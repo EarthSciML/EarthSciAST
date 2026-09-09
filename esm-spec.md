@@ -379,10 +379,59 @@ Every `op` string belongs to one of **two tiers**:
 
 | Op | Additional fields | Meaning |
 |---|---|---|
-| `D` | `"wrt": "t"` or a spatial axis | Derivative ∂/∂(`wrt`) of `args[0]`. `wrt:"t"` (or an absent `wrt`) is the **structural** time derivative (equation LHS, consumed by system assembly) and is **strictly unary**. A spatial `wrt` — or *any* `D` in a right-hand-side expression — is a **rewrite-target** (§9.6.8): lowered to a stencil by a discretization rule, never evaluated directly; it MAY carry **trailing auxiliary operands** after `args[0]` (see below). |
+| `D` | `"wrt": "t"` or a spatial axis | Derivative ∂/∂(`wrt`) of `args[0]`. `wrt:"t"` (or an absent `wrt`) is the **structural** time derivative and is **strictly unary**: on an equation LHS it is consumed by system assembly; in a right-hand side it denotes the **total time derivative** of `args[0]` and is resolved during flattening from the equations already in the system (see "A right-hand-side structural `D`" below). A **spatial** `wrt` is a **rewrite-target** (§9.6.8): lowered to a stencil by a discretization rule, never evaluated directly; it MAY carry **trailing auxiliary operands** after `args[0]` (see below). A right-hand-side structural `D` that resolution cannot answer is a rewrite-target too. |
 | `ic` | — | Initial-condition declaration, used as an equation LHS: `ic(u) ~ <initial field>` (§11.4). `args[0]` is the ODE state. |
 
 Example: `{"op": "D", "args": ["O3"], "wrt": "t"}` represents ∂O₃/∂t.
+
+**A right-hand-side structural `D` is a total time derivative, resolved by substitution
+(normative).** A `D` with `wrt:"t"` (or no `wrt`) appearing in a right-hand side denotes the
+**total derivative with respect to `t`** of its operand. It is **resolved during flattening**
+(the flattening algorithm of `esm-libraries-spec.md` §4.7.5) — the resolved expression replaces
+the `D` node in the canonical flattened form — so no evaluator ever meets one, and every
+consumer of the flattened system answers alike without knowing the rule. Resolution is defined
+by structural recursion, and by nothing else:
+
+| Operand | Resolves to |
+|---|---|
+| a name carrying a differential equation `D(x)/dt ~ f` (a **state**) | `f`, with any `D` inside `f` resolved in turn |
+| a name carrying a defining equation `y ~ g` (an **observed** or algebraic unknown) | the resolution of `g` — the **chain rule**, applied by substituting the definition |
+| a name that does not vary with `t` (a **parameter**) | `0` |
+| a numeric **literal** | `0` |
+| `+`, unary and binary `-`, `neg`, n-ary `*`, binary `/` | the operands' resolutions combined by the sum, product and quotient rules |
+| anything else | **nothing** — see the refusal rule below |
+
+Two consequences are worth stating. Resolution **recurses**: a tendency may itself name another
+state's derivative (`D(lai)/dt ~ sla · D(biomass)/dt`), and an observed's definition may name a
+further observed. And it is a **rewrite, not a solver**: it substitutes what the equations
+already say and never deduces a value from an equation as a whole.
+
+This is what makes the **instantaneous-derivative test shape** (§6.6.2) expressible against a
+mechanism: an observed `dO3dt ~ D(Chem.O3, t)` in a wrapping model asserts a species tendency
+at `t = 0` against the mass-action ODE §7.4 generates, with no evaluator learning anything
+about reactions. The value is not a runtime's to invent: every quantity it needs is already
+defined by an equation in the same system.
+
+**A `D` the resolution cannot answer MUST be refused (normative).** Resolution answers nothing
+for an operand outside the table above — an operator with no rule there (`^`, an elementary
+function, a reduction, a nested `D`), or a name that carries neither equation and is not
+time-invariant — and it answers nothing for a **cyclic** chain, which it MUST detect and stop
+rather than expand without end (`D(x)/dt ~ k · D(x, t)`; an observed whose definition reaches
+its own derivative). In each case the node remains as authored and is a rewrite-target: an
+implementation MUST NOT invent a value for it (in particular **not `0`**, which is a wrong
+answer rather than a missing one), and the `unlowered_operator` gate (§9.6.3 constraint 6)
+rejects it before evaluation exactly as it rejects an undiscretized spatial `D`. That is the
+code an author sees, because the gate runs at build time, ahead of every evaluator; an
+evaluator that additionally refuses `D` by name (§9.6.6 `unevaluable_operator`) is a
+defence-in-depth backstop for a pipeline bug, not the diagnostic for an under-lowered
+document.
+
+The boundary is deliberate. The format defines **no symbolic differentiation**: what the table
+gives is substitution of the system's own equations, plus the three algebraic identities needed
+to push a derivative through the arithmetic those substitutions produce. Extending it to `^` or
+to elementary functions would be a differentiation engine, which this format does not have.
+Nothing here changes the LHS: a `D` on an equation's left-hand side is what makes that equation
+differential and is never rewritten.
 
 **Arity of `D` — trailing auxiliary operands (normative).** `args[0]` is always the
 differentiated operand, so every `D` has arity ≥ 1. Beyond that the two tiers of `D` differ:
@@ -2478,14 +2527,30 @@ The rule is pinned by the `assertion_nonfinite` conformance category (CONFORMANC
 
 #### 6.6.4 Tolerance Resolution Order
 
-Tolerance is resolved most-specific first:
+Tolerance is resolved **per field**, most-specific first. `abs` and `rel` resolve *independently*: each takes its value from the innermost level that declares that field.
 
-1. **Per-assertion** `tolerance` (if present) — wins outright.
-2. Otherwise, **per-test** `tolerance` — the test's default.
-3. Otherwise, the enclosing component's **model-level** `tolerance` field.
-4. Otherwise, an **implementation default** — conforming runtimes should use `rel = 1e-6` and no `abs` bound.
+1. **Per-assertion** `tolerance` — its declared fields win.
+2. Otherwise, for a field it does not declare, **per-test** `tolerance` — the test's default.
+3. Otherwise, for a field neither declares, the enclosing component's **model-level** `tolerance` field.
+4. Otherwise, for a field none of the three declares, an **implementation default**: conforming runtimes SHOULD use `rel = 1e-6` and no `abs` bound.
 
-Each level is a `{abs?, rel?}` object; absent fields fall through to the next level independently. Specifying only `abs` at a lower level does not mask `rel` from an upper level — they are merged per-field.
+All four levels take part in the **same per-field merge**, and an absent field falls through to the next one independently. Specifying only `abs` at a more-specific level does not mask `rel` from a less-specific one — they are merged per-field. With a model-level `{rel: 1e-6}` and an assertion-level `{abs: 1e-9}`, the resolved pair is `(rel = 1e-6, abs = 1e-9)`; a runtime that returned the assertion's block whole would run that assertion with **no relative bound at all**, silently discarding a tolerance the author declared one level up.
+
+**Level 4 is a merge level, not a fallback.** It is not consulted only when levels 1-3 are silent: it supplies whichever bound is *still* undeclared after them. An assertion that declares only `{abs: 1e-4}`, with no `rel` at any enclosing level, therefore resolves to `(rel = 1e-6, abs = 1e-4)` — the default's relative bound applies alongside the declared absolute one, and passing either bound is sufficient (§6.6.3). Because the default is a level rather than a fallback, **`rel: 0` is the only way a document can ask for an absolute-only comparison**, and correspondingly `abs` has no such spelling to need: the default declares no `abs` bound, so an unspecified `abs` resolves to `0` at level 4 regardless.
+
+**What "absent" means.** A field is absent when its key is missing from the object, and only an absent field falls through. `abs` and `rel` are declared `number` in the schema, so a JSON `null` is not conforming input; a runtime that accepts one MUST treat it as absent. An explicit **`0` is a declaration, not an absence** — it says *"no bound of this kind"* — and it stops the fallthrough, the implementation default included:
+
+| `tolerance` block | Resolved | Why |
+|---|---|---|
+| assertion `{abs: 1e-9}`, model `{rel: 1e-6}` | `rel = 1e-6`, `abs = 1e-9` | `rel` absent at the assertion, so it falls through to the model. |
+| assertion `{abs: 1e-4}`, nothing else | `rel = 1e-6`, `abs = 1e-4` | `rel` falls through all three document levels to the default. |
+| assertion `{rel: 0, abs: 1e-4}`, nothing else | `rel = 0`, `abs = 1e-4` | The explicit `0` stops the fallthrough at level 1: an `abs`-only comparison. |
+| assertion `{rel: 0, abs: 1e-9}`, model `{rel: 1e-6}` | `rel = 0`, `abs = 1e-9` | Likewise — the `0` blocks the model's `rel`, not just the default's. |
+| model `{rel: 0, abs: 0}`, nothing else | `rel = 0`, `abs = 0` | Exact equality — the only way to spell it, and the way the recurrence fixtures do (CONFORMANCE_SPEC §5.19). |
+| assertion `{}`, nothing else | `rel = 1e-6`, `abs = 0` | An object declaring neither bound contributes nothing; both fields reach level 4. |
+| nothing anywhere | `rel = 1e-6`, `abs = 0` | Both fields reach level 4. |
+
+This resolution is pinned by the `tolerance_resolution` conformance category (CONFORMANCE_SPEC §5.21).
 
 **This is not the integrator's tolerance.** The chain above resolves the tolerance an assertion result is **compared at**. The tolerance the **integrator** is asked to hold is the `solver` block's `abstol` / `reltol` (§2.2.2), which resolves on its own independent chain (call site → document → binding default). The two are different quantities and neither substitutes for the other: loosening `abstol` makes a trajectory less accurate and its assertions *more* likely to fail, while loosening `tolerance` makes the same trajectory easier to pass. The distinct spellings — `{abs, rel}` here, `abstol`/`reltol` there — are what keep the two legible at a glance. An inline-test runner's own default integration tolerances sit at the bottom of the §2.2.2 chain, so a document's `solver` block displaces them.
 
@@ -3936,7 +4001,7 @@ Required fields:
 3. **Typed signatures (positional-by-name).** Bindings MUST cover every entry of the template's `params` exactly — no missing keys, no extras.
 4. **Component-local scope.** Templates declared inside — or imported into (§9.7.2) — one `model` / `reaction_system` are visible only within that component's expression positions.
 5. **Pure syntactic substitution.** Every parameter occurrence in `body` — a bare parameter-name string in a variable-reference position, or the string value of a scalar Expression-node field (§9.6.1) — is replaced by the bound argument's AST in source order. Substitution is position-blind and purely syntactic: a declared parameter name shadows any coincident field literal or index symbol inside `body`, no evaluation occurs, and no field-specific admissibility is checked at substitution time — a value substituted into a scalar-field position MUST be a literal admissible for that field, enforced by the §9.6.9 validation discharge, never by the substitution engine. Expansion MUST NOT depend on argument evaluation. Parameter substitution applies inside the `bindings` values of nested `apply_expression_template` references exactly as in any other Expression position; the `name` field is never a substitution site; params shadow as above. If instantiation introduces an eager reference into the tree (a rule body referencing a target-bearing template), the engine expands it immediately as part of the same rewrite (§9.6.4 rules 3–4).
-6. **Rewrite-target operator gate (before evaluation).** Loading is permissive: a file MAY load with rewrite-target ops still present, so fixtures that merely carry `grad`/`div`/`laplacian`/spatial-`D` as content (coupling, scoping, units examples that never simulate) are unaffected. But before a component is EVALUATED or COMPILED for simulation, its expression trees are walked; any node whose `op` is not in the evaluable-core set (§4.2) — including a spatial `D`, or any `D` in a right-hand-side / evaluation position — is rejected with diagnostic `unlowered_operator` (naming the op and node path). This is the sole guarantee that a rewrite-target op cannot reach evaluation. Parse/validate-only tooling that never builds an evaluator need not run the gate.
+6. **Rewrite-target operator gate (before evaluation).** Loading is permissive: a file MAY load with rewrite-target ops still present, so fixtures that merely carry `grad`/`div`/`laplacian`/spatial-`D` as content (coupling, scoping, units examples that never simulate) are unaffected. But before a component is EVALUATED or COMPILED for simulation, its expression trees are walked; any node whose `op` is not in the evaluable-core set (§4.2) — including a spatial `D`, and a right-hand-side structural `D` that §4.2's total-derivative resolution left standing (an operand outside its closed set, a name it cannot resolve, or a cyclic chain) — is rejected with diagnostic `unlowered_operator` (naming the op and node path). This is the sole guarantee that a rewrite-target op cannot reach evaluation. Parse/validate-only tooling that never builds an evaluator need not run the gate.
 
 #### 9.6.4 Round-trip — Option B (reference-preserving)
 

@@ -1,0 +1,41 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "DOfParameter",
+    "description": "esm-spec §4.2, REFUSE half: D of a PARAMETER resolves to no tendency and MUST be refused with `unlowered_operator` rather than given a value. A constant's derivative is arithmetically 0, which is exactly why this case is dangerous: 0 is the value the pre-fix bindings returned for EVERY unresolvable D, so accepting it here would make the wrong answers indistinguishable from the right one.",
+    "authors": ["EarthSciAST conformance"],
+    "created": "2026-09-07T00:00:00Z",
+    "tags": ["conformance", "esm-spec-4.2", "unlowered-operator"]
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "x": { "type": "unknown", "units": "kg", "default": 2.0 },
+        "k": { "type": "parameter", "units": "1/s", "default": 3.0 },
+        "dk": { "type": "unknown", "units": "1/s^2", "description": "D of a parameter — unresolvable" }
+      },
+      "equations": [
+        {
+          "lhs": { "op": "D", "args": ["x"], "wrt": "t" },
+          "rhs": { "op": "*", "args": [{ "op": "-", "args": ["k"] }, "x"] }
+        },
+        {
+          "_comment": "k is a load-time constant, not an unknown, so it carries no D(k)/dt equation and this names no tendency.",
+          "lhs": "dk",
+          "rhs": { "op": "D", "args": ["k"], "wrt": "t" }
+        }
+      ],
+      "tests": [
+        {
+          "id": "d_of_parameter_is_refused",
+          "description": "The run must be refused rather than answered. `expected` is deliberately 0 — the very value a runtime inventing one would produce — so a binding that returns it is caught by the refusal contract and not by the number.",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "assertions": [
+            { "variable": "dk", "time": 0.0, "expected": 0.0, "tolerance": { "abs": 1e-9 } }
+          ]
+        }
+      ]
+    }
+  },
+  "domain": { "temporal": {} }
+}

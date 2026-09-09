@@ -441,6 +441,20 @@ impl ArrayCompiled {
         // not an in-solver event), so rejecting here loses no in-scope
         // capability while preventing a model that *does* declare events from
         // compiling with its events silently dropped.
+        //
+        // esm-spec §4.2: a right-hand-side structural `D` that `flatten`'s
+        // tendency resolution left standing is a rewrite-target reaching
+        // evaluation, and no implementation may invent a value for it — in
+        // particular not the `0` this runtime's `eval`/tape lowering return.
+        // Outside the dimensionality guard below, which only admits a system
+        // with a SPATIAL independent variable: this defect lives in 0-D
+        // documents. Same check, same code, as the scalar
+        // `reject_unsupported_features`.
+        if crate::flatten::first_unresolved_rhs_time_derivative(flat).is_some() {
+            return Err(CompileError::UnloweredOperatorError {
+                op: "D".to_string(),
+            });
+        }
         if flat.independent_variables != ["t"] {
             // A spatial independent variable means a rewrite-target operator was
             // never discretized. Report THAT, with the uniform
@@ -602,6 +616,29 @@ impl ArrayCompiled {
         // subsystems / ragged sets.
         let mut index_sets_owned = index_sets.clone();
         mount_subsystems(&mut model_owned, &mut index_sets_owned)?;
+        // esm-spec §4.2, the two halves of the right-hand-side `D` rule, applied
+        // here because this SINGLE-MODEL route deliberately never flattens (see
+        // `from_file_owned`) and so does not get them from `flatten`'s phase
+        // 5b′: resolve each RHS structural `D` over an unknown that carries a
+        // differential equation into that unknown's tendency, then refuse any
+        // that resolved to nothing rather than letting `eval`/the tape lowering
+        // answer it with `0`. Runs after mounting so a subsystem's equations are
+        // in scope under their mounted names. Same two functions, in the same
+        // order, as `Self::from_flattened` — the two array routes must not
+        // answer one document differently.
+        let time_invariant: std::collections::HashSet<String> = model_owned
+            .variables
+            .iter()
+            .filter(|(_, v)| v.var_type == crate::types::VariableType::Parameter)
+            .map(|(name, _)| name.clone())
+            .collect();
+        crate::flatten::resolve_rhs_time_derivatives(&mut model_owned.equations, &time_invariant);
+        if crate::flatten::first_unresolved_rhs_time_derivative_in(&model_owned.equations).is_some()
+        {
+            return Err(CompileError::UnloweredOperatorError {
+                op: "D".to_string(),
+            });
+        }
         // Lower every SHAPED parameter whose value the document supplies —
         // inline array data, or one scalar broadcast over the grid (esm-spec
         // §6.3 / §6.6.2) — into the `const`-observed channel this runtime

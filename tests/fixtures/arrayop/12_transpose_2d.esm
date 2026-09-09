@@ -37,7 +37,7 @@
           "rhs": { "op": "index", "args": [{ "op": "transpose", "args": ["u"] }, 3, 1] }
         }
       ],
-      "tolerance": { "abs": 1.0e-9 },
+      "tolerance": { "rel": 0.0, "abs": 1.0e-9 },
       "tests": [
         {
           "id": "transpose_element_check",

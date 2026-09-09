@@ -1727,7 +1727,9 @@ cover at minimum:
    Load each fixture under `tests/simulation/*.esm`, walk its inline
    `tests` blocks, build a `System`, and compare the numerical trajectory
    against each test's declared `assertions` at the documented
-   sample times under the resolved (assertion > test > model) tolerance.
+   sample times under the tolerance resolved per field over the four
+   levels (assertion > test > model > implementation default, esm-spec
+   §6.6.4).
    This proves that the Julia library reproduces the cross-language
    analytical or numerical reference carried in the fixture itself — the
    earlier `reference_solutions/*.json` filesystem pairing was migrated

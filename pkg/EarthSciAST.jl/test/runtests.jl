@@ -135,6 +135,11 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("scan_prefix_test.jl")                   # ess-scan O(N) prefix reduction ≡ per-cell
     include("stencil_affine_cse_test.jl")            # ess-affine per-cell CSE ≡ per-cell
     include("stencil_affine_invariant_test.jl")      # ess-affine invariant hoist ≡ per-cell
+    # Cross-shape state gather (a state array read from a loop of a DIFFERENT
+    # shape): the cut signature and the box lowering must both stay O(1) in the
+    # grid. Sits next to grid_invariance_test.jl because it pins the same
+    # property on the tier that was violating it.
+    include("stencil_affine_cross_shape_test.jl")
     include("grid_invariance_test.jl")               # compiled IR size is O(1) in the grid
     include("fn_content_cse_test.jl")                # fn specs keyed by CONTENT in per-kernel CSE
     include("array_obs_materialize_test.jl")         # factored array observeds ≡ ESS_ARRAY_OBS_INLINE=1
@@ -288,10 +293,12 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("conformance_pde_inline_array_overrides_test.jl")
     include("conformance_assertion_nonfinite_test.jl")  # §6.6.3 non-finite actuals
     include("assertion_tolerance_symmetry_test.jl")     # §6.6.3 symmetric relative bound
+    include("conformance_tolerance_resolution_test.jl")  # §6.6.4 per-field tolerance merge
     include("conformance_scalar_ic_test.jl")
     include("conformance_shaped_parameter_broadcast_test.jl")  # §6.3 scalar-on-a-shaped-parameter broadcast
     include("conformance_override_key_diagnostics_test.jl")
     include("conformance_pde_inline_reference_dimension_names_test.jl")  # §6.6.5 reference dimension names
+    include("rhs_time_derivative_resolution_test.jl")   # §4.2 right-hand-side D: Julia resolves; its exclusion
     include("closed_functions_test.jl")
     include("closed_functions_autodiff_test.jl")
     include("datetime_arithmetic_test.jl")

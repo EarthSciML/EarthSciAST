@@ -64,7 +64,7 @@
         { "lhs": { "op": "D", "args": [{ "op": "index", "args": ["u", 19] }], "wrt": "t" }, "rhs": 0.0 },
         { "lhs": { "op": "D", "args": [{ "op": "index", "args": ["u", 20] }], "wrt": "t" }, "rhs": 0.0 }
       ],
-      "tolerance": { "abs": 1.0e-10 },
+      "tolerance": { "rel": 0.0, "abs": 1.0e-10 },
       "tests": [
         {
           "id": "zero_ic_stability",

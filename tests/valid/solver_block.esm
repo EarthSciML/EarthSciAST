@@ -33,7 +33,7 @@
           "rhs": { "op": "neg", "args": [{ "op": "*", "args": ["k", "A"] }] }
         }
       ],
-      "tolerance": { "abs": 1e-6 },
+      "tolerance": { "rel": 0.0, "abs": 1e-6 },
       "tests": [
         {
           "id": "decays_by_half_life",
