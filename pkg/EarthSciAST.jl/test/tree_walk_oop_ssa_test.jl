@@ -452,3 +452,260 @@ end
               ForwardDiff.jacobian(uu -> foff(uu, p, 0.3), u)
     end
 end
+
+# ---------------------------------------------------------------------------
+# SCALAR read surfaces (`SSA_SPIKE.md` blocker #4): the scalar `_Node` walker
+# (`_oop_eval` — a `_NK_STATE` pin, a `_NK_STATE_GATHER` slot table) and its
+# lane-batched twin (`_oop_eval_batch`, ess-oop-batch). Neither reads through a
+# consumer DESCRIPTOR, so neither could use the per-kernel redirect table; both
+# went through the flat `ue` and held their producers' scatters alive wherever
+# they landed. They redirect through the same slot→(producer, position) map the
+# descriptor arm resolves, published per surface as a consumer LEVEL
+# (`_OopSSAOwn` + `_OopSSASCtx`).
+#
+# THE ARM IS DEFAULT OFF — it MEASURED SLOWER (4.3% on the CONUS 4x5 transport
+# reverse; see the knob's note in oop.jl) — so `ESS_OOP_SSA_SCALAR=1` opts in
+# and every build below spells its intent. Three `:oop` builds are compared
+# throughout: the arm opted IN, the SHIPPED DEFAULT (`ESS_OOP_SSA=1` alone,
+# which must be indistinguishable from the explicit `=0` control — that is the
+# assertion that the default path is untouched), and the feature off entirely.
+#
+# Measured on the ReSEACT transport RHS at 6x6x8 (the campaign's steering
+# instrument, `oop_ssa_stats().blockers_only`): these reads were the SOLE
+# blocker on 2 of the 4 surviving producers, both of them level-3/4 per-column
+# fills reading a lower level's kernel output through a `_NK_STATE_GATHER`.
+# ---------------------------------------------------------------------------
+
+# One producer owning slots 5:8 at level 1 (`_SX_*` above), a second at 9:12.
+const _SC_PID = Int32[1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3]
+const _SC_POS = Int32[1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4]
+const _SC_OWN = ESMs._OopSSAOwn(_SC_PID, _SC_POS, Int[0, 1, 2])
+
+@testset "scalar surface map (the redirect predicate)" begin
+    own = _SC_OWN
+    # a producer that strictly precedes the surface redirects; one at the same
+    # level or later does not (a fill level's own scalars run BEFORE its
+    # kernels, so `cons == producer level` must refuse)
+    @test ESMs._ssa_owner_pid(own, 5, 2) == 2
+    @test ESMs._ssa_owner_pid(own, 5, 1) == 0
+    @test ESMs._ssa_owner_pid(own, 9, 2) == 0
+    @test ESMs._ssa_owner_pid(own, 9, 3) == 3
+    # the raw state prefix is producer 1 at level 0, so it redirects everywhere
+    @test ESMs._ssa_owner_pid(own, 1, 1) == 1
+    # a disowned slot (a later writer took it, or a level scalar / scan fold
+    # rewrites it) and an out-of-range slot are both refused, never read
+    dis = ESMs._OopSSAOwn(Int32[1, 0, 1], Int32[1, 0, 3], Int[0])
+    @test ESMs._ssa_owner_pid(dis, 2, 1) == 0
+    @test ESMs._ssa_owner_pid(own, 99, 9) == 0
+    @test ESMs._ssa_owner_pid(own, 0, 9) == 0
+    # `cons == 0` is the OFF surface: nothing redirects, whatever the map says
+    @test ESMs._ssa_owner_pid(own, 5, 0) == 0
+    # …and the OFF singleton answers 0 for every slot
+    @test ESMs._ssa_owner_pid(ESMs._OOP_SSA_OWN_OFF, 5, 9) == 0
+    # the (pid, pos) form agrees with it and carries the producer-local position
+    sc = ESMs._OopSSASCtx(own, 2, Any[])
+    @test ESMs._oop_ssa_owner(sc, 7) == (2, 3)
+    @test ESMs._oop_ssa_owner(ESMs._OOP_SSA_SCTX_OFF, 7) == (0, 0)
+end
+
+@testset "scalar surface: lane vectors take ONE producer or nothing" begin
+    own = _SC_OWN
+    # BUILD-time verdict and RUN-time resolution are the same function of the
+    # same data — asserted here side by side, because a disagreement is exactly
+    # what would let a scatter be skipped under a live reader.
+    lanes(slots, mask = Bool[]; cons = 2) = begin
+        pos = Vector{Int}(undef, length(slots))
+        pid = ESMs._oop_ssa_lane_pid!(pos, ESMs._OopSSASCtx(own, cons, Any[]),
+                                      slots, mask)
+        (pid, pid == 0 ? Int[] : pos)
+    end
+    # one producer, in any order: redirected at producer-local positions
+    @test lanes([5, 6, 7, 8]) == (2, [1, 2, 3, 4])
+    @test lanes([8, 5, 8]) == (2, [4, 1, 4])
+    @test ESMs._ssa_lane_common_pid([8, 5, 8], own, 2) == 2
+    # TWO producers in one lane vector: no single-op form, so the `ue` gather
+    # stays (and the build marks both blocks residual)
+    @test lanes([5, 9]; cons = 3)[1] == 0
+    @test ESMs._ssa_lane_common_pid([5, 9], own, 3) == 0
+    # an unowned or not-yet-written lane refuses the whole vector
+    @test lanes([5, 6, 7, 8]; cons = 1)[1] == 0
+    @test ESMs._ssa_lane_common_pid([5, 6, 7, 8], own, 1) == 0
+    # GHOST lanes are wildcards (the caller's select overwrites them with 0),
+    # so they take position 1 instead of breaking the single-producer form
+    @test lanes([1, 6, 7, 1], Bool[true, false, false, true]) == (2, [1, 2, 3, 1])
+    # an ALL-ghost vector has no producer to name and declines
+    @test lanes([1, 1], Bool[true, true])[1] == 0
+    # the OFF surface never redirects
+    @test ESMs._oop_ssa_lane_pid!(zeros(Int, 4), ESMs._OOP_SSA_SCTX_OFF,
+                                  [5, 6, 7, 8], Bool[]) == 0
+end
+
+# `g` is a materialized array observed read BOTH by an array kernel (which the
+# descriptor arm already redirects) and by `M` SCALAR state equations. With
+# M == 1 that read is a leftover single on `_oop_eval`; with M > 1 the congruent
+# entries form ONE lane-batched group and the read becomes a `_NK_STATE` slot
+# VECTOR on `_oop_eval_batch` — the two scalar surfaces, same fixture.
+function _s_scalread(N, M)
+    vars = Dict{String,Any}("u" => _s_state(shape = Any["n"]),
+                            "g" => _s_state(shape = Any["n"]),
+                            "k" => _s_param(0.25))
+    eqs = Any[
+        Dict{String,Any}("lhs" => "g",
+            "rhs" => _s_ao(_s_o("+", _s_o("*", 2.0, _s_ix("u", "i")), 1.0))),
+        Dict{String,Any}("lhs" => _s_ao(_s_Dt(_s_ix("u", "i"))),
+            "rhs" => _s_ao(_s_o("-", _s_o("*", "k", _s_ix("g", "i")),
+                                _s_ix("u", "i")))),
+    ]
+    for m in 1:M
+        nm = "w$m"
+        vars[nm] = _s_state()
+        push!(eqs, Dict{String,Any}("lhs" => _s_Dt(nm),
+            "rhs" => _s_o("-", _s_ix("g", Float64(m)), nm)))
+    end
+    _s_doc("SSASCAL", vars, eqs, N)
+end
+
+@testset "scalar-walker reads redirect (blocker #4)" begin
+    @testset "$(M == 1 ? "leftover single" : "lane-batched group") (M = $M)" for M in (1, 4)
+        doc = _s_scalread(9, M)
+        (fon, u0, p, _, _) = _s_build_env(doc, "ESS_OOP_SSA_SCALAR" => "1")
+        (fno, _, _, _, _) = _s_build_env(doc, "ESS_OOP_SSA_SCALAR" => "0")
+        (fdef, _, _, _, _) = _s_build_env(doc)     # the SHIPPED default
+        foff, = withenv("ESS_OOP_SSA" => nothing) do
+            ESMs.build_evaluator(doc; form = :oop)
+        end
+        fip, = ESMs.build_evaluator(doc)
+
+        # BIT-IDENTITY across all four `:oop` builds and the in-place `f!`.
+        for probe in (u0, _s_seed(length(u0))), t in (0.0, 0.53)
+            a = fon(probe, p, t)
+            @test a == foff(probe, p, t)
+            @test a == fno(probe, p, t)
+            @test a == fdef(probe, p, t)
+            @test a == _s_ip(fip, probe, p, t)
+        end
+
+        son = ESMs.oop_ssa_stats(fon)
+        sno = ESMs.oop_ssa_stats(fno)
+        # The surface really is the one under test: with M > 1 the entries
+        # batched (one lane vector), with M == 1 they did not.
+        rhs = getfield(fon, :rhs)
+        rb = getfield(rhs, :rhs_batches)
+        @test (M > 1) == !isempty(rb.groups)
+        # ENGAGEMENT: every scalar read site redirected, at full element volume.
+        @test son.n_scalar_edges > 0
+        @test son.n_scalar_fast == son.n_scalar_edges
+        @test son.elems_scalar_fast == son.elems_scalar_edges > 0
+        # …and it was the LAST reader keeping `g`'s scatter into `ue` alive.
+        @test son.n_producers == 1
+        @test son.n_skipped_scatters == 1
+        @test son.blockers_only.scalar == 0
+
+        # NEGATIVE CONTROL: with the arm declined the sites are still counted
+        # (the tally is the steering instrument), none of them redirects, and
+        # `g` scatters again — blamed on this surface by name.
+        @test sno.n_scalar_edges == son.n_scalar_edges
+        @test sno.n_scalar_fast == 0
+        @test sno.elems_scalar_fast == 0
+        @test sno.n_skipped_scatters == 0
+        @test sno.blockers_only.scalar == 1
+        # SHIPPED DEFAULT: `ESS_OOP_SSA=1` alone must be the control, column for
+        # column — the arm is opt-in, so merging it may not move any build that
+        # does not ask for it.
+        @test ESMs.oop_ssa_stats(fdef) == sno
+        # the DESCRIPTOR arm is untouched either way (this is one arm, alone)
+        @test sno.n_fast == son.n_fast
+        @test sno.n_edges == son.n_edges
+
+        # AD: a redirect changes where an operand comes from, never the value.
+        u = _s_seed(length(u0))
+        @test ForwardDiff.jacobian(uu -> fon(uu, p, 0.35), u) ==
+              ForwardDiff.jacobian(uu -> foff(uu, p, 0.35), u)
+    end
+end
+
+# The surface that actually held ReSEACT's two producers: a per-column
+# materialized fill whose body is a runtime CONTRACTION LOOP, so its state read
+# is a `_NK_STATE_GATHER` at a loop-counter subscript — a slot resolved per
+# iteration out of a static table. Here `q` is itself a materialized array
+# observed (a level-1 kernel producer) and `S[i] = Σ_k q[i,k]` fragments into
+# per-column scalars at level 2, which batch into ONE lane group: exactly the
+# ReSEACT transport shape (level-3/4 per-column fills over a level-1/2 kernel's
+# output). Built through the typed AST because a runtime contraction loop needs
+# an `aggregate` with an inner range, which the JSON helpers above do not spell.
+include("testutils.jl")
+
+@testset "state-gather fill levels redirect (blocker #4, the ReSEACT shape)" begin
+    N, M = 6, 12                       # M ≥ the contraction-loop floor
+    isets = Dict("x" => ESMs.IndexSet("interval"; size = N),
+                 "y" => ESMs.IndexSet("interval"; size = M))
+    vars = Dict("u" => ESMs.ModelVariable(ESMs.UnknownVariable; shape = ["x"]),
+                "q" => ESMs.ModelVariable(ESMs.UnknownVariable; shape = ["x", "y"]),
+                "S" => ESMs.ModelVariable(ESMs.UnknownVariable; shape = ["x"]))
+    rng_i = Dict{String,Any}("i" => ESMs.IndexSetRef("x"))
+    rng_ik = Dict{String,Any}("i" => ESMs.IndexSetRef("x"),
+                              "k" => ESMs.IndexSetRef("y"))
+    rng_ab = Dict{String,Any}("a" => ESMs.IndexSetRef("x"),
+                              "b" => ESMs.IndexSetRef("y"))
+    eqs = [
+        ESMs.Equation(_v("q"), _op("aggregate"; output_idx = Any["a", "b"],
+            ranges = rng_ab,
+            expr_body = _op("+", _op("*", _n(2.0), _idx("u", _v("a"))), _n(1.0)))),
+        ESMs.Equation(_v("S"), _op("aggregate"; output_idx = Any["i"],
+            ranges = rng_ik, semiring = "sum_product",
+            expr_body = _idx("q", _v("i"), _v("k")))),
+        ESMs.Equation(_op("aggregate"; output_idx = Any["i"], ranges = rng_i,
+                          expr_body = _Didx("u", _v("i"))),
+                      _op("aggregate"; output_idx = Any["i"], ranges = rng_i,
+                          expr_body = _op("-", _idx("S", _v("i")),
+                                          _idx("u", _v("i"))))),
+    ]
+    model = ESMs.Model(vars, eqs)
+    ics = Dict{String,Any}("u[$j]" => 0.3 * j for j in 1:N)
+    bld(env = (); form = :oop) = withenv("ESS_CONTRACTION_LOOP" => "1",
+            "ESS_CONTRACTION_LOOP_MIN" => "8", env...) do
+        ESMs.build_evaluator(model; index_sets = isets, initial_conditions = ics,
+                             form = form)
+    end
+    fon, u0, p, _, _ = bld(("ESS_OOP_SSA" => "1", "ESS_OOP_SSA_SCALAR" => "1"))
+    fno, = bld(("ESS_OOP_SSA" => "1", "ESS_OOP_SSA_SCALAR" => "0"))
+    fdef, = bld(("ESS_OOP_SSA" => "1",))            # the SHIPPED default
+    foff, = bld(("ESS_OOP_SSA" => nothing,))
+    fip, ui, pi_, = bld((); form = :inplace)
+
+    # The fixture really is the shape under test: `q` is a level-1 kernel
+    # producer and `S`'s fill fragmented into per-column scalars that batched.
+    rhs = getfield(fon, :rhs)
+    ml = getfield(rhs, :mat_levels)
+    @test length(ml) == 2
+    @test length(ml[1][2]) == 1 && isempty(ml[1][1])   # level 1: one kernel
+    @test length(ml[2][1]) == N && isempty(ml[2][2])   # level 2: N scalars
+    @test length(getfield(rhs, :mat_batches)[2].groups) == 1
+
+    # BIT-IDENTITY across all four `:oop` builds and the in-place `f!`.
+    for t in (0.0, 0.29)
+        a = fon(u0, p, t)
+        @test a == foff(u0, p, t)
+        @test a == fno(u0, p, t)
+        @test a == fdef(u0, p, t)
+        @test a == _s_ip(fip, ui, pi_, t)
+    end
+
+    son = ESMs.oop_ssa_stats(fon)
+    sno = ESMs.oop_ssa_stats(fno)
+    # ENGAGEMENT: the state-gather site redirected at full element volume, and
+    # it was the only reader keeping `q`'s scatter into `ue` alive.
+    @test son.n_scalar_edges == sno.n_scalar_edges > 0
+    @test son.n_scalar_fast == son.n_scalar_edges
+    @test son.elems_scalar_fast == son.elems_scalar_edges > 0
+    @test son.n_producers == 1 && son.n_skipped_scatters == 1
+    @test son.blockers_only.scalar == 0
+    # NEGATIVE CONTROL, and the SHIPPED DEFAULT is that control exactly.
+    @test sno.n_scalar_fast == 0 && sno.elems_scalar_fast == 0
+    @test sno.n_skipped_scatters == 0
+    @test sno.blockers_only.scalar == 1
+    @test ESMs.oop_ssa_stats(fdef) == sno
+
+    @test ForwardDiff.jacobian(uu -> fon(uu, p, 0.17), u0) ==
+          ForwardDiff.jacobian(uu -> foff(uu, p, 0.17), u0)
+end

@@ -33,6 +33,17 @@ With the flag on, a consumer descriptor references its producer's RESULT VALUE:
 * **tier 3 (fallback)** — everything else keeps the dense gather from `ue`,
   byte-for-byte.
 
+The same slot→(producer, position) map also serves the **scalar read
+surfaces** — the scalar `_Node` walker (`_oop_eval`: a `_NK_STATE` pin, a
+`_NK_STATE_GATHER` slot table) and its lane-batched twin (`_oop_eval_batch`) —
+which have no descriptor to key a per-kernel table on. There it is published
+per surface as a consumer LEVEL (`_OopSSAOwn` + `_OopSSASCtx`): a scalar read
+of slot `s` redirects iff `s` has an owner and that owner's level is strictly
+below the surface's. The scalar walker decides per SLOT (it can fall back per
+read); the batched walker returns a whole lane vector through one gather, so it
+decides per NODE and requires one common producer across every lane (ghost
+lanes are wildcards — the select discards them).
+
 Three descriptor surfaces feed those tiers: a kernel's own top-level
 descriptors, its TEMPLATE SUB-KERNEL (`_NK_SUBCALL`) descriptors — resolved by
 `_build_oop_desc_vectors` against the same parent lanes, so decomposable by the
@@ -56,11 +67,15 @@ through references. Final `du` scatters (the real output) are untouched.
   scalar fills, per-cell fallback kernels, or level scan folds are disowned
   (or re-owned by the later writer), and the level check refuses any redirect
   that could observe the wrong write.
-* Every non-redirected read surface marks residual slots: scalar-walker trees
-  (`_NK_STATE`, `_NK_STATE_GATHER`), E-lane (in-reduce) and sub-kernel plans,
-  `_AK_STATE_FIXED` pins, ghost-masked table gathers, declined descriptors,
-  level scan folds. Any per-cell (non-vectorizable) kernel disables ALL
-  scatter skipping — its reads cannot be enumerated.
+* Every non-redirected read surface marks residual slots: E-lane (in-reduce)
+  and sub-kernel plans, `_AK_STATE_FIXED` pins, ghost-masked table gathers,
+  declined descriptors, level scan folds, and the scalar reads the surface map
+  refuses. Any per-cell (non-vectorizable) kernel disables ALL scatter
+  skipping — its reads cannot be enumerated.
+* The scalar arm's build-time marking (`_ssa_mark_node_reads!` /
+  `_ssa_mark_batch_reads!`) and its walk-time seams share ONE predicate
+  (`_ssa_owner_pid`), so a slot is marked residual exactly when the walker will
+  read it off `ue` — the two cannot drift.
 * Runtime guard: a producer whose spine hoists to a lane-invariant SCALAR
   records no value; redirects to it fall back to the gather and its scatter
   still runs, so the build-time `skip` verdict never outruns reality.
@@ -155,10 +170,32 @@ fold.
 3. **E-lane (in-reduce) CSR gathers.** Per-entry `(cell, neighbour)` reads
    repeat cells — median run length 1 — so slices+concat lose to the gather;
    would need segment-level ops instead. Left as gathers deliberately.
-4. **Scalar-walker and lane-batched scalar reads** (`_NK_STATE`,
-   `_NK_STATE_GATHER`, batch slot vectors). Redirectable through the same
-   slot→(producer, position) map; not done in the spike. They also hold
-   producer scatters alive wherever they read.
+4. **Scalar-walker and lane-batched scalar reads** — **built, MEASURED, and
+   shipped OFF** (`ESS_OOP_SSA_SCALAR=1` opts in). Both walkers redirect
+   through the same slot→(producer, position) map, published per surface as a
+   consumer level, so item 4's premise was right: the surface IS redirectable
+   through the existing map. On the ReSEACT transport RHS at 6x6x8 it was the
+   SOLE blocker on 2 of the 4 surviving producers (two level-3/4 per-column
+   fills reading a lower level's kernel output through a `_NK_STATE_GATHER`,
+   404 352 read elements), and closing it takes scatters-skipped **13/17 →
+   15/17** (4 874 → 5 450 slots) with the `scalar` blocker row at zero.
+
+   It does not pay. At CONUS 4x5: `rhs` flat (ratio 1.010), **`rhs_vjp` 4.3%
+   SLOWER** (71.41 → 74.59 ms). Copy census: whole-buffer copies 82 → 80 —
+   the two scatters it really did free — against total copy instructions
+   **290 → 432** and real element writes 55.22 → 56.11 M. The scalar surfaces'
+   reads were already CHEAP relative to the buffer versions they kept alive (a
+   handful of gathers per level, not O(cells) of them), so freeing two scatters
+   buys little while the redirect's own materialization — a producer-value
+   gather per lane group, off a value XLA must keep live across the level
+   boundary — adds copies. That is the scatter-skip gate's mechanism again: a
+   PARTIAL skip pays twice, once for the buffer that still gets assembled and
+   once for the value kept alive beside it. Coverage is not the objective
+   function; the copy census is.
+
+   What survives as load-bearing is the INSTRUMENTATION: the `scalar` blocker
+   row and the scalar edge columns of `oop_ssa_stats`. What is left on that RHS
+   is one sub-kernel descriptor group and one level scan fold.
 5. ~~**Fragmented gathers**~~ (`nseg > min(64, max(8, L÷4))`) — CLOSED by tier
    2b: past the slice threshold a single-producer mapping gathers the producer's
    VALUE instead of the buffer. `frag` went 5 blocked producers → 0. A

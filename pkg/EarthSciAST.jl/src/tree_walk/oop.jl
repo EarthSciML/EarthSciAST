@@ -909,6 +909,131 @@ const _OOP_NO_FORCING = _OopForcing((;), Vector{Float64}[])
     return arr
 end
 
+# ---- SSA scalar read redirect: the surface map (ess-oop-ssa, blocker #4) ----
+#
+# Declared HERE, above the two scalar walkers, because their signatures name the
+# context type; the ANALYSIS that fills it in and the rationale for the whole
+# feature live in the `_OopSSA*` section further down.
+#
+# DEFAULT OFF (`ESS_OOP_SSA_SCALAR=1` opts in), even inside `ESS_OOP_SSA=1`:
+# the redirect is exact and its coverage is real, but it MEASURED SLOWER — 4.3%
+# on the CONUS 4x5 transport reverse, for two whole-buffer copies removed and
+# 142 copy instructions added. See the knob's note below for the mechanism.
+# Everything here is therefore dead code on the default path, and the
+# instrumentation (the `scalar` blocker row, the scalar edge columns) is what
+# survives as load-bearing.
+#
+# WHAT THIS IS FOR. The vectorized redirect (`_OopSSARef`) reroutes a consumer
+# access kernel's whole-lane DESCRIPTOR off the flat extended buffer `ue`. It
+# leaves the emitter's other two readers of `ue` untouched: the scalar `_Node`
+# walker (`_oop_eval` — a `_NK_STATE` pin, a `_NK_STATE_GATHER` slot table) and
+# its lane-batched twin (`_oop_eval_batch` — the same two kinds over a group's
+# lane axis). Those reads are what `SSA_SPIKE.md` §"What blocks the rest" item 4
+# names, and they hold their producers' scatters into `ue` alive wherever they
+# land: on the ReSEACT transport RHS they were the SOLE blocker on two of the
+# four surviving producers.
+#
+# WHY ONE SHARED MAP AND NOT A TABLE PER SURFACE. A scalar read names a SLOT,
+# not a descriptor position, so there is nothing to key a per-consumer table on
+# — and one slot-indexed table per read surface would be O(levels × n_total)
+# host data (12 MB at CONUS) for a decision that is the same function of the
+# slot everywhere. So ownership is stored ONCE (`pid`/`pos`, the very vectors
+# the plan build already computes for the descriptor arm, plus each producer's
+# level) and each surface carries only its own consumer LEVEL. The redirect
+# fires for slot `s` at level `ℓ` iff `s` has an owner and that owner's level is
+# strictly below `ℓ` — the same two soundness facts the descriptor arm rests on
+# (fills read strictly lower levels; slot ownership is LAST-writer, so a slot a
+# later kernel rewrites is owned by that later kernel or by nobody and the level
+# test then refuses it).
+#
+# BUILD/RUN AGREEMENT. `_ssa_mark_node_reads!` marks a slot residual exactly
+# when this map would NOT redirect it, so the scatter-skip verdict is never
+# weaker than what runs. The one runtime divergence is the feature's existing
+# guard: a producer whose spine hoisted to a lane-invariant scalar records no
+# value, every redirect to it falls back to the (still-written) gather, and
+# `_oop_run_acc_vec` then emits its scatter after all.
+struct _OopSSAOwn
+    pid::Vector{Int32}      # slot → owning producer id (0 ⇒ unowned)
+    pos::Vector{Int32}      # slot → position inside that producer's value
+    lvl::Vector{Int}        # producer id → its fill level (entry 1 = 0, `u`)
+end
+const _OOP_SSA_OWN_OFF = _OopSSAOwn(Int32[], Int32[], Int[])
+
+# One scalar read surface at walk time: the shared map, this surface's consumer
+# level (0 ⇒ redirect disabled, the flag-off singleton) and this call's producer
+# values.
+struct _OopSSASCtx
+    own::_OopSSAOwn
+    cons::Int
+    vals::Vector{Any}
+end
+const _OOP_SSA_SCTX_OFF = _OopSSASCtx(_OOP_SSA_OWN_OFF, 0, Any[])
+const _OOP_NO_MASK = Bool[]     # "this lane vector has no ghost mask"
+
+@inline _oop_ssa_sctx(own::_OopSSAOwn, cons::Int, vals::Vector{Any}) =
+    isempty(own.pid) ? _OOP_SSA_SCTX_OFF : _OopSSASCtx(own, cons, vals)
+
+# THE redirect predicate — the producer that owns slot `s` and strictly
+# precedes level `cons`, or 0. Shared verbatim by the walk-time read seams and
+# by the build-time residual marking (`_ssa_mark_node_reads!`), because a
+# disagreement between the two would let a scatter be skipped while something
+# still read the buffer.
+@inline function _ssa_owner_pid(own::_OopSSAOwn, s::Int, cons::Int)
+    cons == 0 && return 0
+    pv = own.pid
+    (1 <= s <= length(pv)) || return 0
+    pid = Int(@inbounds pv[s])
+    pid == 0 && return 0
+    return (@inbounds own.lvl[pid]) < cons ? pid : 0
+end
+
+# `(pid, pos)` for a slot this surface may redirect, `(0, 0)` otherwise. Pure
+# integer table lookups — no state is touched, so it is equally usable from the
+# host walkers and from a trace.
+@inline function _oop_ssa_owner(sc::_OopSSASCtx, s::Int)
+    pid = _ssa_owner_pid(sc.own, s, sc.cons)
+    pid == 0 && return (0, 0)
+    return (pid, Int(@inbounds sc.own.pos[s]))
+end
+
+# ONE redirected scalar read, or `nothing` to take the `ue` read (not
+# redirectable here, or the producer recorded no value this call).
+@inline function _oop_ssa_scalar(sc::_OopSSASCtx, s::Int, ::Type{T}, memo) where {T}
+    pid, pos = _oop_ssa_owner(sc, s)
+    pid == 0 && return nothing
+    v = @inbounds sc.vals[pid]
+    v isa AbstractArray || return nothing
+    return convert(T, _oop_read_state(v, pos, memo))
+end
+
+# A LANE VECTOR of slots (`_oop_eval_batch`'s state leaves), redirected only
+# when every lane resolves into the SAME producer — then it is one gather of
+# that producer's value at producer-local positions, the same single op the `ue`
+# gather was. Mixed-owner lane sets keep the `ue` gather (and are marked
+# residual at build time, so their producers still scatter). `mask` lanes are
+# WILDCARDS: the caller's select overwrites them with 0, so a ghost lane takes
+# position 1 rather than breaking the single-producer form. Returns the producer
+# id and fills `pos`, or 0.
+@inline function _oop_ssa_lane_pid!(pos::Vector{Int}, sc::_OopSSASCtx,
+                                    slots::Vector{Int}, mask::Vector{Bool})
+    sc.cons == 0 && return 0
+    L = length(slots)
+    L == 0 && return 0
+    masked = !isempty(mask)
+    p1 = 0
+    @inbounds for l in 1:L
+        if masked && mask[l]
+            pos[l] = 1                      # wildcard: the select discards it
+            continue
+        end
+        pid, q = _oop_ssa_owner(sc, slots[l])
+        pid == 0 && return 0
+        p1 == 0 ? (p1 = pid) : (pid == p1 || return 0)
+        pos[l] = q
+    end
+    return p1
+end
+
 # ---- Scalar walker (`_Node`) ------------------------------------------------
 #
 # The generic twin of `_eval_node`. Type-stable in `T`: every leaf converts into the
@@ -920,11 +1045,16 @@ end
 # subexpressions. `f!` reads the same slots out of a `Vector{Float64}` captured on
 # the node; here they come from a `Vector{T}` allocated per call, which is what makes
 # CSE survive differentiation at all.
-function _oop_eval(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_OopForcing)::T where {T}
+function _oop_eval(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_OopForcing,
+                   sc::_OopSSASCtx=_OOP_SSA_SCTX_OFF)::T where {T}
     k = n.kind
     if k === _NK_LITERAL
         return _oop_const(T, n.literal, fb.memo)
     elseif k === _NK_STATE
+        # An SSA-redirected slot (ess-oop-ssa blocker #4) reads its producer's
+        # value instead of the flat buffer; `nothing` ⇒ read `ue`.
+        r = _oop_ssa_scalar(sc, n.idx, T, fb.memo)
+        r === nothing || return r
         return convert(T, _oop_read_state(u, n.idx, fb.memo))
     elseif k === _NK_PARAM
         return _oop_const(T, _read_param(p, n.sym, n.idx), fb.memo)
@@ -941,18 +1071,20 @@ function _oop_eval(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_OopForcing)
     elseif k === _NK_CACHED
         return @inbounds cache[n.idx]
     elseif k === _NK_CONTRACTION
-        return _oop_contraction(n, u, p, t, cache, fb)
+        return _oop_contraction(n, u, p, t, cache, fb, sc)
     elseif k === _NK_LOOPVAR
         # ess-runtime-contraction: enclosing loop counter, an integer constant of T.
         return convert(T, (n.payload::Base.RefValue{Int})[])
     elseif k === _NK_CONTRACTION_LOOP
-        return _oop_contraction_loop(n, u, p, t, cache, fb)
+        return _oop_contraction_loop(n, u, p, t, cache, fb, sc)
     elseif k === _NK_CONST_GATHER
+        # No state read (a frozen array at loop-counter subscripts), so no
+        # redirect surface — and its subscripts go through `_oop_index_int`.
         return _oop_const_gather(n, u, p, t, cache, fb)
     elseif k === _NK_STATE_GATHER
-        return _oop_state_gather(n, u, p, t, cache, fb)
+        return _oop_state_gather(n, u, p, t, cache, fb, sc)
     else
-        return _oop_eval_op(n, u, p, t, cache, fb)
+        return _oop_eval_op(n, u, p, t, cache, fb, sc)
     end
 end
 
@@ -1044,7 +1176,8 @@ end
 # OOP twin of `_eval_state_gather` (ess-runtime-contraction). Same slot computation
 # and ghost convention; reads the state through `_oop_read_state` so a tracing
 # backend sees the real input, and returns `T` on both arms.
-function _oop_state_gather(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_OopForcing)::T where {T}
+function _oop_state_gather(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_OopForcing,
+                           sc::_OopSSASCtx=_OOP_SSA_SCTX_OFF)::T where {T}
     sg = n.payload::_StateGather
     children = n.children
     off = 0
@@ -1056,13 +1189,19 @@ function _oop_state_gather(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_Oop
         off += (sub - sg.lo[d]) * sg.strides[d]
     end
     slot = @inbounds sg.slot_flat[off + 1]
+    # The resolved slot is a host `Int`, so the redirect decision is the same
+    # table lookup a `_NK_STATE` pin makes — per SLOT, which is why the build
+    # marks residual per slot of `sg.slot_flat` rather than all-or-nothing.
+    r = _oop_ssa_scalar(sc, slot, T, fb.memo)
+    r === nothing || return r
     return convert(T, _oop_read_state(u, slot, fb.memo))
 end
 
 # OOP twin of `_eval_contraction_loop` (ess-runtime-contraction). Same static-range
 # iteration, same 0̄-seeded ⊕-fold, so a Float64 `:oop` run stays bit-identical to
 # `f!` — the property the in-place tests use `:oop` as an oracle for.
-function _oop_contraction_loop(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_OopForcing)::T where {T}
+function _oop_contraction_loop(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_OopForcing,
+                               sc::_OopSSASCtx=_OOP_SSA_SCTX_OFF)::T where {T}
     spec = n.payload::_ContractLoop
     ref = spec.ref
     body = @inbounds n.children[1]
@@ -1072,31 +1211,32 @@ function _oop_contraction_loop(n::_Node, u, p, t, cache::AbstractVector{T}, fb::
     if op === :+
         @inbounds for k in rng
             ref[] = k
-            s += _oop_eval(body, u, p, t, cache, fb)
+            s += _oop_eval(body, u, p, t, cache, fb, sc)
         end
     elseif op === :*
         @inbounds for k in rng
             ref[] = k
-            s *= _oop_eval(body, u, p, t, cache, fb)
+            s *= _oop_eval(body, u, p, t, cache, fb, sc)
         end
     elseif op === :max
         @inbounds for k in rng
             ref[] = k
-            s = max(s, _oop_eval(body, u, p, t, cache, fb))
+            s = max(s, _oop_eval(body, u, p, t, cache, fb, sc))
         end
     else  # :min
         @inbounds for k in rng
             ref[] = k
-            s = min(s, _oop_eval(body, u, p, t, cache, fb))
+            s = min(s, _oop_eval(body, u, p, t, cache, fb, sc))
         end
     end
     return s
 end
 
-function _oop_eval_op(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_OopForcing)::T where {T}
-    n.op === :fn && return _oop_fn(n, u, p, t, cache, fb)
+function _oop_eval_op(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_OopForcing,
+                      sc::_OopSSASCtx=_OOP_SSA_SCTX_OFF)::T where {T}
+    n.op === :fn && return _oop_fn(n, u, p, t, cache, fb, sc)
     if n.op === :^ || n.op === :pow
-        return _oop_pow(n.op, n.children, u, p, t, cache, fb)
+        return _oop_pow(n.op, n.children, u, p, t, cache, fb, sc)
     end
     # A GUARD MUST GUARD. `ifelse`/`and`/`or` are lazy on the in-place scalar walker
     # (`_eval_node_op`), and this emitter promises a Float64 `:oop` run is bit-
@@ -1110,23 +1250,23 @@ function _oop_eval_op(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_OopForci
     ch = n.children
     if n.op === :ifelse
         _expect_arity_n(n.op, ch, 3)
-        return _oop_eval(ch[1], u, p, t, cache, fb) != 0 ?
-               _oop_eval(ch[2], u, p, t, cache, fb) :
-               _oop_eval(ch[3], u, p, t, cache, fb)
+        return _oop_eval(ch[1], u, p, t, cache, fb, sc) != 0 ?
+               _oop_eval(ch[2], u, p, t, cache, fb, sc) :
+               _oop_eval(ch[3], u, p, t, cache, fb, sc)
     elseif n.op === :and
         @inbounds for i in eachindex(ch)
-            _oop_eval(ch[i], u, p, t, cache, fb) == 0 && return zero(T)
+            _oop_eval(ch[i], u, p, t, cache, fb, sc) == 0 && return zero(T)
         end
         return one(T)
     elseif n.op === :or
         @inbounds for i in eachindex(ch)
-            _oop_eval(ch[i], u, p, t, cache, fb) != 0 && return one(T)
+            _oop_eval(ch[i], u, p, t, cache, fb, sc) != 0 && return one(T)
         end
         return zero(T)
     end
     c = Vector{T}(undef, length(ch))
     @inbounds for i in eachindex(ch)
-        c[i] = _oop_eval(ch[i], u, p, t, cache, fb)
+        c[i] = _oop_eval(ch[i], u, p, t, cache, fb, sc)
     end
     return _oop_op(n.op, c, T, fb.memo)
 end
@@ -1144,35 +1284,37 @@ end
 # Both branches return the value type (`T^Float64` and `T^T` alike), so this stays
 # type-stable, and at Float64 it is the same `^` call the in-place ladder makes.
 @inline function _oop_pow(op::Symbol, ch::Vector{_Node}, u, p, t,
-                          cache::AbstractVector{T}, fb::_OopForcing)::T where {T}
+                          cache::AbstractVector{T}, fb::_OopForcing,
+                          sc::_OopSSASCtx=_OOP_SSA_SCTX_OFF)::T where {T}
     _expect_arity_n(op, ch, 2)
-    base = _oop_eval(ch[1], u, p, t, cache, fb)
+    base = _oop_eval(ch[1], u, p, t, cache, fb, sc)
     e = ch[2]
     return e.kind === _NK_LITERAL ? _oop_powlit(base, e.literal, fb.memo) :
-           base^_oop_eval(e, u, p, t, cache, fb)
+           base^_oop_eval(e, u, p, t, cache, fb, sc)
 end
 
 # Semiring fold, seeded from the 0̄ identity baked on the node — same order as
 # `_eval_contraction`, so the sum is bit-identical at Float64.
-function _oop_contraction(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_OopForcing)::T where {T}
+function _oop_contraction(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_OopForcing,
+                          sc::_OopSSASCtx=_OOP_SSA_SCTX_OFF)::T where {T}
     op = n.op
     ch = n.children
     s = _oop_const(T, n.literal, fb.memo)
     if op === :+
         @inbounds for k in eachindex(ch)
-            s += _oop_eval(ch[k], u, p, t, cache, fb)
+            s += _oop_eval(ch[k], u, p, t, cache, fb, sc)
         end
     elseif op === :*
         @inbounds for k in eachindex(ch)
-            s *= _oop_eval(ch[k], u, p, t, cache, fb)
+            s *= _oop_eval(ch[k], u, p, t, cache, fb, sc)
         end
     elseif op === :max
         @inbounds for k in eachindex(ch)
-            s = max(s, _oop_eval(ch[k], u, p, t, cache, fb))
+            s = max(s, _oop_eval(ch[k], u, p, t, cache, fb, sc))
         end
     else  # :min
         @inbounds for k in eachindex(ch)
-            s = min(s, _oop_eval(ch[k], u, p, t, cache, fb))
+            s = min(s, _oop_eval(ch[k], u, p, t, cache, fb, sc))
         end
     end
     return s
@@ -1189,24 +1331,25 @@ end
 # differentiation variable for a Rosenbrock ∂f/∂t term), and a traced walk
 # keeps the decomposition inside the program (`evaluate_closed_function_ad`),
 # exactly as before typed cores existed.
-function _oop_fn(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_OopForcing)::T where {T}
+function _oop_fn(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_OopForcing,
+                 sc::_OopSSASCtx=_OOP_SSA_SCTX_OFF)::T where {T}
     pl = n.payload
     c = n.children
     if pl isa Tuple{String,_InterpLinearSpec}
-        return _oop_interp_linear(pl[2], _oop_eval(c[1], u, p, t, cache, fb), T)
+        return _oop_interp_linear(pl[2], _oop_eval(c[1], u, p, t, cache, fb, sc), T)
     elseif pl isa Tuple{String,_InterpBilinearSpec}
-        return _oop_interp_bilinear(pl[2], _oop_eval(c[1], u, p, t, cache, fb),
-                                    _oop_eval(c[2], u, p, t, cache, fb), T)
+        return _oop_interp_bilinear(pl[2], _oop_eval(c[1], u, p, t, cache, fb, sc),
+                                    _oop_eval(c[2], u, p, t, cache, fb, sc), T)
     elseif pl isa Tuple{String,_InterpSearchsortedSpec}
-        return _oop_interp_searchsorted(pl[2], _oop_eval(c[1], u, p, t, cache, fb), T)
+        return _oop_interp_searchsorted(pl[2], _oop_eval(c[1], u, p, t, cache, fb, sc), T)
     elseif pl isa Tuple{String,_FnTypedCoreSpec}
         if T === Float64      # compile-time fold, as in `_eval_closed_fn`
-            return _fn_typed_core_call(pl[2].id, _oop_eval(c[1], u, p, t, cache, fb))
+            return _fn_typed_core_call(pl[2].id, _oop_eval(c[1], u, p, t, cache, fb, sc))
         end
-        args = Any[_oop_eval(ci, u, p, t, cache, fb) for ci in c]
+        args = Any[_oop_eval(ci, u, p, t, cache, fb, sc) for ci in c]
         return convert(T, _eval_closed_fn(pl[1], args, T))
     elseif pl isa Tuple{String,Nothing}
-        args = Any[_oop_eval(ci, u, p, t, cache, fb) for ci in c]
+        args = Any[_oop_eval(ci, u, p, t, cache, fb, sc) for ci in c]
         return convert(T, _eval_closed_fn(pl[1], args, T))
     end
     throw(TreeWalkError("E_TREEWALK_UNKNOWN_CLOSED_FUNCTION",
@@ -1587,13 +1730,30 @@ end
 # what `_oop_eval` computes on that lane's original node (see the bit-identity
 # note at the section header).
 function _oop_eval_batch(b::_OopBatchNode, u, p, t, cache::AbstractVector{T},
-                         fb::_OopForcing) where {T}
+                         fb::_OopForcing, sc::_OopSSASCtx=_OOP_SSA_SCTX_OFF) where {T}
     k = b.kind
     if k === _NK_LITERAL
         return isempty(b.lanes_f) ? _oop_const(T, b.literal, fb.memo) : b.lanes_f
     elseif k === _NK_STATE
-        return isempty(b.slots) ? convert(T, _oop_read_state(u, b.idx, fb.memo)) :
-               _oop_gather(u, b.slots, fb.memo)
+        if isempty(b.slots)
+            r = _oop_ssa_scalar(sc, b.idx, T, fb.memo)
+            r === nothing || return r
+            return convert(T, _oop_read_state(u, b.idx, fb.memo))
+        end
+        # SSA redirect (ess-oop-ssa blocker #4): one gather of the producer's
+        # VALUE when every lane of this group's slot vector lands in the same
+        # producer — the same single op, off the value instead of `ue`. The
+        # slot vector is build-time data, so this resolution is the same one
+        # `_ssa_mark_batch_reads!` made when it decided not to mark it residual.
+        if sc.cons != 0
+            pos = Vector{Int}(undef, length(b.slots))
+            pid = _oop_ssa_lane_pid!(pos, sc, b.slots, _OOP_NO_MASK)
+            if pid != 0
+                v = @inbounds sc.vals[pid]
+                v isa AbstractArray && return _oop_gather(v, pos, fb.memo)
+            end
+        end
+        return _oop_gather(u, b.slots, fb.memo)
     elseif k === _NK_PARAM
         return _oop_const(T, _read_param(p, b.sym, b.idx), fb.memo)
     elseif k === _NK_TIME
@@ -1667,6 +1827,21 @@ function _oop_eval_batch(b::_OopBatchNode, u, p, t, cache::AbstractVector{T},
             slots[l] = g ? 1 : sg.slot_flat[off + 1]
             anyghost |= g
         end
+        # SSA redirect (ess-oop-ssa blocker #4): the slots are host integers by
+        # now, so the same single-producer test the `_NK_STATE` lane vector
+        # takes applies — and a GHOST lane is a wildcard (the select below
+        # overwrites it with 0), so it does not break the single-producer form.
+        if sc.cons != 0
+            pos = Vector{Int}(undef, L)
+            pid = _oop_ssa_lane_pid!(pos, sc, slots, anyghost ? mask : _OOP_NO_MASK)
+            if pid != 0
+                v = @inbounds sc.vals[pid]
+                if v isa AbstractArray
+                    pg = _oop_gather(v, pos, fb.memo)
+                    return anyghost ? ifelse.(mask, zero(T), pg) : pg
+                end
+            end
+        end
         gth = _oop_gather(u, slots, fb.memo)
         return anyghost ? ifelse.(mask, zero(T), gth) : gth
     elseif k === _NK_CONTRACTION_LOOP
@@ -1681,22 +1856,22 @@ function _oop_eval_batch(b::_OopBatchNode, u, p, t, cache::AbstractVector{T},
         if op === :+
             for kk in b.lo:b.step:b.hi
                 @inbounds for r in refs; r[] = kk; end
-                s = s .+ _oop_eval_batch(body, u, p, t, cache, fb)
+                s = s .+ _oop_eval_batch(body, u, p, t, cache, fb, sc)
             end
         elseif op === :*
             for kk in b.lo:b.step:b.hi
                 @inbounds for r in refs; r[] = kk; end
-                s = s .* _oop_eval_batch(body, u, p, t, cache, fb)
+                s = s .* _oop_eval_batch(body, u, p, t, cache, fb, sc)
             end
         elseif op === :max
             for kk in b.lo:b.step:b.hi
                 @inbounds for r in refs; r[] = kk; end
-                s = max.(s, _oop_eval_batch(body, u, p, t, cache, fb))
+                s = max.(s, _oop_eval_batch(body, u, p, t, cache, fb, sc))
             end
         else  # :min
             for kk in b.lo:b.step:b.hi
                 @inbounds for r in refs; r[] = kk; end
-                s = min.(s, _oop_eval_batch(body, u, p, t, cache, fb))
+                s = min.(s, _oop_eval_batch(body, u, p, t, cache, fb, sc))
             end
         end
         return s
@@ -1707,19 +1882,19 @@ function _oop_eval_batch(b::_OopBatchNode, u, p, t, cache::AbstractVector{T},
         res::Any = _oop_const(T, b.literal, fb.memo)
         if b.op === :+
             for i in eachindex(ch)
-                res = res .+ _oop_eval_batch(ch[i], u, p, t, cache, fb)
+                res = res .+ _oop_eval_batch(ch[i], u, p, t, cache, fb, sc)
             end
         elseif b.op === :*
             for i in eachindex(ch)
-                res = res .* _oop_eval_batch(ch[i], u, p, t, cache, fb)
+                res = res .* _oop_eval_batch(ch[i], u, p, t, cache, fb, sc)
             end
         elseif b.op === :max
             for i in eachindex(ch)
-                res = max.(res, _oop_eval_batch(ch[i], u, p, t, cache, fb))
+                res = max.(res, _oop_eval_batch(ch[i], u, p, t, cache, fb, sc))
             end
         else  # :min
             for i in eachindex(ch)
-                res = min.(res, _oop_eval_batch(ch[i], u, p, t, cache, fb))
+                res = min.(res, _oop_eval_batch(ch[i], u, p, t, cache, fb, sc))
             end
         end
         return res
@@ -1727,20 +1902,20 @@ function _oop_eval_batch(b::_OopBatchNode, u, p, t, cache::AbstractVector{T},
         op = b.op
         ch = b.children
         if op === :fn
-            cv = Any[_oop_eval_batch(c, u, p, t, cache, fb) for c in ch]
+            cv = Any[_oop_eval_batch(c, u, p, t, cache, fb, sc) for c in ch]
             return _oop_batch_fn(b.payload, cv, T)
         elseif (op === :^ || op === :pow) && length(ch) == 2
             # A literal exponent stays a literal (see `_oop_pow`); the signature
             # pinned it, so a literal exponent is always the SHARED-literal form.
-            base = _oop_eval_batch(ch[1], u, p, t, cache, fb)
+            base = _oop_eval_batch(ch[1], u, p, t, cache, fb, sc)
             e = @inbounds ch[2]
             (e.kind === _NK_LITERAL && isempty(e.lanes_f)) &&
                 return _oop_powlit(base, e.literal, fb.memo)
-            return base .^ _oop_eval_batch(e, u, p, t, cache, fb)
+            return base .^ _oop_eval_batch(e, u, p, t, cache, fb, sc)
         end
         c = Vector{Any}(undef, length(ch))
         for i in eachindex(ch)
-            c[i] = _oop_eval_batch(ch[i], u, p, t, cache, fb)
+            c[i] = _oop_eval_batch(ch[i], u, p, t, cache, fb, sc)
         end
         return _oop_op(op, c, T, fb.memo)
     end
@@ -1751,16 +1926,18 @@ end
 # the surface are disjoint and the entries never read each other (section
 # header), so the values are the per-entry scalar walk's, bit for bit.
 function _oop_run_scalar_batches(du, sb::_OopScalarBatches, ue, p, t,
-                                 cache::AbstractVector{T}, fb::_OopForcing) where {T}
+                                 cache::AbstractVector{T}, fb::_OopForcing,
+                                 sc::_OopSSASCtx=_OOP_SSA_SCTX_OFF) where {T}
     rl = sb.rest
     @inbounds for i in eachindex(rl)
         slot, node = rl[i]
-        du = _oop_store(du, slot, _oop_eval(node, ue, p, t, cache, fb))
+        du = _oop_store(du, slot, _oop_eval(node, ue, p, t, cache, fb, sc))
     end
     gs = sb.groups
     for i in eachindex(gs)
         g = gs[i]
-        du = _oop_scatter(du, g.slots, _oop_eval_batch(g.root, ue, p, t, cache, fb))
+        du = _oop_scatter(du, g.slots,
+                          _oop_eval_batch(g.root, ue, p, t, cache, fb, sc))
     end
     return du
 end
@@ -2873,9 +3050,14 @@ forcing_buffer_index(f::_OopRHS) = f.buffer_index
 @inline function _oop_fill_level(ue, lvl, sb::_OopScalarBatches, p, t, ::Type{T},
                                  fb, empty_cache,
                                  ssaks::Vector{_OopSSAKernel}=_OOP_SSA_EMPTY_KS,
-                                 vals::Vector{Any}=_OOP_SSA_NO_VALS) where {T}
+                                 vals::Vector{Any}=_OOP_SSA_NO_VALS,
+                                 own::_OopSSAOwn=_OOP_SSA_OWN_OFF,
+                                 li::Int=0) where {T}
     scalars, kernels, plans, scans = lvl
-    ue = _oop_run_scalar_batches(ue, sb, ue, p, t, empty_cache, fb)
+    # This level's scalars run BEFORE its kernels, so their SSA consumer level
+    # is `li` and a redirect to a producer of this very level is refused.
+    ue = _oop_run_scalar_batches(ue, sb, ue, p, t, empty_cache, fb,
+                                 _oop_ssa_sctx(own, li, vals))
     for j in eachindex(kernels)
         plan = plans[j]
         ue = plan.vectorizable ?
@@ -2892,32 +3074,57 @@ end
 # costs an allocation per level per call. `ssat` rides along the same way (one
 # `Vector{_OopSSAKernel}` per level, empty ⇒ SSA off for that level).
 @inline _oop_fill_levels(ue, ::Tuple{}, sbs::Tuple, p, t, ::Type{T}, fb, ec,
-                         ssat::Tuple, vals::Vector{Any}) where {T} = ue
+                         ssat::Tuple, vals::Vector{Any}, own::_OopSSAOwn,
+                         li::Int) where {T} = ue
 @inline function _oop_fill_levels(ue, levels::Tuple, sbs::Tuple, p, t, ::Type{T},
-                                  fb, ec, ssat::Tuple, vals::Vector{Any}) where {T}
-    ue = _oop_fill_level(ue, levels[1], sbs[1], p, t, T, fb, ec, ssat[1], vals)
+                                  fb, ec, ssat::Tuple, vals::Vector{Any},
+                                  own::_OopSSAOwn=_OOP_SSA_OWN_OFF,
+                                  li::Int=1) where {T}
+    ue = _oop_fill_level(ue, levels[1], sbs[1], p, t, T, fb, ec, ssat[1], vals,
+                         own, li)
     return _oop_fill_levels(ue, Base.tail(levels), Base.tail(sbs), p, t, T, fb, ec,
-                            Base.tail(ssat), vals)
+                            Base.tail(ssat), vals, own, li + 1)
 end
 
 # ---- SSA build-time analysis (ess-oop-ssa) ----------------------------------
 
 _oop_ssa_enabled() = get(ENV, "ESS_OOP_SSA", "") == "1"
 
-# Bisect knobs for the three redirect arms added after the spike, all riding
-# inside `ESS_OOP_SSA=1` and all default ON. Setting one to 0 declines exactly
-# that arm while KEEPING the per-blocker attribution below, so one process can
-# A/B an arm without a second checkout — which is how the arms were measured
-# (setup wall on this filesystem is not a usable metric) — and so the test file
-# has a negative control for each.
+# Bisect knobs for the redirect arms added after the spike, all riding inside
+# `ESS_OOP_SSA=1`. Setting one to its off value declines exactly that arm while
+# KEEPING the per-blocker attribution below, so one process can A/B an arm
+# without a second checkout — which is how the arms were measured (setup wall
+# on this filesystem is not a usable metric) — and so the test file has a
+# negative control for each.
+#
+# THREE ARE DEFAULT ON because they paid. `_SCALAR` is default OFF because it
+# did NOT, and that is a measurement, not caution:
 #
 #   ESS_OOP_SSA_GHOST=0     ghost-masked `_AK_STATE_TBL_BOX` descriptors
 #                           (`_ssa_lane_owners`' wildcard fill)
 #   ESS_OOP_SSA_SUB=0       template sub-kernel (`_NK_SUBCALL`) descriptor tables
 #   ESS_OOP_SSA_PGATHER=0   tier 2b, the single-producer value gather
+#   ESS_OOP_SSA_SCALAR=1    OPT-IN: scalar-walker and lane-batched scalar reads
+#                           (`_NK_STATE` / `_NK_STATE_GATHER`, the surface map)
+#
+# WHY `_SCALAR` SHIPS OFF. It is correct and its coverage is real — on the
+# ReSEACT transport RHS at 6x6x8 it takes scatters-skipped 13/17 → 15/17 and
+# clears the `scalar` blocker row, moving 404 352 read elements off `ue` — but
+# at CONUS 4x5 it costs **4.3% on the transport step's reverse** (`rhs_vjp`
+# 71.41 → 74.59 ms; the forward `rhs` is flat at 1.010). The copy census says
+# why: whole-buffer copies 82 → 80 (the two scatters it really did free) against
+# total copy instructions 290 → 432 and real element writes 55.22 → 56.11 M.
+# The scalar surfaces' reads were ALREADY cheap relative to the buffer versions
+# they kept alive — a handful of gathers per level, not O(cells) of them — so
+# freeing two scatters buys little while the redirect's own materialization
+# (a producer-value gather per lane group, off a value XLA must now keep live
+# across the level boundary) adds copies. Same mechanism the scatter-skip gate
+# established: a PARTIAL skip pays twice, once for the buffer that still gets
+# assembled and once for the value kept alive beside it.
 _oop_ssa_ghost_enabled()   = get(ENV, "ESS_OOP_SSA_GHOST", "1") != "0"
 _oop_ssa_sub_enabled()     = get(ENV, "ESS_OOP_SSA_SUB", "1") != "0"
 _oop_ssa_pgather_enabled() = get(ENV, "ESS_OOP_SSA_PGATHER", "1") != "0"
+_oop_ssa_scalar_enabled()  = get(ENV, "ESS_OOP_SSA_SCALAR", "0") == "1"
 
 # WHY a residual `ue` read exists, one bit per read surface, carried per slot in
 # the analysis' `resid` map and reduced per producer into the blocker tally
@@ -2960,6 +3167,10 @@ struct _OopSSAStats
     n_sfast::Int          # … of which redirected
     elems_sedges::Int
     elems_sfast::Int
+    n_cedges::Int         # SCALAR read sites (scalar walker + lane-batched)
+    n_cfast::Int          # … of which fully redirected off `ue`
+    elems_cedges::Int     # Σ candidate slots over those sites
+    elems_cfast::Int      # … of which redirected
     blk::NTuple{8,Int}      # producers whose residual set includes reason k
     blk_only::NTuple{8,Int} # … producers blocked SOLELY by reason k
 end
@@ -2970,29 +3181,145 @@ struct _OopSSAPlan
     nprod::Int                          # producer count INCLUDING pid 1 (the state)
     mat::Vector{Vector{_OopSSAKernel}}  # per fill level, aligned with its kernels
     fin::Vector{_OopSSAKernel}          # aligned with the state-RHS acc_kernels
+    own::_OopSSAOwn                     # the scalar surfaces' shared slot map
     stats::_OopSSAStats
 end
 const _OOP_SSA_OFF = _OopSSAPlan(false, 0, Vector{_OopSSAKernel}[], _OopSSAKernel[],
+                                 _OOP_SSA_OWN_OFF,
                                  _OopSSAStats(0, 0, 0, 0, 0, 0, 0, false,
                                               0, 0, 0, 0, 0, 0, 0, 0,
+                                              0, 0, 0, 0,
                                               _SSA_BLK0, _SSA_BLK0))
 
-# Residual `ue` reads of the scalar walkers: `_NK_STATE` pins one slot,
-# `_NK_STATE_GATHER` may read any slot in its table (its subscripts are
-# runtime loop counters). Everything else that reads the state does so through
-# an access-kernel plan, which the caller accounts separately.
-function _ssa_mark_node_reads!(resid::Vector{UInt8}, n::_Node)
+# ---- scalar read surfaces: redirect verdict + residual marking -------------
+#
+# `_NK_STATE` pins one slot; `_NK_STATE_GATHER` resolves ONE slot per read out
+# of a static table (its subscripts are runtime loop counters, so the table —
+# not the slot — is what the build can see). Everything else that reads the
+# state does so through an access-kernel plan, accounted by `desc_table`.
+#
+# A slot is marked residual (`_SSA_R_SCALAR`) exactly when the surface map
+# would NOT redirect it at this surface's level; with the arm declined the map
+# is empty, `_ssa_owner_pid` returns 0 for every slot, and this is the pre-arm
+# behaviour verbatim. `cnt` accumulates (sites, sites redirected, candidate
+# slots, slots redirected) for `oop_ssa_stats`.
+#
+# GRANULARITY differs between the two walkers, because their fallbacks do:
+# `_oop_eval` reads ONE slot and can fall back per read, so the verdict is per
+# SLOT; `_oop_eval_batch` returns a whole lane vector through one gather, so its
+# verdict is per NODE and requires one common producer across every lane.
+function _ssa_mark_node_reads!(resid::Vector{UInt8}, n::_Node, own::_OopSSAOwn,
+                               cons::Int, cnt::Vector{Int})
     k = n.kind
     if k === _NK_STATE
-        1 <= n.idx <= length(resid) && (resid[n.idx] |= _SSA_R_SCALAR)
+        cnt[1] += 1; cnt[3] += 1
+        if _ssa_owner_pid(own, n.idx, cons) != 0
+            cnt[2] += 1; cnt[4] += 1
+        else
+            1 <= n.idx <= length(resid) && (resid[n.idx] |= _SSA_R_SCALAR)
+        end
     elseif k === _NK_STATE_GATHER
         sg = n.payload::_StateGather
+        nok = 0
         for s in sg.slot_flat
-            1 <= s <= length(resid) && (resid[s] |= _SSA_R_SCALAR)
+            if _ssa_owner_pid(own, s, cons) != 0
+                nok += 1
+            else
+                1 <= s <= length(resid) && (resid[s] |= _SSA_R_SCALAR)
+            end
         end
+        L = length(sg.slot_flat)
+        cnt[1] += 1; cnt[3] += L
+        nok == L && (cnt[2] += 1)
+        cnt[4] += nok
     end
     for c in n.children
-        _ssa_mark_node_reads!(resid, c)
+        _ssa_mark_node_reads!(resid, c, own, cons, cnt)
+    end
+    return nothing
+end
+
+# The ONE common producer of a lane-batched slot vector, or 0 — the build-time
+# twin of `_oop_ssa_lane_pid!`. A lane whose slot has no redirectable owner, or
+# a second producer, refuses the whole node (the walker then gathers `ue`).
+function _ssa_lane_common_pid(slots, own::_OopSSAOwn, cons::Int)
+    pid = 0
+    for s in slots
+        q = _ssa_owner_pid(own, s, cons)
+        q == 0 && return 0
+        pid == 0 ? (pid = q) : (q == pid || return 0)
+    end
+    return pid
+end
+
+_ssa_sg_slots(nd::_Node) = (nd.payload::_StateGather).slot_flat
+
+function _ssa_mark_batch_reads!(resid::Vector{UInt8}, b::_OopBatchNode,
+                                own::_OopSSAOwn, cons::Int, cnt::Vector{Int})
+    k = b.kind
+    if k === _NK_STATE && isempty(b.slots)
+        # A lane-INVARIANT pin: one slot, so the scalar rule applies.
+        cnt[1] += 1; cnt[3] += 1
+        if _ssa_owner_pid(own, b.idx, cons) != 0
+            cnt[2] += 1; cnt[4] += 1
+        else
+            1 <= b.idx <= length(resid) && (resid[b.idx] |= _SSA_R_SCALAR)
+        end
+    elseif k === _NK_STATE
+        L = length(b.slots)
+        cnt[1] += 1; cnt[3] += L
+        if _ssa_lane_common_pid(b.slots, own, cons) != 0
+            cnt[2] += 1; cnt[4] += L
+        else
+            for s in b.slots
+                1 <= s <= length(resid) && (resid[s] |= _SSA_R_SCALAR)
+            end
+        end
+    elseif k === _NK_STATE_GATHER
+        # Per-lane tables: the walker picks one slot per lane at run time, so
+        # the redirect must hold for EVERY slot of EVERY lane's table under one
+        # common producer. (A GHOST lane substitutes a safe slot at run time and
+        # is then discarded by the select, so it is a wildcard — see
+        # `_oop_ssa_lane_pid!` — and does not enter this test.)
+        pid = 0; tot = 0; okall = true
+        for nd in b.nodes
+            sf = _ssa_sg_slots(nd)
+            tot += length(sf)
+            q = _ssa_lane_common_pid(sf, own, cons)
+            if q == 0 || (pid != 0 && q != pid)
+                okall = false
+            elseif pid == 0
+                pid = q
+            end
+        end
+        cnt[1] += 1; cnt[3] += tot
+        if okall && pid != 0
+            cnt[2] += 1; cnt[4] += tot
+        else
+            for nd in b.nodes, s in _ssa_sg_slots(nd)
+                1 <= s <= length(resid) && (resid[s] |= _SSA_R_SCALAR)
+            end
+        end
+    end
+    # `_NK_CONST_GATHER` reads FROZEN array data, and every gather subscript is
+    # loop-counter integer arithmetic (`_oop_index_int` refuses anything else),
+    # so neither carries a state read into `resid`.
+    for c in b.children
+        _ssa_mark_batch_reads!(resid, c, own, cons, cnt)
+    end
+    return nothing
+end
+
+# One whole batch surface (`rhs_list`, or one fill level's scalars): the
+# leftover singles walk as `_Node`s, each group as its lowered lane tree —
+# together exactly the entries `_oop_batch_scalars` was given.
+function _ssa_mark_surface_reads!(resid::Vector{UInt8}, sb::_OopScalarBatches,
+                                  own::_OopSSAOwn, cons::Int, cnt::Vector{Int})
+    for (_, nd) in sb.rest
+        _ssa_mark_node_reads!(resid, nd, own, cons, cnt)
+    end
+    for g in sb.groups
+        _ssa_mark_batch_reads!(resid, g.root, own, cons, cnt)
     end
     return nothing
 end
@@ -3101,11 +3428,14 @@ function _ssa_pack_ref(pid_l::Vector{Int}, pos_l::Vector{Int}, pgather_ok::Bool)
 end
 
 function _build_oop_ssa_plan(mat_levels::Tuple, acc_kernels, acc_plans,
-                             rhs_list, cse_prelude, n_states::Int, n_total::Int)
+                             rhs_batches::_OopScalarBatches,
+                             mat_batches::Tuple, cse_prelude,
+                             n_states::Int, n_total::Int)
     _oop_ssa_enabled() || return _OOP_SSA_OFF
     ghost_ok = _oop_ssa_ghost_enabled()
     sub_ok = _oop_ssa_sub_enabled()
     pgather_ok = _oop_ssa_pgather_enabled()
+    scalar_ok = _oop_ssa_scalar_enabled()
     nlev = length(mat_levels)
 
     # ---- Slot ownership, in execution order (LAST writer owns) ----
@@ -3154,22 +3484,36 @@ function _build_oop_ssa_plan(mat_levels::Tuple, acc_kernels, acc_plans,
         end
     end
 
+    # The scalar surfaces' shared slot map (ess-oop-ssa blocker #4). Built HERE,
+    # after the ownership pass has settled `own_pid`/`own_pos`/`prod_level` and
+    # before the residual marking that consults it. With the arm declined it is
+    # the empty singleton: `_ssa_owner_pid` then answers 0 for every slot, so
+    # every scalar read marks residual exactly as it did before the arm, and no
+    # walk-time branch can fire.
+    # (named `scown`, not `own`: `desc_table` below already binds a local
+    # `own` for its lane-owner tuple, and a closure assigning that name would
+    # otherwise capture and clobber THIS binding.)
+    scown = scalar_ok ? _OopSSAOwn(own_pid, own_pos, prod_level) : _OOP_SSA_OWN_OFF
+
     # ---- Residual `ue` reads (everything that will NOT be redirected) ----
     resid = zeros(UInt8, n_total)
     markv!(v, why::UInt8) = (for s in v
                                  1 <= s <= n_total && (resid[s] |= why)
                              end)
+    # (sites, sites redirected, candidate slots, slots redirected)
+    sccnt = zeros(Int, 4)
+    # The CSE prelude and the state-RHS scalars run AFTER every fill level, so
+    # their consumer level is `nlev + 1`; a level's own scalars run BEFORE that
+    # level's kernels, so theirs is the level index itself. Both go through the
+    # BATCH surfaces, which are what actually run (`_oop_run_scalar_batches`):
+    # groups ∪ rest is exactly the entry list they were built from.
     for nd in cse_prelude
-        _ssa_mark_node_reads!(resid, nd)
+        _ssa_mark_node_reads!(resid, nd, scown, nlev + 1, sccnt)
     end
-    for (_, nd) in rhs_list
-        _ssa_mark_node_reads!(resid, nd)
-    end
+    _ssa_mark_surface_reads!(resid, rhs_batches, scown, nlev + 1, sccnt)
     for li in 1:nlev
-        scalars, _, _, scans = mat_levels[li]
-        for (_, nd) in scalars
-            _ssa_mark_node_reads!(resid, nd)
-        end
+        _, _, _, scans = mat_levels[li]
+        _ssa_mark_surface_reads!(resid, mat_batches[li], scown, li, sccnt)
         for S in scans
             # the fold reads its own slots back
             markv!((S::_ScanFold).slots, _SSA_R_SCAN)
@@ -3309,8 +3653,9 @@ function _build_oop_ssa_plan(mat_levels::Tuple, acc_kernels, acc_plans,
                          length(prod_level) - 1, n_skip, elems_skip, dynamic,
                          n_gedges, n_gfast, elems_gedges, elems_gfast,
                          n_sedges, n_sfast, elems_sedges, elems_sfast,
+                         sccnt[1], sccnt[2], sccnt[3], sccnt[4],
                          NTuple{8,Int}(blk), NTuple{8,Int}(blk_only))
-    return _OopSSAPlan(true, length(prod_level), mat, fin, stats)
+    return _OopSSAPlan(true, length(prod_level), mat, fin, scown, stats)
 end
 
 """
@@ -3331,6 +3676,8 @@ function oop_ssa_stats(f::_OopRHS)
             elems_ghost_edges = s.elems_gedges, elems_ghost_fast = s.elems_gfast,
             n_sub_edges = s.n_sedges, n_sub_fast = s.n_sfast,
             elems_sub_edges = s.elems_sedges, elems_sub_fast = s.elems_sfast,
+            n_scalar_edges = s.n_cedges, n_scalar_fast = s.n_cfast,
+            elems_scalar_edges = s.elems_cedges, elems_scalar_fast = s.elems_cfast,
             n_producers = s.n_prod, n_skipped_scatters = s.n_skip,
             elems_skipped = s.elems_skip, dynamic = s.dynamic,
             blockers = NamedTuple{_SSA_R_NAMES}(s.blk),
@@ -3380,8 +3727,11 @@ function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
     # SSA-dataflow plan (ess-oop-ssa; `ESS_OOP_SSA=1`, read HERE at build time —
     # the OFF singleton keeps every runtime branch on the pre-existing path).
     # `ssa_mat` mirrors `mat_levels`' tuple shape for the tail-recursive fill.
-    ssa = _build_oop_ssa_plan(mat_levels, acc_kernels, acc_plans, rhs_list,
-                              cse_prelude, n_states, n_total)
+    ssa = _build_oop_ssa_plan(mat_levels, acc_kernels, acc_plans, rhs_batches,
+                              mat_batches, cse_prelude, n_states, n_total)
+    # The CSE prelude and the state-RHS scalars read `ue` after every fill
+    # level, so their scalar-redirect surface level is `n_lev + 1`.
+    n_lev = length(mat_levels)
     ssa_mat = ssa.enabled ? Tuple(ssa.mat) :
               ntuple(_ -> _OOP_SSA_EMPTY_KS, length(mat_levels))
     buf_names = sort!(String[String(k) for k in keys(pgather)])
@@ -3438,12 +3788,16 @@ function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
         if !isempty(mat_levels)
             ue = _oop_prefix_copy(_oop_du_zeros(u, T, n_total), u, n_states)
             ue = _oop_fill_levels(ue, mat_levels, mat_batches, p, t, T, fb,
-                                  _EMPTY_OOP_CACHE(T), ssa_mat, vals)
+                                  _EMPTY_OOP_CACHE(T), ssa_mat, vals, ssa.own, 1)
         end
 
+        # Scalar read surface for everything that runs after the fills
+        # (ess-oop-ssa blocker #4); the OFF singleton with the arm or the
+        # feature declined, and then every branch below folds away.
+        sc_top = _oop_ssa_sctx(ssa.own, n_lev + 1, vals)
         cache = Vector{T}(undef, n_cse)
         @inbounds for s in 1:n_cse
-            cache[s] = _oop_eval(cse_prelude[s], ue, p, t, cache, fb)
+            cache[s] = _oop_eval(cse_prelude[s], ue, p, t, cache, fb, sc_top)
         end
 
         # Scalar state equations, through the lane-batched surface (ess-oop-
@@ -3454,7 +3808,8 @@ function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
         # surface — now that the entries themselves live in `rhs_batches`.)
         du = _oop_du_zeros(u, T, n_states)
         if !isempty(rhs_list)
-            du = _oop_run_scalar_batches(du, rhs_batches, ue, p, t, cache, fb)
+            du = _oop_run_scalar_batches(du, rhs_batches, ue, p, t, cache, fb,
+                                         sc_top)
         end
 
         # Access kernels (the unified array IR), out of place. The vectorized form
