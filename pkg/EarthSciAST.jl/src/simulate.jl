@@ -221,9 +221,9 @@ function _apply_initial_conditions!(u0::Vector{Float64}, var_map::AbstractDict,
     # merely failed loudly instead of silently. Resolve the caller's key onto
     # the name the build uses with the SAME rules (build.jl
     # `_canonicalize_override_keys`): exact hit, else a dotted key whose LONGEST
-    # dotted suffix is a state name, else a bare key that is the trailing
-    # segment of exactly one — an ambiguous local name is rejected, never
-    # guessed at.
+    # dotted suffix is a state name, else a key that is itself a dotted suffix
+    # of exactly one state name (`u` — and equally `sub.u` — for `P.sub.u`) —
+    # an ambiguous suffix is rejected, never guessed at.
     #
     # Two name spaces are tried in order: the ELEMENT names (`M.u`, `M.f[1]`),
     # then the array BASE names for the broadcast form (`M.f` sets every
@@ -241,8 +241,8 @@ function _apply_initial_conditions!(u0::Vector{Float64}, var_map::AbstractDict,
         push!(get!(cells_of, parsed[1], Tuple{Vector{Int},Int}[]), (parsed[2], idx))
     end
     base_names = Set{String}(keys(cells_of))
-    element_alias = _bare_alias_groups(element_names)
-    base_alias = _bare_alias_groups(base_names)
+    element_alias = _suffix_alias_groups(element_names)
+    base_alias = _suffix_alias_groups(base_names)
     # esm-spec §6.6.2 rule 2 validates a key's LEADING segments against the
     # component / subsystem scope, so `Missing.u` is reported rather than
     # silently re-pointed at the state `u` by its trailing segment. The scope is
@@ -311,14 +311,16 @@ function _apply_initial_conditions!(u0::Vector{Float64}, var_map::AbstractDict,
     return u0
 end
 
-# `bare trailing segment => every qualified name carrying it`, built once per
-# name space so key resolution below stays O(1) per key.
-function _bare_alias_groups(names::AbstractSet{String})
+# `dotted suffix => every qualified name carrying it as one`, built once per
+# name space so key resolution below stays O(1) per key. esm-spec §6.6.2 rule 3
+# admits EVERY proper suffix of a build name, not only its trailing segment, so
+# a flattened `P.sub.u` is reachable as `sub.u` as well as `u`.
+function _suffix_alias_groups(names::AbstractSet{String})
     groups = Dict{String,Vector{String}}()
     for n in names
-        b = _bare_param_name(n)
-        b == n && continue
-        push!(get!(groups, b, String[]), n)
+        for s in _dotted_suffixes(n)
+            push!(get!(groups, s, String[]), n)
+        end
     end
     return groups
 end
@@ -326,9 +328,10 @@ end
 # Resolve ONE caller-spelled state key against a set of build-resolved names,
 # by the esm-spec §6.6.2 precedence shared with `parameter_overrides`. Returns
 # the resolved name, or `nothing` when the key designates none of them. An
-# AMBIGUOUS bare name (the local name of two mounted components' states) raises
-# its own diagnostic rather than being lumped in with "unknown" — silently
-# binding one of the candidates would be a wrong answer, not a missing one.
+# AMBIGUOUS suffix (a local, or partially qualified, name two mounted
+# components' states both carry) raises its own diagnostic rather than being
+# lumped in with "unknown" — silently binding one of the candidates would be a
+# wrong answer, not a missing one.
 function _resolve_state_key(key::AbstractString, names::AbstractSet{String},
                             alias::AbstractDict{String,Vector{String}},
                             namespaces::AbstractSet{String})
@@ -338,13 +341,15 @@ function _resolve_state_key(key::AbstractString, names::AbstractSet{String},
     # only when every qualifier it drops names a real component or subsystem.
     suffix = _dotted_suffix_hit(names, namespaces, key)
     suffix === nothing || return suffix
+    # Rule 3, the other direction: the key is itself a dotted suffix of exactly
+    # one state name (`u` — and equally `sub.u` — for `P.sub.u`).
     cands = get(alias, String(key), nothing)
     cands === nothing && return nothing
     length(cands) == 1 && return cands[1]
     throw(SimulateError("simulate: initial_conditions names the ambiguous local " *
-                        "state '$key' — $(length(cands)) states carry it " *
-                        "($(join(sort(cands), ", "))). Qualify it with its owning " *
-                        "component (esm-spec §6.6.2)."))
+                        "state '$key' — $(length(cands)) states carry it as a suffix " *
+                        "($(join(sort(cands), ", "))). Qualify it further with its " *
+                        "owning component (esm-spec §6.6.2)."))
 end
 
 """

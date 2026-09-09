@@ -125,10 +125,18 @@ pub enum CompileError {
     /// indistinguishable from a legitimate numerical result and would propagate
     /// into the solution, whereas the pipeline stage that should have eliminated
     /// the op is the actual defect.
+    ///
+    /// BOTH interpreters raise it. The message names no particular one because
+    /// the two have different rule sets — the scalar ODE interpreter
+    /// ([`crate::simulate`]) additionally has no rule for the array/tensor and
+    /// geometry ops the array runtime ([`crate::simulate_array`]) evaluates —
+    /// and the invariant is the same either way: an unevaluable op is a
+    /// diagnostic, never a number.
     #[error(
         "unevaluable_operator: operator '{op}' is an evaluable-core op with no evaluation rule \
-         in the array interpreter — it must be eliminated by an earlier pipeline stage \
-         (value invention, or a lowering pass) before evaluation (esm-spec §4.2)"
+         in the interpreter this model was built for — it must be eliminated by an earlier \
+         pipeline stage (value invention, or a lowering pass), or the document built for a \
+         runtime that evaluates it, before evaluation (esm-spec §4.2)"
     )]
     UnevaluableOperatorError {
         /// The offending operator name (e.g. `"skolem"`).

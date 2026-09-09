@@ -76,16 +76,18 @@ pub enum SimulateError {
         name: String,
     },
 
-    /// The user supplied a BARE parameter name that two or more of the
-    /// flattened system's parameters carry as their local name (esm-spec
-    /// §6.6.2). Distinct from [`SimulateError::InvalidParameter`]: the name
-    /// exists, it just does not identify ONE parameter, and binding it to
-    /// either candidate would be a wrong answer rather than a missing one.
+    /// The user supplied a key that two or more of the flattened system's
+    /// parameters carry as a DOTTED SUFFIX — a shared local name (`gain` for
+    /// `Left.gain` and `Right.gain`) or a shared partial qualification
+    /// (`sub.g` for `Left.sub.g` and `Right.sub.g`), esm-spec §6.6.2 rule 4.
+    /// Distinct from [`SimulateError::InvalidParameter`]: the name exists, it
+    /// just does not identify ONE parameter, and binding it to either
+    /// candidate would be a wrong answer rather than a missing one.
     #[error(
-        "Ambiguous parameter '{name}': the local name of {candidates:?} — qualify it with its owning component"
+        "Ambiguous parameter '{name}': carried as a suffix by {candidates:?} — qualify it further with its owning component"
     )]
     AmbiguousParameter {
-        /// The ambiguous local name.
+        /// The ambiguous local or partially qualified name.
         name: String,
         /// The qualified parameters that carry it.
         candidates: Vec<String>,
@@ -119,14 +121,14 @@ pub enum SimulateError {
         name: String,
     },
 
-    /// The user supplied a BARE state name that two or more of the flattened
-    /// system's states carry as their local name (esm-spec §6.6.2). The
+    /// The user supplied a key that two or more of the flattened system's
+    /// states carry as a DOTTED SUFFIX (esm-spec §6.6.2 rule 4). The
     /// state-side counterpart of [`SimulateError::AmbiguousParameter`].
     #[error(
-        "Ambiguous initial condition '{name}': the local name of {candidates:?} — qualify it with its owning component"
+        "Ambiguous initial condition '{name}': carried as a suffix by {candidates:?} — qualify it further with its owning component"
     )]
     AmbiguousInitialCondition {
-        /// The ambiguous local name.
+        /// The ambiguous local or partially qualified name.
         name: String,
         /// The qualified states that carry it.
         candidates: Vec<String>,

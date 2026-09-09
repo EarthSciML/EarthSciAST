@@ -1109,7 +1109,7 @@ All libraries (including Core tier) must implement the flattening algorithm. Fla
        so a consumer that addresses a state by NAME — a `parameter_overrides` or
        `initial_conditions` key, an output selection — can resolve through it
        too. Normative statement, the surviving-registry-body carve-out, and the
-       per-surface scope: **CONFORMANCE_SPEC §5.34**.
+       per-surface scope: **CONFORMANCE_SPEC §5.35**.
    - **`couple`**: Apply connector equations, resolving the `from` and `to` scoped references to their namespaced equivalents.
    - **`variable_map`**: Substitute the target parameter with the source variable. For `param_to_var`, replace all occurrences of `Target.param` with `Source.var` in the flattened equations and remove the parameter from the target's parameter list.
    - **`operator_apply` / `callback`**: Record in the flattened system's metadata as opaque runtime references.
@@ -1202,7 +1202,7 @@ TypeScript `camelCase`, others verbatim).
 | `equations` | list | The governing equations — dynamics and constraints — coupling applied, dot-namespaced. Entries classified out into `field_ics` are REMOVED from this list (see below). |
 | `continuous_events` / `discrete_events` | list | Events, dot-namespaced. |
 | `domain` | domain or null | The file's `domain` section, unchanged. |
-| `metadata` | record | Which components were flattened, which coupling rules applied, and `merged_variable_renames` — every state spelling an `operator_compose` renaming match DELETED, mapped onto the survivor it was folded into (step 3, CONFORMANCE_SPEC §5.34). Empty for a document with no renaming merge. |
+| `metadata` | record | Which components were flattened, which coupling rules applied, and `merged_variable_renames` — every state spelling an `operator_compose` renaming match DELETED, mapped onto the survivor it was folded into (step 3, CONFORMANCE_SPEC §5.35). Empty for a document with no renaming merge. |
 | `index_sets` | ordered map | Document-scoped index-set registry; required to interpret arrayed equations. |
 | `function_tables` | ordered map | Merged function-table registry; resolves `table_lookup`. |
 | `template_registry` | ordered map | The merged expression-template registry specified above. |

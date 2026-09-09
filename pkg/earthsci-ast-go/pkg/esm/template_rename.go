@@ -78,34 +78,19 @@ func nameMap(raw any, field, where string) (map[string]string, error) {
 
 // renameAxisKeys: scalar Expression-node fields whose string value names an
 // AXIS / index set (rewritten by the index-set rename map, param-shadowed like
-// §9.6.1). `var` is `integral`'s integration variable (esm-spec §4.2) — the
-// same kind of axis-naming scalar as `wrt`/`dim`, so an imported `integral`
-// rewrite rule follows its axis under rename exactly as a `D` rule does.
-var renameAxisKeys = map[string]struct{}{"wrt": {}, "dim": {}, "var": {}}
+// §9.6.1). Derived from the canonical structural-field table in metaparams.go.
+var renameAxisKeys = keySet(axisKeys)
 
-// renameBoundKeys: `integral` bound fields (esm-spec §4.2). Unlike `var` these
-// are full Expression positions — a numeric literal, a parameter reference, an
-// AST subtree — so they stay variable-reference positions for `varmap`; only a
-// bare string naming a RENAMED index set (the cumulative form `"upper": "x"`)
-// is an axis occurrence and follows the rename (§9.7.7).
-var renameBoundKeys = map[string]struct{}{"lower": {}, "upper": {}}
+// renameBoundKeys: `integral` bound fields (esm-spec §4.2), an Expression
+// position that may also hold a bare axis name.
+var renameBoundKeys = keySet(boundKeys)
 
 // renameProtectedKeys: object keys whose values are never variable-reference
 // positions for the rename walk — the metaparameter skip set plus the remaining
-// scalar structural ExpressionNode fields (`op`, closed-registry ids, literal
-// enums). `from`, `wrt`/`dim`, apply-`name`, and `of` are handled positionally
-// in the walk.
-var renameProtectedKeys = func() map[string]struct{} {
-	out := map[string]struct{}{}
-	for k := range metaSubstSkipKeys {
-		out[k] = struct{}{}
-	}
-	for _, k := range []string{"op", "id", "expect_cadence", "reduce", "semiring",
-		"manifold", "fn", "table", "side", "attrs", "members", "from_faq"} {
-		out[k] = struct{}{}
-	}
-	return out
-}()
+// scalar structural ExpressionNode fields (the op-parameterizing closed-registry
+// ids and literal enums). `from`, `wrt`/`dim`, apply-`name`, and `of` are
+// handled positionally in the walk.
+var renameProtectedKeys = keySet(protectedKeys, axisKeys, nodeHeaderKeys, registryKeys)
 
 // isetRenamed looks up s in isetmap, returning the renamed axis or s unchanged.
 func isetRenamed(s string, isetmap map[string]string) string {

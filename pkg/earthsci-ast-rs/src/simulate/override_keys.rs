@@ -16,11 +16,12 @@ use super::*;
 pub(crate) enum OverrideKeyError {
     /// The key matches no name under any of the §6.6.2 rules.
     Unknown(String),
-    /// A bare key that is the local name of two or more qualified names.
+    /// A key that is a dotted suffix of two or more qualified names.
     Ambiguous {
-        /// The ambiguous local name as the caller spelled it.
+        /// The ambiguous local (or partially qualified) name as the caller
+        /// spelled it.
         key: String,
-        /// The qualified names that carry it, sorted.
+        /// The qualified names that carry it as a suffix, sorted.
         candidates: Vec<String>,
     },
     /// Two or more NON-EXACT keys designate one build-resolved name.
@@ -32,9 +33,17 @@ pub(crate) enum OverrideKeyError {
     },
 }
 
-/// The trailing (local) segment of a possibly dot-qualified name.
-fn bare_name(name: &str) -> &str {
-    name.rsplit('.').next().unwrap_or(name)
+/// Every PROPER dotted suffix of a possibly dot-qualified name, longest first:
+/// `A.sub.g` yields `sub.g` then `g`, and a bare `g` yields nothing. These are
+/// the spellings rule 3 admits for the name (esm-spec §6.6.2) — the trailing
+/// segment is merely the shortest of them.
+fn dotted_suffixes(name: &str) -> impl Iterator<Item = &str> {
+    let mut rest = name;
+    std::iter::from_fn(move || {
+        let (_, tail) = rest.split_once('.')?;
+        rest = tail;
+        Some(tail)
+    })
 }
 
 /// The COMPONENT / SUBSYSTEM names a rule-2 override key may name in its
@@ -82,9 +91,13 @@ pub(crate) fn namespace_scope<'a>(
 ///      name a component or subsystem in `namespaces`, so a typo'd
 ///      `Missng.M.pert_amp` is reported rather than silently suffix-matched
 ///      onto `M.pert_amp`;
-///   3. else a BARE key that is the trailing segment of exactly ONE name
-///      resolves to it (`A` against the flattened `M.A`);
-///   4. else a BARE key carried by two or more names is `Ambiguous`;
+///   3. else a key that is a DOTTED SUFFIX of exactly ONE name resolves to it
+///      — `A` against the flattened `M.A` (the bare case), and equally
+///      `sub.g` against the flattened `P.sub.g`, the mounted-subsystem
+///      spelling a single-model build carries as `sub.g` outright. Rules 2 and
+///      3 are the two directions of one relationship: rule 2 for a key LONGER
+///      than the name, rule 3 for a key SHORTER than it;
+///   4. else a key carried as a suffix by two or more names is `Ambiguous`;
 ///   5. else it is `Unknown`.
 ///
 /// Two NON-EXACT keys designating ONE name — `solo` (rule 3) and
@@ -122,12 +135,14 @@ pub(crate) fn canonicalize_override_keys(
         resolved = resolve_merged_renames(overrides, renames);
         &resolved
     };
-    // Local name -> every qualified name carrying it.
+    // Dotted suffix -> every qualified name carrying it as one. Rule 3 admits
+    // EVERY proper suffix, not only the trailing segment, so `P.sub.g` is
+    // reachable as `sub.g` as well as `g` — a suffix carried by two or more
+    // names is ambiguous rather than tie-broken.
     let mut groups: HashMap<&str, Vec<&str>> = HashMap::new();
     for n in known.keys() {
-        let b = bare_name(n);
-        if b != n.as_str() {
-            groups.entry(b).or_default().push(n.as_str());
+        for s in dotted_suffixes(n) {
+            groups.entry(s).or_default().push(n.as_str());
         }
     }
 
@@ -148,7 +163,7 @@ pub(crate) fn canonicalize_override_keys(
             suffix // rule 2: longest known dotted suffix under a real namespace
         } else if let Some(cands) = groups.get(k.as_str()) {
             if cands.len() == 1 {
-                cands[0] // rule 3: unique bare alias
+                cands[0] // rule 3: unique dotted-suffix alias
             } else {
                 let mut candidates: Vec<String> = cands.iter().map(|s| (*s).to_string()).collect();
                 candidates.sort();
@@ -316,6 +331,69 @@ mod tests {
         ));
     }
 
+    /// esm-spec §6.6.2 rule 3 is a DOTTED SUFFIX of exactly one name, not
+    /// merely its trailing segment. Against a FLATTENED build carrying
+    /// `P.sub.g` — which is what Python and Julia hand the resolver, and what
+    /// Rust's own multi-model path builds — all three authored spellings of a
+    /// mounted subsystem's parameter must bind the one name, exactly as they
+    /// do against a single-model build carrying it as `sub.g` (rules 1 and 2
+    /// there). `sub.g` used to reach neither rule and was reported unknown.
+    #[test]
+    fn rule_3_binds_a_dotted_suffix_of_exactly_one_name() {
+        let k = known(&["P.sub.g", "P.x0"]);
+        let ns = namespace_scope(k.keys().map(String::as_str), []);
+        for key in ["P.sub.g", "sub.g", "g"] {
+            let over: HashMap<String, f64> = [(key.to_string(), 1.5)].into_iter().collect();
+            let out = canonicalize_override_keys(&k, &ns, &over, &no_renames())
+                .unwrap_or_else(|e| panic!("'{key}' must resolve, got {e:?}"));
+            assert_eq!(out.get("P.sub.g"), Some(&1.5), "key '{key}'");
+        }
+        // A key that is the suffix of NOTHING stays unknown: widening rule 3
+        // must not turn it into a trailing-segment match on `P.sub.g`.
+        for key in ["Missing.solo", "Missing.g", "x.sub.g"] {
+            let bad: HashMap<String, f64> = [(key.to_string(), 1.0)].into_iter().collect();
+            assert!(
+                matches!(
+                    canonicalize_override_keys(&k, &ns, &bad, &no_renames()),
+                    Err(OverrideKeyError::Unknown(ref n)) if n == key
+                ),
+                "key '{key}' must be unknown"
+            );
+        }
+        // A suffix carried by TWO names is AMBIGUOUS, never tie-broken — and
+        // the diagnostic names every candidate so the author can qualify it.
+        let two = known(&["Left.sub.g", "Right.sub.g"]);
+        let ns2 = namespace_scope(two.keys().map(String::as_str), []);
+        for key in ["sub.g", "g"] {
+            match canonicalize_override_keys(
+                &two,
+                &ns2,
+                &[(key.to_string(), 1.5)].into_iter().collect(),
+                &no_renames(),
+            ) {
+                Err(OverrideKeyError::Ambiguous {
+                    key: got,
+                    candidates,
+                }) => {
+                    assert_eq!(got, key);
+                    assert_eq!(candidates, vec!["Left.sub.g", "Right.sub.g"]);
+                }
+                other => panic!("expected ambiguous for '{key}', got {other:?}"),
+            }
+        }
+        // Two spellings of ONE name still collide rather than racing.
+        let over: HashMap<String, f64> = [("sub.g".to_string(), 1.5), ("g".to_string(), 2.5)]
+            .into_iter()
+            .collect();
+        match canonicalize_override_keys(&k, &ns, &over, &no_renames()) {
+            Err(OverrideKeyError::Collision { name, keys }) => {
+                assert_eq!(name, "P.sub.g");
+                assert_eq!(keys, vec!["g", "sub.g"]);
+            }
+            other => panic!("expected a collision, got {other:?}"),
+        }
+    }
+
     /// esm-spec §6.6.2 rule 2 validates the LEADING SEGMENTS: they must name a
     /// component or subsystem the build actually carries. Without the check a
     /// typo'd qualifier is silently discarded and the key binds the name it
@@ -408,7 +486,8 @@ mod tests {
         let over: HashMap<String, f64> = [("solo".to_string(), 2.0), ("gain".to_string(), 3.0)]
             .into_iter()
             .collect();
-        let out = canonicalize_override_keys(&two, &ns2, &over, &no_renames()).expect("both resolve");
+        let out =
+            canonicalize_override_keys(&two, &ns2, &over, &no_renames()).expect("both resolve");
         assert_eq!(out.get("Left.solo"), Some(&2.0));
         assert_eq!(out.get("Right.gain"), Some(&3.0));
     }

@@ -446,6 +446,23 @@ def resolve_merged_renames(renames: dict[str, str], overrides: dict[str, Any]) -
     return out
 
 
+def dotted_suffixes(name: str) -> list[str]:
+    """Every PROPER dotted suffix of ``name``, longest first: ``A.sub.g`` gives
+    ``["sub.g", "g"]`` and a bare ``g`` gives ``[]``.
+
+    These are the spellings esm-spec §6.6.2 rule 3 admits for the name — the
+    trailing segment is merely the shortest of them. The Julia
+    (``_dotted_suffixes``) and Rust (``dotted_suffixes``) mirrors enumerate the
+    same list.
+    """
+    out: list[str] = []
+    rest = str(name)
+    while "." in rest:
+        rest = rest.split(".", 1)[1]
+        out.append(rest)
+    return out
+
+
 def namespace_scope(names: Iterable[str], extra: Iterable[str] = ()) -> set[str]:
     """The COMPONENT / SUBSYSTEM names a rule-2 override key may spell in its
     LEADING segments (esm-spec §6.6.2 rule 2, §4.6).
@@ -507,10 +524,15 @@ def check_parameter_override_keys(
        way must name a component or subsystem in ``namespaces``, so a typo'd
        ``Missng.M.pert_amp`` is reported rather than silently suffix-matched
        onto ``M.pert_amp``;
-    3. else a BARE key that is the trailing segment of exactly ONE parameter
-       resolves to it (``A`` against the flattened ``M.A``);
-    4. else a BARE key carried by two or more parameters is AMBIGUOUS —
-       :class:`AmbiguousParameterError`, reported with its candidates;
+    3. else a key that is a DOTTED SUFFIX of exactly ONE parameter resolves to
+       it — ``A`` against the flattened ``M.A`` (the bare case), and equally
+       ``sub.g`` against the flattened ``P.sub.g``, the mounted-subsystem
+       spelling a single-model build carries as ``sub.g`` outright. Rules 2
+       and 3 are the two directions of one relationship: rule 2 for a key
+       LONGER than the name, rule 3 for a key SHORTER than it;
+    4. else a key carried as a dotted suffix by two or more parameters is
+       AMBIGUOUS — :class:`AmbiguousParameterError`, reported with its
+       candidates;
     5. else it is UNKNOWN — :class:`UnknownParameterError`.
 
     Two NON-EXACT keys designating ONE parameter — ``solo`` (rule 3) and
@@ -542,9 +564,8 @@ def check_parameter_override_keys(
     ns = namespace_scope(known) if namespaces is None else set(namespaces)
     groups: dict[str, list[str]] = {}
     for name in known:
-        bare = name.rsplit(".", 1)[-1]
-        if bare != name:
-            groups.setdefault(bare, []).append(name)
+        for suffix in dotted_suffixes(name):
+            groups.setdefault(suffix, []).append(name)
     unknown: list[str] = []
     ambiguous: list[tuple[str, list[str]]] = []
     exact: set[str] = set()
@@ -567,9 +588,9 @@ def check_parameter_override_keys(
     if ambiguous:
         key, candidates = sorted(ambiguous)[0]
         raise AmbiguousParameterError(
-            f"parameter_overrides: ambiguous parameter name {key!r} — it is the local "
-            f"name of {len(candidates)} parameters ({', '.join(candidates)}). Qualify "
-            f"it with its owning component (esm-spec §6.6.2)."
+            f"parameter_overrides: ambiguous parameter name {key!r} — it is carried as "
+            f"a suffix by {len(candidates)} parameters ({', '.join(candidates)}). "
+            f"Qualify it further with its owning component (esm-spec §6.6.2)."
         )
     collisions = sorted(
         (name, sorted(keys)) for name, keys in claims.items() if name not in exact and len(keys) > 1
@@ -637,18 +658,21 @@ def resolve_override_raw(
     """The value :func:`_resolve_override` resolves, BEFORE the ``float`` cast.
 
     Precedence: a caller override wins — the dot-namespaced ``name`` first
-    (rule 1, an EXACT hit), then a single NON-EXACT claim on it: its bare
-    trailing segment (rule 3) or a MORE-qualified key that RESOLVES to ``name``
-    under rule 2 of :func:`check_parameter_override_keys` (``Outer.M.A`` for the
-    name ``M.A``) — otherwise the declared ``default``. Returns the value exactly
+    (rule 1, an EXACT hit), then a single NON-EXACT claim on it: a MORE-qualified
+    key that RESOLVES to ``name`` under rule 2 of
+    :func:`check_parameter_override_keys` (``Outer.M.A`` for the name ``M.A``),
+    or a SHORTER key that is a dotted suffix of ``name`` under rule 3 (``A`` —
+    and equally ``sub.g`` for the name ``P.sub.g``) — otherwise the declared
+    ``default``. Returns the value exactly
     as authored, so a caller that supports shaped data (esm-spec §6.3 / §6.6.2: a
     row-major nested JSON array on a SHAPED variable's ``default``,
     ``parameter_overrides`` or ``initial_conditions``) can route a list to its
     array channel instead of forcing it through ``float``. ``None`` when neither
     an override nor a declared default supplies a value.
 
-    TWO non-exact claims on one name — the bare spelling and a more-qualified
-    one, or two more-qualified ones — raise :class:`AmbiguousParameterError`
+    TWO non-exact claims on one name — two of its suffix spellings (``g`` and
+    ``sub.g`` for ``P.sub.g``), a suffix spelling beside a more-qualified one,
+    or two more-qualified ones — raise :class:`AmbiguousParameterError`
     naming ``name`` and every colliding key. The caller wrote two overrides and
     only one can take effect, so choosing between them would be a wrong answer
     rather than a missing one. An EXACT hit is never part of a collision: rule 1
@@ -681,7 +705,6 @@ def resolve_override_raw(
     """
     if not overrides:
         return default
-    bare = name.rsplit(".", 1)[-1]
     if name in overrides:
         return overrides[name]
     # `name` is always in the view, so a caller that passes a partial `known`
@@ -695,9 +718,20 @@ def resolve_override_raw(
     else:
         names = set(known) | {name}
     ns = namespace_scope(names) if namespaces is None else namespaces
-    claims = [k for k in overrides if k not in names and _dotted_suffix_hit(names, k, ns) == name]
-    if bare != name and bare in overrides:
-        claims.append(bare)
+    suffixes = frozenset(dotted_suffixes(name))
+    claims: list[str] = []
+    for k in overrides:
+        if k in names:
+            # A key that is itself a build name is an EXACT hit on THAT name
+            # (rule 1) and is never read as a re-spelling of some other one.
+            continue
+        hit = _dotted_suffix_hit(names, k, ns)
+        if hit is not None:
+            if hit == name:  # rule 2: the key is MORE qualified than `name`
+                claims.append(k)
+            continue  # rule 2 fired for a different name; precedence stops here
+        if k in suffixes:  # rule 3: the key is a dotted suffix of `name`
+            claims.append(k)
     if len(claims) > 1:
         raise AmbiguousParameterError(_collision_message(surface, kind, name, sorted(claims)))
     if claims:

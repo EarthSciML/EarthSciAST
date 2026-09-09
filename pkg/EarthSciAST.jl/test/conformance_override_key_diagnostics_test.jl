@@ -3,9 +3,10 @@
 # esm-spec §6.6.2 "Unrecognized override keys": every `parameter_overrides` key
 # must designate exactly ONE parameter of the flattened system, and one that
 # designates none is an ERROR rather than a silently-ignored no-op. Three
-# outcomes, kept distinct: a key that resolves (exactly, or by the LOCAL
-# spelling §6.6 mandates) runs; a BARE key that is the local name of two or more
-# parameters is AMBIGUOUS; anything else is UNKNOWN.
+# outcomes, kept distinct: a key that resolves (exactly, or as a dotted SUFFIX
+# of exactly one flattened name — the LOCAL spelling §6.6 mandates, and any
+# longer partial qualification of it) runs; a key carried as a suffix by two or
+# more parameters is AMBIGUOUS; anything else is UNKNOWN.
 #
 # Julia used to leave an unmatched key verbatim, so it bound nothing and the run
 # quietly used every declared default while still reporting a verdict — the same
@@ -145,10 +146,49 @@ end
         Float64, sub_names, EarthSciAST._override_namespaces(sub_names),
         Dict("P.sub.g" => 1.5))
     @test u_np == ["P.sub.g"]
-    # A key none of whose suffixes is a name stays UNKNOWN (rule 3 is bare-only).
+    # A key none of whose suffixes is a name, and which is the suffix of no
+    # name either, stays UNKNOWN under both rule 2 and the widened rule 3.
     _, u2, _, _ = EarthSciAST._canonicalize_override_keys(
         Float64, names, ns, Dict("Missing.solo" => 1.0))
     @test u2 == ["Missing.solo"]
+end
+
+# esm-spec §6.6.2 rule 3 is a DOTTED SUFFIX of exactly one name, not merely its
+# trailing segment. Against a FLATTENED build carrying `P.sub.g` — which is what
+# Julia and Python hand the resolver — all three authored spellings of a mounted
+# subsystem's parameter must bind the one name, exactly as they do against a
+# single-model build carrying it as `sub.g` (rules 1 and 2 there). `sub.g`
+# reached NEITHER rule and was reported unknown, so the same document ran in
+# Rust and raised here (issue #227).
+@testset "override keys: rule 3 binds a dotted suffix of exactly one name" begin
+    names = Set{String}(["P.sub.g", "P.x0"])
+    ns = EarthSciAST._override_namespaces(names)
+    for key in ("P.sub.g", "sub.g", "g")
+        n, u, a, c = EarthSciAST._canonicalize_override_keys(
+            Float64, names, ns, Dict(key => 1.5))
+        @test n == Dict("P.sub.g" => 1.5)
+        @test isempty(u) && isempty(a) && isempty(c)
+    end
+    # A key that is the suffix of NOTHING stays unknown: widening rule 3 must
+    # not turn it into a trailing-segment match on `P.sub.g`.
+    for key in ("Missing.solo", "Missing.g", "x.sub.g")
+        _, u, _, _ = EarthSciAST._canonicalize_override_keys(
+            Float64, names, ns, Dict(key => 1.5))
+        @test u == [key]
+    end
+    # A suffix carried by TWO names is AMBIGUOUS, never tie-broken.
+    two = Set{String}(["Left.sub.g", "Right.sub.g"])
+    two_ns = EarthSciAST._override_namespaces(two)
+    for key in ("sub.g", "g")
+        _, u, a, _ = EarthSciAST._canonicalize_override_keys(
+            Float64, two, two_ns, Dict(key => 1.5))
+        @test isempty(u)
+        @test sort(a[key]) == ["Left.sub.g", "Right.sub.g"]
+    end
+    # Two spellings of ONE name still collide rather than racing.
+    _, _, _, c = EarthSciAST._canonicalize_override_keys(
+        Float64, names, ns, Dict("sub.g" => 1.5, "g" => 2.5))
+    @test c == Dict("P.sub.g" => ["g", "sub.g"])
 end
 
 @testset "override keys: two keys, one name, is ambiguous" begin
