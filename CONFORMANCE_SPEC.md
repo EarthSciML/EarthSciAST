@@ -4322,17 +4322,41 @@ trigger the wrap. (Julia's general-purpose `free_variables` reports `wrt`, and
 adds it after binder subtraction; the predicate this rule pins is the narrower
 `_mentions_free` / `mentions_free`, which does not.)
 
-**A dimension name the parameter scope also binds is a FAULT.** "Nothing that
-evaluated before evaluates differently" holds only with this clause. Where a
-reference mentions free a name that is BOTH a dimension of the asserted field
-and a parameter in the build-time scope the reference is evaluated against
-(flattened parameter names plus their unambiguous bare aliases), the wrap would
-shadow the parameter with the cell's 1-based index: the same reference, a
-different number, no diagnostic — the §5.14 / §5.23 failure class. One name
-meaning two things in one scope is an ill-formed document, so a binding MUST
-reject it with an error naming the clashing name, rather than silently choosing
-either meaning. A reference that does NOT mention the name is unaffected, as is
-a gather that rebinds it as its own loop symbol.
+**A dimension name the build-time scope already binds is a FAULT.** "Nothing
+that evaluated before evaluates differently" holds only with this clause. Where
+a reference mentions free a name that is BOTH a dimension of the asserted field
+and a name the build-time scope it is evaluated against already binds, the wrap
+would shadow that other meaning with the cell's 1-based index: the same
+reference, a different number, no diagnostic — the §5.14 / §5.23 failure class.
+One name meaning two things in one scope is an ill-formed document, so a binding
+MUST reject it with an error naming the clashing name, rather than silently
+choosing either meaning. A reference that does NOT mention the name is
+unaffected, as is a gather that rebinds it as its own loop symbol.
+
+**The clash scope is the WHOLE build-time scope, in two halves.** esm-spec
+§6.6.5 names them, and a binding assembles both before calling
+`bind_dimension_names`:
+
+1. the resolved SCALAR PARAMETERS — `BuildInspection.params`, flattened names
+   plus their unambiguous bare aliases (`param_scope_with_aliases`); and
+2. the build-time ARRAY names — a materialized state-free array observed, an
+   inline `const` array, a shaped parameter's inline column, a provider- or
+   loader-injected input field — likewise with their unambiguous bare aliases
+   (`array_scope_names` in Rust, `_array_scope_names` in Julia and Python, which
+   apply the SAME alias rule so an ambiguous bare tail is in neither half).
+
+The array half is what keeps the three on one rule, and checking only the
+parameter half was a live divergence (issue #226). Julia hands its cellwise
+evaluator the build's `const_arrays`, so a const array named after a shape index
+set — an array `lev` over the index set `lev` — is a name the reference could
+already read there, and the wrap rebound it to the cell index in silence; Python
+and Rust have no const-array-by-name channel in this position and merely
+wrapped. Erroring in Julia alone would have reintroduced the divergence #202
+closed, so the rule is the same in all three and each supplies what its
+inspection carries: Julia `const_arrays` + `setup_arrays`, Python the same two,
+Rust `setup_arrays` (its `BuildInspection` has no `const_arrays` field). Which
+names a build carries in each half is an implementation matter; that the clash
+is checked against **all** of them is the contract.
 
 #### 5.30.1 Gate
 
@@ -4370,6 +4394,14 @@ The scope clash: **Julia** `test/inline_tests_test.jl`
 **Python**
 `tests/test_inline_tests.py::test_bind_dimension_names_rejects_a_dimension_that_shadows_a_parameter`,
 **Rust** `inline_tests::tests::bind_dimension_names_rejects_a_dimension_that_shadows_a_parameter`.
+Its ARRAY half is gated beside it, one test each — **Julia**
+`test/inline_tests_test.jl` (the `lev` block), **Python**
+`tests/test_inline_tests.py::test_bind_dimension_names_rejects_a_dimension_a_build_array_binds`,
+**Rust** `inline_tests::tests::bind_dimension_names_rejects_a_dimension_a_build_array_binds`
+— each pinning the flattened name, its unambiguous bare alias, that an AMBIGUOUS
+bare tail is in neither half, and that a non-mention and a rebinding gather are
+untouched. Neither clause is expressible as a passing shared fixture: the fixture
+would have to be a document every binding REJECTS.
 
 ### 5.31 Override Keys: the Longest Dotted Suffix, Its Guard, and Key Collisions (normative)
 
@@ -4383,8 +4415,29 @@ Rust while Python and Julia, whose builds are always flattened to `M.sub.A`,
 took it as an exact hit — a cross-binding divergence on the same document and
 the same test. Rule 2 now tries every dotted suffix of the key, **most-qualified
 first**, and binds the longest one that is a name; the trailing segment is the
-last one tried. Rule 3 is unchanged and still bare-only, so `Missing.solo` stays
-unknown.
+last one tried.
+
+**Rule 3 is the same relationship read the other way.** Rule 2 covers a key
+LONGER than the name it designates; rule 3 covers a key SHORTER than it, and it
+was bare-only, which left the mirror-image divergence open (issue #227). Against
+the FLATTENED build Python and Julia always produce, a mounted subsystem's
+parameter is `P.sub.g`, and the key `sub.g` is a suffix of a known name rather
+than having a known name as its suffix: rule 2 drops leading segments of the KEY
+(`sub.g` → `g`, not a name there) and rule 3 refused a dotted key, so the same
+authored override ran in Rust — whose single-model array build carries it as
+`sub.g` outright, an exact hit — and raised `UnknownParameterError` in the other
+two. Rule 3 now reads "the key is a dotted suffix of exactly ONE flattened
+name", of which the bare trailing segment is the shortest case
+(`dotted_suffixes` in Rust, `dotted_suffixes` in Python, `_dotted_suffixes` in
+Julia, all enumerating the same list longest-first). A suffix carried by two or
+more names is AMBIGUOUS and names every candidate — `dup.k` for `Left.dup.k` and
+`Right.dup.k` is refused exactly as the shared local name `gain` is — never
+tie-broken by depth, document order or anything else.
+
+Neither widening discards a qualifier, which is what keeps `Missing.solo`
+unknown: rule 2 validates every segment it drops (below), and rule 3 drops
+nothing at all — no flattened name ends with `.Missing.solo`. `Missing.sub.g` is
+unknown for the same reason even though `sub.g` resolves.
 
 **The guard: leading segments are VALIDATED.** The prefix rule 2 drops is a §4.6
 qualifier, and every segment of it MUST name a component or subsystem the
@@ -4407,6 +4460,16 @@ then an exact hit; it fires only inside a binding that keeps a model's own names
 and is gated there by each binding's `P.sub.g` subsystem-override test
 (Rust `self_qualified_subsystem_reference_and_override_spellings`, Python
 `test_subsystem_parameter_override_in_every_spelling`).
+
+Rule 3's positive path IS expressible there, precisely because the fixture
+flattens, and the fixture now pins it: `Left` mounts a subsystem `sub` carrying
+`g`, so the three authored spellings `Left.sub.g` (rule 1), `sub.g` (rule 3) and
+`g` (rule 3) must all bind `Left.sub.g` and produce the SAME trajectory at
+`t = 1`. `g` alone is the control — a binding that resolves it and not `sub.g`
+has implemented the trailing segment, not the rule. Both components also mount a
+subsystem `dup` carrying `k`, so `dup.k` and `k` are both **ambiguous** over
+`Left.dup.k` / `Right.dup.k`, and `Missing.sub.g` is **unknown**: the widened
+rule must not become a suffix-match on the key's own tail.
 
 **Key collisions.** Widening rule 2 also made it possible for TWO distinct keys
 to designate ONE build name — `solo` (rule 3) and `Doc.Left.solo` (rule 2) both
@@ -4624,6 +4687,107 @@ Adapters: `pkg/EarthSciAST.jl/test/operator_compose_merge_conformance_test.jl`;
 **All five bindings** are in scope: the merge is a rewrite, so a rewrite-only
 port implements it in full. None is excluded.
 
+### 5.34 An Arrayed Definition Is Observed, in Every LHS Spelling (normative)
+
+esm-spec §6.3.1 admits **two** LHS spellings for the equation that DEFINES an
+unknown — bare (`y ~ f(…)`) and indexed (`y[i] ~ f(…)`, which defines the whole
+array `y`) — and restricts **neither** by rank. It states the criterion
+semantically, not syntactically: the defining form is read through the LHS's
+**base name**, so "an arrayed definition is observed exactly as its scalar
+counterpart is". §6.3.1 also retired the older wording ("a bare-variable LHS")
+explicitly, as "written for scalar equations" and contradicting the semantic
+criterion in the arrayed case.
+
+Alongside `observed_unknowns`, §6.3.1 sanctions a **narrower** set — the strict
+`y ~ f(…)` form, for **inlining** specifically, which Python spells
+`inlined_unknowns` — and says in as many words that it "does not narrow the
+partition". Substituting that narrower set for the classification is the defect
+this category exists to catch. It was found independently in **four of the five
+bindings**:
+
+| Binding | Where | Fixed by |
+|---|---|---|
+| Julia | the tree-walk build's owner buckets keyed on `eq.lhs isa VarExpr` | #232 / PR #250 |
+| Python | `flatten._collect_model` reading `classification.inlined_unknowns` | #232 / PR #276 |
+| Go | `definedVariableName` stopping at the `aggregate` shell | PR #268 |
+| TypeScript | `baseVariableName` stopping at the `aggregate` shell | PR #268 |
+| Rust | — `lhs_form` already peels both shells | (already correct) |
+
+Four independent implementations reaching the same wrong answer is a corpus
+failure, not four coincidences: the `classification` category
+(`tests/conformance/classification/`) contains **no `index` or `aggregate` LHS at
+all**, so the indexed spelling was unpinned everywhere.
+
+**The base-name rule.** A bare string is itself; `index(w, i…)` is `w`; an
+`aggregate` whose `expr` is an `index` is that index's base. An `aggregate` whose
+`expr` is a **`D`** is NOT a definition — it is the whole-array spelling of a
+tendency, and its base is an ODE state. That asymmetry is the entire content of
+the category: every binding's *derivative* reader already peeled the `aggregate`
+shell, and four of five *observed* readers did not.
+
+#### 5.34.1 Gate
+
+`tests/conformance/classification_indexed_lhs/`, one authored fixture
+(`observed_indexed_lhs.esm`) whose golden is written against the spec rather than
+minted by a binding. Seven unknowns, chosen so a binding cannot pass by widening
+indiscriminately:
+
+| Variable | LHS | Golden |
+|---|---|---|
+| `wf` | `aggregate{k}(index(wf, k))`, state-free RHS | observed |
+| `ws` | `aggregate{k}(index(ws, k))`, state-reading RHS | observed |
+| `wb` | `index(wb, i)` — §6.3.1's worked-example spelling | observed |
+| `sc` | bare `sc` — the rank-0 control | observed |
+| `u`, `v` | `aggregate{k}(D(u[k]))` — the **same shell**, over a `D` | ODE state |
+| `im` | `im*im ~ c0` | algebraic |
+
+`wf` and `ws` are a controlled pair (state-free vs. state-reading), the two
+classes bindings route differently downstream, so a partial fix does not pass.
+`u` and `v` are the pin in the other direction: their derivative LHSs wear
+exactly the shell `wf` and `ws` wear, and a reader that unwraps it
+indiscriminately steals them out of `ode_states`.
+
+The golden's shape is identical to the `classification` category's, so each
+binding drives both with one reader. All five are in `bindings_required`.
+
+**All five bindings pass.** The category was authored while the Python half was
+still open, and kept python in `bindings_required` rather than moving it to
+`scope_excluded` — defining the contract down to what already passes is the
+weaker use of the mechanism (PR #250's precedent). Python answered
+`observed_unknowns = ['sc', 'wb']` and `algebraic_unknowns = ['im', 'wf', 'ws']`
+until PR #276 landed `classification._base_name`'s aggregate unwrap. Julia and
+Rust were already correct on `main`; Go and TypeScript are corrected in PR #268.
+
+#### 5.34.2 What this category deliberately does not pin
+
+Two omissions, both decisions rather than oversights, recorded in the category's
+`README.md`:
+
+- **Which flatten bucket an arrayed observed lands in** — issue #270.
+  esm-libraries-spec §4.7.5 puts it in **both** `state_variables` and
+  `observed_variables`; no binding does that, and they miss in two opposite
+  directions. Measured on this fixture: Python reports `state_variables =
+  [u, v, wb, im]` / `observed_variables = [wf, ws, sc]`, while Rust, Go and
+  TypeScript report `state_variables = [u, v, wf, ws, wb, im]` /
+  `observed_variables = [sc]`. Python is not self-consistent either — `wb`, whose
+  LHS is §6.3.1's own worked-example `index(wb, i)`, stays a `state_variable`
+  there, because only the `aggregate` spelling is normalized upstream. Dual membership is not
+  expressible today — each binding assigns one role per variable with a single
+  `switch` — so this is a four-binding data-model decision with two defensible
+  directions, and pinning it here would settle it by fixture rather than by
+  triage.
+
+- **The cadence of an indexed-LHS observed** — issue #272. This is the
+  consequence §6.3.1 names: `algebraic_unknowns` seeds the CONTINUOUS partition
+  (§5.7.2) while an observed's cadence resolves through its defining RHS, so a
+  state-free arrayed observed mis-credited as algebraic stops folding at bind.
+  It is not pinned cross-binding because the **cadence oracle itself** —
+  `scripts/run-cadence-conformance.py` and Julia's mirror in `src/cadence.jl` —
+  carries the same strict bare-LHS gate, and seven existing fixtures under
+  `tests/valid/cadence/` already have `index` / `aggregate` LHSs whose goldens
+  were minted against that behaviour. The consequence is pinned **per-binding**
+  in the meantime (Go and TypeScript both assert `cadence(w) == const` for a
+  state-free arrayed observed), which is what made #272 visible.
 
 ## 6. CI Integration
 

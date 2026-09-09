@@ -273,13 +273,30 @@ func observedDefinitions(model *Model) map[string]Expression {
 }
 
 // definedVariableName is the variable an equation LHS DEFINES: a bare name is
-// itself and `index(u, …)` is `u`. Anything else — a derivative, an `ic`, an
-// arithmetic expression — names no defined variable and returns "".
+// itself, `index(u, …)` is `u`, and an `aggregate` whose `expr` is an `index` —
+// the arrayed definition `y[i] ~ f(…)` as documents actually spell it — is that
+// index's base. Anything else — a derivative, an `ic`, an arithmetic expression
+// — names no defined variable and returns "".
 //
-// Deliberately NARROWER than graph.go's extractVariableFromLHS, which also
-// credits `D` and `aggregate`: a derivative LHS makes an ODE state, not an
-// observed, and crediting it here would make ObservedDefinition hand a state's
-// derivative RHS to the units and cadence passes as if it were a definition.
+// The aggregate unwrap mirrors collectDerivativeTargets', which already sees
+// through the same shell for a `D` body. esm-spec §6.3.1 reads BOTH defining
+// spellings through the LHS's BASE NAME — "an arrayed definition is observed
+// exactly as its scalar counterpart is" — and neither spelling is restricted by
+// rank. Without it, an array-shaped observed written
+// `aggregate{k}(index(w, k)) ~ …` was credited to nobody, so ObservedUnknowns
+// did not know it was an observed at all and AlgebraicUnknowns claimed it by
+// elimination. §6.3.1 calls that misclassification out as load-bearing beyond
+// bookkeeping: AlgebraicUnknowns seeds the CONTINUOUS cadence partition
+// (CONFORMANCE_SPEC §5.7.2), whereas an observed's cadence resolves through its
+// defining RHS, so the arrayed definition's build-time work lands on the
+// per-timestep hot path instead.
+//
+// Only an `index` body unwraps, which is what keeps this NARROWER than
+// graph.go's extractVariableFromLHS: that one also credits a `D`, and an
+// `aggregate` whose body is a derivative (`aggregate{k}(D(u[k]))`) is the
+// whole-array spelling of a TENDENCY. It makes an ODE state, not an observed,
+// and crediting it here would make ObservedDefinition hand a state's derivative
+// RHS to the units and cadence passes as if it were a definition.
 func definedVariableName(lhs Expression) string {
 	if s, ok := lhs.(string); ok {
 		return s
@@ -290,6 +307,11 @@ func definedVariableName(lhs Expression) string {
 	}
 	if node.Op == "index" && len(node.Args) > 0 {
 		return definedVariableName(node.Args[0])
+	}
+	if node.Op == "aggregate" && node.Expr != nil {
+		if inner, ok := asExprNode(node.Expr); ok && inner.Op == "index" {
+			return definedVariableName(node.Expr)
+		}
 	}
 	return ""
 }

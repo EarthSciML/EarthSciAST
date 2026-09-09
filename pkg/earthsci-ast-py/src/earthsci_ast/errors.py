@@ -39,11 +39,15 @@ class UnknownParameterError(EarthSciAstError, ValueError):
 
 
 class AmbiguousParameterError(UnknownParameterError):
-    """Raised when a BARE ``parameter_overrides`` key is the local name of two
-    or more of the flattened system's parameters (esm-spec §6.6.2).
+    """Raised when a ``parameter_overrides`` key is a DOTTED SUFFIX of two or
+    more of the flattened system's parameters (esm-spec §6.6.2 rule 4) — a
+    shared local name (``gain`` for ``Left.gain`` and ``Right.gain``) or a
+    shared partial qualification (``sub.g`` for ``Left.sub.g`` and
+    ``Right.sub.g``).
 
     Distinct from :class:`UnknownParameterError`: the name exists, it just does
-    not identify ONE parameter — the fix is to qualify it with its owning
-    component, not to correct the spelling. Subclasses it so a caller that only
-    cares that the key did not resolve can catch the pair with one clause.
+    not identify ONE parameter — the fix is to qualify it further with its
+    owning component, not to correct the spelling. Subclasses it so a caller
+    that only cares that the key did not resolve can catch the pair with one
+    clause.
     """

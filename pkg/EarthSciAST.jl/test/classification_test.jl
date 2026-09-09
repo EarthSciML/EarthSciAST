@@ -190,3 +190,65 @@ const _CLS = ClassificationConformanceAdapter
         @test "p_data" in discrete_parameters(m)
     end
 end
+
+# The INDEXED LHS spelling of an arrayed definition (esm-spec §6.3.1), which the
+# `classification` category cannot state: it carries no `index` or `aggregate`
+# LHS at all, which is why FOUR of the five bindings drifted onto the same wrong
+# answer independently (Julia's own tree-walk build, issue #232; Python, issue
+# #231; Go and TypeScript, PR #268). Julia's §6.3.1 API was already right — this
+# is the regression pin for that, not a fix.
+#
+# Same golden shape as the category above, so the same adapter reads it.
+# See tests/conformance/classification_indexed_lhs/README.md.
+const _CLS_IDX_DIR =
+    joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "classification_indexed_lhs")
+
+@testset "Classification API: the INDEXED LHS spelling (esm-spec §6.3.1)" begin
+    manifest_path = joinpath(_CLS_IDX_DIR, "manifest.json")
+    @test isfile(manifest_path)
+    manifest = JSON3.read(read(manifest_path, String))
+    @test "julia" in [String(b) for b in manifest["bindings_required"]]
+
+    @testset "golden agreement — $(String(fx["id"]))" for fx in manifest["fixtures"]
+        fixture_path = joinpath(_CLS_IDX_DIR, String(fx["fixture"]))
+        golden_path = joinpath(_CLS_IDX_DIR, String(fx["golden"]))
+        @test isfile(fixture_path)
+        @test isfile(golden_path)
+
+        got = _CLS.classify_fixture(fixture_path)["models"]
+        want = JSON3.read(read(golden_path, String))["models"]
+
+        @test sort!(collect(keys(got))) == sort!(String[String(k) for k in keys(want)])
+
+        for (mname, wmodel) in pairs(want)
+            gmodel = got[String(mname)]
+            for key in ("ode_states", "observed_unknowns", "algebraic_unknowns",
+                        "brownian_parameters", "discrete_parameters",
+                        "sampled_parameters", "constant_parameters")
+                @test (String(mname), key, gmodel[key]) ==
+                      (String(mname), key, String[String(x) for x in wmodel[key]])
+            end
+            @test (String(mname), gmodel["system_kind"]) ==
+                  (String(mname), String(wmodel["system_kind"]))
+            if haskey(wmodel, "declared_system_kind")
+                w = wmodel["declared_system_kind"]
+                @test gmodel["declared_system_kind"] ==
+                      (w === nothing ? nothing : String(w))
+            end
+        end
+    end
+
+    # The boundary the unwrap must not cross, said out loud: `u` and `v` carry
+    # the SAME `aggregate` shell as `wf` and `ws`, over a `D` rather than an
+    # `index`. A reader that peels the shell indiscriminately steals them out of
+    # `ode_states` and calls them observed.
+    @testset "an aggregate over a D stays a TENDENCY, not a definition" begin
+        m = EarthSciAST.load_path(
+            joinpath(_CLS_IDX_DIR, "fixtures", "observed_indexed_lhs.esm")).models["M"]
+        @test ode_states(m) == ["u", "v"]
+        @test observed_unknowns(m) == ["sc", "wb", "wf", "ws"]
+        @test algebraic_unknowns(m) == ["im"]
+        @test !("u" in observed_unknowns(m))
+        @test !("v" in observed_unknowns(m))
+    end
+end

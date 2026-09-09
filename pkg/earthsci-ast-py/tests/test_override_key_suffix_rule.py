@@ -5,8 +5,12 @@ that is a known name — the trailing segment being tried last — so the §4.6
 fully-qualified ``M.sub.A`` binds a build's ``sub.A`` and ``M.A`` binds a bare
 ``A``, PROVIDED every leading segment it drops names a component or subsystem
 the document declares. A key none of whose suffixes is a name (``Missing.solo``)
-stays UNKNOWN, a key whose qualifier names nothing (``Doc.Left.solo``) stays
-UNKNOWN too, and rule 3 stays bare-only.
+stays UNKNOWN, and a key whose qualifier names nothing (``Doc.Left.solo``) stays
+UNKNOWN too.
+
+Rule 3 is the same relationship read the other way: the key is a dotted SUFFIX
+of exactly one known name, so ``sub.g`` binds a flattened ``P.sub.g`` just as
+``g`` does. A suffix carried by two or more names is AMBIGUOUS.
 
 Rule 6: two NON-EXACT keys designating one name is a document authoring error,
 not a race to be settled by a ranking.
@@ -73,6 +77,43 @@ def test_rule_2_rejects_a_leading_segment_that_names_nothing() -> None:
         resolve_override_raw("sub.g", {"P.sub.g": 1.5}, 9.81, known={"sub.g"}, namespaces={"sub"})
         == 9.81
     )
+
+
+def test_rule_3_binds_a_dotted_suffix_of_exactly_one_name() -> None:
+    """esm-spec §6.6.2 rule 3 is a DOTTED SUFFIX, not just a trailing segment.
+
+    Against a FLATTENED build carrying ``P.sub.g`` — which is what Python and
+    Julia hand the resolver — all three authored spellings of a mounted
+    subsystem's parameter must bind the one name, exactly as they do against a
+    single-model build carrying it as ``sub.g`` (rules 1 and 2 there). ``sub.g``
+    reached neither rule and was reported UNKNOWN, so the same document ran in
+    Rust and raised here (issue #227).
+    """
+    known = {"P.sub.g", "P.x0"}
+    ns = namespace_scope(known)
+    for key in ("P.sub.g", "sub.g", "g"):
+        check_parameter_override_keys(sorted(known), {key: 1.5}, ns)
+        assert (
+            resolve_override_raw("P.sub.g", {key: 1.5}, 9.81, known=known, namespaces=ns) == 1.5
+        ), key
+    # A key that is the suffix of NOTHING stays unknown: widening rule 3 must
+    # not turn it into a trailing-segment match on `P.sub.g`.
+    for key in ("Missing.solo", "Missing.g", "x.sub.g"):
+        with pytest.raises(UnknownParameterError):
+            check_parameter_override_keys(sorted(known), {key: 1.5}, ns)
+    # A suffix carried by TWO names is AMBIGUOUS, never tie-broken, and the
+    # diagnostic names every candidate so the author can qualify it further.
+    two = {"Left.sub.g", "Right.sub.g"}
+    ns2 = namespace_scope(two)
+    for key in ("sub.g", "g"):
+        with pytest.raises(AmbiguousParameterError) as exc:
+            check_parameter_override_keys(sorted(two), {key: 1.5}, ns2)
+        assert key in str(exc.value)
+        assert "Left.sub.g" in str(exc.value) and "Right.sub.g" in str(exc.value)
+    # Two spellings of ONE name still collide rather than racing.
+    with pytest.raises(AmbiguousParameterError) as exc:
+        check_parameter_override_keys(sorted(known), {"sub.g": 1.5, "g": 2.5}, ns)
+    assert "2 keys designate the parameter 'P.sub.g' (g, sub.g)" in str(exc.value)
 
 
 def test_check_parameter_override_keys_accepts_a_suffix_hit_and_rejects_the_rest() -> None:

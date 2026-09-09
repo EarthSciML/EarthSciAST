@@ -1,0 +1,16 @@
+{
+  "$comment": "AUTHORED, not produced by any binding — this golden states esm-spec §6.3.1 rather than recording what an implementation happens to do. `wf`, `ws` and `wb` are the three unknowns the category exists for: all three are DEFINED by an equation whose LHS names them through an index, so all three are observed. `im` is the control that must stay algebraic, `u` and `v` the control that must stay ODE states even though their derivative LHSs wear the same `aggregate` shell, and `sc` the rank-0 control §6.3.1 says the arrayed ones must match. Lists are sorted lexicographically by UTF-8 code point.",
+  "models": {
+    "M": {
+      "ode_states": ["u", "v"],
+      "observed_unknowns": ["sc", "wb", "wf", "ws"],
+      "algebraic_unknowns": ["im"],
+      "brownian_parameters": [],
+      "discrete_parameters": [],
+      "sampled_parameters": [],
+      "constant_parameters": ["c0"],
+      "system_kind": "ode",
+      "declared_system_kind": null
+    }
+  }
+}

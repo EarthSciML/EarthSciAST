@@ -203,11 +203,23 @@ def _collect_metaparam_decls(raw: Any, origin: str) -> dict[str, Any]:
     return out
 
 
-#: Keys whose VALUES are never expression positions: metaparameter names are
-#: substituted as bare variable-reference strings, so structural string fields
-#: must not be rewritten. Template ``params`` shadowing is handled separately
-#: in :func:`_substitute_metaparams_decl`.
-_META_SUBST_SKIP_KEYS = frozenset(
+# ---------------------------------------------------------------------------
+# Canonical structural-field table
+# ---------------------------------------------------------------------------
+# The ONE registry of raw-JSON object keys whose VALUES are structural — never
+# ordinary expression positions — for the two load-time rewrite passes in this
+# module (metaparameter substitution, esm-spec §9.7.6, and the import-edge
+# rename walk, esm-spec §9.7.7). The skip/protect sets are DERIVED from it;
+# nothing else hand-maintains key membership. Mirrors ``_STRUCTURAL_FIELDS`` in
+# the Julia reference (``EarthSciAST.jl/src/template_imports.jl``) kind for kind.
+#
+# NEW Expression structural fields MUST be registered here with the right kind,
+# or metaparameter substitution / import-edge renaming will rewrite their string
+# values as if they were variable references.
+
+#: Opaque to metaparameter substitution AND copied verbatim by the rename walk.
+#: ``name`` and ``where`` additionally get a positional rename-walk branch.
+_PROTECTED_KEYS = frozenset(
     {
         "metadata",
         "params",
@@ -216,11 +228,6 @@ _META_SUBST_SKIP_KEYS = frozenset(
         "kind",
         "description",
         "name",
-        "wrt",
-        "dim",
-        # `integral`'s integration variable is an axis NAME (esm-spec §4.2),
-        # exactly like `wrt`/`dim` — never an expression position.
-        "var",
         "expression_template_imports",
         "metaparameters",
         "only",
@@ -229,6 +236,59 @@ _META_SUBST_SKIP_KEYS = frozenset(
         "where",
     }
 )
+
+#: Scalar value NAMES an index set / axis: the rename walk maps it through
+#: ``isetmap``, and it is opaque to metaparameter substitution (an axis name is
+#: never an integer-valued metaparameter reference). ``var`` is ``integral``'s
+#: integration variable (esm-spec §4.2), the same kind of axis-naming scalar as
+#: ``wrt``/``dim`` (§4.9.1).
+_AXIS_KEYS = frozenset({"wrt", "dim", "var"})
+
+#: NODE-HEADER fields: they describe the Expression node itself rather than
+#: parameterizing whatever op it carries — ``op`` (which operator this node IS),
+#: ``id`` (this node's identity) and ``expect_cadence`` (an assertion about this
+#: node). None is an expression position (esm-spec §9.7.6), so a metaparameter
+#: that happens to share a name with an operator — ``max``, say — must not
+#: rewrite ``{"op": "max", …}`` into ``{"op": 3, …}``, which then dies in the
+#: typed load with a raw "cannot unmarshal number into `op`" instead of a
+#: diagnostic. Opaque to substitution AND copied verbatim by the rename walk.
+_NODE_HEADER_KEYS = frozenset({"op", "id", "expect_cadence"})
+
+#: Closed-registry ids / literal enums PARAMETERIZING the node's op. Like the
+#: node-header fields these are names rather than values, so they are opaque to
+#: metaparameter substitution AND copied verbatim by the rename walk; the kind
+#: is kept distinct because the two answer different questions about a node
+#: (what it IS vs how its op is parameterized).
+_REGISTRY_KEYS = frozenset(
+    {
+        "reduce",
+        "semiring",
+        "manifold",
+        "fn",
+        "table",
+        "side",
+        "attrs",
+        "members",
+        "from_faq",
+    }
+)
+
+#: Keys whose VALUES are never expression positions: metaparameter names are
+#: substituted as bare variable-reference strings, so structural string fields
+#: must not be rewritten. Template ``params`` shadowing is handled separately
+#: in :func:`_substitute_metaparams_decl`.
+#:
+#: All five bindings MUST hold the SAME set here — a divergence is silent until
+#: a document happens to name a metaparameter after a structural field's value
+#: (``tests/conformance/expression_templates/metaparam_axis_name_collision``).
+#:
+#: Every structural kind but ``bound`` and ``positional`` is in: an expression
+#: position is the ONLY thing substitution may rewrite, and ``bound`` is the one
+#: structural-table entry that IS one. This makes the set coincide with
+#: :data:`_RENAME_PROTECTED_KEYS` below; both stay derived from the kind sets
+#: separately because they answer different questions and a future kind may
+#: split them.
+_META_SUBST_SKIP_KEYS = _PROTECTED_KEYS | _AXIS_KEYS | _NODE_HEADER_KEYS | _REGISTRY_KEYS
 
 
 def _substitute_metaparams(x: Any, values: dict[str, int]) -> Any:
@@ -699,7 +759,7 @@ def _name_map(raw: Any, field: str, where: str) -> dict[str, str]:
 #: ``var`` is ``integral``'s integration variable (esm-spec §4.2) — the same
 #: kind of axis-naming scalar as ``wrt``/``dim``, so an imported `integral`
 #: rewrite rule follows its axis under rename exactly as a ``D`` rule does.
-_RENAME_AXIS_KEYS = ("wrt", "dim", "var")
+_RENAME_AXIS_KEYS = _AXIS_KEYS
 
 #: ``integral`` bound fields (esm-spec §4.2). Unlike ``var`` these are full
 #: Expression positions — a numeric literal, a parameter reference, an AST
@@ -710,24 +770,10 @@ _RENAME_BOUND_KEYS = ("lower", "upper")
 
 #: Object keys whose values are never variable-reference positions for the
 #: rename walk: the metaparameter skip set plus the remaining scalar structural
-#: ExpressionNode fields. ``from``, ``wrt``/``dim``, apply-``name``, and ``of``
-#: are handled positionally in the walk.
-_RENAME_PROTECTED_KEYS = _META_SUBST_SKIP_KEYS | frozenset(
-    {
-        "op",
-        "id",
-        "expect_cadence",
-        "reduce",
-        "semiring",
-        "manifold",
-        "fn",
-        "table",
-        "side",
-        "attrs",
-        "members",
-        "from_faq",
-    }
-)
+#: ExpressionNode fields (the op-parameterizing closed-registry ids and literal
+#: enums). ``from``, ``wrt``/``dim``, apply-``name``, and ``of`` are handled
+#: positionally in the walk.
+_RENAME_PROTECTED_KEYS = _META_SUBST_SKIP_KEYS | _REGISTRY_KEYS
 
 #: Object keys whose values a variable-reference collector must NOT descend
 #: into: ``from`` / ``wrt`` / ``dim`` name index sets, ``of`` names bound index
