@@ -280,6 +280,12 @@ pub(crate) fn ic_key_error(e: OverrideKeyError) -> SimulateError {
 mod tests {
     use super::*;
 
+    /// The rule-0 merge map, empty: these cases exercise the §6.6.2 rules on a
+    /// document with no renaming `operator_compose` merge.
+    fn no_renames() -> HashMap<String, String> {
+        HashMap::new()
+    }
+
     fn known(names: &[&str]) -> HashMap<String, usize> {
         names
             .iter()
@@ -301,11 +307,11 @@ mod tests {
         assert_eq!(dotted_suffix_hit(&k, &ns, "Missing.solo"), None);
         assert_eq!(dotted_suffix_hit(&k, &ns, "g"), None);
         let over: HashMap<String, f64> = [("P.sub.g".to_string(), 1.5)].into_iter().collect();
-        let out = canonicalize_override_keys(&k, &ns, &over).expect("resolves");
+        let out = canonicalize_override_keys(&k, &ns, &over, &no_renames()).expect("resolves");
         assert_eq!(out.get("sub.g"), Some(&1.5));
         let bad: HashMap<String, f64> = [("Missing.solo".to_string(), 1.0)].into_iter().collect();
         assert!(matches!(
-            canonicalize_override_keys(&k, &ns, &bad),
+            canonicalize_override_keys(&k, &ns, &bad, &no_renames()),
             Err(OverrideKeyError::Unknown(ref n)) if n == "Missing.solo"
         ));
     }
@@ -323,7 +329,7 @@ mod tests {
         assert!(ns.contains("Left") && ns.contains("Right") && !ns.contains("Doc"));
         let bad: HashMap<String, f64> = [("Doc.Left.solo".to_string(), 9.0)].into_iter().collect();
         assert!(matches!(
-            canonicalize_override_keys(&k, &ns, &bad),
+            canonicalize_override_keys(&k, &ns, &bad, &no_renames()),
             Err(OverrideKeyError::Unknown(ref n)) if n == "Doc.Left.solo"
         ));
         // A REAL leading segment still resolves.
@@ -331,7 +337,7 @@ mod tests {
         let real = namespace_scope(sub.keys().map(String::as_str), ["P"]);
         let over: HashMap<String, f64> = [("P.sub.g".to_string(), 1.5)].into_iter().collect();
         assert_eq!(
-            canonicalize_override_keys(&sub, &real, &over)
+            canonicalize_override_keys(&sub, &real, &over, &no_renames())
                 .expect("resolves")
                 .get("sub.g"),
             Some(&1.5)
@@ -349,7 +355,7 @@ mod tests {
         let run = |pairs: &[(&str, f64)]| {
             let over: HashMap<String, f64> =
                 pairs.iter().map(|(n, v)| ((*n).to_string(), *v)).collect();
-            canonicalize_override_keys(&k, &ns, &over)
+            canonicalize_override_keys(&k, &ns, &over, &no_renames())
         };
         // Rule 3 (bare) + rule 2 (longer dotted) on one name: a collision.
         match run(&[("solo", 2.0), ("Doc.Left.solo", 9.0)]) {
@@ -402,7 +408,7 @@ mod tests {
         let over: HashMap<String, f64> = [("solo".to_string(), 2.0), ("gain".to_string(), 3.0)]
             .into_iter()
             .collect();
-        let out = canonicalize_override_keys(&two, &ns2, &over).expect("both resolve");
+        let out = canonicalize_override_keys(&two, &ns2, &over, &no_renames()).expect("both resolve");
         assert_eq!(out.get("Left.solo"), Some(&2.0));
         assert_eq!(out.get("Right.gain"), Some(&3.0));
     }
