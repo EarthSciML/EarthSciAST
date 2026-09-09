@@ -30,6 +30,15 @@ pub enum ResolvedExpr {
         arg: Box<ResolvedExpr>,
     },
     /// Operator node.
+    ///
+    /// SEALED (`#[non_exhaustive]`): outside this crate it is built only
+    /// through [`ResolvedExpr::op`], which applies the same
+    /// [`is_evaluable_op`] oracle [`resolve_expr`] does. That is what makes
+    /// [`eval_op`](crate::simulate::interpret)'s `unreachable!` backstop sound
+    /// — an operator with no evaluation rule cannot be placed in this variant
+    /// by any caller, so reaching the backstop really is a crate bug and not a
+    /// document or caller error (issue #220).
+    #[non_exhaustive]
     Op {
         /// Operator name (string-tagged for v1; cheap to dispatch on).
         op: String,
@@ -51,6 +60,35 @@ pub enum ResolvedExpr {
         /// materialized constant array.
         args: Vec<ResolvedFnArg>,
     },
+}
+
+impl ResolvedExpr {
+    /// Build a [`ResolvedExpr::Op`], refusing an operator this interpreter has
+    /// no evaluation rule for.
+    ///
+    /// The sealed variant's only constructor outside this crate, and the
+    /// caller-facing half of the issue #220 gate: [`resolve_expr`] applies
+    /// [`is_evaluable_op`] to every operator node it lowers from a DOCUMENT,
+    /// and this applies it to every operator node a CALLER hands in directly.
+    /// Between them nothing can place an unevaluable operator in the variant,
+    /// which is what lets `eval_op`'s backstop be `unreachable!` rather than
+    /// the `f64::NAN` sentinel it used to be — a sentinel indistinguishable
+    /// from a legitimate result that propagated into the solution.
+    ///
+    /// # Errors
+    ///
+    /// [`CompileError::UnevaluableOperatorError`] naming `op`, for an operator
+    /// with no rule here: the open-tier rewrite targets (`grad`, `div`,
+    /// `laplacian`, spatial `D`, any unregistered op), the array / tensor and
+    /// geometry ops (which belong to [`crate::simulate_array`]), and the
+    /// evaluable-core ops no evaluator has a rule for (`skolem`, `rank`, …).
+    pub fn op(op: impl Into<String>, args: Vec<ResolvedExpr>) -> Result<Self, CompileError> {
+        let op = op.into();
+        if !is_evaluable_op(&op) {
+            return Err(CompileError::UnevaluableOperatorError { op });
+        }
+        Ok(ResolvedExpr::Op { op, args })
+    }
 }
 
 /// One argument to a resolved [`ResolvedExpr::Fn`] call.

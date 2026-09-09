@@ -158,7 +158,7 @@ fn collect_unbound(expr: &Expr, bindings: &HashMap<String, f64>, out: &mut Vec<S
 ///
 /// Every one of the gated ops used to reach [`eval_op`]'s `_ => f64::NAN`
 /// backstop and come back as a NUMBER (issue #220). They are refused by name
-/// now.
+/// now, and that backstop is an `unreachable!`.
 #[must_use]
 pub fn is_evaluable_op(op: &str) -> bool {
     matches!(
@@ -293,22 +293,24 @@ fn eval_op(
         // The spatial-calculus sugar ops (`grad`/`div`/`laplacian`/`curl`/`∇`/
         // `integral`), every other unregistered op, and the evaluable-core ops
         // this interpreter has no rule for (the array/tensor and geometry ops
-        // and the build-time relational ops) carry NO privileged semantics
-        // here: their value is UNDETERMINABLE (esm-spec §4.2).
+        // and the build-time relational ops) are ALL refused before a
+        // `ResolvedExpr::Op` carrying one can exist — from a DOCUMENT by
+        // `resolve_expr` (the open tier via `op_registry::check_node`, the
+        // evaluable-core remainder via `is_evaluable_op`), and from a CALLER by
+        // `ResolvedExpr::op`, the sealed variant's only constructor outside
+        // this crate. Reaching here therefore means the oracle and this `match`
+        // have drifted, which is a bug in this crate and not in the document.
         //
-        // The guarantee that no DOCUMENT reaches this arm is `resolve_expr`'s
-        // pair of gates — the open tier by `op_registry::check_node`, the
-        // evaluable-core remainder by `is_evaluable_op` — which is where issue
-        // #220's silent NaN is actually closed, and which
-        // `simulate::tests::every_registry_op_is_either_evaluable_or_gated`
-        // pins structurally.
-        //
-        // This arm stays a NaN rather than an `unreachable!` because
-        // [`ResolvedExpr`] is PUBLIC (`api-surface.json`, tier `extension`) and
-        // so is [`interpret`]: a caller may hand-build a `ResolvedExpr::Op` and
-        // never pass through `resolve_expr` at all, and a panic on public input
-        // is not an improvement over an undeterminable value. Never a silent
-        // `0.0`, which would quietly poison a trajectory.
-        _ => f64::NAN,
+        // This used to be `_ => f64::NAN`, which meant an ungated op came back
+        // as a NUMBER: indistinguishable from a legitimate result, propagating
+        // into the solution, and reported to the author as an assertion that
+        // "expected 25, got NaN" rather than as the pipeline defect it is
+        // (issue #220). The array evaluator's backstop is `unreachable!` for
+        // exactly this reason; this one now matches it.
+        _ => unreachable!(
+            "scalar interpreter reached operator '{op}' with no evaluation rule — \
+             `resolve_expr` and `ResolvedExpr::op` both gate on `is_evaluable_op()` \
+             before building a `ResolvedExpr::Op`, so the two have drifted"
+        ),
     }
 }

@@ -441,6 +441,34 @@ mod tests {
         );
     }
 
+    /// The evaluability gate runs BEFORE the §11.3 Float32 gate, and that
+    /// ordering is pinned rather than incidental.
+    ///
+    /// `intersect_polygon` and `polygon_intersection_area` are the two ops that
+    /// trip both: `precision::f32_unsupported_reason` names them (their
+    /// geometry kernels are binary64-only), and this interpreter has no rule
+    /// for them in ANY precision. `unevaluable_operator` is therefore the more
+    /// fundamental answer — telling the author to declare `Float64` would send
+    /// them to fix the wrong thing, since the scalar path still could not
+    /// evaluate the op. Under Float64 the ordering is unobservable; this asks
+    /// the question where it is observable.
+    #[test]
+    fn the_evaluability_gate_precedes_the_float32_gate() {
+        for op in ["intersect_polygon", "polygon_intersection_area"] {
+            assert!(
+                crate::precision::f32_unsupported_reason(op, None).is_some(),
+                "{op} must be one of the ops that trips BOTH gates, or this pins nothing"
+            );
+            let _f32 = crate::precision::enter(crate::precision::Precision::Float32);
+            let err = resolve_it(&node_with_legal_arity(op))
+                .expect_err("an op with no scalar rule must not resolve under Float32 either");
+            assert!(
+                matches!(err, CompileError::UnevaluableOperatorError { op: ref got } if got == op),
+                "{op} must report `unevaluable_operator`, not `float32_unsupported`: {err:?}"
+            );
+        }
+    }
+
     #[test]
     fn topo_sort_empty_and_simple() {
         // No deps -> any order is fine, but length matches.
