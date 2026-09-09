@@ -16,8 +16,8 @@
 
 /** A `{abs?, rel?}` tolerance at any of the three §6.6.4 levels. */
 export interface AssertionTolerance {
-  abs?: number
-  rel?: number
+  abs?: number | null
+  rel?: number | null
 }
 
 /**
@@ -27,20 +27,51 @@ export interface AssertionTolerance {
 export const DEFAULT_REL_TOL = 1e-6
 
 /**
- * esm-spec §6.6.4 precedence: assertion > test > model > implementation default.
- * The FIRST level that is present wins outright, and a bound it does not spell
- * is `0` — which is what all three executing bindings do.
+ * The innermost level that DECLARES `field`, walking assertion → test → model.
+ * A key that is absent, or spelled `null` (non-conforming input the schema types
+ * as `number`; a lenient parser must read it as absent, never as a declared 0),
+ * falls through. An explicit `0` is a DECLARATION — "no bound of this kind" —
+ * and stops the fallthrough.
+ */
+function declaredBound(
+  levels: ReadonlyArray<AssertionTolerance | undefined | null>,
+  field: 'rel' | 'abs',
+): number | undefined {
+  for (const level of levels) {
+    if (level === undefined || level === null) continue
+    const value = level[field]
+    if (typeof value === 'number' && !Number.isNaN(value)) return value
+  }
+  return undefined
+}
+
+/**
+ * esm-spec §6.6.4 precedence: assertion → test → model → implementation default.
+ *
+ * `abs` and `rel` resolve **INDEPENDENTLY**. §6.6.4 says an absent field falls
+ * through to the next level on its own, so a model-level `{rel: 1e-6}` and an
+ * assertion-level `{abs: 1e-9}` resolve TOGETHER to `(rel = 1e-6, abs = 1e-9)`.
+ * Returning the innermost declared block WHOLE — and zeroing whatever it does
+ * not spell — silently discards a bound the author declared one level up; that
+ * is the divergence EarthSciML/EarthSciAST#228 records, and this function is
+ * written against the per-field rule rather than against it.
+ *
+ * Level 4 is TERMINAL, not a fourth merge level: `rel = 1e-6` applies only when
+ * levels 1-3 declare NEITHER bound. An assertion declaring only `{abs: 1e-4}`
+ * resolves to `rel = 0`; it does not silently acquire the default's relative
+ * bound, which is an advisory (SHOULD) runtime constant rather than something a
+ * document wrote.
  */
 export function resolveTolerance(
   modelTol: AssertionTolerance | undefined | null,
   testTol: AssertionTolerance | undefined | null,
   assertionTol: AssertionTolerance | undefined | null,
 ): { rel: number; abs: number } {
-  for (const cand of [assertionTol, testTol, modelTol]) {
-    if (cand === undefined || cand === null) continue
-    return { rel: cand.rel ?? 0, abs: cand.abs ?? 0 }
-  }
-  return { rel: DEFAULT_REL_TOL, abs: 0 }
+  const levels = [assertionTol, testTol, modelTol] as const
+  const rel = declaredBound(levels, 'rel')
+  const abs = declaredBound(levels, 'abs')
+  if (rel === undefined && abs === undefined) return { rel: DEFAULT_REL_TOL, abs: 0 }
+  return { rel: rel ?? 0, abs: abs ?? 0 }
 }
 
 /**
