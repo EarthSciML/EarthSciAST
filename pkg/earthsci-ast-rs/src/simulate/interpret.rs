@@ -143,18 +143,22 @@ fn collect_unbound(expr: &Expr, bindings: &HashMap<String, f64>, out: &mut Vec<S
 /// runtime's oracle — this evaluator's values are `f64`, so on top of the nine
 /// core ops neither evaluator has a rule for (`skolem`, `rank`, `distinct`,
 /// `argmin`, `argmax`, `ic`, `enum`, `table_lookup`,
-/// `apply_expression_template`) it also has none for:
+/// `apply_expression_template`) it also has none for the array / tensor ops
+/// (`aggregate`, `makearray`, `index`, `reshape`, `transpose`, `concat`,
+/// `broadcast`) or the geometry ops (`intersect_polygon`,
+/// `polygon_intersection_area`) — a document carrying one belongs to
+/// [`crate::simulate_array`], which [`crate::simulate::is_array_file`] routes
+/// it to.
 ///
-/// * the array / tensor ops (`aggregate`, `makearray`, `index`, `reshape`,
-///   `transpose`, `concat`, `broadcast`) and the geometry ops
-///   (`intersect_polygon`, `polygon_intersection_area`) — a document carrying
-///   one belongs to [`crate::simulate_array`], which
-///   [`crate::simulate::is_array_file`] routes it to;
-/// * `const`, `neg` and `true`, which the array runtime evaluates and this one
-///   never had an arm for.
+/// `const` is absent for a different reason: its value hangs off the NODE, not
+/// off `args`, so a plain [`ResolvedExpr::Op`] cannot carry it.
+/// [`crate::simulate::resolve_expr`] folds a SCALAR `const` straight to a
+/// [`ResolvedExpr::Number`] before this oracle is consulted; only an ARRAY
+/// `const`, which this evaluator has no value type for, reaches the gate.
 ///
-/// Every one of those used to reach [`eval_op`]'s `_ => f64::NAN` backstop and
-/// come back as a NUMBER (issue #220). They are refused by name now.
+/// Every one of the gated ops used to reach [`eval_op`]'s `_ => f64::NAN`
+/// backstop and come back as a NUMBER (issue #220). They are refused by name
+/// now.
 #[must_use]
 pub fn is_evaluable_op(op: &str) -> bool {
     matches!(
@@ -169,6 +173,8 @@ pub fn is_evaluable_op(op: &str) -> bool {
         | "exp" | "log" | "ln" | "log10" | "sqrt" | "abs" | "sign" | "floor" | "ceil"
         | "sin" | "cos" | "tan" | "asin" | "acos" | "atan"
         | "sinh" | "cosh" | "tanh" | "asinh" | "acosh" | "atanh" | "not"
+        // Canonical unary negate and the nullary boolean literal.
+        | "neg" | "true"
         // Conditional.
         | "ifelse"
         // Form ops with a defined runtime meaning here: a `D` on the RHS is the
@@ -236,6 +242,18 @@ fn eval_op(
             _ => f64::NAN,
         },
 
+        // The canonical unary negation `canonicalize.rs` emits — the same sign
+        // flip as the unary `-` above, and the same primitive the array
+        // evaluator routes `neg` through, so the two agree by construction.
+        "neg" => -v(0),
+
+        // The nullary boolean literal (esm-spec §4.2). This interpreter's
+        // boolean convention is 1.0 / 0.0 — every comparison and `and`/`or`/
+        // `not` above produces it — so the value is forced, not chosen, and it
+        // is what the array evaluator, Python (`numpy_interpreter`), Julia and
+        // Go all already produce for the same node.
+        "true" => 1.0,
+
         // Strictly-binary arithmetic + comparisons + logicals, all via the shared
         // `apply_binary`. Comparisons route through `scalar_compare` internally,
         // so `==`/`!=` stay EXACT equality (`a == b`) — the pinned cross-binding
@@ -274,24 +292,23 @@ fn eval_op(
 
         // The spatial-calculus sugar ops (`grad`/`div`/`laplacian`/`curl`/`∇`/
         // `integral`), every other unregistered op, and the evaluable-core ops
-        // this interpreter has no rule for (the array/tensor and geometry ops,
-        // the build-time relational ops, `const`, `neg`, `true`, and the
-        // lowered-at-load form ops) are ALL refused at build by `resolve_expr`
-        // — the open tier by `op_registry::check_node`, the rest by
-        // `is_evaluable_op` — and `resolve_expr` is the only thing that ever
-        // builds a `ResolvedExpr::Op`. Reaching here therefore means a gate was
-        // bypassed, which is a bug in this crate and not in the document.
+        // this interpreter has no rule for (the array/tensor and geometry ops
+        // and the build-time relational ops) carry NO privileged semantics
+        // here: their value is UNDETERMINABLE (esm-spec §4.2).
         //
-        // This used to be `_ => f64::NAN`, which meant an ungated op came back
-        // as a NUMBER: indistinguishable from a legitimate result, propagating
-        // into the solution, and reported to the author as an assertion that
-        // "expected 25, got NaN" rather than as the pipeline defect it is
-        // (issue #220). The array evaluator's backstop is `unreachable!` for
-        // exactly this reason; this one now matches it.
-        _ => unreachable!(
-            "scalar interpreter reached operator '{op}' with no evaluation rule — \
-             `resolve_expr` gates every op with `is_evaluable_op()` before building a \
-             `ResolvedExpr::Op`, so the two have drifted"
-        ),
+        // The guarantee that no DOCUMENT reaches this arm is `resolve_expr`'s
+        // pair of gates — the open tier by `op_registry::check_node`, the
+        // evaluable-core remainder by `is_evaluable_op` — which is where issue
+        // #220's silent NaN is actually closed, and which
+        // `simulate::tests::every_registry_op_is_either_evaluable_or_gated`
+        // pins structurally.
+        //
+        // This arm stays a NaN rather than an `unreachable!` because
+        // [`ResolvedExpr`] is PUBLIC (`api-surface.json`, tier `extension`) and
+        // so is [`interpret`]: a caller may hand-build a `ResolvedExpr::Op` and
+        // never pass through `resolve_expr` at all, and a panic on public input
+        // is not an improvement over an undeterminable value. Never a silent
+        // `0.0`, which would quietly poison a trajectory.
+        _ => f64::NAN,
     }
 }

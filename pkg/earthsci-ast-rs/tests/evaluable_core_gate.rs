@@ -49,9 +49,10 @@
 //! VALIDATES and silently returns NaN**, over the same op list.
 //!
 //! The scalar rule set is SMALLER than the array one, so the gate covers more
-//! than the nine: `const`, `neg`, `true` and the array/tensor + geometry ops
-//! have no scalar rule either and are refused by name rather than NaN'd. That
-//! wider gap is pinned by a unit test next to the oracle
+//! than the nine: the array/tensor + geometry ops have no scalar rule either
+//! (nor does an ARRAY `const`, whose value has no `f64` form) and are refused
+//! by name rather than NaN'd. That wider gap is pinned by a unit test next to
+//! the oracle
 //! (`simulate::tests::the_scalar_evaluable_gap_is_pinned`); the nine are what
 //! this file carries, because they are the ops BOTH evaluators must refuse.
 

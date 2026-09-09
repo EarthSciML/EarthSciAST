@@ -163,6 +163,22 @@ pub(super) fn resolve_expr(
             // `FlattenedSystem::field_ics` as a bare `(target, rhs)` pair, and
             // `classify_equations` only ever resolves an equation's RHS, so an
             // `ic` NODE never reaches this function.
+            //
+            // `const` is the one core op that RESOLVES rather than dispatches.
+            // Its value hangs off the NODE (esm-spec §4), not off `args`, so a
+            // plain `ResolvedExpr::Op` cannot carry it — which is why this
+            // interpreter never had an `eval_op` arm for it and every `const`
+            // came back `NaN`, including the equation RHS
+            // `{"op":"const","value":0.0}` in the SHARED conformance fixture
+            // `tests/conformance/function_tables/inline_test/fixture.esm`. A
+            // scalar literal folds here, once, rounded at the active precision
+            // exactly as the array runtime's `json_to_value` does. An ARRAY
+            // `const` has no `f64` representation and stays gated below.
+            if node.op == "const"
+                && let Some(v) = node.value.as_ref().and_then(serde_json::Value::as_f64)
+            {
+                return Ok(ResolvedExpr::Number(crate::precision::active().round(v)));
+            }
             if !is_evaluable_op(&node.op) {
                 return Err(CompileError::UnevaluableOperatorError {
                     op: node.op.clone(),

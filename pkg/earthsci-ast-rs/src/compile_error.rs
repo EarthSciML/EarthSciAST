@@ -128,10 +128,10 @@ pub enum CompileError {
     ///
     /// BOTH interpreters raise it. The message names no particular one because
     /// the two have different rule sets — the scalar ODE interpreter
-    /// ([`crate::simulate`]) additionally has no rule for the array/tensor ops
-    /// the array runtime ([`crate::simulate_array`]) evaluates — and the
-    /// invariant is the same either way: an unevaluable op is a diagnostic,
-    /// never a number.
+    /// ([`crate::simulate`]) additionally has no rule for the array/tensor and
+    /// geometry ops the array runtime ([`crate::simulate_array`]) evaluates —
+    /// and the invariant is the same either way: an unevaluable op is a
+    /// diagnostic, never a number.
     #[error(
         "unevaluable_operator: operator '{op}' is an evaluable-core op with no evaluation rule \
          in the interpreter this model was built for — it must be eliminated by an earlier \

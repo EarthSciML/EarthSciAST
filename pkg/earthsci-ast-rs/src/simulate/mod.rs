@@ -268,8 +268,11 @@ mod tests {
     ///
     /// It is a superset of the array runtime's nine-op gap: the scalar
     /// interpreter's values are `f64`, so the array/tensor and geometry ops are
-    /// unevaluable here too, as are `const`, `neg` and `true` — every one of
-    /// which used to come back from `eval_op` as a `NaN` NUMBER.
+    /// unevaluable here too — every one of which used to come back from
+    /// `eval_op` as a `NaN` NUMBER. `const` is in the gap because its value
+    /// lives on the node rather than in `args`; `resolve_expr` folds a SCALAR
+    /// `const` to a `Number` before the oracle is consulted, so only an ARRAY
+    /// one is actually refused.
     #[test]
     fn the_scalar_evaluable_gap_is_pinned() {
         const CORE: &[&str] = &[
@@ -365,14 +368,12 @@ mod tests {
                 "index",
                 "intersect_polygon",
                 "makearray",
-                "neg",
                 "polygon_intersection_area",
                 "rank",
                 "reshape",
                 "skolem",
                 "table_lookup",
                 "transpose",
-                "true",
             ]
         );
     }
@@ -391,6 +392,51 @@ mod tests {
         let err = resolve_it(&outer).expect_err("a nested unevaluable op must not resolve");
         assert!(
             matches!(err, CompileError::UnevaluableOperatorError { op: ref got } if got == "rank"),
+            "{err:?}"
+        );
+    }
+
+    /// `neg`, `true` and a scalar `const` are §4.2 core ops that the ARRAY
+    /// evaluator, Python, Julia and Go all answer for, and that the public
+    /// stable-tier `evaluate` (esm `api-surface.json`) must therefore answer
+    /// for here too. This interpreter had no rule for any of the three, so each
+    /// came back as a silent `NaN` — including the equation RHS
+    /// `{"op":"const","value":0.0}` in the shared conformance fixture
+    /// `tests/conformance/function_tables/inline_test/fixture.esm`. Gating them
+    /// instead of NaN-ing them would have been a diagnostic where four other
+    /// bindings return a number, so they are evaluated.
+    #[test]
+    fn neg_true_and_a_scalar_const_evaluate_as_the_other_bindings_do() {
+        let eval = |e: &Expr| {
+            let r = resolve_it(e).expect("core op with a rule must resolve");
+            interpret(&r, &[], &[], &[], 0.0)
+        };
+        let node = |op: &str, args: Vec<Expr>, value: Option<serde_json::Value>| {
+            Expr::Operator(std::sync::Arc::new(ExpressionNode {
+                op: op.to_string(),
+                args,
+                value,
+                ..Default::default()
+            }))
+        };
+
+        assert_eq!(eval(&node("neg", vec![Expr::Number(3.5)], None)), -3.5);
+        assert_eq!(eval(&node("true", Vec::new(), None)), 1.0);
+        assert_eq!(
+            eval(&node("const", Vec::new(), Some(serde_json::json!(2.5)))),
+            2.5
+        );
+
+        // An ARRAY `const` has no `f64` representation, so it stays gated —
+        // by name, not as a NaN.
+        let err = resolve_it(&node(
+            "const",
+            Vec::new(),
+            Some(serde_json::json!([1.0, 2.0])),
+        ))
+        .expect_err("an array `const` has no scalar value");
+        assert!(
+            matches!(err, CompileError::UnevaluableOperatorError { op: ref got } if got == "const"),
             "{err:?}"
         );
     }
