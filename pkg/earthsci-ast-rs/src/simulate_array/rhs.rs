@@ -4,6 +4,7 @@
 
 use super::tape::{TapeCtx, TapeProgram, run_tape_call};
 use super::*;
+use crate::simulate::CompileError;
 use ndarray::ArrayViewD;
 use std::collections::HashSet;
 
@@ -319,11 +320,25 @@ pub(super) fn collect_expr_var_refs(expr: &Expr, out: &mut HashSet<String>) {
 
 /// Stable topological sort of observed algebraic rules so each follows every
 /// observed its body references (RFC §8.1). Independent observeds keep their
-/// original order; any rule left in a dependency cycle is appended in original
-/// order so the build still proceeds (the evaluator then surfaces a clear
-/// unresolved read rather than the driver hanging). Mirrors the Python
-/// `simulation._order_observed_equations`.
-pub(super) fn dependency_order_observed(rules: Vec<AlgebraicRule>) -> Vec<AlgebraicRule> {
+/// original order. Mirrors the Python `simulation._order_observed_equations`.
+///
+/// A rule set that cannot be ordered — a dependency cycle among observeds,
+/// esm-spec §4.9.6 — is a hard [`CompileError::ObservedCycle`] naming the
+/// cycle. This sweep used to append the stuck rules in declaration order
+/// instead, on the theory that "the build still proceeds (the evaluator then
+/// surfaces a clear unresolved read)". The read was not clear: materialization
+/// ran the stuck rules anyway, one of them read an observed that had no value
+/// yet, and `E_TREEWALK_UNBOUND_NAME` named whichever name the walk reached
+/// first — which is generally an observed that is declared, defined and
+/// referenced correctly, and has nothing to do with the cycle (issue #181).
+/// Proceeding past an unsatisfiable order buys nothing and costs the diagnosis.
+///
+/// The self-edge of a recurrence is already dropped below (`n != self_name`),
+/// so a well-founded causal self-read (esm-spec §4.3.1.1) is an ordering within
+/// one rule and never reaches this error.
+pub(super) fn dependency_order_observed(
+    rules: Vec<AlgebraicRule>,
+) -> Result<Vec<AlgebraicRule>, CompileError> {
     let names: HashSet<String> = rules.iter().map(|r| observed_rule_var(r).clone()).collect();
     // Per-rule dependency set, restricted to *other* observed names.
     let deps: Vec<HashSet<String>> = rules
@@ -354,17 +369,53 @@ pub(super) fn dependency_order_observed(rules: Vec<AlgebraicRule>) -> Vec<Algebr
         }
         remaining = still;
         if !progress {
-            break; // a cycle — append the rest in original order below
+            // Nothing became ready and rules are left: the residue contains at
+            // least one cycle. Name it (esm-spec §4.9.6) instead of proceeding
+            // into an evaluation that cannot succeed.
+            return Err(CompileError::ObservedCycle {
+                cycle: first_cycle_among(&rules, &deps, &remaining),
+            });
         }
     }
-    order.extend(remaining);
 
     // Reassemble in the computed order, moving each rule out exactly once.
     let mut slots: Vec<Option<AlgebraicRule>> = rules.into_iter().map(Some).collect();
-    order
+    Ok(order
         .into_iter()
         .map(|i| slots[i].take().expect("each index visited once"))
-        .collect()
+        .collect())
+}
+
+/// The first cycle among the rules that could not be ordered, as a path with
+/// its entry node repeated (`["a", "b", "a"]`).
+///
+/// The residue is indexed by rule POSITION and its adjacency sets are
+/// `HashSet`s, neither of which iterates stably, so it is re-keyed by name into
+/// the sorted graph [`first_observed_cycle`] walks — the same walk, and the
+/// same output shape, the validator's `observed_cycle` check uses. The two
+/// remain separate CALLERS because they read different inputs (the validator
+/// reads a model's equations, this reads lowered rules), and agreeing on the
+/// walk is what makes their answers comparable for a document that reached here
+/// unvalidated.
+fn first_cycle_among(
+    rules: &[AlgebraicRule],
+    deps: &[HashSet<String>],
+    residue: &[usize],
+) -> Vec<String> {
+    let stuck: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> = residue
+        .iter()
+        .map(|&i| {
+            let name = observed_rule_var(&rules[i]).clone();
+            let ds: std::collections::BTreeSet<String> = deps[i].iter().cloned().collect();
+            (name, ds)
+        })
+        .collect();
+
+    // Unreachable in practice — the residue is non-empty precisely because no
+    // rule was ready, which requires an unsatisfied dependency inside it — but
+    // a name is more useful than a panic if the invariant ever moves.
+    crate::classification::first_observed_cycle(&stuck)
+        .unwrap_or_else(|| stuck.keys().cloned().collect())
 }
 
 // ============================================================================
@@ -700,6 +751,9 @@ pub(super) struct RhsCall<'a> {
     /// behaviour change vs. the scalar-`p` path.
     pub(super) forcing: &'a RefCell<HashMap<String, ArrayD<f64>>>,
     pub(super) t: f64,
+    /// See [`EvalCtx::declared`] — the compiled model's declared-name set,
+    /// carried so the evaluator's fault arm can name the right defect.
+    pub(super) declared: &'a HashSet<String>,
 }
 
 /// Evaluate one RHS call. Step 3b dispatcher: when the scratch carries a
@@ -799,6 +853,7 @@ fn evaluate_rhs_legacy(
         params,
         forcing,
         t,
+        declared,
     } = call;
     // (a) Refill the persistent per-variable state arrays in place from the
     //     flat state vector (no per-call allocation).
@@ -910,6 +965,7 @@ fn evaluate_rhs_legacy(
                 // beneficiary.
                 cse: Some(&*cse),
                 const_arrays,
+                declared,
             },
             // Honour the oracle contract: `force_scalar` runs observeds per-cell
             // too, so the reference trajectory is fully un-vectorized.
@@ -933,6 +989,7 @@ fn evaluate_rhs_legacy(
         forcing,
         cse: Some(&scratch.cse),
         const_arrays,
+        declared,
     };
     let pool = &mut scratch.pool;
 
@@ -1217,7 +1274,7 @@ mod elementwise_array_observed_tests {
         .and_then(|prob| crate::problem::solve(&prob, &erk()))
         .expect("simulates");
         let ti = sol.time.len() - 1;
-        let cells = crate::pde_inline_tests::state_cells(&sol.state_variable_names, "psi", "M");
+        let cells = crate::inline_tests::state_cells(&sol.state_variable_names, "psi", "M");
         assert_eq!(cells.len(), 3);
         let psi: Vec<f64> = cells.iter().map(|(_, row)| sol.state[*row][ti]).collect();
         let one_minus_em1 = 1.0 - (-1.0f64).exp();

@@ -189,7 +189,15 @@ func operatorComposeSwapFile(t *testing.T) *ESMFile {
 	         "equations":[{"lhs":{"op":"D","args":["y"],"wrt":"t"},"rhs":"r"}]}
 	  },
 	  "coupling":[{"type":"operator_compose","systems":["A","B"],
+	               "require_match":false,
 	               "translate":{"A.q":"B.r","B.r":"A.q"}}]}`
+	// `require_match: false` because this document composes B for its VARIABLES,
+	// not its tendencies: the translate map swaps PARAMETERS (A.q <-> B.r) and
+	// neither system has an equation the other can land on, so the entry merges
+	// nothing. Without the declaration that is `operator_compose_no_merge`
+	// (esm-libraries-spec §4.7.1 step 5) -- which is right, and is not what this
+	// fixture is about. What it pins is that the swap map is applied once and
+	// deterministically.
 	file, err := LoadString(src)
 	if err != nil {
 		t.Fatal(err)

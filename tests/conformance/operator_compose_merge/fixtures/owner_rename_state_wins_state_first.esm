@@ -1,0 +1,86 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "operator_compose_owner_rename_state_first",
+    "description": "esm-libraries-spec 4.7.1 step 3, the UNAMBIGUOUS bare-name match -- the residual case the ownership rule still decides. `Diag.O3` is an OBSERVED (a bare-LHS equation defines it) and `Sink.O3` is a STATE with an initial condition. Only one of the two carries an IC, so the merge has nothing to choose between: the STATE owns the quantity and the observed name is retargeted onto it. `Sink.O3` therefore survives in EITHER argument order, which is the whole point -- this pair differs only in the `systems` order and must agree. The flip: the STATE side is `systems[0]`, so ownership and systems[0] agree and the merge is the identity. Same surviving state, same initial condition, as it must be.",
+    "authors": [
+      "EarthSciAST"
+    ],
+    "tags": [
+      "esm-libraries-spec-4.7.1",
+      "operator-compose",
+      "bare-name-fallback",
+      "merge-intent",
+      "owner-rename"
+    ]
+  },
+  "models": {
+    "Diag": {
+      "variables": {
+        "O3": {
+          "type": "unknown",
+          "units": "ppb",
+          "description": "DEFINED by the bare-LHS equation below, so it is an OBSERVED: it carries no initial condition, which is what makes this match unambiguous."
+        },
+        "k": {
+          "type": "parameter",
+          "units": "ppb",
+          "default": 1.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": "O3",
+          "rhs": "k"
+        }
+      ]
+    },
+    "Sink": {
+      "variables": {
+        "O3": {
+          "type": "unknown",
+          "units": "ppb",
+          "default": 40.0,
+          "description": "The OPERATOR's spelling, and its own initial condition."
+        },
+        "kd": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.0001
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "O3"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "kd"
+                ]
+              },
+              "O3"
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "operator_compose",
+      "systems": [
+        "Sink",
+        "Diag"
+      ]
+    }
+  ]
+}

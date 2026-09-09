@@ -35,7 +35,7 @@ from conftest import VALID_DIR
 from earthsci_ast.esm_types import ExprNode
 from earthsci_ast.parse import load_path
 from earthsci_ast.problem import ReturnCode, esm_problem, solve
-from earthsci_ast.pde_inline_tests import TEST_ABSTOL, TEST_RELTOL
+from earthsci_ast.inline_tests import TEST_ABSTOL, TEST_RELTOL
 from earthsci_ast.simulation import (
     _order_observed_equations,
     _time_varying_observeds,

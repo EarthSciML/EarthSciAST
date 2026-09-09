@@ -398,7 +398,7 @@ are authored per-run config, so the enclosing component round-trips with its `D`
 INTACT and each test KEEPS its import field (form C survives `parse → emit`).
 Each test runs as an independent per-test ephemeral build in which the leaf's
 derivative is lowered under that test's grid; the persisted component is never
-mutated (the Julia reference runs this through `run_pde_tests`).
+mutated (the Julia reference runs this through `run_inline_tests`).
 
 ### `inject_agnostic_aggregate/` (load-time acceptance — §9.7.10 / §6.6.6, issue #185)
 

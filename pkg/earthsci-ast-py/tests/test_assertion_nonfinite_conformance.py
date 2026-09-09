@@ -30,7 +30,7 @@ from pathlib import Path
 
 import pytest
 
-from earthsci_ast.pde_inline_tests import _check_assertion, run_pde_tests
+from earthsci_ast.inline_tests import _check_assertion, run_inline_tests
 
 _ROOT = Path(__file__).resolve().parents[3] / "tests" / "conformance" / "assertion_nonfinite"
 _MANIFEST = _ROOT / "manifest.json"
@@ -62,7 +62,7 @@ def test_manifest_declares_the_three_executing_bindings() -> None:
 def test_nonfinite_actuals_fail_every_finite_expectation(fixture: dict) -> None:
     manifest = _manifest()
     integ = manifest["integrators"]["python"]
-    results = run_pde_tests(
+    results = run_inline_tests(
         str(_ROOT / fixture["path"]),
         model_name=fixture["model"],
         method=integ["method"],

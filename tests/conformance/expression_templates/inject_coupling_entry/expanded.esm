@@ -6,6 +6,7 @@
         "Emit",
         "Advection"
       ],
+      "require_match": false,
       "type": "operator_compose"
     }
   ],

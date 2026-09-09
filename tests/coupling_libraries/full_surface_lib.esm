@@ -37,6 +37,7 @@
     {
       "type": "operator_compose",
       "systems": ["Fuel", "Spread"],
+      "require_match": false,
       "translate": {
         "Fuel.flux": { "var": "Spread.flux", "factor": 2.0 }
       }

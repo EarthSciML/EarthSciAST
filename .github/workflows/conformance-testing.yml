@@ -28,12 +28,6 @@ on:
         type: string
         default: ''
   workflow_dispatch:  # Allow manual triggering
-    inputs:
-      run_performance_analysis:
-        description: 'Run detailed performance analysis'
-        required: false
-        default: 'true'
-        type: boolean
 
 permissions:
   contents: read
@@ -80,6 +74,25 @@ jobs:
   # Split out, the test jobs report test results and this job reports style.
   # It also de-duplicates work: rust lint ran 3x across its matrix, python 4x,
   # typescript 2x. Here each runs once.
+  #
+  # Every gate below carries `if: ${{ !cancelled() }}` so that ONE failing
+  # linter does not skip the ones after it. Steps run in sequence and a failed
+  # step normally short-circuits the rest, which meant a dirty `cargo fmt` --
+  # cosmetic and self-fixing -- silently skipped `cargo clippy`, eslint,
+  # prettier, gofmt, golangci-lint and the version-sync check: one reported
+  # failure, while three other languages' substantive linters and the
+  # cross-binding version check were never consulted at all (#217). The job
+  # still fails if any gate fails; it just consults all of them first, so one
+  # push surfaces every finding instead of one finding per round trip.
+  #
+  # `!cancelled()` rather than `always()`: this workflow sets
+  # `cancel-in-progress: true`, and `always()` would keep running lint steps
+  # through a cancellation instead of letting the superseded run stop.
+  #
+  # The `Setup *` / cache steps above deliberately have NO condition: those are
+  # infrastructure, and linting against a toolchain that failed to install
+  # produces noise, not signal. (A failure there still leaves the other
+  # languages' gates to run, since they carry the condition.)
   lint:
     name: Lint and format (all languages)
     runs-on: ubuntu-latest
@@ -126,9 +139,11 @@ jobs:
 
       # --- Python -------------------------------------------------------
       - name: Install ruff (pinned)
+        if: ${{ !cancelled() }}
         run: pip install "ruff==${RUFF_VERSION}"
 
       - name: ruff check / ruff format
+        if: ${{ !cancelled() }}
         working-directory: pkg/earthsci-ast-py
         run: |
           # Config lives in the repo-root ruff.toml.
@@ -137,30 +152,43 @@ jobs:
 
       # --- Rust ---------------------------------------------------------
       - name: cargo fmt
+        if: ${{ !cancelled() }}
         working-directory: pkg/earthsci-ast-rs
         run: cargo fmt --all -- --check
 
       # Default features only, deliberately. `--all-features` (what this step
-      # used to say) does not COMPILE today, and has not for a long time -- the
-      # clippy step sat behind the rustfmt gate, so it has not actually run in
-      # CI for 40+ runs and the rot went unseen. Two separate blockers:
-      #   * `esio` pulls earthsciio 0.1 from crates.io, which has no
-      #     `DataSource`/`SourceTemporal` yet (same blocker as the python
-      #     bridge; needs the next EarthSciIO release).
-      #   * `performance` has ~14 call sites still passing `ExpressionNode`
-      #     where `Expr::Operator` now wants `Arc<ExpressionNode>`.
-      # Widen this back out once those are fixed, rather than leaving a gate
-      # that can never go green.
+      # used to say) did not COMPILE for a long time -- and because the clippy
+      # step sat behind the rustfmt gate (#217, fixed by the conditions on
+      # these steps), it did not actually run in CI for 40+ runs, so the rot
+      # went unseen. There were two blockers: `esio` against an earthsciio 0.1
+      # with no `DataSource`/`SourceTemporal`, and ~14 `performance` call sites
+      # passing `ExpressionNode` where `Expr::Operator` wanted
+      # `Arc<ExpressionNode>`.
+      #
+      # BOTH are now fixed -- `cargo check --all-features` builds clean, which
+      # is what the `rust-tests` matrix and the bench-check step below rely on.
+      # Widening this back out is therefore possible but is NOT a free change:
+      # `esio_provider` and `performance` have never once been linted, so it
+      # would surface a fresh backlog under `-D warnings`. Do it as its own
+      # change, with the findings triaged, rather than as a drive-by.
+      #
+      # Note also that `--all-targets` on the default feature set does NOT
+      # cover `benches/benchmarks.rs`: that target is `required-features =
+      # ["benchmarks"]`, which is off by default. The bench target's COMPILE is
+      # checked in `rust-tests` instead (#218).
       - name: cargo clippy
+        if: ${{ !cancelled() }}
         working-directory: pkg/earthsci-ast-rs
         run: cargo clippy --all-targets -- -D warnings
 
       # --- TypeScript ---------------------------------------------------
       - name: Install TypeScript dependencies
+        if: ${{ !cancelled() }}
         working-directory: pkg/earthsci-ast-ts
         run: npm ci
 
       - name: eslint / prettier
+        if: ${{ !cancelled() }}
         working-directory: pkg/earthsci-ast-ts
         run: |
           npm run lint
@@ -168,6 +196,7 @@ jobs:
 
       # --- Go -----------------------------------------------------------
       - name: gofmt
+        if: ${{ !cancelled() }}
         working-directory: pkg/earthsci-ast-go
         run: |
           unformatted=$(gofmt -l .)
@@ -176,6 +205,7 @@ jobs:
           fi
 
       - name: golangci-lint (pinned)
+        if: ${{ !cancelled() }}
         uses: golangci/golangci-lint-action@v8
         with:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
@@ -186,6 +216,7 @@ jobs:
       # mirrors with no manifest to derive from. v0.2.0 published with both
       # mirrors stale. Cheap to check, so check it on every run.
       - name: Version sync (all bindings)
+        if: ${{ !cancelled() }}
         run: ./scripts/check-version-sync.sh
 
   # Run each language's individual tests first.
@@ -339,13 +370,37 @@ jobs:
           toolchain: ${{ matrix.rust }}
           components: rustfmt, clippy
 
+      # Registry + git checkouts ONLY -- deliberately NOT `target`.
+      #
+      # Caching `target` here cost far more than it bought. This job builds the
+      # crate three ways (native, wasm32, `--all-features` tests) plus rustdoc,
+      # so one cold run leaves a target tree tens of GB wide. Two consequences,
+      # both observed:
+      #   * The post-job `tar` writes cache.tzst onto the SAME runner volume it
+      #     is compressing, and on the `stable` leg -- the only one that also
+      #     builds wasm32 and rustdoc -- that ran the disk out ("No space left
+      #     on device"), failing a job whose every real step had passed.
+      #   * The saved entry was 7 GiB for the SMALLEST leg. A repository gets
+      #     10 GiB of Actions cache total, so the three legs evicted each other
+      #     and every other cache in the repo. Every rust-tests restore in
+      #     recorded history reports "Cache not found" -- the target half of
+      #     this cache has never once been reused.
+      #
+      # `~/.cargo/registry` + `~/.cargo/git` are a few hundred MB, do not
+      # approach either limit, and save the crates.io downloads that are the
+      # part actually worth keeping. Compile time is unchanged: these builds
+      # were already cold on every run.
+      #
+      # (Note that `hashFiles` resolves to the empty string here -- Cargo.lock
+      # is gitignored for this library crate -- so the key is effectively the
+      # restore-key. Harmless for a download cache; it is why the entry is
+      # rewritten on every run.)
       - name: Cache Rust dependencies
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            pkg/earthsci-ast-rs/target
           key: ${{ runner.os }}-cargo-${{ matrix.rust }}-${{ hashFiles('pkg/earthsci-ast-rs/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-${{ matrix.rust }}-
@@ -400,6 +455,27 @@ jobs:
           else
             cargo test --verbose --all-features
           fi
+
+      # `cargo test` does NOT build bench targets -- that needs `--benches` or
+      # `--all-targets` -- so nothing above ever compiles benches/benchmarks.rs,
+      # and it silently drifted out of compiling as five structs gained fields
+      # (#218). Check-only: the point is that the benches still build against
+      # current types, not to spend CI minutes measuring.
+      #
+      # Skipped on the MSRV leg for the same reason the test step drops `esio`
+      # there: `--all-features` pulls earthsciio -> zarrs, whose own MSRV is
+      # 1.91. Benches are dev tooling and make no MSRV claim, so checking them
+      # on stable and beta is enough. `--all-features` (rather than just
+      # `--features benchmarks`) matches the test step above, so this step
+      # reuses that feature resolution instead of rebuilding the dependency
+      # graph under a second one.
+      #
+      # `!cancelled()` for the reason spelled out on the lint job: a failing
+      # test run must not silently skip this check, or a broken bench could
+      # hide behind an unrelated red suite -- which is how the drift got here.
+      - name: Build bench targets
+        if: ${{ !cancelled() && matrix.rust != '1.89.0' }}
+        run: cargo check --all-features --benches
 
       - name: Generate Rust documentation
         if: matrix.rust == 'stable'
@@ -464,6 +540,21 @@ jobs:
   # kind of nit that kept the whole workflow red for 40 runs. `lint` still runs
   # and still fails the workflow on its own — it just does not withhold this
   # signal while it does.
+  #
+  # THE `needs:` LIST IS THE SUITE GATE, and is now the ONLY thing performing
+  # that role (#224). The harness used to re-run all five suites itself before
+  # generating any conformance output, which duplicated exactly the work these
+  # five jobs had just finished — at ONE pinned version apiece, where the
+  # matrix covers julia 1.10/1.11/1.12, node 20/22, python 3.9-3.12, rust
+  # stable/beta/MSRV and go 1.21/1.22/1.23. Less coverage, for the whole cost.
+  #
+  # That duplication is why this job had NEVER completed: across the last 174
+  # workflow runs it executed 28 times and all 28 died at the 45-minute wall,
+  # the most recent still inside the first suite (`Pkg.test()`) 38.6 minutes
+  # in, with no conformance output produced. `--skip-binding-suites` below
+  # removes the duplicate, NOT the gate: keep this `needs:` list in step with
+  # the per-language jobs, because dropping a language from it would let the
+  # harness run against a binding whose suite nobody checked.
   standard-conformance-testing:
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -503,7 +594,6 @@ jobs:
             ~/.cache/pip
             ~/.cargo/registry
             ~/.cargo/git
-            pkg/earthsci-ast-rs/target
             pkg/earthsci-ast-ts/node_modules
           key: ${{ runner.os }}-conformance-${{ hashFiles('pkg/*/Project.toml', 'pkg/*/package*.json', 'pkg/*/pyproject.toml', 'pkg/*/Cargo.lock') }}
           restore-keys: |
@@ -527,10 +617,25 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .[dev,test]
 
+      # Build exactly what the harness RUNS, which is not what this step used
+      # to build. Every rust invocation in `test-conformance.sh` is a `cargo
+      # run` on the DEV profile with `--features conformance-adapters`; the
+      # release artifacts this step produced were used by nothing, at a
+      # measured 4m21s per run (#224). Dev is not the slow profile here:
+      # Cargo.toml pins `opt-level = 2` for this crate and its dependencies in
+      # the dev profile precisely so the conformance producers run fast.
+      #
+      # This step is NOT cheaper than the one it replaces, and nothing here
+      # claims it is: it builds three more bin targets at the same
+      # optimisation level, so on its own it takes longer than the release
+      # build did. What is saved is downstream — the crate is compiled ONCE,
+      # here, instead of again inside the 45-minute harness step below, where
+      # it was previously built twice over (once at default features for
+      # `esm`, once with `conformance-adapters` for the first adapter).
       - name: Build Rust package
         working-directory: pkg/earthsci-ast-rs
         run: |
-          cargo build --release
+          cargo build --features conformance-adapters
 
       # Make scripts executable
       - name: Make conformance scripts executable
@@ -540,10 +645,17 @@ jobs:
           chmod +x scripts/run-typescript-conformance.js
           chmod +x scripts/run-python-conformance.py
 
-      # Run standard cross-language conformance testing
+      # Run standard cross-language conformance testing.
+      #
+      # `--skip-binding-suites`: the five suites are the `needs:` gate above,
+      # already run at more versions than this job could. What still runs here
+      # is everything only this job can do — the per-binding conformance
+      # PRODUCERS, the cross-language comparison, and the determinism /
+      # geometry / cadence / PDE gates. A producer that fails still fails this
+      # job. See the job comment and issue #224.
       - name: Run standard conformance tests
         run: |
-          ./scripts/test-conformance.sh
+          ./scripts/test-conformance.sh --skip-binding-suites
 
       # Upload conformance results (best-effort — partial output is useful for debugging)
       - name: Upload standard conformance results
@@ -555,84 +667,14 @@ jobs:
             conformance-results/
           retention-days: 30
 
-  # Performance analysis job
-  performance-analysis:
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    if: github.event.inputs.run_performance_analysis != 'false'
-    needs: [standard-conformance-testing]
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.ref || '' }}
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Install performance analysis dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install matplotlib seaborn plotly pandas numpy scipy
-
-      - name: Download conformance results
-        uses: actions/download-artifact@v4
-        with:
-          name: conformance-results-${{ github.run_number }}
-          path: conformance-results/
-
-      - name: Run performance analysis
-        run: |
-          python3 -c "
-          import json
-          import os
-          from pathlib import Path
-
-          # Load performance data
-          performance_file = Path('conformance-results/performance_summary.json')
-          if performance_file.exists():
-              with open(performance_file) as f:
-                  data = json.load(f)
-
-              print('=== PERFORMANCE ANALYSIS SUMMARY ===')
-              print(f'Analysis completed at: {data.get(\"timestamp\", \"unknown\")}')
-
-              languages = data.get('languages', {})
-              if languages:
-                  # Find fastest and slowest
-                  exec_times = {lang: info.get('execution_time_ms', 0) for lang, info in languages.items()}
-                  fastest = min(exec_times, key=exec_times.get) if exec_times else 'unknown'
-                  slowest = max(exec_times, key=exec_times.get) if exec_times else 'unknown'
-
-                  print(f'Fastest implementation: {fastest} ({exec_times.get(fastest, 0):.1f}ms)')
-                  print(f'Slowest implementation: {slowest} ({exec_times.get(slowest, 0):.1f}ms)')
-
-                  # Memory usage
-                  mem_usage = {lang: info.get('memory_peak_mb', 0) for lang, info in languages.items()}
-                  lowest_mem = min(mem_usage, key=mem_usage.get) if mem_usage else 'unknown'
-                  highest_mem = max(mem_usage, key=mem_usage.get) if mem_usage else 'unknown'
-
-                  print(f'Lowest memory usage: {lowest_mem} ({mem_usage.get(lowest_mem, 0):.1f}MB)')
-                  print(f'Highest memory usage: {highest_mem} ({mem_usage.get(highest_mem, 0):.1f}MB)')
-          else:
-              print('No performance data available')
-          "
-
-      - name: Upload performance analysis
-        uses: actions/upload-artifact@v4
-        with:
-          name: performance-analysis-${{ github.run_number }}
-          path: |
-            conformance-results/performance_summary.json
-          retention-days: 90
-
-  # Report aggregation and final status
   conformance-results:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: [standard-conformance-testing]
-    if: always()
+    if: ${{ !cancelled() }}
+    env:
+      # 'success' | 'failure' | 'skipped' | 'cancelled'
+      HARNESS_RESULT: ${{ needs.standard-conformance-testing.result }}
     # This is the only job that writes to the PR. The workflow-level default
     # is `contents: read`, under which the comment step below 403s on every
     # pull request ("Resource not accessible by integration"), failing the job
@@ -648,17 +690,41 @@ jobs:
         with:
           ref: ${{ inputs.ref || '' }}
 
+      # Report NOT RUN and stop. No artifact exists to download, no verdict
+      # exists to comment, and inventing either is the bug this guards against.
+      - name: Report that conformance did not run
+        if: ${{ needs.standard-conformance-testing.result == 'skipped' || needs.standard-conformance-testing.result == 'cancelled' }}
+        run: |
+          if [ "$HARNESS_RESULT" = "skipped" ]; then
+            why="an upstream per-language job did not pass, so the harness never started"
+          else
+            why="the harness was cancelled (its own 45-minute timeout, most likely)"
+          fi
+          echo "::notice title=Conformance not run::$why — no conformance verdict was produced for this run."
+          {
+            echo "## ⏭️ Cross-language conformance: NOT RUN"
+            echo
+            echo "\`standard-conformance-testing\` reported \`$HARNESS_RESULT\`: $why."
+            echo
+            echo "**This is not a conformance result, in either direction.** Nothing was"
+            echo "compared, so nothing passed and nothing failed. Whatever went wrong is"
+            echo "red on its own job in this run."
+          } >> "$GITHUB_STEP_SUMMARY"
+
       # Download all results
       - name: Download standard conformance results
+        if: ${{ needs.standard-conformance-testing.result == 'success' || needs.standard-conformance-testing.result == 'failure' }}
         uses: actions/download-artifact@v4
         with:
           name: conformance-results-${{ github.run_number }}
           path: standard-results/
         continue-on-error: true
 
-      # Comment on PR with conformance results
+      # Comment on PR with conformance results. Only when there IS a verdict:
+      # a PR whose python job failed should not also collect a conformance
+      # comment about results that were never computed.
       - name: Comment PR with enhanced conformance results
-        if: github.event_name == 'pull_request' && always()
+        if: ${{ github.event_name == 'pull_request' && (needs.standard-conformance-testing.result == 'success' || needs.standard-conformance-testing.result == 'failure') }}
         uses: actions/github-script@v7
         with:
           script: |
@@ -673,7 +739,6 @@ jobs:
                 const analysis = JSON.parse(fs.readFileSync(analysisPath, 'utf8'));
 
                 const overallStatus = analysis.overall_status || 'UNKNOWN';
-                const overallScore = analysis.divergence_summary?.overall_score || 0;
                 const languagesTested = analysis.languages_tested || [];
                 const criticalDivergences = analysis.divergence_summary?.critical_divergences || [];
 
@@ -684,9 +749,8 @@ jobs:
 
                 let comment = `## ${statusEmoji} ${analysisType} Cross-Language Conformance Test Results\n\n`;
                 comment += `**Overall Status:** ${overallStatus}\n`;
-                comment += `**Consistency Score:** ${(overallScore * 100).toFixed(1)}%\n`;
                 comment += `**Languages Tested:** ${languagesTested.join(', ')}\n`;
-                comment += `**Critical Divergences:** ${criticalDivergences.length}\n\n`;
+                comment += `**Failing checks:** ${criticalDivergences.length}\n\n`;
 
                 // Performance summary if available
                 if (analysis.performance_analysis && analysis.performance_analysis.execution_time_stats) {
@@ -703,19 +767,38 @@ jobs:
                   comment += '\n';
                 }
 
+                // Read ONLY keys that `build_analysis()` in
+                // compare-conformance-outputs.py actually writes. This block used
+                // to read `divergence.score`, `data.status`, `data.consistency_score`,
+                // `data.divergent_tests` and `data.total_tests` — none of which
+                // exist in that schema, which emits `divergent_count` per entry and
+                // a plain integer per category. Every FAIL comment would have
+                // rendered `NaN%` and `undefined/undefined`. Nobody had seen it,
+                // because the harness had never once produced an analysis to
+                // comment on (#224); the first real divergence this gate catches
+                // must be readable.
+                const sections = [
+                  ['validation', analysis.validation_analysis],
+                  ['display', analysis.display_analysis],
+                  ['substitution', analysis.substitution_analysis],
+                ];
+                comment += `### Sections\n`;
+                for (const [name, sec] of sections) {
+                  const summary = (sec && sec.summary) || {};
+                  const divergent = summary.divergent_tests ?? 0;
+                  const total = summary.total_tests ?? 0;
+                  comment += `- ${divergent === 0 ? '✅' : '❌'} **${name}**: ${divergent}/${total} divergent\n`;
+                }
+                comment += '\n';
+
+                // `critical_divergences` and `divergence_summary.categories` carry
+                // the same per-check counts; one rendering of them is enough.
                 if (criticalDivergences.length > 0) {
-                  comment += `### Critical Divergences (< 70% consistency):\n`;
+                  comment += `### Failures by check\n`;
                   for (const divergence of criticalDivergences) {
-                    comment += `- **${divergence.category}**: ${(divergence.score * 100).toFixed(1)}% consistency\n`;
+                    comment += `- \`${divergence.category}\`: ${divergence.divergent_count} failure(s)\n`;
                   }
                   comment += '\n';
-                }
-
-                comment += `### Category Results:\n`;
-                const categories = analysis.divergence_summary?.categories || {};
-                for (const [category, data] of Object.entries(categories)) {
-                  const statusIcon = data.status === 'PASS' ? '✅' : data.status === 'WARN' ? '⚠️' : '❌';
-                  comment += `- ${statusIcon} **${category.charAt(0).toUpperCase() + category.slice(1)}**: ${(data.consistency_score * 100).toFixed(1)}% (${data.divergent_tests}/${data.total_tests} divergent)\n`;
                 }
 
                 comment += `\n📊 [View detailed conformance report](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`;
@@ -727,11 +810,14 @@ jobs:
                   body: comment
                 });
               } else {
+                // The harness RAN and still produced no analysis.json. That is
+                // a broken harness, not a divergence between bindings — say
+                // which, so nobody reads this as a conformance regression.
                 await github.rest.issues.createComment({
                   issue_number: context.issue.number,
                   owner: context.repo.owner,
                   repo: context.repo.repo,
-                  body: '❌ Cross-language conformance testing failed - no results generated. Check the action logs for details.'
+                  body: '⚠️ The conformance harness ran but produced no analysis file, so there is **no conformance verdict** for this run — this is not a report that the bindings diverged. See the `standard-conformance-testing` job logs.'
                 });
               }
             } catch (error) {
@@ -751,8 +837,12 @@ jobs:
               }
             }
 
-      # Final status check
+      # Final status check. Only reachable when the harness actually ran — the
+      # skipped/cancelled outcomes were reported as NOT RUN above and end this
+      # job green, because there is no verdict to fail on and the real failure
+      # is already red elsewhere in the run.
       - name: Check final conformance status
+        if: ${{ needs.standard-conformance-testing.result == 'success' || needs.standard-conformance-testing.result == 'failure' }}
         run: |
           ANALYSIS_FILE=""
           if [ -f "standard-results/comparison/analysis.json" ]; then
@@ -786,6 +876,9 @@ jobs:
                 ;;
             esac
           else
-            echo "❌ No conformance analysis results found"
+            # The harness ran and produced nothing. Broken harness, not a
+            # divergence — still red, but say which.
+            echo "::error title=Conformance harness produced no analysis::The harness reported '$HARNESS_RESULT' but no comparison/analysis.json was uploaded. This is NOT a conformance verdict."
+            echo "❌ The harness ran but produced no analysis file — see the standard-conformance-testing job"
             exit 1
           fi

@@ -40,7 +40,7 @@ const SII = SciMLBase.SymbolicIndexingInterface
 # --------------------------------------------------------------------------- #
 EarthSciAST._callback_set(cbs::AbstractVector) = SciMLBase.CallbackSet(cbs...)
 
-# The core's internal solve bridge (`run_pde_tests` and friends), routed through
+# The core's internal solve bridge (`run_inline_tests` and friends), routed through
 # the ONE public solve path so there is no second mechanism.
 EarthSciAST._solve_problem(prob::EsmProblem, alg; kwargs...) =
     SciMLBase.solve(prob, alg; kwargs...)

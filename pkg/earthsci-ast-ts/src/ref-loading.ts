@@ -29,6 +29,7 @@ import {
 } from './lower-expression-templates.js'
 import {
   appendComponentImports,
+  applyMountIndexSetRename,
   applyScopeInjections,
   evalMetaExpr,
   isTemplateLibraryDoc,
@@ -303,6 +304,21 @@ async function prefetchRefs(
  * axis size disagrees with the importer's declaration must fail at load, not
  * silently resolve against the importer.
  */
+/**
+ * One-line rendering of an index-set declaration — `kind=interval, size=59` —
+ * so the §4.7 collision diagnostic names both definitions rather than only the
+ * axis they disagree about. Mirrors the Julia / Python `_index_set_show`.
+ */
+function showIndexSet(decl: unknown): string {
+  if (typeof decl !== 'object' || decl === null || Array.isArray(decl)) return JSON.stringify(decl)
+  const d = decl as Record<string, unknown>
+  const parts: string[] = []
+  for (const k of ['kind', 'size', 'members', 'of', 'from_faq']) {
+    if (d[k] !== undefined && d[k] !== null) parts.push(`${k}=${JSON.stringify(d[k])}`)
+  }
+  return parts.length > 0 ? parts.join(', ') : JSON.stringify(decl)
+}
+
 function mergeSubsystemIndexSets(
   registry: Record<string, unknown>,
   loaded: EsmFile,
@@ -317,7 +333,7 @@ function mergeSubsystemIndexSets(
       if (!deepEqual(registry[n], decl)) {
         throw new EsmMachineryError(
           ERROR_CODES.SUBSYSTEM_INDEX_SET_CONFLICT,
-          `index set '${n}' from subsystem ref '${ref}' collides with a non-deep-equal declaration in the importing document. A referenced subsystem file's top-level index_sets merge into the importing document's registry; deep-equal redeclaration is idempotent, a size/kind disagreement is a load-time error (esm-spec §4.7).`,
+          `index set '${n}' from subsystem ref '${ref}' (${showIndexSet(decl)}) collides with a non-deep-equal declaration already in the importing document's registry (${showIndexSet(registry[n])}) — contributed by the document's own \`index_sets\` or by an earlier mount. A referenced subsystem file's top-level index_sets merge into the importing document's registry; deep-equal redeclaration is idempotent, a size/kind disagreement is a load-time error (esm-spec §4.7). If the two are genuinely different axes that happen to share a name, rename one at its mount edge with \`index_set_rename\` (esm-spec §4.7 "Mount-edge index-set renaming"), e.g. {"ref": "${ref}", "index_set_rename": {"${n}": "${n}_2"}}.`,
         )
       }
     } else {
@@ -403,6 +419,7 @@ function resolveRefDocument(
   refBasePath: string,
   bindings: Record<string, number>,
   injectedImports: readonly unknown[] = [],
+  indexSetRename: unknown = undefined,
 ): EsmFile {
   if (isTemplateLibraryDoc(parsed)) {
     throw new EsmMachineryError(
@@ -429,11 +446,23 @@ function resolveRefDocument(
     metaparameters: bindings,
     validateSchema,
   })
-  if (resolved === null) return machineryInput
   // esm-spec §9.6.4 (Option B): lower to the reference-preserving form, then
   // apply the RFC §7.7 Expand-at-build strategy so the resolved subsystem is
   // the Option-A expanded image (bit-identical downstream behavior).
-  return expandDocument(lowerExpressionTemplates(resolved)) as EsmFile
+  const out =
+    resolved === null
+      ? machineryInput
+      : (expandDocument(lowerExpressionTemplates(resolved)) as EsmFile)
+  // esm-spec §4.7 "Mount-edge index-set renaming", pipeline step 2. The
+  // referenced document has now resolved in its OWN scope — its imports, this
+  // edge's `bindings` and injection, its metaparameter close and fold, the
+  // §9.6.3 fixpoint — so its `index_sets` are the post-resolution vocabulary
+  // the edge's `index_set_rename` speaks. Before its own nested mounts resolve:
+  // each nested edge renames what IT contributes, at its own edge. Absent or
+  // empty ⇒ identity, so an edge that does not use the field resolves exactly
+  // as before.
+  applyMountIndexSetRename(out, indexSetRename, `subsystem ref '${ref}'`)
+  return out
 }
 
 /**
@@ -443,6 +472,8 @@ interface RefEdge {
   ref?: string
   bindings?: unknown
   expression_template_imports?: unknown
+  /** esm-spec §4.7 "Mount-edge index-set renaming" — index-set name → importer-visible name. */
+  index_set_rename?: unknown
 }
 
 /**
@@ -491,6 +522,7 @@ function resolveRefEdge(
       refBasePath,
       readEdgeBindings(sub, subName),
       readEdgeInjectedImports(sub),
+      sub.index_set_rename,
     )
     inline(parsed, refBasePath)
   } finally {
@@ -691,7 +723,7 @@ function resolveReactionSystemRefs(
  * The raw base is re-read from `sourcePath` when given (relative import `ref`s
  * resolve against its directory), else re-serialized from `file`; `baseDir`
  * anchors the injected `ref`s. Mirrors the Julia reference
- * `_ephemeral_injected_file` (`EarthSciAST.jl/src/pde_inline_tests.jl`).
+ * `_ephemeral_injected_file` (`EarthSciAST.jl/src/inline_tests.jl`).
  *
  * This binding does not numerically simulate PDEs; the ephemeral build is the
  * structural-lowering half of form C (the leaf's rewrite-target is lowered in

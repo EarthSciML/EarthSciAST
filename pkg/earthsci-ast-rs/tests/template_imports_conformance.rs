@@ -369,6 +369,54 @@ fn subsystem_index_sets_merge_into_document() {
     assert_eq!(mesh_isets["vertices"].size, Some(4));
 }
 
+/// §4.7 "Two mount forms, one mechanism": a TOP-LEVEL `models.<k>` `{ref}` mount
+/// merges the leaf's `index_sets` exactly as the `subsystems.<k>` form above
+/// does. The two fixtures mount the SAME leaf (`tests/valid/subsystem_mesh_lib.esm`)
+/// through the other attachment point, so this is a differential test of the two
+/// forms: `cells` is redeclared deep-equal (idempotent), and `vertices` — declared
+/// only by the leaf, yet the axis the assembling document's own `Host.diag` is
+/// shaped over — is brought in. Before the merge existed here the axis was
+/// silently dropped and an assembly had to redeclare its leaves' axes.
+#[test]
+fn toplevel_ref_mount_merges_leaf_index_sets() {
+    let dir = repo_root().join("tests/fixtures/toplevel_ref_index_sets");
+    let f = load_path(dir.join("toplevel_ref_index_set_merge.esm")).expect("top-level mount load");
+    let isets = f.index_sets.as_ref().expect("index_sets");
+    assert_eq!(isets["cells"].size, Some(5));
+    assert_eq!(isets["vertices"].size, Some(4));
+
+    // The mount is a real splice, not a surviving `{ref}` stub.
+    let models = f.models.as_ref().expect("models");
+    assert!(
+        models["M"].variables.contains_key("area"),
+        "leaf spliced in"
+    );
+
+    // A non-deep-equal collision is `subsystem_index_set_conflict` — the SAME
+    // diagnostic the subsystems-edge form raises, not last-writer-wins.
+    let e = load_path(dir.join("toplevel_ref_index_set_conflict.esm"))
+        .expect_err("size disagreement must be rejected");
+    assert!(
+        e.to_string().contains("[subsystem_index_set_conflict]"),
+        "got: {e}"
+    );
+
+    // §4.7 merges a mounted file's axes "after the referenced document's
+    // metaparameters are closed and folded", and a top-level mount edge does
+    // NOT close them (it is a raw pre-pass that drops the leaf's
+    // `metaparameters` block). An axis whose `size` is still the leaf's own
+    // metaparameter name is therefore held back rather than merged in the wrong
+    // scope — without the guard this load dies on `invalid type: string
+    // "NLEV", expected i64`.
+    let f = load_path(dir.join("toplevel_ref_metaparameter_axis.esm"))
+        .expect("an unfolded leaf axis must not break the load");
+    assert!(
+        f.index_sets.as_ref().is_none_or(|s| !s.contains_key("lev")),
+        "an unfolded `size` must not reach the registry: {:?}",
+        f.index_sets
+    );
+}
+
 /// §4.3.2 makearray region bounds: the empty bound `[start, start-1]` (here
 /// `[2, N-1]` folding to `[2, 1]` at the default N = 2) loads clean; rebinding
 /// N = 1 folds it to `[2, 0]`, INVERTED, rejected with `makearray_region_inverted`.
