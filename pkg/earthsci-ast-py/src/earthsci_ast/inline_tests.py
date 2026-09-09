@@ -948,9 +948,7 @@ def simulate_states(
     return SimulatedStates(times=times, states=states, var_map=var_map, problem=prob)
 
 
-def _resolve_tolerance_field(
-    levels: tuple[Tolerance | None, ...], field: str
-) -> float | None:
+def _resolve_tolerance_field(levels: tuple[Tolerance | None, ...], field: str) -> float | None:
     """First DECLARED value of ``field`` walking outward, or ``None``."""
     for candidate in levels:
         if candidate is None:
