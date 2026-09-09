@@ -301,15 +301,34 @@ fn state_param_observed_time_refs() {
 }
 
 // ============================================================================
-// Differential operators on the RHS: `D` stays a legacy 0.0 marker; the spatial
-// sugar ops carry no privileged semantics and cannot be built at all
+// Differential operators: neither a structural `D` nor a spatial sugar op can
+// be built for this evaluator at all
 // ============================================================================
 
+/// A structural `D` can no longer be BUILT for this evaluator, let alone
+/// evaluated (esm-spec §4.2).
+///
+/// It used to be constructible and answer `0.0` — the "legacy parity" marker,
+/// matching what the two array evaluators returned. That parity was real and
+/// all three were wrong together: four shipped documents computed silent zeros
+/// through it, and §4.2 now says an implementation MUST NOT invent a value for
+/// a right-hand-side `D`, in particular not `0`.
+///
+/// Nothing is lost. A `D` on an equation's LEFT-hand side never reaches this
+/// evaluator — `resolve_expr` runs only over right-hand sides, observed bodies
+/// and event bodies — and a `D` on a RIGHT-hand side is resolved to the
+/// quantity's tendency by `flatten`'s phase 5b′, or refused with
+/// `unlowered_operator` before any build. So the only `D` that could arrive
+/// here is a pipeline bug, and issue #220's answer to that is a refusal naming
+/// the op.
 #[test]
-fn differential_ops_on_rhs() {
-    // `D` on the RHS is unchanged — the legacy 0.0 marker (its time-derivative
-    // semantics are not touched by the spatial-op de-specialization).
-    assert_eq!(interpret(&op("D", vec![n(123.0)]), &[], &[], &[], 0.0), 0.0);
+fn a_structural_d_cannot_be_built_for_the_scalar_evaluator() {
+    let err = ResolvedExpr::op("D", vec![n(123.0)])
+        .expect_err("`D` has no evaluation rule here and must be refused by name");
+    assert!(
+        format!("{err}").contains('D'),
+        "the refusal must name the operator, got: {err}"
+    );
 }
 
 /// An operator with no evaluation rule is refused BY NAME at construction, and

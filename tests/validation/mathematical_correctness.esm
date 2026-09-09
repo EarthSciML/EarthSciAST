@@ -108,7 +108,7 @@
     },
     "StoichiometricBalance": {
       "reference": {
-        "notes": "Test complex stoichiometric balancing: 2A + B → 3C + D"
+        "notes": "Test complex stoichiometric balancing: 2A + B \u2192 3C + D"
       },
       "species": {
         "A": {
@@ -214,12 +214,12 @@
         "kinetic_energy": {
           "type": "unknown",
           "units": "J",
-          "description": "Kinetic energy = ½mv²"
+          "description": "Kinetic energy = \u00bdmv\u00b2"
         },
         "potential_energy": {
           "type": "unknown",
           "units": "J",
-          "description": "Potential energy = ½kx²"
+          "description": "Potential energy = \u00bdkx\u00b2"
         },
         "total_energy": {
           "type": "unknown",
@@ -372,7 +372,7 @@
         },
         "total_momentum": {
           "type": "unknown",
-          "units": "kg⋅m/s",
+          "units": "kg\u22c5m/s",
           "description": "Total momentum (conserved)"
         },
         "total_kinetic_energy": {
@@ -665,17 +665,17 @@
         "linear_combination": {
           "type": "unknown",
           "units": "dimensionless",
-          "description": "αu + βv"
+          "description": "\u03b1u + \u03b2v"
         },
         "derivative_of_combination": {
           "type": "unknown",
           "units": "1/s",
-          "description": "d(αu + βv)/dt"
+          "description": "d(\u03b1u + \u03b2v)/dt"
         },
         "combination_of_derivatives": {
           "type": "unknown",
           "units": "1/s",
-          "description": "α(du/dt) + β(dv/dt)"
+          "description": "\u03b1(du/dt) + \u03b2(dv/dt)"
         }
       },
       "equations": [
@@ -794,6 +794,37 @@
               }
             ]
           }
+        }
+      ],
+      "tests": [
+        {
+          "id": "linearity_of_the_time_derivative",
+          "description": "d(alpha*u + beta*v)/dt equals alpha*du/dt + beta*dv/dt. Both sides are written as observeds over a right-hand-side structural D, so this executes esm-spec \u00a74.2's resolution: the left one needs the CHAIN RULE through the observed `linear_combination`, the right one only the states' own tendencies. At t = 0, u = 1 and v = 2, so both are alpha*(-0.1*1) + beta*(0.05*2) = 3*(-0.1) + (-1.5)*(0.1) = -0.45. Before the rule was stated in full this model could not run at all: Python and Julia refused the left-hand observed and Rust answered 0 for it, which made the two sides differ and the linearity this fixture is named for untestable.",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "tolerance": {
+            "rel": 1e-08,
+            "abs": 1e-10
+          },
+          "assertions": [
+            {
+              "variable": "linear_combination",
+              "time": 0.0,
+              "expected": 0.0
+            },
+            {
+              "variable": "derivative_of_combination",
+              "time": 0.0,
+              "expected": -0.45
+            },
+            {
+              "variable": "combination_of_derivatives",
+              "time": 0.0,
+              "expected": -0.45
+            }
+          ]
         }
       ]
     }

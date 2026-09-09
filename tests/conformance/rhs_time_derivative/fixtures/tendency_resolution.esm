@@ -1,0 +1,91 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "TendencyResolution",
+    "description": "esm-spec §4.2, RESOLVE half: a right-hand-side structural D over an unknown that carries a differential equation is that unknown's tendency. Three shapes in one document — an own-state derivative, a chained one, and a scoped reference into a sibling reaction system's mass-action ODE.",
+    "authors": ["EarthSciAST conformance"],
+    "created": "2026-09-07T00:00:00Z",
+    "tags": ["conformance", "esm-spec-4.2", "tendency"]
+  },
+  "reaction_systems": {
+    "Chem": {
+      "reference": {
+        "notes": "A -> B at a first-order rate k, so d(A)/dt = -k*A by mass action (§7.4)."
+      },
+      "species": {
+        "A": { "units": "mol/mol", "default": 4.0, "description": "Decaying species" },
+        "B": { "units": "mol/mol", "default": 0.0, "description": "Product" }
+      },
+      "parameters": {
+        "k": { "units": "1/s", "default": 0.5, "description": "First-order rate constant" }
+      },
+      "reactions": [
+        {
+          "id": "R1",
+          "name": "first_order_decay",
+          "substrates": [{ "species": "A", "stoichiometry": 1 }],
+          "products": [{ "species": "B", "stoichiometry": 1 }],
+          "rate": "k"
+        }
+      ]
+    }
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "x": { "type": "unknown", "units": "kg", "default": 2.0, "description": "Exponentially decaying state" },
+        "kx": { "type": "parameter", "units": "1/s", "default": 3.0, "description": "Decay rate of x" },
+        "dxdt": { "type": "unknown", "units": "kg/s", "description": "OWN-STATE form: D(x, t), which must be -kx*x" },
+
+        "b": { "type": "unknown", "units": "kg", "default": 0.0, "description": "Biomass, growing at a constant rate" },
+        "growth": { "type": "parameter", "units": "kg/s", "default": 5.0, "description": "Biomass growth rate" },
+        "l": { "type": "unknown", "units": "m^2", "default": 1.0, "description": "Leaf area, whose tendency NAMES b's tendency" },
+        "sla": { "type": "parameter", "units": "m^2/kg", "default": 2.0, "description": "Specific leaf area" },
+
+        "dAdt": { "type": "unknown", "units": "mol/mol/s", "description": "SCOPED form: D(Chem.A, t), the mechanism's mass-action tendency" }
+      },
+      "equations": [
+        {
+          "_comment": "d(x)/dt = -kx*x, so x(0) = 2 gives a tendency of -6 at t = 0.",
+          "lhs": { "op": "D", "args": ["x"], "wrt": "t" },
+          "rhs": { "op": "*", "args": [{ "op": "-", "args": ["kx"] }, "x"] }
+        },
+        {
+          "_comment": "The own-state form. Must resolve to -kx*x, NOT to 0.",
+          "lhs": "dxdt",
+          "rhs": { "op": "D", "args": ["x"], "wrt": "t" }
+        },
+        {
+          "lhs": { "op": "D", "args": ["b"], "wrt": "t" },
+          "rhs": "growth"
+        },
+        {
+          "_comment": "A CHAINED tendency: d(l)/dt names d(b)/dt, so resolution recurses. sla*growth = 10, and l(0) = 1, so l(3) = 31.",
+          "lhs": { "op": "D", "args": ["l"], "wrt": "t" },
+          "rhs": { "op": "*", "args": ["sla", { "op": "D", "args": ["b"], "wrt": "t" }] }
+        },
+        {
+          "_comment": "The SCOPED form: the tendency being named belongs to a sibling reaction system and exists only because §7.4 generated it. -k*A = -0.5*4 = -2 at t = 0.",
+          "lhs": "dAdt",
+          "rhs": { "op": "D", "args": ["Chem.A"], "wrt": "t" }
+        }
+      ],
+      "tests": [
+        {
+          "id": "tendencies_resolve",
+          "description": "Every right-hand-side D resolves to the tendency the flattened system defines for it.",
+          "time_span": { "start": 0.0, "end": 3.0 },
+          "tolerance": { "rel": 1e-8, "abs": 1e-10 },
+          "assertions": [
+            { "variable": "x", "time": 0.0, "expected": 2.0 },
+            { "variable": "dxdt", "time": 0.0, "expected": -6.0 },
+            { "variable": "b", "time": 3.0, "expected": 15.0 },
+            { "variable": "l", "time": 3.0, "expected": 31.0 },
+            { "variable": "dAdt", "time": 0.0, "expected": -2.0 }
+          ]
+        }
+      ]
+    }
+  },
+  "domain": { "temporal": {} }
+}

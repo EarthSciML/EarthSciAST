@@ -686,6 +686,16 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
     // Phase 5b: pointwise spatial lift (esm-spec §10.5).
     maybe_apply_pointwise_lift(file, &mut parts, &loaded_producers)?;
 
+    // Phase 5b′: resolve a right-hand-side STRUCTURAL time derivative to the
+    // tendency this system defines for it (esm-spec §4.2). Runs after the lift
+    // so it sees the equations the lift produced, after reaction lowering
+    // (phase 1) so a mechanism's mass-action tendency is available to a sibling
+    // model's scoped `D(Chem.O3, t)`, and after coupling (phase 4) so a state
+    // merged by `operator_compose` yields its WHOLE tendency rather than the
+    // first contributing term.
+    let time_invariant: HashSet<String> = parts.parameters.keys().cloned().collect();
+    resolve_rhs_time_derivatives(&mut parts.equations, &time_invariant);
+
     // Phase 5c: the §6.3.1 SUBSET maps, re-derived over the FINISHED system so
     // they see the equations coupling and the pointwise lift actually produced
     // rather than the ones the document declared. Each is a subset of the map
@@ -1070,6 +1080,79 @@ pub fn first_unlowered_operator(flat: &FlattenedSystem) -> Option<String> {
         }
     }
     None
+}
+
+/// The name a right-hand-side structural `D` differentiates, for the first such
+/// node in `flat` that [`resolve_rhs_time_derivatives`] left standing — or
+/// `None` when every one of them resolved.
+///
+/// The companion gate to that phase, and the second half of esm-spec §4.2's
+/// right-hand-side `D` rule. The phase resolves a `D` over an unknown that
+/// carries a differential equation; everything else it deliberately leaves
+/// alone, because resolving it would be symbolic differentiation and the format
+/// defines none:
+///
+/// * `D` of an OBSERVED or a PARAMETER,
+/// * `D` of a compound expression (`D(a*b, t)`),
+/// * a self- or mutually-referential tendency chain, which the phase stops
+///   expanding rather than looping.
+///
+/// Each of those is a rewrite-target that reached evaluation unlowered, and
+/// §4.2 says an implementation MUST NOT invent a value for it — **in particular
+/// not `0`**, which is what all three Rust evaluators used to return and what
+/// made three shipped documents compute silent zeros. So both compile paths ask
+/// this before they build.
+///
+/// This is a SEPARATE query from [`first_unlowered_operator`] rather than a new
+/// case inside it, for two reasons. It is RHS-only — a `D` on an equation's
+/// left-hand side is what makes the equation differential and must never be
+/// reported — and `first_unlowered_operator` is reached only from behind the
+/// `independent_variables != ["t"]` guard in both compile paths, so a 0-D
+/// document (which is exactly where `dxdt ~ D(x, t)` is written) never passes
+/// through it at all.
+///
+/// The returned string is the differentiated operand rendered for the
+/// diagnostic, not a variable that can be looked up: `D` of a compound has no
+/// name, so it renders as the expression.
+pub fn first_unresolved_rhs_time_derivative(flat: &FlattenedSystem) -> Option<String> {
+    first_unresolved_rhs_time_derivative_in(&flat.equations)
+}
+
+/// [`first_unresolved_rhs_time_derivative`] over a bare equation list.
+///
+/// The array runtime's SINGLE-MODEL entry point (`ArrayCompiled::from_file` →
+/// `from_model_owned_with_arrays`) deliberately never flattens — it exists so a
+/// large expanded discretization is not copied through a `FlattenedSystem` — so
+/// it needs both the resolution phase and this gate applied to the model's own
+/// equations. Same two functions, same order, so the two array routes cannot
+/// answer a document differently.
+pub(crate) fn first_unresolved_rhs_time_derivative_in(equations: &[Equation]) -> Option<String> {
+    for eq in equations {
+        if let Some(target) = first_rhs_time_derivative(&eq.rhs) {
+            return Some(target);
+        }
+    }
+    None
+}
+
+/// The operand of the first structural `D` anywhere inside `expr`, rendered.
+fn first_rhs_time_derivative(expr: &Expr) -> Option<String> {
+    let Expr::Operator(node) = expr else {
+        return None;
+    };
+    if is_structural_time_derivative(node) {
+        return Some(match &node.args[0] {
+            Expr::Variable(name) => name.clone(),
+            other => format!("{other}"),
+        });
+    }
+    let mut found: Option<String> = None;
+    node.for_each_child(&mut |child| {
+        if found.is_none() {
+            found = first_rhs_time_derivative(child);
+        }
+    });
+    found
 }
 
 /// Phase 5d of [`flatten`]: the provider-served loaded fields
@@ -1498,6 +1581,321 @@ fn maybe_apply_pointwise_lift(
         )?;
     }
     Ok(())
+}
+
+/// Is `node` the STRUCTURAL time derivative — `D` with `wrt: "t"` or no `wrt`
+/// at all (esm-spec §4.2: an absent `wrt` MEANS `t`), applied to a single
+/// operand?
+///
+/// The complement of [`crate::op_registry::is_rewrite_target_derivative`],
+/// which is the SPATIAL tier: a `D` whose `wrt` names an axis, lowered to a
+/// stencil by a discretization rule and never evaluated.
+fn is_structural_time_derivative(node: &ExpressionNode) -> bool {
+    node.op == "D"
+        && node.args.len() == 1
+        && !crate::op_registry::is_rewrite_target_derivative(node)
+}
+
+/// Phase 5b′ of [`flatten`]: rewrite every right-hand-side STRUCTURAL time
+/// derivative into the tendency the flattened system already defines for it.
+///
+/// `D` on an equation's LEFT-hand side is structural: it is what makes the
+/// equation differential, and system assembly consumes it. On a RIGHT-hand
+/// side there was no consumer at all, and the three evaluators each answered
+/// `D(anything) = 0` "for parity" with one another — a silent wrong answer
+/// rather than a missing feature, which is what made an observed written
+/// `dxdt ~ D(x, t)` (esm-spec §6.6.2, the instantaneous-derivative test shape)
+/// read as exactly `0` and grade its inline test against a configuration the
+/// model never computed.
+///
+/// The value is not a runner's to invent: everything it needs is already in
+/// this system. `D(x, t)` over a state is `x`'s own `D(x)/dt ~ f`; `D(y, t)`
+/// over an OBSERVED is the total derivative of `y`'s defining equation, which
+/// is that equation's right-hand side differentiated by the same rule, one
+/// level down. So the whole rule is one recursive walk, `deriv` below, and it
+/// runs HERE — the layer that qualifies names, applies coupling and lowers a
+/// reaction network to its mass-action ODEs — so no evaluator ever meets a
+/// right-hand-side `D` and every `FlattenedSystem` consumer answers alike by
+/// construction. It is what lets `D(Chem.O3, t)` in a sibling model resolve to
+/// the mechanism's tendency (esm-spec §7.4) with no runner learning anything
+/// about reactions.
+///
+/// What `deriv` covers, and nothing else:
+///
+/// * a STATE (a name carrying `D(x)/dt ~ f`) — its tendency, with any `D`
+///   inside that tendency resolved in turn, so a chained
+///   `D(lai)/dt ~ sla · D(biomass)/dt` terminates in states;
+/// * an OBSERVED (a name carrying `y ~ g`) — `deriv(g)`, the chain rule
+///   applied by substituting the definition and differentiating it;
+/// * a TIME-INVARIANT name (a parameter) and a literal — `0`;
+/// * `+`, binary and unary `-`, `neg`, n-ary `*`, and binary `/` — distributed
+///   by the ordinary sum, product and quotient rules over the operands'
+///   derivatives.
+///
+/// Every other shape — `^`, a call, a reduction, a nested `D`, a name in no
+/// table — resolves to NOTHING and is left exactly as authored, as is any
+/// cyclic chain (`active` stops it). Those reach
+/// [`first_unresolved_rhs_time_derivative`] and are refused with
+/// `unlowered_operator`: §4.2 forbids inventing a value for them, in
+/// particular `0`. A SPATIAL `D` is untouched — it is a rewrite target for a
+/// discretization rule (§9.6.8) and that gate still owns it — and left-hand
+/// sides are never rewritten.
+pub(crate) fn resolve_rhs_time_derivatives(
+    equations: &mut [Equation],
+    time_invariant: &HashSet<String>,
+) {
+    let mut tables = DerivTables {
+        tendency: HashMap::new(),
+        definition: HashMap::new(),
+        time_invariant,
+    };
+    for eq in equations.iter() {
+        match &eq.lhs {
+            Expr::Operator(node) if is_structural_time_derivative(node) => {
+                if let Some(Expr::Variable(name)) = node.args.first() {
+                    tables.tendency.insert(name.clone(), eq.rhs.clone());
+                }
+            }
+            // A bare-variable LHS is a DEFINING equation — esm-spec §6.3.1's
+            // observed / algebraic form. Its right-hand side is what the chain
+            // rule differentiates.
+            Expr::Variable(name) => {
+                tables.definition.insert(name.clone(), eq.rhs.clone());
+            }
+            _ => {}
+        }
+    }
+    if tables.tendency.is_empty() && tables.definition.is_empty() {
+        return;
+    }
+    for eq in equations.iter_mut() {
+        // Cheap pre-check: a document with no right-hand-side `D` at all — every
+        // document that had none before this phase existed — keeps its equations
+        // untouched rather than being rebuilt through `substitute`.
+        if !contains_time_derivative(&eq.rhs) {
+            continue;
+        }
+        // The quantity this equation DEFINES is not available to substitute
+        // into its own right-hand side; seeding `active` with it is what makes
+        // `D(x)/dt ~ k·D(x, t)` and `y ~ D(y, t)` terminate as unresolved
+        // rather than expand forever.
+        let mut active: Vec<String> = match &eq.lhs {
+            Expr::Operator(node) if is_structural_time_derivative(node) => {
+                match node.args.first() {
+                    Some(Expr::Variable(name)) => vec![name.clone()],
+                    _ => Vec::new(),
+                }
+            }
+            Expr::Variable(name) => vec![name.clone()],
+            _ => Vec::new(),
+        };
+        eq.rhs = tables.substitute(&eq.rhs, &mut active);
+    }
+}
+
+/// The tendency and defining equations [`resolve_rhs_time_derivatives`] reads,
+/// plus the names whose time derivative is `0`.
+struct DerivTables<'a> {
+    /// `x` -> the right-hand side of its `D(x)/dt ~ …` equation.
+    tendency: HashMap<String, Expr>,
+    /// `y` -> the right-hand side of its `y ~ …` defining equation.
+    definition: HashMap<String, Expr>,
+    /// Names that do not vary with `t` — the flattened system's parameters.
+    /// A name in NONE of the three is unresolvable rather than zero: answering
+    /// `0` for a name this pass simply does not recognise is the very defect
+    /// §4.2 forbids.
+    time_invariant: &'a HashSet<String>,
+}
+
+impl DerivTables<'_> {
+    /// Rewrite every structural `D` inside `expr`, leaving the ones `deriv`
+    /// cannot answer exactly as authored for the gate to report.
+    fn substitute(&self, expr: &Expr, active: &mut Vec<String>) -> Expr {
+        let Expr::Operator(node) = expr else {
+            return expr.clone();
+        };
+        if is_structural_time_derivative(node) {
+            return match node.args.first().and_then(|a| self.deriv(a, active)) {
+                Some(out) => out,
+                None => expr.clone(),
+            };
+        }
+        Expr::operator(node.map_children(&mut |child| self.substitute(child, active)))
+    }
+
+    /// d/dt of `expr`, or `None` when this format does not define it.
+    fn deriv(&self, expr: &Expr, active: &mut Vec<String>) -> Option<Expr> {
+        match expr {
+            Expr::Integer(_) | Expr::Number(_) => Some(zero()),
+            Expr::Variable(name) => {
+                if active.iter().any(|n| n == name) {
+                    // A cycle. Stop, and let the gate name it.
+                    return None;
+                }
+                if let Some(f) = self.tendency.get(name) {
+                    let f = f.clone();
+                    active.push(name.clone());
+                    let out = self.substitute(&f, active);
+                    active.pop();
+                    Some(out)
+                } else if let Some(g) = self.definition.get(name) {
+                    let g = g.clone();
+                    active.push(name.clone());
+                    let out = self.deriv(&g, active);
+                    active.pop();
+                    out
+                } else if self.time_invariant.contains(name) {
+                    Some(zero())
+                } else {
+                    None
+                }
+            }
+            Expr::Operator(node) => self.deriv_op(node, active),
+        }
+    }
+
+    /// [`Self::deriv`] over an operator node: the closed arithmetic set.
+    fn deriv_op(&self, node: &ExpressionNode, active: &mut Vec<String>) -> Option<Expr> {
+        let d = |a: &Expr, active: &mut Vec<String>| self.deriv(a, active);
+        match node.op.as_str() {
+            "+" => {
+                let mut terms = Vec::with_capacity(node.args.len());
+                for a in &node.args {
+                    terms.push(d(a, active)?);
+                }
+                Some(sum(terms))
+            }
+            "-" => match node.args.len() {
+                1 => Some(negate(d(&node.args[0], active)?)),
+                2 => {
+                    let a = d(&node.args[0], active)?;
+                    let b = d(&node.args[1], active)?;
+                    Some(difference(a, b))
+                }
+                _ => None,
+            },
+            "neg" if node.args.len() == 1 => Some(negate(d(&node.args[0], active)?)),
+            // Product rule over an n-ary `*`: one term per factor, that
+            // factor differentiated and the others left alone.
+            "*" => {
+                let mut terms = Vec::with_capacity(node.args.len());
+                for (i, a) in node.args.iter().enumerate() {
+                    let da = d(a, active)?;
+                    if is_zero(&da) {
+                        continue;
+                    }
+                    let mut factors = vec![da];
+                    for (j, b) in node.args.iter().enumerate() {
+                        if i != j {
+                            factors.push(b.clone());
+                        }
+                    }
+                    terms.push(product(factors));
+                }
+                Some(sum(terms))
+            }
+            "/" if node.args.len() == 2 => {
+                let (u, v) = (&node.args[0], &node.args[1]);
+                let du = d(u, active)?;
+                let dv = d(v, active)?;
+                if is_zero(&dv) {
+                    // v is constant in t: (u/v)' = u'/v, which keeps the
+                    // expression small in the common `D(x, t)/c` shape.
+                    return Some(quotient(du, v.clone()));
+                }
+                let num = difference(product(vec![du, v.clone()]), product(vec![u.clone(), dv]));
+                Some(quotient(num, product(vec![v.clone(), v.clone()])))
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Does `expr` carry a structural `D` anywhere?
+fn contains_time_derivative(expr: &Expr) -> bool {
+    let Expr::Operator(node) = expr else {
+        return false;
+    };
+    is_structural_time_derivative(node) || node.any_child(&mut contains_time_derivative)
+}
+
+// ---------------------------------------------------------------------------
+// Small folding constructors for the derivative expressions.
+//
+// Folding is not cosmetic here. A parameter and a literal both differentiate
+// to `0`, so an unfolded product rule would emit `0*x + 2*0` shapes throughout
+// and `D(k, t)` would be a sum of zeros rather than the literal `0` that a
+// downstream classifier can recognise as constant.
+// ---------------------------------------------------------------------------
+
+fn zero() -> Expr {
+    Expr::Number(0.0)
+}
+
+fn is_zero(e: &Expr) -> bool {
+    matches!(e, Expr::Number(v) if *v == 0.0) || matches!(e, Expr::Integer(0))
+}
+
+fn is_one(e: &Expr) -> bool {
+    matches!(e, Expr::Number(v) if *v == 1.0) || matches!(e, Expr::Integer(1))
+}
+
+fn node(op: &str, args: Vec<Expr>) -> Expr {
+    Expr::operator(ExpressionNode {
+        op: op.to_string(),
+        args,
+        ..Default::default()
+    })
+}
+
+fn sum(terms: Vec<Expr>) -> Expr {
+    let mut kept: Vec<Expr> = terms.into_iter().filter(|t| !is_zero(t)).collect();
+    match kept.len() {
+        0 => zero(),
+        1 => kept.pop().expect("len 1"),
+        _ => node("+", kept),
+    }
+}
+
+fn difference(a: Expr, b: Expr) -> Expr {
+    if is_zero(&b) {
+        return a;
+    }
+    if is_zero(&a) {
+        return negate(b);
+    }
+    node("-", vec![a, b])
+}
+
+fn negate(a: Expr) -> Expr {
+    match &a {
+        _ if is_zero(&a) => zero(),
+        Expr::Number(v) => Expr::Number(-v),
+        Expr::Integer(v) => Expr::Integer(-v),
+        // Unary `-`, not `neg`: both spell negation, but the scalar
+        // interpreter has an arm for the first and (until #220) none for the
+        // second, so emitting `neg` here would be a NaN on one backend.
+        _ => node("-", vec![a]),
+    }
+}
+
+fn product(factors: Vec<Expr>) -> Expr {
+    if factors.iter().any(is_zero) {
+        return zero();
+    }
+    let mut kept: Vec<Expr> = factors.into_iter().filter(|f| !is_one(f)).collect();
+    match kept.len() {
+        0 => Expr::Number(1.0),
+        1 => kept.pop().expect("len 1"),
+        _ => node("*", kept),
+    }
+}
+
+fn quotient(a: Expr, b: Expr) -> Expr {
+    if is_zero(&a) {
+        return zero();
+    }
+    node("/", vec![a, b])
 }
 
 /// Flatten a single [`Model`] as a convenience wrapper around [`flatten`].
