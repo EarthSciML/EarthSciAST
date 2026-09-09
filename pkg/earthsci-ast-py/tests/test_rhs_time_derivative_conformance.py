@@ -63,7 +63,18 @@ def test_manifest_shape() -> None:
 @pytest.mark.parametrize("fixture", _manifest()["fixtures"], ids=lambda fx: fx["id"])
 def test_rhs_time_derivative_outcomes(fixture: dict) -> None:
     path = CATEGORY / fixture["path"]
-    results = run_inline_tests(str(path), model_name=fixture["model"])
+    # The manifest's `integrators.python` block is the contract for HOW this
+    # category is integrated; the Rust adapter reads its own block the same way.
+    # These fixtures declare no `solver`, so under the esm-spec §2.2.2 chain the
+    # call-level arguments below are what the runner uses.
+    integ = _manifest()["integrators"]["python"]
+    results = run_inline_tests(
+        str(path),
+        model_name=fixture["model"],
+        method=integ["method"],
+        rtol=integ["rtol"],
+        atol=integ["atol"],
+    )
     cases = fixture["cases"]
     assert len(results) == len(cases), (
         f"{fixture['id']}: ran {len(results)} assertions, manifest declares {len(cases)}"
