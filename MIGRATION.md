@@ -63,6 +63,7 @@ green and your program does something different. Audit these first.
 | Python | index-set merge | A model-nested `index_sets` now **merges over** the document-scoped registry instead of being invisible to it. | Different resolution verdicts on pre-0.8.0-shaped documents. |
 | Julia | diagnostic pointers | A scalar `update: {...}` no longer reports a synthetic `/0` segment. | A consumer matching on diagnostic JSON Pointers sees a different path. |
 | all five | `from_faq` | Resolves against the **whole document**, not one model. | Documents that used to be rejected now load; duplicate node ids that used to be legal now fail. |
+| all five | inline-test `tolerance` | Resolves **per field** (esm-spec §6.6.4): `abs` and `rel` each come from the innermost level that declares that field. A level declaring only one bound no longer masks the other from an enclosing level. | An assertion that declares only `abs` now also carries whatever `rel` its test or model declared. The resolved bound can only get LOOSER, so nothing that passes starts failing — 56 assertions in the shipped corpus change. |
 | Rust | `esm graph` CLI | Output changed in all three formats; `--level=expression` now works. | Any golden capturing CLI output. |
 
 Each of these is expanded in the per-binding table it belongs to.
@@ -215,6 +216,42 @@ Where **exactly one** side is a state the match is *not* ambiguous and nothing
 changes for you: the other name carries no initial condition, so the state owns
 the quantity and the other name is retargeted onto it — **in either argument
 order**, which is itself a fix for the old order-dependence.
+
+### Inline-test `tolerance` merges PER FIELD
+
+esm-spec §6.6.4 always said the `{abs?, rel?}` blocks at the assertion, test and
+model levels merge **per field**. No binding did it: all three returned the
+first block that was present *whole* and defaulted its missing bound to `0`. So
+
+```json
+"tolerance": { "rel": 1e-6 }          // on the model
+"tolerance": { "abs": 1e-9 }          // on the assertion
+```
+
+resolved to `(rel = 0, abs = 1e-9)` — the assertion ran with **no relative
+bound at all**, silently discarding a tolerance its author declared one level
+up. It now resolves to `(rel = 1e-6, abs = 1e-9)`.
+
+Two rules the section left implicit are now written down with it:
+
+* An explicit **`0` is a declaration**, not an absence: `{"rel": 0}` means "no
+  relative bound" and stops the fallthrough. Only a missing key (or a
+  non-conforming JSON `null`) falls through. This is what
+  `tests/fixtures/recurrence/*.esm` rely on to pin bit-exact comparison with a
+  model-level `{rel: 0, abs: 0}`.
+* The **implementation default (`rel = 1e-6`) is terminal**, not a fourth merge
+  level. It applies only when levels 1-3 declare *neither* bound, so an
+  assertion declaring only `{abs: 1e-4}` still resolves to `rel = 0` and does
+  not acquire a relative bound its author never wrote.
+
+**What to check in your documents.** Any assertion or test block that spells one
+bound while an enclosing level spells the other. The merged bound is never
+tighter than the old one, so an assertion cannot flip pass → fail; one that was
+failing on a bound the old rule had thrown away may now pass. If you meant the
+old, narrower comparison, spell the bound you want suppressed as `0`.
+
+Pinned by the `tolerance_resolution` conformance category (CONFORMANCE_SPEC
+§5.21).
 
 ---
 
