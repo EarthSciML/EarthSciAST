@@ -82,7 +82,10 @@ vectorizable kernels (ghost-masked ones excluded and counted as fallback).
 | merged class (g1,g2 → one kernel, N=6) | 3/3 | 24/24 | 1/1 | member reads = slices at offsets inside ONE producer value |
 | reaction–diffusion, no observeds (N=16) | 7/7 | 46/46 | 0/0 | prefix reads become slices of `u` |
 
-Whole host corpus green with the flag FORCED on: tree_walk_oop (164),
+Full suite (`Pkg.test()`, `ESM_TEST_REACTANT=1`) at 4x5-era main: flag OFF
+89 034 pass / 8 broken / 89 042; forced ON 89 029 pass / 5 fail / 8 broken, the
+5 being exactly `reactant_oop_intern_test.jl`'s interning-ENGAGEMENT assertions
+(see Interactions below). Whole host corpus green with the flag FORCED on: tree_walk_oop (164),
 oop_merge (75), array_obs_materialize (78), scan_prefix (333),
 oop_scalar_batch (42), observed_materialization (20), observed_slots (36),
 iip_generic — all bit-identical to `f!` — and green with the flag OFF
@@ -226,12 +229,13 @@ Bit-identity across the arms is asserted and holds on HOST (`==`) and, on the
 toy fixtures, in the traced census (`reactant_oop_ssa_test.jl`, which pins the
 DUS delta to `n_skipped_scatters`). At CONUS the two arms are NOT bit-identical:
 changing the operand graph changes XLA's fusion, hence FMA and vectorization
-order. chemistry `ros_step` is bit-for-bit and `ros_vjp`'s λ is bit-for-bit (its
-p-gradient differs in the 20th significant figure); transport `ssp_step`
-differs by 5.6e-15 pointwise relative. The pointwise metric on the VJPs is
-uninformative — it reads exactly 2.0 on components at ~1e-310 — so the probe
-also reports a scale-relative figure and the count of components over 1e-9 of
-scale.
+order. chemistry `ros_step` is bit-for-bit and `ros_vjp`'s λ is bit-for-bit; on
+transport the largest ABSOLUTE difference is 5.6e-15 on `ssp_step` (1.1e-18 of
+scale) and 3.5e-18 on `ssp_vjp`'s λ (3.2e-16 of scale), and NOT ONE of the
+85 176 state or λ components in any program differs by more than 1e-9 of that
+quantity's own scale. The POINTWISE relative metric is uninformative here — it
+reads exactly 2.0 on an opposite-signed component at ~1e-310 — which is why the
+probe reports absolute and scale-relative figures plus a component count.
 
 ## Generalization assessment (honest)
 
