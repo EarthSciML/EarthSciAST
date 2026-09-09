@@ -1177,6 +1177,25 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
                                                    eq_owners; renames=merged_renames))
     end
 
+    # §4.7.1 step 4's retarget is document-wide, and "document" is more than the
+    # equation pool. EVENTS and a variable's `update` rules were namespaced at
+    # COLLECTION — steps 1+2, before any coupling rule ran — so an affect, a
+    # crossing condition, a `condition` trigger or an update expression naming
+    # `B.x` still holds the FULLY-QUALIFIED spelling this merge just deleted.
+    # Nothing downstream rewrites it, and an affect on an unknown the flattened
+    # system does not declare is a silent wrong answer rather than a refusal.
+    # (`equations` are rewritten inside the merge itself, which is why they are
+    # not here; `field_ics` are classified out of `equations` at step 4 and so
+    # ride along with them.)  CONFORMANCE_SPEC §5.35.
+    if !isempty(merged_renames)
+        _rn(e) = _rename_variables(e, merged_renames)
+        _rename_event_names!(continuous_events, merged_renames)
+        _rename_event_names!(discrete_events, merged_renames)
+        states = _lower_variable_updates(states, _rn)
+        params = _lower_variable_updates(params, _rn)
+        observeds = _lower_variable_updates(observeds, _rn)
+    end
+
     for entry in file.coupling
         entry isa CouplingCouple || continue
         _apply_couple!(equations, _retarget_pending_entry(entry, merged_renames), opaque_refs)

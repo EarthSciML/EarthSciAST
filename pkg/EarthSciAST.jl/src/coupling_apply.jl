@@ -932,10 +932,63 @@ function _rename_variables(expr::ASTExpr,
         to = get(renames, expr.name, nothing)
         return to === nothing ? expr : VarExpr(to)
     elseif expr isa OpExpr
-        return map_children(x -> _rename_variables(x, renames), expr)
+        # A relational `join` names its key COLUMNS and its overlap envelope
+        # factors as bare STRINGS rather than as `VarExpr` children, so
+        # `map_children` preserves them verbatim (that is what it is for) and
+        # this walk alone would leave a join pointing at a spelling the merge
+        # deleted. §4.7.5 step 2 namespaces those strings like any other
+        # reference, so §4.7.1 step 4 has to rename them like any other
+        # reference too (CONFORMANCE_SPEC §5.5.6, §5.35).
+        return _rename_join_clauses(map_children(x -> _rename_variables(x, renames), expr),
+                                    renames)
     end
     return expr
 end
+
+"""
+    _rename_event_names!(events, renames) -> events
+
+Apply §4.7.1 step 4's merged-away rename to a collected event, in place.
+
+Deliberately NOT `_lower_events!`: that one maps EXPRESSIONS, and an affect's
+`lhs` is a plain variable NAME string, not an expression. The `lhs` is precisely
+what a renaming merge deletes — an affect still writing `B.x` writes to an
+unknown the flattened system no longer declares, which the solver reports far
+downstream, if at all.
+"""
+function _rename_event_names!(events::Vector{ContinuousEvent},
+                              renames::AbstractDict{String, String})
+    isempty(renames) && return events
+    for (i, ev) in enumerate(events)
+        events[i] = ContinuousEvent(
+            ASTExpr[_rename_variables(c, renames) for c in ev.conditions],
+            _rename_affects(ev.affects, renames);
+            affect_neg=(ev.affect_neg === nothing ? nothing :
+                        _rename_affects(ev.affect_neg, renames)),
+            root_find=ev.root_find, reinitialize=ev.reinitialize,
+            description=ev.description, name=ev.name)
+    end
+    return events
+end
+
+function _rename_event_names!(events::Vector{DiscreteEvent},
+                              renames::AbstractDict{String, String})
+    isempty(renames) && return events
+    for (i, ev) in enumerate(events)
+        # Only a `ConditionTrigger` carries an expression; a periodic / times
+        # trigger is pure data.
+        trigger = ev.trigger isa ConditionTrigger ?
+                  ConditionTrigger(_rename_variables(ev.trigger.expression, renames)) :
+                  ev.trigger
+        events[i] = DiscreteEvent(trigger, _rename_affects(ev.affects, renames);
+            reinitialize=ev.reinitialize, description=ev.description, name=ev.name)
+    end
+    return events
+end
+
+_rename_affects(affects::Vector{AffectEquation}, renames::AbstractDict{String, String}) =
+    AffectEquation[AffectEquation(get(renames, a.lhs, a.lhs),
+                                  _rename_variables(a.rhs, renames)) for a in affects]
 
 function _substitute_placeholder(expr::ASTExpr,
                                  placeholder::Union{String, Nothing},
@@ -1187,7 +1240,8 @@ function _substitute_variable_map!(equations::Vector{Equation},
     for (i, eq) in enumerate(equations)
         equations[i] = Equation(
             substitute(eq.lhs, bindings),
-            _rename_join_names(substitute(eq.rhs, bindings), entry.to, entry.from);
+            _rename_join_names(substitute(eq.rhs, bindings),
+                               Dict{String, String}(entry.to => entry.from));
             _comment=eq._comment,
         )
     end
@@ -1206,17 +1260,31 @@ end
 # COUPLED rectangle buffer hits: `tgt_env = [ISRM.src_W, …]` while the
 # document's `ISRM_SR.src_W -> ISRM.src_W` map has already removed
 # `ISRM.src_W`, and materialisation dies on `join references unknown variable`.
-_rename_join_names(expr::ASTExpr, ::AbstractString, ::AbstractString) = expr
-function _rename_join_names(expr::OpExpr, to::AbstractString, from::AbstractString)
-    out = map_children(x -> _rename_join_names(x, to, from), expr)
-    (out isa OpExpr && out.join !== nothing) || return out
-    ren(n) = String(n) == String(to) ? String(from) : String(n)
+#
+# Taken as a MAP rather than a single pair, because the same hazard reaches the
+# join from two directions: a `variable_map` deleting its consumer parameter
+# (one pair, below) and an `operator_compose` renaming match deleting a
+# dependent variable (a whole map, §4.7.1 step 4 / CONFORMANCE_SPEC §5.35).
+_rename_join_names(expr::ASTExpr, ::AbstractDict{String, String}) = expr
+function _rename_join_names(expr::OpExpr, renames::AbstractDict{String, String})
+    isempty(renames) && return expr
+    return _rename_join_clauses(map_children(x -> _rename_join_names(x, renames), expr),
+                                renames)
+end
+
+# ONE node's join clauses, without recursing — the recursion belongs to the
+# caller, so a walk that already descends (`_rename_variables`) does not pay for
+# a second full traversal.
+_rename_join_clauses(expr::ASTExpr, ::AbstractDict{String, String}) = expr
+function _rename_join_clauses(expr::OpExpr, renames::AbstractDict{String, String})
+    (expr.join === nothing || isempty(renames)) && return expr
+    ren(n) = get(renames, String(n), String(n))
     renclause(c::_OverlapJoinSpec) = _OverlapJoinSpec(String[ren(n) for n in c.src_env],
                                                       String[ren(n) for n in c.tgt_env], c.eps)
     # As in `namespacing.jl`: rename the key COLUMNS, never the clause's `syms`,
     # which are binders of the node rather than variable references.
     renclause(c) = _with_pairs(c, Tuple{String,String}[(ren(l), ren(r)) for (l, r) in c])
-    return reconstruct(out; join=Any[renclause(c) for c in out.join])
+    return reconstruct(expr; join=Any[renclause(c) for c in expr.join])
 end
 
 # For param_to_var / conversion_factor, remove the target param from the

@@ -41,7 +41,11 @@ from .esm_types import (
     VariableMapCoupling,
     is_aggregate_op,
 )
+from .error_handling import (
+    TEMPLATE_BODY_REFERENCES_COUPLING_REWRITTEN_VARIABLE,
+)
 from .expr_walk import any_child, iter_children, map_children, walk
+from .json_walk import ExpressionTemplateError
 
 # ``_expand_range`` moved to the dependency-free leaf :mod:`.index_ranges` (so
 # :mod:`.numpy_interpreter` can import it at module load instead of via three
@@ -351,6 +355,14 @@ class FlattenMetadata:
     # the merge moved out from under it. Empty for a document with no renaming
     # merge, which is the overwhelming majority.
     merged_variable_renames: dict[str, str] = field(default_factory=dict)
+    # Every name a COUPLING rule rewrote out of the flattened equations: a
+    # `variable_map`'s substituted target, and every merged-away spelling above.
+    # Only the registry guard reads it — a surviving template body is authored
+    # source no substitution reaches, so a body naming one of these is REFUSED
+    # rather than resolved (`_check_registry_coupling_rewrites`,
+    # CONFORMANCE_SPEC §5.35). Not a consumer-facing map, unlike
+    # `merged_variable_renames`: it says a name is GONE, not where it went.
+    coupling_rewritten_names: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -993,6 +1005,45 @@ class _ComponentSystem:
         self.loader_fields.extend(other.loader_fields)
 
 
+def _namespace_variable_update(
+    update: Any,
+    prefix: str,
+    leave_alone: set[str],
+    subsystem_keys: set[str],
+    locals_: set[str],
+) -> Any:
+    """Namespace the expression-bearing slots of a variable's ``update`` rules.
+
+    Only ``when`` (the ``condition`` / ``crossing`` trigger) and ``expression``
+    (the value form) name variables. ``source``, ``hook``, ``from`` and
+    ``handler`` name a data source, a remesh hook, a source binding or a
+    registered function — different namespaces, left alone. Returns ``update``
+    itself when nothing changed, so a document with no update rules allocates
+    nothing. Mirrors Julia ``namespacing.jl::_namespace_variable_update``.
+    """
+    if update is None:
+        return update
+    rules = update if isinstance(update, list) else [update]
+
+    def ns(expr: Expr) -> Expr:
+        return _namespace_expr(expr, prefix, leave_alone, subsystem_keys, locals_)
+
+    out = []
+    changed = False
+    for rule in rules:
+        when = getattr(rule, "when", None)
+        expression = getattr(rule, "expression", None)
+        new_when = ns(when) if when is not None else None
+        new_expression = ns(expression) if expression is not None else None
+        if new_when is not when or new_expression is not expression:
+            changed = True
+            rule = replace(rule, when=new_when, expression=new_expression)
+        out.append(rule)
+    if not changed:
+        return update
+    return out if isinstance(update, list) else out[0]
+
+
 def _namespace_equations(
     equations: list,
     component: _ComponentSystem,
@@ -1195,6 +1246,18 @@ def _collect_model(
     # above, an ARRAYED definition (`y[i] ~ f(i)`) reaches this as the bare form
     # and is classified observed too, as §6.3.1 requires. Every other unknown is
     # SOLVED FOR and lands in `state_vars`: an ODE state and an algebraic unknown.
+    # _var is a placeholder used by operator_compose; never namespace it.
+    leave_alone = {"t", PLACEHOLDER_VAR}
+    # Subsystem keys mounted on this model (nested models): references rooted at
+    # one of these are subsystem-LOCAL and must be qualified with the model
+    # prefix to match the lowered subsystem name (see _namespace_expr).
+    sub_keys = set(model.subsystems.keys())
+    # The component's own declared names — the gate for namespacing the
+    # plain-string references a ``join`` clause carries (§5.5.6). Mirrors Julia
+    # ``_collect_model!``'s ``local_names`` and Rust ``build_model_block``'s
+    # ``locals``.
+    locals_ = set(model.variables.keys()) | sub_keys
+
     observed = set(inlined_unknowns(model))
 
     for var_name, var in model.variables.items():
@@ -1223,7 +1286,17 @@ def _collect_model(
             description=var.description,
             source_system=full_prefix,
             shape=list(var.shape) if var.shape else None,
-            update=var.update,
+            # A parameter's `update` rules carry EXPRESSIONS — the `when`
+            # trigger and the value `expression` — whose free names are
+            # ordinary references in this component's scope, so they namespace
+            # exactly like an equation side. Julia's
+            # `namespacing.jl::_namespace_variable_update` has always done
+            # this; passing them through bare left this binding out of step
+            # with the reference implementation, and left the names beyond the
+            # reach of every later rewrite that keys on the namespaced form.
+            update=_namespace_variable_update(
+                var.update, full_prefix, leave_alone, sub_keys, locals_
+            ),
             distribution=var.distribution,
             element_type=var.element_type,
         )
@@ -1234,17 +1307,6 @@ def _collect_model(
         else:
             component.observed[namespaced] = flat_var
 
-    # _var is a placeholder used by operator_compose; never namespace it.
-    leave_alone = {"t", PLACEHOLDER_VAR}
-    # Subsystem keys mounted on this model (nested models): references rooted at
-    # one of these are subsystem-LOCAL and must be qualified with the model
-    # prefix to match the lowered subsystem name (see _namespace_expr).
-    sub_keys = set(model.subsystems.keys())
-    # The component's own declared names — the gate for namespacing the
-    # plain-string references a ``join`` clause carries (§5.5.6). Mirrors Julia
-    # ``_collect_model!``'s ``local_names`` and Rust ``build_model_block``'s
-    # ``locals``.
-    locals_ = set(model.variables.keys()) | sub_keys
     # An observed unknown's defining relation is now an ORDINARY equation with a
     # bare-variable LHS, so the separate `variables[v].expression` lowering that
     # used to run here is gone: `_namespace_equations` below carries it.
@@ -1489,7 +1551,7 @@ def _retarget_pending_entry(entry: CouplingEntry, renames: dict[str, str]) -> Co
                 from_var=renames.get(ceq.from_var, ceq.from_var),
                 to_var=renames.get(ceq.to_var, ceq.to_var),
                 expression=(
-                    substitute(ceq.expression, renames) if ceq.expression is not None else None
+                    rename_names(ceq.expression, renames) if ceq.expression is not None else None
                 ),
             )
             for ceq in entry.connector.equations
@@ -1498,7 +1560,7 @@ def _retarget_pending_entry(entry: CouplingEntry, renames: dict[str, str]) -> Co
     if isinstance(entry, VariableMapCoupling):
         transform = entry.transform
         if not isinstance(transform, str) and transform is not None:
-            transform = substitute(transform, renames)
+            transform = rename_names(transform, renames)
         return replace(
             entry,
             from_var=renames.get(entry.from_var, entry.from_var),
@@ -1892,6 +1954,28 @@ def _reattribute_merged_equations(
         components[owner].equations.append(eq)
 
 
+def rename_names(expr: Expr, renames: dict[str, str]) -> Expr:
+    """:func:`~.substitute.substitute`, extended to a ``join``'s plain strings.
+
+    A relational ``join`` names its references as STRINGS rather than as child
+    expressions — an ``on`` key column, and an ``overlap`` clause's ``src_env`` /
+    ``tgt_env`` envelope factors — so :func:`~.expr_walk.map_children` preserves
+    them verbatim and ``substitute`` alone never sees them. §4.7.5 step 2
+    namespaces those strings like any other reference
+    (:func:`_namespace_join`, CONFORMANCE_SPEC §5.5.6), so a rename that deletes
+    a name has to reach them like any other reference, or the join keeps
+    pointing at a variable the flattened system no longer declares
+    (CONFORMANCE_SPEC §5.35).
+
+    This is the walker every merged-away retarget uses. ``substitute`` itself is
+    left alone: it is the general binding-substitution primitive and a
+    ``join`` string cannot hold the arbitrary EXPRESSION a binding may supply.
+    """
+    if not renames or expr is None:
+        return expr
+    return _rename_join_names(substitute(expr, renames), renames)
+
+
 def _retarget_merged_names(
     components: OrderedDict[str, _ComponentSystem],
     renames: dict[str, str],
@@ -1903,14 +1987,53 @@ def _retarget_merged_names(
     every equation side in the whole document is rewritten off the dead name.
     An observed variable's defining expression is one of those equations (it is
     not carried on :class:`FlattenedVariable`), so this covers it too.
+
+    A variable's ``update`` rules are NOT equations and are carried on the
+    variable itself, so they are rewritten here beside them: a parameter that
+    refreshes from ``B.x`` reads a state the flattened system no longer declares
+    (CONFORMANCE_SPEC §5.35).
     """
     for comp in components.values():
         for i, eq in enumerate(comp.equations):
             comp.equations[i] = FlattenedEquation(
-                lhs=substitute(eq.lhs, renames),
-                rhs=substitute(eq.rhs, renames),
+                lhs=rename_names(eq.lhs, renames),
+                rhs=rename_names(eq.rhs, renames),
                 source_system=eq.source_system,
             )
+        for table in (comp.state_vars, comp.parameters, comp.observed):
+            for name, var in table.items():
+                updated = _rename_variable_updates(var, renames)
+                if updated is not var:
+                    table[name] = updated
+
+
+def _rename_variable_updates(var: FlattenedVariable, renames: dict[str, str]):
+    """A variable's ``update`` rules, off the names a merge deleted.
+
+    Only the two EXPRESSION slots of :class:`~.esm_types.ParameterUpdate` can
+    name a variable: ``when`` (the ``condition`` / ``crossing`` trigger) and
+    ``expression`` (the value form). ``source``, ``hook``, ``from_source`` and
+    ``handler`` name a data source, a remesh hook or a registered function, none
+    of which lives in the variable namespace. Returns ``var`` itself when
+    nothing changed, so the common path allocates nothing.
+    """
+    if not renames or var.update is None:
+        return var
+    rules = var.update if isinstance(var.update, list) else [var.update]
+    out = []
+    changed = False
+    for rule in rules:
+        when = getattr(rule, "when", None)
+        expression = getattr(rule, "expression", None)
+        new_when = rename_names(when, renames) if when is not None else None
+        new_expression = rename_names(expression, renames) if expression is not None else None
+        if new_when is not when or new_expression is not expression:
+            changed = True
+            rule = replace(rule, when=new_when, expression=new_expression)
+        out.append(rule)
+    if not changed:
+        return var
+    return replace(var, update=out if isinstance(var.update, list) else out[0])
 
 
 def _add_exprs(left: Expr, right: Expr) -> Expr:
@@ -2007,8 +2130,8 @@ def _contains_join(expr: Expr) -> bool:
     return any_child(expr, _contains_join)
 
 
-def _rename_join_names(expr: Expr, to_var: str, from_var: str) -> Expr:
-    """Rename ``to_var`` -> ``from_var`` in every plain-string ``join`` name.
+def _rename_join_names(expr: Expr, renames: dict[str, str]) -> Expr:
+    """Apply a rename MAP to every plain-string ``join`` name.
 
     The join-side companion of the ``variable_map`` substitution
     (CONFORMANCE_SPEC §5.5.6). ``substitute`` walks expression CHILDREN, so it
@@ -2020,26 +2143,32 @@ def _rename_join_names(expr: Expr, to_var: str, from_var: str) -> Expr:
     with ``join references unknown variable``. Mirrors Julia
     ``coupling_apply.jl::_rename_join_names`` and Rust
     ``flatten.rs::rename_join_names``.
+
+    Taken as a MAP rather than a single pair, because the same hazard
+    reaches a join from two directions: a ``variable_map`` deleting its
+    consumer parameter (one pair), and an ``operator_compose`` renaming
+    match deleting a dependent variable (a whole map, §4.7.1 step 4 /
+    CONFORMANCE_SPEC §5.35).
     """
     # Scan BEFORE the rebuild: ``map_children`` copies, and this runs over every
     # equation of every component for every ``variable_map`` entry. Almost no
     # model carries a join, and those must not pay a whole-tree copy on top of
     # the substitution's. The scan is once per tree, not per node — the
     # recursion below is the unguarded ``_rename_join_names_in``.
-    if not isinstance(expr, ExprNode) or not _contains_join(expr):
+    if not renames or not isinstance(expr, ExprNode) or not _contains_join(expr):
         return expr
-    return _rename_join_names_in(expr, to_var, from_var)
+    return _rename_join_names_in(expr, renames)
 
 
-def _rename_join_names_in(expr: Expr, to_var: str, from_var: str) -> Expr:
+def _rename_join_names_in(expr: Expr, renames: dict[str, str]) -> Expr:
     """The unguarded recursion behind :func:`_rename_join_names`."""
     if not isinstance(expr, ExprNode):
         return expr
 
     def ren(name: Any) -> Any:
-        return from_var if name == to_var else name
+        return renames.get(name, name) if isinstance(name, str) else name
 
-    out = map_children(expr, lambda c: _rename_join_names_in(c, to_var, from_var))
+    out = map_children(expr, lambda c: _rename_join_names_in(c, renames))
     if not getattr(expr, "join", None):
         return out
     clauses: list[dict[str, Any]] = []
@@ -2106,7 +2235,7 @@ def _apply_variable_map(
                 FlattenedEquation(
                     lhs=substitute(eq.lhs, bindings),
                     rhs=_rename_join_names(
-                        substitute(eq.rhs, bindings), entry.to_var, entry.from_var
+                        substitute(eq.rhs, bindings), {entry.to_var: entry.from_var}
                     ),
                     source_system=eq.source_system,
                 )
@@ -2370,6 +2499,7 @@ def _apply_couplings(
         _compose_renames(merged_renames, _apply_operator_compose(components, oc, merged_renames))
 
     metadata.merged_variable_renames.update(merged_renames)
+    metadata.coupling_rewritten_names.update(merged_renames)
 
     for cp in couple_entries:
         _apply_couple(components, _retarget_pending_entry(cp, merged_renames))
@@ -2378,7 +2508,14 @@ def _apply_couplings(
     # producer is a source-fed field, so a grid-shaped binding keeps its shape.
     loader_names: set[str] = set(getattr(esm_file, "data_sources", None) or {})
     for vm in var_map_entries:
-        _apply_variable_map(components, _retarget_pending_entry(vm, merged_renames), loader_names)
+        resolved = _retarget_pending_entry(vm, merged_renames)
+        _apply_variable_map(components, resolved, loader_names)
+        # A NAMED transform substitutes `to` away entirely; an EXPRESSION
+        # transform leaves it standing as the observed the transform defines.
+        # Only the first deletes a name, so only the first joins the set the
+        # registry guard refuses against (Julia's `map_rewritten_names`).
+        if not isinstance(resolved.transform, ExprNode):
+            metadata.coupling_rewritten_names.add(resolved.to_var)
 
 
 def _assemble_system(
@@ -2466,6 +2603,26 @@ def _namespace_events(esm_file: EsmFile, flat: FlattenedSystem) -> None:
         bare = name.rsplit(".", 1)[-1]
         var_to_namespaced.setdefault(bare, name)
 
+    # An `operator_compose` renaming match DELETED spellings before this ran
+    # (§4.7.1 step 4), and the tables above no longer carry them — so an event
+    # naming a merged-away state matches nothing here and is left holding a
+    # reference to a variable the flattened system does not declare. Seed both
+    # spellings an author could have written: the FULLY-QUALIFIED dead name, and
+    # its bare local name.
+    #
+    # The bare half is not redundant. Where the survivor carries a DIFFERENT
+    # local name — a `translate` folding `Sink.O3` onto `Chem.ozone` — nothing
+    # in the flattened system is spelled `O3` any more, so the bare reference
+    # the author wrote inside `Sink` resolves to nothing without it. Where the
+    # two locals agree, the loop above already bound the bare name to the
+    # survivor and `setdefault` leaves it alone: a LIVE variable always wins
+    # over a dead alias, which is the precedence every other name-keyed surface
+    # uses — resolution must never shadow a variable the system really has
+    # (CONFORMANCE_SPEC §5.35).
+    for gone, survivor in (flat.metadata.merged_variable_renames or {}).items():
+        var_to_namespaced.setdefault(gone, survivor)
+        var_to_namespaced.setdefault(gone.rsplit(".", 1)[-1], survivor)
+
     for event in esm_file.events:
         if isinstance(event, ContinuousEvent):
             new_conditions = [substitute(c, var_to_namespaced) for c in event.conditions]
@@ -2492,11 +2649,26 @@ def _namespace_events(esm_file: EsmFile, flat: FlattenedSystem) -> None:
             flat.discrete_events.append(
                 DiscreteEvent(
                     name=event.name,
-                    trigger=event.trigger,
+                    trigger=_namespace_event_trigger(event.trigger, var_to_namespaced),
                     affects=new_affects,
                     priority=event.priority,
                 )
             )
+
+
+def _namespace_event_trigger(trigger: Any, system_var_names: dict[str, str]) -> Any:
+    """A ``condition`` trigger's ``value`` is an EXPRESSION, so it names
+    variables and is rewritten like an affect's RHS. The other two kinds carry a
+    time or a list of times and are pure data.
+    """
+    if getattr(trigger, "type", None) != "condition":
+        return trigger
+    value = getattr(trigger, "value", None)
+    if isinstance(value, str):
+        return replace(trigger, value=system_var_names.get(value, value))
+    if isinstance(value, ExprNode):
+        return replace(trigger, value=substitute(value, system_var_names))
+    return trigger
 
 
 def _apply_domain(esm_file: EsmFile, flat: FlattenedSystem) -> None:
@@ -2882,8 +3054,85 @@ def flatten(esm_file: EsmFile, base_path: str = ".", load_ref=None) -> Flattened
     _collect_field_ics(flat)
     # The merged expression-template registry (esm-spec §9.6.4 rule 7, §10.7).
     flat.template_registry = _merged_template_registry(esm_file)
+    # ...and the ONE place a coupling-rewritten name is REFUSED rather than
+    # resolved. See `_check_registry_coupling_rewrites`.
+    _check_registry_coupling_rewrites(flat.template_registry, metadata.coupling_rewritten_names)
 
     return flat
+
+
+# Keys of an expression node whose STRING value names something other than a
+# variable, so a raw-body walk must not read them as references.
+_TEMPLATE_BODY_NON_OPERAND_KEYS = frozenset(
+    {"op", "wrt", "dim", "fn", "table", "id", "manifold", "name", "semiring", "reduce"}
+)
+
+
+def _template_body_var_names(body: Any) -> set[str]:
+    """Every variable name a RAW (unparsed) template body references.
+
+    The registry holds bodies as JSON rather than as :class:`ExprNode`, so this
+    walks the JSON: a bare string in an OPERAND position is a variable
+    reference. A structural key (`op`, `wrt`, `fn`, ...) names an operator, an
+    axis or a registry id and is skipped.
+    """
+    out: set[str] = set()
+
+    def walk(node: Any, operand: bool) -> None:
+        if isinstance(node, str):
+            if operand:
+                out.add(node)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item, operand)
+        elif isinstance(node, dict):
+            for key, value in node.items():
+                walk(value, key not in _TEMPLATE_BODY_NON_OPERAND_KEYS)
+
+    walk(body, False)
+    return out
+
+
+def _check_registry_coupling_rewrites(registry: dict[str, Any], rewritten: set[str] | None) -> None:
+    """Refuse a SURVIVING registry body that names a coupling-rewritten variable.
+
+    A `variable_map` substitution and an `operator_compose` renaming match both
+    DELETE a name from the flattened tables and rewrite the equations off it. A
+    surviving `expression_templates` body is a shadow copy of authored source
+    that no equation walk reaches, and it expands at the BUILD boundary rather
+    than at flatten -- so a body still naming a deleted variable would expand,
+    later and elsewhere, into a name the flattened system does not declare.
+
+    This is the ONE site where such a reference is REFUSED rather than resolved
+    (CONFORMANCE_SPEC §5.35). The body is authored source: rewriting it would
+    silently diverge from the expand-at-load image the same document produces
+    under `ESS_TEMPLATE_REF_DISABLE=1`. A template `param` shadows the outer
+    name (esm-spec §9.6.1), so a body that BINDS the name through its params is
+    fine -- which is exactly the fix the message names.
+
+    Mirrors Julia `flatten.jl::_check_registry_coupling_rewrites`.
+    """
+    if not registry or not rewritten:
+        return
+    for tname in sorted(registry):
+        decl = registry[tname]
+        if not isinstance(decl, dict):
+            continue
+        body = decl.get("body")
+        if body is None:
+            continue
+        params = {p for p in (decl.get("params") or []) if isinstance(p, str)}
+        hits = sorted((_template_body_var_names(body) - params) & set(rewritten))
+        if hits:
+            names = "', '".join(hits)
+            raise ExpressionTemplateError(
+                TEMPLATE_BODY_REFERENCES_COUPLING_REWRITTEN_VARIABLE,
+                f"expression template '{tname}' body references '{names}', which "
+                f"a coupling rule rewrote in the flattened equations; the registry "
+                f"body would expand to a stale name at the build boundary. Bind "
+                f"the value through the template's params, or expand the "
+                f"reference before coupling (esm-spec §9.6.4).",
+            )
 
 
 def _is_structural_time_derivative(expr: Expr) -> bool:
