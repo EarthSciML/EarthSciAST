@@ -49,6 +49,39 @@
         "derive_output_plan": "The exported output-plan function takes the request list and the slot names and nothing else, in both Julia and Rust. Resolving a merged-away request INSIDE it needs a new parameter on a function `output_derivation` (§5.17) pins as a cross-binding surface, so every in-repo caller resolves at the CALL SITE instead (Rust's `esm simulate --format grid`, and `SolveOptions.output_observed` before the solve). An EXTERNAL caller passing a merged-away name straight to `derive_output_plan` is therefore still on its own. Julia's `_match_requested!` happens to tolerate the common case anyway, because it matches bare tails both ways. Tracked, with the Julia solution-read half it shares a cause with, in EarthSciML/EarthSciAST#271.",
         "_tracked_by": "EarthSciML/EarthSciAST#271"
       }
+    },
+    "events_and_updates": {
+      "_comment": "The name-keyed places that are NOT equations and NOT coupling entries: a discrete/continuous event (its affect `lhs` is a plain NAME string, its affect `rhs`, its conditions, and a `condition` trigger's expression) and a variable's `update` rules (`when` / `expression`, carried on the VARIABLE rather than in `equations`). Both are pure structural rewrites over the flattened form, so all five bindings implement them in full. Where a binding namespaces events at COLLECTION -- before any coupling rule runs -- the dead spelling survives fully qualified; where it namespaces them after coupling, the reference finds no live variable and is left bare. Both are an affect writing to an unknown the flattened system does not declare.",
+      "bindings": [
+        "julia",
+        "python",
+        "rust",
+        "typescript",
+        "go"
+      ]
+    },
+    "template_registry": {
+      "_comment": "The ONE surface that REFUSES rather than resolves. A surviving `expression_templates` body is a shadow copy of authored source that no equation walk reaches and that expands at the BUILD boundary, so a body naming a merged-away state would expand later and elsewhere into a variable the flattened system does not declare. Rewriting it would make the flattened registry disagree with the expand-at-load image the same document produces, which esm-spec 9.6.4 rule 2 requires to be observably identical -- so the document is refused at flatten instead. A template `param` shadows the outer name (9.6.1), so a body that BINDS the name is fine; the fixture deliberately does not.",
+      "bindings": [
+        "julia",
+        "python",
+        "rust",
+        "typescript",
+        "go"
+      ],
+      "diagnostic": "template_body_references_coupling_rewritten_variable"
+    },
+    "inline_tests": {
+      "_comment": "A component's own inline test addresses the quantity by its LOCAL name (esm-spec 6.6), in an assertion and in an `initial_conditions` key. A merge can fold that component's state onto another's, and then neither resolves. The two halves fail differently: the assertion fails LOUDLY (`scalar state 'O3' not found`), while the IC key is dropped in SILENCE and the state runs from the survivor's declared default -- a wrong answer rather than a missing one. Only the three bindings that RUN inline tests are in scope.",
+      "bindings": [
+        "julia",
+        "python",
+        "rust"
+      ],
+      "scope_excluded": {
+        "go": "rewrite-only port; no simulator, so no inline-test runner",
+        "typescript": "rewrite-only port; no simulator, so no inline-test runner"
+      }
     }
   },
   "merged_variable_renames_field": {
@@ -128,6 +161,57 @@
         "Sink.O3"
       ],
       "note": "A caller reading the finished run by the deleted spelling. The trajectory it names MOVED to `Chem.O3`'s row, so the read resolves there rather than reporting a variable that never existed — and the row NAMES still report only the surviving spelling, because resolving a read must not invent a name the flattened system does not declare. Where a binding also takes an output REQUEST (an `output_observed` / `--observed` list, an `observed_field` lookup), the same map resolves it before the plan is derived."
+    },
+    {
+      "id": "rename_reaches_events_and_updates",
+      "path": "fixtures/rename_reaches_events_and_updates.esm",
+      "surface": "events_and_updates",
+      "merged_variable_renames": {
+        "Sink.O3": "Chem.ozone"
+      },
+      "state_variables": [
+        "Chem.ozone"
+      ],
+      "event_affects": [
+        {
+          "lhs": "Chem.ozone",
+          "rhs_references": [
+            "Chem.ozone"
+          ]
+        }
+      ],
+      "variable_updates": {
+        "Sink.kd": [
+          "Chem.ozone"
+        ]
+      },
+      "absent_from_events_and_updates": [
+        "Sink.O3",
+        "O3"
+      ],
+      "note": "The `translate` renames ACROSS differing local names, which is what makes this case load-bearing: the survivor is `Chem.ozone`, so nothing in the flattened system is spelled `O3` and the bare-name coincidence that rescues a same-local-name merge cannot apply. The affect's `lhs` is the sharpest half -- it is a plain name STRING, so a walk that maps only EXPRESSIONS leaves it holding the dead spelling even after the affect's own RHS has been rewritten."
+    },
+    {
+      "id": "registry_body_names_the_merged_away_state",
+      "path": "fixtures/registry_body_names_the_merged_away_state.esm",
+      "surface": "template_registry",
+      "raises": "template_body_references_coupling_rewritten_variable",
+      "names_in_message": [
+        "Sink.O3"
+      ],
+      "note": "Flatten must REFUSE. The body references the component's local `O3`, which scopes to `Sink.O3` and which the merge then deletes; `O3` is not one of the template's `params`, so the 9.6.1 shadow does not apply. A binding that resolves here instead of refusing is as wrong as one that does nothing: it would silently rewrite authored source."
+    },
+    {
+      "id": "inline_test_names_the_merged_away_state",
+      "path": "fixtures/inline_test_names_the_merged_away_state.esm",
+      "surface": "inline_tests",
+      "test_id": "merged_away_local_name",
+      "component": "Sink",
+      "variable": "O3",
+      "expected": 10.0,
+      "passes": true,
+      "default_without_resolution": 30.0,
+      "note": "Both halves are pinned by one assertion. That it RESOLVES at all is the assertion half -- unresolved it raises `scalar state 'O3' not found`. That the actual is 10.0 rather than 30.0 is the `initial_conditions` half: the survivor's declared default is 30.0, so an IC key that failed to resolve would leave the run there and the test would still return a verdict. Both rates are zero, so the trajectory holds its initial value and the assertion reads the override rather than any integration."
     }
   ]
 }

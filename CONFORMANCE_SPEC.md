@@ -4911,8 +4911,11 @@ equation was consumed, so keeping the declaration would hand the solver an
 unknown nothing constrains. esm-libraries-spec §4.7.1 step 4 therefore rewrites
 every reference to `B.x` at `A.x` first, document-wide.
 
-That rewrite was document-wide over **equation ASTs and nothing else**, and
-three other places address the state BY NAME:
+That rewrite was document-wide over **equation ASTs and nothing else**. An
+equation is not the only thing that names a state, and this is the enumeration
+the rewrite must cover. It is meant to be exhaustive: a rename that reaches
+some of these and not others produces a document that is silently inconsistent
+with itself, which is worse than one that never renamed at all.
 
 1. **The by-name endpoints of a coupling entry that has not run yet.** A
    `couple` connector's `from` / `to` and a `variable_map`'s `from` / `to` are
@@ -4926,6 +4929,37 @@ three other places address the state BY NAME:
    a read of the finished run (`sol["SuperFast.O3"]`).
 3. **A surviving expression-template registry body**, which is a shadow copy of
    authored source that expands at the build boundary rather than at flatten.
+   This is the one entry that is REFUSED rather than resolved; see below.
+4. **An EVENT.** An affect's `lhs` is a plain variable NAME string rather than
+   an expression, so a walk that maps only expressions rewrites the affect's
+   RHS and leaves its target holding the dead spelling — an affect writing to
+   an unknown the flattened system does not declare. The affect RHS, an
+   `affect_neg` set, a continuous event's crossing `conditions` and a
+   `condition` trigger's expression are all in scope too. Ordering makes this
+   worse rather than better: a binding that namespaces events at COLLECTION —
+   before any coupling rule runs — carries the FULLY-QUALIFIED dead name
+   through, so the rename must be applied to the collected events after the
+   `operator_compose` pass. A binding that namespaces them after coupling
+   instead finds no live variable of that name and leaves the reference bare,
+   and must seed its resolution map with both the qualified dead spelling and
+   its bare local name.
+5. **A variable's `update` rules** (esm-spec §5.4). Their `when` and
+   `expression` slots are expressions carried on the VARIABLE, not in
+   `equations`, so no equation walk reaches them; a parameter that refreshes
+   from `B.x` reads a state that no longer exists.
+6. **An inline test's `assertions[].variable` and its `initial_conditions` /
+   `parameter_overrides` keys**, which esm-spec §6.6 writes as names LOCAL to
+   the component that owns the test. A merge can fold that component's state
+   onto another's. The two halves fail differently and the quieter one is
+   worse: the assertion fails loudly, while the initial-condition key resolves
+   to nothing and is DROPPED — the state runs from the survivor's declared
+   default and the test still returns a verdict.
+7. **The plain-string references a relational `join` carries** — an `on` key
+   column, and an `overlap` clause's `src_env` / `tgt_env` envelope factors.
+   These are references encoded as strings rather than as expression children,
+   so a `map_children`-style walk preserves them verbatim; §4.7.5 step 2
+   namespaces them like any other reference (§5.5.6), so §4.7.1 step 4 has to
+   rename them like any other reference.
 
 **The rule is RESOLUTION, not refusal.** A reference to a merged-away name
 resolves to the survivor, so a document that merges `B.x` onto `A.x` stays
@@ -4960,9 +4994,20 @@ Consequently:
 - **The registry body is refused, not rewritten.** It is authored source the
   substitution never sees, so a body still naming a merged-away variable would
   expand at the build boundary into a name the flattened system no longer
-  declares. That is the guard `template_body_references_coupling_rewritten_variable`
-  already applies to a `variable_map`-substituted name (§9.6.4); the merged-away
-  names join the same set.
+  declares. Rewriting it is not the alternative: the flattened form's registry
+  would then disagree with the expand-at-load image the same document produces,
+  which esm-spec §9.6.4 rule 2 requires to be observably identical. That is the
+  guard `template_body_references_coupling_rewritten_variable` already applies
+  to a `variable_map`-substituted name (§9.6.4); the merged-away names join the
+  same set. A template `param` shadows the outer name (§9.6.1), so a body that
+  BINDS the name is unaffected — which is the first of the two fixes the
+  diagnostic names.
+
+  **All five bindings MUST implement this guard.** A MUST that four of five
+  ignore is not a rule, it is a note about one implementation, and the
+  compliance matrix stops meaning anything. The `template_registry` surface
+  below pins it, so a binding that drops it goes red rather than quietly
+  diverging.
 
 **Shape.** Structure-comparing and golden-free, like §5.33. Each flatten case
 pins BOTH halves — the dead name survives nowhere, AND the later entry landed on
@@ -4983,6 +5028,23 @@ indistinguishable from a gap.
 | Surface | Binds | Excluded, and why |
 |---|---|---|
 | `flatten` | all five | — the rewrite is a pure structural transform, so a rewrite-only port implements it in full. |
+| `events_and_updates` | all five | — same reason: an event and an `update` rule are part of the flattened form, and rewriting them needs no simulator. |
+| `template_registry` | all five | — the REFUSAL. Every binding carries the merged registry on its flattened form, so every binding can and must check it. |
+| `inline_tests` | Julia, Python, Rust | **Go**, **TypeScript**: no simulator, so no inline-test runner to resolve a name for. |
+
+**The `join` half of item 7 is implemented in every binding but is not pinned by
+a fixture of its own, and the reason is worth recording rather than hiding.** The
+rename now runs through the same join-string renamer the `variable_map` case
+uses — each binding generalized its single-pair renamer to a rename MAP and
+folded it into the merged-away walk, so the two callers share one implementation
+and the existing `variable_map` join tests exercise it. What is NOT pinned is an
+`operator_compose`-driven join rename specifically, because the document that
+would pin it is contrived: `operator_compose` deletes only a DEPENDENT VARIABLE,
+while a join's `on` key columns are categorical keys and its `overlap` envelope
+factors are in practice parameters or coordinates. The realistic form of this
+hazard is the `variable_map` one the guard was written for. A binding could
+therefore drop the `operator_compose` half of the join rename and stay green
+here; that is a known gap in the pinning, not in the implementation.
 | `override_keys` | Julia, Python, Rust | **Go**, **TypeScript**: no simulator, so no override-key surface. The same split §5.15 (`override_key_diagnostics`) records. |
 | `output_selection` | Python, Rust | **Go**, **TypeScript**: no simulator, so no result object to read by name. **Julia**: its result is a SciML `ODESolution` indexed through SciMLBase's own `SymbolCache` — the package fills that name list but does not own the lookup, so resolving there needs a custom SymbolicIndexingInterface system type. The problem-side lookup Julia DOES own, `observed_field(prob, name)`, resolves through `EsmProblem.merged_renames`, and the category pins that the problem carries the map. |
 
