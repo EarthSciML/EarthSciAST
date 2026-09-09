@@ -1,5 +1,5 @@
 {
-  "$comment": "GOLDEN for CONFORMANCE_SPEC §5.35 / esm-spec §6.6.3. Each case is a (actual, expected, rel, abs) tuple fed straight to the binding's own assertion predicate; `passed` is the required verdict. The verdicts are ANALYTIC — computed from the §6.6.3 rule written out longhand, not read off any binding. Regenerate with scripts/gen-assertion-tolerance-golden.py.",
+  "$comment": "GOLDEN for CONFORMANCE_SPEC §5.37 / esm-spec §6.6.3. Each case is a (actual, expected, rel, abs) tuple fed straight to the binding's own assertion predicate; `passed` is the required verdict. The verdicts are ANALYTIC — computed from the §6.6.3 rule written out longhand, not read off any binding. Regenerate with scripts/gen-assertion-tolerance-golden.py.",
   "encoding_comment": "JSON has no infinite or NaN literal, so `actual` and `expected` are either a JSON number or one of exactly three strings. Nothing else may appear, and no other numeric field is ever a string; an adapter that does not recognise one of the three MUST fail rather than skip.",
   "encoding": {
     "non_finite": [

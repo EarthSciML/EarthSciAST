@@ -112,7 +112,7 @@ export function resolveTolerance(
  * bounds as zero.
  *
  * Pinned across the bindings by the shared `assertion_tolerance` conformance
- * category (CONFORMANCE_SPEC §5.35).
+ * category (CONFORMANCE_SPEC §5.37).
  */
 export function checkAssertion(
   actual: number,

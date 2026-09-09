@@ -177,9 +177,19 @@ pub fn is_evaluable_op(op: &str) -> bool {
         | "neg" | "true"
         // Conditional.
         | "ifelse"
-        // Form ops with a defined runtime meaning here: a `D` on the RHS is the
-        // legacy-parity zero, `Pre` passes its operand through.
-        | "D" | "Pre"
+        // `Pre` passes its operand through.
+        //
+        // `D` is deliberately ABSENT. A structural `D` on an equation's LHS
+        // never reaches here — `resolve_expr` is called only on right-hand
+        // sides, observed bodies and event bodies — and a `D` on a RIGHT-hand
+        // side is resolved to a tendency by `flatten`'s phase 5b′, or refused
+        // with `unlowered_operator` before any build (esm-spec §4.2). So the
+        // only way one arrives is a pipeline bug, and issue #220's answer to
+        // that is a refusal NAMING the op rather than a number. It used to be
+        // listed here with a `0.0` arm "for legacy parity" with the two array
+        // evaluators — a wrong number graded green, which three shipped
+        // documents computed silent zeros through.
+        | "Pre"
         // Resolved to their own `ResolvedExpr` variants by `resolve_expr` and
         // dispatched by `interpret` before `eval_op` sees them — the closed
         // function registry (esm-spec §9.2) and the engine-internal
@@ -279,11 +289,6 @@ fn eval_op(
                 v(2)
             }
         }
-
-        // Differential operator on RHS. `D` is a programming-form-only
-        // marker on the LHS of state equations and is rewritten elsewhere;
-        // if it shows up on the RHS we treat it as 0 (legacy parity).
-        "D" => 0.0,
 
         // Pre is the previous-value operator (used by event handling). With
         // events disallowed in v1 it should never appear, but if it does we

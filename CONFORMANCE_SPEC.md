@@ -3357,7 +3357,7 @@ fixture in this or any other category does: every fixture assertion in the
 corpus gets the same verdict under both readings, which is why the seam is
 invisible to fixtures however many are added.
 
-It is pinned instead by **§5.35**, whose fixture is DATA-ONLY: it feeds
+It is pinned instead by **§5.37**, whose fixture is DATA-ONLY: it feeds
 `(actual, expected, rel, abs)` tuples straight to each binding's predicate, so
 it never has to *arrive* at a discriminating pair — it states one. Promoting the
 seam to a *simulation* category would indeed need a fixture whose integrated
@@ -3368,7 +3368,7 @@ on the contract. The per-binding unit tests
 `test_relative_bound_is_symmetric_in_actual_and_expected` (Python) and
 `relative_bound_is_symmetric_in_actual_and_expected` (Rust) remain as each
 binding's own statement of the same discriminating case and swap-invariance
-property; §5.35 is what makes them a repo-wide contract instead of three
+property; §5.37 is what makes them a repo-wide contract instead of three
 independent assertions, and extends the pin to TypeScript.
 
 **All five bindings READ this manifest**, including the two that cannot execute
@@ -3385,6 +3385,117 @@ exclusion is invisible by construction, so it has to be asserted somewhere that
 goes red when it stops being true. Giving Go or TypeScript a simulator will fail
 that binding's scope test until it is moved into `bindings_required` with a real
 runner.
+### 5.21 Tolerance Resolution: the Levels Merge Per Field (normative)
+
+§5.20 governs the §6.6.3 **pass predicate**; this one governs the `(rel, abs)`
+pair that predicate is evaluated *with*. esm-spec §6.6.4 resolves tolerance from
+up to three declared `{abs?, rel?}` blocks — the assertion's, its test's, and the
+enclosing component's — plus the implementation default as a fourth level, and it
+resolves them **per field**: `abs` and `rel` each take their value from the
+innermost level that declares that field. The three simulation bindings —
+**Julia, Python, Rust** — must agree. The shared **offline, data-only** fixture
+lives in `tests/conformance/tolerance_resolution/`.
+
+#### 5.21.1 Why this needs a category
+
+**No other tier can see it.** Every fixture in every other category declares
+exactly one tolerance block, and a single block resolves identically whether the
+rule is per-field or wholesale. The divergence is only observable when two levels
+each declare *part* of a tolerance — and until #228 all three bindings did the
+same wrong thing there, so cross-binding output comparison agreed as well:
+
+```
+model     {rel: 1e-6}
+assertion {abs: 1e-9}
+                       spec:     (rel = 1e-6, abs = 1e-9)
+                       bindings: (rel = 0,    abs = 1e-9)
+```
+
+The assertion ran with **no relative bound at all**. That is the same shape of
+failure as §5.20 — a gate that silently stops gating — except in the opposite
+direction: §5.20's hole made assertions pass that should fail, and this one made
+an author's declared tolerance vanish, which can make an assertion fail that
+should pass, or (once fixed) admit a value the previous resolution rejected. A
+document is the contract; a runtime that drops half of a declared one is
+answering a question the author did not ask.
+
+Three bindings agreeing on the wrong answer is exactly what a conformance suite
+built on cross-binding comparison cannot detect. This category therefore pins the
+rule against the **spec**, not against a reference binding's output, and the
+`resolved` pairs in the manifest are derived from §6.6.4's text.
+
+#### 5.21.2 What is compared
+
+**Data-only.** Resolution is a pure function of the declared blocks — it does not
+depend on a trajectory, a solver, a discretization or a document — so the
+category carries no `.esm` fixture, no `integrators` block (the field is `null`,
+and each binding asserts that it is) and no numeric golden. Each in-scope binding
+feeds a case's `levels` straight into its resolution entry point
+(`_resolve_tolerance` in Julia and Python, `resolve_tolerance` in Rust) and
+compares the returned pair:
+
+| Field | Contract |
+|---|---|
+| `levels.model` / `levels.test` / `levels.assertion` | The declared block at that level, or `null` for "no block at all". Within a block, a bound is **declared** when its key is present with a number — **including `0`** — and **absent** when the key is missing or its value is `null`. |
+| `resolved` | The `(rel, abs)` §6.6.4 requires. **This is the contract.** |
+| `changed_by_228` | Whether the pre-#228 wholesale rule produced a different pair. Each binding recomputes the old rule and asserts this flag, so the tier cannot quietly stop covering the regression. |
+
+#### 5.21.3 The two rules §6.6.4 had left implicit
+
+Both are pinned by dedicated cases, because both are silent when wrong:
+
+1. **An explicit `0` is a declaration, not an absence.** `{"rel": 0}` says
+   *"no relative bound"* and MUST stop the fallthrough; only a missing key (or a
+   non-conforming `null`) falls through. Reading `0` as absent is not a corner
+   case: `tests/fixtures/recurrence/*.esm` pin the bit-exact recurrence contract
+   of §5.19 with a model-level `{rel: 0, abs: 0}`, and a binding that fell
+   through from it would run all ten of them at `rel = 1e-6` — the exactness
+   requirement gone, with every fixture still green.
+
+2. **The implementation default is the FOURTH LEVEL of the same merge**, not a
+   fallback reached only when levels 1-3 are silent. It supplies whichever bound
+   is *still* undeclared after them, so an assertion declaring only
+   `{abs: 1e-4}` resolves to `(rel = 1e-6, abs = 1e-4)`, not `(0, 1e-4)`.
+
+   The consequence is that **`rel: 0` is the only way a document can ask for an
+   absolute-only comparison**, and it is load-bearing rather than stylistic: an
+   `abs`-only block that means to be tight silently acquires a `1e-6` relative
+   band otherwise. When this rule was adopted, the 69 assertions in the shipped
+   corpus that would have picked up that band — including
+   `tests/conformance/elementwise_observed_gather` (`abs = 1e-11`),
+   `pde_inline_observed_rank2` and `pde_inline_dead_observed` — had an explicit
+   `rel: 0` written into the 63 authored blocks that govern them, so every one
+   of them still enforces the bound its author wrote. **A new `abs`-only block
+   is not an error, but it is a choice**: it asks for the default relative band
+   as well, and a fixture that exists to be tight should spell `rel: 0`.
+
+   Note the asymmetry, which is not an oversight: level 4 declares `rel = 1e-6`
+   and *no* `abs` bound, so a `rel`-only block resolves to `abs = 0` under
+   either reading. Only an `abs`-only block distinguishes them, which is why
+   the manifest pins that shape at both the model and the assertion level.
+
+#### 5.21.4 Gate
+
+Julia `pkg/EarthSciAST.jl/test/conformance_tolerance_resolution_test.jl`, Python
+`pkg/earthsci-ast-py/tests/test_tolerance_resolution_conformance.py`, Rust
+`tolerance_resolution_conformance_manifest` in
+`pkg/earthsci-ast-rs/src/inline_tests.rs`. `bindings_required` is
+`["julia", "python", "rust"]`; Go and TypeScript carry the `Tolerance` type but
+have no inline-test runner, so they never resolve one and are `scope_excluded`.
+Both of them assert that exclusion themselves — Go
+`pkg/earthsci-ast-go/pkg/esm/tolerance_resolution_scope_test.go`, TypeScript
+`pkg/earthsci-ast-ts/src/tolerance-resolution-scope.test.ts`, the same shape
+§5.20 uses — so a binding that grows a §6.6.4 resolver cannot leave itself out
+of the category quietly. (TypeScript's existing `resolveTolerances` is the
+§2.2.2 INTEGRATION chain, a different quantity on a different chain.)
+
+Each gate also asserts **monotonicity** against the pre-#228 rule: per field the
+merged value can only come from a level the wholesale rule ignored, never from
+one it consulted, so no resolved bound ever *tightens*. That is the safety
+argument for changing a shipped comparison rule — an assertion can flip
+fail → pass under it, but never pass → fail — and it is checked rather than
+claimed.
+
 ### 5.22 Data-Source Location Resolution (normative)
 
 esm-spec §8.2.1 fixes WHERE a `data_sources[*].source.url_template` points. All
@@ -4794,7 +4905,7 @@ Two omissions, both decisions rather than oversights, recorded in the category's
   in the meantime (Go and TypeScript both assert `cadence(w) == const` for a
   state-free arrayed observed), which is what made #272 visible.
 
-### 5.35 The §6.6.3 Assertion Predicate Itself (normative)
+### 5.37 The §6.6.3 Assertion Predicate Itself (normative)
 
 §5.20 pins what a binding does with a NON-FINITE actual. This category pins the
 arithmetic: esm-spec §6.6.3's pass predicate as a **pure function of four
@@ -4815,7 +4926,7 @@ ways; all three executing bindings had implemented the symmetric form from the
 start, so the settlement changed prose rather than behaviour. This category is
 the gate on that settlement.
 
-#### 5.35.1 Why a data-only category, and why no other shape works
+#### 5.37.1 Why a data-only category, and why no other shape works
 
 Every other assertion category is a **simulation** category: it integrates a
 document, produces an actual, and then compares it. That shape can only exercise
@@ -4838,7 +4949,7 @@ discriminating pair — it states one:
 | `a=1.6, e=1.0, rel=0.5, abs=0` | 0.8 → **PASS** | 0.5 → FAIL | 0.5 → FAIL |
 | `a=1.5, e=1.0, rel=0.3, abs=0.3` | 0.45 → **FAIL** | 0.3 → FAIL | 0.6 → PASS |
 
-#### 5.35.2 What is compared
+#### 5.37.2 What is compared
 
 Each in-scope binding feeds every golden case's `(actual, expected, rel, abs)`
 to **the same predicate its own inline-test harnesses call** — Julia
@@ -4859,7 +4970,7 @@ look like a simulation divergence. Here they are **inputs**, over a closed
 three-token vocabulary, and a mis-parse fails in the adapter before the
 predicate is ever called.
 
-#### 5.35.3 Non-vacuity
+#### 5.37.3 Non-vacuity
 
 The golden is 22 pass / 21 fail, so a binding answering a constant fails. Beyond
 that, `readings_discriminated` counts — per known WRONG reading of §6.6.3 — how
@@ -4884,7 +4995,7 @@ The verdicts are **analytic** — computed from §6.6.3 written out longhand by 
 generator, not read off any binding — so this is a *reference-comparing* fixture
 (`tests/conformance/README.md`), not a cross-binding agreement.
 
-#### 5.35.4 Gate
+#### 5.37.4 Gate
 
 `bindings_required` is `["julia", "python", "rust", "typescript"]`:
 **Julia** — `pkg/EarthSciAST.jl/test/conformance_assertion_tolerance_test.jl`;
@@ -4894,7 +5005,7 @@ generator, not read off any binding — so this is a *reference-comparing* fixtu
 
 TypeScript is required here and `scope_excluded` from §5.20, and the difference
 is the point: §5.20's contract runs through a simulator, which this binding does
-not have; §5.35's is arithmetic, which it does. Its predicate lives in
+not have; §5.37's is arithmetic, which it does. Its predicate lives in
 `src/assertion-tolerance.ts` — in `src/`, not in the test file, because a
 predicate defined inside its only caller is a predicate nothing can hold to a
 contract, which is precisely how the ~12 copies drifted.
@@ -4910,12 +5021,12 @@ into `bindings_required` with a real adapter. That is §5.20's pattern and its
 reason: an exclusion is invisible by construction, so it has to be asserted
 somewhere that goes red when it stops being true.
 
-#### 5.35.5 What this category does not prove
+#### 5.37.5 What this category does not prove
 
 That any runner actually **calls** the predicate. §5.20 is the end-to-end half:
 it drives a document whose arithmetic overflows through each binding's real
 inline-test runner and compares verdicts. Neither category subsumes the other —
-§5.20 cannot state a discriminating overshoot, and §5.35 cannot prove the
+§5.20 cannot state a discriminating overshoot, and §5.37 cannot prove the
 function it tests is the one the runner reaches — and both are needed.
 
 

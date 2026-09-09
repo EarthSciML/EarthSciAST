@@ -506,7 +506,7 @@ def main() -> None:
 
     golden = {
         "$comment": (
-            "GOLDEN for CONFORMANCE_SPEC §5.35 / esm-spec §6.6.3. Each case is a "
+            "GOLDEN for CONFORMANCE_SPEC §5.37 / esm-spec §6.6.3. Each case is a "
             "(actual, expected, rel, abs) tuple fed straight to the binding's own "
             "assertion predicate; `passed` is the required verdict. The verdicts are "
             "ANALYTIC — computed from the §6.6.3 rule written out longhand, not read "

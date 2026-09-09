@@ -1,5 +1,5 @@
 //! Rust adapter for the SHARED `assertion_tolerance` conformance category
-//! (CONFORMANCE_SPEC §5.35, `tests/conformance/assertion_tolerance/`).
+//! (CONFORMANCE_SPEC §5.37, `tests/conformance/assertion_tolerance/`).
 //!
 //! The category's subject is the esm-spec §6.6.3 pass predicate as a PURE
 //! FUNCTION of `(actual, expected, rel, abs)`. Every other assertion category

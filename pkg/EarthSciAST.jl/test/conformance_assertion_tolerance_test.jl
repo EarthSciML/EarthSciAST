@@ -1,6 +1,6 @@
 # Conformance harness adapter — assertion_tolerance category.
 #
-# CONFORMANCE_SPEC §5.35 / esm-spec §6.6.3. The subject is the pass predicate
+# CONFORMANCE_SPEC §5.37 / esm-spec §6.6.3. The subject is the pass predicate
 # itself, as a PURE FUNCTION of `(actual, expected, rel, abs)`:
 #
 #   actual == expected

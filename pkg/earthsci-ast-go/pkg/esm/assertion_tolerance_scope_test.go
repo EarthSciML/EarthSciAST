@@ -8,7 +8,7 @@ import (
 )
 
 // assertion_tolerance_scope_test.go is Go's read of the SHARED
-// `assertion_tolerance` conformance manifest (CONFORMANCE_SPEC §5.35,
+// `assertion_tolerance` conformance manifest (CONFORMANCE_SPEC §5.37,
 // tests/conformance/assertion_tolerance/manifest.json).
 //
 // Go cannot run that category: its contract is the esm-spec §6.6.3 pass
