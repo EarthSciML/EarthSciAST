@@ -3062,9 +3062,7 @@ def _resolve_rhs_time_derivatives(flat: FlattenedSystem) -> None:
         if own is None and isinstance(eq.lhs, str):
             own = eq.lhs
         active: list[str] = [own] if own is not None else []
-        eq.rhs = _substitute_time_derivatives(
-            eq.rhs, tendency, definition, time_invariant, active
-        )
+        eq.rhs = _substitute_time_derivatives(eq.rhs, tendency, definition, time_invariant, active)
 
 
 def _expand_operator_compose_placeholders(

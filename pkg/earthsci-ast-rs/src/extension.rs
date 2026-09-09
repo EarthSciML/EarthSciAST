@@ -140,6 +140,7 @@ pub mod error {
 
 /// Flatten-pass internals.
 pub mod flatten {
+    pub use crate::flatten::first_unresolved_rhs_time_derivative;
     pub use crate::flatten::reject_unlowered_operators;
 }
 

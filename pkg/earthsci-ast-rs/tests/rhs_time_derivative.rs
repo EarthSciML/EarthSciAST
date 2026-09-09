@@ -383,52 +383,58 @@ fn a_cyclic_tendency_terminates_and_is_refused() {
     // Terminates at all — an unguarded substitution never returns.
     let flat = flatten(&file).expect("flattens");
     assert!(
-        earthsci_ast::flatten::first_unresolved_rhs_time_derivative(&flat).is_some(),
+        earthsci_ast::extension::flatten::first_unresolved_rhs_time_derivative(&flat).is_some(),
         "the cyclic `D` must survive as an unresolved rewrite target"
     );
 }
 
 /// The motivating shipped document: `tests/validation/mathematical_correctness.esm`
 /// exists to check that `d/dt` is LINEAR, and until §4.2 stated the chain rule
-/// it could not run at all — Python and Julia refused its left-hand observed and
-/// this crate answered `0` for it, so the two sides of the identity disagreed
-/// and the property the fixture is named for was untestable. Its only consumer
-/// was a round-trip test, which never evaluates anything.
+/// it could not be resolved at all — this crate answered `0` for its left-hand
+/// observed while Python and Julia refused it, so the two sides of the identity
+/// disagreed and the property the fixture is named for was untestable. Its only
+/// consumer was a round-trip test, which never evaluates anything.
 ///
-/// Both sides must agree AND be non-zero: agreement alone is satisfied by a
-/// binding that answers `0` for both.
+/// This asserts the half §4.2 owns: after flattening, BOTH sides are ordinary
+/// expressions over the states and parameters, with no `D` left standing and
+/// nothing for the `unlowered_operator` gate to refuse. The end-to-end numeric
+/// check — that the two sides agree at `-0.45` — lives in the Python binding
+/// (`test_the_linearity_fixture_runs_and_both_sides_agree`), because the
+/// document also declares `continuous_events`, which this crate's v1 scalar
+/// route refuses for reasons unrelated to this rule.
 #[test]
-fn the_shipped_linearity_fixture_runs_and_both_sides_agree() {
+fn the_shipped_linearity_fixture_resolves_both_sides() {
     let path = common::repo_fixture("validation/mathematical_correctness.esm");
     let text = std::fs::read_to_string(&path).expect("fixture readable");
     let file = load_string(&text).expect("document loads");
-    let results = run_inline_tests(&file, Some("LinearityTest"), &opts());
-    assert!(!results.is_empty(), "the fixture declares inline tests");
-    let get = |name: &str| {
-        results
+    let flat = flatten(&file).expect("flattens");
+
+    let rendered = |name: &str| {
+        let eq = flat
+            .equations
             .iter()
-            .find(|r| r.variable == name)
-            .unwrap_or_else(|| panic!("no row for {name}"))
+            .find(|eq| matches!(&eq.lhs, earthsci_ast::Expr::Variable(v) if v == name))
+            .unwrap_or_else(|| panic!("no defining equation for {name}"));
+        format!("{}", eq.rhs)
     };
-    let left = get("derivative_of_combination");
-    let right = get("combination_of_derivatives");
-    for r in [left, right] {
-        assert!(r.passed, "{}: {}", r.variable, r.message);
+    for name in [
+        "LinearityTest.derivative_of_combination",
+        "LinearityTest.combination_of_derivatives",
+    ] {
+        let body = rendered(name);
+        assert!(
+            !body.contains("D("),
+            "{name} must resolve to an ordinary expression, got `{body}`"
+        );
+        // Non-vacuous: the resolved body has to mention the states it depends
+        // on, so a binding that folded both sides to a constant fails here.
+        assert!(
+            body.contains("LinearityTest.u") && body.contains("LinearityTest.v"),
+            "{name} should depend on both states, got `{body}`"
+        );
     }
-    let (l, r) = (
-        left.actual.expect("left actual"),
-        right.actual.expect("right actual"),
-    );
     assert!(
-        (l - r).abs() <= 1e-12 * l.abs().max(1.0),
-        "d(a*u+b*v)/dt = {l} but a*du/dt + b*dv/dt = {r}"
-    );
-    assert!(
-        (l + 0.45).abs() <= 1e-9,
-        "expected -0.45 at t = 0, got {l}"
-    );
-    assert!(
-        l.abs() > 1e-6,
-        "a binding answering 0 for both sides would satisfy agreement alone"
+        earthsci_ast::extension::flatten::first_unresolved_rhs_time_derivative(&flat).is_none(),
+        "the document must no longer be refused on esm-spec §4.2 grounds"
     );
 }

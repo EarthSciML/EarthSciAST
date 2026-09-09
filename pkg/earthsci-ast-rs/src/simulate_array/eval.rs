@@ -393,17 +393,22 @@ fn eval_op_named(op: &str, node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
 
         "ifelse" => eval_ifelse(node, ctx),
 
-        // Derivative operator: only meaningful on an equation LHS, which this
-        // evaluator never sees. A right-hand-side `D` is resolved to a tendency
-        // by `flatten`'s phase 5b′ or refused with `unlowered_operator` before
-        // any build (esm-spec §4.2), so this arm is unreachable.
+        // Derivative operator. Unreachable, and the sentinel says so.
         //
-        // It used to answer `0.0` "for parity with the scalar interpreter" —
-        // the parity was real and all three evaluators were wrong together.
-        // §4.2 forbids inventing a value here, IN PARTICULAR `0`, which passes
-        // an `expected: 0` assertion silently; `NaN` fails every finite one.
-        // `D` stays in `is_evaluable_op` because an equation LHS carries it
-        // past `check_evaluable_side`.
+        // A right-hand-side `D` is resolved to a tendency by `flatten`'s phase
+        // 5b′, or refused with `unlowered_operator` before any build (esm-spec
+        // §4.2). It used to answer `0.0` "for parity with the scalar
+        // interpreter" — the parity was real and all three evaluators were
+        // wrong together, which is how four shipped documents came to compute
+        // silent zeros. §4.2 forbids inventing a value here, IN PARTICULAR `0`,
+        // which passes an `expected: 0` assertion silently where `NaN` fails
+        // every finite one.
+        //
+        // Unlike the scalar interpreter, `D` must STAY in `is_evaluable_op`
+        // here: `check_evaluable_side` walks an equation's LHS and unwraps only
+        // `ic`, so delisting `D` would reject every document that states a
+        // differential equation. Teaching that gate to unwrap a structural `D`
+        // LHS as it unwraps `ic` would let this arm go too.
         "D" => Value::Scalar(f64::NAN),
 
         // `Pre` (previous-value marker) is only meaningful under event handling;

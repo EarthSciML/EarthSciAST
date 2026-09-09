@@ -177,9 +177,19 @@ pub fn is_evaluable_op(op: &str) -> bool {
         | "neg" | "true"
         // Conditional.
         | "ifelse"
-        // Form ops with a defined runtime meaning here: a `D` on the RHS is the
-        // legacy-parity zero, `Pre` passes its operand through.
-        | "D" | "Pre"
+        // `Pre` passes its operand through.
+        //
+        // `D` is deliberately ABSENT. A structural `D` on an equation's LHS
+        // never reaches here — `resolve_expr` is called only on right-hand
+        // sides, observed bodies and event bodies — and a `D` on a RIGHT-hand
+        // side is resolved to a tendency by `flatten`'s phase 5b′, or refused
+        // with `unlowered_operator` before any build (esm-spec §4.2). So the
+        // only way one arrives is a pipeline bug, and issue #220's answer to
+        // that is a refusal NAMING the op rather than a number. It used to be
+        // listed here with a `0.0` arm "for legacy parity" with the two array
+        // evaluators — a wrong number graded green, which three shipped
+        // documents computed silent zeros through.
+        | "Pre"
         // Resolved to their own `ResolvedExpr` variants by `resolve_expr` and
         // dispatched by `interpret` before `eval_op` sees them — the closed
         // function registry (esm-spec §9.2) and the engine-internal
@@ -279,26 +289,6 @@ fn eval_op(
                 v(2)
             }
         }
-
-        // Differential operator on a RIGHT-hand side. Unreachable, and the
-        // sentinel says so.
-        //
-        // esm-spec §4.2: a right-hand-side structural `D` is resolved to the
-        // named quantity's tendency by `flatten`'s phase 5b′
-        // (`flatten::resolve_rhs_time_derivatives`), and one that resolves to
-        // nothing is refused with `unlowered_operator` by
-        // `flatten::first_unresolved_rhs_time_derivative`, which both compile
-        // paths call before building. So no `D` reaches this arm.
-        //
-        // It used to return `0.0` "for legacy parity" with the two array
-        // evaluators, which was a WRONG NUMBER graded green: three shipped
-        // documents computed silent zeros through it, and §4.2 now says an
-        // implementation MUST NOT invent a value here, in particular not `0`.
-        // `NaN` is the crate's existing "undeterminable" sentinel and is the
-        // one answer that cannot be mistaken for a result — an assertion over
-        // it fails every finite expectation (the `assertion_nonfinite`
-        // conformance category), where `0` silently PASSES `expected: 0`.
-        "D" => f64::NAN,
 
         // Pre is the previous-value operator (used by event handling). With
         // events disallowed in v1 it should never appear, but if it does we

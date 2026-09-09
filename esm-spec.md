@@ -420,7 +420,11 @@ rather than expand without end (`D(x)/dt ~ k · D(x, t)`; an observed whose defi
 its own derivative). In each case the node remains as authored and is a rewrite-target: an
 implementation MUST NOT invent a value for it (in particular **not `0`**, which is a wrong
 answer rather than a missing one), and the `unlowered_operator` gate (§9.6.3 constraint 6)
-rejects it before evaluation exactly as it rejects an undiscretized spatial `D`.
+rejects it before evaluation exactly as it rejects an undiscretized spatial `D`. That is the
+code an author sees, because the gate runs at build time, ahead of every evaluator; an
+evaluator that additionally refuses `D` by name (§9.6.6 `unevaluable_operator`) is a
+defence-in-depth backstop for a pipeline bug, not the diagnostic for an under-lowered
+document.
 
 The boundary is deliberate. The format defines **no symbolic differentiation**: what the table
 gives is substitution of the system's own equations, plus the three algebraic identities needed

@@ -1803,10 +1803,7 @@ impl DerivTables<'_> {
                     // expression small in the common `D(x, t)/c` shape.
                     return Some(quotient(du, v.clone()));
                 }
-                let num = difference(
-                    product(vec![du, v.clone()]),
-                    product(vec![u.clone(), dv]),
-                );
+                let num = difference(product(vec![du, v.clone()]), product(vec![u.clone(), dv]));
                 Some(quotient(num, product(vec![v.clone(), v.clone()])))
             }
             _ => None,
