@@ -2,6 +2,7 @@ package esm
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -525,4 +526,184 @@ func mergedTemplateRegistry(file *ESMFile) []FlattenedTemplate {
 		out = append(out, FlattenedTemplate{Name: name, Declaration: merged.get(name)})
 	}
 	return out
+}
+
+// checkRegistryCouplingRewrites refuses a SURVIVING registry body that names a
+// coupling-rewritten variable.
+//
+// A `variable_map` substitution and an `operator_compose` renaming match both
+// DELETE a name from the flattened tables and rewrite the equations off it. A
+// surviving `expression_templates` body is a shadow copy of authored source that
+// no equation walk reaches, and it expands at the BUILD boundary rather than at
+// flatten — so a body still naming a deleted variable would expand, later and
+// elsewhere, into a name the flattened system does not declare (for
+// `param_to_var` / `conversion_factor`, a deleted parameter; for the scaling
+// transforms, a silent semantic divergence from the expand-at-load image).
+//
+// This is the ONE site where such a reference is REFUSED rather than resolved
+// (CONFORMANCE_SPEC §5.35). The body is authored source: rewriting it would
+// silently diverge from the image the same document produces with template
+// expansion done at load. A template `param` shadows the outer name (esm-spec
+// §9.6.1), so a body that BINDS the name through its params is fine — which is
+// exactly the fix the message names.
+//
+// Mirrors Julia `flatten.jl::_check_registry_coupling_rewrites` and Python
+// `flatten.py::_check_registry_coupling_rewrites`.
+func checkRegistryCouplingRewrites(registry []FlattenedTemplate, rewritten map[string]bool) error {
+	if len(registry) == 0 || len(rewritten) == 0 {
+		return nil
+	}
+	// The registry is already in document order, so the FIRST offending template
+	// is deterministic without a sort.
+	for _, entry := range registry {
+		decl, ok := entry.Declaration.(map[string]any)
+		if !ok {
+			continue
+		}
+		body, has := decl["body"]
+		if !has || body == nil {
+			continue
+		}
+		// The template's own formal params are its private scope (esm-spec
+		// §9.6.1), so a body that binds the name through them names nothing
+		// outer.
+		params := map[string]bool{}
+		if list, ok := decl["params"].([]any); ok {
+			for _, p := range list {
+				if name, ok := p.(string); ok {
+					params[name] = true
+				}
+			}
+		}
+		names := map[string]bool{}
+		collectTemplateBodyVarNames(body, params, names)
+		var hits []string
+		for name := range names {
+			if rewritten[name] {
+				hits = append(hits, name)
+			}
+		}
+		if len(hits) == 0 {
+			continue
+		}
+		sort.Strings(hits)
+		return newETErr(CodeTemplateBodyReferencesCouplingRewrittenVariable, fmt.Sprintf(
+			"expression template '%s' body references '%s', which a coupling rule "+
+				"rewrote in the flattened equations; the registry body would expand "+
+				"to a stale name at the build boundary. Bind the value through the "+
+				"template's params, or expand the reference before coupling "+
+				"(esm-spec §9.6.4).",
+			entry.Name, strings.Join(hits, "', '")))
+	}
+	return nil
+}
+
+// collectTemplateBodyVarNames collects into `out` every variable name a RAW
+// (unparsed) template body references, skipping names `bound` shadows.
+//
+// The registry holds bodies as decoded JSON rather than as ExprNode, so this
+// walks the JSON with exactly scopeTemplateBody's structure: a bare string in an
+// OPERAND slot is a reference, a sidecar slot (`op`, `wrt`, `fn`, `ranges`, ...)
+// names an operator, an axis or a binder and is skipped, an aggregate's own loop
+// symbols shadow, and a `join`'s key columns and overlap envelope factors ARE
+// references (§5.5.6) while its `syms` are binders. Sharing that shape is the
+// point: the guard must see the same references the scoping pass rewrote, no
+// more and no fewer.
+func collectTemplateBodyVarNames(raw any, bound, out map[string]bool) {
+	switch v := raw.(type) {
+	case string:
+		if !bound[v] {
+			out[v] = true
+		}
+	case []any:
+		for _, item := range v {
+			collectTemplateBodyVarNames(item, bound, out)
+		}
+	case map[string]any:
+		if _, isNode := v["op"]; !isNode {
+			// Not an expression node (a `ranges` spec, a `join` clause, ...):
+			// its strings are not references.
+			return
+		}
+		localBound := bound
+		if v["op"] == "aggregate" {
+			localBound = map[string]bool{}
+			for k, b := range bound {
+				localBound[k] = b
+			}
+			for _, name := range exprBinderNames(v) {
+				localBound[name] = true
+			}
+		}
+		for k, val := range v {
+			switch k {
+			case "op", "wrt", "dim", "fn", "name", "value", "table", "output",
+				"reduce", "semiring", "manifold", "label", "attrs", "ranges",
+				"regions", "output_idx", "distinct", "shape", "perm", "axis", "id":
+				// Sidecar / non-reference slots, exactly the ones
+				// scopeTemplateBody carries verbatim.
+			case "join":
+				if clauses, ok := val.([]any); ok {
+					binders := map[string]bool{}
+					for _, name := range exprBinderNames(v) {
+						binders[name] = true
+					}
+					collectJoinClauseNames(clauses, binders, out)
+				}
+			default:
+				collectTemplateBodyVarNames(val, localBound, out)
+			}
+		}
+	}
+}
+
+// exprBinderNames returns the loop symbols a raw aggregate node binds — its
+// `output_idx` entries and its `ranges` keys.
+func exprBinderNames(node map[string]any) []string {
+	var names []string
+	if idx, ok := node["output_idx"].([]any); ok {
+		for _, s := range idx {
+			if name, ok := s.(string); ok {
+				names = append(names, name)
+			}
+		}
+	}
+	if rng, ok := node["ranges"].(map[string]any); ok {
+		names = append(names, sortedKeys(rng)...)
+	}
+	return names
+}
+
+// collectJoinClauseNames collects the plain-string variable references a `join`
+// carries — an `on` key column and an `overlap` clause's `src_env` / `tgt_env`
+// factors. A clause's `syms` are binders of the node, not references, and are
+// skipped, exactly as namespaceJoinNames skips them.
+func collectJoinClauseNames(clauses []any, binders, out map[string]bool) {
+	add := func(v any) {
+		if s, ok := v.(string); ok && !binders[s] {
+			out[s] = true
+		}
+	}
+	addList := func(v any) {
+		if items, ok := v.([]any); ok {
+			for _, it := range items {
+				add(it)
+			}
+		}
+	}
+	for _, raw := range clauses {
+		clause, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if pairs, ok := clause["on"].([]any); ok {
+			for _, pair := range pairs {
+				addList(pair)
+			}
+		}
+		if overlap, ok := clause["overlap"].(map[string]any); ok {
+			addList(overlap["src_env"])
+			addList(overlap["tgt_env"])
+		}
+	}
 }
