@@ -254,6 +254,61 @@ fn import_rename_integral_axis_matches_golden() {
     }
 }
 
+/// metaparam_axis_name_collision: §9.7.6 substitution is per-FIELD, not
+/// per-NODE. The fixture names four metaparameters after the structural string
+/// field standing beside them — `lev` (the `dim`/`wrt`/`var` axis names), `max`
+/// (an operator name), `flux` (a node `id`) and `continuous` (an
+/// `expect_cadence` enum value) — and writes each one in an expression position
+/// too, so both halves of the split are pinned at once.
+///
+/// Before the fix an operator name WAS an expression position here: with `max`
+/// bound to 3, `{"op": "max", …}` became `{"op": 3, …}` and the document then
+/// died in the typed load with a raw "cannot unmarshal number into `op`" rather
+/// than a diagnostic.
+#[test]
+fn metaparam_axis_name_collision_matches_golden() {
+    let d = expand_raw(&conf(&["metaparam_axis_name_collision", "fixture.esm"]));
+    assert_eq!(
+        d,
+        golden(&conf(&["metaparam_axis_name_collision", "expanded.esm"]))
+    );
+    let model = &d["models"]["M"];
+
+    // NODE-HEADER fields survive verbatim…
+    let rhs0 = &model["equations"][0]["rhs"];
+    assert_eq!(rhs0["op"], "max");
+    assert_eq!(rhs0["id"], "flux");
+    assert_eq!(rhs0["expect_cadence"], "continuous");
+    // …while the genuine expression position in the SAME node closes: the skip
+    // is per-KEY, not per-NODE.
+    assert_eq!(rhs0["args"], json!(["c", 3]));
+
+    // AXIS fields name a spatial coordinate (§4.9.1, §4.2), never a value.
+    let g = obs_def(model, "g");
+    assert_eq!(g["args"][0]["dim"], "lev");
+    assert_eq!(g["args"][1]["wrt"], "lev");
+    assert_eq!(g["args"][2]["var"], "lev");
+    assert_eq!(g["args"][3], 4);
+
+    // The two remaining collisions close in ordinary argument positions.
+    assert_eq!(obs_def(model, "s")["args"], json!([5, 7]));
+
+    // OP-REGISTRY fields: a closed-registry id or literal enum parameterizing
+    // the node's op is a name, not a value, so it is not an expression position
+    // either. Each node carries a genuine expression position alongside it.
+    let r = obs_def(model, "r");
+    assert_eq!(r["args"][0]["reduce"], "max");
+    assert_eq!(r["args"][0]["expr"]["args"], json!(["i", 3]));
+    assert_eq!(r["args"][1]["semiring"], "min_sum");
+    assert_eq!(r["args"][1]["expr"]["args"], json!(["i", 6]));
+    assert_eq!(r["args"][2]["fn"], "max");
+    assert_eq!(r["args"][2]["args"], json!(["c", 3]));
+    // An open rewrite-target op's `attrs` mirror the fixed dim/side/wrt/var
+    // slots, not `args` — scalar attribute NAMES, never expressions.
+    assert_eq!(r["args"][3]["attrs"], json!({"limiter": "max"}));
+    assert_eq!(r["args"][3]["args"], json!(["c", 3]));
+}
+
 /// import_where_rename_unknown_index_set: a `where` shape naming a set the
 /// library never declares survives the rename as spelled and is rejected at rule
 /// registration — the fix does not paper over genuine typos.
@@ -312,6 +367,54 @@ fn subsystem_index_sets_merge_into_document() {
     let mesh_isets = mesh.index_sets.as_ref().expect("index_sets");
     assert_eq!(mesh_isets["cells"].size, Some(5));
     assert_eq!(mesh_isets["vertices"].size, Some(4));
+}
+
+/// §4.7 "Two mount forms, one mechanism": a TOP-LEVEL `models.<k>` `{ref}` mount
+/// merges the leaf's `index_sets` exactly as the `subsystems.<k>` form above
+/// does. The two fixtures mount the SAME leaf (`tests/valid/subsystem_mesh_lib.esm`)
+/// through the other attachment point, so this is a differential test of the two
+/// forms: `cells` is redeclared deep-equal (idempotent), and `vertices` — declared
+/// only by the leaf, yet the axis the assembling document's own `Host.diag` is
+/// shaped over — is brought in. Before the merge existed here the axis was
+/// silently dropped and an assembly had to redeclare its leaves' axes.
+#[test]
+fn toplevel_ref_mount_merges_leaf_index_sets() {
+    let dir = repo_root().join("tests/fixtures/toplevel_ref_index_sets");
+    let f = load_path(dir.join("toplevel_ref_index_set_merge.esm")).expect("top-level mount load");
+    let isets = f.index_sets.as_ref().expect("index_sets");
+    assert_eq!(isets["cells"].size, Some(5));
+    assert_eq!(isets["vertices"].size, Some(4));
+
+    // The mount is a real splice, not a surviving `{ref}` stub.
+    let models = f.models.as_ref().expect("models");
+    assert!(
+        models["M"].variables.contains_key("area"),
+        "leaf spliced in"
+    );
+
+    // A non-deep-equal collision is `subsystem_index_set_conflict` — the SAME
+    // diagnostic the subsystems-edge form raises, not last-writer-wins.
+    let e = load_path(dir.join("toplevel_ref_index_set_conflict.esm"))
+        .expect_err("size disagreement must be rejected");
+    assert!(
+        e.to_string().contains("[subsystem_index_set_conflict]"),
+        "got: {e}"
+    );
+
+    // §4.7 merges a mounted file's axes "after the referenced document's
+    // metaparameters are closed and folded", and a top-level mount edge does
+    // NOT close them (it is a raw pre-pass that drops the leaf's
+    // `metaparameters` block). An axis whose `size` is still the leaf's own
+    // metaparameter name is therefore held back rather than merged in the wrong
+    // scope — without the guard this load dies on `invalid type: string
+    // "NLEV", expected i64`.
+    let f = load_path(dir.join("toplevel_ref_metaparameter_axis.esm"))
+        .expect("an unfolded leaf axis must not break the load");
+    assert!(
+        f.index_sets.as_ref().is_none_or(|s| !s.contains_key("lev")),
+        "an unfolded `size` must not reach the registry: {:?}",
+        f.index_sets
+    );
 }
 
 /// §4.3.2 makearray region bounds: the empty bound `[start, start-1]` (here

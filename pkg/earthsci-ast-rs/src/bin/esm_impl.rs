@@ -3387,10 +3387,10 @@ const TEST_ABSTOL: f64 = 1e-14;
 
 /// PASS / FAIL / ERROR — the tri-state verdict the Julia runner reports.
 ///
-/// [`earthsci_ast::PdeAssertionResult`] carries a two-state `passed: bool` and
+/// [`earthsci_ast::AssertionResult`] carries a two-state `passed: bool` and
 /// stays that way: it is `Serialize`d verbatim by `examples/pde_conformance.rs`
 /// as a payload an external runner consumes. The third state is RECOVERED from
-/// it instead. `run_pde_tests` sets `actual: Some(_)` exactly on the path that
+/// it instead. `run_inline_tests` sets `actual: Some(_)` exactly on the path that
 /// got as far as comparing a number against the resolved tolerance, and
 /// `actual: None` on every path that failed before then — discretization
 /// injection, the problem build, the solve, the solver retcode, and assertion
@@ -3684,7 +3684,7 @@ fn data_source_providers(
 
 /// One assertion's outcome, tagged with the file it came from.
 ///
-/// The file is not part of [`earthsci_ast::PdeAssertionResult`] (the engine is
+/// The file is not part of [`earthsci_ast::AssertionResult`] (the engine is
 /// handed an already-loaded document), and a file that fails to LOAD produces
 /// a row with no assertion behind it at all — so the runner keeps its own row
 /// type rather than the library's.
@@ -3744,6 +3744,41 @@ fn relative_to_cwd(path: &std::path::Path) -> String {
         .unwrap_or_else(|| path.to_path_buf())
         .display()
         .to_string()
+}
+
+/// The top-level `models.<k>` MOUNT EDGES a document declares in its SOURCE, as
+/// `"<k> ← <ref>"` lines in document order.
+///
+/// Read from the raw file because a LOADED document no longer shows them: the
+/// mount splices the referenced leaf's model in under the same key (§4.7 /
+/// §9.7.10), leaving nothing to distinguish it from a model the document wrote
+/// itself. `esm test` reports them so the §6.6 rule — a mount does not carry the
+/// mounted component's inline tests — is VISIBLE rather than silent: the reader
+/// is told which components were not asserted on here, and where their own
+/// assertions live.
+///
+/// Best-effort: an unreadable or unparseable file yields nothing, because the
+/// run itself already reports that failure as a load ERROR row.
+fn mounted_components(path: &std::path::Path) -> Vec<String> {
+    let Ok(text) = fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let Ok(raw) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return Vec::new();
+    };
+    let Some(models) = raw.get("models").and_then(|v| v.as_object()) else {
+        return Vec::new();
+    };
+    models
+        .iter()
+        // The mount-edge shape `inline_toplevel_model_refs` recognises: a `ref`
+        // and no inline `variables`.
+        .filter(|(_, m)| m.get("ref").is_some() && m.get("variables").is_none())
+        .map(|(k, m)| {
+            let target = m.get("ref").and_then(|v| v.as_str()).unwrap_or("<ref>");
+            format!("{k} ← {target}")
+        })
+        .collect()
 }
 
 fn run_test(
@@ -3847,7 +3882,7 @@ fn run_test(
                     ),
                     ..opts.clone()
                 };
-                let results = earthsci_ast::run_pde_tests_filtered(
+                let results = earthsci_ast::run_inline_tests_filtered(
                     &esm_file,
                     model.as_deref(),
                     &file_opts,
@@ -3903,6 +3938,31 @@ fn print_test_summary(files: &[PathBuf], rows: &[TestRow]) {
     println!("================ ESM inline-test summary ================");
     println!("Files discovered: {}", files.len());
     println!("Assertions:       {}", rows.len());
+
+    // esm-spec §6.6: a mount does not carry the mounted component's inline
+    // tests. Naming the mount edges keeps that VISIBLE — the reader sees which
+    // components this run did not assert on, and where their assertions do run —
+    // rather than losing them silently. Printed before the `rows.is_empty()`
+    // exit, so a document that is nothing but mounts and coupling still says so.
+    let mounts: Vec<(String, String)> = files
+        .iter()
+        .flat_map(|path| {
+            let file = relative_to_cwd(path);
+            mounted_components(path)
+                .into_iter()
+                .map(move |edge| (file.clone(), edge))
+        })
+        .collect();
+    if !mounts.is_empty() {
+        println!(
+            "Mounted:          {} (esm-spec §6.6 — a mounted component's inline tests are not \
+             run here; they run when its own file is a test target)",
+            mounts.len()
+        );
+        for (file, edge) in &mounts {
+            println!("  - {file} :: {edge}");
+        }
+    }
 
     if rows.is_empty() {
         println!("(no inline tests found)");

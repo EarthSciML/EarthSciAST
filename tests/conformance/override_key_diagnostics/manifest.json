@@ -1,7 +1,7 @@
 {
     "category": "override_key_diagnostics",
-    "version": "1.0",
-    "description": "Cross-binding conformance for esm-spec \u00a76.6.2 'Unrecognized override keys': every `parameter_overrides` key must designate exactly ONE parameter of the flattened system, and a key that designates none is an ERROR \u2014 not a silently-ignored no-op. Three outcomes are pinned, and they are DISTINCT: a key that resolves (exactly, or by the local spelling \u00a76.6 mandates) runs; a BARE key that is the local name of two or more parameters is AMBIGUOUS; anything else is UNKNOWN. Ambiguous is kept apart from unknown because the fixes differ \u2014 qualify the name versus correct it \u2014 and because silently binding one of two candidates would be a wrong answer rather than a missing one. Rust already raised `SimulateError::InvalidParameter` for the unknown case; Julia and Python silently ignored it, so an author's override did nothing and the run still reported a verdict. This category is what keeps the three from drifting apart again: unlike the other categories it compares DIAGNOSTIC OUTCOMES, not numbers, so it carries no golden \u2014 each binding's runner asserts its own idiomatic error type per case. NOTE on rule 2 (the dotted-suffix rule): every binding's `esm_problem` FLATTENS, so a key whose leading segments name real components is an exact hit here and rule 2's POSITIVE path is not expressible in a shared fixture \u2014 it fires only inside a binding that keeps a model's own names (Rust's single-model array build, which carries a mounted subsystem parameter as `sub.g`), and is gated there by each binding's `P.sub.g` subsystem-override test. What this category DOES pin about rule 2 is its GUARD: a key whose leading segments name no component or subsystem is UNKNOWN, never suffix-matched.",
+    "version": "1.1",
+    "description": "Cross-binding conformance for esm-spec §6.6.2 'Unrecognized override keys': every `parameter_overrides` key must designate exactly ONE parameter of the flattened system, and a key that designates none is an ERROR — not a silently-ignored no-op. Three outcomes are pinned, and they are DISTINCT: a key that resolves (exactly, or as a dotted SUFFIX of exactly one name — the local spelling §6.6 mandates, and any longer partial qualification of it) runs; a key carried as a suffix by two or more parameters is AMBIGUOUS; anything else is UNKNOWN. Ambiguous is kept apart from unknown because the fixes differ — qualify the name versus correct it — and because silently binding one of two candidates would be a wrong answer rather than a missing one. Rust already raised `SimulateError::InvalidParameter` for the unknown case; Julia and Python silently ignored it, so an author's override did nothing and the run still reported a verdict. This category is what keeps the three from drifting apart again: unlike the other categories it compares DIAGNOSTIC OUTCOMES, not numbers, so it carries no golden — each binding's runner asserts its own idiomatic error type per case. NOTE on rule 2 (a key LONGER than the name): every binding's `esm_problem` FLATTENS, so a key whose leading segments name real components is an exact hit here and rule 2's POSITIVE path is not expressible in a shared fixture — it fires only inside a binding that keeps a model's own names (Rust's single-model array build, which carries a mounted subsystem parameter as `sub.g`), and is gated there by each binding's `P.sub.g` subsystem-override test. What this category DOES pin about rule 2 is its GUARD: a key whose leading segments name no component or subsystem is UNKNOWN, never suffix-matched. Rule 3 (a key SHORTER than the name) IS expressible here and is now pinned in all three spellings, which is what issue #227 was: `sub.g` against the flattened `Left.sub.g` resolved in Rust's single-model array build and raised UnknownParameterError in Python and Julia.",
     "reference_binding": "rust",
     "bindings_required": [
         "julia",
@@ -36,11 +36,15 @@
                 "override-key-diagnostics",
                 "ambiguous-local-name",
                 "unknown-override-key",
-                "rule-2-leading-segments"
+                "rule-2-leading-segments",
+                "rule-3-dotted-suffix"
             ],
             "parameters": [
+                "Left.dup.k",
                 "Left.gain",
                 "Left.solo",
+                "Left.sub.g",
+                "Right.dup.k",
                 "Right.gain"
             ],
             "cases": [
@@ -52,7 +56,7 @@
                     "binds": "Left.gain",
                     "note": "Exact hit on the flattening-qualified name.",
                     "trajectory_at_t1": {
-                        "Left.x": 14.0,
+                        "Left.x": 15.0,
                         "Right.y": 3.0
                     }
                 },
@@ -62,9 +66,45 @@
                     "outcome": "resolved",
                     "rule": 3,
                     "binds": "Left.solo",
-                    "note": "The LOCAL spelling \u00a76.6 mandates, unique across the document. The non-vacuity anchor: a binding that rejected every bare key would fail here.",
+                    "note": "The LOCAL spelling §6.6 mandates, unique across the document. The non-vacuity anchor: a binding that rejected every bare key would fail here.",
                     "trajectory_at_t1": {
-                        "Left.x": 11.0,
+                        "Left.x": 12.0,
+                        "Right.y": 3.0
+                    }
+                },
+                {
+                    "key": "Left.sub.g",
+                    "value": 9.0,
+                    "outcome": "resolved",
+                    "rule": 1,
+                    "binds": "Left.sub.g",
+                    "note": "The mounted subsystem's parameter, spelled in full. Exact hit on the flattening-qualified name, and the anchor the two shorter spellings below are measured against: all three must produce the SAME trajectory.",
+                    "trajectory_at_t1": {
+                        "Left.x": 16.0,
+                        "Right.y": 3.0
+                    }
+                },
+                {
+                    "key": "sub.g",
+                    "value": 9.0,
+                    "outcome": "resolved",
+                    "rule": 3,
+                    "binds": "Left.sub.g",
+                    "note": "Issue #227, the case this category exists to pin. Rule 3 is a dotted SUFFIX of exactly one flattened name, not merely its trailing segment: `Left.sub.g` ends with `.sub.g`, and no other parameter does. It used to reach NEITHER rule — rule 2 drops leading segments of the KEY (`sub.g` → `g`, which is not a name here) and rule 3 was bare-only — so Python and Julia raised UnknownParameterError while Rust, whose single-model array build carries the parameter as `sub.g` outright, took the same key as an exact hit and ran. Same document, same authored test, two answers.",
+                    "trajectory_at_t1": {
+                        "Left.x": 16.0,
+                        "Right.y": 3.0
+                    }
+                },
+                {
+                    "key": "g",
+                    "value": 9.0,
+                    "outcome": "resolved",
+                    "rule": 3,
+                    "binds": "Left.sub.g",
+                    "note": "The bare tail of the same parameter, unique across the document. The bare case of rule 3, and the control for `sub.g` above: a binding that resolved only this one has not implemented the rule, it has implemented the trailing segment.",
+                    "trajectory_at_t1": {
+                        "Left.x": 16.0,
                         "Right.y": 3.0
                     }
                 },
@@ -73,7 +113,7 @@
                     "value": 9.0,
                     "outcome": "unknown",
                     "rule": 5,
-                    "note": "A DOTTED key whose longest dotted suffix IS a parameter name (`Left.solo`), but whose LEADING SEGMENT names no component or subsystem of this document \u2014 there is no `Doc`. Rule 2 validates every segment it drops, so a mistyped qualifier is not silently discarded: `Missng.M.pert_amp` is reported instead of quietly driving `M.pert_amp`. This case USED TO RESOLVE, binding `Left.solo`; pinning it UNKNOWN is the deliberate behaviour change that makes a typo'd qualifier visible. The legitimate rule-2 spelling \u2014 the esm-spec \u00a74.6 fully-qualified `P.sub.g` against a build carrying `sub.g`, where `P` names the model and `sub` the mounted subsystem \u2014 is unaffected, because both leading segments name something real."
+                    "note": "A DOTTED key whose longest dotted suffix IS a parameter name (`Left.solo`), but whose LEADING SEGMENT names no component or subsystem of this document — there is no `Doc`. Rule 2 validates every segment it drops, so a mistyped qualifier is not silently discarded: `Missng.M.pert_amp` is reported instead of quietly driving `M.pert_amp`. This case USED TO RESOLVE, binding `Left.solo`; pinning it UNKNOWN is the deliberate behaviour change that makes a typo'd qualifier visible. Rule 3 does not rescue it either: the key is LONGER than `Left.solo`, so it is the dotted suffix of nothing. The legitimate rule-2 spelling — the esm-spec §4.6 fully-qualified `P.sub.g` against a build carrying `sub.g`, where `P` names the model and `sub` the mounted subsystem — is unaffected, because both leading segments name something real."
                 },
                 {
                     "key": "gain",
@@ -87,6 +127,28 @@
                     "note": "Two components carry this local name; binding either would be a wrong answer."
                 },
                 {
+                    "key": "dup.k",
+                    "value": 9.0,
+                    "outcome": "ambiguous",
+                    "rule": 4,
+                    "candidates": [
+                        "Left.dup.k",
+                        "Right.dup.k"
+                    ],
+                    "note": "The widened rule 3's own failure mode, and the reason it is 'exactly ONE name': `Left.dup.k` and `Right.dup.k` both end with `.dup.k`, so a shared PARTIAL qualification is refused exactly as a shared local name is. Picking a candidate — by document order, by depth, by anything — would be a wrong answer rather than a missing one, and the diagnostic must name both so the author can qualify it further."
+                },
+                {
+                    "key": "k",
+                    "value": 9.0,
+                    "outcome": "ambiguous",
+                    "rule": 4,
+                    "candidates": [
+                        "Left.dup.k",
+                        "Right.dup.k"
+                    ],
+                    "note": "The bare tail of the same pair: the ambiguity is a property of the NAME SET, not of how much of the name the key spells, so the two spellings must be classified alike."
+                },
+                {
                     "key": "not_a_parameter",
                     "value": 9.0,
                     "outcome": "unknown",
@@ -98,14 +160,21 @@
                     "value": 9.0,
                     "outcome": "unknown",
                     "rule": 5,
-                    "note": "A DOTTED key resolves only under rule 2, which needs one of its dotted suffixes to be a parameter name outright; the only suffix here is `solo`, and the parameter is `Left.solo`, not `solo`, so rule 2 fails. Rule 3 is for BARE keys only, so the qualifier is never discarded and `Missing.solo` does not quietly become `Left.solo` \u2014 an author who names a component that does not exist is told so."
+                    "note": "Neither direction reaches a parameter. Rule 2 needs one of the key's own dotted suffixes to be a parameter name outright; the only suffix here is `solo`, and the parameter is `Left.solo`, not `solo`. Rule 3 needs the KEY to be a dotted suffix of a name, and no parameter ends with `.Missing.solo`. So the qualifier is never discarded and `Missing.solo` does not quietly become `Left.solo` — an author who names a component that does not exist is told so."
+                },
+                {
+                    "key": "Missing.sub.g",
+                    "value": 9.0,
+                    "outcome": "unknown",
+                    "rule": 5,
+                    "note": "The same guard against the WIDENED rule 3 specifically: `sub.g` resolves, but prefixing it with a component that does not exist must not. Rule 2 rejects the leading `Missing`, and no parameter ends with `.Missing.sub.g`, so the key names nothing. Without this the widened rule would be a suffix-match on the key's own tail and every typo'd qualifier would silently drive `Left.sub.g`."
                 }
             ],
             "defaults_at_t1": {
-                "Left.x": 7.0,
+                "Left.x": 8.0,
                 "Right.y": 3.0
             },
-            "_trajectory_comment": "`Left.x` integrates (Left.gain + Left.solo) and `Right.y` integrates Right.gain, both from 0 over [0,1], so a resolved override is VISIBLE at t=1 and a binding that accepted a key without actually binding it is caught too. The RHS is constant, so every solver reproduces these within the manifest tolerance."
+            "_trajectory_comment": "`Left.x` integrates (Left.gain + Left.solo + Left.sub.g + Left.dup.k) = 2 + 5 + 1 + 0 and `Right.y` integrates (Right.gain + Right.dup.k) = 3 + 0, both from 0 over [0,1], so a resolved override is VISIBLE at t=1 and a binding that accepted a key without actually binding it is caught too. The `dup.k` pair defaults to 0 on both sides, so the ambiguity cases cost the trajectory nothing. The RHS is constant, so every solver reproduces these within the manifest tolerance."
         }
     ],
     "tolerances": {

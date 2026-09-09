@@ -4,7 +4,7 @@
 The shared cases live in ``tests/conformance/tolerance_resolution/manifest.json``
 (repo root); the Julia runner (``conformance_tolerance_resolution_test.jl``) and
 the Rust runner (the ``tolerance_resolution_conformance_manifest`` unit test in
-``pde_inline_tests.rs``) gate the same file.
+``inline_tests.rs``) gate the same file.
 
 The category is DATA-ONLY: resolution is a pure function of the declared
 ``{abs?, rel?}`` blocks, so there is no ``.esm`` fixture, no integrator and no
@@ -27,7 +27,7 @@ from pathlib import Path
 import pytest
 
 from earthsci_ast.esm_types import Tolerance
-from earthsci_ast.pde_inline_tests import _DEFAULT_REL_TOL, _resolve_tolerance
+from earthsci_ast.inline_tests import _DEFAULT_REL_TOL, _resolve_tolerance
 
 _MANIFEST = (
     Path(__file__).resolve().parents[3]

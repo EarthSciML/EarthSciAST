@@ -15,11 +15,13 @@ fn n(v: f64) -> ResolvedExpr {
     ResolvedExpr::Number(v)
 }
 
+/// `ResolvedExpr::Op` is sealed (`#[non_exhaustive]`), so an out-of-crate
+/// caller builds one only through `ResolvedExpr::op`, which refuses an
+/// operator the interpreter has no evaluation rule for (issue #220). Every
+/// operator exercised below has one, so the `expect` never fires; the refusal
+/// itself is the subject of `an_op_with_no_rule_cannot_be_built`.
 fn op(name: &str, args: Vec<ResolvedExpr>) -> ResolvedExpr {
-    ResolvedExpr::Op {
-        op: name.to_string(),
-        args,
-    }
+    ResolvedExpr::op(name, args).expect("the ops exercised here all have rules")
 }
 
 fn approx(a: f64, b: f64, eps: f64) -> bool {
@@ -300,7 +302,7 @@ fn state_param_observed_time_refs() {
 
 // ============================================================================
 // Differential operators on the RHS: `D` stays a legacy 0.0 marker; the spatial
-// sugar ops carry no privileged semantics and are undeterminable (NaN)
+// sugar ops carry no privileged semantics and cannot be built at all
 // ============================================================================
 
 #[test]
@@ -308,17 +310,48 @@ fn differential_ops_on_rhs() {
     // `D` on the RHS is unchanged — the legacy 0.0 marker (its time-derivative
     // semantics are not touched by the spatial-op de-specialization).
     assert_eq!(interpret(&op("D", vec![n(123.0)]), &[], &[], &[], 0.0), 0.0);
+}
 
-    // The spatial-calculus sugar ops are ORDINARY open-tier rewrite targets with
-    // NO privileged semantics: their value is UNDETERMINABLE until a
-    // discretization rule lowers them (esm-spec §4.2). The normal pipeline
-    // rejects them at compile time; reached directly here they evaluate to
-    // `NaN` (undeterminable), never a silent `0.0` that would quietly poison a
-    // trajectory.
-    for name in ["grad", "div", "laplacian", "curl", "∇", "integral"] {
+/// An operator with no evaluation rule is refused BY NAME at construction, and
+/// so can never be evaluated at all (issue #220).
+///
+/// This used to read the other way round: `ResolvedExpr::Op` was freely
+/// constructible and `interpret` answered `f64::NAN` — "undeterminable", and
+/// deliberately not a silent `0.0` that would quietly poison a trajectory. But
+/// a NaN is indistinguishable from a legitimate numerical result and propagates
+/// into the solution just as silently, which is the defect #220 reports; the
+/// author saw `actual=NaN expected=25` rather than the name of the operator at
+/// fault. Sealing the variant behind `ResolvedExpr::op` moves the answer from
+/// evaluation time to construction time, where it can name the operator.
+#[test]
+fn an_op_with_no_rule_cannot_be_built() {
+    // The open-tier rewrite targets: ordinary rewrite targets with NO
+    // privileged semantics, undeterminable until a discretization rule lowers
+    // them (esm-spec §4.2), plus any unregistered op.
+    for name in [
+        "grad",
+        "div",
+        "laplacian",
+        "curl",
+        "∇",
+        "integral",
+        "totally_made_up",
+    ] {
+        let err = ResolvedExpr::op(name, vec![n(123.0)])
+            .expect_err("an op with no evaluation rule must not be constructible");
+        let msg = err.to_string();
         assert!(
-            interpret(&op(name, vec![n(123.0)]), &[], &[], &[], 0.0).is_nan(),
-            "{name} must be undeterminable (NaN), not silently 0.0"
+            msg.contains("unevaluable_operator") && msg.contains(name),
+            "{name} must be refused by name: {msg}"
+        );
+    }
+
+    // The evaluable-core ops that are legal in an AST but that THIS evaluator
+    // has no rule for are refused by the same door.
+    for name in ["skolem", "rank", "aggregate", "intersect_polygon"] {
+        assert!(
+            ResolvedExpr::op(name, Vec::new()).is_err(),
+            "{name} has no scalar rule and must not be constructible"
         );
     }
 }
@@ -333,14 +366,4 @@ fn pre_returns_argument() {
         interpret(&op("Pre", vec![n(42.0)]), &[], &[], &[], 0.0),
         42.0
     );
-}
-
-// ============================================================================
-// Unknown operator yields NaN (so the solver detects the failure)
-// ============================================================================
-
-#[test]
-fn unknown_op_returns_nan() {
-    let v = interpret(&op("totally_made_up", vec![n(1.0)]), &[], &[], &[], 0.0);
-    assert!(v.is_nan());
 }

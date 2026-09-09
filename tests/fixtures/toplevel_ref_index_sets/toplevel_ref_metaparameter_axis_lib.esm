@@ -1,0 +1,29 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "toplevel_ref_metaparameter_axis_lib",
+    "description": "A mountable leaf whose only axis is sized by its OWN metaparameter (NLEV, default 4) rather than a literal — the shape a grid-library component takes (esm-spec §9.7.6: an index_sets interval size MAY be a metaparameter expression). Mounted as a `subsystems` entry its metaparameters close and fold at the edge, so `lev` reaches the importer's registry as size 4. Mounted through a TOP-LEVEL `models.<k>` {ref} they do not close there at all, which is what the §4.7 merge's fold guard is pinned against by toplevel_ref_metaparameter_axis.esm.",
+    "authors": ["EarthSciAST"],
+    "created": "2026-09-07T00:00:00Z",
+    "tags": ["subsystem", "index_sets", "metaparameter", "mount", "toplevel-ref"]
+  },
+  "metaparameters": {
+    "NLEV": { "type": "integer", "default": 4, "description": "column levels" }
+  },
+  "index_sets": {
+    "lev": { "kind": "interval", "size": "NLEV" }
+  },
+  "models": {
+    "Column": {
+      "variables": {
+        "u": { "type": "unknown", "units": "1", "shape": ["lev"], "default": 1.0, "description": "per-level state" }
+      },
+      "equations": [
+        {
+          "lhs": { "op": "D", "args": ["u"], "wrt": "t" },
+          "rhs": { "op": "*", "args": [-1.0, "u"] }
+        }
+      ]
+    }
+  }
+}

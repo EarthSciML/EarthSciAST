@@ -296,6 +296,59 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         @test f.index_sets["b.cells"].size == 9
     end
 
+    @testset "metaparam_axis_name_collision: substitution is per-FIELD (§9.7.6)" begin
+        # §9.7.6 substitutes a bound metaparameter name only where it occurs as a
+        # bare string in an EXPRESSION position. The fixture names four
+        # metaparameters after the structural string field standing beside them —
+        # `lev` (the `dim`/`wrt`/`var` axis names), `max` (an operator name),
+        # `flux` (a node `id`) and `continuous` (an `expect_cadence` enum value) —
+        # and writes each one in an expression position too, so the golden pins
+        # both halves of the split at once.
+        @test _expand_raw(conf("metaparam_axis_name_collision", "fixture.esm")) ==
+              _golden(conf("metaparam_axis_name_collision", "expanded.esm"))
+
+        d = _expand_raw(conf("metaparam_axis_name_collision", "fixture.esm"))
+        eqs = d["models"]["M"]["equations"]
+
+        # NODE-HEADER fields: an operator name is not an expression position, so
+        # `{"op": "max", …}` must NOT become `{"op": 3, …}` (which then dies in a
+        # typed load with a raw "cannot unmarshal number into op").
+        rhs0 = eqs[1]["rhs"]
+        @test rhs0["op"] == "max"
+        @test rhs0["id"] == "flux"
+        @test rhs0["expect_cadence"] == "continuous"
+        # …while the genuine expression position in the SAME node closes: the
+        # skip is per-KEY, not per-NODE.
+        @test rhs0["args"] == Any["c", 3]
+
+        # AXIS fields: `dim` / `wrt` / `var` name a spatial coordinate (§4.9.1,
+        # §4.2), never an expression position.
+        gargs = _defrhs(d, "M", "g")["args"]
+        @test gargs[1]["dim"] == "lev"
+        @test gargs[2]["wrt"] == "lev"
+        @test gargs[3]["var"] == "lev"
+        @test gargs[4] == 4          # …the expression position beside them closes
+
+        # And the two remaining collisions close in ordinary argument positions.
+        @test _defrhs(d, "M", "s")["args"] == Any[5, 7]
+
+        # OP-REGISTRY fields: a closed-registry id or literal enum
+        # parameterizing the node's op is a name, not a value, so it is not an
+        # expression position either. Each node carries a genuine expression
+        # position alongside it.
+        rargs = _defrhs(d, "M", "r")["args"]
+        @test rargs[1]["reduce"] == "max"
+        @test rargs[1]["expr"]["args"] == Any["i", 3]
+        @test rargs[2]["semiring"] == "min_sum"
+        @test rargs[2]["expr"]["args"] == Any["i", 6]
+        @test rargs[3]["fn"] == "max"
+        @test rargs[3]["args"] == Any["c", 3]
+        # An open rewrite-target op's `attrs` mirror the fixed dim/side/wrt/var
+        # slots, not `args` — scalar attribute NAMES, never expressions.
+        @test rargs[4]["attrs"]["limiter"] == "max"
+        @test rargs[4]["args"] == Any["c", 3]
+    end
+
     @testset "loader-API bindings (§9.7.6 site 4) and defaults (site 5)" begin
         problem = conf("metaparameter_resolutions", "problem.esm")
         fdef = EarthSciAST.load_path(problem)
@@ -504,6 +557,42 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         mesh = EarthSciAST.load_path(joinpath(repo_root, "tests", "valid",
                                                    "subsystem_mesh_lib.esm"))
         @test mesh.index_sets["cells"].size == 5
+    end
+
+    @testset "top-level ref mounts merge index_sets identically (§4.7)" begin
+        # esm-spec §4.7 "Two mount forms, one mechanism": the SAME leaf
+        # (subsystem_mesh_lib.esm) mounted through a TOP-LEVEL `models.M {ref}`
+        # instead of a `subsystems` entry must merge its axes the same way — the
+        # differential half of the testset above. Before this, the top-level
+        # inliner merged only function_tables/data_sources/enums and silently
+        # dropped the leaf's axes, so an assembly had to redeclare them.
+        dir = joinpath(repo_root, "tests", "fixtures", "toplevel_ref_index_sets")
+        f = EarthSciAST.load_path(joinpath(dir, "toplevel_ref_index_set_merge.esm"))
+        @test f.index_sets["cells"].size == 5        # deep-equal redeclaration
+        @test f.index_sets["vertices"].size == 4     # merged in from the mesh file
+        # The mount is a real splice, not a surviving `{ref}` stub.
+        @test f.models["M"] isa EarthSciAST.Model
+        @test haskey(f.models["M"].variables, "q")
+        # A non-deep-equal collision is `subsystem_index_set_conflict` — the SAME
+        # diagnostic the subsystems-edge form raises, not last-writer-wins.
+        err = try
+            EarthSciAST.load_path(joinpath(dir, "toplevel_ref_index_set_conflict.esm"))
+            nothing
+        catch e
+            e
+        end
+        @test err isa ExpressionTemplateError
+        @test err.code == "subsystem_index_set_conflict"
+
+        # §4.7 merges a mounted file's axes "after the referenced document's
+        # metaparameters are closed and folded", and a top-level mount edge does
+        # NOT close them (it is a raw pre-pass that drops the leaf's
+        # `metaparameters` block). An axis whose `size` is still the leaf's own
+        # metaparameter name is held back rather than merged in the wrong scope
+        # — without the guard this load dies on a bare
+        # `MethodError: no method matching Int64(::String)`.
+        m = EarthSciAST.load_path(joinpath(dir, "toplevel_ref_metaparameter_axis.esm"))
+        @test !haskey(m.index_sets, "lev")
     end
 
     @testset "makearray empty vs inverted region bounds (esm-spec §4.3.2)" begin

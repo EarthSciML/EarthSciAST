@@ -1,26 +1,28 @@
-"""Tests for the §6.6.5-capable inline-test runner (``pde_inline_tests``) and
+"""Tests for the §6.6.5-capable inline-test runner (``inline_tests``) and
 its supporting load/simulate capabilities: ``Assertion`` ``coords`` /
 ``reduce`` / ``reference`` parsing + serialization, coordinate-expression
 ``ic`` seeding through the NumPy interpreter, ``evaluate_cellwise``,
-``field_reduce``, ``state_cells``, and ``run_pde_tests`` — the Python mirror
-of the Julia reference's ``pde_inline_tests.jl``."""
+``field_reduce``, ``state_cells``, and ``run_inline_tests`` — the Python mirror
+of the Julia reference's ``inline_tests.jl``."""
 
 from __future__ import annotations
 
 import json
 import math
+import os
 
 import pytest
 from conftest import FIXTURES_ROOT
 
 from earthsci_ast.esm_types import ExprNode, Tolerance
 from earthsci_ast.parse import load_string
-from earthsci_ast.pde_inline_tests import (
+from earthsci_ast.inline_tests import (
+    InlineTestOptions,
     _check_assertion,
     _resolve_tolerance,
     evaluate_cellwise,
     field_reduce,
-    run_pde_tests,
+    run_inline_tests,
     state_cells,
 )
 from earthsci_ast.serialize import _serialize_esm_file
@@ -332,13 +334,13 @@ def test_relative_bound_is_symmetric_in_actual_and_expected():
 
 
 # ---------------------------------------------------------------------------
-# run_pde_tests end-to-end (coordinate-expression ic + reductions)
+# run_inline_tests end-to-end (coordinate-expression ic + reductions)
 # ---------------------------------------------------------------------------
 
 
-def test_run_pde_tests_decay_field():
+def test_run_inline_tests_decay_field():
     f = load_string(json.dumps(_decay_doc()))
-    results = run_pde_tests(f, model_name="M", method="LSODA", rtol=1e-12, atol=1e-14)
+    results = run_inline_tests(f, model_name="M", method="LSODA", rtol=1e-12, atol=1e-14)
     assert [r.assertion_idx for r in results] == [1, 2, 3]
     by_idx = {r.assertion_idx: r for r in results}
     # t=0: the ic seeding IS the reference — zero up to the dense-output
@@ -366,7 +368,7 @@ def _free_x_cos() -> dict:
 
 def test_bind_dimension_names_wraps_only_a_free_mention():
     from earthsci_ast.esm_types import ExprNode
-    from earthsci_ast.pde_inline_tests import bind_dimension_names
+    from earthsci_ast.inline_tests import bind_dimension_names
 
     lit = ExprNode(op="*", args=[2.0, "k"])
     assert bind_dimension_names(lit, ["x"]) is lit
@@ -400,10 +402,10 @@ def test_bind_dimension_names_rejects_a_dimension_that_shadows_a_parameter():
     import pytest
 
     from earthsci_ast.esm_types import ExprNode
-    from earthsci_ast.pde_inline_tests import bind_dimension_names
+    from earthsci_ast.inline_tests import bind_dimension_names
 
     free = ExprNode(op="+", args=["x", 1])
-    with pytest.raises(RuntimeError, match="parameter in scope"):
+    with pytest.raises(RuntimeError, match="a parameter"):
         bind_dimension_names(free, ["x"], {"x": 3.0})
     # No mention of the clashing name: unaffected.
     lit = ExprNode(op="*", args=[2.0, "k"])
@@ -415,6 +417,43 @@ def test_bind_dimension_names_rejects_a_dimension_that_shadows_a_parameter():
     assert bind_dimension_names(bound, ["x"], {"x": 3.0}) is bound
     # And with no scope supplied the wrap is unchanged.
     assert bind_dimension_names(free, ["x"]).op == "aggregate"
+
+
+def test_bind_dimension_names_rejects_a_dimension_a_build_array_binds():
+    """esm-spec §6.6.5's clash scope is the WHOLE build-time scope, not the
+    parameter half of it (issue #226).
+
+    A build ARRAY named after a shape index set — an array ``lev`` over the
+    index set ``lev`` — is a name a reference could already read, so wrapping it
+    would rebind it to the cell's 1-based index: the same expression, a
+    different number, no diagnostic. Julia is where that channel is live, but
+    all three bindings must reject the same documents.
+    """
+    import pytest
+
+    from earthsci_ast.esm_types import ExprNode
+    from earthsci_ast.inline_tests import _array_scope_names, bind_dimension_names
+
+    free = ExprNode(op="index", args=["table", "lev"])
+    # The flattened name AND its unambiguous bare alias are both in scope.
+    for names in ({"lev": None}, {"M.lev": None}):
+        arrays = _array_scope_names(names)
+        with pytest.raises(RuntimeError, match="a build-time array"):
+            bind_dimension_names(free, ["lev"], None, arrays)
+    # An AMBIGUOUS bare alias is not in scope under either spelling, so it does
+    # not clash — the same rule `_param_scope_with_aliases` applies.
+    ambiguous = _array_scope_names({"A.lev": None, "B.lev": None})
+    assert "lev" not in ambiguous
+    assert bind_dimension_names(free, ["lev"], None, ambiguous).op == "aggregate"
+    # A reference that does not mention the name is unaffected, and so is a
+    # gather that rebinds it as its own loop symbol.
+    arrays = _array_scope_names({"lev": None})
+    lit = ExprNode(op="*", args=[2.0, "k"])
+    assert bind_dimension_names(lit, ["lev"], None, arrays) is lit
+    bound = ExprNode(
+        op="aggregate", args=[], output_idx=["lev"], ranges={"lev": {"from": "lev"}}, expr=free
+    )
+    assert bind_dimension_names(bound, ["lev"], None, arrays) is bound
 
 
 def test_reference_binds_the_field_dimension_names():
@@ -466,7 +505,7 @@ def test_reference_binds_the_field_dimension_names():
             "reference": {"op": "*", "args": [{"op": "exp", "args": [-1]}, _free_x_cos()]},
         },
     ]
-    results = run_pde_tests(
+    results = run_inline_tests(
         load_string(json.dumps(doc)), model_name="M", method="LSODA", rtol=1e-12, atol=1e-14
     )
     assert len(results) == 4
@@ -509,7 +548,7 @@ def test_subsystem_parameter_override_in_every_spelling():
         },
         {"id": "bare", "time_span": span, "parameter_overrides": {"g": 3.5}, "assertions": gg(3.5)},
     ]
-    results = run_pde_tests(
+    results = run_inline_tests(
         load_string(json.dumps(doc)), model_name="P", method="LSODA", rtol=1e-12, atol=1e-14
     )
     assert len(results) == 4
@@ -599,7 +638,7 @@ def test_array_observed_assertions_read_both_the_build_and_the_trajectory():
     cells in var_map". It is now evaluated at the trajectory sample through the
     same observed driver the RHS uses."""
     f = load_string(json.dumps(_array_observed_doc()))
-    results = run_pde_tests(f, model_name="M", method="LSODA", rtol=1e-12, atol=1e-14)
+    results = run_inline_tests(f, model_name="M", method="LSODA", rtol=1e-12, atol=1e-14)
     assert len(results) == 4
     by_idx = {r.assertion_idx: r for r in results}
     # g = [1, 4, 9] is state-free: read from the build's materialized field.
@@ -683,7 +722,7 @@ def test_array_observed_assertion_never_reads_a_sibling_components_field():
     and Julia (`_observed_field`) both require the asserted model to declare the
     name; Python now does too."""
     f = load_string(json.dumps(_sibling_array_observed_doc()))
-    results = run_pde_tests(f, model_name="M2", method="LSODA", rtol=1e-12, atol=1e-14)
+    results = run_inline_tests(f, model_name="M2", method="LSODA", rtol=1e-12, atol=1e-14)
     assert len(results) == 1
     r = results[0]
     assert not r.passed, f"M2 must not borrow M1's g (actual={r.actual})"
@@ -691,7 +730,7 @@ def test_array_observed_assertion_never_reads_a_sibling_components_field():
     assert "has no cells in var_map" in r.message
 
 
-def test_run_pde_tests_reports_failing_assertion_with_actual():
+def test_run_inline_tests_reports_failing_assertion_with_actual():
     doc = _decay_doc()
     # An impossible expectation: the decayed field cannot still match its
     # initial state at t=1 to 1e-12.
@@ -705,7 +744,7 @@ def test_run_pde_tests_reports_failing_assertion_with_actual():
             "reference": _cos_pi_x(),
         },
     ]
-    results = run_pde_tests(
+    results = run_inline_tests(
         load_string(json.dumps(doc)), model_name="M", method="LSODA", rtol=1e-12, atol=1e-14
     )
     assert len(results) == 1
@@ -717,7 +756,7 @@ def test_run_pde_tests_reports_failing_assertion_with_actual():
 
 def test_coordinate_expression_ic_seeds_grid(tmp_path):
     """The §11.4.1 case-3 seeding path in isolation: u(0) = cos(pi x_i)."""
-    from earthsci_ast.pde_inline_tests import simulate_states
+    from earthsci_ast.inline_tests import simulate_states
 
     f = load_string(json.dumps(_decay_doc()))
     sim = simulate_states(f, (0.0, 1.0), method="LSODA", rtol=1e-12, atol=1e-14, saveat=[0.0])
@@ -745,10 +784,10 @@ def _coords_assert(coords, *, time=0.0, expected=0.0, abs_tol=1e-9, var="u"):
 
 def _run(doc_or_file, **kwargs):
     f = load_string(json.dumps(doc_or_file)) if isinstance(doc_or_file, dict) else doc_or_file
-    return run_pde_tests(f, model_name="M", method="LSODA", rtol=1e-12, atol=1e-14, **kwargs)
+    return run_inline_tests(f, model_name="M", method="LSODA", rtol=1e-12, atol=1e-14, **kwargs)
 
 
-def test_run_pde_tests_coords_sampling_nearest_ties_down():
+def test_run_inline_tests_coords_sampling_nearest_ties_down():
     u3 = math.cos(math.pi * 2.5 / N)
     u6 = math.cos(math.pi * 5.5 / N)
     u8 = math.cos(math.pi * 7.5 / N)
@@ -768,7 +807,7 @@ def test_run_pde_tests_coords_sampling_nearest_ties_down():
     assert results[0].actual == results[1].actual
 
 
-def test_run_pde_tests_coords_validation_rejections():
+def test_run_inline_tests_coords_validation_rejections():
     doc = _decay_doc()
     doc["models"]["M"]["tests"][0]["assertions"] = [
         _coords_assert({"y": 1.0}),
@@ -784,7 +823,7 @@ def test_run_pde_tests_coords_validation_rejections():
     assert "resolves to index 9" in results[2].message
 
 
-def test_run_pde_tests_coords_on_scalar_variable_rejected():
+def test_run_inline_tests_coords_on_scalar_variable_rejected():
     """coords on a scalar (0-D) variable is ill-formed per §6.6.5."""
     doc = {
         "esm": "1.0.0",
@@ -895,7 +934,7 @@ def _from_file_assert(ref, *, reduce="L2_error", abs_tol=1e-12):
 
 
 def test_from_file_reference_happy_path(tmp_path):
-    from earthsci_ast.pde_inline_tests import simulate_states
+    from earthsci_ast.inline_tests import simulate_states
 
     # The binding's own evaluated ic field, so the diff is exactly 0 (the
     # loaded array is used exactly like an evaluated reference field).
@@ -914,7 +953,7 @@ def test_from_file_reference_happy_path(tmp_path):
     prob.write_text(json.dumps(doc))
 
     # Path input: base_dir defaults to the .esm file's directory.
-    results = run_pde_tests(str(prob), model_name="M", method="LSODA", rtol=1e-12, atol=1e-14)
+    results = run_inline_tests(str(prob), model_name="M", method="LSODA", rtol=1e-12, atol=1e-14)
     assert len(results) == 2
     for r in results:
         assert r.passed, r.message
@@ -972,7 +1011,7 @@ def test_from_file_reference_missing_file_and_format(tmp_path):
 def test_shared_fixture_pde_inline_assertions_exec():
     fixture = FIXTURES_ROOT / "spatial" / "pde_inline_assertions_exec.esm"
     assert fixture.is_file()
-    results = run_pde_tests(str(fixture), model_name="M", method="LSODA", rtol=1e-12, atol=1e-14)
+    results = run_inline_tests(str(fixture), model_name="M", method="LSODA", rtol=1e-12, atol=1e-14)
     assert len(results) == 7
     assert all(r.passed for r in results), [(r.assertion_idx, r.message) for r in results]
     # The two tie-sampling coords assertions hit the SAME cell.
@@ -1059,9 +1098,9 @@ def _scalar_observed_doc() -> dict:
     }
 
 
-def test_run_pde_tests_scalar_observed_tracks_parameter_overrides():
+def test_run_inline_tests_scalar_observed_tracks_parameter_overrides():
     f = load_string(json.dumps(_scalar_observed_doc()))
-    results = run_pde_tests(f, model_name="M2", method="LSODA", rtol=1e-12, atol=1e-14)
+    results = run_inline_tests(f, model_name="M2", method="LSODA", rtol=1e-12, atol=1e-14)
     by_id = {r.test_id: r for r in results}
     assert set(by_id) == {"t_lo", "t_hi"}
     # Each test's override must flow through: M2.k = 5·T, distinct per test —
@@ -1070,3 +1109,177 @@ def test_run_pde_tests_scalar_observed_tracks_parameter_overrides():
     assert by_id["t_hi"].actual == pytest.approx(100.0, rel=1e-9)
     assert by_id["t_lo"].actual != by_id["t_hi"].actual
     assert all(r.passed for r in results), [(r.test_id, r.message) for r in results]
+
+
+# ---------------------------------------------------------------------------
+# Issue #194: reaction-system coverage, the per-document options hook, `cse`
+# ---------------------------------------------------------------------------
+
+
+def _reaction_decay_doc() -> dict:
+    """A first-order decay written as a REACTION SYSTEM: A → B at rate k·[A],
+    so A(t) = e^{-kt} and B(t) = 1 − e^{-kt} exactly.
+
+    ``reaction_systems`` carries the same ``tests`` member ``models`` does
+    (esm-spec §6.6), and the runner iterated ``models`` alone until issue
+    #194 — so every assertion of a chemical mechanism was skipped, and
+    skipped SILENTLY, since a component that produced no rows is
+    indistinguishable in the result list from one that was never looked at."""
+    return {
+        "esm": "1.0.0",
+        "metadata": {"name": "inline_test_reaction_system"},
+        "reaction_systems": {
+            "Decay": {
+                "species": {
+                    "A": {"units": "mol/mol", "default": 1.0},
+                    "B": {"units": "mol/mol", "default": 0.0},
+                },
+                "parameters": {"k": {"units": "1/s", "default": 1.0}},
+                "reactions": [
+                    {
+                        "id": "R1",
+                        "substrates": [{"species": "A", "stoichiometry": 1}],
+                        "products": [{"species": "B", "stoichiometry": 1}],
+                        "rate": "k",
+                    }
+                ],
+                "tests": [
+                    {
+                        "id": "decays",
+                        "time_span": {"start": 0.0, "end": 1.0},
+                        "assertions": [
+                            {
+                                "variable": "A",
+                                "time": 1.0,
+                                "expected": math.exp(-1.0),
+                                "tolerance": {"rel": 1e-6},
+                            },
+                            {
+                                "variable": "B",
+                                "time": 1.0,
+                                "expected": 1.0 - math.exp(-1.0),
+                                "tolerance": {"rel": 1e-6},
+                            },
+                        ],
+                    }
+                ],
+            }
+        },
+    }
+
+
+def test_run_inline_tests_covers_reaction_systems():
+    f = load_string(json.dumps(_reaction_decay_doc()))
+    results = run_inline_tests(f, method="LSODA", rtol=1e-12, atol=1e-14)
+    # Two assertions, both from a component that is NOT a `models` entry.
+    assert [r.model for r in results] == ["Decay", "Decay"]
+    assert [r.variable for r in results] == ["A", "B"]
+    assert results[0].actual == pytest.approx(math.exp(-1.0), rel=1e-6)
+    assert results[1].actual == pytest.approx(1.0 - math.exp(-1.0), rel=1e-6)
+    assert all(r.passed for r in results), [(r.variable, r.message) for r in results]
+
+
+def _ramp_doc(expected: float, test_overrides: dict | None = None) -> dict:
+    """``D(y)/dt = T`` from ``y(0) = 0``, so ``y(1) = T`` exactly whatever
+    ``T`` is. The assertion's ``expected`` is therefore a direct read-out of
+    the ``T`` the run actually used — which is what makes it a probe for
+    where an override came from."""
+    test: dict = {
+        "id": "ramp",
+        "time_span": {"start": 0.0, "end": 1.0},
+        "assertions": [
+            {"variable": "y", "time": 1.0, "expected": expected, "tolerance": {"rel": 1e-9}}
+        ],
+    }
+    if test_overrides is not None:
+        test["parameter_overrides"] = test_overrides
+    return {
+        "esm": "1.0.0",
+        "metadata": {"name": "ramp"},
+        "models": {
+            "M": {
+                "variables": {
+                    "T": {"type": "parameter", "units": "1", "default": 1.0},
+                    "y": {"type": "unknown", "units": "1", "default": 0.0},
+                },
+                "equations": [{"lhs": {"op": "D", "args": ["y"], "wrt": "t"}, "rhs": "T"}],
+                "tests": [test],
+            }
+        },
+    }
+
+
+def test_run_inline_tests_options_for_is_consulted_per_document(tmp_path):
+    """The issue's key ask: site policy lives in the CALLER. Two documents in
+    one directory, each needing a different parameter, and one callback that
+    knows which is which — with nothing document-specific reaching this
+    module."""
+    (tmp_path / "a.esm").write_text(json.dumps(_ramp_doc(3.0)))
+    (tmp_path / "b.esm").write_text(json.dumps(_ramp_doc(7.0)))
+    seeds = {"a.esm": 3.0, "b.esm": 7.0}
+
+    def options_for(path):
+        return InlineTestOptions(
+            method="LSODA",
+            rtol=1e-12,
+            atol=1e-14,
+            parameter_overrides={"T": seeds[os.path.basename(path)]},
+        )
+
+    # A DIRECTORY expands to the .esm files under it, sorted.
+    results = run_inline_tests(str(tmp_path), options_for=options_for)
+    assert len(results) == 2
+    assert results[0].actual == pytest.approx(3.0, rel=1e-9)
+    assert results[1].actual == pytest.approx(7.0, rel=1e-9)
+    assert all(r.passed for r in results), [(r.model, r.message) for r in results]
+
+    # Without the callback both documents run at T's default of 1.0 and both
+    # assertions fail — so the callback is load-bearing, not decorative.
+    bare = run_inline_tests(str(tmp_path), method="LSODA", rtol=1e-12, atol=1e-14)
+    assert not any(r.passed for r in bare)
+
+
+def test_run_inline_tests_options_seed_yields_to_the_tests_own_override():
+    """A seed supplies what the document left unsaid; it never overrules what
+    the document said. The test names ``T = 5`` and the caller seeds
+    ``T = 99``, so ``y(1)`` must be 5."""
+    f = load_string(json.dumps(_ramp_doc(5.0, test_overrides={"T": 5.0})))
+    results = run_inline_tests(
+        [f],
+        options_for=lambda _doc: InlineTestOptions(
+            method="LSODA", rtol=1e-12, atol=1e-14, parameter_overrides={"T": 99.0}
+        ),
+    )
+    assert len(results) == 1
+    assert results[0].actual == pytest.approx(5.0, rel=1e-9)
+    assert results[0].passed, results[0].message
+
+
+def test_run_inline_tests_cse_false_agrees_with_cse_true():
+    """``cse`` reaches the problem builder and is a performance knob only: the
+    two runs must agree to the last bit, since neither changes what is
+    computed."""
+    f = load_string(json.dumps(_decay_doc()))
+    on = run_inline_tests(f, model_name="M", method="LSODA", rtol=1e-12, atol=1e-14, cse=True)
+    off = run_inline_tests(f, model_name="M", method="LSODA", rtol=1e-12, atol=1e-14, cse=False)
+    assert [r.actual for r in on] == [r.actual for r in off]
+    assert all(r.passed for r in on + off)
+
+
+def test_run_inline_tests_batch_records_an_unreadable_document_as_a_row(tmp_path):
+    """One bad file must not cost a corpus run every other file's verdicts —
+    and must not vanish either, which would be indistinguishable from a
+    pass."""
+    (tmp_path / "good.esm").write_text(json.dumps(_ramp_doc(1.0)))
+    (tmp_path / "bad.esm").write_text("{ not json")
+    results = run_inline_tests(str(tmp_path), method="LSODA", rtol=1e-12, atol=1e-14)
+    by_test = {r.test_id: r for r in results}
+    assert set(by_test) == {"ramp", "<load>"}
+    assert by_test["ramp"].passed
+    assert not by_test["<load>"].passed
+    assert by_test["<load>"].model.endswith("bad.esm")
+    assert "load failed" in by_test["<load>"].message
+
+    # A SINGLE document keeps the old behaviour: the load raises.
+    with pytest.raises(Exception):  # noqa: B017 — the loader's own error type
+        run_inline_tests(str(tmp_path / "bad.esm"))

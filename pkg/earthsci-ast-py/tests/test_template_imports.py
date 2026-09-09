@@ -128,6 +128,9 @@ def _err_code(fn) -> str | None:
         ("import_rebind_keyed_factors", "fixture.esm", "expanded.esm"),
         ("import_rename_diamond", "fixture.esm", "expanded.esm"),
         ("import_rename_integral_axis", "fixture.esm", "expanded.esm"),
+        # §9.7.6 substitution is per-FIELD: a metaparameter named after the
+        # structural string field beside it must not rewrite that field.
+        ("metaparam_axis_name_collision", "fixture.esm", "expanded.esm"),
     ],
 )
 def test_import_conformance_matches_golden(group, fixture, golden):
@@ -1086,3 +1089,55 @@ def test_dim_axis_name_survives_metaparameter_substitution():
     # sanity: the substitution machinery IS active for genuine expression
     # positions (bare variable-reference strings), so this is a real skip.
     assert _substitute_metaparams("N", {"N": 7}) == 7
+
+
+def test_metaparam_substitution_is_per_field_not_per_node():
+    """§9.7.6: a bound metaparameter name is substituted only where it occurs as
+    a bare string in an EXPRESSION position. The shared fixture names four
+    metaparameters after the structural string field standing beside them —
+    ``lev`` (the ``dim``/``wrt``/``var`` axis names), ``max`` (an operator name),
+    ``flux`` (a node ``id``) and ``continuous`` (an ``expect_cadence`` enum
+    value) — and writes each one in an expression position too, so both halves
+    of the split are pinned at once.
+
+    Before the fix an operator name WAS an expression position here: with ``max``
+    bound to 3, ``{"op": "max", …}`` became ``{"op": 3, …}`` and the document
+    then died in the typed load with a raw "cannot unmarshal number into `op`"
+    instead of a diagnostic.
+    """
+    d = _expand_raw(os.path.join(CONF, "metaparam_axis_name_collision", "fixture.esm"))
+    eqs = d["models"]["M"]["equations"]
+
+    # NODE-HEADER fields survive verbatim…
+    rhs0 = eqs[0]["rhs"]
+    assert rhs0["op"] == "max"
+    assert rhs0["id"] == "flux"
+    assert rhs0["expect_cadence"] == "continuous"
+    # …while the genuine expression position in the SAME node closes: the skip
+    # is per-KEY, not per-NODE.
+    assert rhs0["args"] == ["c", 3]
+
+    # AXIS fields name a spatial coordinate (§4.9.1, §4.2), never a value.
+    gargs = _defining(d, "M", "g")["args"]
+    assert gargs[0]["dim"] == "lev"
+    assert gargs[1]["wrt"] == "lev"
+    assert gargs[2]["var"] == "lev"
+    assert gargs[3] == 4
+
+    # The two remaining collisions close in ordinary argument positions.
+    assert _defining(d, "M", "s")["args"] == [5, 7]
+
+    # OP-REGISTRY fields: a closed-registry id or literal enum parameterizing the
+    # node's op is a name, not a value, so it is not an expression position
+    # either. Each node carries a genuine expression position alongside it.
+    rargs = _defining(d, "M", "r")["args"]
+    assert rargs[0]["reduce"] == "max"
+    assert rargs[0]["expr"]["args"] == ["i", 3]
+    assert rargs[1]["semiring"] == "min_sum"
+    assert rargs[1]["expr"]["args"] == ["i", 6]
+    assert rargs[2]["fn"] == "max"
+    assert rargs[2]["args"] == ["c", 3]
+    # An open rewrite-target op's `attrs` mirror the fixed dim/side/wrt/var
+    # slots, not `args` — scalar attribute NAMES, never expressions.
+    assert rargs[3]["attrs"] == {"limiter": "max"}
+    assert rargs[3]["args"] == ["c", 3]

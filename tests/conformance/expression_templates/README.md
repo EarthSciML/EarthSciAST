@@ -257,6 +257,44 @@ cell measure (`1 / 4` on `lev`, `1 / 3` on `lat`). Without that rewrite the
 instances still match `var: "x"`, neither fires, and both integrals survive
 lowering as `unlowered_operator`.
 
+### `metaparam_axis_name_collision/` (expanded.esm)
+
+Metaparameter substitution is per-**FIELD**, not per-node (§9.7.6). An
+import-free single-model document declares five metaparameters spelled exactly
+like the structural string field standing beside them in the same node:
+
+| metaparameter | default | collides with |
+|---|---|---|
+| `lev` | 4 | the axis-naming scalars `dim` (§4.9.1), `wrt`, and `integral`'s `var` (§4.2) |
+| `max` | 3 | the `op` operator name, and the `reduce` / `fn` / `attrs` registry values |
+| `flux` | 7 | a node `id` |
+| `continuous` | 5 | an `expect_cadence` enum value |
+| `min_sum` | 6 | a `semiring` registry id |
+
+Each of the five ALSO appears as a bare string in a genuine expression position
+in the SAME node, so the golden pins both halves of the split at once: every
+structural field survives verbatim while every expression-position occurrence
+closes to its integer default (4 / 3 / 7 / 5 / 6). A binding whose substitution
+walk is per-NODE corrupts the structural field; a binding whose skip set is too
+broad fails to close the expression position sitting beside it.
+
+The four equations partition the structural fields by kind: `c`'s derivative
+carries the **node-header** fields (`op`, `id`, `expect_cadence`), `g` the
+**axis** fields (`dim`, `wrt`, `var`), `s` two plain expression positions, and
+`r` the **op-parameterizing registry** fields (`reduce`, `semiring`, `fn`,
+`attrs`) — the four of the nine that live on an ExpressionNode and need no extra
+document machinery. `integral`'s `lower`/`upper` in `g` are the deliberate
+counter-example: a bound IS an expression position and keeps substituting.
+
+This is reachable in a legal document even though §9.7.6 forbids a metaparameter
+name colliding with a visible variable / parameter / species / index-set name: a
+`dim` value names a coordinate *structurally* (§4.9.1 clause ii) with no
+`index_sets` entry required, and an operator name or a reduction id is in no
+namespace that check covers at all. The fixture is the cross-binding gate for
+everything recorded at `ESM_COMPLIANCE_VALIDATION_MATRIX.md` EXPR-09-E-008 — Go
+alone substituted `dim`, the other four alone substituted `op` / `id` /
+`expect_cadence`, and all five substituted the registry fields.
+
 ## Flatten-time registry merge (esm-spec §9.6.4 rule 7 / §10.7)
 
 Every fixture here is consumed through the shared `flatten_template_registries`
@@ -360,7 +398,7 @@ are authored per-run config, so the enclosing component round-trips with its `D`
 INTACT and each test KEEPS its import field (form C survives `parse → emit`).
 Each test runs as an independent per-test ephemeral build in which the leaf's
 derivative is lowered under that test's grid; the persisted component is never
-mutated (the Julia reference runs this through `run_pde_tests`).
+mutated (the Julia reference runs this through `run_inline_tests`).
 
 ### `inject_agnostic_aggregate/` (load-time acceptance — §9.7.10 / §6.6.6, issue #185)
 

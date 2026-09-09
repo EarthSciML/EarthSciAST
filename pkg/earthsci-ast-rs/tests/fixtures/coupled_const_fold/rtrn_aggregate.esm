@@ -1,0 +1,103 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "RtrnAggregateLeaf",
+    "description": "Identical to `rtrn_const.esm` except that the table is read through an `aggregate` wrapper — the spelling the issue #207 reporter found already worked. The two leaves are semantically the same table; only the fold timing differs, which is exactly what must not change the answer. Its inline test moved to the mounting document: esm-spec §6.6 — a mounted component's tests do not cross the mount edge (#214), and standalone this leaf's own default T = 161 gathers 20, not the coupled 40.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ]
+  },
+  "models": {
+    "Rtrn": {
+      "variables": {
+        "T": {
+          "type": "parameter",
+          "default": 161.0
+        },
+        "totplnk_raw": {
+          "type": "unknown",
+          "shape": [
+            "tbl"
+          ]
+        },
+        "totplnk": {
+          "type": "unknown",
+          "shape": [
+            "tbl"
+          ]
+        },
+        "plnk": {
+          "type": "unknown"
+        },
+        "flux": {
+          "type": "unknown",
+          "default": 0.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": "totplnk_raw",
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": [
+              10.0,
+              20.0,
+              30.0,
+              40.0,
+              50.0
+            ]
+          }
+        },
+        {
+          "lhs": "totplnk",
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "tbl"
+              }
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                "totplnk_raw",
+                "i"
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "plnk",
+          "rhs": {
+            "op": "index",
+            "args": [
+              "totplnk",
+              {
+                "op": "-",
+                "args": [
+                  "T",
+                  159
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "flux"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        }
+      ]
+    }
+  }
+}

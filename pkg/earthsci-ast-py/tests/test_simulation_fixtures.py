@@ -47,7 +47,9 @@ class TestEarthSciASTIntegration:
             variables={
                 "x": ModelVariable(type="unknown", units="mol/L", default=1.0),
                 "k": ModelVariable(type="parameter", units="1/s", default=0.1),
-                "t": ModelVariable(type="parameter", units="s", default=0.0),
+                # No `t` declaration: the independent variable is implicitly in
+                # scope (esm-spec §4.9.1) and declaring it is a
+                # `reserved_variable_name` error (§4.9.1.1).
             },
             equations=[
                 Equation(

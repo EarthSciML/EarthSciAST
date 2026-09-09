@@ -23,7 +23,7 @@
 #    offsets factor in EXPRESSION position (`index(aggregate, i)`), and the
 #    registry's bare offsets name resolves against namespaced (flattened)
 #    variables via the model-scope suffix match. §6.6.5 inline tests may
-#    assert directly on such an array observed (`run_pde_tests` evaluates it
+#    assert directly on such an array observed (`run_inline_tests` evaluates it
 #    through the inspection surface).
 
 using Test
@@ -236,7 +236,7 @@ end
     # exercises the model-scope suffix resolution of the registry's bare
     # "nEdgesOnCell" offsets factor) — including the DIRECT observed assertion.
     file = EarthSciAST.load_string(IOBuffer(JSON3.write(doc)))
-    results = run_pde_tests(file; model_name="Div", alg=OrdinaryDiffEqTsit5.Tsit5(),
+    results = run_inline_tests(file; model_name="Div", alg=OrdinaryDiffEqTsit5.Tsit5(),
                             reltol=1e-10, abstol=1e-12)
     @test length(results) == 3
     for r in results

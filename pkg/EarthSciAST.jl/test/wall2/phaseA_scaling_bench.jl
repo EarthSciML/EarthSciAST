@@ -7,8 +7,8 @@
 # The ISRM diagnostics TotalPM25 / deathsK / deathsL are OBSERVED UNKNOWNS (esm
 # 1.0.0 §6.3.1: `unknown`s defined by a bare-variable-LHS equation) whose
 # field is materialised at build time by
-#   _observed_field  (src/pde_inline_tests.jl)
-#     -> evaluate_cellwise  (src/pde_inline_tests.jl:110)
+#   _observed_field  (src/inline_tests.jl)
+#     -> evaluate_cellwise  (src/inline_tests.jl:110)
 #       -> _eval_cellwise   (src/tree_walk/helpers.jl:533)   [ONE output cell at a time]
 #         -> _index_at_cell -> _resolve_indices -> _compile -> _eval_node
 #

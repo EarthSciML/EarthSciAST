@@ -478,7 +478,8 @@
       "systems": [
         "EventTestChem",
         "EventTestModel"
-      ]
+      ],
+      "require_match": false
     },
     {
       "type": "variable_map",

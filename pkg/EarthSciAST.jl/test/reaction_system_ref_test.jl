@@ -101,8 +101,14 @@ _rr_uses_var(::EarthSciAST.ASTExpr, ::String) = false
                 cp(chem_leaf, joinpath(tmp, "chem_leaf.esm"))
                 # A second model with its own D(A), composed onto the mounted
                 # reaction system's A via operator_compose that references the
-                # mounted system by its assembly key "Chem" and translates
-                # Extra.A onto Chem.A (mirrors the flatten operator_compose test).
+                # mounted system by its assembly key "Chem".
+                #
+                # The translate map is written in §4.7.1 step 3's normative
+                # direction: the KEY names A's (`systems[1]` = "Chem") variable
+                # and the VALUE names B's (`systems[2]` = "Extra"), so the pair
+                # is two spellings of ONE quantity and A's spelling survives.
+                # This mirrors flatten_test.jl's `{"A.T" => "B.T"}` over
+                # `systems: ["A", "B"]`.
                 asm = joinpath(tmp, "coupled.esm")
                 write(asm, """{
                     "esm": "0.8.0",
@@ -117,7 +123,7 @@ _rr_uses_var(::EarthSciAST.ASTExpr, ::String) = false
                     }},
                     "reaction_systems": {"Chem": {"ref": "./chem_leaf.esm"}},
                     "coupling": [{"type": "operator_compose", "systems": ["Chem", "Extra"],
-                                  "translate": {"Extra.A": "Chem.A"}}]
+                                  "translate": {"Chem.A": "Extra.A"}}]
                 }""")
                 loaded = ESM_RR.load_path(asm)
                 @test haskey(loaded.reaction_systems, "Chem")

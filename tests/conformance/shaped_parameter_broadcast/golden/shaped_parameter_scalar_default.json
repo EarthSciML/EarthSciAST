@@ -1,0 +1,127 @@
+{
+    "fixture": "shaped_parameter_scalar_default",
+    "assertions": [
+        {
+            "test_id": "scalar_default_broadcasts",
+            "assertion_idx": 1,
+            "variable": "phi",
+            "actual": 0.4999999999999999
+        },
+        {
+            "test_id": "scalar_default_broadcasts",
+            "assertion_idx": 2,
+            "variable": "phi",
+            "actual": 0.4999999999999999
+        },
+        {
+            "test_id": "scalar_default_broadcasts",
+            "assertion_idx": 3,
+            "variable": "phi",
+            "actual": 0.4999999999999999
+        },
+        {
+            "test_id": "scalar_default_broadcasts",
+            "assertion_idx": 4,
+            "variable": "phi",
+            "actual": 0.4999999999999999
+        },
+        {
+            "test_id": "scalar_default_broadcasts",
+            "assertion_idx": 5,
+            "variable": "theta",
+            "actual": 1.0
+        },
+        {
+            "test_id": "scalar_default_broadcasts",
+            "assertion_idx": 6,
+            "variable": "theta",
+            "actual": 1.5
+        },
+        {
+            "test_id": "scalar_default_broadcasts",
+            "assertion_idx": 7,
+            "variable": "theta",
+            "actual": 2.999999999999999
+        },
+        {
+            "test_id": "scalar_default_broadcasts",
+            "assertion_idx": 8,
+            "variable": "theta",
+            "actual": 2.999999999999999
+        },
+        {
+            "test_id": "scalar_override_broadcasts",
+            "assertion_idx": 1,
+            "variable": "phi",
+            "actual": 1.9999999999999996
+        },
+        {
+            "test_id": "scalar_override_broadcasts",
+            "assertion_idx": 2,
+            "variable": "phi",
+            "actual": 1.9999999999999996
+        },
+        {
+            "test_id": "scalar_override_broadcasts",
+            "assertion_idx": 3,
+            "variable": "theta",
+            "actual": 3.0
+        },
+        {
+            "test_id": "scalar_override_broadcasts",
+            "assertion_idx": 4,
+            "variable": "theta",
+            "actual": 8.999999999999998
+        },
+        {
+            "test_id": "array_override_still_binds",
+            "assertion_idx": 1,
+            "variable": "phi",
+            "actual": 0.9999999999999998
+        },
+        {
+            "test_id": "array_override_still_binds",
+            "assertion_idx": 2,
+            "variable": "phi",
+            "actual": 3.999999999999999
+        },
+        {
+            "test_id": "array_override_still_binds",
+            "assertion_idx": 3,
+            "variable": "theta",
+            "actual": 16.999999999999996
+        },
+        {
+            "test_id": "scalar_override_beats_array_default",
+            "assertion_idx": 1,
+            "variable": "theta",
+            "actual": 2.4999999999999996
+        },
+        {
+            "test_id": "scalar_override_beats_array_default",
+            "assertion_idx": 2,
+            "variable": "theta",
+            "actual": 2.4999999999999996
+        },
+        {
+            "test_id": "scalar_override_beats_array_default",
+            "assertion_idx": 3,
+            "variable": "theta",
+            "actual": 2.4999999999999996
+        },
+        {
+            "test_id": "scalar_override_beats_array_default",
+            "assertion_idx": 4,
+            "variable": "theta",
+            "actual": 2.4999999999999996
+        },
+        {
+            "test_id": "scalar_override_beats_array_default",
+            "assertion_idx": 5,
+            "variable": "phi",
+            "actual": 0.4999999999999999
+        }
+    ],
+    "reference_binding": "julia",
+    "_comment": "Minted by the Julia reference binding's `run_pde_tests` (Tsit5, reltol=1e-12, abstol=1e-14) over fixtures/shaped_parameter_scalar_default.esm. Every actual is within an ulp or two of the exact value: each state is the integral of a constant, so the integrator's own rounding is all that separates 0.4999999999999999 from 0.5 and 16.999999999999996 from 17 -- ~4e-16 relative, seven orders inside the manifest's 1e-9 assertion_rtol. Before the fix this fixture could not be minted at all: Julia refused the document with E_TREEWALK_UNSUPPORTED_SHAPE. The `scalar_override_beats_array_default` rows are the \u00a76.6.2 PRECEDENCE arm: `scale` is overridden by one scalar while its declared `default` is the array [1,2,3,4], so every theta cell is 1 + 0.5*3 = 2.5 and a binding that ranked the override behind that default reads [1.5, 2.0, 2.5, 3.0] instead."
+}

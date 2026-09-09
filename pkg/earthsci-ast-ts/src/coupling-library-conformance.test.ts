@@ -190,11 +190,16 @@ describe('coupling-library conformance (esm-spec §10.9–§10.11)', () => {
 
     // The mis-bind (Spread -> RothermelNoW0, which lacks `w0`) surfaces on the
     // expanded edge as the existing unresolved_scoped_ref — the same diagnostic
-    // a hand-authored bad edge yields. KNOWN TS GAP: the reference flatten()
-    // does not itself re-run scoped-ref resolution on expanded edges (the check
-    // lives in validate.ts, which iterates the UN-expanded coupling), so we
-    // drive it by validating the expanded coupling. flatten() alone succeeds:
-    expect(() => flatten(loadPath(p), { basePath: dir })).not.toThrow()
+    // a hand-authored bad edge yields.
+    //
+    // This used to be a KNOWN GAP: flatten() did not re-run scoped-ref
+    // resolution on expanded edges (the check lived only in validate.ts, which
+    // iterates the UN-expanded coupling), so flatten() SUCCEEDED and the test
+    // drove the diagnostic through validate() instead. The `variable_map`
+    // endpoint preflight closes it — a mis-bound edge is now caught where the
+    // manifest always said it should be ("site": "flatten") — so both routes
+    // are asserted below.
+    expect(errCode(() => flatten(loadPath(p), { basePath: dir }))).toBe('unresolved_scoped_ref')
 
     const expandedFile = { ...readJson(p), coupling: expanded }
     const result = validate(expandedFile)

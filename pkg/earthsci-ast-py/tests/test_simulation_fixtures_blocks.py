@@ -41,7 +41,7 @@ pytest.importorskip("scipy")
 
 from earthsci_ast.parse import load_path
 from earthsci_ast.problem import ReturnCode, esm_problem, solve
-from earthsci_ast.pde_inline_tests import TEST_ABSTOL, TEST_RELTOL
+from earthsci_ast.inline_tests import TEST_ABSTOL, TEST_RELTOL
 
 
 SIMULATION_DIR = str(FIXTURES_ROOT / "simulation")

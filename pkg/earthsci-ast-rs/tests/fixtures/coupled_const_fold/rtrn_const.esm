@@ -1,0 +1,75 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "RtrnConstLeaf",
+    "description": "Tail of the coupling chain: gathers a Planck-function row out of a table declared as a BARE `const` array, at an index computed from the coupled-in temperature. `T` is the coupling target; its declared default (161) is deliberately different from the coupled value (163) so a fold that reads the wrong one is visible rather than merely lucky. Its inline test moved to the mounting document: esm-spec §6.6 — a mounted component's tests do not cross the mount edge (#214), and standalone this leaf's own default T = 161 gathers 20, not the coupled 40.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ]
+  },
+  "models": {
+    "Rtrn": {
+      "variables": {
+        "T": {
+          "type": "parameter",
+          "default": 161.0
+        },
+        "totplnk": {
+          "type": "unknown",
+          "shape": [
+            "tbl"
+          ]
+        },
+        "plnk": {
+          "type": "unknown"
+        },
+        "flux": {
+          "type": "unknown",
+          "default": 0.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": "totplnk",
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": [
+              10.0,
+              20.0,
+              30.0,
+              40.0,
+              50.0
+            ]
+          }
+        },
+        {
+          "lhs": "plnk",
+          "rhs": {
+            "op": "index",
+            "args": [
+              "totplnk",
+              {
+                "op": "-",
+                "args": [
+                  "T",
+                  159
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "flux"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        }
+      ]
+    }
+  }
+}

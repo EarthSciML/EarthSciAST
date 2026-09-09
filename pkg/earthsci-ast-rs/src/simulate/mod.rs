@@ -84,6 +84,7 @@ pub use resolve::*;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::ExpressionNode;
 
     #[test]
     fn interpret_arithmetic() {
@@ -154,6 +155,318 @@ mod tests {
         // ifelse(true, log(e^1), 0) = 1
         assert!((interpret(&e, &[x_pos], &[], &[], 0.0) - 1.0).abs() < 1e-12);
         assert_eq!(interpret(&e, &[-1.0], &[], &[], 0.0), 0.0);
+    }
+
+    /// Resolve a bare operator node against empty scopes — the one funnel every
+    /// expression this interpreter evaluates passes through.
+    fn resolve_it(expr: &Expr) -> Result<ResolvedExpr, CompileError> {
+        resolve_expr(
+            expr,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+        )
+    }
+
+    /// A WELL-FORMED operator node for `op`: the minimum arity the registry
+    /// admits, plus the sidecar fields `op_registry::check_node` insists on for
+    /// the two ops whose operator is data. Both are supplied so the registry's
+    /// own checks cannot mask the evaluability check under test.
+    fn node_with_legal_arity(op: &str) -> Expr {
+        let arity = crate::op_registry::arity_of(op).expect("registry-legal op");
+        let n = (0..=3)
+            .find(|n| arity.admits(*n))
+            .expect("some arity in 0..=3 is admitted");
+        Expr::Operator(std::sync::Arc::new(ExpressionNode {
+            op: op.to_string(),
+            args: (0..n).map(|_| Expr::Number(1.0)).collect(),
+            // `broadcast`'s arithmetic is named by a sibling string, and
+            // `check_node` rejects a node without one before evaluability is
+            // ever consulted.
+            broadcast_fn: (op == "broadcast").then(|| "+".to_string()),
+            ..Default::default()
+        }))
+    }
+
+    /// `is_evaluable_op` must agree with `eval_op`'s arms for every op the
+    /// registry admits: any registry op NOT listed as evaluable must be
+    /// REJECTED by `resolve_expr`, so `eval_op`'s `unreachable!` backstop stays
+    /// unreachable. The array evaluator pins the same property next to its own
+    /// oracle (`simulate_array::eval`'s
+    /// `every_registry_op_is_either_evaluable_or_gated`); this is the scalar
+    /// half, and it is what makes the invariant structural rather than a
+    /// property of who happens to call in (issue #220).
+    #[test]
+    fn every_registry_op_is_either_evaluable_or_gated() {
+        for op in [
+            "+",
+            "-",
+            "*",
+            "/",
+            "^",
+            "neg",
+            "exp",
+            "log",
+            "sqrt",
+            "min",
+            "max",
+            "ifelse",
+            "and",
+            "or",
+            "not",
+            "atan2",
+            "==",
+            "!=",
+            "<",
+            "<=",
+            ">",
+            ">=",
+            "D",
+            "Pre",
+            "const",
+            "true",
+            "fn",
+            "index",
+            "aggregate",
+            "makearray",
+            "broadcast",
+            "reshape",
+            "transpose",
+            "concat",
+            "skolem",
+            "rank",
+            "distinct",
+            "argmin",
+            "argmax",
+            "ic",
+            "enum",
+            "table_lookup",
+            "apply_expression_template",
+            "intersect_polygon",
+            "polygon_intersection_area",
+        ] {
+            assert!(
+                crate::op_registry::is_core_op(op),
+                "{op} is listed here but the registry does not carry it"
+            );
+            if is_evaluable_op(op) {
+                continue;
+            }
+            let err = resolve_it(&node_with_legal_arity(op))
+                .expect_err("an op with no rule must not resolve");
+            assert!(
+                matches!(err, CompileError::UnevaluableOperatorError { op: ref got } if got == op),
+                "{op} is registry-legal and has no scalar rule, so it must be gated BY NAME: \
+                 {err:?}"
+            );
+        }
+    }
+
+    /// The §4.2 core set minus THIS evaluator's rules, pinned member by member
+    /// so a rule added or lost is a test diff and not a silent behaviour change.
+    ///
+    /// It is a superset of the array runtime's nine-op gap: the scalar
+    /// interpreter's values are `f64`, so the array/tensor and geometry ops are
+    /// unevaluable here too — every one of which used to come back from
+    /// `eval_op` as a `NaN` NUMBER. `const` is in the gap because its value
+    /// lives on the node rather than in `args`; `resolve_expr` folds a SCALAR
+    /// `const` to a `Number` before the oracle is consulted, so only an ARRAY
+    /// one is actually refused.
+    #[test]
+    fn the_scalar_evaluable_gap_is_pinned() {
+        const CORE: &[&str] = &[
+            "+",
+            "-",
+            "*",
+            "/",
+            "^",
+            "neg",
+            "exp",
+            "log",
+            "ln",
+            "log10",
+            "sqrt",
+            "abs",
+            "sign",
+            "floor",
+            "ceil",
+            "sin",
+            "cos",
+            "tan",
+            "asin",
+            "acos",
+            "atan",
+            "sinh",
+            "cosh",
+            "tanh",
+            "asinh",
+            "acosh",
+            "atanh",
+            "atan2",
+            "min",
+            "max",
+            "ifelse",
+            "==",
+            "!=",
+            "<",
+            "<=",
+            ">",
+            ">=",
+            "and",
+            "or",
+            "not",
+            "D",
+            "ic",
+            "Pre",
+            "const",
+            "true",
+            "fn",
+            "enum",
+            "table_lookup",
+            "apply_expression_template",
+            "aggregate",
+            "makearray",
+            "index",
+            "broadcast",
+            "reshape",
+            "transpose",
+            "concat",
+            "skolem",
+            "rank",
+            "distinct",
+            "argmin",
+            "argmax",
+            "intersect_polygon",
+            "polygon_intersection_area",
+        ];
+        for op in CORE {
+            assert!(
+                crate::op_registry::is_core_op(op),
+                "{op} is listed here but the registry does not carry it"
+            );
+        }
+        let mut gap: Vec<&str> = CORE
+            .iter()
+            .copied()
+            .filter(|op| !is_evaluable_op(op))
+            .collect();
+        gap.sort_unstable();
+        assert_eq!(
+            gap,
+            vec![
+                "aggregate",
+                "apply_expression_template",
+                "argmax",
+                "argmin",
+                "broadcast",
+                "concat",
+                "const",
+                "distinct",
+                "enum",
+                "ic",
+                "index",
+                "intersect_polygon",
+                "makearray",
+                "polygon_intersection_area",
+                "rank",
+                "reshape",
+                "skolem",
+                "table_lookup",
+                "transpose",
+            ]
+        );
+    }
+
+    /// The gate is not merely top-level: an unevaluable op NESTED inside an
+    /// otherwise-fine expression is still refused, because `resolve_expr`
+    /// recurses through every operand before building the parent node.
+    #[test]
+    fn a_nested_unevaluable_op_is_gated_too() {
+        let inner = node_with_legal_arity("rank");
+        let outer = Expr::Operator(std::sync::Arc::new(ExpressionNode {
+            op: "+".to_string(),
+            args: vec![Expr::Number(1.0), inner],
+            ..Default::default()
+        }));
+        let err = resolve_it(&outer).expect_err("a nested unevaluable op must not resolve");
+        assert!(
+            matches!(err, CompileError::UnevaluableOperatorError { op: ref got } if got == "rank"),
+            "{err:?}"
+        );
+    }
+
+    /// `neg`, `true` and a scalar `const` are §4.2 core ops that the ARRAY
+    /// evaluator, Python, Julia and Go all answer for, and that the public
+    /// stable-tier `evaluate` (esm `api-surface.json`) must therefore answer
+    /// for here too. This interpreter had no rule for any of the three, so each
+    /// came back as a silent `NaN` — including the equation RHS
+    /// `{"op":"const","value":0.0}` in the shared conformance fixture
+    /// `tests/conformance/function_tables/inline_test/fixture.esm`. Gating them
+    /// instead of NaN-ing them would have been a diagnostic where four other
+    /// bindings return a number, so they are evaluated.
+    #[test]
+    fn neg_true_and_a_scalar_const_evaluate_as_the_other_bindings_do() {
+        let eval = |e: &Expr| {
+            let r = resolve_it(e).expect("core op with a rule must resolve");
+            interpret(&r, &[], &[], &[], 0.0)
+        };
+        let node = |op: &str, args: Vec<Expr>, value: Option<serde_json::Value>| {
+            Expr::Operator(std::sync::Arc::new(ExpressionNode {
+                op: op.to_string(),
+                args,
+                value,
+                ..Default::default()
+            }))
+        };
+
+        assert_eq!(eval(&node("neg", vec![Expr::Number(3.5)], None)), -3.5);
+        assert_eq!(eval(&node("true", Vec::new(), None)), 1.0);
+        assert_eq!(
+            eval(&node("const", Vec::new(), Some(serde_json::json!(2.5)))),
+            2.5
+        );
+
+        // An ARRAY `const` has no `f64` representation, so it stays gated —
+        // by name, not as a NaN.
+        let err = resolve_it(&node(
+            "const",
+            Vec::new(),
+            Some(serde_json::json!([1.0, 2.0])),
+        ))
+        .expect_err("an array `const` has no scalar value");
+        assert!(
+            matches!(err, CompileError::UnevaluableOperatorError { op: ref got } if got == "const"),
+            "{err:?}"
+        );
+    }
+
+    /// The evaluability gate runs BEFORE the §11.3 Float32 gate, and that
+    /// ordering is pinned rather than incidental.
+    ///
+    /// `intersect_polygon` and `polygon_intersection_area` are the two ops that
+    /// trip both: `precision::f32_unsupported_reason` names them (their
+    /// geometry kernels are binary64-only), and this interpreter has no rule
+    /// for them in ANY precision. `unevaluable_operator` is therefore the more
+    /// fundamental answer — telling the author to declare `Float64` would send
+    /// them to fix the wrong thing, since the scalar path still could not
+    /// evaluate the op. Under Float64 the ordering is unobservable; this asks
+    /// the question where it is observable.
+    #[test]
+    fn the_evaluability_gate_precedes_the_float32_gate() {
+        for op in ["intersect_polygon", "polygon_intersection_area"] {
+            assert!(
+                crate::precision::f32_unsupported_reason(op, None).is_some(),
+                "{op} must be one of the ops that trips BOTH gates, or this pins nothing"
+            );
+            let _f32 = crate::precision::enter(crate::precision::Precision::Float32);
+            let err = resolve_it(&node_with_legal_arity(op))
+                .expect_err("an op with no scalar rule must not resolve under Float32 either");
+            assert!(
+                matches!(err, CompileError::UnevaluableOperatorError { op: ref got } if got == op),
+                "{op} must report `unevaluable_operator`, not `float32_unsupported`: {err:?}"
+            );
+        }
     }
 
     #[test]

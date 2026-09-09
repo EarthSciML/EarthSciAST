@@ -17,12 +17,6 @@
           "default": 0.0,
           "description": "Tracer concentration (state)"
         },
-        "t": {
-          "type": "parameter",
-          "units": "s",
-          "default": 1.0,
-          "description": "Time (independent variable placeholder)"
-        },
         "x": {
           "type": "parameter",
           "default": 0.0,
