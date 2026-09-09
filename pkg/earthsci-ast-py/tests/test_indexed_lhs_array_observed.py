@@ -297,6 +297,42 @@ def test_the_normalizer_declines_outside_its_narrow_recognition(tmp_path, name, 
     assert _normalize_indexed_observed_lhs(model) is model.equations
 
 
+def _distinct_shell(value):
+    """``EQ_W_INDEXED``'s LHS with an explicit ``distinct`` on the shell."""
+    lhs = dict(_agg(_idx("w")))
+    lhs["distinct"] = value
+    return {"lhs": lhs, "rhs": _agg({"op": "*", "args": [2.0, _idx("u")]})}
+
+
+def test_a_false_distinct_spells_the_same_node_as_an_absent_one(tmp_path):
+    """esm-schema's ``ExpressionNode.distinct``: "Absent => false (ordinary
+    array-producing reduction), exactly as today". So ``"distinct": false`` is a
+    spelling of the very same addressing shell and MUST normalize. Testing the
+    field's PRESENCE declined it, and the observed then answered 0.0 from its
+    never-written state slot — a silent divergence from Julia, whose
+    ``_rewrite_indexed_observed_lhs`` tests ``distinct !== true``."""
+    eq = _distinct_shell(False)
+    path = _write(tmp_path, _doc("df", [eq, EQ_D_INDEXED], ASSERT_U), "df.esm.json")
+    model = load_path(path).models["Column"]
+
+    assert _normalize_indexed_observed_lhs(model) is not model.equations
+
+    got = _actuals(tmp_path, "dfr", [eq, EQ_D_INDEXED], ASSERT_U_AND_W)
+    assert got["w"] == pytest.approx(2 * E2, rel=1e-6)
+    assert got["u"] == pytest.approx(E2, rel=1e-6)
+
+
+def test_a_true_distinct_is_a_set_semantics_shell_and_is_declined(tmp_path):
+    """A TRUE ``distinct`` makes the shell index-set-producing rather than
+    addressing, so it computes and the normalizer must leave it alone."""
+    path = _write(
+        tmp_path, _doc("dt", [_distinct_shell(True), EQ_D_INDEXED], ASSERT_U), "dt.esm.json"
+    )
+    model = load_path(path).models["Column"]
+
+    assert _normalize_indexed_observed_lhs(model) is model.equations
+
+
 def test_the_normalizer_declines_a_target_with_no_declared_shape(tmp_path):
     """The two corpus equations that already use this LHS shape name a variable
     with NO declared shape (``arrayop/02`` and ``arrayop/04``); the rank guard is

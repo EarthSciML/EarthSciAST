@@ -39,73 +39,55 @@ divergence, never an integrator one.**
 Julia is the reference binding; `golden/observed_indexed_lhs.json` was minted by
 its `run_pde_tests` (Tsit5, reltol 1e-12, abstol 1e-14).
 
-## Python: red on `main`, fixed by PR #237, pending merge
+## The Python half, and where it landed
 
-Julia and Rust pass all fourteen assertions. **Python passes 7 of 14 on `main`**
-(at `71e25b380`, where this category was authored) and **14 of 14 on PR #237**
-at `57b72acad`. It is deliberately kept in `bindings_required` rather than
-`scope_excluded`: it has a real runner, so the category states the contract and
-lets the binding be red until the fix lands, instead of being defined down to
-what passes today.
+Julia, Python and Rust all pass all fourteen assertions.
 
-So this is not a standing divergence — it is a **fixed defect awaiting a merge**.
-The category's Python leg is red until #237 merges and green immediately after.
-
-### The defect
-
-Three symptoms, one root cause. `flatten._collect_model` read observed-ness from
+Python did not, when this category was authored. Three symptoms, one root
+cause: `flatten._collect_model` read observed-ness from
 `classification.inlined_unknowns` — the strict `y ~ f(…)` set that §6.3.1
 sanctions **for inlining specifically** — and used it as if it were the
 classification. §6.3.1 says that set "does not narrow the partition".
 
-That is the same mistake, in a different binding, that #250 fixes on the Julia
-side: there the tree-walk build's owner buckets each tested the syntactic
-`eq.lhs isa VarExpr`. Two bindings, one wrong substitution, found independently.
+That is the same mistake, in a different binding, that this PR fixes on the
+Julia side: there the tree-walk build's owner buckets each tested the syntactic
+`eq.lhs isa VarExpr`. Two bindings, one wrong substitution, found
+independently.
 
-The three symptoms on `main`:
+The three symptoms were:
 
 1. **An indexed-LHS array observed is not readable by an assertion.** `wf` and
-   `ws` answer `0.0` at every time instead of their field values. (Assertions
-   1–6 and 8 catch this. Assertion 7 passes even on `main`, because `ws(0)` is
+   `ws` answered `0.0` at every time instead of their field values. (Assertions
+   1–6 and 8 catch this. Assertion 7 passed even then, because `ws(0)` is
    genuinely zero — see the note on assertion 7 below.)
 2. **An indexed LHS with a PER-CELL right-hand side is silently dropped.**
-   `aggregate{k}(w[k]) ~ 2*u[k]`, with no `aggregate` on the right, raises
+   `aggregate{k}(w[k]) ~ 2*u[k]`, with no `aggregate` on the right, raised
    `RuntimeWarning: unrecognized algebraic equation … was not applied to the ODE
    RHS; any state it constrains stays frozen at its initial value` — and the
-   state does stay frozen at its initial value.
+   state did stay frozen at its initial value.
 3. **An indexed-LHS observed feeding a WHOLE-ARRAY derivative is dropped the
-   same way.** `D(u) ~ wf` leaves `u` at its initial value; spelling the
+   same way.** `D(u) ~ wf` left `u` at its initial value; spelling the
    derivative `aggregate{k}(D(u[k])) ~ aggregate{k}(wf[k])` — which is what this
    fixture does — makes it integrate.
 
-Complete reproducer documents for all three are in the body of **PR #250**, which
-introduced this category.
+All three are closed on `main` by **PR #276** (commit `bac8a6197`,
+cherry-picked from #237's `57b72acad`), whose
+`flatten._normalize_indexed_observed_lhs` is the mirror of the Julia normalizer
+this PR adds. Complete reproducer documents for all three are in the body of
+**PR #250**, which introduced this category.
 
-### Measured, not assumed — at both heads
+### One acceptance difference remains between the two halves
 
-Each of the three reproducers, plus this whole fixture, was run against #237's
-`pkg/earthsci-ast-py/src` extracted with `git archive` and put on `PYTHONPATH`:
+The two normalizers agree on every document in the corpus and on this fixture,
+but not on one edge: an LHS aggregate shell spelling `"distinct": false`. The
+schema says an absent `distinct` **means** `false` ("Absent ⇒ false (ordinary
+array-producing reduction), exactly as today"), so the two spellings must
+behave alike. Julia declines to normalize only when `distinct` is **true**;
+Python declined whenever the field was **present**, so `"distinct": false`
+silently returned `0.0` for the observed. That one-word difference is corrected
+in `pkg/earthsci-ast-py/src/earthsci_ast/flatten.py` by this PR and pinned by
+`tests/test_indexed_lhs_array_observed.py`.
 
-| #237 head | the three reproducers | this fixture |
-|---|---|---|
-| `67504523` (earlier) | all three fail, identically to `main` | 7 / 14 |
-| `57b72acad` (current) | **all three pass** | **14 / 14** |
-
-The earlier head is recorded because divergence 3 reads exactly like #237's
-title ("a declared `shape` routes to the array pathway, whatever the equation
-spelling") and was nonetheless not covered by it then — worth knowing that the
-title was not sufficient evidence, and that the later commit is what actually
-closes it.
-
-### No mechanism marks this red-until-merge
-
-The manifest's `tags` are free-form strings with no runner behind them, and the
-Python adapter carries no `xfail` — an `xfail` would flip to an unexpected-pass
-failure the moment #237 merges, which is worse than a red leg that turns green.
-So the tag `red-on-main-until-pr-237` is documentation only, and the actual
-signal is this section plus the adapter docstring. Nothing needs to be removed
-from the fixture when #237 merges; only this prose goes stale, and the tag
-should be dropped then.
 
 ## A note on assertion 7, and one on `_comment`
 

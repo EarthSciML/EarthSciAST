@@ -4693,18 +4693,12 @@ a per-cell body rather than the whole array. All fourteen assertions pass.
 
 **Rust** — conforming; all fourteen assertions pass. The category pins it.
 
-**Python** — FIXED by PR #237, **red on `main` until that merges**. It is kept in
-`bindings_required` on purpose. `scope_excluded` is for a binding with no runner
-at all; Python has one, so the category states the contract and lets the binding
-be red until the fix lands, rather than being defined down to what passes today.
-Measured at both of that PR's heads, with its `pkg/earthsci-ast-py/src` extracted
-and put on `PYTHONPATH`:
-
-| source | this category |
-|---|---|
-| `main` @ `71e25b380` | 7 / 14 — `wf` and `ws` both answer `0.0` |
-| #237 @ `67504523` | 7 / 14 — unchanged from `main` |
-| #237 @ `57b72acad` | **14 / 14** |
+**Python** — FIXED, on `main`, by PR #276 (commit `bac8a6197`, cherry-picked from
+#237's `57b72acad`); all fourteen assertions pass. `flatten._normalize_indexed_observed_lhs`
+is the mirror of the Julia normalizer above, and `classification._base_name` sees
+through the same shell so `observed_definitions` credits the indexed spelling —
+without that, §6.6.5's observed-assertion lookup was gated out before it ever
+looked. The category scored 7 / 14 before it (`wf` and `ws` both answering `0.0`).
 
 Three symptoms, ONE root cause, and it is the SAME wrong substitution this
 section's Julia half describes: `flatten._collect_model` read observed-ness from
@@ -4712,7 +4706,7 @@ section's Julia half describes: `flatten._collect_model` read observed-ness from
 for INLINING specifically — and used it as the classification, which §6.3.1
 forbids ("it does not narrow the partition"). Julia's owner buckets made the same
 substitution syntactically. Two bindings, one error, diagnosed independently. The
-symptoms on `main` were:
+symptoms were:
 
 1. an indexed-LHS array observed is **not readable by an assertion** — `wf` and
    `ws` answer `0.0` at every time rather than their field values;
@@ -4725,17 +4719,19 @@ symptoms on `main` were:
    is dropped the same way, while `aggregate{k}(D(u[k])) ~ aggregate{k}(wf[k])`
    — the spelling this fixture uses — integrates.
 
-All three reproduce on `main` and on `67504523`, and all three pass on
-`57b72acad`. Complete reproducer documents are in the body of PR #250, which
-introduced this category. The `67504523` row is kept because symptom 3 reads
-exactly like #237's title and was nonetheless not covered by it at that head — a
-reminder that a matching title is not evidence.
+Complete reproducer documents are in the body of PR #250, which introduced this
+category.
 
-Nothing in the fixture marks this red-until-merge: manifest `tags` are free-form
-strings with no runner behind them, and the Python adapter deliberately carries
-no `xfail`, which would flip to an unexpected-pass failure the moment #237
-merges. The tag `red-on-main-until-pr-237` is documentation only; drop it, and
-this paragraph, once that PR lands.
+The two normalizers agree on every document in the corpus and on this fixture,
+and they must also agree at their recognition boundary, since that boundary is
+where a document becomes accepted or silently mis-run. One difference was found
+and closed: `distinct` is a BOOLEAN whose absence MEANS `false` ("Absent ⇒ false
+(ordinary array-producing reduction), exactly as today" — `esm-schema.json`,
+`ExpressionNode.distinct`), so only a TRUE `distinct` is a set-semantics shell
+that computes rather than addresses. Julia tests `distinct !== true`; Python
+tested the field's PRESENCE, so an LHS spelling `"distinct": false` — the very
+same node — was declined and the observed answered `0.0`. A binding MUST read an
+absent and a false `distinct` alike.
 
 **TypeScript**, **Go** — rewrite-only ports with no simulator; no rows apply.
 
