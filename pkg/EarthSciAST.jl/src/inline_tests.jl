@@ -994,7 +994,8 @@ end
 # bare-keyed single-model build). Byte-identical selection to the Python
 # `_scalar_slot`.
 function _scalar_slot(var_map::AbstractDict, variable::AbstractString,
-                      model::AbstractString)::Int
+                      model::AbstractString,
+                      renames::AbstractDict=Dict{String,String}())::Int
     qualified = String(model) * "." * String(variable)
     for (name, slot) in var_map
         s = String(name)
@@ -1004,6 +1005,20 @@ function _scalar_slot(var_map::AbstractDict, variable::AbstractString,
         s = String(name)
         bare = occursin('.', s) ? String(split(s, '.'; limit=2)[2]) : s
         bare == String(variable) && return Int(slot)
+    end
+    # A THIRD pass, for a name an `operator_compose` renaming match DELETED
+    # (§4.7.1 step 4). A test is written against the component that owns it, and
+    # a merge can fold that component's state onto another's — the quantity the
+    # assertion names still exists, under the survivor's spelling. LAST, so a
+    # live row always wins: resolution may never shadow a variable the flattened
+    # system really has (CONFORMANCE_SPEC §5.35).
+    if !isempty(renames)
+        survivor = get(renames, qualified, get(renames, String(variable), nothing))
+        if survivor !== nothing
+            for (name, slot) in var_map
+                String(name) == survivor && return Int(slot)
+            end
+        end
     end
     return 0
 end
@@ -1286,14 +1301,15 @@ const _SAVED_TIME_RTOL = 1e-9
 function _evaluate_assertion(a, sim, var_map::AbstractDict,
                              insp::BuildInspection, eval_file::EsmFile,
                              mname::AbstractString,
-                             resolved_base::AbstractString)::Float64
+                             resolved_base::AbstractString,
+                             renames::AbstractDict=Dict{String,String}())::Float64
     ti = argmin(abs.(sim.t .- a.time))
     abs(sim.t[ti] - a.time) <= _SAVED_TIME_RTOL * max(1.0, abs(a.time)) ||
         throw(InlineTestError("no saved state at t=$(a.time) (nearest $(sim.t[ti]))"))
     state = sim.u[ti]
 
     if a.coords === nothing && a.reduce === nothing
-        slot = _scalar_slot(var_map, a.variable, String(mname))
+        slot = _scalar_slot(var_map, a.variable, String(mname), renames)
         slot == 0 && throw(InlineTestError("scalar state '$(a.variable)' not found"))
         return state[slot]
     end
@@ -1422,6 +1438,10 @@ struct _SimulateHandle
     var_map::Dict{String,Int}     # state-element name → flat index (from the problem)
     insp::BuildInspection
     eval_file::EsmFile
+    # The states an `operator_compose` renaming match DELETED, mapped onto the
+    # survivors (issue #230). An assertion names its component's LOCAL variable,
+    # which a merge may have folded onto another component's.
+    merged_renames::Dict{String,String}
 end
 
 # Qualify a test's override keys with the component that OWNS the test.
@@ -1464,10 +1484,11 @@ end
 
 function _scope_to_component(overrides, mname, target)
     (overrides === nothing || isempty(overrides)) && return overrides
-    known = try
+    known, renames = try
         flat = flatten(target)
-        union(Set{String}(String(n) for n in keys(flat.parameters)),
-              Set{String}(String(n) for n in keys(flat.state_variables)))
+        (union(Set{String}(String(n) for n in keys(flat.parameters)),
+               Set{String}(String(n) for n in keys(flat.state_variables))),
+         flat.metadata.merged_variable_renames)
     catch
         return overrides   # let `esm_problem` report the real failure
     end
@@ -1478,7 +1499,13 @@ function _scope_to_component(overrides, mname, target)
     for (rawk, v) in overrides
         k = String(rawk)
         q = string(mname, ".", k)
-        out[q in known ? q : k] = v
+        # An `operator_compose` renaming match may have DELETED the very name
+        # this component's test keys on (§4.7.1 step 4): `Sink.O3` folded onto
+        # `Chem.ozone` leaves the scoped spelling naming nothing, and the key
+        # then falls through as a bare local that resolves to nothing
+        # document-wide. Resolve it onto the survivor instead
+        # (CONFORMANCE_SPEC §5.35).
+        out[q in known ? q : get(renames, q, k)] = v
     end
     return out
 end
@@ -1507,12 +1534,13 @@ function _engine_setup(e::SimulateTestEngine, t)
     # core file stays solver-free.
     Symbol(sim.retcode) === :Success ||
         return "solver retcode $(sim.retcode)"
-    return _SimulateHandle(sim, prob.var_map, insp, target)
+    return _SimulateHandle(sim, prob.var_map, insp, target,
+                           Dict{String,String}(prob.merged_renames))
 end
 
 _engine_actual(e::SimulateTestEngine, h::_SimulateHandle, a) =
     _evaluate_assertion(a, h.sim, h.var_map, h.insp, h.eval_file, e.mname,
-                        e.resolved_base)
+                        e.resolved_base, h.merged_renames)
 
 _engine_error_message(::SimulateTestEngine, err) =
     "assertion evaluation failed: $(sprint(showerror, err))"

@@ -36,6 +36,7 @@
 using Test
 using EarthSciAST
 using JSON3
+using OrdinaryDiffEqTsit5   # the inline-test surface needs an ODE algorithm
 
 include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
@@ -50,6 +51,9 @@ const _MRR_CASES = _MRR_MANIFEST.cases
 const _MRR_FLATTEN = [c for c in _MRR_CASES if c.surface == "flatten"]
 const _MRR_OVERRIDE = [c for c in _MRR_CASES if c.surface == "override_keys"]
 const _MRR_OUTPUT = [c for c in _MRR_CASES if c.surface == "output_selection"]
+const _MRR_EVENTS = [c for c in _MRR_CASES if c.surface == "events_and_updates"]
+const _MRR_REGISTRY = [c for c in _MRR_CASES if c.surface == "template_registry"]
+const _MRR_INLINE = [c for c in _MRR_CASES if c.surface == "inline_tests"]
 
 _mrr_flatten(case) = flatten(load_path(joinpath(_MRR_DIR, String(case.path))))
 
@@ -59,6 +63,12 @@ _mrr_flatten(case) = flatten(load_path(joinpath(_MRR_DIR, String(case.path))))
         @test !isempty(_MRR_FLATTEN)
         @test !isempty(_MRR_OVERRIDE)
         @test !isempty(_MRR_OUTPUT)
+        @test !isempty(_MRR_EVENTS)
+        @test !isempty(_MRR_REGISTRY)
+        @test !isempty(_MRR_INLINE)
+        for surface in ("events_and_updates", "template_registry", "inline_tests")
+            @test "julia" in _MRR_MANIFEST.surfaces[Symbol(surface)].bindings
+        end
         @test "julia" in _MRR_MANIFEST.surfaces.flatten.bindings
         @test "julia" in _MRR_MANIFEST.surfaces.override_keys.bindings
         # The result-object READ is out of scope HERE, and the manifest must say
@@ -143,6 +153,104 @@ _mrr_flatten(case) = flatten(load_path(joinpath(_MRR_DIR, String(case.path))))
                 slot = get(prob.var_map, String(name), nothing)
                 if slot !== nothing
                     @test !(prob.u0[slot] ≈ Float64(unresolved))
+                end
+            end
+        end
+    end
+    for case in _MRR_EVENTS
+        @testset "$(case.id)" begin
+            # Neither an event nor an `update` rule is an equation, and both
+            # address the state BY NAME. The affect's `lhs` is the sharp one: it
+            # is a plain NAME string, so a walk that maps only EXPRESSIONS
+            # rewrites the affect's RHS and leaves its target pointing at a
+            # state the flattened system no longer declares.
+            flat = _mrr_flatten(case)
+            recorded = Dict{String,String}(String(k) => String(v)
+                                           for (k, v) in flat.metadata.merged_variable_renames)
+            expected = Dict{String,String}(String(k) => String(v)
+                                           for (k, v) in pairs(case.merged_variable_renames))
+            @test recorded == expected
+            @test collect(keys(flat.state_variables)) == [String(s) for s in case.state_variables]
+
+            affects = [a for ev in vcat(flat.discrete_events, flat.continuous_events)
+                       for a in ev.affects]
+            @test length(affects) == length(case.event_affects)
+            for (affect, want) in zip(affects, case.event_affects)
+                @test affect.lhs == String(want.lhs)
+                rhs = to_ascii(affect.rhs)
+                for name in want.rhs_references
+                    @test occursin(String(name), rhs)
+                end
+            end
+
+            for (var_name, wanted) in pairs(case.variable_updates)
+                v = get(flat.parameters, String(var_name),
+                        get(flat.state_variables, String(var_name), nothing))
+                @test v !== nothing
+                if v !== nothing && v.update !== nothing
+                    rendered = join([to_ascii(r.expression) for r in v.update
+                                     if r.expression !== nothing], " ")
+                    for name in wanted
+                        @test occursin(String(name), rendered)
+                    end
+                end
+            end
+
+            # The dead spelling survives in NEITHER, in either form: not the
+            # qualified name a collect-time namespacing carries through, and not
+            # the bare local a coupling-time one leaves behind.
+            haystack = join(vcat(
+                [to_ascii(a.rhs) for a in affects],
+                [a.lhs for a in affects],
+                [to_ascii(r.expression)
+                 for v in vcat(collect(values(flat.parameters)),
+                               collect(values(flat.state_variables)))
+                 if v.update !== nothing for r in v.update if r.expression !== nothing]), " ")
+            for gone in case.absent_from_events_and_updates
+                @test !(String(gone) in split(haystack))
+            end
+        end
+    end
+
+    for case in _MRR_REGISTRY
+        @testset "$(case.id)" begin
+            # The ONE surface that refuses rather than resolves. A surviving
+            # registry body is authored source that expands at the BUILD
+            # boundary, so it can neither be left alone nor rewritten.
+            err = nothing
+            try
+                _mrr_flatten(case)
+            catch e
+                err = e
+            end
+            @test err isa ExpressionTemplateError
+            if err isa ExpressionTemplateError
+                @test err.code == String(case.raises)
+                for name in case.names_in_message
+                    @test occursin(String(name), err.message)
+                end
+            end
+        end
+    end
+
+    for case in _MRR_INLINE
+        @testset "$(case.id)" begin
+            # Both halves in one assertion. That it RESOLVES at all is the
+            # assertion half. That the actual is the caller's value rather than
+            # the survivor's declared default is the `initial_conditions` half:
+            # a key that silently resolved to nothing would leave the run at
+            # that default and the test would still return a verdict.
+            results = run_inline_tests(joinpath(_MRR_DIR, String(case.path)); alg=Tsit5())
+            matching = [r for r in results if r.test_id == String(case.test_id)]
+            @test !isempty(matching)
+            if !isempty(matching)
+                r = matching[1]
+                @test r.passed == case.passes
+                @test r.actual !== nothing
+                if r.actual !== nothing
+                    @test isapprox(r.actual, Float64(case.expected); rtol=1e-6)
+                    @test !isapprox(r.actual, Float64(case.default_without_resolution);
+                                    rtol=1e-6)
                 end
             end
         end
