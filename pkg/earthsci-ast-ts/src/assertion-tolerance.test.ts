@@ -55,14 +55,25 @@ describe('resolveTolerance (esm-spec §6.6.4)', () => {
     })
   })
 
-  it('makes the implementation default terminal, not a fourth merge level', () => {
-    // Nothing declared anywhere: the default applies.
+  it('merges the implementation default as a fourth level, per field', () => {
+    // Nothing declared anywhere: both fields reach level 4.
     expect(resolveTolerance(undefined, undefined, undefined)).toEqual({
       rel: DEFAULT_REL_TOL,
       abs: 0,
     })
     expect(resolveTolerance({}, {}, {})).toEqual({ rel: DEFAULT_REL_TOL, abs: 0 })
-    // One bound declared: the OTHER is 0, not the default's 1e-6.
-    expect(resolveTolerance(undefined, undefined, { abs: 1e-4 })).toEqual({ rel: 0, abs: 1e-4 })
+    // Only `abs` declared: `rel` falls through to the default like any other
+    // undeclared field, rather than the assertion running with no relative
+    // bound at all.
+    expect(resolveTolerance(undefined, undefined, { abs: 1e-4 })).toEqual({
+      rel: DEFAULT_REL_TOL,
+      abs: 1e-4,
+    })
+    // An explicit 0 is how a document turns the relative bound OFF, and level 4
+    // must not override it.
+    expect(resolveTolerance(undefined, undefined, { rel: 0, abs: 1e-4 })).toEqual({
+      rel: 0,
+      abs: 1e-4,
+    })
   })
 })

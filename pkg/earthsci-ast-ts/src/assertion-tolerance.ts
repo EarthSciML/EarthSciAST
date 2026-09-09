@@ -56,11 +56,13 @@ function declaredBound(
  * is the divergence EarthSciML/EarthSciAST#228 records, and this function is
  * written against the per-field rule rather than against it.
  *
- * Level 4 is TERMINAL, not a fourth merge level: `rel = 1e-6` applies only when
- * levels 1-3 declare NEITHER bound. An assertion declaring only `{abs: 1e-4}`
- * resolves to `rel = 0`; it does not silently acquire the default's relative
- * bound, which is an advisory (SHOULD) runtime constant rather than something a
- * document wrote.
+ * The implementation default is the FOURTH MERGE LEVEL, on the same footing as
+ * the three a document writes: `rel` falls through to `1e-6` and `abs` to `0`
+ * per field, so an assertion declaring only `{abs: 1e-4}` resolves to
+ * `(rel = 1e-6, abs = 1e-4)` — it does not run with the relative bound switched
+ * off. Level 4 is only ever reached by a field NO level declares, and an
+ * explicit `0` is a declaration, so a document that means "no relative bound"
+ * says `{"rel": 0}` and gets it.
  */
 export function resolveTolerance(
   modelTol: AssertionTolerance | undefined | null,
@@ -68,10 +70,10 @@ export function resolveTolerance(
   assertionTol: AssertionTolerance | undefined | null,
 ): { rel: number; abs: number } {
   const levels = [assertionTol, testTol, modelTol] as const
-  const rel = declaredBound(levels, 'rel')
-  const abs = declaredBound(levels, 'abs')
-  if (rel === undefined && abs === undefined) return { rel: DEFAULT_REL_TOL, abs: 0 }
-  return { rel: rel ?? 0, abs: abs ?? 0 }
+  return {
+    rel: declaredBound(levels, 'rel') ?? DEFAULT_REL_TOL,
+    abs: declaredBound(levels, 'abs') ?? 0,
+  }
 }
 
 /**
