@@ -195,8 +195,112 @@ mutable struct _AffineSig
     bmemo::IdDict{OpExpr,Bool}
     bio::IOBuffer
     state_scratch::Vector{Int}   # reused per `_cell_ckey!` for the state-lane slots
+    # LANE-AFFINE key support, per branch key: for every lane recipe, which of
+    # its index arguments are NOT structurally affine in the loop indices and
+    # therefore have to be differenced per keyed cell. Classified once per
+    # branch; see `_lane_nonaffine_args!`.
+    lane_ref::Dict{String,Vector{Vector{Bool}}}
+    back_scratch::Vector{Int}    # reused per keyed cell for the backward probe
 end
-_AffineSig() = _AffineSig(Dict{String,_StencilBranch}(), IdDict{OpExpr,Bool}(), IOBuffer(), Int[])
+_AffineSig() = _AffineSig(Dict{String,_StencilBranch}(), IdDict{OpExpr,Bool}(), IOBuffer(), Int[],
+                          Dict{String,Vector{Vector{Bool}}}(), Int[])
+
+# ── LANE-AFFINE SIGNATURE (the cut key measures the LANE, not the output) ─────
+#
+# The gather key historically recorded, per STATE lane, `Δ = slot − oln` — the
+# lane's slot relative to the OUTPUT cell's slot. That is the right key only for
+# a gather from an array laid out exactly like the output: a Cartesian stencil
+# neighbour. It is the WRONG key for a gather whose array has a DIFFERENT shape
+# from the output's — a lower-rank geometry column (`coslat_e[j]` read from an
+# (i,j,k) loop), a staggered face field (`Mx` on (NLON+1, NLAT, NLEV)), a 2-D
+# surface field. Those slots are perfectly affine in the loop indices, but with
+# their OWN strides, so `Δ` moves at every cell and the signature reads a
+# transition where there is none. Two costs follow, both O(grid):
+#
+#   * the edge-inward cut scan never stabilises (the key changes at every cell),
+#     so it walks the whole half-range of every axis instead of stopping after
+#     `_AFFINE_STABLE_GUARD` cells — the scan becomes O(axis length);
+#   * every scanned axis is cut into segments up to the `_AFFINE_MAX_DELTA_SEGS`
+#     cap, so the box count grows with the grid and every per-box cost
+#     (branch key, corner verification, lane derivation, spine memo key) is paid
+#     once per box.
+#
+# The fix keys each lane by its SUBSCRIPTS' own local behaviour instead: a
+# subscript that is STRUCTURALLY affine in the loop indices (`+ - neg *` over
+# loop names and integer literals) can never open a cut and is skipped outright,
+# and any other subscript contributes its per-dim BACKWARD DIFFERENCE
+# `v(loop) − v(loop − e_d)`. That difference is constant wherever the subscript
+# is affine — no cut, at any grid size — and changes exactly at the cell where a
+# clamp / fold / wrap engages, which is exactly where the box processor's corner
+# verification would fail. It is reference-free by construction: keying the
+# deviation from an affine model derived at some probe cell silently poisons the
+# scan whenever that probe sits on the clamped side of the transition being
+# looked for. Ghost membership (a state slot resolving to 0) keeps its own bit,
+# as before. `ESS_LANE_AFFINE_KEY_DISABLE=1` restores the Δ-keyed signature byte
+# for byte.
+_lane_affine_key_disabled() = get(ENV, "ESS_LANE_AFFINE_KEY_DISABLE", "") == "1"
+
+# Is this subscript expression an AFFINE function of the loop indices — a sum of
+# integer literals and loop-index terms with integer coefficients? Such an
+# expression cannot deviate from its own affine model at ANY cell, so it can
+# never open a cut and never has to be evaluated for the signature. Everything
+# else (a clamp `max(k-1,1)`, a fold, a `mod`, a gather through a const table, a
+# division, a registered function) is classified NON-affine and DOES get its
+# per-cell deviation keyed. Conservative in the safe direction: mis-classifying
+# an affine expression as non-affine only costs a per-cell evaluation, while the
+# reverse is impossible -- the recognizer admits nothing but `+ - neg *`.
+function _affine_idx_expr(e::ASTExpr, idxset)::Bool
+    e isa IntExpr && return true
+    e isa NumExpr && return (e::NumExpr).value == round((e::NumExpr).value)
+    e isa VarExpr && return ((e::VarExpr).name in idxset)
+    e isa OpExpr || return false
+    o = e::OpExpr
+    (o.ranges === nothing && o.output_idx === nothing && o.bindings === nothing &&
+     o.expr_body === nothing && o.lower === nothing && o.upper === nothing &&
+     o.filter === nothing && o.key === nothing && o.values === nothing) || return false
+    if o.op == "+" || o.op == "-"
+        return all(a -> _affine_idx_expr(a, idxset), o.args)
+    elseif o.op == "neg"
+        return length(o.args) == 1 && _affine_idx_expr(o.args[1], idxset)
+    elseif o.op == "*"
+        nvar = 0
+        for a in o.args
+            _affine_idx_expr(a, idxset) || return false
+            _const_idx_expr(a, idxset) || (nvar += 1)
+        end
+        return nvar <= 1
+    end
+    return false
+end
+# Loop-index-free (hence constant over the loop) -- the multiplication guard.
+function _const_idx_expr(e::ASTExpr, idxset)::Bool
+    e isa IntExpr && return true
+    e isa NumExpr && return true
+    e isa VarExpr && return !((e::VarExpr).name in idxset)
+    e isa OpExpr || return false
+    return all(a -> _const_idx_expr(a, idxset), (e::OpExpr).args)
+end
+
+# Classify (and cache) one branch's lane subscripts: `true` for an argument that
+# is NOT structurally affine in the loop indices and therefore has to be
+# differenced per keyed cell, `false` for one that can never open a cut. Once per
+# branch; the classification is a property of the EXPRESSION, not of any cell,
+# so no reference point is involved (an earlier version derived an affine model
+# at a reference cell and keyed the deviation from it — which silently poisons
+# the scan when the reference happens to sit on the clamped side of the very
+# transition being looked for, and then keys a change at EVERY cell).
+function _lane_nonaffine_args!(sig::_AffineSig, bkey::String,
+                               recipes::Vector{_LaneRecipe}, idxset)
+    cached = get(sig.lane_ref, bkey, nothing)
+    cached === nothing || return cached
+    ref = Vector{Vector{Bool}}(undef, length(recipes))
+    for k in eachindex(recipes)
+        rec = recipes[k]
+        ref[k] = Bool[!_affine_idx_expr(a, idxset) for a in rec.idx_args]
+    end
+    sig.lane_ref[bkey] = ref
+    return ref
+end
 
 @inline _set_env!(env, idx_names, loop) =
     (for d in eachindex(idx_names); env[idx_names[d]] = loop[d]; end; env)
@@ -292,7 +396,8 @@ function _cell_bkey!(sig::_AffineSig, loop, idx_names, body, ctx_proto,
 end
 function _cell_ckey!(sig::_AffineSig, loop, idx_names, body, ctx_proto,
                      var_map, param_sym_set, reg_funcs,
-                     okey::Union{Nothing,Tuple{Int,Vector{Int}}}=nothing)
+                     okey::Union{Nothing,Tuple{Int,Vector{Int}}}=nothing,
+                     ranges::Union{Nothing,Vector{UnitRange{Int}}}=nothing)
     bkey, branch = _cell_bkey!(sig, loop, idx_names, body, ctx_proto,
                                var_map, param_sym_set, reg_funcs)
     env = ctx_proto.idx_env    # left populated with `loop` by _cell_bkey! (branch_key restores its temp binds)
@@ -311,11 +416,60 @@ function _cell_ckey!(sig::_AffineSig, loop, idx_names, body, ctx_proto,
         @inbounds for v in state_vals
             print(io, v == 0 ? '1' : '0')
         end
-    else
+    elseif _lane_affine_key_disabled()
         base, strides = okey
         oln = _box_oln(base, strides, loop, length(idx_names))
         @inbounds for v in state_vals
             v == 0 ? print(io, "G,") : print(io, v - oln, ',')
+        end
+    else
+        # LANE-AFFINE key (see `_lane_nonaffine_args!`): the ghost pattern, then
+        # every lane subscript's DEVIATION from its own affine model of the loop
+        # indices. Zero wherever the lane is affine — at any grid size — so a
+        # cross-shape gather (lower-rank geometry, staggered face, surface
+        # field) stops manufacturing a cut at every cell.
+        @inbounds for v in state_vals
+            print(io, v == 0 ? '1' : '0')
+        end
+        print(io, '|')
+        ref = _lane_nonaffine_args!(sig, bkey, recipes, ctx_proto.idxset)
+        D = length(idx_names)
+        ca = ctx_proto.const_arrays
+        back = sig.back_scratch
+        resize!(back, D)
+        @inbounds for k in eachindex(recipes)
+            rk = ref[k]
+            (isempty(rk) || !any(rk)) && continue
+            rec = recipes[k]
+            for m in eachindex(rk)
+                rk[m] || continue                  # structurally affine: no cut, ever
+                a = rec.idx_args[m]
+                v = _eval_const_int(a, env, ca)
+                # LOCAL BACKWARD DIFFERENCE per dim: constant wherever the
+                # subscript is affine, and changing exactly at the cell where a
+                # clamp / fold / wrap engages. Reference-free, so no probe point
+                # can poison it. `loop − e_d` may leave the range; a subscript is
+                # a total integer function of the loop, so evaluating there is
+                # always safe (unlike a slot, which can be a ghost).
+                print(io, k, ':')
+                for d in 1:D
+                    @inbounds for dd in 1:D; back[dd] = loop[dd]; end
+                    # CLAMPED to the dim's own range. A subscript is NOT a total
+                    # function of an out-of-range loop point: an unstructured
+                    # gather (`index(cells_on_cell, i, n)`) resolves through a
+                    # const array and throws `E_TREEWALK_CONSTARRAY_OOB` at
+                    # `i = lo − 1`. At `lo` the difference degenerates to 0 for
+                    # every lane, which costs nothing: `lo` is a segment start
+                    # unconditionally, and the scan compares `lo` only against
+                    # `lo + 1`.
+                    back[d] = ranges === nothing ? loop[d] - 1 :
+                              max(first(ranges[d]), loop[d] - 1)
+                    vb = _eval_const_int(a, _set_env!(env, idx_names, back), ca)
+                    print(io, v - vb, ',')
+                end
+                _set_env!(env, idx_names, loop)    # restore for the next lane
+                print(io, ';')
+            end
         end
     end
     _const_fold_key!(io, recipes, env, ctx_proto.const_arrays)
@@ -489,7 +643,7 @@ function _scan_dim_cuts(sig::_AffineSig, body, idx_names, ranges, ctx_proto,
     loop = Vector{Int}(undef, D)
     ck(iv) = (loop[d] = iv;
               (_cell_ckey!(sig, loop, idx_names, body, ctx_proto,
-                           var_map, param_sym_set, reg_funcs, okey))[2])
+                           var_map, param_sym_set, reg_funcs, okey, ranges))[2])
     # Region boundaries in this dim, kept only where they open a real segment
     # (lo < C ≤ hi). Each is confirmed below by comparing C-1 to C.
     cand_d = sort!(Int[c for c in region_cands[d] if lo < c <= hi])
@@ -645,6 +799,65 @@ function _ak_tbl_log!(kind::Symbol, rec::_LaneRecipe, len::Int)
     return nothing
 end
 
+# ── LANE-AFFINE STATE BOX (a state gather on its OWN grid) ────────────────
+#
+# `_AK_STATE_AFFINE` models `u[oln + Δ]` — a gather from an array laid out
+# EXACTLY like the output, which is every Cartesian stencil neighbour. It does
+# not model a gather whose array has a DIFFERENT shape: a lower-rank geometry
+# column (`coslat_e[j]` read from an (i,j,k) loop), a staggered face field on
+# (NLON+1, NLAT, NLEV), a 2-D surface field. Those slots are affine in the loop
+# indices too, but with the ARRAY's own strides, so `Δ` is not constant and the
+# derivation below fell through to a dense per-box slot table — one
+# `_eval_recipe` and one stored `Int` per box CELL, per lane, which is the
+# build's largest grid-dependent term on a transport model.
+#
+# The const and live-forcing branches already have the right descriptor for
+# this: `_AccConstBox` / `_AccForcingBox` address their own grid as
+# `off + Σ(midx_d−1)·s_d`. `_AccStateTblBox` has the same addressing, and its
+# `conn` table only has to map that address to a slot — so a lane whose slot is
+# affine in the loop needs no per-cell table at all: it needs the strides, and a
+# table that is the IDENTITY over the variable's own slot block. That block is
+# one dense contiguous run per array variable (`_enumerate_array_cell_names`
+# lays cells out column-major, contiguously), it is shared by every lane, every
+# box and every equation of the build through the pool below, and it is the same
+# size as the variable — never O(#cells) per lane.
+#
+# `ESS_STATE_BOX_DISABLE=1` restores the dense per-box table byte for byte.
+_state_box_disabled() = get(ENV, "ESS_STATE_BOX_DISABLE", "") == "1"
+
+# Build-scoped, mirroring `_LANE_INTERN_POOL`: installed in
+# `_build_evaluator_impl`, torn down in its `finally`. `nothing` outside a build
+# (or under the kill switch) simply means the table is not shared.
+const _STATE_SLOT_TBL_POOL =
+    Base.RefValue{Union{Nothing,Dict{Tuple{String,Int,Int},Vector{Int}}}}(nothing)
+
+function _state_slot_identity(var_name::String, lo0::Int, hi0::Int)
+    pool = _STATE_SLOT_TBL_POOL[]
+    pool === nothing && return collect(lo0:hi0)
+    return get!(() -> collect(lo0:hi0), pool, (var_name, lo0, hi0))
+end
+
+# The variable's own contiguous slot block, from the affine slot map the recipe
+# already carries (`rec.affine`, corner-verified against `var_map` in
+# `_derive_var_affine`) and its `array_var_info` bounds. Strides are the
+# column-major products of the extents, so all-positive; the block runs from the
+# `lo` corner to the `hi` corner.
+function _state_slot_block(rec::_LaneRecipe)
+    aff = rec.affine
+    aff === nothing && return nothing
+    base, strides = aff
+    n = length(rec.lo)
+    (n == length(rec.hi) && n == length(strides)) || return nothing
+    lo0 = base; hi0 = base
+    @inbounds for d in 1:n
+        strides[d] >= 0 || return nothing
+        lo0 += rec.lo[d] * strides[d]
+        hi0 += rec.hi[d] * strides[d]
+    end
+    (lo0 >= 1 && hi0 >= lo0) || return nothing
+    return (lo0, hi0)
+end
+
 # Materialize a NON-AFFINE state lane as a per-box slot table (Stage 2 of the
 # array-IR unification): one `_eval_recipe` per box cell — the SAME resolution
 # the per-cell fallback would run — stored densely in box-local layout, with 0
@@ -763,13 +976,79 @@ function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
             return _LitRepl(0.0)
         end
         Δ = slot_rep - oln_rep
+        uniform = true
         for cn in corners
             sc = ev(cn)
-            (sc != 0 && sc - _box_oln(base, strides, cn, D) == Δ) ||
-                return _materialize_state_tbl(rec, idx_names, box, D,
-                                              var_map, const_arrays)
+            if !(sc != 0 && sc - _box_oln(base, strides, cn, D) == Δ)
+                uniform = false
+                break
+            end
         end
-        return _AccRepl(_AccStateAffine(Δ))
+        uniform && return _AccRepl(_AccStateAffine(Δ))
+        # Not at a constant offset from the output slot. Before paying for a
+        # dense per-box table, try the lane's OWN affine map (see the LANE-AFFINE
+        # STATE BOX note above): finite-difference the slot across a unit step in
+        # each non-thin dim, then VERIFY at every corner — the same derivation
+        # the const / live-forcing branches below use. A ghost anywhere in the
+        # probe or the corners declines (the table's per-cell 0 sentinel is what
+        # models a ghost).
+        #
+        # GUARD — every subscript must be STRUCTURALLY affine in the output loop
+        # indices. Corner verification alone does NOT license this lowering: a
+        # 2^D-corner check cannot see the interior, and a state subscript can be
+        # arbitrary data (an unstructured `index(conn, i)` gather, whose slot map
+        # is affine at the corners and at `rep + e_d` whenever the connectivity
+        # happens to agree there). The `_derive_var_affine` slot map is affine in
+        # the SUBSCRIPT VALUES, so the composed map is affine in the loop exactly
+        # when the subscripts are — and `_affine_idx_expr` admits nothing but
+        # `+ - neg *` over loop names and integer literals, which is a proof, not
+        # a sample. Anything else keeps the exact per-box table it had before.
+        # (This is the same reasoning the LANE_CONST branch below spells out: its
+        # index affinity holds "BY CONSTRUCTION within a box", not by corner
+        # agreement.) The motivating shapes — a lower-rank geometry column, a
+        # staggered face field, a 2-D surface field — all pass this guard.
+        if !_state_box_disabled() &&
+           all(a -> _affine_idx_expr(a, idx_names), rec.idx_args)
+            blk = _state_slot_block(rec)
+            if blk !== nothing
+                lo0, hi0 = blk
+                ls = zeros(Int, 3)
+                ok = lo0 <= slot_rep <= hi0
+                if ok
+                    for d in 1:D
+                        thin[d] && continue
+                        l2 = copy(rep); l2[d] += 1
+                        v2 = ev(l2)
+                        if v2 == 0
+                            ok = false
+                            break
+                        end
+                        ls[d] = v2 - slot_rep
+                    end
+                end
+                if ok
+                    o = slot_rep - lo0 + 1
+                    @inbounds for d in 1:D
+                        o -= (rep[d] - 1) * ls[d]
+                    end
+                    for cn in corners
+                        sc = ev(cn)
+                        a = o
+                        @inbounds for d in 1:D
+                            a += (cn[d] - 1) * ls[d]
+                        end
+                        if !(sc != 0 && 1 <= a <= (hi0 - lo0 + 1) && lo0 + a - 1 == sc)
+                            ok = false
+                            break
+                        end
+                    end
+                end
+                ok && return _AccRepl(_AccStateTblBox(
+                    _state_slot_identity(rec.var_name, lo0, hi0),
+                    ls[1], ls[2], ls[3], o))
+            end
+        end
+        return _materialize_state_tbl(rec, idx_names, box, D, var_map, const_arrays)
     elseif rec.kind == LANE_LOOPLIT
         dim = findfirst(==(rec.loop_name), idx_names)
         dim === nothing && throw(_StencilFallback("loop-lit name not an output index"))

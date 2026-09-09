@@ -273,6 +273,14 @@ mod tests {
     /// lives on the node rather than in `args`; `resolve_expr` folds a SCALAR
     /// `const` to a `Number` before the oracle is consulted, so only an ARRAY
     /// one is actually refused.
+    ///
+    /// `D` is in the gap and the ARRAY evaluator's is not, which is the one
+    /// asymmetry here: `simulate_array`'s `check_evaluable_side` walks an
+    /// equation's LHS and unwraps only `ic`, so delisting `D` there would
+    /// reject every document that states a differential equation. Nothing is
+    /// lost by the asymmetry — both routes refuse an unresolved right-hand-side
+    /// `D` upstream, at `flatten::first_unresolved_rhs_time_derivative` — and
+    /// closing it means teaching that gate to unwrap a structural `D` LHS too.
     #[test]
     fn the_scalar_evaluable_gap_is_pinned() {
         const CORE: &[&str] = &[
@@ -355,6 +363,16 @@ mod tests {
         assert_eq!(
             gap,
             vec![
+                // esm-spec §4.2: a right-hand-side structural `D` is resolved
+                // to its operand's tendency by `flatten`'s phase 5b′, or
+                // refused with `unlowered_operator` before any build; a `D` on
+                // an equation LHS never reaches `resolve_expr`, which runs only
+                // over right-hand sides, observed bodies and event bodies. So
+                // the only `D` that could arrive here is a pipeline bug, and it
+                // is refused by name rather than answered — it used to have a
+                // `0.0` rule "for legacy parity" with the array evaluators,
+                // which is how four shipped documents computed silent zeros.
+                "D",
                 "aggregate",
                 "apply_expression_template",
                 "argmax",

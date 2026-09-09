@@ -26,7 +26,15 @@ function _pgt_build3(model, ics, bufs)
     out = Dict{Symbol,Any}()
     for (tag, envs) in (
             (:tbl, ("ESS_OBSREF_DISABLE" => nothing, "ESS_STENCIL_DISABLE" => nothing)),
-            (:off, ("ESS_OBSREF_DISABLE" => "1", "ESS_STENCIL_DISABLE" => nothing)),
+            # `ESS_OBSREF_DISABLE=1` alone no longer forces the whole-equation
+            # decline: with the LANE-AFFINE signature the clamp transition opens
+            # a box cut of its own, so the forcing subscript is affine WITHIN
+            # each box and the equation stays on the affine path with no table
+            # at all. The oracle needs a genuinely divergent second path, so the
+            # `:off` arm restores the Δ-keyed signature too — which is exactly
+            # the build this switch was written against.
+            (:off, ("ESS_OBSREF_DISABLE" => "1", "ESS_STENCIL_DISABLE" => nothing,
+                    "ESS_LANE_AFFINE_KEY_DISABLE" => "1")),
             (:ref, ("ESS_OBSREF_DISABLE" => nothing, "ESS_STENCIL_DISABLE" => "1")))
         withenv(envs...) do
             ESM._reset_cascade_tally!()
@@ -107,6 +115,14 @@ function _pgt_oracle(model, ics, bufs; refresh!)
     @test get(b[:tbl][4], :affine, 0) >= 1
     @test get(b[:tbl][4], :percell_acc, 0) == 0
     @test get(b[:off][4], :percell_acc, 0) >= 1
+    # And with the lane-affine signature on, the table is not merely optional —
+    # a clamped forcing subscript needs NO per-box table, because the clamp
+    # transition is a box cut. (`_AK_TBL_LOG` counts every table materialised.)
+    withenv("ESS_AK_TBL_DEBUG" => "1") do
+        ESM._reset_ak_tbl_log!()
+        ESM._build_evaluator_impl(model; initial_conditions=ics, param_arrays=bufs)
+        @test sum(v[2] for v in values(ESM._AK_TBL_LOG); init=0) == 0
+    end
     du = Dict(tag => _pgt_eval(b[tag]) for tag in (:tbl, :off, :ref))
     @test du[:tbl] == du[:ref]
     @test du[:off] == du[:ref]
