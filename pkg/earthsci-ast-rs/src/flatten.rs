@@ -44,13 +44,13 @@
 //! can demand one with [`reject_unlowered_operators`].
 
 use crate::types::{
-    ContinuousEvent, CouplingEntry, DiscreteEvent, Domain, Equation, EsmFile, Expr, ExpressionNode,
-    IndexSet, InlineValue, JoinClause, Model, ModelVariable, OverlapClause, RangeSpec,
-    ReactionSystem, VariableMapTransform, VariableType,
+    AffectEquation, ContinuousEvent, CouplingEntry, DiscreteEvent, DiscreteEventTrigger, Domain,
+    Equation, EsmFile, Expr, ExpressionNode, IndexSet, InlineValue, JoinClause, Model,
+    ModelVariable, OverlapClause, RangeSpec, ReactionSystem, VariableMapTransform, VariableType,
 };
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use thiserror::Error;
 
 // ============================================================================
@@ -359,6 +359,17 @@ pub enum FlattenError {
         reason: String,
     },
 
+    /// A SURVIVING `expression_templates` registry body names a variable a
+    /// coupling rule rewrote out of the flattened equations (esm-spec §9.6.4,
+    /// CONFORMANCE_SPEC §5.35).
+    ///
+    /// Carries the stable `template_body_references_coupling_rewritten_variable`
+    /// diagnostic code. Not `#[from]`: [`FlattenError::CouplingImport`] already
+    /// owns the blanket conversion from [`crate::diagnostic::DiagnosticError`],
+    /// and a §9.6.4 refusal is not a §10.11 import failure.
+    #[error("{0}")]
+    ExpressionTemplate(crate::diagnostic::DiagnosticError),
+
     /// The file contains no models or reaction systems to flatten.
     #[error("No models or reaction systems to flatten")]
     Empty,
@@ -409,6 +420,20 @@ pub struct FlattenMetadata {
     /// document with no renaming merge, which is the overwhelming majority.
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub merged_variable_renames: IndexMap<String, String>,
+    /// Every name a COUPLING rule rewrote OUT of the flattened equations: a
+    /// NAMED-transform `variable_map`'s substituted `to`, and every merged-away
+    /// spelling of [`FlattenMetadata::merged_variable_renames`].
+    ///
+    /// Only the registry guard reads it
+    /// ([`check_registry_coupling_rewrites`]): a surviving
+    /// `expression_templates` body is authored source no substitution reaches,
+    /// so a body naming one of these is REFUSED rather than resolved
+    /// (CONFORMANCE_SPEC §5.35). Not a consumer-facing map, unlike
+    /// `merged_variable_renames`: it says a name is GONE, not where it went.
+    /// The Rust twin of Python's `FlattenMetadata.coupling_rewritten_names` and
+    /// Julia's local `map_rewritten_names`.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub coupling_rewritten_names: BTreeSet<String>,
 }
 
 /// Spec-compliant flattened coupled system (§4.7.5).
@@ -681,7 +706,7 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
 
     // Phase 3: apply coupling rules, collecting rule descriptions and the
     // document-wide map of the state names the merges DELETED (issue #230).
-    let (coupling_rules_applied, merged_variable_renames) =
+    let (coupling_rules_applied, merged_variable_renames, coupling_rewritten_names) =
         apply_coupling_entries(file, &mut per_system)?;
 
     // Phase 4: conflict detection after coupling.
@@ -740,6 +765,12 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
         lifted_shapes,
     } = parts;
 
+    // Phase 5f: the MERGED expression-template registry (esm-spec §9.6.4 rule 7)
+    // ...and the ONE place a coupling-rewritten name is REFUSED rather than
+    // resolved. See [`check_registry_coupling_rewrites`].
+    let template_registry = merged_template_registry(file);
+    check_registry_coupling_rewrites(&template_registry, &coupling_rewritten_names)?;
+
     Ok(FlattenedSystem {
         independent_variables,
         state_variables,
@@ -763,7 +794,7 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
             .as_ref()
             .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
             .unwrap_or_default(),
-        template_registry: merged_template_registry(file),
+        template_registry,
         loader_fields,
         lifted_shapes,
         metadata: FlattenMetadata {
@@ -772,8 +803,116 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
             dimension_promotions_applied: Vec::new(),
             implicit_interface_inferred: false,
             merged_variable_renames,
+            coupling_rewritten_names,
         },
     })
+}
+
+/// Keys of an expression node whose STRING value names something other than a
+/// variable, so a raw-body walk must not read them as references.
+const TEMPLATE_BODY_NON_OPERAND_KEYS: &[&str] = &[
+    "op", "wrt", "dim", "fn", "table", "id", "manifold", "name", "semiring", "reduce",
+];
+
+/// Every variable name a RAW (unparsed) template body references.
+///
+/// The registry holds bodies as JSON rather than as [`Expr`], so this walks the
+/// JSON: a bare string in an OPERAND position is a variable reference. A
+/// structural key (`op`, `wrt`, `fn`, …) names an operator, an axis or a
+/// registry id and is skipped. Mirrors Python
+/// `flatten.py::_template_body_var_names`.
+fn template_body_var_names(body: &serde_json::Value) -> BTreeSet<String> {
+    fn walk(node: &serde_json::Value, operand: bool, out: &mut BTreeSet<String>) {
+        match node {
+            serde_json::Value::String(name) => {
+                if operand {
+                    out.insert(name.clone());
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    walk(item, operand, out);
+                }
+            }
+            serde_json::Value::Object(map) => {
+                for (key, value) in map {
+                    walk(
+                        value,
+                        !TEMPLATE_BODY_NON_OPERAND_KEYS.contains(&key.as_str()),
+                        out,
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = BTreeSet::new();
+    walk(body, false, &mut out);
+    out
+}
+
+/// Refuse a SURVIVING registry body that names a coupling-rewritten variable.
+///
+/// A `variable_map` substitution and an `operator_compose` renaming match both
+/// DELETE a name from the flattened tables and rewrite the equations off it. A
+/// surviving `expression_templates` body is a shadow copy of authored source
+/// that no equation walk reaches, and it expands at the BUILD boundary rather
+/// than at flatten — so a body still naming a deleted variable would expand,
+/// later and elsewhere, into a name the flattened system does not declare (for
+/// `param_to_var` / `conversion_factor`, an unbound variable deep in the build;
+/// for the scaling transforms, a silent semantic divergence from the
+/// expand-at-load image).
+///
+/// This is the ONE site where such a reference is REFUSED rather than resolved
+/// (CONFORMANCE_SPEC §5.35). The body is authored source: rewriting it would
+/// silently diverge from the expand-at-load image the same document produces
+/// with reference-preserving expansion disabled. A template `param` SHADOWS the
+/// outer name (esm-spec §9.6.1), so a body that BINDS the name through its
+/// params is fine — which is exactly the fix the message names.
+///
+/// Mirrors Julia `flatten.jl::_check_registry_coupling_rewrites` and Python
+/// `flatten.py::_check_registry_coupling_rewrites`.
+fn check_registry_coupling_rewrites(
+    registry: &IndexMap<String, serde_json::Value>,
+    rewritten: &BTreeSet<String>,
+) -> Result<(), FlattenError> {
+    if registry.is_empty() || rewritten.is_empty() {
+        return Ok(());
+    }
+    // Sorted, so the template a multi-entry registry reports is not a function
+    // of document order — the peer bindings sort here for the same reason.
+    let mut names: Vec<&String> = registry.keys().collect();
+    names.sort_unstable();
+    for tname in names {
+        let Some(decl) = registry[tname.as_str()].as_object() else {
+            continue;
+        };
+        let Some(body) = decl.get("body") else {
+            continue;
+        };
+        let params: BTreeSet<&str> = decl
+            .get("params")
+            .and_then(|p| p.as_array())
+            .map(|entries| entries.iter().filter_map(|v| v.as_str()).collect())
+            .unwrap_or_default();
+        let hits: Vec<String> = template_body_var_names(body)
+            .into_iter()
+            .filter(|name| !params.contains(name.as_str()) && rewritten.contains(name))
+            .collect();
+        if !hits.is_empty() {
+            return Err(FlattenError::ExpressionTemplate(crate::diagnostic::err(
+                crate::diagnostic::codes::TEMPLATE_BODY_REFERENCES_COUPLING_REWRITTEN_VARIABLE,
+                format!(
+                    "expression template '{tname}' body references '{}', which a coupling rule \
+                     rewrote in the flattened equations; the registry body would expand to a \
+                     stale name at the build boundary. Bind the value through the template's \
+                     params, or expand the reference before coupling (esm-spec §9.6.4).",
+                    hits.join("', '")
+                ),
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// The MERGED expression-template registry of the flattened representation
@@ -1256,8 +1395,12 @@ fn collect_component_systems(
 fn apply_coupling_entries(
     file: &EsmFile,
     per_system: &mut Vec<SystemBlock>,
-) -> Result<(Vec<String>, IndexMap<String, String>), FlattenError> {
+) -> Result<(Vec<String>, IndexMap<String, String>, BTreeSet<String>), FlattenError> {
     let mut coupling_rules_applied = Vec::new();
+    // Every name a coupling rule rewrote OUT of the equations, for the registry
+    // guard alone (see [`FlattenMetadata::coupling_rewritten_names`]). Julia
+    // calls this local `map_rewritten_names`.
+    let mut coupling_rewritten_names: BTreeSet<String> = BTreeSet::new();
     // The document-wide merge map: every state spelling an `operator_compose`
     // renaming match has DELETED, mapped onto the survivor (issue #230). It
     // accumulates across the rank-0 pass and is applied to the by-name endpoints
@@ -1265,7 +1408,11 @@ fn apply_coupling_entries(
     // spelling resolves to the survivor instead of dangling.
     let mut merged_renames: IndexMap<String, String> = IndexMap::new();
     let Some(entries) = &file.coupling else {
-        return Ok((coupling_rules_applied, merged_renames));
+        return Ok((
+            coupling_rules_applied,
+            merged_renames,
+            coupling_rewritten_names,
+        ));
     };
 
     // BY KIND, not by array position. §4.7.1 runs before §4.7.2 and §4.7.3 so
@@ -1292,12 +1439,27 @@ fn apply_coupling_entries(
                 continue;
             }
             let mut one = Vec::new();
-            apply_coupling_entry(entry, per_system, &mut one, &mut merged_renames)?;
+            apply_coupling_entry(
+                entry,
+                per_system,
+                &mut one,
+                &mut merged_renames,
+                &mut coupling_rewritten_names,
+            )?;
             descriptions[i] = one.into_iter().next();
         }
     }
     coupling_rules_applied.extend(descriptions.into_iter().flatten());
-    Ok((coupling_rules_applied, merged_renames))
+    // Every merged-away spelling is a rewritten name too: `retarget_merged_names`
+    // deleted it from the tables and rewrote every equation off it, exactly as a
+    // NAMED `variable_map` transform does to its `to` (Julia's
+    // `union!(map_rewritten_names, keys(merged_renames))`).
+    coupling_rewritten_names.extend(merged_renames.keys().cloned());
+    Ok((
+        coupling_rules_applied,
+        merged_renames,
+        coupling_rewritten_names,
+    ))
 }
 
 /// Fold a merge's fresh rename map into the running document-wide one.
@@ -1364,10 +1526,12 @@ fn retarget_connector<'a>(
                 }
             }
             // The connector's own expression is carried on the ENTRY too, so
-            // the equation-AST retarget never saw it either.
+            // the equation-AST retarget never saw it either. `rename_names`
+            // rather than `substitute`, so a `join` inside it gets the same
+            // plain-string coverage every other retarget site does.
             if let Some(raw) = obj.get("expression") {
                 if let Ok(expr) = serde_json::from_value::<Expr>(raw.clone()) {
-                    let rewritten = crate::substitute::substitute(&expr, &subs);
+                    let rewritten = rename_names(&expr, &subs, renames);
                     if rewritten != expr {
                         if let Ok(v) = serde_json::to_value(&rewritten) {
                             obj.insert("expression".to_string(), v);
@@ -2660,6 +2824,7 @@ fn apply_coupling_entry(
     per_system: &mut Vec<SystemBlock>,
     coupling_rules_applied: &mut Vec<String>,
     merged_renames: &mut IndexMap<String, String>,
+    coupling_rewritten_names: &mut BTreeSet<String>,
 ) -> Result<(), FlattenError> {
     match entry {
         CouplingEntry::OperatorCompose {
@@ -2724,12 +2889,19 @@ fn apply_coupling_entry(
                 // resolves — the expression arm's `contains` check below reads
                 // the AUTHORED node, which still spells the authored `from`.
                 VariableMapTransform::Named(_) => {
+                    let resolved_to = resolve_renamed(to, merged_renames).to_string();
                     apply_variable_map(
                         resolve_renamed(from, merged_renames),
-                        resolve_renamed(to, merged_renames),
+                        &resolved_to,
                         *factor,
                         per_system,
                     );
+                    // A NAMED transform substitutes `to` away entirely; the
+                    // Expression arm below leaves it standing as the observed
+                    // the transform defines. Only the first DELETES a name, so
+                    // only the first joins the set the registry guard refuses
+                    // against (Julia's `map_rewritten_names`).
+                    coupling_rewritten_names.insert(resolved_to);
                 }
                 // Expression transform (esm-spec §10.4): no substitution —
                 // references to `to` stay intact and resolve to the observed
@@ -3466,16 +3638,117 @@ fn reattribute_merged_equations(
 /// equation side in the whole document is rewritten off the dead name. An
 /// observed variable's defining expression is one of those equations (it is not
 /// carried on the variable record), so this covers it too.
+///
+/// "Document-wide" is more than the equation pool, and the three surfaces below
+/// are the rest of it (CONFORMANCE_SPEC §5.35). All three were namespaced at
+/// COLLECTION — phase 1, before any coupling rule ran — so each still holds the
+/// FULLY-QUALIFIED spelling this merge just deleted, and nothing downstream
+/// rewrites it:
+///
+/// * **EVENTS.** An affect's `lhs` is a plain variable NAME, not an expression,
+///   and it is exactly what a renaming merge deletes: an affect writing to an
+///   unknown the flattened system does not declare is a silent wrong answer
+///   rather than a refusal. A crossing condition, an affect RHS, an
+///   `affect_neg`, and a discrete `condition` trigger's expression go with it.
+/// * **`update` RULES.** A variable's parameter-update `when` / `expression`
+///   slots are Expressions carried on the VARIABLE rather than in `equations`,
+///   so no equation walk reaches them; a parameter that refreshes from `B.x`
+///   would keep reading a state that no longer exists.
+/// * **`join` SIDECARS.** Handled inside [`rename_join_names`] — see there.
+///
+/// (`field_ics` are classified out of `equations` after this runs, so they ride
+/// along with the equations.)
 fn retarget_merged_names(per_system: &mut [SystemBlock], renames: &IndexMap<String, String>) {
+    if renames.is_empty() {
+        return;
+    }
     let subs: HashMap<String, Expr> = renames
         .iter()
         .map(|(from, to)| (from.clone(), Expr::Variable(to.clone())))
         .collect();
+    let ren = |expr: &Expr| rename_names(expr, &subs, renames);
     for block in per_system.iter_mut() {
         for eq in block.equations.iter_mut() {
-            eq.lhs = crate::substitute::substitute(&eq.lhs, &subs);
-            eq.rhs = crate::substitute::substitute(&eq.rhs, &subs);
+            eq.lhs = ren(&eq.lhs);
+            eq.rhs = ren(&eq.rhs);
         }
+        for var in block
+            .state_vars
+            .values_mut()
+            .chain(block.parameters.values_mut())
+            .chain(block.observed_vars.values_mut())
+        {
+            var.for_each_expression_mut(&mut |expr| *expr = ren(expr));
+        }
+        for event in block.continuous_events.iter_mut() {
+            rename_continuous_event_names(event, &subs, renames);
+        }
+        for event in block.discrete_events.iter_mut() {
+            rename_discrete_event_names(event, &subs, renames);
+        }
+    }
+}
+
+/// [`crate::substitute::substitute`], extended to a `join`'s plain strings.
+///
+/// The walker every merged-away retarget uses. `substitute` itself is left
+/// alone: it is the general binding-substitution primitive, and a `join` string
+/// cannot hold the arbitrary EXPRESSION a binding may supply. Mirrors Python
+/// `flatten.py::rename_names`.
+fn rename_names(
+    expr: &Expr,
+    subs: &HashMap<String, Expr>,
+    renames: &IndexMap<String, String>,
+) -> Expr {
+    rename_join_names(&crate::substitute::substitute(expr, subs), renames)
+}
+
+/// One event's affect list, off the names a merge deleted.
+///
+/// Deliberately NOT [`crate::substitute::substitute_in_continuous_event`]: that
+/// one maps EXPRESSIONS, and an affect's `lhs` is a plain variable NAME string.
+/// The `lhs` is precisely what a renaming merge deletes.
+fn rename_affect_names(
+    affects: &mut [AffectEquation],
+    subs: &HashMap<String, Expr>,
+    renames: &IndexMap<String, String>,
+) {
+    for affect in affects {
+        if let Some(survivor) = renames.get(&affect.lhs) {
+            affect.lhs = survivor.clone();
+        }
+        affect.rhs = rename_names(&affect.rhs, subs, renames);
+    }
+}
+
+/// A continuous event's conditions, affects and `affect_neg` (see
+/// [`rename_affect_names`]).
+fn rename_continuous_event_names(
+    event: &mut ContinuousEvent,
+    subs: &HashMap<String, Expr>,
+    renames: &IndexMap<String, String>,
+) {
+    for condition in event.conditions.iter_mut() {
+        *condition = rename_names(condition, subs, renames);
+    }
+    rename_affect_names(&mut event.affects, subs, renames);
+    if let Some(neg) = event.affect_neg.as_mut() {
+        rename_affect_names(neg, subs, renames);
+    }
+}
+
+/// A discrete event's trigger and affects. Only a `condition` trigger carries an
+/// expression; a periodic / times trigger is pure data.
+fn rename_discrete_event_names(
+    event: &mut DiscreteEvent,
+    subs: &HashMap<String, Expr>,
+    renames: &IndexMap<String, String>,
+) {
+    if let DiscreteEventTrigger::Condition { expression } = &mut event.trigger {
+        *expression = rename_names(expression, subs, renames);
+    }
+    if let Some(affects) = event.affects.as_mut() {
+        rename_affect_names(affects, subs, renames);
     }
 }
 
@@ -3696,10 +3969,18 @@ fn apply_variable_map(from: &str, to: &str, factor: Option<f64>, per_system: &mu
     // and observeds but not events, so an event condition / affect RHS
     // referencing the removed `to` parameter kept a dangling reference.
     let subs: HashMap<String, Expr> = std::iter::once((to.to_string(), replacement)).collect();
+    // The same single pair in the form the join renamer takes: a `join` names
+    // its key columns and overlap envelope factors as plain STRINGS, which no
+    // expression substitution can reach.
+    let join_renames: IndexMap<String, String> =
+        std::iter::once((to.to_string(), from.to_string())).collect();
     for block in per_system.iter_mut() {
         for eq in &mut block.equations {
             eq.lhs = crate::substitute::substitute(&eq.lhs, &subs);
-            eq.rhs = rename_join_names(&crate::substitute::substitute(&eq.rhs, &subs), to, from);
+            eq.rhs = rename_join_names(
+                &crate::substitute::substitute(&eq.rhs, &subs),
+                &join_renames,
+            );
         }
         // A `variable_map` also removes the mapped parameter from the system, so
         // it must reach every remaining Expression a VARIABLE carries — the
@@ -3713,7 +3994,8 @@ fn apply_variable_map(from: &str, to: &str, factor: Option<f64>, per_system: &mu
             .chain(block.parameters.values_mut())
         {
             var.for_each_expression_mut(&mut |expr| {
-                *expr = rename_join_names(&crate::substitute::substitute(expr, &subs), to, from);
+                *expr =
+                    rename_join_names(&crate::substitute::substitute(expr, &subs), &join_renames);
             });
         }
         // ...and event conditions / affect RHS (continuous + discrete), for the
@@ -3740,7 +4022,7 @@ fn contains_join(expr: &Expr) -> bool {
     }
 }
 
-/// Rename `to` → `from` in every plain-string name a `join` clause carries
+/// Apply a rename MAP to every plain-string name a `join` clause carries
 /// (CONFORMANCE_SPEC §5.5.6), the join-side companion of the `variable_map`
 /// substitution above.
 ///
@@ -3755,25 +4037,31 @@ fn contains_join(expr: &Expr) -> bool {
 /// The exact case this exists for: an overlap-gated value-invention producer
 /// over a coupled rectangle buffer, where `tgt_env = [ISRM.src_W, …]` while an
 /// `ISRM_SR.src_W -> ISRM.src_W` map has already removed `ISRM.src_W`.
-fn rename_join_names(expr: &Expr, to: &str, from: &str) -> Expr {
+///
+/// Taken as a MAP rather than a single pair, because the same hazard reaches a
+/// join from two directions: a `variable_map` deleting its consumer parameter
+/// (one pair, [`apply_variable_map`]) and an `operator_compose` renaming match
+/// deleting a dependent variable (a whole map,
+/// esm-libraries-spec §4.7.1 step 4 / CONFORMANCE_SPEC §5.35).
+fn rename_join_names(expr: &Expr, renames: &IndexMap<String, String>) -> Expr {
     // Scan BEFORE the rebuild: `map_children` clones, and this runs over every
     // equation of every block for every `variable_map` entry. Almost no model
     // carries a join, and those must stay free of an extra whole-tree copy on
     // top of the substitution's. The scan is once per tree, not per node — the
     // recursion below is the unguarded `rename_join_names_in`.
-    if !contains_join(expr) {
+    if renames.is_empty() || !contains_join(expr) {
         return expr.clone();
     }
-    rename_join_names_in(expr, to, from)
+    rename_join_names_in(expr, renames)
 }
 
-fn rename_join_names_in(expr: &Expr, to: &str, from: &str) -> Expr {
+fn rename_join_names_in(expr: &Expr, renames: &IndexMap<String, String>) -> Expr {
     let Expr::Operator(node) = expr else {
         return expr.clone();
     };
-    let mut out = node.map_children(&mut |c| rename_join_names_in(c, to, from));
+    let mut out = node.map_children(&mut |c| rename_join_names_in(c, renames));
     if let Some(join) = &node.join {
-        let ren = |n: &String| -> String { if n == to { from.to_string() } else { n.clone() } };
+        let ren = |n: &String| -> String { renames.get(n).unwrap_or(n).clone() };
         out.join = Some(
             join.iter()
                 .map(|c| JoinClause {
