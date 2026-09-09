@@ -3385,10 +3385,11 @@ runner.
 §5.20 governs the §6.6.3 **pass predicate**; this one governs the `(rel, abs)`
 pair that predicate is evaluated *with*. esm-spec §6.6.4 resolves tolerance from
 up to three declared `{abs?, rel?}` blocks — the assertion's, its test's, and the
-enclosing component's — and it resolves them **per field**: `abs` and `rel` each
-take their value from the innermost level that declares that field. The three
-simulation bindings — **Julia, Python, Rust** — must agree. The shared
-**offline, data-only** fixture lives in `tests/conformance/tolerance_resolution/`.
+enclosing component's — plus the implementation default as a fourth level, and it
+resolves them **per field**: `abs` and `rel` each take their value from the
+innermost level that declares that field. The three simulation bindings —
+**Julia, Python, Rust** — must agree. The shared **offline, data-only** fixture
+lives in `tests/conformance/tolerance_resolution/`.
 
 #### 5.21.1 Why this needs a category
 
@@ -3446,16 +3447,27 @@ Both are pinned by dedicated cases, because both are silent when wrong:
    through from it would run all ten of them at `rel = 1e-6` — the exactness
    requirement gone, with every fixture still green.
 
-2. **The implementation default is terminal, not a fourth merge level.** `rel =
-   1e-6` applies only when levels 1-3 declare *neither* bound; it is not merged
-   field-by-field into a partially-declared result, so an assertion declaring
-   only `{abs: 1e-4}` resolves to `rel = 0`. §6.6.4's merge sentence governs the
-   `{abs?, rel?}` objects a *document* writes, whereas the default is an advisory
-   (SHOULD) constant, and a normative resolved tolerance must not depend on one.
-   The consequence of the other reading is measured, not asserted: merging the
-   default per field widens the admissible band of 64 further assertions in the
-   shipped corpus — conformance fixtures included, by up to 4·10⁵× — none of
-   whose authors wrote a relative bound.
+2. **The implementation default is the FOURTH LEVEL of the same merge**, not a
+   fallback reached only when levels 1-3 are silent. It supplies whichever bound
+   is *still* undeclared after them, so an assertion declaring only
+   `{abs: 1e-4}` resolves to `(rel = 1e-6, abs = 1e-4)`, not `(0, 1e-4)`.
+
+   The consequence is that **`rel: 0` is the only way a document can ask for an
+   absolute-only comparison**, and it is load-bearing rather than stylistic: an
+   `abs`-only block that means to be tight silently acquires a `1e-6` relative
+   band otherwise. When this rule was adopted, the 69 assertions in the shipped
+   corpus that would have picked up that band — including
+   `tests/conformance/elementwise_observed_gather` (`abs = 1e-11`),
+   `pde_inline_observed_rank2` and `pde_inline_dead_observed` — had an explicit
+   `rel: 0` written into the 63 authored blocks that govern them, so every one
+   of them still enforces the bound its author wrote. **A new `abs`-only block
+   is not an error, but it is a choice**: it asks for the default relative band
+   as well, and a fixture that exists to be tight should spell `rel: 0`.
+
+   Note the asymmetry, which is not an oversight: level 4 declares `rel = 1e-6`
+   and *no* `abs` bound, so a `rel`-only block resolves to `abs = 0` under
+   either reading. Only an `abs`-only block distinguishes them, which is why
+   the manifest pins that shape at both the model and the assertion level.
 
 #### 5.21.4 Gate
 

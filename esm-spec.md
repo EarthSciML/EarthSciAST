@@ -2478,26 +2478,28 @@ The rule is pinned by the `assertion_nonfinite` conformance category (CONFORMANC
 
 #### 6.6.4 Tolerance Resolution Order
 
-Tolerance is resolved **per field**, most-specific first. `abs` and `rel` resolve *independently*: each takes its value from the innermost of the three **declared levels** that declares that field.
+Tolerance is resolved **per field**, most-specific first. `abs` and `rel` resolve *independently*: each takes its value from the innermost level that declares that field.
 
 1. **Per-assertion** `tolerance` — its declared fields win.
 2. Otherwise, for a field it does not declare, **per-test** `tolerance` — the test's default.
 3. Otherwise, for a field neither declares, the enclosing component's **model-level** `tolerance` field.
-4. If **neither** bound is declared at any of the three, an **implementation default** applies: conforming runtimes SHOULD use `rel = 1e-6` and no `abs` bound.
+4. Otherwise, for a field none of the three declares, an **implementation default**: conforming runtimes SHOULD use `rel = 1e-6` and no `abs` bound.
 
-Each of levels 1-3 is a `{abs?, rel?}` object, and an absent field falls through to the next level independently. Specifying only `abs` at a more-specific level does not mask `rel` from a less-specific one — they are merged per-field. With a model-level `{rel: 1e-6}` and an assertion-level `{abs: 1e-9}`, the resolved pair is `(rel = 1e-6, abs = 1e-9)`; a runtime that returned the assertion's block whole would run that assertion with **no relative bound at all**, silently discarding a tolerance the author declared one level up.
+All four levels take part in the **same per-field merge**, and an absent field falls through to the next one independently. Specifying only `abs` at a more-specific level does not mask `rel` from a less-specific one — they are merged per-field. With a model-level `{rel: 1e-6}` and an assertion-level `{abs: 1e-9}`, the resolved pair is `(rel = 1e-6, abs = 1e-9)`; a runtime that returned the assertion's block whole would run that assertion with **no relative bound at all**, silently discarding a tolerance the author declared one level up.
 
-**What "absent" means.** A field is absent when its key is missing from the object, and only an absent field falls through. `abs` and `rel` are declared `number` in the schema, so a JSON `null` is not conforming input; a runtime that accepts one MUST treat it as absent. An explicit **`0` is a declaration, not an absence** — it says *"no bound of this kind"* — and it stops the fallthrough:
+**Level 4 is a merge level, not a fallback.** It is not consulted only when levels 1-3 are silent: it supplies whichever bound is *still* undeclared after them. An assertion that declares only `{abs: 1e-4}`, with no `rel` at any enclosing level, therefore resolves to `(rel = 1e-6, abs = 1e-4)` — the default's relative bound applies alongside the declared absolute one, and passing either bound is sufficient (§6.6.3). Because the default is a level rather than a fallback, **`rel: 0` is the only way a document can ask for an absolute-only comparison**, and correspondingly `abs` has no such spelling to need: the default declares no `abs` bound, so an unspecified `abs` resolves to `0` at level 4 regardless.
+
+**What "absent" means.** A field is absent when its key is missing from the object, and only an absent field falls through. `abs` and `rel` are declared `number` in the schema, so a JSON `null` is not conforming input; a runtime that accepts one MUST treat it as absent. An explicit **`0` is a declaration, not an absence** — it says *"no bound of this kind"* — and it stops the fallthrough, the implementation default included:
 
 | `tolerance` block | Resolved | Why |
 |---|---|---|
-| assertion `{abs: 1e-9}`, model `{rel: 1e-6}` | `rel = 1e-6`, `abs = 1e-9` | `rel` absent at the assertion, so it falls through. |
-| assertion `{rel: 0, abs: 1e-9}`, model `{rel: 1e-6}` | `rel = 0`, `abs = 1e-9` | The explicit `0` stops the fallthrough: an `abs`-only comparison. |
+| assertion `{abs: 1e-9}`, model `{rel: 1e-6}` | `rel = 1e-6`, `abs = 1e-9` | `rel` absent at the assertion, so it falls through to the model. |
+| assertion `{abs: 1e-4}`, nothing else | `rel = 1e-6`, `abs = 1e-4` | `rel` falls through all three document levels to the default. |
+| assertion `{rel: 0, abs: 1e-4}`, nothing else | `rel = 0`, `abs = 1e-4` | The explicit `0` stops the fallthrough at level 1: an `abs`-only comparison. |
+| assertion `{rel: 0, abs: 1e-9}`, model `{rel: 1e-6}` | `rel = 0`, `abs = 1e-9` | Likewise — the `0` blocks the model's `rel`, not just the default's. |
 | model `{rel: 0, abs: 0}`, nothing else | `rel = 0`, `abs = 0` | Exact equality — the only way to spell it, and the way the recurrence fixtures do (CONFORMANCE_SPEC §5.19). |
-| assertion `{}`, nothing else | `rel = 1e-6`, `abs = 0` | An object declaring neither bound contributes nothing, so the implementation default is reached. |
-| nothing anywhere | `rel = 1e-6`, `abs = 0` | The implementation default. |
-
-**The implementation default is terminal, not a fourth merge level.** It is consulted only when levels 1-3 declared *neither* bound; it is not merged field-by-field into a partially-declared result. An assertion that declares only `{abs: 1e-4}` therefore resolves to `rel = 0` unless some enclosing level declares `rel` — it does **not** silently acquire the default's `1e-6` relative bound. Two things force this reading. The merge sentence above governs "each of levels 1-3 … a `{abs?, rel?}` object" — the blocks a *document* writes — whereas level 4 is an advisory (SHOULD) runtime constant, and a normative resolved tolerance must not depend on an advisory value. And per-field merging of level 4 would mean a document could never say *"compare within this absolute tolerance and nothing else"* without writing `rel: 0` explicitly, retroactively loosening every `abs`-only assertion already written against this format — including tightly-pinned conformance fixtures — by as much as five orders of magnitude.
+| assertion `{}`, nothing else | `rel = 1e-6`, `abs = 0` | An object declaring neither bound contributes nothing; both fields reach level 4. |
+| nothing anywhere | `rel = 1e-6`, `abs = 0` | Both fields reach level 4. |
 
 This resolution is pinned by the `tolerance_resolution` conformance category (CONFORMANCE_SPEC §5.21).
 

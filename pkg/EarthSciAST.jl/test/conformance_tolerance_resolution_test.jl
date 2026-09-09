@@ -18,8 +18,10 @@
 # Two things §6.6.4 left open are pinned here too: an explicit `0` is a
 # DECLARATION ("no bound of this kind") that stops the fallthrough, while a
 # missing key or a JSON `null` is an ABSENCE that falls through; and the
-# implementation default (`rel = 1e-6`) is TERMINAL, reached only when levels
-# 1-3 declare neither bound, rather than a fourth per-field merge level.
+# implementation default (`rel = 1e-6`) is the FOURTH LEVEL of the same
+# per-field merge, supplying whichever bound levels 1-3 left undeclared, rather
+# than a fallback reached only when they are both silent. `rel: 0` is therefore
+# the only spelling of "this absolute bound and nothing else".
 #
 # The category is DATA-ONLY — resolution is a pure function of the declared
 # blocks — so it carries no `.esm` fixture, no integrator and no numeric golden.

@@ -63,7 +63,7 @@ green and your program does something different. Audit these first.
 | Python | index-set merge | A model-nested `index_sets` now **merges over** the document-scoped registry instead of being invisible to it. | Different resolution verdicts on pre-0.8.0-shaped documents. |
 | Julia | diagnostic pointers | A scalar `update: {...}` no longer reports a synthetic `/0` segment. | A consumer matching on diagnostic JSON Pointers sees a different path. |
 | all five | `from_faq` | Resolves against the **whole document**, not one model. | Documents that used to be rejected now load; duplicate node ids that used to be legal now fail. |
-| all five | inline-test `tolerance` | Resolves **per field** (esm-spec §6.6.4): `abs` and `rel` each come from the innermost level that declares that field. A level declaring only one bound no longer masks the other from an enclosing level. | An assertion that declares only `abs` now also carries whatever `rel` its test or model declared. The resolved bound can only get LOOSER, so nothing that passes starts failing — 56 assertions in the shipped corpus change. |
+| all five | inline-test `tolerance` | Resolves **per field** over four levels (esm-spec §6.6.4): `abs` and `rel` each come from the innermost of assertion / test / model / implementation default that declares that field. A level declaring only one bound no longer masks the other from an enclosing level. | An assertion that declares only `abs` now also carries whatever `rel` its test or model declared — or, if none does, the `1e-6` default. Write `rel: 0` for an absolute-only comparison. The resolved bound can only get LOOSER, so nothing that passes starts failing; 56 assertions in the shipped corpus change, and the 69 that would have picked up the default `rel` were given an explicit `rel: 0` instead, so their enforced bounds do not move. |
 | Rust | `esm graph` CLI | Output changed in all three formats; `--level=expression` now works. | Any golden capturing CLI output. |
 
 Each of these is expanded in the per-binding table it belongs to.
@@ -239,16 +239,24 @@ Two rules the section left implicit are now written down with it:
   non-conforming JSON `null`) falls through. This is what
   `tests/fixtures/recurrence/*.esm` rely on to pin bit-exact comparison with a
   model-level `{rel: 0, abs: 0}`.
-* The **implementation default (`rel = 1e-6`) is terminal**, not a fourth merge
-  level. It applies only when levels 1-3 declare *neither* bound, so an
-  assertion declaring only `{abs: 1e-4}` still resolves to `rel = 0` and does
-  not acquire a relative bound its author never wrote.
+* The **implementation default (`rel = 1e-6`) is the fourth level** of the same
+  per-field merge, not a fallback reached only when levels 1-3 are silent. It
+  supplies whichever bound is still undeclared after them, so an assertion
+  declaring only `{abs: 1e-4}` resolves to `(rel = 1e-6, abs = 1e-4)`.
 
-**What to check in your documents.** Any assertion or test block that spells one
-bound while an enclosing level spells the other. The merged bound is never
-tighter than the old one, so an assertion cannot flip pass → fail; one that was
-failing on a bound the old rule had thrown away may now pass. If you meant the
-old, narrower comparison, spell the bound you want suppressed as `0`.
+**What to check in your documents.**
+
+1. Any assertion or test block that spells one bound while an enclosing level
+   spells the other: it now keeps both.
+2. **Any `abs`-only block that was meant to be tight.** Under the old rule it
+   compared with no relative bound; it now also admits `1e-6 · max(|a|, |e|)`.
+   Write `rel: 0` to keep the old, absolute-only comparison — that is now the
+   only spelling of it. Every such block in this repository's own corpus (63
+   of them, governing 69 assertions) was given an explicit `rel: 0` in the same
+   change, so no shipped fixture's enforced bound moved.
+
+Nothing can flip pass → fail: the resolved bound is never tighter than it was.
+One that was failing on a bound the old rule had thrown away may now pass.
 
 Pinned by the `tolerance_resolution` conformance category (CONFORMANCE_SPEC
 §5.21).

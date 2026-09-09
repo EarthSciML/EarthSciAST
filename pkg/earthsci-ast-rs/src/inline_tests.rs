@@ -522,9 +522,11 @@ fn scalar_slot(element_names: &[String], variable: &str, model: &str) -> Option<
     None
 }
 
-/// esm-spec §6.6.4, resolved PER FIELD across the three declared levels
-/// (assertion > test > model), then the implementation default `rel=1e-6` if
-/// neither bound was declared at any of them. Identical to the Julia
+/// esm-spec §6.6.4, resolved PER FIELD over FOUR levels: assertion > test >
+/// model > the implementation default. Each of `rel` and `abs` independently
+/// takes its value from the innermost level that declares it; the default
+/// supplies `rel = 1e-6` and no `abs` bound to whatever is still undeclared
+/// after the three document levels. Identical to the Julia
 /// `_resolve_tolerance` reference and the Python `_resolve_tolerance`. Returns
 /// `(rtol, atol)`.
 ///
@@ -538,17 +540,16 @@ fn scalar_slot(element_names: &[String], variable: &str, model: &str) -> Option<
 /// **Absent vs zero.** A field is absent when the key is missing or JSON-null
 /// (the schema admits only a number, so `null` is non-conforming input treated
 /// as absent); only an absent field falls through. An explicit `0` is a
-/// DECLARATION — "no bound of this kind" — and stops the fallthrough. The
-/// recurrence fixtures pin exactness with a model-level `{rel: 0, abs: 0}`
-/// (CONFORMANCE_SPEC §5.19), which treating `0` as absent would silently
-/// replace with the 1e-6 default.
+/// DECLARATION — "no bound of this kind" — and stops the fallthrough, the
+/// default included. That distinction carries the whole rule: the recurrence
+/// fixtures pin exactness with a model-level `{rel: 0, abs: 0}`
+/// (CONFORMANCE_SPEC §5.19), and `rel: 0` is how a document says "this
+/// absolute bound and nothing else" now that the default is not terminal.
 ///
-/// **The implementation default is terminal**, not a fourth merge level: it
-/// applies only when levels 1-3 declared neither bound. §6.6.4's merge
-/// sentence governs "each level [that] is a `{abs?, rel?}` object" — the three
-/// document-level blocks — while the default is an advisory (SHOULD) runtime
-/// constant. Merging it per-field would instead hand every `abs`-only
-/// assertion an unasked-for 1e-6 relative bound.
+/// **The implementation default is the FOURTH LEVEL** of the same per-field
+/// merge, not a fallback reached only when levels 1-3 are silent. An assertion
+/// declaring only `{abs: 1e-4}` therefore resolves to `rel = 1e-6`, not
+/// `rel = 0`.
 pub fn resolve_tolerance(
     model_tol: Option<&Tolerance>,
     test_tol: Option<&Tolerance>,
@@ -559,10 +560,7 @@ pub fn resolve_tolerance(
         |pick: fn(&Tolerance) -> Option<f64>| levels.iter().copied().flatten().find_map(pick);
     let rel = first(|t| t.rel);
     let atol = first(|t| t.abs);
-    match (rel, atol) {
-        (None, None) => (DEFAULT_REL_TOL, 0.0),
-        _ => (rel.unwrap_or(0.0), atol.unwrap_or(0.0)),
-    }
+    (rel.unwrap_or(DEFAULT_REL_TOL), atol.unwrap_or(0.0))
 }
 
 /// The esm-spec §6.6.3 pass predicate — `actual == expected`, or both values
@@ -2528,6 +2526,40 @@ mod tests {
         );
         assert_eq!(resolve_tolerance(Some(&model_tol), None, None), (1e-2, 0.0));
         assert_eq!(resolve_tolerance(None, None, None), (DEFAULT_REL_TOL, 0.0));
+        // The implementation default is the FOURTH LEVEL of the same per-field
+        // merge, not a fallback reached only when levels 1-3 are silent: an
+        // `abs`-only block still takes `rel = 1e-6` from it.
+        let abs_only = Tolerance {
+            abs: Some(1e-4),
+            rel: None,
+        };
+        assert_eq!(
+            resolve_tolerance(None, None, Some(&abs_only)),
+            (DEFAULT_REL_TOL, 1e-4)
+        );
+        assert_eq!(
+            resolve_tolerance(Some(&abs_only), None, None),
+            (DEFAULT_REL_TOL, 1e-4)
+        );
+        // ... and `rel: 0` is the only way to opt out of it. An explicit zero
+        // is a DECLARATION, so it stops the fallthrough at the default too.
+        let abs_only_exact = Tolerance {
+            abs: Some(1e-4),
+            rel: Some(0.0),
+        };
+        assert_eq!(
+            resolve_tolerance(None, None, Some(&abs_only_exact)),
+            (0.0, 1e-4)
+        );
+        // A declared outer `rel` still beats the default, however far out.
+        let outer_rel = Tolerance {
+            abs: None,
+            rel: Some(1e-3),
+        };
+        assert_eq!(
+            resolve_tolerance(Some(&outer_rel), None, Some(&abs_only)),
+            (1e-3, 1e-4)
+        );
         // Julia isapprox: |a-e| <= max(atol, rtol*max(|a|,|e|)).
         assert!(check_assertion(1.0000009, 1.0, 1e-6, 0.0));
         assert!(!check_assertion(1.000002, 1.0, 1e-6, 0.0));
