@@ -6,7 +6,7 @@
 //! (`test_rhs_time_derivative_conformance.py`) gates the same manifest.
 //!
 //! Julia is `scope_excluded`, for reasons in neither its transform nor this
-//! rule: its `run_pde_tests` cannot read a 0-D OBSERVED at all, and it does not
+//! rule: its `run_inline_tests` cannot read a 0-D OBSERVED at all, and it does not
 //! REFUSE an unresolvable right-hand-side `D`. It does implement the resolve
 //! half (`flatten` step 3c), pinned on its side by
 //! `rhs_time_derivative_resolution_test.jl` through a state the runner can
@@ -31,7 +31,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::{Alg, SolveOptions, load_string, run_pde_tests_with_base_dir};
+use earthsci_ast::{Alg, SolveOptions, load_string, run_inline_tests_with_base_dir};
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
@@ -110,7 +110,7 @@ fn rhs_time_derivative_outcomes_match_the_manifest() {
         let file = load_string(&text)
             .unwrap_or_else(|e| panic!("fixture {esm_path:?} does not load: {e}"));
         let results =
-            run_pde_tests_with_base_dir(&file, fx["model"].as_str(), &opts, Some(dir.as_path()));
+            run_inline_tests_with_base_dir(&file, fx["model"].as_str(), &opts, Some(dir.as_path()));
 
         let cases = fx["cases"].as_array().expect("cases");
         assert_eq!(

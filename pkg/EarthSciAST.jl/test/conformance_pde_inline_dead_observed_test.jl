@@ -1,11 +1,11 @@
 # Conformance harness adapter — pde_inline_dead_observed category.
 #
 # §6.6.5 inline-test assertions on an array OBSERVED that NO LIVE EQUATION
-# CONSUMES. The reference binding (Julia) runs the OFFICIAL `run_pde_tests`
+# CONSUMES. The reference binding (Julia) runs the OFFICIAL `run_inline_tests`
 # pathway over the committed fixture and must reproduce the committed golden
 # actuals (which that same pathway minted). The manifest declares
 # julia/python/rust as bindings_required: Rust (`esm test`) and Python
-# (`run_pde_tests`) already answered this document, so the golden is the shared
+# (`run_inline_tests`) already answered this document, so the golden is the shared
 # cross-binding anchor.
 #
 # This is the conformance GATE for #176: before the fix, the elementwise
@@ -50,7 +50,7 @@ const _DEADOBS_MANIFEST = joinpath(_DEADOBS_CAT_DIR, "manifest.json")
             golden = JSON3.read(read(golden_path, String))
             @test String(golden.reference_binding) == "julia"
 
-            results = run_pde_tests(esm_path; model_name=String(fixture.model),
+            results = run_inline_tests(esm_path; model_name=String(fixture.model),
                                     alg=OrdinaryDiffEqTsit5.Tsit5(),
                                     reltol=1e-12, abstol=1e-14)
             @test length(results) == length(golden.assertions)

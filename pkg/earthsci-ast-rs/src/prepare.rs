@@ -530,9 +530,28 @@ fn observed_order(defs: &HashMap<String, Expr>) -> Result<Vec<String>, PrepareEr
             .cloned()
             .collect();
         if ready.is_empty() {
-            let mut rest: Vec<_> = pending.into_iter().collect();
-            rest.sort();
-            return Err(err(format!("cyclic observed dependency among {rest:?}")));
+            // Name the CYCLE, not the residue. "cyclic observed dependency
+            // among [a, b, c, d, e]" tells an author that five observeds are
+            // implicated and nothing about which edges close the loop; the
+            // whole value of this diagnostic is the path (esm-spec §4.9.6).
+            // Sorted roots and successors so the same cycle is named every run.
+            let mut stuck: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> =
+                std::collections::BTreeMap::new();
+            for n in &pending {
+                stuck.insert(n.clone(), deps[n].iter().cloned().collect());
+            }
+            let cycle = crate::classification::first_observed_cycle(&stuck)
+                // Unreachable in practice — the residue is non-empty precisely
+                // because nothing in it became ready, which requires an
+                // unsatisfied dependency inside it — but naming the residue
+                // beats a panic if that invariant ever moves.
+                .unwrap_or_else(|| stuck.keys().cloned().collect());
+            return Err(err(format!(
+                "observed_cycle: dependency cycle among observed variables: {}. Each is defined \
+                 in terms of the next, so no evaluation order satisfies every definition \
+                 (esm-spec §4.9.6). `esm validate` reports this cycle before any build.",
+                cycle.join(" -> ")
+            )));
         }
         ready.sort(); // deterministic tie-break
         for n in ready {

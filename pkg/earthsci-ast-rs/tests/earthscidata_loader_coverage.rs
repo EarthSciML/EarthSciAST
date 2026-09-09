@@ -39,7 +39,7 @@ const FIXTURES: &[Fixture] = &[
     Fixture {
         name: "ERA5_PressureLevels",
         content: include_str!("fixtures/data_sources/era5.esm"),
-        expected_variables: &["t", "u", "v", "w", "q", "z", "o3"],
+        expected_variables: &["air_temperature", "u", "v", "w", "q", "z", "o3"],
     },
     Fixture {
         name: "WRF_Regional",

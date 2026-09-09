@@ -3,7 +3,7 @@ rule, in both halves (``tests/conformance/rhs_time_derivative/``).
 
 The Rust runner (``rhs_time_derivative_conformance.rs``) gates the same
 manifest. Julia is ``scope_excluded``, for reasons in neither its transform nor
-this rule: its ``run_pde_tests`` cannot read a 0-D OBSERVED at all, and it does
+this rule: its ``run_inline_tests`` cannot read a 0-D OBSERVED at all, and it does
 not REFUSE an unresolvable right-hand-side ``D``. It does implement the resolve
 half (``flatten`` step 3c), pinned on its side by
 ``rhs_time_derivative_resolution_test.jl`` through a state the runner can read.
@@ -35,7 +35,7 @@ from pathlib import Path
 import pytest
 from conftest import FIXTURES_ROOT
 
-from earthsci_ast.pde_inline_tests import run_pde_tests
+from earthsci_ast.inline_tests import run_inline_tests
 
 CATEGORY = FIXTURES_ROOT / "conformance" / "rhs_time_derivative"
 
@@ -63,7 +63,7 @@ def test_manifest_shape() -> None:
 @pytest.mark.parametrize("fixture", _manifest()["fixtures"], ids=lambda fx: fx["id"])
 def test_rhs_time_derivative_outcomes(fixture: dict) -> None:
     path = CATEGORY / fixture["path"]
-    results = run_pde_tests(str(path), model_name=fixture["model"])
+    results = run_inline_tests(str(path), model_name=fixture["model"])
     cases = fixture["cases"]
     assert len(results) == len(cases), (
         f"{fixture['id']}: ran {len(results)} assertions, manifest declares {len(cases)}"

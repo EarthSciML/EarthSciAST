@@ -1,0 +1,104 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "operator_compose_ambiguous_bare_name_flipped",
+    "description": "esm-libraries-spec 4.7.1 step 3, the AMBIGUOUS bare-name match. `Sink` and `Chem` each declare a state named `O3` with a DIFFERENT default, and only the bare-name fallback binds them -- there is no `translate` map and neither writes the other's scoped name. The merge keeps ONE of the two names, so the choice decides which initial condition the flattened system integrates from, and the document does not express it. The tendency is arithmetically identical either way, which is why the old behaviour -- rename onto systems[0] -- was invisible: flipping `systems` silently swapped the surviving state and its IC and nothing downstream reported it. So the match is REFUSED. The flip of `ambiguous_bare_name.esm`: identical models in identical declaration order, with ONLY the `systems` array reversed. THE ORDER-INDEPENDENCE PIN -- the two orders used to disagree on the surviving state and its initial condition, and must now agree on refusing.",
+    "authors": [
+      "EarthSciAST"
+    ],
+    "tags": [
+      "esm-libraries-spec-4.7.1",
+      "operator-compose",
+      "bare-name-fallback",
+      "merge-intent",
+      "ambiguous-bare-name"
+    ]
+  },
+  "models": {
+    "Sink": {
+      "variables": {
+        "O3": {
+          "type": "unknown",
+          "units": "ppb",
+          "default": 40.0,
+          "description": "The OPERATOR's spelling, and its own initial condition."
+        },
+        "kd": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.0001
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "O3"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "kd"
+                ]
+              },
+              "O3"
+            ]
+          }
+        }
+      ]
+    },
+    "Chem": {
+      "variables": {
+        "O3": {
+          "type": "unknown",
+          "units": "ppb",
+          "default": 30.0,
+          "description": "The MECHANISM's spelling, and its own initial condition."
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.0002
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "O3"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "O3"
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "operator_compose",
+      "systems": [
+        "Chem",
+        "Sink"
+      ]
+    }
+  ]
+}

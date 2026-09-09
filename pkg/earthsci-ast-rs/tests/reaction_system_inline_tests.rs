@@ -4,18 +4,18 @@
 //! field shape, and tolerance resolution are identical to Section 6.6", and
 //! the shared corpus ships documents whose ONLY tests are on a mechanism
 //! (`tests/simulation/autocatalytic_reaction.esm`, and EarthSciModels'
-//! `superfast.esm`). [`run_pde_tests`] — the runner behind `esm test` —
+//! `superfast.esm`). [`run_inline_tests`] — the runner behind `esm test` —
 //! enumerated `file.models` alone, so such a document produced zero assertion
 //! rows and the CLI printed "(no inline tests found)": a whole mechanism's
 //! test suite silently unexecuted.
 //!
 //! Sabotage check: drop the `reaction_systems` arm from
-//! `test_bearing_components` in `src/pde_inline_tests.rs` and every test here
+//! `run_inline_tests_seeded` in `src/inline_tests.rs` and every test here
 //! fails with an empty result vector.
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::{PdeAssertionResult, SolveOptions, load_string, run_pde_tests};
+use earthsci_ast::{AssertionResult, SolveOptions, load_string, run_inline_tests};
 use serde_json::json;
 
 mod common;
@@ -28,9 +28,9 @@ fn opts() -> SolveOptions {
     }
 }
 
-fn run(doc: serde_json::Value) -> Vec<PdeAssertionResult> {
+fn run(doc: serde_json::Value) -> Vec<AssertionResult> {
     let file = load_string(&doc.to_string()).expect("document loads");
-    run_pde_tests(&file, None, &opts())
+    run_inline_tests(&file, None, &opts())
 }
 
 /// A first-order decay mechanism `A -> B` at rate `k`, with the whole test
@@ -209,8 +209,8 @@ fn component_selector_reaches_a_reaction_system() {
     )
     .expect("document loads");
 
-    assert_eq!(run_pde_tests(&file, Some("Chem"), &opts()).len(), 1);
-    assert!(run_pde_tests(&file, Some("NotAComponent"), &opts()).is_empty());
+    assert_eq!(run_inline_tests(&file, Some("Chem"), &opts()).len(), 1);
+    assert!(run_inline_tests(&file, Some("NotAComponent"), &opts()).is_empty());
 }
 
 /// The shipped corpus fixture the issue names: its whole test suite is on a
@@ -218,7 +218,7 @@ fn component_selector_reaches_a_reaction_system() {
 #[test]
 fn shipped_reaction_system_fixture_produces_rows() {
     let file = common::load_repo_fixture("simulation/autocatalytic_reaction.esm");
-    let results = run_pde_tests(&file, None, &opts());
+    let results = run_inline_tests(&file, None, &opts());
     assert_eq!(
         results.len(),
         3,

@@ -195,6 +195,37 @@ pub enum FlattenError {
     )]
     VariableMapExpressionMissingFrom { from: String, to: String },
 
+    /// A `variable_map` endpoint names nothing the flattened system carries
+    /// (esm-spec §4.6, §10.4).
+    ///
+    /// Both halves of the entry are load-bearing and both used to fail
+    /// SILENTLY. A `to` that resolves to no parameter is simply never
+    /// promoted: the document declares a coupling, the target keeps its
+    /// declared default, and nothing downstream can tell "applied" from
+    /// "ignored". A `from` that resolves to nothing is worse — the
+    /// substitution still runs, so every consumer of `to` is rewritten to a
+    /// name no table binds, and the run produces NaN instead of a diagnostic.
+    ///
+    /// Same reasoning as [`FlattenError::CoupleMultiplicativeNoTendency`]: a
+    /// coupling mis-specification must not have the one outcome that looks
+    /// like success.
+    ///
+    /// A `from` whose owning system is a top-level `data_sources` key is
+    /// exempt — such a producer is served through the forcing seam rather than
+    /// as a declared variable (see [`apply_variable_map_removals`]).
+    #[error(
+        "variable_map({from} -> {to}): the '{side}' endpoint '{endpoint}' resolves to no variable, \
+         parameter or observed in the flattened system (esm-spec §4.6, §10.4). A scoped reference \
+         walks EVERY dot-separated segment, so a subsystem endpoint is spelled \
+         '<Model>.<Subsystem>.<name>'."
+    )]
+    VariableMapUnresolvedEndpoint {
+        from: String,
+        to: String,
+        side: String,
+        endpoint: String,
+    },
+
     /// Wrapped reaction-lowering failure.
     #[error("Reaction lowering failed: {0}")]
     Reaction(#[from] crate::reactions::DeriveError),
@@ -236,6 +267,82 @@ pub enum FlattenError {
          (esm-spec §10.4) instead."
     )]
     CoupleMultiplicativeNoTendency { target: String },
+
+    /// An `operator_compose` entry merged NOTHING (esm-libraries-spec §4.7.1
+    /// step 5).
+    ///
+    /// Such an entry is indistinguishable from one that is not there: the
+    /// operator integrates a private, decoupled system from its own defaults,
+    /// the other system receives no contribution at all, and the only evidence
+    /// is a state count one too high. That is the one outcome a coupling
+    /// mis-specification must not have, so it is refused rather than reported.
+    ///
+    /// An operator that genuinely contributes only states of its own — a
+    /// transport operator whose single equation defines its own wind field, say
+    /// — says so with `require_match: false`, and is then permitted.
+    #[error(
+        "operator_compose_no_merge: operator_compose({a} + {b}) merged NONE of the {authored} \
+         equations '{b}' authored; no equation of '{a}' matches: {unmatched}. The entry is \
+         indistinguishable from one that is not there — '{b}' would integrate decoupled from its \
+         own defaults and '{a}' would receive no contribution. If '{b}' really does contribute \
+         only states of its own, declare it with `require_match: false` on this entry."
+    )]
+    OperatorComposeNoMerge {
+        a: String,
+        b: String,
+        authored: usize,
+        unmatched: String,
+    },
+
+    /// An `operator_compose` entry declared `require_match: true` and one of
+    /// `systems[1]`'s equations found no equation of `systems[0]` to land on
+    /// (esm-libraries-spec §4.7.1 step 5).
+    ///
+    /// Step 5 otherwise preserves an unmatched equation unchanged, and a PARTIAL
+    /// shortfall is only a warning by default; `require_match` is the author's
+    /// opt-in to make it fatal. A PARTIAL match raises here — there is no "some
+    /// is enough" reading an author could rely on: the seven-of-twelve-species
+    /// case is exactly the defect the flag exists to catch.
+    #[error(
+        "operator_compose_require_match_unmatched: operator_compose({a} + {b}) declares \
+         `require_match` and merged {merged} of {authored} equations '{b}' authored; no equation \
+         of '{a}' matches: {unmatched}"
+    )]
+    OperatorComposeRequireMatchUnmatched {
+        a: String,
+        b: String,
+        merged: usize,
+        authored: usize,
+        unmatched: String,
+    },
+
+    /// The bare-name fallback would unify two STATE variables and the document
+    /// has not said which spelling survives (esm-libraries-spec §4.7.1 step 3).
+    ///
+    /// The fallback binds `A.x` to `B.x` on the strength of a shared local name
+    /// alone. When both are states, each carries its own INITIAL CONDITION, and
+    /// the merge has to delete one of them — so the choice decides which IC the
+    /// flattened system integrates from. Nothing in the document expresses that
+    /// choice, and picking one silently is how flipping the entry's `systems`
+    /// order came to change the answer.
+    ///
+    /// A match where only ONE side is a state is NOT ambiguous: the other
+    /// carries no initial condition, so the state is the owner and the merge
+    /// renames onto it.
+    #[error(
+        "operator_compose_ambiguous_bare_name: operator_compose({a} + {b}) matched '{b_dep}' to \
+         '{target}' on their shared local name alone, but BOTH are state variables and the merge \
+         keeps only one. Each carries its own initial condition, so the choice decides which the \
+         flattened system integrates from, and the document does not express it. Name the \
+         surviving spelling with a `translate` entry ({{'{target}': '{b_dep}'}}), or rename one \
+         of them."
+    )]
+    OperatorComposeAmbiguousBareName {
+        a: String,
+        b: String,
+        b_dep: String,
+        target: String,
+    },
 
     /// A model subsystem that structurally declares itself a [`DataSource`] —
     /// it carries the discriminating `kind` / `source` keys — failed to
@@ -537,6 +644,13 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
 
     // Phase 1: collect per-system lowered equations and namespaced variables.
     let (source_systems, mut per_system) = collect_component_systems(file)?;
+
+    // Phase 2 preflight (esm-spec §4.6 / §10.4): every `variable_map` endpoint
+    // must name something the collected system carries. Run against the
+    // PRE-coupling tables so an `operator_compose` `translate` merge (§10.2,
+    // which legitimately consumes one of the two spellings) cannot make a
+    // well-formed endpoint look unresolvable.
+    check_variable_map_endpoints(file, &per_system)?;
 
     // NOTE: flatten does NOT reject an undiscretized spatial operator. It used
     // to, and that was this binding's own stricter behaviour rather than the
@@ -2257,10 +2371,11 @@ fn apply_coupling_entry(
         CouplingEntry::OperatorCompose {
             systems,
             translate,
+            require_match,
             description,
             ..
         } => {
-            apply_operator_compose(systems, translate.as_ref(), per_system)?;
+            apply_operator_compose(systems, translate.as_ref(), *require_match, per_system)?;
             coupling_rules_applied.push(
                 description
                     .clone()
@@ -2542,7 +2657,12 @@ fn expand_placeholder_equations(a_idx: usize, b_idx: usize, per_system: &mut [Sy
 ///    direct or placeholder match the two names are already equal, so the
 ///    rewrite is the identity.
 /// 5. **Preserve unmatched equations** — a B equation with no A counterpart
-///    stays in B's block, in place and unchanged.
+///    stays in B's block, in place and unchanged, and is REPORTED: an entry that
+///    merges nothing at all, or only some of what B authored, prints
+///    `operator_compose_no_merge` / `operator_compose_partial_merge`, and fails
+///    outright when the entry declares `require_match`. Preserving an unmatched
+///    equation quietly is what made "merged everything" and "merged nothing" the
+///    same observable outcome.
 ///
 /// This function previously merged only equations whose dependent variable was
 /// byte-identical across two blocks. Because flattening namespaces every
@@ -2552,6 +2672,7 @@ fn expand_placeholder_equations(a_idx: usize, b_idx: usize, per_system: &mut [Sy
 fn apply_operator_compose(
     systems: &[String],
     translate: Option<&serde_json::Value>,
+    require_match: Option<bool>,
     per_system: &mut [SystemBlock],
 ) -> Result<(), FlattenError> {
     if systems.len() < 2 {
@@ -2597,16 +2718,26 @@ fn apply_operator_compose(
     // B equation has been matched — relocating an equation mid-loop would
     // invalidate it.
     let mut merged_positions: HashSet<usize> = HashSet::new();
+    // The subset of `merged_away` the BARE-NAME fallback produced. Its surviving
+    // spelling is settled by ownership below, not by which side was `systems[0]`.
+    let mut bare_matches: IndexMap<String, String> = IndexMap::new();
+    // Step 5's merge tally: how many equations the operator side authored that
+    // COULD match (one with no extractable dependent variable is not a
+    // contribution and is exempt by construction), and which of them did not.
+    let mut authored = 0_usize;
+    let mut unmatched: Vec<String> = Vec::new();
     for b_eq in b_equations {
         let Some(b_dep) = compose_dependent(&b_eq.lhs) else {
             surviving.push(b_eq);
             continue;
         };
+        authored += 1;
 
         // Step 3, in precedence order: direct, then translation, then the
         // bare-name fallback.
         let mut target = b_dep.clone();
         let mut factor = 1.0_f64;
+        let mut is_bare_match = false;
         if a_index.contains_key(&b_dep) {
             // Direct match: `target` is already right.
         } else if let Some((a_name, f)) = translate.get(&b_dep) {
@@ -2617,11 +2748,13 @@ fn apply_operator_compose(
             let suffix = format!(".{short}");
             if let Some(hit) = a_index.keys().find(|k| k.ends_with(&suffix)) {
                 target = hit.clone();
+                is_bare_match = true;
             }
         }
 
         // Step 5: no counterpart in A, so the equation stays in B untouched.
         let Some(&i) = a_index.get(&target) else {
+            unmatched.push(b_dep);
             surviving.push(b_eq);
             continue;
         };
@@ -2653,10 +2786,48 @@ fn apply_operator_compose(
         per_system[a_idx].equations[i].rhs = sum_exprs(rhs_a, rhs_b);
         merged_positions.insert(i);
         if target != b_dep {
+            if is_bare_match {
+                bare_matches.insert(b_dep.clone(), target.clone());
+            }
             merged_away.insert(b_dep, target);
         }
     }
     per_system[b_idx].equations = surviving;
+
+    report_operator_compose_merge(
+        &systems[0],
+        &systems[1],
+        require_match,
+        authored,
+        &unmatched,
+    )?;
+
+    // §4.7.1 step 3, the bare-name fallback's OWNERSHIP rule. A bare-name match
+    // asserts that A's `x` and B's `x` are one state under two spellings; the
+    // surviving spelling is the OWNER's, not `systems[0]`'s, so that flipping
+    // the entry's argument order cannot change which state name — and therefore
+    // which INITIAL CONDITION — comes out the far side.
+    let mut inverted: IndexMap<String, String> = IndexMap::new();
+    for (b_dep, target) in &bare_matches {
+        if bare_name_owner(per_system, &systems[0], &systems[1], b_dep, target)? == *b_dep {
+            inverted.insert(target.clone(), b_dep.clone());
+            merged_away.shift_remove(b_dep);
+        }
+    }
+    if !inverted.is_empty() {
+        // Retarget BEFORE the reattribution: the reattribution reads each merged
+        // equation's dependent variable to decide whose block it belongs in, and
+        // after this rewrite that variable is the owner's spelling. Running it
+        // first would file the merged tendency under the name that just went away.
+        retarget_merged_names(per_system, &inverted);
+        for gone in inverted.keys() {
+            let owner = gone.split_once('.').map(|(head, _)| head).unwrap_or(gone);
+            if let Some(block) = per_system.iter_mut().find(|b| b.name == owner) {
+                block.state_vars.shift_remove(gone);
+                block.observed_vars.shift_remove(gone);
+            }
+        }
+    }
 
     reattribute_merged_equations(a_idx, &merged_positions, per_system);
 
@@ -2682,6 +2853,187 @@ fn apply_operator_compose(
         }
     }
 
+    Ok(())
+}
+
+thread_local! {
+    /// Active sink for [`capture_coupling_diagnostics`]. `None` — the default —
+    /// means the warnings go to stderr, which is what a caller sees.
+    static COUPLING_DIAGNOSTIC_SINK: std::cell::RefCell<Option<Vec<String>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Run `f`, collecting the WARNING-level coupling diagnostics it emits instead
+/// of printing them, and return them alongside its result.
+///
+/// The side-effect-free counterpart of the stderr stream, in the shape
+/// [`crate::pushdown_rewrite::pushdown_diagnostics`] established for the
+/// projection-pushdown residuals. It exists because a diagnostic nothing can
+/// assert on is a diagnostic that rots: the shared
+/// `tests/conformance/operator_compose_merge/` corpus compares diagnostic
+/// OUTCOMES, and without this the Rust adapter could check the `require_match`
+/// refusals but not the warnings they were promoted from.
+///
+/// The sink is thread-local, so concurrent test threads do not capture each
+/// other's findings, and it is restored on the way out even if `f` returns an
+/// error (`f` is not unwind-safe by contract — a panic inside it leaves the sink
+/// installed for that thread, which only affects a thread that is already
+/// unwinding).
+pub fn capture_coupling_diagnostics<T>(f: impl FnOnce() -> T) -> (T, Vec<String>) {
+    COUPLING_DIAGNOSTIC_SINK.with(|sink| *sink.borrow_mut() = Some(Vec::new()));
+    let out = f();
+    let collected =
+        COUPLING_DIAGNOSTIC_SINK.with(|sink| sink.borrow_mut().take().unwrap_or_default());
+    (out, collected)
+}
+
+/// Emit one coupling warning: into the active capture sink if there is one,
+/// otherwise to stderr with the `warning: ` prefix `pushdown_rewrite` uses.
+fn emit_coupling_warning(message: String) {
+    let captured = COUPLING_DIAGNOSTIC_SINK.with(|sink| {
+        if let Some(buf) = sink.borrow_mut().as_mut() {
+            buf.push(message.clone());
+            true
+        } else {
+            false
+        }
+    });
+    if !captured {
+        eprintln!("warning: {message}");
+    }
+}
+
+/// Is `dep` a STATE variable of the (partly flattened) blocks?
+///
+/// A state is the thing that carries an initial condition, which is the whole of
+/// what a bare-name match decides between. An observed carries none.
+fn is_state_var(per_system: &[SystemBlock], dep: &str) -> bool {
+    let root = dep.split_once('.').map(|(h, _)| h).unwrap_or(dep);
+    per_system
+        .iter()
+        .find(|b| b.name == root)
+        .is_some_and(|b| b.state_vars.contains_key(dep))
+}
+
+/// Which spelling owns the quantity a bare-name match unified?
+/// (esm-libraries-spec §4.7.1 step 3.)
+///
+/// A DIRECT match needs no decision (the two names are equal) and a `translate`
+/// match is the author naming the surviving spelling explicitly. The BARE-NAME
+/// fallback is the one that has to choose, and choosing `systems[0]` — what this
+/// binding did before — makes an `operator_compose` entry mean different things
+/// in its two argument orders: flipping `systems` silently swapped which state
+/// name, and which INITIAL CONDITION, came out the far side.
+///
+/// Ownership follows the variable's own namespace, the direction step 4's
+/// merged-equation reattribution already reaches in. The merge deletes one of
+/// the two names, so the question is which of them the flattened system keeps:
+///
+/// * **Both are STATES** — each carries its own initial condition, and nothing
+///   in the document says which one the merged tendency should integrate from.
+///   Refused, because deciding it here is exactly the silent choice issue #195
+///   is about. The author says what they mean with `translate`, which names the
+///   surviving spelling outright, or with `require_match`.
+/// * **Exactly one is a state** — the other carries no initial condition, so
+///   there is nothing to lose by renaming onto the state. That one is the owner,
+///   in either argument order.
+/// * **Neither is** — no initial condition is at stake either way; the incumbent
+///   (`systems[0]`'s spelling) stands, as before.
+fn bare_name_owner(
+    per_system: &[SystemBlock],
+    a: &str,
+    b: &str,
+    b_dep: &str,
+    target: &str,
+) -> Result<String, FlattenError> {
+    let b_state = is_state_var(per_system, b_dep);
+    let a_state = is_state_var(per_system, target);
+    if b_state && a_state {
+        return Err(FlattenError::OperatorComposeAmbiguousBareName {
+            a: a.to_string(),
+            b: b.to_string(),
+            b_dep: b_dep.to_string(),
+            target: target.to_string(),
+        });
+    }
+    Ok(if b_state {
+        b_dep.to_string()
+    } else {
+        target.to_string()
+    })
+}
+
+/// Report an `operator_compose` entry that merged nothing, or only some of what
+/// the operator side authored (esm-libraries-spec §4.7.1 step 5).
+///
+/// Preserving an unmatched equation is correct — an operator system may
+/// legitimately contribute states of its own — but preserving it SILENTLY leaves
+/// "merged everything" and "merged nothing" indistinguishable, and both wrong
+/// outcomes reachable from a document that is spec-valid and loads clean.
+///
+/// `require_match` is TRI-STATE, and the three states are three different things
+/// an author can mean:
+///
+/// | `require_match` | zero merged                       | some but not all      |
+/// |:----------------|:----------------------------------|:----------------------|
+/// | `None`          | `operator_compose_no_merge` ERROR | partial-merge warning |
+/// | `Some(true)`    | `operator_compose_require_match_unmatched` ERROR (both) ||
+/// | `Some(false)`   | permitted, silently               | permitted, silently   |
+///
+/// ZERO merged is an error by default because such an entry is indistinguishable
+/// from an entry that is not there. PARTIAL stays a warning because an operator
+/// may legitimately contribute states of its own alongside the ones it does
+/// merge, and the format cannot tell the two apart.
+///
+/// `require_match: false` is the explicit opt-out — the author declaring a
+/// standalone-contributing operator. It is a DECLARATION, not a default: an
+/// absent flag means "I have not said", which is why it is the case that errors.
+///
+/// The warning goes through [`emit_coupling_warning`] — stderr, the same channel
+/// `pushdown_rewrite`'s residual diagnostics use, or the active
+/// [`capture_coupling_diagnostics`] sink; the two refusals are real errors and
+/// are returned.
+fn report_operator_compose_merge(
+    a: &str,
+    b: &str,
+    require_match: Option<bool>,
+    authored: usize,
+    unmatched: &[String],
+) -> Result<(), FlattenError> {
+    if authored == 0 || unmatched.is_empty() {
+        return Ok(());
+    }
+    // The author has declared a standalone-contributing operator. Nothing to
+    // report: an unmatched equation is what they said to expect.
+    if require_match == Some(false) {
+        return Ok(());
+    }
+    let merged = authored - unmatched.len();
+    let names = unmatched.join(", ");
+    if require_match == Some(true) {
+        return Err(FlattenError::OperatorComposeRequireMatchUnmatched {
+            a: a.to_string(),
+            b: b.to_string(),
+            merged,
+            authored,
+            unmatched: names,
+        });
+    }
+    if merged == 0 {
+        return Err(FlattenError::OperatorComposeNoMerge {
+            a: a.to_string(),
+            b: b.to_string(),
+            authored,
+            unmatched: names,
+        });
+    }
+    emit_coupling_warning(format!(
+        "operator_compose_partial_merge: operator_compose({a} + {b}) merged {merged} of \
+         {authored} equations '{b}' authored; unmatched dependent variable(s): {names}. The \
+         unmatched equations are preserved unchanged (esm-libraries-spec §4.7.1 step 5), so they \
+         integrate DECOUPLED from '{a}'. Set `require_match: true` if they were meant to be \
+         contributions, or `require_match: false` if they were not."
+    ));
     Ok(())
 }
 
@@ -3108,6 +3460,78 @@ fn rename_join_names_in(expr: &Expr, to: &str, from: &str) -> Expr {
         );
     }
     Expr::operator(out)
+}
+
+/// Preflight (esm-spec §4.6 / §10.4): every `variable_map` endpoint must name
+/// something the collected system carries — a state, a parameter, or an
+/// observed, under its FULL dot path.
+///
+/// This is the resolution half of the entry, and until it existed both halves
+/// failed silently. `apply_variable_map` substitutes `to` -> `from` whether or
+/// not either name binds, and `apply_variable_map_removals` pops `to` with
+/// `shift_remove`, whose `None` was discarded — so an endpoint that resolved
+/// to nothing produced a flattened system that looked exactly like one where
+/// the coupling had been applied and had simply had no effect. The two failure
+/// modes reported in issue #198 are both this: a target that keeps its
+/// declared default, and a source that leaves every rewritten consumer reading
+/// a name no table binds (NaN at run time, not a diagnostic).
+///
+/// EXEMPTION: a `from` whose owning system is a top-level `data_sources` key.
+/// Such a producer is served through the runtime forcing seam rather than as a
+/// declared variable, so it is legitimately absent from the collected tables
+/// (see [`apply_variable_map_removals`], which records it as a loaded
+/// producer).
+///
+/// Deliberately NOT checked: whether a promoting transform's `to` is a
+/// PARAMETER rather than an unknown. `tests/valid/scoped_refs_coupling.esm`
+/// maps `param_to_var` onto a declared unknown, and tightening that is a
+/// separate question from whether the endpoint resolves at all.
+fn check_variable_map_endpoints(
+    file: &EsmFile,
+    per_system: &[SystemBlock],
+) -> Result<(), FlattenError> {
+    let Some(entries) = &file.coupling else {
+        return Ok(());
+    };
+    let mut known: HashSet<&str> = HashSet::new();
+    for block in per_system {
+        known.extend(block.state_vars.keys().map(String::as_str));
+        known.extend(block.parameters.keys().map(String::as_str));
+        known.extend(block.observed_vars.keys().map(String::as_str));
+    }
+    let loader_names: HashSet<&str> = file
+        .data_sources
+        .as_ref()
+        .map(|ds| ds.keys().map(String::as_str).collect())
+        .unwrap_or_default();
+    for entry in entries {
+        let CouplingEntry::VariableMap { from, to, .. } = entry else {
+            continue;
+        };
+        // A `from` served by a data source never lands in the collected tables.
+        // The owner is the segment BEFORE the first dot, and a dotless `from`
+        // is its own owner — matching the other four bindings, which all take
+        // the whole string when there is no dot.
+        let from_owner = from
+            .split_once('.')
+            .map_or(from.as_str(), |(owner, _)| owner);
+        let from_is_loaded = loader_names.contains(from_owner);
+        for (side, endpoint) in [("from", from), ("to", to)] {
+            if endpoint.is_empty()
+                || known.contains(endpoint.as_str())
+                || (side == "from" && from_is_loaded)
+            {
+                continue;
+            }
+            return Err(FlattenError::VariableMapUnresolvedEndpoint {
+                from: from.clone(),
+                to: to.clone(),
+                side: side.to_string(),
+                endpoint: endpoint.clone(),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Preflight (esm-spec §10.4): walk every `variable_map` coupling entry whose
@@ -3549,7 +3973,7 @@ fn apply_pointwise_lift(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{ddt, var};
+    use crate::test_support::{ddt, test_file, var};
     use crate::types::{Model, ModelVariable, VariableType};
     use std::collections::HashMap;
 
@@ -3713,6 +4137,114 @@ mod tests {
     fn test_variable_map_identity_missing_unit_ok() {
         assert!(flatten(&identity_map_file(None, Some("degC"))).is_ok());
         assert!(flatten(&identity_map_file(Some("K"), None)).is_ok());
+    }
+
+    // ---- variable_map endpoint resolution (esm-spec §4.6 / §10.4) ----------
+
+    /// A wrapper model whose SUBSYSTEM owns the coupling target: `Src.T` feeds
+    /// the parameter `Wrap.inner.gain`, which `Wrap.inner`'s own ODE reads.
+    /// `to_endpoint` is spelled by the caller so a wrong path can be probed.
+    fn subsystem_map_file(to_endpoint: &str) -> EsmFile {
+        let src = make_model(
+            vec![("T", var(VariableType::Unknown, Some("K")))],
+            vec![ddt("T", Expr::Number(1.0))],
+        );
+        let inner = make_model(
+            vec![
+                ("gain", var(VariableType::Parameter, Some("K"))),
+                ("x", var(VariableType::Unknown, Some("K"))),
+            ],
+            vec![ddt("x", Expr::Variable("gain".to_string()))],
+        );
+        let mut subsystems = IndexMap::new();
+        subsystems.insert(
+            "inner".to_string(),
+            serde_json::to_value(&inner).expect("model serializes"),
+        );
+        let wrap = Model {
+            subsystems: Some(subsystems),
+            ..Default::default()
+        };
+
+        let mut models = IndexMap::new();
+        models.insert("Src".to_string(), src);
+        models.insert("Wrap".to_string(), wrap);
+
+        EsmFile {
+            models: Some(models),
+            coupling: Some(vec![CouplingEntry::VariableMap {
+                from: "Src.T".to_string(),
+                to: to_endpoint.to_string(),
+                transform: VariableMapTransform::Named("param_to_var".to_string()),
+                factor: None,
+                lifting: None,
+                description: None,
+            }]),
+            ..test_file()
+        }
+    }
+
+    // A `to` endpoint reaching INTO a subsystem resolves by its FULL dot path:
+    // the nested parameter is promoted away and the nested equation that read
+    // it now reads the source. This is issue #198 item 1's first shape, and it
+    // is the case a two-segment endpoint resolver cannot express.
+    #[test]
+    fn test_variable_map_into_subsystem_parameter_resolves() {
+        let flat = flatten(&subsystem_map_file("Wrap.inner.gain")).expect("flattens");
+        assert!(
+            !flat.parameters.contains_key("Wrap.inner.gain"),
+            "the nested target must be promoted away, got {:?}",
+            flat.parameters.keys().collect::<Vec<_>>()
+        );
+        let rhs = &flat
+            .equations
+            .iter()
+            .find(|e| {
+                matches!(&e.lhs, Expr::Operator(n) if n.op == "D"
+                && n.args.first() == Some(&Expr::Variable("Wrap.inner.x".to_string())))
+            })
+            .expect("the nested ODE survives")
+            .rhs;
+        assert_eq!(*rhs, Expr::Variable("Src.T".to_string()));
+    }
+
+    // The same edge spelled with a MISSING segment (`Wrap.gain` for a
+    // parameter that lives at `Wrap.inner.gain`) resolves to nothing. It used
+    // to flatten cleanly with the coupling silently dropped — the target kept
+    // its declared default and nothing downstream could tell "applied" from
+    // "ignored" (issue #198 item 1's third shape).
+    #[test]
+    fn test_variable_map_unresolved_to_endpoint_errors() {
+        match flatten(&subsystem_map_file("Wrap.gain")).unwrap_err() {
+            FlattenError::VariableMapUnresolvedEndpoint {
+                side, endpoint, to, ..
+            } => {
+                assert_eq!(side, "to");
+                assert_eq!(endpoint, "Wrap.gain");
+                assert_eq!(to, "Wrap.gain");
+            }
+            other => panic!("expected VariableMapUnresolvedEndpoint, got {other:?}"),
+        }
+    }
+
+    // A `from` that resolves to nothing is the NaN half: the substitution runs
+    // regardless, so every consumer of `to` was rewritten to a name no table
+    // binds and the run produced NaN rather than a diagnostic.
+    #[test]
+    fn test_variable_map_unresolved_from_endpoint_errors() {
+        let mut file = subsystem_map_file("Wrap.inner.gain");
+        if let Some(CouplingEntry::VariableMap { from, .. }) =
+            file.coupling.as_mut().and_then(|c| c.first_mut())
+        {
+            *from = "Src.Nope.T".to_string();
+        }
+        match flatten(&file).unwrap_err() {
+            FlattenError::VariableMapUnresolvedEndpoint { side, endpoint, .. } => {
+                assert_eq!(side, "from");
+                assert_eq!(endpoint, "Src.Nope.T");
+            }
+            other => panic!("expected VariableMapUnresolvedEndpoint, got {other:?}"),
+        }
     }
 
     // C2: a pointwise-lift merged ODE whose operator makearray carries no

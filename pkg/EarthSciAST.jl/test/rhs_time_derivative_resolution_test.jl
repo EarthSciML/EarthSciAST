@@ -11,7 +11,7 @@
 # `rhs_time_derivative` conformance category, following the convention
 # `assertion_nonfinite` established: an exclusion is invisible by construction,
 # so it has to be asserted somewhere that goes red when it stops being true.
-# The two gaps are in `run_pde_tests`, not in the §4.2 transform:
+# The two gaps are in `run_inline_tests`, not in the §4.2 transform:
 #
 #   1. it cannot READ a 0-D observed — `_evaluate_assertion`'s pointwise branch
 #      resolves the asserted name against the state vector alone (`_scalar_slot`)
@@ -129,7 +129,7 @@ end
         # one shape this runner CAN read: `l` is a STATE. Its tendency names
         # `D(b)/dt`, so without step 3c the derivative never resolves and `l`
         # stays at its initial 1.0 instead of reaching 1 + 3*sla*growth = 31.
-        results = run_pde_tests(path; model_name="M",
+        results = run_inline_tests(path; model_name="M",
                                 alg=OrdinaryDiffEqTsit5.Tsit5(),
                                 reltol=1e-12, abstol=1e-14)
         row = only(r for r in results if r.variable == "l")
@@ -160,8 +160,8 @@ end
     # And the gaps are real, so the exclusion is honest. Both are asserted
     # directly: when either stops being true this test fails and Julia should
     # join `bindings_required`.
-    @testset "gap 1: a 0-D observed is unreadable by run_pde_tests" begin
-        results = run_pde_tests(joinpath(_RTD_DIR, "fixtures", "tendency_resolution.esm");
+    @testset "gap 1: a 0-D observed is unreadable by run_inline_tests" begin
+        results = run_inline_tests(joinpath(_RTD_DIR, "fixtures", "tendency_resolution.esm");
                                 model_name="M", alg=OrdinaryDiffEqTsit5.Tsit5(),
                                 reltol=1e-12, abstol=1e-14)
         row = only(r for r in results if r.variable == "dxdt")
@@ -170,7 +170,7 @@ end
     end
 
     @testset "gap 2: an unresolvable right-hand-side D is not refused" begin
-        results = run_pde_tests(joinpath(_RTD_DIR, "fixtures", "d_of_parameter.esm");
+        results = run_inline_tests(joinpath(_RTD_DIR, "fixtures", "d_of_parameter.esm");
                                 model_name="M", alg=OrdinaryDiffEqTsit5.Tsit5(),
                                 reltol=1e-12, abstol=1e-14)
         row = only(r for r in results if r.variable == "dk")

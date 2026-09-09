@@ -897,7 +897,29 @@ function _coerce_subsystem_entry(name::String, v)
         if imports_raw !== nothing
             injected = Any[_to_native_json(e) for e in imports_raw]
         end
-        return SubsystemRef(string(v["ref"]), bindings, injected)
+        # Optional `index_set_rename` translates the MOUNTED document's index-set
+        # names into this document's vocabulary at load (esm-spec §4.7
+        # "Mount-edge index-set renaming"). Kept as a raw name→name map;
+        # `_resolve_subsystem_ref` threads it into the referenced document's load
+        # and applies it once that document has resolved in its own scope, so it
+        # is consumed at the mount and does not survive `parse → emit`.
+        iset_rename = nothing
+        rename_raw = _get_field(v, :index_set_rename, nothing)
+        if rename_raw !== nothing
+            # A malformed (non-object) map is left for `_name_map` to reject with
+            # `template_import_rename_invalid` at the mount, not stringified here.
+            iset_rename = _is_object(rename_raw) ?
+                OrderedDict{String,String}(
+                    string(rk) => string(rv) for (rk, rv) in pairs(rename_raw)) :
+                OrderedDict{String,String}()
+            _is_object(rename_raw) || throw(ExpressionTemplateError(
+                ERROR_CODES.TEMPLATE_IMPORT_RENAME_INVALID,
+                "subsystems.$(name): `index_set_rename` must be an object mapping " *
+                "index-set names to names (esm-spec §4.7)"))
+        end
+        return SubsystemRef(string(v["ref"]),
+                            Dict{String,Int}(bindings), Any[e for e in injected],
+                            iset_rename)
     else
         return coerce_model(v)
     end

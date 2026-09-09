@@ -12,11 +12,12 @@ This module is the Python equivalent of EarthSciAST.jl/src/flatten.jl.
 from __future__ import annotations
 
 import os
+import warnings
 from collections import OrderedDict
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from .classification import inlined_unknowns
+from .classification import inlined_unknowns, ode_states
 from .errors import EarthSciAstError
 from .esm_types import (
     ARRAY_OPS,
@@ -28,6 +29,7 @@ from .esm_types import (
     DataSource,
     DiscreteEvent,
     Domain,
+    Equation,
     EsmFile,
     Expr,
     ExprNode,
@@ -36,6 +38,7 @@ from .esm_types import (
     OperatorComposeCoupling,
     ReactionSystem,
     VariableMapCoupling,
+    is_aggregate_op,
 )
 from .expr_walk import any_child, iter_children, map_children, walk
 
@@ -87,6 +90,88 @@ class CoupleMultiplicativeNoTendencyError(FlattenError):
     """
 
     code = "couple_multiplicative_no_tendency"
+
+
+class OperatorComposeNoMergeError(FlattenError):
+    """An ``operator_compose`` entry merged NOTHING (esm-libraries-spec §4.7.1 step 5).
+
+    An entry that matches nothing is indistinguishable from an entry that is not
+    there: the operator integrates a private, decoupled system from its own
+    defaults, the other system receives no contribution at all, and the only
+    evidence is a state count one too high. That is the one outcome a coupling
+    mis-specification must not have, so it is refused rather than reported.
+
+    An operator that genuinely contributes only states of its own -- a transport
+    operator whose single equation defines its own wind field, say -- says so
+    with ``require_match: false``, and is then permitted.
+    """
+
+    code = "operator_compose_no_merge"
+
+
+class OperatorComposeRequireMatchError(FlattenError):
+    """An ``operator_compose`` entry declared ``require_match`` and did not match.
+
+    esm-libraries-spec §4.7.1 step 5: ``require_match: true`` says the
+    ``systems[1]`` equations are CONTRIBUTIONS and every one of them must land on
+    an equation of ``systems[0]``. Step 5 otherwise preserves an unmatched
+    equation unchanged, and a PARTIAL shortfall is only a warning by default;
+    this is the author's opt-in to make it fatal.
+
+    A PARTIAL match raises here. There is no "some is enough" reading an author
+    could rely on: the seven-of-twelve-species case is exactly the defect the
+    flag exists to catch.
+    """
+
+    code = "operator_compose_require_match_unmatched"
+
+
+class OperatorComposeAmbiguousBareNameError(FlattenError):
+    """A bare-name match unified two STATES and the document did not say which survives.
+
+    esm-libraries-spec §4.7.1 step 3. The bare-name fallback binds ``A.x`` to
+    ``B.x`` on the strength of a shared local name alone. When both are state
+    variables, each carries its own INITIAL CONDITION, and the merge has to
+    delete one of them -- so the choice decides which IC the flattened system
+    integrates from. Nothing in the document expresses that choice, and picking
+    one silently is how flipping the entry's ``systems`` order came to change the
+    answer.
+
+    So it is refused. The author says what they mean with ``translate``, which
+    names the surviving spelling outright, or with ``require_match``.
+
+    A match where only ONE side is a state is NOT ambiguous: the other carries no
+    initial condition, so the state is the owner and the merge renames onto it.
+    """
+
+    code = "operator_compose_ambiguous_bare_name"
+
+
+class VariableMapUnresolvedEndpointError(FlattenError):
+    """A ``variable_map`` endpoint names nothing the flattened system carries.
+
+    esm-spec §4.6: a scoped reference walks EVERY dot-separated segment, so a
+    subsystem endpoint is spelled ``<Model>.<Subsystem>.<name>``. §10.4: the
+    entry binds ``to`` to ``from``, which presupposes that both resolve.
+
+    Both halves used to fail SILENTLY, and each fails differently. A ``to``
+    that resolves to no parameter is simply never promoted: the document
+    declares a coupling, the target keeps its declared default, and nothing
+    downstream can tell "applied" from "ignored". A ``from`` that resolves to
+    nothing is worse -- the substitution still runs, so every consumer of
+    ``to`` is rewritten to a name no table binds and the run yields NaN rather
+    than a diagnostic. Both are reported in issue #198 item 1.
+
+    Same reasoning as :class:`CoupleMultiplicativeNoTendencyError`: a coupling
+    mis-specification must not have the one outcome that looks like success.
+
+    Deliberately NOT re-exported from the package root and given no stable
+    ``code``: `api-surface.json` is the cross-binding record of what every
+    binding exports ("a symbol absent from this manifest MUST NOT be
+    exported"), and adding a name there is a five-binding contract change.
+    Callers catch :class:`FlattenError`, which IS exported, or import this
+    class from ``earthsci_ast.flatten``.
+    """
 
 
 class DimensionPromotionError(FlattenError):
@@ -973,6 +1058,110 @@ def _data_source_fields(
     return fields
 
 
+def _frame_symbol_occurs_free(expr: Expr, syms: set[str]) -> bool:
+    """Does any of ``syms`` occur as a bare reference not rebound by an aggregate?
+
+    The discriminator for :func:`_normalize_indexed_observed_lhs`: a right-hand
+    side that mentions the LHS frame's own index symbols is a PER-CELL body and
+    needs the frame wrapped around it; one that does not (a literal, a whole-array
+    expression, or an aggregate that binds those symbols itself) is already the
+    whole array. Mirrors Julia's use of ``free_variables``, which subtracts
+    aggregate binders — :func:`earthsci_ast.expression.free_variables` does not,
+    so the binder-aware walk lives here.
+    """
+    if isinstance(expr, str):
+        return expr in syms
+    if not isinstance(expr, ExprNode):
+        return False
+    inner = syms
+    if is_aggregate_op(expr.op):
+        inner = syms - (set(expr.output_idx or []) | set(expr.ranges or {}))
+        if not inner:
+            return False
+    return any(_frame_symbol_occurs_free(child, inner) for child in iter_children(expr))
+
+
+def _normalized_indexed_definition(eq: Equation, model: Model, states: set[str]) -> Equation | None:
+    """The bare-LHS rewrite of one indexed array-observed definition, or None.
+
+    Recognition is deliberately narrow, mirroring Julia's
+    ``_normalize_indexed_observed_lhs``: the shell must carry no
+    ``filter`` / ``join`` / ``key`` / ``distinct``; the gather must be the
+    IDENTITY on the frame (``index(V, k…)``, same symbols in the same order, so
+    ``index(V, k+1)`` and permutations are not recognized); ``output_idx`` must be
+    non-empty (a scalar reduction is no frame); ``ranges`` must bind exactly those
+    symbols; and ``V`` must be a declared ``unknown`` of this model that is not an
+    ODE state and whose declared ``shape`` has the frame's rank. Anything else
+    returns None and the equation is passed through untouched.
+    """
+    lhs = eq.lhs
+    if not (isinstance(lhs, ExprNode) and is_aggregate_op(lhs.op)):
+        return None
+    if any(getattr(lhs, f, None) is not None for f in ("filter", "join", "key", "distinct")):
+        return None
+    frame = [s for s in (lhs.output_idx or []) if isinstance(s, str)]
+    if not frame or len(frame) != len(lhs.output_idx or []):
+        return None
+    ranges = lhs.ranges if isinstance(lhs.ranges, dict) else {}
+    if set(ranges) != set(frame):
+        return None
+    body = lhs.expr
+    if not (isinstance(body, ExprNode) and body.op == "index" and body.args):
+        return None
+    head = body.args[0]
+    if not isinstance(head, str) or list(body.args[1:]) != frame:
+        return None
+    var = model.variables.get(head)
+    if var is None or var.type != "unknown" or head in states:
+        return None
+    if len(var.shape or []) != len(frame):
+        return None
+    rhs = eq.rhs
+    if _frame_symbol_occurs_free(rhs, set(frame)):
+        # A per-cell body: wrap it in the LHS's own frame, so the definition
+        # denotes the whole array exactly as the bare spelling would.
+        rhs = replace(lhs, args=[], expr=rhs)
+    return replace(eq, lhs=head, rhs=rhs)
+
+
+def _normalize_indexed_observed_lhs(model: Model) -> list[Equation]:
+    """Rewrite the INDEXED spelling of an array-observed definition to the bare one.
+
+    esm-spec §6.3.1 admits two LHS spellings for the equation that DEFINES an
+    unknown — bare (``y ~ f(…)``) and indexed (``y[i] ~ f(…)``, "which defines the
+    whole array ``y``") — and reads the defining form through the LHS's BASE NAME:
+    "an arrayed definition is observed exactly as its scalar counterpart is".
+    Neither spelling is restricted by rank.
+
+    This binding classified by the LHS's SYNTAX instead, through
+    :func:`~earthsci_ast.classification.inlined_unknowns` — the strict
+    ``y ~ f(…)`` set §6.3.1 sanctions for *inlining specifically*, used here as if
+    it were the classification, which §6.3.1 says it is not ("does not narrow the
+    partition"). An array-shaped observed written the indexed way therefore landed
+    in ``state_vars``, where nothing ever wrote it, and three things went wrong at
+    once (issue #232's Python half): asserting the observed itself returned 0.0
+    from its never-written state slot; a per-cell RHS matched no driver case and
+    was dropped with the ``unrecognized algebraic equation`` warning, freezing the
+    state it constrained; and a bare whole-array reader (``D(u) ~ w``) read that
+    same zero slot, because the array build's algebraic elimination substitutes
+    only INDEXED reads.
+
+    Normalizing the spelling once, upstream of classification and of every
+    downstream consumer, fixes all three at their single cause and leaves exactly
+    one LHS form in the flattened system — upstream normalization, not runner
+    dispatch (``AGENTS.md``). Returns ``model.equations`` BY IDENTITY when nothing
+    matches.
+    """
+    states = set(ode_states(model))
+    out: list[Equation] = []
+    changed = False
+    for eq in model.equations:
+        rewritten = _normalized_indexed_definition(eq, model, states)
+        out.append(eq if rewritten is None else rewritten)
+        changed = changed or rewritten is not None
+    return out if changed else model.equations
+
+
 def _collect_model(
     name: str,
     model: Model,
@@ -983,14 +1172,20 @@ def _collect_model(
     full_prefix = prefix or name
     component = _ComponentSystem(name=full_prefix)
 
+    # esm-spec §6.3.1 admits BOTH LHS spellings for the equation that defines an
+    # unknown, and reads the defining form through the LHS's base name. Normalize
+    # the indexed one (`y[i] ~ f(…)`) to the bare one FIRST, so classification and
+    # every downstream consumer see exactly one form.
+    equations = _normalize_indexed_observed_lhs(model)
+    if equations is not model.equations:
+        model = replace(model, equations=equations)
+
     # The variable's role comes from the §6.3.1 classification, NOT from a
-    # declared type. `observed` is the INLINED form specifically -- an unknown a
-    # bare-variable LHS defines, which is substituted into its consumers. Every
-    # other unknown is SOLVED FOR and lands in `state_vars`: an ODE state, an
-    # algebraic unknown, and an ARRAYED definition (`y[i] ~ f(i)`) alike. The
-    # arrayed one is observed by §6.3.1 and its cadence resolves through its RHS,
-    # but it materializes into a buffer its consumers index rather than being
-    # inlined -- exactly the 0.x `state` + index-LHS shape.
+    # declared type. `observed` is the unknown a bare-variable LHS defines, which
+    # is substituted into its consumers; with the indexed spelling normalized
+    # above, an ARRAYED definition (`y[i] ~ f(i)`) reaches this as the bare form
+    # and is classified observed too, as §6.3.1 requires. Every other unknown is
+    # SOLVED FOR and lands in `state_vars`: an ODE state and an algebraic unknown.
     observed = set(inlined_unknowns(model))
 
     for var_name, var in model.variables.items():
@@ -1240,6 +1435,17 @@ def _apply_operator_compose(
     Per spec §4.7.1: for each B equation with LHS ``D(x, t)``, find A's
     equation with LHS ``D(x, t)`` (translation-aware) and sum their RHS into
     a single equation. Unmatched B equations are appended unchanged.
+
+    Two things step 5 used to leave silent are reported here (§4.7.1 step 5):
+    an entry that merges NOTHING and an entry that merges only SOME of the
+    equations B authored. Preserving the unmatched equations is still correct --
+    an operator may legitimately contribute states of its own -- but preserving
+    them *quietly* makes "merged everything" and "merged nothing" the same
+    observable outcome, which is the one outcome a coupling mis-specification
+    must not have. ``require_match: true`` promotes either to a hard refusal.
+
+    The bare-name fallback resolves its surviving spelling by OWNERSHIP rather
+    than by ``systems[0]``; see :func:`_bare_name_owner`.
     """
     if not entry.systems or len(entry.systems) < 2:
         return
@@ -1261,17 +1467,28 @@ def _apply_operator_compose(
     surviving_b: list[FlattenedEquation] = []
     # b_dep -> target_dep for every match that RENAMED the dependent variable.
     merged_away: dict[str, str] = {}
+    # The subset of `merged_away` produced by the BARE-NAME fallback, whose
+    # surviving spelling is decided by ownership below rather than by which side
+    # happened to be `systems[0]`.
+    bare_matches: dict[str, str] = {}
     # Positions in `a.equations` this entry merged INTO, for the reattribution
     # below. Collected rather than acted on in place because `a_index` indexes
     # `a.equations` positionally and stays live until the last B equation has
     # been matched -- relocating an equation mid-loop would invalidate it.
     merged_positions: set[int] = set()
+    # §4.7.1 step 5's merge tally. `authored` counts the B equations that COULD
+    # match (one with no extractable dependent variable is not a contribution and
+    # is exempt by construction); `unmatched` records the ones that did not, in
+    # document order, because naming them is what turns the diagnostic into a fix.
+    authored = 0
+    unmatched: list[str] = []
 
     for b_eq in b.equations:
         b_dep = _lhs_dependent_var(b_eq.lhs)
         if b_dep is None:
             surviving_b.append(b_eq)
             continue
+        authored += 1
 
         # Determine the A target for this dependent variable. Spec §4.7.1 step 3
         # lists the match kinds in precedence order: DIRECT first, then
@@ -1284,6 +1501,7 @@ def _apply_operator_compose(
         # (the `translate: {"A.x": "B._var"}` redundancy invariant, §10.2).
         target_dep = b_dep
         factor = 1.0
+        is_bare_match = False
         if b_dep in a_index:
             pass  # direct match; `target_dep` is already right
         elif b_dep in translate:
@@ -1294,6 +1512,7 @@ def _apply_operator_compose(
             for ad in a_index:
                 if ad.endswith("." + short):
                     target_dep = ad
+                    is_bare_match = True
                     break
 
         if target_dep in a_index:
@@ -1311,10 +1530,40 @@ def _apply_operator_compose(
             merged_positions.add(i)
             if target_dep != b_dep:
                 merged_away[b_dep] = target_dep
+                if is_bare_match:
+                    bare_matches[b_dep] = target_dep
         else:
+            unmatched.append(b_dep)
             surviving_b.append(b_eq)
 
     b.equations = surviving_b
+
+    _report_operator_compose_merge(entry, a_name, b_name, authored, unmatched)
+
+    # §4.7.1 step 3, the bare-name fallback's OWNERSHIP rule. A bare-name match
+    # asserts that A's `x` and B's `x` are one quantity under two spellings, and
+    # the merge has to delete one of them. When BOTH are states the document has
+    # not said which INITIAL CONDITION survives -- so that is refused rather than
+    # decided here. When only one is a state, that one is the owner and the merge
+    # renames onto it, in either argument order.
+    inverted: dict[str, str] = {}
+    for b_dep, target_dep in bare_matches.items():
+        owner = _bare_name_owner(components, entry, a_name, b_name, b_dep, target_dep)
+        if owner == b_dep:
+            inverted[target_dep] = b_dep
+            merged_away.pop(b_dep, None)
+    if inverted:
+        # Retarget BEFORE the reattribution: the reattribution reads each merged
+        # equation's dependent variable to decide whose bag it belongs in, and
+        # after this rewrite that variable is the owner's spelling. Running it
+        # first would file the merged tendency under the component whose name
+        # just went away.
+        _retarget_merged_names(components, inverted)
+        for gone in inverted:
+            owner = components.get(gone.split(".", 1)[0])
+            if owner is not None:
+                owner.state_vars.pop(gone, None)
+                owner.observed.pop(gone, None)
 
     # `a is b` is a self-compose (`"systems": ["X", "X"]`), which nothing rejects
     # and which has just rebound the one shared list out from under
@@ -1339,6 +1588,140 @@ def _apply_operator_compose(
         for gone in merged_away:
             b.state_vars.pop(gone, None)
             b.observed.pop(gone, None)
+
+
+def _is_state(components: OrderedDict[str, _ComponentSystem], dep: str) -> bool:
+    """Is ``dep`` a STATE variable of the (partly flattened) component tables?
+
+    A state is the thing that carries an initial condition, which is the whole of
+    what a bare-name match decides between. An observed carries none.
+    """
+    comp = components.get(dep.split(".", 1)[0])
+    return comp is not None and dep in comp.state_vars
+
+
+def _bare_name_owner(
+    components: OrderedDict[str, _ComponentSystem],
+    entry: OperatorComposeCoupling,
+    a_name: str,
+    b_name: str,
+    b_dep: str,
+    target_dep: str,
+) -> str:
+    """Which spelling owns the quantity a bare-name match unified (§4.7.1 step 3)?
+
+    A DIRECT match needs no decision (the two names are equal) and a ``translate``
+    match is the author naming the surviving spelling explicitly. The BARE-NAME
+    fallback is the one that has to choose, and choosing ``systems[0]`` -- what
+    this binding did before -- makes an ``operator_compose`` entry mean different
+    things in its two argument orders: flipping ``systems`` silently swapped which
+    state name, and which INITIAL CONDITION, came out the far side.
+
+    Ownership follows the variable's own namespace, the direction step 4's
+    merged-equation reattribution already reaches in. The merge deletes one of the
+    two names, so the question is which of them the flattened system keeps:
+
+    * **Both are STATES** -- each carries its own initial condition, and nothing
+      in the document says which one the merged tendency should integrate from.
+      Refused (:class:`OperatorComposeAmbiguousBareNameError`), because deciding
+      it here is exactly the silent choice issue #195 is about. The author says
+      what they mean with ``translate``, which names the surviving spelling
+      outright, or with ``require_match``.
+    * **Exactly one is a state** -- the other carries no initial condition, so
+      there is nothing to lose by renaming onto the state. That one is the owner,
+      in either argument order.
+    * **Neither is** -- no initial condition is at stake either way; the incumbent
+      (``systems[0]``'s spelling) stands, as before.
+    """
+    b_state = _is_state(components, b_dep)
+    a_state = _is_state(components, target_dep)
+    if b_state and a_state:
+        raise OperatorComposeAmbiguousBareNameError(
+            f"operator_compose_ambiguous_bare_name: operator_compose({a_name} + "
+            f"{b_name}) matched {b_dep!r} to {target_dep!r} on their shared local "
+            f"name alone, but BOTH are state variables and the merge keeps only "
+            f"one. Each carries its own initial condition, so the choice decides "
+            f"which the flattened system integrates from, and the document does "
+            f"not express it. Name the surviving spelling with a `translate` "
+            f"entry ({{{target_dep!r}: {b_dep!r}}}), or rename one of them."
+        )
+    if b_state:
+        return b_dep
+    return target_dep
+
+
+def _report_operator_compose_merge(
+    entry: OperatorComposeCoupling,
+    a_name: str,
+    b_name: str,
+    authored: int,
+    unmatched: list[str],
+) -> None:
+    """Report an ``operator_compose`` entry that merged nothing, or only some.
+
+    esm-libraries-spec §4.7.1 step 5. Step 5 preserves an unmatched equation, and
+    preserving it SILENTLY is what left "merged everything" and "merged nothing"
+    indistinguishable -- both wrong outcomes reachable from a document that is
+    spec-valid and loads clean.
+
+    ``require_match`` is TRI-STATE, and the three states are three different
+    things an author can mean:
+
+    ============== ================================ ==========================
+    ``require_match``  zero equations merged            some but not all merged
+    ============== ================================ ==========================
+    absent          ``operator_compose_no_merge``     ``operator_compose_partial_merge``
+                    -- **error**                      -- warning
+    ``true``        ``operator_compose_require_match_unmatched`` -- error (both cases)
+    ``false``       permitted, silently               permitted, silently
+    ============== ================================ ==========================
+
+    ZERO merged is an error by default because such an entry is indistinguishable
+    from an entry that is not there: the operator integrates a private decoupled
+    system from its own defaults and the mechanism gets nothing. PARTIAL stays a
+    warning because an operator may legitimately contribute states of its own
+    alongside the ones it does merge, and the format cannot tell the two apart.
+
+    ``require_match: false`` is the explicit opt-out -- the author declaring a
+    standalone-contributing operator. It is a DECLARATION, not a default: an
+    absent flag means "I have not said", which is why it is the case that errors.
+    """
+    if authored == 0 or not unmatched:
+        return
+    require_match = getattr(entry, "require_match", None)
+    if require_match is False:
+        # The author has declared a standalone-contributing operator. Nothing to
+        # report: an unmatched equation is what they said to expect.
+        return
+    where = f"operator_compose({a_name} + {b_name})"
+    merged = authored - len(unmatched)
+    names = ", ".join(unmatched)
+    if require_match is True:
+        raise OperatorComposeRequireMatchError(
+            f"operator_compose_require_match_unmatched: {where} declares "
+            f"`require_match` and merged {merged} of {authored} equations "
+            f"{b_name!r} authored; no equation of {a_name!r} matches: {names}"
+        )
+    if merged == 0:
+        raise OperatorComposeNoMergeError(
+            f"operator_compose_no_merge: {where} merged NONE of the {authored} "
+            f"equations {b_name!r} authored; no equation of {a_name!r} matches: "
+            f"{names}. The entry is indistinguishable from one that is not there "
+            f"-- {b_name!r} would integrate decoupled from its own defaults and "
+            f"{a_name!r} would receive no contribution. If {b_name!r} really does "
+            f"contribute only states of its own, declare it with "
+            f"`require_match: false` on this entry."
+        )
+    warnings.warn(
+        f"operator_compose_partial_merge: {where} merged {merged} of {authored} "
+        f"equations {b_name!r} authored; unmatched dependent variable(s): {names}. "
+        f"The unmatched equations are preserved unchanged (esm-libraries-spec "
+        f"§4.7.1 step 5), so they integrate DECOUPLED from {a_name!r}. Set "
+        f"`require_match: true` if they were meant to be contributions, or "
+        f"`require_match: false` if they were not.",
+        UserWarning,
+        stacklevel=2,
+    )
 
 
 def _reattribute_merged_equations(
@@ -1797,6 +2180,54 @@ def _collect_components(
     return components, source_systems
 
 
+def _check_variable_map_endpoints(
+    esm_file: EsmFile,
+    components: OrderedDict[str, _ComponentSystem],
+    coupling_entries: list[CouplingEntry],
+) -> None:
+    """Preflight: every ``variable_map`` endpoint must name a state, parameter
+    or observed the collected system carries, under its FULL dot path.
+
+    This is the resolution half of the entry, and until it existed both halves
+    failed silently: :func:`_apply_variable_map` substitutes ``to`` -> ``from``
+    whether or not either name binds, and its promotion step ``pop``s ``to``
+    with a ``None`` default that was then discarded. An endpoint resolving to
+    nothing therefore produced a flattened system indistinguishable from one
+    where the coupling had been applied and had simply had no effect.
+
+    EXEMPTION: a ``from`` whose owning system is a top-level ``data_sources``
+    key. Such a producer is served through the runtime forcing seam rather than
+    as a declared variable, so it is legitimately absent from the tables (see
+    :func:`_apply_variable_map`, which records it as a loaded producer).
+
+    Deliberately NOT checked: whether a promoting transform's ``to`` is a
+    PARAMETER rather than an unknown. ``tests/valid/scoped_refs_coupling.esm``
+    maps ``param_to_var`` onto a declared unknown, and tightening that is a
+    separate question from whether the endpoint resolves at all.
+    """
+    declared: set[str] = set()
+    for comp in components.values():
+        declared |= set(comp.state_vars) | set(comp.parameters) | set(comp.observed)
+    loader_names: set[str] = set(getattr(esm_file, "data_sources", None) or {})
+    for entry in coupling_entries:
+        if not isinstance(entry, VariableMapCoupling):
+            continue
+        from_is_loaded = entry.from_var.split(".", 1)[0] in loader_names
+        for side, endpoint in (("from", entry.from_var), ("to", entry.to_var)):
+            if not endpoint or endpoint in declared:
+                continue
+            if side == "from" and from_is_loaded:
+                continue
+            raise VariableMapUnresolvedEndpointError(
+                f"variable_map({entry.from_var} -> {entry.to_var}): the "
+                f"'{side}' endpoint '{endpoint}' resolves to no variable, "
+                f"parameter or observed in the flattened system (esm-spec "
+                f"§4.6, §10.4). A scoped reference walks EVERY dot-separated "
+                f"segment, so a subsystem endpoint is spelled "
+                f"'<Model>.<Subsystem>.<name>'."
+            )
+
+
 def _apply_couplings(
     esm_file: EsmFile,
     components: OrderedDict[str, _ComponentSystem],
@@ -1812,6 +2243,11 @@ def _apply_couplings(
     under us. Provenance (operator applies, callbacks, coupling-rule
     descriptions) is recorded into ``metadata``.
     """
+    # Endpoint preflight, against the PRE-coupling tables: an `operator_compose`
+    # `translate` merge (§10.2) legitimately consumes one of two spellings of a
+    # quantity, so checking after it ran would flag a well-formed endpoint.
+    _check_variable_map_endpoints(esm_file, components, coupling_entries)
+
     operator_compose_entries: list[OperatorComposeCoupling] = []
     couple_entries: list[CouplingCouple] = []
     var_map_entries: list[VariableMapCoupling] = []

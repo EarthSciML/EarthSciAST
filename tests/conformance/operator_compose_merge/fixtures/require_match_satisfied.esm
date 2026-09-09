@@ -1,0 +1,124 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "operator_compose_require_match_satisfied",
+    "description": "The NON-VACUITY anchor for `require_match`: every one of the operator's equations lands, so the flag is satisfied and the document flattens clean with NO diagnostic at all. Without this case a binding that refused every `require_match` entry, or that warned on every compose, would pass the three cases above. `Sink` here authors only `Chem.O3`, which the mechanism carries; the merged tendency is the sum of both rates and `Chem.NO` keeps its own.",
+    "authors": [
+      "EarthSciAST"
+    ],
+    "tags": [
+      "esm-libraries-spec-4.7.1",
+      "operator-compose",
+      "operator-compose-require-match",
+      "merge-intent",
+      "non-vacuity"
+    ]
+  },
+  "models": {
+    "Chem": {
+      "variables": {
+        "O3": {
+          "type": "unknown",
+          "units": "ppb",
+          "default": 30.0
+        },
+        "NO": {
+          "type": "unknown",
+          "units": "ppb",
+          "default": 5.0
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.0002
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "O3"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "O3"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "NO"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "NO"
+            ]
+          }
+        }
+      ]
+    },
+    "Sink": {
+      "variables": {
+        "kd": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.0001
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "Chem.O3"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "kd"
+                ]
+              },
+              "Chem.O3"
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "operator_compose",
+      "systems": [
+        "Chem",
+        "Sink"
+      ],
+      "require_match": true
+    }
+  ]
+}

@@ -3,14 +3,14 @@ structural ``D(x, t)`` resolves to the state's tendency (issue #206 items 1
 and 2). The Python mirror of the Rust binding's
 ``tests/reaction_system_inline_tests.rs`` and ``tests/rhs_time_derivative.rs``.
 
-Before this, ``run_pde_tests`` enumerated ``file.models`` alone — so a
+Before this, ``run_inline_tests`` enumerated ``file.models`` alone — so a
 document whose only tests live on a mechanism (esm-spec §7.2, and the shipped
 ``tests/simulation/autocatalytic_reaction.esm``) produced no assertion rows at
 all — and an observed written ``dxdt ~ D(x, t)`` was unrunnable: this binding
 raised ``unlowered_operator`` where the Rust binding silently returned ``0``.
 
 Sabotage checks: drop the ``reaction_systems`` loop from
-``_test_bearing_components`` and every §7.2 test here reports no rows; delete
+``_test_components`` and every §7.2 test here reports no rows; delete
 the ``_resolve_rhs_time_derivatives`` call from ``flatten`` and every tendency
 test here errors with ``unlowered_operator``.
 """
@@ -24,7 +24,7 @@ from conftest import FIXTURES_ROOT
 
 from earthsci_ast.flatten import flatten
 from earthsci_ast.parse import load_path, load_string
-from earthsci_ast.pde_inline_tests import run_pde_tests
+from earthsci_ast.inline_tests import run_inline_tests
 
 _META = {
     "name": "Issue206",
@@ -63,7 +63,7 @@ def _decay_mechanism(tests: list) -> dict:
 
 
 def _run(doc: dict):
-    return run_pde_tests(load_string(json.dumps(doc)))
+    return run_inline_tests(load_string(json.dumps(doc)))
 
 
 # ---------------------------------------------------------------------------
@@ -156,15 +156,15 @@ def test_component_selector_reaches_a_reaction_system():
         ]
     )
     file = load_string(json.dumps(doc))
-    assert len(run_pde_tests(file, model_name="Chem")) == 1
-    assert run_pde_tests(file, model_name="NotAComponent") == []
+    assert len(run_inline_tests(file, model_name="Chem")) == 1
+    assert run_inline_tests(file, model_name="NotAComponent") == []
 
 
 def test_shipped_reaction_system_fixture_produces_rows():
     """The corpus fixture the issue names: its whole suite is on a reaction
     system, and it produced no rows at all before this change."""
     path = FIXTURES_ROOT / "simulation" / "autocatalytic_reaction.esm"
-    results = run_pde_tests(str(path))
+    results = run_inline_tests(str(path))
     assert len(results) == 3, results
     assert all(r.passed for r in results), results
 

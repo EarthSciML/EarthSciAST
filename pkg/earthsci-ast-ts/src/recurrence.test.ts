@@ -230,17 +230,34 @@ describe('cycles through DISTINCT variables are still rejected (§5.19.5)', () =
     }
   })
 
-  it('reports that cycle through validate() as a load_error, as it did before', () => {
+  it('reports that cycle through validate() as observed_cycle at the model', () => {
+    // CHANGED (esm-spec §4.9.6, issue #181). This used to assert `load_error`
+    // at the document root, with `details.exception_type: 'CadenceCycleError'`
+    // — the seeder's exception escaping `validateRelationalNodesInContinuous`,
+    // falling through the orchestrator's generic catch (`CadenceCycleError`
+    // extends `EsmDiagnosticError`, not `EsmMachineryError`, so `loadErrorCode`
+    // has no arm for it), and collapsing the whole document into one
+    // uninformative finding that took every other structural result with it.
+    //
+    // §4.9.6 gives the defect its own name and its own pointer, so the cycle is
+    // now decided by `validateObservedCycles` BEFORE any cadence is asked for,
+    // and the relational check absorbs the exception instead of letting it
+    // escape. The pinned pair is `(observed_cycle, /models/M)`, and the message
+    // names the observeds on the cycle — see `observed-cycle.test.ts` for the
+    // full contract, including the shared fixture.
     const result = validate({
       esm: '1.0.0',
       metadata: { name: 'Cycle', description: 'd', authors: ['t'] },
       models: { M: twoVariableCycle },
     } as unknown as EsmFile)
     expect(result.is_valid).toBe(false)
-    expect(result.structural_errors.map((e) => e.code)).toContain('load_error')
-    expect(result.structural_errors[0].details).toMatchObject({
-      exception_type: 'CadenceCycleError',
-    })
+    const codes = result.structural_errors.map((e) => e.code)
+    expect(codes).toContain('observed_cycle')
+    expect(codes).not.toContain('load_error')
+    const finding = result.structural_errors.find((e) => e.code === 'observed_cycle')!
+    expect(finding.path).toBe('/models/M')
+    expect(finding.details).toMatchObject({ cycle: ['a', 'b', 'a'] })
+    expect(finding.message).toContain('a -> b -> a')
   })
 
   it('seeds a legal recurrence instead of throwing on its self-edge', () => {
@@ -459,7 +476,13 @@ describe('a self-reference that is NOT a recurrence keeps its cycle rejection', 
     }
   })
 
-  it('reports the scalar self-cycle through validate() rather than admitting it', () => {
+  it('reports the scalar self-cycle through validate() as observed_cycle', () => {
+    // CHANGED (esm-spec §4.9.6, issue #181), for the same reason as the
+    // two-variable case above: this used to assert `load_error`, which was the
+    // seeder's exception escaping rather than a diagnosis. The rejection is
+    // what matters and it is unchanged — a scalar `x ~ x + 1` is a cycle of
+    // length one — but it now arrives under the name §4.9.6 gives it, at the
+    // model, with `x` named in `details.cycle`.
     const result = validate({
       esm: '1.0.0',
       metadata: { name: 'ScalarSelf', description: 'd', authors: ['t'] },
@@ -471,7 +494,12 @@ describe('a self-reference that is NOT a recurrence keeps its cycle rejection', 
       },
     } as unknown as EsmFile)
     expect(result.is_valid).toBe(false)
-    expect(result.structural_errors.map((e) => e.code)).toContain('load_error')
+    const codes = result.structural_errors.map((e) => e.code)
+    expect(codes).toContain('observed_cycle')
+    expect(codes).not.toContain('load_error')
+    expect(
+      result.structural_errors.find((e) => e.code === 'observed_cycle')!.details,
+    ).toMatchObject({ cycle: ['x', 'x'] })
   })
 
   it('still throws for a BARE array self-reference `s ~ s + 1`', () => {

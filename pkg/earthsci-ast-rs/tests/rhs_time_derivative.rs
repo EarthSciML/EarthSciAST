@@ -21,7 +21,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::{PdeAssertionResult, SolveOptions, flatten, load_string, run_pde_tests};
+use earthsci_ast::{AssertionResult, SolveOptions, flatten, load_string, run_inline_tests};
 use serde_json::json;
 
 fn opts() -> SolveOptions {
@@ -32,9 +32,9 @@ fn opts() -> SolveOptions {
     }
 }
 
-fn run(doc: &serde_json::Value) -> Vec<PdeAssertionResult> {
+fn run(doc: &serde_json::Value) -> Vec<AssertionResult> {
     let file = load_string(&doc.to_string()).expect("document loads");
-    run_pde_tests(&file, None, &opts())
+    run_inline_tests(&file, None, &opts())
 }
 
 /// `D(x)/dt = -k·x` with `k = 3`, `x(0) = 2`, plus an observed `dxdt = D(x, t)`
