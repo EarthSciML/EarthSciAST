@@ -223,6 +223,62 @@ this succeeds: it reduced VERSIONS, which the forward already got for free,
 instead of removing READERS. Its census went 99 → 102 copies; this one goes
 98 → 82 and 394 → 331.
 
+## The scatter-skip GATE: redundant is not the same as expensive
+
+The verdict above is STATIC — "nothing reads this producer's block off `ue` any
+more, so the scatter is redundant". It says nothing about COST, and the CONUS
+table is the counter-example: the transport forward is 1.8x SLOWER with more
+scatters skipped. So the skip is now gated, and finding the gate meant
+instrumenting first. `oop_ssa_producers(f)` reports, per tracked producer, its
+fill level, value length, how many redirected read surfaces now source from it
+and at what element volume, how many of those take the whole value with no op
+at all, the residual-read reasons, and both verdicts (`skippable`, `skip`).
+
+**PRODUCER BLOCK SIZE — the obvious guess — is refuted by that table.** At
+6x6x8:
+
+| | transport (part 1) | chemistry (part 2) |
+|---|---|---|
+| producers | 17 | 59 |
+| statically skippable | 13 | **59 — all of them** |
+| skippable element volume | 4 874 of 8 042 | 53 964 of 53 964 |
+| largest skipped block | 3 456 | **20 736** (then 10 368, 5 184) |
+| redirected read volume / block | 0.125 … 58 230 | 1.0 … 198 |
+| tier-1 (whole-value) reads | 4 producers, 1 each | 30+ producers, up to 87 |
+
+Chemistry skips producers 6x larger than transport's largest and WINS, so no
+size bound separates the two. Nor does the read-volume ratio: transport spans
+both extremes of it.
+
+What actually differs is **whether the flat buffer can DIE**. Chemistry skips
+59 of 59, so nothing scatters into `ue` at all and the whole 12 326-element
+buffer (247 423 at CONUS) is dead code. Transport skips 13 of 17, so `ue` is
+assembled anyway — and a PARTIAL skip is the worst of both worlds: the flat
+buffer is still allocated and still written by the four surviving producers,
+AND each skipped producer's value becomes a buffer of its own instead of being
+fused into an aliasing `dynamic_update_slice`. The forward pays for both.
+
+So the gate is ALL-OR-NOTHING per build:
+
+```
+ESS_OOP_SSA_SKIP_WHOLE=1   (default) skip only when EVERY tracked producer's
+                           scatter can go, so `ue` actually retires
+ESS_OOP_SSA_SKIP_WHOLE=0   allow partial skipping (what the arms shipped with)
+ESS_OOP_SSA_SKIP=0         never skip -- the negative control for the gate
+ESS_OOP_SSA_SKIP_MAXLEN=n  per-producer block-size bound   (both RELEASED by
+ESS_OOP_SSA_SKIP_MINRATIO=x per-producer read-volume bound   default: they are
+                           the refuted hypotheses, kept bisectable)
+ESS_OOP_SSA_SKIP_PIDS=3,7  per-producer bisect; `!3,7` inverts
+```
+
+Declining a skip is always CORRECT — it emits a write nothing reads, exactly
+what the flag-off build does — and the gate touches only whether the scatter is
+emitted. The redirect tables are untouched, so `n_skippable_scatters` (a
+read-graph fact) is identical in every arm and only `n_skipped_scatters` moves;
+`n_gate_declined` is the difference. On ReSEACT the default gate leaves
+chemistry exactly as the arms had it (59 of 59, `ue` dead) and takes transport
+to 0 of 17 — the redirects without the skip.
+
 ## What is NOT verified
 
 Bit-identity across the arms is asserted and holds on HOST (`==`) and, on the
