@@ -81,7 +81,14 @@ fn the_manifest_is_not_empty_and_names_this_binding() {
         !cases_for(&m, "output_selection").is_empty(),
         "no output_selection cases"
     );
-    for surface in ["flatten", "override_keys", "output_selection"] {
+    for surface in [
+        "flatten",
+        "override_keys",
+        "output_selection",
+        "events_and_updates",
+        "template_registry",
+        "inline_tests",
+    ] {
         let bindings = m["surfaces"][surface]["bindings"]
             .as_array()
             .expect("`bindings` is an array");
@@ -287,5 +294,210 @@ fn a_name_keyed_read_of_the_result_resolves() {
                 case["id"]
             );
         }
+    }
+}
+
+/// Neither an event nor an `update` rule is an equation, and both address the
+/// state BY NAME.
+///
+/// The affect's `lhs` is the sharp one: it is a plain `String`, so a walk that
+/// maps only EXPRESSIONS rewrites the affect's RHS and leaves its target
+/// pointing at a state the flattened system no longer declares.
+#[test]
+fn the_rename_reaches_events_and_variable_updates() {
+    let m = manifest();
+    let cases = cases_for(&m, "events_and_updates");
+    assert!(
+        !cases.is_empty(),
+        "no events_and_updates cases in the manifest"
+    );
+    for case in &cases {
+        let flat = flatten_case(case);
+        let id = case["id"].as_str().unwrap_or("?");
+
+        for (gone, survivor) in case["merged_variable_renames"]
+            .as_object()
+            .expect("`merged_variable_renames` is an object")
+        {
+            assert_eq!(
+                flat.metadata.merged_variable_renames.get(gone.as_str()),
+                Some(&survivor.as_str().expect("survivor is a string").to_string()),
+                "{id}: {gone} must be recorded as merged away"
+            );
+        }
+
+        let mut affects: Vec<(String, String)> = Vec::new();
+        for ev in &flat.continuous_events {
+            for a in &ev.affects {
+                affects.push((a.lhs.clone(), to_ascii(&a.rhs)));
+            }
+        }
+        for ev in &flat.discrete_events {
+            for a in ev.affects.iter().flatten() {
+                affects.push((a.lhs.clone(), to_ascii(&a.rhs)));
+            }
+        }
+        let want = case["event_affects"]
+            .as_array()
+            .expect("`event_affects` is an array");
+        assert_eq!(affects.len(), want.len(), "{id}: affect count");
+        for (got, w) in affects.iter().zip(want) {
+            assert_eq!(
+                got.0,
+                w["lhs"].as_str().expect("lhs is a string"),
+                "{id}: the affect writes to {:?} — an affect `lhs` is a plain NAME \
+                 string, not an expression",
+                got.0
+            );
+            for name in w["rhs_references"]
+                .as_array()
+                .expect("rhs_references is an array")
+            {
+                let name = name.as_str().expect("a reference is a string");
+                assert!(
+                    got.1.contains(name),
+                    "{id}: affect RHS must reference {name}"
+                );
+            }
+        }
+
+        let mut update_text = String::new();
+        for (var_name, wanted) in case["variable_updates"]
+            .as_object()
+            .expect("`variable_updates` is an object")
+        {
+            let var = flat
+                .parameters
+                .get(var_name.as_str())
+                .or_else(|| flat.state_variables.get(var_name.as_str()))
+                .unwrap_or_else(|| panic!("{id}: no variable {var_name}"));
+            // `for_each_expression` is the type's own walk over the two slots
+            // that can name a variable — the `when` trigger and the value
+            // `expression` — so this cannot drift as the union grows.
+            // The VARIABLE's own walk over every Expression position an
+            // `update` rule carries — the `when` trigger, the `expression`
+            // value form, a `from` binding's `unit_conversion` — so this cannot
+            // drift as the rule union grows.
+            let mut rendered = String::new();
+            var.for_each_expression(&mut |expr| {
+                rendered.push_str(&to_ascii(expr));
+                rendered.push(' ');
+            });
+            for name in wanted.as_array().expect("wanted is an array") {
+                let name = name.as_str().expect("a reference is a string");
+                assert!(
+                    rendered.contains(name),
+                    "{id}: {var_name}'s update must reference {name}, got {rendered}"
+                );
+            }
+            update_text.push_str(&rendered);
+        }
+
+        // The dead spelling survives in NEITHER, in EITHER form: not the
+        // qualified name a collect-time namespacing carries through, and not the
+        // bare local a coupling-time one leaves behind.
+        let mut haystack = update_text;
+        for (lhs, rhs) in &affects {
+            haystack.push_str(lhs);
+            haystack.push(' ');
+            haystack.push_str(rhs);
+            haystack.push(' ');
+        }
+        for gone in case["absent_from_events_and_updates"]
+            .as_array()
+            .expect("`absent_from_events_and_updates` is an array")
+        {
+            let gone = gone.as_str().expect("a name is a string");
+            assert!(
+                !haystack.split_whitespace().any(|tok| tok
+                    .trim_matches(|c: char| { !c.is_alphanumeric() && c != '.' && c != '_' })
+                    == gone),
+                "{id}: {gone} still appears in an event or an update: {haystack}"
+            );
+        }
+    }
+}
+
+/// The ONE surface that refuses rather than resolves.
+///
+/// A surviving registry body is authored source that expands at the build
+/// boundary, so it can neither be left alone (it would expand into a name the
+/// flattened system does not declare) nor rewritten (the flattened registry
+/// would then disagree with the expand-at-load image). Flatten refuses.
+#[test]
+fn a_registry_body_naming_the_merged_away_state_is_refused() {
+    let m = manifest();
+    let cases = cases_for(&m, "template_registry");
+    assert!(
+        !cases.is_empty(),
+        "no template_registry cases in the manifest"
+    );
+    for case in &cases {
+        let id = case["id"].as_str().unwrap_or("?");
+        let path = category_dir().join(case["path"].as_str().expect("`path` is a string"));
+        let file = load_path(&path).unwrap_or_else(|e| panic!("loading {}: {e}", path.display()));
+        let err = flatten(&file).expect_err(&format!("{id}: flatten must REFUSE"));
+        let text = err.to_string();
+        let want = case["raises"].as_str().expect("`raises` is a string");
+        assert!(
+            text.contains(want),
+            "{id}: the diagnostic must carry {want}, got {text}"
+        );
+        for name in case["names_in_message"].as_array().expect("array") {
+            let name = name.as_str().expect("a name is a string");
+            assert!(
+                text.contains(name),
+                "{id}: the diagnostic must name {name} — naming the offending \
+                 reference is what turns it into a fix"
+            );
+        }
+    }
+}
+
+/// Both halves of the inline-test surface, pinned by one assertion.
+///
+/// That it RESOLVES at all is the assertion half — unresolved it reports
+/// `scalar state ... not found`. That the actual is the caller's value rather
+/// than the survivor's declared default is the `initial_conditions` half: a key
+/// that silently resolved to nothing would leave the run at that default and
+/// the test would still return a verdict.
+#[test]
+#[cfg(feature = "solve")]
+fn an_inline_test_naming_the_merged_away_state_resolves() {
+    let m = manifest();
+    let cases = cases_for(&m, "inline_tests");
+    assert!(!cases.is_empty(), "no inline_tests cases in the manifest");
+    for case in &cases {
+        let id = case["id"].as_str().unwrap_or("?");
+        let path = category_dir().join(case["path"].as_str().expect("`path` is a string"));
+        let file = load_path(&path).unwrap_or_else(|e| panic!("loading {}: {e}", path.display()));
+        let results = earthsci_ast::run_inline_tests(&file, None, &Default::default());
+        let want_id = case["test_id"].as_str().expect("`test_id` is a string");
+        let result = results
+            .iter()
+            .find(|r| r.test_id == want_id)
+            .unwrap_or_else(|| panic!("{id}: no result for test {want_id}"));
+        assert_eq!(
+            result.passed,
+            case["passes"].as_bool().expect("`passes` is a bool"),
+            "{id}: {}",
+            result.message
+        );
+        let actual = result
+            .actual
+            .unwrap_or_else(|| panic!("{id}: no actual value"));
+        let expected = case["expected"].as_f64().expect("`expected` is a number");
+        let stale = case["default_without_resolution"]
+            .as_f64()
+            .expect("`default_without_resolution` is a number");
+        assert!(
+            (actual - expected).abs() < 1e-6,
+            "{id}: read {actual}; {stale} is what an unresolved initial-condition key \
+             silently leaves in place"
+        );
+        assert!(
+            (actual - stale).abs() > 1e-6,
+            "{id}: read the stale default {stale}"
+        );
     }
 }
