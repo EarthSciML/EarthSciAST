@@ -24,8 +24,10 @@
 #   * an equation the affine tier DECLINES falls back to the loop.
 #
 # Numerically nothing may move: the wide case is pinned bit-for-bit against the
-# pure-unroll reference (`ESS_CONTRACTION_LOOP=0`), the per-cell scalar-walk
-# reference (`ESS_STENCIL_DISABLE=1`) and exact arithmetic.
+# pure-unroll reference (`ESS_CONTRACTION_LOOP=0`), the per-cell reference
+# (`ESS_STENCIL_DISABLE=1` — which for this shape IS the contraction-loop
+# per-cell path, so it cross-checks the two tiers against each other) and exact
+# arithmetic.
 
 using Test
 include("testutils.jl")
@@ -151,10 +153,12 @@ _cto_outs(du, vm, NI, NJ) = [ du[vm["out[$i,$j]"]] for i in 1:NI, j in 1:NJ ]
         du_a, vm_a, tally_a, _ = _cto_build(NI, NJ, NK)
         du_u, vm_u, tally_u, _ = _cto_build(NI, NJ, NK;
             env = Dict("ESS_CONTRACTION_LOOP" => "0"))          # pure unroll
-        du_p, vm_p, _, _ = _cto_build(NI, NJ, NK;
-            env = Dict("ESS_STENCIL_DISABLE" => "1"))           # per-cell scalar walk
+        du_p, vm_p, tally_p, _ = _cto_build(NI, NJ, NK;
+            env = Dict("ESS_STENCIL_DISABLE" => "1"))           # per-cell: the LOOP tier
         @test _cto_get(tally_a, :percell_loop) == 0
         @test _cto_get(tally_u, :percell_loop) == 0
+        # The reference really is the other tier, not a relabelled affine build.
+        @test _cto_get(tally_p, :percell_loop) == 1
         A = _cto_outs(du_a, vm_a, NI, NJ)
         @test A == _cto_outs(du_u, vm_u, NI, NJ)
         @test A == _cto_outs(du_p, vm_p, NI, NJ)
