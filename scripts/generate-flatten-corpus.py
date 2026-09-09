@@ -51,6 +51,10 @@ the other bindings:
      §6.3.1's first row.
   6. `equation_count == len(equations)`.
   7. Flattening the same fixture twice produces an identical record.
+  8. A name in BOTH `state_variables` and `observed_variables` is ARRAYED —
+     §4.7.5's dual membership is for the observed that "materializes into a
+     buffer", so a SCALAR observed appearing in the solved-for vector is a
+     bug in the oracle, not a case to record.
 
 Regenerate with:  python3 scripts/generate-flatten-corpus.py
 Output:           tests/conformance/flatten/cases.json
@@ -567,6 +571,19 @@ def _check(case_id: str, rec: dict) -> None:
     if rec["equation_count"] != len(rec["equations"]):
         raise AssertionError(f"{case_id}: equation_count disagrees with equations")
 
+    # 7. Dual membership is for the ARRAYED observed only. §4.7.5 step 4 says a
+    #    scalar observed "is eliminated by substitution and is NOT in
+    #    `state_variables`", so a shapeless name in both maps means the oracle
+    #    filed an inlineable observed in the solved-for vector.
+    shapes = {v["name"]: v["shape"] for v in rec["state_variables"]}
+    for v in rec["observed_variables"]:
+        if v["name"] in shapes and not shapes[v["name"]]:
+            raise AssertionError(
+                f"{case_id}: {v['name']} is in both state_variables and "
+                f"observed_variables but declares no shape; only an ARRAYED "
+                f"observed materializes into a buffer (§4.7.5 step 4)"
+            )
+
 
 # --- build -------------------------------------------------------------------
 
@@ -615,6 +632,12 @@ def main() -> int:
             "brownian_parameters / discrete_parameters PARTITION `parameters` "
             "(esm-spec §6.3.1); they are recorded as name lists because their full "
             "metadata is already in `parameters`, where each MUST also appear. "
+            "`state_variables` and `observed_variables` are NOT a partition: "
+            "`state_variables` is the solved-for vector and `observed_variables` "
+            "is the §6.3.1 classification, so an ARRAYED observed - one an "
+            "indexed LHS defines, which materializes into a buffer rather than "
+            "being inlined - appears in BOTH, carrying the role `observed` in "
+            "each (issue #270). "
             "Entries in `refusals` must be rejected, with the named error type."
         ),
         "oracle": "earthsci_ast.flatten (pkg/earthsci-ast-py)",

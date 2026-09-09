@@ -218,13 +218,21 @@ def test_all_four_spelling_combinations_agree(tmp_path):
 
 
 def test_flatten_classifies_the_indexed_definition_as_an_observed(tmp_path):
-    """It landed in ``state_variables``, where nothing ever wrote it."""
+    """It landed in ``state_variables`` ALONE, where nothing ever wrote it.
+
+    esm-libraries-spec §4.7.5 step 4 puts it in BOTH maps (issue #270): an
+    equation defines it, so it is an ``observed_variables`` entry, and it
+    materializes into a buffer the solver allocates, so it is a
+    ``state_variables`` entry too. The bare-LHS twin is the control — a SCALAR
+    observed is eliminated by substitution and is in ``observed_variables``
+    only.
+    """
     path = _write(tmp_path, _doc("c", [EQ_W_INDEXED, EQ_D_INDEXED], ASSERT_U), "c.esm.json")
     flat = flatten(load_path(path))
 
     assert "Column.w" in flat.observed_variables
-    assert "Column.w" not in flat.state_variables
-    assert list(flat.state_variables) == ["Column.u"]
+    assert "Column.w" in flat.state_variables
+    assert list(flat.state_variables) == ["Column.w", "Column.u"]
 
 
 def test_classification_credits_the_indexed_lhs_to_its_base_name(tmp_path):

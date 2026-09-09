@@ -31,6 +31,14 @@ type classificationGolden struct {
 		SystemKind         string   `json:"system_kind"`
 		DeclaredSystemKind *string  `json:"declared_system_kind"`
 	} `json:"models"`
+	// FlattenBuckets pins esm-libraries-spec §4.7.5 step 4's flattened maps,
+	// where a golden carries them. Optional: only the categories whose fixtures
+	// make the distinction interesting do.
+	FlattenBuckets *struct {
+		StateVariables     []string `json:"state_variables"`
+		ObservedVariables  []string `json:"observed_variables"`
+		AlgebraicVariables []string `json:"algebraic_variables"`
+	} `json:"flatten_buckets"`
 }
 
 type classificationManifest struct {
@@ -130,6 +138,38 @@ func runClassificationCategory(t *testing.T, category string) {
 			var golden classificationGolden
 			if err := json.Unmarshal(goldenRaw, &golden); err != nil {
 				t.Fatalf("decode golden: %v", err)
+			}
+
+			// Which flattened MAP an unknown lands in is a different question
+			// from which §6.3.1 set classifies it, and §4.7.5 step 4 answers it
+			// with two maps that are NOT a partition: an arrayed observed is in
+			// ObservedVariables (an equation defines it) AND in StateVariables
+			// (it materializes into a buffer the solver allocates). Issue #270.
+			if want := golden.FlattenBuckets; want != nil {
+				flat, err := Flatten(file)
+				if err != nil {
+					t.Fatalf("flatten: %v", err)
+				}
+				names := func(vars []FlattenedVariable) []string {
+					out := []string{}
+					for _, v := range vars {
+						out = append(out, v.Name)
+					}
+					return out
+				}
+				for _, c := range []struct {
+					label string
+					got   []string
+					want  []string
+				}{
+					{"state_variables", names(flat.StateVariables), want.StateVariables},
+					{"observed_variables", names(flat.ObservedVariables), want.ObservedVariables},
+					{"algebraic_variables", names(flat.AlgebraicVariables), want.AlgebraicVariables},
+				} {
+					if !reflect.DeepEqual(c.got, c.want) {
+						t.Errorf("flatten %s = %v, want %v", c.label, c.got, c.want)
+					}
+				}
 			}
 
 			nodes := classificationModelNodes(t, file)

@@ -17,7 +17,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from .classification import inlined_unknowns, ode_states
+from .classification import inlined_unknowns, observed_unknowns, ode_states
 from .errors import EarthSciAstError
 from .esm_types import (
     ARRAY_OPS,
@@ -356,12 +356,17 @@ class FlattenedSystem:
         ``"z"``) appear only when the equations contain spatial derivative
         operators (``grad``, ``div``, ``laplacian``).
     state_variables:
-        Dot-namespaced state variables, keyed by their namespaced name.
+        The SOLVED-FOR VECTOR, keyed by dot-namespaced name: the differential
+        unknowns, PLUS ``algebraic_variables``, PLUS any arrayed observed that
+        materializes into a buffer (esm-libraries-spec §4.7.5 step 4).
     parameters:
         Dot-namespaced parameters, keyed by their namespaced name.
         Parameters promoted to variables by ``variable_map`` are removed.
     observed_variables:
-        Dot-namespaced observed (algebraic / dependent) variables.
+        The dot-namespaced unknowns an equation DEFINES, at either LHS spelling
+        (esm-spec §6.3.1). NOT disjoint from ``state_variables``: a scalar
+        observed is eliminated by substitution and is in this map alone, while
+        an arrayed one materializes into a buffer and is in both.
     equations:
         Flattened equations as Expr trees.
     continuous_events:
@@ -484,6 +489,21 @@ class FlattenedSystem:
         for name, var in self.observed_variables.items():
             out[name] = var.type
         return out
+
+
+def _integrated_state_names(flat: FlattenedSystem) -> list[str]:
+    """The `state_variables` entries a solver ADVANCES, in document order.
+
+    esm-libraries-spec §4.7.5 step 4 files a materialized arrayed observed in
+    `state_variables` as well as `observed_variables`: the solver must allocate
+    its buffer, so it is part of the solved-for system. It is not part of the
+    INTEGRATED vector, though — its defining equation writes the buffer, exactly
+    as it writes an eliminable observed's value — so a `u` layout built from the
+    whole map would reserve a slot nothing ever advances and read zeros out of
+    it. The unknowns to lay out are therefore the map minus the names
+    `observed_variables` also holds.
+    """
+    return [n for n in flat.state_variables if n not in flat.observed_variables]
 
 
 # ============================================================================
@@ -1084,15 +1104,22 @@ def _frame_symbol_occurs_free(expr: Expr, syms: set[str]) -> bool:
 def _normalized_indexed_definition(eq: Equation, model: Model, states: set[str]) -> Equation | None:
     """The bare-LHS rewrite of one indexed array-observed definition, or None.
 
-    Recognition is deliberately narrow, mirroring Julia's
-    ``_normalize_indexed_observed_lhs``: the shell must carry no
-    ``filter`` / ``join`` / ``key`` / ``distinct``; the gather must be the
-    IDENTITY on the frame (``index(V, k…)``, same symbols in the same order, so
-    ``index(V, k+1)`` and permutations are not recognized); ``output_idx`` must be
-    non-empty (a scalar reduction is no frame); ``ranges`` must bind exactly those
-    symbols; and ``V`` must be a declared ``unknown`` of this model that is not an
-    ODE state and whose declared ``shape`` has the frame's rank. Anything else
+    Recognition is deliberately narrow: the shell must carry no
+    ``filter`` / ``join`` / ``key`` / ``distinct``; its ``output_idx`` must be
+    non-empty (a scalar reduction is no frame); its ``ranges`` must bind exactly
+    those symbols; the gather must be the IDENTITY on the frame; and the
+    addressed variable must be a declared ``unknown`` of this model that is not
+    an ODE state and whose declared ``shape`` has the frame's rank. Anything else
     returns None and the equation is passed through untouched.
+
+    Only the ``aggregate`` shell is rewritten, never the bare ``index(V, i)``
+    spelling §6.3.1's worked example uses. This is a rewrite of the flattened
+    ``equations`` list that no other binding performs, and the shared flatten
+    corpus compares that list's rendering across all five;
+    ``edge_enumeration_area_eff`` already pins a bare-index definition LHS, so
+    widening the rewrite to it would move Python's answer alone. Nothing needs
+    it to: which BUCKET a definition lands in is read from the §6.3.1
+    classification in :func:`_collect_model`, which sees through both spellings.
     """
     lhs = eq.lhs
     if not (isinstance(lhs, ExprNode) and is_aggregate_op(lhs.op)):
@@ -1172,21 +1199,23 @@ def _collect_model(
     full_prefix = prefix or name
     component = _ComponentSystem(name=full_prefix)
 
+    # The two §6.3.1 sets the buckets below need, read from the model AS WRITTEN.
+    # They are read BEFORE the normalization on the next lines, because that
+    # rewrite erases the very distinction they draw: `observed` is every unknown
+    # an equation defines at either spelling, and `inlined_unknowns` is the
+    # narrower strict `y ~ f(…)` set §6.3.1 sanctions for INLINING specifically,
+    # so their difference is exactly the arrayed observeds that materialize into
+    # a buffer instead of being substituted away.
+    observed = set(observed_unknowns(model))
+    materialized = observed - set(inlined_unknowns(model))
+
     # esm-spec §6.3.1 admits BOTH LHS spellings for the equation that defines an
     # unknown, and reads the defining form through the LHS's base name. Normalize
-    # the indexed one (`y[i] ~ f(…)`) to the bare one FIRST, so classification and
-    # every downstream consumer see exactly one form.
+    # the `aggregate{k}(y[k]) ~ …` shell to the bare one, so downstream consumers
+    # see one form (issue #232's Python half).
     equations = _normalize_indexed_observed_lhs(model)
     if equations is not model.equations:
         model = replace(model, equations=equations)
-
-    # The variable's role comes from the §6.3.1 classification, NOT from a
-    # declared type. `observed` is the unknown a bare-variable LHS defines, which
-    # is substituted into its consumers; with the indexed spelling normalized
-    # above, an ARRAYED definition (`y[i] ~ f(i)`) reaches this as the bare form
-    # and is classified observed too, as §6.3.1 requires. Every other unknown is
-    # SOLVED FOR and lands in `state_vars`: an ODE state and an algebraic unknown.
-    observed = set(inlined_unknowns(model))
 
     for var_name, var in model.variables.items():
         namespaced = f"{full_prefix}.{var_name}"
@@ -1218,12 +1247,21 @@ def _collect_model(
             distribution=var.distribution,
             element_type=var.element_type,
         )
-        if role == "state":
-            component.state_vars[namespaced] = flat_var
-        elif role == "parameter":
+        # esm-libraries-spec §4.7.5 step 4: the two maps are NOT a partition.
+        # `observed_variables` is the CLASSIFICATION — every unknown an equation
+        # defines, at either LHS spelling — while `state_variables` is the
+        # SOLVED-FOR VECTOR. A scalar observed is eliminated by substitution and
+        # is in the first only; an arrayed observed materializes into a buffer
+        # the solver must allocate and is in BOTH, exactly as an algebraic
+        # unknown is in `state_variables` and `algebraic_variables` at once.
+        if role == "parameter":
             component.parameters[namespaced] = flat_var
-        else:
+        elif role == "observed":
             component.observed[namespaced] = flat_var
+            if var_name in materialized:
+                component.state_vars[namespaced] = flat_var
+        else:
+            component.state_vars[namespaced] = flat_var
 
     # _var is a placeholder used by operator_compose; never namespace it.
     leave_alone = {"t", PLACEHOLDER_VAR}

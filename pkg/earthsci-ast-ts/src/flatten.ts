@@ -72,6 +72,7 @@ import {
   brownianParameters as classifyBrownian,
   discreteParameters as classifyDiscrete,
   observedDefinitions,
+  observedUnknowns,
   systemKind as classifySystemKind,
   updateRules,
   type SystemKind,
@@ -223,10 +224,13 @@ export class DimensionPromotionError extends FlattenError {
  * The DERIVED role of a flattened variable (esm-spec §6.3.1) — never a declared
  * type, which from 1.0.0 is only `unknown` or `parameter`.
  *
- * - `state` — solved for: an ODE state, an algebraic unknown, or an arrayed
- *   observed that materializes into a buffer.
- * - `observed` — an unknown a bare-variable-LHS equation defines, eliminable by
- *   inlining.
+ * - `state` — solved for and defined by no equation of its own: an ODE state or
+ *   an algebraic unknown.
+ * - `observed` — an unknown an equation DEFINES, at either LHS spelling. A
+ *   scalar one is eliminable by inlining and appears in `observedVariables`
+ *   alone; an arrayed one materializes into a buffer and appears in
+ *   `stateVariables` too, keeping this role in both (esm-libraries-spec §4.7.5
+ *   step 4: `stateVariables` is the solved-for vector, not a classification).
  * - `parameter` — a parameter of any cadence.
  * - `species` — a reaction-system state (a `state` that came from a species).
  */
@@ -1052,12 +1056,18 @@ function collectModel(
 ): ComponentSystem {
   const component = newComponent(fullPrefix)
 
-  // The role comes from the §6.3.1 classification, NOT from a declared type.
-  // `observed` is the INLINED form specifically — an unknown a BARE-variable LHS
-  // defines, substituted into its consumers. Every other unknown is SOLVED FOR
-  // and lands in `stateVars`: an ODE state, an algebraic unknown, and an ARRAYED
-  // definition (`y[i] ~ f(i)`) alike. The arrayed one is observed by §6.3.1, but
-  // it materializes into a buffer its consumers index rather than being inlined.
+  // The role comes from the §6.3.1 classification, NOT from a declared type,
+  // and the two maps it fills are NOT a partition (esm-libraries-spec §4.7.5
+  // step 4). `observedVariables` is the classification — every unknown an
+  // equation DEFINES, at either LHS spelling — while `stateVariables` is the
+  // solved-for vector. An ODE state and an algebraic unknown are solved for and
+  // defined by no equation of their own, so they are in `stateVars` alone; an
+  // INLINEABLE observed (the strict bare-variable LHS) is eliminated by
+  // substitution and contributes no buffer, so it is in `observed` alone; and an
+  // ARRAYED definition (`y[i] ~ f(i)`) is in BOTH — §6.3.1 makes it observed,
+  // and it materializes into a buffer its consumers index rather than being
+  // inlined, so the solver must allocate it.
+  const observed = new Set(observedUnknowns(model))
   const inlined = new Set(observedDefinitions(model, { bareOnly: true }).keys())
 
   for (const [varName, variable] of Object.entries(model.variables ?? {})) {
@@ -1072,15 +1082,17 @@ function collectModel(
         `variable '${namespaced}' declares type '${String(variable.type)}', which esm 1.0.0 ` +
           `removed; the declared types are 'unknown' and 'parameter' (esm-spec §6.3)`,
       )
-    } else if (inlined.has(varName)) {
+    } else if (observed.has(varName)) {
       role = 'observed'
     } else {
       role = 'state'
     }
     const flat = flattenedVariableOf(namespaced, role, variable, fullPrefix)
-    if (role === 'state') component.stateVars[namespaced] = flat
-    else if (role === 'parameter') component.parameters[namespaced] = flat
-    else component.observed[namespaced] = flat
+    if (role === 'parameter') component.parameters[namespaced] = flat
+    else if (role === 'observed') {
+      if (!inlined.has(varName)) component.stateVars[namespaced] = flat
+      component.observed[namespaced] = flat
+    } else component.stateVars[namespaced] = flat
   }
 
   const subs = modelSubsystems(model)
