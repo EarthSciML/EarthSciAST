@@ -1136,8 +1136,11 @@ function flattened_to_esm(flat::FlattenedSystem;
     sname = String(name)
 
     variables = Dict{String,Any}()
-    # Order: states, parameters, observeds. A later partition never re-keys an
-    # earlier one (flatten guarantees disjoint names), so merge is unambiguous.
+    # Order: states, parameters, observeds. `state_variables` and
+    # `observed_variables` are NOT disjoint — esm-libraries-spec §4.7.5 step 4
+    # files a materialized arrayed observed in both — but the two maps hold the
+    # SAME `ModelVariable` for such a name, so the second write reproduces the
+    # first and the merge stays unambiguous. `parameters` is disjoint from both.
     for partition in (flat.state_variables, flat.parameters, flat.observed_variables)
         for (k, v) in partition
             variables[k] = serialize_model_variable(v)
