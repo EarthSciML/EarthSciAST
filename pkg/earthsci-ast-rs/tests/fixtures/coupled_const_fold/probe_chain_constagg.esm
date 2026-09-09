@@ -3,13 +3,77 @@
   "metadata": {
     "name": "ProbeChainConstAggregate",
     "description": "Issue #207, the spelling that already WORKED: byte-for-byte the same chain as `probe_chain_const.esm`, mounting the leaf whose table is wrapped in an `aggregate` instead of being read as a bare `const` array. Its answer is the contrast that shows the two spellings must agree.",
-    "authors": ["EarthSciML Authors and Contributors"]
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ]
   },
-  "index_sets": { "tbl": { "kind": "interval", "size": 5 } },
+  "index_sets": {
+    "tbl": {
+      "kind": "interval",
+      "size": 5
+    }
+  },
   "models": {
-    "Sun": { "ref": "./sun.esm" },
-    "Atm": { "ref": "./atm.esm" },
-    "Rtrn": { "ref": "./rtrn_aggregate.esm" }
+    "Sun": {
+      "ref": "./sun.esm"
+    },
+    "Atm": {
+      "ref": "./atm.esm"
+    },
+    "Rtrn": {
+      "ref": "./rtrn_aggregate.esm"
+    },
+    "Probe": {
+      "variables": {
+        "plnk_in": {
+          "type": "parameter",
+          "default": 0.0,
+          "description": "Replaced by `Rtrn.plnk` through a `param_to_var` edge, so the assertion below is authored against THIS document's conditions (esm-spec §6.6, #214)."
+        },
+        "plnk": {
+          "type": "unknown",
+          "description": "The gathered table row, republished in the mounting document."
+        },
+        "acc": {
+          "type": "unknown",
+          "default": 0.0,
+          "description": "A differential state, so the assembled system has one the coupling cannot eliminate."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "plnk",
+          "rhs": "plnk_in"
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "acc"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        }
+      ],
+      "tests": [
+        {
+          "id": "coupled_temperature_picks_the_right_table_row",
+          "description": "The chain delivers T = 163, so the gather is totplnk[163-159] = totplnk[4] = 40. Reading the coupling target's own default (161) would give 20; reading an unbound 0 would index -159 and raise E_TREEWALK_CONSTARRAY_OOB.",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "assertions": [
+            {
+              "variable": "plnk",
+              "time": 0.0,
+              "expected": 40.0
+            }
+          ]
+        }
+      ]
+    }
   },
   "coupling": [
     {
@@ -23,6 +87,13 @@
       "from": "Atm.T",
       "to": "Rtrn.T",
       "transform": "param_to_var"
+    },
+    {
+      "type": "variable_map",
+      "from": "Rtrn.plnk",
+      "to": "Probe.plnk_in",
+      "transform": "param_to_var",
+      "description": "Republishes the mounted leaf's gathered row into a component this document declares itself, which is where the assertion may live (esm-spec §6.6)."
     }
   ]
 }
