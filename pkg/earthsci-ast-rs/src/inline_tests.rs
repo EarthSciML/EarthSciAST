@@ -69,7 +69,7 @@
 //! so it is now `run_inline_tests`, with no deprecated alias (the old spelling
 //! is exactly the misunderstanding the rename exists to remove).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -303,28 +303,49 @@ fn mentions_free(expr: &Expr, name: &str) -> bool {
 /// symbols — is returned untouched, so nothing that evaluated before evaluates
 /// differently. Mirrors the Julia / Python `bind_dimension_names`.
 ///
-/// `scope` is the reference's build-time parameter scope (flattened names plus
-/// their unambiguous bare aliases). "Nothing that evaluated before evaluates
-/// differently" holds only because a dimension name that scope ALSO binds is
-/// rejected here: wrapping would silently shadow the parameter with the cell's
-/// index — the same expression, a different number, no diagnostic. One name
-/// meaning two things in one scope is an ill-formed document, so it is a fault.
+/// "Nothing that evaluated before evaluates differently" holds only because a
+/// dimension name the BUILD-TIME SCOPE ALREADY BINDS is rejected here: wrapping
+/// would silently shadow that other meaning with the cell's index — the same
+/// expression, a different number, no diagnostic. One name meaning two things in
+/// one scope is an ill-formed document, so it is a fault. esm-spec §6.6.5 makes
+/// the clash scope the WHOLE build-time scope, in two halves:
+///
+/// * `scope` — the scalar parameter scope (flattened names plus their
+///   unambiguous bare aliases, [`param_scope_with_aliases`]); and
+/// * `arrays` — the build-time ARRAY names ([`array_scope_names`] over a
+///   [`BuildInspection`](crate::simulate_array::BuildInspection)'s
+///   `setup_arrays`), likewise with bare aliases.
+///
+/// The array half is what keeps the three bindings on one rule: Julia hands its
+/// cellwise evaluator the build's `const_arrays`, so an array named after a
+/// shape index set is a name a reference could already read there, and a guard
+/// that checked only the parameter half would let Julia rebind it to the cell
+/// index in silence while Python and Rust merely wrapped (issue #226).
 pub fn bind_dimension_names(
     expr: &Expr,
     dims: &[String],
     scope: &HashMap<String, f64>,
+    arrays: &HashSet<String>,
 ) -> Result<Expr, String> {
     let mentioned: Vec<&String> = dims.iter().filter(|d| mentions_free(expr, d)).collect();
     if mentioned.is_empty() {
         return Ok(expr.clone());
     }
-    if let Some(clash) = mentioned.iter().find(|d| scope.contains_key(d.as_str())) {
+    if let Some(clash) = mentioned
+        .iter()
+        .find(|d| scope.contains_key(d.as_str()) || arrays.contains(d.as_str()))
+    {
+        let kind = if scope.contains_key(clash.as_str()) {
+            "a parameter"
+        } else {
+            "a build-time array"
+        };
         return Err(format!(
             "inline `reference` mentions '{clash}', which is both a dimension of the \
-             asserted field and a parameter in scope. esm-spec §6.6.5 binds a free \
-             dimension name to the cell's 1-based position, which would shadow the \
-             parameter. Rename one of them, or gather explicitly with \
-             `aggregate(i from {clash}; …)`."
+             asserted field and a name the build-time scope already binds ({kind}). \
+             esm-spec §6.6.5 binds a free dimension name to the cell's 1-based \
+             position, which would shadow it. Rename one of them, or gather \
+             explicitly with `aggregate(i from {clash}; …)`."
         ));
     }
     let ranges: serde_json::Map<String, serde_json::Value> = dims
@@ -607,6 +628,35 @@ fn param_scope_with_aliases(params: &HashMap<String, f64>) -> HashMap<String, f6
         let bare = k.rsplit('.').next().unwrap_or(k.as_str());
         if bare != k.as_str() && counts.get(bare) == Some(&1) && !out.contains_key(bare) {
             out.insert(bare.to_string(), *v);
+        }
+    }
+    out
+}
+
+/// The ARRAY half of the §6.6.5 build-time clash scope: every name the build's
+/// array registries bind, plus each one's UNAMBIGUOUS bare alias — the same
+/// alias rule [`param_scope_with_aliases`] applies to the scalar half, and the
+/// rule under which a flattened `M.table` is readable as `table`. Takes any
+/// number of name iterators (a [`BuildInspection`]'s `setup_arrays`, and in the
+/// other bindings its `const_arrays` too), so a binding that keeps its build
+/// arrays in more than one registry passes all of them. Mirrors the Julia
+/// `_array_scope_names` / Python `_array_scope_names`.
+pub(crate) fn array_scope_names<'a>(
+    registries: impl IntoIterator<Item = &'a str>,
+) -> HashSet<String> {
+    let names: HashSet<String> = registries.into_iter().map(|s| s.to_string()).collect();
+    let mut counts: HashMap<&str, usize> = HashMap::new();
+    for n in &names {
+        let bare = n.rsplit('.').next().unwrap_or(n.as_str());
+        if bare != n.as_str() {
+            *counts.entry(bare).or_insert(0) += 1;
+        }
+    }
+    let mut out = names.clone();
+    for n in &names {
+        let bare = n.rsplit('.').next().unwrap_or(n.as_str());
+        if bare != n.as_str() && counts.get(bare) == Some(&1) {
+            out.insert(bare.to_string());
         }
     }
     out
@@ -1003,8 +1053,13 @@ fn eval_assertion(
             // build's resolved scalar params. The field's dimension names are
             // in scope too, bound per cell (`bind_dimension_names`).
             let scope = param_scope_with_aliases(&insp.params);
+            // The ARRAY half of the §6.6.5 clash scope: the three bindings must
+            // reject the same documents, and Julia's cellwise evaluator reads
+            // build arrays by name, so an array named after a shape index set
+            // is a clash there and must be one here too (issue #226).
+            let arrays = array_scope_names(insp.setup_arrays.keys().map(String::as_str));
             let dims = variable_shape(file, model_name, &assertion.variable).unwrap_or_default();
-            let bound = bind_dimension_names(expr, &dims, &scope)?;
+            let bound = bind_dimension_names(expr, &dims, &scope, &arrays)?;
             Some(evaluate_cellwise(&bound, &cell_tuples, index_sets, &scope)?)
         }
         Some(AssertionReference::FromFile(ff)) => {
@@ -2779,7 +2834,10 @@ mod tests {
         let dims = vec!["x".to_string()];
         let scope: HashMap<String, f64> = HashMap::from([("k".to_string(), 2.0)]);
         let parse = |v: serde_json::Value| -> Expr { serde_json::from_value(v).unwrap() };
-        let bind = |e: &Expr, d: &[String]| bind_dimension_names(e, d, &scope).expect("no clash");
+        let no_arrays: HashSet<String> = HashSet::new();
+        let bind = |e: &Expr, d: &[String]| {
+            bind_dimension_names(e, d, &scope, &no_arrays).expect("no clash")
+        };
         // No mention: untouched.
         let lit = parse(json!({"op": "*", "args": [2.0, "k"]}));
         assert_eq!(bind(&lit, &dims), lit);
@@ -2819,14 +2877,16 @@ mod tests {
         let parse = |v: serde_json::Value| -> Expr { serde_json::from_value(v).unwrap() };
         let scope: HashMap<String, f64> = HashMap::from([("x".to_string(), 3.0)]);
         let free = parse(json!({"op": "+", "args": ["x", 1]}));
-        let err = bind_dimension_names(&free, &dims, &scope).expect_err("clash is a fault");
+        let no_arrays: HashSet<String> = HashSet::new();
+        let err =
+            bind_dimension_names(&free, &dims, &scope, &no_arrays).expect_err("clash is a fault");
         assert!(err.contains("'x'"), "{err}");
-        assert!(err.contains("parameter in scope"), "{err}");
+        assert!(err.contains("a parameter"), "{err}");
         // A reference that does not mention it is unaffected — the clash only
         // matters where the wrap would actually rebind the name.
         let lit = parse(json!({"op": "*", "args": [2.0, "k"]}));
         assert_eq!(
-            bind_dimension_names(&lit, &dims, &scope).expect("no mention"),
+            bind_dimension_names(&lit, &dims, &scope, &no_arrays).expect("no mention"),
             lit
         );
         // And a gather that rebinds `x` itself keeps working.
@@ -2834,7 +2894,54 @@ mod tests {
                                  "ranges": {"x": {"from": "x"}},
                                  "expr": {"op": "+", "args": ["x", 1]}}));
         assert_eq!(
-            bind_dimension_names(&bound, &dims, &scope).expect("rebound"),
+            bind_dimension_names(&bound, &dims, &scope, &no_arrays).expect("rebound"),
+            bound
+        );
+    }
+
+    /// esm-spec §6.6.5's clash scope is the WHOLE build-time scope, not the
+    /// parameter half of it (issue #226). A build ARRAY named after a shape
+    /// index set — an array `lev` over the index set `lev` — is a name a
+    /// reference could already read, so wrapping it would rebind it to the
+    /// cell's 1-based index: the same expression, a different number, no
+    /// diagnostic. `array_scope_names` supplies the flattened names AND their
+    /// unambiguous bare aliases, so `M.lev` clashes as `lev` too.
+    #[test]
+    fn bind_dimension_names_rejects_a_dimension_a_build_array_binds() {
+        let dims = vec!["lev".to_string()];
+        let parse = |v: serde_json::Value| -> Expr { serde_json::from_value(v).unwrap() };
+        let no_params: HashMap<String, f64> = HashMap::new();
+        let free = parse(json!({"op": "index", "args": ["table", "lev"]}));
+        for names in [vec!["lev"], vec!["M.lev"]] {
+            let arrays = array_scope_names(names.iter().copied());
+            let err = bind_dimension_names(&free, &dims, &no_params, &arrays)
+                .expect_err("clash is a fault");
+            assert!(err.contains("'lev'"), "{err}");
+            assert!(err.contains("a build-time array"), "{err}");
+        }
+        // An AMBIGUOUS bare alias is not in scope under either spelling, so it
+        // does not clash — the same rule `param_scope_with_aliases` applies.
+        let ambiguous = array_scope_names(["A.lev", "B.lev"]);
+        assert!(!ambiguous.contains("lev"));
+        let wrapped = bind_dimension_names(&free, &dims, &no_params, &ambiguous)
+            .expect("no unambiguous alias, no clash");
+        let Expr::Operator(node) = wrapped else {
+            panic!("expected an aggregate wrapper");
+        };
+        assert_eq!(node.op, "aggregate");
+        // A reference that does not mention the name is unaffected, and so is a
+        // gather that rebinds it as its own loop symbol.
+        let arrays = array_scope_names(["lev"]);
+        let lit = parse(json!({"op": "*", "args": [2.0, "k"]}));
+        assert_eq!(
+            bind_dimension_names(&lit, &dims, &no_params, &arrays).expect("no mention"),
+            lit
+        );
+        let bound = parse(json!({"op": "aggregate", "args": [], "output_idx": ["lev"],
+                                 "ranges": {"lev": {"from": "lev"}},
+                                 "expr": {"op": "index", "args": ["table", "lev"]}}));
+        assert_eq!(
+            bind_dimension_names(&bound, &dims, &no_params, &arrays).expect("rebound"),
             bound
         );
     }

@@ -402,7 +402,7 @@ def test_bind_dimension_names_rejects_a_dimension_that_shadows_a_parameter():
     from earthsci_ast.inline_tests import bind_dimension_names
 
     free = ExprNode(op="+", args=["x", 1])
-    with pytest.raises(RuntimeError, match="parameter in scope"):
+    with pytest.raises(RuntimeError, match="a parameter"):
         bind_dimension_names(free, ["x"], {"x": 3.0})
     # No mention of the clashing name: unaffected.
     lit = ExprNode(op="*", args=[2.0, "k"])
@@ -414,6 +414,43 @@ def test_bind_dimension_names_rejects_a_dimension_that_shadows_a_parameter():
     assert bind_dimension_names(bound, ["x"], {"x": 3.0}) is bound
     # And with no scope supplied the wrap is unchanged.
     assert bind_dimension_names(free, ["x"]).op == "aggregate"
+
+
+def test_bind_dimension_names_rejects_a_dimension_a_build_array_binds():
+    """esm-spec §6.6.5's clash scope is the WHOLE build-time scope, not the
+    parameter half of it (issue #226).
+
+    A build ARRAY named after a shape index set — an array ``lev`` over the
+    index set ``lev`` — is a name a reference could already read, so wrapping it
+    would rebind it to the cell's 1-based index: the same expression, a
+    different number, no diagnostic. Julia is where that channel is live, but
+    all three bindings must reject the same documents.
+    """
+    import pytest
+
+    from earthsci_ast.esm_types import ExprNode
+    from earthsci_ast.inline_tests import _array_scope_names, bind_dimension_names
+
+    free = ExprNode(op="index", args=["table", "lev"])
+    # The flattened name AND its unambiguous bare alias are both in scope.
+    for names in ({"lev": None}, {"M.lev": None}):
+        arrays = _array_scope_names(names)
+        with pytest.raises(RuntimeError, match="a build-time array"):
+            bind_dimension_names(free, ["lev"], None, arrays)
+    # An AMBIGUOUS bare alias is not in scope under either spelling, so it does
+    # not clash — the same rule `_param_scope_with_aliases` applies.
+    ambiguous = _array_scope_names({"A.lev": None, "B.lev": None})
+    assert "lev" not in ambiguous
+    assert bind_dimension_names(free, ["lev"], None, ambiguous).op == "aggregate"
+    # A reference that does not mention the name is unaffected, and so is a
+    # gather that rebinds it as its own loop symbol.
+    arrays = _array_scope_names({"lev": None})
+    lit = ExprNode(op="*", args=[2.0, "k"])
+    assert bind_dimension_names(lit, ["lev"], None, arrays) is lit
+    bound = ExprNode(
+        op="aggregate", args=[], output_idx=["lev"], ranges={"lev": {"from": "lev"}}, expr=free
+    )
+    assert bind_dimension_names(bound, ["lev"], None, arrays) is bound
 
 
 def test_reference_binds_the_field_dimension_names():

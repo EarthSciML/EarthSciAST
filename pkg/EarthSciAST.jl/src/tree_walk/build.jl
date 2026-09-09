@@ -953,12 +953,16 @@ const _EMPTY_DERIVED_EXTENTS = Dict{String,Int}()
 #      PROVIDED every leading segment dropped along the way names a component or
 #      subsystem the document actually declares, so a typo'd `Missng.M.pert_amp`
 #      is reported rather than silently suffix-matched onto `M.pert_amp`;
-#   3. else a BARE key that is the trailing segment of exactly ONE parameter
-#      resolves to it (`A` against the flattened `M.A`);
-#   4. a BARE key that is the trailing segment of MORE THAN ONE parameter is
-#      AMBIGUOUS — the caller named one local parameter that two mounted
-#      components both carry — and is rejected naming the candidates, never
-#      guessed at;
+#   3. else a key that is a DOTTED SUFFIX of exactly ONE parameter resolves to
+#      it — `A` against the flattened `M.A` (the bare case), and equally
+#      `sub.g` against the flattened `P.sub.g`, the mounted-subsystem spelling
+#      a single-model build carries as `sub.g` outright. Rules 2 and 3 are the
+#      two directions of one relationship: rule 2 for a key LONGER than the
+#      name, rule 3 for a key SHORTER than it;
+#   4. a key that is a dotted suffix of MORE THAN ONE parameter is AMBIGUOUS —
+#      the caller named one local (or partially qualified) parameter that two
+#      mounted components both carry — and is rejected naming the candidates,
+#      never guessed at;
 #   5. anything else matches no parameter and is rejected as UNKNOWN.
 # Two NON-EXACT keys designating ONE parameter — `solo` (rule 3) and
 # `Doc.Left.solo` (rule 2) both landing on `Left.solo`, or `A.M.g` and `B.M.g`
@@ -993,9 +997,9 @@ function _normalize_param_override_keys(model::Model, overrides::AbstractDict;
     if !isempty(ambiguous)
         k, cands = first(sort!(collect(ambiguous), by = first))
         throw(ArgumentError(
-            "parameter_overrides: ambiguous parameter name '$(k)' — it is the " *
-            "local name of $(length(cands)) parameters ($(join(sort(cands), ", "))). " *
-            "Qualify it with its owning component (esm-spec §6.6.2)."))
+            "parameter_overrides: ambiguous parameter name '$(k)' — it is carried " *
+            "as a suffix by $(length(cands)) parameters ($(join(sort(cands), ", "))). " *
+            "Qualify it further with its owning component (esm-spec §6.6.2)."))
     end
     if !isempty(collisions)
         name, keys_ = first(sort!(collect(collisions), by = first))
@@ -1041,14 +1045,18 @@ _canonicalize_override_keys(names::AbstractSet{String}, namespaces::AbstractSet{
 function _canonicalize_override_keys(::Type{V}, names::AbstractSet{String},
                                      namespaces::AbstractSet{String},
                                      overrides::AbstractDict) where {V}
-    # Bare trailing segment → the unique name carrying it. A bare segment
-    # carried by two or more names is AMBIGUOUS: recorded here with its
-    # candidates rather than resolved, so it is never bound to one of them.
-    bare_group = Dict{String,Vector{String}}()
+    # Dotted suffix → the unique name carrying it as one. Rule 3 admits EVERY
+    # proper suffix of a build name, not only its trailing segment, so a
+    # flattened `P.sub.g` is reachable as `sub.g` as well as `g` — the §4.6
+    # spelling an author writes against a single-model build that carries the
+    # mounted subsystem parameter as `sub.g` outright. A suffix carried by two
+    # or more names is AMBIGUOUS: recorded here with its candidates rather than
+    # resolved, so it is never bound to one of them.
+    suffix_group = Dict{String,Vector{String}}()
     for n in names
-        b = _bare_param_name(n)
-        b == n && continue
-        push!(get!(bare_group, b, String[]), n)
+        for s in _dotted_suffixes(n)
+            push!(get!(suffix_group, s, String[]), n)
+        end
     end
     normalized = Dict{String,V}()
     unknown = String[]
@@ -1074,11 +1082,11 @@ function _canonicalize_override_keys(::Type{V}, names::AbstractSet{String},
         suffix = _dotted_suffix_hit(names, namespaces, k)
         if suffix !== nothing                     # rule 2: longest known suffix
             name = suffix
-        elseif haskey(bare_group, k)
-            cands = bare_group[k]
-            if length(cands) == 1                 # rule 3: unique bare alias
+        elseif haskey(suffix_group, k)
+            cands = suffix_group[k]
+            if length(cands) == 1                 # rule 3: unique suffix alias
                 name = cands[1]
-            else                                  # rule 4: ambiguous local name
+            else                                  # rule 4: ambiguous suffix
                 ambiguous[k] = cands
                 continue
             end
@@ -1167,6 +1175,21 @@ end
 
 _bare_param_name(name::AbstractString) =
     (i = findlast('.', name)) === nothing ? String(name) : String(name[nextind(name, i):end])
+
+# Every PROPER dotted suffix of `name`, longest first: `A.sub.g` gives
+# `["sub.g", "g"]`, a bare `g` gives `String[]`. These are the spellings
+# esm-spec §6.6.2 rule 3 admits for the name — the trailing segment is merely
+# the shortest of them. The Python (`dotted_suffixes`) and Rust
+# (`dotted_suffixes`) mirrors enumerate the same list.
+function _dotted_suffixes(name::AbstractString)
+    out = String[]
+    rest = String(name)
+    while (i = findfirst('.', rest)) !== nothing
+        rest = rest[nextind(rest, i):end]
+        push!(out, rest)
+    end
+    return out
+end
 
 # ---- Stage: scalar parameter scope (load-time constants) ----
 # Each scalar parameter's RESOLVED value: `parameter_overrides` if given,
