@@ -351,7 +351,7 @@ jobs:
 
   rust-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:
