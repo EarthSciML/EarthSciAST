@@ -1491,7 +1491,13 @@ impl<'m> TapeBuilder<'m> {
                     }
                 }
             }
-            "D" => Ok(LV::Lit(0.0)),
+            // Unreachable: esm-spec §4.2's right-hand-side `D` is resolved to a
+            // tendency by `flatten`'s phase 5b′, or refused with
+            // `unlowered_operator` before this lowering runs. The literal `0.0`
+            // this used to emit was the third of three evaluators agreeing on a
+            // wrong number; `NaN` is the sentinel that cannot be mistaken for a
+            // result.
+            "D" => Ok(LV::Lit(f64::NAN)),
             "Pre" => match node.args.first() {
                 None => Ok(LV::Lit(f64::NAN)),
                 Some(a) => self.lower_wholesale(a),

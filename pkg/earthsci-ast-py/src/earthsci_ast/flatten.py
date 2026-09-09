@@ -2810,89 +2810,261 @@ def _derivative_target(expr: Expr) -> str | None:
     return arg if isinstance(arg, str) else None
 
 
-def _substitute_time_derivatives(expr: Expr, tendency: dict[str, Expr], active: list[str]) -> Expr:
-    """The rewrite :func:`_resolve_rhs_time_derivatives` documents, over one
-    expression."""
+def _zero() -> Expr:
+    return 0.0
+
+
+def _is_number(e: Expr) -> bool:
+    return isinstance(e, (int, float)) and not isinstance(e, bool)
+
+
+def _is_zero(e: Expr) -> bool:
+    return _is_number(e) and float(e) == 0.0
+
+
+def _is_one(e: Expr) -> bool:
+    return _is_number(e) and float(e) == 1.0
+
+
+def _sum(terms: list[Expr]) -> Expr:
+    """Folding sum. Folding is not cosmetic: a parameter and a literal both
+    differentiate to ``0``, so an unfolded product rule would emit ``0*x`` shapes
+    throughout and ``D(k, t)`` would be a sum of zeros rather than the literal
+    ``0`` a downstream classifier can read as constant."""
+    kept = [t for t in terms if not _is_zero(t)]
+    if not kept:
+        return _zero()
+    if len(kept) == 1:
+        return kept[0]
+    return ExprNode(op="+", args=kept)
+
+
+def _negate(a: Expr) -> Expr:
+    if _is_zero(a):
+        return _zero()
+    if _is_number(a):
+        return -a
+    # Unary ``-``, not ``neg``: both spell negation, but the Rust scalar
+    # interpreter has an arm for the first and none for the second, so emitting
+    # ``neg`` here would make one backend answer NaN.
+    return ExprNode(op="-", args=[a])
+
+
+def _difference(a: Expr, b: Expr) -> Expr:
+    if _is_zero(b):
+        return a
+    if _is_zero(a):
+        return _negate(b)
+    return ExprNode(op="-", args=[a, b])
+
+
+def _product(factors: list[Expr]) -> Expr:
+    if any(_is_zero(f) for f in factors):
+        return _zero()
+    kept = [f for f in factors if not _is_one(f)]
+    if not kept:
+        return 1.0
+    if len(kept) == 1:
+        return kept[0]
+    return ExprNode(op="*", args=kept)
+
+
+def _quotient(a: Expr, b: Expr) -> Expr:
+    if _is_zero(a):
+        return _zero()
+    return ExprNode(op="/", args=[a, b])
+
+
+def _substitute_time_derivatives(
+    expr: Expr,
+    tendency: dict[str, Expr],
+    definition: dict[str, Expr],
+    time_invariant: frozenset[str],
+    active: list[str],
+) -> Expr:
+    """Rewrite every structural ``D`` inside ``expr``, leaving the ones
+    :func:`_deriv` cannot answer exactly as authored, for the gate to report."""
     if not isinstance(expr, ExprNode):
         return expr
-    target = _derivative_target(expr)
-    if target is not None and target in tendency:
-        if target in active:
-            # A cycle: leave the node as authored rather than expanding it
-            # without end. Downstream sees exactly what it saw before.
-            return expr
-        active.append(target)
-        try:
-            return _substitute_time_derivatives(tendency[target], tendency, active)
-        finally:
-            active.pop()
-    return map_children(expr, lambda child: _substitute_time_derivatives(child, tendency, active))
+    if _is_structural_time_derivative(expr):
+        arg = expr.args[0] if expr.args else None
+        if arg is not None:
+            out = _deriv(arg, tendency, definition, time_invariant, active)
+            if out is not None:
+                return out
+        return expr
+    return map_children(
+        expr,
+        lambda child: _substitute_time_derivatives(
+            child, tendency, definition, time_invariant, active
+        ),
+    )
 
 
-def _has_resolvable_time_derivative(expr: Expr, tendency: dict[str, Expr]) -> bool:
-    """Does ``expr`` carry a structural ``D`` the tendency table can answer?
-    Checked before rebuilding so a document with no such node keeps its
-    equations untouched."""
+def _deriv(
+    expr: Expr,
+    tendency: dict[str, Expr],
+    definition: dict[str, Expr],
+    time_invariant: frozenset[str],
+    active: list[str],
+) -> Expr | None:
+    """d/dt of ``expr``, or ``None`` when this format does not define it."""
+    if isinstance(expr, str):
+        name = expr
+        if name in active:
+            return None  # a cycle: stop here and let the gate name it
+        if name in tendency:
+            active.append(name)
+            try:
+                return _substitute_time_derivatives(
+                    tendency[name], tendency, definition, time_invariant, active
+                )
+            finally:
+                active.pop()
+        if name in definition:
+            # CHAIN RULE: an observed's total time derivative is its defining
+            # right-hand side differentiated by this same rule, one level down.
+            active.append(name)
+            try:
+                return _deriv(definition[name], tendency, definition, time_invariant, active)
+            finally:
+                active.pop()
+        if name in time_invariant:
+            return _zero()
+        # A name in none of the three. Answering ``0`` for a name this pass does
+        # not recognise is exactly the invention §4.2 forbids.
+        return None
+    if _is_number(expr):
+        return _zero()
+    if not isinstance(expr, ExprNode):
+        return None
+
+    def d(a: Expr) -> Expr | None:
+        return _deriv(a, tendency, definition, time_invariant, active)
+
+    op = expr.op
+    args = list(expr.args or [])
+    if op == "+":
+        terms: list[Expr] = []
+        for a in args:
+            da = d(a)
+            if da is None:
+                return None
+            terms.append(da)
+        return _sum(terms)
+    if op == "-":
+        if len(args) == 1:
+            da = d(args[0])
+            return None if da is None else _negate(da)
+        if len(args) == 2:
+            da, db = d(args[0]), d(args[1])
+            return None if da is None or db is None else _difference(da, db)
+        return None
+    if op == "neg" and len(args) == 1:
+        da = d(args[0])
+        return None if da is None else _negate(da)
+    if op == "*":
+        # Product rule over an n-ary ``*``: one term per factor, that factor
+        # differentiated and the others left alone.
+        terms = []
+        for i, a in enumerate(args):
+            da = d(a)
+            if da is None:
+                return None
+            if _is_zero(da):
+                continue
+            terms.append(_product([da] + [b for j, b in enumerate(args) if j != i]))
+        return _sum(terms)
+    if op == "/" and len(args) == 2:
+        u, v = args
+        du, dv = d(u), d(v)
+        if du is None or dv is None:
+            return None
+        if _is_zero(dv):
+            # ``v`` is constant in t, so (u/v)' = u'/v — which keeps the common
+            # ``D(x, t)/c`` shape small.
+            return _quotient(du, v)
+        num = _difference(_product([du, v]), _product([u, dv]))
+        return _quotient(num, _product([v, v]))
+    return None
+
+
+def _has_time_derivative(expr: Expr) -> bool:
+    """Does ``expr`` carry a structural ``D`` anywhere?"""
     if not isinstance(expr, ExprNode):
         return False
-    target = _derivative_target(expr)
-    if target is not None and target in tendency:
+    if _is_structural_time_derivative(expr):
         return True
-    return any_child(expr, lambda child: _has_resolvable_time_derivative(child, tendency))
+    return any_child(expr, _has_time_derivative)
 
 
 def _resolve_rhs_time_derivatives(flat: FlattenedSystem) -> None:
     """Step 4c of :func:`flatten`: rewrite every right-hand-side STRUCTURAL time
-    derivative of an ODE unknown into that unknown's TENDENCY — the right-hand
-    side of its own ``D(x)/dt ~ f`` equation.
+    derivative into the tendency this system already defines for it
+    (esm-spec §4.2).
 
     ``D`` on an equation's LEFT-hand side is structural: it is what makes the
     equation differential, and system assembly consumes it. On a RIGHT-hand side
-    there was no consumer at all, so an observed written ``dxdt ~ D(x, t)`` — the
-    standard shape for asserting a species tendency at ``t = 0`` (esm-spec §6.6.2
-    "instantaneous-derivative test shape") — was unrunnable: this binding raised
-    ``unlowered_operator``, and the Rust binding silently evaluated it to ``0``.
+    there was no consumer, so an observed written ``dxdt ~ D(x, t)`` — the
+    standard shape for asserting a species tendency at ``t = 0`` (esm-spec
+    §6.6.2, "instantaneous-derivative test shape") — was unrunnable: this binding
+    raised ``unlowered_operator`` and the Rust binding silently evaluated it to
+    ``0``.
 
-    The value was never a runner's to invent or refuse: ``x`` already has a
-    defining ``D(x)/dt ~ f`` equation in this very system, so resolving it is an
-    ordinary AST substitution over the canonical flattened form — the same layer
-    that qualifies names, applies coupling and lowers a reaction network to its
-    mass-action ODEs. Doing it here is what lets ``D(Chem.O3, t)`` in a sibling
-    model resolve to the mechanism's tendency (esm-spec §7.4) with no runner
-    knowing anything about reactions.
+    Neither answer was right, because everything needed is already in the
+    system. ``D(x, t)`` over a STATE is ``x``'s own ``D(x)/dt ~ f``; ``D(y, t)``
+    over an OBSERVED is the total derivative of ``y``'s defining equation, which
+    is that equation's right-hand side differentiated by the same rule one level
+    down. So the whole rule is the one recursive walk :func:`_deriv`, and it runs
+    HERE — the layer that qualifies names, applies coupling and lowers a reaction
+    network to its mass-action ODEs — so no evaluator ever meets a right-hand-side
+    ``D`` and every consumer of the flattened system answers alike. It is what
+    lets ``D(Chem.O3, t)`` in a sibling model resolve to the mechanism's tendency
+    (esm-spec §7.4) with no runner knowing anything about reactions.
 
-    Scope, deliberately narrow (mirrors the Rust
-    ``resolve_rhs_time_derivatives``):
+    What :func:`_deriv` covers, and nothing else: a STATE (its tendency, with any
+    ``D`` inside that tendency resolved in turn, so a chained
+    ``D(lai)/dt ~ sla * D(biomass)/dt`` terminates in states); an OBSERVED (the
+    chain rule, by substituting its definition and differentiating it); a
+    TIME-INVARIANT name or a literal (``0``); and ``+``, unary and binary ``-``,
+    ``neg``, n-ary ``*`` and binary ``/``, distributed by the sum, product and
+    quotient rules. Every other shape — ``^``, a call, a reduction, a nested
+    ``D``, a name in no table — and every cyclic chain resolves to NOTHING and is
+    left exactly as authored, to be refused with ``unlowered_operator``: §4.2
+    forbids inventing a value there, in particular ``0``. A SPATIAL ``D`` is
+    untouched (§9.6.8 owns it), and left-hand sides are never rewritten.
 
-    * only an ``args[0]`` that is a bare variable REFERENCE naming an unknown
-      carrying ``D(x)/dt ~ f`` is resolved;
-    * ``D`` of an OBSERVED or a PARAMETER, and ``D`` of a compound expression,
-      are left exactly as authored — resolving those is symbolic
-      differentiation, which this format does not define;
-    * a SPATIAL ``D`` is untouched: it is a rewrite target for a discretization
-      rule (§9.6.8) and the ``unlowered_operator`` gate still owns it;
-    * left-hand sides are never rewritten.
-
-    A tendency may itself name another state's derivative
-    (``D(lai)/dt ~ sla · D(biomass)/dt``), so substitution recurses; ``active``
-    carries the chain being expanded and a self- or mutually-referential
-    definition stops there.
+    Mirrors the Rust ``flatten::resolve_rhs_time_derivatives`` and the Julia
+    ``_resolve_rhs_time_derivatives!`` exactly.
     """
     tendency: dict[str, Expr] = {}
+    definition: dict[str, Expr] = {}
     for eq in flat.equations:
         target = _derivative_target(eq.lhs)
         if target is not None:
             tendency[target] = eq.rhs
-    if not tendency:
+        elif isinstance(eq.lhs, str):
+            # A bare-variable LHS is a DEFINING equation (esm-spec §6.3.1's
+            # observed / algebraic form); its right-hand side is what the chain
+            # rule differentiates.
+            definition[eq.lhs] = eq.rhs
+    if not tendency and not definition:
         return
+    time_invariant = frozenset(str(k) for k in (flat.parameters or {}))
     for eq in flat.equations:
-        if not _has_resolvable_time_derivative(eq.rhs, tendency):
+        if not _has_time_derivative(eq.rhs):
             continue
-        # While expanding the RHS of `D(x)/dt` itself, `x`'s tendency is the very
-        # thing being defined and so is not available to substitute into.
+        # The quantity this equation DEFINES is not available to substitute into
+        # its own right-hand side; seeding ``active`` with it is what makes
+        # ``D(x)/dt ~ k*D(x, t)`` and ``y ~ D(y, t)`` terminate as unresolved
+        # rather than expand forever.
         own = _derivative_target(eq.lhs)
+        if own is None and isinstance(eq.lhs, str):
+            own = eq.lhs
         active: list[str] = [own] if own is not None else []
-        eq.rhs = _substitute_time_derivatives(eq.rhs, tendency, active)
+        eq.rhs = _substitute_time_derivatives(
+            eq.rhs, tendency, definition, time_invariant, active
+        )
 
 
 def _expand_operator_compose_placeholders(

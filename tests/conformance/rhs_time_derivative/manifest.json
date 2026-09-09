@@ -1,16 +1,16 @@
 {
     "category": "rhs_time_derivative",
     "version": "1.0",
-    "description": "Cross-binding conformance for esm-spec §4.2's RIGHT-HAND-SIDE structural `D` rule, in BOTH of its halves. RESOLVE: a `D` with `wrt: \"t\"` (or no `wrt`) whose `args[0]` is a bare reference to an unknown that CARRIES a differential equation names that unknown's tendency and is substituted during flattening, recursing through chained tendencies — so `dxdt ~ D(x, t)` is `-k*x`, and a model's scoped `D(Chem.A, t)` is the mass-action tendency §7.4 generated for the sibling reaction system. REFUSE: a structural `D` that resolves to NOTHING — one over an observed, over a parameter, or over a compound expression — is a rewrite-target reaching evaluation, and a conforming runtime MUST report `unlowered_operator` rather than invent a value for it, IN PARTICULAR NOT `0`. The two halves are gated together on purpose. Before this category all three Rust evaluators answered `D(anything) = 0` \"for parity\" with one another, so three shipped documents (`tests/end_to_end/land_atmosphere_hydrology.esm`, `tests/events/financial_climate_scenarios.esm`, `tests/valid/scoped_refs_nested.esm`) computed silent zeros and an inline test asserting a species tendency at t = 0 graded a configuration the model never ran; Python meanwhile refused BOTH halves with `unlowered_operator`, so the bindings disagreed in opposite directions on the same document. The refusal half is the one that can silently rot: `0` is a plausible-looking number, and `d_of_parameter` deliberately asserts `expected: 0.0` so a binding that invents the value is caught by the OUTCOME contract and not by the arithmetic. VERDICTS and outcome CLASSES are compared, not a numeric golden: a refusal has no actual to record, and each binding's diagnostic text differs while the `unlowered_operator` code (esm-spec §9.6.3 constraint 6) is the cross-binding contract.",
+    "description": "Cross-binding conformance for esm-spec \u00a74.2's RIGHT-HAND-SIDE structural `D` rule, in BOTH of its halves. RESOLVE: a `D` with `wrt: \"t\"` (or no `wrt`) denotes the total time derivative of its operand, and flattening rewrites it into the tendency the system already defines \u2014 a STATE gives its own `D(x)/dt ~ f`; an OBSERVED gives the CHAIN RULE, its defining right-hand side differentiated by the same rule one level down; a parameter or a literal gives 0; and `+ - neg * /` distribute by the sum, product and quotient rules. So `dxdt ~ D(x, t)` is `-k*x`, a model's scoped `D(Chem.A, t)` is the mass-action tendency \u00a77.4 generated for the sibling reaction system, and `D(2*x, t)` over the observed `combo` is `2*(-k*x)`. REFUSE: a `D` the resolution CANNOT answer \u2014 an operand outside that closed set (`^`, a call, a reduction, a nested `D`), a name in no table, or a cyclic chain \u2014 is a rewrite-target reaching evaluation, and a conforming runtime MUST report `unlowered_operator` rather than invent a value for it, IN PARTICULAR NOT `0`. The two halves are gated together on purpose. Before this category all three Rust evaluators answered `D(anything) = 0` \"for parity\" with one another, so four shipped documents (`tests/end_to_end/land_atmosphere_hydrology.esm`, `tests/events/financial_climate_scenarios.esm`, `tests/valid/scoped_refs_nested.esm` and `tests/validation/mathematical_correctness.esm`) computed silent zeros and an inline test asserting a species tendency at t = 0 graded a configuration the model never ran; Python and Julia meanwhile refused BOTH halves with `unlowered_operator`, so the bindings disagreed in opposite directions on the same document. The refusal half is the one that can silently rot: `0` is a plausible-looking number, so `d_of_unsupported` and `d_of_cycle` each assert `expected: 0.0` \u2014 a binding that invents the value passes on the arithmetic and is caught only by the OUTCOME contract. VERDICTS and outcome CLASSES are compared, not a numeric golden: a refusal has no actual to record, and each binding's diagnostic text differs while the `unlowered_operator` code (esm-spec \u00a79.6.3 constraint 6) is the cross-binding contract.",
     "reference_binding": "python",
     "bindings_required": [
         "python",
         "rust"
     ],
     "scope_excluded": {
-        "go": "rewrite-only port; no simulator / inline test runner",
-        "typescript": "rewrite-only port; no simulator / inline test runner",
-        "julia": "TWO gaps in `run_inline_tests` — the runner every inline-test category drives — neither of them in the §4.2 transform itself. (1) It cannot READ a 0-D observed: `_evaluate_assertion`'s pointwise branch resolves the asserted name against the STATE VECTOR alone (`_scalar_slot`, src/inline_tests.jl:1253) with no state-free-observed fallback of the kind Rust's `scalar_observed` and Python's `_scalar_observed` provide, so every assertion here answers `scalar state '<name>' not found`. (2) It does not REFUSE an unresolvable right-hand-side `D`: the three refusal fixtures build and solve without complaint and only fail at the assertion lookup, so the `unlowered_operator` contract is unmet on this path (the gate in `tree_walk/compile.jl` belongs to the OTHER runner). Julia DOES implement the resolve half — `flatten` step 3c — and that is pinned separately by `rhs_time_derivative_resolution_test.jl`, which asserts it through a STATE the runner can read (`l(3) = 31` requires the chained tendency to have resolved). A binding GAP, not a design decision: remove this entry once `run_inline_tests` can read a 0-D observed and refuses an unlowered `D`."
+        "go": "No simulator and no inline-test runner, so this CATEGORY (which drives one) cannot be run here. NOTE that this is an exclusion from the category only, not from the rule: \u00a74.2's resolution is a FLATTEN transform, and esm-libraries-spec \u00a74.7.5 binds every library including the Core tier, so `pkg/earthsci-ast-go/pkg/esm/flatten.go` still owes it. It does not have it today \u2014 feeding `tendency_resolution.esm` through `Flatten` leaves all three right-hand-side `D` nodes standing where Julia, Python and Rust substitute them. Latent, because `tests/conformance/flatten/cases.json` carries no right-hand-side `D`. Tracked separately.",
+        "typescript": "No simulator and no inline-test runner, so this CATEGORY (which drives one) cannot be run here. Same caveat as Go: \u00a74.2's resolution is a FLATTEN transform and `pkg/earthsci-ast-ts/src/flatten.ts` implements flattening, so it owes the transform even without a runner. It does not have it today \u2014 `flatten` leaves all three right-hand-side `D` nodes of `tendency_resolution.esm` standing. Latent, because the shared flatten corpus carries no right-hand-side `D`. Tracked separately.",
+        "julia": "TWO gaps in `run_inline_tests` \u2014 the runner every inline-test category drives \u2014 neither of them in the \u00a74.2 transform itself. (1) It cannot READ a 0-D observed: `_evaluate_assertion`'s pointwise branch resolves the asserted name against the STATE VECTOR alone (`_scalar_slot`, src/inline_tests.jl:1253) with no state-free-observed fallback of the kind Rust's `scalar_observed` and Python's `_scalar_observed` provide, so every assertion here answers `scalar state '<name>' not found`. (2) It does not REFUSE an unresolvable right-hand-side `D`: the refusal fixtures build and solve without complaint and only fail at the assertion lookup, so the `unlowered_operator` contract is unmet on this path (the gate in `tree_walk/compile.jl` belongs to the OTHER runner). Julia DOES implement the resolve half in full, chain rule included \u2014 `flatten` step 3c \u2014 and that is pinned separately by `rhs_time_derivative_resolution_test.jl`, which asserts it through a STATE the runner can read (`l(3) = 31` requires the chained tendency to have resolved). A binding GAP, not a design decision: remove this entry once `run_inline_tests` can read a 0-D observed and refuses an unlowered `D`."
     },
     "integrators": {
         "python": {
@@ -77,7 +77,7 @@
                     "outcome": "value",
                     "expected": -2.0,
                     "passed": true,
-                    "note": "SCOPED form: D(Chem.A, t) = -k*A = -0.5*4, a tendency that exists only because §7.4 generated it from the reaction list. This is the shape the reporter of issue #206 needed."
+                    "note": "SCOPED form: D(Chem.A, t) = -k*A = -0.5*4, a tendency that exists only because \u00a77.4 generated it from the reaction list. This is the shape the reporter of issue #206 needed."
                 }
             ]
         },
@@ -86,15 +86,20 @@
             "path": "fixtures/d_of_observed.esm",
             "model": "M",
             "test_id": "d_of_observed_is_refused",
-            "tags": ["esm-spec-4.2", "esm-spec-9.6.3", "unlowered-operator", "refusal"],
+            "tags": [
+                "esm-spec-4.2",
+                "tendency",
+                "chain-rule",
+                "observed"
+            ],
             "cases": [
                 {
                     "assertion_idx": 1,
                     "variable": "dcombo",
-                    "outcome": "refused",
-                    "diagnostic": "unlowered_operator",
-                    "passed": false,
-                    "note": "combo has no d(combo)/dt equation. Chain-ruling through its definition would be symbolic differentiation, which the format does not define. The mathematically intended -12 must NOT be produced either — the contract is refusal, not a different number."
+                    "outcome": "value",
+                    "expected": -12.0,
+                    "passed": true,
+                    "note": "CHAIN RULE. combo is an observed, `combo ~ 2*x`, and it carries no d(combo)/dt equation \u2014 but its definition does, one level down: d/dt(2*x) = 2*(-k*x) = -12 at t = 0. Resolving it needs no differentiation rule beyond the product rule the resolution already applies, so refusing it would be an arbitrary stop one substitution short. The pre-fix bindings answered 0 (Rust) or refused (Python, Julia); both were wrong."
                 }
             ]
         },
@@ -103,15 +108,19 @@
             "path": "fixtures/d_of_parameter.esm",
             "model": "M",
             "test_id": "d_of_parameter_is_refused",
-            "tags": ["esm-spec-4.2", "esm-spec-9.6.3", "unlowered-operator", "refusal"],
+            "tags": [
+                "esm-spec-4.2",
+                "tendency",
+                "time-invariant"
+            ],
             "cases": [
                 {
                     "assertion_idx": 1,
                     "variable": "dk",
-                    "outcome": "refused",
-                    "diagnostic": "unlowered_operator",
-                    "passed": false,
-                    "note": "The sharpest case. A constant's derivative really is 0, and 0 is exactly what the pre-fix bindings returned for EVERY unresolvable D — so the fixture asserts `expected: 0.0` and a binding that answers it PASSES on the number while failing this category. That is the whole point of pinning the outcome class."
+                    "outcome": "value",
+                    "expected": 0.0,
+                    "passed": true,
+                    "note": "A parameter does not vary with t, so its derivative IS 0 and the resolution says so. This case used to be a refusal that asserted `expected: 0.0` precisely to catch a binding inventing that number \u2014 the guard has moved to `d_of_unsupported` and `d_of_cycle`, which assert the same 0 for shapes where 0 is genuinely not an answer. Kept as a `value` case because a binding that refuses a constant's derivative cannot express `D(alpha*u + beta*v, t)`, which is what `tests/validation/mathematical_correctness.esm` is about."
                 }
             ]
         },
@@ -120,15 +129,64 @@
             "path": "fixtures/d_of_compound.esm",
             "model": "M",
             "test_id": "d_of_compound_is_refused",
-            "tags": ["esm-spec-4.2", "esm-spec-9.6.3", "unlowered-operator", "refusal"],
+            "tags": [
+                "esm-spec-4.2",
+                "tendency",
+                "product-rule"
+            ],
             "cases": [
                 {
                     "assertion_idx": 1,
                     "variable": "dscaled",
+                    "outcome": "value",
+                    "expected": -12.0,
+                    "passed": true,
+                    "note": "PRODUCT RULE over a compound operand: d/dt(scale*x) = scale*(-k*x) = -12, with d(scale)/dt = 0 because `scale` is a parameter. Same machinery as `d_of_observed` \u2014 the observed case reaches this one after substituting the definition \u2014 so the two must agree or the rule is not one rule."
+                }
+            ]
+        },
+        {
+            "id": "d_of_unsupported",
+            "path": "fixtures/d_of_unsupported.esm",
+            "model": "M",
+            "test_id": "d_of_unsupported_is_refused",
+            "tags": [
+                "esm-spec-4.2",
+                "esm-spec-9.6.3",
+                "unlowered-operator",
+                "refusal"
+            ],
+            "cases": [
+                {
+                    "assertion_idx": 1,
+                    "variable": "dsq",
                     "outcome": "refused",
                     "diagnostic": "unlowered_operator",
                     "passed": false,
-                    "note": "args[0] is an operator node, not a bare reference, so there is nothing to look up. Distributing D over the product is symbolic differentiation."
+                    "note": "The BOUNDARY of the closed set. `^` is evaluable-core arithmetic sitting immediately beside the operators the resolution does distribute (`+ - neg * /`), and differentiating it needs the power RULE rather than a substitution \u2014 so the resolution answers nothing and \u00a74.2 requires a refusal. The intended value is -24 and the pre-fix answer was 0; the fixture asserts 0 so an inventing binding passes on the arithmetic and is caught only here."
+                }
+            ]
+        },
+        {
+            "id": "d_of_cycle",
+            "path": "fixtures/d_of_cycle.esm",
+            "model": "M",
+            "test_id": "d_of_cycle_is_refused",
+            "tags": [
+                "esm-spec-4.2",
+                "esm-spec-9.6.3",
+                "unlowered-operator",
+                "refusal",
+                "cycle"
+            ],
+            "cases": [
+                {
+                    "assertion_idx": 1,
+                    "variable": "dx",
+                    "outcome": "refused",
+                    "diagnostic": "unlowered_operator",
+                    "passed": false,
+                    "note": "A SELF-REFERENTIAL tendency: `D(x)/dt ~ k * D(x, t)`. Substituting would re-enter the same equation without end, so the chain guard stops and leaves the node standing. This case is what makes the guard load-bearing: a binding without one does not fail this fixture, it hangs or overflows its stack. The algebra would give 0 for k != 1, and the fixture asserts 0, so \u2014 again \u2014 only the outcome class separates a resolution from an invention."
                 }
             ]
         }

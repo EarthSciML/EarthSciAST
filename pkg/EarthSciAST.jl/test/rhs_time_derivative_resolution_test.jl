@@ -1,11 +1,14 @@
 # esm-spec §4.2 — a RIGHT-HAND-SIDE structural `D` is the named unknown's
 # tendency. This is Julia's side of the rule, in two parts.
 #
-# PART 1 pins what this binding implements: `flatten` step 3c substitutes a
-# structural `D` over an unknown that CARRIES a differential equation with that
-# unknown's tendency, recursing through chained tendencies, and leaves every
-# other `D` exactly as authored. The end-to-end assertion goes through a STATE,
-# not an observed — see part 2 for why that matters.
+# PART 1 pins what this binding implements: `flatten` step 3c resolves a
+# right-hand-side structural `D` to the total time derivative the system already
+# defines — a STATE's own tendency, an OBSERVED's definition differentiated by
+# the chain rule, `0` for a time-invariant name, and the sum / product /
+# quotient rules through `+ - neg * /` — recursing throughout, and leaving every
+# shape outside that closed set (and every cyclic chain) exactly as authored.
+# The end-to-end assertion goes through a STATE, not an observed — see part 2
+# for why that matters.
 #
 # PART 2 asserts this binding's own EXCLUSION from the shared
 # `rhs_time_derivative` conformance category, following the convention
@@ -18,7 +21,7 @@
 #      with no state-free-observed fallback, so `dxdt ~ D(x, t)` answers
 #      "scalar state 'dxdt' not found";
 #   2. it does not REFUSE an unresolvable right-hand-side `D` — the category's
-#      three refusal fixtures build and solve without complaint, so the
+#      two refusal fixtures build and solve without complaint, so the
 #      `unlowered_operator` contract §4.2 requires is unmet on this path (the
 #      gate in `tree_walk/compile.jl` belongs to the other runner).
 #
@@ -52,26 +55,32 @@ function _structural_ds(e)
     return out
 end
 
+"The right-hand side of the `name ~ …` equation of `flat`, or `nothing`."
+function _rhs_of(flat, name)
+    idx = findfirst(eq -> eq.lhs isa EarthSciAST.VarExpr &&
+                          (eq.lhs::EarthSciAST.VarExpr).name == name,
+                    flat.equations)
+    return idx === nothing ? nothing : flat.equations[idx].rhs
+end
+
+"The right-hand side of the `D(name)/dt ~ …` equation of `flat`, or `nothing`."
+function _d_rhs_of(flat, name)
+    idx = findfirst(flat.equations) do eq
+        eq.lhs isa EarthSciAST.OpExpr && (eq.lhs::EarthSciAST.OpExpr).op == "D" &&
+            !isempty((eq.lhs::EarthSciAST.OpExpr).args) &&
+            (eq.lhs::EarthSciAST.OpExpr).args[1] isa EarthSciAST.VarExpr &&
+            ((eq.lhs::EarthSciAST.OpExpr).args[1]::EarthSciAST.VarExpr).name == name
+    end
+    return idx === nothing ? nothing : flat.equations[idx].rhs
+end
+
 @testset "§4.2 right-hand-side D — Julia resolves the tendency (flatten step 3c)" begin
     path = joinpath(_RTD_DIR, "fixtures", "tendency_resolution.esm")
     @test isfile(path)
     flat = EarthSciAST.flatten(load_path(path))
 
-    rhs_of(name) = begin
-        idx = findfirst(eq -> eq.lhs isa EarthSciAST.VarExpr &&
-                              (eq.lhs::EarthSciAST.VarExpr).name == name,
-                        flat.equations)
-        idx === nothing ? nothing : flat.equations[idx].rhs
-    end
-    d_rhs_of(name) = begin
-        idx = findfirst(flat.equations) do eq
-            eq.lhs isa EarthSciAST.OpExpr && (eq.lhs::EarthSciAST.OpExpr).op == "D" &&
-                !isempty((eq.lhs::EarthSciAST.OpExpr).args) &&
-                (eq.lhs::EarthSciAST.OpExpr).args[1] isa EarthSciAST.VarExpr &&
-                ((eq.lhs::EarthSciAST.OpExpr).args[1]::EarthSciAST.VarExpr).name == name
-        end
-        idx === nothing ? nothing : flat.equations[idx].rhs
-    end
+    rhs_of(name) = _rhs_of(flat, name)
+    d_rhs_of(name) = _d_rhs_of(flat, name)
 
     @testset "own-state form: dxdt ~ D(x, t) becomes x's tendency" begin
         rhs = rhs_of("M.dxdt")
@@ -107,21 +116,61 @@ end
         end
     end
 
-    @testset "an unresolvable D is left exactly as authored" begin
-        # `D` of an observed, of a parameter, and of a compound expression: the
-        # format defines no symbolic differentiation, so the phase must not
-        # invent a substitution for any of them.
-        for (file, lhs) in (("d_of_observed.esm",  "M.dcombo"),
-                            ("d_of_parameter.esm", "M.dk"),
-                            ("d_of_compound.esm",  "M.dscaled"))
+    @testset "chain rule: D of an OBSERVED resolves through its definition" begin
+        # `combo ~ 2*x` carries no d(combo)/dt equation, but its DEFINITION does
+        # one level down. Substituting the definition and applying the product
+        # rule is the whole of it — no differentiation engine, and no arbitrary
+        # stop one substitution short of the answer.
+        f = EarthSciAST.flatten(load_path(joinpath(_RTD_DIR, "fixtures", "d_of_observed.esm")))
+        rhs = _rhs_of(f, "M.dcombo")
+        @test rhs !== nothing
+        @test isempty(_structural_ds(rhs))
+        rendered = string(rhs)
+        @test occursin("M.k", rendered) && occursin("M.x", rendered)
+    end
+
+    @testset "product rule: D of a COMPOUND resolves, with a parameter factor at 0" begin
+        f = EarthSciAST.flatten(load_path(joinpath(_RTD_DIR, "fixtures", "d_of_compound.esm")))
+        rhs = _rhs_of(f, "M.dscaled")
+        @test rhs !== nothing
+        @test isempty(_structural_ds(rhs))
+        @test occursin("M.scale", string(rhs))
+    end
+
+    @testset "a TIME-INVARIANT name differentiates to a literal 0" begin
+        # A parameter does not vary with t, so `D(k, t)` is 0 — and folding
+        # makes it the literal `0`, not a sum of zero terms, so a downstream
+        # classifier can still read it as constant.
+        f = EarthSciAST.flatten(load_path(joinpath(_RTD_DIR, "fixtures", "d_of_parameter.esm")))
+        rhs = _rhs_of(f, "M.dk")
+        @test rhs !== nothing
+        @test isempty(_structural_ds(rhs))
+        @test rhs isa EarthSciAST.NumExpr && (rhs::EarthSciAST.NumExpr).value == 0.0
+    end
+
+    @testset "what the resolution CANNOT answer is left exactly as authored" begin
+        # The closed set stops at `+ - neg * /`. `^` needs the power RULE, and a
+        # self-referential tendency would substitute into itself without end —
+        # so both survive untouched, for the `unlowered_operator` gate to refuse.
+        for (file, lhs) in (("d_of_unsupported.esm", "M.dsq"),
+                            ("d_of_cycle.esm",       "M.dx"))
             f = EarthSciAST.flatten(load_path(joinpath(_RTD_DIR, "fixtures", file)))
-            i = findfirst(eq -> eq.lhs isa EarthSciAST.VarExpr &&
-                                (eq.lhs::EarthSciAST.VarExpr).name == lhs,
-                          f.equations)
-            @test i !== nothing
-            i === nothing && continue
-            @test length(_structural_ds(f.equations[i].rhs)) == 1
+            rhs = _rhs_of(f, lhs)
+            @test rhs !== nothing
+            rhs === nothing && continue
+            @test length(_structural_ds(rhs)) == 1
         end
+    end
+
+    @testset "the cycle guard terminates rather than overflowing" begin
+        # The load above already proves it — an unguarded substitution does not
+        # return at all — but assert the SHAPE too: `D(x)/dt ~ k*D(x, t)` keeps
+        # its own `D` on the right, rather than being expanded one level and
+        # silently truncated.
+        f = EarthSciAST.flatten(load_path(joinpath(_RTD_DIR, "fixtures", "d_of_cycle.esm")))
+        d_rhs = _d_rhs_of(f, "M.x")
+        @test d_rhs !== nothing
+        @test length(_structural_ds(d_rhs)) == 1
     end
 
     @testset "non-vacuity: the chained tendency reaches the trajectory" begin
@@ -170,10 +219,10 @@ end
     end
 
     @testset "gap 2: an unresolvable right-hand-side D is not refused" begin
-        results = run_inline_tests(joinpath(_RTD_DIR, "fixtures", "d_of_parameter.esm");
+        results = run_inline_tests(joinpath(_RTD_DIR, "fixtures", "d_of_unsupported.esm");
                                 model_name="M", alg=OrdinaryDiffEqTsit5.Tsit5(),
                                 reltol=1e-12, abstol=1e-14)
-        row = only(r for r in results if r.variable == "dk")
+        row = only(r for r in results if r.variable == "dsq")
         # §4.2 requires `unlowered_operator`. It is not produced: the run builds
         # and solves, and only the assertion lookup fails.
         @test !occursin("unlowered_operator", row.message)

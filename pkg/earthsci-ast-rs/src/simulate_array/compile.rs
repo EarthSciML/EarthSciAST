@@ -615,7 +615,13 @@ impl ArrayCompiled {
         // in scope under their mounted names. Same two functions, in the same
         // order, as `Self::from_flattened` — the two array routes must not
         // answer one document differently.
-        crate::flatten::resolve_rhs_time_derivatives(&mut model_owned.equations);
+        let time_invariant: std::collections::HashSet<String> = model_owned
+            .variables
+            .iter()
+            .filter(|(_, v)| v.var_type == crate::types::VariableType::Parameter)
+            .map(|(name, _)| name.clone())
+            .collect();
+        crate::flatten::resolve_rhs_time_derivatives(&mut model_owned.equations, &time_invariant);
         if crate::flatten::first_unresolved_rhs_time_derivative_in(&model_owned.equations).is_some()
         {
             return Err(CompileError::UnloweredOperatorError {

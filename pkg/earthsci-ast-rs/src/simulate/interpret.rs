@@ -166,21 +166,11 @@ fn eval_op(
             }
         }
 
-        // `-` is unary negate (arity 1) or binary subtract (arity 2), and `neg`
-        // is the strictly-unary SPELLING of the same negation (esm-spec §4.2
-        // lists it in the arithmetic core, `+ - * / ^ neg`; `op_registry` gives
-        // it `Arity::Exact(1)`). Only the binary case has a leaf-kernel entry;
-        // unary negation is trivial and has no shared `f64` kernel (the array
-        // path negates at the `Value` level). Unary negation is a sign flip:
-        // exact in every binary format, so it needs no rounding under Float32
-        // (its operand already is binary32).
-        //
-        // `neg` had no arm here at all, so it fell through to the `_` backstop
-        // and came back `NaN` — silently, on the SCALAR backend only, while the
-        // array runtime evaluated it (`simulate_array::vectorized` `VecOp::Neg`).
-        // `canonicalize` keeps `neg` as `neg` whenever its operand is not a
-        // literal, so the hole was reachable from an ordinary document.
-        "neg" => -v(0),
+        // `-` is unary negate (arity 1) or binary subtract (arity 2). Only the
+        // binary case has a leaf-kernel entry; unary negation is trivial and has
+        // no shared `f64` kernel (the array path negates at the `Value` level).
+        // Unary negation is a sign flip: exact in every binary format, so it
+        // needs no rounding under Float32 (its operand already is binary32).
         "-" => match args.len() {
             1 => -v(0),
             2 => apply_binary("-", v(0), v(1)),
@@ -213,10 +203,25 @@ fn eval_op(
             }
         }
 
-        // Differential operator on RHS. `D` is a programming-form-only
-        // marker on the LHS of state equations and is rewritten elsewhere;
-        // if it shows up on the RHS we treat it as 0 (legacy parity).
-        "D" => 0.0,
+        // Differential operator on a RIGHT-hand side. Unreachable, and the
+        // sentinel says so.
+        //
+        // esm-spec §4.2: a right-hand-side structural `D` is resolved to the
+        // named quantity's tendency by `flatten`'s phase 5b′
+        // (`flatten::resolve_rhs_time_derivatives`), and one that resolves to
+        // nothing is refused with `unlowered_operator` by
+        // `flatten::first_unresolved_rhs_time_derivative`, which both compile
+        // paths call before building. So no `D` reaches this arm.
+        //
+        // It used to return `0.0` "for legacy parity" with the two array
+        // evaluators, which was a WRONG NUMBER graded green: three shipped
+        // documents computed silent zeros through it, and §4.2 now says an
+        // implementation MUST NOT invent a value here, in particular not `0`.
+        // `NaN` is the crate's existing "undeterminable" sentinel and is the
+        // one answer that cannot be mistaken for a result — an assertion over
+        // it fails every finite expectation (the `assertion_nonfinite`
+        // conformance category), where `0` silently PASSES `expected: 0`.
+        "D" => f64::NAN,
 
         // The spatial-calculus sugar ops (`grad`/`div`/`laplacian`/`curl`/`∇`/
         // `integral`) and every other unregistered op carry NO privileged

@@ -24,6 +24,8 @@
 use earthsci_ast::{AssertionResult, SolveOptions, flatten, load_string, run_inline_tests};
 use serde_json::json;
 
+mod common;
+
 fn opts() -> SolveOptions {
     SolveOptions {
         reltol: Some(1e-10),
@@ -250,5 +252,183 @@ fn a_spatial_derivative_is_left_for_the_discretization_rule() {
     assert!(
         earthsci_ast::extension::flatten::reject_unlowered_operators(&flat).is_err(),
         "and it must still be reported as an unlowered rewrite target"
+    );
+}
+
+/// CHAIN RULE: `D` of an OBSERVED resolves through the observed's own defining
+/// equation (esm-spec §4.2).
+///
+/// `combo ~ 2*x` carries no `D(combo)/dt`, but its definition does one level
+/// down, so `D(combo, t)` is `d/dt(2*x)` = `2*(-k*x)` = `-12` at `t = 0`. This
+/// needs no differentiation rule beyond the product rule the resolution already
+/// applies to reach a state's tendency, which is why refusing it — what this
+/// crate's sibling bindings used to do — was an arbitrary stop one substitution
+/// short of the answer.
+#[test]
+fn d_of_an_observed_resolves_through_its_definition() {
+    let doc = json!({
+        "esm": "1.0.0",
+        "metadata": {
+            "name": "DObsChain",
+            "description": "D of an observed, resolved by the chain rule.",
+            "authors": ["issue-206"],
+            "created": "2026-09-08T00:00:00Z"
+        },
+        "models": {
+            "M": {
+                "variables": {
+                    "x": {"type": "unknown", "units": "kg", "default": 2.0},
+                    "k": {"type": "parameter", "units": "1/s", "default": 3.0},
+                    "combo": {"type": "unknown", "units": "kg"},
+                    "dcombo": {"type": "unknown", "units": "kg/s"}
+                },
+                "equations": [
+                    {"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+                     "rhs": {"op": "*", "args": [{"op": "-", "args": ["k"]}, "x"]}},
+                    {"lhs": "combo", "rhs": {"op": "*", "args": [2.0, "x"]}},
+                    {"lhs": "dcombo", "rhs": {"op": "D", "args": ["combo"], "wrt": "t"}}
+                ],
+                "tests": [{
+                    "id": "chain",
+                    "description": "d(2x)/dt = 2*(-k*x) = -12 at t = 0",
+                    "time_span": {"start": 0.0, "end": 1.0},
+                    "assertions": [
+                        {"variable": "dcombo", "time": 0.0, "expected": -12.0,
+                         "tolerance": {"abs": 1e-9}}
+                    ]
+                }]
+            }
+        },
+        "domain": {"temporal": {}}
+    });
+    let results = run(&doc);
+    assert_eq!(results.len(), 1, "{results:?}");
+    assert!(results[0].passed, "{:?}", results[0]);
+    assert_eq!(results[0].actual, Some(-12.0));
+}
+
+/// A TIME-INVARIANT operand differentiates to a literal `0`, and the folding
+/// makes it exactly that rather than a sum of zero terms — so a downstream
+/// classifier can still read the equation as constant.
+#[test]
+fn d_of_a_parameter_is_a_folded_zero() {
+    let doc = json!({
+        "esm": "1.0.0",
+        "metadata": {
+            "name": "DParam", "description": "D of a parameter.",
+            "authors": ["issue-206"], "created": "2026-09-08T00:00:00Z"
+        },
+        "models": {
+            "M": {
+                "variables": {
+                    "x": {"type": "unknown", "units": "kg", "default": 2.0},
+                    "k": {"type": "parameter", "units": "1/s", "default": 3.0},
+                    "dk": {"type": "unknown", "units": "1/s^2"}
+                },
+                "equations": [
+                    {"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+                     "rhs": {"op": "*", "args": [{"op": "-", "args": ["k"]}, "x"]}},
+                    {"lhs": "dk", "rhs": {"op": "D", "args": ["k"], "wrt": "t"}}
+                ]
+            }
+        },
+        "domain": {"temporal": {}}
+    });
+    let file = load_string(&doc.to_string()).expect("document loads");
+    let flat = flatten(&file).expect("flattens");
+    let dk = flat
+        .equations
+        .iter()
+        .find(|eq| matches!(&eq.lhs, earthsci_ast::Expr::Variable(v) if v == "M.dk"))
+        .expect("the observed equation survives flattening");
+    assert!(
+        matches!(&dk.rhs, earthsci_ast::Expr::Number(v) if *v == 0.0),
+        "expected a folded literal 0, got `{}`",
+        dk.rhs
+    );
+}
+
+/// A CYCLIC chain must terminate with the node left as authored, and the
+/// document must then be REFUSED — never expanded without end, and never given
+/// a value.
+///
+/// This is the case that makes the chain guard load-bearing rather than
+/// defensive: an implementation without one does not fail this test, it hangs
+/// or overflows its stack. The algebra would give `0` for `k != 1`, which is
+/// exactly why the answer has to be a refusal rather than a number — the
+/// resolution is a rewrite, not a solver.
+#[test]
+fn a_cyclic_tendency_terminates_and_is_refused() {
+    let doc = json!({
+        "esm": "1.0.0",
+        "metadata": {
+            "name": "DCycle", "description": "A self-referential tendency.",
+            "authors": ["issue-206"], "created": "2026-09-08T00:00:00Z"
+        },
+        "models": {
+            "M": {
+                "variables": {
+                    "x": {"type": "unknown", "units": "kg", "default": 2.0},
+                    "k": {"type": "parameter", "units": "dimensionless", "default": 0.5}
+                },
+                "equations": [
+                    {"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+                     "rhs": {"op": "*", "args": ["k", {"op": "D", "args": ["x"], "wrt": "t"}]}}
+                ]
+            }
+        },
+        "domain": {"temporal": {}}
+    });
+    let file = load_string(&doc.to_string()).expect("document loads");
+    // Terminates at all — an unguarded substitution never returns.
+    let flat = flatten(&file).expect("flattens");
+    assert!(
+        earthsci_ast::flatten::first_unresolved_rhs_time_derivative(&flat).is_some(),
+        "the cyclic `D` must survive as an unresolved rewrite target"
+    );
+}
+
+/// The motivating shipped document: `tests/validation/mathematical_correctness.esm`
+/// exists to check that `d/dt` is LINEAR, and until §4.2 stated the chain rule
+/// it could not run at all — Python and Julia refused its left-hand observed and
+/// this crate answered `0` for it, so the two sides of the identity disagreed
+/// and the property the fixture is named for was untestable. Its only consumer
+/// was a round-trip test, which never evaluates anything.
+///
+/// Both sides must agree AND be non-zero: agreement alone is satisfied by a
+/// binding that answers `0` for both.
+#[test]
+fn the_shipped_linearity_fixture_runs_and_both_sides_agree() {
+    let path = common::repo_fixture("validation/mathematical_correctness.esm");
+    let text = std::fs::read_to_string(&path).expect("fixture readable");
+    let file = load_string(&text).expect("document loads");
+    let results = run_inline_tests(&file, Some("LinearityTest"), &opts());
+    assert!(!results.is_empty(), "the fixture declares inline tests");
+    let get = |name: &str| {
+        results
+            .iter()
+            .find(|r| r.variable == name)
+            .unwrap_or_else(|| panic!("no row for {name}"))
+    };
+    let left = get("derivative_of_combination");
+    let right = get("combination_of_derivatives");
+    for r in [left, right] {
+        assert!(r.passed, "{}: {}", r.variable, r.message);
+    }
+    let (l, r) = (
+        left.actual.expect("left actual"),
+        right.actual.expect("right actual"),
+    );
+    assert!(
+        (l - r).abs() <= 1e-12 * l.abs().max(1.0),
+        "d(a*u+b*v)/dt = {l} but a*du/dt + b*dv/dt = {r}"
+    );
+    assert!(
+        (l + 0.45).abs() <= 1e-9,
+        "expected -0.45 at t = 0, got {l}"
+    );
+    assert!(
+        l.abs() > 1e-6,
+        "a binding answering 0 for both sides would satisfy agreement alone"
     );
 }

@@ -20,6 +20,8 @@ from __future__ import annotations
 import json
 import math
 
+import pytest
+
 from conftest import FIXTURES_ROOT
 
 from earthsci_ast.flatten import flatten
@@ -367,3 +369,32 @@ def test_load_path_still_round_trips_the_shipped_fixture():
     file = load_path(str(FIXTURES_ROOT / "simulation" / "autocatalytic_reaction.esm"))
     assert file.reaction_systems is not None
     assert len(file.reaction_systems["ChemicalSystem"].tests) == 1
+
+
+def test_the_linearity_fixture_runs_and_both_sides_agree() -> None:
+    """``tests/validation/mathematical_correctness.esm`` is the motivating case for
+    esm-spec §4.2's CHAIN RULE, and it is now executed rather than merely shipped.
+
+    ``LinearityTest`` writes both sides of d(alpha*u + beta*v)/dt as observeds over
+    a right-hand-side structural ``D``. The left side goes through the observed
+    ``linear_combination``, so it needs the chain rule; the right side needs only
+    the states' own tendencies. Before the rule was stated in full this model could
+    not run at all — Python and Julia refused the left-hand observed, Rust answered
+    ``0`` for it — so the linearity the fixture is named for was untestable, and
+    the whole document was reachable only through a round-trip test.
+
+    Both sides must come back equal AND non-zero: equality alone would be
+    satisfied by a binding that answered ``0`` for both."""
+    path = FIXTURES_ROOT / "validation" / "mathematical_correctness.esm"
+    results = run_inline_tests(str(path), model_name="LinearityTest")
+    assert results, "the fixture declares inline tests and they must be discovered"
+    by_var = {r.variable: r for r in results}
+    for name in ("derivative_of_combination", "combination_of_derivatives"):
+        r = by_var[name]
+        assert r.actual is not None, f"{name}: {r.message}"
+        assert r.passed, f"{name}: {r.message}"
+    left = by_var["derivative_of_combination"].actual
+    right = by_var["combination_of_derivatives"].actual
+    assert left == pytest.approx(right, rel=1e-12), "d(a*u+b*v)/dt != a*du/dt + b*dv/dt"
+    assert left == pytest.approx(-0.45, rel=1e-9)
+    assert abs(left) > 1e-6, "a binding answering 0 for both sides would satisfy equality alone"

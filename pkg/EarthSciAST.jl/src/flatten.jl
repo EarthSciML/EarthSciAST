@@ -519,90 +519,256 @@ function _rhs_derivative_target(e::ASTExpr)::Union{String,Nothing}
 end
 
 """
-    _resolve_rhs_time_derivatives!(equations)
+    _resolve_rhs_time_derivatives!(equations, time_invariant)
 
 Step 3c of [`flatten`]: rewrite every right-hand-side STRUCTURAL time derivative
-of an ODE unknown into that unknown's TENDENCY — the right-hand side of its own
-`D(x)/dt ~ f` equation (esm-spec §4.2).
+into the tendency this system already defines for it (esm-spec §4.2).
 
 `D` on an equation's LEFT-hand side is structural: it is what makes the equation
 differential, and system assembly consumes it. On a RIGHT-hand side there is no
 such consumer, so an observed written `dxdt ~ D(x, t)` — the standard shape for
-asserting a species tendency at `t = 0` (§6.6.2 "instantaneous-derivative test
+asserting a species tendency at `t = 0` (§6.6.2, "instantaneous-derivative test
 shape") — was unrunnable: the tree-walk runner's `unlowered_operator` gate
 refused it, and the Rust binding silently evaluated it to `0`.
 
-The value is not a runner's to invent or refuse: `x` already carries a defining
-`D(x)/dt ~ f` equation in this very system, so resolving it is an ordinary AST
-substitution over the canonical flattened form — the same layer that qualifies
-names, applies coupling and lowers a reaction network to its mass-action ODEs.
-Doing it here is what lets a sibling model's `D(Chem.O3, t)` resolve to the
-mechanism's tendency (§7.4) with no runner learning anything about reactions.
+Neither answer was right, because everything needed is already in the system.
+`D(x, t)` over a STATE is `x`'s own `D(x)/dt ~ f`; `D(y, t)` over an OBSERVED is
+the total derivative of `y`'s defining equation, which is that equation's
+right-hand side differentiated by the same rule one level down. So the whole
+rule is the one recursive walk [`_deriv`](@ref), and it runs HERE — the layer
+that qualifies names, applies coupling and lowers a reaction network to its
+mass-action ODEs — so no evaluator ever meets a right-hand-side `D` and every
+consumer of the flattened system answers alike. It is what lets a sibling
+model's `D(Chem.O3, t)` resolve to the mechanism's tendency (§7.4) with no
+runner learning anything about reactions.
 
-Scope, deliberately narrow (identical to the Rust `resolve_rhs_time_derivatives`
-and the Python `_resolve_rhs_time_derivatives`):
+What `_deriv` covers, and nothing else: a STATE (its tendency, with any `D`
+inside that tendency resolved in turn, so a chained
+`D(lai)/dt ~ sla · D(biomass)/dt` terminates in states); an OBSERVED (the chain
+rule, by substituting its definition and differentiating it); a TIME-INVARIANT
+name or a literal (`0`); and `+`, unary and binary `-`, `neg`, n-ary `*` and
+binary `/`, distributed by the sum, product and quotient rules. Every other
+shape — `^`, a call, a reduction, a nested `D`, a name in no table — and every
+cyclic chain resolves to NOTHING and is left exactly as authored, to be refused
+with `unlowered_operator`: §4.2 forbids inventing a value there, in particular
+`0`. A SPATIAL `D` is untouched (§9.6.8 owns it) and left-hand sides are never
+rewritten.
 
-  * only an `args[1]` that is a bare variable REFERENCE naming an unknown that
-    carries a differential equation is resolved;
-  * `D` of an OBSERVED or a PARAMETER, and `D` of a compound expression, are
-    left exactly as authored — resolving those is symbolic differentiation,
-    which this format does not define, and the `unlowered_operator` gate in
-    `tree_walk/compile.jl` refuses them before evaluation;
-  * a SPATIAL `D` is untouched: it is a rewrite target for a discretization rule
-    (§9.6.8);
-  * left-hand sides are never rewritten.
+The tendency and definition tables are built straight from the equations' LHS
+FORMS, never from a classification set: §6.3.1 derives an unknown's role from the
+equations, and `inlined_unknowns` in particular is the strict `y ~ f(…)` inlining
+set, not the classification (the substitution PR #250 unpicked).
 
-The tendency table is built straight from the equations' LHS FORMS, never from a
-classification set: §6.3.1 derives an unknown's role from the equations, and
-`inlined_unknowns` in particular is the strict `y ~ f(…)` inlining set, not the
-classification (the substitution PR #250 unpicked).
-
-A tendency may itself name another state's derivative
-(`D(lai)/dt ~ sla · D(biomass)/dt`), so substitution recurses; `active` carries
-the chain being expanded and a self- or mutually-referential definition stops
-there with the node left as authored, which the gate then catches.
+Mirrors the Rust `flatten::resolve_rhs_time_derivatives` and the Python
+`_resolve_rhs_time_derivatives` exactly.
 """
-function _resolve_rhs_time_derivatives!(equations::Vector{Equation})
+function _resolve_rhs_time_derivatives!(equations::Vector{Equation},
+                                        time_invariant::Set{String})
     tendency = Dict{String,ASTExpr}()
+    definition = Dict{String,ASTExpr}()
     for eq in equations
         t = _rhs_derivative_target(eq.lhs)
-        t === nothing || (tendency[t] = eq.rhs)
+        if t !== nothing
+            tendency[t] = eq.rhs
+        elseif eq.lhs isa VarExpr
+            # A bare-variable LHS is a DEFINING equation (§6.3.1's observed /
+            # algebraic form); its right-hand side is what the chain rule
+            # differentiates.
+            definition[(eq.lhs::VarExpr).name] = eq.rhs
+        end
     end
-    isempty(tendency) && return equations
+    (isempty(tendency) && isempty(definition)) && return equations
     for (i, eq) in enumerate(equations)
-        # While expanding the RHS of `D(x)/dt` itself, `x`'s tendency is the very
-        # thing being defined and so is not available to substitute into.
+        _has_time_derivative(eq.rhs) || continue
+        # The quantity this equation DEFINES is not available to substitute into
+        # its own right-hand side; seeding `active` with it is what makes
+        # `D(x)/dt ~ k·D(x, t)` and `y ~ D(y, t)` terminate as unresolved rather
+        # than expand forever.
         own = _rhs_derivative_target(eq.lhs)
+        if own === nothing && eq.lhs isa VarExpr
+            own = (eq.lhs::VarExpr).name
+        end
         active = own === nothing ? String[] : String[own]
-        new_rhs = _substitute_time_derivatives(eq.rhs, tendency, active)
+        new_rhs = _substitute_time_derivatives(eq.rhs, tendency, definition,
+                                               time_invariant, active)
         new_rhs === eq.rhs || (equations[i] = Equation(eq.lhs, new_rhs))
     end
     return equations
 end
 
 """
-    _substitute_time_derivatives(e, tendency, active) -> ASTExpr
+    _has_time_derivative(e) -> Bool
 
-The rewrite [`_resolve_rhs_time_derivatives!`](@ref) documents, over one
-expression. `map_children` is identity-preserving, so an expression carrying no
-resolvable `D` is returned unchanged rather than rebuilt.
+Does `e` carry a structural `D` anywhere?
+"""
+function _has_time_derivative(e::ASTExpr)::Bool
+    e isa OpExpr || return false
+    _is_structural_time_derivative(e) && return true
+    found = false
+    foreach_child(x -> (found |= _has_time_derivative(x)), e)
+    return found
+end
+
+"""
+    _substitute_time_derivatives(e, tendency, definition, time_invariant, active)
+
+Rewrite every structural `D` inside `e`, leaving the ones [`_deriv`](@ref)
+cannot answer exactly as authored for the gate to report. `map_children` is
+identity-preserving, so an expression carrying no `D` is returned unchanged
+rather than rebuilt.
 """
 function _substitute_time_derivatives(e::ASTExpr, tendency::Dict{String,ASTExpr},
+                                      definition::Dict{String,ASTExpr},
+                                      time_invariant::Set{String},
                                       active::Vector{String})::ASTExpr
     e isa OpExpr || return e
-    target = _rhs_derivative_target(e)
-    if target !== nothing && haskey(tendency, target)
-        # A cycle: leave the node as authored rather than expanding it without
-        # end. It reaches the `unlowered_operator` gate exactly as before.
-        target in active && return e
-        push!(active, target)
-        try
-            return _substitute_time_derivatives(tendency[target], tendency, active)
-        finally
-            pop!(active)
-        end
+    if _is_structural_time_derivative(e)
+        out = _deriv(e.args[1], tendency, definition, time_invariant, active)
+        return out === nothing ? e : out
     end
-    return map_children(x -> _substitute_time_derivatives(x, tendency, active), e)
+    return map_children(
+        x -> _substitute_time_derivatives(x, tendency, definition, time_invariant, active), e)
+end
+
+"""
+    _deriv(e, tendency, definition, time_invariant, active) -> Union{ASTExpr,Nothing}
+
+d/dt of `e`, or `nothing` when this format does not define it.
+"""
+function _deriv(e::ASTExpr, tendency::Dict{String,ASTExpr},
+                definition::Dict{String,ASTExpr}, time_invariant::Set{String},
+                active::Vector{String})::Union{ASTExpr,Nothing}
+    if e isa VarExpr
+        name = (e::VarExpr).name
+        # A cycle: stop here and let the gate name it.
+        name in active && return nothing
+        if haskey(tendency, name)
+            push!(active, name)
+            try
+                return _substitute_time_derivatives(tendency[name], tendency, definition,
+                                                    time_invariant, active)
+            finally
+                pop!(active)
+            end
+        elseif haskey(definition, name)
+            # CHAIN RULE: an observed's total time derivative is its defining
+            # right-hand side differentiated by this same rule, one level down.
+            push!(active, name)
+            try
+                return _deriv(definition[name], tendency, definition, time_invariant, active)
+            finally
+                pop!(active)
+            end
+        elseif name in time_invariant
+            return _zero_expr()
+        end
+        # A name in none of the three. Answering `0` for a name this pass does
+        # not recognise is exactly the invention §4.2 forbids.
+        return nothing
+    end
+    (e isa NumExpr || e isa IntExpr) && return _zero_expr()
+    e isa OpExpr || return nothing
+
+    d(a) = _deriv(a, tendency, definition, time_invariant, active)
+    op = (e::OpExpr).op
+    args = (e::OpExpr).args
+    if op == "+"
+        terms = ASTExpr[]
+        for a in args
+            da = d(a)
+            da === nothing && return nothing
+            push!(terms, da)
+        end
+        return _sum_expr(terms)
+    elseif op == "-" && length(args) == 1
+        da = d(args[1]); da === nothing && return nothing
+        return _negate_expr(da)
+    elseif op == "-" && length(args) == 2
+        da = d(args[1]); da === nothing && return nothing
+        db = d(args[2]); db === nothing && return nothing
+        return _difference_expr(da, db)
+    elseif op == "neg" && length(args) == 1
+        da = d(args[1]); da === nothing && return nothing
+        return _negate_expr(da)
+    elseif op == "*"
+        # Product rule over an n-ary `*`: one term per factor, that factor
+        # differentiated and the others left alone.
+        terms = ASTExpr[]
+        for (i, a) in enumerate(args)
+            da = d(a)
+            da === nothing && return nothing
+            _is_zero_expr(da) && continue
+            factors = ASTExpr[da]
+            for (j, b) in enumerate(args)
+                i == j || push!(factors, b)
+            end
+            push!(terms, _product_expr(factors))
+        end
+        return _sum_expr(terms)
+    elseif op == "/" && length(args) == 2
+        u, v = args[1], args[2]
+        du = d(u); du === nothing && return nothing
+        dv = d(v); dv === nothing && return nothing
+        # `v` constant in t: (u/v)' = u'/v, which keeps the common `D(x, t)/c`
+        # shape small.
+        _is_zero_expr(dv) && return _quotient_expr(du, v)
+        num = _difference_expr(_product_expr(ASTExpr[du, v]), _product_expr(ASTExpr[u, dv]))
+        return _quotient_expr(num, _product_expr(ASTExpr[v, v]))
+    end
+    return nothing
+end
+
+# ---------------------------------------------------------------------------
+# Small folding constructors for the derivative expressions.
+#
+# Folding is not cosmetic. A parameter and a literal both differentiate to `0`,
+# so an unfolded product rule would emit `0*x` shapes throughout and `D(k, t)`
+# would be a sum of zeros rather than the literal `0` a downstream classifier
+# can read as constant.
+# ---------------------------------------------------------------------------
+
+_zero_expr() = NumExpr(0.0)
+
+_is_zero_expr(e::ASTExpr) = (e isa NumExpr && (e::NumExpr).value == 0.0) ||
+                            (e isa IntExpr && (e::IntExpr).value == 0)
+
+_is_one_expr(e::ASTExpr) = (e isa NumExpr && (e::NumExpr).value == 1.0) ||
+                           (e isa IntExpr && (e::IntExpr).value == 1)
+
+function _sum_expr(terms::Vector{ASTExpr})::ASTExpr
+    kept = ASTExpr[t for t in terms if !_is_zero_expr(t)]
+    isempty(kept) && return _zero_expr()
+    length(kept) == 1 && return kept[1]
+    return OpExpr("+", kept)
+end
+
+function _negate_expr(a::ASTExpr)::ASTExpr
+    _is_zero_expr(a) && return _zero_expr()
+    a isa NumExpr && return NumExpr(-(a::NumExpr).value)
+    a isa IntExpr && return IntExpr(-(a::IntExpr).value)
+    # Unary `-`, not `neg`: both spell negation, but the Rust scalar interpreter
+    # has an arm for the first and none for the second, so emitting `neg` here
+    # would make one backend answer NaN.
+    return OpExpr("-", ASTExpr[a])
+end
+
+function _difference_expr(a::ASTExpr, b::ASTExpr)::ASTExpr
+    _is_zero_expr(b) && return a
+    _is_zero_expr(a) && return _negate_expr(b)
+    return OpExpr("-", ASTExpr[a, b])
+end
+
+function _product_expr(factors::Vector{ASTExpr})::ASTExpr
+    any(_is_zero_expr, factors) && return _zero_expr()
+    kept = ASTExpr[f for f in factors if !_is_one_expr(f)]
+    isempty(kept) && return NumExpr(1.0)
+    length(kept) == 1 && return kept[1]
+    return OpExpr("*", kept)
+end
+
+function _quotient_expr(a::ASTExpr, b::ASTExpr)::ASTExpr
+    _is_zero_expr(a) && return _zero_expr()
+    return OpExpr("/", ASTExpr[a, b])
 end
 
 # ========================================
@@ -1030,7 +1196,7 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
     # after the lift so it sees the equations the lift produced, and after Step
     # 1+2 so a reaction network's mass-action tendency (§7.4) is available to a
     # sibling model's scoped `D(Chem.O3, t)`.
-    _resolve_rhs_time_derivatives!(equations)
+    _resolve_rhs_time_derivatives!(equations, Set{String}(keys(params)))
 
     # Step 4: Compute independent variables.
     ivs = _compute_independent_variables(equations)

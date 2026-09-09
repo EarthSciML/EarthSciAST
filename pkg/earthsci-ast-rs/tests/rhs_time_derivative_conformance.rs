@@ -15,19 +15,21 @@
 //! The category pins OUTCOME CLASSES rather than a numeric golden, because half
 //! of it has no number to record:
 //!
-//! * `outcome: "value"` — the `D` named an unknown carrying a differential
-//!   equation, so it resolves to that unknown's tendency;
-//! * `outcome: "refused"` — the `D` named an observed, a parameter or a
-//!   compound, resolves to nothing, and the run MUST be refused with the
+//! * `outcome: "value"` — the resolution answered, from the equations the
+//!   system already carries: a state's own tendency, an observed's definition
+//!   differentiated by the CHAIN RULE, `0` for a time-invariant name, and the
+//!   sum / product / quotient rules through `+ - neg * /`;
+//! * `outcome: "refused"` — the resolution answered NOTHING, because the
+//!   operand is outside that closed set (`d_of_unsupported`, a `^`) or the
+//!   chain is cyclic (`d_of_cycle`). The run MUST be refused with the
 //!   `unlowered_operator` diagnostic. There is no actual, and inventing one —
 //!   **in particular `0`** — is the defect this half exists to catch.
 //!
-//! The refusal half is the fragile one, which is why `d_of_parameter` asserts
-//! `expected: 0.0`: a constant's derivative really is 0, and 0 is what all
-//! three Rust evaluators returned for *every* unresolvable `D`
-//! (`simulate/interpret.rs`, `simulate_array/eval.rs`,
-//! `simulate_array/tape/lower.rs`). A binding that answers it would pass on the
-//! arithmetic and fail here, which is the only way round to catch it.
+//! The refusal half is the fragile one, which is why both its fixtures assert
+//! `expected: 0.0`: `0` is what all three Rust evaluators returned for *every*
+//! unresolvable `D` (`simulate/interpret.rs`, `simulate_array/eval.rs`,
+//! `simulate_array/tape/lower.rs`). A binding that answers it passes on the
+//! arithmetic and fails here, which is the only way round to catch it.
 
 #![cfg(not(target_arch = "wasm32"))]
 
@@ -202,4 +204,49 @@ fn the_resolve_half_is_not_vacuous() {
         seen >= 2,
         "the resolve half must assert the own-state and the scoped tendency directly"
     );
+
+    // The CHAIN RULE half of the resolution has its own non-vacuity condition:
+    // `d_of_observed` must expect a non-zero number. A binding that refuses
+    // `D` of an observed — which is what Python and Julia used to do, and what
+    // §4.2 said before the rule was stated in full — fails it as an outcome
+    // mismatch rather than an arithmetic one.
+    let chain = fixture(&m, "d_of_observed");
+    let case = &chain["cases"][0];
+    assert_eq!(case["outcome"].as_str(), Some("value"));
+    assert_ne!(
+        case["expected"].as_f64(),
+        Some(0.0),
+        "the chain-rule case must expect a non-zero derivative"
+    );
+}
+
+/// The refusal half must keep BOTH of its shapes: an operand outside the closed
+/// arithmetic set, and a cyclic chain. They fail differently in an
+/// implementation that gets the rule wrong — the first answers a number, the
+/// second does not return at all — so neither substitutes for the other.
+#[test]
+fn the_refusal_half_keeps_both_shapes() {
+    let m = manifest();
+    for id in ["d_of_unsupported", "d_of_cycle"] {
+        let fx = fixture(&m, id);
+        assert_eq!(
+            fx["cases"][0]["outcome"].as_str(),
+            Some("refused"),
+            "{id} must stay a refusal"
+        );
+        assert_eq!(
+            fx["cases"][0]["expected"].as_f64(),
+            None,
+            "{id}: a refusal records no actual, so the manifest states none"
+        );
+    }
+}
+
+fn fixture<'a>(m: &'a serde_json::Value, id: &str) -> &'a serde_json::Value {
+    m["fixtures"]
+        .as_array()
+        .expect("fixtures")
+        .iter()
+        .find(|f| f["id"].as_str() == Some(id))
+        .unwrap_or_else(|| panic!("{id} fixture"))
 }

@@ -111,15 +111,41 @@ def test_rhs_time_derivative_outcomes(fixture: dict) -> None:
             )
 
 
+def _fixture(manifest: dict, fixture_id: str) -> dict:
+    return next(f for f in manifest["fixtures"] if f["id"] == fixture_id)
+
+
 def test_resolution_is_not_vacuous() -> None:
     """Guard the RESOLVE half against passing for the wrong reason: every
     tendency assertion must be non-zero, so a binding that still answers
     ``D(anything) = 0`` cannot satisfy it."""
-    fx = next(f for f in _manifest()["fixtures"] if f["id"] == "tendency_resolution")
+    m = _manifest()
+    fx = _fixture(m, "tendency_resolution")
     tendencies = [c for c in fx["cases"] if c["variable"] in ("dxdt", "dAdt")]
     assert tendencies, "the resolve half must assert at least one tendency directly"
     for c in tendencies:
         assert c["expected"] != 0.0, f"{c['variable']}: a zero expectation gates nothing"
+
+    # The CHAIN RULE half has its own non-vacuity condition: a binding that
+    # refuses ``D`` of an observed — what this binding used to do — fails it as
+    # an outcome mismatch rather than an arithmetic one.
+    case = _fixture(m, "d_of_observed")["cases"][0]
+    assert case["outcome"] == "value"
+    assert case["expected"] != 0.0, "the chain-rule case must expect a non-zero derivative"
+
+
+def test_the_refusal_half_keeps_both_shapes() -> None:
+    """The refusal half must keep BOTH of its shapes: an operand outside the
+    closed arithmetic set, and a cyclic chain. They fail differently in an
+    implementation that gets the rule wrong — the first answers a number, the
+    second does not return at all — so neither substitutes for the other."""
+    m = _manifest()
+    for fixture_id in ("d_of_unsupported", "d_of_cycle"):
+        case = _fixture(m, fixture_id)["cases"][0]
+        assert case["outcome"] == "refused", f"{fixture_id} must stay a refusal"
+        assert "expected" not in case, (
+            f"{fixture_id}: a refusal records no actual, so the manifest states none"
+        )
 
 
 def test_fixture_paths_resolve() -> None:
