@@ -244,9 +244,23 @@ def test_tolerance_precedence_and_isapprox_semantics():
     test_tol = Tolerance(rel=None, abs=1e-3)
     assertion_tol = Tolerance(rel=1e-6, abs=1e-9)
     assert _resolve_tolerance(model_tol, test_tol, assertion_tol) == (1e-6, 1e-9)
-    assert _resolve_tolerance(model_tol, test_tol, None) == (0.0, 1e-3)
+    # PER FIELD (§6.6.4): the test declares only ``abs``, so the model's ``rel``
+    # survives. This returned ``(0.0, 1e-3)`` before #228 — the test's block won
+    # wholesale and the model's relative bound vanished.
+    assert _resolve_tolerance(model_tol, test_tol, None) == (1e-2, 1e-3)
     assert _resolve_tolerance(model_tol, None, None) == (1e-2, 0.0)
     assert _resolve_tolerance(None, None, None) == (1e-6, 0.0)
+    # The implementation default is the FOURTH LEVEL of the same per-field
+    # merge, not a fallback reached only when levels 1-3 are silent: an
+    # `abs`-only block still takes `rel = 1e-6` from it.
+    abs_only = Tolerance(rel=None, abs=1e-4)
+    assert _resolve_tolerance(None, None, abs_only) == (1e-6, 1e-4)
+    assert _resolve_tolerance(abs_only, None, None) == (1e-6, 1e-4)
+    # ... and `rel: 0` is the only way to opt out of it. An explicit zero is a
+    # DECLARATION, so it stops the fallthrough at the default too.
+    assert _resolve_tolerance(None, None, Tolerance(rel=0.0, abs=1e-4)) == (0.0, 1e-4)
+    # A declared outer `rel` still beats the default, however far out it sits.
+    assert _resolve_tolerance(Tolerance(rel=1e-3, abs=None), None, abs_only) == (1e-3, 1e-4)
     # Julia isapprox: |a-e| <= max(atol, rtol*max(|a|,|e|)).
     assert _check_assertion(1.0000009, 1.0, 1e-6, 0.0)
     assert not _check_assertion(1.000002, 1.0, 1e-6, 0.0)

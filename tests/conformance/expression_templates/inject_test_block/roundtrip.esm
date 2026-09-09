@@ -43,6 +43,7 @@
               "reduce": "mean",
               "time": 10.0,
               "tolerance": {
+                "rel": 0.0,
                 "abs": 1.0e-6
               },
               "variable": "c"
@@ -77,6 +78,7 @@
               "reduce": "mean",
               "time": 10.0,
               "tolerance": {
+                "rel": 0.0,
                 "abs": 1.0e-6
               },
               "variable": "c"

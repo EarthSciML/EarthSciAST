@@ -522,22 +522,45 @@ fn scalar_slot(element_names: &[String], variable: &str, model: &str) -> Option<
     None
 }
 
-/// esm-spec §6.6.4 precedence: assertion > test > model > default
-/// `rel=1e-6` (identical to the Julia / Python references). Returns
-/// `(rtol, atol)`; an unset bound within the winning tolerance is `0.0`.
+/// esm-spec §6.6.4, resolved PER FIELD over FOUR levels: assertion > test >
+/// model > the implementation default. Each of `rel` and `abs` independently
+/// takes its value from the innermost level that declares it; the default
+/// supplies `rel = 1e-6` and no `abs` bound to whatever is still undeclared
+/// after the three document levels. Identical to the Julia
+/// `_resolve_tolerance` reference and the Python `_resolve_tolerance`. Returns
+/// `(rtol, atol)`.
+///
+/// The merge is per-field and NOT wholesale. A level that declares only `abs`
+/// does not mask an outer level's `rel`: with a model `{rel: 1e-6}` and an
+/// assertion `{abs: 1e-9}` the resolved pair is `(1e-6, 1e-9)`, not
+/// `(0, 1e-9)`. Returning the first `Some` block whole — what this did before
+/// #228 — ran such an assertion with NO relative bound at all, silently
+/// dropping a tolerance its author declared one level up.
+///
+/// **Absent vs zero.** A field is absent when the key is missing or JSON-null
+/// (the schema admits only a number, so `null` is non-conforming input treated
+/// as absent); only an absent field falls through. An explicit `0` is a
+/// DECLARATION — "no bound of this kind" — and stops the fallthrough, the
+/// default included. That distinction carries the whole rule: the recurrence
+/// fixtures pin exactness with a model-level `{rel: 0, abs: 0}`
+/// (CONFORMANCE_SPEC §5.19), and `rel: 0` is how a document says "this
+/// absolute bound and nothing else" now that the default is not terminal.
+///
+/// **The implementation default is the FOURTH LEVEL** of the same per-field
+/// merge, not a fallback reached only when levels 1-3 are silent. An assertion
+/// declaring only `{abs: 1e-4}` therefore resolves to `rel = 1e-6`, not
+/// `rel = 0`.
 pub fn resolve_tolerance(
     model_tol: Option<&Tolerance>,
     test_tol: Option<&Tolerance>,
     assertion_tol: Option<&Tolerance>,
 ) -> (f64, f64) {
-    match [assertion_tol, test_tol, model_tol]
-        .into_iter()
-        .flatten()
-        .next()
-    {
-        Some(candidate) => (candidate.rel.unwrap_or(0.0), candidate.abs.unwrap_or(0.0)),
-        None => (DEFAULT_REL_TOL, 0.0),
-    }
+    let levels = [assertion_tol, test_tol, model_tol];
+    let first =
+        |pick: fn(&Tolerance) -> Option<f64>| levels.iter().copied().flatten().find_map(pick);
+    let rel = first(|t| t.rel);
+    let atol = first(|t| t.abs);
+    (rel.unwrap_or(DEFAULT_REL_TOL), atol.unwrap_or(0.0))
 }
 
 /// The esm-spec §6.6.3 pass predicate — `actual == expected`, or both values
@@ -2494,12 +2517,49 @@ mod tests {
             resolve_tolerance(Some(&model_tol), Some(&test_tol), Some(&assertion_tol)),
             (1e-6, 1e-9)
         );
+        // PER FIELD (§6.6.4): the test declares only `abs`, so the model's
+        // `rel` survives. This returned `(0.0, 1e-3)` before #228 — the test's
+        // block won wholesale and the model's relative bound vanished.
         assert_eq!(
             resolve_tolerance(Some(&model_tol), Some(&test_tol), None),
-            (0.0, 1e-3)
+            (1e-2, 1e-3)
         );
         assert_eq!(resolve_tolerance(Some(&model_tol), None, None), (1e-2, 0.0));
         assert_eq!(resolve_tolerance(None, None, None), (DEFAULT_REL_TOL, 0.0));
+        // The implementation default is the FOURTH LEVEL of the same per-field
+        // merge, not a fallback reached only when levels 1-3 are silent: an
+        // `abs`-only block still takes `rel = 1e-6` from it.
+        let abs_only = Tolerance {
+            abs: Some(1e-4),
+            rel: None,
+        };
+        assert_eq!(
+            resolve_tolerance(None, None, Some(&abs_only)),
+            (DEFAULT_REL_TOL, 1e-4)
+        );
+        assert_eq!(
+            resolve_tolerance(Some(&abs_only), None, None),
+            (DEFAULT_REL_TOL, 1e-4)
+        );
+        // ... and `rel: 0` is the only way to opt out of it. An explicit zero
+        // is a DECLARATION, so it stops the fallthrough at the default too.
+        let abs_only_exact = Tolerance {
+            abs: Some(1e-4),
+            rel: Some(0.0),
+        };
+        assert_eq!(
+            resolve_tolerance(None, None, Some(&abs_only_exact)),
+            (0.0, 1e-4)
+        );
+        // A declared outer `rel` still beats the default, however far out.
+        let outer_rel = Tolerance {
+            abs: None,
+            rel: Some(1e-3),
+        };
+        assert_eq!(
+            resolve_tolerance(Some(&outer_rel), None, Some(&abs_only)),
+            (1e-3, 1e-4)
+        );
         // Julia isapprox: |a-e| <= max(atol, rtol*max(|a|,|e|)).
         assert!(check_assertion(1.0000009, 1.0, 1e-6, 0.0));
         assert!(!check_assertion(1.000002, 1.0, 1e-6, 0.0));
@@ -2590,6 +2650,96 @@ mod tests {
         // and `abs` admits what the symmetric `rel` rejects (same inputs as the
         // `!check_assertion(3.0, 1.0, 0.5, 0.0)` rejection above):
         assert!(check_assertion(3.0, 1.0, 0.5, 2.5));
+    }
+
+    /// Cross-language conformance: esm-spec §6.6.4 tolerance RESOLUTION
+    /// (CONFORMANCE_SPEC §5.21).
+    ///
+    /// The shared cases live in `tests/conformance/tolerance_resolution/`
+    /// (repo root); the Julia runner (`conformance_tolerance_resolution_test.jl`)
+    /// and the Python runner (`test_tolerance_resolution_conformance.py`) gate
+    /// the same file. The category is DATA-ONLY — resolution is a pure function
+    /// of the declared `{abs?, rel?}` blocks — so it carries no `.esm` fixture,
+    /// no integrator and no numeric golden, and it lives here as a unit test
+    /// rather than under `tests/` because it needs nothing from the crate but
+    /// this one private-ish function.
+    ///
+    /// The defect it closes (#228): all three bindings returned the first
+    /// `Some` block WHOLE and defaulted its missing field to 0, so a model
+    /// `{rel: 1e-6}` plus an assertion `{abs: 1e-9}` resolved to `(0, 1e-9)`
+    /// and the assertion ran with no relative bound at all. No other
+    /// conformance tier could see it: every fixture in every other category
+    /// declares exactly one tolerance block, and one block merges identically
+    /// whether the rule is per-field or wholesale.
+    #[test]
+    fn tolerance_resolution_conformance_manifest() {
+        use serde_json::Value;
+
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/conformance/tolerance_resolution/manifest.json");
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        let m: Value = serde_json::from_str(&text).expect("parse manifest");
+
+        assert_eq!(m["category"], "tolerance_resolution");
+        // Data-only: pinning an integrator here would be a category error.
+        assert!(m["integrators"].is_null());
+        let cases = m["cases"].as_array().expect("cases array");
+        assert!(cases.len() >= 15, "thin tier: {} cases", cases.len());
+
+        // A manifest `levels` entry: a missing key and an explicit JSON `null`
+        // both mean ABSENT and both become `None`; a `0` is a declared bound
+        // and must survive as `Some(0.0)`.
+        fn tolerance(block: &Value) -> Option<Tolerance> {
+            if block.is_null() {
+                return None;
+            }
+            let field = |name: &str| block.get(name).and_then(Value::as_f64);
+            Some(Tolerance {
+                abs: field("abs"),
+                rel: field("rel"),
+            })
+        }
+
+        // The pre-#228 rule, kept as the thing the new one must never be
+        // tighter than: the first declared block won wholesale and its missing
+        // field became 0.
+        fn wholesale(
+            model: Option<&Tolerance>,
+            test: Option<&Tolerance>,
+            assertion: Option<&Tolerance>,
+        ) -> (f64, f64) {
+            match [assertion, test, model].into_iter().flatten().next() {
+                Some(c) => (c.rel.unwrap_or(0.0), c.abs.unwrap_or(0.0)),
+                None => (DEFAULT_REL_TOL, 0.0),
+            }
+        }
+
+        let mut changed = 0usize;
+        for case in cases {
+            let id = case["id"].as_str().expect("case id");
+            let levels = &case["levels"];
+            let model = tolerance(&levels["model"]);
+            let test = tolerance(&levels["test"]);
+            let assertion = tolerance(&levels["assertion"]);
+
+            let got = resolve_tolerance(model.as_ref(), test.as_ref(), assertion.as_ref());
+            let want = (
+                case["resolved"]["rel"].as_f64().expect("resolved.rel"),
+                case["resolved"]["abs"].as_f64().expect("resolved.abs"),
+            );
+            assert_eq!(got, want, "{id}: {}", case["note"]);
+
+            // Monotonicity: per field the merged value can only come from a
+            // level the wholesale rule ignored, so no bound ever tightens and
+            // no assertion can flip pass -> fail under this change.
+            let old = wholesale(model.as_ref(), test.as_ref(), assertion.as_ref());
+            assert!(got.0 >= old.0 && got.1 >= old.1, "{id} tightened");
+            let flag = case["changed_by_228"].as_bool().expect("changed_by_228");
+            assert_eq!(old != got, flag, "{id}: changed_by_228 is stale");
+            changed += usize::from(flag);
+        }
+        assert!(changed >= 5, "tier does not exercise the change: {changed}");
     }
 
     /// esm-spec §6.6.3: finiteness is judged BEFORE tolerance. Without the

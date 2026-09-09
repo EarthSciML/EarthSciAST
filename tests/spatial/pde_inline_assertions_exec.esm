@@ -151,6 +151,7 @@
               "time": 0.0,
               "expected": 0.5555702330196023,
               "tolerance": {
+                "rel": 0.0,
                 "abs": 1e-09
               },
               "coords": {
@@ -162,6 +163,7 @@
               "time": 0.0,
               "expected": 0.5555702330196023,
               "tolerance": {
+                "rel": 0.0,
                 "abs": 1e-09
               },
               "coords": {
@@ -173,6 +175,7 @@
               "time": 0.0,
               "expected": -0.555570233019602,
               "tolerance": {
+                "rel": 0.0,
                 "abs": 1e-09
               },
               "coords": {
@@ -184,6 +187,7 @@
               "time": 0.25,
               "expected": 0.43267853252682914,
               "tolerance": {
+                "rel": 0.0,
                 "abs": 1e-06
               },
               "coords": {
@@ -195,6 +199,7 @@
               "time": 0.0,
               "expected": 0.0,
               "tolerance": {
+                "rel": 0.0,
                 "abs": 1e-12
               },
               "reduce": "integral"
@@ -204,6 +209,7 @@
               "time": 0.0,
               "expected": 0.0,
               "tolerance": {
+                "rel": 0.0,
                 "abs": 1e-12
               },
               "reduce": "L2_error",
@@ -217,6 +223,7 @@
               "time": 0.0,
               "expected": 0.0,
               "tolerance": {
+                "rel": 0.0,
                 "abs": 1e-12
               },
               "reduce": "Linf_error",

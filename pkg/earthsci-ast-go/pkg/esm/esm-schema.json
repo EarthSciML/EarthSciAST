@@ -1964,7 +1964,7 @@
         },
         "tolerance": {
           "$ref": "#/$defs/Tolerance",
-          "description": "Model-level default numerical tolerance for tests, used when a test or assertion does not provide its own."
+          "description": "Model-level default numerical tolerance for tests. Resolution is PER FIELD over four levels (esm-spec 6.6.4): assertion, test, model, then the implementation default (rel = 1e-6, no abs bound). abs and rel each take their value from the innermost level that declares that field, so a test or assertion that declares only one bound does not mask the other from here. An explicit 0 is a declaration ('no bound of this kind'), not an absence, and stops the fallthrough - including the fallthrough to the implementation default, which is why rel: 0 is the only way to ask for an absolute-only comparison."
         },
         "tests": {
           "type": "array",
@@ -2347,7 +2347,7 @@
         },
         "tolerance": {
           "$ref": "#/$defs/Tolerance",
-          "description": "System-level default numerical tolerance for tests, used when a test or assertion does not provide its own."
+          "description": "System-level default numerical tolerance for tests. Resolution is PER FIELD over four levels (esm-spec 6.6.4): assertion, test, system, then the implementation default (rel = 1e-6, no abs bound). abs and rel each take their value from the innermost level that declares that field, so a test or assertion that declares only one bound does not mask the other from here. An explicit 0 is a declaration ('no bound of this kind'), not an absence, and stops the fallthrough - including the fallthrough to the implementation default, which is why rel: 0 is the only way to ask for an absolute-only comparison."
         },
         "tests": {
           "type": "array",
@@ -2626,7 +2626,7 @@
         },
         "tolerance": {
           "$ref": "#/$defs/Tolerance",
-          "description": "Per-assertion tolerance override. If present, this takes precedence over the test-level and model-level defaults."
+          "description": "Per-assertion tolerance override, merged PER FIELD over the test-level and model-level defaults and then the implementation default (esm-spec 6.6.4): each of abs and rel that this object declares wins, and each it omits falls through independently. Declaring only abs here therefore keeps an outer rel rather than dropping it, and falls through to the implementation default rel = 1e-6 when no enclosing level declares one; write rel: 0 to mean 'no relative bound'."
         },
         "coords": {
           "type": "object",
@@ -2789,7 +2789,7 @@
         },
         "tolerance": {
           "$ref": "#/$defs/Tolerance",
-          "description": "Test-level default tolerance applied to all assertions in this test that do not override it."
+          "description": "Test-level default tolerance, merged PER FIELD (esm-spec 6.6.4): it supplies each of abs and rel that an assertion in this test does not declare, and falls through to the model-level default - and then to the implementation default rel = 1e-6 - for each field it does not declare itself. Write rel: 0 to stop that fallthrough."
         },
         "expression_template_imports": {
           "type": "array",

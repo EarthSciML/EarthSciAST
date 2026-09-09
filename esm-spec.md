@@ -2527,14 +2527,30 @@ The rule is pinned by the `assertion_nonfinite` conformance category (CONFORMANC
 
 #### 6.6.4 Tolerance Resolution Order
 
-Tolerance is resolved most-specific first:
+Tolerance is resolved **per field**, most-specific first. `abs` and `rel` resolve *independently*: each takes its value from the innermost level that declares that field.
 
-1. **Per-assertion** `tolerance` (if present) — wins outright.
-2. Otherwise, **per-test** `tolerance` — the test's default.
-3. Otherwise, the enclosing component's **model-level** `tolerance` field.
-4. Otherwise, an **implementation default** — conforming runtimes should use `rel = 1e-6` and no `abs` bound.
+1. **Per-assertion** `tolerance` — its declared fields win.
+2. Otherwise, for a field it does not declare, **per-test** `tolerance` — the test's default.
+3. Otherwise, for a field neither declares, the enclosing component's **model-level** `tolerance` field.
+4. Otherwise, for a field none of the three declares, an **implementation default**: conforming runtimes SHOULD use `rel = 1e-6` and no `abs` bound.
 
-Each level is a `{abs?, rel?}` object; absent fields fall through to the next level independently. Specifying only `abs` at a lower level does not mask `rel` from an upper level — they are merged per-field.
+All four levels take part in the **same per-field merge**, and an absent field falls through to the next one independently. Specifying only `abs` at a more-specific level does not mask `rel` from a less-specific one — they are merged per-field. With a model-level `{rel: 1e-6}` and an assertion-level `{abs: 1e-9}`, the resolved pair is `(rel = 1e-6, abs = 1e-9)`; a runtime that returned the assertion's block whole would run that assertion with **no relative bound at all**, silently discarding a tolerance the author declared one level up.
+
+**Level 4 is a merge level, not a fallback.** It is not consulted only when levels 1-3 are silent: it supplies whichever bound is *still* undeclared after them. An assertion that declares only `{abs: 1e-4}`, with no `rel` at any enclosing level, therefore resolves to `(rel = 1e-6, abs = 1e-4)` — the default's relative bound applies alongside the declared absolute one, and passing either bound is sufficient (§6.6.3). Because the default is a level rather than a fallback, **`rel: 0` is the only way a document can ask for an absolute-only comparison**, and correspondingly `abs` has no such spelling to need: the default declares no `abs` bound, so an unspecified `abs` resolves to `0` at level 4 regardless.
+
+**What "absent" means.** A field is absent when its key is missing from the object, and only an absent field falls through. `abs` and `rel` are declared `number` in the schema, so a JSON `null` is not conforming input; a runtime that accepts one MUST treat it as absent. An explicit **`0` is a declaration, not an absence** — it says *"no bound of this kind"* — and it stops the fallthrough, the implementation default included:
+
+| `tolerance` block | Resolved | Why |
+|---|---|---|
+| assertion `{abs: 1e-9}`, model `{rel: 1e-6}` | `rel = 1e-6`, `abs = 1e-9` | `rel` absent at the assertion, so it falls through to the model. |
+| assertion `{abs: 1e-4}`, nothing else | `rel = 1e-6`, `abs = 1e-4` | `rel` falls through all three document levels to the default. |
+| assertion `{rel: 0, abs: 1e-4}`, nothing else | `rel = 0`, `abs = 1e-4` | The explicit `0` stops the fallthrough at level 1: an `abs`-only comparison. |
+| assertion `{rel: 0, abs: 1e-9}`, model `{rel: 1e-6}` | `rel = 0`, `abs = 1e-9` | Likewise — the `0` blocks the model's `rel`, not just the default's. |
+| model `{rel: 0, abs: 0}`, nothing else | `rel = 0`, `abs = 0` | Exact equality — the only way to spell it, and the way the recurrence fixtures do (CONFORMANCE_SPEC §5.19). |
+| assertion `{}`, nothing else | `rel = 1e-6`, `abs = 0` | An object declaring neither bound contributes nothing; both fields reach level 4. |
+| nothing anywhere | `rel = 1e-6`, `abs = 0` | Both fields reach level 4. |
+
+This resolution is pinned by the `tolerance_resolution` conformance category (CONFORMANCE_SPEC §5.21).
 
 **This is not the integrator's tolerance.** The chain above resolves the tolerance an assertion result is **compared at**. The tolerance the **integrator** is asked to hold is the `solver` block's `abstol` / `reltol` (§2.2.2), which resolves on its own independent chain (call site → document → binding default). The two are different quantities and neither substitutes for the other: loosening `abstol` makes a trajectory less accurate and its assertions *more* likely to fail, while loosening `tolerance` makes the same trajectory easier to pass. The distinct spellings — `{abs, rel}` here, `abstol`/`reltol` there — are what keep the two legible at a glance. An inline-test runner's own default integration tolerances sit at the bottom of the §2.2.2 chain, so a document's `solver` block displaces them.
 
