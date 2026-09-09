@@ -704,4 +704,38 @@ _pit_free_x_cos() = Dict{String,Any}(
     @test EarthSciAST.bind_dimension_names(lit, dims, clash) === lit
     # A gather that rebinds `x` itself keeps working.
     @test EarthSciAST.bind_dimension_names(wrapped, dims, clash) === wrapped
+
+    # esm-spec §6.6.5's clash scope is the WHOLE build-time scope, not the
+    # parameter half of it (issue #226). Julia hands `evaluate_cellwise` the
+    # build's `const_arrays`, so a build ARRAY named after a shape index set —
+    # an array `lev` over the index set `lev` — is a name the reference could
+    # already read, and the wrap would rebind it to the cell's 1-based index:
+    # the same expression, a different number, no diagnostic.
+    lev_dims = String["lev"]
+    lev_free = EarthSciAST.OpExpr("index",
+        EarthSciAST.ASTExpr[EarthSciAST.VarExpr("table"), EarthSciAST.VarExpr("lev")])
+    empty_params = Dict{String,Float64}()
+    # The flattened name AND its unambiguous bare alias are both in scope.
+    for reg in (Dict{String,Any}("lev" => [1.0]), Dict{String,Any}("M.lev" => [1.0]))
+        arrays = EarthSciAST._array_scope_names(reg)
+        @test_throws EarthSciAST.InlineTestError EarthSciAST.bind_dimension_names(
+            lev_free, lev_dims, empty_params, arrays)
+    end
+    # An AMBIGUOUS bare alias is not in scope under either spelling, so it does
+    # not clash — the same rule `_param_scope_with_aliases` applies.
+    ambiguous = EarthSciAST._array_scope_names(
+        Dict{String,Any}("A.lev" => [1.0], "B.lev" => [1.0]))
+    @test !("lev" in ambiguous)
+    @test EarthSciAST.bind_dimension_names(lev_free, lev_dims, empty_params,
+                                           ambiguous).op == "aggregate"
+    # A reference that does not mention the name is unaffected, and so is a
+    # gather that rebinds it as its own loop symbol.
+    lev_arrays = EarthSciAST._array_scope_names(Dict{String,Any}("lev" => [1.0]))
+    @test EarthSciAST.bind_dimension_names(lit, lev_dims, empty_params, lev_arrays) === lit
+    lev_bound = EarthSciAST.OpExpr("aggregate", EarthSciAST.ASTExpr[];
+                                   output_idx=Any["lev"],
+                                   ranges=Dict{String,Any}("lev" => EarthSciAST.IndexSetRef("lev")),
+                                   expr_body=lev_free)
+    @test EarthSciAST.bind_dimension_names(lev_bound, lev_dims, empty_params,
+                                           lev_arrays) === lev_bound
 end

@@ -2320,23 +2320,75 @@ impl<'m> TapeBuilder<'m> {
                 Some(ci) => self.streams[home as usize][ci].instrs.push(instr),
                 None => {
                     // The rule emitted nothing into its home stream (its whole
-                    // value hoisted to an earlier section): open a chunk now.
-                    self.streams[home as usize].push(Chunk {
-                        rule: rule_ord as u32,
-                        instrs: vec![instr],
-                    });
-                    // Note: appended at the END of the stream, which keeps
-                    // every consumer ordering valid only because a fallback
-                    // reader in the SAME stream always sits in a later chunk
-                    // than the producer would... to stay strictly safe, only
-                    // rules that emitted nothing anywhere can take this path,
-                    // and their export value lives in an earlier section, so
-                    // any same-stream reader still reads a defined slot.
+                    // value hoisted to an earlier section): open a chunk now,
+                    // AT THE RULE'S OWN PLACE in the stream (see
+                    // [`Self::open_home_chunk`]) rather than at the end.
+                    let ci = self.open_home_chunk(rule_ord as u32, home);
+                    self.streams[home as usize][ci].instrs.push(instr);
                 }
             }
             exports.push((name, slot));
         }
         exports
+    }
+
+    /// Open a fresh home chunk for `rule` in `home`'s stream, INSERTED at the
+    /// rule's own place in rule order rather than appended at the end.
+    ///
+    /// The export pass reaches this for a producing rule that emitted nothing
+    /// into its home stream — a scalar observed whose whole value folded to a
+    /// literal, say, or one whose value was hoisted to an earlier section.
+    ///
+    /// Appending at the END is what issue #207 was: a later rule that BAILED
+    /// to the oracle (`Instr::Fallback`) resolves its observed reads through
+    /// the runtime observed map, and the producer's `Instr::Export` — the
+    /// memcpy that publishes into that map — then ran *after* the fallback that
+    /// reads it. The fallback saw the preallocated `0.0`. In the reported
+    /// document that zero became a const-array subscript of `0 - 159`, i.e.
+    /// `E_TREEWALK_CONSTARRAY_OOB … index -159`; a fallback over a
+    /// state-variable gather would instead have silently read the zero ghost.
+    ///
+    /// Inserting in rule order is both sufficient and safe. Sufficient: an
+    /// observed can only be read by a LATER rule than the one defining it
+    /// (`observed_rules` is dependency-ordered), so the producer's place
+    /// precedes every reader's chunk in this stream. Safe: every stream is
+    /// built in nondecreasing rule order (rules are lowered in ordinal order
+    /// and [`Self::emit`] appends), so the insertion preserves that order; and
+    /// the value being exported is either a literal filled by the instruction
+    /// beside it or a slot computed in this or an earlier SECTION, which the
+    /// section concatenation in [`Self::finish`] has already run.
+    ///
+    /// Chunk indices shift on insert, so every `rule_home_chunk` entry at or
+    /// after the insertion point **in this stream** is fixed up — entries for
+    /// other sections index other streams and are left alone.
+    fn open_home_chunk(&mut self, rule: u32, home: Cadence) -> usize {
+        let pos = {
+            let stream = &mut self.streams[home as usize];
+            let pos = stream
+                .iter()
+                .position(|c| c.rule > rule)
+                .unwrap_or(stream.len());
+            stream.insert(
+                pos,
+                Chunk {
+                    rule,
+                    instrs: Vec::new(),
+                },
+            );
+            pos
+        };
+        for r in 0..self.rule_home_chunk.len() {
+            if self.rules[r].cadence != home {
+                continue;
+            }
+            if let Some(ci) = self.rule_home_chunk[r]
+                && ci >= pos
+            {
+                self.rule_home_chunk[r] = Some(ci + 1);
+            }
+        }
+        self.rule_home_chunk[rule as usize] = Some(pos);
+        pos
     }
 
     /// `ensure_slot` variant used by the export pass, which appends into an
@@ -2363,13 +2415,12 @@ impl<'m> TapeBuilder<'m> {
                 };
                 match self.rule_home_chunk[rule as usize] {
                     Some(ci) => self.streams[home as usize][ci].instrs.push(instr),
+                    // Same ordering rule as the export itself: the chunk goes
+                    // at the rule's own place in the stream, never at the end
+                    // (issue #207; see [`Self::open_home_chunk`]).
                     None => {
-                        self.streams[home as usize].push(Chunk {
-                            rule,
-                            instrs: vec![instr],
-                        });
-                        self.rule_home_chunk[rule as usize] =
-                            Some(self.streams[home as usize].len() - 1);
+                        let ci = self.open_home_chunk(rule, home);
+                        self.streams[home as usize][ci].instrs.push(instr);
                     }
                 }
                 out

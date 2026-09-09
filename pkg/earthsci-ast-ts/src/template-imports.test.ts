@@ -207,6 +207,58 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
     expect(f.index_sets.lat.size).toBe(3)
   })
 
+  it('metaparam_axis_name_collision: §9.7.6 substitution is per-FIELD, not per-node', () => {
+    // The fixture names four metaparameters after the structural string field
+    // standing beside them — `lev` (the `dim`/`wrt`/`var` axis names), `max` (an
+    // operator name), `flux` (a node `id`) and `continuous` (an
+    // `expect_cadence` enum value) — and writes each one in an expression
+    // position too, so both halves of the split are pinned at once.
+    //
+    // Before the fix an operator name WAS an expression position here: with
+    // `max` bound to 3, `{"op": "max", …}` became `{"op": 3, …}` and the
+    // document then died in the typed load with a raw "cannot unmarshal number
+    // into `op`" instead of a diagnostic.
+    const d = expandRaw(conf('metaparam_axis_name_collision', 'fixture.esm')) as any
+    expect(canonEqs(d)).toEqual(
+      canonEqs(golden(conf('metaparam_axis_name_collision', 'expanded.esm'))),
+    )
+    const eqs = d.models.M.equations
+
+    // NODE-HEADER fields survive verbatim…
+    const rhs0 = eqs[0].rhs
+    expect(rhs0.op).toBe('max')
+    expect(rhs0.id).toBe('flux')
+    expect(rhs0.expect_cadence).toBe('continuous')
+    // …while the genuine expression position in the SAME node closes: the skip
+    // is per-KEY, not per-NODE.
+    expect(rhs0.args).toEqual(['c', 3])
+
+    // AXIS fields name a spatial coordinate (§4.9.1, §4.2), never a value.
+    const gArgs = definingRhs(d.models.M, 'g').args
+    expect(gArgs[0].dim).toBe('lev')
+    expect(gArgs[1].wrt).toBe('lev')
+    expect(gArgs[2].var).toBe('lev')
+    expect(gArgs[3]).toBe(4)
+
+    // The two remaining collisions close in ordinary argument positions.
+    expect(definingRhs(d.models.M, 's').args).toEqual([5, 7])
+
+    // OP-REGISTRY fields: a closed-registry id or literal enum parameterizing
+    // the node's op is a name, not a value, so it is not an expression position
+    // either. Each node carries a genuine expression position alongside it.
+    const rArgs = definingRhs(d.models.M, 'r').args
+    expect(rArgs[0].reduce).toBe('max')
+    expect(rArgs[0].expr.args).toEqual(['i', 3])
+    expect(rArgs[1].semiring).toBe('min_sum')
+    expect(rArgs[1].expr.args).toEqual(['i', 6])
+    expect(rArgs[2].fn).toBe('max')
+    expect(rArgs[2].args).toEqual(['c', 3])
+    // An open rewrite-target op's `attrs` mirror the fixed dim/side/wrt/var
+    // slots, not `args` — scalar attribute NAMES, never expressions.
+    expect(rArgs[3].attrs).toEqual({ limiter: 'max' })
+    expect(rArgs[3].args).toEqual(['c', 3])
+  })
+
   it('import_where_rename_unknown_index_set: bad where set after rename rejected', () => {
     // A where shape naming a set the library never declares survives the rename
     // as spelled and is rejected at rule registration (esm-spec §9.6.6).
