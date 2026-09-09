@@ -583,6 +583,37 @@ def _apply_equation_to_dy(
     # and must not warn.
     if isinstance(lhs, ExprNode) and lhs.op == "ic":
         return
+
+    # A BARE-INDEX LHS (`y[i] ~ f(…)`, no `aggregate` shell) naming a variable
+    # that still holds a live solver slot is esm-spec §6.3.1's own worked-example
+    # spelling of an arrayed definition (`rg_src_bin[a] ~ …`). Reaching here means
+    # the definition was neither eliminated nor applied, so `y` would integrate
+    # from its initial value while an assertion on it reads that untouched slot
+    # and answers `0.0` — a document that grades GREEN on wrong numbers. Julia
+    # refuses the same document outright with `E_TREEWALK_UNSUPPORTED_SHAPE`, so
+    # refuse it here under the same code rather than warning: neither binding can
+    # run this spelling yet, and the two must at least agree that it is
+    # unsupported. `_normalize_indexed_observed_lhs` handles only the
+    # `aggregate{k}(index(y, k…))` shell, whose `ranges` bind the frame symbols;
+    # a bare `index` LHS carries no binder for `i`, so inferring the frame from
+    # the declared `shape` is a cross-binding semantic decision and is NOT made
+    # here. Every OTHER unapplied shape keeps the warning.
+    if (
+        isinstance(lhs, ExprNode)
+        and lhs.op == "index"
+        and lhs.args
+        and isinstance(lhs.args[0], str)
+        and lhs.args[0] in state_layout
+    ):
+        raise SimulationError(
+            f"E_TREEWALK_UNSUPPORTED_SHAPE: {lhs.args[0]} — a bare-index LHS "
+            f"(`{lhs.args[0]}[i] ~ …`, esm-spec §6.3.1's arrayed-definition "
+            f"spelling) defines a variable that still occupies a solver slot, and "
+            f"this binding has no owner that writes it. Spell the definition "
+            f"`aggregate{{i…}}({lhs.args[0]}[i…]) ~ …`, whose `ranges` bind the "
+            f"frame, or define it bare"
+        )
+
     warnings.warn(
         f"solve: unrecognized algebraic equation with LHS {eq.lhs!r} was not "
         f"applied to the ODE RHS; any state it constrains stays frozen at its "

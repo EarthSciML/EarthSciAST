@@ -351,3 +351,35 @@ def test_the_indexed_spelling_still_routes_to_the_array_pathway(tmp_path):
     path = _write(tmp_path, _doc("p", [EQ_W_INDEXED, EQ_D_BARE], ASSERT_U), "p.esm.json")
 
     assert esm_problem(path, (0.0, 1.0)).pathway == "array"
+
+
+# --------------------------------------------------------------------------- #
+# The BARE-INDEX LHS, which this normalizer does NOT handle, must FAIL LOUDLY
+# --------------------------------------------------------------------------- #
+
+# w[k] ~ 5 — esm-spec §6.3.1's own worked-example spelling (`rg_src_bin[a] ~ …`),
+# with NO `aggregate` shell and so no `ranges` binding `k`.
+EQ_W_BARE_INDEX = {"lhs": _idx("w"), "rhs": 5.0}
+
+
+def test_a_bare_index_lhs_is_refused_and_not_silently_integrated(tmp_path):
+    """No binding RUNS §6.3.1's bare-index arrayed definition yet. Julia refuses
+    the document with ``E_TREEWALK_UNSUPPORTED_SHAPE``; this binding used to warn
+    ``unrecognized algebraic equation`` and answer ``0.0`` from the untouched
+    solver slot, which GRADES GREEN on wrong numbers. Refuse under the same code,
+    so the two executing bindings at least agree the spelling is unsupported.
+
+    The normalizer is deliberately not widened to cover it: a bare ``index`` LHS
+    carries no ``ranges`` binder for ``i``, so the frame would have to be inferred
+    from the declared ``shape``, and that is a cross-binding semantic decision.
+    """
+    equations = [EQ_W_BARE_INDEX, EQ_D_INDEXED]
+    path = _write(tmp_path, _doc("bi", equations, ASSERT_U_AND_W), "bi.esm.json")
+    results = run_inline_tests(path)
+
+    assert results, "the document must still produce assertion results"
+    for r in results:
+        assert not r.passed
+        assert r.actual is None, "a refused document must report no actual, not 0.0"
+        assert "E_TREEWALK_UNSUPPORTED_SHAPE" in (r.message or "")
+        assert "Column.w" in (r.message or "")
