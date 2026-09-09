@@ -452,3 +452,204 @@ end
               ForwardDiff.jacobian(uu -> foff(uu, p, 0.3), u)
     end
 end
+
+# ---------------------------------------------------------------------------
+# The SCATTER-SKIP GATE (ess-oop-ssa-gate).
+#
+# Static skippability says a producer's scatter into `ue` is REDUNDANT. It does
+# not say dropping it is CHEAPER — a `dynamic_update_slice` aliases its operand
+# in the forward, so keeping it can be nearly free while dropping it makes the
+# producer's value a buffer of its own. The gate prices that, and these tests
+# pin the two things a price may never change:
+#
+#   * VALUES. Every gate setting is bit-identical to flag-off and to
+#     `:inplace`, and ForwardDiff agrees exactly. Declining a skip emits a
+#     write nothing reads — the flag-off behaviour — so this is the same
+#     contract the spike has, asserted across the whole knob group.
+#   * THE READ GRAPH. The gate decides only whether a scatter is EMITTED; the
+#     redirect tables and the static `n_skippable_scatters` are the same in
+#     every arm. A gate that also suppressed redirects would show up here.
+#
+# Each knob has a negative control, so the arm can be bisected: the master
+# `ESS_OOP_SSA_SKIP=0`, the ungated `ESS_OOP_SSA_SKIP_GATE=0` (what #283
+# shipped), the two thresholds, and the per-producer `ESS_OOP_SSA_SKIP_PIDS`
+# bisect the discriminator was found with.
+_s_build_gate(doc, env...) = withenv("ESS_OOP_SSA" => "1", env...) do
+    ESMs.build_evaluator(doc; form = :oop)
+end
+
+@testset "scatter-skip gate (ESS_OOP_SSA_SKIP*)" begin
+    doc = _s_fan(7, 4)
+    (fdef, u0, p, _, _) = _s_build_gate(doc)
+    (fung, _, _, _, _) = _s_build_gate(doc, "ESS_OOP_SSA_SKIP_GATE" => "0")
+    (fno,  _, _, _, _) = _s_build_gate(doc, "ESS_OOP_SSA_SKIP" => "0")
+    (flen, _, _, _, _) = _s_build_gate(doc, "ESS_OOP_SSA_SKIP_MAXLEN" => "1")
+    (frat, _, _, _, _) = _s_build_gate(doc, "ESS_OOP_SSA_SKIP_MINRATIO" => "1e9")
+    (fpid, _, _, _, _) = _s_build_gate(doc, "ESS_OOP_SSA_SKIP_PIDS" => "!2")
+    (funl, _, _, _, _) = _s_build_gate(doc, "ESS_OOP_SSA_SKIP_MAXLEN" => "-1",
+                                       "ESS_OOP_SSA_SKIP_MINRATIO" => "0")
+    (foff, _, _, _, _) = withenv("ESS_OOP_SSA" => nothing) do
+        ESMs.build_evaluator(doc; form = :oop)
+    end
+    (fip, _, _, _, _) = ESMs.build_evaluator(doc)
+    ARMS = (fdef, fung, fno, flen, frat, fpid, funl)
+    st(f) = ESMs.oop_ssa_stats(f)
+
+    @testset "the gate moves ONLY the skip verdict" begin
+        base = st(fung)
+        @test base.n_skippable_scatters == base.n_skipped_scatters == 2
+        for f in ARMS
+            s = st(f)
+            @test s.n_skippable_scatters == 2      # a read-graph fact
+            @test s.n_fast == base.n_fast > 0      # redirects untouched
+            @test s.elems_fast == base.elems_fast
+            @test s.n_sub_fast == base.n_sub_fast
+            @test s.n_skipped_scatters + s.n_gate_declined == 2
+            @test s.n_skipped_scatters <= s.n_skippable_scatters
+        end
+    end
+
+    @testset "each knob declines what it says it declines" begin
+        @test st(fung).n_skipped_scatters == 2      # #283, ungated
+        @test st(funl).n_skipped_scatters == 2      # both bounds released
+        @test st(fno).n_skipped_scatters == 0       # master off
+        @test st(fno).n_gate_declined == 2
+        @test st(flen).n_skipped_scatters == 0      # every producer is 7 > 1
+        @test st(frat).n_skipped_scatters == 0      # no producer reads 7e9 elems
+        @test st(fpid).n_skipped_scatters == 1      # producer 2 excluded by hand
+        # … and it is producer 2's scatter, not the other one, that survived
+        @test [q.pid for q in ESMs.oop_ssa_producers(fpid) if !q.skip] == [2]
+        @test [q.pid for q in ESMs.oop_ssa_producers(fpid) if q.skip] == [3]
+        # the default ships a gate that is not degenerate on these fixtures
+        @test st(fdef).n_skipped_scatters == 2
+    end
+
+    @testset "values and derivatives are identical in every arm" begin
+        for probe in (u0, _s_seed(length(u0))), t in (0.0, 0.37)
+            a = foff(probe, p, t)
+            @test a == _s_ip(fip, probe, p, t)
+            for f in ARMS
+                @test f(probe, p, t) == a
+            end
+        end
+        u = _s_seed(length(u0))
+        J = ForwardDiff.jacobian(uu -> foff(uu, p, 0.2), u)
+        for f in ARMS
+            @test ForwardDiff.jacobian(uu -> f(uu, p, 0.2), u) == J
+        end
+    end
+end
+
+@testset "oop_ssa_producers: the gate's evidence table" begin
+    # The table is what the discriminator was chosen from, so its columns are
+    # asserted against shapes whose read structure is known by construction.
+    @testset "fan-out: two producers, every consumer reads both whole" begin
+        (f, _, _, _, _) = _s_build_gate(_s_fan(7, 4))
+        pr = ESMs.oop_ssa_producers(f)
+        @test length(pr) == 2
+        @test [q.pid for q in pr] == [2, 3]
+        @test all(q -> q.len == 7, pr)
+        # each of the 4 consumer classes reads g and v as a WHOLE block, so
+        # every read of every producer is a tier-1 reference
+        @test all(q -> q.nread == 4, pr)
+        @test all(q -> q.nwhole == 4, pr)
+        @test all(q -> q.elread == 28, pr)
+        @test all(q -> q.skippable && q.skip, pr)
+        @test all(q -> isempty(q.why), pr)
+        @test all(q -> q.level == 1, pr)
+    end
+
+    @testset "merged class: one producer, member reads are slices" begin
+        (f, _, _, _, _) = _s_build_gate(_s_merged(6))
+        pr = ESMs.oop_ssa_producers(f)
+        @test length(pr) == ESMs.oop_ssa_stats(f).n_producers
+        # g1/g2 merge into ONE 12-slot producer read by two 6-element slices,
+        # so nothing takes the whole value and the read volume equals it
+        q = only(filter(q -> q.len == 12, pr))
+        @test q.nwhole == 0
+        @test q.nread == 2
+        @test q.elread == 12
+        @test q.skippable && q.skip
+    end
+
+    @testset "empty with the flag off" begin
+        (f, _, _, _, _) = withenv("ESS_OOP_SSA" => nothing) do
+            ESMs.build_evaluator(_s_fan(7, 4); form = :oop)
+        end
+        @test isempty(ESMs.oop_ssa_producers(f))
+        @test ESMs.oop_ssa_stats(f).enabled == false
+    end
+end
+
+# ---------------------------------------------------------------------------
+# `ESS_OOP_SSA_SKIP_WHOLE`, the measured discriminator: the skip is
+# ALL-OR-NOTHING per build. With even one producer still scattering, `ue` is
+# assembled anyway, so a partial skip pays for the flat buffer AND for the
+# skipped producers' own values; only a build where every producer can go
+# actually retires the buffer.
+#
+# The fixture needs a build with TWO producers where one can be blocked ON
+# DEMAND, which `ESS_OOP_SSA_PGATHER=0` does: `v` is read REVERSED (L runs of
+# length 1, past the slice bound), so without tier 2b that read stays on the
+# dense `ue` gather and holds `v`'s scatter alive, while `g`'s whole-block read
+# redirects either way.
+function _s_mixed(N)
+    _s_doc("SSAMIX",
+        Dict{String,Any}("u" => _s_state(shape = Any["n"]),
+                         "g" => _s_state(shape = Any["n"]),
+                         "v" => _s_state(shape = Any["n"]),
+                         "k" => _s_param(0.25)),
+        Any[Dict{String,Any}("lhs" => "g",
+                "rhs" => _s_ao(_s_o("+", _s_o("*", 2.0, _s_ix("u", "i")), 1.0))),
+            Dict{String,Any}("lhs" => "v",
+                "rhs" => _s_ao(_s_o("*", _s_ix("u", "i"), _s_ix("u", "i")))),
+            Dict{String,Any}("lhs" => _s_ao(_s_Dt(_s_ix("u", "i"))),
+                "rhs" => _s_ao(_s_o("-",
+                    _s_o("*", "k", _s_o("+", _s_ix("g", "i"),
+                         _s_ix("v", _s_o("-", Float64(N + 1), "i")))),
+                    _s_ix("u", "i"))))],
+        N)
+end
+
+@testset "the skip is all-or-nothing (ESS_OOP_SSA_SKIP_WHOLE)" begin
+    N = 24
+    doc = _s_mixed(N)
+    # both producers redirectable ⇒ the whole gate is satisfied either way
+    (fall, u0, p, _, _) = _s_build_gate(doc)
+    (fallp, _, _, _, _) = _s_build_gate(doc, "ESS_OOP_SSA_SKIP_WHOLE" => "0")
+    # tier 2b off ⇒ `v` keeps its scatter, so the build is only PARTIALLY
+    # skippable: the whole gate then declines every skip, and `=0` restores the
+    # partial one (#283's behaviour)
+    (fpart, _, _, _, _) = _s_build_gate(doc, "ESS_OOP_SSA_PGATHER" => "0")
+    (fpartp, _, _, _, _) = _s_build_gate(doc, "ESS_OOP_SSA_PGATHER" => "0",
+                                         "ESS_OOP_SSA_SKIP_WHOLE" => "0")
+    (foff, _, _, _, _) = withenv("ESS_OOP_SSA" => nothing) do
+        ESMs.build_evaluator(doc; form = :oop)
+    end
+    (fip, _, _, _, _) = ESMs.build_evaluator(doc)
+    st(f) = ESMs.oop_ssa_stats(f)
+
+    @test st(fall).n_producers == 2
+    @test st(fall).n_skippable_scatters == 2
+    @test st(fall).n_skipped_scatters == 2          # nothing to gate
+    @test st(fallp).n_skipped_scatters == 2
+    # the negative control: one producer blocked ⇒
+    @test st(fpart).n_skippable_scatters == 1       # … static verdict unmoved
+    @test st(fpart).n_skipped_scatters == 0         # … and the gate declines it
+    @test st(fpart).n_gate_declined == 1
+    @test st(fpartp).n_skipped_scatters == 1        # … which `=0` undoes
+    @test [q.pid for q in ESMs.oop_ssa_producers(fpartp) if q.skip] ==
+          [q.pid for q in ESMs.oop_ssa_producers(fpart) if q.skippable]
+    # the gate is a cost decision, so it may not move a number
+    for probe in (u0, _s_seed(length(u0))), t in (0.0, 0.41)
+        a = foff(probe, p, t)
+        @test a == _s_ip(fip, probe, p, t)
+        for f in (fall, fallp, fpart, fpartp)
+            @test f(probe, p, t) == a
+        end
+    end
+    J = ForwardDiff.jacobian(uu -> foff(uu, p, 0.2), _s_seed(N))
+    for f in (fall, fallp, fpart, fpartp)
+        @test ForwardDiff.jacobian(uu -> f(uu, p, 0.2), _s_seed(N)) == J
+    end
+end
