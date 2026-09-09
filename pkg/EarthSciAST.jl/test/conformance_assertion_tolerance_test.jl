@@ -1,6 +1,6 @@
 # Conformance harness adapter — assertion_tolerance category.
 #
-# CONFORMANCE_SPEC §5.32 / esm-spec §6.6.3. The subject is the pass predicate
+# CONFORMANCE_SPEC §5.35 / esm-spec §6.6.3. The subject is the pass predicate
 # itself, as a PURE FUNCTION of `(actual, expected, rel, abs)`:
 #
 #   actual == expected
@@ -17,7 +17,7 @@
 # integrator, so it can state the discriminating pairs directly.
 #
 # The adapter calls `EarthSciAST._check_assertion` — the same function
-# `run_tests` / `run_pde_tests` call, and the one that delegates to `isapprox`.
+# `run_tests` / `run_inline_tests` call, and the one that delegates to `isapprox`.
 # An adapter that re-derived the predicate here would be testing itself, which
 # is the defect the category exists to close.
 #

@@ -250,7 +250,10 @@ cd pkg/earthsci-ast-rs
 cargo fmt
 cargo clippy -- -D warnings
 cargo test
-cargo bench  # for performance testing
+# The bench target is gated behind the `benchmarks` feature, so a plain
+# `cargo bench` builds nothing. CI compiles it with
+# `cargo check --all-features --benches`.
+cargo bench --features benchmarks  # for performance testing
 ```
 
 ### Go (earthsci-ast-go)

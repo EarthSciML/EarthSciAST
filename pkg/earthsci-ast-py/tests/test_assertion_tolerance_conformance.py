@@ -1,5 +1,5 @@
 """Python adapter for the SHARED ``assertion_tolerance`` conformance category
-(CONFORMANCE_SPEC §5.32, ``tests/conformance/assertion_tolerance/``).
+(CONFORMANCE_SPEC §5.35, ``tests/conformance/assertion_tolerance/``).
 
 The category's subject is the esm-spec §6.6.3 pass predicate as a PURE FUNCTION
 of ``(actual, expected, rel, abs)``. Every other assertion category is a
@@ -10,8 +10,8 @@ all sit in the ``|actual| <= |expected|`` region, where ``rel*max(|a|,|e|)`` and
 OVERSHOOT, which no fixture in any category reaches. This adapter feeds the
 discriminating pairs directly.
 
-It calls :func:`earthsci_ast.pde_inline_tests._check_assertion` — the same
-function ``run_pde_tests`` calls. An adapter that re-derived the predicate here
+It calls :func:`earthsci_ast.inline_tests._check_assertion` — the same
+function ``run_inline_tests`` calls. An adapter that re-derived the predicate here
 would be testing itself, which is the defect the category exists to close.
 """
 
@@ -23,7 +23,7 @@ from typing import Any, Dict, List
 
 from conftest import CONFORMANCE_DIR
 
-from earthsci_ast.pde_inline_tests import _check_assertion
+from earthsci_ast.inline_tests import _check_assertion
 
 _CATEGORY: Path = CONFORMANCE_DIR / "assertion_tolerance"
 _MANIFEST: Path = _CATEGORY / "manifest.json"

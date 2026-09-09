@@ -398,3 +398,189 @@ func VariableExprSites(mv *ModelVariable) []VariableExprSite {
 	}
 	return sites
 }
+
+// --- Document Expression positions -------------------------------------------
+
+// mapFileExprs applies f to the ROOT of every Expression-bearing position in the
+// document — each component's equations and initialization equations, each
+// variable's `update` sites, the discrete and continuous events, each reaction
+// rate and constraint equation, and each `couple` connector equation — writing
+// the results back IN PLACE. The first error f returns aborts the walk, which
+// leaves the document PARTIALLY rewritten; a caller that cannot tolerate that
+// works on a clone (cloneForExprLowering).
+//
+// It is the DOCUMENT-level counterpart of mapExprChildren, and exists for the
+// same reason: the lowering passes (lower_enums.go, lower_table_lookup.go) each
+// need "every expression in the file" and, spelled separately, would each grow a
+// different hole. An `enum` inside an event already survived lowering that way
+// once (audit G15).
+//
+// f is applied to the root of each position only; descending into the tree is
+// f's own job — both callers recurse through mapExprChildren.
+//
+// WARNING — MAINTENANCE INVARIANT: a NEW Expression-bearing position added to
+// Model / ReactionSystem / CouplingEntry MUST be added here, or every pass built
+// on mapFileExprs will silently skip it.
+func mapFileExprs(file *ESMFile, f func(Expression) (Expression, error)) error {
+	for name := range file.Models {
+		m := file.Models[name]
+		if err := mapModelExprs(&m, f); err != nil {
+			return err
+		}
+		file.Models[name] = m
+	}
+	for name := range file.ReactionSystems {
+		rs := file.ReactionSystems[name]
+		if err := mapReactionSystemExprs(&rs, f); err != nil {
+			return err
+		}
+		file.ReactionSystems[name] = rs
+	}
+	for i := range file.Coupling {
+		mapped, err := mapCouplingEntryExprs(file.Coupling[i], f)
+		if err != nil {
+			return err
+		}
+		file.Coupling[i] = mapped
+	}
+	return nil
+}
+
+// mapModelExprs applies f to every Expression-bearing position of a model.
+//
+// A variable's positions are its parameter `update` rules (`when`,
+// `expression`, `from.unit_conversion`) — enumerated once by VariableExprSites;
+// the observed `expression` field they replaced is gone in esm 1.0.0, and an
+// observed unknown's defining expression is an ordinary equation.
+func mapModelExprs(m *Model, f func(Expression) (Expression, error)) error {
+	for name := range m.Variables {
+		v := m.Variables[name]
+		for _, site := range VariableExprSites(&v) {
+			mapped, err := f(site.Expr)
+			if err != nil {
+				return err
+			}
+			site.Set(mapped)
+		}
+		m.Variables[name] = v
+	}
+	if err := mapEquationExprs(m.Equations, f); err != nil {
+		return err
+	}
+	if err := mapEquationExprs(m.InitializationEquations, f); err != nil {
+		return err
+	}
+	if err := mapDiscreteEventExprs(m.DiscreteEvents, f); err != nil {
+		return err
+	}
+	return mapContinuousEventExprs(m.ContinuousEvents, f)
+}
+
+// mapReactionSystemExprs applies f to every Expression-bearing position of a
+// reaction system: each reaction RATE, the constraint equations, and the events.
+func mapReactionSystemExprs(rs *ReactionSystem, f func(Expression) (Expression, error)) error {
+	for i := range rs.Reactions {
+		mapped, err := f(rs.Reactions[i].Rate)
+		if err != nil {
+			return err
+		}
+		rs.Reactions[i].Rate = mapped
+	}
+	if err := mapEquationExprs(rs.ConstraintEquations, f); err != nil {
+		return err
+	}
+	if err := mapDiscreteEventExprs(rs.DiscreteEvents, f); err != nil {
+		return err
+	}
+	return mapContinuousEventExprs(rs.ContinuousEvents, f)
+}
+
+// mapEquationExprs applies f to both sides of each equation, in place.
+func mapEquationExprs(eqs []Equation, f func(Expression) (Expression, error)) error {
+	for i := range eqs {
+		lhs, err := f(eqs[i].LHS)
+		if err != nil {
+			return err
+		}
+		rhs, err := f(eqs[i].RHS)
+		if err != nil {
+			return err
+		}
+		eqs[i].LHS = lhs
+		eqs[i].RHS = rhs
+	}
+	return nil
+}
+
+// mapDiscreteEventExprs applies f to a discrete event's trigger condition and to
+// each affect right-hand side.
+func mapDiscreteEventExprs(events []DiscreteEvent, f func(Expression) (Expression, error)) error {
+	for i := range events {
+		if events[i].Trigger.Expression != nil {
+			mapped, err := f(events[i].Trigger.Expression)
+			if err != nil {
+				return err
+			}
+			events[i].Trigger.Expression = mapped
+		}
+		if err := mapAffectExprs(events[i].Affects, f); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// mapContinuousEventExprs applies f to a continuous event's root-find conditions
+// and to both affect lists.
+func mapContinuousEventExprs(events []ContinuousEvent, f func(Expression) (Expression, error)) error {
+	for i := range events {
+		for j := range events[i].Conditions {
+			mapped, err := f(events[i].Conditions[j])
+			if err != nil {
+				return err
+			}
+			events[i].Conditions[j] = mapped
+		}
+		if err := mapAffectExprs(events[i].Affects, f); err != nil {
+			return err
+		}
+		if err := mapAffectExprs(events[i].AffectNeg, f); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// mapAffectExprs applies f to the RHS of each affect equation. The LHS is a
+// variable NAME, not an expression, so it is left alone.
+func mapAffectExprs(affects []AffectEquation, f func(Expression) (Expression, error)) error {
+	for i := range affects {
+		mapped, err := f(affects[i].RHS)
+		if err != nil {
+			return err
+		}
+		affects[i].RHS = mapped
+	}
+	return nil
+}
+
+// mapCouplingEntryExprs applies f to a coupling entry's connector equations,
+// returning the (possibly updated) entry. Only CouplingCouple entries carry
+// connector equations; any other entry is returned unchanged.
+func mapCouplingEntryExprs(ce CouplingEntry, f func(Expression) (Expression, error)) (CouplingEntry, error) {
+	cc, ok := ce.(CouplingCouple)
+	if !ok {
+		return ce, nil
+	}
+	for i := range cc.Connector.Equations {
+		if cc.Connector.Equations[i].Expression == nil {
+			continue
+		}
+		mapped, err := f(cc.Connector.Equations[i].Expression)
+		if err != nil {
+			return ce, err
+		}
+		cc.Connector.Equations[i].Expression = mapped
+	}
+	return cc, nil
+}

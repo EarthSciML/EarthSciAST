@@ -572,6 +572,7 @@
         "AtmosphericChemistry",
         "AdvectionTransport"
       ],
+      "require_match": false,
       "description": "Add horizontal advection to all chemical species"
     },
     {

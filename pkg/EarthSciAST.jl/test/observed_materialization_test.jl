@@ -1,5 +1,5 @@
 # Build-time materialization of an observed's PRODUCERS
-# (`_materialized_obs_scope`, pde_inline_tests.jl).
+# (`_materialized_obs_scope`, inline_tests.jl).
 #
 # `evaluate_cellwise` walks an expression once PER OUTPUT CELL, so an array
 # observed inlined into its readers is re-executed at every cell of the

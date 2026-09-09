@@ -30,6 +30,15 @@ pub enum ResolvedExpr {
         arg: Box<ResolvedExpr>,
     },
     /// Operator node.
+    ///
+    /// SEALED (`#[non_exhaustive]`): outside this crate it is built only
+    /// through [`ResolvedExpr::op`], which applies the same
+    /// [`is_evaluable_op`] oracle [`resolve_expr`] does. That is what makes
+    /// [`eval_op`](crate::simulate::interpret)'s `unreachable!` backstop sound
+    /// — an operator with no evaluation rule cannot be placed in this variant
+    /// by any caller, so reaching the backstop really is a crate bug and not a
+    /// document or caller error (issue #220).
+    #[non_exhaustive]
     Op {
         /// Operator name (string-tagged for v1; cheap to dispatch on).
         op: String,
@@ -51,6 +60,35 @@ pub enum ResolvedExpr {
         /// materialized constant array.
         args: Vec<ResolvedFnArg>,
     },
+}
+
+impl ResolvedExpr {
+    /// Build a [`ResolvedExpr::Op`], refusing an operator this interpreter has
+    /// no evaluation rule for.
+    ///
+    /// The sealed variant's only constructor outside this crate, and the
+    /// caller-facing half of the issue #220 gate: [`resolve_expr`] applies
+    /// [`is_evaluable_op`] to every operator node it lowers from a DOCUMENT,
+    /// and this applies it to every operator node a CALLER hands in directly.
+    /// Between them nothing can place an unevaluable operator in the variant,
+    /// which is what lets `eval_op`'s backstop be `unreachable!` rather than
+    /// the `f64::NAN` sentinel it used to be — a sentinel indistinguishable
+    /// from a legitimate result that propagated into the solution.
+    ///
+    /// # Errors
+    ///
+    /// [`CompileError::UnevaluableOperatorError`] naming `op`, for an operator
+    /// with no rule here: the open-tier rewrite targets (`grad`, `div`,
+    /// `laplacian`, spatial `D`, any unregistered op), the array / tensor and
+    /// geometry ops (which belong to [`crate::simulate_array`]), and the
+    /// evaluable-core ops no evaluator has a rule for (`skolem`, `rank`, …).
+    pub fn op(op: impl Into<String>, args: Vec<ResolvedExpr>) -> Result<Self, CompileError> {
+        let op = op.into();
+        if !is_evaluable_op(&op) {
+            return Err(CompileError::UnevaluableOperatorError { op });
+        }
+        Ok(ResolvedExpr::Op { op, args })
+    }
 }
 
 /// One argument to a resolved [`ResolvedExpr::Fn`] call.
@@ -142,6 +180,48 @@ pub(super) fn resolve_expr(
                     CompileError::InvalidBroadcastFn { reason }
                 }
             })?;
+            // Then reject the evaluable-core ops that are legal in an AST but
+            // have NO rule in THIS interpreter — the scalar half of the array
+            // path's stage-(0) gate (`simulate_array::check_evaluable`, applied
+            // by `reject_unlowered_spatial_ops`). The registry check above only
+            // closes the OPEN tier; without this second layer an op the core
+            // admits but `eval_op` has no arm for fell through to its
+            // `_ => f64::NAN` backstop and came back as a NUMBER — silently,
+            // and indistinguishably from a legitimate result, which is exactly
+            // what `CompileError::UnevaluableOperatorError` exists to prevent
+            // (issue #220). Doing it HERE rather than in a separate pre-pass is
+            // deliberate: `resolve_expr` is the one funnel through which every
+            // expression this interpreter will ever evaluate becomes a
+            // `ResolvedExpr`, so nothing can reach `eval_op` around it — which
+            // is what lets `eval_op`'s backstop be `unreachable!` rather than a
+            // sentinel, as the array evaluator's already is.
+            //
+            // The `ic` operator needs no carve-out on this path (the array one
+            // has one): `flatten` routes an `ic(state) = rhs` equation into
+            // `FlattenedSystem::field_ics` as a bare `(target, rhs)` pair, and
+            // `classify_equations` only ever resolves an equation's RHS, so an
+            // `ic` NODE never reaches this function.
+            //
+            // `const` is the one core op that RESOLVES rather than dispatches.
+            // Its value hangs off the NODE (esm-spec §4), not off `args`, so a
+            // plain `ResolvedExpr::Op` cannot carry it — which is why this
+            // interpreter never had an `eval_op` arm for it and every `const`
+            // came back `NaN`, including the equation RHS
+            // `{"op":"const","value":0.0}` in the SHARED conformance fixture
+            // `tests/conformance/function_tables/inline_test/fixture.esm`. A
+            // scalar literal folds here, once, rounded at the active precision
+            // exactly as the array runtime's `json_to_value` does. An ARRAY
+            // `const` has no `f64` representation and stays gated below.
+            if node.op == "const"
+                && let Some(v) = node.value.as_ref().and_then(serde_json::Value::as_f64)
+            {
+                return Ok(ResolvedExpr::Number(crate::precision::active().round(v)));
+            }
+            if !is_evaluable_op(&node.op) {
+                return Err(CompileError::UnevaluableOperatorError {
+                    op: node.op.clone(),
+                });
+            }
             // Under `element_type: "Float32"` (esm-spec §11.3), reject the ops
             // whose numeric work happens outside the shared scalar kernels and
             // therefore cannot honour the declared precision. The array path

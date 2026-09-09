@@ -41,8 +41,11 @@ import {
   validateAggregateJoinSides,
   validateAggregateIndexSets,
   validateRelationalNodesInContinuous,
+  validateReservedDeclarationNames,
+  validateReservedModelNames,
 } from './model-checks.js'
 import { validateBroadcastFns, validateArrayBroadcastShapes } from './array-checks.js'
+import { validateObservedCycles } from './observed-checks.js'
 import { validateRecurrenceEquations } from '../recurrence.js'
 import {
   validateReactionConsistency,
@@ -185,6 +188,15 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
       errors.push(...validateConversionFactorConsistency(model, modelPath))
       errors.push(...validateDefaultUnits(model, modelPath))
 
+      // esm-spec §4.9.1.1. A `variables` key spelled with a globally-scoped
+      // name — the independent variable, or the §6.4 `_var` placeholder — is
+      // unreachable: both resolve BY NAME ahead of the declaration map, so
+      // every reader silently receives the implicit symbol instead of the
+      // declared quantity (issue #200). Independent of coupling.
+      // Recurses into inline subsystems: a subsystem is a model, and a MOUNTED
+      // subsystem is the shape #200 was reported in.
+      errors.push(...validateReservedModelNames(model, modelPath, `Model '${modelName}'`, esmFile))
+
       // (F-6) Static `aggregate` semantics decidable from this document alone:
       // a value-equality join key of a non-comparable type, an index-set range
       // naming an undeclared set, and a relational (value-invention) node that
@@ -214,6 +226,15 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
       // come from the `index_sets` registry, which is document-scoped.
       errors.push(...validateRecurrenceEquations(model, modelPath, esmFile))
 
+      // esm-spec §4.9.6. The companion rule to the one above: a cycle among the
+      // model's OBSERVED definitions, where the recurrence self-edge just
+      // exempted is precisely the edge that is NOT one of these. Decidable from
+      // the equations alone and INTRA-model — a cycle closed by this model's own
+      // observeds is a cycle however the model is wired into a coupling — so it
+      // runs unconditionally, outside the `isCoupled` relaxation that equation
+      // balance gets.
+      errors.push(...validateObservedCycles(model, modelPath, esmFile))
+
       // Recursively validate subsystems
       if (model.subsystems) {
         for (const [subsystemName, subsystem] of Object.entries(model.subsystems)) {
@@ -241,6 +262,7 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
           errors.push(...validateBroadcastFns(subsystem, subsystemPath))
           errors.push(...validateArrayBroadcastShapes(subsystem, subsystemPath))
           errors.push(...validateRecurrenceEquations(subsystem, subsystemPath, esmFile))
+          errors.push(...validateObservedCycles(subsystem, subsystemPath, esmFile))
         }
       }
     }
@@ -256,6 +278,27 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
       // `esmFile` lets a rate expression's SCOPED references (a cross-system
       // Arrhenius rate reading another model's temperature) resolve against the
       // whole document instead of being reported undefined.
+      // esm-spec §4.9.1.1, the same rule as for a model's `variables`: a
+      // species and a reaction parameter become symbols of the derived ODE
+      // system exactly as a `variables` entry does (§7.4), so all three
+      // declaration maps collide with the globally-scoped names identically.
+      errors.push(
+        ...validateReservedDeclarationNames(
+          reactionSystem.species,
+          `${systemPath}/species`,
+          `Reaction system '${systemName}'`,
+          'species',
+          esmFile,
+        ),
+        ...validateReservedDeclarationNames(
+          reactionSystem.parameters,
+          `${systemPath}/parameters`,
+          `Reaction system '${systemName}'`,
+          'parameter',
+          esmFile,
+        ),
+      )
+
       errors.push(...validateReactionConsistency(reactionSystem, systemPath, esmFile))
       // (h) A reaction system's constraint_equations and events are expression
       // positions too, and were never reference-checked.

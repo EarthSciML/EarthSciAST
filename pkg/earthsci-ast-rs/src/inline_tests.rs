@@ -1,6 +1,6 @@
-//! pde_inline_tests — the §6.6.5-capable inline-test runner over the
+//! inline_tests — the §6.6.5-capable inline-test runner over the
 //! vectorized array simulation pathway (the Rust mirror of the Julia
-//! binding's `pde_inline_tests.jl` and the Python `pde_inline_tests.py`).
+//! binding's `inline_tests.jl` and the Python `inline_tests.py`).
 //!
 //! NOTE: this is PRODUCT code, not Rust test code — the runner for tests
 //! embedded in ESM model files. The filename mirrors the sibling bindings'
@@ -34,7 +34,7 @@
 //!    per-cell measure cancels between numerator and denominator).
 //! 3. `from_file` references — `{type: "from_file", path, format?}`: `path`
 //!    resolves relative to the .esm file's directory (the
-//!    [`run_pde_tests_with_base_dir`] `base_dir`; [`run_pde_tests`] resolves
+//!    [`run_inline_tests_with_base_dir`] `base_dir`; [`run_inline_tests`] resolves
 //!    against the working directory); the default and only v1 `format` is
 //!    "json" — a row-major nested JSON array exactly matching the field's
 //!    shape (validated; mismatch is a clear error). The loaded array is used
@@ -51,12 +51,26 @@
 //!   absolute Linf, mean/max/min).
 //! - [`state_cells`] — (cell-index-tuple, state-row) pairs of one array
 //!   state, sorted by cell tuple.
-//! - [`run_pde_tests`] — run every inline test of the selected model(s);
-//!   returns per-assertion results carrying the ACTUAL reduction values
-//!   (conformance runners record these).
+//! - [`run_inline_tests`] — run every inline test of the selected
+//!   component(s) of one loaded document; returns per-assertion results
+//!   carrying the ACTUAL reduction values (conformance runners record these).
+//! - [`run_inline_tests_paths`] + [`InlineTestOptions`] — the corpus entry:
+//!   many documents by path, with a per-document options callback so that
+//!   site-specific policy (a stiff-solver map, an initial-condition seed)
+//!   stays with the caller.
+//!
+//! `models` and `reaction_systems` alike are run: the schema gives both the
+//! same `tests` member (esm-spec §6.6).
+//!
+//! This entry was called `run_inline_tests` until it grew the ability to run a
+//! whole corpus. The name was always too narrow — the §6.6.5 spatial
+//! reductions are one assertion FORM, and the same runner has always executed
+//! the plain pointwise assertions of an ODE document through the same body —
+//! so it is now `run_inline_tests`, with no deprecated alias (the old spelling
+//! is exactly the misunderstanding the rename exists to remove).
 
-use std::collections::HashMap;
-use std::path::Path;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
@@ -73,7 +87,7 @@ use crate::simulate::{Solution, SolveOptions};
 /// rather than once per test. `Err` carries a message naming what could not be
 /// constructed; it is recorded as an assertion ERROR, never ignored.
 ///
-/// See [`run_pde_tests_with_providers`].
+/// See [`run_inline_tests_with_providers`].
 pub type BuildProviderFactory<'a> =
     dyn Fn() -> Result<Vec<(String, Box<dyn crate::prepare::PrepareProvider>)>, String> + 'a;
 
@@ -92,6 +106,15 @@ pub type BuildProviderFactory<'a> =
 /// that does not (already qualified, a scoped reference the prefix would double
 /// up, or simply wrong) passes through untouched, so the build reports on it
 /// exactly as it would have.
+///
+/// This is what makes the runner's answer differ from handing the authored map
+/// to the build raw and letting bare-name resolution find it. The scoped
+/// spelling is fully qualified, which is an EXACT hit under the forward,
+/// longest-dotted-suffix resolution of esm-spec §6.6.2 rule 2 — so the two
+/// rules agree here rather than compete, and the scoped one additionally
+/// survives a document where a sibling component declares the same bare name.
+/// A seed supplied by an [`InlineTestOptions`] is merged onto the authored map
+/// before this runs, so it is keyed and scoped by the same rule.
 fn scope_to_component(
     overrides: Option<&HashMap<String, InlineValue>>,
     model_name: &str,
@@ -113,6 +136,45 @@ fn scope_to_component(
         })
         .collect()
 }
+
+/// The caller-supplied override SEEDS of one document, laid beneath every
+/// test's own maps.
+///
+/// Empty for the four `&EsmFile` entry points, which take no seeds; filled
+/// from an [`InlineTestOptions`] by [`run_inline_tests_paths`].
+#[derive(Clone, Debug, Default)]
+struct InlineTestSeeds {
+    parameter_overrides: HashMap<String, InlineValue>,
+    initial_conditions: HashMap<String, InlineValue>,
+}
+
+impl InlineTestSeeds {
+    /// Lay `seed` under a test's `authored` map: the document is authoritative
+    /// about its own test, so an authored key wins and the seed only supplies
+    /// what the document left unsaid.
+    ///
+    /// The merge happens BEFORE [`scope_to_component`], so a seed key and an
+    /// authored key naming the same variable collide on the one spelling.
+    /// Merging afterwards would instead hand the build both `T` and `M.T` —
+    /// two keys designating one parameter, with two values.
+    fn lay_under(
+        &self,
+        seed: &HashMap<String, InlineValue>,
+        authored: Option<&HashMap<String, InlineValue>>,
+    ) -> Option<HashMap<String, InlineValue>> {
+        if seed.is_empty() {
+            return authored.cloned();
+        }
+        let mut out = seed.clone();
+        if let Some(authored) = authored {
+            for (k, v) in authored {
+                out.insert(k.clone(), v.clone());
+            }
+        }
+        Some(out)
+    }
+}
+
 use crate::simulate_array::{BuildInspection, Value, eval_buildtime_field};
 use crate::types::{
     AssertionReference, EsmFile, Expr, FromFileReference, IndexSet, InlineValue, Model, Tolerance,
@@ -127,10 +189,10 @@ pub const DEFAULT_REL_TOL: f64 = 1e-6;
 /// simulation pathway. `actual` is the computed reduction value (`None` when
 /// the simulation or reduction itself failed); `message` carries the diff or
 /// error text for non-passing results. Field-for-field identical to the
-/// Julia `PdeAssertionResult` / Python `PdeAssertionResult`, and
+/// Julia `AssertionResult` / Python `AssertionResult`, and
 /// `Serialize`-able so conformance runners can record it directly.
 #[derive(Debug, Clone, Serialize)]
-pub struct PdeAssertionResult {
+pub struct AssertionResult {
     /// Owning model name.
     pub model: String,
     /// The inline test's `id`.
@@ -241,35 +303,56 @@ fn mentions_free(expr: &Expr, name: &str) -> bool {
 /// symbols — is returned untouched, so nothing that evaluated before evaluates
 /// differently. Mirrors the Julia / Python `bind_dimension_names`.
 ///
-/// `scope` is the reference's build-time parameter scope (flattened names plus
-/// their unambiguous bare aliases). "Nothing that evaluated before evaluates
-/// differently" holds only because a dimension name that scope ALSO binds is
-/// rejected here: wrapping would silently shadow the parameter with the cell's
-/// index — the same expression, a different number, no diagnostic. One name
-/// meaning two things in one scope is an ill-formed document, so it is a fault.
+/// "Nothing that evaluated before evaluates differently" holds only because a
+/// dimension name the BUILD-TIME SCOPE ALREADY BINDS is rejected here: wrapping
+/// would silently shadow that other meaning with the cell's index — the same
+/// expression, a different number, no diagnostic. One name meaning two things in
+/// one scope is an ill-formed document, so it is a fault. esm-spec §6.6.5 makes
+/// the clash scope the WHOLE build-time scope, in two halves:
+///
+/// * `scope` — the scalar parameter scope (flattened names plus their
+///   unambiguous bare aliases, [`param_scope_with_aliases`]); and
+/// * `arrays` — the build-time ARRAY names ([`array_scope_names`] over a
+///   [`BuildInspection`](crate::simulate_array::BuildInspection)'s
+///   `setup_arrays`), likewise with bare aliases.
+///
+/// The array half is what keeps the three bindings on one rule: Julia hands its
+/// cellwise evaluator the build's `const_arrays`, so an array named after a
+/// shape index set is a name a reference could already read there, and a guard
+/// that checked only the parameter half would let Julia rebind it to the cell
+/// index in silence while Python and Rust merely wrapped (issue #226).
 pub fn bind_dimension_names(
     expr: &Expr,
     dims: &[String],
     scope: &HashMap<String, f64>,
+    arrays: &HashSet<String>,
 ) -> Result<Expr, String> {
     let mentioned: Vec<&String> = dims.iter().filter(|d| mentions_free(expr, d)).collect();
     if mentioned.is_empty() {
         return Ok(expr.clone());
     }
-    if let Some(clash) = mentioned.iter().find(|d| scope.contains_key(d.as_str())) {
+    if let Some(clash) = mentioned
+        .iter()
+        .find(|d| scope.contains_key(d.as_str()) || arrays.contains(d.as_str()))
+    {
+        let kind = if scope.contains_key(clash.as_str()) {
+            "a parameter"
+        } else {
+            "a build-time array"
+        };
         return Err(format!(
             "inline `reference` mentions '{clash}', which is both a dimension of the \
-             asserted field and a parameter in scope. esm-spec §6.6.5 binds a free \
-             dimension name to the cell's 1-based position, which would shadow the \
-             parameter. Rename one of them, or gather explicitly with \
-             `aggregate(i from {clash}; …)`."
+             asserted field and a name the build-time scope already binds ({kind}). \
+             esm-spec §6.6.5 binds a free dimension name to the cell's 1-based \
+             position, which would shadow it. Rename one of them, or gather \
+             explicitly with `aggregate(i from {clash}; …)`."
         ));
     }
     let ranges: serde_json::Map<String, serde_json::Value> = dims
         .iter()
         .map(|d| (d.clone(), serde_json::json!({ "from": d })))
         .collect();
-    // Reported, not asserted: `run_pde_tests` records a per-assertion failure
+    // Reported, not asserted: `run_inline_tests` records a per-assertion failure
     // message for every error this returns, and `bind_dimension_names` is `pub`,
     // so an `Expr` built programmatically (a non-finite `Expr::Number`, say)
     // must not abort the whole run through a panicking `expect`.
@@ -459,7 +542,7 @@ pub fn resolve_tolerance(
 
 /// The esm-spec §6.6.3 pass predicate — `actual == expected`, or both values
 /// FINITE and `|a − e| ≤ max(atol, rtol·max(|a|, |e|))` — the same predicate
-/// the Julia / Python `run_pde_tests` use (see also CONFORMANCE_SPEC §5.20).
+/// the Julia / Python `run_inline_tests` use (see also CONFORMANCE_SPEC §5.20).
 /// This is Julia `isapprox`.
 ///
 /// **The relative bound is SYMMETRIC** in `actual` and `expected`: its scale is
@@ -545,6 +628,35 @@ fn param_scope_with_aliases(params: &HashMap<String, f64>) -> HashMap<String, f6
         let bare = k.rsplit('.').next().unwrap_or(k.as_str());
         if bare != k.as_str() && counts.get(bare) == Some(&1) && !out.contains_key(bare) {
             out.insert(bare.to_string(), *v);
+        }
+    }
+    out
+}
+
+/// The ARRAY half of the §6.6.5 build-time clash scope: every name the build's
+/// array registries bind, plus each one's UNAMBIGUOUS bare alias — the same
+/// alias rule [`param_scope_with_aliases`] applies to the scalar half, and the
+/// rule under which a flattened `M.table` is readable as `table`. Takes any
+/// number of name iterators (a [`BuildInspection`]'s `setup_arrays`, and in the
+/// other bindings its `const_arrays` too), so a binding that keeps its build
+/// arrays in more than one registry passes all of them. Mirrors the Julia
+/// `_array_scope_names` / Python `_array_scope_names`.
+pub(crate) fn array_scope_names<'a>(
+    registries: impl IntoIterator<Item = &'a str>,
+) -> HashSet<String> {
+    let names: HashSet<String> = registries.into_iter().map(|s| s.to_string()).collect();
+    let mut counts: HashMap<&str, usize> = HashMap::new();
+    for n in &names {
+        let bare = n.rsplit('.').next().unwrap_or(n.as_str());
+        if bare != n.as_str() {
+            *counts.entry(bare).or_insert(0) += 1;
+        }
+    }
+    let mut out = names.clone();
+    for n in &names {
+        let bare = n.rsplit('.').next().unwrap_or(n.as_str());
+        if bare != n.as_str() && counts.get(bare) == Some(&1) {
+            out.insert(bare.to_string());
         }
     }
     out
@@ -941,8 +1053,13 @@ fn eval_assertion(
             // build's resolved scalar params. The field's dimension names are
             // in scope too, bound per cell (`bind_dimension_names`).
             let scope = param_scope_with_aliases(&insp.params);
+            // The ARRAY half of the §6.6.5 clash scope: the three bindings must
+            // reject the same documents, and Julia's cellwise evaluator reads
+            // build arrays by name, so an array named after a shape index set
+            // is a clash there and must be one here too (issue #226).
+            let arrays = array_scope_names(insp.setup_arrays.keys().map(String::as_str));
             let dims = variable_shape(file, model_name, &assertion.variable).unwrap_or_default();
-            let bound = bind_dimension_names(expr, &dims, &scope)?;
+            let bound = bind_dimension_names(expr, &dims, &scope, &arrays)?;
             Some(evaluate_cellwise(&bound, &cell_tuples, index_sets, &scope)?)
         }
         Some(AssertionReference::FromFile(ff)) => {
@@ -961,7 +1078,7 @@ fn eval_assertion(
 /// it is re-serialized from the loaded `file` (`base_dir` anchors the injected
 /// `ref`s). This is what lets one test suite exercise a discretization-agnostic
 /// PDE leaf under several schemes with no conflict between tests. Mirrors the
-/// Julia reference (`pde_inline_tests.jl` `_ephemeral_injected_file`).
+/// Julia reference (`inline_tests.jl` `_ephemeral_injected_file`).
 pub fn ephemeral_injected_file(
     file: &EsmFile,
     source_path: Option<&Path>,
@@ -1084,19 +1201,15 @@ fn assertion_observed_requests(
 /// assertion count equal to the number of assertions the document declares
 /// however the test failed.
 fn push_test_error(
-    results: &mut Vec<PdeAssertionResult>,
+    results: &mut Vec<AssertionResult>,
     model_name: &str,
     t: &crate::types::ModelTest,
-    model: &Model,
+    tolerance: Option<&Tolerance>,
     message: &str,
 ) {
     for (i, a) in t.assertions.iter().enumerate() {
-        let (rtol, atol) = resolve_tolerance(
-            model.tolerance.as_ref(),
-            t.tolerance.as_ref(),
-            a.tolerance.as_ref(),
-        );
-        results.push(PdeAssertionResult {
+        let (rtol, atol) = resolve_tolerance(tolerance, t.tolerance.as_ref(), a.tolerance.as_ref());
+        results.push(AssertionResult {
             model: model_name.to_string(),
             test_id: t.id.clone(),
             assertion_idx: i + 1,
@@ -1228,20 +1341,23 @@ struct BuiltModel {
     built: Built,
 }
 
-/// Partition an override map into `(scalars, inline array data)` — the two
-/// value shapes esm-spec §6.6.2 admits for a `parameter_overrides` /
-/// `initial_conditions` entry.
+/// Partition an override map into `(scalars, document-channel values)` — the
+/// two value shapes esm-spec §6.6.2 admits for a `parameter_overrides` /
+/// `initial_conditions` entry, plus the keys `shaped` claims for the document
+/// channel whatever their own value shape (a shaped parameter, whose scalar is
+/// a §6.3 broadcast the scalar `p` vector cannot carry).
 fn split_inline_arrays(
     overrides: HashMap<String, InlineValue>,
+    shaped: impl Fn(&str) -> bool,
 ) -> (HashMap<String, f64>, HashMap<String, InlineValue>) {
     let mut scalars = HashMap::new();
     let mut arrays = HashMap::new();
     for (k, v) in overrides {
         match v.as_scalar() {
-            Some(x) => {
+            Some(x) if !shaped(&k) => {
                 scalars.insert(k, x);
             }
-            None => {
+            _ => {
                 arrays.insert(k, v);
             }
         }
@@ -1249,46 +1365,73 @@ fn split_inline_arrays(
     (scalars, arrays)
 }
 
+/// The NAMES of the model a (possibly dot-qualified) override key resolves
+/// against and of the key's LOCAL variable within it. `None` when no model of
+/// `file` declares it.
+fn resolve_override_target(file: &EsmFile, key: &str) -> Option<(String, String)> {
+    let models = file.models.as_ref()?;
+    // Longest dotted prefix that names a model wins, so `M.sub.p` binds
+    // `sub.p` inside `M` rather than a bare `p` anywhere.
+    let mut split: Option<(String, String)> = None;
+    let mut best = 0usize;
+    for (mname, model) in models.iter() {
+        if let Some(rest) = key.strip_prefix(&format!("{mname}."))
+            && mname.len() > best
+            && model.variables.contains_key(rest)
+        {
+            best = mname.len();
+            split = Some((mname.clone(), rest.to_string()));
+        }
+    }
+    split.or_else(|| {
+        models
+            .iter()
+            .find(|(_, m)| m.variables.contains_key(key))
+            .map(|(n, _)| (n.clone(), key.to_string()))
+    })
+}
+
 /// The model a (possibly dot-qualified) override key names, plus the key's
 /// LOCAL variable name within it. `None` when no model of `file` declares it.
 fn locate_override_target<'a>(file: &'a mut EsmFile, key: &str) -> Option<(&'a mut Model, String)> {
     // Resolve the (model, local name) pair against an IMMUTABLE view first, so
     // the single mutable borrow below is the one the caller keeps.
-    let target = {
-        let models = file.models.as_ref()?;
-        // Longest dotted prefix that names a model wins, so `M.sub.p` binds
-        // `sub.p` inside `M` rather than a bare `p` anywhere.
-        let mut split: Option<(String, String)> = None;
-        let mut best = 0usize;
-        for (mname, model) in models.iter() {
-            if let Some(rest) = key.strip_prefix(&format!("{mname}."))
-                && mname.len() > best
-                && model.variables.contains_key(rest)
-            {
-                best = mname.len();
-                split = Some((mname.clone(), rest.to_string()));
-            }
-        }
-        split.or_else(|| {
-            models
-                .iter()
-                .find(|(_, m)| m.variables.contains_key(key))
-                .map(|(n, _)| (n.clone(), key.to_string()))
-        })?
-    };
+    let target = resolve_override_target(file, key)?;
     let model = file.models.as_mut()?.get_mut(&target.0)?;
     Some((model, target.1))
 }
 
-/// Write each INLINE ARRAY parameter override onto the run document as that
+/// True iff `key` names a SHAPED parameter of `file`.
+///
+/// A shaped parameter's value lives on the document's own array channel
+/// whatever its VALUE shape, because esm-spec §6.3 gives a scalar on a shaped
+/// variable the broadcast meaning — one value over every element — which the
+/// positional scalar `p` vector cannot carry. So an override of one is bound by
+/// [`bind_array_parameters`] rather than split off as a `p` entry.
+fn names_shaped_parameter(file: &EsmFile, key: &str) -> bool {
+    let Some((mname, local)) = resolve_override_target(file, key) else {
+        return false;
+    };
+    file.models
+        .as_ref()
+        .and_then(|ms| ms.get(&mname))
+        .and_then(|m| m.variables.get(&local))
+        .is_some_and(|v| {
+            v.var_type == crate::types::VariableType::Parameter
+                && v.shape.as_ref().is_some_and(|s| !s.is_empty())
+        })
+}
+
+/// Write each SHAPED parameter override onto the run document as that
 /// parameter's `default` (esm-spec §6.6.2: an override supplies the value the
-/// declared default would otherwise supply).
+/// declared default would otherwise supply). The value is inline array data or
+/// a scalar; §6.3 gives both the same channel on a shaped variable.
 ///
 /// `file` is the EPHEMERAL run instance, never the persisted document, so this
 /// is a per-run binding and not an edit. The array compile then lowers the
 /// shaped parameter into its `const` observed
 /// ([`crate::simulate_array`]'s `lower_inline_array_parameters`), which is where
-/// the declared-shape check reports a mismatch.
+/// a scalar is broadcast and the declared-shape check reports a mismatch.
 fn bind_array_parameters(
     file: &mut EsmFile,
     arrays: &HashMap<String, InlineValue>,
@@ -1417,6 +1560,7 @@ fn build_for_test(
     t: &crate::types::ModelTest,
     base_dir: Option<&Path>,
     build_providers: Option<&BuildProviderFactory<'_>>,
+    seeds: &InlineTestSeeds,
 ) -> BuiltModel {
     // esm-spec §9.7.10 form C: a test that injects a discretization runs
     // against an EPHEMERAL instance of this component with the test's
@@ -1457,22 +1601,31 @@ fn build_for_test(
     let mut ephemeral = ephemeral;
     let run_file: &EsmFile = ephemeral.as_ref().unwrap_or(file);
 
-    let params = scope_to_component(t.parameter_overrides.as_ref(), model_name, run_file);
-    let ics = scope_to_component(t.initial_conditions.as_ref(), model_name, run_file);
-    // Split each override map by VALUE SHAPE (esm-spec §6.6.2). A scalar goes
-    // on the canonical SciML `p` / `u0` channel unchanged; INLINE ARRAY DATA
-    // needs a channel that can carry a whole column:
+    let seeded_params = seeds.lay_under(&seeds.parameter_overrides, t.parameter_overrides.as_ref());
+    let seeded_ics = seeds.lay_under(&seeds.initial_conditions, t.initial_conditions.as_ref());
+    let params = scope_to_component(seeded_params.as_ref(), model_name, run_file);
+    let ics = scope_to_component(seeded_ics.as_ref(), model_name, run_file);
+    // Split each override map by the channel that can carry it (esm-spec
+    // §6.6.2). A scalar goes on the canonical SciML `p` / `u0` channel
+    // unchanged; a whole column needs one that can hold it:
     //
-    //   * a shaped PARAMETER's column is written onto an EPHEMERAL copy of the
+    //   * a shaped PARAMETER's value is written onto an EPHEMERAL copy of the
     //     run document as that parameter's `default`, which the array compile
     //     then lowers into its `const` observed ([`lower_inline_array_parameters`]).
     //     The persisted document is untouched — this is the same ephemeral
-    //     instance a §9.7.10 discretization injection runs against;
+    //     instance a §9.7.10 discretization injection runs against. EVERY
+    //     override of a shaped parameter takes this route, scalar included: §6.3
+    //     makes a scalar on a shaped variable a BROADCAST over the whole grid,
+    //     which is what the lowering materializes and what the one-f64 `p` slot
+    //     cannot express;
     //   * a shaped UNKNOWN's profile is expanded into one `u0` entry per grid
     //     cell (`u[1]`, `u[2]`, …), the element names the state vector is keyed
-    //     by, so no new initial-condition channel is needed at all.
-    let (scalar_params, array_params) = split_inline_arrays(params);
-    let (scalar_ics, array_ics) = split_inline_arrays(ics);
+    //     by, so no new initial-condition channel is needed at all. A scalar `u0`
+    //     entry stays a scalar: the state vector's per-cell seeding already
+    //     broadcasts it.
+    let (scalar_params, array_params) =
+        split_inline_arrays(params, |k| names_shaped_parameter(run_file, k));
+    let (scalar_ics, array_ics) = split_inline_arrays(ics, |_| false);
     if !array_params.is_empty() {
         let mut owned = ephemeral.take().unwrap_or_else(|| file.clone());
         if let Err(e) = bind_array_parameters(&mut owned, &array_params) {
@@ -1543,7 +1696,12 @@ fn build_for_test(
     }
 }
 
-/// Run every inline test of one model, appending per-assertion results.
+/// Run every inline test of one COMPONENT, appending per-assertion results.
+///
+/// Takes the component's `tests` and `tolerance` rather than a `&Model`,
+/// because esm-spec §6.6 hangs `tests` off `reaction_systems` too and both
+/// drive this one body — the document is flattened either way, and a species
+/// becomes an ordinary state.
 ///
 /// `test_filter`, when given, selects the tests to RUN by the same
 /// `id.contains(needle)` predicate the CLI's `--filter` used to apply to the
@@ -1559,25 +1717,29 @@ fn build_for_test(
 /// The memo cannot change an answer it does not also change without it: the
 /// key is compared exactly, the build is a pure function of the key plus the
 /// loop-invariant context above, and the solve still runs per test.
-// Nine parameters against clippy's seven. They are the loop-invariant context
+///
+/// The caller's `seeds` are part of that loop-invariant context: they come from
+/// one [`InlineTestOptions`] for the whole DOCUMENT and so are constant across
+/// the tests this loop memoises over. That is why they need not enter the
+/// [`BuildKey`] — a key hit within one call is a hit under the same seeds.
+// Ten parameters against clippy's seven. They are the loop-invariant context
 // the build memo keys on, described above; bundling them into a struct would
 // move the same values behind one more name without making any of them
 // optional.
 #[allow(clippy::too_many_arguments)]
-fn run_model_tests(
+fn run_component_tests(
     file: &EsmFile,
     model_name: &str,
-    model: &Model,
+    tests: &[crate::types::ModelTest],
+    tolerance: Option<&Tolerance>,
     index_sets: &HashMap<String, IndexSet>,
     opts: &SolveOptions,
     base_dir: Option<&Path>,
     build_providers: Option<&BuildProviderFactory<'_>>,
     test_filter: Option<&str>,
-    results: &mut Vec<PdeAssertionResult>,
+    seeds: &InlineTestSeeds,
+    results: &mut Vec<AssertionResult>,
 ) {
-    let Some(tests) = &model.tests else {
-        return;
-    };
     let mut memo: Option<BuiltModel> = None;
     for t in tests {
         if test_filter.is_some_and(|needle| !t.id.contains(needle)) {
@@ -1595,6 +1757,7 @@ fn run_model_tests(
                 t,
                 base_dir,
                 build_providers,
+                seeds,
             ));
         }
         let cached = memo.as_ref().expect("just built");
@@ -1602,7 +1765,7 @@ fn run_model_tests(
         let run_index_sets: &HashMap<String, IndexSet> =
             cached.index_sets.as_ref().unwrap_or(index_sets);
         if let Built::TestError(msg) = &cached.built {
-            push_test_error(results, model_name, t, model, msg);
+            push_test_error(results, model_name, t, tolerance, msg);
             continue;
         }
 
@@ -1689,11 +1852,8 @@ fn run_model_tests(
             }
         });
         for (i, a) in t.assertions.iter().enumerate() {
-            let (rtol, atol) = resolve_tolerance(
-                model.tolerance.as_ref(),
-                t.tolerance.as_ref(),
-                a.tolerance.as_ref(),
-            );
+            let (rtol, atol) =
+                resolve_tolerance(tolerance, t.tolerance.as_ref(), a.tolerance.as_ref());
             let outcome = match &sim {
                 Err(msg) => Err(msg.clone()),
                 Ok(sol) => eval_assertion(
@@ -1722,7 +1882,7 @@ fn run_model_tests(
                     (Some(actual), ok, msg)
                 }
             };
-            results.push(PdeAssertionResult {
+            results.push(AssertionResult {
                 model: model_name.to_string(),
                 test_id: t.id.clone(),
                 assertion_idx: i + 1,
@@ -1744,7 +1904,7 @@ fn run_model_tests(
 /// assertions) of the selected model(s) of `file` through the official
 /// simulation pathway ([`crate::simulate::simulate`], which routes
 /// array/spatial files to the vectorized array runtime), and return one
-/// [`PdeAssertionResult`] per assertion — carrying the ACTUAL reduction
+/// [`AssertionResult`] per assertion — carrying the ACTUAL reduction
 /// value alongside pass/fail, so conformance harnesses can record and
 /// cross-compare the numbers.
 ///
@@ -1758,34 +1918,34 @@ fn run_model_tests(
 /// `reduce` (error norms evaluate the `reference` — an analytic expression
 /// cellwise via [`evaluate_cellwise`], or a `{type: "from_file", path,
 /// format?}` JSON snapshot resolved against the working directory; use
-/// [`run_pde_tests_with_base_dir`] to anchor at the .esm file's directory).
+/// [`run_inline_tests_with_base_dir`] to anchor at the .esm file's directory).
 /// An assertion with neither `coords` nor `reduce` samples a scalar state.
-/// Mirrors the Julia binding's `run_pde_tests` 1:1 (tolerances per §6.6.4;
+/// Mirrors the Julia binding's `run_inline_tests` 1:1 (tolerances per §6.6.4;
 /// the pass predicate is Julia `isapprox`). Models iterate in sorted name
 /// order for deterministic output.
-pub fn run_pde_tests(
+pub fn run_inline_tests(
     file: &EsmFile,
     model_name: Option<&str>,
     opts: &SolveOptions,
-) -> Vec<PdeAssertionResult> {
-    run_pde_tests_with_base_dir(file, model_name, opts, None)
+) -> Vec<AssertionResult> {
+    run_inline_tests_with_base_dir(file, model_name, opts, None)
 }
 
-/// [`run_pde_tests`] with an explicit `base_dir` anchoring `from_file`
+/// [`run_inline_tests`] with an explicit `base_dir` anchoring `from_file`
 /// reference paths (esm-spec §6.6.5, pinned convention: relative to the .esm
 /// file's directory). `None` resolves relative paths against the working
 /// directory — callers that loaded the document from a path should pass that
 /// path's parent, matching the Julia / Python bindings' default.
-pub fn run_pde_tests_with_base_dir(
+pub fn run_inline_tests_with_base_dir(
     file: &EsmFile,
     model_name: Option<&str>,
     opts: &SolveOptions,
     base_dir: Option<&Path>,
-) -> Vec<PdeAssertionResult> {
-    run_pde_tests_with_providers(file, model_name, opts, base_dir, None)
+) -> Vec<AssertionResult> {
+    run_inline_tests_with_providers(file, model_name, opts, base_dir, None)
 }
 
-/// [`run_pde_tests_with_base_dir`] with the document's `data_sources` actually
+/// [`run_inline_tests_with_base_dir`] with the document's `data_sources` actually
 /// INGESTED (esm-spec §8.9).
 ///
 /// A document whose parameters carry `update: {kind: "data", …}` reads its
@@ -1812,17 +1972,17 @@ pub fn run_pde_tests_with_base_dir(
 /// testable: `solve` reports [`crate::SimulateError::NotDynamic`], and the
 /// assertions are evaluated against the build's own products at the asserted
 /// times.
-pub fn run_pde_tests_with_providers(
+pub fn run_inline_tests_with_providers(
     file: &EsmFile,
     model_name: Option<&str>,
     opts: &SolveOptions,
     base_dir: Option<&Path>,
     build_providers: Option<&BuildProviderFactory<'_>>,
-) -> Vec<PdeAssertionResult> {
-    run_pde_tests_filtered(file, model_name, opts, base_dir, build_providers, None)
+) -> Vec<AssertionResult> {
+    run_inline_tests_filtered(file, model_name, opts, base_dir, build_providers, None)
 }
 
-/// [`run_pde_tests_with_providers`] restricted to the tests whose `id` CONTAINS
+/// [`run_inline_tests_with_providers`] restricted to the tests whose `id` CONTAINS
 /// `test_filter`.
 ///
 /// The selection happens BEFORE anything is built or solved, which is the whole
@@ -1833,43 +1993,274 @@ pub fn run_pde_tests_with_providers(
 /// alike.
 ///
 /// `None` runs every test, and is what the three unfiltered entry points pass.
-pub fn run_pde_tests_filtered(
+pub fn run_inline_tests_filtered(
     file: &EsmFile,
     model_name: Option<&str>,
     opts: &SolveOptions,
     base_dir: Option<&Path>,
     build_providers: Option<&BuildProviderFactory<'_>>,
     test_filter: Option<&str>,
-) -> Vec<PdeAssertionResult> {
+) -> Vec<AssertionResult> {
+    run_inline_tests_seeded(
+        file,
+        model_name,
+        opts,
+        base_dir,
+        build_providers,
+        test_filter,
+        &InlineTestSeeds::default(),
+    )
+}
+
+/// [`run_inline_tests_filtered`] with the caller's override SEEDS — the one
+/// thing the four `&EsmFile` entry points cannot express and
+/// [`run_inline_tests_paths`] can.
+///
+/// Both kinds of test-bearing component run here: `models` first, then
+/// `reaction_systems`, each in sorted name order for deterministic output. The
+/// schema gives `reaction_systems` the same `tests` / `tolerance` members it
+/// gives `models` (esm-spec §6.6), and this runner iterated `models` alone
+/// until issue #194 — so a chemical mechanism's assertions were neither run nor
+/// reported, which is the silent half of a coverage gap: a component that
+/// produced no rows is indistinguishable in the result list from one that was
+/// never looked at.
+#[allow(clippy::too_many_arguments)]
+fn run_inline_tests_seeded(
+    file: &EsmFile,
+    model_name: Option<&str>,
+    opts: &SolveOptions,
+    base_dir: Option<&Path>,
+    build_providers: Option<&BuildProviderFactory<'_>>,
+    test_filter: Option<&str>,
+    seeds: &InlineTestSeeds,
+) -> Vec<AssertionResult> {
     let mut results = Vec::new();
-    let Some(models) = &file.models else {
-        return results;
-    };
+
+    // Lower `table_lookup` ONCE for the whole run (esm-spec §9.5.3).
+    // `esm_problem` lowers its own copy, which covers everything it compiles —
+    // but this runner also evaluates §6.6.5 analytic `reference` expressions
+    // itself, outside any problem build, so those would otherwise be the one
+    // position where an authored `table_lookup` still reached an evaluator.
+    // A document that will not lower is passed through UNCHANGED and refused
+    // by the build, in the vocabulary this runner already reports.
+    let lowered = crate::lower_table_lookup::lowered_copy(file);
+    let file: &EsmFile = lowered.as_ref().unwrap_or(file);
     let index_sets: HashMap<String, IndexSet> = file
         .index_sets
         .clone()
         .unwrap_or_default()
         .into_iter()
         .collect();
-    let mut names: Vec<&String> = models.keys().collect();
-    names.sort();
-    for mname in names {
+
+    // (name, tests, tolerance) for every test-bearing component, models first.
+    let mut components: Vec<(&String, &Vec<crate::types::ModelTest>, Option<&Tolerance>)> =
+        Vec::new();
+    if let Some(models) = &file.models {
+        let mut names: Vec<&String> = models.keys().collect();
+        names.sort();
+        for name in names {
+            let m = &models[name];
+            if let Some(tests) = m.tests.as_ref() {
+                components.push((name, tests, m.tolerance.as_ref()));
+            }
+        }
+    }
+    if let Some(systems) = &file.reaction_systems {
+        let mut names: Vec<&String> = systems.keys().collect();
+        names.sort();
+        for name in names {
+            let rs = &systems[name];
+            if let Some(tests) = rs.tests.as_ref() {
+                components.push((name, tests, rs.tolerance.as_ref()));
+            }
+        }
+    }
+
+    for (name, tests, tolerance) in components {
         if let Some(selected) = model_name
-            && selected != mname
+            && selected != name.as_str()
         {
             continue;
         }
-        run_model_tests(
+        run_component_tests(
             file,
-            mname,
-            &models[mname],
+            name,
+            tests,
+            tolerance,
             &index_sets,
             opts,
             base_dir,
             build_providers,
             test_filter,
+            seeds,
             &mut results,
         );
+    }
+    results
+}
+
+/// Per-document overrides for [`run_inline_tests_paths`], returned by its
+/// `options_for` callback.
+///
+/// This record exists so that site-specific policy stays at the site. A CI gate
+/// over a model corpus routinely carries basename-keyed tables — a
+/// stiff-solver map, an initial-condition seed for the documents whose tests do
+/// not state one — and each of those is a reason the gate could not call the
+/// library entry and re-implemented esm-spec §6.6 instead. One callback absorbs
+/// all of them without this module learning anything about the corpus.
+///
+/// `initial_conditions` / `parameter_overrides` are SEEDS: they are laid
+/// BENEATH each test's own maps, so a test that states a value keeps it and a
+/// test that is silent gets the caller's. They are merged with the test's map
+/// before [`scope_to_component`] runs, and so are keyed and resolved exactly
+/// like a test's own keys — which is what makes the precedence well defined.
+///
+/// `base_dir` left `None` defaults to the document's own parent directory,
+/// which is what anchors a §6.6.5 `from_file` reference at the `.esm` file
+/// rather than at the process's working directory.
+///
+/// There is deliberately no `cse` field: unlike the Python binding, this
+/// crate's problem builder exposes no common-subexpression knob — its CSE is
+/// unconditional internal machinery — and a field that silently did nothing
+/// would be worse than its absence.
+#[derive(Clone, Default)]
+pub struct InlineTestOptions {
+    /// Run only this component of the document (`None` runs every one).
+    pub model_name: Option<String>,
+    /// Solver family and tolerances for this document.
+    pub solve: SolveOptions,
+    /// Directory anchoring `from_file` reference paths; `None` uses the
+    /// document's own parent.
+    pub base_dir: Option<PathBuf>,
+    /// Run only the tests whose `id` CONTAINS this needle.
+    pub test_filter: Option<String>,
+    /// Initial-condition seed, laid beneath each test's own map.
+    pub initial_conditions: HashMap<String, InlineValue>,
+    /// Parameter-override seed, laid beneath each test's own map.
+    pub parameter_overrides: HashMap<String, InlineValue>,
+}
+
+impl std::fmt::Debug for InlineTestOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InlineTestOptions")
+            .field("model_name", &self.model_name)
+            .field("solve", &self.solve)
+            .field("base_dir", &self.base_dir)
+            .field("test_filter", &self.test_filter)
+            .field("initial_conditions", &self.initial_conditions.len())
+            .field("parameter_overrides", &self.parameter_overrides.len())
+            .finish()
+    }
+}
+
+/// Every `.esm` document under `dir`, recursively, SORTED — a result list whose
+/// order depends on the filesystem is not comparable between two runs, let
+/// alone between two machines.
+fn esm_files_under(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&d) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().is_some_and(|e| e == "esm") {
+                out.push(path);
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// The one ERROR row a document that could not be LOADED contributes to a run.
+///
+/// A corpus run must not lose a file to one bad document, and must not lose it
+/// SILENTLY either — a document that vanishes from the result list is
+/// indistinguishable from one that passed. So the failure becomes a row, the
+/// way every other failure in this runner becomes a row.
+fn load_failure_result(path: &Path, message: String) -> AssertionResult {
+    AssertionResult {
+        model: path.display().to_string(),
+        test_id: "<load>".to_string(),
+        assertion_idx: 0,
+        variable: String::new(),
+        time: f64::NAN,
+        reduce: None,
+        expected: f64::NAN,
+        actual: None,
+        rtol: 0.0,
+        atol: 0.0,
+        passed: false,
+        message: format!("load failed: {message}"),
+    }
+}
+
+/// Run the inline tests of every document in `paths`, asking `options_for` for
+/// each document's options.
+///
+/// This is the corpus entry: it takes PATHS rather than a loaded [`EsmFile`],
+/// because the thing a caller varies per document — the solver, the tolerances,
+/// an initial-condition seed — is keyed by the document, and a caller that had
+/// to load each file itself to get at that would be back to writing the loop
+/// this function is. A `paths` entry that is a DIRECTORY expands to the `.esm`
+/// files under it, recursively and sorted; results are concatenated in that
+/// order.
+///
+/// A document that fails to load contributes one ERROR row naming the path and
+/// the run continues, so one unreadable file cannot cost the run every other
+/// file's verdicts. `options_for` is consulted BEFORE the load, so it is asked
+/// about the unreadable file too and wants a default rather than a panic.
+///
+/// What stays with the CALLER, deliberately: per-file process isolation and
+/// memory limits, JUnit emission, summary formatting, and root discovery. A
+/// library should not impose a process model.
+pub fn run_inline_tests_paths(
+    paths: &[impl AsRef<Path>],
+    options_for: &dyn Fn(&Path) -> InlineTestOptions,
+) -> Vec<AssertionResult> {
+    let mut documents: Vec<PathBuf> = Vec::new();
+    for p in paths {
+        let p = p.as_ref();
+        if p.is_dir() {
+            documents.extend(esm_files_under(p));
+        } else {
+            documents.push(p.to_path_buf());
+        }
+    }
+    let mut results = Vec::new();
+    for path in documents {
+        let opts = options_for(&path);
+        let file = match crate::parse::load_path(&path) {
+            Ok(f) => f,
+            Err(e) => {
+                results.push(load_failure_result(&path, e.to_string()));
+                continue;
+            }
+        };
+        // A `from_file` reference is anchored at the .esm file's own directory
+        // unless the caller says otherwise — the pinned cross-binding
+        // convention, and the same default the Julia and Python entries apply.
+        let base_dir = opts
+            .base_dir
+            .clone()
+            .or_else(|| path.parent().map(Path::to_path_buf));
+        let seeds = InlineTestSeeds {
+            parameter_overrides: opts.parameter_overrides.clone(),
+            initial_conditions: opts.initial_conditions.clone(),
+        };
+        results.extend(run_inline_tests_seeded(
+            &file,
+            opts.model_name.as_deref(),
+            &opts.solve,
+            base_dir.as_deref(),
+            None,
+            opts.test_filter.as_deref(),
+            &seeds,
+        ));
     }
     results
 }
@@ -2260,7 +2651,7 @@ mod tests {
             }},
         });
         let file = load_string(&doc.to_string()).expect("scalar-only doc loads");
-        let results = run_pde_tests(&file, Some("ScalarOnly"), &tight_opts());
+        let results = run_inline_tests(&file, Some("ScalarOnly"), &tight_opts());
         assert_eq!(results.len(), 1);
         assert!(results[0].passed, "{}", results[0].message);
         assert_eq!(results[0].actual, Some(42.0));
@@ -2270,7 +2661,7 @@ mod tests {
         let mut wrong = doc.clone();
         wrong["models"]["ScalarOnly"]["tests"][0]["assertions"][0]["expected"] = json!(41.0);
         let file = load_string(&wrong.to_string()).expect("doc loads");
-        let results = run_pde_tests(&file, Some("ScalarOnly"), &tight_opts());
+        let results = run_inline_tests(&file, Some("ScalarOnly"), &tight_opts());
         assert!(!results[0].passed);
         assert_eq!(results[0].actual, Some(42.0));
         assert!(
@@ -2315,7 +2706,7 @@ mod tests {
             }},
         });
         let file = load_string(&doc.to_string()).expect("ode doc loads");
-        let results = run_pde_tests(&file, Some("M"), &tight_opts());
+        let results = run_inline_tests(&file, Some("M"), &tight_opts());
         assert_eq!(results.len(), 3);
         for r in &results {
             assert!(
@@ -2358,7 +2749,7 @@ mod tests {
             }},
         });
         let file = load_string(&doc.to_string()).expect("doc loads");
-        let results = run_pde_tests(&file, Some("ScalarOnly"), &tight_opts());
+        let results = run_inline_tests(&file, Some("ScalarOnly"), &tight_opts());
         assert_eq!(results.len(), 1);
         assert!(!results[0].passed);
         assert_eq!(
@@ -2373,9 +2764,9 @@ mod tests {
     }
 
     #[test]
-    fn run_pde_tests_decay_field() {
+    fn run_inline_tests_decay_field() {
         let file = load_string(&decay_doc().to_string()).expect("decay doc loads");
-        let results = run_pde_tests(&file, Some("M"), &tight_opts());
+        let results = run_inline_tests(&file, Some("M"), &tight_opts());
         assert_eq!(
             results.iter().map(|r| r.assertion_idx).collect::<Vec<_>>(),
             vec![1, 2, 3]
@@ -2431,7 +2822,7 @@ mod tests {
              "reference": {"op": "*", "args": [{"op": "exp", "args": [-1]}, free_x]}},
         ]);
         let file = load_string(&doc.to_string()).expect("doc loads");
-        let results = run_pde_tests(&file, Some("M"), &tight_opts());
+        let results = run_inline_tests(&file, Some("M"), &tight_opts());
         assert_eq!(results.len(), 4);
         for r in &results {
             assert!(r.passed, "assertion #{}: {}", r.assertion_idx, r.message);
@@ -2443,7 +2834,10 @@ mod tests {
         let dims = vec!["x".to_string()];
         let scope: HashMap<String, f64> = HashMap::from([("k".to_string(), 2.0)]);
         let parse = |v: serde_json::Value| -> Expr { serde_json::from_value(v).unwrap() };
-        let bind = |e: &Expr, d: &[String]| bind_dimension_names(e, d, &scope).expect("no clash");
+        let no_arrays: HashSet<String> = HashSet::new();
+        let bind = |e: &Expr, d: &[String]| {
+            bind_dimension_names(e, d, &scope, &no_arrays).expect("no clash")
+        };
         // No mention: untouched.
         let lit = parse(json!({"op": "*", "args": [2.0, "k"]}));
         assert_eq!(bind(&lit, &dims), lit);
@@ -2483,14 +2877,16 @@ mod tests {
         let parse = |v: serde_json::Value| -> Expr { serde_json::from_value(v).unwrap() };
         let scope: HashMap<String, f64> = HashMap::from([("x".to_string(), 3.0)]);
         let free = parse(json!({"op": "+", "args": ["x", 1]}));
-        let err = bind_dimension_names(&free, &dims, &scope).expect_err("clash is a fault");
+        let no_arrays: HashSet<String> = HashSet::new();
+        let err =
+            bind_dimension_names(&free, &dims, &scope, &no_arrays).expect_err("clash is a fault");
         assert!(err.contains("'x'"), "{err}");
-        assert!(err.contains("parameter in scope"), "{err}");
+        assert!(err.contains("a parameter"), "{err}");
         // A reference that does not mention it is unaffected — the clash only
         // matters where the wrap would actually rebind the name.
         let lit = parse(json!({"op": "*", "args": [2.0, "k"]}));
         assert_eq!(
-            bind_dimension_names(&lit, &dims, &scope).expect("no mention"),
+            bind_dimension_names(&lit, &dims, &scope, &no_arrays).expect("no mention"),
             lit
         );
         // And a gather that rebinds `x` itself keeps working.
@@ -2498,7 +2894,54 @@ mod tests {
                                  "ranges": {"x": {"from": "x"}},
                                  "expr": {"op": "+", "args": ["x", 1]}}));
         assert_eq!(
-            bind_dimension_names(&bound, &dims, &scope).expect("rebound"),
+            bind_dimension_names(&bound, &dims, &scope, &no_arrays).expect("rebound"),
+            bound
+        );
+    }
+
+    /// esm-spec §6.6.5's clash scope is the WHOLE build-time scope, not the
+    /// parameter half of it (issue #226). A build ARRAY named after a shape
+    /// index set — an array `lev` over the index set `lev` — is a name a
+    /// reference could already read, so wrapping it would rebind it to the
+    /// cell's 1-based index: the same expression, a different number, no
+    /// diagnostic. `array_scope_names` supplies the flattened names AND their
+    /// unambiguous bare aliases, so `M.lev` clashes as `lev` too.
+    #[test]
+    fn bind_dimension_names_rejects_a_dimension_a_build_array_binds() {
+        let dims = vec!["lev".to_string()];
+        let parse = |v: serde_json::Value| -> Expr { serde_json::from_value(v).unwrap() };
+        let no_params: HashMap<String, f64> = HashMap::new();
+        let free = parse(json!({"op": "index", "args": ["table", "lev"]}));
+        for names in [vec!["lev"], vec!["M.lev"]] {
+            let arrays = array_scope_names(names.iter().copied());
+            let err = bind_dimension_names(&free, &dims, &no_params, &arrays)
+                .expect_err("clash is a fault");
+            assert!(err.contains("'lev'"), "{err}");
+            assert!(err.contains("a build-time array"), "{err}");
+        }
+        // An AMBIGUOUS bare alias is not in scope under either spelling, so it
+        // does not clash — the same rule `param_scope_with_aliases` applies.
+        let ambiguous = array_scope_names(["A.lev", "B.lev"]);
+        assert!(!ambiguous.contains("lev"));
+        let wrapped = bind_dimension_names(&free, &dims, &no_params, &ambiguous)
+            .expect("no unambiguous alias, no clash");
+        let Expr::Operator(node) = wrapped else {
+            panic!("expected an aggregate wrapper");
+        };
+        assert_eq!(node.op, "aggregate");
+        // A reference that does not mention the name is unaffected, and so is a
+        // gather that rebinds it as its own loop symbol.
+        let arrays = array_scope_names(["lev"]);
+        let lit = parse(json!({"op": "*", "args": [2.0, "k"]}));
+        assert_eq!(
+            bind_dimension_names(&lit, &dims, &no_params, &arrays).expect("no mention"),
+            lit
+        );
+        let bound = parse(json!({"op": "aggregate", "args": [], "output_idx": ["lev"],
+                                 "ranges": {"lev": {"from": "lev"}},
+                                 "expr": {"op": "index", "args": ["table", "lev"]}}));
+        assert_eq!(
+            bind_dimension_names(&bound, &dims, &no_params, &arrays).expect("rebound"),
             bound
         );
     }
@@ -2531,7 +2974,7 @@ mod tests {
              "parameter_overrides": {"g": 3.5}, "assertions": assert_gg(3.5)},
         ]);
         let file = load_string(&doc.to_string()).expect("doc loads");
-        let results = run_pde_tests(&file, Some("P"), &tight_opts());
+        let results = run_inline_tests(&file, Some("P"), &tight_opts());
         assert_eq!(results.len(), 4);
         for r in &results {
             assert!(r.passed, "test {}: {}", r.test_id, r.message);
@@ -2545,13 +2988,13 @@ mod tests {
              "parameter_overrides": {"Q.sub.g": 1.5}, "assertions": assert_gg(1.5)},
         ]);
         let file = load_string(&doc.to_string()).expect("doc loads");
-        let results = run_pde_tests(&file, Some("P"), &tight_opts());
+        let results = run_inline_tests(&file, Some("P"), &tight_opts());
         assert_eq!(results.len(), 1);
         assert!(!results[0].passed, "a typo'd qualifier must not resolve");
     }
 
     #[test]
-    fn run_pde_tests_reports_failing_assertion_with_actual() {
+    fn run_inline_tests_reports_failing_assertion_with_actual() {
         let mut doc = decay_doc();
         // An impossible expectation: the decayed field cannot still match
         // its initial state at t=1 to 1e-12.
@@ -2561,7 +3004,7 @@ mod tests {
              "reference": cos_pi_x()},
         ]);
         let file = load_string(&doc.to_string()).expect("doc loads");
-        let results = run_pde_tests(&file, Some("M"), &tight_opts());
+        let results = run_inline_tests(&file, Some("M"), &tight_opts());
         assert_eq!(results.len(), 1);
         let r = &results[0];
         assert!(!r.passed);
@@ -2655,7 +3098,7 @@ mod tests {
     #[test]
     fn array_observed_assertions_evaluate_directly() {
         let file = load_string(&observed_assert_doc().to_string()).expect("doc loads");
-        let results = run_pde_tests(&file, Some("M"), &tight_opts());
+        let results = run_inline_tests(&file, Some("M"), &tight_opts());
         assert_eq!(results.len(), 5);
         // g = [1, 4, 9] (index arithmetic, exact) is STATE-FREE: max and min
         // pass with the exact reductions recorded.
@@ -2701,7 +3144,7 @@ mod tests {
     }
 
     #[test]
-    fn run_pde_tests_coords_sampling_nearest_ties_down() {
+    fn run_inline_tests_coords_sampling_nearest_ties_down() {
         let u = |i: f64| (std::f64::consts::PI * (i - 0.5) / N as f64).cos();
         let mut doc = decay_doc_with(json!([
             coords_assert(json!({"x": 3}), 0.0, u(3.0)),
@@ -2719,7 +3162,7 @@ mod tests {
                 a
             });
         let file = load_string(&doc.to_string()).expect("doc loads");
-        let results = run_pde_tests(&file, Some("M"), &tight_opts());
+        let results = run_inline_tests(&file, Some("M"), &tight_opts());
         assert_eq!(results.len(), 6);
         for r in &results {
             assert!(r.passed, "assertion {}: {}", r.assertion_idx, r.message);
@@ -2729,7 +3172,7 @@ mod tests {
     }
 
     #[test]
-    fn run_pde_tests_coords_validation_rejections() {
+    fn run_inline_tests_coords_validation_rejections() {
         let file = load_string(
             &decay_doc_with(json!([
                 coords_assert(json!({"y": 1.0}), 0.0, 0.0),
@@ -2739,7 +3182,7 @@ mod tests {
             .to_string(),
         )
         .expect("doc loads");
-        let results = run_pde_tests(&file, Some("M"), &tight_opts());
+        let results = run_inline_tests(&file, Some("M"), &tight_opts());
         assert_eq!(results.len(), 3);
         for r in &results {
             assert!(!r.passed);
@@ -2752,7 +3195,7 @@ mod tests {
     }
 
     #[test]
-    fn run_pde_tests_coords_on_scalar_variable_rejected() {
+    fn run_inline_tests_coords_on_scalar_variable_rejected() {
         // coords on a scalar (0-D) variable is ill-formed per §6.6.5.
         let doc = json!({
             "esm": "1.0.0",
@@ -2771,7 +3214,7 @@ mod tests {
             }},
         });
         let file = load_string(&doc.to_string()).expect("doc loads");
-        let results = run_pde_tests(&file, Some("M"), &tight_opts());
+        let results = run_inline_tests(&file, Some("M"), &tight_opts());
         assert_eq!(results.len(), 1);
         assert!(!results[0].passed);
         assert!(
@@ -2829,13 +3272,13 @@ mod tests {
     #[test]
     fn coords_strict_subset_requires_singleton_remainder() {
         let ok_file = load_string(&doc_2d(1).to_string()).expect("doc loads");
-        let ok = run_pde_tests(&ok_file, Some("M"), &tight_opts());
+        let ok = run_inline_tests(&ok_file, Some("M"), &tight_opts());
         assert_eq!(ok.len(), 1);
         assert!(ok[0].passed, "{}", ok[0].message);
         assert!((ok[0].actual.unwrap() - 1.0).abs() < 1e-8);
 
         let bad_file = load_string(&doc_2d(3).to_string()).expect("doc loads");
-        let bad = run_pde_tests(&bad_file, Some("M"), &tight_opts());
+        let bad = run_inline_tests(&bad_file, Some("M"), &tight_opts());
         assert_eq!(bad.len(), 1);
         assert!(!bad[0].passed);
         assert!(
@@ -2882,7 +3325,7 @@ mod tests {
         ]));
         let file = load_string(&doc.to_string()).expect("doc loads");
         let results =
-            run_pde_tests_with_base_dir(&file, Some("M"), &tight_opts(), Some(dir.path()));
+            run_inline_tests_with_base_dir(&file, Some("M"), &tight_opts(), Some(dir.path()));
         assert_eq!(results.len(), 2);
         // Identical evaluation machinery seeded the ic, so the diff is 0.
         for r in &results {
@@ -2908,7 +3351,8 @@ mod tests {
             .to_string(),
         )
         .expect("doc loads");
-        let r = &run_pde_tests_with_base_dir(&file, Some("M"), &tight_opts(), Some(dir.path()))[0];
+        let r =
+            &run_inline_tests_with_base_dir(&file, Some("M"), &tight_opts(), Some(dir.path()))[0];
         assert!(!r.passed);
         assert!(
             r.message
@@ -2932,7 +3376,8 @@ mod tests {
             .to_string(),
         )
         .expect("doc loads");
-        let r = &run_pde_tests_with_base_dir(&file, Some("M"), &tight_opts(), Some(dir.path()))[0];
+        let r =
+            &run_inline_tests_with_base_dir(&file, Some("M"), &tight_opts(), Some(dir.path()))[0];
         assert!(!r.passed);
         assert!(
             r.message.contains("expected a number"),
@@ -2952,7 +3397,8 @@ mod tests {
             .to_string(),
         )
         .expect("doc loads");
-        let r = &run_pde_tests_with_base_dir(&file, Some("M"), &tight_opts(), Some(dir.path()))[0];
+        let r =
+            &run_inline_tests_with_base_dir(&file, Some("M"), &tight_opts(), Some(dir.path()))[0];
         assert!(!r.passed);
         assert!(
             r.message.contains("file not found"),
@@ -2969,7 +3415,8 @@ mod tests {
             .to_string(),
         )
         .expect("doc loads");
-        let r = &run_pde_tests_with_base_dir(&file, Some("M"), &tight_opts(), Some(dir.path()))[0];
+        let r =
+            &run_inline_tests_with_base_dir(&file, Some("M"), &tight_opts(), Some(dir.path()))[0];
         assert!(!r.passed);
         assert!(
             r.message.contains("format 'netcdf' is not supported"),
@@ -2990,7 +3437,7 @@ mod tests {
         let text = std::fs::read_to_string(&fixture).expect("fixture reads");
         let file = load_string(&text).expect("fixture loads");
         let results =
-            run_pde_tests_with_base_dir(&file, Some("M"), &tight_opts(), fixture.parent());
+            run_inline_tests_with_base_dir(&file, Some("M"), &tight_opts(), fixture.parent());
         assert_eq!(results.len(), 7);
         for r in &results {
             assert!(r.passed, "assertion {}: {}", r.assertion_idx, r.message);
@@ -3057,17 +3504,17 @@ mod tests {
     }
 
     /// Regression for the cross-binding scalar-observed slot-resolution bug
-    /// (mirror of the Python `test_run_pde_tests_scalar_observed_tracks_
+    /// (mirror of the Python `test_run_inline_tests_scalar_observed_tracks_
     /// parameter_overrides`). Each of M2's two tests overrides its own `T`, so
     /// a correct runner reads `M2.k = 5·T` (50, then 100) — distinct per test.
     /// The pre-fix single-pass `scalar_slot` returned the FIRST bare-`k` slot
     /// (`M1.k = 2·T = 20`) for every M2 assertion, so both tests read 20 and
     /// failed; the qualified-first two-pass resolver reads `M2.k`.
     #[test]
-    fn run_pde_tests_scalar_observed_tracks_parameter_overrides() {
+    fn run_inline_tests_scalar_observed_tracks_parameter_overrides() {
         let file = load_string(&scalar_observed_coupled_doc().to_string()).expect("doc loads");
-        let results = run_pde_tests(&file, Some("M2"), &tight_opts());
-        let by_id: HashMap<&str, &PdeAssertionResult> =
+        let results = run_inline_tests(&file, Some("M2"), &tight_opts());
+        let by_id: HashMap<&str, &AssertionResult> =
             results.iter().map(|r| (r.test_id.as_str(), r)).collect();
         assert_eq!(by_id.len(), 2, "expected the two M2 tests");
         let lo = by_id["t_lo"].actual.expect("t_lo actual recorded");
@@ -3091,5 +3538,198 @@ mod tests {
                 .map(|r| (r.test_id.clone(), r.message.clone()))
                 .collect::<Vec<_>>()
         );
+    }
+
+    // -----------------------------------------------------------------
+    // Issue #194: reaction-system coverage and the per-document options hook
+    // -----------------------------------------------------------------
+
+    /// A first-order decay written as a REACTION SYSTEM: A → B at rate k·[A],
+    /// so A(t) = e^{-kt} and B(t) = 1 − e^{-kt} exactly.
+    ///
+    /// `reaction_systems` carries the same `tests` member `models` does
+    /// (esm-spec §6.6), and this runner iterated `models` alone until issue
+    /// #194 — so every assertion of a chemical mechanism was skipped, and
+    /// skipped SILENTLY, since a component that produced no rows is
+    /// indistinguishable in the result list from one that was never looked at.
+    fn reaction_decay_doc() -> serde_json::Value {
+        json!({
+            "esm": "1.0.0",
+            "metadata": {"name": "inline_test_reaction_system"},
+            "reaction_systems": {"Decay": {
+                "species": {
+                    "A": {"units": "mol/mol", "default": 1.0},
+                    "B": {"units": "mol/mol", "default": 0.0},
+                },
+                "parameters": {"k": {"units": "1/s", "default": 1.0}},
+                "reactions": [{
+                    "id": "R1",
+                    "substrates": [{"species": "A", "stoichiometry": 1}],
+                    "products": [{"species": "B", "stoichiometry": 1}],
+                    "rate": "k",
+                }],
+                "tests": [{
+                    "id": "decays",
+                    "time_span": {"start": 0.0, "end": 1.0},
+                    "assertions": [
+                        {"variable": "A", "time": 1.0,
+                         "expected": std::f64::consts::E.recip(),
+                         "tolerance": {"rel": 1e-6}},
+                        {"variable": "B", "time": 1.0,
+                         "expected": 1.0 - std::f64::consts::E.recip(),
+                         "tolerance": {"rel": 1e-6}},
+                    ],
+                }],
+            }},
+        })
+    }
+
+    #[test]
+    fn run_inline_tests_covers_reaction_systems() {
+        let file = load_string(&reaction_decay_doc().to_string()).expect("doc loads");
+        let results = run_inline_tests(&file, None, &tight_opts());
+        // Two assertions, both from a component that is NOT a `models` entry.
+        assert_eq!(results.len(), 2, "{results:?}");
+        assert!(results.iter().all(|r| r.model == "Decay"));
+        assert_eq!(
+            results
+                .iter()
+                .map(|r| r.variable.as_str())
+                .collect::<Vec<_>>(),
+            vec!["A", "B"]
+        );
+        assert!(
+            results.iter().all(|r| r.passed),
+            "{:?}",
+            results
+                .iter()
+                .map(|r| (r.variable.clone(), r.message.clone()))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// `D(y)/dt = T` from `y(0) = 0`, so `y(1) = T` exactly whatever `T` is.
+    /// The assertion's `expected` is therefore a direct read-out of the `T` the
+    /// run actually used — which is what makes it a probe for where an override
+    /// came from.
+    fn ramp_doc(expected: f64, test_overrides: Option<serde_json::Value>) -> serde_json::Value {
+        let mut test = json!({
+            "id": "ramp",
+            "time_span": {"start": 0.0, "end": 1.0},
+            "assertions": [{"variable": "y", "time": 1.0,
+                            "expected": expected, "tolerance": {"rel": 1e-9}}],
+        });
+        if let Some(ov) = test_overrides {
+            test["parameter_overrides"] = ov;
+        }
+        json!({
+            "esm": "1.0.0",
+            "metadata": {"name": "ramp"},
+            "models": {"M": {
+                "variables": {
+                    "T": {"type": "parameter", "units": "1", "default": 1.0},
+                    "y": {"type": "unknown", "units": "1", "default": 0.0},
+                },
+                "equations": [{"lhs": {"op": "D", "args": ["y"], "wrt": "t"}, "rhs": "T"}],
+                "tests": [test],
+            }},
+        })
+    }
+
+    fn write_doc(dir: &Path, name: &str, doc: &serde_json::Value) {
+        std::fs::write(dir.join(name), doc.to_string()).expect("fixture written");
+    }
+
+    /// The issue's key ask: site policy lives in the CALLER. Two documents in
+    /// one directory, each needing a different parameter, and one callback that
+    /// knows which is which — with nothing document-specific reaching this
+    /// module.
+    #[test]
+    fn run_inline_tests_paths_consults_options_for_per_document() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_doc(dir.path(), "a.esm", &ramp_doc(3.0, None));
+        write_doc(dir.path(), "b.esm", &ramp_doc(7.0, None));
+
+        let options_for = |path: &Path| {
+            let seed = match path.file_name().and_then(|n| n.to_str()) {
+                Some("a.esm") => 3.0,
+                _ => 7.0,
+            };
+            InlineTestOptions {
+                solve: tight_opts(),
+                parameter_overrides: HashMap::from([("T".to_string(), InlineValue::Scalar(seed))]),
+                ..Default::default()
+            }
+        };
+        // A DIRECTORY expands to the .esm files under it, sorted.
+        let results = run_inline_tests_paths(&[dir.path()], &options_for);
+        assert_eq!(results.len(), 2, "{results:?}");
+        assert!((results[0].actual.expect("a actual") - 3.0).abs() <= 1e-9 * 3.0);
+        assert!((results[1].actual.expect("b actual") - 7.0).abs() <= 1e-9 * 7.0);
+        assert!(results.iter().all(|r| r.passed), "{results:?}");
+
+        // Without the seeds both documents run at T's default of 1.0 and both
+        // assertions fail — so the callback is load-bearing, not decorative.
+        let bare = run_inline_tests_paths(&[dir.path()], &|_p| InlineTestOptions {
+            solve: tight_opts(),
+            ..Default::default()
+        });
+        assert!(bare.iter().all(|r| !r.passed), "{bare:?}");
+    }
+
+    /// A seed supplies what the document left unsaid; it never overrules what
+    /// the document said. The test names `T = 5` and the caller seeds
+    /// `T = 99`, so `y(1)` must be 5.
+    #[test]
+    fn run_inline_tests_paths_seed_yields_to_the_tests_own_override() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_doc(
+            dir.path(),
+            "seeded.esm",
+            &ramp_doc(5.0, Some(json!({"T": 5.0}))),
+        );
+        let results = run_inline_tests_paths(&[dir.path()], &|_p| InlineTestOptions {
+            solve: tight_opts(),
+            parameter_overrides: HashMap::from([("T".to_string(), InlineValue::Scalar(99.0))]),
+            ..Default::default()
+        });
+        assert_eq!(results.len(), 1, "{results:?}");
+        let actual = results[0].actual.expect("actual recorded");
+        assert!(
+            (actual - 5.0).abs() <= 1e-9 * 5.0,
+            "actual {actual}, want 5"
+        );
+        assert!(results[0].passed, "{}", results[0].message);
+    }
+
+    /// One bad file must not cost a corpus run every other file's verdicts —
+    /// and must not vanish either, which would be indistinguishable from a
+    /// pass.
+    #[test]
+    fn run_inline_tests_paths_records_an_unreadable_document_as_a_row() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_doc(dir.path(), "good.esm", &ramp_doc(1.0, None));
+        std::fs::write(dir.path().join("bad.esm"), "{ not json").expect("bad fixture");
+        let results = run_inline_tests_paths(&[dir.path()], &|_p| InlineTestOptions {
+            solve: tight_opts(),
+            ..Default::default()
+        });
+        assert_eq!(results.len(), 2, "{results:?}");
+        let load_row = results
+            .iter()
+            .find(|r| r.test_id == "<load>")
+            .expect("a <load> row for the unreadable document");
+        assert!(load_row.model.ends_with("bad.esm"), "{}", load_row.model);
+        assert!(!load_row.passed);
+        assert!(
+            load_row.message.contains("load failed"),
+            "{}",
+            load_row.message
+        );
+        let good = results
+            .iter()
+            .find(|r| r.test_id == "ramp")
+            .expect("the good document still ran");
+        assert!(good.passed, "{}", good.message);
     }
 }

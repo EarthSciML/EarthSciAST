@@ -424,14 +424,16 @@
       "systems": [
         "AtmosphericChemistry",
         "BiologicalSystem"
-      ]
+      ],
+      "require_match": false
     },
     {
       "type": "operator_compose",
       "systems": [
         "MeteorologicalSystem",
         "AtmosphericChemistry"
-      ]
+      ],
+      "require_match": false
     }
   ],
   "domain": {

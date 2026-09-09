@@ -30,7 +30,7 @@ import pytest
 from conftest import INVALID_DIR, VALID_DIR
 
 from earthsci_ast.parse import load_path
-from earthsci_ast.pde_inline_tests import _check_assertion
+from earthsci_ast.inline_tests import _check_assertion
 from earthsci_ast.reference_resolution import (
     E_REF_UNDECLARED_INDEX_SET,
     ReferenceResolutionError,

@@ -530,9 +530,28 @@ fn observed_order(defs: &HashMap<String, Expr>) -> Result<Vec<String>, PrepareEr
             .cloned()
             .collect();
         if ready.is_empty() {
-            let mut rest: Vec<_> = pending.into_iter().collect();
-            rest.sort();
-            return Err(err(format!("cyclic observed dependency among {rest:?}")));
+            // Name the CYCLE, not the residue. "cyclic observed dependency
+            // among [a, b, c, d, e]" tells an author that five observeds are
+            // implicated and nothing about which edges close the loop; the
+            // whole value of this diagnostic is the path (esm-spec §4.9.6).
+            // Sorted roots and successors so the same cycle is named every run.
+            let mut stuck: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> =
+                std::collections::BTreeMap::new();
+            for n in &pending {
+                stuck.insert(n.clone(), deps[n].iter().cloned().collect());
+            }
+            let cycle = crate::classification::first_observed_cycle(&stuck)
+                // Unreachable in practice — the residue is non-empty precisely
+                // because nothing in it became ready, which requires an
+                // unsatisfied dependency inside it — but naming the residue
+                // beats a panic if that invariant ever moves.
+                .unwrap_or_else(|| stuck.keys().cloned().collect());
+            return Err(err(format!(
+                "observed_cycle: dependency cycle among observed variables: {}. Each is defined \
+                 in terms of the next, so no evaluation order satisfies every definition \
+                 (esm-spec §4.9.6). `esm validate` reports this cycle before any build.",
+                cycle.join(" -> ")
+            )));
         }
         ready.sort(); // deterministic tie-break
         for n in ready {
@@ -568,6 +587,21 @@ fn observed_defs(model: &Model) -> HashMap<String, Expr> {
 
 /// Every declared 0-D parameter's default (overridden by `overrides`, exact or
 /// bare key) — the scalar evaluation scope, sorted by name.
+///
+/// **Selection and value resolution must agree.** They did not: the filter
+/// admitted every parameter with `default.is_some()`, while the value read
+/// `default_scalar()`, which is `None` for inline ARRAY data
+/// ([`crate::types::InlineValue::as_scalar`]) — and the `.unwrap_or(0.0)`
+/// underneath then FABRICATED a zero. A 0-D parameter whose `default` is array
+/// data (there is no shape for the array to fill) therefore entered the build's
+/// scalar scope bound to `0.0`, and every expression reading it evaluated
+/// against a number the document never states. That is a silent wrong answer,
+/// which is the one outcome a build-time scope must not produce.
+///
+/// A parameter with array data is not a 0-D parameter's default, so it is not
+/// in this scope at all. It reaches the evaluator's fail-closed path instead of
+/// a plausible zero. (Its mirror image — a SCALAR default on a SHAPED parameter,
+/// which must broadcast rather than be dropped — is issue #219.)
 fn scalar_params(model: &Model, overrides: &HashMap<String, f64>) -> (Vec<f64>, Vec<String>) {
     let mut names: Vec<String> = model
         .variables
@@ -575,7 +609,7 @@ fn scalar_params(model: &Model, overrides: &HashMap<String, f64>) -> (Vec<f64>, 
         .filter(|(_, v)| {
             v.var_type == VariableType::Parameter
                 && v.shape.as_ref().map(|s| s.is_empty()).unwrap_or(true)
-                && v.default.is_some()
+                && v.default_scalar().is_some()
         })
         .map(|(k, _)| k.clone())
         .collect();
@@ -587,7 +621,11 @@ fn scalar_params(model: &Model, overrides: &HashMap<String, f64>) -> (Vec<f64>, 
                 .get(n)
                 .or_else(|| overrides.get(n.rsplit('.').next().unwrap_or(n)))
                 .copied()
-                .unwrap_or_else(|| model.variables[n].default_scalar().unwrap_or(0.0))
+                .unwrap_or_else(|| {
+                    model.variables[n]
+                        .default_scalar()
+                        .expect("selected on default_scalar().is_some()")
+                })
         })
         .collect();
     (vals, names)

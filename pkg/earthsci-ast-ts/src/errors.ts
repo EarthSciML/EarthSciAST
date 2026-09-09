@@ -56,6 +56,36 @@ export const ERROR_CODES = {
   //   case a corresponding meaning. Raised from flatten.ts as
   //   CoupleMultiplicativeNoTendencyError.
   COUPLE_MULTIPLICATIVE_NO_TENDENCY: 'couple_multiplicative_no_tendency',
+  // `operator_compose_no_merge` — ERROR (esm-libraries-spec §4.7.1 step 5). An
+  //   `operator_compose` entry merged NONE of the equations `systems[1]`
+  //   authored, which makes it indistinguishable from an entry that is not
+  //   there: the operator integrates a private decoupled system from its own
+  //   defaults, the other system receives no contribution, and the only evidence
+  //   is a state count one too high. An operator that genuinely contributes only
+  //   states of its own declares that with `require_match: false` and is then
+  //   permitted. Raised from flatten.ts as OperatorComposeNoMergeError.
+  OPERATOR_COMPOSE_NO_MERGE: 'operator_compose_no_merge',
+  // `operator_compose_partial_merge` — WARNING. Some but not all of
+  //   `systems[1]`'s equations landed. Unlike a zero merge this is
+  //   indistinguishable from an operator that legitimately contributes states of
+  //   its own ALONGSIDE the ones it does merge, so the format cannot call it a
+  //   defect; an author who knows better says so with `require_match`.
+  OPERATOR_COMPOSE_PARTIAL_MERGE: 'operator_compose_partial_merge',
+  // `operator_compose_require_match_unmatched` — an `operator_compose` entry
+  //   declared `require_match: true` and one of `systems[1]`'s equations found
+  //   no equation of `systems[0]` to land on. A PARTIAL match fails too: there
+  //   is no "some is enough" reading an author could rely on. Raised from
+  //   flatten.ts as OperatorComposeRequireMatchError.
+  OPERATOR_COMPOSE_REQUIRE_MATCH_UNMATCHED: 'operator_compose_require_match_unmatched',
+  // `operator_compose_ambiguous_bare_name` — the bare-name fallback (§4.7.1
+  //   step 3) would unify two STATE variables. Each carries its own INITIAL
+  //   CONDITION and the merge keeps only one, so the choice decides what the
+  //   flattened system integrates from — and the document, which bound them on a
+  //   shared local name alone, has not expressed it. Deciding it silently is how
+  //   flipping an entry's `systems` order came to change the answer. A match
+  //   where only ONE side is a state is not ambiguous: the state owns the
+  //   quantity. Raised from flatten.ts as OperatorComposeAmbiguousBareNameError.
+  OPERATOR_COMPOSE_AMBIGUOUS_BARE_NAME: 'operator_compose_ambiguous_bare_name',
   // `relational_node_in_continuous` — a relational / value-invention
   //   `aggregate` (`distinct: true` under `bool_and_or`) whose `key`/`expr`
   //   reads a declared STATE variable, so the cadence partition would class the
@@ -80,6 +110,22 @@ export const ERROR_CODES = {
   //   axis to align to. Both shapes are declared, so this is static — a hard
   //   error, not a warning and not a runtime concern.
   ARRAY_SHAPE_MISMATCH: 'array_shape_mismatch',
+  // `observed_cycle` — a dependency cycle among a model's OBSERVED unknowns
+  //   (esm-spec §4.9.6): each observed on the cycle is defined by an equation
+  //   whose RHS names the next, so no evaluation order satisfies every
+  //   definition. Decidable from the equations alone — no shapes, no values, no
+  //   solver — so it is a HARD error at the structural layer in every binding,
+  //   executing or not, rather than a surprise at build time.
+  //   Pinned at `/models/<M>`: a cycle belongs to no single equation, exactly as
+  //   `equation_count_mismatch` belongs to no single one. `details.cycle` is the
+  //   path in traversal order with the entry node repeated to close it — a PATH,
+  //   so it is ordered semantically rather than by the §7.1.0 sort.
+  //   The self-edge of a §4.3.1.1 recurrence CANDIDATE is not one of these edges
+  //   and is dropped; every other self-reference (a scalar `x ~ x + 1`, a bare
+  //   `s ~ s + 1`) has no axis to fold along, is a cycle of length one, and IS
+  //   reported here. Distinct from `circular_dependency`, which is a cycle among
+  //   MODELS reached through scoped references.
+  OBSERVED_CYCLE: 'observed_cycle',
   // `recurrence_not_wellfounded` — a causal self-read (esm-spec §4.3.1.1) that
   //   is not strictly earlier along exactly ONE of its aggregate's output axes:
   //   a read provably at the same cell or later on its axis (`k`, `k+c`), an
@@ -154,6 +200,14 @@ export const ERROR_CODES = {
   //   /${VAR}/x.parquet" that named neither, one step away from a source that
   //   silently delivered a consuming parameter's default.
   DATA_SOURCE_URL_UNRESOLVED: 'data_source_url_unresolved',
+  // A declaration — a `variables` key, a species, or a reaction parameter —
+  //   spelled with a GLOBALLY-SCOPED name: the document's independent variable
+  //   (`domain.independent_variable`, default `"t"`) or the §6.4 `_var`
+  //   placeholder (esm-spec §4.9.1.1). Both are in scope in every component and
+  //   resolve BY NAME ahead of the declaration maps, so the declaration is
+  //   unreachable and every reader silently receives the implicit symbol
+  //   instead — the simulation clock in place of the declared quantity.
+  RESERVED_VARIABLE_NAME: 'reserved_variable_name',
   UNDEFINED_PARAMETER: 'undefined_parameter',
   UNDEFINED_SPECIES: 'undefined_species',
   UNDEFINED_SYSTEM: 'undefined_system',
@@ -224,6 +278,9 @@ export const ERROR_CODES = {
   // ---- subsystem refs (ref-loading.ts; EsmMachineryError codes raised
   //      while resolving `subsystem` references / library detection) ----
   SUBSYSTEM_INDEX_SET_CONFLICT: 'subsystem_index_set_conflict',
+  SUBSYSTEM_INDEX_SET_RENAME_UNKNOWN_NAME: 'subsystem_index_set_rename_unknown_name',
+  SUBSYSTEM_INDEX_SET_RENAME_UNSUPPORTED_MOUNT_FORM:
+    'subsystem_index_set_rename_unsupported_mount_form',
   SUBSYSTEM_REF_IS_COUPLING_LIBRARY: 'subsystem_ref_is_coupling_library',
   SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY: 'subsystem_ref_is_template_library',
 
@@ -244,6 +301,22 @@ export const ERROR_CODES = {
   ENUM_OP_MALFORMED: 'enum_op_malformed',
   ENUM_NOT_DECLARED: 'enum_not_declared',
   ENUM_MEMBER_NOT_FOUND: 'enum_member_not_found',
+
+  // ---- function tables: §9.5.3 `table_lookup` lowering (lower-table-lookups.ts;
+  //      TableLookupLoweringError codes, named by esm-spec §9.5.5) ----
+  TABLE_LOOKUP_UNKNOWN_TABLE: 'table_lookup_unknown_table',
+  TABLE_LOOKUP_AXIS_NAME_MISMATCH: 'table_lookup_axis_name_mismatch',
+  TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE: 'table_lookup_output_out_of_range',
+  TABLE_INTERPOLATION_AXES_MISMATCH: 'table_interpolation_axes_mismatch',
+  TABLE_DATA_SHAPE_MISMATCH: 'table_data_shape_mismatch',
+  TABLE_AXIS_NAN: 'table_axis_nan',
+  // `table_out_of_bounds_unsupported` — esm-spec §9.5.3a. `out_of_bounds:
+  //   "error"` is "conformant when implemented" (§9.5.1) and this binding does
+  //   not implement it. Lowering such a table to the clamping `interp.*` form
+  //   anyway would answer in a mode the author did not ask for, with nothing in
+  //   the result to say so, so the lookup is REFUSED at the point it would
+  //   otherwise lower. Loading and round-tripping are unaffected.
+  TABLE_OUT_OF_BOUNDS_UNSUPPORTED: 'table_out_of_bounds_unsupported',
 
   // ---- closed-functions: §9.2 closed function registry (closed-functions.ts;
   //      ClosedFunctionError codes) ----

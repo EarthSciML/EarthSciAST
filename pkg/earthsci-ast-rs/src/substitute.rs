@@ -106,7 +106,12 @@ fn map_exprs_in_continuous_event(
     }
 }
 
-fn map_exprs_in_model(model: &Model, m: &mut dyn FnMut(&Expr) -> Expr) -> Model {
+/// Apply `m` to every expression position of `model` (equations plus
+/// discrete/continuous events), cloning everything else. `pub(crate)` because
+/// the §9.5.3 `table_lookup` lowering rewrites the same positions and must not
+/// re-enumerate them (a hand-rolled second list is how a pass ends up missing
+/// event conditions).
+pub(crate) fn map_exprs_in_model(model: &Model, m: &mut dyn FnMut(&Expr) -> Expr) -> Model {
     Model {
         equations: model
             .equations
@@ -133,7 +138,10 @@ fn map_exprs_in_model(model: &Model, m: &mut dyn FnMut(&Expr) -> Expr) -> Model 
     }
 }
 
-fn map_exprs_in_reaction_system(
+/// Apply `m` to every reaction-rate expression of `reaction_system`, cloning
+/// everything else. `pub(crate)` for the same reason as
+/// [`map_exprs_in_model`].
+pub(crate) fn map_exprs_in_reaction_system(
     reaction_system: &ReactionSystem,
     m: &mut dyn FnMut(&Expr) -> Expr,
 ) -> ReactionSystem {

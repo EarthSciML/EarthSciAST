@@ -125,14 +125,39 @@ pub enum CompileError {
     /// indistinguishable from a legitimate numerical result and would propagate
     /// into the solution, whereas the pipeline stage that should have eliminated
     /// the op is the actual defect.
+    ///
+    /// BOTH interpreters raise it. The message names no particular one because
+    /// the two have different rule sets — the scalar ODE interpreter
+    /// ([`crate::simulate`]) additionally has no rule for the array/tensor and
+    /// geometry ops the array runtime ([`crate::simulate_array`]) evaluates —
+    /// and the invariant is the same either way: an unevaluable op is a
+    /// diagnostic, never a number.
     #[error(
         "unevaluable_operator: operator '{op}' is an evaluable-core op with no evaluation rule \
-         in the array interpreter — it must be eliminated by an earlier pipeline stage \
-         (value invention, or a lowering pass) before evaluation (esm-spec §4.2)"
+         in the interpreter this model was built for — it must be eliminated by an earlier \
+         pipeline stage (value invention, or a lowering pass), or the document built for a \
+         runtime that evaluates it, before evaluation (esm-spec §4.2)"
     )]
     UnevaluableOperatorError {
         /// The offending operator name (e.g. `"skolem"`).
         op: String,
+    },
+
+    /// A `table_lookup` node that cannot be lowered to its esm-spec §9.5.3
+    /// `interp.linear` / `interp.bilinear` / `index` form — an unknown table,
+    /// an axis-key set that does not match the table's declared axes, an
+    /// out-of-range `output`, or a table whose `interpolation` and axis count
+    /// disagree.
+    ///
+    /// Raised by [`crate::lower_table_lookup`] during the build rather than by
+    /// the evaluator: `unevaluable_operator` would name `table_lookup` without
+    /// saying which of the §9.5.5 conditions the document actually trips.
+    #[error("{code}: {reason}")]
+    TableLookupLowering {
+        /// The esm-spec §9.5.5 diagnostic code.
+        code: &'static str,
+        /// What is wrong with this `table_lookup` (or the table it names).
+        reason: String,
     },
 
     /// `domain.element_type` names a precision this evaluator does not have.
@@ -231,6 +256,32 @@ pub enum CompileError {
         result: String,
         /// The result's declared index sets, in declaration order.
         result_axes: Vec<String>,
+    },
+
+    /// A dependency cycle among the model's OBSERVED unknowns (esm-spec
+    /// §4.9.6): each observed on the cycle is defined by an equation whose RHS
+    /// names the next, so no evaluation order satisfies every definition.
+    ///
+    /// The equations decide this on their own, so `validate()` reports the same
+    /// defect as an `observed_cycle` structural error before any build is
+    /// attempted; this is the build-time backstop for a model compiled without
+    /// being validated first — and it is the reason this variant exists at all.
+    /// The ordering sweep used to *tolerate* an unorderable rule set, appending
+    /// the stuck rules in declaration order so "the build still proceeds"; what
+    /// actually proceeded was a materialization pass that read an observed with
+    /// no value yet and reported `E_TREEWALK_UNBOUND_NAME` against whichever
+    /// name it reached first — routinely an observed that is declared, defined
+    /// and referenced perfectly well (issue #181).
+    #[error(
+        "observed_cycle: dependency cycle among observed variables: {}. Each is defined in \
+         terms of the next, so no evaluation order satisfies every definition (esm-spec §4.9.6). \
+         `esm validate` reports this cycle before any build.",
+        cycle.join(" -> ")
+    )]
+    ObservedCycle {
+        /// The observeds on the cycle, in traversal order, with the entry node
+        /// repeated to close it (`["a", "b", "a"]`).
+        cycle: Vec<String>,
     },
 
     /// The convenience constructors flattened the input first; that step

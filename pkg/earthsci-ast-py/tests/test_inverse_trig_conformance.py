@@ -27,7 +27,7 @@ import pytest
 from conftest import VALID_DIR
 
 from earthsci_ast.parse import load_path
-from earthsci_ast.pde_inline_tests import _check_assertion
+from earthsci_ast.inline_tests import _check_assertion
 from earthsci_ast.problem import ReturnCode, esm_problem, solve
 
 

@@ -79,18 +79,42 @@ fn want_list(golden: &Value, key: &str) -> Vec<String> {
 
 #[test]
 fn rust_classification_matches_golden() {
-    let manifest = load_json("tests/conformance/classification/manifest.json");
+    run_classification_category("classification");
+}
+
+/// The INDEXED LHS spelling of an arrayed definition (esm-spec §6.3.1), which
+/// the `classification` category cannot state: it carries no `index` or
+/// `aggregate` LHS at all, which is why four of the five bindings drifted onto
+/// the same wrong answer independently. Rust was the one that did not — its
+/// `lhs_form` peels both the `index` and the `aggregate` shell — so this is the
+/// regression pin for that, not a fix. Same golden shape, same driver.
+/// See `tests/conformance/classification_indexed_lhs/README.md`.
+#[test]
+fn rust_classification_indexed_lhs_matches_golden() {
+    run_classification_category("classification_indexed_lhs");
+}
+
+fn run_classification_category(category: &str) {
+    let manifest = load_json(&format!("tests/conformance/{category}/manifest.json"));
     let fixtures = manifest["fixtures"].as_array().expect("fixtures array");
     assert!(!fixtures.is_empty());
+    assert!(
+        manifest["bindings_required"]
+            .as_array()
+            .expect("bindings_required")
+            .iter()
+            .any(|b| b.as_str() == Some("rust")),
+        "the {category} manifest no longer lists rust in bindings_required"
+    );
 
     for fx in fixtures {
         let id = fx["id"].as_str().expect("fixture id");
         let doc = load_json(&format!(
-            "tests/conformance/classification/{}",
+            "tests/conformance/{category}/{}",
             fx["fixture"].as_str().expect("fixture path")
         ));
         let golden = load_json(&format!(
-            "tests/conformance/classification/{}",
+            "tests/conformance/{category}/{}",
             fx["golden"].as_str().expect("golden path")
         ));
         let golden_models = golden["models"].as_object().expect("golden models");

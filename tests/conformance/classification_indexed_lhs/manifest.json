@@ -1,0 +1,39 @@
+{
+  "category": "classification_indexed_lhs",
+  "version": "1.0",
+  "description": "Cross-language conformance for the INDEXED LHS spelling of an equation that DEFINES an unknown (esm-spec §6.3.1). §6.3.1 admits TWO spellings — bare (`y ~ f(…)`) and indexed (`y[i] ~ f(…)`, which defines the whole array `y`) — and restricts NEITHER by rank: the defining form is read through the LHS's BASE NAME, so 'an arrayed definition is observed exactly as its scalar counterpart is'. The existing `classification` category cannot state this: it contains no `index` or `aggregate` LHS at all, which is why FOUR of the five bindings drifted onto the same wrong answer independently (Julia issue #232, Python issue #231, Go and TypeScript PR #268; Rust alone was already right). This category exists to close that blind spot. Its single fixture writes an arrayed definition BOTH ways documents spell it — the bare `index(w, i)` of §6.3.1's own worked example and the `aggregate{k}(index(w, k))` shell the corpus actually uses — next to the three shapes a base-name reader must NOT confuse them with: an `aggregate` over a `D` (a tendency, so an ODE state), a genuine expression LHS (an implicit constraint, so algebraic), and a scalar bare-LHS observed (the rank-0 control). The golden is AUTHORED against the spec, not minted by a binding. See README.md for what this category deliberately does NOT pin.",
+  "reference_binding": "authored",
+  "bindings_required": [
+    "julia",
+    "typescript",
+    "python",
+    "rust",
+    "go"
+  ],
+  "bindings_optional": [],
+  "contract": {
+    "functions": [
+      "ode_states(model)         - unknowns appearing under D(.,t) on some equation LHS, INCLUDING through an `aggregate` shell whose `expr` is the derivative",
+      "observed_unknowns(model)  - unknowns an equation DEFINES, its LHS naming them bare (`y ~ f(...)`) OR indexed (`y[i] ~ f(...)`), at ANY rank",
+      "algebraic_unknowns(model) - unknowns named only by a genuine EXPRESSION LHS, one that names no single variable"
+    ],
+    "base_name_rule": "The defining form is read through the LHS's BASE NAME. A bare string is itself; `index(w, i…)` is `w`; an `aggregate` whose `expr` is an `index` is that index's base. An `aggregate` whose `expr` is a `D` is NOT a definition — it is the whole-array spelling of a tendency, and its base is an ODE state. That asymmetry is the whole content of this category: every binding's derivative reader already peeled the `aggregate` shell, and four of five observed readers did not.",
+    "partitions": [
+      "ode_states + observed_unknowns + algebraic_unknowns == the model's unknowns, disjointly"
+    ],
+    "naming": "snake_case in Julia, Python, Rust and Go; camelCase (odeStates, observedUnknowns, algebraicUnknowns) in TypeScript.",
+    "golden_shape": "Identical to the `classification` category's, so a binding can drive both with one reader."
+  },
+  "expected_failures": {},
+  "notes": {
+    "python": "GREEN on main since PR #276 (issue #232's Python half) landed `classification._base_name`'s aggregate unwrap. Before it, Python answered observed_unknowns = ['sc', 'wb'] and algebraic_unknowns = ['im', 'wf', 'ws'], missing BOTH aggregate-indexed observeds; this category was authored while that fix was still open and kept python in bindings_required rather than scope_excluded. All five bindings now pass."
+  },
+  "fixtures": [
+    {
+      "id": "observed_indexed_lhs",
+      "fixture": "fixtures/observed_indexed_lhs.esm",
+      "golden": "golden/observed_indexed_lhs.json",
+      "pins": "An arrayed definition is OBSERVED in both indexed spellings — the bare `index(wb, i)` and the `aggregate{k}(index(wf, k))` shell — and stays out of `algebraic_unknowns`. The two aggregate-spelled observeds are a CONTROLLED PAIR: `wf` is state-free and `ws` reads a state, the two classes a binding routes differently downstream, so fixing one path only does not pass. `u` and `v` pin the boundary in the other direction: their derivative LHSs wear the SAME `aggregate` shell, and a reader that unwraps it indiscriminately would steal them out of `ode_states`. `im` pins that the third arm of the partition still works, and `sc` pins the rank-0 statement §6.3.1 makes explicitly."
+    }
+  ]
+}

@@ -819,30 +819,63 @@ end
 # such a value into a dense `Array{Float64,N}`; these two stages route it to the
 # channel the build already reads it from.
 
-# Every SHAPED parameter whose resolved value is inline array data, merged into
+# Every SHAPED parameter whose resolved value the DOCUMENT supplies, merged into
 # the const-array registry. Precedence follows §6.6.2: an explicit
 # `parameter_overrides` entry wins over everything, then a caller-supplied
 # `const_arrays` entry (loaded data beats a document default), then the declared
 # `default`. Returns the ORIGINAL registry object when nothing was added, so a
 # document with no inline array data builds byte-identically.
+#
+# The value is inline array data, or a SCALAR — which esm-spec §6.3 gives the
+# same meaning, "the one value applies to every element" — BROADCAST over the
+# declared grid. The broadcast is what a shaped UNKNOWN's scalar `default`
+# already gets from `_build_u0` (one value into every cell of the state vector);
+# without it here, `_partition_variables` reaches a shaped parameter backed by
+# neither `const_arrays` nor `param_arrays` and throws
+# `E_TREEWALK_UNSUPPORTED_SHAPE` on a document the spec says is valid
+# (EarthSciML/EarthSciAST#219). A LIVE forcing buffer (`param_arrays`) owns its
+# name, so broadcasting a DECLARED scalar never displaces one; an explicit
+# override is the caller speaking for this run and outranks both registries,
+# exactly as the array spelling of that override already does.
 function _register_inline_array_parameters(model::Model, const_arrays::AbstractDict,
                                            parameter_overrides::AbstractDict,
-                                           index_sets::AbstractDict)
+                                           index_sets::AbstractDict;
+                                           param_arrays::AbstractDict=Dict{String,Any}())
     additions = Dict{String,Any}()
     for (name, v) in model.variables
         v.type == ParameterVariable && _is_array_shape(v.shape) || continue
         ov = get(parameter_overrides, name, nothing)
         value = if is_inline_array(ov)
             ov
+        elseif ov isa Number
+            # A SCALAR override is tested BESIDE the array one, before either
+            # default arm: §6.6.2 gives the two spellings of the §6.3 union one
+            # precedence, so an override must not lose to the very `default` it
+            # replaces (nor to caller-supplied data, which the array arm above
+            # already outranks). Tested after it, a scalar override of a
+            # parameter whose declared `default` is an inline array was silently
+            # DROPPED and the default used instead.
+            exts = _declared_shape_extents(v.shape, index_sets, _EMPTY_DERIVED_EXTENTS)
+            exts === nothing && continue
+            fill(Float64(ov), Tuple(exts))
         elseif haskey(const_arrays, name)
             continue                      # caller-supplied data is authoritative
         elseif is_inline_array(v.default)
             v.default
+        elseif v.default isa Number
+            # esm-spec §6.3 broadcast of the DECLARED scalar. Skipped when a live
+            # forcing buffer already carries the name, and when the shape does
+            # not resolve (an unmaterialized derived set has no extent to fill) —
+            # the build's own extent checks then report any real disagreement.
+            haskey(param_arrays, name) && continue
+            exts = _declared_shape_extents(v.shape, index_sets, _EMPTY_DERIVED_EXTENTS)
+            exts === nothing && continue
+            fill(Float64(v.default), Tuple(exts))
         else
             continue
         end
         _check_inline_shape(name, value, v.shape, index_sets,
-                            is_inline_array(ov) ? "parameter_overrides" : "default")
+                            ov === nothing ? "default" : "parameter_overrides")
         additions[name] = value
     end
     isempty(additions) && return const_arrays
@@ -920,12 +953,16 @@ const _EMPTY_DERIVED_EXTENTS = Dict{String,Int}()
 #      PROVIDED every leading segment dropped along the way names a component or
 #      subsystem the document actually declares, so a typo'd `Missng.M.pert_amp`
 #      is reported rather than silently suffix-matched onto `M.pert_amp`;
-#   3. else a BARE key that is the trailing segment of exactly ONE parameter
-#      resolves to it (`A` against the flattened `M.A`);
-#   4. a BARE key that is the trailing segment of MORE THAN ONE parameter is
-#      AMBIGUOUS — the caller named one local parameter that two mounted
-#      components both carry — and is rejected naming the candidates, never
-#      guessed at;
+#   3. else a key that is a DOTTED SUFFIX of exactly ONE parameter resolves to
+#      it — `A` against the flattened `M.A` (the bare case), and equally
+#      `sub.g` against the flattened `P.sub.g`, the mounted-subsystem spelling
+#      a single-model build carries as `sub.g` outright. Rules 2 and 3 are the
+#      two directions of one relationship: rule 2 for a key LONGER than the
+#      name, rule 3 for a key SHORTER than it;
+#   4. a key that is a dotted suffix of MORE THAN ONE parameter is AMBIGUOUS —
+#      the caller named one local (or partially qualified) parameter that two
+#      mounted components both carry — and is rejected naming the candidates,
+#      never guessed at;
 #   5. anything else matches no parameter and is rejected as UNKNOWN.
 # Two NON-EXACT keys designating ONE parameter — `solo` (rule 3) and
 # `Doc.Left.solo` (rule 2) both landing on `Left.solo`, or `A.M.g` and `B.M.g`
@@ -960,9 +997,9 @@ function _normalize_param_override_keys(model::Model, overrides::AbstractDict;
     if !isempty(ambiguous)
         k, cands = first(sort!(collect(ambiguous), by = first))
         throw(ArgumentError(
-            "parameter_overrides: ambiguous parameter name '$(k)' — it is the " *
-            "local name of $(length(cands)) parameters ($(join(sort(cands), ", "))). " *
-            "Qualify it with its owning component (esm-spec §6.6.2)."))
+            "parameter_overrides: ambiguous parameter name '$(k)' — it is carried " *
+            "as a suffix by $(length(cands)) parameters ($(join(sort(cands), ", "))). " *
+            "Qualify it further with its owning component (esm-spec §6.6.2)."))
     end
     if !isempty(collisions)
         name, keys_ = first(sort!(collect(collisions), by = first))
@@ -1008,14 +1045,18 @@ _canonicalize_override_keys(names::AbstractSet{String}, namespaces::AbstractSet{
 function _canonicalize_override_keys(::Type{V}, names::AbstractSet{String},
                                      namespaces::AbstractSet{String},
                                      overrides::AbstractDict) where {V}
-    # Bare trailing segment → the unique name carrying it. A bare segment
-    # carried by two or more names is AMBIGUOUS: recorded here with its
-    # candidates rather than resolved, so it is never bound to one of them.
-    bare_group = Dict{String,Vector{String}}()
+    # Dotted suffix → the unique name carrying it as one. Rule 3 admits EVERY
+    # proper suffix of a build name, not only its trailing segment, so a
+    # flattened `P.sub.g` is reachable as `sub.g` as well as `g` — the §4.6
+    # spelling an author writes against a single-model build that carries the
+    # mounted subsystem parameter as `sub.g` outright. A suffix carried by two
+    # or more names is AMBIGUOUS: recorded here with its candidates rather than
+    # resolved, so it is never bound to one of them.
+    suffix_group = Dict{String,Vector{String}}()
     for n in names
-        b = _bare_param_name(n)
-        b == n && continue
-        push!(get!(bare_group, b, String[]), n)
+        for s in _dotted_suffixes(n)
+            push!(get!(suffix_group, s, String[]), n)
+        end
     end
     normalized = Dict{String,V}()
     unknown = String[]
@@ -1041,11 +1082,11 @@ function _canonicalize_override_keys(::Type{V}, names::AbstractSet{String},
         suffix = _dotted_suffix_hit(names, namespaces, k)
         if suffix !== nothing                     # rule 2: longest known suffix
             name = suffix
-        elseif haskey(bare_group, k)
-            cands = bare_group[k]
-            if length(cands) == 1                 # rule 3: unique bare alias
+        elseif haskey(suffix_group, k)
+            cands = suffix_group[k]
+            if length(cands) == 1                 # rule 3: unique suffix alias
                 name = cands[1]
-            else                                  # rule 4: ambiguous local name
+            else                                  # rule 4: ambiguous suffix
                 ambiguous[k] = cands
                 continue
             end
@@ -1134,6 +1175,21 @@ end
 
 _bare_param_name(name::AbstractString) =
     (i = findlast('.', name)) === nothing ? String(name) : String(name[nextind(name, i):end])
+
+# Every PROPER dotted suffix of `name`, longest first: `A.sub.g` gives
+# `["sub.g", "g"]`, a bare `g` gives `String[]`. These are the spellings
+# esm-spec §6.6.2 rule 3 admits for the name — the trailing segment is merely
+# the shortest of them. The Python (`dotted_suffixes`) and Rust
+# (`dotted_suffixes`) mirrors enumerate the same list.
+function _dotted_suffixes(name::AbstractString)
+    out = String[]
+    rest = String(name)
+    while (i = findfirst('.', rest)) !== nothing
+        rest = rest[nextind(rest, i):end]
+        push!(out, rest)
+    end
+    return out
+end
 
 # ---- Stage: scalar parameter scope (load-time constants) ----
 # Each scalar parameter's RESOLVED value: `parameter_overrides` if given,
@@ -2784,7 +2840,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
         # bytes as before this change. A factored array observed no longer sits
         # in the RHS substitution map (its readers gather its buffer), but the
         # observability surface is not the RHS: `_observed_field`
-        # (pde_inline_tests.jl, esm-spec §6.6.5) evaluates an asserted array
+        # (inline_tests.jl, esm-spec §6.6.5) evaluates an asserted array
         # observed's expression CELLWISE, off the ODE path, so every reference
         # in it must be substituted — including references between factored
         # observeds. Re-resolving the merged map restores exactly that, and only
@@ -3321,17 +3377,19 @@ function _build_evaluator_impl_inner(model::Model;
     parameter_overrides = _normalize_param_override_keys(model, parameter_overrides;
                                                         model_name=_model_name)
     # ---- Inline array data (esm-spec §6.3 / §6.6.2) ----
-    # A SHAPED parameter whose value is authored as a row-major nested array —
-    # on its own `default`, or in the caller's `parameter_overrides` — is
-    # BUILD-TIME DATA, not a scalar `p` slot. Register it in the const-array
-    # registry, which is exactly the channel `_partition_variables` already
-    # requires an array-shaped parameter to be backed by; nothing else in the
-    # build then needs to know the column was authored inline rather than
-    # loaded. A shaped UNKNOWN's inline `initial_conditions` profile is expanded
-    # into the per-cell keys `_build_u0` seeds from. Both are no-ops (and the
-    # registries byte-identical) for a document that authors no array data.
+    # A SHAPED parameter whose value the document supplies — a row-major nested
+    # array on its own `default` or in the caller's `parameter_overrides`, or one
+    # SCALAR broadcast over the declared grid (§6.3) — is BUILD-TIME DATA, not a
+    # scalar `p` slot. Register it in the const-array registry, which is exactly
+    # the channel `_partition_variables` already requires an array-shaped
+    # parameter to be backed by; nothing else in the build then needs to know the
+    # column was authored inline rather than loaded. A shaped UNKNOWN's inline
+    # `initial_conditions` profile is expanded into the per-cell keys `_build_u0`
+    # seeds from. Both are no-ops (and the registries byte-identical) for a
+    # document that declares no shaped parameter.
     const_arrays = _register_inline_array_parameters(model, const_arrays,
-                                                     parameter_overrides, index_sets)
+                                                     parameter_overrides, index_sets;
+                                                     param_arrays=param_arrays)
     initial_conditions = _expand_inline_array_ics(model, initial_conditions, index_sets)
     # ---- Phase 1: equation pre-lowering + build-owned variable classification ----
     cls = _build_lower_and_classify(model;
@@ -3940,7 +3998,35 @@ function _compile_arrayop_equation!(percell_scalar, acc_kernels, scan_folds,
     # returns `nothing` and the einsum takes the existing affine / unroll path,
     # unchanged. Small reductions (< floor) also keep the existing path, so the vast
     # existing array-kernel test surface is byte-for-byte unaffected.
+    #
+    # PREEMPTION — which tier is cheaper is NOT a property of the equation alone.
+    # The two build costs are:
+    #
+    #   contraction loop   one resolve + `_compile` per OUTPUT CELL, each O(1) in
+    #                      the reduction length            →  O(#output cells)
+    #   unroll + affine    one resolve + `_compile` per STRUCTURAL GROUP over a
+    #                      body of ∏|k…| terms             →  O(#groups · ∏|k…|)
+    #
+    # Only the FIRST of those grows with the grid: `#groups` is a fact of the
+    # DOCUMENT (boundary classes, makearray regions), and `∏|k…|` a fact of the
+    # reduction, so the affine tier is the grid-independent one and the loop is
+    # not. Deciding the loop unconditionally would therefore hand the O(#cells)
+    # tier every reduction at or above the floor, INCLUDING the ones the affine
+    # tier compiles once for the whole array — a plain column sum
+    # (`Σ_k dp[i,j,k]·f[i,j,k]·c[i,j,k]`, one output cell per COLUMN) being the
+    # shape a transport model is full of.
+    #
+    # So the loop PREEMPTS the affine tier only when it is the cheaper of the two.
+    # `#groups ≥ 1` always, so `#output cells < ∏|k…|` is the most optimistic
+    # (single-group) form of "the unroll cannot be cheaper": the loop keeps the
+    # equation whenever it holds, which is exactly the small-output /
+    # long-reduction shape the loop exists for. When it does NOT hold the affine
+    # tier is OFFERED the equation first and the loop stays behind it as the
+    # fallback — a declined affine build lands on the same
+    # `_NK_CONTRACTION_LOOP` per-cell path, so no equation loses the loop, and one
+    # the affine tier accepts was never a candidate for a per-cell tier at all.
     use_contraction_loop = false
+    loop_preempts_affine = false
     if _contraction_loop_enabled() && !isempty(contract_names) &&
        agg_gates === nothing && agg_filter === nothing &&
        all(c -> c !== nothing, contract_const) &&
@@ -3956,6 +4042,8 @@ function _compile_arrayop_equation!(percell_scalar, acc_kernels, scan_folds,
             use_contraction_loop = _try_build_contraction_loop(probe, contract_names,
                 pranges, rhs_oplus, rhs_zerobar, array_var_info, var_map,
                 const_registry, pgather) !== nothing
+            n_out_cells = prod(length(r) for r in range_iters)
+            loop_preempts_affine = use_contraction_loop && n_out_cells < total_contract
         end
     end
 
@@ -3983,7 +4071,10 @@ function _compile_arrayop_equation!(percell_scalar, acc_kernels, scan_folds,
     scan_fold = nothing
     affine_kernels = nothing
     affine_first_try = false
-    if !_stencil_disabled() && !use_contraction_loop
+    # A viable contraction loop preempts this block only when it is the cheaper
+    # tier (see the PREEMPTION note above); otherwise it waits behind it as the
+    # fallback, which is the `use_contraction_loop` read below.
+    if !_stencil_disabled() && !loop_preempts_affine
         scan = _detect_prefix_scan(idx_names, range_iters, contract_names,
                                    contract_const, agg_gates, agg_filter, rhs_body)
         affine_body =

@@ -981,6 +981,11 @@ def _serialize_coupling_entry(coupling: CouplingEntry) -> dict[str, Any]:
             result["translate"] = coupling.translate
         if coupling.lifting is not None:
             result["lifting"] = coupling.lifting
+        # Emitted whenever the author SET it, `false` included: the flag is
+        # tri-state, so an explicit `false` (a DECLARED standalone-contributing
+        # operator) carries meaning that a dropped key does not.
+        if coupling.require_match is not None:
+            result["require_match"] = coupling.require_match
 
     elif isinstance(coupling, CouplingCouple):
         result["type"] = "couple"

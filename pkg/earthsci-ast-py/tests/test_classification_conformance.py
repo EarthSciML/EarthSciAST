@@ -1,4 +1,5 @@
-"""Manifest-driven adapter for ``tests/conformance/classification``.
+"""Manifest-driven adapter for ``tests/conformance/classification`` and
+``tests/conformance/classification_indexed_lhs``.
 
 esm-spec §6.3.1 requires every binding to expose the SAME pure functions
 recovering the finer solver categories from the two declared variable types.
@@ -20,7 +21,13 @@ from conftest import CONFORMANCE_DIR, REPO_ROOT, VALID_DIR
 from earthsci_ast import classification as C
 from earthsci_ast.parse import load_document
 
-MANIFEST = CONFORMANCE_DIR / "classification" / "manifest.json"
+#: The categories this adapter drives. ``classification_indexed_lhs`` carries the
+#: INDEXED LHS spelling of an arrayed definition (esm-spec §6.3.1), which
+#: ``classification`` cannot state: it holds no ``index`` or ``aggregate`` LHS at
+#: all, which is why four of the five bindings drifted onto the same wrong answer
+#: independently. The golden shape is identical, so one driver reads both.
+#: See ``tests/conformance/classification_indexed_lhs/README.md``.
+CATEGORIES = ("classification", "classification_indexed_lhs")
 
 #: The keys a golden pins for each model node. ``declared_system_kind`` is
 #: optional in a golden (it is only interesting where a model carries the
@@ -52,32 +59,34 @@ def _classify(model) -> dict:
     }
 
 
-def _manifest() -> dict:
-    assert MANIFEST.is_file(), f"conformance manifest not found: {MANIFEST}"
-    return json.loads(MANIFEST.read_text())
+def _manifest(category: str = "classification") -> dict:
+    path = CONFORMANCE_DIR / category / "manifest.json"
+    assert path.is_file(), f"conformance manifest not found: {path}"
+    return json.loads(path.read_text())
 
 
-def _cases() -> list[dict]:
-    return _manifest()["fixtures"]
+def _cases() -> list[tuple[str, dict]]:
+    return [(c, entry) for c in CATEGORIES for entry in _manifest(c)["fixtures"]]
 
 
 CASES = _cases()
-IDS = [c["id"] for c in CASES]
+IDS = [f"{category}:{entry['id']}" for category, entry in CASES]
 
 
 @pytest.fixture(params=CASES, ids=IDS)
 def case(request):
-    entry = request.param
-    base = CONFORMANCE_DIR / "classification"
+    category, entry = request.param
+    base = CONFORMANCE_DIR / category
     doc = json.loads((base / entry["fixture"]).read_text())
     golden = json.loads((base / entry["golden"]).read_text())
     return entry, doc, golden
 
 
-def test_python_is_a_required_binding():
+@pytest.mark.parametrize("category", CATEGORIES)
+def test_python_is_a_required_binding(category):
     """The manifest names python; if that ever changes this adapter is dead
     weight and should be deleted rather than silently kept passing."""
-    assert "python" in _manifest()["bindings_required"]
+    assert "python" in _manifest(category)["bindings_required"]
 
 
 def test_classification_matches_the_golden(case):

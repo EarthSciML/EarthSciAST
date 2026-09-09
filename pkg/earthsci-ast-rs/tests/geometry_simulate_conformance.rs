@@ -146,7 +146,7 @@ fn check_one_assertion(
 ) {
     let actual = lookup(sol, &a.variable, a.time);
     // esm-spec §6.6.4 through the binding's own resolver, the one
-    // `run_pde_tests` uses — note the argument order is (model, test,
+    // `run_inline_tests` uses — note the argument order is (model, test,
     // assertion), the reverse of the local copy this replaces. That copy
     // additionally SKIPPED a tolerance level whose fields were all zero and
     // fell through to the next; §6.6.4 gives the first level that is present,

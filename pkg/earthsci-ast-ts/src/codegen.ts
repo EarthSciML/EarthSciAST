@@ -1,17 +1,19 @@
 /**
  * Tree-walking scalar evaluator (`compileExpression` / `evaluateExpression`)
  * — the EarthSciAST TypeScript in-process runner. Despite the historical
- * "codegen" filename this performs NO code generation or lowering: a
- * canonical-form `Expr` is walked directly. `compileExpression` returns a
- * closure over a free-variable bindings map that returns the scalar numeric
- * result; `evaluateExpression` walks and applies in one step.
+ * "codegen" filename this performs NO code generation: a canonical-form `Expr`
+ * is walked directly. `compileExpression` returns a closure over a
+ * free-variable bindings map that returns the scalar numeric result;
+ * `evaluateExpression` walks and applies in one step.
  *
  * Structural / array ops and the closed-function registry are dispatched to
- * their consumers; ANY op the evaluable-core op-registry does not know — the
- * open-tier rewrite-target sugar `grad`/`div`/`laplacian`/`integral`, a user op,
- * or a spatial / right-hand-side `D` — is rejected here as an unlowered
- * rewrite-target: it must be lowered to a stencil by a rewrite rule before
- * evaluation.
+ * their consumers. `table_lookup` is the one op lowered rather than dispatched
+ * — to its §9.5.3 `interp.*` form, one node at a time, on the way through; see
+ * `lower-table-lookups.ts` for why that happens HERE and not at load. ANY op
+ * the evaluable-core op-registry does not know — the open-tier rewrite-target
+ * sugar `grad`/`div`/`laplacian`/`integral`, a user op, or a spatial /
+ * right-hand-side `D` — is rejected here as an unlowered rewrite-target: it
+ * must be lowered to a stencil by a rewrite rule before evaluation.
  */
 
 import type { Expr, Expression, ExpressionNode } from './types.js'
@@ -19,6 +21,8 @@ import { isNumericLiteral } from './numeric-literal.js'
 import { dispatchClosedFunction } from './closed-functions.js'
 import { getOpInfo, checkArity } from './op-registry.js'
 import { EsmDiagnosticError } from './errors.js'
+import type { FunctionTables } from './lower-table-lookups.js'
+import { lowerTableLookupNode } from './lower-table-lookups.js'
 
 /**
  * Compiled expression closure produced by {@link compileExpression}.
@@ -26,6 +30,20 @@ import { EsmDiagnosticError } from './errors.js'
  * returns the scalar result.
  */
 export type CompiledExpression = (bindings: Map<string, number>) => number
+
+/**
+ * Document context an expression may need beyond its free-variable bindings.
+ *
+ * Only `table_lookup` needs any: the node names a `function_tables` entry that
+ * lives on the DOCUMENT, not in the expression, so an expression lifted out of
+ * an `EsmFile` cannot be evaluated without being handed the block it refers to
+ * (`{ functionTables: file.function_tables }`). Every other op is
+ * self-contained, which is why this is optional.
+ */
+export interface EvaluateOptions {
+  /** The document's `function_tables` block (esm-spec §9.5.1). */
+  functionTables?: FunctionTables | undefined
+}
 
 /**
  * Error carrying the stable, cross-binding `unlowered_operator` diagnostic
@@ -73,9 +91,12 @@ export class EvaluatorError extends EsmDiagnosticError {
  * load time) and array-valued `const` nodes (those are consumed by
  * container ops such as `interp.searchsorted` and `index`, not by
  * scalar evaluation).
+ *
+ * Pass `{ functionTables: file.function_tables }` to evaluate an expression
+ * containing `table_lookup` nodes — see {@link EvaluateOptions}.
  */
-export function compileExpression(expr: Expr): CompiledExpression {
-  return (bindings: Map<string, number>) => evalExprNode(expr, bindings)
+export function compileExpression(expr: Expr, options?: EvaluateOptions): CompiledExpression {
+  return (bindings: Map<string, number>) => evalExprNode(expr, bindings, options)
 }
 
 /**
@@ -85,8 +106,12 @@ export function compileExpression(expr: Expr): CompiledExpression {
  * fixed-point observed-variable resolution, unit-conversion
  * folding).
  */
-export function evaluateExpression(expr: Expr, bindings: Map<string, number>): number {
-  return evalExprNode(expr, bindings)
+export function evaluateExpression(
+  expr: Expr,
+  bindings: Map<string, number>,
+  options?: EvaluateOptions,
+): number {
+  return evalExprNode(expr, bindings, options)
 }
 
 /**
@@ -104,7 +129,11 @@ function constArrayValue(arg: Expression): unknown[] | null {
   return null
 }
 
-function evalExprNode(expr: Expr, bindings: Map<string, number>): number {
+function evalExprNode(
+  expr: Expr,
+  bindings: Map<string, number>,
+  options?: EvaluateOptions,
+): number {
   if (typeof expr === 'number') {
     return expr
   } else if (isNumericLiteral(expr)) {
@@ -161,9 +190,26 @@ function evalExprNode(expr: Expr, bindings: Map<string, number>): number {
       }
       const fnArgs: unknown[] = node.args.map((arg): unknown => {
         const arr = constArrayValue(arg)
-        return arr !== null ? arr : evalExprNode(arg, bindings)
+        return arr !== null ? arr : evalExprNode(arg, bindings, options)
       })
       return dispatchClosedFunction(fnName, fnArgs)
+    }
+
+    // table_lookup: §9.5.3 sugar over the closed-function set above. Lowered
+    // ONE NODE AT A TIME, HERE, rather than in `parse.ts` next to `lowerEnums`:
+    // §9.5.4 requires the authored `table_lookup` / `function_tables` forms to
+    // survive a round trip, and `toJson` serializes the image `loadString`
+    // produced — so a load-time rewrite would emit the lowered form instead.
+    // §9.5.3 admits exactly this alternative (an evaluator that dispatches on
+    // the node), and lowering-then-evaluating keeps ONE implementation of the
+    // semantics: the lowered tree drives the same `interp.*` closed functions
+    // an author would have called by hand, which is what makes the two
+    // spellings bit-equivalent. A `table_lookup` nested in an axis input is
+    // reached by the recursion below. Must precede the rewrite-target gate:
+    // `table_lookup` carries no op-registry entry, so the gate would otherwise
+    // report this evaluable node as an unlowered spatial operator.
+    if (node.op === 'table_lookup') {
+      return evalExprNode(lowerTableLookupNode(node, options?.functionTables), bindings, options)
     }
 
     // Rewrite-target op gate (esm-spec §4.2 / §9.6.8). The evaluable-core op
@@ -208,15 +254,15 @@ function evalExprNode(expr: Expr, bindings: Map<string, number>): number {
     const truthy = (v: number): boolean => v !== 0
     if (node.op === 'ifelse') {
       checkArity(node.op, node.args.length)
-      return truthy(evalExprNode(node.args[0], bindings))
-        ? evalExprNode(node.args[1], bindings)
-        : evalExprNode(node.args[2], bindings)
+      return truthy(evalExprNode(node.args[0], bindings, options))
+        ? evalExprNode(node.args[1], bindings, options)
+        : evalExprNode(node.args[2], bindings, options)
     }
     if (node.op === 'and') {
       checkArity(node.op, node.args.length)
       // Short-circuit on the first falsy operand.
       for (const arg of node.args) {
-        if (!truthy(evalExprNode(arg, bindings))) return 0
+        if (!truthy(evalExprNode(arg, bindings, options))) return 0
       }
       return 1
     }
@@ -224,7 +270,7 @@ function evalExprNode(expr: Expr, bindings: Map<string, number>): number {
       checkArity(node.op, node.args.length)
       // Short-circuit on the first truthy operand.
       for (const arg of node.args) {
-        if (truthy(evalExprNode(arg, bindings))) return 1
+        if (truthy(evalExprNode(arg, bindings, options))) return 1
       }
       return 0
     }
@@ -241,7 +287,7 @@ function evalExprNode(expr: Expr, bindings: Map<string, number>): number {
       throw new EvaluatorError('unsupported_operator', `Unsupported operator: ${node.op}`)
     }
 
-    const args: number[] = node.args.map((arg) => evalExprNode(arg, bindings))
+    const args: number[] = node.args.map((arg) => evalExprNode(arg, bindings, options))
     checkArity(node.op, args.length)
     return info.evaluate(args)
   }

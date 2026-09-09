@@ -91,6 +91,7 @@ pub(crate) mod join;
 pub(crate) mod json_visit;
 pub(crate) mod lower_enums;
 pub(crate) mod lower_expression_templates;
+pub(crate) mod lower_table_lookup;
 pub(crate) mod migration;
 pub(crate) mod op_registry;
 pub(crate) mod parse;
@@ -145,7 +146,7 @@ pub mod simulate_array;
 // reductions, analytic references, coordinate-expression evaluation) —
 // native-only like the `simulate_array` runtime it drives.
 #[cfg(all(not(target_arch = "wasm32"), feature = "solve"))]
-pub(crate) mod pde_inline_tests;
+pub(crate) mod inline_tests;
 
 // `polygon_area` as a sum_product FAQ over the clip ring — evaluated through the
 // array simulator, so native-only like `simulate_array` (the wasm regridder keeps
@@ -213,8 +214,8 @@ pub use display::{to_ascii, to_latex, to_unicode};
 pub use expression::evaluate;
 pub use expression::{contains, free_parameters, free_variables, simplify};
 pub use flatten::{
-    DimensionPromotionRecord, FlattenError, FlattenMetadata, FlattenedSystem, LoaderField, flatten,
-    flatten_model, flatten_with_options,
+    DimensionPromotionRecord, FlattenError, FlattenMetadata, FlattenedSystem, LoaderField,
+    capture_coupling_diagnostics, flatten, flatten_model, flatten_with_options,
 };
 pub use geometry::{
     GeometryError, Manifold, SLIVER_ATOL_FACTOR, area_tolerance_ok, intersect_polygon,
@@ -329,10 +330,11 @@ pub use migration::get_supported_migration_targets;
 pub use compile_error::CompileError;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "solve"))]
-pub use pde_inline_tests::{
-    BuildProviderFactory, PdeAssertionResult, check_assertion, ephemeral_injected_file,
-    evaluate_cellwise, field_reduce, resolve_tolerance, run_pde_tests, run_pde_tests_filtered,
-    run_pde_tests_with_base_dir, run_pde_tests_with_providers, state_cells,
+pub use inline_tests::{
+    AssertionResult, BuildProviderFactory, InlineTestOptions, check_assertion,
+    ephemeral_injected_file, evaluate_cellwise, field_reduce, resolve_tolerance, run_inline_tests,
+    run_inline_tests_filtered, run_inline_tests_paths, run_inline_tests_with_base_dir,
+    run_inline_tests_with_providers, state_cells,
 };
 pub use performance::{CompactExpr, PerformanceError};
 #[cfg(feature = "parallel")]
