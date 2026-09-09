@@ -1,0 +1,17 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "AtmLeaf",
+    "description": "Middle of the coupling chain: takes a temperature in as a PARAMETER and republishes it as a variable, so the chain is two hops rather than one.",
+    "authors": ["EarthSciML Authors and Contributors"]
+  },
+  "models": {
+    "Atm": {
+      "variables": {
+        "T_in": { "type": "parameter", "units": "K", "default": 111.0 },
+        "T": { "type": "unknown", "units": "K" }
+      },
+      "equations": [{ "lhs": "T", "rhs": "T_in" }]
+    }
+  }
+}
