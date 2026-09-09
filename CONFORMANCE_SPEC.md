@@ -4789,7 +4789,7 @@ Two omissions, both decisions rather than oversights, recorded in the category's
   in the meantime (Go and TypeScript both assert `cadence(w) == const` for a
   state-free arrayed observed), which is what made #272 visible.
 
-### 5.35 Both LHS Spellings RUN, at Every Rank (normative)
+### 5.36 Both LHS Spellings RUN, at Every Rank (normative)
 
 **§5.34 is this section's classification half, and the two are complements, not
 duplicates.** §5.34 asks whether `observed_unknowns` *credits* the indexed
@@ -4832,7 +4832,7 @@ spelling once, before any of them reads an LHS — and not in the runner, which
 esm AGENTS.md forbids from dispatching on rule shape, nor in the gate, which
 would admit the shape with no owner to evaluate it.
 
-#### 5.35.1 Gate
+#### 5.36.1 Gate
 
 `tests/conformance/pde_inline_observed_indexed_lhs/` holds the shared fixture
 and the Julia-minted golden. Every array observed in it uses the indexed

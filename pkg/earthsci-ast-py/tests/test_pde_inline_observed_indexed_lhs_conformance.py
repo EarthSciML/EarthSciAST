@@ -37,7 +37,7 @@ feeding a WHOLE-ARRAY derivative (``D(u) ~ wf``) dropped the same way.
 
 Reproducers are in the body of PR #250, which introduced this category. See
 ``tests/conformance/pde_inline_observed_indexed_lhs/README.md`` and
-CONFORMANCE_SPEC §5.35.1.
+CONFORMANCE_SPEC §5.36.1.
 """
 
 from __future__ import annotations
