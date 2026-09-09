@@ -213,11 +213,23 @@ function collectMetaparamDecls(raw: unknown, origin: string): JsonObject {
   return out
 }
 
-// Keys whose VALUES are never expression positions: metaparameter names are
-// substituted as bare variable-reference strings, so structural string fields
-// must not be rewritten. Template `params` shadowing is handled separately in
-// `substituteMetaparamsDecl`.
-const META_SUBST_SKIP_KEYS = new Set<string>([
+// ---------------------------------------------------------------------------
+// Canonical structural-field table
+// ---------------------------------------------------------------------------
+// The ONE registry of raw-JSON object keys whose VALUES are structural — never
+// ordinary expression positions — for the two load-time rewrite passes in this
+// module (metaparameter substitution, esm-spec §9.7.6, and the import-edge
+// rename walk, esm-spec §9.7.7). The skip/protect sets are DERIVED from it;
+// nothing else hand-maintains key membership. Mirrors `_STRUCTURAL_FIELDS` in
+// the Julia reference (`EarthSciAST.jl/src/template_imports.jl`) kind for kind.
+//
+// NEW Expression structural fields MUST be registered here with the right kind,
+// or metaparameter substitution / import-edge renaming will rewrite their
+// string values as if they were variable references.
+
+// Opaque to metaparameter substitution AND copied verbatim by the rename walk.
+// `name` and `where` additionally get a positional rename-walk branch.
+const PROTECTED_KEYS = [
   'metadata',
   'params',
   'type',
@@ -225,19 +237,76 @@ const META_SUBST_SKIP_KEYS = new Set<string>([
   'kind',
   'description',
   'name',
-  'wrt',
-  // Axis-name positions (esm-spec §9.7.7): a `dim` value is a structural axis
-  // NAME, never an expression, so a bound metaparameter of the same name must
-  // not rewrite it into an integer. (The §9.7.7 rename walk handles renaming.)
-  'dim',
-  // `integral`'s integration variable (esm-spec §4.2) is an axis NAME too.
-  'var',
   'expression_template_imports',
   'metaparameters',
   'only',
   // `where` match-scoping constraints (esm-spec §9.6.1) carry index-set
   // NAMES, a structural namespace — never expression positions.
   'where',
+] as const
+
+// Scalar value NAMES an index set / axis: the rename walk maps it through
+// `isetmap`, and it is opaque to metaparameter substitution (an axis name is
+// never an integer-valued metaparameter reference). `var` is `integral`'s
+// integration variable (esm-spec §4.2), the same kind of axis-naming scalar as
+// `wrt`/`dim` (§4.9.1).
+const AXIS_KEYS = ['wrt', 'dim', 'var'] as const
+
+// NODE-HEADER fields: they describe the Expression node itself rather than
+// parameterizing whatever op it carries — `op` (which operator this node IS),
+// `id` (this node's identity) and `expect_cadence` (an assertion about this
+// node). None is an expression position (esm-spec §9.7.6), so a metaparameter
+// that happens to share a name with an operator — `max`, say — must not rewrite
+// `{"op": "max", …}` into `{"op": 3, …}`, which then dies in the typed load with
+// a raw "cannot unmarshal number into `op`" instead of a diagnostic. Opaque to
+// substitution AND copied verbatim by the rename walk.
+const NODE_HEADER_KEYS = ['op', 'id', 'expect_cadence'] as const
+
+// Closed-registry ids / literal enums PARAMETERIZING the node's op. Like the
+// node-header fields these are names rather than values, so they are opaque to
+// metaparameter substitution AND copied verbatim by the rename walk; the kind is
+// kept distinct because the two answer different questions about a node (what it
+// IS vs how its op is parameterized).
+const REGISTRY_KEYS = [
+  'reduce',
+  'semiring',
+  'manifold',
+  'fn',
+  'table',
+  'side',
+  'attrs',
+  'members',
+  'from_faq',
+] as const
+
+// `integral` bound fields (esm-spec §4.2). Unlike `var` these are full
+// Expression positions — a numeric literal, a parameter reference, an AST
+// subtree — so they stay variable-reference positions for `varmap`; only a bare
+// string naming a RENAMED index set (the cumulative form `"upper": "x"`) is an
+// axis occurrence and follows the rename (§9.7.7). The one structural-table kind
+// that metaparameter substitution must NOT skip.
+const BOUND_KEYS = ['lower', 'upper'] as const
+
+// Keys whose VALUES are never expression positions: metaparameter names are
+// substituted as bare variable-reference strings, so structural string fields
+// must not be rewritten. Template `params` shadowing is handled separately in
+// `substituteMetaparamsDecl`.
+//
+// All five bindings MUST hold the SAME set here — a divergence is silent until
+// a document happens to name a metaparameter after a structural field's value
+// (`tests/conformance/expression_templates/metaparam_axis_name_collision`).
+//
+// Every structural kind but `bound` and `positional` is in: an expression
+// position is the ONLY thing substitution may rewrite, and `bound` is the one
+// structural-table entry that IS one. This makes the set coincide with
+// `RENAME_PROTECTED_KEYS` below; both stay derived from the kind arrays
+// separately because they answer different questions and a future kind may split
+// them.
+const META_SUBST_SKIP_KEYS = new Set<string>([
+  ...PROTECTED_KEYS,
+  ...AXIS_KEYS,
+  ...NODE_HEADER_KEYS,
+  ...REGISTRY_KEYS,
 ])
 
 /**
@@ -748,34 +817,21 @@ function nameMap(raw: unknown, field: string, where: string): Record<string, str
 // `integral`'s integration variable (esm-spec §4.2) — the same kind of
 // axis-naming scalar as `wrt`/`dim`, so an imported `integral` rewrite rule
 // follows its axis under rename exactly as a `D` rule does.
-const RENAME_AXIS_KEYS = new Set<string>(['wrt', 'dim', 'var'])
+const RENAME_AXIS_KEYS = new Set<string>(AXIS_KEYS)
 
 // `integral` bound fields (esm-spec §4.2). Unlike `var` these are full
 // Expression positions — a numeric literal, a parameter reference, an AST
 // subtree — so they stay variable-reference positions for `varmap`; only a bare
 // string naming a RENAMED index set (the cumulative form `"upper": "x"`) is an
 // axis occurrence and follows the rename (§9.7.7).
-const RENAME_BOUND_KEYS = new Set<string>(['lower', 'upper'])
+const RENAME_BOUND_KEYS = new Set<string>(BOUND_KEYS)
 
 // Object keys whose values are never variable-reference positions for the
 // rename walk: the metaparameter skip set plus the remaining scalar structural
-// ExpressionNode fields (`op`, closed-registry ids, literal enums). `from`,
-// `wrt`/`dim`, apply-`name`, and `of` are handled positionally in the walk.
-const RENAME_PROTECTED_KEYS = new Set<string>([
-  ...META_SUBST_SKIP_KEYS,
-  'op',
-  'id',
-  'expect_cadence',
-  'reduce',
-  'semiring',
-  'manifold',
-  'fn',
-  'table',
-  'side',
-  'attrs',
-  'members',
-  'from_faq',
-])
+// ExpressionNode fields (the op-parameterizing closed-registry ids and literal
+// enums). `from`, `wrt`/`dim`, apply-`name`, and `of` are handled positionally
+// in the walk.
+const RENAME_PROTECTED_KEYS = new Set<string>([...META_SUBST_SKIP_KEYS, ...REGISTRY_KEYS])
 
 /**
  * One transitive-substitution pass over an imported declaration (esm-spec
