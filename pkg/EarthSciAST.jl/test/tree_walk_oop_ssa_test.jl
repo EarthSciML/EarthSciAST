@@ -213,3 +213,242 @@ _s_ip(f!, u, p, t) = (du = zero(u); f!(du, u, p, t); du)
         @test Jon == Joff
     end
 end
+
+# ---------------------------------------------------------------------------
+# The three arms added after the spike (`SSA_SPIKE.md` "What blocks the rest"):
+# ghost-masked table gathers (#1), template sub-kernel descriptor tables (#2),
+# and tier 2b — the single-producer VALUE gather that fragmented mappings (#5)
+# take instead of the flat-buffer fallback. Each has a bisect knob
+# (`ESS_OOP_SSA_GHOST` / `_SUB` / `_PGATHER`, all default on), so every
+# engagement assertion below is paired with a NEGATIVE CONTROL: the same build
+# with that one arm declined must show the coverage gone.
+# ---------------------------------------------------------------------------
+
+# One producer occupying slots 5:8 at level 1, the state at slots 1:4 (level 0).
+const _SX_PID = Int32[1, 1, 1, 1, 2, 2, 2, 2]
+const _SX_POS = Int32[1, 2, 3, 4, 1, 2, 3, 4]
+const _SX_LVL = Int[0, 1]
+const _SX_LEN = Int[4, 4]
+_sx_owners(g, m = Bool[]; lvl = 2, pid = _SX_PID, pos = _SX_POS) =
+    ESMs._ssa_lane_owners(g, m, pid, pos, _SX_LVL, _SX_LEN, lvl)
+
+@testset "SSA reference forms (lane owners + tier choice)" begin
+
+    @testset "run decomposition and the level/ownership refusals" begin
+        o = _sx_owners([5, 6, 7, 8])
+        @test o !== nothing
+        r = ESMs._ssa_pack_ref(o[1], o[2], true)
+        @test r.pid == 0 && r.segs == [ESMs._OopSSASeg(2, 1, 4)]
+        # a producer that does NOT strictly precede the consumer is refused
+        @test _sx_owners([5, 6, 7, 8]; lvl = 1) === nothing
+        # so is a slot nothing owns (a later writer disowned it)
+        dis = copy(_SX_PID); dis[6] = 0
+        @test _sx_owners([5, 6, 7, 8]; pid = dis) === nothing
+        # out-of-range slots are refused rather than read
+        @test _sx_owners([5, 6, 7, 99]) === nothing
+    end
+
+    @testset "ghost mask: a wildcard lane takes whatever continues the run" begin
+        # A MIDDLE ghost (its safe-index gather read slot 1) is filled from its
+        # left neighbour and the whole descriptor collapses to ONE slice.
+        o = _sx_owners([5, 1, 7, 8], Bool[false, true, false, false])
+        @test o !== nothing
+        @test o[1] == [2, 2, 2, 2] && o[2] == [1, 2, 3, 4]
+        @test ESMs._ssa_pack_ref(o[1], o[2], true).segs == [ESMs._OopSSASeg(2, 1, 4)]
+        # A LEADING ghost cannot back-extend past position 1, so it takes the
+        # placeholder segment (the state's slot 1) and the rest is one slice.
+        o = _sx_owners([1, 5, 6, 7], Bool[true, false, false, false])
+        @test o !== nothing
+        @test o[1] == [1, 2, 2, 2] && o[2] == [1, 1, 2, 3]
+        @test ESMs._ssa_pack_ref(o[1], o[2], true).segs ==
+              [ESMs._OopSSASeg(1, 1, 1), ESMs._OopSSASeg(2, 1, 3)]
+        # A leading ghost that CAN back-extend does, and the run stays single.
+        o = _sx_owners([1, 6, 7, 8], Bool[true, false, false, false])
+        @test o[1] == [2, 2, 2, 2] && o[2] == [1, 2, 3, 4]
+        # Every invented position stays inside its producer's value, whichever
+        # lanes the mask covers.
+        raw = [5, 6, 7, 8]
+        for bits in 1:14                      # every mask but none-set / all-set
+            msk = Bool[(bits >> (l - 1)) & 1 == 1 for l in 1:4]
+            o = _sx_owners(Int[msk[l] ? 1 : raw[l] for l in 1:4], msk)
+            @test o !== nothing
+            for l in 1:4
+                @test 1 <= o[2][l] <= _SX_LEN[o[1][l]]
+            end
+        end
+        # An ALL-ghost descriptor is declined (it is a constant zero vector).
+        @test _sx_owners([1, 1, 1, 1], Bool[true, true, true, true]) === nothing
+    end
+
+    @testset "tier 2b: a fragmented SINGLE-producer mapping gathers the value" begin
+        pid = fill(Int32(2), 40)
+        pos = Int32.(1:40)
+        lvl = Int[0, 1]
+        len = Int[40, 40]
+        g = collect(40:-1:1)                      # reversed ⇒ 40 runs of length 1
+        o = ESMs._ssa_lane_owners(g, Bool[], pid, pos, lvl, len, 2)
+        @test o !== nothing
+        r = ESMs._ssa_pack_ref(o[1], o[2], true)
+        @test r.pid == 2 && r.pos == g && isempty(r.segs)
+        # NEGATIVE CONTROL: with tier 2b declined the mapping is too fragmented
+        # for slices and falls back to the flat buffer.
+        @test ESMs._ssa_pack_ref(o[1], o[2], false) === ESMs._OOP_SSA_NOREF
+        # A fragmented MULTI-producer mapping has no one-op form either way.
+        pid2 = Int32[i <= 20 ? 2 : 3 for i in 1:40]
+        pos2 = Int32[i <= 20 ? i : i - 20 for i in 1:40]
+        o2 = ESMs._ssa_lane_owners(g, Bool[], pid2, pos2, Int[0, 1, 1], Int[40, 20, 20], 2)
+        @test o2 !== nothing
+        @test ESMs._ssa_pack_ref(o2[1], o2[2], true) === ESMs._OOP_SSA_NOREF
+    end
+end
+
+# A REVERSED read of a materialized observed: `g[N+1-i]` is not `out .+ delta`,
+# so the build lowers it to a per-box slot table whose lanes descend — L runs of
+# length 1, past the slice worthwhileness bound. Tier 2b turns it into one
+# gather of `g`'s value; without tier 2b it is the dense `ue` gather, and `g`'s
+# scatter has to stay.
+function _s_rev(N)
+    _s_doc("SSAREV",
+        Dict{String,Any}("u" => _s_state(shape = Any["n"]),
+                         "g" => _s_state(shape = Any["n"]),
+                         "k" => _s_param(0.25)),
+        Any[Dict{String,Any}("lhs" => "g",
+                "rhs" => _s_ao(_s_o("+", _s_o("*", 2.0, _s_ix("u", "i")), 1.0))),
+            Dict{String,Any}("lhs" => _s_ao(_s_Dt(_s_ix("u", "i"))),
+                "rhs" => _s_ao(_s_o("-", _s_o("*", "k",
+                                    _s_ix("g", _s_o("-", Float64(N + 1), "i"))),
+                                    _s_ix("u", "i"))))],
+        N)
+end
+
+_s_build_env(doc, env...) = withenv("ESS_OOP_SSA" => "1", env...) do
+    ESMs.build_evaluator(doc; form = :oop)
+end
+
+@testset "tier 2b end to end (reversed observed read)" begin
+    N = 24
+    doc = _s_rev(N)
+    (fon, u0, p, _, _) = _s_build_env(doc)
+    (fno, _, _, _, _) = _s_build_env(doc, "ESS_OOP_SSA_PGATHER" => "0")
+    foff, = withenv("ESS_OOP_SSA" => nothing) do
+        ESMs.build_evaluator(doc; form = :oop)
+    end
+    fip, = ESMs.build_evaluator(doc)
+    for probe in (u0, _s_seed(length(u0))), t in (0.0, 0.41)
+        a = fon(probe, p, t)
+        @test a == foff(probe, p, t)
+        @test a == fno(probe, p, t)
+        @test a == _s_ip(fip, probe, p, t)
+    end
+    son = ESMs.oop_ssa_stats(fon)
+    sno = ESMs.oop_ssa_stats(fno)
+    # ENGAGEMENT + NEGATIVE CONTROL: the reversed edge redirects only with the
+    # arm on, and it is the last reader keeping `g`'s scatter alive.
+    @test son.n_fast > sno.n_fast
+    @test son.n_skipped_scatters > sno.n_skipped_scatters
+    @test son.n_producers == 1 && son.n_skipped_scatters == 1
+    Jon = ForwardDiff.jacobian(uu -> fon(uu, p, 0.2), _s_seed(N))
+    Joff = ForwardDiff.jacobian(uu -> foff(uu, p, 0.2), _s_seed(N))
+    @test Jon == Joff
+end
+
+# ---------------------------------------------------------------------------
+# Template SUB-KERNEL descriptor tables (`SSA_SPIKE.md` blocker #2). A sub is
+# evaluated at the PARENT's lanes and `_build_oop_desc_vectors` resolves its
+# descriptors against that same enumeration, so its gathers are ordinary slot
+# vectors into `ue` — but they index `S.acc`, not `K.acc`, which is why the
+# spike's per-kernel table could not carry them and every one of them held its
+# producers' scatters alive. Measured on the ReSEACT transport RHS at 6x6x8,
+# these are 885 of the 985 candidate descriptors and 1.07 M of the 1.11 M read
+# elements, so they are the read surface that matters.
+#
+# The fixture is the duo-rule shape from codegen_subcall_fn_test.jl — a
+# makearray whose region value applies an aggregate-bodied template whose expr
+# holds more applies as arithmetic OPERANDS — because that is what mints
+# `_NK_SUBCALL`s at all.
+function _s_sub_fixture(dir, N)
+    ix(f, i, j) = Dict("op" => "index", "args" => Any[f, i, j])
+    ap(a, b) = Dict("op" => "apply_expression_template", "args" => Any[],
+                    "name" => "leaf", "bindings" => Dict("a" => a, "b" => b))
+    leaf_terms = Any[]
+    for k in 1:12
+        push!(leaf_terms, Dict("op" => "*", "args" => Any[0.5 + 0.01k,
+            Dict("op" => "+", "args" => Any[
+                Dict("op" => "*", "args" => Any["a", "a"]),
+                Dict("op" => "*", "args" => Any["b", 0.3 + 0.02k])])]))
+    end
+    leaf = Dict("params" => Any["a", "b"],
+                "body" => Dict("op" => "+", "args" => leaf_terms))
+    inner_expr = Dict("op" => "+", "args" => Any[
+        Dict("op" => "*", "args" => Any[0.25, ap(ix("f", "i", "j"), ix("f", "i", "j"))]),
+        ap(ix("f", "i", "j"), ix("f", "j", "i")),
+        Dict("op" => "*", "args" => Any[ap(ix("f", "i", "j"), ix("f", "i", "j")), 0.125])])
+    inner = Dict("params" => Any["f"],
+                 "body" => Dict("op" => "aggregate", "output_idx" => Any["i", "j"],
+                                "args" => Any["f"],
+                                "ranges" => Dict("i" => Dict("from" => "x"),
+                                                 "j" => Dict("from" => "y")),
+                                "expr" => inner_expr))
+    rhs = Dict("op" => "makearray", "args" => Any[],
+               "regions" => Any[Any[Any[1, "N"], Any[1, "N"]]],
+               "values" => Any[Dict("op" => "apply_expression_template",
+                                    "args" => Any[], "name" => "inner",
+                                    "bindings" => Dict("f" => "u"))])
+    doc = Dict("esm" => "1.0.0",
+        "metadata" => Dict("name" => "ssa_subcall_fixture",
+                           "description" => "generated by tree_walk_oop_ssa_test.jl: sub-kernel redirect"),
+        "metaparameters" => Dict("N" => Dict("type" => "integer", "default" => N)),
+        "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => "N"),
+                             "y" => Dict("kind" => "interval", "size" => "N")),
+        "models" => Dict("M" => Dict(
+            "expression_templates" => Dict("leaf" => leaf, "inner" => inner),
+            "variables" => Dict("u" => Dict("type" => "unknown", "units" => "1",
+                                            "shape" => Any["x", "y"], "default" => 1.0)),
+            "equations" => Any[Dict(
+                "lhs" => Dict("op" => "D", "args" => Any["u"], "wrt" => "t"),
+                "rhs" => rhs)])))
+    path = joinpath(dir, "ssa_subcall_fixture.esm")
+    open(path, "w") do io
+        JSON3.write(io, doc)
+    end
+    return path
+end
+
+@testset "sub-kernel descriptor tables redirect (blocker #2)" begin
+    mktempdir() do dir
+        F = _s_sub_fixture(dir, 5)
+        build(env...) = withenv(env...) do
+            ESMs.build_evaluator(ESMs.flatten(ESMs.load_path(F)); form = :oop)
+        end
+        # The nested-boundary tier is what mints the `_NK_SUBCALL`s.
+        nested = "ESS_NESTED_TEMPLATE_BOUNDARY" => "1"
+        (fon, u0, p, _, _) = build(nested, "ESS_OOP_SSA" => "1")
+        (fno, _, _, _, _) = build(nested, "ESS_OOP_SSA" => "1",
+                                  "ESS_OOP_SSA_SUB" => "0")
+        (foff, _, _, _, _) = build(nested, "ESS_OOP_SSA" => nothing)
+        fip, ui, pi_, _, _ = withenv(nested) do
+            ESMs.build_evaluator(ESMs.flatten(ESMs.load_path(F)))
+        end
+
+        son = ESMs.oop_ssa_stats(fon)
+        sno = ESMs.oop_ssa_stats(fno)
+        # ENGAGEMENT: the sub tables are where this fixture's reads live at all,
+        # and every one of them redirects.
+        @test son.n_sub_edges > 0
+        @test son.n_sub_fast == son.n_sub_edges
+        # NEGATIVE CONTROL: with the arm declined not one of them redirects.
+        @test sno.n_sub_edges == son.n_sub_edges
+        @test sno.n_sub_fast == 0
+
+        # BIT-IDENTITY across all three builds and the in-place `f!`.
+        for probe in (u0, _s_seed(length(u0))), t in (0.0, 0.63)
+            a = fon(probe, p, t)
+            @test a == foff(probe, p, t)
+            @test a == fno(probe, p, t)
+            @test a == _s_ip(fip, probe, pi_, t)
+        end
+        u = _s_seed(length(u0))
+        @test ForwardDiff.jacobian(uu -> fon(uu, p, 0.3), u) ==
+              ForwardDiff.jacobian(uu -> foff(uu, p, 0.3), u)
+    end
+end
