@@ -29,7 +29,7 @@
     "Every `pass` case that discriminates a reading is paired with a `fail` case in the same region (`overshoot_inside_symmetric_bound` with `overshoot_outside_the_symmetric_bound`, `max_not_sum_of_the_two_bounds` with `max_not_sum_control_that_still_passes`, the two zero-expected cases with `tiny_actual_against_zero_expected_rescued_by_abs`), so a binding cannot satisfy one half by loosening or tightening everything."
   ],
   "gate": {
-    "julia": "pkg/EarthSciAST.jl/test/assertion_tolerance_conformance_test.jl",
+    "julia": "pkg/EarthSciAST.jl/test/conformance_assertion_tolerance_test.jl",
     "python": "pkg/earthsci-ast-py/tests/test_assertion_tolerance_conformance.py",
     "rust": "pkg/earthsci-ast-rs/tests/assertion_tolerance_conformance.rs",
     "typescript": "pkg/earthsci-ast-ts/src/assertion-tolerance-conformance.test.ts",

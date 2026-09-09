@@ -80,8 +80,8 @@ so a binding cannot satisfy half the list by loosening or tightening everything.
 
 | Binding | File | Predicate under test |
 |---|---|---|
-| Julia | `pkg/EarthSciAST.jl/test/assertion_tolerance_conformance_test.jl` | `EarthSciAST._check_assertion` |
-| Python | `pkg/earthsci-ast-py/tests/test_assertion_tolerance_conformance.py` | `earthsci_ast.pde_inline_tests._check_assertion` |
+| Julia | `pkg/EarthSciAST.jl/test/conformance_assertion_tolerance_test.jl` | `EarthSciAST._check_assertion` |
+| Python | `pkg/earthsci-ast-py/tests/test_assertion_tolerance_conformance.py` | `earthsci_ast.inline_tests._check_assertion` |
 | Rust | `pkg/earthsci-ast-rs/tests/assertion_tolerance_conformance.rs` | `earthsci_ast::check_assertion` |
 | TypeScript | `pkg/earthsci-ast-ts/src/assertion-tolerance-conformance.test.ts` | `checkAssertion` (`src/assertion-tolerance.ts`) |
 | Go | `pkg/earthsci-ast-go/pkg/esm/assertion_tolerance_scope_test.go` | — (scope only) |
