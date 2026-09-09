@@ -1108,12 +1108,13 @@ capability and no binding is exempt.
 > everywhere — `protected` / `axis` / **`node-header`** (`op`, `id`,
 > `expect_cadence`: fields describing the NODE rather than parameterizing its op)
 > / `registry` (closed-registry ids that DO parameterize the op) / `bound`. The
-> metaparameter skip set is `protected ∪ axis ∪ node-header` — 17 keys, identical
-> in all five bindings — and the §9.7.7 rename-protected set adds `registry`, so
-> rename behavior is unchanged. The shared fixture
+> metaparameter skip set is `protected ∪ axis ∪ node-header ∪ registry` — 26
+> keys, identical in all five bindings — which now coincides with the §9.7.7
+> rename-protected set, so rename behavior is unchanged. The shared fixture
 > `tests/conformance/expression_templates/metaparam_axis_name_collision` pins all
-> six fields plus a positive control in each node, so a future divergence in
-> either direction fails a golden rather than going quiet.
+> ten fields (`op`, `id`, `expect_cadence`, `dim`, `wrt`, `var`, `reduce`,
+> `semiring`, `fn`, `attrs`) plus a positive control in each node, so a future
+> divergence in either direction fails a golden rather than going quiet.
 >
 > **The `registry` fields are in too, and that CHANGES GO as well.** The
 > op-parameterizing closed-registry ids and literal enums — `reduce`,

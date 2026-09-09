@@ -279,6 +279,14 @@ const REGISTRY_KEYS = [
   'from_faq',
 ] as const
 
+// `integral` bound fields (esm-spec §4.2). Unlike `var` these are full
+// Expression positions — a numeric literal, a parameter reference, an AST
+// subtree — so they stay variable-reference positions for `varmap`; only a bare
+// string naming a RENAMED index set (the cumulative form `"upper": "x"`) is an
+// axis occurrence and follows the rename (§9.7.7). The one structural-table kind
+// that metaparameter substitution must NOT skip.
+const BOUND_KEYS = ['lower', 'upper'] as const
+
 // Keys whose VALUES are never expression positions: metaparameter names are
 // substituted as bare variable-reference strings, so structural string fields
 // must not be rewritten. Template `params` shadowing is handled separately in
@@ -816,7 +824,7 @@ const RENAME_AXIS_KEYS = new Set<string>(AXIS_KEYS)
 // subtree — so they stay variable-reference positions for `varmap`; only a bare
 // string naming a RENAMED index set (the cumulative form `"upper": "x"`) is an
 // axis occurrence and follows the rename (§9.7.7).
-const RENAME_BOUND_KEYS = new Set<string>(['lower', 'upper'])
+const RENAME_BOUND_KEYS = new Set<string>(BOUND_KEYS)
 
 // Object keys whose values are never variable-reference positions for the
 // rename walk: the metaparameter skip set plus the remaining scalar structural
