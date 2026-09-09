@@ -4789,7 +4789,18 @@ Two omissions, both decisions rather than oversights, recorded in the category's
   in the meantime (Go and TypeScript both assert `cadence(w) == const` for a
   state-free arrayed observed), which is what made #272 visible.
 
-### 5.34 Both LHS Spellings Define an Observed, at Every Rank (normative)
+### 5.35 Both LHS Spellings RUN, at Every Rank (normative)
+
+**§5.34 is this section's classification half, and the two are complements, not
+duplicates.** §5.34 asks whether `observed_unknowns` *credits* the indexed
+spelling — a pure-function question every binding, rewrite-only ports included,
+can answer, and it is answered against a spec-written golden. This section asks
+whether a binding then *runs* such a document and produces the right numbers,
+which only the three executing bindings can answer and which is gated against a
+Julia-minted golden. A binding can pass §5.34 and fail this one: Julia's
+`observed_unknowns` was already correct on `main` (its `_lhs_unwrap` peels the
+`aggregate` shell), and its tree-walk **build** still refused the document
+outright.
 
 esm-spec §6.3.1 admits **two** LHS spellings for the equation that DEFINES an
 unknown, and states the criterion semantically: the defining form is read
@@ -4821,7 +4832,7 @@ spelling once, before any of them reads an LHS — and not in the runner, which
 esm AGENTS.md forbids from dispatching on rule shape, nor in the gate, which
 would admit the shape with no owner to evaluate it.
 
-#### 5.34.1 Gate
+#### 5.35.1 Gate
 
 `tests/conformance/pde_inline_observed_indexed_lhs/` holds the shared fixture
 and the Julia-minted golden. Every array observed in it uses the indexed

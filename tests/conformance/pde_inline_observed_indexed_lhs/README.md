@@ -1,9 +1,18 @@
 # `pde_inline_observed_indexed_lhs`
 
 The INDEXED LHS spelling of an ARRAY-shaped observed (esm-spec §6.3.1;
-CONFORMANCE_SPEC §5.34). Normative prose lives in CONFORMANCE_SPEC — this file
+CONFORMANCE_SPEC §5.35). Normative prose lives in CONFORMANCE_SPEC — this file
 records what the fixture is for, and the one thing about this category that is
 unusual.
+
+**Sibling category.** `tests/conformance/classification_indexed_lhs/`
+(CONFORMANCE_SPEC §5.34, PR #268) pins the same §6.3.1 rule one level up: does
+`observed_unknowns` *credit* the indexed spelling? That is a pure-function
+question all five bindings answer, against a spec-written golden. This category
+asks whether a binding then *runs* such a document and produces the right
+numbers — three executing bindings, against a Julia-minted golden. Julia already
+passed the classification question on `main` and still refused to build the
+document, which is why both categories exist.
 
 ## What it pins
 
