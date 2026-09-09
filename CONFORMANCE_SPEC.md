@@ -3380,6 +3380,117 @@ exclusion is invisible by construction, so it has to be asserted somewhere that
 goes red when it stops being true. Giving Go or TypeScript a simulator will fail
 that binding's scope test until it is moved into `bindings_required` with a real
 runner.
+### 5.21 Tolerance Resolution: the Levels Merge Per Field (normative)
+
+§5.20 governs the §6.6.3 **pass predicate**; this one governs the `(rel, abs)`
+pair that predicate is evaluated *with*. esm-spec §6.6.4 resolves tolerance from
+up to three declared `{abs?, rel?}` blocks — the assertion's, its test's, and the
+enclosing component's — plus the implementation default as a fourth level, and it
+resolves them **per field**: `abs` and `rel` each take their value from the
+innermost level that declares that field. The three simulation bindings —
+**Julia, Python, Rust** — must agree. The shared **offline, data-only** fixture
+lives in `tests/conformance/tolerance_resolution/`.
+
+#### 5.21.1 Why this needs a category
+
+**No other tier can see it.** Every fixture in every other category declares
+exactly one tolerance block, and a single block resolves identically whether the
+rule is per-field or wholesale. The divergence is only observable when two levels
+each declare *part* of a tolerance — and until #228 all three bindings did the
+same wrong thing there, so cross-binding output comparison agreed as well:
+
+```
+model     {rel: 1e-6}
+assertion {abs: 1e-9}
+                       spec:     (rel = 1e-6, abs = 1e-9)
+                       bindings: (rel = 0,    abs = 1e-9)
+```
+
+The assertion ran with **no relative bound at all**. That is the same shape of
+failure as §5.20 — a gate that silently stops gating — except in the opposite
+direction: §5.20's hole made assertions pass that should fail, and this one made
+an author's declared tolerance vanish, which can make an assertion fail that
+should pass, or (once fixed) admit a value the previous resolution rejected. A
+document is the contract; a runtime that drops half of a declared one is
+answering a question the author did not ask.
+
+Three bindings agreeing on the wrong answer is exactly what a conformance suite
+built on cross-binding comparison cannot detect. This category therefore pins the
+rule against the **spec**, not against a reference binding's output, and the
+`resolved` pairs in the manifest are derived from §6.6.4's text.
+
+#### 5.21.2 What is compared
+
+**Data-only.** Resolution is a pure function of the declared blocks — it does not
+depend on a trajectory, a solver, a discretization or a document — so the
+category carries no `.esm` fixture, no `integrators` block (the field is `null`,
+and each binding asserts that it is) and no numeric golden. Each in-scope binding
+feeds a case's `levels` straight into its resolution entry point
+(`_resolve_tolerance` in Julia and Python, `resolve_tolerance` in Rust) and
+compares the returned pair:
+
+| Field | Contract |
+|---|---|
+| `levels.model` / `levels.test` / `levels.assertion` | The declared block at that level, or `null` for "no block at all". Within a block, a bound is **declared** when its key is present with a number — **including `0`** — and **absent** when the key is missing or its value is `null`. |
+| `resolved` | The `(rel, abs)` §6.6.4 requires. **This is the contract.** |
+| `changed_by_228` | Whether the pre-#228 wholesale rule produced a different pair. Each binding recomputes the old rule and asserts this flag, so the tier cannot quietly stop covering the regression. |
+
+#### 5.21.3 The two rules §6.6.4 had left implicit
+
+Both are pinned by dedicated cases, because both are silent when wrong:
+
+1. **An explicit `0` is a declaration, not an absence.** `{"rel": 0}` says
+   *"no relative bound"* and MUST stop the fallthrough; only a missing key (or a
+   non-conforming `null`) falls through. Reading `0` as absent is not a corner
+   case: `tests/fixtures/recurrence/*.esm` pin the bit-exact recurrence contract
+   of §5.19 with a model-level `{rel: 0, abs: 0}`, and a binding that fell
+   through from it would run all ten of them at `rel = 1e-6` — the exactness
+   requirement gone, with every fixture still green.
+
+2. **The implementation default is the FOURTH LEVEL of the same merge**, not a
+   fallback reached only when levels 1-3 are silent. It supplies whichever bound
+   is *still* undeclared after them, so an assertion declaring only
+   `{abs: 1e-4}` resolves to `(rel = 1e-6, abs = 1e-4)`, not `(0, 1e-4)`.
+
+   The consequence is that **`rel: 0` is the only way a document can ask for an
+   absolute-only comparison**, and it is load-bearing rather than stylistic: an
+   `abs`-only block that means to be tight silently acquires a `1e-6` relative
+   band otherwise. When this rule was adopted, the 69 assertions in the shipped
+   corpus that would have picked up that band — including
+   `tests/conformance/elementwise_observed_gather` (`abs = 1e-11`),
+   `pde_inline_observed_rank2` and `pde_inline_dead_observed` — had an explicit
+   `rel: 0` written into the 63 authored blocks that govern them, so every one
+   of them still enforces the bound its author wrote. **A new `abs`-only block
+   is not an error, but it is a choice**: it asks for the default relative band
+   as well, and a fixture that exists to be tight should spell `rel: 0`.
+
+   Note the asymmetry, which is not an oversight: level 4 declares `rel = 1e-6`
+   and *no* `abs` bound, so a `rel`-only block resolves to `abs = 0` under
+   either reading. Only an `abs`-only block distinguishes them, which is why
+   the manifest pins that shape at both the model and the assertion level.
+
+#### 5.21.4 Gate
+
+Julia `pkg/EarthSciAST.jl/test/conformance_tolerance_resolution_test.jl`, Python
+`pkg/earthsci-ast-py/tests/test_tolerance_resolution_conformance.py`, Rust
+`tolerance_resolution_conformance_manifest` in
+`pkg/earthsci-ast-rs/src/inline_tests.rs`. `bindings_required` is
+`["julia", "python", "rust"]`; Go and TypeScript carry the `Tolerance` type but
+have no inline-test runner, so they never resolve one and are `scope_excluded`.
+Both of them assert that exclusion themselves — Go
+`pkg/earthsci-ast-go/pkg/esm/tolerance_resolution_scope_test.go`, TypeScript
+`pkg/earthsci-ast-ts/src/tolerance-resolution-scope.test.ts`, the same shape
+§5.20 uses — so a binding that grows a §6.6.4 resolver cannot leave itself out
+of the category quietly. (TypeScript's existing `resolveTolerances` is the
+§2.2.2 INTEGRATION chain, a different quantity on a different chain.)
+
+Each gate also asserts **monotonicity** against the pre-#228 rule: per field the
+merged value can only come from a level the wholesale rule ignored, never from
+one it consulted, so no resolved bound ever *tightens*. That is the safety
+argument for changing a shipped comparison rule — an assertion can flip
+fail → pass under it, but never pass → fail — and it is checked rather than
+claimed.
+
 ### 5.22 Data-Source Location Resolution (normative)
 
 esm-spec §8.2.1 fixes WHERE a `data_sources[*].source.url_template` points. All

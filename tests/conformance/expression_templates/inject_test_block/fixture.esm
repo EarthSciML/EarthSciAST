@@ -28,7 +28,7 @@
           ],
           "assertions": [
             { "variable": "c", "time": 10.0, "expected": 3.0, "reduce": "mean",
-              "tolerance": { "abs": 1e-6 } }
+              "tolerance": { "rel": 0.0, "abs": 1e-6 } }
           ]
         },
         {
@@ -43,7 +43,7 @@
           ],
           "assertions": [
             { "variable": "c", "time": 10.0, "expected": 3.0, "reduce": "mean",
-              "tolerance": { "abs": 1e-6 } }
+              "tolerance": { "rel": 0.0, "abs": 1e-6 } }
           ]
         }
       ]

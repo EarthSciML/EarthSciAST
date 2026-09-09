@@ -144,6 +144,7 @@
               "time": 0.0,
               "expected": 0.0,
               "tolerance": {
+                "rel": 0.0,
                 "abs": 1e-12
               },
               "reduce": "L2_error",
@@ -250,6 +251,7 @@
               "time": 0.0,
               "expected": 0.0,
               "tolerance": {
+                "rel": 0.0,
                 "abs": 1e-12
               },
               "reduce": "L2_error",
@@ -295,6 +297,7 @@
               "time": 0.0,
               "expected": 0.0,
               "tolerance": {
+                "rel": 0.0,
                 "abs": 1e-12
               },
               "reduce": "L2_error",
@@ -340,6 +343,7 @@
               "time": 1.0,
               "expected": 0.0,
               "tolerance": {
+                "rel": 0.0,
                 "abs": 1e-09
               },
               "reduce": "mean"

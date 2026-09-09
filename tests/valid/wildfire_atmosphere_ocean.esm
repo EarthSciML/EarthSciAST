@@ -1192,6 +1192,7 @@
               "time": 0,
               "expected": 290.0,
               "tolerance": {
+                "rel": 0.0,
                 "abs": 1e-09
               }
             },
@@ -1200,6 +1201,7 @@
               "time": 0,
               "expected": 290.0,
               "tolerance": {
+                "rel": 0.0,
                 "abs": 1e-09
               }
             },
@@ -1208,6 +1210,7 @@
               "time": 0,
               "expected": 290.0,
               "tolerance": {
+                "rel": 0.0,
                 "abs": 1e-09
               }
             },
@@ -1216,6 +1219,7 @@
               "time": 3600,
               "expected": 290.0861244019,
               "tolerance": {
+                "rel": 0.0,
                 "abs": 1e-06
               }
             },
@@ -1224,6 +1228,7 @@
               "time": 3600,
               "expected": 290.2440191388,
               "tolerance": {
+                "rel": 0.0,
                 "abs": 1e-06
               }
             },
@@ -1232,6 +1237,7 @@
               "time": 3600,
               "expected": 290.3014354067,
               "tolerance": {
+                "rel": 0.0,
                 "abs": 1e-06
               }
             }
