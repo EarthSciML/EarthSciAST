@@ -37,19 +37,24 @@ function _find_sym(simp, system_name::Symbol, local_name::AbstractString)
           "parameters=$(_MTK_TB.parameters(simp)))")
 end
 
-# Resolve (rel, abs) precedence: assertion-level wins, then test-level,
-# then model-level. An unset field contributes 0. Falls back to rtol=1e-6
-# when nothing is configured.
-function _resolve_tol(model_tol, test_tol, assertion_tol)
-    for cand in (assertion_tol, test_tol, model_tol)
-        cand === nothing && continue
-        r = cand.rel === nothing ? 0.0 : cand.rel
-        a = cand.abs === nothing ? 0.0 : cand.abs
-        return (r, a)
-    end
-    return (1.0e-6, 0.0)
-end
-
+# esm-spec §6.6.4 and §6.6.3 are `EarthSciAST._resolve_tolerance` and
+# `EarthSciAST._check_assertion` — the same two functions `run_inline_tests`
+# calls. Nothing here re-derives either (#223).
+#
+# The two hand-rolled copies this replaces both diverged from them:
+#
+#   * `_resolve_tol` returned the innermost DECLARED block WHOLE and zeroed
+#     whatever it did not spell, so a model-level `rel` was discarded by an
+#     assertion-level `{abs: ...}`. §6.6.4 merges PER FIELD over four levels
+#     (#228), which is what the library resolver now does.
+#   * the assertion was compared by a three-way branch on `(rel, abs)`, which
+#     is not §6.6.3's predicate. When `abs > 0 && expected == 0` it dropped
+#     `rel` outright and compared against `abs` alone — TIGHTER than
+#     `max(abs, rel*max(|a|,|e|))`, on 24 of this file's assertions. When both
+#     bounds resolved to 0 it called `isapprox(a, e; atol=0)`, which falls back
+#     to Julia's default `rtol = sqrt(eps) ~ 1.5e-8` rather than the exact
+#     equality §6.6.3 requires of that spelling.
+#
 function _run_one_test(simp, system_name::Symbol,
                        model_tol, t::_ESM_TB.InlineTest)
     u0_map = Dict{Any,Float64}()
@@ -75,15 +80,9 @@ function _run_one_test(simp, system_name::Symbol,
 
     for a in t.assertions
         handle = _find_sym(simp, system_name, a.variable)
-        rel, abs_ = _resolve_tol(model_tol, t.tolerance, a.tolerance)
+        rtol, atol = _ESM_TB._resolve_tolerance(model_tol, t.tolerance, a.tolerance)
         actual = sol(a.time, idxs=handle)
-        if abs_ > 0 && iszero(a.expected)
-            @test isapprox(actual, a.expected; atol=abs_)
-        elseif rel > 0
-            @test isapprox(actual, a.expected; rtol=rel, atol=abs_)
-        else
-            @test isapprox(actual, a.expected; atol=abs_)
-        end
+        @test _ESM_TB._check_assertion(Float64(actual), a.expected, rtol, atol)
     end
 end
 
