@@ -1,0 +1,42 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "DOfCompound",
+    "description": "esm-spec §4.2, REFUSE half: D of a COMPOUND EXPRESSION resolves to no tendency and MUST be refused with `unlowered_operator`. Resolution is defined only for `args[0]` that is a bare reference to an unknown carrying a differential equation; distributing D over a product is symbolic differentiation, which this format does not define.",
+    "authors": ["EarthSciAST conformance"],
+    "created": "2026-09-07T00:00:00Z",
+    "tags": ["conformance", "esm-spec-4.2", "unlowered-operator"]
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "x": { "type": "unknown", "units": "kg", "default": 2.0 },
+        "k": { "type": "parameter", "units": "1/s", "default": 3.0 },
+        "scale": { "type": "parameter", "units": "dimensionless", "default": 2.0 },
+        "dscaled": { "type": "unknown", "units": "kg/s", "description": "D of scale*x — unresolvable" }
+      },
+      "equations": [
+        {
+          "lhs": { "op": "D", "args": ["x"], "wrt": "t" },
+          "rhs": { "op": "*", "args": [{ "op": "-", "args": ["k"] }, "x"] }
+        },
+        {
+          "_comment": "args[0] is an operator node, not a bare reference, so there is nothing to look up in the tendency table.",
+          "lhs": "dscaled",
+          "rhs": { "op": "D", "args": [{ "op": "*", "args": ["scale", "x"] }], "wrt": "t" }
+        }
+      ],
+      "tests": [
+        {
+          "id": "d_of_compound_is_refused",
+          "description": "The run must be refused. The mathematically intended value is -12 (scale*(-k*x)); the value the pre-fix bindings returned was 0.",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "assertions": [
+            { "variable": "dscaled", "time": 0.0, "expected": -12.0, "tolerance": { "abs": 1e-9 } }
+          ]
+        }
+      ]
+    }
+  },
+  "domain": { "temporal": {} }
+}

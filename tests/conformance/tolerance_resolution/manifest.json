@@ -1,0 +1,342 @@
+{
+    "category": "tolerance_resolution",
+    "version": "1.0",
+    "description": "Cross-binding conformance for esm-spec §6.6.4's tolerance RESOLUTION ORDER — how the `{abs?, rel?}` blocks declared at the assertion, test and model levels, plus the implementation default, combine into the single `(rel, abs)` pair the §6.6.3 pass predicate is evaluated with. Resolution is PER FIELD over FOUR levels: `abs` and `rel` are resolved independently, each taking its value from the innermost level that declares it, so a level declaring only one bound does not mask the other from an enclosing level, and the default (`rel = 1e-6`, no `abs` bound) fills in whichever bound is still undeclared after the three document levels. All three bindings previously returned the first non-null block WHOLE and defaulted its missing field to 0 (#228), which meant a model `{rel: 1e-6}` plus an assertion `{abs: 1e-9}` ran the assertion with NO relative bound at all. The one question §6.6.4 had left open is pinned here too: an explicit `0` is a DECLARATION (\"no bound of this kind\") and stops the fallthrough — the implementation default included — where a missing key or a JSON `null` is an ABSENCE and falls through.",
+    "reference_binding": "julia",
+    "bindings_required": [
+        "julia",
+        "python",
+        "rust"
+    ],
+    "scope_excluded": {
+        "go": "rewrite-only port; carries the `Tolerance` type but has no inline-test runner, so it never resolves one",
+        "typescript": "rewrite-only port; carries the `Tolerance` type but has no inline-test runner, so it never resolves one"
+    },
+    "integrators": null,
+    "integrators_note": "DATA-ONLY by design. Resolution is a pure function of the declared blocks — it does not depend on a trajectory, a solver or a discretization — so this tier carries no `.esm` fixtures and pins no numeric golden. Each in-scope binding feeds `levels` straight into its `resolve_tolerance` / `_resolve_tolerance` entry point and compares the returned pair to `resolved`. That is the whole contract, and it is why this category can gate a rule that no simulating fixture could reach: every fixture in every other tier has ONE tolerance chain, so none of them distinguishes a per-field merge from a wholesale one.",
+    "absent_encoding": "Within a `levels` block, a bound is DECLARED when its key is present with a number (including `0`) and ABSENT when the key is missing or its value is `null`. `esm-schema.json` types `abs`/`rel` as `number`, so a `null` is not conforming input; the `null_is_absent` case pins that a binding lenient enough to accept one treats it as an absence, which is what all three parsers already do. Because the implementation default is the fourth level of the same merge rather than a terminal fallback, `rel: 0` is the ONLY way a document can ask for an absolute-only comparison.",
+    "cases": [
+        {
+            "id": "nothing_declared_anywhere",
+            "levels": {
+                "model": null,
+                "test": null,
+                "assertion": null
+            },
+            "resolved": {
+                "rel": 1e-06,
+                "abs": 0.0
+            },
+            "changed_by_228": false,
+            "note": "Both bounds fall through all three document levels onto the implementation default."
+        },
+        {
+            "id": "model_rel_only",
+            "levels": {
+                "model": {
+                    "rel": 0.01
+                },
+                "test": null,
+                "assertion": null
+            },
+            "resolved": {
+                "rel": 0.01,
+                "abs": 0.0
+            },
+            "changed_by_228": false,
+            "note": "A single declared level. `rel` stops at the model; `abs` reaches the default, whose `abs` bound is absent — so the resolved `abs` is 0 either way. This is why an `abs`-only case, not a `rel`-only one, is what distinguishes the fourth-level reading from a terminal one."
+        },
+        {
+            "id": "model_abs_only_still_takes_the_default_rel",
+            "levels": {
+                "model": {
+                    "abs": 0.001
+                },
+                "test": null,
+                "assertion": null
+            },
+            "resolved": {
+                "rel": 1e-06,
+                "abs": 0.001
+            },
+            "changed_by_228": true,
+            "note": "THE FOURTH-LEVEL CONTRACT. The model declares `abs` and nothing declares `rel`, so `rel` falls through all three document levels and lands on the implementation default: the result is `(1e-6, 1e-3)`, not `(0, 1e-3)`. The default is a merge level, not a fallback reached only when levels 1-3 are silent. An author who means \"this absolute bound and nothing else\" writes `rel: 0`, which the next case pins."
+        },
+        {
+            "id": "assertion_abs_over_model_rel",
+            "levels": {
+                "model": {
+                    "rel": 1e-06
+                },
+                "test": null,
+                "assertion": {
+                    "abs": 1e-09
+                }
+            },
+            "resolved": {
+                "rel": 1e-06,
+                "abs": 1e-09
+            },
+            "changed_by_228": true,
+            "note": "THE DEFECT IN ITS PLAINEST FORM (#228). Before the fix every binding returned `(0, 1e-9)`: the assertion's block won wholesale and the model's relative bound vanished."
+        },
+        {
+            "id": "assertion_rel_over_model_abs",
+            "levels": {
+                "model": {
+                    "abs": 0.001
+                },
+                "test": null,
+                "assertion": {
+                    "rel": 1e-06
+                }
+            },
+            "resolved": {
+                "rel": 1e-06,
+                "abs": 0.001
+            },
+            "changed_by_228": true,
+            "note": "The mirror image, which pins that the merge is symmetric in the two fields and not an `abs`-only special case."
+        },
+        {
+            "id": "three_levels_each_supply_a_field",
+            "levels": {
+                "model": {
+                    "rel": 0.01,
+                    "abs": 0.1
+                },
+                "test": {
+                    "rel": 1e-05
+                },
+                "assertion": {
+                    "abs": 1e-09
+                }
+            },
+            "resolved": {
+                "rel": 1e-05,
+                "abs": 1e-09
+            },
+            "changed_by_228": true,
+            "note": "Full chain. `rel` stops at the test (the innermost level declaring it), `abs` at the assertion; the model supplies neither, because a more-specific level declared both. Before the fix: `(0, 1e-9)`."
+        },
+        {
+            "id": "rel_falls_through_two_levels",
+            "levels": {
+                "model": {
+                    "rel": 0.01
+                },
+                "test": {
+                    "abs": 0.001
+                },
+                "assertion": {
+                    "abs": 1e-09
+                }
+            },
+            "resolved": {
+                "rel": 0.01,
+                "abs": 1e-09
+            },
+            "changed_by_228": true,
+            "note": "`rel` falls past TWO levels that both decline to declare it. Before the fix: `(0, 1e-9)`."
+        },
+        {
+            "id": "test_level_no_assertion_block",
+            "levels": {
+                "model": {
+                    "rel": 0.01
+                },
+                "test": {
+                    "abs": 0.001
+                },
+                "assertion": null
+            },
+            "resolved": {
+                "rel": 0.01,
+                "abs": 0.001
+            },
+            "changed_by_228": true,
+            "note": "The same masking one level up: a test declaring only `abs` used to drop its model's `rel`. Before the fix: `(0, 1e-3)`."
+        },
+        {
+            "id": "assertion_declares_both",
+            "levels": {
+                "model": {
+                    "rel": 0.01,
+                    "abs": 0.1
+                },
+                "test": {
+                    "rel": 1e-05,
+                    "abs": 0.001
+                },
+                "assertion": {
+                    "rel": 1e-06,
+                    "abs": 1e-09
+                }
+            },
+            "resolved": {
+                "rel": 1e-06,
+                "abs": 1e-09
+            },
+            "changed_by_228": false,
+            "note": "NON-VACUITY. A fully-specified innermost block still wins outright — the merge must not reach past a level that declares both fields."
+        },
+        {
+            "id": "explicit_zero_rel_stops_the_fallthrough",
+            "levels": {
+                "model": {
+                    "rel": 1e-06
+                },
+                "test": null,
+                "assertion": {
+                    "rel": 0.0,
+                    "abs": 1e-09
+                }
+            },
+            "resolved": {
+                "rel": 0.0,
+                "abs": 1e-09
+            },
+            "changed_by_228": false,
+            "note": "`rel: 0` is a DECLARATION, not an absence: it is how an author says \"absolute bound only\" and it must block the enclosing `rel`. A binding that treated 0 as absent would resolve `1e-6` here."
+        },
+        {
+            "id": "explicit_zero_abs_stops_the_fallthrough",
+            "levels": {
+                "model": {
+                    "abs": 0.1
+                },
+                "test": {
+                    "abs": 0.0
+                },
+                "assertion": {
+                    "rel": 1e-06
+                }
+            },
+            "resolved": {
+                "rel": 1e-06,
+                "abs": 0.0
+            },
+            "changed_by_228": false,
+            "note": "The same for `abs`, at the test level. Before the fix this resolved to `(1e-6, 0)` too — the same pair by accident, because the wholesale rule zeroed the assertion's undeclared `abs` anyway. It is here for the rule, not the regression: `abs: 0` at the test must block the model's `0.1`."
+        },
+        {
+            "id": "explicit_zero_pair_is_exact_equality",
+            "levels": {
+                "model": {
+                    "rel": 0.0,
+                    "abs": 0.0
+                },
+                "test": null,
+                "assertion": null
+            },
+            "resolved": {
+                "rel": 0.0,
+                "abs": 0.0
+            },
+            "changed_by_228": false,
+            "note": "EXACT EQUALITY, and the only way a document can spell it. This is what `tests/fixtures/recurrence/*.esm` declare to pin the bit-exact recurrence contract (CONFORMANCE_SPEC §5.19); a binding that read `0` as absent would silently run them at `rel = 1e-6`."
+        },
+        {
+            "id": "empty_block_declares_nothing",
+            "levels": {
+                "model": null,
+                "test": null,
+                "assertion": {}
+            },
+            "resolved": {
+                "rel": 1e-06,
+                "abs": 0.0
+            },
+            "changed_by_228": true,
+            "note": "A `{}` tolerance declares neither bound, so it contributes nothing and both fields reach the default. Before the fix a `{}` block won wholesale and produced `(0, 0)` — silent EXACT-EQUALITY mode from an empty object."
+        },
+        {
+            "id": "empty_block_does_not_mask_the_model",
+            "levels": {
+                "model": {
+                    "rel": 0.01,
+                    "abs": 0.001
+                },
+                "test": {},
+                "assertion": null
+            },
+            "resolved": {
+                "rel": 0.01,
+                "abs": 0.001
+            },
+            "changed_by_228": true,
+            "note": "An empty block is transparent, not a barrier. Before the fix: `(0, 0)`, exact equality, from a test whose author wrote nothing at all."
+        },
+        {
+            "id": "null_is_absent",
+            "levels": {
+                "model": {
+                    "rel": 1e-06,
+                    "abs": 0.001
+                },
+                "test": null,
+                "assertion": {
+                    "rel": null,
+                    "abs": 1e-09
+                }
+            },
+            "resolved": {
+                "rel": 1e-06,
+                "abs": 1e-09
+            },
+            "changed_by_228": true,
+            "note": "A JSON `null` is not conforming input (the schema types both bounds as `number`), but a binding lenient enough to accept one MUST treat it as an absence and fall through — never as a declared 0. This is the case that separates \"absent\" from \"explicitly 0\"."
+        },
+        {
+            "id": "assertion_abs_only_takes_the_default_rel",
+            "levels": {
+                "model": null,
+                "test": null,
+                "assertion": {
+                    "abs": 0.0001
+                }
+            },
+            "resolved": {
+                "rel": 1e-06,
+                "abs": 0.0001
+            },
+            "changed_by_228": true,
+            "note": "The same at the innermost level, which is where `abs`-only blocks are actually written in the corpus. Nothing declares `rel`, so the default supplies it."
+        },
+        {
+            "id": "explicit_zero_rel_blocks_even_the_default",
+            "levels": {
+                "model": null,
+                "test": null,
+                "assertion": {
+                    "rel": 0.0,
+                    "abs": 0.0001
+                }
+            },
+            "resolved": {
+                "rel": 0.0,
+                "abs": 0.0001
+            },
+            "changed_by_228": false,
+            "note": "THE OPT-OUT, and the counterpart of the two cases above: with the default merging as a fourth level, `rel: 0` is the only spelling of \"absolute bound and nothing else\". A binding that treated the default as terminal would agree here — which is exactly why the two readings need the `abs`-only cases to tell them apart."
+        },
+        {
+            "id": "outer_rel_beats_the_default",
+            "levels": {
+                "model": {
+                    "rel": 0.001
+                },
+                "test": null,
+                "assertion": {
+                    "abs": 1e-09
+                }
+            },
+            "resolved": {
+                "rel": 0.001,
+                "abs": 1e-09
+            },
+            "changed_by_228": true,
+            "note": "NON-VACUITY for the fourth level: the default must not displace a `rel` a document did declare, however far out. `1e-3` from the model wins over the `1e-6` default."
+        }
+    ]
+}

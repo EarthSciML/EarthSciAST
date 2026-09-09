@@ -7,6 +7,20 @@ use super::*;
 /// v1 scope guards for [`Compiled::from_flattened`]: only pure `t`-dimensional
 /// ODE systems with no continuous or discrete events are supported.
 pub(super) fn reject_unsupported_features(flat: &FlattenedSystem) -> Result<(), CompileError> {
+    // esm-spec §4.2: a right-hand-side structural `D` that `flatten`'s tendency
+    // resolution left standing (a `D` of an observed, of a parameter, of a
+    // compound, or a cyclic tendency chain) is a rewrite-target reaching
+    // evaluation, and an implementation MUST NOT invent a value for it — in
+    // particular not `0`, which is what `eval_op`'s `D` arm returns.
+    //
+    // Checked BEFORE the dimensionality guard below, and outside it: that guard
+    // only admits a system with a SPATIAL independent variable, and this defect
+    // lives in 0-D documents, where `dxdt ~ D(x, t)` is written.
+    if crate::flatten::first_unresolved_rhs_time_derivative(flat).is_some() {
+        return Err(CompileError::UnloweredOperatorError {
+            op: "D".to_string(),
+        });
+    }
     if flat.independent_variables != ["t"] {
         // A spatial independent variable means a rewrite-target operator was
         // never discretized. Report THAT, with the uniform

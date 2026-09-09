@@ -123,6 +123,7 @@
               "reduce": "max",
               "expected": 8.25,
               "tolerance": {
+                "rel": 0.0,
                 "abs": 1e-09
               }
             },
@@ -132,6 +133,7 @@
               "reduce": "min",
               "expected": 0.75,
               "tolerance": {
+                "rel": 0.0,
                 "abs": 1e-09
               }
             },
@@ -144,6 +146,7 @@
               },
               "expected": 5.25,
               "tolerance": {
+                "rel": 0.0,
                 "abs": 1e-09
               }
             },
@@ -156,6 +159,7 @@
               },
               "expected": 3.75,
               "tolerance": {
+                "rel": 0.0,
                 "abs": 1e-09
               }
             }
