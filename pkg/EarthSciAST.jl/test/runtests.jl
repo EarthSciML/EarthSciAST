@@ -131,6 +131,11 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("scan_prefix_test.jl")                   # ess-scan O(N) prefix reduction ≡ per-cell
     include("stencil_affine_cse_test.jl")            # ess-affine per-cell CSE ≡ per-cell
     include("stencil_affine_invariant_test.jl")      # ess-affine invariant hoist ≡ per-cell
+    # Cross-shape state gather (a state array read from a loop of a DIFFERENT
+    # shape): the cut signature and the box lowering must both stay O(1) in the
+    # grid. Sits next to grid_invariance_test.jl because it pins the same
+    # property on the tier that was violating it.
+    include("stencil_affine_cross_shape_test.jl")
     include("grid_invariance_test.jl")               # compiled IR size is O(1) in the grid
     include("fn_content_cse_test.jl")                # fn specs keyed by CONTENT in per-kernel CSE
     include("array_obs_materialize_test.jl")         # factored array observeds ≡ ESS_ARRAY_OBS_INLINE=1
