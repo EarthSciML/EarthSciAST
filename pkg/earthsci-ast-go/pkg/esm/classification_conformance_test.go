@@ -75,11 +75,25 @@ func classificationModelNodes(t *testing.T, file *ESMFile) map[string]*Model {
 }
 
 func TestClassificationConformanceGoldens(t *testing.T) {
+	runClassificationCategory(t, "classification")
+}
+
+// The INDEXED LHS spelling of an arrayed definition (esm-spec §6.3.1), which the
+// `classification` category cannot state: it carries no `index` or `aggregate`
+// LHS at all, which is why four of the five bindings drifted onto the same wrong
+// answer independently. Same golden shape, so the same driver reads it.
+// See tests/conformance/classification_indexed_lhs/README.md.
+func TestClassificationIndexedLhsConformanceGoldens(t *testing.T) {
+	runClassificationCategory(t, "classification_indexed_lhs")
+}
+
+func runClassificationCategory(t *testing.T, category string) {
+	t.Helper()
 	repoRoot, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
 	if err != nil {
 		t.Fatalf("resolve repo root: %v", err)
 	}
-	base := filepath.Join(repoRoot, "tests", "conformance", "classification")
+	base := filepath.Join(repoRoot, "tests", "conformance", category)
 
 	raw, err := os.ReadFile(filepath.Join(base, "manifest.json"))
 	if err != nil {
@@ -96,7 +110,7 @@ func TestClassificationConformanceGoldens(t *testing.T) {
 		}
 	}
 	if !requiresGo {
-		t.Fatalf("the classification manifest no longer lists go in bindings_required: %v", man.BindingsRequired)
+		t.Fatalf("the %s manifest no longer lists go in bindings_required: %v", category, man.BindingsRequired)
 	}
 	if len(man.Fixtures) == 0 {
 		t.Fatal("manifest lists no fixtures")
@@ -380,5 +394,124 @@ func TestSystemKindMismatchIsReported(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("want system_kind_mismatch (declared nonlinear, derives ode): %+v", res.StructuralErrors)
+	}
+}
+
+// esm-spec §6.3.1 admits TWO LHS spellings for the equation that DEFINES an
+// unknown — bare (`y ~ f(…)`) and indexed (`y[i] ~ f(…)`, which defines the
+// whole array `y`) — and neither is restricted by rank: "the defining form is
+// read through the LHS's BASE NAME ... so an arrayed definition is observed
+// exactly as its scalar counterpart is".
+//
+// Both spellings of the indexed one must therefore credit `w` an OBSERVED: the
+// bare `index(w, i)` LHS that §6.3.1's worked example names verbatim, and the
+// `aggregate{k}(index(w, k))` shell that documents in this repo actually use
+// (both are written out in tests/conformance/classification_indexed_lhs/).
+// definedVariableName stopped at the aggregate shell, so
+// the second spelling was credited to nobody and AlgebraicUnknowns claimed `w`
+// by elimination.
+//
+// That is not bookkeeping. §6.3.1: AlgebraicUnknowns seeds the CONTINUOUS
+// cadence partition, whereas an observed's cadence resolves through its
+// defining RHS — "so misclassifying an arrayed definition as algebraic pushes
+// build-time work ... onto the per-timestep hot path". The partition assertion
+// below is what pins that consequence.
+//
+// See issue #232: PR #250 carries the Julia half, PR #276 the Python one.
+func TestObservedUnknownsSeeThroughIndexedLHSSpellings(t *testing.T) {
+	// `aggregate{k}(index(w, k))` — the whole-array spelling of `w[k] ~ …`.
+	aggregateIndexed := ExprNode{
+		Op:        "aggregate",
+		Args:      []any{},
+		OutputIdx: []any{"k"},
+		Ranges:    map[string]any{"k": map[string]any{"from": "lev"}},
+		Expr:      ExprNode{Op: "index", Args: []any{"w", "k"}},
+	}
+	cases := map[string]Expression{
+		"bare":                 "w",
+		"indexed":              ExprNode{Op: "index", Args: []any{"w", "k"}},
+		"aggregate_of_indexed": aggregateIndexed,
+	}
+	for label, lhs := range cases {
+		t.Run(label, func(t *testing.T) {
+			model := &Model{
+				Variables: map[string]ModelVariable{
+					"u": {Type: VarTypeUnknown},
+					"w": {Type: VarTypeUnknown, Shape: &[]string{"lev"}},
+				},
+				Equations: []Equation{
+					{LHS: ExprNode{Op: OpDerivative, Args: []any{"u"}, Wrt: strPtr("t")}, RHS: "w"},
+					{LHS: lhs, RHS: 2.0},
+				},
+			}
+			if got := ObservedUnknowns(model); !reflect.DeepEqual(got, []string{"w"}) {
+				t.Errorf("ObservedUnknowns = %v, want [w]", got)
+			}
+			// The three sets PARTITION, so crediting the definition must also
+			// take `w` out of the algebraic bucket, not merely add it here.
+			if got := AlgebraicUnknowns(model); len(got) != 0 {
+				t.Errorf("AlgebraicUnknowns = %v, want none (an arrayed definition is observed, not an implicit constraint)", got)
+			}
+			if _, ok := ObservedDefinition(model, "w"); !ok {
+				t.Error("ObservedDefinition(w) = false, want true")
+			}
+			// The ODE partition is untouched: `u` is still the only state.
+			if got := ODEStates(model); !reflect.DeepEqual(got, []string{"u"}) {
+				t.Errorf("ODEStates = %v, want [u]", got)
+			}
+			// THE CONSEQUENCE, not just the bookkeeping. `w`'s definition is
+			// state-free, so an observed seeds from its RHS's class and folds at
+			// bind (cadence.go's own contract: "seeding every unknown CONTINUOUS
+			// is sound but stops a state-free observed folding at bind, which the
+			// geometry and projection-pushdown paths rely on"). While the
+			// aggregate spelling was mis-credited to AlgebraicUnknowns it seeded
+			// CONTINUOUS instead, putting build-time work on the per-timestep hot
+			// path — exactly what esm-spec §6.3.1 warns this misclassification
+			// costs.
+			cad, err := NewCadenceClassifier(nil, model).SeedLeaf("w")
+			if err != nil {
+				t.Fatalf("SeedLeaf(w): %v", err)
+			}
+			if cad != CadenceConst {
+				t.Errorf("cadence(w) = %v, want const (a state-free observed folds at bind)", cad)
+			}
+		})
+	}
+}
+
+// The aggregate unwrap must recognise an `index` body ONLY. An `aggregate`
+// whose body is a `D` is the whole-array spelling of a TENDENCY — it makes an
+// ODE state, and crediting it as a definition would hand a state's derivative
+// RHS to the units and cadence passes as if it defined the state.
+//
+// TestODEStatesSeeThroughWrappedDerivatives already pins the ODE side; this
+// pins that the observed side does NOT also claim it, which is the boundary the
+// unwrap could have crossed.
+func TestAggregateDerivativeLHSIsNotAnObservedDefinition(t *testing.T) {
+	model := &Model{
+		Variables: map[string]ModelVariable{"u": {Type: VarTypeUnknown, Shape: &[]string{"lev"}}},
+		Equations: []Equation{{
+			LHS: ExprNode{
+				Op:        "aggregate",
+				Args:      []any{},
+				OutputIdx: []any{"k"},
+				Ranges:    map[string]any{"k": map[string]any{"from": "lev"}},
+				Expr: ExprNode{
+					Op:   OpDerivative,
+					Args: []any{ExprNode{Op: "index", Args: []any{"u", "k"}}},
+					Wrt:  strPtr("t"),
+				},
+			},
+			RHS: 1.0,
+		}},
+	}
+	if got := ObservedUnknowns(model); len(got) != 0 {
+		t.Errorf("ObservedUnknowns = %v, want none (an aggregate over a D is a tendency, not a definition)", got)
+	}
+	if _, ok := ObservedDefinition(model, "u"); ok {
+		t.Error("ObservedDefinition(u) = true, want false")
+	}
+	if got := ODEStates(model); !reflect.DeepEqual(got, []string{"u"}) {
+		t.Errorf("ODEStates = %v, want [u]", got)
 	}
 }
