@@ -93,6 +93,15 @@ func (e *CadenceError) DiagnosticCode() string { return e.Code }
 
 // Cadence-partition diagnostic codes.
 const (
+	// CodeCadenceObservedCycle is the CADENCE-pass sighting of the same defect
+	// esm-spec §4.9.6 gives the structural validator: a dependency cycle among a
+	// model's observed definitions, with the §4.3.1.1 recurrence self-edge
+	// exempted on candidacy. It is a *CadenceError raised while classifying, so
+	// `Validate` never sees it; the validator-track counterpart is
+	// validate_observed_cycle.go's `observed_cycle`, which is what
+	// tests/invalid/expected_errors.json pins. Keep the two in step — in
+	// particular the self-edge gate, which both take from
+	// recurrenceCandidateVars.
 	CodeCadenceObservedCycle        = "cadence_observed_cycle"
 	CodeCadenceExpectMismatch       = "cadence_expect_mismatch"
 	CodeCadenceContinuousRelational = "cadence_continuous_relational"

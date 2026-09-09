@@ -104,6 +104,11 @@ include("resolve.jl")
 include("coupling_imports.jl")
 # Expression operations, rendering, and tooling
 include("expression.jl")
+# esm-spec §9.5.3 `table_lookup` → `interp.*` lowering. A BUILD-time pass (see
+# the file header for why it deliberately is not a load-time one like the §9.3
+# enum lowering), so it sits with the expression rewrites and is called from the
+# build front doors in simulate.jl / the two inline-test runners.
+include("lower_table_lookup.jl")
 # Structural interning (hash-consing) of the expression AST — perf plan A1.
 include("intern.jl")
 include("display.jl")
@@ -140,7 +145,7 @@ include("value_invention.jl")
 include("pushdown_rewrite.jl")
 # Inline-test runners (spec §6.6; called as API by downstream model repos)
 include("run_tests.jl")
-include("pde_inline_tests.jl")
+include("inline_tests.jl")
 
 export
     # Root of the exception hierarchy (H-1): every exception this package
@@ -213,6 +218,8 @@ export
     ConflictingDerivativeError, DimensionPromotionError, UnmappedDomainError,
     UnsupportedMappingError, DomainUnitMismatchError,
     DomainExtentMismatchError, SliceOutOfDomainError, CyclicPromotionError,
+    OperatorComposeNoMergeError, OperatorComposeRequireMatchError,
+    OperatorComposeAmbiguousBareNameError,
     # System types
     Domain, Reference, Metadata, EsmFile,
     FunctionTable, FunctionTableAxis,
@@ -389,8 +396,11 @@ export
     AssertionStatus, AssertionResult, PASS, FAIL, ERROR, SKIP,
     esm_root, esm_path,
     discover_esm_files, run_esm_tests, write_junit_xml,
-    # PDE inline-test runner (spec §6.6.5) over the tree-walk pathway
-    PdeAssertionResult, run_pde_tests, evaluate_cellwise, field_reduce,
+    # Inline-test runner (spec §6.6, incl. the §6.6.5 PDE assertion forms)
+    # over the tree-walk pathway. The results are the `AssertionResult`
+    # exported above — both runners have always shared the one type.
+    run_inline_tests, InlineTestOptions,
+    evaluate_cellwise, field_reduce,
     # Closed function registry (esm-tzp / esm-4aw; esm-spec §9.2)
     evaluate_closed_function, evaluate_closed_function_ad,
     closed_function_names, ClosedFunctionError,

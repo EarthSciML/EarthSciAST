@@ -1,0 +1,102 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "operator_compose_no_merge",
+    "description": "esm-libraries-spec 4.7.1 step 5, ZERO-MERGE. The deposition operator `Sink` writes its tendency over `O3S`, a species the mechanism `Chem` does not carry -- a typo, a renamed species, or a mechanism variant. Nothing matches, so step 5 preserves Sink's equation unchanged and the flattened system carries TWO states where the author meant one: Chem integrates with no deposition at all and Sink integrates a private decoupled decay from its own hard-coded default. Before this diagnostic the only evidence was a state count one too high. The equations are still preserved -- an operator may legitimately contribute states of its own, which is why this is a WARNING -- but it is no longer silent.",
+    "authors": [
+      "EarthSciAST"
+    ],
+    "tags": [
+      "esm-libraries-spec-4.7.1",
+      "operator-compose",
+      "operator-compose-no-merge",
+      "merge-intent"
+    ]
+  },
+  "models": {
+    "Chem": {
+      "variables": {
+        "O3": {
+          "type": "unknown",
+          "units": "ppb",
+          "default": 30.0
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.0002
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "O3"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "O3"
+            ]
+          }
+        }
+      ]
+    },
+    "Sink": {
+      "variables": {
+        "O3S": {
+          "type": "unknown",
+          "units": "ppb",
+          "default": 40.0,
+          "description": "The species the mechanism does NOT carry. Nothing matches it."
+        },
+        "kd": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.0001
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "O3S"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "kd"
+                ]
+              },
+              "O3S"
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "operator_compose",
+      "systems": [
+        "Chem",
+        "Sink"
+      ]
+    }
+  ]
+}

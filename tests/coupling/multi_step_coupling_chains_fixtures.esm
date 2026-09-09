@@ -592,6 +592,7 @@
         "AtmosphereChemistry",
         "AtmosphereTransport"
       ],
+      "require_match": false,
       "description": "STEP 1: Couple chemistry with transport (placeholder expansion for all chemical species)"
     },
     {
@@ -655,6 +656,7 @@
         "OceanBiogeochemistry",
         "AtmosphereTransport"
       ],
+      "require_match": false,
       "translate": {
         "DIC": {
           "var": "CO2_dissolved",

@@ -1,0 +1,68 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "decay_leaf",
+    "description": "A standalone leaf component carrying its own esm-spec 6.6 inline test. `k` defaults to 1, so u(1) = 1/e and the test passes when this file is the test target. Mounted into `assembly.esm`, the coupling drives `k` to 5 and the same assertion would be off by two orders of magnitude - which is why a mount does not carry a component's tests.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ]
+  },
+  "models": {
+    "Decay": {
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0,
+          "description": "Decaying quantity."
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 1.0,
+          "description": "Decay rate. Standalone it is 1; a coupling may replace it."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "u"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              -1.0,
+              "k",
+              "u"
+            ]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "decays_to_one_over_e",
+          "description": "An assertion about THIS leaf under ITS OWN standalone conditions: k = 1, so u(1) = exp(-1). The tolerance is loose enough for every binding's DEFAULT integrator (no manifest pins one here) and still ~1000x tighter than the 0.361 the coupling moves this value by, so the fixture gates the mount rule without gating solver accuracy.",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "tolerance": {
+            "abs": 0.001,
+            "rel": 0.001
+          },
+          "assertions": [
+            {
+              "variable": "u",
+              "time": 1.0,
+              "expected": 0.36787944117144233
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

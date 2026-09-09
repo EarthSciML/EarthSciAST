@@ -131,7 +131,7 @@ end
 
 _dob_load(doc) = _DOB.load_string(IOBuffer(JSON3.write(doc)))
 
-_dob_run(file) = run_pde_tests(file; model_name = "M",
+_dob_run(file) = run_inline_tests(file; model_name = "M",
                                alg = OrdinaryDiffEqTsit5.Tsit5(),
                                reltol = 1e-12, abstol = 1e-14)
 
@@ -302,7 +302,7 @@ end
             _dob_reduce("diag", "max", top),
             _dob_coords("diag", ["x" => 2], cell2),
             _dob_reduce("base", "max", top / 2)])
-        results = run_pde_tests(_dob_load(doc); model_name = mname,
+        results = run_inline_tests(_dob_load(doc); model_name = mname,
                                 alg = OrdinaryDiffEqTsit5.Tsit5(),
                                 reltol = 1e-12, abstol = 1e-14)
         @test length(results) == 3

@@ -937,6 +937,9 @@ reading that as a gap.
 | `model` | type | `Model` | – | `Model` | `Model` | `Model` |
 | `model_variable` | type | `ModelVariable` | – | `ModelVariable` | `ModelVariable` | `ModelVariable` |
 | `observed_definitions` | function | `observed_definitions` | `observedDefinitions` | `observed_definitions` | `observed_definitions` | – |
+| `operator_compose_ambiguous_bare_name_error` | error | `OperatorComposeAmbiguousBareNameError` | `OperatorComposeAmbiguousBareNameError` | `OperatorComposeAmbiguousBareNameError` | – | `OperatorComposeAmbiguousBareNameError` |
+| `operator_compose_no_merge_error` | error | `OperatorComposeNoMergeError` | `OperatorComposeNoMergeError` | `OperatorComposeNoMergeError` | – | `OperatorComposeNoMergeError` |
+| `operator_compose_require_match_error` | error | `OperatorComposeRequireMatchError` | `OperatorComposeRequireMatchError` | `OperatorComposeRequireMatchError` | – | `OperatorComposeRequireMatchError` |
 | `parameter_update` | type | `ParameterUpdate` | – | `ParameterUpdate` | `ParameterUpdate` | `ParameterUpdate` |
 | `reaction` | type | `Reaction` | – | `Reaction` | `Reaction` | `Reaction` |
 | `reaction_system` | type | `ReactionSystem` | – | `ReactionSystem` | `ReactionSystem` | `ReactionSystem` |
@@ -1005,6 +1008,7 @@ reading that as a gap.
 | `apply_scope_injections` | function | – | `applyScopeInjections` | – | `apply_scope_injections` | – |
 | `apply_unit_conversion` | function | `apply_unit_conversion` / `apply_unit_conversion!` | – | `apply_unit_conversion` | – | – |
 | `area_tolerance_ok` | function | – | – | `area_tolerance_ok` | `area_tolerance_ok` | – |
+| `assertion_result` | type | `AssertionResult` | – | – | `AssertionResult` | – |
 | `build_unit_env` | function | – | – | – | `build_unit_env` | `BuildUnitEnv` |
 | `cadence` | type | – | – | – | `Cadence` | `Cadence` |
 | `callback_set` | type | – | – | `CallbackSet` | `CallbackSet` | – |
@@ -1050,6 +1054,7 @@ reading that as a gap.
 | `group_aggregate` | function | – | – | `group_aggregate` | `group_aggregate` | – |
 | `group_gridding_by_grid` | function | `group_gridding_by_grid` | – | – | `group_gridding_by_grid` | – |
 | `init` | function | – | – | `init` | `init` | – |
+| `inline_test_options` | type | `InlineTestOptions` | – | – | `InlineTestOptions` | – |
 | `integrator` | type | – | – | `Integrator` | `Integrator` | – |
 | `intersect_polygon` | function | – | – | `intersect_polygon` | `intersect_polygon` | – |
 | `is_template_library_doc` | function | – | `isTemplateLibraryDoc` | – | `is_template_library_doc` | – |
@@ -1065,7 +1070,6 @@ reading that as a gap.
 | `parse_error` | error | `ParseError` | `ParseError` | – | – | – |
 | `parse_unit_conversion` | function | `parse_unit_conversion` | – | `parse_unit_conversion` | – | – |
 | `partition` | type | – | – | `Partition` | `Partition` | – |
-| `pde_assertion_result` | type | `PdeAssertionResult` | – | – | `PdeAssertionResult` | – |
 | `plan_dimension_coordinates` | function | `plan_dimension_coordinates` | – | – | `plan_dimension_coordinates` | – |
 | `polygon_area` | function | – | – | `polygon_area` | `polygon_area` | – |
 | `product_matrix` | function | – | `productMatrix` | `product_matrix` | – | – |
@@ -1073,7 +1077,7 @@ reading that as a gap.
 | `ranking` | type | – | – | `Ranking` | `Ranking` | – |
 | `remake` | function | – | – | `remake` | `remake` | – |
 | `return_code` | type | – | – | `ReturnCode` | `ReturnCode` | – |
-| `run_pde_tests` | function | `run_pde_tests` | – | – | `run_pde_tests` | – |
+| `run_inline_tests` | function | `run_inline_tests` | – | – | `run_inline_tests` | – |
 | `schema_error` | error | – | – | – | `SchemaError` | `SchemaError` |
 | `schema_error` | type | `SchemaError` | `SchemaError` | – | – | – |
 | `simulate_error` | error | `SimulateError` | – | – | `SimulateError` | – |

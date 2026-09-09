@@ -862,11 +862,27 @@ type CouplingEntry interface {
 
 // OperatorComposeCoupling represents operator composition
 type OperatorComposeCoupling struct {
-	Type        string         `json:"type"` // "operator_compose"
-	Systems     [2]string      `json:"systems"`
-	Translate   map[string]any `json:"translate,omitempty"`
-	Lifting     *string        `json:"lifting,omitempty"`
-	Description *string        `json:"description,omitempty"`
+	Type      string         `json:"type"` // "operator_compose"
+	Systems   [2]string      `json:"systems"`
+	Translate map[string]any `json:"translate,omitempty"`
+	Lifting   *string        `json:"lifting,omitempty"`
+	// RequireMatch is the entry's MERGE INTENT (esm-libraries-spec §4.7.1
+	// step 5). TRI-STATE, which is why it is a pointer: nil is NOT false.
+	//
+	//	nil    the author has not said. A zero-merge is then
+	//	       CodeOperatorComposeNoMerge, an ERROR (such an entry is
+	//	       indistinguishable from one that is absent); a partial merge is a
+	//	       warning.
+	//	true   the Systems[1] equations are CONTRIBUTIONS and every one must
+	//	       land; any shortfall, partial included, is a hard refusal.
+	//	false  a standalone-contributing operator, DECLARED. Unmatched equations
+	//	       are expected and nothing is reported.
+	//
+	// `omitempty` on a pointer drops only nil, so an explicit false survives the
+	// round trip -- dropping it would silently re-arm the zero-merge refusal on
+	// every document that opted out.
+	RequireMatch *bool   `json:"require_match,omitempty"`
+	Description  *string `json:"description,omitempty"`
 }
 
 func (o OperatorComposeCoupling) CouplingType() string { return o.Type }

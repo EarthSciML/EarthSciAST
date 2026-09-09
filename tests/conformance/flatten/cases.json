@@ -2063,6 +2063,170 @@
       "lifted_shapes": {}
     },
     {
+      "id": "variable_map_subsystem_endpoints",
+      "tier": "coupled",
+      "fixture": "valid/variable_map_subsystem_endpoints.esm",
+      "system_kind": "ode",
+      "independent_variables": [
+        "t"
+      ],
+      "state_variables": [
+        {
+          "name": "Source.drive",
+          "role": "state",
+          "units": "K",
+          "default": 1.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Source"
+        },
+        {
+          "name": "Wrapper.inner.tracer",
+          "role": "state",
+          "units": "K",
+          "default": 1.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Wrapper.inner"
+        },
+        {
+          "name": "Wrapper.sink.load",
+          "role": "state",
+          "units": "K",
+          "default": 0.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Wrapper.sink"
+        },
+        {
+          "name": "Receiver.total",
+          "role": "state",
+          "units": "K",
+          "default": 0.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Receiver"
+        }
+      ],
+      "parameters": [
+        {
+          "name": "Source.ramp",
+          "role": "parameter",
+          "units": "K/s",
+          "default": 1.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Source"
+        },
+        {
+          "name": "Wrapper.inner.tau",
+          "role": "parameter",
+          "units": "s",
+          "default": 1.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Wrapper.inner"
+        },
+        {
+          "name": "Wrapper.sink.tau",
+          "role": "parameter",
+          "units": "s",
+          "default": 1.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Wrapper.sink"
+        },
+        {
+          "name": "Receiver.tau",
+          "role": "parameter",
+          "units": "s",
+          "default": 1.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Receiver"
+        }
+      ],
+      "observed_variables": [
+        {
+          "name": "Wrapper.exported",
+          "role": "observed",
+          "units": "K",
+          "default": null,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Wrapper"
+        }
+      ],
+      "algebraic_variables": [],
+      "brownian_parameters": [],
+      "discrete_parameters": [],
+      "equation_count": 5,
+      "equations": [
+        {
+          "lhs": "D(Source.drive)/Dt",
+          "rhs": "Source.ramp",
+          "source_system": "Source"
+        },
+        {
+          "lhs": "Wrapper.exported",
+          "rhs": "2 * Wrapper.inner.tracer",
+          "source_system": "Wrapper"
+        },
+        {
+          "lhs": "D(Wrapper.inner.tracer)/Dt",
+          "rhs": "Source.drive / Wrapper.inner.tau",
+          "source_system": "Wrapper.inner"
+        },
+        {
+          "lhs": "D(Wrapper.sink.load)/Dt",
+          "rhs": "Wrapper.inner.tracer / Wrapper.sink.tau",
+          "source_system": "Wrapper.sink"
+        },
+        {
+          "lhs": "D(Receiver.total)/Dt",
+          "rhs": "(Wrapper.inner.tracer + Wrapper.exported) / Receiver.tau",
+          "source_system": "Receiver"
+        }
+      ],
+      "continuous_events": [],
+      "discrete_events": [],
+      "domain": {
+        "independent_variable": null,
+        "element_type": null,
+        "array_type": null
+      },
+      "metadata": {
+        "source_systems": [
+          "Source",
+          "Wrapper",
+          "Receiver"
+        ],
+        "coupling_rules": [
+          "variable_map(Source.drive -> Wrapper.inner.gain, transform=param_to_var)",
+          "variable_map(Wrapper.inner.tracer -> Receiver.nested_in, transform=param_to_var)",
+          "variable_map(Wrapper.exported -> Receiver.wrapper_in, transform=param_to_var)",
+          "variable_map(Wrapper.inner.tracer -> Wrapper.sink.uptake, transform=param_to_var)"
+        ],
+        "operator_applies": [],
+        "callbacks": []
+      },
+      "index_sets": [],
+      "function_tables": [],
+      "template_registry": [],
+      "field_ics": [],
+      "loader_fields": [],
+      "lifted_shapes": {}
+    },
+    {
       "id": "minimal_chemistry",
       "tier": "operator_compose",
       "fixture": "valid/minimal_chemistry.esm",
@@ -4085,6 +4249,11 @@
       "fixture": "coupling/couple_multiplicative_no_tendency.esm",
       "error": "CoupleMultiplicativeNoTendencyError",
       "reason": "a `couple` connector applies `multiplicative` to `Surface.resistance`, a constant parameter with no `D(...)` tendency. esm-spec §10.3 and libraries §4.7.2 both define the transform against the target's EXISTING ODE RHS, so there is nothing to multiply. Four of five bindings used to drop the connector equation SILENTLY -- the document declared a coupling and the flattened system carried no trace of it. This case exists so `couple_multiplicative_no_tendency` cannot rot the way `operator_compose` did: every fixture that used the idiom was migrated to the §10.4 `variable_map` spelling, which left the diagnostic with no fixture at all. It lives in tests/coupling/ and NOT in tests/invalid/ because it is schema-valid and structurally valid -- `tests/invalid/` means `validate()` must reject, and this document is refused at FLATTEN. Same placement rule as valid/template_import_lib.esm."
+    },
+    {
+      "fixture": "coupling/coupling_resolution_edge_cases.esm",
+      "error": "VariableMapUnresolvedEndpointError",
+      "reason": "EDGE CASE 10 of this catalogue maps `SingleVariableSystem.x` onto `EmptySystem.nonexistent_param`, which the document declares nowhere. Every binding used to flatten it CLEANLY with the entry silently dropped: the substitution runs over a name nothing references and the promotion pops a key that is not there, so the flattened system is indistinguishable from one where the coupling applied and happened to have no effect. That is the failure mode issue #198 item 1 reports from the other end -- a target that keeps its declared default, and (when it is the SOURCE that resolves to nothing) consumers rewritten to a name no table binds, which reads NaN at run time rather than raising. Same placement rule as `couple_multiplicative_no_tendency`: schema-valid and structurally valid, refused at FLATTEN, so it lives in tests/coupling/ and not tests/invalid/."
     },
     {
       "fixture": "conformance/expression_templates/nonterminating_rewrite/fixture.esm",
