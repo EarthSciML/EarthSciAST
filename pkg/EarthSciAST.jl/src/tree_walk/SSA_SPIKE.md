@@ -180,14 +180,58 @@ fold.
   forcing reads go through the buffers argument, never `ue` — and the
   discrete-cadence refresh stays visible with fill scatters skipped (probed).
 
+## ReSEACT at CONUS: 1.36x on the whole adjoint loop, chemistry exact
+
+Measured 2026-09-09 at 4x5 CONUS (13x7x72, 6 552 cells), two driver builds in
+ONE process, arms interleaved, every pair run in BOTH arm orders — reproducing
+to three digits, so the order is not what is being measured.
+`tools/diag/p13_ssa_ab.jl` + `tools/diag/p11_ue_traffic.py` in the consuming
+repo.
+
+| program | arms off | arms on | off/on | copies | real element writes |
+|---|---|---|---|---|---|
+| `ros_step` (chemistry) | 38.90 ms | 28.23 ms | **1.38** (bit-for-bit) | | |
+| `ros_vjp` | 81.11 ms | 56.71 ms | **1.43** (λ bit-for-bit) | | |
+| `rhs` (transport RHS) | 3.755 ms | 6.405 ms | 0.59 | 2 → 3 | 2.49 M → 2.69 M |
+| `rhs_vjp` | 80.5 ms | 72.2 ms | **1.12** | **98 → 82** | 59.55 M → 55.22 M |
+| `ssp_step` (4-stage) | 13.41 ms | 24.25 ms | 0.55 | 8 → 12 | 10.43 M → 16.97 M |
+| `ssp_vjp` | 306.6 ms | 254.9 ms | **1.20** | **394 → 331** | 231.8 M → 176.3 M |
+
+Weighted by the adjoint's step mix (45.3 chemistry + 3.2 transport steps per
+300 s window) the per-window cost is 6.46 s → 4.74 s, **1.36x**.
+
+WHY THE TRANSPORT FORWARD LOSES. A producer's `dynamic_update_slice` into `ue`
+ALIASES its operand in the FORWARD, so XLA:CPU writes only the update and the
+scatter is nearly free there; skipping it instead forces the producer's value to
+be materialized as its own buffer. On the PPM transport RHS (17 producers,
+blocks up to 3 456 elements) that trade is a loss. On chemistry it is a win in
+both directions, because there the redirect replaces fragmented gathers of the
+12 326-element buffer with gathers of much smaller producer values and 59 of 59
+scatters disappear.
+
+The copies the scatter chain causes are all in the REVERSE, where each `ue`
+version has ~70 live consumers and copy-insertion duplicates the whole buffer
+per version. That is where removing readers pays on both halves: `ssp_vjp`
+loses 63 of its 394 whole-buffer copies and 24% of its write traffic for 1.20x,
+against a ~1.8x ceiling if every copy vanished.
+
+It is also why `ess-oop-levelbase` (one read version per level) failed where
+this succeeds: it reduced VERSIONS, which the forward already got for free,
+instead of removing READERS. Its census went 99 → 102 copies; this one goes
+98 → 82 and 394 → 331.
+
 ## What is NOT verified
 
-The `ESM_TEST_REACTANT=1` traced census (`reactant_oop_ssa_test.jl`) asserts the
-DUS delta equals `n_skipped_scatters` on the toy fixtures; the extension's arms
-are exercised there only insofar as those fixtures engage them. The ReSEACT
-timing A/B and the whole-buffer copy census live in the consuming repo
-(`tools/diag/p13_ssa_ab.jl`, `tools/diag/p11_ue_traffic.py`) because they need
-the offline forcing environment.
+Bit-identity across the arms is asserted and holds on HOST (`==`) and, on the
+toy fixtures, in the traced census (`reactant_oop_ssa_test.jl`, which pins the
+DUS delta to `n_skipped_scatters`). At CONUS the two arms are NOT bit-identical:
+changing the operand graph changes XLA's fusion, hence FMA and vectorization
+order. chemistry `ros_step` is bit-for-bit and `ros_vjp`'s λ is bit-for-bit (its
+p-gradient differs in the 20th significant figure); transport `ssp_step`
+differs by 5.6e-15 pointwise relative. The pointwise metric on the VJPs is
+uninformative — it reads exactly 2.0 on components at ~1e-310 — so the probe
+also reports a scale-relative figure and the count of components over 1e-9 of
+scale.
 
 ## Generalization assessment (honest)
 
