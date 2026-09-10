@@ -369,6 +369,37 @@ type FlattenMetadata struct {
 	OperatorApplies []string
 	// Callbacks are the `callback` coupling entries, likewise.
 	Callbacks []string
+	// MergedVariableRenames maps every state spelling an `operator_compose`
+	// renaming match DELETED onto the survivor it was folded into (issue #230).
+	//
+	// The flattener's own retarget reaches equation ASTs; this is the map a
+	// CONSUMER that addresses a state by name needs — a parameter_overrides /
+	// initial_conditions key, an output selection — to resolve a spelling the
+	// merge moved out from under it. Nil for a document with no renaming merge,
+	// which is the overwhelming majority.
+	MergedVariableRenames map[string]string
+	// CouplingRewrittenNames is every name a COUPLING rule rewrote out of the
+	// flattened equations: a `variable_map`'s substituted target, and every
+	// merged-away spelling above.
+	//
+	// Only the registry guard reads it — a surviving expression-template body is
+	// authored source no substitution reaches, so a body naming one of these is
+	// REFUSED rather than resolved (checkRegistryCouplingRewrites,
+	// CONFORMANCE_SPEC §5.35). Not a consumer-facing map, unlike
+	// MergedVariableRenames: it says a name is GONE, not where it went.
+	CouplingRewrittenNames map[string]bool
+}
+
+// noteCouplingRewritten records one name a coupling rule rewrote out of the
+// equations, materializing the set on first use.
+func (m *FlattenMetadata) noteCouplingRewritten(name string) {
+	if name == "" {
+		return
+	}
+	if m.CouplingRewrittenNames == nil {
+		m.CouplingRewrittenNames = map[string]bool{}
+	}
+	m.CouplingRewrittenNames[name] = true
 }
 
 // FlattenedSystem is a coupled system flattened into a single system — the
@@ -758,6 +789,19 @@ func namespaceExprTree(expr Expression, prefix string, leaveAlone, subsystemKeys
 		out.Join = namespaceJoinNames(out.Join, binders, prefix, locals)
 	}
 	return out
+}
+
+// namespaceVariableUpdate namespaces the expression-bearing slots of a
+// variable's `update` rules (§4.7.5 step 2).
+//
+// A rule's `when` and `expression` are ordinary expressions in the declaring
+// component's scope, exactly like an equation side — but they are carried on the
+// VARIABLE rather than in `equations`, so no equation walk reaches them. Mirrors
+// Julia `namespacing.jl::_namespace_variable_update`.
+func namespaceVariableUpdate(update any, prefix string, leaveAlone, subsystemKeys, locals map[string]bool) any {
+	return rewriteUpdateExprs(update, func(expr Expression) Expression {
+		return namespaceExprTree(expr, prefix, leaveAlone, subsystemKeys, locals)
+	})
 }
 
 // namespaceJoinNames dot-prefixes the plain-string variable references a `join`
@@ -1150,6 +1194,27 @@ func collectModel(file *ESMFile, model *Model, fullPrefix, docPath string, sourc
 	}
 
 	varOrder := orderedKeys(model.Variables, file.declarationOrder(docPath+"/variables"))
+
+	// Subsystem keys mounted on this model: references rooted at one of these
+	// are subsystem-LOCAL and must be qualified with the model prefix.
+	subKeys := map[string]bool{}
+	for k := range model.Subsystems {
+		subKeys[k] = true
+	}
+	// The component's own declared names — the gate for namespacing the
+	// plain-string references a `join` clause carries (§5.5.6).
+	locals := map[string]bool{}
+	for k := range model.Variables {
+		locals[k] = true
+	}
+	for k := range subKeys {
+		locals[k] = true
+	}
+	// Computed BEFORE the variable loop, which needs them: a parameter's
+	// `update` expressions are references in this component's scope and
+	// namespace exactly like an equation side.
+	leaveAlone := placeholderLeaveAlone()
+
 	for _, varName := range varOrder {
 		v := model.Variables[varName]
 		namespaced := fullPrefix + "." + varName
@@ -1178,7 +1243,14 @@ func collectModel(file *ESMFile, model *Model, fullPrefix, docPath string, sourc
 			Default:      v.Default,
 			Description:  v.Description,
 			Shape:        append([]string(nil), v.Dims()...),
-			Update:       v.Update,
+			// A parameter's `update` rules carry EXPRESSIONS — the `when`
+			// trigger and the value `expression` — whose free names are
+			// ordinary references in this component's scope, so they namespace
+			// exactly like an equation side (§4.7.5 step 2). Passing them
+			// through bare left them out of step with the reference bindings,
+			// and beyond the reach of every later rewrite that keys on the
+			// namespaced form (CONFORMANCE_SPEC §5.35).
+			Update:       namespaceVariableUpdate(v.Update, fullPrefix, leaveAlone, subKeys, locals),
 			Distribution: v.Distribution,
 		}
 		if len(flatVar.Shape) == 0 {
@@ -1199,23 +1271,7 @@ func collectModel(file *ESMFile, model *Model, fullPrefix, docPath string, sourc
 		}
 	}
 
-	// Subsystem keys mounted on this model: references rooted at one of these
-	// are subsystem-LOCAL and must be qualified with the model prefix.
-	subKeys := map[string]bool{}
-	for k := range model.Subsystems {
-		subKeys[k] = true
-	}
-	// The component's own declared names — the gate for namespacing the
-	// plain-string references a `join` clause carries (§5.5.6).
-	locals := map[string]bool{}
-	for k := range model.Variables {
-		locals[k] = true
-	}
-	for k := range subKeys {
-		locals[k] = true
-	}
-
-	component.namespaceEquations(model.Equations, fullPrefix, placeholderLeaveAlone(), subKeys, locals)
+	component.namespaceEquations(model.Equations, fullPrefix, leaveAlone, subKeys, locals)
 	component.loaderFields = append(component.loaderFields,
 		dataSourceFields(model, fullPrefix, varOrder, sources)...)
 
@@ -1266,6 +1322,17 @@ func collectReactionSystem(file *ESMFile, rs *ReactionSystem, fullPrefix, docPat
 	}
 
 	paramOrder := orderedKeys(rs.Parameters, file.declarationOrder(docPath+"/parameters"))
+
+	// Declared local names for the §5.5.6 `join` gate — computed BEFORE the
+	// parameter loop, which needs them to namespace an `update` expression.
+	locals := map[string]bool{}
+	for _, n := range speciesOrder {
+		locals[n] = true
+	}
+	for _, n := range paramOrder {
+		locals[n] = true
+	}
+
 	for _, name := range paramOrder {
 		p := rs.Parameters[name]
 		var defaultValue any
@@ -1280,19 +1347,12 @@ func collectReactionSystem(file *ESMFile, rs *ReactionSystem, fullPrefix, docPat
 		component.parameters.set(FlattenedVariable{
 			Name: fullPrefix + "." + name, Role: "parameter", SourceSystem: fullPrefix,
 			Units: p.Units, Default: defaultValue, Description: p.Description,
-			Shape:        append([]string(nil), p.Dims()...),
-			Update:       p.Update,
+			Shape: append([]string(nil), p.Dims()...),
+			// The `when` / `expression` slots are references in this system's
+			// scope; see collectModel.
+			Update:       namespaceVariableUpdate(p.Update, fullPrefix, leaveAlone, nil, locals),
 			Distribution: p.Distribution,
 		})
-	}
-
-	// Declared local names for the §5.5.6 `join` gate.
-	locals := map[string]bool{}
-	for _, n := range speciesOrder {
-		locals[n] = true
-	}
-	for _, n := range paramOrder {
-		locals[n] = true
 	}
 
 	derived, err := lowerReactionsToEquations(rs, speciesOrder)
@@ -1563,13 +1623,118 @@ func expandOperatorComposePlaceholders(components map[string]*componentSystem, e
 // than by Systems[0]: whichever of the two names is the state variable owns the
 // quantity, and where BOTH are states the entry is refused rather than decided.
 // See bareNameOwner.
-func applyOperatorCompose(components map[string]*componentSystem, entry OperatorComposeCoupling) error {
+
+// composeRenames folds a merge's fresh rename map into the running
+// document-wide one.
+//
+// Renames CHAIN: if an earlier `operator_compose` merged `B.x` onto `A.x` and a
+// later one merges `A.x` onto `C.x`, a document that still names `B.x` must land
+// on `C.x` — so the accumulated map's VALUES are retargeted through the new map
+// before the new pairs are added.
+func composeRenames(acc, next map[string]string) {
+	for gone, survivor := range acc {
+		if further, ok := next[survivor]; ok {
+			acc[gone] = further
+		}
+	}
+	for gone, survivor := range next {
+		acc[gone] = survivor
+	}
+}
+
+// retargetTranslateMap rewrites a built `translate` map off names an earlier
+// merge deleted. Both endpoints are rewritten: an earlier entry may have
+// consumed either the A-side or the B-side spelling this entry names (#230).
+func retargetTranslateMap(translate map[string]translateEntry, renames map[string]string) map[string]translateEntry {
+	if len(renames) == 0 || len(translate) == 0 {
+		return translate
+	}
+	out := make(map[string]translateEntry, len(translate))
+	for bName, te := range translate {
+		if survivor, ok := renames[te.target]; ok {
+			te.target = survivor
+		}
+		if survivor, ok := renames[bName]; ok {
+			bName = survivor
+		}
+		out[bName] = te
+	}
+	return out
+}
+
+// retargetPendingCouple rewrites a not-yet-applied `couple` entry's connector
+// endpoints off names an earlier merge deleted (issue #230).
+//
+// `operator_compose` runs before `couple` and `variable_map` (§4.7.5 step 3
+// ordering) and a renaming merge DELETES the spelling it consumed. The
+// document-wide retarget (retargetMergedNames) reaches equation ASTs only — a
+// connector's From/To is a plain scoped-reference STRING carried on the entry,
+// so an entry that has not run yet can still name a state that has moved, and
+// the connector then matches nothing and is dropped in SILENCE. The entry is
+// COPIED (the connector's equation slice included), so the source document keeps
+// what its author wrote.
+func retargetPendingCouple(entry CouplingCouple, renames map[string]string) CouplingCouple {
+	if len(renames) == 0 || len(entry.Connector.Equations) == 0 {
+		return entry
+	}
+	walk := newNameRenamer(renames)
+	eqs := make([]ConnectorEquation, len(entry.Connector.Equations))
+	for i, ceq := range entry.Connector.Equations {
+		if survivor, ok := renames[ceq.From]; ok {
+			ceq.From = survivor
+		}
+		if survivor, ok := renames[ceq.To]; ok {
+			ceq.To = survivor
+		}
+		if ceq.Expression != nil {
+			ceq.Expression = walk.apply(ceq.Expression)
+		}
+		eqs[i] = ceq
+	}
+	entry.Connector = Connector{Equations: eqs}
+	return entry
+}
+
+// retargetPendingVariableMap is retargetPendingCouple's `variable_map`
+// counterpart: From/To are the same kind of plain scoped-reference string, and a
+// From naming a merged-away state would substitute a DEAD name into every
+// equation referencing the mapped parameter.
+func retargetPendingVariableMap(entry VariableMapCoupling, renames map[string]string) VariableMapCoupling {
+	if len(renames) == 0 {
+		return entry
+	}
+	if survivor, ok := renames[entry.From]; ok {
+		entry.From = survivor
+	}
+	if survivor, ok := renames[entry.To]; ok {
+		entry.To = survivor
+	}
+	if entry.TransformIsExpression() {
+		entry.Transform = newNameRenamer(renames).apply(entry.Transform)
+	}
+	return entry
+}
+
+// renameBindings lifts a name -> name map into the name -> Expression form
+// substituteExpr takes.
+func renameBindings(renames map[string]string) map[string]Expression {
+	bindings := make(map[string]Expression, len(renames))
+	for from, to := range renames {
+		bindings[from] = to
+	}
+	return bindings
+}
+
+// applyOperatorCompose merges B's equations into A, returning every state
+// spelling the merge DELETED mapped onto the survivor it was folded into, for
+// the caller's running document-wide rename (issue #230).
+func applyOperatorCompose(components map[string]*componentSystem, entry OperatorComposeCoupling, renames map[string]string) (map[string]string, error) {
 	a, aok := components[entry.Systems[0]]
 	b, bok := components[entry.Systems[1]]
 	if !aok || !bok {
-		return nil
+		return nil, nil
 	}
-	translate := buildTranslateMap(entry)
+	translate := retargetTranslateMap(buildTranslateMap(entry), renames)
 
 	// Index A's equations by namespaced dependent variable, keeping insertion
 	// order so the fallback scan below is deterministic.
@@ -1688,7 +1853,7 @@ func applyOperatorCompose(components map[string]*componentSystem, entry Operator
 	b.equations = surviving
 
 	if err := reportOperatorComposeMerge(entry, authored, unmatched); err != nil {
-		return err
+		return nil, err
 	}
 
 	// §4.7.1 step 3, the bare-name fallback's OWNERSHIP rule. A bare-name match
@@ -1702,7 +1867,7 @@ func applyOperatorCompose(components map[string]*componentSystem, entry Operator
 		targetDep := bareMatches[bDep]
 		owner, err := bareNameOwner(components, entry, bDep, targetDep)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if owner == bDep {
 			inverted[targetDep] = bDep
@@ -1757,7 +1922,19 @@ func applyOperatorCompose(components map[string]*componentSystem, entry Operator
 			b.observed.remove(gone)
 		}
 	}
-	return nil
+
+	// Everything this entry deleted, in one map, for the caller's running
+	// document-wide rename (issue #230). `inverted` rides along because it is
+	// the same operation pointed the other way -- the loser of an ownership
+	// decision is merged away exactly like the loser of a translation match.
+	made := make(map[string]string, len(mergedAway)+len(inverted))
+	for gone, survivor := range mergedAway {
+		made[gone] = survivor
+	}
+	for gone, survivor := range inverted {
+		made[gone] = survivor
+	}
+	return made, nil
 }
 
 // removeString returns xs without the first occurrence of s, preserving order.
@@ -2000,20 +2177,67 @@ func reattributeMergedEquations(components map[string]*componentSystem, aName st
 // equation side in every component is rewritten off the dead name. An observed
 // variable's defining expression is one of those equations (it is not carried
 // on FlattenedVariable), so this covers it too.
+//
+// A variable's `update` rules are NOT equations and ARE carried on the variable,
+// so they are rewritten here beside them: a parameter that refreshes from `B.x`
+// otherwise reads a state the flattened system no longer declares
+// (CONFORMANCE_SPEC §5.35).
 func retargetMergedNames(components map[string]*componentSystem, renames map[string]string) {
-	bindings := make(map[string]Expression, len(renames))
-	for from, to := range renames {
-		bindings[from] = to
+	if len(renames) == 0 {
+		return
 	}
+	walk := newNameRenamer(renames)
 	for _, comp := range components {
 		for i, eq := range comp.equations {
 			comp.equations[i] = FlattenedEquation{
-				LHS:          substituteExpr(eq.LHS, bindings),
-				RHS:          substituteExpr(eq.RHS, bindings),
+				LHS:          walk.apply(eq.LHS),
+				RHS:          walk.apply(eq.RHS),
 				SourceSystem: eq.SourceSystem,
 			}
 		}
+		for _, table := range []*varTable{comp.stateVars, comp.parameters, comp.observed} {
+			for _, name := range table.keys {
+				v := table.m[name]
+				if v.Update == nil {
+					continue
+				}
+				v.Update = rewriteUpdateExprs(v.Update, walk.apply)
+				table.m[name] = v
+			}
+		}
 	}
+}
+
+// rewriteUpdateExprs applies `rewrite` to the expression-bearing slots of a
+// variable's `update` rules, preserving declaration order.
+//
+// Only `when` (the `condition` / `crossing` trigger) and `expression` (the value
+// form) name variables. `source`, `hook`, `from` and `handler` name a data
+// source, a remesh hook, a source binding or a registered function — different
+// namespaces, left alone. Returns the spec unchanged when no rule carries an
+// expression at all, so the common path allocates nothing.
+func rewriteUpdateExprs(update any, rewrite func(Expression) Expression) any {
+	rules := updateSpecRules(update)
+	if len(rules) == 0 {
+		return update
+	}
+	out := make([]ParameterUpdate, len(rules))
+	touched := false
+	for i, rule := range rules {
+		if rule.When != nil {
+			rule.When = rewrite(rule.When)
+			touched = true
+		}
+		if rule.Expression != nil {
+			rule.Expression = rewrite(rule.Expression)
+			touched = true
+		}
+		out[i] = rule
+	}
+	if !touched {
+		return update
+	}
+	return updateSpecFromRules(out)
 }
 
 // applyCouple resolves a `couple` connector by injecting source/sink terms: each
@@ -2171,12 +2395,15 @@ func applyVariableMap(components map[string]*componentSystem, order []string, en
 		src = ExprNode{Op: "*", Args: []any{*entry.Factor, entry.From}}
 	}
 	bindings := map[string]Expression{entry.To: src}
+	// The join sidecars take the same rewrite as a NAME pair, built once rather
+	// than per equation.
+	joinRenames := map[string]string{entry.To: entry.From}
 	for _, sysName := range order {
 		comp := components[sysName]
 		for i, eq := range comp.equations {
 			comp.equations[i] = FlattenedEquation{
 				LHS:          substituteExpr(eq.LHS, bindings),
-				RHS:          renameJoinNames(substituteExpr(eq.RHS, bindings), entry.To, entry.From),
+				RHS:          renameJoinNames(substituteExpr(eq.RHS, bindings), joinRenames),
 				SourceSystem: eq.SourceSystem,
 			}
 		}
@@ -2273,20 +2500,56 @@ func exprReferencesVar(expr Expression, name string) bool {
 	return false
 }
 
-// renameJoinNames renames toVar -> fromVar in every plain-string `join` name.
+// renameJoinNames applies a rename MAP to every plain-string `join` name.
 //
 // The join-side companion of the `variable_map` substitution (CONFORMANCE_SPEC
 // §5.5.6). Substitute walks expression CHILDREN, so it cannot see an `on` key
 // column or an `overlap`'s `src_env` / `tgt_env` — but those are references in
 // the same namespaced scope as everything else. A `param_to_var` /
-// `conversion_factor` map REMOVES toVar from the flattened parameter list, so a
-// join still naming it points at a variable the system no longer declares.
-func renameJoinNames(expr Expression, toVar, fromVar string) Expression {
+// `conversion_factor` map REMOVES its `to` name from the flattened parameter
+// list, so a join still naming it points at a variable the system no longer
+// declares.
+//
+// Taken as a MAP rather than a single pair, because the same hazard reaches a
+// join from two directions: a `variable_map` deleting its consumer parameter
+// (one pair), and an `operator_compose` renaming match deleting a dependent
+// variable (a whole map, §4.7.1 step 4 / CONFORMANCE_SPEC §5.35).
+func renameJoinNames(expr Expression, renames map[string]string) Expression {
+	if len(renames) == 0 {
+		return expr
+	}
 	node, ok := asExprNode(expr)
 	if !ok || !exprContainsJoin(node) {
 		return expr
 	}
-	return renameJoinNamesIn(node, toVar, fromVar)
+	return renameJoinNamesIn(node, renames)
+}
+
+// nameRenamer is the walker every merged-away retarget uses: an ordinary
+// substitution, extended to the plain STRINGS a `join` carries.
+//
+// It holds the rename in both forms the two halves need — the name -> Expression
+// bindings substituteExpr takes and the name -> name map the join sidecars take
+// — so a caller that rewrites many expressions builds them once.
+//
+// Substitute itself is left alone: it is the general binding-substitution
+// primitive, and a `join` string cannot hold the arbitrary EXPRESSION a binding
+// may supply.
+type nameRenamer struct {
+	bindings map[string]Expression
+	renames  map[string]string
+}
+
+func newNameRenamer(renames map[string]string) nameRenamer {
+	return nameRenamer{bindings: renameBindings(renames), renames: renames}
+}
+
+// apply rewrites one expression off the names the rename deleted.
+func (r nameRenamer) apply(expr Expression) Expression {
+	if len(r.renames) == 0 || expr == nil {
+		return expr
+	}
+	return renameJoinNames(substituteExpr(expr, r.bindings), r.renames)
 }
 
 func exprContainsJoin(node ExprNode) bool {
@@ -2299,20 +2562,22 @@ func exprContainsJoin(node ExprNode) bool {
 	return found
 }
 
-func renameJoinNamesIn(expr Expression, toVar, fromVar string) Expression {
+func renameJoinNamesIn(expr Expression, renames map[string]string) Expression {
 	node, ok := asExprNode(expr)
 	if !ok {
 		return expr
 	}
 	out, _ := mapExprRefChildren(node, func(child Expression) (Expression, error) {
-		return renameJoinNamesIn(child, toVar, fromVar), nil
+		return renameJoinNamesIn(child, renames), nil
 	})
 	if len(node.Join) == 0 {
 		return out
 	}
 	ren := func(v any) any {
-		if s, ok := v.(string); ok && s == toVar {
-			return fromVar
+		if s, ok := v.(string); ok {
+			if to, found := renames[s]; found {
+				return to
+			}
 		}
 		return v
 	}
@@ -2434,6 +2699,11 @@ func FlattenWithOptions(file *ESMFile, opts CouplingImportOptions) (*FlattenedSy
 	classifyFlattened(flat)
 	collectFieldICs(flat)
 	flat.TemplateRegistry = mergedTemplateRegistry(file)
+	// ...and the ONE place a coupling-rewritten name is REFUSED rather than
+	// resolved. See checkRegistryCouplingRewrites.
+	if err := checkRegistryCouplingRewrites(flat.TemplateRegistry, flat.Metadata.CouplingRewrittenNames); err != nil {
+		return nil, err
+	}
 	return flat, nil
 }
 
@@ -2497,14 +2767,33 @@ func applyCouplings(file *ESMFile, components map[string]*componentSystem, order
 		metadata.CouplingRules = append(metadata.CouplingRules, describeCoupling(entry, file, i))
 	}
 
+	// The document-wide merge map: every state spelling an `operator_compose`
+	// renaming match has DELETED, mapped onto the survivor (issue #230). It
+	// accumulates across the `operator_compose` pass and is applied to the
+	// by-name endpoints of every entry that has not run yet, so an entry naming
+	// a merged-away spelling resolves to the survivor instead of dangling.
+	mergedRenames := map[string]string{}
+
 	for _, oc := range composes {
 		expandOperatorComposePlaceholders(components, oc)
-		if err := applyOperatorCompose(components, oc); err != nil {
+		made, err := applyOperatorCompose(components, oc, mergedRenames)
+		if err != nil {
 			return err
 		}
+		composeRenames(mergedRenames, made)
+	}
+	if len(mergedRenames) > 0 {
+		metadata.MergedVariableRenames = mergedRenames
+	}
+	// A merge DELETES a name the same way a `variable_map` substitution does, and
+	// a surviving template-registry body is the same SHADOW copy of authored
+	// source no equation walk reaches — so the merged-away names join the set the
+	// registry guard refuses against (issue #230, CONFORMANCE_SPEC §5.35).
+	for gone := range mergedRenames {
+		metadata.noteCouplingRewritten(gone)
 	}
 	for _, cp := range couples {
-		if err := applyCouple(components, order, cp); err != nil {
+		if err := applyCouple(components, order, retargetPendingCouple(cp, mergedRenames)); err != nil {
 			return err
 		}
 	}
@@ -2513,8 +2802,15 @@ func applyCouplings(file *ESMFile, components map[string]*componentSystem, order
 		loaderNames[k] = true
 	}
 	for _, vm := range varMaps {
-		if err := applyVariableMap(components, order, vm, loaderNames); err != nil {
+		resolved := retargetPendingVariableMap(vm, mergedRenames)
+		if err := applyVariableMap(components, order, resolved, loaderNames); err != nil {
 			return err
+		}
+		// A NAMED transform substitutes `to` away entirely; an EXPRESSION
+		// transform leaves it standing as the observed the transform defines.
+		// Only the first deletes a name, so only the first joins the guard's set.
+		if !resolved.TransformIsExpression() {
+			metadata.noteCouplingRewritten(resolved.To)
 		}
 	}
 	return nil
@@ -2595,6 +2891,39 @@ func namespaceEvents(file *ESMFile, flat *FlattenedSystem) {
 			if _, seen := bare[short]; !seen {
 				bare[short] = v.Name
 			}
+		}
+	}
+
+	// An `operator_compose` renaming match DELETED spellings before this ran
+	// (§4.7.1 step 4), and the tables above no longer carry them — so an event
+	// naming a merged-away state matches nothing here and is left holding a
+	// reference to a variable the flattened system does not declare. An affect
+	// writing to an unknown the system does not declare is a wrong ANSWER, not a
+	// refusal, which is what makes this the silent one of the four surfaces.
+	// Seed both spellings an author could have written: the FULLY-QUALIFIED dead
+	// name, and its bare local name.
+	//
+	// The bare half is not redundant. Where the survivor carries a DIFFERENT
+	// local name — a `translate` folding `Sink.O3` onto `Chem.ozone` — nothing in
+	// the flattened system is spelled `O3` any more, so the bare reference the
+	// author wrote inside `Sink` resolves to nothing without it. Where the two
+	// locals agree, the loop above already bound the bare name to the survivor
+	// and the seen-check leaves it alone: a LIVE variable always wins over a dead
+	// alias, which is the precedence every other name-keyed surface uses —
+	// resolution must never shadow a variable the system really has
+	// (CONFORMANCE_SPEC §5.35). Seeded in sorted order, because two dead names
+	// can share a bare tail and Go randomizes map iteration.
+	for _, gone := range sortedKeys(flat.Metadata.MergedVariableRenames) {
+		survivor := flat.Metadata.MergedVariableRenames[gone]
+		if _, seen := bare[gone]; !seen {
+			bare[gone] = survivor
+		}
+		short := gone
+		if idx := strings.LastIndex(short, "."); idx >= 0 {
+			short = short[idx+1:]
+		}
+		if _, seen := bare[short]; !seen {
+			bare[short] = survivor
 		}
 	}
 

@@ -97,6 +97,7 @@ from .simulation_common import (
     _scipy_missing_message,
     check_parameter_override_keys,
     flat_namespace_scope,
+    resolve_merged_renames,
 )
 from .simulation_loaders import (
     LoaderProvider,
@@ -590,6 +591,16 @@ def esm_problem(
     # leaves every parameter at its default, so the author's binding does
     # nothing and the run still reports a verdict: a wrong answer, not a
     # missing one.
+    # ...but resolve the merged-away spellings FIRST. An `operator_compose`
+    # renaming match DELETES the name it consumed (esm-libraries-spec §4.7.1
+    # step 4) and rewrites every equation off it -- a caller still holding
+    # `"Sink.O3"` is addressing a state that moved, and the key check would
+    # report it as merely unknown (issue #230). `u0` rides along: it is the same
+    # kind of key against the same renames, on the state side.
+    renames = dict(flat.metadata.merged_variable_renames)
+    p = resolve_merged_renames(renames, p)
+    u0 = resolve_merged_renames(renames, u0)
+
     check_parameter_override_keys(flat.parameters, p, flat_namespace_scope(flat))
 
     # ---- provider injection: eager CONST materialization; gated deferral ----
@@ -954,7 +965,7 @@ def solve(
             prob.inspect,
             maxiters=maxiters,
         )
-        return _finish_segmented(sol, saveat, cb)
+        return _with_merged_renames(prob, _finish_segmented(sol, saveat, cb))
     if prob.pathway == "loaders":
         sol = _simulate_with_loaders(
             prob.flat,
@@ -968,36 +979,61 @@ def solve(
             provider_factory=prob.provider_factory,
             maxiters=maxiters,
         )
-        return _finish_segmented(sol, saveat, cb)
+        return _with_merged_renames(prob, _finish_segmented(sol, saveat, cb))
     if prob.pathway == "array":
-        return _simulate_with_numpy(
+        return _with_merged_renames(
+            prob,
+            _simulate_with_numpy(
+                prob.flat,
+                prob.tspan,
+                prob.p,
+                prob.u0,
+                alg,
+                rtol=reltol,
+                atol=abstol,
+                loader_arrays=prob.const_arrays,
+                prebuilt=prob.build,
+                maxiters=maxiters,
+                saveat=saveat,
+                callback=cb,
+            ),
+        )
+    return _with_merged_renames(
+        prob,
+        _simulate_scalar(
             prob.flat,
             prob.tspan,
             prob.p,
             prob.u0,
             alg,
-            rtol=reltol,
-            atol=abstol,
-            loader_arrays=prob.const_arrays,
-            prebuilt=prob.build,
+            reltol,
+            abstol,
+            prob.cse,
+            prebuilt=prob.scalar_build,
             maxiters=maxiters,
             saveat=saveat,
             callback=cb,
-        )
-    return _simulate_scalar(
-        prob.flat,
-        prob.tspan,
-        prob.p,
-        prob.u0,
-        alg,
-        reltol,
-        abstol,
-        prob.cse,
-        prebuilt=prob.scalar_build,
-        maxiters=maxiters,
-        saveat=saveat,
-        callback=cb,
+        ),
     )
+
+
+def _with_merged_renames(prob: EsmProblem, sol: Solution) -> Solution:
+    """Stamp the flatten-time merge map onto a finished solution (issue #230).
+
+    A caller reading ``sol["Sink.O3"]`` after an ``operator_compose`` renaming
+    match folded it into ``Chem.O3`` is naming a state that MOVED. The solution
+    is the one object such a caller holds and the flattened system is not in its
+    hand, so the map travels with the result; :meth:`Solution.resolve_name`
+    consults it only for a name the solution does not already carry.
+
+    Mutates in place rather than rebuilding: the pathways return solutions built
+    at four different sites, and a rebuild would have to keep every optional
+    field of each in step.
+    """
+    renames = prob.flat.metadata.merged_variable_renames
+    if renames:
+        sol.merged_renames = dict(renames)
+    return sol
 
 
 def _finish_segmented(sol: Solution, saveat: Any, cb: Any) -> Solution:
@@ -1073,6 +1109,13 @@ def remake(
     the parameter and the class that makes it un-substitutable, rather than
     silently rebuilding or silently ignoring it.
     """
+    # Resolve merged-away spellings before anything reads the keys, exactly as
+    # `esm_problem` does at the build front door (issue #230): `prob.p` /
+    # `prob.u0` are already resolved, so only the caller's new keys need it.
+    renames = dict(prob.flat.metadata.merged_variable_renames)
+    p = None if p is None else resolve_merged_renames(renames, p)
+    u0 = None if u0 is None else resolve_merged_renames(renames, u0)
+
     new_p = dict(prob.p) if p is None else {**prob.p, **p}
     new_u0 = dict(prob.u0) if u0 is None else {**prob.u0, **u0}
     new_tspan = prob.tspan if tspan is None else (float(tspan[0]), float(tspan[1]))

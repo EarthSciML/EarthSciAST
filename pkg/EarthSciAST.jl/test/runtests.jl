@@ -84,6 +84,10 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     # operator_compose merge intent: the §4.7.1 step 5 diagnostic, `require_match`,
     # and step 3's owner-based bare-name rename (issue #195).
     include("operator_compose_merge_conformance_test.jl")
+    # How far the merged-away rename REACHES: past the equation ASTs, onto the
+    # by-name endpoints of every coupling entry that has not run yet and onto a
+    # runner's override keys (issue #230).
+    include("merged_rename_reach_conformance_test.jl")
     include("pointwise_lift_axis_names_test.jl")  # §10.5 lift axes by NAME, not by extent
     include("coupling_imports_test.jl")
     include("flattened_to_esm_test.jl")

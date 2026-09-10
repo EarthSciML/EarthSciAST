@@ -132,7 +132,20 @@ fn scope_to_component(
             let qualified = format!("{model_name}.{k}");
             let known = flat.parameters.contains_key(&qualified)
                 || flat.state_variables.contains_key(&qualified);
-            (if known { qualified } else { k.clone() }, v.clone())
+            if known {
+                return (qualified, v.clone());
+            }
+            // An `operator_compose` renaming match may have DELETED the very
+            // name this component's test keys on (esm-libraries-spec §4.7.1
+            // step 4): `Sink.O3` folded onto `Chem.ozone` leaves the scoped
+            // spelling naming nothing, and the key then falls through as a bare
+            // local that resolves to nothing document-wide -- dropped in
+            // SILENCE, so the state runs from the survivor's declared default
+            // and the test still returns a verdict (CONFORMANCE_SPEC §5.35).
+            match flat.metadata.merged_variable_renames.get(&qualified) {
+                Some(survivor) => (survivor.clone(), v.clone()),
+                None => (k.clone(), v.clone()),
+            }
         })
         .collect()
 }
@@ -504,7 +517,12 @@ pub fn state_cells(
 /// exact-bare match first, then a bare-suffix fallback (reached only when the
 /// qualified element is absent, e.g. a bare-keyed single-model build). Mirrors
 /// the Python `_scalar_slot` two-pass semantics.
-fn scalar_slot(element_names: &[String], variable: &str, model: &str) -> Option<usize> {
+fn scalar_slot(
+    element_names: &[String],
+    variable: &str,
+    model: &str,
+    renames: &HashMap<String, String>,
+) -> Option<usize> {
     let qualified = format!("{model}.{variable}");
     // Pass 1: exact model-qualified or exact bare match.
     for (row, name) in element_names.iter().enumerate() {
@@ -519,7 +537,14 @@ fn scalar_slot(element_names: &[String], variable: &str, model: &str) -> Option<
             return Some(row);
         }
     }
-    None
+    // Pass 3: a name an `operator_compose` renaming match DELETED. A test is
+    // written against the component that owns it, and a merge can fold that
+    // component's state onto another's -- the quantity the assertion names
+    // still exists, under the survivor's spelling. LAST, so a live row always
+    // wins: resolution may never shadow a variable the flattened system really
+    // has (CONFORMANCE_SPEC §5.35).
+    let survivor = renames.get(&qualified).or_else(|| renames.get(variable))?;
+    element_names.iter().position(|name| name == survivor)
 }
 
 /// esm-spec §6.6.4, resolved PER FIELD over FOUR levels: assertion > test >
@@ -1001,8 +1026,12 @@ fn eval_assertion(
         return Err("`coords` and `reduce` are mutually exclusive".to_string());
     }
     if assertion.coords.is_none() && assertion.reduce.is_none() {
-        if let Some(slot) = scalar_slot(&sol.state_variable_names, &assertion.variable, model_name)
-        {
+        if let Some(slot) = scalar_slot(
+            &sol.state_variable_names,
+            &assertion.variable,
+            model_name,
+            &sol.metadata.merged_variable_renames,
+        ) {
             return Ok(sol.state[slot][ti]);
         }
         // No trajectory row: a STATE-FREE SCALAR OBSERVED, read from the
@@ -2496,7 +2525,7 @@ mod tests {
         assert_eq!(state_cells(&names2, "u", "Other"), cells); // bare-stem match
         assert_eq!(state_cells(&names, "w", "M"), vec![]); // scalars never match
         assert_eq!(state_cells(&names, "x", "M"), vec![]); // non-integer suffix
-        assert_eq!(scalar_slot(&names, "w", "M"), Some(1));
+        assert_eq!(scalar_slot(&names, "w", "M", &HashMap::new()), Some(1));
     }
 
     #[test]

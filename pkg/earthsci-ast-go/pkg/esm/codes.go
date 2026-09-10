@@ -103,6 +103,15 @@ const (
 	// CodeTemplateConstraintUnknownIndexSet: a template's `constraints` entry
 	// names an index set absent from the document `index_sets` registry.
 	CodeTemplateConstraintUnknownIndexSet = "template_constraint_unknown_index_set"
+	// CodeTemplateBodyReferencesCouplingRewrittenVariable: a SURVIVING
+	// registry body names a variable a coupling rule rewrote out of the
+	// flattened equations — a `variable_map`'s substituted target, or a
+	// spelling an `operator_compose` renaming match deleted (esm-spec §9.6.4,
+	// CONFORMANCE_SPEC §5.35). The body is authored source no equation walk
+	// reaches, and it expands at the BUILD boundary, so it is REFUSED rather
+	// than resolved: rewriting it would silently diverge from the
+	// expand-at-load image of the same document.
+	CodeTemplateBodyReferencesCouplingRewrittenVariable = "template_body_references_coupling_rewritten_variable"
 	// CodeMakearrayRegionInverted: a `makearray` region's stop precedes its
 	// start, so the region denotes no cells (esm-spec §4.3.5).
 	CodeMakearrayRegionInverted = "makearray_region_inverted"

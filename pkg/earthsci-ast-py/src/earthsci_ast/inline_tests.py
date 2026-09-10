@@ -635,7 +635,25 @@ def _observed_sample(
     return None
 
 
-def _scalar_slot(var_map: dict[str, int], variable: str, model: str) -> int | None:
+def _sim_merged_renames(sim: Any) -> dict[str, str]:
+    """The flatten-time merged-away rename map behind a simulated run, if any.
+
+    ``SimulatedStates.problem`` is the built
+    :class:`~earthsci_ast.problem.EsmProblem`, which carries the flattened
+    system the run came from; a caller that assembled states some other way has
+    no problem and gets an empty map.
+    """
+    flat = getattr(getattr(sim, "problem", None), "flat", None)
+    metadata = getattr(flat, "metadata", None)
+    return dict(getattr(metadata, "merged_variable_renames", None) or {})
+
+
+def _scalar_slot(
+    var_map: dict[str, int],
+    variable: str,
+    model: str,
+    renames: dict[str, str] | None = None,
+) -> int | None:
     """Flat slot of a SCALAR state / scalar OBSERVED by model-qualified name
     (preferred) or bare name.
 
@@ -647,7 +665,14 @@ def _scalar_slot(var_map: dict[str, int], variable: str, model: str) -> int | No
     assertion, reading the wrong component's value. We therefore do two passes
     — an exact qualified / exact-bare match first, then a bare-suffix fallback
     (reached only when the qualified element is absent, e.g. a bare-keyed
-    single-model build)."""
+    single-model build).
+
+    A THIRD pass resolves a name an ``operator_compose`` renaming match DELETED
+    (§4.7.1 step 4). A test is written against the component that owns it, and
+    a merge can fold that component's state onto another's — the quantity the
+    assertion names still exists, under the survivor's spelling. It runs LAST so
+    a live row always wins: resolution may never shadow a variable the flattened
+    system really has (CONFORMANCE_SPEC §5.35)."""
     qualified = f"{model}.{variable}"
     for name, slot in var_map.items():
         if str(name) in (qualified, variable):
@@ -657,6 +682,12 @@ def _scalar_slot(var_map: dict[str, int], variable: str, model: str) -> int | No
         bare = s.split(".", 1)[1] if "." in s else s
         if bare == variable:
             return int(slot)
+    if renames:
+        survivor = renames.get(qualified) or renames.get(variable)
+        if survivor is not None:
+            for name, slot in var_map.items():
+                if str(name) == survivor:
+                    return int(slot)
     return None
 
 
@@ -876,10 +907,22 @@ def _scope_to_component(
     except Exception:  # noqa: BLE001 — let `esm_problem` report the real failure
         return dict(overrides)
     known = set(flat.parameters) | set(flat.state_variables)
+    # A merge may have DELETED the very name this component's test keys on
+    # (§4.7.1 step 4): `Sink.O3` folded onto `Chem.O3` leaves the scoped
+    # spelling naming nothing, so without this the key falls through as a bare
+    # local name, resolves to nothing document-wide, and is DROPPED IN SILENCE
+    # — the state then runs from its declared default and the test still
+    # reports a verdict (CONFORMANCE_SPEC §5.35).
+    renames = dict(flat.metadata.merged_variable_renames or {})
     out: dict[str, float] = {}
     for key, value in overrides.items():
         qualified = f"{model_name}.{key}"
-        out[qualified if qualified in known else key] = value
+        if qualified in known:
+            out[qualified] = value
+        elif qualified in renames:
+            out[renames[qualified]] = value
+        else:
+            out[key] = value
     return out
 
 
@@ -1148,7 +1191,7 @@ def _evaluate_assertion(
         if a.coords is not None and a.reduce is not None:
             raise RuntimeError("`coords` and `reduce` are mutually exclusive")
         if a.coords is None and a.reduce is None:
-            slot = _scalar_slot(sim.var_map, a.variable, str(mname))
+            slot = _scalar_slot(sim.var_map, a.variable, str(mname), _sim_merged_renames(sim))
             if slot is None:
                 raise RuntimeError(f"scalar state '{a.variable}' not found")
             actual = float(state[slot])

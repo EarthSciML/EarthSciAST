@@ -207,7 +207,7 @@ func TestRenameJoin_SymsAreBindersAndSurviveUntouched(t *testing.T) {
 		},
 	})
 
-	out := renameJoinNames(expr, "row_prior", "shifted_key")
+	out := renameJoinNames(expr, map[string]string{"row_prior": "shifted_key"})
 	clause := joinOf(t, out)[0].(map[string]any)
 	if got, want := clause["on"], []any{[]any{"shifted_key", "row_id"}}; !reflect.DeepEqual(got, want) {
 		t.Errorf("on = %#v, want %#v", got, want)
@@ -218,7 +218,7 @@ func TestRenameJoin_SymsAreBindersAndSurviveUntouched(t *testing.T) {
 
 	// A rename whose TARGET is a range symbol must still leave `syms` alone —
 	// the pass renames variable references, and a binder is not one.
-	out2 := renameJoinNames(expr, "src", "renamed_src")
+	out2 := renameJoinNames(expr, map[string]string{"src": "renamed_src"})
 	clause2 := joinOf(t, out2)[0].(map[string]any)
 	if got, want := clause2["syms"], []any{"src", "c"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("syms = %#v, want it untouched %#v", got, want)

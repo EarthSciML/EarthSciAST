@@ -1095,6 +1095,21 @@ All libraries (including Core tier) must implement the flattening algorithm. Fla
    expanded edge set (whether inside flattening or as a coupled-system validation over the flattened
    form).
    - **`operator_compose`**: Match equations by dependent variable (applying the `translate` map and `_var` placeholder expansion as described in Section 4.7.1). Combine matched equations by summing their RHS terms. The resulting equation uses the namespaced LHS variable (e.g., `D(SimpleOzone.O3, t) = [chemistry RHS] + [advection RHS]`).
+     - **The merged-away rename reaches past the equations (normative).** §4.7.1
+       step 4 deletes the spelling a RENAMING match consumed and retargets every
+       reference at the survivor. That retarget must reach more than the equation
+       ASTs, because this step runs `operator_compose` entries FIRST: a `couple`
+       connector's `from` / `to` and a `variable_map`'s `from` / `to` are plain
+       scoped-reference STRINGS on an entry that has not run yet, and can still
+       name a spelling the merge has deleted. Such an endpoint RESOLVES to the
+       survivor — the rename is one the author asked for, so the document stays
+       addressable by either spelling — and the entry is copied rather than
+       mutated, so the source document round-trips as authored. A library
+       records the map on the flattened form (`merged_variable_renames`, step 4)
+       so a consumer that addresses a state by NAME — a `parameter_overrides` or
+       `initial_conditions` key, an output selection — can resolve through it
+       too. Normative statement, the surviving-registry-body carve-out, and the
+       per-surface scope: **CONFORMANCE_SPEC §5.35**.
    - **`couple`**: Apply connector equations, resolving the `from` and `to` scoped references to their namespaced equivalents.
    - **`variable_map`**: Substitute the target parameter with the source variable. For `param_to_var`, replace all occurrences of `Target.param` with `Source.var` in the flattened equations and remove the parameter from the target's parameter list.
    - **`operator_apply` / `callback`**: Record in the flattened system's metadata as opaque runtime references.
@@ -1187,7 +1202,7 @@ TypeScript `camelCase`, others verbatim).
 | `equations` | list | The governing equations — dynamics and constraints — coupling applied, dot-namespaced. Entries classified out into `field_ics` are REMOVED from this list (see below). |
 | `continuous_events` / `discrete_events` | list | Events, dot-namespaced. |
 | `domain` | domain or null | The file's `domain` section, unchanged. |
-| `metadata` | record | Which components were flattened, which coupling rules applied. |
+| `metadata` | record | Which components were flattened, which coupling rules applied, and `merged_variable_renames` — every state spelling an `operator_compose` renaming match DELETED, mapped onto the survivor it was folded into (step 3, CONFORMANCE_SPEC §5.35). Empty for a document with no renaming merge. |
 | `index_sets` | ordered map | Document-scoped index-set registry; required to interpret arrayed equations. |
 | `function_tables` | ordered map | Merged function-table registry; resolves `table_lookup`. |
 | `template_registry` | ordered map | The merged expression-template registry specified above. |

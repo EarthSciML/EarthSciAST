@@ -1,0 +1,159 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "merged_rename_reaches_events_and_updates",
+    "description": "esm-libraries-spec 4.7.1 step 4, past the equation ASTs. A `translate` match merges `Sink.O3` onto `Chem.ozone`, so `Sink.O3` is DELETED -- and the two names are DIFFERENT local names, which is what makes this case sharp. Three places still address the deleted state by name and none of them is an equation: a discrete event's affect LHS (a plain name STRING, not an expression), that affect's RHS, and the `expression` of a parameter's `update` rule (carried on the VARIABLE, not in `equations`). A binding that namespaces its events at collection -- before any coupling rule runs -- carries the fully-qualified dead spelling straight through; a binding that namespaces them after coupling finds no live variable of that name and leaves the reference bare. Both outcomes are an affect writing to, and an update reading from, an unknown the flattened system does not declare: a silent wrong answer rather than a refusal. Because the surviving local name is `ozone` and the dead one is `O3`, NOTHING in the flattened system is spelled `O3` any more -- so the bare-name coincidence that rescues a same-local-name merge cannot rescue this one, and only real resolution through the rename map produces `Chem.ozone`.",
+    "authors": [
+      "EarthSciAST"
+    ],
+    "tags": [
+      "esm-libraries-spec-4.7.1",
+      "operator-compose",
+      "merged-away-rename",
+      "events",
+      "parameter-update"
+    ]
+  },
+  "models": {
+    "Chem": {
+      "reference": {
+        "notes": "The SURVIVING spelling: the `translate` key names it, and its local name differs from the merged-away one."
+      },
+      "variables": {
+        "ozone": {
+          "type": "unknown",
+          "units": "ppb",
+          "default": 30.0,
+          "description": "Survives the merge as `Chem.ozone`."
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.0002,
+          "description": "Chemical loss rate.",
+          "shape": []
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "ozone"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "ozone"
+            ]
+          }
+        }
+      ]
+    },
+    "Sink": {
+      "reference": {
+        "notes": "The MERGED-AWAY spelling. Its event and its parameter update both name the local `O3`, which the merge deletes."
+      },
+      "variables": {
+        "O3": {
+          "type": "unknown",
+          "units": "ppb",
+          "default": 40.0,
+          "description": "The `translate` VALUE names it; it does not survive the merge."
+        },
+        "kd": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.0001,
+          "description": "Deposition rate, refreshed from the state the merge deletes.",
+          "shape": [],
+          "update": {
+            "kind": "schedule",
+            "times": [
+              0.5
+            ],
+            "expression": {
+              "op": "*",
+              "args": [
+                "O3",
+                0.5
+              ]
+            }
+          }
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "O3"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "kd"
+                ]
+              },
+              "O3"
+            ]
+          }
+        }
+      ],
+      "discrete_events": [
+        {
+          "name": "pulse",
+          "trigger": {
+            "type": "preset_times",
+            "times": [
+              0.5
+            ]
+          },
+          "affects": [
+            {
+              "lhs": "O3",
+              "rhs": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "O3"
+                    ]
+                  },
+                  1.0
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "operator_compose",
+      "systems": [
+        "Chem",
+        "Sink"
+      ],
+      "translate": {
+        "Chem.ozone": "Sink.O3"
+      },
+      "description": "Deletes `Sink.O3`, retargeting it onto `Chem.ozone`. The KEY names systems[0]'s variable and the VALUE names systems[1]'s, per 4.7.1 step 2."
+    }
+  ]
+}

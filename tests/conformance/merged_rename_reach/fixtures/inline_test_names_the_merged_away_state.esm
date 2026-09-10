@@ -1,0 +1,140 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "merged_rename_reaches_an_inline_test",
+    "description": "esm-libraries-spec 4.7.1 step 4, on the inline-test surface. A `translate` match merges `Sink.O3` onto `Chem.ozone` across DIFFERING local names, and `Sink`'s own test still addresses the quantity as its local `O3` -- in an assertion, and in an `initial_conditions` key. esm-spec 6.6 says a test exercises the component that owns it, so its keys are LOCAL names; the runner qualifies them against the flattened system, where `Sink.O3` no longer exists. The two halves fail differently and the quieter one is worse. The ASSERTION fails loudly, with `scalar state 'O3' not found` -- a test that cannot find its variable at least reports. The `initial_conditions` KEY is dropped in SILENCE: it qualifies to a name nothing binds, no override is applied, the state runs from the survivor's declared default of 30.0 instead of the 10.0 the test asked for, and the test still returns a verdict. That is a wrong answer rather than a missing one. Resolving through the merge map lands both on `Chem.ozone`, so the assertion reads the row the test meant and reads the value the test set.",
+    "authors": [
+      "EarthSciAST"
+    ],
+    "tags": [
+      "esm-libraries-spec-4.7.1",
+      "operator-compose",
+      "merged-away-rename",
+      "inline-tests"
+    ]
+  },
+  "models": {
+    "Chem": {
+      "reference": {
+        "notes": "The SURVIVING spelling. Its declared default of 30.0 is what an unresolved initial-condition key silently leaves in place."
+      },
+      "variables": {
+        "ozone": {
+          "type": "unknown",
+          "units": "ppb",
+          "default": 30.0,
+          "description": "Survives the merge as `Chem.ozone`."
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.0,
+          "description": "Zero, so the trajectory holds its initial value and the assertion reads the OVERRIDE rather than any integration.",
+          "shape": []
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "ozone"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "ozone"
+            ]
+          }
+        }
+      ]
+    },
+    "Sink": {
+      "reference": {
+        "notes": "The MERGED-AWAY spelling, and the component the test hangs off."
+      },
+      "variables": {
+        "O3": {
+          "type": "unknown",
+          "units": "ppb",
+          "default": 40.0,
+          "description": "The `translate` VALUE names it; it does not survive the merge."
+        },
+        "kd": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.0,
+          "description": "Zero, for the same reason `Chem.k` is.",
+          "shape": []
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "O3"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "kd"
+                ]
+              },
+              "O3"
+            ]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "merged_away_local_name",
+          "description": "Both the initial-condition key and the assertion name the LOCAL `O3` the merge deleted. Both must land on `Chem.ozone`.",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "initial_conditions": {
+            "O3": 10.0
+          },
+          "assertions": [
+            {
+              "variable": "O3",
+              "time": 0.0,
+              "expected": 10.0,
+              "tolerance": {
+                "rel": 1e-6
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "operator_compose",
+      "systems": [
+        "Chem",
+        "Sink"
+      ],
+      "translate": {
+        "Chem.ozone": "Sink.O3"
+      },
+      "description": "Deletes `Sink.O3`, retargeting it onto `Chem.ozone`."
+    }
+  ]
+}

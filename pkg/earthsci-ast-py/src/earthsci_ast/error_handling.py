@@ -171,6 +171,17 @@ TEMPLATE_BODY_REFERENCES_PUSHDOWN_REWRITTEN_VARIABLE = (
     "template_body_references_pushdown_rewritten_variable"
 )
 
+# A SURVIVING registry body that names a variable a COUPLING rule rewrote out of
+# the flattened equations -- a `variable_map` substitution target, or a name an
+# `operator_compose` renaming match merged away (esm-libraries-spec §4.7.1
+# step 4). The body is a shadow copy of authored source that expands at the
+# build boundary, so it would expand into a name the flattened system no longer
+# declares. Refused rather than rewritten, because rewriting authored source
+# would diverge from the expand-at-load image (CONFORMANCE_SPEC §5.35).
+TEMPLATE_BODY_REFERENCES_COUPLING_REWRITTEN_VARIABLE = (
+    "template_body_references_coupling_rewritten_variable"
+)
+
 # ===========================================================================
 # Data-source location codes (esm-spec §8.2.1), raised as
 # ``ExpressionTemplateError`` from ``_data_source_urls.py`` at load time.

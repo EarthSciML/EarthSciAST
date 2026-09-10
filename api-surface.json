@@ -91,17 +91,17 @@
     }
   },
   "counts": {
-    "symbols": 881,
+    "symbols": 882,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
       "julia": 305,
       "typescript": 238,
       "python": 250,
       "rust": 337,
-      "go": 405
+      "go": 406
     },
     "by_tier": {
-      "extension": 609,
+      "extension": 610,
       "stable": 272
     }
   },
@@ -1453,6 +1453,14 @@
       "tier": "extension",
       "bindings": {
         "go": "CodeTemplateBodyExpansionTooDeep"
+      }
+    },
+    {
+      "name": "code_template_body_references_coupling_rewritten_variable",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTemplateBodyReferencesCouplingRewrittenVariable"
       }
     },
     {

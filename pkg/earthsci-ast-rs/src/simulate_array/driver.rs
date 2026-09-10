@@ -22,6 +22,12 @@ use diffsol::{Bdf, FaerLU, FaerMat, NewtonNonlinearSolver, OdeBuilder, Sdirk, Ve
 use std::collections::HashSet;
 
 impl ArrayCompiled {
+    /// The flatten-time merge map (issue #230): every state spelling an
+    /// `operator_compose` renaming match DELETED, mapped onto the survivor.
+    pub(crate) fn merged_renames(&self) -> &HashMap<String, String> {
+        &self.merged_renames
+    }
+
     /// A clonable handle to the external forcing buffer (PR-1, ess-14f.7). A
     /// driver that integrates this model in discrete-cadence segments holds the
     /// returned `Rc` and, at each cadence boundary, refreshes a loader-fed
@@ -334,6 +340,7 @@ impl ArrayCompiled {
             &self.param_index,
             &self.override_namespaces(),
             params,
+            &self.merged_renames,
         )
         .map_err(crate::simulate::param_key_error)?;
         let mut param_vec = vec![0.0f64; self.param_names.len()];
@@ -367,6 +374,7 @@ impl ArrayCompiled {
             &self.scalar_state_index,
             &self.override_namespaces(),
             initial_conditions,
+            &self.merged_renames,
         )
         .map_err(crate::simulate::ic_key_error)?;
         // Resolved scalar-parameter scope (load-time constants) for the ic
@@ -540,7 +548,12 @@ impl ArrayCompiled {
                 time,
                 state,
                 retcode,
-                solution_metadata(solver_name, &stats, tape_fallbacks),
+                solution_metadata(
+                    solver_name,
+                    &stats,
+                    tape_fallbacks,
+                    self.merged_renames.clone(),
+                ),
                 &param_vec,
                 &setup,
                 &opts.output_observed,
@@ -568,7 +581,12 @@ impl ArrayCompiled {
             time,
             state,
             retcode,
-            solution_metadata(solver_name, &stats, tape_fallbacks),
+            solution_metadata(
+                solver_name,
+                &stats,
+                tape_fallbacks,
+                self.merged_renames.clone(),
+            ),
             &param_vec,
             &setup,
             &opts.output_observed,
@@ -1793,6 +1811,7 @@ fn solution_metadata(
     solver_name: &str,
     stats: &SolveStats,
     tape_fallbacks: Vec<(String, String)>,
+    merged_variable_renames: HashMap<String, String>,
 ) -> SolutionMetadata {
     SolutionMetadata {
         alg: solver_name.to_string(),
@@ -1801,6 +1820,9 @@ fn solution_metadata(
         n_accepted_steps: stats.n_accepted_steps,
         n_rejected_steps: stats.n_rejected_steps,
         tape_fallbacks,
+        // Rides to the caller so a name-keyed read of the result can resolve a
+        // spelling the merge deleted (issue #230).
+        merged_variable_renames,
     }
 }
 

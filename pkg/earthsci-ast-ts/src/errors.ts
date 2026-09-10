@@ -251,6 +251,16 @@ export const ERROR_CODES = {
   APPLY_EXPRESSION_TEMPLATE_VERSION_TOO_OLD: 'apply_expression_template_version_too_old',
   REWRITE_RULE_NONTERMINATING: 'rewrite_rule_nonterminating',
   TEMPLATE_BODY_EXPANSION_TOO_DEEP: 'template_body_expansion_too_deep',
+  // A SURVIVING registry body that names a variable a COUPLING rule rewrote out
+  //   of the flattened equations -- a `variable_map` substitution target, or a
+  //   name an `operator_compose` renaming match merged away
+  //   (esm-libraries-spec §4.7.1 step 4). The body is a shadow copy of authored
+  //   source that expands at the BUILD boundary, so it would expand into a name
+  //   the flattened system no longer declares. Refused rather than rewritten,
+  //   because rewriting authored source would diverge from the expand-at-load
+  //   image (CONFORMANCE_SPEC §5.35). Raised by `flatten.ts`.
+  TEMPLATE_BODY_REFERENCES_COUPLING_REWRITTEN_VARIABLE:
+    'template_body_references_coupling_rewritten_variable',
   TEMPLATE_CONSTRAINT_UNKNOWN_INDEX_SET: 'template_constraint_unknown_index_set',
   METAPARAMETER_NAME_CONFLICT: 'metaparameter_name_conflict',
   METAPARAMETER_TYPE_ERROR: 'metaparameter_type_error',

@@ -547,6 +547,13 @@ pub struct RecurrenceInfo {
 
 /// Compiled, parameter-sweep-ready ODE model for array-op models.
 pub struct ArrayCompiled {
+    /// Every state spelling an `operator_compose` renaming match DELETED,
+    /// mapped onto the survivor (issue #230). Carried from
+    /// `FlattenMetadata::merged_variable_renames` by
+    /// [`ArrayCompiled::from_flattened`] so an override key naming a state the
+    /// merge moved resolves instead of silently designating nothing. Empty on
+    /// the `from_model` path, which has no coupling to have renamed anything.
+    merged_renames: HashMap<String, String>,
     var_shapes: IndexMap<String, VarShape>,
     /// Names of every scalar slot (`"u[1]"`, `"u[2,3]"`, `"s"`, etc.),
     /// parallel to the flat state vector.

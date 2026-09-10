@@ -132,6 +132,18 @@ diagnostic_code_registry! {
     /// document's `index_sets` registry.
     TEMPLATE_CONSTRAINT_UNKNOWN_INDEX_SET = "template_constraint_unknown_index_set";
 
+    // ---- expression templates: the SURVIVING registry, checked at flatten
+    //      (`flatten.rs::check_registry_coupling_rewrites`) ----
+
+    /// A surviving `expression_templates` registry body names a variable a
+    /// coupling rule rewrote out of the flattened equations (a `variable_map`
+    /// substitution, or an `operator_compose` renaming match). The body is
+    /// authored source no equation walk reaches and it expands at the BUILD
+    /// boundary, so this is the ONE site where such a reference is REFUSED
+    /// rather than resolved (esm-spec §9.6.4, CONFORMANCE_SPEC §5.35).
+    TEMPLATE_BODY_REFERENCES_COUPLING_REWRITTEN_VARIABLE =
+        "template_body_references_coupling_rewritten_variable";
+
     // ---- templates: geometry / makearray structural folds (also emitted from
     //      `lower_expression_templates.rs` during template lowering) ----
 
@@ -558,6 +570,7 @@ mod error_code_tests {
             "table_lookup_unknown_table",
             "table_out_of_bounds_unsupported",
             "template_body_expansion_too_deep",
+            "template_body_references_coupling_rewritten_variable",
             "template_constraint_unknown_index_set",
             "template_import_cycle",
             "template_import_index_set_conflict",

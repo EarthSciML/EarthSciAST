@@ -1,0 +1,132 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "merged_rename_registry_body_is_refused",
+    "description": "The ONE surface where a merged-away name is REFUSED rather than resolved. A `translate` match merges `Sink.O3` onto `Chem.ozone`, and `Sink` carries a surviving `expression_templates` entry whose body still references its local `O3`. A registry body is a SHADOW COPY of authored source: no equation walk reaches it, and it expands at the BUILD boundary rather than at flatten, so a body left naming the deleted state would expand -- later, and somewhere else -- into a variable the flattened system does not declare. Rewriting it is not the answer either: the body is authored source, and rewriting it would make the flattened form's registry disagree with the expand-at-load image the same document produces, which is the round-trip esm-spec 9.6.4 rule 2 requires to be observably identical. So the document is refused at flatten with `template_body_references_coupling_rewritten_variable` -- the same guard a `variable_map`-substituted name already gets -- and the message names the two fixes: bind the value through the template's `params`, which shadow the outer name per 9.6.1, or expand the reference before coupling.",
+    "authors": [
+      "EarthSciAST"
+    ],
+    "tags": [
+      "esm-libraries-spec-4.7.1",
+      "operator-compose",
+      "merged-away-rename",
+      "expression-templates",
+      "refusal"
+    ]
+  },
+  "models": {
+    "Chem": {
+      "reference": {
+        "notes": "The SURVIVING spelling."
+      },
+      "variables": {
+        "ozone": {
+          "type": "unknown",
+          "units": "ppb",
+          "default": 30.0,
+          "description": "Survives the merge as `Chem.ozone`."
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.0002,
+          "description": "Chemical loss rate.",
+          "shape": []
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "ozone"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "ozone"
+            ]
+          }
+        }
+      ]
+    },
+    "Sink": {
+      "reference": {
+        "notes": "The MERGED-AWAY spelling, and the owner of the offending template."
+      },
+      "variables": {
+        "O3": {
+          "type": "unknown",
+          "units": "ppb",
+          "default": 40.0,
+          "description": "The `translate` VALUE names it; it does not survive the merge."
+        },
+        "kd": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.0001,
+          "description": "Deposition rate.",
+          "shape": []
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "O3"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "kd"
+                ]
+              },
+              "O3"
+            ]
+          }
+        }
+      ],
+      "expression_templates": {
+        "scaled_loss": {
+          "params": [
+            "rate"
+          ],
+          "body": {
+            "op": "*",
+            "args": [
+              "rate",
+              "O3"
+            ]
+          }
+        }
+      }
+    }
+  },
+  "coupling": [
+    {
+      "type": "operator_compose",
+      "systems": [
+        "Chem",
+        "Sink"
+      ],
+      "translate": {
+        "Chem.ozone": "Sink.O3"
+      },
+      "description": "Deletes `Sink.O3`. `scaled_loss`'s body still names it, and `O3` is NOT one of the template's params, so the body cannot be rescued by the 9.6.1 shadow."
+    }
+  ]
+}

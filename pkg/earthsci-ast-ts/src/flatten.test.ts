@@ -493,3 +493,74 @@ describe('couple multiplicative requires an existing tendency (§10.3)', () => {
     expect(() => flatten(coupled('A.s', 'additive'))).not.toThrow()
   })
 })
+
+describe("the merged-away rename reaches a `join`'s plain STRINGS", () => {
+  // A relational `join` names its `on` key columns and an `overlap` clause's
+  // `src_env` / `tgt_env` envelope factors as STRINGS rather than as child
+  // expressions, so `mapChildren` preserves them verbatim (that is what it is
+  // for) and `substitute` never sees them — yet §4.7.5 step 2 namespaces them
+  // like any other reference. A rename that DELETES a name has to reach them
+  // the same way, or the join keeps pointing at a variable the flattened
+  // system no longer declares (CONFORMANCE_SPEC §5.5.6, §5.35).
+  const doc = {
+    esm: '1.0.0',
+    metadata: { name: 'join-merge' },
+    index_sets: { rows: { size: 3 } },
+    models: {
+      Chem: {
+        variables: {
+          ozone: { type: 'unknown', default: 1.0 },
+          k: { type: 'parameter', default: 1.0 },
+        },
+        equations: [{ lhs: { op: 'D', args: ['ozone'], wrt: 't' }, rhs: 'k' }],
+      },
+      Sink: {
+        variables: {
+          O3: { type: 'unknown', default: 2.0 },
+          kd: { type: 'parameter', default: 1.0 },
+        },
+        equations: [{ lhs: { op: 'D', args: ['O3'], wrt: 't' }, rhs: 'kd' }],
+      },
+      Consumer: {
+        variables: {
+          total: { type: 'unknown', default: 0.0 },
+          col: { type: 'unknown', shape: ['rows'] },
+        },
+        equations: [
+          {
+            lhs: 'total',
+            rhs: {
+              op: 'aggregate',
+              args: [{ op: '*', args: ['Sink.O3', 1.0] }],
+              ranges: { i: { from: 'rows' } },
+              reduce: 'sum',
+              join: [
+                {
+                  on: [['Sink.O3', 'col']],
+                  overlap: { src_env: ['Sink.O3'], tgt_env: ['col'] },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    },
+    coupling: [
+      {
+        type: 'operator_compose',
+        systems: ['Chem', 'Sink'],
+        translate: { 'Chem.ozone': 'Sink.O3' },
+      },
+    ],
+  } as unknown as EsmFile
+
+  it('rewrites an `on` key column and an `overlap` envelope onto the survivor', () => {
+    const flat = flatten(doc)
+    expect(flat.metadata.mergedVariableRenames).toEqual({ 'Sink.O3': 'Chem.ozone' })
+    const eq = flat.equations.find((e) => e.lhs === 'Consumer.total')
+    expect(eq).toBeDefined()
+    const clause = (eq!.rhs as unknown as { join: Array<Record<string, unknown>> }).join[0]!
+    expect(clause.on).toEqual([['Chem.ozone', 'Consumer.col']])
+    expect(clause.overlap).toEqual({ src_env: ['Chem.ozone'], tgt_env: ['Consumer.col'] })
+  })
+})

@@ -46,6 +46,12 @@ pub struct Compiled {
     /// the same way, and the only way to guarantee that is for the artifact to
     /// carry the precision its constants were folded in.
     precision: crate::precision::Env,
+    /// Every state spelling an `operator_compose` renaming match DELETED,
+    /// mapped onto the survivor (issue #230). Carried from
+    /// `FlattenMetadata::merged_variable_renames` so an override key naming a
+    /// state the merge moved resolves instead of silently designating nothing.
+    /// Empty for every document with no renaming merge.
+    merged_renames: HashMap<String, String>,
     /// The component / subsystem names a rule-2 override key may spell in its
     /// LEADING segments (esm-spec §6.6.2, §4.6) — the flattened names' own
     /// namespace segments plus the contributing component systems. Carried so
@@ -66,6 +72,12 @@ pub(super) enum StateKind {
 }
 
 impl Compiled {
+    /// The flatten-time merge map (issue #230): every state spelling an
+    /// `operator_compose` renaming match DELETED, mapped onto the survivor.
+    pub(crate) fn merged_renames(&self) -> &HashMap<String, String> {
+        &self.merged_renames
+    }
+
     /// Build from a [`FlattenedSystem`] (the spec-compliant flattening output).
     ///
     /// The build runs as a sequence of named phases: v1 scope guards
@@ -178,6 +190,12 @@ impl Compiled {
             state_ic_exprs,
             algebraic_topo,
             precision: crate::precision::Env::capture(),
+            merged_renames: flat
+                .metadata
+                .merged_variable_renames
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
             namespaces,
         })
     }
@@ -276,6 +294,9 @@ impl Compiled {
                 // The scalar interpreter builds no tape, so there is nothing to
                 // fall back FROM.
                 tape_fallbacks: Vec::new(),
+                // Rides to the caller so a name-keyed read of the result can
+                // resolve a spelling the merge deleted (issue #230).
+                merged_variable_renames: self.merged_renames.clone(),
             },
         })
     }
@@ -289,8 +310,13 @@ impl Compiled {
         // both spellings bind, then reject anything that still designates no
         // parameter — an unknown key is `InvalidParameter`, a bare name two
         // components both carry is the distinct `AmbiguousParameter`.
-        let params = canonicalize_override_keys(&self.param_index, &self.namespaces, params)
-            .map_err(param_key_error)?;
+        let params = canonicalize_override_keys(
+            &self.param_index,
+            &self.namespaces,
+            params,
+            &self.merged_renames,
+        )
+        .map_err(param_key_error)?;
         let mut param_vec = vec![0.0f64; self.param_names.len()];
         for (i, name) in self.param_names.iter().enumerate() {
             if let Some(&v) = params.get(name) {
@@ -318,9 +344,13 @@ impl Compiled {
         t0: f64,
     ) -> Result<Vec<f64>, SimulateError> {
         // Same §6.6.2 canonicalization as `build_param_vec`, on the state side.
-        let initial_conditions =
-            canonicalize_override_keys(&self.state_index, &self.namespaces, initial_conditions)
-                .map_err(ic_key_error)?;
+        let initial_conditions = canonicalize_override_keys(
+            &self.state_index,
+            &self.namespaces,
+            initial_conditions,
+            &self.merged_renames,
+        )
+        .map_err(ic_key_error)?;
         let no_state: [f64; 0] = [];
         let no_obs: [f64; 0] = [];
         let mut ic_vec = vec![0.0f64; self.state_names.len()];

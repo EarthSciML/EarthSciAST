@@ -38,21 +38,31 @@ Fields:
   promotion — e.g. `(variable="Chem.O3", source_domain=nothing, target_domain="grid2d", kind=:broadcast)`.
 - `opaque_coupling_refs::Vector{String}`: opaque runtime references recorded
   for `operator_apply` and `callback` couplings.
+- `merged_variable_renames::OrderedDict{String,String}`: every state spelling an
+  `operator_compose` renaming match DELETED, mapped onto the survivor it was
+  folded into (issue #230). The flattener's own retarget reaches equation ASTs;
+  this is the map a CONSUMER that addresses a state by name needs — a
+  `parameter_overrides` / `initial_conditions` key, an output selection — to
+  resolve a spelling the merge moved out from under it. Empty for a document
+  with no renaming merge, which is the overwhelming majority.
 """
 struct FlattenMetadata
     source_systems::Vector{String}
     coupling_rules_applied::Vector{String}
     dimension_promotions_applied::Vector{NamedTuple}
     opaque_coupling_refs::Vector{String}
+    merged_variable_renames::OrderedDict{String,String}
 end
 
 FlattenMetadata(source_systems::Vector{String}=String[],
                 coupling_rules_applied::Vector{String}=String[];
                 dimension_promotions_applied::Vector{<:NamedTuple}=NamedTuple[],
-                opaque_coupling_refs::Vector{String}=String[]) =
+                opaque_coupling_refs::Vector{String}=String[],
+                merged_variable_renames::AbstractDict=OrderedDict{String,String}()) =
     FlattenMetadata(source_systems, coupling_rules_applied,
                     NamedTuple[dp for dp in dimension_promotions_applied],
-                    opaque_coupling_refs)
+                    opaque_coupling_refs,
+                    OrderedDict{String,String}(merged_variable_renames))
 
 """
     LoaderField
@@ -1155,24 +1165,64 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
         end
     end
 
+    # The document-wide merge map: every state spelling an `operator_compose`
+    # renaming match has DELETED, mapped onto the survivor (issue #230). It
+    # accumulates across the compose pass and is applied to the by-name endpoints
+    # of every entry that has not run yet, so an entry naming a merged-away
+    # spelling resolves to the survivor instead of dangling.
+    merged_renames = OrderedDict{String, String}()
+
     for entry in file.coupling
         entry isa CouplingOperatorCompose || continue
         # Equations a previous coupling rule introduced belong to no component;
         # `_attribute_equations!` marks them so before the merge reads the vector.
         _attribute_equations!(eq_owners, equations, "")
-        _apply_operator_compose!(equations, entry, states, observeds, eq_owners)
+        _compose_renames!(merged_renames,
+                          _apply_operator_compose!(equations, entry, states, observeds,
+                                                   eq_owners; renames=merged_renames))
+    end
+
+    # §4.7.1 step 4's retarget is document-wide, and "document" is more than the
+    # equation pool. EVENTS and a variable's `update` rules were namespaced at
+    # COLLECTION — steps 1+2, before any coupling rule ran — so an affect, a
+    # crossing condition, a `condition` trigger or an update expression naming
+    # `B.x` still holds the FULLY-QUALIFIED spelling this merge just deleted.
+    # Nothing downstream rewrites it, and an affect on an unknown the flattened
+    # system does not declare is a silent wrong answer rather than a refusal.
+    # (`equations` are rewritten inside the merge itself, which is why they are
+    # not here; `field_ics` are classified out of `equations` at step 4 and so
+    # ride along with them.)  CONFORMANCE_SPEC §5.35.
+    if !isempty(merged_renames)
+        _rn(e) = _rename_variables(e, merged_renames)
+        _rename_event_names!(continuous_events, merged_renames)
+        _rename_event_names!(discrete_events, merged_renames)
+        states = _lower_variable_updates(states, _rn)
+        params = _lower_variable_updates(params, _rn)
+        observeds = _lower_variable_updates(observeds, _rn)
     end
 
     for entry in file.coupling
         entry isa CouplingCouple || continue
-        _apply_couple!(equations, entry, opaque_refs)
+        _apply_couple!(equations, _retarget_pending_entry(entry, merged_renames), opaque_refs)
     end
 
     for entry in file.coupling
         entry isa CouplingVariableMap || continue
-        _apply_variable_map!(equations, params, entry; observeds=observeds)
-        entry.transform isa ASTExpr || push!(map_rewritten_names, entry.to)
+        resolved = _retarget_pending_entry(entry, merged_renames)
+        _apply_variable_map!(equations, params, resolved; observeds=observeds)
+        resolved.transform isa ASTExpr || push!(map_rewritten_names, resolved.to)
     end
+
+    # An `operator_compose` merge DELETES a name the same way a `variable_map`
+    # substitution does, and a surviving template-registry body is the same
+    # SHADOW copy of authored source that no equation walk reaches — a body
+    # still naming a merged-away state would expand at the build boundary into a
+    # variable the flattened system no longer declares. So the merged-away names
+    # join the set the registry guard below checks against (issue #230). This is
+    # the ONE site where a stale reference is refused rather than resolved: the
+    # body is authored source, and rewriting it would silently diverge from the
+    # Expand-at-load image.
+    union!(map_rewritten_names, keys(merged_renames))
 
     # (`template_registry` was computed before collection — see above — so its
     # collision rename could reach the per-component reference sites. It is
@@ -1220,6 +1270,7 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
         coupling_rules_applied;
         dimension_promotions_applied=NamedTuple[],
         opaque_coupling_refs=opaque_refs,
+        merged_variable_renames=merged_renames,
     )
 
     # File-scoped function tables (esm-spec §9.5) are keyed by globally-unique id
@@ -1412,7 +1463,7 @@ function _check_registry_coupling_rewrites(registry, rewritten::Set{String})
         isempty(hits) || throw(ExpressionTemplateError(
             ERROR_CODES.TEMPLATE_BODY_REFERENCES_COUPLING_REWRITTEN_VARIABLE,
             "expression template '$(String(tname))' body references " *
-            "'$(join(hits, "', '"))', which a coupling variable_map rewrote in " *
+            "'$(join(hits, "', '"))', which a coupling rule rewrote in " *
             "the flattened equations; the registry body would expand to a stale " *
             "name at the build boundary. Bind the value through the template's " *
             "params, or expand the reference before coupling (esm-spec §9.6.4)."))

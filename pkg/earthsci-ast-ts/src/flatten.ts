@@ -52,6 +52,7 @@ import type {
   CouplingEntry,
   DataSource,
   DiscreteEvent,
+  DiscreteEventTrigger,
   Domain,
   EsmFile,
   Equation,
@@ -78,6 +79,7 @@ import {
   type SystemKind,
 } from './classification.js'
 import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
+import { EsmMachineryError } from './lower-expression-templates.js'
 import { mergedTemplateRegistry } from './flatten-template-registry.js'
 
 /** Options for {@link flatten}. Only needed when the file uses `coupling_import`. */
@@ -255,7 +257,11 @@ export interface FlattenedVariable {
   sourceSystem?: string
   /** Ordered index-set names for an arrayed variable; absent means scalar. */
   shape?: string[]
-  /** The declared cadence machinery, carried verbatim (parameters only). */
+  /**
+   * The declared cadence machinery (parameters only), with its expression
+   * slots — a `condition` / `crossing` `when` and the value `expression` —
+   * namespaced like any other reference (§4.7.5 step 2).
+   */
   update?: ParameterUpdateSpec
   /** The declared sampling law, carried verbatim (parameters only). */
   distribution?: Distribution
@@ -330,6 +336,29 @@ export interface FlattenMetadata {
   operatorApplies: string[]
   /** `callback` entries, recorded as opaque runtime references. */
   callbacks: string[]
+  /**
+   * Every state spelling an `operator_compose` renaming match DELETED, mapped
+   * onto the survivor it was folded into (issue #230).
+   *
+   * The flattener's own retarget reaches equation ASTs; this is the map a
+   * CONSUMER that addresses a state by name needs — a `parameter_overrides` /
+   * `initial_conditions` key, an output selection — to resolve a spelling the
+   * merge moved out from under it. Empty for a document with no renaming merge,
+   * which is the overwhelming majority.
+   */
+  mergedVariableRenames: Record<string, string>
+  /**
+   * Every name a COUPLING rule rewrote OUT of the flattened equations: a
+   * `variable_map`'s substituted target, plus every merged-away spelling of
+   * {@link FlattenMetadata.mergedVariableRenames}.
+   *
+   * Only the registry guard reads it. A surviving `expression_templates` body
+   * is authored source that no equation walk reaches, so a body naming one of
+   * these is REFUSED rather than resolved (see `checkRegistryCouplingRewrites`,
+   * CONFORMANCE_SPEC §5.35). Unlike `mergedVariableRenames` this is not a
+   * consumer-facing map: it says a name is GONE, not where it went.
+   */
+  couplingRewrittenNames: Set<string>
 }
 
 /** A deferred `ic` equation (esm-spec §11.4.1): an initial condition, not dynamics. */
@@ -700,28 +729,40 @@ function containsJoin(expr: Expression): boolean {
   return found
 }
 
+/** `renames[name]`, own-property only, or `name` when nothing maps it. */
+function renamed(renames: Record<string, string>, name: string): string {
+  return Object.prototype.hasOwnProperty.call(renames, name) ? renames[name]! : name
+}
+
 /**
- * Rename `toVar` -> `fromVar` in every plain-string `join` name — the join-side
- * companion of the `variable_map` substitution (CONFORMANCE_SPEC §5.5.6).
+ * Apply a rename MAP to every plain-string `join` name — the join-side
+ * companion of a rename that DELETES a variable (CONFORMANCE_SPEC §5.5.6).
  *
  * {@link substitute} walks expression CHILDREN, so it cannot see an `on` key
- * column or an `overlap`'s envelope factors. A `param_to_var` /
- * `conversion_factor` map REMOVES `toVar` from the flattened parameters, so a
- * join still naming it points at a variable the system no longer declares.
+ * column or an `overlap`'s envelope factors: §4.7.5 step 2 namespaces those
+ * strings like any other reference ({@link namespaceJoin}), so a rename has to
+ * reach them like any other reference too, or the join keeps pointing at a
+ * variable the flattened system no longer declares.
+ *
+ * Taken as a MAP rather than a single pair, because the same hazard reaches a
+ * join from two directions: a `variable_map` deleting its consumer parameter
+ * (one pair), and an `operator_compose` renaming match deleting a dependent
+ * variable (a whole map, §4.7.1 step 4 / CONFORMANCE_SPEC §5.35).
  *
  * The {@link containsJoin} scan runs BEFORE the rebuild: almost no model carries
  * a join, and those must not pay a whole-tree copy on top of the substitution's.
  */
-function renameJoinNames(expr: Expression, toVar: string, fromVar: string): Expression {
+function renameJoinNames(expr: Expression, renames: Record<string, string>): Expression {
+  if (Object.keys(renames).length === 0) return expr
   if (!isNode(expr) || !containsJoin(expr)) return expr
-  return renameJoinNamesIn(expr, toVar, fromVar)
+  return renameJoinNamesIn(expr, renames)
 }
 
-function renameJoinNamesIn(expr: Expression, toVar: string, fromVar: string): Expression {
+function renameJoinNamesIn(expr: Expression, renames: Record<string, string>): Expression {
   if (!isNode(expr)) return expr
-  const ren = (name: unknown): unknown => (name === toVar ? fromVar : name)
+  const ren = (name: unknown): unknown => (typeof name === 'string' ? renamed(renames, name) : name)
   const out = mapChildren(expr, (child) =>
-    renameJoinNamesIn(child as Expression, toVar, fromVar),
+    renameJoinNamesIn(child as Expression, renames),
   ) as ExpressionNode
   const join = (expr as { join?: unknown }).join
   if (!Array.isArray(join) || join.length === 0) return out
@@ -744,6 +785,20 @@ function renameJoinNamesIn(expr: Expression, toVar: string, fromVar: string): Ex
     return next
   })
   return { ...out, join: clauses } as ExpressionNode
+}
+
+/**
+ * {@link substitute}, extended to a `join`'s plain STRINGS.
+ *
+ * This is the walker every merged-away retarget uses (§4.7.1 step 4).
+ * `substitute` itself is left alone: it is the general binding-substitution
+ * primitive, and a `join` string cannot hold the arbitrary EXPRESSION a binding
+ * may supply. Mirrors Python `flatten.rename_names` and Julia
+ * `coupling_apply.jl::_rename_variables`.
+ */
+function renameNames(expr: Expression, renames: Record<string, string>): Expression {
+  if (Object.keys(renames).length === 0) return expr
+  return renameJoinNames(substitute(expr, renames) as Expression, renames)
 }
 
 // ---------------------------------------------------------------------------
@@ -1032,18 +1087,87 @@ function dataSourceFields(
   return fields
 }
 
+/**
+ * The two slots of an `update` rule that hold an EXPRESSION, and so name
+ * variables: `when` (the `condition` / `crossing` trigger) and `expression`
+ * (the value form). `source`, `hook`, `from` and `handler` name a data source,
+ * a remesh hook, a source binding or a registered function — different
+ * namespaces, left alone.
+ */
+const UPDATE_EXPRESSION_KEYS = ['when', 'expression'] as const
+
+/**
+ * Rewrite the expression-bearing slots of a variable's `update` rules through
+ * `rewrite`, preserving the single-rule / array form (a one-element array is
+ * invalid, §6.3.2). Returns `spec` itself when nothing changed, so a document
+ * with no update rules allocates nothing.
+ */
+function mapUpdateExpressions(
+  spec: ParameterUpdateSpec,
+  rewrite: (expr: Expression) => Expression,
+): ParameterUpdateSpec {
+  let changed = false
+  const out = updateRules(spec).map((rule) => {
+    const src = rule as unknown as Record<string, unknown>
+    const next: Record<string, unknown> = { ...src }
+    for (const key of UPDATE_EXPRESSION_KEYS) {
+      const value = src[key]
+      if (value === undefined || value === null) continue
+      const rewritten = rewrite(value as Expression)
+      if (rewritten !== value) {
+        next[key] = rewritten
+        changed = true
+      }
+    }
+    return next
+  })
+  if (!changed) return spec
+  return (Array.isArray(spec) ? out : out[0]) as unknown as ParameterUpdateSpec
+}
+
+/**
+ * Namespace a variable's `update` rules at COLLECTION (§4.7.5 step 2).
+ *
+ * Their free names are ordinary references in the declaring component's scope,
+ * so they namespace exactly like an equation side. Julia's
+ * `namespacing.jl::_namespace_variable_update` has always done this; carrying
+ * them bare leaves the names beyond the reach of every later rewrite that keys
+ * on the namespaced form — including §4.7.1 step 4's merged-away retarget.
+ */
+function namespaceVariableUpdate(
+  spec: ParameterUpdateSpec,
+  prefix: string,
+  subsystemKeys: ReadonlySet<string> | undefined,
+  locals: ReadonlySet<string> | undefined,
+): ParameterUpdateSpec {
+  return mapUpdateExpressions(spec, (expr) =>
+    namespaceExpr(expr, prefix, LEAVE_ALONE, subsystemKeys, locals),
+  )
+}
+
 function flattenedVariableOf(
   namespaced: string,
   role: FlattenedVariableRole,
   variable: ModelVariable,
   sourceSystem: string,
+  updateScope?: { subsystemKeys: ReadonlySet<string>; locals: ReadonlySet<string> },
 ): FlattenedVariable {
   const out: FlattenedVariable = { name: namespaced, type: role, sourceSystem }
   if (variable.units !== undefined) out.units = variable.units
   if (variable.default !== undefined) out.default = variable.default
   if (variable.description !== undefined) out.description = variable.description
   if (variable.shape !== undefined && variable.shape.length > 0) out.shape = [...variable.shape]
-  if (variable.update !== undefined) out.update = variable.update
+  if (variable.update !== undefined) {
+    out.update =
+      updateScope === undefined
+        ? variable.update
+        : namespaceVariableUpdate(
+            variable.update,
+            sourceSystem,
+            updateScope.subsystemKeys,
+            updateScope.locals,
+          )
+  }
   if (variable.distribution !== undefined) out.distribution = variable.distribution
   return out
 }
@@ -1070,6 +1194,15 @@ function collectModel(
   const observed = new Set(observedUnknowns(model))
   const inlined = new Set(observedDefinitions(model, { bareOnly: true }).keys())
 
+  const subs = modelSubsystems(model)
+  const subKeys = new Set(Object.keys(model.subsystems ?? {}))
+  // The component's own declared names — the gate for namespacing the plain
+  // string references a `join` clause carries (§5.5.6), and for the `update`
+  // rules below. Computed BEFORE the variable loop because a rule's `when` /
+  // `expression` is namespaced exactly like an equation side.
+  const locals = new Set([...Object.keys(model.variables ?? {}), ...subKeys])
+  const updateScope = { subsystemKeys: subKeys, locals }
+
   for (const [varName, variable] of Object.entries(model.variables ?? {})) {
     const namespaced = `${fullPrefix}.${varName}`
     let role: FlattenedVariableRole
@@ -1087,19 +1220,13 @@ function collectModel(
     } else {
       role = 'state'
     }
-    const flat = flattenedVariableOf(namespaced, role, variable, fullPrefix)
+    const flat = flattenedVariableOf(namespaced, role, variable, fullPrefix, updateScope)
     if (role === 'parameter') component.parameters[namespaced] = flat
     else if (role === 'observed') {
       if (!inlined.has(varName)) component.stateVars[namespaced] = flat
       component.observed[namespaced] = flat
     } else component.stateVars[namespaced] = flat
   }
-
-  const subs = modelSubsystems(model)
-  const subKeys = new Set(Object.keys(model.subsystems ?? {}))
-  // The component's own declared names — the gate for namespacing the plain
-  // string references a `join` clause carries (§5.5.6).
-  const locals = new Set([...Object.keys(model.variables ?? {}), ...subKeys])
 
   // An observed unknown's defining relation is an ORDINARY equation with a
   // bare-variable LHS, so it travels through `equations` like any other.
@@ -1336,17 +1463,93 @@ function expandOperatorComposePlaceholders(
  * `require_match`. Preserving an unmatched equation quietly is what made
  * "merged everything" and "merged nothing" the same observable outcome.
  */
+/**
+ * Fold a merge's fresh rename map into the running document-wide one.
+ *
+ * Renames CHAIN: if an earlier `operator_compose` merged `B.x` onto `A.x` and a
+ * later one merges `A.x` onto `C.x`, a document that still names `B.x` must land
+ * on `C.x` — so the accumulated map's VALUES are retargeted through the new map
+ * before the new pairs are added.
+ */
+function composeRenames(acc: Record<string, string>, next: Record<string, string>): void {
+  for (const gone of Object.keys(acc)) acc[gone] = next[acc[gone]] ?? acc[gone]
+  Object.assign(acc, next)
+}
+
+/**
+ * Rewrite a built `translate` map off names an earlier merge deleted.
+ *
+ * Both endpoints are rewritten: an earlier entry may have consumed either the
+ * A-side or the B-side spelling this entry names (issue #230).
+ */
+function retargetTranslateMap(
+  translate: Record<string, [string, number]>,
+  renames: Record<string, string>,
+): Record<string, [string, number]> {
+  if (Object.keys(renames).length === 0) return translate
+  const out: Record<string, [string, number]> = {}
+  for (const [bName, [aName, factor]] of Object.entries(translate)) {
+    out[renames[bName] ?? bName] = [renames[aName] ?? aName, factor]
+  }
+  return out
+}
+
+/**
+ * Rewrite a not-yet-applied coupling entry's BY-NAME endpoints (issue #230).
+ *
+ * `operator_compose` runs before `couple` and `variable_map` (§4.7.5 step 3
+ * ordering) and a renaming merge DELETES the spelling it consumed. The
+ * document-wide retarget ({@link retargetMergedNames}) reaches equation ASTs
+ * only — a connector's `from`/`to` and a `variable_map`'s `from`/`to` are plain
+ * scoped-reference STRINGS carried on the entry, so an entry that has not run
+ * yet can still name a state that has moved. Resolve those endpoints onto the
+ * surviving spelling rather than let them dangle. The entry is COPIED, so the
+ * source document keeps what its author wrote.
+ */
+function retargetPendingEntry(
+  entry: CouplingEntry,
+  renames: Record<string, string>,
+): CouplingEntry {
+  if (Object.keys(renames).length === 0) return entry
+  const e = entry as unknown as Record<string, unknown>
+  const ren = (name: unknown): unknown =>
+    typeof name === 'string' ? (renames[name] ?? name) : name
+
+  if (entry.type === 'couple') {
+    const connector = e.connector as { equations?: unknown[] } | undefined
+    if (connector?.equations === undefined || connector.equations.length === 0) return entry
+    const equations = connector.equations.map((raw) => {
+      const ceq = raw as Record<string, unknown>
+      const out: Record<string, unknown> = { ...ceq, from: ren(ceq.from), to: ren(ceq.to) }
+      if (ceq.expression !== undefined) {
+        out.expression = renameNames(ceq.expression as Expression, renames)
+      }
+      return out
+    })
+    return { ...e, connector: { ...connector, equations } } as unknown as CouplingEntry
+  }
+  if (entry.type === 'variable_map') {
+    const out: Record<string, unknown> = { ...e, from: ren(e.from), to: ren(e.to) }
+    if (e.transform !== undefined && typeof e.transform !== 'string') {
+      out.transform = renameNames(e.transform as Expression, renames)
+    }
+    return out as unknown as CouplingEntry
+  }
+  return entry
+}
+
 function applyOperatorCompose(
   components: Record<string, ComponentSystem>,
   entry: CouplingEntry,
-): void {
+  renames: Record<string, string> = {},
+): Record<string, string> {
   const systems = (entry as unknown as { systems?: string[] }).systems
-  if (systems === undefined || systems.length < 2) return
+  if (systems === undefined || systems.length < 2) return {}
   const a = components[systems[0]]
   const b = components[systems[1]]
-  if (a === undefined || b === undefined) return
+  if (a === undefined || b === undefined) return {}
 
-  const translate = buildTranslateMap(entry)
+  const translate = retargetTranslateMap(buildTranslateMap(entry), renames)
 
   const aIndex: Record<string, number> = {}
   a.equations.forEach((eq, i) => {
@@ -1498,6 +1701,12 @@ function applyOperatorCompose(
       delete b.observed[gone]
     }
   }
+
+  // Everything this entry deleted, in one map, for the caller's running
+  // document-wide rename (issue #230). `inverted` rides along because it is the
+  // same operation pointed the other way — the loser of an ownership decision is
+  // merged away exactly like the loser of a translation match.
+  return { ...mergedAway, ...inverted }
 }
 
 /**
@@ -1720,13 +1929,34 @@ function retargetMergedNames(
   components: Record<string, ComponentSystem>,
   renames: Record<string, string>,
 ): void {
+  if (Object.keys(renames).length === 0) return
   for (const comp of Object.values(components)) {
     comp.equations = comp.equations.map((eq) => ({
-      lhs: substitute(eq.lhs, renames) as Expression,
-      rhs: substitute(eq.rhs, renames) as Expression,
+      lhs: renameNames(eq.lhs, renames),
+      rhs: renameNames(eq.rhs, renames),
       sourceSystem: eq.sourceSystem,
     }))
+    // A variable's `update` rules are NOT equations — they are carried on the
+    // VARIABLE — so no equation walk reaches them. A parameter that refreshes
+    // from `B.x` would otherwise read a state the flattened system no longer
+    // declares (CONFORMANCE_SPEC §5.35).
+    for (const table of [comp.stateVars, comp.parameters, comp.observed]) {
+      for (const [name, variable] of Object.entries(table)) {
+        const next = renameVariableUpdates(variable, renames)
+        if (next !== variable) table[name] = next
+      }
+    }
   }
+}
+
+/** A variable's `update` rules, off the names a merge deleted. */
+function renameVariableUpdates(
+  variable: FlattenedVariable,
+  renames: Record<string, string>,
+): FlattenedVariable {
+  if (variable.update === undefined) return variable
+  const update = mapUpdateExpressions(variable.update, (expr) => renameNames(expr, renames))
+  return update === variable.update ? variable : { ...variable, update }
 }
 
 /**
@@ -1877,7 +2107,7 @@ function applyVariableMap(
   for (const comp of Object.values(components)) {
     comp.equations = comp.equations.map((eq) => ({
       lhs: substitute(eq.lhs, bindings) as Expression,
-      rhs: renameJoinNames(substitute(eq.rhs, bindings) as Expression, toVar, fromVar),
+      rhs: renameJoinNames(substitute(eq.rhs, bindings) as Expression, { [toVar]: fromVar }),
       sourceSystem: eq.sourceSystem,
     }))
   }
@@ -1984,14 +2214,134 @@ function applyCouplings(
   // quantity, so checking after it ran would flag a well-formed endpoint.
   checkVariableMapEndpoints(file, components, varMaps)
 
+  // The document-wide merge map: every state spelling an `operator_compose`
+  // renaming match has DELETED, mapped onto the survivor (issue #230). It
+  // accumulates across the `operator_compose` pass and is applied to the by-name
+  // endpoints of every entry that has not run yet, so an entry naming a
+  // merged-away spelling resolves to the survivor instead of dangling.
+  const mergedRenames: Record<string, string> = {}
+
   for (const oc of composes) {
     expandOperatorComposePlaceholders(components, oc)
-    applyOperatorCompose(components, oc)
+    composeRenames(mergedRenames, applyOperatorCompose(components, oc, mergedRenames))
   }
-  for (const cp of couples) applyCouple(components, cp)
+  Object.assign(metadata.mergedVariableRenames, mergedRenames)
+  // An `operator_compose` merge DELETES a name the same way a `variable_map`
+  // substitution does, so the merged-away spellings join the set the registry
+  // guard refuses against (issue #230).
+  for (const gone of Object.keys(mergedRenames)) metadata.couplingRewrittenNames.add(gone)
+
+  for (const cp of couples) applyCouple(components, retargetPendingEntry(cp, mergedRenames))
 
   const loaderNames = new Set(Object.keys(file.data_sources ?? {}))
-  for (const vm of varMaps) applyVariableMap(components, vm, loaderNames)
+  for (const vm of varMaps) {
+    const resolved = retargetPendingEntry(vm, mergedRenames)
+    applyVariableMap(components, resolved, loaderNames)
+    // A NAMED transform substitutes `to` away entirely; an EXPRESSION transform
+    // leaves it standing as the observed the transform defines. Only the first
+    // deletes a name, so only the first joins the set the registry guard
+    // refuses against (Julia's `map_rewritten_names`).
+    const e = resolved as unknown as { to?: string; transform?: unknown }
+    const toVar = e.to ?? ''
+    if (toVar !== '' && (e.transform === undefined || typeof e.transform === 'string')) {
+      metadata.couplingRewrittenNames.add(toVar)
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The shadow template registry: the ONE site a rewritten name is REFUSED
+// ---------------------------------------------------------------------------
+
+/**
+ * Keys of an expression node whose STRING value names something other than a
+ * variable, so the raw-body walk must not read them as references.
+ */
+const TEMPLATE_BODY_NON_OPERAND_KEYS: ReadonlySet<string> = new Set([
+  'op',
+  'wrt',
+  'dim',
+  'fn',
+  'table',
+  'id',
+  'manifold',
+  'name',
+  'semiring',
+  'reduce',
+])
+
+/**
+ * Every variable name a RAW (unparsed) template body references.
+ *
+ * The registry holds bodies as JSON rather than as {@link ExpressionNode}, so
+ * this walks the JSON: a bare string in an OPERAND position is a variable
+ * reference; a structural key (`op`, `wrt`, `fn`, …) names an operator, an axis
+ * or a registry id and is skipped. Mirrors Python
+ * `flatten._template_body_var_names`.
+ */
+function templateBodyVarNames(body: unknown): Set<string> {
+  const out = new Set<string>()
+  const walk = (node: unknown, operand: boolean): void => {
+    if (typeof node === 'string') {
+      if (operand) out.add(node)
+    } else if (Array.isArray(node)) {
+      for (const item of node) walk(item, operand)
+    } else if (node !== null && typeof node === 'object') {
+      for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+        walk(value, !TEMPLATE_BODY_NON_OPERAND_KEYS.has(key))
+      }
+    }
+  }
+  walk(body, false)
+  return out
+}
+
+/**
+ * Refuse a SURVIVING registry body that names a coupling-rewritten variable.
+ *
+ * A `variable_map` substitution and an `operator_compose` renaming match both
+ * DELETE a name from the flattened tables and rewrite the equations off it. A
+ * surviving `expression_templates` body is a shadow copy of authored source
+ * that no equation walk reaches, and it expands at the BUILD boundary rather
+ * than at flatten — so a body still naming a deleted variable would expand,
+ * later and elsewhere, into a name the flattened system does not declare.
+ *
+ * This is the ONE site where such a reference is REFUSED rather than resolved
+ * (CONFORMANCE_SPEC §5.35). The body is authored source: rewriting it would
+ * silently diverge from the expand-at-load image the same document produces
+ * with reference-preserving emit disabled. A template `param` SHADOWS the outer
+ * name (esm-spec §9.6.1), so a body that BINDS the name through its params is
+ * fine — which is exactly the fix the message names.
+ *
+ * Mirrors Julia `flatten.jl::_check_registry_coupling_rewrites` and Python
+ * `flatten._check_registry_coupling_rewrites`.
+ */
+function checkRegistryCouplingRewrites(
+  registry: Record<string, unknown>,
+  rewritten: ReadonlySet<string>,
+): void {
+  if (rewritten.size === 0) return
+  for (const tname of Object.keys(registry).sort()) {
+    const decl = registry[tname]
+    if (decl === null || typeof decl !== 'object' || Array.isArray(decl)) continue
+    const body = (decl as Record<string, unknown>).body
+    if (body === undefined || body === null) continue
+    const raw = (decl as Record<string, unknown>).params
+    const params = new Set(
+      (Array.isArray(raw) ? raw : []).filter((p): p is string => typeof p === 'string'),
+    )
+    const hits = [...templateBodyVarNames(body)]
+      .filter((n) => !params.has(n) && rewritten.has(n))
+      .sort()
+    if (hits.length === 0) continue
+    throw new EsmMachineryError(
+      ERROR_CODES.TEMPLATE_BODY_REFERENCES_COUPLING_REWRITTEN_VARIABLE,
+      `expression template '${tname}' body references '${hits.join("', '")}', which a ` +
+        'coupling rule rewrote in the flattened equations; the registry body would expand ' +
+        "to a stale name at the build boundary. Bind the value through the template's " +
+        'params, or expand the reference before coupling (esm-spec §9.6.4).',
+    )
+  }
 }
 
 /**
@@ -2144,6 +2494,24 @@ function namespaceEventAffects(
 }
 
 /**
+ * A `condition` trigger's `expression` names variables, so it is rewritten like
+ * an affect's RHS. The `periodic` and `preset_times` kinds carry a time or a
+ * list of times and are pure data. Mirrors Python
+ * `flatten._namespace_event_trigger`.
+ */
+function namespaceEventTrigger(
+  trigger: DiscreteEventTrigger,
+  varToNamespaced: Record<string, string>,
+): DiscreteEventTrigger {
+  if (trigger.type !== 'condition') return trigger
+  const expression = trigger.expression
+  if (typeof expression === 'string') {
+    return { ...trigger, expression: renamed(varToNamespaced, expression) }
+  }
+  return { ...trigger, expression: substitute(expression, varToNamespaced) as Expression }
+}
+
+/**
  * Collect the file's events, dot-namespacing references that unambiguously match
  * a known state variable or parameter. A component's events are not tagged with
  * their source system in the file's flat event view, so the rewrite is by bare
@@ -2151,11 +2519,33 @@ function namespaceEventAffects(
  */
 function namespaceEvents(file: EsmFile, flat: FlattenedSystem): void {
   const varToNamespaced: Record<string, string> = {}
+  const bind = (from: string, to: string): void => {
+    if (!Object.prototype.hasOwnProperty.call(varToNamespaced, from)) varToNamespaced[from] = to
+  }
   for (const name of [...Object.keys(flat.stateVariables), ...Object.keys(flat.parameters)]) {
-    const bare = name.slice(name.lastIndexOf('.') + 1)
-    if (!Object.prototype.hasOwnProperty.call(varToNamespaced, bare)) {
-      varToNamespaced[bare] = name
-    }
+    bind(name.slice(name.lastIndexOf('.') + 1), name)
+  }
+
+  // An `operator_compose` renaming match DELETED spellings before this ran
+  // (§4.7.1 step 4), and the tables above no longer carry them — so an event
+  // naming a merged-away state matches nothing here and is left holding a
+  // reference to a variable the flattened system does not declare. An affect
+  // writing to an unknown the system never declares is a silent wrong answer
+  // rather than a refusal, which is what makes this the sharpest of the
+  // rename's reach surfaces. Seed BOTH spellings an author could have written:
+  // the FULLY-QUALIFIED dead name, and its bare local name.
+  //
+  // The bare half is not redundant. Where the survivor carries a DIFFERENT
+  // local name — a `translate` folding `Sink.O3` onto `Chem.ozone` — nothing in
+  // the flattened system is spelled `O3` any more, so the bare reference the
+  // author wrote inside `Sink` resolves to nothing without it. Where the two
+  // locals agree, the loop above already bound the bare name to the survivor
+  // and `bind` leaves it alone: a LIVE variable always wins over a dead alias,
+  // which is the precedence every other name-keyed surface uses — resolution
+  // may never shadow a variable the system really has (CONFORMANCE_SPEC §5.35).
+  for (const [gone, survivor] of Object.entries(flat.metadata.mergedVariableRenames)) {
+    bind(gone, survivor)
+    bind(gone.slice(gone.lastIndexOf('.') + 1), survivor)
   }
 
   const components: Array<Model | ReactionSystem> = []
@@ -2170,6 +2560,7 @@ function namespaceEvents(file: EsmFile, flat: FlattenedSystem): void {
     for (const event of component.discrete_events ?? []) {
       flat.discreteEvents.push({
         ...event,
+        trigger: namespaceEventTrigger(event.trigger, varToNamespaced),
         affects: namespaceEventAffects(event.affects, varToNamespaced),
       })
     }
@@ -2561,6 +2952,8 @@ export function flatten(file: EsmFile, options: FlattenOptions = {}): FlattenedS
     couplingRules: [],
     operatorApplies: [],
     callbacks: [],
+    mergedVariableRenames: {},
+    couplingRewrittenNames: new Set<string>(),
   }
 
   // 2. Resolve coupling entries into the per-component equation sets.
@@ -2586,6 +2979,9 @@ export function flatten(file: EsmFile, options: FlattenOptions = {}): FlattenedS
   classifyFlattened(flat)
   collectFieldIcs(flat)
   flat.templateRegistry = mergedTemplateRegistry(file)
+  // ...and the ONE place a coupling-rewritten name is REFUSED rather than
+  // resolved. See `checkRegistryCouplingRewrites`.
+  checkRegistryCouplingRewrites(flat.templateRegistry, metadata.couplingRewrittenNames)
 
   return flat
 }
