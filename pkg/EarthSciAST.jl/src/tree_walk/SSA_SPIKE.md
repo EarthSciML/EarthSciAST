@@ -183,7 +183,7 @@ fold.
   forcing reads go through the buffers argument, never `ue` — and the
   discrete-cadence refresh stays visible with fill scatters skipped (probed).
 
-## ReSEACT at CONUS: 1.36x on the whole adjoint loop, chemistry exact
+## ReSEACT at CONUS: 1.36x on the adjoint step+VJP mix, chemistry exact
 
 Measured 2026-09-09 at 4x5 CONUS (13x7x72, 6 552 cells), two driver builds in
 ONE process, arms interleaved, every pair run in BOTH arm orders — reproducing
@@ -201,7 +201,13 @@ repo.
 | `ssp_vjp` | 306.6 ms | 254.9 ms | **1.20** | **394 → 331** | 231.8 M → 176.3 M |
 
 Weighted by the adjoint's step mix (45.3 chemistry + 3.2 transport steps per
-300 s window) the per-window cost is 6.46 s → 4.74 s, **1.36x**.
+300 s window) the per-window step+VJP cost is 6.46 s → 4.74 s, **1.36x**.
+
+That mix prices ONE primal against one VJP. The adjoint evaluates the primal
+TWICE per accepted step — the forward step and the backward replay — so a primal
+regression is paid twice against one VJP win, and the whole loop (which also
+carries the refresh and host terms) is NOT this ratio. Do not read 1.36x as a
+loop figure.
 
 WHY THE TRANSPORT FORWARD LOSES. A producer's `dynamic_update_slice` into `ue`
 ALIASES its operand in the FORWARD, so XLA:CPU writes only the update and the
