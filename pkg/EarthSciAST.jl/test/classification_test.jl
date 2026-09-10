@@ -238,6 +238,27 @@ const _CLS_IDX_DIR =
         end
     end
 
+    # Which flattened MAP an unknown lands in is a different question from
+    # which §6.3.1 set classifies it, and esm-libraries-spec §4.7.5 step 4
+    # answers it with two maps that are NOT a partition: an arrayed observed is
+    # in `observed_variables` (an equation defines it) AND in `state_variables`
+    # (it materializes into a buffer the solver allocates). The golden carries
+    # the pin only where the fixture makes the distinction interesting.
+    # Issue #270.
+    @testset "the §4.7.5 step-4 buckets — $(String(fx["id"]))" for fx in manifest["fixtures"]
+        golden = JSON3.read(read(joinpath(_CLS_IDX_DIR, String(fx["golden"])), String))
+        if haskey(golden, "flatten_buckets")
+            want = golden["flatten_buckets"]
+            flat = EarthSciAST.flatten(
+                EarthSciAST.load_path(joinpath(_CLS_IDX_DIR, String(fx["fixture"]))))
+            for (key, got) in (("state_variables", collect(keys(flat.state_variables))),
+                               ("observed_variables", collect(keys(flat.observed_variables))),
+                               ("algebraic_variables", collect(keys(flat.algebraic_variables))))
+                @test (key, got) == (key, String[String(x) for x in want[key]])
+            end
+        end
+    end
+
     # The boundary the unwrap must not cross, said out loud: `u` and `v` carry
     # the SAME `aggregate` shell as `wf` and `ws`, over a `D` rather than an
     # `index`. A reader that peels the shell indiscriminately steals them out of

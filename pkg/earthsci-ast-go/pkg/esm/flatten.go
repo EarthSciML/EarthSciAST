@@ -394,8 +394,11 @@ type FlattenedSystem struct {
 	// Parameters is ALL parameters of every cadence, minus any promoted to
 	// variables by `variable_map`.
 	Parameters []FlattenedVariable
-	// ObservedVariables are the unknowns a bare-variable-LHS equation DEFINES —
-	// eliminated by substitution into their consumers, so NOT in StateVariables.
+	// ObservedVariables are the unknowns an equation DEFINES, at either LHS
+	// spelling (esm-spec §6.3.1). A SCALAR observed is eliminated by
+	// substitution into its consumers and is NOT in StateVariables; an ARRAYED
+	// one materializes into a buffer and IS, so the two lists are not a
+	// partition (esm-libraries-spec §4.7.5 step 4).
 	ObservedVariables []FlattenedVariable
 	// AlgebraicVariables are the unknowns constrained only by an expression-LHS
 	// equation. A SUBSET of StateVariables.
@@ -1128,15 +1131,23 @@ func dataSourceFields(model *Model, fullPrefix string, varOrder []string, source
 // componentSystem.
 //
 // A variable's role comes from the §6.3.1 classification, NOT from a declared
-// type. "observed" is the INLINED form specifically — an unknown a bare-variable
-// LHS defines, which is substituted into its consumers. Every other unknown is
-// SOLVED FOR and lands in the state table: an ODE state, an algebraic unknown,
-// and an ARRAYED definition (`y[i] ~ f(i)`) alike. The arrayed one is observed by
-// §6.3.1 and its cadence resolves through its RHS, but it materializes into a
-// buffer its consumers index rather than being inlined.
+// type, and the two tables it fills are NOT a partition (esm-libraries-spec
+// §4.7.5 step 4). ObservedVariables is the classification — every unknown an
+// equation DEFINES, at either LHS spelling — while StateVariables is the
+// solved-for vector. An ODE state and an algebraic unknown are solved for and no
+// equation defines them by name, so they land in the state table alone; an
+// INLINEABLE observed (the strict bare-variable LHS) is eliminated by
+// substitution and contributes no buffer, so it lands in the observed table
+// alone; and an ARRAYED definition (`y[i] ~ f(i)`) lands in BOTH — §6.3.1 makes
+// it observed, and it materializes into a buffer its consumers index rather than
+// being inlined, so the solver must allocate it.
 func collectModel(file *ESMFile, model *Model, fullPrefix, docPath string, sources map[string]DataSource) (*componentSystem, error) {
 	component := newComponentSystem(fullPrefix)
 	inlined := inlinedUnknownSet(model)
+	observed := map[string]bool{}
+	for _, name := range ObservedUnknowns(model) {
+		observed[name] = true
+	}
 
 	varOrder := orderedKeys(model.Variables, file.declarationOrder(docPath+"/variables"))
 	for _, varName := range varOrder {
@@ -1154,7 +1165,7 @@ func collectModel(file *ESMFile, model *Model, fullPrefix, docPath string, sourc
 			return nil, fmt.Errorf(
 				"flatten: variable '%s' declares type '%s', which esm 1.0.0 removed; the declared types are 'unknown' and 'parameter' (esm-spec §6.3)",
 				namespaced, v.Type)
-		case inlined[varName]:
+		case observed[varName]:
 			role = "observed"
 		default:
 			role = "state"
@@ -1174,12 +1185,17 @@ func collectModel(file *ESMFile, model *Model, fullPrefix, docPath string, sourc
 			flatVar.Shape = nil
 		}
 		switch role {
-		case "state":
-			component.stateVars.set(flatVar)
 		case "parameter":
 			component.parameters.set(flatVar)
-		default:
+		case "observed":
+			// Dual membership for the arrayed case: the buffer the solver
+			// allocates AND the equation-defined unknown (§4.7.5 step 4).
+			if !inlined[varName] {
+				component.stateVars.set(flatVar)
+			}
 			component.observed.set(flatVar)
+		default:
+			component.stateVars.set(flatVar)
 		}
 	}
 

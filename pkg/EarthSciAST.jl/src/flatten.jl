@@ -109,12 +109,17 @@ This is the canonical intermediate form consumed by MTK/PDESystem constructors
 Fields:
 - `independent_variables::Vector{Symbol}`: `[:t]` for pure-ODE systems, or
   `[:t, :x, :y, ...]` when spatial operators are present.
-- `state_variables::OrderedDict{String, ModelVariable}`: namespaced state
-  variables and (former-reaction) species.
+- `state_variables::OrderedDict{String, ModelVariable}`: the SOLVED-FOR VECTOR —
+  namespaced state variables and (former-reaction) species, PLUS
+  `algebraic_variables`, PLUS any arrayed observed that materializes into a
+  buffer (esm-libraries-spec §4.7.5 step 4).
 - `parameters::OrderedDict{String, ModelVariable}`: namespaced parameters,
   minus any promoted to variables by `variable_map`.
-- `observed_variables::OrderedDict{String, ModelVariable}`: namespaced
-  observed variables.
+- `observed_variables::OrderedDict{String, ModelVariable}`: the namespaced
+  unknowns an equation DEFINES, at either LHS spelling (esm-spec §6.3.1). NOT
+  disjoint from `state_variables`: a scalar observed is eliminated by
+  substitution and is in this map alone, while an arrayed one materializes into
+  a buffer and is in both.
 - `equations::Vector{Equation}`: all equations after reaction lowering and
   coupling, with variable references rewritten to namespaced form.
 - `continuous_events::Vector{ContinuousEvent}`: collected from every source
@@ -1421,8 +1426,11 @@ function flattened_to_esm(flat::FlattenedSystem;
     sname = String(name)
 
     variables = Dict{String,Any}()
-    # Order: states, parameters, observeds. A later partition never re-keys an
-    # earlier one (flatten guarantees disjoint names), so merge is unambiguous.
+    # Order: states, parameters, observeds. `state_variables` and
+    # `observed_variables` are NOT disjoint — esm-libraries-spec §4.7.5 step 4
+    # files a materialized arrayed observed in both — but the two maps hold the
+    # SAME `ModelVariable` for such a name, so the second write reproduces the
+    # first and the merge stays unambiguous. `parameters` is disjoint from both.
     for partition in (flat.state_variables, flat.parameters, flat.observed_variables)
         for (k, v) in partition
             variables[k] = serialize_model_variable(v)

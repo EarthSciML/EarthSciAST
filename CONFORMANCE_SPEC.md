@@ -4874,24 +4874,55 @@ weaker use of the mechanism (PR #250's precedent). Python answered
 until PR #276 landed `classification._base_name`'s aggregate unwrap. Julia and
 Rust were already correct on `main`; Go and TypeScript are corrected in PR #268.
 
-#### 5.34.2 What this category deliberately does not pin
+#### 5.34.2 Which flatten bucket an arrayed observed lands in (normative)
 
-Two omissions, both decisions rather than oversights, recorded in the category's
-`README.md`:
+The same golden carries an optional `flatten_buckets` object, authored against
+esm-libraries-spec §4.7.5 step 4's field table rather than minted by a binding.
+That table's two rows are **not** a partition:
 
-- **Which flatten bucket an arrayed observed lands in** — issue #270.
-  esm-libraries-spec §4.7.5 puts it in **both** `state_variables` and
-  `observed_variables`; no binding does that, and they miss in two opposite
-  directions. Measured on this fixture: Python reports `state_variables =
-  [u, v, wb, im]` / `observed_variables = [wf, ws, sc]`, while Rust, Go and
-  TypeScript report `state_variables = [u, v, wf, ws, wb, im]` /
-  `observed_variables = [sc]`. Python is not self-consistent either — `wb`, whose
-  LHS is §6.3.1's own worked-example `index(wb, i)`, stays a `state_variable`
-  there, because only the `aggregate` spelling is normalized upstream. Dual membership is not
-  expressible today — each binding assigns one role per variable with a single
-  `switch` — so this is a four-binding data-model decision with two defensible
-  directions, and pinning it here would settle it by fixture rather than by
-  triage.
+> | `state_variables` | … Differential unknowns …, PLUS `algebraic_variables`, PLUS **any arrayed observed that materializes into a buffer**. |
+> | `observed_variables` | Unknowns DEFINED by an equation, **bare-LHS or indexed-LHS** (esm-spec §6.3.1). A scalar observed is eliminated by substitution and is NOT in `state_variables`; **an arrayed observed materializes into a buffer and IS**. |
+
+So on this fixture `wf`, `ws` and `wb` are in **both** maps; `sc` — a *scalar*
+observed, eliminated by substitution — is in `observed_variables` alone; and `im`
+is in `state_variables` and `algebraic_variables` at once, which is the same dual
+membership the table already requires of an algebraic unknown. Every list is in
+**document order**, which step 4 makes normative:
+
+```
+state_variables     [M.u, M.v, M.wf, M.ws, M.wb, M.im]
+observed_variables  [M.wf, M.ws, M.wb, M.sc]
+algebraic_variables [M.im]
+```
+
+**Which observeds materialize.** §4.7.5's qualifier — "any arrayed observed *that
+materializes into a buffer*" — is read against §6.3.1's own distinction between
+the classification and the narrower inlineable set: an observed defined by a
+**bare-variable LHS** is eliminated by substituting its definition into every
+consumer, so it occupies no buffer, while one defined by an **indexed LHS**
+(`y[i] ~ …`, or the `aggregate{k}(y[k]) ~ …` shell) is by construction arrayed
+and its consumers index the buffer instead. The materialized set is therefore
+`observed_unknowns \ inlined_unknowns`, which is the set every binding's own
+comments already named "materializes into a buffer".
+
+A binding files the whole `FlattenedVariable` in both maps — one record, two
+memberships — and keeps the §6.3.1 `role`/`type` tag (`observed`) in both, since
+§4.7.5 states that `state_variables` "is the solved-for vector, not a
+classification". A consumer that builds the integrated `u` layout takes
+`state_variables` minus the names `observed_variables` also holds: the defining
+equation writes that buffer, so reserving an integrated slot for it would read
+zeros out of a slot nothing advances.
+
+Before issue #270 was fixed no binding did this, and they missed in two opposite
+directions: Python reported `state_variables = [u, v, wb, im]` /
+`observed_variables = [wf, ws, sc]`, while Rust, Go and TypeScript reported
+`state_variables = [u, v, wf, ws, wb, im]` / `observed_variables = [sc]`.
+
+The shared `flatten` corpus pins the same contract independently on
+`edge_enumeration_area_eff`, whose `edge_exists` and `edge_dense_id` are arrayed
+observeds written with the bare `index(V, sym)` LHS.
+
+#### 5.34.3 What this category deliberately does not pin
 
 - **The cadence of an indexed-LHS observed** — issue #272. This is the
   consequence §6.3.1 names: `algebraic_unknowns` seeds the CONTINUOUS partition

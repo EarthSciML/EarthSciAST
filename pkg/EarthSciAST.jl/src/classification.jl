@@ -215,6 +215,36 @@ observed_unknowns(model::Model)::Vector{String} =
     sort!(collect(keys(observed_definitions(model))))
 
 """
+    _inlineable_observed_unknowns(model::Model) -> Set{String}
+
+The observed unknowns whose defining LHS is a BARE variable — the strict
+`y ~ f(…)` form esm-spec §6.3.1 sanctions for INLINING specifically, which
+"does not narrow the partition".
+
+Narrower than [`observed_unknowns`](@ref) on purpose. An ARRAYED definition
+(`y[i] ~ f(…)`, or the `aggregate{k}(y[k]) ~ …` shell the corpus writes) is
+observed exactly as its scalar counterpart is, but it is not eliminated by
+substitution: it materializes into a buffer its consumers index. The difference
+between the two sets is therefore the observeds that occupy storage, which is
+what esm-libraries-spec §4.7.5 step 4 puts in `state_variables` as well as
+`observed_variables`. Mirrors Rust's `Classification::inlined_unknowns`,
+Python's `inlined_unknowns` and Go's `inlinedUnknownSet`.
+"""
+function _inlineable_observed_unknowns(model::Model)::Set{String}
+    states = Set(ode_states(model))
+    out = Set{String}()
+    for eq in model.equations
+        eq.lhs isa VarExpr || continue
+        name = eq.lhs.name
+        name in states && continue
+        v = get(model.variables, name, nothing)
+        (v !== nothing && v.type == UnknownVariable) || continue
+        push!(out, name)
+    end
+    return out
+end
+
+"""
     algebraic_unknowns(model::Model) -> Vector{String}
 
 The unknowns constrained only implicitly (`H*H*SO4 ~ Ksp`) — those an equation

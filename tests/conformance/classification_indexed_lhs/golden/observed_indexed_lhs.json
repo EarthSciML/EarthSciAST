@@ -12,5 +12,11 @@
       "system_kind": "ode",
       "declared_system_kind": null
     }
+  },
+  "flatten_buckets": {
+    "$comment": "esm-libraries-spec §4.7.5 step 4's flattened-representation buckets for this same fixture, AUTHORED against that table rather than minted by a binding. The two maps are NOT a partition: `state_variables` is the SOLVED-FOR VECTOR (\"Differential unknowns …, PLUS `algebraic_variables`, PLUS any arrayed observed that materializes into a buffer\") and `observed_variables` is the §6.3.1 CLASSIFICATION (\"Unknowns DEFINED by an equation, bare-LHS or indexed-LHS … an arrayed observed materializes into a buffer and IS [in state_variables]\"). So `wf`, `ws` and `wb` are in BOTH; `sc` — a SCALAR observed, \"eliminated by substitution and … NOT in state_variables\" — is in `observed_variables` only; and `im` is in `state_variables` and `algebraic_variables` at once, the dual membership the same table already requires of an algebraic unknown (\"A subset of state_variables — a DAE solves for them\"). Names are dot-namespaced and every list is in DOCUMENT order, which step 4 makes normative — this is the one golden here that is NOT sorted. Issue #270.",
+    "state_variables": ["M.u", "M.v", "M.wf", "M.ws", "M.wb", "M.im"],
+    "observed_variables": ["M.wf", "M.ws", "M.wb", "M.sc"],
+    "algebraic_variables": ["M.im"]
   }
 }

@@ -30,7 +30,8 @@ import {
   parameters,
 } from './classification.js'
 import { leafCadence } from './cadence.js'
-import type { Model } from './types.js'
+import { flatten } from './flatten.js'
+import type { EsmFile, Model } from './types.js'
 import { fixturesDir } from './test-helpers.js'
 
 const classificationDir = join(fixturesDir(), 'conformance', 'classification')
@@ -54,6 +55,17 @@ interface GoldenEntry {
   declared_system_kind?: string | null
 }
 
+/**
+ * esm-libraries-spec §4.7.5 step 4's flattened buckets, where a golden pins
+ * them. Optional: only the categories whose fixtures make the distinction
+ * interesting carry it.
+ */
+interface GoldenFlattenBuckets {
+  state_variables: string[]
+  observed_variables: string[]
+  algebraic_variables: string[]
+}
+
 interface Manifest {
   bindings_required: string[]
   fixtures: { id: string; fixture: string; golden: string; pins: string }[]
@@ -72,10 +84,27 @@ function runClassificationCategory(label: string, dir: string): void {
         const doc = loadString(readFileSync(join(dir, entry.fixture), 'utf-8')) as {
           models: { [k: string]: unknown }
         }
-        const golden: { models: { [k: string]: GoldenEntry } } = JSON.parse(
-          readFileSync(join(dir, entry.golden), 'utf-8'),
-        )
+        const golden: {
+          models: { [k: string]: GoldenEntry }
+          flatten_buckets?: GoldenFlattenBuckets
+        } = JSON.parse(readFileSync(join(dir, entry.golden), 'utf-8'))
         const actual = classifyDocument(doc.models)
+
+        const buckets = golden.flatten_buckets
+        if (buckets !== undefined) {
+          // Which flattened MAP an unknown lands in is a different question
+          // from which §6.3.1 set classifies it, and §4.7.5 step 4 answers it
+          // with two maps that are NOT a partition: an arrayed observed is in
+          // `observedVariables` (an equation defines it) AND in
+          // `stateVariables` (it materializes into a buffer the solver
+          // allocates). Issue #270.
+          it('files the unknowns in the §4.7.5 step-4 buckets, dual membership and all', () => {
+            const flat = flatten(doc as unknown as EsmFile)
+            expect(Object.keys(flat.stateVariables)).toEqual(buckets.state_variables)
+            expect(Object.keys(flat.observedVariables)).toEqual(buckets.observed_variables)
+            expect(Object.keys(flat.algebraicVariables)).toEqual(buckets.algebraic_variables)
+          })
+        }
 
         it(`classifies exactly the model nodes the golden names (${entry.pins.slice(0, 60)}…)`, () => {
           expect(Object.keys(actual).sort()).toEqual(Object.keys(golden.models).sort())

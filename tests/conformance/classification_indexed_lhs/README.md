@@ -64,29 +64,50 @@ observeds — until PR #276 (issue #232's Python half) landed
 `classification._base_name`'s aggregate unwrap. Julia and Rust were already
 correct; Go and TypeScript are corrected in PR #268.
 
+## The flatten buckets — **issue #270**
+
+The golden carries a second, optional section, `flatten_buckets`, authored
+against esm-libraries-spec §4.7.5 step 4 rather than minted by a binding. Which
+§6.3.1 set classifies an unknown and which flattened MAP it lands in are
+different questions, and step 4's two rows are **not** a partition:
+
+> | `state_variables` | … Differential unknowns …, PLUS `algebraic_variables`, PLUS **any arrayed observed that materializes into a buffer**. |
+> | `observed_variables` | Unknowns DEFINED by an equation, **bare-LHS or indexed-LHS** (esm-spec §6.3.1). A scalar observed is eliminated by substitution and is NOT in `state_variables`; **an arrayed observed materializes into a buffer and IS**. |
+
+So on this fixture:
+
+```
+state_variables     [M.u, M.v, M.wf, M.ws, M.wb, M.im]
+observed_variables  [M.wf, M.ws, M.wb, M.sc]
+algebraic_variables [M.im]
+```
+
+`wf`, `ws` and `wb` are in **both** maps. `sc` is the control in the other
+direction — a SCALAR observed, "eliminated by substitution and … NOT in
+`state_variables`". `im` is in `state_variables` and `algebraic_variables` at
+once, which is the same dual membership §4.7.5 already requires of an algebraic
+unknown ("A **subset** of `state_variables` — a DAE solves for them"), so this is
+an existing pattern rather than a new one. Lists are in DOCUMENT order, which
+step 4 makes normative — the one golden here that is not sorted.
+
+Which observeds count as materializing is read through §6.3.1's own distinction
+between the classification and the narrower set it sanctions for INLINING: a
+bare-variable LHS is eliminated by substitution and occupies no buffer, an
+indexed LHS is by construction arrayed and its consumers index the buffer. The
+materialized set is `observed_unknowns \ inlined_unknowns`, which is the set
+every binding's own comments already called "materializes into a buffer".
+
+Before #270 was fixed, no binding did this and they missed in two opposite
+directions: Python put `wf` and `ws` in `observed_variables` and dropped them
+from `state_variables`, while Rust, Go and TypeScript put them in
+`state_variables` and dropped them from `observed_variables`. Python was not even
+self-consistent — `wb`, whose LHS is the bare `index(wb, i)` of §6.3.1's worked
+example, stayed in `state_variables` alone, because its bucket was read off the
+strict INLINING set rather than off the classification.
+
 ## What this category deliberately does NOT pin
 
-Two things were left out on purpose. Both are omissions, not oversights.
-
-### 1. Which flatten bucket an arrayed observed lands in — **issue #270**
-
-esm-libraries-spec §4.7.5 says an arrayed observed is in **both**
-`state_variables` (it materializes into a buffer the solver allocates) and
-`observed_variables` (an equation defines it). No binding does that, and they
-miss in two opposite directions. Measured on this fixture: Python puts `wf` and
-`ws` in `observed_variables` and drops them from `state_variables`, while Rust,
-Go and TypeScript put them in `state_variables` and drop them from
-`observed_variables`. Python is not even self-consistent — `wb`, whose LHS is the
-bare `index(wb, i)` of §6.3.1's worked example, stays in `state_variables` there,
-because only the `aggregate` spelling is normalized upstream.
-Dual membership is not expressible in any of them today, because each assigns one
-role per variable with a single `switch`.
-
-That is a four-binding data-model decision with two defensible directions, so it
-is out of scope here and filed as **#270**. Pinning it in this category would
-force the decision by fixture rather than by triage.
-
-### 2. The cadence of an indexed-LHS observed — **issue #272**
+### The cadence of an indexed-LHS observed — **issue #272**
 
 This is the consequence §6.3.1 names in as many words: `algebraic_unknowns` seeds
 the CONTINUOUS cadence partition, whereas an observed's cadence resolves through
@@ -111,7 +132,8 @@ The consequence is pinned **per-binding** in the meantime — Go's
 
 Read `manifest.json`, and for each fixture compare the three unknown sets, the
 four parameter sets and `system_kind` against the golden, plus the partition
-invariant. The golden's shape is identical to the `classification` category's, so
-a binding can drive both with one reader.
+invariant. The golden's `models` shape is identical to the `classification`
+category's, so a binding can drive both with one reader; `flatten_buckets` is
+OPTIONAL and a reader compares it only where a golden carries it.
 
 See also `CONFORMANCE_SPEC.md` §5.34.
