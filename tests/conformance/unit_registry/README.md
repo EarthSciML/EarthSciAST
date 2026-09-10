@@ -69,10 +69,17 @@ table and assert it in their own unit tests, but neither has an adapter yet.
 
 The document-level halves of the same contract are
 `tests/valid/units_inventory_registry.esm` (the FF10 units resolve, with their
-exact scales) and `tests/invalid/units_discriminator_scaling_factor.esm` (a
-scaling factor is a hard `unit_parse_error`) — those go through the ordinary
+exact scales), `tests/valid/units_moves_registry.esm` (the MOVES units — `mi`,
+`mi/h`, `lb`, `hp`, `gal`, `inHg` and the compounds they build) and
+`tests/invalid/units_discriminator_scaling_factor.esm` (a scaling factor is a
+hard `unit_parse_error`) — those go through the ordinary
 `scripts/compare-conformance-outputs.py` agreement check, which is what pins
 that all five bindings reach the same verdict on the same FILE.
+
+That is the layer that covers Go and TypeScript. A registry entry pinned only
+here is pinned for three bindings; `inHg` went into the Rust table alone and
+survived three days because it was named at NEITHER layer. A new entry belongs
+in the golden below AND in one of those documents.
 
 ## Known divergences this file deliberately does not pin
 

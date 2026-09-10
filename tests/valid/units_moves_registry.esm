@@ -1,0 +1,304 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "UnitsMovesRegistry",
+    "description": "Cross-binding pin for the esm-spec §4.8.1 registry entries the US ONROAD and NONROAD inventory needs: `mi`, `mi/h`, `lb`, `hp`, `gal`, `inHg` and the compounds they compose into (`lb/(hp*h)`, `g/(hp*h)`, `lb/gal`, `g/mi`, `gal/s`). EPA MOVES -- the model every US mobile-source inventory comes from -- stores `link.linkLength` in MILES, `link.linkAvgSpeed` in MI/H, `nrsourceusetype.hpAvg` in HORSEPOWER, every `nremissionrate` row in G/(HP*H), brake-specific fuel consumption in LB/(HP*H), `fueltype.fuelDensity` in LB/GAL (its CMFGAS constant is 6.237) and `County.barometricPressure` in INHG. This is the second half of the contract `tests/valid/units_inventory_registry.esm` covers for the FF10 point-source format, and it exists because the FIRST half was not enough: `inHg` went into the Rust registry alone and stayed there for three days, validating a document under one binding and failing it under four, because nothing at the DOCUMENT level named the symbol. Every observed here is a DISCRIMINATOR: `travel_time` is only an hour if `mi` and `mi/h` compose, `power_ratio` is only dimensionless if `hp` is a POWER, `pound_per_ton` only if `lb` and `short_ton` are commensurate, `gallon_ratio` only if `gal` is a volume, and `pressure_ratio` only if `inHg` is a pressure. The reference parameters carry the same physical quantity in SI, so each ratio is exactly 1 when the binding uses the scales §4.8.1 pins -- 1 mi = 1609.344 m, 1 lb = 0.45359237 kg, 1 hp = 745.6998715822702 W (MECHANICAL, not the metric PS at 735.49875 W), 1 gal = 3.785411784 L (US LIQUID, not the imperial 4.54609 L), 1 inHg = 3386.388640341 Pa. NOTE what is NOT here: `mph` (a fused spelling of a compound the grammar already builds), `in`, `yd`, `miles` and MOVES's own `hp-hr` (`-` is not an operator in §4.8.2) all fail to resolve, and tests/conformance/unit_registry pins each of those five as a reject.",
+    "authors": [
+      "Chris Tessum with Claude"
+    ],
+    "created": "2026-09-10T00:00:00Z",
+    "tags": [
+      "units",
+      "registry",
+      "emissions",
+      "moves",
+      "imperial",
+      "conformance"
+    ]
+  },
+  "models": {
+    "UnitsMovesRegistry": {
+      "reference": {
+        "notes": "esm-spec §4.8.1. The MOVES columns link.linkLength (mi), link.linkAvgSpeed (mi/h), nrsourceusetype.hpAvg (hp), nremissionrate.meanBaseRate (g/hp-hr, spelled g/(hp*h) here), fueltype.fuelDensity (lb/gal) and County.barometricPressure (inHg)."
+      },
+      "variables": {
+        "fuel_burned": {
+          "type": "unknown",
+          "units": "gal",
+          "default": 0.0,
+          "description": "The single integrated unknown: fuel consumed so far, in the unit the fuel-supply tables are written in. Its only role is to give the model one well-formed ODE whose rhs is a rate built from every entry this fixture pins."
+        },
+        "link_length": {
+          "type": "parameter",
+          "units": "mi",
+          "default": 1.0,
+          "description": "MOVES link.linkLength, in miles as the column stores it. Declared `km` this parses and lies by a factor of 1.609344."
+        },
+        "link_avg_speed": {
+          "type": "parameter",
+          "units": "mi/h",
+          "default": 30.0,
+          "description": "MOVES link.linkAvgSpeed. `mi/h` COMPOSES from `mi` and `h`; `mph` is not a registry symbol and must not resolve."
+        },
+        "engine_power": {
+          "type": "parameter",
+          "units": "hp",
+          "default": 175.0,
+          "description": "MOVES nrsourceusetype.hpAvg -- the axis the NONROAD model bins on."
+        },
+        "bsfc": {
+          "type": "parameter",
+          "units": "lb/(hp*h)",
+          "default": 0.367,
+          "description": "Brake-specific fuel consumption, in the unit MOVES tabulates it in. MOVES spells this lb/hp-hr; the hyphen is not an operator (§4.8.2), so the ESM spelling parenthesises."
+        },
+        "fuel_density": {
+          "type": "parameter",
+          "units": "lb/gal",
+          "default": 6.237,
+          "description": "MOVES fueltype.fuelDensity for gasoline -- its CMFGAS constant. Two of the entries this fixture pins in one string."
+        },
+        "emission_factor": {
+          "type": "parameter",
+          "units": "g/(hp*h)",
+          "default": 5.0,
+          "description": "MOVES nremissionrate.meanBaseRate -- the unit every NONROAD emission rate is tabulated in."
+        },
+        "barometric_pressure": {
+          "type": "parameter",
+          "units": "inHg",
+          "default": 29.92,
+          "description": "MOVES County.barometricPressure. This is the symbol that went into ONE binding's registry and stayed there."
+        },
+        "seconds_per_hour": {
+          "type": "parameter",
+          "units": "s/h",
+          "default": 3600.0,
+          "description": "One hour in seconds, as a unit RATIO -- `s/h` is dimensionless in dimension and carries the scale, which is what pairs an hourly rate with the model's time base."
+        },
+        "reference_length": {
+          "type": "parameter",
+          "units": "m",
+          "default": 1609.344,
+          "description": "The same length in metres (1 mi = 1609.344 m exactly = 5280 ft), so `length_ratio` is exactly 1 when `mi` carries its defined scale."
+        },
+        "reference_speed": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 13.4112,
+          "description": "The same speed in SI (30 mi/h = 13.4112 m/s exactly, since 1 mi/h is exactly 0.44704 m/s -- the constant MOVES's own SQL writes)."
+        },
+        "reference_power": {
+          "type": "parameter",
+          "units": "W",
+          "default": 130497.47752689729,
+          "description": "The same power in watts (175 hp at 745.6998715822702 W each). Under the METRIC horsepower this number would be 1.4% off, which no dimensional check can see -- which is why the scale is normative."
+        },
+        "reference_volume": {
+          "type": "parameter",
+          "units": "L",
+          "default": 3.785411784,
+          "description": "One US LIQUID gallon in litres, exactly. Under the imperial gallon this would be 4.54609, 20% away and dimensionally identical."
+        },
+        "reference_pressure": {
+          "type": "parameter",
+          "units": "Pa",
+          "default": 101320.74811900273,
+          "description": "The same pressure in pascals (29.92 inHg at 3386.388640341 Pa each, i.e. exactly 25.4 mmHg)."
+        },
+        "unit_volume": {
+          "type": "parameter",
+          "units": "gal",
+          "default": 1.0,
+          "description": "One gallon, so that `gallon_ratio` compares like with like."
+        },
+        "pound_mass": {
+          "type": "parameter",
+          "units": "lb",
+          "default": 2000.0,
+          "description": "Two thousand pounds -- which is what `short_ton` IS. The registry held the ton before it held the pound."
+        },
+        "ton_mass": {
+          "type": "parameter",
+          "units": "short_ton",
+          "default": 1.0,
+          "description": "The same mass as the entry above, in the unit the FF10 inventory is written in."
+        },
+        "travel_time": {
+          "type": "unknown",
+          "units": "h",
+          "description": "DISCRIMINATOR: mi ÷ (mi/h) is a TIME. Fails unless `mi` composes into both a length and a speed with the same meaning."
+        },
+        "length_ratio": {
+          "type": "unknown",
+          "units": "1",
+          "description": "DISCRIMINATOR: `mi` and `m` are COMMENSURATE, so their ratio is dimensionless. A binding that admitted `mi` on some axis other than [length] fails here."
+        },
+        "speed_ratio": {
+          "type": "unknown",
+          "units": "1",
+          "description": "DISCRIMINATOR: (mi/h) ÷ (m/s) is dimensionless -- the compound, not the symbol."
+        },
+        "power_ratio": {
+          "type": "unknown",
+          "units": "1",
+          "description": "DISCRIMINATOR: `hp` ÷ `W` is dimensionless, so `hp` must be a POWER and not, say, a force or an energy."
+        },
+        "gallon_ratio": {
+          "type": "unknown",
+          "units": "1",
+          "description": "DISCRIMINATOR: `gal` ÷ `L` is dimensionless, so `gal` must be a [length]^3."
+        },
+        "pressure_ratio": {
+          "type": "unknown",
+          "units": "1",
+          "description": "DISCRIMINATOR: `inHg` ÷ `Pa` is dimensionless. This is the assertion whose absence let `inHg` live in one binding for three days."
+        },
+        "pound_per_ton": {
+          "type": "unknown",
+          "units": "1",
+          "description": "DISCRIMINATOR: `lb` ÷ `short_ton` is dimensionless, and the two are the SAME mass here (2000 : 1) -- which is exactly why tests/conformance/unit_registry pins the SCALES as well, since the dimension check alone passes either rounding."
+        },
+        "fuel_mass_rate": {
+          "type": "unknown",
+          "units": "lb/h",
+          "description": "DISCRIMINATOR: lb/(hp*h) × hp is a mass per time. The `hp` in the denominator of the rate must cancel the `hp` of the engine rating."
+        },
+        "fuel_volume_rate": {
+          "type": "unknown",
+          "units": "gal/s",
+          "description": "DISCRIMINATOR: (lb/h) ÷ (lb/gal) ÷ (s/h) is a volume per SECOND -- the unit that pairs MOVES's hourly fuel rate with the model's time base."
+        },
+        "distance_rate": {
+          "type": "unknown",
+          "units": "g/mi",
+          "description": "DISCRIMINATOR: g/(hp*h) × hp ÷ (mi/h) is a mass per DISTANCE -- the MOVES air-toxics `g/mile` output, and the case that pins that `mi` composes in a denominator too."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "fuel_burned"
+            ],
+            "wrt": "t"
+          },
+          "rhs": "fuel_volume_rate"
+        },
+        {
+          "lhs": "travel_time",
+          "rhs": {
+            "op": "/",
+            "args": [
+              "link_length",
+              "link_avg_speed"
+            ]
+          }
+        },
+        {
+          "lhs": "length_ratio",
+          "rhs": {
+            "op": "/",
+            "args": [
+              "link_length",
+              "reference_length"
+            ]
+          }
+        },
+        {
+          "lhs": "speed_ratio",
+          "rhs": {
+            "op": "/",
+            "args": [
+              "link_avg_speed",
+              "reference_speed"
+            ]
+          }
+        },
+        {
+          "lhs": "power_ratio",
+          "rhs": {
+            "op": "/",
+            "args": [
+              "engine_power",
+              "reference_power"
+            ]
+          }
+        },
+        {
+          "lhs": "gallon_ratio",
+          "rhs": {
+            "op": "/",
+            "args": [
+              "unit_volume",
+              "reference_volume"
+            ]
+          }
+        },
+        {
+          "lhs": "pressure_ratio",
+          "rhs": {
+            "op": "/",
+            "args": [
+              "barometric_pressure",
+              "reference_pressure"
+            ]
+          }
+        },
+        {
+          "lhs": "pound_per_ton",
+          "rhs": {
+            "op": "/",
+            "args": [
+              "pound_mass",
+              "ton_mass"
+            ]
+          }
+        },
+        {
+          "lhs": "fuel_mass_rate",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "bsfc",
+              "engine_power"
+            ]
+          }
+        },
+        {
+          "lhs": "fuel_volume_rate",
+          "rhs": {
+            "op": "/",
+            "args": [
+              {
+                "op": "/",
+                "args": [
+                  "fuel_mass_rate",
+                  "fuel_density"
+                ]
+              },
+              "seconds_per_hour"
+            ]
+          }
+        },
+        {
+          "lhs": "distance_rate",
+          "rhs": {
+            "op": "/",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "emission_factor",
+                  "engine_power"
+                ]
+              },
+              "link_avg_speed"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}
