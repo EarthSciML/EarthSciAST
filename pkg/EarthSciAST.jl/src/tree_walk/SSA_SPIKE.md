@@ -25,8 +25,24 @@ With the flag on, a consumer descriptor references its producer's RESULT VALUE:
 * **tier 2 (slice)** — the gather decomposes into few consecutive-position runs,
   each inside one producer ⇒ one `slice` per run (+ one `concatenate` when
   more than one run);
+* **tier 2b (producer gather)** — the mapping lies inside ONE producer but
+  shatters into more runs than slices are worth ⇒ one `gather` of that
+  producer's value at producer-local positions. Exactly the single op the dense
+  `ue` gather was, over an index vector of the same length: the win is not op
+  count, it is that the read no longer touches the flat buffer;
 * **tier 3 (fallback)** — everything else keeps the dense gather from `ue`,
   byte-for-byte.
+
+Three descriptor surfaces feed those tiers: a kernel's own top-level
+descriptors, its TEMPLATE SUB-KERNEL (`_NK_SUBCALL`) descriptors — resolved by
+`_build_oop_desc_vectors` against the same parent lanes, so decomposable by the
+same map, but indexed by `S.acc` and therefore carried in a per-sub table — and
+GHOST-MASKED `_AK_STATE_TBL_BOX` descriptors, where a masked lane's value is
+discarded by the emitter's `ifelse` select and is therefore a WILDCARD the
+decomposition fills with whatever continues a neighbouring run. Each of the
+three has a bisect knob (`ESS_OOP_SSA_SUB`, `ESS_OOP_SSA_PGATHER`,
+`ESS_OOP_SSA_GHOST`, all default ON inside `ESS_OOP_SSA=1`), which is what lets
+one process A/B an arm and what each engagement test's negative control flips.
 
 A producer's scatter into `ue` is emitted only when static accounting finds a
 residual reader of its block; otherwise it is skipped and the value flows only
@@ -66,7 +82,10 @@ vectorizable kernels (ghost-masked ones excluded and counted as fallback).
 | merged class (g1,g2 → one kernel, N=6) | 3/3 | 24/24 | 1/1 | member reads = slices at offsets inside ONE producer value |
 | reaction–diffusion, no observeds (N=16) | 7/7 | 46/46 | 0/0 | prefix reads become slices of `u` |
 
-Whole host corpus green with the flag FORCED on: tree_walk_oop (164),
+Full suite (`Pkg.test()`, `ESM_TEST_REACTANT=1`) at 4x5-era main: flag OFF
+89 034 pass / 8 broken / 89 042; forced ON 89 029 pass / 5 fail / 8 broken, the
+5 being exactly `reactant_oop_intern_test.jl`'s interning-ENGAGEMENT assertions
+(see Interactions below). Whole host corpus green with the flag FORCED on: tree_walk_oop (164),
 oop_merge (75), array_obs_materialize (78), scan_prefix (333),
 oop_scalar_batch (42), observed_materialization (20), observed_slots (36),
 iip_generic — all bit-identical to `f!` — and green with the flag OFF
@@ -88,15 +107,51 @@ XLA's optimizer converges the two programs (18 ≡ 18 ops optimized) — at scal
 that convergence is precisely what fails (pairwise slice-CSE went quadratic on
 CONUS; the buffers exceed L3), so the emission-level census is the measure.
 
-## What blocks the rest (tier-3 fallbacks, in expected ReSEACT impact order)
+## Measured on ReSEACT — and the blocker order the spike guessed is WRONG
 
-1. **Ghost-masked `_AK_STATE_TBL_BOX` gathers** (boundary stencils through slot
-   tables with 0-entries). Extension is mechanical: redirect the safe-index
-   gather to producer slices and keep the select-against-mask.
-2. **Sub-kernel (`_NK_SUBCALL`) descriptor plans.** Their tables are resolved
-   against parent lanes but indexed per-sub, so the per-kernel redirect table
-   does not align; needs per-sub redirect tables built in
-   `_build_oop_acc_plan`-style. Mechanical, not conceptual.
+The spike listed its remaining tier-3 fallbacks "in expected ReSEACT impact
+order" and put ghost-masked table gathers first. `oop_ssa_stats` now carries a
+per-reason blocker tally (which read surface still reads each surviving
+producer's block), and on the ReSEACT transport RHS at 6x6x8 it says:
+
+| | spike | + this extension |
+|---|---|---|
+| top-level edges redirected | 51 / 100 | **97 / 100** |
+| top-level elements | 5 292 / 32 148 | **24 948 / 32 148** |
+| SUB-KERNEL descriptors redirected | 0 / 885 | **731 / 885** |
+| sub-kernel elements | 0 / 1 074 487 | **896 863 / 1 074 487** |
+| producer scatters skipped | 6 / 17 | **13 / 17** |
+| blocked producers, by reason | sub 9, frag 5, scalar 2, scan 1 | sub 2, scalar 2, scan 1 |
+| … blocked SOLELY by that reason | sub 4, frag 1 | scalar 2, sub 1 |
+
+Two things in that table refute the spike's ordering:
+
+* **there are ZERO ghost-masked descriptors in this build** (`n_ghost_edges = 0`
+  at both 6x6x8 and on split part 2), and none at all in any of the 1-D host
+  fixtures — so blocker #1, the one the note called the primary target, has no
+  coverage to give here. It is implemented anyway (it is cheap and it is
+  correct), and the unit tests cover it directly, but it is not what was
+  holding the scatters.
+* **the sub-kernel descriptors are the read surface that matters**: 885 of the
+  985 candidate descriptors and 1 074 487 of the 1 106 635 candidate READ
+  ELEMENTS — 33x the top-level edges' volume — and they held 9 of the 11
+  surviving producer scatters alive. Blocker #2, listed second and described as
+  "mechanical, not conceptual", was the whole game.
+
+E-lane CSR gathers (#3) and `_AK_STATE_FIXED` pins are likewise 0 here. What is
+left is blocker #4 (scalar-walker reads: 2 producers, and BOTH of them are
+blocked by nothing else) plus one sub-kernel descriptor group and one level scan
+fold.
+
+## What blocks the rest (tier-3 fallbacks, in the order the spike GUESSED)
+
+1. ~~**Ghost-masked `_AK_STATE_TBL_BOX` gathers**~~ — CLOSED (`_ssa_lane_owners`'
+   wildcard fill), and measured at ZERO coverage on ReSEACT: no build in this
+   corpus emits one. Kept because it is correct and free.
+2. ~~**Sub-kernel (`_NK_SUBCALL`) descriptor plans**~~ — CLOSED (per-sub tables
+   on `_OopSSAKernel.subs`, `_oop_ssa_subctx` at the `_NK_SUBCALL` arm). This
+   was the real blocker: 731/885 descriptors and 896 863 read elements
+   redirected, 7 more producer scatters skipped.
 3. **E-lane (in-reduce) CSR gathers.** Per-entry `(cell, neighbour)` reads
    repeat cells — median run length 1 — so slices+concat lose to the gather;
    would need segment-level ops instead. Left as gathers deliberately.
@@ -104,8 +159,10 @@ CONUS; the buffers exceed L3), so the emission-level census is the measure.
    `_NK_STATE_GATHER`, batch slot vectors). Redirectable through the same
    slot→(producer, position) map; not done in the spike. They also hold
    producer scatters alive wherever they read.
-5. **Fragmented gathers** (`nseg > max(8, L÷4)`): kept dense by the
-   worthwhileness threshold; they also keep their producers' scatters.
+5. ~~**Fragmented gathers**~~ (`nseg > min(64, max(8, L÷4))`) — CLOSED by tier
+   2b: past the slice threshold a single-producer mapping gathers the producer's
+   VALUE instead of the buffer. `frag` went 5 blocked producers → 0. A
+   fragmented MULTI-producer mapping has no one-op form and still falls back.
 6. **Per-cell fallback kernels** disable scatter-skipping globally (reads
    un-enumerable). Rare on affine builds.
 
@@ -125,6 +182,66 @@ CONUS; the buffers exceed L3), so the emission-level census is the measure.
 * Live forcing (`param_arrays`/`rhs_with_buffers`) rides through unchanged —
   forcing reads go through the buffers argument, never `ue` — and the
   discrete-cadence refresh stays visible with fill scatters skipped (probed).
+
+## ReSEACT at CONUS: 1.36x on the adjoint step+VJP mix, chemistry exact
+
+Measured 2026-09-09 at 4x5 CONUS (13x7x72, 6 552 cells), two driver builds in
+ONE process, arms interleaved, every pair run in BOTH arm orders — reproducing
+to three digits, so the order is not what is being measured.
+`tools/diag/p13_ssa_ab.jl` + `tools/diag/p11_ue_traffic.py` in the consuming
+repo.
+
+| program | arms off | arms on | off/on | copies | real element writes |
+|---|---|---|---|---|---|
+| `ros_step` (chemistry) | 38.90 ms | 28.23 ms | **1.38** (bit-for-bit) | | |
+| `ros_vjp` | 81.11 ms | 56.71 ms | **1.43** (λ bit-for-bit) | | |
+| `rhs` (transport RHS) | 3.755 ms | 6.405 ms | 0.59 | 2 → 3 | 2.49 M → 2.69 M |
+| `rhs_vjp` | 80.5 ms | 72.2 ms | **1.12** | **98 → 82** | 59.55 M → 55.22 M |
+| `ssp_step` (4-stage) | 13.41 ms | 24.25 ms | 0.55 | 8 → 12 | 10.43 M → 16.97 M |
+| `ssp_vjp` | 306.6 ms | 254.9 ms | **1.20** | **394 → 331** | 231.8 M → 176.3 M |
+
+Weighted by the adjoint's step mix (45.3 chemistry + 3.2 transport steps per
+300 s window) the per-window step+VJP cost is 6.46 s → 4.74 s, **1.36x**.
+
+That mix prices ONE primal against one VJP. The adjoint evaluates the primal
+TWICE per accepted step — the forward step and the backward replay — so a primal
+regression is paid twice against one VJP win, and the whole loop (which also
+carries the refresh and host terms) is NOT this ratio. Do not read 1.36x as a
+loop figure.
+
+WHY THE TRANSPORT FORWARD LOSES. A producer's `dynamic_update_slice` into `ue`
+ALIASES its operand in the FORWARD, so XLA:CPU writes only the update and the
+scatter is nearly free there; skipping it instead forces the producer's value to
+be materialized as its own buffer. On the PPM transport RHS (17 producers,
+blocks up to 3 456 elements) that trade is a loss. On chemistry it is a win in
+both directions, because there the redirect replaces fragmented gathers of the
+12 326-element buffer with gathers of much smaller producer values and 59 of 59
+scatters disappear.
+
+The copies the scatter chain causes are all in the REVERSE, where each `ue`
+version has ~70 live consumers and copy-insertion duplicates the whole buffer
+per version. That is where removing readers pays on both halves: `ssp_vjp`
+loses 63 of its 394 whole-buffer copies and 24% of its write traffic for 1.20x,
+against a ~1.8x ceiling if every copy vanished.
+
+It is also why `ess-oop-levelbase` (one read version per level) failed where
+this succeeds: it reduced VERSIONS, which the forward already got for free,
+instead of removing READERS. Its census went 99 → 102 copies; this one goes
+98 → 82 and 394 → 331.
+
+## What is NOT verified
+
+Bit-identity across the arms is asserted and holds on HOST (`==`) and, on the
+toy fixtures, in the traced census (`reactant_oop_ssa_test.jl`, which pins the
+DUS delta to `n_skipped_scatters`). At CONUS the two arms are NOT bit-identical:
+changing the operand graph changes XLA's fusion, hence FMA and vectorization
+order. chemistry `ros_step` is bit-for-bit and `ros_vjp`'s λ is bit-for-bit; on
+transport the largest ABSOLUTE difference is 5.6e-15 on `ssp_step` (1.1e-18 of
+scale) and 3.5e-18 on `ssp_vjp`'s λ (3.2e-16 of scale), and NOT ONE of the
+85 176 state or λ components in any program differs by more than 1e-9 of that
+quantity's own scale. The POINTWISE relative metric is uninformative here — it
+reads exactly 2.0 on an opposite-signed component at ~1e-310 — which is why the
+probe reports absolute and scale-relative figures plus a component count.
 
 ## Generalization assessment (honest)
 
