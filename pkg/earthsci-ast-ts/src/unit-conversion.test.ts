@@ -253,8 +253,14 @@ describe('unit-conversion', () => {
     })
 
     it('carries every unit the shared registry contract lists', () => {
-      // The cross-binding contract (Go's `unitRegistry`). A symbol missing from
-      // this table is not "conservatively unknown" — it FAILS THE FILE.
+      // The cross-binding contract: this list is EVERY symbol esm-spec §4.8.1
+      // tabulates, row by row, and it is checked against the spec table and not
+      // against what this file happens to define. A symbol missing from the
+      // TABLE is not "conservatively unknown" — it FAILS THE FILE; a symbol
+      // missing from THIS LIST is worse, because then the table can lose the
+      // entry and this test still passes. It has: the list once omitted `ft`,
+      // `short_ton`, `tonne` and `inHg`, which is how `inHg` stayed
+      // Rust-only for three days.
       const contract = `m kg s mol K A cd rad
         g mg ug lb short_ton tonne
         dm cm mm um nm km ft mi
@@ -262,13 +268,16 @@ describe('unit-conversion', () => {
         L l mL gal
         kmol mmol umol nmol M
         Hz N Pa J kJ cal kcal W kW MW hp
-        atm bar hPa kPa mbar Torr mmHg inHg psi
+        atm uatm bar hPa kPa mbar Torr mmHg inHg psi
         erg BTU Wh kWh
         C V Ohm F T
         degC degF deg
+        sr
+        % psu
         ppm ppb ppt ppmv ppbv pptv
-        molec individuals vehicles units count
+        molec molecule individuals vehicles units count
         Dobson DU
+        meter meters hour Celsius percent degree degrees
         dimensionless`.split(/\s+/)
       for (const symbol of contract) {
         expect(() => parseUnitForConversion(symbol)).not.toThrow()
@@ -297,8 +306,10 @@ describe('unit-conversion', () => {
       // MECHANICAL horsepower, never the metric one (PS, 735.49875 W).
       expect(Math.abs(parseUnitForConversion('hp').scale - 735.49875)).toBeGreaterThan(1)
       // The US LIQUID gallon, never the imperial one (4.54609 L).
-      expect(parseUnitForConversion('gal').scale / parseUnitForConversion('L').scale)
-        .toBeCloseTo(3.785411784, 12)
+      expect(parseUnitForConversion('gal').scale / parseUnitForConversion('L').scale).toBeCloseTo(
+        3.785411784,
+        12,
+      )
 
       // 1 mi/h is EXACTLY 0.44704 m/s -- the constant MOVES's own SQL writes.
       expect(parseUnitForConversion('mi/h').scale).toBe(0.44704)

@@ -70,18 +70,75 @@ using Unitful
     @testset "esm-spec §4.8.1 — the flat unit registry" begin
         P = EarthSciAST.parse_units
 
-        # Every registry symbol resolves.
+        # Every registry symbol resolves. This list is EVERY symbol
+        # esm-spec §4.8.1 tabulates, row by row, and it is written from the
+        # spec table rather than from `_UNIT_REGISTRY` — a symbol missing here
+        # is worse than a symbol missing from the table, because then the table
+        # can lose the entry and this test still passes. It has: the list once
+        # omitted `ft`, `short_ton`, `tonne`, `uatm`, `sr`, `%`, `psu` and
+        # `molecule`, and `inHg` stayed Rust-only for three days.
         for u in ("m", "kg", "s", "mol", "K", "A", "cd", "rad",
-                  "g", "mg", "ug", "dm", "cm", "mm", "um", "nm", "km",
+                  "g", "mg", "ug", "lb", "short_ton", "tonne",
+                  "dm", "cm", "mm", "um", "nm", "km", "ft", "mi",
                   "ms", "us", "ns", "min", "h", "hr", "day", "yr", "year",
-                  "L", "l", "mL", "kmol", "mmol", "umol", "nmol", "M",
+                  "L", "l", "mL", "gal", "kmol", "mmol", "umol", "nmol", "M",
                   "Hz", "N", "Pa", "J", "kJ", "cal", "kcal", "W", "kW", "MW",
-                  "atm", "bar", "hPa", "kPa", "mbar", "Torr", "mmHg", "psi",
+                  "hp",
+                  "atm", "uatm", "bar", "hPa", "kPa", "mbar", "Torr", "mmHg",
+                  "inHg", "psi",
                   "erg", "BTU", "Wh", "kWh", "C", "V", "Ohm", "F", "T",
-                  "degC", "degF", "deg", "ppm", "ppb", "ppt", "ppmv", "ppbv",
-                  "pptv", "molec", "individuals", "vehicles", "units", "count",
-                  "Dobson", "DU")
+                  "degC", "degF", "deg", "sr", "%", "psu",
+                  "ppm", "ppb", "ppt", "ppmv", "ppbv",
+                  "pptv", "molec", "molecule", "individuals", "vehicles",
+                  "units", "count", "Dobson", "DU",
+                  "meter", "meters", "hour", "Celsius", "percent",
+                  "degree", "degrees")
             @test P(u) !== nothing
+        end
+
+        # The US customary family: `ft`, `mi`, `lb`, `hp`, `gal`. Every one is
+        # EXACT by definition, and the SCALE is the contract and not merely the
+        # dimension — mechanical and metric horsepower share a dimension and
+        # are 1.4% apart, as do the US and imperial gallons at 20%, so a
+        # dimension-only check passes a binding that picks the wrong one and
+        # mis-scales every rate in a MOVES run.
+        #
+        # Each is asserted against the entry it is DEFINED in terms of, with
+        # `==` and not a tolerance, because units.jl now builds each one from
+        # that entry: `mi` from `ft`, `short_ton` from `lb`, `hp` from both.
+        # An edit to `ft` or `lb` that forgot one of them fails here.
+        scale(u, canonical) = Unitful.ustrip(Unitful.uconvert(canonical, 1.0 * P(u)))
+        ft = scale("ft", u"m")
+        lb = scale("lb", u"kg")
+        @test ft == 0.3048
+        @test lb == 0.45359237
+        @test scale("mi", u"m") == 1609.344
+        @test scale("mi", u"m") == 5280 * ft
+        @test scale("short_ton", u"kg") == 2000 * lb
+        @test scale("hp", u"W") == 745.6998715822702
+        @test scale("hp", u"W") == 550 * ft * lb * 9.80665
+        # MECHANICAL horsepower, never the metric one (PS, 735.49875 W).
+        @test abs(scale("hp", u"W") - 735.49875) > 1
+        # The US LIQUID gallon, never the imperial one (4.54609 L).
+        @test scale("gal", u"L") == 3.785411784
+        @test scale("inHg", u"Pa") == 3386.388640341
+        @test scale("inHg", u"Pa") == 25.4 * scale("mmHg", u"Pa")
+
+        # The compounds these entries exist to make spellable. None is a table
+        # entry — they fall out of the grammar, which is why the BASE units
+        # were added and not the compounds. 1 mi/h is EXACTLY 0.44704 m/s, the
+        # constant MOVES's own SQL writes.
+        @test scale("mi/h", u"m/s") == 0.44704
+        for u in ("g/(hp*h)", "lb/(hp*h)", "g/gal", "g/mi", "kJ/gal")
+            @test P(u) !== nothing
+        end
+        # The deliberate absences, pinned as rejects by
+        # tests/conformance/unit_registry. `mph` is a fused spelling of a
+        # compound the grammar already builds; `in` and `yd` have no corpus
+        # user; `hp-hr` is MOVES's OWN spelling of horsepower-hour and is
+        # unparseable because `-` is not an operator (§4.8.2).
+        for u in ("mph", "in", "yd", "miles", "hp-hr")
+            @test P(u) === nothing
         end
 
         # `C` is the COULOMB, per SI — never Celsius. Binding it to Celsius
