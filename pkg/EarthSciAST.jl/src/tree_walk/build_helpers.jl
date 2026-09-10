@@ -23,7 +23,59 @@ const _BENCH_BRANCH_TEMPLATES = Ref(0)
 # body variants compiled — one per (use site, region class). The RFC's ~21.
 const _BENCH_BODY_VARIANTS = Ref(0)
 _bench_reset!() = (_BENCH_COMPILE_CALLS[] = 0; _BENCH_BRANCH_TEMPLATES[] = 0;
-                   _BENCH_BODY_VARIANTS[] = 0; nothing)
+                   _BENCH_BODY_VARIANTS[] = 0;
+                   empty!(_BENCH_PHASE); empty!(_BENCH_PHASE_N);
+                   empty!(_BENCH_PHASE_GC); nothing)
+
+# ---- BUILD PHASE TIMERS (diagnostic; `_BENCH_ON[]` gated, like the counters) --
+# `_BENCH_COMPILE_CALLS` counts node lowerings, which after the contraction-tier
+# fix is FLAT in the grid while build wall time is not. These accumulate wall
+# seconds and call counts per named build phase, so the O(#cells) term can be
+# attributed to a phase rather than inferred from IR volume.
+const _BENCH_PHASE   = Dict{Symbol,Float64}()
+const _BENCH_PHASE_N = Dict{Symbol,Int}()
+const _BENCH_PHASE_GC = Dict{Symbol,Float64}()
+@inline function _bench_phase!(k::Symbol, t0::UInt64, g0::UInt64=UInt64(0))
+    _BENCH_ON[] || return nothing
+    dt = (time_ns() - t0) / 1e9
+    _BENCH_PHASE[k]   = get(_BENCH_PHASE, k, 0.0) + dt
+    _BENCH_PHASE_N[k] = get(_BENCH_PHASE_N, k, 0) + 1
+    g0 == 0 || (_BENCH_PHASE_GC[k] = get(_BENCH_PHASE_GC, k, 0.0) +
+                                     (Base.gc_time_ns() - g0) / 1e9)
+    return nothing
+end
+# Guarded on `_BENCH_ON[]` so a default build takes no clock reading at all.
+# The guard duplicates `ex` in the expansion; at every site but one `ex` is a
+# plain call, so that costs nothing. The exception is `:spine_lower`, whose
+# argument is a `get!` with a `do` block — duplicating that would compile the
+# closure twice, so that site uses `@_bench_hot` below instead.
+macro _bench(k, ex)
+    quote
+        if _BENCH_ON[]
+            local _t0 = time_ns()
+            local _g0 = Base.gc_time_ns()
+            local _v = $(esc(ex))
+            _bench_phase!($(esc(k)), _t0, _g0 == 0 ? UInt64(1) : _g0)
+            _v
+        else
+            $(esc(ex))
+        end
+    end
+end
+
+# Ungated variant: reads the clocks unconditionally, so it does NOT duplicate
+# `ex`. Only for a site whose argument is expensive to expand twice AND is not
+# in a per-lane loop — today that is `:spine_lower`, once per box, wrapping a
+# cache lookup that is already doing real work.
+macro _bench_hot(k, ex)
+    quote
+        local _t0 = time_ns()
+        local _g0 = Base.gc_time_ns()
+        local _v = $(esc(ex))
+        _bench_phase!($(esc(k)), _t0, _g0 == 0 ? UInt64(1) : _g0)
+        _v
+    end
+end
 
 # Lockstep site translation (compile-once template tier): a SHAPE-PRESERVING
 # equation rewrite — join-gate or index-set-range resolution rebuilds a node's

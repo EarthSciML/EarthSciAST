@@ -2811,7 +2811,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     mat_vars = Set{String}(keys(layout.mat_dims))
 
     # ---- Observed substitution / derivative-equation split ----
-    derivative_eqs, resolved_obs, raw_obs, mat_defs = _split_observed_and_derivatives(
+    derivative_eqs, resolved_obs, raw_obs, mat_defs = @_bench :split_obs _split_observed_and_derivatives(
         parts.equations,
         parts.observed_names, cls.geom_ring_vars, cls.geom_setup_vars,
         cls.geom_inline_vars, cls.array_inline_vars, mat_vars,
@@ -2822,7 +2822,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
                                  for (k, v) in registered_functions)
 
     # ---- Const-array registry (caller arrays + boundaries + setup geometry) ----
-    const_registry = _register_const_arrays(const_arrays, const_array_boundaries,
+    const_registry = @_bench :const_registry _register_const_arrays(const_arrays, const_array_boundaries,
         parts.geom_rings, parts.geom_setup_arrays, cls.pia_operand_arrays,
         cls.const_obs_arrays)
 
@@ -2874,7 +2874,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
 
     # ---- Live forcing buffers (ess-14f.3, JL-J0) ----
     # (see `_build_pgather` for the feasibility-gate design note)
-    pgather = _build_pgather(param_arrays)
+    pgather = @_bench :build_pgather _build_pgather(param_arrays)
 
     # ---- Discrete-cadence materialization: cache buffers + fill kernels ----
     # (the middle cadence phase; see DiscreteMaterializer). Each discrete var gets a
@@ -2887,13 +2887,13 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # valid there (a name that reaches one keeps the inline path — see
     # `_collect_materialized_array_obs`).
     if materialize_out !== nothing
-        _build_discrete_materializer!(materialize_out, cls.discrete_vars,
+        @_bench :discrete_mat _build_discrete_materializer!(materialize_out, cls.discrete_vars,
             parts.discrete_defs, resolved_obs, layout.array_var_info, layout.var_map,
             const_registry, pgather, param_sym_set, reg_funcs, p, n_states)
     end
 
     # ---- Evaluate arrayop-valued initialization_equations into u0 ----
-    _seed_arrayop_init_u0!(u0, parts.init_equations, initial_conditions, layout.var_map,
+    @_bench :seed_u0 _seed_arrayop_init_u0!(u0, parts.init_equations, initial_conditions, layout.var_map,
                            layout.array_var_info, const_registry, pgather,
                            param_sym_set, reg_funcs, p)
 
@@ -2990,7 +2990,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # bound above): a reader's `index(<materialized observed>, i…)` must resolve
     # through the ordinary array-gather path onto the observed's buffer block.
     # `scan_folds` is the ess-scan post-pass list for the STATE equations.
-    scalar_entries, percell_scalar, acc_kernels_pre, scan_folds = _compile_derivative_equations(derivative_eqs,
+    scalar_entries, percell_scalar, acc_kernels_pre, scan_folds = @_bench :compile_deriv_eqs _compile_derivative_equations(derivative_eqs,
         resolved_obs, array_var_info, var_map, const_registry, pgather,
         param_sym_set, reg_funcs, n_states; template_sites=template_sites,
         scalar_obs_inline=obs_plan.inline)
@@ -3012,7 +3012,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # ESS_KERNEL_CLASS_MERGE_DISABLE=1) restores the unmerged build byte for
     # byte. The ESS_STENCIL_DISABLE per-cell reference is untouched either
     # way: its trees live on `percell_scalar`, never in the kernel list.
-    acc_kernels, class_merge_diag = _merge_acc_kernel_classes(acc_kernels_pre)
+    acc_kernels, class_merge_diag = @_bench :class_merge _merge_acc_kernel_classes(acc_kernels_pre)
 
     # ---- Common-subexpression elimination on the scalar/indexed-D RHS (ess-r7h) ----
     # Batched compile of every scalar resolved-RHS expr: subexpressions sharing a
@@ -3026,7 +3026,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # `pgather` holds BOTH the raw `param_arrays` buffers and the discrete-cadence
     # caches, which is why this is read after `_build_discrete_materializer!` ran.
     rhs_list, scalar_prelude, scalar_cache, cse_diag =
-        _cse_compile_scalar(scalar_entries, var_map, param_sym_set, reg_funcs;
+        @_bench :cse_scalar _cse_compile_scalar(scalar_entries, var_map, param_sym_set, reg_funcs;
                             has_pgather = !isempty(pgather), obs_defs=obs_defs)
 
     # ---- Cross-kernel / kernel↔prelude fn-CSE (perf plan B4; xcse.jl) ----
@@ -3092,7 +3092,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
         # `pgather` (raw `param_arrays` buffers + discrete-cadence caches) rides
         # along so the OOP RHS can expose its live forcing buffers as ARGUMENTS
         # (`_OopRHS` / `rhs_with_buffers`, B2) — the traceable binding.
-        _make_rhs_oop(rhs_list, scalar_prelude, acc_kernels, n_states, pgather,
+        @_bench :make_rhs_oop _make_rhs_oop(rhs_list, scalar_prelude, acc_kernels, n_states, pgather,
                       scan_folds, Tuple(mat_levels_oop), n_total)
     else
         throw(TreeWalkError("E_TREEWALK_UNKNOWN_FORM",
@@ -3437,7 +3437,7 @@ function _build_evaluator_impl_inner(model::Model;
         end
         merged
     end
-    layout = _build_state_layout(model, cls, parts;
+    layout = @_bench :state_layout _build_state_layout(model, cls, parts;
         initial_conditions=initial_conditions, index_sets=index_sets,
         registered_functions=registered_functions, const_arrays=ic_const_arrays,
         vi_vars=_vi_vars, param_reads=param_reads)
@@ -4100,7 +4100,7 @@ function _compile_arrayop_equation!(percell_scalar, acc_kernels, scan_folds,
         # full output axis. Identical object on every pre-existing shape.
         term_iters = (scan === nothing || scan[4] === nothing) ? range_iters : scan[4]
         affine_kernels = affine_body === nothing ? nothing :
-            _try_affine_stencil(affine_body, idx_names, term_iters, lhs_body,
+            @_bench :affine_tier _try_affine_stencil(affine_body, idx_names, term_iters, lhs_body,
                                 resolved_obs, array_var_info, var_map,
                                 const_registry, pgather, param_sym_set, reg_funcs,
                                 covered; template_sites=template_sites, xeq=xeq)
