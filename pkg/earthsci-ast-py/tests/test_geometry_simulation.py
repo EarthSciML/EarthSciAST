@@ -35,7 +35,7 @@ from conftest import VALID_DIR
 from earthsci_ast.esm_types import ExprNode
 from earthsci_ast.parse import load_path
 from earthsci_ast.problem import ReturnCode, esm_problem, solve
-from earthsci_ast.inline_tests import TEST_ABSTOL, TEST_RELTOL
+from earthsci_ast.inline_tests import TEST_ABSTOL, TEST_RELTOL, _check_assertion
 from earthsci_ast.simulation import (
     _order_observed_equations,
     _time_varying_observeds,
@@ -120,14 +120,13 @@ def _lookup(result, var_key: str, time: float) -> float:
 
 
 def _passes(actual: float, expected: float, rel: float, ab: float) -> bool:
-    diff = abs(actual - expected)
-    if ab > 0 and diff <= ab:
-        return True
-    if rel > 0 and diff / max(abs(expected), 1e-12) <= rel:
-        return True
-    if ab == 0 and rel == 0:
-        return diff == 0.0
-    return False
+    """esm-spec §6.6.3, through the binding's OWN predicate — the function
+    ``run_pde_tests`` calls. The hand-rolled body this replaces scaled the
+    relative bound by ``|expected|`` alone rather than
+    ``max(|actual|, |expected|)``, floored that scale at 1e-12 (§6.6.3 forbids
+    a floor), and had no finiteness guard, so a ±inf actual satisfied it
+    vacuously for every expectation."""
+    return _check_assertion(actual, expected, rel, ab)
 
 
 def test_at_least_one_runnable_geometry_fixture() -> None:

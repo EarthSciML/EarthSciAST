@@ -3355,16 +3355,21 @@ it takes an OVERSHOOT (`|actual| > |expected|`) whose margin is itself of order
 above its expectation is one — but landing inside that band is not, and no
 fixture in this or any other category does: every fixture assertion in the
 corpus gets the same verdict under both readings, which is why the seam is
-invisible to fixtures however many are added. It is therefore pinned by a
-per-binding unit test rather than by a shared fixture:
+invisible to fixtures however many are added.
+
+It is pinned instead by **§5.37**, whose fixture is DATA-ONLY: it feeds
+`(actual, expected, rel, abs)` tuples straight to each binding's predicate, so
+it never has to *arrive* at a discriminating pair — it states one. Promoting the
+seam to a *simulation* category would indeed need a fixture whose integrated
+actual overshoots its expectation by a pinned margin, which the
+pinned-integrator contract does not give; that is a constraint on the shape, not
+on the contract. The per-binding unit tests
 `assertion_tolerance_symmetry_test.jl` (Julia),
-`test_relative_bound_is_symmetric_in_actual_and_expected` (Python), and
-`relative_bound_is_symmetric_in_actual_and_expected` (Rust) each assert the same
-discriminating case and the same swap-invariance property. Promoting it to a
-shared category would need a fixture whose simulated actual reliably overshoots
-its expectation by a pinned margin, which the pinned-integrator contract does
-not currently give; the three unit tests are the interim gate, and they are
-named here so the gap is recorded rather than assumed covered.
+`test_relative_bound_is_symmetric_in_actual_and_expected` (Python) and
+`relative_bound_is_symmetric_in_actual_and_expected` (Rust) remain as each
+binding's own statement of the same discriminating case and swap-invariance
+property; §5.37 is what makes them a repo-wide contract instead of three
+independent assertions, and extends the pin to TypeScript.
 
 **All five bindings READ this manifest**, including the two that cannot execute
 it: `pkg/earthsci-ast-go/pkg/esm/assertion_nonfinite_scope_test.go` and
@@ -4899,6 +4904,131 @@ Two omissions, both decisions rather than oversights, recorded in the category's
   were minted against that behaviour. The consequence is pinned **per-binding**
   in the meantime (Go and TypeScript both assert `cadence(w) == const` for a
   state-free arrayed observed), which is what made #272 visible.
+
+### 5.37 The §6.6.3 Assertion Predicate Itself (normative)
+
+§5.20 pins what a binding does with a NON-FINITE actual. This category pins the
+arithmetic: esm-spec §6.6.3's pass predicate as a **pure function of four
+numbers**, with no integrator anywhere in the loop. The shared **data-only**
+fixture lives in `tests/conformance/assertion_tolerance/`.
+
+```
+pass(actual, expected, rel, abs) =
+      actual == expected
+   OR ( actual and expected are both FINITE
+        AND NOT (rel == 0 AND abs == 0)
+        AND |actual − expected| ≤ max(abs, rel · max(|actual|, |expected|)) )
+```
+
+The **symmetric** scale `max(|actual|, |expected|)`, and the absence of an `ε`
+floor on it, are what #193 settled after finding §6.6.3 stating the rule three
+ways; all three executing bindings had implemented the symmetric form from the
+start, so the settlement changed prose rather than behaviour. This category is
+the gate on that settlement.
+
+#### 5.37.1 Why a data-only category, and why no other shape works
+
+Every other assertion category is a **simulation** category: it integrates a
+document, produces an actual, and then compares it. That shape can only exercise
+the predicate at the pairs an integrator happens to produce — and every one of
+them sits in the `|actual| ≤ |expected|` region, where the symmetric bound
+`rel·max(|a|,|e|)` and the `|expected|`-only bound `rel·|e|` **compute the same
+number**. The two readings differ only on an *overshoot*, by a margin of order
+`rel`. Nothing in the corpus reaches that seam, which is why 8031 corpus
+assertions agreed unanimously (#193) while ~12 of the bindings' own fixture
+harnesses were computing a different predicate from the bindings themselves
+(#223) and no suite went red.
+
+A shared **simulation** fixture cannot close this: it would need an integrator
+that overshoots its expectation by a pinned margin, which the pinned-integrator
+contract does not give. A data-only fixture does not have to *arrive* at a
+discriminating pair — it states one:
+
+| Case | `rel·max(\|a\|,\|e\|)` | `rel·\|e\|` | `abs + rel·\|e\|` |
+|---|---|---|---|
+| `a=1.6, e=1.0, rel=0.5, abs=0` | 0.8 → **PASS** | 0.5 → FAIL | 0.5 → FAIL |
+| `a=1.5, e=1.0, rel=0.3, abs=0.3` | 0.45 → **FAIL** | 0.3 → FAIL | 0.6 → PASS |
+
+#### 5.37.2 What is compared
+
+Each in-scope binding feeds every golden case's `(actual, expected, rel, abs)`
+to **the same predicate its own inline-test harnesses call** — Julia
+`_check_assertion`, Python `_check_assertion`, Rust `check_assertion`,
+TypeScript `checkAssertion` — and compares the returned boolean to the case's
+`passed`. There is no tolerance on a verdict.
+
+An adapter that re-derived the predicate locally would be testing itself, which
+is the defect this category exists to close.
+
+`±Inf` and `NaN` are not JSON-representable, so `actual` and `expected` are
+**either a JSON number or one of exactly three strings** (`"+inf"`, `"-inf"`,
+`"nan"`); an adapter meeting an unrecognised one MUST fail rather than skip.
+§5.20 declines that encoding, on the ground that re-parsing strings would make
+the golden's format the thing under test — sound there, because that category's
+numbers are *outputs* a runner was supposed to produce, so a mis-parse would
+look like a simulation divergence. Here they are **inputs**, over a closed
+three-token vocabulary, and a mis-parse fails in the adapter before the
+predicate is ever called.
+
+#### 5.37.3 Non-vacuity
+
+The golden is 22 pass / 21 fail, so a binding answering a constant fails. Beyond
+that, `readings_discriminated` counts — per known WRONG reading of §6.6.3 — how
+many cases change verdict under it, and
+`scripts/gen-assertion-tolerance-golden.py` **asserts every count is nonzero**,
+so the case list cannot quietly stop being able to see a defect:
+
+| Wrong reading | Where it was found | Cases |
+|---|---|---|
+| scale by `\|expected\|` alone | 9 of the ~12 harnesses in #223 | 6 |
+| `abs + rel·\|expected\|` (numpy `isclose`) | Rust `wildfire_simulation.rs`, `loaded_ic_bc_simulation.rs` — the form #193 flagged | 7 |
+| an `ε` floor on the scale | 1e-12 in five Python harnesses, `f64::MIN_POSITIVE` in two Rust ones | 3 |
+| no finiteness guard, plus "both non-finite ⇒ equal" | the three Rust `approximately_equal` harnesses | 7 |
+
+Each discriminating PASS case is paired with a FAIL case in the same region
+(`overshoot_inside_symmetric_bound` with `overshoot_outside_the_symmetric_bound`;
+`max_not_sum_of_the_two_bounds` with `max_not_sum_control_that_still_passes`;
+the two zero-expected cases with `tiny_actual_against_zero_expected_rescued_by_abs`),
+so a binding cannot satisfy half the list by loosening or tightening everything.
+
+The verdicts are **analytic** — computed from §6.6.3 written out longhand by the
+generator, not read off any binding — so this is a *reference-comparing* fixture
+(`tests/conformance/README.md`), not a cross-binding agreement.
+
+#### 5.37.4 Gate
+
+`bindings_required` is `["julia", "python", "rust", "typescript"]`:
+**Julia** — `pkg/EarthSciAST.jl/test/conformance_assertion_tolerance_test.jl`;
+**Python** — `pkg/earthsci-ast-py/tests/test_assertion_tolerance_conformance.py`;
+**Rust** — `pkg/earthsci-ast-rs/tests/assertion_tolerance_conformance.rs`;
+**TypeScript** — `pkg/earthsci-ast-ts/src/assertion-tolerance-conformance.test.ts`.
+
+TypeScript is required here and `scope_excluded` from §5.20, and the difference
+is the point: §5.20's contract runs through a simulator, which this binding does
+not have; §5.37's is arithmetic, which it does. Its predicate lives in
+`src/assertion-tolerance.ts` — in `src/`, not in the test file, because a
+predicate defined inside its only caller is a predicate nothing can hold to a
+contract, which is precisely how the ~12 copies drifted.
+
+**Go** is `scope_excluded`: it has no assertion predicate anywhere — not in
+production, not in its own tests — because it parses a `tests` block as data and
+never compares an actual to an expectation. `Tolerance`'s doc comment in
+`types.go` carries the rule so a future runner does not re-derive it.
+`pkg/earthsci-ast-go/pkg/esm/assertion_tolerance_scope_test.go` asserts that
+exclusion, checks the other four bindings really are required, and re-checks the
+golden's non-vacuity — so giving Go a predicate goes RED there until Go is moved
+into `bindings_required` with a real adapter. That is §5.20's pattern and its
+reason: an exclusion is invisible by construction, so it has to be asserted
+somewhere that goes red when it stops being true.
+
+#### 5.37.5 What this category does not prove
+
+That any runner actually **calls** the predicate. §5.20 is the end-to-end half:
+it drives a document whose arithmetic overflows through each binding's real
+inline-test runner and compares verdicts. Neither category subsumes the other —
+§5.20 cannot state a discriminating overshoot, and §5.37 cannot prove the
+function it tests is the one the runner reaches — and both are needed.
+
 
 ## 6. CI Integration
 

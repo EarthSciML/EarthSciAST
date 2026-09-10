@@ -13,7 +13,8 @@
 //! `pressure_drop` fix from gt-p3v — must cause this suite to fail.
 
 use earthsci_ast::{
-    EsmFile, Expr, Model, ModelTest, Tolerance, VariableType, fold_constant_expr, load_string,
+    EsmFile, Expr, Model, ModelTest, VariableType, check_assertion, fold_constant_expr,
+    load_string, resolve_tolerance,
 };
 use std::collections::HashMap;
 
@@ -38,21 +39,6 @@ const UNITS_FIXTURES: &[(&str, &str)] = &[
 /// unbound; the caller uses that signal to defer observed resolution.
 fn eval_expr(expr: &Expr, bindings: &HashMap<String, f64>) -> Option<f64> {
     fold_constant_expr(expr, bindings).ok()
-}
-
-fn resolve_tol(
-    model_tol: Option<&Tolerance>,
-    test_tol: Option<&Tolerance>,
-    assertion_tol: Option<&Tolerance>,
-) -> (f64, f64) {
-    if let Some(t) = [assertion_tol, test_tol, model_tol]
-        .into_iter()
-        .flatten()
-        .next()
-    {
-        return (t.rel.unwrap_or(0.0), t.abs.unwrap_or(0.0));
-    }
-    (1e-6, 0.0)
 }
 
 fn resolve_observed(model: &Model, bindings: &mut HashMap<String, f64>) {
@@ -99,19 +85,16 @@ fn build_bindings(model: &Model, t: &ModelTest) -> HashMap<String, f64> {
     bindings
 }
 
-fn check_assertion(label: &str, actual: f64, expected: f64, rel: f64, abs_: f64) {
-    let diff = (actual - expected).abs();
-    let passed = if abs_ > 0.0 && expected == 0.0 {
-        diff <= abs_
-    } else if rel > 0.0 {
-        let bound = (rel * expected.abs().max(f64::MIN_POSITIVE)).max(abs_);
-        diff <= bound
-    } else {
-        diff <= abs_
-    };
+/// esm-spec §6.6.3 through the binding's own predicate. The hand-rolled bound
+/// this replaces scaled by `|expected|` alone, floored that scale at
+/// `f64::MIN_POSITIVE` (§6.6.3 forbids a floor), and consulted `abs` only when
+/// `expected` was exactly zero — so an assertion carrying both bounds got
+/// whichever branch it happened to reach rather than the larger of the two.
+fn assert_within_tolerance(label: &str, actual: f64, expected: f64, rel: f64, abs_: f64) {
     assert!(
-        passed,
-        "{label}: actual={actual} expected={expected} rel={rel} abs={abs_} diff={diff}"
+        check_assertion(actual, expected, rel, abs_),
+        "{label}: actual={actual} expected={expected} rel={rel} abs={abs_} diff={}",
+        (actual - expected).abs()
     );
 }
 
@@ -134,7 +117,7 @@ fn units_fixtures_inline_tests_execute() {
                 let mut bindings = build_bindings(model, t);
                 resolve_observed(model, &mut bindings);
                 for a in &t.assertions {
-                    let (rel, abs_) = resolve_tol(
+                    let (rel, abs_) = resolve_tolerance(
                         model.tolerance.as_ref(),
                         t.tolerance.as_ref(),
                         a.tolerance.as_ref(),
@@ -146,7 +129,7 @@ fn units_fixtures_inline_tests_execute() {
                         )
                     });
                     let label = format!("{}::{}::{}::{}", fname, mname, t.id, a.variable);
-                    check_assertion(&label, actual, a.expected, rel, abs_);
+                    assert_within_tolerance(&label, actual, a.expected, rel, abs_);
                 }
             }
         }
