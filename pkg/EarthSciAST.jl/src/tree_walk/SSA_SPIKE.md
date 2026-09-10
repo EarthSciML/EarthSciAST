@@ -279,6 +279,76 @@ read-graph fact) is identical in every arm and only `n_skipped_scatters` moves;
 chemistry exactly as the arms had it (59 of 59, `ue` dead) and takes transport
 to 0 of 17 — the redirects without the skip.
 
+### Measured: the gate wins on BOTH sides
+
+4x5 CONUS (13x7x72, 6 552 cells), three arms in ONE process, interleaved, both
+arm orders (`tools/diag/p14_ssa_gate.jl` in the consuming repo). `noskip` is
+what the default gate emits on transport (0 of 17) and `ungated` is #283
+(13 of 17); on chemistry the gate emits `ungated` unchanged, so the chemistry
+row is #283's.
+
+| program | flag off | gate (= `noskip`) | #283 (= `ungated`) |
+|---|---|---|---|
+| `ssp_step` | 14.668 ms | 19.887 ms (**0.738**) | 21.310 ms (0.688) |
+| `rhs` | 4.127 ms | 4.938 ms (**0.836**) | 6.523 ms (0.633) |
+| `ssp_vjp` | 360.279 ms | 251.832 ms (**1.431**) | (1.203) |
+| `ssp_vjp`, arms reversed | 347.620 ms | 254.526 ms (**1.366**) | |
+| `ros_step` (chemistry) | | 1.38 | 1.38 |
+| `ros_vjp` (chemistry) | | 1.43 | 1.43 |
+
+The gate roughly HALVES the transport primal regression (0.688 -> 0.738 on the
+4-stage step, 0.633 -> 0.836 on the bare RHS) and, unexpectedly, IMPROVES the
+transport VJP from #283's 1.203 to 1.37-1.43: the redirects pay better once a
+partial skip is not working against them. Chemistry is untouched — the gate
+leaves that build structurally identical (59 of 59, `n_gate_declined = 0`).
+
+**The falsifiable test of the explanation.** "A partial skip pays twice" and
+"one big producer is the problem" both predict the transport regression; they
+differ on what removing ONE producer does. `ESS_OOP_SSA_SKIP_PIDS=!17` drops
+the skip of the 3 456-element producer (78 624 at CONUS, the largest by 15x)
+and keeps the other twelve:
+
+| `ssp_step` | flag off | #283 (13 of 17) | `!17` (12 of 17) |
+|---|---|---|---|
+| | 14.433 ms | 24.397 ms (0.592) | 24.768 ms (**0.583**) |
+
+`no17` is not better than `ungated`. Size is not what makes a skip expensive;
+PARTIALNESS is. That is why the gate is all-or-nothing and why the two
+per-producer bounds ship released.
+
+### The loop, counting replay
+
+Per accepted step the adjoint runs the primal TWICE — the forward `T.step` and
+the backward `T.replay` — and the VJP once, so a primal regression is paid
+twice against one VJP win. Against the measured 2x2.5 48 h decomposition
+(576 windows, transport step+replay 427 s and vjp 2 048 s):
+
+| term | flag off | #283 | + this gate |
+|---|---|---|---|
+| chemistry (step + replay + vjp) | 5 106 s | 3 633 s | 3 633 s |
+| transport (step + replay + vjp) | 2 475 s | 2 411 s | **1 995 s** |
+| refresh | 1 792 s | 1 792 s | 1 792 s |
+| host remainder | 123 s | 123 s | 123 s |
+| **loop** | **9 495 s** | 7 959 s (1.19x) | **7 543 s (1.26x)** |
+
+Transport was a WASH under #283 — the 1.20x VJP win almost exactly cancelled
+the doubled primal regression, so the whole 1.19x was chemistry. With the gate
+transport is a real 1.24x and the loop moves 1.19x -> 1.26x. The break-even for
+the gate is `ssp_vjp >= 1.032`; it delivers ~1.40, so the trade is net-positive
+by a wide margin rather than marginally. (Predicted 1.257x from the break-even
+arithmetic before measuring; measured 1.26x.)
+
+### The criterion NOT met, and further work
+
+The target for the gate was the transport primal back to >= 0.95 of flag-off.
+It is **0.738** on `ssp_step` and 0.836 on `rhs`. The gate halves the
+regression; it does not remove it. With ZERO scatters skipped the only
+difference from flag-off is the redirects themselves, so something on the
+transport primal still materializes that the flat-buffer gather did not — the
+producer values that the sub-kernel and tier-2b redirects now read from. That
+is the next thing to measure (a per-arm redirect gate would price it), and it
+is a separate decision from the skip.
+
 ## What is NOT verified
 
 Bit-identity across the arms is asserted and holds on HOST (`==`) and, on the
