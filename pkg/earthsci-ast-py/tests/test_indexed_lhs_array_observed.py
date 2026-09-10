@@ -371,15 +371,30 @@ EQ_W_BARE_INDEX = {"lhs": _idx("w"), "rhs": 5.0}
 
 
 def test_a_bare_index_lhs_is_refused_and_not_silently_integrated(tmp_path):
-    """No binding RUNS §6.3.1's bare-index arrayed definition yet. Julia refuses
-    the document with ``E_TREEWALK_UNSUPPORTED_SHAPE``; this binding used to warn
-    ``unrecognized algebraic equation`` and answer ``0.0`` from the untouched
-    solver slot, which GRADES GREEN on wrong numbers. Refuse under the same code,
-    so the two executing bindings at least agree the spelling is unsupported.
+    """No binding RUNS §6.3.1's bare-index arrayed definition yet (issue #291),
+    and the one thing that MUST hold until one does is that the document is
+    REFUSED rather than answered from a slot nothing wrote.
 
-    The normalizer is deliberately not widened to cover it: a bare ``index`` LHS
-    carries no ``ranges`` binder for ``i``, so the frame would have to be inferred
-    from the declared ``shape``, and that is a cross-binding semantic decision.
+    This binding used to warn ``unrecognized algebraic equation`` and return
+    ``0.0``, which grades a wrong document GREEN — an assertion expecting ``0.0``
+    passes on a value that was never computed. PR #290's §4.7.5 dual membership
+    closed that: the arrayed observed is no longer resolvable as a bare state
+    slot, so the solve fails outright and every assertion reports
+    ``actual=None``. Julia refuses the same document with
+    ``E_TREEWALK_UNSUPPORTED_SHAPE``.
+
+    The two bindings still spell the refusal differently — Julia names the
+    unsupported SHAPE, this binding names the UNRESOLVED SYMBOL — because they
+    hit the wall at different phases. What is pinned here is the part that
+    matters and that both share: no pass, no actual, and the offending variable
+    named. Do not weaken this to a message match without checking Julia's.
+
+    The normalizer is deliberately not widened to cover the spelling: a bare
+    ``index`` LHS carries no ``ranges`` binder for ``i``, so the frame would have
+    to be inferred from the declared ``shape``, and that is a cross-binding
+    semantic decision. Widening it HERE would be doubly wrong — the rewrite
+    mutates the flattened ``equations`` list that the shared corpus compares
+    across all five bindings, and no other binding mutates it.
     """
     equations = [EQ_W_BARE_INDEX, EQ_D_INDEXED]
     path = _write(tmp_path, _doc("bi", equations, ASSERT_U_AND_W), "bi.esm.json")
@@ -389,5 +404,6 @@ def test_a_bare_index_lhs_is_refused_and_not_silently_integrated(tmp_path):
     for r in results:
         assert not r.passed
         assert r.actual is None, "a refused document must report no actual, not 0.0"
-        assert "E_TREEWALK_UNSUPPORTED_SHAPE" in (r.message or "")
-        assert "Column.w" in (r.message or "")
+        assert "Column.w" in (r.message or ""), (
+            f"the refusal must name the offending variable: {r.message!r}"
+        )

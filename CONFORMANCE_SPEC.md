@@ -4956,12 +4956,19 @@ the form the spec's own worked example writes (`rg_src_bin[a] ~ …`) — is
 classified correctly by all five bindings (§5.34's `wb`) and **run by none**: a
 bare `index` LHS carries no binder for `i`, so the frame would have to be
 inferred from the declared `shape`, which is a normative decision this section
-does not make. Issue #291 carries it. What this section DOES require in the
-meantime is that the two executing bindings agree the spelling is
-**unsupported** rather than one refusing and the other integrating an unwritten
-slot: both MUST refuse under `E_TREEWALK_UNSUPPORTED_SHAPE`, naming the
-variable. A binding that answers `0.0` from a never-written solver slot grades a
-wrong document green, which is strictly worse than refusing it.
+does not make. Issue #291 carries it.
+
+What this section DOES require in the meantime is that a binding which cannot
+run the spelling **refuses** it — reporting **no actual** and **naming the
+offending variable** — rather than answering from a solver slot nothing wrote. A
+binding that returns `0.0` from a never-written slot grades a wrong document
+**green**: an assertion whose expected value happens to be `0.0` passes on a
+number that was never computed. Julia refuses with
+`E_TREEWALK_UNSUPPORTED_SHAPE`; Python refuses with `Unresolved symbol`, having
+hit the wall at a later phase. The two codes are **not** required to match while
+neither binding runs the spelling — what is required is that neither invents a
+value. Python answered `0.0` here until PR #290's §4.7.5 dual membership stopped
+resolving an arrayed observed as a bare state slot.
 
 esm-spec §6.3.1 admits **two** LHS spellings for the equation that DEFINES an
 unknown, and states the criterion semantically: the defining form is read
