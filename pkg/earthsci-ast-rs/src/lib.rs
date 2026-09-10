@@ -331,10 +331,10 @@ pub use compile_error::CompileError;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "solve"))]
 pub use inline_tests::{
-    AssertionResult, BuildProviderFactory, InlineTestOptions, ephemeral_injected_file,
-    evaluate_cellwise, field_reduce, run_inline_tests, run_inline_tests_filtered,
-    run_inline_tests_paths, run_inline_tests_with_base_dir, run_inline_tests_with_providers,
-    state_cells,
+    AssertionResult, BuildProviderFactory, InlineTestOptions, check_assertion,
+    ephemeral_injected_file, evaluate_cellwise, field_reduce, resolve_tolerance, run_inline_tests,
+    run_inline_tests_filtered, run_inline_tests_paths, run_inline_tests_with_base_dir,
+    run_inline_tests_with_providers, state_cells,
 };
 pub use performance::{CompactExpr, PerformanceError};
 #[cfg(feature = "parallel")]

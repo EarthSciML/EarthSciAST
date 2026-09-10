@@ -17,7 +17,7 @@
 //! what `subsystem_scope` discriminates.
 
 use earthsci_ast::Classification;
-use earthsci_ast::{Model, SystemKind};
+use earthsci_ast::{EsmFile, Model, SystemKind, flatten};
 use serde_json::Value;
 use std::path::PathBuf;
 
@@ -118,6 +118,43 @@ fn run_classification_category(category: &str) {
             fx["golden"].as_str().expect("golden path")
         ));
         let golden_models = golden["models"].as_object().expect("golden models");
+
+        // Which flattened MAP an unknown lands in is a different question from
+        // which §6.3.1 set classifies it, and esm-libraries-spec §4.7.5 step 4
+        // answers it with two maps that are NOT a partition: an arrayed
+        // observed is in `observed_variables` (an equation defines it) AND in
+        // `state_variables` (it materializes into a buffer the solver
+        // allocates). Optional — only a golden whose fixture makes the
+        // distinction interesting carries it. Issue #270.
+        if let Some(buckets) = golden.get("flatten_buckets") {
+            let file: EsmFile = serde_json::from_value(doc.clone()).expect("fixture parses");
+            let flat = flatten(&file).expect("fixture flattens");
+            for (label, got) in [
+                (
+                    "state_variables",
+                    flat.state_variables
+                        .keys()
+                        .cloned()
+                        .collect::<Vec<String>>(),
+                ),
+                (
+                    "observed_variables",
+                    flat.observed_variables
+                        .keys()
+                        .cloned()
+                        .collect::<Vec<String>>(),
+                ),
+                (
+                    "algebraic_variables",
+                    flat.algebraic_variables
+                        .keys()
+                        .cloned()
+                        .collect::<Vec<String>>(),
+                ),
+            ] {
+                assert_eq!(got, want_list(buckets, label), "[{id}] flatten {label}");
+            }
+        }
 
         let nodes = model_nodes(&doc);
         let got_keys: Vec<&str> = nodes.iter().map(|(k, _)| k.as_str()).collect();

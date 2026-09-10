@@ -456,12 +456,18 @@ pub struct FlattenedSystem {
     /// first encounters them, which is the order the document names them and
     /// the order a downstream array layout follows.
     pub independent_variables: Vec<String>,
-    /// Dot-namespaced state variables with full metadata.
+    /// The SOLVED-FOR VECTOR, dot-namespaced and with full metadata: the
+    /// differential unknowns, PLUS [`Self::algebraic_variables`], PLUS any
+    /// arrayed observed that materializes into a buffer
+    /// (esm-libraries-spec §4.7.5 step 4).
     pub state_variables: IndexMap<String, ModelVariable>,
     /// Dot-namespaced parameters. `variable_map` with `param_to_var` or
     /// `conversion_factor` transform removes entries from this map.
     pub parameters: IndexMap<String, ModelVariable>,
-    /// Dot-namespaced observed variables.
+    /// The dot-namespaced unknowns an equation DEFINES, at either LHS spelling
+    /// (esm-spec §6.3.1). NOT disjoint from [`Self::state_variables`]: a scalar
+    /// observed is eliminated by substitution and is in this map alone, while an
+    /// arrayed one materializes into a buffer and is in both.
     pub observed_variables: IndexMap<String, ModelVariable>,
     /// Unknowns constrained ONLY by an expression-LHS equation (`H*H*SO4 ~ Ksp`,
     /// esm-spec §6.3.1). A **SUBSET** of [`Self::state_variables`], not a
@@ -2267,24 +2273,29 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
             *expr = namespace_expr(expr, system_name, &sub_keys, &locals);
         });
         match var.var_type {
-            // An unknown lands in the bucket its EQUATIONS put it in.
-            // `observed_variables` is the INLINED form specifically — the
-            // strict `y ~ f(…)` a bare-variable LHS defines, which is
-            // substituted into every consumer and contributes no output of its
-            // own. Every OTHER unknown is SOLVED FOR and joins `state_vars`:
-            // an ODE state; an algebraic unknown (not eliminable, and the
-            // consumers that integrate this bucket already tolerate an unknown
-            // with no derivative equation — that is what `dae.rs` handles); and
-            // an ARRAYED definition (`y[i] ~ f(i)`), which is observed by
-            // §6.3.1 but materializes into a buffer its consumers index rather
-            // than being inlined, so the solver must allocate it.
+            // The two maps are NOT a partition (esm-libraries-spec §4.7.5
+            // step 4). `observed_variables` is the §6.3.1 CLASSIFICATION —
+            // every unknown an equation DEFINES, at either LHS spelling —
+            // while `state_variables` is the SOLVED-FOR VECTOR. So:
             //
-            // Gating on `is_observed` — the broader semantic set — instead left
-            // an arrayed observed OUT of the solved-for vector entirely, the
-            // same class of defect esm-libraries-spec 45fa534a0 corrected for
-            // `algebraic_variables`.
+            //   * an ODE state and an algebraic unknown are solved for and
+            //     nothing defines them by name, so `state_vars` only (the
+            //     consumers that integrate this bucket already tolerate an
+            //     unknown with no derivative equation — `dae.rs` handles it);
+            //   * an INLINEABLE observed (the strict `y ~ f(…)` a bare-variable
+            //     LHS defines) is eliminated by substitution and contributes no
+            //     buffer, so `observed_vars` only;
+            //   * an ARRAYED definition (`y[i] ~ f(i)`) is BOTH. §6.3.1 makes it
+            //     observed, and it materializes into a buffer its consumers
+            //     index rather than being inlined, so the solver must allocate
+            //     it. Filing it in one map or the other loses half of that,
+            //     exactly as filing an algebraic unknown outside
+            //     `state_variables` did before 45fa534a0.
             VariableType::Unknown => {
-                if class.is_inlined(var_name) {
+                if class.is_observed(var_name) {
+                    if !class.is_inlined(var_name) {
+                        state_vars.insert(namespaced.clone(), cloned.clone());
+                    }
                     observed_vars.insert(namespaced, cloned);
                 } else {
                     state_vars.insert(namespaced, cloned);

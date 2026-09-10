@@ -2295,6 +2295,12 @@ function _oop_reduce_fold(bodyE, seg::Vector{Int}, zerobar::Float64, ::Type{T}) 
 end
 
 function _build_oop_acc_plan(K::_AccKernel)
+    _t0 = time_ns()
+    r = _build_oop_acc_plan_inner(K)
+    _bench_phase!(:oop_plan, _t0)
+    return r
+end
+function _build_oop_acc_plan_inner(K::_AccKernel)
     ok = _oop_acc_vecable(K.spine, K) &&
          all(r -> _oop_acc_vecable(r, K), K.cse.recipes) &&
          all(r -> _oop_acc_vecable(r, K), K.cse.inv_recipes)

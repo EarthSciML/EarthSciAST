@@ -41,7 +41,7 @@ pytest.importorskip("scipy")
 
 from earthsci_ast.parse import load_path
 from earthsci_ast.problem import ReturnCode, esm_problem, solve
-from earthsci_ast.inline_tests import TEST_ABSTOL, TEST_RELTOL
+from earthsci_ast.inline_tests import TEST_ABSTOL, TEST_RELTOL, _check_assertion
 
 
 SIMULATION_DIR = str(FIXTURES_ROOT / "simulation")
@@ -177,17 +177,16 @@ def _execute_component_tests(
             # np.interp requires a sorted x array; solve_ivp returns t sorted.
             actual = float(np.interp(t_eval, result.t, result.y[idx]))
             rel, abs_ = _resolve_tol(model_tol, test_tol, a.get("tolerance"))
-            diff = abs(actual - expected)
-            bound = abs_
-            if rel > 0:
-                bound = max(bound, rel * max(abs(expected), np.finfo(float).tiny))
-            if rel == 0.0 and abs_ == 0.0:
-                # Default rtol=1e-6, matching the Julia runner.
-                bound = 1e-6 * max(abs(expected), np.finfo(float).tiny)
-            assert diff <= bound, (
+            # esm-spec §6.6.3 through the binding's OWN predicate, the one
+            # ``run_pde_tests`` uses. The hand-rolled bound this replaces scaled
+            # by ``|expected|`` alone, floored that scale at the smallest normal
+            # double (§6.6.3 forbids a floor), and substituted the §6.6.4
+            # implementation default when a document spelled BOTH bounds as
+            # zero — which is exact-equality mode, not "no bound".
+            assert _check_assertion(actual, expected, rel, abs_), (
                 f"{label}/{test['id']} var={a['variable']} t={t_eval}: "
                 f"actual={actual:g} expected={expected:g} "
-                f"diff={diff:g} bound={bound:g} (rel={rel}, abs={abs_})"
+                f"diff={abs(actual - expected):g} (rel={rel}, abs={abs_})"
             )
 
 

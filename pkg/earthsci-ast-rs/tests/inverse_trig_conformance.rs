@@ -22,45 +22,14 @@
 
 use earthsci_ast::Solution;
 use earthsci_ast::{
-    Alg, Model, ModelTest, ModelTestAssertion, SolveOptions, Tolerance, load_string,
+    Alg, Model, ModelTest, ModelTestAssertion, SolveOptions, check_assertion, load_string,
+    resolve_tolerance,
 };
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
 mod common;
-
-fn effective_tolerance(
-    assertion: Option<&Tolerance>,
-    test: Option<&Tolerance>,
-    model: Option<&Tolerance>,
-) -> (f64, f64) {
-    for t in [assertion, test, model].into_iter().flatten() {
-        let rel = t.rel.unwrap_or(0.0);
-        let abs = t.abs.unwrap_or(0.0);
-        if rel > 0.0 || abs > 0.0 {
-            return (rel, abs);
-        }
-    }
-    (1e-6, 0.0)
-}
-
-fn approximately_equal(actual: f64, expected: f64, rel: f64, abs: f64) -> bool {
-    if !actual.is_finite() && !expected.is_finite() {
-        return true;
-    }
-    let diff = (actual - expected).abs();
-    if diff <= abs {
-        return true;
-    }
-    if rel > 0.0 {
-        let scale = expected.abs().max(actual.abs());
-        if diff <= rel * scale {
-            return true;
-        }
-    }
-    false
-}
 
 fn model_iter(file: &earthsci_ast::EsmFile) -> Vec<(&String, &Model)> {
     file.models
@@ -130,11 +99,11 @@ fn run_model_test(
         ),
     };
     for a in &t.assertions {
-        check_assertion(fixture_name, model_name, model, t, a, &sol);
+        check_one_assertion(fixture_name, model_name, model, t, a, &sol);
     }
 }
 
-fn check_assertion(
+fn check_one_assertion(
     fixture_name: &str,
     model_name: &str,
     model: &Model,
@@ -166,13 +135,19 @@ fn check_assertion(
         .map(|(i, _)| i)
         .unwrap_or(0);
     let actual = sol.state[slot][tix];
-    let (rel, abs) = effective_tolerance(
-        a.tolerance.as_ref(),
-        t.tolerance.as_ref(),
+    // esm-spec §6.6.4 through the binding's own resolver, the one
+    // `run_inline_tests` uses — note the argument order is (model, test,
+    // assertion), the reverse of the local copy this replaces. That copy
+    // additionally SKIPPED a tolerance level whose fields were all zero and
+    // fell through to the next; §6.6.4 gives the first level that is present,
+    // and `rel == abs == 0` is exact-equality mode, not "no bound".
+    let (rel, abs) = resolve_tolerance(
         model.tolerance.as_ref(),
+        t.tolerance.as_ref(),
+        a.tolerance.as_ref(),
     );
     assert!(
-        approximately_equal(actual, a.expected, rel, abs),
+        check_assertion(actual, a.expected, rel, abs),
         "[{fixture_name}/{model_name}/{}] assertion failed: {} @ t={} expected {} got {} (rel_tol={rel}, abs_tol={abs})",
         t.id,
         a.variable,

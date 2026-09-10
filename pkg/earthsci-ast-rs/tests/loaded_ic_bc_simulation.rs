@@ -22,7 +22,7 @@ use earthsci_ast::flatten;
 use earthsci_ast::load_path;
 use earthsci_ast::provider::{CadenceProvider, NativeField, ProviderError};
 use earthsci_ast::simulate_array::ArrayCompiled;
-use earthsci_ast::{Alg, Solution, SolveOptions};
+use earthsci_ast::{Alg, Solution, SolveOptions, check_assertion};
 use ndarray::{ArrayD, IxDyn};
 use std::collections::HashMap;
 
@@ -109,9 +109,12 @@ fn value_at(sol: &Solution, name: &str, t: f64) -> f64 {
     sol.state[vi][ti]
 }
 
-fn close(actual: f64, expected: f64, abs: f64, rel: f64) -> bool {
-    (actual - expected).abs() <= abs + rel * expected.abs()
-}
+// The §6.6.3 pass predicate is `earthsci_ast::check_assertion`; nothing here
+// re-derives it. The local `close` this replaces compared against
+// `abs + rel*|expected|` — numpy `isclose`'s SUM of the two bounds, which is
+// strictly wider than the `max` §6.6.3 takes, and scaled by `|expected|` alone
+// rather than `max(|actual|, |expected|)`. Note the argument ORDER: the library
+// function takes `(actual, expected, rtol, atol)`.
 
 #[test]
 fn loaded_ic_bc_simulation_provider_injection() {
@@ -183,7 +186,7 @@ fn loaded_ic_bc_simulation_provider_injection() {
     let mut failures: Vec<String> = Vec::new();
     for A(name, t, expected, abs, rel) in assertions {
         let actual = value_at(&sol, name, t);
-        if close(actual, expected, abs, rel) {
+        if check_assertion(actual, expected, rel, abs) {
             passed += 1;
         } else {
             failures.push(format!(

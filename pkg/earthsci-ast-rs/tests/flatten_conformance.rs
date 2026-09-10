@@ -82,13 +82,21 @@ fn owner(name: &str) -> &str {
 ///
 /// Derived here rather than carried on Rust's `ModelVariable`, which models the
 /// two DECLARED esm 1.0.0 types (`unknown` / `parameter`) and no third. The
-/// mapping is total and was read off the corpus itself: bucket membership
-/// decides `state` / `observed` / `parameter`, and a solved-for unknown owned by
-/// a `reaction_systems` component is a `species`.
-fn role(bucket: &str, name: &str, reaction_systems: &BTreeSet<String>) -> String {
+/// mapping is total and was read off the corpus itself: `parameters` is
+/// `parameter`, an entry of `observed_variables` is `observed` WHEREVER it
+/// appears — esm-libraries-spec §4.7.5 step 4 files a materialized arrayed
+/// observed in `state_variables` as well, and the role follows the §6.3.1
+/// classification, not the map — and a solved-for unknown owned by a
+/// `reaction_systems` component is a `species`.
+fn role(
+    bucket: &str,
+    name: &str,
+    reaction_systems: &BTreeSet<String>,
+    observed: &indexmap::IndexMap<String, ModelVariable>,
+) -> String {
     match bucket {
-        "observed_variables" => "observed".to_string(),
         "parameters" => "parameter".to_string(),
+        _ if observed.contains_key(name) => "observed".to_string(),
         _ if reaction_systems.contains(owner(name)) => "species".to_string(),
         _ => "state".to_string(),
     }
@@ -100,10 +108,11 @@ fn variable_record(
     name: &str,
     var: &ModelVariable,
     reaction_systems: &BTreeSet<String>,
+    observed: &indexmap::IndexMap<String, ModelVariable>,
 ) -> Value {
     serde_json::json!({
         "name": name,
-        "role": role(bucket, name, reaction_systems),
+        "role": role(bucket, name, reaction_systems, observed),
         "units": var.units,
         "default": var.default,
         // THE CORPUS CANNOT DISTINGUISH A DECLARED-EMPTY SHAPE FROM AN ABSENT
@@ -129,10 +138,11 @@ fn variable_map(
     bucket: &str,
     m: &indexmap::IndexMap<String, ModelVariable>,
     reaction_systems: &BTreeSet<String>,
+    observed: &indexmap::IndexMap<String, ModelVariable>,
 ) -> Value {
     Value::Array(
         m.iter()
-            .map(|(n, v)| variable_record(bucket, n, v, reaction_systems))
+            .map(|(n, v)| variable_record(bucket, n, v, reaction_systems, observed))
             .collect(),
     )
 }
@@ -177,10 +187,20 @@ fn record(flat: &FlattenedSystem, reaction_systems: &BTreeSet<String>) -> Value 
     serde_json::json!({
         "system_kind": kind_str(flat.system_kind()),
         "independent_variables": flat.independent_variables,
-        "state_variables": variable_map("state_variables", &flat.state_variables, reaction_systems),
-        "parameters": variable_map("parameters", &flat.parameters, reaction_systems),
-        "observed_variables":
-            variable_map("observed_variables", &flat.observed_variables, reaction_systems),
+        "state_variables": variable_map(
+            "state_variables",
+            &flat.state_variables,
+            reaction_systems,
+            &flat.observed_variables,
+        ),
+        "parameters":
+            variable_map("parameters", &flat.parameters, reaction_systems, &flat.observed_variables),
+        "observed_variables": variable_map(
+            "observed_variables",
+            &flat.observed_variables,
+            reaction_systems,
+            &flat.observed_variables,
+        ),
         "algebraic_variables": names(&flat.algebraic_variables),
         "brownian_parameters": names(&flat.brownian_parameters),
         "discrete_parameters": names(&flat.discrete_parameters),
