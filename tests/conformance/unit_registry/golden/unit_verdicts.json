@@ -100,6 +100,60 @@
       "canonical": "K",
       "scale_to_canonical": null,
       "units": "degF"
+    },
+    {
+      "canonical": "m",
+      "scale_to_canonical": 1609.344,
+      "units": "mi",
+      "why": "esm-spec 4.8.1 registry addition: the international mile, EXACTLY 5280 ft = 1609.344 m by the 1959 agreement. EPA MOVES stores link.linkLength in it and its whole activity model is vehicle-MILES travelled."
+    },
+    {
+      "canonical": "m/s",
+      "scale_to_canonical": 0.44704,
+      "units": "mi/h",
+      "why": "link.linkAvgSpeed and driveSchedule.averageSpeed. It COMPOSES from `mi` and `h` and is not a table entry; 0.44704 is exactly the constant MOVES's own SQL writes three times in one statement. `mph` is a reject, below."
+    },
+    {
+      "canonical": "kg/m",
+      "scale_to_canonical": 6.21371192237334e-07,
+      "units": "g/mi",
+      "why": "The MOVES air-toxics distance-rate output (`g/mile`). Pins that the mile composes in a DENOMINATOR too."
+    },
+    {
+      "canonical": "kg",
+      "scale_to_canonical": 0.45359237,
+      "units": "lb",
+      "why": "esm-spec 4.8.1 registry addition: the international avoirdupois pound, EXACTLY 0.45359237 kg -- and exactly short_ton/2000, which the registry already carried. MOVES tabulates brake-specific fuel consumption in lb/(hp*h)."
+    },
+    {
+      "canonical": "W",
+      "scale_to_canonical": 745.6998715822702,
+      "units": "hp",
+      "why": "esm-spec 4.8.1 registry addition: MECHANICAL horsepower, 550 ft*lbf/s = 745.6998715822702 W (NIST SP 811 App. B). The scale is the whole contract here: the metric horsepower (PS) is 735.49875 W, same dimension, 1.4% apart, and no dimension-only check can tell them apart. nrsourceusetype.hpAvg is the axis MOVES's NONROAD model bins on."
+    },
+    {
+      "canonical": "kg/J",
+      "scale_to_canonical": 3.7250613599861885e-10,
+      "units": "g/(hp*h)",
+      "why": "nremissionrate.meanBaseRate -- the unit every NONROAD emission rate is tabulated in. MOVES spells it `g/hp-hr`; the hyphen is not an operator in 4.8.2, so the ESM spelling parenthesises. Composed, not a table entry."
+    },
+    {
+      "canonical": "L",
+      "scale_to_canonical": 3.785411784,
+      "units": "gal",
+      "why": "esm-spec 4.8.1 registry addition: the US LIQUID gallon, exactly 231 in^3 = 3.785411784 L (NIST SP 811 App. B). Again the scale is the contract: the imperial gallon is 4.54609 L, 20% away and dimensionally identical."
+    },
+    {
+      "canonical": "kg/m^3",
+      "scale_to_canonical": 0.2641720523581484,
+      "units": "g/gal",
+      "why": "fueltype.fuelDensity, refuelingfactors.refuelingSpillRate and the NONROAD dioxin and metal emission rates are all per US gallon."
+    },
+    {
+      "canonical": "Pa",
+      "scale_to_canonical": 3386.388640341,
+      "units": "inHg",
+      "why": "Added to the Rust registry by fa7ffb01e (PR #238) for MOVES's County.barometricPressure and NEVER MIRRORED to the other four bindings -- precisely the drift this fixture exists to catch, and unpinned until now. Exactly 25.4 mmHg (NIST SP 811)."
     }
   ],
   "kind": "unit_registry_verdicts",
@@ -159,6 +213,26 @@
     {
       "units": "not_a_unit",
       "why": "The corpus-canonical unparseable string."
+    },
+    {
+      "units": "mph",
+      "why": "A FUSED spelling of a compound the grammar already builds. `mi/h` is the spelling, and admitting `mph` too would make one quantity have two names -- the same argument that keeps `feet` out beside `ft`."
+    },
+    {
+      "units": "in",
+      "why": "No corpus column is stored in inches. The only inch in MOVES is a ft-to-in conversion constant, and `inHg` is its own table entry, not `in` times `Hg`. The table grows by demonstrated need."
+    },
+    {
+      "units": "yd",
+      "why": "No corpus user at all. Listed so that the imperial family's membership is a pinned fact rather than an accident of what got filed."
+    },
+    {
+      "units": "miles",
+      "why": "A plural is not an alias, exactly as `tons/year` and `feet` are not. The imperial family is symbol-only."
+    },
+    {
+      "units": "hp-hr",
+      "why": "MOVES's own spelling of horsepower-hour, and NOT parseable: `-` is not an operator in 4.8.2, so this reads as a dangling minus. The ESM spelling is `hp*h`. Pinned because a porter transcribing a MOVES column name will try this first."
     }
   ],
   "reject_scaling_factor": [

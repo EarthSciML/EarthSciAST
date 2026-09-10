@@ -59,9 +59,48 @@ Unitful.@unit _u_dobson "DU" DobsonUnit 2.6867e20 * Unitful.u"m"^-2 false
 # air-quality models that cannot spell the unit its own input files use forces
 # every such column to be declared in a unit it is not stored in. Spelled out
 # here rather than taken from Unitful so this table stays the only statement of
-# what `ft` means. `ft` is the ONLY imperial length in the registry: `in`, `yd`
-# and `mi` are absent because nothing in the corpus declares them.
+# what `ft` means. It has no long-form alias: `foot`/`feet` are pinned as
+# REJECTS by tests/conformance/unit_registry.
 Unitful.@unit _u_ft "ft" InternationalFoot 0.3048 * Unitful.u"m" false
+
+# The international mile, exact by definition since the same 1959 agreement:
+# 1 mi = 5280 ft = 1609.344 m. The US onroad transportation inventory is written
+# in it end to end — EPA MOVES stores `link.linkLength` in miles,
+# `link.linkAvgSpeed` in `mi/h`, and its whole activity model is built on
+# vehicle-MILES travelled. Spelled out here rather than taken from Unitful for
+# the same reason `ft` is. `mi/h` composes from this and `hr`; `mph` is
+# deliberately not a name, and neither are `in` and `yd`, which no corpus
+# column uses.
+Unitful.@unit _u_mi "mi" InternationalMile 1609.344 * Unitful.u"m" false
+
+# The international avoirdupois pound, exact by definition since 1959:
+# 1 lb = 0.45359237 kg — and exactly `short_ton` / 2000, so the registry held
+# the DERIVED unit and not the one it is defined in. US emission rates are
+# tabulated in it: MOVES's NONROAD brake-specific fuel consumption is
+# `lb/(hp*h)` and its gasoline density constant CMFGAS is 6.237 lb/gal.
+Unitful.@unit _u_lb "lb" AvoirdupoisPound 0.45359237 * Unitful.u"kg" false
+
+# Mechanical (imperial) horsepower — 550 ft*lbf/s = 745.6998715822702 W
+# (NIST SP 811 App. B gives 7.456 999 E+02 W). Written as the ft*lbf/s product
+# of this file's OWN `ft` and `lb` and standard gravity, so it cannot drift away
+# from them, and emphatically NOT the metric horsepower (PS, 735.49875 W).
+# Engine ratings are the axis MOVES's NONROAD model bins on:
+# `nrsourceusetype.hpAvg` is horsepower and every `nremissionrate` row is
+# `g/(hp*h)`.
+Unitful.@unit _u_hp "hp" MechanicalHorsepower (550 * 0.3048 * 0.45359237 * 9.80665) * Unitful.u"W" false
+
+# The US liquid gallon, exact by definition: 231 in^3 = 3.785411784 L
+# (NIST SP 811 App. B) — NOT the imperial gallon, which is 20% larger and which
+# a dimension-only check cannot tell apart from it. US fuel data is per gallon:
+# MOVES stores `fueltype.fuelDensity` in g/gal, its refuelling spill rate in
+# g/gal, and its dioxin and metal emission rates in g/gal.
+Unitful.@unit _u_gal "gal" USLiquidGallon 3.785411784 * Unitful.u"L" false
+
+# Inch of mercury — exactly 25.4 mmHg, the conventional value (NIST SP 811).
+# US barometric datasets store pressure in inHg. Added to the Rust registry by
+# fa7ffb01e and never mirrored here, which is exactly the drift
+# tests/conformance/unit_registry exists to catch; it is now in the golden.
+Unitful.@unit _u_inHg "inHg" InchOfMercury 3386.388640341 * Unitful.u"Pa" false
 
 # The two tons, both spelled UNAMBIGUOUSLY and neither spelled `ton`. A bare
 # `ton` is three different masses (short 907.18474 kg, metric 1000 kg, long
@@ -85,12 +124,12 @@ const _UNIT_REGISTRY = Dict{String, Unitful.Units}(
 
     # Mass. `short_ton` / `tonne` are spelled in full on purpose (see above);
     # `ton` and `t` are deliberately NOT registry symbols.
-    "g" => u"g", "mg" => u"mg", "ug" => u"μg",
+    "g" => u"g", "mg" => u"mg", "ug" => u"μg", "lb" => _u_lb,
     "short_ton" => _u_short_ton, "tonne" => _u_tonne,
 
     # Length.
     "dm" => u"dm", "cm" => u"cm", "mm" => u"mm", "um" => u"μm",
-    "nm" => u"nm", "km" => u"km", "ft" => _u_ft,
+    "nm" => u"nm", "km" => u"km", "ft" => _u_ft, "mi" => _u_mi,
 
     # Time. `h` is the HOUR here, not Unitful's Planck constant.
     #
@@ -102,7 +141,7 @@ const _UNIT_REGISTRY = Dict{String, Unitful.Units}(
     "yr" => u"yr", "year" => u"yr",
 
     # Volume.
-    "L" => u"L", "l" => u"L", "mL" => u"mL",
+    "L" => u"L", "l" => u"L", "mL" => u"mL", "gal" => _u_gal,
 
     # Amount of substance. `M` is molarity (mol/L).
     "kmol" => u"kmol", "mmol" => u"mmol", "umol" => u"μmol",
@@ -111,10 +150,12 @@ const _UNIT_REGISTRY = Dict{String, Unitful.Units}(
     # Derived.
     "Hz" => u"Hz", "N" => u"N", "Pa" => u"Pa", "J" => u"J", "kJ" => u"kJ",
     "cal" => u"cal", "kcal" => u"kcal", "W" => u"W", "kW" => u"kW", "MW" => u"MW",
+    "hp" => _u_hp,
 
     # Pressure.
     "atm" => u"atm", "bar" => u"bar", "hPa" => u"hPa", "kPa" => u"kPa",
-    "mbar" => u"mbar", "Torr" => u"Torr", "mmHg" => _u_mmHg, "psi" => u"psi",
+    "mbar" => u"mbar", "Torr" => u"Torr", "mmHg" => _u_mmHg,
+    "inHg" => _u_inHg, "psi" => u"psi",
 
     # Energy.
     "erg" => u"erg", "BTU" => u"btu", "Wh" => u"W*hr", "kWh" => u"kW*hr",

@@ -119,6 +119,12 @@ const UNIT_TABLE: Record<string, UnitSpec> = {
   // reason `d` is. `short_ton` is exactly 2000 international pounds -- what a US
   // emissions inventory means by "tons", and exactly InMAP's 907184740000
   // ug/short-ton emission-conversion constant.
+  // The international avoirdupois pound, exact by definition since 1959:
+  // 1 lb = 0.45359237 kg -- and exactly short_ton/2000, so the table held the
+  // DERIVED unit and not the one it is defined in. US emission rates are
+  // tabulated in it: MOVES's NONROAD brake-specific fuel consumption is
+  // `lb/(hp*h)` and its gasoline density constant CMFGAS is 6.237 lb/gal.
+  lb: { dims: { kg: 1 }, scale: 0.45359237 },
   short_ton: { dims: { kg: 1 }, scale: 907.18474 },
   tonne: { dims: { kg: 1 }, scale: 1e3 },
 
@@ -137,6 +143,14 @@ const UNIT_TABLE: Record<string, UnitSpec> = {
   // length in the table; `in`, `yd` and `mi` are absent because nothing in the
   // corpus declares them.
   ft: { dims: { m: 1 }, scale: 0.3048 },
+  // The international mile, exact by definition since the same 1959 agreement:
+  // 1 mi = 5280 ft = 1609.344 m. The US onroad transportation inventory is
+  // written in it end to end -- EPA MOVES stores `link.linkLength` in miles,
+  // `link.linkAvgSpeed` in `mi/h`, and its whole activity model is built on
+  // vehicle-MILES travelled -- so a table with `ft` and not `mi` could spell a
+  // stack height and not a road. `mi/h` composes; `mph` is deliberately not a
+  // name, and neither are `in` and `yd`, which no corpus column uses.
+  mi: { dims: { m: 1 }, scale: 1609.344 },
 
   // ---- Time ----
   ms: { dims: { s: 1 }, scale: 1e-3 },
@@ -158,6 +172,12 @@ const UNIT_TABLE: Record<string, UnitSpec> = {
   L: { dims: { m: 3 }, scale: 1e-3 },
   l: { dims: { m: 3 }, scale: 1e-3 },
   mL: { dims: { m: 3 }, scale: 1e-6 },
+  // The US liquid gallon, exact by definition: 231 in^3 = 3.785411784 L
+  // (NIST SP 811 App. B) -- NOT the imperial gallon, which is 20% larger and
+  // which a dimension-only check cannot tell apart from it. US fuel data is
+  // per gallon: MOVES stores `fueltype.fuelDensity` in g/gal, its refuelling
+  // spill rate in g/gal, and its dioxin and metal emission rates in g/gal.
+  gal: { dims: { m: 3 }, scale: 3.785411784e-3 },
 
   // ---- Amount of substance ----
   kmol: { dims: { mol: 1 }, scale: 1e3 },
@@ -178,6 +198,14 @@ const UNIT_TABLE: Record<string, UnitSpec> = {
   W: { dims: { kg: 1, m: 2, s: -3 }, scale: 1 },
   kW: { dims: { kg: 1, m: 2, s: -3 }, scale: 1e3 },
   MW: { dims: { kg: 1, m: 2, s: -3 }, scale: 1e6 },
+  // Mechanical (imperial) horsepower -- 550 ft*lbf/s = 745.6998715822702 W
+  // (NIST SP 811 App. B gives 7.456 999 E+02 W). Written as the ft*lbf/s
+  // product of this table's own ft and lb and standard gravity so it cannot
+  // drift away from them, and NOT the metric horsepower (PS, 735.49875 W).
+  // Engine ratings are the axis MOVES's NONROAD model bins on:
+  // `nrsourceusetype.hpAvg` is horsepower and every `nremissionrate` row is
+  // `g/(hp*h)`.
+  hp: { dims: { kg: 1, m: 2, s: -3 }, scale: 550 * 0.3048 * 0.45359237 * 9.80665 },
 
   // ---- Pressure ----
   atm: { dims: { kg: 1, m: -1, s: -2 }, scale: 101325 },
@@ -187,6 +215,11 @@ const UNIT_TABLE: Record<string, UnitSpec> = {
   mbar: { dims: { kg: 1, m: -1, s: -2 }, scale: 100 },
   Torr: { dims: { kg: 1, m: -1, s: -2 }, scale: 101325 / 760 },
   mmHg: { dims: { kg: 1, m: -1, s: -2 }, scale: 133.322387415 },
+  // Inch of mercury -- exactly 25.4 mmHg, the conventional value (NIST SP 811).
+  // US barometric datasets store pressure in inHg. Added to the Rust registry
+  // by fa7ffb01e and never mirrored here, which is exactly the drift
+  // tests/conformance/unit_registry exists to catch.
+  inHg: { dims: { kg: 1, m: -1, s: -2 }, scale: 3386.388640341 },
   psi: { dims: { kg: 1, m: -1, s: -2 }, scale: 6894.757293168 },
 
   // ---- Energy / power ----
