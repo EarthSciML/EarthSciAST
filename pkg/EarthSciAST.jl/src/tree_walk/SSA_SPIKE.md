@@ -156,9 +156,21 @@ fold.
    repeat cells — median run length 1 — so slices+concat lose to the gather;
    would need segment-level ops instead. Left as gathers deliberately.
 4. **Scalar-walker and lane-batched scalar reads** (`_NK_STATE`,
-   `_NK_STATE_GATHER`, batch slot vectors). Redirectable through the same
-   slot→(producer, position) map; not done in the spike. They also hold
-   producer scatters alive wherever they read.
+   `_NK_STATE_GATHER`, batch slot vectors) — REDIRECTABLE, MEASURED, and NOT
+   WORTH IT. They are reachable through the same slot→(producer, position) map,
+   published per read surface as a consumer level; an implementation took
+   transport from 13/17 to 15/17 scatters skipped and `blockers.scalar` to 0.
+   It cost **4.3% on the transport reverse**: two whole-buffer copies removed
+   against ~140 copy instructions added, because these reads were already cheap
+   relative to the buffer versions they pinned, and redirecting one keeps a
+   producer value live across a level boundary instead of letting it die into
+   `ue`. Coverage is not the objective function; the copy census is.
+
+   It is also INERT under the shipped gate. `ESS_OOP_SSA_SKIP_WHOLE` skips
+   nothing unless EVERY tracked producer can go, and 15 of 17 is not 17 of 17 —
+   the scan and sub-kernel blockers below survive it. So closing #4 alone
+   changes no emitted program at the default; it would only pay as the LAST of
+   the transport blockers to fall. Do not re-attempt it on its own.
 5. ~~**Fragmented gathers**~~ (`nseg > min(64, max(8, L÷4))`) — CLOSED by tier
    2b: past the slice threshold a single-producer mapping gathers the producer's
    VALUE instead of the buffer. `frag` went 5 blocked producers → 0. A
