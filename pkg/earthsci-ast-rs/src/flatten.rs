@@ -726,7 +726,8 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
 
     // Phase 5a: post-collection variable_map parameter removals, plus the
     // source-fed array parameters that replace them from esm 1.0.0.
-    let mut loaded_producers = apply_variable_map_removals(file, &mut parts);
+    let mut loaded_producers =
+        apply_variable_map_removals(file, &mut parts, &merged_variable_renames);
     loaded_producers.extend(source_fed_producers(&parts));
 
     // Phase 5b: pointwise spatial lift (esm-spec §10.5).
@@ -1774,6 +1775,7 @@ fn in_document_order(
 fn apply_variable_map_removals(
     file: &EsmFile,
     parts: &mut AssembledParts,
+    merged_renames: &IndexMap<String, String>,
 ) -> HashMap<String, usize> {
     let loader_names: HashSet<String> = file
         .data_sources
@@ -1838,10 +1840,23 @@ fn apply_variable_map_removals(
                     // esm 1.0.0 has no `expression` field on a variable, and it
                     // is that equation form that makes `to` an observed unknown
                     // (esm-spec §6.3.1).
+                    // …off the names a merge deleted. This install happens in
+                    // ASSEMBLY, after `retarget_merged_names` has run over the
+                    // equation pool, so the document-wide retarget never sees
+                    // this node and the authored spelling would survive here
+                    // alone (CONFORMANCE_SPEC §5.35). Renaming at the INSTALL
+                    // rather than on the entry keeps the §10.4 `contains` check
+                    // above comparing the authored `from` against the authored
+                    // node, which is what it is for.
+                    let subs: HashMap<String, Expr> = merged_renames
+                        .iter()
+                        .map(|(gone, survivor)| (gone.clone(), Expr::Variable(survivor.clone())))
+                        .collect();
+                    let rhs = rename_names(&Expr::operator(node.clone()), &subs, merged_renames);
                     parts.equations.push(Equation {
                         comment: None,
                         lhs: Expr::Variable(to.clone()),
-                        rhs: Expr::operator(node.clone()),
+                        rhs,
                     });
                 }
                 VariableMapTransform::Named(_) => {}

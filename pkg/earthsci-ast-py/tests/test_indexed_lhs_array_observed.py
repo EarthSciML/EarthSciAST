@@ -305,6 +305,42 @@ def test_the_normalizer_declines_outside_its_narrow_recognition(tmp_path, name, 
     assert _normalize_indexed_observed_lhs(model) is model.equations
 
 
+def _distinct_shell(value):
+    """``EQ_W_INDEXED``'s LHS with an explicit ``distinct`` on the shell."""
+    lhs = dict(_agg(_idx("w")))
+    lhs["distinct"] = value
+    return {"lhs": lhs, "rhs": _agg({"op": "*", "args": [2.0, _idx("u")]})}
+
+
+def test_a_false_distinct_spells_the_same_node_as_an_absent_one(tmp_path):
+    """esm-schema's ``ExpressionNode.distinct``: "Absent => false (ordinary
+    array-producing reduction), exactly as today". So ``"distinct": false`` is a
+    spelling of the very same addressing shell and MUST normalize. Testing the
+    field's PRESENCE declined it, and the observed then answered 0.0 from its
+    never-written state slot — a silent divergence from Julia, whose
+    ``_rewrite_indexed_observed_lhs`` tests ``distinct !== true``."""
+    eq = _distinct_shell(False)
+    path = _write(tmp_path, _doc("df", [eq, EQ_D_INDEXED], ASSERT_U), "df.esm.json")
+    model = load_path(path).models["Column"]
+
+    assert _normalize_indexed_observed_lhs(model) is not model.equations
+
+    got = _actuals(tmp_path, "dfr", [eq, EQ_D_INDEXED], ASSERT_U_AND_W)
+    assert got["w"] == pytest.approx(2 * E2, rel=1e-6)
+    assert got["u"] == pytest.approx(E2, rel=1e-6)
+
+
+def test_a_true_distinct_is_a_set_semantics_shell_and_is_declined(tmp_path):
+    """A TRUE ``distinct`` makes the shell index-set-producing rather than
+    addressing, so it computes and the normalizer must leave it alone."""
+    path = _write(
+        tmp_path, _doc("dt", [_distinct_shell(True), EQ_D_INDEXED], ASSERT_U), "dt.esm.json"
+    )
+    model = load_path(path).models["Column"]
+
+    assert _normalize_indexed_observed_lhs(model) is model.equations
+
+
 def test_the_normalizer_declines_a_target_with_no_declared_shape(tmp_path):
     """The two corpus equations that already use this LHS shape name a variable
     with NO declared shape (``arrayop/02`` and ``arrayop/04``); the rank guard is
@@ -323,3 +359,51 @@ def test_the_indexed_spelling_still_routes_to_the_array_pathway(tmp_path):
     path = _write(tmp_path, _doc("p", [EQ_W_INDEXED, EQ_D_BARE], ASSERT_U), "p.esm.json")
 
     assert esm_problem(path, (0.0, 1.0)).pathway == "array"
+
+
+# --------------------------------------------------------------------------- #
+# The BARE-INDEX LHS, which this normalizer does NOT handle, must FAIL LOUDLY
+# --------------------------------------------------------------------------- #
+
+# w[k] ~ 5 — esm-spec §6.3.1's own worked-example spelling (`rg_src_bin[a] ~ …`),
+# with NO `aggregate` shell and so no `ranges` binding `k`.
+EQ_W_BARE_INDEX = {"lhs": _idx("w"), "rhs": 5.0}
+
+
+def test_a_bare_index_lhs_is_refused_and_not_silently_integrated(tmp_path):
+    """No binding RUNS §6.3.1's bare-index arrayed definition yet (issue #291),
+    and the one thing that MUST hold until one does is that the document is
+    REFUSED rather than answered from a slot nothing wrote.
+
+    This binding used to warn ``unrecognized algebraic equation`` and return
+    ``0.0``, which grades a wrong document GREEN — an assertion expecting ``0.0``
+    passes on a value that was never computed. PR #290's §4.7.5 dual membership
+    closed that: the arrayed observed is no longer resolvable as a bare state
+    slot, so the solve fails outright and every assertion reports
+    ``actual=None``. Julia refuses the same document with
+    ``E_TREEWALK_UNSUPPORTED_SHAPE``.
+
+    The two bindings still spell the refusal differently — Julia names the
+    unsupported SHAPE, this binding names the UNRESOLVED SYMBOL — because they
+    hit the wall at different phases. What is pinned here is the part that
+    matters and that both share: no pass, no actual, and the offending variable
+    named. Do not weaken this to a message match without checking Julia's.
+
+    The normalizer is deliberately not widened to cover the spelling: a bare
+    ``index`` LHS carries no ``ranges`` binder for ``i``, so the frame would have
+    to be inferred from the declared ``shape``, and that is a cross-binding
+    semantic decision. Widening it HERE would be doubly wrong — the rewrite
+    mutates the flattened ``equations`` list that the shared corpus compares
+    across all five bindings, and no other binding mutates it.
+    """
+    equations = [EQ_W_BARE_INDEX, EQ_D_INDEXED]
+    path = _write(tmp_path, _doc("bi", equations, ASSERT_U_AND_W), "bi.esm.json")
+    results = run_inline_tests(path)
+
+    assert results, "the document must still produce assertion results"
+    for r in results:
+        assert not r.passed
+        assert r.actual is None, "a refused document must report no actual, not 0.0"
+        assert "Column.w" in (r.message or ""), (
+            f"the refusal must name the offending variable: {r.message!r}"
+        )

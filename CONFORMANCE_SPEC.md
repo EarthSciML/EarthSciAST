@@ -5106,6 +5106,149 @@ DEPENDENT VARIABLE — a state or an observed — so a `parameter_overrides` key
 never name one. `initial_conditions` is the surface the case actually lands on;
 the two share the §6.6.2 canonicalization, so covering one covers the rule.
 
+### 5.36 Both LHS Spellings RUN, at Every Rank (normative)
+
+**§5.34 is this section's classification half, and the two are complements, not
+duplicates.** §5.34 asks whether `observed_unknowns` *credits* the indexed
+spelling — a pure-function question every binding, rewrite-only ports included,
+can answer, and it is answered against a spec-written golden. This section asks
+whether a binding then *runs* such a document and produces the right numbers,
+which only the three executing bindings can answer and which is gated against a
+Julia-minted golden. A binding can pass §5.34 and fail this one: Julia's
+`observed_unknowns` was already correct on `main` (its `_lhs_unwrap` peels the
+`aggregate` shell), and its tree-walk **build** still refused the document
+outright.
+
+**Scope: the `aggregate`-shelled spelling only.** This section pins
+`aggregate{k…}(index(V, k…)) ~ …`, whose `ranges` bind the frame symbols.
+§6.3.1's *other* arrayed spelling — a **bare** `index(V, i)` LHS with no shell,
+the form the spec's own worked example writes (`rg_src_bin[a] ~ …`) — is
+classified correctly by all five bindings (§5.34's `wb`) and **run by none**: a
+bare `index` LHS carries no binder for `i`, so the frame would have to be
+inferred from the declared `shape`, which is a normative decision this section
+does not make. Issue #291 carries it.
+
+What this section DOES require in the meantime is that a binding which cannot
+run the spelling **refuses** it — reporting **no actual** and **naming the
+offending variable** — rather than answering from a solver slot nothing wrote. A
+binding that returns `0.0` from a never-written slot grades a wrong document
+**green**: an assertion whose expected value happens to be `0.0` passes on a
+number that was never computed. Julia refuses with
+`E_TREEWALK_UNSUPPORTED_SHAPE`; Python refuses with `Unresolved symbol`, having
+hit the wall at a later phase. The two codes are **not** required to match while
+neither binding runs the spelling — what is required is that neither invents a
+value. Python answered `0.0` here until PR #290's §4.7.5 dual membership stopped
+resolving an arrayed observed as a bare state slot.
+
+esm-spec §6.3.1 admits **two** LHS spellings for the equation that DEFINES an
+unknown, and states the criterion semantically: the defining form is read
+through the LHS's **base name**, so an unknown is observed when some equation
+*defines* it whether that LHS names it bare (`y ~ f(…)`) or indexed
+(`y[i] ~ f(…)`, which defines the whole array `y`). The spec spells out that
+this is deliberate and not a scalar-only convenience — "an arrayed definition is
+observed exactly as its scalar counterpart is", and an earlier bare-LHS-only
+wording is called out there as the mistake the semantic criterion replaces.
+
+**Neither spelling may be restricted by rank.** A binding MUST run a document
+whose ARRAY-shaped observed is defined the indexed way exactly as it runs the
+bare one. A binding is free to keep a NARROWER set alongside `observed_unknowns`
+for the strict `y ~ f(…)` form — §6.3.1 sanctions it for inlining specifically,
+and Python spells it `inlined_unknowns` — but that set governs *how* the observed
+is eliminated (a scalar substitutes into its consumers; an array materializes
+into a buffer its consumers index), never *whether* the document is accepted.
+
+The failure this pins is what happens when the narrower set is used as the
+classifier. Julia's tree-walk build routed every array observed into an owner
+bucket — the elementwise fold, the promoted-arrayop inline set, the bare-alias
+registration, geometry clip-ring discovery — and each bucket tested the
+SYNTACTIC bare LHS. An array-shaped observed written the indexed way matched no
+bucket, fell through to the partition's geometry-ring gate, and was refused with
+`E_TREEWALK_UNSUPPORTED_SHAPE: <name>` on a document Rust and Python both ran
+(issue #232). The refusal was loud, which is the good half of it: nothing ran on
+a bad value. The fix belongs UPSTREAM of the classifiers — normalize the
+spelling once, before any of them reads an LHS — and not in the runner, which
+esm AGENTS.md forbids from dispatching on rule shape, nor in the gate, which
+would admit the shape with no owner to evaluate it.
+
+#### 5.36.1 Gate
+
+`tests/conformance/pde_inline_observed_indexed_lhs/` holds the shared fixture
+and the Julia-minted golden. Every array observed in it uses the indexed
+spelling, and the fixture asserts those observeds **DIRECTLY** — not merely the
+states they drive. That is deliberate: asserting the observeds is what makes the
+category state the §6.3.1 contract, rather than the weaker intersection the
+bindings happen to agree on. The driven states are asserted alongside, so a
+binding that answers the observeds but drops them out of the dynamics (or the
+reverse) still fails.
+
+The two observeds are a CONTROLLED PAIR: `wf` is STATE-FREE (the
+build-materialized path) and `ws` is STATE-DEPENDENT (evaluated at the sampled
+state) — the two classes a binding routes differently, so fixing one path only
+does not pass the category. Both right-hand sides are exactly integrable —
+`D(u) = wf = 2k` is a per-cell constant, so `u[k](t) = 2·k·t`, and `D(v) = ws =
+3·u` is then linear in `t`, so `v[k](t) = 3·k·t²` — hence every pinned solver
+family of order ≥ 2 reproduces the goldens to machine precision and a divergence
+here is a semantics divergence, never an integrator one.
+
+Per-binding runners drive it and gate every assertion against BOTH the golden
+actual and the fixture's own declared `expected`: **Julia** —
+`pkg/EarthSciAST.jl/test/conformance_pde_inline_observed_indexed_lhs_test.jl`;
+**Python** — `pkg/earthsci-ast-py/tests/test_pde_inline_observed_indexed_lhs_conformance.py`;
+**Rust** — `pkg/earthsci-ast-rs/tests/pde_inline_observed_indexed_lhs_conformance.rs`.
+`bindings_required` is `["julia", "python", "rust"]`; Go and TypeScript are
+rewrite-only ports with no simulator and no inline-test runner, and are
+`scope_excluded` in the manifest.
+
+**Julia** — FIXED. `_normalize_indexed_observed_lhs` (tree_walk/build_helpers.jl)
+rewrites `aggregate{k…}(index(V, k…)) ~ rhs` into the bare `V ~ rhs` before any
+classifier reads an LHS, wrapping the rhs in the LHS's own frame when the rhs is
+a per-cell body rather than the whole array. All fourteen assertions pass.
+
+**Rust** — conforming; all fourteen assertions pass. The category pins it.
+
+**Python** — FIXED, on `main`, by PR #276 (commit `bac8a6197`, cherry-picked from
+#237's `57b72acad`); all fourteen assertions pass. `flatten._normalize_indexed_observed_lhs`
+is the mirror of the Julia normalizer above, and `classification._base_name` sees
+through the same shell so `observed_definitions` credits the indexed spelling —
+without that, §6.6.5's observed-assertion lookup was gated out before it ever
+looked. The category scored 7 / 14 before it (`wf` and `ws` both answering `0.0`).
+
+Three symptoms, ONE root cause, and it is the SAME wrong substitution this
+section's Julia half describes: `flatten._collect_model` read observed-ness from
+`classification.inlined_unknowns` — the strict `y ~ f(…)` set §6.3.1 sanctions
+for INLINING specifically — and used it as the classification, which §6.3.1
+forbids ("it does not narrow the partition"). Julia's owner buckets made the same
+substitution syntactically. Two bindings, one error, diagnosed independently. The
+symptoms were:
+
+1. an indexed-LHS array observed is **not readable by an assertion** — `wf` and
+   `ws` answer `0.0` at every time rather than their field values;
+2. an indexed LHS with a **PER-CELL** right-hand side (`aggregate{k}(w[k]) ~
+   2*u[k]`, no `aggregate` on the right) is silently dropped —
+   `RuntimeWarning: unrecognized algebraic equation … was not applied to the ODE
+   RHS; any state it constrains stays frozen at its initial value`, and it does
+   stay frozen;
+3. an indexed-LHS observed feeding a **WHOLE-ARRAY** derivative (`D(u) ~ wf`)
+   is dropped the same way, while `aggregate{k}(D(u[k])) ~ aggregate{k}(wf[k])`
+   — the spelling this fixture uses — integrates.
+
+Complete reproducer documents are in the body of PR #250, which introduced this
+category.
+
+The two normalizers agree on every document in the corpus and on this fixture,
+and they must also agree at their recognition boundary, since that boundary is
+where a document becomes accepted or silently mis-run. One difference was found
+and closed: `distinct` is a BOOLEAN whose absence MEANS `false` ("Absent ⇒ false
+(ordinary array-producing reduction), exactly as today" — `esm-schema.json`,
+`ExpressionNode.distinct`), so only a TRUE `distinct` is a set-semantics shell
+that computes rather than addresses. Julia tests `distinct !== true`; Python
+tested the field's PRESENCE, so an LHS spelling `"distinct": false` — the very
+same node — was declined and the observed answered `0.0`. A binding MUST read an
+absent and a false `distinct` alike.
+
+**TypeScript**, **Go** — rewrite-only ports with no simulator; no rows apply.
+
+
 ### 5.37 The §6.6.3 Assertion Predicate Itself (normative)
 
 §5.20 pins what a binding does with a NON-FINITE actual. This category pins the

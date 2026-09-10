@@ -137,6 +137,26 @@
       "note": "The LOUD failure, and the sharper half. A later `variable_map` names the deleted `Sink.O3` as its `from`, so the substitution injected a name the flattened system no longer declares into every equation referencing `Consumer.bg` — a dangling reference that surfaces far downstream as an unbound variable at the build boundary, not a missing term."
     },
     {
+      "id": "variable_map_expression_transform",
+      "path": "fixtures/variable_map_expression_transform.esm",
+      "surface": "flatten",
+      "merged_variable_renames": {
+        "Sink.O3": "Chem.ozone"
+      },
+      "state_variables": [
+        "Consumer.y",
+        "Chem.ozone"
+      ],
+      "tendency_of": "Consumer.bg",
+      "tendency_references": [
+        "Chem.ozone"
+      ],
+      "no_equation_references": [
+        "Sink.O3"
+      ],
+      "note": "The `variable_map` EXPRESSION arm (esm-spec §10.4), which the `later_variable_map` case does not reach — that one drives a NAMED transform. The two arms are implemented differently on purpose: a named transform substitutes `to` away, so the entry's endpoints must be resolved before it runs, while an expression transform installs its node as the defining equation of the observed it introduces. A binding that installs that node at COLLECTION has already had the document-wide equation retarget rewrite it, and resolving the entry's `from` as well would break the §10.4 `contains` check against the AUTHORED node. Different routes, one observable result — which is exactly what a conformance case should pin, and what nothing pinned before: `Consumer.bg` is defined over `Chem.ozone`, and `Sink.O3` survives nowhere."
+    },
+    {
       "id": "override_key_names_the_merged_away_state",
       "path": "fixtures/later_couple_connector.esm",
       "surface": "override_keys",

@@ -1184,7 +1184,16 @@ def _normalized_indexed_definition(eq: Equation, model: Model, states: set[str])
     lhs = eq.lhs
     if not (isinstance(lhs, ExprNode) and is_aggregate_op(lhs.op)):
         return None
-    if any(getattr(lhs, f, None) is not None for f in ("filter", "join", "key", "distinct")):
+    if any(getattr(lhs, f, None) is not None for f in ("filter", "join", "key")):
+        return None
+    # ``distinct`` is a BOOLEAN whose absence MEANS false ("Absent => false
+    # (ordinary array-producing reduction), exactly as today" -- esm-schema
+    # ExpressionNode.distinct), so only a TRUE one is the set-semantics shell
+    # that computes rather than addresses. Testing PRESENCE instead declined
+    # ``"distinct": false``, a spelling of the very same node, and the observed
+    # then silently answered 0.0 from its never-written state slot. Julia's
+    # ``_rewrite_indexed_observed_lhs`` tests ``distinct !== true``.
+    if getattr(lhs, "distinct", None):
         return None
     frame = [s for s in (lhs.output_idx or []) if isinstance(s, str)]
     if not frame or len(frame) != len(lhs.output_idx or []):

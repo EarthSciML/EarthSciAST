@@ -1,0 +1,154 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "merged_rename_variable_map_expression_transform",
+    "description": "esm-libraries-spec 4.7.1 step 4 on the `variable_map` EXPRESSION transform (esm-spec 10.4), the arm the named-transform sibling fixture does not reach. A `translate` match merges `Sink.O3` onto `Chem.ozone` across DIFFERING local names, and a later `variable_map` names the deleted spelling as its `from` while carrying an expression that spells its own arithmetic over it. The two arms are implemented differently and deliberately so: a NAMED transform substitutes `to` away, so the entry's endpoints must be resolved before it runs, whereas an EXPRESSION transform installs its node as the defining equation of the observed it introduces -- which in a binding that installs it at COLLECTION means the document-wide equation retarget has already rewritten it, and resolving the entry's `from` as well would break the spec-required `contains` check against the AUTHORED node. Different routes, one observable result, and that result is what this case pins: whichever route a binding takes, `Consumer.bg` ends up defined over `Chem.ozone` and nothing anywhere still spells `Sink.O3`.",
+    "authors": [
+      "EarthSciAST"
+    ],
+    "tags": [
+      "esm-libraries-spec-4.7.1",
+      "operator-compose",
+      "merged-away-rename",
+      "variable-map",
+      "expression-transform"
+    ]
+  },
+  "models": {
+    "Sink": {
+      "variables": {
+        "O3": {
+          "type": "unknown",
+          "units": "ppb",
+          "default": 40.0,
+          "description": "The MERGED-AWAY spelling, which the later `variable_map` still names."
+        },
+        "kd": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.0001
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "O3"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "kd"
+                ]
+              },
+              "O3"
+            ]
+          }
+        }
+      ]
+    },
+    "Consumer": {
+      "variables": {
+        "bg": {
+          "type": "parameter",
+          "units": "ppb",
+          "default": 5.0,
+          "description": "The mapped parameter. Every reference to it becomes a reference to the `variable_map`'s `from`."
+        },
+        "y": {
+          "type": "unknown",
+          "units": "ppb",
+          "default": 0.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              "bg",
+              "y"
+            ]
+          }
+        }
+      ]
+    },
+    "Chem": {
+      "variables": {
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.0002
+        },
+        "ozone": {
+          "type": "unknown",
+          "units": "ppb",
+          "default": 30.0,
+          "description": "Survives the merge as `Chem.ozone`."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "ozone"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "ozone"
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "operator_compose",
+      "systems": [
+        "Chem",
+        "Sink"
+      ],
+      "translate": {
+        "Chem.ozone": "Sink.O3"
+      },
+      "description": "Deletes `Sink.O3`, retargeting it onto `Chem.ozone`."
+    },
+    {
+      "type": "variable_map",
+      "from": "Sink.O3",
+      "to": "Consumer.bg",
+      "transform": {
+        "op": "*",
+        "args": [
+          "Sink.O3",
+          0.5
+        ]
+      },
+      "description": "Names the merged-away spelling as its `from` AND inside its expression transform. Both must land on `Chem.ozone`."
+    }
+  ]
+}
