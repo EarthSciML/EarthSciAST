@@ -2925,6 +2925,104 @@ _oop_ssa_ghost_enabled()   = get(ENV, "ESS_OOP_SSA_GHOST", "1") != "0"
 _oop_ssa_sub_enabled()     = get(ENV, "ESS_OOP_SSA_SUB", "1") != "0"
 _oop_ssa_pgather_enabled() = get(ENV, "ESS_OOP_SSA_PGATHER", "1") != "0"
 
+# ---- The scatter-skip GATE (ess-oop-ssa-gate) --------------------------------
+#
+# Static skippability (`why == 0`: nothing reads the producer's block off `ue`
+# any more) says the scatter is REDUNDANT. It does not say that dropping it is
+# CHEAPER, and measurement says it often is not: a producer's
+# `dynamic_update_slice` into `ue` ALIASES its operand in the forward, so
+# XLA:CPU writes only the update and can fuse the producer's spine straight into
+# `ue`'s memory. Dropping the scatter takes that fusion away and makes the
+# producer's value a buffer of its own. On the PPM transport RHS that trade is a
+# loss; on the merged-class chemistry RHS it is a large win. So the skip is
+# GATED on producer facts, and the gate is what this knob group tunes.
+#
+#   ESS_OOP_SSA_SKIP=0            never skip a scatter (the redirects stay) --
+#                                 the negative control for the whole gate
+#   ESS_OOP_SSA_SKIP_MAXLEN=<n>   skip only a producer whose value is <= n
+#                                 elements (`-1` ⇒ no bound)
+#   ESS_OOP_SSA_SKIP_MINRATIO=<x> skip only a producer whose REDIRECTED read
+#                                 volume is >= x times its own block size
+#                                 (`0` ⇒ no bound)
+#
+# `ESS_OOP_SSA_SKIP_GATE=0` releases both bounds AND the whole-buffer gate
+# together, so every statically skippable scatter is skipped -- the ungated
+# behaviour the engagement tests A/B against.
+_oop_ssa_skip_enabled() = get(ENV, "ESS_OOP_SSA_SKIP", "1") != "0"
+_oop_ssa_skip_gated()   = get(ENV, "ESS_OOP_SSA_SKIP_GATE", "1") != "0"
+# Both PER-PRODUCER bounds are released by default: the measured
+# discriminator is not a producer property at all (see `ESS_OOP_SSA_SKIP_WHOLE`
+# below and SSA_SPIKE.md) -- they exist so the alternative hypotheses stay
+# bisectable without a rebuild.
+const _SSA_SKIP_MAXLEN_DEFAULT = typemax(Int)
+const _SSA_SKIP_MINRATIO_DEFAULT = 0.0
+function _oop_ssa_skip_maxlen()
+    v = get(ENV, "ESS_OOP_SSA_SKIP_MAXLEN", "")
+    isempty(v) && return _SSA_SKIP_MAXLEN_DEFAULT
+    n = tryparse(Int, v)
+    (n === nothing || n < 0) && return typemax(Int)
+    return n
+end
+function _oop_ssa_skip_minratio()
+    v = get(ENV, "ESS_OOP_SSA_SKIP_MINRATIO", "")
+    isempty(v) && return _SSA_SKIP_MINRATIO_DEFAULT
+    x = tryparse(Float64, v)
+    return x === nothing ? _SSA_SKIP_MINRATIO_DEFAULT : x
+end
+
+# `ESS_OOP_SSA_SKIP_PIDS=3,7,12` restricts skipping to those producer ids, and
+# `ESS_OOP_SSA_SKIP_PIDS=!17` skips everything EXCEPT them. Producer ids are
+# structural (the fill-kernel enumeration does not depend on the grid), so a
+# 6x6x8 `oop_ssa_producers` table names the same producers a CONUS build has:
+# this is the per-producer BISECT the gate's discriminator was found with, not
+# a knob a caller should set. Empty ⇒ no pid restriction.
+function _oop_ssa_skip_pids()
+    v = strip(get(ENV, "ESS_OOP_SSA_SKIP_PIDS", ""))
+    isempty(v) && return (false, Int[])
+    neg = startswith(v, "!")
+    neg && (v = v[2:end])
+    ids = Int[]
+    for tok in split(v, ',')
+        tok = strip(tok)
+        isempty(tok) && continue
+        n = tryparse(Int, tok)
+        n === nothing || push!(ids, n)
+    end
+    return (neg, ids)
+end
+
+# One producer's build-time facts, for the gate and for `oop_ssa_producers`.
+# `len` is the value's element count, `nread`/`elread` the redirected read
+# surfaces and element volume that now source from it, `nwhole` how many of
+# those take the whole value with no op at all (tier 1), and `why` the residual
+# reason bits that would keep the scatter alive regardless of the gate.
+struct _OopSSAProd
+    pid::Int
+    level::Int
+    len::Int
+    nread::Int
+    elread::Int
+    nwhole::Int
+    why::UInt8
+    skippable::Bool   # static accounting alone would drop the scatter
+    skip::Bool        # … and the gate agreed
+end
+
+# `ESS_OOP_SSA_SKIP_WHOLE=1` makes the skip ALL-OR-NOTHING per build: a
+# scatter is dropped only when EVERY tracked producer's is droppable, so `ue`
+# stops being written at all and the whole flat buffer dies. `=0` allows
+# partial skipping (what #283 shipped).
+_oop_ssa_skip_whole() = get(ENV, "ESS_OOP_SSA_SKIP_WHOLE", "1") != "0"
+
+# The per-producer half of the gate: given a STATICALLY skippable producer, is
+# dropping the scatter worth it? `maxlen`/`minratio` come from the knobs above.
+@inline function _ssa_skip_worth(pr_len::Int, elread::Int,
+                                 maxlen::Int, minratio::Float64)
+    pr_len <= maxlen || return false
+    minratio <= 0 && return true
+    return elread >= minratio * pr_len
+end
+
 # WHY a residual `ue` read exists, one bit per read surface, carried per slot in
 # the analysis' `resid` map and reduced per producer into the blocker tally
 # `oop_ssa_stats` reports. The tally is the campaign's steering instrument: a
@@ -2955,8 +3053,10 @@ struct _OopSSAStats
     elems_edges::Int      # Σ gather lengths over all edges
     elems_fast::Int       # Σ gather lengths over redirected edges
     n_prod::Int           # tracked producers (fill kernels; excludes the state)
-    n_skip::Int           # producers whose `ue` scatter is statically skippable
-    elems_skip::Int       # Σ out_slots lengths over skippable producers
+    n_skip::Int           # producers whose `ue` scatter is ACTUALLY skipped
+    elems_skip::Int       # Σ out_slots lengths over skipped producers
+    n_skippable::Int      # … statically skippable, before the worthwhileness gate
+    elems_skippable::Int
     dynamic::Bool         # a per-cell kernel exists ⇒ no scatter may be skipped
     n_gedges::Int         # ghost-masked candidate descriptors
     n_gfast::Int          # … of which redirected to producer values + select
@@ -2977,11 +3077,13 @@ struct _OopSSAPlan
     mat::Vector{Vector{_OopSSAKernel}}  # per fill level, aligned with its kernels
     fin::Vector{_OopSSAKernel}          # aligned with the state-RHS acc_kernels
     stats::_OopSSAStats
+    prods::Vector{_OopSSAProd}          # per-producer facts (gate instrumentation)
 end
 const _OOP_SSA_OFF = _OopSSAPlan(false, 0, Vector{_OopSSAKernel}[], _OopSSAKernel[],
-                                 _OopSSAStats(0, 0, 0, 0, 0, 0, 0, false,
+                                 _OopSSAStats(0, 0, 0, 0, 0, 0, 0, 0, 0, false,
                                               0, 0, 0, 0, 0, 0, 0, 0,
-                                              _SSA_BLK0, _SSA_BLK0))
+                                              _SSA_BLK0, _SSA_BLK0),
+                                 _OopSSAProd[])
 
 # Residual `ue` reads of the scalar walkers: `_NK_STATE` pins one slot,
 # `_NK_STATE_GATHER` may read any slot in its table (its subscripts are
@@ -3112,6 +3214,12 @@ function _build_oop_ssa_plan(mat_levels::Tuple, acc_kernels, acc_plans,
     ghost_ok = _oop_ssa_ghost_enabled()
     sub_ok = _oop_ssa_sub_enabled()
     pgather_ok = _oop_ssa_pgather_enabled()
+    skip_ok = _oop_ssa_skip_enabled()
+    gate_on = _oop_ssa_skip_gated()
+    gate_maxlen = gate_on ? _oop_ssa_skip_maxlen() : typemax(Int)
+    gate_minratio = gate_on ? _oop_ssa_skip_minratio() : 0.0
+    pid_neg, pid_list = _oop_ssa_skip_pids()
+    whole_only = gate_on && _oop_ssa_skip_whole()
     nlev = length(mat_levels)
 
     # ---- Slot ownership, in execution order (LAST writer owns) ----
@@ -3187,6 +3295,41 @@ function _build_oop_ssa_plan(mat_levels::Tuple, acc_kernels, acc_plans,
     n_gedges = 0; n_gfast = 0; elems_gedges = 0; elems_gfast = 0
     n_sedges = 0; n_sfast = 0; elems_sedges = 0; elems_sfast = 0
 
+    # ---- Per-producer redirected-read volume (the gate's input) ----
+    # A redirect makes the producer's VALUE the read surface, which is what
+    # forces it to be materialized; these tallies are how much reading now goes
+    # there, per producer, so the skip verdict can be priced instead of assumed.
+    nprod_all = length(prod_level)
+    rd_n = zeros(Int, nprod_all)      # redirected descriptors sourcing from pid
+    rd_el = zeros(Int, nprod_all)     # … their element volume out of pid
+    rd_whole = zeros(Int, nprod_all)  # … of which take the whole value (tier 1)
+    function record_ref!(ref::_OopSSARef)
+        if ref.pid != 0
+            rd_n[ref.pid] += 1
+            rd_el[ref.pid] += length(ref.pos)
+            return
+        end
+        segs = ref.segs
+        isempty(segs) && return
+        # one descriptor may straddle several producers; count it once each
+        for k in eachindex(segs)
+            sg = segs[k]
+            rd_el[sg.pid] += sg.len
+            seen = false
+            for k2 in 1:(k - 1)
+                if segs[k2].pid == sg.pid
+                    seen = true
+                    break
+                end
+            end
+            seen || (rd_n[sg.pid] += 1)
+        end
+        if length(segs) == 1
+            sg = segs[1]
+            (sg.lo == 1 && sg.len == prod_len[sg.pid]) && (rd_whole[sg.pid] += 1)
+        end
+    end
+
     # ONE descriptor table — a kernel's own, or a sub-kernel's, both resolved
     # against the SAME lane enumeration. Decides each descriptor's redirect and
     # marks every read that stays on the gather path, with the reason that
@@ -3234,6 +3377,7 @@ function _build_oop_ssa_plan(mat_levels::Tuple, acc_kernels, acc_plans,
                 continue
             end
             refs[i] = ref
+            record_ref!(ref)
             any_fast = true
             if is_sub
                 n_sfast += 1
@@ -3283,22 +3427,33 @@ function _build_oop_ssa_plan(mat_levels::Tuple, acc_kernels, acc_plans,
                         for j in eachindex(acc_kernels)]
 
     # ---- Producer roles: attach pid + the scatter-skip verdict ----
-    n_skip = 0; elems_skip = 0
+    #
+    # TWO verdicts, deliberately separate. `skippable` is the STATIC one the
+    # spike shipped: nothing reads this producer's block off `ue` any more, so
+    # the scatter is redundant. `skip` is that AND the worthwhileness gate
+    # (`_ssa_skip_worth`) — because a redundant scatter is not necessarily an
+    # expensive one, and on the transport RHS dropping it costs more than it
+    # saves. Declining the gate is always CORRECT: it emits a write nothing
+    # reads, exactly as the flag-off build does.
+    n_skip = 0; elems_skip = 0; n_skippable = 0; elems_skippable = 0
     blk = zeros(Int, 8); blk_only = zeros(Int, 8)
+    prods = _OopSSAProd[]
+    # PASS 1: the static verdict and the residual-reason tally, per producer.
+    why_p = zeros(UInt8, nprod_all)
+    skippable_p = falses(nprod_all)
     for li in 1:nlev
-        pids = matpids[li]
-        ks = mat[li]
-        for j in eachindex(pids)
-            pid = pids[j]
+        for pid in matpids[li]
             pid == 0 && continue
             why = UInt8(0)
             @inbounds for sl in prod_slots[pid]
                 why |= resid[sl]
             end
-            skip = !dynamic && why == 0
-            if skip
-                n_skip += 1
-                elems_skip += length(prod_slots[pid])
+            why_p[pid] = why
+            sk = !dynamic && why == 0
+            skippable_p[pid] = sk
+            if sk
+                n_skippable += 1
+                elems_skippable += length(prod_slots[pid])
             else
                 for k in 1:8
                     (why & _SSA_R_BITS[k]) == 0 && continue
@@ -3306,17 +3461,44 @@ function _build_oop_ssa_plan(mat_levels::Tuple, acc_kernels, acc_plans,
                     why == _SSA_R_BITS[k] && (blk_only[k] += 1)
                 end
             end
+        end
+    end
+    # `ESS_OOP_SSA_SKIP_WHOLE`: with even ONE producer still scattering, `ue`
+    # is assembled anyway and a partial skip pays for the flat buffer AND for
+    # the skipped producers' own buffers. So unless every tracked producer can
+    # go, none does.
+    all_skippable = n_skippable == length(prod_level) - 1
+    build_ok = skip_ok && !(whole_only && !all_skippable)
+    # PASS 2: the gated verdict.
+    for li in 1:nlev
+        pids = matpids[li]
+        ks = mat[li]
+        for j in eachindex(pids)
+            pid = pids[j]
+            pid == 0 && continue
+            plen = length(prod_slots[pid])
+            pid_ok = isempty(pid_list) ? true : ((pid in pid_list) != pid_neg)
+            skip = skippable_p[pid] && build_ok && pid_ok &&
+                   _ssa_skip_worth(plen, rd_el[pid], gate_maxlen, gate_minratio)
+            if skip
+                n_skip += 1
+                elems_skip += plen
+            end
+            push!(prods, _OopSSAProd(pid, li, plen, rd_n[pid], rd_el[pid],
+                                     rd_whole[pid], why_p[pid],
+                                     skippable_p[pid], skip))
             k0 = ks[j]
             ks[j] = _OopSSAKernel(pid, skip, k0.desc, k0.subs)
         end
     end
 
     stats = _OopSSAStats(n_edges, n_fast, elems_edges, elems_fast,
-                         length(prod_level) - 1, n_skip, elems_skip, dynamic,
+                         length(prod_level) - 1, n_skip, elems_skip,
+                         n_skippable, elems_skippable, dynamic,
                          n_gedges, n_gfast, elems_gedges, elems_gfast,
                          n_sedges, n_sfast, elems_sedges, elems_sfast,
                          NTuple{8,Int}(blk), NTuple{8,Int}(blk_only))
-    return _OopSSAPlan(true, length(prod_level), mat, fin, stats)
+    return _OopSSAPlan(true, length(prod_level), mat, fin, stats, prods)
 end
 
 """
@@ -3338,9 +3520,34 @@ function oop_ssa_stats(f::_OopRHS)
             n_sub_edges = s.n_sedges, n_sub_fast = s.n_sfast,
             elems_sub_edges = s.elems_sedges, elems_sub_fast = s.elems_sfast,
             n_producers = s.n_prod, n_skipped_scatters = s.n_skip,
-            elems_skipped = s.elems_skip, dynamic = s.dynamic,
+            elems_skipped = s.elems_skip,
+            n_skippable_scatters = s.n_skippable,
+            elems_skippable = s.elems_skippable,
+            n_gate_declined = s.n_skippable - s.n_skip,
+            dynamic = s.dynamic,
             blockers = NamedTuple{_SSA_R_NAMES}(s.blk),
             blockers_only = NamedTuple{_SSA_R_NAMES}(s.blk_only))
+end
+
+"""
+    oop_ssa_producers(f) -> Vector{NamedTuple}
+
+Per-producer build-time facts behind the scatter-skip GATE (ess-oop-ssa):
+each tracked fill kernel's fill `level`, its value length `len`, how many
+redirected read surfaces now source from it (`nread`) and at what element
+volume (`elread`), how many of those take its whole value with no op at all
+(`nwhole`), the residual-read reason bits that would keep its scatter alive
+(`why`, names as in `oop_ssa_stats().blockers`), whether static accounting
+alone would drop the scatter (`skippable`) and whether the gate agreed
+(`skip`). Empty when the flag was off at build time.
+"""
+function oop_ssa_producers(f::_OopRHS)
+    p = f.rhs.ssa::_OopSSAPlan
+    return [(; pid = q.pid, level = q.level, len = q.len, nread = q.nread,
+              elread = q.elread, nwhole = q.nwhole,
+              why = Tuple(_SSA_R_NAMES[k] for k in 1:8
+                          if (q.why & _SSA_R_BITS[k]) != 0),
+              skippable = q.skippable, skip = q.skip) for q in p.prods]
 end
 
 function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
