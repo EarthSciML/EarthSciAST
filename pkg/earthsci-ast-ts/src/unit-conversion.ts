@@ -57,6 +57,14 @@ interface UnitSpec {
   offset?: number
 }
 
+// The two US customary scales the table below DEFINES other entries in terms
+// of, named once so those entries cannot drift away from them: `mi` is exactly
+// 5280 ft, `short_ton` exactly 2000 lb, and `hp` exactly 550 ft*lbf/s. All
+// three products are exact in binary64, so they are bit-for-bit what
+// tests/conformance/unit_registry pins.
+const FT_IN_M = 0.3048
+const LB_IN_KG = 0.45359237
+
 /**
  * The unit registry. Every symbol the five bindings recognize, and nothing else.
  *
@@ -112,6 +120,12 @@ const UNIT_TABLE: Record<string, UnitSpec> = {
   g: { dims: { kg: 1 }, scale: 1e-3 },
   mg: { dims: { kg: 1 }, scale: 1e-6 },
   ug: { dims: { kg: 1 }, scale: 1e-9 },
+  // The international avoirdupois pound, exact by definition since 1959:
+  // 1 lb = 0.45359237 kg -- and exactly short_ton/2000, so the table held the
+  // DERIVED unit and not the one it is defined in. US emission rates are
+  // tabulated in it: MOVES's NONROAD brake-specific fuel consumption is
+  // `lb/(hp*h)` and its gasoline density constant CMFGAS is 6.237 lb/gal.
+  lb: { dims: { kg: 1 }, scale: LB_IN_KG },
   // The two tons, both spelled UNAMBIGUOUSLY and neither spelled `ton`. A bare
   // `ton` is three different masses (short 907.18474 kg, metric 1000 kg, long
   // 1016.0469088 kg), and a table whose job is to make a declared unit mean ONE
@@ -119,13 +133,7 @@ const UNIT_TABLE: Record<string, UnitSpec> = {
   // reason `d` is. `short_ton` is exactly 2000 international pounds -- what a US
   // emissions inventory means by "tons", and exactly InMAP's 907184740000
   // ug/short-ton emission-conversion constant.
-  // The international avoirdupois pound, exact by definition since 1959:
-  // 1 lb = 0.45359237 kg -- and exactly short_ton/2000, so the table held the
-  // DERIVED unit and not the one it is defined in. US emission rates are
-  // tabulated in it: MOVES's NONROAD brake-specific fuel consumption is
-  // `lb/(hp*h)` and its gasoline density constant CMFGAS is 6.237 lb/gal.
-  lb: { dims: { kg: 1 }, scale: 0.45359237 },
-  short_ton: { dims: { kg: 1 }, scale: 907.18474 },
+  short_ton: { dims: { kg: 1 }, scale: 2000 * LB_IN_KG },
   tonne: { dims: { kg: 1 }, scale: 1e3 },
 
   // ---- Length ----
@@ -139,10 +147,10 @@ const UNIT_TABLE: Record<string, UnitSpec> = {
   // Emission inventories are written in it -- the EPA FF10 point-source format
   // stores STKHGT and STKDIAM in feet -- and a format for air-quality models
   // that cannot spell the unit its own input files use forces every such column
-  // to be declared in a unit it is not stored in. `ft` is the ONLY imperial
-  // length in the table; `in`, `yd` and `mi` are absent because nothing in the
-  // corpus declares them.
-  ft: { dims: { m: 1 }, scale: 0.3048 },
+  // to be declared in a unit it is not stored in. It has no long-form alias:
+  // `foot`/`feet` are pinned as REJECTS by tests/conformance/unit_registry, so
+  // the imperial family is symbol-only.
+  ft: { dims: { m: 1 }, scale: FT_IN_M },
   // The international mile, exact by definition since the same 1959 agreement:
   // 1 mi = 5280 ft = 1609.344 m. The US onroad transportation inventory is
   // written in it end to end -- EPA MOVES stores `link.linkLength` in miles,
@@ -150,7 +158,7 @@ const UNIT_TABLE: Record<string, UnitSpec> = {
   // vehicle-MILES travelled -- so a table with `ft` and not `mi` could spell a
   // stack height and not a road. `mi/h` composes; `mph` is deliberately not a
   // name, and neither are `in` and `yd`, which no corpus column uses.
-  mi: { dims: { m: 1 }, scale: 1609.344 },
+  mi: { dims: { m: 1 }, scale: 5280 * FT_IN_M },
 
   // ---- Time ----
   ms: { dims: { s: 1 }, scale: 1e-3 },
@@ -200,12 +208,13 @@ const UNIT_TABLE: Record<string, UnitSpec> = {
   MW: { dims: { kg: 1, m: 2, s: -3 }, scale: 1e6 },
   // Mechanical (imperial) horsepower -- 550 ft*lbf/s = 745.6998715822702 W
   // (NIST SP 811 App. B gives 7.456 999 E+02 W). Written as the ft*lbf/s
-  // product of this table's own ft and lb and standard gravity so it cannot
-  // drift away from them, and NOT the metric horsepower (PS, 735.49875 W).
+  // product of the two scales `ft` and `lb` are themselves defined by, so it
+  // cannot drift away from them, and NOT the metric horsepower (PS,
+  // 735.49875 W).
   // Engine ratings are the axis MOVES's NONROAD model bins on:
   // `nrsourceusetype.hpAvg` is horsepower and every `nremissionrate` row is
   // `g/(hp*h)`.
-  hp: { dims: { kg: 1, m: 2, s: -3 }, scale: 550 * 0.3048 * 0.45359237 * 9.80665 },
+  hp: { dims: { kg: 1, m: 2, s: -3 }, scale: 550 * FT_IN_M * LB_IN_KG * 9.80665 },
 
   // ---- Pressure ----
   atm: { dims: { kg: 1, m: -1, s: -2 }, scale: 101325 },

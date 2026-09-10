@@ -1774,18 +1774,20 @@ fn build_base_units() -> HashMap<String, Unit> {
     units.insert("W".to_string(), watt.clone());
 
     // Mechanical (imperial) horsepower — 550 ft·lbf/s, which is
-    // 745.699 871 582 270 2 W: NIST SP 811 App. B gives 7.456 999 E+02 W. It is
-    // built from the foot, the pound and standard gravity already implied by
-    // the entries above rather than typed as an independent literal, so it
-    // cannot drift away from them. NOT the metric horsepower (PS, 735.49875 W),
-    // which is a different unit by 1.4%.
+    // 745.699 871 582 270 2 W: NIST SP 811 App. B gives 7.456 999 E+02 W. The
+    // foot and the pound are READ BACK OUT of the table rather than retyped as
+    // literals here, so this entry cannot drift away from the two entries that
+    // define it. NOT the metric horsepower (PS, 735.49875 W), which is a
+    // different unit by 1.4%.
     //
     // Engine ratings are the axis MOVES's NONROAD model bins on:
     // `nrsourceusetype.hpAvg` is horsepower and every `nremissionrate` row is
     // `g/(hp*h)`, so without this entry the rate tables that ARE the model have
     // no honest declaration.
+    let foot = units["ft"].scale;
+    let pound = units["lb"].scale;
     let mut horsepower = watt.clone();
-    horsepower.scale *= 550.0 * 0.3048 * 0.45359237 * 9.80665;
+    horsepower.scale *= 550.0 * foot * pound * 9.80665;
     units.insert("hp".to_string(), horsepower);
 
     // Electromagnetic family, all derived from the ampere.
@@ -2190,24 +2192,36 @@ mod tests {
     /// the point of adding the BASE units rather than the compounds.
     #[test]
     fn test_moves_compounds_derive() {
-        assert!(parse_unit("mi/h")
-            .unwrap()
-            .is_compatible(&parse_unit("m/s").unwrap()));
-        assert!(parse_unit("g/(hp*h)")
-            .unwrap()
-            .is_compatible(&parse_unit("kg/J").unwrap()));
-        assert!(parse_unit("lb/(hp*h)")
-            .unwrap()
-            .is_compatible(&parse_unit("kg/J").unwrap()));
-        assert!(parse_unit("g/gal")
-            .unwrap()
-            .is_compatible(&parse_unit("kg/m^3").unwrap()));
-        assert!(parse_unit("g/mi")
-            .unwrap()
-            .is_compatible(&parse_unit("kg/m").unwrap()));
-        assert!(parse_unit("kJ/gal")
-            .unwrap()
-            .is_compatible(&parse_unit("J/m^3").unwrap()));
+        assert!(
+            parse_unit("mi/h")
+                .unwrap()
+                .is_compatible(&parse_unit("m/s").unwrap())
+        );
+        assert!(
+            parse_unit("g/(hp*h)")
+                .unwrap()
+                .is_compatible(&parse_unit("kg/J").unwrap())
+        );
+        assert!(
+            parse_unit("lb/(hp*h)")
+                .unwrap()
+                .is_compatible(&parse_unit("kg/J").unwrap())
+        );
+        assert!(
+            parse_unit("g/gal")
+                .unwrap()
+                .is_compatible(&parse_unit("kg/m^3").unwrap())
+        );
+        assert!(
+            parse_unit("g/mi")
+                .unwrap()
+                .is_compatible(&parse_unit("kg/m").unwrap())
+        );
+        assert!(
+            parse_unit("kJ/gal")
+                .unwrap()
+                .is_compatible(&parse_unit("J/m^3").unwrap())
+        );
     }
 
     /// SI prefixes resolve against the prefixable symbols — which is what makes

@@ -303,6 +303,12 @@ func buildUnitRegistry() map[string]Unit {
 	r["g"] = Unit{Dim: r["kg"].Dim, Scale: 1e-3}
 	r["mg"] = Unit{Dim: r["kg"].Dim, Scale: 1e-6}
 	r["ug"] = Unit{Dim: r["kg"].Dim, Scale: 1e-9}
+	// The international avoirdupois pound, exact by definition since 1959:
+	// 1 lb = 0.45359237 kg -- and exactly short_ton/2000, so the table held the
+	// DERIVED unit and not the one it is defined in. US emission rates are
+	// tabulated in it: MOVES's NONROAD brake-specific fuel consumption is
+	// lb/(hp*h) and its gasoline density constant CMFGAS is 6.237 lb/gal.
+	r["lb"] = Unit{Dim: r["kg"].Dim, Scale: 0.45359237}
 	// The two tons, both spelled UNAMBIGUOUSLY and neither spelled "ton". A bare
 	// "ton" is three different masses (short 907.18474 kg, metric 1000 kg, long
 	// 1016.0469088 kg), and a table whose job is to make a declared unit mean
@@ -310,12 +316,6 @@ func buildUnitRegistry() map[string]Unit {
 	// same reason "d" is. short_ton is exactly 2000 international pounds --
 	// what a US emissions inventory means by "tons", and exactly InMAP's
 	// 907184740000 ug/short-ton emission-conversion constant.
-	// The international avoirdupois pound, exact by definition since 1959:
-	// 1 lb = 0.45359237 kg -- and exactly short_ton/2000, so the table held the
-	// DERIVED unit and not the one it is defined in. US emission rates are
-	// tabulated in it: MOVES's NONROAD brake-specific fuel consumption is
-	// lb/(hp*h) and its gasoline density constant CMFGAS is 6.237 lb/gal.
-	r["lb"] = Unit{Dim: r["kg"].Dim, Scale: 0.45359237}
 	r["short_ton"] = Unit{Dim: r["kg"].Dim, Scale: 907.18474}
 	r["tonne"] = Unit{Dim: r["kg"].Dim, Scale: 1e3}
 
@@ -330,9 +330,9 @@ func buildUnitRegistry() map[string]Unit {
 	// Emission inventories are written in it -- the EPA FF10 point-source format
 	// stores STKHGT and STKDIAM in feet -- and a format for air-quality models
 	// that cannot spell the unit its own input files use forces every such
-	// column to be declared in a unit it is not stored in. "ft" is the ONLY
-	// imperial length in the table; "in", "yd" and "mi" are absent because
-	// nothing in the corpus declares them.
+	// column to be declared in a unit it is not stored in. It has no long-form
+	// alias: "foot"/"feet" are pinned as REJECTS by
+	// tests/conformance/unit_registry, so the imperial family is symbol-only.
 	r["ft"] = Unit{Dim: r["m"].Dim, Scale: 0.3048}
 	// The international mile, exact by definition since the same 1959
 	// agreement: 1 mi = 5280 ft = 1609.344 m. The US onroad transportation
@@ -419,13 +419,14 @@ func buildUnitRegistry() map[string]Unit {
 	r["kW"] = Unit{Dim: r["W"].Dim, Scale: 1000}
 	r["MW"] = Unit{Dim: r["W"].Dim, Scale: 1e6}
 	// Mechanical (imperial) horsepower -- 550 ft*lbf/s = 745.6998715822702 W
-	// (NIST SP 811 App. B gives 7.456 999 E+02 W). Written as the ft*lbf/s
-	// product of this table's own ft and lb and standard gravity so it cannot
-	// drift away from them, and NOT the metric horsepower (PS, 735.49875 W).
+	// (NIST SP 811 App. B gives 7.456 999 E+02 W). The foot and the pound are
+	// READ BACK OUT of the table rather than retyped as literals here, so this
+	// entry cannot drift away from the two entries that define it. NOT the
+	// metric horsepower (PS, 735.49875 W).
 	// Engine ratings are the axis MOVES's NONROAD model bins on:
 	// nrsourceusetype.hpAvg is horsepower and every nremissionrate row is
 	// g/(hp*h).
-	r["hp"] = Unit{Dim: r["W"].Dim, Scale: 550 * 0.3048 * 0.45359237 * 9.80665}
+	r["hp"] = Unit{Dim: r["W"].Dim, Scale: 550 * r["ft"].Scale * r["lb"].Scale * 9.80665}
 
 	// Electromagnetic derived units.
 	//

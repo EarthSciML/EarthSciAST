@@ -67,11 +67,12 @@ Unitful.@unit _u_ft "ft" InternationalFoot 0.3048 * Unitful.u"m" false
 # 1 mi = 5280 ft = 1609.344 m. The US onroad transportation inventory is written
 # in it end to end — EPA MOVES stores `link.linkLength` in miles,
 # `link.linkAvgSpeed` in `mi/h`, and its whole activity model is built on
-# vehicle-MILES travelled. Spelled out here rather than taken from Unitful for
-# the same reason `ft` is. `mi/h` composes from this and `hr`; `mph` is
-# deliberately not a name, and neither are `in` and `yd`, which no corpus
-# column uses.
-Unitful.@unit _u_mi "mi" InternationalMile 1609.344 * Unitful.u"m" false
+# vehicle-MILES travelled. Written as `5280 * _u_ft` — the entry ABOVE, not
+# Unitful's own `mi` and not a retyped 1609.344 — so the two cannot drift
+# apart; 5280 × 0.3048 is 1609.344 with no rounding in binary64. `mi/h`
+# composes from this and `hr`; `mph` is deliberately not a name, and neither
+# are `in` and `yd`, which no corpus column uses.
+Unitful.@unit _u_mi "mi" InternationalMile 5280 * _u_ft false
 
 # The international avoirdupois pound, exact by definition since 1959:
 # 1 lb = 0.45359237 kg — and exactly `short_ton` / 2000, so the registry held
@@ -82,12 +83,16 @@ Unitful.@unit _u_lb "lb" AvoirdupoisPound 0.45359237 * Unitful.u"kg" false
 
 # Mechanical (imperial) horsepower — 550 ft*lbf/s = 745.6998715822702 W
 # (NIST SP 811 App. B gives 7.456 999 E+02 W). Written as the ft*lbf/s product
-# of this file's OWN `ft` and `lb` and standard gravity, so it cannot drift away
-# from them, and emphatically NOT the metric horsepower (PS, 735.49875 W).
+# of the `_u_ft` and `_u_lb` DEFINED ABOVE and standard gravity — not as a
+# retyped literal — so it cannot drift away from the two entries that define
+# it, and emphatically NOT the metric horsepower (PS, 735.49875 W). `lbf` is
+# `lb` × g0, hence the m/s^2 that turns ft*lb into ft*lbf and the third second
+# that turns ft*lbf into a power. Unitful folds the product left to right, so
+# the basefactor is the same bits the other four bindings compute.
 # Engine ratings are the axis MOVES's NONROAD model bins on:
 # `nrsourceusetype.hpAvg` is horsepower and every `nremissionrate` row is
 # `g/(hp*h)`.
-Unitful.@unit _u_hp "hp" MechanicalHorsepower (550 * 0.3048 * 0.45359237 * 9.80665) * Unitful.u"W" false
+Unitful.@unit _u_hp "hp" MechanicalHorsepower 550 * _u_ft * _u_lb * 9.80665 * Unitful.u"m" / Unitful.u"s"^3 false
 
 # The US liquid gallon, exact by definition: 231 in^3 = 3.785411784 L
 # (NIST SP 811 App. B) — NOT the imperial gallon, which is 20% larger and which
@@ -108,12 +113,13 @@ Unitful.@unit _u_inHg "inHg" InchOfMercury 3386.388640341 * Unitful.u"Pa" false
 # thing cannot hold a name that means three. `t` is excluded for the same reason
 # `d` is: a one-letter mass symbol reads as tera- to half its readers.
 #
-# `short_ton` is exactly 2000 international pounds (2000 × 0.45359237 kg) —
-# what a US emissions inventory means by "tons", and exactly InMAP's
-# 907184740000 µg/short-ton emission-conversion constant. `tonne` is the metric
-# ton, so that choosing between them is something a document DOES rather than
-# something it cannot express.
-Unitful.@unit _u_short_ton "short_ton" ShortTon 907.18474 * Unitful.u"kg" false
+# `short_ton` is exactly 2000 international pounds, so it is written as
+# `2000 * _u_lb` rather than as 907.18474: it is what a US emissions inventory
+# means by "tons", and exactly InMAP's 907184740000 µg/short-ton
+# emission-conversion constant. `tonne` is the metric ton, so that choosing
+# between them is something a document DOES rather than something it cannot
+# express.
+Unitful.@unit _u_short_ton "short_ton" ShortTon 2000 * _u_lb false
 Unitful.@unit _u_tonne "tonne" MetricTon 1000 * Unitful.u"kg" false
 
 # The flat table, grouped exactly as esm-spec §4.8.1 lists it.

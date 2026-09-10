@@ -94,7 +94,7 @@ _CONTRACT_DEFINITIONS: tuple[str, ...] = (
     #   * `tonne` — the metric ton, 1000 kg, which is what the rest of the world
     #     means. Present so that the disambiguation is a CHOICE a document makes
     #     rather than a unit it cannot express.
-    "short_ton = 907.18474 kg",
+    "short_ton = 2000 lb",
     "tonne = 1e3 kg",
     # --- length -------------------------------------------------------------
     "dm = 1e-1 m",
@@ -164,11 +164,15 @@ _CONTRACT_DEFINITIONS: tuple[str, ...] = (
     "kW = 1e3 W",
     "MW = 1e6 W",
     # Mechanical (imperial) horsepower — 550 ft*lbf/s = 745.6998715822702 W
-    # (NIST SP 811 App. B gives 7.456 999 E+02 W). NOT the metric horsepower
+    # (NIST SP 811 App. B gives 7.456 999 E+02 W). Written as the ft*lbf/s
+    # product of this table's OWN `ft` and `lb` and standard gravity rather than
+    # as an opaque literal, so it cannot drift away from the two entries that
+    # define it; pint evaluates the product left to right, so the result is the
+    # same bits the other four bindings compute. NOT the metric horsepower
     # (PS, 735.49875 W), which is a different unit by 1.4%. Engine ratings are
     # the axis MOVES's NONROAD model bins on: `nrsourceusetype.hpAvg` is
     # horsepower and every `nremissionrate` row is `g/(hp*h)`.
-    "hp = 745.6998715822702 W",
+    "hp = 550 * ft * lb * 9.80665 * m / s ** 3",
     # --- pressure -----------------------------------------------------------
     "atm = 101325 Pa",
     "bar = 1e5 Pa",
