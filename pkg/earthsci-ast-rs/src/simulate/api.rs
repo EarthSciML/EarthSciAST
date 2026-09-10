@@ -382,10 +382,10 @@ impl Solution {
         // renaming match DELETED (issue #230): the quantity MOVED to the
         // survivor's row rather than never existing. Consulted only after the
         // exact match, so the map can never shadow a live row.
-        if let Some(survivor) = self.metadata.merged_variable_renames.get(name) {
-            if let Some(i) = self.state_variable_names.iter().position(|n| n == survivor) {
-                return Some(&self.state[i]);
-            }
+        if let Some(survivor) = self.metadata.merged_variable_renames.get(name)
+            && let Some(i) = self.state_variable_names.iter().position(|n| n == survivor)
+        {
+            return Some(&self.state[i]);
         }
         if name.contains('.') {
             return None;

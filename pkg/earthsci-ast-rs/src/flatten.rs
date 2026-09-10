@@ -712,8 +712,11 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
 
     // Phase 3: apply coupling rules, collecting rule descriptions and the
     // document-wide map of the state names the merges DELETED (issue #230).
-    let (coupling_rules_applied, merged_variable_renames, coupling_rewritten_names) =
-        apply_coupling_entries(file, &mut per_system)?;
+    let CouplingOutcome {
+        rules_applied: coupling_rules_applied,
+        merged_variable_renames,
+        coupling_rewritten_names,
+    } = apply_coupling_entries(file, &mut per_system)?;
 
     // Phase 4: conflict detection after coupling.
     detect_conflicts(file, &per_system)?;
@@ -1398,10 +1401,27 @@ fn collect_component_systems(
 /// order (`operator_compose`, `couple`, `variable_map` — §4.7.1–§4.7.4),
 /// mutating the per-system blocks. Returns the human-readable descriptions of
 /// the rules applied, in order, for [`FlattenMetadata`].
+/// What [`apply_coupling_entries`] hands back: three parallel results of the one
+/// pass, named rather than positional so the call site cannot transpose the two
+/// name collections — they are both string collections keyed on the same
+/// vocabulary and mean quite different things.
+struct CouplingOutcome {
+    /// Human-readable descriptions of the rules applied, in order.
+    rules_applied: Vec<String>,
+    /// Every state spelling an `operator_compose` renaming match DELETED,
+    /// mapped onto the survivor it was folded into (issue #230). A CONSUMER
+    /// map: it says where a name went.
+    merged_variable_renames: IndexMap<String, String>,
+    /// Every name a coupling rule rewrote OUT of the equations, for the
+    /// registry guard alone. Not a consumer map: it says a name is GONE, not
+    /// where it went.
+    coupling_rewritten_names: BTreeSet<String>,
+}
+
 fn apply_coupling_entries(
     file: &EsmFile,
     per_system: &mut Vec<SystemBlock>,
-) -> Result<(Vec<String>, IndexMap<String, String>, BTreeSet<String>), FlattenError> {
+) -> Result<CouplingOutcome, FlattenError> {
     let mut coupling_rules_applied = Vec::new();
     // Every name a coupling rule rewrote OUT of the equations, for the registry
     // guard alone (see [`FlattenMetadata::coupling_rewritten_names`]). Julia
@@ -1414,11 +1434,11 @@ fn apply_coupling_entries(
     // spelling resolves to the survivor instead of dangling.
     let mut merged_renames: IndexMap<String, String> = IndexMap::new();
     let Some(entries) = &file.coupling else {
-        return Ok((
-            coupling_rules_applied,
-            merged_renames,
+        return Ok(CouplingOutcome {
+            rules_applied: coupling_rules_applied,
+            merged_variable_renames: merged_renames,
             coupling_rewritten_names,
-        ));
+        });
     };
 
     // BY KIND, not by array position. §4.7.1 runs before §4.7.2 and §4.7.3 so
@@ -1461,11 +1481,11 @@ fn apply_coupling_entries(
     // NAMED `variable_map` transform does to its `to` (Julia's
     // `union!(map_rewritten_names, keys(merged_renames))`).
     coupling_rewritten_names.extend(merged_renames.keys().cloned());
-    Ok((
-        coupling_rules_applied,
-        merged_renames,
+    Ok(CouplingOutcome {
+        rules_applied: coupling_rules_applied,
+        merged_variable_renames: merged_renames,
         coupling_rewritten_names,
-    ))
+    })
 }
 
 /// Fold a merge's fresh rename map into the running document-wide one.
@@ -1535,15 +1555,15 @@ fn retarget_connector<'a>(
             // the equation-AST retarget never saw it either. `rename_names`
             // rather than `substitute`, so a `join` inside it gets the same
             // plain-string coverage every other retarget site does.
-            if let Some(raw) = obj.get("expression") {
-                if let Ok(expr) = serde_json::from_value::<Expr>(raw.clone()) {
-                    let rewritten = rename_names(&expr, &subs, renames);
-                    if rewritten != expr {
-                        if let Ok(v) = serde_json::to_value(&rewritten) {
-                            obj.insert("expression".to_string(), v);
-                            changed = true;
-                        }
-                    }
+            if let Some(raw) = obj.get("expression")
+                && let Ok(expr) = serde_json::from_value::<Expr>(raw.clone())
+            {
+                let rewritten = rename_names(&expr, &subs, renames);
+                if rewritten != expr
+                    && let Ok(v) = serde_json::to_value(&rewritten)
+                {
+                    obj.insert("expression".to_string(), v);
+                    changed = true;
                 }
             }
         }
