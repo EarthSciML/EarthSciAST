@@ -2939,9 +2939,9 @@ _oop_ssa_pgather_enabled() = get(ENV, "ESS_OOP_SSA_PGATHER", "1") != "0"
 #                                 volume is >= x times its own block size
 #                                 (`0` ⇒ no bound)
 #
-# Both bounds default to the measured gate; `ESS_OOP_SSA_SKIP_GATE=0` restores
-# the ungated behaviour (every statically skippable scatter skipped), which is
-# what #283 shipped and what the engagement tests A/B against.
+# `ESS_OOP_SSA_SKIP_GATE=0` releases both bounds AND the whole-buffer gate
+# together, so every statically skippable scatter is skipped -- the ungated
+# behaviour the engagement tests A/B against.
 _oop_ssa_skip_enabled() = get(ENV, "ESS_OOP_SSA_SKIP", "1") != "0"
 _oop_ssa_skip_gated()   = get(ENV, "ESS_OOP_SSA_SKIP_GATE", "1") != "0"
 # Both PER-PRODUCER bounds are released by default: the measured
