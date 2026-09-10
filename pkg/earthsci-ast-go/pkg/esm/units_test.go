@@ -155,6 +155,93 @@ func TestParseUnitDimensionalEquality(t *testing.T) {
 	}
 }
 
+// The US customary family, all four EXACT by definition and all four asserted
+// against a table entry they are defined in terms of rather than against an
+// independently typed literal -- so none of them can drift. Their SCALES are
+// the contract, not just their dimensions: mechanical and metric horsepower
+// share a dimension and are 1.4% apart, as do the US and imperial gallons at
+// 20%, and a dimension-only check cannot tell either pair apart.
+//
+// They are here because EPA MOVES is written in them: link.linkLength in
+// miles, link.linkAvgSpeed in mi/h, nrsourceusetype.hpAvg in horsepower, every
+// nremissionrate row in g/(hp*h), fueltype.fuelDensity in g/gal, and
+// brake-specific fuel consumption in lb/(hp*h).
+func TestParseUnitUSCustomary(t *testing.T) {
+	ft, _ := ParseUnit("ft")
+	mi, err := ParseUnit("mi")
+	if err != nil {
+		t.Fatalf("ParseUnit(\"mi\"): %v", err)
+	}
+	if !mi.Dim.Equal(ft.Dim) {
+		t.Errorf("mi must carry the length dimension, got %v", mi.Dim)
+	}
+	if mi.Scale != 5280*ft.Scale {
+		t.Errorf("mi = %v, want EXACTLY 5280 ft = %v", mi.Scale, 5280*ft.Scale)
+	}
+	if mi.Scale != 1609.344 {
+		t.Errorf("the international mile is 1609.344 m, got %v", mi.Scale)
+	}
+
+	lb, err := ParseUnit("lb")
+	if err != nil {
+		t.Fatalf("ParseUnit(\"lb\"): %v", err)
+	}
+	st, _ := ParseUnit("short_ton")
+	if st.Scale != 2000*lb.Scale {
+		t.Errorf("short_ton is DEFINED as 2000 lb: %v vs %v", st.Scale, 2000*lb.Scale)
+	}
+
+	hp, err := ParseUnit("hp")
+	if err != nil {
+		t.Fatalf("ParseUnit(\"hp\"): %v", err)
+	}
+	w, _ := ParseUnit("W")
+	if !hp.Dim.Equal(w.Dim) {
+		t.Errorf("hp must carry the power dimension, got %v", hp.Dim)
+	}
+	if hp.Scale != 550*ft.Scale*lb.Scale*9.80665 {
+		t.Errorf("hp must be exactly 550 ft*lbf/s, got %v", hp.Scale)
+	}
+	if math.Abs(hp.Scale-735.49875) < 1 {
+		t.Errorf("hp must be MECHANICAL horsepower, not metric (PS): %v", hp.Scale)
+	}
+
+	gal, err := ParseUnit("gal")
+	if err != nil {
+		t.Fatalf("ParseUnit(\"gal\"): %v", err)
+	}
+	l, _ := ParseUnit("L")
+	if !gal.Dim.Equal(l.Dim) {
+		t.Errorf("gal must be a volume, got %v", gal.Dim)
+	}
+	if math.Abs(gal.Scale/l.Scale-3.785411784) > 1e-12 {
+		t.Errorf("gal must be the US LIQUID gallon, 3.785411784 L, got %v L", gal.Scale/l.Scale)
+	}
+
+	// The compounds these exist to make spellable. None is a table entry --
+	// they fall out of the grammar, which is why the BASE units were added and
+	// not the compounds.
+	mph, _ := ParseUnit("mi/h")
+	if mph.Scale != 0.44704 {
+		t.Errorf("1 mi/h is exactly 0.44704 m/s (MOVES's own constant), got %v", mph.Scale)
+	}
+	for _, c := range []string{"g/(hp*h)", "lb/(hp*h)", "g/gal", "g/mi", "kJ/gal"} {
+		if _, err := ParseUnit(c); err != nil {
+			t.Errorf("ParseUnit(%q): %v", c, err)
+		}
+	}
+
+	// The deliberate absences. `mph` is a fused spelling of a compound the
+	// grammar already builds; `in` and `yd` have no corpus user; `hp-hr` is
+	// MOVES's OWN spelling of horsepower-hour and is unparseable because `-`
+	// is not an operator.
+	for _, c := range []string{"mph", "in", "yd", "miles", "hp-hr"} {
+		if _, err := ParseUnit(c); err == nil {
+			t.Errorf("ParseUnit(%q) must NOT resolve", c)
+		}
+	}
+}
+
 func TestParseUnitErrors(t *testing.T) {
 	for _, s := range []string{"wibble", "m/", "m^", "m^abc", "(m", "m)"} {
 		if _, err := ParseUnit(s); err == nil {
