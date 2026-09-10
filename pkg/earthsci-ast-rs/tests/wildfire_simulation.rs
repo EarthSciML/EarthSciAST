@@ -24,7 +24,9 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use earthsci_ast::Solution;
-use earthsci_ast::{Alg, EsmFile, Model, ModelTest, SolveOptions};
+use earthsci_ast::{
+    Alg, EsmFile, Model, ModelTest, SolveOptions, check_assertion, resolve_tolerance,
+};
 use std::collections::HashMap;
 
 mod common;
@@ -110,12 +112,21 @@ fn wildfire_ocean_inline_tests() {
         let sol = run(&file, test);
         for a in &test.assertions {
             let actual = lookup(&sol, &a.variable, a.time);
-            let abs = a.tolerance.as_ref().and_then(|t| t.abs).unwrap_or(0.0);
-            let rel = a.tolerance.as_ref().and_then(|t| t.rel).unwrap_or(1e-6);
-            let tol = abs + rel * a.expected.abs();
+            // esm-spec §6.6.4 then §6.6.3, both through the binding's own
+            // functions. This used to resolve `rel` from the assertion alone
+            // (defaulting to 1e-6 even when the assertion declared `abs` only,
+            // which is every assertion in this fixture) and then compare against
+            // `abs + rel*|expected|` — numpy `isclose`'s SUM, strictly wider
+            // than the `max` §6.6.3 takes. Together those made the t=3600
+            // assertions' declared `abs: 1e-6` bound worth 2.9e-4.
+            let (rel, abs) = resolve_tolerance(
+                ocean.tolerance.as_ref(),
+                test.tolerance.as_ref(),
+                a.tolerance.as_ref(),
+            );
             assert!(
-                (actual - a.expected).abs() <= tol,
-                "[{}] {} @ t={}: got {actual}, expected {} (tol {tol})",
+                check_assertion(actual, a.expected, rel, abs),
+                "[{}] {} @ t={}: got {actual}, expected {} (rel={rel}, abs={abs})",
                 test.id,
                 a.variable,
                 a.time,

@@ -26,6 +26,7 @@ from .flatten import (
     FlattenedSystem,
     UnsupportedDimensionalityError,
     _expand_range,
+    _integrated_state_names,
     flatten,
     infer_variable_shapes,
 )
@@ -2308,7 +2309,7 @@ def _build_numpy_rhs(
     # Value-invention states (broad-phase bins / candidate-set membership) are
     # materialized at setup and DROPPED from the ODE (RFC §5.3 / §6.1).
     vi_var_names, bin_specs = _detect_value_invention_states(flat)
-    state_names = [n for n in flat.state_variables.keys() if n not in vi_var_names]
+    state_names = [n for n in _integrated_state_names(flat) if n not in vi_var_names]
     observed_names: set[str] = set(flat.observed_variables.keys())
     # Keep the CALLER's dict identity (when given): the pushdown hooks below
     # merge derived member-factor / gated-fetch arrays into this registry, and

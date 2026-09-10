@@ -30,6 +30,7 @@ import pytest
 from conftest import INVALID_DIR, VALID_DIR
 
 from earthsci_ast.parse import load_path
+from earthsci_ast.inline_tests import _check_assertion
 from earthsci_ast.reference_resolution import (
     E_REF_UNDECLARED_INDEX_SET,
     ReferenceResolutionError,
@@ -93,15 +94,13 @@ def _lookup_element(
 
 
 def _assertion_passes(actual: float, expected: float, rel: float, ab: float) -> bool:
-    diff = abs(actual - expected)
-    if ab > 0 and diff <= ab:
-        return True
-    if rel > 0:
-        if diff / max(abs(expected), 1e-12) <= rel:
-            return True
-    if ab == 0 and rel == 0:
-        return diff == 0.0
-    return False
+    """esm-spec §6.6.3, through the binding's OWN predicate — the function
+    ``run_pde_tests`` calls. The hand-rolled body this replaces scaled the
+    relative bound by ``|expected|`` alone rather than
+    ``max(|actual|, |expected|)``, floored that scale at 1e-12 (§6.6.3 forbids
+    a floor), and had no finiteness guard, so a ±inf actual satisfied it
+    vacuously for every expectation."""
+    return _check_assertion(actual, expected, rel, ab)
 
 
 def test_at_least_four_worked_examples() -> None:

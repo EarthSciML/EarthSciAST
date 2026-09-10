@@ -19,6 +19,7 @@ import pytest
 from conftest import CONFORMANCE_DIR, REPO_ROOT, VALID_DIR
 
 from earthsci_ast import classification as C
+from earthsci_ast.flatten import flatten
 from earthsci_ast.parse import load_document
 
 #: The categories this adapter drives. ``classification_indexed_lhs`` carries the
@@ -103,6 +104,26 @@ def test_classification_matches_the_golden(case):
             if key not in want:
                 continue
             assert got[key] == want[key], f"{name}.{key}: got {got[key]!r}, want {want[key]!r}"
+
+
+def test_flatten_buckets_match_the_golden(case):
+    """esm-libraries-spec §4.7.5 step 4's buckets, where the golden pins them.
+
+    The §6.3.1 classification above says which unknown is observed; this says
+    which flattened MAP it lands in, and the two are not the same question. An
+    arrayed observed is in `observed_variables` (an equation defines it) AND in
+    `state_variables` (it materializes into a buffer the solver allocates), so
+    the maps are not a partition — issue #270.
+    """
+    entry, doc, golden = case
+    want = golden.get("flatten_buckets")
+    if want is None:
+        pytest.skip("this golden does not pin the flatten buckets")
+
+    flat = flatten(load_document(doc))
+    assert list(flat.state_variables) == want["state_variables"]
+    assert list(flat.observed_variables) == want["observed_variables"]
+    assert list(flat.algebraic_variables) == want["algebraic_variables"]
 
 
 def test_the_sets_partition(case):

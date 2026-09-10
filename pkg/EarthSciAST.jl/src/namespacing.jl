@@ -236,19 +236,28 @@ function _collect_model!(states::OrderedDict{String, ModelVariable},
     # variable references are namespaced.
 
     # Which bucket each variable lands in is DERIVED, not declared (esm-spec
-    # §6.3.1): an unknown defined by a bare-variable LHS is observed and
-    # everything else the solver solves for is a state, while every parameter —
-    # constant, sampled, or discrete-cadence — partitions with the parameters,
-    # because a parameter is never differentiated. A discrete-cadence one is the
-    # forcing buffer the update machinery writes; its `update` block travels
-    # with it, so `flattened_to_esm` re-emits it losslessly.
+    # §6.3.1), and the two unknown buckets are NOT a partition
+    # (esm-libraries-spec §4.7.5 step 4): `observed_variables` is the
+    # classification — every unknown an equation DEFINES, at either LHS
+    # spelling — while `state_variables` is the solved-for vector. So an ODE
+    # state and an algebraic unknown are states alone; an INLINEABLE observed
+    # (the strict bare-variable LHS) is eliminated by substitution and is an
+    # observed alone; and an ARRAYED definition (`y[i] ~ f(…)`) is BOTH,
+    # because it materializes into a buffer the solver must allocate.
+    # Every parameter — constant, sampled, or discrete-cadence — partitions with
+    # the parameters, because a parameter is never differentiated. A
+    # discrete-cadence one is the forcing buffer the update machinery writes;
+    # its `update` block travels with it, so `flattened_to_esm` re-emits it
+    # losslessly.
     _observed_here = Set(observed_unknowns(model))
+    _inlineable_here = _inlineable_observed_unknowns(model)
     for (name, var) in model.variables
         namespaced = "$(prefix).$(name)"
         v = _namespace_variable_update(var, _ns)
         if v.type == ParameterVariable
             params[namespaced] = v
         elseif name in _observed_here
+            name in _inlineable_here || (states[namespaced] = v)
             observeds[namespaced] = v
         else
             states[namespaced] = v

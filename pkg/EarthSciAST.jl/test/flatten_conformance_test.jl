@@ -175,16 +175,15 @@ the transport term, and the equation ORDER agrees.)
   stays bare; the oracle prefixes it to `EmissionSources.NO`, a name that is in no
   variable map either. The fixture is under-specified and neither answer is
   usable — worth a fixture fix rather than a binding change.
-* `state_variables` / `observed_variables` on `edge_enumeration_area_eff` — the
-  fixture defines `edge_exists[edge] ~ …` and `edge_dense_id[e] ~ …`, indexed-LHS
-  definitions, which esm-spec §6.3.1 makes OBSERVED unknowns ("the variable an
-  `index` node indexes is the variable that LHS defines"). Julia puts them in
-  `observed_variables`; the oracle puts them in `state_variables` and records
-  `observed_variables == []`. The §4.7.5 step-4 table says BOTH — an arrayed
-  observed is observed AND materializes into the solved-for vector — so this is
-  the one case that could pin that rule and the corpus cannot, because the oracle
-  does not implement the observed half. Neither binding implements the table's
-  full reading today.
+(RESOLVED 2026-09-09, issue #270: `state_variables` / `observed_variables` on
+`edge_enumeration_area_eff`. The fixture defines `edge_exists[edge] ~ …` and
+`edge_dense_id[e] ~ …`, indexed-LHS definitions, which esm-spec §6.3.1 makes
+OBSERVED unknowns ("the variable an `index` node indexes is the variable that LHS
+defines"). Julia used to put them in `observed_variables` alone and the oracle in
+`state_variables` alone — two opposite halves of the §4.7.5 step-4 table, which
+says BOTH: an arrayed observed is observed AND materializes into the solved-for
+vector. All five bindings now implement the full reading, so the case is compared
+in full and this is the corpus's pin for the rule.)
 * `equations` on the reaction-lowering cases — a stoichiometric coefficient of
   −1 renders as `-1 * rate` in the oracle and `-rate` (or an infix `a - b`) in
   Julia. Semantically identical, textually different; a `to_ascii`-level
@@ -257,7 +256,7 @@ refusal must not lose the diagnostic.)
 const _FC_DIVERGENCES = Dict{String,Vector{String}}(
     "full_coupled" => ["equations"],
     "complete_coupling_types" => ["equations"],
-    "edge_enumeration_area_eff" => ["state_variables", "observed_variables", "equations"],
+    "edge_enumeration_area_eff" => ["equations"],
     "expression_templates_arrhenius" => ["equations"],
     "autocatalytic_reaction" => ["equations"],
     "advection_reaction_loaded_ic_bc" => ["equations"],
@@ -313,7 +312,19 @@ function _fc_variable(name::AbstractString, v::ModelVariable, role::AbstractStri
     )
 end
 
-_fc_variable_map(m, role) = [_fc_variable(k, v, role) for (k, v) in m]
+"""
+Every entry of one flattened map, in the corpus's record shape.
+
+`role` is the §6.3.1 CLASSIFICATION, not the map's name: esm-libraries-spec
+§4.7.5 step 4 files a materialized arrayed observed in `state_variables` as well
+as `observed_variables` ("`state_variables` is the solved-for vector, not a
+classification"), and such an entry is `observed` in both. `observed` names the
+observed map so the state map can defer to it.
+"""
+_fc_variable_map(m, role; observed=nothing) =
+    [_fc_variable(k, v,
+                  (observed !== nothing && haskey(observed, k)) ? "observed" : role)
+     for (k, v) in m]
 
 _fc_event(ev::ContinuousEvent) = Dict{String,Any}(
     "name" => ev.name,
@@ -339,7 +350,8 @@ function _fc_record(flat)
     Dict{String,Any}(
         "system_kind" => system_kind(flat),
         "independent_variables" => String[String(iv) for iv in flat.independent_variables],
-        "state_variables" => _fc_variable_map(flat.state_variables, "state"),
+        "state_variables" => _fc_variable_map(flat.state_variables, "state";
+                                              observed=flat.observed_variables),
         "parameters" => _fc_variable_map(flat.parameters, "parameter"),
         "observed_variables" => _fc_variable_map(flat.observed_variables, "observed"),
         "algebraic_variables" => String[k for k in keys(flat.algebraic_variables)],

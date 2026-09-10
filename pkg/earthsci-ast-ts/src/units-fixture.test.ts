@@ -16,6 +16,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
+import { checkAssertion, resolveTolerance, type AssertionTolerance } from './assertion-tolerance.js'
 import { evaluateExpression } from './codegen.js'
 import { observedDefinitions, odeStates } from './classification.js'
 import { readFixture } from './test-helpers.js'
@@ -27,19 +28,7 @@ const FIXTURES = [
   'units_propagation.esm',
 ]
 
-type AnyTol = { abs?: number; rel?: number } | undefined
-
-function resolveTol(
-  modelTol: AnyTol,
-  testTol: AnyTol,
-  assertionTol: AnyTol,
-): { rel: number; abs: number } {
-  for (const cand of [assertionTol, testTol, modelTol]) {
-    if (cand === undefined || cand === null) continue
-    return { rel: cand.rel ?? 0, abs: cand.abs ?? 0 }
-  }
-  return { rel: 1e-6, abs: 0 }
-}
+type AnyTol = AssertionTolerance | undefined
 
 /**
  * Resolve every observed variable in `model` into `bindings` by iterated
@@ -74,6 +63,15 @@ function resolveObserved(model: Model, bindings: Map<string, number>): void {
   }
 }
 
+/**
+ * esm-spec §6.6.3 through this binding's OWN predicate (`checkAssertion`),
+ * which the shared `assertion_tolerance` conformance category pins against
+ * Julia, Python and Rust. The hand-rolled body this replaces scaled the
+ * relative bound by `|expected|` alone rather than `max(|actual|, |expected|)`,
+ * floored that scale at 1e-300 (§6.6.3 forbids a floor), and consulted `abs`
+ * only when `expected` was exactly zero — so an assertion carrying both bounds
+ * got whichever branch it happened to reach rather than the larger of the two.
+ */
 function assertWithTolerance(
   label: string,
   actual: number,
@@ -81,16 +79,11 @@ function assertWithTolerance(
   rel: number,
   abs: number,
 ): void {
-  if (abs > 0 && expected === 0) {
-    expect(Math.abs(actual - expected), label).toBeLessThanOrEqual(abs)
-    return
-  }
-  if (rel > 0) {
-    const bound = Math.max(rel * Math.max(Math.abs(expected), 1e-300), abs)
-    expect(Math.abs(actual - expected), label).toBeLessThanOrEqual(bound)
-    return
-  }
-  expect(Math.abs(actual - expected), label).toBeLessThanOrEqual(abs)
+  expect(
+    checkAssertion(actual, expected, rel, abs),
+    `${label}: actual=${actual} expected=${expected} rel=${rel} abs=${abs} ` +
+      `diff=${Math.abs(actual - expected)}`,
+  ).toBe(true)
 }
 
 /**
@@ -145,7 +138,7 @@ describe('Units fixtures inline tests execution (gt-dt0o)', () => {
             const bindings = buildBindings(model, t)
             resolveObserved(model, bindings)
             for (const a of t.assertions as Assertion[]) {
-              const { rel, abs } = resolveTol(
+              const { rel, abs } = resolveTolerance(
                 model.tolerance as AnyTol,
                 t.tolerance as AnyTol,
                 a.tolerance as AnyTol,

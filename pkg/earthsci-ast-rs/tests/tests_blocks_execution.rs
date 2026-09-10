@@ -22,7 +22,9 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::{Alg, Compiled, SolveOptions, Tolerance, load_path};
+use earthsci_ast::{
+    Alg, Compiled, SolveOptions, Tolerance, check_assertion, load_path, resolve_tolerance,
+};
 use earthsci_ast::{EsmFile, Metadata};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -137,21 +139,6 @@ fn reaction_system_only_subset(file: &EsmFile, rs_key: &str) -> EsmFile {
     }
 }
 
-fn resolve_tol(
-    model_tol: Option<&Tolerance>,
-    test_tol: Option<&Tolerance>,
-    assertion_tol: Option<&Tolerance>,
-) -> (f64, f64) {
-    if let Some(cand) = [assertion_tol, test_tol, model_tol]
-        .into_iter()
-        .flatten()
-        .next()
-    {
-        return (cand.rel.unwrap_or(0.0), cand.abs.unwrap_or(0.0));
-    }
-    (1e-6, 0.0)
-}
-
 fn find_state_index(state_names: &[String], component: &str, local: &str) -> Option<usize> {
     let namespaced = format!("{component}.{local}");
     if let Some(i) = state_names.iter().position(|n| n == &namespaced) {
@@ -247,28 +234,23 @@ fn execute_component(
                 a.time
             );
             let actual = sol.state[idx][k];
-            let (rel, abs_) = resolve_tol(model_tol, t.tolerance.as_ref(), a.tolerance.as_ref());
-            let diff = (actual - a.expected).abs();
-            let mut bound = abs_;
-            if rel > 0.0 {
-                let rbound = rel * a.expected.abs().max(f64::MIN_POSITIVE);
-                if rbound > bound {
-                    bound = rbound;
-                }
-            }
-            if rel == 0.0 && abs_ == 0.0 {
-                bound = 1e-6 * a.expected.abs().max(f64::MIN_POSITIVE);
-            }
+            // esm-spec §6.6.4 then §6.6.3, both through the binding's own
+            // functions. The hand-rolled bound this replaces scaled by
+            // `|expected|` alone, floored that scale at `f64::MIN_POSITIVE`
+            // (§6.6.3 forbids a floor), and silently substituted the §6.6.4
+            // implementation default when a document spelled BOTH bounds as
+            // zero — which is exact-equality mode, not "no bound".
+            let (rel, abs_) =
+                resolve_tolerance(model_tol, t.tolerance.as_ref(), a.tolerance.as_ref());
             assert!(
-                diff <= bound,
-                "{label}/{} var={} t={}: actual={} expected={} diff={} bound={} rel={} abs={}",
+                check_assertion(actual, a.expected, rel, abs_),
+                "{label}/{} var={} t={}: actual={} expected={} diff={} rel={} abs={}",
                 t.id,
                 a.variable,
                 a.time,
                 actual,
                 a.expected,
-                diff,
-                bound,
+                (actual - a.expected).abs(),
                 rel,
                 abs_
             );
