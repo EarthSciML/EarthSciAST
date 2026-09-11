@@ -194,22 +194,6 @@ fn merge_subsystem_index_sets(
     Ok(())
 }
 
-/// Is this post-wire `index_sets` entry mergeable as it stands, i.e. is its
-/// `size` either absent (categorical / derived / ragged) or already a concrete
-/// integer? A `size` that is still a metaparameter expression — a bare name, or
-/// an `{op, args}` tree (esm-spec §9.7.6) — is not. Used only by
-/// [`inline_toplevel_model_refs`], where nothing has folded the leaf's
-/// metaparameters yet; mirrors the Julia `_native_index_set_is_folded`.
-fn native_index_set_is_folded(decl: &Value) -> bool {
-    let Some(obj) = decl.as_object() else {
-        return false;
-    };
-    match obj.get("size") {
-        None => true,
-        Some(v) => v.as_i64().is_some(),
-    }
-}
-
 /// Wording for [`load_ref_document`]'s diagnostics, so each call site keeps its
 /// original error strings while sharing the load sequence.
 struct RefNoun {
@@ -349,11 +333,12 @@ fn walk_top_level(
     // the referenced leaf's single model, carrying the edge's
     // `expression_template_imports` into that model's own scope, BEFORE the
     // ordinary subsystem walk (the spliced model may itself carry subsystems).
-    // Resolution of the injected discretization is DEFERRED to the root
-    // template-machinery pass (`load_with_options`), so the loader-API
-    // metaparameters (grid resolution) reach the leaf document-wide — mirroring
-    // the Julia inliner (`_inline_toplevel_model_refs!`).
-    inline_toplevel_model_refs(obj, base_path, visited)?;
+    // The leaf resolves in its OWN scope at the edge — the §4.7 edge pipeline,
+    // the same one a `subsystems.<k>` ref runs — so `parent_meta` is threaded
+    // in: edge `bindings` fold against it, and the names the leaf declares
+    // backfill its metaparameter close, which is how the loader-API grid
+    // resolution still reaches the leaf.
+    inline_toplevel_model_refs(obj, base_path, visited, parent_meta)?;
 
     // The importing document's index-set registry starts from its own
     // top-level `index_sets` — already carrying whatever the top-level model
@@ -390,31 +375,42 @@ fn walk_top_level(
 }
 
 /// Inline every top-level `models.<k>` MOUNT EDGE — a bare `{ref}` (has `ref`,
-/// no inline `variables`) — by splicing in the referenced leaf's single model,
-/// with the edge's `expression_template_imports` folded into that model's own
-/// scope (esm-spec §9.7.10 form A at a top-level model-ref edge). Mirrors the
-/// Julia `_inline_toplevel_model_refs!`:
+/// no inline `variables`) — by resolving the referenced leaf IN ITS OWN SCOPE
+/// and splicing in its single model.
 ///
-/// * the leaf's own nested top-level model-refs are inlined first (component of
-///   component), sharing this walk's path-scoped cycle set;
-/// * the leaf's single model (or the `model`-selected one) is spliced in;
-/// * the model's own relative `{ref}`s (its `expression_template_imports`,
-///   subsystems) are absolutized against the LEAF's dir, and the edge's imports
-///   against THIS document's dir, so both resolve after the model lands in a
-///   parent whose directory differs;
-/// * the leaf's top-level `index_sets` merge into THIS document's registry under
-///   the §4.7 deep-equal-or-`subsystem_index_set_conflict` rule — the same merge
-///   a subsystem mount performs, so the two mount forms agree;
-/// * the leaf's `function_tables` / `data_sources` / `enums` are merged in
-///   (parent wins on a key clash).
+/// This runs the SAME normative edge pipeline (esm-spec §4.7 "Edge pipeline")
+/// that [`resolve_value`] runs at a `subsystems.<k>` edge, because "Two mount
+/// forms, one mechanism" forbids the two attachment points from differing:
 ///
-/// The injected discretization is NOT resolved here — it is left as model-level
-/// `expression_template_imports` for the root template-machinery pass, so the
-/// loader-API metaparameters reach the leaf document-wide.
+/// 1. the referenced document resolves in its OWN scope — the library gates,
+///    this edge's `bindings` and §9.7.10 form-A injection, its metaparameter
+///    close and fold, the §9.6.3 fixpoint;
+/// 2. this edge's `index_set_rename` applies to that resolved document;
+/// 3. the renamed `index_sets` merge into THIS document's registry under the
+///    deep-equal-or-`subsystem_index_set_conflict` rule, and the component
+///    splices in.
+///
+/// The leaf's nested refs — of EITHER form — then resolve through
+/// [`walk_top_level`] in the leaf's own directory, sharing this walk's
+/// path-scoped cycle set, so the merge composes transitively. On top of the
+/// shared pipeline this form additionally merges the leaf's `function_tables` /
+/// `data_sources` / `enums` up (parent wins on a key clash) and drops the leaf's
+/// inline `tests` (§6.6: they do not cross a mount edge).
+///
+/// `parent_meta` is the MOUNTING document's closed metaparameter environment
+/// (its `default`s overlaid with the loader-API bindings, §9.7.6 sites 4-5).
+/// Edge `bindings` expressions fold against it, and — mirroring the Python
+/// `_load_ref_data` backfill — the entries naming a metaparameter the LEAF
+/// declares also seed the leaf's close, so a leaf mounted with no explicit edge
+/// `bindings` still resolves under the assembler's grid (`NX`/`NY`) instead of
+/// falling back to its own defaults. Explicit edge `bindings` win; names the
+/// leaf does not declare are never forwarded, so they cannot raise
+/// `template_import_unknown_name` against the leaf.
 fn inline_toplevel_model_refs(
     obj: &mut Map<String, Value>,
     base_path: &Path,
     visited: &mut HashSet<PathBuf>,
+    parent_meta: &BTreeMap<String, i64>,
 ) -> Result<(), DiagnosticError> {
     let edge_names: Vec<String> = match obj.get("models").and_then(|v| v.as_object()) {
         Some(models) => models
@@ -437,31 +433,6 @@ fn inline_toplevel_model_refs(
             .and_then(|m| m.remove(&name))
             .expect("edge entry present");
         let entry_obj = entry.as_object().expect("edge entry is an object");
-        // esm-spec §4.7 "Mount-edge index-set renaming", "Where it applies".
-        // `index_set_rename` is a legal `SubsystemRef` property at BOTH mount
-        // forms, but THIS one — the top-level `models.<k>` `{ref}` — is inlined
-        // by a raw pre-pass that splices the leaf and defers all of §9.7 to the
-        // root, so there is no resolved mounted document for the rename to speak
-        // about and no hook to apply it at. Merging the leaf under its PRE-rename
-        // axis names would be silently wrong exactly where the field exists to
-        // prevent silence, so refuse the edge instead.
-        if entry_obj
-            .get("index_set_rename")
-            .is_some_and(|v| !v.is_null())
-        {
-            return Err(err(
-                codes::SUBSYSTEM_INDEX_SET_RENAME_UNSUPPORTED_MOUNT_FORM,
-                format!(
-                    "models.{name}: `index_set_rename` is not supported at this mount \
-                     form. This binding inlines a top-level `models.<k>` `{{ref}}` with \
-                     a raw pre-pass that defers the leaf's §9.7 resolution to the root \
-                     document, so the edge has no resolved mounted document to rename \
-                     and the leaf would merge under its ORIGINAL axis names. Mount the \
-                     component at a `subsystems.<k>` `{{ref}}` edge instead, where the \
-                     rename applies (esm-spec §4.7 \"Mount-edge index-set renaming\")"
-                ),
-            ));
-        }
         let ref_str = entry_obj
             .get("ref")
             .and_then(|v| v.as_str())
@@ -479,10 +450,99 @@ fn inline_toplevel_model_refs(
         // mark can be removed and `comp`'s by-name blocks merged below on every
         // exit path), and yields the spliced model.
         let build: Result<Value, DiagnosticError> = (|| {
-            // Component-of-component: inline the leaf's own top-level model-refs.
-            if let Some(comp_obj) = comp.as_object_mut() {
-                inline_toplevel_model_refs(comp_obj, &leaf_dir, visited)?;
+            // esm-spec §4.7 "Edge pipeline" step (1): the referenced document
+            // resolves in its OWN scope. Identical to the `subsystems.<k>` edge
+            // in `resolve_value` — the two mount forms are one mechanism, so a
+            // binding MUST NOT make them differ.
+            crate::lower_expression_templates::reject_expression_templates_pre_v04(&comp)?;
+            crate::template_imports::reject_template_imports_pre_v08(&comp)?;
+            if crate::template_imports::is_template_library_doc(&comp) {
+                return Err(err(
+                    codes::SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY,
+                    format!(
+                        "Model ref '{ref_str}' targets a template-library file ({}); \
+                         libraries are imported via expression_template_imports \
+                         (esm-spec 9.7.1)",
+                        canonical.display()
+                    ),
+                ));
             }
+            if crate::coupling_imports::is_coupling_library_doc(&comp) {
+                return Err(err(
+                    codes::SUBSYSTEM_REF_IS_COUPLING_LIBRARY,
+                    format!(
+                        "Model ref '{ref_str}' targets a coupling-library file ({}); \
+                         libraries are imported via a coupling_import coupling entry \
+                         (esm-spec 10.9)",
+                        canonical.display()
+                    ),
+                ));
+            }
+
+            // §9.7.6 binding site 3: close the leaf's metaparameters. The
+            // mounting scope's bindings backfill the names the leaf DECLARES
+            // (so a bare `{ref}` mount still inherits the assembler's grid),
+            // and explicit edge `bindings` — folded against `parent_meta` —
+            // win over them.
+            let leaf_declared: Vec<String> = comp
+                .get("metaparameters")
+                .and_then(|v| v.as_object())
+                .map(|o| o.keys().cloned().collect())
+                .unwrap_or_default();
+            let mut bindings: BTreeMap<String, i64> = parent_meta
+                .iter()
+                .filter(|(k, _)| leaf_declared.contains(k))
+                .map(|(k, v)| (k.clone(), *v))
+                .collect();
+            bindings.extend(read_edge_bindings(entry_obj, parent_meta)?);
+
+            // §9.7.10 form A: the edge's `expression_template_imports` inject a
+            // discretization into the leaf's own scope BEFORE resolution, so the
+            // §9.6.3 fixpoint lowers its rewrite-targets at the mount. Their own
+            // relative refs are authored by the assembler carrying the edge, so
+            // they absolutize against THIS document's directory, not the leaf's.
+            let injected: Vec<Value> = entry_obj
+                .get("expression_template_imports")
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    let mut a = a.clone();
+                    for e in a.iter_mut() {
+                        absolutize_nested_refs(e, base_path);
+                    }
+                    a
+                })
+                .unwrap_or_default();
+            crate::template_imports::apply_scope_injections(&mut comp, &injected)?;
+
+            if let Some(mut resolved) = crate::template_imports::resolve_template_machinery(
+                &comp, &leaf_dir, &bindings,
+            )? {
+                // A mounted component is a self-contained build boundary: lower
+                // under Option B, then `expand`, so the spliced component carries
+                // the fully-expanded Option-A image and the assembling document's
+                // lowering never resolves the leaf's template names against its
+                // own registry.
+                crate::lower_expression_templates::lower_expression_templates(&mut resolved)?;
+                crate::lower_expression_templates::expand(&mut resolved)?;
+                comp = resolved;
+            }
+
+            // Step (2): `index_set_rename` speaks the resolved leaf's own
+            // post-resolution vocabulary, so it applies HERE — after the close
+            // and fold above, before the leaf's nested mounts contribute (each
+            // nested edge renames what IT brings, at its own edge).
+            crate::template_imports::apply_mount_index_set_rename(
+                &mut comp,
+                entry_obj,
+                &format!("top-level model ref '{ref_str}'"),
+            )?;
+
+            // The leaf's own nested refs, of EITHER mount form, in the leaf's
+            // directory. Its metaparameters closed and folded just above, so its
+            // nested edge bindings arrive already concrete and fold against an
+            // empty environment (esm-spec §9.7.6: refs resolve post-close).
+            walk_top_level(&mut comp, &leaf_dir, visited, &BTreeMap::new())?;
+
             let sel = entry_obj.get("model").and_then(|v| v.as_str());
             let mut model = extract_toplevel_model(&comp, sel, ref_str, &canonical)?;
             // esm-spec §6.6: inline tests do NOT cross a mount edge. They are
@@ -495,28 +555,9 @@ fn inline_toplevel_model_refs(
             if let Some(model_obj) = model.as_object_mut() {
                 model_obj.remove("tests");
             }
-            // The leaf model's own relative refs anchor at the leaf's dir; the
-            // edge's injected imports anchor at THIS document's dir (§9.7.10
-            // merge order: target's own first, then injected).
+            // Any relative `{ref}` the resolution above did not consume anchors
+            // at the LEAF's directory, not at the parent it is about to land in.
             absolutize_nested_refs(&mut model, &leaf_dir);
-            if let Some(imports) = entry_obj
-                .get("expression_template_imports")
-                .and_then(|v| v.as_array())
-            {
-                let mut injected = imports.clone();
-                for e in injected.iter_mut() {
-                    absolutize_nested_refs(e, base_path);
-                }
-                append_component_imports(
-                    model.as_object_mut().ok_or_else(|| {
-                        err(
-                            TOPLEVEL_MODEL_REF.code,
-                            format!("top-level model ref {ref_str:?} is not an object"),
-                        )
-                    })?,
-                    injected,
-                );
-            }
             Ok(model)
         })();
         visited.remove(&canonical);
@@ -541,33 +582,20 @@ fn inline_toplevel_model_refs(
         // one mechanism at two attachment points, so an assembly may shape its
         // coupling over the leaf's axes without redeclaring them. Deep-equal
         // redeclaration is idempotent; a non-deep-equal collision is
-        // `subsystem_index_set_conflict`. Merged AFTER the component-of-component
-        // recursion above, so `comp`'s registry already carries whatever ITS own
-        // mounts brought in and the merge composes transitively. Unlike the
-        // by-name blocks below, the importer does NOT silently win a clash.
+        // `subsystem_index_set_conflict`. Merged AFTER the leaf's own resolution
+        // and nested mounts above, so `comp`'s registry already carries whatever
+        // ITS own mounts brought in and the merge composes transitively. Unlike
+        // the by-name blocks below, the importer does NOT silently win a clash.
         //
-        // One declaration is held back: an `interval` whose `size` is still an
-        // unfolded metaparameter expression. §4.7 merges a mounted file's axes
-        // "after the referenced document's metaparameters are closed and
-        // folded", and at THIS attachment point they have not been — this
-        // inliner is a raw pre-pass that drops the leaf's `metaparameters`
-        // block and defers everything §9.7 to the ROOT pass. Merging one anyway
-        // resolves it in the wrong scope: either the root has no binding for
-        // the leaf's name and coercion to `IndexSet.size: i64` fails with a raw
-        // serde message, or the root happens to declare the same name and the
-        // axis silently takes the ROOT's value instead of the leaf's own
-        // default. Skipping leaves the axis where it was before this merge
-        // existed — undeclared, so the importer must redeclare it — until a
-        // top-level mount edge closes the leaf's metaparameters the way a
-        // subsystem edge does. Mirrors the Julia
-        // `_native_index_set_is_folded` guard.
+        // Every declaration merges, including an `interval` sized by the leaf's
+        // own metaparameter: the edge closed and folded the leaf's
+        // `metaparameters` above (§9.7.6 site 3), so its `size` is a concrete
+        // integer by the time it reaches here. Before that close existed this
+        // merge held such a declaration back, and the assembly had to redeclare
+        // the axis — the gap §4.7's "without redeclaring them" forbids.
         if let Some(loaded) = comp.get("index_sets").and_then(|v| v.as_object()).cloned()
             && !loaded.is_empty()
         {
-            let loaded: Map<String, Value> = loaded
-                .into_iter()
-                .filter(|(_, decl)| native_index_set_is_folded(decl))
-                .collect();
             let registry = obj
                 .entry("index_sets".to_string())
                 .or_insert_with(|| Value::Object(Map::new()));
@@ -654,18 +682,6 @@ fn extract_toplevel_model(
                 ))
             }
         }
-    }
-}
-
-/// Append raw §9.7.2 import entries to a model's own
-/// `expression_template_imports` (esm-spec §9.7.10 merge order: the target's own
-/// imports first, then the injected list).
-fn append_component_imports(model: &mut Map<String, Value>, injected: Vec<Value>) {
-    let arr = model
-        .entry("expression_template_imports".to_string())
-        .or_insert_with(|| Value::Array(Vec::new()));
-    if let Some(arr) = arr.as_array_mut() {
-        arr.extend(injected);
     }
 }
 
