@@ -202,6 +202,12 @@ func TestParseUnitUSCustomary(t *testing.T) {
 	if hp.Scale != 550*ft.Scale*lb.Scale*9.80665 {
 		t.Errorf("hp must be exactly 550 ft*lbf/s, got %v", hp.Scale)
 	}
+	// The decimal too, not only the product: the product alone would still hold
+	// if ft and lb were both wrong, or if a map-ordering change left one of them
+	// reading back the zero Unit. This is the value the golden pins.
+	if hp.Scale != 745.6998715822702 {
+		t.Errorf("hp must be 745.6998715822702 W, got %v", hp.Scale)
+	}
 	if math.Abs(hp.Scale-735.49875) < 1 {
 		t.Errorf("hp must be MECHANICAL horsepower, not metric (PS): %v", hp.Scale)
 	}

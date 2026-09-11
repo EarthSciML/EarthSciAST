@@ -102,9 +102,9 @@ Unitful.@unit _u_hp "hp" MechanicalHorsepower 550 * _u_ft * _u_lb * 9.80665 * Un
 Unitful.@unit _u_gal "gal" USLiquidGallon 3.785411784 * Unitful.u"L" false
 
 # Inch of mercury — exactly 25.4 mmHg, the conventional value (NIST SP 811).
-# US barometric datasets store pressure in inHg. Added to the Rust registry by
-# fa7ffb01e and never mirrored here, which is exactly the drift
-# tests/conformance/unit_registry exists to catch; it is now in the golden.
+# US barometric datasets store pressure in inHg; without this entry such a
+# column has no honest declaration, because a unit string carries no numeric
+# scale factor, so `25.4 mmHg` cannot be spelled either.
 Unitful.@unit _u_inHg "inHg" InchOfMercury 3386.388640341 * Unitful.u"Pa" false
 
 # The two tons, both spelled UNAMBIGUOUSLY and neither spelled `ton`. A bare

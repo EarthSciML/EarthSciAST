@@ -1605,7 +1605,13 @@ fn build_base_units() -> HashMap<String, Unit> {
     // Nor are `mile`/`miles` here: `foot`/`feet` are pinned as REJECTS by
     // tests/conformance/unit_registry, so the imperial family is symbol-only
     // by contract and this follows it.
-    units.insert("mi".to_string(), Unit::base(Dimension::Length, 1, 1609.344));
+    //
+    // The foot is READ BACK OUT of the table rather than retyped as 1609.344,
+    // so this entry cannot drift away from the one that defines it.
+    units.insert(
+        "mi".to_string(),
+        Unit::base(Dimension::Length, 1, 5280.0 * units["ft"].scale),
+    );
 
     // Time units
     units.insert("s".to_string(), Unit::base(Dimension::Time, 1, 1.0));
@@ -1635,9 +1641,11 @@ fn build_base_units() -> HashMap<String, Unit> {
     // same reason `d` is. `short_ton` is exactly 2000 international pounds —
     // what a US emissions inventory means by "tons", and exactly InMAP's
     // 907184740000 ug/short-ton emission-conversion constant.
+    // The pound is READ BACK OUT of the table rather than retyped as
+    // 907.18474, for the same reason `mi` reads the foot back out.
     units.insert(
         "short_ton".to_string(),
-        Unit::base(Dimension::Mass, 1, 907.18474),
+        Unit::base(Dimension::Mass, 1, 2000.0 * units["lb"].scale),
     );
     units.insert("tonne".to_string(), Unit::base(Dimension::Mass, 1, 1000.0));
 
@@ -1827,6 +1835,12 @@ fn build_base_units() -> HashMap<String, Unit> {
     };
     units.insert("erg".to_string(), joule_scaled(1e-7));
     units.insert("BTU".to_string(), joule_scaled(1_055.055_852_62));
+    // The watt-hour, exactly 3600 J, and the kilowatt-hour it is the base of.
+    // esm-spec §4.8.1's Energy row lists BOTH; Julia, Python, Go and TypeScript
+    // carried both while this table had only `kWh`, so `units: "Wh"` resolved in
+    // four bindings and was a hard error in this one. `W*h` composes either way,
+    // which is why the gap was silent.
+    units.insert("Wh".to_string(), joule_scaled(3600.0));
     units.insert("kWh".to_string(), joule_scaled(3.6e6));
 
     // ESM-specific units standard (docs/units-standard.md).

@@ -1341,7 +1341,7 @@ Every one of these is **exact by definition** (`inHg`, by convention), and the *
 | `ft` | `0.3048` m | the international foot, 1959 agreement |
 | `mi` | `1609.344` m | exactly `5280 × ft`, same agreement |
 | `lb` | `0.45359237` kg | the international avoirdupois pound, 1959 — and exactly `short_ton / 2000` |
-| `hp` | `745.6998715822702` W | 550 ft·lbf/s = exactly `550 × ft × lb × 9.80665`; NIST SP 811 App. B gives 7.456 999 E+02 W |
+| `hp` | `745.6998715822702` W | 550 ft·lbf/s = `550 × ft × lb × 9.80665`, folded LEFT TO RIGHT — unlike `mi` and `short_ton` this product is not exactly representable, so the fold order is what makes every binding land on the same double; NIST SP 811 App. B gives 7.456 999 E+02 W |
 | `gal` | `0.003785411784` m³ | 231 in³, the US **liquid** gallon; NIST SP 811 App. B |
 | `inHg` | `3386.388640341` Pa | exactly `25.4 × mmHg`, the conventional value; NIST SP 811 |
 

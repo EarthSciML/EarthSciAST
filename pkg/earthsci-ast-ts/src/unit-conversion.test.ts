@@ -258,9 +258,9 @@ describe('unit-conversion', () => {
       // against what this file happens to define. A symbol missing from the
       // TABLE is not "conservatively unknown" — it FAILS THE FILE; a symbol
       // missing from THIS LIST is worse, because then the table can lose the
-      // entry and this test still passes. It has: the list once omitted `ft`,
-      // `short_ton`, `tonne` and `inHg`, which is how `inHg` stayed
-      // Rust-only for three days.
+      // entry and this test still passes. That is not hypothetical: this list
+      // has been found short of `ft`, `short_ton`, `tonne` and `inHg`, and
+      // while a symbol is missing here a binding may drop it unnoticed.
       const contract = `m kg s mol K A cd rad
         g mg ug lb short_ton tonne
         dm cm mm um nm km ft mi
@@ -302,7 +302,7 @@ describe('unit-conversion', () => {
       expect(parseUnitForConversion('mi').scale).toBe(5280 * ft)
       expect(parseUnitForConversion('short_ton').scale).toBe(2000 * lb)
       expect(parseUnitForConversion('hp').scale).toBe(550 * ft * lb * 9.80665)
-      expect(parseUnitForConversion('hp').scale).toBeCloseTo(745.6998715822702, 10)
+      expect(parseUnitForConversion('hp').scale).toBe(745.6998715822702)
       // MECHANICAL horsepower, never the metric one (PS, 735.49875 W).
       expect(Math.abs(parseUnitForConversion('hp').scale - 735.49875)).toBeGreaterThan(1)
       // The US LIQUID gallon, never the imperial one (4.54609 L).

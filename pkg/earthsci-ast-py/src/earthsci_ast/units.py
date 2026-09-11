@@ -182,9 +182,9 @@ _CONTRACT_DEFINITIONS: tuple[str, ...] = (
     "Torr = 101325 / 760 Pa",
     "mmHg = 133.322387415 Pa",
     # Inch of mercury — exactly 25.4 mmHg, the conventional value (NIST SP 811).
-    # US barometric datasets store pressure in inHg. Added to the Rust registry
-    # by fa7ffb01e and never mirrored here, which is exactly the drift
-    # tests/conformance/unit_registry exists to catch; it is now in the golden.
+    # US barometric datasets store pressure in inHg; without this entry such a
+    # column has no honest declaration, because a unit string carries no numeric
+    # scale factor, so `25.4 mmHg` cannot be spelled either.
     "inHg = 3386.388640341 Pa",
     "psi = 6894.757293168361 Pa",
     "uatm = 1e-6 atm",

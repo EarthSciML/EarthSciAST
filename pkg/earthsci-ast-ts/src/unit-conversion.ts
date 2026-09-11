@@ -59,9 +59,13 @@ interface UnitSpec {
 
 // The two US customary scales the table below DEFINES other entries in terms
 // of, named once so those entries cannot drift away from them: `mi` is exactly
-// 5280 ft, `short_ton` exactly 2000 lb, and `hp` exactly 550 ft*lbf/s. All
-// three products are exact in binary64, so they are bit-for-bit what
-// tests/conformance/unit_registry pins.
+// 5280 ft, `short_ton` exactly 2000 lb, and `hp` exactly 550 ft*lbf/s.
+//
+// `mi` and `short_ton` are exactly representable in binary64. `hp` is NOT --
+// 745.6998715822702 is a rounding of the true product -- so what makes it
+// bit-for-bit what tests/conformance/unit_registry pins is that every binding
+// folds the same factors in the same LEFT-TO-RIGHT order. Reassociating the
+// product moves the result by one ULP.
 const FT_IN_M = 0.3048
 const LB_IN_KG = 0.45359237
 
@@ -225,9 +229,9 @@ const UNIT_TABLE: Record<string, UnitSpec> = {
   Torr: { dims: { kg: 1, m: -1, s: -2 }, scale: 101325 / 760 },
   mmHg: { dims: { kg: 1, m: -1, s: -2 }, scale: 133.322387415 },
   // Inch of mercury -- exactly 25.4 mmHg, the conventional value (NIST SP 811).
-  // US barometric datasets store pressure in inHg. Added to the Rust registry
-  // by fa7ffb01e and never mirrored here, which is exactly the drift
-  // tests/conformance/unit_registry exists to catch.
+  // US barometric datasets store pressure in inHg; without this entry such a
+  // column has no honest declaration, because a unit string carries no numeric
+  // scale factor, so `25.4 mmHg` cannot be spelled either.
   inHg: { dims: { kg: 1, m: -1, s: -2 }, scale: 3386.388640341 },
   psi: { dims: { kg: 1, m: -1, s: -2 }, scale: 6894.757293168 },
 

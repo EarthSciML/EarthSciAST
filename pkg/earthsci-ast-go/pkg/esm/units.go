@@ -299,6 +299,14 @@ func buildUnitRegistry() map[string]Unit {
 	r["cd"] = baseUnit(dimLuminosity, 1.0)
 	r["rad"] = baseUnit(dimAngle, 1.0)
 
+	// ORDER MATTERS BELOW. short_ton, mi and hp are DEFINED in terms of lb and
+	// ft and read those entries back out of r rather than retyping their
+	// scales, so each must be inserted after the entry it reads. A Go map read
+	// of a missing key yields the zero Unit -- scale 0, no dimension -- so
+	// reordering them would not panic, it would silently zero a scale.
+	// TestParseUnitUSCustomary pins each of the three against its exact decimal
+	// so that such a reorder fails loudly there.
+	//
 	// Mass (gram, because kg is the SI base but g/mg/ug are common).
 	r["g"] = Unit{Dim: r["kg"].Dim, Scale: 1e-3}
 	r["mg"] = Unit{Dim: r["kg"].Dim, Scale: 1e-6}
@@ -316,7 +324,9 @@ func buildUnitRegistry() map[string]Unit {
 	// same reason "d" is. short_ton is exactly 2000 international pounds --
 	// what a US emissions inventory means by "tons", and exactly InMAP's
 	// 907184740000 ug/short-ton emission-conversion constant.
-	r["short_ton"] = Unit{Dim: r["kg"].Dim, Scale: 907.18474}
+	// The pound is READ BACK OUT of the table rather than retyped as 907.18474,
+	// so this entry cannot drift away from the one that defines it.
+	r["short_ton"] = Unit{Dim: r["kg"].Dim, Scale: 2000 * r["lb"].Scale}
 	r["tonne"] = Unit{Dim: r["kg"].Dim, Scale: 1e3}
 
 	// Length scales.
@@ -341,8 +351,9 @@ func buildUnitRegistry() map[string]Unit {
 	// activity model is built on vehicle-MILES travelled -- so a table with
 	// "ft" and not "mi" could spell a stack height and not a road. "mi/h"
 	// composes; "mph" is deliberately not a name, and neither are "in" and
-	// "yd", which no corpus column uses.
-	r["mi"] = Unit{Dim: r["m"].Dim, Scale: 1609.344}
+	// "yd", which no corpus column uses. The foot is READ BACK OUT of the table
+	// rather than retyped as 1609.344, as short_ton reads the pound.
+	r["mi"] = Unit{Dim: r["m"].Dim, Scale: 5280 * r["ft"].Scale}
 
 	// Time scales.
 	r["ms"] = Unit{Dim: r["s"].Dim, Scale: 1e-3}
@@ -405,9 +416,9 @@ func buildUnitRegistry() map[string]Unit {
 	r["Torr"] = Unit{Dim: r["Pa"].Dim, Scale: 101325.0 / 760.0}
 	r["mmHg"] = Unit{Dim: r["Pa"].Dim, Scale: 133.322387415}
 	// Inch of mercury -- exactly 25.4 mmHg, the conventional value (NIST
-	// SP 811). US barometric datasets store pressure in inHg. Added to the
-	// Rust registry by fa7ffb01e and never mirrored here, which is exactly the
-	// drift tests/conformance/unit_registry exists to catch.
+	// SP 811). US barometric datasets store pressure in inHg; without this
+	// entry such a column has no honest declaration, because a unit string
+	// carries no numeric scale factor, so "25.4 mmHg" cannot be spelled either.
 	r["inHg"] = Unit{Dim: r["Pa"].Dim, Scale: 3386.388640341}
 	r["psi"] = Unit{Dim: r["Pa"].Dim, Scale: 6894.757293168}
 

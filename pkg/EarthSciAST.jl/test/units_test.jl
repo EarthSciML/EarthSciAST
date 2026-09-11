@@ -74,9 +74,10 @@ using Unitful
         # esm-spec §4.8.1 tabulates, row by row, and it is written from the
         # spec table rather than from `_UNIT_REGISTRY` — a symbol missing here
         # is worse than a symbol missing from the table, because then the table
-        # can lose the entry and this test still passes. It has: the list once
-        # omitted `ft`, `short_ton`, `tonne`, `uatm`, `sr`, `%`, `psu` and
-        # `molecule`, and `inHg` stayed Rust-only for three days.
+        # can lose the entry and this test still passes. That is not
+        # hypothetical: this list has been found short of `ft`, `short_ton`,
+        # `tonne`, `uatm`, `sr`, `%`, `psu`, `molecule` and `inHg`, and while a
+        # symbol is missing here a binding may drop it unnoticed.
         for u in ("m", "kg", "s", "mol", "K", "A", "cd", "rad",
                   "g", "mg", "ug", "lb", "short_ton", "tonne",
                   "dm", "cm", "mm", "um", "nm", "km", "ft", "mi",

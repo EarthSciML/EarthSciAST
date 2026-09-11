@@ -154,6 +154,12 @@
       "scale_to_canonical": 3386.388640341,
       "units": "inHg",
       "why": "Added to the Rust registry by fa7ffb01e (PR #238) for MOVES's County.barometricPressure and NEVER MIRRORED to the other four bindings -- precisely the drift this fixture exists to catch, and unpinned until now. Exactly 25.4 mmHg (NIST SP 811)."
+    },
+    {
+      "canonical": "J",
+      "scale_to_canonical": 3600.0,
+      "units": "Wh",
+      "why": "The watt-hour, exactly 3600 J. esm-spec 4.8.1's Energy row lists it beside `kWh`, and Julia, Python, Go and TypeScript all carried it while Rust's table had only `kWh` -- so `units: \"Wh\"` resolved in four bindings and was a hard error in the fifth. It survived because it was pinned at NEITHER layer, and because `W*h` composes in every binding, which made the gap silent."
     }
   ],
   "kind": "unit_registry_verdicts",
@@ -233,6 +239,18 @@
     {
       "units": "hp-hr",
       "why": "MOVES's own spelling of horsepower-hour, and NOT parseable: `-` is not an operator in 4.8.2, so this reads as a dangling minus. The ESM spelling is `hp*h`. Pinned because a porter transcribing a MOVES column name will try this first."
+    },
+    {
+      "units": "mile",
+      "why": "A long form is not an alias, exactly as `foot` is not. esm-spec 4.8.1 names `mile` in the reject list beside `feet` and `miles`; unpinned, a binding could add it and stay green while the other four reject it."
+    },
+    {
+      "units": "gallon",
+      "why": "As `mile`: the volume is spelled `gal` and there is deliberately one spelling."
+    },
+    {
+      "units": "pound",
+      "why": "As `mile`: the mass is spelled `lb` and there is deliberately one spelling."
     }
   ],
   "reject_scaling_factor": [
