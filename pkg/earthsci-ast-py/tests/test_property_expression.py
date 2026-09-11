@@ -12,7 +12,7 @@ Invariants asserted (per gt-72z):
 
 Scope notes:
   - Expressions generated here cover the scalar operators plus the array-op
-    extensions (``aggregate``, ``makearray``, ``reshape``, ``transpose``,
+    extensions (``faq``, ``makearray``, ``reshape``, ``transpose``,
     ``concat``, ``index``, ``broadcast``). The array ops were added once the
     serializer was fixed (gt-4009) to emit their auxiliary fields.
 """
@@ -168,7 +168,7 @@ def _op_aggregate(child: st.SearchStrategy):
         include_reduce = draw(st.booleans())
         include_ranges = draw(st.booleans())
         return ExprNode(
-            op="aggregate",
+            op="faq",
             args=args,
             output_idx=output_idx,
             expr=body,

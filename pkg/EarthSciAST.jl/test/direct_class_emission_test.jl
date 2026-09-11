@@ -74,9 +74,9 @@ _dce_khi() = _op("-", _op("+", _v("i"), _i(2)), _v("i"))
 function _dce_percell_model(vals::Vector{ESM.ASTExpr}, N::Int)
     mk = OpExpr("makearray", ESM.ASTExpr[];
         regions=[[[1, N ÷ 2]], [[N ÷ 2 + 1, N]]], values=vals)
-    lhs = OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i"],
+    lhs = OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i"],
         expr_body=_Didx("u", _v("i")), ranges=Dict("i" => [1, N]))
-    rhs = OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i"],
+    rhs = OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i"],
         expr_body=_op("*", _op("index", mk, _v("i")), _v("k")),
         ranges=Dict("i" => [1, N], "k" => Any[_i(1), _dce_khi()]), reduce="+")
     vars = Dict{String,ESM.ModelVariable}(

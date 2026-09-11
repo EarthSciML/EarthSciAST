@@ -56,7 +56,7 @@ static GLOBAL: CountingAlloc = CountingAlloc;
 
 /// A discretized 1-D heat equation on `n` cells (interior + two ghost regions),
 /// parameterized by grid size — identical stencil AST at every N. Mirrors
-/// `fixtures/arrayop/15_discretized_1d_heat.esm`.
+/// `fixtures/faq/15_discretized_1d_heat.esm`.
 fn heat1d_json(n: usize) -> String {
     const TEMPLATE: &str = r#"{
  "esm": "1.0.0",
@@ -66,10 +66,10 @@ fn heat1d_json(n: usize) -> String {
    "variables": {"u": {"type": "unknown", "shape": ["i"]}},
    "equations": [
     {
-     "lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+     "lhs": {"op": "faq", "args": [], "output_idx": ["i"],
              "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "i"]}], "wrt": "t"},
              "ranges": {"i": [1, __N__]}},
-     "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+     "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
              "ranges": {"i": [1, __N__]},
              "expr": {"op": "index", "args": [
                {"op": "makearray", "args": [],
@@ -109,10 +109,10 @@ fn einsum_heat1d_json(n: usize) -> String {
    "variables": {"u": {"type": "unknown", "shape": ["i"]}},
    "equations": [
     {
-     "lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+     "lhs": {"op": "faq", "args": [], "output_idx": ["i"],
              "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "i"]}], "wrt": "t"},
              "ranges": {"i": [1, __N__]}},
-     "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+     "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
              "reduce": "+",
              "ranges": {"i": [1, __N__], "k": [-1, 1]},
              "expr": {"op": "*", "args": [
@@ -139,10 +139,10 @@ fn latlon_heat_json(nlon: usize, nlat: usize) -> String {
    "variables": {"u": {"type": "unknown", "shape": ["i", "j"]}},
    "equations": [
     {
-     "lhs": {"op": "aggregate", "args": [], "output_idx": ["i", "j"],
+     "lhs": {"op": "faq", "args": [], "output_idx": ["i", "j"],
              "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "i", "j"]}], "wrt": "t"},
              "ranges": {"i": [1, __NLON__], "j": [1, __NLAT__]}},
-     "rhs": {"op": "aggregate", "args": [], "output_idx": ["i", "j"],
+     "rhs": {"op": "faq", "args": [], "output_idx": ["i", "j"],
              "ranges": {"i": [1, __NLON__], "j": [1, __NLAT__]},
              "expr": {"op": "*", "args": [0.4, {"op": "+", "args": [
                {"op": "index", "args": ["u",

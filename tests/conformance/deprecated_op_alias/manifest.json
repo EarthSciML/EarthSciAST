@@ -1,0 +1,33 @@
+{
+  "suite": "deprecated_op_alias",
+  "spec": "CONFORMANCE_SPEC.md \u00a77 (`deprecated_op_alias`); esm-spec \u00a74.2; docs/content/rfcs/faq-node-rename.md",
+  "description": "The one deprecated expression-node `op` alias: `aggregate`, the pre-1.1.0 spelling of `faq` (Functional Aggregate Query). Pins the four properties every binding must share.",
+  "cases": [
+    {
+      "id": "alias_loads",
+      "input": "aliased.esm",
+      "assert": "loads without error"
+    },
+    {
+      "id": "alias_warns_once",
+      "input": "aliased.esm",
+      "assert": "emits exactly one `deprecated_op_alias` warning for the document, naming the node count (2), NOT one per node"
+    },
+    {
+      "id": "alias_normalizes",
+      "input": "aliased.esm",
+      "expected": "canonical.esm",
+      "assert": "emit(load(aliased)) is byte-identical to canonical.esm \u2014 the alias never survives the loader"
+    },
+    {
+      "id": "canonical_is_quiet",
+      "input": "canonical.esm",
+      "assert": "loads with NO `deprecated_op_alias` warning, and emit(load(x)) == x (the \u00a79.6.4 fixed point holds at the current version)"
+    },
+    {
+      "id": "arrayop_rejected",
+      "input": "../../invalid/faq/arrayop_op_removed.esm",
+      "assert": "REJECTED \u2014 `arrayop` was removed at esm 0.8.0 and is not an alias"
+    }
+  ]
+}

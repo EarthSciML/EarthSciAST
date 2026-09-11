@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "loader_const_seed",
     "description": "M3 cadence-partition fixture (RFC semiring-faq-unified-ir 6.1; CONFORMANCE_SPEC.md 5.7.2; bead ess-v9a.5): the SOURCE-SEEDED-CONST path. The matched-pair sibling of loader_temporal_seed.esm -- the SAME boundary-condition relaxation RHS D(c[i])/dt = bc[i] - c[i] and the SAME `update: {kind: data, source: bc_loader}` declaration of the parameter `bc`, but the top-level data source `bc_loader` declares NO `temporal` block. A source without `temporal` describes non-time-varying data (`temporal` is optional; absence implies non-time-varying), so the partition REFINES the declared DISCRETE seed down to CONST: the field is loaded once and folds at bind (external-resource provenance), never refreshing. The const bc[i] gather feeds the CONTINUOUS subtraction, so it materializes at the CONST->CONTINUOUS threshold -- and because nothing is DISCRETE, the per-event handler is EMPTY (unlike the temporal sibling). This is the whole point of the bead: toggling the source's `temporal` block -- and nothing else -- flips the same source-fed parameter between DISCRETE and CONST, exactly matching 6.1. Every node carries an `expect_cadence` assertion the partition pass checks against its derived class. Validates against the schema with no evaluator; the golden class summary + materialization set live in tests/conformance/cadence/manifest.json.",
@@ -65,7 +65,7 @@
         {
           "_comment": "D(c[i])/dt = bc[i] - c[i]. Identical to loader_temporal_seed.esm, but bc[i] is CONST (loader WITHOUT temporal): it folds at bind and feeds the CONTINUOUS subtraction at the CONST->CONTINUOUS threshold. No DISCRETE node anywhere, so the per-event handler is empty.",
           "lhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": [
               "i"
@@ -91,7 +91,7 @@
             }
           },
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": [
               "i"

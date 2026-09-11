@@ -35,12 +35,12 @@ fn contraction_model(rhs_extra: &str) -> String {
           "models": {{ "M": {{
             "variables": {{ "y": {{ "type": "unknown", "shape": ["i"] }} }},
             "equations": [{{
-              "lhs": {{ "op": "aggregate", "args": [], "output_idx": ["i"],
+              "lhs": {{ "op": "faq", "args": [], "output_idx": ["i"],
                         "expr": {{ "op": "D",
                                    "args": [{{ "op": "index", "args": ["y", "i"] }}],
                                    "wrt": "t" }},
                         "ranges": {{ "i": [1, 2] }} }},
-              "rhs": {{ "op": "aggregate", "args": [], "output_idx": ["i"],
+              "rhs": {{ "op": "faq", "args": [], "output_idx": ["i"],
                         "reduce": "+",
                         {rhs_extra}
                         "expr": {{ "op": "*", "args": ["i", "j"] }},
@@ -108,7 +108,7 @@ fn rhs_join_on(file: &EsmFile) -> (bool, bool, Vec<[String; 2]>) {
 #[test]
 fn join_filter_fixture_round_trips_both_m2_fields() {
     // The committed M2 schema fixture carries both a `join` and a `filter`.
-    let fixture = include_str!("../../../tests/valid/aggregate/join_filter.esm");
+    let fixture = include_str!("../../../tests/valid/faq/join_filter.esm");
     let parsed = load_string(fixture).expect("parse join_filter.esm");
 
     // Parsed AST carries both additive M2 fields with their full structure —

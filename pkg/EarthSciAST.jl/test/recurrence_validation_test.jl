@@ -34,7 +34,7 @@ end
 
 # `aggregate{output_idx: [k], ranges: {k: steps, extra…}} body`.
 _recur_agg(body::ESM_R.ASTExpr; extra_ranges=Dict{String,Any}()) =
-    _op("aggregate"; output_idx=Any["k"], expr_body=body, reduce="+",
+    _op("faq"; output_idx=Any["k"], expr_body=body, reduce="+",
         ranges=merge(Dict{String,Any}("k" => ESM_R.IndexSetRef("steps")), extra_ranges))
 
 # The legal body this file's rejections are each one mutation away from:
@@ -166,7 +166,7 @@ _recur_findings(file) = [e for e in ESM_R.validate_recurrence_semantics(file)]
 
         # Admitting it identifies the axis but does NOT stop counting axes:
         # `m[i - n, j - n]` with `n` unbounded is still two axes.
-        two = _op("aggregate"; output_idx=Any["i", "j"], reduce="+",
+        two = _op("faq"; output_idx=Any["i", "j"], reduce="+",
             ranges=Dict{String,Any}("i" => ESM_R.IndexSetRef("steps"),
                                     "j" => ESM_R.IndexSetRef("steps")),
             expr_body=_idx("m", _op("-", _v("i"), _v("n")), _op("-", _v("j"), _v("n"))))

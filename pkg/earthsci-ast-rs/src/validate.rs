@@ -172,7 +172,7 @@ pub enum StructuralErrorCode {
     /// declared, non-empty, and DIFFERING units (esm-spec §4.7.6). Static mirror
     /// of the flatten-time [`crate::flatten::FlattenError::DomainUnitMismatch`].
     DomainUnitMismatch,
-    /// An `aggregate` value-equality `join` whose key column ranges over a
+    /// A `faq` value-equality `join` whose key column ranges over a
     /// categorical index set carrying a FLOAT or NULL member (RFC
     /// semiring-faq-unified-ir §5.3 / §5.7 rule 1): floats are not portably
     /// equality-comparable and a null key is unmatchable.
@@ -182,7 +182,7 @@ pub enum StructuralErrorCode {
     JoinSideAmbiguous,
     /// A `join.syms` entry that is not a range symbol of the node.
     JoinSymsUnknownSymbol,
-    /// A value-invention `aggregate` (`distinct: true`) whose `key`/`expr` reads
+    /// A value-invention `faq` (`distinct: true`) whose `key`/`expr` reads
     /// a model STATE variable, so the cadence partition classes it CONTINUOUS —
     /// relational work is forbidden on the per-step hot path (RFC
     /// semiring-faq-unified-ir §6.1; CONFORMANCE_SPEC.md §5.7.6 guard 2).
@@ -196,10 +196,10 @@ pub enum StructuralErrorCode {
     /// A causal self-read (esm-spec §4.3.1.1) the runtime cannot restrict to a
     /// single cell: reached through a `makearray` region value or a
     /// `reshape`/`transpose`/`concat` operand, or in an equation whose RHS is
-    /// not an `aggregate` over the variable's own axes. The READ is causal; the
+    /// not a `faq` over the variable's own axes. The READ is causal; the
     /// CARRIER cannot sequence it.
     RecurrenceUnsupportedForm,
-    /// An `aggregate` `ranges` entry `{ "from": NAME }` whose NAME is not a key
+    /// A `faq` `ranges` entry `{ "from": NAME }` whose NAME is not a key
     /// of the document `index_sets` registry (RFC semiring-faq-unified-ir §5.2):
     /// no implicit interval is inferred for an undeclared name.
     UndefinedIndexSet,
@@ -1559,7 +1559,7 @@ mod tests {
     /// §4.3.4 requires a SCALAR operator; the array/tensor ops are not.
     #[test]
     fn non_scalar_broadcast_fn_is_a_structural_error() {
-        for f in ["aggregate", "index", "broadcast", "makearray"] {
+        for f in ["faq", "index", "broadcast", "makearray"] {
             let expr = format!(r#"{{"op": "broadcast", "fn": "{f}", "args": ["x"]}}"#);
             let found = broadcast_findings(&expr);
             assert_eq!(
@@ -1618,7 +1618,7 @@ mod tests {
     /// in an `aggregate.expr` sidecar is found, at the enclosing field's pointer.
     #[test]
     fn broadcast_fn_is_checked_inside_sidecar_fields() {
-        let expr = r#"{"op": "aggregate", "output_idx": ["i"], "args": [],
+        let expr = r#"{"op": "faq", "output_idx": ["i"], "args": [],
                        "ranges": {"i": [1, 3]},
                        "expr": {"op": "broadcast", "fn": "nope", "args": ["x"]}}"#;
         let found = broadcast_findings(expr);

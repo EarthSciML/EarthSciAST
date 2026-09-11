@@ -206,7 +206,7 @@ func parseJSONTag(field reflect.StructField) (name string, omitempty, skip bool)
 // out (as `{}` / `[]`) even though `omitempty` would drop it.
 //
 // A handful of wire keys distinguish "absent" from "present but empty", and
-// eliding them is a conformance bug, not a cosmetic one: an `aggregate` node
+// eliding them is a conformance bug, not a cosmetic one: a `faq` node
 // with no free indices carries `"output_idx": []`, which esm-schema.json
 // REQUIRES on every aggregate, and one with no `where` clause carries
 // `"ranges": {}`, which the other language bindings emit. A nil field is still

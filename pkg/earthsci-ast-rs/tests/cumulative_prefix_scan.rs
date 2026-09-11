@@ -1,6 +1,6 @@
 //! Cumulative (prefix) reductions — esm-spec §4.3.1.
 //!
-//! A prefix reduction is an ordinary `aggregate` whose `filter` compares the
+//! A prefix reduction is an ordinary `faq` whose `filter` compares the
 //! contracted index against an output index. Evaluated literally it is a
 //! triangular double loop: `N` output cells each re-folding the window the
 //! previous cell already folded. The evaluator recognizes the FORWARD rows
@@ -23,7 +23,7 @@ use std::collections::HashMap;
 /// Build a prefix-reduction aggregate over `u` with the given comparison.
 fn prefix_agg(cmp: &str, n: i64, reduce: &str) -> earthsci_ast::Expr {
     let node = json!({
-        "op": "aggregate",
+        "op": "faq",
         "args": ["u"],
         "output_idx": ["i"],
         "reduce": reduce,
@@ -184,7 +184,7 @@ fn inclusive_forward_sum_is_the_expected_running_total() {
 fn body_referencing_the_scanned_symbol_falls_back_to_the_oracle() {
     let n = 6i64;
     let node = json!({
-        "op": "aggregate",
+        "op": "faq",
         "args": ["u"],
         "output_idx": ["i"],
         "reduce": "+",
@@ -292,7 +292,7 @@ fn rank_2_output_scans_one_axis_and_leaves_the_other_independent() {
         v
     };
     let node = json!({
-        "op": "aggregate",
+        "op": "faq",
         "args": ["m"],
         "output_idx": ["r", "i"],
         "reduce": "+",
@@ -335,7 +335,7 @@ fn mirrored_forward_spelling_matches_and_reverse_spelling_does_not() {
     let u = catastrophic_values(24);
     let n = u.len() as i64;
     let mirrored = json!({
-        "op": "aggregate", "args": ["u"], "output_idx": ["i"], "reduce": "+",
+        "op": "faq", "args": ["u"], "output_idx": ["i"], "reduce": "+",
         "ranges": { "i": [1, n], "j": [1, n] },
         "filter": { "op": ">=", "args": ["i", "j"] },   // i >= j  ==  j <= i
         "expr": { "op": "index", "args": ["u", "j"] }
@@ -361,7 +361,7 @@ fn rank_2_output_scans_axis_zero() {
     let (nr, nc) = (4usize, 3usize); // i = scanned axis 0, c = independent
     let m: Vec<f64> = (0..nr * nc).map(|k| (k + 1) as f64).collect();
     let node = json!({
-        "op": "aggregate", "args": ["m"], "output_idx": ["i", "c"], "reduce": "+",
+        "op": "faq", "args": ["m"], "output_idx": ["i", "c"], "reduce": "+",
         "ranges": { "i": [1, nr], "c": [1, nc], "j": [1, nr] },
         "filter": { "op": "<=", "args": ["j", "i"] },
         "expr": { "op": "index", "args": ["m", "j", "c"] }
@@ -395,13 +395,13 @@ mod common;
 /// same semantics through load → compile → solve, which is what the Python and
 /// Julia bindings do with these fixtures. Without it the Rust side would only
 /// cover the kernel, and the manifest's executing-binding claim for `rust` would
-/// rest on nothing (the `simulate_arrayop` manifest is not itself executed by any
+/// rest on nothing (the `simulate_faq` manifest is not itself executed by any
 /// harness — see its README).
 #[test]
 fn shared_cumulative_fixtures_satisfy_their_inline_assertions() {
     for name in [
-        "fixtures/arrayop/25_cumulative_prefix_reduction.esm",
-        "fixtures/arrayop/26_cumulative_integral_measure.esm",
+        "fixtures/faq/25_cumulative_prefix_reduction.esm",
+        "fixtures/faq/26_cumulative_integral_measure.esm",
     ] {
         let path = common::repo_fixture(name);
         let raw = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {name}: {e}"));

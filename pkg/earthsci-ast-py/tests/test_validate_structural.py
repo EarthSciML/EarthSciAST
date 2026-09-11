@@ -839,7 +839,7 @@ class TestSpecSanctionedConstructsAreNotRejected:
                             {
                                 "lhs": {"op": "D", "args": ["u"], "wrt": "t"},
                                 "rhs": {
-                                    "op": "aggregate",
+                                    "op": "faq",
                                     "args": [],
                                     "output_idx": ["i"],
                                     "ranges": {"i": [1, 4]},
@@ -1139,8 +1139,8 @@ class TestReferenceIntegrityEveryExpressionBearingField:
             "unresolved_scoped_ref_in_connector_expression.esm",
             "unresolved_scoped_ref_in_variable_map_transform.esm",
             # and the non-`args` expression CHILD fields, inside an equation
-            "undefined_variable_in_aggregate_expr.esm",
-            "undefined_variable_in_aggregate_key.esm",
+            "undefined_variable_in_faq_expr.esm",
+            "undefined_variable_in_faq_key.esm",
             "undefined_variable_in_filter.esm",
             "undefined_variable_in_integral_bound.esm",
             "undefined_variable_in_makearray_values.esm",

@@ -13,7 +13,7 @@ An expression is one of four things:
 | Scoped reference | `"Chem.O3"` | A dotted path into a subsystem. |
 
 An operator node always has `op` and `args`. Some operators take extra named
-fields — `wrt` on `D`, `output_idx`/`ranges` on `aggregate`, `regions`/`values`
+fields — `wrt` on `D`, `output_idx`/`ranges` on `faq`, `regions`/`values`
 on `makearray` — which are listed on each operator's page.
 
 **Text**
@@ -94,7 +94,7 @@ throughout; the text notation covers expressions and equations, not files.
 | `broadcast` | 1+ (`fn` field) | [arrays](arrays/) |
 | `reshape` `transpose` | 1 | [arrays](arrays/) |
 | `concat` | 1+ | [arrays](arrays/) |
-| `aggregate` | structural | [aggregation](aggregation/) |
+| `faq` | structural | [aggregation](aggregation/) |
 | `argmin` `argmax` | structural | [aggregation](aggregation/) |
 | `skolem` | n-ary | [aggregation](aggregation/) |
 | `rank` | 1 | [aggregation](aggregation/) |

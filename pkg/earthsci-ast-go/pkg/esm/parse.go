@@ -108,6 +108,19 @@ func LoadDocument(document map[string]any, opts ...LoadOption) (*ESMFile, error)
 func LoadString(jsonStr string, opts ...LoadOption) (*ESMFile, error) {
 	o := applyLoadOptions(opts)
 
+	// esm 1.1.0: rewrite the deprecated `faq` op spelling to the
+	// canonical `faq` at the wire boundary, ahead of every other pass, so the
+	// version gates, the schema, the typed tree and Emit all see exactly one
+	// tag (docs/content/rfcs/faq-node-rename.md). The document is only
+	// re-encoded when an alias was actually present, so the overwhelmingly
+	// common case pays nothing and keeps its original bytes.
+	if err := rejectRemovedOps(jsonStr); err != nil {
+		return nil, err
+	}
+	if normalized, ok := normalizeDeprecatedOpAliases(jsonStr); ok {
+		jsonStr = normalized
+	}
+
 	// v0.4.0 expression_templates / apply_expression_template are rejected
 	// when the file declares esm < 0.4.0 (RFC §5.4 spec-version gate), and
 	// the v0.8.0 §9.7 constructs (expression_template_imports, top-level
@@ -713,4 +726,112 @@ func authoredDeclarationBlocks(jsonStr string) (templates, metaparams json.RawMe
 		return nil, nil
 	}
 	return top["expression_templates"], top["metaparameters"]
+}
+
+
+// rewriteOpAliases walks a decoded JSON value depth-first, rewriting
+// `"op": "aggregate"` to `"op": "faq"`, and returns how many nodes it changed.
+func rewriteOpAliases(node any) int {
+	n := 0
+	switch v := node.(type) {
+	case map[string]any:
+		if op, isStr := v["op"].(string); isStr && op == "aggregate" {
+			v["op"] = "faq"
+			n++
+		}
+		for _, child := range v {
+			n += rewriteOpAliases(child)
+		}
+	case []any:
+		for _, child := range v {
+			n += rewriteOpAliases(child)
+		}
+	}
+	return n
+}
+
+// normalizeDeprecatedOpAliases normalizes deprecated expression-node `op`
+// spellings in a JSON document, warning once for the document. It reports
+// whether anything changed; when nothing did, the caller keeps the original
+// bytes.
+//
+// The one alias is `faq` -> `faq` (esm 1.1.0,
+// docs/content/rfcs/faq-node-rename.md). Normalizing at the wire boundary is
+// what lets the rest of the package recognize exactly one spelling: nothing
+// downstream of the loader, Emit included, ever sees the alias, so a document
+// authored with `faq` is upgraded exactly once.
+//
+// The older `faq` spelling is NOT normalized: it was removed at esm 0.8.0
+// and is rejected like any other unknown non-rewrite-target op.
+func normalizeDeprecatedOpAliases(jsonStr string) (string, bool) {
+	var doc any
+	dec := json.NewDecoder(strings.NewReader(jsonStr))
+	dec.UseNumber()
+	if err := dec.Decode(&doc); err != nil {
+		// Malformed JSON is not this pass's error to report; schema
+		// validation below produces the real diagnostic.
+		return jsonStr, false
+	}
+	n := rewriteOpAliases(doc)
+	if n == 0 {
+		return jsonStr, false
+	}
+	out, err := json.Marshal(doc)
+	if err != nil {
+		return jsonStr, false
+	}
+	plural := "nodes were"
+	if n == 1 {
+		plural = "node was"
+	}
+	fmt.Fprintf(os.Stderr,
+		"warning: deprecated_op_alias: `\"op\": \"aggregate\"` is the pre-1.1.0 spelling "+
+			"of `\"op\": \"faq\"` (Functional Aggregate Query); %d %s normalized on load. "+
+			"The alias is REMOVED at esm 2.0.0 — re-emit this document to migrate it "+
+			"(docs/content/rfcs/faq-node-rename.md).\n", n, plural)
+	return string(out), true
+}
+
+// findRemovedOp reports the path of the first `"op": "arrayop"` node, if any.
+func findRemovedOp(node any, at string) (string, bool) {
+	switch v := node.(type) {
+	case map[string]any:
+		if op, isStr := v["op"].(string); isStr && op == "arrayop" {
+			return at, true
+		}
+		for k, child := range v {
+			if hit, ok := findRemovedOp(child, at+"/"+k); ok {
+				return hit, true
+			}
+		}
+	case []any:
+		for i, child := range v {
+			if hit, ok := findRemovedOp(child, fmt.Sprintf("%s/%d", at, i)); ok {
+				return hit, true
+			}
+		}
+	}
+	return "", false
+}
+
+// rejectRemovedOps rejects a document carrying the pre-0.8.0 `arrayop` spelling.
+//
+// `arrayop` is REMOVED, not deprecated: it is a perfectly well-formed
+// identifier, so without this check it falls into the OPEN rewrite-target tier
+// (esm-spec §4.2), loads silently, and fails only much later as an
+// `unlowered_operator`.
+func rejectRemovedOps(jsonStr string) error {
+	var doc any
+	dec := json.NewDecoder(strings.NewReader(jsonStr))
+	dec.UseNumber()
+	if err := dec.Decode(&doc); err != nil {
+		return nil // malformed JSON is schema validation's diagnostic, not ours
+	}
+	if path, found := findRemovedOp(doc, ""); found {
+		return fmt.Errorf(
+			"removed_op at %s: `\"op\": \"arrayop\"` was removed at esm 0.8.0 and is not a "+
+				"deprecated alias; use `\"op\": \"faq\"` (the Functional Aggregate Query node). "+
+				"See docs/content/rfcs/faq-node-rename.md", path)
+	}
+	return nil
 }

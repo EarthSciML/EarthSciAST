@@ -60,9 +60,9 @@ const _XQ_TB = [0.0, -100.0, -200.0, -300.0]
 _xq_khi() = _op("-", _op("+", _v("i"), _i(2)), _v("i"))
 
 function _xq_percell_eq(x::String, body, N::Int)
-    lhs = ESM.OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i"],
+    lhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i"],
         expr_body=_Didx(x, _v("i")), ranges=Dict("i" => [1, N]))
-    rhs = ESM.OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i"],
+    rhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i"],
         expr_body=body, ranges=Dict("i" => [1, N], "k" => Any[_i(1), _xq_khi()]),
         reduce="+")
     ESM.Equation(lhs, rhs)
@@ -109,7 +109,7 @@ function _xq_afbox_model(N)
                       _op("*", _n(-2.0), _idx(x, _v("i"))),
                       _idx(x, _op("+", _v("i"), _i(1))))
     term = _op("*", _idx("W", _v("i"), _v("k")), _v("k"))
-    agg() = ESM.OpExpr("aggregate", ESM.ASTExpr[]; expr_body=term,
+    agg() = ESM.OpExpr("faq", ESM.ASTExpr[]; expr_body=term,
         ranges=Dict{String,Any}("k" => Any[1, 3]), reduce="+")
     mkeq(x) = ESM.Equation(_ao1(_Didx(x, _v("i")), "i", 1, N),
                            _ao1(_op("+", lap(x), agg()), "i", 1, N))

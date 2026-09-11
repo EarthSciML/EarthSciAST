@@ -274,7 +274,7 @@ _ld_has_scalar(hlo, v::String) = occursin("dense<$v> : tensor<f64>", hlo)
                           Dict{String,Any}("op" => "const", "value" => ax),
                           Dict{String,Any}("op" => "index", "args" => Any[x, "i"]),
                           Dict{String,Any}("op" => "index", "args" => Any[x, "i"])])
-        ao(e) = Dict{String,Any}("op" => "arrayop", "output_idx" => Any["i"],
+        ao(e) = Dict{String,Any}("op" => "faq", "output_idx" => Any["i"],
             "ranges" => Dict{String,Any}("i" => Dict{String,Any}("from" => "n")),
             "args" => Any[], "expr" => e)
         eq(x, rhs) = Dict{String,Any}(

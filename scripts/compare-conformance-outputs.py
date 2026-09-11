@@ -119,7 +119,7 @@ def check_coverage(manifest: dict[str, Any], results: dict[str, dict[str, Any]])
 
     Without this, a producer that skips a subdirectory reports 100% consistency
     on the fixtures it happened to look at — which is precisely how the entire
-    `aggregate` and `template_imports` corpora went unswept in four bindings.
+    `faq` and `template_imports` corpora went unswept in four bindings.
     """
     failures: list[Failure] = []
     expected_sets = {

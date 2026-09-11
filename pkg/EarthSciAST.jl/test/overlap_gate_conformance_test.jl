@@ -94,7 +94,7 @@ _op(o, args...) = Dict("op" => o, "args" => Any[args...])
             "equations" => [Dict(
                 "lhs" => _ix("cell_present", "m"),
                 "rhs" => Dict(
-                    "op" => "aggregate",
+                    "op" => "faq",
                     "id" => "cells_with_points",
                     "semiring" => "bool_and_or",
                     "distinct" => true,
@@ -200,10 +200,10 @@ _op(o, args...) = Dict("op" => o, "args" => Any[args...])
                 "F_tgt" => Dict("type" => "unknown", "shape" => ["tgt_cells"])),
             "equations" => [
                 Dict(
-                    "lhs" => Dict("op" => "aggregate", "args" => [], "output_idx" => ["j"],
+                    "lhs" => Dict("op" => "faq", "args" => [], "output_idx" => ["j"],
                         "expr" => Dict("op" => "D", "args" => [_ix("A_j", "j")], "wrt" => "t"),
                         "ranges" => Dict("j" => [1, 3])),
-                    "rhs" => Dict("op" => "aggregate", "semiring" => "sum_product",
+                    "rhs" => Dict("op" => "faq", "semiring" => "sum_product",
                         "output_idx" => ["j"],
                         "ranges" => Dict("i" => Dict("from" => "src_cells"),
                                          "j" => Dict("from" => "tgt_cells")),
@@ -212,10 +212,10 @@ _op(o, args...) = Dict("op" => o, "args" => Any[args...])
                                    "tgt_W", "tgt_S", "tgt_E", "tgt_N"],
                         "expr" => _ix("A_ij", "i", "j"))),
                 Dict(
-                    "lhs" => Dict("op" => "aggregate", "args" => [], "output_idx" => ["j"],
+                    "lhs" => Dict("op" => "faq", "args" => [], "output_idx" => ["j"],
                         "expr" => Dict("op" => "D", "args" => [_ix("F_tgt", "j")], "wrt" => "t"),
                         "ranges" => Dict("j" => [1, 3])),
-                    "rhs" => Dict("op" => "aggregate", "semiring" => "sum_product",
+                    "rhs" => Dict("op" => "faq", "semiring" => "sum_product",
                         "output_idx" => ["j"],
                         "ranges" => Dict("i" => Dict("from" => "src_cells"),
                                          "j" => Dict("from" => "tgt_cells")),

@@ -46,7 +46,7 @@
             "op": "+",
             "args": [
               {
-                "op": "aggregate",
+                "op": "faq",
                 "args": [],
                 "output_idx": [],
                 "reduce": "max",
@@ -54,7 +54,7 @@
                 "expr": { "op": "*", "args": ["i", "max"] }
               },
               {
-                "op": "aggregate",
+                "op": "faq",
                 "args": [],
                 "output_idx": [],
                 "semiring": "min_sum",

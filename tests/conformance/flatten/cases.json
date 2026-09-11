@@ -2934,7 +2934,7 @@
     {
       "id": "edge_enumeration_area_eff",
       "tier": "arrayed",
-      "fixture": "valid/aggregate/edge_enumeration_area_eff.esm",
+      "fixture": "valid/faq/edge_enumeration_area_eff.esm",
       "system_kind": "ode",
       "independent_variables": [
         "t"

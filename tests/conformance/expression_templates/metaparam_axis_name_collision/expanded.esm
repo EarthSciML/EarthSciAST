@@ -107,7 +107,7 @@
                   ],
                   "op": "*"
                 },
-                "op": "aggregate",
+                "op": "faq",
                 "output_idx": [],
                 "ranges": {
                   "i": [
@@ -126,7 +126,7 @@
                   ],
                   "op": "*"
                 },
-                "op": "aggregate",
+                "op": "faq",
                 "output_idx": [],
                 "ranges": {
                   "i": [

@@ -107,7 +107,7 @@ def _doc():
                     {
                         "lhs": "E_PM25",
                         "rhs": {
-                            "op": "aggregate",
+                            "op": "faq",
                             "reduce": "+",
                             "output_idx": ["c"],
                             "ranges": {
@@ -198,7 +198,7 @@ def _doc():
                     {
                         "lhs": "conc_PM25",
                         "rhs": {
-                            "op": "aggregate",
+                            "op": "faq",
                             "reduce": "+",
                             "output_idx": ["rcv"],
                             "ranges": {"rcv": {"from": "rcv_cells"}, "s": {"from": "src_cells"}},

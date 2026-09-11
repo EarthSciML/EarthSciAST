@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "inject_coupling_entry",
     "description": "esm-spec §9.7.10 form B / §10.8: an operator_compose of a 0-D system (Emit) and a discretization-agnostic spatial model (Advection, bare D(c, wrt: lon) with NO import of its own) injects the central-difference BC rule into Advection by name. On load the injection is appended to Advection's scope and the §9.6.3 fixpoint lowers its lon-derivative; the coupling entry's injection map is consumed and does not survive parse->emit."

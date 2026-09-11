@@ -94,7 +94,7 @@ def test_ragged_offsets_resolve_through_factor_scope() -> None:
     )
     # out[i] = sum_{k=1..nedges[i]} k  ->  [1+2, 1+2+3] = [3, 6]
     node = ExprNode(
-        op="aggregate",
+        op="faq",
         args=[],
         output_idx=["i"],
         expr="k",
@@ -158,7 +158,7 @@ _RAGGED_DOC = {
                 {
                     "lhs": "gathered",
                     "rhs": {
-                        "op": "aggregate",
+                        "op": "faq",
                         "args": ["w", "edges_on_cell"],
                         "output_idx": ["i"],
                         "ranges": {
@@ -174,7 +174,7 @@ _RAGGED_DOC = {
                 {
                     "lhs": {"op": "D", "args": ["u"], "wrt": "t"},
                     "rhs": {
-                        "op": "aggregate",
+                        "op": "faq",
                         "args": ["w", "edges_on_cell"],
                         "output_idx": ["i"],
                         "ranges": {

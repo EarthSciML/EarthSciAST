@@ -1739,8 +1739,8 @@ fn outobs_prune_disabled() -> bool {
 ///   * an `ArrayLoop` writes a box of rank `output_ranges.len()` on BOTH the
 ///     vectorized fast path and the per-cell oracle (see
 ///     [`materialize_observeds_pass`]);
-///   * a `Scalar` rule whose body is an `aggregate` carrying a body (`expr`) and
-///     a non-empty `output_idx` is evaluated by [`eval_arrayop`], which returns
+///   * a `Scalar` rule whose body is a `faq` carrying a body (`expr`) and
+///     a non-empty `output_idx` is evaluated by [`eval_faq`], which returns
 ///     a `Value::Array` of rank `output_idx.len()`. (Without `expr` the oracle
 ///     reports the scalar `NaN` sentinel, hence the `expr.is_some()` guard.)
 ///
@@ -1754,7 +1754,7 @@ pub(super) fn observed_rule_is_array_valued(rule: &AlgebraicRule) -> bool {
         | AlgebraicRule::Recurrence { output_ranges, .. } => !output_ranges.is_empty(),
         AlgebraicRule::Scalar { body, .. } => match &**body {
             Expr::Operator(node) => {
-                node.op == "aggregate"
+                node.op == "faq"
                     && node.expr.is_some()
                     && node.output_idx.as_ref().is_some_and(|ix| !ix.is_empty())
             }
@@ -1946,7 +1946,7 @@ mod forcing_channel_tests {
                   "equations": [
                     {
                       "lhs": {
-                        "op": "aggregate",
+                        "op": "faq",
                         "args": [],
                         "output_idx": [
                           "i"
@@ -1972,7 +1972,7 @@ mod forcing_channel_tests {
                         }
                       },
                       "rhs": {
-                        "op": "aggregate",
+                        "op": "faq",
                         "args": [],
                         "output_idx": [
                           "i"
@@ -2100,7 +2100,7 @@ mod forcing_channel_tests {
                   "equations": [
                     {
                       "lhs": {
-                        "op": "aggregate",
+                        "op": "faq",
                         "args": [],
                         "output_idx": [
                           "i"
@@ -2126,7 +2126,7 @@ mod forcing_channel_tests {
                         }
                       },
                       "rhs": {
-                        "op": "aggregate",
+                        "op": "faq",
                         "args": [],
                         "output_idx": [
                           "i"
@@ -2215,7 +2215,7 @@ mod forcing_channel_tests {
                   "equations": [
                     {
                       "lhs": {
-                        "op": "aggregate",
+                        "op": "faq",
                         "args": [],
                         "output_idx": [
                           "i"
@@ -2241,7 +2241,7 @@ mod forcing_channel_tests {
                         }
                       },
                       "rhs": {
-                        "op": "aggregate",
+                        "op": "faq",
                         "args": [],
                         "output_idx": [
                           "i"

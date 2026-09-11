@@ -127,7 +127,7 @@ def test_two_rename_keys_onto_one_target_is_a_collision(tmp_path):
 def _join_leaf() -> dict:
     """A leaf whose `aggregate` joins on a loop symbol against an index set.
 
-    Modelled on ``tests/valid/aggregate/join_moves_running_exhaust.esm``: each
+    Modelled on ``tests/valid/faq/join_moves_running_exhaust.esm``: each
     ``on`` pair is ``[loop symbol, index set]``, which is exactly the mix the
     rename rule has to tell apart.
     """
@@ -146,7 +146,7 @@ def _join_leaf() -> dict:
                     {
                         "lhs": {"op": "D", "args": ["e"], "wrt": "t"},
                         "rhs": {
-                            "op": "aggregate",
+                            "op": "faq",
                             "args": [],
                             "output_idx": ["src"],
                             "semiring": "sum_product",

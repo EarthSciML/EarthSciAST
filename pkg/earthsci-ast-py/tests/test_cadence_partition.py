@@ -223,7 +223,7 @@ def test_guard_continuous_relational_rejected():
             {
                 "lhs": {"op": "index", "args": ["edge_exists", "e"]},
                 "rhs": {
-                    "op": "aggregate",
+                    "op": "faq",
                     "distinct": True,
                     "semiring": "bool_and_or",
                     "output_idx": ["e"],
@@ -244,12 +244,12 @@ def test_guard_continuous_relational_rejected():
 
 
 def test_continuous_relational_fixture_rejected():
-    """The shared invalid fixture tests/invalid/aggregate/continuous_relational_node.esm
+    """The shared invalid fixture tests/invalid/faq/continuous_relational_node.esm
     — a relational/value-invention node whose Skolem key reads an `unknown` var — is
     SCHEMA-VALID (Go / TS accept it, marked resolver_only) but the partition pass
     rejects it (guard 2). The same fixture is rejected by the Julia and Rust
     siblings, so all three evaluators agree (bead ess-my4.3.11)."""
-    path = INVALID_DIR / "aggregate" / "continuous_relational_node.esm"
+    path = INVALID_DIR / "faq" / "continuous_relational_node.esm"
     model = json.loads(path.read_text())["models"]["ContinuousRelationalNode"]
     with pytest.raises(CadenceError, match="CONTINUOUS"):
         partition(model)
@@ -268,7 +268,7 @@ def test_guard_from_faq_cycle_rejected():
             {
                 "lhs": {"op": "index", "args": ["a", "x"]},
                 "rhs": {
-                    "op": "aggregate",
+                    "op": "faq",
                     "id": "nodeA",
                     "distinct": True,
                     "semiring": "bool_and_or",
@@ -280,7 +280,7 @@ def test_guard_from_faq_cycle_rejected():
             {
                 "lhs": {"op": "index", "args": ["b", "x"]},
                 "rhs": {
-                    "op": "aggregate",
+                    "op": "faq",
                     "id": "nodeB",
                     "distinct": True,
                     "semiring": "bool_and_or",

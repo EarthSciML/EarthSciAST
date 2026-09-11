@@ -504,7 +504,7 @@ def assert_no_continuous_relational(
     if _cache is None:
         _cache = {}
     op = node.get("op")
-    is_relational = op in RELATIONAL_OPS or (op == "aggregate" and node.get("distinct"))
+    is_relational = op in RELATIONAL_OPS or (op == "faq" and node.get("distinct"))
     if is_relational and classify(node, model, _cache) == "continuous":
         raise CadenceError(
             f"relational/value-invention node op={op!r} classifies CONTINUOUS — "

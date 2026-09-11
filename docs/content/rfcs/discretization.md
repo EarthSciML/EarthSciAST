@@ -120,21 +120,21 @@ the expansion rule and §7.3 for the worked MPAS divergence example.
 
 The existing `index` op (spec §4.3.3) is sufficient for every array-element
 reference this RFC needs. `index` is **not** restricted to appearing inside
-`arrayop.expr`; the parenthetical in §4.3.3 — "as a string, when inside an
-`arrayop.expr`" — qualifies only the interpretation of a bare-string index
+`faq.expr`; the parenthetical in §4.3.3 — "as a string, when inside an
+`faq.expr`" — qualifies only the interpretation of a bare-string index
 argument as a symbolic index variable, not the op's legal contexts.
 
 This RFC normatively confirms and adds:
 
 1. **`index` is legal in any expression context**, including the `rhs` of a
    model equation, a coupling expression, or a BC replacement AST. Outside
-   `arrayop.expr`, bare-string index arguments are resolved as ordinary
+   `faq.expr`, bare-string index arguments are resolved as ordinary
    parameter references (§6.2 of the spec), not as symbolic index variables.
 2. **Integer literals and composite index expressions** are permitted:
    `{op:"index", args:["u", 0]}`, `{op:"index", args:["u", {op:"+",
    args:["i", 1]}]}`, and `{op:"index", args:["cellsOnEdge", "$e", 1]}` are
    all valid. This is already consistent with §4.3.3 — this RFC only pins it.
-3. **Resolution of `index` on a non-`arrayop` expression.** Given
+3. **Resolution of `index` on a non-`faq` expression.** Given
    `{op:"index", args:[E, i_1, ..., i_n]}` where `E` is not a bare variable
    name:
    - If `E` is a `makearray`, reduce by the `makearray` axes' extents
@@ -204,7 +204,7 @@ enumerated per op and are fixed by this RFC:
 | `grad`, `div`, `laplacian` | `dim` (when present) |
 | `bc` | `kind`, `side` |
 | `index` | (none — all args are Expression) |
-| `arrayop` | `idx` (each entry), `reduce.op` |
+| `faq` | `idx` (each entry), `reduce.op` |
 | `broadcast` | `fn` |
 | `transpose` | (none — `perm` is a literal list) |
 | `regrid` (new; §5.3) | `from`, `to` |
@@ -1167,7 +1167,7 @@ gt-adhm M4).** A `reduction` selector's `k_bound` field names an
 iteration variable that becomes **in scope inside the scheme's `coeff`
 tree alongside `$target`**. The name is a string identifier (typically
 `"k"`); the `coeff` may reference it as a bare string (which the
-engine binds to the `arrayop`'s index variable at materialization time,
+engine binds to the `faq`'s index variable at materialization time,
 §7.2), exactly like `$target`. The `k_bound` identifier is **not**
 prefixed with `$` — it is a local binding, not a pattern variable. The
 following are reserved local index names per grid family (not available
@@ -1304,7 +1304,7 @@ expressions:
 |---|---|
 | `cartesian` | For target `[..., axis_idx, ...]`, output the same list with `axis_idx` replaced by `{op:"+", args:[axis_idx, offset]}`. |
 | `indirect` | Emit `[index_expr]` after `$target`-substitution. `index_expr` is a single index expression into the indexed variable. |
-| `reduction` | Lower to an `arrayop` over the index `k` running `0 .. count_expr - 1`, with element `coeff · index(operand, table[target, k])`, reducing via `combine`. |
+| `reduction` | Lower to an `faq` over the index `k` running `0 .. count_expr - 1`, with element `coeff · index(operand, table[target, k])`, reducing via `combine`. |
 
 All cases are pure AST transforms; no runtime array data is touched.
 
@@ -1396,11 +1396,11 @@ Scheme:
 ```
 
 Expansion at cell `c` lowers (§7.2 `reduction` row) to the following,
-which conforms **exactly** to base-spec §4.3.1 `arrayop` (resolves
+which conforms **exactly** to base-spec §4.3.1 `faq` (resolves
 gt-j6do New C2):
 
 ```json
-{ "op": "arrayop",
+{ "op": "faq",
   "output_idx": [],
   "expr": { "op": "*", "args": [
       { "op": "/", "args": [
@@ -1436,18 +1436,18 @@ per gt-j6do New C2):
   name, as the base-spec matmul example does (L214, L228). `k` is not
   listed (it is an index variable, not an array).
 
-This is the same `arrayop` shape the existing spec §4.3.1 supports; no new
+This is the same `faq` shape the existing spec §4.3.1 supports; no new
 AST node is introduced for the reduction. The MPAS worked example **parses
-against the base-spec `arrayop` schema** — a conformance fixture under
+against the base-spec `faq` schema** — a conformance fixture under
 `tests/conformance/discretization/step3_mpas/` MUST include a JSON-schema
 validation assertion that this lowered form validates against
-`esm-schema.json`'s `arrayop` definition. MPAS thus "reduces to" the stencil
-template after one lowering step to `arrayop`, consistent with §4's
+`esm-schema.json`'s `faq` definition. MPAS thus "reduces to" the stencil
+template after one lowering step to `faq`, consistent with §4's
 architectural claim.
 
 The inner `index` on `edgesOnCell` is a dynamic index: `k` is a symbolic
-index variable valid inside `arrayop.expr` (per spec §4.3.3), so `"k"` as a
-bare string is permitted and resolves to the arrayop index variable — no
+index variable valid inside `faq.expr` (per spec §4.3.3), so `"k"` as a
+bare string is permitted and resolves to the faq index variable — no
 `regrid` is needed because we remain on grid `mpas_cvmesh`.
 
 ### 7.4 Schema — `staggering_rules` (unstructured C-grid, resolves esm-15f)
@@ -1611,18 +1611,18 @@ cross-binding fixture.
 > naming/composition convenience for a sum of
 > `sign · metric_component(i,j) · per-axis-1D-stencil` terms that — by its
 > own former expansion semantics — reduced to a sum of standard §4.3.1
-> `arrayop` nodes after a single lowering step. It was never an
+> `faq` nodes after a single lowering step. It was never an
 > irreducible primitive, and it had no production consumers at removal
 > time.
 >
 > The covariant operators it was meant for — the full covariant Laplacian
 > and gradient on curvilinear / lat–lon grids — are now expressed directly
-> as generic **`arrayop`-einsum replacement rules** built from base AST
+> as generic **`faq`-einsum replacement rules** built from base AST
 > ops only: multi-axis `index` gathers (including the four NE/NW/SE/SW
 > corner gathers for the off-diagonal `g_xieta` cross-derivative),
 > arithmetic, and `const`-array metric coefficients. No dedicated
 > composite scheme kind is required. Authors needing a covariant operator
-> should compose it from the §4.3.1 `arrayop` / `index` ops (see the ESD
+> should compose it from the §4.3.1 `faq` / `index` ops (see the ESD
 > covariant finite-volume rule set) rather than a discretization
 > composite.
 >
@@ -1878,7 +1878,7 @@ stencil/coeff expressions reference them by name.
 **Trigger paths:**
 
 1. **Consumed directly** — a `use:` rule matches the provider's `applies_to`;
-   the engine emits one observed arrayop equation per declared output and rewrites
+   the engine emits one observed faq equation per declared output and rewrites
    the matched expression to the output named by `primary`.
 
 2. **Demanded by a consumer** — the provider's `applies_to` has no occurrence in
@@ -1904,7 +1904,7 @@ stencil/coeff expressions reference them by name.
 
 **Staggered extents (OQ1 resolved):** For a face-located output
 (`emits_location: "face"`) on a bounded (non-periodic) dimension, the emitted
-arrayop `ranges` along the stencil axis extend to `n+1` (bounded dimension with
+faq `ranges` along the stencil axis extend to `n+1` (bounded dimension with
 `n` cells has `n+1` faces). Periodic dimensions retain `n` faces (face extent
 equals cell extent). All other output locations keep `n` on bounded dimensions.
 The `derived:` block for non-stencil outputs (OQ3) is deferred to a follow-on
@@ -2358,7 +2358,7 @@ identical discretized expressions (post-canonicalization).
 
 **Scope.** Everything Step 2 onwards depends on:
 
-- `index` extension for out-of-`arrayop` contexts in all five bindings
+- `index` extension for out-of-`faq` contexts in all five bindings
   (§5.1).
 - Pattern-match / rule engine in all five bindings (§5.2).
 - `regrid` AST op in all five bindings (§5.3).
@@ -2503,7 +2503,7 @@ embed MLIR textual payloads, pushing round-trip fidelity onto every binding
 and re-introducing the "math parser" dependency §4 of the base spec forbids.
 Additionally, MLIR's dialect space is a moving target; pinning to a dialect
 would couple ESM's stability to LLVM's release cadence. We prefer the
-in-format `arrayop` lowering (§7.3) for MPAS because it reuses the existing
+in-format `faq` lowering (§7.3) for MPAS because it reuses the existing
 AST and stays diff-friendly.
 
 ### 15.2 SymPy Wild / Replacer DSL
@@ -2546,16 +2546,16 @@ Authors coming from OpenFOAM should find ESM's authoring surface familiar.
 The RFC's choice to model schemes as data (rather than library hooks) is
 the specific departure.
 
-### 15.4 `makearray + single arrayop` compression
+### 15.4 `makearray + single faq` compression
 
 **Rejected for the general case, accepted for reductions (§7.3).**
 Review gt-tlw2 correctly notes that the v1 rejection of "fully-materialized
-arrayop" was too strong. For *rectangular* interior regions the output
-compresses to a single `makearray` with one `arrayop` body — O(1) file
+faq" was too strong. For *rectangular* interior regions the output
+compresses to a single `makearray` with one `faq` body — O(1) file
 size. But boundary regions (ghost cells, side-specific rules) require
-region-specific rewrites; a single arrayop per region is necessary.
+region-specific rewrites; a single faq per region is necessary.
 The MVP keeps interior regions as per-cell expressions (consistent with
-MOL PR #531's output) and uses `arrayop` for reductions (§7.3). A later
+MOL PR #531's output) and uses `faq` for reductions (§7.3). A later
 optimization pass could collapse identical per-cell forms into `makearray`
 without any schema change — this is a runtime/binding concern and out of
 scope for v0.2.
@@ -2649,7 +2649,7 @@ diff quickly.
 **Critical issues:**
 
 - **C1 (idx vs index).** Resolved: `idx` dropped; §5.1 extends `index`
-  contexts and documents composite index expressions and non-`arrayop`
+  contexts and documents composite index expressions and non-`faq`
   resolution semantics.
 - **C2 (BCs duplicate domain BCs).** Resolved: §9 introduces model-level
   `boundary_conditions`; §10.1 documents removal of
@@ -2675,7 +2675,7 @@ diff quickly.
 - **M1 (scalar dx vs dx[i]).** Resolved: §6.2.1 option (b) — engine
   auto-rewrites scalar metric refs to `index` when `spacing: "nonuniform"`.
 - **M2 (MPAS variable-valence).** Resolved: §4 + §7 add the `reduction`
-  selector; §7.3 ships a worked MPAS divergence that lowers to `arrayop`.
+  selector; §7.3 ships a worked MPAS divergence that lowers to `faq`.
 - **M3 (`$e` target binding).** Resolved: §7.1.1 defines `$target` and
   its components per grid family; `$e` for edge-operand schemes is an
   implicit alias for `$target`.
@@ -2746,11 +2746,11 @@ findings it resolves and the section(s) that carry the normative text.
     `[start, stop]` ranges, string `reduce`, explicit `args` list).
     Resolves gt-j6do **New C2**. §7.3 now carries a self-validation
     note requiring the conformance fixture to assert JSON-schema
-    validation against the base-spec `arrayop`.
+    validation against the base-spec `faq`.
   - `$target` chooser for unstructured grids now reads "emits_location
     if set, else operand's location" (§7.1.1). §7.3 conforms:
     `emits_location: cell_center` → `$target = c`. Every `index`
-    reference inside the expanded `arrayop` uses connectivity tables
+    reference inside the expanded `faq` uses connectivity tables
     (`index(edgesOnCell, c, k)`) rather than bare `$target` for edge
     operands. Resolves gt-adhm **C2**.
 

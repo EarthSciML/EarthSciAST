@@ -42,7 +42,7 @@ const _BI_TGT = Any[_bi_rect(1.5 * (C - 1), 1.5 * C, 1.5 * (R - 1), 1.5 * R)
                     for R in 1:2 for C in 1:2]
 
 _bi_agg(output_idx, ranges, expr; filter=nothing, args=Any[]) = begin
-    d = Dict{String,Any}("op" => "aggregate", "semiring" => "sum_product",
+    d = Dict{String,Any}("op" => "faq", "semiring" => "sum_product",
                          "output_idx" => output_idx, "ranges" => ranges,
                          "args" => args, "expr" => expr)
     filter === nothing || (d["filter"] = filter)

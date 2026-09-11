@@ -542,7 +542,7 @@ export function evalMetaExpr(expr: Json, env: Record<string, number>, ctx: strin
 
 /**
  * Fold metaparameter expressions in the structural integer sites —
- * `aggregate` dense `ranges` tuple entries and `makearray` `regions` bound
+ * `faq` dense `ranges` tuple entries and `makearray` `regions` bound
  * pairs — to concrete integers, in place, wherever they are already closed.
  * Entries still carrying a bare name (a template-param slot, or an open
  * metaparameter in a not-yet-fully-bound library) are left symbolic for a
@@ -556,7 +556,7 @@ function foldStructuralSites(x: Json, ctx: string): void {
   }
   if (!isObject(x)) return
   const op = typeof x.op === 'string' ? x.op : ''
-  if (op === 'aggregate') {
+  if (op === 'faq') {
     const ranges = x.ranges
     if (isObject(ranges)) {
       for (const [k, rv] of Object.entries(ranges)) {
@@ -1024,7 +1024,7 @@ function collectBoundSyms(out: Set<string>, x: Json): Set<string> {
     return out
   }
   if (!isObject(x)) return out
-  if (x.op === 'aggregate') {
+  if (x.op === 'faq') {
     const oi = x.output_idx
     if (Array.isArray(oi)) {
       for (const e of oi) if (typeof e === 'string') out.add(e)
@@ -1944,7 +1944,7 @@ function substituteClosedValues(
 
 /**
  * Phase 7 — fold the structural integer sites of the closed document
- * (`aggregate` ranges, `makearray` regions, index-set `size`s). A remaining
+ * (`faq` ranges, `makearray` regions, index-set `size`s). A remaining
  * open index-set size is `metaparameter_unbound` at the root (`'reject'`).
  */
 function foldClosedDocument(

@@ -146,14 +146,14 @@
     { "id": "end_to_end/ocean_atmosphere_biogeochemistry",  "path": "end_to_end/ocean_atmosphere_biogeochemistry.esm",  "tags": ["end_to_end", "coupling", "esm-umm", "divergent"] },
     { "id": "end_to_end/land_atmosphere_hydrology",         "path": "end_to_end/land_atmosphere_hydrology.esm",         "tags": ["end_to_end", "coupling", "esm-umm", "divergent"] },
 
-    { "id": "fixtures/arrayop/01_pure_ode_analytical",      "path": "fixtures/arrayop/01_pure_ode_analytical.esm",      "tags": ["arrayop"] },
-    { "id": "fixtures/arrayop/02_mixed_ode_algebraic",      "path": "fixtures/arrayop/02_mixed_ode_algebraic.esm",      "tags": ["arrayop"] },
-    { "id": "fixtures/arrayop/03_1d_stencil_mass_conservation", "path": "fixtures/arrayop/03_1d_stencil_mass_conservation.esm", "tags": ["arrayop"] },
-    { "id": "fixtures/arrayop/04_weno_wide_stencil",        "path": "fixtures/arrayop/04_weno_wide_stencil.esm",        "tags": ["arrayop"] },
-    { "id": "fixtures/arrayop/06_rearranged_algebraic",     "path": "fixtures/arrayop/06_rearranged_algebraic.esm",     "tags": ["arrayop"] },
-    { "id": "fixtures/arrayop/23_arrayop_pure_matvec_contraction", "path": "fixtures/arrayop/23_arrayop_pure_matvec_contraction.esm", "tags": ["arrayop", "contraction", "ess-zmm"] },
+    { "id": "fixtures/faq/01_pure_ode_analytical",      "path": "fixtures/faq/01_pure_ode_analytical.esm",      "tags": ["faq"] },
+    { "id": "fixtures/faq/02_mixed_ode_algebraic",      "path": "fixtures/faq/02_mixed_ode_algebraic.esm",      "tags": ["faq"] },
+    { "id": "fixtures/faq/03_1d_stencil_mass_conservation", "path": "fixtures/faq/03_1d_stencil_mass_conservation.esm", "tags": ["faq"] },
+    { "id": "fixtures/faq/04_weno_wide_stencil",        "path": "fixtures/faq/04_weno_wide_stencil.esm",        "tags": ["faq"] },
+    { "id": "fixtures/faq/06_rearranged_algebraic",     "path": "fixtures/faq/06_rearranged_algebraic.esm",     "tags": ["faq"] },
+    { "id": "fixtures/faq/23_faq_pure_matvec_contraction", "path": "fixtures/faq/23_faq_pure_matvec_contraction.esm", "tags": ["faq", "contraction", "ess-zmm"] },
 
-    { "id": "indexing/idx_outside_arrayop",                 "path": "indexing/idx_outside_arrayop.esm",                 "tags": ["indexing", "rfc-discretization-5.1"] },
+    { "id": "indexing/idx_outside_faq",                 "path": "indexing/idx_outside_faq.esm",                 "tags": ["indexing", "rfc-discretization-5.1"] },
 
     { "id": "fixtures/arrayed_vars/scalar_no_shape", "path": "fixtures/arrayed_vars/scalar_no_shape.esm", "tags": ["arrayed_vars", "regression"] },
     { "id": "fixtures/arrayed_vars/scalar_explicit", "path": "fixtures/arrayed_vars/scalar_explicit.esm", "tags": ["arrayed_vars"] },
@@ -196,8 +196,8 @@
     { "id": "valid/fractional_stoichiometry",        "path": "valid/fractional_stoichiometry.esm",        "tags": ["reactions", "fractional-stoichiometry", "gt-1e96"] },
 
     { "id": "valid/integral_operator_pide",          "path": "valid/integral_operator_pide.esm",          "tags": ["expressions", "integral", "pide", "ess-886"] },
-    { "id": "valid/aggregate/cumulative_prefix_reduction", "path": "valid/aggregate/cumulative_prefix_reduction.esm", "tags": ["aggregate", "filter", "cumulative", "prefix-sum", "scan", "measure"] },
-    { "id": "valid/aggregate/coordinate_int_ratio_spacing", "path": "valid/aggregate/coordinate_int_ratio_spacing.esm", "tags": ["aggregate", "int-division", "canonical-number", "5.5.3.1", "ess-aggregate-intdiv"] },
+    { "id": "valid/faq/cumulative_prefix_reduction", "path": "valid/faq/cumulative_prefix_reduction.esm", "tags": ["faq", "filter", "cumulative", "prefix-sum", "scan", "measure"] },
+    { "id": "valid/faq/coordinate_int_ratio_spacing", "path": "valid/faq/coordinate_int_ratio_spacing.esm", "tags": ["faq", "int-division", "canonical-number", "5.5.3.1", "ess-aggregate-intdiv"] },
 
     { "id": "valid/advection_reaction_loaded_ic_bc", "path": "valid/advection_reaction_loaded_ic_bc.esm", "tags": ["expression_templates", "transforming"],
       "load_transforms": [
@@ -224,7 +224,7 @@
     { "id": "valid/makearray_empty_region_min_extent", "path": "valid/makearray_empty_region_min_extent.esm", "tags": ["makearray", "metaparameters", "transforming"],
       "load_transforms": [
         { "transform": "metaparameter_folding", "spec": "esm-spec 9.7.6 / 9.6.4 rule 5 'Instantiating load'",
-          "detail": "N folds into the aggregate ranges and the makearray region bounds — the fold this fixture exists to pin, since [2, N-1] at N = 2 must produce the legal EMPTY bound [2, 1] (4.3.2). All five bindings." }
+          "detail": "N folds into the faq ranges and the makearray region bounds — the fold this fixture exists to pin, since [2, N-1] at N = 2 must produce the legal EMPTY bound [2, 1] (4.3.2). All five bindings." }
       ] },
     { "id": "valid/lib_calendar_subsystem_inclusion", "path": "valid/lib_calendar_subsystem_inclusion.esm", "tags": ["subsystems", "transforming"],
       "load_transforms": [

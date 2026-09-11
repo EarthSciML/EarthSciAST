@@ -213,7 +213,7 @@ same rejection diagnostic.
       "params": ["f"],
       "match": { "op": "D", "args": ["f"], "wrt": "x" },
       "body": {
-        "op": "aggregate", "output_idx": ["i"], "args": ["f"],
+        "op": "faq", "output_idx": ["i"], "args": ["f"],
         "ranges": { "i": [2, { "op": "-", "args": ["N", 1] }] },
         "expr": { "op": "/", "args": [
           { "op": "-", "args": [

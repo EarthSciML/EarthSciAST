@@ -31,7 +31,7 @@ const ESMs = EarthSciAST
 _s_Dt(v) = Dict{String,Any}("op" => "D", "args" => Any[v], "wrt" => "t")
 _s_ix(v, i...) = Dict{String,Any}("op" => "index", "args" => Any[v, i...])
 _s_o(o, a...) = Dict{String,Any}("op" => o, "args" => Any[a...])
-_s_ao(e) = Dict{String,Any}("op" => "arrayop", "output_idx" => Any["i"],
+_s_ao(e) = Dict{String,Any}("op" => "faq", "output_idx" => Any["i"],
     "ranges" => Dict{String,Any}("i" => Dict{String,Any}("from" => "n")),
     "args" => Any[], "expr" => e)
 
@@ -384,7 +384,7 @@ function _s_sub_fixture(dir, N)
         ap(ix("f", "i", "j"), ix("f", "j", "i")),
         Dict("op" => "*", "args" => Any[ap(ix("f", "i", "j"), ix("f", "i", "j")), 0.125])])
     inner = Dict("params" => Any["f"],
-                 "body" => Dict("op" => "aggregate", "output_idx" => Any["i", "j"],
+                 "body" => Dict("op" => "faq", "output_idx" => Any["i", "j"],
                                 "args" => Any["f"],
                                 "ranges" => Dict("i" => Dict("from" => "x"),
                                                  "j" => Dict("from" => "y")),

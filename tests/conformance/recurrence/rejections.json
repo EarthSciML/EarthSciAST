@@ -15,7 +15,7 @@
       "expected_path": "/models/R/equations/0/rhs",
       "why": "index(s, k+1) names a cell the sweep has not reached. Provably later on its axis, so no sweep order satisfies it.",
       "document": {
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {
           "name": "R",
           "description": "rejection case",
@@ -47,7 +47,7 @@
               {
                 "lhs": "s",
                 "rhs": {
-                  "op": "aggregate",
+                  "op": "faq",
                   "args": [],
                   "output_idx": [
                     "k"
@@ -83,7 +83,7 @@
       "expected_path": "/models/R/equations/0/rhs",
       "why": "index(s, k) defines s in terms of itself at the same cell -- an implicit equation, not a recurrence.",
       "document": {
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {
           "name": "R",
           "description": "rejection case",
@@ -115,7 +115,7 @@
               {
                 "lhs": "s",
                 "rhs": {
-                  "op": "aggregate",
+                  "op": "faq",
                   "args": [],
                   "output_idx": [
                     "k"
@@ -145,7 +145,7 @@
       "expected_path": "/models/R/equations/0/rhs",
       "why": "a bare `s` alongside an `index` read names the WHOLE array, which does not exist while the sweep is in progress.",
       "document": {
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {
           "name": "R",
           "description": "rejection case",
@@ -177,7 +177,7 @@
               {
                 "lhs": "s",
                 "rhs": {
-                  "op": "aggregate",
+                  "op": "faq",
                   "args": [],
                   "output_idx": [
                     "k"
@@ -219,7 +219,7 @@
       "expected_path": "/models/R/equations/0/rhs",
       "why": "index(s, 2*k) carries the frame symbol with coefficient 2, so it names no position RELATIVE to the cell being written and neither the axis nor the direction is decidable. The coefficient is the half of the proof obligation that is mandatory.",
       "document": {
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {
           "name": "R",
           "description": "rejection case",
@@ -251,7 +251,7 @@
               {
                 "lhs": "s",
                 "rhs": {
-                  "op": "aggregate",
+                  "op": "faq",
                   "args": [],
                   "output_idx": [
                     "k"
@@ -287,7 +287,7 @@
       "expected_path": "/models/R/equations/0/rhs",
       "why": "index(s, 1) does not mention the frame symbol at all, so it says nothing about which axis the recurrence folds along.",
       "document": {
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {
           "name": "R",
           "description": "rejection case",
@@ -319,7 +319,7 @@
               {
                 "lhs": "s",
                 "rhs": {
-                  "op": "aggregate",
+                  "op": "faq",
                   "args": [],
                   "output_idx": [
                     "k"
@@ -349,7 +349,7 @@
       "expected_path": "/models/R2/equations/0/rhs",
       "why": "index(m, i-1, j-1) is offset on both axes. A recurrence folds along exactly ONE axis; the sweep cannot advance two at once.",
       "document": {
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {
           "name": "R2",
           "description": "rejection case",
@@ -386,7 +386,7 @@
               {
                 "lhs": "m",
                 "rhs": {
-                  "op": "aggregate",
+                  "op": "faq",
                   "args": [],
                   "output_idx": [
                     "i",
@@ -433,7 +433,7 @@
       "expected_path": "/models/R2/equations/0/rhs",
       "why": "THE BOUNDARY CASE. An unprovable lag is admitted (see fixture 08) -- but admitting it identifies the recurrence axis without stopping the axis COUNT. index(m, i-n, j-n) with `n` a parameter is still two axes. This is the one place an unprovable lag rejects, and it is one `if` away from being lost in a refactor, which is why it is pinned across bindings rather than in one binding's unit tests.",
       "document": {
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {
           "name": "R2",
           "description": "rejection case",
@@ -475,7 +475,7 @@
               {
                 "lhs": "m",
                 "rhs": {
-                  "op": "aggregate",
+                  "op": "faq",
                   "args": [],
                   "output_idx": [
                     "i",
@@ -522,7 +522,7 @@
       "expected_path": "/models/R/equations/0/rhs",
       "why": "the READ is causal but the CARRIER cannot sequence it. A `makearray` region's value expression is evaluated ONCE for the whole region; 4.3.2's overlap rule (`later entries overwrite earlier ones`) fixes which write WINS, not the order cells are EVALUATED in. Distinct code from the family above for exactly that reason.",
       "document": {
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {
           "name": "R",
           "description": "rejection case",
@@ -573,7 +573,7 @@
                   "values": [
                     1.0,
                     {
-                      "op": "aggregate",
+                      "op": "faq",
                       "args": [],
                       "output_idx": [
                         "k"

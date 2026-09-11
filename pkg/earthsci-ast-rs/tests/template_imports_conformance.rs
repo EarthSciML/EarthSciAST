@@ -101,7 +101,7 @@ fn import_smoke_matches_golden() {
     assert_eq!(stencil.op, "makearray");
 }
 
-/// aggregate_int_ratio_golden: CONFORMANCE_SPEC §5.5.3.1 rule 1 on the
+/// faq_int_ratio_golden: CONFORMANCE_SPEC §5.5.3.1 rule 1 on the
 /// AST-golden pathway. A `coord` template body cos(pi·aggregate((i−1/2)·(1/8)))
 /// is expanded so an integer ratio {op:/,args:[1,8]} lands inside a nested,
 /// float-heavy aggregate `expr`. Julia's JSON3 reader widened those integer
@@ -109,13 +109,13 @@ fn import_smoke_matches_golden() {
 /// reproduce the committed `[1,8]` golden byte-for-byte (serde_json `Value`
 /// equality distinguishes an integer from a float).
 #[test]
-fn aggregate_int_ratio_golden_matches_golden() {
+fn faq_int_ratio_golden_matches_golden() {
     assert_eq!(
-        expand_raw(&conf(&["aggregate_int_ratio_golden", "fixture.esm"])),
-        golden(&conf(&["aggregate_int_ratio_golden", "expanded.esm"]))
+        expand_raw(&conf(&["faq_int_ratio_golden", "fixture.esm"])),
+        golden(&conf(&["faq_int_ratio_golden", "expanded.esm"]))
     );
     // The in-aggregate ratio and the standalone dx=1/8 both stay integers.
-    let expanded = expand_raw(&conf(&["aggregate_int_ratio_golden", "fixture.esm"]));
+    let expanded = expand_raw(&conf(&["faq_int_ratio_golden", "fixture.esm"]));
     let dx = &earthsci_ast::observed_definition_json(&expanded["models"]["M"], "dx")
         .expect("dx defining equation")["args"];
     assert!(dx[0].is_i64() || dx[0].is_u64());
@@ -245,7 +245,7 @@ fn import_rename_integral_axis_matches_golden() {
     // carried `var`/`upper` per edge, so col's rule fired on lev, row's on lat.
     for (name, axis, n) in [("Q", "lev", 4), ("P", "lat", 3)] {
         let agg = obs_def(model, name);
-        assert_eq!(agg["op"], "aggregate");
+        assert_eq!(agg["op"], "faq");
         assert_eq!(agg["ranges"]["i"]["from"], axis);
         assert_eq!(agg["ranges"]["j"]["from"], axis);
         let measure = &agg["expr"]["args"][1];
@@ -1066,7 +1066,7 @@ fn metaparameter_fold_ranges_regions_size_exact() {
                     {
                       "lhs": "agg",
                       "rhs": {
-                        "op": "aggregate",
+                        "op": "faq",
                         "output_idx": [
                           "i"
                         ],

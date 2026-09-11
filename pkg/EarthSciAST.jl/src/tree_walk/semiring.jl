@@ -61,9 +61,9 @@ function _aggregate_oplus_identity(semiring::Union{String,Nothing},
     return (r, _OPLUS_IDENTITY[r])
 end
 
-# True for both the canonical `aggregate` op tag and its deprecated `arrayop`
+# True for both the canonical `faq` op tag and its deprecated `faq`
 # alias (§5.6). The evaluator dispatches on the two identically.
-@inline _is_aggregate_op(op::AbstractString) = (op == "arrayop" || op == "aggregate")
+@inline _is_aggregate_op(op::AbstractString) = (op == "faq")
 
 # Combine a vector of expressions with the semiring ⊕ (`oplus`), returning the
 # 0̄ identity (`zerobar`) for an empty reduction. Build-time helper for

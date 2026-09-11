@@ -111,7 +111,7 @@ function _mtk_extended_op(op::AbstractString, expr::OpExpr,
                op == "<=" ? l <= r :
                op == "==" ? l == r :
                             l != r
-    elseif op == "arrayop" || op == "aggregate"
+    elseif op == "faq"
         return _build_arrayop_sym(expr, var_dict, t_sym, dim_dict)
     elseif op == "makearray"
         return _build_makearray(expr, var_dict, t_sym, dim_dict)

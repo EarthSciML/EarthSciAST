@@ -530,7 +530,7 @@ describe("the merged-away rename reaches a `join`'s plain STRINGS", () => {
           {
             lhs: 'total',
             rhs: {
-              op: 'aggregate',
+              op: 'faq',
               args: [{ op: '*', args: ['Sink.O3', 1.0] }],
               ranges: { i: { from: 'rows' } },
               reduce: 'sum',

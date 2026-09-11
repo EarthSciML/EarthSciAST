@@ -31,7 +31,7 @@ using JSON3
 
         # §5.5.3.1 rule 1: an integral-valued float literal is an integer
         # literal, regardless of source spelling. This makes an integer ratio
-        # `{op:"/",args:[1,N]}` inside an `aggregate` `expr` body byte-stable
+        # `{op:"/",args:[1,N]}` inside a `faq` `expr` body byte-stable
         # across bindings even when JSON3's context-dependent number inference
         # materialises a bare integer token as Float64 (aggregate int-division
         # cross-binding canonical-form fix).
@@ -506,7 +506,7 @@ using JSON3
         # (CONFORMANCE_SPEC §5.5.3.1 rule 1). JSON3's context-dependent structural
         # number inference materialises a bare integer token (`1`, `8`) as Float64
         # when an integer ratio `{op:/,args:[1,N]}` is authored inside an
-        # `aggregate` `expr` body that is a sibling of a non-integral float (here
+        # `faq` `expr` body that is a sibling of a non-integral float (here
         # `cos(pi * ...)`), so the same ratio would round-trip as `1.0/8.0` in
         # Julia but `1/8` in the other four bindings — a byte divergence the AST
         # rule-1 narrowing at the parse boundary removes.
@@ -522,10 +522,10 @@ using JSON3
             },
             "equations": [
               { "lhs": "dx", "rhs": { "op": "/", "args": [1, 8] } },
-              { "lhs": { "op": "aggregate", "output_idx": ["i"], "args": [],
+              { "lhs": { "op": "faq", "output_idx": ["i"], "args": [],
                          "ranges": { "i": { "from": "x" } },
                          "expr": { "op": "D", "args": [ { "op": "index", "args": ["u","i"] } ], "wrt": "t" } },
-                "rhs": { "op": "aggregate", "output_idx": ["i"], "args": [],
+                "rhs": { "op": "faq", "output_idx": ["i"], "args": [],
                          "ranges": { "i": { "from": "x" } },
                          "expr": { "op": "cos", "args": [ { "op": "*", "args": [ 3.141592653589793,
                                      { "op": "*", "args": [ { "op": "-", "args": ["i", 0.5] },

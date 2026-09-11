@@ -1,0 +1,124 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "faq_19_einsum_1d_stencil",
+    "description": "Generalized-einsum form of the 1D heat equation from fixture 15. Interior cells (i in 1..2, cell index i+1) use a contracted stencil index k in [-1,0,1] with weight ifelse(k==0,-2,1) to express the standard second-difference operator: D(u[i+1]) = sum_k 25*ifelse(k==0,-2,1)*u[i+1+k]. Boundary cells (u[1] and u[4]) are scalar equations with ghost cells u[0]=u[5]=0. The same first-mode sinusoidal IC decays with eigenvalue lambda_1=25*(2*cos(pi/5)-2)=-9.5492, so u[i,t]=exp(lambda_1*t)*sin(pi*i/5). This fixture tests the generalized-einsum evaluator path: contracted index k must be unrolled at build time and combined with the reduce operator.",
+    "authors": [
+      "EarthSciAST/polecats/gastown.nux"
+    ],
+    "tags": [
+      "faq",
+      "conformance",
+      "einsum",
+      "contraction",
+      "stencil",
+      "pde"
+    ]
+  },
+  "models": {
+    "Heat1DEinsum": {
+      "tolerance": {
+        "rel": 1e-3,
+        "abs": 0.0
+      },
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "shape": ["i"]
+        }
+      },
+      "equations": [
+        {
+          "_comment": "Left boundary cell: D(u[1]) = 25*(-2*u[1] + u[2]), ghost u[0]=0",
+          "lhs": {
+            "op": "D",
+            "args": [{"op": "index", "args": ["u", 1]}],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              25,
+              {
+                "op": "+",
+                "args": [
+                  {"op": "*", "args": [-2, {"op": "index", "args": ["u", 1]}]},
+                  {"op": "index", "args": ["u", 2]}
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "_comment": "Interior cells via generalized einsum: LHS output_idx=[i], RHS contracts over k in [-1,0,1]. Weight ifelse(k==0,-2,1) encodes the standard second-difference stencil. For i=1: 25*(u[1]-2*u[2]+u[3]); for i=2: 25*(u[2]-2*u[3]+u[4]).",
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": ["i"],
+            "expr": {
+              "op": "D",
+              "args": [{"op": "index", "args": ["u", {"op": "+", "args": ["i", 1]}]}],
+              "wrt": "t"
+            },
+            "ranges": {"i": [1, 2]}
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": ["i"],
+            "expr": {
+              "op": "*",
+              "args": [
+                25,
+                {"op": "ifelse", "args": [{"op": "==", "args": ["k", 0]}, -2, 1]},
+                {"op": "index", "args": ["u", {"op": "+", "args": [{"op": "+", "args": ["i", 1]}, "k"]}]}
+              ]
+            },
+            "reduce": "+",
+            "ranges": {"i": [1, 2], "k": [-1, 1]}
+          }
+        },
+        {
+          "_comment": "Right boundary cell: D(u[4]) = 25*(u[3] - 2*u[4]), ghost u[5]=0",
+          "lhs": {
+            "op": "D",
+            "args": [{"op": "index", "args": ["u", 4]}],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              25,
+              {
+                "op": "+",
+                "args": [
+                  {"op": "index", "args": ["u", 3]},
+                  {"op": "*", "args": [-2, {"op": "index", "args": ["u", 4]}]}
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "mode1_decay_t0.1",
+          "description": "Same first-mode sinusoidal IC as fixture 15; einsum form must yield identical numerical results. Exact decay factor exp(-9.5492*0.1)=0.38485.",
+          "initial_conditions": {
+            "u[1]": 0.5877852522924731,
+            "u[2]": 0.9510565162951535,
+            "u[3]": 0.9510565162951536,
+            "u[4]": 0.5877852522924732
+          },
+          "time_span": {"start": 0.0, "end": 0.1},
+          "assertions": [
+            {"variable": "u[1]", "time": 0.1, "expected": 0.22620612381309183},
+            {"variable": "u[2]", "time": 0.1, "expected": 0.36600919679294946},
+            {"variable": "u[3]", "time": 0.1, "expected": 0.36600919679294946},
+            {"variable": "u[4]", "time": 0.1, "expected": 0.22620612381309183}
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -5,7 +5,7 @@ This module provides a recursive evaluator for the ESM expression AST that
 returns NumPy scalars or ndarrays. It is the Python counterpart of the Rust
 ``ndarray`` runtime and the Julia ``SymbolicUtils.ArrayOp`` path, and is used
 by :mod:`earthsci_ast.simulation` when the flattened system contains any
-array op (``arrayop``, ``makearray``, ``index``, ``broadcast``, ``reshape``,
+array op (``faq``, ``makearray``, ``index``, ``broadcast``, ``reshape``,
 ``transpose``, ``concat``).
 
 Design notes
@@ -14,13 +14,13 @@ Design notes
   parameters, observed values, and the flat-state layout (``{name: slice}``
   plus ``{name: shape}``). It views slices of the flat state vector as
   ndarrays of the appropriate shape.
-- Index symbols inside an ``arrayop`` body are threaded through a ``locals``
+- Index symbols inside an ``faq`` body are threaded through a ``locals``
   dict. The body is evaluated once per point in the output box; results are
   assembled into an output ndarray.
 - For simple contraction bodies (``index(A, i, k) * index(B, k, j)`` with
   ``j``, ``k`` implicit / reduced) a vectorized ``np.einsum`` fast path
-  (:func:`_eval_arrayop_vectorized`, and the cached weight-operator path in
-  :func:`_eval_arrayop_operator_cached`) handles the common scaled-product
+  (:func:`_eval_faq_vectorized`, and the cached weight-operator path in
+  :func:`_eval_faq_operator_cached`) handles the common scaled-product
   forms; bodies it declines fall through to the generic nested loop. The public
   API is the same either way.
 - Shapes are 1-based to match the schema's Julia heritage. When reading an
@@ -75,7 +75,7 @@ class EvalContext:
     t: float
     locals: dict[str, int] = field(default_factory=dict)
     # Document-scoped index-set registry (RFC semiring-faq-unified-ir §5.2),
-    # keyed by name. Used to resolve arrayop / aggregate range references of the
+    # keyed by name. Used to resolve faq range references of the
     # form {"from": <name>}. Empty ⇒ no named sets are declared.
     index_sets: dict[str, Any] = field(default_factory=dict)
     # Runtime materialization of data-derived index sets (RFC §5.5 / §8.1),
@@ -150,7 +150,7 @@ class EvalContext:
     # built once and cached here so a cadence-segmented rebuild re-applies it (one
     # ``einsum``) to the refreshed field instead of re-walking the weight + re-
     # coding the join every segment. ``None`` ⇒ operator caching is off (the
-    # single-shot builds); the dense :func:`_eval_arrayop_reduce_vectorized` path
+    # single-shot builds); the dense :func:`_eval_faq_reduce_vectorized` path
     # (#1) and the scalar loop remain the always-correct fallbacks.
     op_cache: dict[int, Any] | None = None
     # Names whose materialized value is loader-INVARIANT (constant across cadence
@@ -258,7 +258,7 @@ class UnreachableSpatialOperatorError(NumpyInterpreterError):
     (esm-spec §4.2 / §9.6.8). All are treated identically — none is privileged.
 
     These ops carry NO evaluator: a discretization rule MUST rewrite them into an
-    ``aggregate``/``makearray`` stencil before evaluation. Encountering one here
+    ``faq``/``makearray`` stencil before evaluation. Encountering one here
     means no rule lowered it — silently substituting zero (the previous
     behaviour) would mask the broken pipeline. The gate fires before evaluation
     with the uniform, cross-binding ``code = "unlowered_operator"`` diagnostic
@@ -498,7 +498,7 @@ class _RaggedRange:
 
 
 def _resolve_range_spec(spec: Any, ctx: EvalContext) -> Any:
-    """Resolve one arrayop / aggregate range spec against the index-set registry.
+    """Resolve one faq range spec against the index-set registry.
 
     ``spec`` is either a dense integer tuple (``[lo, hi]`` / ``[lo, step, hi]``,
     as today) or an index-set reference ``{"from": <name>, "of": [...]}`` (RFC
@@ -513,7 +513,7 @@ def _resolve_range_spec(spec: Any, ctx: EvalContext) -> Any:
     name = spec.get("from")
     if name is None:
         raise NumpyInterpreterError(
-            f"arrayop / aggregate range reference {spec!r} is missing 'from'"
+            f"faq range reference {spec!r} is missing 'from'"
         )
     entry = ctx.index_sets.get(name)
     if entry is None:
@@ -1037,9 +1037,9 @@ def eval_expr(expr: Expr, ctx: EvalContext) -> float | np.ndarray:
         raise UnreachableSpatialOperatorError("D")
 
     # --- array ops --- (`index` is dispatched at the top of eval_expr)
-    # "aggregate" is the canonical Functional Aggregate Query op tag.
-    if op == "aggregate":
-        return _eval_arrayop(expr, ctx)
+    # "faq" is the canonical Functional Aggregate Query op tag.
+    if op == "faq":
+        return _eval_faq(expr, ctx)
     if op == "makearray":
         return _eval_makearray(expr, ctx)
     if op == "broadcast":
@@ -1402,7 +1402,7 @@ def _eval_polygon_intersection_area(expr: ExprNode, ctx: EvalContext) -> float:
 
     Because it returns a scalar (a plain ``float``), it evaluates as an ordinary
     scalar leaf: no ring is registered in ``ctx.derived_rings`` and no node ``id``
-    is materialized, so it is equally usable inside an ``aggregate`` body or as a
+    is materialized, so it is equally usable inside an ``faq`` body or as a
     bare observed. ``planar`` is dependency-free (Sutherland–Hodgman clip +
     shoelace); ``spherical`` / ``geodesic`` inherit the pinned S2 clip + the
     great-circle spherical-excess FAQ. A non-overlapping pair yields ``0.0``.
@@ -1543,7 +1543,7 @@ def _decompose_body_as_scaled_product(
     return None
 
 
-def _eval_arrayop_vectorized(
+def _eval_faq_vectorized(
     body: Expr,
     ctx: EvalContext,
     out_syms: list[str],
@@ -1552,7 +1552,7 @@ def _eval_arrayop_vectorized(
     out_shape: tuple[int, ...],
     reducer: str,
 ) -> np.ndarray | None:
-    """Vectorized fast path for arrayop evaluation.
+    """Vectorized fast path for faq evaluation.
 
     Handles bodies that are scalar multiples of products of ``index(var,
     sym, ...)`` with pure symbol subscripts.  For ``+`` reduction uses
@@ -1692,8 +1692,8 @@ class _bound_index_box:
     its own axis of the ``len(syms)``-D box (so a body evaluates over the whole
     box in one pass), restoring ``ctx.locals`` on exit. The shared save / bind /
     restore of the whole-box vectorized paths (:func:`_materialize_map`,
-    :func:`_eval_arrayop_reduce_vectorized`). A plain slotted context manager —
-    not ``@contextmanager`` — because it brackets every vectorized arrayop
+    :func:`_eval_faq_reduce_vectorized`). A plain slotted context manager —
+    not ``@contextmanager`` — because it brackets every vectorized faq
     evaluation on the RHS-hot path and the generator protocol's frame cost is
     measurable there."""
 
@@ -1814,7 +1814,7 @@ def _materialize_map(
     node: ExprNode | None = None,
     dynamic: bool = False,
 ) -> np.ndarray | None:
-    """Vectorized fast path for a pure (non-reducing) arrayop map — the shape
+    """Vectorized fast path for a pure (non-reducing) faq map — the shape
     finite-difference / level-set stencils take.
 
     Two patterns are handled, both by binding the output index symbols to
@@ -1849,7 +1849,7 @@ def _materialize_map(
             val = fn(ctx)
         # `np.asarray(..., dtype=float)` / `.astype(float)` below would DISCARD
         # an imaginary part behind a ComplexWarning; refuse instead.
-        res = np.asarray(_require_real(val, "arrayop map body"), dtype=float)
+        res = np.asarray(_require_real(val, "faq map body"), dtype=float)
         if res.shape == tuple(out_shape):
             return res
         return np.broadcast_to(res, tuple(out_shape)).astype(float)
@@ -1945,7 +1945,7 @@ def _codegen_box_fn(
     return fn if fn is not None else _compile_expr(body)
 
 
-def _eval_arrayop_contraction_broadcast(
+def _eval_faq_contraction_broadcast(
     body: Expr,
     ctx: EvalContext,
     out_syms: list[str],
@@ -2068,7 +2068,7 @@ def _join_admits_mask(
     ``out × reduce`` box before masking it — precisely the ``O(N_c·N_r)`` work
     (66.3M terms on isrm.esm) the driver exists to remove, and it would allocate
     that box as well. Declining routes the node to the driven scalar path
-    (:func:`_eval_arrayop_scalar`), which is both faster and, because it
+    (:func:`_eval_faq_scalar`), which is both faster and, because it
     preserves the ⊕-accumulation order of the filtered full product, bit-exact.
     """
     mask = np.ones(out_shape, dtype=bool)
@@ -2093,7 +2093,7 @@ def _join_admits_mask(
     return mask
 
 
-def _eval_arrayop_batched_leaf(
+def _eval_faq_batched_leaf(
     expr: ExprNode,
     ctx: EvalContext,
     out_syms: list[str],
@@ -2113,7 +2113,7 @@ def _eval_arrayop_batched_leaf(
     evaluates the leaf over every join-admitted ``(i, j)`` in ONE batched kernel
     call (:func:`geometry.intersect_polygon_area_batch`) instead of one scalar
     Sutherland–Hodgman clip per cell (the per-cell loop in
-    :func:`_eval_arrayop_scalar`). Semantics are identical:
+    :func:`_eval_faq_scalar`). Semantics are identical:
     an admitted cell gets the leaf value, a non-admitted cell the semiring
     identity ``empty_zero`` (0 for ``sum_product``).
 
@@ -2181,8 +2181,8 @@ def _join_has_overlap(expr: ExprNode) -> bool:
     return False
 
 
-def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
-    """Evaluate an aggregate / arrayop body over its output index box.
+def _eval_faq(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
+    """Evaluate a faq body over its output index box.
 
     Returns an ndarray whose shape is the cartesian product of the ranges for
     each symbolic index in ``output_idx``. The reduction over contracted indices
@@ -2195,18 +2195,18 @@ def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
     subscripts, bare names).
     """
     if expr.expr is None:
-        raise NumpyInterpreterError("aggregate / arrayop requires an 'expr' body")
+        raise NumpyInterpreterError("faq requires an 'expr' body")
     raw_ranges = expr.ranges or {}
 
     # Per-node dispatch prep cache: for a node whose range specs are all dense
     # literal lists, everything computed below (symbol partition, semiring
     # resolution, expanded ranges, output shape) is a pure function of the NODE
-    # — no ctx enters — yet it was re-derived on every one of the ~300k arrayop
+    # — no ctx enters — yet it was re-derived on every one of the ~300k faq
     # evaluations a stiff solve makes. Cache it on the ExprNode (like
     # ``_compiled_fn``); the cached lists are never mutated downstream. Any
     # ``{"from": ...}`` reference resolves against ctx.index_sets, so such
     # nodes stay uncached and take the original path unchanged.
-    prep = getattr(expr, "_arrayop_prep", None)
+    prep = getattr(expr, "_faq_prep", None)
     if prep is not None:
         (
             out_syms,
@@ -2228,13 +2228,13 @@ def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
         for s in out_syms:
             if s not in raw_ranges:
                 raise NumpyInterpreterError(
-                    f"aggregate / arrayop output index {s!r} has no declared range"
+                    f"faq output index {s!r} has no declared range"
                 )
 
         reducer, empty_zero, otimes = _resolve_semiring(expr)
 
         # Resolve {"from": ...} index-set references (RFC §5.2). Dense list ranges
-        # pass through unchanged, so existing arrayop fixtures are byte-for-byte
+        # pass through unchanged, so existing faq fixtures are byte-for-byte
         # identical; ragged sets become per-parent dynamic bounds.
         resolved = {s: _resolve_range_spec(raw_ranges[s], ctx) for s in raw_ranges}
 
@@ -2263,7 +2263,7 @@ def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
                 sym_0based[s] = [x - 1 for x in r]
             for s, r in zip(reduce_syms, red_ranges_exp):
                 sym_0based[s] = [x - 1 for x in r]
-            expr._arrayop_prep = (
+            expr._faq_prep = (
                 out_syms,
                 out_ranges_exp,
                 out_shape,
@@ -2303,7 +2303,7 @@ def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
     # partially built array just as the outer body does. A ragged contraction
     # keeps its own (already per-output-cell, non-reordering) path below.
     if ctx.recur is not None and not ragged_reduce:
-        return _eval_arrayop_scalar(
+        return _eval_faq_scalar(
             expr,
             ctx,
             out_syms,
@@ -2323,7 +2323,7 @@ def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
     # instead of a per-cell Sutherland–Hodgman clip; declines (→ None) to the
     # scalar join/fallback paths below for anything it does not recognize.
     if not ragged_reduce and not overlap_gated:
-        batched = _eval_arrayop_batched_leaf(
+        batched = _eval_faq_batched_leaf(
             expr,
             ctx,
             out_syms,
@@ -2349,7 +2349,7 @@ def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
         # BEFORE the dense gated paths, because they would materialize the whole
         # N×N triangle just to mask half of it away. Declines (→ None) for
         # anything that is not exactly a forward scan.
-        scan = _eval_arrayop_prefix_scan(
+        scan = _eval_faq_prefix_scan(
             expr,
             ctx,
             out_syms,
@@ -2370,7 +2370,7 @@ def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
         op = (
             None
             if overlap_gated
-            else _eval_arrayop_operator_cached(
+            else _eval_faq_operator_cached(
                 expr,
                 ctx,
                 out_syms,
@@ -2397,7 +2397,7 @@ def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
         vec = (
             None
             if overlap_gated
-            else _eval_arrayop_reduce_vectorized(
+            else _eval_faq_reduce_vectorized(
                 expr,
                 ctx,
                 out_syms,
@@ -2413,7 +2413,7 @@ def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
         )
         if vec is not None:
             return vec
-        return _eval_arrayop_scalar(
+        return _eval_faq_scalar(
             expr,
             ctx,
             out_syms,
@@ -2428,7 +2428,7 @@ def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
         )
 
     if ragged_reduce:
-        return _eval_arrayop_ragged(
+        return _eval_faq_ragged(
             expr,
             ctx,
             out_syms,
@@ -2454,7 +2454,7 @@ def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
     # case). For ⊗ = + (min_sum / max_sum) or ⊗ = ∧ (bool_and_or) the body is a
     # sum / conjunction and the scalar loop carries the correct semantics.
     if otimes == "*":
-        fast = _eval_arrayop_vectorized(
+        fast = _eval_faq_vectorized(
             expr.expr, ctx, out_syms, reduce_syms, sym_0based, out_shape, reducer
         )
         if fast is not None:
@@ -2465,7 +2465,7 @@ def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
     # function; a {"from": ...}-ranged node resolves its box per call, so its
     # generated functions are cached per resolved-box CONTENT instead (a
     # registry change is a cache miss, never a stale binding).
-    cg_dynamic = getattr(expr, "_arrayop_prep", None) is None
+    cg_dynamic = getattr(expr, "_faq_prep", None) is None
 
     # Whole-box broadcast contraction: the plain contractions the einsum
     # decomposer rejects (affine / computed subscripts, indicator gates — the
@@ -2474,7 +2474,7 @@ def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
     # per-cell to whole-box, in the identical term order, so the answer is
     # bit-for-bit the scalar loop's. Declines (→ None) to the scalar loop.
     if reduce_syms:
-        unrolled = _eval_arrayop_contraction_broadcast(
+        unrolled = _eval_faq_contraction_broadcast(
             expr.expr,
             ctx,
             out_syms,
@@ -2506,7 +2506,7 @@ def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
     # ⊗-term per contraction point, reduced with ⊕. Shares the output-cell walk
     # and the gated reduction with the join/filter path (a plain reduction is the
     # gate-free case), so both flow through one code path.
-    return _eval_arrayop_scalar(
+    return _eval_faq_scalar(
         expr,
         ctx,
         out_syms,
@@ -2529,7 +2529,7 @@ def _iter_output_cells(
     """Yield ``(multi_idx, local_binding)`` for every cell of the output box.
 
     ``local_binding`` maps each output index symbol to its 1-based range value at
-    that cell. Shared by every scalar arrayop path (plain / ragged / join+filter)
+    that cell. Shared by every scalar faq path (plain / ragged / join+filter)
     so the output-cell walk and the index-symbol binding live in one place."""
     it = np.ndindex(*out_shape) if out_shape else [()]
     for multi_idx in it:
@@ -2566,7 +2566,7 @@ def _reduce_over(
     )
 
 
-def _eval_arrayop_ragged(
+def _eval_faq_ragged(
     expr: ExprNode,
     ctx: EvalContext,
     out_syms: list[str],
@@ -3302,7 +3302,7 @@ def _gather_operator_factor(
     """Gather + slice the array backing an ``index(var, *syms)`` factor for the
     operator path, or ``None`` if it is not a plain per-cell array gather.
 
-    Resolves ``var`` the way :func:`_eval_arrayop_vectorized` does — a state
+    Resolves ``var`` the way :func:`_eval_faq_vectorized` does — a state
     array, a materialized ``derived_rings`` buffer, or a loader ``input_arrays``
     field — and slices each declared axis to the factor's 0-based index range.
     Diagonal / repeated subscripts and rank mismatches decline (→ ``None``) so
@@ -3324,7 +3324,7 @@ def _gather_operator_factor(
     return np.asarray(sl, dtype=float)
 
 
-def _eval_arrayop_operator_cached(
+def _eval_faq_operator_cached(
     expr: ExprNode,
     ctx: EvalContext,
     out_syms: list[str],
@@ -3352,7 +3352,7 @@ def _eval_arrayop_operator_cached(
     re-walking the weight and re-coding the join each segment.
 
     Declines (→ ``None``, caller falls to the dense
-    :func:`_eval_arrayop_reduce_vectorized`, then the scalar loop) whenever the
+    :func:`_eval_faq_reduce_vectorized`, then the scalar loop) whenever the
     node is not this exact shape or any factor is not a plain invariant/varying
     array gather: a non-``+`` ⊕, a ``filter``, no contraction, an affine / summed
     body, a join key that is not a box axis, or a captured weight factor that is
@@ -3452,7 +3452,7 @@ def _eval_arrayop_operator_cached(
     return np.asarray(out, dtype=float).reshape(out_shape)
 
 
-def _eval_arrayop_reduce_vectorized(
+def _eval_faq_reduce_vectorized(
     expr: ExprNode,
     ctx: EvalContext,
     out_syms: list[str],
@@ -3494,11 +3494,11 @@ def _eval_arrayop_reduce_vectorized(
     ``field_tgt[j] = Σ_i A_ij·field_i / A_j`` gated by a broad-phase bin
     equi-join — evaluate as a handful of numpy ops over the already-materialized
     ``A_ij`` matrix instead of a Python loop over every (source, target) pair (the
-    dense ``_eval_arrayop_scalar`` → ``_reduce_over_gated`` walk).
+    dense ``_eval_faq_scalar`` → ``_reduce_over_gated`` walk).
 
     Per-cell values are computed by the SAME gather the scalar path uses, so only
     the contraction's summation order changes (numpy pairwise vs sequential), on a
-    par with the existing einsum fast path (:func:`_eval_arrayop_vectorized`).
+    par with the existing einsum fast path (:func:`_eval_faq_vectorized`).
     Returns ``None`` — caller falls back to the scalar loop — for an unsupported
     ⊕, an empty index box, a join whose keys are not all box axes, or any body /
     filter that does not evaluate + broadcast cleanly over the box (e.g. a ragged
@@ -3611,7 +3611,7 @@ def _match_forward_prefix_filter(filter_expr: Expr | None) -> tuple[str, str, bo
     return None
 
 
-def _eval_arrayop_prefix_scan(
+def _eval_faq_prefix_scan(
     expr: ExprNode,
     ctx: EvalContext,
     out_syms: list[str],
@@ -3706,7 +3706,7 @@ def _eval_arrayop_prefix_scan(
     return np.ascontiguousarray(result, dtype=float).reshape(out_shape)
 
 
-def _eval_arrayop_scalar(
+def _eval_faq_scalar(
     expr: ExprNode,
     ctx: EvalContext,
     out_syms: list[str],
@@ -3741,7 +3741,7 @@ def _eval_arrayop_scalar(
     # this expansion instead of merely filtering it (§5.5.6 / Wall #1).
     ov = broad_phase.overlap_driver(gates)
     if ov is not None:
-        return _eval_arrayop_scalar_gate_driven(
+        return _eval_faq_scalar_gate_driven(
             expr,
             ctx,
             out_syms,
@@ -3774,7 +3774,7 @@ def _eval_arrayop_scalar(
     return out
 
 
-def _eval_arrayop_scalar_gate_driven(
+def _eval_faq_scalar_gate_driven(
     expr: ExprNode,
     ctx: EvalContext,
     out_syms: list[str],
@@ -4143,7 +4143,7 @@ def expr_contains_array_op(expr: Expr) -> bool:
 #
 # The one construct in the array runtime whose output cells are NOT
 # independent, which is why it gets its own driver instead of sharing the
-# per-cell arrayop walk: the recurrence axis must be the outer loop, each cell
+# per-cell faq walk: the recurrence axis must be the outer loop, each cell
 # must be published before the axis advances, and no reordering / batching path
 # may touch it (CONFORMANCE_SPEC §5.19.2). Recognition and well-foundedness live
 # in :mod:`earthsci_ast.recurrence`, shared with the load-time validator.

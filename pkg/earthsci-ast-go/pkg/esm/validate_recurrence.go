@@ -14,7 +14,7 @@ import (
 //
 // A **recurrence definition** is an equation defining an array-shaped unknown
 // `V` whose RHS reads `index(V, …)` — the array being defined, at a strictly
-// earlier position along exactly ONE of the defining `aggregate`'s output axes.
+// earlier position along exactly ONE of the defining `faq`'s output axes.
 // There is no new op and no new schema field: the recurrence, its axis and its
 // lag are all read off the document, which is why the recognition is structural
 // and why it belongs in the structural validator rather than in a lowering pass.
@@ -85,7 +85,7 @@ const opIndex = "index"
 type symBounds struct{ lo, hi int64 }
 
 // symBinding is one entry of the index-symbol environment stack. A stack rather
-// than a map because `aggregate` nodes nest and an inner binder SHADOWS an
+// than a map because `faq` nodes nest and an inner binder SHADOWS an
 // outer one of the same name; snapshotting in push order lets the innermost win.
 type symBinding struct {
 	name   string
@@ -281,7 +281,7 @@ func analyzeRecurrenceEquation(eq Equation, file *ESMFile, arrayShaped map[strin
 				"`reshape`/`transpose`/`concat`/`broadcast` operand — so no cell-by-cell sweep can "+
 				"supply it. A `makearray`'s region order fixes which write WINS, not the order "+
 				"cells are EVALUATED in (esm-spec §4.3.1.1, §4.3.2); write the recurrence as one "+
-				"`aggregate` with the base case as an `ifelse` guard in the body.", varName),
+				"`faq` with the base case as an `ifelse` guard in the body.", varName),
 		}
 	}
 
@@ -296,7 +296,7 @@ func analyzeRecurrenceEquation(eq Equation, file *ESMFile, arrayShaped map[strin
 		return true, &recurrenceFinding{
 			code: codeRecurrenceUnsupportedForm,
 			message: fmt.Sprintf("the definition of '%s' reads '%s' at another position, but the "+
-				"equation declares no cell frame to sweep: its RHS is not an `aggregate` over the "+
+				"equation declares no cell frame to sweep: its RHS is not a `faq` over the "+
 				"variable's axes and its LHS is not the indexed-aggregate form "+
 				"`aggregate{expr: index(%s, k…)}` (esm-spec §4.3.1.1).", varName, varName, varName),
 		}
@@ -331,7 +331,7 @@ func checkRecurrenceReads(varName string, frameSyms []string, frameEnv map[strin
 			}
 		}
 
-		// The read's own environment wins over the frame's: an inner `aggregate`
+		// The read's own environment wins over the frame's: an inner `faq`
 		// may rebind a name, and the read sits under that binder.
 		env := make(map[string]symBounds, len(frameEnv)+len(read.env))
 		for k, v := range frameEnv {
@@ -470,7 +470,7 @@ func recurrenceLHSTarget(lhs Expression) (string, []any, bool, bool) {
 }
 
 // aggregateOutputIdx returns an expression's `output_idx` when it is an
-// `aggregate` node that declares one.
+// `faq` node that declares one.
 func aggregateOutputIdx(expr Expression) ([]any, bool) {
 	node, ok := asExprNode(expr)
 	if !ok || node.Op != opAggregate || node.OutputIdx == nil {
@@ -503,7 +503,7 @@ func frameIndexSymbols(idxNames []any) ([]string, bool) {
 	return out, true
 }
 
-// aggregateRangeBounds resolves the index-symbol bounds an `aggregate`'s
+// aggregateRangeBounds resolves the index-symbol bounds a `faq`'s
 // `ranges` declares, skipping every entry the validator cannot resolve.
 func aggregateRangeBounds(expr Expression, file *ESMFile) map[string]symBounds {
 	out := make(map[string]symBounds)
@@ -782,7 +782,7 @@ func opBlocksCellRestriction(op string) bool {
 // cell. It also sets bare when varName occurs as a NAKED reference, which names
 // the whole array — an object that does not exist while the recurrence sweeps it.
 //
-// env is a stack: an `aggregate` pushes its resolvable `ranges` on entry and
+// env is a stack: a `faq` pushes its resolvable `ranges` on entry and
 // pops them on exit, so a nested binder shadows an outer one of the same name
 // and a symbol goes out of scope where the authored binder ends.
 //

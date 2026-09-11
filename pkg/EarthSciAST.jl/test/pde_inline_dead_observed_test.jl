@@ -116,7 +116,7 @@ function _dob_doc(assertions::Vector)
                                   "rhs" => Dict{String, Any}("op" => "*",
                                       "args" => Any[3.0, "u"])),
                 Dict{String, Any}("lhs" => "scaled",
-                    "rhs" => Dict{String, Any}("op" => "aggregate",
+                    "rhs" => Dict{String, Any}("op" => "faq",
                         "args" => Any["base"], "output_idx" => Any["i"],
                         "ranges" => Dict{String, Any}("i" => Any[1, _DOB_NX]),
                         "expr" => Dict{String, Any}("op" => "*",

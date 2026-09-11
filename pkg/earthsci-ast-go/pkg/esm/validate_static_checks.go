@@ -60,7 +60,7 @@ const (
 )
 
 // opAggregate is the array-query reduction op these checks key on.
-const opAggregate = "aggregate"
+const opAggregate = "faq"
 
 // validateModelStaticAggregateChecks runs the three per-model aggregate checks
 // (join_key_invalid_type, relational_node_in_continuous, undefined_index_set)

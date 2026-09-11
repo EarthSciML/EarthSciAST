@@ -83,7 +83,7 @@ order or a language-native hash value.
 4. **`skolem`** — a canonical **tuple**, not a hash. Symmetric relations sort
    their components (undirected edge → `(min, max)`); directed relations
    preserve order. Dense IDs then come from `rank`.
-5. **`join` / group-by aggregate** — hash only to *bucket*; emit **sorted by
+5. **`join` / group-by faq** — hash only to *bucket*; emit **sorted by
    the canonical key**. The semiring `⊕` is associative + commutative (every
    registry `⊕` is), so input/parallel order cannot change a result; for a
    float `⊕`, reduce each bucket sequentially in canonical order.

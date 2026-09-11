@@ -21,9 +21,9 @@ this tier asserts that the three **PDE-simulation-capable** bindings — **Julia
 ## Fixtures
 
 Each fixture is a **pre-discretized** ESM document: the spatial operator is
-already lowered to a full-grid `arrayop` whose body is
+already lowered to a full-grid `faq` whose body is
 `index(makearray(regions, values), …)` — the same form the
-`tests/fixtures/arrayop/15,16` heat fixtures use. Boundary-cell stencils live in
+`tests/fixtures/faq/15,16` heat fixtures use. Boundary-cell stencils live in
 dedicated single-cell `makearray` regions, so the **BC ghost / makearray path**
 is conformance-checked, not just the interior stencil.
 
@@ -101,7 +101,7 @@ the trajectory at each declared output time, keyed by the **bare** element name
 ## Scope
 
 **Go and TypeScript are excluded.** They implement only the rewrite half (no
-`arrayop`/`makearray` evaluator, no simulator) and cannot run PDEs. Extending this
+`faq`/`makearray` evaluator, no simulator) and cannot run PDEs. Extending this
 tier to them would first require their own PDE-simulation tiers (a future
 extension, explicitly out of scope here).
 

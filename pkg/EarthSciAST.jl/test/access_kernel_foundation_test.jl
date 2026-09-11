@@ -219,8 +219,8 @@ end
         conn = Float64.(perm)
         vars = Dict("y" => ModelVariable(UnknownVariable),
                     "u" => ModelVariable(UnknownVariable))
-        lhs = _arrayop1d(_D_idx("y", _v("i")), "i", 1, N)
-        rhs = _arrayop1d(_idx("u", _idx("conn", _v("i"))), "i", 1, N)
+        lhs = _faq1d(_D_idx("y", _v("i")), "i", 1, N)
+        rhs = _faq1d(_idx("u", _idx("conn", _v("i"))), "i", 1, N)
         model = E.Model(vars, [E.Equation(lhs, rhs)])
         ics = Dict{String,Float64}()
         for k in 1:N; ics["y[$k]"] = 0.0; ics["u[$k]"] = 1.0k; end

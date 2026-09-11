@@ -597,7 +597,7 @@ run_pde_simulation_conformance_julia() {
             --output "$OUTPUT_DIR/pde_simulation/julia_report.json"
 }
 
-# Rust drives the vectorized arrayop evaluator (ArrayCompiled::debug_eval_rhs) +
+# Rust drives the vectorized faq evaluator (ArrayCompiled::debug_eval_rhs) +
 # diffsol. ess-fmw. (`cargo run` used to be required here to provision the
 # s2bindings shim lib path; the geometry kernel is pure Rust now, so the adapter
 # binary is self-contained.)
@@ -671,7 +671,7 @@ run_pde_pipeline_conformance_julia() {
             --output "$OUTPUT_DIR/pde_simulation_pipeline/julia_report.json"
 }
 
-# Rust drives the vectorized arrayop evaluator (ArrayCompiled::from_flattened +
+# Rust drives the vectorized faq evaluator (ArrayCompiled::from_flattened +
 # debug_eval_rhs) + diffsol, with the provider forcing installed into the
 # compiled instance. (No shim lib path to provision any more — the geometry
 # kernel is pure Rust, so the adapter binary is self-contained.)

@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "import_rebind_keyed_factors",
     "description": "Free-name rebinding at an import edge (esm-spec 9.7.7): the ragged_rowsum library's keyed-factor contract (row_count / row_cols / row_w) is rebound to this model's meshA_* arrays, transitively through the ragged index set's offsets/values AND every occurrence in the rule body. Rebinding un-reserves the factor names in the consumer: the local parameter row_count below is unrelated to the library and does not collide"

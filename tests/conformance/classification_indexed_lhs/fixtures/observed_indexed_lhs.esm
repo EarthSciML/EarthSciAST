@@ -62,14 +62,14 @@
         {
           "_comment": "wf[k] ~ 2*k -- AGGREGATE-INDEXED LHS, state-free. Observed; cadence const.",
           "lhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": ["k"],
             "ranges": { "k": { "from": "lev" } },
             "expr": { "op": "index", "args": ["wf", "k"] }
           },
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": ["k"],
             "ranges": { "k": { "from": "lev" } },
@@ -79,14 +79,14 @@
         {
           "_comment": "ws[k] ~ 3*u[k] -- AGGREGATE-INDEXED LHS, state-dependent. Observed; cadence continuous.",
           "lhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": ["k"],
             "ranges": { "k": { "from": "lev" } },
             "expr": { "op": "index", "args": ["ws", "k"] }
           },
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": ["u"],
             "output_idx": ["k"],
             "ranges": { "k": { "from": "lev" } },
@@ -111,7 +111,7 @@
         {
           "_comment": "aggregate{k}(D(u[k])) ~ aggregate{k}(wf[k]) -- an aggregate over a D is a TENDENCY, so `u` is an ODE STATE and NOT an observed.",
           "lhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": ["k"],
             "ranges": { "k": { "from": "lev" } },
@@ -122,7 +122,7 @@
             }
           },
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": ["k"],
             "ranges": { "k": { "from": "lev" } },
@@ -132,7 +132,7 @@
         {
           "_comment": "aggregate{k}(D(v[k])) ~ aggregate{k}(ws[k]) -- keeps the state-dependent observed live.",
           "lhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": ["k"],
             "ranges": { "k": { "from": "lev" } },
@@ -143,7 +143,7 @@
             }
           },
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": ["k"],
             "ranges": { "k": { "from": "lev" } },

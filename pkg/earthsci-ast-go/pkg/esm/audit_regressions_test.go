@@ -23,7 +23,7 @@ import (
 
 // sidecarAggregateJSON is `aggregate(reduce:+, expr: index(w,i) * y)` — the
 // reference to `y` lives in the `expr` sidecar, not in `args`.
-const sidecarAggregateJSON = `{"op":"aggregate","args":[],"reduce":"+","output_idx":[],` +
+const sidecarAggregateJSON = `{"op":"faq","args":[],"reduce":"+","output_idx":[],` +
 	`"ranges":{"i":[1,3]},"expr":{"op":"*","args":[{"op":"index","args":["w","i"]},"y"]}}`
 
 // --- G1: the shared walk sees names reachable only through a sidecar ---------
@@ -1672,7 +1672,7 @@ func TestUnitsV2_SuperscriptDigitsAreNotAContiguousRange(t *testing.T) {
 
 // --- (g) a construct's BOUND INDEX is in scope inside its body --------------
 
-// `aggregate`, `makearray`, `index`, `integral` and the geometry constructs BIND
+// `faq`, `makearray`, `index`, `integral` and the geometry constructs BIND
 // loop indices (`i`, `j`, `e`, `g`, `p`, …). A bound index is a loop position,
 // not a declared variable, and must never be reported as `undefined_variable`
 // inside the construct that binds it — Rust measured this as 45 of its 68
@@ -1695,10 +1695,10 @@ func TestCheckerB_G_BoundIndicesAreInScope(t *testing.T) {
 	      "u":{"type":"unknown","units":"1","shape":["cells"],"default":0.0},
 	      "k":{"type":"parameter","units":"1/s","default":0.1}},
 	    "equations":[{
-	      "lhs":{"op":"aggregate","args":[],"output_idx":["i"],
+	      "lhs":{"op":"faq","args":[],"output_idx":["i"],
 	             "expr":{"op":"D","args":[{"op":"index","args":["u","i"]}],"wrt":"t"},
 	             "ranges":{"i":[1,3]}},
-	      "rhs":{"op":"aggregate","args":[],"output_idx":["i"],
+	      "rhs":{"op":"faq","args":[],"output_idx":["i"],
 	             "ranges":{"i":[1,3]},
 	             "expr":{"op":"*","args":[
 	               {"op":"-","args":["k"]},
@@ -1738,10 +1738,10 @@ func TestCheckerB_G_BoundIndicesAreInScope(t *testing.T) {
 	      "u":{"type":"unknown","units":"1","shape":["cells"],"default":0.0},
 	      "w":{"type":"unknown","units":"1","default":0.0}},
 	    "equations":[
-	      {"lhs":{"op":"aggregate","args":[],"output_idx":["i"],
+	      {"lhs":{"op":"faq","args":[],"output_idx":["i"],
 	              "expr":{"op":"D","args":[{"op":"index","args":["u","i"]}],"wrt":"t"},
 	              "ranges":{"i":[1,3]}},
-	       "rhs":{"op":"aggregate","args":[],"output_idx":["i"],
+	       "rhs":{"op":"faq","args":[],"output_idx":["i"],
 	              "ranges":{"i":[1,3]},"expr":0}},
 	      {"lhs":{"op":"D","args":["w"],"wrt":"t"},"rhs":"i"}
 	    ]}}}`

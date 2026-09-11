@@ -838,7 +838,7 @@ describe('spec-sanctioned constructs the checker used to reject', () => {
   })
 
   it('(g) treats a construct-BOUND loop index as in scope, without allowlisting letters', () => {
-    // An `aggregate` binds its `output_idx` / `ranges` names, and an `index`
+    // A `faq` binds its `output_idx` / `ranges` names, and an `index`
     // element position is a bound index. Those names are in scope inside the
     // construct's body and are never `undefined_variable`. Critically, the scope
     // is derived from the BINDERS actually present — not from a list of
@@ -856,14 +856,14 @@ describe('spec-sanctioned constructs the checker used to reject', () => {
           equations: [
             {
               lhs: {
-                op: 'aggregate',
+                op: 'faq',
                 args: [],
                 output_idx: ['i'],
                 ranges: { i: [1, 3] },
                 expr: { op: 'D', args: [{ op: 'index', args: ['u', 'i'] }], wrt: 't' },
               },
               rhs: {
-                op: 'aggregate',
+                op: 'faq',
                 args: [],
                 output_idx: ['i'],
                 ranges: { i: [1, 3] },
@@ -892,14 +892,14 @@ describe('spec-sanctioned constructs the checker used to reject', () => {
           equations: [
             {
               lhs: {
-                op: 'aggregate',
+                op: 'faq',
                 args: [],
                 output_idx: ['i'],
                 ranges: { i: [1, 3] },
                 expr: { op: 'D', args: [{ op: 'index', args: ['u', 'i'] }], wrt: 't' },
               },
               rhs: {
-                op: 'aggregate',
+                op: 'faq',
                 args: [],
                 output_idx: ['i'],
                 ranges: { i: [1, 3] },

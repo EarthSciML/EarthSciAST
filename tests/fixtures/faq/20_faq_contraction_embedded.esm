@@ -1,0 +1,91 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "faq_20_contraction_embedded",
+    "description": "Exercises the eval_faq contraction path where an faq node appears as a sub-expression (embedded inside a scalar equation RHS). Three state variables driven by contracted faq expressions: (z) '+' reduction sum_{j=1}^{3} j^2 = 14 => z(1)=14; (w) 'max' reduction max_{j=1}^{4} j = 4 => w(1)=4; (z3) index into faq[i]{sum_j j*(i+j), j in [1,2]} at i=1 gives 8 => z3(1)=8. All three previously returned NaN due to eval_faq ignoring contracted indices.",
+    "authors": [
+      "EarthSciAST/polecats/gastown.furiosa"
+    ],
+    "tags": [
+      "faq",
+      "conformance",
+      "einsum",
+      "contraction",
+      "eval_faq",
+      "reduce"
+    ]
+  },
+  "models": {
+    "ContractionEmbedded": {
+      "variables": {
+        "z": { "type": "unknown" },
+        "w": { "type": "unknown" },
+        "z3": { "type": "unknown" }
+      },
+      "equations": [
+        {
+          "_comment": "D(z)/dt = sum_{j=1}^{3} j^2 = 1+4+9 = 14. Scalar faq (empty output_idx) with '+' reducer, embedded as RHS.",
+          "lhs": { "op": "D", "args": ["z"], "wrt": "t" },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [],
+            "reduce": "+",
+            "ranges": { "j": [1, 3] },
+            "expr": { "op": "*", "args": ["j", "j"] }
+          }
+        },
+        {
+          "_comment": "D(w)/dt = max_{j=1}^{4} j = 4. Scalar faq with 'max' reducer.",
+          "lhs": { "op": "D", "args": ["w"], "wrt": "t" },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [],
+            "reduce": "max",
+            "ranges": { "j": [1, 4] },
+            "expr": "j"
+          }
+        },
+        {
+          "_comment": "D(z3)/dt = index(faq[i]{sum_j j*(i+j), j in [1,2], reduce='+'}, 1). For i=1: 1*(1+1)+2*(1+2)=2+6=8.",
+          "lhs": { "op": "D", "args": ["z3"], "wrt": "t" },
+          "rhs": {
+            "op": "index",
+            "args": [
+              {
+                "op": "faq",
+                "args": [],
+                "output_idx": ["i"],
+                "reduce": "+",
+                "ranges": { "i": [1, 2], "j": [1, 2] },
+                "expr": {
+                  "op": "*",
+                  "args": [
+                    "j",
+                    { "op": "+", "args": ["i", "j"] }
+                  ]
+                }
+              },
+              1
+            ]
+          }
+        }
+      ],
+      "tolerance": { "rel": 1e-6, "abs": 0.0 },
+      "tests": [
+        {
+          "id": "contraction_t1",
+          "description": "D(z)=14, D(w)=4, D(z3)=8 (all constant). Starting from 0, each integrates to its constant RHS value at t=1.",
+          "initial_conditions": { "z": 0.0, "w": 0.0, "z3": 0.0 },
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "assertions": [
+            { "variable": "z",  "time": 1.0, "expected": 14.0 },
+            { "variable": "w",  "time": 1.0, "expected": 4.0  },
+            { "variable": "z3", "time": 1.0, "expected": 8.0  }
+          ]
+        }
+      ]
+    }
+  }
+}

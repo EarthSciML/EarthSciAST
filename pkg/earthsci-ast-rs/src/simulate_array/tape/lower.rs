@@ -12,7 +12,7 @@
 //! ## Value numbering
 //!
 //! The runtime CSE overlay ([`super::super::cse`]) memoizes per `(scope,
-//! structural class)`, with a fresh scope per output box (each arrayop entry,
+//! structural class)`, with a fresh scope per output box (each faq entry,
 //! each contraction tuple, each makearray region) — and hoists box-pure
 //! subtrees into a persistent store keyed by `(box signature, class)`. The
 //! build-time equivalent here:
@@ -1130,13 +1130,13 @@ impl<'m> TapeBuilder<'m> {
 
     // -- nested aggregate -----------------------------------------------------
 
-    /// Mirror of `eval_vec_nested_aggregate` (same `arrayop_spec`, same
+    /// Mirror of `eval_vec_nested_aggregate` (same `faq_spec`, same
     /// binding-independence precondition — the SHARED
     /// [`nested_aggregate_capture`] predicate, so the two paths cannot drift;
     /// there is no `ctx.loop_binds` at build time, which is why only the box's
     /// own symbols and contraction names are offered to it).
     fn lower_nested_aggregate(&mut self, node: &Arc<ExpressionNode>, bx: &LBox) -> LResult<LV> {
-        let Some(spec) = arrayop_spec(node) else {
+        let Some(spec) = faq_spec(node) else {
             bail_tape!("aggregate: node carries no `expr` body");
         };
         if spec.ranges.is_empty() {
@@ -1151,7 +1151,7 @@ impl<'m> TapeBuilder<'m> {
         {
             bail_tape!("aggregate: nested body depends on an enclosing bound index `{name}`");
         }
-        self.lower_arrayop(
+        self.lower_faq(
             spec.idx_names,
             &spec.ranges,
             spec.body,
@@ -1162,10 +1162,10 @@ impl<'m> TapeBuilder<'m> {
         )
     }
 
-    // -- arrayop (the try_eval_arrayop_vectorized mirror) ---------------------
+    // -- faq (the try_eval_faq_vectorized mirror) ---------------------
 
     #[allow(clippy::too_many_arguments)]
-    fn lower_arrayop(
+    fn lower_faq(
         &mut self,
         idx_names: &[String],
         ranges: &[(i64, i64)],
@@ -1178,7 +1178,7 @@ impl<'m> TapeBuilder<'m> {
         let lo: DimI = ranges.iter().map(|(l, _)| *l).collect();
         let shape: DimU = ranges.iter().map(|(l, h)| (h - l + 1) as usize).collect();
         if shape.contains(&0) {
-            bail_tape!("arrayop: empty output box");
+            bail_tape!("faq: empty output box");
         }
         self.push_scope();
         let v = if contract_names.is_empty() {
@@ -1229,7 +1229,7 @@ impl<'m> TapeBuilder<'m> {
         // Mirror of the top-level bare-View bail: the oracle scalarizes a bare
         // whole-array body, so the overlay refuses it — and so do we.
         if matches!(&v, LV::State(_) | LV::Obs { .. }) && self.lv_box(&v).is_some() {
-            bail_tape!("arrayop: body reduced to a bare whole-array view (oracle scalarizes it)");
+            bail_tape!("faq: body reduced to a bare whole-array view (oracle scalarizes it)");
         }
         match self.lv_box(&v) {
             None => Ok(self.emit_fill(&v, &shape, &lo, Cadence::Const)),
@@ -1237,7 +1237,7 @@ impl<'m> TapeBuilder<'m> {
                 if s == shape && o == lo {
                     Ok(v)
                 } else {
-                    bail_tape!("arrayop: result box does not match the output box");
+                    bail_tape!("faq: result box does not match the output box");
                 }
             }
         }
@@ -1357,9 +1357,9 @@ impl<'m> TapeBuilder<'m> {
     // A `Scalar` rule's body — a declared observed's whole expression, or a
     // 0-d state's RHS — is evaluated by the per-cell oracle's `eval`
     // WHOLESALE: a variable reference resolves to the whole array, elementwise
-    // arithmetic broadcasts over it, and a top-level `aggregate`/`makearray`
+    // arithmetic broadcasts over it, and a top-level `faq`/`makearray`
     // materializes its own box (trying the SAME vectorized overlay this pass
-    // compiles — `eval_arrayop` / `eval_makearray`). This mirror covers the
+    // compiles — `eval_faq` / `eval_makearray`). This mirror covers the
     // wholesale algebra where it agrees exactly with the tape's instruction
     // semantics:
     //
@@ -1507,7 +1507,7 @@ impl<'m> TapeBuilder<'m> {
                 Value::Array(_) => bail_tape!("wholesale: array-valued `const`"),
             },
             "index" => self.lower_wholesale_index(node),
-            "aggregate" => self.lower_wholesale_aggregate(node),
+            "faq" => self.lower_wholesale_aggregate(node),
             "makearray" => self.lower_wholesale_makearray(node),
             other => bail_tape!("wholesale: unsupported op `{other}`"),
         }
@@ -1569,13 +1569,13 @@ impl<'m> TapeBuilder<'m> {
         Ok(LV::Scalar(out))
     }
 
-    /// `eval_arrayop` mirror (a standalone aggregate evaluated wholesale):
+    /// `eval_faq` mirror (a standalone aggregate evaluated wholesale):
     /// prefix scans get the running-fold lowering, rank-0 reductions stay
     /// per-cell (fallback), everything else goes through the same overlay
     /// entry as the compiled rules.
     fn lower_wholesale_aggregate(&mut self, node: &Arc<ExpressionNode>) -> LResult<LV> {
-        let Some(spec) = arrayop_spec(node) else {
-            return Ok(LV::Lit(f64::NAN)); // eval_arrayop's missing-body sentinel
+        let Some(spec) = faq_spec(node) else {
+            return Ok(LV::Lit(f64::NAN)); // eval_faq's missing-body sentinel
         };
         if spec.has_drivable_overlap() {
             bail_tape!("aggregate: carries an overlap join gate that drives enumeration");
@@ -1602,7 +1602,7 @@ impl<'m> TapeBuilder<'m> {
         if spec.ranges.is_empty() {
             bail_tape!("aggregate: rank-0 output (scalar reduction, per-cell)");
         }
-        let v = self.lower_arrayop(
+        let v = self.lower_faq(
             spec.idx_names,
             &spec.ranges,
             spec.body,
@@ -1982,8 +1982,8 @@ fn fallback_observed_shape(rule: &AlgebraicRule) -> Option<DimU> {
                 .collect(),
         ),
         AlgebraicRule::Scalar { body, .. } => match &**body {
-            Expr::Operator(node) if node.op == "aggregate" => {
-                let spec = arrayop_spec(node)?;
+            Expr::Operator(node) if node.op == "faq" => {
+                let spec = faq_spec(node)?;
                 Some(
                     spec.ranges
                         .iter()
@@ -2114,7 +2114,7 @@ impl<'m> TapeBuilder<'m> {
                 if padded_shape.contains(&0) {
                     bail_tape!("observed: empty padded box (per-cell path)");
                 }
-                let v = self.lower_arrayop(
+                let v = self.lower_faq(
                     output_idx_names,
                     output_ranges,
                     body,
@@ -2201,7 +2201,7 @@ impl<'m> TapeBuilder<'m> {
                 let Some(dest_lo) = subblock_dest(vs, output_ranges, &shifts) else {
                     bail_tape!("rule: shifted output box does not fit the variable block");
                 };
-                let v = self.lower_arrayop(
+                let v = self.lower_faq(
                     output_idx_names,
                     output_ranges,
                     body,

@@ -34,7 +34,7 @@ end
 # memo a node of in-degree `d` is visited and `reconstruct`ed `d` times,
 # re-inflating the DAG into an exponentially larger tree BEFORE it reaches
 # `_compile` (whose own IdDict memo would otherwise have kept it small). The
-# per-cell arrayop build (`_compile_arrayop_percell!`) calls this once per cell,
+# per-cell faq build (`_compile_faq_percell!`) calls this once per cell,
 # so the re-inflation is paid per cell — the build-time OOM this memo removes.
 # The memo is created fresh per top-level call: `bindings` is fixed within one
 # call, so mapping input identity → output is sound.
@@ -187,10 +187,10 @@ function _sub_preserving(expr::OpExpr, bindings::Dict{String,ASTExpr}, memo::_Su
         memo[expr] = expr
         return expr
     end
-    # Substitute loop-var bindings into range BOUNDS too, so a nested arrayop
+    # Substitute loop-var bindings into range BOUNDS too, so a nested faq
     # whose reduction bound references an OUTER loop index — e.g. a per-cell
     # variable-valence reduction `k ∈ [1, index(n_edges_on_cell, i)]` inside an
-    # outer `i`-loop — has `i` resolved when the inner arrayop is later expanded.
+    # outer `i`-loop — has `i` resolved when the inner faq is later expanded.
     # Bounds are Int (pass through) or ASTExpr (recursively substituted).
     new_ranges = _sub_ranges(expr.ranges, bindings, memo)
     # `reconstruct` (types.jl) copies every remaining OpExpr field, so the full
@@ -201,7 +201,7 @@ function _sub_preserving(expr::OpExpr, bindings::Dict{String,ASTExpr}, memo::_Su
     return result
 end
 
-# Substitute loop-var bindings into an arrayop `ranges` dict's bound expressions.
+# Substitute loop-var bindings into a faq `ranges` dict's bound expressions.
 # Each entry is a vector whose elements are Int (left as-is) or an ASTExpr bound
 # (recursively `_sub_preserving`d). Returns `nothing` unchanged when ranges is
 # nothing; otherwise a fresh Dict so the original is never mutated.
@@ -221,7 +221,7 @@ end
 # model equation is a single `_sub_preserving` call. Iteration cap =
 # depth of the longest valid chain; exceeding it means there's a cycle.
 #
-# CONSUMERS after ess-obs-slots: the ARRAY paths (arrayop kernels, stencil /
+# CONSUMERS after ess-obs-slots: the ARRAY paths (faq kernels, stencil /
 # affine builds, discrete-cadence fills) and the inline FALLBACK of the scalar
 # path still splice these fully-resolved bodies. The scalar path's primary
 # mechanism is now the NAMED PRELUDE SLOT (`_plan_observed_slots`, build.jl),
@@ -239,8 +239,8 @@ function _resolve_observed(obs::Dict{String,ASTExpr})
         any_change = false
         for (k, v) in resolved
             # `_referenced_var_names` (not `free_variables`) so a chain that runs
-            # THROUGH an arrayop/aggregate body is detected — a live-field geometry
-            # observed reads its upstream regrid output inside an arrayop, which
+            # THROUGH a faq body is detected — a live-field geometry
+            # observed reads its upstream regrid output inside a faq, which
             # `free_variables` treats as bound-away and would leave un-inlined
             # (ess-14f.4). For a scalar value the two agree, so scalar observeds are
             # byte-identical; only array-valued observeds gain transitive collapse.
@@ -469,7 +469,7 @@ function _pick_tspan(tspan, model::Model)
 end
 
 # ============================================================
-# 5b. Array-variable helpers (arrayop evaluation support)
+# 5b. Array-variable helpers (faq evaluation support)
 # ============================================================
 
 # Format an array-cell key like "u[3]" (1D) or "u[2,3]" (2D).
@@ -511,7 +511,7 @@ element. Supported RHS forms, in order:
 2. A BROADCAST CONSTANT — an RHS that const-folds to a scalar applied to every
    cell.
 3. A COORDINATE EXPRESSION — an elementwise expression over array-producing
-   `aggregate`/`makearray` nodes (e.g. `cos(pi * x_coord)` where `x_coord` is a
+   `faq`/`makearray` nodes (e.g. `cos(pi * x_coord)` where `x_coord` is a
    grid-geometry aggregate expanded from a §9.7 template import). The expression
    is indexed at this cell ([`_index_at_cell`](@ref)) and folded through the
    standard `_resolve_indices` + `_compile` build-time machinery.
@@ -572,7 +572,7 @@ end
     _index_at_cell(expr, idxs) -> ASTExpr
 
 Broadcast-index an elementwise expression at the concrete 1-based cell `idxs`:
-every array-PRODUCING node (`makearray`, or `aggregate`/`arrayop` with non-empty
+every array-PRODUCING node (`makearray`, or `faq` with non-empty
 `output_idx`) is wrapped in `index(node, idxs…)`, elementwise ops are descended,
 and scalar leaves (literals, scalar names, `index` gathers, scalar reductions)
 pass through. The concrete-index dual of `_index_array_leaves` (loop-name form).
@@ -586,7 +586,7 @@ function _index_at_cell(expr::EarthSciAST.ASTExpr, idxs::Vector{Int})::EarthSciA
             end
             return OpExpr("index", idx_args)
         end
-        (expr.op == "aggregate" || expr.op == "arrayop" || expr.op == "makearray" ||
+        (expr.op == "faq" || expr.op == "makearray" ||
          expr.op == "index") && return expr
         return reconstruct(expr; args=ASTExpr[_index_at_cell(a, idxs) for a in expr.args])
     end
@@ -617,7 +617,7 @@ function _index_at_cell_sym(expr::EarthSciAST.ASTExpr,
             end
             return OpExpr("index", idx_args)
         end
-        (expr.op == "aggregate" || expr.op == "arrayop" || expr.op == "makearray" ||
+        (expr.op == "faq" || expr.op == "makearray" ||
          expr.op == "index") && return expr
         return reconstruct(expr; args=ASTExpr[_index_at_cell_sym(a, syms) for a in expr.args])
     end
@@ -661,8 +661,7 @@ const _NO_STATE_U = Float64[]
 # ranges on an inner node are conservatively rejected.
 function _ic_body_is_closed_form(e)::Bool
     e isa OpExpr || return true
-    (e.op == "index" || e.op == "makearray" || e.op == "aggregate" ||
-     e.op == "arrayop") && return false
+    (e.op == "index" || e.op == "makearray" || e.op == "faq") && return false
     _is_array_producer(e) && return false
     (e.lower !== nothing || e.upper !== nothing || e.filter !== nothing ||
      e.key !== nothing || e.table_axes !== nothing || e.ranges !== nothing) && return false
@@ -678,7 +677,7 @@ function _ic_body_is_closed_form(e)::Bool
     return true
 end
 
-# Compile-once fast path for a coordinate-field ic: an `aggregate`/`arrayop` over
+# Compile-once fast path for a coordinate-field ic: a `faq` over
 # the output loop indices whose body is pure closed-form (see above). The body is
 # compiled a SINGLE time with the loop indices bound as parameters; each cell then
 # only rebinds the index values and re-evaluates — replacing the per-cell
@@ -690,7 +689,7 @@ end
 function _try_field_ic_fastpath(rhs, params::AbstractDict,
                                 registered_functions, const_arrays)
     rhs isa OpExpr || return nothing
-    (rhs.op == "aggregate" || rhs.op == "arrayop") || return nothing
+    (rhs.op == "faq") || return nothing
     (rhs.join_gates === nothing && rhs.filter === nothing) || return nothing
     body = rhs.expr_body
     body === nothing && return nothing

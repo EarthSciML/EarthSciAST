@@ -79,7 +79,7 @@ def _duo_strip_rhs() -> ExprNode:
         _idx("M.refx", "gi"),
     )
     return ExprNode(
-        op="aggregate",
+        op="faq",
         args=[],
         output_idx=[1, "gi", "gj"],
         ranges={"gi": [1, 3], "gj": [4, 7], "k": [0, 5], "l": [0, 5]},
@@ -117,7 +117,7 @@ def test_repeated_symbol_falls_back_exactly() -> None:
     must answer — identically to the kill-switch path."""
     body = _idx("M.u", _add(_sub("i", "i"), 3))
     assert not FL._collect_index_uses_interval(body, {"M.u"}, {}, {"i": (1, 5)})
-    rhs = ExprNode(op="aggregate", args=[], output_idx=["i"], ranges={"i": [1, 5]}, expr=body)
+    rhs = ExprNode(op="faq", args=[], output_idx=["i"], ranges={"i": [1, 5]}, expr=body)
     fast, ref = _shapes_both_paths(rhs, ["M.u"])
     assert fast == ref
     assert fast["M.u"] == (3,)
@@ -128,14 +128,14 @@ def test_stepped_and_descending_ranges() -> None:
     the same per-dimension maxima the enumeration finds."""
     rhs = _add(
         ExprNode(
-            op="aggregate",
+            op="faq",
             args=[],
             output_idx=["i"],
             ranges={"i": [1, 2, 7]},
             expr=_idx("M.u", _sub(_mul(2, "i"), 1)),
         ),
         ExprNode(
-            op="aggregate",
+            op="faq",
             args=[],
             output_idx=["j"],
             ranges={"j": [7, -2, 1]},
@@ -152,7 +152,7 @@ def test_empty_box_records_nothing() -> None:
     """An empty range ([3, 2]) means the enumeration visits no points; the
     interval path must record nothing either, leaving the variable scalar."""
     rhs = ExprNode(
-        op="aggregate",
+        op="faq",
         args=[],
         output_idx=["i"],
         ranges={"i": [3, 2]},
@@ -167,13 +167,13 @@ def test_nested_aggregate_boxes_compose() -> None:
     """An inner aggregate inherits the outer hull: ``u[i + k]`` with i in 1..4
     and k in 0..3 maxes at 7 on both paths."""
     inner = ExprNode(
-        op="aggregate",
+        op="faq",
         args=[],
         output_idx=["k"],
         ranges={"k": [0, 3]},
         expr=_idx("M.u", _add("i", "k")),
     )
-    rhs = ExprNode(op="aggregate", args=[], output_idx=["i"], ranges={"i": [1, 4]}, expr=inner)
+    rhs = ExprNode(op="faq", args=[], output_idx=["i"], ranges={"i": [1, 4]}, expr=inner)
     fast, ref = _shapes_both_paths(rhs, ["M.u"])
     assert fast == ref
     assert fast["M.u"] == (7,)
@@ -184,7 +184,7 @@ def test_unbound_symbol_skips_site_on_both_paths() -> None:
     evaluator; the interval path must skip it identically (variable stays
     scalar), not fall back or invent a bound."""
     rhs = ExprNode(
-        op="aggregate",
+        op="faq",
         args=[],
         output_idx=["i"],
         ranges={"i": [1, 4]},

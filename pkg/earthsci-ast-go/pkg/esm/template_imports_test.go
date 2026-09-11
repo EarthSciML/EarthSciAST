@@ -132,7 +132,7 @@ func TestTemplateImports_ConformanceGoldens(t *testing.T) {
 		{"import_order_determinism", "fixture_priority_override.esm", "expanded_priority_override.esm"},
 		// §5.5.3.1 rule 1: integer ratio {op:/,args:[1,N]} inside a nested
 		// aggregate expr stays integer on the AST-golden pathway.
-		{"aggregate_int_ratio_golden", "fixture.esm", "expanded.esm"},
+		{"faq_int_ratio_golden", "fixture.esm", "expanded.esm"},
 		// §9.7.7 import-edge renaming / namespacing + free-name rebinding.
 		{"import_rename_two_instances", "fixture.esm", "expanded.esm"},
 		{"import_where_rename_two_instances", "fixture.esm", "expanded.esm"},
@@ -368,7 +368,7 @@ func TestTemplateImports_IntegralRenameFollowsAxis(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s: no defining equation", name)
 		}
-		if agg["op"] != "aggregate" {
+		if agg["op"] != "faq" {
 			t.Errorf("%s: op = %v; want aggregate (integral not lowered)", name, agg["op"])
 		}
 		ranges := agg["ranges"].(map[string]any)
@@ -1218,7 +1218,7 @@ func TestTemplateImports_FoldRangesRegionsSizeExact(t *testing.T) {
           "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
                          "rhs": {"op": "-", "args": ["x"]}},
                         {"lhs": "agg",
-                         "rhs": {"op": "aggregate", "output_idx": ["i"], "args": ["x"],
+                         "rhs": {"op": "faq", "output_idx": ["i"], "args": ["x"],
                            "ranges": {"i": [1, {"op": "-", "args": ["N", 1]}]},
                            "expr": {"op": "*", "args": ["x", "i"]}}},
                         {"lhs": "ma",

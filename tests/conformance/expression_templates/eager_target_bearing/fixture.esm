@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "eager_target_bearing",
     "description": "esm-spec §9.6.4 rule 3 (RFC out-of-line-expression-templates §9.2). Two match-less templates: `deriv_c` carries a spatial `D` in its body (TARGET-BEARING), so its reference is EAGER — expanded innermost-first in the pre-pass, surfacing the `D`, which the `central` match rule then lowers at load. `scale_c` is target-free, so its reference SURVIVES load and is materialized into the emitted registry. Positive (eager, lowered) + negative (surviving) in one document.",
@@ -28,7 +28,7 @@
             "wrt": "x"
           },
           "body": {
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "i"
             ],

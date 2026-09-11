@@ -37,7 +37,7 @@
 # `_MaybeMemo` (compile.jl) precede the `_resolve_indices` signatures
 # (resolve.jl). Note that build.jl is included BEFORE compile.jl — its
 # function signatures therefore must not annotate compile-layer types
-# (they are used at runtime only; see `_compile_arrayop_equation!`).
+# (they are used at runtime only; see `_compile_faq_equation!`).
 # ─────────────────────────────────────────────────────────────────────────────
 
 include("tree_walk/errors.jl")           # §1   TreeWalkError + E_TREEWALK_* codes

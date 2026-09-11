@@ -54,7 +54,7 @@ function _gi_model(N)
                    _op("*", _n(-2.0), _idx("u", _v("i"))),
                    _idx("u", _op("+", _v("i"), _i(1))))
     stencil = _op("*", _op("/", _v("g"), _v("h")), lap)
-    colsum = ESM.OpExpr("arrayop", ESM.ASTExpr[];
+    colsum = ESM.OpExpr("faq", ESM.ASTExpr[];
         output_idx=Any["i"], expr_body=_op("*", _idx("u", _v("i")), _v("k")),
         ranges=Dict("i" => [1, N], "k" => [1, 3]), reduce="+")
     ESM.Model(vars, [

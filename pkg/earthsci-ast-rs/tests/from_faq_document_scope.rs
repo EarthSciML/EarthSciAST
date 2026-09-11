@@ -30,11 +30,11 @@ fn from_faq_resolves_a_producer_in_another_model() {
         },
         "models": {
             "Consumer": {"equations": [{"lhs": {
-                "op": "aggregate", "args": [], "output_idx": [],
+                "op": "faq", "args": [], "output_idx": [],
                 "ranges": {"e": {"from": "edges"}}
             }, "rhs": 0}]},
             "Producer": {"equations": [{"lhs": {
-                "op": "aggregate", "args": [], "id": "edge_faq", "output_idx": ["edge"],
+                "op": "faq", "args": [], "id": "edge_faq", "output_idx": ["edge"],
                 "ranges": {"f": {"from": "faces"}}
             }, "rhs": 0}]}
         }
@@ -62,8 +62,8 @@ fn from_faq_naming_no_node_in_the_document_still_errors() {
     let doc = json!({
         "index_sets": {"edges": {"kind": "derived", "from_faq": "nowhere"}},
         "models": {
-            "A": {"equations": [{"lhs": {"op": "aggregate", "args": [], "id": "here"}, "rhs": 0}]},
-            "B": {"equations": [{"lhs": {"op": "aggregate", "args": [], "id": "there"}, "rhs": 0}]}
+            "A": {"equations": [{"lhs": {"op": "faq", "args": [], "id": "here"}, "rhs": 0}]},
+            "B": {"equations": [{"lhs": {"op": "faq", "args": [], "id": "there"}, "rhs": 0}]}
         }
     });
     let e = resolve_references(&doc).unwrap_err();
@@ -78,8 +78,8 @@ fn from_faq_naming_no_node_in_the_document_still_errors() {
 fn duplicate_node_id_across_two_models_errors() {
     let doc = json!({
         "models": {
-            "A": {"equations": [{"lhs": {"op": "aggregate", "args": [], "id": "dup"}, "rhs": 0}]},
-            "B": {"equations": [{"lhs": {"op": "aggregate", "args": [], "id": "dup"}, "rhs": 0}]}
+            "A": {"equations": [{"lhs": {"op": "faq", "args": [], "id": "dup"}, "rhs": 0}]},
+            "B": {"equations": [{"lhs": {"op": "faq", "args": [], "id": "dup"}, "rhs": 0}]}
         }
     });
     let e = resolve_references(&doc).unwrap_err();
@@ -99,7 +99,7 @@ fn duplicate_node_id_across_two_models_errors() {
 /// The shared cross-binding fixture for the ruling.
 #[test]
 fn cross_model_from_faq_corpus_fixture_resolves() {
-    let doc = fixture_json("valid/aggregate/cross_model_from_faq.esm");
+    let doc = fixture_json("valid/faq/cross_model_from_faq.esm");
     let graphs = resolve_references(&doc).expect("resolves");
     let mut names: Vec<&str> = graphs.keys().map(String::as_str).collect();
     names.sort_unstable();

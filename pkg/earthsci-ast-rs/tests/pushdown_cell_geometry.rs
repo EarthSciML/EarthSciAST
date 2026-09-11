@@ -86,7 +86,7 @@ fn doc() -> Value {
         },
         "equations": [
             {"lhs": "E_PM25", "rhs": {
-                "op": "aggregate", "reduce": "+", "output_idx": ["c"],
+                "op": "faq", "reduce": "+", "output_idx": ["c"],
                 "ranges": {"c": {"from": "src_cells"}, "r": {"from": "emis_records"}},
                 "args": ["src_W", "src_S", "src_E", "src_N",
                          "rec_xmin", "rec_ymin", "rec_xmax", "rec_ymax",
@@ -94,7 +94,7 @@ fn doc() -> Value {
                 "expr": {"op": "*", "args": [
                     {"op": "ifelse", "args": [env_overlap, 1.0, 0.0]}, weight]}}},
             {"lhs": "conc_PM25", "rhs": {
-                "op": "aggregate", "reduce": "+", "output_idx": ["rcv"],
+                "op": "faq", "reduce": "+", "output_idx": ["rcv"],
                 "ranges": {"rcv": {"from": "rcv_cells"}, "s": {"from": "src_cells"}},
                 "args": ["SR_PM25", "E_PM25"],
                 "expr": {"op": "*", "args": [

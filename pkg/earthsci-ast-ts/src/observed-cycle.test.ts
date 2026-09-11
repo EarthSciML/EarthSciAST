@@ -221,7 +221,7 @@ describe('a legal recurrence keeps its self-edge exemption (§5.19.5)', () => {
             {
               lhs: 's',
               rhs: {
-                op: 'aggregate',
+                op: 'faq',
                 args: [],
                 output_idx: ['k'],
                 ranges: { k: { from: 'steps' } },

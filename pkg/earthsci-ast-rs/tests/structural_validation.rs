@@ -711,7 +711,7 @@ fn bound_index_symbols_are_in_scope_but_do_not_leak() {
                 }},
                 "equations": [
                   {{ "lhs": "nearest",
-                     "rhs": {{ "op": "aggregate", "args": [], "output_idx": ["i"],
+                     "rhs": {{ "op": "faq", "args": [], "output_idx": ["i"],
                                "ranges": {{ "i": {{ "from": "points" }} }},
                                "expr": {{ "op": "index", "args": ["src", "i"] }} }} }},
                   {{ "lhs": "probe",
@@ -866,7 +866,7 @@ fn reference_integrity_reaches_every_expression_bearing_block() {
                 {
                   "lhs": "obs",
                   "rhs": {
-                    "op": "aggregate",
+                    "op": "faq",
                     "args": [],
                     "output_idx": [],
                     "ranges": {
@@ -1161,7 +1161,7 @@ fn assert_structural(fixture: &str, code: StructuralErrorCode, path: &str) {
 #[test]
 fn test_f6_float_join_key() {
     assert_structural(
-        include_str!("../../../tests/invalid/aggregate/build_time/float_join_key.esm"),
+        include_str!("../../../tests/invalid/faq/build_time/float_join_key.esm"),
         StructuralErrorCode::JoinKeyInvalidType,
         "/models/FloatJoinKey/equations/0/rhs",
     );
@@ -1172,7 +1172,7 @@ fn test_f6_float_join_key() {
 #[test]
 fn test_f6_null_in_key_column() {
     assert_structural(
-        include_str!("../../../tests/invalid/aggregate/build_time/null_in_key_column.esm"),
+        include_str!("../../../tests/invalid/faq/build_time/null_in_key_column.esm"),
         StructuralErrorCode::JoinKeyInvalidType,
         "/models/NullInKeyColumn/equations/0/rhs",
     );
@@ -1192,7 +1192,7 @@ fn test_f6_null_in_key_column() {
 fn test_self_join_three_ranges_ambiguous() {
     assert_structural(
         include_str!(
-            "../../../tests/invalid/aggregate/build_time/self_join_three_ranges_ambiguous.esm"
+            "../../../tests/invalid/faq/build_time/self_join_three_ranges_ambiguous.esm"
         ),
         StructuralErrorCode::JoinSideAmbiguous,
         "/models/ThreeRangesAmbiguous/equations/2/rhs",
@@ -1208,7 +1208,7 @@ fn test_self_join_three_ranges_ambiguous() {
 fn test_self_join_index_set_key_ambiguous() {
     assert_structural(
         include_str!(
-            "../../../tests/invalid/aggregate/build_time/self_join_index_set_key_ambiguous.esm"
+            "../../../tests/invalid/faq/build_time/self_join_index_set_key_ambiguous.esm"
         ),
         StructuralErrorCode::JoinSideAmbiguous,
         "/models/IndexSetKeyAmbiguous/equations/2/rhs",
@@ -1222,7 +1222,7 @@ fn test_self_join_index_set_key_ambiguous() {
 fn test_self_join_syms_unknown_symbol() {
     assert_structural(
         include_str!(
-            "../../../tests/invalid/aggregate/build_time/self_join_syms_unknown_symbol.esm"
+            "../../../tests/invalid/faq/build_time/self_join_syms_unknown_symbol.esm"
         ),
         StructuralErrorCode::JoinSymsUnknownSymbol,
         "/models/SymsUnknownSymbol/equations/2/rhs",
@@ -1235,7 +1235,7 @@ fn test_self_join_syms_unknown_symbol() {
 #[test]
 fn test_f6_continuous_relational_node() {
     assert_structural(
-        include_str!("../../../tests/invalid/aggregate/continuous_relational_node.esm"),
+        include_str!("../../../tests/invalid/faq/continuous_relational_node.esm"),
         StructuralErrorCode::RelationalNodeInContinuous,
         "/models/ContinuousRelationalNode/equations/0/rhs",
     );
@@ -1246,7 +1246,7 @@ fn test_f6_continuous_relational_node() {
 #[test]
 fn test_f6_undefined_index_set() {
     assert_structural(
-        include_str!("../../../tests/invalid/aggregate/undeclared_from_name.esm"),
+        include_str!("../../../tests/invalid/faq/undeclared_from_name.esm"),
         StructuralErrorCode::UndefinedIndexSet,
         "/models/UndeclaredFrom/equations/0/lhs",
     );
@@ -1255,7 +1255,7 @@ fn test_f6_undefined_index_set() {
 /// A §9.7.10 / §6.6.6 discretization-agnostic PDE leaf declares NO `index_sets`
 /// of its own: its registry arrives from the grid library a composing document,
 /// a subsystem-ref edge or an inline test injects into this component's scope.
-/// An `aggregate` range naming a set the document does not declare is therefore
+/// A `faq` range naming a set the document does not declare is therefore
 /// NOT decidable at standalone load and must NOT be reported as
 /// `undefined_index_set` — mirroring esm-spec §9.6.1, where
 /// `template_constraint_unknown_index_set` does not run for a library file
@@ -1263,7 +1263,7 @@ fn test_f6_undefined_index_set() {
 #[test]
 fn test_f6_undefined_index_set_deferred_for_agnostic_leaf() {
     let fixture = include_str!(
-        "../../../tests/conformance/expression_templates/inject_agnostic_aggregate/fixture.esm"
+        "../../../tests/conformance/expression_templates/inject_agnostic_faq/fixture.esm"
     );
     let esm = load_string(fixture).expect("agnostic leaf loads");
     let result = validate(&esm);
@@ -1321,7 +1321,7 @@ fn test_f6_positive_controls_stay_valid() {
 // mounted handed every reader of `t` the simulation clock, so `log(t)` was
 // `-inf` at `t = 0` and every number downstream was finite and plausible.
 //
-// The sibling rule for an `aggregate` BINDER is `reserved_index_symbol`
+// The sibling rule for a `faq` BINDER is `reserved_index_symbol`
 // (tests/reserved_index_symbol.rs); both follow the same reserved set.
 // ---------------------------------------------------------------------------
 

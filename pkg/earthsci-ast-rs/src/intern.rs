@@ -552,7 +552,7 @@ mod tests {
     fn attrs_participate_in_the_key() {
         let _scope = InternScope::new();
         let mk = |dim: &str| {
-            let mut n = op("aggregate", vec![]);
+            let mut n = op("faq", vec![]);
             n.output_idx = Some(vec!["i".to_string()]);
             n.dim = Some(dim.to_string());
             n.expr = Some(Box::new(Expr::Variable("q".into())));
@@ -575,7 +575,7 @@ mod tests {
         use crate::types::RangeSpec;
         let _scope = InternScope::new();
         let mk = |hi: i64| {
-            let mut n = op("aggregate", vec![]);
+            let mut n = op("faq", vec![]);
             n.output_idx = Some(vec!["i".to_string()]);
             n.ranges = Some(
                 [("i".to_string(), RangeSpec::Interval([1, hi]))]

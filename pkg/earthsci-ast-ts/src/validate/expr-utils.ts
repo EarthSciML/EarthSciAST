@@ -85,7 +85,7 @@ export function extractVariableReferences(expr: Expression): string[] {
  * every symbol that function can surface from any nested body is captured here.
  *
  * Binders modelled:
- *   - `aggregate` `output_idx` entries and `ranges` keys (loop variables);
+ *   - `faq` `output_idx` entries and `ranges` keys (loop variables);
  *   - `argmin` / `argmax` `arg` witness and their own `ranges` keys;
  *   - `index(array, i, j, …)` element positions after the array head;
  *   - `apply_expression_template` `bindings` parameter names.
@@ -101,7 +101,7 @@ export function collectIndexSymbols(expr: Expression): Set<string> {
     if (!isExprNode(node)) return
 
     // Aggregate output indices are bound loop variables.
-    if (node.op === 'aggregate') {
+    if (node.op === 'faq') {
       for (const idx of node.output_idx || []) {
         if (typeof idx === 'string') symbols.add(idx)
       }
@@ -181,7 +181,7 @@ export function lhsAssignmentTarget(lhs: Expression): string | undefined {
       case 'D':
       case 'index':
         return lhs.args && lhs.args.length > 0 ? lhsAssignmentTarget(lhs.args[0]) : undefined
-      case 'aggregate':
+      case 'faq':
         return lhs.expr !== undefined ? lhsAssignmentTarget(lhs.expr) : undefined
       default:
         return undefined

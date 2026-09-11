@@ -46,7 +46,7 @@ pub enum Arity {
     /// At least `n` (`+`/`*` are n-ary; `min`/`max` are n-ary with `n >= 2`).
     AtLeast(usize),
     /// Any arity, including zero. Used by the ops whose operands do not live in
-    /// `args` at all (`aggregate`/`makearray` carry them in `expr`/`values`;
+    /// `args` at all (`faq`/`makearray` carry them in `expr`/`values`;
     /// `fn` defers to the closed-function registry's own signature check).
     Any,
 }
@@ -270,10 +270,10 @@ pub fn arity_of(op: &str) -> Option<Arity> {
         // Expanded at load time (§9.6); its operands live in `bindings`.
         "apply_expression_template" => Arity::Any,
 
-        // --- Array / tensor (§4.3). `aggregate` and `makearray` carry their
+        // --- Array / tensor (§4.3). `faq` and `makearray` carry their
         // real operands in `expr` / `values`, and `args` is conventionally the
         // (possibly empty) operand list, so their arity is open.
-        "aggregate" => Arity::Any,
+        "faq" => Arity::Any,
         "makearray" => Arity::Any,
         // "`args[0]` is the array; `args[1..]` are the index expressions."
         "index" => Arity::AtLeast(1),
@@ -370,7 +370,7 @@ pub fn is_builtin_function_name(name: &str) -> bool {
 /// * **Does element alignment descend into a node's operands?** An ARRAY-LEVEL
 ///   `a * b` means "multiply corresponding elements", so the operands must first
 ///   be brought onto a common index space (§4.3.4). Every other op consumes its
-///   operands WHOLE and defines its own operand contract — an `aggregate` and a
+///   operands WHOLE and defines its own operand contract — a `faq` and a
 ///   `makearray` name their axes, an `index` gathers, the shape ops restructure,
 ///   the relational and geometry kernels return arrays of an unrelated shape —
 ///   so alignment must not reach inside them. [`is_elementwise_node`] lifts this
@@ -384,7 +384,7 @@ pub fn is_builtin_function_name(name: &str) -> bool {
 /// Everything whose meaning is NOT pointwise is excluded, and each exclusion is
 /// load-bearing:
 ///
-/// * the array/tensor ops (`aggregate`, `makearray`, `index`, `reshape`,
+/// * the array/tensor ops (`faq`, `makearray`, `index`, `reshape`,
 ///   `transpose`, `concat`, and `broadcast` itself) — they RESHAPE, so
 ///   "apply element-wise" is not defined for them (and a self-referential
 ///   `fn: "broadcast"` would recurse forever in the evaluators);
@@ -469,7 +469,7 @@ pub fn is_elementwise_node(node: &ExpressionNode) -> bool {
 ///    no default in the spec, and inventing one turns a truncated node into a
 ///    silent sum.
 /// 2. **An `fn` that names no scalar operator** — a typo (`"not_a_real_op"`) or
-///    a non-pointwise op (`"aggregate"`). §4.3.4 requires a scalar operator, so
+///    a non-pointwise op (`"faq"`). §4.3.4 requires a scalar operator, so
 ///    this is the exact analogue of the §9.1 rule for `fn`-NODE names.
 /// 3. **An `fn`/`args` arity mismatch.** `broadcast(fn = "sin", [a, b])` and
 ///    `broadcast(fn = "min", [x])` are wrong for precisely the reason the bare
@@ -761,7 +761,7 @@ mod tests {
     #[test]
     fn the_walk_descends_into_sidecar_fields() {
         let agg = node(serde_json::json!({
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": ["i"],
             "expr": {"op": "atan2", "args": [1.0]},
             "args": ["u"]
@@ -802,7 +802,7 @@ mod tests {
         "enum",
         "table_lookup",
         "apply_expression_template",
-        "aggregate",
+        "faq",
         "makearray",
         "index",
         "broadcast",
@@ -878,7 +878,7 @@ mod tests {
             "const",
             "true",
             "fn",
-            "aggregate",
+            "faq",
             "index",
             "expp",
             "t",
@@ -969,7 +969,7 @@ mod tests {
     /// §4.3.4 requires a SCALAR operator.
     #[test]
     fn non_scalar_broadcast_fn_is_rejected() {
-        for f in ["aggregate", "index", "makearray", "broadcast", "fn", "D"] {
+        for f in ["faq", "index", "makearray", "broadcast", "fn", "D"] {
             let e = check_expr(&node(serde_json::json!({
                 "op": "broadcast", "fn": f, "args": ["x"]
             })))
@@ -1066,7 +1066,7 @@ mod tests {
         assert!(is_elementwise_node(&bcast(None)));
         // Not a scalar operator: stay out.
         assert!(!is_elementwise_node(&bcast(Some("pow"))));
-        assert!(!is_elementwise_node(&bcast(Some("aggregate"))));
+        assert!(!is_elementwise_node(&bcast(Some("faq"))));
 
         // The NODE question and the NAME question differ on exactly one input:
         // a `broadcast` node is elementwise in its args, but the string

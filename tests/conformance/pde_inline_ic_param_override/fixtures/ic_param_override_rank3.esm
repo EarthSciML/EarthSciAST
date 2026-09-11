@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "ic_param_override_rank3",
     "description": "esm-spec 6.6.5 build-time evaluation scope for a RANK-3 (lon/lat/lev) coordinate-expression ic (11.4.1) whose amplitude parameter appears ONLY in the ic. amp is declared 1.0 and overridden to 2.0 through the inline test's parameter_overrides. The sibling fixture ic_param_default_rank3 is the same document with amp DECLARED 2.0 and no override; the two share one golden, so the pair is the controlled defaults-vs-overrides comparison a real model reproduced by hand -- if the override were dropped from the build-time ic scope, this fixture would read the 1.0 default and the pair would diverge.",
@@ -65,7 +65,7 @@
             ]
           },
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": [
               "i",
@@ -197,7 +197,7 @@
         },
         {
           "lhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": [
               "i",
@@ -235,7 +235,7 @@
             }
           },
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": [
               "i",

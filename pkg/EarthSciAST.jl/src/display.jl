@@ -726,7 +726,7 @@ function format_bound(value, format::Symbol)
     end
 end
 
-"""Big-operator symbol for an `aggregate` reduction (semiring supersedes reduce)."""
+"""Big-operator symbol for a `faq` reduction (semiring supersedes reduce)."""
 function aggregate_symbol(semiring, reduce, format::Symbol)
     fam = if semiring !== nothing
         (semiring == "max_product" || semiring == "max_sum") ? :max :
@@ -781,7 +781,7 @@ function _display_join_clause(clause)
     return syms === nothing ? body : "$body @ $(syms[1]),$(syms[2])"
 end
 
-"""Render an `aggregate` node per the rendering contract."""
+"""Render a `faq` node per the rendering contract."""
 function format_aggregate(node::OpExpr, format::Symbol)
     r(e) = format_expression(e, format)
     out_idx = node.output_idx === nothing ? Any[] : node.output_idx
@@ -951,7 +951,7 @@ function format_structural_op(node::OpExpr, format::Symbol)
         # before, so every existing rendering is unchanged.
         id_part = node.id === nothing ? "" : ", id=$(node.id)"
         return "$name($inner, manifold=$manifold$id_part)"
-    elseif op == "aggregate"
+    elseif op == "faq"
         return format_aggregate(node, format)
     elseif op == "argmin" || op == "argmax"
         return format_arg_witness(node, format)

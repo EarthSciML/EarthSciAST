@@ -588,7 +588,7 @@ fn propagate_operator_dim(
         // Array operators: propagate the element dimension. Shape and
         // indexing are orthogonal to dimension (see gt-t5c / gt-vt3 — shapes
         // are a separate concern from unit checking).
-        "aggregate" | "makearray" | "index" | "reshape" | "transpose" | "concat" | "broadcast" => {
+        "faq" | "makearray" | "index" | "reshape" | "transpose" | "concat" | "broadcast" => {
             propagate_array_dim(op, env, findings)
         }
         // No dimensional rule for this operator — an unregistered user op, or a
@@ -972,7 +972,7 @@ fn propagate_ifelse_dim(
 
 /// Array operators: propagate the element dimension. Shape and indexing are
 /// orthogonal to dimension (see gt-t5c / gt-vt3 — shapes are a separate
-/// concern from unit checking). `aggregate` is the unified Functional
+/// concern from unit checking). `faq` is the unified Functional
 /// Aggregate Query op (RFC §5.6).
 fn propagate_array_dim(
     op: &ExpressionNode,
@@ -980,7 +980,7 @@ fn propagate_array_dim(
     findings: &mut Vec<UnitFinding>,
 ) -> Dim {
     match op.op.as_str() {
-        "aggregate" => {
+        "faq" => {
             // The body is the scalar expression evaluated for each tuple of
             // loop-index values; its dimension is the array's element
             // dimension.
@@ -2717,7 +2717,7 @@ mod tests {
     }
 
     #[test]
-    fn propagate_arrayop_body() {
+    fn propagate_faq_body() {
         // aggregate { expr: x * scale } with x in m/s and a dimensionless
         // `scale` -> result m/s. (A bare numeric literal would leave the product
         // INDETERMINATE — see `propagate_literal_is_indeterminate` — so the
@@ -2728,7 +2728,7 @@ mod tests {
             vec![Expr::Variable("x".into()), Expr::Variable("scale".into())],
         );
         let node = Expr::operator(ExpressionNode {
-            op: "aggregate".to_string(),
+            op: "faq".to_string(),
             args: vec![],
             expr: Some(Box::new(body)),
             ..ExpressionNode::default()

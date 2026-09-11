@@ -138,7 +138,7 @@ func TestArrayBroadcastShapeAlignment(t *testing.T) {
 			name:     "a broadcast whose fn is not a scalar operator is not descended",
 			dpShape:  []string{"lon", "lat"},
 			operands: map[string][]string{"z1": {"lev"}},
-			rhs:      ExprNode{Op: opBroadcast, Fn: strPtr("aggregate"), Args: []any{"z1"}},
+			rhs:      ExprNode{Op: opBroadcast, Fn: strPtr("faq"), Args: []any{"z1"}},
 		},
 		// --- anonymous shapes keep the positional regime (§4.3.4 case 2) ---
 		{

@@ -263,7 +263,7 @@ class TestSymPyBridge:
         """A CORE op the scalar SymPy bridge has no representation for still
         raises ``SimulationError`` (the shared bridge semantics), not ``TypeError``
         — only genuinely non-representable core ops reach that path now."""
-        expr = ExprNode(op="aggregate", args=[])
+        expr = ExprNode(op="faq", args=[])
         with pytest.raises(SimulationError, match="Unsupported operation"):
             to_sympy(expr)
 

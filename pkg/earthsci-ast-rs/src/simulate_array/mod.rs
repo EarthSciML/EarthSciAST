@@ -1,4 +1,4 @@
-//! Native array runtime for `arrayop`, `makearray`, `index`, `reshape`,
+//! Native array runtime for `faq`, `makearray`, `index`, `reshape`,
 //! `transpose`, `concat`, and `broadcast` expression nodes (gt-oxr).
 //!
 //! This module sits alongside [`crate::simulate`] and handles the subset of
@@ -13,11 +13,11 @@
 //! concatenation of per-variable blocks. Each array variable occupies a
 //! column-major-ordered block sized by its inferred shape; scalar
 //! variables occupy a single slot. Shape inference walks every `index`
-//! call and every `arrayop` `ranges` dict to compute per-variable, per-
+//! call and every `faq` `ranges` dict to compute per-variable, per-
 //! dimension bounds.
 //!
 //! At RHS evaluation time the interpreter wraps the flat state slice into
-//! [`ndarray::ArrayD`] views (one per variable), binds `arrayop` loop
+//! [`ndarray::ArrayD`] views (one per variable), binds `faq` loop
 //! indices into a context, and evaluates each equation's body expression
 //! into a [`Value`] — either `Scalar(f64)` or `Array(ArrayD<f64>)`. For
 //! array-producing operators (`reshape`, `transpose`, `concat`,
@@ -26,7 +26,7 @@
 //!
 //! Column-major ordering is the convention used by the Julia sibling and
 //! reflected in the cross-language conformance fixtures (e.g.
-//! `arrayop_11_reshape_roundtrip.esm`).
+//! `faq_11_reshape_roundtrip.esm`).
 //!
 //! ## Subsystems
 //!
@@ -103,7 +103,7 @@ use layout::*;
 use rhs::*;
 use vectorized::*;
 
-use crate::aggregate::{ReduceKind, empty_derived_extents};
+use crate::faq::{ReduceKind, empty_derived_extents};
 use crate::types::{Expr, IndexSet, RangeSpec};
 use crate::value_invention::BoundaryKind;
 use indexmap::IndexMap;
@@ -197,7 +197,7 @@ pub struct VarShape {
     pub flat_offset: usize,
 }
 
-/// One contracted (reduction) index's loop bound in an `aggregate`/`arrayop`
+/// One contracted (reduction) index's loop bound in a `faq`/`faq`
 /// einsum. Either a static inclusive interval, or a **ragged** bound whose
 /// upper limit `offsets[of…]` is gathered per output tuple at eval time
 /// (RFC `semiring-faq-unified-ir` §5.2 — variable-valence / unstructured-mesh
@@ -359,7 +359,7 @@ pub struct RhsStats {
 enum AlgebraicRule {
     /// `var := body` — pure scalar algebraic.
     Scalar { var: String, body: Rc<Expr> },
-    /// `var[i...] := body` — array algebraic defined via an arrayop over
+    /// `var[i...] := body` — array algebraic defined via a faq over
     /// the full shape of `var`.
     ArrayLoop {
         var: String,
@@ -594,7 +594,7 @@ pub struct ArrayCompiled {
     /// `derived_rings` is interior-mutable but built *fresh per RHS call*
     /// (intra-evaluation FAQ-geometry scratch, wrong lifetime and overwritten by
     /// `intersect_polygon` producers). The gap is real, so the channel is added
-    /// — as a runtime *binding*, not a new engine primitive (no arrayop, no
+    /// — as a runtime *binding*, not a new engine primitive (no faq, no
     /// scalarizer arm, no `Discrete` `VariableType`). The optional typed
     /// `ModelVariable.refresh` field (plan PR-2) is deferred: forcing resolves
     /// by name at runtime and does not need it.
@@ -621,7 +621,7 @@ pub struct ArrayCompiled {
     /// document with no field `ic`.
     ic_scope_defs: Vec<(String, Expr)>,
     /// Document-scoped index-set registry, kept so `ic` RHS coordinate
-    /// expressions (whose `aggregate` ranges may still carry `{ "from": <set> }`
+    /// expressions (whose `faq` ranges may still carry `{ "from": <set> }`
     /// references on the flattened path) resolve at `u0` build time exactly as
     /// equation expressions do at compile time.
     index_sets: HashMap<String, IndexSet>,
@@ -824,7 +824,7 @@ struct EvalCtx<'a> {
     t: f64,
     /// Runtime registry of FAQ-materialized derived rings (RFC §8.1): an
     /// `intersect_polygon` clip self-registers its closed overlap ring here
-    /// under its node `id`, so a downstream `aggregate` over a `kind:"derived"`
+    /// under its node `id`, so a downstream `faq` over a `kind:"derived"`
     /// index set (`from_faq: <id>`) resolves its extent (the distinct-vertex
     /// count) via [`derived_extent`]. Interior-mutable so the producer can
     /// register while the same borrow chain reads it; empty for models with no

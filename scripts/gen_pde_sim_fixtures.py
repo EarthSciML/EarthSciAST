@@ -3,9 +3,9 @@
 (bead ess-fmw).
 
 Each fixture is a **pre-discretized** method-of-lines ESM document: the spatial
-operator is already lowered to a full-grid ``arrayop`` whose body is an
+operator is already lowered to a full-grid ``faq`` whose body is an
 ``index(makearray(regions, values), ...)`` — exactly the form the existing
-``tests/fixtures/arrayop/15,16`` heat fixtures use and that all three
+``tests/fixtures/faq/15,16`` heat fixtures use and that all three
 PDE-simulation bindings (Julia / Python / Rust) evaluate natively. The
 boundary-cell stencils live in dedicated single-cell makearray regions so the
 **BC ghost / makearray path** is exercised, not just the interior stencil.
@@ -41,7 +41,7 @@ FIXTURES = TIER / "fixtures"
 GOLDEN = TIER / "golden"
 
 # ---------------------------------------------------------------------------
-# AST builders (match the JSON shape of tests/fixtures/arrayop/15_*.esm)
+# AST builders (match the JSON shape of tests/fixtures/faq/15_*.esm)
 # ---------------------------------------------------------------------------
 
 
@@ -65,9 +65,9 @@ def iadd(a, b):  # index arithmetic  a + b
     return {"op": "+", "args": [a, b]}
 
 
-def arrayop_lhs(out_idx, var, ranges):
+def faq_lhs(out_idx, var, ranges):
     return {
-        "op": "aggregate",
+        "op": "faq",
         "args": [],
         "output_idx": list(out_idx),
         "expr": {"op": "D", "args": [idx(var, *out_idx)], "wrt": "t"},
@@ -75,9 +75,9 @@ def arrayop_lhs(out_idx, var, ranges):
     }
 
 
-def arrayop_rhs(out_idx, makearray, ranges):
+def faq_rhs(out_idx, makearray, ranges):
     return {
-        "op": "aggregate",
+        "op": "faq",
         "args": [],
         "output_idx": list(out_idx),
         "expr": {"op": "index", "args": [makearray, *out_idx]},
@@ -280,8 +280,8 @@ def build_1d_diffusion(fid, n, dx, bc, *, neumann=(0.5, -0.5), robin=(0.5, 0.3),
         "variables": {"u": {"type": "unknown", "shape": ["i"]}},
         "equations": [
             {
-                "lhs": arrayop_lhs(["i"], "u", rng),
-                "rhs": arrayop_rhs(["i"], ma, rng),
+                "lhs": faq_lhs(["i"], "u", rng),
+                "rhs": faq_rhs(["i"], ma, rng),
             }
         ],
     }
@@ -303,8 +303,8 @@ def build_advection(fid, n, dx, a=1.0, t_end=0.1):
         "variables": {"u": {"type": "unknown", "shape": ["i"]}},
         "equations": [
             {
-                "lhs": arrayop_lhs(["i"], "u", rng),
-                "rhs": arrayop_rhs(["i"], ma, rng),
+                "lhs": faq_lhs(["i"], "u", rng),
+                "rhs": faq_rhs(["i"], ma, rng),
             }
         ],
     }
@@ -318,7 +318,7 @@ def build_advection(fid, n, dx, a=1.0, t_end=0.1):
 def build_2d_diffusion(fid, n, h, t_end=0.03):
     kappa = 1.0 / (h * h)
     rng = {"i": [1, n], "j": [1, n]}
-    # single arrayop, implicit zero ghost on out-of-bounds (fixture-16 style)
+    # single faq, implicit zero ghost on out-of-bounds (fixture-16 style)
     body = mul(
         kappa,
         add(
@@ -334,9 +334,9 @@ def build_2d_diffusion(fid, n, h, t_end=0.03):
         "variables": {"u": {"type": "unknown", "shape": ["i", "j"]}},
         "equations": [
             {
-                "lhs": arrayop_lhs(["i", "j"], "u", rng),
+                "lhs": faq_lhs(["i", "j"], "u", rng),
                 "rhs": {
-                    "op": "aggregate",
+                    "op": "faq",
                     "args": [],
                     "output_idx": ["i", "j"],
                     "expr": body,
@@ -402,7 +402,7 @@ def _finish(fid, model_name, model, L, b, order, n, spacing, bc, t_end, ic_kind)
             "name": fid,
             "description": _describe(fid, n, spacing, bc, ic_kind),
             "authors": ["EarthSciAST/polecats/gastown.nux"],
-            "tags": ["arrayop", "conformance", "pde", "simulation", bc, ic_kind],
+            "tags": ["faq", "conformance", "pde", "simulation", bc, ic_kind],
         },
         "models": {model_name: model},
     }
@@ -443,7 +443,7 @@ def _describe(fid, n, spacing, bc, ic_kind):
     return (
         f"Discretized 1-D heat equation on {n} cells (dx={spacing}, "
         f"kappa={1.0 / (spacing * spacing):g}) with {bc} boundary conditions. "
-        "Full-grid arrayop; boundary cells use single-cell makearray regions "
+        "Full-grid faq; boundary cells use single-cell makearray regions "
         f"with the {bc} ghost expression."
     )
 
@@ -483,7 +483,7 @@ def main():
             "(reference), Python, and Rust evaluate the SAME pre-discretized "
             "method-of-lines fixtures and must agree on the discretized RHS f(u,t) "
             "and the integrated trajectory within numeric tolerance. Go and TS are "
-            "out of scope (no arrayop/makearray evaluator, no simulator)."
+            "out of scope (no faq/makearray evaluator, no simulator)."
         ),
         "reference_binding": "julia",
         "bindings_required": ["julia", "python", "rust"],

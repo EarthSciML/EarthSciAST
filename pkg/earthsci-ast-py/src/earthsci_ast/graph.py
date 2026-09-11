@@ -483,7 +483,7 @@ def lhs_target_name(lhs: Expr) -> str | None:
         if args is None and isinstance(lhs, dict):
             args = lhs.get("args")
         return lhs_target_name(args[0]) if args else None
-    if op == "aggregate":
+    if op == "faq":
         body = getattr(lhs, "expr", None)
         if body is None and isinstance(lhs, dict):
             body = lhs.get("expr")
@@ -492,8 +492,8 @@ def lhs_target_name(lhs: Expr) -> str | None:
 
 
 def _bound_index_symbols(node: ExprNode) -> list[str]:
-    """Index symbols this node BINDS for its own body: an ``aggregate`` /
-    ``arrayop``'s ``ranges`` keys and ``output_idx`` entries, and an
+    """Index symbols this node BINDS for its own body: an ``faq`` /
+    ``faq``'s ``ranges`` keys and ``output_idx`` entries, and an
     ``integral``'s ``var``.
 
     Narrower than :func:`structural_checks._expression_bound_symbols`, which also
@@ -501,7 +501,7 @@ def _bound_index_symbols(node: ExprNode) -> list[str]:
     positions are exactly where an aggregate's binders appear, and subtracting
     them THERE rather than at the binding node would hide a real reference to a
     declared variable used as an index. The binder itself is caught at its
-    ``aggregate``.
+    ``faq``.
     """
     bound: list[str] = []
     ranges = getattr(node, "ranges", None)
@@ -539,7 +539,7 @@ def _sorted_free_variables(expr: Expr | None) -> list[str]:
     for.
 
     Deliberately NOT :func:`expression.free_variables`. That function walks every
-    child and reports every bare name it reaches, so an ``aggregate``'s own range
+    child and reports every bare name it reaches, so an ``faq``'s own range
     binders (``sum over a of src[a]``) come back looking like model variables and
     become graph nodes with no declaration, no units and no kind. A binder is
     introduced by the aggregate's own ``ranges`` clause and is scoped to it; it

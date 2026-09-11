@@ -226,6 +226,22 @@ end
 # and op-existence rejections live here.
 function _parse_op_dict(data)
     op = string(_get_field(data, :op, nothing))
+    if op == "arrayop"
+        # The `faq` spelling was removed at esm v0.8.0, when the node
+        # became the semiring FAQ (RFC `semiring-faq-unified-ir` §5.6). It is
+        # not an alias and is not normalized — see
+        # `docs/content/rfcs/faq-node-rename.md` §4 for why it nevertheless
+        # survived that removal inside the bindings until esm 1.1.0.
+        throw(ParseError("`faq` op was removed in v0.8.0; use `faq` " *
+                         "(the Functional Aggregate Query node)."))
+    end
+    if op == "aggregate"
+        # Deprecated alias for `faq`, removed at esm 2.0.0. The load pipeline
+        # normalizes the whole document in `_warn_deprecated_op_aliases!` and
+        # warns once; this silent fallback covers callers that reach
+        # `expression_from_json` directly with an un-normalized node.
+        op = "faq"
+    end
     if op == "call"
         # The `call` op + `registered_functions` extension point was removed in
         # v0.3.0 (esm-spec §9 closure, RFC `closed-function-registry.md`).

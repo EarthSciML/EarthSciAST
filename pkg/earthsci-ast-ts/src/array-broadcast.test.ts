@@ -34,7 +34,7 @@ function scalarModel(rhs: Expression): EsmFile {
 
 /**
  * A `[lon,lat,lev]` state `dp` driven by `rhs`, plus one observed operand per
- * entry of `operandShapes`. Each operand is DEFINED by an `aggregate` over its
+ * entry of `operandShapes`. Each operand is DEFINED by a `faq` over its
  * own axes — the spelling that declares a frame without itself being an
  * array-level expression.
  *
@@ -54,7 +54,7 @@ function arrayModel(rhs: Expression, operandShapes: Record<string, string[]>): E
     equations.push({
       lhs: name,
       rhs: {
-        op: 'aggregate',
+        op: 'faq',
         args: [],
         output_idx: idx,
         ranges: Object.fromEntries(idx.map((s, i) => [s, { from: shape[i] }])),
@@ -116,7 +116,7 @@ describe('invalid_broadcast_fn (esm-spec §4.3.4)', () => {
   })
 
   it.each([
-    'aggregate',
+    'faq',
     'makearray',
     'index',
     'broadcast',
@@ -289,7 +289,7 @@ describe('array_shape_mismatch (esm-spec §4.3.4 "Broadcast compatibility")', ()
     ).toEqual(['array_shape_mismatch @ /models/M/equations/0/rhs'])
   })
 
-  it.each(['aggregate', 'index', 'reshape', 'transpose', 'concat', 'makearray'])(
+  it.each(['faq', 'index', 'reshape', 'transpose', 'concat', 'makearray'])(
     'does NOT descend into %s — those consume their operands whole',
     (op) => {
       expect(findings(arrayModel({ op, args: ['bad'] } as Expression, { bad: ['spc'] }))).toEqual(

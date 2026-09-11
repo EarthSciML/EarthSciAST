@@ -264,7 +264,7 @@ def test_array_path_binds_a_more_qualified_parameter_key() -> None:
     from earthsci_ast.problem import esm_problem, solve
 
     loop = {
-        "op": "aggregate",
+        "op": "faq",
         "args": [],
         "output_idx": ["i"],
         "ranges": {"i": {"from": "x"}},

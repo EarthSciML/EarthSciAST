@@ -43,7 +43,7 @@ func TestScalarOperatorsAllHaveArity(t *testing.T) {
 func TestNonPointwiseOpsAreNotScalarOperators(t *testing.T) {
 	for _, op := range []string{
 		// Array / tensor.
-		"aggregate", "makearray", "index", "broadcast", "reshape", "transpose", "concat",
+		"faq", "makearray", "index", "broadcast", "reshape", "transpose", "concat",
 		// Closed-registry invocation.
 		"fn",
 		// Form / lowering.
@@ -91,7 +91,7 @@ func TestCheckBroadcastFn(t *testing.T) {
 
 		// A name that is not a scalar operator — a typo or a non-pointwise op.
 		{"typo", bcast(strPtr("not_a_real_op"), 1), "does not name a scalar operator"},
-		{"aggregate", bcast(strPtr("aggregate"), 1), "does not name a scalar operator"},
+		{"faq", bcast(strPtr("faq"), 1), "does not name a scalar operator"},
 		{"index", bcast(strPtr("index"), 2), "does not name a scalar operator"},
 		{"makearray", bcast(strPtr("makearray"), 1), "does not name a scalar operator"},
 		{"self-referential", bcast(strPtr("broadcast"), 1), "does not name a scalar operator"},
@@ -147,9 +147,9 @@ func TestIsElementwiseNode(t *testing.T) {
 		// An absent `fn` keeps the historical `+` classification; such a node is
 		// a hard invalid_broadcast_fn error and never reaches alignment.
 		{bcast(nil, 2), true},
-		{bcast(strPtr("aggregate"), 1), false},
+		{bcast(strPtr("faq"), 1), false},
 		{bcast(strPtr("not_a_real_op"), 1), false},
-		{ExprNode{Op: "aggregate"}, false},
+		{ExprNode{Op: "faq"}, false},
 		{ExprNode{Op: "index", Args: []any{"a", "i"}}, false},
 		{ExprNode{Op: "reshape", Args: []any{"a"}}, false},
 		{ExprNode{Op: "transpose", Args: []any{"a"}}, false},

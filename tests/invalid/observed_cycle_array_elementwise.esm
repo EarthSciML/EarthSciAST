@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "ObservedCycleArrayElementwise",
     "description": "INVALID cross-binding fixture for esm-spec §4.9.6 (issue #181): three ARRAY observeds over one index set that reference each other ELEMENTWISE, closing the dependency cycle gamfac -> hpbl -> wscale -> gamfac. No evaluation order satisfies all three definitions, and the equations alone decide that — so every binding MUST reject the document in `validate` with `observed_cycle` at /models/YSU, naming the observeds on the cycle.\n\nThe names are the reporter's, and the two observeds that are NOT on the cycle are the whole reason the fixture has this shape. `in_pbl` is declared, defined and referenced perfectly well; it merely reads `hpbl`. `z_ent_flux` reads `in_pbl` and is declared FIRST, so a build that tolerates the cycle and materializes the observeds in declaration order evaluates `z_ent_flux` before anything has produced `in_pbl` — and reports `E_TREEWALK_UNBOUND_NAME: 'in_pbl'`, which is exactly what issue #181 reported and exactly the wrong answer. `in_pbl` MUST NOT appear on the reported cycle, and no binding may describe it as unbound: it is bound. (`z_ent_flux` is spelled to sort LAST so the sorted-root DFS still enters the cycle at `gamfac` — the reported path is a property of the graph, not of who happens to consume it.)",
@@ -85,7 +85,7 @@
           "_comment": "Declared FIRST. Reads `in_pbl` (not on the cycle) and `wscale` (on it), so an ordering sweep that tolerates the cycle and falls back to declaration order evaluates this rule with NOTHING materialized — and names `in_pbl`.",
           "lhs": "z_ent_flux",
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": [
               "i"
@@ -120,7 +120,7 @@
           "_comment": "in_pbl is downstream of the cycle but not on it.",
           "lhs": "in_pbl",
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": [
               "i"
@@ -149,7 +149,7 @@
           "_comment": "wscale -> gamfac",
           "lhs": "wscale",
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": [
               "i"
@@ -178,7 +178,7 @@
           "_comment": "gamfac -> hpbl",
           "lhs": "gamfac",
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": [
               "i"
@@ -207,7 +207,7 @@
           "_comment": "hpbl -> wscale, closing gamfac -> hpbl -> wscale -> gamfac",
           "lhs": "hpbl",
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": [
               "i"

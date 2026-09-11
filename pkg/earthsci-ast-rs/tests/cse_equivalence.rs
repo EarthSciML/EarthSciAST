@@ -100,10 +100,10 @@ fn repeated_subexpr_json(n: usize) -> String {
    "variables": {"u": {"type": "unknown", "shape": ["i"]}},
    "equations": [
     {
-     "lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+     "lhs": {"op": "faq", "args": [], "output_idx": ["i"],
              "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "i"]}], "wrt": "t"},
              "ranges": {"i": [1, __N__]}},
-     "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+     "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
              "ranges": {"i": [1, __N__]},
              "expr": {"op": "index", "args": [
                {"op": "makearray", "args": [],
@@ -132,10 +132,10 @@ fn contracted_repeat_json(n: usize) -> String {
    "variables": {"u": {"type": "unknown", "shape": ["i"]}},
    "equations": [
     {
-     "lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+     "lhs": {"op": "faq", "args": [], "output_idx": ["i"],
              "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "i"]}], "wrt": "t"},
              "ranges": {"i": [1, __N__]}},
-     "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+     "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
              "reduce": "+",
              "ranges": {"i": [1, __N__], "k": [-1, 1]},
              "expr": {"op": "+", "args": [

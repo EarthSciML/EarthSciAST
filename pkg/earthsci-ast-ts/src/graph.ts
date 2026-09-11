@@ -575,7 +575,7 @@ export function lhsTargetName(lhs: Expr): string | undefined {
       case 'D':
       case 'index':
         return node.args && node.args.length > 0 ? lhsTargetName(node.args[0]) : undefined
-      case 'aggregate': {
+      case 'faq': {
         const body = (node as { expr?: Expr }).expr
         return body !== undefined ? lhsTargetName(body) : undefined
       }
@@ -591,7 +591,7 @@ export function lhsTargetName(lhs: Expr): string | undefined {
  * removed — the node set §4.8.2 asks for.
  *
  * This is deliberately NOT `expression.freeVariables`. That function walks every
- * child and reports every bare name it reaches, so an `aggregate`'s own range
+ * child and reports every bare name it reaches, so a `faq`'s own range
  * binders (`sum over a of src[a]`) come back looking like model variables and
  * become graph nodes with no declaration, no units and no kind. A binder is
  * introduced by the aggregate's own `ranges` clause and is scoped to it; it is
@@ -612,14 +612,14 @@ export function graphVariableReferences(expr: Expr): Set<string> {
 }
 
 /**
- * Index symbols BOUND by this node for its own body: an `aggregate` /
- * `arrayop`'s `ranges` keys and `output_idx` entries, and an `integral`'s `var`.
+ * Index symbols BOUND by this node for its own body: a `faq` /
+ * `faq`'s `ranges` keys and `output_idx` entries, and an `integral`'s `var`.
  *
  * Narrower than the validator's `collectIndexSymbols`, which also treats every
  * bare name in an `index(A, i, j)` position as bound. Those positions are
  * exactly where an aggregate's binders appear, and subtracting them HERE rather
  * than at the binding node would hide a real reference to a declared variable
- * used as an index. The binder itself is caught at its `aggregate`.
+ * used as an index. The binder itself is caught at its `faq`.
  */
 function boundIndexSymbols(node: ExpressionNode): string[] {
   const bound: string[] = []

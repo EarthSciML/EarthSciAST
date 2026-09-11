@@ -5,8 +5,8 @@
 //! lowering helpers.
 
 use super::*;
-use crate::aggregate::{
-    effective_reduce_kind, is_aggregate_op, resolve_aggregate_ranges, validate_oplus_spellings,
+use crate::faq::{
+    effective_reduce_kind, is_faq_op, resolve_aggregate_ranges, validate_oplus_spellings,
 };
 use crate::flatten::FlattenedSystem;
 use crate::op_registry::{OpError, is_builtin_function_name};
@@ -25,12 +25,12 @@ use std::collections::{BTreeMap, HashSet};
 // Detection: does the file contain array-op expressions anywhere?
 // ============================================================================
 
-/// Names of the array-op sidecar operators introduced in gt-t5c. `aggregate`
+/// Names of the array-op sidecar operators introduced in gt-t5c. `faq`
 /// and `makearray` are the composition primitives; the rest are shape /
 /// extraction helpers that are only meaningful when operating on array
 /// intermediates.
 pub(super) const ARRAY_OP_NAMES: &[&str] = &[
-    "aggregate", // unified Functional Aggregate Query op (RFC semiring-faq-unified-ir §5.6)
+    "faq", // unified Functional Aggregate Query op (RFC semiring-faq-unified-ir §5.6)
     "makearray",
     "reshape",
     "transpose",
@@ -56,8 +56,8 @@ pub fn file_has_array_ops(file: &EsmFile) -> bool {
 ///
 /// Used by [`crate::simulate::simulate`] to route discretized-PDE files to the
 /// ArrayOp runtime even when the equations do not yet contain explicit
-/// `aggregate`/`index` nodes (e.g. a spatial model whose equations were rewritten
-/// using indexed-scalar D(u[i])=... form rather than the `aggregate` wrapper).
+/// `faq`/`index` nodes (e.g. a spatial model whose equations were rewritten
+/// using indexed-scalar D(u[i])=... form rather than the `faq` wrapper).
 pub fn file_has_spatial_model(file: &EsmFile) -> bool {
     let Some(models) = &file.models else {
         return false;
@@ -432,7 +432,7 @@ impl ArrayCompiled {
     /// expects a single registry discriminated by [`ModelVariable::var_type`].
     /// We merge them back into one synthetic [`Model`] (each variable already
     /// carries its `var_type`) and delegate, so every downstream stage — shape
-    /// inference, arrayop lowering, the diffsol RHS build — is shared bit-for-bit
+    /// inference, faq lowering, the diffsol RHS build — is shared bit-for-bit
     /// with the single-model path.
     pub fn from_flattened(flat: &FlattenedSystem) -> Result<Self, CompileError> {
         // Reject hybrid dimensionality and model events, mirroring the scalar
@@ -505,7 +505,7 @@ impl ArrayCompiled {
         }
 
         // `index_sets` is not carried through flatten today, so coupled models
-        // that address `arrayop`/`aggregate` ranges via `{ "from": <set> }`
+        // that address `faq`/`faq` ranges via `{ "from": <set> }`
         // are not yet resolvable on this path (tracked as follow-up). Dense
         // `[lo, hi]` ranges — what discretized stencils emit — need no
         // registry and work here.
@@ -516,7 +516,7 @@ impl ArrayCompiled {
         };
         // The document `index_sets` registry is carried through flatten
         // (`FlattenedSystem::index_sets`), so a coupled array system can resolve
-        // `aggregate`/`arrayop` `ranges` `{ "from": <set> }`, `join.on` gates, and
+        // `faq`/`faq` `ranges` `{ "from": <set> }`, `join.on` gates, and
         // derived-set references exactly as the single-model `from_file` path
         // does against `file.index_sets`. Empty for a file with no index sets, so
         // dense `[lo, hi]`-range discretized stencils are unaffected.
@@ -714,7 +714,7 @@ impl ArrayCompiled {
         // Reject any aggregate whose ⊕ is spelled outside the schema's closed
         // `reduce` / `semiring` enums. The gate lives here, at the one funnel
         // every array-runtime build passes through, because the seams that
-        // actually resolve ⊕ (`extract_derivative_arrayop`, `arrayop_spec`)
+        // actually resolve ⊕ (`extract_derivative_faq`, `faq_spec`)
         // return `Option` and so could only decline silently.
         validate_oplus_spellings(&model_owned)?;
 
@@ -944,7 +944,7 @@ fn check_evaluable_side(expr: &Expr) -> Result<(), CompileError> {
 ///    names;
 ///  * spatial-coordinate symbols — the free symbols of every `ic` RHS (§11.4
 ///    defines these to BE coordinate expressions) and every spatial-op `dim`;
-///  * loop / index binders introduced anywhere in the equation — `aggregate` /
+///  * loop / index binders introduced anywhere in the equation — `faq` /
 ///    `makearray` `output_idx` & `ranges`, bare `index(array, i…)` subscript
 ///    positions, an `integral` `int_var`, an argmin/argmax `arg`, and
 ///    `apply_expression_template` `bindings` keys. Collected over the WHOLE
@@ -1667,7 +1667,7 @@ fn build_param_tables(
 struct SelfRead {
     /// The read's index arguments (`args[1..]` of the `index` node).
     args: Vec<Expr>,
-    /// Bounds of every index symbol bound by an enclosing `aggregate` at the
+    /// Bounds of every index symbol bound by an enclosing `faq` at the
     /// point the read was found — the scope a symbol-valued lag is proved in.
     /// Innermost binding wins, matching the evaluator's `loop_binds` shadowing.
     env: HashMap<String, (i64, i64)>,
@@ -1824,7 +1824,7 @@ fn classify_self_index(arg: &Expr, sym: &str, env: &HashMap<String, (i64, i64)>)
     }
 }
 
-/// Bounds every `aggregate` range in `node` contributes to the symbol scope.
+/// Bounds every `faq` range in `node` contributes to the symbol scope.
 fn aggregate_range_env(node: &ExpressionNode) -> Vec<(String, (i64, i64))> {
     node.ranges
         .as_ref()
@@ -1854,7 +1854,7 @@ fn collect_self_reads(
             }
         }
         Expr::Operator(node) => {
-            let pushed = if crate::aggregate::is_aggregate_op(&node.op) {
+            let pushed = if crate::faq::is_faq_op(&node.op) {
                 let add = aggregate_range_env(node);
                 let n = add.len();
                 env.extend(add);
@@ -1922,7 +1922,7 @@ fn lhs_identity_gather(e: &Expr, var: &str, idx_names: &[String]) -> bool {
         .all(|(a, want)| matches!(a, Expr::Variable(v) if v == want))
 }
 
-/// Cell-restrict an `aggregate` that produces the whole frame: move its output
+/// Cell-restrict a `faq` that produces the whole frame: move its output
 /// indices out to the enclosing sweep, keeping its contraction, `filter`,
 /// `reduce`, `join` and `key` intact so the body evaluates at one cell exactly
 /// as §4.3.1 specifies for a non-recurrent aggregate.
@@ -1995,9 +1995,9 @@ pub(super) fn lower_recurrence(
     // bare LHS whose RHS is an aggregate over V's axes. Anything else has no
     // frame to sweep.
     let frame_node: &ExpressionNode = match (lhs, rhs) {
-        (Expr::Operator(l), _) if crate::aggregate::is_aggregate_op(&l.op) => l.as_ref(),
+        (Expr::Operator(l), _) if crate::faq::is_faq_op(&l.op) => l.as_ref(),
         (Expr::Variable(v), Expr::Operator(r))
-            if v == var && crate::aggregate::is_aggregate_op(&r.op) =>
+            if v == var && crate::faq::is_faq_op(&r.op) =>
         {
             r.as_ref()
         }
@@ -2007,7 +2007,7 @@ pub(super) fn lower_recurrence(
                 format!(
                     "the definition of '{var}' reads '{var}' at an earlier position, but its \
                      shape gives the runtime no cell frame to sweep. Write the recurrence as one \
-                     `aggregate` over the variable's axes — either `{var} ~ aggregate{{…}}` or \
+                     `faq` over the variable's axes — either `{var} ~ aggregate{{…}}` or \
                      `aggregate{{expr: index({var}, k…)}} ~ …` — with the base case as an \
                      `ifelse` guard in the body (esm-spec §4.3.1.1)."
                 ),
@@ -2160,7 +2160,7 @@ pub(super) fn lower_recurrence(
     // ---- the per-cell body -------------------------------------------------
     let body = match rhs {
         Expr::Operator(r)
-            if crate::aggregate::is_aggregate_op(&r.op)
+            if crate::faq::is_faq_op(&r.op)
                 && r.output_idx.as_deref() == Some(idx_names.as_slice()) =>
         {
             cell_restrict_aggregate(r, &idx_names)
@@ -2180,7 +2180,7 @@ pub(super) fn lower_recurrence(
                     "recurrence_unsupported_form",
                     format!(
                         "the recurrence definition of '{var}' cannot be restricted to one cell: \
-                         its RHS is not an `aggregate` over the frame {idx_names:?}, and its LHS \
+                         its RHS is not a `faq` over the frame {idx_names:?}, and its LHS \
                          is not the identity gather `index({var}, {})`. A self-read reached only \
                          through a `makearray` region, a `reshape`/`transpose`/`concat` operand, \
                          or an aggregate over a different frame cannot be sequenced cell by cell \
@@ -2239,7 +2239,7 @@ fn build_observed_rules(
     //
     // WHICH rule form it lowers to is decided by the LHS, and both forms matter:
     //
-    // * an `aggregate` LHS (`aggregate{expr: w[i]} ~ aggregate{…}`) is a PER-CELL
+    // * a `faq` LHS (`aggregate{expr: w[i]} ~ aggregate{…}`) is a PER-CELL
     //   definition and lowers to [`AlgebraicRule::ArrayLoop`], the form the
     //   whole-array overlay vectorizes. Lowering it as a wholesale body instead
     //   silently drops a varying array observed onto the per-cell oracle — the
@@ -2276,7 +2276,7 @@ fn build_observed_rules(
             });
             continue;
         }
-        if let Some(a) = extract_algebraic_arrayop(&eq.lhs, &eq.rhs) {
+        if let Some(a) = extract_algebraic_faq(&eq.lhs, &eq.rhs) {
             observed_rules.push(AlgebraicRule::ArrayLoop {
                 var: a.var,
                 output_idx_names: a.idx_names,
@@ -2293,12 +2293,12 @@ fn build_observed_rules(
         }
     }
 
-    // Algebraic arrayop equations for ELIMINATED state variables — the same two
+    // Algebraic faq equations for ELIMINATED state variables — the same two
     // forms, for a name the DAE pass removed from the state vector rather than
     // one the classification calls observed. An observed's own defining equation
     // was lowered above, so it is skipped here rather than emitted twice.
     for eq in &model.equations {
-        if let Some(a) = extract_algebraic_arrayop(&eq.lhs, &eq.rhs) {
+        if let Some(a) = extract_algebraic_faq(&eq.lhs, &eq.rhs) {
             if eliminated.contains(&a.var) && !observed_names.contains(&a.var) {
                 if let Some(r) = lower_recurrence(&a.var, &eq.lhs, &eq.rhs)? {
                     observed_rules.push(AlgebraicRule::Recurrence {
@@ -2352,7 +2352,7 @@ fn build_observed_rules(
 /// operand must replicate along the axes it does NOT carry (esm-spec §4.3.4).
 /// Such a body is lowered to the per-cell [`AlgebraicRule::ArrayLoop`] form
 /// instead, which gathers each operand at its own axes exactly as the
-/// equivalent `aggregate` spelling would. An operand carrying an index set the
+/// equivalent `faq` spelling would. An operand carrying an index set the
 /// result does not have is rejected by [`build_gather_plan`].
 fn lower_algebraic_body(
     name: &str,
@@ -2428,8 +2428,8 @@ fn build_rhs_rules(
     let array_axes = declared_axis_names(model);
 
     for eq in &model.equations {
-        if let Some(d) = extract_derivative_arrayop(&eq.lhs, &eq.rhs) {
-            lower_arrayop_derivative(d, var_shapes, &mut covered_slots, &mut rhs_rules)?;
+        if let Some(d) = extract_derivative_faq(&eq.lhs, &eq.rhs) {
+            lower_faq_derivative(d, var_shapes, &mut covered_slots, &mut rhs_rules)?;
             continue;
         }
         // Scalar D(var, t) = rhs.
@@ -2468,7 +2468,7 @@ fn build_rhs_rules(
 
 /// Lower an array-op derivative over `(idx_names, ranges)` to one
 /// [`RhsRule::ArrayLoop`], marking the covered slots.
-fn lower_arrayop_derivative(
+fn lower_faq_derivative(
     d: DerivArrayop,
     var_shapes: &IndexMap<String, VarShape>,
     covered_slots: &mut HashSet<usize>,
@@ -2610,9 +2610,9 @@ fn lower_bare_derivative(
 }
 
 /// Whole-array `D(var) = <rhs containing a lowered stencil>`
-/// (an array-PRODUCING `makearray`/`aggregate` in elementwise
+/// (an array-PRODUCING `makearray`/`faq` in elementwise
 /// position, the form a §9.6.3 discretization rewrite emits):
-/// lift to the per-cell `arrayop` (ArrayLoop) form the
+/// lift to the per-cell `faq` (ArrayLoop) form the
 /// derivative partition consumes — output loops over the full
 /// declared shape, each array leaf and array producer gathered
 /// per cell via `index(node, loops…)`. This is the loop-form
@@ -2732,11 +2732,11 @@ fn check_state_slots_covered(
 
 /// Evaluate a state-free build-time expression (grid geometry, §11.4.1
 /// coordinate-expression `ic` RHSs, §6.6.5 analytic `reference`s) through the
-/// official array evaluator. Array-producing `aggregate`/`makearray` nodes
+/// official array evaluator. Array-producing `faq`/`makearray` nodes
 /// yield arrays; elementwise ops broadcast over them. Any `{ "from": <set> }`
 /// range references are resolved against `index_sets` first, so a raw
 /// (pre-compile) expression evaluates exactly as an equation expression does
-/// after [`crate::aggregate::resolve_aggregate_ranges`].
+/// after [`crate::faq::resolve_aggregate_ranges`].
 ///
 /// STATE references are not in scope — the context carries no states. Model
 /// PARAMETERS (load-time constants) ARE in scope when supplied via `params`
@@ -2763,7 +2763,7 @@ pub(crate) fn eval_buildtime_field_in_scope(
     scope: &HashMap<String, ArrayD<f64>>,
 ) -> Result<Value, CompileError> {
     let mut resolved = expr.clone();
-    crate::aggregate::resolve_expr_ranges(&mut resolved, index_sets)?;
+    crate::faq::resolve_expr_ranges(&mut resolved, index_sets)?;
     let param_names: Vec<String> = params.keys().cloned().collect();
     let param_vec: Vec<f64> = param_names.iter().map(|n| params[n]).collect();
     eval_expression(&resolved, scope, &param_vec, &param_names, 0.0)
@@ -2779,7 +2779,7 @@ pub(crate) fn eval_buildtime_field_in_scope(
 ///    broadcast.
 /// 2. A BROADCAST CONSTANT — an RHS that const-folds to a finite scalar.
 /// 3. A COORDINATE EXPRESSION — an elementwise expression over array-producing
-///    `aggregate`/`makearray` nodes (e.g. `cos(pi * x_coord)` where `x_coord`
+///    `faq`/`makearray` nodes (e.g. `cos(pi * x_coord)` where `x_coord`
 ///    is a grid-geometry aggregate expanded from a §9.7 template import),
 ///    evaluated through the official array evaluator ([`eval_buildtime_field`])
 ///    in a state-free context and indexed at this cell.
@@ -2881,7 +2881,7 @@ pub(super) fn resolve_field_ic_cell(
 // ============================================================================
 
 /// The variable a top-level equation defines, if any: `v = …`, `index(v, …) = …`,
-/// `D(v) = …` / `D(index(v, …)) = …`, `ic(v) = …`, or an `arrayop`/`aggregate`
+/// `D(v) = …` / `D(index(v, …)) = …`, `ic(v) = …`, or a `faq`/`faq`
 /// whose body is `D(index(v, …))` / `index(v, …)`. Used to prune value-invention
 /// equations and to classify algebraic definitions.
 pub(super) fn equation_defined_var(lhs: &Expr) -> Option<String> {
@@ -2897,7 +2897,7 @@ pub(super) fn equation_defined_var(lhs: &Expr) -> Option<String> {
                 Some(inner) => equation_defined_var(inner),
                 None => None,
             },
-            op if is_aggregate_op(op) => node.expr.as_ref().and_then(|b| equation_defined_var(b)),
+            op if is_faq_op(op) => node.expr.as_ref().and_then(|b| equation_defined_var(b)),
             _ => None,
         },
         _ => None,
@@ -2914,8 +2914,8 @@ pub(super) fn algebraic_defined_var(lhs: &Expr) -> Option<String> {
                 Some(Expr::Variable(v)) => Some(v.clone()),
                 _ => None,
             },
-            op if is_aggregate_op(op) => {
-                // `arrayop(expr = index(v, …))` — but NOT `expr = D(index(v, …))`,
+            op if is_faq_op(op) => {
+                // `faq(expr = index(v, …))` — but NOT `expr = D(index(v, …))`,
                 // which is a derivative, not an algebraic definition.
                 let body = node.expr.as_ref()?;
                 if let Expr::Operator(b) = body.as_ref() {
@@ -3309,7 +3309,7 @@ fn rewrite_equation_to_const(model: &mut Model, name: &str, buf: &[f64]) {
 /// loaded `X`/`Y`/`W`/`S`/`E`/`N` into
 /// [`ValueInventionResult::extents`](crate::ValueInventionResult::extents) — the
 /// map that then sizes every `emis_src_cells` axis through
-/// [`crate::aggregate::resolve_aggregate_ranges_with_extents`] and
+/// [`crate::faq::resolve_aggregate_ranges_with_extents`] and
 /// [`crate::simulate_array::eval_expression_with_extents`].
 ///
 /// `caller_arrays` overlays the document's `const` factors (caller wins; see
@@ -3416,14 +3416,14 @@ pub(super) fn resolve_declared_shape(
 }
 
 /// True iff `expr` is an array-PRODUCING node: a `makearray`, or an
-/// `aggregate`/`arrayop` with a non-empty `output_idx` (a scalar reduction has
+/// `faq`/`faq` with a non-empty `output_idx` (a scalar reduction has
 /// an empty `output_idx` and produces a scalar). Mirrors the Julia
 /// `_is_array_producer` (shape_promotion.jl).
 pub(super) fn is_array_producer(node: &ExpressionNode) -> bool {
     if node.op == "makearray" {
         return true;
     }
-    is_aggregate_op(&node.op)
+    is_faq_op(&node.op)
         && node
             .output_idx
             .as_ref()
@@ -3442,7 +3442,7 @@ pub(super) fn rhs_has_array_producer(expr: &Expr) -> bool {
             if is_array_producer(node) {
                 return true;
             }
-            if node.op == "index" || is_aggregate_op(&node.op) {
+            if node.op == "index" || is_faq_op(&node.op) {
                 return false;
             }
             node.args.iter().any(rhs_has_array_producer)
@@ -3672,12 +3672,12 @@ fn rename_join_names(join: &[JoinClause], from: &str, to: &str) -> Vec<JoinClaus
 
 /// Inline a `makearray`'s ARRAY-VALUED aggregate region values into the
 /// enclosing loop symbols: a region value that is a pointwise
-/// `aggregate`/`arrayop` whose output ranges equal the region bounds exactly
+/// `faq`/`faq` whose output ranges equal the region bounds exactly
 /// (no contraction, no filter) is replaced by its body with each output
 /// symbol renamed to the enclosing loop symbol. This turns the discretized
 /// `makearray([interior], [aggregate_i(stencil)])` form a §9.6.3 rewrite rule
 /// emits into the scalar-region-value form the vectorized whole-array kernel
-/// consumes directly (the build-time `index(arrayop, …)` collapse the Julia
+/// consumes directly (the build-time `index(faq, …)` collapse the Julia
 /// reference performs). Values that do not match are left untouched.
 pub(super) fn inline_region_aggregates(node: &ExpressionNode, loops: &[String]) -> ExpressionNode {
     let (Some(regions), Some(values)) = (&node.regions, &node.values) else {
@@ -3695,7 +3695,7 @@ pub(super) fn inline_region_aggregates(node: &ExpressionNode, loops: &[String]) 
                 let Expr::Operator(v) = value else {
                     return value.clone();
                 };
-                if !is_aggregate_op(&v.op) || v.filter.is_some() {
+                if !is_faq_op(&v.op) || v.filter.is_some() {
                     return value.clone();
                 }
                 let (Some(idx), Some(ranges), Some(body)) = (&v.output_idx, &v.ranges, &v.expr)
@@ -3755,7 +3755,7 @@ pub(super) fn declared_axis_names(model: &Model) -> HashMap<String, Vec<String>>
 /// `d` of an operand declared over `["lat"]` is the result's `lat` axis
 /// wherever that sits, and every result axis the operand does not declare is
 /// one it BROADCASTS along. A name-keyed plan makes `D(dp) = w1` (with
-/// `dp: [lon,lat,lev]`, `w1: [lat]`) compute exactly what the `aggregate`
+/// `dp: [lon,lat,lev]`, `w1: [lat]`) compute exactly what the `faq`
 /// spelling `sum_{i,j,k} w1[j]` computes, and makes axis ORDER immaterial — a
 /// `[lat,lon]` operand transposes rather than being reinterpreted.
 ///
@@ -3770,7 +3770,7 @@ type GatherPlan = HashMap<String, Vec<usize>>;
 /// which is the only place element alignment is defined. That includes a
 /// `broadcast` node, whose `fn` IS the scalar operator, so the `broadcast` and
 /// bare spellings of one expression align identically. A leaf reached through
-/// an op that consumes its operands whole — an `aggregate`, a `makearray`, an
+/// an op that consumes its operands whole — a `faq`, a `makearray`, an
 /// `index` target, a shape op, a relational or geometry kernel — is left to
 /// that op's own operand contract and keeps the legacy positional lowering.
 ///
@@ -3794,7 +3794,7 @@ fn collect_wrapped_array_leaves(
                 return;
             }
             if !into_binders
-                && (is_array_producer(node) || node.op == "index" || is_aggregate_op(&node.op))
+                && (is_array_producer(node) || node.op == "index" || is_faq_op(&node.op))
             {
                 return;
             }
@@ -3874,7 +3874,7 @@ fn plan_is_identity(plan: &GatherPlan, target_rank: usize) -> bool {
 /// Julia `_index_array_leaves` in shape_promotion.jl): each bare array-shaped
 /// `Variable` leaf and each array-PRODUCING node (a `makearray` — whose
 /// aggregate region values are first inlined via [`inline_region_aggregates`]
-/// — or an `aggregate`/`arrayop` with output axes) is wrapped in
+/// — or a `faq`/`faq` with output axes) is wrapped in
 /// `index(node, loops…)`; `index` gathers and scalar reductions stay
 /// untouched; other operators recurse elementwise.
 ///
@@ -3924,7 +3924,7 @@ pub(super) fn index_array_leaves_by_loops(
                 };
                 return wrap(target, loops.iter().collect());
             }
-            if node.op == "index" || is_aggregate_op(&node.op) {
+            if node.op == "index" || is_faq_op(&node.op) {
                 return expr.clone();
             }
             // Element alignment is defined only under elementwise nodes (a
@@ -4013,7 +4013,7 @@ pub(super) fn collect_derivative_targets(equations: &[crate::types::Equation]) -
         if let Some((name, _)) = extract_derivative_scalar(&eq.lhs) {
             out.insert(name);
         }
-        if let Some(DerivArrayop { var: name, .. }) = extract_derivative_arrayop(&eq.lhs, &eq.rhs) {
+        if let Some(DerivArrayop { var: name, .. }) = extract_derivative_faq(&eq.lhs, &eq.rhs) {
             out.insert(name);
         }
     }
@@ -4057,7 +4057,7 @@ pub(super) fn extract_derivative_scalar(lhs: &Expr) -> Option<(String, Option<Ve
     }
 }
 
-/// If `lhs` is `arrayop(expr=D(index(var, idx...)), ...)`, extract
+/// If `lhs` is `faq(expr=D(index(var, idx...)), ...)`, extract
 /// `(var_name, output_idx_names, output_ranges, lhs_idx_exprs, rhs_body,
 ///  contract_names, contract_ranges, reduce)`.
 /// `contract_names`/`contract_ranges` are indices present in the RHS ranges
@@ -4065,7 +4065,7 @@ pub(super) fn extract_derivative_scalar(lhs: &Expr) -> Option<(String, Option<Ve
 /// `reduce` is the semiring ⊕ resolved from the RHS node's `semiring`/`reduce`
 /// (defaulting to `Sum` per the ESM spec).
 /// The parsed pieces of an `aggregate(expr=D(index(var, …))) = aggregate(…)`
-/// derivative equation, as extracted by [`extract_derivative_arrayop`]. The
+/// derivative equation, as extracted by [`extract_derivative_faq`]. The
 /// fields mirror [`RhsRule::ArrayLoop`]'s.
 pub(super) struct DerivArrayop {
     /// Target state variable name.
@@ -4088,11 +4088,11 @@ pub(super) struct DerivArrayop {
     filter: Option<Box<Expr>>,
 }
 
-pub(super) fn extract_derivative_arrayop(lhs: &Expr, rhs: &Expr) -> Option<DerivArrayop> {
+pub(super) fn extract_derivative_faq(lhs: &Expr, rhs: &Expr) -> Option<DerivArrayop> {
     let Expr::Operator(node) = lhs else {
         return None;
     };
-    if !is_aggregate_op(&node.op) {
+    if !is_faq_op(&node.op) {
         return None;
     }
     let body = node.expr.as_ref()?.as_ref();
@@ -4124,11 +4124,11 @@ pub(super) fn extract_derivative_arrayop(lhs: &Expr, rhs: &Expr) -> Option<Deriv
             (r[0], r[1])
         })
         .collect();
-    // RHS body: assume rhs is also arrayop with body, or pass through as
+    // RHS body: assume rhs is also faq with body, or pass through as
     // scalar-valued expr that evaluates at each tuple.
     // Also extract contracted (reduction) indices and the semiring ⊕ reducer.
     let (rhs_body, contract_names, contract_dims, reduce, filter) = match rhs {
-        Expr::Operator(rnode) if is_aggregate_op(&rnode.op) => {
+        Expr::Operator(rnode) if is_faq_op(&rnode.op) => {
             let b = rnode.expr.as_ref().map(|b| b.as_ref().clone())?;
             // Declining (rather than reporting) an out-of-enum ⊕ spelling is
             // safe here only because this is a pattern matcher with no error
@@ -4169,8 +4169,8 @@ pub(super) fn extract_derivative_arrayop(lhs: &Expr, rhs: &Expr) -> Option<Deriv
     })
 }
 
-/// The parsed pieces of an algebraic `arrayop(expr=index(var, …)) = arrayop(…)`
-/// definition, as extracted by [`extract_algebraic_arrayop`]. The counterpart
+/// The parsed pieces of an algebraic `faq(expr=index(var, …)) = faq(…)`
+/// definition, as extracted by [`extract_algebraic_faq`]. The counterpart
 /// of [`DerivArrayop`] for equations that define a variable's value rather
 /// than its derivative.
 pub(super) struct AlgebraicArrayop {
@@ -4184,14 +4184,14 @@ pub(super) struct AlgebraicArrayop {
     pub(super) body: Expr,
 }
 
-/// Extract an algebraic `arrayop(expr=index(var, idx...)) = arrayop(...)`
+/// Extract an algebraic `faq(expr=index(var, idx...)) = faq(...)`
 /// definition. Matches fixtures 02 and 04 where an algebraic variable is
-/// defined through an arrayop whose body is just `index(v, i...)`.
-pub(super) fn extract_algebraic_arrayop(lhs: &Expr, rhs: &Expr) -> Option<AlgebraicArrayop> {
+/// defined through a faq whose body is just `index(v, i...)`.
+pub(super) fn extract_algebraic_faq(lhs: &Expr, rhs: &Expr) -> Option<AlgebraicArrayop> {
     let Expr::Operator(node) = lhs else {
         return None;
     };
-    if !is_aggregate_op(&node.op) {
+    if !is_faq_op(&node.op) {
         return None;
     }
     let body = node.expr.as_ref()?.as_ref();
@@ -4227,7 +4227,7 @@ pub(super) fn extract_algebraic_arrayop(lhs: &Expr, rhs: &Expr) -> Option<Algebr
         })
         .collect();
     let rhs_body = match rhs {
-        Expr::Operator(rnode) if is_aggregate_op(&rnode.op) => {
+        Expr::Operator(rnode) if is_faq_op(&rnode.op) => {
             // This elementwise (non-contracting) fast path does not apply a
             // `filter`. Bail rather than silently drop it — a filtered
             // definition must be compiled by a path that honors §5.3.
@@ -4248,7 +4248,7 @@ pub(super) fn extract_algebraic_arrayop(lhs: &Expr, rhs: &Expr) -> Option<Algebr
 
 /// Shape inference: per state variable, infer its shape from every
 /// `index(var, ...)` reference, `D(index(var, ...))` reference, and
-/// `arrayop` over its elements. Returns a map var_name → shape (empty Vec
+/// `faq` over its elements. Returns a map var_name → shape (empty Vec
 /// means scalar). Origins are assumed 1-based.
 ///
 /// Two-pass design: LHS equations pin the authoritative state extent; RHS
@@ -4370,8 +4370,8 @@ impl ShapeWalk<'_> {
                 }
             }
         }
-        if is_aggregate_op(&node.op) {
-            // Build loop range map from the arrayop's ranges. Ranges have
+        if is_faq_op(&node.op) {
+            // Build loop range map from the faq's ranges. Ranges have
             // already been resolved to concrete intervals (RFC §5.2) by
             // `resolve_aggregate_ranges` at the top of `from_model`.
             let mut inner = loop_ranges.clone();
@@ -4462,7 +4462,7 @@ mod subsystem_ragged_and_inspection_tests {
                     { "lhs": "left_key", "rhs": { "op": "const", "args": [], "value": [7, 9, 4] } },
                     { "lhs": "right_key", "rhs": { "op": "const", "args": [], "value": [7, 9] } },
                     { "lhs": "matched",
-                      "rhs": { "op": "aggregate", "args": [], "semiring": "sum_product",
+                      "rhs": { "op": "faq", "args": [], "semiring": "sum_product",
                                "output_idx": [],
                                "ranges": { "l": { "from": "leaf_left" },
                                            "r": { "from": "leaf_right" } },
@@ -4547,7 +4547,7 @@ mod subsystem_ragged_and_inspection_tests {
                     { "lhs": "X", "rhs": { "op": "const", "args": [], "value": [1.0, 3.0] } },
                     { "lhs": "W", "rhs": { "op": "const", "args": [], "value": [0.0, 2.0] } },
                     { "lhs": "hits",
-                      "rhs": { "op": "aggregate", "args": [], "semiring": "sum_product",
+                      "rhs": { "op": "faq", "args": [], "semiring": "sum_product",
                                "output_idx": [],
                                "ranges": { "p": { "from": "pts" }, "c": { "from": "cells" } },
                                "join": [ { "overlap": { "src_env": ["X"], "tgt_env": ["W"] } } ],
@@ -4622,7 +4622,7 @@ mod subsystem_ragged_and_inspection_tests {
                 {"lhs": "nEdgesOnCell", "rhs": "mesh.nEdgesOnCell"},
                 {"lhs": "edgesOnCell", "rhs": "mesh.edgesOnCell"},
                 {"lhs": "s", "rhs": {
-                        "op": "aggregate", "args": ["edgesOnCell", "mesh.w"],
+                        "op": "faq", "args": ["edgesOnCell", "mesh.w"],
                         "output_idx": ["i"], "semiring": "sum_product",
                         "ranges": {"i": {"from": "cells"},
                                     "k": {"from": "edges_of_cell", "of": ["i"]}},
@@ -4830,21 +4830,21 @@ mod subsystem_ragged_and_inspection_tests {
                 {"lhs": "tgt_poly", "rhs": {"op": "const", "args": [], "value": [
                             [[0.0, 0.0], [2.0, 0.0], [2.0, 1.0], [0.0, 1.0]]]}},
                 {"lhs": "A_ij", "rhs": {
-                        "op": "aggregate", "args": ["src_poly", "tgt_poly"],
+                        "op": "faq", "args": ["src_poly", "tgt_poly"],
                         "output_idx": ["i", "j"], "semiring": "sum_product",
                         "ranges": {"i": {"from": "src_cells"}, "j": {"from": "tgt_cells"}},
                         "expr": {"op": "polygon_intersection_area", "manifold": "planar",
                                  "args": [{"op": "index", "args": ["src_poly", "i"]},
                                           {"op": "index", "args": ["tgt_poly", "j"]}]}}},
                 {"lhs": "A_j", "rhs": {
-                        "op": "aggregate", "args": ["A_ij"],
+                        "op": "faq", "args": ["A_ij"],
                         "output_idx": ["j"], "semiring": "sum_product",
                         "ranges": {"i": {"from": "src_cells"}, "j": {"from": "tgt_cells"}},
                         "filter": {"op": ">", "args": [
                             {"op": "index", "args": ["A_ij", "i", "j"]}, "atol"]},
                         "expr": {"op": "index", "args": ["A_ij", "i", "j"]}}},
                 {"lhs": "W_ij", "rhs": {
-                        "op": "aggregate", "args": ["A_ij", "A_j"],
+                        "op": "faq", "args": ["A_ij", "A_j"],
                         "output_idx": ["i", "j"], "semiring": "sum_product",
                         "ranges": {"i": {"from": "src_cells"}, "j": {"from": "tgt_cells"}},
                         "filter": {"op": ">", "args": [
@@ -4892,7 +4892,7 @@ mod subsystem_ragged_and_inspection_tests {
                 {"lhs": "z", "rhs": "M.i"},
                 // Bound by the enclosing aggregate's own `i`: left alone.
                 {"lhs": "u", "rhs": {
-                    "op": "aggregate", "args": [], "output_idx": ["i"],
+                    "op": "faq", "args": [], "output_idx": ["i"],
                     "ranges": {"i": {"from": "x"}},
                     "expr": {"op": "*", "args": ["M.i", "i"]}}}
             ]

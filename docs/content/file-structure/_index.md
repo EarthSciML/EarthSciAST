@@ -65,7 +65,7 @@ Earlier drafts had `operators`, `registered_functions`, `grids`,
 
 - Grid geometry is ordinary data — coordinates, extents, spacing, connectivity
   and metric arrays are loaded through `data_sources` or declared as variables,
-  and topology is constructed with [`aggregate`](../operators/aggregation/).
+  and topology is constructed with [`faq`](../operators/aggregation/).
 - Discretization is a [template rewrite](../templates/), not a declaration.
 - The function registry is closed and lives in the spec, not in your file. See
   [closed functions](../operators/closed-functions/).

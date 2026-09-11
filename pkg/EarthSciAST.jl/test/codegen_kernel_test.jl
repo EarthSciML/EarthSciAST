@@ -72,9 +72,9 @@ function _cgk_2d_model(N)
         _idx("u", _op("+", _v("i"), _i(1)), _v("j")),
         _idx("u", _v("i"), _op("-", _v("j"), _i(1))),
         _idx("u", _v("i"), _op("+", _v("j"), _i(1))))
-    lhs = ESM.OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i", "j"],
+    lhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "j"],
         expr_body=_Didx("u", _v("i"), _v("j")), ranges=Dict("i" => [1, N], "j" => [1, N]))
-    rhs = ESM.OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i", "j"],
+    rhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "j"],
         expr_body=body, ranges=Dict("i" => [1, N], "j" => [1, N]))
     ESM.Model(vars, [ESM.Equation(lhs, rhs)])
 end
@@ -133,7 +133,7 @@ end
 
 function _cgk_reduce_model(statevars, ybody, ni, klo, khi; reduce="+", filt=nothing)
     vars = Dict(v => ESM.ModelVariable(ESM.UnknownVariable) for v in statevars)
-    rhs = ESM.OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i"], expr_body=ybody,
+    rhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i"], expr_body=ybody,
         ranges=Dict("i" => [1, ni], "k" => [klo, khi]), reduce=reduce, filter=filt)
     ESM.Model(vars, [ESM.Equation(_ao1(_Didx(statevars[1], _v("i")), "i", 1, ni), rhs)])
 end

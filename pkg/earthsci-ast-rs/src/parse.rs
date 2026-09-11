@@ -149,6 +149,12 @@ pub fn load_string_with_options(
 fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmError> {
     let mut json_value = json_value;
 
+    // esm 1.1.0: rewrite the deprecated `aggregate` op spelling to the
+    // canonical `faq` at the wire boundary, ahead of every other pass, so the
+    // version gates, the schema, the typed tree and `emit` all see exactly one
+    // tag (docs/content/rfcs/faq-node-rename.md).
+    normalize_deprecated_op_aliases(&mut json_value)?;
+
     let base = options.base_path.clone().unwrap_or_else(|| {
         std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
     });
@@ -254,7 +260,7 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     crate::lower_enums::lower_enums_raw(&mut json_value)
         .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
 
-    // Reject an `aggregate` binder that shadows a globally-scoped name (the
+    // Reject a `faq` binder that shadows a globally-scoped name (the
     // independent variable, `_var`). Runs HERE, on the fully lowered form, so a
     // binder a §9.6/§9.7 template body introduced is caught with the authored
     // ones. See `reject_reserved_index_symbols` for why this is a rejection
@@ -655,7 +661,7 @@ fn compile_branch<'c>(
 // If you change a shared rule, change it in both layers (and the sibling
 // bindings).
 
-/// Reject any `aggregate` binder that SHADOWS the document's independent
+/// Reject any `faq` binder that SHADOWS the document's independent
 /// variable (esm-spec §11.3: `domain.independent_variable`, default `"t"`) or
 /// the §6.4 operator placeholder `_var` — diagnostic `reserved_index_symbol`.
 ///
@@ -674,7 +680,7 @@ fn compile_branch<'c>(
 /// **Why this is a rejection and not a shadowing rule.** Making the binder win
 /// would mean inverting that precedence at all nine sites here and in every
 /// peer binding, and it would still leave the node unable to mention the
-/// independent variable at all — an `aggregate` body that reads `t` for a
+/// independent variable at all — a `faq` body that reads `t` for a
 /// forcing term is ordinary, and inside such a node `t` would silently become
 /// an index. Rejecting costs nothing an author wants: an index symbol is the
 /// author's free choice (§4.3.1), so the fix is to spell it anything else.
@@ -1548,6 +1554,88 @@ fn is_iso8601_duration(s: &str) -> bool {
     }
 
     any_component && chars.next().is_none()
+}
+
+
+/// Rewrite every deprecated expression-node `op` spelling to its canonical tag,
+/// in place, and warn once for the document.
+///
+/// The one alias is `aggregate` → `faq` (esm 1.1.0,
+/// `docs/content/rfcs/faq-node-rename.md`). Normalizing at the wire boundary is
+/// what lets the rest of the crate recognize exactly one spelling: nothing
+/// downstream of the loader — [`crate::faq::is_faq_op`] included — ever sees the
+/// alias, and a document authored with `aggregate` is upgraded exactly once, on
+/// its first load.
+///
+/// The older `arrayop` spelling is NOT normalized: it was removed at esm 0.8.0
+/// and is rejected like any other unknown non-rewrite-target op.
+pub(crate) fn normalize_deprecated_op_aliases(value: &mut serde_json::Value) -> Result<(), EsmError> {
+    if let Some(path) = find_removed_op(value) {
+        return Err(EsmError::SchemaValidation(format!(
+            "removed_op at {path}: `\"op\": \"arrayop\"` was removed at esm 0.8.0 and is not a \
+             deprecated alias; use `\"op\": \"faq\"` (the Functional Aggregate Query node). \
+             See docs/content/rfcs/faq-node-rename.md."
+        )));
+    }
+    let n = rewrite_op_aliases(value);
+    if n > 0 {
+        let plural = if n == 1 { "node was" } else { "nodes were" };
+        eprintln!(
+            "warning: deprecated_op_alias: `\"op\": \"aggregate\"` is the pre-1.1.0 spelling \
+             of `\"op\": \"faq\"` (Functional Aggregate Query); {n} {plural} normalized on \
+             load. The alias is REMOVED at esm 2.0.0 — re-emit this document to migrate it \
+             (docs/content/rfcs/faq-node-rename.md)."
+        );
+    }
+    Ok(())
+}
+
+/// Locate a `"op": "arrayop"` node, returning a JSON-pointer-ish path to it.
+///
+/// `arrayop` is REMOVED, not deprecated: without this check it is a perfectly
+/// well-formed identifier and would fall into the OPEN rewrite-target tier
+/// (esm-spec §4.2), loading silently and failing only much later as an
+/// `unlowered_operator`.
+fn find_removed_op(value: &serde_json::Value) -> Option<String> {
+    fn walk(v: &serde_json::Value, at: &str) -> Option<String> {
+        match v {
+            serde_json::Value::Object(map) => {
+                if map.get("op").and_then(|o| o.as_str()) == Some("arrayop") {
+                    return Some(at.to_string());
+                }
+                map.iter().find_map(|(k, child)| walk(child, &format!("{at}/{k}")))
+            }
+            serde_json::Value::Array(items) => items
+                .iter()
+                .enumerate()
+                .find_map(|(i, child)| walk(child, &format!("{at}/{i}"))),
+            _ => None,
+        }
+    }
+    walk(value, "")
+}
+
+/// Depth-first rewrite of `"op": "aggregate"` to `"op": "faq"`; returns the count.
+fn rewrite_op_aliases(value: &mut serde_json::Value) -> usize {
+    let mut n = 0;
+    match value {
+        serde_json::Value::Object(map) => {
+            if map.get("op").and_then(|v| v.as_str()) == Some("aggregate") {
+                map.insert("op".to_string(), serde_json::Value::String("faq".to_string()));
+                n += 1;
+            }
+            for (_, v) in map.iter_mut() {
+                n += rewrite_op_aliases(v);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for v in items.iter_mut() {
+                n += rewrite_op_aliases(v);
+            }
+        }
+        _ => {}
+    }
+    n
 }
 
 #[cfg(test)]

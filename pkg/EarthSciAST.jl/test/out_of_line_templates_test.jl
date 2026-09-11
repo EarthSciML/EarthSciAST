@@ -55,7 +55,7 @@ end
         # injection + metaparameter goldens go through the typed load path and
         # are pinned by scope_injection_test.jl / template_imports_test.jl).
         cases = [
-            ("aggregate_int_ratio_golden", "fixture.esm", "expanded.esm"),
+            ("faq_int_ratio_golden", "fixture.esm", "expanded.esm"),
             ("arrhenius_smoke", "fixture.esm", "expanded.esm"),
             ("constrained_match_scope", "fixture.esm", "expanded.esm"),
             ("coupling_transform_expression", "fixture.esm", "expanded.esm"),
@@ -105,13 +105,14 @@ end
         doc = JSON3.read(s)
         adv = doc["models"]["Advection"]
         # Rule 8's stamp is a MINIMUM ("a consumer needs at least this"), so it
-        # only ever raises: a 1.0.0 source keeps 1.0.0 rather than being
-        # downgraded to a schema that cannot describe it.
-        # The literal, not SCHEMA_VERSION: the source declares 1.0.0 and the
-        # floor leaves it there. Comparing against the library's own version
-        # only agreed while that version WAS 1.0.0, and it asserted the opposite
-        # rule — that emit restamps — which is what the two lines below pin.
-        @test doc["esm"] == "1.0.0"
+        # only ever raises: a source above the floor keeps its own version
+        # rather than being downgraded to a schema that cannot describe it.
+        # The literal, not SCHEMA_VERSION: this fixture declares 1.1.0 (its
+        # imported rules lower to `faq`, which requires 1.1.0) and the floor
+        # leaves it there. Comparing against the library's own version asserts
+        # the opposite rule — that emit restamps — which the two lines below
+        # pin against.
+        @test doc["esm"] == "1.1.0"
         @test EarthSciAST._esm_stamp_floor("0.8.0") == "0.9.0"   # below the floor: raised
         @test EarthSciAST._esm_stamp_floor("1.0.0") == "1.0.0"   # at/above: untouched
         @test !haskey(adv, "expression_template_imports")     # imports consumed
@@ -150,7 +151,7 @@ end
         # lowered by the `central` rule → an aggregate. No surviving ref.
         deager = _normj(_ool_defrhs(m, "d_eager"))
         @test deager["op"] == "index"
-        @test deager["args"][1]["op"] == "aggregate"
+        @test deager["args"][1]["op"] == "faq"
         # NEGATIVE: scale_c (target-free) reference SURVIVES.
         dsurv = _normj(_ool_defrhs(m, "d_survive"))
         @test _isapply(dsurv["args"][1]) && dsurv["args"][1]["name"] == "scale_c"

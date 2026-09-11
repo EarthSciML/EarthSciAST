@@ -573,7 +573,7 @@ pub(crate) fn eval_meta_expr(
 }
 
 /// Fold metaparameter expressions in the structural integer sites —
-/// `aggregate` dense `ranges` tuple entries and `makearray` `regions` bound
+/// `faq` dense `ranges` tuple entries and `makearray` `regions` bound
 /// pairs — to concrete integers, in place, wherever they are already closed.
 /// Entries still carrying a bare name (a template-param slot, or an open
 /// metaparameter in a not-yet-fully-bound library) are left symbolic for a
@@ -589,7 +589,7 @@ fn fold_structural_sites(x: &mut Value, ctx: &str) -> Result<(), ExpressionTempl
             .and_then(|w| w.as_str())
             .unwrap_or_default()
             .to_string();
-        if op == "aggregate" {
+        if op == "faq" {
             if let Some(Value::Object(ranges)) = obj.get_mut("ranges") {
                 let keys: Vec<String> = ranges.keys().cloned().collect();
                 for k in keys {
@@ -1182,7 +1182,7 @@ pub(crate) fn apply_mount_index_set_rename(
 fn collect_bound_syms(x: &Value, out: &mut std::collections::HashSet<String>) {
     crate::json_visit::visit_values(x, &mut |_path, v| {
         let Some(obj) = v.as_object() else { return };
-        if obj.get("op").and_then(|w| w.as_str()) != Some("aggregate") {
+        if obj.get("op").and_then(|w| w.as_str()) != Some("faq") {
             return;
         }
         if let Some(oi) = obj.get("output_idx").and_then(|w| w.as_array()) {

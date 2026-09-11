@@ -65,11 +65,11 @@ Python's strict `xfail`, Rust's masked `kind` comparison and Julia's
 `merge_coupled` assertions) are all deleted, and every binding now compares that
 fixture strictly.
 
-### 2. An aggregate's BOUND index variables are not graph nodes
+### 2. A faq's BOUND index variables are not graph nodes
 
 A bound index (`a`, `o`, `v` in this corpus) is a binder introduced by the
-aggregate's own `ranges` clause: no declaration, no units, no kind, scoped to
-the aggregate. Julia was right; the other four emitted them because their
+faq's own `ranges` clause: no declaration, no units, no kind, scoped to
+the faq. Julia was right; the other four emitted them because their
 free-variable collector did not subtract range binders.
 
 TypeScript, Python, Go and Rust now each have a **graph-private** binder-aware

@@ -1,8 +1,8 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "conservative_regrid_assembly",
-    "description": "Conservative-regridding assembly with weights computed INLINE from cell geometry (RFC semiring-faq-unified-ir §A.8 / §8.1; CONFORMANCE_SPEC.md §5.8; esm-spec.md §8.6.1; bead ess-my4.4.6). The source (F_src=[10,20,30,40]) is a SPATIALLY-VARYING field on a 4-cell source grid, remapped onto a DIFFERENT 4-cell target grid whose cell boundaries are shifted so the overlaps are fractional. Both grids tile [0,4]x[0,1] as in-file `const` vertex rings (src_poly / tgt_poly). The overlap weights are NOT supplied: A_ij = polygon_intersection_area(src_i, tgt_j) is declared inline via the FUSED planar clip+area leaf (§8.6.1), ranged over the bin-skolem candidate pairs; the candidate pairs come from the bin-skolem broad phase (floor → skolem bin keys → distinct equi-join on the materialized bin buffers), A_j = Σ_i A_ij is the row-sum normalization, and W_ij = A_ij/A_j. F_tgt[j] = Σ_i W_ij·F_src[i] = [40/3, 20, 100/3, 40], conserving global mass Σ_j A_j·F_tgt = Σ_i A_i·F_src = 100 with partition-of-unity Σ_i W_ij = 1 by construction. Because the fused leaf returns the SCALAR overlap area (defined to equal the intersect_polygon clip + shoelace area) and hides the clip ring inside the kernel, A_ij is an ordinary DENSE aggregate over the candidate set with NO ragged intermediate — the densely-evaluable narrow phase of §8.6.1, unlike the earlier ragged-clip form conservative_regrid_overlap_join.esm still documents. The dedicated Julia test geometry_assembly_conformance_test.jl asserts the inline fused-leaf provenance and drives the narrow phase (A_ij) plus apply/normalize (A_j, F_tgt, conservation, partition-of-unity) numerically from the in-file geometry.",
+    "description": "Conservative-regridding assembly with weights computed INLINE from cell geometry (RFC semiring-faq-unified-ir §A.8 / §8.1; CONFORMANCE_SPEC.md §5.8; esm-spec.md §8.6.1; bead ess-my4.4.6). The source (F_src=[10,20,30,40]) is a SPATIALLY-VARYING field on a 4-cell source grid, remapped onto a DIFFERENT 4-cell target grid whose cell boundaries are shifted so the overlaps are fractional. Both grids tile [0,4]x[0,1] as in-file `const` vertex rings (src_poly / tgt_poly). The overlap weights are NOT supplied: A_ij = polygon_intersection_area(src_i, tgt_j) is declared inline via the FUSED planar clip+area leaf (§8.6.1), ranged over the bin-skolem candidate pairs; the candidate pairs come from the bin-skolem broad phase (floor → skolem bin keys → distinct equi-join on the materialized bin buffers), A_j = Σ_i A_ij is the row-sum normalization, and W_ij = A_ij/A_j. F_tgt[j] = Σ_i W_ij·F_src[i] = [40/3, 20, 100/3, 40], conserving global mass Σ_j A_j·F_tgt = Σ_i A_i·F_src = 100 with partition-of-unity Σ_i W_ij = 1 by construction. Because the fused leaf returns the SCALAR overlap area (defined to equal the intersect_polygon clip + shoelace area) and hides the clip ring inside the kernel, A_ij is an ordinary DENSE faq over the candidate set with NO ragged intermediate — the densely-evaluable narrow phase of §8.6.1, unlike the earlier ragged-clip form conservative_regrid_overlap_join.esm still documents. The dedicated Julia test geometry_assembly_conformance_test.jl asserts the inline fused-leaf provenance and drives the narrow phase (A_ij) plus apply/normalize (A_j, F_tgt, conservation, partition-of-unity) numerically from the in-file geometry.",
     "authors": [
       "EarthSciAST/polecats/gastown.nux"
     ],
@@ -190,7 +190,7 @@
             ]
           },
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "semiring": "sum_product",
             "output_idx": [
               "i"
@@ -255,7 +255,7 @@
             ]
           },
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "semiring": "sum_product",
             "output_idx": [
               "j"
@@ -320,7 +320,7 @@
             ]
           },
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "semiring": "bool_and_or",
             "output_idx": [
               "p"
@@ -363,7 +363,7 @@
         {
           "_comment": "(3) A_j[j] = Σ_i A_ij[i,j] over the bin-skolem candidate pairs (join on the materialized bin buffers) with the sliver filter. A_ij is computed inline from geometry above. Zero IC ⇒ du[A_j_check] = A_j.",
           "lhs": {
-            "op": "aggregate",
+            "op": "faq",
             "semiring": "sum_product",
             "output_idx": [
               "j"
@@ -390,7 +390,7 @@
             }
           },
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "semiring": "sum_product",
             "output_idx": [
               "j"
@@ -441,7 +441,7 @@
         {
           "_comment": "(4)+(5) APPLY + NORMALIZE — D(F_tgt[j]) = Σ_i W_ij[i,j]·F_src[i], W_ij = A_ij/A_j (normalize folded into the inline weights). Same bin-skolem candidate join + zero-area filter. Zero IC ⇒ du[F_tgt] = F_tgt.",
           "lhs": {
-            "op": "aggregate",
+            "op": "faq",
             "semiring": "sum_product",
             "output_idx": [
               "j"
@@ -468,7 +468,7 @@
             }
           },
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "semiring": "sum_product",
             "output_idx": [
               "j"
@@ -693,7 +693,7 @@
         {
           "lhs": "src_lon",
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "i"
             ],
@@ -723,7 +723,7 @@
         {
           "lhs": "src_lat",
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "i"
             ],
@@ -753,7 +753,7 @@
         {
           "lhs": "tgt_lon",
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "j"
             ],
@@ -783,7 +783,7 @@
         {
           "lhs": "tgt_lat",
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "j"
             ],
@@ -826,7 +826,7 @@
         {
           "lhs": "A_ij",
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "semiring": "sum_product",
             "output_idx": [
               "i",
@@ -876,7 +876,7 @@
         {
           "lhs": "A_j",
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "semiring": "sum_product",
             "output_idx": [
               "j"
@@ -927,7 +927,7 @@
         {
           "lhs": "W_ij",
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "semiring": "sum_product",
             "output_idx": [
               "i",

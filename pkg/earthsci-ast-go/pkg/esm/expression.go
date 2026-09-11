@@ -333,7 +333,7 @@ var arithOpTable = map[string]arithOp{
 		return p, nil
 	}},
 	// `neg` is the canonical unary negation canonicalize.go emits, and a legal
-	// `broadcast` fn (tests/fixtures/arrayop/27_broadcast_unary.esm).
+	// `broadcast` fn (tests/fixtures/faq/27_broadcast_unary.esm).
 	"neg": {1, 1, func(a []float64) (float64, error) { return -a[0], nil }},
 	"-": {1, 2, func(a []float64) (float64, error) {
 		if len(a) == 1 {
@@ -538,7 +538,7 @@ func evalLazyOp(node ExprNode, bindings map[string]float64) (float64, error) {
 // reports "no scalar evaluator" rather than the (wrong) `unlowered_operator`,
 // which would tell an author to write a rewrite rule for an op that needs none.
 var closedNonScalarOps = map[string]struct{}{
-	"aggregate": {}, "makearray": {}, "index": {}, "broadcast": {}, "reshape": {},
+	"faq": {}, "makearray": {}, "index": {}, "broadcast": {}, "reshape": {},
 	"transpose": {}, "concat": {}, "skolem": {}, "rank": {}, "argmin": {}, "argmax": {},
 	"intersect_polygon": {}, "polygon_intersection_area": {}, "table_lookup": {},
 	"apply_expression_template": {}, "ic": {},

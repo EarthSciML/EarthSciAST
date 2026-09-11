@@ -74,30 +74,30 @@ type ExprNode struct {
 	// Manifold is the geometry manifold of `intersect_polygon` /
 	// `polygon_intersection_area` ops.
 	Manifold *string `json:"manifold,omitempty"`
-	// OutputIdx are the surviving (free) index names of an `aggregate` op.
+	// OutputIdx are the surviving (free) index names of a `faq` op.
 	// `esm:"keepempty"`: esm-schema.json REQUIRES `output_idx` on every
 	// aggregate, so an allocated-but-empty list (a full reduction, `sum[] (…)`)
 	// must still serialize as `[]` rather than vanishing.
 	OutputIdx []any `json:"output_idx,omitempty" esm:"keepempty"`
-	// Expr is the reduced sub-expression of an `aggregate` / `argmin` / `argmax`
+	// Expr is the reduced sub-expression of a `faq` / `argmin` / `argmax`
 	// op.
 	Expr any `json:"expr,omitempty"`
-	// Reduce is the scalar reduction operator of an `aggregate` op.
+	// Reduce is the scalar reduction operator of a `faq` op.
 	Reduce *string `json:"reduce,omitempty"`
-	// Semiring is the optional named semiring of an `aggregate` op.
+	// Semiring is the optional named semiring of a `faq` op.
 	Semiring *string `json:"semiring,omitempty"`
-	// Ranges maps a bound index name to its iteration range for `aggregate` /
+	// Ranges maps a bound index name to its iteration range for `faq` /
 	// `argmin` / `argmax` ops. `esm:"keepempty"`: an allocated-but-empty map (an
 	// aggregate authored with no `where` clause) serializes as `{}`, matching
 	// the other language bindings; a nil map is still omitted.
 	Ranges map[string]any `json:"ranges,omitempty" esm:"keepempty"`
-	// Join is the optional list of join clauses of an `aggregate` op.
+	// Join is the optional list of join clauses of a `faq` op.
 	Join []any `json:"join,omitempty"`
-	// Filter is the optional predicate of an `aggregate` op.
+	// Filter is the optional predicate of a `faq` op.
 	Filter any `json:"filter,omitempty"`
-	// Distinct marks an `aggregate` op as reducing over distinct values.
+	// Distinct marks a `faq` op as reducing over distinct values.
 	Distinct *bool `json:"distinct,omitempty"`
-	// Key is the optional grouping key of an `aggregate` op.
+	// Key is the optional grouping key of a `faq` op.
 	Key any `json:"key,omitempty"`
 	// Label is the optional documentary relation tag of a `skolem` op
 	// (esm-spec §4.2; e.g. "edge", "bin", "pair"). Purely documentary — it does
@@ -1098,7 +1098,7 @@ type Metadata struct {
 
 // IndexSet is one entry in the document-scoped `index_sets` registry
 // (RFC semiring-faq-unified-ir §5.2): the declaration shape for an iteration
-// domain referenced from an `aggregate` range via { "from": <name> } and from
+// domain referenced from a `faq` range via { "from": <name> } and from
 // arrayed-variable `shape` lists. Exactly one of four kinds — each populating
 // its own subset of fields:
 //
@@ -1185,7 +1185,7 @@ type ESMFile struct {
 	// IndexSets is the document-scoped registry of named index sets
 	// (RFC semiring-faq-unified-ir §5.2), keyed by name — the single,
 	// document-level declaration site for every iteration domain shared by all
-	// models in the document. An `aggregate` range references one by name as
+	// models in the document. A `faq` range references one by name as
 	// { "from": <name> } and arrayed-variable `shape` lists draw dimension
 	// names from it. As of v0.8.0 this moved from a per-Model field to
 	// document scope: one registry, shared by every model.

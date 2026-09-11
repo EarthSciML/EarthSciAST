@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "OperandIndexSetNotInResult",
     "description": "INVALID cross-binding fixture for esm-spec §4.3.4 (issue #100): a bare array-level equation whose operand carries an index set the result does NOT have. `dp` is shaped over [lon,lat]; the operand `z1` is shaped over [lev], which is absent from the result, so there is no axis to align it to and no defensible value for it to contribute. Operands of a bare array-level expression align by index-set NAME and may only be MISSING result axes (which they broadcast along) — carrying an extra one is a hard structural error, `array_shape_mismatch`, reported at the containing expression field. Both shapes are declared, so this is decidable statically; the alternative — a positional flatten — validates clean and then silently integrates zero-padded garbage.",
@@ -66,7 +66,7 @@
         {
           "lhs": "z1",
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": [
               "k"

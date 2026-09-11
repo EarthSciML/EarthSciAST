@@ -1,13 +1,13 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "diffusion_1d_neumann_n4",
-    "description": "Discretized 1-D heat equation on 4 cells (dx=0.2, kappa=25) with neumann boundary conditions. Full-grid arrayop; boundary cells use single-cell makearray regions with the neumann ghost expression.",
+    "description": "Discretized 1-D heat equation on 4 cells (dx=0.2, kappa=25) with neumann boundary conditions. Full-grid faq; boundary cells use single-cell makearray regions with the neumann ghost expression.",
     "authors": [
       "EarthSciAST/polecats/gastown.nux"
     ],
     "tags": [
-      "arrayop",
+      "faq",
       "conformance",
       "pde",
       "simulation",
@@ -32,7 +32,7 @@
       "equations": [
         {
           "lhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": [
               "i"
@@ -58,7 +58,7 @@
             }
           },
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": [
               "i"

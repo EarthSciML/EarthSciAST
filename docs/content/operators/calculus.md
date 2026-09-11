@@ -187,5 +187,5 @@ measure, because the format has none.
 
 **Do not reach for `integral` to write a discrete cumulative sum.** A running
 total, a cumulative distribution, or a column-integrated burden over a
-discretized axis is an ordinary [`aggregate`](../aggregation/) with a monotone
+discretized axis is an ordinary [`faq`](../aggregation/) with a monotone
 `filter` — in the evaluable core, and running in every executing binding today.

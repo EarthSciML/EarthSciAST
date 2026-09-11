@@ -41,7 +41,7 @@ const MODEL: &str = r#"
           "equations": [
             {
               "lhs": {
-                "op": "aggregate",
+                "op": "faq",
                 "args": [],
                 "output_idx": [
                   "i"
@@ -67,7 +67,7 @@ const MODEL: &str = r#"
                 }
               },
               "rhs": {
-                "op": "aggregate",
+                "op": "faq",
                 "args": [],
                 "output_idx": [
                   "i"
@@ -134,7 +134,7 @@ const MODEL: &str = r#"
             {
               "lhs": "g",
               "rhs": {
-                "op": "aggregate",
+                "op": "faq",
                 "args": [],
                 "output_idx": [
                   "i"

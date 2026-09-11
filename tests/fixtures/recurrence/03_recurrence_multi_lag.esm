@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "RecurrenceMultiLag",
     "description": "CONFORMANCE_SPEC 5.19.3 shape 2, literal half: two self-reads at lags 1 AND 2 in one body -- s[k] = s[k-1] + s[k-2] from s[1] = s[2] = 1, i.e. the Fibonacci numbers. A binding that implements only the single-step shape acc[i] = f(acc[i-1], body[i]) cannot evaluate this at all, so it fails here rather than passing on the subset that a single-step accumulator happens to cover.",
@@ -38,7 +38,7 @@
         {
           "lhs": "s",
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": [
               "k"

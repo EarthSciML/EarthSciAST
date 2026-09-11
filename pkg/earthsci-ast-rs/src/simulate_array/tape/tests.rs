@@ -165,7 +165,7 @@ fn wrap(inner: serde_json::Value, lo: i64, hi: i64) -> serde_json::Value {
 /// `D(u[i]) = rhs` over `i ∈ [1, n]` (the standard method-of-lines equation).
 fn d_eq(var: &str, n: i64, rhs: serde_json::Value) -> serde_json::Value {
     json!({
-        "lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+        "lhs": {"op": "faq", "args": [], "output_idx": ["i"],
                 "expr": {"op": "D", "args": [{"op": "index", "args": [var, "i"]}], "wrt": "t"},
                 "ranges": {"i": [1, n]}},
         "rhs": rhs
@@ -173,7 +173,7 @@ fn d_eq(var: &str, n: i64, rhs: serde_json::Value) -> serde_json::Value {
 }
 
 fn agg(n: i64, body: serde_json::Value) -> serde_json::Value {
-    json!({"op": "aggregate", "args": [], "output_idx": ["i"],
+    json!({"op": "faq", "args": [], "output_idx": ["i"],
            "ranges": {"i": [1, n]}, "expr": body})
 }
 
@@ -253,7 +253,7 @@ fn ab_multi_rule_stencil_wrap_and_ghost() {
 #[test]
 fn ab_nested_aggregate() {
     let n = 8;
-    let inner = json!({"op": "aggregate", "args": [], "output_idx": ["j"],
+    let inner = json!({"op": "faq", "args": [], "output_idx": ["j"],
     "ranges": {"j": [1, n]},
     "expr": {"op": "-", "args": [
         idx("u", json!({"op": "+", "args": ["j", 1]})),
@@ -286,7 +286,7 @@ fn ab_nested_aggregate() {
 #[test]
 fn ab_nested_aggregate_shadowing_enclosing_index() {
     let n = 8;
-    let inner = json!({"op": "aggregate", "args": [], "output_idx": ["i"],
+    let inner = json!({"op": "faq", "args": [], "output_idx": ["i"],
     "ranges": {"i": [1, n]},
     "expr": {"op": "-", "args": [
         idx("u", json!({"op": "+", "args": ["i", 1]})),
@@ -316,7 +316,7 @@ fn ab_nested_aggregate_shadowing_enclosing_index() {
 fn ab_nested_aggregate_makearray_of_shadowed_aggregates() {
     let n = 8;
     let region_agg = |lo: i64, hi: i64, body: serde_json::Value| {
-        json!({"op": "aggregate", "args": [], "output_idx": ["i"],
+        json!({"op": "faq", "args": [], "output_idx": ["i"],
                "ranges": {"i": [lo, hi]}, "expr": body})
     };
     let interior = region_agg(
@@ -371,7 +371,7 @@ fn ab_nested_aggregate_makearray_of_shadowed_aggregates() {
 #[test]
 fn ab_nested_aggregate_capturing_enclosing_index_still_falls_back() {
     let n = 6;
-    let inner = json!({"op": "aggregate", "args": [], "output_idx": ["j"],
+    let inner = json!({"op": "faq", "args": [], "output_idx": ["j"],
     "ranges": {"j": [1, n]},
     "expr": {"op": "*", "args": [idx("u", json!("j")), "i"]}});
     let doc = json!({
@@ -440,7 +440,7 @@ fn ab_contraction_weights() {
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
             "equations": [
-                d_eq("u", n, json!({"op": "aggregate", "args": [], "output_idx": ["i"],
+                d_eq("u", n, json!({"op": "faq", "args": [], "output_idx": ["i"],
                     "reduce": "+",
                     "ranges": {"i": [1, n], "k": [-1, 1]},
                     "expr": {"op": "*", "args": [
@@ -465,7 +465,7 @@ fn ab_contraction_with_filter_mask() {
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
             "equations": [
-                d_eq("u", n, json!({"op": "aggregate", "args": [], "output_idx": ["i"],
+                d_eq("u", n, json!({"op": "faq", "args": [], "output_idx": ["i"],
                     "reduce": "+",
                     "ranges": {"i": [1, n], "j": [1, n]},
                     "filter": {"op": "<=", "args": ["j", {"op": "*", "args": [1, "i"]}]},
@@ -687,12 +687,12 @@ fn ab_subblock_dy_scatter() {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
             "equations": [
                 {
-                    "lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+                    "lhs": {"op": "faq", "args": [], "output_idx": ["i"],
                             "expr": {"op": "D", "args": [
                                 {"op": "index", "args": ["u", {"op": "+", "args": ["i", 1]}]}
                             ], "wrt": "t"},
                             "ranges": {"i": [1, 7]}},
-                    "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+                    "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
                             "ranges": {"i": [1, 7]},
                             "expr": idx("u", json!("i"))}
                 },
@@ -730,18 +730,18 @@ fn ab_observed_chain_and_broadcast() {
                 "s": {"type": "unknown"}
             },
             "equations": [
-                {"lhs": "c", "rhs": {"op": "aggregate", "args": [], "output_idx": ["j"],
+                {"lhs": "c", "rhs": {"op": "faq", "args": [], "output_idx": ["j"],
                           "ranges": {"j": [1, nj]},
                           "expr": {"op": "cos", "args": [{"op": "*", "args": [0.3, "j"]}]}}},
                 {"lhs": "s", "rhs": {"op": "*", "args": [2.0, "x"]}},
                 {"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
                  "rhs": {"op": "*", "args": [{"op": "neg", "args": ["s"]}, "x"]}},
                 {
-                    "lhs": {"op": "aggregate", "args": [], "output_idx": ["i", "j"],
+                    "lhs": {"op": "faq", "args": [], "output_idx": ["i", "j"],
                             "expr": {"op": "D", "args": [
                                 {"op": "index", "args": ["w", "i", "j"]}], "wrt": "t"},
                             "ranges": {"i": [1, ni], "j": [1, nj]}},
-                    "rhs": {"op": "aggregate", "args": [], "output_idx": ["i", "j"],
+                    "rhs": {"op": "faq", "args": [], "output_idx": ["i", "j"],
                             "ranges": {"i": [1, ni], "j": [1, nj]},
                             "expr": {"op": "*", "args": [
                                 {"op": "index", "args": ["c", "j"]},
@@ -887,7 +887,7 @@ fn coloring_invariants() {
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
             "equations": [
-                d_eq("u", n, json!({"op": "aggregate", "args": [], "output_idx": ["i"],
+                d_eq("u", n, json!({"op": "faq", "args": [], "output_idx": ["i"],
                     "reduce": "+",
                     "ranges": {"i": [1, n], "k": [-1, 1]},
                     "expr": {"op": "*", "args": [
@@ -1065,12 +1065,12 @@ fn exports_materialize_as_observed_arrays() {
 
 /// Forward prefix scans (inclusive `<=` and exclusive `<`), compiled as the
 /// whole-plane running fold — bit-identical to the per-cell sweep the
-/// production `eval_arrayop` runs for these.
+/// production `eval_faq` runs for these.
 #[test]
 fn ab_prefix_scan_observeds() {
     let (ni, nk) = (4, 5);
     let scan_obs = |cmp: &str| {
-        json!({"op": "aggregate", "args": [], "output_idx": ["i", "k"],
+        json!({"op": "faq", "args": [], "output_idx": ["i", "k"],
             "reduce": "+",
             "ranges": {"i": [1, ni], "k": [1, nk], "m": [1, nk]},
             "filter": {"op": cmp, "args": ["m", "k"]},
@@ -1089,11 +1089,11 @@ fn ab_prefix_scan_observeds() {
                 {"lhs": "P", "rhs": scan_obs("<=")},
                 {"lhs": "Q", "rhs": scan_obs("<")},
                 {
-                    "lhs": {"op": "aggregate", "args": [], "output_idx": ["i", "k"],
+                    "lhs": {"op": "faq", "args": [], "output_idx": ["i", "k"],
                             "expr": {"op": "D", "args": [
                                 {"op": "index", "args": ["u", "i", "k"]}], "wrt": "t"},
                             "ranges": {"i": [1, ni], "k": [1, nk]}},
-                    "rhs": {"op": "aggregate", "args": [], "output_idx": ["i", "k"],
+                    "rhs": {"op": "faq", "args": [], "output_idx": ["i", "k"],
                             "ranges": {"i": [1, ni], "k": [1, nk]},
                             "expr": {"op": "+", "args": [
                                 {"op": "*", "args": [-0.1,
@@ -1124,13 +1124,13 @@ fn ab_prefix_scan_observeds() {
 #[test]
 fn ab_wholesale_makearray_and_elementwise_observeds() {
     let n = 8;
-    let interior = json!({"op": "aggregate", "args": [], "output_idx": ["i"],
+    let interior = json!({"op": "faq", "args": [], "output_idx": ["i"],
     "ranges": {"i": [2, n - 1]},
     "expr": {"op": "-", "args": [
         idx("u", json!({"op": "+", "args": ["i", 1]})),
         idx("u", json!({"op": "-", "args": ["i", 1]}))
     ]}});
-    let top = json!({"op": "aggregate", "args": [], "output_idx": ["i"],
+    let top = json!({"op": "faq", "args": [], "output_idx": ["i"],
         "ranges": {"i": [n, n]},
         "expr": {"op": "*", "args": [2.0, idx("u", json!("i"))]}});
     let doc = json!({
@@ -1144,7 +1144,7 @@ fn ab_wholesale_makearray_and_elementwise_observeds() {
                 "h": {"type": "unknown", "shape": ["i"]}
             },
             "equations": [
-                {"lhs": "g", "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+                {"lhs": "g", "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
                           "ranges": {"i": [1, n]},
                           "expr": {"op": "sin", "args": [{"op": "*", "args": [0.5, "i"]}]}}},
                 {"lhs": "q", "rhs": {"op": "makearray", "args": [],
@@ -1289,7 +1289,7 @@ fn ab_shifted_read_folding_wrap_ghost_linear() {
     ]});
     let d2 = |var: &str, rhs: serde_json::Value| {
         json!({
-            "lhs": {"op": "aggregate", "args": [], "output_idx": ["i", "j"],
+            "lhs": {"op": "faq", "args": [], "output_idx": ["i", "j"],
                     "expr": {"op": "D", "args": [
                         {"op": "index", "args": [var, "i", "j"]}], "wrt": "t"},
                     "ranges": {"i": [1, ni], "j": [1, nj]}},
@@ -1297,7 +1297,7 @@ fn ab_shifted_read_folding_wrap_ghost_linear() {
         })
     };
     let agg2 = |body: serde_json::Value| {
-        json!({"op": "aggregate", "args": [], "output_idx": ["i", "j"],
+        json!({"op": "faq", "args": [], "output_idx": ["i", "j"],
                "ranges": {"i": [1, ni], "j": [1, nj]}, "expr": body})
     };
     let doc = json!({
@@ -1312,7 +1312,7 @@ fn ab_shifted_read_folding_wrap_ghost_linear() {
                 "s": {"type": "unknown", "shape": ["i"]}
             },
             "equations": [
-                {"lhs": "s", "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+                {"lhs": "s", "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
                           "ranges": {"i": [1, ni]},
                           "expr": {"op": "*", "args": [0.5,
                               {"op": "index", "args": ["w", "i", 3]}]}}},

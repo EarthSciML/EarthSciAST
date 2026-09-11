@@ -52,7 +52,7 @@
 //! # No new engine primitive
 //!
 //! This is consumer/glue code: a provider *trait* and an executor that drives it
-//! into the existing PR-1 buffer. No arrayop, no scalarizer arm, no
+//! into the existing PR-1 buffer. No faq, no scalarizer arm, no
 //! `VariableType` variant, no lift of the event/spatial rejections —
 //! `declarative-bc-no-new-primitives` holds. Regridding stays declarative in the
 //! model (an in-model coupling contraction the RHS evaluates), not a seam here.
@@ -879,7 +879,7 @@ mod tests {
                   "equations": [
                     {
                       "lhs": {
-                        "op": "aggregate",
+                        "op": "faq",
                         "args": [],
                         "output_idx": [
                           "i"
@@ -905,7 +905,7 @@ mod tests {
                         }
                       },
                       "rhs": {
-                        "op": "aggregate",
+                        "op": "faq",
                         "args": [],
                         "output_idx": [
                           "i"

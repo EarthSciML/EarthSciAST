@@ -11,6 +11,7 @@ import copy
 import json
 import os
 import re
+import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -2380,6 +2381,13 @@ def _load_data(
     entry points above say which they are.
     """
 
+    # esm 1.1.0: rewrite the deprecated `aggregate` op spelling to the canonical
+    # `faq` at the wire boundary, ahead of every other pass, so the version
+    # gates, the schema, the typed tree and `emit` all see exactly one tag
+    # (docs/content/rfcs/faq-node-rename.md).
+    reject_removed_ops(data)
+    normalize_deprecated_op_aliases(data)
+
     # Strip top-level events (not allowed by schema, but accepted for tooling roundtrip)
     top_continuous_events = data.pop("continuous_events", None) if isinstance(data, dict) else None
     top_discrete_events = data.pop("discrete_events", None) if isinstance(data, dict) else None
@@ -2587,3 +2595,81 @@ def _load_data(
             esm_file.events.append(_parse_discrete_event(ev))
 
     return esm_file
+
+
+def _rewrite_op_aliases(node: object) -> int:
+    """Depth-first rewrite of ``"op": "aggregate"`` to ``"op": "faq"``.
+
+    Returns how many nodes were rewritten.
+    """
+    n = 0
+    if isinstance(node, dict):
+        if node.get("op") == "aggregate":
+            node["op"] = "faq"
+            n += 1
+        for value in node.values():
+            n += _rewrite_op_aliases(value)
+    elif isinstance(node, list):
+        for value in node:
+            n += _rewrite_op_aliases(value)
+    return n
+
+
+def normalize_deprecated_op_aliases(data: object) -> int:
+    """Normalize deprecated expression-node ``op`` spellings in place, warn once.
+
+    The one alias is ``aggregate`` -> ``faq`` (esm 1.1.0,
+    ``docs/content/rfcs/faq-node-rename.md``). Normalizing at the wire boundary
+    is what lets the rest of the package recognize exactly one spelling:
+    nothing downstream of the loader, ``emit`` included, ever sees the alias,
+    so a document authored with ``aggregate`` is upgraded exactly once.
+
+    The older ``arrayop`` spelling is NOT normalized -- it was removed at esm
+    0.8.0 and is rejected like any other unknown non-rewrite-target op.
+    """
+    n = _rewrite_op_aliases(data)
+    if n:
+        warnings.warn(
+            "deprecated_op_alias: '\"op\": \"aggregate\"' is the pre-1.1.0 spelling of "
+            f"'\"op\": \"faq\"' (Functional Aggregate Query); {n} "
+            f"{'node was' if n == 1 else 'nodes were'} normalized on load. The alias is "
+            "REMOVED at esm 2.0.0 -- re-emit this document to migrate it "
+            "(docs/content/rfcs/faq-node-rename.md).",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+    return n
+
+
+def _find_removed_op(node: object, at: str = "") -> str | None:
+    """Path of the first ``"op": "arrayop"`` node, or ``None``."""
+    if isinstance(node, dict):
+        if node.get("op") == "arrayop":
+            return at
+        for key, child in node.items():
+            hit = _find_removed_op(child, f"{at}/{key}")
+            if hit is not None:
+                return hit
+    elif isinstance(node, list):
+        for i, child in enumerate(node):
+            hit = _find_removed_op(child, f"{at}/{i}")
+            if hit is not None:
+                return hit
+    return None
+
+
+def reject_removed_ops(data: object) -> None:
+    """Reject a document carrying the pre-0.8.0 ``arrayop`` spelling.
+
+    ``arrayop`` is REMOVED, not deprecated: it is a well-formed identifier, so
+    without this check it falls into the OPEN rewrite-target tier (esm-spec
+    §4.2), loads silently, and fails only much later as an
+    ``unlowered_operator``.
+    """
+    path = _find_removed_op(data)
+    if path is not None:
+        raise ParseError(
+            f'removed_op at {path}: \'"op": "arrayop"\' was removed at esm 0.8.0 and is '
+            'not a deprecated alias; use \'"op": "faq"\' (the Functional Aggregate Query '
+            'node). See docs/content/rfcs/faq-node-rename.md.'
+        )

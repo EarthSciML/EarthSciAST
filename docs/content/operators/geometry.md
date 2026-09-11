@@ -3,7 +3,7 @@ title: "Geometry"
 description: "polygon_intersection_area and intersect_polygon: the kernels behind conservative regridding."
 ---
 
-Two geometry kernels accompany [`aggregate`](../aggregation/) in the relational
+Two geometry kernels accompany [`faq`](../aggregation/) in the relational
 surface. Both take two polygons and clip one against the other; they differ in
 what they hand back. Both run at **build/setup time**, not per timestep — their
 results are frozen into the compiled system, which is what makes a conservative
@@ -19,7 +19,7 @@ regrid a build cost rather than a per-step one.
 
 Returns the **scalar** area shared by the two polygons — the fused composition
 of a clip and a shoelace area. It exposes no clip ring, which is what makes it
-densely evaluable: a per-pair overlap factor is an ordinary `aggregate` with no
+densely evaluable: a per-pair overlap factor is an ordinary `faq` with no
 ragged intermediate.
 
 **Text**
@@ -44,7 +44,7 @@ pair contributes the fold identity and drops out on its own.
 
 ### The conservative-regridding weight matrix
 
-The idiomatic use is a whole weight matrix assembled by an `aggregate` over the
+The idiomatic use is a whole weight matrix assembled by a `faq` over the
 source × target product. `A_ij` is the shared area of each surviving pair:
 
 **Text**
@@ -54,7 +54,7 @@ sum[i, j] (polygon_intersection_area(src_poly[i], tgt_poly[j], manifold=planar))
 **JSON**
 ```json
 {
-  "op": "aggregate",
+  "op": "faq",
   "output_idx": ["i", "j"],
   "semiring": "sum_product",
   "ranges": { "i": { "from": "src_cells" }, "j": { "from": "tgt_cells" } },
@@ -81,7 +81,7 @@ sum[j] (A_ij[i, j]) where {i in src_cells, j in tgt_cells} join(src_bin=tgt_bin)
 **JSON**
 ```json
 {
-  "op": "aggregate",
+  "op": "faq",
   "output_idx": ["j"],
   "semiring": "sum_product",
   "ranges": { "i": { "from": "src_cells" }, "j": { "from": "tgt_cells" } },
@@ -98,7 +98,7 @@ computed from the cell geometry the document already carries.
 
 ### Pruning the pair set
 
-Both `aggregate`s above carry `join(src_bin=tgt_bin)`. Without it the aggregate
+Both `faq` nodes above carry `join(src_bin=tgt_bin)`. Without it the `faq`
 visits the full source × target product; with it, the cost is proportional to the
 number of candidate pairs. The bin keys are themselves computed — quantize each
 cell's representative coordinate and mint a key from the two integers:
@@ -110,7 +110,7 @@ sum[i] (skolem(floor(src_lon[i] / dx), floor(src_lat[i] / dy))) where {i in src_
 **JSON**
 ```json
 {
-  "op": "aggregate",
+  "op": "faq",
   "output_idx": ["i"],
   "ranges": { "i": { "from": "src_cells" } },
   "expr": {

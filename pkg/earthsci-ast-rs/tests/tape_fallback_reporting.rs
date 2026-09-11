@@ -164,7 +164,7 @@ const TAPED_MODEL: &str = r#"
             {
               "lhs": "k",
               "rhs": {
-                "op": "aggregate",
+                "op": "faq",
                 "args": [],
                 "output_idx": [
                   "i"

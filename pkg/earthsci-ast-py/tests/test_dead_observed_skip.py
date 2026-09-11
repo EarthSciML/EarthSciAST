@@ -83,7 +83,7 @@ def _doc(dead_body):
                     {"lhs": "dead", "rhs": dead_body},
                     {
                         "lhs": {
-                            "op": "aggregate",
+                            "op": "faq",
                             "args": [],
                             "output_idx": ["i"],
                             "ranges": {"i": {"from": "cells"}},
@@ -94,7 +94,7 @@ def _doc(dead_body):
                             },
                         },
                         "rhs": {
-                            "op": "aggregate",
+                            "op": "faq",
                             "args": [],
                             "output_idx": ["i"],
                             "ranges": {"i": {"from": "cells"}},

@@ -1680,7 +1680,7 @@ func formatRangesClause(ranges map[string]any, format string) string {
 	return " where {" + strings.Join(parts, ", ") + "}"
 }
 
-// formatAggregate renders an `aggregate` node per the rendering contract.
+// formatAggregate renders a `faq` node per the rendering contract.
 func formatAggregate(node ExprNode, format string) string {
 	outParts := make([]string, len(node.OutputIdx))
 	for i, o := range node.OutputIdx {
@@ -1977,7 +1977,7 @@ func formatStructuralOp(node ExprNode, format string) (string, bool) {
 		}
 		return opDisplayName(op, format) + "(" + inner + ", manifold=" + manifold + idPart + ")", true
 
-	case "aggregate":
+	case "faq":
 		return formatAggregate(node, format), true
 
 	case "argmin", "argmax":

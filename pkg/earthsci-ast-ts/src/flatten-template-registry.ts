@@ -70,7 +70,7 @@ const MAP_CHILDREN = ['axes', 'bindings'] as const
  * sets, none of which are component locals and none of which may be prefixed.
  * The caller removes the template's `params` from `localNames` before calling.
  *
- * `bound` carries the loop symbols an enclosing `aggregate` binds; they shadow
+ * `bound` carries the loop symbols an enclosing `faq` binds; they shadow
  * locals (esm-spec §4.3.1) and are never prefixed. Shadowing is scoped to the
  * subtree.
  */
@@ -89,7 +89,7 @@ function scopeTemplateBody(
   // Binder symbols this node introduces shadow the owner's locals for the
   // whole subtree (`output_idx` entries and `ranges` keys).
   let frozen = bound
-  if (expr.op === 'aggregate') {
+  if (expr.op === 'faq') {
     const localBound = new Set(bound)
     for (const sym of asStringList(expr.output_idx)) localBound.add(sym)
     for (const sym of mapKeys(expr.ranges)) localBound.add(sym)

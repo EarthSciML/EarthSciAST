@@ -97,7 +97,7 @@ const ESM_Expr = EarthSciAST.ASTExpr
 
     @testset "canonicalize preserves ALL OpExpr fields (reconstruct-backed)" begin
         E = EarthSciAST
-        agg = OpExpr("aggregate", ESM_Expr[];
+        agg = OpExpr("faq", ESM_Expr[];
             semiring="sum_product", output_idx=Any[],
             ranges=Dict{String,Any}("i" => E.IndexSetRef("cells")),
             expr_body=OpExpr("*", ESM_Expr[VarExpr("A"), VarExpr("F")]),
@@ -118,7 +118,7 @@ const ESM_Expr = EarthSciAST.ASTExpr
 
     @testset "canonical_json refuses out-of-encoding nodes (no ambiguous bytes)" begin
         E = EarthSciAST
-        mkagg(body) = OpExpr("aggregate", ESM_Expr[];
+        mkagg(body) = OpExpr("faq", ESM_Expr[];
             output_idx=Any[],
             ranges=Dict{String,Any}("i" => E.IndexSetRef("cells")),
             expr_body=body)

@@ -168,7 +168,7 @@ export class CadenceSeeder {
     //
     // The SELF-EDGE `V -> V` is the one exception, and it is dropped rather than
     // reported (esm-spec §4.3.1.1, CONFORMANCE_SPEC §5.19.5). A causal
-    // self-reference — `V`'s own defining `aggregate` reading `index(V, k-1)` —
+    // self-reference — `V`'s own defining `faq` reading `index(V, k-1)` —
     // is an ORDERING WITHIN one variable, not a dependency between two: the
     // sweep publishes cell `k-1` before it evaluates cell `k`, so there is
     // nothing to break. It therefore contributes `const`, which is

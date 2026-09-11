@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "inject_coupling_entry_neg_target_is_loader",
     "description": "NEGATIVE (esm-spec 9.7.10 / 10.8): the variable_map injection map key 'GEOSFP' resolves to a data_sources entry, which from 1.0.0 is pure ingest configuration -- not a component, and with no expression positions to rewrite. MUST be rejected at load with template_inject_target_not_component."

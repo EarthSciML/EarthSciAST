@@ -229,14 +229,14 @@ def test_roundtrip_preserves_metadata():
     assert ref["url"] == "https://example.com/paper"
 
 
-def test_roundtrip_index_outside_arrayop():
+def test_roundtrip_index_outside_faq():
     """Round-trip for `index` op used in scalar RHS contexts (outside
-    `arrayop.expr`), per RFC discretization §5.1. Exercises integer-literal
+    `faq.expr`), per RFC discretization §5.1. Exercises integer-literal
     and composite-arithmetic index arguments, plus a coexisting `index`
-    inside an `arrayop.expr` body, to ensure both contexts survive
+    inside an `faq.expr` body, to ensure both contexts survive
     load → save → load idempotently.
     """
-    fixture_path = FIXTURES_ROOT / "indexing" / "idx_outside_arrayop.esm"
+    fixture_path = FIXTURES_ROOT / "indexing" / "idx_outside_faq.esm"
     json_str = fixture_path.read_text()
 
     esm1 = load_string(json_str)

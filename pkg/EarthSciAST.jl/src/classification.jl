@@ -72,13 +72,13 @@ parameter_names(model::Model)::Vector{String} = parameters(model)
 # | `ic(u)` | `(:none, "")` — an initial condition defines no dynamics |
 # | `H*H*SO4`, `laplacian(phi)`, anything else | `(:implicit, "")` |
 
-"""Strip the array-addressing wrappers (`index` / `arrayop`) and the
-vectorising `aggregate` from an LHS, returning the node they address."""
+"""Strip the array-addressing wrappers (`index` / `faq`) and the
+vectorising `faq` from an LHS, returning the node they address."""
 function _lhs_unwrap(e::ASTExpr)::ASTExpr
     while e isa OpExpr
-        if e.op == "aggregate" && e.expr_body !== nothing
+        if e.op == "faq" && e.expr_body !== nothing
             e = e.expr_body
-        elseif (e.op == "index" || e.op == "arrayop") && !isempty(e.args)
+        elseif e.op == "index" && !isempty(e.args)
             e = e.args[1]
         else
             return e
@@ -133,7 +133,7 @@ end
 The unknowns appearing under `D(·, t)` on some equation LHS — the quantities
 the solver integrates (esm-spec §6.3.1). Sorted lexicographically.
 
-A derivative LHS may be wrapped: `D(u)`, `D(u[i])`, and an `aggregate` whose
+A derivative LHS may be wrapped: `D(u)`, `D(u[i])`, and a `faq` whose
 body is a `D(…)` all credit the base variable.
 
 This replaces every 0.x `variable.type == "state"` test.

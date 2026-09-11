@@ -254,7 +254,7 @@ describe('effectiveSystemKind (API_SPEC.md §8 item 11)', () => {
  */
 describe('an ARRAYED definition is observed, in every LHS spelling (§6.3.1)', () => {
   const aggregateIndexed = {
-    op: 'aggregate',
+    op: 'faq',
     args: [],
     output_idx: ['k'],
     ranges: { k: { from: 'lev' } },
@@ -314,7 +314,7 @@ describe('an ARRAYED definition is observed, in every LHS spelling (§6.3.1)', (
       equations: [
         {
           lhs: {
-            op: 'aggregate',
+            op: 'faq',
             args: [],
             output_idx: ['k'],
             ranges: { k: { from: 'lev' } },

@@ -36,7 +36,7 @@ per output cell the whole N_src-wide contraction tree is rebuilt. NOT O(N_rcv + 
 
 Dominant self-time is NOT `_compile` (0.2% of stacks). It is the per-cell **AST
 re-resolution / re-unrolling**:
-- `_resolve_index_of_arrayop` (resolve.jl:258/301) → `_foreach_aggregate_term`
+- `_resolve_index_of_faq` (resolve.jl:258/301) → `_foreach_aggregate_term`
   (resolve.jl:216/224/231/232) — re-expands the N_src-term reduction PER cell,
 - `_sub_preserving` (helpers.jl:47/85/126) — re-substitutes the output index into the
   body PER cell,
@@ -48,7 +48,7 @@ re-resolution / re-unrolling**:
 
 Root cause CONFIRMED and SHARPENED: the observed-field evaluator re-runs the full
 `_index_at_cell → _resolve_indices(+unroll) → _compile` pipeline for every output cell
-because the output index is baked to a concrete Int at `_resolve_index_of_arrayop`
+because the output index is baked to a concrete Int at `_resolve_index_of_faq`
 (resolve.jl:275, `k_vals = _eval_const_int(...)`), which forces const-array reads to
 constant-fold to per-cell literals.
 

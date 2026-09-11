@@ -300,7 +300,7 @@ function _struct_sig!(io::IOBuffer, n::_Node, direct::Bool)
             # signature — and `_acc_merge_nodes` puts ONE spec on the merged kernel, so
             # every cell would silently compute against `nodes[1]`'s table. Reachable:
             # a `makearray` whose regions each call `interp.*` with their own table,
-            # indexed inside an arrayop that takes the per-cell path (any contraction,
+            # indexed inside a faq that takes the per-cell path (any contraction,
             # i.e. an einsum/aggregate RHS). Keying the spec's CONTENT splits those
             # into one kernel per distinct table.
             #
@@ -620,7 +620,7 @@ end
 # enough to stay inferable. `rhs_list` and `acc_kernels` are captured by the
 # closure; Julia specializes the generated method to the captured types.
 # Scalar/indexed-D equations evaluate through `rhs_list` (one slot each); array
-# (`arrayop`) equations evaluate through `acc_kernels` as whole-array access
+# (`faq`) equations evaluate through `acc_kernels` as whole-array access
 # kernels (codegen-compiled loop nests, the eltype-generic scalar walk for
 # declined kernels). Accepts any AbstractVector so both the pre-allocated and the
 # dynamically-grown forms produced by build_evaluator work. The whole RHS is

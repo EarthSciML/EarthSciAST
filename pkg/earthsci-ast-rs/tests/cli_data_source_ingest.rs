@@ -194,7 +194,7 @@ fn document(url: &str, extra_reader_options: Option<(&str, Value)>, sizing: Sizi
                 "equations": [{
                     "lhs": "annual_obs",
                     "rhs": {
-                        "op": "aggregate",
+                        "op": "faq",
                         "output_idx": ["r"],
                         "ranges": {"r": {"from": "records"}},
                         "args": ["annual"],
@@ -245,7 +245,7 @@ fn document_with_scalar_total(url: &str, sizing: Sizing, expected_total: f64) ->
         .push(json!({
             "lhs": "annual_total",
             "rhs": {
-                "op": "aggregate",
+                "op": "faq",
                 "output_idx": [],
                 "ranges": {"r": {"from": "records"}},
                 "args": ["annual"],

@@ -114,7 +114,7 @@ AGGREGATE_LHS_DERIVATIVE = {
             "equations": [
                 {
                     "lhs": {
-                        "op": "aggregate",
+                        "op": "faq",
                         "args": [],
                         "output_idx": ["k"],
                         "expr": {
@@ -125,7 +125,7 @@ AGGREGATE_LHS_DERIVATIVE = {
                         "ranges": {"k": {"from": "lev"}},
                     },
                     "rhs": {
-                        "op": "aggregate",
+                        "op": "faq",
                         "args": [],
                         "output_idx": ["k"],
                         "expr": 1.0,

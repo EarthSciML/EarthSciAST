@@ -168,7 +168,7 @@ pub(crate) fn map_exprs_in_reaction_system(
 
 /// Substitute variables in an expression, returning a new expression.
 ///
-/// Traverses the full expression tree — including aggregate/arrayop bodies,
+/// Traverses the full expression tree — including aggregate/faq bodies,
 /// `filter` predicates, integral bounds, makearray `values`, and
 /// `table_lookup` axes — and preserves all operator-node metadata.
 pub fn substitute(expr: &Expr, substitutions: &HashMap<String, Expr>) -> Expr {

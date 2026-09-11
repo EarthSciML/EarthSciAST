@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "InterfaceDefinitions",
     "description": "Cross-grid tropopause coupling. Stratospheric ozone (a SPATIALLY-VARYING field on the 3-cell stratospheric grid) is remapped onto the DIFFERENT 4-cell tropospheric grid by a REAL conservative regrid whose overlap weights W[u,l] = A[u,l]/A_l are computed INLINE from cell geometry (bin-skolem broad phase + fused polygon_intersection_area narrow phase, esm-spec.md §8.6.1), not supplied. The regridded boundary O3_boundary drives D(O3) (stratosphere-troposphere exchange). Spatial<->0-D maps use the coupling lifting field.",
@@ -254,7 +254,7 @@
             "upper_cells",
             "lower_cells"
           ],
-          "description": "NARROW PHASE (densely evaluable): overlap-area matrix A[u,l] = polygon_intersection_area(rg_src_poly[u], rg_tgt_poly[l]) computed INLINE from the in-file geometry via the FUSED planar clip+area leaf (esm-spec.md §8.6.1), ranged over the SAME bin-skolem candidate pairs (join.on [[rg_src_bin,rg_tgt_bin]]) as the row-sum / apply. The fused leaf returns the SCALAR overlap area (defined to equal the standalone intersect_polygon clip composed with the shoelace area) and hides the intersection ring inside the kernel, so this is a DENSE aggregate over the candidate set with NO ragged intermediate — replacing the earlier ragged-ring narrow phase. The weights are computed from cell geometry, not supplied."
+          "description": "NARROW PHASE (densely evaluable): overlap-area matrix A[u,l] = polygon_intersection_area(rg_src_poly[u], rg_tgt_poly[l]) computed INLINE from the in-file geometry via the FUSED planar clip+area leaf (esm-spec.md §8.6.1), ranged over the SAME bin-skolem candidate pairs (join.on [[rg_src_bin,rg_tgt_bin]]) as the row-sum / apply. The fused leaf returns the SCALAR overlap area (defined to equal the standalone intersect_polygon clip composed with the shoelace area) and hides the intersection ring inside the kernel, so this is a DENSE faq over the candidate set with NO ragged intermediate — replacing the earlier ragged-ring narrow phase. The weights are computed from cell geometry, not supplied."
         },
         "rg_At": {
           "type": "unknown",
@@ -290,7 +290,7 @@
             ]
           },
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "semiring": "sum_product",
             "output_idx": [
               "u"
@@ -355,7 +355,7 @@
             ]
           },
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "semiring": "sum_product",
             "output_idx": [
               "l"
@@ -420,7 +420,7 @@
             ]
           },
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "semiring": "bool_and_or",
             "output_idx": [
               "p"
@@ -727,7 +727,7 @@
         {
           "lhs": "rg_A",
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "semiring": "sum_product",
             "output_idx": [
               "u",
@@ -777,7 +777,7 @@
         {
           "lhs": "rg_At",
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "semiring": "sum_product",
             "output_idx": [
               "l"
@@ -828,7 +828,7 @@
         {
           "lhs": "rg_W",
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "semiring": "sum_product",
             "output_idx": [
               "u",
@@ -892,7 +892,7 @@
         {
           "lhs": "O3_boundary",
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "semiring": "sum_product",
             "output_idx": [
               "l"

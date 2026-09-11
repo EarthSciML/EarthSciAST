@@ -407,7 +407,7 @@ func (c *CadenceClassifier) checkRelational(expr Expression, path string) []erro
 	}
 	var problems []error
 	_, named := relationalOps[node.Op]
-	isRelational := named || (node.Op == "aggregate" && node.Distinct != nil && *node.Distinct)
+	isRelational := named || (node.Op == "faq" && node.Distinct != nil && *node.Distinct)
 	if isRelational {
 		if class, err := c.Classify(node); err == nil && class == CadenceContinuous {
 			problems = append(problems, &CadenceError{

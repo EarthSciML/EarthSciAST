@@ -426,6 +426,15 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
     validationView = canonical ? stripNumericLiterals(input) : input
   }
 
+  // Step 1a-pre: esm 1.1.0 — rewrite the deprecated `aggregate` op spelling to
+  // the canonical `faq` at the wire boundary, ahead of every other pass, so
+  // the version gates, the schema, the typed tree and `emit` all see exactly
+  // one tag (docs/content/rfcs/faq-node-rename.md). Both views are rewritten
+  // because in canonical mode `validationView` is a separate stripped copy.
+  rejectRemovedOps(data)
+  normalizeDeprecatedOpAliases(data)
+  if (validationView !== data) normalizeDeprecatedOpAliases(validationView)
+
   // Step 1a: esm-spec §8.2.1 — resolve every `data_sources[*].source` location
   // against this document's own directory, before schema validation and before
   // anything downstream reads the field, so the typed `DataSourceLocation`,
@@ -673,6 +682,88 @@ function rejectRemovedV02Blocks(view: unknown): void {
     throw new SchemaValidationError(
       `ESM v0.3.0 rejects ${errors.length} removed v0.2.x construct(s)`,
       errors,
+    )
+  }
+}
+
+
+/**
+ * Depth-first rewrite of `"op": "faq"` to `"op": "faq"`; returns the count.
+ */
+function rewriteOpAliases(node: unknown): number {
+  let n = 0
+  if (Array.isArray(node)) {
+    for (const v of node) n += rewriteOpAliases(v)
+  } else if (node !== null && typeof node === 'object') {
+    const obj = node as Record<string, unknown>
+    if (obj.op === 'aggregate') {
+      obj.op = 'faq'
+      n += 1
+    }
+    for (const k of Object.keys(obj)) n += rewriteOpAliases(obj[k])
+  }
+  return n
+}
+
+/**
+ * Normalize deprecated expression-node `op` spellings in place, warning once
+ * for the document.
+ *
+ * The one alias is `aggregate` → `faq` (esm 1.1.0,
+ * `docs/content/rfcs/faq-node-rename.md`). Normalizing at the wire boundary is
+ * what lets the rest of the package recognize exactly one spelling: nothing
+ * downstream of the loader, `emit` included, ever sees the alias, so a
+ * document authored with `aggregate` is upgraded exactly once.
+ *
+ * The older `arrayop` spelling is NOT normalized — it was removed at esm 0.8.0
+ * and is rejected like any other unknown non-rewrite-target op.
+ */
+export function normalizeDeprecatedOpAliases(doc: unknown): number {
+  const n = rewriteOpAliases(doc)
+  if (n > 0) {
+    console.warn(
+      `deprecated_op_alias: \`"op": "aggregate"\` is the pre-1.1.0 spelling of ` +
+        `\`"op": "faq"\` (Functional Aggregate Query); ${n} ` +
+        `${n === 1 ? 'node was' : 'nodes were'} normalized on load. The alias is ` +
+        `REMOVED at esm 2.0.0 — re-emit this document to migrate it ` +
+        `(docs/content/rfcs/faq-node-rename.md).`
+    )
+  }
+  return n
+}
+
+/** Path of the first `"op": "arrayop"` node, or `null`. */
+function findRemovedOp(node: unknown, at = ''): string | null {
+  if (Array.isArray(node)) {
+    for (let i = 0; i < node.length; i++) {
+      const hit = findRemovedOp(node[i], `${at}/${i}`)
+      if (hit !== null) return hit
+    }
+  } else if (node !== null && typeof node === 'object') {
+    const obj = node as Record<string, unknown>
+    if (obj.op === 'arrayop') return at
+    for (const k of Object.keys(obj)) {
+      const hit = findRemovedOp(obj[k], `${at}/${k}`)
+      if (hit !== null) return hit
+    }
+  }
+  return null
+}
+
+/**
+ * Reject a document carrying the pre-0.8.0 `arrayop` spelling.
+ *
+ * `arrayop` is REMOVED, not deprecated: it is a well-formed identifier, so
+ * without this check it falls into the OPEN rewrite-target tier (esm-spec
+ * §4.2), loads silently, and fails only much later as an `unlowered_operator`.
+ */
+export function rejectRemovedOps(doc: unknown): void {
+  const path = findRemovedOp(doc)
+  if (path !== null) {
+    throw new ParseError(
+      `removed_op at ${path}: \`"op": "arrayop"\` was removed at esm 0.8.0 and is not a ` +
+        `deprecated alias; use \`"op": "faq"\` (the Functional Aggregate Query node). ` +
+        `See docs/content/rfcs/faq-node-rename.md.`
     )
   }
 }

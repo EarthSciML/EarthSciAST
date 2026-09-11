@@ -237,6 +237,12 @@ function _load_parsed(raw_data; base_path::AbstractString=pwd(),
                       injected_imports::AbstractVector=Any[],
                       index_set_rename=nothing,
                       rename_where::AbstractString="mount edge")::EsmFile
+    # esm 1.1.0: rewrite the deprecated `aggregate` op spelling to the
+    # canonical `faq` before ANY other pass runs, so the version gates, the
+    # schema, the coercers and `emit` all see exactly one tag
+    # (docs/content/rfcs/faq-node-rename.md).
+    _warn_deprecated_op_aliases!(raw_data)
+
     # v0.4.0 expression_templates / apply_expression_template are
     # rejected when the file declares esm < 0.4.0 (RFC §5.4 spec-version
     # gate). Surfaced before schema validation so the user sees the
@@ -1424,4 +1430,77 @@ function _load_remote_ref(url::String, visited::Set{String}=Set{String}();
     _resolve_refs_in_file!(file, url_base, visited)
 
     return file
+end
+
+"""
+    _normalize_deprecated_op_aliases!(raw_data) -> Int
+
+Rewrite every deprecated expression-node `op` spelling to its canonical tag,
+in place, and return how many nodes were rewritten.
+
+The one alias is `aggregate` → `faq` (esm 1.1.0,
+`docs/content/rfcs/faq-node-rename.md`). Normalizing HERE — at the wire
+boundary, ahead of the version gates and schema validation — is what lets the
+rest of the library recognize exactly one spelling: nothing downstream of the
+loader, including `emit`, ever sees the alias. A document authored with
+`aggregate` is therefore upgraded exactly once, on its first load, and the
+`emit ∘ load` byte-wise fixed point holds for the upgraded form.
+
+The older `faq` spelling is NOT normalized: it was removed at esm 0.8.0
+and is rejected in `_parse_op_dict` like any other unknown op.
+"""
+function _normalize_deprecated_op_aliases!(node)::Int
+    n = 0
+    if node isa AbstractDict
+        # The document arrives both symbol-keyed (in-memory callers) and
+        # string-keyed (the JSON wire), so the key is probed in both spellings
+        # and rewritten under whichever one it was found at.
+        for key in (:op, "op")
+            haskey(node, key) || continue
+            opv = get(node, key, nothing)
+            if opv == "arrayop"
+                # REMOVED, not deprecated: `arrayop` was the pre-0.8.0 spelling.
+                # Rejected here rather than left to fall through to the OPEN
+                # rewrite-target tier (esm-spec §4.2), where it would load
+                # silently and only fail much later as an `unlowered_operator`.
+                throw(ParseError("[E_REMOVED_OP] `\"op\": \"arrayop\"` was removed at esm " *
+                                 "0.8.0 and is not a deprecated alias; use `\"op\": \"faq\"` " *
+                                 "(the Functional Aggregate Query node). See " *
+                                 "docs/content/rfcs/faq-node-rename.md."))
+            elseif opv == "aggregate"
+                node[key] = "faq"
+                n += 1
+            end
+            break
+        end
+        for v in values(node)
+            n += _normalize_deprecated_op_aliases!(v)
+        end
+    elseif node isa AbstractVector
+        for v in node
+            n += _normalize_deprecated_op_aliases!(v)
+        end
+    end
+    return n
+end
+
+"""
+    _warn_deprecated_op_aliases!(raw_data)
+
+Normalize deprecated `op` aliases and emit ONE `E_DEPRECATED_OP_ALIAS` warning
+for the document when any were found — not one per node, which for a large
+discretized document would be thousands of identical lines.
+"""
+function _warn_deprecated_op_aliases!(raw_data)
+    n = _normalize_deprecated_op_aliases!(raw_data)
+    if n > 0
+        @warn string(
+            "[E_DEPRECATED_OP_ALIAS] `\"op\": \"aggregate\"` is the pre-1.1.0 ",
+            "spelling of `\"op\": \"faq\"` (Functional Aggregate Query); ", n,
+            n == 1 ? " node was" : " nodes were", " normalized on load. ",
+            "The alias is REMOVED at esm 2.0.0 — re-emit this document to ",
+            "migrate it (docs/content/rfcs/faq-node-rename.md)."
+        )
+    end
+    return
 end

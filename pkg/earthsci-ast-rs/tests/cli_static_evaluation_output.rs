@@ -47,7 +47,7 @@ fn relational_document() -> Value {
         json!({
             "lhs": name,
             "rhs": {
-                "op": "aggregate", "args": [], "output_idx": ["i"],
+                "op": "faq", "args": [], "output_idx": ["i"],
                 "ranges": {"i": {"from": "rows"}}, "expr": expr
             }
         })
@@ -69,7 +69,7 @@ fn relational_document() -> Value {
                     {
                         "lhs": "total",
                         "rhs": {
-                            "op": "aggregate", "args": ["left"], "output_idx": [],
+                            "op": "faq", "args": ["left"], "output_idx": [],
                             "ranges": {"i": {"from": "rows"}},
                             "expr": {"op": "index", "args": ["left", "i"]}
                         }

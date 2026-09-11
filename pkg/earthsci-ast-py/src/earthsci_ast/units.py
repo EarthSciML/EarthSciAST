@@ -246,7 +246,7 @@ class UnparseableUnitError(ValueError):
     other bindings make (Go's ``UnitFindingUnparseable``, TS's ``unit_error``).
 
     Contrast with a GENUINELY UNDETERMINABLE dimension — a symbolic exponent
-    (``x^n``), an op with no dimensional rule (``aggregate``/``index``/``fn``/
+    (``x^n``), an op with no dimensional rule (``faq``/``index``/``fn``/
     ``table_lookup``), an undeclared variable — which is a statement about the
     checker and stays a WARNING (signalled by ``None``, never by an exception).
     """

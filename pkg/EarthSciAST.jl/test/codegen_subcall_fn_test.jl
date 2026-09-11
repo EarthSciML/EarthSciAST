@@ -58,7 +58,7 @@ function _scf_write_fixture(dir)
         Dict("op" => "*", "args" => Any[
             _ap(_ix("f", "i", "j"), _ix("f", "i", "j")), 0.125])])
     inner = Dict("params" => Any["f"],
-                 "body" => Dict("op" => "aggregate", "output_idx" => Any["i", "j"],
+                 "body" => Dict("op" => "faq", "output_idx" => Any["i", "j"],
                                 "args" => Any["f"],
                                 "ranges" => Dict("i" => Dict("from" => "x"),
                                                  "j" => Dict("from" => "y")),

@@ -37,7 +37,7 @@ function _ob_halo(M::Int; ghost::Bool=false)
     NQ = ghost ? M : (max(NI, NJ) + M - 1)
     W = [ [ [ [ Float64((i+2j+3k+5l) % 7) for l in 1:M ] for k in 1:M ] for j in 1:NJ ] for i in 1:NI ]
     donor(a, b) = Dict("op"=>"-","args"=>Any[Dict("op"=>"+","args"=>Any[a,b]),1])
-    agg = Dict{String,Any}("op"=>"aggregate","semiring"=>"sum_product","args"=>Any[],
+    agg = Dict{String,Any}("op"=>"faq","semiring"=>"sum_product","args"=>Any[],
         "output_idx"=>Any["i","j"],
         "ranges"=>Dict("i"=>Any[1,NI],"j"=>Any[1,NJ],"k"=>Any[1,M],"l"=>Any[1,M]),
         "expr"=>Dict("op"=>"*","args"=>Any[
@@ -48,12 +48,12 @@ function _ob_halo(M::Int; ghost::Bool=false)
         "variables"=>Dict("q"=>Dict("type"=>"unknown","shape"=>Any["a","b"]),
                           "out"=>Dict("type"=>"unknown","shape"=>Any["i","j"])),
         "equations"=>Any[
-          Dict("lhs"=>Dict("op"=>"aggregate","args"=>Any[],"output_idx"=>Any["a","b"],
+          Dict("lhs"=>Dict("op"=>"faq","args"=>Any[],"output_idx"=>Any["a","b"],
                  "ranges"=>Dict("a"=>Any[1,NQ],"b"=>Any[1,NQ]),
                  "expr"=>Dict("op"=>"D","args"=>Any[Dict("op"=>"index","args"=>Any["q","a","b"])],"wrt"=>"t")),
-               "rhs"=>Dict("op"=>"aggregate","args"=>Any[],"output_idx"=>Any["a","b"],
+               "rhs"=>Dict("op"=>"faq","args"=>Any[],"output_idx"=>Any["a","b"],
                  "ranges"=>Dict("a"=>Any[1,NQ],"b"=>Any[1,NQ]),"expr"=>0.0)),
-          Dict("lhs"=>Dict("op"=>"aggregate","args"=>Any[],"output_idx"=>Any["i","j"],
+          Dict("lhs"=>Dict("op"=>"faq","args"=>Any[],"output_idx"=>Any["i","j"],
                  "ranges"=>Dict("i"=>Any[1,NI],"j"=>Any[1,NJ]),
                  "expr"=>Dict("op"=>"D","args"=>Any[Dict("op"=>"index","args"=>Any["out","i","j"])],"wrt"=>"t")),
                "rhs"=>agg)])))
@@ -142,21 +142,21 @@ _ob_build(doc, ics; form=:inplace, loop=true, batch=true) =
                                   "k" => _OB_ESS.IndexSetRef("y"))
         rng_ab = Dict{String,Any}("a" => _OB_ESS.IndexSetRef("x"),
                                   "b" => _OB_ESS.IndexSetRef("y"))
-        Sdef = _op("aggregate"; output_idx = Any["i"], ranges = rng_ik,
+        Sdef = _op("faq"; output_idx = Any["i"], ranges = rng_ik,
                    semiring = "sum_product",
                    expr_body = _op("*", _op("index", _const(W), _v("k")),
                                    _idx("q", _v("i"), _v("k"))))
         eqs = [
             _OB_ESS.Equation(_v("S"), Sdef),
             _OB_ESS.Equation(
-                _op("aggregate"; output_idx = Any["a", "b"], ranges = rng_ab,
+                _op("faq"; output_idx = Any["a", "b"], ranges = rng_ab,
                     expr_body = _Didx("q", _v("a"), _v("b"))),
-                _op("aggregate"; output_idx = Any["a", "b"], ranges = rng_ab,
+                _op("faq"; output_idx = Any["a", "b"], ranges = rng_ab,
                     expr_body = _n(0.0))),
             _OB_ESS.Equation(
-                _op("aggregate"; output_idx = Any["i"], ranges = rng_i,
+                _op("faq"; output_idx = Any["i"], ranges = rng_i,
                     expr_body = _Didx("v", _v("i"))),
-                _op("aggregate"; output_idx = Any["i"], ranges = rng_i,
+                _op("faq"; output_idx = Any["i"], ranges = rng_i,
                     expr_body = _idx("S", _v("i")))),
         ]
         model = _OB_ESS.Model(vars, eqs)

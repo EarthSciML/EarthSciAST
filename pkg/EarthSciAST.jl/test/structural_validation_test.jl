@@ -567,9 +567,9 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
     @testset "Undefined bare variables in equations (undefined_variable)" begin
         # Invalid fixture: an undefined variable hidden in an aggregate `expr`
         # body (a non-`args` child) must be rejected. Mirrors Rust/Go/TS/Python.
-        @testset "Invalid fixture undefined_variable_in_aggregate_expr.esm is rejected" begin
+        @testset "Invalid fixture undefined_variable_in_faq_expr.esm is rejected" begin
             fixture_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid",
-                                    "undefined_variable_in_aggregate_expr.esm")
+                                    "undefined_variable_in_faq_expr.esm")
             if _require_fixture(fixture_path)
                 esm_data = EarthSciAST.load_path(fixture_path)
                 result = EarthSciAST.validate(esm_data)
@@ -587,7 +587,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
             variables = Dict{String,EarthSciAST.ModelVariable}(
                 "q" => EarthSciAST.ModelVariable(EarthSciAST.UnknownVariable),
             )
-            agg = EarthSciAST.OpExpr("aggregate",
+            agg = EarthSciAST.OpExpr("faq",
                 EarthSciAST.ASTExpr[EarthSciAST.VarExpr("q")];
                 output_idx=Any["i"],
                 ranges=Dict{String,Any}("i" => Dict{String,Any}("from" => "cells")),
@@ -613,7 +613,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
             variables = Dict{String,EarthSciAST.ModelVariable}(
                 "q" => EarthSciAST.ModelVariable(EarthSciAST.UnknownVariable),
             )
-            agg = EarthSciAST.OpExpr("aggregate",
+            agg = EarthSciAST.OpExpr("faq",
                 EarthSciAST.ASTExpr[EarthSciAST.VarExpr("q")];
                 output_idx=Any["i"],
                 ranges=Dict{String,Any}("i" => Dict{String,Any}("from" => "cells")),

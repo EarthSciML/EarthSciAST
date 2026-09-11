@@ -183,7 +183,7 @@ MICRO_DOC = {
                 {
                     "lhs": {"op": "index", "args": ["cell_present", "m"]},
                     "rhs": {
-                        "op": "aggregate",
+                        "op": "faq",
                         "id": "cells_with_points",
                         "semiring": "bool_and_or",
                         "distinct": True,

@@ -121,7 +121,7 @@ def test_fn_kind_disambiguation():
 
 
 def _agg(body):
-    return ExprNode(op="aggregate", args=[], expr=body)
+    return ExprNode(op="faq", args=[], expr=body)
 
 
 def test_non_emissible_field_fails_closed():
@@ -130,7 +130,7 @@ def test_non_emissible_field_fails_closed():
     # raises the pinned coded error rather than emit ambiguous bytes.
     for node in (
         _agg(ExprNode(op="x", args=[])),
-        ExprNode(op="aggregate", args=[], semiring="sum_product", output_idx=[]),
+        ExprNode(op="faq", args=[], semiring="sum_product", output_idx=[]),
         ExprNode(op="table_lookup", args=[], table="tbl", table_axes={"code": "fm"}),
         ExprNode(op="intersect_polygon", args=["a", "b"], id="prod", manifold="planar"),
         # handler_id is NOT emissible (unlike the historical full-coverage emitter).
@@ -153,7 +153,7 @@ def test_non_emissible_nested_in_args_fails_closed():
 def test_canonicalize_is_field_preserving():
     # `canonicalize` itself stays field-preserving — the fail-closed check lives
     # in `canonical_json`, not `canonicalize`.
-    agg = ExprNode(op="aggregate", args=[], semiring="sum_product", table="tbl")
+    agg = ExprNode(op="faq", args=[], semiring="sum_product", table="tbl")
     c = canonicalize(agg)
     assert isinstance(c, ExprNode)
     assert c.semiring == "sum_product"

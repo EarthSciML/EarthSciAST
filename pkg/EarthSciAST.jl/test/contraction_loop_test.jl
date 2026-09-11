@@ -36,7 +36,7 @@ _cl_doc(M::Int) = Dict{String,Any}(
             Dict("lhs" => Dict("op" => "D", "args" => Any["x"], "wrt" => "t"),
                  "rhs" => 0.0),
             Dict("lhs" => Dict("op" => "D", "args" => Any["s"], "wrt" => "t"),
-                 "rhs" => Dict("op" => "aggregate", "semiring" => "sum_product",
+                 "rhs" => Dict("op" => "faq", "semiring" => "sum_product",
                                "args" => Any[], "output_idx" => Any[],
                                "ranges" => Dict("k" => Any[0, M]),
                                "expr" => Dict("op" => "*", "args" => Any["k", "x"]))),
@@ -57,7 +57,7 @@ _cl_doc_weighted(W::Vector{Float64}) = Dict{String,Any}(
             Dict("lhs" => Dict("op" => "D", "args" => Any["x"], "wrt" => "t"),
                  "rhs" => 0.0),
             Dict("lhs" => Dict("op" => "D", "args" => Any["s"], "wrt" => "t"),
-                 "rhs" => Dict("op" => "aggregate", "semiring" => "sum_product",
+                 "rhs" => Dict("op" => "faq", "semiring" => "sum_product",
                                "args" => Any[], "output_idx" => Any[],
                                "ranges" => Dict("k" => Any[1, length(W)]),
                                "expr" => Dict("op" => "*", "args" => Any[
@@ -155,7 +155,7 @@ end
 function _cl_doc2d_weighted(M::Int)
     W = [ [ [ [ Float64((i+2j+3k+5l) % 7) for l in 1:M ] for k in 1:M ] for j in 1:2 ] for i in 1:2 ]
     F = [ [ Float64((2k+3l) % 5) for l in 1:M ] for k in 1:M ]
-    agg = Dict{String,Any}("op"=>"aggregate","semiring"=>"sum_product","args"=>Any[],
+    agg = Dict{String,Any}("op"=>"faq","semiring"=>"sum_product","args"=>Any[],
         "output_idx"=>Any["i","j"],"ranges"=>Dict("i"=>Any[1,2],"j"=>Any[1,2],
                                                    "k"=>Any[1,M],"l"=>Any[1,M]),
         "expr"=>Dict("op"=>"*","args"=>Any[
@@ -165,7 +165,7 @@ function _cl_doc2d_weighted(M::Int)
       "models"=>Dict("R"=>Dict{String,Any}(
         "variables"=>Dict("out"=>Dict("type"=>"unknown","shape"=>Any["i","j"])),
         "equations"=>Any[Dict(
-          "lhs"=>Dict("op"=>"aggregate","args"=>Any[],"output_idx"=>Any["i","j"],
+          "lhs"=>Dict("op"=>"faq","args"=>Any[],"output_idx"=>Any["i","j"],
                       "ranges"=>Dict("i"=>Any[1,2],"j"=>Any[1,2]),
                       "expr"=>Dict("op"=>"D","args"=>Any[Dict("op"=>"index","args"=>Any["out","i","j"])],"wrt"=>"t")),
           "rhs"=>agg)])))
@@ -178,7 +178,7 @@ end
 # Arithmetic: out[i,j] = Σ_{k,l=0..M} (k·l+1)·x[i,j] — tiny input for any M, so
 # build size is measurable independent of the const-data size.
 function _cl_doc2d_arith(M::Int)
-    agg = Dict{String,Any}("op"=>"aggregate","semiring"=>"sum_product","args"=>Any[],
+    agg = Dict{String,Any}("op"=>"faq","semiring"=>"sum_product","args"=>Any[],
         "output_idx"=>Any["i","j"],"ranges"=>Dict("i"=>Any[1,2],"j"=>Any[1,2],
                                                    "k"=>Any[0,M],"l"=>Any[0,M]),
         "expr"=>Dict("op"=>"*","args"=>Any[
@@ -189,12 +189,12 @@ function _cl_doc2d_arith(M::Int)
         "variables"=>Dict("x"=>Dict("type"=>"unknown","shape"=>Any["i","j"]),
                           "out"=>Dict("type"=>"unknown","shape"=>Any["i","j"])),
         "equations"=>Any[
-          Dict("lhs"=>Dict("op"=>"aggregate","args"=>Any[],"output_idx"=>Any["i","j"],
+          Dict("lhs"=>Dict("op"=>"faq","args"=>Any[],"output_idx"=>Any["i","j"],
                  "ranges"=>Dict("i"=>Any[1,2],"j"=>Any[1,2]),
                  "expr"=>Dict("op"=>"D","args"=>Any[Dict("op"=>"index","args"=>Any["x","i","j"])],"wrt"=>"t")),
-               "rhs"=>Dict("op"=>"aggregate","args"=>Any[],"output_idx"=>Any["i","j"],
+               "rhs"=>Dict("op"=>"faq","args"=>Any[],"output_idx"=>Any["i","j"],
                  "ranges"=>Dict("i"=>Any[1,2],"j"=>Any[1,2]),"expr"=>0.0)),
-          Dict("lhs"=>Dict("op"=>"aggregate","args"=>Any[],"output_idx"=>Any["i","j"],
+          Dict("lhs"=>Dict("op"=>"faq","args"=>Any[],"output_idx"=>Any["i","j"],
                  "ranges"=>Dict("i"=>Any[1,2],"j"=>Any[1,2]),
                  "expr"=>Dict("op"=>"D","args"=>Any[Dict("op"=>"index","args"=>Any["out","i","j"])],"wrt"=>"t")),
                "rhs"=>agg)])))
@@ -265,7 +265,7 @@ end
     @testset "state-source contraction (src[k,l]) loops and matches unroll" begin
         N = 4    # total contraction N² = 16 ≥ floor
         W = [ [ [ [ Float64((i+2j+3k+5l) % 7) for l in 1:N ] for k in 1:N ] for j in 1:2 ] for i in 1:2 ]
-        agg = Dict{String,Any}("op"=>"aggregate","semiring"=>"sum_product","args"=>Any[],
+        agg = Dict{String,Any}("op"=>"faq","semiring"=>"sum_product","args"=>Any[],
             "output_idx"=>Any["i","j"],"ranges"=>Dict("i"=>Any[1,2],"j"=>Any[1,2],"k"=>Any[1,N],"l"=>Any[1,N]),
             "expr"=>Dict("op"=>"*","args"=>Any[
                 Dict("op"=>"index","args"=>Any[Dict("op"=>"const","args"=>Any[],"value"=>W),"i","j","k","l"]),
@@ -275,12 +275,12 @@ end
             "variables"=>Dict("src"=>Dict("type"=>"unknown","shape"=>Any["k","l"]),
                               "out"=>Dict("type"=>"unknown","shape"=>Any["i","j"])),
             "equations"=>Any[
-              Dict("lhs"=>Dict("op"=>"aggregate","args"=>Any[],"output_idx"=>Any["k","l"],
+              Dict("lhs"=>Dict("op"=>"faq","args"=>Any[],"output_idx"=>Any["k","l"],
                      "ranges"=>Dict("k"=>Any[1,N],"l"=>Any[1,N]),
                      "expr"=>Dict("op"=>"D","args"=>Any[Dict("op"=>"index","args"=>Any["src","k","l"])],"wrt"=>"t")),
-                   "rhs"=>Dict("op"=>"aggregate","args"=>Any[],"output_idx"=>Any["k","l"],
+                   "rhs"=>Dict("op"=>"faq","args"=>Any[],"output_idx"=>Any["k","l"],
                      "ranges"=>Dict("k"=>Any[1,N],"l"=>Any[1,N]),"expr"=>0.0)),
-              Dict("lhs"=>Dict("op"=>"aggregate","args"=>Any[],"output_idx"=>Any["i","j"],
+              Dict("lhs"=>Dict("op"=>"faq","args"=>Any[],"output_idx"=>Any["i","j"],
                      "ranges"=>Dict("i"=>Any[1,2],"j"=>Any[1,2]),
                      "expr"=>Dict("op"=>"D","args"=>Any[Dict("op"=>"index","args"=>Any["out","i","j"])],"wrt"=>"t")),
                    "rhs"=>agg)])))
@@ -310,7 +310,7 @@ function _cl_halo(M::Int; ghost::Bool=false)
     NQ = ghost ? M : (max(NI, NJ) + M - 1)   # ghost: q smaller than donor range ⇒ OOB reads → 0
     W = [ [ [ [ Float64((i+2j+3k+5l) % 7) for l in 1:M ] for k in 1:M ] for j in 1:NJ ] for i in 1:NI ]
     donor(a, b) = Dict("op"=>"-","args"=>Any[Dict("op"=>"+","args"=>Any[a,b]),1])   # a+b-1
-    agg = Dict{String,Any}("op"=>"aggregate","semiring"=>"sum_product","args"=>Any[],
+    agg = Dict{String,Any}("op"=>"faq","semiring"=>"sum_product","args"=>Any[],
         "output_idx"=>Any["i","j"],"ranges"=>Dict("i"=>Any[1,NI],"j"=>Any[1,NJ],"k"=>Any[1,M],"l"=>Any[1,M]),
         "expr"=>Dict("op"=>"*","args"=>Any[
             Dict("op"=>"index","args"=>Any[Dict("op"=>"const","args"=>Any[],"value"=>W),"i","j","k","l"]),
@@ -320,12 +320,12 @@ function _cl_halo(M::Int; ghost::Bool=false)
         "variables"=>Dict("q"=>Dict("type"=>"unknown","shape"=>Any["a","b"]),
                           "out"=>Dict("type"=>"unknown","shape"=>Any["i","j"])),
         "equations"=>Any[
-          Dict("lhs"=>Dict("op"=>"aggregate","args"=>Any[],"output_idx"=>Any["a","b"],
+          Dict("lhs"=>Dict("op"=>"faq","args"=>Any[],"output_idx"=>Any["a","b"],
                  "ranges"=>Dict("a"=>Any[1,NQ],"b"=>Any[1,NQ]),
                  "expr"=>Dict("op"=>"D","args"=>Any[Dict("op"=>"index","args"=>Any["q","a","b"])],"wrt"=>"t")),
-               "rhs"=>Dict("op"=>"aggregate","args"=>Any[],"output_idx"=>Any["a","b"],
+               "rhs"=>Dict("op"=>"faq","args"=>Any[],"output_idx"=>Any["a","b"],
                  "ranges"=>Dict("a"=>Any[1,NQ],"b"=>Any[1,NQ]),"expr"=>0.0)),
-          Dict("lhs"=>Dict("op"=>"aggregate","args"=>Any[],"output_idx"=>Any["i","j"],
+          Dict("lhs"=>Dict("op"=>"faq","args"=>Any[],"output_idx"=>Any["i","j"],
                  "ranges"=>Dict("i"=>Any[1,NI],"j"=>Any[1,NJ]),
                  "expr"=>Dict("op"=>"D","args"=>Any[Dict("op"=>"index","args"=>Any["out","i","j"])],"wrt"=>"t")),
                "rhs"=>agg)])))

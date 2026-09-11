@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "index_sets": {
     "emis_records": {
       "kind": "interval",
@@ -46,7 +46,7 @@
               "name": "bin_into_cell",
               "op": "apply_expression_template"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "c"
             ],
@@ -88,7 +88,7 @@
               ],
               "op": "*"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "rcv"
             ],

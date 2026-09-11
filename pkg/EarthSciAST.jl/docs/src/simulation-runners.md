@@ -123,7 +123,7 @@ function registry) op set per `esm-spec` §4 / §9.2:
     author, not an evaluator bug**. The built-in `datetime.*` / `interp.*` set
     honors this contract.
 
-Array-typed ops (`arrayop`, `makearray`, `broadcast`, `reshape`,
+Array-typed ops (`faq`, `makearray`, `broadcast`, `reshape`,
 `transpose`, `concat`, `index`, `bc`) and PDE ops (`grad`, `div`,
 `laplacian`) raise `E_TREEWALK_UNSUPPORTED_OP` on encounter — they must be
 discretized and scalarized **before** `build_evaluator`. The `D` op is only

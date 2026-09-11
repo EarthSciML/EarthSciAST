@@ -7,7 +7,7 @@
  * record for every entry in it. The producer does NOT enumerate the corpus
  * itself: each producer used to walk `tests/valid` / `tests/invalid`
  * NON-recursively and all four skipped the same 69 fixtures — the entire
- * `aggregate` and `template_imports` corpora — plus `lib/**`, which nothing
+ * `faq` and `template_imports` corpora — plus `lib/**`, which nothing
  * swept at all (audit 2026-07-14, F5; CONFORMANCE_SPEC §2.2.1).
  *
  * Every validation entry runs the full **load → resolve → validate** pipeline.

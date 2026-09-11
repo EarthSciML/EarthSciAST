@@ -36,12 +36,12 @@ _op(op, args...; kw...) = OpExpr(String(op), ESM.ASTExpr[args...]; kw...)
 _idxv(var, ix...) = _op("index", _v(var), [_v(String(s)) for s in ix]...)
 
 # conc[rcv] = Σ_c A[c,rcv]·E[c]
-make_conc(N_src) = _op("aggregate"; output_idx = Any["rcv"], semiring = "sum_product",
+make_conc(N_src) = _op("faq"; output_idx = Any["rcv"], semiring = "sum_product",
     expr_body = _op("*", _idxv("A", "c", "rcv"), _idxv("E", "c")),
     ranges = Dict{String,Any}("c" => Any[1, N_src]))
 
 # conc2[i,j] = Σ_c A3[c,i,j]·E[c]   (rank-2 output)
-make_conc2(N_src) = _op("aggregate"; output_idx = Any["i", "j"], semiring = "sum_product",
+make_conc2(N_src) = _op("faq"; output_idx = Any["i", "j"], semiring = "sum_product",
     expr_body = _op("*", _idxv("A", "c", "i", "j"), _idxv("E", "c")),
     ranges = Dict{String,Any}("c" => Any[1, N_src]))
 
@@ -149,15 +149,15 @@ _rss_mib() = parse(Int, split(read(`ps -o rss= -p $(getpid())`, String))[1]) / 2
         ca = Dict{String,Any}("A" => A, "E" => E)
 
         # (a) max-semiring aggregate of the SAME shape — the soundness guard.
-        maxagg = _op("aggregate"; output_idx = Any["rcv"], semiring = "max_product",
+        maxagg = _op("faq"; output_idx = Any["rcv"], semiring = "max_product",
             expr_body = _op("*", _idxv("A", "c", "rcv"), _idxv("E", "c")),
             ranges = Dict{String,Any}("c" => Any[1, N_src]))
         # (b) non-affine body A[c,rcv]^2 · E[c] — not a plain product of index reads.
-        sqagg = _op("aggregate"; output_idx = Any["rcv"], semiring = "sum_product",
+        sqagg = _op("faq"; output_idx = Any["rcv"], semiring = "sum_product",
             expr_body = _op("*", _op("^", _idxv("A", "c", "rcv"), _num(2.0)), _idxv("E", "c")),
             ranges = Dict{String,Any}("c" => Any[1, N_src]))
         # (c) runtime filter aggregate — restricts contributing terms.
-        filtagg = _op("aggregate"; output_idx = Any["rcv"], semiring = "sum_product",
+        filtagg = _op("faq"; output_idx = Any["rcv"], semiring = "sum_product",
             expr_body = _op("*", _idxv("A", "c", "rcv"), _idxv("E", "c")),
             ranges = Dict{String,Any}("c" => Any[1, N_src]),
             filter = _op("<", _v("c"), _num(40.0)))

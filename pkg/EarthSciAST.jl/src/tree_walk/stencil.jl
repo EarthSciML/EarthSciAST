@@ -23,7 +23,7 @@
 # Applicability is intentionally narrow. `_stencilize` keeps ONLY the whitelisted
 # elementwise ops + `index(state/const/pgather, …)` gathers + `fn` leaves + bare
 # loop-index literals; ANY loop-var-dependent construct outside that set
-# (`arrayop`/`aggregate`/`makearray`/`integral`/`index`-of-those/`table_lookup`/…)
+# (`faq`/`makearray`/`integral`/`index`-of-those/`table_lookup`/…)
 # throws `_StencilFallback` and the caller runs the unchanged per-cell path. So the
 # fast path is provably identical WHERE it applies and simply absent elsewhere.
 # ONE refinement keeps the failure mode SUBTERM-granular instead of
@@ -701,7 +701,7 @@ end
 # recipes; `index(makearray|aggregate, …)` is unwrapped symbolically (region
 # selected via `ctx.idx_env`, aggregate output indices bound to the — still
 # symbolic — `k` argument expressions). Mirrors the `_resolve_indices` `index`
-# branch and its `_resolve_index_of_{makearray,arrayop}` helpers; anything not
+# branch and its `_resolve_index_of_{makearray,faq}` helpers; anything not
 # modelled falls back.
 function _stencilize_index(e::OpExpr, ctx::_StencilCtx)
     isempty(e.args) && throw(_StencilFallback("empty index op"))
@@ -774,7 +774,7 @@ end
 
 # Symbolically index an array producer at `kargs`. For a `makearray`, select the
 # covering region via `ctx.idx_env` and recurse into its value (a full-rank
-# producer, or a scalar value used directly). For a non-contracting `aggregate`,
+# producer, or a scalar value used directly). For a non-contracting `faq`,
 # bind its output indices to `kargs` and stencilize the body. Contraction /
 # joins / filters / reduced-rank region values are NOT modelled — fall back.
 function _stencilize_indexed(producer::OpExpr, kargs::Vector{ASTExpr}, ctx::_StencilCtx)
@@ -808,7 +808,7 @@ function _stencilize_indexed(producer::OpExpr, kargs::Vector{ASTExpr}, ctx::_Ste
         end
         return _stencilize(sel, ctx)
     end
-    # aggregate / arrayop
+    # aggregate / faq
     (producer.join_gates === nothing && producer.filter === nothing) ||
         throw(_StencilFallback("index(aggregate) with join/filter"))
     oi_raw = producer.output_idx === nothing ? Any[] : producer.output_idx
@@ -821,7 +821,7 @@ function _stencilize_indexed(producer::OpExpr, kargs::Vector{ASTExpr}, ctx::_Ste
     cnames = _contracted_index_names(ranges, oi)
     if !isempty(cnames)
         # CONSTANT-bound contraction: unroll into the same ⊕-combined term list
-        # the per-cell reference builds (`_resolve_index_of_arrayop` →
+        # the per-cell reference builds (`_resolve_index_of_faq` →
         # `_foreach_aggregate_term` + `_combine_with_reducer`), so the fold
         # SHAPE, term order, and reducer chaining are byte-identical — the box
         # processor then lowers the unrolled body like any elementwise tree.
@@ -1012,7 +1012,7 @@ function _branch_key_indexed!(io::IOBuffer, producer::OpExpr, kargs::Vector{ASTE
         end
         return
     end
-    # aggregate / arrayop: recurse the body with the output indices bound in the
+    # aggregate / faq: recurse the body with the output indices bound in the
     # SAME env/idxset (restored on the way out) — never a per-cell `_sub_preserving`
     # (which would re-clone the whole stencil spine on every cell) and never a
     # per-cell `copy` of the env/idxset (which fed the build's GC). The body's own

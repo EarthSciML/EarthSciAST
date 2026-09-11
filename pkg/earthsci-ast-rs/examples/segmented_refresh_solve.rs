@@ -33,7 +33,7 @@
 //! # The model
 //!
 //! Two coupled components over a 3-cell index `i ∈ [1, 3]` (a discretized,
-//! COUPLED, non-PDE system — no spatial operator, just `arrayop` ODEs):
+//! COUPLED, non-PDE system — no spatial operator, just `faq` ODEs):
 //!
 //!   * `Box.c[i]`: `D(c[i]) = scale[i]·src[i]` — accumulates a loader-fed
 //!     source `src` (DISCRETE, refreshed hourly) scaled by a CONST factor field
@@ -77,7 +77,7 @@ const COUPLED_FORCED_JSON: &str = r#"
           "equations": [
             {
               "lhs": {
-                "op": "arrayop",
+                "op": "faq",
                 "args": [],
                 "output_idx": [
                   "i"
@@ -103,7 +103,7 @@ const COUPLED_FORCED_JSON: &str = r#"
                 }
               },
               "rhs": {
-                "op": "arrayop",
+                "op": "faq",
                 "args": [],
                 "output_idx": [
                   "i"
@@ -150,7 +150,7 @@ const COUPLED_FORCED_JSON: &str = r#"
           "equations": [
             {
               "lhs": {
-                "op": "arrayop",
+                "op": "faq",
                 "args": [],
                 "output_idx": [
                   "i"
@@ -176,7 +176,7 @@ const COUPLED_FORCED_JSON: &str = r#"
                 }
               },
               "rhs": {
-                "op": "arrayop",
+                "op": "faq",
                 "args": [],
                 "output_idx": [
                   "i"

@@ -29,7 +29,7 @@ With `a=9` → `3.0`. With `a=-1` → `0.0`.
 **Laziness is not guaranteed.** The scalar evaluators walk only the taken
 branch, so the example above is safe on a scalar. The **array evaluators are
 eager by construction**: they broadcast over lanes, and per-lane laziness would
-need masked evaluation. Inside an [`aggregate`](../aggregation/) both branches
+need masked evaluation. Inside an [`faq`](../aggregation/) both branches
 are evaluated, so `ifelse` will *not* protect `sqrt` from a negative input. This
 is a deliberate, documented divergence between the scalar and array paths —
 write the guard into the argument instead:
@@ -67,7 +67,7 @@ Pre(x)
 
 The nullary boolean literal. `args` must be empty. Its use is as an
 always-true predicate — the body of an index-set-producing
-[`aggregate`](../aggregation/), or a join gate that admits everything.
+[`faq`](../aggregation/), or a join gate that admits everything.
 
 **Text**
 ```text

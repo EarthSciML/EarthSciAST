@@ -13,11 +13,11 @@ using OrderedCollections: OrderedDict
 # What operator_compose does NOT do is array-ify the result: the merged
 # `D(sp) = <reaction> + <-u·makearray(grad(sp))>` still has a SCALAR `sp` while
 # its advection `makearray` indexes `sp` per grid cell. This step performs the
-# `lifting:"pointwise"` promotion — it reuses the same arrayop lowering a spatial
-# MODEL uses — by wrapping each such merged state ODE in an `aggregate` over the
+# `lifting:"pointwise"` promotion — it reuses the same faq lowering a spatial
+# MODEL uses — by wrapping each such merged state ODE in a `faq` over the
 # grid, indexing the bare reaction species per cell and each operator makearray
 # per cell, and giving the species a grid shape. The reaction network then runs
-# pointwise on the grid through the existing arrayop evaluator.
+# pointwise on the grid through the existing faq evaluator.
 
 # Collect every `makearray` OpExpr node reachable from `expr`.
 function _collect_makearrays!(acc::Vector{OpExpr}, expr::ASTExpr)
@@ -135,7 +135,7 @@ end
 # the spatial `loops`: a bare reference to an array variable becomes
 # `index(var, loops…)`, and each spatial-operator `makearray` becomes
 # `index(makearray, loops…)` (its region values already index per cell).
-# Self-contained nodes (index / aggregate / arrayop) are left untouched;
+# Self-contained nodes (index / aggregate / faq) are left untouched;
 # elementwise ops recurse. Expressed via the shared `_wrap_bare_array_refs`
 # rewrite (shape_promotion.jl); its typed twin with a different wrap/stop set
 # is `_index_array_leaves`. The stop set here deliberately omits `makearray` —
@@ -144,8 +144,7 @@ function _lift_rhs_to_cell(expr::ASTExpr, arrayvars::Set{String},
                            loops::Vector{String})::ASTExpr
     return _wrap_bare_array_refs(expr, arrayvars, loops;
         wrap_node = e -> e.op == "makearray",
-        stop_node = e -> e.op == "index" || e.op == "aggregate" ||
-                         e.op == "arrayop")
+        stop_node = e -> e.op == "index" || e.op == "faq")
 end
 
 """
@@ -154,8 +153,8 @@ end
 Pointwise spatial lift (§10.5) for `operator_compose` couplings that declare
 `lifting: "pointwise"`. Promotes every state ODE that `operator_compose` merged
 with a spatial operator (its merged RHS carries an operator `makearray`) from a
-0-D scalar to the operator's grid shape, and rewrites the equation into an
-`aggregate` over the grid. No-op when no coupling requests pointwise lifting, or
+0-D scalar to the operator's grid shape, and rewrites the equation into a
+`faq` over the grid. No-op when no coupling requests pointwise lifting, or
 no merged equation carries a spatial-operator makearray.
 """
 function _apply_pointwise_lift!(equations::Vector{Equation},
@@ -422,7 +421,7 @@ function _pointwise_lift_axes(ma::OpExpr, loops::Vector{String},
     return gaxes, ranges
 end
 
-# Rewrite the merged scalar state ODE into per-cell `aggregate`s over the grid:
+# Rewrite the merged scalar state ODE into per-cell `faq`s over the grid:
 # LHS `D(sp,t)` → `aggregate(D(index(sp, loops…), t))`, RHS per-cell via
 # `_lift_rhs_to_cell`.
 function _pointwise_lift_equation(eq::Equation, species::String,
@@ -432,10 +431,10 @@ function _pointwise_lift_equation(eq::Equation, species::String,
     oidx = Any[l for l in loops]
     idx_species = OpExpr("index", ASTExpr[VarExpr(species),
                          (VarExpr(l) for l in loops)...])
-    new_lhs = OpExpr("aggregate", ASTExpr[];
+    new_lhs = OpExpr("faq", ASTExpr[];
                      output_idx=oidx, ranges=ranges,
                      expr_body=OpExpr("D", ASTExpr[idx_species], wrt="t"))
-    new_rhs = OpExpr("aggregate", ASTExpr[];
+    new_rhs = OpExpr("faq", ASTExpr[];
                      output_idx=oidx, ranges=ranges,
                      expr_body=_lift_rhs_to_cell(eq.rhs, arrayvars, loops))
     return Equation(new_lhs, new_rhs; _comment=eq._comment)

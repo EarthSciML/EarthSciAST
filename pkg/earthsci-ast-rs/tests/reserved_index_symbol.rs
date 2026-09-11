@@ -1,4 +1,4 @@
-//! An `aggregate` binder that SHADOWS a globally-scoped name is rejected at
+//! A `faq` binder that SHADOWS a globally-scoped name is rejected at
 //! load — diagnostic `reserved_index_symbol`.
 //!
 //! `t` (the document's independent variable, esm-spec §11.3) and `_var` (the
@@ -128,7 +128,7 @@ fn doc_binding(sym: &str, independent: Option<&str>) -> Value {
                 "variables": { "total": { "type": "unknown" } },
                 "equations": [
                     { "lhs": "total",
-                      "rhs": { "op": "aggregate", "args": [], "semiring": "sum_product",
+                      "rhs": { "op": "faq", "args": [], "semiring": "sum_product",
                                "output_idx": [],
                                "ranges": { sym: { "from": "rows" } },
                                "expr": 1.0 } }

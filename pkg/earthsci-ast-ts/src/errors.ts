@@ -24,7 +24,7 @@ export const ERROR_CODES = {
   //      pinned as STRUCTURAL findings by tests/invalid/expected_errors.json.
   //      Values coordinated across all bindings (Julia/Rust/Python/Go/TS). ----
   //
-  // `join_key_invalid_type` — an `aggregate` value-equality `join` whose key
+  // `join_key_invalid_type` — a `faq` value-equality `join` whose key
   //   columns come from a categorical index set with a FLOAT or NULL member
   //   (floats aren't portably equality-comparable; null is unmatchable).
   //   RFC semiring-faq-unified-ir §5.3 / §5.7 rule 1.
@@ -87,11 +87,11 @@ export const ERROR_CODES = {
   //   quantity. Raised from flatten.ts as OperatorComposeAmbiguousBareNameError.
   OPERATOR_COMPOSE_AMBIGUOUS_BARE_NAME: 'operator_compose_ambiguous_bare_name',
   // `relational_node_in_continuous` — a relational / value-invention
-  //   `aggregate` (`distinct: true` under `bool_and_or`) whose `key`/`expr`
+  //   `faq` (`distinct: true` under `bool_and_or`) whose `key`/`expr`
   //   reads a declared STATE variable, so the cadence partition would class the
   //   node CONTINUOUS — forbidden on the hot path (CONFORMANCE_SPEC §5.7 guard 2).
   RELATIONAL_NODE_IN_CONTINUOUS: 'relational_node_in_continuous',
-  // `undefined_index_set` — an `aggregate` `ranges` entry `{ from: NAME }`
+  // `undefined_index_set` — a `faq` `ranges` entry `{ from: NAME }`
   //   naming an index set absent from the document `index_sets` registry
   //   (RFC semiring-faq-unified-ir §5.2; no implicit interval is inferred).
   UNDEFINED_INDEX_SET: 'undefined_index_set',
@@ -145,7 +145,7 @@ export const ERROR_CODES = {
   //   is consumed WHOLE — a `makearray` region value, or a `reshape` /
   //   `transpose` / `concat` / `broadcast` / `apply_expression_template` operand
   //   — so no cell-by-cell sweep can supply it; or the equation declares no cell
-  //   frame to sweep (its RHS is not an `aggregate` over the variable's axes and
+  //   frame to sweep (its RHS is not a `faq` over the variable's axes and
   //   its LHS is not the §4.3 indexed-aggregate form).
   //   The `makearray` case is worth naming separately because §4.3.2's overlap
   //   rule ("later entries overwrite earlier ones") reads like a licence to

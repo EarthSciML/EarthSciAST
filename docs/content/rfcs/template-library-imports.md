@@ -293,7 +293,7 @@ truth." Both halves of that sentence are wrong and the corrected rules are:*
     "central_D_lon_interior": {
       "params": ["f"],
       "body": {
-        "op": "aggregate", "output_idx": ["i", "j"], "args": ["f"],
+        "op": "faq", "output_idx": ["i", "j"], "args": ["f"],
         "ranges": { "i": [2, { "op": "-", "args": ["NLON", 1] }], "j": { "from": "lat" } },
         "expr": { "op": "/", "args": [
           { "op": "-", "args": [
@@ -328,13 +328,13 @@ truth." Both halves of that sentence are wrong and the corrected rules are:*
         "values": [
           { "op": "apply_expression_template", "args": [],
             "name": "central_D_lon_interior", "bindings": { "f": "f" } },
-          { "op": "aggregate", "output_idx": ["j"], "args": ["f"],
+          { "op": "faq", "output_idx": ["j"], "args": ["f"],
             "ranges": { "j": { "from": "lat" } },
             "expr": { "op": "/", "args": [
               { "op": "-", "args": [ { "op": "index", "args": ["f", 2, "j"] },
                                      { "op": "index", "args": ["f", 1, "j"] } ] },
               { "op": "apply_expression_template", "args": [], "name": "dlon_deg", "bindings": {} } ] } },
-          { "op": "aggregate", "output_idx": ["j"], "args": ["f"],
+          { "op": "faq", "output_idx": ["j"], "args": ["f"],
             "ranges": { "j": { "from": "lat" } },
             "expr": { "op": "/", "args": [
               { "op": "-", "args": [ { "op": "index", "args": ["f", "NLON", "j"] },

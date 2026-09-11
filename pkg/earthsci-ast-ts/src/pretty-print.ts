@@ -1565,7 +1565,7 @@ function formatBound(value: unknown, format: TextFormat): string {
   return String(value)
 }
 
-/** Big-operator symbol for an `aggregate` reduction (semiring supersedes reduce). */
+/** Big-operator symbol for a `faq` reduction (semiring supersedes reduce). */
 function aggregateSymbol(semiring: string | undefined, reduce: string, format: TextFormat): string {
   let fam: 'plus' | 'times' | 'max' | 'min' | 'bool'
   if (semiring) {
@@ -1614,7 +1614,7 @@ function formatRangesClause(ranges: Record<string, unknown>, format: TextFormat)
   return ` where {${parts.join(', ')}}`
 }
 
-/** Render an `aggregate` node per the rendering contract. */
+/** Render a `faq` node per the rendering contract. */
 function formatAggregate(node: ExprNode, format: TextFormat): string {
   const n = structuralView(node)
   const r = (e: Expr) => renderExpr(e, format)
@@ -1793,7 +1793,7 @@ function formatStructuralOp(node: ExprNode, format: TextFormat): string | undefi
       return `${name}(${inner}, manifold=${String(n.manifold ?? '')}${idPart})`
     }
 
-    case 'aggregate':
+    case 'faq':
       return formatAggregate(node, format)
 
     case 'argmin':

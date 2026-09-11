@@ -19,7 +19,7 @@ over — with ``valid=True``, ``success=True`` and zero warnings. Whether the
 mistake was even visible depended on arithmetic luck: a mismatched element count
 raised, a matching one corrupted. The equal-rank case silently TRANSPOSED.
 
-The oracle throughout is the explicit ``aggregate`` spelling with written-out
+The oracle throughout is the explicit ``faq`` spelling with written-out
 indices, which was already correct and is not changed by any of this. Every
 Bug-2 test below asserts the bare array-level form equals its aggregate form
 exactly.
@@ -261,7 +261,7 @@ def test_missing_broadcast_fn_is_a_validation_error() -> None:
     assert any("fn" in e for e in _errors(doc))
 
 
-@pytest.mark.parametrize("fn", ["aggregate", "index", "makearray", "reshape", "concat"])
+@pytest.mark.parametrize("fn", ["faq", "index", "makearray", "reshape", "concat"])
 def test_non_scalar_broadcast_fn_is_a_validation_error(fn: str) -> None:
     """``fn`` must name a SCALAR operator (esm-spec §4.3.4).
 
@@ -422,7 +422,7 @@ def _bare_eq(rhs):
 def _agg_eq(expr):
     """The ORACLE spelling: an explicit per-cell aggregate over ``[i, j, k]``."""
     frame = {
-        "op": "aggregate",
+        "op": "faq",
         "args": [],
         "output_idx": ["i", "j", "k"],
         "ranges": {"i": {"from": "lon"}, "j": {"from": "lat"}, "k": {"from": "lev"}},
@@ -538,7 +538,7 @@ def test_equal_rank_name_permuted_operand_transposes_not_reinterprets() -> None:
     oracle_eq = [
         {
             "lhs": {
-                "op": "aggregate",
+                "op": "faq",
                 "args": [],
                 "output_idx": ["i", "j"],
                 "ranges": {"i": {"from": "lon"}, "j": {"from": "lat"}},
@@ -549,7 +549,7 @@ def test_equal_rank_name_permuted_operand_transposes_not_reinterprets() -> None:
                 },
             },
             "rhs": {
-                "op": "aggregate",
+                "op": "faq",
                 "args": [],
                 "output_idx": ["i", "j"],
                 "ranges": {"i": {"from": "lon"}, "j": {"from": "lat"}},
@@ -714,7 +714,7 @@ def test_alignable_operands_do_not_trigger_the_error() -> None:
 def test_an_index_use_of_a_foreign_index_set_is_not_flagged() -> None:
     """``index(z1, k)`` inside an aggregate is NOT an array-level operand.
 
-    The walk must stop at ``index``/``aggregate``: those name their own axes
+    The walk must stop at ``index``/``faq``: those name their own axes
     explicitly, so a ``[lev]`` field read there is correct, not misaligned. A
     check that flagged it would break every correct aggregate in the corpus.
     """

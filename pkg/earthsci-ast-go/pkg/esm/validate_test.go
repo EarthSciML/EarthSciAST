@@ -713,7 +713,7 @@ func TestValidateFileValidModel(t *testing.T) {
 
 // TestUndefinedVariableInAggregateBodyFlagged pins that a reference-checking walk
 // descends the non-`args` child fields of an operator node. An undefined variable
-// hidden in an `aggregate` `expr` body (a field the historical args-only walker
+// hidden in a `faq` `expr` body (a field the historical args-only walker
 // never visited, so the document was silently accepted) is now reported as an
 // ErrorUndefinedVariable at the aggregate's `/expr` sub-path.
 func TestUndefinedVariableInAggregateBodyFlagged(t *testing.T) {
@@ -734,7 +734,7 @@ func TestUndefinedVariableInAggregateBodyFlagged(t *testing.T) {
 						// aggregate contracts over loop index `i` (bound via
 						// ranges) but its body references an undeclared variable.
 						RHS: ExprNode{
-							Op:        "aggregate",
+							Op:        "faq",
 							Args:      []any{},
 							OutputIdx: []any{},
 							Ranges:    map[string]any{"i": map[string]any{"from": "cells"}},
@@ -760,7 +760,7 @@ func TestUndefinedVariableInAggregateBodyFlagged(t *testing.T) {
 	// The reference is inside the aggregate body (`expr` sidecar), but the pointer
 	// names the containing expression FIELD, not the leaf position: §7.1.2 carries
 	// a reference-integrity defect at the equation `rhs`, and the shared corpus
-	// (undefined_variable_in_aggregate_expr.esm) and TypeScript pin `/rhs`.
+	// (undefined_variable_in_faq_expr.esm) and TypeScript pin `/rhs`.
 	assert.Equal(t, "/models/AggBody/equations/0/rhs", found.Path,
 		"reference-integrity finding must point at the rhs field, not the aggregate-body leaf")
 	assert.False(t, result.Valid)
@@ -788,7 +788,7 @@ func TestBoundLoopIndexInAggregateNotFlagged(t *testing.T) {
 					{
 						LHS: ExprNode{Op: "D", Args: []any{"total"}, Wrt: strPtr("t")},
 						RHS: ExprNode{
-							Op:        "aggregate",
+							Op:        "faq",
 							Args:      []any{},
 							OutputIdx: []any{},
 							Ranges:    map[string]any{"i": map[string]any{"from": "cells"}},

@@ -1,7 +1,7 @@
 # Tests for the semiring-parameterized FAQ evaluator changes (ess-my4.1.2):
 #   (a) semiring parameterization of _combine_with_reducer / _NK_CONTRACTION,
 #       with the §5.1 normative empty-reduction identities (0̄);
-#   (b) op:aggregate accepted identically to op:arrayop (§5.6);
+#   (b) op:aggregate accepted identically to op:faq (§5.6);
 #   (c) ranges[*] {from, of} resolved against the document index_sets registry —
 #       interval / categorical / ragged — with a clear error on an undeclared
 #       name (§5.2);
@@ -71,7 +71,7 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
                                ("max_product", -Inf), ("max_sum", -Inf))
             vars = Dict("z" => ModelVariable(UnknownVariable))
             # D(z) = aggregate_{k ∈ [1,0]} 1   (empty range ⇒ 0̄)
-            rhs = OpExpr("aggregate", ESM.ASTExpr[];
+            rhs = OpExpr("faq", ESM.ASTExpr[];
                 output_idx=Any[], semiring=sr, expr_body=_n(1.0),
                 ranges=Dict("k" => Any[1, 0]))
             model = ESM.Model(vars, [ESM.Equation(_op("D", _v("z"); wrt="t"), rhs)])
@@ -89,10 +89,10 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
         vars = Dict("x" => ModelVariable(UnknownVariable),
                     "z" => ModelVariable(UnknownVariable),
                     "w" => ModelVariable(UnknownVariable))
-        agg_min = OpExpr("aggregate", ESM.ASTExpr[];
+        agg_min = OpExpr("faq", ESM.ASTExpr[];
             output_idx=Any[], semiring="min_sum",
             expr_body=_idx("x", _v("j")), ranges=Dict("j" => Any[1, 5]))
-        agg_max = OpExpr("aggregate", ESM.ASTExpr[];
+        agg_max = OpExpr("faq", ESM.ASTExpr[];
             output_idx=Any[], semiring="max_product",
             expr_body=_idx("x", _v("j")), ranges=Dict("j" => Any[1, 5]))
         eqs = [ESM.Equation(_op("D", _v("z"); wrt="t"), agg_min),
@@ -106,9 +106,9 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
     end
 
     # ------------------------------------------------------------------
-    # (b) op:aggregate is dispatched identically to op:arrayop (§5.6).
+    # (b) op:aggregate is dispatched identically to op:faq (§5.6).
     # ------------------------------------------------------------------
-    @testset "(b) aggregate alias ≡ arrayop" begin
+    @testset "(b) aggregate alias ≡ faq" begin
         N = 4
         vars = Dict("u" => ModelVariable(UnknownVariable))
         ics = Dict("u[$i]" => Float64(i) for i in 1:N)
@@ -117,8 +117,8 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
                    expr_body=_D_idx("u", _v("i")), ranges=Dict("i" => Any[1, N])),
             OpExpr(tag, ESM.ASTExpr[]; output_idx=Any["i"], reduce="+",
                    expr_body=_op("-", _idx("u", _v("i"))), ranges=Dict("i" => Any[1, N])))])
-        fa!, ua, pa, _, va = build_evaluator(mk("arrayop");   initial_conditions=ics)
-        fb!, ub, pb, _, vb = build_evaluator(mk("aggregate"); initial_conditions=ics)
+        fa!, ua, pa, _, va = build_evaluator(mk("faq");   initial_conditions=ics)
+        fb!, ub, pb, _, vb = build_evaluator(mk("faq"); initial_conditions=ics)
         dua = similar(ua); fa!(dua, ua, pa, 0.0)
         dub = similar(ub); fb!(dub, ub, pb, 0.0)
         @test va == vb
@@ -139,15 +139,15 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
         eqs = [
             # D(u[i]) = -u[i]  for i ∈ cells
             ESM.Equation(
-                OpExpr("aggregate", ESM.ASTExpr[]; output_idx=Any["i"],
+                OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i"],
                        expr_body=_D_idx("u", _v("i")),
                        ranges=Dict("i" => ESM.IndexSetRef("cells"))),
-                OpExpr("aggregate", ESM.ASTExpr[]; output_idx=Any["i"], semiring="sum_product",
+                OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i"], semiring="sum_product",
                        expr_body=_op("-", _idx("u", _v("i"))),
                        ranges=Dict("i" => ESM.IndexSetRef("cells")))),
             # D(total) = Σ_{i ∈ cells} u[i]
             ESM.Equation(_op("D", _v("total"); wrt="t"),
-                OpExpr("aggregate", ESM.ASTExpr[]; output_idx=Any[], semiring="sum_product",
+                OpExpr("faq", ESM.ASTExpr[]; output_idx=Any[], semiring="sum_product",
                        expr_body=_idx("u", _v("i")),
                        ranges=Dict("i" => ESM.IndexSetRef("cells")))),
         ]
@@ -172,7 +172,7 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
             ESM.IndexSet("categorical"; members=["Champaign", "Cook", "Sangamon"]))
         # D(total) = Σ_{c ∈ county} pop[c]   (pop is a categorical-keyed table)
         eq = ESM.Equation(_op("D", _v("total"); wrt="t"),
-            OpExpr("aggregate", ESM.ASTExpr[]; output_idx=Any[], semiring="sum_product",
+            OpExpr("faq", ESM.ASTExpr[]; output_idx=Any[], semiring="sum_product",
                    expr_body=_idx("pop", _v("c")),
                    ranges=Dict("c" => ESM.IndexSetRef("county"))))
         model = ESM.Model(vars, [eq])
@@ -199,17 +199,17 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
         body = _op("*", _op("index", _v("coeff"), _c, _k),
                    _op("-", _op("index", _v("u"), _op("index", _v("cells_on_cell"), _c, _k)),
                             _idx("u", _c)))
-        lhs = OpExpr("aggregate", ESM.ASTExpr[]; output_idx=Any["c"],
+        lhs = OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["c"],
                      expr_body=_D_idx("u", _c), ranges=Dict("c" => Any[1, N_c]))
         # Registry form: k ∈ {from: edges_of_cell, of: [c]}.
         index_sets = Dict("edges_of_cell" => ESM.IndexSet("ragged";
             of=["cells"], offsets="n_edges_on_cell", values="cells_on_cell"))
-        rhs_reg = OpExpr("aggregate", ESM.ASTExpr[]; output_idx=Any["c"], reduce="+",
+        rhs_reg = OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["c"], reduce="+",
             ranges=Dict("c" => Any[1, N_c], "k" => ESM.IndexSetRef("edges_of_cell"; of=["c"])),
             expr_body=body)
         model_reg = ESM.Model(vars, [ESM.Equation(lhs, rhs_reg)])
         # Explicit form: k ∈ [1, index(n_edges_on_cell, c)].
-        rhs_exp = OpExpr("aggregate", ESM.ASTExpr[]; output_idx=Any["c"], reduce="+",
+        rhs_exp = OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["c"], reduce="+",
             ranges=Dict("c" => Any[1, N_c],
                         "k" => Any[1, _op("index", _v("n_edges_on_cell"), _c)]),
             expr_body=body)
@@ -237,7 +237,7 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
         vars = Dict("u" => ModelVariable(UnknownVariable),
                     "total" => ModelVariable(UnknownVariable))
         eq = ESM.Equation(_op("D", _v("total"); wrt="t"),
-            OpExpr("aggregate", ESM.ASTExpr[]; output_idx=Any[], semiring="sum_product",
+            OpExpr("faq", ESM.ASTExpr[]; output_idx=Any[], semiring="sum_product",
                    expr_body=_idx("u", _v("i")),
                    ranges=Dict("i" => ESM.IndexSetRef("not_declared"))))
         # No registry at all.
@@ -258,15 +258,15 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
     # Round-trip: semiring / index_sets / {from} ranges survive parse↔serialize.
     # ------------------------------------------------------------------
     @testset "round-trip semiring + index_sets + {from} ranges" begin
-        agg = OpExpr("aggregate", ESM.ASTExpr[]; output_idx=Any[], semiring="min_sum",
+        agg = OpExpr("faq", ESM.ASTExpr[]; output_idx=Any[], semiring="min_sum",
                      expr_body=_idx("u", _v("i")),
                      ranges=Dict("i" => ESM.IndexSetRef("cells"; of=String[])))
         j = ESM.serialize_expression(agg)
-        @test j["op"] == "aggregate"
+        @test j["op"] == "faq"
         @test j["semiring"] == "min_sum"
         @test j["ranges"]["i"]["from"] == "cells"
         rt = ESM.expression_from_json(j)
-        @test rt.op == "aggregate"
+        @test rt.op == "faq"
         @test rt.semiring == "min_sum"
         @test rt.ranges["i"] isa ESM.IndexSetRef
         @test rt.ranges["i"].from == "cells"
@@ -283,9 +283,9 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
     # ------------------------------------------------------------------
     # Integration: the shared conformance fixture loads, parses, and evaluates.
     # ------------------------------------------------------------------
-    @testset "valid fixture aggregate_semiring_indexset.esm evaluates" begin
-        path = joinpath(_SR_REPO_ROOT, "tests", "valid", "aggregate",
-                        "aggregate_semiring_indexset.esm")
+    @testset "valid fixture faq_semiring_indexset.esm evaluates" begin
+        path = joinpath(_SR_REPO_ROOT, "tests", "valid", "faq",
+                        "faq_semiring_indexset.esm")
         if isfile(path)
             file = EarthSciAST.load_path(path)
             ics = Dict("u[$i]" => Float64(i) for i in 1:5)

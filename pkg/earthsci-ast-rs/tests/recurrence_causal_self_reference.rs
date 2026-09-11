@@ -246,7 +246,7 @@ fn doc_with_body(body: Value) -> String {
         "tolerance": { "rel": 0.0, "abs": 0.0 },
         "variables": { "s": { "type": "unknown", "shape": ["steps"], "units": "1" } },
         "equations": [ { "lhs": "s", "rhs": {
-          "op": "aggregate", "args": [], "output_idx": ["k"],
+          "op": "faq", "args": [], "output_idx": ["k"],
           "ranges": { "k": { "from": "steps" } }, "expr": body } } ],
         "tests": [ { "id": "probe", "description": "probe",
           "time_span": { "start": 0.0, "end": 0.0 },
@@ -366,7 +366,7 @@ fn two_unprovable_lags_are_still_two_axes() {
           "m": { "type": "unknown", "shape": ["rows", "cols"], "units": "1" }
         },
         "equations": [ { "lhs": "m", "rhs": {
-          "op": "aggregate", "args": [], "output_idx": ["i", "j"],
+          "op": "faq", "args": [], "output_idx": ["i", "j"],
           "ranges": { "i": { "from": "rows" }, "j": { "from": "cols" } },
           "expr": { "op": "index", "args": ["m",
                       { "op": "-", "args": ["i", "n"] },
@@ -394,7 +394,7 @@ fn self_read_offset_on_two_axes_is_rejected() {
         "tolerance": { "rel": 0.0, "abs": 0.0 },
         "variables": { "m": { "type": "unknown", "shape": ["rows", "cols"], "units": "1" } },
         "equations": [ { "lhs": "m", "rhs": {
-          "op": "aggregate", "args": [], "output_idx": ["i", "j"],
+          "op": "faq", "args": [], "output_idx": ["i", "j"],
           "ranges": { "i": { "from": "rows" }, "j": { "from": "cols" } },
           "expr": { "op": "index", "args": ["m",
                       { "op": "-", "args": ["i", 1] },
@@ -435,7 +435,7 @@ fn makearray_region_self_read_is_refused_as_unsupported_form() {
           "op": "makearray", "args": [],
           "regions": [ [[1, 1]], [[2, 4]] ],
           "values": [ 1.0, {
-            "op": "aggregate", "args": [], "output_idx": ["k"],
+            "op": "faq", "args": [], "output_idx": ["k"],
             "ranges": { "k": [2, 4] },
             "expr": { "op": "*", "args": [
               { "op": "index", "args": ["s", { "op": "-", "args": ["k", 1] }] }, 2.0 ] } } ] } } ],
@@ -595,7 +595,7 @@ fn structural_validator_rejects_a_makearray_region_self_read() {
           "op": "makearray", "args": [],
           "regions": [ [[1, 1]], [[2, 4]] ],
           "values": [ 1.0, {
-            "op": "aggregate", "args": [], "output_idx": ["k"],
+            "op": "faq", "args": [], "output_idx": ["k"],
             "ranges": { "k": [2, 4] },
             "expr": { "op": "index", "args": ["s", { "op": "-", "args": ["k", 1] }] } } ] } } ]
       } }
@@ -660,10 +660,10 @@ fn a_two_variable_cycle_is_not_a_recurrence_and_still_produces_nothing() {
           "b": { "type": "unknown", "shape": ["steps"], "units": "1" }
         },
         "equations": [
-          { "lhs": "a", "rhs": { "op": "aggregate", "args": [], "output_idx": ["k"],
+          { "lhs": "a", "rhs": { "op": "faq", "args": [], "output_idx": ["k"],
             "ranges": { "k": { "from": "steps" } },
             "expr": { "op": "index", "args": ["b", "k"] } } },
-          { "lhs": "b", "rhs": { "op": "aggregate", "args": [], "output_idx": ["k"],
+          { "lhs": "b", "rhs": { "op": "faq", "args": [], "output_idx": ["k"],
             "ranges": { "k": { "from": "steps" } },
             "expr": { "op": "index", "args": ["a", "k"] } } }
         ],

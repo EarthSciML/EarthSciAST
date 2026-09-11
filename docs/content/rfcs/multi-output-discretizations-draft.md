@@ -49,11 +49,11 @@ resolution** (recommended; resolution of former open question 2 — see
 §4.2). A new scheme `kind: "multi_output_stencil"`. Two trigger paths:
 
 1. **Consumed directly** — a `use:` rule matches an expression
-   occurrence; the engine emits one observed arrayop equation per named
+   occurrence; the engine emits one observed faq equation per named
    output into the enclosing model:
 
    ```jsonc
-   { "lhs": { "op": "arrayop", "output_idx": ["i"],
+   { "lhs": { "op": "faq", "output_idx": ["i"],
               "expr": { "op": "index", "args": ["q_left_edge", "i"] }, ... },
      "rhs": <expansion of stencil["q_left_edge"] at $target>,
      "observed": true, "emitted_by": "ppm_reconstruction" }
@@ -151,7 +151,7 @@ round-trip the block losslessly (same contract as §7.5
 
 1. **Staggered output extents.** A face-located output on a size-`n`
    periodic dimension has `n` faces, but `n+1` on a bounded one. The
-   arrayop `ranges` for emitted equations need the §7.4 staggering
+   faq `ranges` for emitted equations need the §7.4 staggering
    vocabulary to be answerable; this proposal should land after (or
    with) staggered-location enforcement. (A deliberately scoped v1 —
    periodic dimensions only, where face extent equals cell extent `n` —

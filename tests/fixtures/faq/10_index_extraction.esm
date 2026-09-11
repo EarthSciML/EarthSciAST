@@ -1,0 +1,53 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "faq_10_index_extraction",
+    "description": "Exercises the standalone `index` op on an array variable. u[1:5] follows D(u[i]) = -u[i] (analytical u_i(t) = i*exp(-t)) via an faq. A scalar state s is driven by D(s) = -index(u, 3) = -u[3], so s(t) = 3*(exp(-t) - 1). This verifies that `index` on an array-shaped state variable resolves to the correct scalar element when used in a scalar equation RHS outside of an faq body.",
+    "authors": ["EarthSciAST/polecats/brahmin"],
+    "tags": ["faq", "conformance", "index"]
+  },
+  "models": {
+    "IndexExtract": {
+      "variables": {
+        "u": { "type": "unknown" },
+        "s": { "type": "unknown" }
+      },
+      "equations": [
+        {
+          "_comment": "Array ODE: D(u[i]) = -u[i] for i in 1..5.",
+          "lhs": {
+            "op": "faq", "args": [], "output_idx": ["i"],
+            "expr": { "op": "D", "args": [{ "op": "index", "args": ["u", "i"] }], "wrt": "t" },
+            "ranges": { "i": [1, 5] }
+          },
+          "rhs": {
+            "op": "faq", "args": [], "output_idx": ["i"],
+            "expr": { "op": "-", "args": [{ "op": "index", "args": ["u", "i"] }] },
+            "ranges": { "i": [1, 5] }
+          }
+        },
+        {
+          "_comment": "Scalar ODE: D(s) = -index(u, 3). Analytically s(t) = 3*(exp(-t) - 1).",
+          "lhs": { "op": "D", "args": ["s"], "wrt": "t" },
+          "rhs": { "op": "-", "args": [{ "op": "index", "args": ["u", 3] }] }
+        }
+      ],
+      "tolerance": { "rel": 1.0e-6 },
+      "tests": [
+        {
+          "id": "index_then_integrate",
+          "description": "u[3](1) = 3*exp(-1) ≈ 1.103638323514327; s(1) = 3*(exp(-1) - 1) ≈ -1.8963616760078034.",
+          "initial_conditions": {
+            "u[1]": 1.0, "u[2]": 2.0, "u[3]": 3.0, "u[4]": 4.0, "u[5]": 5.0,
+            "s": 0.0
+          },
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "assertions": [
+            { "variable": "u[3]", "time": 1.0, "expected": 1.103638323514327 },
+            { "variable": "s",    "time": 1.0, "expected": -1.8963616764856731 }
+          ]
+        }
+      ]
+    }
+  }
+}

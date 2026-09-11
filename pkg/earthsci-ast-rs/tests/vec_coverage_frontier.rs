@@ -48,7 +48,7 @@ fn sample_state(n: usize) -> Vec<f64> {
 /// these fixtures *only* because each one puts its stencil in a compiled `D(…)`
 /// rule, which is one of the two call sites that flag gates. It is NOT a valid
 /// oracle for a model whose stencils live in observeds — those reach the
-/// overlay through `eval_arrayop`, which the flag does not touch; use
+/// overlay through `eval_faq`, which the flag does not touch; use
 /// `ESS_VEC_DISABLE=1` for that. Keep new fixtures in this file rule-shaped so
 /// the cheap in-process oracle stays sound.
 fn check(name: &str, json: &str, expect_vectorized: bool) {
@@ -125,10 +125,10 @@ fn rule_model(n: usize, rhs_expr: &str) -> String {
    "variables": {{"u": {{"type": "unknown", "shape": ["i"]}}}},
    "equations": [
     {{
-     "lhs": {{"op": "aggregate", "args": [], "output_idx": ["i"],
+     "lhs": {{"op": "faq", "args": [], "output_idx": ["i"],
              "expr": {{"op": "D", "args": [{{"op": "index", "args": ["u", "i"]}}], "wrt": "t"}},
              "ranges": {{"i": [1, {n}]}}}},
-     "rhs": {{"op": "aggregate", "args": [], "output_idx": ["i"],
+     "rhs": {{"op": "faq", "args": [], "output_idx": ["i"],
              "ranges": {{"i": [1, {n}]}},
              "expr": {rhs_expr}}}
     }}
@@ -193,7 +193,7 @@ fn covered_makearray_region_dispatch() {
     check("makearray regions", &rule_model(6, rhs), true);
 }
 
-/// A nested `aggregate` whose own `output_idx` SHADOWS the enclosing output
+/// A nested `faq` whose own `output_idx` SHADOWS the enclosing output
 /// symbol (issue #98).
 ///
 /// `index(aggregate[i](u[i+1] − u[i]), i)` inside `aggregate[i](…)` is what a
@@ -211,7 +211,7 @@ fn covered_makearray_region_dispatch() {
 #[test]
 fn covered_nested_aggregate_shadowing_enclosing_index() {
     let rhs = r#"{"op": "index", "args": [
-        {"op": "aggregate", "args": [], "output_idx": ["i"],
+        {"op": "faq", "args": [], "output_idx": ["i"],
          "ranges": {"i": [1, 6]},
          "expr": {"op": "-", "args": [
             {"op": "index", "args": ["u", {"op": "+", "args": ["i", 1]}]},
@@ -241,7 +241,7 @@ fn covered_nested_aggregate_shadowing_enclosing_index() {
 #[test]
 fn frontier_nested_aggregate_capturing_enclosing_index_falls_back() {
     let rhs = r#"{"op": "index", "args": [
-        {"op": "aggregate", "args": [], "output_idx": ["j"],
+        {"op": "faq", "args": [], "output_idx": ["j"],
          "ranges": {"j": [1, 6]},
          "expr": {"op": "*", "args": [{"op": "index", "args": ["u", "j"]}, "i"]}},
         "i"]}"#;
@@ -317,7 +317,7 @@ fn frontier_indirect_gather_falls_back() {
               "equations": [
                 {
                   "lhs": {
-                    "op": "aggregate",
+                    "op": "faq",
                     "args": [],
                     "output_idx": [
                       "i"
@@ -343,7 +343,7 @@ fn frontier_indirect_gather_falls_back() {
                     }
                   },
                   "rhs": {
-                    "op": "aggregate",
+                    "op": "faq",
                     "args": [],
                     "output_idx": [
                       "i"
@@ -372,7 +372,7 @@ fn frontier_indirect_gather_falls_back() {
                 {
                   "lhs": "nbr",
                   "rhs": {
-                    "op": "aggregate",
+                    "op": "faq",
                     "args": [],
                     "output_idx": [
                       "i"
@@ -433,7 +433,7 @@ fn frontier_array_valued_const_falls_back() {
 // `eval_vec_contracted` bails on the `ContractDim::Ragged` arm. It has no
 // rule-shaped minimal form: a ragged set needs an `index_sets` declaration plus
 // the offsets/values keyed factors, which only exist on an observed, and an
-// observed reaches the overlay through `eval_arrayop`, where `force_scalar` —
+// observed reaches the overlay through `eval_faq`, where `force_scalar` —
 // the oracle this file's `check` uses — has no effect. Pinning it here would
 // mean either an invalid fixture that silently no-ops or an unsound oracle.
 //

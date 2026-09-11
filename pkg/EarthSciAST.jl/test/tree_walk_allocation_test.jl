@@ -55,12 +55,12 @@ function _contraction_model(M)
     vars = Dict("y" => ModelVariable(UnknownVariable),
                 "x" => ModelVariable(UnknownVariable))
     body = _op("*", _idx("A", _v("i"), _v("k")), _idx("x", _v("k")))
-    rhs = OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i"], expr_body=body,
+    rhs = OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i"], expr_body=body,
                  ranges=Dict("i" => [1, 2], "k" => [1, M]), reduce="+")
     ESM.Model(vars, [ESM.Equation(_ao1(_Didx("y", _v("i")), "i", 1, 2), rhs)])
 end
 
-# 1-D periodic centered-advection document: discretizes to an arrayop whose RHS
+# 1-D periodic centered-advection document: discretizes to a faq whose RHS
 # is (u[i+1]-u[i-1])/(2·dx) — exercises PARAM (dx) + the `/` and `-` OP arms in a
 # REALISTIC parse→discretize→build_evaluator pipeline.
 function _advection_esm(n)
@@ -95,7 +95,7 @@ end
 
 
 # Closed-function (`interp.*`) leaves on the array RHS (ess-wrh). Each is a single
-# arrayop `D(u[i]) = interp.<op>(<const table/axis>, …, u[i])` — the const table &
+# faq `D(u[i]) = interp.<op>(<const table/axis>, …, u[i])` — the const table &
 # axis ride on the fn payload (lowered to a typed `_Interp*Spec` at build time);
 # the per-cell query `u[i]` merges to a GATHER. These exercise the de-boxed
 # whole-array interp path (`_eval_acc_op`'s `:fn` arm): the only Float64 arrays are the
@@ -139,7 +139,7 @@ _forcing_gather_model(N) = ESM.Model(
     [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
                   _ao1(_op("+", _idx("forcing", _v("i")), _idx("u", _v("i"))), "i", 1, N))])
 
-# Scalar (non-arrayop) `interp.*` observeds on the RHS (perf-interp-alloc). Each
+# Scalar (non-faq) `interp.*` observeds on the RHS (perf-interp-alloc). Each
 # is a plain scalar equation `D(z) = interp.<op>(<const table/axis>, …, <state>)`,
 # so the RHS compiles to a scalar `_Node` tree walked by `_eval_node_op`'s `:fn`
 # arm — the FastJX-box hot path. The const table/axis are validated + coerced to

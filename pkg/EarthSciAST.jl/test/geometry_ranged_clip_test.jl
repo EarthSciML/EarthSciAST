@@ -4,7 +4,7 @@
 # array const operands. This exercises the M4+ extension: intersect_polygon RANGED
 # over the src × tgt candidate pairs, so the overlap-area matrix A_ij is computed
 # DECLARATIVELY — `A_ij = polygon_area(intersect_polygon(src_i, tgt_j))` over all
-# pairs, the shoelace `aggregate` FAQ — with NO host-supplied A_ij/dst_areas. The
+# pairs, the shoelace `faq` FAQ — with NO host-supplied A_ij/dst_areas. The
 # whole geometry chain (clip → A_ij → A_j → F_tgt apply) is build-once at setup
 # from the const polygon inputs, then `build_evaluator` integrates the apply.
 #
@@ -21,11 +21,11 @@ const _ESS = EarthSciAST
 # ---- compact AST builders ----
 _ix(args...) = Dict{String,Any}("op" => "index", "args" => collect(Any, args))
 _agg(lv, set, body) = Dict{String,Any}(
-    "op" => "aggregate", "semiring" => "sum_product", "output_idx" => Any[],
+    "op" => "faq", "semiring" => "sum_product", "output_idx" => Any[],
     "ranges" => Dict{String,Any}(lv => Dict{String,Any}("from" => set)),
     "args" => Any[], "expr" => body)
 _arrop(oidx, ranges, body) = Dict{String,Any}(
-    "op" => "arrayop", "output_idx" => collect(Any, oidx),
+    "op" => "faq", "output_idx" => collect(Any, oidx),
     "ranges" => Dict{String,Any}(k => Dict{String,Any}("from" => v) for (k, v) in ranges),
     "args" => Any[], "expr" => body)
 _D(s, rhs) = Dict{String,Any}(
@@ -116,21 +116,21 @@ end
 end
 
 # ---------------------------------------------------------------------------
-# ON-DISK / SCHEMA-VALID form: the array-producing FAQ op is `aggregate` with a
-# non-empty `output_idx`, NOT the internal `arrayop` alias `shape_promotion.jl`
-# emits (schema v0.8.0 dropped `arrayop` from the op enum — see
+# ON-DISK / SCHEMA-VALID form: the array-producing FAQ op is `faq` with a
+# non-empty `output_idx`, NOT the internal `faq` alias `shape_promotion.jl`
+# emits (schema v0.8.0 dropped `faq` from the op enum — see
 # tests/valid/geometry/conservative_regrid_overlap_join.esm, where `clip` is an
-# `aggregate` node with output_idx [i,j,w,c] wrapping intersect_polygon). This is
+# `faq` node with output_idx [i,j,w,c] wrapping intersect_polygon). This is
 # the byte-identical 2×2 regrid of the first testset with every array-producing
-# node authored as `aggregate`, proving the ranged (fixed-extent) intersect_polygon
+# node authored as `faq`, proving the ranged (fixed-extent) intersect_polygon
 # clip is materialized through the SAME `_materialize_ranged_clip` path — i.e. the
-# setup dispatch recognizes the on-disk `aggregate` clip, not only `arrayop`.
+# setup dispatch recognizes the on-disk `faq` clip, not only `faq`.
 # ---------------------------------------------------------------------------
 
-# Array-producing aggregate: `aggregate` op with a non-empty `output_idx` (the
-# schema-valid on-disk spelling of the internal `arrayop`).
+# Array-producing aggregate: `faq` op with a non-empty `output_idx` (the
+# schema-valid on-disk spelling of the internal `faq`).
 _arrop_agg(oidx, ranges, body) = Dict{String,Any}(
-    "op" => "aggregate", "semiring" => "sum_product", "output_idx" => collect(Any, oidx),
+    "op" => "faq", "semiring" => "sum_product", "output_idx" => collect(Any, oidx),
     "ranges" => Dict{String,Any}(k => Dict{String,Any}("from" => v) for (k, v) in ranges),
     "args" => Any[], "expr" => body)
 
@@ -182,7 +182,7 @@ function _ranged_clip_regrid_esm_aggregate()
         "models" => Dict{String,Any}("RangedClipRegrid2x2Agg" => model))
 end
 
-@testset "Ranged intersect_polygon clip authored as on-disk `aggregate` (schema v0.8.0)" begin
+@testset "Ranged intersect_polygon clip authored as on-disk `faq` (schema v0.8.0)" begin
     esm = _ranged_clip_regrid_esm_aggregate()
 
     src_poly = zeros(2, 4, 2)
@@ -200,8 +200,8 @@ end
     du = similar(u0)
     f!(du, u0, p, 0.0)
 
-    # Identical results to the `arrayop`-authored chain — proves the on-disk
-    # `aggregate` ranged clip reaches the dense ranged-clip evaluator.
+    # Identical results to the `faq`-authored chain — proves the on-disk
+    # `faq` ranged clip reaches the dense ranged-clip evaluator.
     @test du[vmap["A11"]] ≈ 1.0 atol = 1e-12
     @test du[vmap["A12"]] ≈ 0.5 atol = 1e-12
     @test du[vmap["A21"]] ≈ 0.0 atol = 1e-12
@@ -220,7 +220,7 @@ end
 # ---------------------------------------------------------------------------
 
 _aggjf(lv, set, body, args) = Dict{String,Any}(
-    "op" => "aggregate", "semiring" => "sum_product", "output_idx" => Any[],
+    "op" => "faq", "semiring" => "sum_product", "output_idx" => Any[],
     "ranges" => Dict{String,Any}(lv => Dict{String,Any}("from" => set)),
     "join" => Any[Dict{String,Any}("on" => Any[Any["src_bin", "tgt_bin"]])],
     "filter" => Dict{String,Any}("op" => ">", "args" => Any[_ix("A_ij", "i", "j"), "atol"]),
@@ -325,7 +325,7 @@ function _constructed_live_regrid_esm()
     A_j  = _arrop(["j"], ["j" => "tgt_cells"], _agg("i", "src_cells", _ix("A_ij", "i", "j")))
     num  = _agg("i", "src_cells", _eq("*", _ix("A_ij", "i", "j"), _ix("F_src", "i")))
     rhs  = _arrop(["j"], ["j" => "tgt_cells"], _eq("/", num, _ix("A_j", "j")))
-    lhs  = Dict{String,Any}("op" => "aggregate", "output_idx" => Any["j"],
+    lhs  = Dict{String,Any}("op" => "faq", "output_idx" => Any["j"],
         "ranges" => Dict{String,Any}("j" => Dict{String,Any}("from" => "tgt_cells")),
         "expr" => Dict{String,Any}("op" => "D", "args" => Any[_ix("F_tgt", "j")], "wrt" => "t"))
     Pd(d) = Dict{String,Any}("type" => "parameter", "default" => d)
@@ -395,7 +395,7 @@ function _coupled_bridge_esm()
     F_tgt = _arrop(["j"], ["j" => "tgt_cells"], _eq("/", num, _ix("A_j", "j")))
     # consumer: D(u[j],t) = k * F_tgt[j] — a DIFFERENT state reads the regrid output
     cons_rhs = _arrop(["j"], ["j" => "tgt_cells"], _eq("*", "k", _ix("F_tgt", "j")))
-    cons_lhs = Dict{String,Any}("op" => "aggregate", "output_idx" => Any["j"],
+    cons_lhs = Dict{String,Any}("op" => "faq", "output_idx" => Any["j"],
         "ranges" => Dict{String,Any}("j" => Dict{String,Any}("from" => "tgt_cells")),
         "expr" => Dict{String,Any}("op" => "D", "args" => Any[_ix("u", "j")], "wrt" => "t"))
     Pd(d) = Dict{String,Any}("type" => "parameter", "default" => d)
@@ -446,7 +446,7 @@ end
 #   S_n[j]   = 1 + F_tgt[j]            (derived per-cell field — R_0·(1+φ) stand-in)
 #   D(u[j],t)= S_n[j]                  (the front RHS reads the derived field)
 # Both F_tgt and S_n are live-field array observeds; the chain S_n→F_tgt must
-# collapse transitively (the `_resolve_observed` fix that reads THROUGH arrayop
+# collapse transitively (the `_resolve_observed` fix that reads THROUGH faq
 # bodies), then `index(S_n, j)` nested-beta-reduces to the regrid kernel.
 #   F_src=[10,20,30,40] ⇒ F_tgt=[15,35] ⇒ S_n=[16,36] ⇒ du=[16,36].
 # ---------------------------------------------------------------------------

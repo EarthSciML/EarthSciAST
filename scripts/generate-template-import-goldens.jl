@@ -91,7 +91,7 @@ for (dir, fixture, golden) in [
     ("import_order_determinism", "fixture_import_order.esm", "expanded_import_order.esm"),
     ("import_order_determinism", "fixture_priority_override.esm", "expanded_priority_override.esm"),
     ("scalar_field_param", "fixture.esm", "expanded.esm"),
-    ("aggregate_int_ratio_golden", "fixture.esm", "expanded.esm"),
+    ("faq_int_ratio_golden", "fixture.esm", "expanded.esm"),
     ("import_rename_two_instances", "fixture.esm", "expanded.esm"),
     ("import_rename_integral_axis", "fixture.esm", "expanded.esm"),
     ("import_where_rename_two_instances", "fixture.esm", "expanded.esm"),

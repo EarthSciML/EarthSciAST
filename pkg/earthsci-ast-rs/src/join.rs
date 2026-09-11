@@ -1,5 +1,5 @@
-//! Build-time value-equality (`join.on`) resolution for `aggregate` /
-//! `arrayop` nodes — the M2 core of RFC `semiring-faq-unified-ir` §5.3, under
+//! Build-time value-equality (`join.on`) resolution for `faq` /
+//! `faq` nodes — the M2 core of RFC `semiring-faq-unified-ir` §5.3, under
 //! the cross-binding determinism contract of §5.7 / `CONFORMANCE_SPEC.md` §5.5.
 //!
 //! `join.on` adds combination of factors by **value equality of key columns**
@@ -34,7 +34,7 @@
 //! [`crate::relational`]; this module lowers a build-time `join.on` to a coded
 //! `filter` gate.)
 //!
-//! **Build-time, same artifact.** Like [`crate::aggregate::resolve_aggregate_ranges`],
+//! **Build-time, same artifact.** Like [`crate::faq::resolve_aggregate_ranges`],
 //! [`resolve_aggregate_joins`] runs once on an owned model — **before** range
 //! resolution, while each range still carries its `{ "from": <index set> }`
 //! linkage — and classifies every `[left, right]` key pair:
@@ -77,7 +77,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde_json::Value;
 
-use crate::aggregate::is_aggregate_op;
+use crate::faq::is_faq_op;
 use crate::compile_error::CompileError;
 use crate::types::{Expr, ExpressionNode, IndexSet, JoinClause, Model, RangeSpec, RegionBound};
 
@@ -238,7 +238,7 @@ fn next_gate_id() -> u64 {
 }
 
 /// Resolve every `join.on` clause in `model` (RFC §5.3), in place. Call once on
-/// an owned model **before** [`crate::aggregate::resolve_aggregate_ranges`], so
+/// an owned model **before** [`crate::faq::resolve_aggregate_ranges`], so
 /// each aggregate range still carries its `{ "from": <index set> }` linkage and
 /// the join key columns' member values can be read. Since v0.8.0 the
 /// `index_sets` registry is document-scoped (one registry shared by all
@@ -353,9 +353,9 @@ fn lower_node_joins(
     index_sets: &HashMap<String, IndexSet>,
     var_shapes: &HashMap<String, Vec<String>>,
 ) -> Result<(), CompileError> {
-    if !is_aggregate_op(&node.op) {
+    if !is_faq_op(&node.op) {
         return Err(CompileError::build_err(format!(
-            "`join` is only valid on an aggregate/arrayop node, but appears on op '{}' \
+            "`join` is only valid on an aggregate/faq node, but appears on op '{}' \
              (RFC semiring-faq-unified-ir §5.3)",
             node.op
         )));
@@ -777,7 +777,7 @@ fn raw_key_expr(s: &ResolvedSide) -> Result<Expr, CompileError> {
 /// their `{ "from": <index set> }` linkage intact) and the model's declared
 /// variable shapes — which is why it lives here rather than inside
 /// [`lower_node_joins`], and why it must run BEFORE
-/// [`crate::aggregate::resolve_aggregate_ranges`] erases the linkage.
+/// [`crate::faq::resolve_aggregate_ranges`] erases the linkage.
 ///
 /// Mirrors the Julia `_overlap_env_sym` (`tree_walk/semiring.jl`). Deliberately
 /// INFALLIBLE: a factor whose shape is unknown or not 1-D, or an index set no
@@ -1296,7 +1296,7 @@ mod tests {
             range_map.insert(r.to_string(), RangeSpec::Interval([1, 2]));
         }
         Expr::operator(ExpressionNode {
-            op: "aggregate".into(),
+            op: "faq".into(),
             ranges: Some(range_map),
             output_idx: Some(vec![]),
             join: Some(joins),
@@ -1326,7 +1326,7 @@ mod tests {
             },
         );
         let mut expr = Expr::operator(ExpressionNode {
-            op: "aggregate".into(),
+            op: "faq".into(),
             ranges: Some(range_map),
             output_idx: Some(vec![]),
             join: Some(vec![JoinClause {
@@ -1485,7 +1485,7 @@ mod tests {
             })
             .collect();
         Expr::operator(ExpressionNode {
-            op: "aggregate".into(),
+            op: "faq".into(),
             ranges: Some(range_map),
             output_idx: Some(vec![out_sym.to_string()]),
             join: Some(vec![JoinClause {
@@ -1616,7 +1616,7 @@ mod tests {
             },
         );
         let mut expr = Expr::operator(ExpressionNode {
-            op: "aggregate".into(),
+            op: "faq".into(),
             ranges: Some(range_map),
             output_idx: Some(vec![]),
             join: Some(vec![JoinClause {
@@ -1644,7 +1644,7 @@ mod tests {
         // An aggregate node with no join clause resolves trivially, and the walk
         // recurses into nested children without spurious errors.
         let mut agg = Expr::operator(ExpressionNode {
-            op: "aggregate".into(),
+            op: "faq".into(),
             ranges: Some(HashMap::from([(
                 "i".to_string(),
                 RangeSpec::Interval([1, 3]),

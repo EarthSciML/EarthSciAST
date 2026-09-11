@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "pde_inline_observed_state_dependent",
     "description": "\u00a76.6.5 inline-test assertions on a STATE-DEPENDENT array OBSERVED. `g[i] = 2*u[i] + rate[i]` moves with the trajectory, so no build-time product can carry its field (only STATE-FREE observeds are materialized at build) and it is not a scalar output row either; a binding must evaluate the observed's own expression at the SAMPLED STATE. `g` is a live node of the graph (it drives the second state `v`), and `rate` is the STATE-FREE array observed of the same document, asserted alongside as the regression guard that the build-materialized path still answers. `D(u,t) = rate` is a per-cell CONSTANT, so u(t) = i^2 + i*t is integrated exactly by every pinned solver family and the assertion values are integrator-independent."
@@ -55,7 +55,7 @@
             ]
           },
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "i"
             ],
@@ -77,7 +77,7 @@
         {
           "lhs": "rate",
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "i"
             ],
@@ -109,7 +109,7 @@
         {
           "lhs": "g",
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "i"
             ],

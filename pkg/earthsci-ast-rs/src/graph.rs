@@ -882,7 +882,7 @@ fn process_reaction_system(b: &mut ExprGraphBuilder, rs: &crate::ReactionSystem,
 ///
 /// Deliberately NOT [`crate::classification::lhs_form`]: that helper answers a
 /// different question (which §6.3.1 CATEGORY the LHS puts the unknown in) and
-/// so refuses a SPATIAL derivative and accepts `arrayop`/`broadcast` shells.
+/// so refuses a SPATIAL derivative and accepts `faq`/`broadcast` shells.
 /// The graph only wants to know WHICH quantity is written, whatever kind of
 /// derivative writes it.
 fn lhs_target_name(lhs: &crate::Expr) -> Option<String> {
@@ -890,7 +890,7 @@ fn lhs_target_name(lhs: &crate::Expr) -> Option<String> {
         crate::Expr::Variable(name) => Some(name.clone()),
         crate::Expr::Operator(node) => match node.op.as_str() {
             "D" | "index" => node.args.first().and_then(lhs_target_name),
-            "aggregate" => node.expr.as_deref().and_then(lhs_target_name),
+            "faq" => node.expr.as_deref().and_then(lhs_target_name),
             _ => None,
         },
         crate::Expr::Number(_) | crate::Expr::Integer(_) => None,
@@ -1027,14 +1027,14 @@ fn process_coupling(b: &mut ExprGraphBuilder, coupling: &[CouplingEntry]) {
     }
 }
 
-/// Index symbols a node BINDS for its own body: an `aggregate` / `arrayop`'s
+/// Index symbols a node BINDS for its own body: a `faq` / `faq`'s
 /// `ranges` keys and `output_idx` entries, and an `integral`'s `var`.
 ///
 /// Narrower than `structural::bound_index_symbols`, which also treats every bare
 /// name in an `index(A, i, j)` position as bound. Those positions are exactly
 /// where an aggregate's binders appear, and subtracting them THERE rather than
 /// at the binding node would hide a real reference to a declared variable used
-/// as an index. The binder itself is caught at its `aggregate`.
+/// as an index. The binder itself is caught at its `faq`.
 fn graph_bound_index_symbols(node: &crate::types::ExpressionNode) -> Vec<String> {
     let mut bound = Vec::new();
     if let Some(ranges) = &node.ranges {
@@ -1080,7 +1080,7 @@ fn collect_graph_variables(expr: &crate::Expr, out: &mut std::collections::HashS
 /// and `table_lookup` axes all contribute graph edges.
 ///
 /// Deliberately NOT [`crate::expression::collect_variables`]. That collector
-/// reports every bare name it reaches, so an `aggregate`'s own range binders
+/// reports every bare name it reaches, so a `faq`'s own range binders
 /// (`sum over a of src[a]`) came back looking like model variables and became
 /// graph nodes with no declaration, no units and no kind. A binder is introduced
 /// by the aggregate's own `ranges` clause and is scoped to it; it is not a

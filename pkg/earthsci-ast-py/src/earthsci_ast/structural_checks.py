@@ -381,10 +381,10 @@ _RELATIONAL_SEMIRINGS: frozenset[str] = frozenset({"bool_and_or"})
 
 
 def _iter_aggregate_nodes(expr):
-    """Yield every ``op:"aggregate"`` node reachable from ``expr`` (depth-first,
+    """Yield every ``op:"faq"`` node reachable from ``expr`` (depth-first,
     including aggregates nested inside another aggregate's child fields)."""
     if isinstance(expr, dict):
-        if expr.get("op") == "aggregate":
+        if expr.get("op") == "faq":
             yield expr
         for value in expr.values():
             yield from _iter_aggregate_nodes(value)
@@ -410,7 +410,7 @@ def _join_key_columns(agg: dict[str, Any]) -> set[str]:
 
 
 def _check_aggregate_semantics(data: dict[str, Any], errors: list) -> None:
-    """Three statically-decidable ``aggregate`` defects that are SCHEMA-VALID (so
+    """Three statically-decidable ``faq`` defects that are SCHEMA-VALID (so
     they slip past JSON Schema), each reported at the CONTAINING expression field
     (equation side / observed expression — the Phase-2 pointer convention):
 
@@ -724,7 +724,7 @@ def _recurrence_lhs_target(lhs: Any) -> str | None:
     ``None``."""
     if isinstance(lhs, str):
         return lhs
-    if isinstance(lhs, dict) and lhs.get("op") == "aggregate":
+    if isinstance(lhs, dict) and lhs.get("op") == "faq":
         inner = lhs.get("expr")
         if isinstance(inner, dict) and inner.get("op") == "index":
             args = inner.get("args") or []
@@ -1013,7 +1013,7 @@ def _check_broadcast_fn(data: dict[str, Any], errors: list, path: str = "") -> N
     than in ``op``, and every arity/vocabulary check walked ``args`` only — so
     ``fn`` was never validated by anything. A ``fn`` naming an op that does not
     exist (``"not_a_real_op"``), no ``fn`` at all, or a ``fn`` naming a
-    non-scalar op such as ``aggregate`` all passed ``validate()`` cleanly and, at
+    non-scalar op such as ``faq`` all passed ``validate()`` cleanly and, at
     best, became a run-time table miss much later. Worse, a ONE-operand node
     silently returned its operand unchanged, so ``{"fn": "-", "args": [x]}``
     evaluated to ``+x`` — a dropped sign, no diagnostic anywhere (issue #101).
@@ -1077,7 +1077,7 @@ def _index_frame_sites(m: dict[str, Any], mname: str, var_axes: dict):
       declared shape); and
     * an observed variable's ``expression`` (the frame is its own).
 
-    An ``aggregate``-LHS equation is excluded: it declares its own frame through
+    An ``faq``-LHS equation is excluded: it declares its own frame through
     ``output_idx``/``ranges`` and is the oracle name-alignment reproduces.
     """
     for i, eq in enumerate(m.get("equations", []) or []):
@@ -1528,7 +1528,7 @@ def _lhs_is_closed_definition(lhs: Any, declared: set) -> bool:
     if op in ("index", "ic"):
         args = lhs.get("args") or []
         return bool(args) and _lhs_is_closed_definition(args[0], declared)
-    if op == "aggregate":
+    if op == "faq":
         return _lhs_is_closed_definition(lhs.get("expr"), declared)
     return False
 
@@ -1913,7 +1913,7 @@ def _reserved_declaration_names(data: dict[str, Any]) -> dict[str, str]:
     Two symbols, both of them GLOBALLY scoped: the document's independent
     variable (``domain.independent_variable``, default ``"t"``) and the §6.4
     operator placeholder. §4.9.1.1 is the normative home of this set; the
-    sibling ``reserved_index_symbol`` rule for an ``aggregate`` binder reads the
+    sibling ``reserved_index_symbol`` rule for an ``faq`` binder reads the
     same set, so the two cannot drift apart. (That sibling rule is currently
     implemented only in the Rust binding; this one is implemented in all five.)
 
@@ -2235,7 +2235,7 @@ def _walk_expression_for_exponent_checks(
         _walk_expression_for_exponent_checks(
             arg, var_units, f"{node_path}/args[{i}]", report_path, variable, errors
         )
-    # Also walk arrayop sub-expressions that live outside args.
+    # Also walk faq sub-expressions that live outside args.
     if "expr" in expr:
         _walk_expression_for_exponent_checks(
             expr["expr"], var_units, f"{node_path}/expr", report_path, variable, errors

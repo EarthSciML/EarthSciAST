@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "index_sets": {
     "emis_records": {
       "kind": "interval",
@@ -180,7 +180,7 @@
               "label": "cell",
               "op": "skolem"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "m"
             ],
@@ -368,7 +368,7 @@
                 }
               }
             ],
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "c"
             ],
@@ -410,7 +410,7 @@
               ],
               "op": "*"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "rcv"
             ],
@@ -545,7 +545,7 @@
                 }
               }
             ],
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "r"
             ],
@@ -580,7 +580,7 @@
               ],
               "op": "index"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "c"
             ],
@@ -613,7 +613,7 @@
               ],
               "op": "index"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "c",
               "pd_t0",
@@ -652,7 +652,7 @@
               ],
               "op": "index"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "c"
             ],
@@ -683,7 +683,7 @@
               ],
               "op": "index"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "c"
             ],
@@ -714,7 +714,7 @@
               ],
               "op": "index"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "c"
             ],
@@ -745,7 +745,7 @@
               ],
               "op": "index"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "c"
             ],

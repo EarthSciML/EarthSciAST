@@ -173,7 +173,7 @@ impl TwoClause {
             json!({"on": [["lkey_b", "rkey_b"]]}),
         ];
         let mut node = json!({
-            "op": "aggregate",
+            "op": "faq",
             "reduce": "+",
             "output_idx": ["l"],
             "ranges": {"l": {"from": "lrows"}, "r": {"from": "rrows"}},
@@ -440,7 +440,7 @@ impl ThreeClause {
             json!({"on": [["rkey_c", "skey_c"]]}),
         ];
         let mut node = json!({
-            "op": "aggregate",
+            "op": "faq",
             "reduce": "+",
             "output_idx": ["l"],
             "ranges": {

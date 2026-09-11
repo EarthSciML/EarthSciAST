@@ -273,7 +273,7 @@ export class ReferenceGraph {
 }
 
 /** Ops whose nodes are addressable FAQ vertices even without an explicit `id`. */
-const AGGREGATE_OPS = new Set(['aggregate'])
+const AGGREGATE_OPS = new Set(['faq'])
 
 /**
  * Resolve the reference edges of ONE `model` into a {@link ReferenceGraph}.
@@ -545,7 +545,7 @@ function buildReferenceGraphImpl(
           // twin of `index_set:sourceType`.
           //
           // A non-string right column is a SCHEMA defect
-          // (tests/invalid/aggregate/join_on_key_not_string.esm pins it there)
+          // (tests/invalid/faq/join_on_key_not_string.esm pins it there)
           // and is not re-diagnosed as a reference error.
           if (pair.length > 1 && typeof pair[1] === 'string') {
             checkJoinName(node, pair[1], key, path)

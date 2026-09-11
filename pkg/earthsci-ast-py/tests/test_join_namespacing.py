@@ -50,7 +50,7 @@ JOIN_FILTER_FIXTURE = os.path.normpath(
         "..",
         "tests",
         "valid",
-        "aggregate",
+        "faq",
         "join_filter.esm",
     )
 )

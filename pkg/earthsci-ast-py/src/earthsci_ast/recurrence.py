@@ -1,7 +1,7 @@
 """Causal self-reference (recurrence) along one index axis — esm-spec §4.3.1.1.
 
 An equation whose LHS names an array-shaped unknown ``V`` and whose RHS
-``aggregate`` body reads ``index(V, …)`` at a strictly earlier position along
+``faq`` body reads ``index(V, …)`` at a strictly earlier position along
 exactly ONE of the aggregate's output axes is a **recurrence definition** of
 ``V``. There is no new op and no new schema field: the construct is recognized
 structurally, so a document that contains no self-read takes exactly the paths
@@ -384,7 +384,7 @@ def find_self_reads(
                 bare[0] = True
             return
         op = _op(e)
-        added = _aggregate_range_env(e, symbol_bounds) if op == "aggregate" else []
+        added = _aggregate_range_env(e, symbol_bounds) if op == "faq" else []
         env.extend(added)
         try:
             args = _args(e)
@@ -481,9 +481,9 @@ def _frame_node(var: str, lhs: Any, rhs: Any) -> Any:
     or a bare LHS whose RHS is an aggregate over ``V``'s axes. Anything else has
     no frame to sweep.
     """
-    if _op(lhs) == "aggregate":
+    if _op(lhs) == "faq":
         return lhs
-    if _is_symbol(lhs, var) and _op(rhs) == "aggregate":
+    if _is_symbol(lhs, var) and _op(rhs) == "faq":
         return rhs
     return None
 
@@ -635,7 +635,7 @@ def analyze_recurrence(
 
 
 def cell_restricted_body(node: Any, idx_names: list[str], make_node: Callable[[dict], Any]) -> Any:
-    """Restrict a frame-producing ``aggregate`` to ONE cell of its frame.
+    """Restrict a frame-producing ``faq`` to ONE cell of its frame.
 
     Moves the output indices out to the enclosing sweep and keeps the
     contraction, ``filter``, ``reduce``, ``join``, ``key`` and ``semiring``

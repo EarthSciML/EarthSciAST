@@ -170,7 +170,7 @@ DiscreteMaterializer() =
 #     equation carries the folded RHS.
 #  3. WHOLE-ARRAY DECLARED-SHAPE DERIVATIVE LIFT: a whole-array
 #     `D(state) = <array rhs>` over a declared shape is lifted into the
-#     per-cell `arrayop` form the derivative partition consumes (see
+#     per-cell `faq` form the derivative partition consumes (see
 #     `_lift_wholearray_deriv_equations`). Spatial-operator zeroing over a
 #     structurally-0-D field is done EARLIER, at the flatten→document boundary
 #     (`flattened_to_esm`), so a raw `grad`/`div`/`laplacian` reaching the
@@ -209,7 +209,7 @@ end
 #    that are NOT build-once setup vars because they read a live `param_arrays`
 #    buffer (the conservative-regrid output F_tgt = A_ij ⊗ F_src / A_j is the
 #    motivating case). They are INLINED into the array-state RHS that consumes
-#    them, so the build-time `index(arrayop,…)` reducer collapses
+#    them, so the build-time `index(faq,…)` reducer collapses
 #    `index(F_tgt, j)` to F_tgt's body — yielding the proven array-state
 #    aggregate kernel (const A_ij/A_j + live F_src), the met→fire coupling
 #    edge. Empty (byte-identical) for files whose geometry outputs are all
@@ -298,20 +298,20 @@ function _discover_geometry_vars(model::Model, equations::Vector{Equation},
 end
 
 # ---- Stage: promoted array observeds (shape-promotion inlining) ----
-# An array-shaped observed defined by an `arrayop` is inlined into its readers
+# An array-shaped observed defined by a `faq` is inlined into its readers
 # via the same index beta-reduction as a live-field geometry observed
-# (`index(obs, i…)` collapses to the arrayop body) — it carries no ODE
+# (`index(obs, i…)` collapses to the faq body) — it carries no ODE
 # partition slot. This generalizes the geometry `inline_vars` to the
 # non-geometry case, so a `promote_downstream_shapes`-lifted physics chain
 # (scalar authored, array after promotion) runs with no per-cell runner logic.
 # Excludes anything the geometry path already owns. Empty (byte-identical) for
 # a system with no array observeds.
 #
-# The on-disk `aggregate` spelling (schema v0.8.0) and `makearray` qualify the
+# The on-disk `faq` spelling (schema v0.8.0) and `makearray` qualify the
 # same way when they PRODUCE an array (non-empty `output_idx` / regions): a
 # general array-shaped observed authored as an aggregate map — an edge-indexed
 # flux field, a ragged-contraction rule output like the MPAS `div(flux)`
-# lowering — is exactly the promoted-arrayop case, just spelled with the
+# lowering — is exactly the promoted-faq case, just spelled with the
 # public op name. A SCALAR reduction (empty `output_idx`) is not an array
 # producer and keeps the scalar-observed path.
 function _collect_array_inline_vars(model::Model, equations::Vector{Equation},
@@ -327,7 +327,7 @@ function _collect_array_inline_vars(model::Model, equations::Vector{Equation},
         haskey(model.variables, name) || continue
         v = model.variables[name]
         (name in observed_here && _is_array_shape(v.shape)) || continue
-        (eq.rhs isa OpExpr && ((eq.rhs::OpExpr).op == "arrayop" ||
+        (eq.rhs isa OpExpr && ((eq.rhs::OpExpr).op == "faq" ||
                                _is_array_producer(eq.rhs))) || continue
         push!(array_inline_vars, name)
     end
@@ -481,7 +481,7 @@ function _array_obs_structural_refs!(e::ASTExpr, names::Set{String}, hits::Set{S
         # knows loop indices and const arrays). The gather TARGET is either the
         # array being read — a materialized observed's buffer, resolved by name —
         # or an inline array PRODUCER whose region/aggregate body is an ordinary
-        # EXPRESSION position (`_resolve_index_of_{makearray,arrayop}` resolves
+        # EXPRESSION position (`_resolve_index_of_{makearray,faq}` resolves
         # the selected value through `_resolve_indices`), so recurse into it
         # rather than flagging its whole subtree.
         for k in 2:length(e.args)
@@ -526,7 +526,7 @@ end
 #
 # The DECLARED SHAPE is the authority whenever it resolves: it is what a reader's
 # `index(obs, i…)` addresses, and therefore what the buffer's cell keys must
-# match. An `aggregate`/`arrayop` producer ALSO carries its own (already
+# match. A `faq` producer ALSO carries its own (already
 # range-resolved) output ranges — those size the buffer when there is no
 # resolvable declared shape, and when both are present they must AGREE. A
 # disagreement means the producer does not actually cover the declared field —
@@ -1562,10 +1562,10 @@ end
 
 # ---- Stage: observed substitution / derivative-equation split ----
 # Partition the surviving equations into derivative equations (scalar,
-# indexed, and arrayop `D` forms) and the observed substitution map, then
+# indexed, and faq `D` forms) and the observed substitution map, then
 # resolve observed-into-observed references to a fixed point. A live-field
 # geometry observed (F_tgt …) or a promoted array observed enters the
-# substitution map as an arrayop value; `index(obs, j)` in a reader
+# substitution map as a faq value; `index(obs, j)` in a reader
 # beta-reduces to its body via `_resolve_indices` (ess-14f.4 /
 # shape-promotion). Returns `(derivative_eqs, resolved_obs, raw_obs)`; the RAW
 # map preserves the author-declared observed-into-observed references so the
@@ -1596,7 +1596,7 @@ function _split_observed_and_derivatives(equations::Vector{Equation},
             continue
         elseif _is_scalar_D_lhs(eq.lhs)
             push!(derivative_eqs, eq)
-        elseif _is_indexed_D_lhs(eq.lhs) || _is_arrayop_D_lhs(eq.lhs)
+        elseif _is_indexed_D_lhs(eq.lhs) || _is_faq_D_lhs(eq.lhs)
             push!(derivative_eqs, eq)
         elseif isa(eq.lhs, VarExpr) && (eq.lhs.name in observed_names ||
                                         eq.lhs.name in geom_inline_vars ||
@@ -1672,7 +1672,7 @@ const _EMPTY_NAME_SET = Set{String}()
 #
 # WHAT STAYS INLINED (falls back to today's `_sub_preserving` splice, i.e. the
 # entry is left in the `inline` map):
-#   * ARRAY-valued observeds (arrayop/makearray producers, geometry live fields,
+#   * ARRAY-valued observeds (faq/makearray producers, geometry live fields,
 #     promoted array observeds) — the `index(obs, i)` beta-reduction path is
 #     untouched by design;
 #   * LEAF bodies (a bare variable/literal alias) — a slot would cost a store +
@@ -1688,7 +1688,7 @@ const _EMPTY_NAME_SET = Set{String}()
 #     demoted in turn, so every surviving slot has an unconditional evaluation
 #     site in the pre-slot walk — hoisting it introduces no new throw/NaN.
 #
-# The ARRAY paths (arrayop kernels, stencil/affine builds, discrete-cadence
+# The ARRAY paths (faq kernels, stencil/affine builds, discrete-cadence
 # fills) keep receiving the FULL resolved map and inline exactly as before; a
 # kernel's inlined copy of a slotted observed is later collapsed onto the
 # observed's slot by `_share_kernel_invariants!` when the value numbers match.
@@ -1859,13 +1859,13 @@ function _build_pgather(param_arrays::AbstractDict)
     return pgather
 end
 
-# ---- Stage: arrayop-valued initialization_equations → u0 ----
-# When discretize() materializes an IC equation as an arrayop (coord-subst
+# ---- Stage: faq-valued initialization_equations → u0 ----
+# When discretize() materializes an IC equation as a faq (coord-subst
 # x→index(coord_x,i)), we evaluate it per-cell here using the same
 # index-substitution + _resolve_indices + _compile pattern used by the ODE
-# arrayop path. The coord_<dim> const_array must be provided by the caller.
+# faq path. The coord_<dim> const_array must be provided by the caller.
 # Explicit initial_conditions values take precedence (already seeded in u0).
-function _seed_arrayop_init_u0!(u0::Vector{Float64}, init_equations,
+function _seed_faq_init_u0!(u0::Vector{Float64}, init_equations,
                                 initial_conditions::AbstractDict,
                                 var_map::Dict{String,Int}, array_var_info,
                                 const_arrays::AbstractDict,
@@ -2064,7 +2064,7 @@ end
 # reader's `index(var, j…)` gathers the cache via `_NK_PARAM_GATHER` — the SAME
 # zero-alloc live-buffer path a raw forcing read uses, NOT an inline beta-reduction),
 # and precompile a per-cell fill node list. `materialize!` evaluates every node into
-# its cache in dependency order — reusing the proven `_seed_arrayop_init_u0!`
+# its cache in dependency order — reusing the proven `_seed_faq_init_u0!`
 # per-cell (`_sub_preserving` → `_resolve_indices` → `_compile` → `_eval_node`)
 # pattern, but writing a cache buffer instead of a u0 slot, and reading the live raw
 # buffers + const arrays + upstream caches. Runs once here (initial fill) and again
@@ -2084,7 +2084,7 @@ function _build_discrete_materializer!(mut::DiscreteMaterializer,
         rhs = discrete_defs[name]
         (rhs isa OpExpr && _is_aggregate_op((rhs::OpExpr).op)) ||
             throw(TreeWalkError("E_TREEWALK_DISCRETE_MATERIALIZE",
-                "discrete-cadence var '$name' must be an arrayop/aggregate producer"))
+                "discrete-cadence var '$name' must be a faq producer"))
         rop = rhs::OpExpr
         idx_names = _output_idx_strings(rop)
         ranges = _ranges_dict(rop)
@@ -2103,7 +2103,7 @@ function _build_discrete_materializer!(mut::DiscreteMaterializer,
     end
     # 2. Precompile per-cell fill nodes: (cache_vec, linear_index, node). Each cell is
     #    compiled as `index(<the defining aggregate>, j0…)` and resolved through the
-    #    SAME `_resolve_index_of_arrayop` expansion the inline reader uses — so a
+    #    SAME `_resolve_index_of_faq` expansion the inline reader uses — so a
     #    reduction over CONTRACTED indices (the conservative regrid Σ_i A_ij·F_src/A_j,
     #    whose sum-over-source `i` lives in the aggregate's ranges, not the body) is
     #    expanded, not silently dropped. Scalar observeds are inlined into the
@@ -2116,7 +2116,7 @@ function _build_discrete_materializer!(mut::DiscreteMaterializer,
         rop_res = isempty(resolved_obs) ? rop : _sub_preserving(rop, resolved_obs)
         rop_res isa OpExpr ||
             throw(TreeWalkError("E_TREEWALK_DISCRETE_MATERIALIZE",
-                "discrete-cadence var '$name' resolved to a non-arrayop expression"))
+                "discrete-cadence var '$name' resolved to a non-faq expression"))
         idx_names, rngs = cells_of[name]
         cvec = vec(caches[name])
         dims = isempty(rngs) ? Int[1] : Int[length(r) for r in rngs]
@@ -2189,15 +2189,15 @@ end
 
 # Synthesize the per-cell fill equation for one materialized array observed:
 #
-#     arrayop(D(index(obs, i…)), output_idx=[i…], ranges=1…n) = index(<def>, i…)
+#     faq(D(index(obs, i…)), output_idx=[i…], ranges=1…n) = index(<def>, i…)
 #
-# i.e. exactly the shape `_compile_arrayop_equation!` consumes for an array
+# i.e. exactly the shape `_compile_faq_equation!` consumes for an array
 # STATE equation, so the fill reuses the whole array-equation cascade (affine
 # polyhedral build, per-cell fallback, per-cell CSE, class merge, codegen) with
 # no bespoke kernel path.
 #
 # THE RHS IS THE GATHER FORM `index(<def>, i…)`, not the bare producer — even
-# when `<def>` is an `aggregate` whose own `output_idx` matches. `index(<def>, i…)`
+# when `<def>` is a `faq` whose own `output_idx` matches. `index(<def>, i…)`
 # is EXACTLY the expression every reader of this observed used to present after
 # inlining, so the fill lowers through the identical, already-exercised path.
 #
@@ -2213,8 +2213,8 @@ end
 #
 # EXCEPTION, applied downstream rather than here: a producer that CONTRACTS is
 # unwrapped back to the bare form by `_unwrap_identity_gather`. The gather form
-# hides a contraction from `_compile_arrayop_equation!` entirely (it tests
-# `rhs.op == "aggregate"` and sees `index`), so scan detection, the unrolled fold
+# hides a contraction from `_compile_faq_equation!` entirely (it tests
+# `rhs.op == "faq"` and sees `index`), so scan detection, the unrolled fold
 # and the runtime contraction loop are all skipped and the equation drops to the
 # per-cell tier at O(#cells) IR. A NON-contracting producer keeps the gather
 # form: it lowers identically either way.
@@ -2236,7 +2236,7 @@ function _materialized_fill_equation(name::String, def::ASTExpr, dims::Vector{In
     for l in loops
         push!(idx_args, VarExpr(l))
     end
-    lhs = OpExpr("arrayop", ASTExpr[];
+    lhs = OpExpr("faq", ASTExpr[];
                  output_idx=Any[l for l in loops], ranges=ranges,
                  expr_body=OpExpr("D", ASTExpr[OpExpr("index", idx_args)]; wrt="t"))
     rhs = OpExpr("index", ASTExpr[def, (VarExpr(l) for l in loops)...])
@@ -2627,7 +2627,7 @@ function _build_partition_and_materialize(model::Model, cls;
 
     # ---- Extract discrete-cadence materialize defs (RANGE-RESOLVED) + drop them ----
     # The discrete-cadence array observeds were kept through join-gate + index-set
-    # range resolution so their arrayop `ranges` lower to concrete `[1, n]`. Capture
+    # range resolution so their faq `ranges` lower to concrete `[1, n]`. Capture
     # their resolved defining aggregates now (for the per-refresh fill kernels in
     # phase 4) and remove their equations from the ODE stream — they are
     # materialized into cache buffers, never compiled as observeds/derivatives.
@@ -2798,7 +2798,7 @@ end
 # ---- Phase 4: registry + forcing buffers + derivative compile + closure ----
 # Observed substitution, the merged const-array registry, the live forcing
 # buffers, the (opt-in) discrete-cadence materializer, u0 seeding from
-# arrayop-valued initialization equations, the per-derivative compile + CSE,
+# faq-valued initialization equations, the per-derivative compile + CSE,
 # and the final `f!` closure. Returns the full `_build_evaluator_impl` result.
 function _build_compile_evaluator(model::Model, cls, parts, layout;
         registered_functions::AbstractDict, const_arrays::AbstractDict,
@@ -2904,8 +2904,8 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
             const_registry, pgather, param_sym_set, reg_funcs, p, n_states)
     end
 
-    # ---- Evaluate arrayop-valued initialization_equations into u0 ----
-    @_bench :seed_u0 _seed_arrayop_init_u0!(u0, parts.init_equations, initial_conditions, layout.var_map,
+    # ---- Evaluate faq-valued initialization_equations into u0 ----
+    @_bench :seed_u0 _seed_faq_init_u0!(u0, parts.init_equations, initial_conditions, layout.var_map,
                            layout.array_var_info, const_registry, pgather,
                            param_sym_set, reg_funcs, p)
 
@@ -2926,7 +2926,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
 
     # ---- Factored array-observed fill kernels (per RHS call, dependency order) ----
     # Each materialized observed compiles through the SAME array-equation cascade
-    # its readers do, via a synthesized `arrayop(D(index(obs, i…))) = <body>`
+    # its readers do, via a synthesized `faq(D(index(obs, i…))) = <body>`
     # equation whose output slots land in the observed's buffer block. Kernels are
     # class-merged WITHIN a level only — the merge reorders, and levels are an
     # ordering constraint. Empty (and the closure below unwrapped) when nothing
@@ -2944,7 +2944,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # plumbing is not optional even while the list is empty.
     #
     # It IS empty today, and deliberately so: `_detect_prefix_scan` fires only on
-    # an equation whose RHS is a top-level `aggregate`, and a fill's RHS is the
+    # an equation whose RHS is a top-level `faq`, and a fill's RHS is the
     # GATHER `index(<def>, i…)` (see `_materialized_fill_equation` for why that
     # spelling, and what handing it the bare aggregate would reach). An observed
     # whose own body is a prefix reduction therefore keeps the triangular path —
@@ -2997,7 +2997,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     end
 
     # ---- Build per-derivative compiled-IR list ----
-    # (see `_compile_derivative_equations` / `_compile_arrayop_equation!`)
+    # (see `_compile_derivative_equations` / `_compile_faq_equation!`)
     # `array_var_info` here is the EXTENDED map (`layout.array_var_info_ext`,
     # bound above): a reader's `index(<materialized observed>, i…)` must resolve
     # through the ordinary array-gather path onto the observed's buffer block.
@@ -3487,8 +3487,8 @@ end
 # here; compilation to the compact `_Node` form is deferred to the caller's
 # single batched `_cse_compile_scalar` pass, so common subexpressions are
 # eliminated across equations as well as within one RHS (ess-r7h). Array
-# (`arrayop`) derivative equations compile to whole-array access kernels
-# instead of N per-cell scalar nodes — see `_compile_arrayop_equation!`.
+# (`faq`) derivative equations compile to whole-array access kernels
+# instead of N per-cell scalar nodes — see `_compile_faq_equation!`.
 # `percell_scalar` carries the ESS_STENCIL_DISABLE=1 reference's compiled
 # per-cell nodes (empty on every default build); the caller appends them to
 # `rhs_list` so they evaluate through the plain scalar walker — the maximally
@@ -3503,7 +3503,7 @@ function _compile_derivative_equations(derivative_eqs::Vector{Equation},
         # observeds compiled as named prelude slots, so a slot reference stays a
         # bare `VarExpr` for `_compile_cse` to lower onto its slot. `nothing`
         # (no slots) ⇔ the full map — byte-identical to the pre-slot build. The
-        # ARRAY (`arrayop`) arm always inlines the FULL map.
+        # ARRAY (`faq`) arm always inlines the FULL map.
         scalar_obs_inline::Union{Nothing,Dict{String,ASTExpr}}=nothing)
     scalar_inline = scalar_obs_inline === nothing ? resolved_obs : scalar_obs_inline
     scalar_entries = Tuple{Int,ASTExpr}[]
@@ -3562,8 +3562,8 @@ function _compile_derivative_equations(derivative_eqs::Vector{Equation},
             rhs_r = _resolve_indices(rhs, array_var_info, var_map, const_registry, pgather)
             push!(scalar_entries, (idx, rhs_r))
 
-        elseif _is_arrayop_D_lhs(eq.lhs)
-            _compile_arrayop_equation!(percell_scalar, acc_kernels, scan_folds, covered, eq, resolved_obs,
+        elseif _is_faq_D_lhs(eq.lhs)
+            _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds, covered, eq, resolved_obs,
                                        array_var_info, var_map, const_registry,
                                        pgather, param_sym_set, reg_funcs;
                                        template_sites=template_sites, xeq=xeq,
@@ -3580,8 +3580,8 @@ function _compile_derivative_equations(derivative_eqs::Vector{Equation},
     return scalar_entries, percell_scalar, acc_kernels, scan_folds
 end
 
-# ---- Stage: one arrayop derivative equation → whole-array kernels ----
-# `arrayop(expr=D(index(var, ...)), output_idx=[...], ranges={...}) = rhs_arrayop(...)`
+# ---- Stage: one faq derivative equation → whole-array kernels ----
+# `faq(expr=D(index(var, ...)), output_idx=[...], ranges={...}) = rhs_faq(...)`
 # Expand by iterating the Cartesian product of output_ranges.
 # Per-cell compiled nodes are collected and then merged into whole-array
 # kernels (ess-dhq) rather than pushed individually into `rhs_list`; the
@@ -3589,7 +3589,7 @@ end
 # variable-valence bounds) is unchanged. Appends to `acc_kernels` and marks
 # `covered` for every cell it owns. Two-branch dispatch: the symbolic-stencil
 # fast path when it applies, else the per-cell fallback
-# (`_compile_arrayop_percell!`).
+# (`_compile_faq_percell!`).
 # (`acc_kernels` is a `Vector{_AccKernel}`; the annotation is omitted because
 # `_AccKernel` is defined in access_kernel.jl, included after this build section.)
 
@@ -3713,8 +3713,8 @@ end
 # `_materialized_fill_equation` synthesizes every array-observed fill as
 # `index(<def>, i…)` rather than handing over the bare producer, so the fill
 # lowers through the identical, already-exercised path every reader used after
-# inlining. That is the right default and it stays. But `_compile_arrayop_equation!`
-# detects a contraction by testing `rhs.op == "aggregate"` — it sees `index`,
+# inlining. That is the right default and it stays. But `_compile_faq_equation!`
+# detects a contraction by testing `rhs.op == "faq"` — it sees `index`,
 # leaves `contract_names` empty, and NONE of the contraction machinery runs:
 # not `_detect_prefix_scan`, not `_unrolled_contraction_body`, not the runtime
 # contraction loop. The affine build is then handed `index(<contracting
@@ -3788,7 +3788,7 @@ function _unwrap_identity_gather(rhs::ASTExpr, idx_names::Vector{String},
         filter = (a.filter === nothing || isempty(ren)) ? a.filter :
                  _sub_preserving(a.filter, ren),
         expr_body = isempty(ren) ? a.expr_body : _sub_preserving(a.expr_body, ren))
-    # Everything below mirrors what `_compile_arrayop_equation!` would derive
+    # Everything below mirrors what `_compile_faq_equation!` would derive
     # from `bare`, so each detector sees exactly what it will see later.
     cnames = _contracted_index_names(newranges, idx_names)
     # No contraction ⇒ the gather form already lowers identically. Keep it.
@@ -3805,7 +3805,7 @@ function _unwrap_identity_gather(rhs::ASTExpr, idx_names::Vector{String},
     if length(cnames) == 1 &&
        _detect_prefix_scan(idx_names, range_iters, cnames, cconst,
                            bare.join_gates, bare.filter,
-                           _extract_arrayop_body(bare)) !== nothing
+                           _extract_faq_body(bare)) !== nothing
         return bare
     end
     # Otherwise the ordinary contraction tiers. A join gate can drop terms per
@@ -3831,7 +3831,7 @@ end
 # NON-scanned output indices; within a lane the slots ascend.
 #
 # Slots come from the same `lhs_body` → `_cell_key` → `var_map` path the
-# per-cell build uses (`_compile_arrayop_percell!`), deliberately: the state
+# per-cell build uses (`_compile_faq_percell!`), deliberately: the state
 # ordering is a derived fact, not a convention, and this must not re-derive it.
 function _build_scan_fold(axis::Int, inclusive::Bool, idx_names::Vector{String},
         range_iters, lhs_body::OpExpr, var_map::Dict{String,Int},
@@ -3863,7 +3863,7 @@ function _build_scan_fold(axis::Int, inclusive::Bool, idx_names::Vector{String},
             sub_lhs = _sub_preserving(lhs_body, idx_exprs)
             (sub_lhs isa OpExpr && (sub_lhs::OpExpr).op == "D") ||
                 throw(TreeWalkError("E_TREEWALK_ARRAYOP_MALFORMED_LHS",
-                                    "expected D(index(...)) in arrayop body"))
+                                    "expected D(index(...)) in faq body"))
             inner = (sub_lhs::OpExpr).args[1]
             (inner isa OpExpr && (inner::OpExpr).op == "index") ||
                 throw(TreeWalkError("E_TREEWALK_ARRAYOP_MALFORMED_LHS",
@@ -3934,7 +3934,7 @@ const _CASCADE_TALLY = Dict{Symbol,Int}()
 _tally_cascade!(k::Symbol) = (_CASCADE_TALLY[k] = get(_CASCADE_TALLY, k, 0) + 1; nothing)
 _reset_cascade_tally!() = (empty!(_CASCADE_TALLY); nothing)
 
-function _compile_arrayop_equation!(percell_scalar, acc_kernels, scan_folds,
+function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
         covered::BitVector, eq::Equation, resolved_obs::Dict{String,ASTExpr},
         array_var_info, var_map::Dict{String,Int},
         const_registry::AbstractDict, pgather::AbstractDict,
@@ -3960,7 +3960,7 @@ function _compile_arrayop_equation!(percell_scalar, acc_kernels, scan_folds,
     # which is the only case the gather form costs anything (it hides the
     # contraction from every tier below). See `_unwrap_identity_gather`.
     rhs_expr = _unwrap_identity_gather(eq.rhs, idx_names, ranges_dict)
-    rhs_body = _extract_arrayop_body(rhs_expr)
+    rhs_body = _extract_faq_body(rhs_expr)
 
     # Generalized einsum: detect contracted (reduction) indices in the RHS.
     # Contracted indices are keys in rhs.ranges that are NOT in output_idx.
@@ -4160,7 +4160,7 @@ function _compile_arrayop_equation!(percell_scalar, acc_kernels, scan_folds,
                  sprint(show, lhs_body), " out_idx=", idx_names,
                  " ranges=", [(n, length(r)) for (n, r) in zip(idx_names, range_iters)]);
          flush(stderr))
-    _compile_arrayop_percell!(percell_scalar, acc_kernels, covered, lhs_body, rhs_body;
+    _compile_faq_percell!(percell_scalar, acc_kernels, covered, lhs_body, rhs_body;
         idx_names=idx_names, range_iters=range_iters,
         contract_names=contract_names, contract_ranges=contract_ranges,
         contract_const=contract_const, rhs_oplus=rhs_oplus,
@@ -4172,7 +4172,7 @@ function _compile_arrayop_equation!(percell_scalar, acc_kernels, scan_folds,
     return nothing
 end
 
-# ---- Stage: arrayop per-cell fallback ----
+# ---- Stage: faq per-cell fallback ----
 # Compile one representative per structural group: all cells of this equation
 # share the same resolve/compile context, so a per-equation memo (a plain
 # local, passed explicitly) lets every subexpression shared across cells
@@ -4190,7 +4190,7 @@ end
 # reference the acc≡per-cell differentials compare against. The
 # equation-derived inputs are keyword-only (several share a type, so
 # positional passing could silently swap two of them).
-function _compile_arrayop_percell!(percell_scalar, acc_kernels, covered::BitVector,
+function _compile_faq_percell!(percell_scalar, acc_kernels, covered::BitVector,
         lhs_body::OpExpr, rhs_body::ASTExpr;
         idx_names::Vector{String}, range_iters,
         contract_names::Vector{String}, contract_ranges, contract_const,
@@ -4205,7 +4205,7 @@ function _compile_arrayop_percell!(percell_scalar, acc_kernels, covered::BitVect
     # A scalar aggregate NESTED in this array-equation cell body must keep
     # unrolling: its node flows into the stencil / access-kernel merge, which
     # models unrolled scalar terms. Mark the array-cell resolve so
-    # `_resolve_scalar_arrayop` confines the runtime contraction loop to scalar
+    # `_resolve_scalar_faq` confines the runtime contraction loop to scalar
     # contexts (ess-runtime-contraction). try/finally: the guard must unwind even
     # if a cell resolve throws.
     _ARRAY_CELL_DEPTH[] += 1
@@ -4219,7 +4219,7 @@ function _compile_arrayop_percell!(percell_scalar, acc_kernels, covered::BitVect
         sub_lhs = _sub_preserving(lhs_body, idx_exprs)
         sub_lhs isa OpExpr && sub_lhs.op == "D" ||
             throw(TreeWalkError("E_TREEWALK_ARRAYOP_MALFORMED_LHS",
-                                "expected D(index(...)) in arrayop body"))
+                                "expected D(index(...)) in faq body"))
         inner = sub_lhs.args[1]
         inner isa OpExpr && inner.op == "index" ||
             throw(TreeWalkError("E_TREEWALK_ARRAYOP_MALFORMED_LHS",
@@ -4352,9 +4352,9 @@ consumed by the ess-dhq N-independence property test.
 
 All state variables must be scalar (shape === nothing) — the walker
 assumes equations have already been scalarized by the discretize
-pipeline. `arrayop` and `makearray` are supported in expression
-position: scalar `arrayop` (empty `output_idx`) is expanded inline;
-`index(arrayop(...), k...)` and `index(makearray(...), k...)` are
+pipeline. `faq` and `makearray` are supported in expression
+position: scalar `faq` (empty `output_idx`) is expanded inline;
+`index(faq(...), k...)` and `index(makearray(...), k...)` are
 resolved at build time. Other array-typed ops (`broadcast`, `reshape`,
 `transpose`, `concat`) raise `E_TREEWALK_UNSUPPORTED_OP`.
 

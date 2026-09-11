@@ -45,13 +45,13 @@ export interface OpInfo {
    *     ARRAY-LEVEL `a * b` means "combine corresponding elements", so its
    *     operands must first be brought onto a common index frame (§4.3.4).
    *     Every other op consumes its operands WHOLE under its own contract — an
-   *     `aggregate`/`makearray` names its axes, an `index` gathers, the shape
+   *     `faq`/`makearray` names its axes, an `index` gathers, the shape
    *     ops restructure, a geometry kernel returns an unrelated shape — so
    *     alignment must not reach inside them. {@link isElementwiseNode} lifts
    *     this flag from op NAMES to NODES.
    *
    * Every exclusion is load-bearing. Not scalar: the array/tensor ops
-   * (`aggregate`, `makearray`, `index`, `reshape`, `transpose`, `concat`, and
+   * (`faq`, `makearray`, `index`, `reshape`, `transpose`, `concat`, and
    * `broadcast` ITSELF — a self-referential `fn: 'broadcast'` would recurse
    * forever); the closed-registry invocation `fn`; the form/lowering ops (`D`,
    * `ic`, `Pre`, `const`, `true`, `enum`, `table_lookup`,
@@ -145,7 +145,7 @@ export const OPS: Record<string, OpInfo> = {
   // The CANONICAL unary negation `canonicalize.ts` emits (`-(0, x)` folds to
   // `neg(x)`, and `neg(neg(x))` to `x`). It is an ordinary scalar operator —
   // §4.2 arithmetic, listed in the schema's `broadcast.fn` scalar subset and
-  // spelled by `tests/fixtures/arrayop/27_broadcast_unary.esm` — so it belongs
+  // spelled by `tests/fixtures/faq/27_broadcast_unary.esm` — so it belongs
   // in the registry rather than falling through to the unlowered-op gate.
   neg: { arity: { min: 1, max: 1 }, scalar: true, cost: 1, evaluate: (args) => -args[0] },
 
@@ -522,7 +522,7 @@ export interface BroadcastFnViolation {
  *  1. **A missing `fn`.** There is no default in the spec, and inventing `+`
  *     turns a truncated node into a silent sum.
  *  2. **An `fn` naming no scalar operator** — a typo (`'not_a_real_op'`) or a
- *     non-pointwise op (`'aggregate'`, `'index'`, `'broadcast'` itself). This
+ *     non-pointwise op (`'faq'`, `'index'`, `'broadcast'` itself). This
  *     is the exact analogue of the §4.4 `unknown_closed_function` rule for
  *     `fn`-NODE names: a name no binding can resolve must never reach an
  *     evaluator, because the failure is otherwise silent.

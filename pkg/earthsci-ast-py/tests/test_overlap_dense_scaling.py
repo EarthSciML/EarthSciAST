@@ -144,7 +144,7 @@ def test_mirrored_dense_aggregate_is_gate_driven(geom):
                     "P": _obs(
                         ["points"],
                         {
-                            "op": "aggregate",
+                            "op": "faq",
                             "semiring": "sum_product",
                             "output_idx": ["p"],
                             "ranges": {
@@ -205,7 +205,7 @@ def test_forward_rewritten_binning_aggregate_is_gate_driven(geom):
     annual = np.arange(1.0, NPTS + 1.0)
     sr = np.array([[float((i % 7) + j) for j in range(2)] for i in range(NCELLS)])
     binagg = {
-        "op": "aggregate",
+        "op": "faq",
         "output_idx": ["c"],
         "reduce": "+",
         "ranges": {"c": {"from": "cells"}, "r": {"from": "points"}},
@@ -217,7 +217,7 @@ def test_forward_rewritten_binning_aggregate_is_gate_driven(geom):
         ),
     }
     concagg = {
-        "op": "aggregate",
+        "op": "faq",
         "output_idx": ["rcv"],
         "reduce": "+",
         "ranges": {"s": {"from": "cells"}, "rcv": {"from": "rcv_cells"}},
@@ -324,7 +324,7 @@ def test_output_position_with_no_candidate_is_the_semiring_identity():
                     "P": _obs(
                         ["points"],
                         {
-                            "op": "aggregate",
+                            "op": "faq",
                             "semiring": "sum_product",
                             "output_idx": ["p"],
                             "ranges": {
@@ -396,7 +396,7 @@ def test_scalar_reduction_drives_from_the_candidate_pairs(geom):
                     "T": {
                         "type": "unknown",
                         "defined_by": {
-                            "op": "aggregate",
+                            "op": "faq",
                             "semiring": "sum_product",
                             "output_idx": [],
                             "ranges": {
@@ -490,7 +490,7 @@ def test_driven_reduction_is_bit_identical_to_the_membership_tested_product(monk
                     "B": _obs(
                         ["cells"],
                         {
-                            "op": "aggregate",
+                            "op": "faq",
                             "semiring": "sum_product",
                             "output_idx": ["c"],
                             "ranges": {

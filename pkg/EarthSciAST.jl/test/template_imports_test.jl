@@ -75,7 +75,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         @test eq.rhs.args[2].op == "makearray"
     end
 
-    @testset "aggregate_int_ratio_golden: §5.5.3.1 rule 1 on the AST-golden path" begin
+    @testset "faq_int_ratio_golden: §5.5.3.1 rule 1 on the AST-golden path" begin
         # Guards the AST-GOLDEN pathway (resolve_template_machinery →
         # lower_expression_templates → canonical write), which never calls
         # `expression_from_json`. A `coord` template body cos(pi·aggregate((i−1/2)·(1/8)))
@@ -85,7 +85,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # narrows integral Int64-representable Float64 in `args` positions back to
         # integers (CONFORMANCE_SPEC §5.5.3.1 rule 1), so the emitted golden is
         # `[1,8]` — byte-identical with Python/Rust/TS/Go.
-        fixture = conf("aggregate_int_ratio_golden", "fixture.esm")
+        fixture = conf("faq_int_ratio_golden", "fixture.esm")
 
         # (a) The fixture actually exercises the bug: the raw JSON3 reader widens
         # the in-aggregate ratio to `1.0/8.0` while the standalone dx=1/8 stays
@@ -96,7 +96,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
 
         # (b) The expanded tree matches the committed golden structurally.
         tree = _expand_raw(fixture)
-        @test tree == _golden(conf("aggregate_int_ratio_golden", "expanded.esm"))
+        @test tree == _golden(conf("faq_int_ratio_golden", "expanded.esm"))
 
         # (c) Byte-level: no float promotion survives into the emitted
         # expression subtree (scoped to the expression — NOT the whole document,
@@ -177,7 +177,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
             @test half.args[1].value == n
             # Structural site: the aggregate dense range folded exactly.
             ramp = observed_definition(sub, "ramp")
-            @test ramp.op == "aggregate"
+            @test ramp.op == "faq"
             @test ramp.ranges["i"] == [1, div(n, 2)]
             # Typed round-trip matches the golden.
             @test _normj(serialize_esm_file(f)) ==
@@ -196,10 +196,10 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # Each renamed rule instance fired only on its own axis (`wrt` in the
         # match pattern followed the index-set rename).
         eqf = f.models["TwoGrids"].equations[1]
-        @test eqf.rhs.op == "aggregate"
+        @test eqf.rhs.op == "faq"
         @test eqf.rhs.ranges["i"] == [2, 15]      # N=16 instance
         eqc = f.models["TwoGrids"].equations[2]
-        @test eqc.rhs.op == "aggregate"
+        @test eqc.rhs.op == "faq"
         @test eqc.rhs.ranges["i"] == [2, 7]       # N=8 instance
     end
 
@@ -240,7 +240,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # pins), not of the typed view built over it.
         for (name, axis, n) in (("Q", "lev", 4), ("P", "lat", 3))
             agg = _defrhs(d, "Column", name)
-            @test agg["op"] == "aggregate"
+            @test agg["op"] == "faq"
             @test agg["ranges"]["i"]["from"] == axis
             @test agg["ranges"]["j"]["from"] == axis
             measure = agg["expr"]["args"][2]
@@ -267,7 +267,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         @test f.index_sets["nz_of_row"].values == "meshA_cols"
         # ...and in the rule body (args and index gathers alike).
         total = observed_definition(f.models["Sparse"], "total")
-        @test total.op == "aggregate"
+        @test total.op == "faq"
         argnames = String[a.name for a in total.args]   # typed VarExpr leaves
         @test "meshA_cols" in argnames && "meshA_w" in argnames
         @test !("row_cols" in argnames)
@@ -845,7 +845,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                                        "offsets": "cnt", "values": "cols"}},
                  "expression_templates": {"rsum": {"params": ["F"],
                    "match": {"op": "rsum", "args": ["F"]},
-                   "body": {"op": "aggregate", "args": ["F", "cols", "wgt"],
+                   "body": {"op": "faq", "args": ["F", "cols", "wgt"],
                      "output_idx": ["i"], "semiring": "sum_product",
                      "ranges": {"i": {"from": "rows"}, "k": {"from": "nz", "of": ["i"]}},
                      "expr": {"op": "*", "args": [
@@ -920,7 +920,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                   "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
                                  "rhs": {"op": "-", "args": ["x"]}},
                                 {"lhs": "agg",
-                                 "rhs": {"op": "aggregate", "output_idx": ["i"], "args": ["x"],
+                                 "rhs": {"op": "faq", "output_idx": ["i"], "args": ["x"],
                                    "ranges": {"i": [1, {"op": "-", "args": ["N", 1]}]},
                                    "expr": {"op": "*", "args": ["x", "i"]}}},
                                 {"lhs": "ma",

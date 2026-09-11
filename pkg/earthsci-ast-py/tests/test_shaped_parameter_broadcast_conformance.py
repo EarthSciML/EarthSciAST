@@ -101,7 +101,7 @@ def test_a_shaped_parameter_with_no_value_at_all_is_not_zero_filled(tmp_path: Pa
                 "equations": [
                     {
                         "lhs": {
-                            "op": "aggregate",
+                            "op": "faq",
                             "args": [],
                             "output_idx": ["k"],
                             "ranges": {"k": {"from": "lev"}},
@@ -112,7 +112,7 @@ def test_a_shaped_parameter_with_no_value_at_all_is_not_zero_filled(tmp_path: Pa
                             },
                         },
                         "rhs": {
-                            "op": "aggregate",
+                            "op": "faq",
                             "args": [],
                             "output_idx": ["k"],
                             "ranges": {"k": {"from": "lev"}},

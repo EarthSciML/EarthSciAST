@@ -58,7 +58,7 @@ function _join_doc(N::Int, M::Int; body = 1.0, on = [["src_type", "emf_type"]],
              "variables" => vars,
              "equations" => [Dict(
                  "lhs" => Dict("op" => "D", "args" => ["count"], "wrt" => "t"),
-                 "rhs" => Dict("op" => "aggregate", "args" => [], "output_idx" => [],
+                 "rhs" => Dict("op" => "faq", "args" => [], "output_idx" => [],
                      "semiring" => "sum_product", "reduce" => "+",
                      "ranges" => Dict("l" => Dict("from" => "src_rows"),
                                       "r" => Dict("from" => "emf_rows")),
@@ -100,7 +100,7 @@ end
     #     4 is unmatched. A binding that drops the clause computes the full
     #     product's 12; one that cannot resolve a data-column key raises
     #     E_TREEWALK_JOIN_UNKNOWN_KEY, which is what Julia did before §5.5.8.
-    path = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid", "aggregate",
+    path = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid", "faq",
                     "join_on_data_columns.esm")
     @test isfile(path)
     file = ESS.load_path(path)
@@ -370,7 +370,7 @@ end
             "variables" => Dict("count" => Dict("type" => "unknown", "default" => 0.0)),
             "equations" => [Dict(
                 "lhs" => Dict("op" => "D", "args" => ["count"], "wrt" => "t"),
-                "rhs" => Dict("op" => "aggregate", "args" => [], "output_idx" => [],
+                "rhs" => Dict("op" => "faq", "args" => [], "output_idx" => [],
                     "semiring" => "sum_product", "reduce" => "+",
                     "ranges" => Dict("l" => Dict("from" => "src_cat"),
                                      "r" => Dict("from" => "emf_cat")),

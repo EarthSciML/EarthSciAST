@@ -183,7 +183,7 @@
           "threshold": "const->artifact",
           "provenance": "compile",
           "produces": "edges",
-          "doc": "The CONST distinct/skolem aggregate that materializes the derived `edges` index set — folds into the artifact at compile time (the deduplicated, canonically-sorted edge set)."
+          "doc": "The CONST distinct/skolem faq that materializes the derived `edges` index set — folds into the artifact at compile time (the deduplicated, canonically-sorted edge set)."
         },
         {
           "label": "edge_dense_id",

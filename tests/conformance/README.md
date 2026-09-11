@@ -12,12 +12,16 @@ checks against overlapping but inconsistent fixture sets (see gt-tvz).
 ```
 tests/conformance/
 ├── README.md                       # this file — the adapter contract
+├── deprecated_op_alias/            # the `aggregate` -> `faq` alias contract (esm 1.1.0)
+│   ├── aliased.esm                 #   input, authored with the deprecated spelling
+│   ├── canonical.esm               #   expected output, and a no-warning input
+│   └── manifest.json
 └── round_trip/
     └── manifest.json               # fixtures, normalizations, transforms, divergences
 ```
 
 The fixtures themselves live in the existing corpus (`tests/valid/`,
-`tests/fixtures/arrayop/`, etc.). Manifests reference fixtures by path
+`tests/fixtures/faq/`, etc.). Manifests reference fixtures by path
 relative to the repository's `tests/` directory.
 
 ## What shape is a conformance stage? Read this before adding one
@@ -53,6 +57,7 @@ Classification of every stage in `scripts/test-conformance.sh`:
 | `full-pipeline PDE self-test` | reference-comparing (golden vs independent reference integrator) |
 | `full-pipeline PDE producer (julia/rust/python)` | reference-comparing (golden + independent reference) |
 | `recurrence` (`recurrence/`, driven by each binding's own suite) | **reference-comparing** — every assertion is a value pinned at zero tolerance, several against an INDEPENDENT oracle (`07`'s ascending fold in Python) rather than against another binding. Bit-identity is available here (CONFORMANCE_SPEC §5.19.1), so cross-binding agreement is a consequence of each binding matching the reference, not the test |
+| `deprecated_op_alias` (`deprecated_op_alias/manifest.json`, driven by each binding's own suite) | **reference-comparing** — `canonical.esm` is a committed golden outside the bindings, and the alias input must emit byte-identically to it. The warning-count assertion is a per-binding classification (CONFORMANCE_SPEC §7), not a wire format. |
 | **round-trip** (`round_trip/manifest.json`, below) | **reference-comparing** since the original fixture `F` became the oracle (was self-comparing) |
 
 ## Round-trip contract
@@ -215,7 +220,7 @@ Fields:
 - `id` — stable identifier used in test output. Slash-separated, no extension.
 - `path` — path relative to the `tests/` directory.
 - `tags` — free-form labels for filtering (e.g. `core`, `events`,
-  `arrayop`). The labels `transforming` and `divergent` mirror the two
+  `faq`). The labels `transforming` and `divergent` mirror the two
   ledgers for quick filtering; the ledgers themselves are authoritative.
 - `load_transforms` — optional; spec-mandated rewrites (see above).
 

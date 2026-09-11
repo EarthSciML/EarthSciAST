@@ -52,7 +52,7 @@
         {
           "lhs": "totplnk",
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": [
               "i"

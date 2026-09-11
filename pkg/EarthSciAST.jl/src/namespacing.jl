@@ -73,7 +73,7 @@ _namespace_expr(e::VarExpr, prefix::String, local_names::Set{String},
 #
 # `binders` are the loop symbols THIS node binds (`output_idx` entries and
 # `ranges` keys) and they WIN over `local_names`: an index symbol is local to the
-# enclosing `aggregate` and shadows any coincident variable name (esm-spec
+# enclosing `faq` and shadows any coincident variable name (esm-spec
 # §4.3.1 — "a given string can be a variable reference in most contexts but
 # serves as an index symbol inside `aggregate.output_idx`, `aggregate.expr`, and
 # `aggregate.ranges` keys"), and an `on` key column is resolved against this
@@ -119,7 +119,7 @@ function _namespace_expr(expr::OpExpr, prefix::String,
     r = get(memo, expr, nothing)
     r === nothing || return r
     # Recurse into EVERY variable-bearing sub-expression via the shared
-    # field-preserving rewrite so prefix rewrites reach arrayop / makearray
+    # field-preserving rewrite so prefix rewrites reach faq / makearray
     # bodies, filter predicates (M2 §7.2), integral bounds (`lower`/`upper`),
     # table_lookup per-axis input expressions, makearray `values`, value-invention
     # `key`, expression-valued dense `ranges` bounds, AND expression-template

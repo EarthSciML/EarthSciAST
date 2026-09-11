@@ -190,7 +190,7 @@ fn constructs_binary32_cannot_carry_are_named() {
         ("fn", Some("datetime.year")),
         ("fn", Some("datetime.day_of_year")),
         ("+", None),
-        ("aggregate", None),
+        ("faq", None),
     ] {
         assert!(
             precision::f32_unsupported_reason(op, name).is_none(),

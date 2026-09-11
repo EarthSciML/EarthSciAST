@@ -110,7 +110,7 @@ fn off_the_end_flat_gather_through_prepare_fails_closed() {
             },
             "equations": [
                 {"lhs": "shifted", "rhs": {
-                        "op": "aggregate",
+                        "op": "faq",
                         "output_idx": ["i"],
                         "ranges": {"i": {"from": "k"}},
                         "args": ["M"],

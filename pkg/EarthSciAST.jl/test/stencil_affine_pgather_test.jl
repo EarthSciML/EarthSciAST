@@ -64,9 +64,9 @@ function _pg_2d_model(N)
         _idx("u", _v("i"), _op("-", _v("j"), _i(1))),
         _idx("u", _v("i"), _op("+", _v("j"), _i(1))))
     body = _op("+", _idx("forcing", _v("i"), _v("j")), lap)
-    lhs = ESM.OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i", "j"],
+    lhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "j"],
         expr_body=_Didx("u", _v("i"), _v("j")), ranges=Dict("i" => [1, N], "j" => [1, N]))
-    rhs = ESM.OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i", "j"],
+    rhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "j"],
         expr_body=body, ranges=Dict("i" => [1, N], "j" => [1, N]))
     ESM.Model(vars, [ESM.Equation(lhs, rhs)])
 end

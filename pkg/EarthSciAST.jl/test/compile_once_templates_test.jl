@@ -167,7 +167,7 @@ end
                     ),
                     "flux_int" => Dict(
                         "params" => ["f"],
-                        "body" => Dict("op" => "aggregate", "output_idx" => ["i"],
+                        "body" => Dict("op" => "faq", "output_idx" => ["i"],
                             "args" => ["f"], "ranges" => Dict("i" => [2, 7]),
                             "expr" => Dict("op" => "*", "args" => [
                                 Dict("op" => "exp", "args" => [
@@ -178,13 +178,13 @@ end
                     ),
                     "flux_lo" => Dict(
                         "params" => ["f"],
-                        "body" => Dict("op" => "aggregate", "output_idx" => ["i"],
+                        "body" => Dict("op" => "faq", "output_idx" => ["i"],
                             "args" => ["f"], "ranges" => Dict("i" => [1, 1]),
                             "expr" => Dict("op" => "-", "args" => [pin("f", 2), pin("f", 1)])),
                     ),
                     "flux_hi" => Dict(
                         "params" => ["f"],
-                        "body" => Dict("op" => "aggregate", "output_idx" => ["i"],
+                        "body" => Dict("op" => "faq", "output_idx" => ["i"],
                             "args" => ["f"], "ranges" => Dict("i" => [8, 8]),
                             "expr" => Dict("op" => "-", "args" => [pin("f", 8), pin("f", 7)])),
                     ),

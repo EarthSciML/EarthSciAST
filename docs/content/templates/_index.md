@@ -159,7 +159,7 @@ constraint: `shape`.
   "params": ["F"],
   "match": { "op": "div", "args": ["F"] },
   "where": { "F": { "shape": ["edges"] } },
-  "body": { "op": "aggregate", "output_idx": ["c"], "expr": "…", "args": ["F"] }
+  "body": { "op": "faq", "output_idx": ["c"], "expr": "…", "args": ["F"] }
 }
 ```
 
@@ -211,7 +211,7 @@ contents.
 ## Discretization
 
 Putting it together: spatial discretization is a rule that lowers a
-rewrite-target operator into an [`aggregate`](../operators/aggregation/) stencil
+rewrite-target operator into an [`faq`](../operators/aggregation/) stencil
 wrapped in a [`makearray`](../operators/arrays/), with the boundary treatment in
 the `makearray`'s later regions.
 
@@ -223,7 +223,7 @@ the `makearray`'s later regions.
     "op": "makearray",
     "regions": [[[2, "N-1"]], [[1, 1]], [["N", "N"]]],
     "values": [
-      { "op": "aggregate",
+      { "op": "faq",
         "output_idx": ["i"],
         "expr": { "op": "/",
                   "args": [{ "op": "-",

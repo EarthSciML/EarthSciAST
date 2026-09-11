@@ -164,7 +164,7 @@ fn mirrored_dense_aggregate_is_candidate_driven_not_full_product() {
             "shape": ["points"]}),
     );
     eqs.push(json!({"lhs": "P", "rhs": {
-        "op": "aggregate",
+        "op": "faq",
         "reduce": "+",
         "output_idx": ["p"],
         "ranges": {"p": {"from": "points"}, "c": {"from": "cells"}},
@@ -265,7 +265,7 @@ fn rewritten_forward_binning_aggregate_is_candidate_driven() {
             "shape": ["cells"]}),
     );
     eqs.push(json!({"lhs": "E", "rhs": {
-        "op": "aggregate",
+        "op": "faq",
         "reduce": "+",
         "output_idx": ["c"],
         "ranges": {"c": {"from": "cells"}, "r": {"from": "records"}},
@@ -284,7 +284,7 @@ fn rewritten_forward_binning_aggregate_is_candidate_driven() {
             "shape": ["rcv"]}),
     );
     eqs.push(json!({"lhs": "conc", "rhs": {
-        "op": "aggregate",
+        "op": "faq",
         "reduce": "+",
         "output_idx": ["o"],
         "ranges": {"s": {"from": "cells"}, "o": {"from": "rcv"}},
@@ -452,7 +452,7 @@ fn both_gated_symbols_contracted_drives_from_the_candidate_pairs() {
             "shape": ["one"]}),
     );
     eqs.push(json!({"lhs": "total", "rhs": {
-        "op": "aggregate",
+        "op": "faq",
         "reduce": "+",
         "output_idx": ["k"],
         "ranges": {
@@ -517,7 +517,7 @@ fn both_gated_symbols_bound_is_a_membership_test_with_identity_fill() {
             "shape": ["points", "cells"]}),
     );
     eqs.push(json!({"lhs": "hit", "rhs": {
-        "op": "aggregate",
+        "op": "faq",
         "reduce": "+",
         "output_idx": ["r", "c"],
         "ranges": {"r": {"from": "points"}, "c": {"from": "cells"}},

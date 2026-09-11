@@ -180,7 +180,7 @@ class TestTheRecurrenceSelfEdgeIsExempt:
     @staticmethod
     def _agg(body: dict) -> dict:
         return {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": ["k"],
             "ranges": {"k": {"from": "steps"}},
@@ -276,7 +276,7 @@ class TestNoFalsePositives:
                 {
                     "lhs": "k",
                     "rhs": {
-                        "op": "aggregate",
+                        "op": "faq",
                         "args": [],
                         "output_idx": [],
                         "ranges": {"k": {"from": "steps"}},

@@ -55,7 +55,7 @@
 //! * **Per equation** — by the rule the equation compiles to, read back at
 //!   evaluation as `precision::of_variable(rule.var)`. Nothing is added to the
 //!   tree, so every pass that pattern-matches an equation's right-hand side
-//!   (the `aggregate` an `AlgebraicRule::ArrayLoop` is built from, the
+//!   (the `faq` an `AlgebraicRule::ArrayLoop` is built from, the
 //!   relational lowering, the value-invention detector) still sees what it saw.
 //! * **Per subtree** — by a [`MARKER_OP`] node wrapping any subtree INSIDE an
 //!   expression whose precision differs from the equation's, which is exactly

@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "JoinLeaf",
     "description": "Shared fixture for findings F1 and F2: the smallest relational leaf there is. Two 1-D key columns and a `join.on` between them, in a file that declares its own index sets. On its own it loads, validates and evaluates correctly -- matchedPairCount is 2, joining [7, 9, 4] against [7, 9] -- which is what makes the two mount failures attributable to the mount and not to the leaf.",
@@ -20,7 +20,7 @@
         { "lhs": "left_key", "rhs": { "op": "const", "args": [], "value": [7, 9, 4] } },
         { "lhs": "right_key", "rhs": { "op": "const", "args": [], "value": [7, 9] } },
         { "lhs": "matchedPairCount",
-          "rhs": { "op": "aggregate", "args": [], "semiring": "sum_product", "output_idx": [],
+          "rhs": { "op": "faq", "args": [], "semiring": "sum_product", "output_idx": [],
             "ranges": { "l": { "from": "leaf_left" }, "r": { "from": "leaf_right" } },
             "join": [ { "on": [["left_key", "right_key"]] } ],
             "expr": 1.0 } }

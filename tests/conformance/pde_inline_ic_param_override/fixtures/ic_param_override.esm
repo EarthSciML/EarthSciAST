@@ -1,5 +1,5 @@
 {
-    "esm": "1.0.0",
+    "esm": "1.1.0",
     "metadata": {
         "name": "pde_inline_ic_param_override",
         "description": "esm-spec 6.6.5 'Build-time evaluation scope': the model parameters an inline test resolves before the run -- for a coordinate-expression `ic` (11.4.1) and for an analytic assertion `reference` -- are bound to their `parameter_overrides`-or-default values. Parameter `A` (default 1.0) appears ONLY inside `ic(u)` and inside assertion references, nowhere in the equations, so a test that overrides `A` can only change the answer through the build-time scope. State `v` is seeded by the parameter-FREE `ic(v) = cos(pi x)` and serves as the independent anchor the parameter-dependent `reference` is measured against, so a binding that ignored the override in BOTH the ic and the reference cannot cancel out and still pass.",
@@ -71,7 +71,7 @@
                                         "args": [
                                             3.141592653589793,
                                             {
-                                                "op": "aggregate",
+                                                "op": "faq",
                                                 "args": [],
                                                 "output_idx": [
                                                     "i"
@@ -123,7 +123,7 @@
                                 "args": [
                                     3.141592653589793,
                                     {
-                                        "op": "aggregate",
+                                        "op": "faq",
                                         "args": [],
                                         "output_idx": [
                                             "i"
@@ -160,7 +160,7 @@
                 },
                 {
                     "lhs": {
-                        "op": "aggregate",
+                        "op": "faq",
                         "args": [],
                         "output_idx": [
                             "i"
@@ -186,7 +186,7 @@
                         }
                     },
                     "rhs": {
-                        "op": "aggregate",
+                        "op": "faq",
                         "args": [],
                         "output_idx": [
                             "i"
@@ -202,7 +202,7 @@
                 },
                 {
                     "lhs": {
-                        "op": "aggregate",
+                        "op": "faq",
                         "args": [],
                         "output_idx": [
                             "i"
@@ -228,7 +228,7 @@
                         }
                     },
                     "rhs": {
-                        "op": "aggregate",
+                        "op": "faq",
                         "args": [],
                         "output_idx": [
                             "i"
@@ -331,7 +331,7 @@
                                                 "args": [
                                                     3.141592653589793,
                                                     {
-                                                        "op": "aggregate",
+                                                        "op": "faq",
                                                         "args": [],
                                                         "output_idx": [
                                                             "i"
@@ -412,7 +412,7 @@
                                                 "args": [
                                                     3.141592653589793,
                                                     {
-                                                        "op": "aggregate",
+                                                        "op": "faq",
                                                         "args": [],
                                                         "output_idx": [
                                                             "i"

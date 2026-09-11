@@ -66,7 +66,7 @@ def _pow_x():
             "map",
             ["n"],
             {
-                "op": "aggregate",
+                "op": "faq",
                 "output_idx": ["i"],
                 "ranges": {"i": {"from": "n"}},
                 "args": ["x"],
@@ -78,7 +78,7 @@ def _pow_x():
             "reduce",
             None,
             {
-                "op": "aggregate",
+                "op": "faq",
                 "output_idx": [],
                 "ranges": {"i": {"from": "n"}},
                 "args": ["x"],
@@ -137,7 +137,7 @@ def test_array_operand_keeps_numpy_nan_semantics():
     Rust binding's behaviour — and nothing here changes that."""
     doc = _doc(
         {
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": ["i"],
             "ranges": {"i": {"from": "n"}},
             "args": ["v"],

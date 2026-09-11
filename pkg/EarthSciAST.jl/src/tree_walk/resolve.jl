@@ -2,7 +2,7 @@
 # tree_walk/resolve.jl — part of the tree-walk evaluator (gt-e8yw).
 # Included by src/tree_walk.jl; see that file for the full layout and
 # include order. Section 5d: index-set registry resolution, build-time index resolution
-# (_resolve_indices and the arrayop/makearray expansions), live-forcing
+# (_resolve_indices and the faq/makearray expansions), live-forcing
 # buffers (_PGatherArray), array-cell discovery, and model selection.
 # ========================================================================
 
@@ -186,10 +186,10 @@ function _resolve_index_set_ranges(eqs::Vector{Equation}, index_sets::AbstractDi
 end
 
 # ---- Shared aggregate/einsum expansion core (one spelling, three sites) --------
-# The three aggregate expansions — the LHS-arrayop einsum
-# (`_compile_arrayop_percell!`), the expression-position gather
-# (`_resolve_index_of_arrayop`), and the scalar reduction
-# (`_resolve_scalar_arrayop`) — all unroll the same product: iterate the
+# The three aggregate expansions — the LHS-faq einsum
+# (`_compile_faq_percell!`), the expression-position gather
+# (`_resolve_index_of_faq`), and the scalar reduction
+# (`_resolve_scalar_faq`) — all unroll the same product: iterate the
 # Cartesian product of the contracted-index iterators, drop join-rejected
 # combinations at build time (M2, §5.3), substitute the concrete contracted
 # indices into the (already output-index-substituted) `body`, and guard
@@ -283,7 +283,7 @@ end
 # pair emits NO term. That is the correct answer, not a hole: the callers
 # combine an empty term list into the semiring identity 0̄
 # (`_combine_with_reducer`, and the explicit `rhs_zerobar` literal in
-# `_compile_arrayop_percell!`) — e.g. an emission record outside the grid sums
+# `_compile_faq_percell!`) — e.g. an emission record outside the grid sums
 # to 0 under `(+, 0)`.
 function _foreach_aggregate_term_gated(emit!::F, body::ASTExpr,
         contract_names::Vector{String}, contract_iters, gates, filt,
@@ -357,27 +357,27 @@ _expand_contract_range(rspec, idx_env::Dict{String,Int}, const_arrays::AbstractD
     collect(_is_const_int_range(rspec) ? _expand_int_range(rspec) :
             _expand_int_range_dyn(rspec, idx_env, const_arrays))
 
-# Resolve index(arrayop(...), k1, k2, ...) in expression position by
+# Resolve index(faq(...), k1, k2, ...) in expression position by
 # substituting the output_idx values and unrolling contracted indices at
-# build time. Mirrors the LHS-arrayop expansion (`_compile_arrayop_percell!`,
-# the `_is_arrayop_D_lhs` branch of the derivative loop) but produces a scalar
+# build time. Mirrors the LHS-faq expansion (`_compile_faq_percell!`,
+# the `_is_faq_D_lhs` branch of the derivative loop) but produces a scalar
 # ASTExpr instead of writing to rhs_list.
-function _resolve_index_of_arrayop(arrayop_expr::OpExpr, idx_args::Vector{ASTExpr},
+function _resolve_index_of_faq(faq_expr::OpExpr, idx_args::Vector{ASTExpr},
                                     array_var_info, var_map, const_arrays,
                                     pgather::AbstractDict=_EMPTY_PGATHER,
                                     memo::_MaybeMemo=nothing,
                                     bound_syms::Set{String}=_EMPTY_BOUND_SYMS)
-    output_idx_strs = _output_idx_strings(arrayop_expr)
+    output_idx_strs = _output_idx_strings(faq_expr)
     length(output_idx_strs) == length(idx_args) ||
         throw(TreeWalkError("E_TREEWALK_ARRAYOP_INDEX_NDIM",
-              "arrayop output_idx has $(length(output_idx_strs)) dims " *
+              "faq output_idx has $(length(output_idx_strs)) dims " *
               "but $(length(idx_args)) index args"))
-    body = arrayop_expr.expr_body
+    body = faq_expr.expr_body
     body === nothing &&
         throw(TreeWalkError("E_TREEWALK_ARRAYOP_NO_BODY",
-                            "arrayop requires an expr body"))
-    ranges_dict = _ranges_dict(arrayop_expr)
-    oplus, zerobar = _aggregate_oplus_identity(arrayop_expr.semiring, arrayop_expr.reduce)
+                            "faq requires an expr body"))
+    ranges_dict = _ranges_dict(faq_expr)
+    oplus, zerobar = _aggregate_oplus_identity(faq_expr.semiring, faq_expr.reduce)
 
     # Output-index substitution. Each output-index arg is EITHER a bound symbol —
     # kept SYMBOLIC, substituted as its own resolved-in-place expression so the
@@ -415,8 +415,8 @@ function _resolve_index_of_arrayop(arrayop_expr::OpExpr, idx_args::Vector{ASTExp
     contract_iters = [_expand_contract_range(ranges_dict[n], _out_idx_env, const_arrays)
                       for n in contract_names]
 
-    gates = arrayop_expr.join_gates
-    filt0 = arrayop_expr.filter
+    gates = faq_expr.join_gates
+    filt0 = faq_expr.filter
     # Build-time join gates / runtime filter guards need CONCRETE output-index
     # bindings (the join binding is seeded from `_out_idx_env`; the filter is
     # substituted with `idx_exprs`). A symbolic output index has neither, so
@@ -502,7 +502,7 @@ function _resolve_index_of_makearray(makearray_expr::OpExpr, idx_args::Vector{AS
         return re.op == "makearray" ?
             _resolve_index_of_makearray(re, sel_exprs, array_var_info, var_map,
                                         const_arrays, pgather, memo, bound_syms) :
-            _resolve_index_of_arrayop(re, sel_exprs, array_var_info, var_map,
+            _resolve_index_of_faq(re, sel_exprs, array_var_info, var_map,
                                       const_arrays, pgather, memo, bound_syms)
     end
     return _resolve_indices(result_expr, array_var_info, var_map, const_arrays,
@@ -510,7 +510,7 @@ function _resolve_index_of_makearray(makearray_expr::OpExpr, idx_args::Vector{AS
 end
 
 # ── Runtime contraction loop gate (ess-runtime-contraction) ─────────────────
-# Depth of the array-equation per-cell resolve (`_compile_arrayop_percell!`). A
+# Depth of the array-equation per-cell resolve (`_compile_faq_percell!`). A
 # scalar aggregate nested INSIDE an array-equation cell body must keep unrolling:
 # its compiled node flows into the stencil / access-kernel merge (acc_merge.jl,
 # stencil_affine.jl, oop_merge.jl), which model unrolled scalar terms — so the
@@ -575,25 +575,25 @@ function _try_build_contraction_loop(body::ASTExpr, contract_names::Vector{Strin
     return node
 end
 
-# Expand a scalar arrayop (empty output_idx) to a plain scalar ASTExpr by
+# Expand a scalar faq (empty output_idx) to a plain scalar ASTExpr by
 # unrolling all contracted indices at build time and combining them with the
 # declared reducer. This is the build-time equivalent of an einsum over a
 # general expression body — compile once, evaluate cheaply at every RHS call.
-function _resolve_scalar_arrayop(arrayop_expr::OpExpr, array_var_info, var_map, const_arrays,
+function _resolve_scalar_faq(faq_expr::OpExpr, array_var_info, var_map, const_arrays,
                                  pgather::AbstractDict=_EMPTY_PGATHER,
                                  memo::_MaybeMemo=nothing,
                                  bound_syms::Set{String}=_EMPTY_BOUND_SYMS)
-    body = arrayop_expr.expr_body
+    body = faq_expr.expr_body
     body === nothing &&
         throw(TreeWalkError("E_TREEWALK_ARRAYOP_NO_BODY",
-                            "arrayop requires an expr body"))
-    ranges_dict = _ranges_dict(arrayop_expr)
-    oplus, zerobar = _aggregate_oplus_identity(arrayop_expr.semiring, arrayop_expr.reduce)
+                            "faq requires an expr body"))
+    ranges_dict = _ranges_dict(faq_expr)
+    oplus, zerobar = _aggregate_oplus_identity(faq_expr.semiring, faq_expr.reduce)
     # Every range key contracts (a scalar aggregate has no output indices).
     contract_names = _contracted_index_names(ranges_dict, ())
     # A contracted range bound may be a per-cell INDEX EXPRESSION (e.g. the
     # variable-valence unstructured reduction's `index(n_edges_on_cell, i)`).
-    # This scalar-arrayop resolver is reached from `_resolve_indices` AFTER the
+    # This scalar-faq resolver is reached from `_resolve_indices` AFTER the
     # outer loop variable has been substituted to a literal in `body`/`ranges`,
     # so the bound is evaluable now via `_eval_const_int` against `const_arrays`
     # with the empty idx_env (any surviving symbol would be unbound — an error,
@@ -604,8 +604,8 @@ function _resolve_scalar_arrayop(arrayop_expr::OpExpr, array_var_info, var_map, 
     # key of a scalar aggregate is a contracted symbol, so the binding is the
     # contraction tuple (no output-index seed). With neither join nor filter,
     # this is the unchanged M1 scalar expansion.
-    gates = arrayop_expr.join_gates
-    filt0 = arrayop_expr.filter
+    gates = faq_expr.join_gates
+    filt0 = faq_expr.filter
     if isempty(contract_names) && gates === nothing && filt0 === nothing
         return _resolve_indices(body, array_var_info, var_map, const_arrays,
                                 pgather, memo, bound_syms)
@@ -952,12 +952,12 @@ function _resolve_indices_op(expr::OpExpr,
         isempty(expr.args) &&
             throw(TreeWalkError("E_TREEWALK_INDEX_EMPTY", "index op requires at least one arg"))
         first_arg = expr.args[1]
-        # Expression-position arrayop: index(arrayop(...), k1, k2, ...)
-        # Expand the arrayop at build time by substituting output_idx and
-        # unrolling contracted indices (same strategy as the `_is_arrayop_D_lhs`
+        # Expression-position faq: index(faq(...), k1, k2, ...)
+        # Expand the faq at build time by substituting output_idx and
+        # unrolling contracted indices (same strategy as the `_is_faq_D_lhs`
         # branch of `_build_evaluator_impl`'s derivative loop).
         if first_arg isa OpExpr && _is_aggregate_op(first_arg.op)
-            return _resolve_index_of_arrayop(first_arg::OpExpr, expr.args[2:end],
+            return _resolve_index_of_faq(first_arg::OpExpr, expr.args[2:end],
                                              array_var_info, var_map, const_arrays, pgather, memo, bound_syms)
         end
         # Expression-position makearray: index(makearray(...), k1, k2, ...)
@@ -1137,9 +1137,9 @@ function _resolve_indices_op(expr::OpExpr,
     # handled by the _resolve_indices index-of-aggregate branch above.
     if _is_aggregate_op(expr.op)
         if isempty(_output_idx_strings(expr))
-            return _resolve_scalar_arrayop(expr, array_var_info, var_map, const_arrays, pgather, memo, bound_syms)
+            return _resolve_scalar_faq(expr, array_var_info, var_map, const_arrays, pgather, memo, bound_syms)
         end
-        # Non-scalar arrayop without index() — pass through (will become a
+        # Non-scalar faq without index() — pass through (will become a
         # compile-time error in _compile with a helpful message).
     end
     new_args, changed = _resolve_arg_vec(expr.args, array_var_info, var_map, const_arrays, pgather, memo, bound_syms)
@@ -1244,7 +1244,7 @@ function _scan_lhs_cells!(cells, lhs::ASTExpr, array_var_names::Set{String})
             push!(cells[vname], indices)
         catch err
             # A non-constant index expression is simply not discoverable here
-            # (the arrayop path enumerates it); anything else is a real bug.
+            # (the faq path enumerates it); anything else is a real bug.
             err isa TreeWalkError || rethrow()
         end
         return
@@ -1297,8 +1297,8 @@ function _is_indexed_D_lhs(lhs)
            isa(lhs.args[1], OpExpr) && lhs.args[1].op == "index"
 end
 
-# Identify arrayop(D(index(var, ...)), ...) — array-loop derivative LHS.
-function _is_arrayop_D_lhs(lhs)
+# Identify faq(D(index(var, ...)), ...) — array-loop derivative LHS.
+function _is_faq_D_lhs(lhs)
     lhs isa OpExpr && _is_aggregate_op(lhs.op) || return false
     body = lhs.expr_body
     body === nothing && return false
@@ -1307,9 +1307,9 @@ function _is_arrayop_D_lhs(lhs)
            body.args[1] isa OpExpr && body.args[1].op == "index"
 end
 
-# Extract the scalar body from an arrayop node (or return expr unchanged).
-# Used to unwrap the RHS of an arrayop equation.
-function _extract_arrayop_body(expr::ASTExpr)
+# Extract the scalar body from a faq node (or return expr unchanged).
+# Used to unwrap the RHS of a faq equation.
+function _extract_faq_body(expr::ASTExpr)
     if expr isa OpExpr && _is_aggregate_op(expr.op)
         expr.expr_body !== nothing && return expr.expr_body
     end

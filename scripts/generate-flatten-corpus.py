@@ -207,7 +207,7 @@ CASES: list[tuple[str, str, str]] = [
     (
         "arrayed",
         "edge_enumeration_area_eff",
-        "valid/aggregate/edge_enumeration_area_eff.esm",
+        "valid/faq/edge_enumeration_area_eff.esm",
     ),
     # --- function_tables / table_lookup --------------------------------------
     (

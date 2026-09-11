@@ -156,7 +156,7 @@ struct _ContractLoop
     step::Int
 end
 
-# Build-time side channel carrying the loop metadata from `_resolve_scalar_arrayop`
+# Build-time side channel carrying the loop metadata from `_resolve_scalar_faq`
 # (resolve pass) to `_compile` (compile pass) on a synthetic `__contract_loop`
 # marker op's `.value` slot — the exact pattern `_ConstGatherRef` uses. A resolved
 # body is never re-substituted (`_sub_preserving` runs BEFORE resolution), so the
@@ -172,7 +172,7 @@ struct _ContractLoopBuild
 end
 
 # Reserved loop-variable name (Symbol) → its shared counter `Ref`, populated by
-# `_resolve_scalar_arrayop` and read by `_compile`'s `VarExpr` arm to lower a
+# `_resolve_scalar_faq` and read by `_compile`'s `VarExpr` arm to lower a
 # loop-var reference to an `_NK_LOOPVAR` node. Cleared at the top of every build
 # (`_build_evaluator_impl`) so it never grows across builds; a loop-var name is
 # GLOBALLY UNIQUE (a monotonic counter), so a stale entry can never be confused
@@ -426,7 +426,7 @@ function _compile(expr::VarExpr, var_map, param_syms, reg_funcs, memo::_MaybeMem
         return _mknode(kind=_NK_PARAM, sym=sym, idx=_param_index(param_syms, sym))
     end
     # A reserved runtime-contraction loop variable (ess-runtime-contraction):
-    # `_resolve_scalar_arrayop` kept the contracted index symbolic and registered
+    # `_resolve_scalar_faq` kept the contracted index symbolic and registered
     # its shared counter `Ref` here. Lower to an `_NK_LOOPVAR` leaf that reads the
     # ref at eval time (the enclosing `_NK_CONTRACTION_LOOP` writes it per iteration).
     lref = get(_LOOPVAR_REFS, sym, nothing)
@@ -588,7 +588,7 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
         # never appear in an RHS / general expression position.
         throw(TreeWalkError("E_TREEWALK_IC_IN_RHS",
                             "ic(...) only allowed in equation LHS"))
-    elseif op_sym === :arrayop || op_sym === :aggregate
+    elseif op_sym === :faq || op_sym === :aggregate
         # If _resolve_indices ran, scalar aggregate (empty output_idx) was
         # already expanded to a plain arithmetic tree and never reaches here.
         # Reaching this branch means an array-producing aggregate (non-empty
@@ -647,7 +647,7 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
     # or an op with no registry row) — NOT a hardcoded op-name list — so a user's
     # own open-tier op is rejected identically to grad/div/laplacian, by predicate.
     # Mirrors the other bindings: unregistered/open-tier op → `unlowered_operator`;
-    # a registered-but-non-scalar CORE form (const/arrayop/makearray/broadcast/…)
+    # a registered-but-non-scalar CORE form (const/faq/makearray/broadcast/…)
     # keeps its distinct `E_TREEWALK_UNSUPPORTED_OP`, handled by the arms above and
     # never reaching here. The `D` arm (bespoke `wrt` detail) likewise handles its
     # own T member above. The gate fires before evaluation; the op is lowered to a
@@ -724,7 +724,7 @@ end
 # Guard laziness holds only on the SCALAR walkers (`_eval_node`, `_oop_eval`). The
 # access-kernel `_eval_acc` is EAGER for `ifelse`/`and`/`or` BY CONSTRUCTION — it
 # broadcasts over lanes, and per-lane laziness would need masked evaluation — so a
-# guarded-domain expression inside an `arrayop` is NOT protected by its guard, with
+# guarded-domain expression inside a `faq` is NOT protected by its guard, with
 # or without CSE. That is a deliberate scalar/array divergence (see the `ifelse` arm
 # of `_eval_acc`), and it is why the guard rule lives in the scalar pass only.
 #
@@ -737,7 +737,7 @@ end
 #                        which normalizes one expression at a time and does not
 #                        combine `sin(a+b)` with `cos(a+b)`, or share a reaction flux
 #                        `k*A*B` across several species balances. That is this pass.
-# Cross-KERNEL sharing of a lane-invariant subtree across several arrayop equations
+# Cross-KERNEL sharing of a lane-invariant subtree across several faq equations
 # is a separate pass, keyed structurally on the kernel spine rather than on
 # `canonical_json`: see tree_walk/xcse.jl.
 #

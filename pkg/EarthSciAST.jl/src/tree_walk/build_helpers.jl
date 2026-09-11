@@ -155,7 +155,7 @@ const _EMPTY_IDX_ENV = Dict{String,Int}()
 _is_array_shape(shape) = shape !== nothing && !isempty(shape)
 
 # ---- Aggregate-node field accessors -------------------------------------------
-# The `output_idx` / `ranges` fields of an aggregate/arrayop/makearray node are
+# The `output_idx` / `ranges` fields of a faq/makearray node are
 # optional on the wire (`nothing` when absent), and `output_idx` may carry
 # non-string entries that every consumer skips. These accessors are the single
 # spelling of "the string output indices" and "a ranges table" (formerly
@@ -407,7 +407,7 @@ end
 # arrayed definition is observed exactly as its scalar counterpart is".
 #
 # Every downstream owner-bucket collector in this build, though, tests the
-# SYNTACTIC `eq.lhs isa VarExpr` — the WS4 elementwise fold, the promoted-arrayop
+# SYNTACTIC `eq.lhs isa VarExpr` — the WS4 elementwise fold, the promoted-faq
 # inline set (`_collect_array_inline_vars`), the bare-alias array registration,
 # the clip-ring discovery. An ARRAY-shaped observed written with the indexed
 # spelling therefore landed in no bucket at all and fell through to
@@ -465,9 +465,9 @@ function _rewrite_indexed_observed_lhs(eq::Equation, model::Model,
     lhs = eq.lhs
     lhs isa OpExpr || return nothing
     shell = lhs::OpExpr
-    # `arrayop` is the internal twin of the public `aggregate` spelling; both are
+    # `faq` is the internal twin of the public `aggregate` spelling; both are
     # addressing shells to `_lhs_unwrap`, so both normalize here.
-    (shell.op == "aggregate" || shell.op == "arrayop") || return nothing
+    (shell.op == "faq") || return nothing
     # A shell that CONTRACTS or GATES is not pure addressing — it computes.
     (shell.filter === nothing && shell.join === nothing && shell.key === nothing &&
      shell.distinct !== true) || return nothing
@@ -505,7 +505,7 @@ function _rewrite_indexed_observed_lhs(eq::Equation, model::Model,
     rhs = eq.rhs
     rhs_free = free_variables(rhs)
     if any(s -> s in rhs_free, syms)
-        rhs = OpExpr("aggregate", ASTExpr[];
+        rhs = OpExpr("faq", ASTExpr[];
                      output_idx=Any[s for s in syms],
                      ranges=Dict{String,Any}(s => ranges[s] for s in syms),
                      expr_body=rhs)
@@ -517,11 +517,11 @@ end
 # A declared array-shaped state may be integrated by a WHOLE-ARRAY equation
 # `D(SST) = <array-valued rhs>` (bare `VarExpr` LHS, no per-cell `index`). The
 # tree-walk's derivative partition only recognises `D(scalar)`, `D(index(var,k))`,
-# and `arrayop(D(index(var,…)))`, so lift the whole-array form into the `arrayop`
+# and `faq(D(index(var,…)))`, so lift the whole-array form into the `faq`
 # per-cell form the machinery already consumes: loop over the state's declared
 # shape index set(s), gathering every array operand of the rhs per cell (a genuine
 # scalar / reduction leaf is left as-is by `_index_array_leaves`). This also lets
-# `_discover_array_cells` enumerate the state's cells from the lifted `arrayop`
+# `_discover_array_cells` enumerate the state's cells from the lifted `faq`
 # ranges — a declared array state with a broadcast `ic` and no per-cell equation
 # otherwise resolves to no cells.
 function _lift_wholearray_deriv_equations(eqs::Vector{Equation},
@@ -569,7 +569,7 @@ function _lift_wholearray_deriv_equations(eqs::Vector{Equation},
                 push!(idx_args, VarExpr(l))
             end
             lhs_body = OpExpr("D", ASTExpr[OpExpr("index", idx_args)]; wrt=lhs.wrt)
-            new_lhs = OpExpr("arrayop", ASTExpr[];
+            new_lhs = OpExpr("faq", ASTExpr[];
                              output_idx=Any[l for l in loops], ranges=ranges,
                              expr_body=lhs_body)
             # Name-based operand alignment (esm-spec §4.3.4): each array-variable
@@ -589,8 +589,8 @@ end
 
 # Elementwise scalar ops whose ARRAY-shaped observed the WS4 fold may inline: the
 # arithmetic / transcendental functions that broadcast per cell. An array observed
-# whose top-level op is anything else — a producer (`makearray`/`arrayop`/
-# `aggregate`), a `const` field, a geometry kernel (`intersect_polygon`, …), a
+# whose top-level op is anything else — a producer (`makearray`/`faq`/
+# `faq`), a `const` field, a geometry kernel (`intersect_polygon`, …), a
 # gather/reshape (`index`, `reshape`, `transpose`, `concat`, `broadcast`), a
 # value-invention op (`skolem`/`distinct`/`rank`), or a bare alias — is left to
 # its own dedicated handler (const_arrays, `_array_inline_vars`, geometry setup,
@@ -618,7 +618,7 @@ const _WS4_FOLDABLE_ELEMENTWISE_OPS = _ops_with(:ws4_foldable)
 #
 # NOT `_sub_preserving` (tree_walk/helpers.jl): that helper substitutes only
 # through args / expr_body / values / filter / ranges — the fields its
-# per-cell arrayop callers need — while the fold below rewrites arbitrary
+# per-cell faq callers need — while the fold below rewrites arbitrary
 # READER equations, which may reference a folded name inside an integral
 # bound, a table-lookup axis, a value-invention `key`, or a `bindings` value.
 # Routing through the `map_children` generated full field walk covers every
@@ -652,7 +652,7 @@ end
 #
 # An expression is array-valued here when it is
 #
-#   * an array PRODUCER node — a `makearray`, or an `aggregate`/`arrayop` that
+#   * an array PRODUCER node — a `makearray`, or a `faq` that
 #     keeps at least one symbolic output index (a SCALAR reduction, whose
 #     `output_idx` is empty, produces a scalar and must NOT be gathered); or
 #   * a variable leaf the caller recognizes as an array; or

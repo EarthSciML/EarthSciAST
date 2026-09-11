@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "LoopSymbolNamedKControl",
     "description": "The CONTROL for the two `reserved_index_symbol` fixtures beside it: the identical aggregate with its first range symbol spelled `k` instead of `t`. It loads, and the `sum_product` reduction is 2 — the answer the `t` spelling silently turned into 0 before the collision was rejected at load. Only the name differs, which is what makes the rejection specific to the independent-variable collision and not to the join.",
@@ -18,13 +18,13 @@
       },
       "equations": [
         { "lhs": "left_key",
-          "rhs": { "op": "aggregate", "args": [], "output_idx": ["i"],
+          "rhs": { "op": "faq", "args": [], "output_idx": ["i"],
             "ranges": { "i": { "from": "f4_left" } }, "expr": "i" } },
         { "lhs": "right_key",
-          "rhs": { "op": "aggregate", "args": [], "output_idx": ["j"],
+          "rhs": { "op": "faq", "args": [], "output_idx": ["j"],
             "ranges": { "j": { "from": "f4_right" } }, "expr": "j" } },
         { "lhs": "matchedWithSymbolK",
-          "rhs": { "op": "aggregate", "args": [], "semiring": "sum_product", "output_idx": [],
+          "rhs": { "op": "faq", "args": [], "semiring": "sum_product", "output_idx": [],
             "ranges": { "k": { "from": "f4_left" }, "r": { "from": "f4_right" } },
             "join": [ { "on": [["left_key", "right_key"]] } ],
             "expr": 1.0 } }

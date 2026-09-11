@@ -92,7 +92,7 @@ def body(axis_d, cls):
     ranges = {}
     for d, loop in enumerate(LOOPS):
         ranges[loop] = rng if d == axis_d else {"from": ["x", "y", "z"][d]}
-    return {"op": "aggregate", "output_idx": list(LOOPS), "args": [f], "ranges": ranges, "expr": e}
+    return {"op": "faq", "output_idx": list(LOOPS), "args": [f], "ranges": ranges, "expr": e}
 
 
 templates = {}

@@ -2,7 +2,7 @@
 Unit tests for M2 value-equality joins and filter predicates in the NumPy AST
 interpreter (RFC semiring-faq-unified-ir §5.3 / §7.2; bead ess-my4.2.4).
 
-These exercise ``aggregate`` / ``arrayop`` nodes carrying a ``join`` (inner
+These exercise ``faq`` / ``faq`` nodes carrying a ``join`` (inner
 equi-join of key columns) and/or a ``filter`` predicate against a synthetic
 :class:`EvalContext`, covering the spec's fixed semantics: inner-only join,
 many-to-many cardinality, ``int``/categorical keys only, unmatched →
@@ -83,10 +83,10 @@ def test_degenerate_join_byte_identical_to_no_join() -> None:
     ranges = {"src": {"from": "sourceType"}}
 
     no_join = ExprNode(
-        op="aggregate", output_idx=[], semiring="sum_product", expr=body, ranges=ranges
+        op="faq", output_idx=[], semiring="sum_product", expr=body, ranges=ranges
     )
     deg_join = ExprNode(
-        op="aggregate",
+        op="faq",
         output_idx=[],
         semiring="sum_product",
         expr=body,
@@ -107,7 +107,7 @@ def test_join_key_may_name_the_index_set_or_the_symbol() -> None:
     body = _index("w", "i", "j")
     # Naming the symbol "j" and the set "county" (bound only by i) are equivalent.
     by_sym = ExprNode(
-        op="aggregate",
+        op="faq",
         output_idx=[],
         semiring="sum_product",
         expr=body,
@@ -129,7 +129,7 @@ def test_inner_equijoin_is_diagonal_over_shared_keys() -> None:
     ctx = _ctx({"w": w}, idx)
     body = _index("w", "i", "j")
     joined = ExprNode(
-        op="aggregate",
+        op="faq",
         output_idx=[],
         semiring="sum_product",
         expr=body,
@@ -149,7 +149,7 @@ def test_many_to_many_cardinality_is_defined() -> None:
     ctx = _ctx({"one": np.ones((3, 2))}, idx)
     body = _index("one", "i", "j")
     joined = ExprNode(
-        op="aggregate",
+        op="faq",
         output_idx=[],
         reduce="+",
         expr=body,
@@ -173,7 +173,7 @@ def test_multiple_clauses_and_pairs_are_all_anded() -> None:
     }
     ctx = _ctx({}, idx)
     joined = ExprNode(
-        op="aggregate",
+        op="faq",
         output_idx=[],
         reduce="+",
         expr=1.0,
@@ -193,7 +193,7 @@ def test_join_across_two_distinct_categorical_sets_matches_by_value() -> None:
     ctx = _ctx({"one": np.ones((3, 3))}, idx)
     body = _index("one", "i", "j")
     joined = ExprNode(
-        op="aggregate",
+        op="faq",
         output_idx=[],
         reduce="+",
         expr=body,
@@ -226,7 +226,7 @@ def test_no_match_contributes_semiring_identity(semiring, expected) -> None:
     ctx = _ctx({"one": np.ones((1, 1))}, idx)
     body = _index("one", "i", "j")
     joined = ExprNode(
-        op="aggregate",
+        op="faq",
         output_idx=[],
         semiring=semiring,
         expr=body,
@@ -246,7 +246,7 @@ def test_partial_match_leaves_unmatched_output_cells_at_identity() -> None:
     ctx = _ctx({"v": np.array([[5.0, 7.0], [8.0, 9.0]])}, idx)
     body = _index("v", "i", "k")
     node = ExprNode(
-        op="aggregate",
+        op="faq",
         output_idx=["i"],
         semiring="sum_product",
         expr=body,
@@ -266,7 +266,7 @@ def test_float_join_key_rejected() -> None:
     idx = {"A": {"kind": "categorical", "members": [1.5, 2.5]}}
     ctx = _ctx({"a": np.array([1.0, 2.0])}, idx)
     node = ExprNode(
-        op="aggregate",
+        op="faq",
         output_idx=[],
         expr=_index("a", "i"),
         ranges={"i": {"from": "A"}, "j": {"from": "A"}},
@@ -281,7 +281,7 @@ def test_null_in_key_column_rejected() -> None:
     idx = {"A": {"kind": "categorical", "members": ["x", None]}}
     ctx = _ctx({"a": np.array([1.0, 2.0])}, idx)
     node = ExprNode(
-        op="aggregate",
+        op="faq",
         output_idx=[],
         expr=_index("a", "i"),
         ranges={"i": {"from": "A"}, "j": {"from": "A"}},
@@ -299,7 +299,7 @@ def test_incompatible_key_types_rejected() -> None:
     }
     ctx = _ctx({"one": np.ones((2, 2))}, idx)
     node = ExprNode(
-        op="aggregate",
+        op="faq",
         output_idx=[],
         expr=_index("one", "i", "j"),
         ranges={"i": {"from": "ints"}, "j": {"from": "strs"}},
@@ -314,7 +314,7 @@ def test_ambiguous_index_set_key_rejected() -> None:
     idx = {"county": {"kind": "categorical", "members": ["A", "B"]}}
     ctx = _ctx({"w": np.ones((2, 2))}, idx)
     node = ExprNode(
-        op="aggregate",
+        op="faq",
         output_idx=[],
         expr=_index("w", "i", "j"),
         ranges={"i": {"from": "county"}, "j": {"from": "county"}},
@@ -329,7 +329,7 @@ def test_unknown_join_key_rejected() -> None:
     idx = {"county": {"kind": "categorical", "members": ["A", "B"]}}
     ctx = _ctx({"w": np.ones((2, 2))}, idx)
     node = ExprNode(
-        op="aggregate",
+        op="faq",
         output_idx=[],
         expr=_index("w", "i", "j"),
         ranges={"i": {"from": "county"}, "j": {"from": "county"}},
@@ -358,7 +358,7 @@ def test_join_output_is_independent_of_declared_member_order() -> None:
             w[p, p] = diag[m]
         ctx = _ctx({"w": w}, {"county": {"kind": "categorical", "members": order}})
         node = ExprNode(
-            op="aggregate",
+            op="faq",
             output_idx=[],
             semiring="sum_product",
             expr=_index("w", "i", "j"),
@@ -385,7 +385,7 @@ def test_cross_set_join_value_is_permutation_invariant() -> None:
             },
         )
         node = ExprNode(
-            op="aggregate",
+            op="faq",
             output_idx=[],
             reduce="+",
             expr=_index("one", "i", "j"),
@@ -412,7 +412,7 @@ def test_filter_drops_combinations_where_predicate_false() -> None:
     body = ExprNode(op="*", args=[_index("activity", "src"), _index("base_rate", "src")])
     filt = ExprNode(op=">", args=[_index("base_rate", "src"), 0])
     node = ExprNode(
-        op="aggregate",
+        op="faq",
         output_idx=[],
         semiring="sum_product",
         expr=body,
@@ -429,7 +429,7 @@ def test_filter_all_false_returns_identity() -> None:
     ctx = _ctx({"a": np.array([1.0, 2.0, 3.0])}, idx)
     filt = ExprNode(op=">", args=[_index("a", "i"), 100])
     node = ExprNode(
-        op="aggregate",
+        op="faq",
         output_idx=[],
         semiring="sum_product",
         expr=_index("a", "i"),
@@ -447,7 +447,7 @@ def test_join_and_filter_compose() -> None:
     body = _index("w", "i", "j")
     filt = ExprNode(op=">", args=[body, 1])
     node = ExprNode(
-        op="aggregate",
+        op="faq",
         output_idx=[],
         semiring="sum_product",
         expr=body,
@@ -465,10 +465,10 @@ def test_join_and_filter_compose() -> None:
 
 
 def test_canonical_join_filter_fixture_evaluates_as_positional() -> None:
-    """The repo's ``valid/aggregate/join_filter.esm`` fixture (the ESI MOVES
+    """The repo's ``valid/faq/join_filter.esm`` fixture (the ESI MOVES
     contraction, RFC §7.2) evaluates, and its degenerate join is byte-identical
     to the same node with ``join`` removed — the positional-einsum baseline."""
-    fixture = VALID_DIR / "aggregate" / "join_filter.esm"
+    fixture = VALID_DIR / "faq" / "join_filter.esm"
     doc = json.loads(fixture.read_text())
     model = doc["models"]["EmissionsAggregate"]
     rhs = _parse_expression(model["equations"][0]["rhs"])
@@ -492,7 +492,7 @@ def test_interval_keys_join_on_integer_id() -> None:
     idx = {"n": {"kind": "interval", "size": 3}}
     ctx = _ctx({"w": np.array([[1.0, 0.0, 0.0], [0.0, 2.0, 0.0], [0.0, 0.0, 3.0]])}, idx)
     node = ExprNode(
-        op="aggregate",
+        op="faq",
         output_idx=[],
         semiring="sum_product",
         expr=_index("w", "i", "j"),
@@ -514,7 +514,7 @@ def _join_count_model(with_join: bool) -> dict:
     the diagonal join (i==j) only 2 combinations contribute; without it all 4 do.
     """
     rhs: dict = {
-        "op": "aggregate",
+        "op": "faq",
         "reduce": "+",
         "output_idx": [],
         "ranges": {"i": {"from": "county"}, "j": {"from": "county"}},

@@ -1007,7 +1007,7 @@ function _pd_gather_defn(F::AbstractString, shape::AbstractVector,
         ranges[sym] = Dict{String,Any}("from" => String(t))
     end
     defn = Dict{String,Any}(
-        "op" => "aggregate", "output_idx" => Any[Any["c"]; Any[s for s in syms]...],
+        "op" => "faq", "output_idx" => Any[Any["c"]; Any[s for s in syms]...],
         "ranges" => ranges, "args" => Any[F, mfactor],
         "expr" => _pd_ix(F, _pd_ix(mfactor, "c"), syms...))
     return (decl, defn)
@@ -1181,7 +1181,7 @@ function _pd_apply(esm, mname::AbstractString, plan, reg=nothing)
     producer = Dict{String,Any}(
         "lhs" => _pd_ix(memvar, "m"),
         "rhs" => Dict{String,Any}(
-            "op" => "aggregate", "output_idx" => Any["m"],
+            "op" => "faq", "output_idx" => Any["m"],
             "ranges" => Dict{String,Any}(
                 plan.rep_rsym => Dict{String,Any}("from" => plan.R),
                 plan.rep_csym => Dict{String,Any}("from" => C)),

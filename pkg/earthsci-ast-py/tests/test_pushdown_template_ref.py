@@ -45,7 +45,7 @@ def _apply(name, bindings):
 
 def _agg(output_idx, ranges, expr, reduce=None, args=()):
     d = {
-        "op": "aggregate",
+        "op": "faq",
         "output_idx": list(output_idx),
         "ranges": ranges,
         "args": list(args),

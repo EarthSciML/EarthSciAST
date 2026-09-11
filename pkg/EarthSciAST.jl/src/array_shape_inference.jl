@@ -10,7 +10,7 @@
 """
     infer_array_shapes(equations::Vector{Equation}) -> Dict{String, Vector{UnitRange{Int}}}
 
-Walk every `arrayop`, `makearray`, and `index` node in the equation set and
+Walk every `faq`, `makearray`, and `index` node in the equation set and
 compute, for each array-shaped variable, the union of ranges observed across
 all references. The result maps variable name → per-axis `UnitRange{Int}`
 vector (empty for scalar variables; one entry per dimension for array
@@ -23,7 +23,7 @@ Semantics:
   name, or affine offset like `i+1`). The range of that index determines the
   variable's length on that axis. Affine offsets widen the required range
   (e.g. `u[i-1]` and `u[i+1]` in `i in 2:9` force `u` to span `1:10`).
-- For an `arrayop`, its `output_idx` and `ranges` combined define the
+- For a `faq`, its `output_idx` and `ranges` combined define the
   iteration space. Index names with no explicit range are left for
   inference from their usages inside the body.
 - Conflicts: if a variable is referenced with inconsistent dimensionality
@@ -44,7 +44,7 @@ end
 
 # Walk an expression tree recording per-variable axis extents. `idx_env`
 # maps index-symbol name (`"i"`, `"j"`) to the UnitRange it iterates over
-# in the enclosing `arrayop`, so `index(u, i-1, j+1)` inside `i in 2:9` can
+# in the enclosing `faq`, so `index(u, i-1, j+1)` inside `i in 2:9` can
 # be resolved to a concrete range on each axis.
 function _scan_shape!(shapes::Dict{String,Vector{UnitRange{Int}}},
                       expr::ASTExpr,
@@ -62,7 +62,7 @@ function _scan_shape!(shapes::Dict{String,Vector{UnitRange{Int}}},
         return
     end
 
-    if expr.op == "arrayop" || expr.op == "aggregate"
+    if expr.op == "faq"
         # Extend idx_env with any explicit ranges declared on this node.
         new_env = copy(idx_env)
         if expr.ranges !== nothing

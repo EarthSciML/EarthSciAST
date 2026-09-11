@@ -9,7 +9,7 @@
 # fixture (tests/bench/transport_3axis_7cubed_fullrank.esm), a synthesized
 # TWO-EQUATION version of it whose second equation reuses the first's D()
 # roots (the transport m/mq/dev shape — this is where the cross-equation cache
-# hits), a multi-equation observed-chain arrayop model (the shared obs-inline
+# hits), a multi-equation observed-chain faq model (the shared obs-inline
 # memo path with no templates at all), and the proxy27 bench fixture. Also
 # pins the sharing itself: variants on the two-equation fixture DROP with the
 # hoist on and are pinned at the per-equation count with it off, and the
@@ -83,10 +83,10 @@ function _xeq_two_eq_fixture(fix::AbstractString)
     return out
 end
 
-# Multi-equation arrayop model over a shared observed chain (no templates):
+# Multi-equation faq model over a shared observed chain (no templates):
 # exercises the SHARED obs-inline `_SubMemo` — both equations splice the same
 # `resolved_obs` bodies, and the hoist must not change a bit.
-function _xeq_observed_arrayop_model(N)
+function _xeq_observed_faq_model(N)
     kuv = _op("*", _v("k0"), _op("+", _idx("u", _v("i")), _idx("v", _v("i"))))
     # esm 1.0.0 (esm-spec §6.3.1): `w` is a plain unknown; its `makearray` body
     # is the bare-variable-LHS equation spliced in below.
@@ -146,7 +146,7 @@ end
 
     @testset "multi-equation observed chain (shared obs memo, no templates)" begin
         N = 16
-        model = _xeq_observed_arrayop_model(N)
+        model = _xeq_observed_faq_model(N)
         ics = Dict{String,Float64}()
         for k in 1:N
             ics["u[$k]"] = sin(0.3k) + 0.1k

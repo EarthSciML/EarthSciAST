@@ -2,7 +2,7 @@
 //! §5.5.8, the equality mirror of the §5.5.6 overlap gate.
 //!
 //! `join.on` used to be lowered to a member-value-equality `filter` and nothing
-//! else, so an `aggregate` contracting two row axes under an equality gate was a
+//! else, so a `faq` contracting two row axes under an equality gate was a
 //! genuine `O(N·M)` nested loop that merely TESTED equality — and a key naming a
 //! genuine data column (one table's `sourceTypeID` against another's, which is
 //! how a relational port such as EPA MOVES/NONROAD spells every join) was
@@ -183,7 +183,7 @@ impl Tables {
         vars.insert("E".into(), json!({"type": "unknown", "shape": ["lrows"]}));
 
         let mut node = json!({
-            "op": "aggregate",
+            "op": "faq",
             "reduce": "+",
             "output_idx": ["l"],
             "ranges": {"l": {"from": "lrows"}, "r": {"from": "rrows"}},
@@ -491,7 +491,7 @@ fn categorical_member_key_columns_join_many_to_many() {
                 "E": {"type": "unknown", "shape": ["lrows"]}
             },
             "equations": [{"lhs": "E", "rhs": {
-                "op": "aggregate",
+                "op": "faq",
                 "reduce": "+",
                 "output_idx": ["l"],
                 "ranges": {"l": {"from": "lrows"}, "r": {"from": "rrows"}},
@@ -559,7 +559,7 @@ fn scalar_reduction_drives_both_contracted_symbols_from_the_pairs() {
     vars.insert("T".into(), json!({"type": "unknown", "shape": ["one"]}));
     let make = |gated: bool| {
         let mut node = json!({
-            "op": "aggregate",
+            "op": "faq",
             "reduce": "+",
             "output_idx": ["q"],
             "ranges": {"q": {"from": "one"}, "l": {"from": "lrows"}, "r": {"from": "rrows"}},
@@ -704,7 +704,7 @@ fn extra_contracted_axis_still_drives_the_later_gated_symbol() {
     // and the contracted names sort to [l, m, r], so the two gated dims are NOT
     // adjacent and the later one (r) is the restricted axis.
     let node = json!({
-        "op": "aggregate",
+        "op": "faq",
         "reduce": "+",
         "output_idx": ["q"],
         "ranges": {

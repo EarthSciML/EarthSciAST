@@ -487,7 +487,7 @@ mod tests {
     #[test]
     fn collect_variables_visits_sidecar_children() {
         let expr: Expr = serde_json::from_value(serde_json::json!({
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": ["i"],
             "expr": { "op": "*", "args": ["rate", { "op": "index", "args": ["y", "i"] }] },

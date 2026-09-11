@@ -291,23 +291,23 @@ fn test_mathematical_correctness_round_trip() {
     }
 }
 
-/// Round-trip for the `index`-outside-arrayop fixture (RFC discretization §5.1).
+/// Round-trip for the `index`-outside-faq fixture (RFC discretization §5.1).
 /// Confirms that `{op:"index", args:[V, i]}` nodes sitting on a scalar equation
-/// RHS (rather than inside `arrayop.expr`) survive a load → save → load cycle
+/// RHS (rather than inside `faq.expr`) survive a load → save → load cycle
 /// under the typed parser, with both integer-literal and composite-arithmetic
 /// index arguments preserved.
 ///
 /// The FULL lossless comparison for this fixture lives in
-/// `test_index_outside_arrayop_lossless`, which also pins the fixture's
+/// `test_index_outside_faq_lossless`, which also pins the fixture's
 /// equation `_comment` fields.
 #[test]
-fn test_index_outside_arrayop_round_trip() {
-    let fixture = include_str!("../../../tests/indexing/idx_outside_arrayop.esm");
+fn test_index_outside_faq_round_trip() {
+    let fixture = include_str!("../../../tests/indexing/idx_outside_faq.esm");
 
-    let parsed: EsmFile = load_string(fixture).expect("Failed to parse idx_outside_arrayop");
-    let serialized = to_json(&parsed).expect("Failed to serialize idx_outside_arrayop");
+    let parsed: EsmFile = load_string(fixture).expect("Failed to parse idx_outside_faq");
+    let serialized = to_json(&parsed).expect("Failed to serialize idx_outside_faq");
     let reparsed: EsmFile =
-        load_string(&serialized).expect("Failed to reparse idx_outside_arrayop");
+        load_string(&serialized).expect("Failed to reparse idx_outside_faq");
 
     // The typed round-trip preserves the parsed document exactly.
     assert_eq!(
@@ -323,15 +323,15 @@ fn test_index_outside_arrayop_round_trip() {
     assert_eq!(
         serde_json::to_value(&reparsed).expect("reparsed as value"),
         serde_json::to_value(&reparsed_again).expect("reparsed_again as value"),
-        "save/load must be a fixed point on idx_outside_arrayop"
+        "save/load must be a fixed point on idx_outside_faq"
     );
 }
 
 #[test]
-fn test_index_outside_arrayop_lossless() {
+fn test_index_outside_faq_lossless() {
     assert_lossless_round_trip(
-        "idx_outside_arrayop",
-        include_str!("../../../tests/indexing/idx_outside_arrayop.esm"),
+        "idx_outside_faq",
+        include_str!("../../../tests/indexing/idx_outside_faq.esm"),
     );
 }
 
@@ -370,7 +370,7 @@ fn test_metadata_inheritance_round_trip() {
 /// modulo key ordering and numeric spelling.
 #[test]
 fn test_model_tests_tolerance_round_trip() {
-    let fixture = include_str!("../../../tests/fixtures/arrayop/01_pure_ode_analytical.esm");
+    let fixture = include_str!("../../../tests/fixtures/faq/01_pure_ode_analytical.esm");
 
     let parsed: EsmFile = load_string(fixture).expect("load fixture with tests/tolerance");
 

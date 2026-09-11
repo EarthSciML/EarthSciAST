@@ -15,7 +15,7 @@ pub struct EsmFile {
     /// Document-scoped index-set registry (RFC semiring-faq-unified-ir §5.2,
     /// v0.8.0). A single registry shared by every model in the document; it
     /// unifies grid dims and categorical index sets and is referenced from
-    /// `aggregate`/`arrayop` `ranges` via `{ "from": <name> }` and from
+    /// `faq`/`faq` `ranges` via `{ "from": <name> }` and from
     /// variable `shape`s. Declared once at the document top level (a sibling of
     /// `models`/`domain`), no longer per-`Model`.
     #[serde(default, skip_serializing_if = "Option::is_none")]

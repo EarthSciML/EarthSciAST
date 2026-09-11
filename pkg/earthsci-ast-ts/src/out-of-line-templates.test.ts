@@ -86,7 +86,7 @@ describe('out-of-line expression templates (Option B, esm-spec §9.6.4)', () => 
      * agree on it. Each former `type: 'observed'` variable became a bare-LHS
      * equation appended in its own file's `variables` key order, and the goldens
      * were emitted with those keys sorted while the fixtures kept authored order
-     * — so e.g. aggregate_int_ratio_golden's fixture yields `dx, c0` where its
+     * — so e.g. faq_int_ratio_golden's fixture yields `dx, c0` where its
      * expanded oracle lists `c0, dx`. Canonicalize each component's equation
      * list before comparing so the gate pins CONTENT, which is what rule 1 is
      * about; every other position stays an exact structural match.
@@ -113,7 +113,7 @@ describe('out-of-line expression templates (Option B, esm-spec §9.6.4)', () => 
       return sortEqs(out) as Record<string, unknown>
     }
     const cases: [string, string, string][] = [
-      ['aggregate_int_ratio_golden', 'fixture.esm', 'expanded.esm'],
+      ['faq_int_ratio_golden', 'fixture.esm', 'expanded.esm'],
       ['arrhenius_smoke', 'fixture.esm', 'expanded.esm'],
       ['constrained_match_scope', 'fixture.esm', 'expanded.esm'],
       ['coupling_transform_expression', 'fixture.esm', 'expanded.esm'],
@@ -166,9 +166,10 @@ describe('out-of-line expression templates (Option B, esm-spec §9.6.4)', () => 
     const doc = JSON.parse(s) as Record<string, any>
     const adv = doc.models.Advection
     // Rule 8 version stamp: emitting a surviving reference requires Option B,
-    // i.e. `esm >= 0.9.0`. It is a FLOOR, not an assignment — a 1.0.0 source
-    // document must not be stamped back down to an unloadable 0.9.0.
-    expect(doc.esm).toBe('1.0.0')
+    // i.e. `esm >= 0.9.0`. It is a FLOOR, not an assignment — a source document
+    // above the floor must not be stamped back down to an unloadable 0.9.0.
+    // This fixture is 1.1.0: its imported rules lower to `faq`.
+    expect(doc.esm).toBe('1.1.0')
     expect('expression_template_imports' in adv).toBe(false) // imports consumed
     const reg = adv.expression_templates
     expect(new Set(Object.keys(reg))).toEqual(new Set(['central_D_lon_interior', 'dlon_deg']))
@@ -205,7 +206,7 @@ describe('out-of-line expression templates (Option B, esm-spec §9.6.4)', () => 
     // plain unknown; the rewritten call site is its defining equation's RHS.)
     const deager = normj(definingRhs(m, 'd_eager')) as any
     expect(deager.op).toBe('index')
-    expect(deager.args[0].op).toBe('aggregate')
+    expect(deager.args[0].op).toBe('faq')
     // NEGATIVE: scale_c (target-free) reference SURVIVES.
     const dsurv = normj(definingRhs(m, 'd_survive')) as any
     expect(isApply(dsurv.args[0])).toBe(true)

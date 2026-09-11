@@ -1,0 +1,274 @@
+# Cross-binding conformance tests for the M1 semiring / index-set worked
+# examples (bead ess-my4.1.5) and the M2 value-equality join.on worked examples
+# (bead ess-my4.2.5).
+#
+# Loads the shared fixtures under tests/valid/faq/ that carry inline
+# `tests` blocks and evaluates each through `build_evaluator`. Julia, Rust, and
+# Python all check the SAME inline expected values baked into these shared
+# fixtures, so agreement here is the cross-binding semiring-equivalence proof.
+# (The M2 many-to-many fixtures are Julia/Python only — the data-derived
+# value-equality engine is M3 in the dense Rust evaluator, which sees only the
+# degenerate positional join; see the per-testset comments below.)
+#
+# Each fixture is a constant-RHS contraction from zero initial conditions, so
+# the derivative du = f!(u0) the evaluator returns IS the trajectory value at
+# t=1 (y(1) = rate·1 = rate). We therefore assert on du directly — exact, and
+# no ODE integrator dependency — and the asserted numbers mirror the fixtures'
+# inline `tests[].assertions[].expected` (which Rust/Python check via simulate).
+#
+# RFC: docs/content/rfcs/semiring-faq-unified-ir.md §5.1 / §5.2 / §5.3 / §5.7 / §7.1 / §7.2.
+
+using Test
+using EarthSciAST
+
+include("testutils.jl")  # TESTUTILS_REPO_ROOT
+
+const _AGG_REPO_ROOT = TESTUTILS_REPO_ROOT
+
+# Evaluate a shared aggregate fixture and return (du, vmap), seeding every
+# state element to zero (the constant-RHS worked examples start from rest).
+function _eval_aggregate_fixture(filename::AbstractString, model_name::AbstractString,
+                                 elements::Vector{<:AbstractString})
+    path = joinpath(_AGG_REPO_ROOT, "tests", "valid", "faq", filename)
+    @test isfile(path)
+    file = EarthSciAST.load_path(path)
+    ics = Dict(e => 0.0 for e in elements)
+    f!, u0, p, _, vmap = build_evaluator(file; model_name=model_name,
+                                         initial_conditions=ics)
+    du = similar(u0)
+    f!(du, u0, p, 0.0)
+    return du, vmap
+end
+
+@testset "aggregate worked-example conformance (ess-my4.1.5)" begin
+    # 7.1 FVM diffusion as the default sum_product ring, plus the empty-range
+    # 0̄ identity: degenerate[i] = Σ_{j∈∅} i·j = 0 (sum_product 0̄).
+    @testset "fvm_diffusion_sum_product" begin
+        du, vmap = _eval_aggregate_fixture(
+            "fvm_diffusion_sum_product.esm", "FvmDiffusionSumProduct",
+            ["flux[1]", "flux[2]", "degenerate[1]", "degenerate[2]"])
+        @test du[vmap["flux[1]"]] ≈ 6.0
+        @test du[vmap["flux[2]"]] ≈ 12.0
+        # Empty sum_product contraction returns the normative 0̄ identity (0).
+        @test du[vmap["degenerate[1]"]] == 0.0
+        @test du[vmap["degenerate[2]"]] == 0.0
+    end
+
+    # min_sum (tropical): ⊕ = min over the additive body i+j.
+    @testset "min_sum_tropical" begin
+        du, vmap = _eval_aggregate_fixture(
+            "min_sum_tropical.esm", "MinSumTropical", ["dist[1]", "dist[2]"])
+        @test du[vmap["dist[1]"]] ≈ 2.0   # min(2,3,4)
+        @test du[vmap["dist[2]"]] ≈ 3.0   # min(3,4,5)
+    end
+
+    # max_product: ⊕ = max over the product body i*j.
+    @testset "max_product_saturation" begin
+        du, vmap = _eval_aggregate_fixture(
+            "max_product_saturation.esm", "MaxProductSaturation", ["best[1]", "best[2]"])
+        @test du[vmap["best[1]"]] ≈ 3.0   # max(1,2,3)
+        @test du[vmap["best[2]"]] ≈ 6.0   # max(2,4,6)
+    end
+
+    # Categorical index set resolves to [1, |members|]; a 3-member set drives a
+    # 3-wide contraction identical to an interval of size 3.
+    @testset "categorical_index_set" begin
+        du, vmap = _eval_aggregate_fixture(
+            "categorical_index_set.esm", "CategoricalIndexSet",
+            ["emissions[1]", "emissions[2]"])
+        @test du[vmap["emissions[1]"]] ≈ 6.0
+        @test du[vmap["emissions[2]"]] ≈ 12.0
+    end
+
+    # §7.3 DOWNSTREAM geometric FAQ (bead ess-my4.3.10): the second half of the
+    # value-invention end-to-end chain. The first half (mesh-edge enumeration via
+    # bool_and_or + distinct + skolem, then rank) MINTS the `edges` index set as a
+    # CONST-fold whose byte-identical output is pinned by the determinism
+    # `edge_enumeration` + cadence `pure_topology` goldens. Post-fold, `edges` is a
+    # PRIMITIVE index set, consumed here by a plain sum_product contraction:
+    # area_eff[i] = Σ_{e∈edges} i·e over the 5 materialized edges of the canonical
+    # 2-triangle mesh. Same inline `expected` as Rust/Python — completing §7.3.
+    @testset "area_eff_edge_faq (downstream geometric FAQ over the edge set)" begin
+        du, vmap = _eval_aggregate_fixture(
+            "area_eff_edge_faq.esm", "AreaEffEdgeFaq",
+            ["area_eff[1]", "area_eff[2]"])
+        @test du[vmap["area_eff[1]"]] ≈ 15.0   # Σ_{e=1..5} 1·e = 15
+        @test du[vmap["area_eff[2]"]] ≈ 30.0   # Σ_{e=1..5} 2·e = 30
+    end
+end
+
+# Resolver-level invalid fixture (bead ess-my4.1.6; RFC §5.2): a `faq`
+# `{from}` range naming an index set absent from the model `index_sets` registry
+# is SCHEMA-VALID (so `load` succeeds) but rejected by the index-set-registry
+# resolver inside `build_evaluator` — no implicit interval is inferred for an
+# undeclared name. Schema-only bindings (TypeScript/Go) accept it; see
+# tests/invalid/expected_errors.json (resolver_only entry).
+@testset "invalid: undeclared {from} index set rejected (ess-my4.1.6)" begin
+    path = joinpath(_AGG_REPO_ROOT, "tests", "invalid", "faq",
+                    "undeclared_from_name.esm")
+    @test isfile(path)
+    file = EarthSciAST.load_path(path)   # schema-valid: load must succeed
+    err = try
+        build_evaluator(file; model_name="UndeclaredFrom")
+        nothing
+    catch e
+        e
+    end
+    @test err isa EarthSciAST.TreeWalkError
+    @test occursin("ghost_cells", sprint(showerror, err))
+end
+
+# esm-spec §9.7.10 / §6.6.6 (issue #185): a discretization-agnostic PDE leaf
+# declares NO `index_sets` of its own — its registry arrives from the grid
+# library a composing document, a subsystem-ref edge or an inline test injects
+# into this component's scope, so the sets exist only in that per-run build. An
+# `faq` range naming a set the document does not declare is therefore NOT
+# decidable at standalone load and must NOT be reported as `undefined_index_set`,
+# mirroring §9.6.1, where `template_constraint_unknown_index_set` does not run
+# for a library file validated standalone. Before the fix `validate()` rejected
+# every conforming leaf. The typo case stays covered by the negative fixture
+# above (which DOES declare a registry) and by `build_evaluator`.
+@testset "valid: agnostic leaf's injected {from} index set is not a load error (#185)" begin
+    path = joinpath(_AGG_REPO_ROOT, "tests", "conformance", "expression_templates",
+                    "inject_agnostic_faq", "fixture.esm")
+    @test isfile(path)
+    file = EarthSciAST.load_path(path)
+    result = EarthSciAST.validate(file)
+    @test isempty(result.structural_errors)
+    @test result.is_valid
+end
+
+# M2 join.on conformance (bead ess-my4.2.5). Evaluates the shared join fixtures
+# under tests/valid/faq/. Julia and Python check the SAME inline expected
+# values; Rust additionally checks the degenerate fixture (the value-equality
+# m·n engine is M3 in Rust, so the m2m fixtures are Julia/Python here). The
+# RFC §5.3 / §5.7 / §7.2 semantics: inner-only; m·n defined; output in declared
+# index order (permutation-invariant value); float/null keys rejected at build.
+@testset "join.on worked-example conformance (ess-my4.2.5)" begin
+    # §7.2 MOVES running-exhaust contraction as the degenerate positional join:
+    # the join key columns are the loop indices, so the gate admits every
+    # (sourceType x fuelType) combination — byte-identical to the join-free
+    # contraction. running_exhaust[p] = p · Σ_{src,fuel} src·fuel = 9p.
+    @testset "join_moves_running_exhaust (degenerate positional)" begin
+        du, vmap = _eval_aggregate_fixture(
+            "join_moves_running_exhaust.esm", "MovesRunningExhaust",
+            ["running_exhaust[1]", "running_exhaust[2]"])
+        @test du[vmap["running_exhaust[1]"]] ≈ 9.0
+        @test du[vmap["running_exhaust[2]"]] ≈ 18.0
+    end
+
+    # True value-equality many-to-many join: the shared key "coal" (multiplicity
+    # 2 left, 2 right) contributes 2·2 = 4 product terms; "oil"/"gas" unmatched.
+    # The constant body 1 makes the reduction COUNT admitted combinations = 4
+    # (vs the join-free full product 3·3 = 9), pinning the m·n cardinality.
+    @testset "join_disaggregation_m2m (m·n cardinality)" begin
+        du, vmap = _eval_aggregate_fixture(
+            "join_disaggregation_m2m.esm", "Disaggregation", ["count"])
+        @test du[vmap["count"]] ≈ 4.0
+    end
+
+    # Determinism: the SAME join with both key sets' members reordered yields the
+    # identical count (4) — value-equality matches by member value, not declared
+    # position (§5.7 rule 5). Agreement with the canonical fixture above is the
+    # permuted-input -> identical-result proof.
+    @testset "join_disaggregation_m2m_permuted (determinism)" begin
+        du, vmap = _eval_aggregate_fixture(
+            "join_disaggregation_m2m_permuted.esm", "DisaggregationPermuted", ["count"])
+        @test du[vmap["count"]] ≈ 4.0
+    end
+
+    # DATA-COLUMN key columns (CONFORMANCE_SPEC §5.5.8 / BEHAV-10-B-001). The
+    # `on` keys here are neither loop symbols nor index sets but genuine 1-D
+    # variables over the two ranges — how a relational port (EPA MOVES/NONROAD)
+    # spells every join. src_type = [7,9,7,4] against emf_type = [7,9,7]: key 7
+    # matches 2x2, key 9 matches 1x1, key 4 is unmatched and contributes 0̄, so
+    # `count(1)` reads the join's CARDINALITY, 5 — against the 12 a binding that
+    # ignores or drops the clause computes for the full 4x3 product.
+    @testset "join_on_data_columns (1-D variables as key columns)" begin
+        du, vmap = _eval_aggregate_fixture(
+            "join_on_data_columns.esm", "DataColumnJoin", ["count"])
+        @test du[vmap["count"]] == 5.0
+    end
+
+    # §5.5.8 "Two ranges over one index set" — a relation joined to ITSELF, the
+    # shared fixture. ONE 5-row table contracted over BOTH of its own ranges on
+    # a shifted key column, which resolved to no loop symbol at all before the
+    # side assignment was fixed (the column's axis named two candidate symbols
+    # and the pair could not say which). Two assertions, because a count alone
+    # would not pin WHICH pairs were admitted.
+    @testset "join_on_self_join (a relation joined to itself)" begin
+        du, vmap = _eval_aggregate_fixture(
+            "join_on_self_join.esm", "SelfJoin", ["priorSum", "pairCount"])
+        @test du[vmap["priorSum"]] == 1111.0   # NOT 11110 (transposed) or 55555 (ungated)
+        @test du[vmap["pairCount"]] == 4.0     # NOT 25 (the full product)
+    end
+
+    # The EXPLICIT `syms` spelling of the same self-join, sides swapped: each row
+    # reads its SUCCESSOR. The answer DIFFERS from the default spelling's, which
+    # is what makes this a test of `syms` and not of the join — parse-and-ignore
+    # computes 1111, dropping the clause computes 55555, correct is 11110.
+    @testset "join_on_self_join_syms (explicit sides)" begin
+        du, vmap = _eval_aggregate_fixture(
+            "join_on_self_join_syms.esm", "SelfJoin", ["priorSum", "pairCount"])
+        @test du[vmap["priorSum"]] == 11110.0
+        @test du[vmap["pairCount"]] == 4.0
+    end
+
+    # Build-time key-type rejection (RFC §5.3 / §5.7 rule 1). These shared
+    # fixtures live in tests/invalid/faq/build_time/ — schema-valid (so the
+    # Go/TS schema harness, which globs the parent dir non-recursively, skips
+    # them) but rejected by the evaluating bindings at build. A float member or a
+    # null member in a join key set must make `build_evaluator` raise, never
+    # silently bucket on a non-portable key.
+    @testset "build-time key-type rejection" begin
+        function _build_error_msg(filename, model_name)
+            path = joinpath(_AGG_REPO_ROOT, "tests", "invalid", "faq",
+                            "build_time", filename)
+            @test isfile(path)
+            file = EarthSciAST.load_path(path)
+            try
+                build_evaluator(file; model_name=model_name,
+                                initial_conditions=Dict("count" => 0.0))
+                return nothing
+            catch e
+                return sprint(showerror, e)
+            end
+        end
+
+        msg_float = _build_error_msg("float_join_key.esm", "FloatJoinKey")
+        @test msg_float !== nothing            # rejected, not silently evaluated
+        @test occursin("float", lowercase(msg_float))
+
+        msg_null = _build_error_msg("null_in_key_column.esm", "NullInKeyColumn")
+        @test msg_null !== nothing             # rejected, not silently evaluated
+        @test occursin("null", lowercase(msg_null))
+    end
+
+    # The SIDE rejections of the same directory (CONFORMANCE_SPEC §5.5.8), which
+    # are structural rather than evaluator-only: each is decidable from the ONE
+    # document, so `validate` must reject it in every binding, and the expected
+    # `(code, path)` is read from the SHARED pin rather than restated here. A
+    # per-binding copy of the expected code is how five bindings drift apart one
+    # fixture at a time.
+    @testset "build-time self-join SIDE rejection (shared pin)" begin
+        pins = JSON3.read(read(joinpath(_AGG_REPO_ROOT, "tests", "invalid",
+                                        "expected_errors.json"), String))
+        for name in ("self_join_three_ranges_ambiguous.esm",
+                     "self_join_index_set_key_ambiguous.esm",
+                     "self_join_syms_unknown_symbol.esm")
+            path = joinpath(_AGG_REPO_ROOT, "tests", "invalid", "faq",
+                            "build_time", name)
+            @test isfile(path)
+            pin = pins[Symbol(name)]
+            @test pin["is_valid"] == false
+            @test isempty(pin["schema_errors"])       # the schema cannot express it
+            want = Set((String(e["code"]), String(e["path"])) for e in pin["structural_errors"])
+            @test !isempty(want)
+
+            r = EarthSciAST.validate_path(path)
+            @test r.is_valid == false
+            got = Set((e.error_type, e.path) for e in r.structural_errors)
+            @test issubset(want, got)
+        end
+    end
+end

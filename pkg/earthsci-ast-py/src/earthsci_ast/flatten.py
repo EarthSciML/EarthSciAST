@@ -566,7 +566,7 @@ def _expr_to_string(expr: Expr) -> str:
             inner = args[0] if args else ""
             return f"{op}({inner}, {expr.dim})"
 
-        if op == "aggregate":
+        if op == "faq":
             body = _expr_to_string(expr.expr) if expr.expr is not None else ""
             idxs = ",".join(str(i) for i in (expr.output_idx or []))
             ranges = expr.ranges or {}
@@ -629,7 +629,7 @@ def _namespace_join(
 
     ``binders`` are the loop symbols THIS node binds (``output_idx`` entries and
     ``ranges`` keys) and they win over ``locals_``: an index symbol is local to
-    the enclosing ``aggregate`` and shadows any coincident variable name
+    the enclosing ``faq`` and shadows any coincident variable name
     (esm-spec §4.3.1), and an ``on`` key column is resolved against this node's
     own ranges (``value_invention._vi_join_index_sym``,
     ``numpy_interpreter._join_sym_for_key``) — so prefixing a shadowed symbol
@@ -699,13 +699,13 @@ def _namespace_expr(
             return expr  # already fully namespaced -> leave alone
         return f"{prefix}.{expr}"
     if isinstance(expr, ExprNode):
-        # For aggregate / arrayop, index symbols (output_idx and ranges keys) are
+        # For faq, index symbols (output_idx and ranges keys) are
         # local to the expression body and must not be namespaced. They are
         # binder NAMES, not child expressions — expr_walk never visits them —
         # so the only special handling needed is adding them to ``leave_alone``
         # for the children that may reference them.
         local_leave = set(leave_alone)
-        if expr.op == "aggregate":
+        if expr.op == "faq":
             if expr.output_idx:
                 for sym in expr.output_idx:
                     if isinstance(sym, str):
@@ -756,7 +756,7 @@ def _lhs_dependent_var(lhs: Expr) -> str | None:
 
     For ``D(var, t)`` returns ``var``. For a bare variable name returns it.
     For ``D(index(var, ...), t)`` returns ``var`` — the array state whose
-    element is being differentiated. For ``arrayop(expr=D(index(var, ...), t))``
+    element is being differentiated. For ``faq(expr=D(index(var, ...), t))``
     likewise returns ``var``. Returns None if the LHS cannot be identified
     (e.g. an algebraic constraint with a complex LHS).
     """
@@ -775,7 +775,7 @@ def _lhs_dependent_var(lhs: Expr) -> str | None:
                     if isinstance(head, str):
                         return head
             return None
-        if lhs.op == "aggregate" and lhs.expr is not None:
+        if lhs.op == "faq" and lhs.expr is not None:
             return _lhs_dependent_var(lhs.expr)
         # Algebraic equation: LHS is a complex expression — not a single var.
         return None
@@ -2788,7 +2788,7 @@ def _classification_view(flat: FlattenedSystem) -> dict[str, Any]:
     because flattening moves the ground under it: ``operator_compose`` merges two
     RHSs into one equation, ``variable_map`` deletes a parameter and promotes a
     variable in its place, and the pointwise lift rewrites a scalar state ODE
-    into an ``aggregate``. A per-component answer namespaced after the fact would
+    into an ``faq``. A per-component answer namespaced after the fact would
     describe the document, not the system that was produced from it.
     """
     variables: dict[str, Any] = {}
@@ -2913,7 +2913,7 @@ def _scope_template_body(
         return f"{prefix}.{expr}" if expr in local_names else expr
     if isinstance(expr, ExprNode):
         local_bound = set(bound)
-        if expr.op == "aggregate":
+        if expr.op == "faq":
             for sym in expr.output_idx or ():
                 if isinstance(sym, str):
                     local_bound.add(sym)
@@ -3519,10 +3519,10 @@ def _expand_operator_compose_placeholders(
 # ``D(sp) = <reaction> + <-u·makearray(grad(sp))>`` still has a SCALAR ``sp``
 # while its advection makearray indexes ``sp`` per grid cell. This pass performs
 # the ``lifting:"pointwise"`` promotion — wrapping each merged state ODE in an
-# ``aggregate`` over the grid, indexing the bare reaction species per cell and
+# ``faq`` over the grid, indexing the bare reaction species per cell and
 # each operator makearray per cell, and recording the species' concrete grid
 # shape. The reaction network then runs pointwise on the grid through the
-# existing NumPy arrayop evaluator. Julia counterpart: flatten.jl
+# existing NumPy faq evaluator. Julia counterpart: flatten.jl
 # ``_apply_pointwise_lift!``.
 
 
@@ -3606,7 +3606,7 @@ def _lift_rhs_to_cell(expr: Expr, arrayvars: set[str], loops: list[str]) -> Expr
             # otherwise a per-cell gather would read the stencil out of bounds.
             ma = replace(expr, output_idx=list(loops))
             return ExprNode(op="index", args=[ma, *loops])
-        if expr.op in ("index", "aggregate", "arrayop"):
+        if expr.op in ("index", "faq"):
             return expr
         new_args = [_lift_rhs_to_cell(a, arrayvars, loops) for a in expr.args]
         return replace(expr, args=new_args)
@@ -3618,7 +3618,7 @@ def _apply_pointwise_lift(flat: FlattenedSystem, coupling: list[CouplingEntry]) 
     that declare ``lifting: "pointwise"``. Promotes every state ODE that
     operator_compose merged with a spatial operator (its merged RHS carries an
     operator ``makearray``) from a 0-D scalar to the operator's grid shape, and
-    rewrites the equation into an ``aggregate`` over the grid. No-op when no
+    rewrites the equation into an ``faq`` over the grid. No-op when no
     coupling requests pointwise lifting, or no merged equation carries a
     spatial-operator makearray."""
     if not any(
@@ -3687,13 +3687,13 @@ def _apply_pointwise_lift(flat: FlattenedSystem, coupling: list[CouplingEntry]) 
 
         idx_species = ExprNode(op="index", args=[target, *loops])
         new_lhs = ExprNode(
-            op="aggregate",
+            op="faq",
             output_idx=output_idx,
             ranges=ranges,
             expr=ExprNode(op="D", args=[idx_species], wrt="t"),
         )
         new_rhs = ExprNode(
-            op="aggregate",
+            op="faq",
             output_idx=output_idx,
             ranges=ranges,
             expr=_lift_rhs_to_cell(eq.rhs, arrayvars, loops),
@@ -3887,7 +3887,7 @@ def _collect_index_uses_interval(
             if not _collect_index_uses_interval(child, state_vars, out, bounds):
                 return False
         return True
-    if expr.op == "aggregate":
+    if expr.op == "faq":
         ranges = expr.ranges or {}
         idx_syms = [s for s in (expr.output_idx or []) if isinstance(s, str)]
         for k in ranges.keys():
@@ -3925,7 +3925,7 @@ def _collect_index_uses(
     For every ``index(var, i0, i1, ...)`` sub-expression where ``var`` is a
     known state variable (post-namespacing), append the resolved integer
     index tuple to ``out[var]``. ``bound_indices`` carries the current
-    arrayop index-symbol bindings (one entry per iterated point in the
+    faq index-symbol bindings (one entry per iterated point in the
     output box) so offset indices like ``u[i-1]`` resolve to concrete ints.
     """
     bound_indices = bound_indices or {}
@@ -3961,7 +3961,7 @@ def _collect_index_uses(
                 _collect_index_uses(child, state_vars, out, bound_indices)
             return
 
-        if expr.op == "aggregate":
+        if expr.op == "faq":
             # Iterate the output box (via `ranges` if provided, else via the
             # output_idx symbols we cannot resolve). For each concrete point
             # inherit bound_indices and walk the body.

@@ -5,7 +5,7 @@
 # `sum_product` FAQ over the ring (RFC §8.1). The builders below assemble that FAQ
 # as an `OpExpr` and `_polygon_area_via_faq` evaluates it through the SAME generic
 # aggregate machinery the tree-walk evaluator uses (`_resolve_indices` →
-# `_resolve_scalar_arrayop` → `evaluate_expr`) — so the production polygon area is
+# `_resolve_scalar_faq` → `evaluate_expr`) — so the production polygon area is
 # the FAQ, and the imperative `geometry.polygon_area` / `_spherical_signed_area`
 # loops are only the cross-check oracle. Coordinate columns are 1-based (1 = lon,
 # 2 = lat) over the CLOSED ring, so the wrap edge `v→1` is the ordinary `v+1`
@@ -69,7 +69,7 @@ function _spherical_area_faq(n::Int)::OpExpr
     apex = _clip_unit_vec(IntExpr(1))
     here = _clip_unit_vec(VarExpr("v"))
     nxt  = _clip_unit_vec(OpExpr("+", ASTExpr[VarExpr("v"), IntExpr(1)]))
-    return OpExpr("aggregate", ASTExpr[VarExpr("overlap_clip")];
+    return OpExpr("faq", ASTExpr[VarExpr("overlap_clip")];
                   semiring="sum_product", output_idx=Any[],
                   ranges=Dict{String,Any}("v" => [1, n]),
                   expr_body=_spherical_excess(apex, here, nxt))
@@ -83,7 +83,7 @@ Evaluate the (unsigned) `polygon_area` FAQ for a CLOSED clip ring (`n+1` rows).
 The SPHERICAL manifold routes through the generic aggregate machinery: register
 the ring as the `overlap_clip` const-array, build the spherical-excess
 `sum_product` FAQ ([`_spherical_area_faq`](@ref)), and run it through
-`_resolve_indices` (→ `_resolve_scalar_arrayop`) + `evaluate_expr` — the same
+`_resolve_indices` (→ `_resolve_scalar_faq`) + `evaluate_expr` — the same
 tree-walk path `build_evaluator` uses.
 
 The PLANAR manifold BYPASSES the FAQ machinery entirely: it is evaluated

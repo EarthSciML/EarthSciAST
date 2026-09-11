@@ -211,7 +211,7 @@ function _collect_recurrence_self_reads!(e::ASTExpr, var::AbstractString, file::
         return out
     end
     pushed = 0
-    if e.op == "aggregate" && e.ranges !== nothing
+    if e.op == "faq" && e.ranges !== nothing
         for sym in sort!(collect(keys(e.ranges)))
             b = _recurrence_symbol_bounds(e.ranges[sym], file)
             b === nothing && continue
@@ -254,7 +254,7 @@ end
 function _recurrence_lhs_target(lhs::ASTExpr)
     if lhs isa VarExpr
         return (lhs.name, nothing)
-    elseif lhs isa OpExpr && lhs.op == "aggregate"
+    elseif lhs isa OpExpr && lhs.op == "faq"
         inner = lhs.expr_body
         (inner isa OpExpr && inner.op == "index" && !isempty(inner.args)) || return nothing
         head = inner.args[1]
@@ -298,21 +298,21 @@ function _check_recurrence_equation!(errors::Vector{StructuralError}, file::EsmF
             "`reshape`/`transpose`/`concat`/`broadcast` operand — so no cell-by-cell sweep " *
             "can supply it. A `makearray`'s region order fixes which write WINS, not the " *
             "order cells are EVALUATED in (esm-spec §4.3.1.1, §4.3.2); write the recurrence " *
-            "as one `aggregate` with the base case as an `ifelse` guard in the body.",
+            "as one `faq` with the base case as an `ifelse` guard in the body.",
             nothing)
         return errors
     end
 
     # The cell frame: the indexed-aggregate LHS's own indices, else the RHS
     # aggregate's.
-    rhs_agg = (eq.rhs isa OpExpr && (eq.rhs::OpExpr).op == "aggregate") ?
+    rhs_agg = (eq.rhs isa OpExpr && (eq.rhs::OpExpr).op == "faq") ?
               (eq.rhs::OpExpr) : nothing
     raw_idx = lhs_idx !== nothing ? lhs_idx :
               (rhs_agg === nothing ? nothing : rhs_agg.output_idx)
     if raw_idx === nothing
         push_err!(ERROR_CODES.RECURRENCE_UNSUPPORTED_FORM,
             "the definition of '$var' reads '$var' at another position, but the equation " *
-            "declares no cell frame to sweep: its RHS is not an `aggregate` over the " *
+            "declares no cell frame to sweep: its RHS is not a `faq` over the " *
             "variable's axes and its LHS is not the indexed-aggregate form " *
             "`aggregate{expr: index($var, k…)}` (esm-spec §4.3.1.1).", nothing)
         return errors

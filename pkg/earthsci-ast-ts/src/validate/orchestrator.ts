@@ -197,7 +197,7 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
       // subsystem is the shape #200 was reported in.
       errors.push(...validateReservedModelNames(model, modelPath, `Model '${modelName}'`, esmFile))
 
-      // (F-6) Static `aggregate` semantics decidable from this document alone:
+      // (F-6) Static `faq` semantics decidable from this document alone:
       // a value-equality join key of a non-comparable type, an index-set range
       // naming an undeclared set, and a relational (value-invention) node that
       // reads continuous state. Independent of coupling, so run on every model.
@@ -217,7 +217,7 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
       errors.push(...validateArrayBroadcastShapes(model, modelPath))
 
       // esm-spec §4.3.1.1. A causal self-reference (recurrence): an equation
-      // defining an array-shaped unknown whose RHS `aggregate` body reads the
+      // defining an array-shaped unknown whose RHS `faq` body reads the
       // array being defined, strictly earlier along ONE output axis. This
       // binding evaluates no array numerics, so the well-foundedness check IS
       // its whole implementation of the construct — and CONFORMANCE_SPEC

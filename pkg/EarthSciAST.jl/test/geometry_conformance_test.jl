@@ -117,7 +117,7 @@ _vertset(ring) = Set((round(ring[i, 1]; digits=9), round(ring[i, 2]; digits=9))
                 "equations" => [Dict(
                     "lhs" => Dict("op" => "D", "args" => ["y"], "wrt" => "t"),
                     "rhs" => Dict(
-                        "op" => "aggregate", "semiring" => "sum_product",
+                        "op" => "faq", "semiring" => "sum_product",
                         "output_idx" => [], "args" => [],
                         "ranges" => Dict("v" => Dict("from" => "ghost_ring")),
                         "expr" => 1.0,

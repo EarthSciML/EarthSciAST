@@ -1499,7 +1499,7 @@ exports[`Rendering output lock (all display fixtures) > renders all_operators.js
         "op": "index",
       },
       "id": "rg_candidate_pairs",
-      "op": "aggregate",
+      "op": "faq",
       "output_idx": [
         "p",
       ],
@@ -5285,7 +5285,7 @@ exports[`Rendering output lock (all display fixtures) > renders structural_ops.j
         ],
         "op": "*",
       },
-      "op": "aggregate",
+      "op": "faq",
       "output_idx": [
         "i",
       ],
@@ -5302,7 +5302,7 @@ exports[`Rendering output lock (all display fixtures) > renders structural_ops.j
         "A",
       ],
       "expr": "A",
-      "op": "aggregate",
+      "op": "faq",
       "output_idx": [
         "i",
         "j",
@@ -5324,7 +5324,7 @@ exports[`Rendering output lock (all display fixtures) > renders structural_ops.j
         ],
         "op": "*",
       },
-      "op": "aggregate",
+      "op": "faq",
       "output_idx": [
         "i",
       ],
@@ -5345,7 +5345,7 @@ exports[`Rendering output lock (all display fixtures) > renders structural_ops.j
     "input": {
       "args": [],
       "expr": "d",
-      "op": "aggregate",
+      "op": "faq",
       "output_idx": [
         "i",
       ],

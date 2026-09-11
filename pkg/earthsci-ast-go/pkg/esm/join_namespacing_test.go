@@ -24,7 +24,7 @@ import (
 
 func aggregateWithJoin(join []any) Expression {
 	return map[string]any{
-		"op":         "aggregate",
+		"op":         "faq",
 		"semiring":   "sum_product",
 		"output_idx": []any{},
 		"ranges": map[string]any{

@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "inline_const_index_gather",
     "description": "Regression fixture for the tree-walk `index({op:const, value:[...]}, <loopvar>, ...)` gather (fix/index-inline-const-array). An INLINE non-scalar `const` array literal used as the TARGET of an `index()` inside an aggregate body used to survive `_resolve_indices` untouched and hit the `E_TREEWALK_UNSUPPORTED_OP: non-scalar const outside an array-consuming position` dead-end in `_compile`. It is now interned into the const-array registry and gathered through the same path a REGISTERED const-array observed already takes. Two constant-RHS ODEs from zero ICs, so du(u0) IS the value at t=1: a 1-D case a[i]=C1[i], and a multi-dim case b[gt]=Σ_{d=1..3} G[gt][d][1] mirroring the duo `index({const [n][3][3]}, gt, d, k)` usage (gt over a tile axis, d over a size-3 axis, k a literal).",
@@ -10,7 +10,7 @@
       "tree-walk",
       "const",
       "index",
-      "aggregate",
+      "faq",
       "regression"
     ]
   },
@@ -48,7 +48,7 @@
         {
           "_comment": "1-D: D(a[i])/dt = index({const [10,20,30]}, i). a[i]=C1[i] at t=1.",
           "lhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": ["i"],
             "expr": {
@@ -61,7 +61,7 @@
             "ranges": { "i": [1, 3] }
           },
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": ["i"],
             "ranges": { "i": [1, 3] },
@@ -81,7 +81,7 @@
         {
           "_comment": "Multi-dim: D(b[gt])/dt = Σ_{d=1..3} index({const [2][3][3]}, gt, d, 1). G[gt][d][k]=100*gt+10*d+k; k=1 literal. b[1]=363, b[2]=663 at t=1.",
           "lhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": ["gt"],
             "expr": {
@@ -94,7 +94,7 @@
             "ranges": { "gt": [1, 2] }
           },
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": ["gt"],
             "ranges": { "gt": [1, 2], "d": [1, 3] },
