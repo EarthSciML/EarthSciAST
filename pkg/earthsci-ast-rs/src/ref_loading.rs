@@ -133,7 +133,7 @@ pub fn resolve_subsystem_refs_with_metaparameters(
 ) -> Result<(), DiagnosticError> {
     let root_meta = root_metaparameter_env(value, api_meta);
     let mut visited = HashSet::new();
-    walk_top_level(value, base_path, &mut visited, &root_meta)
+    walk_top_level(value, base_path, &mut visited, &root_meta, api_meta)
 }
 
 /// A one-line rendering of an index-set declaration for the collision message
@@ -322,6 +322,7 @@ fn walk_top_level(
     base_path: &Path,
     visited: &mut HashSet<PathBuf>,
     parent_meta: &BTreeMap<String, i64>,
+    api_meta: &BTreeMap<String, i64>,
 ) -> Result<(), DiagnosticError> {
     let obj = match value.as_object_mut() {
         Some(o) => o,
@@ -334,11 +335,12 @@ fn walk_top_level(
     // `expression_template_imports` into that model's own scope, BEFORE the
     // ordinary subsystem walk (the spliced model may itself carry subsystems).
     // The leaf resolves in its OWN scope at the edge — the §4.7 edge pipeline,
-    // the same one a `subsystems.<k>` ref runs — so `parent_meta` is threaded
-    // in: edge `bindings` fold against it, and the names the leaf declares
-    // backfill its metaparameter close, which is how the loader-API grid
-    // resolution still reaches the leaf.
-    inline_toplevel_model_refs(obj, base_path, visited, parent_meta)?;
+    // the same one a `subsystems.<k>` ref runs — so BOTH environments are
+    // threaded in, and they are NOT interchangeable: edge `bindings` fold
+    // against `parent_meta` (the mounting document's full closed environment),
+    // while only `api_meta` — the loader-API bindings, §9.7.6 site 4 —
+    // backfills the leaf's own close. See `inline_toplevel_model_refs`.
+    inline_toplevel_model_refs(obj, base_path, visited, parent_meta, api_meta)?;
 
     // The importing document's index-set registry starts from its own
     // top-level `index_sets` — already carrying whatever the top-level model
@@ -411,6 +413,7 @@ fn inline_toplevel_model_refs(
     base_path: &Path,
     visited: &mut HashSet<PathBuf>,
     parent_meta: &BTreeMap<String, i64>,
+    api_meta: &BTreeMap<String, i64>,
 ) -> Result<(), DiagnosticError> {
     let edge_names: Vec<String> = match obj.get("models").and_then(|v| v.as_object()) {
         Some(models) => models
@@ -442,6 +445,9 @@ fn inline_toplevel_model_refs(
                     "top-level model ref must be a string",
                 )
             })?;
+        // `read_edge_bindings` is shared with the `subsystems.<k>` edge, so it
+        // is told which mount form it is reporting for.
+        let mount_noun = format!("top-level model ref '{ref_str}'");
         let (canonical, mut comp) =
             load_ref_document(ref_str, base_path, visited, &TOPLEVEL_MODEL_REF)?;
         let leaf_dir = canonical.parent().unwrap_or(base_path).to_path_buf();
@@ -479,22 +485,33 @@ fn inline_toplevel_model_refs(
                 ));
             }
 
-            // §9.7.6 binding site 3: close the leaf's metaparameters. The
-            // mounting scope's bindings backfill the names the leaf DECLARES
-            // (so a bare `{ref}` mount still inherits the assembler's grid),
-            // and explicit edge `bindings` — folded against `parent_meta` —
-            // win over them.
+            // §9.7.6 binding site 3: close the leaf's metaparameters. Explicit
+            // edge `bindings` win, backfilled by the LOADER-API bindings (site
+            // 4) for the names the leaf DECLARES — so a leaf mounted with no
+            // edge bindings still inherits the loader's grid instead of falling
+            // to its own defaults. Names the leaf does not declare are never
+            // forwarded, so they cannot raise `template_import_unknown_name`
+            // against it. Mirrors the Python `_load_ref_data` backfill.
+            //
+            // The backfill reads `api_meta`, NOT `parent_meta`. `parent_meta`
+            // additionally carries the mounting document's OWN declared
+            // defaults, and forwarding those would let an assembler's unrelated
+            // `NLEV` silently override the leaf's own default for a name the
+            // edge never bound — a different answer from the one the SAME leaf
+            // gets at a `subsystems.<k>` mount, which is exactly what §4.7
+            // forbids. `parent_meta` is the scope edge `bindings` EXPRESSIONS
+            // fold against, and that is all it is.
             let leaf_declared: Vec<String> = comp
                 .get("metaparameters")
                 .and_then(|v| v.as_object())
                 .map(|o| o.keys().cloned().collect())
                 .unwrap_or_default();
-            let mut bindings: BTreeMap<String, i64> = parent_meta
+            let mut bindings: BTreeMap<String, i64> = api_meta
                 .iter()
                 .filter(|(k, _)| leaf_declared.contains(k))
                 .map(|(k, v)| (k.clone(), *v))
                 .collect();
-            bindings.extend(read_edge_bindings(entry_obj, parent_meta)?);
+            bindings.extend(read_edge_bindings(entry_obj, parent_meta, &mount_noun)?);
 
             // §9.7.10 form A: the edge's `expression_template_imports` inject a
             // discretization into the leaf's own scope BEFORE resolution, so the
@@ -541,7 +558,13 @@ fn inline_toplevel_model_refs(
             // directory. Its metaparameters closed and folded just above, so its
             // nested edge bindings arrive already concrete and fold against an
             // empty environment (esm-spec §9.7.6: refs resolve post-close).
-            walk_top_level(&mut comp, &leaf_dir, visited, &BTreeMap::new())?;
+            walk_top_level(
+                &mut comp,
+                &leaf_dir,
+                visited,
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+            )?;
 
             let sel = entry_obj.get("model").and_then(|v| v.as_str());
             let mut model = extract_toplevel_model(&comp, sel, ref_str, &canonical)?;
@@ -587,12 +610,22 @@ fn inline_toplevel_model_refs(
         // ITS own mounts brought in and the merge composes transitively. Unlike
         // the by-name blocks below, the importer does NOT silently win a clash.
         //
-        // Every declaration merges, including an `interval` sized by the leaf's
-        // own metaparameter: the edge closed and folded the leaf's
-        // `metaparameters` above (§9.7.6 site 3), so its `size` is a concrete
-        // integer by the time it reaches here. Before that close existed this
-        // merge held such a declaration back, and the assembly had to redeclare
-        // the axis — the gap §4.7's "without redeclaring them" forbids.
+        // Every declaration merges, including an `interval` whose `size` is a
+        // metaparameter name. Before the edge close existed this merge held such
+        // a declaration back, and the assembly had to redeclare the axis — the
+        // gap §4.7's "without redeclaring them" forbids.
+        //
+        // A `size` is concrete here only when the leaf HAS §9.7 machinery: then
+        // the edge closed and folded its `metaparameters` above (§9.7.6 site 3).
+        // A leaf with NO machinery has no close to run, so a `size` naming a
+        // metaparameter the ASSEMBLER declares still arrives here SYMBOLIC and
+        // merges that way, to be closed by the mounting document's own §9.7.6
+        // pass. `merge_subsystem_index_sets` compares declarations structurally
+        // and has no symbolic handling, so on that path the idempotence it
+        // enforces is SYNTACTIC: a mount that restates the leaf's axis verbatim
+        // (`size: "n_rows"`) merges clean, and one that restates it with the
+        // concrete number the name folds to (`size: 7`) is a
+        // `subsystem_index_set_conflict`. Python agrees on both.
         if let Some(loaded) = comp.get("index_sets").and_then(|v| v.as_object()).cloned()
             && !loaded.is_empty()
         {
@@ -772,6 +805,7 @@ fn walk_subsystems(
 fn read_edge_bindings(
     obj: &serde_json::Map<String, Value>,
     parent_meta: &std::collections::BTreeMap<String, i64>,
+    mount_noun: &str,
 ) -> Result<std::collections::BTreeMap<String, i64>, DiagnosticError> {
     let mut out = std::collections::BTreeMap::new();
     let Some(bindings) = obj.get("bindings") else {
@@ -780,12 +814,14 @@ fn read_edge_bindings(
     let Some(bindings_obj) = bindings.as_object() else {
         return Err(err(
             codes::METAPARAMETER_TYPE_ERROR,
-            "subsystem ref `bindings` must be an object of \
-             metaparameter expressions (esm-spec 9.7.6)",
+            format!(
+                "{mount_noun} `bindings` must be an object of \
+                 metaparameter expressions (esm-spec 9.7.6)"
+            ),
         ));
     };
     for (k, v) in bindings_obj {
-        let ctx = format!("subsystem ref, binding '{k}'");
+        let ctx = format!("{mount_noun}, binding '{k}'");
         // Structural grammar check at the edge (bad op / empty args / float —
         // even with a symbolic arg), then fold against the mounting scope.
         crate::template_imports::require_meta_expr(v, &ctx)?;
@@ -865,7 +901,7 @@ fn resolve_value(
         let edge_result: Result<(), DiagnosticError> = (|| {
             crate::lower_expression_templates::reject_expression_templates_pre_v04(&parsed)?;
             crate::template_imports::reject_template_imports_pre_v08(&parsed)?;
-            let bindings = read_edge_bindings(obj, parent_meta)?;
+            let bindings = read_edge_bindings(obj, parent_meta, "subsystem ref")?;
             // esm-spec §9.7.10 form A: the edge's `expression_template_imports`
             // inject a discretization into the referenced component's own
             // scope, appended BEFORE resolution so the §9.6.3 fixpoint lowers
@@ -926,7 +962,13 @@ fn resolve_value(
             // its OWN nested subsystem refs arrives with metaparameter names
             // already substituted to concrete integers — its refs fold against
             // an empty environment (esm-spec §9.7.6: refs resolve post-close).
-            walk_top_level(&mut parsed, &parent_dir, visited, &BTreeMap::new())?;
+            walk_top_level(
+                &mut parsed,
+                &parent_dir,
+                visited,
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+            )?;
             if let Some(reg) = registry
                 && let Some(loaded) = parsed.get("index_sets").and_then(|v| v.as_object())
             {

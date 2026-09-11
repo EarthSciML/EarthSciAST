@@ -14,7 +14,8 @@
 //! AND the behaviour that must not change with it: the conflict still fires,
 //! and the documents that redeclare everything today keep loading unchanged.
 
-use earthsci_ast::load_path;
+use earthsci_ast::{load_path, load_path_with_options};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 fn scratch(tag: &str) -> PathBuf {
@@ -228,10 +229,18 @@ fn a_consumed_mount_edge_round_trips_to_a_fixed_point() {
 /// sized by a name the leaf does not declare is `metaparameter_unbound` at the
 /// edge — it never reaches the mounting document's close. A leaf with NO
 /// machinery has no close to be strict about, so the same size merges
-/// symbolically (the test above). Both behaviours match Python and match this
-/// binding's own `subsystems.<k>` edge, which is what §4.7 requires; whether
-/// the edge close SHOULD be strict about a name only the assembler can bind is
-/// a spec question, not a divergence.
+/// symbolically (the test above). Both behaviours match this binding's own
+/// `subsystems.<k>` edge, which is what §4.7 requires, and both match Python's
+/// VERDICT — accept or refuse — at both of its mount forms; whether the edge
+/// close SHOULD be strict about a name only the assembler can bind is a spec
+/// question, not a divergence.
+///
+/// The verdicts agree; one merged VALUE does not. On the no-machinery path
+/// Rust's root pass folds the symbolic size before emitting it (`size: 7`)
+/// while Python leaves it symbolic (`size: "n_rows"`), because the two merge on
+/// opposite sides of their own close. Neither refuses the document, so no
+/// shared suite sees it, but a downstream shape check would. It is out of this
+/// change's scope and is recorded rather than fixed.
 #[test]
 fn a_leaf_with_machinery_is_strict_about_an_assembler_scoped_size() {
     let dir = scratch("strict");
@@ -261,6 +270,183 @@ fn a_leaf_with_machinery_is_strict_about_an_assembler_scoped_size() {
         e.to_string().contains("metaparameter_unbound") && e.to_string().contains("n_rows"),
         "a proper diagnostic, not an i64 coercion panic: {e}"
     );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// FALSIFICATION 5 — the backfill must not reach past the loader API into the
+/// mounting document's OWN declared defaults.
+///
+/// §9.7.6 site 4 is the loader API; a mounting document's `metaparameters`
+/// defaults are site 5, its own close, and they are NOT a binding on anything
+/// it mounts. Forwarding them would let an assembler's unrelated `NLEV` silently
+/// resize a leaf axis the edge never bound — and give a DIFFERENT answer from
+/// the one the same leaf gets at a `subsystems.<k>` mount, which is precisely
+/// what §4.7 forbids. Python backfills from `loader_metaparameters` only; this
+/// pins Rust to that.
+#[test]
+fn an_assemblers_own_default_never_overrides_a_leafs_own() {
+    let dir = scratch("assembler_default");
+    write(&dir, "leaf.esm", SELF_CONTAINED_LEAF);
+    // The assembler happens to declare a metaparameter of the SAME NAME, for
+    // its own purposes, and does not bind it on the edge.
+    let top = write(
+        &dir,
+        "top.esm",
+        r#"{"esm":"1.0.0","metadata":{"name":"top"},
+            "metaparameters":{"NLEV":{"type":"integer","default":12}},
+            "models":{"M":{"ref":"./leaf.esm"}}}"#,
+    );
+    // The same leaf, the same assembler, through the OTHER attachment point.
+    let sub = write(
+        &dir,
+        "sub.esm",
+        r#"{"esm":"1.0.0","metadata":{"name":"sub"},
+            "metaparameters":{"NLEV":{"type":"integer","default":12}},
+            "models":{"Host":{
+              "subsystems":{"M":{"ref":"./leaf.esm"}},
+              "variables":{"q":{"type":"unknown","units":"1","default":1.0}},
+              "equations":[{"lhs":{"op":"D","args":["q"],"wrt":"t"},
+                            "rhs":{"op":"*","args":[-1.0,"q"]}}]}}}"#,
+    );
+
+    let a = load_path(&top).expect("top-level mount loads");
+    let b = load_path(&sub).expect("subsystem mount loads");
+    let size_of =
+        |f: &earthsci_ast::EsmFile| f.index_sets.as_ref().expect("index_sets")["lev"].size;
+    assert_eq!(
+        size_of(&a),
+        Some(4),
+        "the LEAF's own default must win: the assembler never bound NLEV on this edge"
+    );
+    assert_eq!(
+        size_of(&a),
+        size_of(&b),
+        "esm-spec §4.7: the two mount forms MUST NOT differ"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// FALSIFICATION 6 — the backfill's precedence, both halves.
+///
+/// The loader API (§9.7.6 site 4) DOES reach a leaf, for the names the leaf
+/// declares, so a bare `{ref}` mount still inherits the caller's grid instead of
+/// falling to the leaf's defaults. An explicit edge `bindings` entry (site 3)
+/// outranks it. Neither half was exercised before: deleting the backfill
+/// outright, or reversing the precedence, left the suite green.
+///
+/// Note the host must DECLARE a name for the loader API to bind it — binding an
+/// undeclared one is `template_import_unknown_name` at the root, before any
+/// mount is reached. So `api_meta` is always a subset of what the host declares,
+/// and what FALSIFICATION 5 forbids forwarding is precisely the remainder: the
+/// host's own DEFAULTS, for names the caller did not bind.
+#[test]
+fn the_loader_api_backfills_a_leaf_and_an_edge_binding_outranks_it() {
+    let dir = scratch("backfill_precedence");
+    write(&dir, "leaf.esm", SELF_CONTAINED_LEAF);
+    let bare = write(
+        &dir,
+        "bare.esm",
+        r#"{"esm":"1.0.0","metadata":{"name":"bare"},
+            "metaparameters":{"NLEV":{"type":"integer","default":12}},
+            "models":{"M":{"ref":"./leaf.esm"}}}"#,
+    );
+    let bound = write(
+        &dir,
+        "bound.esm",
+        r#"{"esm":"1.0.0","metadata":{"name":"bound"},
+            "metaparameters":{"NLEV":{"type":"integer","default":12}},
+            "models":{"M":{"ref":"./leaf.esm","bindings":{"NLEV":7}}}}"#,
+    );
+    let api: BTreeMap<String, i64> = [("NLEV".to_string(), 9i64)].into_iter().collect();
+
+    let size_of =
+        |f: &earthsci_ast::EsmFile| f.index_sets.as_ref().expect("index_sets")["lev"].size;
+    assert_eq!(
+        size_of(&load_path_with_options(&bare, &api).expect("bare mount loads")),
+        Some(9),
+        "site 4 backfills a name the leaf declares, over the leaf's own default"
+    );
+    assert_eq!(
+        size_of(&load_path_with_options(&bound, &api).expect("bound mount loads")),
+        Some(7),
+        "site 3 — the explicit edge binding — must outrank the site-4 backfill"
+    );
+    // And with the SAME host, no API binding: the host's own default of 12 must
+    // NOT reach the leaf. This is FALSIFICATION 5's rule at the one document
+    // where the two environments differ only in that default.
+    assert_eq!(
+        size_of(&load_path(&bare).expect("bare mount loads with no API bindings")),
+        Some(4),
+        "an unbound host default is site 5, its own close — never a binding on a mount"
+    );
+
+    // A name the LEAF does not declare is never forwarded, so it cannot raise
+    // `template_import_unknown_name` against the leaf.
+    let other = write(
+        &dir,
+        "other.esm",
+        r#"{"esm":"1.0.0","metadata":{"name":"other"},
+            "metaparameters":{"NROWS":{"type":"integer","default":2}},
+            "models":{"M":{"ref":"./leaf.esm"}}}"#,
+    );
+    let unrelated: BTreeMap<String, i64> = [("NROWS".to_string(), 3i64)].into_iter().collect();
+    assert_eq!(
+        size_of(&load_path_with_options(&other, &unrelated).expect("an unrelated name is inert")),
+        Some(4),
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// FALSIFICATION 7 — the OTHER new refusal, pinned so it is visible rather than
+/// discovered.
+///
+/// On the no-machinery path a symbolic `size` reaches the merge unfolded, and
+/// `merge_subsystem_index_sets` compares declarations structurally. So the
+/// idempotence of a restatement is SYNTACTIC there: restating the leaf's axis
+/// verbatim merges clean (FALSIFICATION 2), but restating it with the concrete
+/// number the name folds to is a conflict — even though the two say the same
+/// thing once the root closes. This loaded before the edge pipeline ran here.
+/// Python refuses it identically, so it is a convergence, not a divergence.
+#[test]
+fn a_concrete_restatement_of_a_symbolic_leaf_axis_collides() {
+    let dir = scratch("concrete_restatement");
+    write(
+        &dir,
+        "leaf.esm",
+        r#"{
+  "esm": "1.0.0",
+  "metadata": {"name": "leaf"},
+  "index_sets": {"rows": {"kind": "interval", "size": "n_rows"}},
+  "models": {"Census": {
+    "variables": {"u": {"type":"unknown","units":"1","shape":["rows"],"default":1.0}},
+    "equations": [{"lhs": {"op":"D","args":["u"],"wrt":"t"},
+                   "rhs": {"op":"*","args":[-1.0,"u"]}}]}}}"#,
+    );
+    let host = write(
+        &dir,
+        "host.esm",
+        r#"{"esm":"1.0.0","metadata":{"name":"host"},
+            "metaparameters":{"n_rows":{"type":"integer","default":7}},
+            "index_sets":{"rows":{"kind":"interval","size":7}},
+            "models":{"M":{"ref":"./leaf.esm"}}}"#,
+    );
+
+    let e =
+        load_path(&host).expect_err("a concrete restatement is not deep-equal to a symbolic one");
+    let text = e.to_string();
+    assert!(
+        text.contains("subsystem_index_set_conflict"),
+        "stable code required, not an i64 coercion panic: {text}"
+    );
+    for needle in ["n_rows", "size=7"] {
+        assert!(
+            text.contains(needle),
+            "the diagnostic must name both contributors ({needle}): {text}"
+        );
+    }
 
     let _ = std::fs::remove_dir_all(&dir);
 }

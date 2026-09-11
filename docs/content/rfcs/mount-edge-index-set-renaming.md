@@ -484,13 +484,25 @@ breaks URL refs and offers no per-name control.
    **Resolved for Rust (2026-09-10)**: Rust took the first horn — a mounted leaf is a closed
    build boundary at BOTH forms — and the cost item 3 named is smaller than it looked. The
    loader-API metaparameters still reach the leaf, by the backfill Python already used: the
-   mounting scope's bindings seed the leaf's close for the names the LEAF declares, and explicit
-   edge `bindings` win over them. What is genuinely lost is an axis sized by a name only the
+   LOADER-API bindings (§9.7.6 site 4) seed the leaf's close for the names the LEAF declares, and
+   explicit edge `bindings` (site 3) win over them. The mounting document's own declared defaults
+   are NOT forwarded — they are its site-5 close, not a binding on anything it mounts, and
+   forwarding them would let an assembler's unrelated name silently resize a leaf axis and make
+   the two mount forms disagree. What is genuinely lost is an axis sized by a name only the
    ASSEMBLER declares — with no leaf machinery it merges symbolically and the root's close
    resolves it, but a leaf that has any §9.7 machinery folds strictly and rejects it with
    `metaparameter_unbound`, exactly as Python and as the `subsystems.<k>` edge do. Whether the
    edge close should be strict about such a name is the remaining open question, and it is a
-   spec question at both forms rather than a top-level one. Status is now: honoured by Python
+   spec question at both forms rather than a top-level one. Note what makes a leaf strict: a
+   whole-document boolean, whether it carries ANY §9.7 machinery at all. A component's
+   acceptance therefore flips on an `expression_template_imports` entry unrelated to the axis in
+   question. That is inherited from Python rather than invented here, but it is a footgun and
+   belongs in the same ruling.
+   A second consequence of merging a symbolic size is worth settling with it: on the
+   no-machinery path the registry merge compares declarations structurally, so a mount that
+   restates the leaf's axis VERBATIM (`size: "n_rows"`) is idempotent while one that restates it
+   with the concrete number the name folds to (`size: 7`) is a `subsystem_index_set_conflict`.
+   Python agrees, so it is convergent behaviour, but the asymmetry is surprising to an author. Status is now: honoured by Python
    and Rust, refused with `subsystem_index_set_rename_unsupported_mount_form` by Julia,
    unreachable in TypeScript and Go.
    **This matters for the reporter**: EqWeFiC's assemblies use top-level `ref` mounts, so under
