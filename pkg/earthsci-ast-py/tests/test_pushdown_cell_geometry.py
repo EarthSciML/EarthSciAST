@@ -56,7 +56,7 @@ def _doc():
     """The polygon-allocation document: an envelope broad phase, an intersection
     area for the narrow phase, and a data-fed SR array for the mat-vec."""
     return {
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "pushdown_cell_geometry"},
         "data_sources": {"MockSR": {"kind": "static", "source": {"url_template": "mock://sr"}}},
         "index_sets": {

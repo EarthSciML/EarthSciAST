@@ -118,11 +118,17 @@ func TestAggregateInvalidFixtures(t *testing.T) {
 				if _, err := LoadPath(path); err != nil {
 					t.Fatalf("resolver-only fixture %s must pass schema validation, got error: %v", name, err)
 				}
+			case pin.ParseError:
+				// Rejected at LOAD by something other than JSON Schema — the
+				// `removed_op` rejection of `arrayop` is the case here. The
+				// schema cannot express it: `arrayop` is a well-formed `op`
+				// identifier, so esm-spec §4.2 would admit it as an OPEN
+				// rewrite-target op (docs/content/rfcs/faq-node-rename.md §5.4).
+				if _, err := LoadPath(path); err == nil {
+					t.Fatalf("expected %s to be rejected at load, but it loaded", name)
+				}
 			case len(pin.SchemaErrors) > 0:
-				// Rejected at Load — by schema validation, or by an explicit
-				// wire-boundary rejection such as `removed_op` (`faq`),
-				// which the schema cannot express because the spelling is a
-				// well-formed identifier.
+				// Rejected at Load by schema validation.
 				if _, err := LoadPath(path); err == nil {
 					t.Fatalf("expected %s to be rejected at schema validation, but it validated", name)
 				}

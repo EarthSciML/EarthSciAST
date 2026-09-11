@@ -260,7 +260,7 @@ def _probe_document(body: dict, *, tests: bool = True) -> str:
         ]
     return json.dumps(
         {
-            "esm": "1.0.0",
+            "esm": "1.1.0",
             "metadata": {"name": "R", "description": "probe", "authors": ["t"]},
             "index_sets": {"steps": {"kind": "interval", "size": 4}},
             "models": {"R": model},
@@ -394,7 +394,7 @@ def test_self_read_offset_on_two_axes_is_rejected() -> None:
     sweep would have to advance both at once."""
     doc = json.dumps(
         {
-            "esm": "1.0.0",
+            "esm": "1.1.0",
             "metadata": {"name": "R2", "description": "probe", "authors": ["t"]},
             "index_sets": {
                 "rows": {"kind": "interval", "size": 3},
@@ -440,7 +440,7 @@ def test_makearray_region_self_read_is_refused_as_unsupported_form() -> None:
     code says the READ is causal but the CARRIER cannot sequence it."""
     doc = json.dumps(
         {
-            "esm": "1.0.0",
+            "esm": "1.1.0",
             "metadata": {"name": "RM", "description": "probe", "authors": ["t"]},
             "index_sets": {"steps": {"kind": "interval", "size": 4}},
             "models": {

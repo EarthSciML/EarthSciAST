@@ -39,7 +39,7 @@
 //!   entry, each contraction tuple in `eval_vec_contracted`, and each region of
 //!   `eval_vec_makearray`. Two occurrences under different boxes never share.
 //!
-//! Every binder in the IR (a `faq`/`faq` `output_idx` or `ranges`
+//! Every binder in the IR (a `faq` `output_idx` or `ranges`
 //! key, an `integral` `var`, a skolem `arg`, a template `bindings` key) either
 //! opens a new box on the vectorized path — and therefore a new scope here — or
 //! is not evaluated by the overlay at all, in which case [`ClassTable`] refuses
@@ -536,7 +536,7 @@ impl ClassTable {
     ///
     /// `binders = None` means "no box symbol is in scope here", which makes the
     /// whole subtree non-pure. That is the conservative treatment given to every
-    /// binder-introducing operator (`faq`/`faq`/`makearray`): those
+    /// binder-introducing operator (`faq`/`makearray`): those
     /// re-enter the overlay under a DIFFERENT box, whose symbols this walk does
     /// not know, so nothing beneath them is ever cached.
     fn walk(
@@ -593,7 +593,7 @@ impl ClassTable {
                 let kids_evaluated = evaluated && (transparent || opener);
                 // Only a box-TRANSPARENT node keeps its children under this box,
                 // so only there does the caller's binder set still describe them.
-                // Every other node — `faq`/`faq`/`makearray`, or a
+                // Every other node — `faq`/`makearray`, or a
                 // construct the overlay bails on — evaluates its children under a
                 // DIFFERENT box whose symbols this walk does not know, so nothing
                 // beneath one is ever treated as pure. A nested aggregate

@@ -517,7 +517,7 @@ pub struct FlattenedSystem {
     /// through verbatim from the source [`EsmFile`]. Carried so a coupled
     /// (multi-model) array system reaching the array runtime via
     /// [`crate::simulate_array::ArrayCompiled::from_flattened`] can resolve
-    /// `faq`/`faq` `ranges` `{ "from": <set> }`, `join.on` gates, and
+    /// `faq` `ranges` `{ "from": <set> }`, `join.on` gates, and
     /// derived-set references against it — exactly as the single-model
     /// `from_file` path resolves them against `file.index_sets`. Empty for a
     /// file that declares no index sets, so the ordinary ODE path is unaffected.
@@ -2512,13 +2512,13 @@ fn build_reaction_block(
 /// variable `t` is never namespaced — it's a global symbol resolved to
 /// [`ResolvedExpr::Time`] during compile, not a component-scoped name.
 ///
-/// Array nodes (`faq`/`faq`/`makearray`/`integral`/…) carry their
+/// Array nodes (`faq`/`makearray`/`integral`/…) carry their
 /// body in out-of-band fields (`expr`, `filter`, `lower`, `upper`, `values`,
 /// `axes`) plus structural metadata (`output_idx`, `ranges`, `reduce`,
 /// `semiring`, `shape`, …). Every such field is preserved and the
 /// expression-bearing ones are recursively namespaced, so a discretized
 /// `faq` survives coupling. Loop-index symbols introduced by an enclosing
-/// `faq`/`faq` (`output_idx` + `ranges` keys) or `integral`
+/// `faq` (`output_idx` + `ranges` keys) or `integral`
 /// (`int_var`) are component-local — the array interpreter resolves them
 /// positionally against `loop_binds`, never against the variable registry — so
 /// they are excluded from namespacing within that node's scope (ess-14f.8).
@@ -2644,7 +2644,7 @@ fn namespace_expr_scoped(
             // Extend the bound-index set with the loop symbols this node
             // introduces so its body / filter / bound expressions skip them.
             // `ranges` keys cover both the output and contracted indices of an
-            // `faq`/`faq`; `output_idx` is added defensively; an
+            // `faq`; `output_idx` is added defensively; an
             // `integral` binds its `int_var`.
             let mut child_bound = bound.clone();
             if let Some(output_idx) = &node.output_idx {
@@ -4465,7 +4465,7 @@ fn makearray_extents(ma: &ExpressionNode) -> Vec<i64> {
 /// the spatial `loops`: a bare reference to an array variable becomes
 /// `index(var, loops…)`, and each spatial-operator `makearray` becomes
 /// `index(makearray, loops…)` (its region values already index per cell).
-/// Self-contained nodes (`index`/`faq`/`faq`) are left untouched;
+/// Self-contained nodes (`index`/`faq`) are left untouched;
 /// elementwise ops recurse.
 fn lift_rhs_to_cell(expr: &Expr, arrayvars: &HashSet<String>, loops: &[String]) -> Expr {
     match expr {

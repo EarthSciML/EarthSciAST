@@ -84,7 +84,7 @@ fn base_doc() -> Value {
         json!({"type": "unknown", "shape": ["rcv_cells"]}),
     );
     json!({
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "pd_tmpl"},
         "index_sets": {
             "src_cells": {"kind": "interval", "size": 4},

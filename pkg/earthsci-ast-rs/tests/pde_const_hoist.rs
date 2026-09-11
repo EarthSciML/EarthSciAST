@@ -44,7 +44,7 @@ use earthsci_ast::simulate_array::{ArrayCompiled, RhsStats};
 /// on the geometry factor, which is the intended granularity.
 fn geom_json(n: usize) -> String {
     const TEMPLATE: &str = r#"{
- "esm": "1.0.0",
+ "esm": "1.1.0",
  "metadata": {"name": "const_hoist_geom"},
  "models": {
   "Geom": {

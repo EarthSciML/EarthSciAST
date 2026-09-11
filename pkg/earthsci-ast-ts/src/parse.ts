@@ -422,8 +422,11 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
       validationView = data
     }
   } else {
-    data = input
-    validationView = canonical ? stripNumericLiterals(input) : input
+    // Copy: `prepareDocumentOps` rewrites `op` values on nested nodes, and a
+    // caller that handed us a live object should not see its document mutated.
+    // Rust, Go and Julia all work on their own copy; this makes the five agree.
+    data = structuredClone(input)
+    validationView = canonical ? stripNumericLiterals(data) : data
   }
 
   // Step 1a-pre: esm 1.1.0 — rewrite the deprecated `aggregate` op spelling to
@@ -431,9 +434,10 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
   // the version gates, the schema, the typed tree and `emit` all see exactly
   // one tag (docs/content/rfcs/faq-node-rename.md). Both views are rewritten
   // because in canonical mode `validationView` is a separate stripped copy.
-  rejectRemovedOps(data)
-  normalizeDeprecatedOpAliases(data)
-  if (validationView !== data) normalizeDeprecatedOpAliases(validationView)
+  prepareDocumentOps(data)
+  // In canonical mode `validationView` is a separate stripped copy, so it needs
+  // the same rewrite — but silently: the document has already been reported.
+  if (validationView !== data) prepareDocumentOps(validationView, { warn: false })
 
   // Step 1a: esm-spec §8.2.1 — resolve every `data_sources[*].source` location
   // against this document's own directory, before schema validation and before
@@ -687,9 +691,7 @@ function rejectRemovedV02Blocks(view: unknown): void {
 }
 
 
-/**
- * Depth-first rewrite of `"op": "faq"` to `"op": "faq"`; returns the count.
- */
+/** Depth-first rewrite of `"op": "aggregate"` to `"op": "faq"`; returns the count. */
 function rewriteOpAliases(node: unknown): number {
   let n = 0
   if (Array.isArray(node)) {
@@ -705,65 +707,83 @@ function rewriteOpAliases(node: unknown): number {
   return n
 }
 
-/**
- * Normalize deprecated expression-node `op` spellings in place, warning once
- * for the document.
- *
- * The one alias is `aggregate` → `faq` (esm 1.1.0,
- * `docs/content/rfcs/faq-node-rename.md`). Normalizing at the wire boundary is
- * what lets the rest of the package recognize exactly one spelling: nothing
- * downstream of the loader, `emit` included, ever sees the alias, so a
- * document authored with `aggregate` is upgraded exactly once.
- *
- * The older `arrayop` spelling is NOT normalized — it was removed at esm 0.8.0
- * and is rejected like any other unknown non-rewrite-target op.
- */
-export function normalizeDeprecatedOpAliases(doc: unknown): number {
-  const n = rewriteOpAliases(doc)
-  if (n > 0) {
-    console.warn(
-      `deprecated_op_alias: \`"op": "aggregate"\` is the pre-1.1.0 spelling of ` +
-        `\`"op": "faq"\` (Functional Aggregate Query); ${n} ` +
-        `${n === 1 ? 'node was' : 'nodes were'} normalized on load. The alias is ` +
-        `REMOVED at esm 2.0.0 — re-emit this document to migrate it ` +
-        `(docs/content/rfcs/faq-node-rename.md).`
-    )
-  }
-  return n
-}
-
-/** Path of the first `"op": "arrayop"` node, or `null`. */
-function findRemovedOp(node: unknown, at = ''): string | null {
+/** Path of the first node carrying `"op": <op>`, or `null`. */
+function findOp(node: unknown, op: string, at = ''): string | null {
   if (Array.isArray(node)) {
     for (let i = 0; i < node.length; i++) {
-      const hit = findRemovedOp(node[i], `${at}/${i}`)
+      const hit = findOp(node[i], op, `${at}/${i}`)
       if (hit !== null) return hit
     }
   } else if (node !== null && typeof node === 'object') {
     const obj = node as Record<string, unknown>
-    if (obj.op === 'arrayop') return at
+    if (obj.op === op) return at
     for (const k of Object.keys(obj)) {
-      const hit = findRemovedOp(obj[k], `${at}/${k}`)
+      const hit = findOp(obj[k], op, `${at}/${k}`)
       if (hit !== null) return hit
     }
   }
   return null
 }
 
+/** Does `doc` declare an `esm` version below 1.1.0? */
+function declaredBelowV11(doc: unknown): boolean {
+  if (doc === null || typeof doc !== 'object') return false
+  const esm = (doc as Record<string, unknown>).esm
+  if (typeof esm !== 'string') return false
+  const [major, minor] = esm.split('.').map((x) => Number.parseInt(x, 10))
+  if (Number.isNaN(major) || Number.isNaN(minor)) return false
+  return major < 1 || (major === 1 && minor < 1)
+}
+
 /**
- * Reject a document carrying the pre-0.8.0 `arrayop` spelling.
+ * The wire boundary for expression-node `op` spellings, applied to EVERY
+ * document — root, `{ref}`-loaded child, template library, coupling library.
  *
- * `arrayop` is REMOVED, not deprecated: it is a well-formed identifier, so
- * without this check it falls into the OPEN rewrite-target tier (esm-spec
- * §4.2), loads silently, and fails only much later as an `unlowered_operator`.
+ * Three steps, in this order:
+ *
+ * 1. `arrayop` (removed at esm 0.8.0) is rejected BY NAME. It is a well-formed
+ *    identifier, so esm-spec §4.2 would otherwise admit it as an OPEN
+ *    rewrite-target op: the document would load silently and fail much later as
+ *    `unlowered_operator`, or never.
+ * 2. The `faq` version gate, on the AUTHORED form — `faq` arrives at esm 1.1.0
+ *    (esm-spec §2.2.4). Deliberately BEFORE normalization: `aggregate` is the
+ *    pre-1.1.0 spelling, so a 1.0.0 document carrying the alias is legal.
+ * 3. `aggregate` is normalized to `faq` and the declared version is raised to
+ *    the 1.1.0 floor with it, so the upgraded document is self-consistent.
+ *
+ * Returns the number of nodes normalized.
+ * See `docs/content/rfcs/faq-node-rename.md`.
  */
-export function rejectRemovedOps(doc: unknown): void {
-  const path = findRemovedOp(doc)
-  if (path !== null) {
+export function prepareDocumentOps(doc: unknown, opts?: { warn?: boolean }): number {
+  const removedAt = findOp(doc, 'arrayop')
+  if (removedAt !== null) {
     throw new ParseError(
-      `removed_op at ${path}: \`"op": "arrayop"\` was removed at esm 0.8.0 and is not a ` +
+      `removed_op at ${removedAt}: \`"op": "arrayop"\` was removed at esm 0.8.0 and is not a ` +
         `deprecated alias; use \`"op": "faq"\` (the Functional Aggregate Query node). ` +
         `See docs/content/rfcs/faq-node-rename.md.`
     )
   }
+  const faqAt = findOp(doc, 'faq')
+  if (faqAt !== null && declaredBelowV11(doc)) {
+    const declared = (doc as Record<string, unknown>).esm
+    throw new ParseError(
+      `faq_version_too_old at ${faqAt}: the \`faq\` op arrives at esm 1.1.0; file declares ` +
+        `${String(declared)}. Use \`"op": "aggregate"\` (the deprecated pre-1.1.0 spelling) ` +
+        `or raise the declared version. See docs/content/rfcs/faq-node-rename.md.`
+    )
+  }
+  const n = rewriteOpAliases(doc)
+  if (n > 0) {
+    if (declaredBelowV11(doc)) (doc as Record<string, unknown>).esm = '1.1.0'
+    if (opts?.warn !== false) {
+      console.warn(
+        `deprecated_op_alias: \`"op": "aggregate"\` is the pre-1.1.0 spelling of ` +
+          `\`"op": "faq"\` (Functional Aggregate Query); ${n} ` +
+          `${n === 1 ? 'node was' : 'nodes were'} normalized on load. The alias is ` +
+          `REMOVED at esm 2.0.0 — re-emit this document to migrate it ` +
+          `(docs/content/rfcs/faq-node-rename.md).`
+      )
+    }
+  }
+  return n
 }

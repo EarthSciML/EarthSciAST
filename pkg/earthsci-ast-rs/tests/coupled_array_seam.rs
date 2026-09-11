@@ -37,7 +37,7 @@ use std::collections::HashMap;
 ///   `u[i](t) = u0[i]·e^{-t}`,  `w[i](t) = u0[i]·(1 - e^{-t})`.
 const COUPLED_ARRAY_JSON: &str = r#"
     {
-      "esm": "1.0.0",
+      "esm": "1.1.0",
       "metadata": {
         "name": "coupled_array_seam"
       },
@@ -389,7 +389,7 @@ fn single_model_array_path_unchanged() {
     // dispatcher's `model_count > 1` guard leaves it on the raw entry point.
     let json = r#"
         {
-          "esm": "1.0.0",
+          "esm": "1.1.0",
           "metadata": {
             "name": "single_array_decay"
           },

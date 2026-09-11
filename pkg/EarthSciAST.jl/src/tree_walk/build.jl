@@ -542,7 +542,7 @@ function _materialized_obs_dims(def::ASTExpr, shape, index_sets::AbstractDict,
                                 derived_extents::AbstractDict)
     declared = _declared_shape_extents(shape, index_sets, derived_extents)
     produced = nothing
-    if def isa OpExpr && _is_aggregate_op((def::OpExpr).op)
+    if def isa OpExpr && _is_faq_op((def::OpExpr).op)
         dop = def::OpExpr
         idx_names = _output_idx_strings(dop)
         if !isempty(idx_names)
@@ -1872,7 +1872,7 @@ function _seed_faq_init_u0!(u0::Vector{Float64}, init_equations,
                                 pgather::AbstractDict, param_sym_set, reg_funcs, p)
     for eq in init_equations
         eq.lhs isa VarExpr || continue
-        eq.rhs isa OpExpr && _is_aggregate_op((eq.rhs::OpExpr).op) || continue
+        eq.rhs isa OpExpr && _is_faq_op((eq.rhs::OpExpr).op) || continue
         var_name = (eq.lhs::VarExpr).name
         rhs_op   = eq.rhs::OpExpr
         idx_names = _output_idx_strings(rhs_op)
@@ -2082,7 +2082,7 @@ function _build_discrete_materializer!(mut::DiscreteMaterializer,
     #    discrete cache resolves to a pgather over it (values filled later, in order).
     for name in order
         rhs = discrete_defs[name]
-        (rhs isa OpExpr && _is_aggregate_op((rhs::OpExpr).op)) ||
+        (rhs isa OpExpr && _is_faq_op((rhs::OpExpr).op)) ||
             throw(TreeWalkError("E_TREEWALK_DISCRETE_MATERIALIZE",
                 "discrete-cadence var '$name' must be a faq producer"))
         rop = rhs::OpExpr
@@ -3751,7 +3751,7 @@ function _unwrap_identity_gather(rhs::ASTExpr, idx_names::Vector{String},
     nd = length(idx_names)
     length(g.args) == nd + 1 || return rhs
     prod = g.args[1]
-    (prod isa OpExpr && _is_aggregate_op((prod::OpExpr).op)) || return rhs
+    (prod isa OpExpr && _is_faq_op((prod::OpExpr).op)) || return rhs
     a = prod::OpExpr
     a.expr_body === nothing && return rhs
     aranges = a.ranges
@@ -3983,7 +3983,7 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
     # M2 join gates / filter predicate (§5.3 / §7.2) — constant per equation.
     agg_gates = nothing
     agg_filter = nothing
-    if rhs_expr isa OpExpr && _is_aggregate_op((rhs_expr::OpExpr).op)
+    if rhs_expr isa OpExpr && _is_faq_op((rhs_expr::OpExpr).op)
         rhs_op = rhs_expr::OpExpr
         rhs_oplus, rhs_zerobar =
             _aggregate_oplus_identity(rhs_op.semiring, rhs_op.reduce)

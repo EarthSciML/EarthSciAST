@@ -173,7 +173,7 @@ fn every_unevaluable_core_op_ends_in_a_diagnostic_not_a_panic() {
 
     for (op, refused_by, body) in cases {
         let file: EsmFile = serde_json::from_value(json!({
-            "esm": "1.0.0",
+            "esm": "1.1.0",
             "metadata": { "name": "UnevaluableProbe" },
             "index_sets": { "rows": { "kind": "interval", "size": 2 } },
             "models": { "M": {
@@ -229,7 +229,7 @@ fn every_unevaluable_core_op_ends_in_a_diagnostic_not_a_panic() {
 #[test]
 fn an_ic_equation_lhs_still_builds() {
     let file: EsmFile = serde_json::from_value(json!({
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": { "name": "IcLhsProbe" },
         "models": { "M": {
             "variables": { "u": { "type": "unknown", "units": "1", "default": 0.0 } },
@@ -266,7 +266,7 @@ fn an_ic_equation_lhs_still_builds() {
 /// already covers. This shape is what reaches the SCALAR interpreter.
 fn scalar_probe(body: serde_json::Value) -> EsmFile {
     serde_json::from_value(json!({
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": { "name": "ScalarUnevaluableProbe" },
         "models": { "M": {
             "variables": {

@@ -1008,7 +1008,7 @@ fn metaparameter_fold_ranges_regions_size_exact() {
         dir.path(),
         r#"
             {
-              "esm": "1.0.0",
+              "esm": "1.1.0",
               "metadata": {
                 "name": "fold"
               },

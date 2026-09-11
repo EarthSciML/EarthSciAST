@@ -313,7 +313,7 @@ def test_desugar_semiring_guard_blocks_non_additive():
 
 
 def test_desugar_no_models_or_unknown_model_is_noop():
-    assert desugar_pushdown({"esm": "1.0.0"}) == {"esm": "1.0.0"}
+    assert desugar_pushdown({"esm": "1.1.0"}) == {"esm": "1.1.0"}
     doc = _l1_doc()
     assert desugar_pushdown(doc, model_name="NoSuchModel") is doc
 

@@ -861,7 +861,7 @@ mod tests {
         // name through the forcing buffer (PR-1). No `data_sources` needed here.
         let model_json = r#"
             {
-              "esm": "1.0.0",
+              "esm": "1.1.0",
               "metadata": {
                 "name": "r1_forcing"
               },

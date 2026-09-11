@@ -247,7 +247,7 @@ function _collect_recurrence_self_reads!(e::ASTExpr, var::AbstractString, file::
 end
 
 # The variable an equation DEFINES, if its LHS names one: a bare variable, or
-# the §4.3 indexed-aggregate LHS form `aggregate{expr: index(V, k…)}`. A
+# the §4.3 indexed-`faq` LHS form `faq{expr: index(V, k…)}`. A
 # DERIVATIVE LHS (`D(u)`) defines no array algebraically — a stencil read of `u`
 # at `i−1` there is a gather on the solver's state vector, not a
 # self-reference — so it deliberately yields `nothing`.
@@ -303,7 +303,7 @@ function _check_recurrence_equation!(errors::Vector{StructuralError}, file::EsmF
         return errors
     end
 
-    # The cell frame: the indexed-aggregate LHS's own indices, else the RHS
+    # The cell frame: the indexed-`faq` LHS's own indices, else the RHS
     # aggregate's.
     rhs_agg = (eq.rhs isa OpExpr && (eq.rhs::OpExpr).op == "faq") ?
               (eq.rhs::OpExpr) : nothing
@@ -313,8 +313,8 @@ function _check_recurrence_equation!(errors::Vector{StructuralError}, file::EsmF
         push_err!(ERROR_CODES.RECURRENCE_UNSUPPORTED_FORM,
             "the definition of '$var' reads '$var' at another position, but the equation " *
             "declares no cell frame to sweep: its RHS is not a `faq` over the " *
-            "variable's axes and its LHS is not the indexed-aggregate form " *
-            "`aggregate{expr: index($var, k…)}` (esm-spec §4.3.1.1).", nothing)
+            "variable's axes and its LHS is not the indexed-`faq` form " *
+            "`faq{expr: index($var, k…)}` (esm-spec §4.3.1.1).", nothing)
         return errors
     end
     idx_names = String[string(s) for s in raw_idx]

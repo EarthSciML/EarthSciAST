@@ -1,18 +1,24 @@
 ---
 title: "A semiring-parameterized FAQ IR for ESS arrayops"
-description: "Concrete proposal to generalize the ESS faq node into a Functional-Aggregate-Query IR over semirings — unifying tensor contraction (ESM/ESD discretization), relational select-multiply-aggregate (ESI), and the data-dependent index-set construction (mesh topology) that currently must live in imperative grid code."
+description: "Concrete proposal to generalize the ESS arrayop node into a Functional-Aggregate-Query IR over semirings — unifying tensor contraction (ESM/ESD discretization), relational select-multiply-aggregate (ESI), and the data-dependent index-set construction (mesh topology) that currently must live in imperative grid code."
 ---
 
-> **AMENDED by [`faq-node-rename`](faq-node-rename.md) (esm 1.1.0):** §5.6's
-> serialized tag `"op": "faq"` is renamed to **`"op": "faq"`**, and the
-> `"op": "faq"` alias this RFC retained is removed outright. `aggregate`
-> survives only as a deprecated alias, normalized away at load and removed at
-> esm 2.0.0. The design below is otherwise unchanged — read every `aggregate`
-> node tag in it as `faq`.
+> **AMENDED by [`faq-node-rename`](faq-node-rename.md) (esm 1.1.0).** §5.6 below
+> names the serialized tag `"op": "aggregate"` and retains `"op": "arrayop"` as
+> a deprecated synonym. Both statements are now historical:
+>
+> * The canonical tag is **`"op": "faq"`**.
+> * `"op": "aggregate"` is a DEPRECATED ALIAS — normalized to `faq` at the wire
+>   boundary, warned once per document, and REMOVED at esm 2.0.0.
+> * `"op": "arrayop"` is REMOVED and rejected by name (`removed_op`).
+>
+> The text below is left exactly as written, because §5.6's argument is *about*
+> the arrayop→aggregate transition and rewriting its tags would turn it into a
+> tautology. Read every `aggregate` node tag in it as `faq`.
 >
 > **Status:** Draft proposal (concrete IR). **Bead:** unassigned.
 > **Target repo:** EarthSciAST (`pkg/EarthSciAST.jl`, the
-> `faq` IR and `tree_walk.jl` evaluator). Relocated here from
+> `arrayop` IR and `tree_walk.jl` evaluator). Relocated here from
 > EarthSciDiscretizations `docs/content/rfcs/`.
 
 ---
@@ -20,7 +26,7 @@ description: "Concrete proposal to generalize the ESS faq node into a Functional
 ## 1. Summary
 
 ESS already evaluates one specialization of a much broader declarative
-operation. This RFC proposes generalizing the `faq` node from a
+operation. This RFC proposes generalizing the `arrayop` node from a
 fixed **sum-product contraction over dense, name-matched index sets** into a
 **Functional Aggregate Query (FAQ) node parameterized by a semiring**, with three
 additive capabilities: data-dependent index sets, value-equality joins, and
@@ -29,7 +35,7 @@ content-addressed (Skolem) key construction.
 Because the generalized node is no longer "an array operation" (its Boolean
 specialization produces an *index set*, not an array), the concept is renamed
 **`AggregateQuery`** — a semiring FAQ — with the serialized tag becoming
-`"op": "faq"` and `"op": "faq"` retained as a **deprecated alias** so
+`"op": "aggregate"` and `"op": "arrayop"` retained as a **deprecated alias** so
 existing files keep parsing (§5.6).
 
 The payoff: a single IR whose specializations are (a) today's tensor/stencil
@@ -37,7 +43,7 @@ discretization (ESM/ESD), (b) relational select-multiply-aggregate
 (EarthSciInventory's `aggregate(derive(join…))`), and (c) the mesh-topology
 construction (edge enumeration, connectivity inversion) that **cannot** be
 expressed as an einsum today and is therefore stranded in imperative grid code.
-Every existing `faq` remains valid as the `sum_product` / dense / no-join
+Every existing `arrayop` remains valid as the `sum_product` / dense / no-join
 special case — the change is a conservative superset.
 
 ## 2. Motivation
@@ -46,7 +52,7 @@ Two findings from the ESD unstructured-grid work motivate this.
 
 **(a) ESS's evaluator is already most of the way here.** The MPAS/DUO
 nearest-neighbour diffusion rules rely on an ESD-side rewrite
-(`_rewrite_unstructured_faq!`, `_unstructured_const_arrays`) that flattens a
+(`_rewrite_unstructured_arrayop!`, `_unstructured_const_arrays`) that flattens a
 variable-valence FVM coefficient into a precomputed `coeff` array. Inspection of
 `tree_walk.jl` shows this rewrite is **redundant with ESS**: `build_evaluator`
 already supports (i) **per-cell dynamic reduction bounds** — expression-valued
@@ -69,16 +75,16 @@ defined on a subset of the index variables. ESI is that operation over a
 were built as separate formats meeting "at the emissions socket." From the IR's
 view the socket is just a change of index space.
 
-This RFC names the common parent and proposes ESS adopt it as the `faq` IR, so
+This RFC names the common parent and proposes ESS adopt it as the `arrayop` IR, so
 ESM/ESD/ESI specialize one evaluator instead of three.
 
-## 3. Background — what `faq` is today
+## 3. Background — what `arrayop` is today
 
 The current node (as produced by `discretize.jl` and consumed by `tree_walk.jl`):
 
 ```json
 {
-  "op": "faq",
+  "op": "arrayop",
   "reduce": "+",
   "output_idx": ["i"],
   "ranges": { "i": [1, 64], "k": [1, 5] },
@@ -125,12 +131,12 @@ separate `rank` pass, not part of the logic.
 
 ## 5. Proposed IR
 
-Generalize `faq` with **optional, additive** fields. Absence of every new
+Generalize `arrayop` with **optional, additive** fields. Absence of every new
 field reproduces today's semantics exactly.
 
 ```json
 {
-  "op": "faq",                  // canonical; "faq" still parses (deprecated alias, §5.6)
+  "op": "aggregate",                  // canonical; "arrayop" still parses (deprecated alias, §5.6)
   "semiring": "sum_product",          // NEW: named (⊕, ⊗). Default = today.
   "output_idx": ["i"],
   "ranges": {
@@ -288,7 +294,7 @@ case; tables are factors keyed by categorical tuples.
 Two primitives close the value-invention gap:
 - `{"op": "skolem", "args": ["edge", v_lo, v_hi]}` — a deterministic,
   content-addressed key. Generalizes ESI `pack`.
-- `distinct: true` on an index-set-producing `faq` under the `bool_and_or`
+- `distinct: true` on an index-set-producing `arrayop` under the `bool_and_or`
   semiring — set semantics (dedup) materializing a **data-derived index set**.
 
 Together: enumerate the unique edges (`distinct` Boolean FAQ over faces), name each
@@ -309,14 +315,14 @@ two separate concerns:
   in prose, schema titles, and any new evaluator type. `faq` is deliberately *not*
   used as an identifier — it reads as "frequently asked questions" to anyone who
   hasn't read the FAQ literature — though FAQ is cited as the formal pedigree.
-- **Serialized `op` tag:** canonical value becomes `"faq"`, chosen because it
+- **Serialized `op` tag:** canonical value becomes `"aggregate"`, chosen because it
   is a readable word (matching this IR's node-tag convention — `index`, `skolem`,
   `rank` — not the terse expression-operator symbols `+`/`*`) and because it
   **reuses ESI's existing `aggregate` op**, so the cross-format unification is
   legible at the tag level (ESI's `aggregate(derive(join…))` collapses into one
   `aggregate` node).
-- **`faq` as a deprecated alias:** the evaluator and schema continue to accept
-  `"op": "faq"` as an exact synonym for `"op": "faq"`. Existing files are
+- **`arrayop` as a deprecated alias:** the evaluator and schema continue to accept
+  `"op": "arrayop"` as an exact synonym for `"op": "aggregate"`. Existing files are
   unaffected (preserving the §9 strict-superset promise); the alias is marked
   deprecated and files migrate on their own schedule. No deprecation window is
   forced — the alias may live indefinitely, since a serialization tag is an
@@ -423,7 +429,7 @@ Most of this already exists; the deltas are bounded.
 | Value-equality joins | absent | resolve `join.on` at build time → gather/merge |
 | Named / data-derived index sets | partial (dense + dynamic bound) | index-set registry + materialization |
 | Skolem keys / `distinct` / `rank` | absent | new resolve passes (build-time) |
-| Node `op` tag | `faq` only | accept `aggregate` (canonical) + `faq` (deprecated alias) at dispatch |
+| Node `op` tag | `arrayop` only | accept `aggregate` (canonical) + `arrayop` (deprecated alias) at dispatch |
 
 Crucially, the existing model — **build-time unroll → compiled `_Node` tree, with
 constants inlined as literals** — is preserved. Joins, Skolem keys, and
@@ -573,7 +579,7 @@ The hot tree's shape is identical to today's compiled stencil; the topology FAQ 
 once at compile. If instead the mesh is reloaded at AMR events, the first two rows
 become `DISCRETE` and move from the artifact into the per-event handler — nothing
 else changes. This is the concrete mechanism by which ESD drops
-`_rewrite_unstructured_faq!` and its imperative edge/connectivity construction
+`_rewrite_unstructured_arrayop!` and its imperative edge/connectivity construction
 (§2a, §9).
 
 #### Conformance and caching
@@ -599,12 +605,12 @@ depended-on) and the cross-binding determinism spec the conformance suite requir
 
 ### 7.1 Today's FVM diffusion (unchanged)
 `semiring: sum_product` (default), `reduce: "+"`, ragged `k` bound. Identical to
-the current `nn_diffusion_*` faq — and, per §2(a), the ESD coefficient flatten
+the current `nn_diffusion_*` arrayop — and, per §2(a), the ESD coefficient flatten
 becomes unnecessary because the gathered weight evaluates symbolically.
 
 ### 7.2 ESI-style `aggregate(derive(join…))`
 ```json
-{ "op": "faq", "semiring": "sum_product",
+{ "op": "aggregate", "semiring": "sum_product",
   "output_idx": ["county", "pollutant"],
   "ranges": { "county": {"from": "county"}, "pollutant": {"from": "pollutant"},
               "src": {"from": "sourceType"}, "fuel": {"from": "fuelType"} },
@@ -618,7 +624,7 @@ ESI expressed in the ESS IR, no new evaluator concepts.
 
 ### 7.3 Mesh-edge enumeration (the operation einsum can't do)
 ```json
-{ "op": "faq", "semiring": "bool_and_or", "distinct": true,
+{ "op": "aggregate", "semiring": "bool_and_or", "distinct": true,
   "output_idx": ["edge"],
   "ranges": { "f": {"from": "faces"}, "a": {"from": "face_vertices", "of": ["f"]},
               "b": {"from": "face_vertices", "of": ["f"]} },
@@ -635,9 +641,9 @@ than imperative Julia.
 ## 8. Schema deltas
 
 Additive only (Draft 2020-12). On the `AggregateQuery` object (`op` ∈
-`{"faq", "faq"}`, the latter a deprecated alias — §5.6):
-- `op`: the `op` enum gains `"faq"` as the canonical value and **retains**
-  `"faq"` as an accepted synonym; both resolve to the same node.
+`{"aggregate", "arrayop"}`, the latter a deprecated alias — §5.6):
+- `op`: the `op` enum gains `"aggregate"` as the canonical value and **retains**
+  `"arrayop"` as an accepted synonym; both resolve to the same node.
 - `semiring`: `string` (enum of registered names). Optional; default `sum_product`.
 - `ranges[*]`: allow `{ "from": string, "of"?: string[] }` **in addition to**
   the existing `[lo, hi]` tuple.
@@ -663,7 +669,7 @@ buffer is recomputed and is otherwise inert to the algebra. This is additive —
 file declaring no `discrete` variables validates and partitions exactly as today
 (two cadences, §9 strict-superset promise).
 
-**Concrete patch.** Against the current schema, where `faq` is an `op` enum
+**Concrete patch.** Against the current schema, where `arrayop` is an `op` enum
 value on `$defs/ExpressionNode` (`additionalProperties: false`, so each new field
 must be declared), the additive Draft-2020-12 changes are:
 
@@ -671,8 +677,8 @@ must be declared), the additive Draft-2020-12 changes are:
 // $defs/ExpressionNode
 {
   "properties": {
-    // 1. op enum gains the canonical + value-invention tags ("faq" stays).
-    "op": { "enum": [ /* …existing… */, "faq", "skolem", "rank", "true" ] },
+    // 1. op enum gains the canonical + value-invention tags ("arrayop" stays).
+    "op": { "enum": [ /* …existing… */, "aggregate", "skolem", "rank", "true" ] },
 
     // 2. named semiring; absent ⇒ sum_product (today). Closed enum (§5.1).
     "semiring": {
@@ -747,8 +753,8 @@ must be declared), the additive Draft-2020-12 changes are:
 
 All of the above are additive: a file using none of the new keys validates
 exactly as today (the §9 strict-superset promise). The conformance fixtures in
-`tests/` gain a `valid/faq/` set (one fixture per worked example, §7) and an
-`invalid/faq/` set (undeclared `from` name, float join key, `null` in a key
+`tests/` gain a `valid/aggregate/` set (one fixture per worked example, §7) and an
+`invalid/aggregate/` set (undeclared `from` name, float join key, `null` in a key
 column, missing ragged `offsets`/`values`) so each rule above is exercised both
 ways.
 
@@ -800,7 +806,7 @@ formalism, and the worked conservative-regridding decomposition, are in **Append
 
 ## 9. Backward compatibility & migration
 
-- **Strict superset.** Every current `faq` is the `sum_product` / dense /
+- **Strict superset.** Every current `arrayop` is the `sum_product` / dense /
   no-join / no-key case. Files without the new fields are unaffected; the schema
   changes are additive; the evaluator's existing paths are untouched.
 - **v1 scope — all three capabilities, including topology.** v1 lands (1) the
@@ -813,16 +819,16 @@ formalism, and the worked conservative-regridding decomposition, are in **Append
 - **v1 topology engine.** v1 implements the build-time relational engine (hash/sort
   execution of `distinct`/`join`/`skolem`) so topology FAQs are evaluated natively
   by the setup-time partition. This makes the unified IR self-hosting on day one:
-  ESD drops `_rewrite_unstructured_faq!` **and** the imperative
+  ESD drops `_rewrite_unstructured_arrayop!` **and** the imperative
   edge/connectivity construction once v1 lands and rules reference mesh primitives
   directly (see §2a, §7.3). The later sophistication is
   *not* the engine but the **caching/incrementality** of materialized static sets
   (shared, incrementally-rebuilt index sets to bound setup cost on large meshes) —
   the `structural_simplify`-grade refinement of the §6.1 partition.
 - **Node rename (alias, not a break):** the canonical tag becomes
-  `"op": "faq"` (concept/type `AggregateQuery`), with `"op": "faq"`
+  `"op": "aggregate"` (concept/type `AggregateQuery`), with `"op": "arrayop"`
   retained as a deprecated synonym at both the schema and evaluator-dispatch level
-  (§5.6). Existing files need no edit; rule emitters switch to `"faq"` going
+  (§5.6). Existing files need no edit; rule emitters switch to `"aggregate"` going
   forward. No deprecation window is forced.
 - **Cross-format:** this is the concrete shape of the "future `earthsci-core`
   shared AST" ESI's spec anticipates — ESM/ESD/ESI would import one IR + one

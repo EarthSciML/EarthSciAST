@@ -333,8 +333,8 @@ function collectSelfReads(
 
 /**
  * The variable an equation DEFINES, with the cell frame its LHS declares (if
- * any): a bare variable, or the §4.3 indexed-aggregate LHS form
- * `aggregate{expr: index(V, k...)}`.
+ * any): a bare variable, or the §4.3 indexed-`faq` LHS form
+ * `faq{expr: index(V, k...)}`.
  *
  * A DERIVATIVE LHS (`D(u)`) deliberately yields `undefined`: it defines no array
  * algebraically, so a stencil read of `u` at `i-1` there is a gather on the
@@ -532,7 +532,7 @@ function checkRecurrenceEquation(
     )
   }
 
-  // The cell frame: the indexed-aggregate LHS's own indices, else the RHS
+  // The cell frame: the indexed-`faq` LHS's own indices, else the RHS
   // aggregate's.
   const rhsFrame = isExprNode(rhs) && rhs.op === 'faq' ? rhs.output_idx : undefined
   const frame = target.frame ?? rhsFrame
@@ -541,8 +541,8 @@ function checkRecurrenceEquation(
       ERROR_CODES.RECURRENCE_UNSUPPORTED_FORM,
       `the definition of '${varName}' reads '${varName}' at another position, but the equation ` +
         'declares no cell frame to sweep: its RHS is not a `faq` over the ' +
-        "variable's axes and its LHS is not the indexed-aggregate form " +
-        `\`aggregate{expr: index(${varName}, k…)}\` (esm-spec §4.3.1.1).`,
+        "variable's axes and its LHS is not the indexed-`faq` form " +
+        `\`faq{expr: index(${varName}, k…)}\` (esm-spec §4.3.1.1).`,
     )
   }
   // `output_idx` admits the integer 1 as a literal singleton dimension. A

@@ -115,7 +115,7 @@ def test_ragged_offsets_resolve_through_factor_scope() -> None:
 # Cell valences [2, 3] over 5 edges; edge weights w = [10, 20, 30, 40, 50].
 # gathered[i] = sum_{k<=nedges[i]} w[edges[i,k]] -> [10+20, 30+40+50] = [30, 120].
 _RAGGED_DOC = {
-    "esm": "1.0.0",
+    "esm": "1.1.0",
     "metadata": {
         "name": "ragged_csr_miniature",
         "description": "2-cell ragged CSR keyed-factor miniature.",

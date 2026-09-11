@@ -32,7 +32,7 @@ use earthsci_ast::simulate_array::{ArrayCompiled, RhsStats};
 /// ```
 fn geom_json(n: usize) -> String {
     const TEMPLATE: &str = r#"{
- "esm": "1.0.0",
+ "esm": "1.1.0",
  "metadata": {"name": "tape_const_geom"},
  "models": {
   "Geom": {

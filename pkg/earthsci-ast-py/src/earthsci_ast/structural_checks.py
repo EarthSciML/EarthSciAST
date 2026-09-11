@@ -717,8 +717,8 @@ def _recurrence_symbol_bounds(spec: Any, index_sets: dict[str, Any]) -> tuple[in
 def _recurrence_lhs_target(lhs: Any) -> str | None:
     """The variable an equation DEFINES, if its LHS names one.
 
-    A bare variable, or the §4.3 indexed-aggregate LHS form
-    ``aggregate{expr: index(V, k…)}``. A derivative LHS (``D(u)``) defines no
+    A bare variable, or the §4.3 indexed-`faq` LHS form
+    ``faq{expr: index(V, k…)}``. A derivative LHS (``D(u)``) defines no
     array algebraically — a stencil read of ``u`` at ``i−1`` there is a gather on
     the SOLVER's state vector, not a self-reference — so it deliberately yields
     ``None``."""

@@ -285,7 +285,7 @@ func analyzeRecurrenceEquation(eq Equation, file *ESMFile, arrayShaped map[strin
 		}
 	}
 
-	// The cell frame: the indexed-aggregate LHS's own indices when the LHS names
+	// The cell frame: the indexed-`faq` LHS's own indices when the LHS names
 	// them, else the RHS aggregate's `output_idx`.
 	rhsIdx, rhsIdxPresent := aggregateOutputIdx(eq.RHS)
 	idxNames, framed := lhsIdx, lhsIdxPresent
@@ -297,8 +297,8 @@ func analyzeRecurrenceEquation(eq Equation, file *ESMFile, arrayShaped map[strin
 			code: codeRecurrenceUnsupportedForm,
 			message: fmt.Sprintf("the definition of '%s' reads '%s' at another position, but the "+
 				"equation declares no cell frame to sweep: its RHS is not a `faq` over the "+
-				"variable's axes and its LHS is not the indexed-aggregate form "+
-				"`aggregate{expr: index(%s, k…)}` (esm-spec §4.3.1.1).", varName, varName, varName),
+				"variable's axes and its LHS is not the indexed-`faq` form "+
+				"`faq{expr: index(%s, k…)}` (esm-spec §4.3.1.1).", varName, varName, varName),
 		}
 	}
 
@@ -442,8 +442,8 @@ func checkRecurrenceReads(varName string, frameSyms []string, frameEnv map[strin
 }
 
 // recurrenceLHSTarget returns the variable an equation DEFINES, when its LHS
-// names one: a bare variable, or the §4.3 indexed-aggregate LHS form
-// `aggregate{expr: index(V, k…)}`. The second return is that form's own index
+// names one: a bare variable, or the §4.3 indexed-`faq` LHS form
+// `faq{expr: index(V, k…)}`. The second return is that form's own index
 // frame, and the third whether the LHS supplied one at all.
 //
 // A DERIVATIVE LHS (`D(u) ~ …`) deliberately yields false: it defines no array

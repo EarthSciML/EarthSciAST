@@ -153,7 +153,7 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     // canonical `faq` at the wire boundary, ahead of every other pass, so the
     // version gates, the schema, the typed tree and `emit` all see exactly one
     // tag (docs/content/rfcs/faq-node-rename.md).
-    normalize_deprecated_op_aliases(&mut json_value)?;
+    prepare_document_ops(&mut json_value)?;
 
     let base = options.base_path.clone().unwrap_or_else(|| {
         std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
@@ -1569,7 +1569,8 @@ fn is_iso8601_duration(s: &str) -> bool {
 ///
 /// The older `arrayop` spelling is NOT normalized: it was removed at esm 0.8.0
 /// and is rejected like any other unknown non-rewrite-target op.
-pub(crate) fn normalize_deprecated_op_aliases(value: &mut serde_json::Value) -> Result<(), EsmError> {
+pub(crate) fn prepare_document_ops(value: &mut serde_json::Value) -> Result<(), EsmError> {
+    // 1. `arrayop` was REMOVED at 0.8.0 — rejected by name, before anything else.
     if let Some(path) = find_removed_op(value) {
         return Err(EsmError::SchemaValidation(format!(
             "removed_op at {path}: `\"op\": \"arrayop\"` was removed at esm 0.8.0 and is not a \
@@ -1577,7 +1578,31 @@ pub(crate) fn normalize_deprecated_op_aliases(value: &mut serde_json::Value) -> 
              See docs/content/rfcs/faq-node-rename.md."
         )));
     }
+    // 2. Version gate, on the AUTHORED form. `faq` arrives at esm 1.1.0, so a
+    //    document that spells it while declaring less is rejected — the same
+    //    rule the top-level `solver` block follows (esm-spec §2.2.4). This runs
+    //    BEFORE normalization on purpose: `aggregate` IS the pre-1.1.0
+    //    spelling, so a 1.0.0 document carrying the alias is legal and must not
+    //    be caught by this gate.
+    if let Some(path) = find_faq_op(value) {
+        if let Some(esm) = value.get("esm").and_then(|v| v.as_str())
+            && let Some((major, minor, _)) = crate::diagnostic::parse_semver(esm)
+            && (major, minor) < (1, 1)
+        {
+            return Err(EsmError::SchemaValidation(format!(
+                "faq_version_too_old at {path}: the `faq` op arrives at esm 1.1.0; file \
+                 declares {esm}. Use `\"op\": \"aggregate\"` (the deprecated pre-1.1.0 \
+                 spelling) or raise the declared version. \
+                 See docs/content/rfcs/faq-node-rename.md."
+            )));
+        }
+    }
+    // 3. Normalize the alias, and raise the declared version with it so the
+    //    upgraded document is self-consistent (a floor, never a downgrade).
     let n = rewrite_op_aliases(value);
+    if n > 0 {
+        raise_esm_floor_to_v11(value);
+    }
     if n > 0 {
         let plural = if n == 1 { "node was" } else { "nodes were" };
         eprintln!(
@@ -1588,6 +1613,43 @@ pub(crate) fn normalize_deprecated_op_aliases(value: &mut serde_json::Value) -> 
         );
     }
     Ok(())
+}
+
+/// Locate a `"op": "faq"` node, returning a JSON-pointer-ish path to it.
+fn find_faq_op(value: &serde_json::Value) -> Option<String> {
+    fn walk(v: &serde_json::Value, at: &str) -> Option<String> {
+        match v {
+            serde_json::Value::Object(map) => {
+                if map.get("op").and_then(|o| o.as_str()) == Some("faq") {
+                    return Some(at.to_string());
+                }
+                map.iter().find_map(|(k, child)| walk(child, &format!("{at}/{k}")))
+            }
+            serde_json::Value::Array(items) => items
+                .iter()
+                .enumerate()
+                .find_map(|(i, child)| walk(child, &format!("{at}/{i}"))),
+            _ => None,
+        }
+    }
+    walk(value, "")
+}
+
+/// Raise a document's declared `esm` to 1.1.0 when it sits below that floor.
+///
+/// Normalizing `aggregate` to `faq` would otherwise produce a document that
+/// spells a 1.1.0 construct while declaring an older version — precisely what
+/// the gate above rejects. The stamp is a FLOOR: a document already at or above
+/// 1.1.0 keeps its own version.
+fn raise_esm_floor_to_v11(value: &mut serde_json::Value) {
+    let below = value
+        .get("esm")
+        .and_then(|v| v.as_str())
+        .and_then(crate::diagnostic::parse_semver)
+        .is_some_and(|(major, minor, _)| (major, minor) < (1, 1));
+    if below && let Some(obj) = value.as_object_mut() {
+        obj.insert("esm".to_string(), serde_json::Value::String("1.1.0".to_string()));
+    }
 }
 
 /// Locate a `"op": "arrayop"` node, returning a JSON-pointer-ish path to it.

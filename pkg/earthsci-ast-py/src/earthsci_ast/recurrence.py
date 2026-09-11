@@ -462,7 +462,7 @@ class Recurrence:
     #: Position within ``idx_names`` of the axis the sweep folds along.
     axis: int
     #: The aggregate node that carries the cell frame (the RHS aggregate, or the
-    #: §4.3 indexed-aggregate LHS). ``None`` when the frame came from an LHS the
+    #: §4.3 indexed-`faq` LHS). ``None`` when the frame came from an LHS the
     #: caller supplied without one.
     frame_node: Any
     #: Largest lag any self-read takes along ``axis``, DERIVED from the reads and
@@ -477,7 +477,7 @@ class Recurrence:
 def _frame_node(var: str, lhs: Any, rhs: Any) -> Any:
     """The aggregate node carrying the cell frame, or ``None``.
 
-    Either the §4.3 indexed-aggregate LHS form (``aggregate{expr: V[k…]} ~ …``)
+    Either the §4.3 indexed-`faq` LHS form (``faq{expr: V[k…]} ~ …``)
     or a bare LHS whose RHS is an aggregate over ``V``'s axes. Anything else has
     no frame to sweep.
     """
@@ -537,7 +537,7 @@ def analyze_recurrence(
         raise _unsupported_form(
             f"the definition of '{var}' reads '{var}' at another position, but the equation "
             f"declares no cell frame to sweep: its RHS is not an `aggregate` over the "
-            f"variable's axes and its LHS is not the indexed-aggregate form "
+            f"variable's axes and its LHS is not the indexed-`faq` form "
             f"`aggregate{{expr: index({var}, k…)}}` (esm-spec §4.3.1.1)."
         )
     idx_names = [str(s) for s in idx_names_raw]

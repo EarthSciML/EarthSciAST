@@ -1204,7 +1204,7 @@ func TestTemplateImports_FoldRangesRegionsSizeExact(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "m.esm")
 	writeFileString(t, p, `{
-      "esm": "0.8.0",
+      "esm": "1.1.0",
       "metadata": {"name": "fold"},
       "metaparameters": {"N": {"type": "integer", "default": 6}},
       "index_sets": {"cells": {"kind": "interval", "size": {"op": "*", "args": ["N", 2]}}},

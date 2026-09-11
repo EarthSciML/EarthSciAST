@@ -650,7 +650,7 @@ def test_metaparameter_fold_ranges_regions_size_exact(tmp_path):
     p.write_text(
         json.dumps(
             {
-                "esm": "1.0.0",
+                "esm": "1.1.0",
                 "metadata": {"name": "fold"},
                 "metaparameters": {"N": {"type": "integer", "default": 6}},
                 "index_sets": {

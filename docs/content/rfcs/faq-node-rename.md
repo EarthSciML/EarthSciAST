@@ -175,7 +175,33 @@ rules lower to one, say — declares 1.1.0 even though the authored bytes carry
 no `faq` node at all. The conformance cases that pair an input with a lowered
 golden were bumped as units for exactly this reason.
 
-### 5.2 Normalize on load; do not preserve on emit
+### 5.2 One wire boundary per binding, for EVERY document
+
+Each binding has exactly ONE place where JSON text becomes a document, and the
+three rules below are applied there. That place is reached by every document a
+load touches — the root, a `{ref}`-loaded child, a template library, a coupling
+library — not just the root.
+
+This is stated first because the per-call-site version of it was shipped, and
+was wrong. The original implementation normalized the ROOT document's bytes and
+left ref/import resolution to parse child files raw, so a child's `aggregate`
+reached `emit` untouched and a child's `arrayop` loaded silently — in Python and
+Rust, empirically, and in Julia's remote-ref path. Five per-binding suites were
+green throughout, because every fixture in the new conformance suite was a
+single self-contained document. The suite now mounts a child by `{ref}`
+(`ref_parent_aliased.esm`, `ref_parent_arrayop.esm`) precisely so that this
+cannot pass again.
+
+The chokepoints are `_read_json_document` (Julia — whose docstring already
+called itself "THE wire boundary" while four sites bypassed it),
+`parse::prepare_document_ops` (Rust), `parse.prepare_document_ops` (Python),
+`prepareDocumentOps` (TypeScript), and `prepareDocumentOps` (Go).
+
+Order matters, and it is: **reject `arrayop` → gate `faq` on the AUTHORED
+version → normalize `aggregate` and raise the version floor.** §5.5 explains
+why the gate must read the authored form.
+
+### 5.3 Normalize on load; do not preserve on emit
 
 A loader that encounters `"op": "aggregate"` **rewrites the node to `faq` in
 memory**. Nothing downstream of the loader — validation, classification,
@@ -196,7 +222,7 @@ conformance gate compares each binding's emission against **its own** re-parse
 rather than against the other bindings, so a divergence in which spelling a
 binding preserves would not be caught.
 
-### 5.3 The warning
+### 5.4 The warning
 
 A new diagnostic, severity **warning**:
 
@@ -216,7 +242,34 @@ follows the existing contract and adds no new machinery.
 The warning fires **once per document per alias**, not once per node — a file
 with four hundred `aggregate` nodes produces one warning, naming the count.
 
-### 5.4 `arrayop` is rejected EXPLICITLY, not left to the open tier
+### 5.5 The version gate, and why it reads the AUTHORED form
+
+A document that spells `faq` declares `esm: 1.1.0` or later — the rule the
+top-level `solver` block already follows (`reject_solver_pre_v11`). Violating it
+is the hard error `faq_version_too_old`.
+
+The gate runs **before** normalization, on the document as authored. That
+ordering is the whole subtlety: `aggregate` *is* the legal pre-1.1.0 spelling,
+so a 1.0.0 document carrying the alias must NOT trip the gate. Running the gate
+after normalization would reject exactly the documents the alias exists to
+support.
+
+Normalization then raises the declared version to the 1.1.0 floor alongside the
+rewrite, so the upgraded document is self-consistent rather than spelling a
+1.1.0 construct under an older version — which is the document the gate itself
+forbids. A document already at or above 1.1.0 keeps its own version; the stamp
+is a floor, never a downgrade.
+
+The rule is also **transitive through lowering**: a template-library consumer
+whose imported rules *expand* to `faq` declares 1.1.0 even though its authored
+bytes carry no `faq` node. Conformance cases that pair an input with a lowered
+golden were bumped as units for this reason.
+
+| Code | Class | Meaning |
+|---|---|---|
+| `faq_version_too_old` | Structural | **Hard error.** A document spells `faq` while declaring `esm` below 1.1.0. Reads the authored form, so the `aggregate` alias under an older version is not caught. |
+
+### 5.6 `arrayop` is rejected EXPLICITLY, not left to the open tier
 
 This is the one place where "just delete it" would have been wrong, and it is
 worth stating because the obvious implementation is silently broken.

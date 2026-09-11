@@ -41,7 +41,7 @@ from earthsci_ast.problem import esm_problem
 # document is: everything the engine actually evaluates is fine, and the only
 # rewrite-target op is somewhere the evaluator would never go.
 DEAD_UNLOWERED_SCALAR = {
-    "esm": "1.0.0",
+    "esm": "1.1.0",
     "metadata": {"name": "DeadUnloweredScalar", "authors": ["repro"]},
     "models": {
         "Box": {
@@ -61,7 +61,7 @@ DEAD_UNLOWERED_SCALAR = {
 # routes to the ARRAY pathway — the pathway whose lazy observed evaluation used
 # to let the op through. Under the walk the two pathways agree.
 DEAD_UNLOWERED_ARRAY = {
-    "esm": "1.0.0",
+    "esm": "1.1.0",
     "metadata": {"name": "DeadUnloweredArray", "authors": ["repro"]},
     "index_sets": {"lev": {"kind": "interval", "size": 4}},
     "models": {
@@ -82,7 +82,7 @@ DEAD_UNLOWERED_ARRAY = {
 # that is fine: §5.27.3 says a dead observed is still an observed. The walk must
 # not touch it — it gates rewrite-target OPS, not deadness.
 DEAD_BUT_LOWERED = {
-    "esm": "1.0.0",
+    "esm": "1.1.0",
     "metadata": {"name": "DeadButLowered", "authors": ["repro"]},
     "models": {
         "Box": {
@@ -103,7 +103,7 @@ DEAD_BUT_LOWERED = {
 # differentiated state and is never evaluated — and `args` of an LHS node are
 # still LHS, so the walk must let this through however deeply it nests.
 AGGREGATE_LHS_DERIVATIVE = {
-    "esm": "1.0.0",
+    "esm": "1.1.0",
     "metadata": {"name": "AggregateLhsDerivative", "authors": ["repro"]},
     "index_sets": {"lev": {"kind": "interval", "size": 4}},
     "models": {

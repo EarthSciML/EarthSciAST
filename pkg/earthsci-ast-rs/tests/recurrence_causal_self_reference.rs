@@ -239,7 +239,7 @@ fn a_self_read_through_a_template_binding_is_still_recognized() {
 /// One-variable recurrence document with `body` as the aggregate's `expr`.
 fn doc_with_body(body: Value) -> String {
     json!({
-      "esm": "1.0.0",
+      "esm": "1.1.0",
       "metadata": { "name": "R", "description": "probe", "authors": ["t"] },
       "index_sets": { "steps": { "kind": "interval", "size": 4 } },
       "models": { "R": {
@@ -355,7 +355,7 @@ fn constant_self_index_is_rejected() {
 #[test]
 fn two_unprovable_lags_are_still_two_axes() {
     let doc = json!({
-      "esm": "1.0.0",
+      "esm": "1.1.0",
       "metadata": { "name": "R2", "description": "probe", "authors": ["t"] },
       "index_sets": { "rows": { "kind": "interval", "size": 3 },
                       "cols": { "kind": "interval", "size": 3 } },
@@ -386,7 +386,7 @@ fn two_unprovable_lags_are_still_two_axes() {
 #[test]
 fn self_read_offset_on_two_axes_is_rejected() {
     let doc = json!({
-      "esm": "1.0.0",
+      "esm": "1.1.0",
       "metadata": { "name": "R2", "description": "probe", "authors": ["t"] },
       "index_sets": { "rows": { "kind": "interval", "size": 3 },
                       "cols": { "kind": "interval", "size": 3 } },
@@ -425,7 +425,7 @@ fn self_read_offset_on_two_axes_is_rejected() {
 #[test]
 fn makearray_region_self_read_is_refused_as_unsupported_form() {
     let doc = json!({
-      "esm": "1.0.0",
+      "esm": "1.1.0",
       "metadata": { "name": "RM", "description": "probe", "authors": ["t"] },
       "index_sets": { "steps": { "kind": "interval", "size": 4 } },
       "models": { "RM": {
@@ -585,7 +585,7 @@ fn structural_validator_rejects_a_forward_self_read() {
 #[test]
 fn structural_validator_rejects_a_makearray_region_self_read() {
     let doc = json!({
-      "esm": "1.0.0",
+      "esm": "1.1.0",
       "metadata": { "name": "R", "description": "probe", "authors": ["t"] },
       "index_sets": { "steps": { "kind": "interval", "size": 4 } },
       "models": { "R": {
@@ -650,7 +650,7 @@ fn the_valid_corpus_recurrence_validates_clean() {
 #[test]
 fn a_two_variable_cycle_is_not_a_recurrence_and_still_produces_nothing() {
     let cyclic = json!({
-      "esm": "1.0.0",
+      "esm": "1.1.0",
       "metadata": { "name": "C", "description": "probe", "authors": ["t"] },
       "index_sets": { "steps": { "kind": "interval", "size": 4 } },
       "models": { "C": {

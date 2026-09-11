@@ -53,7 +53,7 @@ fn doc() -> Value {
              "args": [ix("cell_ring", &[json!("c")]), ix("rec_ring", &[json!("r")])]},
             ix("cell_area", &[json!("c")])]}]});
     json!({
-    "esm": "1.0.0",
+    "esm": "1.1.0",
     "metadata": {"name": "pushdown_cell_geometry"},
     "data_sources": {"MockSR": {"kind": "static", "source": {"url_template": "mock://sr"}}},
     "index_sets": {

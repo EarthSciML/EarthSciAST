@@ -608,11 +608,24 @@ array, reducing nothing at all.
   report the warning diagnostic `deprecated_op_alias` once per document per
   alias. The alias is **REMOVED at esm 2.0.0**.
 - **`arrayop`** is the pre-0.8.0 spelling and is **NOT accepted**. It was
-  removed at 0.8.0 and is rejected like any other unknown non-rewrite-target
-  op.
+  removed at 0.8.0 and is rejected **BY NAME**, with the hard error
+  `removed_op` — not left to the open tier. `arrayop` is a well-formed
+  identifier, so §4.2's OPEN rewrite-target tier would otherwise admit it: the
+  document would load silently and fail much later as `unlowered_operator`, or
+  never.
 
 A document that spells the node `faq` declares `esm: 1.1.0` or later, the same
-rule the top-level `solver` block follows (§2.2.4).
+rule the top-level `solver` block follows (§2.2.4), enforced with the hard error
+`faq_version_too_old`. The gate reads the **authored** form, before
+normalization: `aggregate` *is* the pre-1.1.0 spelling, so a 1.0.0 document
+carrying the alias is legal — it is normalized, and its declared version is
+raised to the 1.1.0 floor with it, so the upgraded document is self-consistent
+rather than spelling a 1.1.0 construct under an older version.
+
+Both of these, and the alias normalization, happen at ONE wire boundary per
+binding, applied to EVERY document a load touches — the root, a `{ref}`-loaded
+child, a template library, a coupling library. Doing it per call site is what
+let `arrayop` survive its own 0.8.0 removal.
 
 Because a loader normalizes rather than preserves, `emit` writes `faq` for a
 document authored with `aggregate`. The §9.6.4 round-trip invariant is
@@ -872,7 +885,7 @@ under a private op name. The rationale and the alternatives considered are in
 
 **Recognition.** An equation is a **recurrence definition** of the unknown `V` when
 its LHS names `V` — bare (`V ~ …`) or through the §4.3 indexed-`faq` LHS form
-(`aggregate{expr: V[k…]} ~ …`) — and its RHS contains at least one `index(V, …)`
+(`faq{expr: V[k…]} ~ …`) — and its RHS contains at least one `index(V, …)`
 read. Each such read is a **causal self-read**. The `faq`'s `output_idx` symbols
 and their `ranges` are the **cell frame** `(k₁ … k_r)` with bounds `R₁ … R_r`.
 Nothing is declared: the recurrence, its axis and its lag are all read off the

@@ -408,7 +408,7 @@ describe('Unit parsing and dimensional analysis', () => {
         // defining expression is a bare-LHS equation — and the declared-vs-
         // computed comparison is still made, and reported, at the VARIABLE.
         const file: EsmFile = {
-          esm: '1.0.0',
+          esm: '1.1.0',
           metadata: { name: 'solar' },
           models: {
             Solar: {
@@ -531,7 +531,7 @@ describe('Unit parsing and dimensional analysis', () => {
   describe('validateUnits', () => {
     it('should validate simple ESM file with no errors', () => {
       const esmFile: EsmFile = {
-        esm: '1.0.0',
+        esm: '1.1.0',
         metadata: {
           name: 'test',
           description: 'test model',
@@ -560,7 +560,7 @@ describe('Unit parsing and dimensional analysis', () => {
 
     it('should detect dimensional inconsistencies', () => {
       const esmFile: EsmFile = {
-        esm: '1.0.0',
+        esm: '1.1.0',
         metadata: {
           name: 'test',
           description: 'test model',
@@ -589,7 +589,7 @@ describe('Unit parsing and dimensional analysis', () => {
 
     it('should validate observed variables', () => {
       const esmFile: EsmFile = {
-        esm: '1.0.0',
+        esm: '1.1.0',
         metadata: {
           name: 'test',
           description: 'test model',
@@ -618,7 +618,7 @@ describe('Unit parsing and dimensional analysis', () => {
 
     it('should handle reaction systems', () => {
       const esmFile: EsmFile = {
-        esm: '1.0.0',
+        esm: '1.1.0',
         metadata: {
           name: 'test',
           description: 'test reaction',
@@ -658,7 +658,7 @@ describe('Unit parsing and dimensional analysis', () => {
       // surface as a WARNING with the variable's dimension left UNKNOWN
       // (unbound), which suppresses the mismatch and keeps validation valid.
       const esmFile: EsmFile = {
-        esm: '1.0.0',
+        esm: '1.1.0',
         metadata: {
           name: 'test',
           description: 'unparseable unit',
@@ -709,7 +709,7 @@ describe('Unit parsing and dimensional analysis', () => {
       // fictional — so the declared side is left UNKNOWN and the comparison is
       // skipped.
       const esmFile: EsmFile = {
-        esm: '1.0.0',
+        esm: '1.1.0',
         metadata: {
           name: 'test',
           description: 'unparseable observed unit',

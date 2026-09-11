@@ -505,7 +505,7 @@ impl ArrayCompiled {
         }
 
         // `index_sets` is not carried through flatten today, so coupled models
-        // that address `faq`/`faq` ranges via `{ "from": <set> }`
+        // that address `faq` ranges via `{ "from": <set> }`
         // are not yet resolvable on this path (tracked as follow-up). Dense
         // `[lo, hi]` ranges — what discretized stencils emit — need no
         // registry and work here.
@@ -516,7 +516,7 @@ impl ArrayCompiled {
         };
         // The document `index_sets` registry is carried through flatten
         // (`FlattenedSystem::index_sets`), so a coupled array system can resolve
-        // `faq`/`faq` `ranges` `{ "from": <set> }`, `join.on` gates, and
+        // `faq` `ranges` `{ "from": <set> }`, `join.on` gates, and
         // derived-set references exactly as the single-model `from_file` path
         // does against `file.index_sets`. Empty for a file with no index sets, so
         // dense `[lo, hi]`-range discretized stencils are unaffected.
@@ -1905,7 +1905,7 @@ fn collect_self_reads(
 }
 
 /// Is `e` an `index(var, sym…)` whose indices are exactly `idx_names` in order
-/// — the §4.3 indexed-aggregate LHS form?
+/// — the §4.3 indexed-`faq` LHS form?
 fn lhs_identity_gather(e: &Expr, var: &str, idx_names: &[String]) -> bool {
     let Expr::Operator(node) = e else {
         return false;
@@ -1991,7 +1991,7 @@ pub(super) fn lower_recurrence(
     }
 
     // ---- the cell frame ----------------------------------------------------
-    // Either the indexed-aggregate LHS form (`aggregate{expr: V[k…]} ~ …`) or a
+    // Either the indexed-`faq` LHS form (`faq{expr: V[k…]} ~ …`) or a
     // bare LHS whose RHS is an aggregate over V's axes. Anything else has no
     // frame to sweep.
     let frame_node: &ExpressionNode = match (lhs, rhs) {
@@ -2165,7 +2165,7 @@ pub(super) fn lower_recurrence(
         {
             cell_restrict_aggregate(r, &idx_names)
         }
-        // The indexed-aggregate LHS form whose RHS is already a cell body, or an
+        // The indexed-`faq` LHS form whose RHS is already a cell body, or an
         // RHS aggregate over a DIFFERENT frame (which cannot be restricted onto
         // this one).
         other => {
@@ -2239,7 +2239,7 @@ fn build_observed_rules(
     //
     // WHICH rule form it lowers to is decided by the LHS, and both forms matter:
     //
-    // * a `faq` LHS (`aggregate{expr: w[i]} ~ aggregate{…}`) is a PER-CELL
+    // * a `faq` LHS (`faq{expr: w[i]} ~ aggregate{…}`) is a PER-CELL
     //   definition and lowers to [`AlgebraicRule::ArrayLoop`], the form the
     //   whole-array overlay vectorizes. Lowering it as a wholesale body instead
     //   silently drops a varying array observed onto the per-cell oracle — the
@@ -2881,7 +2881,7 @@ pub(super) fn resolve_field_ic_cell(
 // ============================================================================
 
 /// The variable a top-level equation defines, if any: `v = …`, `index(v, …) = …`,
-/// `D(v) = …` / `D(index(v, …)) = …`, `ic(v) = …`, or a `faq`/`faq`
+/// `D(v) = …` / `D(index(v, …)) = …`, `ic(v) = …`, or a `faq`
 /// whose body is `D(index(v, …))` / `index(v, …)`. Used to prune value-invention
 /// equations and to classify algebraic definitions.
 pub(super) fn equation_defined_var(lhs: &Expr) -> Option<String> {
@@ -3416,7 +3416,7 @@ pub(super) fn resolve_declared_shape(
 }
 
 /// True iff `expr` is an array-PRODUCING node: a `makearray`, or an
-/// `faq`/`faq` with a non-empty `output_idx` (a scalar reduction has
+/// `faq` with a non-empty `output_idx` (a scalar reduction has
 /// an empty `output_idx` and produces a scalar). Mirrors the Julia
 /// `_is_array_producer` (shape_promotion.jl).
 pub(super) fn is_array_producer(node: &ExpressionNode) -> bool {
@@ -3672,7 +3672,7 @@ fn rename_join_names(join: &[JoinClause], from: &str, to: &str) -> Vec<JoinClaus
 
 /// Inline a `makearray`'s ARRAY-VALUED aggregate region values into the
 /// enclosing loop symbols: a region value that is a pointwise
-/// `faq`/`faq` whose output ranges equal the region bounds exactly
+/// `faq` whose output ranges equal the region bounds exactly
 /// (no contraction, no filter) is replaced by its body with each output
 /// symbol renamed to the enclosing loop symbol. This turns the discretized
 /// `makearray([interior], [aggregate_i(stencil)])` form a §9.6.3 rewrite rule
@@ -3874,7 +3874,7 @@ fn plan_is_identity(plan: &GatherPlan, target_rank: usize) -> bool {
 /// Julia `_index_array_leaves` in shape_promotion.jl): each bare array-shaped
 /// `Variable` leaf and each array-PRODUCING node (a `makearray` — whose
 /// aggregate region values are first inlined via [`inline_region_aggregates`]
-/// — or a `faq`/`faq` with output axes) is wrapped in
+/// — or a `faq` with output axes) is wrapped in
 /// `index(node, loops…)`; `index` gathers and scalar reductions stay
 /// untouched; other operators recurse elementwise.
 ///
@@ -4586,7 +4586,7 @@ mod subsystem_ragged_and_inspection_tests {
     /// contraction (a silently unresolved offsets factor) cannot pass.
     fn ragged_miniature_doc() -> serde_json::Value {
         json!({
-            "esm": "1.0.0",
+            "esm": "1.1.0",
             "metadata": {"name": "ragged_subsystem_miniature"},
             "index_sets": {
                 "cells": {"kind": "interval", "size": 2},
@@ -4598,7 +4598,7 @@ mod subsystem_ragged_and_inspection_tests {
             },
             "models": {"M": {
                 "subsystems": {"mesh": {
-                    "esm": "1.0.0",
+                    "esm": "1.1.0",
                     "metadata": {"name": "mini_mesh"},
                     "models": {"MiniMesh": {
                         "variables": {
@@ -4806,7 +4806,7 @@ mod subsystem_ragged_and_inspection_tests {
     #[test]
     fn exact_rational_overlap_weights_through_inspection() {
         let doc = json!({
-            "esm": "1.0.0",
+            "esm": "1.1.0",
             "metadata": {"name": "inspect_overlap"},
             "index_sets": {
                 "src_cells": {"kind": "interval", "size": 2},

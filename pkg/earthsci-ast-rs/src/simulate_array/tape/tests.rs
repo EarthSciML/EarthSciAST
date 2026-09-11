@@ -226,7 +226,7 @@ fn ab_multi_rule_stencil_wrap_and_ghost() {
         idx("v", json!({"op": "+", "args": ["i", 1]}))
     ]});
     let doc = json!({
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "tape_stencil"},
         "models": {"M": {
             "variables": {
@@ -260,7 +260,7 @@ fn ab_nested_aggregate() {
         idx("u", json!("j"))
     ]}});
     let doc = json!({
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "tape_nested"},
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
@@ -293,7 +293,7 @@ fn ab_nested_aggregate_shadowing_enclosing_index() {
         idx("u", json!("i"))
     ]}});
     let doc = json!({
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "tape_nested_shadow"},
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
@@ -344,7 +344,7 @@ fn ab_nested_aggregate_makearray_of_shadowed_aggregates() {
         "regions": [[[2, n - 1]], [[1, 1]], [[n, n]]],
         "values": [interior, left, right]});
     let doc = json!({
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "tape_nested_makearray_agg"},
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
@@ -375,7 +375,7 @@ fn ab_nested_aggregate_capturing_enclosing_index_still_falls_back() {
     "ranges": {"j": [1, n]},
     "expr": {"op": "*", "args": [idx("u", json!("j")), "i"]}});
     let doc = json!({
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "tape_nested_capture"},
         "models": {"M": {
             "variables": {
@@ -416,7 +416,7 @@ fn ab_makearray_regions() {
         "regions": [[[2, n - 1]], [[1, 1]], [[n, n]]],
         "values": [interior, 0.5, {"op": "*", "args": [2.0, idx("u", json!("i"))]}]});
     let doc = json!({
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "tape_makearray"},
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
@@ -435,7 +435,7 @@ fn ab_makearray_regions() {
 fn ab_contraction_weights() {
     let n = 8;
     let doc = json!({
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "tape_einsum"},
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
@@ -460,7 +460,7 @@ fn ab_contraction_weights() {
 fn ab_contraction_with_filter_mask() {
     let n = 6;
     let doc = json!({
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "tape_filter"},
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
@@ -502,7 +502,7 @@ fn ab_scalar_ifelse_short_circuit_traps_untaken_branch() {
     ]});
     let safe = json!({"op": "*", "args": [3.0, idx("u", json!("i"))]});
     let doc = json!({
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "tape_shortcircuit"},
         "models": {"M": {
             "variables": {
@@ -582,7 +582,7 @@ fn ab_scalar_ifelse_short_circuit_traps_untaken_branch() {
 fn ab_select_nan_semantics() {
     let n = 8;
     let doc = json!({
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "tape_select_nan"},
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
@@ -632,7 +632,7 @@ fn ab_select_nan_semantics() {
 fn ab_signed_zero() {
     let n = 4;
     let doc = json!({
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "tape_signed_zero"},
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
@@ -656,7 +656,7 @@ fn ab_signed_zero() {
 fn ab_nary_fold_order() {
     let n = 6;
     let doc = json!({
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "tape_fold_order"},
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
@@ -681,7 +681,7 @@ fn ab_nary_fold_order() {
 #[test]
 fn ab_subblock_dy_scatter() {
     let doc = json!({
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "tape_subblock"},
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
@@ -720,7 +720,7 @@ fn ab_observed_chain_and_broadcast() {
     let ni = 5;
     let nj = 4;
     let doc = json!({
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "tape_obs"},
         "models": {"M": {
             "variables": {
@@ -778,7 +778,7 @@ fn ab_observed_chain_and_broadcast() {
 fn ab_fallback_rule_interop() {
     let n = 3;
     let doc = json!({
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "tape_fallback"},
         "index_sets": {"c": {"kind": "interval", "size": n}},
         "models": {"M": {
@@ -849,7 +849,7 @@ fn ab_fallback_rule_interop() {
 #[test]
 fn ab_scalar_rules() {
     let doc = json!({
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "tape_scalar"},
         "models": {"M": {
             "variables": {
@@ -882,7 +882,7 @@ fn ab_scalar_rules() {
 fn coloring_invariants() {
     let n = 8;
     let doc = json!({
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "tape_coloring"},
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
@@ -967,7 +967,7 @@ fn value_numbering_scope_behaviour() {
     let d = json!({"op": "-", "args": [idx("u", json!("i")),
                                        idx("u", json!({"op": "-", "args": ["i", 1]}))]});
     let doc = json!({
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "tape_vn"},
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
@@ -1005,7 +1005,7 @@ fn value_numbering_scope_behaviour() {
 fn tape_build_is_side_effect_free() {
     let n = 6;
     let doc = json!({
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "tape_pure_build"},
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
@@ -1029,7 +1029,7 @@ fn tape_build_is_side_effect_free() {
 #[test]
 fn exports_materialize_as_observed_arrays() {
     let doc = json!({
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "tape_export_shape"},
         "models": {"M": {
             "variables": {
@@ -1077,7 +1077,7 @@ fn ab_prefix_scan_observeds() {
             "expr": {"op": "*", "args": [0.3, {"op": "index", "args": ["u", "i", "m"]}]}})
     };
     let doc = json!({
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "tape_scan"},
         "models": {"M": {
             "variables": {
@@ -1134,7 +1134,7 @@ fn ab_wholesale_makearray_and_elementwise_observeds() {
         "ranges": {"i": [n, n]},
         "expr": {"op": "*", "args": [2.0, idx("u", json!("i"))]}});
     let doc = json!({
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "tape_wholesale"},
         "models": {"M": {
             "variables": {
@@ -1301,7 +1301,7 @@ fn ab_shifted_read_folding_wrap_ghost_linear() {
                "ranges": {"i": [1, ni], "j": [1, nj]}, "expr": body})
     };
     let doc = json!({
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "tape_fold"},
         "models": {"M": {
             "variables": {
@@ -1357,7 +1357,7 @@ fn ab_shifted_read_folding_wrap_ghost_linear() {
 #[test]
 fn export_demotion_skips_unread_publishes() {
     let doc = json!({
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "tape_export_demote"},
         "models": {"M": {
             "variables": {
@@ -1468,7 +1468,7 @@ fn ab_superop_bin3_and_extended_pairs() {
         u.clone()
     ]});
     let doc = json!({
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "tape_superops"},
         "models": {"M": {
             "variables": {
@@ -1579,7 +1579,7 @@ fn ab_superop_bin3_and_extended_pairs() {
 /// whole point of #101 is that the three evaluators disagreed.
 fn bcast_doc(name: &str, n: i64, rhs: serde_json::Value) -> serde_json::Value {
     json!({
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": name},
         "models": {"M": {
             "variables": {

@@ -75,3 +75,53 @@ def test_arrayop_is_rejected_by_name_not_left_to_the_open_tier():
     # much later as `unlowered_operator`.
     with pytest.raises(ParseError, match="removed_op"):
         load_path(str(INVALID_DIR / "faq" / "arrayop_op_removed.esm"))
+
+
+# --- the wire boundary covers REFERENCED documents, not just the root ---------
+#
+# Every fixture above is a single self-contained document. That is exactly why
+# five green binding suites missed the leak: the normalizer ran on the root's
+# bytes and ref resolution then parsed child files raw, so a child's alias (and
+# `arrayop`) reached `emit` untouched.
+
+
+def test_the_alias_is_normalized_inside_a_referenced_child():
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        f = load_path(str(CONF / "ref_parent_aliased.esm"))
+    emitted = json.loads(to_json(f))
+    assert "aggregate" not in _ops(emitted), "the alias survived a {ref} into emit"
+    assert [w for w in caught if "deprecated_op_alias" in str(w.message)]
+
+
+def test_arrayop_in_a_referenced_child_is_rejected():
+    with pytest.raises(ParseError, match="removed_op"):
+        load_path(str(CONF / "ref_parent_arrayop.esm"))
+
+
+# --- the esm 1.1.0 version gate ----------------------------------------------
+
+
+def _at_version(tmp_path, src, version):
+    doc = json.loads(open(src, encoding="utf-8").read())
+    doc["esm"] = version
+    out = tmp_path / "v.esm"
+    out.write_text(json.dumps(doc), encoding="utf-8")
+    return str(out)
+
+
+def test_faq_below_v11_is_rejected(tmp_path):
+    # `faq` arrives at 1.1.0, the same gate the top-level `solver` block uses.
+    with pytest.raises(ParseError, match="faq_version_too_old"):
+        load_path(_at_version(tmp_path, CONF / "canonical.esm", "1.0.0"))
+
+
+def test_the_alias_below_v11_is_legal_and_raises_the_floor(tmp_path):
+    # `aggregate` IS the pre-1.1.0 spelling, so the gate must NOT catch it. The
+    # gate reads the AUTHORED form, before normalization; the document is then
+    # normalized AND its declared version raised, so the upgrade is
+    # self-consistent rather than spelling a 1.1.0 construct under 1.0.0.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        f = load_path(_at_version(tmp_path, CONF / "aliased.esm", "1.0.0"))
+    assert f.esm == "1.1.0"

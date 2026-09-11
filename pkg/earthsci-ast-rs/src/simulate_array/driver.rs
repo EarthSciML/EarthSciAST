@@ -1928,7 +1928,7 @@ mod forcing_channel_tests {
     fn forced_model() -> ArrayCompiled {
         let json = r#"
             {
-              "esm": "1.0.0",
+              "esm": "1.1.0",
               "metadata": {
                 "name": "forcing_channel"
               },
@@ -2080,7 +2080,7 @@ mod forcing_channel_tests {
         // resolved last and only fills otherwise-unbound names.
         let json = r#"
             {
-              "esm": "1.0.0",
+              "esm": "1.1.0",
               "metadata": {
                 "name": "param_path"
               },
@@ -2192,7 +2192,7 @@ mod forcing_channel_tests {
         // the exact knot 40.0, so both cells' derivative must be 40.0.
         let json = r#"
             {
-              "esm": "1.0.0",
+              "esm": "1.1.0",
               "metadata": {
                 "name": "fn_array_path"
               },

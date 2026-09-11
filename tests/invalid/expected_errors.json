@@ -3089,15 +3089,8 @@
     "notes": "Rejected at load with `solver_version_too_old` (esm-spec \u00a72.2.4): the top-level `solver` block arrives at esm 1.1.0 and this document declares 1.0.0. Gated before schema validation so the author sees the version hint rather than a generic unknown-property error."
   },
   "arrayop_op_removed.esm": {
-    "schema_errors": [
-      {
-        "path": "/models/NodeAddressingDemo/equations/0/rhs",
-        "message": "removed_op: `\"op\": \"arrayop\"` was removed at esm 0.8.0 and is not a deprecated alias; use `\"op\": \"faq\"`",
-        "keyword": "removed_op"
-      }
-    ],
-    "structural_errors": [],
+    "parse_error": true,
     "is_valid": false,
-    "notes": "Rejected at LOAD, at the wire boundary, BY NAME \u2014 not by JSON Schema. `arrayop` matches the `op` pattern, so esm-spec \u00a74.2 would otherwise admit it as an OPEN rewrite-target op and it would load silently, failing much later as `unlowered_operator`. Pinned in the schema_errors branch because that branch's contract is 'Load rejects it' (CONFORMANCE_SPEC \u00a77 `removed_op`; docs/content/rfcs/faq-node-rename.md \u00a75.4)."
+    "notes": "Rejected at LOAD, at the wire boundary, BY NAME \u2014 not by JSON Schema and not by a structural check, so there is no (keyword, path) or (code, path) tuple to pin. Uses the `parse_error` category, whose contract is exactly 'must be rejected at load'; the category is slightly broader than its 'not even JSON' docstring, because `arrayop` IS well-formed JSON and a well-formed `op` identifier \u2014 that is the whole point. Without a by-name rejection esm-spec \u00a74.2 would admit it as an OPEN rewrite-target op and the document would load silently, failing much later as `unlowered_operator`, or never. See CONFORMANCE_SPEC \u00a77 `removed_op` and docs/content/rfcs/faq-node-rename.md \u00a75.4."
   }
 }

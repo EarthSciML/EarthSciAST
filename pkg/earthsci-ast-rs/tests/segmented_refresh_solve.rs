@@ -90,7 +90,7 @@ use std::rc::Rc;
 /// cross-system reference Sink reads.
 const COUPLED_FORCED_JSON: &str = r#"
     {
-      "esm": "1.0.0",
+      "esm": "1.1.0",
       "metadata": {
         "name": "segmented_refresh_coupled"
       },

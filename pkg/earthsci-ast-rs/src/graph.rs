@@ -1027,7 +1027,7 @@ fn process_coupling(b: &mut ExprGraphBuilder, coupling: &[CouplingEntry]) {
     }
 }
 
-/// Index symbols a node BINDS for its own body: a `faq` / `faq`'s
+/// Index symbols a node BINDS for its own body: a `faq`'s
 /// `ranges` keys and `output_idx` entries, and an `integral`'s `var`.
 ///
 /// Narrower than `structural::bound_index_symbols`, which also treats every bare

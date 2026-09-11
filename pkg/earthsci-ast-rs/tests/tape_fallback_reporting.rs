@@ -30,7 +30,7 @@ use earthsci_ast::{SolveOptions, load_string};
 /// this fixture must keep falling back for the assertion to mean anything.
 const FALLBACK_MODEL: &str = r#"
     {
-      "esm": "1.0.0",
+      "esm": "1.1.0",
       "metadata": {
         "name": "fallback_reporting"
       },
@@ -112,7 +112,7 @@ const FALLBACK_MODEL: &str = r#"
 /// fully taped.
 const TAPED_MODEL: &str = r#"
     {
-      "esm": "1.0.0",
+      "esm": "1.1.0",
       "metadata": {
         "name": "taped_reporting"
       },

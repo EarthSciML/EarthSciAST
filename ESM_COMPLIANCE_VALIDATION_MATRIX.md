@@ -123,7 +123,7 @@ Where:
 ### BEHAV-04-G: Evaluable-Core Operator Coverage (esm-spec §4.2)
 | ID | Requirement | Spec Reference | Testable | Test Category |
 |---|---|---|---|---|
-| BEHAV-04-G-001 | `{"op": "true"}` is a nullary boolean LITERAL, not a form op awaiting a lowering pass: an evaluator MUST produce the true value for it (1.0 under the 0/1 convention every comparison and `and`/`or`/`not` already uses), so `aggregate{expr: true}` — the semi-join spelling — COUNTS the admitted tuples | esm-spec.md §4.2 (op table), CONFORMANCE_SPEC.md §5.5.8 | Yes | behavioral |
+| BEHAV-04-G-001 | `{"op": "true"}` is a nullary boolean LITERAL, not a form op awaiting a lowering pass: an evaluator MUST produce the true value for it (1.0 under the 0/1 convention every comparison and `and`/`or`/`not` already uses), so `faq{expr: true}` — the semi-join spelling — COUNTS the admitted tuples | esm-spec.md §4.2 (op table), CONFORMANCE_SPEC.md §5.5.8 | Yes | behavioral |
 | BEHAV-04-G-002 | A §4.2 evaluable-core op the evaluator has NO rule for (`skolem`, `rank`, `distinct`, `argmin`, `argmax`, `ic`, `enum`, `table_lookup`, `apply_expression_template`) MUST be refused with a diagnostic naming it — never a panic, never a NaN. The refusal belongs at BUILD, at the funnel every run passes through, not at each evaluator entry point | esm-spec.md §4.2, §9.6.8 | Yes | validation |
 | BEHAV-04-G-003 | The one carve-out: `ic` is legal as an equation LHS (§11.4) — initial-condition assembly reads the equation and the evaluator never sees the node — so the gate MUST unwrap an `ic` LHS and check its operand instead of rejecting it | esm-spec.md §11.4, §4.2 | Yes | validation |
 

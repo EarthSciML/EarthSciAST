@@ -838,7 +838,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         @testset "rebind guards: declared names, bound indices, target capture" begin
             mktempdir() do dir
                 write(joinpath(dir, "ragged.esm"), """
-                {"esm": "0.8.0", "metadata": {"name": "ragged"},
+                {"esm": "1.1.0", "metadata": {"name": "ragged"},
                  "metaparameters": {"NR": {"type": "integer", "default": 2}},
                  "index_sets": {"rows": {"kind": "interval", "size": "NR"},
                                 "nz": {"kind": "ragged", "of": ["rows"],
@@ -906,7 +906,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
             p = joinpath(dir, "m.esm")
             write(p, """
             {
-              "esm": "0.8.0",
+              "esm": "1.1.0",
               "metadata": {"name": "fold"},
               "metaparameters": {"N": {"type": "integer", "default": 6}},
               "index_sets": {"cells": {"kind": "interval", "size": {"op": "*", "args": ["N", 2]}}},

@@ -956,7 +956,7 @@ function _resolve_indices_op(expr::OpExpr,
         # Expand the faq at build time by substituting output_idx and
         # unrolling contracted indices (same strategy as the `_is_faq_D_lhs`
         # branch of `_build_evaluator_impl`'s derivative loop).
-        if first_arg isa OpExpr && _is_aggregate_op(first_arg.op)
+        if first_arg isa OpExpr && _is_faq_op(first_arg.op)
             return _resolve_index_of_faq(first_arg::OpExpr, expr.args[2:end],
                                              array_var_info, var_map, const_arrays, pgather, memo, bound_syms)
         end
@@ -1135,7 +1135,7 @@ function _resolve_indices_op(expr::OpExpr,
     # Scalar aggregate (empty output_idx) in expression position: expand inline.
     # Non-scalar aggregate (non-empty output_idx) must be wrapped in index() —
     # handled by the _resolve_indices index-of-aggregate branch above.
-    if _is_aggregate_op(expr.op)
+    if _is_faq_op(expr.op)
         if isempty(_output_idx_strings(expr))
             return _resolve_scalar_faq(expr, array_var_info, var_map, const_arrays, pgather, memo, bound_syms)
         end
@@ -1183,7 +1183,7 @@ function _detect_array_vars(equations::Vector{Equation},
             if first_arg isa VarExpr && first_arg.name in state_var_names
                 push!(detected, first_arg.name)
             end
-        elseif lhs isa OpExpr && _is_aggregate_op(lhs.op)
+        elseif lhs isa OpExpr && _is_faq_op(lhs.op)
             body = lhs.expr_body
             if body isa OpExpr && body.op == "D" && !isempty(body.args)
                 inner = body.args[1]
@@ -1249,7 +1249,7 @@ function _scan_lhs_cells!(cells, lhs::ASTExpr, array_var_names::Set{String})
         end
         return
     end
-    if lhs isa OpExpr && _is_aggregate_op(lhs.op)
+    if lhs isa OpExpr && _is_faq_op(lhs.op)
         # aggregate(expr=D(index(var, idx_exprs...)), output_idx=[...], ranges={...})
         lhs_body = lhs.expr_body
         lhs_body === nothing && return
@@ -1299,7 +1299,7 @@ end
 
 # Identify faq(D(index(var, ...)), ...) — array-loop derivative LHS.
 function _is_faq_D_lhs(lhs)
-    lhs isa OpExpr && _is_aggregate_op(lhs.op) || return false
+    lhs isa OpExpr && _is_faq_op(lhs.op) || return false
     body = lhs.expr_body
     body === nothing && return false
     return body isa OpExpr && body.op == "D" && body.wrt == "t" &&
@@ -1310,7 +1310,7 @@ end
 # Extract the scalar body from a faq node (or return expr unchanged).
 # Used to unwrap the RHS of a faq equation.
 function _extract_faq_body(expr::ASTExpr)
-    if expr isa OpExpr && _is_aggregate_op(expr.op)
+    if expr isa OpExpr && _is_faq_op(expr.op)
         expr.expr_body !== nothing && return expr.expr_body
     end
     return expr

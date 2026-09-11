@@ -558,7 +558,7 @@ pub enum LhsForm {
 /// A derivative LHS may be WRAPPED and still credits its base variable:
 /// `D(u)`, `D(u[i])` (an `index` under the `D`), and a `faq` whose
 /// `expr` is a `D(…)` — the arrayed spelling every discretized fixture uses.
-/// The same unwrapping applies to a bare LHS, so `aggregate{expr: y[i]}` still
+/// The same unwrapping applies to a bare LHS, so `faq{expr: y[i]}` still
 /// reads as a definition of `y`.
 pub fn lhs_form(lhs: &Expr) -> LhsForm {
     match lhs {
@@ -572,7 +572,7 @@ pub fn lhs_form(lhs: &Expr) -> LhsForm {
                 .and_then(base_variable)
                 .map(LhsForm::Derivative)
                 .unwrap_or(LhsForm::Expression),
-            // A `faq`/`faq` LHS is a shell around the real form.
+            // A `faq` LHS is a shell around the real form.
             "faq" => node
                 .expr
                 .as_deref()
@@ -592,7 +592,7 @@ pub fn lhs_form(lhs: &Expr) -> LhsForm {
 }
 
 /// The base variable of an LHS operand, peeling the wrappers that do not
-/// change WHICH quantity is being written: `index`, `faq`/`faq`
+/// change WHICH quantity is being written: `index`, `faq`
 /// shells, and `broadcast`.
 fn base_variable(expr: &Expr) -> Option<String> {
     match expr {

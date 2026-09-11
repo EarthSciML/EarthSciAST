@@ -81,7 +81,7 @@ EQ_D_BARE = {"lhs": {"op": "D", "args": ["u"], "wrt": "t"}, "rhs": "w"}
 def _doc(name, equations, assertions):
     """#232's model: w = 2u and D(u) = w, so u(t) = e^(2t) and w(t) = 2e^(2t)."""
     return {
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": name, "authors": ["repro"]},
         "index_sets": {"lev": {"kind": "interval", "size": 4}},
         "models": {

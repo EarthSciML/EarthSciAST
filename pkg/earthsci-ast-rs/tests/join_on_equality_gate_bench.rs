@@ -80,7 +80,7 @@ fn doc(nl: usize, nr: usize, nkeys: usize) -> (Value, HashMap<String, ArrayD<f64
         .insert("join".into(), json!([{"on": [["lkey", "rkey"]]}]));
 
     let doc = json!({
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "join_on_bench"},
         "index_sets": {
             "lrows": {"kind": "interval", "size": nl},

@@ -144,7 +144,7 @@ fn document(url: &str, extra_reader_options: Option<(&str, Value)>, sizing: Sizi
         reader_options[k] = v;
     }
     json!({
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {
             "name": "DataSourceIngestCli",
             "description": "One data source, one bound parameter, one inline test on its column mean."

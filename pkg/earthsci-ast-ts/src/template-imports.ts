@@ -46,6 +46,7 @@ import { isNumericLiteral } from './numeric-literal.js'
 import { deepClone, isObject } from './object-utils.js'
 import { isRemoteRef, normalizeRef, readFileSyncNode } from './path-utils.js'
 import { ERROR_CODES } from './errors.js'
+import { prepareDocumentOps } from './parse.js'
 
 type Json = unknown
 type JsonObject = Record<string, unknown>
@@ -762,6 +763,10 @@ function loadImportRaw(
       `${origin}: template-library ref '${path}' is not valid JSON: ${e instanceof Error ? e.message : String(e)}`,
     )
   }
+  // A template library is a document too, and its template BODIES carry
+  // expression nodes — same wire boundary as the root
+  // (docs/content/rfcs/faq-node-rename.md §5.2).
+  prepareDocumentOps(raw)
   return { raw, dir: dirName(path) }
 }
 

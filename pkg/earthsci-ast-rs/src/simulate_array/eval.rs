@@ -465,7 +465,7 @@ fn eval_op_named(op: &str, node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         // Julia (`geometry_compile.jl`: `_NK_LITERAL, literal=1.0`) and this
         // crate's own `value_invention::vi_eval` (`Val::Bool(true)`) already
         // produce. In a `sum_product` contraction it is the multiplicative
-        // identity, so `aggregate{expr: true}` COUNTS the admitted tuples —
+        // identity, so `faq{expr: true}` COUNTS the admitted tuples —
         // which is exactly what a semi-join wants to say.
         "true" => Value::Scalar(1.0),
 
@@ -2356,7 +2356,7 @@ pub(super) struct ReduceSpec<'a> {
     pub(super) cell: Option<&'a CellBox<'a>>,
 }
 
-/// Evaluate a `faq`/`faq` `filter` predicate under the current loop
+/// Evaluate a `faq` `filter` predicate under the current loop
 /// binds and report whether the combination is **excluded** (§5.3): excluded
 /// iff a filter is present and evaluates to false. With no filter this is always
 /// `false`, so the reduction is byte-identical to the no-filter form.
@@ -3663,7 +3663,7 @@ pub(super) fn with_faq_pool<R>(f: impl FnOnce(&mut Pool) -> R) -> R {
     })
 }
 
-/// The evaluation parameters of a standalone `faq`/`faq` node.
+/// The evaluation parameters of a standalone `faq` node.
 ///
 /// Extracted in ONE place so the per-cell oracle ([`eval_faq`]) and the
 /// vectorized overlay's nested-aggregate arm ([`eval_vec_nested_aggregate`])
@@ -4626,7 +4626,7 @@ mod evaluability_gate_tests {
     /// a boolean LITERAL — so it belongs on the evaluable side of the audit
     /// above, and its value is fixed by this evaluator's own 0/1 boolean
     /// convention. Pinned as a number, not merely as "is_evaluable_op", because
-    /// the whole point of the fix is that `aggregate{expr: true}` COUNTS.
+    /// the whole point of the fix is that `faq{expr: true}` COUNTS.
     #[test]
     fn the_true_literal_evaluates_to_one() {
         assert!(crate::op_registry::is_core_op("true"), "§4.2 lists `true`");

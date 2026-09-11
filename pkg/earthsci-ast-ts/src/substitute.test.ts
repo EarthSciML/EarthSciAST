@@ -180,7 +180,7 @@ describe('substitute', () => {
   it('resolves hierarchical scoped references with context', () => {
     // Create a mock ESM file with hierarchical structure
     const esmFile: EsmFile = {
-      esm: '0.1.0',
+      esm: '1.1.0',
       metadata: { name: 'test' },
       models: {
         SuperFast: {
@@ -225,7 +225,7 @@ describe('substitute', () => {
 
   it('resolves scoped references in reaction systems', () => {
     const esmFile: EsmFile = {
-      esm: '0.1.0',
+      esm: '1.1.0',
       metadata: { name: 'test' },
       reaction_systems: {
         SimpleOzone: {
@@ -270,7 +270,7 @@ describe('substitute', () => {
 
   it('handles scoped references to data loaders', () => {
     const esmFile: EsmFile = {
-      esm: '0.1.0',
+      esm: '1.1.0',
       metadata: { name: 'test' },
       data_loaders: {
         GEOSFP: {

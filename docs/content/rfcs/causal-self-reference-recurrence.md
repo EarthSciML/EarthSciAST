@@ -69,7 +69,7 @@ whereas a scalar self-read is just a gather on the array being written.)
 recognized structurally:
 
 > An equation whose LHS names an array-shaped unknown `V` (bare, `V ~ …`, or
-> indexed through the §4.3 `aggregate` LHS form, `aggregate{expr: V[k]} ~ …`), and
+> indexed through the §4.3 `aggregate` LHS form, `faq{expr: V[k]} ~ …`), and
 > whose RHS contains one or more `index(V, …)` reads, is a **recurrence
 > definition** of `V`.
 

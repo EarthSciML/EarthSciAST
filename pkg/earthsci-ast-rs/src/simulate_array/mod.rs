@@ -197,7 +197,7 @@ pub struct VarShape {
     pub flat_offset: usize,
 }
 
-/// One contracted (reduction) index's loop bound in a `faq`/`faq`
+/// One contracted (reduction) index's loop bound in a `faq`
 /// einsum. Either a static inclusive interval, or a **ragged** bound whose
 /// upper limit `offsets[of…]` is gathered per output tuple at eval time
 /// (RFC `semiring-faq-unified-ir` §5.2 — variable-valence / unstructured-mesh

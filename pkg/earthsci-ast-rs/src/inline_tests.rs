@@ -283,7 +283,7 @@ pub fn evaluate_cellwise(
 }
 
 /// Whether `name` occurs FREE in `expr`: as a variable reference not bound by
-/// an enclosing `faq` / `faq` / `makearray` loop symbol (`output_idx`,
+/// an enclosing `faq` / `makearray` loop symbol (`output_idx`,
 /// a `ranges` key) or an `integral`'s integration variable. A node that binds
 /// `name` shadows it for its whole subtree.
 fn mentions_free(expr: &Expr, name: &str) -> bool {
@@ -2351,7 +2351,7 @@ mod tests {
     fn decay_doc() -> serde_json::Value {
         let idx = json!({"op": "index", "args": ["u", "i"]});
         json!({
-            "esm": "1.0.0",
+            "esm": "1.1.0",
             "metadata": {"name": "pde_inline_decay"},
             "index_sets": {"x": {"kind": "interval", "size": N}},
             "models": {"M": {
@@ -2809,7 +2809,7 @@ mod tests {
     #[test]
     fn scalar_only_component_is_assertable() {
         let doc = json!({
-            "esm": "1.0.0",
+            "esm": "1.1.0",
             "metadata": {"name": "scalar_only"},
             "models": {"ScalarOnly": {
                 "variables": {
@@ -2856,7 +2856,7 @@ mod tests {
     #[test]
     fn scalar_observed_of_an_ode_component_is_assertable() {
         let doc = json!({
-            "esm": "1.0.0",
+            "esm": "1.1.0",
             "metadata": {"name": "scalar_ode_observed"},
             "models": {"M": {
                 "variables": {
@@ -2908,7 +2908,7 @@ mod tests {
     #[test]
     fn an_unmaterialized_scalar_assertion_is_an_error_not_a_zero() {
         let doc = json!({
-            "esm": "1.0.0",
+            "esm": "1.1.0",
             "metadata": {"name": "scalar_missing"},
             "models": {"ScalarOnly": {
                 "variables": {
@@ -3239,7 +3239,7 @@ mod tests {
                        "expr": {"op": "+",
                                 "args": [{"op": "index", "args": ["u", "i"]}, 1]}});
         json!({
-            "esm": "1.0.0",
+            "esm": "1.1.0",
             "metadata": {"name": "observed_assertions"},
             "index_sets": {"x": {"kind": "interval", "size": 3}},
             "models": {"M": {
@@ -3377,7 +3377,7 @@ mod tests {
     fn run_inline_tests_coords_on_scalar_variable_rejected() {
         // coords on a scalar (0-D) variable is ill-formed per §6.6.5.
         let doc = json!({
-            "esm": "1.0.0",
+            "esm": "1.1.0",
             "metadata": {"name": "scalar_coords"},
             "models": {"M": {
                 "variables": {"z": {"type": "unknown", "units": "1", "default": 1.0}},
@@ -3420,7 +3420,7 @@ mod tests {
         let idx = json!({"op": "index", "args": ["u", "i", "j"]});
         let ranges = json!({"i": [1, 4], "j": [1, ny]});
         json!({
-            "esm": "1.0.0",
+            "esm": "1.1.0",
             "metadata": {"name": "pde_inline_2d"},
             "index_sets": {"x": {"kind": "interval", "size": 4},
                            "y": {"kind": "interval", "size": ny}},
@@ -3659,7 +3659,7 @@ mod tests {
             })
         };
         json!({
-            "esm": "1.0.0",
+            "esm": "1.1.0",
             "metadata": {"name": "scalar_observed_param_override"},
             "index_sets": {"s": {"kind": "interval", "size": 1}},
             "models": {
@@ -3733,7 +3733,7 @@ mod tests {
     /// indistinguishable in the result list from one that was never looked at.
     fn reaction_decay_doc() -> serde_json::Value {
         json!({
-            "esm": "1.0.0",
+            "esm": "1.1.0",
             "metadata": {"name": "inline_test_reaction_system"},
             "reaction_systems": {"Decay": {
                 "species": {
@@ -3802,7 +3802,7 @@ mod tests {
             test["parameter_overrides"] = ov;
         }
         json!({
-            "esm": "1.0.0",
+            "esm": "1.1.0",
             "metadata": {"name": "ramp"},
             "models": {"M": {
                 "variables": {

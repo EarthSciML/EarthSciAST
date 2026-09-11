@@ -124,7 +124,7 @@ Base.showerror(io::IO, e::InlineTestError) = print(io, "InlineTestError: ", e.ms
 # `expr_body`), so the accelerator can require EXACTLY ONE reduction.
 function _blas_collect_aggregates!(acc::Vector{OpExpr}, e)
     if e isa OpExpr
-        _is_aggregate_op(e.op) && push!(acc, e)
+        _is_faq_op(e.op) && push!(acc, e)
         for a in e.args
             _blas_collect_aggregates!(acc, a)
         end
@@ -1024,7 +1024,7 @@ function _scalar_slot(var_map::AbstractDict, variable::AbstractString,
 end
 
 # Whether `name` occurs FREE in `expr`: as a variable reference not bound by an
-# enclosing `faq` / `faq` / `makearray` loop symbol (`output_idx`, a
+# enclosing `faq` / `makearray` loop symbol (`output_idx`, a
 # `ranges` key) or an `integral`'s integration variable. A binder shadows the
 # name for its whole subtree.
 #

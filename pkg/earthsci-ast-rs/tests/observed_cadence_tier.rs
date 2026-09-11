@@ -24,7 +24,7 @@ use earthsci_ast::simulate_array::ArrayCompiled;
 /// * `h[i] := u[i] * 2` — reads the integrated state `u`, so CONTINUOUS.
 const MODEL: &str = r#"
     {
-      "esm": "1.0.0",
+      "esm": "1.1.0",
       "metadata": {
         "name": "cadence_tiers"
       },

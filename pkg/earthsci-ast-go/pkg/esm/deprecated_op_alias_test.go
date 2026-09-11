@@ -2,6 +2,7 @@ package esm
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -107,5 +108,80 @@ func TestRemovedOp_ArrayopIsRejectedByName(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "removed_op") {
 		t.Errorf("rejection must carry the `removed_op` diagnostic, got: %v", err)
+	}
+}
+
+// --- the wire boundary covers REFERENCED documents, not just the root -------
+//
+// Every other fixture here is a single self-contained document, which is
+// exactly why five green binding suites missed the leak: the normalizer ran on
+// the root's bytes and ref resolution then read child files raw.
+
+func TestDeprecatedOpAlias_NormalizedInsideAReferencedChild(t *testing.T) {
+	f, err := LoadPath(filepath.Join(aliasConfDir(t), "ref_parent_aliased.esm"))
+	if err != nil {
+		t.Fatalf("parent mounting an aliased child must load: %v", err)
+	}
+	s, err := ToJSON(f)
+	if err != nil {
+		t.Fatalf("emit: %v", err)
+	}
+	var doc any
+	if err := json.Unmarshal([]byte(s), &doc); err != nil {
+		t.Fatalf("decode emit: %v", err)
+	}
+	for _, op := range allOps(doc, nil) {
+		if op == "aggregate" {
+			t.Fatalf("the alias survived a {ref} into emit")
+		}
+	}
+}
+
+func TestRemovedOp_ArrayopInsideAReferencedChildIsRejected(t *testing.T) {
+	_, err := LoadPath(filepath.Join(aliasConfDir(t), "ref_parent_arrayop.esm"))
+	if err == nil {
+		t.Fatalf("expected a child's `arrayop` to be rejected")
+	}
+	if !strings.Contains(err.Error(), "removed_op") {
+		t.Errorf("rejection must carry `removed_op`, got: %v", err)
+	}
+}
+
+// --- the esm 1.1.0 version gate --------------------------------------------
+
+func atVersion(t *testing.T, name, version string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(aliasConfDir(t), name))
+	if err != nil {
+		t.Fatalf("read %s: %v", name, err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(b, &doc); err != nil {
+		t.Fatalf("decode %s: %v", name, err)
+	}
+	doc["esm"] = version
+	out := filepath.Join(t.TempDir(), "v.esm")
+	enc, _ := json.Marshal(doc)
+	if err := os.WriteFile(out, enc, 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	return out
+}
+
+func TestFaqVersionGate(t *testing.T) {
+	// `faq` arrives at esm 1.1.0 — the gate the top-level `solver` block uses.
+	if _, err := LoadPath(atVersion(t, "canonical.esm", "1.0.0")); err == nil {
+		t.Errorf("expected `faq` below 1.1.0 to be rejected")
+	} else if !strings.Contains(err.Error(), "faq_version_too_old") {
+		t.Errorf("rejection must carry `faq_version_too_old`, got: %v", err)
+	}
+	// `aggregate` IS the pre-1.1.0 spelling, so the gate reads the AUTHORED
+	// form and must not catch it; normalization raises the version with it.
+	f, err := LoadPath(atVersion(t, "aliased.esm", "1.0.0"))
+	if err != nil {
+		t.Fatalf("the alias below 1.1.0 is legal, got: %v", err)
+	}
+	if f.ESM != "1.1.0" {
+		t.Errorf("declared version = %q; want 1.1.0 (floor raised with the rewrite)", f.ESM)
 	}
 }

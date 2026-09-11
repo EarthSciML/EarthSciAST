@@ -524,7 +524,7 @@ def _join_count_model(with_join: bool) -> dict:
     if with_join:
         rhs["join"] = [{"on": [["i", "j"]]}]
     return {
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "join_e2e"},
         "index_sets": {"county": {"kind": "categorical", "members": ["A", "B"]}},
         "models": {

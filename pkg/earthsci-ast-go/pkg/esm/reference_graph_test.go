@@ -546,7 +546,7 @@ func TestReferenceGraphTypedConveniences(t *testing.T) {
 // TestResolveReferencesOnDocumentWithoutModels: a document using none of these
 // features yields an empty-but-valid result rather than an error.
 func TestResolveReferencesOnDocumentWithoutModels(t *testing.T) {
-	graphs, err := ResolveReferences(map[string]any{"esm": "1.0.0"})
+	graphs, err := ResolveReferences(map[string]any{"esm": "1.1.0"})
 	if err != nil {
 		t.Fatalf("ResolveReferences: %v", err)
 	}

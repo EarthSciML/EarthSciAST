@@ -1800,13 +1800,22 @@ fn load_import_raw(
             ),
         )
     })?;
-    let raw: Value = serde_json::from_str(&content).map_err(|e| {
+    let mut raw: Value = serde_json::from_str(&content).map_err(|e| {
         err(
             codes::TEMPLATE_IMPORT_UNRESOLVED,
             format!(
                 "{origin}: template-library ref '{}' is not valid JSON: {e}",
                 path.display()
             ),
+        )
+    })?;
+    // A template library is a document too, and its template BODIES carry
+    // expression nodes — so it needs the same wire-boundary treatment as the
+    // root (docs/content/rfcs/faq-node-rename.md §5.2).
+    crate::parse::prepare_document_ops(&mut raw).map_err(|e| {
+        err(
+            codes::TEMPLATE_IMPORT_UNRESOLVED,
+            format!("{origin}: {}: {e}", path.display()),
         )
     })?;
     let dir = path

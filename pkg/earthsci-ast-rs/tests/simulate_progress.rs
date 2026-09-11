@@ -21,7 +21,7 @@ mod common;
 /// document free of any unary-minus encoding.
 const DECAY: &str = r#"
     {
-      "esm": "1.0.0",
+      "esm": "1.1.0",
       "metadata": {
         "name": "progress_decay"
       },
@@ -64,7 +64,7 @@ const DECAY: &str = r#"
 /// that routes through the array runtime rather than the scalar interpreter.
 const ARRAY: &str = r#"
     {
-      "esm": "1.0.0",
+      "esm": "1.1.0",
       "metadata": {
         "name": "progress_array"
       },

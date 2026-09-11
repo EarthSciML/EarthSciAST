@@ -89,7 +89,7 @@ def test_a_shaped_parameter_with_no_value_at_all_is_not_zero_filled(tmp_path: Pa
     too: the read stays scalar and ``index(p, k)`` says so.
     """
     doc = {
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "NoValueShapedParameter", "authors": ["conformance"]},
         "index_sets": {"lev": {"kind": "interval", "size": 3}},
         "models": {

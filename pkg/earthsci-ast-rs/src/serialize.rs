@@ -35,7 +35,43 @@ use std::path::Path;
 /// assert!(json.contains("\"esm\": \"1.0.0\""));
 /// ```
 pub fn to_json(esm_file: &EsmFile) -> Result<String, EsmError> {
-    serde_json::to_string_pretty(esm_file).map_err(EsmError::JsonParse)
+    let mut value = serde_json::to_value(esm_file).map_err(EsmError::JsonParse)?;
+    raise_faq_esm_floor(&mut value);
+    serde_json::to_string_pretty(&value).map_err(EsmError::JsonParse)
+}
+
+/// Raise an emitted document's declared `esm` to 1.1.0 when it CONTAINS a `faq`
+/// node but declares less.
+///
+/// Like the §9.6.4 rule-8 template stamp, this is a FLOOR — "a consumer needs at
+/// least this" — so it only ever raises. It exists because a document can come
+/// to contain `faq` without ever spelling it: a 1.0.0 parent that mounts a
+/// subsystem whose child uses `faq` has the child inlined into it at load, and
+/// emitting that as 1.0.0 writes a document the `faq_version_too_old` gate then
+/// refuses to read back. The load-time gate cannot catch it — the parent's
+/// AUTHORED bytes are legal — so the stamp closes it here.
+/// See docs/content/rfcs/faq-node-rename.md §5.5.
+fn raise_faq_esm_floor(value: &mut serde_json::Value) {
+    fn has_faq(v: &serde_json::Value) -> bool {
+        match v {
+            serde_json::Value::Object(map) => {
+                map.get("op").and_then(|o| o.as_str()) == Some("faq")
+                    || map.values().any(has_faq)
+            }
+            serde_json::Value::Array(items) => items.iter().any(has_faq),
+            _ => false,
+        }
+    }
+    let below = value
+        .get("esm")
+        .and_then(|v| v.as_str())
+        .and_then(crate::diagnostic::parse_semver)
+        .is_some_and(|(major, minor, _)| (major, minor) < (1, 1));
+    if below && has_faq(value)
+        && let Some(obj) = value.as_object_mut()
+    {
+        obj.insert("esm".to_string(), serde_json::Value::String("1.1.0".to_string()));
+    }
 }
 
 /// Serialize an ESM file to compact JSON string (no pretty printing)
@@ -55,7 +91,9 @@ pub fn to_json(esm_file: &EsmFile) -> Result<String, EsmError> {
 /// * `Ok(String)` - Successfully serialized compact JSON string
 /// * `Err(EsmError)` - Serialization error
 pub fn to_json_compact(esm_file: &EsmFile) -> Result<String, EsmError> {
-    serde_json::to_string(esm_file).map_err(EsmError::JsonParse)
+    let mut value = serde_json::to_value(esm_file).map_err(EsmError::JsonParse)?;
+    raise_faq_esm_floor(&mut value);
+    serde_json::to_string(&value).map_err(EsmError::JsonParse)
 }
 
 /// Write an ESM file to `path` as pretty-printed JSON.

@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "description": "esm-spec 9.7.6: metaparameter substitution rewrites EXPRESSION positions ONLY. Five metaparameters are spelled exactly like the structural string field standing beside them in the same node - `lev` like the `dim` / `wrt` / `var` axis names (9.7.7, 4.9.1, 4.2), `max` like an operator name and like the `reduce` / `fn` / `attrs` registry values, `flux` like a node `id`, `continuous` like an `expect_cadence` enum value, `min_sum` like a `semiring` id - and every one of the five ALSO occurs as a bare string in a genuine expression position IN THE SAME NODE. The golden pins the split: each expression-position occurrence closes to its integer default (4 / 3 / 7 / 5 / 6) and each structural field survives verbatim. A binding whose substitution walk is per-NODE rather than per-FIELD corrupts the structural field; a binding whose skip set is too broad fails to close the expression position beside it.",
     "name": "metaparam_axis_name_collision"

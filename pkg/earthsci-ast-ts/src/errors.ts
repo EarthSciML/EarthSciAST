@@ -146,7 +146,7 @@ export const ERROR_CODES = {
   //   `transpose` / `concat` / `broadcast` / `apply_expression_template` operand
   //   — so no cell-by-cell sweep can supply it; or the equation declares no cell
   //   frame to sweep (its RHS is not a `faq` over the variable's axes and
-  //   its LHS is not the §4.3 indexed-aggregate form).
+  //   its LHS is not the §4.3 indexed-`faq` form).
   //   The `makearray` case is worth naming separately because §4.3.2's overlap
   //   rule ("later entries overwrite earlier ones") reads like a licence to
   //   define cell `k` from cell `k-1`. It is not: region order fixes which write

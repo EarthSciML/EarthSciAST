@@ -707,7 +707,7 @@ function _stencilize_index(e::OpExpr, ctx::_StencilCtx)
     isempty(e.args) && throw(_StencilFallback("empty index op"))
     first_arg = e.args[1]
     idx_args = e.args[2:end]
-    if first_arg isa OpExpr && (_is_aggregate_op(first_arg.op) || first_arg.op == "makearray")
+    if first_arg isa OpExpr && (_is_faq_op(first_arg.op) || first_arg.op == "makearray")
         return _stencilize_indexed(first_arg::OpExpr, idx_args, ctx)
     end
     if first_arg isa VarExpr && haskey(ctx.array_var_info, first_arg.name)
@@ -963,7 +963,7 @@ function _branch_key!(io::IOBuffer, e, idxset::Set{String}, idx_env, const_array
     seen[e] = nothing
     if e.op == "index" && !isempty(e.args)
         fa = e.args[1]
-        if fa isa OpExpr && (fa.op == "makearray" || _is_aggregate_op(fa.op))
+        if fa isa OpExpr && (fa.op == "makearray" || _is_faq_op(fa.op))
             _branch_key_indexed!(io, fa::OpExpr, e.args[2:end], idxset, idx_env, const_arrays, memo, seen)
             return
         end

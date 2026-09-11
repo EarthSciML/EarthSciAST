@@ -55,7 +55,7 @@ fn esm_with_model(model_name: &str, model: Model) -> EsmFile {
         coupling_roles: None,
         domain: None,
         index_sets: None,
-        esm: "0.1.0".to_string(),
+        esm: "1.1.0".to_string(),
         metadata: empty_metadata(),
         models: Some(models),
         reaction_systems: None,

@@ -53,7 +53,7 @@ fn relational_document() -> Value {
         })
     };
     json!({
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "RelationalEmit", "description": "Rows from rows; nothing to integrate."},
         "index_sets": {"rows": {"kind": "interval", "size": 3}},
         "models": {

@@ -394,7 +394,7 @@ end
 # is a leaf whose whole subtree is tallied by `_referenced_var_names` (one
 # distinct-name tally per PATH to the barrier, i.e. × its total multiplicity).
 _count_obs_barrier(op::String) =
-    _is_aggregate_op(op) || op == "makearray" || op == "index"
+    _is_faq_op(op) || op == "makearray" || op == "index"
 
 function _count_obs_refs!(e::ASTExpr, names::Set{String},
                           tot::Dict{String,Int}, unc::Dict{String,Int}, cond::Bool)

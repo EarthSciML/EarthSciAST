@@ -48,6 +48,7 @@ import {
 import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
 import { loadString, validateSchema, ROOT_PATH } from './parse.js'
 import { toJson } from './serialize.js'
+import { prepareDocumentOps } from './parse.js'
 
 /**
  * Error thrown when a circular reference is detected during subsystem resolution.
@@ -272,6 +273,10 @@ async function prefetchRefs(
         // A malformed target is the sync core's error to report, with its code.
         continue
       }
+      // A referenced document is a document: same wire boundary as the root
+      // (docs/content/rfcs/faq-node-rename.md §5.2). OUTSIDE the try above, so
+      // a `removed_op` is raised rather than silently skipping the target.
+      prepareDocumentOps(parsed)
       await walkDocument(parsed, refBase)
     }
   }
@@ -516,8 +521,11 @@ function resolveRefEdge(
       throw error
     }
     const refBasePath = isRemoteRef(ref) ? getRemoteBase(ref) : getLocalBase(ref, basePath)
+    const refDoc = JSON.parse(content) as EsmFile
+    // Same wire boundary as the root (docs/content/rfcs/faq-node-rename.md §5.2).
+    prepareDocumentOps(refDoc)
     const parsed = resolveRefDocument(
-      JSON.parse(content) as EsmFile,
+      refDoc,
       ref,
       refBasePath,
       readEdgeBindings(sub, subName),
@@ -740,6 +748,8 @@ export async function ephemeralInjectedFile(
   if (sourcePath !== null) {
     const fs = await import('node:fs/promises')
     raw = JSON.parse(await fs.readFile(sourcePath, 'utf-8')) as Record<string, unknown>
+    // Same wire boundary as the root (docs/content/rfcs/faq-node-rename.md §5.2).
+    prepareDocumentOps(raw)
   } else if (file !== null) {
     raw = JSON.parse(toJson(file)) as Record<string, unknown>
   } else {

@@ -51,7 +51,7 @@ def _decay_doc() -> dict:
     expression ic(u) = cos(pi x_i); exact solution e^{-t} cos(pi x_i)."""
     idx = {"op": "index", "args": ["u", "i"]}
     return {
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "pde_inline_decay"},
         "index_sets": {"x": {"kind": "interval", "size": N}},
         "models": {
@@ -580,7 +580,7 @@ def _array_observed_doc() -> dict:
         "expr": {"op": "*", "args": ["i", "i"]},
     }
     return {
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "pde_inline_array_observed"},
         "index_sets": {"x": {"kind": "interval", "size": 3}},
         "models": {
@@ -713,7 +713,7 @@ def _sibling_array_observed_doc() -> dict:
         ],
     }
     return {
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "pde_inline_sibling_array_observed"},
         "index_sets": {"x": {"kind": "interval", "size": 3}},
         "models": {"M1": m1, "M2": m2},
@@ -837,7 +837,7 @@ def test_run_inline_tests_coords_validation_rejections():
 def test_run_inline_tests_coords_on_scalar_variable_rejected():
     """coords on a scalar (0-D) variable is ill-formed per §6.6.5."""
     doc = {
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "scalar_coords"},
         "models": {
             "M": {
@@ -876,7 +876,7 @@ def _doc_2d(ny):
     idx = {"op": "index", "args": ["u", "i", "j"]}
     ranges = {"i": [1, 4], "j": [1, ny]}
     return {
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "pde_inline_2d"},
         "index_sets": {"x": {"kind": "interval", "size": 4}, "y": {"kind": "interval", "size": ny}},
         "models": {
@@ -1068,7 +1068,7 @@ def _scalar_observed_doc() -> dict:
         }
 
     return {
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "scalar_observed_param_override"},
         "models": {
             # M1 (a=2) is laid out first, so its `k` shadows M2's under a
@@ -1137,7 +1137,7 @@ def _reaction_decay_doc() -> dict:
     skipped SILENTLY, since a component that produced no rows is
     indistinguishable in the result list from one that was never looked at."""
     return {
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "inline_test_reaction_system"},
         "reaction_systems": {
             "Decay": {
@@ -1205,7 +1205,7 @@ def _ramp_doc(expected: float, test_overrides: dict | None = None) -> dict:
     if test_overrides is not None:
         test["parameter_overrides"] = test_overrides
     return {
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "ramp"},
         "models": {
             "M": {

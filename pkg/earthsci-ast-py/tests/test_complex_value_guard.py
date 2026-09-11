@@ -40,7 +40,7 @@ def _doc(expression, shape=None, extra_vars=None):
         **({"shape": list(shape)} if shape else {}),
     }
     return {
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "complex_guard"},
         "index_sets": {"n": {"kind": "interval", "size": 3}},
         "models": {

@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "classification_indexed_lhs",
     "description": "esm-spec §6.3.1 admits TWO LHS spellings for the equation that DEFINES an unknown -- bare (`y ~ f(...)`) and indexed (`y[i] ~ f(...)`, which defines the whole array `y`) -- and neither is restricted by rank: the defining form is read through the LHS's BASE NAME, so an arrayed definition is observed exactly as its scalar counterpart is. This model writes an arrayed definition BOTH ways it is spelled in practice -- the bare `index(w, i)` of §6.3.1's own worked example, and the `aggregate{k}(index(w, k))` shell the corpus actually uses -- alongside the shapes each could be confused with: an `aggregate` over a `D` (a TENDENCY, so an ODE state), an expression LHS (an implicit constraint, so algebraic), and a scalar bare-LHS observed. Every unknown's cadence seed is pinned alongside, because §6.3.1 makes the misclassification cost concrete: `algebraic_unknowns` seeds CONTINUOUS, whereas an observed's cadence resolves through its defining RHS, so a state-free arrayed observed that is mis-credited as algebraic stops folding at bind and lands on the per-timestep hot path.",

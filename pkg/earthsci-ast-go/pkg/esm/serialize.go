@@ -53,14 +53,41 @@ func serializeDocument(file *ESMFile, indent bool) (string, error) {
 // writing (Serialize/SaveToFile) — and the only one whose names matched
 // nobody else's. These are those functions under the shared names.
 func ToJSON(file *ESMFile) (string, error) {
-	return serializeDocument(file, true)
+	out, err := serializeDocument(file, true)
+	if err != nil {
+		return out, err
+	}
+	return raiseFaqEsmFloor(out), nil
+}
+
+// raiseFaqEsmFloor raises an emitted document's declared `esm` to 1.1.0 when it
+// CONTAINS a `faq` node but declares less.
+//
+// Like the §9.6.4 rule-8 template stamp this is a FLOOR — it only ever raises.
+// A document can come to CONTAIN `faq` without ever spelling it: a 1.0.0 parent that mounts a subsystem whose child uses `faq` has the child inlined at load, and emitting that as 1.0.0 writes a document the `faq_version_too_old` gate then refuses to read back.
+// The load-time gate cannot catch it — the parent's AUTHORED bytes are legal — so the stamp closes it here.
+// See docs/content/rfcs/faq-node-rename.md §5.5.
+func raiseFaqEsmFloor(jsonStr string) string {
+	_, _, _, hasFaq := scanOpAliases(jsonStr)
+	if !hasFaq {
+		return jsonStr
+	}
+	declared, below := declaredEsmBelowV11(jsonStr)
+	if !below {
+		return jsonStr
+	}
+	return raiseEsmFloorToV11(jsonStr, declared)
 }
 
 // ToJSONCompact validates an ESM file and returns it as a compact canonical
 // JSON string (no indentation). A separate function rather than a ToJSON
 // option because Go has no default arguments.
 func ToJSONCompact(file *ESMFile) (string, error) {
-	return serializeDocument(file, false)
+	out, err := serializeDocument(file, false)
+	if err != nil {
+		return out, err
+	}
+	return raiseFaqEsmFloor(out), nil
 }
 
 // WritePath writes an ESM file to path as indented canonical JSON. It returns

@@ -28,6 +28,22 @@
       "id": "arrayop_rejected",
       "input": "../../invalid/faq/arrayop_op_removed.esm",
       "assert": "REJECTED \u2014 `arrayop` was removed at esm 0.8.0 and is not an alias"
+    },
+    {
+      "id": "alias_in_referenced_child",
+      "input": "ref_parent_aliased.esm",
+      "assert": "loads; the child's alias is normalized to `faq` too, and `emit` carries no `aggregate` \u2014 the wire boundary covers REFERENCED documents, not just the root"
+    },
+    {
+      "id": "arrayop_in_referenced_child",
+      "input": "ref_parent_arrayop.esm",
+      "assert": "REJECTED with `removed_op` \u2014 the child's removed spelling is caught at the child's own wire boundary"
+    },
+    {
+      "id": "faq_requires_v11",
+      "input": "(any document spelling `faq` while declaring esm < 1.1.0)",
+      "assert": "REJECTED with `faq_version_too_old`; the gate reads the AUTHORED form, so a pre-1.1.0 document carrying the legal `aggregate` alias is NOT caught and is instead normalized with its version raised to the 1.1.0 floor"
     }
-  ]
+  ],
+  "note": "Some bindings resolve subsystem `{ref}`s during load; TypeScript exposes it as a separate `resolveSubsystemRefs` API. A binding's adapter invokes whatever its load path requires \u2014 the CONTRACT is that once refs are resolved, no deprecated alias and no removed op survives anywhere in the document."
 }

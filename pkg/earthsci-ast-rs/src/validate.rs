@@ -330,7 +330,7 @@ impl std::fmt::Display for StructuralErrorCode {
 ///
 /// let json_str = r#"
 /// {
-///   "esm": "1.0.0",
+///   "esm": "1.1.0",
 ///   "metadata": {"name": "test"},
 ///   "models": {"simple": {"variables": {}, "equations": []}}
 /// }
@@ -951,7 +951,7 @@ mod tests {
     fn test_json_serialization_with_observed_expression() {
         // Test that we can serialize and deserialize observed variables with expressions
         let json_str = r#"{
-            "esm": "1.0.0",
+            "esm": "1.1.0",
             "metadata": {
                 "name": "TestModel",
                 "description": "Test observed variables with expressions"
@@ -1278,7 +1278,7 @@ mod tests {
         // JSON that should fail schema validation (has invalid variable type)
         let invalid_json = r#"
         {
-            "esm": "1.0.0",
+            "esm": "1.1.0",
             "metadata": {
                 "name": "test"
             },
@@ -1333,7 +1333,7 @@ mod tests {
         // Test the new validate_text function that should detect schema errors
         let invalid_json = r#"
         {
-            "esm": "1.0.0",
+            "esm": "1.1.0",
             "metadata": {
                 "name": "test"
             },
@@ -1388,7 +1388,7 @@ mod tests {
         // Test validate_text with valid JSON
         let valid_json = r#"
             {
-              "esm": "1.0.0",
+              "esm": "1.1.0",
               "metadata": {
                 "name": "test"
               },
@@ -1481,7 +1481,7 @@ mod tests {
     fn doc_with_observed_expr(expr: &str) -> String {
         format!(
             r#"{{
-              "esm": "1.0.0",
+              "esm": "1.1.0",
               "metadata": {{"name": "bcast"}},
               "models": {{"M": {{
                 "variables": {{

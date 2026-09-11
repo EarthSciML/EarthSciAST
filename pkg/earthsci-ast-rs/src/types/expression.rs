@@ -258,7 +258,7 @@ pub fn region_bounds(pair: &[RegionBound; 2]) -> Option<[i64; 2]> {
     Some([pair[0].as_i64()?, pair[1].as_i64()?])
 }
 
-/// A single `faq`/`faq` index range (RFC semiring-faq-unified-ir
+/// A single `faq` index range (RFC semiring-faq-unified-ir
 /// §5.2). Either a dense inclusive integer interval `[lo, hi]` (the original,
 /// and still the most common form) or a reference to a declared index set.
 ///
@@ -356,7 +356,7 @@ impl RangeSpec {
     }
 }
 
-/// One value-equality join clause on a `faq`/`faq` node (RFC
+/// One value-equality join clause on a `faq` node (RFC
 /// semiring-faq-unified-ir §5.3). `on` lists one or more `[left, right]`
 /// key-column pairs; a combined ⊗-product term is contributed only for index
 /// combinations whose key columns are equal on **every** listed pair (an inner
@@ -533,7 +533,7 @@ pub struct ExpressionNode {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expr: Option<Box<Expr>>,
 
-    /// Output index names for `faq`/`faq` (e.g. `["i", "j"]`).
+    /// Output index names for `faq` (e.g. `["i", "j"]`).
     ///
     /// Each entry is normally a symbolic index name (string), but the schema
     /// (and the semiring IR) also admits a bare integer literal for a singleton
@@ -551,7 +551,7 @@ pub struct ExpressionNode {
     )]
     pub output_idx: Option<Vec<String>>,
 
-    /// Per-index ranges for `faq`/`faq`. Each entry is either a dense
+    /// Per-index ranges for `faq`. Each entry is either a dense
     /// inclusive integer interval `[lo, hi]` (the original form) or a reference
     /// to a declared index set, `{ "from": <name>, "of"?: [...] }` (RFC
     /// semiring-faq-unified-ir §5.2). Index-set references are resolved to
@@ -566,7 +566,7 @@ pub struct ExpressionNode {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reduce: Option<String>,
 
-    /// Named semiring `(⊕, ⊗)` for `faq`/`faq` reductions (RFC
+    /// Named semiring `(⊕, ⊗)` for `faq` reductions (RFC
     /// semiring-faq-unified-ir §5.1). One of `sum_product` (default),
     /// `max_product`, `min_sum`, `max_sum`, `bool_and_or`. When present it is
     /// authoritative: ⊕ (the `reduce`) and both identities come from the closed
@@ -575,7 +575,7 @@ pub struct ExpressionNode {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub semiring: Option<String>,
 
-    /// Value-equality `join` clauses for `faq`/`faq` (RFC
+    /// Value-equality `join` clauses for `faq` (RFC
     /// semiring-faq-unified-ir §5.3). An inner equi-join combining factors by
     /// the value equality of key columns, subsuming ESI `join`. Each clause's
     /// `on` lists `[left, right]` key-column pairs; absent ⇒ factors combine
@@ -585,7 +585,7 @@ pub struct ExpressionNode {
     pub join: Option<Vec<JoinClause>>,
 
     /// Boolean predicate restricting which index combinations contribute a
-    /// ⊗-product term to a `faq`/`faq` reduction (RFC
+    /// ⊗-product term to a `faq` reduction (RFC
     /// semiring-faq-unified-ir §5.3 / §7.2). Combinations for which the
     /// predicate evaluates false contribute the additive identity `0̄` — the
     /// explicit way to express a guarded sum. May reference any index symbol in

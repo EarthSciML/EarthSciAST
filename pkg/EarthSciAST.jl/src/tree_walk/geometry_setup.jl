@@ -388,10 +388,10 @@ end
 # is `index(intersect_polygon(src[outer], tgt[outer]), ring, coord)`. The
 # array-producing form is the on-disk `faq` op with a non-empty `output_idx`
 # (schema v0.8.0; the op enum dropped `faq`), OR the internal `faq` alias
-# `shape_promotion.jl` still emits — `_is_aggregate_op` accepts both, and the
+# `shape_promotion.jl` still emits — `_is_faq_op` accepts both, and the
 # non-empty `output_idx` guard keeps a SCALAR reduction (empty `output_idx`) out.
 _is_ranged_clip(rhs) =
-    rhs isa OpExpr && _is_aggregate_op(rhs.op) &&
+    rhs isa OpExpr && _is_faq_op(rhs.op) &&
     rhs.output_idx !== nothing && !isempty(rhs.output_idx) &&
     rhs.expr_body isa OpExpr &&
     (rhs.expr_body::OpExpr).op == "index" &&
@@ -1176,7 +1176,7 @@ end
 # skolem-bin producer, a loader-field reindex — uses ONLY `_GEO_EVAL_OPS` and so
 # stays on the compiled geometry path (`_materialize_geom_array`), byte-identical.
 function _is_setup_general_map(rhs)
-    (rhs isa OpExpr && _is_aggregate_op(rhs.op)) || return false
+    (rhs isa OpExpr && _is_faq_op(rhs.op)) || return false
     (rhs.output_idx !== nothing && any(s -> s isa AbstractString, rhs.output_idx)) || return false
     rhs.expr_body === nothing && return false
     (rhs.join === nothing && rhs.join_gates === nothing && rhs.filter === nothing) || return false
@@ -1523,7 +1523,7 @@ function _setup_source_array(src, env, index_sets, derived_extents,
                              registered_functions)
     if src isa VarExpr && haskey(env, src.name) && env[src.name] isa AbstractArray
         return env[src.name]
-    elseif src isa OpExpr && _is_aggregate_op(src.op) &&
+    elseif src isa OpExpr && _is_faq_op(src.op) &&
            src.output_idx !== nothing && !isempty(src.output_idx)
         return _materialize_geom_array(src, env, index_sets, derived_extents)
     elseif src isa OpExpr && _is_setup_wholearray_op(src)
@@ -1925,7 +1925,7 @@ function _agg_array_obs_defs(model, env)
     for (n, e) in observed_definitions(model)
         _is_array_shape(model.variables[n].shape) || continue
         haskey(env, n) && continue
-        (e isa OpExpr && _is_aggregate_op(e.op)) || continue
+        (e isa OpExpr && _is_faq_op(e.op)) || continue
         d[n] = e
     end
     return d
@@ -2121,7 +2121,7 @@ function _derive_overlap_env_factors(model, index_sets, const_arrays_kw, param_o
             e = get(obs_defs, n, nothing)
             e === nothing && continue
             length(get(var_shapes, n, String[])) == 1 || continue
-            (e isa OpExpr && _is_aggregate_op(e.op)) || continue
+            (e isa OpExpr && _is_faq_op(e.op)) || continue
             bound = _agg_bound_syms(e); ok = true
             for r in _referenced_var_names(e)
                 r in bound && continue

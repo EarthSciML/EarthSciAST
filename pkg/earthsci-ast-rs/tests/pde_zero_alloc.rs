@@ -59,7 +59,7 @@ static GLOBAL: CountingAlloc = CountingAlloc;
 /// `fixtures/faq/15_discretized_1d_heat.esm`.
 fn heat1d_json(n: usize) -> String {
     const TEMPLATE: &str = r#"{
- "esm": "1.0.0",
+ "esm": "1.1.0",
  "metadata": {"name": "heat1d_zero_alloc"},
  "models": {
   "Heat1D": {
@@ -102,7 +102,7 @@ fn heat1d_json(n: usize) -> String {
 /// parameterized by grid size — the ess-p9s einsum stencil shape.
 fn einsum_heat1d_json(n: usize) -> String {
     const TEMPLATE: &str = r#"{
- "esm": "1.0.0",
+ "esm": "1.1.0",
  "metadata": {"name": "einsum_heat1d_zero_alloc"},
  "models": {
   "Heat1DEinsum": {
@@ -132,7 +132,7 @@ fn einsum_heat1d_json(n: usize) -> String {
 /// latitude, parameterized by grid size — the ess-p9s periodic-wrap shape.
 fn latlon_heat_json(nlon: usize, nlat: usize) -> String {
     const TEMPLATE: &str = r#"{
- "esm": "1.0.0",
+ "esm": "1.1.0",
  "metadata": {"name": "latlon_heat_zero_alloc"},
  "models": {
   "HeatLatLon": {

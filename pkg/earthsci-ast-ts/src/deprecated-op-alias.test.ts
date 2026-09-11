@@ -7,9 +7,12 @@
  */
 import { describe, expect, it, vi, afterEach } from 'vitest'
 import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 
 import { loadPath } from './parse.js'
 import { toJson } from './serialize.js'
+import { resolveSubsystemRefsSync } from './ref-loading.js'
 import { fixturesDir } from './test-helpers.js'
 
 const conf = (name: string) => fixturesDir('conformance', 'deprecated_op_alias', name)
@@ -71,5 +74,52 @@ describe('deprecated op alias: aggregate → faq', () => {
     const path = fixturesDir('invalid', 'faq', 'arrayop_op_removed.esm')
     expect(fs.existsSync(path)).toBe(true)
     expect(() => loadPath(path)).toThrow(/removed_op/)
+  })
+
+  // --- the wire boundary covers REFERENCED documents, not just the root -----
+  //
+  // Every other fixture here is a single self-contained document, which is
+  // exactly why five green binding suites missed the leak: the normalizer ran
+  // on the root and ref resolution then parsed child files raw.
+  //
+  // TypeScript resolves subsystem refs through a separate exported API rather
+  // than inside `loadPath`, so the test drives that explicitly.
+
+  it('normalizes the alias inside a referenced child', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const p = conf('ref_parent_aliased.esm')
+    const f = loadPath(p) as any
+    resolveSubsystemRefsSync(f, path.dirname(p))
+    const ops = allOps(JSON.parse(toJson(f)))
+    expect(ops).not.toContain('aggregate')
+    expect(ops).toContain('faq')
+  })
+
+  it('rejects `arrayop` inside a referenced child', () => {
+    const p = conf('ref_parent_arrayop.esm')
+    const f = loadPath(p) as any
+    expect(() => resolveSubsystemRefsSync(f, path.dirname(p))).toThrow(/removed_op/)
+  })
+
+  // --- the esm 1.1.0 version gate ------------------------------------------
+
+  const atVersion = (name: string, version: string): string => {
+    const doc = JSON.parse(fs.readFileSync(conf(name), 'utf-8'))
+    doc.esm = version
+    const out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'faqver-')), 'v.esm')
+    fs.writeFileSync(out, JSON.stringify(doc))
+    return out
+  }
+
+  it('rejects `faq` below esm 1.1.0', () => {
+    expect(() => loadPath(atVersion('canonical.esm', '1.0.0'))).toThrow(/faq_version_too_old/)
+  })
+
+  it('accepts the alias below 1.1.0 and raises the declared version', () => {
+    // `aggregate` IS the pre-1.1.0 spelling, so the gate must not catch it: it
+    // reads the AUTHORED form, and normalization raises the version with it.
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const f = loadPath(atVersion('aliased.esm', '1.0.0')) as any
+    expect(f.esm).toBe('1.1.0')
   })
 })

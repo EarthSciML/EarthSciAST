@@ -270,7 +270,7 @@ def test_array_path_binds_a_more_qualified_parameter_key() -> None:
         "ranges": {"i": {"from": "x"}},
     }
     doc = {
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {
             "name": "override_key_array_path",
             "description": "One shaped state integrating one scalar parameter.",

@@ -59,7 +59,7 @@ func TestAuditG1_FreeVariablesSeesSidecarFields(t *testing.T) {
 // FreeVariables, so it cannot pass vacuously if the walker regressed.
 func TestAuditG2_DAEContractNoDanglingReference(t *testing.T) {
 	src := `{
-	  "esm":"0.2.0",
+	  "esm":"1.1.0",
 	  "metadata":{"name":"g2"},
 	  "models":{"M":{
 	    "variables":{
@@ -130,7 +130,7 @@ func TestAuditG3_SubstituteReachesSidecar(t *testing.T) {
 // function call.
 func TestAuditG4_FlattenPreservesFnName(t *testing.T) {
 	src := `{
-	  "esm":"0.2.0",
+	  "esm":"1.1.0",
 	  "metadata":{"name":"g4"},
 	  "models":{"M":{
 	    "variables":{
@@ -180,7 +180,7 @@ func TestAuditG4_FlattenPreservesFnName(t *testing.T) {
 func operatorComposeSwapFile(t *testing.T) *ESMFile {
 	t.Helper()
 	src := `{
-	  "esm":"0.2.0",
+	  "esm":"1.1.0",
 	  "metadata":{"name":"g5"},
 	  "models":{
 	    "A":{"variables":{"x":{"type":"unknown","default":0.0},"q":{"type":"parameter","default":1.0}},
@@ -381,7 +381,7 @@ func TestAuditG6_UnloweredOperatorCode(t *testing.T) {
 func TestAuditG7_DataSourceIsNotAnEndpoint(t *testing.T) {
 	// The 1.0.0 spelling: no coupling, the loaded field declared where it is used.
 	src := `{
-	  "esm":"1.0.0",
+	  "esm":"1.1.0",
 	  "metadata":{"name":"g7"},
 	  "models":{"Transport":{
 	    "variables":{
@@ -407,7 +407,7 @@ func TestAuditG7_DataSourceIsNotAnEndpoint(t *testing.T) {
 	// A source named as a coupling endpoint is an undefined SYSTEM: it is not a
 	// component, so there is nothing there to couple.
 	bad := `{
-	  "esm":"1.0.0",
+	  "esm":"1.1.0",
 	  "metadata":{"name":"g7neg"},
 	  "models":{"Transport":{
 	    "variables":{"c":{"type":"unknown","default":0.0},"u":{"type":"parameter","default":0.0}},
@@ -567,7 +567,7 @@ func TestAuditG11_GraphWalkSeesSidecarFields(t *testing.T) {
 // {"op":3, …} and the document died in LoadString with a raw unmarshal error.
 func TestAuditG12_MetaparamDoesNotRewriteOpSlot(t *testing.T) {
 	src := `{
-	  "esm":"0.8.0",
+	  "esm":"1.1.0",
 	  "metadata":{"name":"g12"},
 	  "metaparameters":{"max":{"type":"integer","default":3}},
 	  "models":{"M":{
@@ -599,7 +599,7 @@ func TestAuditG12_MetaparamDoesNotRewriteOpSlot(t *testing.T) {
 // with `Source.var`"), so the exponent lives on B's side of the map.
 func TestAuditG13_VariableMapFactorIsParenthesized(t *testing.T) {
 	src := `{
-	  "esm":"0.2.0",
+	  "esm":"1.1.0",
 	  "metadata":{"name":"g13"},
 	  "models":{
 	    "A":{"variables":{"p":{"type":"unknown","default":0.0},"x":{"type":"parameter","default":1.0}},
@@ -669,7 +669,7 @@ func TestAuditG13_ConnectorTargetMatchIsTokenAware(t *testing.T) {
 // that no `enum` node remains, and leaving `unknown_enum` dead in that position.
 func TestAuditG15_LowerEnumsReachesEvents(t *testing.T) {
 	src := `{
-	  "esm":"0.2.0",
+	  "esm":"1.1.0",
 	  "metadata":{"name":"g15"},
 	  "enums":{"phase":{"solid":1,"liquid":2}},
 	  "models":{"M":{
@@ -712,7 +712,7 @@ func TestAuditG15_LowerEnumsReachesEvents(t *testing.T) {
 // the position it used to be dead in.
 func TestAuditG15_UnknownEnumIsDiagnosedInEvents(t *testing.T) {
 	src := `{
-	  "esm":"0.2.0",
+	  "esm":"1.1.0",
 	  "metadata":{"name":"g15b"},
 	  "enums":{"phase":{"solid":1}},
 	  "models":{"M":{
@@ -1237,7 +1237,7 @@ func loadInvalidFixtureByPath(t *testing.T, name string) (*ESMFile, string, erro
 // expression initial condition).
 func TestCheckerB_A_IndependentVarAndCoordinatesAreImplicit(t *testing.T) {
 	src := `{
-	  "esm":"0.8.0",
+	  "esm":"1.1.0",
 	  "metadata":{"name":"implicit-names","authors":["t"]},
 	  "models":{"M":{
 	    "variables":{"u":{"type":"unknown","units":"1","default":0.0}},
@@ -1272,7 +1272,7 @@ func TestCheckerB_A_IndependentVarAndCoordinatesAreImplicit(t *testing.T) {
 // the valid tests/valid/full_coupled.esm.
 func TestCheckerB_B_VarPlaceholderLegalInCoupledModel(t *testing.T) {
 	src := `{
-	  "esm":"0.8.0",
+	  "esm":"1.1.0",
 	  "metadata":{"name":"operator-placeholder","authors":["t"]},
 	  "models":{
 	    "Chem":{
@@ -1308,7 +1308,7 @@ func TestCheckerB_B_VarPlaceholderLegalInCoupledModel(t *testing.T) {
 	// The check is not simply disabled: an UNCOUPLED model with an undeclared
 	// event target is still rejected.
 	uncoupled := `{
-	  "esm":"0.8.0",
+	  "esm":"1.1.0",
 	  "metadata":{"name":"uncoupled","authors":["t"]},
 	  "models":{"M":{
 	    "variables":{"x":{"type":"unknown","units":"1","default":1.0}},
@@ -1329,7 +1329,7 @@ func TestCheckerB_B_VarPlaceholderLegalInCoupledModel(t *testing.T) {
 // exists and never checked that the rest of the path resolves.
 func TestCheckerB_C_ScopedRefsAreArbitraryDepth(t *testing.T) {
 	src := `{
-	  "esm":"0.8.0",
+	  "esm":"1.1.0",
 	  "metadata":{"name":"deep-scope","authors":["t"]},
 	  "models":{
 	    "Meteorology":{
@@ -1371,7 +1371,7 @@ func TestCheckerB_C_ScopedRefsAreArbitraryDepth(t *testing.T) {
 // code the shared corpus pins.
 func TestCheckerB_D_ReactionRateScopedRefsAndUndefinedParameter(t *testing.T) {
 	src := `{
-	  "esm":"0.8.0",
+	  "esm":"1.1.0",
 	  "metadata":{"name":"rate-scope","authors":["t"]},
 	  "models":{"Meteo":{
 	    "variables":{"T":{"type":"unknown","units":"K","default":298.0}},
@@ -1411,7 +1411,7 @@ func TestCheckerB_D_ReactionRateScopedRefsAndUndefinedParameter(t *testing.T) {
 // (tests/valid/nonlinear_isorropia_shape.esm).
 func TestCheckerB_E_NonlinearEquationBalance(t *testing.T) {
 	balanced := `{
-	  "esm":"0.8.0",
+	  "esm":"1.1.0",
 	  "metadata":{"name":"isorropia-shape","authors":["t"]},
 	  "models":{"Eq":{
 	    "system_kind":"nonlinear",
@@ -1494,7 +1494,7 @@ func TestCheckerB_F_CouplingAndSubsystemRefPins(t *testing.T) {
 	// reported rather than silently accepted.
 	t.Run("unresolved_ref_at_validate_time", func(t *testing.T) {
 		src := `{
-		  "esm":"0.8.0",
+		  "esm":"1.1.0",
 		  "metadata":{"name":"unresolved","authors":["t"]},
 		  "models":{"Host":{
 		    "variables":{"x":{"type":"unknown","units":"1","default":0.0}},
@@ -1687,7 +1687,7 @@ func TestCheckerB_G_BoundIndicesAreInScope(t *testing.T) {
 	// IR routinely binds on one side and reads on the other), and a nested
 	// makearray/aggregate binds `j` in its own body.
 	src := `{
-	  "esm":"0.8.0",
+	  "esm":"1.1.0",
 	  "metadata":{"name":"bound-indices","authors":["t"]},
 	  "index_sets":{"cells":{"kind":"interval","size":3}},
 	  "models":{"M":{
@@ -1730,7 +1730,7 @@ func TestCheckerB_G_BoundIndicesAreInScope(t *testing.T) {
 	// two SIDES of one equation, because the array-form IR binds on the LHS and
 	// reads on the RHS; the equation is the scope unit.)
 	leaked := `{
-	  "esm":"0.8.0",
+	  "esm":"1.1.0",
 	  "metadata":{"name":"index-does-not-leak","authors":["t"]},
 	  "index_sets":{"cells":{"kind":"interval","size":3}},
 	  "models":{"M":{

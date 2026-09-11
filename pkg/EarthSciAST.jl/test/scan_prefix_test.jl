@@ -271,7 +271,7 @@ end
 
         unwrapped(a) = begin
             got = ESM._unwrap_identity_gather(gather(a), ["_mo0"], ranges_d)
-            got isa ESM.OpExpr && ESM._is_aggregate_op(got.op) &&
+            got isa ESM.OpExpr && ESM._is_faq_op(got.op) &&
                 ESM._output_idx_strings(got) == ["_mo0"] &&
                 sort(collect(keys(got.ranges))) == ["_mo0", "gk"]
         end

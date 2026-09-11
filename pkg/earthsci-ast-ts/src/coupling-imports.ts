@@ -21,6 +21,7 @@ import { deepClone, isObject } from './object-utils.js'
 import { isRemoteRef, joinPath } from './path-utils.js'
 import { ERROR_CODES } from './errors.js'
 import { EsmMachineryError } from './lower-expression-templates.js'
+import { prepareDocumentOps } from './parse.js'
 
 /**
  * The `coupling` entry `type` tag identifying a coupling-library import
@@ -349,14 +350,20 @@ function defaultLoadRef(ref: string, basePath: string): unknown {
       `coupling-library file not found or unreadable: ${path} (from ref '${ref}'): ${e instanceof Error ? e.message : String(e)}`,
     )
   }
+  let raw: unknown
   try {
-    return JSON.parse(content)
+    raw = JSON.parse(content)
   } catch (e) {
     throw new EsmMachineryError(
       ERROR_CODES.COUPLING_IMPORT_UNRESOLVED,
       `coupling-library ref '${path}' is not valid JSON: ${e instanceof Error ? e.message : String(e)}`,
     )
   }
+  // A coupling library is a document too — same wire boundary as the root
+  // (docs/content/rfcs/faq-node-rename.md §5.2). OUTSIDE the try above, so a
+  // `removed_op` / `faq_version_too_old` is not rebranded as a JSON error.
+  prepareDocumentOps(raw)
+  return raw
 }
 
 // ---------------------------------------------------------------------------

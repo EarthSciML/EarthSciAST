@@ -118,7 +118,7 @@ fn check(name: &str, json: &str, expect_vectorized: bool) {
 fn rule_model(n: usize, rhs_expr: &str) -> String {
     format!(
         r#"{{
- "esm": "1.0.0",
+ "esm": "1.1.0",
  "metadata": {{"name": "vec_frontier"}},
  "models": {{
   "M": {{
@@ -294,7 +294,7 @@ fn frontier_indirect_gather_falls_back() {
     // also trip the array-valued-`const` gate below.
     let json = r#"
         {
-          "esm": "1.0.0",
+          "esm": "1.1.0",
           "metadata": {
             "name": "vec_frontier_gather"
           },

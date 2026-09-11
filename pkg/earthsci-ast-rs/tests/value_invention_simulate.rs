@@ -55,7 +55,7 @@ fn sq_dist() -> &'static str {
 fn argmin_model() -> String {
     format!(
         r#"{{
-      "esm": "1.0.0",
+      "esm": "1.1.0",
       "metadata": {{ "name": "argmin_simulate" }},
       "index_sets": {{
         "points":     {{ "kind": "interval", "size": 4 }},
@@ -176,7 +176,7 @@ fn argmin_nearest_generator_simulates_end_to_end() {
 fn centroid_model() -> &'static str {
     r#"
         {
-          "esm": "1.0.0",
+          "esm": "1.1.0",
           "metadata": {
             "name": "centroid_simulate"
           },

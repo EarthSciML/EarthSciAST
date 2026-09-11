@@ -1248,7 +1248,7 @@ fn collect_structural_self_reads<'a>(
 }
 
 /// The variable an equation DEFINES, if its LHS names one: a bare variable, or
-/// the §4.3 indexed-aggregate LHS form `aggregate{expr: index(V, k…)}`. A
+/// the §4.3 indexed-`faq` LHS form `faq{expr: index(V, k…)}`. A
 /// derivative LHS (`D(u)`) defines no array algebraically — a stencil read of
 /// `u` at `i−1` there is a gather on the solver's state, not a self-reference —
 /// so it deliberately yields `None`.
@@ -1346,7 +1346,7 @@ fn check_recurrence_equation(
         );
         return;
     }
-    // The cell frame: the indexed-aggregate LHS's own indices, else the RHS
+    // The cell frame: the indexed-`faq` LHS's own indices, else the RHS
     // aggregate's.
     let rhs_idx = match &equation.rhs {
         crate::Expr::Operator(node) if node.op == "faq" => node.output_idx.as_ref(),
@@ -1359,7 +1359,7 @@ fn check_recurrence_equation(
             format!(
                 "the definition of '{var}' reads '{var}' at another position, but the equation \
                  declares no cell frame to sweep: its RHS is not a `faq` over the \
-                 variable's axes and its LHS is not the indexed-aggregate form \
+                 variable's axes and its LHS is not the indexed-`faq` form \
                  `aggregate{{expr: index({var}, k…)}}` (esm-spec §4.3.1.1)."
             ),
             None,
@@ -2765,7 +2765,7 @@ fn reaction_rate_units_str(rate: &crate::Expr, rs: &crate::ReactionSystem) -> St
 }
 
 /// The index / integration symbols an operator node BINDS for its own body:
-/// `output_idx` and `ranges` keys (`faq`/`faq`), the `integral` op's
+/// `output_idx` and `ranges` keys (`faq`), the `integral` op's
 /// `var`, and the `argmin`/`argmax` witness `arg`. These are in scope for the
 /// node's child expressions (the aggregate body, filter predicate, grouping
 /// key, integral bounds) but are NOT model/parameter declarations, so a

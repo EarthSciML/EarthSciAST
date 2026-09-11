@@ -67,7 +67,7 @@ def _doc(dead_body):
     Under esm 1.0.0 ``live`` and ``dead`` are declared ``unknown``; it is the
     bare-variable equations below that make them observed (§6.3.1)."""
     return {
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "DeadObservedFixture"},
         "index_sets": {"cells": {"kind": "interval", "size": 3}},
         "models": {

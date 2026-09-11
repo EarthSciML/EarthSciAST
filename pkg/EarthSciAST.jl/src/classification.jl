@@ -67,8 +67,8 @@ parameter_names(model::Model)::Vector{String} = parameters(model)
 #
 # | LHS | role |
 # |---|---|
-# | `D(u, t)`, `D(u[i])`, `aggregate{expr: D(index(u,i))}` | `(:derivative, "u")` |
-# | `"y"`, `index(y,i)`, `aggregate{expr: index(y,i)}` | `(:definition, "y")` |
+# | `D(u, t)`, `D(u[i])`, `faq{expr: D(index(u,i))}` | `(:derivative, "u")` |
+# | `"y"`, `index(y,i)`, `faq{expr: index(y,i)}` | `(:definition, "y")` |
 # | `ic(u)` | `(:none, "")` — an initial condition defines no dynamics |
 # | `H*H*SO4`, `laplacian(phi)`, anything else | `(:implicit, "")` |
 

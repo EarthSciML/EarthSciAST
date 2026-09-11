@@ -104,7 +104,7 @@ def _doc(variables: dict, equations: list, index_sets: dict | None = None) -> st
             equations.append({"lhs": name, "rhs": expr})
     return json.dumps(
         {
-            "esm": "1.0.0",
+            "esm": "1.1.0",
             "metadata": {"name": "AlignmentFixture"},
             "index_sets": dict(index_sets or GRID),
             "models": {"M": {"variables": variables, "equations": equations}},

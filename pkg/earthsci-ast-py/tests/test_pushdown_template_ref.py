@@ -126,7 +126,7 @@ def base_doc():
         v[n] = _param(["emis_records"])
     v["SR_PM25"] = _param(["src_cells", "rcv_cells"])
     doc = {
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "pd_tmpl"},
         "index_sets": {
             "src_cells": {"kind": "interval", "size": 4},
