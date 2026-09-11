@@ -514,9 +514,9 @@ fn inline_toplevel_model_refs(
                 .unwrap_or_default();
             crate::template_imports::apply_scope_injections(&mut comp, &injected)?;
 
-            if let Some(mut resolved) = crate::template_imports::resolve_template_machinery(
-                &comp, &leaf_dir, &bindings,
-            )? {
+            if let Some(mut resolved) =
+                crate::template_imports::resolve_template_machinery(&comp, &leaf_dir, &bindings)?
+            {
                 // A mounted component is a self-contained build boundary: lower
                 // under Option B, then `expand`, so the spliced component carries
                 // the fully-expanded Option-A image and the assembling document's

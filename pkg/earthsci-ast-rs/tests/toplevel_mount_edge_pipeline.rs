@@ -18,10 +18,7 @@ use earthsci_ast::load_path;
 use std::path::{Path, PathBuf};
 
 fn scratch(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "esm_toplevel_mount_{tag}_{}",
-        std::process::id()
-    ));
+    let dir = std::env::temp_dir().join(format!("esm_toplevel_mount_{tag}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("scratch dir");
     dir
@@ -168,7 +165,10 @@ fn an_assembler_scoped_axis_merges_symbolically_with_or_without_restatement() {
 
     let a = load_path(&verbose).expect("today's verbose-but-correct document must keep loading");
     let b = load_path(&terse).expect("and the restatement must be deletable");
-    assert_eq!(a.index_sets.as_ref().expect("index_sets")["rows"].size, Some(7));
+    assert_eq!(
+        a.index_sets.as_ref().expect("index_sets")["rows"].size,
+        Some(7)
+    );
     assert_eq!(
         serde_json::to_value(a.index_sets.as_ref()).expect("json"),
         serde_json::to_value(b.index_sets.as_ref()).expect("json"),
@@ -258,8 +258,7 @@ fn a_leaf_with_machinery_is_strict_about_an_assembler_scoped_size() {
 
     let e = load_path(&host).expect_err("the leaf's own close is strict");
     assert!(
-        e.to_string().contains("metaparameter_unbound")
-            && e.to_string().contains("n_rows"),
+        e.to_string().contains("metaparameter_unbound") && e.to_string().contains("n_rows"),
         "a proper diagnostic, not an i64 coercion panic: {e}"
     );
 
