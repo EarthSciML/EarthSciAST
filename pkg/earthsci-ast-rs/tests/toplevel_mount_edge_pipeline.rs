@@ -220,3 +220,48 @@ fn a_consumed_mount_edge_round_trips_to_a_fixed_point() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The strictness boundary the close introduces, pinned so it is visible rather
+/// than discovered. §9.7.6 site 3 resolves a mounted leaf "as a complete
+/// document and folded to concrete integers at the mount", so the leaf's OWN
+/// close is strict: once the leaf has any §9.7 machinery to resolve, an axis
+/// sized by a name the leaf does not declare is `metaparameter_unbound` at the
+/// edge — it never reaches the mounting document's close. A leaf with NO
+/// machinery has no close to be strict about, so the same size merges
+/// symbolically (the test above). Both behaviours match Python and match this
+/// binding's own `subsystems.<k>` edge, which is what §4.7 requires; whether
+/// the edge close SHOULD be strict about a name only the assembler can bind is
+/// a spec question, not a divergence.
+#[test]
+fn a_leaf_with_machinery_is_strict_about_an_assembler_scoped_size() {
+    let dir = scratch("strict");
+    write(
+        &dir,
+        "leaf.esm",
+        r#"{
+  "esm": "1.0.0",
+  "metadata": {"name": "leaf"},
+  "metaparameters": {"UNRELATED": {"type": "integer", "default": 1}},
+  "index_sets": {"rows": {"kind": "interval", "size": "n_rows"}},
+  "models": {"Census": {
+    "variables": {"u": {"type":"unknown","units":"1","shape":["rows"],"default":1.0}},
+    "equations": [{"lhs": {"op":"D","args":["u"],"wrt":"t"},
+                   "rhs": {"op":"*","args":[-1.0,"u"]}}]}}}"#,
+    );
+    let host = write(
+        &dir,
+        "host.esm",
+        r#"{"esm":"1.0.0","metadata":{"name":"host"},
+            "metaparameters":{"n_rows":{"type":"integer","default":7}},
+            "models":{"M":{"ref":"./leaf.esm"}}}"#,
+    );
+
+    let e = load_path(&host).expect_err("the leaf's own close is strict");
+    assert!(
+        e.to_string().contains("metaparameter_unbound")
+            && e.to_string().contains("n_rows"),
+        "a proper diagnostic, not an i64 coercion panic: {e}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

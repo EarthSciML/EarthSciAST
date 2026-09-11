@@ -399,7 +399,7 @@ binding inlines that form:
 | Binding | §4.7 subsystem edge | Top-level `{ref}` mount |
 |---|---|---|
 | Julia | implemented | **refused** — a raw pre-pass splices the leaf and defers its §9.7 resolution to the root, so there is no resolved mounted document to rename; the edge raises `subsystem_index_set_rename_unsupported_mount_form` |
-| Rust | implemented | same pre-pass, same refusal |
+| Rust | implemented | **implemented** (2026-09-10) — `inline_toplevel_model_refs` now runs the same §4.7 edge pipeline `resolve_value` runs at a `subsystems.<k>` edge, so the leaf resolves in its own scope and there is a resolved mounted document to rename |
 | Python | implemented | **implemented** — both forms share `_load_ref_data`, which resolves the leaf fully at the mount; verified end-to-end |
 | TypeScript | implemented | the form is not inlined at all (a bare `{ref}` stub returns immediately), so the field is unreachable |
 | Go | implemented | the form does not exist |
@@ -481,12 +481,18 @@ breaks URL refs and offers no per-name control.
    would imply the §9.7.7 domain (templates ∪ index sets ∪ open metaparameters), only one
    third of which crosses a mount. Recommendation: keep `index_set_rename`.
 2. **How does the top-level `models.<k>` `{ref}` mount get to APPLYING the field?** (§4.11.)
-   Settled for now: normative at both forms, honoured by Python, refused with
-   `subsystem_index_set_rename_unsupported_mount_form` by Julia and Rust, unreachable in
-   TypeScript and Go. What remains open is the trade-off item 3 named — whether the deferring
-   bindings resolve a mounted leaf as a closed build boundary the way the subsystem edge does,
-   which costs them the loader-API metaparameters reaching a mounted leaf document-wide, or the
-   top-level merge is defined some other way. Until that is decided the refusal is the answer.
+   **Resolved for Rust (2026-09-10)**: Rust took the first horn — a mounted leaf is a closed
+   build boundary at BOTH forms — and the cost item 3 named is smaller than it looked. The
+   loader-API metaparameters still reach the leaf, by the backfill Python already used: the
+   mounting scope's bindings seed the leaf's close for the names the LEAF declares, and explicit
+   edge `bindings` win over them. What is genuinely lost is an axis sized by a name only the
+   ASSEMBLER declares — with no leaf machinery it merges symbolically and the root's close
+   resolves it, but a leaf that has any §9.7 machinery folds strictly and rejects it with
+   `metaparameter_unbound`, exactly as Python and as the `subsystems.<k>` edge do. Whether the
+   edge close should be strict about such a name is the remaining open question, and it is a
+   spec question at both forms rather than a top-level one. Status is now: honoured by Python
+   and Rust, refused with `subsystem_index_set_rename_unsupported_mount_form` by Julia,
+   unreachable in TypeScript and Go.
    **This matters for the reporter**: EqWeFiC's assemblies use top-level `ref` mounts, so under
    Julia and the Rust CLI they must move the component to a `subsystems.<k>` edge to use the
    field, or wait for that resolution to converge. (An earlier draft said they were *pushed* to
