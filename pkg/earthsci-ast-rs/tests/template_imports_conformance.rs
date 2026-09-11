@@ -402,18 +402,19 @@ fn toplevel_ref_mount_merges_leaf_index_sets() {
     );
 
     // §4.7 merges a mounted file's axes "after the referenced document's
-    // metaparameters are closed and folded", and a top-level mount edge does
-    // NOT close them (it is a raw pre-pass that drops the leaf's
-    // `metaparameters` block). An axis whose `size` is still the leaf's own
-    // metaparameter name is therefore held back rather than merged in the wrong
-    // scope — without the guard this load dies on `invalid type: string
-    // "NLEV", expected i64`.
+    // metaparameters are closed and folded", and the top-level mount edge now
+    // runs that close (§9.7.6 site 3) exactly as the `subsystems.<k>` edge
+    // does. The leaf's only axis is sized by the leaf's OWN metaparameter
+    // `NLEV` (default 4), so it folds AT THE EDGE, in the leaf's scope, and
+    // reaches the registry as 4 — the importer redeclares nothing. This used to
+    // be held back by a fold guard and the axis stayed undeclared.
     let f = load_path(dir.join("toplevel_ref_metaparameter_axis.esm"))
-        .expect("an unfolded leaf axis must not break the load");
-    assert!(
-        f.index_sets.as_ref().is_none_or(|s| !s.contains_key("lev")),
-        "an unfolded `size` must not reach the registry: {:?}",
-        f.index_sets
+        .expect("a metaparameter-sized leaf axis must fold at the edge and merge");
+    let isets = f.index_sets.as_ref().expect("index_sets");
+    assert_eq!(
+        isets["lev"].size,
+        Some(4),
+        "the axis must take the LEAF's own default, folded in the leaf's scope"
     );
 }
 

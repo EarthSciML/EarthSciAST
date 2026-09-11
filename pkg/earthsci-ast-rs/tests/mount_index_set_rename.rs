@@ -146,14 +146,14 @@ fn mount_rename_unknown_index_set_is_a_loud_load_error() {
 }
 
 /// esm-spec §4.7 "Where it applies": `index_set_rename` is normative at BOTH
-/// mount forms, but Rust inlines a top-level `models.<k>` `{ref}` with a raw
-/// pre-pass that defers the leaf's §9.7 resolution to the root document, so
-/// there is no resolved mounted document for the rename to speak about. Since
-/// #198 item 3 that form MERGES the leaf's `index_sets`, so ignoring the field
-/// would mount the leaf under its PRE-rename axis names — silently, in the one
-/// place the field exists to make loud. It must be refused instead.
+/// mount forms, with the same meaning and the same pipeline — "a binding MUST
+/// NOT make the two forms differ". Rust used to refuse the field at a top-level
+/// `models.<k>` `{ref}` with `subsystem_index_set_rename_unsupported_mount_form`,
+/// because that form was a raw pre-pass with no resolved mounted document to
+/// rename. The form now runs the §4.7 edge pipeline, so the rename applies: the
+/// spec says the refusal "closes when that gap does".
 #[test]
-fn index_set_rename_is_refused_at_a_toplevel_model_ref_mount() {
+fn index_set_rename_applies_at_a_toplevel_model_ref_mount() {
     let dir =
         std::env::temp_dir().join(format!("esm_mount_rename_toplevel_{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("scratch dir");
@@ -174,20 +174,35 @@ fn index_set_rename_is_refused_at_a_toplevel_model_ref_mount() {
     )
     .expect("write host");
 
-    let err = load_path(dir.join("host.esm"))
-        .expect_err("a top-level model ref must refuse `index_set_rename`, not ignore it");
-    let text = err.to_string();
+    let f = load_path(dir.join("host.esm")).expect("a top-level model ref applies the rename");
+    let isets = f.index_sets.as_ref().expect("index_sets");
     assert!(
-        text.contains("subsystem_index_set_rename_unsupported_mount_form"),
-        "diagnostic must carry the stable code: {text}"
+        isets.contains_key("renamed_ax") && !isets.contains_key("ax"),
+        "the leaf's axis must merge under its POST-rename name: {isets:?}"
     );
-    assert!(
-        text.contains("not supported at this mount form"),
-        "diagnostic must say what is wrong: {text}"
+    assert_eq!(isets["renamed_ax"].size, Some(3));
+    // §4.7 transitivity: the rename rewrites every occurrence, not only the
+    // registry key — the mounted component's `shape` entries included.
+    let models = f.models.as_ref().expect("models");
+    assert_eq!(
+        models["L"].variables["u"].shape.as_deref(),
+        Some(&["renamed_ax".to_string()][..]),
+        "a mounted ModelVariable's shape must follow the rename"
     );
+
+    // A key that the resolved mounted document does not declare is still
+    // `subsystem_index_set_rename_unknown_name` — renames never invent names.
+    std::fs::write(
+        dir.join("host_bad.esm"),
+        r#"{"esm":"1.0.0","metadata":{"name":"host_bad"},
+            "models":{"L":{"ref":"./leaf.esm","index_set_rename":{"nope":"renamed_ax"}}}}"#,
+    )
+    .expect("write host_bad");
+    let err = load_path(dir.join("host_bad.esm")).expect_err("unknown rename key must be refused");
     assert!(
-        text.contains("subsystems"),
-        "diagnostic must name the mount form that does work: {text}"
+        err.to_string()
+            .contains("subsystem_index_set_rename_unknown_name"),
+        "got: {err}"
     );
 
     let _ = std::fs::remove_dir_all(&dir);
