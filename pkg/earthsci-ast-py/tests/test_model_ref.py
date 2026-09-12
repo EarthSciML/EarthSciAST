@@ -339,13 +339,12 @@ def test_toplevel_ref_mount_folds_a_metaparameter_sized_leaf_axis():
     mount form too, so a leaf axis sized by the leaf's own metaparameter merges
     as a concrete integer.
 
-    Rust now agrees: `inline_toplevel_model_refs` runs the same §4.7 edge
-    pipeline, so the axis merges folded there too. JULIA still has the gap --
-    its top-level inliner is a raw pre-pass that never closes the leaf's
-    metaparameters, so the same axis is HELD BACK rather than merged
-    (`ESM_COMPLIANCE_VALIDATION_MATRIX.md` BEHAV-04-D-003). Pinned here so
-    closing that last gap shows up as three-way agreement rather than as a
-    silent behaviour change.
+    Rust and Julia now agree: each runs the same §4.7 edge pipeline at the
+    top-level form (`ref_loading.rs::inline_toplevel_model_refs`,
+    `resolve.jl::_inline_toplevel_model_refs!`), so the axis merges folded in
+    all three. This fixture is 3-of-3; pinned here so a regression in any of
+    them shows up as disagreement rather than as a silent behaviour change
+    (`ESM_COMPLIANCE_VALIDATION_MATRIX.md` BEHAV-04-D-003).
     """
     doc = load_path(str(_TOPLEVEL_REF_DIR / "toplevel_ref_metaparameter_axis.esm"))
     assert doc.index_sets["lev"]["size"] == 4

@@ -44,13 +44,15 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
         @test !occursin("\"lev\"", soil_json)
     end
 
-    @testset "the field is refused, not ignored, at a top-level model `{ref}`" begin
+    @testset "the field applies at a top-level model `{ref}` mount" begin
         # esm-spec §4.7 "Where it applies": `index_set_rename` is normative at
-        # BOTH mount forms, but Julia inlines a top-level `models.<k>` `{ref}`
-        # with a raw pre-pass that defers the leaf's §9.7 resolution to the root,
-        # so there is no resolved mounted document to rename. Since #198 item 3
-        # that form MERGES the leaf's `index_sets`, so ignoring the field would
-        # mount the leaf under its PRE-rename axis names — silently. Refuse.
+        # BOTH mount forms, with the same meaning and the same pipeline — "a
+        # binding MUST NOT make the two forms differ". Julia used to refuse the
+        # field at a top-level `models.<k>` `{ref}` with
+        # `subsystem_index_set_rename_unsupported_mount_form`, because that form
+        # was a raw pre-pass with no resolved mounted document to rename. The
+        # form now runs the §4.7 edge pipeline, so the rename applies: the spec
+        # says the refusal "closes when that gap does".
         dir = mktempdir()
         leaf = Dict{String,Any}(
             "esm" => "1.0.0", "metadata" => Dict("name" => "leaf"),
@@ -67,8 +69,57 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
             "models" => Dict("L" => Dict("ref" => "./leaf.esm",
                                          "index_set_rename" => Dict("ax" => "renamed_ax"))))
         write(joinpath(dir, "host.esm"), JSON3.write(host))
+        f = EarthSciAST.load_path(joinpath(dir, "host.esm"))
+        # The leaf's axis merges under its POST-rename name.
+        @test haskey(f.index_sets, "renamed_ax")
+        @test !haskey(f.index_sets, "ax")
+        @test f.index_sets["renamed_ax"].size == 3
+        # §4.7 transitivity: the rename rewrites every occurrence, not only the
+        # registry key — the mounted component's `shape` entries included.
+        @test f.models["L"].variables["u"].shape == ["renamed_ax"]
+
+        # A key the resolved mounted document does not declare is still
+        # `subsystem_index_set_rename_unknown_name` — renames never invent names.
+        bad_host = Dict{String,Any}(
+            "esm" => "1.0.0", "metadata" => Dict("name" => "host_bad"),
+            "models" => Dict("L" => Dict("ref" => "./leaf.esm",
+                                         "index_set_rename" => Dict("nope" => "renamed_ax"))))
+        write(joinpath(dir, "host_bad.esm"), JSON3.write(bad_host))
         err = try
-            EarthSciAST.load_path(joinpath(dir, "host.esm"))
+            EarthSciAST.load_path(joinpath(dir, "host_bad.esm"))
+            nothing
+        catch e
+            e
+        end
+        @test err isa ExpressionTemplateError
+        @test err.code == ERROR_CODES.SUBSYSTEM_INDEX_SET_RENAME_UNKNOWN_NAME
+    end
+
+    @testset "the twin refusal survives at a top-level reaction-system `{ref}`" begin
+        # OUT of the model form's scope and deliberately unchanged: Julia is the
+        # only binding with a top-level `reaction_systems.<k>` `{ref}` mount, and
+        # that inliner is still the raw pre-pass the model form used to be — no
+        # resolved mounted document, so nothing for the rename to speak about.
+        # Refusing rather than ignoring keeps it loud (esm-spec §4.7 "Where it
+        # applies"); the refusal closes when THAT gap does.
+        dir = mktempdir()
+        leaf = Dict{String,Any}(
+            "esm" => "1.0.0", "metadata" => Dict("name" => "rs_leaf"),
+            "reaction_systems" => Dict("RS" => Dict(
+                "species" => Dict("A" => Dict("units" => "mol/m^3", "default" => 1.0),
+                                  "B" => Dict("units" => "mol/m^3", "default" => 0.0)),
+                "reactions" => [Dict("reactants" => Dict("A" => 1),
+                                     "products" => Dict("B" => 1),
+                                     "rate" => 0.5)])))
+        write(joinpath(dir, "rs_leaf.esm"), JSON3.write(leaf))
+        host = Dict{String,Any}(
+            "esm" => "1.0.0", "metadata" => Dict("name" => "rs_host"),
+            "reaction_systems" => Dict("R" => Dict(
+                "ref" => "./rs_leaf.esm",
+                "index_set_rename" => Dict("ax" => "renamed_ax"))))
+        write(joinpath(dir, "rs_host.esm"), JSON3.write(host))
+        err = try
+            EarthSciAST.load_path(joinpath(dir, "rs_host.esm"))
             nothing
         catch e
             e

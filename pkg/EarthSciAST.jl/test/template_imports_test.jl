@@ -585,14 +585,14 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         @test err.code == "subsystem_index_set_conflict"
 
         # §4.7 merges a mounted file's axes "after the referenced document's
-        # metaparameters are closed and folded", and a top-level mount edge does
-        # NOT close them (it is a raw pre-pass that drops the leaf's
-        # `metaparameters` block). An axis whose `size` is still the leaf's own
-        # metaparameter name is held back rather than merged in the wrong scope
-        # — without the guard this load dies on a bare
-        # `MethodError: no method matching Int64(::String)`.
+        # metaparameters are closed and folded", and the top-level mount edge now
+        # runs that close (§9.7.6 site 3) exactly as the `subsystems.<k>` edge
+        # does. The leaf's only axis is sized by the leaf's OWN metaparameter
+        # `NLEV` (default 4), so it folds AT THE EDGE, in the leaf's scope, and
+        # reaches the registry as 4 — the importer redeclares nothing. This used
+        # to be held back by a fold guard and the axis stayed undeclared.
         m = EarthSciAST.load_path(joinpath(dir, "toplevel_ref_metaparameter_axis.esm"))
-        @test !haskey(m.index_sets, "lev")
+        @test m.index_sets["lev"].size == 4
     end
 
     @testset "makearray empty vs inverted region bounds (esm-spec §4.3.2)" begin

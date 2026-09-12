@@ -230,17 +230,22 @@ fn a_consumed_mount_edge_round_trips_to_a_fixed_point() {
 /// edge — it never reaches the mounting document's close. A leaf with NO
 /// machinery has no close to be strict about, so the same size merges
 /// symbolically (the test above). Both behaviours match this binding's own
-/// `subsystems.<k>` edge, which is what §4.7 requires, and both match Python's
-/// VERDICT — accept or refuse — at both of its mount forms; whether the edge
-/// close SHOULD be strict about a name only the assembler can bind is a spec
-/// question, not a divergence.
+/// `subsystems.<k>` edge, which is what §4.7 requires, and THIS document —
+/// machinery plus an assembler-scoped size — is refused by Python too. Whether
+/// the edge close SHOULD be strict about a name only the assembler can bind is
+/// a spec question, not a divergence.
 ///
-/// The verdicts agree; one merged VALUE does not. On the no-machinery path
-/// Rust's root pass folds the symbolic size before emitting it (`size: 7`)
-/// while Python leaves it symbolic (`size: "n_rows"`), because the two merge on
-/// opposite sides of their own close. Neither refuses the document, so no
-/// shared suite sees it, but a downstream shape check would. It is out of this
-/// change's scope and is recorded rather than fixed.
+/// Python does NOT agree across the whole no-machinery path, though, and the
+/// split is pre-existing rather than introduced here: Rust and Julia merge a
+/// mounted leaf's `index_sets` BEFORE the mounting document's own §9.7.6 close,
+/// Python merges AFTER. So for a host that declares `n_rows` and also restates
+/// the leaf's axis verbatim (`size: "n_rows"`), Rust and Julia compare two
+/// identical symbolic declarations and accept, while Python compares its
+/// already-folded `size: 7` against the leaf's `"n_rows"` and raises
+/// `subsystem_index_set_conflict`. Deleting the restatement — the terse
+/// spelling this change exists to enable — loads in all three. Recorded in
+/// `docs/content/rfcs/mount-edge-index-set-renaming.md` §6; settling which side
+/// merges is a spec question and is not attempted here.
 #[test]
 fn a_leaf_with_machinery_is_strict_about_an_assembler_scoped_size() {
     let dir = scratch("strict");
