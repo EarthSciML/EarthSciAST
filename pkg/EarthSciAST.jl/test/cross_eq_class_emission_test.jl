@@ -417,7 +417,8 @@ _xq_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
                 try
                     f!, u0, p, _t, _vm = ESM.build_evaluator(file; model_name=name)
                     return (f=f!, u0=u0, p=p, tally=copy(ESM._CASCADE_TALLY))
-                catch
+                catch e
+                    corpus_is_resource_error(e) && rethrow()
                     return nothing
                 end
             end
@@ -426,7 +427,8 @@ _xq_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
             du = zeros(length(u0))
             try
                 f!(du, u0, p, t)
-            catch
+            catch e
+                corpus_is_resource_error(e) && rethrow()
                 return nothing
             end
             return du
@@ -439,7 +441,8 @@ _xq_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
         for path in esms
             file = try
                 ESM.load_path(path)
-            catch
+            catch e
+                corpus_is_resource_error(e) && rethrow()
                 skipped += 1
                 continue
             end

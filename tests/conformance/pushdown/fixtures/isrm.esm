@@ -114,58 +114,58 @@
           "arrays": {
             "E": {
               "chunks": [
-                596444
+                96
               ],
               "dtype": "<f8",
               "shape": [
-                596444
+                96
               ]
             },
             "MortalityRate": {
               "chunks": [
-                596444
+                96
               ],
               "dtype": "<f8",
               "shape": [
-                596444
+                96
               ]
             },
             "N": {
               "chunks": [
-                596444
+                96
               ],
               "dtype": "<f8",
               "shape": [
-                596444
+                96
               ]
             },
             "PrimaryPM25": {
               "chunks": [
                 1,
                 100,
-                52411
+                64
               ],
               "dtype": "<f4",
               "shape": [
                 3,
-                52411,
-                52411
+                64,
+                64
               ]
             },
             "S": {
               "chunks": [
-                596444
+                96
               ],
               "dtype": "<f8",
               "shape": [
-                596444
+                96
               ]
             },
             "SOA": {
               "chunks": [
                 1,
                 100,
-                52411
+                64
               ],
               "compressor": "blosc:lz4:clevel5:shuffle1",
               "dtype": "<f4",
@@ -173,72 +173,72 @@
               "order": "C",
               "shape": [
                 3,
-                52411,
-                52411
+                64,
+                64
               ]
             },
             "TotalPop": {
               "chunks": [
-                596444
+                96
               ],
               "dtype": "<f8",
               "shape": [
-                596444
+                96
               ]
             },
             "W": {
               "chunks": [
-                596444
+                96
               ],
               "dtype": "<f8",
               "shape": [
-                596444
+                96
               ]
             },
             "pNH4": {
               "chunks": [
                 1,
                 100,
-                52411
+                64
               ],
               "dtype": "<f4",
               "shape": [
                 3,
-                52411,
-                52411
+                64,
+                64
               ]
             },
             "pNO3": {
               "chunks": [
                 1,
                 100,
-                52411
+                64
               ],
               "dtype": "<f4",
               "shape": [
                 3,
-                52411,
-                52411
+                64,
+                64
               ]
             },
             "pSO4": {
               "chunks": [
                 1,
                 100,
-                52411
+                64
               ],
               "dtype": "<f4",
               "shape": [
                 3,
-                52411,
-                52411
+                64,
+                64
               ]
             }
           },
           "consolidated": false,
           "format": "zarr",
           "gated_select": {
-            "_DRAFT": "Phase-2-core GATED-PROVIDER field (proposed). Replaces the runner's lazy_select ([0], ppl, :). Per-axis selection over the native SR dims sr_dim_order [emisLayer, source, receptor] = [3, 52411, 52411]; one axis is GATED BY a derived (value-invention) index set. Intended consumption: the engine DEFERS this provider's materialisation until materialize_value_invention has produced the gating set's members+extent, then delivers each `applies_to` array pre-sliced to the compact [emis_src_cells, rcv_cells] slab BEFORE the SR contraction (no 330 GB fold). Per-axis semantics: {\"fixed\":[i]} = take native index i and DROP the axis; {\"gated_by\":\"<derived index set>\"} = take that set's materialised members, in the set's canonical (sorted) member order, as the new axis (here emis_src_cells = the invented ppl); \"all\" = full axis (slice(None)).",
+            "_DRAFT": "Phase-2-core GATED-PROVIDER field (proposed). Replaces the runner's lazy_select ([0], ppl, :). Per-axis selection over the native SR dims sr_dim_order [emisLayer, source, receptor] = [3, 64, 64]; one axis is GATED BY a derived (value-invention) index set. Intended consumption: the engine DEFERS this provider's materialisation until materialize_value_invention has produced the gating set's members+extent, then delivers each `applies_to` array pre-sliced to the compact [emis_src_cells, rcv_cells] slab BEFORE the SR contraction (no 330 GB fold). Per-axis semantics: {\"fixed\":[i]} = take native index i and DROP the axis; {\"gated_by\":\"<derived index set>\"} = take that set's materialised members, in the set's canonical (sorted) member order, as the new axis (here emis_src_cells = the invented ppl); \"all\" = full axis (slice(None)).",
             "applies_to": [
               "SOA",
               "pNO3",
@@ -258,7 +258,7 @@
               "all"
             ]
           },
-          "note": "`format` and the pinned .zarray params are not expressible in the 0.8.0 source schema (G1); the runner sets format at provider creation. PUSHDOWN DRAFT: the SR source-axis slice is no longer the runner-threaded `ppl` lazy_select but the gated_select above, gated by the DERIVED emis_src_cells set the value-invention producer emis_src_cells_faq materialises (G2; Phase-2-core gated-provider deferral). W/S/E/N/TotalPop/MortalityRate are read fully; the first 52411 (the [0:52411] prefix slice) are the SR receptor/source cells. NOTE: for the pushdown, W/S/E/N (full-grid cell rectangles) must also be available to value-invention as build-time const factors (the producer's rectangle filter reads index(W,c)..index(N,c) over the full source grid).",
+          "note": "`format` and the pinned .zarray params are not expressible in the 0.8.0 source schema (G1); the runner sets format at provider creation. PUSHDOWN DRAFT: the SR source-axis slice is no longer the runner-threaded `ppl` lazy_select but the gated_select above, gated by the DERIVED emis_src_cells set the value-invention producer emis_src_cells_faq materialises (G2; Phase-2-core gated-provider deferral). W/S/E/N/TotalPop/MortalityRate are read fully; the first 64 (the [0:64] prefix slice) are the SR receptor/source cells. NOTE: for the pushdown, W/S/E/N (full-grid cell rectangles) must also be available to value-invention as build-time const factors (the producer's rectangle filter reads index(W,c)..index(N,c) over the full source grid).",
           "sr_dim_order": [
             "emisLayer",
             "source",
@@ -298,15 +298,15 @@
     },
     "pop_cells": {
       "kind": "interval",
-      "size": 596444
+      "size": 96
     },
     "rcv_cells": {
       "kind": "interval",
-      "size": 52411
+      "size": 64
     },
     "src_cells": {
       "kind": "interval",
-      "size": 52411
+      "size": 64
     }
   },
   "metadata": {
@@ -352,12 +352,12 @@
       "type": "integer"
     },
     "N_POP": {
-      "default": 596444,
+      "default": 96,
       "description": "Full InMAP grid length of W/S/E/N/TotalPop/MortalityRate.",
       "type": "integer"
     },
     "N_RCV": {
-      "default": 52411,
+      "default": 64,
       "description": "ISRM receptor cells (== the source grid, same ordered cell set).",
       "type": "integer"
     },
@@ -367,8 +367,8 @@
       "type": "integer"
     },
     "N_SRC": {
-      "default": 52411,
-      "description": "ISRM source cells (first-52411 coarse subset of the InMAP grid).",
+      "default": 64,
+      "description": "ISRM source cells (first-64 coarse subset of the InMAP grid).",
       "type": "integer"
     }
   },
@@ -4206,7 +4206,7 @@
         },
         "MortalityRate": {
           "default": 0.0,
-          "description": "Baseline mortality per 100k; from ISRM_SR.MortalityRate (prefix [0:52411]).",
+          "description": "Baseline mortality per 100k; from ISRM_SR.MortalityRate (prefix [0:64]).",
           "shape": [
             "pop_cells"
           ],
@@ -4254,7 +4254,7 @@
         },
         "SR_PrimaryPM25": {
           "default": 0.0,
-          "description": "Source-receptor matrix for the PrimaryPM25 pathway (contracted with PM2_5 emissions), already emisLayer-0- and ppl-sliced by the runner's lazy zarr select ([0], ppl, :). Rows are the compact emission-bearing source cells (emis_src_cells), columns the 52411 receptors (rcv_cells). Wired from ISRM_SR.PrimaryPM25 via param_to_var (G2).",
+          "description": "Source-receptor matrix for the PrimaryPM25 pathway (contracted with PM2_5 emissions), already emisLayer-0- and ppl-sliced by the runner's lazy zarr select ([0], ppl, :). Rows are the compact emission-bearing source cells (emis_src_cells), columns the 64 receptors (rcv_cells). Wired from ISRM_SR.PrimaryPM25 via param_to_var (G2).",
           "shape": [
             "src_cells",
             "rcv_cells"
@@ -4271,7 +4271,7 @@
         },
         "SR_SOA": {
           "default": 0.0,
-          "description": "Source-receptor matrix for the SOA pathway (contracted with VOC emissions), already emisLayer-0- and ppl-sliced by the runner's lazy zarr select ([0], ppl, :). Rows are the compact emission-bearing source cells (emis_src_cells), columns the 52411 receptors (rcv_cells). Wired from ISRM_SR.SOA via param_to_var (G2).",
+          "description": "Source-receptor matrix for the SOA pathway (contracted with VOC emissions), already emisLayer-0- and ppl-sliced by the runner's lazy zarr select ([0], ppl, :). Rows are the compact emission-bearing source cells (emis_src_cells), columns the 64 receptors (rcv_cells). Wired from ISRM_SR.SOA via param_to_var (G2).",
           "shape": [
             "src_cells",
             "rcv_cells"
@@ -4288,7 +4288,7 @@
         },
         "SR_pNH4": {
           "default": 0.0,
-          "description": "Source-receptor matrix for the pNH4 pathway (contracted with NH3 emissions), already emisLayer-0- and ppl-sliced by the runner's lazy zarr select ([0], ppl, :). Rows are the compact emission-bearing source cells (emis_src_cells), columns the 52411 receptors (rcv_cells). Wired from ISRM_SR.pNH4 via param_to_var (G2).",
+          "description": "Source-receptor matrix for the pNH4 pathway (contracted with NH3 emissions), already emisLayer-0- and ppl-sliced by the runner's lazy zarr select ([0], ppl, :). Rows are the compact emission-bearing source cells (emis_src_cells), columns the 64 receptors (rcv_cells). Wired from ISRM_SR.pNH4 via param_to_var (G2).",
           "shape": [
             "src_cells",
             "rcv_cells"
@@ -4305,7 +4305,7 @@
         },
         "SR_pNO3": {
           "default": 0.0,
-          "description": "Source-receptor matrix for the pNO3 pathway (contracted with NOx emissions), already emisLayer-0- and ppl-sliced by the runner's lazy zarr select ([0], ppl, :). Rows are the compact emission-bearing source cells (emis_src_cells), columns the 52411 receptors (rcv_cells). Wired from ISRM_SR.pNO3 via param_to_var (G2).",
+          "description": "Source-receptor matrix for the pNO3 pathway (contracted with NOx emissions), already emisLayer-0- and ppl-sliced by the runner's lazy zarr select ([0], ppl, :). Rows are the compact emission-bearing source cells (emis_src_cells), columns the 64 receptors (rcv_cells). Wired from ISRM_SR.pNO3 via param_to_var (G2).",
           "shape": [
             "src_cells",
             "rcv_cells"
@@ -4322,7 +4322,7 @@
         },
         "SR_pSO4": {
           "default": 0.0,
-          "description": "Source-receptor matrix for the pSO4 pathway (contracted with SOx emissions), already emisLayer-0- and ppl-sliced by the runner's lazy zarr select ([0], ppl, :). Rows are the compact emission-bearing source cells (emis_src_cells), columns the 52411 receptors (rcv_cells). Wired from ISRM_SR.pSO4 via param_to_var (G2).",
+          "description": "Source-receptor matrix for the pSO4 pathway (contracted with SOx emissions), already emisLayer-0- and ppl-sliced by the runner's lazy zarr select ([0], ppl, :). Rows are the compact emission-bearing source cells (emis_src_cells), columns the 64 receptors (rcv_cells). Wired from ISRM_SR.pSO4 via param_to_var (G2).",
           "shape": [
             "src_cells",
             "rcv_cells"
@@ -4347,7 +4347,7 @@
         },
         "TotalPop": {
           "default": 0.0,
-          "description": "Population per cell; from ISRM_SR.TotalPop (read on the rcv range = [0:52411] prefix slice).",
+          "description": "Population per cell; from ISRM_SR.TotalPop (read on the rcv range = [0:64] prefix slice).",
           "shape": [
             "pop_cells"
           ],
@@ -4363,7 +4363,7 @@
         },
         "W": {
           "default": 0.0,
-          "description": "Cell west edge (LCC m); from ISRM_SR.W (full 596444, prefix used).",
+          "description": "Cell west edge (LCC m); from ISRM_SR.W (full 96, prefix used).",
           "shape": [
             "pop_cells"
           ],
@@ -4432,7 +4432,7 @@
           "units": "ug/m^3"
         },
         "deathsK": {
-          "description": "Attributable deaths at each receptor (Krewski RR 1.06): (exp(log(rr)/10*TotalPM25)-1)*TotalPop*pop_scale*MortalityRate/100000*mort_scale. TotalPop/MortalityRate indexed on the rcv range = the [0:52411] prefix slice.",
+          "description": "Attributable deaths at each receptor (Krewski RR 1.06): (exp(log(rr)/10*TotalPM25)-1)*TotalPop*pop_scale*MortalityRate/100000*mort_scale. TotalPop/MortalityRate indexed on the rcv range = the [0:64] prefix slice.",
           "shape": [
             "rcv_cells"
           ],
@@ -4440,7 +4440,7 @@
           "units": "1"
         },
         "deathsL": {
-          "description": "Attributable deaths at each receptor (Lepeule RR 1.14): (exp(log(rr)/10*TotalPM25)-1)*TotalPop*pop_scale*MortalityRate/100000*mort_scale. TotalPop/MortalityRate indexed on the rcv range = the [0:52411] prefix slice.",
+          "description": "Attributable deaths at each receptor (Lepeule RR 1.14): (exp(log(rr)/10*TotalPM25)-1)*TotalPop*pop_scale*MortalityRate/100000*mort_scale. TotalPop/MortalityRate indexed on the rcv range = the [0:64] prefix slice.",
           "shape": [
             "rcv_cells"
           ],

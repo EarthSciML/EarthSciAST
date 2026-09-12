@@ -105,6 +105,32 @@ function canon(io::IO, x, level::Int)
     end
 end
 
+# ---------------------------------------------------------------------------
+# Extent guard for a re-cut input fixture.
+#
+# The committed isrm.esm is the real document at REDUCED extents. Upstream it
+# declares 52,411 x 52,411 source-receptor cells over a 596,444-cell
+# population grid, and the Julia corpus sweeps
+# (pkg/EarthSciAST.jl/test/cross_eq_class_emission_test.jl and
+# cg_foreign_scratch_test.jl) build EVERY fixture in this tree: at production
+# extents that build exhausts the allocator before it reaches any diagnostic,
+# which reads on CI as an ordinary "does not build standalone" skip. Re-cutting
+# the input from a checkout would restore those extents silently, so refuse
+# instead and make the reduction a deliberate step.
+const MAX_FIXTURE_EXTENT = 1024
+
+function check_extents(doc, origin::AbstractString)
+    for (name, set) in get(doc, "index_sets", Dict{String,Any}())
+        n = get(set, "kind", nothing) == "interval" ? get(set, "size", 0) :
+            length(get(set, "members", ()))
+        n isa Integer && n > MAX_FIXTURE_EXTENT && error(
+            "$(origin): index set `$(name)` declares $(n) members, over the " *
+            "$(MAX_FIXTURE_EXTENT) a corpus fixture may carry. Reduce the grid " *
+            "extents before committing (see tests/conformance/pushdown/README.md).")
+    end
+    return doc
+end
+
 function write_canon(path::AbstractString, doc)
     mkpath(dirname(path))
     open(path, "w") do io
@@ -653,6 +679,7 @@ function main()
                         normpath(joinpath(REPO, "..", "isrm.esm", "isrm.esm")))
         isfile(isrm_path) || error("isrm.esm not found at $isrm_path (set ISRM_ESM)")
         ser = EA.serialize_esm_file(EA.load_path(isrm_path))   # metaparameter defaults folded
+        check_extents(ser, isrm_path)
         write_canon(joinpath(OUTDIR, "fixtures", "isrm.esm"), ser)
     end
     ser = EA.serialize_esm_file(EA.load_path(joinpath(OUTDIR, "fixtures", "isrm.esm")))
