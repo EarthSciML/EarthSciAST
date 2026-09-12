@@ -2290,8 +2290,9 @@ end
 # Wrap the compiled state RHS with the per-call observed fills. Returns `f_state!`
 # UNCHANGED when nothing is materialized, so every model without a factored array
 # observed keeps a byte-identical closure (and its zero-allocation property).
-# `levels` is a vector of `(scalar_nodes, kernel_section, scan_folds)` in
-# dependency order.
+# `levels` is a vector of
+# `(scalar_nodes, kernel_section, scan_folds, array_contractions)` in dependency
+# order.
 function _make_rhs_with_obs_buffers(f_state!, ext::_ObsExtVec, n_states::Int,
                                     levels::Tuple)
     isempty(levels) && return f_state!
@@ -2327,6 +2328,10 @@ end
     # every level whose observeds carry no cumulative reduction.
     sf = lv[3]
     isempty(sf) || _apply_scan_folds!(ue, sf)
+    # ess-array-contraction: this level's whole-array contraction nests, in the
+    # same position behind the kernel section that `_make_rhs` puts them in.
+    ac = lv[4]
+    isempty(ac) || _apply_array_contractions!(ue, ue, p, t, ac, T)
     return _fill_obs_levels!(Base.tail(levels), ue, p, t, T)
 end
 
@@ -2954,9 +2959,10 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # unchanged, is the shape it was written for — a STATE equation that is
     # itself a prefix reduction — including in a model that also materializes
     # observeds, where the two mechanisms compose bit-for-bit.
-    # `mat_levels` carries the `:inplace` shape `(scalars, _KernelSection, scans)`
-    # that `_fill_obs_levels!` consumes; `mat_levels_oop` carries the same fills
-    # as `(scalars, kernels, oop_plans, scans)` because the out-of-place runners
+    # `mat_levels` carries the `:inplace` shape
+    # `(scalars, _KernelSection, scans, array_contractions)` that
+    # `_fill_obs_levels!` consumes; `mat_levels_oop` carries the same fills as
+    # `(scalars, kernels, oop_plans, scans, array_contractions)` because the out-of-place runners
     # take the kernel and its plan separately rather than a fused callable. Only
     # the emitter actually being built is populated.
     mat_levels = Any[]
@@ -2967,10 +2973,11 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
             lvl_scalars = Tuple{Int,_Node}[]
             lvl_kernels = _AccKernel[]
             lvl_scans = _ScanFold[]
+            lvl_acs = _ArrayContraction[]
             for name in lvl
                 feq = _materialized_fill_equation(name, mat_defs[name],
                                                   layout.mat_dims[name])
-                se, pcs, aks, sfs = _compile_derivative_equations(Equation[feq],
+                se, pcs, aks, sfs, acs = _compile_derivative_equations(Equation[feq],
                     resolved_obs, array_var_info, var_map, const_registry,
                     pgather, param_sym_set, reg_funcs, n_total;
                     template_sites=template_sites)
@@ -2981,6 +2988,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
                 append!(lvl_scalars, pcs)
                 append!(lvl_kernels, aks)
                 append!(lvl_scans, sfs)
+                append!(lvl_acs, acs)
             end
             merged, _ = _merge_acc_kernel_classes(lvl_kernels)
             mat_scan_fold_count += length(lvl_scans)
@@ -2988,10 +2996,10 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
                 push!(mat_levels_oop,
                       (lvl_scalars, merged,
                        _OopAccPlan[_build_oop_acc_plan(K) for K in merged],
-                       lvl_scans))
+                       lvl_scans, lvl_acs))
             else
                 push!(mat_levels,
-                      (lvl_scalars, _make_kernel_section(merged), lvl_scans))
+                      (lvl_scalars, _make_kernel_section(merged), lvl_scans, lvl_acs))
             end
         end
     end
@@ -3002,7 +3010,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # bound above): a reader's `index(<materialized observed>, i…)` must resolve
     # through the ordinary array-gather path onto the observed's buffer block.
     # `scan_folds` is the ess-scan post-pass list for the STATE equations.
-    scalar_entries, percell_scalar, acc_kernels_pre, scan_folds = @_bench :compile_deriv_eqs _compile_derivative_equations(derivative_eqs,
+    scalar_entries, percell_scalar, acc_kernels_pre, scan_folds, array_contractions = @_bench :compile_deriv_eqs _compile_derivative_equations(derivative_eqs,
         resolved_obs, array_var_info, var_map, const_registry, pgather,
         param_sym_set, reg_funcs, n_states; template_sites=template_sites,
         scalar_obs_inline=obs_plan.inline)
@@ -3098,14 +3106,16 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
         # among the STATE equations); each fill level carries its own.
         _make_rhs_with_obs_buffers(
             _make_rhs(rhs_list, scalar_prelude, scalar_cache, acc_kernels,
-                      const_slots, time_slots, dyn_slots, scan_folds),
+                      const_slots, time_slots, dyn_slots, scan_folds,
+                      array_contractions),
             _ObsExtVec(n_total), n_states, Tuple(mat_levels))
     elseif form === :oop
         # `pgather` (raw `param_arrays` buffers + discrete-cadence caches) rides
         # along so the OOP RHS can expose its live forcing buffers as ARGUMENTS
         # (`_OopRHS` / `rhs_with_buffers`, B2) — the traceable binding.
         @_bench :make_rhs_oop _make_rhs_oop(rhs_list, scalar_prelude, acc_kernels, n_states, pgather,
-                      scan_folds, Tuple(mat_levels_oop), n_total)
+                      scan_folds, Tuple(mat_levels_oop), n_total,
+                      array_contractions)
     else
         throw(TreeWalkError("E_TREEWALK_UNKNOWN_FORM",
             "build_evaluator: `form` must be :inplace or :oop, got :$(form)"))
@@ -3493,7 +3503,7 @@ end
 # per-cell nodes (empty on every default build); the caller appends them to
 # `rhs_list` so they evaluate through the plain scalar walker — the maximally
 # independent differential oracle. Returns
-# `(scalar_entries, percell_scalar, acc_kernels)`.
+# `(scalar_entries, percell_scalar, acc_kernels, scan_folds, array_contractions)`.
 function _compile_derivative_equations(derivative_eqs::Vector{Equation},
         resolved_obs::Dict{String,ASTExpr}, array_var_info,
         var_map::Dict{String,Int}, const_registry::AbstractDict,
@@ -3510,6 +3520,9 @@ function _compile_derivative_equations(derivative_eqs::Vector{Equation},
     percell_scalar = Tuple{Int,_Node}[]
     acc_kernels = _AccKernel[]
     scan_folds = _ScanFold[]           # ess-scan post-passes (scan.jl); usually empty
+    # ess-array-contraction whole-equation loop nests (array_contraction.jl);
+    # empty unless a contraction clears the length floor.
+    array_contractions = _ArrayContraction[]
     covered = falses(n_states)
     # A3: ONE cross-equation store for this build's whole equation loop — the
     # compile-once variant / bound-body caches and the shared obs-inline memo
@@ -3563,7 +3576,8 @@ function _compile_derivative_equations(derivative_eqs::Vector{Equation},
             push!(scalar_entries, (idx, rhs_r))
 
         elseif _is_arrayop_D_lhs(eq.lhs)
-            _compile_arrayop_equation!(percell_scalar, acc_kernels, scan_folds, covered, eq, resolved_obs,
+            _compile_arrayop_equation!(percell_scalar, acc_kernels, scan_folds,
+                                       array_contractions, covered, eq, resolved_obs,
                                        array_var_info, var_map, const_registry,
                                        pgather, param_sym_set, reg_funcs;
                                        template_sites=template_sites, xeq=xeq,
@@ -3577,7 +3591,7 @@ function _compile_derivative_equations(derivative_eqs::Vector{Equation},
     # deterministic. Empty whenever no equation took the per-cell path.
     pooled_cells === nothing || isempty(pooled_cells) ||
         append!(acc_kernels, _acc_from_cell_entries(pooled_cells))
-    return scalar_entries, percell_scalar, acc_kernels, scan_folds
+    return scalar_entries, percell_scalar, acc_kernels, scan_folds, array_contractions
 end
 
 # ---- Stage: one arrayop derivative equation → whole-array kernels ----
@@ -3935,7 +3949,8 @@ _tally_cascade!(k::Symbol) = (_CASCADE_TALLY[k] = get(_CASCADE_TALLY, k, 0) + 1;
 _reset_cascade_tally!() = (empty!(_CASCADE_TALLY); nothing)
 
 function _compile_arrayop_equation!(percell_scalar, acc_kernels, scan_folds,
-        covered::BitVector, eq::Equation, resolved_obs::Dict{String,ASTExpr},
+        array_contractions, covered::BitVector,
+        eq::Equation, resolved_obs::Dict{String,ASTExpr},
         array_var_info, var_map::Dict{String,Int},
         const_registry::AbstractDict, pgather::AbstractDict,
         param_sym_set, reg_funcs;
@@ -4001,6 +4016,49 @@ function _compile_arrayop_equation!(percell_scalar, acc_kernels, scan_folds,
     end
 
     range_iters = [collect(_expand_int_range(ranges_dict[n])) for n in idx_names]
+
+    # ── Whole-array contraction loop nest (ess-array-contraction) ─────────────
+    # Offered FIRST, and only above a CONTRACTED-length floor. Both tiers below
+    # scale their build with an extent of this equation — the affine tier
+    # materializes the ∏|k…|-term unrolled body before it can model anything (so
+    # the cost is paid even when it then DECLINES), and the per-cell loop
+    # compiles one node per output cell. A dense source-receptor contraction is
+    # unaffordable on both, and which of the two is worse cannot be read off the
+    # output extent: `conc[rcv] = Σ_s SR[s,rcv]·E[s]` has exactly as many output
+    # cells as contracted ones, so the existing `#out < ∏|k…|` preemption does
+    # not fire and the unroll is built. Above the floor this tier takes the
+    # equation outright; below it, nothing changes and the existing
+    # loop-vs-affine order decides as before.
+    #
+    # `nothing` (a body that will not resolve with its indices symbolic, or a
+    # compile the `_Node` lowering declines) falls through to that same order
+    # with `covered` untouched — correctness first, exactly as the per-cell loop
+    # probe does.
+    if _array_contraction_enabled() && !isempty(contract_names) &&
+       agg_gates === nothing && agg_filter === nothing &&
+       all(c -> c !== nothing, contract_const) &&
+       (rhs_oplus == "+" || rhs_oplus == "*" || rhs_oplus == "max" || rhs_oplus == "min") &&
+       !isempty(range_iters) && all(!isempty, range_iters) &&
+       prod(length(c) for c in contract_const) >= _array_contraction_min()
+        ac = _try_compile_array_contraction(lhs_body, rhs_body, covered;
+                idx_names=idx_names, ranges_dict=ranges_dict,
+                range_iters=range_iters, contract_names=contract_names,
+                contract_ranges=contract_ranges, rhs_oplus=rhs_oplus,
+                rhs_zerobar=rhs_zerobar, resolved_obs=resolved_obs,
+                array_var_info=array_var_info, var_map=var_map,
+                const_registry=const_registry, pgather=pgather,
+                param_sym_set=param_sym_set, reg_funcs=reg_funcs)
+        if ac !== nothing
+            _tally_cascade!(:array_contraction)
+            get(ENV, "ESS_STENCIL_DEBUG", "") == "1" &&
+                (println(stderr, "[ess-array-contraction] FIRED: ",
+                         length(ac.outs), " output cells, ",
+                         prod(length(c) for c in contract_const), " contracted");
+                 flush(stderr))
+            push!(array_contractions, ac)
+            return nothing
+        end
+    end
 
     # ── Array-einsum runtime contraction loop (ess-runtime-contraction) ────────
     # An array-producing aggregate `out[i…] = ⊕_{k…} body(i…, k…)` with a UNIFORM
@@ -4170,6 +4228,77 @@ function _compile_arrayop_equation!(percell_scalar, acc_kernels, scan_folds,
         param_sym_set=param_sym_set, reg_funcs=reg_funcs,
         contraction_loop=use_contraction_loop, pooled_cells=pooled_cells)
     return nothing
+end
+
+# ---- Stage: whole-array contraction loop nest (ess-array-contraction) ----
+# Compile ONE body for the whole equation — output AND contracted indices kept
+# symbolic — plus the flat `du` slot of every output cell, and return the
+# `_ArrayContraction` the RHS section runs (array_contraction.jl). Returns
+# `nothing` for anything this tier cannot model, having touched nothing: the body
+# is resolved and compiled BEFORE the LHS walk, so a decline can never leave
+# `covered` half-marked.
+#
+# Unlike `_compile_arrayop_percell!` this does NOT loop the output indices at
+# build time to resolve or compile anything — the cell loop below only reads each
+# cell's slot out of `var_map`, which is an integer lookup, not IR.
+function _try_compile_array_contraction(lhs_body::OpExpr, rhs_body::ASTExpr,
+        covered::BitVector;
+        idx_names::Vector{String}, ranges_dict, range_iters,
+        contract_names::Vector{String}, contract_ranges,
+        rhs_oplus::String, rhs_zerobar::Float64,
+        resolved_obs::Dict{String,ASTExpr}, array_var_info,
+        var_map::Dict{String,Int}, const_registry::AbstractDict,
+        pgather::AbstractDict, param_sym_set, reg_funcs)
+    body = isempty(resolved_obs) ? rhs_body : _sub_preserving(rhs_body, resolved_obs)
+    pranges = [_expand_int_range(contract_ranges[d]) for d in eachindex(contract_names)]
+    built = _try_build_array_contraction(body, idx_names, contract_names, pranges,
+                rhs_oplus, rhs_zerobar, array_var_info, var_map,
+                const_registry, pgather)
+    built === nothing && return nothing
+    out_refs, marker = built
+    # `memo=nothing`: the symbolic body shares nothing with the concrete per-cell
+    # builds, the same isolation the per-cell loop tier's compile relies on.
+    node = try
+        _compile(marker, var_map, param_sym_set, reg_funcs)
+    catch
+        return nothing
+    end
+    # The output cells, in `Iterators.product` order (dimension 1 fastest) — the
+    # order `_ac_seek!` reconstructs the loop counters in.
+    n_cells = prod(length(r) for r in range_iters)
+    outs = Vector{Int}(undef, n_cells)
+    c = 0
+    for idx_tuple in Iterators.product(range_iters...)
+        c += 1
+        idx_exprs = Dict{String,ASTExpr}(idx_names[d] => IntExpr(Int64(idx_tuple[d]))
+                                         for d in eachindex(idx_names))
+        sub_lhs = _sub_preserving(lhs_body, idx_exprs)
+        sub_lhs isa OpExpr && sub_lhs.op == "D" ||
+            throw(TreeWalkError("E_TREEWALK_ARRAYOP_MALFORMED_LHS",
+                                "expected D(index(...)) in arrayop body"))
+        inner = sub_lhs.args[1]
+        inner isa OpExpr && inner.op == "index" ||
+            throw(TreeWalkError("E_TREEWALK_ARRAYOP_MALFORMED_LHS",
+                                "expected index(var,...) inside D"))
+        ve = inner.args[1]
+        ve isa VarExpr ||
+            throw(TreeWalkError("E_TREEWALK_ARRAYOP_MALFORMED_LHS",
+                                "index first arg must be a variable name"))
+        cname = _cell_key(ve.name, [_eval_const_int(a, _EMPTY_IDX_ENV)
+                                    for a in inner.args[2:end]])
+        idx = get(var_map, cname, 0)
+        idx == 0 && throw(TreeWalkError("E_TREEWALK_UNKNOWN_STATE", cname))
+        covered[idx] &&
+            throw(TreeWalkError("E_TREEWALK_DUPLICATE_DERIVATIVE", cname))
+        covered[idx] = true
+        outs[c] = idx
+    end
+    rngs = [_expand_int_range(ranges_dict[n]) for n in idx_names]
+    return _ArrayContraction(out_refs,
+                             Int[first(r) for r in rngs],
+                             Int[step(r) for r in rngs],
+                             Int[length(r) for r in rngs],
+                             outs, node)
 end
 
 # ---- Stage: arrayop per-cell fallback ----

@@ -2859,7 +2859,8 @@ forcing_buffer_index(f::_OopRHS) = f.buffer_index
 
 # Fill ONE materialized-observed level out of place, mirroring
 # `_fill_obs_levels!` (build.jl) statement for statement — scalar entries, then
-# the level's access kernels, then its prefix reductions — but threading the
+# the level's access kernels, its prefix reductions and its whole-array
+# contractions — but threading the
 # extended vector functionally, because a tracing backend's `_oop_store` returns
 # a new value rather than mutating.
 #
@@ -2880,7 +2881,7 @@ forcing_buffer_index(f::_OopRHS) = f.buffer_index
                                  fb, empty_cache,
                                  ssaks::Vector{_OopSSAKernel}=_OOP_SSA_EMPTY_KS,
                                  vals::Vector{Any}=_OOP_SSA_NO_VALS) where {T}
-    scalars, kernels, plans, scans = lvl
+    scalars, kernels, plans, scans, acs = lvl
     ue = _oop_run_scalar_batches(ue, sb, ue, p, t, empty_cache, fb)
     for j in eachindex(kernels)
         plan = plans[j]
@@ -2890,6 +2891,8 @@ forcing_buffer_index(f::_OopRHS) = f.buffer_index
              _oop_run_acc_kernel(ue, ue, p, t, kernels[j], T)
     end
     isempty(scans) || (ue = _apply_scan_folds_oop(ue, scans))
+    isempty(acs) ||
+        (ue = _apply_array_contractions_oop(ue, ue, p, t, acs, empty_cache, fb))
     return ue
 end
 
@@ -3557,7 +3560,9 @@ function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
                        pgather::AbstractDict=_EMPTY_PGATHER,
                        scan_folds::AbstractVector{_ScanFold}=_ScanFold[],
                        mat_levels::Tuple=(),
-                       n_total::Int=n_states)
+                       n_total::Int=n_states,
+                       array_contractions::AbstractVector{_ArrayContraction}=
+                           _ArrayContraction[])
     n_cse = length(cse_prelude)
     # J5 covers BOTH IR families: the `_NK_PARAM_GATHER` scalar scan and the
     # acc-descriptor scan (`_AK_FORCING_BOX`/`_AK_ARR_FIXED`/`_AK_ARR_TBL_BOX`)
@@ -3686,6 +3691,13 @@ function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
         # Cumulative (prefix) reductions (ess-scan, scan.jl): fold the per-cell
         # terms the kernels above just stored, along each scanned axis.
         isempty(scan_folds) || (du = _apply_scan_folds_oop(du, scan_folds))
+
+        # Whole-array contractions (ess-array-contraction, array_contraction.jl):
+        # the same loop nests `f!` runs, in the same position, writing through
+        # the `_oop_store` seam so a traced output is never scalar-indexed.
+        isempty(array_contractions) ||
+            (du = _apply_array_contractions_oop(du, ue, p, t, array_contractions,
+                                                cache, fb))
         return du
     end
     return _OopRHS(rhs, host_bufs, buffer_index)
