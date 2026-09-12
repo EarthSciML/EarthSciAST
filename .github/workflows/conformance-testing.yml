@@ -257,6 +257,21 @@ jobs:
         run: |
           julia --project=. -e 'using Pkg; Pkg.test(coverage=true)'
 
+      # The §9.7 golden generator is the only sanctioned way to produce the
+      # template-import goldens, so a generator that does not reproduce what is
+      # committed hands every fixture author an unrelated diff to notice and
+      # revert by hand (#256: a stale hardcoded `esm` version went unnoticed
+      # precisely because nothing ran the script). Re-run it and require the
+      # tree to be unchanged. One matrix leg is enough — the writer sorts keys,
+      # so the output does not vary by Julia version.
+      - name: Template-import goldens regenerate byte-identically
+        if: matrix.julia-version == '1.12'
+        working-directory: ${{ github.workspace }}
+        run: |
+          julia --project=pkg/EarthSciAST.jl scripts/generate-template-import-goldens.jl
+          julia --project=pkg/EarthSciAST.jl scripts/generate-pushdown-goldens.jl
+          git diff --exit-code -- tests/
+
       - name: Process Julia coverage
         uses: julia-actions/julia-processcoverage@v1
         if: matrix.julia-version == '1.12'

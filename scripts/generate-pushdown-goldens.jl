@@ -294,8 +294,11 @@ function build_l1_doc()
         _fed!(vn, "MockPts", fv)
     end
 
+    # 1.1.0 is a FLOOR here, not a preference: every one of these documents
+    # carries `faq` nodes (`_agg`), which arrive at esm 1.1.0. It is also what
+    # the committed fixtures declare, so the generator reproduces them.
     doc = Dict{String,Any}(
-        "esm" => "1.0.0",
+        "esm" => "1.1.0",
         "metadata" => Dict{String,Any}("name" => "prepare_pushdown_L1"),
         "index_sets" => Dict{String,Any}(
             "src_cells"    => Dict("kind"=>"interval", "size"=>GRID),
@@ -346,8 +349,9 @@ function build_gated_dense_doc()
         Dict("s"=>Dict("from"=>"src_cells"), "rcv"=>Dict("from"=>"rcv_cells")),
         _op("*", _ix("SR_PM25", "s", "rcv"), _ix("E_PM25", "s"));
         reduce="+", args=["SR_PM25", "E_PM25"]))
+    # `faq` floor, as in `build_l1_doc` above.
     doc = Dict{String,Any}(
-        "esm" => "1.0.0",
+        "esm" => "1.1.0",
         "metadata" => Dict{String,Any}("name" => "pushdown_gated_dense"),
         "index_sets" => Dict{String,Any}(
             "src_cells"    => Dict("kind"=>"interval", "size"=>NC),
