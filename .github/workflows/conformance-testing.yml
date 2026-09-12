@@ -228,7 +228,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        julia-version: ['1.10', '1.11', '1.12']
+        julia-version: ['1.10', '1.12', '1.13']
     defaults:
       run:
         working-directory: pkg/EarthSciAST.jl
@@ -545,7 +545,7 @@ jobs:
   # that role (#224). The harness used to re-run all five suites itself before
   # generating any conformance output, which duplicated exactly the work these
   # five jobs had just finished — at ONE pinned version apiece, where the
-  # matrix covers julia 1.10/1.11/1.12, node 20/22, python 3.9-3.12, rust
+  # matrix covers julia 1.10/1.12/1.13, node 20/22, python 3.9-3.12, rust
   # stable/beta/MSRV and go 1.21/1.22/1.23. Less coverage, for the whole cost.
   #
   # That duplication is why this job had NEVER completed: across the last 174
