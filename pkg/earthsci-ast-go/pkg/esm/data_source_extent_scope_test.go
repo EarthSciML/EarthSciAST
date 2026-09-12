@@ -3,6 +3,7 @@ package esm
 import (
 	"encoding/json"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -247,5 +248,50 @@ func TestExtentScope_LoaderBindingTheLeafDoesNotDeclareIsNotForwarded(t *testing
 	}
 	if doc == nil {
 		t.Fatal("load returned no document")
+	}
+}
+
+// TestIndexSetSizeCodecRoundTrips pins the `size` codec in BOTH directions.
+//
+// `size` is one wire key with two inhabitants — a folded integer and a still
+// symbolic metaparameter expression — and this binding is the only one that
+// decodes the registry into a typed struct, so it is the only one that needed a
+// custom codec to carry the symbolic case at all. An untested MarshalJSON is
+// how a field silently stops being emitted: the cross-language round-trip gate
+// compares a binding against ITSELF, so a symbolic size dropped on emit and
+// absent on the re-read would agree with itself and pass.
+func TestIndexSetSizeCodecRoundTrips(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		wire string
+	}{
+		{"a folded integer size", `{"kind":"interval","size":4}`},
+		{"a bare metaparameter name", `{"kind":"interval","size":"N_REC"}`},
+		{"a metaparameter expression", `{"kind":"interval","size":{"op":"mul","args":["NX","NY"]}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var is IndexSet
+			if err := json.Unmarshal([]byte(tc.wire), &is); err != nil {
+				t.Fatalf("decode %s: %v", tc.wire, err)
+			}
+			if (is.Size == nil) == (is.SizeExpr == nil) {
+				t.Fatalf("exactly one of Size/SizeExpr must be set, got Size=%v SizeExpr=%v",
+					is.Size, is.SizeExpr)
+			}
+			out, err := json.Marshal(is)
+			if err != nil {
+				t.Fatalf("encode: %v", err)
+			}
+			var got, want any
+			if err := json.Unmarshal(out, &got); err != nil {
+				t.Fatalf("re-decode emitted %s: %v", out, err)
+			}
+			if err := json.Unmarshal([]byte(tc.wire), &want); err != nil {
+				t.Fatalf("decode expected: %v", err)
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("round-trip changed the declaration:\n  in:  %s\n  out: %s", tc.wire, out)
+			}
+		})
 	}
 }
