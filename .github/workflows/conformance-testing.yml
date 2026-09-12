@@ -242,8 +242,48 @@ jobs:
         with:
           version: ${{ matrix.julia-version }}
 
-      - name: Cache Julia packages
-        uses: julia-actions/cache@v2
+      # Depot cache: RESTORE on every run, SAVE only on `main`.
+      #
+      # `Pkg.test()` builds a separate environment (the `[targets] test` set)
+      # and precompiles it under `--check-bounds=yes` — a different
+      # `Base.CacheFlags` configuration from the one the step below builds, and
+      # ~437 packages deep. Warm that costs 40-70 s. Cold it costs 8-24 min,
+      # and it was cold on 6 of 15 legs sampled.
+      #
+      # Not because dependencies drifted — the resolved version sets of a cold
+      # leg (34703909739) and a warm one (34671026222) are byte-identical, 303
+      # entries, zero diff. Because the repo was permanently over GitHub's 10
+      # GB cache limit and in continuous LRU eviction:
+      # `actions/cache/usage` reported 11.6 GB across 24 caches, of which the
+      # ten largest were all julia depots. Every leg saved a ~0.8-1.5 GB cache
+      # under a `run_id`-unique key on EVERY run, and caches are scoped per
+      # ref, so each open PR kept its own full set. Three legs x ~1 GB x ~20
+      # runs/day went into a 10 GB budget.
+      #
+      # Saving only from `main` fixes that at the source. PR runs still restore
+      # it — a PR run CAN read its base branch's caches, and did: run
+      # 34700838214 (a pull request) restored the cache written by run
+      # 34671026222 (a push to main). Steady state is one depot per julia
+      # version, ~3 GB total, instead of one per version per live ref.
+      #
+      # The key is pinned to the package's Project.toml, not to the run, so
+      # main re-saves only when the dependency set changes; between those the
+      # exact-key hit makes the save step a no-op. Bump `v1` by hand to force a
+      # rebuild if a depot ever goes stale enough to be worth discarding.
+      - name: Restore Julia depot
+        id: julia-depot
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.julia/artifacts
+            ~/.julia/packages
+            ~/.julia/registries
+            ~/.julia/compiled
+            ~/.julia/scratchspaces
+            ~/.julia/logs
+          key: julia-depot-v1-${{ runner.os }}-${{ matrix.julia-version }}-${{ hashFiles('pkg/EarthSciAST.jl/Project.toml') }}
+          restore-keys: |
+            julia-depot-v1-${{ runner.os }}-${{ matrix.julia-version }}-
 
       - name: Install Julia dependencies
         run: |
@@ -269,6 +309,23 @@ jobs:
         with:
           files: lcov.info
           flags: julia
+
+      # See the restore step above for why this is main-only. `always()` so a
+      # red suite still banks the precompile work, which is just as valid; the
+      # `cache-hit` guard makes this a no-op on the runs that already had an
+      # exact-key hit, which is most of them.
+      - name: Save Julia depot
+        if: ${{ always() && github.ref == 'refs/heads/main' && steps.julia-depot.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.julia/artifacts
+            ~/.julia/packages
+            ~/.julia/registries
+            ~/.julia/compiled
+            ~/.julia/scratchspaces
+            ~/.julia/logs
+          key: julia-depot-v1-${{ runner.os }}-${{ matrix.julia-version }}-${{ hashFiles('pkg/EarthSciAST.jl/Project.toml') }}
 
   typescript-tests:
     runs-on: ubuntu-latest
