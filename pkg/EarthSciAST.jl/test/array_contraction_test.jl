@@ -192,6 +192,53 @@ const _AC_OFF = Dict("ESS_ARRAY_CONTRACTION_DISABLE" => "1")
         @test all(_ac_outs(dl, vl, NR)[r] === _ac_outs(do_, vo, NR)[r] for r in 1:NR)
     end
 
+    # ── The nest is a `ue` READER the SSA dataflow pass has to know about ────
+    # `ESS_OOP_SSA=1` drops a materialized fill's scatter into `ue` once nothing
+    # is left reading its slots off the buffer. The nest's body is an ordinary
+    # `_Node` walked by `_oop_eval`, so it reads `ue` like any scalar node does —
+    # if the plan does not count those reads, the producer feeding the nest looks
+    # dead, its scatter goes, and the nest folds a zero buffer. Pinned at BOTH
+    # positions a nest can occupy: the state RHS and a materialized fill level.
+    @testset "ESS_OOP_SSA keeps the scatter a nest reads ($where)" for
+            (where, obs_nest) in (("state nest", false), ("observed nest", true))
+        N = 16
+        ag1(b) = _AC_ESS.OpExpr("arrayop", _AC_ESS.ASTExpr[]; output_idx=Any["i"],
+            ranges=Dict("i" => _AC_ESS.IndexSetRef("x")), expr_body=b)
+        # w[i] = 2·u[i] — an elementwise materialized observed, i.e. a
+        # vectorizable producer whose ONLY reader is the nest below.
+        weq = _AC_ESS.Equation(_v("w"), ag1(_op("*", _n(2.0), _idx("u", _v("i")))))
+        nest = _AC_ESS.OpExpr("aggregate", _AC_ESS.ASTExpr[]; output_idx=Any["i"],
+            reduce="+", ranges=Dict("i" => _AC_ESS.IndexSetRef("x"),
+                                    "j" => _AC_ESS.IndexSetRef("x")),
+            expr_body=_op("*", _op("+", _v("i"), _v("j")), _idx("w", _v("j"))))
+        vars = Dict("u" => _AC_ESS.ModelVariable(_AC_ESS.UnknownVariable; shape=["x"]),
+                    "w" => _AC_ESS.ModelVariable(_AC_ESS.UnknownVariable; shape=["x"]))
+        eqs = if obs_nest
+            vars["z"] = _AC_ESS.ModelVariable(_AC_ESS.UnknownVariable; shape=["x"])
+            [weq, _AC_ESS.Equation(_v("z"), nest),
+             _AC_ESS.Equation(ag1(_Didx("u", _v("i"))), ag1(_idx("z", _v("i"))))]
+        else
+            [weq, _AC_ESS.Equation(ag1(_Didx("u", _v("i"))), nest)]
+        end
+        kw = (; index_sets=Dict("x" => _AC_ESS.IndexSet("interval"; size=N)),
+                initial_conditions=Dict("u[$i]" => Float64(i % 7) for i in 1:N),
+                form=:oop)
+        # `SKIP_GATE=0` releases the worthwhileness bounds, so a scatter the
+        # static accounting calls dead really is dropped and the values bite.
+        bld(extra) = withenv((k => v for (k, v) in _ac_env(extra))...) do
+            _AC_ESS._reset_cascade_tally!()
+            (_AC_ESS._build_evaluator_impl(_AC_ESS.Model(vars, eqs); kw...),
+             copy(_AC_ESS._CASCADE_TALLY))
+        end
+        (rb, tb) = bld(Dict{String,String}())
+        (rs, _) = bld(Dict("ESS_OOP_SSA" => "1", "ESS_OOP_SSA_SKIP_GATE" => "0"))
+        @test _ac_tally(tb, :array_contraction) == 1
+        # The producer the nest reads must not be counted dead…
+        @test !any(q.skippable for q in _AC_ESS.oop_ssa_producers(rs[1]))
+        # …and the two arms must agree element for element.
+        @test rb[1](rb[2], rb[3], 0.0) == rs[1](rs[2], rs[3], 0.0)
+    end
+
     @testset "a bound this tier cannot model declines and still answers" begin
         # A per-cell VARIABLE contracted bound (`index(valence, i)`): not a
         # constant integer range, so the tier's admission test rejects it before

@@ -3211,7 +3211,9 @@ function _ssa_pack_ref(pid_l::Vector{Int}, pos_l::Vector{Int}, pgather_ok::Bool)
 end
 
 function _build_oop_ssa_plan(mat_levels::Tuple, acc_kernels, acc_plans,
-                             rhs_list, cse_prelude, n_states::Int, n_total::Int)
+                             rhs_list, cse_prelude, n_states::Int, n_total::Int,
+                             array_contractions::AbstractVector{_ArrayContraction}=
+                                 _ArrayContraction[])
     _oop_ssa_enabled() || return _OOP_SSA_OFF
     ghost_ok = _oop_ssa_ghost_enabled()
     sub_ok = _oop_ssa_sub_enabled()
@@ -3281,14 +3283,27 @@ function _build_oop_ssa_plan(mat_levels::Tuple, acc_kernels, acc_plans,
     for (_, nd) in rhs_list
         _ssa_mark_node_reads!(resid, nd)
     end
+    # ess-array-contraction: the STATE nests write `du`, so they leave no
+    # residue of their own (as the state `scan_folds` do not) — but their bodies
+    # still READ `ue`, so every producer one of them reads must keep scattering.
+    for A in array_contractions
+        _ssa_mark_node_reads!(resid, A.body)
+    end
     for li in 1:nlev
-        scalars, _, _, scans = mat_levels[li]
+        scalars, _, _, scans, acs = mat_levels[li]
         for (_, nd) in scalars
             _ssa_mark_node_reads!(resid, nd)
         end
         for S in scans
             # the fold reads its own slots back
             markv!((S::_ScanFold).slots, _SSA_R_SCAN)
+        end
+        # ess-array-contraction: the nest's body is an ordinary `_Node` walked
+        # by `_oop_eval`, so every slot it reads comes off `ue` and NO producer
+        # feeding it may drop its scatter. Unmarked, a producer read only by a
+        # nest looks dead and is skipped, and the nest reads a zero buffer.
+        for A in acs
+            _ssa_mark_node_reads!(resid, (A::_ArrayContraction).body)
         end
     end
     # (The state-RHS `scan_folds` fold `du`, not `ue` — no residue here.)
@@ -3598,7 +3613,7 @@ function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
     # the OFF singleton keeps every runtime branch on the pre-existing path).
     # `ssa_mat` mirrors `mat_levels`' tuple shape for the tail-recursive fill.
     ssa = _build_oop_ssa_plan(mat_levels, acc_kernels, acc_plans, rhs_list,
-                              cse_prelude, n_states, n_total)
+                              cse_prelude, n_states, n_total, array_contractions)
     ssa_mat = ssa.enabled ? Tuple(ssa.mat) :
               ntuple(_ -> _OOP_SSA_EMPTY_KS, length(mat_levels))
     buf_names = sort!(String[String(k) for k in keys(pgather)])
