@@ -68,11 +68,34 @@ Go and TypeScript are `scope_excluded` in the manifest: both carry the same
 table and assert it in their own unit tests, but neither has an adapter yet.
 
 The document-level halves of the same contract are
-`tests/valid/units_inventory_registry.esm` (the FF10 units resolve, with their
-exact scales) and `tests/invalid/units_discriminator_scaling_factor.esm` (a
-scaling factor is a hard `unit_parse_error`) — those go through the ordinary
+`tests/valid/units_inventory_registry.esm` (the FF10 units),
+`tests/valid/units_moves_registry.esm` (the MOVES units — `mi`, `mi/h`, `lb`,
+`hp`, `gal`, `inHg` and the compounds they build) and
+`tests/invalid/units_discriminator_scaling_factor.esm` (a scaling factor is a
+hard `unit_parse_error`) — those go through the ordinary
 `scripts/compare-conformance-outputs.py` agreement check, which is what pins
 that all five bindings reach the same verdict on the same FILE.
+
+**What that layer does and does not pin.** It pins that the SYMBOL resolves and
+that its DIMENSION is what the document's dimensional analysis needs — nothing
+more. It does NOT pin the scale: a unit string in a document carries dimensions
+only, and the inline-test evaluator is a pure numeric one that never applies a
+registry scale factor (which is why `tests/valid/units_conversions.esm` writes
+its conversions out as explicit factors, `distance_m * 0.001`). A ratio of two
+commensurate quantities is dimensionless whatever the mile is worth, so a
+binding whose `mi` is 1609.0 still validates these documents clean.
+
+**So scales are pinned HERE and nowhere else, and only for the three bindings
+that read this golden** — Rust (`tests/unit_registry_conformance.rs`), Python
+(`tests/test_unit_registry_conformance.py`) and Julia
+(`test/unit_registry_conformance_test.jl`). Go and TypeScript have no adapter,
+so their scales are pinned only by their own per-binding unit tests
+(`pkg/esm/units_test.go`, `src/unit-conversion.test.ts`), which can drift from
+this golden without anything going red. That is the real remaining gap, and it
+is why `inHg` could go into the Rust table alone and survive: it was named at
+NEITHER layer. A new entry belongs in the golden below AND in one of those
+documents, and closing the gap properly means giving Go and TypeScript an
+adapter that reads this golden.
 
 ## Known divergences this file deliberately does not pin
 

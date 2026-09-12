@@ -16,7 +16,6 @@
   ],
   "known_divergences_not_pinned_here": [
     "Rust (pkg/earthsci-ast-rs/src/units.rs, `parse_si_prefixed`) still HAS an SI-prefix mechanism, which §4.8.1 says a binding MUST disable or gate on the table. It therefore resolves `Tm`, `dam`, `dg`, `PW`, `fs` and friends, which every other binding rejects. Those strings are deliberately absent from `reject` so this fixture stays green; the divergence is real and is its own fix.",
-    "Go's table is missing `degree` (it has `deg` and `degrees`), so `units: \"degree\"` is a hard error in Go alone.",
     "TypeScript's table carries nine names §4.8.1 does not list (`sec`, `second`, `seconds`, `minute`, `Kelvin`, `liter`, `ratio`, `kHz`, `MHz`).",
     "WHICH ENTRY POINT enforces §4.8.4 differs: `esm-libraries-spec.md` §2.1a says `load()` MUST succeed for a file that passes schema validation and fails structural validation, and Julia/Rust/Go/TS obey it while Python's `load()` hard-rejects. Every binding agrees at `validate()`. That is a divergence about the API, not about the unit table, and it is not this fixture's subject."
   ]

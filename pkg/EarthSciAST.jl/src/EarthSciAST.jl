@@ -421,16 +421,22 @@ export
 """
 Register this module's own `Unitful.@unit` definitions with Unitful.
 
-`units.jl` defines six units Unitful does not have — `mmHg`, `uatm`, `Dobson`,
-`ft`, `short_ton`, `tonne` — with `Unitful.@unit`. That macro stores each one's
-conversion factor in a table LOCAL to this module; Unitful's `uconvert` reads a
-GLOBAL table, and `Unitful.register` is what copies one into the other. Without
-this call the custom units resolve and carry the right DIMENSION but throw
-`KeyError` the moment anyone converts them — `uconvert(u"m", 1.0 * ft)` fails,
-and so does the exact `DU` -> `molec/m^2` conversion units.jl's own comment
-promises. That went unnoticed for as long as nothing converted a custom unit;
-`tests/conformance/unit_registry`, which pins SCALES and not only dimensions, is
-what converts them.
+`units.jl` defines eleven units with `Unitful.@unit` — `mmHg`, `uatm`,
+`Dobson`, `ft`, `mi`, `lb`, `hp`, `gal`, `inHg`, `short_ton`, `tonne`. Most are
+units Unitful does not have at all. Two of them, `mi` and `lb`, Unitful DOES
+have (as `Mile` and `Pound` in its own defaults), and they are defined here
+anyway: esm-spec §4.8.1 makes this file the only statement of what a registry
+symbol means, and a scale inherited from an upstream library is a scale no
+cross-binding golden pins. The `@unit` names are distinct from Unitful's
+(`InternationalMile`, `AvoirdupoisPound`), so nothing collides. That macro
+stores each one's conversion factor in a table LOCAL to this module; Unitful's
+`uconvert` reads a GLOBAL table, and `Unitful.register` is what copies one into
+the other. Without this call the custom units resolve and carry the right
+DIMENSION but throw `KeyError` the moment anyone converts them —
+`uconvert(u"m", 1.0 * ft)` fails, and so does the exact `DU` -> `molec/m^2`
+conversion units.jl's own comment promises. That went unnoticed for as long as
+nothing converted a custom unit; `tests/conformance/unit_registry`, which pins
+SCALES and not only dimensions, is what converts them.
 """
 function __init__()
     Unitful.register(EarthSciAST)

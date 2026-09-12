@@ -74,6 +74,13 @@ _CONTRACT_DEFINITIONS: tuple[str, ...] = (
     "g = 1e-3 kg",
     "mg = 1e-6 kg",
     "ug = 1e-9 kg",
+    # The international avoirdupois pound, exact by definition since 1959:
+    # 1 lb is exactly 0.45359237 kg -- and exactly `short_ton` / 2000, so the
+    # table used to hold the DERIVED unit and not the one it is defined in.
+    # US emission rates are tabulated in it: MOVES's NONROAD brake-specific fuel
+    # consumption is `lb/(hp*h)` and its gasoline density constant CMFGAS is
+    # 6.237 lb/gal.
+    "lb = 0.45359237 kg",
     # The two tons, both spelled UNAMBIGUOUSLY and neither spelled `ton`.
     # A bare `ton` is three different masses depending on the country and the
     # decade (short 907.18474 kg, metric 1000 kg, long 1016.0469088 kg), and a
@@ -87,7 +94,7 @@ _CONTRACT_DEFINITIONS: tuple[str, ...] = (
     #   * `tonne` — the metric ton, 1000 kg, which is what the rest of the world
     #     means. Present so that the disambiguation is a CHOICE a document makes
     #     rather than a unit it cannot express.
-    "short_ton = 907.18474 kg",
+    "short_ton = 2000 lb",
     "tonne = 1e3 kg",
     # --- length -------------------------------------------------------------
     "dm = 1e-1 m",
@@ -102,11 +109,17 @@ _CONTRACT_DEFINITIONS: tuple[str, ...] = (
     # and a format for air-quality models that cannot spell the unit its own
     # input files use forces every such column to be declared in a unit it is
     # not stored in, which is a lie the dimensional checker cannot catch.
-    # `ft` is the ONLY imperial length here, and it has no long-form alias: the
-    # rest of the family (in, yd, mi) and the spellings `foot`/`feet` are absent
-    # because nothing in the corpus declares them. The table grows by
-    # demonstrated need, one line at a time — that is what keeps it pinnable.
+    # It has no long-form alias: `foot`/`feet` are pinned as REJECTS by
+    # tests/conformance/unit_registry, so the imperial family is symbol-only.
     "ft = 0.3048 m",
+    # The international mile, exact by definition since the same 1959 agreement:
+    # 1 mi = 5280 ft = 1609.344 m. The US onroad transportation inventory is
+    # written in it end to end — EPA MOVES stores `link.linkLength` in miles,
+    # `link.linkAvgSpeed` in `mi/h`, and its whole activity model is built on
+    # vehicle-MILES travelled — so a table with `ft` and not `mi` could spell a
+    # stack height and not a road. `mi/h` composes; `mph` is deliberately not a
+    # name, and neither are `in` and `yd`, which no corpus column uses.
+    "mi = 1609.344 m",
     # --- time ---------------------------------------------------------------
     "ms = 1e-3 s",
     "us = 1e-6 s",
@@ -127,6 +140,12 @@ _CONTRACT_DEFINITIONS: tuple[str, ...] = (
     "L = 1e-3 m ** 3",
     "l = 1e-3 m ** 3",
     "mL = 1e-6 m ** 3",
+    # The US liquid gallon, exact by definition: 231 in^3 = 3.785411784 L
+    # (NIST SP 811 App. B) — NOT the imperial gallon, which is 20% larger.
+    # US fuel data is per gallon: MOVES stores `fueltype.fuelDensity` in g/gal,
+    # its refuelling spill rate in g/gal, and its dioxin and metal emission
+    # rates in g/gal.
+    "gal = 3.785411784 L",
     # --- amount -------------------------------------------------------------
     "kmol = 1e3 mol",
     "mmol = 1e-3 mol",
@@ -144,6 +163,16 @@ _CONTRACT_DEFINITIONS: tuple[str, ...] = (
     "W = J / s",
     "kW = 1e3 W",
     "MW = 1e6 W",
+    # Mechanical (imperial) horsepower — 550 ft*lbf/s = 745.6998715822702 W
+    # (NIST SP 811 App. B gives 7.456 999 E+02 W). Written as the ft*lbf/s
+    # product of this table's OWN `ft` and `lb` and standard gravity rather than
+    # as an opaque literal, so it cannot drift away from the two entries that
+    # define it; pint evaluates the product left to right, so the result is the
+    # same bits the other four bindings compute. NOT the metric horsepower
+    # (PS, 735.49875 W), which is a different unit by 1.4%. Engine ratings are
+    # the axis MOVES's NONROAD model bins on: `nrsourceusetype.hpAvg` is
+    # horsepower and every `nremissionrate` row is `g/(hp*h)`.
+    "hp = 550 * ft * lb * 9.80665 * m / s ** 3",
     # --- pressure -----------------------------------------------------------
     "atm = 101325 Pa",
     "bar = 1e5 Pa",
@@ -152,6 +181,11 @@ _CONTRACT_DEFINITIONS: tuple[str, ...] = (
     "mbar = 100 Pa",
     "Torr = 101325 / 760 Pa",
     "mmHg = 133.322387415 Pa",
+    # Inch of mercury — exactly 25.4 mmHg, the conventional value (NIST SP 811).
+    # US barometric datasets store pressure in inHg; without this entry such a
+    # column has no honest declaration, because a unit string carries no numeric
+    # scale factor, so `25.4 mmHg` cannot be spelled either.
+    "inHg = 3386.388640341 Pa",
     "psi = 6894.757293168361 Pa",
     "uatm = 1e-6 atm",
     # --- energy -------------------------------------------------------------

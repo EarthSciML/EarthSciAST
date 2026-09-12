@@ -299,10 +299,24 @@ func buildUnitRegistry() map[string]Unit {
 	r["cd"] = baseUnit(dimLuminosity, 1.0)
 	r["rad"] = baseUnit(dimAngle, 1.0)
 
+	// ORDER MATTERS BELOW. short_ton, mi and hp are DEFINED in terms of lb and
+	// ft and read those entries back out of r rather than retyping their
+	// scales, so each must be inserted after the entry it reads. A Go map read
+	// of a missing key yields the zero Unit -- scale 0, no dimension -- so
+	// reordering them would not panic, it would silently zero a scale.
+	// TestParseUnitUSCustomary pins each of the three against its exact decimal
+	// so that such a reorder fails loudly there.
+	//
 	// Mass (gram, because kg is the SI base but g/mg/ug are common).
 	r["g"] = Unit{Dim: r["kg"].Dim, Scale: 1e-3}
 	r["mg"] = Unit{Dim: r["kg"].Dim, Scale: 1e-6}
 	r["ug"] = Unit{Dim: r["kg"].Dim, Scale: 1e-9}
+	// The international avoirdupois pound, exact by definition since 1959:
+	// 1 lb = 0.45359237 kg -- and exactly short_ton/2000, so the table held the
+	// DERIVED unit and not the one it is defined in. US emission rates are
+	// tabulated in it: MOVES's NONROAD brake-specific fuel consumption is
+	// lb/(hp*h) and its gasoline density constant CMFGAS is 6.237 lb/gal.
+	r["lb"] = Unit{Dim: r["kg"].Dim, Scale: 0.45359237}
 	// The two tons, both spelled UNAMBIGUOUSLY and neither spelled "ton". A bare
 	// "ton" is three different masses (short 907.18474 kg, metric 1000 kg, long
 	// 1016.0469088 kg), and a table whose job is to make a declared unit mean
@@ -310,7 +324,9 @@ func buildUnitRegistry() map[string]Unit {
 	// same reason "d" is. short_ton is exactly 2000 international pounds --
 	// what a US emissions inventory means by "tons", and exactly InMAP's
 	// 907184740000 ug/short-ton emission-conversion constant.
-	r["short_ton"] = Unit{Dim: r["kg"].Dim, Scale: 907.18474}
+	// The pound is READ BACK OUT of the table rather than retyped as 907.18474,
+	// so this entry cannot drift away from the one that defines it.
+	r["short_ton"] = Unit{Dim: r["kg"].Dim, Scale: 2000 * r["lb"].Scale}
 	r["tonne"] = Unit{Dim: r["kg"].Dim, Scale: 1e3}
 
 	// Length scales.
@@ -324,10 +340,20 @@ func buildUnitRegistry() map[string]Unit {
 	// Emission inventories are written in it -- the EPA FF10 point-source format
 	// stores STKHGT and STKDIAM in feet -- and a format for air-quality models
 	// that cannot spell the unit its own input files use forces every such
-	// column to be declared in a unit it is not stored in. "ft" is the ONLY
-	// imperial length in the table; "in", "yd" and "mi" are absent because
-	// nothing in the corpus declares them.
+	// column to be declared in a unit it is not stored in. It has no long-form
+	// alias: "foot"/"feet" are pinned as REJECTS by
+	// tests/conformance/unit_registry, so the imperial family is symbol-only.
 	r["ft"] = Unit{Dim: r["m"].Dim, Scale: 0.3048}
+	// The international mile, exact by definition since the same 1959
+	// agreement: 1 mi = 5280 ft = 1609.344 m. The US onroad transportation
+	// inventory is written in it end to end -- EPA MOVES stores
+	// link.linkLength in miles, link.linkAvgSpeed in mi/h, and its whole
+	// activity model is built on vehicle-MILES travelled -- so a table with
+	// "ft" and not "mi" could spell a stack height and not a road. "mi/h"
+	// composes; "mph" is deliberately not a name, and neither are "in" and
+	// "yd", which no corpus column uses. The foot is READ BACK OUT of the table
+	// rather than retyped as 1609.344, as short_ton reads the pound.
+	r["mi"] = Unit{Dim: r["m"].Dim, Scale: 5280 * r["ft"].Scale}
 
 	// Time scales.
 	r["ms"] = Unit{Dim: r["s"].Dim, Scale: 1e-3}
@@ -349,6 +375,12 @@ func buildUnitRegistry() map[string]Unit {
 	r["L"] = liter
 	r["l"] = liter
 	r["mL"] = Unit{Dim: liter.Dim, Scale: 1e-6}
+	// The US liquid gallon, exact by definition: 231 in^3 = 3.785411784 L
+	// (NIST SP 811 App. B) -- NOT the imperial gallon, which is 20% larger and
+	// which a dimension-only check cannot tell apart from it. US fuel data is
+	// per gallon: MOVES stores fueltype.fuelDensity in g/gal, its refuelling
+	// spill rate in g/gal, and its dioxin and metal emission rates in g/gal.
+	r["gal"] = Unit{Dim: liter.Dim, Scale: 3.785411784e-3}
 
 	// Length, long form. The corpus spells metres out ("meters/second" in a
 	// description-driven fixture); both spellings are the same unit.
@@ -383,6 +415,11 @@ func buildUnitRegistry() map[string]Unit {
 	r["mbar"] = Unit{Dim: r["Pa"].Dim, Scale: 100}
 	r["Torr"] = Unit{Dim: r["Pa"].Dim, Scale: 101325.0 / 760.0}
 	r["mmHg"] = Unit{Dim: r["Pa"].Dim, Scale: 133.322387415}
+	// Inch of mercury -- exactly 25.4 mmHg, the conventional value (NIST
+	// SP 811). US barometric datasets store pressure in inHg; without this
+	// entry such a column has no honest declaration, because a unit string
+	// carries no numeric scale factor, so "25.4 mmHg" cannot be spelled either.
+	r["inHg"] = Unit{Dim: r["Pa"].Dim, Scale: 3386.388640341}
 	r["psi"] = Unit{Dim: r["Pa"].Dim, Scale: 6894.757293168}
 
 	// Energy / power (non-coherent multiples).
@@ -392,6 +429,15 @@ func buildUnitRegistry() map[string]Unit {
 	r["kWh"] = Unit{Dim: r["J"].Dim, Scale: 3.6e6}
 	r["kW"] = Unit{Dim: r["W"].Dim, Scale: 1000}
 	r["MW"] = Unit{Dim: r["W"].Dim, Scale: 1e6}
+	// Mechanical (imperial) horsepower -- 550 ft*lbf/s = 745.6998715822702 W
+	// (NIST SP 811 App. B gives 7.456 999 E+02 W). The foot and the pound are
+	// READ BACK OUT of the table rather than retyped as literals here, so this
+	// entry cannot drift away from the two entries that define it. NOT the
+	// metric horsepower (PS, 735.49875 W).
+	// Engine ratings are the axis MOVES's NONROAD model bins on:
+	// nrsourceusetype.hpAvg is horsepower and every nremissionrate row is
+	// g/(hp*h).
+	r["hp"] = Unit{Dim: r["W"].Dim, Scale: 550 * r["ft"].Scale * r["lb"].Scale * 9.80665}
 
 	// Electromagnetic derived units.
 	//

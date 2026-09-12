@@ -1589,10 +1589,29 @@ fn build_base_units() -> HashMap<String, Unit> {
     // Emission inventories are written in it — the EPA FF10 point-source format
     // stores STKHGT and STKDIAM in feet — and a format for air-quality models
     // that cannot spell the unit its own input files use forces every such
-    // column to be declared in a unit it is not stored in. `ft` is the ONLY
-    // imperial length in the table; `in`, `yd` and `mi` are absent because
-    // nothing in the corpus declares them.
+    // column to be declared in a unit it is not stored in.
     units.insert("ft".to_string(), Unit::base(Dimension::Length, 1, 0.3048));
+    // The international mile, exact by definition since the same 1959
+    // agreement: 1 mi = 5280 ft = 1609.344 m. It is the unit the US onroad
+    // transportation inventory is written in end to end — EPA MOVES stores
+    // `link.linkLength` in miles, `link.linkAvgSpeed` and
+    // `driveSchedule.averageSpeed` in `mi/h`, and its whole activity model is
+    // built on vehicle-MILES travelled — so a table that has `ft` and not `mi`
+    // can spell a stack height and not a road.
+    //
+    // `mi/h` composes from this entry and `h`; `mph` is deliberately NOT a
+    // separate name, because it is a fused spelling of a compound the grammar
+    // already builds, and every fused alias is a second way to say one thing.
+    // Nor are `mile`/`miles` here: `foot`/`feet` are pinned as REJECTS by
+    // tests/conformance/unit_registry, so the imperial family is symbol-only
+    // by contract and this follows it.
+    //
+    // The foot is READ BACK OUT of the table rather than retyped as 1609.344,
+    // so this entry cannot drift away from the one that defines it.
+    units.insert(
+        "mi".to_string(),
+        Unit::base(Dimension::Length, 1, 5280.0 * units["ft"].scale),
+    );
 
     // Time units
     units.insert("s".to_string(), Unit::base(Dimension::Time, 1, 1.0));
@@ -1608,6 +1627,13 @@ fn build_base_units() -> HashMap<String, Unit> {
     // Mass units
     units.insert("kg".to_string(), Unit::base(Dimension::Mass, 1, 1.0));
     units.insert("g".to_string(), Unit::base(Dimension::Mass, 1, 0.001));
+    // The international avoirdupois pound, exact by definition since 1959:
+    // 1 lb = 0.45359237 kg. US emission rates are tabulated in it — MOVES's
+    // NONROAD brake-specific fuel consumption is `lb/(hp*h)` and its gasoline
+    // density constant CMFGAS is 6.237 lb/gal — and it is the unit `short_ton`
+    // below is DEFINED in, so having the ton and not the pound left the
+    // derived unit spellable and the base one not.
+    units.insert("lb".to_string(), Unit::base(Dimension::Mass, 1, 0.45359237));
     // The two tons, both spelled UNAMBIGUOUSLY and neither spelled `ton`. A bare
     // `ton` is three different masses (short 907.18474 kg, metric 1000 kg, long
     // 1016.0469088 kg), and a table whose job is to make a declared unit mean
@@ -1615,9 +1641,11 @@ fn build_base_units() -> HashMap<String, Unit> {
     // same reason `d` is. `short_ton` is exactly 2000 international pounds —
     // what a US emissions inventory means by "tons", and exactly InMAP's
     // 907184740000 ug/short-ton emission-conversion constant.
+    // The pound is READ BACK OUT of the table rather than retyped as
+    // 907.18474, for the same reason `mi` reads the foot back out.
     units.insert(
         "short_ton".to_string(),
-        Unit::base(Dimension::Mass, 1, 907.18474),
+        Unit::base(Dimension::Mass, 1, 2000.0 * units["lb"].scale),
     );
     units.insert("tonne".to_string(), Unit::base(Dimension::Mass, 1, 1000.0));
 
@@ -1662,6 +1690,18 @@ fn build_base_units() -> HashMap<String, Unit> {
 
     // Volume (L = dm³ = 10⁻³ m³)
     units.insert("L".to_string(), Unit::base(Dimension::Length, 3, 0.001));
+    // The US liquid gallon, exact by definition: 231 in³ = 3.785 411 784 L
+    // (NIST SP 811 App. B). It is spelled `gal` and not `gallon` for the same
+    // reason `ft` has no `foot`, and it is the US liquid gallon and not the
+    // imperial one — those differ by 20%, which is exactly the kind of silent
+    // scale error tests/conformance/unit_registry exists to pin. US fuel data
+    // is per gallon: MOVES stores `fueltype.fuelDensity` in g/gal, its
+    // refuelling spill rate in g/gal, and its dioxin and metal emission rates
+    // in g/gal.
+    units.insert(
+        "gal".to_string(),
+        Unit::base(Dimension::Length, 3, 0.003_785_411_784),
+    );
 
     // Frequency: Hz = s⁻¹.
     units.insert("Hz".to_string(), Unit::base(Dimension::Time, -1, 1.0));
@@ -1741,6 +1781,23 @@ fn build_base_units() -> HashMap<String, Unit> {
         .divide(&Unit::base(Dimension::Time, 3, 1.0));
     units.insert("W".to_string(), watt.clone());
 
+    // Mechanical (imperial) horsepower — 550 ft·lbf/s, which is
+    // 745.699 871 582 270 2 W: NIST SP 811 App. B gives 7.456 999 E+02 W. The
+    // foot and the pound are READ BACK OUT of the table rather than retyped as
+    // literals here, so this entry cannot drift away from the two entries that
+    // define it. NOT the metric horsepower (PS, 735.49875 W), which is a
+    // different unit by 1.4%.
+    //
+    // Engine ratings are the axis MOVES's NONROAD model bins on:
+    // `nrsourceusetype.hpAvg` is horsepower and every `nremissionrate` row is
+    // `g/(hp*h)`, so without this entry the rate tables that ARE the model have
+    // no honest declaration.
+    let foot = units["ft"].scale;
+    let pound = units["lb"].scale;
+    let mut horsepower = watt.clone();
+    horsepower.scale *= 550.0 * foot * pound * 9.80665;
+    units.insert("hp".to_string(), horsepower);
+
     // Electromagnetic family, all derived from the ampere.
     //
     // `C` is the COULOMB (A·s), NOT Celsius — degrees Celsius is spelled
@@ -1778,6 +1835,12 @@ fn build_base_units() -> HashMap<String, Unit> {
     };
     units.insert("erg".to_string(), joule_scaled(1e-7));
     units.insert("BTU".to_string(), joule_scaled(1_055.055_852_62));
+    // The watt-hour, exactly 3600 J, and the kilowatt-hour it is the base of.
+    // esm-spec §4.8.1's Energy row lists BOTH; Julia, Python, Go and TypeScript
+    // carried both while this table had only `kWh`, so `units: "Wh"` resolved in
+    // four bindings and was a hard error in this one. `W*h` composes either way,
+    // which is why the gap was silent.
+    units.insert("Wh".to_string(), joule_scaled(3600.0));
     units.insert("kWh".to_string(), joule_scaled(3.6e6));
 
     // ESM-specific units standard (docs/units-standard.md).
@@ -2020,8 +2083,6 @@ mod tests {
         assert_eq!(parse_unit("kg * m").unwrap(), parse_unit("kg*m").unwrap());
     }
 
-    /// SI prefixes resolve against the prefixable symbols — which is what makes
-    /// the `µ` → `u` normalization useful — but must not invent units out of
     /// Inches of mercury — exactly 25.4 mmHg BY DEFINITION, so the two must agree
     /// to the last bit rather than merely within a tolerance. `inHg` is how US
     /// barometric data is stored, and before this entry the registry had `mmHg`
@@ -2043,6 +2104,142 @@ mod tests {
         );
     }
 
+    /// The international mile — EXACTLY 5280 international feet by the same
+    /// 1959 agreement that fixes `ft`, so it is asserted against the neighbouring
+    /// entry bit-for-bit rather than within a tolerance: the two cannot be
+    /// allowed to drift apart, and 5280 × 0.3048 is 1609.344 with no rounding in
+    /// binary64. Before this entry the table could spell a stack height in feet
+    /// and not a road in miles, which is the unit the entire US onroad
+    /// transportation inventory is written in.
+    #[test]
+    fn test_international_mile() {
+        let mi = parse_unit("mi").unwrap();
+        let ft = parse_unit("ft").unwrap();
+        assert!(
+            mi.is_compatible(&parse_unit("m").unwrap()),
+            "mi must carry the length dimension"
+        );
+        assert_eq!(mi.scale, 1609.344, "the international mile is 1609.344 m");
+        assert_eq!(
+            mi.scale,
+            ft.scale * 5280.0,
+            "mi must be EXACTLY 5280 ft, not merely close to it"
+        );
+        // `mph` is NOT a name; the compound is what spells a speed, and it
+        // composes from the two entries without a fused alias.
+        let mph = parse_unit("mi/h").unwrap();
+        assert!(mph.is_compatible(&parse_unit("m/s").unwrap()));
+        // 1 mi/h is EXACTLY 0.44704 m/s — the constant MOVES's own SQL writes.
+        assert_eq!(mph.scale, 0.44704);
+        assert!(
+            parse_unit("mph").is_err(),
+            "`mph` must stay unresolvable: a fused spelling of a compound the \
+             grammar already builds is a second way to say one thing"
+        );
+    }
+
+    /// The international avoirdupois pound — EXACTLY 0.45359237 kg, and exactly
+    /// a two-thousandth of the `short_ton` already in the table, which is what
+    /// the assertion pins. Having the ton and not the pound meant the DERIVED
+    /// unit was spellable and the one it is defined in was not.
+    #[test]
+    fn test_avoirdupois_pound() {
+        let lb = parse_unit("lb").unwrap();
+        assert!(lb.is_compatible(&parse_unit("kg").unwrap()));
+        assert_eq!(lb.scale, 0.45359237);
+        assert_eq!(
+            parse_unit("short_ton").unwrap().scale,
+            lb.scale * 2000.0,
+            "short_ton is DEFINED as 2000 lb; the two must agree to the last bit"
+        );
+    }
+
+    /// Mechanical horsepower — 550 ft·lbf/s = 745.6998715822702 W (NIST SP 811
+    /// gives 7.456 999 E+02 W). Asserted BOTH ways: against the literal, and
+    /// against the foot / pound / standard-gravity product it is built from, so
+    /// a future edit to `ft` or `lb` that forgot this entry would fail here.
+    /// It is emphatically not the metric horsepower (PS, 735.49875 W).
+    #[test]
+    fn test_mechanical_horsepower() {
+        let hp = parse_unit("hp").unwrap();
+        assert!(hp.is_compatible(&parse_unit("W").unwrap()));
+        assert_eq!(hp.scale, 745.699_871_582_270_2);
+        assert_eq!(
+            hp.scale,
+            550.0 * parse_unit("ft").unwrap().scale * parse_unit("lb").unwrap().scale * 9.80665,
+            "hp must be exactly 550 ft*lbf/s in terms of the table's own ft and lb"
+        );
+        assert!(
+            (hp.scale - 735.498_75).abs() > 1.0,
+            "hp must be the MECHANICAL horsepower, not the metric one"
+        );
+    }
+
+    /// The US liquid gallon — exactly 231 in³ = 3.785411784 L. Pinned against
+    /// the litre already in the table, and pinned as NOT the imperial gallon,
+    /// which is 20% larger: a dimension-only check cannot tell the two apart.
+    #[test]
+    fn test_us_liquid_gallon() {
+        let gal = parse_unit("gal").unwrap();
+        let l = parse_unit("L").unwrap();
+        assert_eq!(
+            gal.dimensions.get(&Dimension::Length),
+            Some(&Rational::int(3)),
+            "a gallon is a volume, i.e. [length]^3"
+        );
+        assert_eq!(gal.scale, 0.003_785_411_784);
+        assert!(
+            (gal.scale / l.scale - 3.785_411_784).abs() < 1e-12,
+            "the US liquid gallon is 3.785411784 L"
+        );
+        assert!(
+            (gal.scale - 0.004_546_09).abs() > 1e-6,
+            "must be the US liquid gallon, not the imperial one"
+        );
+    }
+
+    /// The compounds the four new entries exist to make spellable. Each is a
+    /// real MOVES column: `mi/h` is `link.linkAvgSpeed`, `g/(hp*h)` is
+    /// `nremissionrate.meanBaseRate`, `lb/(hp*h)` is the brake-specific fuel
+    /// consumption carrier, and `g/gal` is `fueltype.fuelDensity`. None of them
+    /// needs a table entry of its own — they fall out of the grammar — which is
+    /// the point of adding the BASE units rather than the compounds.
+    #[test]
+    fn test_moves_compounds_derive() {
+        assert!(
+            parse_unit("mi/h")
+                .unwrap()
+                .is_compatible(&parse_unit("m/s").unwrap())
+        );
+        assert!(
+            parse_unit("g/(hp*h)")
+                .unwrap()
+                .is_compatible(&parse_unit("kg/J").unwrap())
+        );
+        assert!(
+            parse_unit("lb/(hp*h)")
+                .unwrap()
+                .is_compatible(&parse_unit("kg/J").unwrap())
+        );
+        assert!(
+            parse_unit("g/gal")
+                .unwrap()
+                .is_compatible(&parse_unit("kg/m^3").unwrap())
+        );
+        assert!(
+            parse_unit("g/mi")
+                .unwrap()
+                .is_compatible(&parse_unit("kg/m").unwrap())
+        );
+        assert!(
+            parse_unit("kJ/gal")
+                .unwrap()
+                .is_compatible(&parse_unit("J/m^3").unwrap())
+        );
+    }
+
+    /// SI prefixes resolve against the prefixable symbols — which is what makes
+    /// the `µ` → `u` normalization useful — but must not invent units out of
     /// arbitrary identifiers, nor shadow a name that merely looks prefixed.
     #[test]
     fn test_si_prefixes() {

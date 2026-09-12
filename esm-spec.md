@@ -1314,12 +1314,12 @@ A binding MUST NOT introduce a ninth axis, and MUST NOT map a registry symbol on
 | Group | Symbols |
 |---|---|
 | SI base | `m` `kg` `s` `mol` `K` `A` `cd` `rad` |
-| Mass | `g` `mg` `ug` `short_ton` `tonne` |
-| Length | `dm` `cm` `mm` `um` `nm` `km` `ft` |
+| Mass | `g` `mg` `ug` `lb` `short_ton` `tonne` |
+| Length | `dm` `cm` `mm` `um` `nm` `km` `ft` `mi` |
 | Time | `ms` `us` `ns` `min` `h` `hr` `day` `yr` `year` (`yr` = `year` = the **Julian** year, `31557600` s exactly = 365.25 × 86400 — pinned because one binding shipped a 365-day year, 0.0685% short, and a scale error is invisible to dimensional analysis) |
-| Volume | `L` `l` `mL` |
+| Volume | `L` `l` `mL` `gal` |
 | Amount | `kmol` `mmol` `umol` `nmol` `M` |
-| Derived | `Hz` `N` `Pa` `J` `kJ` `cal` `kcal` `W` `kW` `MW` |
+| Derived | `Hz` `N` `Pa` `J` `kJ` `cal` `kcal` `W` `kW` `MW` `hp` |
 | Pressure | `atm` `uatm` `bar` `hPa` `kPa` `mbar` `Torr` `mmHg` `inHg` `psi` |
 | Energy | `erg` `BTU` `Wh` `kWh` |
 | Electromagnetic | `C` `V` `Ohm` `F` `T` |
@@ -1332,9 +1332,24 @@ A binding MUST NOT introduce a ninth axis, and MUST NOT map a registry symbol on
 | Long-form aliases | `meter` `meters` → `m` · `hour` → `h` · `Celsius` → `degC` · `percent` → `%` · `degree` `degrees` → `deg` |
 | Dimensionless spellings | `""` · `"1"` · `"dimensionless"` |
 
-**`ft`, `short_ton` and `tonne` are in the table because emission inventories are written in them.** The EPA FF10 point-source format — the input every US air-quality model reads — stores stack height and stack diameter in **feet**, stack velocity in **feet per second**, and the annual emission total in **short tons per year**. A format for air-quality models that cannot spell the units its own input files use forces every such column to be declared in a unit it is not stored in, and that lie is invisible to a dimensional checker: `ft` declared as `m` is dimensionally perfect and numerically wrong by 3.28. `ft` is exact by definition (1 ft = 0.3048 m, since 1959) and is the ONLY imperial length in the table — `in`, `yd`, `mi` are absent, and the table grows only by demonstrated need.
+**The US customary entries are in the table because US emission inventories are written in them.** The EPA FF10 point-source format — the input every US air-quality model reads — stores stack height and stack diameter in **feet**, stack velocity in **feet per second**, and the annual emission total in **short tons per year**. EPA MOVES, the onroad and nonroad inventory model, stores link length in **miles** and link speed in **mi/h**, bins its nonroad model on engine ratings in **horsepower**, tabulates every emission rate in **g/(hp·h)** and brake-specific fuel consumption in **lb/(hp·h)**, and stores fuel density and its refuelling and dioxin rates per **US gallon**. A format for air-quality models that cannot spell the units its own input files use forces every such column to be declared in a unit it is not stored in, and that lie is invisible to a dimensional checker: `ft` declared as `m` is dimensionally perfect and numerically wrong by 3.28.
 
-**There is deliberately no `ton` and no `t`.** A bare `ton` is three different masses — short (907.18474 kg, = 2000 international pounds), metric (1000 kg), long (1016.0469088 kg) — and a table whose entire purpose is to make a declared unit mean ONE thing cannot hold a name that means three. Both tons are therefore spelled in full: **`short_ton`** (exactly `2000 * 0.45359237` kg — this is what a US emissions inventory means by "tons", and exactly InMAP's `907184740000` µg-per-short-ton emission-conversion constant) and **`tonne`** (the metric ton, 1000 kg). `t` is excluded for the same reason `d` is: a one-letter mass symbol reads as the tera- prefix to half its readers. A document that means short tons MUST write `short_ton`; there is no spelling under which it can be mistaken.
+Every one of these is **exact by definition** (`inHg`, by convention), and the **scale** — not only the dimension — is normative, because a scale error is invisible to dimensional analysis:
+
+| Symbol | Scale | Exact because |
+|---|---|---|
+| `ft` | `0.3048` m | the international foot, 1959 agreement |
+| `mi` | `1609.344` m | exactly `5280 × ft`, same agreement |
+| `lb` | `0.45359237` kg | the international avoirdupois pound, 1959 — and exactly `short_ton / 2000` |
+| `hp` | `745.6998715822702` W | 550 ft·lbf/s = `550 × ft × lb × 9.80665`, folded LEFT TO RIGHT — unlike `mi` and `short_ton` this product is not exactly representable, so the fold order is what makes every binding land on the same double; NIST SP 811 App. B gives 7.456 999 E+02 W |
+| `gal` | `0.003785411784` m³ | 231 in³, the US **liquid** gallon; NIST SP 811 App. B |
+| `inHg` | `3386.388640341` Pa | exactly `25.4 × mmHg`, the conventional value; NIST SP 811 |
+
+`hp` and `gal` are why the scale is normative and not merely recommended: the **metric** horsepower (PS) is 735.49875 W and the **imperial** gallon is 4.54609 L. Each shares its dimension with the entry above — 1.4% and 20% away respectively — so a binding that picks the other convention passes every dimensional check and mis-scales every rate in the file. A binding MUST use the values above.
+
+**The imperial family is symbol-only, and the table grows only by demonstrated need.** `in` and `yd` are absent because no corpus column is stored in them. The long forms `foot`, `feet`, `mile`, `miles` are not aliases, and the fused spelling `mph` is not a name — `mi/h` composes from the table and is exactly `0.44704` m/s, the constant MOVES's own SQL writes. All five are pinned as REJECTS by `tests/conformance/unit_registry`, so the membership of this family is a stated fact rather than an accident of what happened to get filed. MOVES's own `g/hp-hr` spelling does not resolve either: `-` is not an operator (§4.8.2), so it reads as a dangling minus; the ESM spelling is `g/(hp*h)`.
+
+**There is deliberately no `ton` and no `t`.** A bare `ton` is three different masses — short (907.18474 kg, = 2000 international pounds), metric (1000 kg), long (1016.0469088 kg) — and a table whose entire purpose is to make a declared unit mean ONE thing cannot hold a name that means three. Both tons are therefore spelled in full: **`short_ton`** (exactly `2000 * lb`, i.e. `907.18474` kg — this is what a US emissions inventory means by "tons", and exactly InMAP's `907184740000` µg-per-short-ton emission-conversion constant) and **`tonne`** (the metric ton, 1000 kg). `t` is excluded for the same reason `d` is: a one-letter mass symbol reads as the tera- prefix to half its readers. A document that means short tons MUST write `short_ton`; there is no spelling under which it can be mistaken.
 
 **Unit strings carry DIMENSIONS ONLY — never species tags.** A trailing chemical species is NOT part of a unit. `"kg C/m^2"` for "kilograms of carbon per square metre" is ILLEGAL: whitespace is multiplication (§4.8.2), so it parses as kg·coulomb·m⁻², a *silently wrong dimension* rather than an error, and no checker can catch it. The same trap holds for `"kg N/ha"`, `"mg C/m^3/d"`, `"ug S/m^3"`. **The species belongs in the variable's name or `description`; the unit is `"kg/m^2"`.**
 

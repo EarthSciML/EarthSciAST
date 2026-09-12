@@ -253,25 +253,77 @@ describe('unit-conversion', () => {
     })
 
     it('carries every unit the shared registry contract lists', () => {
-      // The cross-binding contract (Go's `unitRegistry`). A symbol missing from
-      // this table is not "conservatively unknown" — it FAILS THE FILE.
+      // The cross-binding contract: this list is EVERY symbol esm-spec §4.8.1
+      // tabulates, row by row, and it is checked against the spec table and not
+      // against what this file happens to define. A symbol missing from the
+      // TABLE is not "conservatively unknown" — it FAILS THE FILE; a symbol
+      // missing from THIS LIST is worse, because then the table can lose the
+      // entry and this test still passes. That is not hypothetical: this list
+      // has been found short of `ft`, `short_ton`, `tonne` and `inHg`, and
+      // while a symbol is missing here a binding may drop it unnoticed.
       const contract = `m kg s mol K A cd rad
-        g mg ug
-        dm cm mm um nm km
+        g mg ug lb short_ton tonne
+        dm cm mm um nm km ft mi
         ms us ns min h hr day yr year
-        L l mL
+        L l mL gal
         kmol mmol umol nmol M
-        Hz N Pa J kJ cal kcal W kW MW
-        atm bar hPa kPa mbar Torr mmHg psi
+        Hz N Pa J kJ cal kcal W kW MW hp
+        atm uatm bar hPa kPa mbar Torr mmHg inHg psi
         erg BTU Wh kWh
         C V Ohm F T
         degC degF deg
+        sr
+        % psu
         ppm ppb ppt ppmv ppbv pptv
-        molec individuals vehicles units count
+        molec molecule individuals vehicles units count
         Dobson DU
+        meter meters hour Celsius percent degree degrees
         dimensionless`.split(/\s+/)
       for (const symbol of contract) {
         expect(() => parseUnitForConversion(symbol)).not.toThrow()
+      }
+    })
+
+    // The US customary family. All four are EXACT by definition and each is
+    // asserted against a table entry it is defined in terms of, so none can
+    // drift. Their SCALES are the contract and not merely their dimensions:
+    // mechanical and metric horsepower share a dimension and are 1.4% apart,
+    // as do the US and imperial gallons at 20%.
+    //
+    // They are here because EPA MOVES is written in them: `link.linkLength` in
+    // miles, `link.linkAvgSpeed` in `mi/h`, `nrsourceusetype.hpAvg` in
+    // horsepower, every `nremissionrate` row in `g/(hp*h)`,
+    // `fueltype.fuelDensity` in `g/gal`.
+    it('carries the US customary units EXACTLY, scales included', () => {
+      const ft = parseUnitForConversion('ft').scale
+      const lb = parseUnitForConversion('lb').scale
+
+      expect(parseUnitForConversion('mi').scale).toBe(1609.344)
+      expect(parseUnitForConversion('mi').scale).toBe(5280 * ft)
+      expect(parseUnitForConversion('short_ton').scale).toBe(2000 * lb)
+      expect(parseUnitForConversion('hp').scale).toBe(550 * ft * lb * 9.80665)
+      expect(parseUnitForConversion('hp').scale).toBe(745.6998715822702)
+      // MECHANICAL horsepower, never the metric one (PS, 735.49875 W).
+      expect(Math.abs(parseUnitForConversion('hp').scale - 735.49875)).toBeGreaterThan(1)
+      // The US LIQUID gallon, never the imperial one (4.54609 L).
+      expect(parseUnitForConversion('gal').scale / parseUnitForConversion('L').scale).toBeCloseTo(
+        3.785411784,
+        12,
+      )
+
+      // 1 mi/h is EXACTLY 0.44704 m/s -- the constant MOVES's own SQL writes.
+      expect(parseUnitForConversion('mi/h').scale).toBe(0.44704)
+      // The compounds fall out of the grammar; none is a table entry, which is
+      // why the BASE units were added and not the compounds.
+      for (const c of ['g/(hp*h)', 'lb/(hp*h)', 'g/gal', 'g/mi', 'kJ/gal']) {
+        expect(() => parseUnitForConversion(c)).not.toThrow()
+      }
+      // The deliberate absences. `mph` is a fused spelling of a compound the
+      // grammar already builds; `in` and `yd` have no corpus user; `hp-hr` is
+      // MOVES's OWN spelling of horsepower-hour and is unparseable because `-`
+      // is not an operator.
+      for (const c of ['mph', 'in', 'yd', 'miles', 'hp-hr']) {
+        expect(() => parseUnitForConversion(c)).toThrow(UnitConversionError)
       }
     })
   })
