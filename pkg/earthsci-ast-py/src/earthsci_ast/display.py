@@ -852,7 +852,7 @@ def _format_bound(value, format_type: str) -> str:
 
 
 def _aggregate_symbol(semiring, reduce, format_type: str) -> str:
-    """Big-operator symbol for an ``aggregate`` reduction (semiring supersedes reduce)."""
+    """Big-operator symbol for an ``faq`` reduction (semiring supersedes reduce)."""
     if semiring:
         if semiring in ("max_product", "max_sum"):
             fam = "max"
@@ -904,7 +904,7 @@ def _format_ranges_clause(ranges: dict, format_type: str) -> str:
 
 
 def _format_aggregate(node, format_type: str) -> str:
-    """Render an ``aggregate`` node per the rendering contract."""
+    """Render an ``faq`` node per the rendering contract."""
 
     def r(e):
         return _render_expr(e, format_type)
@@ -1107,7 +1107,7 @@ def _format_structural_op(node, format_type: str):
         id_part = f", id={node_id}" if node_id is not None else ""
         return f"{name}({inner}, manifold={manifold if manifold is not None else ''}{id_part})"
 
-    if op == "aggregate":
+    if op == "faq":
         return _format_aggregate(node, format_type)
 
     if op in ("argmin", "argmax"):

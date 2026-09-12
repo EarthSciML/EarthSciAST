@@ -304,7 +304,7 @@ func repoFile(t *testing.T, parts ...string) string {
 // document edited through this binding was deleted — 48 of the 94 corpus
 // fixtures carry at least one.
 func TestRoundTripPreservesEquationComment(t *testing.T) {
-	path := repoFile(t, "tests", "valid", "aggregate", "min_sum_tropical.esm")
+	path := repoFile(t, "tests", "valid", "faq", "min_sum_tropical.esm")
 	file, err := LoadPath(path)
 	if err != nil {
 		t.Fatalf("load: %v", err)

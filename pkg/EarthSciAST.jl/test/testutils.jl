@@ -42,20 +42,20 @@ _idx(v, is...) = _op("index", _v(v), is...)
 
 # Derived shorthands shared by the tree-walk / data-refresh test files
 # (previously redefined per-file with identical bodies, producing
-# method-overwrite warnings under runtests.jl). `_D_idx`/`_arrayop1d` are the
+# method-overwrite warnings under runtests.jl). `_D_idx`/`_faq1d` are the
 # historical spellings of `_Didx`/`_ao1` — kept as forwarding aliases so both
 # call styles keep working.
 _D(v) = _op("D", _v(v); wrt="t")
 _Didx(v, is...) = _op("D", _idx(v, is...); wrt="t")
 _D_idx(v, is...) = _Didx(v, is...)
-_ao1(body, idx, lo, hi) = EarthSciAST.OpExpr("arrayop",
+_ao1(body, idx, lo, hi) = EarthSciAST.OpExpr("faq",
     EarthSciAST.ASTExpr[];
     output_idx=Any[idx], expr_body=body, ranges=Dict(idx => [lo, hi]))
-_arrayop1d(body, idx, lo, hi) = _ao1(body, idx, lo, hi)
+_faq1d(body, idx, lo, hi) = _ao1(body, idx, lo, hi)
 _const(val) = EarthSciAST.OpExpr("const",
     EarthSciAST.ASTExpr[]; value=val)
 
-# 1-D second-difference stencil arrayop over the FULL range, so the two end
+# 1-D second-difference stencil faq over the FULL range, so the two end
 # cells gather an out-of-range (ghost) neighbour and form their own boundary
 # kernels — the canonical "interior kernel + boundary kernels" decomposition.
 # Shared by tree_walk_vectorized_test.jl and tree_walk_allocation_test.jl.

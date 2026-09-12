@@ -159,7 +159,7 @@ _cl_doc(M::Int) = Dict{String,Any}(
             Dict("lhs" => Dict("op" => "D", "args" => Any["x"], "wrt" => "t"),
                  "rhs" => 0.0),
             Dict("lhs" => Dict("op" => "D", "args" => Any["s"], "wrt" => "t"),
-                 "rhs" => Dict("op" => "aggregate", "semiring" => "sum_product",
+                 "rhs" => Dict("op" => "faq", "semiring" => "sum_product",
                                "args" => Any[], "output_idx" => Any[],
                                "ranges" => Dict("k" => Any[0, M]),
                                "expr" => Dict("op" => "*", "args" => Any["k", "x"]))),

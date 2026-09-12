@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "RecurrenceOnOneOfTwoAxes",
     "description": "A recurrence over ONE axis of a rank-2 variable: m[i,j] folds along j and is free in i. The carried state is therefore a whole COLUMN, not a scalar -- the same construct serves an array-valued accumulator without any extra machinery, because the frame simply has another axis. It also pins the sweep order of esm-spec 4.3.1.1 point 1: the recurrence axis is the OUTER loop and the free axis iterates inside it, so cells sharing a j are computed before j advances. The values are exactly representable, so a wrong sweep order here shows up as an unavailable-cell fault or a wrong power of ten rather than as a low-bit difference.",
@@ -44,7 +44,7 @@
         {
           "lhs": "m",
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": [
               "i",

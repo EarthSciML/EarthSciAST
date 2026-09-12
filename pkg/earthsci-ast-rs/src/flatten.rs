@@ -33,7 +33,7 @@
 //!
 //! The `unlowered_operator` gate (esm-spec §4.2 / §9.6.8) still applies where
 //! discretization is genuinely required: such an operator must be lowered to an
-//! `arrayop` stencil by a `match` rewrite rule (an `expression_templates`
+//! `faq` stencil by a `match` rewrite rule (an `expression_templates`
 //! discretization applied during the load-time rewrite fixpoint) before it can
 //! be EVALUATED, and the scalar and array simulators reject a survivor at
 //! compile time with [`crate::compile_error::CompileError::UnloweredOperatorError`].
@@ -445,7 +445,7 @@ pub struct FlattenMetadata {
 pub struct FlattenedSystem {
     /// Independent variables, derived per esm-libraries-spec §4.7.6
     /// "Independent-variable computation": `["t"]` for a 0-D system or a
-    /// DISCRETIZED one (whose spatial axes have been folded into `arrayop`
+    /// DISCRETIZED one (whose spatial axes have been folded into `faq`
     /// dimensions and so name no axis any more), and `["t", <spatial axes>]`
     /// for a system still carrying undiscretized spatial differentials.
     ///
@@ -517,7 +517,7 @@ pub struct FlattenedSystem {
     /// through verbatim from the source [`EsmFile`]. Carried so a coupled
     /// (multi-model) array system reaching the array runtime via
     /// [`crate::simulate_array::ArrayCompiled::from_flattened`] can resolve
-    /// `aggregate`/`arrayop` `ranges` `{ "from": <set> }`, `join.on` gates, and
+    /// `faq` `ranges` `{ "from": <set> }`, `join.on` gates, and
     /// derived-set references against it — exactly as the single-model
     /// `from_file` path resolves them against `file.index_sets`. Empty for a
     /// file that declares no index sets, so the ordinary ODE path is unaffected.
@@ -1731,7 +1731,7 @@ fn source_fed_producers(parts: &AssembledParts) -> HashMap<String, usize> {
 /// per-component answers, because flattening moves the ground under it:
 /// `operator_compose` merges two RHSs into one equation, `variable_map` deletes
 /// a parameter and promotes a variable in its place, and the pointwise lift
-/// rewrites a scalar state ODE into an `aggregate`. Every membership decision
+/// rewrites a scalar state ODE into a `faq`. Every membership decision
 /// is delegated to [`crate::classification`] — the binding's only sanctioned
 /// answer to these questions — so no `update.kind == "wiener"` test is spelled
 /// here. Mirrors Python's `_classification_view` / `_classify_flattened`.
@@ -2512,13 +2512,13 @@ fn build_reaction_block(
 /// variable `t` is never namespaced — it's a global symbol resolved to
 /// [`ResolvedExpr::Time`] during compile, not a component-scoped name.
 ///
-/// Array nodes (`arrayop`/`aggregate`/`makearray`/`integral`/…) carry their
+/// Array nodes (`faq`/`makearray`/`integral`/…) carry their
 /// body in out-of-band fields (`expr`, `filter`, `lower`, `upper`, `values`,
 /// `axes`) plus structural metadata (`output_idx`, `ranges`, `reduce`,
 /// `semiring`, `shape`, …). Every such field is preserved and the
 /// expression-bearing ones are recursively namespaced, so a discretized
-/// `arrayop` survives coupling. Loop-index symbols introduced by an enclosing
-/// `arrayop`/`aggregate` (`output_idx` + `ranges` keys) or `integral`
+/// `faq` survives coupling. Loop-index symbols introduced by an enclosing
+/// `faq` (`output_idx` + `ranges` keys) or `integral`
 /// (`int_var`) are component-local — the array interpreter resolves them
 /// positionally against `loop_binds`, never against the variable registry — so
 /// they are excluded from namespacing within that node's scope (ess-14f.8).
@@ -2549,7 +2549,7 @@ fn namespace_expr(
 ///
 /// * a name this node BINDS as a loop symbol (an `output_idx` entry or a
 ///   `ranges` key) is left alone — **even when a local variable of the same
-///   name is declared**. Index symbols are local to the enclosing `aggregate`
+///   name is declared**. Index symbols are local to the enclosing `faq`
 ///   and shadow any coincident variable name (esm-spec §4.3.1: "a given string
 ///   can be a variable reference in most contexts but serves as an index symbol
 ///   inside `aggregate.output_idx`, `aggregate.expr`, and `aggregate.ranges`
@@ -2644,7 +2644,7 @@ fn namespace_expr_scoped(
             // Extend the bound-index set with the loop symbols this node
             // introduces so its body / filter / bound expressions skip them.
             // `ranges` keys cover both the output and contracted indices of an
-            // `arrayop`/`aggregate`; `output_idx` is added defensively; an
+            // `faq`; `output_idx` is added defensively; an
             // `integral` binds its `int_var`.
             let mut child_bound = bound.clone();
             if let Some(output_idx) = &node.output_idx {
@@ -3023,7 +3023,7 @@ fn apply_coupling_entry(
 /// (esm-libraries-spec §4.7.1 step 1).
 ///
 /// `D(x, t)` yields `x`; a bare-variable LHS yields itself; the `index` /
-/// `aggregate` shells peel to the variable they write. An LHS that is a
+/// `faq` shells peel to the variable they write. An LHS that is a
 /// composite expression (an algebraic constraint, an `ic` seed) defines no
 /// single variable and yields `None`, so it never participates in a match and
 /// is preserved unchanged by step 5.
@@ -3875,7 +3875,7 @@ fn apply_couple(
 ///
 /// The target equation is found by its LHS DEPENDENT VARIABLE, read through the
 /// crate's canonical [`crate::classification::lhs_form`], so `D(x, t)`,
-/// `D(x[i], t)`, a bare `x`, and the `aggregate`-wrapped spellings all resolve
+/// `D(x[i], t)`, a bare `x`, and the `faq`-wrapped spellings all resolve
 /// to `x`. For an `additive` or `replacement` transform a `to` that names no
 /// equation's LHS is SKIPPED, not an error — the oracle skips it too.
 ///
@@ -4339,7 +4339,7 @@ pub(crate) fn extract_ic_target(lhs: &Expr) -> Option<String> {
 // `D(sp) = <reaction in scalar sp> + <-u·makearray(grad(sp))>` still has a SCALAR
 // `sp` while its advection `makearray` indexes `sp` per grid cell. This pass
 // performs the `lifting:"pointwise"` promotion — it wraps each such merged state
-// ODE in an `aggregate` over the grid, indexing the bare reaction species per cell
+// ODE in a `faq` over the grid, indexing the bare reaction species per cell
 // and each operator makearray per cell, so the reaction network runs pointwise on
 // the grid through the existing array evaluator. Mirrors the Julia reference
 // `_apply_pointwise_lift!` (flatten.jl).
@@ -4465,7 +4465,7 @@ fn makearray_extents(ma: &ExpressionNode) -> Vec<i64> {
 /// the spatial `loops`: a bare reference to an array variable becomes
 /// `index(var, loops…)`, and each spatial-operator `makearray` becomes
 /// `index(makearray, loops…)` (its region values already index per cell).
-/// Self-contained nodes (`index`/`aggregate`/`arrayop`) are left untouched;
+/// Self-contained nodes (`index`/`faq`) are left untouched;
 /// elementwise ops recurse.
 fn lift_rhs_to_cell(expr: &Expr, arrayvars: &HashSet<String>, loops: &[String]) -> Expr {
     match expr {
@@ -4475,7 +4475,7 @@ fn lift_rhs_to_cell(expr: &Expr, arrayvars: &HashSet<String>, loops: &[String]) 
             if node.op == "makearray" {
                 return index_makearray(node, loops);
             }
-            if matches!(node.op.as_str(), "index" | "aggregate" | "arrayop") {
+            if matches!(node.op.as_str(), "index" | "faq") {
                 return expr.clone();
             }
             let mut out = ExpressionNode::clone(node);
@@ -4520,7 +4520,7 @@ fn index_makearray(ma: &ExpressionNode, loops: &[String]) -> Expr {
 /// Pointwise spatial lift (esm-spec §10.5). Promotes every state ODE that
 /// `operator_compose` merged with a spatial operator (its merged RHS carries an
 /// operator `makearray`) from a 0-D scalar to the operator's grid shape, and
-/// rewrites the equation into an `aggregate` over the grid. `loaded_producers`
+/// rewrites the equation into a `faq` over the grid. `loaded_producers`
 /// maps loaded field name → rank; a producer whose rank equals the grid rank is
 /// indexed per cell alongside the lifted species.
 fn apply_pointwise_lift(
@@ -4620,14 +4620,14 @@ fn apply_pointwise_lift(
             ..Default::default()
         });
         let new_lhs = Expr::operator(ExpressionNode {
-            op: "aggregate".to_string(),
+            op: "faq".to_string(),
             output_idx: Some(loops.clone()),
             ranges: Some(ranges.clone()),
             expr: Some(Box::new(d_body)),
             ..Default::default()
         });
         let new_rhs = Expr::operator(ExpressionNode {
-            op: "aggregate".to_string(),
+            op: "faq".to_string(),
             output_idx: Some(loops.clone()),
             ranges: Some(ranges),
             expr: Some(Box::new(lift_rhs_to_cell(&eq.rhs, &arrayvars, &loops))),
@@ -4961,7 +4961,7 @@ mod tests {
             ..Default::default()
         });
         let aggregate = Expr::operator(ExpressionNode {
-            op: "aggregate".to_string(),
+            op: "faq".to_string(),
             // Nothing reachable through `args`; the op lives only in `expr`.
             args: vec![],
             expr: Some(Box::new(grad)),
@@ -4984,7 +4984,7 @@ mod tests {
             ..Default::default()
         });
         let filtered = Expr::operator(ExpressionNode {
-            op: "aggregate".to_string(),
+            op: "faq".to_string(),
             args: vec![Expr::Variable("w".to_string())],
             filter: Some(Box::new(spatial_d)),
             reduce: Some("+".to_string()),
@@ -5014,7 +5014,7 @@ mod tests {
             ..Default::default()
         });
         let aggregate = Expr::operator(ExpressionNode {
-            op: "aggregate".to_string(),
+            op: "faq".to_string(),
             args: vec![Expr::Variable("w".to_string())],
             output_idx: Some(vec!["i".to_string()]),
             key: Some(Box::new(key)),

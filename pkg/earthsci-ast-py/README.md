@@ -62,7 +62,7 @@ per-document build with the per-run integration, and is deleted.
 This is **not** a 0-D-only ODE solver. It is a runner for the post-discretize
 canonical AST: spatial dimensions are folded into array dimensions, and the
 only independent variable that remains at run time is `t`. Once a system has been discretized, the binding
-evaluates `arrayop`-rich ASTs end-to-end (reshape / transpose / concat /
+evaluates `faq`-rich ASTs end-to-end (reshape / transpose / concat /
 broadcast / index / elementwise stencils), so PDEs, 2-D and 3-D grids, and
 mixed ODE/algebraic systems are all in scope.
 
@@ -89,7 +89,7 @@ vocabulary — carries the discretization templates (authored inline or imported
 from a discretization template library such as the EarthSciDiscretizations
 catalog) that rewrite those operators into the canonical post-discretize form:
 
-- spatial operators are replaced with explicit stencils built from `arrayop`,
+- spatial operators are replaced with explicit stencils built from `faq`,
   `index`, and the elementwise op set;
 - the spatial axis becomes an array dimension on each state variable;
 - the only remaining independent variable is `t`.
@@ -134,7 +134,7 @@ from earthsci_ast.parse import load
 
 # Load a post-discretize PDE fixture. The 1-D spatial axis has been folded
 # into the array dimension of u, so `independent_variables == ['t']`.
-file = load("tests/fixtures/arrayop/03_1d_stencil_mass_conservation.esm")
+file = load("tests/fixtures/faq/03_1d_stencil_mass_conservation.esm")
 
 # A delta spike at u[5]; everything else zero.
 u0 = {f"u[{i}]": (1.0 if i == 5 else 0.0) for i in range(1, 11)}
@@ -149,21 +149,21 @@ assert sol.retcode is ReturnCode.Success
 # interior tolerance: sum_i u[i](t) ≈ sum_i u[i](0) = 1.0.
 ```
 
-Inside the fixture, the interior stencil is an `arrayop` over `i in 2..9`
+Inside the fixture, the interior stencil is a `faq` over `i in 2..9`
 with body `u[i-1] - 2*u[i] + u[i+1]`, plus scalar boundary equations for
 `u[1]` and `u[10]`. That is the canonical post-discretize shape: every
-spatial term is an explicit `arrayop`, no `grad` / `div` / `laplacian`
+spatial term is an explicit `faq`, no `grad` / `div` / `laplacian`
 nodes survive. The full pipeline for a user-authored continuous PDE is:
 
 ```
 .esm (continuous form + discretization templates, with grad/div/laplacian)
-  → load-time template rewrite (§9.6 fixpoint lowers spatial ops to arrayop stencils)
+  → load-time template rewrite (§9.6 fixpoint lowers spatial ops to `faq` stencils)
   → earthsci_ast.esm_problem() / solve()  (NumPy interpreter integrates with SciPy)
 ```
 
 For more end-to-end discretized fixtures, see
-`tests/fixtures/arrayop/` (1-D, 2-D, makearray, reshape, transpose,
-concat, broadcast); `tests/test_arrayop_simulation.py` runs every
+`tests/fixtures/faq/` (1-D, 2-D, makearray, reshape, transpose,
+concat, broadcast); `tests/test_faq_simulation.py` runs every
 fixture's declared assertions through `esm_problem()` / `solve()` and is the
 conformance contract for the array-op path.
 

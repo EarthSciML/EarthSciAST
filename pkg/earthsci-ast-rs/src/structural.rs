@@ -365,7 +365,7 @@ impl<'a> ModelCtx<'a> {
         }
     }
 
-    /// Static `aggregate`-node constraints (RFC semiring-faq-unified-ir): an
+    /// Static `faq`-node constraints (RFC semiring-faq-unified-ir): an
     /// undeclared `from` index set, a value-equality join over an unportable
     /// (float/null) categorical key, and a value-invention `distinct` node that
     /// reads a state variable (relational work on the continuous hot path). Each
@@ -373,7 +373,7 @@ impl<'a> ModelCtx<'a> {
     fn check_aggregate_nodes(&self, errors: &mut Vec<StructuralError>) {
         // The leaves that seed CONTINUOUS in the cadence partition
         // (CONFORMANCE_SPEC.md §5.7.2): ODE states, algebraic unknowns, and
-        // Brownian parameters. An `aggregate` reading any of them classes
+        // Brownian parameters. A `faq` reading any of them classes
         // CONTINUOUS, which guard 2 forbids for relational work. (An OBSERVED
         // unknown's class depends on its defining equation, which only the cadence
         // pass resolves; this static check stays with the leaves it can decide.)
@@ -852,7 +852,7 @@ fn reserved_declaration_reason(
 /// resolved BY NAME ahead of the declaration maps — `ModelCtx::new` extends
 /// `defined_vars` with exactly these two — so the declaration is unreachable:
 /// the implicit symbol shadows it, not the other way round. Same reserved set as
-/// `parse::reject_reserved_index_symbols` uses for an `aggregate` binder,
+/// `parse::reject_reserved_index_symbols` uses for a `faq` binder,
 /// stated once per rule so the two cannot drift.
 ///
 /// Findings are emitted in sorted key order, matching the peer bindings: two of
@@ -969,8 +969,8 @@ fn collect_free_symbols(expr: &crate::Expr, out: &mut HashSet<String>) {
     }
 }
 
-/// Static `aggregate`-node constraints (RFC semiring-faq-unified-ir), decidable
-/// from this single document. Walk every `aggregate` node in the model's
+/// Static `faq`-node constraints (RFC semiring-faq-unified-ir), decidable
+/// from this single document. Walk every `faq` node in the model's
 /// `equations` and emit, at the CONTAINING equation FIELD (`.../equations/<i>/lhs`
 /// or `/rhs`, the pointer convention shared with the reference checks):
 ///
@@ -1188,7 +1188,7 @@ fn collect_structural_self_reads<'a>(
         }
         return;
     };
-    let pushed = if node.op == "aggregate" {
+    let pushed = if node.op == "faq" {
         let add: Vec<(String, (i64, i64))> = node
             .ranges
             .as_ref()
@@ -1248,14 +1248,14 @@ fn collect_structural_self_reads<'a>(
 }
 
 /// The variable an equation DEFINES, if its LHS names one: a bare variable, or
-/// the §4.3 indexed-aggregate LHS form `aggregate{expr: index(V, k…)}`. A
+/// the §4.3 indexed-`faq` LHS form `faq{expr: index(V, k…)}`. A
 /// derivative LHS (`D(u)`) defines no array algebraically — a stencil read of
 /// `u` at `i−1` there is a gather on the solver's state, not a self-reference —
 /// so it deliberately yields `None`.
 fn recurrence_lhs_target(lhs: &crate::Expr) -> Option<(&str, Option<&Vec<String>>)> {
     match lhs {
         crate::Expr::Variable(v) => Some((v.as_str(), None)),
-        crate::Expr::Operator(node) if node.op == "aggregate" => {
+        crate::Expr::Operator(node) if node.op == "faq" => {
             let crate::Expr::Operator(inner) = node.expr.as_deref()? else {
                 return None;
             };
@@ -1340,16 +1340,16 @@ fn check_recurrence_equation(
                  `reshape`/`transpose`/`concat`/`broadcast` operand — so no cell-by-cell sweep \
                  can supply it. A `makearray`'s region order fixes which write WINS, not the \
                  order cells are EVALUATED in (esm-spec §4.3.1.1, §4.3.2); write the recurrence \
-                 as one `aggregate` with the base case as an `ifelse` guard in the body."
+                 as one `faq` with the base case as an `ifelse` guard in the body."
             ),
             None,
         );
         return;
     }
-    // The cell frame: the indexed-aggregate LHS's own indices, else the RHS
+    // The cell frame: the indexed-`faq` LHS's own indices, else the RHS
     // aggregate's.
     let rhs_idx = match &equation.rhs {
-        crate::Expr::Operator(node) if node.op == "aggregate" => node.output_idx.as_ref(),
+        crate::Expr::Operator(node) if node.op == "faq" => node.output_idx.as_ref(),
         _ => None,
     };
     let Some(idx_names) = lhs_idx.or(rhs_idx) else {
@@ -1358,8 +1358,8 @@ fn check_recurrence_equation(
             StructuralErrorCode::RecurrenceUnsupportedForm,
             format!(
                 "the definition of '{var}' reads '{var}' at another position, but the equation \
-                 declares no cell frame to sweep: its RHS is not an `aggregate` over the \
-                 variable's axes and its LHS is not the indexed-aggregate form \
+                 declares no cell frame to sweep: its RHS is not a `faq` over the \
+                 variable's axes and its LHS is not the indexed-`faq` form \
                  `aggregate{{expr: index({var}, k…)}}` (esm-spec §4.3.1.1)."
             ),
             None,
@@ -1380,7 +1380,7 @@ fn check_recurrence_equation(
         return;
     }
     let frame_env: HashMap<String, (i64, i64)> = match &equation.rhs {
-        crate::Expr::Operator(node) if node.op == "aggregate" => node
+        crate::Expr::Operator(node) if node.op == "faq" => node
             .ranges
             .as_ref()
             .map(|m| {
@@ -1613,7 +1613,7 @@ fn has_index_self_read(expr: &crate::Expr, var: &str) -> bool {
 /// Sorted (`BTreeMap`/`BTreeSet`) rather than hashed because the cycle the
 /// diagnostic NAMES is chosen by the traversal order, and a `HashMap` would
 /// hand a different member of the same cycle to two runs of the same binary.
-/// Binder symbols are subtracted first, so an `aggregate` range key that
+/// Binder symbols are subtracted first, so a `faq` range key that
 /// happens to share a name with an observed does not manufacture an edge.
 fn observed_dependency_graph(
     class: &crate::classification::Classification,
@@ -1695,7 +1695,7 @@ fn check_observed_dependency_cycle(
 ///
 /// A **bare** array-level expression is one written over whole arrays with no
 /// explicit index symbols — `D(dp) ~ w2 * z1`, `p3 ~ w2 * z1` — as opposed to
-/// the `aggregate` spelling, where the author names the axes and there is
+/// the `faq` spelling, where the author names the axes and there is
 /// nothing to infer. Its operands align by index-set NAME: an operand declared
 /// over a SUBSET of the result's index sets broadcasts along the ones it is
 /// missing (a `[lat]` operand replicates along `lon` and `lev` in a
@@ -1820,7 +1820,7 @@ fn check_operand_axes(
 /// functions, the conditionals, and a `broadcast` whose `fn` names one of them
 /// — because those are the only ones for which "corresponding elements" is
 /// what the expression means. Every other op consumes its operands whole under
-/// its own contract: an `aggregate` and a `makearray` name their axes, an
+/// its own contract: a `faq` and a `makearray` name their axes, an
 /// `index` gathers, the shape ops restructure, and a geometry kernel like
 /// `intersect_polygon` legitimately takes `[src_verts, coord]` operands and
 /// returns a `[clip_ring, coord]` result.
@@ -1850,7 +1850,7 @@ fn collect_bare_array_operands<'a>(
 }
 
 /// Recurse through `expr`, applying [`check_aggregate_node`] to every
-/// `aggregate` node reached (including nested ones), each reported at
+/// `faq` node reached (including nested ones), each reported at
 /// `field_path` — the top-level equation side that contains it.
 fn check_aggregates_in_expr(
     expr: &crate::Expr,
@@ -1863,7 +1863,7 @@ fn check_aggregates_in_expr(
     let crate::Expr::Operator(node) = expr else {
         return;
     };
-    if node.op == "aggregate" {
+    if node.op == "faq" {
         check_aggregate_node(node, field_path, esm_file, state_vars, var_shapes, errors);
     }
     node.for_each_child(&mut |child| {
@@ -1985,7 +1985,7 @@ fn check_join_sides(
     }
 }
 
-/// Apply the three static aggregate checks to a single `aggregate` node.
+/// Apply the three static aggregate checks to a single `faq` node.
 fn check_aggregate_node(
     node: &crate::types::ExpressionNode,
     field_path: &str,
@@ -2765,7 +2765,7 @@ fn reaction_rate_units_str(rate: &crate::Expr, rs: &crate::ReactionSystem) -> St
 }
 
 /// The index / integration symbols an operator node BINDS for its own body:
-/// `output_idx` and `ranges` keys (`aggregate`/`arrayop`), the `integral` op's
+/// `output_idx` and `ranges` keys (`faq`), the `integral` op's
 /// `var`, and the `argmin`/`argmax` witness `arg`. These are in scope for the
 /// node's child expressions (the aggregate body, filter predicate, grouping
 /// key, integral bounds) but are NOT model/parameter declarations, so a
@@ -3086,7 +3086,7 @@ pub(crate) fn validate_expression_references_with_systems(
             }
             // Recursively validate every expression-bearing child via the
             // canonical walker — args PLUS the sidecar fields (integral bounds,
-            // aggregate/arrayop bodies, filter predicates, table axes,
+            // aggregate/faq bodies, filter predicates, table axes,
             // aggregate keys, template bindings) — so a reference hidden
             // outside `args` is not missed. Index symbols the node BINDS
             // (`output_idx`/`ranges`/`var`/`arg`) are added to the in-scope set

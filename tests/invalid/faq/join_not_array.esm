@@ -1,0 +1,72 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "join_not_array",
+    "description": "INVALID (bead ess-my4.2.1): a `faq` node whose `join` is a bare object instead of an array of join clauses (RFC semiring-faq-unified-ir §5.3 / §8). `join` is declared `type: array` (a list of `{ \"on\": … }` clauses), so supplying a single object is a pure schema (type) violation — caught by every binding.",
+    "authors": [
+      "EarthSciAST/polecats/gastown.capable"
+    ],
+    "tags": [
+      "faq",
+      "join",
+      "invalid",
+      "schema"
+    ]
+  },
+  "index_sets": {
+    "sourceType": {
+      "kind": "categorical",
+      "members": [
+        "onroad",
+        "nonroad"
+      ]
+    }
+  },
+  "models": {
+    "BadJoinShape": {
+      "variables": {
+        "u": {
+          "type": "unknown"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "u"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "faq",
+            "output_idx": [],
+            "ranges": {
+              "src": {
+                "from": "sourceType"
+              }
+            },
+            "join": {
+              "on": [
+                [
+                  "src",
+                  "sourceType"
+                ]
+              ]
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                "u",
+                "src"
+              ]
+            },
+            "args": [
+              "u"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

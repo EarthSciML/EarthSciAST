@@ -1,0 +1,57 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "faq_08_2d_analytical",
+    "description": "2-D ArrayOp on u[i,j] with M=4, N=3. D(u[i,j]) = -u[i,j], analytical u_ij(t) = (i+j)*exp(-t). Exercises the 2-D output_idx path and multi-dimensional shape inference. Mirrors MTK fork test #8.",
+    "authors": ["EarthSciAST/polecats/brahmin"],
+    "tags": ["faq", "conformance", "2d", "analytical"]
+  },
+  "models": {
+    "ODE2D": {
+      "variables": {
+        "u": { "type": "unknown" }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "faq", "args": [], "output_idx": ["i", "j"],
+            "expr": { "op": "D", "args": [{ "op": "index", "args": ["u", "i", "j"] }], "wrt": "t" },
+            "ranges": { "i": [1, 4], "j": [1, 3] }
+          },
+          "rhs": {
+            "op": "faq", "args": [], "output_idx": ["i", "j"],
+            "expr": { "op": "-", "args": [{ "op": "index", "args": ["u", "i", "j"] }] },
+            "ranges": { "i": [1, 4], "j": [1, 3] }
+          }
+        }
+      ],
+      "tolerance": { "rel": 1.0e-6 },
+      "tests": [
+        {
+          "id": "analytical_t1",
+          "description": "u[i,j](1) = (i+j)*exp(-1). Sample the corners and center.",
+          "initial_conditions": {
+            "u[1,1]": 2.0,
+            "u[1,2]": 3.0,
+            "u[1,3]": 4.0,
+            "u[2,1]": 3.0,
+            "u[2,2]": 4.0,
+            "u[2,3]": 5.0,
+            "u[3,1]": 4.0,
+            "u[3,2]": 5.0,
+            "u[3,3]": 6.0,
+            "u[4,1]": 5.0,
+            "u[4,2]": 6.0,
+            "u[4,3]": 7.0
+          },
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "assertions": [
+            { "variable": "u[1,1]", "time": 1.0, "expected": 0.7357588823428847 },
+            { "variable": "u[4,3]", "time": 1.0, "expected": 2.5751560881800964 },
+            { "variable": "u[2,2]", "time": 1.0, "expected": 1.4715177646857694 }
+          ]
+        }
+      ]
+    }
+  }
+}

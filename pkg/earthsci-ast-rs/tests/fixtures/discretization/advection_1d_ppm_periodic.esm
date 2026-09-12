@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "advection_1d_ppm_periodic",
     "description": "SELF-CONTAINED regression fixture (earthsci-ast-rs only) for the deep PPM template chain. Byte-equivalent in meaning to EarthSciDiscretizations problems/advection_1d_ppm_periodic.esm with its grids/cartesian_uniform_1d/rules/ppm_D_periodic import chain (rule + ppm_D_interior + ppm_flux + ppm_face_value{,_mono} + ppm_slope{,_mono} + ppm_limit_right + grid) resolved INLINE, so the test needs no sibling repository. MMS driver: 1-D linear advection u_t = -c u_x on the periodic unit interval [0, 1], discretized by grids/cartesian_uniform_1d/rules/ppm_D_periodic (Piecewise Parabolic Method, Colella-Woodward 1984; conservative finite-volume, semi-discrete method-of-lines flux, non-negative speed). Exact solution u(x,t) = sin(2 pi (x - c t)) transported at speed c with no change of shape, so no forcing term is required. FLUX FORM: the rule uses the semi-discrete reconstructed-edge PPM flux F_{i+1/2} = qr_lim(cell i) (the CW84-limited right edge of the upwind cell), not the fully-discrete Courant-integral flux, because the ESS simulate() pathway is method-of-lines (the rule provides only D(u,x); the ODE integrator owns dt) -- see the rule file for the full rationale. OBSERVED ORDER (honest): PPM is nominally 3rd order (parabolic reconstruction) and the unlimited flux-difference is exactly 4th-order central, but the original CW84 monotonicity limiter still clips the two smooth extrema of the sine (the classic smooth-extremum clipping of the 1984 limiter), flattening the parabola there to first order. The global order is therefore sub-nominal and norm-dependent -- about 1.7 in L2 and 1.3 in Linf over N=16..128; the convergence gate (tests/conformance/convergence/advection_1d_ppm_periodic) asserts the honestly-observed order, NOT the nominal 3. CONSERVATION: the flux-difference telescopes on the periodic ring and neighbouring cells share the identical float face flux, so sum(u) (hence mean(u)) is preserved to the bit -- the t=0.1 mean-conservation assertion pins this. The grid's consumer-supplied geometry contract (grids/cartesian_uniform_1d/grid.esm) is fulfilled for [0, 1]: x0 = 0 (parameter) and dx = 1/N (an observed dividing the extent by the metaparameter name N, esm-spec 9.7.6, so the convergence sweep's loader-API rebinding of N keeps dx consistent) resolve the rule body's free dx at evaluation. Initial condition and test references spell the grid's index-to-coordinate conversion x_i = x0 + (i - 1/2) dx = 0 + (i - 1/2)(1/N) inline with load-foldable scalars, not via the free-name x_coord template: the official 6.6.5/ic build-time cellwise evaluation is scope-free (model parameters/observeds are not in scope there).",
@@ -40,7 +40,7 @@
           "params": [],
           "description": "Cell-center coordinates x_i = x0 + (i - 1/2) dx, shaped over the x index set. x0 and dx are free names supplied by the consuming model (see metadata.description for the contract).",
           "body": {
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "i"
             ],
@@ -477,7 +477,7 @@
           ],
           "description": "interior (F_{i+1/2}-F_{i-1/2})/dx over [4,N-2]",
           "body": {
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "i"
             ],
@@ -1346,7 +1346,7 @@
                 "args": [
                   6.283185307179586,
                   {
-                    "op": "aggregate",
+                    "op": "faq",
                     "output_idx": [
                       "i"
                     ],
@@ -1451,7 +1451,7 @@
                     "args": [
                       6.283185307179586,
                       {
-                        "op": "aggregate",
+                        "op": "faq",
                         "output_idx": [
                           "i"
                         ],
@@ -1512,7 +1512,7 @@
                         "op": "-",
                         "args": [
                           {
-                            "op": "aggregate",
+                            "op": "faq",
                             "output_idx": [
                               "i"
                             ],

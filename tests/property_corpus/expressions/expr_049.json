@@ -39,7 +39,7 @@
     ],
     "op": "log"
   },
-  "op": "aggregate",
+  "op": "faq",
   "output_idx": [
     1
   ],

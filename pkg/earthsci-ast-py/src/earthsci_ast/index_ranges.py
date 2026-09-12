@@ -1,6 +1,6 @@
 """Index-range expansion — a dependency-free leaf module.
 
-Holds :func:`expand_range`, the expansion of an arrayop / aggregate range spec
+Holds :func:`expand_range`, the expansion of a faq range spec
 (``[start, stop]`` or ``[start, step, stop]``) into the explicit list of 1-based
 index values. It lives here, importing **nothing** from the rest of the package,
 so both :mod:`earthsci_ast.flatten` and :mod:`earthsci_ast.numpy_interpreter` can

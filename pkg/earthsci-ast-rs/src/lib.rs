@@ -54,7 +54,6 @@
 // hidden from the published rustdoc API surface.
 #[doc(hidden)]
 pub mod adapter_support;
-pub(crate) mod aggregate;
 /// Pure, I/O-free structural and expression analysis helpers for the `esm` CLI.
 pub(crate) mod analysis;
 /// Planar spatial-index broad phase (rstar R*-tree + brute-force oracle) for the
@@ -77,6 +76,7 @@ pub(crate) mod diagnostic;
 pub(crate) mod display;
 pub(crate) mod edit;
 pub(crate) mod error;
+pub(crate) mod faq;
 // The tier-2 EXTENSION SEAM (API_SPEC.md §3): the one deliberately-named place
 // where a Rust-only internal is handed to a caller. Everything reachable from
 // outside this crate is either a root `pub use` above/below (the stable tier,
@@ -128,7 +128,7 @@ pub mod wasm;
 pub mod performance;
 
 // Non-gated: the `CompileError` type is also named by the WASM-compiled
-// `aggregate` / `join` passes, so it cannot live inside the gated solver module.
+// `faq` / `join` passes, so it cannot live inside the gated solver module.
 pub(crate) mod compile_error;
 
 // Scalar ODE simulation (gt-5ws). Compiled for wasm too: its diffsol/Faer path

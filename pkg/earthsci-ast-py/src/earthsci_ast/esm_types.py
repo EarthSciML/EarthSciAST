@@ -37,7 +37,7 @@ class ExprNode:
     )  # upper integration bound (for integral operator)
 
     # Aggregate extensions (schema §ExpressionNode). None unless the op uses them.
-    # The canonical Functional Aggregate Query op tag is "aggregate".
+    # The canonical Functional Aggregate Query op tag is "faq".
     output_idx: list[str | int] | None = field(default=None, metadata={"kind": "scalar"})
     expr: Expr | None = field(default=None, metadata={"kind": "expr"})
     reduce: str | None = field(
@@ -269,11 +269,11 @@ EXPR_CHILD_SPEC: tuple[tuple[str, str], ...] = tuple(
 
 
 # The canonical Functional Aggregate Query op tag.
-AGGREGATE_OPS: tuple[str, ...] = ("aggregate",)
+AGGREGATE_OPS: tuple[str, ...] = ("faq",)
 
 
 def is_aggregate_op(op: Any) -> bool:
-    """True if ``op`` is the ``aggregate`` node tag."""
+    """True if ``op`` is the ``faq`` node tag."""
     return op in AGGREGATE_OPS
 
 
@@ -900,7 +900,7 @@ class DataSource:
     it by declaring a PARAMETER whose ``update`` names this source and binds one
     of its ``file_variable``s (:class:`DataSourceBinding`); the parameter owns
     the units. Grid geometry a source reads arrives as ordinary parameters and
-    is transformed downstream by ``aggregate`` FAQs and coupling expressions.
+    is transformed downstream by ``faq`` FAQs and coupling expressions.
     """
 
     name: str

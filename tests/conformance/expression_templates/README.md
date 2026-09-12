@@ -199,7 +199,7 @@ the order tie-break (§9.6.3) → `y = 5 * x`.
 
 `problem.esm` is a model file sized by metaparameter `N` (default 2): `N`
 appears in an expression position (`npts`), inside an AST division that must
-NOT fold (`half`), and in an `aggregate` dense range bound that MUST fold
+NOT fold (`half`), and in a `faq` dense range bound that MUST fold
 (`ramp`). `wrapper_n4.esm` / `wrapper_n8.esm` instantiate it at `N = 4` / `8`
 through §4.7 subsystem-ref `bindings` (§9.7.6 binding site 3). Goldens are the
 full typed round-trip (`load → serialize`), wrapper subsystem inlined.
@@ -225,7 +225,7 @@ Free-name rebinding (§9.7.7) in the MPAS keyed-factor style:
 factor `row_w`. `fixture.esm` imports it with
 `rebind: {row_count → meshA_count, row_cols → meshA_cols, row_w → meshA_w}`.
 The golden shows the rebound names in the merged registry (offsets/values)
-AND throughout the rule body (aggregate `args`, `index` gathers); the
+AND throughout the rule body (faq `args`, `index` gathers); the
 consumer's own unrelated `row_count` parameter coexists — rebinding
 un-reserves the library's factor names.
 
@@ -400,17 +400,17 @@ Each test runs as an independent per-test ephemeral build in which the leaf's
 derivative is lowered under that test's grid; the persisted component is never
 mutated (the Julia reference runs this through `run_inline_tests`).
 
-### `inject_agnostic_aggregate/` (load-time acceptance — §9.7.10 / §6.6.6, issue #185)
+### `inject_agnostic_faq/` (load-time acceptance — §9.7.10 / §6.6.6, issue #185)
 
 `fixture.esm` is an agnostic PDE leaf that declares NO `index_sets` of its own
-and whose `aggregate` `ranges` name `{ "from": "cells" }` — a set that arrives
+and whose `faq` `ranges` name `{ "from": "cells" }` — a set that arrives
 only when a grid library is injected into this component's scope (form A, B or
 C above). The contract is **load-time acceptance**: `validate()` MUST NOT emit
 `undefined_index_set` here, because the effective registry (§9.7.5) is not
 knowable until the component's template scope closes (§9.7.4). This mirrors
 §9.6.1, where `template_constraint_unknown_index_set` does not run for a library
 file validated standalone. Every binding asserts the acceptance; the typo case
-stays covered by `tests/invalid/aggregate/undeclared_from_name.esm`, which
+stays covered by `tests/invalid/faq/undeclared_from_name.esm`, which
 *does* declare a registry and ranges over a name absent from it, and by the
 evaluating bindings' resolvers, which still reject a name left unresolved once
 injection has run (`E_REF_UNDECLARED_INDEX_SET` and peers). Like every §6.6.6

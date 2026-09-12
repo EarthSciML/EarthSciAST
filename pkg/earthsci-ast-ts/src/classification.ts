@@ -65,7 +65,7 @@ function equationsOf(model: Model): Equation[] {
  * variable as an ODE state:
  *   - `D(u)`                          → `u`
  *   - `D(u[i])`, i.e. `D(index(u,i))` → `u`
- *   - an `aggregate` whose `expr` is a `D(...)`
+ *   - a `faq` whose `expr` is a `D(...)`
  */
 function derivativeTarget(expr: Expression): string | undefined {
   if (!isExpressionNode(expr)) return undefined
@@ -78,8 +78,8 @@ function derivativeTarget(expr: Expression): string | undefined {
     return arg === undefined ? undefined : baseVariableName(arg)
   }
 
-  // An `aggregate` over a derivative: the reduction wraps the D, so look inside.
-  if (expr.op === 'aggregate') {
+  // A `faq` over a derivative: the reduction wraps the D, so look inside.
+  if (expr.op === 'faq') {
     const inner = (expr as { expr?: Expression }).expr
     return inner === undefined ? undefined : derivativeTarget(inner)
   }
@@ -116,7 +116,7 @@ function baseVariableName(expr: Expression): string | undefined {
     const arg = expr.args?.[0]
     return arg === undefined ? undefined : baseVariableName(arg)
   }
-  if (isExpressionNode(expr) && expr.op === 'aggregate') {
+  if (isExpressionNode(expr) && expr.op === 'faq') {
     const inner = (expr as { expr?: Expression }).expr
     if (inner !== undefined && isExpressionNode(inner) && inner.op === 'index') {
       return baseVariableName(inner)

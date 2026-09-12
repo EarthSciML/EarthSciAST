@@ -357,7 +357,7 @@ func collectBoundSyms(out map[string]struct{}, x any) {
 			collectBoundSyms(out, c)
 		}
 	case map[string]any:
-		if op, _ := v["op"].(string); op == "aggregate" {
+		if op, _ := v["op"].(string); op == "faq" {
 			if oi, ok := v["output_idx"].([]any); ok {
 				for _, e := range oi {
 					if es, ok := e.(string); ok {

@@ -207,7 +207,7 @@ fn serialize_stoichiometry<S: serde::Serializer>(
 /// declaring a PARAMETER whose [`ParameterUpdate::Data`] names this entry and
 /// binds one of its file variables ([`DataSourceBinding`]); the parameter owns
 /// the units. Grid geometry a source reads arrives the same way, as ordinary
-/// parameters, and is transformed downstream by `aggregate` FAQs.
+/// parameters, and is transformed downstream by `faq` nodes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DataSource {
     /// Structural kind of the dataset. Scientific role (emissions,

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/xeipuuv/gojsonschema"
@@ -107,6 +108,16 @@ func LoadDocument(document map[string]any, opts ...LoadOption) (*ESMFile, error)
 // LoadString parses an ESM file from JSON TEXT and validates it against the JSON schema
 func LoadString(jsonStr string, opts ...LoadOption) (*ESMFile, error) {
 	o := applyLoadOptions(opts)
+
+	// esm 1.1.0: settle expression-node `op` spellings at the wire boundary,
+	// ahead of every other pass, so the version gates, the schema, the typed
+	// tree and Emit all see exactly one tag
+	// (docs/content/rfcs/faq-node-rename.md).
+	prepared, err := prepareDocumentOps(jsonStr)
+	if err != nil {
+		return nil, err
+	}
+	jsonStr = prepared
 
 	// v0.4.0 expression_templates / apply_expression_template are rejected
 	// when the file declares esm < 0.4.0 (RFC §5.4 spec-version gate), and
@@ -713,4 +724,179 @@ func authoredDeclarationBlocks(jsonStr string) (templates, metaparams json.RawMe
 		return nil, nil
 	}
 	return top["expression_templates"], top["metaparameters"]
+}
+
+// scanOpAliases rewrites `"op": "aggregate"` to `"op": "faq"` directly in the
+// JSON TEXT, and reports whether a `"op": "arrayop"` is present.
+//
+// Textual rather than decode-and-re-marshal on purpose: Go's encoder writes map
+// keys SORTED, so round-tripping the document through map[string]any destroys
+// the authored key order that `extractTemplateOrders` reads a few lines later
+// and that esm-libraries-spec §4.7.5 step 4 makes normative for every map a
+// FlattenedSystem carries. This walk preserves every other byte exactly.
+//
+// The scanner tracks string boundaries (including escapes) so an `"op"`
+// appearing INSIDE some other string value is never mistaken for a key.
+func scanOpAliases(src string) (out string, aliases int, hasRemoved bool, hasFaq bool) {
+	var b strings.Builder
+	b.Grow(len(src))
+	i := 0
+	// readString returns the raw literal (with quotes), its decoded-enough
+	// content for comparison, and the index just past it.
+	readString := func(at int) (raw string, content string, next int) {
+		j := at + 1
+		for j < len(src) {
+			if src[j] == '\\' {
+				j += 2
+				continue
+			}
+			if src[j] == '"' {
+				return src[at : j+1], src[at+1 : j], j + 1
+			}
+			j++
+		}
+		return src[at:], src[at+1:], len(src)
+	}
+	for i < len(src) {
+		c := src[i]
+		if c != '"' {
+			b.WriteByte(c)
+			i++
+			continue
+		}
+		raw, content, next := readString(i)
+		if content != "op" {
+			b.WriteString(raw)
+			i = next
+			continue
+		}
+		// Possible key position: look for `: "<value>"`.
+		j := next
+		for j < len(src) && (src[j] == ' ' || src[j] == '\t' || src[j] == '\n' || src[j] == '\r') {
+			j++
+		}
+		if j >= len(src) || src[j] != ':' {
+			b.WriteString(raw)
+			i = next
+			continue
+		}
+		colonEnd := j + 1
+		k := colonEnd
+		for k < len(src) && (src[k] == ' ' || src[k] == '\t' || src[k] == '\n' || src[k] == '\r') {
+			k++
+		}
+		if k >= len(src) || src[k] != '"' {
+			b.WriteString(raw)
+			i = next
+			continue
+		}
+		vRaw, vContent, vNext := readString(k)
+		b.WriteString(raw)
+		b.WriteString(src[next:k])
+		switch vContent {
+		case "aggregate":
+			b.WriteString(`"faq"`)
+			aliases++
+		case "arrayop":
+			b.WriteString(vRaw)
+			hasRemoved = true
+		case "faq":
+			b.WriteString(vRaw)
+			hasFaq = true
+		default:
+			b.WriteString(vRaw)
+		}
+		i = vNext
+	}
+	return b.String(), aliases, hasRemoved, hasFaq
+}
+
+// declaredEsmBelowV11 reports whether the document's `esm` field is below 1.1.0.
+func declaredEsmBelowV11(jsonStr string) (declared string, below bool) {
+	var probe struct {
+		Esm string `json:"esm"`
+	}
+	if err := json.Unmarshal([]byte(jsonStr), &probe); err != nil || probe.Esm == "" {
+		return "", false
+	}
+	parts := strings.Split(probe.Esm, ".")
+	if len(parts) < 2 {
+		return probe.Esm, false
+	}
+	major, err1 := strconv.Atoi(parts[0])
+	minor, err2 := strconv.Atoi(parts[1])
+	if err1 != nil || err2 != nil {
+		return probe.Esm, false
+	}
+	return probe.Esm, major < 1 || (major == 1 && minor < 1)
+}
+
+// prepareDocumentOps is the wire boundary for expression-node `op` spellings,
+// applied to EVERY document — root, {ref}-loaded child, template library,
+// coupling library.
+//
+// Three steps, in this order:
+//
+//  1. `arrayop` (removed at esm 0.8.0) is rejected BY NAME. It is a well-formed
+//     identifier, so esm-spec §4.2 would otherwise admit it as an OPEN
+//     rewrite-target op: the document would load silently and fail much later
+//     as `unlowered_operator`, or never.
+//  2. The `faq` version gate, on the AUTHORED form — `faq` arrives at esm 1.1.0
+//     (esm-spec §2.2.4). Deliberately BEFORE normalization: `aggregate` is the
+//     pre-1.1.0 spelling, so a 1.0.0 document carrying the alias is legal.
+//  3. `aggregate` is normalized to `faq` and the declared version is raised to
+//     the 1.1.0 floor with it, so the upgraded document is self-consistent.
+//
+// See docs/content/rfcs/faq-node-rename.md.
+func prepareDocumentOps(jsonStr string) (string, error) {
+	rewritten, aliases, hasRemoved, hasFaq := scanOpAliases(jsonStr)
+	if hasRemoved {
+		return "", fmt.Errorf(
+			"removed_op: `\"op\": \"arrayop\"` was removed at esm 0.8.0 and is not a " +
+				"deprecated alias; use `\"op\": \"faq\"` (the Functional Aggregate Query " +
+				"node). See docs/content/rfcs/faq-node-rename.md")
+	}
+	declared, below := declaredEsmBelowV11(jsonStr)
+	// The gate reads the AUTHORED form: `hasFaq` counts only nodes that spelled
+	// `faq` themselves, never ones this pass just normalized, so a 1.0.0
+	// document carrying the legal `aggregate` alias is not caught here.
+	if below && hasFaq {
+		return "", fmt.Errorf(
+			"faq_version_too_old: the `faq` op arrives at esm 1.1.0; file declares %s. "+
+				"Use `\"op\": \"aggregate\"` (the deprecated pre-1.1.0 spelling) or raise "+
+				"the declared version. See docs/content/rfcs/faq-node-rename.md", declared)
+	}
+	if aliases == 0 {
+		return jsonStr, nil
+	}
+	plural := "nodes were"
+	if aliases == 1 {
+		plural = "node was"
+	}
+	fmt.Fprintf(os.Stderr,
+		"warning: deprecated_op_alias: `\"op\": \"aggregate\"` is the pre-1.1.0 spelling "+
+			"of `\"op\": \"faq\"` (Functional Aggregate Query); %d %s normalized on load. "+
+			"The alias is REMOVED at esm 2.0.0 — re-emit this document to migrate it "+
+			"(docs/content/rfcs/faq-node-rename.md).\n", aliases, plural)
+	if below {
+		rewritten = raiseEsmFloorToV11(rewritten, declared)
+	}
+	return rewritten, nil
+}
+
+// raiseEsmFloorToV11 rewrites the document's declared `esm` string to 1.1.0,
+// textually, so the surrounding bytes and key order survive.
+func raiseEsmFloorToV11(jsonStr, declared string) string {
+	old := `"esm"`
+	idx := strings.Index(jsonStr, old)
+	if idx < 0 {
+		return jsonStr
+	}
+	rest := jsonStr[idx+len(old):]
+	q := strings.Index(rest, `"`+declared+`"`)
+	if q < 0 {
+		return jsonStr
+	}
+	at := idx + len(old) + q
+	return jsonStr[:at] + `"1.1.0"` + jsonStr[at+len(declared)+2:]
 }

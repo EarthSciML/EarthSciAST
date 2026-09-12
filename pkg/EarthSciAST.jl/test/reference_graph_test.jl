@@ -16,7 +16,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
 # minimal aggregate node dict (build explicitly; `merge` is ambiguous here
 # because EarthSciAST also exports a `merge`).
 function agg(; kw...)
-    d = Dict{String,Any}("op" => "aggregate", "args" => Any[])
+    d = Dict{String,Any}("op" => "faq", "args" => Any[])
     for (k, v) in kw
         d[string(k)] = v
     end
@@ -41,7 +41,7 @@ eqn(lhs, rhs) = Dict{String,Any}("lhs" => lhs, "rhs" => rhs)
         @test ff[1].source == "index_set:edges"
         @test ff[1].target == "node:edge_faq"
         @test g.vertices["node:edge_faq"].node_id == "edge_faq"
-        @test g.vertices["node:edge_faq"].op == "aggregate"
+        @test g.vertices["node:edge_faq"].op == "faq"
         # queryable: edges depends on the node.
         @test "node:edge_faq" in ESS.dependencies(g, "index_set:edges")
     end
@@ -420,7 +420,7 @@ eqn(lhs, rhs) = Dict{String,Any}("lhs" => lhs, "rhs" => rhs)
     end
 
     @testset "the shared cross-model corpus fixture resolves" begin
-        path = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid", "aggregate",
+        path = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid", "faq",
                         "cross_model_from_faq.esm")
         doc = JSON3.read(read(path, String), Dict{String,Any})
         graphs = resolve_references(doc)

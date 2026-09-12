@@ -580,6 +580,7 @@ reference-preserving byte form instead.
 """
 function to_json(file::EsmFile)::String
     serialized = serialize_esm_file(file)
+    _raise_faq_esm_floor!(serialized)
     if file.component_templates !== nothing
         # esm-spec §9.6.4 rule 5 (Option B): a document carrying surviving
         # references / materialized registries emits in the canonical
@@ -821,4 +822,59 @@ for spec in RECORD_FIELD_TABLES
     `RECORD_FIELD_TABLES` (types.jl); the parse direction is generated from
     the same table in parse.jl.
     """) $sname
+end
+
+"""
+    _contains_faq(node) -> Bool
+
+Does `node` contain an `"op" => "faq"` anywhere?
+"""
+function _contains_faq(node)::Bool
+    if node isa AbstractDict
+        for key in (:op, "op")
+            haskey(node, key) && get(node, key, nothing) == "faq" && return true
+        end
+        for v in values(node)
+            _contains_faq(v) && return true
+        end
+    elseif node isa AbstractVector
+        for v in node
+            _contains_faq(v) && return true
+        end
+    end
+    return false
+end
+
+"""
+    _raise_faq_esm_floor!(doc)
+
+Raise an emitted document's declared `esm` to 1.1.0 when it CONTAINS a `faq`
+node but declares less.
+
+Like the §9.6.4 rule-8 template stamp ([`_esm_stamp_floor`](@ref)) this is a
+FLOOR — it only ever raises. A document can come to CONTAIN `faq` without ever
+spelling it: a 1.0.0 parent that mounts a subsystem whose child uses `faq` has
+the child inlined at load, and emitting that as 1.0.0 writes a document the
+`faq_version_too_old` gate then refuses to read back. The load-time gate cannot
+catch it — the parent's AUTHORED bytes are legal — so the stamp closes it here.
+See `docs/content/rfcs/faq-node-rename.md` §5.5.
+"""
+function _raise_faq_esm_floor!(doc)
+    doc isa AbstractDict || return doc
+    esm = nothing
+    key_found = nothing
+    for key in (:esm, "esm")
+        if haskey(doc, key)
+            esm = get(doc, key, nothing); key_found = key; break
+        end
+    end
+    esm isa AbstractString || return doc
+    parts = split(String(esm), '.')
+    length(parts) >= 2 || return doc
+    major = tryparse(Int, parts[1]); minor = tryparse(Int, parts[2])
+    (major === nothing || minor === nothing) && return doc
+    if (major, minor) < (1, 1) && _contains_faq(doc)
+        doc[key_found] = "1.1.0"
+    end
+    return doc
 end

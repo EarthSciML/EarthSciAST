@@ -356,14 +356,14 @@ func TestClassificationSpecWorkedExample(t *testing.T) {
 }
 
 // A derivative LHS may be WRAPPED and still credits its base variable: `D(u)`,
-// `D(u[i])`, and an `aggregate` whose `expr` is a `D(...)` all name `u` an ODE
+// `D(u[i])`, and a `faq` whose `expr` is a `D(...)` all name `u` an ODE
 // state. A binding that recognises only the bare form calls every arrayed model
 // state-free — which is what made Go reject two dozen aggregate fixtures.
 func TestODEStatesSeeThroughWrappedDerivatives(t *testing.T) {
 	cases := map[string]Expression{
-		"bare":      ExprNode{Op: OpDerivative, Args: []any{"u"}, Wrt: strPtr("t")},
-		"indexed":   ExprNode{Op: OpDerivative, Args: []any{ExprNode{Op: "index", Args: []any{"u", "i"}}}, Wrt: strPtr("t")},
-		"aggregate": ExprNode{Op: "aggregate", OutputIdx: []any{"i"}, Args: []any{"u"}, Expr: ExprNode{Op: OpDerivative, Args: []any{ExprNode{Op: "index", Args: []any{"u", "i"}}}, Wrt: strPtr("t")}},
+		"bare":    ExprNode{Op: OpDerivative, Args: []any{"u"}, Wrt: strPtr("t")},
+		"indexed": ExprNode{Op: OpDerivative, Args: []any{ExprNode{Op: "index", Args: []any{"u", "i"}}}, Wrt: strPtr("t")},
+		"faq":     ExprNode{Op: "faq", OutputIdx: []any{"i"}, Args: []any{"u"}, Expr: ExprNode{Op: OpDerivative, Args: []any{ExprNode{Op: "index", Args: []any{"u", "i"}}}, Wrt: strPtr("t")}},
 	}
 	for label, lhs := range cases {
 		t.Run(label, func(t *testing.T) {
@@ -461,7 +461,7 @@ func TestSystemKindMismatchIsReported(t *testing.T) {
 func TestObservedUnknownsSeeThroughIndexedLHSSpellings(t *testing.T) {
 	// `aggregate{k}(index(w, k))` — the whole-array spelling of `w[k] ~ …`.
 	aggregateIndexed := ExprNode{
-		Op:        "aggregate",
+		Op:        "faq",
 		Args:      []any{},
 		OutputIdx: []any{"k"},
 		Ranges:    map[string]any{"k": map[string]any{"from": "lev"}},
@@ -532,7 +532,7 @@ func TestAggregateDerivativeLHSIsNotAnObservedDefinition(t *testing.T) {
 		Variables: map[string]ModelVariable{"u": {Type: VarTypeUnknown, Shape: &[]string{"lev"}}},
 		Equations: []Equation{{
 			LHS: ExprNode{
-				Op:        "aggregate",
+				Op:        "faq",
 				Args:      []any{},
 				OutputIdx: []any{"k"},
 				Ranges:    map[string]any{"k": map[string]any{"from": "lev"}},

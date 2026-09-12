@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "mount_rename_atm_column",
     "description": "A 59-layer atmospheric column component, the `column_nonuniform_1d` shape of the EqWeFiC report in issue #198 item 4: it declares the axis `lev` as interval/59 and shapes its unknown T over it. Its 4-layer soil twin (tests/valid/mount_rename_soil_column.esm) independently spells the SAME axis name at a different length, which is what puts two `lev` declarations on the road to one document-scoped registry when tests/valid/mount_rename_two_columns.esm mounts both. Loads standalone as an ordinary single-model document.",
@@ -26,7 +26,7 @@
           "_comment": "Newtonian relaxation per layer: d(T_k)/dt = -T_k.",
           "lhs": { "op": "D", "args": ["T"], "wrt": "t" },
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": ["k"],
             "args": ["T"],
             "ranges": { "k": { "from": "lev" } },

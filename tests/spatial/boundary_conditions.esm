@@ -228,7 +228,7 @@
     },
     "MixedBoundaries": {
       "reference": {
-        "notes": "Test mixed BCs: a flux_contrib from a dry deposition component and an emission flux_contrib on the same (variable, side) pair — the rewrite engine aggregates both into the zmin Neumann template (RFC §9.3)."
+        "notes": "Test mixed BCs: a flux_contrib from a dry deposition component and an emission flux_contrib on the same (variable, side) pair — the rewrite engine faq nodes both into the zmin Neumann template (RFC §9.3)."
       },
       "variables": {
         "pollution": {

@@ -238,7 +238,7 @@ def _probe_document(body: dict, *, tests: bool = True) -> str:
             {
                 "lhs": "s",
                 "rhs": {
-                    "op": "aggregate",
+                    "op": "faq",
                     "args": [],
                     "output_idx": ["k"],
                     "ranges": {"k": {"from": "steps"}},
@@ -260,7 +260,7 @@ def _probe_document(body: dict, *, tests: bool = True) -> str:
         ]
     return json.dumps(
         {
-            "esm": "1.0.0",
+            "esm": "1.1.0",
             "metadata": {"name": "R", "description": "probe", "authors": ["t"]},
             "index_sets": {"steps": {"kind": "interval", "size": 4}},
             "models": {"R": model},
@@ -394,7 +394,7 @@ def test_self_read_offset_on_two_axes_is_rejected() -> None:
     sweep would have to advance both at once."""
     doc = json.dumps(
         {
-            "esm": "1.0.0",
+            "esm": "1.1.0",
             "metadata": {"name": "R2", "description": "probe", "authors": ["t"]},
             "index_sets": {
                 "rows": {"kind": "interval", "size": 3},
@@ -410,7 +410,7 @@ def test_self_read_offset_on_two_axes_is_rejected() -> None:
                         {
                             "lhs": "m",
                             "rhs": {
-                                "op": "aggregate",
+                                "op": "faq",
                                 "args": [],
                                 "output_idx": ["i", "j"],
                                 "ranges": {"i": {"from": "rows"}, "j": {"from": "cols"}},
@@ -440,7 +440,7 @@ def test_makearray_region_self_read_is_refused_as_unsupported_form() -> None:
     code says the READ is causal but the CARRIER cannot sequence it."""
     doc = json.dumps(
         {
-            "esm": "1.0.0",
+            "esm": "1.1.0",
             "metadata": {"name": "RM", "description": "probe", "authors": ["t"]},
             "index_sets": {"steps": {"kind": "interval", "size": 4}},
             "models": {
@@ -457,7 +457,7 @@ def test_makearray_region_self_read_is_refused_as_unsupported_form() -> None:
                                 "values": [
                                     1.0,
                                     {
-                                        "op": "aggregate",
+                                        "op": "faq",
                                         "args": [],
                                         "output_idx": ["k"],
                                         "ranges": {"k": [2, 4]},
@@ -499,7 +499,7 @@ def test_the_self_edge_is_not_a_cycle_but_a_two_variable_cycle_still_is() -> Non
             {
                 "lhs": "s",
                 "rhs": {
-                    "op": "aggregate",
+                    "op": "faq",
                     "args": [],
                     "output_idx": ["k"],
                     "ranges": {"k": {"from": "steps"}},
@@ -551,12 +551,12 @@ def test_an_ordinary_equation_is_not_touched_by_the_recurrence_path() -> None:
 
 
 _REORDERING_PATHS = (
-    "_eval_arrayop_batched_leaf",
-    "_eval_arrayop_prefix_scan",
-    "_eval_arrayop_operator_cached",
-    "_eval_arrayop_reduce_vectorized",
-    "_eval_arrayop_vectorized",
-    "_eval_arrayop_contraction_broadcast",
+    "_eval_faq_batched_leaf",
+    "_eval_faq_prefix_scan",
+    "_eval_faq_operator_cached",
+    "_eval_faq_reduce_vectorized",
+    "_eval_faq_vectorized",
+    "_eval_faq_contraction_broadcast",
     "_materialize_map",
 )
 
@@ -758,7 +758,7 @@ def test_the_self_edge_exemption_is_gated_on_candidacy_not_on_the_verdict() -> N
 
     def agg(body):
         return {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": ["k"],
             "ranges": {"k": {"from": "steps"}},

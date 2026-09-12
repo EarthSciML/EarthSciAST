@@ -121,7 +121,7 @@ def _err_code(fn) -> str | None:
         ),
         # §5.5.3.1 rule 1: integer ratio {op:/,args:[1,N]} inside a nested
         # aggregate expr stays integer on the AST-golden pathway.
-        ("aggregate_int_ratio_golden", "fixture.esm", "expanded.esm"),
+        ("faq_int_ratio_golden", "fixture.esm", "expanded.esm"),
         # §9.7.7 import renaming / namespacing / free-name rebinding
         ("import_rename_two_instances", "fixture.esm", "expanded.esm"),
         ("import_where_rename_two_instances", "fixture.esm", "expanded.esm"),
@@ -229,7 +229,7 @@ def test_metaparameter_resolutions_subsystem_bindings(wrapper, golden, n):
     assert half.args == [n, 2]
     # Structural site: the aggregate dense range folded exactly.
     ramp = _defining_typed(sub, "ramp")
-    assert ramp.op == "aggregate"
+    assert ramp.op == "faq"
     assert ramp.ranges == {"i": [1, n // 2]}
     # Typed round-trip matches the golden, fully structurally.
     got = _canonical_equation_order(_serialize_esm_file(f))
@@ -383,7 +383,7 @@ def test_import_rename_integral_axis_follows_var_and_bounds():
     # carried `var`/`upper` per edge, so col's rule fired on lev, row's on lat.
     for var, axis, n in (("Q", "lev", 4), ("P", "lat", 3)):
         agg = _defining(d, "Column", var)
-        assert agg["op"] == "aggregate"
+        assert agg["op"] == "faq"
         assert agg["ranges"]["i"] == {"from": axis}
         assert agg["ranges"]["j"] == {"from": axis}
         assert agg["expr"]["args"][1] == {"op": "/", "args": [1, n]}
@@ -650,7 +650,7 @@ def test_metaparameter_fold_ranges_regions_size_exact(tmp_path):
     p.write_text(
         json.dumps(
             {
-                "esm": "1.0.0",
+                "esm": "1.1.0",
                 "metadata": {"name": "fold"},
                 "metaparameters": {"N": {"type": "integer", "default": 6}},
                 "index_sets": {
@@ -673,7 +673,7 @@ def test_metaparameter_fold_ranges_regions_size_exact(tmp_path):
                             {
                                 "lhs": "agg",
                                 "rhs": {
-                                    "op": "aggregate",
+                                    "op": "faq",
                                     "output_idx": ["i"],
                                     "args": ["x"],
                                     "ranges": {"i": [1, {"op": "-", "args": ["N", 1]}]},

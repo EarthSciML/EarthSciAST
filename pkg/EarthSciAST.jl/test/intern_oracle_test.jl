@@ -73,9 +73,9 @@ function _int_stencil2d_model(N)
         _idx("u", _op("+", _v("i"), _i(1)), _v("j")),
         _idx("u", _v("i"), _op("-", _v("j"), _i(1))),
         _idx("u", _v("i"), _op("+", _v("j"), _i(1))))
-    lhs = ESM.OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i", "j"],
+    lhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "j"],
         expr_body=_Didx("u", _v("i"), _v("j")), ranges=Dict("i" => [1, N], "j" => [1, N]))
-    rhs = ESM.OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i", "j"],
+    rhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "j"],
         expr_body=body, ranges=Dict("i" => [1, N], "j" => [1, N]))
     ESM.Model(vars, [ESM.Equation(lhs, rhs)])
 end
@@ -166,11 +166,11 @@ end
         @test r1 !== r2
         @test r1 === r3
         # expression-valued range bounds are interned and discriminated
-        d1 = ESM.OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i"],
+        d1 = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i"],
             expr_body=_v("i"), ranges=Dict{String,Any}("i" => Any[1, _op("+", _v("n"), _i(1))]))
-        d2 = ESM.OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i"],
+        d2 = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i"],
             expr_body=_v("i"), ranges=Dict{String,Any}("i" => Any[1, _op("+", _v("n"), _i(1))]))
-        d3 = ESM.OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i"],
+        d3 = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i"],
             expr_body=_v("i"), ranges=Dict{String,Any}("i" => Any[1, _op("+", _v("n"), _i(2))]))
         @test _intern_expr(d1, ctx) === _intern_expr(d2, ctx)
         @test _intern_expr(d1, ctx) !== _intern_expr(d3, ctx)

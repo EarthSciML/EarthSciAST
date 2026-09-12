@@ -47,13 +47,13 @@ fn relational_document() -> Value {
         json!({
             "lhs": name,
             "rhs": {
-                "op": "aggregate", "args": [], "output_idx": ["i"],
+                "op": "faq", "args": [], "output_idx": ["i"],
                 "ranges": {"i": {"from": "rows"}}, "expr": expr
             }
         })
     };
     json!({
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "RelationalEmit", "description": "Rows from rows; nothing to integrate."},
         "index_sets": {"rows": {"kind": "interval", "size": 3}},
         "models": {
@@ -69,7 +69,7 @@ fn relational_document() -> Value {
                     {
                         "lhs": "total",
                         "rhs": {
-                            "op": "aggregate", "args": ["left"], "output_idx": [],
+                            "op": "faq", "args": ["left"], "output_idx": [],
                             "ranges": {"i": {"from": "rows"}},
                             "expr": {"op": "index", "args": ["left", "i"]}
                         }

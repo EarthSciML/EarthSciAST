@@ -78,7 +78,7 @@ function _doc()
                           _ix("cell_area", "c"))))
     eqs = Any[
         Dict{String,Any}("lhs" => "E_PM25", "rhs" => Dict{String,Any}(
-            "op" => "aggregate", "reduce" => "+", "output_idx" => Any["c"],
+            "op" => "faq", "reduce" => "+", "output_idx" => Any["c"],
             "ranges" => Dict{String,Any}("c" => Dict("from" => "src_cells"),
                                          "r" => Dict("from" => "emis_records")),
             "args" => Any["src_W", "src_S", "src_E", "src_N",
@@ -86,14 +86,14 @@ function _doc()
                           "cell_ring", "cell_area", "rec_ring", "emis_annual"],
             "expr" => E_body)),
         Dict{String,Any}("lhs" => "conc_PM25", "rhs" => Dict{String,Any}(
-            "op" => "aggregate", "reduce" => "+", "output_idx" => Any["rcv"],
+            "op" => "faq", "reduce" => "+", "output_idx" => Any["rcv"],
             "ranges" => Dict{String,Any}("rcv" => Dict("from" => "rcv_cells"),
                                          "s" => Dict("from" => "src_cells")),
             "args" => Any["SR_PM25", "E_PM25"],
             "expr" => _op("*", _ix("SR_PM25", "s", "rcv"), _ix("E_PM25", "s")))),
     ]
     return Dict{String,Any}(
-        "esm" => "1.0.0",
+        "esm" => "1.1.0",
         "metadata" => Dict{String,Any}("name" => "pushdown_cell_geometry"),
         "data_sources" => Dict{String,Any}("MockSR" => Dict{String,Any}(
             "kind" => "static", "source" => Dict("url_template" => "mock://sr"))),

@@ -311,11 +311,11 @@ def _apply_initial_conditions(
 def _collect_algebraic_substitutions(
     equations: list[FlattenedEquation],
 ) -> tuple[list[FlattenedEquation], dict[str, tuple[list[str], Expr]]]:
-    """Eliminate simple algebraic arrayop equations of the form ``v[i,...] = <body>``.
+    """Eliminate simple algebraic faq equations of the form ``v[i,...] = <body>``.
 
-    Detects equations whose LHS is ``arrayop(expr=index(v, i, j, ...))`` where
+    Detects equations whose LHS is ``faq(expr=index(v, i, j, ...))`` where
     the index list is just the symbolic indices from ``output_idx`` (no
-    offsets), and whose RHS is ``arrayop(expr=<body>)`` over the same index
+    offsets), and whose RHS is ``faq(expr=<body>)`` over the same index
     set. Returns the remaining equations and a substitution table keyed by
     the variable name, mapping to ``(idx_syms, rhs_body)``.
 
@@ -376,28 +376,27 @@ def _rebind_index_syms(expr: Expr, bindings: dict[str, Expr]) -> Expr:
     return expr
 
 
-def _iter_arrayop_points(lhs: ExprNode, ctx: EvalContext) -> tuple[list[str], list[list[int]]]:
+def _iter_faq_points(lhs: ExprNode, ctx: EvalContext) -> tuple[list[str], list[list[int]]]:
     """Return ``(output_idx_symbols, expanded_ranges)`` for an aggregate LHS.
 
     Output ranges may be dense ``[lo, hi]`` tuples or ``{"from": <name>}``
     index-set references (RFC §5.2), resolved against ``ctx.index_sets``.
     """
     if lhs.ranges is None or lhs.output_idx is None:
-        raise SimulationError("aggregate / arrayop LHS missing output_idx/ranges")
+        raise SimulationError("faq LHS missing output_idx/ranges")
     syms = [s for s in lhs.output_idx if isinstance(s, str)]
     ranges: list[list[int]] = []
     for s in syms:
         resolved = _resolve_range_spec(lhs.ranges[s], ctx)
         if isinstance(resolved, _RaggedRange):
             raise SimulationError(
-                f"aggregate / arrayop output index {s!r} cannot reference a "
-                f"ragged index set (RFC §5.2)"
+                f"faq output index {s!r} cannot reference a ragged index set (RFC §5.2)"
             )
         ranges.append(_expand_range(resolved))
     return syms, ranges
 
 
-def _scatter_arrayop_rhs(
+def _scatter_faq_rhs(
     lhs: ExprNode,
     rhs: Expr,
     idx_exprs: list[Expr],
@@ -407,7 +406,7 @@ def _scatter_arrayop_rhs(
     state_layout: dict[str, slice],
     dy: np.ndarray,
 ) -> None:
-    """Evaluate an aggregate / arrayop ODE RHS through the interpreter and scatter
+    """Evaluate a faq ODE RHS through the interpreter and scatter
     it into ``dy`` — the single evaluation path for the
     ``aggregate(D(index(var, i…)), ranges) = <rhs>`` array-state derivative form.
 
@@ -430,7 +429,7 @@ def _scatter_arrayop_rhs(
     place — the interpreter's vectorized materialization is contractually
     byte-for-byte identical to its scalar fallback.
     """
-    syms, ranges = _iter_arrayop_points(lhs, ctx)
+    syms, ranges = _iter_faq_points(lhs, ctx)
     shape = shapes[head]
     layout_start = state_layout[head].start
     it = np.ndindex(*(len(r) for r in ranges)) if ranges else [()]
@@ -462,15 +461,15 @@ def _apply_aggregate_ode_to_dy(
     state_layout: dict[str, slice],
     dy: np.ndarray,
 ) -> bool:
-    """Evaluate the aggregate / arrayop ODE form and scatter it into ``dy``.
+    """Evaluate the faq ODE form and scatter it into ``dy``.
 
-    Handles ``arrayop(D(index(var, i, ...), t), ranges=...) = <rhs>`` — an array
+    Handles ``faq(D(index(var, i, ...), t), ranges=...) = <rhs>`` — an array
     state derivative written over a range box. Returns ``True`` if ``lhs`` matched
     this shape (and its contribution was written into ``dy``), ``False`` otherwise
     so :func:`_apply_equation_to_dy` can fall through to its remaining cases.
 
     Every matching node is evaluated through the full NumPy interpreter via
-    :func:`_scatter_arrayop_rhs` — the interpreter carries the reduction /
+    :func:`_scatter_faq_rhs` — the interpreter carries the reduction /
     semiring / index-set / join / filter semantics (and its vectorized
     materialization is contractually byte-for-byte identical to its scalar
     fallback), so there is no hand-rolled unroll to keep in sync.
@@ -482,7 +481,7 @@ def _apply_aggregate_ode_to_dy(
             if isinstance(inner, ExprNode) and inner.op == "index" and inner.args:
                 head = inner.args[0]
                 if isinstance(head, str) and head in state_layout:
-                    _scatter_arrayop_rhs(
+                    _scatter_faq_rhs(
                         lhs,
                         rhs,
                         inner.args[1:],
@@ -509,7 +508,7 @@ def _apply_equation_to_dy(
 
     * ``D(scalar_state, t) = rhs`` — scalar state derivative.
     * ``D(index(var, k1, ...), t) = rhs`` — single element of an array state.
-    * ``arrayop(D(index(var, i, ...), t), ranges=...) = <rhs>`` — array state
+    * ``faq(D(index(var, i, ...), t), ranges=...) = <rhs>`` — array state
       derivative over a range box.
     """
     lhs = eq.lhs
@@ -565,7 +564,7 @@ def _apply_equation_to_dy(
                 dy[flat_pos] = val
                 return
 
-    # Case B: aggregate / arrayop LHS wrapping D(index(var, ...)).
+    # Case B: faq LHS wrapping D(index(var, ...)).
     if _apply_aggregate_ode_to_dy(lhs, rhs, ctx, shapes, state_layout, dy):
         return
 
@@ -959,7 +958,7 @@ def _resolve_field_ic(
        ``const`` gather resolves here.
     2. A BROADCAST CONSTANT — a numeric RHS applied to every cell.
     3. A COORDINATE EXPRESSION — an elementwise expression over array-producing
-       ``aggregate``/``makearray`` nodes (e.g. ``cos(pi * x_coord)`` where
+       ``faq``/``makearray`` nodes (e.g. ``cos(pi * x_coord)`` where
        ``x_coord`` is a grid-geometry aggregate expanded from a §9.7 template
        import). The expression is evaluated through the official NumPy
        interpreter (:func:`earthsci_ast.numpy_interpreter.eval_expr`) in a
@@ -1021,7 +1020,7 @@ def _eval_buildtime_field(
 ) -> float | np.ndarray:
     """Evaluate a state-free build-time expression (grid geometry, §6.6.5
     analytic references) through the official NumPy interpreter. Array-
-    producing ``aggregate``/``makearray`` nodes yield ndarrays; elementwise
+    producing ``faq``/``makearray`` nodes yield ndarrays; elementwise
     ops broadcast over them.
 
     STATE references are not in scope — the context carries no states, so any
@@ -1323,7 +1322,7 @@ def _detect_value_invention_states(
         if base is None or base not in states:
             continue
         rhs = eq.rhs
-        if not (isinstance(rhs, ExprNode) and rhs.op == "aggregate"):
+        if not (isinstance(rhs, ExprNode) and rhs.op == "faq"):
             continue
         skolem_body = isinstance(rhs.expr, ExprNode) and rhs.expr.op == "skolem"
         skolem_key = isinstance(rhs.key, ExprNode) and rhs.key.op == "skolem"
@@ -1490,7 +1489,7 @@ def _frontdoor_join_keys_and_extents(
         rhs = eq.rhs
         if (
             isinstance(rhs, ExprNode)
-            and rhs.op == "aggregate"
+            and rhs.op == "faq"
             and getattr(rhs, "distinct", None) is True
             and getattr(rhs, "join", None)
         ):
@@ -2179,7 +2178,7 @@ def _align_named_operands(
     error and no warning (issue #100). Rewrite each such operand — statically,
     once, here at build time — into the transpose/reshape that places it on the
     axes it actually names, so the bare array-level spelling computes what the
-    explicit ``aggregate`` spelling computes.
+    explicit ``faq`` spelling computes.
 
     Two result frames carry names, and both are handled:
 
@@ -2187,7 +2186,7 @@ def _align_named_operands(
       declared shape; and
     * an observed assignment ``obs = body``, whose frame is ``obs``'s.
 
-    An ``aggregate``-LHS equation is deliberately NOT rewritten: it already
+    An ``faq``-LHS equation is deliberately NOT rewritten: it already
     states its own index frame explicitly via ``output_idx``/``ranges``, and it
     is the oracle this alignment is defined to reproduce. Everything else —
     scalar states, undeclared shapes, anonymous operands — is returned untouched

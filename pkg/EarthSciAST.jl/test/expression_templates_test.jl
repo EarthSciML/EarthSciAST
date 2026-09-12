@@ -355,9 +355,9 @@ end
         # asserted status rather than something discovered at run time.
         #
         # Note what this is NOT: a discrete cumulative sum. That is an
-        # `aggregate` with a monotone `filter` (esm-spec §4.3.1), is evaluable
+        # `faq` with a monotone `filter` (esm-spec §4.3.1), is evaluable
         # core, and runs today — see the cumulative-reduction fixtures
-        # tests/fixtures/arrayop/25_* and 26_*.
+        # tests/fixtures/faq/25_* and 26_*.
         io = IOBuffer(read(joinpath(_conf("unlowered_integral"), "fixture.esm")))
         f = EarthSciAST.load_string(io)
         @test f isa EarthSciAST.EsmFile

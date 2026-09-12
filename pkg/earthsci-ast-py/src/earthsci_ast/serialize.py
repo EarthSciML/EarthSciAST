@@ -1256,6 +1256,7 @@ def to_json(esm_file: EsmFile, *, indent: int | None = 2) -> str:
         JSON string representation of the ESM file
     """
     data = _serialize_esm_file(esm_file)
+    _raise_faq_esm_floor(data)
     if indent:
         return json.dumps(data, indent=indent, ensure_ascii=False)
     # Compact: `json.dumps(indent=None)` still emits `", "` / `": "` separators,
@@ -1369,3 +1370,39 @@ def emit_esm_string(doc: Any) -> str:
     _emit_write(buf, doc, 0)
     buf.append("\n")
     return "".join(buf)
+
+
+def _contains_faq(node: object) -> bool:
+    """Does ``node`` contain an ``"op": "faq"`` anywhere?"""
+    if isinstance(node, dict):
+        return node.get("op") == "faq" or any(_contains_faq(v) for v in node.values())
+    if isinstance(node, list):
+        return any(_contains_faq(v) for v in node)
+    return False
+
+
+def _raise_faq_esm_floor(data: object) -> None:
+    """Raise an emitted document's declared ``esm`` to 1.1.0 when it CONTAINS a
+    ``faq`` node but declares less.
+
+    Like the §9.6.4 rule-8 template stamp, this is a FLOOR — "a consumer needs
+    at least this" — so it only ever raises. It exists because a document can
+    come to contain ``faq`` without ever spelling it: a 1.0.0 parent that mounts
+    a subsystem whose child uses ``faq`` has the child inlined into it at load,
+    and emitting that as 1.0.0 writes a document the ``faq_version_too_old``
+    gate then refuses to read back. The load-time gate cannot catch it — the
+    parent's AUTHORED bytes are legal — so the stamp closes it here.
+    See ``docs/content/rfcs/faq-node-rename.md`` §5.5.
+    """
+    if not isinstance(data, dict):
+        return
+    esm = data.get("esm")
+    if not isinstance(esm, str):
+        return
+    parts = esm.split(".")
+    try:
+        major, minor = int(parts[0]), int(parts[1])
+    except (IndexError, ValueError):
+        return
+    if (major, minor) < (1, 1) and _contains_faq(data):
+        data["esm"] = "1.1.0"

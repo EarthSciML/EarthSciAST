@@ -14,7 +14,7 @@
  *  - array & call-shaped tier: array literals `[…]` (`const`), indexing
  *    `a[i, j]` (`index`), dotted closed-function calls `datetime.year(t)` (`fn`),
  *    the `true` literal, and `integral` / `reshape` / `transpose` / `concat`;
- *  - reduction & array-query tier: `aggregate` reductions
+ *  - reduction & array-query tier: `faq` reductions
  *    `sum[i] (expr) where {i in set, j in lo:hi} join(a=b) if pred distinct
  *    key=k [semiring=…]` (all clause shapes), the `argmin`/`argmax` arg-witnesses
  *    `argmin[g] (expr) where {…}`, template application
@@ -101,7 +101,7 @@ const TEMPLATE_ARG_MIN = opPrecedence('+')
 /**
  * Structural ops whose defining data lives OUTSIDE `args` AND which have no
  * text surface yet — refused, pending a dedicated syntax pass. (`integral`,
- * `reshape`, `transpose`, `concat`, `fn`, `const`, `index`, `true`, `aggregate`,
+ * `reshape`, `transpose`, `concat`, `fn`, `const`, `index`, `true`, `faq`,
  * `apply_expression_template`, `polygon_intersection_area`, `intersect_polygon`,
  * `makearray` DO have a surface and are reconstructed below; they are
  * intentionally absent here. `table_lookup` IS listed: its surface is the
@@ -476,7 +476,7 @@ class Parser {
   }
 
   /**
-   * Parse an `aggregate` reduction (esm-spec §4.2) — the inverse of
+   * Parse a `faq` reduction (esm-spec §4.2) — the inverse of
    * `formatAggregate`:
    *
    *   sym '[' out_idx ']' '(' expr ')' ('where' '{' ranges '}')? ('join' '(' … ')')?
@@ -560,7 +560,7 @@ class Parser {
     // A join with no explicit semiring is the sum-of-products contraction.
     if (semiring === undefined && join.length > 0) semiring = 'sum_product'
 
-    const node: Record<string, unknown> = { op: 'aggregate', output_idx: outputIdx }
+    const node: Record<string, unknown> = { op: 'faq', output_idx: outputIdx }
     if (semiring !== undefined) node.semiring = semiring
     else {
       const red = REDUCE_BY_SYM[sym]

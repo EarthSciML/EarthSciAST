@@ -1395,7 +1395,7 @@
   },
   {
     "input": {
-      "op": "aggregate",
+      "op": "faq",
       "output_idx": [
         "p"
       ],

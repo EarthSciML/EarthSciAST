@@ -14,7 +14,7 @@ Coverage:
    ``a[i, j]`` (``index``), dotted closed-function calls ``datetime.year(t)``
    (``fn``), the ``true`` literal, and ``integral`` / ``reshape`` / ``transpose`` /
    ``concat``;
- - reduction & array-query tier: ``aggregate`` reductions
+ - reduction & array-query tier: ``faq`` reductions
    ``sum[i] (expr) where {i in set, j in lo:hi} join(a=b) if pred distinct
    key=k [semiring=…]`` (all clause shapes), the ``argmin``/``argmax``
    arg-witnesses ``argmin[g] (expr) where {…}``, template application
@@ -485,7 +485,7 @@ class _Parser:
         return False
 
     def _parse_aggregate(self, sym: str) -> Any:
-        """Parse an ``aggregate`` reduction (esm-spec §4.2) — the inverse of the
+        """Parse an ``faq`` reduction (esm-spec §4.2) — the inverse of the
         printer's aggregate rendering::
 
             sym '[' out_idx ']' '(' expr ')' ('where' '{' ranges '}')?
@@ -552,7 +552,7 @@ class _Parser:
         if semiring is None and join:
             semiring = "sum_product"
 
-        node: dict[str, Any] = {"op": "aggregate", "output_idx": output_idx}
+        node: dict[str, Any] = {"op": "faq", "output_idx": output_idx}
         if semiring is not None:
             node["semiring"] = semiring
         else:

@@ -1,4 +1,4 @@
-//! A relation joined to ITSELF: two `aggregate` ranges over ONE index set
+//! A relation joined to ITSELF: two `faq` ranges over ONE index set
 //! (CONFORMANCE_SPEC.md §5.5.8 "Two ranges over one index set").
 //!
 //! Two ranges over one index set is already the documented spelling of a prefix
@@ -143,7 +143,7 @@ enum Spelling {
 /// two sides of the join are two ranges over one relation.
 fn doc(t: &Table, key_col: &str, spelling: Spelling) -> Value {
     let mut node = json!({
-        "op": "aggregate",
+        "op": "faq",
         "semiring": "sum_product",
         "reduce": "+",
         "output_idx": ["a"],
@@ -170,7 +170,7 @@ fn doc(t: &Table, key_col: &str, spelling: Spelling) -> Value {
         }
     }
     json!({
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "self_join"},
         "index_sets": {"rows": {"kind": "interval", "size": t.n}},
         "models": {"S": {

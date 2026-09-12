@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "RecurrenceParameterValuedLag",
     "description": "A lag the validator CANNOT prove, admitted rather than rejected. s[k] = 3*s[k-n] with `n` a parameter, so nothing static bounds the lag at all.\n\nesm-spec 4.3.1.1 splits the proof obligation in two, and this fixture pins the split. The COEFFICIENT of the frame symbol must be provable -- without it the read names no position relative to the cell being written, and which axis the recurrence folds along is undecidable. The lag's SIGN need not be: an unprovable lag is admitted, because a self-read resolves only against cells the sweep has already published, so an ill-founded read cannot return a number -- it faults. The static check therefore rejects what is provably wrong and identifies the axis; it does not certify what is right.\n\nThis matters for parity in a specific way. A binding's VALIDATOR necessarily proves less than its EVALUATOR, which has resolved every range against the index-set registry first. A binding that treated 'unproven' as 'illegal' would reject documents its own evaluator accepts, and would reject this one. With n = 2 the answer is [1, 1, 3, 3, 9].",
@@ -45,7 +45,7 @@
         {
           "lhs": "s",
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": [
               "k"

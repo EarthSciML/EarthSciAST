@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "Float32PerOperationRounding",
     "description": "100 * ((100 - 73.5) / 100) / (100 - 73.5) is exactly 1.0 in binary64 and 0.99999994 in binary32. Every operand is a runtime parameter, so a build-time constant fold cannot account for the difference."
@@ -17,7 +17,7 @@
         {
           "lhs": "y",
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": ["i"],
             "ranges": { "i": { "from": "one" } },

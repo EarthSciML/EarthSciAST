@@ -3,12 +3,12 @@ its defining equation (issue #231).
 
 ``_choose_pathway`` used to read array-ness out of EQUATION CONTENT alone: a
 ``providers`` / ``const_arrays`` injection, a ``loader_fields`` seam, or an
-``index`` / ``aggregate`` / ``arrayop`` node somewhere in an equation. A
+``index`` / ``faq`` node somewhere in an equation. A
 document whose only array-ness is a declared ``shape`` — a bare whole-array
 ``D(theta) ~ 1`` over ``"shape": ["lev"]``, with no array op anywhere — routed
 to the SCALAR (SymPy) pathway, where the shaped state got no cells at all and a
 ``coords`` assertion could not find it. Rewriting the identical semantics in the
-``aggregate`` spelling routed to the array pathway and worked, so the SPELLING,
+``faq`` spelling routed to the array pathway and worked, so the SPELLING,
 not the model, decided the answer.
 
 esm-spec §6.3 makes ``shape`` — "the ordered list of index-set names the
@@ -71,7 +71,7 @@ BARE = {
 # runtime. `_has_array_op` sees the aggregate, so this routed to the array
 # pathway even before the fix.
 AGGREGATE = {
-    "esm": "1.0.0",
+    "esm": "1.1.0",
     "metadata": {"name": "AggregateShapedNoParams", "authors": ["repro"]},
     "index_sets": {"lev": {"kind": "interval", "size": 4}},
     "models": {
@@ -82,7 +82,7 @@ AGGREGATE = {
             "equations": [
                 {
                     "lhs": {
-                        "op": "aggregate",
+                        "op": "faq",
                         "args": [],
                         "output_idx": ["k"],
                         "expr": {
@@ -93,7 +93,7 @@ AGGREGATE = {
                         "ranges": {"k": {"from": "lev"}},
                     },
                     "rhs": {
-                        "op": "aggregate",
+                        "op": "faq",
                         "args": [],
                         "output_idx": ["k"],
                         "expr": 1.0,

@@ -206,7 +206,14 @@ function _read_json_document(json_string::AbstractString)
         msg = hasfield(typeof(e), :msg) ? e.msg : sprint(showerror, e)
         throw(ParseError("Invalid JSON: $(msg)", e))
     end
-    return _to_ordered(parsed)
+    doc = _to_ordered(parsed)
+    # Expression-node `op` spellings are settled HERE, at the one wire boundary,
+    # so every document gets identical treatment — root, `{ref}`-loaded child,
+    # template library, coupling library (docs/content/rfcs/faq-node-rename.md
+    # §5.2). Doing it per-caller is what let `arrayop` survive its own 0.8.0
+    # removal, and what let the `aggregate` alias reach `emit` through a `{ref}`.
+    _prepare_document_ops!(doc)
+    return doc
 end
 
 """
@@ -243,6 +250,18 @@ function _load_parsed(raw_data; base_path::AbstractString=pwd(),
                       injected_imports::AbstractVector=Any[],
                       index_set_rename=nothing,
                       rename_where::AbstractString="mount edge")::EsmFile
+    # `load_document` hands us an in-memory dict that never passed through
+    # `_read_json_document`, so the wire-boundary op pass runs here too. It is
+    # idempotent: a document that already came through the reader carries no
+    # alias, so this is a silent no-op rather than a second warning.
+    #
+    # `gate=false`: top-level `{ref}` inlining has already run by this point, so
+    # this document is no longer the AUTHORED one. A legal 1.0.0 parent that
+    # mounts a `faq`-using child now CONTAINS `faq` without ever having spelled
+    # it, and gating it here would reject a document nobody authored wrongly.
+    # The floor is raised instead, exactly as `emit` does (§5.5).
+    _prepare_document_ops!(raw_data; gate=false)
+
     # v0.4.0 expression_templates / apply_expression_template are
     # rejected when the file declares esm < 0.4.0 (RFC §5.4 spec-version
     # gate). Surfaced before schema validation so the user sees the
@@ -726,7 +745,7 @@ function _inline_toplevel_model_refs!(native::AbstractDict{String,Any}, base_pat
         try
             isfile(refpath) || throw(SubsystemRefError(
                 "Referenced model file not found: $(refpath) (from ref '$(ref)')"))
-            comp = _to_ordered(JSON3.read(read(refpath, String)))
+            comp = _read_json_document(read(refpath, String))
             comp isa AbstractDict{String,Any} || throw(SubsystemRefError(
                 "Referenced model file '$(ref)' did not parse as a JSON object"))
             # esm-spec §4.7 "Edge pipeline" step (1): the referenced document
@@ -942,7 +961,7 @@ function _inline_toplevel_reaction_system_refs!(native::AbstractDict{String,Any}
         try
             isfile(refpath) || throw(SubsystemRefError(
                 "Referenced reaction system file not found: $(refpath) (from ref '$(ref)')"))
-            comp = _to_ordered(JSON3.read(read(refpath, String)))
+            comp = _read_json_document(read(refpath, String))
             comp isa AbstractDict{String,Any} || throw(SubsystemRefError(
                 "Referenced reaction system file '$(ref)' did not parse as a JSON object"))
             # A §4.7 subsystem ref MUST NOT target a template/coupling library.
@@ -1491,7 +1510,7 @@ function _load_local_ref(ref::String, base_path::String, visited::Set{String};
     # A §4.7 subsystem ref MUST NOT target a template- or coupling-library
     # file — those reference mechanisms are disjoint (esm-spec §9.7.1, §10.9).
     content = read(resolved_path, String)
-    raw_ref_doc = JSON3.read(content)
+    raw_ref_doc = _read_json_document(content)
     _reject_library_ref(raw_ref_doc, ref, resolved_path)
 
     # Parse the referenced file with the typed pipeline ONLY — deliberately not
@@ -1536,7 +1555,7 @@ function _load_remote_ref(url::String, visited::Set{String}=Set{String}();
         throw(SubsystemRefError("Failed to download subsystem ref '$(url)': $(e)"))
     end
 
-    raw_data = JSON3.read(content)
+    raw_data = _read_json_document(content)
 
     reject_expression_templates_pre_v04(raw_data)
     reject_template_imports_pre_v08(raw_data)
@@ -1573,4 +1592,144 @@ function _load_remote_ref(url::String, visited::Set{String}=Set{String}();
     _resolve_refs_in_file!(file, url_base, visited)
 
     return file
+end
+
+"""
+    _prepare_document_ops!(doc) -> Int
+
+Settle expression-node `op` spellings for ONE document, in three steps:
+
+1. `arrayop` (removed at esm 0.8.0) is rejected BY NAME. It is a well-formed
+   identifier, so esm-spec §4.2 would otherwise admit it as an OPEN
+   rewrite-target op — the document would load silently and fail much later as
+   `unlowered_operator`, or never.
+2. The `faq` version gate, on the AUTHORED form: `faq` arrives at esm 1.1.0
+   (esm-spec §2.2.4, the rule the top-level `solver` block follows). This runs
+   BEFORE normalization deliberately — `aggregate` IS the pre-1.1.0 spelling,
+   so a 1.0.0 document carrying the alias is legal and must not trip this gate.
+3. `aggregate` is normalized to `faq`, ONE `E_DEPRECATED_OP_ALIAS` warning is
+   raised for the document naming the count, and the declared version is raised
+   to the 1.1.0 floor so the upgraded document is self-consistent rather than
+   spelling a 1.1.0 construct under an older version.
+
+Returns the number of nodes normalized.
+See `docs/content/rfcs/faq-node-rename.md`.
+"""
+function _prepare_document_ops!(doc; gate::Bool=true)::Int
+    at = _find_op_path(doc, "arrayop")
+    if at !== nothing
+        throw(ParseError("[E_REMOVED_OP] removed_op at $(at): `\"op\": \"arrayop\"` was " *
+                         "removed at esm 0.8.0 and is not a deprecated alias; use " *
+                         "`\"op\": \"faq\"` (the Functional Aggregate Query node). " *
+                         "See docs/content/rfcs/faq-node-rename.md."))
+    end
+    faq_at = _find_op_path(doc, "faq")
+    if gate && faq_at !== nothing && _declared_below_v11(doc)
+        declared = _get_field(doc, :esm, nothing)
+        throw(ParseError("[E_FAQ_VERSION_TOO_OLD] faq_version_too_old at $(faq_at): the " *
+                         "`faq` op arrives at esm 1.1.0; file declares $(declared). Use " *
+                         "`\"op\": \"aggregate\"` (the deprecated pre-1.1.0 spelling) or " *
+                         "raise the declared version. " *
+                         "See docs/content/rfcs/faq-node-rename.md."))
+    end
+    n = _rewrite_op_aliases!(doc)
+    if !gate && faq_at !== nothing && _declared_below_v11(doc)
+        # Post-inlining: the document CONTAINS `faq` without having spelled it
+        # — a legal 1.0.0 parent whose mounted child uses `faq`. Raise the floor
+        # rather than reject, the same rule `emit` applies
+        # (docs/content/rfcs/faq-node-rename.md §5.5).
+        for key in (:esm, "esm")
+            if haskey(doc, key)
+                doc[key] = "1.1.0"
+                break
+            end
+        end
+    end
+    if n > 0
+        if _declared_below_v11(doc)
+            for key in (:esm, "esm")
+                if haskey(doc, key)
+                    doc[key] = "1.1.0"
+                    break
+                end
+            end
+        end
+        @warn string(
+            "[E_DEPRECATED_OP_ALIAS] `\"op\": \"aggregate\"` is the pre-1.1.0 ",
+            "spelling of `\"op\": \"faq\"` (Functional Aggregate Query); ", n,
+            n == 1 ? " node was" : " nodes were", " normalized on load. ",
+            "The alias is REMOVED at esm 2.0.0 — re-emit this document to ",
+            "migrate it (docs/content/rfcs/faq-node-rename.md)."
+        )
+    end
+    return n
+end
+
+"""
+    _rewrite_op_aliases!(node) -> Int
+
+Rewrite every `"op": "aggregate"` to `"op": "faq"` in place; return the count.
+The document arrives both symbol-keyed (in-memory callers) and string-keyed
+(the JSON wire), so the key is probed in both spellings.
+"""
+function _rewrite_op_aliases!(node)::Int
+    n = 0
+    if node isa AbstractDict
+        for key in (:op, "op")
+            if haskey(node, key) && get(node, key, nothing) == "aggregate"
+                node[key] = "faq"
+                n += 1
+                break
+            end
+        end
+        for v in values(node)
+            n += _rewrite_op_aliases!(v)
+        end
+    elseif node isa AbstractVector
+        for v in node
+            n += _rewrite_op_aliases!(v)
+        end
+    end
+    return n
+end
+
+"""
+    _find_op_path(node, op, at="") -> Union{String,Nothing}
+
+Path of the first node carrying `"op" => op`, or `nothing`.
+"""
+function _find_op_path(node, op::AbstractString, at::AbstractString="")
+    if node isa AbstractDict
+        for key in (:op, "op")
+            if haskey(node, key) && get(node, key, nothing) == op
+                return at
+            end
+        end
+        for (k, v) in node
+            hit = _find_op_path(v, op, string(at, "/", k))
+            hit === nothing || return hit
+        end
+    elseif node isa AbstractVector
+        for (i, v) in enumerate(node)
+            hit = _find_op_path(v, op, string(at, "/", i - 1))
+            hit === nothing || return hit
+        end
+    end
+    return nothing
+end
+
+"""
+    _declared_below_v11(doc) -> Bool
+
+Does `doc` declare an `esm` version below 1.1.0?
+"""
+function _declared_below_v11(doc)::Bool
+    doc isa AbstractDict || return false
+    esm = _get_field(doc, :esm, nothing)
+    esm isa AbstractString || return false
+    parts = split(String(esm), '.')
+    length(parts) >= 2 || return false
+    major = tryparse(Int, parts[1]); minor = tryparse(Int, parts[2])
+    (major === nothing || minor === nothing) && return false
+    return (major, minor) < (1, 1)
 end

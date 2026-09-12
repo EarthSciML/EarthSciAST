@@ -42,7 +42,7 @@ _ix(v, i...) = Dict{String,Any}("op" => "index", "args" => Any[v, i...])
 _o(o, a...) = Dict{String,Any}("op" => o, "args" => Any[a...])
 _cst(v) = Dict{String,Any}("op" => "const", "value" => v)
 _fnop(nm, a...) = Dict{String,Any}("op" => "fn", "name" => nm, "args" => Any[a...])
-_ao(e) = Dict{String,Any}("op" => "arrayop", "output_idx" => Any["i"],
+_ao(e) = Dict{String,Any}("op" => "faq", "output_idx" => Any["i"],
     "ranges" => Dict{String,Any}("i" => Dict{String,Any}("from" => "n")),
     "args" => Any[], "expr" => e)
 
@@ -66,7 +66,7 @@ _param(v) = Dict{String,Any}("type" => "parameter", "default" => v)
 # FN (an interp table), STATE/PARAM/TIME/LITERAL, plus the scalar `_Node` path with a
 # live CSE prelude.
 
-# 1-D reaction–diffusion. `exp(-Ea/T)` inside the arrayop hoists to `_VK_INVARIANT`;
+# 1-D reaction–diffusion. `exp(-Ea/T)` inside the faq hoists to `_VK_INVARIANT`;
 # the end cells gather ghosts and form their own kernels; `c[i]^2` is the literal-
 # exponent case. The state is seeded with NEGATIVE cells on purpose.
 function _rd(N)
@@ -469,7 +469,7 @@ end
         @test any(!=(0.0), J)
     end
 
-    @testset "interp.* inside an arrayop: lanes ≡ scalar cores, and AD" begin
+    @testset "interp.* inside a faq: lanes ≡ scalar cores, and AD" begin
         # The acc `:fn` arm evaluates locate→gather→blend over whole lanes (the
         # form a tracer needs). It must be BIT-identical to the branchy scalar
         # cores — pinned both through the emitters and directly, over a dense

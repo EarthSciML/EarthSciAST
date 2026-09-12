@@ -270,7 +270,7 @@ fn ring_envelopes(rings: &ArrayD<f64>) -> Result<Vec<Envelope>, String> {
 //   * the value-invention producer ([`crate::value_invention`]) enumerates
 //     ranges LAZILY (a ragged `of` bound depends on its parent binding), so it
 //     recurses; BOTH gated symbols are contracted there.
-//   * the dense aggregate expansion (`simulate_array::eval::eval_arrayop`)
+//   * the dense aggregate expansion (`simulate_array::eval::eval_faq`)
 //     unrolls the cartesian product over PRE-EXPANDED contraction bounds once
 //     per output cell, and the output cell has usually already bound one of the
 //     two gated symbols.
@@ -372,7 +372,7 @@ pub fn set_join_gate_enabled(on: bool) -> bool {
 /// and the Rust integration tests read it directly. A whole-document
 /// measurement on a real fixture cannot: it runs through the `esm` binary,
 /// where no test harness holds the counter. This switch makes the same number
-/// readable from a CLI run — one line per gated `aggregate` evaluation on
+/// readable from a CLI run — one line per gated `faq` evaluation on
 /// stderr — so a claim about a document's enumeration cost is a command's
 /// output rather than an argument from the source.
 ///

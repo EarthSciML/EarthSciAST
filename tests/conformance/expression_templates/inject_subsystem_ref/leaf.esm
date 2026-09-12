@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "advection_leaf",
     "description": "A discretization-agnostic PDE leaf: a bare spatial derivative D(c, wrt: lon) with NO expression_template_imports of its own. Un-runnable in isolation (unlowered_operator) — the mounting assembler injects the discretization (esm-spec §9.7.10 form A)."

@@ -363,7 +363,7 @@ const _CHAIN_ICS = Dict("psi[1]" => 1.0, "psi[2]" => 2.0, "psi[3]" => 3.0)
         @test fv == Set(["x", "y"])
         # Binder subtraction happens at the binder node: a loop index is bound
         # away, an outer name stays free.
-        agg = _op("arrayop"; output_idx=Any["i"],
+        agg = _op("faq"; output_idx=Any["i"],
                   expr_body=_op("+", _v("i"), _v("z")),
                   ranges=Dict("i" => [1, 3]))
         @test ESM.free_variables(agg) == Set(["z"])

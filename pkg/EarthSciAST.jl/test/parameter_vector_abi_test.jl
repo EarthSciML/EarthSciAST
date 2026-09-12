@@ -54,7 +54,7 @@ include("zero_alloc_harness.jl")
 _pv_Dt(v) = Dict{String,Any}("op" => "D", "args" => Any[v], "wrt" => "t")
 _pv_ix(v, i...) = Dict{String,Any}("op" => "index", "args" => Any[v, i...])
 _pv_o(o, a...) = Dict{String,Any}("op" => o, "args" => Any[a...])
-_pv_ao(e) = Dict{String,Any}("op" => "arrayop", "output_idx" => Any["i"],
+_pv_ao(e) = Dict{String,Any}("op" => "faq", "output_idx" => Any["i"],
     "ranges" => Dict{String,Any}("i" => Dict{String,Any}("from" => "n")),
     "args" => Any[], "expr" => e)
 _pv_state(; kw...) = Dict{String,Any}("type" => "unknown",

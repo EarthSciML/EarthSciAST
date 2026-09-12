@@ -711,7 +711,7 @@ func extractVariableFromLHS(lhs Expression) string {
 		if len(node.Args) > 0 {
 			return extractVariableFromLHS(node.Args[0])
 		}
-	case "aggregate":
+	case "faq":
 		if node.Expr != nil {
 			return extractVariableFromLHS(node.Expr)
 		}
@@ -720,14 +720,14 @@ func extractVariableFromLHS(lhs Expression) string {
 }
 
 // graphBoundIndexSymbols is the set of index symbols a node BINDS for its own
-// body: an `aggregate` / `arrayop`'s `ranges` keys and `output_idx` entries, and
+// body: a `faq`'s `ranges` keys and `output_idx` entries, and
 // an `integral`'s `var`.
 //
 // Narrower than validate.go's boundIndexSymbols, which also treats every bare
 // name in an `index(A, i, j)` position as bound. Those positions are exactly
 // where an aggregate's binders appear, and subtracting them THERE rather than at
 // the binding node would hide a real reference to a declared variable used as an
-// index. The binder itself is caught at its `aggregate`.
+// index. The binder itself is caught at its `faq`.
 func graphBoundIndexSymbols(node ExprNode) []string {
 	var bound []string
 	for k := range node.Ranges {
@@ -755,7 +755,7 @@ func graphBoundIndexSymbols(node ExprNode) []string {
 // It now shares the one field-preserving walk that backs FreeVariables.
 //
 // It does NOT share FreeVariables' answer, though. That function reports every
-// bare name it reaches, so an `aggregate`'s own range binders (`sum over a of
+// bare name it reaches, so a `faq`'s own range binders (`sum over a of
 // src[a]`) come back looking like model variables and became graph nodes with no
 // declaration, no units and no kind. A binder is introduced by the aggregate's
 // own `ranges` clause and is scoped to it; it is not a variable of the system,

@@ -185,7 +185,7 @@ binding carries:
 * `join_syms_unknown_symbol` — a `syms` entry the node does not bind.
 
 The negative cases live in **one shared fixture set**,
-`tests/invalid/aggregate/build_time/self_join_*.esm`, pinned by `(code, path)`
+`tests/invalid/faq/build_time/self_join_*.esm`, pinned by `(code, path)`
 in `tests/invalid/expected_errors.json`. That file is what
 `scripts/compare-conformance-outputs.py` reads for its check B (every
 `tests/invalid/**` must be rejected, per binding, no exceptions) and check C

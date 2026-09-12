@@ -1,5 +1,5 @@
 {
- "esm": "1.0.0",
+ "esm": "1.1.0",
  "metadata": {
   "name": "assertion_nonfinite",
   "description": "esm-spec \u00a76.6.3 assertion comparison when the ACTUAL value is not finite. `base` is a const array of 1e200, and three observeds over it are the three non-finite outcomes ordinary model arithmetic produces: `pos` squares it (+Inf, an overflow), `neg` negates that square (-Inf), and `nanv` multiplies the square by zero (NaN, the shape an Inf*0 or Inf-Inf takes). `fin` is the finite control (1e200) and is what makes the tier non-vacuous: a binding that failed every assertion would fail it. Every assertion below names a FINITE `expected` -- a JSON document cannot spell an infinite one -- so under the \u00a76.6.3 rule every non-finite actual FAILS, whatever the tolerance. The defect this pins is a comparison that reads `|actual - expected| <= max(atol, rtol*max(|actual|, |expected|))` without a finiteness guard: with `actual = \u00b1Inf` both sides are Inf and the assertion passes for EVERY expected value, which turns a document that computes nothing meaningful into a green test run. Julia's `isapprox` carries the guard (`x == y || (isfinite(x) && isfinite(y) && ...)`); the Rust and Python re-implementations of 'Julia isapprox semantics' dropped it.",
@@ -121,7 +121,7 @@
     {
      "lhs": "pos",
      "rhs": {
-      "op": "aggregate",
+      "op": "faq",
       "semiring": "sum_product",
       "output_idx": [
        "i"
@@ -159,7 +159,7 @@
     {
      "lhs": "neg",
      "rhs": {
-      "op": "aggregate",
+      "op": "faq",
       "semiring": "sum_product",
       "output_idx": [
        "i"
@@ -203,7 +203,7 @@
     {
      "lhs": "nanv",
      "rhs": {
-      "op": "aggregate",
+      "op": "faq",
       "semiring": "sum_product",
       "output_idx": [
        "i"
@@ -247,7 +247,7 @@
     {
      "lhs": "fin",
      "rhs": {
-      "op": "aggregate",
+      "op": "faq",
       "semiring": "sum_product",
       "output_idx": [
        "i"

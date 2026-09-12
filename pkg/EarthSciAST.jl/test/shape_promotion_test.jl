@@ -1,5 +1,5 @@
 # M2-1: promote_downstream_shapes — a scalar physics chain fed by an array source
-# is promoted to the array shape, its equations rewritten to arrayops, and a real
+# is promoted to the array shape, its equations rewritten to faqs, and a real
 # reduction (aggregate) stays a promotion BOUNDARY (scalar). Evaluates per-cell.
 using Test
 import EarthSciAST as ESS
@@ -10,7 +10,7 @@ ix(a...)    = Dict{String,Any}("op"=>"index", "args"=>collect(Any, a))
 
 # index set c (size 3); f[c] array param; a=f*2, b=a+f scalar-authored; s = Σ_c b.
 function syn()
-    agg = Dict{String,Any}("op"=>"aggregate","semiring"=>"sum_product","output_idx"=>Any[],
+    agg = Dict{String,Any}("op"=>"faq","semiring"=>"sum_product","output_idx"=>Any[],
         "ranges"=>Dict{String,Any}("k"=>Dict{String,Any}("from"=>"c")),
         "args"=>Any[], "expr"=>ix("b","k"))
     Dict{String,Any}("esm"=>"0.5.0","metadata"=>Dict("name"=>"P"),
@@ -43,7 +43,7 @@ end
         @test sh("M.s") == String[]           # reduction boundary — stays scalar
     end
 
-    @testset "equations rewritten to arrayops; evaluates per-cell" begin
+    @testset "equations rewritten to faqs; evaluates per-cell" begin
         doc = E.flattened_to_esm(prom)
         f!, u0, p, _t, vmap = E.build_evaluator(doc;
             const_arrays=Dict("M.f"=>[1.0,2.0,3.0]), initial_conditions=Dict("M.s"=>0.0))
@@ -94,7 +94,7 @@ end
 end
 
 @testset "inline_elementwise_array_observeds" begin
-    # An ARRAY observed defined by a bare ELEMENTWISE equation (not arrayop/aggregate)
+    # An ARRAY observed defined by a bare ELEMENTWISE equation (not faq)
     # is folded into the equations that read it and dropped — the library form of the
     # level-set fold. a = f+1, b = a*2 (both [c]); D(s) = f - b. After inlining, a and b
     # vanish and D(s)'s RHS references only f.

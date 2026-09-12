@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "Bench_Proxy27",
     "description": "Controlled 27-box proxy for the affine access-kernel lowering path: a 3x3x3 grid, one tracer, branch-free donor-cell upwind flux divergence along lon and lev with no-flux walls (structural omission, ESD convention), plus linear decay. Self-contained (no external imports). Reconstruction of the ephemeral fixture used to validate EarthSciAST commit 08c4985b; 9 region classes (3 lon x 3 lev), 7 gathered aggregates, one scalar parameter.",
@@ -76,7 +76,7 @@
             ]
           },
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "i",
               "j",
@@ -151,7 +151,7 @@
             "op": "+",
             "args": [
               {
-                "op": "aggregate",
+                "op": "faq",
                 "output_idx": [
                   "i",
                   "j",
@@ -261,7 +261,7 @@
                 }
               },
               {
-                "op": "aggregate",
+                "op": "faq",
                 "output_idx": [
                   "i",
                   "j",
@@ -440,7 +440,7 @@
                 }
               },
               {
-                "op": "aggregate",
+                "op": "faq",
                 "output_idx": [
                   "i",
                   "j",
@@ -533,7 +533,7 @@
                 }
               },
               {
-                "op": "aggregate",
+                "op": "faq",
                 "output_idx": [
                   "i",
                   "j",
@@ -643,7 +643,7 @@
                 }
               },
               {
-                "op": "aggregate",
+                "op": "faq",
                 "output_idx": [
                   "i",
                   "j",
@@ -822,7 +822,7 @@
                 }
               },
               {
-                "op": "aggregate",
+                "op": "faq",
                 "output_idx": [
                   "i",
                   "j",
@@ -915,7 +915,7 @@
                 }
               },
               {
-                "op": "aggregate",
+                "op": "faq",
                 "output_idx": [
                   "i",
                   "j",
@@ -962,7 +962,7 @@
         {
           "lhs": "w",
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "ci",
               "cj",
@@ -1053,7 +1053,7 @@
         {
           "lhs": "u",
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "ci",
               "cj",

@@ -113,7 +113,7 @@ if operator node). With `perm`: `transpose(A, [p0, p1, …])` (latex `\mathrm{�
 ### intersect_polygon / polygon_intersection_area  `{…, manifold:M, args:[P,Q]}`
 `name(P, Q, manifold=M)`; latex `\mathrm{ESC(name)}(P, Q, manifold=M)`.
 
-### aggregate  `{op:"aggregate", output_idx:[…], expr:E, reduce:R, semiring?, ranges?, join?, filter?, distinct?, key?}`
+### faq  `{op:"faq", output_idx:[…], expr:E, reduce:R, semiring?, ranges?, join?, filter?, distinct?, key?}`
 Big-operator symbol `⊕` chosen from `semiring` if present else `reduce`:
 
 | ⊕ source | unicode | latex | ascii |
@@ -142,7 +142,7 @@ Then append, in this exact order, each clause only when the field is present:
 
 ### argmin / argmax  `{op:"argmin"|"argmax", arg:G, expr:E, ranges?:{…}}`
 - unicode `argmin[G] (E)`, latex `\mathrm{argmin}_{G} (E)`, ascii `argmin[G](E)`.
-- If `ranges` present, append the same ` where {…}` clause as `aggregate`.
+- If `ranges` present, append the same ` where {…}` clause as `faq`.
 
 ## Associativity and parenthesization (NORMATIVE — added 2026-07-15)
 

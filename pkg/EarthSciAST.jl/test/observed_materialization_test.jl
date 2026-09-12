@@ -36,7 +36,7 @@ _param(shape) = Dict{String,Any}("type" => "parameter", "default" => 0.0,
                                  "shape" => Any[shape...])
 _obs(shape) = Dict{String,Any}("type" => "unknown", "shape" => Any[shape...])
 _agg(out, ranges, args, expr; reduce=nothing) = begin
-    d = Dict{String,Any}("op" => "aggregate", "output_idx" => Any[out...])
+    d = Dict{String,Any}("op" => "faq", "output_idx" => Any[out...])
     reduce === nothing || (d["reduce"] = reduce)
     d["ranges"] = Dict{String,Any}(k => Dict("from" => v) for (k, v) in ranges)
     d["args"] = Any[args...]
@@ -166,7 +166,7 @@ function _doc()
         _op("*", _ix("SR_PM25", "s", "rcv"), _ix("E_PM25", "s")); reduce="+")))
 
     return Dict{String,Any}(
-        "esm" => "1.0.0",
+        "esm" => "1.1.0",
         "metadata" => Dict{String,Any}("name" => "observed_materialization"),
         "data_sources" => Dict{String,Any}("MockSR" => Dict{String,Any}(
             "kind" => "static", "source" => Dict("url_template" => "mock://sr"))),

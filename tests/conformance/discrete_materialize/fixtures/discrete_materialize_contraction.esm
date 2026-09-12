@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "discrete_materialize_contraction",
     "description": "Cross-language conformance fixture for DISCRETE-CADENCE MATERIALIZATION (the middle cadence phase; CONFORMANCE_SPEC.md §5.13). Model M mixes a CONST weight matrix `W` (an in-file const observed) with a DISCRETE forcing field `src` (declared `type: \"discrete\"`, delivered through each binding's forcing/loader/param buffer) inside a conservative-regrid-shaped CONTRACTION `g[j] = sum_i W[i,j]*src[i]`: state-free but forcing-tainted, so it changes ONLY when `src` is refreshed at a cadence boundary — a DISCRETE field a materializing binding caches once per refresh and gathers into the hot RHS. A sibling contraction `k[j] = sum_i W[i,j]*offset` reads only const/parameter data (W, the scalar parameter `offset`): state-free AND forcing-free, so it is CONST-cadence and stays on the build-once/inline path (the regression guard against an over-broad discrete cut). The per-cell ODE `D(c[j]) = g[j] + k[j]` couples both into the continuous state. The forcing is piecewise-constant across the cadence segments, so the segmented trajectory is analytic and exact. Strictly offline (no providers, no network): each binding's adapter drives the segments, writing `src` from the golden's `forcing.by_anchor` snapshots at the golden's `refresh_times`. Dense index ranges (no `index_sets`) so the array-simulate compilers consume it directly."
@@ -69,7 +69,7 @@
       "equations": [
         {
           "lhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": [
               "j"
@@ -95,7 +95,7 @@
             }
           },
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": [
               "j"
@@ -149,7 +149,7 @@
         {
           "lhs": "g",
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "j"
             ],
@@ -192,7 +192,7 @@
         {
           "lhs": "k",
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "j"
             ],

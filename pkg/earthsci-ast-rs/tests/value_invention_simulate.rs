@@ -55,7 +55,7 @@ fn sq_dist() -> &'static str {
 fn argmin_model() -> String {
     format!(
         r#"{{
-      "esm": "1.0.0",
+      "esm": "1.1.0",
       "metadata": {{ "name": "argmin_simulate" }},
       "index_sets": {{
         "points":     {{ "kind": "interval", "size": 4 }},
@@ -77,16 +77,16 @@ fn argmin_model() -> String {
           {{ "lhs": "py", "rhs": {{ "op": "const", "args": [], "value": [0.0, 0.5, 0.0, 0.0] }} }},
           {{
             "lhs": {{ "op": "index", "args": ["assign", "i"] }},
-            "rhs": {{ "op": "aggregate", "output_idx": ["i"], "ranges": {{ "i": {{ "from": "points" }} }},
+            "rhs": {{ "op": "faq", "output_idx": ["i"], "ranges": {{ "i": {{ "from": "points" }} }},
                      "args": ["px", "py", "gx", "gy"],
                      "expr": {{ "op": "argmin", "args": ["px", "py", "gx", "gy"], "arg": "g",
                                "ranges": {{ "g": {{ "from": "generators" }} }},
                                "expr": {body} }} }}
           }},
           {{
-            "lhs": {{ "op": "aggregate", "args": [], "output_idx": ["i"], "ranges": {{ "i": {{ "from": "points" }} }},
+            "lhs": {{ "op": "faq", "args": [], "output_idx": ["i"], "ranges": {{ "i": {{ "from": "points" }} }},
                      "expr": {{ "op": "D", "args": [ {{ "op": "index", "args": ["u", "i"] }} ], "wrt": "t" }} }},
-            "rhs": {{ "op": "aggregate", "args": [], "output_idx": ["i"], "ranges": {{ "i": {{ "from": "points" }} }},
+            "rhs": {{ "op": "faq", "args": [], "output_idx": ["i"], "ranges": {{ "i": {{ "from": "points" }} }},
                      "expr": {{ "op": "index", "args": ["assign", "i"] }} }}
           }}
         ]
@@ -176,7 +176,7 @@ fn argmin_nearest_generator_simulates_end_to_end() {
 fn centroid_model() -> &'static str {
     r#"
         {
-          "esm": "1.0.0",
+          "esm": "1.1.0",
           "metadata": {
             "name": "centroid_simulate"
           },
@@ -253,7 +253,7 @@ fn centroid_model() -> &'static str {
                     ]
                   },
                   "rhs": {
-                    "op": "aggregate",
+                    "op": "faq",
                     "output_idx": [
                       "i"
                     ],
@@ -333,7 +333,7 @@ fn centroid_model() -> &'static str {
                     ]
                   },
                   "rhs": {
-                    "op": "aggregate",
+                    "op": "faq",
                     "output_idx": [
                       "g"
                     ],
@@ -391,7 +391,7 @@ fn centroid_model() -> &'static str {
                     ]
                   },
                   "rhs": {
-                    "op": "aggregate",
+                    "op": "faq",
                     "output_idx": [
                       "g"
                     ],
@@ -436,7 +436,7 @@ fn centroid_model() -> &'static str {
                     ]
                   },
                   "rhs": {
-                    "op": "aggregate",
+                    "op": "faq",
                     "output_idx": [
                       "g"
                     ],
@@ -472,7 +472,7 @@ fn centroid_model() -> &'static str {
                 },
                 {
                   "lhs": {
-                    "op": "aggregate",
+                    "op": "faq",
                     "args": [],
                     "output_idx": [
                       "g"
@@ -497,7 +497,7 @@ fn centroid_model() -> &'static str {
                     }
                   },
                   "rhs": {
-                    "op": "aggregate",
+                    "op": "faq",
                     "args": [],
                     "output_idx": [
                       "g"
@@ -564,7 +564,7 @@ fn centroid_model() -> &'static str {
 /// The grouped `group_aggregate` (num / den) over the argmin key and the derived
 /// centroid simulate end-to-end to the correct, non-NaN buffer `[0, 1.125, 2]`.
 #[test]
-fn scvt_centroid_group_aggregate_simulates_end_to_end() {
+fn scvt_centroid_group_faq_simulates_end_to_end() {
     let file = load_string(centroid_model()).expect("centroid model loads");
     let ics: HashMap<String, f64> = ["cu[1]", "cu[2]", "cu[3]"]
         .into_iter()

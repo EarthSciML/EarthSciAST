@@ -1,7 +1,7 @@
 # Differential + behavioural test for CUMULATIVE (prefix) reductions on the
 # O(N) scan path (ess-scan, tree_walk/scan.jl).
 #
-# A prefix reduction is an ordinary `aggregate` whose `filter` admits the
+# A prefix reduction is an ordinary `faq` whose `filter` admits the
 # monotone window `j <= i` (esm-spec §4.3.1). The build recognizes the FORWARD
 # variants and splits them into a term pass (an ordinary affine/elementwise
 # body with the contracted symbol renamed to the output symbol) plus an O(N)
@@ -36,7 +36,7 @@ function _scan_model(n::Int; filt="<=", reduce="+", body=nothing)
     vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable),
                 "c" => ESM.ModelVariable(ESM.UnknownVariable))
     b = body === nothing ? _idx("u", _v("j")) : body
-    rhs = ESM.OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i"], expr_body=b,
+    rhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i"], expr_body=b,
         ranges=Dict("i" => [1, n], "j" => [1, n]), reduce=reduce,
         filter=_op(filt, _v("j"), _v("i")))
     ESM.Model(vars, [
@@ -52,7 +52,7 @@ end
 function _scan_model_staggered(n::Int; filt="<", reduce="+")
     vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable),
                 "c" => ESM.ModelVariable(ESM.UnknownVariable))
-    rhs = ESM.OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i"],
+    rhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i"],
         expr_body=_idx("u", _v("j")),
         ranges=Dict("i" => [1, n + 1], "j" => [1, n]), reduce=reduce,
         filter=_op(filt, _v("j"), _v("i")))
@@ -132,7 +132,7 @@ end
         m = _scan_model(n)                                   # j <= i
         vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable),
                     "c" => ESM.ModelVariable(ESM.UnknownVariable))
-        rhs = ESM.OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i"],
+        rhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i"],
             expr_body=_idx("u", _v("j")), ranges=Dict("i" => [1, n], "j" => [1, n]),
             reduce="+", filter=_op(">=", _v("i"), _v("j")))   # i >= j
         mirror = ESM.Model(vars, [
@@ -227,7 +227,7 @@ end
         n = 8
         vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable),
                     "c" => ESM.ModelVariable(ESM.UnknownVariable))
-        rhs = ESM.OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i"],
+        rhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i"],
             expr_body=_idx("u", _v("j")),
             ranges=Dict("i" => [1, n + 1], "j" => [2, n + 1]), reduce="+",
             filter=_op("<", _v("j"), _v("i")))
@@ -251,7 +251,7 @@ end
     @testset "identity gather over a CONTRACTING producer unwraps" begin
         # A materialized array observed's fill arrives as `index(<def>, i…)`
         # (`_materialized_fill_equation`), which hides the aggregate from
-        # `_compile_arrayop_equation!` — `rhs.op` is `index`, so `contract_names`
+        # `_compile_faq_equation!` — `rhs.op` is `index`, so `contract_names`
         # never gets populated and NONE of the contraction machinery runs (no
         # scan detection, no unrolled fold, no runtime contraction loop). The
         # affine build is then handed `index(<contracting aggregate>, i…)`, which
@@ -262,7 +262,7 @@ end
         n = 8
         ranges_d = Dict{String,Any}("_mo0" => Any[1, n + 1])
         mkagg(; filt="<", jrange=Any[1, n], out=["gke"], red="+") =
-            ESM.OpExpr("aggregate", ESM.ASTExpr[]; output_idx=Any[out...],
+            ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any[out...],
                 expr_body=_idx("u", _v("gk")),
                 ranges=Dict{String,Any}("gke" => Any[1, n + 1], "gk" => jrange),
                 reduce=red, filter=(filt === nothing ? nothing :
@@ -271,7 +271,7 @@ end
 
         unwrapped(a) = begin
             got = ESM._unwrap_identity_gather(gather(a), ["_mo0"], ranges_d)
-            got isa ESM.OpExpr && ESM._is_aggregate_op(got.op) &&
+            got isa ESM.OpExpr && ESM._is_faq_op(got.op) &&
                 ESM._output_idx_strings(got) == ["_mo0"] &&
                 sort(collect(keys(got.ranges))) == ["_mo0", "gk"]
         end
@@ -291,7 +291,7 @@ end
         # ---- what still keeps the gather form ----
         # NO contraction: the bare form lowers identically, so there is nothing
         # to unlock and the fill synthesizer's default governs.
-        nocon = ESM.OpExpr("aggregate", ESM.ASTExpr[]; output_idx=Any["gke"],
+        nocon = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["gke"],
             expr_body=_idx("u", _v("gke")),
             ranges=Dict{String,Any}("gke" => Any[1, n + 1]), reduce="+")
         let g = gather(nocon)

@@ -174,7 +174,7 @@ _oc_param() = ESM_OC.ModelVariable(ESM_OC.ParameterVariable; units="1", default=
         # spelling, array-shaped with an `index` self-read, so a CANDIDATE.
         body = _op("ifelse", _op("<=", _v("k"), _i(1)), _n(1.0),
                    _op("*", _idx("s", _op("-", _v("k"), _i(1))), _n(2.0)))
-        rhs = _op("aggregate"; output_idx=Any["k"], expr_body=body, reduce="+",
+        rhs = _op("faq"; output_idx=Any["k"], expr_body=body, reduce="+",
                   ranges=Dict{String,Any}("k" => ESM_OC.IndexSetRef("steps")))
         file = _oc_file(Dict("s" => _oc_array()), [ESM_OC.Equation(_v("s"), rhs)])
         @test isempty(ESM_OC.validate_observed_cycles(file))
@@ -188,7 +188,7 @@ _oc_param() = ESM_OC.ModelVariable(ESM_OC.ParameterVariable; units="1", default=
         # Gating on the verdict instead would collapse this document to one
         # cycle error and lose that name (CONFORMANCE_SPEC §5.19.5).
         body = _op("*", _idx("s", _op("+", _v("k"), _i(1))), _n(2.0))
-        rhs = _op("aggregate"; output_idx=Any["k"], expr_body=body, reduce="+",
+        rhs = _op("faq"; output_idx=Any["k"], expr_body=body, reduce="+",
                   ranges=Dict{String,Any}("k" => ESM_OC.IndexSetRef("steps")))
         file = _oc_file(Dict("s" => _oc_array()), [ESM_OC.Equation(_v("s"), rhs)])
         @test isempty(ESM_OC.validate_observed_cycles(file))
@@ -238,7 +238,7 @@ _oc_param() = ESM_OC.ModelVariable(ESM_OC.ParameterVariable; units="1", default=
         # `y`'s aggregate binds the loop symbol `i`, and the model ALSO declares
         # an observed named `i` that reads `y`. Without binder subtraction the
         # loop symbol reads as a reference and closes a phantom `y -> i -> y`.
-        agg = _op("aggregate"; output_idx=Any["i"],
+        agg = _op("faq"; output_idx=Any["i"],
                   expr_body=_op("*", _v("p"), _v("i")), reduce="+",
                   ranges=Dict{String,Any}("i" => ESM_OC.IndexSetRef("steps")))
         file = _oc_file(

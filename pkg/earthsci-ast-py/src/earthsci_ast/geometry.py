@@ -17,7 +17,7 @@ FAQ:
 - ``polygon_area`` — **NOT a new op.** The area of a vertex ring is an ordinary
   ``sum_product`` FAQ over the ring index set (planar shoelace / Gauss–Green, or
   the spherical-excess sum), evaluated by
-  :func:`earthsci_ast.numpy_interpreter._eval_arrayop`. The pure helpers here
+  :func:`earthsci_ast.numpy_interpreter._eval_faq`. The pure helpers here
   (:func:`polygon_area`) provide the *reference* area used to cross-check that FAQ
   and to back the spherical manifold; they are the same formula the FAQ body
   encodes, not a parallel implementation of the op.
@@ -235,7 +235,7 @@ def _dedup_consecutive(ring: np.ndarray) -> np.ndarray:
 # conservative-regrid aggregate whose body is that leaf — ``A_ij[i,j] =
 # polygon_intersection_area(src_i, tgt_j)`` over a candidate-pair set — can be
 # evaluated as ONE batched kernel call instead of ``K`` per-pair Python clips
-# (the per-cell fallback in ``numpy_interpreter._eval_arrayop``). The evaluator
+# (the per-cell fallback in ``numpy_interpreter._eval_faq``). The evaluator
 # recognizes the pattern and calls this; anything it cannot batch falls back to
 # the scalar per-pair path, so this is a pure fast path.
 #

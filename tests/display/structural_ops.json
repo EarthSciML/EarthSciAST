@@ -352,9 +352,9 @@
         "ascii": "polygon_intersection_area(P, Q, manifold=planar)"
       },
       {
-        "name": "aggregate sum",
+        "name": "faq sum",
         "input": {
-          "op": "aggregate",
+          "op": "faq",
           "args": [
             "A",
             "B"
@@ -376,9 +376,9 @@
         "ascii": "sum[i] (A * B)"
       },
       {
-        "name": "aggregate product 2d",
+        "name": "faq product 2d",
         "input": {
-          "op": "aggregate",
+          "op": "faq",
           "args": [
             "A"
           ],
@@ -394,9 +394,9 @@
         "ascii": "prod[i, j] (A)"
       },
       {
-        "name": "aggregate with ranges",
+        "name": "faq with ranges",
         "input": {
-          "op": "aggregate",
+          "op": "faq",
           "args": [],
           "output_idx": [
             "i"
@@ -421,9 +421,9 @@
         "ascii": "sum[i] (A * B) where {j in 1:10}"
       },
       {
-        "name": "aggregate semiring",
+        "name": "faq semiring",
         "input": {
-          "op": "aggregate",
+          "op": "faq",
           "args": [],
           "output_idx": [
             "i"

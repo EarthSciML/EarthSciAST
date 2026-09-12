@@ -40,7 +40,7 @@ def _doc(expression, shape=None, extra_vars=None):
         **({"shape": list(shape)} if shape else {}),
     }
     return {
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "complex_guard"},
         "index_sets": {"n": {"kind": "interval", "size": 3}},
         "models": {
@@ -66,7 +66,7 @@ def _pow_x():
             "map",
             ["n"],
             {
-                "op": "aggregate",
+                "op": "faq",
                 "output_idx": ["i"],
                 "ranges": {"i": {"from": "n"}},
                 "args": ["x"],
@@ -78,7 +78,7 @@ def _pow_x():
             "reduce",
             None,
             {
-                "op": "aggregate",
+                "op": "faq",
                 "output_idx": [],
                 "ranges": {"i": {"from": "n"}},
                 "args": ["x"],
@@ -137,7 +137,7 @@ def test_array_operand_keeps_numpy_nan_semantics():
     Rust binding's behaviour — and nothing here changes that."""
     doc = _doc(
         {
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": ["i"],
             "ranges": {"i": {"from": "n"}},
             "args": ["v"],

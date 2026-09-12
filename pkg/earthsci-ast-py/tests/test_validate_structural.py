@@ -41,7 +41,7 @@ class TestStructuralValidation:
         """Test detection of undefined variable references."""
         # Create a test case with undefined variable reference
         invalid_esm = {
-            "esm": "1.0.0",
+            "esm": "1.1.0",
             "metadata": {"name": "Test"},
             "models": {
                 "test_model": {
@@ -72,7 +72,7 @@ class TestStructuralValidation:
         position. Regression test for the false
         ``undefined variable reference '_var'`` structural error."""
         advection = {
-            "esm": "1.0.0",
+            "esm": "1.1.0",
             "metadata": {"name": "Advection"},
             "models": {
                 "Advection": {
@@ -115,7 +115,7 @@ class TestStructuralValidation:
         a genuinely misspelled variable nested in the same operator position is
         STILL reported as an undefined variable reference."""
         bad = {
-            "esm": "1.0.0",
+            "esm": "1.1.0",
             "metadata": {"name": "Advection"},
             "models": {
                 "Advection": {
@@ -149,7 +149,7 @@ class TestStructuralValidation:
     def test_type_mismatch_in_expressions(self, fixtures_dir):
         """Test type consistency in expressions."""
         invalid_esm = {
-            "esm": "1.0.0",
+            "esm": "1.1.0",
             "metadata": {"name": "Test"},
             "models": {
                 "test_model": {
@@ -194,7 +194,7 @@ class TestStructuralValidation:
         """Test reaction system mass balance validation."""
         # Create reaction system with mass imbalance
         invalid_esm = {
-            "esm": "1.0.0",
+            "esm": "1.1.0",
             "metadata": {"name": "Test"},
             "reaction_systems": {
                 "test_rs": {
@@ -232,7 +232,7 @@ class TestStructuralValidation:
     def test_domain_boundary_consistency(self, fixtures_dir):
         """Test domain and boundary condition consistency."""
         invalid_esm = {
-            "esm": "1.0.0",
+            "esm": "1.1.0",
             "metadata": {"name": "Test"},
             "models": {"test": {"variables": {}, "equations": []}},
             "domains": {
@@ -278,7 +278,7 @@ class TestStructuralValidation:
         """Test scope resolution validation."""
         # Create nested scope with ambiguous references
         invalid_esm = {
-            "esm": "1.0.0",
+            "esm": "1.1.0",
             "metadata": {"name": "Test"},
             "models": {
                 "model1": {"variables": {"x": {"type": "unknown"}}, "equations": []},
@@ -312,7 +312,7 @@ class TestStructuralValidation:
         it keeps this test testing what it was written to test.
         """
         invalid_esm = {
-            "esm": "1.0.0",
+            "esm": "1.1.0",
             "metadata": {"name": "Test"},
             "models": {
                 "test_model": {
@@ -344,7 +344,7 @@ class TestStructuralValidation:
         """
         for op in ("+", "*"):
             doc = {
-                "esm": "1.0.0",
+                "esm": "1.1.0",
                 "metadata": {"name": "Test"},
                 "models": {
                     "test_model": {
@@ -358,7 +358,7 @@ class TestStructuralValidation:
     def test_placeholder_expansion_errors(self, fixtures_dir):
         """Test placeholder expansion validation."""
         invalid_esm = {
-            "esm": "1.0.0",
+            "esm": "1.1.0",
             "metadata": {"name": "Test"},
             "models": {
                 "test_model": {
@@ -395,12 +395,12 @@ class TestErrorCodeSpecificity:
         """Test that validation errors have specific error codes."""
         invalid_cases = [
             # Missing required field
-            ('{"esm": "1.0.0"}', "required"),
+            ('{"esm": "1.1.0"}', "required"),
             # Wrong type
             ('{"esm": 123, "metadata": {"name": "Test"}}', "type"),
             # Invalid enum value
             (
-                '{"esm": "1.0.0", "metadata": {"name": "Test"}, "models": {"m": {"variables": {"x": {"type": "invalid"}}, "equations": []}}}',
+                '{"esm": "1.1.0", "metadata": {"name": "Test"}, "models": {"m": {"variables": {"x": {"type": "invalid"}}, "equations": []}}}',
                 "enum",
             ),
         ]
@@ -416,7 +416,7 @@ class TestErrorCodeSpecificity:
         """Test that structural errors are reported with context."""
         # Test with a complex invalid structure
         invalid_esm = {
-            "esm": "1.0.0",
+            "esm": "1.1.0",
             "metadata": {"name": "Test"},
             "models": {
                 "test_model": {
@@ -576,7 +576,7 @@ class TestValidationWithFixtures:
         trip the ic_in_reaction_system diagnostic (no false positives)."""
         content = json.dumps(
             {
-                "esm": "1.0.0",
+                "esm": "1.1.0",
                 "metadata": {"name": "ok", "authors": ["t"], "created": "2026-07-01T00:00:00Z"},
                 "reaction_systems": {
                     "Chemistry": {
@@ -643,7 +643,7 @@ class TestSpecSanctionedConstructsAreNotRejected:
     @staticmethod
     def _doc(**over):
         doc = {
-            "esm": "1.0.0",
+            "esm": "1.1.0",
             "metadata": {
                 "name": "t",
                 "authors": ["a"],
@@ -839,7 +839,7 @@ class TestSpecSanctionedConstructsAreNotRejected:
                             {
                                 "lhs": {"op": "D", "args": ["u"], "wrt": "t"},
                                 "rhs": {
-                                    "op": "aggregate",
+                                    "op": "faq",
                                     "args": [],
                                     "output_idx": ["i"],
                                     "ranges": {"i": [1, 4]},
@@ -877,7 +877,7 @@ class TestUnitFindingCodesAreDistinct:
         equations = [{"lhs": "c", "rhs": expression}] if expression else []
         return json.dumps(
             {
-                "esm": "1.0.0",
+                "esm": "1.1.0",
                 "metadata": {"name": "t", "authors": ["a"], "created": "2026-01-01T00:00:00Z"},
                 "models": {"M": {"variables": variables, "equations": equations}},
             }
@@ -920,7 +920,7 @@ class TestReservedDeclarationNames:
         """The reported shape: an unknown named ``t`` with a defining equation."""
         content = json.dumps(
             {
-                "esm": "1.0.0",
+                "esm": "1.1.0",
                 "metadata": {"name": "FuelMoisture"},
                 "models": {
                     "P": {
@@ -950,7 +950,7 @@ class TestReservedDeclarationNames:
     def test_operator_placeholder_declaration_is_rejected(self):
         content = json.dumps(
             {
-                "esm": "1.0.0",
+                "esm": "1.1.0",
                 "metadata": {"name": "PlaceholderDeclared"},
                 "models": {
                     "M": {
@@ -972,7 +972,7 @@ class TestReservedDeclarationNames:
         system exactly as a ``variables`` entry does (esm-spec §7.4)."""
         content = json.dumps(
             {
-                "esm": "1.0.0",
+                "esm": "1.1.0",
                 "metadata": {"name": "ReactionNamedT"},
                 "reaction_systems": {
                     "R": {
@@ -1009,7 +1009,7 @@ class TestReservedDeclarationNames:
         def doc(declared):
             return json.dumps(
                 {
-                    "esm": "1.0.0",
+                    "esm": "1.1.0",
                     "metadata": {"name": "Renamed"},
                     "domain": {"independent_variable": "s"},
                     "models": {
@@ -1035,7 +1035,7 @@ class TestReservedDeclarationNames:
         position."""
         content = json.dumps(
             {
-                "esm": "1.0.0",
+                "esm": "1.1.0",
                 "metadata": {"name": "CoordinateNamedVariable"},
                 "models": {
                     "M": {
@@ -1059,7 +1059,7 @@ class TestReservedDeclarationNames:
         """
         content = json.dumps(
             {
-                "esm": "1.0.0",
+                "esm": "1.1.0",
                 "metadata": {"name": "SubsystemDeclaration"},
                 "models": {
                     "Parent": {
@@ -1139,8 +1139,8 @@ class TestReferenceIntegrityEveryExpressionBearingField:
             "unresolved_scoped_ref_in_connector_expression.esm",
             "unresolved_scoped_ref_in_variable_map_transform.esm",
             # and the non-`args` expression CHILD fields, inside an equation
-            "undefined_variable_in_aggregate_expr.esm",
-            "undefined_variable_in_aggregate_key.esm",
+            "undefined_variable_in_faq_expr.esm",
+            "undefined_variable_in_faq_key.esm",
             "undefined_variable_in_filter.esm",
             "undefined_variable_in_integral_bound.esm",
             "undefined_variable_in_makearray_values.esm",

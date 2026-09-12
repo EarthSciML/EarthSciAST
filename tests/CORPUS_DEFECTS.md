@@ -31,12 +31,12 @@ the fixture was not at fault. Note that the failure count did not fall by two
 when defect 2 landed: fixing it unmasked a second instance of defect 3 on the
 same fixture, and only defect 3's repair cleared both — see #3.
 
-## 1. `aggregate/skolem_distinct_rank.esm` — FIXED (phase 6b)
+## 1. `faq/skolem_distinct_rank.esm` — FIXED (phase 6b)
 
 **The recorded diagnosis was wrong, and the repair was one line.**
 
 This entry used to read: "The producer node was described and never written …
-Fixing this means authoring the missing index-set-producing `aggregate` per RFC
+Fixing this means authoring the missing index-set-producing `faq` per RFC
 semiring-faq-unified-ir §5.5/§5.7, which is fixture work needing the RFC
 author's intent, not a mechanical repair."
 
@@ -51,7 +51,7 @@ doc-comment **on that node**, sitting in the same equation object as a sibling
 of the `lhs` / `rhs` it annotates, and it opens by saying so — *"edge_set: the
 index-set-producing node referenced by `index_sets.edges.from_faq`"*. The node
 itself was at `/models/EdgeEnumeration/equations/0/rhs` all along, complete:
-`op: aggregate`, `semiring: bool_and_or`, `distinct: true`, the skolem `key`
+`op: faq`, `semiring: bool_and_or`, `distinct: true`, the skolem `key`
 over the sorted endpoints, `filter`, `expr`, `ranges`, `output_idx`. Every field
 the RFC and the `_comment` call for was already written.
 
@@ -109,7 +109,7 @@ walk `index_set → node` across the model boundary. A `from_faq` naming no node
 in the document is still `unknown_faq_node`; the same `id` in two models is now
 `E_REF_DUPLICATE_NODE_ID`.
 
-`tests/valid/aggregate/cross_model_from_faq.esm` is the minimal cross-binding
+`tests/valid/faq/cross_model_from_faq.esm` is the minimal cross-binding
 fixture for the ruling, and every binding pins it.
 
 **This defect is closed.** After it landed, `wildfire_atmosphere_ocean.esm`
@@ -160,7 +160,7 @@ with no structural error and no unit warning. A document the semantic engines
 run is not reference-broken.
 
 **3. The scope set was self-inconsistent on fixtures everyone already accepts.**
-`tests/valid/aggregate/join_filter.esm` and
+`tests/valid/faq/join_filter.esm` and
 `.../join_moves_running_exhaust.esm` join on `["src", "sourceType"]` — and
 `sourceType` is a document-scoped index set, in no `args`, no `ranges` key and
 no `output_idx`. They passed only because no binding validated `pair[1]` at all;
@@ -202,7 +202,7 @@ defect 2 fixed simply began failing here instead. One change repairs both.
 resolves to, testing the classes in the order CONFORMANCE_SPEC §5.5.6 fixes —
 the order is normative because a node-local binder SHADOWS a same-named
 variable (esm-spec §4.3.1 permits one string to be a variable reference outside
-an aggregate and an index symbol inside one):
+a faq and an index symbol inside one):
 
 1. node-local binders — `ranges` keys and symbolic `output_idx` entries, FIRST;
 2. node-local string factor `args`;
@@ -219,7 +219,7 @@ could not be before (see evidence 3). Only the LEFT column carries the
 index set, which already has its own vertex kind, and inventing a
 `factor:sourceType` twin of `index_set:sourceType` would be worse than leaving
 it un-edged. A non-string right column is left to the schema, where
-`tests/invalid/aggregate/join_on_key_not_string.esm` already pins it; the left
+`tests/invalid/faq/join_on_key_not_string.esm` already pins it; the left
 column keeps its existing "non-string ⇒ unresolved factor" behaviour.
 
 Julia additionally validates `overlap`'s `src_env` / `tgt_env` against the same
@@ -246,7 +246,7 @@ TypeScript `reference-resolution.test.ts`, Go `TestReferenceGraphOverValidCorpus
 Julia `reference_graph_test.jl`), and the five-binding conformance run
 (`compare-conformance-outputs.py` over all 245 validation files) still passes.
 
-`tests/valid/aggregate/join_filter.esm` was the live trap here: it joins on
+`tests/valid/faq/join_filter.esm` was the live trap here: it joins on
 `["src", "sourceType"]`, where `sourceType` is a document-scoped index set in no
 `args`, no `ranges` key and no `output_idx`. It survived only because `pair[1]`
 was never validated. It resolves under the new rule through class 4, which is
@@ -262,7 +262,7 @@ column.
 ### The fixture-side workaround, and why it was not taken
 
 A mechanical repair existed: add `"args": ["src_bin", "tgt_bin"]` to each of the
-six aggregates here and the five in wildfire's `OceanDynamics`, matching how
+six faq nodes here and the five in wildfire's `OceanDynamics`, matching how
 `bin_skolem_spatial_join.esm` and `conservative_regrid_overlap_join.esm` were
 authored. It is semantically harmless. But adopting it as *the* fix would have
 ratified a rule the spec does not state, would have left `join_filter.esm`'s

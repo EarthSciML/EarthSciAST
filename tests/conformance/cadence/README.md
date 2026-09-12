@@ -42,7 +42,7 @@ The fixtures themselves are valid ESM files under
 `pure_pointwise.esm`, `discrete_remesh_stencil.esm`, and the loader-seeded pair
 `loader_temporal_seed.esm` / `loader_const_seed.esm`) — they validate against the
 schema with no evaluator
-(like `tests/valid/aggregate/discrete_variable_refresh.esm`) and carry an
+(like `tests/valid/faq/discrete_variable_refresh.esm`) and carry an
 `expect_cadence` assertion on every meaningful node. The runner is
 `scripts/run-cadence-conformance.py` (a self-contained sibling of
 `scripts/run-determinism-conformance.py`). It embeds the **reference
@@ -63,11 +63,11 @@ classifier + folder** — the §5.7 contract as code — and the committed golde
 The numeric tail of the §7.3 worked example — the downstream `sum_product`
 geometric FAQ that consumes the materialized edge set as a *primitive* index set
 (`area_eff[i] = Σ_{e∈edges} …`) — lives in
-`tests/valid/aggregate/area_eff_edge_faq.esm` and is evaluated numerically by all
-three bindings via the aggregate-conformance suites (its inline `tests` golden is
+`tests/valid/faq/area_eff_edge_faq.esm` and is evaluated numerically by all
+three bindings via the faq-conformance suites (its inline `tests` golden is
 the cross-binding numeric check). The full §7.3 chain in one document (enumerate →
 skolem/distinct → rank → ragged `edges_of_cell` inversion → `area_eff`) is the
-structural fixture `tests/valid/aggregate/edge_enumeration_area_eff.esm`.
+structural fixture `tests/valid/faq/edge_enumeration_area_eff.esm`.
 
 ## Two phases
 

@@ -728,7 +728,7 @@ func (s *structuralScan) validateModel(modelName string, model *Model) {
 		}
 	}
 	// The document-scoped `index_sets` registry is a legitimate non-variable
-	// identifier namespace (RFC semiring-faq-unified-ir §5.2): an `aggregate`
+	// identifier namespace (RFC semiring-faq-unified-ir §5.2): a `faq`
 	// may name an index set as a positional operand (value-invention form
 	// `aggregate(args:["faces"], …)`) or reduce over it (`rank(edges)`). Credit
 	// those names so the full-child descent below does not mis-flag them as
@@ -951,7 +951,7 @@ func (s *structuralScan) validateExpressionVariables(expr Expression, allVars ma
 
 // creditIndexSetNames marks every document-scoped `index_sets` registry name as
 // in-scope in allVars. Index-set names are a legitimate non-variable identifier
-// namespace an `aggregate` may reference (RFC semiring-faq-unified-ir §5.2); the
+// namespace a `faq` may reference (RFC semiring-faq-unified-ir §5.2); the
 // full-child descent in validateExprNodeChildren would otherwise flag them as
 // undefined. No-op when no file/registry is attached.
 func (s *structuralScan) creditIndexSetNames(allVars map[string]bool) {

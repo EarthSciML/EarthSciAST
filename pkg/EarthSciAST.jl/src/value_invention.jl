@@ -77,7 +77,7 @@ Classify a typed aggregate node's value-invention role:
 """
 function _vi_node_kind(node)
     node isa OpExpr || return :none
-    node.op == "aggregate" || return :none
+    node.op == "faq" || return :none
     node.distinct === true && return :producer
     body = node.expr_body
     if body isa OpExpr
@@ -135,7 +135,7 @@ function _vi_skolem_index_targets(model::Model)
 end
 
 # The group KEY of a GROUPED reduction, or `nothing`. The SCVT group-by signature
-# is precise: a single-output-index `aggregate` whose `join` pairs the OUTPUT
+# is precise: a single-output-index `faq` whose `join` pairs the OUTPUT
 # index symbol with an already-known value-invention buffer (`num[g] = … join on
 # [["assign","g"]]` ⇒ key `assign`). This is deliberately narrower than "any join
 # touching a VI buffer" — a relational gather that joins two VI bin buffers to
@@ -143,7 +143,7 @@ end
 # regridder) pairs neither column with its output index and is NOT a grouped
 # value-invention reduction; it stays an ordinary aggregate on the simulate path.
 function _vi_grouped_key(node::OpExpr, vi_var_names)
-    node.op == "aggregate" || return nothing
+    node.op == "faq" || return nothing
     oi = node.output_idx === nothing ? Any[] : node.output_idx
     length(oi) == 1 || return nothing
     gsym = String(oi[1])
@@ -166,13 +166,13 @@ function _vi_grouped_key(node::OpExpr, vi_var_names)
 end
 
 # True iff `node` is an elementwise DERIVED buffer over known value-invention
-# buffers: a single-output-index `aggregate` with NO join and NO contraction (every
+# buffers: a single-output-index `faq` with NO join and NO contraction (every
 # range symbol is the output index) whose body reads an upstream VI buffer
 # (`centroid[g] = num[g]/den[g]`). The no-contraction / no-join guard keeps a
 # contracted or scalar aggregate (`mass_tgt = …`, output_idx `[]`) from being
 # mistaken for the centroid map.
 function _vi_is_derived(node::OpExpr, vi_var_names)
-    node.op == "aggregate" || return false
+    node.op == "faq" || return false
     oi = node.output_idx === nothing ? Any[] : node.output_idx
     length(oi) == 1 || return false
     gsym = String(oi[1])
@@ -192,7 +192,7 @@ reductions) — all excluded from the ODE state, as the geometry clip-ring vars 
 
 `chain` is the ordered list of `(lhs, node, kind)` build-time GROUPED / DERIVED
 buffers downstream of an arg-witness assignment — the SCVT centroid step. A plain
-numeric `aggregate` becomes value-invention by *data dependency*: if its `join`
+numeric `faq` becomes value-invention by *data dependency*: if its `join`
 names an already-known VI buffer it is a `:grouped` semiring reduction keyed on
 that buffer (`num[g] = Σ_{p:assign=g} rho_p·x_p`); if its body merely reads VI
 buffers it is a `:derived` elementwise buffer (`centroid[g] = num[g]/den[g]`). The
@@ -208,7 +208,7 @@ function _vi_detect(model::Model)
         base === nothing && continue
         kind = _vi_node_kind(rhs)
         if kind == :none
-            rhs isa OpExpr && rhs.op == "aggregate" && push!(candidates, (base, rhs))
+            rhs isa OpExpr && rhs.op == "faq" && push!(candidates, (base, rhs))
             continue
         end
         push!(vi_var_names, base)   # every value-invention output leaves the ODE

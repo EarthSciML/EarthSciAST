@@ -103,7 +103,7 @@ DEAD_BUT_LOWERED = {
 # differentiated state and is never evaluated — and `args` of an LHS node are
 # still LHS, so the walk must let this through however deeply it nests.
 AGGREGATE_LHS_DERIVATIVE = {
-    "esm": "1.0.0",
+    "esm": "1.1.0",
     "metadata": {"name": "AggregateLhsDerivative", "authors": ["repro"]},
     "index_sets": {"lev": {"kind": "interval", "size": 4}},
     "models": {
@@ -114,7 +114,7 @@ AGGREGATE_LHS_DERIVATIVE = {
             "equations": [
                 {
                     "lhs": {
-                        "op": "aggregate",
+                        "op": "faq",
                         "args": [],
                         "output_idx": ["k"],
                         "expr": {
@@ -125,7 +125,7 @@ AGGREGATE_LHS_DERIVATIVE = {
                         "ranges": {"k": {"from": "lev"}},
                     },
                     "rhs": {
-                        "op": "aggregate",
+                        "op": "faq",
                         "args": [],
                         "output_idx": ["k"],
                         "expr": 1.0,

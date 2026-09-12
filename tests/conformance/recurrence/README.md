@@ -1,8 +1,8 @@
 # Recurrence Conformance Fixtures — causal self-reference along one index axis
 
 Cross-port fixtures for **esm-spec §4.3.1.1** / **CONFORMANCE_SPEC §5.19**: an
-equation defining an array-shaped unknown `V` whose defining `aggregate` body
-reads `index(V, …)` at a strictly earlier position along one of that aggregate's
+equation defining an array-shaped unknown `V` whose defining `faq` body
+reads `index(V, …)` at a strictly earlier position along one of that faq's
 output axes. The array is then materialized cell by cell, that axis outermost and
 ascending, each cell published before the axis advances.
 

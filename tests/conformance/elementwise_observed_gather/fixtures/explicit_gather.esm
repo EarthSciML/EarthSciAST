@@ -1,8 +1,8 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "explicit_gather",
-    "description": "ORACLE twin of elementwise_gather.esm: the identical field written as an EXPLICIT gather, f = aggregate(k from lev; 1 + cos(pi*index(zc, k))) — the spelling that never needed the index push-down. Same index sets, same equations otherwise, same assertions, same expected values, so a divergence between the two files is the push-down and cannot be the physics."
+    "description": "ORACLE twin of elementwise_gather.esm: the identical field written as an EXPLICIT gather, f = faq(k from lev; 1 + cos(pi*index(zc, k))) — the spelling that never needed the index push-down. Same index sets, same equations otherwise, same assertions, same expected values, so a divergence between the two files is the push-down and cannot be the physics."
   },
   "index_sets": {
     "lev": { "kind": "interval", "size": 4 }
@@ -27,7 +27,7 @@
         {
           "lhs": "f",
           "rhs": {
-            "op": "aggregate", "semiring": "sum_product",
+            "op": "faq", "semiring": "sum_product",
             "output_idx": ["k"],
             "ranges": { "k": [1, 4] },
             "args": ["zc"],
@@ -44,7 +44,7 @@
         {
           "lhs": "colsum",
           "rhs": {
-            "op": "aggregate", "semiring": "sum_product",
+            "op": "faq", "semiring": "sum_product",
             "output_idx": ["i"],
             "ranges": { "i": [1, 4], "j": [1, 4] },
             "args": ["f"],
@@ -55,7 +55,7 @@
         {
           "lhs": "total",
           "rhs": {
-            "op": "aggregate", "semiring": "sum_product",
+            "op": "faq", "semiring": "sum_product",
             "output_idx": [],
             "ranges": { "j": [1, 4] },
             "args": ["f"],

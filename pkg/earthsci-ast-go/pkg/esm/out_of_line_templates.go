@@ -80,7 +80,7 @@ var evaluableCoreOps = map[string]struct{}{
 	// Array producers / gathers / reshapes
 	"index": {}, "makearray": {}, "broadcast": {}, "reshape": {}, "transpose": {}, "concat": {},
 	// Aggregates
-	"arrayop": {}, "aggregate": {},
+	"faq": {},
 	// Geometry kernel leaves / value invention
 	"intersect_polygon": {}, "polygon_intersection_area": {}, "skolem": {},
 }

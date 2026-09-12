@@ -965,7 +965,7 @@ fn test_error_grad_in_simulator_rejected() {
     // Feed a non-discretized AST with a `grad` node directly to the
     // simulator's RHS evaluator. Per the canonical pipeline contract,
     // ESD discretization rules MUST rewrite `grad`/`div`/`laplacian` into
-    // `arrayop` AST before reaching the simulator; encountering one here
+    // `faq` AST before reaching the simulator; encountering one here
     // means the canonical pipeline broke. The simulator must surface
     // this rather than silently substitute zero (the historical stub).
     let flat = flat_with_one_state_rhs(op("grad", vec![var("u")]));
@@ -1033,7 +1033,7 @@ fn test_error_spatial_d_in_simulator_rejected() {
 fn test_error_grad_in_array_simulator_rejected() {
     // The array-op simulator (`ArrayCompiled::from_model`) must also reject
     // unlowered rewrite-target operators with the same uniform
-    // `unlowered_operator` code. Sneak a `grad` into an arrayop body so the
+    // `unlowered_operator` code. Sneak a `grad` into a faq body so the
     // dispatcher routes the model to the array path.
     use earthsci_ast::simulate_array::ArrayCompiled;
 
@@ -1042,13 +1042,13 @@ fn test_error_grad_in_array_simulator_rejected() {
         "i".to_string(),
         earthsci_ast::extension::types::RangeSpec::Interval([1i64, 2i64]),
     );
-    // NOTE: this used to carry the legacy `op: "arrayop"` spelling, which ESM
-    // v0.8.0 removed (`aggregate::is_aggregate_op` no longer accepts it). The op
+    // NOTE: this used to carry the legacy `op: "faq"` spelling, which ESM
+    // v0.8.0 removed (`aggregate::is_faq_op` no longer accepts it). The op
     // registry now rejects that dead name as an unlowered operator in its own
     // right, which would shadow the `grad` this test is actually about — so use
-    // the current `aggregate` tag and keep asserting on the inner `grad`.
-    let arrayop_body = Expr::operator(ExpressionNode {
-        op: "aggregate".to_string(),
+    // the current `faq` tag and keep asserting on the inner `grad`.
+    let faq_body = Expr::operator(ExpressionNode {
+        op: "faq".to_string(),
         args: vec![],
         expr: Some(Box::new(op("grad", vec![var("u")]))),
         output_idx: Some(vec!["i".to_string()]),
@@ -1071,7 +1071,7 @@ fn test_error_grad_in_array_simulator_rejected() {
         vec![Equation {
             comment: None,
             lhs,
-            rhs: arrayop_body,
+            rhs: faq_body,
         }],
     );
     let err = match ArrayCompiled::from_model(&model, &std::collections::HashMap::new()) {
@@ -1097,7 +1097,7 @@ fn test_error_unknown_variable_in_array_model_rejected() {
     // bare loader-fed forcing field.
     use earthsci_ast::simulate_array::ArrayCompiled;
 
-    // Force the array path with a trivial arrayop equation for a real state, so
+    // Force the array path with a trivial faq equation for a real state, so
     // the dispatcher/build reaches the array runtime, then add the bad equation.
     let mut ranges = HashMap::new();
     ranges.insert(
@@ -1105,7 +1105,7 @@ fn test_error_unknown_variable_in_array_model_rejected() {
         earthsci_ast::extension::types::RangeSpec::Interval([1i64, 2i64]),
     );
     let good_lhs = Expr::operator(ExpressionNode {
-        op: "aggregate".to_string(),
+        op: "faq".to_string(),
         args: vec![],
         expr: Some(Box::new(op(
             "D",
@@ -1116,7 +1116,7 @@ fn test_error_unknown_variable_in_array_model_rejected() {
         ..Default::default()
     });
     let good_rhs = Expr::operator(ExpressionNode {
-        op: "aggregate".to_string(),
+        op: "faq".to_string(),
         args: vec![],
         expr: Some(Box::new(op(
             "*",

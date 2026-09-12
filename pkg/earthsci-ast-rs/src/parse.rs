@@ -149,6 +149,12 @@ pub fn load_string_with_options(
 fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmError> {
     let mut json_value = json_value;
 
+    // esm 1.1.0: rewrite the deprecated `aggregate` op spelling to the
+    // canonical `faq` at the wire boundary, ahead of every other pass, so the
+    // version gates, the schema, the typed tree and `emit` all see exactly one
+    // tag (docs/content/rfcs/faq-node-rename.md).
+    prepare_document_ops(&mut json_value)?;
+
     let base = options.base_path.clone().unwrap_or_else(|| {
         std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
     });
@@ -254,7 +260,7 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     crate::lower_enums::lower_enums_raw(&mut json_value)
         .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
 
-    // Reject an `aggregate` binder that shadows a globally-scoped name (the
+    // Reject a `faq` binder that shadows a globally-scoped name (the
     // independent variable, `_var`). Runs HERE, on the fully lowered form, so a
     // binder a §9.6/§9.7 template body introduced is caught with the authored
     // ones. See `reject_reserved_index_symbols` for why this is a rejection
@@ -655,7 +661,7 @@ fn compile_branch<'c>(
 // If you change a shared rule, change it in both layers (and the sibling
 // bindings).
 
-/// Reject any `aggregate` binder that SHADOWS the document's independent
+/// Reject any `faq` binder that SHADOWS the document's independent
 /// variable (esm-spec §11.3: `domain.independent_variable`, default `"t"`) or
 /// the §6.4 operator placeholder `_var` — diagnostic `reserved_index_symbol`.
 ///
@@ -674,7 +680,7 @@ fn compile_branch<'c>(
 /// **Why this is a rejection and not a shadowing rule.** Making the binder win
 /// would mean inverting that precedence at all nine sites here and in every
 /// peer binding, and it would still leave the node unable to mention the
-/// independent variable at all — an `aggregate` body that reads `t` for a
+/// independent variable at all — a `faq` body that reads `t` for a
 /// forcing term is ordinary, and inside such a node `t` would silently become
 /// an index. Rejecting costs nothing an author wants: an index symbol is the
 /// author's free choice (§4.3.1), so the fix is to spell it anything else.
@@ -1548,6 +1554,156 @@ fn is_iso8601_duration(s: &str) -> bool {
     }
 
     any_component && chars.next().is_none()
+}
+
+/// Rewrite every deprecated expression-node `op` spelling to its canonical tag,
+/// in place, and warn once for the document.
+///
+/// The one alias is `aggregate` → `faq` (esm 1.1.0,
+/// `docs/content/rfcs/faq-node-rename.md`). Normalizing at the wire boundary is
+/// what lets the rest of the crate recognize exactly one spelling: nothing
+/// downstream of the loader — [`crate::faq::is_faq_op`] included — ever sees the
+/// alias, and a document authored with `aggregate` is upgraded exactly once, on
+/// its first load.
+///
+/// The older `arrayop` spelling is NOT normalized: it was removed at esm 0.8.0
+/// and is rejected like any other unknown non-rewrite-target op.
+pub(crate) fn prepare_document_ops(value: &mut serde_json::Value) -> Result<(), EsmError> {
+    // 1. `arrayop` was REMOVED at 0.8.0 — rejected by name, before anything else.
+    if let Some(path) = find_removed_op(value) {
+        return Err(EsmError::SchemaValidation(format!(
+            "removed_op at {path}: `\"op\": \"arrayop\"` was removed at esm 0.8.0 and is not a \
+             deprecated alias; use `\"op\": \"faq\"` (the Functional Aggregate Query node). \
+             See docs/content/rfcs/faq-node-rename.md."
+        )));
+    }
+    // 2. Version gate, on the AUTHORED form. `faq` arrives at esm 1.1.0, so a
+    //    document that spells it while declaring less is rejected — the same
+    //    rule the top-level `solver` block follows (esm-spec §2.2.4). This runs
+    //    BEFORE normalization on purpose: `aggregate` IS the pre-1.1.0
+    //    spelling, so a 1.0.0 document carrying the alias is legal and must not
+    //    be caught by this gate.
+    if let Some(path) = find_faq_op(value)
+        && let Some(esm) = value.get("esm").and_then(|v| v.as_str())
+        && let Some((major, minor, _)) = crate::diagnostic::parse_semver(esm)
+        && (major, minor) < (1, 1)
+    {
+        return Err(EsmError::SchemaValidation(format!(
+            "faq_version_too_old at {path}: the `faq` op arrives at esm 1.1.0; file \
+             declares {esm}. Use `\"op\": \"aggregate\"` (the deprecated pre-1.1.0 \
+             spelling) or raise the declared version. \
+             See docs/content/rfcs/faq-node-rename.md."
+        )));
+    }
+    // 3. Normalize the alias, and raise the declared version with it so the
+    //    upgraded document is self-consistent (a floor, never a downgrade).
+    let n = rewrite_op_aliases(value);
+    if n > 0 {
+        raise_esm_floor_to_v11(value);
+    }
+    if n > 0 {
+        let plural = if n == 1 { "node was" } else { "nodes were" };
+        eprintln!(
+            "warning: deprecated_op_alias: `\"op\": \"aggregate\"` is the pre-1.1.0 spelling \
+             of `\"op\": \"faq\"` (Functional Aggregate Query); {n} {plural} normalized on \
+             load. The alias is REMOVED at esm 2.0.0 — re-emit this document to migrate it \
+             (docs/content/rfcs/faq-node-rename.md)."
+        );
+    }
+    Ok(())
+}
+
+/// Locate a `"op": "faq"` node, returning a JSON-pointer-ish path to it.
+fn find_faq_op(value: &serde_json::Value) -> Option<String> {
+    fn walk(v: &serde_json::Value, at: &str) -> Option<String> {
+        match v {
+            serde_json::Value::Object(map) => {
+                if map.get("op").and_then(|o| o.as_str()) == Some("faq") {
+                    return Some(at.to_string());
+                }
+                map.iter()
+                    .find_map(|(k, child)| walk(child, &format!("{at}/{k}")))
+            }
+            serde_json::Value::Array(items) => items
+                .iter()
+                .enumerate()
+                .find_map(|(i, child)| walk(child, &format!("{at}/{i}"))),
+            _ => None,
+        }
+    }
+    walk(value, "")
+}
+
+/// Raise a document's declared `esm` to 1.1.0 when it sits below that floor.
+///
+/// Normalizing `aggregate` to `faq` would otherwise produce a document that
+/// spells a 1.1.0 construct while declaring an older version — precisely what
+/// the gate above rejects. The stamp is a FLOOR: a document already at or above
+/// 1.1.0 keeps its own version.
+fn raise_esm_floor_to_v11(value: &mut serde_json::Value) {
+    let below = value
+        .get("esm")
+        .and_then(|v| v.as_str())
+        .and_then(crate::diagnostic::parse_semver)
+        .is_some_and(|(major, minor, _)| (major, minor) < (1, 1));
+    if below && let Some(obj) = value.as_object_mut() {
+        obj.insert(
+            "esm".to_string(),
+            serde_json::Value::String("1.1.0".to_string()),
+        );
+    }
+}
+
+/// Locate a `"op": "arrayop"` node, returning a JSON-pointer-ish path to it.
+///
+/// `arrayop` is REMOVED, not deprecated: without this check it is a perfectly
+/// well-formed identifier and would fall into the OPEN rewrite-target tier
+/// (esm-spec §4.2), loading silently and failing only much later as an
+/// `unlowered_operator`.
+fn find_removed_op(value: &serde_json::Value) -> Option<String> {
+    fn walk(v: &serde_json::Value, at: &str) -> Option<String> {
+        match v {
+            serde_json::Value::Object(map) => {
+                if map.get("op").and_then(|o| o.as_str()) == Some("arrayop") {
+                    return Some(at.to_string());
+                }
+                map.iter()
+                    .find_map(|(k, child)| walk(child, &format!("{at}/{k}")))
+            }
+            serde_json::Value::Array(items) => items
+                .iter()
+                .enumerate()
+                .find_map(|(i, child)| walk(child, &format!("{at}/{i}"))),
+            _ => None,
+        }
+    }
+    walk(value, "")
+}
+
+/// Depth-first rewrite of `"op": "aggregate"` to `"op": "faq"`; returns the count.
+fn rewrite_op_aliases(value: &mut serde_json::Value) -> usize {
+    let mut n = 0;
+    match value {
+        serde_json::Value::Object(map) => {
+            if map.get("op").and_then(|v| v.as_str()) == Some("aggregate") {
+                map.insert(
+                    "op".to_string(),
+                    serde_json::Value::String("faq".to_string()),
+                );
+                n += 1;
+            }
+            for (_, v) in map.iter_mut() {
+                n += rewrite_op_aliases(v);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for v in items.iter_mut() {
+                n += rewrite_op_aliases(v);
+            }
+        }
+        _ => {}
+    }
+    n
 }
 
 #[cfg(test)]

@@ -31,7 +31,7 @@ over axes ``T``:
 
 * ``A ⊆ T`` — the operand broadcasts along the axes of ``T`` it does not carry.
   A ``[lat]`` operand in a ``[lon, lat, lev]`` result replicates along ``lon``
-  and ``lev``, which is exactly what the explicit ``aggregate`` spelling
+  and ``lev``, which is exactly what the explicit ``faq`` spelling
   (``index(w1, j)``) computes. The aggregate path is the correctness oracle and
   is not touched by any of this.
 * Axis ORDER is irrelevant — ``A`` is matched to ``T`` by name, so a
@@ -47,7 +47,7 @@ The scope boundary
 ------------------
 
 Name-based alignment applies ONLY where names exist. The results of ``reshape``,
-``transpose``, ``concat``, ``makearray``, ``index``, ``aggregate``, ``fn`` and
+``transpose``, ``concat``, ``makearray``, ``index``, ``faq``, ``fn`` and
 literal arrays are ANONYMOUS — they have shapes but no index-set names — and
 they keep NumPy's positional semantics (and, under ``broadcast``, that op's
 established Julia-parity left-align). :data:`ELEMENTWISE_OPS` is what encodes
@@ -98,7 +98,7 @@ __all__ = [
 #:
 #: DERIVED from the op registry rather than hand-listed, so an element-wise op
 #: added there is covered here automatically. Every op NOT in this set — the
-#: array ops (``index``/``aggregate``/``makearray``/``reshape``/``transpose``/
+#: array ops (``index``/``faq``/``makearray``/``reshape``/``transpose``/
 #: ``concat``), the relational and geometry ops, ``fn``, ``D`` — terminates the
 #: walk, because it re-indexes or reshapes its operands rather than combining
 #: them cell-wise, and so its operands are NOT in the enclosing result's frame.
@@ -171,7 +171,7 @@ def iter_named_operands(expr: Any, var_axes: dict[str, tuple[str, ...]]):
     """Yield ``(name, axes)`` for each bare-name leaf in ``expr``'s own frame.
 
     Descends only through :data:`ELEMENTWISE_OPS`, so a name appearing under an
-    ``index`` / ``aggregate`` / reshaping op — where it is NOT an operand of the
+    ``index`` / ``faq`` / reshaping op — where it is NOT an operand of the
     enclosing element-wise expression — is correctly skipped.
 
     Yields in LEFT-TO-RIGHT pre-order. The order is observable — it decides

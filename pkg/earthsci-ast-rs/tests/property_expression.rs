@@ -194,7 +194,7 @@ fn op_index(child: BoxedStrategy<Expr>) -> BoxedStrategy<Expr> {
         .boxed()
 }
 
-fn op_arrayop(child: BoxedStrategy<Expr>) -> BoxedStrategy<Expr> {
+fn op_faq(child: BoxedStrategy<Expr>) -> BoxedStrategy<Expr> {
     let output_idx = prop::collection::vec(index_name(), 1..=3);
     let reduce = prop_oneof![
         Just(Some("+".to_string())),
@@ -210,7 +210,7 @@ fn op_arrayop(child: BoxedStrategy<Expr>) -> BoxedStrategy<Expr> {
     (args, output_idx, child, reduce, ranges)
         .prop_map(|(args, oi, body, red, rngs)| {
             Expr::operator(ExpressionNode {
-                op: "arrayop".into(),
+                op: "faq".into(),
                 args,
                 output_idx: Some(oi),
                 expr: Some(Box::new(body)),
@@ -290,7 +290,7 @@ fn expr_strategy() -> BoxedStrategy<Expr> {
                 op_concat(inner.clone()),
                 op_broadcast(inner.clone()),
                 op_index(inner.clone()),
-                op_arrayop(inner.clone()),
+                op_faq(inner.clone()),
                 op_makearray(inner),
             ]
         })

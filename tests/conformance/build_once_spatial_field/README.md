@@ -14,14 +14,14 @@ darea    = D_c(area)                                              # build-once m
 D(u[c])  = darea[c] - u[c],  u(0)=0                               # ODE gathers darea per cell (Gap 2)
 ```
 
-1. **Gap 1 — setup materialization of a non-aggregate array op.** The build-once
+1. **Gap 1 — setup materialization of a non-faq array op.** The build-once
    `darea` is a `makearray` (the periodic centered-difference stencil a
    discretization rule lowers `D` to): an interior region plus two periodic-face
-   regions, each a nested central-difference aggregate over `area`, divided by
+   regions, each a nested central-difference faq over `area`, divided by
    `2·dx`. A `makearray` (and a `reshape`) carries no `output_idx`/`ranges`, so
    the setup-time materializer must evaluate it per output cell through the same
    build-time array pipeline the ODE RHS uses for `index(makearray, …)` — not
-   only the aggregate (`output_idx`) form.
+   only the faq (`output_idx`) form.
 2. **Gap 2 — build-once array crossing into the ODE RHS.** `area` and `darea`
    are build-once functions of the const geometry, so they are materialized at
    setup into const arrays; the per-cell ODE then references `index(darea, c)`,
@@ -77,7 +77,7 @@ Rust already evaluate `polygon_intersection_area` + `makearray` + array-ODE
 end-to-end, resolving the build-once field at the RHS rather than at a separate
 setup pass (so the numeric result is identical to Julia's setup-materialized
 path). Rust drives the composed path through its `simulate_array` runtime — the
-geometry-leaf aggregate, the `makearray` boundary-region stencil, and the array
+geometry-leaf faq, the `makearray` boundary-region stencil, and the array
 ODE's per-cell `index(darea, c)` gather — with no source changes required to
 enable it.
 

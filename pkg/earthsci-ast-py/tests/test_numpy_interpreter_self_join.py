@@ -1,4 +1,4 @@
-"""A relation joined to ITSELF: two ``aggregate`` ranges over ONE index set.
+"""A relation joined to ITSELF: two ``faq`` ranges over ONE index set.
 
 CONFORMANCE_SPEC §5.5.8 "Two ranges over one index set".
 
@@ -94,7 +94,7 @@ def _node(
     if syms is not None:
         clause["syms"] = list(syms)
     return ExprNode(
-        op="aggregate",
+        op="faq",
         output_idx=[out_sym],
         semiring="sum_product",
         reduce="+",
@@ -220,7 +220,7 @@ def test_a_key_naming_an_ambiguous_index_set_still_says_name_the_symbol() -> Non
     symbol instead, so that ambiguity stays an error — losing the diagnostic
     would trade a build failure for a plausible number."""
     node = ExprNode(
-        op="aggregate",
+        op="faq",
         output_idx=[],
         expr=ExprNode(op="index", args=["payload", "b"]),
         ranges={"a": {"from": "rows"}, "b": {"from": "rows"}},
@@ -236,7 +236,7 @@ def test_an_ambiguous_index_set_key_is_resolvable_with_syms() -> None:
     match on the diagonal — n terms, one per row."""
     n = 5
     node = ExprNode(
-        op="aggregate",
+        op="faq",
         output_idx=[],
         semiring="sum_product",
         reduce="+",

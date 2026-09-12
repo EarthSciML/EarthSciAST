@@ -161,7 +161,7 @@ def micro_const_arrays() -> dict[str, np.ndarray]:
 
 
 MICRO_DOC = {
-    "esm": "0.9.0",
+    "esm": "1.1.0",
     "metadata": {"name": "overlap_gate_point_in_rect_micro"},
     "index_sets": {
         "points": {"kind": "interval", "size": 5},
@@ -183,7 +183,7 @@ MICRO_DOC = {
                 {
                     "lhs": {"op": "index", "args": ["cell_present", "m"]},
                     "rhs": {
-                        "op": "aggregate",
+                        "op": "faq",
                         "id": "cells_with_points",
                         "semiring": "bool_and_or",
                         "distinct": True,

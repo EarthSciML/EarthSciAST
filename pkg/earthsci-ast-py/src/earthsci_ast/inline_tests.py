@@ -294,7 +294,7 @@ def evaluate_cellwise(
     params: dict[str, float] | None = None,
 ) -> list[float]:
     """Evaluate an array-valued expression (elementwise ops over
-    array-producing ``aggregate``/``makearray`` nodes — e.g. a grid-geometry
+    array-producing ``faq``/``makearray`` nodes — e.g. a grid-geometry
     template expanded by a §9.7 import, or a §6.6.5 analytic ``reference``)
     at each 1-based integer cell of ``cells``, returning one float per cell.
 
@@ -324,7 +324,7 @@ def evaluate_cellwise(
 
 def _mentions_free(expr: Expr, name: str) -> bool:
     """Whether ``name`` occurs FREE in ``expr``: as a variable reference not
-    bound by an enclosing ``aggregate`` / ``arrayop`` / ``makearray`` loop
+    bound by an enclosing ``faq`` / ``makearray`` loop
     symbol (``output_idx``, a ``ranges`` key) or an ``integral``'s integration
     variable. A node that binds ``name`` shadows it for its whole subtree."""
     if isinstance(expr, str):
@@ -378,10 +378,10 @@ def bind_dimension_names(
     reads (convention 1) — so ``index(table, lev)`` reads the cell's entry of
     a lookup array and ``sin(pi * (x - 0.5) / N)`` is the cell-centre analytic
     form, with no explicit gather. A reference that mentions a dimension name
-    FREE is turned into the whole field by wrapping it in an ``aggregate``
+    FREE is turned into the whole field by wrapping it in an ``faq``
     whose output indices ARE the dimension names (in shape order, each ranging
     over its index set); one that mentions none — a literal, a parameter
-    expression, or an ``aggregate`` that already produces the field under its
+    expression, or an ``faq`` that already produces the field under its
     own loop symbols — is returned untouched, so nothing that evaluated before
     evaluates differently. Mirrors the Julia / Rust ``bind_dimension_names``.
 
@@ -420,7 +420,7 @@ def bind_dimension_names(
             f"explicitly with `aggregate(i from {clash}; …)`."
         )
     return ExprNode(
-        op="aggregate",
+        op="faq",
         args=[],
         output_idx=list(dims),
         ranges={d: {"from": d} for d in dims},

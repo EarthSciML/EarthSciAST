@@ -5,7 +5,7 @@ for what every language producer must sweep.
 
 Why this exists (audit 2026-07-14, F5): all four producers used to enumerate
 ``tests/valid`` / ``tests/invalid`` themselves, NON-recursively, and each one
-therefore silently skipped the same 69 fixtures (the entire ``aggregate`` and
+therefore silently skipped the same 69 fixtures (the entire ``faq`` and
 ``template_imports`` corpora) — plus ``lib/**``, which nothing swept at all
 (CONFORMANCE_SPEC §2.2.1). Five hand-rolled directory walks are five chances to
 skip something and never notice.

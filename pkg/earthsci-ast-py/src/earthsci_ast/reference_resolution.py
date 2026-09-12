@@ -518,7 +518,7 @@ def _build_reference_graph(
                     # `factor:sourceType` twin of `index_set:sourceType`.
                     #
                     # A non-string right column is a SCHEMA defect
-                    # (tests/invalid/aggregate/join_on_key_not_string.esm pins it
+                    # (tests/invalid/faq/join_on_key_not_string.esm pins it
                     # there) and is not re-diagnosed as a reference error.
                     if len(pair) > 1 and isinstance(pair[1], str):
                         check_join_name(node, pair[1], key, path)

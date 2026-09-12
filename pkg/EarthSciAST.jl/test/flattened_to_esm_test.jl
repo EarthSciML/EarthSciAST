@@ -16,7 +16,7 @@ V(n) = E.VarExpr(n); N(x) = E.NumExpr(x)
     @testset "reconstruct copies every OpExpr field; rewrites preserve them" begin
         tl = E.OpExpr("table_lookup", E.ASTExpr[]; table="fuel", output=2,
                       table_axes=Dict{String,E.ASTExpr}("code" => V("fm")))
-        agg = E.OpExpr("aggregate", E.ASTExpr[]; semiring="sum_product", output_idx=Any[],
+        agg = E.OpExpr("faq", E.ASTExpr[]; semiring="sum_product", output_idx=Any[],
                        ranges=Dict{String,Any}("i" => E.IndexSetRef("src_cells")),
                        expr_body=E.OpExpr("*", E.ASTExpr[V("A"), V("F")]),
                        join=Any[[("a","b")]], filter=E.OpExpr(">", E.ASTExpr[V("A"), N(0.0)]),

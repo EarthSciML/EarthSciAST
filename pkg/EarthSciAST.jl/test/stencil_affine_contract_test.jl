@@ -29,7 +29,7 @@ end
 # D(y[i]) = ⊕_{k=lo:hi} body, output i in 1:ni. `reduce` names ⊕; `filt` optional.
 function _reduce_model(statevars, ybody, ni, klo, khi; reduce="+", filt=nothing)
     vars = Dict(v => ESM.ModelVariable(ESM.UnknownVariable) for v in statevars)
-    rhs = ESM.OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i"], expr_body=ybody,
+    rhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i"], expr_body=ybody,
         ranges=Dict("i" => [1, ni], "k" => [klo, khi]), reduce=reduce, filter=filt)
     ESM.Model(vars, [ESM.Equation(_ao1(_Didx(statevars[1], _v("i")), "i", 1, ni), rhs)])
 end
@@ -114,9 +114,9 @@ end
         vars = Dict("w" => ESM.ModelVariable(ESM.UnknownVariable; shape=["i", "j"]),
                     "u" => ESM.ModelVariable(ESM.UnknownVariable; shape=["i", "j"]))
         body = _op("*", _idx("u", _v("i"), _v("j")), _v("k"))
-        lhs = ESM.OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i", "j"],
+        lhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "j"],
             expr_body=_Didx("w", _v("i"), _v("j")), ranges=Dict("i"=>[1,N], "j"=>[1,N]))
-        rhs = ESM.OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i", "j"], expr_body=body,
+        rhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "j"], expr_body=body,
             ranges=Dict("i"=>[1,N], "j"=>[1,N], "k"=>[1,3]), reduce="+")
         m = ESM.Model(vars, [ESM.Equation(lhs, rhs)])
         ics = Dict("$v[$i,$j]" => (v=="u" ? sin(0.2i)+0.1j : 0.0)

@@ -861,10 +861,10 @@ function _collect_lhs_names!(names::Set{String}, e::ASTExpr)
         if e.op == "ic"
             # Initial condition: constrains a value, does not define dynamics.
             return names
-        elseif e.op in ("D", "index", "arrayop") && !isempty(e.args)
+        elseif e.op in ("D", "index") && !isempty(e.args)
             # Structural wrappers: the solved-for name is the head operand.
             _collect_lhs_names!(names, e.args[1])
-        elseif e.op == "aggregate" && e.expr_body !== nothing
+        elseif e.op == "faq" && e.expr_body !== nothing
             # Vectorised equation: the body is the real LHS.
             _collect_lhs_names!(names, e.expr_body)
         else
@@ -1065,7 +1065,7 @@ Every name a declaration map may NOT spell, mapped to the reason it is reserved
 
 Two symbols, both GLOBALLY scoped: the document's independent variable and the
 §6.4 operator placeholder. §4.9.1.1 is the normative home of this set; the
-sibling `reserved_index_symbol` rule for an `aggregate` binder reads the same
+sibling `reserved_index_symbol` rule for a `faq` binder reads the same
 set, so the two cannot drift apart. (That sibling rule is currently implemented
 only in the Rust binding; this one is implemented in all five.)
 
@@ -1195,7 +1195,7 @@ end
 
 The three static aggregate/relational checks of F-6. Walks every
 expression-bearing field of every model (and its subsystems) and, for each
-`aggregate` node it finds, applies:
+`faq` node it finds, applies:
 
 - [`_check_undefined_index_set!`] — a `ranges` `{from: NAME}` whose
   NAME is not a key of the document `index_sets` registry (run only when the
@@ -1257,7 +1257,7 @@ function _check_model_aggregates!(errors::Vector{StructuralError}, file::EsmFile
     return errors
 end
 
-# Descend `expr`; at every `aggregate` node apply the three checks, then recurse
+# Descend `expr`; at every `faq` node apply the three checks, then recurse
 # into the full expression-bearing child set (so a NESTED aggregate is checked
 # too). `anchor` is the field pointer and stays constant through the descent —
 # a finding attaches at the field, not the leaf.
@@ -1266,7 +1266,7 @@ function _walk_aggregates!(errors::Vector{StructuralError}, file::EsmFile,
                            registry::Set{String},
                            var_shapes::Dict{String,Vector{String}})
     isa(expr, OpExpr) || return errors
-    if expr.op == "aggregate"
+    if expr.op == "faq"
         _check_undefined_index_set!(errors, expr, anchor, registry)
         _check_join_key_type!(errors, file, expr, anchor)
         _check_join_sides!(errors, expr, anchor, var_shapes)
@@ -1484,7 +1484,7 @@ Array broadcast semantics (esm-spec §4.3.4), document-wide. Two families:
 
 **The `broadcast.fn` contract.** `fn` is parsed as an opaque string, so a
 `broadcast` naming a nonexistent operator (`"not_a_real_op"`), naming a
-STRUCTURAL operator (`aggregate`, `index`, `makearray`, `grad`, …), carrying no
+STRUCTURAL operator (`faq`, `index`, `makearray`, `grad`, …), carrying no
 `fn` at all, or handing its operator the wrong number of operands used to
 validate clean and only fail (if at all) at evaluation. The contract itself is
 [`_broadcast_fn_problem`](@ref) (op_registry.jl) — the same predicate the
@@ -1502,8 +1502,8 @@ an index set the result does NOT have has no alignment at all — reported as
 `array_shape_mismatch`. The result shape is the declared shape of the equation's
 whole-array LHS (`D(v)` or a bare `v`) or of the array observed being defined,
 and is used only when its axis names do not repeat. The walk descends ONLY
-through element-wise (scalar) operators; an explicit `index` gather, an
-`aggregate`/`arrayop`/`makearray`/`reshape`/`transpose`/`concat`/`broadcast`, a
+through element-wise (scalar) operators; an explicit `index` gather, a
+`faq`/`makearray`/`reshape`/`transpose`/`concat`/`broadcast`, a
 relational or geometry kernel, and an unlowered rewrite target each consume
 their operands WHOLE under their own contract and are not element-wise
 positions.
@@ -1583,7 +1583,7 @@ end
 
 # `(target name, declared index-set names)` for an equation whose LHS is a
 # WHOLE-ARRAY write, or `nothing` otherwise (a scalar equation, or a per-cell
-# `D(index(v,…))` / `arrayop(…)` LHS, which carries its own indexing). Mirrors
+# `D(index(v,…))` / `faq(…)` LHS, which carries its own indexing). Mirrors
 # `_lift_wholearray_deriv_equations`' `is_wholearray_D` plus the bare
 # array-observed definition `v = <array rhs>`.
 function _wholearray_result_axes(lhs::ASTExpr,
@@ -1894,7 +1894,7 @@ end
 # The bare names an observed's defining RHS DEPENDS ON: every `VarExpr` in the
 # tree minus every symbol some node in that tree BINDS.
 #
-# Binder subtraction is what keeps the graph honest. An `aggregate` over
+# Binder subtraction is what keeps the graph honest. A `faq` over
 # `ranges: {i: …}` writes `index(hpbl, i)`, and the `i` is a loop symbol, not a
 # reference — so a model that also happens to declare an observed named `i`
 # would otherwise gain a manufactured edge into it from every aggregate in the
@@ -2462,7 +2462,7 @@ end
 Validate references in an expression tree.
 
 Two independent checks run over the FULL expression child set — `args` plus the
-sidecar fields (integral `lower`/`upper` bounds, an aggregate/arrayop body
+sidecar fields (integral `lower`/`upper` bounds, a faq body
 `expr`, a `filter` predicate, `makearray` `values`, `table_lookup` `axes`, an
 aggregate grouping `key`, and `apply_expression_template` `bindings` values),
 matching Rust `for_each_child` / Go `validateExprNodeChildren`:

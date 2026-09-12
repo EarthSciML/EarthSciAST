@@ -1,8 +1,8 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "build_once_spatial_ode",
-    "description": "Cross-language conformance fixture for a BUILD-ONCE SPATIAL FIELD that is materialized once at setup and then consumed elementwise by an ODE (CONFORMANCE_SPEC.md §5.12). Model 'Field' declares three const polygon cells (`poly`, an in-file ring stack) and derives a per-cell `area[c] = polygon_intersection_area(poly[c], poly[c], planar)` — a geometry leaf that arms the build-once setup machinery, yielding area = [10, 30, 60]. It then takes a build-once centered first difference of that area with periodic wrap, `darea = D_c(area)`, authored directly as the `makearray` STENCIL a discretization rule lowers `D` to (an interior region plus the two periodic-boundary face regions, each a nested central-difference aggregate over `area`, divided by 2·dx). Both `area` (an aggregate) and `darea` (a makearray) are build-once functions of the const geometry, so they are materialized at setup into const arrays; the ODE `D(u[c]) = darea[c] - u[c]`, u(0)=0 then GATHERS the build-once `darea` per cell (`index(darea, c)`) at every RHS call. With dx=1 the difference is darea = [(30-60)/2, (60-10)/2, (10-30)/2] = [-15, 25, -10] and the trajectory u_c(t) = darea_c (1 - e^-t) is analytic and network-free. This is the ONLY fixture that exercises a NON-aggregate build-once array op (makearray) materialized at setup AND a build-once array crossing into the ODE RHS as a per-cell gather — the two gaps the terrain-regrid path surfaced in the Julia runner (a `D`-lowered makearray had no `output_idx` for the setup materializer, and the setup array was not exposed to the RHS)."
+    "description": "Cross-language conformance fixture for a BUILD-ONCE SPATIAL FIELD that is materialized once at setup and then consumed elementwise by an ODE (CONFORMANCE_SPEC.md §5.12). Model 'Field' declares three const polygon cells (`poly`, an in-file ring stack) and derives a per-cell `area[c] = polygon_intersection_area(poly[c], poly[c], planar)` — a geometry leaf that arms the build-once setup machinery, yielding area = [10, 30, 60]. It then takes a build-once centered first difference of that area with periodic wrap, `darea = D_c(area)`, authored directly as the `makearray` STENCIL a discretization rule lowers `D` to (an interior region plus the two periodic-boundary face regions, each a nested central-difference faq over `area`, divided by 2·dx). Both `area` (a faq) and `darea` (a makearray) are build-once functions of the const geometry, so they are materialized at setup into const arrays; the ODE `D(u[c]) = darea[c] - u[c]`, u(0)=0 then GATHERS the build-once `darea` per cell (`index(darea, c)`) at every RHS call. With dx=1 the difference is darea = [(30-60)/2, (60-10)/2, (10-30)/2] = [-15, 25, -10] and the trajectory u_c(t) = darea_c (1 - e^-t) is analytic and network-free. This is the ONLY fixture that exercises a NON-faq build-once array op (makearray) materialized at setup AND a build-once array crossing into the ODE RHS as a per-cell gather — the two gaps the terrain-regrid path surfaced in the Julia runner (a `D`-lowered makearray had no `output_idx` for the setup materializer, and the setup array was not exposed to the RHS)."
   },
   "index_sets": {
     "cells": {
@@ -51,7 +51,7 @@
           "shape": [
             "cells"
           ],
-          "description": "Build-once centered first difference of `area` with periodic wrap, authored as the makearray stencil a discretization rule lowers D to: interior region [2,2] plus the two periodic face regions [1,1] and [3,3], each a nested central-difference aggregate over `area` divided by 2·dx. darea = [-15, 25, -10]."
+          "description": "Build-once centered first difference of `area` with periodic wrap, authored as the makearray stencil a discretization rule lowers D to: interior region [2,2] plus the two periodic face regions [1,1] and [3,3], each a nested central-difference faq over `area` divided by 2·dx. darea = [-15, 25, -10]."
         },
         "u": {
           "type": "unknown",
@@ -65,7 +65,7 @@
       "equations": [
         {
           "lhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": [
               "c"
@@ -90,7 +90,7 @@
             }
           },
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": [
               "c"
@@ -187,7 +187,7 @@
         {
           "lhs": "area",
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "semiring": "sum_product",
             "output_idx": [
               "c"
@@ -249,7 +249,7 @@
             ],
             "values": [
               {
-                "op": "aggregate",
+                "op": "faq",
                 "output_idx": [
                   "c"
                 ],
@@ -307,7 +307,7 @@
                 }
               },
               {
-                "op": "aggregate",
+                "op": "faq",
                 "output_idx": [
                   "c"
                 ],
@@ -353,7 +353,7 @@
                 }
               },
               {
-                "op": "aggregate",
+                "op": "faq",
                 "output_idx": [
                   "c"
                 ],

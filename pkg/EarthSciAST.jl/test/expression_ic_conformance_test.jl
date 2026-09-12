@@ -27,18 +27,20 @@ const _EXPRIC_REPO_ROOT = TESTUTILS_REPO_ROOT
     # Julia parses the golden into an EsmFile (round-trip / evaluation deferred).
     file = ESS.load_path(path)
     @test file isa ESS.EsmFile
-    # The shared corpus is esm 1.0.0 throughout and is NOT restamped as the
-    # library advances (the 1.x line is additive, so an older minor stays
-    # loadable). Pinning SCHEMA_VERSION here only worked while the two
-    # coincided; what this case actually needs is that the golden LOADS.
-    @test file.esm == "1.0.0"
+    # Loading must not RESTAMP the document, so pin the loaded version against
+    # the golden's OWN declared one rather than a literal. A literal has to be
+    # chased every time the corpus moves: this golden declared 1.0.0 until its
+    # `faq` nodes made 1.1.0 the floor, and the 1.x line being additive means an
+    # older minor stays loadable, so the version a shared fixture carries is not
+    # this case's to assert. What it needs is that the golden LOADS unchanged.
+    raw = JSON3.read(read(path, String), Dict)
+    @test file.esm == raw["esm"]
 
     # esm-spec v0.8.0 removed the domain-level `initial_conditions` block; the
     # expression IC is now carried by an `ic(u)` equation whose RHS is the
     # Expression AST psi(x) = 0.5 * (1 + tanh((x - 0.3)/0.15)) in the spatial
     # coordinate `x`. The state field is method-of-lines discretized over the
     # 1-D grid via `shape: [i]`.
-    raw = JSON3.read(read(path, String), Dict)
     model = raw["models"]["IgnitionFront1D"]
     @test model["variables"]["u"]["shape"] == ["i"]
 

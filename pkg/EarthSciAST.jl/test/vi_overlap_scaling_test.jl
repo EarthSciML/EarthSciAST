@@ -111,7 +111,7 @@ _op(o, args...) = Dict("op" => o, "args" => Any[args...])
         0.0)
 
     _mkdoc(np, nc) = Dict(
-        "esm" => "0.6.0",
+        "esm" => "1.1.0",
         "metadata" => Dict("name" => "vi_overlap_scaling"),
         "index_sets" => Dict(
             "points" => Dict("kind" => "interval", "size" => np),
@@ -129,7 +129,7 @@ _op(o, args...) = Dict("op" => o, "args" => Any[args...])
             "equations" => [Dict(
                 "lhs" => _ix("cell_present", "m"),
                 "rhs" => Dict(
-                    "op" => "aggregate",
+                    "op" => "faq",
                     "id" => "scaling_producer",
                     "semiring" => "bool_and_or",
                     "distinct" => true,
@@ -230,7 +230,7 @@ end
         "E" => Dict("type" => "parameter", "shape" => ["cells"]),
         "N" => Dict("type" => "parameter", "shape" => ["cells"]))
     _mirror_doc(np, nc) = Dict(
-        "esm" => "0.6.0",
+        "esm" => "1.1.0",
         "metadata" => Dict("name" => "dense_overlap_mirror"),
         "index_sets" => Dict("points" => Dict("kind" => "interval", "size" => np),
                              "cells"  => Dict("kind" => "interval", "size" => nc)),
@@ -238,10 +238,10 @@ end
             "variables" => merge(_rectvars,
                 Dict("P" => Dict("type" => "unknown", "shape" => ["points"]))),
             "equations" => [Dict(
-                "lhs" => Dict("op" => "aggregate", "args" => [], "output_idx" => ["p"],
+                "lhs" => Dict("op" => "faq", "args" => [], "output_idx" => ["p"],
                     "expr" => Dict("op" => "D", "args" => [_ix("P", "p")], "wrt" => "t"),
                     "ranges" => Dict("p" => [1, np])),
-                "rhs" => Dict("op" => "aggregate", "semiring" => "sum_product",
+                "rhs" => Dict("op" => "faq", "semiring" => "sum_product",
                     "output_idx" => ["p"],
                     "ranges" => Dict("p" => Dict("from" => "points"),
                                      "c" => Dict("from" => "cells")),
@@ -292,12 +292,12 @@ end
     # unknown is declared `unknown` and DEFINED by a bare-variable-LHS equation.
     _unk(shape) = Dict("type" => "unknown", "shape" => shape)
     _defeq(name, e) = Dict{String,Any}("lhs" => name, "rhs" => e)
-    _binagg = Dict("op" => "aggregate", "output_idx" => ["c"], "reduce" => "+",
+    _binagg = Dict("op" => "faq", "output_idx" => ["c"], "reduce" => "+",
         "ranges" => Dict("c" => Dict("from" => "cells"), "r" => Dict("from" => "points")),
         "args" => ["W", "S", "E", "N", "X", "Y", "annual"],
         "expr" => _op("*", _op("ifelse", _contain("c", "r"), 1.0, 0.0),
                       _ix("annual", "r")))
-    _concagg = Dict("op" => "aggregate", "output_idx" => ["rcv"], "reduce" => "+",
+    _concagg = Dict("op" => "faq", "output_idx" => ["rcv"], "reduce" => "+",
         "ranges" => Dict("s" => Dict("from" => "cells"),
                          "rcv" => Dict("from" => "rcv_cells")),
         "args" => ["SR", "Emis"],

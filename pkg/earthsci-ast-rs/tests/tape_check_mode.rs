@@ -18,7 +18,7 @@ use earthsci_ast::{Alg, SolveOptions, load_string};
 /// a genuine divergence between the two paths would be caught.
 const MODEL: &str = r#"
     {
-      "esm": "1.0.0",
+      "esm": "1.1.0",
       "metadata": {
         "name": "tape_check_mode"
       },
@@ -41,7 +41,7 @@ const MODEL: &str = r#"
           "equations": [
             {
               "lhs": {
-                "op": "aggregate",
+                "op": "faq",
                 "args": [],
                 "output_idx": [
                   "i"
@@ -67,7 +67,7 @@ const MODEL: &str = r#"
                 }
               },
               "rhs": {
-                "op": "aggregate",
+                "op": "faq",
                 "args": [],
                 "output_idx": [
                   "i"
@@ -134,7 +134,7 @@ const MODEL: &str = r#"
             {
               "lhs": "g",
               "rhs": {
-                "op": "aggregate",
+                "op": "faq",
                 "args": [],
                 "output_idx": [
                   "i"

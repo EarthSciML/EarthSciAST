@@ -276,7 +276,7 @@
       }
     }
   },
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "index_sets": {
     "emis_layer": {
       "kind": "interval",
@@ -500,7 +500,7 @@
               ],
               "op": "*"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "c"
             ],
@@ -640,7 +640,7 @@
               ],
               "op": "*"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "c"
             ],
@@ -780,7 +780,7 @@
               ],
               "op": "*"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "c"
             ],
@@ -920,7 +920,7 @@
               ],
               "op": "*"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "c"
             ],
@@ -1060,7 +1060,7 @@
               ],
               "op": "*"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "c"
             ],
@@ -1131,7 +1131,7 @@
               ],
               "op": "*"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "rcv"
             ],
@@ -1674,7 +1674,7 @@
               ],
               "op": "*"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "r"
             ],
@@ -2604,7 +2604,7 @@
               ],
               "op": "-"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "r"
             ],
@@ -2642,7 +2642,7 @@
               ],
               "op": "*"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "rcv"
             ],
@@ -2684,7 +2684,7 @@
               ],
               "op": "*"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "rcv"
             ],
@@ -2726,7 +2726,7 @@
               ],
               "op": "*"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "rcv"
             ],
@@ -2768,7 +2768,7 @@
               ],
               "op": "*"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "rcv"
             ],
@@ -2810,7 +2810,7 @@
               ],
               "op": "*"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "rcv"
             ],
@@ -2910,7 +2910,7 @@
               ],
               "op": "*"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "rcv"
             ],
@@ -3006,7 +3006,7 @@
               ],
               "op": "*"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "rcv"
             ],
@@ -3043,7 +3043,7 @@
               ],
               "op": "ifelse"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "r"
             ],
@@ -3124,7 +3124,7 @@
               ],
               "op": "ifelse"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "r"
             ],
@@ -3387,7 +3387,7 @@
               ],
               "op": "ifelse"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "r"
             ],
@@ -3424,7 +3424,7 @@
               ],
               "op": "ifelse"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "r"
             ],
@@ -3908,7 +3908,7 @@
               ],
               "op": "ifelse"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "r"
             ],
@@ -3938,7 +3938,7 @@
               ],
               "op": "*"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "rcv"
             ],
@@ -3968,7 +3968,7 @@
               ],
               "op": "*"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "rcv"
             ],
@@ -3998,7 +3998,7 @@
               ],
               "op": "*"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "rcv"
             ],
@@ -4028,7 +4028,7 @@
               ],
               "op": "*"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "rcv"
             ],
@@ -4058,7 +4058,7 @@
               ],
               "op": "*"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "rcv"
             ],
@@ -4101,7 +4101,7 @@
               ],
               "op": "/"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "rcv"
             ],
@@ -4144,7 +4144,7 @@
               ],
               "op": "/"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "rcv"
             ],

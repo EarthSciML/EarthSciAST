@@ -1067,7 +1067,7 @@ describe('lhsTargetName', () => {
     expect(lhsTargetName('x')).toBe('x')
     expect(lhsTargetName({ op: 'D', args: ['x'] })).toBe('x')
     expect(lhsTargetName({ op: 'index', args: ['v', 'i'] })).toBe('v')
-    expect(lhsTargetName({ op: 'aggregate', args: [], expr: { op: 'D', args: ['y'] } })).toBe('y')
+    expect(lhsTargetName({ op: 'faq', args: [], expr: { op: 'D', args: ['y'] } })).toBe('y')
   })
 
   it('returns undefined for unrecognized LHS shapes', () => {

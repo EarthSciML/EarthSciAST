@@ -477,5 +477,11 @@ def load_ref_raw(
         raise ExpressionTemplateError(
             code, f"{prefix}{subject} ref '{label}' is not valid JSON: {e}"
         ) from e
+    # A library is a document too, and its template BODIES carry expression
+    # nodes — same wire boundary as the root
+    # (docs/content/rfcs/faq-node-rename.md §5.2).
+    from .parse import prepare_document_ops
+
+    prepare_document_ops(raw)
     new_base = base_dir if path is None else os.path.dirname(path)
     return raw, new_base

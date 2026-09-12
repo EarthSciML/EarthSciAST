@@ -6,7 +6,7 @@
 //! and the `polygon_area` FAQ at the kernel / `eval_expression` level. This suite
 //! closes the loop: it drives the shared `tests/valid/geometry/*.esm` fixtures
 //! that carry inline `tests` blocks END-TO-END through [`earthsci_ast::simulate`],
-//! exactly as `aggregate_conformance_tests.rs` does for the M1 semiring fixtures
+//! exactly as `faq_conformance_tests.rs` does for the M1 semiring fixtures
 //! and as the Python `test_geometry_simulation.py` does for the same fixtures.
 //!
 //! A geometry-ODE fixture integrates as a real ODE only because the array-op

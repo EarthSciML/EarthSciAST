@@ -51,7 +51,7 @@ const _PG_ESM = EarthSciAST
 _pg_Dt(v) = Dict{String,Any}("op" => "D", "args" => Any[v], "wrt" => "t")
 _pg_ix(v, i...) = Dict{String,Any}("op" => "index", "args" => Any[v, i...])
 _pg_o(o, a...) = Dict{String,Any}("op" => o, "args" => Any[a...])
-_pg_ao(e) = Dict{String,Any}("op" => "arrayop", "output_idx" => Any["i"],
+_pg_ao(e) = Dict{String,Any}("op" => "faq", "output_idx" => Any["i"],
     "ranges" => Dict{String,Any}("i" => Dict{String,Any}("from" => "n")),
     "args" => Any[], "expr" => e)
 _pg_state(; kw...) = Dict{String,Any}("type" => "unknown",

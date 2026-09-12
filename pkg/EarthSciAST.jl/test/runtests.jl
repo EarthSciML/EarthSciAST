@@ -118,7 +118,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("intern_oracle_test.jl")               # A1 hash-consing ≡ ESS_INTERN_DISABLE=1 (differential)
     include("xeq_variant_oracle_test.jl")          # A3 cross-eq variant memo ≡ ESS_XEQ_VARIANT_DISABLE=1 (differential)
     include("expand_memo_oracle_test.jl")          # A4 template-expansion memo ≡ ESS_EXPAND_MEMO_DISABLE=1 (differential)
-    include("tree_walk_arrayop_test.jl")
+    include("tree_walk_faq_test.jl")
     include("broadcast_alignment_test.jl")           # §4.3.4 broadcast lowering + name-based operand alignment
     include("tree_walk_inline_const_index_test.jl")  # inline `const` array as index() target (fix/index-inline-const-array)
     include("tree_walk_elementwise_obs_gather_test.jl")  # #175 elementwise array observed reached only via an aggregate gather
@@ -254,7 +254,8 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("value_invention_frontdoor_test.jl")
 
     # ---- Cross-binding conformance harness adapters (tests/conformance/*) ----
-    include("aggregate_conformance_test.jl")
+    include("faq_conformance_test.jl")
+    include("deprecated_op_alias_test.jl")
     include("expression_ic_conformance_test.jl")
     include("inverse_trig_conformance_test.jl")
     include("geometry_conformance_test.jl")

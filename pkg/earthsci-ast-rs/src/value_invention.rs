@@ -11,7 +11,7 @@
 //! §7.3 (edge enumeration); `CONFORMANCE_SPEC.md` §5.5 / §5.7.
 //!
 //! A `kind:"derived"` index set whose `from_faq` names a value-invention
-//! aggregate (an `aggregate` with `distinct:true`, or whose body / `key` is
+//! aggregate (a `faq` with `distinct:true`, or whose body / `key` is
 //! `skolem` / `rank`) is materialised here, ONCE at setup, off the per-step hot
 //! path — the §6.1 CONST/DISCRETE materialisation point. The aggregate's keys
 //! are evaluated over the build-time const-array factors and run through the
@@ -19,7 +19,7 @@
 //! distinct set's cardinality is handed to the index-set resolver as the dense
 //! extent `[1, n]`. Concretely, [`apply_value_invention`] rewrites the typed
 //! model's `kind:"derived"` set into `kind:"interval"` with `size = n`, so
-//! [`crate::aggregate::resolve_aggregate_ranges`] resolves it via the existing
+//! [`crate::faq::resolve_aggregate_ranges`] resolves it via the existing
 //! interval arm (a derived **output** index — e.g. the `rank` dense-id buffer —
 //! is otherwise rejected, since a data-dependent extent cannot size an output
 //! array). The value-invention outputs are dropped from the ODE.
@@ -36,9 +36,9 @@ use std::collections::{HashMap, HashSet};
 use ndarray::{ArrayD, IxDyn};
 use serde_json::{Map, Value};
 
-use crate::aggregate::{ReduceKind, effective_reduce_kind};
 use crate::broad_phase::OverlapIndex;
 use crate::cadence::{self, Cadence};
+use crate::faq::{ReduceKind, effective_reduce_kind};
 use crate::relational::{self, Key, Num, SemiringOp, group_aggregate};
 use crate::types::{Expr, IndexSet, Model};
 
@@ -226,7 +226,7 @@ fn vi_node_kind(node: &Value) -> NodeKind {
     let Some(map) = obj(node) else {
         return NodeKind::None;
     };
-    if map.get("op").and_then(|v| v.as_str()) != Some("aggregate") {
+    if map.get("op").and_then(|v| v.as_str()) != Some("faq") {
         return NodeKind::None;
     }
     if map.get("distinct").and_then(|v| v.as_bool()) == Some(true) {
@@ -359,12 +359,12 @@ fn vi_join_partner(
 
 /// The group KEY of a GROUPED reduction, or `None`. The SCVT group-by signature
 /// is precise (mirror of Julia `_vi_grouped_key`): a single-output-index
-/// `aggregate` whose `join.on` pairs the OUTPUT index symbol with a known VI
+/// `faq` whose `join.on` pairs the OUTPUT index symbol with a known VI
 /// buffer. Deliberately narrower than "any join touching a VI buffer" so a
 /// bin-to-bin gather (the conservative regridder's `A_j`) is left on the
 /// simulate path.
 fn vi_grouped_key(node: &Value, vi_var_names: &HashSet<String>) -> Option<String> {
-    if node_op(node) != Some("aggregate") {
+    if node_op(node) != Some("faq") {
         return None;
     }
     let oi = node.get("output_idx").and_then(|v| v.as_array())?;
@@ -377,10 +377,10 @@ fn vi_grouped_key(node: &Value, vi_var_names: &HashSet<String>) -> Option<String
 }
 
 /// True iff `node` is an elementwise DERIVED buffer over known VI buffers
-/// (mirror of Julia `_vi_is_derived`): a single-output-index `aggregate` with NO
+/// (mirror of Julia `_vi_is_derived`): a single-output-index `faq` with NO
 /// join and NO contraction whose body reads an upstream VI buffer.
 fn vi_is_derived(node: &Value, vi_var_names: &HashSet<String>) -> bool {
-    if node_op(node) != Some("aggregate") {
+    if node_op(node) != Some("faq") {
         return false;
     }
     let Some(oi) = node.get("output_idx").and_then(|v| v.as_array()) else {
@@ -471,7 +471,7 @@ fn classify_assignment(base: &str, rhs: &Value, det: &mut Detection) {
     let kind = vi_node_kind(rhs);
     if kind == NodeKind::None {
         // A plain numeric aggregate is a grouped/derived candidate (resolved later).
-        if node_op(rhs) == Some("aggregate") {
+        if node_op(rhs) == Some("faq") {
             det.candidates.push((base.to_string(), rhs.clone()));
         }
         return;
@@ -1928,7 +1928,7 @@ pub fn materialize_value_invention(
 
 /// Rewrite each typed `kind:"derived"` index set named by a materialised
 /// value-invention producer into `kind:"interval"` with `size = n`, so
-/// [`crate::aggregate::resolve_aggregate_ranges`] resolves it via the existing
+/// [`crate::faq::resolve_aggregate_ranges`] resolves it via the existing
 /// interval arm (handing the resolver the dense extent `[1, n]`). Generalises the
 /// geometry clip-ring handoff (§8.1) to the relational engine.
 pub fn rewrite_derived_index_sets(
@@ -2014,7 +2014,7 @@ mod tests {
     const CANDIDATE_GOLDEN: &str = "[[1,1],[2,2],[3,3]]";
 
     const EDGE_FIXTURE: &str =
-        include_str!("../../../tests/valid/aggregate/edge_enumeration_area_eff.esm");
+        include_str!("../../../tests/valid/faq/edge_enumeration_area_eff.esm");
     const REGRID_FIXTURE: &str =
         include_str!("../../../tests/valid/geometry/conservative_regrid_overlap_join.esm");
 
@@ -2244,14 +2244,14 @@ mod tests {
             .unwrap();
 
         // Without the rewrite: the derived output index is rejected.
-        assert!(crate::aggregate::resolve_aggregate_ranges(&mut model.clone(), &registry).is_err());
+        assert!(crate::faq::resolve_aggregate_ranges(&mut model.clone(), &registry).is_err());
 
         // With the rewrite: the derived `edges` set resolves to the dense [1, 5].
         rewrite_derived_index_sets(&mut registry, &vi.extents);
         let edges = registry.get("edges").unwrap();
         assert_eq!(edges.kind, "interval");
         assert_eq!(edges.size, Some(5));
-        assert!(crate::aggregate::resolve_aggregate_ranges(&mut model.clone(), &registry).is_ok());
+        assert!(crate::faq::resolve_aggregate_ranges(&mut model.clone(), &registry).is_ok());
     }
 
     #[test]
@@ -2270,7 +2270,7 @@ mod tests {
             "equations": [{
                 "lhs": {"op": "index", "args": ["tag", "p"]},
                 "rhs": {
-                    "op": "aggregate", "id": "tag_set", "semiring": "bool_and_or",
+                    "op": "faq", "id": "tag_set", "semiring": "bool_and_or",
                     "distinct": true, "output_idx": ["p"],
                     "ranges": {"i": {"from": "items"}},
                     "key": {"op": "skolem", "args": ["t", {"op": "index", "args": ["u", "i"]}]},
@@ -2304,7 +2304,7 @@ mod tests {
     // Python port-parity tests: the SAME coordinate factors → the SAME buffer.
 
     const ARGMIN_FIXTURE: &str =
-        include_str!("../../../tests/valid/aggregate/nearest_generator_argmin.esm");
+        include_str!("../../../tests/valid/faq/nearest_generator_argmin.esm");
 
     #[test]
     fn argmin_nearest_generator_smallest_id_tiebreak() {
@@ -2360,7 +2360,7 @@ mod tests {
             },
             "equations": [{
                 "lhs": {"op": "index", "args": ["far", "i"]},
-                "rhs": {"op": "aggregate", "output_idx": ["i"],
+                "rhs": {"op": "faq", "output_idx": ["i"],
                     "ranges": {"i": {"from": "points"}},
                     "expr": {"op": "argmax", "arg": "g",
                         "ranges": {"g": {"from": "generators"}},
@@ -2396,7 +2396,7 @@ mod tests {
             },
             "equations": [{
                 "lhs": {"op": "index", "args": ["assign", "i"]},
-                "rhs": {"op": "aggregate", "output_idx": ["i"],
+                "rhs": {"op": "faq", "output_idx": ["i"],
                     "ranges": {"i": {"from": "points"}},
                     "expr": {"op": "argmin", "arg": "g",
                         "ranges": {"g": {"from": "generators"}},
@@ -2433,7 +2433,7 @@ mod tests {
             },
             "equations": [{
                 "lhs": {"op": "index", "args": ["assign", "i"]},
-                "rhs": {"op": "aggregate", "output_idx": ["i"],
+                "rhs": {"op": "faq", "output_idx": ["i"],
                     "ranges": {"i": {"from": "points"}},
                     "expr": {"op": "argmin", "arg": "g",
                         "ranges": {"g": {"from": "generators"}},
@@ -2602,7 +2602,7 @@ mod tests {
     // until now). The fixture factors here are IDENTICAL to the Julia / Python
     // port-parity tests; agreement on num / den / centroid IS the conformance proof.
     const CENTROID_FIXTURE: &str =
-        include_str!("../../../tests/valid/aggregate/nearest_generator_centroid.esm");
+        include_str!("../../../tests/valid/faq/nearest_generator_centroid.esm");
 
     #[test]
     fn centroid_group_aggregate_over_argmin_key() {
@@ -2692,7 +2692,7 @@ mod tests {
             },
             "equations": [
                 {"lhs": {"op": "index", "args": ["assign", "i"]},
-                 "rhs": {"op": "aggregate", "output_idx": ["i"], "ranges": {"i": {"from": "points"}},
+                 "rhs": {"op": "faq", "output_idx": ["i"], "ranges": {"i": {"from": "points"}},
                     "args": ["px", "gx"],
                     "expr": {"op": "argmin", "args": ["px", "gx"], "arg": "g",
                         "ranges": {"g": {"from": "generators"}},
@@ -2700,7 +2700,7 @@ mod tests {
                             {"op": "-", "args": [{"op": "index", "args": ["px", "i"]}, {"op": "index", "args": ["gx", "g"]}]},
                             {"op": "-", "args": [{"op": "index", "args": ["px", "i"]}, {"op": "index", "args": ["gx", "g"]}]}]}}}},
                 {"lhs": {"op": "index", "args": ["num", "g"]},
-                 "rhs": {"op": "aggregate", "output_idx": ["g"],
+                 "rhs": {"op": "faq", "output_idx": ["g"],
                     "ranges": {"g": {"from": "generators"}, "p": {"from": "points"}},
                     "semiring": "sum_product", "join": [{"on": [["assign", "g"]]}],
                     "args": ["assign", "rho"],

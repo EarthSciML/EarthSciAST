@@ -37,11 +37,11 @@ const NR = 6
 const PATHS = ["SOA","pNO3","pNH4","pSO4","PrimaryPM25"]
 const FACT=28766.639; const RRK=1.06; const PSC=1.0465819687408728; const MSC=1.025229357798165
 
-conc(p) = _op("aggregate"; output_idx=Any["rcv"], semiring="sum_product",
+conc(p) = _op("faq"; output_idx=Any["rcv"], semiring="sum_product",
     ranges=Dict{String,Any}("s"=>Any[1,NS], "rcv"=>Any[1,NR]),
     expr_body=_op("*", _ix("SR_$p","s","rcv"), _ix("E_$p","s")))
 tpm() = _op("*", _num(FACT), _op("+", [_ix(conc(p), "rcv") for p in PATHS]...))
-tpm_as_agg() = _op("aggregate"; output_idx=Any["rcv"],
+tpm_as_agg() = _op("faq"; output_idx=Any["rcv"],
     ranges=Dict{String,Any}("rcv"=>Any[1,NR]), expr_body=tpm())
 deaths_body(rr) = _op("*",
     _op("*",
@@ -50,7 +50,7 @@ deaths_body(rr) = _op("*",
             _op("*", _ix("TotalPop","rcv"), _num(PSC))),
         _op("/", _ix("MortalityRate","rcv"), _num(1e5))),
     _num(MSC))
-deathsK() = _op("aggregate"; output_idx=Any["rcv"],
+deathsK() = _op("faq"; output_idx=Any["rcv"],
     ranges=Dict{String,Any}("rcv"=>Any[1,NR]), expr_body=deaths_body(RRK))
 
 function make_ca()

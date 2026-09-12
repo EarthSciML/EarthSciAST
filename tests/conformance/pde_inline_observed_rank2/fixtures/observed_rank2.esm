@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "pde_inline_observed_rank2",
     "description": "§6.6.5 inline-test assertions on a RANK-2 (multidimensional) array observed. Guards the rank>=2 observed-materialization path (a Matrix-shaped CartesianIndices comprehension) that Julia sort! could not order without dims=."
@@ -73,7 +73,7 @@
         {
           "lhs": "scaled",
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "semiring": "sum_product",
             "output_idx": [
               "i",

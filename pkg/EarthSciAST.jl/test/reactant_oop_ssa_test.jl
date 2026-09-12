@@ -35,7 +35,7 @@ const RXa = Reactant
 _a_Dt(v) = Dict{String,Any}("op" => "D", "args" => Any[v], "wrt" => "t")
 _a_ix(v, i...) = Dict{String,Any}("op" => "index", "args" => Any[v, i...])
 _a_o(o, a...) = Dict{String,Any}("op" => o, "args" => Any[a...])
-_a_ao(e) = Dict{String,Any}("op" => "arrayop", "output_idx" => Any["i"],
+_a_ao(e) = Dict{String,Any}("op" => "faq", "output_idx" => Any["i"],
     "ranges" => Dict{String,Any}("i" => Dict{String,Any}("from" => "n")),
     "args" => Any[], "expr" => e)
 function _a_doc(name, vars, eqs, N)

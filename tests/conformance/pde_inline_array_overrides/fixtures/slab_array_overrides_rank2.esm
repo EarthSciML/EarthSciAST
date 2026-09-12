@@ -1,5 +1,5 @@
 {
-    "esm": "1.0.0",
+    "esm": "1.1.0",
     "metadata": {
         "name": "pde_inline_array_overrides_rank2",
         "description": "The RANK-2 half of the category: inline array data whose two axes have DIFFERENT extents (lev=2, col=3) and pairwise-distinct element values, so the row-major nesting order of esm-spec 6.6.2 is gated rather than assumed. A binding that reads the authored array in column-major order, or that flattens it against its own state-vector order, disagrees on every off-diagonal cell instead of coincidentally agreeing.",
@@ -122,7 +122,7 @@
                 },
                 {
                     "lhs": {
-                        "op": "aggregate",
+                        "op": "faq",
                         "args": [],
                         "output_idx": [
                             "i",
@@ -152,7 +152,7 @@
                         }
                     },
                     "rhs": {
-                        "op": "aggregate",
+                        "op": "faq",
                         "args": [],
                         "output_idx": [
                             "i",
@@ -171,7 +171,7 @@
                 },
                 {
                     "lhs": {
-                        "op": "aggregate",
+                        "op": "faq",
                         "args": [],
                         "output_idx": [
                             "i",
@@ -201,7 +201,7 @@
                         }
                     },
                     "rhs": {
-                        "op": "aggregate",
+                        "op": "faq",
                         "args": [],
                         "output_idx": [
                             "i",

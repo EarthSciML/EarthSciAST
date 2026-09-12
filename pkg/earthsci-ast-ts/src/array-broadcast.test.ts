@@ -19,7 +19,7 @@ import type { EsmFile, Expression } from './types.js'
 /** A one-state model whose single equation is `D(x) ~ rhs`. */
 function scalarModel(rhs: Expression): EsmFile {
   return {
-    esm: '1.0.0',
+    esm: '1.1.0',
     metadata: { name: 'BroadcastFnTest' },
     models: {
       TestModel: {
@@ -34,7 +34,7 @@ function scalarModel(rhs: Expression): EsmFile {
 
 /**
  * A `[lon,lat,lev]` state `dp` driven by `rhs`, plus one observed operand per
- * entry of `operandShapes`. Each operand is DEFINED by an `aggregate` over its
+ * entry of `operandShapes`. Each operand is DEFINED by a `faq` over its
  * own axes — the spelling that declares a frame without itself being an
  * array-level expression.
  *
@@ -54,7 +54,7 @@ function arrayModel(rhs: Expression, operandShapes: Record<string, string[]>): E
     equations.push({
       lhs: name,
       rhs: {
-        op: 'aggregate',
+        op: 'faq',
         args: [],
         output_idx: idx,
         ranges: Object.fromEntries(idx.map((s, i) => [s, { from: shape[i] }])),
@@ -63,7 +63,7 @@ function arrayModel(rhs: Expression, operandShapes: Record<string, string[]>): E
     })
   }
   return {
-    esm: '1.0.0',
+    esm: '1.1.0',
     metadata: { name: 'ArrayShapeTest' },
     index_sets: {
       lon: { kind: 'interval', size: 3 },
@@ -116,7 +116,7 @@ describe('invalid_broadcast_fn (esm-spec §4.3.4)', () => {
   })
 
   it.each([
-    'aggregate',
+    'faq',
     'makearray',
     'index',
     'broadcast',
@@ -189,7 +189,7 @@ describe('invalid_broadcast_fn (esm-spec §4.3.4)', () => {
     // entry stands in for all of them: what is pinned is that the checker rides
     // that enumeration rather than walking `equations` alone.
     const file = {
-      esm: '1.0.0',
+      esm: '1.1.0',
       metadata: { name: 'Sidecar' },
       models: {
         M: {
@@ -289,7 +289,7 @@ describe('array_shape_mismatch (esm-spec §4.3.4 "Broadcast compatibility")', ()
     ).toEqual(['array_shape_mismatch @ /models/M/equations/0/rhs'])
   })
 
-  it.each(['aggregate', 'index', 'reshape', 'transpose', 'concat', 'makearray'])(
+  it.each(['faq', 'index', 'reshape', 'transpose', 'concat', 'makearray'])(
     'does NOT descend into %s — those consume their operands whole',
     (op) => {
       expect(findings(arrayModel({ op, args: ['bad'] } as Expression, { bad: ['spc'] }))).toEqual(

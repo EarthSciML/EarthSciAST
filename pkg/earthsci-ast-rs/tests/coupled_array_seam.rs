@@ -9,7 +9,7 @@
 //! *discretized* (array-shaped) system compiles and evaluates end-to-end.
 //!
 //! Two properties are pinned:
-//!   1. Flattening preserves `arrayop` structure. The pre-seam `namespace_expr`
+//!   1. Flattening preserves `faq` structure. The pre-seam `namespace_expr`
 //!      rebuilt operator nodes with `..Default::default()`, silently dropping
 //!      `expr`/`ranges`/`output_idx`/… — corrupting every array node. The fix
 //!      preserves all fields, namespaces the body's free variables, and leaves
@@ -29,15 +29,15 @@ use std::collections::HashMap;
 ///
 /// `Src.u[i]` decays (`D(u[i]) = -u[i]`); `Snk.w[i]` integrates the source
 /// field it reads across the component boundary (`D(w[i]) = Src.u[i]`, a dotted
-/// cross-system reference inside an `arrayop` body). Both equations are written
-/// as `arrayop`s over `i ∈ [1, 3]`, so flattening must carry the array
+/// cross-system reference inside a `faq` body). Both equations are written
+/// as `faq`s over `i ∈ [1, 3]`, so flattening must carry the array
 /// structure through namespacing for either model to compile.
 ///
 /// Closed form with `u(0) = [1, 2, 3]`, `w(0) = 0`:
 ///   `u[i](t) = u0[i]·e^{-t}`,  `w[i](t) = u0[i]·(1 - e^{-t})`.
 const COUPLED_ARRAY_JSON: &str = r#"
     {
-      "esm": "1.0.0",
+      "esm": "1.1.0",
       "metadata": {
         "name": "coupled_array_seam"
       },
@@ -54,7 +54,7 @@ const COUPLED_ARRAY_JSON: &str = r#"
           "equations": [
             {
               "lhs": {
-                "op": "aggregate",
+                "op": "faq",
                 "args": [],
                 "output_idx": [
                   "i"
@@ -80,7 +80,7 @@ const COUPLED_ARRAY_JSON: &str = r#"
                 }
               },
               "rhs": {
-                "op": "aggregate",
+                "op": "faq",
                 "args": [],
                 "output_idx": [
                   "i"
@@ -120,7 +120,7 @@ const COUPLED_ARRAY_JSON: &str = r#"
           "equations": [
             {
               "lhs": {
-                "op": "aggregate",
+                "op": "faq",
                 "args": [],
                 "output_idx": [
                   "i"
@@ -146,7 +146,7 @@ const COUPLED_ARRAY_JSON: &str = r#"
                 }
               },
               "rhs": {
-                "op": "aggregate",
+                "op": "faq",
                 "args": [],
                 "output_idx": [
                   "i"
@@ -199,7 +199,7 @@ fn final_value(sol: &earthsci_ast::Solution, name: &str) -> f64 {
 }
 
 /// Does `expr` contain a reference to the variable named `name` anywhere
-/// (including inside `arrayop` bodies)?
+/// (including inside `faq` bodies)?
 fn expr_references(expr: &Expr, name: &str) -> bool {
     match expr {
         Expr::Variable(v) => v == name,
@@ -219,7 +219,7 @@ fn expr_references(expr: &Expr, name: &str) -> bool {
 }
 
 #[test]
-fn flatten_preserves_arrayop_structure_and_namespaces_body() {
+fn flatten_preserves_faq_structure_and_namespaces_body() {
     let file = load_string(COUPLED_ARRAY_JSON).expect("load coupled array file");
     let flat = flatten(&file).expect("flatten coupled array file");
 
@@ -244,23 +244,20 @@ fn flatten_preserves_arrayop_structure_and_namespaces_body() {
 
     let Expr::Operator(rhs) = &snk_eq.rhs else {
         panic!(
-            "Snk RHS should be an arrayop operator node, got {:?}",
+            "Snk RHS should be a faq operator node, got {:?}",
             snk_eq.rhs
         );
     };
-    // The arrayop sidecar fields must survive namespacing — the regression the
+    // The faq sidecar fields must survive namespacing — the regression the
     // seam fixes is `..Default::default()` wiping exactly these.
-    assert_eq!(rhs.op, "aggregate");
+    assert_eq!(rhs.op, "faq");
     assert_eq!(
         rhs.output_idx.as_deref(),
         Some(&["i".to_string()][..]),
         "output_idx dropped by namespacing"
     );
     assert!(rhs.ranges.is_some(), "ranges dropped by namespacing");
-    assert!(
-        rhs.expr.is_some(),
-        "arrayop body (expr) dropped by namespacing"
-    );
+    assert!(rhs.expr.is_some(), "faq body (expr) dropped by namespacing");
 
     // The body keeps the dotted cross-system reference verbatim (not
     // re-namespaced to `Snk.Src.u`) and does NOT namespace the loop index `i`.
@@ -389,7 +386,7 @@ fn single_model_array_path_unchanged() {
     // dispatcher's `model_count > 1` guard leaves it on the raw entry point.
     let json = r#"
         {
-          "esm": "1.0.0",
+          "esm": "1.1.0",
           "metadata": {
             "name": "single_array_decay"
           },
@@ -406,7 +403,7 @@ fn single_model_array_path_unchanged() {
               "equations": [
                 {
                   "lhs": {
-                    "op": "aggregate",
+                    "op": "faq",
                     "args": [],
                     "output_idx": [
                       "i"
@@ -432,7 +429,7 @@ fn single_model_array_path_unchanged() {
                     }
                   },
                   "rhs": {
-                    "op": "aggregate",
+                    "op": "faq",
                     "args": [],
                     "output_idx": [
                       "i"

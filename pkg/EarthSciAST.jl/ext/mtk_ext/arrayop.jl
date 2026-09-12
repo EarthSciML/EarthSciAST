@@ -439,7 +439,15 @@ function _lhs_arrayop_shapes(equations::Vector{Equation},
     for eq in equations
         lhs = eq.lhs
         lhs isa OpExpr || continue
-        if lhs.op == "arrayop" || lhs.op == "aggregate"
+        # The ESM WIRE TAG, which is `faq` from esm 1.1.0 — not SymbolicUtils'
+        # `ArrayOp`, whose vocabulary this file otherwise keeps. Dispatching on
+        # the old spellings here made this whole loop dead: the loader rejects
+        # `arrayop` and normalizes `aggregate`, and every internal construction
+        # site emits `faq`, so `shapes` came back empty and the
+        # `merge!(inferred_shapes, lhs_shapes)` in `variables.jl` silently
+        # stopped overriding ghost-widened shapes with the authoritative LHS
+        # grid (docs/content/rfcs/faq-node-rename.md §4.1).
+        if lhs.op == "faq"
             lhs.ranges === nothing && continue
             lhs.output_idx === nothing && continue
             isempty(lhs.output_idx) && continue

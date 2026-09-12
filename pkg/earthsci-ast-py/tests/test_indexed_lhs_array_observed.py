@@ -50,7 +50,7 @@ E2 = math.exp(2.0)
 
 def _agg(expr, sym="k"):
     return {
-        "op": "aggregate",
+        "op": "faq",
         "args": [],
         "output_idx": [sym],
         "ranges": {sym: {"from": "lev"}},
@@ -81,7 +81,7 @@ EQ_D_BARE = {"lhs": {"op": "D", "args": ["u"], "wrt": "t"}, "rhs": "w"}
 def _doc(name, equations, assertions):
     """#232's model: w = 2u and D(u) = w, so u(t) = e^(2t) and w(t) = 2e^(2t)."""
     return {
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": name, "authors": ["repro"]},
         "index_sets": {"lev": {"kind": "interval", "size": 4}},
         "models": {
@@ -269,7 +269,7 @@ def test_the_normalizer_returns_its_input_by_identity_when_nothing_matches(tmp_p
             "filtered_shell",
             {
                 "lhs": {
-                    "op": "aggregate",
+                    "op": "faq",
                     "args": [],
                     "output_idx": ["k"],
                     "ranges": {"k": {"from": "lev"}},
@@ -284,7 +284,7 @@ def test_the_normalizer_returns_its_input_by_identity_when_nothing_matches(tmp_p
             "scalar_reduction",
             {
                 "lhs": {
-                    "op": "aggregate",
+                    "op": "faq",
                     "args": [],
                     "output_idx": [],
                     "ranges": {"k": {"from": "lev"}},
@@ -343,7 +343,7 @@ def test_a_true_distinct_is_a_set_semantics_shell_and_is_declined(tmp_path):
 
 def test_the_normalizer_declines_a_target_with_no_declared_shape(tmp_path):
     """The two corpus equations that already use this LHS shape name a variable
-    with NO declared shape (``arrayop/02`` and ``arrayop/04``); the rank guard is
+    with NO declared shape (``faq/02`` and ``faq/04``); the rank guard is
     what leaves them byte-identical."""
     doc = _doc("noshape", [EQ_W_INDEXED, EQ_D_INDEXED], ASSERT_U)
     del doc["models"]["Column"]["variables"]["w"]["shape"]

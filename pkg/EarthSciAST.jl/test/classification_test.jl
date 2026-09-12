@@ -78,7 +78,7 @@ const _CLS = ClassificationConformanceAdapter
 
     @testset "a derivative LHS may be wrapped (D(u), D(u[i]), aggregate{D(...)})" begin
         # `tests/valid/cadence/observed_leaf_seeds.esm` writes its state
-        # equation as an `aggregate` whose body is `D(index(u,i))`. A binding
+        # equation as a `faq` whose body is `D(index(u,i))`. A binding
         # that only recognises a bare `D(u)` LHS misses the state entirely and
         # then reports every unknown as algebraic.
         path = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid", "cadence",

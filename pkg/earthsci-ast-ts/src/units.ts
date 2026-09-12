@@ -48,7 +48,7 @@ export interface UnitResult {
    * `null` is not "dimensionless" — it is "this analysis cannot say", and it is
    * the value returned for an unknown variable, an unparseable unit
    * declaration, and any operator whose dimensional semantics this module does
-   * not model (`index`, `fn`, `aggregate`, `makearray`, `table_lookup`, ...).
+   * not model (`index`, `fn`, `faq`, `makearray`, `table_lookup`, ...).
    * Keeping the two apart is what stops a structural op from being *assumed*
    * dimensionless and thereby manufacturing a false mismatch against a
    * dimensional operand. `null` propagates through every combining rule, and a
@@ -91,7 +91,7 @@ export interface UnitWarning {
    *   registry gap is a false rejection.)
    * - `analysis` — the checker cannot DETERMINE a dimension: a symbolic
    *   exponent (`x^n`, whose dimension depends on `n`'s runtime value), an
-   *   operator with no dimensional rule (`aggregate`, `index`, `fn`,
+   *   operator with no dimensional rule (`faq`, `index`, `fn`,
    *   `table_lookup`), a malformed arity, an unknown variable. Genuinely
    *   undeterminable — a statement about the checker, not the file. → WARNING,
    *   and the dimension is reported UNKNOWN and the check SKIPPED, never assumed
@@ -700,7 +700,7 @@ function computeDimensions(
 
     default:
       // Structural / not-dimensionally-modelled ops (`index`, `fn`,
-      // `aggregate`, `const`, `makearray`, `table_lookup`, `arrayop`, ...) AND
+      // `faq`, `const`, `makearray`, `table_lookup`, `faq`, ...) AND
       // every OPEN-TIER rewrite-target op — the spatial-calculus sugar
       // `grad`/`div`/`laplacian`/`integral` and any user op such as
       // `godunov_hamiltonian`. These sugar ops carry NO dimensional rule

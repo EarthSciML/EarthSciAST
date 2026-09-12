@@ -210,7 +210,7 @@ describe('a legal recurrence keeps its self-edge exemption (§5.19.5)', () => {
     // named diagnosis would never be reached: the same masking defect issue
     // #181 is about, merely moved from the legal case to the illegal one.
     const result = validate({
-      esm: '1.0.0',
+      esm: '1.1.0',
       metadata: { name: 'IllFounded', description: 'shape under test', authors: ['t'] },
       domain: { independent_variable: 't' },
       index_sets: { steps: { kind: 'interval', size: 4 } },
@@ -221,7 +221,7 @@ describe('a legal recurrence keeps its self-edge exemption (§5.19.5)', () => {
             {
               lhs: 's',
               rhs: {
-                op: 'aggregate',
+                op: 'faq',
                 args: [],
                 output_idx: ['k'],
                 ranges: { k: { from: 'steps' } },

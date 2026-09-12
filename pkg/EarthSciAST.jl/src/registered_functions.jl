@@ -928,7 +928,7 @@ end
 # Build-time-validated typed carriers for the access-kernel array path (ess-wrh)
 # ============================================================
 #
-# An `arrayop` whose body contains an `interp.*` leaf evaluates that
+# A `faq` whose body contains an `interp.*` leaf evaluates that
 # leaf once per cell (lane). Re-validating the build-time-constant table/axis and
 # re-coercing them to `Vector{Float64}` on every lane — and boxing the scalar
 # query into the `AbstractVector{Any}` that `evaluate_closed_function` consumes —

@@ -64,7 +64,7 @@ const DECAY: &str = r#"
 /// that routes through the array runtime rather than the scalar interpreter.
 const ARRAY: &str = r#"
     {
-      "esm": "1.0.0",
+      "esm": "1.1.0",
       "metadata": {
         "name": "progress_array"
       },
@@ -82,7 +82,7 @@ const ARRAY: &str = r#"
           "equations": [
             {
               "lhs": {
-                "op": "aggregate",
+                "op": "faq",
                 "args": [],
                 "output_idx": [
                   "i"
@@ -108,7 +108,7 @@ const ARRAY: &str = r#"
                 }
               },
               "rhs": {
-                "op": "aggregate",
+                "op": "faq",
                 "args": [],
                 "output_idx": [
                   "i"

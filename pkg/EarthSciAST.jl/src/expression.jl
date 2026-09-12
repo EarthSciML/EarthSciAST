@@ -82,7 +82,7 @@ All immediate sub-expressions of `e`, drawn from EVERY expression-bearing
 `OpExpr` field — not just `args`. This is the ONE shared traversal used by
 [`free_variables`](@ref), [`Base.contains`](@ref contains), and (field-wise)
 [`substitute`](@ref), so dependency analysis sees variables nested inside
-aggregate/arrayop bodies (`expr_body`), filter predicates (`filter`), integral
+faq bodies (`expr_body`), filter predicates (`filter`), integral
 bounds (`lower`/`upper`), makearray `values`, table-lookup axis inputs
 (`table_axes`), expression-valued dense `ranges` bounds, value-invention
 `key` expressions, AND expression-template `bindings` values (historically the
@@ -112,7 +112,7 @@ end
 Apply `f` to `expr` and to every descendant expression node, depth-first,
 parent before children, drawing children from [`child_exprs`](@ref) — so `f`
 sees expressions nested in EVERY expression-bearing `OpExpr` field
-(aggregate/arrayop bodies, filters, integral bounds, makearray `values`,
+(faq bodies, filters, integral bounds, makearray `values`,
 table-lookup axis inputs, dense `ranges` bounds, value-invention `key`s,
 template `bindings` values), not just `args`.
 
@@ -260,7 +260,7 @@ Used by validate's reference walk so its descent can never drift from the
 shared traversal.
 """ foreach_child_with_path
 
-# Index/loop symbols BOUND by this node itself (aggregate/arrayop range keys,
+# Index/loop symbols BOUND by this node itself (faq range keys,
 # `output_idx` axis names, an integral's `int_var`). These are node-local
 # binders, not references to enclosing-scope variables.
 #
@@ -404,7 +404,7 @@ end
 
 # Field-preserving substitution: recurse into EVERY sub-expression the node
 # carries (via the shared `map_children` rewrite) — not just `args` — so
-# substitution is complete inside aggregate/arrayop bodies, filter predicates,
+# substitution is complete inside faq bodies, filter predicates,
 # integral bounds, makearray values, table-lookup axis inputs, value-invention
 # `key` expressions, and expression-valued dense `ranges` bounds. `map_children`
 # routes through `reconstruct`, preserving all non-expression fields (semiring,
@@ -474,7 +474,7 @@ function _free_variables_dag(expr::OpExpr,
     cached === nothing || return cached
     # Union of free variables from EVERY expression-bearing field (via the
     # shared `child_exprs` traversal), so dependency analysis sees references
-    # inside aggregate/arrayop bodies, filter predicates, integral bounds,
+    # inside faq bodies, filter predicates, integral bounds,
     # makearray values, and table-lookup axis inputs.
     result = Set{String}()
     for c in child_exprs(expr)
@@ -485,7 +485,7 @@ function _free_variables_dag(expr::OpExpr,
         end
     end
 
-    # Symbols bound by THIS node (aggregate/arrayop loop indices, an
+    # Symbols bound by THIS node (faq loop indices, an
     # integral's `int_var`) are local binders, not free references.
     for b in _bound_symbols(expr)
         delete!(result, b)
@@ -509,7 +509,7 @@ end
 
 Check if an expression contains a specific variable name.
 Returns true if the variable appears anywhere in the expression — including
-inside aggregate/arrayop bodies, filter predicates, integral bounds,
+inside faq bodies, filter predicates, integral bounds,
 makearray values, and table-lookup axis inputs (the shared `child_exprs`
 traversal). Unlike [`free_variables`](@ref), node-local binder symbols are
 NOT subtracted: this is a pure containment check.
@@ -663,7 +663,7 @@ _foldable_failure(err) =
 
 function simplify(expr::OpExpr)::ASTExpr
     # Recurse into EVERY sub-expression via the shared field-preserving rewrite,
-    # so folding and identity rules also reach aggregate/arrayop bodies, filter
+    # so folding and identity rules also reach faq bodies, filter
     # predicates, integral bounds, makearray values, table axes, and dense range
     # bounds — not just top-level `args`. `recursed` carries the simplified
     # children in all fields; the algebraic rules below only reshape `args`.

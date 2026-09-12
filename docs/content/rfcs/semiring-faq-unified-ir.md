@@ -3,6 +3,19 @@ title: "A semiring-parameterized FAQ IR for ESS arrayops"
 description: "Concrete proposal to generalize the ESS arrayop node into a Functional-Aggregate-Query IR over semirings — unifying tensor contraction (ESM/ESD discretization), relational select-multiply-aggregate (ESI), and the data-dependent index-set construction (mesh topology) that currently must live in imperative grid code."
 ---
 
+> **AMENDED by [`faq-node-rename`](faq-node-rename.md) (esm 1.1.0).** §5.6 below
+> names the serialized tag `"op": "aggregate"` and retains `"op": "arrayop"` as
+> a deprecated synonym. Both statements are now historical:
+>
+> * The canonical tag is **`"op": "faq"`**.
+> * `"op": "aggregate"` is a DEPRECATED ALIAS — normalized to `faq` at the wire
+>   boundary, warned once per document, and REMOVED at esm 2.0.0.
+> * `"op": "arrayop"` is REMOVED and rejected by name (`removed_op`).
+>
+> The text below is left exactly as written, because §5.6's argument is *about*
+> the arrayop→aggregate transition and rewriting its tags would turn it into a
+> tautology. Read every `aggregate` node tag in it as `faq`.
+>
 > **Status:** Draft proposal (concrete IR). **Bead:** unassigned.
 > **Target repo:** EarthSciAST (`pkg/EarthSciAST.jl`, the
 > `arrayop` IR and `tree_walk.jl` evaluator). Relocated here from

@@ -46,7 +46,7 @@ def _cycle_records(document: dict) -> list[dict]:
 def _model(variables: dict, equations: list) -> dict:
     """A one-model document with nothing in it but the equations under test."""
     return {
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "ObservedCycleUnderTest"},
         "models": {"M": {"variables": variables, "equations": equations}},
     }
@@ -180,7 +180,7 @@ class TestTheRecurrenceSelfEdgeIsExempt:
     @staticmethod
     def _agg(body: dict) -> dict:
         return {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": ["k"],
             "ranges": {"k": {"from": "steps"}},
@@ -276,7 +276,7 @@ class TestNoFalsePositives:
                 {
                     "lhs": "k",
                     "rhs": {
-                        "op": "aggregate",
+                        "op": "faq",
                         "args": [],
                         "output_idx": [],
                         "ranges": {"k": {"from": "steps"}},

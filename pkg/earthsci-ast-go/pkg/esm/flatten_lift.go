@@ -21,7 +21,7 @@ import (
 // `D(sp) = <reaction> + <-u·makearray(grad(sp))>` still has a SCALAR `sp` while
 // its advection makearray indexes `sp` per grid cell. This pass performs the
 // `lifting: "pointwise"` promotion — wrapping each merged state ODE in an
-// `aggregate` over the grid, indexing the bare reaction species per cell and each
+// `faq` over the grid, indexing the bare reaction species per cell and each
 // operator makearray per cell, and recording the species' concrete grid shape.
 
 // collectMakearrays returns every `makearray` node reachable from expr,
@@ -109,7 +109,7 @@ func makearrayExtents(ma ExprNode) []int {
 // per-cell form over the spatial `loops`: a bare reference to an array variable
 // becomes `index(var, loops…)`, and each spatial-operator `makearray` becomes
 // `index(makearray, loops…)` (its region values already index per cell).
-// Self-contained nodes (index / aggregate / arrayop) are left untouched;
+// Self-contained nodes (index / faq) are left untouched;
 // elementwise ops recurse.
 func liftRHSToCell(expr Expression, arrayvars map[string]bool, loops []string) Expression {
 	if s, ok := expr.(string); ok {
@@ -133,7 +133,7 @@ func liftRHSToCell(expr Expression, arrayvars map[string]bool, loops []string) E
 			ma.OutputIdx[i] = l
 		}
 		return ExprNode{Op: "index", Args: indexArgs(ma, loops)}
-	case "index", "aggregate", "arrayop":
+	case "index", "faq":
 		return node
 	}
 	out := node
@@ -159,7 +159,7 @@ func indexArgs(head any, loops []string) []any {
 // applyPointwiseLift promotes every state ODE that `operator_compose` merged
 // with a spatial operator (its merged RHS carries an operator `makearray`) from
 // a 0-D scalar to the operator's grid shape, and rewrites the equation into an
-// `aggregate` over the grid. No-op when no coupling entry requests pointwise
+// `faq` over the grid. No-op when no coupling entry requests pointwise
 // lifting, or no merged equation carries a spatial-operator makearray.
 func applyPointwiseLift(flat *FlattenedSystem, coupling []CouplingEntry) error {
 	requested := false
@@ -252,11 +252,11 @@ func applyPointwiseLift(flat *FlattenedSystem, coupling []CouplingEntry) error {
 		idxSpecies := ExprNode{Op: "index", Args: indexArgs(target, loops)}
 		out = append(out, FlattenedEquation{
 			LHS: ExprNode{
-				Op: "aggregate", OutputIdx: outputIdx, Ranges: ranges,
+				Op: "faq", OutputIdx: outputIdx, Ranges: ranges,
 				Expr: ExprNode{Op: OpDerivative, Args: []any{idxSpecies}, Wrt: &wrt},
 			},
 			RHS: ExprNode{
-				Op: "aggregate", OutputIdx: outputIdx, Ranges: ranges,
+				Op: "faq", OutputIdx: outputIdx, Ranges: ranges,
 				Expr: liftRHSToCell(eq.RHS, arrayvars, loops),
 			},
 			SourceSystem: eq.SourceSystem,
@@ -315,7 +315,7 @@ func scopeTemplateBody(raw any, prefix string, localNames, bound map[string]bool
 			return v
 		}
 		localBound := bound
-		if v["op"] == "aggregate" {
+		if v["op"] == "faq" {
 			localBound = map[string]bool{}
 			for k, b := range bound {
 				localBound[k] = b
@@ -626,7 +626,7 @@ func collectTemplateBodyVarNames(raw any, bound, out map[string]bool) {
 			return
 		}
 		localBound := bound
-		if v["op"] == "aggregate" {
+		if v["op"] == "faq" {
 			localBound = map[string]bool{}
 			for k, b := range bound {
 				localBound[k] = b

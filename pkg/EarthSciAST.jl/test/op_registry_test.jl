@@ -47,7 +47,7 @@ const ESM = EarthSciAST
         # (they stay CSE barriers via their own `_compile_op` arms).
         @test ESM._CSE_OPAQUE_OPS == Set{String}([
             "const", "enum", "call", "D", "ic",
-            "arrayop", "aggregate", "makearray", "broadcast", "reshape",
+            "faq", "faq", "makearray", "broadcast", "reshape",
             "transpose", "concat", "index",
         ])
         @test ESM._CSE_OPAQUE_OPS isa Set{String}
@@ -83,7 +83,7 @@ const ESM = EarthSciAST
             "ifelse", "floor", "ceil", ">", "<", ">=", "<=", "==", "!=",
             "and", "or", "not",
             "index", "intersect_polygon", "polygon_intersection_area", "skolem",
-            "true", "false", "aggregate", "arrayop",
+            "true", "false", "faq", "faq",
         ])
         @test ESM._GEO_EVAL_OPS isa Set{String}
         # Previously a plain (non-const) global — a bug-adjacent oversight.
@@ -102,7 +102,7 @@ const ESM = EarthSciAST
             "min", "max",
             ">", "<", ">=", "<=", "==", "!=",
             "D",  # grad/div/laplacian dropped (§4.2): unregistered user-op tier
-            "arrayop", "aggregate", "makearray", "index", "broadcast",
+            "faq", "faq", "makearray", "index", "broadcast",
             "reshape", "transpose",
             "concat", "Pre", "ifelse", "call", "fn", "ic",
         ])
@@ -141,10 +141,10 @@ const ESM = EarthSciAST
         # self-indexing nodes (producers + `index`) the leaf-indexing
         # rewrites never descend into.
         @test ESM._ARRAY_PRODUCER_OPS ==
-              Set{String}(["aggregate", "arrayop", "makearray"])
+              Set{String}(["faq", "faq", "makearray"])
         @test ESM._ARRAY_PRODUCER_OPS isa Set{String}
         @test ESM._SELF_INDEXED_OPS ==
-              Set{String}(["aggregate", "arrayop", "makearray", "index"])
+              Set{String}(["faq", "faq", "makearray", "index"])
         @test ESM._SELF_INDEXED_OPS isa Set{String}
     end
 
@@ -309,7 +309,7 @@ end
         # An aggregate whose variables hide in expr_body / filter — the fields
         # a hand-rolled args-only walk misses.
         body = OpExpr("*", EarthSciAST.ASTExpr[VarExpr("w"), VarExpr("u")])
-        agg = OpExpr("aggregate", EarthSciAST.ASTExpr[];
+        agg = OpExpr("faq", EarthSciAST.ASTExpr[];
                      output_idx=Any["i"],
                      ranges=Dict{String,Any}("i" => [1, 4]),
                      expr_body=body,

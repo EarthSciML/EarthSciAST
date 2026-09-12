@@ -54,7 +54,7 @@ const opBroadcast = "broadcast"
 // Everything whose meaning is NOT pointwise is excluded, and each exclusion is
 // load-bearing:
 //
-//   - the array/tensor ops (`aggregate`, `makearray`, `index`, `reshape`,
+//   - the array/tensor ops (`faq`, `makearray`, `index`, `reshape`,
 //     `transpose`, `concat`, and `broadcast` ITSELF) — they RESHAPE, so "apply
 //     element-wise" is not defined for them, and a self-referential
 //     `fn: "broadcast"` would recurse forever;
@@ -191,7 +191,7 @@ type broadcastFnFinding struct {
 //  1. A MISSING `fn`. Evaluators defaulted it to "+". There is no default in the
 //     spec, and inventing one turns a truncated node into a silent sum.
 //  2. An `fn` that NAMES NO SCALAR OPERATOR — a typo ("not_a_real_op") or a
-//     non-pointwise op ("aggregate"). One branch covers both: from the file's
+//     non-pointwise op ("faq"). One branch covers both: from the file's
 //     point of view they are the same defect.
 //  3. An `fn`/`args` ARITY MISMATCH, reported against the `fn` NAME because it
 //     is literally the same defect the bare node would have.

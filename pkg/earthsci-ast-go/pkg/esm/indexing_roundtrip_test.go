@@ -1,12 +1,12 @@
 package esm
 
 // Round-trip coverage for `index` used in scalar expression contexts
-// outside of `arrayop.expr`, per RFC discretization §5.1 (bead gt-5s48).
+// outside of `faq.expr`, per RFC discretization §5.1 (bead gt-5s48).
 //
 // This test exercises the Go binding's ability to preserve `{op:"index",
 // ...}` nodes (with both integer-literal and composite-arithmetic index
 // arguments) through a load → save → load cycle. It deliberately does
-// NOT exercise `arrayop` round-tripping, which the Go binding does not
+// NOT exercise `faq` round-tripping, which the Go binding does not
 // yet structurally support (ExprNode lacks OutputIdx/Expr/Ranges fields)
 // — that gap predates this RFC and is tracked separately.
 
@@ -21,16 +21,16 @@ import (
 )
 
 // TestIndexOutsideArrayopFixtureParses confirms the Go binding can load
-// the shared cross-binding fixture at tests/indexing/idx_outside_arrayop.esm,
+// the shared cross-binding fixture at tests/indexing/idx_outside_faq.esm,
 // which is the conformance artifact for RFC §5.1.
 func TestIndexOutsideArrayopFixtureParses(t *testing.T) {
 	wd, err := os.Getwd()
 	require.NoError(t, err)
 	repoRoot := filepath.Join(wd, "..", "..", "..", "..")
-	fixturePath := filepath.Join(repoRoot, "tests", "indexing", "idx_outside_arrayop.esm")
+	fixturePath := filepath.Join(repoRoot, "tests", "indexing", "idx_outside_faq.esm")
 
 	parsed, err := LoadPath(fixturePath)
-	require.NoError(t, err, "Load must accept `index` outside arrayop (RFC §5.1)")
+	require.NoError(t, err, "Load must accept `index` outside faq (RFC §5.1)")
 	require.NotNil(t, parsed)
 	require.NotNil(t, parsed.Models)
 
@@ -43,7 +43,7 @@ func TestIndexOutsideArrayopFixtureParses(t *testing.T) {
 // TestIndexOutsideArrayopScalarRoundTrip drives the load → save → load
 // cycle on a scalar-only model that uses `{op:"index", ...}` on the RHS
 // of ODEs — the exact contract RFC §5.1 pins down. Using an in-Go
-// ESMFile keeps this test isolated from the independent `arrayop`
+// ESMFile keeps this test isolated from the independent `faq`
 // serialization gap in the Go binding.
 func TestIndexOutsideArrayopScalarRoundTrip(t *testing.T) {
 	original := &ESMFile{

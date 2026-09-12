@@ -303,7 +303,7 @@ fn default_load_ref(ref_str: &str, base_path: &str) -> Result<Value, DiagnosticE
             ),
         )
     })?;
-    serde_json::from_str(&content).map_err(|e| {
+    let mut raw: Value = serde_json::from_str(&content).map_err(|e| {
         err(
             codes::COUPLING_IMPORT_UNRESOLVED,
             format!(
@@ -311,7 +311,16 @@ fn default_load_ref(ref_str: &str, base_path: &str) -> Result<Value, DiagnosticE
                 path.display()
             ),
         )
-    })
+    })?;
+    // A coupling library is a document too — same wire-boundary treatment as
+    // the root (docs/content/rfcs/faq-node-rename.md §5.2).
+    crate::parse::prepare_document_ops(&mut raw).map_err(|e| {
+        err(
+            codes::COUPLING_IMPORT_UNRESOLVED,
+            format!("{}: {e}", path.display()),
+        )
+    })?;
+    Ok(raw)
 }
 
 // ---------------------------------------------------------------------------

@@ -1,5 +1,5 @@
 {
-    "esm": "1.0.0",
+    "esm": "1.1.0",
     "metadata": {
         "name": "shaped_parameter_scalar_default",
         "description": "esm-spec 6.3 'Inline array data' + 6.6.2 'Shaped values': a SCALAR on a shaped variable keeps its broadcast meaning -- the one value applies to every element -- and the same union applies to a shaped variable's declared `default`. `ramp` is a shaped PARAMETER whose value is one scalar; `scale` is the shaped parameter carrying the array spelling of the same union, and its pairwise-distinct cells make every theta cell distinct so a binding that broadcast the wrong operand disagrees somewhere. `phi` integrates ramp[k] ALONE, so min == max over its four cells says exactly what the rule says; `theta` integrates ramp[k]*scale[k], gathering the broadcast parameter and the array-valued one at the same cell. The three tests are the bisection axis of EarthSciML/EarthSciAST#219 held inside ONE document: the declared scalar, a SCALAR parameter_overrides value, and the ARRAY parameter_overrides spelling of the same parameter.",
@@ -74,7 +74,7 @@
                 {
                     "_comment": "D(theta[k])/dt = ramp[k] * scale[k] -- the broadcast parameter and the array-valued one gathered at the SAME cell, so a binding that broadcast the wrong operand disagrees somewhere.",
                     "lhs": {
-                        "op": "aggregate",
+                        "op": "faq",
                         "args": [],
                         "output_idx": [
                             "k"
@@ -99,7 +99,7 @@
                         }
                     },
                     "rhs": {
-                        "op": "aggregate",
+                        "op": "faq",
                         "args": [],
                         "output_idx": [
                             "k"
@@ -133,7 +133,7 @@
                 {
                     "_comment": "D(phi[k])/dt = ramp[k]: the broadcast parameter alone, straight into the state right-hand side.",
                     "lhs": {
-                        "op": "aggregate",
+                        "op": "faq",
                         "args": [],
                         "output_idx": [
                             "k"
@@ -158,7 +158,7 @@
                         }
                     },
                     "rhs": {
-                        "op": "aggregate",
+                        "op": "faq",
                         "args": [],
                         "output_idx": [
                             "k"

@@ -58,7 +58,7 @@
 //!     `D(d[i]) = Box.c[i]` — a dotted cross-system reference, the coupling the
 //!     `from_flattened` seam carries through namespacing.
 //!
-//! No spatial operator appears (non-PDE): the equations are plain `arrayop`
+//! No spatial operator appears (non-PDE): the equations are plain `faq`
 //! ODEs over a dense `[1, 3]` range. Dense ranges (not `{from: <set>}`) are
 //! required on this path — `index_sets` are not carried through flatten yet
 //! (ess-14f.13) — and are exactly what a discretized stencil emits.
@@ -90,7 +90,7 @@ use std::rc::Rc;
 /// cross-system reference Sink reads.
 const COUPLED_FORCED_JSON: &str = r#"
     {
-      "esm": "1.0.0",
+      "esm": "1.1.0",
       "metadata": {
         "name": "segmented_refresh_coupled"
       },
@@ -108,7 +108,7 @@ const COUPLED_FORCED_JSON: &str = r#"
           "equations": [
             {
               "lhs": {
-                "op": "aggregate",
+                "op": "faq",
                 "args": [],
                 "output_idx": [
                   "i"
@@ -134,7 +134,7 @@ const COUPLED_FORCED_JSON: &str = r#"
                 }
               },
               "rhs": {
-                "op": "aggregate",
+                "op": "faq",
                 "args": [],
                 "output_idx": [
                   "i"
@@ -181,7 +181,7 @@ const COUPLED_FORCED_JSON: &str = r#"
           "equations": [
             {
               "lhs": {
-                "op": "aggregate",
+                "op": "faq",
                 "args": [],
                 "output_idx": [
                   "i"
@@ -207,7 +207,7 @@ const COUPLED_FORCED_JSON: &str = r#"
                 }
               },
               "rhs": {
-                "op": "aggregate",
+                "op": "faq",
                 "args": [],
                 "output_idx": [
                   "i"

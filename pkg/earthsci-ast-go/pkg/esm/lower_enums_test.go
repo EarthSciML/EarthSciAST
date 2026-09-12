@@ -21,7 +21,7 @@ func TestLowerEnumsRecursesAllFields(t *testing.T) {
 		return ExprNode{Op: "enum", Args: []any{"Season", sym}}
 	}
 	node := ExprNode{
-		Op:    "aggregate",
+		Op:    "faq",
 		Args:  []any{enumNode("winter")},
 		Expr:  enumNode("summer"),
 		Lower: enumNode("winter"),
@@ -64,7 +64,7 @@ func TestLowerEnumsRecursesAllFields(t *testing.T) {
 func TestLowerEnumsUnknownSymbolInNestedField(t *testing.T) {
 	enums := map[string]map[string]int{"Season": {"winter": 0}}
 	node := ExprNode{
-		Op:    "aggregate",
+		Op:    "faq",
 		Args:  []any{"x"},
 		Lower: ExprNode{Op: "enum", Args: []any{"Season", "autumn"}}, // not declared
 	}

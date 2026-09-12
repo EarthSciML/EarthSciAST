@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "pde_inline_dead_observed",
     "description": "§6.6.5 inline-test assertions on array OBSERVEDS that NO LIVE EQUATION CONSUMES — the ordinary shape of a diagnostic computed for a test. `diag` is dead; `chain` is dead and reads the dead `diag`. Neither reaches the Julia build's observed graph (the elementwise array-observed fold inlines such an observed into its readers and drops its equation, and a dead one has no readers), so Julia refused both while Python and Rust answered them."
@@ -23,7 +23,7 @@
         {
           "lhs": "base",
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": ["i"],
             "ranges": { "i": [1, 4] },

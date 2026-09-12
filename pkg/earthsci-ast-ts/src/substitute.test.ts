@@ -311,7 +311,7 @@ describe('substitute', () => {
   // set via mapChildren.
   it('substitutes into aggregate expr/filter/key structural fields', () => {
     const expr = {
-      op: 'aggregate',
+      op: 'faq',
       args: ['i'],
       expr: { op: '*', args: ['k', 'i'] },
       filter: { op: '>', args: ['k', 0] },
@@ -319,7 +319,7 @@ describe('substitute', () => {
     } as unknown as Expr
     const bindings = { k: 2 }
     expect(substitute(expr, bindings)).toEqual({
-      op: 'aggregate',
+      op: 'faq',
       args: ['i'],
       expr: { op: '*', args: [2, 'i'] },
       filter: { op: '>', args: [2, 0] },

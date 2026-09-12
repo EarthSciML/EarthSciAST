@@ -1,0 +1,49 @@
+{
+  "suite": "deprecated_op_alias",
+  "spec": "CONFORMANCE_SPEC.md \u00a77 (`deprecated_op_alias`); esm-spec \u00a74.2; docs/content/rfcs/faq-node-rename.md",
+  "description": "The one deprecated expression-node `op` alias: `aggregate`, the pre-1.1.0 spelling of `faq` (Functional Aggregate Query). Pins the four properties every binding must share.",
+  "cases": [
+    {
+      "id": "alias_loads",
+      "input": "aliased.esm",
+      "assert": "loads without error"
+    },
+    {
+      "id": "alias_warns_once",
+      "input": "aliased.esm",
+      "assert": "emits exactly one `deprecated_op_alias` warning for the document, naming the node count (2), NOT one per node"
+    },
+    {
+      "id": "alias_normalizes",
+      "input": "aliased.esm",
+      "expected": "canonical.esm",
+      "assert": "emit(load(aliased)) is byte-identical to canonical.esm \u2014 the alias never survives the loader"
+    },
+    {
+      "id": "canonical_is_quiet",
+      "input": "canonical.esm",
+      "assert": "loads with NO `deprecated_op_alias` warning, and emit(load(x)) == x (the \u00a79.6.4 fixed point holds at the current version)"
+    },
+    {
+      "id": "arrayop_rejected",
+      "input": "../../invalid/faq/arrayop_op_removed.esm",
+      "assert": "REJECTED \u2014 `arrayop` was removed at esm 0.8.0 and is not an alias"
+    },
+    {
+      "id": "alias_in_referenced_child",
+      "input": "ref_parent_aliased.esm",
+      "assert": "loads; the child's alias is normalized to `faq` too, and `emit` carries no `aggregate` \u2014 the wire boundary covers REFERENCED documents, not just the root"
+    },
+    {
+      "id": "arrayop_in_referenced_child",
+      "input": "ref_parent_arrayop.esm",
+      "assert": "REJECTED with `removed_op` \u2014 the child's removed spelling is caught at the child's own wire boundary"
+    },
+    {
+      "id": "faq_requires_v11",
+      "input": "(any document spelling `faq` while declaring esm < 1.1.0)",
+      "assert": "REJECTED with `faq_version_too_old`; the gate reads the AUTHORED form, so a pre-1.1.0 document carrying the legal `aggregate` alias is NOT caught and is instead normalized with its version raised to the 1.1.0 floor"
+    }
+  ],
+  "note": "Some bindings resolve subsystem `{ref}`s during load; TypeScript exposes it as a separate `resolveSubsystemRefs` API. A binding's adapter invokes whatever its load path requires \u2014 the CONTRACT is that once refs are resolved, no deprecated alias and no removed op survives anywhere in the document."
+}

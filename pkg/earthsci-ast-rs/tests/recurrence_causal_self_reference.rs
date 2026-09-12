@@ -239,14 +239,14 @@ fn a_self_read_through_a_template_binding_is_still_recognized() {
 /// One-variable recurrence document with `body` as the aggregate's `expr`.
 fn doc_with_body(body: Value) -> String {
     json!({
-      "esm": "1.0.0",
+      "esm": "1.1.0",
       "metadata": { "name": "R", "description": "probe", "authors": ["t"] },
       "index_sets": { "steps": { "kind": "interval", "size": 4 } },
       "models": { "R": {
         "tolerance": { "rel": 0.0, "abs": 0.0 },
         "variables": { "s": { "type": "unknown", "shape": ["steps"], "units": "1" } },
         "equations": [ { "lhs": "s", "rhs": {
-          "op": "aggregate", "args": [], "output_idx": ["k"],
+          "op": "faq", "args": [], "output_idx": ["k"],
           "ranges": { "k": { "from": "steps" } }, "expr": body } } ],
         "tests": [ { "id": "probe", "description": "probe",
           "time_span": { "start": 0.0, "end": 0.0 },
@@ -355,7 +355,7 @@ fn constant_self_index_is_rejected() {
 #[test]
 fn two_unprovable_lags_are_still_two_axes() {
     let doc = json!({
-      "esm": "1.0.0",
+      "esm": "1.1.0",
       "metadata": { "name": "R2", "description": "probe", "authors": ["t"] },
       "index_sets": { "rows": { "kind": "interval", "size": 3 },
                       "cols": { "kind": "interval", "size": 3 } },
@@ -366,7 +366,7 @@ fn two_unprovable_lags_are_still_two_axes() {
           "m": { "type": "unknown", "shape": ["rows", "cols"], "units": "1" }
         },
         "equations": [ { "lhs": "m", "rhs": {
-          "op": "aggregate", "args": [], "output_idx": ["i", "j"],
+          "op": "faq", "args": [], "output_idx": ["i", "j"],
           "ranges": { "i": { "from": "rows" }, "j": { "from": "cols" } },
           "expr": { "op": "index", "args": ["m",
                       { "op": "-", "args": ["i", "n"] },
@@ -386,7 +386,7 @@ fn two_unprovable_lags_are_still_two_axes() {
 #[test]
 fn self_read_offset_on_two_axes_is_rejected() {
     let doc = json!({
-      "esm": "1.0.0",
+      "esm": "1.1.0",
       "metadata": { "name": "R2", "description": "probe", "authors": ["t"] },
       "index_sets": { "rows": { "kind": "interval", "size": 3 },
                       "cols": { "kind": "interval", "size": 3 } },
@@ -394,7 +394,7 @@ fn self_read_offset_on_two_axes_is_rejected() {
         "tolerance": { "rel": 0.0, "abs": 0.0 },
         "variables": { "m": { "type": "unknown", "shape": ["rows", "cols"], "units": "1" } },
         "equations": [ { "lhs": "m", "rhs": {
-          "op": "aggregate", "args": [], "output_idx": ["i", "j"],
+          "op": "faq", "args": [], "output_idx": ["i", "j"],
           "ranges": { "i": { "from": "rows" }, "j": { "from": "cols" } },
           "expr": { "op": "index", "args": ["m",
                       { "op": "-", "args": ["i", 1] },
@@ -425,7 +425,7 @@ fn self_read_offset_on_two_axes_is_rejected() {
 #[test]
 fn makearray_region_self_read_is_refused_as_unsupported_form() {
     let doc = json!({
-      "esm": "1.0.0",
+      "esm": "1.1.0",
       "metadata": { "name": "RM", "description": "probe", "authors": ["t"] },
       "index_sets": { "steps": { "kind": "interval", "size": 4 } },
       "models": { "RM": {
@@ -435,7 +435,7 @@ fn makearray_region_self_read_is_refused_as_unsupported_form() {
           "op": "makearray", "args": [],
           "regions": [ [[1, 1]], [[2, 4]] ],
           "values": [ 1.0, {
-            "op": "aggregate", "args": [], "output_idx": ["k"],
+            "op": "faq", "args": [], "output_idx": ["k"],
             "ranges": { "k": [2, 4] },
             "expr": { "op": "*", "args": [
               { "op": "index", "args": ["s", { "op": "-", "args": ["k", 1] }] }, 2.0 ] } } ] } } ],
@@ -585,7 +585,7 @@ fn structural_validator_rejects_a_forward_self_read() {
 #[test]
 fn structural_validator_rejects_a_makearray_region_self_read() {
     let doc = json!({
-      "esm": "1.0.0",
+      "esm": "1.1.0",
       "metadata": { "name": "R", "description": "probe", "authors": ["t"] },
       "index_sets": { "steps": { "kind": "interval", "size": 4 } },
       "models": { "R": {
@@ -595,7 +595,7 @@ fn structural_validator_rejects_a_makearray_region_self_read() {
           "op": "makearray", "args": [],
           "regions": [ [[1, 1]], [[2, 4]] ],
           "values": [ 1.0, {
-            "op": "aggregate", "args": [], "output_idx": ["k"],
+            "op": "faq", "args": [], "output_idx": ["k"],
             "ranges": { "k": [2, 4] },
             "expr": { "op": "index", "args": ["s", { "op": "-", "args": ["k", 1] }] } } ] } } ]
       } }
@@ -650,7 +650,7 @@ fn the_valid_corpus_recurrence_validates_clean() {
 #[test]
 fn a_two_variable_cycle_is_not_a_recurrence_and_still_produces_nothing() {
     let cyclic = json!({
-      "esm": "1.0.0",
+      "esm": "1.1.0",
       "metadata": { "name": "C", "description": "probe", "authors": ["t"] },
       "index_sets": { "steps": { "kind": "interval", "size": 4 } },
       "models": { "C": {
@@ -660,10 +660,10 @@ fn a_two_variable_cycle_is_not_a_recurrence_and_still_produces_nothing() {
           "b": { "type": "unknown", "shape": ["steps"], "units": "1" }
         },
         "equations": [
-          { "lhs": "a", "rhs": { "op": "aggregate", "args": [], "output_idx": ["k"],
+          { "lhs": "a", "rhs": { "op": "faq", "args": [], "output_idx": ["k"],
             "ranges": { "k": { "from": "steps" } },
             "expr": { "op": "index", "args": ["b", "k"] } } },
-          { "lhs": "b", "rhs": { "op": "aggregate", "args": [], "output_idx": ["k"],
+          { "lhs": "b", "rhs": { "op": "faq", "args": [], "output_idx": ["k"],
             "ranges": { "k": { "from": "steps" } },
             "expr": { "op": "index", "args": ["a", "k"] } } }
         ],

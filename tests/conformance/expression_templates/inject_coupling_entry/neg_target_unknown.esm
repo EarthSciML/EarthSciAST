@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "inject_coupling_entry_neg_target_unknown",
     "description": "NEGATIVE (esm-spec §9.7.10 / §10.8): the coupling entry's injection map key 'Nonexistent' names no system the entry references (systems are Emit and Advection). MUST be rejected at load with template_inject_target_unknown."

@@ -14,7 +14,7 @@
 //!  - array & call-shaped tier: array literals `[…]` (`const`), indexing
 //!    `a[i, j]` (`index`), dotted closed-function calls `datetime.year(t)` (`fn`),
 //!    the `true` literal, and `integral` / `reshape` / `transpose` / `concat`;
-//!  - reduction & array-query tier: `aggregate` reductions
+//!  - reduction & array-query tier: `faq` reductions
 //!    `sum[i] (expr) where {i in set, j in lo:hi} join(a=b) if pred distinct
 //!    key=k [semiring=…]` (all clause shapes), the `argmin`/`argmax` arg-witnesses,
 //!    template application `name<binding = value, …>`
@@ -660,7 +660,7 @@ impl Parser {
         false
     }
 
-    /// Parse an `aggregate` reduction (esm-spec §4.2) — the inverse of the
+    /// Parse a `faq` reduction (esm-spec §4.2) — the inverse of the
     /// printer's `formatAggregate`:
     ///
     /// ```text
@@ -742,7 +742,7 @@ impl Parser {
         }
 
         let mut n = ExpressionNode {
-            op: "aggregate".to_string(),
+            op: "faq".to_string(),
             args: derive_aggregate_args(&expr, &join, filter.as_ref(), key.as_ref()),
             ..Default::default()
         };

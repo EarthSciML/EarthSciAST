@@ -173,7 +173,7 @@ impl TwoClause {
             json!({"on": [["lkey_b", "rkey_b"]]}),
         ];
         let mut node = json!({
-            "op": "aggregate",
+            "op": "faq",
             "reduce": "+",
             "output_idx": ["l"],
             "ranges": {"l": {"from": "lrows"}, "r": {"from": "rrows"}},
@@ -196,7 +196,7 @@ impl TwoClause {
             );
         }
         json!({
-            "esm": "1.0.0",
+            "esm": "1.1.0",
             "metadata": {"name": "join_on_conjunctive_gate"},
             "index_sets": {
                 "lrows": {"kind": "interval", "size": self.nl()},
@@ -440,7 +440,7 @@ impl ThreeClause {
             json!({"on": [["rkey_c", "skey_c"]]}),
         ];
         let mut node = json!({
-            "op": "aggregate",
+            "op": "faq",
             "reduce": "+",
             "output_idx": ["l"],
             "ranges": {
@@ -470,7 +470,7 @@ impl ThreeClause {
             );
         }
         json!({
-            "esm": "1.0.0",
+            "esm": "1.1.0",
             "metadata": {"name": "join_on_conjunctive_gate_3"},
             "index_sets": {
                 "lrows": {"kind": "interval", "size": self.lkey_a.len()},

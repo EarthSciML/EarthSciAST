@@ -68,7 +68,7 @@ fn doc(nl: usize, nr: usize, nkeys: usize) -> (Value, HashMap<String, ArrayD<f64
     let rate: Vec<f64> = (0..nr).map(|j| 0.5 + (j % 11) as f64).collect();
 
     let mut node = json!({
-        "op": "aggregate",
+        "op": "faq",
         "reduce": "+",
         "output_idx": ["l"],
         "ranges": {"l": {"from": "lrows"}, "r": {"from": "rrows"}},

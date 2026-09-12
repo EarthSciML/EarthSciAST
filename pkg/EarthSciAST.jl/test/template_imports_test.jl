@@ -75,7 +75,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         @test eq.rhs.args[2].op == "makearray"
     end
 
-    @testset "aggregate_int_ratio_golden: §5.5.3.1 rule 1 on the AST-golden path" begin
+    @testset "faq_int_ratio_golden: §5.5.3.1 rule 1 on the AST-golden path" begin
         # Guards the AST-GOLDEN pathway (resolve_template_machinery →
         # lower_expression_templates → canonical write), which never calls
         # `expression_from_json`. A `coord` template body cos(pi·aggregate((i−1/2)·(1/8)))
@@ -85,7 +85,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # narrows integral Int64-representable Float64 in `args` positions back to
         # integers (CONFORMANCE_SPEC §5.5.3.1 rule 1), so the emitted golden is
         # `[1,8]` — byte-identical with Python/Rust/TS/Go.
-        fixture = conf("aggregate_int_ratio_golden", "fixture.esm")
+        fixture = conf("faq_int_ratio_golden", "fixture.esm")
 
         # (a) The fixture actually exercises the bug: the raw JSON3 reader widens
         # the in-aggregate ratio to `1.0/8.0` while the standalone dx=1/8 stays
@@ -96,7 +96,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
 
         # (b) The expanded tree matches the committed golden structurally.
         tree = _expand_raw(fixture)
-        @test tree == _golden(conf("aggregate_int_ratio_golden", "expanded.esm"))
+        @test tree == _golden(conf("faq_int_ratio_golden", "expanded.esm"))
 
         # (c) Byte-level: no float promotion survives into the emitted
         # expression subtree (scoped to the expression — NOT the whole document,
@@ -177,7 +177,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
             @test half.args[1].value == n
             # Structural site: the aggregate dense range folded exactly.
             ramp = observed_definition(sub, "ramp")
-            @test ramp.op == "aggregate"
+            @test ramp.op == "faq"
             @test ramp.ranges["i"] == [1, div(n, 2)]
             # Typed round-trip matches the golden.
             @test _normj(serialize_esm_file(f)) ==
@@ -196,10 +196,10 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # Each renamed rule instance fired only on its own axis (`wrt` in the
         # match pattern followed the index-set rename).
         eqf = f.models["TwoGrids"].equations[1]
-        @test eqf.rhs.op == "aggregate"
+        @test eqf.rhs.op == "faq"
         @test eqf.rhs.ranges["i"] == [2, 15]      # N=16 instance
         eqc = f.models["TwoGrids"].equations[2]
-        @test eqc.rhs.op == "aggregate"
+        @test eqc.rhs.op == "faq"
         @test eqc.rhs.ranges["i"] == [2, 7]       # N=8 instance
     end
 
@@ -240,7 +240,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # pins), not of the typed view built over it.
         for (name, axis, n) in (("Q", "lev", 4), ("P", "lat", 3))
             agg = _defrhs(d, "Column", name)
-            @test agg["op"] == "aggregate"
+            @test agg["op"] == "faq"
             @test agg["ranges"]["i"]["from"] == axis
             @test agg["ranges"]["j"]["from"] == axis
             measure = agg["expr"]["args"][2]
@@ -267,7 +267,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         @test f.index_sets["nz_of_row"].values == "meshA_cols"
         # ...and in the rule body (args and index gathers alike).
         total = observed_definition(f.models["Sparse"], "total")
-        @test total.op == "aggregate"
+        @test total.op == "faq"
         argnames = String[a.name for a in total.args]   # typed VarExpr leaves
         @test "meshA_cols" in argnames && "meshA_w" in argnames
         @test !("row_cols" in argnames)
@@ -521,8 +521,8 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # not representable as a fixture here and are covered separately:
         # `template_import_unresolved` (a missing FILE) below, and
         # `template_import_version_too_old`, whose fixture was retired with esm
-        # 1.0.0 — the corpus is all `esm: "1.0.0"`, so no document in it can
-        # declare a pre-0.8.0 version and still be schema-valid. The rule itself
+        # 1.0.0 — no document in the corpus declares a pre-0.8.0 version and is
+        # still schema-valid. The rule itself
         # is still pinned, directly on `reject_template_imports_pre_v08`, by the
         # "version gate helper" testset below.
         for code in ["template_import_not_library",
@@ -633,7 +633,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
 
     _model_json(extra_model_fields, top_fields="") = """
     {
-      "esm": "0.8.0",
+      "esm": "1.1.0",
       "metadata": {"name": "t"},$top_fields
       "models": {
         "M": {$extra_model_fields
@@ -664,7 +664,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         mktempdir() do dir
             write(joinpath(dir, "lib.esm"), """
             {
-              "esm": "0.8.0",
+              "esm": "1.1.0",
               "metadata": {"name": "lib"},
               "expression_templates": {
                 "t_inner": {"params": [], "body": 7},
@@ -712,7 +712,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
     @testset "diamond with conflicting edge bindings is rejected (§9.7.6)" begin
         mktempdir() do dir
             write(joinpath(dir, "grid.esm"), """
-            {"esm": "0.8.0", "metadata": {"name": "grid"},
+            {"esm": "1.1.0", "metadata": {"name": "grid"},
              "metaparameters": {"NC": {"type": "integer"}},
              "index_sets": {"cells": {"kind": "interval", "size": "NC"}},
              "expression_templates": {"nc": {"params": [], "body": "NC"}}}
@@ -739,7 +739,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
     @testset "edge bindings: unknown names and non-integer values" begin
         mktempdir() do dir
             write(joinpath(dir, "lib.esm"), """
-            {"esm": "0.8.0", "metadata": {"name": "lib"},
+            {"esm": "1.1.0", "metadata": {"name": "lib"},
              "metaparameters": {"N": {"type": "integer", "default": 8}},
              "expression_templates": {"n": {"params": [], "body": "N"}}}
             """)
@@ -763,7 +763,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
 
     @testset "renaming/rebinding unit behavior (§9.7.7)" begin
         _grid_lib = """
-        {"esm": "0.8.0", "metadata": {"name": "grid"},
+        {"esm": "1.1.0", "metadata": {"name": "grid"},
          "metaparameters": {"N": {"type": "integer"}},
          "index_sets": {"x": {"kind": "interval", "size": "N"}},
          "expression_templates": {"dx": {"params": [], "body": {"op": "/", "args": [1, "N"]}}}}
@@ -775,7 +775,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                 # Mid-layer library mounts the grid under prefix g, leaves g.N
                 # open (re-exported), and composes g.dx into its own template.
                 write(joinpath(dir, "layer.esm"), """
-                {"esm": "0.8.0", "metadata": {"name": "layer"},
+                {"esm": "1.1.0", "metadata": {"name": "layer"},
                  "expression_template_imports": [{"ref": "./grid.esm", "prefix": "g"}],
                  "expression_templates": {"two_dx": {"params": [], "body": {"op": "*", "args": [2,
                     {"op": "apply_expression_template", "args": [], "name": "g.dx", "bindings": {}}]}}}}
@@ -822,7 +822,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                       "template_import_rename_unknown_name"
                 # `rename` keys live in the post-`only` surviving export set.
                 write(joinpath(dir, "two.esm"), """
-                {"esm": "0.8.0", "metadata": {"name": "two"},
+                {"esm": "1.1.0", "metadata": {"name": "two"},
                  "expression_templates": {"keep": {"params": [], "body": 1},
                                           "drop": {"params": [], "body": 2}}}
                 """)
@@ -838,14 +838,14 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         @testset "rebind guards: declared names, bound indices, target capture" begin
             mktempdir() do dir
                 write(joinpath(dir, "ragged.esm"), """
-                {"esm": "0.8.0", "metadata": {"name": "ragged"},
+                {"esm": "1.1.0", "metadata": {"name": "ragged"},
                  "metaparameters": {"NR": {"type": "integer", "default": 2}},
                  "index_sets": {"rows": {"kind": "interval", "size": "NR"},
                                 "nz": {"kind": "ragged", "of": ["rows"],
                                        "offsets": "cnt", "values": "cols"}},
                  "expression_templates": {"rsum": {"params": ["F"],
                    "match": {"op": "rsum", "args": ["F"]},
-                   "body": {"op": "aggregate", "args": ["F", "cols", "wgt"],
+                   "body": {"op": "faq", "args": ["F", "cols", "wgt"],
                      "output_idx": ["i"], "semiring": "sum_product",
                      "ranges": {"i": {"from": "rows"}, "k": {"from": "nz", "of": ["i"]}},
                      "expr": {"op": "*", "args": [
@@ -906,7 +906,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
             p = joinpath(dir, "m.esm")
             write(p, """
             {
-              "esm": "0.8.0",
+              "esm": "1.1.0",
               "metadata": {"name": "fold"},
               "metaparameters": {"N": {"type": "integer", "default": 6}},
               "index_sets": {"cells": {"kind": "interval", "size": {"op": "*", "args": ["N", 2]}}},
@@ -920,7 +920,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                   "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
                                  "rhs": {"op": "-", "args": ["x"]}},
                                 {"lhs": "agg",
-                                 "rhs": {"op": "aggregate", "output_idx": ["i"], "args": ["x"],
+                                 "rhs": {"op": "faq", "output_idx": ["i"], "args": ["x"],
                                    "ranges": {"i": [1, {"op": "-", "args": ["N", 1]}]},
                                    "expr": {"op": "*", "args": ["x", "i"]}}},
                                 {"lhs": "ma",
@@ -945,7 +945,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
             p = joinpath(dir, "m.esm")
             write(p, """
             {
-              "esm": "0.8.0",
+              "esm": "1.1.0",
               "metadata": {"name": "subst"},
               "metaparameters": {"N": {"type": "integer", "default": 144}},
               "models": {
@@ -976,7 +976,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # denotes the fully-inlined value (§9.6.4 rule 2).
         doc = JSON3.read("""
         {
-          "esm": "0.8.0",
+          "esm": "1.1.0",
           "metadata": {"name": "chain3"},
           "models": {
             "M": {
@@ -1016,7 +1016,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                                         "args" => [], "name" => "c_" * lpad(i + 1, 2, '0'),
                                         "bindings" => Dict()))
             end
-            Dict("esm" => "0.8.0", "metadata" => Dict("name" => "chain"),
+            Dict("esm" => "1.1.0", "metadata" => Dict("name" => "chain"),
                  "models" => Dict("M" => Dict(
                      "expression_templates" => tpl,
                      "variables" => Dict("x" => Dict("type" => "unknown", "default" => 0.5)),
@@ -1099,12 +1099,12 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
             # Template libraries: stencil.esm's OWN relative import must join
             # against ITS URL base -> https://esm.invalid/shared/grid.esm.
             "https://esm.invalid/shared/grid.esm" => """
-            {"esm": "0.8.0", "metadata": {"name": "url_grid"},
+            {"esm": "1.1.0", "metadata": {"name": "url_grid"},
              "metaparameters": {"N": {"type": "integer", "default": 8}},
              "index_sets": {"cells": {"kind": "interval", "size": "N"}},
              "expression_templates": {"n_cells": {"params": [], "body": "N"}}}""",
             "https://esm.invalid/lib/stencil.esm" => """
-            {"esm": "0.8.0", "metadata": {"name": "url_stencil"},
+            {"esm": "1.1.0", "metadata": {"name": "url_stencil"},
              "expression_template_imports": [{"ref": "../shared/grid.esm"}],
              "expression_templates": {
                "scale_by_n": {"params": ["f"],
@@ -1115,13 +1115,13 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
             # Self-import through a dot-segment spelling: canonical URL
             # identity must detect the cycle.
             "https://esm.invalid/cyc/a.esm" => """
-            {"esm": "0.8.0", "metadata": {"name": "url_cycle"},
+            {"esm": "1.1.0", "metadata": {"name": "url_cycle"},
              "expression_template_imports": [{"ref": "b/../a.esm"}],
              "expression_templates": {"t": {"params": [], "body": 1}}}""",
             # Subsystem refs: outer.esm's template import AND nested subsystem
             # ref are both relative to ITS OWN URL directory.
             "https://esm.invalid/models/outer.esm" => """
-            {"esm": "0.8.0", "metadata": {"name": "url_outer"},
+            {"esm": "1.1.0", "metadata": {"name": "url_outer"},
              "models": {"Outer": {
                "expression_template_imports": [{"ref": "tpl/lib.esm"}],
                "variables": {
@@ -1133,13 +1133,13 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                               "rhs": {"op": "scale_by_n", "args": ["u"]}}],
                "subsystems": {"Inner": {"ref": "inner.esm"}}}}}""",
             "https://esm.invalid/models/tpl/lib.esm" => """
-            {"esm": "0.8.0", "metadata": {"name": "url_outer_lib"},
+            {"esm": "1.1.0", "metadata": {"name": "url_outer_lib"},
              "expression_templates": {
                "scale_by_n": {"params": ["f"],
                  "match": {"op": "scale_by_n", "args": ["f"]},
                  "body": {"op": "*", "args": ["f", 8]}}}}""",
             "https://esm.invalid/models/inner.esm" => """
-            {"esm": "0.8.0", "metadata": {"name": "url_inner"},
+            {"esm": "1.1.0", "metadata": {"name": "url_inner"},
              "models": {"Inner": {
                "variables": {"v": {"type": "unknown", "units": "1", "default": 0.5}},
                "equations": []}}}""",
@@ -1157,7 +1157,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                 # URL-loaded library resolve against the URL base.
                 consumer = joinpath(dir, "consumer.esm")
                 write(consumer, """
-                {"esm": "0.8.0", "metadata": {"name": "url_consumer"},
+                {"esm": "1.1.0", "metadata": {"name": "url_consumer"},
                  "models": {"M": {
                    "expression_template_imports":
                      [{"ref": "https://esm.invalid/lib/stencil.esm"}],
@@ -1178,7 +1178,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                 # dot-segment self-import collapses to the same key.
                 cyc = joinpath(dir, "cyc.esm")
                 write(cyc, """
-                {"esm": "0.8.0", "metadata": {"name": "url_cyc_consumer"},
+                {"esm": "1.1.0", "metadata": {"name": "url_cyc_consumer"},
                  "models": {"M": {
                    "expression_template_imports":
                      [{"ref": "https://esm.invalid/cyc/a.esm"}],
@@ -1191,7 +1191,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                 # template import and nested subsystem ref join its URL base.
                 wrapper = joinpath(dir, "wrapper.esm")
                 write(wrapper, """
-                {"esm": "0.8.0", "metadata": {"name": "url_wrapper"},
+                {"esm": "1.1.0", "metadata": {"name": "url_wrapper"},
                  "models": {"Top": {
                    "variables": {"z": {"type": "unknown", "units": "1", "default": 2.5}},
                    "equations": [],
@@ -1253,7 +1253,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # ---- 2. import edge: GX = NX*NY carried symbolically, folds at close ----
         _lib_grid = """
         {
-          "esm": "0.8.0",
+          "esm": "1.1.0",
           "metadata": {"name": "lib_grid"},
           "metaparameters": {"GX": {"type": "integer", "default": 2}},
           "index_sets": {"cells": {"kind": "interval", "size": "GX"}},
@@ -1264,7 +1264,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         """
         _model_importing(binding) = """
         {
-          "esm": "0.8.0",
+          "esm": "1.1.0",
           "metadata": {"name": "model_import"},
           "metaparameters": {
             "NX": {"type": "integer", "default": 3},
@@ -1299,7 +1299,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # ---- 3. subsystem / model edge: NTGT = NX*NY folds at the mount ----
         _child_regrid = """
         {
-          "esm": "0.8.0",
+          "esm": "1.1.0",
           "metadata": {"name": "child_regrid"},
           "metaparameters": {
             "NX": {"type": "integer", "default": 2},
@@ -1322,7 +1322,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         """
         _parent_mount(bindings) = """
         {
-          "esm": "0.8.0",
+          "esm": "1.1.0",
           "metadata": {"name": "parent_mount"},
           "metaparameters": {
             "NX": {"type": "integer", "default": 18},

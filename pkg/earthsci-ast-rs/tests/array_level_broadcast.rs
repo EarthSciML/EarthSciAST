@@ -5,7 +5,7 @@
 //! `D(dp) ~ w2 * z1` — aligns its operands by index-set NAME: an operand whose
 //! declared `shape` is a SUBSET of the result's broadcasts along the axes it is
 //! missing, and axis ORDER does not matter. The oracle for every case here is
-//! the explicit `aggregate` spelling of the same maths, which names the axes
+//! the explicit `faq` spelling of the same maths, which names the axes
 //! and has always been right; the two spellings must agree BIT for BIT, not
 //! merely to a tolerance.
 //!
@@ -237,7 +237,7 @@ fn broadcast_spelled_unalignable_operand_is_rejected() {
     );
 }
 
-/// The BARE spelling and the explicit `aggregate` spelling of the same maths
+/// The BARE spelling and the explicit `faq` spelling of the same maths
 /// must agree BIT for BIT — the aggregate form is the correctness oracle,
 /// because its axes are named by the author and were never inferred.
 #[test]
@@ -262,13 +262,13 @@ fn bare_and_aggregate_spellings_are_bit_identical() {
         let bare = load_string(&text).unwrap_or_else(|e| panic!("{fixture}: {e}"));
 
         // Rewrite the single equation's RHS into the equivalent full-map
-        // `aggregate` over every axis — a reduction over nothing, so the two
+        // `faq` over every axis — a reduction over nothing, so the two
         // documents describe the same function.
         let mut doc: serde_json::Value = serde_json::from_str(&text).expect("fixture is JSON");
         let models = doc["models"].as_object_mut().expect("models");
         let model = models.values_mut().next().expect("one model");
         model["equations"][0]["rhs"] = serde_json::json!({
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": ["i", "j", "k"],
             "ranges": {
@@ -301,7 +301,7 @@ fn bare_and_aggregate_spellings_are_bit_identical() {
 /// because a `reshape` result names no index sets to align by.
 #[test]
 fn anonymous_shapes_keep_positional_broadcast() {
-    let path = common::repo_tests_dir().join("fixtures/arrayop/14_broadcast_elementwise.esm");
+    let path = common::repo_tests_dir().join("fixtures/faq/14_broadcast_elementwise.esm");
     let file = load_string(&read(&path)).expect("fixture loads");
     let ics: HashMap<String, f64> = [
         ("a[1]", 1.0),
@@ -412,7 +412,7 @@ fn shared_fixtures_are_bare_array_level_equations() {
         assert_eq!(models.len(), 1, "{name}");
         let model: &Model = models.values().next().unwrap();
         assert!(!model.equations.is_empty(), "{name}");
-        // A bare `D(dp)` LHS: no `index`, no `aggregate` — the whole array.
+        // A bare `D(dp)` LHS: no `index`, no `faq` — the whole array.
         let earthsci_ast::Expr::Operator(lhs) = &model.equations[0].lhs else {
             panic!("{name}: LHS is not an operator")
         };

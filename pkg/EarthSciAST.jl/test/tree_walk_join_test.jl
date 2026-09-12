@@ -37,7 +37,7 @@ const ESMJ = EarthSciAST
     # and keyed-factor const arrays.
     function scalar_du(; semiring=nothing, reduce=nothing, body, ranges,
                        join=nothing, filter=nothing, index_sets, const_arrays=Dict{String,Vector{Float64}}())
-        rhs = _op("aggregate"; output_idx=Any[], semiring=semiring, reduce=reduce,
+        rhs = _op("faq"; output_idx=Any[], semiring=semiring, reduce=reduce,
                   expr_body=body, ranges=ranges, join=join, filter=filter)
         model = ESMJ.Model(Dict("u" => ModelVariable(UnknownVariable)),
                            [ESMJ.Equation(_op("D", _v("u"); wrt="t"), rhs)])
@@ -144,9 +144,9 @@ const ESMJ = EarthSciAST
         # out[i] = Σ_k v[i,k] where member(i)==member(k). i=A matches k=A; i=B none.
         isets = Dict("out" => ESMJ.IndexSet("categorical"; members=["A", "B"]),
                      "k"   => ESMJ.IndexSet("categorical"; members=["A", "C"]))
-        lhs = _op("aggregate"; output_idx=Any["i"], expr_body=_Didx("o", "i"),
+        lhs = _op("faq"; output_idx=Any["i"], expr_body=_Didx("o", "i"),
                   ranges=Dict("i" => _R("out")))
-        rhs = _op("aggregate"; output_idx=Any["i"], semiring="sum_product",
+        rhs = _op("faq"; output_idx=Any["i"], semiring="sum_product",
                   expr_body=_idx("v", "i", "k"),
                   ranges=Dict("i" => _R("out"), "k" => _R("k")),
                   join=Any[[("i", "k")]])
@@ -273,8 +273,8 @@ const ESMJ = EarthSciAST
                         const_arrays=Dict("w" => [1.0 0.0; 0.0 5.0])) == 5.0
     end
 
-    # ---- arrayop alias + the canonical ESI fixture --------------------------
-    @testset "the deprecated arrayop tag resolves joins identically" begin
+    # ---- faq alias + the canonical ESI fixture --------------------------
+    @testset "the deprecated faq tag resolves joins identically" begin
         isets = Dict("county" => ESMJ.IndexSet("categorical"; members=["A", "B"]))
         ca    = Dict("w" => [1.0 2.0; 3.0 4.0])
         common = (; output_idx=Any[], semiring="sum_product", expr_body=_idx("w", "i", "j"),
@@ -282,11 +282,11 @@ const ESMJ = EarthSciAST
         mk(tag) = ESMJ.Model(Dict("u" => ModelVariable(UnknownVariable)),
                              [ESMJ.Equation(_op("D", _v("u"); wrt="t"), _op(tag; common...))])
         run1(m) = (r = build_evaluator(m; index_sets=isets, const_arrays=ca); du = similar(r[2]); r[1](du, r[2], r[3], 0.0); du[r[5]["u"]])
-        @test run1(mk("arrayop")) == run1(mk("aggregate")) == 1.0 + 4.0
+        @test run1(mk("faq")) == run1(mk("faq")) == 1.0 + 4.0
     end
 
     @testset "canonical join_filter.esm fixture (ESI MOVES contraction) evaluates" begin
-        path = joinpath(@__DIR__, "..", "..", "..", "tests", "valid", "aggregate", "join_filter.esm")
+        path = joinpath(@__DIR__, "..", "..", "..", "tests", "valid", "faq", "join_filter.esm")
         doc  = JSON3.read(read(path, String))
         f!, u0, p, _, vmap = build_evaluator(doc; model_name="EmissionsAggregate",
             const_arrays=Dict("activity" => [10.0, 20.0], "base_rate" => [3.0, 5.0]))
@@ -299,7 +299,7 @@ const ESMJ = EarthSciAST
 
     # ---- Round-trip: join / filter survive parse ↔ serialize ----------------
     @testset "join + filter round-trip through parse ↔ serialize" begin
-        raw = Dict("op" => "aggregate", "output_idx" => [], "reduce" => "+",
+        raw = Dict("op" => "faq", "output_idx" => [], "reduce" => "+",
                    "ranges" => Dict("i" => Dict("from" => "s"), "j" => Dict("from" => "s")),
                    "expr" => Dict("op" => "index", "args" => ["w", "i", "j"]),
                    "join" => [Dict("on" => [["i", "j"]])],

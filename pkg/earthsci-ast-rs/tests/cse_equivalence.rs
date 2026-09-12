@@ -93,17 +93,17 @@ fn repeated_subexpr_json(n: usize) -> String {
                                  {"op": "index", "args": ["u", {"op": "-", "args": ["i", 1]}]}]}]},
           {"op": "*", "args": ["i", "i"]}]}]}"#;
     const TEMPLATE: &str = r#"{
- "esm": "1.0.0",
+ "esm": "1.1.0",
  "metadata": {"name": "cse_repeat"},
  "models": {
   "M": {
    "variables": {"u": {"type": "unknown", "shape": ["i"]}},
    "equations": [
     {
-     "lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+     "lhs": {"op": "faq", "args": [], "output_idx": ["i"],
              "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "i"]}], "wrt": "t"},
              "ranges": {"i": [1, __N__]}},
-     "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+     "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
              "ranges": {"i": [1, __N__]},
              "expr": {"op": "index", "args": [
                {"op": "makearray", "args": [],
@@ -125,17 +125,17 @@ fn repeated_subexpr_json(n: usize) -> String {
 /// mentions the contracted index `k`, so each tuple must get its own memo.
 fn contracted_repeat_json(n: usize) -> String {
     const TEMPLATE: &str = r#"{
- "esm": "1.0.0",
+ "esm": "1.1.0",
  "metadata": {"name": "cse_contract"},
  "models": {
   "M": {
    "variables": {"u": {"type": "unknown", "shape": ["i"]}},
    "equations": [
     {
-     "lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+     "lhs": {"op": "faq", "args": [], "output_idx": ["i"],
              "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "i"]}], "wrt": "t"},
              "ranges": {"i": [1, __N__]}},
-     "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+     "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
              "reduce": "+",
              "ranges": {"i": [1, __N__], "k": [-1, 1]},
              "expr": {"op": "+", "args": [

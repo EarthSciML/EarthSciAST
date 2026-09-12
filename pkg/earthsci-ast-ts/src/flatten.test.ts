@@ -503,7 +503,7 @@ describe("the merged-away rename reaches a `join`'s plain STRINGS", () => {
   // the same way, or the join keeps pointing at a variable the flattened
   // system no longer declares (CONFORMANCE_SPEC §5.5.6, §5.35).
   const doc = {
-    esm: '1.0.0',
+    esm: '1.1.0',
     metadata: { name: 'join-merge' },
     index_sets: { rows: { size: 3 } },
     models: {
@@ -530,7 +530,7 @@ describe("the merged-away rename reaches a `join`'s plain STRINGS", () => {
           {
             lhs: 'total',
             rhs: {
-              op: 'aggregate',
+              op: 'faq',
               args: [{ op: '*', args: ['Sink.O3', 1.0] }],
               ranges: { i: { from: 'rows' } },
               reduce: 'sum',

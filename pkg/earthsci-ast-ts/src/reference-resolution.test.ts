@@ -48,7 +48,7 @@ describe('buildReferenceGraph', () => {
       model({
         equations: [
           {
-            lhs: { op: 'aggregate', id: 'agg1', args: [], ranges: { i: { from: 'cells' } } },
+            lhs: { op: 'faq', id: 'agg1', args: [], ranges: { i: { from: 'cells' } } },
             rhs: 0,
           },
         ],
@@ -71,9 +71,7 @@ describe('buildReferenceGraph', () => {
     expect(() =>
       buildReferenceGraph(
         model({
-          equations: [
-            { lhs: { op: 'aggregate', args: [], ranges: { i: { from: 'ghosts' } } }, rhs: 0 },
-          ],
+          equations: [{ lhs: { op: 'faq', args: [], ranges: { i: { from: 'ghosts' } } }, rhs: 0 }],
         }),
         'M',
         { cells: {} },
@@ -86,8 +84,8 @@ describe('buildReferenceGraph', () => {
       buildReferenceGraph(
         model({
           equations: [
-            { lhs: { op: 'aggregate', id: 'dup', args: [] }, rhs: 0 },
-            { lhs: { op: 'aggregate', id: 'dup', args: [] }, rhs: 0 },
+            { lhs: { op: 'faq', id: 'dup', args: [] }, rhs: 0 },
+            { lhs: { op: 'faq', id: 'dup', args: [] }, rhs: 0 },
           ],
         }),
         'M',
@@ -99,7 +97,7 @@ describe('buildReferenceGraph', () => {
     // The two-step walk is what makes this work: every node is registered
     // before any reference is resolved. A single-pass resolver would reject it.
     const g = buildReferenceGraph(
-      model({ equations: [{ lhs: { op: 'aggregate', id: 'faq', args: [] }, rhs: 0 }] }),
+      model({ equations: [{ lhs: { op: 'faq', id: 'faq', args: [] }, rhs: 0 }] }),
       'M',
       { pairs: { kind: 'derived', from_faq: 'faq' } },
     )
@@ -121,7 +119,7 @@ describe('buildReferenceGraph', () => {
         equations: [
           {
             lhs: {
-              op: 'aggregate',
+              op: 'faq',
               id: 'j',
               args: ['A', 'B'],
               join: [{ on: [['A', 'B']] }],
@@ -140,7 +138,7 @@ describe('buildReferenceGraph', () => {
         model({
           equations: [
             {
-              lhs: { op: 'aggregate', id: 'j', args: ['A'], join: [{ on: [['Z', 'A']] }] },
+              lhs: { op: 'faq', id: 'j', args: ['A'], join: [{ on: [['Z', 'A']] }] },
               rhs: 0,
             },
           ],
@@ -168,7 +166,7 @@ describe('buildReferenceGraph', () => {
       equations: [
         {
           lhs: {
-            op: 'aggregate',
+            op: 'faq',
             id: 'j',
             args: ['w'],
             output_idx: [],
@@ -211,7 +209,7 @@ describe('buildReferenceGraph', () => {
 
   it('addresses an id-less aggregate by its structural path', () => {
     const g = buildReferenceGraph(
-      model({ equations: [{ lhs: { op: 'aggregate', args: [] }, rhs: 0 }] }),
+      model({ equations: [{ lhs: { op: 'faq', args: [] }, rhs: 0 }] }),
       'M',
     )
     expect([...g.vertices.keys()]).toEqual([`${VertexKind.NODE}:equations/0/lhs`])
@@ -222,7 +220,7 @@ describe('buildReferenceGraph', () => {
     const g = buildReferenceGraph(
       model({
         equations: [
-          { lhs: { op: 'aggregate', id: 'n', args: [], ranges: { i: { from: 'pairs' } } }, rhs: 0 },
+          { lhs: { op: 'faq', id: 'n', args: [], ranges: { i: { from: 'pairs' } } }, rhs: 0 },
         ],
       }),
       'M',
@@ -241,7 +239,7 @@ describe('buildReferenceGraph', () => {
         M: {
           equations: [
             {
-              lhs: { op: 'aggregate', id: 'a', args: [], ranges: { i: { from: 'cells' } } },
+              lhs: { op: 'faq', id: 'a', args: [], ranges: { i: { from: 'cells' } } },
               rhs: 0,
             },
           ],
@@ -269,7 +267,7 @@ describe('buildReferenceGraph', () => {
       const nested = {
         index_sets: { local: {} },
         equations: [
-          { lhs: { op: 'aggregate', id: 'a', args: [], ranges: { i: { from: 'local' } } }, rhs: 0 },
+          { lhs: { op: 'faq', id: 'a', args: [], ranges: { i: { from: 'local' } } }, rhs: 0 },
         ],
       }
       // Nested-only, no argument: still resolves.
@@ -286,7 +284,7 @@ describe('buildReferenceGraph', () => {
       // A document-scoped set alone still resolves a range that names it.
       const docOnly = {
         equations: [
-          { lhs: { op: 'aggregate', id: 'a', args: [], ranges: { i: { from: 'doc' } } }, rhs: 0 },
+          { lhs: { op: 'faq', id: 'a', args: [], ranges: { i: { from: 'doc' } } }, rhs: 0 },
         ],
       }
       expect(
@@ -360,7 +358,7 @@ describe('reference resolution over the shared corpus', () => {
 
   it('rejects the shared undeclared-index-set fixture with the pinned code', () => {
     const raw = JSON.parse(
-      readFileSync(fixturesDir('invalid', 'aggregate', 'undeclared_from_name.esm'), 'utf-8'),
+      readFileSync(fixturesDir('invalid', 'faq', 'undeclared_from_name.esm'), 'utf-8'),
     ) as { models: Record<string, unknown>; index_sets?: Record<string, unknown> }
     const [name, m] = Object.entries(raw.models)[0]
     let caught: ReferenceResolutionError | undefined
@@ -381,7 +379,7 @@ describe('from_faq resolves at DOCUMENT scope (esm-spec §9.7.5)', () => {
   // Until this ruling every binding resolved `from_faq` against one model's
   // nodes, which made the cross-model shape unresolvable. The consequence: node
   // ids are unique per DOCUMENT, not per model.
-  const agg = (extra: Record<string, unknown>) => ({ op: 'aggregate', args: [], ...extra })
+  const agg = (extra: Record<string, unknown>) => ({ op: 'faq', args: [], ...extra })
 
   it('resolves a producer that lives in another model', () => {
     const doc = {
@@ -448,7 +446,7 @@ describe('from_faq resolves at DOCUMENT scope (esm-spec §9.7.5)', () => {
 
   it('resolves the shared cross-model corpus fixture', () => {
     const raw = JSON.parse(
-      readFileSync(fixturesDir('valid', 'aggregate', 'cross_model_from_faq.esm'), 'utf-8'),
+      readFileSync(fixturesDir('valid', 'faq', 'cross_model_from_faq.esm'), 'utf-8'),
     ) as Record<string, unknown>
     const graphs = resolveReferences(raw)
     expect([...graphs.keys()].sort()).toEqual(['EdgeProducer', 'FluxConsumer'])

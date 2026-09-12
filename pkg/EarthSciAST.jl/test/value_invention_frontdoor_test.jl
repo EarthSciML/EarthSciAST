@@ -66,7 +66,7 @@ const _VI_EDGE_GOLDEN = "[[1,2],[1,3],[2,3],[2,4],[3,4]]"
 @testset "value-invention front-door (ess-3lj.1)" begin
 
     @testset "edge-enumeration: build_evaluator end-to-end (§7.3)" begin
-        rel = "tests/valid/aggregate/edge_enumeration_area_eff.esm"
+        rel = "tests/valid/faq/edge_enumeration_area_eff.esm"
         raw = _vi_raw(rel)
         # Canonical mesh connectivity (the ragged face_vertices backing factors)
         # plus a DUO edge geometry: cell 1 bounds dense edges {1,2,3}, cell 2
@@ -107,7 +107,7 @@ const _VI_EDGE_GOLDEN = "[[1,2],[1,3],[2,3],[2,4],[3,4]]"
     @testset "edge-enumeration: adversarial mesh inputs collapse to the golden" begin
         # §5.5.4: permuted faces / reversed winding / a duplicate face all yield
         # the identical canonically-sorted edge set (the relational engine's job).
-        rel = "tests/valid/aggregate/edge_enumeration_area_eff.esm"
+        rel = "tests/valid/faq/edge_enumeration_area_eff.esm"
         m, isets = _vi_typed_fixture(rel, "EdgeEnumerationAreaEff")
         base = Dict("n_verts_on_face" => Float64[3, 3],
                     "verts_on_face"   => Float64[1 2 3; 2 3 4])
@@ -158,7 +158,7 @@ const _VI_EDGE_GOLDEN = "[[1,2],[1,3],[2,3],[2,4],[3,4]]"
          "variables": {"u":   {"type": "unknown", "shape": ["items"]},
                        "tag": {"type": "unknown", "shape": ["tags"]}},
          "equations": [{"lhs": {"op": "index", "args": ["tag", "p"]},
-           "rhs": {"op": "aggregate", "id": "tag_set",
+           "rhs": {"op": "faq", "id": "tag_set",
                    "semiring": "bool_and_or", "distinct": true,
                    "output_idx": ["p"],
                    "ranges": {"i": {"from": "items"}},
@@ -194,7 +194,7 @@ end
 # cross-binding conformance proof.
 @testset "argmin arg-witness front-door (ess-os1)" begin
 
-    _ARG_REL = "tests/valid/aggregate/nearest_generator_argmin.esm"
+    _ARG_REL = "tests/valid/faq/nearest_generator_argmin.esm"
 
     @testset "nearest-generator argmin + smallest-id tie-break (§5.7 rule 6)" begin
         m, isets = _vi_typed_fixture(_ARG_REL, "NearestGeneratorArgmin")
@@ -239,7 +239,7 @@ end
                        "px": {"type": "parameter", "shape": ["points"]},
                        "far": {"type": "unknown", "shape": ["points"]}},
          "equations": [{"lhs": {"op": "index", "args": ["far", "i"]},
-           "rhs": {"op": "aggregate", "output_idx": ["i"],
+           "rhs": {"op": "faq", "output_idx": ["i"],
              "ranges": {"i": {"from": "points"}},
              "expr": {"op": "argmax", "arg": "g",
                "ranges": {"g": {"from": "generators"}},
@@ -261,7 +261,7 @@ end
                        "px": {"type": "parameter", "shape": ["points"]},
                        "assign": {"type": "unknown", "shape": ["points"]}},
          "equations": [{"lhs": {"op": "index", "args": ["assign", "i"]},
-           "rhs": {"op": "aggregate", "output_idx": ["i"],
+           "rhs": {"op": "faq", "output_idx": ["i"],
              "ranges": {"i": {"from": "points"}},
              "expr": {"op": "argmin", "arg": "g",
                "ranges": {"g": {"from": "generators"}},
@@ -283,7 +283,7 @@ end
                        "px": {"type": "parameter", "shape": ["points"]},
                        "assign": {"type": "unknown", "shape": ["points"]}},
          "equations": [{"lhs": {"op": "index", "args": ["assign", "i"]},
-           "rhs": {"op": "aggregate", "output_idx": ["i"],
+           "rhs": {"op": "faq", "output_idx": ["i"],
              "ranges": {"i": {"from": "points"}},
              "expr": {"op": "argmin", "arg": "g",
                "ranges": {"g": {"from": "generators"}},
@@ -306,7 +306,7 @@ end
 # emitted num / den / centroid buffers IS the cross-binding conformance proof.
 @testset "grouped-aggregate centroid front-door (ess-2u5)" begin
 
-    _CEN_REL = "tests/valid/aggregate/nearest_generator_centroid.esm"
+    _CEN_REL = "tests/valid/faq/nearest_generator_centroid.esm"
 
     @testset "centroid = group_aggregate(rho·x) / group_aggregate(rho) over argmin key" begin
         m, isets = _vi_typed_fixture(_CEN_REL, "NearestGeneratorCentroid")
@@ -361,7 +361,7 @@ end
                        "num": {"type": "unknown", "shape": ["generators"]}},
          "equations": [
            {"lhs": {"op": "index", "args": ["assign", "i"]},
-            "rhs": {"op": "aggregate", "output_idx": ["i"], "ranges": {"i": {"from": "points"}},
+            "rhs": {"op": "faq", "output_idx": ["i"], "ranges": {"i": {"from": "points"}},
               "args": ["px", "gx"],
               "expr": {"op": "argmin", "args": ["px", "gx"], "arg": "g",
                 "ranges": {"g": {"from": "generators"}},
@@ -369,7 +369,7 @@ end
                   {"op": "-", "args": [{"op": "index", "args": ["px", "i"]}, {"op": "index", "args": ["gx", "g"]}]},
                   {"op": "-", "args": [{"op": "index", "args": ["px", "i"]}, {"op": "index", "args": ["gx", "g"]}]}]}}}},
            {"lhs": {"op": "index", "args": ["num", "g"]},
-            "rhs": {"op": "aggregate", "output_idx": ["g"],
+            "rhs": {"op": "faq", "output_idx": ["g"],
               "ranges": {"g": {"from": "generators"}, "p": {"from": "points"}},
               "semiring": "sum_product", "join": [{"on": [["assign", "g"]]}],
               "args": ["assign", "rho"],

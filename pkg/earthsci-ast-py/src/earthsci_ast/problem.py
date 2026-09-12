@@ -468,7 +468,7 @@ def esm_problem(
     ------
     UnsupportedDimensionalityError
         If the flattened system still has a spatial independent variable — a
-        spatial operator that was never discretized into an ``arrayop`` stencil
+        spatial operator that was never discretized into an ``faq`` stencil
         (esm-spec §4.7.6.12). Discretized PDEs fold the spatial axis into array
         dimensions, leaving ``independent_variables == ["t"]``, and build
         normally.
@@ -575,7 +575,7 @@ def esm_problem(
             f"still has spatial independent variables {spatial} — a spatial "
             f"operator that was not discretized. Apply the discretization "
             f"template (an `expression_templates` `match` rewrite) that lowers "
-            f"it to an `arrayop` stencil, then build; discretized "
+            f"it to a `faq` stencil, then build; discretized "
             f"PDEs run natively here."
         )
 
@@ -755,10 +755,10 @@ def _declares_resolvable_shape(flat: FlattenedSystem) -> bool:
     variable is arrayed over" — the authoritative statement of array-ness; it
     says nothing about how the defining equation happens to be spelled. Equation
     content alone therefore under-reports: a bare whole-array ``D(theta) ~ 1``
-    over ``"shape": ["lev"]`` carries no ``index`` / ``aggregate`` / ``arrayop``
+    over ``"shape": ["lev"]`` carries no ``index`` / ``faq``
     node anywhere, so :func:`_has_array_op` sees a scalar system and the state
     reaches the SymPy pathway with no cells at all (issue #231). The
-    ``aggregate`` spelling of the SAME semantics routed to the array runtime,
+    ``faq`` spelling of the SAME semantics routed to the array runtime,
     which made the choice of spelling — not the model — decide the answer.
 
     This mirrors ``_build_numpy_rhs``'s own declared-shape resolution (esm-spec
@@ -813,7 +813,7 @@ def _assert_no_unlowered_operator(flat: FlattenedSystem) -> None:
     ``ic`` right-hand sides — the trees that are compiled for simulation. A
     ``D`` is evaluable-core ONLY in its structural equation-LHS role, where it
     names the differentiated state and is never evaluated; ``args`` of an LHS
-    ``aggregate`` are still LHS, so the array-level spelling
+    ``faq`` are still LHS, so the array-level spelling
     ``aggregate{k}(D(theta[k]))`` stays legal. Anywhere on a right-hand side,
     any ``D`` at all is a rewrite target — exactly the rule
     :mod:`earthsci_ast.numpy_interpreter` already applies at evaluation.
@@ -840,7 +840,7 @@ def _walk_for_unlowered(expr: Any, *, structural_derivative_ok: bool) -> None:
 
     ``structural_derivative_ok`` marks an equation-LHS tree, the one position
     where a time ``D`` is core (§4.2). It propagates to children so a ``D``
-    nested under an LHS ``aggregate`` is still structural.
+    nested under an LHS ``faq`` is still structural.
     """
     if not isinstance(expr, ExprNode):
         return

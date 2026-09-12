@@ -74,7 +74,7 @@ fn normj(v: &Value) -> Value {
 ///
 /// The expansion pass never reorders equations, so a mismatch in their order is
 /// a property of the fixture/golden pair rather than of the expansion — and two
-/// shared goldens (`aggregate_int_ratio_golden`, `import_rebind_keyed_factors`)
+/// shared goldens (`faq_int_ratio_golden`, `import_rebind_keyed_factors`)
 /// list the equations esm 1.0.0 moved out of `variables[..].expression` in a
 /// different order from the fixture they were generated from. Comparing the
 /// equation SET keeps every byte of content pinned while leaving that ordering
@@ -104,7 +104,7 @@ fn is_apply(v: &Value) -> bool {
 #[test]
 fn bridge_expand_equals_expanded_oracle() {
     let cases: &[(&str, &str, &str)] = &[
-        ("aggregate_int_ratio_golden", "fixture.esm", "expanded.esm"),
+        ("faq_int_ratio_golden", "fixture.esm", "expanded.esm"),
         ("arrhenius_smoke", "fixture.esm", "expanded.esm"),
         ("constrained_match_scope", "fixture.esm", "expanded.esm"),
         (
@@ -192,10 +192,12 @@ fn emit_materialized_registry_imports_gone_stencils_materialized() {
     let doc: Value = serde_json::from_str(&s).unwrap();
     let adv = &doc["models"]["Advection"];
     // Rule 8's stamp is a MINIMUM ("a consumer needs at least this"), so it only
-    // ever raises: the 1.0.0 source keeps 1.0.0 rather than being restamped to
-    // whatever the library currently implements. The literal is also what the
-    // byte comparison against `emitted.esm` two lines up already requires.
-    assert_eq!(doc["esm"], "1.0.0");
+    // ever raises: a source already above the floor keeps its own version
+    // rather than being restamped to whatever the library currently
+    // implements. This fixture is 1.1.0 — its imported rules lower to `faq`,
+    // which requires 1.1.0. The literal is also what the byte comparison
+    // against `emitted.esm` two lines up already requires.
+    assert_eq!(doc["esm"], "1.1.0");
     assert!(adv.get("expression_template_imports").is_none()); // imports consumed
     let reg = adv["expression_templates"].as_object().unwrap();
     let keys: std::collections::HashSet<&str> = reg.keys().map(String::as_str).collect();
@@ -244,7 +246,7 @@ fn eager_target_bearing_positive_and_negative() {
     // lowered by the `central` rule -> an aggregate. No surviving reference.
     let deager = normj(obs_def(model, "d_eager"));
     assert_eq!(deager["op"], "index");
-    assert_eq!(deager["args"][0]["op"], "aggregate");
+    assert_eq!(deager["args"][0]["op"], "faq");
     // NEGATIVE: scale_c (target-free) reference SURVIVES.
     let dsurv = normj(obs_def(model, "d_survive"));
     assert!(is_apply(&dsurv["args"][0]) && dsurv["args"][0]["name"] == "scale_c");

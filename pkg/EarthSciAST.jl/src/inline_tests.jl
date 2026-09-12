@@ -7,7 +7,7 @@
 # expression or a `from_file` JSON snapshot), or the pure collapsers
 # `integral | mean | max | min` — or point-sample it via `coords`. The
 # MTK-based `run_esm_tests` cannot compile
-# `aggregate`/`makearray` discretizations; this runner drives the official
+# `faq`/`makearray` discretizations; this runner drives the official
 # tree-walk pipeline instead: `esm_problem` + `solve` (build_evaluator → seed ICs → solve
 # via the SciMLBase extension) then per-assertion field reduction.
 #
@@ -120,11 +120,11 @@ Base.showerror(io::IO, e::InlineTestError) = print(io, "InlineTestError: ", e.ms
 # (`_pd_matvec_factors`) are the SAME ones the pushdown auto-rewrite (`_pd_detect`,
 # pushdown_rewrite.jl) fires on — factored there and shared here, not duplicated.
 
-# Collect every aggregate/arrayop node reachable in `e` (walking `args` and
+# Collect every faq node reachable in `e` (walking `args` and
 # `expr_body`), so the accelerator can require EXACTLY ONE reduction.
 function _blas_collect_aggregates!(acc::Vector{OpExpr}, e)
     if e isa OpExpr
-        _is_aggregate_op(e.op) && push!(acc, e)
+        _is_faq_op(e.op) && push!(acc, e)
         for a in e.args
             _blas_collect_aggregates!(acc, a)
         end
@@ -310,7 +310,7 @@ end
                       params=Dict()) -> Vector{Float64}
 
 Evaluate an array-valued expression (elementwise ops over array-producing
-`aggregate`/`makearray` nodes — e.g. a grid-geometry template expanded by a
+`faq`/`makearray` nodes — e.g. a grid-geometry template expanded by a
 §9.7 import, or a §6.6.5 analytic `reference`) at each 1-based integer cell of
 `cells`, returning one Float64 per cell. This is the public entry to the same
 build-time machinery `build_evaluator` uses to seed coordinate-expression `ic`
@@ -580,7 +580,7 @@ end
 #     left alone: the buffer is the cheaper and more faithful answer.
 #  2. PER-CELL LIFT. The authored body is a WHOLE-ARRAY expression (`2 * u`),
 #     while `evaluate_cellwise` walks one output cell at a time. Wrapping it in
-#     an `arrayop` over the declared shape — through the same
+#     a `faq` over the declared shape — through the same
 #     `_index_array_leaves` the build's own promotion uses, with §4.3.4 name
 #     alignment — is exactly the form the published map would have carried, and
 #     its ranges are the extents already resolved for the cell enumeration, so
@@ -643,13 +643,13 @@ function _authored_observed_body(insp::BuildInspection, file::EsmFile, model::Mo
     end
     isempty(subs) || (body = substitute(body, subs))
 
-    # (2) Lift the whole-array body to the per-cell `arrayop` form — through the
-    # BUILD'S OWN `_lift_to_arrayop` (shape_promotion.jl), with the resolved
+    # (2) Lift the whole-array body to the per-cell `faq` form — through the
+    # BUILD'S OWN `_lift_to_faq` (shape_promotion.jl), with the resolved
     # extents as ranges. Sharing it is the point: the `_p<k>` loop convention
     # and the §4.3.4 alignment then cannot drift from the promotion that minted
     # the published bodies this one stands in for.
     if !isempty(exts)
-        body = _lift_to_arrayop(body, get(var_shapes, String(variable), String[]),
+        body = _lift_to_faq(body, get(var_shapes, String(variable), String[]),
                                 arrayvars, var_shapes; bounds=exts)
     end
 
@@ -1024,7 +1024,7 @@ function _scalar_slot(var_map::AbstractDict, variable::AbstractString,
 end
 
 # Whether `name` occurs FREE in `expr`: as a variable reference not bound by an
-# enclosing `aggregate` / `arrayop` / `makearray` loop symbol (`output_idx`, a
+# enclosing `faq` / `makearray` loop symbol (`output_idx`, a
 # `ranges` key) or an `integral`'s integration variable. A binder shadows the
 # name for its whole subtree.
 #
@@ -1085,9 +1085,9 @@ its axis — the same index space `coords` reads (convention 1) — so
 `sin(pi * (x - 0.5) / N)` is the cell-centre analytic form, with no explicit
 gather. A reference that mentions a dimension name FREE (`_mentions_free`, for
 which every binder's own loop symbols shadow it) is turned into the whole field
-by wrapping it in an `aggregate` whose output indices ARE the dimension names
+by wrapping it in a `faq` whose output indices ARE the dimension names
 (in shape order, each ranging over its index set); one that mentions none — a
-literal, a parameter expression, or an `aggregate` that already produces the
+literal, a parameter expression, or a `faq` that already produces the
 field under its own loop symbols — is returned untouched, so nothing that
 evaluated before evaluates differently. Mirrors the Python / Rust
 `bind_dimension_names`.
@@ -1124,7 +1124,7 @@ function bind_dimension_names(expr::ASTExpr, dims::AbstractVector{<:AbstractStri
         "which would shadow it. Rename one of them, or gather explicitly with " *
         "`aggregate(i from $(mentioned[clash]); …)`."))
     names = String[String(d) for d in dims]
-    return OpExpr("aggregate", ASTExpr[];
+    return OpExpr("faq", ASTExpr[];
                   output_idx=Any[names...],
                   ranges=Dict{String,Any}(d => IndexSetRef(d) for d in names),
                   expr_body=expr)

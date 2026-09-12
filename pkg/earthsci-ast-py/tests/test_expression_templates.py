@@ -411,7 +411,7 @@ def test_unlowered_integral_loads_but_errors_before_evaluation():
     Pinning it makes that the op's asserted status rather than something a user
     discovers at run time.
 
-    Note what this is NOT: a discrete cumulative sum. That is an ``aggregate``
+    Note what this is NOT: a discrete cumulative sum. That is an ``faq``
     with a monotone ``filter``, is evaluable core, and runs today — see
     ``test_cumulative_prefix_scan.py`` and esm-spec §4.3.1.
     """

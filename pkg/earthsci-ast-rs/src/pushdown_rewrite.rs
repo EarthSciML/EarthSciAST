@@ -39,7 +39,7 @@ use std::fmt;
 
 use serde_json::{Map, Value, json};
 
-use crate::aggregate::{ReduceKind, Semiring};
+use crate::faq::{ReduceKind, Semiring};
 
 /// A malformed gate/record encountered while deriving provider gates (mirrors
 /// the Julia `RefreshError` sites in pushdown_rewrite.jl and the Python
@@ -181,7 +181,7 @@ fn semiring_oplus(semiring: &str) -> Option<(&'static str, f64)> {
 /// The domain is the schema's CLOSED `reduce` enum, `+ * max min`, and nothing
 /// else. `"or"` used to be admitted here as a sixth spelling; the schema has
 /// never allowed it, so the arm was unreachable from any valid file, and
-/// [`crate::aggregate::effective_reduce_kind`] now rejects it too. `or` remains
+/// [`crate::faq::effective_reduce_kind`] now rejects it too. `or` remains
 /// a perfectly reachable ⊕ — but only as `bool_and_or`'s, through the
 /// `semiring` field, which [`pd_oplus`] resolves via [`semiring_oplus`] before
 /// it ever consults `reduce`.
@@ -221,8 +221,8 @@ fn value_to_display_string(v: &Value) -> String {
     }
 }
 
-fn is_aggregate_op(op: Option<&str>) -> bool {
-    matches!(op, Some("aggregate") | Some("arrayop"))
+fn is_faq_op(op: Option<&str>) -> bool {
+    op == Some("faq")
 }
 
 fn pd_flip(op: &str) -> &'static str {
@@ -507,7 +507,7 @@ fn pd_detect_binning(
     if shape.len() != 1 || shape[0].as_str()? != out_set {
         return None;
     }
-    if !is_aggregate_op(op_of(agg)) {
+    if !is_faq_op(op_of(agg)) {
         return None;
     }
     let (oplus, ident) = pd_oplus(agg)?;
@@ -737,7 +737,7 @@ fn pd_binning_refusal(
     if shape.len() != 1 || shape[0].as_str() != Some(out_set) {
         return None;
     }
-    if !is_aggregate_op(op_of(agg)) {
+    if !is_faq_op(op_of(agg)) {
         return None;
     }
     let (oplus, ident) = pd_oplus(agg)?;
@@ -930,7 +930,7 @@ fn pd_match_conc<'a>(
     // equation (esm-spec §6.3.1); one without is a state or algebraic
     // unknown and matches nothing here.
     let agg = pd_def_view(model, defs, cname)?;
-    if !is_aggregate_op(op_of(agg)) {
+    if !is_faq_op(op_of(agg)) {
         return None;
     }
     let (oplus, ident) = pd_oplus(agg)?;
@@ -1289,7 +1289,7 @@ fn pd_gather_defn(
     Ok((
         json!({"type": "unknown", "shape": decl_shape}),
         json!({
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": output_idx,
             "ranges": Value::Object(ranges),
             "args": [f, mfactor],
@@ -1826,7 +1826,7 @@ impl<'p> PdEmit<'p> {
         let producer = json!({
             "lhs": pd_ix(self.memvar.clone(), "m"),
             "rhs": {
-                "op": "aggregate",
+                "op": "faq",
                 "output_idx": ["m"],
                 "ranges": prod_ranges,
                 "expr": {"op": "true", "args": []},

@@ -1,6 +1,6 @@
 //! Vectorized (whole-array) stencil evaluator (ess-bdm).
 //!
-//! Evaluates a discretized spatial arrayop RHS as whole-array kernels instead
+//! Evaluates a discretized spatial faq RHS as whole-array kernels instead
 //! of a per-cell scalar loop, mirroring the Python `numpy_interpreter`
 //! vectorized path (ESS PR #25, `_materialize_map` + shifted-slice
 //! `_eval_index` + region-materialized makearray). The state stays the
@@ -55,8 +55,8 @@ pub(super) fn vec_trace_on() -> bool {
 /// Kill-switch for the whole vectorized overlay (`ESS_VEC_DISABLE=1`).
 ///
 /// `RhsStats`'s `force_scalar` flag only gates the two *compiled-rule* call
-/// sites; an array observed whose body is a standalone `aggregate` reaches the
-/// overlay through `eval_arrayop`, which has no such flag. This switch turns the
+/// sites; an array observed whose body is a standalone `faq` reaches the
+/// overlay through `eval_faq`, which has no such flag. This switch turns the
 /// overlay off everywhere at once, so a run with it set is the pure per-cell
 /// oracle — the reference a bit-identity check needs.
 pub(super) fn vec_disabled() -> bool {
@@ -334,7 +334,7 @@ fn apply_filter_gate<'a>(
     }
 }
 
-/// Try to evaluate an arrayop body over the output box as whole-array kernels.
+/// Try to evaluate a faq body over the output box as whole-array kernels.
 /// A pure-map stencil (`contract_names` empty) walks the body once; an einsum
 /// stencil folds the body over its contracted indices ([`eval_vec_contracted`]).
 /// Returns `Some((array, kernel_ops))` on success — `kernel_ops` is the number
@@ -342,7 +342,7 @@ fn apply_filter_gate<'a>(
 /// construct the vectorized path does not handle (the caller then uses the
 /// per-cell oracle).
 #[allow(clippy::too_many_arguments)]
-pub(super) fn try_eval_arrayop_vectorized<'a>(
+pub(super) fn try_eval_faq_vectorized<'a>(
     output_idx_names: &[String],
     output_ranges: &[(i64, i64)],
     body: &Expr,
@@ -362,7 +362,7 @@ pub(super) fn try_eval_arrayop_vectorized<'a>(
         .map(|(l, h)| (h - l + 1) as usize)
         .collect();
     if shape.contains(&0) {
-        bail_vec!("arrayop: empty output box");
+        bail_vec!("faq: empty output box");
     }
     // ess-cse: this box is one CSE scope. Analysing the body is idempotent (it
     // runs once per distinct body root per scratch); the scope guard closes on
@@ -426,7 +426,7 @@ pub(super) fn try_eval_arrayop_vectorized<'a>(
     // only fires on the pure-map path it targets.
     if matches!(v, VecValue::View { .. }) {
         v.release(pool);
-        bail_vec!("arrayop: body reduced to a bare whole-array view (oracle scalarizes it)");
+        bail_vec!("faq: body reduced to a bare whole-array view (oracle scalarizes it)");
     }
     // The top-level result must already cover the output box exactly. A bare
     // scalar is broadcast over the box.
@@ -436,7 +436,7 @@ pub(super) fn try_eval_arrayop_vectorized<'a>(
     };
     if !matches_box {
         v.release(pool);
-        bail_vec!("arrayop: result box does not match the output box");
+        bail_vec!("faq: result box does not match the output box");
     }
     let out = match v {
         VecValue::Scalar(s) => {
@@ -466,7 +466,7 @@ pub(super) fn reduce_combine_op(reduce: ReduceKind) -> Option<BinCode> {
     }
 }
 
-/// Evaluate an einsum arrayop body as a whole-array fold over its contracted
+/// Evaluate an einsum faq body as a whole-array fold over its contracted
 /// indices: for each contraction tuple `k` (a small static window — fixed-width
 /// neighbour stencil), bind `k` and evaluate the body once as whole-array
 /// kernels, then ⊕-combine into the accumulator. Starting from a buffer filled
@@ -903,7 +903,7 @@ pub(super) fn vec_op_code(op: &str) -> VecOp {
         "not" => VecOp::Unary(UnCode::Not),
         "neg" => VecOp::Neg,
         "index" => VecOp::Index,
-        "aggregate" => VecOp::Aggregate,
+        "faq" => VecOp::Aggregate,
         "makearray" => VecOp::Makearray,
         "const" => VecOp::Const,
         "ifelse" => VecOp::Ifelse,
@@ -981,7 +981,7 @@ fn eval_vec_op_code<'a>(
             pool,
         )),
         VecOp::Index => eval_vec_index(node, bx, ctx, pool, ops),
-        // A nested `aggregate` used as an array-valued sub-expression — the
+        // A nested `faq` used as an array-valued sub-expression — the
         // shape every discretized primitive-equation tendency lowers to:
         // `D(u[i,j,k]) = index(aggregate[i,j,k](…), i, j, k)`. Materialize it
         // ONCE as a whole array over its own box (recursively through this same
@@ -1110,7 +1110,7 @@ pub(super) fn expr_mentions(expr: &Expr, name: &str) -> bool {
     }
 }
 
-/// The enclosing binding, if any, that a nested `aggregate` genuinely depends
+/// The enclosing binding, if any, that a nested `faq` genuinely depends
 /// on — the precondition for hoisting it out of the enclosing per-cell loop
 /// (see [`eval_vec_nested_aggregate`]). `None` means the hoist is sound.
 ///
@@ -1119,7 +1119,7 @@ pub(super) fn expr_mentions(expr: &Expr, name: &str) -> bool {
 /// inside the body and the filter that name denotes the nested aggregate's own
 /// index, never the enclosing one, so evaluating the node exactly once over its
 /// own box computes precisely what the per-cell oracle computes. The oracle
-/// agrees by construction — [`eval_arrayop`] saves and rebinds exactly
+/// agrees by construction — [`eval_faq`] saves and rebinds exactly
 /// `idx_names ∪ contract_names` around its body walk (`saved_binds`) — and both
 /// whole-array resolvers ([`eval_vec_variable`] and the tape's `resolve_var`)
 /// consult the aggregate's own box symbols / contraction binds BEFORE any
@@ -1150,11 +1150,11 @@ pub(super) fn nested_aggregate_capture<'n>(
     None
 }
 
-/// Vectorized nested `aggregate`: materialize the sub-array once over the
-/// aggregate's OWN index box, through the same [`try_eval_arrayop_vectorized`]
-/// entry the per-cell oracle's [`eval_arrayop`] tries first. Because both paths
+/// Vectorized nested `faq`: materialize the sub-array once over the
+/// aggregate's OWN index box, through the same [`try_eval_faq_vectorized`]
+/// entry the per-cell oracle's [`eval_faq`] tries first. Because both paths
 /// call that one function with parameters derived from the shared
-/// [`arrayop_spec`], a success here returns the byte-identical array the oracle
+/// [`faq_spec`], a success here returns the byte-identical array the oracle
 /// would have produced — and a failure returns `None`, leaving the oracle in
 /// charge exactly as before.
 ///
@@ -1173,7 +1173,7 @@ fn eval_vec_nested_aggregate<'a>(
     pool: &mut Pool,
     ops: &mut usize,
 ) -> Option<VecValue<'a>> {
-    let spec = match arrayop_spec(node) {
+    let spec = match faq_spec(node) {
         Some(s) => s,
         None => bail_vec!("aggregate: node carries no `expr` body"),
     };
@@ -1198,7 +1198,7 @@ fn eval_vec_nested_aggregate<'a>(
             name
         );
     }
-    let (v, sub_ops) = try_eval_arrayop_vectorized(
+    let (v, sub_ops) = try_eval_faq_vectorized(
         spec.idx_names,
         &spec.ranges,
         spec.body,
@@ -2619,7 +2619,7 @@ mod op_dispatch_equivalence {
         }
         assert_eq!(vec_op_code("neg"), VecOp::Neg);
         assert_eq!(vec_op_code("index"), VecOp::Index);
-        assert_eq!(vec_op_code("aggregate"), VecOp::Aggregate);
+        assert_eq!(vec_op_code("faq"), VecOp::Aggregate);
         assert_eq!(vec_op_code("makearray"), VecOp::Makearray);
         assert_eq!(vec_op_code("const"), VecOp::Const);
         assert_eq!(vec_op_code("ifelse"), VecOp::Ifelse);
@@ -2664,7 +2664,7 @@ mod op_dispatch_equivalence {
     }
 
     /// Both directions: the two ops `eval_vec_op` handles that OPEN a box
-    /// (`aggregate`, `makearray`) must stay off the transparency list, and
+    /// (`faq`, `makearray`) must stay off the transparency list, and
     /// nothing else with an arm may be missing from it.
     #[test]
     fn every_box_transparent_dispatch_arm_is_listed() {
@@ -2681,7 +2681,7 @@ mod op_dispatch_equivalence {
                 "`{op}` has a dispatch arm but is not CSE-transparent"
             );
         }
-        for op in ["aggregate", "makearray"] {
+        for op in ["faq", "makearray"] {
             assert!(
                 !listed(op),
                 "`{op}` rebinds the box and must not be CSE-transparent"

@@ -326,7 +326,7 @@ _ALL: tuple[OpSpec, ...] = (
         "const", "constant", "nullary", arity_bounds=(0, 0), note="args empty; literal in `value`"
     ),
     # --- array / tensor (esm-spec §4.2 Array / Tensor, §4.3) ---
-    OpSpec("aggregate", "array", "special", note="FAQ semiring aggregate"),
+    OpSpec("faq", "array", "special", note="FAQ semiring aggregate"),
     OpSpec("makearray", "array", "special"),
     OpSpec("index", "array", "variadic"),
     OpSpec("broadcast", "array", "variadic", note="carries scalar `fn`"),
@@ -417,7 +417,7 @@ def unary_elementary() -> frozenset[str]:
 #: comparison, etc.)". The "etc." is closed here to the remaining SCALAR
 #: categories — the logical connectives and the ternary ``ifelse`` — because they
 #: are exactly the ops that map operand cells to a result cell. Every other
-#: category is deliberately excluded: ``array`` (``aggregate``/``index``/
+#: category is deliberately excluded: ``array`` (``faq``/``index``/
 #: ``makearray``/``reshape``/``transpose``/``concat``/``broadcast`` itself) and
 #: ``relational``/``geometry`` RESHAPE their operands, ``calculus``/``event`` are
 #: structural, and ``closed_registry``/``template``/``constant`` carry their

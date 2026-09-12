@@ -443,7 +443,7 @@ fn register_and_process(
 ) -> Result<(), ReferenceResolutionError> {
     let op = map.get("op").and_then(|v| v.as_str());
     let nid = nonempty_str(map.get("id"));
-    let is_agg = op.map(crate::aggregate::is_aggregate_op).unwrap_or(false);
+    let is_agg = op.map(crate::faq::is_faq_op).unwrap_or(false);
     // only aggregate / FAQ nodes and any node carrying an explicit id become
     // addressable vertices.
     if !is_agg && nid.is_none() {
@@ -530,7 +530,7 @@ fn register_and_process(
                 // `factor:sourceType` twin of `index_set:sourceType`.
                 //
                 // A non-string right column is a SCHEMA defect
-                // (tests/invalid/aggregate/join_on_key_not_string.esm pins it
+                // (tests/invalid/faq/join_on_key_not_string.esm pins it
                 // there) and is not re-diagnosed as a reference error.
                 if let Some(right) = pair.as_array().and_then(|p| p.get(1))
                     && let Some(r) = right.as_str()
@@ -875,7 +875,7 @@ mod tests {
     use serde_json::json;
 
     fn agg(extra: Value) -> Value {
-        let mut base = json!({"op": "aggregate", "args": []});
+        let mut base = json!({"op": "faq", "args": []});
         if let (Some(b), Some(e)) = (base.as_object_mut(), extra.as_object()) {
             for (k, v) in e {
                 b.insert(k.clone(), v.clone());

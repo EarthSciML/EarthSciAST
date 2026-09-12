@@ -43,7 +43,11 @@ func loadRefBytes(ref, baseDir string) (data []byte, dir string, err error) {
 		if err != nil {
 			return nil, "", err
 		}
-		return data, baseDir, nil
+		prepared, perr := prepareDocumentOps(string(data))
+		if perr != nil {
+			return nil, "", fmt.Errorf("remote ref %q: %w", ref, perr)
+		}
+		return []byte(prepared), baseDir, nil
 	}
 	path := canonicalImportRef(ref, baseDir)
 	info, statErr := os.Stat(path)
@@ -54,5 +58,12 @@ func loadRefBytes(ref, baseDir string) (data []byte, dir string, err error) {
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to read ref %q (%s): %w", ref, path, err)
 	}
-	return data, filepath.Dir(path), nil
+	// A referenced document is a document: same wire boundary as the root
+	// (docs/content/rfcs/faq-node-rename.md §5.2). Without this the `aggregate`
+	// alias and `arrayop` both survive a `{ref}` all the way into Emit.
+	prepared, perr := prepareDocumentOps(string(data))
+	if perr != nil {
+		return nil, "", fmt.Errorf("ref %q (%s): %w", ref, path, perr)
+	}
+	return []byte(prepared), filepath.Dir(path), nil
 }

@@ -92,7 +92,7 @@ pub(crate) fn shoelace_faq_node(n: usize) -> Expr {
     let v: Json = json!("v");
     let v_next: Json = json!({ "op": "+", "args": ["v", 1] });
     serde_json::from_value(json!({
-        "op": "aggregate", "args": [], "semiring": "sum_product", "output_idx": [],
+        "op": "faq", "args": [], "semiring": "sum_product", "output_idx": [],
         "ranges": { "v": [1, n] },
         "expr": { "op": "*", "args": [0.5, { "op": "-", "args": [
             { "op": "*", "args": [col(&v, 1), col(&v_next, 2)] },
@@ -110,7 +110,7 @@ pub(crate) fn spherical_excess_faq_node(n: usize) -> Expr {
     let here = unit_vec(&json!("v"));
     let next = unit_vec(&json!({ "op": "+", "args": ["v", 1] }));
     serde_json::from_value(json!({
-        "op": "aggregate", "args": [], "semiring": "sum_product", "output_idx": [],
+        "op": "faq", "args": [], "semiring": "sum_product", "output_idx": [],
         "ranges": { "v": [1, n] },
         "expr": spherical_excess(&apex, &here, &next),
     }))

@@ -78,14 +78,14 @@ describe('canonicalize per RFC §5.4 (TS best-effort)', () => {
     // node carrying it has no faithful canonical JSON, so — matching the Julia
     // reference — `canonicalJson` THROWS `E_CANONICAL_UNSUPPORTED_FIELD` rather
     // than silently dropping the field or emitting an ambiguous sidecar.
-    const agg = { op: 'aggregate', args: ['x'], reduce: 'max' } as never
+    const agg = { op: 'faq', args: ['x'], reduce: 'max' } as never
     expect(() => canonicalJson(agg)).toThrow(
       expect.objectContaining({ code: E_CANONICAL_UNSUPPORTED_FIELD }),
     )
     expect(() => canonicalJson(agg)).toThrow(CanonicalizeError)
 
     // A non-emissible field on a nested arg node is caught too (tree walk).
-    const nested = { op: '+', args: [{ op: 'aggregate', args: ['x'], semiring: 'tropical' }, 'y'] }
+    const nested = { op: '+', args: [{ op: 'faq', args: ['x'], semiring: 'tropical' }, 'y'] }
     expect(() => canonicalJson(nested as never)).toThrow(
       expect.objectContaining({ code: E_CANONICAL_UNSUPPORTED_FIELD }),
     )

@@ -3,11 +3,11 @@
 #
 # BEFORE-SHAPE (reproduced on the pre-rescue build, N=8): one nested scalar
 # reduction Σ_{k=1..3} W[i,k]·k inside an otherwise-affine stencil body threw
-#     _StencilFallback("unsupported loop-var-dependent op 'aggregate'")
+#     _StencilFallback("unsupported loop-var-dependent op 'faq'")
 # out of `_stencilize_op_core`'s catch-all, and the WHOLE equation landed on
 # the per-cell scalarize fallback — `_CASCADE_TALLY[:percell_acc] == 1`,
 # O(#cells) IR (the failure mode behind the GEOS-FP incident where one
-# declined equation was ~910k of ~935k `_compile` calls). `aggregate` is
+# declined equation was ~910k of ~935k `_compile` calls). `faq` is
 # deliberately outside `_STENCIL_ELEMENTWISE_OPS` (op_registry.jl carries no
 # `stencil=true` on the aggregate row), so the decline is the registry-pinned
 # behavior, not a missing flag.
@@ -37,7 +37,7 @@ const ESM = EarthSciAST
 
 # D(u[i]) = Δ²u[i] + Σ_{k=1..3} W[i,k]·k        (W a const array, N×3)
 # The aggregate is NESTED inside the elementwise `+` (a top-level contraction
-# would be unrolled by `_compile_arrayop_equation!` and never reach the
+# would be unrolled by `_compile_faq_equation!` and never reach the
 # stencilizer's catch-all). `state_in_agg=true` swaps the `·k` factor for
 # `·u[i]` — a STATE reference inside the offending subtree, the negative
 # control (`_exprtbl_evaluable` must reject it; "u" is neither a loop index
@@ -50,7 +50,7 @@ function _stt_model(N; state_in_agg::Bool=false)
     term = state_in_agg ?
         _op("*", _idx("W", _v("i"), _v("k")), _idx("u", _v("i"))) :
         _op("*", _idx("W", _v("i"), _v("k")), _v("k"))
-    agg = ESM.OpExpr("aggregate", ESM.ASTExpr[]; expr_body=term,
+    agg = ESM.OpExpr("faq", ESM.ASTExpr[]; expr_body=term,
         ranges=Dict{String,Any}("k" => Any[1, 3]), reduce="+")
     ESM.Model(vars, [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
                                   _ao1(_op("+", lap, agg), "i", 1, N))])

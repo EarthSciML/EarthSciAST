@@ -53,7 +53,7 @@ fn doc() -> Value {
              "args": [ix("cell_ring", &[json!("c")]), ix("rec_ring", &[json!("r")])]},
             ix("cell_area", &[json!("c")])]}]});
     json!({
-    "esm": "1.0.0",
+    "esm": "1.1.0",
     "metadata": {"name": "pushdown_cell_geometry"},
     "data_sources": {"MockSR": {"kind": "static", "source": {"url_template": "mock://sr"}}},
     "index_sets": {
@@ -86,7 +86,7 @@ fn doc() -> Value {
         },
         "equations": [
             {"lhs": "E_PM25", "rhs": {
-                "op": "aggregate", "reduce": "+", "output_idx": ["c"],
+                "op": "faq", "reduce": "+", "output_idx": ["c"],
                 "ranges": {"c": {"from": "src_cells"}, "r": {"from": "emis_records"}},
                 "args": ["src_W", "src_S", "src_E", "src_N",
                          "rec_xmin", "rec_ymin", "rec_xmax", "rec_ymax",
@@ -94,7 +94,7 @@ fn doc() -> Value {
                 "expr": {"op": "*", "args": [
                     {"op": "ifelse", "args": [env_overlap, 1.0, 0.0]}, weight]}}},
             {"lhs": "conc_PM25", "rhs": {
-                "op": "aggregate", "reduce": "+", "output_idx": ["rcv"],
+                "op": "faq", "reduce": "+", "output_idx": ["rcv"],
                 "ranges": {"rcv": {"from": "rcv_cells"}, "s": {"from": "src_cells"}},
                 "args": ["SR_PM25", "E_PM25"],
                 "expr": {"op": "*", "args": [

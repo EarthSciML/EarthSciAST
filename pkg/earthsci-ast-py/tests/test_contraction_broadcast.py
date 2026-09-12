@@ -1,4 +1,4 @@
-"""Whole-box broadcast contraction path (:func:`_eval_arrayop_contraction_broadcast`).
+"""Whole-box broadcast contraction path (:func:`_eval_faq_contraction_broadcast`).
 
 The Python mirror of EarthSciAST.jl's affine-stencilizer contraction unroll
 (fd81e922f): a PLAIN contraction (no join / filter / ragged range) whose body
@@ -51,7 +51,7 @@ def _duo_strip_node(reduce_op: str | None = None) -> ExprNode:
         ],
     )
     node = ExprNode(
-        op="aggregate",
+        op="faq",
         args=[],
         output_idx=[1, "gi", "gj"],
         ranges={"gi": [1, 3], "gj": [4, 7], "k": [0, 5], "l": [0, 5]},
@@ -86,7 +86,7 @@ def _scalar_reference(node: ExprNode, ctx_factory) -> np.ndarray:
 def _spy_broadcast(monkeypatch):
     """Record every non-``None`` broadcast-contraction evaluation."""
     hits: list[tuple[int, ...]] = []
-    orig = NI._eval_arrayop_contraction_broadcast
+    orig = NI._eval_faq_contraction_broadcast
 
     def spy(*args, **kwargs):
         out = orig(*args, **kwargs)
@@ -94,7 +94,7 @@ def _spy_broadcast(monkeypatch):
             hits.append(tuple(np.shape(out)))
         return out
 
-    monkeypatch.setattr(NI, "_eval_arrayop_contraction_broadcast", spy)
+    monkeypatch.setattr(NI, "_eval_faq_contraction_broadcast", spy)
     return hits
 
 
@@ -144,7 +144,7 @@ def test_empty_contracted_range_is_identity_fill(monkeypatch) -> None:
     path does (RFC §5.1)."""
     hits = _spy_broadcast(monkeypatch)
     node = ExprNode(
-        op="aggregate",
+        op="faq",
         args=[],
         output_idx=["i"],
         ranges={"i": [1, 3], "k": [2, 1]},  # k: hi < lo — empty

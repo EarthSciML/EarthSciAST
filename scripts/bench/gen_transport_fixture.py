@@ -109,7 +109,7 @@ def main(esd_root, out, nlev, hybrid_json=None):
 
     def agg(idx, ranges, args, expr):
         return {
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": idx,
             "ranges": {k: {"from": r} for k, r in ranges.items()},
             "args": args,

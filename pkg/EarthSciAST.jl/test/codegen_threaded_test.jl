@@ -68,10 +68,10 @@ function _cgt_2d_model(N)
         _idx("u", _op("+", _v("i"), _i(1)), _v("j")),
         _idx("u", _v("i"), _op("-", _v("j"), _i(1))),
         _idx("u", _v("i"), _op("+", _v("j"), _i(1))))
-    lhs = ESM.OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i", "j"],
+    lhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "j"],
         expr_body=_Didx("u", _v("i"), _v("j")),
         ranges=Dict("i" => [1, N], "j" => [1, N]))
-    rhs = ESM.OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i", "j"],
+    rhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "j"],
         expr_body=body, ranges=Dict("i" => [1, N], "j" => [1, N]))
     ESM.Model(vars, [ESM.Equation(lhs, rhs)])
 end
@@ -89,9 +89,9 @@ function _cgt_3d_model(Ni, Nj, Nk)
         u(I, J, _op("-", K, _i(1))), u(I, J, _op("+", K, _i(1))),
         _op("*", _n(-6.0), u(I, J, K)))
     rng = Dict("i" => [1, Ni], "j" => [1, Nj], "k" => [1, Nk])
-    lhs = ESM.OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i", "j", "k"],
+    lhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "j", "k"],
         expr_body=_Didx("u", I, J, K), ranges=rng)
-    rhs = ESM.OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i", "j", "k"],
+    rhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "j", "k"],
         expr_body=body, ranges=rng)
     ESM.Model(vars, [ESM.Equation(lhs, rhs)])
 end

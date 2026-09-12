@@ -469,7 +469,7 @@ end
 """
     _fold_structural_sites!(x, ctx)
 
-Fold metaparameter expressions in the structural integer sites — `aggregate`
+Fold metaparameter expressions in the structural integer sites — `faq`
 dense `ranges` tuple entries and `makearray` `regions` bound pairs — to
 concrete integers, in place, wherever they are already closed. Entries still
 carrying a bare name (a template-param slot, or an open metaparameter in a
@@ -478,13 +478,13 @@ Index-set sizes are folded separately by [`_fold_index_set_sizes!`](@ref).
 """
 function _fold_structural_sites!(x, ctx::String)
     # `_walk_json` visits parents first, so each structural array is folded in
-    # place at its owning `aggregate` / `makearray` node before the walk
+    # place at its owning `faq` / `makearray` node before the walk
     # descends into it (the fold replaces entries, never reshapes).
     _walk_json(x) do _, n
         _is_object(n) || return true
         op = get(n, "op", nothing)
         op_str = op === nothing ? "" : string(op)
-        if op_str == "aggregate"
+        if op_str == "faq"
             ranges = get(n, "ranges", nothing)
             if ranges !== nothing && _is_object(ranges)
                 for (k, rv) in pairs(ranges)
@@ -854,7 +854,7 @@ function _collect_bound_syms!(out::Set{String}, x)
     _walk_json(x) do _, n
         _is_object(n) || return true
         op = _raw_get(n, "op")
-        (op !== nothing && string(op) == "aggregate") || return true
+        (op !== nothing && string(op) == "faq") || return true
         oi = _raw_get(n, "output_idx")
         if oi !== nothing && _is_array(oi)
             for e in oi

@@ -1,6 +1,6 @@
 # Contraction tier ORDER (ess-runtime-contraction × ess-affine).
 #
-# `_compile_arrayop_equation!` offers a constant-bound array reduction to two
+# `_compile_faq_equation!` offers a constant-bound array reduction to two
 # tiers, and their build costs scale with different things:
 #
 #   contraction loop   one resolve + `_compile` per OUTPUT CELL, each O(1) in the
@@ -43,29 +43,29 @@ _cto_dpv(i, j, k) = Float64((i + 2j + 3k) % 5)
 _cto_cv(i, j, k)  = Float64((7i + 5j + k) % 6)
 
 function _cto_doc(NI::Int, NJ::Int, NK::Int)
-    agg = Dict{String,Any}("op" => "aggregate", "semiring" => "sum_product",
+    agg = Dict{String,Any}("op" => "faq", "semiring" => "sum_product",
         "args" => Any[], "output_idx" => Any["i", "j"],
         "ranges" => Dict("i" => Any[1, NI], "j" => Any[1, NJ], "k" => Any[1, NK]),
         "expr" => Dict("op" => "*", "args" => Any[
             Dict("op" => "index", "args" => Any["dp", "i", "j", "k"]),
             Dict("op" => "index", "args" => Any["c", "i", "j", "k"])]))
-    zero_c = Dict("op" => "aggregate", "args" => Any[], "output_idx" => Any["i", "j", "k"],
+    zero_c = Dict("op" => "faq", "args" => Any[], "output_idx" => Any["i", "j", "k"],
         "ranges" => Dict("i" => Any[1, NI], "j" => Any[1, NJ], "k" => Any[1, NK]),
         "expr" => 0.0)
-    Dict{String,Any}("esm" => "0.8.0", "metadata" => Dict("name" => "cto_colsum"),
+    Dict{String,Any}("esm" => "1.1.0", "metadata" => Dict("name" => "cto_colsum"),
       "models" => Dict("R" => Dict{String,Any}(
         "variables" => Dict(
             "c"   => Dict("type" => "unknown", "shape" => Any["i", "j", "k"]),
             "dp"  => Dict("type" => "parameter", "shape" => Any["i", "j", "k"]),
             "out" => Dict("type" => "unknown", "shape" => Any["i", "j"])),
         "equations" => Any[
-          Dict("lhs" => Dict("op" => "aggregate", "args" => Any[],
+          Dict("lhs" => Dict("op" => "faq", "args" => Any[],
                  "output_idx" => Any["i", "j", "k"],
                  "ranges" => Dict("i" => Any[1, NI], "j" => Any[1, NJ], "k" => Any[1, NK]),
                  "expr" => Dict("op" => "D", "args" => Any[
                      Dict("op" => "index", "args" => Any["c", "i", "j", "k"])], "wrt" => "t")),
                "rhs" => zero_c),
-          Dict("lhs" => Dict("op" => "aggregate", "args" => Any[],
+          Dict("lhs" => Dict("op" => "faq", "args" => Any[],
                  "output_idx" => Any["i", "j"],
                  "ranges" => Dict("i" => Any[1, NI], "j" => Any[1, NJ]),
                  "expr" => Dict("op" => "D", "args" => Any[

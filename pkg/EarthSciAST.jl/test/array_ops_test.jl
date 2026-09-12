@@ -1,6 +1,6 @@
 # Native Julia tests for the array-op runtime implementation (gt-vt3).
 # Each testset builds an ESM `Model` that uses the new array-op nodes
-# (arrayop / makearray / index / broadcast / reshape / transpose / concat),
+# (faq / makearray / index / broadcast / reshape / transpose / concat),
 # pipes it through `ModelingToolkit.System(model)`, compiles and solves
 # the resulting ODE, and checks against analytical or reference solutions.
 using Test
@@ -27,20 +27,20 @@ _op(op::AbstractString, args...; kwargs...) =
 _idx(arr::AbstractString, idxs...) =
     _op("index", _var(arr), (i isa Integer ? _num(i) : i for i in idxs)...)
 
-# Build a 1-D `arrayop` node with a single range declaration `i in lo:hi`.
-function _arrayop1d(body::ESM2.ASTExpr, idx_name::AbstractString, lo::Int, hi::Int)
-    return ESM2.OpExpr("arrayop", ESM2.ASTExpr[];
+# Build a 1-D `faq` node with a single range declaration `i in lo:hi`.
+function _faq1d(body::ESM2.ASTExpr, idx_name::AbstractString, lo::Int, hi::Int)
+    return ESM2.OpExpr("faq", ESM2.ASTExpr[];
         output_idx=Any[String(idx_name)],
         expr_body=body,
         ranges=Dict{String,Vector{Int}}(String(idx_name) => [lo, hi]))
 end
 
-# Build a 2-D `arrayop` node with ranges `i in 1:M, j in 1:N` — output shape
+# Build a 2-D `faq` node with ranges `i in 1:M, j in 1:N` — output shape
 # is `(M, N)` when both indices appear in `output_idx`.
-function _arrayop2d(body::ESM2.ASTExpr,
+function _faq2d(body::ESM2.ASTExpr,
                     i_name::AbstractString, ilo::Int, ihi::Int,
                     j_name::AbstractString, jlo::Int, jhi::Int)
-    return ESM2.OpExpr("arrayop", ESM2.ASTExpr[];
+    return ESM2.OpExpr("faq", ESM2.ASTExpr[];
         output_idx=Any[String(i_name), String(j_name)],
         expr_body=body,
         ranges=Dict{String,Vector{Int}}(
@@ -48,7 +48,7 @@ function _arrayop2d(body::ESM2.ASTExpr,
             String(j_name) => [jlo, jhi]))
 end
 
-# Build a `D(u[i], t)` node for use inside an `arrayop` body.
+# Build a `D(u[i], t)` node for use inside a `faq` body.
 _d_index(arr::AbstractString, idxs...) =
     _op("D", _idx(arr, idxs...); wrt="t")
 
@@ -182,16 +182,16 @@ end
 
     # ================================================================
     # Case 1 — Pure ODE on u[i], N=5, analytical u_i(t) = i * exp(-t).
-    #   lhs = arrayop (i,) D(u[i]) i in 1:5
-    #   rhs = arrayop (i,) -u[i] i in 1:5
+    #   lhs = faq (i,) D(u[i]) i in 1:5
+    #   rhs = faq (i,) -u[i] i in 1:5
     # ================================================================
     @testset "1. Pure ODE N=5 analytical" begin
         N = 5
         vars = Dict{String,ESM2.ModelVariable}(
             "u" => ESM2.ModelVariable(ESM2.UnknownVariable),
         )
-        lhs = _arrayop1d(_d_index("u", _var("i")), "i", 1, N)
-        rhs = _arrayop1d(_op("-", _idx("u", _var("i"))), "i", 1, N)
+        lhs = _faq1d(_d_index("u", _var("i")), "i", 1, N)
+        rhs = _faq1d(_op("-", _idx("u", _var("i"))), "i", 1, N)
         eq = ESM2.Equation(lhs, rhs)
         model = ESM2.Model(vars, ESM2.Equation[eq])
 
@@ -219,12 +219,12 @@ end
         )
         # D(u[i]) = v[i]
         eq_ode = ESM2.Equation(
-            _arrayop1d(_d_index("u", _var("i")), "i", 1, N),
-            _arrayop1d(_idx("v", _var("i")), "i", 1, N))
+            _faq1d(_d_index("u", _var("i")), "i", 1, N),
+            _faq1d(_idx("v", _var("i")), "i", 1, N))
         # v[i] = -u[i]
         eq_alg = ESM2.Equation(
-            _arrayop1d(_idx("v", _var("i")), "i", 1, N),
-            _arrayop1d(_op("-", _idx("u", _var("i"))), "i", 1, N))
+            _faq1d(_idx("v", _var("i")), "i", 1, N),
+            _faq1d(_op("-", _idx("u", _var("i"))), "i", 1, N))
         model = ESM2.Model(vars, ESM2.Equation[eq_ode, eq_alg])
 
         sys = MTK2.System(model; name=:MixedODEAlg)
@@ -252,13 +252,13 @@ end
         vars = Dict{String,ESM2.ModelVariable}(
             "u" => ESM2.ModelVariable(ESM2.UnknownVariable),
         )
-        # interior arrayop (1-based output range, offsets baked into body)
+        # interior faq (1-based output range, offsets baked into body)
         body = _op("+",
             _idx("u", _var("i")),
             _op("*", _num(-2), _idx("u", _op("+", _var("i"), _num(1)))),
             _idx("u", _op("+", _var("i"), _num(2))))
-        lint = _arrayop1d(_d_index("u", _op("+", _var("i"), _num(1))), "i", 1, N-2)
-        rint = _arrayop1d(body, "i", 1, N-2)
+        lint = _faq1d(_d_index("u", _op("+", _var("i"), _num(1))), "i", 1, N-2)
+        rint = _faq1d(body, "i", 1, N-2)
         eq_int = ESM2.Equation(lint, rint)
 
         # Scalar BCs
@@ -301,8 +301,8 @@ end
         )
         # D(u[i]) = v[i]
         eq_ode = ESM2.Equation(
-            _arrayop1d(_d_index("u", _var("i")), "i", 1, N),
-            _arrayop1d(_idx("v", _var("i")), "i", 1, N))
+            _faq1d(_d_index("u", _var("i")), "i", 1, N),
+            _faq1d(_idx("v", _var("i")), "i", 1, N))
 
         # Algebraic: (-1 - 0.5*sin(u[i]) + v[i]) ~ (v[i] - v[i])
         lhs_alg_body = _op("+",
@@ -311,8 +311,8 @@ end
             _idx("v", _var("i")))
         rhs_alg_body = _op("-", _idx("v", _var("i")), _idx("v", _var("i")))
         eq_alg = ESM2.Equation(
-            _arrayop1d(lhs_alg_body, "i", 1, N),
-            _arrayop1d(rhs_alg_body, "i", 1, N))
+            _faq1d(lhs_alg_body, "i", 1, N),
+            _faq1d(rhs_alg_body, "i", 1, N))
 
         model = ESM2.Model(vars, ESM2.Equation[eq_ode, eq_alg])
         sys = MTK2.System(model; name=:Rearranged)
@@ -335,9 +335,9 @@ end
         vars = Dict{String,ESM2.ModelVariable}(
             "u" => ESM2.ModelVariable(ESM2.UnknownVariable),
         )
-        lhs = _arrayop2d(_op("D", _idx("u", _var("i"), _var("j")); wrt="t"),
+        lhs = _faq2d(_op("D", _idx("u", _var("i"), _var("j")); wrt="t"),
                          "i", 1, M, "j", 1, Nd)
-        rhs = _arrayop2d(_op("-", _idx("u", _var("i"), _var("j"))),
+        rhs = _faq2d(_op("-", _idx("u", _var("i"), _var("j"))),
                          "i", 1, M, "j", 1, Nd)
         eq = ESM2.Equation(lhs, rhs)
         model = ESM2.Model(vars, ESM2.Equation[eq])
@@ -359,15 +359,15 @@ end
     # Parse/serialize round trip smoke test for each array-op node.
     # ================================================================
     @testset "Parse/serialize round trip for all 7 array ops" begin
-        # arrayop
-        node1 = ESM2.OpExpr("arrayop", ESM2.ASTExpr[_var("A"), _var("B")];
+        # faq
+        node1 = ESM2.OpExpr("faq", ESM2.ASTExpr[_var("A"), _var("B")];
             output_idx=Any["i", "j"],
             expr_body=_op("*",
                 _op("index", _var("A"), _var("i"), _var("k")),
                 _op("index", _var("B"), _var("k"), _var("j"))),
             reduce="+")
         j1 = ESM2.serialize_expression(node1)
-        @test j1["op"] == "arrayop"
+        @test j1["op"] == "faq"
         @test j1["output_idx"] == Any["i", "j"]
         @test j1["reduce"] == "+"
         rt1 = ESM2.expression_from_json(j1)
@@ -425,8 +425,8 @@ end
 
         # 1D: u[i] over i in 1:5 → u has shape [1:5].
         eq_arr = ESM2.Equation(
-            _arrayop1d(_d_index("u", _var("i")), "i", 1, 5),
-            _arrayop1d(_op("-", _idx("u", _var("i"))), "i", 1, 5))
+            _faq1d(_d_index("u", _var("i")), "i", 1, 5),
+            _faq1d(_op("-", _idx("u", _var("i"))), "i", 1, 5))
         shapes = infer_array_shapes([eq_arr])
         @test haskey(shapes, "u")
         @test shapes["u"] == [1:5]
@@ -436,16 +436,16 @@ end
             _idx("u", _var("i")),
             _idx("u", _op("+", _var("i"), _num(2))))
         eq_off = ESM2.Equation(
-            _arrayop1d(_d_index("u", _op("+", _var("i"), _num(1))), "i", 1, 8),
-            _arrayop1d(body, "i", 1, 8))
+            _faq1d(_d_index("u", _op("+", _var("i"), _num(1))), "i", 1, 8),
+            _faq1d(body, "i", 1, 8))
         shapes_off = infer_array_shapes([eq_off])
         @test shapes_off["u"] == [1:10]
 
         # 2D: u[i,j] over i in 1:4, j in 1:3 → shape [1:4, 1:3].
         eq_2d = ESM2.Equation(
-            _arrayop2d(_op("D", _idx("u", _var("i"), _var("j")); wrt="t"),
+            _faq2d(_op("D", _idx("u", _var("i"), _var("j")); wrt="t"),
                        "i", 1, 4, "j", 1, 3),
-            _arrayop2d(_op("-", _idx("u", _var("i"), _var("j"))),
+            _faq2d(_op("-", _idx("u", _var("i"), _var("j"))),
                        "i", 1, 4, "j", 1, 3))
         shapes_2d = infer_array_shapes([eq_2d])
         @test shapes_2d["u"] == [1:4, 1:3]
@@ -455,11 +455,11 @@ end
     # Schema-driven fixture runner (Phase 5, gt-cc1 integration).
     # ================================================================
     #
-    # Loads `.esm` files from `tests/fixtures/arrayop/` (repo root), builds the MTK
+    # Loads `.esm` files from `tests/fixtures/faq/` (repo root), builds the MTK
     # system via the full parse → flatten → System path, then executes
     # every inline `test` against the compiled system.
     @testset "Schema fixture runner" begin
-        fixtures_dir = joinpath(@__DIR__, "..", "..", "..", "tests", "fixtures", "arrayop")
+        fixtures_dir = joinpath(@__DIR__, "..", "..", "..", "tests", "fixtures", "faq")
         fixture_files = sort(filter(f -> endswith(f, ".esm"), readdir(fixtures_dir)))
         @test !isempty(fixture_files)
 
@@ -527,7 +527,7 @@ end
 
         mname = "CumulativePrefixReduction"
         path = joinpath(@__DIR__, "..", "..", "..", "tests", "fixtures",
-                        "arrayop", "25_cumulative_prefix_reduction.esm")
+                        "faq", "25_cumulative_prefix_reduction.esm")
         file = EarthSciAST.load_path(path)
         model = file.models[mname]
 
@@ -574,10 +574,10 @@ end
                     values=EarthSciAST.ASTExpr[_num(1e16), _num(1.0),
                                                _num(-1e16), _num(1.0)])),
              EarthSciAST.Equation(
-                _op("aggregate"; output_idx=Any["i"],
+                _op("faq"; output_idx=Any["i"],
                     expr_body=_op("D", _idx("c", _var("i")); wrt="t"),
                     ranges=Dict("i" => EarthSciAST.IndexSetRef("x"))),
-                _op("aggregate", _var("u"); output_idx=Any["i"], reduce="+",
+                _op("faq", _var("u"); output_idx=Any["i"], reduce="+",
                     ranges=Dict("i" => EarthSciAST.IndexSetRef("x"),
                                 "j" => EarthSciAST.IndexSetRef("x")),
                     filter=_op("<=", _var("j"), _var("i")),

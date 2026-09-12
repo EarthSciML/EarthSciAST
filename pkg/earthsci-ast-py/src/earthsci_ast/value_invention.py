@@ -5,7 +5,7 @@ RFC ``semiring-faq-unified-ir`` §6.1 (cadence-partition) / §5.5 (determinism) 
 §7.3 (edge enumeration); ``CONFORMANCE_SPEC.md`` §5.5 / §5.7.
 
 A ``kind:"derived"`` index set whose ``from_faq`` names a value-invention
-aggregate (an ``aggregate`` with ``distinct:true``, or whose body / ``key`` is
+aggregate (an ``faq`` with ``distinct:true``, or whose body / ``key`` is
 ``skolem`` / ``rank``) is materialised here, ONCE at setup, off the per-step hot
 path — the §6.1 CONST/DISCRETE materialisation point. The aggregate's keys are
 evaluated over the build-time const-array factors and run through the
@@ -80,7 +80,7 @@ def _vi_node_kind(node: Any) -> str:
     """
     if not isinstance(node, Mapping):
         return "none"
-    if node.get("op") != "aggregate":
+    if node.get("op") != "faq":
         return "none"
     if node.get("distinct", False) is True:
         return "producer"
@@ -191,11 +191,11 @@ def _vi_index_targets(node: Any, out: set[str]) -> set[str]:
 def _vi_grouped_key(node: Any, vi_var_names: set[str]) -> str | None:
     """The group KEY of a GROUPED reduction, or ``None``. The SCVT group-by
     signature is precise (mirror of Julia ``_vi_grouped_key``): a single-output-
-    index ``aggregate`` whose ``join.on`` pairs the OUTPUT index symbol with a
+    index ``faq`` whose ``join.on`` pairs the OUTPUT index symbol with a
     known value-invention buffer. Deliberately narrower than "any join touching a
     VI buffer" so a bin-to-bin gather (the conservative regridder's ``A_j``) is
     left on the simulate path."""
-    if not isinstance(node, Mapping) or node.get("op") != "aggregate":
+    if not isinstance(node, Mapping) or node.get("op") != "faq":
         return None
     oi = node.get("output_idx") or []
     if len(oi) != 1:
@@ -219,9 +219,9 @@ def _vi_grouped_key(node: Any, vi_var_names: set[str]) -> str | None:
 
 def _vi_is_derived(node: Any, vi_var_names: set[str]) -> bool:
     """True iff ``node`` is an elementwise DERIVED buffer over known VI buffers
-    (mirror of Julia ``_vi_is_derived``): a single-output-index ``aggregate`` with
+    (mirror of Julia ``_vi_is_derived``): a single-output-index ``faq`` with
     NO join and NO contraction whose body reads an upstream VI buffer."""
-    if not isinstance(node, Mapping) or node.get("op") != "aggregate":
+    if not isinstance(node, Mapping) or node.get("op") != "faq":
         return False
     oi = node.get("output_idx") or []
     if len(oi) != 1:
@@ -251,7 +251,7 @@ def _vi_detect(model_json: Mapping[str, Any]) -> _Detection:
             continue
         kind = _vi_node_kind(rhs)
         if kind == "none":
-            if isinstance(rhs, Mapping) and rhs.get("op") == "aggregate":
+            if isinstance(rhs, Mapping) and rhs.get("op") == "faq":
                 candidates.append((base, rhs))
             continue
         vi_var_names.add(base)  # every value-invention output leaves the ODE

@@ -70,7 +70,7 @@ const SCALAR_ODE: &str = r#"
 
 /// Discretized 1D heat equation (method-of-lines, 4 cells, Dirichlet BCs) — a
 /// geometry-free array PDE. Shared cross-language conformance fixture.
-const HEAT_1D: &str = include_str!("../../../tests/fixtures/arrayop/15_discretized_1d_heat.esm");
+const HEAT_1D: &str = include_str!("../../../tests/fixtures/faq/15_discretized_1d_heat.esm");
 
 /// Minimal reaction system `A → B` for the stoichiometry subsystem.
 const REACTIONS: &str = r#"{

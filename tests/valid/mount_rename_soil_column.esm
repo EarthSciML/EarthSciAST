@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "mount_rename_soil_column",
     "description": "A 4-layer soil column component, the twin of tests/valid/mount_rename_atm_column.esm: it declares the SAME axis name `lev` — interval/4 rather than interval/59 — because both components come from the same one-dimensional column family sized differently. Mounting both into one document without a mount-edge rename is the subsystem_index_set_conflict of issue #198 item 4. Loads standalone as an ordinary single-model document.",
@@ -26,7 +26,7 @@
           "_comment": "Newtonian relaxation per soil layer: d(Tsoil_k)/dt = -0.5 * Tsoil_k.",
           "lhs": { "op": "D", "args": ["Tsoil"], "wrt": "t" },
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": ["k"],
             "args": ["Tsoil"],
             "ranges": { "k": { "from": "lev" } },

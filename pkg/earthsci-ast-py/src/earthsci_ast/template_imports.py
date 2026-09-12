@@ -472,7 +472,7 @@ def eval_meta_expr(expr: Any, env: dict[str, int], ctx: str) -> int:
 
 def _fold_structural_sites(x: Any, ctx: str) -> None:
     """Fold metaparameter expressions in the structural integer sites —
-    ``aggregate`` dense ``ranges`` tuple entries and ``makearray`` ``regions``
+    ``faq`` dense ``ranges`` tuple entries and ``makearray`` ``regions``
     bound pairs — to concrete integers, in place, wherever they are already
     closed. Entries still carrying a bare name (a template-param slot, or an
     open metaparameter in a not-yet-fully-bound library) are left symbolic for
@@ -488,7 +488,7 @@ def _fold_structural_sites(x: Any, ctx: str) -> None:
         return
     op = x.get("op")
     op_str = op if isinstance(op, str) else ""
-    if op_str == "aggregate":
+    if op_str == "faq":
         ranges = x.get("ranges")
         if _is_object(ranges):
             for k, rv in ranges.items():
@@ -1065,7 +1065,7 @@ def _collect_bound_syms(out: set, x: Any) -> set:
 
     def _visit(node: dict[str, Any], _path: str) -> None:
         op = node.get("op")
-        if op is not None and str(op) == "aggregate":
+        if op is not None and str(op) == "faq":
             oi = node.get("output_idx")
             if _is_array(oi):
                 for e in oi:
@@ -1700,7 +1700,7 @@ def _substitute_closed_metaparameters(
 def _fold_closed_document(
     root: dict[str, Any], top_templates: dict[str, Any], doc_isets: dict[str, Any]
 ) -> None:
-    """Fold the structural integer sites (``aggregate`` ranges, ``makearray``
+    """Fold the structural integer sites (``faq`` ranges, ``makearray``
     regions) across components + root templates, and the interval ``size``
     expressions in the index-set registry (strict: a still-open name is
     ``metaparameter_unbound``). Mutates in place."""

@@ -650,7 +650,7 @@ func registerAndProcess(
 				// `factor:sourceType` twin of `index_set:sourceType`.
 				//
 				// A non-string right column is a SCHEMA defect
-				// (tests/invalid/aggregate/join_on_key_not_string.esm pins it
+				// (tests/invalid/faq/join_on_key_not_string.esm pins it
 				// there) and is not re-diagnosed as a reference error.
 				if len(pairArr) > 1 {
 					if right, isStr := pairArr[1].(string); isStr {

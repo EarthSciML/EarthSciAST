@@ -734,7 +734,7 @@ end
     # must key distinctly from each other AND refresh (their contents change on a
     # data-refresh event, between calls — a `materialize!`).
     _PG_W = [1.0 2.0 3.0; 4.0 5.0 6.0]   # W[i,j], i=1..2, j=1..3
-    _pg_agg(scale) = OpExpr("aggregate", ESM.ASTExpr[];
+    _pg_agg(scale) = OpExpr("faq", ESM.ASTExpr[];
         output_idx=Any["j"], reduce="+", ranges=Dict("j" => [1, 3], "i" => [1, 2]),
         expr_body=_cse_op("*", _cse_n(scale),
                           _cse_op("*", _idx("W", _v("i"), _v("j")), _idx("src", _v("i")))))

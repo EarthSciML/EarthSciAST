@@ -37,7 +37,7 @@
       }
     }
   },
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "index_sets": {
     "emis_records": {
       "kind": "interval",
@@ -183,7 +183,7 @@
               ],
               "op": "*"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "c"
             ],
@@ -323,7 +323,7 @@
               ],
               "op": "*"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "c"
             ],
@@ -463,7 +463,7 @@
               ],
               "op": "*"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "c"
             ],
@@ -603,7 +603,7 @@
               ],
               "op": "*"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "c"
             ],
@@ -743,7 +743,7 @@
               ],
               "op": "*"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "c"
             ],
@@ -814,7 +814,7 @@
               ],
               "op": "*"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "rcv"
             ],
@@ -909,7 +909,7 @@
               ],
               "op": "*"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "e"
             ],
@@ -1010,7 +1010,7 @@
               ],
               "op": "-"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "e"
             ],
@@ -1048,7 +1048,7 @@
               ],
               "op": "*"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "rcv"
             ],
@@ -1090,7 +1090,7 @@
               ],
               "op": "*"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "rcv"
             ],
@@ -1132,7 +1132,7 @@
               ],
               "op": "*"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "rcv"
             ],
@@ -1174,7 +1174,7 @@
               ],
               "op": "*"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "rcv"
             ],
@@ -1216,7 +1216,7 @@
               ],
               "op": "*"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "rcv"
             ],
@@ -1316,7 +1316,7 @@
               ],
               "op": "*"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "rcv"
             ],
@@ -1412,7 +1412,7 @@
               ],
               "op": "*"
             },
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "rcv"
             ],

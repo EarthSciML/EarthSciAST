@@ -24,7 +24,7 @@ const _PIT_N = 8
 # Cell-center coordinates x_i = (i - 1/2)/N over the `x` index set — the
 # §9.7 grid-geometry aggregate shape (post-import expansion).
 _pit_x_coord_aggregate() = Dict{String,Any}(
-    "op" => "aggregate", "args" => Any[], "output_idx" => Any["i"],
+    "op" => "faq", "args" => Any[], "output_idx" => Any["i"],
     "ranges" => Dict{String,Any}("i" => Dict("from" => "x")),
     "expr" => Dict{String,Any}("op" => "*",
         "args" => Any[Dict("op" => "-", "args" => Any["i", 0.5]),
@@ -42,7 +42,7 @@ _pit_cos_pi_x() = Dict{String,Any}(
 function _pit_decay_doc(assertions::Vector)
     idx = Dict{String,Any}("op" => "index", "args" => Any["u", "i"])
     Dict{String,Any}(
-        "esm" => "1.0.0",
+        "esm" => "1.1.0",
         "metadata" => Dict("name" => "pde_inline_decay"),
         "index_sets" => Dict{String,Any}(
             "x" => Dict("kind" => "interval", "size" => _PIT_N)),
@@ -54,12 +54,12 @@ function _pit_decay_doc(assertions::Vector)
                 Dict{String,Any}("lhs" => Dict("op" => "ic", "args" => Any["u"]),
                                  "rhs" => _pit_cos_pi_x()),
                 Dict{String,Any}(
-                    "lhs" => Dict{String,Any}("op" => "aggregate", "args" => Any[],
+                    "lhs" => Dict{String,Any}("op" => "faq", "args" => Any[],
                         "output_idx" => Any["i"],
                         "ranges" => Dict{String,Any}("i" => Any[1, _PIT_N]),
                         "expr" => Dict{String,Any}("op" => "D", "args" => Any[idx],
                                                    "wrt" => "t")),
-                    "rhs" => Dict{String,Any}("op" => "aggregate", "args" => Any[],
+                    "rhs" => Dict{String,Any}("op" => "faq", "args" => Any[],
                         "output_idx" => Any["i"],
                         "ranges" => Dict{String,Any}("i" => Any[1, _PIT_N]),
                         "expr" => Dict{String,Any}("op" => "*",
@@ -133,7 +133,7 @@ end
 
     # coords on a scalar (0-D) variable is ill-formed per §6.6.5.
     scalar_doc = Dict{String,Any}(
-        "esm" => "1.0.0",
+        "esm" => "1.1.0",
         "metadata" => Dict("name" => "scalar_coords"),
         "models" => Dict{String,Any}("M" => Dict{String,Any}(
             "variables" => Dict{String,Any}(
@@ -165,7 +165,7 @@ function _pit_2d_doc(ny::Int)
     idx = Dict{String,Any}("op" => "index", "args" => Any["u", "i", "j"])
     ranges = Dict{String,Any}("i" => Any[1, 4], "j" => Any[1, ny])
     Dict{String,Any}(
-        "esm" => "1.0.0",
+        "esm" => "1.1.0",
         "metadata" => Dict("name" => "pde_inline_2d"),
         "index_sets" => Dict{String,Any}(
             "x" => Dict("kind" => "interval", "size" => 4),
@@ -178,11 +178,11 @@ function _pit_2d_doc(ny::Int)
                 Dict{String,Any}("lhs" => Dict("op" => "ic", "args" => Any["u"]),
                                  "rhs" => 0.0),
                 Dict{String,Any}(
-                    "lhs" => Dict{String,Any}("op" => "aggregate", "args" => Any[],
+                    "lhs" => Dict{String,Any}("op" => "faq", "args" => Any[],
                         "output_idx" => Any["i", "j"], "ranges" => ranges,
                         "expr" => Dict{String,Any}("op" => "D", "args" => Any[idx],
                                                    "wrt" => "t")),
-                    "rhs" => Dict{String,Any}("op" => "aggregate", "args" => Any[],
+                    "rhs" => Dict{String,Any}("op" => "faq", "args" => Any[],
                         "output_idx" => Any["i", "j"], "ranges" => ranges,
                         "expr" => 1.0))],
             "tests" => Any[Dict{String,Any}(
@@ -286,11 +286,11 @@ function _pit_observed_doc(sizes::Vector{Int}, mult::Float64, base_nested,
     idxs = ["i$(k)" for k in 1:R]
     ranges = Dict{String,Any}(idxs[k] => Any[1, sizes[k]] for k in 1:R)
     index_base = Dict{String,Any}("op" => "index", "args" => Any["base", idxs...])
-    scaled_expr = Dict{String,Any}("op" => "aggregate", "semiring" => "sum_product",
+    scaled_expr = Dict{String,Any}("op" => "faq", "semiring" => "sum_product",
         "output_idx" => Any[idxs...], "ranges" => ranges, "args" => Any["base"],
         "expr" => Dict{String,Any}("op" => "*", "args" => Any[mult, index_base]))
     Dict{String,Any}(
-        "esm" => "1.0.0",
+        "esm" => "1.1.0",
         "metadata" => Dict("name" => "pde_inline_observed_rankN"),
         "index_sets" => Dict{String,Any}(
             dims[k] => Dict("kind" => "interval", "size" => sizes[k]) for k in 1:R),
@@ -372,13 +372,13 @@ end
 # tests/conformance/pde_inline_observed_param_rank2 fixture.
 function _pit_param_observed_doc(assertions::Vector)
     idx = Dict{String,Any}("op" => "index", "args" => Any["base", "i", "j"])
-    scaled_expr = Dict{String,Any}("op" => "aggregate", "semiring" => "sum_product",
+    scaled_expr = Dict{String,Any}("op" => "faq", "semiring" => "sum_product",
         "output_idx" => Any["i", "j"],
         "ranges" => Dict{String,Any}("i" => Any[1, 2], "j" => Any[1, 3]),
         "args" => Any["base"],
         "expr" => Dict{String,Any}("op" => "*", "args" => Any["k", idx]))
     Dict{String,Any}(
-        "esm" => "1.0.0",
+        "esm" => "1.1.0",
         "metadata" => Dict("name" => "pde_inline_param_observed"),
         "index_sets" => Dict{String,Any}(
             "d1" => Dict("kind" => "interval", "size" => 2),
@@ -502,7 +502,7 @@ end
 # component that produced no rows is indistinguishable in the result list from
 # one that was never looked at.
 _pit_reaction_decay_doc() = Dict{String,Any}(
-    "esm" => "1.0.0",
+    "esm" => "1.1.0",
     "metadata" => Dict("name" => "inline_test_reaction_system"),
     "reaction_systems" => Dict{String,Any}("Decay" => Dict{String,Any}(
         "species" => Dict{String,Any}(
@@ -553,7 +553,7 @@ function _pit_ramp_doc(expected::Float64; test_overrides=nothing)
             "tolerance" => Dict("rel" => 1e-9))])
     test_overrides === nothing || (test["parameter_overrides"] = test_overrides)
     Dict{String,Any}(
-        "esm" => "1.0.0",
+        "esm" => "1.1.0",
         "metadata" => Dict("name" => "ramp"),
         "models" => Dict{String,Any}("M" => Dict{String,Any}(
             "variables" => Dict{String,Any}(
@@ -644,7 +644,7 @@ _pit_free_x_cos() = Dict{String,Any}(
                                                             "value" => table), "x"])),
         Dict{String,Any}("variable" => "u", "time" => 0.0, "expected" => 0.0,
                          "tolerance" => Dict("abs" => 1e-12), "reduce" => "L2_error",
-                         "reference" => Dict{String,Any}("op" => "aggregate", "args" => Any[],
+                         "reference" => Dict{String,Any}("op" => "faq", "args" => Any[],
                              "output_idx" => Any["x"],
                              "ranges" => Dict{String,Any}("x" => Dict("from" => "x")),
                              "expr" => _pit_free_x_cos())),
@@ -665,7 +665,7 @@ _pit_free_x_cos() = Dict{String,Any}(
     @test EarthSciAST.bind_dimension_names(lit, dims) === lit
     free = EarthSciAST.OpExpr("+", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("x"), EarthSciAST.IntExpr(1)])
     wrapped = EarthSciAST.bind_dimension_names(free, dims)
-    @test wrapped isa EarthSciAST.OpExpr && wrapped.op == "aggregate"
+    @test wrapped isa EarthSciAST.OpExpr && wrapped.op == "faq"
     @test wrapped.output_idx == Any["x"]
     @test wrapped.expr_body === free
     @test EarthSciAST.bind_dimension_names(wrapped, dims) === wrapped
@@ -727,12 +727,12 @@ _pit_free_x_cos() = Dict{String,Any}(
         Dict{String,Any}("A.lev" => [1.0], "B.lev" => [1.0]))
     @test !("lev" in ambiguous)
     @test EarthSciAST.bind_dimension_names(lev_free, lev_dims, empty_params,
-                                           ambiguous).op == "aggregate"
+                                           ambiguous).op == "faq"
     # A reference that does not mention the name is unaffected, and so is a
     # gather that rebinds it as its own loop symbol.
     lev_arrays = EarthSciAST._array_scope_names(Dict{String,Any}("lev" => [1.0]))
     @test EarthSciAST.bind_dimension_names(lit, lev_dims, empty_params, lev_arrays) === lit
-    lev_bound = EarthSciAST.OpExpr("aggregate", EarthSciAST.ASTExpr[];
+    lev_bound = EarthSciAST.OpExpr("faq", EarthSciAST.ASTExpr[];
                                    output_idx=Any["lev"],
                                    ranges=Dict{String,Any}("lev" => EarthSciAST.IndexSetRef("lev")),
                                    expr_body=lev_free)

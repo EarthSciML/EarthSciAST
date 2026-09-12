@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "scalar_ic_in_array_model",
     "description": "The same esm-spec 11.4 contract for a 0-D state that shares a model with an ARRAY state, so the document routes through each binding's ARRAY runtime rather than its scalar one. Array state `f` (ic = 1.5) is the anchor proving the array-ic path is intact; scalar state `s` (ic = 2*B) is the case a binding that only folds ARRAY-shaped ic targets drops.",
@@ -49,7 +49,7 @@
       "equations": [
         {
           "lhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": [
               "i"
@@ -75,7 +75,7 @@
             }
           },
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": [
               "i"

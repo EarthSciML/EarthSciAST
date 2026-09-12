@@ -256,7 +256,7 @@ end
 # production build path parses straight into the typed IR and runs neither
 # idiom.
 
-const _AGGREGATE_OPS = ("aggregate", "arrayop")
+const _AGGREGATE_OPS = ("faq",)
 
 _node_key(addr::AbstractString) = string(REF_VERTEX_NODE, ":", addr)
 _index_set_key(name::AbstractString) = string(REF_VERTEX_INDEX_SET, ":", name)
@@ -453,7 +453,7 @@ function _register_and_process!(g::ReferenceGraph, node::AbstractDict, path::Abs
                 # `factor:sourceType` twin of `index_set:sourceType`.
                 #
                 # A non-string right column is a SCHEMA defect
-                # (tests/invalid/aggregate/join_on_key_not_string.esm pins it
+                # (tests/invalid/faq/join_on_key_not_string.esm pins it
                 # there) and is not re-diagnosed as a reference error.
                 if length(pv) > 1
                     right = _as_str(pv[2])

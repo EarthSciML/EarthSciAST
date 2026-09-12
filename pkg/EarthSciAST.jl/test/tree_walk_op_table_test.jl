@@ -191,7 +191,7 @@ end
     end
 
     @testset "read-only _EMPTY_* sentinels stay empty after build+evaluate" begin
-        # A build+evaluate cycle that exercises the scalar path, the arrayop
+        # A build+evaluate cycle that exercises the scalar path, the faq
         # (vectorized) path, const arrays, and an ic equation — the code paths
         # that receive the shared sentinels as defaults.
         vars = Dict{String,ModelVariable}(
@@ -205,10 +205,10 @@ end
         deqx = ESM.Equation(_o("D", _v("x"); wrt="t"),
                             _o("*", _v("k"), _v("x")))
         body_lhs = _o("D", _o("index", _v("u"), _v("i")); wrt="t")
-        lhs = OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i"],
+        lhs = OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i"],
                      ranges=Dict{String,Any}("i" => [1, 4]),
                      expr_body=body_lhs)
-        rhs = OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i"],
+        rhs = OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i"],
                      ranges=Dict{String,Any}("i" => [1, 4]),
                      expr_body=_o("*", _o("index", _v("w"), _v("i")),
                                   _o("index", _v("u"), _v("i"))))

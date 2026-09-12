@@ -1,0 +1,124 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "faq_semiring_indexset",
+    "description": "M1 schema fixture (RFC semiring-faq-unified-ir §5.1 / §5.2 / §8; bead ess-my4.1.1): a `faq` node — the canonical op tag for the former `faq` — carrying an explicit `semiring` and a `ranges` entry that references a declared index set via `{ \"from\": ... }`. Exercises the additive schema deltas: op:faq, the closed `semiring` enum, the `ranges` index-set reference union, and the document-scoped `index_sets` registry (interval + categorical kinds). This is the strict-superset additive form of an ordinary faq and validates against the schema with no evaluator.",
+    "authors": [
+      "EarthSciAST/polecats/gastown.nux"
+    ],
+    "tags": [
+      "faq",
+      "semiring",
+      "index-set",
+      "conformance",
+      "schema"
+    ]
+  },
+  "index_sets": {
+    "cells": {
+      "kind": "interval",
+      "size": 5
+    },
+    "county": {
+      "kind": "categorical",
+      "members": [
+        "Champaign",
+        "Cook",
+        "Sangamon"
+      ]
+    }
+  },
+  "models": {
+    "AggregateDemo": {
+      "variables": {
+        "u": {
+          "type": "unknown"
+        },
+        "total": {
+          "type": "unknown"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            },
+            "ranges": {
+              "i": {
+                "from": "cells"
+              }
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "semiring": "sum_product",
+            "expr": {
+              "op": "-",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "i"
+                  ]
+                }
+              ]
+            },
+            "ranges": {
+              "i": {
+                "from": "cells"
+              }
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "total"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [],
+            "semiring": "sum_product",
+            "expr": {
+              "op": "index",
+              "args": [
+                "u",
+                "i"
+              ]
+            },
+            "ranges": {
+              "i": {
+                "from": "cells"
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}
