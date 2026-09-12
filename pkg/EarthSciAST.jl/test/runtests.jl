@@ -78,6 +78,13 @@ end
     # `EarthSciASTError` root, or a diagnostic code spelled as an inline literal.
     shard_include("error_hierarchy_test.jl")
 
+    # ---- Test-file prelude hygiene (this directory) ----
+    # The third such invariant, and the one THIS file is complicit in: every
+    # name is already in `Main` by the time a given include runs, so a file that
+    # imports nothing passes here and dies standalone. Early, and reading only
+    # text, so it costs nothing and reports before the run it cannot trust.
+    shard_include("test_file_prelude_test.jl")
+
     # ---- Core types, parse, validate, display (src/types.jl, parse.jl,
     #      validate.jl, display.jl, graph.jl) ----
     shard_include("types_test.jl")

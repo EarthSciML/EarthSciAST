@@ -1,0 +1,165 @@
+  0-D ic seeding precedence (esm-spec §11.4)
+  Arrayed variables (RFC §10.2)
+  AssertionResult status enum + JUnit emission
+  BuildInspection — per-pair regrid setup arrays (exact rationals)
+  Catalyst Extension Integration
+  Causal self-reference: static well-foundedness (§4.3.1.1)
+  Classification API (esm-spec §6.3.1)
+  Classification API: the INDEXED LHS spelling (esm-spec §6.3.1)
+  Closed function registry — ForwardDiff compatibility
+  Code Generation
+  Conformance: assertion_nonfinite (manifest-driven)
+  Conformance: assertion_tolerance (manifest-driven)
+  Conformance: elementwise_observed_gather (manifest-driven)
+  Conformance: override_key_diagnostics (manifest-driven)
+  Conformance: pde_inline_ic_param_override (manifest-driven)
+  Conformance: pde_inline_observed_rank2 (manifest-driven)
+  Conformance: pde_inline_observed_state_dependent (manifest-driven)
+  Conformance: pushdown rewrite (manifest-driven)
+  Conformance: scalar_ic (manifest-driven)
+  Display conformance (tests/display fixtures)
+  EarthSciAST.Expression Operations
+  EsmProblem — build once, solve many
+  Inline tests-block execution runner
+  M2-1: promote_downstream_shapes
+  M4 conservative-regridding overlap-join end-to-end (ess-3lj.3)
+  MTK description metadata
+  Multi-grid per-grid sinks (Wave 3)
+  Reaction species order conformance
+  Relational engine (RFC §5.5 / CONFORMANCE_SPEC §5.5)
+  SSA class-to-class references (ESS_OOP_SSA)
+  SSA reference forms (lane owners + tier choice)
+  Schema Validation
+  Section 4 Editing Operations
+  Subsystem Reference Resolution Tests
+  Type constructors (src/types.jl)
+  Units Tests
+  Units fixtures inline tests execution (gt-dt0o)
+  VI overlap-gate producer scaling (Wall #1)
+  Wave-1 foundation smoke checks
+  ZarrSink CF dimension coordinates (Wave 3)
+  a DEAD observed is assertable (#176)
+  a DEAD observed that reads STATE resolves at the sample (#177)
+  a dead observed reads its OWN component's array, not a sibling's
+  a name the component does not declare is still refused
+  affine access kernels: AD + out-of-place (ess-affine)
+  affine constant-bound contraction ≡ per-cell (differential, ess-affine)
+  affine live-forcing pgather ≡ per-cell (differential, ess-affine)
+  affine lowering: _lower_to_access ≡ per-cell
+  affine per-cell CSE ≡ per-cell (differential, ess-affine)
+  an UNEVALUABLE body names the operand it could not bind
+  an empty match set reduces to 0̄
+  an index-set member key column drives too (BEHAV-10-B-004)
+  an observed the build DOES publish keeps its published body
+  an observed the build MATERIALIZED is read from its buffer
+  argmin arg-witness front-door (ess-os1)
+  array kernels ≡ per-cell scalar reference (differential)
+  assertion predicate: finiteness before tolerance (§6.6.3)
+  automatic pushdown rewrite — desugar to Phase-2b (Phase 4)
+  broadcast + name-based operand alignment (esm-spec §4.3.4)
+  build_evaluator folds elementwise array observeds (WS4)
+  build_output_callback (streaming-output-sinks RFC §16, Wave 1)
+  canonical emissible-field partition pins
+  codegen shared-prelude reads (ess-cgfsc)
+  codegen tier ≡ pre-codegen runners (differential, B1)
+  compile-once field-ic ≡ per-cell fallback (u0, ess-perf)
+  composite key = tuple equality (BEHAV-10-B-002)
+  conformance: merged_rename_reach (§4.7.1 step 4)
+  const_array boundary policy (ess-gj4)
+  continuous events fire (audit J2)
+  contraction tier order (loop vs affine)
+  coords sampling — nearest index, exact ties round DOWN
+  coords strict-subset pinning — singleton remainder only
+  coords validation rejections
+  corpus round-trip fidelity (save(load(F)) == F)
+  coupling_imports
+  cross-shape state box is not licensed by corner agreement
+  cross-shape state gather is grid-independent
+  data-loader unit_conversion (esm-spec §8.5)
+  deprecated op alias: aggregate -> faq
+  direct class emission (per-cell scalarizer → class kernels)
+  discrete_materialize conformance — discrete-cadence materialization (§5.13)
+  driven walk is the order-preserving subsequence (BEHAV-10-B-005)
+  dual fast path: overflow codegen tier for budget-declined kernels
+  elementwise array observed reached via an aggregate gather (#175)
+  esm-spec §8.2.1 data-source location resolution
+  esm_problem(pushdown_rewrite=true) with a ONE-member support set
+  expanded_model public seam
+  expansion memo differential oracle (A4)
+  field_reduce integral — unit-measure Riemann sum (== mean)
+  flatten cross-language conformance
+  fn const-table specs are not merged across cells (EarthSciSerialization-2wg)
+  fn spec content keying in per-kernel CSE (ess-affine)
+  from_file references — JSON snapshot relative to the .esm dir
+  fully-automatic clean projection-pushdown (Phase 5: LCC@build + auto-rewrite)
+  function_tables block + table_lookup AST op (esm-spec §9.5)
+  graph conformance corpus — sub-document expression_graph targets
+  graph conformance corpus — whole documents
+  grouped-aggregate centroid front-door (ess-2u5)
+  hyperbolic-trig scalar-leaf conformance (ess-v9a.1)
+  inline-Expression §6.6.5 reference loaded from file (parse fix)
+  inline_elementwise_array_observeds
+  intern differential oracle (A1)
+  intra-kernel body split
+  inverse-trig scalar-leaf conformance (ess-9x1)
+  join.on gate drives enumeration (BEHAV-10-B-004)
+  join.on key columns are polymorphic (BEHAV-10-B-001)
+  line allocation: the values, with no geometry kernel in the path
+  live forcing gather _NK_PARAM_GATHER / _VK_PGATHER (ess-14f.3)
+  loader-refresh e2e + zero-alloc + cadence (ess-14f.6, JL-J3)
+  match set ordering is canonical, not Dict order (BEHAV-10-B-003)
+  migration
+  oop_ssa_producers: the gate's evidence table
+  op capability audit
+  op registry pins
+  out-of-line expression templates (Option B, esm-spec §9.6.4)
+  out-of-place RHS emitter (form = :oop)
+  output-derivation conformance (RFC §7–§9, §16.12)
+  overlap-gated DENSE aggregate scaling (both orientations)
+  override keys: a collision reaches the front door
+  override keys: rule 2 validates the leading segments
+  override keys: rule 3 binds a dotted suffix of exactly one name
+  override keys: two keys, one name, is ambiguous
+  parameter classes
+  parameter-dependent array observed asserted directly (§6.6.5 param scope)
+  parameter_overrides key canonicalization (esm-spec §6.6)
+  pointwise lift considers only still-scalar states
+  polygon_intersection_area — fused clip+area scalar leaf (§8.6.1)
+  public API surface
+  ragged CSR contraction — expression position + observed assertion
+  rank-2 array observed — §6.6.5 materialization (regression: sort! dims)
+  rank-3 array observed — vec() fix is rank-agnostic
+  reduced-rank + contracted region values (stencil_indexed)
+  reference_graph
+  registry-declared typed scalar cores (ess-dtcore)
+  run_inline_tests covers reaction_systems (#194)
+  run_inline_tests options_for is consulted per document (#194)
+  run_inline_tests seed yields to the test's own override (#194)
+  scalar observeds compile as named prelude slots (ess-obs-slots)
+  scatter-skip gate (ESS_OOP_SSA_SKIP*)
+  setup-map compile-once
+  setup-time overlap broad phase
+  shape promotion errors use the typed flatten taxonomy
+  shard partition (ESM_TEST_SHARDS/ESM_TEST_SHARD)
+  shared fixture — tests/spatial/pde_inline_assertions_exec.esm
+  spatial OVERLAP join-gate (Phase 2a)
+  sub-kernel descriptor tables redirect (blocker #2)
+  subsystem_loader conformance — source-backed CONST parameters, bare-scalar + gather (§5.11)
+  subtree-table rescue ≡ per-cell (subterm-granular fallback)
+  table_lookup lowering on the evaluation path (esm-spec §9.5.3, #188)
+  template-library imports + metaparameters (esm-spec §9.7)
+  the producers of a build-time field are materialized ONCE
+  the skip is all-or-nothing (ESS_OOP_SSA_SKIP_WHOLE)
+  tier 2b end to end (reversed observed read)
+  tree_walk TIME-cadence tier (B3)
+  tree_walk join.on + filter (ess-my4.2.2)
+  tree_walk vectorized array-kernel RHS (ess-dhq)
+  tree_walk.jl evaluator (gt-e8yw)
+  unit registry conformance (esm-spec §4.8)
+  value-invention front-door (ess-3lj.1)
+  wildfire_atmosphere_ocean.esm — inline regrid + coupled SST simulation
+  §4.2 right-hand-side D — Julia resolves the tendency (flatten step 3c)
+  §4.2 right-hand-side D — Julia's exclusion from the shared category
+  §4.7 edge pipeline at a top-level models.<k> {ref} mount
+  §6.6.5 reference binds the field's dimension names
+  ∂(RHS)/∂(parameter vector) — host

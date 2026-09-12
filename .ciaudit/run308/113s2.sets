@@ -1,0 +1,167 @@
+  0-D model: scalars share one grid and write [time]-only arrays
+  :inplace kernel-class merge ≡ unmerged (hoisted, build.jl)
+  :oop kernel-class merge ≡ unmerged (oop_merge.jl)
+  :oop materializes array observeds and matches :inplace
+  Array-op runtime (gt-vt3 Phases 1-4)
+  Broad-phase join + sliver filter on a declarative conservative regrid (M4+)
+  Cadence-partition pass (CONFORMANCE_SPEC §5.7 / RFC §6.1)
+  Canonical reconstruct + lossless flatten + flattened_to_esm
+  Checkpoint predicates + restart (Wave 3)
+  Closed function registry conformance (esm-tzp / esm-4aw)
+  Conformance: pde_inline_array_overrides (manifest-driven)
+  Conformance: pde_inline_dead_observed (manifest-driven)
+  Conformance: pde_inline_observed_indexed_lhs (manifest-driven)
+  Conformance: pde_inline_observed_param_rank2 (manifest-driven)
+  Conformance: pde_inline_reference_dimension_names (manifest-driven)
+  Conformance: round-trip (manifest-driven)
+  Conformance: shaped_parameter_broadcast (manifest-driven)
+  Conformance: tolerance_resolution (manifest-driven)
+  Constructed geometry + live F_src field through the regrid (M4+)
+  Coupled-array bridge: consumer ODE reads a live regrid F_tgt observed (met→fire)
+  DAG-memoized subexpression walk (ESS-1p5)
+  DataSource EarthSciData coverage fixtures
+  Declarative conservative-regrid A_ij via ranged intersect_polygon (M4+)
+  Display Tests
+  End-to-end simulation (solve) tests
+  Expression text-parser conformance
+  Fixture sweeps
+  Flatten System
+  Graph analysis
+  JSON Parse and Serialize Tests
+  LANE_CONST fold is index-derived, not value-sampled (ess-affine)
+  M4 conservative-regridding assembly, inline fused-leaf weights (ess-my4.4.6)
+  M4 geometry kernel — intersect_polygon + polygon_area (ess-my4.4.3)
+  MTK ext — interp.linear / interp.bilinear (esm-94w)
+  Mount-edge index-set renaming (esm-spec §4.7)
+  Mounted components' inline tests (esm-spec §6.6)
+  Multi-hop chain: consumer reads a DERIVED field over a live regrid (level-set shape)
+  Observed dependency cycles (§4.9.6)
+  OpExpr wire contract exhaustiveness
+  Planar broad-phase candidate primitive (Phase 3a)
+  Qualified Reference Resolution
+  Ranged intersect_polygon clip authored as on-disk `faq` (schema v0.8.0)
+  Reaction System ODE Derivation Tests
+  Real MTK Extension Integration Tests
+  Structural Validation
+  Top-level reaction_system {ref} import (esm-spec §4.7)
+  Version constants
+  ZarrSink end-to-end round-trip (Wave 2)
+  ZarrSink: interleaved sink_flush! writes a gap-free, complete stream
+  `syms` naming a symbol the node does not bind is refused
+  `syms` round-trips through parse and emit
+  a bounded lookback is just another key column
+  access-kernel IR foundation (ess-affine)
+  advection_reaction_loaded_ic_bc.esm — scoped-ref ic + loaded BC simulation (provider)
+  affine interp :fn ≡ per-cell (differential, ess-affine)
+  affine invariant hoist ≡ per-cell (differential, ess-affine)
+  affine stencil ≡ per-cell (differential, ess-affine)
+  aggregate worked-example conformance (ess-my4.1.5)
+  assertion tolerance: symmetric relative bound (§6.6.3)
+  build-time lane-table interning
+  build_once_spatial_field conformance — setup makearray + gather into ODE (§5.12)
+  build_refresh_callback (ess-14f.4, JL-J1)
+  cadence classifier sees state refs in every expression field (ess-5d1)
+  canonicalize per RFC §5.4
+  codegen threaded cell axis
+  codegen tier accepts per-lane interp specs (kernel-class merge)
+  compile-once template tier
+  compiled IR size is independent of the grid (build-level)
+  conformance: operator_compose merge intent
+  consumer refs to promoted vars are gathered in-loop
+  contracted-loop consumer: env binds ranges, not just output_idx
+  cross-equation + affine-box direct class emission
+  cross-equation variant memo oracle (A3)
+  cross-kernel fn-CSE (plan B4, xcse.jl)
+  cumulative (prefix) reductions — O(N) scan (ess-scan)
+  datetime.* branch-free calendar == Dates (ess-traced-datetime)
+  discrete fill kernels are CHECKED state-free at build (ess-5d1)
+  discrete-cadence materialization (DiscreteMaterializer)
+  discrete-event affects round trip (symbolic affect on an unknown)
+  driving is bit-identical to the undriven full product
+  enum lowering (esm-spec §9.3)
+  error hierarchy + code registry
+  esm_problem + solve run entry
+  esm_problem(pushdown_rewrite=true) + record-derived provider gating
+  every raised ExpressionTemplateError code is registered
+  explicit `syms` choose the orientation
+  explicitly indexed consumers are untouched (M2-1 contract)
+  expression initial-condition golden loads (ess-gjn)
+  expression_templates / apply_expression_template (esm-giy)
+  expression_templates rewrite engine — 0.8.0 outermost-first + fixpoint
+  f64 overflow codegen: compiled overflow serves budget-declined Float64 kernels
+  factored array observeds
+  gated hook 2 — a lone loader still gets its bare + aliased keys
+  gated hook 2 — sibling loaders sharing a variable name
+  geometry sweep rank specialization
+  in-place RHS: eltype-generic AND still zero-alloc at Float64
+  index_sets non-string members round trip (members_raw)
+  indexed LHS for an array-shaped observed (#232)
+  inline array data (esm-spec §6.6.2)
+  inlined aggregate does not capture a reader's loop variable
+  invalid: undeclared {from} index set rejected (ess-my4.1.6)
+  join namespacing under flattening (§5.5.6)
+  join.on worked-example conformance (ess-my4.2.5)
+  loader ingest + select (esm-spec §8.9)
+  loader unit_conversion conformance (esm-spec §8.5)
+  match-pattern scoping constraints (where, esm-spec §9.6.1)
+  mtk2esm: Catalyst ReactionSystem export
+  mtk2esm: JSON-serializable output
+  mtk2esm: TODO_GAP for non-standard operator
+  mtk2esm: basic ODESystem export
+  mtk2esm: metadata kwargs pass through
+  mtk2esm: min/max operators round-trip
+  mtk2esm: n-ary min/max (nested)
+  mtk2esm: numerical round-trip (toy ODE)
+  mtk2esm: syntactic round-trip through load/save
+  mtk2esm_gaps pre-flight on gap-free system
+  name alignment transposes a permuted-shape operand
+  non-affine pgather table lowering ≡ per-cell (A2 differential)
+  observed_field on a state-free document
+  oop lane-batched scalars (ess-oop-batch)
+  parameter update handler descriptor round trip
+  parameter-vector ABI (`p::AbstractVector`)
+  pde_inline: model-qualified-first slot/cell resolution (§6.6.5)
+  pointwise lift axis names (§10.5)
+  projection-pushdown const-tier edge — L1 milestone (Phase 2b)
+  provider_sample selection pushdown (Phase 1b)
+  pushdown sees through surviving template references
+  pushdown: a computed cell position is refused loudly
+  pushdown: an array off the cell axis is left alone
+  pushdown: every cell-axis array is gathered, rank-preserving
+  pushdown: rewritten polygon allocation matches the dense evaluation
+  pushdown: the body's cell reads follow the envelopes onto the gathers
+  refresh conformance — discrete-cadence loader + in-model regrid (§5.10)
+  run_esm_tests walker (esm-ol5qa)
+  runtime contraction loop (ess-runtime-contraction)
+  runtime contraction loop — 2-D array einsum (ess-runtime-contraction)
+  runtime contraction loop — state-source halo tent (ess-runtime-contraction)
+  scalar-field template-parameter substitution (esm-spec §9.6.1 / §9.6.3 constraint 5)
+  scalar-position refs stay bare (post-discretize contract)
+  scalar_field_param conformance fixture matches the canonical expanded form
+  scope-directed template injection (esm-spec §9.7.10)
+  shard partition (ESM_TEST_SHARDS/ESM_TEST_SHARD)
+  solver block (esm-spec §2.2)
+  sub-kernel function tier (ess-cg-subcall-fn)
+  table_lookup → interp.* lowering bit-equivalence (esm-spec §9.5.3)
+  the answer is invariant under a permutation of the stored rows
+  the default side assignment reads the PREVIOUS row
+  threaded cell axis: per-dispatch cost is constant in N (ess-9cc)
+  three ranges are spellable with explicit `syms`
+  three ranges over one index set are refused by name
+  tree-walk build gaps: constructed binning coord + bare-alias setup geometry
+  tree-walk inline const index gather (fix/index-inline-const-array)
+  tree-walk op-table synchronization
+  tree_walk CSE const-cadence tier (4qf)
+  tree_walk CSE keys on canonical identity (reassociation is shared)
+  tree_walk CSE over live forcing buffers (ess-qic)
+  tree_walk CSE respects lazy guards (ifelse / and / or)
+  tree_walk CSE sees through closed-function `fn` nodes (ess-obs)
+  tree_walk PDE RHS is allocation-free (ess-9cc)
+  tree_walk audit fixes
+  tree_walk common-subexpression elimination (ess-r7h)
+  tree_walk faq (ess-evm)
+  tree_walk semiring + index-set registry + aggregate (ess-my4.1.2)
+  valid: agnostic leaf's injected {from} index set is not a load error (#185)
+  where constraints on rules arriving via §9.7 library import
+  work tracks the match count, not the squared row count
+  zero and negative enum members (esm-spec §9.3)

@@ -553,7 +553,14 @@ function _materialized_obs_dims(def::ASTExpr, shape, index_sets::AbstractDict,
                 haskey(ranges, n) || return nothing
                 r = try
                     collect(_expand_int_range(ranges[n]))
-                catch
+                catch err
+                    # A range this pass cannot read as a dense integer interval
+                    # means "not a declared-dims producer" — decline. Running
+                    # out of memory MATERIALIZING one does not: `collect` on a
+                    # huge range is exactly how a document's own extents exhaust
+                    # the allocator, and declining here would hide that behind a
+                    # shape the caller reports some other way.
+                    _is_resource_error(err) && rethrow()
                     return nothing
                 end
                 (!isempty(r) && r == collect(1:length(r))) || return nothing
@@ -1389,6 +1396,11 @@ function _fold_ic_equations(equations::Vector{Equation}, model::Model,
                     Float64(evaluate_expr(eq.rhs, param_scope;
                                           registered_functions=registered_functions))
                 catch err
+                    # Running out of memory or stack is not a statement about
+                    # this RHS, and a `TreeWalkError` saying it is would be
+                    # swallowed as an ordinary decline further up
+                    # (`_is_resource_error`).
+                    _is_resource_error(err) && rethrow()
                     throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_EQUATION",
                         "ic($(vn)) RHS must const-fold to a scalar for the " *
                         "tree-walk path ($(sprint(showerror, err)))"))
