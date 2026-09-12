@@ -228,7 +228,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        julia-version: ['1.10', '1.11', '1.12']
+        julia-version: ['1.10', '1.12', '1.13']
         # Two parallel halves of the suite. KEEP IN SYNC with ESM_TEST_SHARDS
         # on the test step below: this list says which shards exist, that
         # value says how many runtests.jl splits into, and a value larger than
