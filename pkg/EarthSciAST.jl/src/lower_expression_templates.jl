@@ -1450,7 +1450,8 @@ function _validate_manifolds_in_refs(node, named::AbstractDict,
         if name != "" && get(manifold_bearing, name, false)
             expansion = try
                 _expand_all(node, named, path)
-            catch
+            catch err
+                _is_resource_error(err) && rethrow()
                 nothing
             end
             if expansion !== nothing
@@ -2430,7 +2431,8 @@ function _esm_stamp_floor(declared)
     declared isa AbstractString || return TEMPLATE_MACHINERY_MIN_ESM
     parse_v(v) = try
         Tuple(parse(Int, p) for p in split(split(String(v), '-')[1], '.'))
-    catch
+    catch err
+        _is_resource_error(err) && rethrow()
         nothing
     end
     d = parse_v(declared)

@@ -51,3 +51,28 @@ root only so the rule "every exception in the package is an
 `EarthSciASTError`" has no exceptions.
 """
 abstract type EarthSciASTError <: Exception end
+
+"""
+    _is_resource_error(e) -> Bool
+
+True for the exceptions that mean THE PROCESS ran out of something, not that
+the DOCUMENT is wrong: `OutOfMemoryError`, `StackOverflowError` and
+`InterruptException`.
+
+Several passes bracket a speculative evaluation in a broad `catch` and, on
+failure, either decline (fall through to a slower form) or rebrand the failure
+as the diagnostic that describes the document — "this RHS does not const-fold",
+say. Both readings are wrong for a resource error. A rebranded one is worse
+than merely wrong: `TreeWalkError` is on the `_foldable_failure` allowlist and
+is swallowed outright at several `err isa TreeWalkError || rethrow()` sites, so
+wrapping an `OutOfMemoryError` in one can turn running out of memory into a
+silent decline several frames up. Test-side corpus sweeps then record it as an
+ordinary "this model cannot build standalone" skip and stay green.
+
+So every such site MUST let these three through unwrapped before it decides
+anything. The sweeps keep their own copy of this predicate
+(`corpus_is_resource_error` in test/testutils.jl) as a backstop, but the
+library is expected not to make it fire.
+"""
+_is_resource_error(e) =
+    e isa OutOfMemoryError || e isa StackOverflowError || e isa InterruptException

@@ -1346,10 +1346,14 @@ function _materialize_setup_general_map(rhs::OpExpr, env::AbstractDict,
             # Anything the compiled tree cannot evaluate (a gather the guards did
             # not anticipate, an unsupported leaf) → the per-cell reference below,
             # which reproduces the original values or the original error. A
-            # user interrupt is NOT a fallback trigger: this sweep can be long,
-            # and silently restarting it on the slower path is the opposite of
-            # what Ctrl-C asked for.
-            err isa InterruptException && rethrow()
+            # RESOURCE error is NOT a fallback trigger: a user interrupt asked
+            # for this sweep to stop, not to restart on the slower path, and
+            # running out of memory or stack says nothing about whether the
+            # compiled tree can evaluate this map — the per-cell path allocates
+            # the same output array and would only fail again, later and with
+            # the cause erased. Path selection for every OTHER error is
+            # untouched: still `nothing`, still the per-cell reference.
+            _is_resource_error(err) && rethrow()
             nothing
         end
         if fast !== nothing

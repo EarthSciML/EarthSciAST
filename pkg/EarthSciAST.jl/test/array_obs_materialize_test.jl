@@ -6,6 +6,7 @@
 # gather that buffer (build.jl §2b-f). `ESS_ARRAY_OBS_INLINE=1` restores the
 # inlining build, which is the oracle every case below compares against —
 # bit-for-bit, not approximately.
+using Test
 include("testutils.jl")
 
 using EarthSciAST

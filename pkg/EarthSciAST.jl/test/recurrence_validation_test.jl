@@ -14,6 +14,7 @@
 
 using Test
 using EarthSciAST
+using JSON3
 using OrderedCollections: OrderedDict
 
 include("testutils.jl")  # TESTUTILS_REPO_ROOT + the _v/_i/_op/_idx AST quartet
