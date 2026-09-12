@@ -214,6 +214,33 @@ fn a_loader_binding_the_leaf_does_not_declare_is_not_forwarded_to_it() {
     );
 }
 
+/// The backfill filter is PER NAME, tested where it can actually fail.
+///
+/// The assembler declares `N_OTHER` and the leaf it mounts declares `N_REC`, so
+/// the loader-API map carries one name the leaf must receive and one it must
+/// not. A filter that withholds the whole map from a leaf declaring NOTHING
+/// looks correct against every other fixture here and still lets an assembler's
+/// unrelated metaparameter through to a leaf that declares something — which is
+/// how an unbound `NLEV: default 12` silently resizes a leaf axis the edge never
+/// bound (esm-spec §4.7, the PR #298 precedence invariant).
+///
+/// Without this case the per-name half of the filter is unpinned: dropping it
+/// while keeping the leaf-declares-something check leaves every other test in
+/// this file green.
+#[test]
+fn an_unrelated_assembler_metaparameter_is_withheld_from_the_leaf() {
+    let doc = load_path_with_options(
+        fixture("assembler_partial_overlap_root.esm"),
+        &api(&[("N_REC", 3), ("N_OTHER", 7)]),
+    )
+    .expect("the leaf declares N_REC and must not be handed N_OTHER");
+    assert_eq!(
+        records_size(&doc),
+        Some(3),
+        "the leaf's own N_REC sizes the axis; the assembler's N_OTHER never reaches it"
+    );
+}
+
 /// The shared fixtures are read by four other bindings; a silent edit that
 /// removed the property under test would leave every suite green.
 #[test]
