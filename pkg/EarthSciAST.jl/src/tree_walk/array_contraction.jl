@@ -39,10 +39,12 @@ struct _ArrayContraction
 end
 
 # Point the output loop counters at cell `c` (1-based, product order). Derived
-# from `c` by division rather than carried in a mutable odometer so the runner
-# holds no state between cells — the loop is restartable and the struct stays
-# read-only at eval time, which is what lets one built evaluator be called from
-# several places without an ordering hazard.
+# from `c` by division rather than carried across iterations in an odometer, so
+# the only eval-time state is the counters the body reads THIS cell — the loop
+# starts correctly from any `c` and nothing has to be reset between calls. The
+# counters are per-equation shared `Ref`s, exactly like the contracted-index
+# `Ref` of an `_NK_CONTRACTION_LOOP`, so this section is single-threaded for the
+# same reason the rest of the scalar walker is.
 @inline function _ac_seek!(ac::_ArrayContraction, c::Int)
     refs = ac.refs
     r = c - 1
