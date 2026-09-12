@@ -18,6 +18,9 @@ import {
 } from './lower-expression-templates.js'
 import {
   applyScopeInjections,
+  checkDataSourceExtents,
+  collectMountDeclaredMetaparameters,
+  documentDeclaresAnExtent,
   rejectTemplateImportsPreV08,
   resolveTemplateMachinery,
 } from './template-imports.js'
@@ -523,10 +526,35 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
   // discretization. `null` when no injection applies (the fast path).
   const injectedRoot = applyScopeInjections(data, options?.injectedImports ?? [])
   const machineryInput = injectedRoot ?? data
+  // The metaparameter names every document this one MOUNTS declares (esm-spec
+  // §4.7, either mount form, transitively). It widens the §9.7.6 site-4 check:
+  // a loader-API binding — which is how a discovered §8.9.4 `extent` arrives —
+  // may name a metaparameter the LEAF declares and this document has no reason
+  // to restate. The mount edge forwards it into the leaf's own close, so the
+  // name is meaningful; only a name NO document in the assembly declares is the
+  // typo the check exists to catch.
+  // Guarded: the widening can only matter when the load carries loader-API
+  // bindings or the document declares an `extent`. A document with neither pays
+  // no extra ref reads — which also keeps the ordinary load off the filesystem
+  // for every mount it would otherwise re-read here.
+  const mountDeclared =
+    (options?.metaparameters && Object.keys(options.metaparameters).length > 0) ||
+    documentDeclaresAnExtent(machineryInput)
+      ? collectMountDeclaredMetaparameters(machineryInput, basePath, {
+          readFile: options?.readFile,
+        })
+      : undefined
+  // esm-spec §8.9.4, statically: an `extent` naming a metaparameter nobody
+  // declares is refused HERE rather than when the source is finally sampled at
+  // build.
+  checkDataSourceExtents(machineryInput, basePath, mountDeclared ?? new Set<string>(), {
+    readFile: options?.readFile,
+  })
   const resolved = resolveTemplateMachinery(machineryInput, basePath, {
     metaparameters: options?.metaparameters,
     readFile: options?.readFile,
     validateSchema,
+    mountDeclared,
   })
   data = resolved ?? machineryInput
   // esm-spec §9.6.4 (Option B): `lowerExpressionTemplates` resolves the document
@@ -569,6 +597,21 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
   if (Object.keys(componentTemplates).length > 0) {
     Object.defineProperty(loweredData, 'componentTemplates', {
       value: componentTemplates,
+      enumerable: false,
+      writable: true,
+      configurable: true,
+    })
+  }
+
+  // Same sidecar mechanism, for the loader-API metaparameter bindings (§9.7.6
+  // site 4). `resolveSubsystemRefsSync` is a SEPARATE entry point in this
+  // binding — `load` does not inline `{ref}` mounts — so this is the only route
+  // by which the bindings reach a `subsystems.<k>` mount edge, where §4.7 says
+  // they must seed the leaf's close exactly as they do at a top-level mount.
+  // Non-enumerable for the same round-trip reason as `componentTemplates`.
+  if (options?.metaparameters && Object.keys(options.metaparameters).length > 0) {
+    Object.defineProperty(loweredData, 'loaderMetaparameters', {
+      value: { ...options.metaparameters },
       enumerable: false,
       writable: true,
       configurable: true,
