@@ -721,7 +721,8 @@ function _try_field_ic_fastpath(rhs, params::AbstractDict,
     end
     node = try
         _compile(body, Dict{String,Int}(), Set{Symbol}(psyms), reg)
-    catch
+    catch err
+        _is_resource_error(err) && rethrow()
         return nothing   # anything the closed-form guard missed → per-cell fallback
     end
     pbase = Float64[Float64(params[k]) for k in pkeys]
@@ -856,7 +857,8 @@ function _cellwise_compile_once_impl(expr::EarthSciAST.ASTExpr, nidx::Int,
                                     Dict{String,Int}(), const_arrays,
                                     _EMPTY_PGATHER, nothing, bound)
         _compile(resolved, Dict{String,Int}(), Set{Symbol}(psyms), reg)
-    catch
+    catch err
+        _is_resource_error(err) && rethrow()
         return nothing   # anything unsupported → per-cell fallback
     end
     base = ntuple(i -> Float64(params[pkeys[i]]), length(pkeys))
