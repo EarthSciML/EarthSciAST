@@ -3013,10 +3013,11 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # bound above): a reader's `index(<materialized observed>, i…)` must resolve
     # through the ordinary array-gather path onto the observed's buffer block.
     # `scan_folds` is the ess-scan post-pass list for the STATE equations.
-    scalar_entries, percell_scalar, acc_kernels_pre, scan_folds, array_contractions = @_bench :compile_deriv_eqs _compile_derivative_equations(derivative_eqs,
-        resolved_obs, array_var_info, var_map, const_registry, pgather,
-        param_sym_set, reg_funcs, n_states; template_sites=template_sites,
-        scalar_obs_inline=obs_plan.inline)
+    scalar_entries, percell_scalar, acc_kernels_pre, scan_folds, array_contractions =
+        @_bench :compile_deriv_eqs _compile_derivative_equations(derivative_eqs,
+            resolved_obs, array_var_info, var_map, const_registry, pgather,
+            param_sym_set, reg_funcs, n_states; template_sites=template_sites,
+            scalar_obs_inline=obs_plan.inline)
     # States without a D(...) equation get du=0 (integrator leaves them
     # at their initial value — a common pattern for reified constants).
 
