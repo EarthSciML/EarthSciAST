@@ -546,6 +546,10 @@ function _resolve_field_ic(target::AbstractString, rhs::EarthSciAST.ASTExpr,
         return Float64(evaluate_expr(rhs, params;
                                      registered_functions=registered_functions))
     catch err
+        # A resource error is not a reason to try the NEXT form — the next form
+        # allocates too — and step (4) would rebrand it as a statement about
+        # this RHS. Out, unwrapped.
+        _is_resource_error(err) && rethrow()
         push!(_errs, "as constant: $(sprint(showerror, err))")
     end
     # (3) Coordinate expression over the grid geometry (per-cell field); model
@@ -556,6 +560,7 @@ function _resolve_field_ic(target::AbstractString, rhs::EarthSciAST.ASTExpr,
                                   registered_functions=registered_functions,
                                   params=params)
         catch err
+            _is_resource_error(err) && rethrow()
             push!(_errs, "as coordinate expression: $(sprint(showerror, err))")
         end
     end

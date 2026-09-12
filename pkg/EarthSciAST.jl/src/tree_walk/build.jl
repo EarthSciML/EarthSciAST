@@ -1389,6 +1389,11 @@ function _fold_ic_equations(equations::Vector{Equation}, model::Model,
                     Float64(evaluate_expr(eq.rhs, param_scope;
                                           registered_functions=registered_functions))
                 catch err
+                    # Running out of memory or stack is not a statement about
+                    # this RHS, and a `TreeWalkError` saying it is would be
+                    # swallowed as an ordinary decline further up
+                    # (`_is_resource_error`).
+                    _is_resource_error(err) && rethrow()
                     throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_EQUATION",
                         "ic($(vn)) RHS must const-fold to a scalar for the " *
                         "tree-walk path ($(sprint(showerror, err)))"))
