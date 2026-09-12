@@ -25,6 +25,7 @@
 using Test
 using EarthSciAST
 using ForwardDiff
+using JSON3
 
 const ESMs = EarthSciAST
 
