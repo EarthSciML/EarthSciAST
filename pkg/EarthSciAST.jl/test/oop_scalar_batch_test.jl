@@ -20,9 +20,9 @@
 #     Dual walk keeps the power rule — groups never blend exponents);
 #   * ForwardDiff through the batched path;
 #   * `ESS_OOP_BATCH=0` restores the pre-feature closure (kill switch).
+using Test
 include("testutils.jl")
 
-using Test
 using ForwardDiff
 using EarthSciAST
 const _OB_ESS = EarthSciAST
