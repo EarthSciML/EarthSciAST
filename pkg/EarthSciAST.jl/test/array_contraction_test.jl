@@ -207,10 +207,18 @@ const _AC_OFF = Dict("ESS_ARRAY_CONTRACTION_DISABLE" => "1")
         # w[i] = 2·u[i] — an elementwise materialized observed, i.e. a
         # vectorizable producer whose ONLY reader is the nest below.
         weq = _AC_ESS.Equation(_v("w"), ag1(_op("*", _n(2.0), _idx("u", _v("i")))))
+        # The source-receptor body this file is built on — an INLINE CONST
+        # matrix read at both indices — because that is the shape the affine
+        # tier declines, and a nest only exists where affine declined. An
+        # arithmetic coefficient is taken by affine instead, and then there is
+        # no nest to pin.
+        Cm = [[_ac_sr(j, i) for i in 1:N] for j in 1:N]
         nest = _AC_ESS.OpExpr("faq", _AC_ESS.ASTExpr[]; output_idx=Any["i"],
             reduce="+", ranges=Dict("i" => _AC_ESS.IndexSetRef("x"),
                                     "j" => _AC_ESS.IndexSetRef("x")),
-            expr_body=_op("*", _op("+", _v("i"), _v("j")), _idx("w", _v("j"))))
+            expr_body=_op("*", _op("index", _AC_ESS.OpExpr("const", _AC_ESS.ASTExpr[];
+                                                           value=Cm), _v("j"), _v("i")),
+                          _idx("w", _v("j"))))
         vars = Dict("u" => _AC_ESS.ModelVariable(_AC_ESS.UnknownVariable; shape=["x"]),
                     "w" => _AC_ESS.ModelVariable(_AC_ESS.UnknownVariable; shape=["x"]))
         eqs = if obs_nest

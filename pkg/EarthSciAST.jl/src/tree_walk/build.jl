@@ -4028,49 +4028,6 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
 
     range_iters = [collect(_expand_int_range(ranges_dict[n])) for n in idx_names]
 
-    # ── Whole-array contraction loop nest (ess-array-contraction) ─────────────
-    # Offered FIRST, and only above a CONTRACTED-length floor. Both tiers below
-    # scale their build with an extent of this equation — the affine tier
-    # materializes the ∏|k…|-term unrolled body before it can model anything (so
-    # the cost is paid even when it then DECLINES), and the per-cell loop
-    # compiles one node per output cell. A dense source-receptor contraction is
-    # unaffordable on both, and which of the two is worse cannot be read off the
-    # output extent: `conc[rcv] = Σ_s SR[s,rcv]·E[s]` has exactly as many output
-    # cells as contracted ones, so the existing `#out < ∏|k…|` preemption does
-    # not fire and the unroll is built. Above the floor this tier takes the
-    # equation outright; below it, nothing changes and the existing
-    # loop-vs-affine order decides as before.
-    #
-    # `nothing` (a body that will not resolve with its indices symbolic, or a
-    # compile the `_Node` lowering declines) falls through to that same order
-    # with `covered` untouched — correctness first, exactly as the per-cell loop
-    # probe does.
-    if _array_contraction_enabled() && !isempty(contract_names) &&
-       agg_gates === nothing && agg_filter === nothing &&
-       all(c -> c !== nothing, contract_const) &&
-       (rhs_oplus == "+" || rhs_oplus == "*" || rhs_oplus == "max" || rhs_oplus == "min") &&
-       !isempty(range_iters) && all(!isempty, range_iters) &&
-       prod(length(c) for c in contract_const) >= _array_contraction_min()
-        ac = _try_compile_array_contraction(lhs_body, rhs_body, covered;
-                idx_names=idx_names, ranges_dict=ranges_dict,
-                range_iters=range_iters, contract_names=contract_names,
-                contract_ranges=contract_ranges, rhs_oplus=rhs_oplus,
-                rhs_zerobar=rhs_zerobar, resolved_obs=resolved_obs,
-                array_var_info=array_var_info, var_map=var_map,
-                const_registry=const_registry, pgather=pgather,
-                param_sym_set=param_sym_set, reg_funcs=reg_funcs)
-        if ac !== nothing
-            _tally_cascade!(:array_contraction)
-            get(ENV, "ESS_STENCIL_DEBUG", "") == "1" &&
-                (println(stderr, "[ess-array-contraction] FIRED: ",
-                         length(ac.outs), " output cells, ",
-                         prod(length(c) for c in contract_const), " contracted");
-                 flush(stderr))
-            push!(array_contractions, ac)
-            return nothing
-        end
-    end
-
     # ── Array-einsum runtime contraction loop (ess-runtime-contraction) ────────
     # An array-producing aggregate `out[i…] = ⊕_{k…} body(i…, k…)` with a UNIFORM
     # constant-bound inner reduction is compiled to ONE `_NK_CONTRACTION_LOOP` per
@@ -4214,6 +4171,60 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
         scan_fold === nothing || push!(scan_folds, scan_fold)
         return nothing
     end
+    # ── Whole-array contraction loop nest (ess-array-contraction) ─────────────
+    # Offered HERE, and only here: every tier above has now either taken the
+    # equation or declined it, so what remains is the per-cell fallback below —
+    # one resolve + `_compile` per OUTPUT CELL, i.e. a build that grows with the
+    # array. This tier's build is O(1) in the contracted extent and O(cells)
+    # machine WORDS (not AST nodes) in the output extent, so it is the only one
+    # of the two whose cost does not track the grid.
+    #
+    # That ordering IS the admission rule, and it is the same rule the preemption
+    # note above states for the per-cell loop: take the equation when the
+    # alternative's build scales with an extent, leave it alone when a
+    # grid-independent tier already has it. The affine tier is grid-independent
+    # (O(#structural groups)) AND its kernels go on to the codegen tier, so an
+    # equation affine ACCEPTED must not be intercepted — doing so trades a
+    # compiled whole-array kernel for an interpreted nest and costs far more per
+    # RHS call than it ever saves once at build time.
+    #
+    # `ESS_STENCIL_DISABLE=1` is excluded deliberately: it is documented as
+    # forcing the per-cell reference, and a reference that routes through this
+    # tier instead is not a reference. The floor stays as a conservative guard on
+    # the small-reduction surface, not as a tier-selection knob — above or below
+    # it, this tier is now reached only when the alternative is per-cell.
+    #
+    # `nothing` (a body that will not resolve with its indices symbolic, or a
+    # compile the `_Node` lowering declines) falls through to the per-cell path
+    # with `covered` untouched — correctness first, exactly as the per-cell loop
+    # probe does.
+    if _array_contraction_enabled() && !_stencil_disabled() &&
+       !isempty(contract_names) &&
+       agg_gates === nothing && agg_filter === nothing &&
+       all(c -> c !== nothing, contract_const) &&
+       (rhs_oplus == "+" || rhs_oplus == "*" || rhs_oplus == "max" || rhs_oplus == "min") &&
+       !isempty(range_iters) && all(!isempty, range_iters) &&
+       prod(length(c) for c in contract_const) >= _array_contraction_min()
+        ac = _try_compile_array_contraction(lhs_body, rhs_body, covered;
+                idx_names=idx_names, ranges_dict=ranges_dict,
+                range_iters=range_iters, contract_names=contract_names,
+                contract_ranges=contract_ranges, rhs_oplus=rhs_oplus,
+                rhs_zerobar=rhs_zerobar, resolved_obs=resolved_obs,
+                array_var_info=array_var_info, var_map=var_map,
+                const_registry=const_registry, pgather=pgather,
+                param_sym_set=param_sym_set, reg_funcs=reg_funcs)
+        if ac !== nothing
+            _tally_cascade!(:array_contraction)
+            get(ENV, "ESS_STENCIL_DEBUG", "") == "1" &&
+                (println(stderr, "[ess-array-contraction] FIRED: ",
+                         length(ac.outs), " output cells, ",
+                         prod(length(c) for c in contract_const), " contracted");
+                 flush(stderr))
+            push!(array_contractions, ac)
+            return nothing
+        end
+    end
+
     # Anything the affine build cannot model takes the per-cell fallback, whose
     # cell entries merge into indirect-outs access kernels (acc_merge.jl) — or,
     # under ESS_STENCIL_DISABLE=1, stay plain per-cell scalar nodes (the
