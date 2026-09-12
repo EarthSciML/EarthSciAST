@@ -1,6 +1,7 @@
 package esm
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 
@@ -1119,6 +1120,86 @@ type IndexSet struct {
 	Of      []string `json:"of,omitempty"`
 	Offsets *string  `json:"offsets,omitempty"`
 	Values  *string  `json:"values,omitempty"`
+	// SizeExpr carries an interval `size` that is still a metaparameter
+	// EXPRESSION — a bare name like `"N_REC"` or a `{op, args}` tree — rather
+	// than an integer. Exactly one of Size / SizeExpr is ever set.
+	//
+	// It exists because this registry is TYPED where every other binding's is a
+	// plain dict, and esm-spec §4.7 "Index-set merge" hands it an UNFOLDED size:
+	// a leaf mounted at a §4.7 edge whose axis is sized by a name only the
+	// ASSEMBLER declares resolves with that size still symbolic, and the size
+	// travels up into the mounting document's registry to be closed there
+	// (§9.7.6 site 5). Decoding that into `Size *int` fails, and it failed as a
+	// bare `json: cannot unmarshal string` — an anonymous unmarshal error where
+	// the spec calls for either a resolved axis or a diagnostic. The custom
+	// codec below routes a non-integer `size` here and writes it back out
+	// verbatim, so the declaration survives parse -> emit unchanged.
+	//
+	// It is deliberately NOT a JSON field of its own: `size` is one wire key
+	// with two inhabitants, and MarshalJSON re-emits it under that one key.
+	SizeExpr any `json:"-"`
+}
+
+// UnmarshalJSON decodes an index-set declaration, routing a `size` that is not
+// an integer literal into SizeExpr (see the field comment). Numbers still land
+// in Size, so every already-folded declaration decodes exactly as before.
+func (s *IndexSet) UnmarshalJSON(data []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	sizeRaw, hasSize := fields["size"]
+	delete(fields, "size")
+	rest, err := json.Marshal(fields)
+	if err != nil {
+		return err
+	}
+	// `plain` drops the method set, so this Unmarshal is not this function.
+	type plain IndexSet
+	var p plain
+	if err := json.Unmarshal(rest, &p); err != nil {
+		return err
+	}
+	*s = IndexSet(p)
+	if !hasSize || string(sizeRaw) == "null" {
+		return nil
+	}
+	var n int
+	if err := json.Unmarshal(sizeRaw, &n); err == nil {
+		s.Size = &n
+		return nil
+	}
+	var expr any
+	dec := json.NewDecoder(bytes.NewReader(sizeRaw))
+	dec.UseNumber()
+	if err := dec.Decode(&expr); err != nil {
+		return err
+	}
+	s.SizeExpr = expr
+	return nil
+}
+
+// MarshalJSON re-emits an unfolded `size` under the same `size` key it was read
+// from, so a symbolic axis round-trips to itself.
+func (s IndexSet) MarshalJSON() ([]byte, error) {
+	type plain IndexSet
+	b, err := json.Marshal(plain(s))
+	if err != nil {
+		return nil, err
+	}
+	if s.SizeExpr == nil {
+		return b, nil
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(b, &fields); err != nil {
+		return nil, err
+	}
+	sz, err := json.Marshal(s.SizeExpr)
+	if err != nil {
+		return nil, err
+	}
+	fields["size"] = sz
+	return json.Marshal(fields)
 }
 
 // Coordinate is one entry of the document-scoped `coordinates` registry

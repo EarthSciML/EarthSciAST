@@ -1622,7 +1622,16 @@ func resolveAndLowerJSONCapturing(jsonStr, basePath string, metaparameters map[s
 	if err := applyCouplingInjections(view); err != nil {
 		return "", nil, err
 	}
-	if _, err := resolveTemplateMachinery(view, orders, basePath, metaparameters); err != nil {
+	// The §4.7 mount context of a ROOT document: the widened site-4 declared set
+	// and the §8.9.4 static `extent` check that must agree with it. Guarded, so
+	// a load with neither loader-API bindings nor an `extent` reads no refs here
+	// at all.
+	mountDeclared, err := rootMountContext(view, basePath, metaparameters)
+	if err != nil {
+		return "", nil, err
+	}
+	if _, err := resolveTemplateMachinery(view, orders, basePath, metaparameters,
+		resolveOpts{mountDeclared: mountDeclared}); err != nil {
 		return "", nil, err
 	}
 	if err := lowerExpressionTemplatesOrdered(view, orders); err != nil {

@@ -995,7 +995,15 @@ func loadOptionB(jsonStr, basePath string, metaparameters map[string]int64) (map
 	if err := applyCouplingInjections(view); err != nil {
 		return nil, err
 	}
-	if _, err := resolveTemplateMachinery(view, orders, basePath, metaparameters); err != nil {
+	// The §4.7 mount context of a ROOT document — same two halves the Option-A
+	// load path computes, so `emit` and `flatten` refuse the same documents
+	// `load` refuses (see rootMountContext).
+	mountDeclared, err := rootMountContext(view, basePath, metaparameters)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := resolveTemplateMachinery(view, orders, basePath, metaparameters,
+		resolveOpts{mountDeclared: mountDeclared}); err != nil {
 		return nil, err
 	}
 	if err := lowerExpressionTemplatesOrdered(view, orders); err != nil {
