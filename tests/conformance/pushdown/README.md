@@ -84,12 +84,22 @@ is **deep-equal as parsed JSON** to the committed golden.
   the committed input is self-contained (no open metaparameters), at REDUCED
   GRID EXTENTS: `src_cells` and `rcv_cells` carry 64 rather than 52,411, and
   `pop_cells` 96 rather than 596,444, with every other spelling of those
-  extents — the metaparameter defaults, the data-source array shapes and
-  chunk sizes, and the counts named in the descriptions — reduced with them.
+  extents — the metaparameter defaults, the data-source array shapes and the
+  chunk dimensions that spelled an extent, and the counts named in the
+  descriptions — reduced with them. (The `x_esd` chunk descriptors keep their
+  authored 100-row source chunking, which the reduction leaves larger than the
+  64-cell axis it chunks; a chunk wider than its array is legal zarr and
+  nothing in this repo reads the field.)
   The rewrite this corpus pins is structural, so the extents were never what
-  it tests; at the real ones the document is a 2.7e9-pair source-receptor
-  contraction that exhausts the allocator when the Julia corpus sweeps build
-  it, so it cannot be carried at production scale. `generate-pushdown-goldens.jl`
+  it tests, and at the real ones the document cannot be carried here at all:
+  the Julia corpus sweeps build EVERY fixture in this tree, and the five
+  `SR_*` parameters declare `shape: [src_cells, rcv_cells]` with a scalar
+  `default`. esm-spec §6.3 broadcasts such a default over the declared shape
+  before anything classifies the model, so each one is a 52,411 x 52,411
+  `Float64` fill — 2.7e9 cells, 20.5 GiB — five times over, which exhausts
+  the allocator. It is that broadcast and not the source-receptor contraction:
+  the allocation failure is raised from `fill` inside
+  `_register_inline_array_parameters`. `generate-pushdown-goldens.jl`
   refuses to write a re-cut input declaring more than 1024 members.
   FROZEN otherwise: see the re-emission note below.
 - `golden/<id>.rewritten.json` — `desugar_pushdown(input)` from the Julia
