@@ -96,6 +96,9 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("subsystem_ref_test.jl")
     include("mount_index_set_rename_test.jl")  # §4.7 mount-edge index_set_rename
     include("toplevel_mount_edge_pipeline_test.jl")  # §4.7 edge pipeline, top-level {ref}
+    # §8.9.4 discovered `extent` + §9.7.6 site 4 widened past the root's own
+    # declarations; the shared fixtures both mount forms are pinned against.
+    include("data_source_extent_scope_test.jl")
     include("reaction_system_ref_test.jl")
     include("editing_test.jl")
     include("data_loader_fixtures_test.jl")

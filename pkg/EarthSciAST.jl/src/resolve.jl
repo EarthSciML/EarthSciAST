@@ -110,6 +110,19 @@ apart — the only difference between them is which `base_path` anchors the refs
 function _load_document(raw_data, base_path::String;
                         metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}(),
                         injected_imports::AbstractVector=Any[])::EsmFile
+    # esm-spec §9.7.6 site 4, widened past "the root document's" (§4.7): the
+    # metaparameter names every document this one MOUNTS declares. Computed on
+    # the AUTHORED tree — the inliner just below CONSUMES the top-level mount
+    # stubs, so after it runs there is nothing left to walk.
+    #
+    # Guarded: the widening has exactly two consumers — the site-4 check and the
+    # §8.9.4 `extent` check — and neither can matter unless this load carries
+    # loader-API bindings or the document declares an `extent`. A document with
+    # neither pays no ref reads at all, so the ordinary path is unchanged in
+    # behaviour AND in I/O (no remote `{ref}` fetched once here and again by the
+    # ref resolver).
+    mount_declared = (!isempty(metaparameters) || _document_declares_an_extent(raw_data)) ?
+        _collect_mount_declared_metaparameters(raw_data, base_path) : Set{String}()
     # Inline any top-level model `{ref}` stubs (schema §4.7: `models.*` is
     # oneOf [Model, {ref}]) before the typed pipeline, so a simulation file that
     # references its components by `{"ref": "..."}` — as the Python runner's
@@ -146,9 +159,14 @@ function _load_document(raw_data, base_path::String;
     resolved_ds = _resolve_data_source_urls(doc, base_path)
     doc = resolved_ds === nothing ? doc : resolved_ds
     file = _load_parsed(doc; base_path=base_path, metaparameters=metaparameters,
-                        injected_imports=injected_imports)
+                        injected_imports=injected_imports,
+                        mount_declared=mount_declared)
     # Resolve nested subsystem references relative to the document's directory.
-    resolve_subsystem_refs!(file, base_path)
+    # The loader-API bindings reach this mount form too (§4.7 "Two mount forms,
+    # one mechanism"): a leaf mounted at a `subsystems.<k>` edge gets the same
+    # site-4 backfill a top-level-mounted leaf gets, so a discovered `extent`
+    # (§8.9.4) sizes its axis at either attachment point.
+    resolve_subsystem_refs!(file, base_path; loader_metaparameters=metaparameters)
     return file
 end
 
@@ -249,7 +267,9 @@ function _load_parsed(raw_data; base_path::AbstractString=pwd(),
                       metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}(),
                       injected_imports::AbstractVector=Any[],
                       index_set_rename=nothing,
-                      rename_where::AbstractString="mount edge")::EsmFile
+                      rename_where::AbstractString="mount edge",
+                      mount_declared::Union{Nothing,AbstractSet{String}}=nothing,
+                      mounted_leaf::Bool=false)::EsmFile
     # `load_document` hands us an in-memory dict that never passed through
     # `_read_json_document`, so the wire-boundary op pass runs here too. It is
     # idempotent: a document that already came through the reader carries no
@@ -295,11 +315,26 @@ function _load_parsed(raw_data; base_path::AbstractString=pwd(),
     # gt-2fvs mayor decision). A follow-up bead flips this to a hard error.
     _warn_deprecated_domain_bc(raw_data)
 
+    # esm-spec §8.9.4, statically: a `data_sources.<k>.extent` naming a
+    # metaparameter neither this document nor any document it mounts declares is
+    # `template_import_unknown_name` AT LOAD, so `validate` refuses it — rather
+    # than once the source is finally SAMPLED at build, which reported a typo as
+    # a loader-API failure on a document that had validated clean. Runs after
+    # schema validation so a malformed document still fails as a schema error.
+    #
+    # ROOT documents only. A mounted leaf's `extent` is checked when that leaf is
+    # itself the load target; at a mount edge the leaf has not been handed the
+    # assembly's scope yet, so checking it here would refuse assemblies the spec
+    # admits.
+    mounted_leaf || check_data_source_extents(raw_data, String(base_path), mount_declared)
+
     return _lower_and_coerce(raw_data, base_path;
                              metaparameters=metaparameters,
                              injected_imports=injected_imports,
                              index_set_rename=index_set_rename,
-                             rename_where=rename_where)
+                             rename_where=rename_where,
+                             mount_declared=mount_declared,
+                             mounted_leaf=mounted_leaf)
 end
 
 """
@@ -331,7 +366,9 @@ function _lower_and_coerce(raw_data, base_path::AbstractString;
                            metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}(),
                            injected_imports::AbstractVector=Any[],
                            index_set_rename=nothing,
-                           rename_where::AbstractString="mount edge")::EsmFile
+                           rename_where::AbstractString="mount edge",
+                           mount_declared::Union{Nothing,AbstractSet{String}}=nothing,
+                           mounted_leaf::Bool=false)::EsmFile
     # Snapshot the top-level DECLARATIONS verbatim, BEFORE any lowering touches
     # them. Option A expands call sites; it does not delete declarations (esm-spec
     # §9.6.4 rule 5), and a pure template library must round-trip to itself — but
@@ -348,7 +385,9 @@ function _lower_and_coerce(raw_data, base_path::AbstractString;
     injected_root = apply_scope_injections(raw_data, injected_imports)
     machinery_input = injected_root === nothing ? raw_data : injected_root
     resolved = resolve_template_machinery(machinery_input, String(base_path);
-                                          metaparameters=metaparameters)
+                                          metaparameters=metaparameters,
+                                          mount_declared=mount_declared,
+                                          mounted_leaf=mounted_leaf)
     lowered_src = resolved === nothing ? machinery_input : resolved
     loaded = lower_expression_templates(lowered_src)
     # esm-spec §4.7 "Mount-edge index-set renaming", pipeline step 2. The
@@ -810,7 +849,22 @@ function _inline_toplevel_model_refs!(native::AbstractDict{String,Any}, base_pat
             # lowering never resolves the leaf's template names against its own
             # registry. A leaf with no machinery has nothing to resolve and flows
             # on untouched (`resolve_template_machinery` returns `nothing`).
-            resolved = resolve_template_machinery(comp, compdir; metaparameters=bindings)
+            # `mounted_leaf=true`: this IS a §4.7 mount edge, so an index-set
+            # `size` the leaf cannot close stays SYMBOLIC — it merges into the
+            # mounting document's registry and closes there (§9.7.6 site 5).
+            # Whether that happened used to turn on `_has_import_machinery`, a
+            # whole-document boolean, so one `expression_template_imports` entry
+            # for a library the leaf never calls flipped the leaf from "axis
+            # merges and the assembler closes it" to `metaparameter_unbound`.
+            # `mount_declared` covers the leaf's OWN nested mounts, so the
+            # site-4 widening composes down the reference DAG. Guarded on the
+            # edge's close being non-empty: with nothing to check, the set is
+            # unused, and the walk would re-read every nested ref for nothing.
+            leaf_mount_declared = isempty(bindings) ? Set{String}() :
+                _collect_mount_declared_metaparameters(comp, compdir)
+            resolved = resolve_template_machinery(comp, compdir; metaparameters=bindings,
+                                                  mount_declared=leaf_mount_declared,
+                                                  mounted_leaf=true)
             if resolved !== nothing
                 comp = expand_document(lower_expression_templates(resolved))
             end
@@ -1131,9 +1185,10 @@ Circular references are detected and raise a `SubsystemRefError`.
 - `file::EsmFile`: the parsed ESM file to resolve references in
 - `base_path::String`: directory path for resolving relative file references
 """
-function resolve_subsystem_refs!(file::EsmFile, base_path::String)
+function resolve_subsystem_refs!(file::EsmFile, base_path::String;
+        loader_metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}())
     visited = Set{String}()
-    _resolve_refs_in_file!(file, base_path, visited)
+    _resolve_refs_in_file!(file, base_path, visited; api_meta=loader_metaparameters)
 end
 
 """
@@ -1141,14 +1196,15 @@ end
 
 Internal recursive resolver for subsystem references in an EsmFile.
 """
-function _resolve_refs_in_file!(file::EsmFile, base_path::String, visited::Set{String})
+function _resolve_refs_in_file!(file::EsmFile, base_path::String, visited::Set{String};
+        api_meta::AbstractDict{String,<:Integer}=Dict{String,Int}())
     # Resolve model subsystem refs. The document's own index-set registry is
     # threaded down the walk so every referenced subsystem file's top-level
     # `index_sets` merge into it (esm-spec §4.7, mirroring §9.7.5).
     if file.models !== nothing
         for (name, model) in file.models
             _resolve_model_refs!(file.models, name, model, base_path, visited,
-                                 file.index_sets)
+                                 file.index_sets; api_meta=api_meta)
         end
     end
 
@@ -1170,7 +1226,8 @@ Recursively resolve subsystem references within a Model's subsystems.
 """
 function _resolve_model_refs!(models_dict, name::String,
                               model, base_path::String, visited::Set{String},
-                              registry::AbstractDict{String,IndexSet})
+                              registry::AbstractDict{String,IndexSet};
+                              api_meta::AbstractDict{String,<:Integer}=Dict{String,Int}())
     # Only Model values carry subsystems to walk; a SubsystemRef leaf has none.
     model isa Model || return
     for (sub_name, sub_value) in collect(model.subsystems)
@@ -1184,7 +1241,8 @@ function _resolve_model_refs!(models_dict, name::String,
             # what lets `validate` render the pinned pointer
             # `/models/<parent>/subsystems/<sub>` (finding (f)).
             model.subsystems[sub_name] = try
-                _resolve_subsystem_ref(sub_value, base_path, visited, registry)
+                _resolve_subsystem_ref(sub_value, base_path, visited, registry;
+                                       api_meta=api_meta)
             catch e
                 e isa SubsystemRefError || rethrow()
                 throw(_with_mount_site(e, sub_name, name))
@@ -1192,7 +1250,7 @@ function _resolve_model_refs!(models_dict, name::String,
         else
             # Inline Model — recurse into its own subsystems.
             _resolve_model_refs!(model.subsystems, sub_name, sub_value, base_path,
-                                 visited, registry)
+                                 visited, registry; api_meta=api_meta)
         end
     end
 end
@@ -1268,12 +1326,14 @@ importing document's registry — with the §4.7 deep-equal-or-error rule
 (`subsystem_index_set_conflict`).
 """
 function _resolve_subsystem_ref(ref::SubsystemRef, base_path::String, visited::Set{String},
-                                registry::AbstractDict{String,IndexSet})
+                                registry::AbstractDict{String,IndexSet};
+                                api_meta::AbstractDict{String,<:Integer}=Dict{String,Int}())
     # esm-spec §9.7.10 form A: the edge's `expression_template_imports` inject a
     # discretization into the referenced component's own scope, threaded into
     # its load so the §9.6.3 fixpoint lowers its rewrite-targets at the mount.
     loaded = _load_ref(ref.ref, base_path, visited;
                        metaparameters=ref.bindings,
+                       api_meta=api_meta,
                        injected_imports=ref.expression_template_imports,
                        index_set_rename=ref.index_set_rename,
                        rename_where="subsystem ref '$(ref.ref)'")
@@ -1293,8 +1353,9 @@ function _resolve_subsystem_ref(ref::SubsystemRef, base_path::String, visited::S
 end
 
 _resolve_subsystem_ref(ref::String, base_path::String, visited::Set{String},
-                       registry::AbstractDict{String,IndexSet}=OrderedDict{String,IndexSet}()) =
-    _resolve_subsystem_ref(SubsystemRef(ref), base_path, visited, registry)
+                       registry::AbstractDict{String,IndexSet}=OrderedDict{String,IndexSet}();
+                       api_meta::AbstractDict{String,<:Integer}=Dict{String,Int}()) =
+    _resolve_subsystem_ref(SubsystemRef(ref), base_path, visited, registry; api_meta=api_meta)
 
 """
     _resolve_reaction_system_refs!(rsys_dict, name, rsys, base_path, visited)
@@ -1321,6 +1382,7 @@ Load a referenced ESM file from a local path or URL, with circular reference det
 """
 function _load_ref(ref::String, base_path::String, visited::Set{String};
                    metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}(),
+                   api_meta::AbstractDict{String,<:Integer}=Dict{String,Int}(),
                    injected_imports::AbstractVector=Any[],
                    index_set_rename=nothing,
                    rename_where::AbstractString="mount edge")::EsmFile
@@ -1340,11 +1402,13 @@ function _load_ref(ref::String, base_path::String, visited::Set{String};
             # was itself loaded from a URL: resolve against the URL base
             # (`canonical` is exactly the joined, normalized URL).
             return _load_remote_ref(canonical, visited; metaparameters=metaparameters,
+                                    api_meta=api_meta,
                                     injected_imports=injected_imports,
                                     index_set_rename=index_set_rename,
                                     rename_where=rename_where)
         else
             return _load_local_ref(ref, base_path, visited; metaparameters=metaparameters,
+                                   api_meta=api_meta,
                                    injected_imports=injected_imports,
                                    index_set_rename=index_set_rename,
                                    rename_where=rename_where)
@@ -1359,6 +1423,45 @@ function _load_ref(ref::String, base_path::String, visited::Set{String};
             throw(SubsystemRefError("Failed to resolve subsystem ref '$(ref)': $(e)"))
         end
     end
+end
+
+"""
+    _backfill_leaf_metaparameters(raw_leaf, bindings, api_meta) -> AbstractDict
+
+The §9.7.6 site-4 backfill at a `subsystems.<k>` mount edge: seed the leaf's
+close with the LOADER-API bindings for the names the LEAF DECLARES, then let
+the edge's explicit `bindings` (site 3) win over them. The twin of the backfill
+`_inline_toplevel_model_refs!` runs at the top-level `models.<k>` form — §4.7
+"Two mount forms, one mechanism": a binding MUST NOT make the two forms differ,
+and without this one a discovered `extent` (§8.9.4) sized a top-level-mounted
+leaf from the data while the same leaf mounted as a subsystem fell through to
+its own placeholder default. That is a silent wrong answer — a zero-length
+ingested field behind a clean validate and a clean exit — not a diagnostic.
+
+The FILTER is load-bearing in both directions (§4.7). A name the leaf does not
+declare is dropped rather than forwarded, or it would raise
+`template_import_unknown_name` against a leaf that never asked for it. And the
+map read here is `api_meta`, the loader-API bindings ONLY — never the mounting
+document's `parent_meta`, which also carries that document's own declared
+DEFAULTS. Those are its own site-5 close, not a binding on anything it mounts;
+forwarding them would let an assembler's unrelated metaparameter silently
+resize a leaf axis the edge never bound.
+"""
+function _backfill_leaf_metaparameters(raw_leaf,
+        bindings::AbstractDict{String,<:Integer},
+        api_meta::AbstractDict{String,<:Integer})
+    isempty(api_meta) && return bindings
+    decls = _raw_get(raw_leaf, "metaparameters")
+    (decls !== nothing && decls isa AbstractDict) || return bindings
+    out = Dict{String,Int}()
+    for (k, v) in pairs(api_meta)
+        haskey(decls, string(k)) && (out[string(k)] = Int(v))
+    end
+    isempty(out) && return bindings
+    for (k, v) in pairs(bindings)          # explicit edge bindings win (site 3)
+        out[string(k)] = Int(v)
+    end
+    return out
 end
 
 """
@@ -1496,6 +1599,7 @@ Load a locally referenced ESM file.
 """
 function _load_local_ref(ref::String, base_path::String, visited::Set{String};
                          metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}(),
+                         api_meta::AbstractDict{String,<:Integer}=Dict{String,Int}(),
                          injected_imports::AbstractVector=Any[],
                          index_set_rename=nothing,
                          rename_where::AbstractString="mount edge")::EsmFile
@@ -1522,14 +1626,20 @@ function _load_local_ref(ref::String, base_path::String, visited::Set{String};
     # inject the edge's discretization into its single component's scope
     # (esm-spec §9.7.10 form A).
     ref_base = dirname(resolved_path)
+    effective = _backfill_leaf_metaparameters(raw_ref_doc, metaparameters, api_meta)
     file = _load_parsed(_read_json_document(content); base_path=ref_base,
-                        metaparameters=metaparameters,
+                        metaparameters=effective,
                         injected_imports=injected_imports,
                         index_set_rename=index_set_rename,
-                        rename_where=rename_where)
+                        rename_where=rename_where,
+                        mount_declared=(isempty(effective) ? Set{String}() :
+                            _collect_mount_declared_metaparameters(raw_ref_doc, ref_base)),
+                        mounted_leaf=true)
 
-    # Recursively resolve refs in the loaded file, relative to its own directory
-    _resolve_refs_in_file!(file, ref_base, visited)
+    # Recursively resolve refs in the loaded file, relative to its own directory.
+    # `api_meta` travels with the walk, so a leaf mounted two edges down gets the
+    # same site-4 backfill (filtered to what IT declares) the first one got.
+    _resolve_refs_in_file!(file, ref_base, visited; api_meta=api_meta)
 
     return file
 end
@@ -1545,6 +1655,7 @@ mirroring `_load_local_ref`'s dirname anchoring; cycle detection carries
 """
 function _load_remote_ref(url::String, visited::Set{String}=Set{String}();
                           metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}(),
+                          api_meta::AbstractDict{String,<:Integer}=Dict{String,Int}(),
                           injected_imports::AbstractVector=Any[],
                           index_set_rename=nothing,
                           rename_where::AbstractString="mount edge")::EsmFile
@@ -1581,15 +1692,19 @@ function _load_remote_ref(url::String, visited::Set{String}=Set{String}();
     # subsystem-ref edge's injected discretization (esm-spec §9.7.10 form A)
     # folds into the single component's scope before resolution.
     url_base = _url_dirname(url)
-    file = _lower_and_coerce(raw_data, url_base; metaparameters=metaparameters,
+    effective = _backfill_leaf_metaparameters(raw_data, metaparameters, api_meta)
+    file = _lower_and_coerce(raw_data, url_base; metaparameters=effective,
                              injected_imports=injected_imports,
                              index_set_rename=index_set_rename,
-                             rename_where=rename_where)
+                             rename_where=rename_where,
+                             mount_declared=(isempty(effective) ? Set{String}() :
+                                 _collect_mount_declared_metaparameters(raw_data, url_base)),
+                             mounted_leaf=true)
 
     # Nested subsystem refs inside the remote document resolve against the
     # same URL base (relative refs join onto the URL; absolute URLs and the
     # shared `visited` set keep cycle detection canonical).
-    _resolve_refs_in_file!(file, url_base, visited)
+    _resolve_refs_in_file!(file, url_base, visited; api_meta=api_meta)
 
     return file
 end

@@ -156,16 +156,26 @@ end
         @test serialize_esm_file(a)["index_sets"] == serialize_esm_file(b)["index_sets"]
     end
 
-    @testset "a leaf with machinery is strict about an assembler-scoped size" begin
-        # The strictness boundary the close introduces, pinned so it is visible
-        # rather than discovered. §9.7.6 site 3 resolves a mounted leaf "as a
-        # complete document and folded to concrete integers at the mount", so the
-        # leaf's OWN close is strict: once the leaf has any §9.7 machinery to
-        # resolve, an axis sized by a name the leaf does not declare is
-        # `metaparameter_unbound` AT THE EDGE — it never reaches the mounting
-        # document's close. A leaf with NO machinery has no close to be strict
-        # about, so the same size merges symbolically (the testset above). Python
-        # returns the same verdict.
+    @testset "a mounted leaf is not the last scope that can close a size" begin
+        # A MOUNT EDGE IS NOT A ROOT. §9.7.6 site 3 resolves a mounted leaf "as a
+        # complete document and folded to concrete integers at the mount", but
+        # site 5 then says "a metaparameter an edge leaves unbound ... is closed
+        # at some enclosing document's close" — and §4.7 applies that to the axis
+        # the name sizes: the leaf's `index_sets` merge into the MOUNTING
+        # document's registry immediately afterwards, so a `size` naming
+        # something the leaf does not declare merges SYMBOLICALLY and travels up
+        # instead of failing at the edge. Only a ROOT document, which has no
+        # enclosing scope, is strict.
+        #
+        # This testset used to assert the opposite — `metaparameter_unbound` at
+        # the edge — because strictness turned on `_has_import_machinery`, a
+        # WHOLE-DOCUMENT boolean. That made the leaf below resolve or not
+        # resolve according to whether it declared ANY metaparameter (or
+        # imported any template library), even one nothing in the file reads:
+        # `UNRELATED` here is never referenced. §4.7 forbids exactly that — "a
+        # component's shape is not allowed to stop resolving because a shared
+        # expression was factored into a library it imports and never calls" —
+        # so the boolean is gone and the two leaves below must agree.
         dir = mktempdir()
         _tmp_write(dir, "leaf.esm", """
         {
@@ -182,8 +192,28 @@ end
             """{"esm":"1.0.0","metadata":{"name":"host"},
                 "metaparameters":{"n_rows":{"type":"integer","default":7}},
                 "models":{"M":{"ref":"./leaf.esm"}}}""")
-        err = _err_or_nothing(() -> EarthSciAST.load_path(host))
-        # A proper diagnostic, not a bare `MethodError: no method matching Int64(::String)`.
+        f = EarthSciAST.load_path(host)
+        # The assembler's close sized the leaf's axis, exactly as it does for the
+        # machinery-free leaf in the testset above.
+        @test f.index_sets["rows"].size == 7
+        @test f.models["M"].variables["u"].shape == ["rows"]
+
+        # THE DIFFERENTIAL: the same leaf minus its unread `metaparameters`
+        # block. Whether a shared name was factored out into a declaration the
+        # leaf never reads must not change whether the assembly resolves.
+        _tmp_write(dir, "leaf_bare.esm", _ASSEMBLER_SCOPED_LEAF)
+        bare_host = _tmp_write(dir, "bare_host.esm",
+            """{"esm":"1.0.0","metadata":{"name":"bare_host"},
+                "metaparameters":{"n_rows":{"type":"integer","default":7}},
+                "models":{"M":{"ref":"./leaf_bare.esm"}}}""")
+        @test EarthSciAST.load_path(bare_host).index_sets["rows"].size ==
+              f.index_sets["rows"].size
+
+        # STILL STRICT AT A ROOT. The same leaf loaded as the load TARGET has no
+        # enclosing scope to close `n_rows`, so it is `metaparameter_unbound` —
+        # a proper diagnostic, not a bare `MethodError: no method matching
+        # Int64(::String)`. Widening the mount edge must not widen this.
+        err = _err_or_nothing(() -> EarthSciAST.load_path(joinpath(dir, "leaf.esm")))
         @test err isa ExpressionTemplateError
         @test err.code == ERROR_CODES.METAPARAMETER_UNBOUND
         @test occursin("n_rows", err.message)

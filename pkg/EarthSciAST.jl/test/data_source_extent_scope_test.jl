@@ -1,0 +1,271 @@
+# A discovered `extent` binds where the NAME is declared, not only at the root.
+#
+# esm-spec §8.9.4 lets a data source measure its own record count and bind a
+# metaparameter an index set is sized by. The count arrives as a §9.7.6 site-4
+# loader-API binding, so these tests bind it directly: `load_path(...;
+# metaparameters=Dict("N_REC" => 3))` is exactly what extent discovery hands the
+# loader, and it exercises the same path without needing a file on disk.
+#
+# Four separable properties are pinned here:
+#
+#   * the mounting document need not RESTATE a metaparameter the leaf it mounts
+#     already declares (§9.7.6 site 4, widened past "the root document's");
+#   * the two §4.7 mount forms size the axis IDENTICALLY — the property "Two
+#     mount forms, one mechanism" states and the one that was silently false, a
+#     subsystem-mounted leaf having sized its axis at the placeholder default
+#     while a top-level-mounted one sized it from the data;
+#   * whether a leaf resolves does not turn on an `expression_template_imports`
+#     entry it never calls;
+#   * an `extent` naming a metaparameter nobody declares is refused at LOAD,
+#     not when the source is finally sampled at build.
+#
+# The fixtures are shared with the other bindings and live under
+# `tests/fixtures/` rather than `tests/valid/`, because the corpus sweep would
+# score TypeScript and Go a false pass on the top-level mount form they do not
+# implement. Ported from
+# `pkg/earthsci-ast-py/tests/test_data_source_extent_scope.py`.
+
+using Test
+using JSON3
+using EarthSciAST
+using EarthSciAST: ExpressionTemplateError, ERROR_CODES
+
+include("testutils.jl")  # TESTUTILS_REPO_ROOT
+
+const _EXTENT_SCOPE_DIR =
+    joinpath(TESTUTILS_REPO_ROOT, "tests", "fixtures", "data_source_extent_scope")
+
+# The merged `records` axis declaration, whatever shape the registry holds.
+_extent_records(f::EarthSciAST.EsmFile) = f.index_sets["records"]
+
+_extent_load(name; metaparameters=Dict{String,Int}()) =
+    EarthSciAST.load_path(joinpath(_EXTENT_SCOPE_DIR, name);
+                          metaparameters=metaparameters)
+
+_extent_err(f) = try
+    f()
+    nothing
+catch e
+    e
+end
+
+# The OUTCOME of a load, reduced to what a DIFFERENTIAL assertion may compare:
+# the merged axis size on success, and the exception's stable §9.6.6 code on
+# failure. Deliberately NOT the message — two spellings of one assembly mount
+# differently-named files, so their messages differ where their meanings must
+# not. Used where the portable contract is "these two agree with each other"
+# rather than an absolute value.
+function _extent_outcome(name; metaparameters=Dict{String,Int}())
+    e = _extent_err(() -> _extent_load(name; metaparameters=metaparameters))
+    e === nothing || return (:error, e.code)
+    return (:ok, _extent_records(_extent_load(name; metaparameters=metaparameters)).size)
+end
+
+@testset "§8.9.4 discovered extent binds where the name is declared" begin
+
+    # -----------------------------------------------------------------------
+    # §9.7.6 site 4 reaches a name only a MOUNTED document declares
+    # -----------------------------------------------------------------------
+
+    @testset "a mounted leaf's metaparameter need not be restated by the root" begin
+        # The thin root owns the `data_sources` entry and declares NO
+        # `metaparameters`; the leaf it mounts declares `N_REC` and is sized by
+        # it. The discovered extent is a loader-API binding, and the site-4
+        # check used to ask only whether the ROOT declared the name — so every
+        # assembly had to carry a second, identical `metaparameters` block that
+        # configured nothing. The check now accepts a name declared by any
+        # document the root mounts, and the mount edge forwards the value into
+        # the leaf's own close.
+        f = _extent_load("extent_root_toplevel.esm"; metaparameters=Dict("N_REC" => 3))
+        @test _extent_records(f).size == 3
+    end
+
+    @testset "a loader-API binding no document declares is still refused" begin
+        # Widening the check must not delete it. A name neither the root nor
+        # anything it mounts declares is still `template_import_unknown_name` —
+        # §9.7.6: bindings never invent metaparameters, a typo fails loudly.
+        err = _extent_err(() ->
+            _extent_load("extent_root_toplevel.esm"; metaparameters=Dict("N_RECS" => 3)))
+        @test err isa ExpressionTemplateError
+        @test err.code == ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME
+        @test occursin("N_RECS", err.message)
+    end
+
+    # -----------------------------------------------------------------------
+    # §4.7 "Two mount forms, one mechanism"
+    # -----------------------------------------------------------------------
+
+    @testset "the same leaf sizes its axis at either mount form" begin
+        # THE ORACLE PIN. Same leaf, same data source, same discovered count;
+        # the two assemblies differ only in which attachment point mounts the
+        # leaf.
+        #
+        # Before, only the top-level `models.<k>` form forwarded the loader-API
+        # bindings into the leaf's close. A `subsystems.<k>` mount fell through
+        # to the leaf's own placeholder default, so the axis folded to 0 and the
+        # ingested field was ZERO-LENGTH — with no diagnostic, a clean validate
+        # and a clean exit. §4.7 says a binding MUST NOT make the two forms
+        # differ; this is the test that says so out loud.
+        top = _extent_load("extent_root_toplevel.esm"; metaparameters=Dict("N_REC" => 3))
+        sub = _extent_load("extent_root_subsystem.esm"; metaparameters=Dict("N_REC" => 3))
+        @test _extent_records(top).size == 3
+        @test _extent_records(sub).size == 3  # a subsystem-mounted leaf used to
+        # size its axis at the placeholder default while a top-level-mounted one
+        # sized it from the data (esm-spec §4.7).
+        @test _extent_records(top).size == _extent_records(sub).size
+        @test _extent_records(top).kind == _extent_records(sub).kind
+    end
+
+    # -----------------------------------------------------------------------
+    # An UNUSED template import does not decide whether a leaf resolves
+    # -----------------------------------------------------------------------
+
+    @testset "an unused template import does not change whether a leaf resolves" begin
+        # Two assemblies differing by ONE import of a library the leaf never
+        # calls.
+        #
+        # Whether a mounted leaf folded strictly used to be a whole-document
+        # boolean — does it carry ANY §9.7 machinery — so adding that import
+        # flipped the leaf from "axis merges symbolically and the assembler
+        # closes it" to `metaparameter_unbound`. Factoring a shared expression
+        # into a library is not supposed to change whether a document's shape
+        # resolves (§4.7).
+        #
+        # The assertion is DIFFERENTIAL rather than absolute on purpose: where
+        # the §4.7 merge sits relative to the mounting document's own §9.7.6
+        # close still differs across bindings (RFC
+        # `mount-edge-index-set-renaming.md` open question 2), so the portable
+        # contract is that the two spellings agree with each other.
+        @test _extent_outcome("assembler_root_with_import.esm") ==
+              _extent_outcome("assembler_root_no_import.esm")
+
+        # WHAT THAT OUTCOME CURRENTLY IS, in Julia, and why the assertion above
+        # is the whole of the portable contract here.
+        #
+        # These two fixtures mount at the `subsystems.<k>` form, where Julia
+        # merges the leaf's axes on the TYPED side (`_merge_subsystem_index_sets!`
+        # over `EsmFile.index_sets`), after the mounting document has already
+        # coerced. `IndexSet.size` is `Union{Int,Nothing}`, so an axis that is
+        # still symbolic when the leaf coerces cannot be carried across that
+        # boundary at all: the leaf fails in coercion, before any merge. That is
+        # true on both sides of this differential and was true before this change
+        # — it is the typed representation, not the strictness this change fixed
+        # — but it does mean Julia does not yet reach the ORACLE's absolute form
+        # (Python loads both and merges the symbolic axis up to the root's
+        # close). Pinned BROKEN rather than deleted, so it flips loudly the day
+        # the typed registry can hold a symbolic size.
+        @test_broken _extent_err(() -> _extent_load("assembler_root_no_import.esm")) === nothing
+    end
+
+    # -----------------------------------------------------------------------
+    # §8.9.4 statically: an extent nobody declares is refused at `validate`
+    # -----------------------------------------------------------------------
+
+    @testset "an extent naming an undeclared metaparameter is refused at load" begin
+        # `extent` names `N_RECS`; neither the root nor the leaf declares it.
+        # This used to validate clean and fail only once the source was SAMPLED,
+        # at build — the same validate/build split §9.7.6's own binding sites
+        # had. It is decidable from the documents alone, so it is decided at
+        # load, with the code §9.7.6 already gives an unknown name at a binding
+        # site (no new diagnostic code).
+        err = _extent_err(() -> _extent_load("extent_undeclared_root.esm"))
+        @test err isa ExpressionTemplateError
+        @test err.code == ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME
+        @test occursin("N_RECS", err.message)
+        @test occursin("EGU_Emis", err.message)   # names the site, not just the name
+    end
+
+    @testset "a declared extent still loads with no loader bindings" begin
+        # The static check must not refuse the ordinary case: an `extent` whose
+        # metaparameter the mounted leaf declares loads standalone, at its
+        # default, with no loader-API bindings at all (§8.9.4: "declare the
+        # metaparameter with a `default` so the document still validates and
+        # loads standalone").
+        f = _extent_load("extent_root_toplevel.esm")
+        @test _extent_records(f).size == 0
+    end
+
+    @testset "a loader binding the leaf does not declare is not forwarded to it" begin
+        # The site-4 backfill is FILTERED to the names the LEAF declares, and
+        # widening the root's check must not loosen that.
+        #
+        # Here the assembler declares `N_REC` and the leaf it mounts declares
+        # nothing. Forwarding the whole loader-API map into the leaf's close
+        # would raise `template_import_unknown_name` against a leaf that never
+        # asked for the name — and, worse, would let an assembler's unrelated
+        # metaparameter silently resize a leaf axis the edge never bound
+        # (esm-spec §4.7).
+        # Stated as a differential so it holds regardless of what the leaf's
+        # own resolution does with an assembler-scoped axis (see the testset
+        # above): binding a name the LEAF does not declare must leave the leaf's
+        # outcome EXACTLY as it was with no loader bindings at all. Forwarding
+        # the unfiltered map instead makes the bound load raise
+        # `template_import_unknown_name` from inside the leaf, and the two
+        # outcomes part company.
+        @test _extent_outcome("assembler_root_with_import.esm";
+                              metaparameters=Dict("N_REC" => 5)) ==
+              _extent_outcome("assembler_root_with_import.esm")
+    end
+
+    @testset "the site-4 backfill at a `subsystems.<k>` edge, all four halves" begin
+        # The `subsystems.<k>` twin of `toplevel_mount_edge_pipeline_test.jl`'s
+        # "the loader API backfills a leaf and an edge binding outranks it".
+        # §4.7 "Two mount forms, one mechanism" means the backfill's PRECEDENCE
+        # has to match at both attachment points, not just its existence — the
+        # shared fixtures above pin existence, and this pins the rest.
+        #
+        # The fourth half is why this testset exists at all: the shared fixtures
+        # exercise a leaf that declares NOTHING, which the backfill short-circuits
+        # before it ever consults the leaf-declared filter. A leaf that declares
+        # SOME name and not the bound one is the case that reaches the filter, and
+        # without it "forward the whole loader-API map" is a silent no-op on every
+        # test in this file.
+        dir = mktempdir()
+        write(joinpath(dir, "leaf.esm"), """
+            {"esm":"1.1.0","metadata":{"name":"leaf"},
+             "metaparameters":{"NLEV":{"type":"integer","default":4}},
+             "index_sets":{"lev":{"kind":"interval","size":"NLEV"}},
+             "models":{"Column":{
+               "variables":{"u":{"type":"unknown","units":"1","shape":["lev"],"default":1.0}},
+               "equations":[{"lhs":{"op":"D","args":["u"],"wrt":"t"},
+                             "rhs":{"op":"*","args":[-1.0,"u"]}}]}}}""")
+        host_body(edge) = """
+            {"esm":"1.1.0","metadata":{"name":"host"},
+             "metaparameters":{"NLEV":{"type":"integer","default":12},
+                               "NROWS":{"type":"integer","default":2}},
+             "models":{"Host":{
+               "variables":{"q":{"type":"unknown","units":"1","default":1.0}},
+               "equations":[{"lhs":{"op":"D","args":["q"],"wrt":"t"},
+                             "rhs":{"op":"*","args":[-1.0,"q"]}}],
+               "subsystems":{"M":{"ref":"./leaf.esm"$edge}}}}}"""
+        write(joinpath(dir, "bare.esm"), host_body(""))
+        write(joinpath(dir, "bound.esm"), host_body(""","bindings":{"NLEV":7}"""))
+        lev(f) = f.index_sets["lev"].size
+
+        # (1) the loader API DOES reach a subsystem-mounted leaf, for the names
+        #     the leaf declares — the property a discovered `extent` rides on.
+        @test lev(EarthSciAST.load_path(joinpath(dir, "bare.esm");
+                                        metaparameters=Dict("NLEV" => 9))) == 9
+        # (2) an explicit edge `bindings` entry (site 3) outranks the backfill.
+        @test lev(EarthSciAST.load_path(joinpath(dir, "bound.esm");
+                                        metaparameters=Dict("NLEV" => 9))) == 7
+        # (3) the HOST's own declared default (12) is its site-5 close, not a
+        #     binding on what it mounts, and never reaches the leaf.
+        @test lev(EarthSciAST.load_path(joinpath(dir, "bare.esm"))) == 4
+        # (4) a loader-API name the LEAF does not declare is dropped, not
+        #     forwarded: the leaf never asked for `NROWS`, so it must neither be
+        #     bound by it nor raise `template_import_unknown_name` about it.
+        @test lev(EarthSciAST.load_path(joinpath(dir, "bare.esm");
+                                        metaparameters=Dict("NROWS" => 3))) == 4
+    end
+
+    @testset "the fixtures say what they are" begin
+        # The shared fixtures are read by four other bindings; a silent edit
+        # that removed the property under test would leave every suite green.
+        root = JSON3.read(read(joinpath(_EXTENT_SCOPE_DIR, "extent_root_toplevel.esm"), String))
+        @test !haskey(root, :metaparameters)      # the root must restate nothing
+        leaf = JSON3.read(read(joinpath(_EXTENT_SCOPE_DIR, "extent_axis_leaf.esm"), String))
+        @test leaf[:metaparameters][:N_REC][:default] == 0
+        @test leaf[:index_sets][:records][:size] == "N_REC"
+    end
+end
