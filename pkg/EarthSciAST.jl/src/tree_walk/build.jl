@@ -2962,12 +2962,14 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # `mat_levels` carries the `:inplace` shape
     # `(scalars, _KernelSection, scans, array_contractions)` that
     # `_fill_obs_levels!` consumes; `mat_levels_oop` carries the same fills as
-    # `(scalars, kernels, oop_plans, scans, array_contractions)` because the out-of-place runners
-    # take the kernel and its plan separately rather than a fused callable. Only
+    # `(scalars, kernels, oop_plans, scans, array_contractions)` because the
+    # out-of-place runners take the kernel and its plan separately rather than a
+    # fused callable. Only
     # the emitter actually being built is populated.
     mat_levels = Any[]
     mat_levels_oop = Any[]
     mat_scan_fold_count = 0
+    mat_array_contraction_count = 0
     if !isempty(mat_vars)
         for lvl in _materialized_obs_levels(mat_defs, mat_vars, raw_obs)
             lvl_scalars = Tuple{Int,_Node}[]
@@ -2992,6 +2994,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
             end
             merged, _ = _merge_acc_kernel_classes(lvl_kernels)
             mat_scan_fold_count += length(lvl_scans)
+            mat_array_contraction_count += length(lvl_acs)
             if form === :oop
                 push!(mat_levels_oop,
                       (lvl_scalars, merged,
@@ -3152,6 +3155,13 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
               # materialized observed is the same rewrite in the same position,
               # just over the observed's buffer block instead of the state.
               n_scan_folds = length(scan_folds) + mat_scan_fold_count,
+              # ess-array-contraction: array einsums compiled to ONE loop nest
+              # each (array_contraction.jl). Zero on every model whose reductions
+              # stay under the tier's floor; counted here for the same reason
+              # `n_scan_folds` is — it is a section of the emitted RHS, invisible
+              # to the kernel counts above.
+              n_array_contractions = length(array_contractions) +
+                                     mat_array_contraction_count,
               n_acc_kernels = length(acc_kernels),
               n_acc_cse_slots = sum(length(K.cse.recipes) for K in acc_kernels; init=0),
               n_acc_inv_slots = sum(length(K.cse.inv_recipes) for K in acc_kernels; init=0),
