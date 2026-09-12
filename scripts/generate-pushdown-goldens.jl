@@ -106,7 +106,7 @@ function canon(io::IO, x, level::Int)
 end
 
 # ---------------------------------------------------------------------------
-# Extent guard for a re-cut input fixture.
+# Extent guard for the isrm input fixture.
 #
 # The committed isrm.esm is the real document at REDUCED extents. Upstream it
 # declares 52,411 x 52,411 source-receptor cells over a 596,444-cell
@@ -114,9 +114,13 @@ end
 # (pkg/EarthSciAST.jl/test/cross_eq_class_emission_test.jl and
 # cg_foreign_scratch_test.jl) build EVERY fixture in this tree: at production
 # extents that build exhausts the allocator before it reaches any diagnostic,
-# which reads on CI as an ordinary "does not build standalone" skip. Re-cutting
-# the input from a checkout would restore those extents silently, so refuse
-# instead and make the reduction a deliberate step.
+# which reads on CI as an ordinary "does not build standalone" skip.
+#
+# Run on BOTH isrm paths. `ISRM_ESM_REFRESH=1` re-cutting the input from a
+# checkout is the obvious way production extents come back, but not the only
+# one: the committed fixture can be hand-edited, or arrive on a branch cut
+# before this guard existed. Refuse either way and make the reduction a
+# deliberate step. `origin` says which path refused.
 const MAX_FIXTURE_EXTENT = 1024
 
 function check_extents(doc, origin::AbstractString)
@@ -674,15 +678,21 @@ function main()
     # upstream isrm.esm keeps evolving, and the frozen fixture — not whatever the
     # sibling checkout currently holds — is the cross-binding contract. Set
     # ISRM_ESM_REFRESH=1 to re-cut the input from a checkout instead.
+    isrm_fixture = joinpath(OUTDIR, "fixtures", "isrm.esm")
     if get(ENV, "ISRM_ESM_REFRESH", "0") == "1"
         isrm_path = get(ENV, "ISRM_ESM",
                         normpath(joinpath(REPO, "..", "isrm.esm", "isrm.esm")))
         isfile(isrm_path) || error("isrm.esm not found at $isrm_path (set ISRM_ESM)")
         ser = EA.serialize_esm_file(EA.load_path(isrm_path))   # metaparameter defaults folded
-        check_extents(ser, isrm_path)
-        write_canon(joinpath(OUTDIR, "fixtures", "isrm.esm"), ser)
+        check_extents(ser, "ISRM_ESM_REFRESH=1 re-cut from $(isrm_path)")
+        write_canon(isrm_fixture, ser)
     end
-    ser = EA.serialize_esm_file(EA.load_path(joinpath(OUTDIR, "fixtures", "isrm.esm")))
+    ser = EA.serialize_esm_file(EA.load_path(isrm_fixture))
+    # Also on the DEFAULT path: the refresh branch is not the only way an
+    # oversized document reaches this tree — the committed fixture can be
+    # hand-edited, or arrive on a branch cut before the guard existed. The
+    # generator is the last thing to read it before the corpus sweeps do.
+    check_extents(ser, "committed fixture $(isrm_fixture)")
     isrm = EA.desugar_pushdown(ser)
     isrm === ser && error("isrm.esm: desugar_pushdown did not fire")
     EA.desugar_pushdown(isrm) === isrm || error("isrm golden re-desugars (idempotency broken)")

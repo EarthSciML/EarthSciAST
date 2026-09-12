@@ -99,8 +99,10 @@ is **deep-equal as parsed JSON** to the committed golden.
   `Float64` fill — 2.7e9 cells, 20.5 GiB — five times over, which exhausts
   the allocator. It is that broadcast and not the source-receptor contraction:
   the allocation failure is raised from `fill` inside
-  `_register_inline_array_parameters`. `generate-pushdown-goldens.jl`
-  refuses to write a re-cut input declaring more than 1024 members.
+  `_register_inline_array_parameters`. `generate-pushdown-goldens.jl` refuses
+  to run at all — on the committed input as well as on an `ISRM_ESM_REFRESH=1`
+  re-cut — once any index set here declares more than 1024 members, so neither
+  a re-cut nor a hand edit puts production extents back silently.
   FROZEN otherwise: see the re-emission note below.
 - `golden/<id>.rewritten.json` — `desugar_pushdown(input)` from the Julia
   reference implementation.
