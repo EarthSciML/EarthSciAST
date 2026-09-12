@@ -2860,9 +2860,8 @@ forcing_buffer_index(f::_OopRHS) = f.buffer_index
 # Fill ONE materialized-observed level out of place, mirroring
 # `_fill_obs_levels!` (build.jl) statement for statement — scalar entries, then
 # the level's access kernels, its prefix reductions and its whole-array
-# contractions — but threading the
-# extended vector functionally, because a tracing backend's `_oop_store` returns
-# a new value rather than mutating.
+# contractions — but threading the extended vector functionally, because a
+# tracing backend's `_oop_store` returns a new value rather than mutating.
 #
 # Output AND state are both `ue`: a fill reads the state and every STRICTLY
 # LOWER level, which are already valid in `ue`, exactly as the in-place wrapper
