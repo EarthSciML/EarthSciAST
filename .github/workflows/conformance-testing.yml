@@ -229,6 +229,13 @@ jobs:
       fail-fast: false
       matrix:
         julia-version: ['1.10', '1.11', '1.12']
+        # Two parallel halves of the suite. KEEP IN SYNC with ESM_TEST_SHARDS
+        # on the test step below: this list says which shards exist, that
+        # value says how many runtests.jl splits into, and a value larger than
+        # this list would leave a shard's tests with no job to run them.
+        # runtests.jl rejects a shard index outside 1:ESM_TEST_SHARDS outright,
+        # and shard_partition_test.jl asserts the split is exact.
+        shard: [1, 2]
     defaults:
       run:
         working-directory: pkg/EarthSciAST.jl
@@ -293,10 +300,20 @@ jobs:
             Pkg.precompile()
           '
 
+      # Half the suite per job. The ~45 min of test execution was the whole
+      # workflow's long pole; two shards take it to ~24 min and ~21 min on the
+      # measured 1.12 timings (ideal split would be 22.6 min). Both shards
+      # share one depot cache — the key above has no shard component, and the
+      # test environment they precompile is the same either way.
       - name: Run Julia tests (with coverage)
+        env:
+          ESM_TEST_SHARDS: 2
+          ESM_TEST_SHARD: ${{ matrix.shard }}
         run: |
           julia --project=. -e 'using Pkg; Pkg.test(coverage=true)'
 
+      # Both shards produce a partial lcov; Codecov merges the uploads, so both
+      # are sent and the flag stays `julia`.
       - name: Process Julia coverage
         uses: julia-actions/julia-processcoverage@v1
         if: matrix.julia-version == '1.12'
@@ -315,7 +332,7 @@ jobs:
       # `cache-hit` guard makes this a no-op on the runs that already had an
       # exact-key hit, which is most of them.
       - name: Save Julia depot
-        if: ${{ always() && github.ref == 'refs/heads/main' && steps.julia-depot.outputs.cache-hit != 'true' }}
+        if: ${{ always() && github.ref == 'refs/heads/main' && matrix.shard == 1 && steps.julia-depot.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v4
         with:
           path: |
