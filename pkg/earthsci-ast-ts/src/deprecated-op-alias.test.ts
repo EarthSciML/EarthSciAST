@@ -10,10 +10,11 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import { loadPath } from './parse.js'
+import { loadPath, loadString } from './parse.js'
 import { toJson } from './serialize.js'
 import { resolveSubsystemRefsSync } from './ref-loading.js'
 import { fixturesDir } from './test-helpers.js'
+import { validate } from './validate.js'
 
 const conf = (name: string) => fixturesDir('conformance', 'deprecated_op_alias', name)
 
@@ -121,5 +122,24 @@ describe('deprecated op alias: aggregate → faq', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const f = loadPath(atVersion('aliased.esm', '1.0.0')) as any
     expect(f.esm).toBe('1.1.0')
+  })
+
+  it('does not gate a 1.0.0 parent that MOUNTS a `faq`-using child', () => {
+    // The gate reads the AUTHORED form. This parent declares 1.0.0 and spells
+    // no `faq` of its own; resolution inlines a 1.1.0 child that does. Four
+    // bindings accepted this and only TypeScript rejected it, because
+    // `validate()` re-enters the loader with the already-RESOLVED document and
+    // the wire-boundary gate fired a second time on a node nobody authored.
+    // Resolution now stamps the 1.1.0 floor, as `toJson` does on the way out.
+    const p = fixturesDir('valid', 'mount_rename_two_columns.esm')
+    const doc = loadString(fs.readFileSync(p, 'utf-8'), { basePath: path.dirname(p) }) as any
+    expect(doc.esm).toBe('1.0.0')
+
+    resolveSubsystemRefsSync(doc, path.dirname(p))
+    expect(doc.esm).toBe('1.1.0')
+
+    const result = validate(doc)
+    expect(result.structural_errors).toEqual([])
+    expect(result.is_valid).toBe(true)
   })
 })

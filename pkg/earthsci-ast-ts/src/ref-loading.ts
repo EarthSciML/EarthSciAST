@@ -48,7 +48,7 @@ import {
 import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
 import { loadString, validateSchema, ROOT_PATH } from './parse.js'
 import { toJson } from './serialize.js'
-import { prepareDocumentOps } from './parse.js'
+import { prepareDocumentOps, raiseFaqVersionFloor } from './parse.js'
 
 /**
  * Error thrown when a circular reference is detected during subsystem resolution.
@@ -197,6 +197,13 @@ export function resolveSubsystemRefsSync(
       resolveReactionSystemRefs(rs, basePath, resolving, [name], read, `/reaction_systems/${name}`)
     }
   }
+
+  // A mounted child may have brought `faq` into a parent that never spells it.
+  // The parent's authored bytes are legal at 1.0.0, but the RESOLVED document
+  // carries the node, and `validate()` re-enters the loader with exactly this
+  // object — so without the floor the §2.2.4 gate fires on a document nobody
+  // mis-authored. Same stamp `toJson` applies on the way out.
+  raiseFaqVersionFloor(file)
 }
 
 /**

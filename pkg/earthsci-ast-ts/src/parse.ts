@@ -735,6 +735,31 @@ function declaredBelowV11(doc: unknown): boolean {
 }
 
 /**
+ * Raise a document's declared `esm` to the 1.1.0 `faq` floor when it CONTAINS a
+ * `faq` node but declares less. FLOOR only — a document at or above 1.1.0 keeps
+ * its own version.
+ *
+ * A document can come to CONTAIN `faq` without ever spelling it: a 1.0.0 parent
+ * that mounts a subsystem whose child uses `faq` has the child inlined at
+ * resolution. The parent's AUTHORED bytes stay legal — the gate in
+ * {@link prepareDocumentOps} reads the authored form and must not reject them —
+ * but the RESOLVED document really does carry the node, so anything that
+ * re-enters the loader with it trips a gate nobody mis-authored. `validate()`
+ * does exactly that: it calls `loadDocument` on whatever it is handed, which is
+ * routinely a document the caller already resolved. Stamping the floor at
+ * resolution keeps the resolved form self-consistent; it is the same stamp
+ * `toJson` applies on the way out (see `serialize.ts`), one step earlier.
+ *
+ * See docs/content/rfcs/faq-node-rename.md §5.5.
+ */
+export function raiseFaqVersionFloor(doc: unknown): void {
+  if (doc === null || typeof doc !== 'object') return
+  if (!declaredBelowV11(doc)) return
+  if (findOp(doc, 'faq') === null) return
+  ;(doc as Record<string, unknown>).esm = '1.1.0'
+}
+
+/**
  * The wire boundary for expression-node `op` spellings, applied to EVERY
  * document — root, `{ref}`-loaded child, template library, coupling library.
  *
