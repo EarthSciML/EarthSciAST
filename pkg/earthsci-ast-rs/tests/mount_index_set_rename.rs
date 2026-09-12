@@ -207,3 +207,43 @@ fn index_set_rename_applies_at_a_toplevel_model_ref_mount() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The shared top-level-form fixtures, driven by all five bindings.
+///
+/// esm-spec §4.7 "Two mount forms, one mechanism": this pair is the
+/// `mount_rename_two_columns` assembly written at the top-level `models.<k>`
+/// attachment point. A binding that applies the field at one form and ignores it
+/// at the other passes the `subsystems.<k>` fixtures above and fails these.
+#[test]
+fn the_shared_toplevel_form_fixtures() {
+    let path = fixture("valid/mount_rename_two_columns_toplevel.esm");
+    let file = load_path(&path).unwrap_or_else(|e| panic!("{} does not load: {e}", path.display()));
+    let value = serde_json::to_value(&file).expect("document renders as JSON");
+    let sets = value.get("index_sets").expect("merged registry");
+    assert_eq!(sets["lev"]["size"], 59, "the un-renamed atmospheric mount");
+    assert_eq!(sets["soil_lev"]["size"], 4, "the renamed soil mount");
+
+    // Each component lands as a TOP-LEVEL system under its mount key, which is
+    // what makes a `Soil.Tsoil` coupling endpoint resolve with no rewriting.
+    let models = file.models.as_ref().expect("models");
+    assert_eq!(
+        models["Soil"].variables["Tsoil"].shape.as_deref(),
+        Some(&["soil_lev".to_string()][..]),
+    );
+    assert_eq!(
+        models["Atm"].variables["T"].shape.as_deref(),
+        Some(&["lev".to_string()][..]),
+    );
+
+    let bad = fixture("invalid/template_imports/mount_rename_unknown_index_set_toplevel.esm");
+    let err = load_path(&bad).expect_err("a misspelled rename key must not load");
+    let text = format!("{err}");
+    assert!(
+        text.contains("subsystem_index_set_rename_unknown_name") && text.contains("celsl"),
+        "the diagnostic names the code and the offending key: {text}"
+    );
+    assert!(
+        text.contains("top-level model ref"),
+        "the diagnostic names the mount form: {text}"
+    );
+}

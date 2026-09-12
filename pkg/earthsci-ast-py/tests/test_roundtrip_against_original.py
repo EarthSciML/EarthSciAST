@@ -113,6 +113,13 @@ TRANSFORMING_FIXTURES: dict[str, str] = {
         "`index_set_rename`, which is a load-time construct consumed at the "
         "edge (esm-spec 4.7 'Mount-edge index-set renaming', Round trip)"
     ),
+    "mount_rename_two_columns_toplevel.esm": (
+        "the same load-time transform as its `subsystems.<k>` twin above, at the "
+        "top-level `models.<k>` mount form: each referenced component is spliced "
+        "in under its mount key and the edge -- `ref` and `index_set_rename` "
+        "alike -- is consumed at load (esm-spec 4.7 'Two mount forms, one "
+        "mechanism', Round trip)"
+    ),
     "events_discrete_periodic.esm": _EMPTY_EVENT_ARRAY,
     "events_discrete_preset_times.esm": _EMPTY_EVENT_ARRAY,
     "full_coupled.esm": _EMPTY_EVENT_ARRAY,

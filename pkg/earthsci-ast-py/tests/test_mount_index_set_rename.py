@@ -210,3 +210,27 @@ def test_mount_rename_rewrites_a_join_on_axis_but_not_its_loop_symbol(tmp_path):
     assert '"atm_sourceType"' in emitted
     assert '"sourceType"' not in emitted.replace('"atm_sourceType"', "")
     assert '"src"' in emitted
+
+
+def test_the_rename_applies_at_a_top_level_model_ref_mount_too():
+    # esm-spec §4.7 "Where it applies": the field is normative at BOTH mount
+    # forms, "with the same meaning and the same pipeline", because "a binding
+    # MUST NOT make the two forms differ". This fixture is the assembly above
+    # written at the other attachment point, so the two must come out the same
+    # apart from where each component lands.
+    doc = load_path(_fixture("valid/mount_rename_two_columns_toplevel.esm"))
+    assert doc.index_sets["lev"]["size"] == 59, doc.index_sets
+    assert doc.index_sets["soil_lev"]["size"] == 4, doc.index_sets
+    # Each component lands as a TOP-LEVEL system under its mount key, which is
+    # what makes a `Soil.Tsoil` coupling endpoint resolve with no rewriting.
+    assert doc.models["Soil"].variables["Tsoil"].shape == ["soil_lev"]
+    assert doc.models["Atm"].variables["T"].shape == ["lev"]
+
+
+def test_an_unknown_rename_key_is_refused_at_a_top_level_model_ref_mount_too():
+    with pytest.raises(ExpressionTemplateError) as excinfo:
+        load_path(_fixture("invalid/template_imports/mount_rename_unknown_index_set_toplevel.esm"))
+    assert "subsystem_index_set_rename_unknown_name" in str(excinfo.value)
+    assert "celsl" in str(excinfo.value)
+    # The diagnostic says which mount form it is talking about.
+    assert "top-level model ref" in str(excinfo.value)

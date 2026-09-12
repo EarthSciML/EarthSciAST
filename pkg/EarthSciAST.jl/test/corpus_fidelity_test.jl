@@ -98,6 +98,8 @@ include("testutils.jl")
             "esm-spec §4.7 + §9.7: a `{ref}` subsystem is inlined and its index sets merged",
         "tests/valid/mount_rename_two_columns.esm" =>
             "esm-spec §4.7: two `{ref}` subsystems are inlined and their index sets merged, one through a mount-edge `index_set_rename` that is consumed at the edge",
+        "tests/valid/mount_rename_two_columns_toplevel.esm" =>
+            "esm-spec §4.7: the same inline-at-load transform at the top-level `models.<k>` mount form — each referenced component is spliced in under its mount key and the edge, `index_set_rename` included, is consumed there",
         "pkg/EarthSciAST.jl/test/fixtures/round_trip/open_op_attrs_match.esm" =>
             "esm-spec §9.6.3 + §9.6.4 rule 5: the `attrs.gamma` match rule fires at load and its match-only registry is dropped",
     )

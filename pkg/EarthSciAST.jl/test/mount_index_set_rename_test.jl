@@ -144,4 +144,31 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
         @test err.code == ERROR_CODES.SUBSYSTEM_INDEX_SET_RENAME_UNKNOWN_NAME
         @test occursin("celsl", err.message)
     end
+
+    @testset "the shared top-level-form fixtures" begin
+        # esm-spec §4.7 "Two mount forms, one mechanism": the pair below is the
+        # `mount_rename_two_columns` assembly written at the top-level
+        # `models.<k>` attachment point, and all five bindings drive it. A
+        # binding that applies the field at one form and ignores it at the other
+        # passes the `subsystems.<k>` fixtures above and fails these.
+        file = EarthSciAST.load_path(valid("mount_rename_two_columns_toplevel.esm"))
+        @test file.index_sets["lev"].size == 59
+        @test file.index_sets["soil_lev"].size == 4
+        # Each component lands as a TOP-LEVEL system under its mount key.
+        @test file.models["Soil"].variables["Tsoil"].shape == ["soil_lev"]
+        @test file.models["Atm"].variables["T"].shape == ["lev"]
+
+        bad = joinpath(repo_root, "tests", "invalid", "template_imports",
+                       "mount_rename_unknown_index_set_toplevel.esm")
+        err = try
+            EarthSciAST.load_path(bad)
+            nothing
+        catch e
+            e
+        end
+        @test err isa ExpressionTemplateError
+        @test err.code == ERROR_CODES.SUBSYSTEM_INDEX_SET_RENAME_UNKNOWN_NAME
+        @test occursin("celsl", err.message)
+        @test occursin("top-level model ref", err.message)
+    end
 end

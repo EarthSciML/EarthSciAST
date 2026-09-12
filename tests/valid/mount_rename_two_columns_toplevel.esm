@@ -1,0 +1,17 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "mount_rename_two_columns_toplevel",
+    "description": "The issue #198 item 4 reproducer at the TOP-LEVEL `models.<k>` mount form, the twin of tests/valid/mount_rename_two_columns.esm (which mounts the same two columns as `subsystems.<k>`). A 59-layer atmospheric column and a 4-layer soil column both spell their axis `lev`, because both come from the same one-dimensional column family at different lengths, and `index_sets` is a document-scoped registry — so without an edge rename the second mount is subsystem_index_set_conflict. The soil mount carries index_set_rename {lev: soil_lev}: after the referenced document resolves in its own scope, its axis, its variable `shape` and its faq `{from}` range are rewritten, and the merged registry holds BOTH lev (59) and soil_lev (4). esm-spec §4.7 'Two mount forms, one mechanism' makes the two files' outcomes identical apart from where each component lands: here each lands as a top-level system named by its mount key, so a coupling endpoint would be `Soil.Tsoil` rather than `Host.Soil.Tsoil`. Pinning both forms is what keeps a binding from implementing the rename at one attachment point only.",
+    "authors": ["EarthSciAST"],
+    "created": "2026-09-12T00:00:00Z",
+    "tags": ["subsystem", "index_sets", "mount", "rename", "issue-198"]
+  },
+  "models": {
+    "Atm": { "ref": "./mount_rename_atm_column.esm" },
+    "Soil": {
+      "ref": "./mount_rename_soil_column.esm",
+      "index_set_rename": { "lev": "soil_lev" }
+    }
+  }
+}

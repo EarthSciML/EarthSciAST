@@ -193,6 +193,16 @@ func LoadString(jsonStr string, opts ...LoadOption) (*ESMFile, error) {
 	}
 	jsonStr = expanded
 
+	// esm-spec §4.7 "Two mount forms, one mechanism": a top-level `models.<k>`
+	// that is a bare `{ref}` is a MOUNT EDGE, not a component. `ESMFile.Models`
+	// is a `map[string]Model`, so the decode below turns such an entry into an
+	// EMPTY Model and the edge — its `ref`, its `bindings`, its
+	// `index_set_rename` — is gone. Snapshot the edges here, off the text, so
+	// the ref resolver can run the §4.7 edge pipeline on them; it runs at the
+	// same pipeline point the `subsystems.<k>` form resolves at, which is what
+	// puts both forms on one side of the root's §9.7.6 metaparameter close.
+	topLevelModelRefs := extractTopLevelModelRefEdges(jsonStr)
+
 	// Parse JSON into our struct. ESMFile implements json.Unmarshaler, so a
 	// top-level decoder's UseNumber setting would NOT reach the nested
 	// Expression slots — the int/float wire distinction (discretization RFC
@@ -225,6 +235,7 @@ func LoadString(jsonStr string, opts ...LoadOption) (*ESMFile, error) {
 	esmFile.ExpressionTemplates = authoredTemplates
 	esmFile.Metaparameters = authoredMetaparams
 	esmFile.keyOrders = authoredOrders
+	esmFile.topLevelModelRefs = topLevelModelRefs
 	// Replay the authored `species` key order onto each reaction system itself.
 	// DeriveODEs and StoichiometricMatrix take a bare *ReactionSystem and so
 	// cannot reach esmFile.keyOrders, but species declaration order is
