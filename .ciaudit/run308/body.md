@@ -201,4 +201,17 @@ The inline "Fixture sweeps" block takes a shard slot explicitly via
 `shard_claim`; otherwise it would run in both shards and the partition would be
 false.
 
+One gap found and closed while integrating #300/#305. The partition assertions
+reason about the REGISTRY, so a test file reached by a plain `include` never
+enters it, runs in every shard, and every assertion still passes — the partition
+stays internally consistent while the suite quietly runs that file twice. #300
+added `include("test_file_prelude_test.jl")` while this branch was in flight and
+git merged it cleanly; nothing would have reported it. It is now a
+`shard_include` (218 units, split 109/109), and `shard_partition_test.jl` reads
+runtests.jl as text and fails if any `include("<name>_test.jl")` is not a
+`shard_include`. Verified discriminating: regressing one call makes it name that
+file. #305's golden-regeneration step, gated on 1.12 and commented "one matrix
+leg is enough", is also pinned to `shard == 1` — with the shard axis, one leg is
+two jobs.
+
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
