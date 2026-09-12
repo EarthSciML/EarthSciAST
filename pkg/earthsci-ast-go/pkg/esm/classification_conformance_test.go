@@ -361,9 +361,9 @@ func TestClassificationSpecWorkedExample(t *testing.T) {
 // state-free — which is what made Go reject two dozen aggregate fixtures.
 func TestODEStatesSeeThroughWrappedDerivatives(t *testing.T) {
 	cases := map[string]Expression{
-		"bare":      ExprNode{Op: OpDerivative, Args: []any{"u"}, Wrt: strPtr("t")},
-		"indexed":   ExprNode{Op: OpDerivative, Args: []any{ExprNode{Op: "index", Args: []any{"u", "i"}}}, Wrt: strPtr("t")},
-		"faq": ExprNode{Op: "faq", OutputIdx: []any{"i"}, Args: []any{"u"}, Expr: ExprNode{Op: OpDerivative, Args: []any{ExprNode{Op: "index", Args: []any{"u", "i"}}}, Wrt: strPtr("t")}},
+		"bare":    ExprNode{Op: OpDerivative, Args: []any{"u"}, Wrt: strPtr("t")},
+		"indexed": ExprNode{Op: OpDerivative, Args: []any{ExprNode{Op: "index", Args: []any{"u", "i"}}}, Wrt: strPtr("t")},
+		"faq":     ExprNode{Op: "faq", OutputIdx: []any{"i"}, Args: []any{"u"}, Expr: ExprNode{Op: OpDerivative, Args: []any{ExprNode{Op: "index", Args: []any{"u", "i"}}}, Wrt: strPtr("t")}},
 	}
 	for label, lhs := range cases {
 		t.Run(label, func(t *testing.T) {

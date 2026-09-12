@@ -726,7 +726,6 @@ func authoredDeclarationBlocks(jsonStr string) (templates, metaparams json.RawMe
 	return top["expression_templates"], top["metaparameters"]
 }
 
-
 // scanOpAliases rewrites `"op": "aggregate"` to `"op": "faq"` directly in the
 // JSON TEXT, and reports whether a `"op": "arrayop"` is present.
 //
@@ -853,8 +852,8 @@ func prepareDocumentOps(jsonStr string) (string, error) {
 	rewritten, aliases, hasRemoved, hasFaq := scanOpAliases(jsonStr)
 	if hasRemoved {
 		return "", fmt.Errorf(
-			"removed_op: `\"op\": \"arrayop\"` was removed at esm 0.8.0 and is not a "+
-				"deprecated alias; use `\"op\": \"faq\"` (the Functional Aggregate Query "+
+			"removed_op: `\"op\": \"arrayop\"` was removed at esm 0.8.0 and is not a " +
+				"deprecated alias; use `\"op\": \"faq\"` (the Functional Aggregate Query " +
 				"node). See docs/content/rfcs/faq-node-rename.md")
 	}
 	declared, below := declaredEsmBelowV11(jsonStr)

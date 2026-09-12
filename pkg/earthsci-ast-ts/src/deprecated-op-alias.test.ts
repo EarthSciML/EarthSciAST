@@ -62,9 +62,9 @@ describe('deprecated op alias: aggregate → faq', () => {
   it('does not warn on the canonical document', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     loadPath(conf('canonical.esm'))
-    expect(warn.mock.calls.filter((c) => String(c[0]).includes('deprecated_op_alias'))).toHaveLength(
-      0
-    )
+    expect(
+      warn.mock.calls.filter((c) => String(c[0]).includes('deprecated_op_alias')),
+    ).toHaveLength(0)
   })
 
   it('rejects `arrayop` by name rather than leaving it to the open tier', () => {

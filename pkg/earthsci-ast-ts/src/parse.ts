@@ -690,7 +690,6 @@ function rejectRemovedV02Blocks(view: unknown): void {
   }
 }
 
-
 /** Depth-first rewrite of `"op": "aggregate"` to `"op": "faq"`; returns the count. */
 function rewriteOpAliases(node: unknown): number {
   let n = 0
@@ -760,7 +759,7 @@ export function prepareDocumentOps(doc: unknown, opts?: { warn?: boolean }): num
     throw new ParseError(
       `removed_op at ${removedAt}: \`"op": "arrayop"\` was removed at esm 0.8.0 and is not a ` +
         `deprecated alias; use \`"op": "faq"\` (the Functional Aggregate Query node). ` +
-        `See docs/content/rfcs/faq-node-rename.md.`
+        `See docs/content/rfcs/faq-node-rename.md.`,
     )
   }
   const faqAt = findOp(doc, 'faq')
@@ -769,7 +768,7 @@ export function prepareDocumentOps(doc: unknown, opts?: { warn?: boolean }): num
     throw new ParseError(
       `faq_version_too_old at ${faqAt}: the \`faq\` op arrives at esm 1.1.0; file declares ` +
         `${String(declared)}. Use \`"op": "aggregate"\` (the deprecated pre-1.1.0 spelling) ` +
-        `or raise the declared version. See docs/content/rfcs/faq-node-rename.md.`
+        `or raise the declared version. See docs/content/rfcs/faq-node-rename.md.`,
     )
   }
   const n = rewriteOpAliases(doc)
@@ -781,7 +780,7 @@ export function prepareDocumentOps(doc: unknown, opts?: { warn?: boolean }): num
           `\`"op": "faq"\` (Functional Aggregate Query); ${n} ` +
           `${n === 1 ? 'node was' : 'nodes were'} normalized on load. The alias is ` +
           `REMOVED at esm 2.0.0 — re-emit this document to migrate it ` +
-          `(docs/content/rfcs/faq-node-rename.md).`
+          `(docs/content/rfcs/faq-node-rename.md).`,
       )
     }
   }

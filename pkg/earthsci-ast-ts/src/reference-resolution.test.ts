@@ -71,9 +71,7 @@ describe('buildReferenceGraph', () => {
     expect(() =>
       buildReferenceGraph(
         model({
-          equations: [
-            { lhs: { op: 'faq', args: [], ranges: { i: { from: 'ghosts' } } }, rhs: 0 },
-          ],
+          equations: [{ lhs: { op: 'faq', args: [], ranges: { i: { from: 'ghosts' } } }, rhs: 0 }],
         }),
         'M',
         { cells: {} },
