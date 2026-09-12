@@ -39,7 +39,7 @@ from earthsci_ast.problem import esm_problem, solve
 # The issue's minimal reproducer, verbatim in substance: no parameters at all,
 # so it cannot be confused with the shaped-PARAMETER defect of #219 / #229.
 BARE = {
-    "esm": "1.1.0",
+    "esm": "1.0.0",
     "metadata": {"name": "BareShapedNoParams", "authors": ["repro"]},
     "index_sets": {"lev": {"kind": "interval", "size": 4}},
     "models": {
@@ -124,7 +124,7 @@ AGGREGATE = {
 # pathway detects a value it cannot bind and says so explicitly, so the routing
 # gap shows up in the error text rather than in a missing cell.
 BARE_INLINE_ARRAY_PARAM = {
-    "esm": "1.1.0",
+    "esm": "1.0.0",
     "metadata": {"name": "BareShapedInlineArrayParam", "authors": ["repro"]},
     "index_sets": {"lev": {"kind": "interval", "size": 4}},
     "models": {
@@ -149,7 +149,7 @@ BARE_INLINE_ARRAY_PARAM = {
 # one — ``_build_numpy_rhs`` resolves declared shapes for observeds through the
 # SAME resolver the routing arm reads, so routing and layout agree.
 OBSERVED_ONLY_SHAPE = {
-    "esm": "1.1.0",
+    "esm": "1.0.0",
     "metadata": {"name": "ObservedOnlyShape", "authors": ["repro"]},
     "index_sets": {"lev": {"kind": "interval", "size": 4}},
     "models": {
@@ -171,7 +171,7 @@ OBSERVED_ONLY_SHAPE = {
 # scalar pathway already runs, so routing on it would change the engine without
 # changing the answer — the arm must leave this document alone.
 UNRESOLVABLE_SHAPE = {
-    "esm": "1.1.0",
+    "esm": "1.0.0",
     "metadata": {"name": "UnresolvableShape", "authors": ["repro"]},
     "models": {
         "Column": {
@@ -185,7 +185,7 @@ UNRESOLVABLE_SHAPE = {
 
 # No shape anywhere: still the lambdified SymPy pathway.
 PLAIN_SCALAR = {
-    "esm": "1.1.0",
+    "esm": "1.0.0",
     "metadata": {"name": "PlainScalar", "authors": ["repro"]},
     "models": {
         "Box": {

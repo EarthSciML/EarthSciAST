@@ -5,8 +5,8 @@
 //! reference the vectorized overlay is verified against.
 
 use super::*;
-use crate::faq::effective_reduce_kind;
 use crate::compile_error::CompileError;
+use crate::faq::effective_reduce_kind;
 use crate::types::{ExpressionNode, JoinClause};
 
 /// Stack-inlined per-axis `(lo, hi)` range list, the same rank≤4 argument

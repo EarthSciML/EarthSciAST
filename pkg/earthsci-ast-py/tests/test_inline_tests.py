@@ -389,9 +389,7 @@ def test_bind_dimension_names_wraps_only_a_free_mention():
     assert wrapped.output_idx == ["x"]
     assert wrapped.ranges == {"x": {"from": "x"}}
     assert wrapped.expr is free
-    bound = ExprNode(
-        op="faq", args=[], output_idx=["x"], ranges={"x": {"from": "x"}}, expr=free
-    )
+    bound = ExprNode(op="faq", args=[], output_idx=["x"], ranges={"x": {"from": "x"}}, expr=free)
     assert bind_dimension_names(bound, ["x"]) is bound
     integ = ExprNode(
         op="integral", args=[ExprNode(op="*", args=[2, "x"])], var="x", lower=0, upper=1
@@ -422,9 +420,7 @@ def test_bind_dimension_names_rejects_a_dimension_that_shadows_a_parameter():
     lit = ExprNode(op="*", args=[2.0, "k"])
     assert bind_dimension_names(lit, ["x"], {"x": 3.0}) is lit
     # A gather that rebinds `x` itself keeps working.
-    bound = ExprNode(
-        op="faq", args=[], output_idx=["x"], ranges={"x": {"from": "x"}}, expr=free
-    )
+    bound = ExprNode(op="faq", args=[], output_idx=["x"], ranges={"x": {"from": "x"}}, expr=free)
     assert bind_dimension_names(bound, ["x"], {"x": 3.0}) is bound
     # And with no scope supplied the wrap is unchanged.
     assert bind_dimension_names(free, ["x"]).op == "faq"

@@ -51,7 +51,7 @@ function _join_doc(N::Int, M::Int; body = 1.0, on = [["src_type", "emf_type"]],
         "src_rows" => Dict("kind" => "interval", "size" => N),
         "emf_rows" => Dict("kind" => "interval", "size" => M))
     merge!(sets, extra_sets)
-    Dict("esm" => "1.0.0",
+    Dict("esm" => "1.1.0",
          "metadata" => Dict("name" => "join_on_gate"),
          "index_sets" => sets,
          "models" => Dict("Rollup" => Dict(
@@ -359,7 +359,7 @@ end
 # that isolates -004 from -001: before the driver landed it resolved, filtered
 # the full product, and visited 0 gate-driven leaves.
 @testset "an index-set member key column drives too (BEHAV-10-B-004)" begin
-    doc = Dict("esm" => "1.0.0",
+    doc = Dict("esm" => "1.1.0",
         "metadata" => Dict("name" => "join_on_member_columns"),
         "index_sets" => Dict(
             "src_cat" => Dict("kind" => "categorical",

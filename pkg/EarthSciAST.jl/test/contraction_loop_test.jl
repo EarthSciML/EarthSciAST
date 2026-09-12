@@ -27,7 +27,7 @@ const _CL_ESS = EarthSciAST
 # Constant-RHS ODE from zero ICs, so du(u0) IS the derivative at t=0.
 # Σ_{k=0..M} k = M(M+1)/2, so du[s] = x0 · M(M+1)/2.
 _cl_doc(M::Int) = Dict{String,Any}(
-    "esm" => "0.8.0",
+    "esm" => "1.1.0",
     "metadata" => Dict("name" => "contraction_loop_repro"),
     "models" => Dict("Repro" => Dict{String,Any}(
         "variables" => Dict("x" => Dict("type" => "unknown"),
@@ -48,7 +48,7 @@ _cl_doc(M::Int) = Dict{String,Any}(
 # array. The loop var reaches a const-array subscript → runtime `_NK_CONST_GATHER`
 # with an `_NK_LOOPVAR` subscript; still one compiled body.
 _cl_doc_weighted(W::Vector{Float64}) = Dict{String,Any}(
-    "esm" => "0.8.0",
+    "esm" => "1.1.0",
     "metadata" => Dict("name" => "contraction_loop_weighted"),
     "models" => Dict("Repro" => Dict{String,Any}(
         "variables" => Dict("x" => Dict("type" => "unknown"),
@@ -161,7 +161,7 @@ function _cl_doc2d_weighted(M::Int)
         "expr"=>Dict("op"=>"*","args"=>Any[
             Dict("op"=>"index","args"=>Any[Dict("op"=>"const","args"=>Any[],"value"=>W),"i","j","k","l"]),
             Dict("op"=>"index","args"=>Any[Dict("op"=>"const","args"=>Any[],"value"=>F),"k","l"])]))
-    Dict{String,Any}("esm"=>"0.8.0","metadata"=>Dict("name"=>"cl_einsum2d_w"),
+    Dict{String,Any}("esm"=>"1.1.0","metadata"=>Dict("name"=>"cl_einsum2d_w"),
       "models"=>Dict("R"=>Dict{String,Any}(
         "variables"=>Dict("out"=>Dict("type"=>"unknown","shape"=>Any["i","j"])),
         "equations"=>Any[Dict(
@@ -184,7 +184,7 @@ function _cl_doc2d_arith(M::Int)
         "expr"=>Dict("op"=>"*","args"=>Any[
             Dict("op"=>"+","args"=>Any[Dict("op"=>"*","args"=>Any["k","l"]),1.0]),
             Dict("op"=>"index","args"=>Any["x","i","j"])]))
-    Dict{String,Any}("esm"=>"0.8.0","metadata"=>Dict("name"=>"cl_einsum2d_a"),
+    Dict{String,Any}("esm"=>"1.1.0","metadata"=>Dict("name"=>"cl_einsum2d_a"),
       "models"=>Dict("R"=>Dict{String,Any}(
         "variables"=>Dict("x"=>Dict("type"=>"unknown","shape"=>Any["i","j"]),
                           "out"=>Dict("type"=>"unknown","shape"=>Any["i","j"])),
@@ -270,7 +270,7 @@ end
             "expr"=>Dict("op"=>"*","args"=>Any[
                 Dict("op"=>"index","args"=>Any[Dict("op"=>"const","args"=>Any[],"value"=>W),"i","j","k","l"]),
                 Dict("op"=>"index","args"=>Any["src","k","l"])]))
-        doc = Dict{String,Any}("esm"=>"0.8.0","metadata"=>Dict("name"=>"cl_state_src"),
+        doc = Dict{String,Any}("esm"=>"1.1.0","metadata"=>Dict("name"=>"cl_state_src"),
           "models"=>Dict("R"=>Dict{String,Any}(
             "variables"=>Dict("src"=>Dict("type"=>"unknown","shape"=>Any["k","l"]),
                               "out"=>Dict("type"=>"unknown","shape"=>Any["i","j"])),
@@ -315,7 +315,7 @@ function _cl_halo(M::Int; ghost::Bool=false)
         "expr"=>Dict("op"=>"*","args"=>Any[
             Dict("op"=>"index","args"=>Any[Dict("op"=>"const","args"=>Any[],"value"=>W),"i","j","k","l"]),
             Dict("op"=>"index","args"=>Any["q", donor("i","k"), donor("j","l")])]))
-    doc = Dict{String,Any}("esm"=>"0.8.0","metadata"=>Dict("name"=>"cl_halo"),
+    doc = Dict{String,Any}("esm"=>"1.1.0","metadata"=>Dict("name"=>"cl_halo"),
       "models"=>Dict("R"=>Dict{String,Any}(
         "variables"=>Dict("q"=>Dict("type"=>"unknown","shape"=>Any["a","b"]),
                           "out"=>Dict("type"=>"unknown","shape"=>Any["i","j"])),

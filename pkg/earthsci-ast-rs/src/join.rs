@@ -77,8 +77,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde_json::Value;
 
-use crate::faq::is_faq_op;
 use crate::compile_error::CompileError;
+use crate::faq::is_faq_op;
 use crate::types::{Expr, ExpressionNode, IndexSet, JoinClause, Model, RangeSpec, RegionBound};
 
 /// One component of a join / group-by key. Exact-equality types only (§5.3):

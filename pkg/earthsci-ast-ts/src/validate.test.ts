@@ -12,7 +12,7 @@ import { readFixture, REPO_ROOT } from './test-helpers.js'
 describe('Structural validation', () => {
   it('should detect equation count mismatch', () => {
     const data = {
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'test' },
       models: {
         TestModel: {
@@ -50,7 +50,7 @@ describe('Structural validation', () => {
 
   it('should detect undefined variable in equation', () => {
     const data = {
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'test' },
       models: {
         TestModel: {
@@ -72,7 +72,7 @@ describe('Structural validation', () => {
 
   it('should detect undefined system in coupling', () => {
     const data = {
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'test' },
       models: {
         TestModel: {
@@ -100,7 +100,7 @@ describe('Structural validation', () => {
 
   it('should detect null reaction', () => {
     const data = {
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'test' },
       reaction_systems: {
         TestSystem: {
@@ -132,7 +132,7 @@ describe('Structural validation', () => {
 
   it('should detect undefined species in reaction', () => {
     const data = {
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'test' },
       reaction_systems: {
         TestSystem: {
@@ -164,7 +164,7 @@ describe('Structural validation', () => {
 
   it('should pass validation for valid data', () => {
     const data = {
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'test' },
       models: {
         TestModel: {
@@ -187,7 +187,7 @@ describe('Structural validation', () => {
 
   it('should include unit_warnings field in ValidationResult', () => {
     const data = {
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'test' },
       models: {
         TestModel: {
@@ -213,7 +213,7 @@ describe('Structural validation', () => {
     // 2nd-order A + B -> C with a 1st-order rate constant (1/s) —
     // the reference fixture for the cross-binding dimensional check.
     const data = {
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'BadReactions' },
       reaction_systems: {
         BadReactions: {
@@ -262,7 +262,7 @@ describe('Structural validation', () => {
     // the integrator multiplies by substrate concentrations at evaluation
     // time. So a 2nd-order constant must carry L/mol/s ≡ L/(mol*s) dims.
     const data = {
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'GoodReactions' },
       reaction_systems: {
         GoodReactions: {
@@ -301,7 +301,7 @@ describe('Structural validation', () => {
     // mole-fraction species is well-formed because the rate expression
     // typically carries a number-density factor.
     const data = {
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'DimlessReactions' },
       reaction_systems: {
         DimlessReactions: {
@@ -356,7 +356,7 @@ describe('Structural validation', () => {
 })
 describe('variable_map expression transforms (schema widening)', () => {
   const exprTransformFile = () => ({
-    esm: '1.1.0',
+    esm: '1.0.0',
     metadata: { name: 'vm_expr_transform' },
     models: {
       Src: {
@@ -426,7 +426,7 @@ describe('scoped-reference split keeps the full variable path (splitScopedRef)',
   // longer exists. The split semantics survive unchanged, and are pinned here
   // where deep references actually live: a chain of model subsystems.
   const deepRefFile = (from: string) => ({
-    esm: '1.1.0',
+    esm: '1.0.0',
     metadata: { name: 'split_scoped_ref' },
     models: {
       M: {
@@ -477,7 +477,7 @@ describe('scoped-reference split keeps the full variable path (splitScopedRef)',
     // not a component and heads no scope. A model consumes it through a
     // parameter `update`, never through a coupling entry.
     const result = validate({
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'source_is_not_an_endpoint' },
       models: {
         M: {
@@ -507,7 +507,7 @@ describe('scoped-reference split keeps the full variable path (splitScopedRef)',
     // `update.source`, and that string is schema-valid whatever it says — so
     // the existence check is structural.
     const file = (source: string) => ({
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'source_ref' },
       models: {
         M: {
@@ -554,7 +554,7 @@ describe('validate(str) JSON parsing (shared losslessJsonParse routing)', () => 
   // empty-string document-root path, `details.error` shape, and `Invalid JSON: `
   // message prefix.
   it('reports malformed JSON in the json_parse_error envelope', () => {
-    const result = validateText('{ "esm": "1.1.0", ')
+    const result = validateText('{ "esm": "1.0.0", ')
 
     expect(result.is_valid).toBe(false)
     expect(result.structural_errors).toEqual([])
@@ -569,7 +569,7 @@ describe('validate(str) JSON parsing (shared losslessJsonParse routing)', () => 
   })
 
   it('rejects trailing content after the JSON document', () => {
-    const result = validateText('{"esm":"1.1.0","metadata":{"name":"x"}} trailing')
+    const result = validateText('{"esm":"1.0.0","metadata":{"name":"x"}} trailing')
 
     expect(result.is_valid).toBe(false)
     expect(result.schema_errors).toHaveLength(1)
@@ -578,7 +578,7 @@ describe('validate(str) JSON parsing (shared losslessJsonParse routing)', () => 
 
   it('parses a valid string identically to the equivalent object', () => {
     const obj = {
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'parse_parity' },
       models: {
         M: {
@@ -614,7 +614,7 @@ describe('spec-sanctioned constructs the checker used to reject', () => {
     // carries no grid). Fixtures: cadence/pure_pointwise.esm (t),
     // initial_conditions/expression_ignition_front_1d.esm (x).
     const result = validate({
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'implicit-coords' },
       models: {
         M: {
@@ -635,7 +635,7 @@ describe('spec-sanctioned constructs the checker used to reject', () => {
 
   it('(a) honours a domain that renames the independent variable', () => {
     const result = validate({
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'renamed-time' },
       domain: { independent_variable: 'time' },
       models: {
@@ -654,7 +654,7 @@ describe('spec-sanctioned constructs the checker used to reject', () => {
     // Spec §6.4: "_var" is substituted with each matching state variable when
     // coupled via operator_compose. Fixture: full_coupled.esm.
     const file = {
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'op-style' },
       models: {
         Transport: {
@@ -689,7 +689,7 @@ describe('spec-sanctioned constructs the checker used to reject', () => {
     // `Meteorology.Temperature.surface_temp` (3 levels) and whose `couple`
     // entry names the SUBSYSTEM `Meteorology.Temperature`.
     const result = validate({
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'deep-scope' },
       models: {
         Chem: { variables: { T: { type: 'parameter', units: 'K', default: 300 } }, equations: [] },
@@ -718,7 +718,7 @@ describe('spec-sanctioned constructs the checker used to reject', () => {
 
     // A deep path that does NOT exist is still unresolved.
     const bad = validate({
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'deep-scope-bad' },
       models: {
         Chem: { variables: { T: { type: 'parameter', units: 'K', default: 300 } }, equations: [] },
@@ -740,7 +740,7 @@ describe('spec-sanctioned constructs the checker used to reject', () => {
     // Fixture: events_cross_system.esm — an Arrhenius rate reading another
     // system's temperature.
     const result = validate({
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'cross-system-rate' },
       models: {
         // `T` is an unknown, so it needs its own equation: from 1.0.0 the
@@ -771,7 +771,7 @@ describe('spec-sanctioned constructs the checker used to reject', () => {
 
     // An unresolvable scoped rate reference is still reported.
     const bad = validate({
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'cross-system-rate-bad' },
       reaction_systems: {
         Chem: {
@@ -796,7 +796,7 @@ describe('spec-sanctioned constructs the checker used to reject', () => {
     // equations, the second of which has a PRODUCT LHS (`H*H*SO4 = Ksp`) that
     // credits no variable under the ODE rule.
     const balanced = validate({
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'equilibrium' },
       models: {
         Eq: {
@@ -819,7 +819,7 @@ describe('spec-sanctioned constructs the checker used to reject', () => {
 
     // An UNDER-determined algebraic system is still a mismatch: 2 unknowns, 1 eq.
     const underdetermined = validate({
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'equilibrium-bad' },
       models: {
         Eq: {
@@ -921,7 +921,7 @@ describe('spec-sanctioned constructs the checker used to reject', () => {
 
   it('(f) emits the canonical subsystem-ref code', () => {
     const result = validate({
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'unresolved-ref' },
       models: {
         Atmosphere: {
@@ -943,7 +943,7 @@ describe('spec-sanctioned constructs the checker used to reject', () => {
 
   it('promotes an unparseable unit to unit_parse_error at the variable', () => {
     const result = validate({
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'bad-unit' },
       models: {
         TestModel: {
@@ -974,7 +974,7 @@ describe('reserved declaration names (§4.9.1.1)', () => {
 
   it('rejects an observed unknown named after the independent variable', () => {
     const result = validate({
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'observed-named-t' },
       models: {
         FuelMoisture: {
@@ -1002,7 +1002,7 @@ describe('reserved declaration names (§4.9.1.1)', () => {
 
   it('rejects a parameter named after the §6.4 operator placeholder', () => {
     const result = validate({
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'param-named-var' },
       models: {
         M: {
@@ -1022,7 +1022,7 @@ describe('reserved declaration names (§4.9.1.1)', () => {
 
   it('covers a reaction system’s species and parameters', () => {
     const result = validate({
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'reaction-named-t' },
       reaction_systems: {
         R: {
@@ -1047,7 +1047,7 @@ describe('reserved declaration names (§4.9.1.1)', () => {
 
   it('follows domain.independent_variable rather than the literal "t"', () => {
     const doc = (declared: string) => ({
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'renamed' },
       domain: { independent_variable: 's' },
       models: {
@@ -1074,7 +1074,7 @@ describe('reserved declaration names (§4.9.1.1)', () => {
     // #200 was reported in — a scan of only the top-level `models` map accepted
     // the offending document.
     const result = validate({
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'subsystem-named-t' },
       models: {
         Parent: {
@@ -1110,7 +1110,7 @@ describe('reserved declaration names (§4.9.1.1)', () => {
     // `x` is a coordinate only in a coordinate position (§11.4);
     // tests/valid/units_dimensional_analysis.esm declares it as a position.
     const result = validate({
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'coordinate-named-variable' },
       models: {
         M: {
@@ -1136,7 +1136,7 @@ describe('reserved declaration names (§4.9.1.1)', () => {
 describe('(h) reference integrity covers every expression-bearing field', () => {
   /** Build a one-model file, applying `patch` to the model. */
   const fileWith = (patch: Record<string, unknown>) => ({
-    esm: '1.1.0',
+    esm: '1.0.0',
     metadata: { name: 'sidecars' },
     models: {
       M: {
@@ -1360,7 +1360,7 @@ describe('(h) reference integrity covers every expression-bearing field', () => 
     // each is stated by a bare-LHS equation rather than by a `variables.*
     // .expression` sidecar, so both components carry one equation per unknown.
     const ownSubsystemFile = (reference: string) => ({
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'own-subsystem' },
       models: {
         Diurnal: {
@@ -1416,7 +1416,7 @@ describe('observed unknowns: declared units are compared against the computed di
   // an `expression` sidecar. The comparison being guarded is unchanged: the
   // variable's declared `units` against the dimension its defining RHS computes.
   const model = (units: string, rhs: unknown) => ({
-    esm: '1.1.0',
+    esm: '1.0.0',
     metadata: { name: 'nonvacuous' },
     models: {
       M: {
@@ -1471,7 +1471,7 @@ describe('observed unknowns: declared units are compared against the computed di
 describe('(h) reference integrity covers the non-model expression sites', () => {
   it('checks a test assertion reference (site 8)', () => {
     const withTests = (reference: unknown) => ({
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'assertion-ref' },
       models: {
         TestModel: {
@@ -1511,7 +1511,7 @@ describe('(h) reference integrity covers the non-model expression sites', () => 
     // conversion. Same expression position, new home — and the check must
     // follow it there, or every conversion in the format goes unchecked again.
     const withConversion = (unit_conversion: unknown) => ({
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'unit-conv' },
       models: {
         TestModel: {
@@ -1556,7 +1556,7 @@ describe('(h) reference integrity covers the non-model expression sites', () => 
 
   it('checks the two coupling expression slots (sites 10 & 11)', () => {
     const base = {
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'coupling-expr' },
       models: {
         TestModel: {
@@ -1615,7 +1615,7 @@ describe('(k) complete declaration-site set', () => {
     // made from OUTSIDE the component. Missing it falsely rejected
     // `tests/coupling/callback_examples.esm`.
     const file = (couplingVarName: string) => ({
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'callback-decl' },
       models: {
         WeatherModel: {
@@ -1661,7 +1661,7 @@ describe('(k) complete declaration-site set', () => {
   it('emits `details.variable` — not `variable_name` — at the new (h) sites', () => {
     // CONFORMANCE_SPEC row (j): the corpus settled on `variable`.
     const result = validate({
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'details-key' },
       models: {
         M: {
@@ -1695,7 +1695,7 @@ describe('an unknown defined as the constant 0 is not "missing" its defining equ
   // kind (an equation whose RHS is `0` still defines its LHS), so the guard is
   // kept, retargeted at the check that replaced it.
   const withRhs = (rhs: unknown) => ({
-    esm: '1.1.0',
+    esm: '1.0.0',
     metadata: { name: 'falsy-zero' },
     models: {
       M: {
@@ -1813,7 +1813,7 @@ describe('validate({ basePath }) resolves relative refs and template imports', (
 
 describe('validate input type (API_SPEC.md §8 item 13)', () => {
   const doc = {
-    esm: '1.1.0',
+    esm: '1.0.0',
     metadata: { name: 'x', authors: [] },
     models: { M: { variables: {}, equations: [] } },
   }
@@ -1834,7 +1834,7 @@ describe('validate input type (API_SPEC.md §8 item 13)', () => {
   })
 
   it('validateText() reports malformed JSON as json_parse_error, not a throw', () => {
-    const result = validateText('{ "esm": "1.1.0", ')
+    const result = validateText('{ "esm": "1.0.0", ')
     expect(result.is_valid).toBe(false)
     expect(result.schema_errors[0].code).toBe('json_parse_error')
   })

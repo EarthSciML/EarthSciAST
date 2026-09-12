@@ -2689,14 +2689,14 @@ def prepare_document_ops(data: object) -> int:
         raise ParseError(
             f'removed_op at {path}: \'"op": "arrayop"\' was removed at esm 0.8.0 and is '
             'not a deprecated alias; use \'"op": "faq"\' (the Functional Aggregate Query '
-            'node). See docs/content/rfcs/faq-node-rename.md.'
+            "node). See docs/content/rfcs/faq-node-rename.md."
         )
     faq_at = _find_op(data, "faq")
     if faq_at is not None and _version_below_v11(data):
         declared = data.get("esm") if isinstance(data, dict) else None
         raise ParseError(
             f"faq_version_too_old at {faq_at}: the `faq` op arrives at esm 1.1.0; file "
-            f"declares {declared}. Use '\"op\": \"aggregate\"' (the deprecated pre-1.1.0 "
+            f'declares {declared}. Use \'"op": "aggregate"\' (the deprecated pre-1.1.0 '
             "spelling) or raise the declared version. "
             "See docs/content/rfcs/faq-node-rename.md."
         )
@@ -2705,8 +2705,8 @@ def prepare_document_ops(data: object) -> int:
         if isinstance(data, dict) and _version_below_v11(data):
             data["esm"] = "1.1.0"
         warnings.warn(
-            "deprecated_op_alias: '\"op\": \"aggregate\"' is the pre-1.1.0 spelling of "
-            f"'\"op\": \"faq\"' (Functional Aggregate Query); {n} "
+            'deprecated_op_alias: \'"op": "aggregate"\' is the pre-1.1.0 spelling of '
+            f'\'"op": "faq"\' (Functional Aggregate Query); {n} '
             f"{'node was' if n == 1 else 'nodes were'} normalized on load. The alias is "
             "REMOVED at esm 2.0.0 -- re-emit this document to migrate it "
             "(docs/content/rfcs/faq-node-rename.md).",

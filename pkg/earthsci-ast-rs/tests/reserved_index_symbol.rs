@@ -191,7 +191,7 @@ fn the_operator_placeholder_is_rejected_on_both_binding_fields() {
 #[test]
 fn an_integral_over_the_independent_variable_still_loads() {
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "1.0.0",
         "metadata": { "name": "TimeIntegral" },
         "models": {
             "M": {

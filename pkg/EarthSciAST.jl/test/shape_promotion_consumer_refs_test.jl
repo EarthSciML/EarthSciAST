@@ -55,9 +55,21 @@ function lifted_consumer_doc()
           Dict{String,Any}("lhs"=>lhs, "rhs"=>rhs)])))
 end
 
-# First aggregate RHS among the equations (the lifted species ODE).
+# The CONSUMER equation's RHS — the one that references the promoted variable.
+#
+# Selected by its LHS being structured (an indexed-`faq` LHS in the array cases,
+# `D(z)` in the contracted-reduction case) rather than a bare variable: shape
+# promotion also lifts the promoted observed `M.j` itself into an array
+# producer, so more than one equation now carries a `faq` RHS, and the promoted
+# observed is exactly the bare-variable-LHS definition.
+#
+# The two used to be separable by TAG — the lift emitted `arrayop` while the
+# consumer carried `aggregate` — but those were always the same node, and esm
+# 1.1.0 collapses them to `faq` (docs/content/rfcs/faq-node-rename.md). This
+# helper never meant "the only `faq`"; it meant "the consumer".
 consumer_rhs(sys) = only(eq for eq in sys.equations
-                         if eq.rhs isa E.OpExpr && eq.rhs.op == "faq").rhs
+                         if eq.rhs isa E.OpExpr && eq.rhs.op == "faq" &&
+                            !(eq.lhs isa E.VarExpr)).rhs
 
 @testset "consumer refs to promoted vars are gathered in-loop" begin
     flat = lifted_consumer_doc() |> roundtrip

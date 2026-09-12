@@ -390,8 +390,7 @@ def _iter_faq_points(lhs: ExprNode, ctx: EvalContext) -> tuple[list[str], list[l
         resolved = _resolve_range_spec(lhs.ranges[s], ctx)
         if isinstance(resolved, _RaggedRange):
             raise SimulationError(
-                f"faq output index {s!r} cannot reference a "
-                f"ragged index set (RFC §5.2)"
+                f"faq output index {s!r} cannot reference a ragged index set (RFC §5.2)"
             )
         ranges.append(_expand_range(resolved))
     return syms, ranges

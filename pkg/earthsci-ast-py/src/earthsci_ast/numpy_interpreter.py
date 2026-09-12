@@ -512,9 +512,7 @@ def _resolve_range_spec(spec: Any, ctx: EvalContext) -> Any:
         return spec  # dense list — unchanged (today's path)
     name = spec.get("from")
     if name is None:
-        raise NumpyInterpreterError(
-            f"faq range reference {spec!r} is missing 'from'"
-        )
+        raise NumpyInterpreterError(f"faq range reference {spec!r} is missing 'from'")
     entry = ctx.index_sets.get(name)
     if entry is None:
         raise NumpyInterpreterError(
@@ -2227,9 +2225,7 @@ def _eval_faq(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
         out_syms = [s for s in output_idx if isinstance(s, str)]
         for s in out_syms:
             if s not in raw_ranges:
-                raise NumpyInterpreterError(
-                    f"faq output index {s!r} has no declared range"
-                )
+                raise NumpyInterpreterError(f"faq output index {s!r} has no declared range")
 
         reducer, empty_zero, otimes = _resolve_semiring(expr)
 

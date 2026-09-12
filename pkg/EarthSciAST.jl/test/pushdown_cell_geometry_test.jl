@@ -93,7 +93,7 @@ function _doc()
             "expr" => _op("*", _ix("SR_PM25", "s", "rcv"), _ix("E_PM25", "s")))),
     ]
     return Dict{String,Any}(
-        "esm" => "1.0.0",
+        "esm" => "1.1.0",
         "metadata" => Dict{String,Any}("name" => "pushdown_cell_geometry"),
         "data_sources" => Dict{String,Any}("MockSR" => Dict{String,Any}(
             "kind" => "static", "source" => Dict("url_template" => "mock://sr"))),

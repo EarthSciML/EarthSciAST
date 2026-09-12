@@ -82,9 +82,7 @@ def test_degenerate_join_byte_identical_to_no_join() -> None:
     body = ExprNode(op="*", args=[_index("activity", "src"), _index("base_rate", "src")])
     ranges = {"src": {"from": "sourceType"}}
 
-    no_join = ExprNode(
-        op="faq", output_idx=[], semiring="sum_product", expr=body, ranges=ranges
-    )
+    no_join = ExprNode(op="faq", output_idx=[], semiring="sum_product", expr=body, ranges=ranges)
     deg_join = ExprNode(
         op="faq",
         output_idx=[],

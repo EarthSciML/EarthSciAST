@@ -397,7 +397,7 @@ def _finish(fid, model_name, model, L, b, order, n, spacing, bc, t_end, ic_kind)
     out_times = [round(t_end / 2, 6), round(t_end, 6)]
     traj_analytic = {f"{t:g}": analytic_traj(L, b, order, ic, t) for t in out_times}
     esm = {
-        "esm": "1.1.0",
+        "esm": "0.1.0",
         "metadata": {
             "name": fid,
             "description": _describe(fid, n, spacing, bc, ic_kind),

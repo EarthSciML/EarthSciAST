@@ -78,9 +78,7 @@ def _empty_ctx(index_sets: dict, derived_extents: dict) -> EvalContext:
 
 
 def test_edge_enumeration_materializes_to_m3_golden() -> None:
-    mj = _load_model(
-        "tests/valid/faq/edge_enumeration_area_eff.esm", "EdgeEnumerationAreaEff"
-    )
+    mj = _load_model("tests/valid/faq/edge_enumeration_area_eff.esm", "EdgeEnumerationAreaEff")
     # Canonical 2-triangle mesh connectivity (the ragged face_vertices factors).
     ca = {
         "n_verts_on_face": np.array([3.0, 3.0]),
@@ -104,9 +102,7 @@ def test_edge_enumeration_materializes_to_m3_golden() -> None:
 def test_edge_enumeration_adversarial_inputs_collapse_to_golden() -> None:
     """§5.5.4: permuted faces / reversed winding all yield the identical
     canonically-sorted edge set (the relational engine's job)."""
-    mj = _load_model(
-        "tests/valid/faq/edge_enumeration_area_eff.esm", "EdgeEnumerationAreaEff"
-    )
+    mj = _load_model("tests/valid/faq/edge_enumeration_area_eff.esm", "EdgeEnumerationAreaEff")
     base = {
         "n_verts_on_face": np.array([3.0, 3.0]),
         "verts_on_face": np.array([[1.0, 2.0, 3.0], [2.0, 3.0, 4.0]]),
@@ -172,9 +168,7 @@ def test_regridder_candidate_set_bin_skolem_equijoin() -> None:
 
 
 def test_resolver_resolves_derived_set_via_value_invention_extent() -> None:
-    mj = _load_model(
-        "tests/valid/faq/edge_enumeration_area_eff.esm", "EdgeEnumerationAreaEff"
-    )
+    mj = _load_model("tests/valid/faq/edge_enumeration_area_eff.esm", "EdgeEnumerationAreaEff")
     ca = {
         "n_verts_on_face": np.array([3.0, 3.0]),
         "verts_on_face": np.array([[1.0, 2.0, 3.0], [2.0, 3.0, 4.0]]),
@@ -192,9 +186,7 @@ def test_resolver_still_raises_without_materialization() -> None:
     """Sanity: a derived set whose producer was never materialized still raises
     (the geometry clip-ring path is untouched, and a typo cannot silently become
     an empty set)."""
-    mj = _load_model(
-        "tests/valid/faq/edge_enumeration_area_eff.esm", "EdgeEnumerationAreaEff"
-    )
+    mj = _load_model("tests/valid/faq/edge_enumeration_area_eff.esm", "EdgeEnumerationAreaEff")
     ctx = _empty_ctx(index_sets=mj["index_sets"], derived_extents={})
     with pytest.raises(NumpyInterpreterError, match="not materialized"):
         _resolve_range_spec({"from": "edges"}, ctx)

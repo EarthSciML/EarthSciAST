@@ -52,7 +52,7 @@ function _cto_doc(NI::Int, NJ::Int, NK::Int)
     zero_c = Dict("op" => "faq", "args" => Any[], "output_idx" => Any["i", "j", "k"],
         "ranges" => Dict("i" => Any[1, NI], "j" => Any[1, NJ], "k" => Any[1, NK]),
         "expr" => 0.0)
-    Dict{String,Any}("esm" => "0.8.0", "metadata" => Dict("name" => "cto_colsum"),
+    Dict{String,Any}("esm" => "1.1.0", "metadata" => Dict("name" => "cto_colsum"),
       "models" => Dict("R" => Dict{String,Any}(
         "variables" => Dict(
             "c"   => Dict("type" => "unknown", "shape" => Any["i", "j", "k"]),

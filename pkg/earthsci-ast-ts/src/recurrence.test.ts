@@ -246,7 +246,7 @@ describe('cycles through DISTINCT variables are still rejected (§5.19.5)', () =
     // names the observeds on the cycle — see `observed-cycle.test.ts` for the
     // full contract, including the shared fixture.
     const result = validate({
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'Cycle', description: 'd', authors: ['t'] },
       models: { M: twoVariableCycle },
     } as unknown as EsmFile)
@@ -484,7 +484,7 @@ describe('a self-reference that is NOT a recurrence keeps its cycle rejection', 
     // length one — but it now arrives under the name §4.9.6 gives it, at the
     // model, with `x` named in `details.cycle`.
     const result = validate({
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'ScalarSelf', description: 'd', authors: ['t'] },
       models: {
         M: {

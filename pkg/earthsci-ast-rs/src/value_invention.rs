@@ -36,9 +36,9 @@ use std::collections::{HashMap, HashSet};
 use ndarray::{ArrayD, IxDyn};
 use serde_json::{Map, Value};
 
-use crate::faq::{ReduceKind, effective_reduce_kind};
 use crate::broad_phase::OverlapIndex;
 use crate::cadence::{self, Cadence};
+use crate::faq::{ReduceKind, effective_reduce_kind};
 use crate::relational::{self, Key, Num, SemiringOp, group_aggregate};
 use crate::types::{Expr, IndexSet, Model};
 

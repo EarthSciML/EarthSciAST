@@ -103,7 +103,7 @@ _vertset(ring) = Set((round(ring[i, 1]; digits=9), round(ring[i, 2]; digits=9))
         # A polygon_area FAQ over a derived index set whose producer was not
         # evaluated must fail clearly (no silent empty reduction).
         bad = Dict(
-            "esm" => "0.6.0",
+            "esm" => "1.1.0",
             "metadata" => Dict("name" => "derived_unmaterialized"),
             # esm-spec v0.8.0: document-scoped index-set registry.
             "index_sets" => Dict(

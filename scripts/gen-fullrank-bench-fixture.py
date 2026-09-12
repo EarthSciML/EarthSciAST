@@ -122,7 +122,7 @@ for axis, d in AXES:
     }
 
 doc = {
-    "esm": "1.1.0",
+    "esm": "0.9.0",
     "metadata": {
         "name": "transport_3axis_7cubed_fullrank",
         "description": (

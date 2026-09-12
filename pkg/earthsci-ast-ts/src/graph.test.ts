@@ -19,7 +19,7 @@ import type { EsmFile, Model, ReactionSystem, Equation, Reaction, CouplingEntry 
 
 describe('componentGraph function', () => {
   const mockEsmFile: EsmFile = {
-    esm: '1.1.0',
+    esm: '1.0.0',
     metadata: {
       name: 'Test System',
       description: 'Test component graph',
@@ -218,7 +218,7 @@ describe('componentGraph function', () => {
     // generated from the schema is the 2-tuple `[string, string]`, so it did not
     // typecheck. The premise was wrong, not the schema.)
     const file: EsmFile = {
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'compose-chain' },
       models: {
         A: { variables: {}, equations: [] },
@@ -243,7 +243,7 @@ describe('componentGraph function', () => {
     // Dangling references (a nonexistent component or a subsystem member that
     // is not itself a node) never produce an edge or a phantom endpoint.
     const file: EsmFile = {
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'dangling' },
       models: {
         A: { variables: {}, equations: [] },
@@ -326,7 +326,7 @@ describe('componentGraph function', () => {
 
   it('should handle empty ESM file gracefully', () => {
     const emptyEsmFile: EsmFile = {
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: {
         name: 'Empty',
         authors: [],
@@ -666,7 +666,7 @@ describe('expressionGraph function', () => {
 
   it('should handle scoped variables in EsmFile', () => {
     const esmFile: EsmFile = {
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'Test', authors: [] },
       models: {
         ModelA: {
@@ -704,7 +704,7 @@ describe('expressionGraph function', () => {
 
 describe('Graph export functions', () => {
   const mockEsmFile: EsmFile = {
-    esm: '1.1.0',
+    esm: '1.0.0',
     metadata: {
       name: 'Test System',
       description: 'Test graph export',
@@ -918,7 +918,7 @@ describe('Graph export functions', () => {
 
     it('should handle empty graphs', () => {
       const emptyEsmFile: EsmFile = {
-        esm: '1.1.0',
+        esm: '1.0.0',
         metadata: { name: 'Empty', authors: [] },
       }
 
@@ -968,7 +968,7 @@ describe('Graph export functions', () => {
 
     it('should format chemical formulas in variable mapping edge labels', () => {
       const mockFile: EsmFile = {
-        esm: '1.1.0',
+        esm: '1.0.0',
         metadata: { name: 'Chemical Test', authors: [] },
         models: {
           ModelA: { variables: { O3: { type: 'unknown', units: 'mol/mol' } }, equations: [] },
@@ -1035,7 +1035,7 @@ describe('buildGraph helper', () => {
 
 describe('expressionGraph mergeCoupled option', () => {
   const mockFile: EsmFile = {
-    esm: '1.1.0',
+    esm: '1.0.0',
     metadata: { name: 'Test', authors: [] },
     models: {
       A: { variables: { u: { type: 'unknown', default: 0 } }, equations: [] },

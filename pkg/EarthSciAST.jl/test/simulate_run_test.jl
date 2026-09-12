@@ -119,7 +119,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (idempotent; standalone runs too)
 
     @testset "array state with seed_ic! + element IC override" begin
         esm = Dict{String,Any}(
-            "esm" => "0.5.0", "metadata" => Dict{String,Any}("name" => "A"),
+            "esm" => "1.1.0", "metadata" => Dict{String,Any}("name" => "A"),
             "index_sets" => Dict{String,Any}("n" => Dict{String,Any}("kind" => "interval", "size" => 3)),
             "models" => Dict{String,Any}("M" => Dict{String,Any}(
                 "variables" => Dict{String,Any}("u" => Dict{String,Any}("type" => "unknown", "shape" => Any["n"])),
@@ -138,7 +138,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (idempotent; standalone runs too)
     @testset "seed_expression_ic! over a grid" begin
         # u[i] state on a 4-cell axis; seed u(x) = x^2 at coords [10,20,30,40].
         esm = Dict{String,Any}(
-            "esm" => "0.5.0", "metadata" => Dict{String,Any}("name" => "G"),
+            "esm" => "1.1.0", "metadata" => Dict{String,Any}("name" => "G"),
             "index_sets" => Dict{String,Any}("n" => Dict{String,Any}("kind" => "interval", "size" => 4)),
             "models" => Dict{String,Any}("M" => Dict{String,Any}(
                 "variables" => Dict{String,Any}("u" => Dict{String,Any}("type" => "unknown", "shape" => Any["n"])),

@@ -43,7 +43,7 @@ function _ob_halo(M::Int; ghost::Bool=false)
         "expr"=>Dict("op"=>"*","args"=>Any[
             Dict("op"=>"index","args"=>Any[Dict("op"=>"const","args"=>Any[],"value"=>W),"i","j","k","l"]),
             Dict("op"=>"index","args"=>Any["q", donor("i","k"), donor("j","l")])]))
-    doc = Dict{String,Any}("esm"=>"0.8.0","metadata"=>Dict("name"=>"ob_halo"),
+    doc = Dict{String,Any}("esm"=>"1.1.0","metadata"=>Dict("name"=>"ob_halo"),
       "models"=>Dict("R"=>Dict{String,Any}(
         "variables"=>Dict("q"=>Dict("type"=>"unknown","shape"=>Any["a","b"]),
                           "out"=>Dict("type"=>"unknown","shape"=>Any["i","j"])),

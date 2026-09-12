@@ -55,8 +55,7 @@ fn raise_faq_esm_floor(value: &mut serde_json::Value) {
     fn has_faq(v: &serde_json::Value) -> bool {
         match v {
             serde_json::Value::Object(map) => {
-                map.get("op").and_then(|o| o.as_str()) == Some("faq")
-                    || map.values().any(has_faq)
+                map.get("op").and_then(|o| o.as_str()) == Some("faq") || map.values().any(has_faq)
             }
             serde_json::Value::Array(items) => items.iter().any(has_faq),
             _ => false,
@@ -67,10 +66,14 @@ fn raise_faq_esm_floor(value: &mut serde_json::Value) {
         .and_then(|v| v.as_str())
         .and_then(crate::diagnostic::parse_semver)
         .is_some_and(|(major, minor, _)| (major, minor) < (1, 1));
-    if below && has_faq(value)
+    if below
+        && has_faq(value)
         && let Some(obj) = value.as_object_mut()
     {
-        obj.insert("esm".to_string(), serde_json::Value::String("1.1.0".to_string()));
+        obj.insert(
+            "esm".to_string(),
+            serde_json::Value::String("1.1.0".to_string()),
+        );
     }
 }
 

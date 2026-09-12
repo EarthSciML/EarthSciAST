@@ -155,7 +155,7 @@ end
                 Dict("op" => (off > 0 ? "+" : "-"), "args" => ["i", abs(off)])])
         pin(f, at) = Dict("op" => "index", "args" => [f, at])
         doc = Dict(
-            "esm" => "0.9.0",
+            "esm" => "1.1.0",
             "metadata" => Dict("name" => "nested_1d"),
             "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => 8)),
             "models" => Dict("T" => Dict(

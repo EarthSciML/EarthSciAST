@@ -257,10 +257,7 @@ fn flatten_preserves_faq_structure_and_namespaces_body() {
         "output_idx dropped by namespacing"
     );
     assert!(rhs.ranges.is_some(), "ranges dropped by namespacing");
-    assert!(
-        rhs.expr.is_some(),
-        "faq body (expr) dropped by namespacing"
-    );
+    assert!(rhs.expr.is_some(), "faq body (expr) dropped by namespacing");
 
     // The body keeps the dotted cross-system reference verbatim (not
     // re-namespaced to `Snk.Src.u`) and does NOT namespace the loop index `i`.

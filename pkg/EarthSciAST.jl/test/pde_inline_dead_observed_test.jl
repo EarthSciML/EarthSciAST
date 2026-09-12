@@ -49,7 +49,7 @@ _dob_var(shape) = Dict{String, Any}("type" => "unknown", "units" => "1",
 # observed graph, not the integrator.
 function _dob_doc(assertions::Vector)
     Dict{String, Any}(
-        "esm" => "1.0.0",
+        "esm" => "1.1.0",
         "metadata" => Dict("name" => "pde_inline_dead_observed"),
         "index_sets" => Dict{String, Any}(
             "x" => Dict("kind" => "interval", "size" => _DOB_NX),

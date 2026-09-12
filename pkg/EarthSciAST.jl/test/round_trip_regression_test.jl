@@ -238,7 +238,7 @@ end
     # affect UNKNOWNS only per §6.3.1, are exercised in the next testset.)
     doc = """
     {
-      "esm": "1.1.0",
+      "esm": "1.0.0",
       "metadata": { "name": "handler_round_trip" },
       "models": {
         "M": {
@@ -363,7 +363,7 @@ end
     # descriptor is gone from events entirely.
     doc = """
     {
-      "esm": "1.1.0",
+      "esm": "1.0.0",
       "metadata": { "name": "affect_round_trip" },
       "models": {
         "M": {
@@ -409,7 +409,7 @@ end
 @testset "index_sets non-string members round trip (members_raw)" begin
     doc = """
     {
-      "esm": "1.1.0",
+      "esm": "0.8.0",
       "metadata": { "name": "members_raw_round_trip" },
       "index_sets": {
         "fips": { "kind": "categorical", "members": [8031, 8005, 8059] },

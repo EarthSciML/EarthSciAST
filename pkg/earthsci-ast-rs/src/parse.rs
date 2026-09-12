@@ -1556,7 +1556,6 @@ fn is_iso8601_duration(s: &str) -> bool {
     any_component && chars.next().is_none()
 }
 
-
 /// Rewrite every deprecated expression-node `op` spelling to its canonical tag,
 /// in place, and warn once for the document.
 ///
@@ -1584,18 +1583,17 @@ pub(crate) fn prepare_document_ops(value: &mut serde_json::Value) -> Result<(), 
     //    BEFORE normalization on purpose: `aggregate` IS the pre-1.1.0
     //    spelling, so a 1.0.0 document carrying the alias is legal and must not
     //    be caught by this gate.
-    if let Some(path) = find_faq_op(value) {
-        if let Some(esm) = value.get("esm").and_then(|v| v.as_str())
-            && let Some((major, minor, _)) = crate::diagnostic::parse_semver(esm)
-            && (major, minor) < (1, 1)
-        {
-            return Err(EsmError::SchemaValidation(format!(
-                "faq_version_too_old at {path}: the `faq` op arrives at esm 1.1.0; file \
-                 declares {esm}. Use `\"op\": \"aggregate\"` (the deprecated pre-1.1.0 \
-                 spelling) or raise the declared version. \
-                 See docs/content/rfcs/faq-node-rename.md."
-            )));
-        }
+    if let Some(path) = find_faq_op(value)
+        && let Some(esm) = value.get("esm").and_then(|v| v.as_str())
+        && let Some((major, minor, _)) = crate::diagnostic::parse_semver(esm)
+        && (major, minor) < (1, 1)
+    {
+        return Err(EsmError::SchemaValidation(format!(
+            "faq_version_too_old at {path}: the `faq` op arrives at esm 1.1.0; file \
+             declares {esm}. Use `\"op\": \"aggregate\"` (the deprecated pre-1.1.0 \
+             spelling) or raise the declared version. \
+             See docs/content/rfcs/faq-node-rename.md."
+        )));
     }
     // 3. Normalize the alias, and raise the declared version with it so the
     //    upgraded document is self-consistent (a floor, never a downgrade).
@@ -1623,7 +1621,8 @@ fn find_faq_op(value: &serde_json::Value) -> Option<String> {
                 if map.get("op").and_then(|o| o.as_str()) == Some("faq") {
                     return Some(at.to_string());
                 }
-                map.iter().find_map(|(k, child)| walk(child, &format!("{at}/{k}")))
+                map.iter()
+                    .find_map(|(k, child)| walk(child, &format!("{at}/{k}")))
             }
             serde_json::Value::Array(items) => items
                 .iter()
@@ -1648,7 +1647,10 @@ fn raise_esm_floor_to_v11(value: &mut serde_json::Value) {
         .and_then(crate::diagnostic::parse_semver)
         .is_some_and(|(major, minor, _)| (major, minor) < (1, 1));
     if below && let Some(obj) = value.as_object_mut() {
-        obj.insert("esm".to_string(), serde_json::Value::String("1.1.0".to_string()));
+        obj.insert(
+            "esm".to_string(),
+            serde_json::Value::String("1.1.0".to_string()),
+        );
     }
 }
 
@@ -1665,7 +1667,8 @@ fn find_removed_op(value: &serde_json::Value) -> Option<String> {
                 if map.get("op").and_then(|o| o.as_str()) == Some("arrayop") {
                     return Some(at.to_string());
                 }
-                map.iter().find_map(|(k, child)| walk(child, &format!("{at}/{k}")))
+                map.iter()
+                    .find_map(|(k, child)| walk(child, &format!("{at}/{k}")))
             }
             serde_json::Value::Array(items) => items
                 .iter()
@@ -1683,7 +1686,10 @@ fn rewrite_op_aliases(value: &mut serde_json::Value) -> usize {
     match value {
         serde_json::Value::Object(map) => {
             if map.get("op").and_then(|v| v.as_str()) == Some("aggregate") {
-                map.insert("op".to_string(), serde_json::Value::String("faq".to_string()));
+                map.insert(
+                    "op".to_string(),
+                    serde_json::Value::String("faq".to_string()),
+                );
                 n += 1;
             }
             for (_, v) in map.iter_mut() {

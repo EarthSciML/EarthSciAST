@@ -111,7 +111,7 @@ _op(o, args...) = Dict("op" => o, "args" => Any[args...])
         0.0)
 
     _mkdoc(np, nc) = Dict(
-        "esm" => "0.6.0",
+        "esm" => "1.1.0",
         "metadata" => Dict("name" => "vi_overlap_scaling"),
         "index_sets" => Dict(
             "points" => Dict("kind" => "interval", "size" => np),
@@ -230,7 +230,7 @@ end
         "E" => Dict("type" => "parameter", "shape" => ["cells"]),
         "N" => Dict("type" => "parameter", "shape" => ["cells"]))
     _mirror_doc(np, nc) = Dict(
-        "esm" => "0.6.0",
+        "esm" => "1.1.0",
         "metadata" => Dict("name" => "dense_overlap_mirror"),
         "index_sets" => Dict("points" => Dict("kind" => "interval", "size" => np),
                              "cells"  => Dict("kind" => "interval", "size" => nc)),

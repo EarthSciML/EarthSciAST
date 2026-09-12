@@ -223,7 +223,7 @@ fn test_ic_in_reaction_system() {
 #[test]
 fn test_reaction_system_non_ic_constraint_ok() {
     let json = r#"{
-        "esm": "1.1.0",
+        "esm": "1.0.0",
         "metadata": {"name": "ok"},
         "reaction_systems": {
             "Chemistry": {
@@ -520,7 +520,7 @@ fn test_valid_cross_model_references() {
     // Test a valid model with cross-references but no circular dependencies
     let json_str = r#"
         {
-          "esm": "1.1.0",
+          "esm": "1.0.0",
           "metadata": {
             "name": "ValidCrossModelTest",
             "description": "Test file with valid cross-model references (no cycles)"
@@ -765,7 +765,7 @@ fn reference_integrity_reaches_every_expression_bearing_block() {
     // A ghost inside an `initialization_equations` RHS.
     let init = r#"
         {
-          "esm": "1.1.0",
+          "esm": "1.0.0",
           "metadata": {
             "name": "H",
             "description": "ghost in initialization_equations"
@@ -929,7 +929,7 @@ fn coupled_systems_skip_reference_integrity_and_equation_balance() {
     // `Advection` names `u` (supplied by its partner) and carries one equation
     // for zero of its own unknowns. Coupled ⇒ both checks stand down.
     let coupled = r#"{
-      "esm": "1.1.0",
+      "esm": "1.0.0",
       "metadata": { "name": "C", "description": "coupled" },
       "models": {
         "Advection": {
@@ -978,7 +978,7 @@ fn discrete_parameter_loads_and_is_derived() {
     // requires `shape` for it), refreshed by an event / cadence / loader rather
     // than integrated.
     let doc = r#"{
-      "esm": "1.1.0",
+      "esm": "1.0.0",
       "metadata": { "name": "D", "description": "discrete parameter" },
       "index_sets": { "cells": { "kind": "interval", "size": 3 } },
       "models": { "M": {
@@ -1029,7 +1029,7 @@ fn default_units_must_match_declared_units() {
     let doc = |default_units: &str| {
         format!(
             r#"{{
-              "esm": "1.1.0",
+              "esm": "1.0.0",
               "metadata": {{ "name": "U", "description": "default units" }},
               "models": {{ "M": {{
                 "variables": {{
@@ -1078,7 +1078,7 @@ fn wrong_conversion_factor_is_caught_but_a_plain_coefficient_is_not() {
     let doc = |declared: &str, factor: &str, src_units: &str| {
         format!(
             r#"{{
-              "esm": "1.1.0",
+              "esm": "1.0.0",
               "metadata": {{ "name": "F", "description": "conversion factor" }},
               "models": {{ "M": {{
                 "variables": {{
@@ -1191,9 +1191,7 @@ fn test_f6_null_in_key_column() {
 #[test]
 fn test_self_join_three_ranges_ambiguous() {
     assert_structural(
-        include_str!(
-            "../../../tests/invalid/faq/build_time/self_join_three_ranges_ambiguous.esm"
-        ),
+        include_str!("../../../tests/invalid/faq/build_time/self_join_three_ranges_ambiguous.esm"),
         StructuralErrorCode::JoinSideAmbiguous,
         "/models/ThreeRangesAmbiguous/equations/2/rhs",
     );
@@ -1207,9 +1205,7 @@ fn test_self_join_three_ranges_ambiguous() {
 #[test]
 fn test_self_join_index_set_key_ambiguous() {
     assert_structural(
-        include_str!(
-            "../../../tests/invalid/faq/build_time/self_join_index_set_key_ambiguous.esm"
-        ),
+        include_str!("../../../tests/invalid/faq/build_time/self_join_index_set_key_ambiguous.esm"),
         StructuralErrorCode::JoinSideAmbiguous,
         "/models/IndexSetKeyAmbiguous/equations/2/rhs",
     );
@@ -1221,9 +1217,7 @@ fn test_self_join_index_set_key_ambiguous() {
 #[test]
 fn test_self_join_syms_unknown_symbol() {
     assert_structural(
-        include_str!(
-            "../../../tests/invalid/faq/build_time/self_join_syms_unknown_symbol.esm"
-        ),
+        include_str!("../../../tests/invalid/faq/build_time/self_join_syms_unknown_symbol.esm"),
         StructuralErrorCode::JoinSymsUnknownSymbol,
         "/models/SymsUnknownSymbol/equations/2/rhs",
     );

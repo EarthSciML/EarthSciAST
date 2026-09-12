@@ -76,7 +76,7 @@ _op(o, args...) = Dict("op" => o, "args" => Any[args...])
         0.0)
 
     _pir_doc = Dict(
-        "esm" => "0.6.0",
+        "esm" => "1.1.0",
         "metadata" => Dict("name" => "overlap_gate_point_in_rect"),
         "index_sets" => Dict(
             "points" => Dict("kind" => "interval", "size" => 5),
@@ -177,7 +177,7 @@ _op(o, args...) = Dict("op" => o, "args" => Any[args...])
     _filt = _op(">", _ix("A_ij", "i", "j"), "atol")
 
     _regrid_doc(eps) = Dict(
-        "esm" => "0.6.0",
+        "esm" => "1.1.0",
         "metadata" => Dict("name" => "overlap_gate_regrid"),
         "index_sets" => Dict(
             "src_cells" => Dict("kind" => "interval", "size" => 3),

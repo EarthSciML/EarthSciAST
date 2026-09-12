@@ -1996,9 +1996,7 @@ pub(super) fn lower_recurrence(
     // frame to sweep.
     let frame_node: &ExpressionNode = match (lhs, rhs) {
         (Expr::Operator(l), _) if crate::faq::is_faq_op(&l.op) => l.as_ref(),
-        (Expr::Variable(v), Expr::Operator(r))
-            if v == var && crate::faq::is_faq_op(&r.op) =>
-        {
+        (Expr::Variable(v), Expr::Operator(r)) if v == var && crate::faq::is_faq_op(&r.op) => {
             r.as_ref()
         }
         _ => {
@@ -4598,7 +4596,7 @@ mod subsystem_ragged_and_inspection_tests {
             },
             "models": {"M": {
                 "subsystems": {"mesh": {
-                    "esm": "1.1.0",
+                    "esm": "1.0.0",
                     "metadata": {"name": "mini_mesh"},
                     "models": {"MiniMesh": {
                         "variables": {

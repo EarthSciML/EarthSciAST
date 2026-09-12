@@ -72,7 +72,7 @@ using JSON3
         # Create a minimal ESM file
         test_json = """
         {
-          "esm": "1.1.0",
+          "esm": "0.1.0",
           "metadata": {
             "name": "test_model",
             "description": "Test model",
@@ -196,7 +196,7 @@ using JSON3
         # Test with IO streams
         test_json = """
         {
-          "esm": "1.1.0",
+          "esm": "0.1.0",
           "metadata": {
             "name": "stream_test",
             "authors": ["Stream Author"]
@@ -242,7 +242,7 @@ using JSON3
         @test_throws ParseError load_string(IOBuffer("invalid json"))
 
         # Test missing required fields
-        invalid_esm = """{"esm": "1.1.0"}"""  # Missing metadata
+        invalid_esm = """{"esm": "0.1.0"}"""  # Missing metadata
         @test_throws SchemaValidationError load_string(IOBuffer(invalid_esm))
 
         # The schema-validation diagnostic uses REAL newlines (a regression
@@ -401,7 +401,7 @@ using JSON3
     @testset "v0.5.0 inline multi-series y (plots.y array form)" begin
         esm_json = """
         {
-          "esm": "1.1.0",
+          "esm": "0.5.0",
           "metadata": { "name": "multi_y_test" },
           "models": {
             "AB": {
@@ -443,7 +443,7 @@ using JSON3
     @testset "v0.8.0 variable_map expression transform (esm-spec §10.4)" begin
         esm_json = """
         {
-          "esm": "1.1.0",
+          "esm": "0.8.0",
           "metadata": { "name": "vm_expr_transform_test" },
           "models": {
             "Src": {

@@ -64,9 +64,7 @@ def test_aggregate_fixture_structurally_valid(fixture_path: Path) -> None:
     assert result.is_valid, f"{fixture_path.name}: validate().is_valid is False"
 
 
-_AGNOSTIC_LEAF = (
-    CONFORMANCE_DIR / "expression_templates" / "inject_agnostic_faq" / "fixture.esm"
-)
+_AGNOSTIC_LEAF = CONFORMANCE_DIR / "expression_templates" / "inject_agnostic_faq" / "fixture.esm"
 
 
 def test_agnostic_leaf_aggregate_range_is_not_undefined_index_set() -> None:

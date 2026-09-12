@@ -130,15 +130,7 @@ const I_2: &str = r#"{ "i": [1, 2] }"#;
 /// `D(y[i]) = Σ_j i*j` ⇒ `y[1](1) = 6`, `y[2](1) = 12`.
 #[test]
 fn sum_product_semiring_matches_reduce_plus() {
-    let by_reduce = build(
-        "faq",
-        "y",
-        r#""reduce": "+","#,
-        PROD_BODY,
-        I_2,
-        IJ_2X3,
-        "",
-    );
+    let by_reduce = build("faq", "y", r#""reduce": "+","#, PROD_BODY, I_2, IJ_2X3, "");
     let by_semiring = build(
         "faq",
         "y",
@@ -166,15 +158,7 @@ fn sum_product_semiring_matches_reduce_plus() {
 /// Matches the legacy `reduce: "max"` exactly.
 #[test]
 fn max_sum_semiring_matches_reduce_max() {
-    let by_reduce = build(
-        "faq",
-        "y",
-        r#""reduce": "max","#,
-        SUM_BODY,
-        I_2,
-        IJ_2X3,
-        "",
-    );
+    let by_reduce = build("faq", "y", r#""reduce": "max","#, SUM_BODY, I_2, IJ_2X3, "");
     let by_semiring = build(
         "faq",
         "y",

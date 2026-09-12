@@ -306,8 +306,7 @@ fn test_index_outside_faq_round_trip() {
 
     let parsed: EsmFile = load_string(fixture).expect("Failed to parse idx_outside_faq");
     let serialized = to_json(&parsed).expect("Failed to serialize idx_outside_faq");
-    let reparsed: EsmFile =
-        load_string(&serialized).expect("Failed to reparse idx_outside_faq");
+    let reparsed: EsmFile = load_string(&serialized).expect("Failed to reparse idx_outside_faq");
 
     // The typed round-trip preserves the parsed document exactly.
     assert_eq!(

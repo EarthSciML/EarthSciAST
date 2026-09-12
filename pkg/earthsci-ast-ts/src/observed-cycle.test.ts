@@ -110,7 +110,7 @@ describe('tests/invalid/observed_cycle_array_elementwise.esm (§4.9.6)', () => {
 /** Wrap a model in the minimum document `validate()` will accept. */
 function doc(models: Record<string, unknown>): EsmFile {
   return {
-    esm: '1.1.0',
+    esm: '1.0.0',
     metadata: { name: 'ObservedCycleShape', description: 'shape under test', authors: ['t'] },
     domain: { independent_variable: 't' },
     models,
@@ -170,7 +170,7 @@ describe('self-references that are NOT recurrence candidates (§4.3.1.1 gating)'
     // no `index` — so there is no axis to fold along and no candidacy either.
     // Same verdict as the scalar, for the same reason.
     const result = validate({
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'BareSelfRead', description: 'shape under test', authors: ['t'] },
       domain: { independent_variable: 't' },
       index_sets: { steps: { kind: 'interval', size: 4 } },

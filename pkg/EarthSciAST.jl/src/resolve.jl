@@ -248,7 +248,13 @@ function _load_parsed(raw_data; base_path::AbstractString=pwd(),
     # `_read_json_document`, so the wire-boundary op pass runs here too. It is
     # idempotent: a document that already came through the reader carries no
     # alias, so this is a silent no-op rather than a second warning.
-    _prepare_document_ops!(raw_data)
+    #
+    # `gate=false`: top-level `{ref}` inlining has already run by this point, so
+    # this document is no longer the AUTHORED one. A legal 1.0.0 parent that
+    # mounts a `faq`-using child now CONTAINS `faq` without ever having spelled
+    # it, and gating it here would reject a document nobody authored wrongly.
+    # The floor is raised instead, exactly as `emit` does (§5.5).
+    _prepare_document_ops!(raw_data; gate=false)
 
     # v0.4.0 expression_templates / apply_expression_template are
     # rejected when the file declares esm < 0.4.0 (RFC §5.4 spec-version
@@ -1460,7 +1466,7 @@ Settle expression-node `op` spellings for ONE document, in three steps:
 Returns the number of nodes normalized.
 See `docs/content/rfcs/faq-node-rename.md`.
 """
-function _prepare_document_ops!(doc)::Int
+function _prepare_document_ops!(doc; gate::Bool=true)::Int
     at = _find_op_path(doc, "arrayop")
     if at !== nothing
         throw(ParseError("[E_REMOVED_OP] removed_op at $(at): `\"op\": \"arrayop\"` was " *
@@ -1469,7 +1475,7 @@ function _prepare_document_ops!(doc)::Int
                          "See docs/content/rfcs/faq-node-rename.md."))
     end
     faq_at = _find_op_path(doc, "faq")
-    if faq_at !== nothing && _declared_below_v11(doc)
+    if gate && faq_at !== nothing && _declared_below_v11(doc)
         declared = _get_field(doc, :esm, nothing)
         throw(ParseError("[E_FAQ_VERSION_TOO_OLD] faq_version_too_old at $(faq_at): the " *
                          "`faq` op arrives at esm 1.1.0; file declares $(declared). Use " *
@@ -1478,6 +1484,18 @@ function _prepare_document_ops!(doc)::Int
                          "See docs/content/rfcs/faq-node-rename.md."))
     end
     n = _rewrite_op_aliases!(doc)
+    if !gate && faq_at !== nothing && _declared_below_v11(doc)
+        # Post-inlining: the document CONTAINS `faq` without having spelled it
+        # — a legal 1.0.0 parent whose mounted child uses `faq`. Raise the floor
+        # rather than reject, the same rule `emit` applies
+        # (docs/content/rfcs/faq-node-rename.md §5.5).
+        for key in (:esm, "esm")
+            if haskey(doc, key)
+                doc[key] = "1.1.0"
+                break
+            end
+        end
+    end
     if n > 0
         if _declared_below_v11(doc)
             for key in (:esm, "esm")

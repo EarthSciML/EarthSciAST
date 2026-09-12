@@ -19,7 +19,7 @@ import type { EsmFile } from './types.js'
 describe('flatten', () => {
   it('namespaces variables from a single model', () => {
     const file = {
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'test' },
       models: {
         Atmos: {
@@ -60,7 +60,7 @@ describe('flatten', () => {
 
   it('namespaces species and parameters from a reaction system', () => {
     const file = {
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'test' },
       reaction_systems: {
         Chem: {
@@ -93,7 +93,7 @@ describe('flatten', () => {
 
   it('records coupling rules in metadata', () => {
     const file = {
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'test' },
       models: {
         A: {
@@ -129,7 +129,7 @@ describe('flatten', () => {
   // same document.
   const subsystemMapFile = (toEndpoint: string, fromEndpoint = 'Src.T') =>
     ({
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'test' },
       models: {
         Src: {
@@ -177,7 +177,7 @@ describe('flatten', () => {
 
   it('handles an expression (object) transform in variable_map', () => {
     const file = {
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'test' },
       models: {
         Src: { variables: { F: { type: 'unknown' } }, equations: [] },
@@ -222,7 +222,7 @@ describe('flatten', () => {
       factor?: number,
     ) =>
       ({
-        esm: '1.1.0',
+        esm: '1.0.0',
         metadata: { name: 'test' },
         models: {
           A: { variables: { x: { type: 'unknown' } }, equations: [] },
@@ -252,7 +252,7 @@ describe('flatten', () => {
 
   it('produces nested dot-namespacing for subsystems', () => {
     const file = {
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'test' },
       models: {
         Outer: {
@@ -284,7 +284,7 @@ describe('flatten', () => {
     //     brownianParameters (§6.3.1's four sets PARTITION the parameters)
     //   - `k` is a plain parameter                   -> parameters only
     const file = {
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'test' },
       models: {
         Box: {
@@ -321,7 +321,7 @@ describe('flatten', () => {
   })
 
   it('refuses a document with no models and no reaction systems', () => {
-    const file = { esm: '1.1.0', metadata: { name: 'empty' } } satisfies EsmFile
+    const file = { esm: '1.0.0', metadata: { name: 'empty' } } satisfies EsmFile
     expect(() => flatten(file)).toThrow(FlattenError)
     expect(() => flatten(file)).toThrow(/no models or reaction systems/)
   })
@@ -339,7 +339,7 @@ describe('operator_compose translate direction (§10.2 / §4.7.1 step 2)', () =>
   /** A: one ODE state `x`. B: one ODE on a DIFFERENTLY named `y`. */
   function differentlyNamed(translate: Record<string, unknown>): EsmFile {
     return {
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'translate-direction' },
       models: {
         A: {
@@ -393,7 +393,7 @@ describe('operator_compose translate direction (§10.2 / §4.7.1 step 2)', () =>
     // ConflictingDerivativeError — bug (b) of the operator_compose defect.
     const withPlaceholder = (translate?: Record<string, unknown>): EsmFile =>
       ({
-        esm: '1.1.0',
+        esm: '1.0.0',
         metadata: { name: 'redundant-translate' },
         models: {
           A: {
@@ -434,7 +434,7 @@ describe('operator_compose translate direction (§10.2 / §4.7.1 step 2)', () =>
 describe('couple multiplicative requires an existing tendency (§10.3)', () => {
   function coupled(to: string, transform: string): EsmFile {
     return {
-      esm: '1.1.0',
+      esm: '1.0.0',
       metadata: { name: 'multiplicative-tendency' },
       models: {
         A: {

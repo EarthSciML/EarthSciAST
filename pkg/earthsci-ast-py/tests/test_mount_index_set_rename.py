@@ -52,7 +52,7 @@ def test_without_the_rename_the_two_columns_still_collide(tmp_path):
     # The un-fixed behavior is preserved: the field is opt-in, and omitting it
     # leaves the §4.7 deep-equal-or-error merge exactly as it was.
     host = {
-        "esm": "1.1.0",
+        "esm": "1.0.0",
         "metadata": {"name": "collide", "description": "no mount-edge rename"},
         "models": {
             "Host": {
@@ -96,7 +96,7 @@ def test_two_rename_keys_onto_one_target_is_a_collision(tmp_path):
     # the second write would silently win and one axis would vanish from the
     # registry it was supposed to reach.
     host = {
-        "esm": "1.1.0",
+        "esm": "1.0.0",
         "metadata": {"name": "rename_collision", "description": "two keys, one target"},
         "models": {
             "Host": {
@@ -175,7 +175,7 @@ def test_mount_rename_rewrites_a_join_on_axis_but_not_its_loop_symbol(tmp_path):
     leaf = tmp_path / "join_leaf.esm"
     leaf.write_text(json.dumps(_join_leaf()))
     host = {
-        "esm": "1.1.0",
+        "esm": "1.0.0",
         "metadata": {"name": "join_host", "description": "renames the joined axis"},
         "models": {
             "Host": {
