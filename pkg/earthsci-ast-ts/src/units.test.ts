@@ -504,7 +504,7 @@ describe('Unit parsing and dimensional analysis', () => {
       const structural: Expression[] = [
         { op: 'index', args: ['u', 2] },
         { op: 'fn', args: ['t'], name: 'datetime.year' } as unknown as Expression,
-        { op: 'aggregate', args: ['A'], expr: { op: '*', args: ['A', 'w'] } } as Expression,
+        { op: 'faq', args: ['A'], expr: { op: '*', args: ['A', 'w'] } } as Expression,
         { op: 'table_lookup', args: [], table: 'kT', axes: { temp: 'T_air' } } as Expression,
         { op: 'makearray', args: [1, 2] } as unknown as Expression,
       ]

@@ -537,7 +537,7 @@ func evalMetaExpr(expr any, env map[string]int64, ctx string) (int64, error) {
 }
 
 // foldStructuralSites folds metaparameter expressions in the structural
-// integer sites — `aggregate` dense `ranges` tuple entries and `makearray`
+// integer sites — `faq` dense `ranges` tuple entries and `makearray`
 // `regions` bound pairs — to concrete integers, in place, wherever they are
 // already closed. Entries still carrying a bare name (a template-param slot,
 // or an open metaparameter in a not-yet-fully-bound library) are left symbolic
@@ -554,7 +554,7 @@ func foldStructuralSites(x any, ctx string) error {
 		return nil
 	case map[string]any:
 		op, _ := v["op"].(string)
-		if op == "aggregate" {
+		if op == "faq" {
 			if ranges, ok := v["ranges"].(map[string]any); ok {
 				for _, k := range sortedKeys(ranges) {
 					rv, ok := ranges[k].([]any)

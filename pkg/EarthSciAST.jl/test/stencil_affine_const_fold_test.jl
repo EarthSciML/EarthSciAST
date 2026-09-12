@@ -117,7 +117,7 @@ end
         xs = [0.0, 2.0, 1.0, 3.0, 2.0, 4.0]
         want = vec(sum(W .* xs; dims=1))                 # [1.0, 2.0, 3.0]
         body = _op("*", _idx("W", _v("i"), _v("j")), _idx("x", _v("i")))
-        rhs = ESM.OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["j"], expr_body=body,
+        rhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["j"], expr_body=body,
                          ranges=Dict("j" => [1, 3], "i" => [1, 6]), reduce="+")
         vars = Dict(v => ESM.ModelVariable(ESM.UnknownVariable) for v in ("y", "x"))
         m = ESM.Model(vars, [ESM.Equation(_ao1(_Didx("y", _v("j")), "j", 1, 3), rhs)])
@@ -138,9 +138,9 @@ end
         K = [(i == 1 || i == N || j == 1 || j == N) ? 1.0 : 4.0 for i in 1:N, j in 1:N]
         vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable; shape=["i", "j"]))
         body = _op("*", _idx("K", _v("i"), _v("j")), _idx("u", _v("i"), _v("j")))
-        lhs = ESM.OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i", "j"],
+        lhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "j"],
             expr_body=_Didx("u", _v("i"), _v("j")), ranges=Dict("i" => [1, N], "j" => [1, N]))
-        rhs = ESM.OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i", "j"],
+        rhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "j"],
             expr_body=body, ranges=Dict("i" => [1, N], "j" => [1, N]))
         m = ESM.Model(vars, [ESM.Equation(lhs, rhs)])
         ics = Dict("u[$i,$j]" => Float64(10i + j) for i in 1:N, j in 1:N)

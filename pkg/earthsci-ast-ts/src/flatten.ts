@@ -466,7 +466,7 @@ export interface FlattenedSystem {
  * legitimately define different index subsets of one state variable.
  */
 const ARRAY_OPS: ReadonlySet<string> = new Set([
-  'aggregate',
+  'faq',
   'broadcast',
   'concat',
   'index',
@@ -495,7 +495,7 @@ function walkNodes(expr: Expression | undefined, visit: (node: ExpressionNode) =
   })
 }
 
-/** The loop symbols an `aggregate` node binds: its `output_idx` plus its `ranges` keys. */
+/** The loop symbols a `faq` node binds: its `output_idx` plus its `ranges` keys. */
 function binderSymbols(node: ExpressionNode): string[] {
   const out: string[] = []
   const outputIdx = (node as { output_idx?: unknown }).output_idx
@@ -589,11 +589,11 @@ function namespaceExpr(
   }
 
   if (isNode(expr)) {
-    // An `aggregate`'s index symbols are local to its body and must not be
+    // A `faq`'s index symbols are local to its body and must not be
     // namespaced. They are binder NAMES, not child expressions, so the only
     // handling needed is adding them to `leaveAlone` for the children.
     let localLeave = leaveAlone
-    if (expr.op === 'aggregate') {
+    if (expr.op === 'faq') {
       const syms = binderSymbols(expr)
       if (syms.length > 0) localLeave = new Set([...leaveAlone, ...syms])
     }
@@ -619,7 +619,7 @@ function namespaceExpr(
  * The dependent variable an equation LHS names, or `undefined` when the LHS
  * cannot be identified (an algebraic constraint with a compound LHS).
  *
- * `D(v, t)` and `D(v[i], t)` both credit `v`; an `aggregate` wrapping a `D`
+ * `D(v, t)` and `D(v[i], t)` both credit `v`; a `faq` wrapping a `D`
  * looks inside; a bare name is itself.
  */
 function lhsDependentVar(lhs: Expression): string | undefined {
@@ -641,7 +641,7 @@ function lhsDependentVar(lhs: Expression): string | undefined {
     return undefined
   }
 
-  if (lhs.op === 'aggregate' && (lhs as { expr?: Expression }).expr !== undefined) {
+  if (lhs.op === 'faq' && (lhs as { expr?: Expression }).expr !== undefined) {
     return lhsDependentVar((lhs as { expr: Expression }).expr)
   }
   return undefined
@@ -2611,7 +2611,7 @@ function deriveIndependentVars(flat: FlattenedSystem): void {
  * because flattening moves the ground under it: `operator_compose` merges two
  * RHSs into one equation, `variable_map` deletes a parameter and promotes a
  * variable in its place, and the pointwise lift rewrites a scalar state ODE into
- * an `aggregate`. A per-component answer namespaced after the fact would describe
+ * a `faq`. A per-component answer namespaced after the fact would describe
  * the document, not the system produced from it.
  *
  * The view hands the classifier the two DECLARED types plus the raw `update` /
@@ -2721,7 +2721,7 @@ function collectFieldIcs(flat: FlattenedSystem): void {
 // `D(sp) = <reaction> + <-u·makearray(grad(sp))>` still has a SCALAR `sp` while
 // its advection makearray indexes `sp` per grid cell. This pass performs the
 // `lifting: "pointwise"` promotion — wrapping each merged state ODE in an
-// `aggregate` over the grid, indexing the bare reaction species per cell and each
+// `faq` over the grid, indexing the bare reaction species per cell and each
 // operator makearray per cell, and recording the species' concrete grid shape.
 
 function collectMakearrays(expr: Expression): ExpressionNode[] {
@@ -2805,7 +2805,7 @@ function liftRhsToCell(
     const ma = { ...expr, output_idx: [...loops] } as ExpressionNode
     return { op: 'index', args: [ma, ...loops] }
   }
-  if (expr.op === 'index' || expr.op === 'aggregate' || expr.op === 'arrayop') return expr
+  if (expr.op === 'index' || expr.op === 'faq' || expr.op === 'faq') return expr
   return {
     ...expr,
     args: (expr.args ?? []).map((a) => liftRhsToCell(a, arrayVars, loops)),
@@ -2882,19 +2882,19 @@ function applyPointwiseLift(flat: FlattenedSystem, coupling: CouplingEntry[]): v
     for (let d = 0; d < rank; d++) ranges[loops[d]] = [1, extents[d]]
     flat.liftedShapes[target] = extents
 
-    // `args: []` is not decoration: an `aggregate` carries its body in `expr`,
+    // `args: []` is not decoration: a `faq` carries its body in `expr`,
     // but the canonical node shape (and `isExprNode`) still requires the `args`
     // slot, and the Python oracle emits it the same way.
     next.push({
       lhs: {
-        op: 'aggregate',
+        op: 'faq',
         args: [],
         output_idx: [...loops],
         ranges,
         expr: { op: 'D', args: [{ op: 'index', args: [target, ...loops] }], wrt: 't' },
       } as unknown as ExpressionNode,
       rhs: {
-        op: 'aggregate',
+        op: 'faq',
         args: [],
         output_idx: [...loops],
         ranges,

@@ -367,7 +367,7 @@ fn an_op_with_no_rule_cannot_be_built() {
 
     // The evaluable-core ops that are legal in an AST but that THIS evaluator
     // has no rule for are refused by the same door.
-    for name in ["skolem", "rank", "aggregate", "intersect_polygon"] {
+    for name in ["skolem", "rank", "faq", "intersect_polygon"] {
         assert!(
             ResolvedExpr::op(name, Vec::new()).is_err(),
             "{name} has no scalar rule and must not be constructible"

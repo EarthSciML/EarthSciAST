@@ -1,0 +1,42 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "ref_parent_arrayop",
+    "description": "Mounts a child that spells the REMOVED `arrayop`. Loading this must be REJECTED.",
+    "authors": [
+      "EarthSciAST"
+    ],
+    "tags": [
+      "faq",
+      "deprecated_op_alias",
+      "ref",
+      "conformance"
+    ]
+  },
+  "models": {
+    "Host": {
+      "subsystems": {
+        "Kid": {
+          "ref": "ref_child_arrayop.esm"
+        }
+      },
+      "variables": {
+        "u": {
+          "type": "unknown"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "u"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0
+        }
+      ]
+    }
+  }
+}

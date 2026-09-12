@@ -8,7 +8,7 @@ import "fmt"
 //
 // A **bare** array-level expression is one written over whole arrays with no
 // explicit index symbols — `D(dp) ~ w2 * z1`, `p3 ~ w2 * z1`, and the equivalent
-// `broadcast` spelling — as opposed to the `aggregate` form, where the author
+// `broadcast` spelling — as opposed to the `faq` form, where the author
 // names the axes and there is nothing to infer. Its operands align by name:
 //
 //   - An operand whose declared index sets are a SUBSET of the result's
@@ -36,7 +36,7 @@ import "fmt"
 //     regime of §4.3.4 case 2 and are not checked here.
 //   - It descends only through ELEMENTWISE nodes (isElementwiseNode,
 //     op_registry.go), because those are the only ones for which "corresponding
-//     elements" is what the expression means. `aggregate` and `makearray` name
+//     elements" is what the expression means. `faq` and `makearray` name
 //     their own axes, `index` gathers, the §4.3.5 shape ops restructure, and a
 //     geometry kernel legitimately returns a result of an unrelated shape.
 //   - It DOES see through a `broadcast` NODE to its `args` when the node's `fn`

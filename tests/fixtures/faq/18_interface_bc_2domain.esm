@@ -1,0 +1,220 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "faq_18_interface_bc_2domain",
+    "description": "Two coupled 1D heat domains (u on [0,1], v on [1,2]) joined by an interface BC at x=1. N=4 cells each, dx=0.25, D=1, D/dx^2=16. Dirichlet(0) at outer boundaries; interface coupling: ghost u[5]=v[1] and ghost v[0]=u[4]. The combined 8-cell system is equivalent to a single 8-cell heat equation on [0,2] with Dirichlet BCs: IC sin(i*pi/9) for i=1..8, mode-1 eigenvalue lambda1=16*(2*cos(pi/9)-2)=-1.9298, decay factor exp(-0.19298)=0.8245 at t=0.1. Verifies interface BC value-continuity coupling: u[4](t)=v[1](t) holds throughout the simulation.",
+    "authors": [
+      "EarthSciAST/polecats/gastown.furiosa"
+    ],
+    "tags": [
+      "faq",
+      "conformance",
+      "stencil",
+      "spatial_dispatch",
+      "pde",
+      "interface_bc",
+      "multi_variable"
+    ]
+  },
+  "models": {
+    "TwoDomainHeat": {
+      "tolerance": {
+        "rel": 1e-3,
+        "abs": 0.0
+      },
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "shape": ["i"]
+        },
+        "v": {
+          "type": "unknown",
+          "shape": ["i"]
+        }
+      },
+      "equations": [
+        {
+          "_comment": "u boundary cell 1: Dirichlet left (ghost u[0]=0) → 16*(-2*u[1]+u[2])",
+          "lhs": {
+            "op": "D",
+            "args": [{"op": "index", "args": ["u", 1]}],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              16,
+              {
+                "op": "+",
+                "args": [
+                  {"op": "*", "args": [-2, {"op": "index", "args": ["u", 1]}]},
+                  {"op": "index", "args": ["u", 2]}
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "_comment": "u interior cells, 1-based i in 1..2 (after offset baking: cells 2 and 3)",
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": ["i"],
+            "expr": {
+              "op": "D",
+              "args": [{"op": "index", "args": ["u", {"op": "+", "args": ["i", 1]}]}],
+              "wrt": "t"
+            },
+            "ranges": {"i": [1, 2]}
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": ["i"],
+            "expr": {
+              "op": "*",
+              "args": [
+                16,
+                {
+                  "op": "+",
+                  "args": [
+                    {"op": "index", "args": ["u", "i"]},
+                    {"op": "*", "args": [-2, {"op": "index", "args": ["u", {"op": "+", "args": ["i", 1]}]}]},
+                    {"op": "index", "args": ["u", {"op": "+", "args": ["i", 2]}]}
+                  ]
+                }
+              ]
+            },
+            "ranges": {"i": [1, 2]}
+          }
+        },
+        {
+          "_comment": "u boundary cell 4: interface right (ghost u[5]=v[1]) → 16*(u[3]-2*u[4]+v[1])",
+          "lhs": {
+            "op": "D",
+            "args": [{"op": "index", "args": ["u", 4]}],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              16,
+              {
+                "op": "+",
+                "args": [
+                  {"op": "index", "args": ["u", 3]},
+                  {"op": "*", "args": [-2, {"op": "index", "args": ["u", 4]}]},
+                  {"op": "index", "args": ["v", 1]}
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "_comment": "v boundary cell 1: interface left (ghost v[0]=u[4]) → 16*(u[4]-2*v[1]+v[2])",
+          "lhs": {
+            "op": "D",
+            "args": [{"op": "index", "args": ["v", 1]}],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              16,
+              {
+                "op": "+",
+                "args": [
+                  {"op": "index", "args": ["u", 4]},
+                  {"op": "*", "args": [-2, {"op": "index", "args": ["v", 1]}]},
+                  {"op": "index", "args": ["v", 2]}
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "_comment": "v interior cells, 1-based i in 1..2 (after offset baking: cells 2 and 3)",
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": ["i"],
+            "expr": {
+              "op": "D",
+              "args": [{"op": "index", "args": ["v", {"op": "+", "args": ["i", 1]}]}],
+              "wrt": "t"
+            },
+            "ranges": {"i": [1, 2]}
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": ["i"],
+            "expr": {
+              "op": "*",
+              "args": [
+                16,
+                {
+                  "op": "+",
+                  "args": [
+                    {"op": "index", "args": ["v", "i"]},
+                    {"op": "*", "args": [-2, {"op": "index", "args": ["v", {"op": "+", "args": ["i", 1]}]}]},
+                    {"op": "index", "args": ["v", {"op": "+", "args": ["i", 2]}]}
+                  ]
+                }
+              ]
+            },
+            "ranges": {"i": [1, 2]}
+          }
+        },
+        {
+          "_comment": "v boundary cell 4: Dirichlet right (ghost v[5]=0) → 16*(v[3]-2*v[4])",
+          "lhs": {
+            "op": "D",
+            "args": [{"op": "index", "args": ["v", 4]}],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              16,
+              {
+                "op": "+",
+                "args": [
+                  {"op": "index", "args": ["v", 3]},
+                  {"op": "*", "args": [-2, {"op": "index", "args": ["v", 4]}]}
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "mode1_decay_t0.1",
+          "description": "IC = sin(i*pi/9) for i=1..8 (mode 1 of the 8-cell system). Decay factor exp(lambda1*0.1) = exp(-0.192984) = 0.82450 at t=0.1. The interface coupling produces the same solution as a single 8-cell heat equation with Dirichlet BCs at both ends.",
+          "initial_conditions": {
+            "u[1]": 0.3420201433256687,
+            "u[2]": 0.6427876096865393,
+            "u[3]": 0.8660254037844386,
+            "u[4]": 0.984807753012208,
+            "v[1]": 0.984807753012208,
+            "v[2]": 0.8660254037844387,
+            "v[3]": 0.6427876096865395,
+            "v[4]": 0.3420201433256689
+          },
+          "time_span": {"start": 0.0, "end": 0.1},
+          "assertions": [
+            {"variable": "u[1]", "time": 0.1, "expected": 0.2819940638265585},
+            {"variable": "u[2]", "time": 0.1, "expected": 0.529975481766495},
+            {"variable": "u[3]", "time": 0.1, "expected": 0.7140340350003057},
+            {"variable": "u[4]", "time": 0.1, "expected": 0.8119695455930536},
+            {"variable": "v[1]", "time": 0.1, "expected": 0.8119695455930536},
+            {"variable": "v[2]", "time": 0.1, "expected": 0.7140340350003057},
+            {"variable": "v[3]", "time": 0.1, "expected": 0.5299754817664951},
+            {"variable": "v[4]", "time": 0.1, "expected": 0.28199406382655867}
+          ]
+        }
+      ]
+    }
+  }
+}

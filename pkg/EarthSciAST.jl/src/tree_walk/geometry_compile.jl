@@ -53,7 +53,7 @@
 # ladder's E_TREEWALK_UNSUPPORTED_OP).
 const _GEO_STRUCTURAL_OPS = Set{String}([
     "index", "intersect_polygon", "polygon_intersection_area", "skolem",
-    "true", "false", "aggregate", "arrayop",
+    "true", "false", "faq",
 ])
 const _GEO_SCALAR_OPS = setdiff(_GEO_EVAL_OPS, _GEO_STRUCTURAL_OPS)
 
@@ -182,7 +182,7 @@ function _geo_compile(expr, g::_GeoCompileCtx)::_Node
             return _mknode(kind=_NK_LITERAL, literal=1.0)
         elseif op == "false"
             return _mknode(kind=_NK_LITERAL, literal=0.0)
-        elseif op == "aggregate" || (op == "arrayop" && isempty(expr.output_idx))
+        elseif op == "faq"
             return _geo_compile_agg(expr, g)
         elseif op == "-" && length(expr.args) >= 3
             # The interpreter's variadic `-`: left fold `((a-b)-c)…`, matching

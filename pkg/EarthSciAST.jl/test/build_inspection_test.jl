@@ -42,7 +42,7 @@ const _BI_TGT = Any[_bi_rect(1.5 * (C - 1), 1.5 * C, 1.5 * (R - 1), 1.5 * R)
                     for R in 1:2 for C in 1:2]
 
 _bi_agg(output_idx, ranges, expr; filter=nothing, args=Any[]) = begin
-    d = Dict{String,Any}("op" => "aggregate", "semiring" => "sum_product",
+    d = Dict{String,Any}("op" => "faq", "semiring" => "sum_product",
                          "output_idx" => output_idx, "ranges" => ranges,
                          "args" => args, "expr" => expr)
     filter === nothing || (d["filter"] = filter)
@@ -56,7 +56,7 @@ function _bi_regrid_doc()
     ranges_ij = Dict{String,Any}("i" => Dict("from" => "src_cells"),
                                  "j" => Dict("from" => "tgt_cells"))
     Dict{String,Any}(
-        "esm" => "0.8.0",
+        "esm" => "1.1.0",
         "metadata" => Dict("name" => "build_inspection_regrid",
                            "description" => "3x3 -> 2x2 exact-rational overlap regrid"),
         "index_sets" => Dict{String,Any}(
@@ -164,7 +164,7 @@ function _bi_ragged_doc()
             _bi_index("F", _bi_index("edgesOnCell", "c", "k"))]);
         args=Any["sgn", "edgesOnCell", "F"])
     Dict{String,Any}(
-        "esm" => "0.8.0",
+        "esm" => "1.1.0",
         "metadata" => Dict("name" => "build_inspection_ragged",
                            "description" => "2-cell ragged CSR contraction miniature"),
         "index_sets" => Dict{String,Any}(

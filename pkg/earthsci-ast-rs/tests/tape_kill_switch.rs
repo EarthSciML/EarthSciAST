@@ -12,7 +12,7 @@ use earthsci_ast::{Alg, SolveOptions, load_string};
 
 const MODEL: &str = r#"
     {
-      "esm": "1.0.0",
+      "esm": "1.1.0",
       "metadata": {
         "name": "tape_kill_switch"
       },
@@ -29,7 +29,7 @@ const MODEL: &str = r#"
           "equations": [
             {
               "lhs": {
-                "op": "aggregate",
+                "op": "faq",
                 "args": [],
                 "output_idx": [
                   "i"
@@ -55,7 +55,7 @@ const MODEL: &str = r#"
                 }
               },
               "rhs": {
-                "op": "aggregate",
+                "op": "faq",
                 "args": [],
                 "output_idx": [
                   "i"

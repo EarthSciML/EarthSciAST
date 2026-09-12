@@ -1,6 +1,6 @@
 # Vectorized array-kernel RHS property tests (ess-dhq).
 #
-# Verifies that the tree-walk runner evaluates discretized `arrayop` derivative
+# Verifies that the tree-walk runner evaluates discretized `faq` derivative
 # equations as WHOLE-ARRAY kernels whose compiled-node count is independent of
 # the grid size N (no per-cell scalarization), while preserving numeric results
 # identical to the analytic stencil/reduction.
@@ -30,16 +30,16 @@ function _fieldic_model(N)
     vars = Dict("psi" => ModelVariable(UnknownVariable; shape=["i", "j"]))
     dref = _op("D", _idx("psi", _v("i"), _v("j")); wrt="t")
     drhs = _op("neg", _idx("psi", _v("i"), _v("j")))
-    dlhs = OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i", "j"],
+    dlhs = OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "j"],
         expr_body=dref, ranges=Dict("i" => [1, N], "j" => [1, N]))
-    drhs_ao = OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i", "j"],
+    drhs_ao = OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "j"],
         expr_body=drhs, ranges=Dict("i" => [1, N], "j" => [1, N]))
     icbody = _op("-",
         _op("sqrt", _op("+",
             _op("^", _op("-", _op("*", _op("-", _v("i"), _n(0.5)), _n(2.0)), _n(1.0 * N)), _i(2)),
             _op("^", _op("-", _op("*", _op("-", _v("j"), _n(0.5)), _n(2.0)), _n(1.0 * N)), _i(2)))),
         _n(0.3 * N))
-    ic_agg = OpExpr("aggregate", ESM.ASTExpr[]; output_idx=Any["i", "j"],
+    ic_agg = OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "j"],
         expr_body=icbody, ranges=Dict("i" => [1, N], "j" => [1, N]))
     ESM.Model(vars, [ESM.Equation(dlhs, drhs_ao),
                      ESM.Equation(_op("ic", _v("psi")), ic_agg)])
@@ -83,12 +83,12 @@ end
         end
     end
 
-    @testset "contraction (reduction) arrayop vectorizes + stays correct" begin
+    @testset "contraction (reduction) faq vectorizes + stays correct" begin
         # D(y[i]) = Σ_{k=1..3} A[i,k]·x[k]  (sum_product semiring)
         vars = Dict("y" => ModelVariable(UnknownVariable),
                     "x" => ModelVariable(UnknownVariable))
         body = _op("*", _idx("A", _v("i"), _v("k")), _idx("x", _v("k")))
-        rhs = OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i"], expr_body=body,
+        rhs = OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i"], expr_body=body,
                      ranges=Dict("i" => [1, 2], "k" => [1, 3]), reduce="+")
         m = ESM.Model(vars, [ESM.Equation(_ao1(_Didx("y", _v("i")), "i", 1, 2), rhs)])
         A = [1.0 2.0 3.0; 4.0 5.0 6.0]
@@ -110,13 +110,13 @@ end
     # ess-wrh: the de-boxed whole-array `interp.*` kernels must reproduce the
     # scalar `:fn` arm bit-for-bit on the fiddly corners (endpoint clamps, exact
     # on-knot queries, NaN propagation, Inf-sentinel table entries). We drive one
-    # arrayop whose per-cell query `u[i]` is set to each corner via the IC, run a
+    # faq whose per-cell query `u[i]` is set to each corner via the IC, run a
     # single `f!`, and compare every lane to `evaluate_closed_function` (the
     # cross-binding scalar contract). Both routes call the same `_interp_*_core`,
     # so this guards the wiring (arg order, child selection, clamp endpoints) and
     # the build-time spec validation/coercion.
     @testset "interp.* vectorized arm is bit-identical to scalar :fn (ess-wrh)" begin
-        # Map per-cell queries through a one-line arrayop and read the lanes back.
+        # Map per-cell queries through a one-line faq and read the lanes back.
         function run_unary_interp(fname, const2, queries)
             N = length(queries)
             body = _op("fn", _idx("u", _v("i")), _const(const2); name=fname)
@@ -246,7 +246,7 @@ end
             @test du[3] == 10.0 && du[4] == 40.0
         end
 
-        @testset "end-to-end: folded constant-query arrayop is correct + 0-alloc" begin
+        @testset "end-to-end: folded constant-query faq is correct + 0-alloc" begin
             N = 8
             body = _op("fn", _const(table), _const(axis), _n(2.0); name="interp.linear")
             m = ESM.Model(Dict("u" => ModelVariable(UnknownVariable)),
@@ -345,7 +345,7 @@ end
 # merged kernel, so EVERY cell silently computed against the FIRST cell's table.
 #
 # REACHABLE, and these tests pin the reproduction: a `makearray` whose two regions
-# each call `interp.linear` with their own table, indexed inside an arrayop that
+# each call `interp.linear` with their own table, indexed inside a faq that
 # takes the PER-CELL path. (The symbolic-stencil fast path already keyed the region
 # choice into its branch key, so it was correct; the per-cell fallback — taken by
 # any contraction, and by `ESS_STENCIL_DISABLE=1` — was not.)
@@ -433,7 +433,7 @@ end
     end
 
     # -- (d) end-to-end reproduction ----------------------------------------
-    # `makearray` regions 1-2 → TBL_A, 3-4 → TBL_B, over an arrayop. Three build
+    # `makearray` regions 1-2 → TBL_A, 3-4 → TBL_B, over a faq. Three build
     # paths: the default affine build, the per-cell fallback via a contracted
     # index (was WRONG), and the forced per-cell scalar reference via
     # ESS_STENCIL_DISABLE (was WRONG). All three must agree with the scalar oracle.
@@ -441,11 +441,11 @@ end
     mk_two_tables(tbl1, tbl2) = OpExpr("makearray", ESM.ASTExpr[];
         regions=[[[1, 2]], [[3, 4]]],
         values=ESM.ASTExpr[_interp_u(tbl1), _interp_u(tbl2)])
-    lhs = OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i"],
+    lhs = OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i"],
         expr_body=_Didx("u", _v("i")), ranges=Dict("i" => [1, N]))
     # `ranges` carrying a key that is NOT in `output_idx` is a CONTRACTED index — an
     # einsum/aggregate RHS — which is exactly what forces the per-cell path.
-    rhs_of(mk; contract::Bool) = OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i"],
+    rhs_of(mk; contract::Bool) = OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i"],
         expr_body=_op("index", mk, _v("i")),
         ranges=contract ? Dict("i" => [1, N], "k" => [1, 1]) : Dict("i" => [1, N]))
 
@@ -524,9 +524,9 @@ end
             mk = OpExpr("makearray", ESM.ASTExpr[];
                 regions=[[[1, N ÷ 2]], [[N ÷ 2 + 1, N]]],
                 values=ESM.ASTExpr[_interp_u(TBL_A), _interp_u(TBL_B)])
-            l = OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i"],
+            l = OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i"],
                 expr_body=_Didx("u", _v("i")), ranges=Dict("i" => [1, N]))
-            r = OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i"],
+            r = OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i"],
                 expr_body=_op("index", mk, _v("i")), ranges=Dict("i" => [1, N]))
             model = ESM.Model(Dict("u" => ModelVariable(UnknownVariable)),
                               [ESM.Equation(l, r)])

@@ -740,7 +740,7 @@ end
         # rebuild dropped and never recursed into.
         tl = E.OpExpr("table_lookup", E.ASTExpr[]; table="fuel", output=1,
             table_axes=Dict{String,E.ASTExpr}("code" => _V("_var")))
-        agg = E.OpExpr("aggregate", E.ASTExpr[];
+        agg = E.OpExpr("faq", E.ASTExpr[];
             output_idx=Any[],
             ranges=Dict{String,Any}("i" => E.IndexSetRef("cells")),
             expr_body=_op("*", _V("_var"), _V("w")),

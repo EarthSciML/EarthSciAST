@@ -1,5 +1,5 @@
 {
-    "esm": "1.0.0",
+    "esm": "1.1.0",
     "metadata": {
         "name": "pde_inline_array_overrides",
         "description": "esm-spec 6.6.2 'Shaped values' + 11.4 state-free array observed ic. One SHARED column component carries its per-regime inputs inline: the shaped parameter `theta0` takes a row-major nested array as its `default` and as each test's `parameter_overrides`, the shaped unknown `v` takes one as its `initial_conditions`, and `w` is seeded by `ic(w) ~ gathered` where `gathered` is a state-free array observed (a `const` gather). Every regime is one test of the same document -- the shape 6.6 describes for 0-D components -- instead of one generated .esm per regime.",
@@ -118,7 +118,7 @@
                 },
                 {
                     "lhs": {
-                        "op": "aggregate",
+                        "op": "faq",
                         "args": [],
                         "output_idx": [
                             "k"
@@ -143,7 +143,7 @@
                         }
                     },
                     "rhs": {
-                        "op": "aggregate",
+                        "op": "faq",
                         "args": [],
                         "output_idx": [
                             "k"
@@ -158,7 +158,7 @@
                 },
                 {
                     "lhs": {
-                        "op": "aggregate",
+                        "op": "faq",
                         "args": [],
                         "output_idx": [
                             "k"
@@ -183,7 +183,7 @@
                         }
                     },
                     "rhs": {
-                        "op": "aggregate",
+                        "op": "faq",
                         "args": [],
                         "output_idx": [
                             "k"
@@ -198,7 +198,7 @@
                 },
                 {
                     "lhs": {
-                        "op": "aggregate",
+                        "op": "faq",
                         "args": [],
                         "output_idx": [
                             "k"
@@ -223,7 +223,7 @@
                         }
                     },
                     "rhs": {
-                        "op": "aggregate",
+                        "op": "faq",
                         "args": [],
                         "output_idx": [
                             "k"

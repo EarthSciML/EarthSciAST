@@ -20,7 +20,7 @@ const _TWB = EarthSciAST
 
 # ---- helpers --------------------------------------------------------------
 function _twb_agg(oi, rng, args, ex, extra=Dict{String,Any}())
-    d = Dict{String,Any}("op"=>"aggregate", "semiring"=>"sum_product",
+    d = Dict{String,Any}("op"=>"faq", "semiring"=>"sum_product",
         "output_idx"=>oi, "ranges"=>rng, "args"=>args, "expr"=>ex)
     for (k, v) in extra; d[k] = v; end
     d

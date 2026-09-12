@@ -24,7 +24,7 @@ fn fixture(rel: &str) -> String {
 /// `EsmFile.index_sets`, survives round-trip, and its `{from}` ranges resolve.
 #[test]
 fn aggregate_fixture_index_sets_is_document_scoped_and_round_trips() {
-    let json = fixture("valid/aggregate/aggregate_semiring_indexset.esm");
+    let json = fixture("valid/faq/faq_semiring_indexset.esm");
     let file = load_string(&json).unwrap_or_else(|e| panic!("load: {e}"));
 
     // (1) Document-scoped: the registry is on the file, not on any model.

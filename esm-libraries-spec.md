@@ -1262,7 +1262,7 @@ Equations:
 > (`Model.regrid`, `RegridSpec`, `Interface.regridding`)"). Cross-grid and
 > cross-dimensional coupling is no longer a separate interface/geometry construct:
 > it is expressed as an ordinary **regridding expression** carried in the coupling
-> entry's `transform` — an `aggregate` (Functional Aggregate Query) over index
+> entry's `transform` — a `faq` (Functional Aggregate Query) over index
 > sets, the same algebra as discretization and reductions. See esm-spec.md §8.6
 > (regridding as a coupling expression), §10.5 (coupling across grids and
 > dimensionality), and §12 (the retired Interfaces section). No binding performs
@@ -1275,19 +1275,19 @@ A single `.esm` file may still combine systems living on different spatial dimen
 **Terminology.**
 - A **domain** is a spatial/temporal specification (see `Domain` in Section 2.2). A system's domain is either `null` (0D — box model) or a reference to a `domains` entry that declares one or more spatial axes (e.g. `{x, y}` or `{x, y, z}`).
 - **Promotion** is the act of rewriting a variable or equation so it lives on a higher-dimensional target domain while preserving its mathematical meaning.
-- A **regridding expression** — the `aggregate`/FAQ on a coupling entry's `transform` (esm-spec.md §8.6, §10.5) — is how promotion is realized numerically. It replaces the removed `Interface.dimension_mapping` / `Interface.regridding` pair: there is no separate interface record and no `dimension_mapping` enum.
+- A **regridding expression** — the `faq`/FAQ on a coupling entry's `transform` (esm-spec.md §8.6, §10.5) — is how promotion is realized numerically. It replaces the removed `Interface.dimension_mapping` / `Interface.regridding` pair: there is no separate interface record and no `dimension_mapping` enum.
 
-**Kinds of promotion (each now spelled as a regridding expression).** The rows below name *what* a promotion does; in v0.8.0 each is written as an `aggregate` expression on the coupling `transform`, not as an `Interface.dimension_mapping` value:
+**Kinds of promotion (each now spelled as a regridding expression).** The rows below name *what* a promotion does; in v0.8.0 each is written as a `faq` expression on the coupling `transform`, not as an `Interface.dimension_mapping` value:
 
 | Kind | Source → Target | Meaning |
 |---|---|---|
 | `broadcast` | 0D → N-D | The source value is spatially uniform on the target domain. A 0D variable `v` becomes a field `v(x, y, …)` whose value is identical at every target grid point. |
 | `identity` | N-D → N-D (same grid) | Source and target share axes and grid; no interpolation is needed. |
 | `slice` | N-D → (N-k)-D | Evaluate the source at fixed coordinate values along `k` of its axes (e.g. project a 3D field onto its surface `z=0`). |
-| `project` | N-D → M-D, M<N | Integrate or average out `N-M` axes (an `aggregate` reduction declaring `"integrate"` vs `"average"` and the axes to reduce). |
-| `regrid` | N-D → N-D (different grid) | Same axes but different discretization; an `aggregate` regridding expression (nearest, linear/bilinear/trilinear, or conservative overlap-area weighting — esm-spec.md §8.6). |
+| `project` | N-D → M-D, M<N | Integrate or average out `N-M` axes (a `faq` reduction declaring `"integrate"` vs `"average"` and the axes to reduce). |
+| `regrid` | N-D → N-D (different grid) | Same axes but different discretization; a `faq` regridding expression (nearest, linear/bilinear/trilinear, or conservative overlap-area weighting — esm-spec.md §8.6). |
 
-**Tier expectations.** `broadcast` and `identity` are trivial and available everywhere. `slice`, `project`, and `regrid` are Analysis-/Advanced-tier and, being ordinary `aggregate` expressions, are handled by the same evaluator as any other FAQ; there is no Interface tier-gate. A library that cannot evaluate a requested regridding kernel surfaces the reserved `UnsupportedMappingError` (see §4.7.6.10) rather than an Interface-mapping error.
+**Tier expectations.** `broadcast` and `identity` are trivial and available everywhere. `slice`, `project`, and `regrid` are Analysis-/Advanced-tier and, being ordinary `faq` expressions, are handled by the same evaluator as any other FAQ; there is no Interface tier-gate. A library that cannot evaluate a requested regridding kernel surfaces the reserved `UnsupportedMappingError` (see §4.7.6.10) rather than an Interface-mapping error.
 
 **Implicit broadcast.** When a 0D system is coupled to an N-D system, libraries apply `broadcast` promotion implicitly — a 0D value is spatially uniform, the only unambiguous default — so the common 0D↔N-D case needs no explicit transform. (The removed `UnmappedDomainError` path, which formerly fired when no `Interface` covered a cross-domain coupling, is reserved/never-raised; see §4.7.6.10.)
 
@@ -2041,12 +2041,12 @@ solution.plot()       # matplotlib integration
 **Implementation approach:**
 
 1. Call `flatten(file)` to obtain the canonical `FlattenedSystem`. This pre-resolves all coupling rules — `operator_compose` (LHS-match + sum, with `_var` placeholder expansion), `couple` connectors, and `variable_map` substitutions — and lowers reaction systems to ODEs via `derive_odes()`.
-2. Reject *undiscretized* spatial operators: if `len(flat.independent_variables) > 1`, raise `UnsupportedDimensionalityError` (see §5.4.6 for the cross-language origin of this error name in the Rust simulator). A surviving spatial independent variable means a spatial operator was never discretized into an `arrayop` stencil. Once discretized, the spatial axis folds into array dimensions, so `independent_variables == ["t"]` and `simulate()` integrates the PDE through the array-op interpreter like any other system.
+2. Reject *undiscretized* spatial operators: if `len(flat.independent_variables) > 1`, raise `UnsupportedDimensionalityError` (see §5.4.6 for the cross-language origin of this error name in the Rust simulator). A surviving spatial independent variable means a spatial operator was never discretized into a `faq` stencil. Once discretized, the spatial axis folds into array dimensions, so `independent_variables == ["t"]` and `simulate()` integrates the PDE through the array-op interpreter like any other system.
 3. Convert each flattened equation's RHS to a SymPy expression using the dot-namespaced symbol map.
 4. Substitute parameter values, then `sympy.lambdify()` to create a fast NumPy-callable RHS function.
 5. Call `scipy.integrate.solve_ivp()`.
 
-**Dimension promotion tier (§4.7.6).** The Python library is **Core tier** for dimension promotion: it handles broadcast and identity mappings (a flattened system whose independent variables are exactly `["t"]`). Slice, project, and regrid mappings raise `UnsupportedMappingError`. An *undiscretized* spatial operator (a spatial independent variable surviving in the flattened system) raises `UnsupportedDimensionalityError`, with a message telling the user to apply the discretization template that lowers it to an `arrayop` stencil. This is not a PDE-capability limit: once discretized, Python simulates the PDE natively (§5.9 cross-language PDE-simulation conformance).
+**Dimension promotion tier (§4.7.6).** The Python library is **Core tier** for dimension promotion: it handles broadcast and identity mappings (a flattened system whose independent variables are exactly `["t"]`). Slice, project, and regrid mappings raise `UnsupportedMappingError`. An *undiscretized* spatial operator (a spatial independent variable surviving in the flattened system) raises `UnsupportedDimensionalityError`, with a message telling the user to apply the discretization template that lowers it to a `faq` stencil. This is not a PDE-capability limit: once discretized, Python simulates the PDE natively (§5.9 cross-language PDE-simulation conformance).
 
 **Conflict and validation errors.** `flatten()` exposes the full Rust `FlattenError` taxonomy as Python exception classes (cross-language error-name parity per §4.7.5 and §4.7.6):
 
@@ -2075,7 +2075,7 @@ Since SciPy's event handling is less sophisticated than DifferentialEquations.jl
 - Direction-dependent affects (`affect_neg`) require custom zero-crossing direction detection.
 - Discrete events with complex triggers require manual integration loop management.
 - Functional affects are not supported (they are runtime-specific).
-- An *undiscretized* spatial operator (`grad`, `div`, `laplacian`) causes `simulate()` to raise `UnsupportedDimensionalityError`: it must first be rewritten to an `arrayop` stencil by a discretization template (`expression_templates` / `apply_expression_template`), which the Python binding applies at load time like every other binding. Once discretized, `simulate()` integrates the PDE natively — Python is one of the three PDE-simulation bindings (§5.9), not a 0D-only box-model solver.
+- An *undiscretized* spatial operator (`grad`, `div`, `laplacian`) causes `simulate()` to raise `UnsupportedDimensionalityError`: it must first be rewritten to a `faq` stencil by a discretization template (`expression_templates` / `apply_expression_template`), which the Python binding applies at load time like every other binding. Once discretized, `simulate()` integrates the PDE natively — Python is one of the three PDE-simulation bindings (§5.9), not a 0D-only box-model solver.
 
 #### 5.3.6 Jupyter Integration
 
@@ -2095,13 +2095,13 @@ esm.explore(file)  # widget showing models, reactions, coupling graph
 
 > The tier label read "Core + Analysis" until phase 6. That contradicted the
 > binding itself — Rust ships the simulation surface (`esm_problem` / `solve`)
-> and the `arrayop` runtime that executes discretized PDEs, described two
+> and the `faq` runtime that executes discretized PDEs, described two
 > paragraphs below. `API_SPEC.md` §11 recorded the contradiction; this is the
 > correction.
 
 Rust provides a high-performance, memory-safe implementation suitable for CLI tools, WASM compilation (for web), and embedding in other systems.
 
-**Flattening scope (Core tier only).** The Rust implementation of `flatten()` targets the Core dimension-promotion tier: it supports `broadcast` and `identity` mappings per §4.7.6, and raises `FlattenError::UnsupportedMapping` with the specific type name (`slice`, `project`, `regrid`, or the spatial operator that was encountered — `grad`, `div`, `laplacian`, `D(_, x)`, etc.) for anything beyond that. This scope limit is a flatten-tier decision, not a simulation limit: the Rust array simulator does run discretized PDEs (`arrayop` systems — see §5.9 cross-language PDE-simulation conformance). The `slice`/`project`/`regrid` dimension-mapping rewrites are simply not yet implemented in Rust `flatten()`. The full cross-language §4.7.6.10 error taxonomy (`ConflictingDerivative`, `DimensionPromotion`, `UnmappedDomain`, `UnsupportedMapping`, `DomainUnitMismatch`, `DomainExtent`, `SliceOutOfDomain`, `CyclicPromotion`) is defined on the Rust `FlattenError` enum for API parity even where a given variant is never raised by Core tier.
+**Flattening scope (Core tier only).** The Rust implementation of `flatten()` targets the Core dimension-promotion tier: it supports `broadcast` and `identity` mappings per §4.7.6, and raises `FlattenError::UnsupportedMapping` with the specific type name (`slice`, `project`, `regrid`, or the spatial operator that was encountered — `grad`, `div`, `laplacian`, `D(_, x)`, etc.) for anything beyond that. This scope limit is a flatten-tier decision, not a simulation limit: the Rust array simulator does run discretized PDEs (`faq` systems — see §5.9 cross-language PDE-simulation conformance). The `slice`/`project`/`regrid` dimension-mapping rewrites are simply not yet implemented in Rust `flatten()`. The full cross-language §4.7.6.10 error taxonomy (`ConflictingDerivative`, `DimensionPromotion`, `UnmappedDomain`, `UnsupportedMapping`, `DomainUnitMismatch`, `DomainExtent`, `SliceOutOfDomain`, `CyclicPromotion`) is defined on the Rust `FlattenError` enum for API parity even where a given variant is never raised by Core tier.
 
 #### 5.4.1 Dependencies
 
@@ -2214,7 +2214,7 @@ esm convert model.esm --to=messagepack  # future binary format
 
 The Rust crate exposes a native, correctness-first simulator: a `diffsol`-backed ODE integrator plus a vectorized array-op runtime that integrates discretized PDEs. v1 is intentionally limited in these ways:
 
-- **Time-integration domain.** The simulator consumes a `FlattenedSystem` whose `independent_variables` is exactly `["t"]` — which *includes* discretized PDEs, whose spatial axis is folded into `arrayop` dimensions and integrated natively by the array-op runtime (see §5.9). A system that still carries a spatial independent variable holds an *undiscretized* spatial operator and returns `CompileError::UnsupportedDimensionalityError`; discretize it first (apply the `expression_templates` stencil rewrite).
+- **Time-integration domain.** The simulator consumes a `FlattenedSystem` whose `independent_variables` is exactly `["t"]` — which *includes* discretized PDEs, whose spatial axis is folded into `faq` dimensions and integrated natively by the array-op runtime (see §5.9). A system that still carries a spatial independent variable holds an *undiscretized* spatial operator and returns `CompileError::UnsupportedDimensionalityError`; discretize it first (apply the `expression_templates` stencil rewrite).
 - **No event handling.** Models with non-empty `continuous_events` or `discrete_events` return `CompileError::UnsupportedFeatureError` and are routed to the future Rust events bead.
 - **No coupling beyond Core flatten.** Anything `flatten()` itself rejects (`slice` / `project` / `regrid`, *undiscretized* spatial operators, mismatched dimension mappings) is rejected upstream and never reaches the simulator.
 - **Native only.** The whole `simulate` module is gated behind `cfg(not(target_arch = "wasm32"))`, so the WASM build (which has a separate follow-up bead for simulator exposure) does not pull in `diffsol`.
@@ -2554,7 +2554,7 @@ The following items are acknowledged gaps in this specification. They do not blo
 | Catalyst ↔ ESM conversion | ✓ | — | — | — | — |
 | Coupled system assembly | ✓ | — | — | — | — |
 | 0D simulation (box model) | ✓ | — | ✓ | 0D stiff ODEs (diffsol backend; events and coupling deferred) | — |
-| Spatial (discretized-PDE) simulation | ✓ | — | ✓ | ✓ (arrayop runtime; §5.9) | — |
+| Spatial (discretized-PDE) simulation | ✓ | — | ✓ | ✓ (`faq` runtime; §5.9) | — |
 | Event simulation | ✓ | — | partial | — | — |
 | WASM target | — | — | — | ✓ | — |
 | CLI tool | — | — | — | ✓ | — |

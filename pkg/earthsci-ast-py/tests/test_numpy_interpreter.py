@@ -1,7 +1,7 @@
 """
 Unit tests for :mod:`earthsci_ast.numpy_interpreter`.
 
-These exercise each array op (arrayop, makearray, index, broadcast, reshape,
+These exercise each array op (faq, makearray, index, broadcast, reshape,
 transpose, concat) and a sampling of scalar ops in isolation, using a
 synthetic :class:`EvalContext` that binds a handful of state variables to a
 flat numpy vector. The goal is to catch regressions in individual ops
@@ -110,11 +110,11 @@ def test_index_1d_and_2d() -> None:
     assert eval_expr(ExprNode(op="index", args=["M", 2, 3]), ctx2) == pytest.approx(23.0)
 
 
-def test_arrayop_elementwise_1d() -> None:
-    """``arrayop[i](u[i] * 2, ranges={i:1..3})`` returns ``[2u_1, 2u_2, 2u_3]``."""
+def test_faq_elementwise_1d() -> None:
+    """``faq[i](u[i] * 2, ranges={i:1..3})`` returns ``[2u_1, 2u_2, 2u_3]``."""
     ctx = _ctx({"u": np.array([5.0, 6.0, 7.0])})
     expr = ExprNode(
-        op="aggregate",
+        op="faq",
         args=[],
         output_idx=["i"],
         expr=ExprNode(op="*", args=[2.0, ExprNode(op="index", args=["u", "i"])]),
@@ -125,11 +125,11 @@ def test_arrayop_elementwise_1d() -> None:
     np.testing.assert_allclose(out, [10.0, 12.0, 14.0])
 
 
-def test_arrayop_offset_index() -> None:
+def test_faq_offset_index() -> None:
     """Stencil-style offset index: ``u[i-1] + u[i+1]`` for ``i in 2..4``."""
     ctx = _ctx({"u": np.array([1.0, 10.0, 100.0, 1000.0, 10000.0])})
     expr = ExprNode(
-        op="aggregate",
+        op="faq",
         args=[],
         output_idx=["i"],
         expr=ExprNode(
@@ -258,13 +258,13 @@ def test_expr_contains_array_op_recursion() -> None:
     assert not expr_contains_array_op(ExprNode(op="+", args=[1.0, 2.0]))
 
 
-def test_arrayop_contraction_plus_matvec() -> None:
+def test_faq_contraction_plus_matvec() -> None:
     """out[i] = Σ_j A[i,j] * x[j]  (matrix–vector product via fast einsum path)."""
     A = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])  # 2×3
     x = np.array([10.0, 1.0, 0.1])  # shape (3,)
     ctx = _ctx({"A": A, "x": x})
     expr = ExprNode(
-        op="aggregate",
+        op="faq",
         args=[],
         output_idx=["i"],
         expr=ExprNode(
@@ -282,12 +282,12 @@ def test_arrayop_contraction_plus_matvec() -> None:
     np.testing.assert_allclose(out, expected)
 
 
-def test_arrayop_contraction_max_row() -> None:
+def test_faq_contraction_max_row() -> None:
     """out[i] = max_j A[i,j]  (row-wise max via fast outer-reduce path)."""
     A = np.array([[3.0, 1.0, 4.0], [1.0, 5.0, 9.0]])  # 2×3
     ctx = _ctx({"A": A})
     expr = ExprNode(
-        op="aggregate",
+        op="faq",
         args=[],
         output_idx=["i"],
         expr=ExprNode(op="index", args=["A", "i", "j"]),
@@ -298,12 +298,12 @@ def test_arrayop_contraction_max_row() -> None:
     np.testing.assert_allclose(out, [4.0, 9.0])
 
 
-def test_arrayop_contraction_min_row() -> None:
+def test_faq_contraction_min_row() -> None:
     """out[i] = min_j A[i,j]  (row-wise min via fast outer-reduce path)."""
     A = np.array([[3.0, 1.0, 4.0], [1.0, 5.0, 9.0]])  # 2×3
     ctx = _ctx({"A": A})
     expr = ExprNode(
-        op="aggregate",
+        op="faq",
         args=[],
         output_idx=["i"],
         expr=ExprNode(op="index", args=["A", "i", "j"]),
@@ -314,13 +314,13 @@ def test_arrayop_contraction_min_row() -> None:
     np.testing.assert_allclose(out, [1.0, 1.0])
 
 
-def test_arrayop_contraction_plus_scalar_coeff() -> None:
+def test_faq_contraction_plus_scalar_coeff() -> None:
     """out[i] = Σ_j 2 * A[i,j] * x[j]  (scalar coefficient in fast path)."""
     A = np.array([[1.0, 2.0], [3.0, 4.0]])  # 2×2
     x = np.array([5.0, 6.0])
     ctx = _ctx({"A": A, "x": x})
     expr = ExprNode(
-        op="aggregate",
+        op="faq",
         args=[],
         output_idx=["i"],
         expr=ExprNode(
@@ -339,11 +339,11 @@ def test_arrayop_contraction_plus_scalar_coeff() -> None:
     np.testing.assert_allclose(out, expected)
 
 
-def test_arrayop_stencil_fallback_unchanged() -> None:
+def test_faq_stencil_fallback_unchanged() -> None:
     """Stencil with offset subscripts still works via scalar fallback."""
     ctx = _ctx({"u": np.array([1.0, 10.0, 100.0, 1000.0, 10000.0])})
     expr = ExprNode(
-        op="aggregate",
+        op="faq",
         args=[],
         output_idx=["i"],
         expr=ExprNode(
@@ -365,7 +365,7 @@ def test_arrayop_stencil_fallback_unchanged() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _scalar_aggregate(semiring, body, ranges, reduce=None, op="aggregate"):
+def _scalar_aggregate(semiring, body, ranges, reduce=None, op="faq"):
     return ExprNode(
         op=op, args=[], output_idx=[], semiring=semiring, reduce=reduce, expr=body, ranges=ranges
     )
@@ -460,7 +460,7 @@ def test_bare_reduce_max_over_all_negative_terms_is_not_clamped_to_zero() -> Non
     The identity is the fold seed, so a wrong ``0.0`` seed corrupts non-empty
     reductions too, not just empty ones: ``max(0, -2, -5, -1)`` is ``0`` where
     the answer is ``-1``. This is the form the cumulative-reduction fixture
-    ``tests/fixtures/arrayop/25_cumulative_prefix_reduction.esm`` exercises
+    ``tests/fixtures/faq/25_cumulative_prefix_reduction.esm`` exercises
     through a ``filter``.
     """
     ctx = _ctx({"a": np.array([-2.0, -5.0, -1.0])})
@@ -528,7 +528,7 @@ def test_ragged_index_set_dynamic_per_parent_bound() -> None:
     ctx = _ctx({"nedges": np.array([2.0, 3.0])}, index_sets=idx)
     # out[i] = Σ_{k=1..nedges[i]} k  → [1+2, 1+2+3] = [3, 6]
     node = ExprNode(
-        op="aggregate",
+        op="faq",
         args=[],
         output_idx=["i"],
         expr="k",
@@ -541,7 +541,7 @@ def test_ragged_output_index_rejected() -> None:
     idx = {"edges_of_cell": {"kind": "ragged", "of": ["i"], "offsets": "nedges", "values": "edges"}}
     ctx = _ctx({"nedges": np.array([2.0])}, index_sets=idx)
     node = ExprNode(
-        op="aggregate",
+        op="faq",
         args=[],
         output_idx=["k"],
         expr="k",
@@ -559,7 +559,7 @@ def test_array_output_with_semiring_and_from() -> None:
         op="*", args=[ExprNode(op="index", args=["a", "i"]), ExprNode(op="index", args=["b", "i"])]
     )
     node = ExprNode(
-        op="aggregate",
+        op="faq",
         args=[],
         output_idx=["i"],
         semiring="sum_product",
@@ -571,7 +571,7 @@ def test_array_output_with_semiring_and_from() -> None:
 
 def test_expr_contains_array_op_recognizes_aggregate() -> None:
     node = ExprNode(
-        op="aggregate",
+        op="faq",
         args=[],
         output_idx=[],
         expr=ExprNode(op="index", args=["a", "i"]),
@@ -589,7 +589,7 @@ def test_matvec_contraction_with_two_indices_sum_product() -> None:
         args=[ExprNode(op="index", args=["A", "i", "k"]), ExprNode(op="index", args=["x", "k"])],
     )
     node = ExprNode(
-        op="aggregate",
+        op="faq",
         args=[],
         output_idx=["i"],
         semiring="sum_product",

@@ -367,7 +367,7 @@ diagnostic_code_registry! {
     RECURRENCE_UNSUPPORTED_FORM = "recurrence_unsupported_form";
     /// A relational node in a continuous (ODE-position) expression.
     RELATIONAL_NODE_IN_CONTINUOUS = "relational_node_in_continuous";
-    /// An `aggregate` binder (a `ranges` key or an `output_idx` entry) spelled
+    /// A `faq` binder (a `ranges` key or an `output_idx` entry) spelled
     /// with a globally-scoped name — the document's independent variable
     /// (esm-spec §11.3) or the §6.4 `_var` placeholder — which every consumer
     /// resolves by name before the loop bindings, so the symbol would never

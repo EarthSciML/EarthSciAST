@@ -1,5 +1,5 @@
 # Regression tests for issue #175 — an ELEMENTWISE-defined array observed that is
-# reached ONLY through an `index(…)` gather inside an `aggregate` body.
+# reached ONLY through an `index(…)` gather inside a `faq` body.
 #
 # `_fold_elementwise_array_observeds` (tree_walk/build_helpers.jl) inlines an
 # array observed whose body is elementwise (`f = 1 + cos(pi*zc)`) into every
@@ -58,7 +58,7 @@ const ESM_EOG = EarthSciAST
     # ---- The two working spellings the issue names, as differential oracles ----
     #
     # Same numbers three ways: the elementwise observed read through a gather
-    # (above), the explicit `aggregate` gather spelling, and the elementwise body
+    # (above), the explicit `faq` gather spelling, and the elementwise body
     # consumed directly in a state RHS.
     function _column_model(f_rhs)
         vars = Dict{String,ModelVariable}(
@@ -68,7 +68,7 @@ const ESM_EOG = EarthSciAST
         )
         eqs = Equation[
             Equation(OpExpr("D", ASTExpr[VarExpr("s")]; wrt="t"),
-                     OpExpr("aggregate", ASTExpr[VarExpr("f")];
+                     OpExpr("faq", ASTExpr[VarExpr("f")];
                             semiring="sum_product", output_idx=Any[],
                             ranges=Dict{String,Any}("j" => Any[1, 4]),
                             expr_body=OpExpr("index", ASTExpr[VarExpr("f"), VarExpr("j")]))),
@@ -86,7 +86,7 @@ const ESM_EOG = EarthSciAST
         body = OpExpr("+", ASTExpr[NumExpr(1.0),
                  OpExpr("cos", ASTExpr[OpExpr("*", ASTExpr[NumExpr(_pi),
                    OpExpr("index", ASTExpr[VarExpr("zc"), VarExpr("i")])])])])
-        model = _column_model(OpExpr("aggregate", ASTExpr[VarExpr("zc")];
+        model = _column_model(OpExpr("faq", ASTExpr[VarExpr("zc")];
                                      semiring="sum_product", output_idx=Any["i"],
                                      ranges=Dict{String,Any}("i" => Any[1, 4]),
                                      expr_body=body))
@@ -124,10 +124,10 @@ const ESM_EOG = EarthSciAST
                    OpExpr("cos", ASTExpr[VarExpr("k")])]))
         # a producer node is array-valued; a SCALAR reduction is not
         @test A(OpExpr("makearray", ASTExpr[]))
-        @test A(OpExpr("aggregate", ASTExpr[]; output_idx=Any["i"],
+        @test A(OpExpr("faq", ASTExpr[]; output_idx=Any["i"],
                        ranges=Dict{String,Any}("i" => Any[1, 4]),
                        expr_body=NumExpr(1.0)))
-        @test !A(OpExpr("aggregate", ASTExpr[]; output_idx=Any[],
+        @test !A(OpExpr("faq", ASTExpr[]; output_idx=Any[],
                         ranges=Dict{String,Any}("j" => Any[1, 4]),
                         expr_body=OpExpr("index", ASTExpr[VarExpr("zc"), VarExpr("j")])))
         # an already-gathered leaf is scalar — `index` is not an elementwise op,

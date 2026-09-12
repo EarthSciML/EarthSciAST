@@ -838,14 +838,14 @@ describe('spec-sanctioned constructs the checker used to reject', () => {
   })
 
   it('(g) treats a construct-BOUND loop index as in scope, without allowlisting letters', () => {
-    // An `aggregate` binds its `output_idx` / `ranges` names, and an `index`
+    // A `faq` binds its `output_idx` / `ranges` names, and an `index`
     // element position is a bound index. Those names are in scope inside the
     // construct's body and are never `undefined_variable`. Critically, the scope
     // is derived from the BINDERS actually present — not from a list of
     // single-letter names — so an unbound name is still reported even when it
     // sits in the very same body.
     const boundIndex = validate({
-      esm: '1.0.0',
+      esm: '1.1.0',
       metadata: { name: 'bound-index' },
       models: {
         M: {
@@ -856,14 +856,14 @@ describe('spec-sanctioned constructs the checker used to reject', () => {
           equations: [
             {
               lhs: {
-                op: 'aggregate',
+                op: 'faq',
                 args: [],
                 output_idx: ['i'],
                 ranges: { i: [1, 3] },
                 expr: { op: 'D', args: [{ op: 'index', args: ['u', 'i'] }], wrt: 't' },
               },
               rhs: {
-                op: 'aggregate',
+                op: 'faq',
                 args: [],
                 output_idx: ['i'],
                 ranges: { i: [1, 3] },
@@ -882,7 +882,7 @@ describe('spec-sanctioned constructs the checker used to reject', () => {
     // binder set is derived, not an allowlist. `j` is a single letter and is NOT
     // excused.
     const unbound = validate({
-      esm: '1.0.0',
+      esm: '1.1.0',
       metadata: { name: 'unbound-index' },
       models: {
         M: {
@@ -892,14 +892,14 @@ describe('spec-sanctioned constructs the checker used to reject', () => {
           equations: [
             {
               lhs: {
-                op: 'aggregate',
+                op: 'faq',
                 args: [],
                 output_idx: ['i'],
                 ranges: { i: [1, 3] },
                 expr: { op: 'D', args: [{ op: 'index', args: ['u', 'i'] }], wrt: 't' },
               },
               rhs: {
-                op: 'aggregate',
+                op: 'faq',
                 args: [],
                 output_idx: ['i'],
                 ranges: { i: [1, 3] },

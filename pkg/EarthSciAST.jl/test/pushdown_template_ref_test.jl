@@ -35,7 +35,7 @@ _apply(name, bindings) = Dict{String,Any}(
     "op"=>"apply_expression_template", "args"=>Any[], "name"=>name,
     "bindings"=>Dict{String,Any}(bindings))
 function _agg(output_idx, ranges, expr; reduce=nothing, args=String[], extra...)
-    d = Dict{String,Any}("op"=>"aggregate", "output_idx"=>collect(output_idx),
+    d = Dict{String,Any}("op"=>"faq", "output_idx"=>collect(output_idx),
                          "ranges"=>ranges, "args"=>collect(args), "expr"=>expr)
     reduce === nothing || (d["reduce"] = reduce)
     for (k, v) in extra; d[String(k)] = v; end

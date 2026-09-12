@@ -174,7 +174,7 @@ describe('array & call-shaped tier: reconstructs exact node shapes', () => {
 describe('reduction & array-query tier: reconstructs exact node shapes', () => {
   it('plain sum with a numeric range and a from-set', () => {
     expect(parseExpression('sum[i] (i * j) where {i in 1:2, j in faces}')).toEqual({
-      op: 'aggregate',
+      op: 'faq',
       output_idx: ['i'],
       ranges: { i: [1, 2], j: { from: 'faces' } },
       expr: { op: '*', args: ['i', 'j'] },
@@ -183,7 +183,7 @@ describe('reduction & array-query tier: reconstructs exact node shapes', () => {
   })
   it('from(of…) range and index-base arg derivation', () => {
     expect(parseExpression('sum[i] (u[i, k]) where {i in cells, k in edges_of_cell(i)}')).toEqual({
-      op: 'aggregate',
+      op: 'faq',
       output_idx: ['i'],
       ranges: { i: { from: 'cells' }, k: { from: 'edges_of_cell', of: ['i'] } },
       expr: { op: 'index', args: ['u', 'i', 'k'] },
@@ -192,7 +192,7 @@ describe('reduction & array-query tier: reconstructs exact node shapes', () => {
   })
   it('symbol selects reduce; empty output index', () => {
     expect(parseExpression('min[i] (a[i]) where {i in cells}')).toEqual({
-      op: 'aggregate',
+      op: 'faq',
       output_idx: ['i'],
       reduce: 'min',
       ranges: { i: { from: 'cells' } },
@@ -200,7 +200,7 @@ describe('reduction & array-query tier: reconstructs exact node shapes', () => {
       args: ['a'],
     })
     expect(parseExpression('sum[] (u[i]) where {i in cells}')).toEqual({
-      op: 'aggregate',
+      op: 'faq',
       output_idx: [],
       ranges: { i: { from: 'cells' } },
       expr: { op: 'index', args: ['u', 'i'] },
@@ -211,7 +211,7 @@ describe('reduction & array-query tier: reconstructs exact node shapes', () => {
     expect(
       parseExpression('max[i] (i * j) where {i in 1:2, j in options} [semiring=max_product]'),
     ).toEqual({
-      op: 'aggregate',
+      op: 'faq',
       output_idx: ['i'],
       semiring: 'max_product',
       ranges: { i: [1, 2], j: { from: 'options' } },
@@ -225,7 +225,7 @@ describe('reduction & array-query tier: reconstructs exact node shapes', () => {
         'sum[j] (A[i, j]) where {i in src, j in tgt} join(src_bin=tgt_bin) if A[i, j] > atol',
       ),
     ).toEqual({
-      op: 'aggregate',
+      op: 'faq',
       output_idx: ['j'],
       semiring: 'sum_product',
       ranges: { i: { from: 'src' }, j: { from: 'tgt' } },

@@ -3,7 +3,7 @@
  * — esm-spec §4.3.1.1, CONFORMANCE_SPEC §5.19.
  *
  * The construct: an equation defining an array-shaped unknown `V` whose RHS
- * `aggregate` body reads `index(V, k - c)` — the array being defined, strictly
+ * `faq` body reads `index(V, k - c)` — the array being defined, strictly
  * earlier along ONE of the aggregate's own output axes. There is no new op and
  * no new schema field; the recurrence, its axis and its lag are all read off the
  * document, which is why recognition is STRUCTURAL and lives here.
@@ -119,7 +119,7 @@ function symbolBounds(range: unknown, esmFile: EsmFile | undefined): Bounds | un
   return undefined
 }
 
-/** Every statically resolvable symbol bound an `aggregate`'s `ranges` declares. */
+/** Every statically resolvable symbol bound a `faq`'s `ranges` declares. */
 function rangeBounds(node: ExpressionNode, esmFile: EsmFile | undefined): Array<[string, Bounds]> {
   const out: Array<[string, Bounds]> = []
   for (const [sym, range] of Object.entries(node.ranges ?? {})) {
@@ -295,10 +295,10 @@ function collectSelfReads(
     return
   }
 
-  // An `aggregate` binds its `ranges` symbols over its own body; an inner
+  // A `faq` binds its `ranges` symbols over its own body; an inner
   // binding shadows an outer one of the same name, which the ordered array plus
   // insertion-ordered snapshot below reproduces.
-  const pushed = e.op === 'aggregate' ? rangeBounds(e, esmFile) : []
+  const pushed = e.op === 'faq' ? rangeBounds(e, esmFile) : []
   env.push(...pushed)
 
   const isSelfIndex = e.op === 'index' && (e.args ?? [])[0] === varName
@@ -333,8 +333,8 @@ function collectSelfReads(
 
 /**
  * The variable an equation DEFINES, with the cell frame its LHS declares (if
- * any): a bare variable, or the §4.3 indexed-aggregate LHS form
- * `aggregate{expr: index(V, k...)}`.
+ * any): a bare variable, or the §4.3 indexed-`faq` LHS form
+ * `faq{expr: index(V, k...)}`.
  *
  * A DERIVATIVE LHS (`D(u)`) deliberately yields `undefined`: it defines no array
  * algebraically, so a stencil read of `u` at `i-1` there is a gather on the
@@ -343,7 +343,7 @@ function collectSelfReads(
  */
 function recurrenceLhsTarget(lhs: Expr): { varName: string; frame?: (string | 1)[] } | undefined {
   if (typeof lhs === 'string') return { varName: lhs }
-  if (!isExprNode(lhs) || lhs.op !== 'aggregate') return undefined
+  if (!isExprNode(lhs) || lhs.op !== 'faq') return undefined
   const inner = lhs.expr
   if (!isExprNode(inner) || inner.op !== 'index') return undefined
   const target = (inner.args ?? [])[0]
@@ -527,22 +527,22 @@ function checkRecurrenceEquation(
         'operand whole — a `makearray` region value, or a ' +
         '`reshape`/`transpose`/`concat`/`broadcast` operand — so no cell-by-cell sweep can ' +
         "supply it. A `makearray`'s region order fixes which write WINS, not the order cells are " +
-        'EVALUATED in (esm-spec §4.3.1.1, §4.3.2); write the recurrence as one `aggregate` with ' +
+        'EVALUATED in (esm-spec §4.3.1.1, §4.3.2); write the recurrence as one `faq` with ' +
         'the base case as an `ifelse` guard in the body.',
     )
   }
 
-  // The cell frame: the indexed-aggregate LHS's own indices, else the RHS
+  // The cell frame: the indexed-`faq` LHS's own indices, else the RHS
   // aggregate's.
-  const rhsFrame = isExprNode(rhs) && rhs.op === 'aggregate' ? rhs.output_idx : undefined
+  const rhsFrame = isExprNode(rhs) && rhs.op === 'faq' ? rhs.output_idx : undefined
   const frame = target.frame ?? rhsFrame
   if (frame === undefined) {
     return finding(
       ERROR_CODES.RECURRENCE_UNSUPPORTED_FORM,
       `the definition of '${varName}' reads '${varName}' at another position, but the equation ` +
-        'declares no cell frame to sweep: its RHS is not an `aggregate` over the ' +
-        "variable's axes and its LHS is not the indexed-aggregate form " +
-        `\`aggregate{expr: index(${varName}, k…)}\` (esm-spec §4.3.1.1).`,
+        'declares no cell frame to sweep: its RHS is not a `faq` over the ' +
+        "variable's axes and its LHS is not the indexed-`faq` form " +
+        `\`faq{expr: index(${varName}, k…)}\` (esm-spec §4.3.1.1).`,
     )
   }
   // `output_idx` admits the integer 1 as a literal singleton dimension. A
@@ -560,7 +560,7 @@ function checkRecurrenceEquation(
   // The frame symbols' own bounds come from the DEFINING aggregate's `ranges`;
   // a read's captured scope refines them with whatever inner symbols it saw.
   const frameEnv = new Map<string, Bounds>(
-    isExprNode(rhs) && rhs.op === 'aggregate' ? rangeBounds(rhs, esmFile) : [],
+    isExprNode(rhs) && rhs.op === 'faq' ? rangeBounds(rhs, esmFile) : [],
   )
 
   let axis: number | undefined

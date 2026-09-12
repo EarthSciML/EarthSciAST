@@ -29,7 +29,7 @@ import "sort"
 // `D(·, t)` on some equation LHS, sorted lexicographically.
 //
 // The derivative LHS may be WRAPPED and still credits its base variable: a bare
-// `D(u)`, an indexed `D(u[i])`, and an `aggregate` whose `expr` is a `D(...)`
+// `D(u)`, an indexed `D(u[i])`, and a `faq` whose `expr` is a `D(...)`
 // (the whole-array spelling of an elementwise derivative) all name `u` an ODE
 // state.
 func ODEStates(model *Model) []string {
@@ -308,7 +308,7 @@ func definedVariableName(lhs Expression) string {
 	if node.Op == "index" && len(node.Args) > 0 {
 		return definedVariableName(node.Args[0])
 	}
-	if node.Op == "aggregate" && node.Expr != nil {
+	if node.Op == "faq" && node.Expr != nil {
 		if inner, ok := asExprNode(node.Expr); ok && inner.Op == "index" {
 			return definedVariableName(node.Expr)
 		}
@@ -321,7 +321,7 @@ func definedVariableName(lhs Expression) string {
 //
 // A `D` node's argument may be the bare name, an `index(u, i…)` gather, or any
 // other wrapper; the base name is the first free symbol reachable through it. An
-// `aggregate` whose `expr` is a derivative is the whole-array spelling of the
+// `faq` whose `expr` is a derivative is the whole-array spelling of the
 // same thing and credits the same variable, which is why the walk descends
 // `expr` as well as `args`.
 func derivativeTargets(expr Expression, indep string) map[string]bool {

@@ -1,4 +1,4 @@
-"""Tier-1 source codegen for box-bound arrayop bodies (:mod:`numpy_codegen`).
+"""Tier-1 source codegen for box-bound faq bodies (:mod:`numpy_codegen`).
 
 The generated flat functions must be BIT-IDENTICAL to the compiled-closure
 tier on every path they specialize — the pure-map stencils, the makearray
@@ -49,11 +49,11 @@ def _ctx(arrays=None, params=None):
 
 def _eval_both(make_agg, arrays=None, params=None):
     """(codegen result, kill-switch oracle result) on fresh trees each."""
-    fast = NI._eval_arrayop(make_agg(), _ctx(arrays, params))
+    fast = NI._eval_faq(make_agg(), _ctx(arrays, params))
     prev = NI._CODEGEN_DISABLE
     NI._CODEGEN_DISABLE = True
     try:
-        ref = NI._eval_arrayop(make_agg(), _ctx(arrays, params))
+        ref = NI._eval_faq(make_agg(), _ctx(arrays, params))
     finally:
         NI._CODEGEN_DISABLE = prev
     return fast, ref
@@ -86,7 +86,7 @@ def test_stencil_map_is_bitwise_and_codegens(u) -> None:
             ],
         )
         return ExprNode(
-            op="aggregate",
+            op="faq",
             args=[],
             output_idx=["i", "j"],
             ranges={"i": [2, 7], "j": [1, 5]},
@@ -94,7 +94,7 @@ def test_stencil_map_is_bitwise_and_codegens(u) -> None:
         )
 
     node = make()
-    res = NI._eval_arrayop(node, _ctx({"u": u}, {"h2": 0.25}))
+    res = NI._eval_faq(node, _ctx({"u": u}, {"h2": 0.25}))
     assert callable(node._cg_map)
     fast, ref = _eval_both(make, {"u": u}, {"h2": 0.25})
     _assert_bitwise(fast, ref)
@@ -115,7 +115,7 @@ def test_makearray_regions_are_bitwise(u) -> None:
             values=[edge, interior],
         )
         return ExprNode(
-            op="aggregate",
+            op="faq",
             args=[],
             output_idx=["i", "j"],
             ranges={"i": [1, 8], "j": [1, 5]},
@@ -123,7 +123,7 @@ def test_makearray_regions_are_bitwise(u) -> None:
         )
 
     node = make()
-    NI._eval_arrayop(node, _ctx({"u": u}))
+    NI._eval_faq(node, _ctx({"u": u}))
     ma_node = node.expr.args[0]
     fns = ma_node._cg_regions[(("i", "j"), (8, 5))]
     assert len(fns) == 2 and all(f is not None for f in fns)
@@ -138,14 +138,14 @@ def test_const_body_does_not_alias_across_calls(u) -> None:
 
     def make():
         return ExprNode(
-            op="aggregate", args=[], output_idx=["i"], ranges={"i": [1, 6]}, expr=_mul("i", 3.0)
+            op="faq", args=[], output_idx=["i"], ranges={"i": [1, 6]}, expr=_mul("i", 3.0)
         )
 
     node = make()
-    first = NI._eval_arrayop(node, _ctx())
+    first = NI._eval_faq(node, _ctx())
     expected = first.copy()
     first += 1e9  # simulate a downstream in-place consumer
-    second = NI._eval_arrayop(node, _ctx())
+    second = NI._eval_faq(node, _ctx())
     _assert_bitwise(second, expected)
 
 
@@ -156,7 +156,7 @@ def test_contraction_broadcast_is_bitwise(u) -> None:
     def make():
         body = _mul(_idx("u", _add("k", 1), "j"), _idx("w", _sub(_add("k", 8), "k"), "k"))
         return ExprNode(
-            op="aggregate",
+            op="faq",
             args=[],
             output_idx=["j"],
             ranges={"j": [1, 5], "k": [1, 6]},
@@ -165,7 +165,7 @@ def test_contraction_broadcast_is_bitwise(u) -> None:
 
     w = np.random.default_rng(11).standard_normal((9, 6))
     node = make()
-    NI._eval_arrayop(node, _ctx({"u": u, "w": w}))
+    NI._eval_faq(node, _ctx({"u": u, "w": w}))
     assert callable(node._cg_contract)
     fast, ref = _eval_both(make, {"u": u, "w": w})
     _assert_bitwise(fast, ref)
@@ -178,14 +178,14 @@ def test_nested_aggregate_delegates_and_matches(u) -> None:
 
     def make():
         inner = ExprNode(
-            op="aggregate",
+            op="faq",
             args=[],
             output_idx=[],
             ranges={"k": [1, 3]},
             expr=_idx("u", _add("i", "k"), 1),
         )
         return ExprNode(
-            op="aggregate",
+            op="faq",
             args=[],
             output_idx=["i"],
             ranges={"i": [1, 4]},
@@ -203,7 +203,7 @@ def test_data_dependent_subscript_stays_dynamic(u) -> None:
     def make():
         body = _idx("u", _idx("tile", "i"), "j")
         return ExprNode(
-            op="aggregate",
+            op="faq",
             args=[],
             output_idx=["i", "j"],
             ranges={"i": [1, 4], "j": [1, 5]},
@@ -221,7 +221,7 @@ def test_scalar_const_subscript_partial_index(u) -> None:
 
     def make():
         return ExprNode(
-            op="aggregate",
+            op="faq",
             args=[],
             output_idx=["j"],
             ranges={"j": [1, 5]},
@@ -247,7 +247,7 @@ def test_repeated_symbols_and_scalar_funcs(u) -> None:
             ],
         )
         return ExprNode(
-            op="aggregate",
+            op="faq",
             args=[],
             output_idx=["i", "j"],
             ranges={"i": [1, 8], "j": [1, 5]},
@@ -264,7 +264,7 @@ def test_kill_switch_leaves_node_unmarked(u) -> None:
 
     def make():
         return ExprNode(
-            op="aggregate",
+            op="faq",
             args=[],
             output_idx=["i"],
             ranges={"i": [1, 8]},
@@ -275,7 +275,7 @@ def test_kill_switch_leaves_node_unmarked(u) -> None:
     prev = NI._CODEGEN_DISABLE
     NI._CODEGEN_DISABLE = True
     try:
-        NI._eval_arrayop(node, _ctx({"u": u}))
+        NI._eval_faq(node, _ctx({"u": u}))
     finally:
         NI._CODEGEN_DISABLE = prev
     assert not hasattr(node, "_cg_map")
@@ -287,7 +287,7 @@ def test_error_parity_unresolved_symbol(u) -> None:
 
     def make():
         return ExprNode(
-            op="aggregate",
+            op="faq",
             args=[],
             output_idx=["i"],
             ranges={"i": [1, 4]},
@@ -295,12 +295,12 @@ def test_error_parity_unresolved_symbol(u) -> None:
         )
 
     with pytest.raises(NI.NumpyInterpreterError, match="Unresolved symbol"):
-        NI._eval_arrayop(make(), _ctx({"u": u}))
+        NI._eval_faq(make(), _ctx({"u": u}))
     prev = NI._CODEGEN_DISABLE
     NI._CODEGEN_DISABLE = True
     try:
         with pytest.raises(NI.NumpyInterpreterError, match="Unresolved symbol"):
-            NI._eval_arrayop(make(), _ctx({"u": u}))
+            NI._eval_faq(make(), _ctx({"u": u}))
     finally:
         NI._CODEGEN_DISABLE = prev
 

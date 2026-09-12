@@ -10,15 +10,15 @@
 # scalars over the grid in the evaluator (runner logic), we PROMOTE shapes in the
 # AST: any variable whose defining expression's inferred shape is an array grid
 # shape is promoted to that shape, and its equation is rewritten from a scalar
-# expression into an `arrayop` that indexes the now-array operands per cell and
-# broadcasts the genuine scalars. Because the rewrite emits standard `arrayop`
+# expression into a `faq` that indexes the now-array operands per cell and
+# broadcasts the genuine scalars. Because the rewrite emits standard `faq`
 # nodes, the evaluator needs NO new per-cell machinery.
 #
 # This is broadcast shape inference over the dataflow graph:
 #  - SEED: variables with an explicit (grid) shape — regrid outputs, loader
 #    fields, the spatial state.
 #  - PROPAGATE: an operand's shape flows to the result through elementwise ops;
-#    an `aggregate`/`arrayop` with a contracting `output_idx` is a PROMOTION
+#    a `faq` with a contracting `output_idx` is a PROMOTION
 #    BOUNDARY (a genuine reduction stays scalar), and an `index` gather is scalar.
 #  - CONFLICT: all array sources must resolve to one grid shape; a genuine
 #    mismatch is an error (the caller picks the target grid).
@@ -111,7 +111,7 @@ operand naming an axis absent from `axes` is unalignable and raises
 `array_shape_mismatch`, esm-spec §4.3.4 "Broadcast compatibility").
 
 Alignment is NAME-based only where names exist. Nodes with an ANONYMOUS shape —
-an `index`-wrapped producer (`makearray`, an `arrayop`/`aggregate` whose
+an `index`-wrapped producer (`makearray`, a `faq` whose
 `output_idx` symbols are node-local, `reshape`/`transpose`/`concat`, a literal
 array) and any variable with no recorded declared shape — keep the historical
 POSITIONAL gather over all `loops`. `nothing` (or an unusable context, see
@@ -235,10 +235,10 @@ end
 
 # Replace each VarExpr leaf naming a promoted ARRAY variable with `index(v, loops…)`,
 # leaving scalar leaves (params, constants, reductions' results) untouched. Does
-# not descend into nested aggregate/arrayop bodies — those carry their own indexing.
+# not descend into nested faq bodies — those carry their own indexing.
 #
 # An ARRAY-PRODUCING node in elementwise position (a `makearray`, or an
-# `aggregate`/`arrayop` with non-empty `output_idx`) gets the same broadcast
+# `faq` with non-empty `output_idx`) gets the same broadcast
 # treatment as an array variable leaf: it is wrapped in `index(node, loops…)` so
 # the per-cell expansion gathers this cell's element. This is the whole-array
 # broadcast semantics of esm-spec §9.6.8 — a discretization rule lowers
@@ -259,19 +259,19 @@ function _index_array_leaves(expr::ASTExpr,
 end
 
 # True iff `expr` is an array-PRODUCING node: a `makearray`, or an
-# `aggregate`/`arrayop` with a non-empty `output_idx` (a scalar reduction has an
+# `faq` with a non-empty `output_idx` (a scalar reduction has an
 # empty `output_idx` and produces a scalar).
 function _is_array_producer(expr::ASTExpr)::Bool
     expr isa OpExpr || return false
     expr.op == "makearray" && return true
-    # The remaining producers (aggregate/arrayop) are array-valued only with a
+    # The remaining producers (faq) are array-valued only with a
     # non-empty `output_idx` — a scalar reduction has an empty one.
     expr.op in _ARRAY_PRODUCER_OPS || return false
     expr.output_idx === nothing && return false
     return any(s -> s isa AbstractString, expr.output_idx)
 end
 
-# Wrap a (formerly scalar) defining expression in an arrayop producing `shape`.
+# Wrap a (formerly scalar) defining expression in a faq producing `shape`.
 # Loop vars are fresh simple names following the shape-promotion synthetic-name
 # convention `_p<k>` (zero-based: `_p0`, `_p1`, …) — NOT the index-set names,
 # which may be dotted/namespaced. Each shape axis ranges over the index set it
@@ -283,10 +283,10 @@ end
 # rather than to store: the §6.6.5 assertion path
 # ([`_authored_observed_body`](@ref)) has the extents in hand and no index-set
 # registry at the evaluator. Everything else about the lift — the loop-name
-# convention, the §4.3.4 name alignment, the arrayop wrapper — MUST stay shared
+# convention, the §4.3.4 name alignment, the faq wrapper — MUST stay shared
 # with the build's own promotion, which is why this takes a keyword instead of
 # being copied.
-function _lift_to_arrayop(expr::ASTExpr, shape::Vector{String},
+function _lift_to_faq(expr::ASTExpr, shape::Vector{String},
                           arrayvars::Set{String},
                           var_shapes::Dict{String,Vector{String}}=
                               Dict{String,Vector{String}}();
@@ -301,7 +301,7 @@ function _lift_to_arrayop(expr::ASTExpr, shape::Vector{String},
     # degrades to the historical positional gather rather than misaligning.
     body = _index_array_leaves(expr, arrayvars, loops;
                                align = _AxisAlign(shape, var_shapes))
-    return OpExpr("arrayop", ASTExpr[];
+    return OpExpr("faq", ASTExpr[];
                   output_idx=Any[l for l in loops], ranges=ranges, expr_body=body)
 end
 
@@ -349,18 +349,18 @@ end
     inline_elementwise_array_observeds(flat::FlattenedSystem) -> FlattenedSystem
 
 Substitute away every ARRAY-shaped observed that is defined by a BARE *elementwise*
-equation (`v = expr` where `expr` is not an `arrayop`/`aggregate`/`makearray`), folding
+equation (`v = expr` where `expr` is not a `faq`/`makearray`), folding
 it into the equations that read it and dropping it from the system.
 
-The tree-walk evaluator inlines an array observed only when it is defined by an
-`arrayop` (per-cell index beta-reduction) or is a geometry clip ring; an array observed
+The tree-walk evaluator inlines an array observed only when it is defined by a
+`faq` (per-cell index beta-reduction) or is a geometry clip ring; an array observed
 authored as a plain elementwise expression over the spatial field (a level-set's
 `grad_mag = sqrt(psi_x^2 + psi_y^2)`, `U_n = …`, `S_n = R_0·(1+phi_W+phi_S)`, …) has no
 such per-cell form and is otherwise rejected. Rather than require every such component
-to be re-authored as `arrayop`s, this pass performs the feed-forward topological
+to be re-authored as `faq` nodes, this pass performs the feed-forward topological
 substitution a driver would otherwise do by hand (the level-set fold), in dependency
 order, so the spatial state equation `D(psi,t) = …` carries the fully-inlined RHS and
-`discretize` then lowers its `grad`s. Genuine reductions/gathers (`arrayop`, `aggregate`,
+`discretize` then lowers its `grad`s. Genuine reductions/gathers (`faq`, `faq`,
 `makearray`) are left intact — they ARE inlinable and define their own indexing. A no-op
 when no elementwise array observed exists. Returns a new system; the input is untouched.
 """
@@ -420,7 +420,7 @@ end
     promote_downstream_shapes(flat::FlattenedSystem) -> FlattenedSystem
 
 Promote every variable whose defining algebraic equation has an inferred ARRAY
-(grid) shape from scalar to that shape, rewriting its equation into an `arrayop`
+(grid) shape from scalar to that shape, rewriting its equation into a `faq`
 that indexes the now-array operands per cell. Shape inference is seeded by the
 variables already carrying a grid shape (regrid outputs, loader fields, the
 spatial state) and propagates through elementwise ops, stopping at aggregate
@@ -428,7 +428,7 @@ reductions and `index` gathers. The transform is a no-op for a system with no
 scalar-downstream-of-array variables (it returns an equivalent system).
 
 CONSUMERS of a promoted variable are closed too: a bare reference to a newly
-promoted name inside the body of an `aggregate`/`arrayop` that already carries
+promoted name inside the body of a `faq` that already carries
 its loops (a pointwise-lifted species ODE, an authored per-cell equation) is
 rewritten to an `index(var, <loops>)` gather bound in that body's own loop
 scope — name-aligned against the enclosing `ranges`' index sets where possible,
@@ -503,9 +503,9 @@ function promote_downstream_shapes(flat::FlattenedSystem;
     # here would change working documents.
     newly_promoted = Set{String}(k for k in arrayvars if flat_was_scalar(flat, k))
 
-    # Rewrite equations: a promoted var's bare `x = expr` becomes `x = arrayop(…)`;
+    # Rewrite equations: a promoted var's bare `x = expr` becomes `x = faq(…)`;
     # then, in EVERY equation, a bare reference to a newly promoted variable
-    # inside a loop-carrying aggregate/arrayop body becomes an `index` gather in
+    # inside a loop-carrying faq body becomes an `index` gather in
     # that body's own loop scope (`_index_promoted_consumer_refs`). Without the
     # consumer rewrite, a pointwise-lifted state ODE — whose lift indexed only
     # the operands that carried a shape AT FLATTEN TIME — ships a bare scalar
@@ -517,7 +517,7 @@ function promote_downstream_shapes(flat::FlattenedSystem;
         rhs = if eq.lhs isa VarExpr && (eq.lhs::VarExpr).name in arrayvars &&
                  haskey(defs, (eq.lhs::VarExpr).name) &&
                  (flat_was_scalar(flat, (eq.lhs::VarExpr).name))
-            _lift_to_arrayop(eq.rhs, shapes[(eq.lhs::VarExpr).name], arrayvars, shapes)
+            _lift_to_faq(eq.rhs, shapes[(eq.lhs::VarExpr).name], arrayvars, shapes)
         else
             eq.rhs
         end
@@ -556,14 +556,14 @@ end
 
 Consumer-side companion of the promoted-definition rewrite: replace a BARE
 reference to a newly promoted array variable, wherever it sits inside the body
-of a loop-carrying `aggregate`/`arrayop`, with an `index(var, <loops>)` gather
+of a loop-carrying `faq`, with an `index(var, <loops>)` gather
 bound in the enclosing loop scope.
 
 The motivating construct is a pointwise-lifted species ODE (§10.5) consuming a
 scalar-authored photolysis chain (Fast-JX): the lift indexed only operands that
 carried a shape AT FLATTEN TIME, so the j-rate — promoted only later, by
 `promote_downstream_shapes` — survives as a bare name inside the per-cell
-`aggregate` body, and the evaluator fails to bind it
+`faq` body, and the evaluator fails to bind it
 (`E_TREEWALK_UNBOUND_VARIABLE`). The post-discretize `index_promoted_refs!`
 cannot close this either: it takes ONE `spatial_loops` list, while each consumer
 equation iterates its OWN loop names (the lift's `["i","j","k"]` vs a promoted
@@ -690,7 +690,7 @@ end
 
 Post-discretize pass: replace a BARE reference to a promoted array variable with
 `index(var, <loops>)`, so the evaluator's index beta-reduction collapses it to the
-var's per-cell value. Inside a nested `arrayop` the loops are its own `output_idx`;
+var's per-cell value. Inside a nested `faq` the loops are its own `output_idx`;
 in the spatial state equation (`D(psi,t) = expr(i,j)`, which `discretize` lowers
 with the grad-rule grid loops — only AFTER `promote_downstream_shapes`) the loops
 are `spatial_loops`. The `spatial_loops` default `["i","j"]` is a convention pin:
@@ -715,12 +715,12 @@ function index_promoted_refs!(doc::AbstractDict, arrayvars;
 end
 
 # Single loop-tracking walk: `loops` is the iteration context for bare promoted
-# refs. An `arrayop` switches the context to its own output_idx for its body; an
+# refs. A `faq` switches the context to its own output_idx for its body; an
 # `index` node keeps its array operand (arg 1) and recurses only the index exprs.
 # This is the raw-JSON dict twin of the typed `_wrap_bare_array_refs` rewrite
 # above (same leaf test + `index(ref, loops…)` wrap); it stays separate because
 # it walks a discretized NATIVE document (string leaves, `{"op": …}` dicts,
-# loop-context switching at `arrayop`) rather than typed Exprs.
+# loop-context switching at `faq`) rather than typed Exprs.
 function _index_bare(node, av::Set{String}, loops::Vector{String})
     if node isa AbstractString
         return node in av ? Dict{String,Any}("op"=>"index", "args"=>Any[node, loops...]) : node
@@ -731,7 +731,7 @@ function _index_bare(node, av::Set{String}, loops::Vector{String})
         nm = get(node, "name", nothing)
         if op == "" && nm isa AbstractString && String(nm) in av
             return Dict{String,Any}("op"=>"index", "args"=>Any[node, loops...])
-        elseif op == "arrayop"
+        elseif op == "faq"
             inner = String[String(x) for x in get(node, "output_idx", Any[])]
             out = Dict{String,Any}()
             for (k, v) in node
@@ -765,7 +765,7 @@ function flat_was_scalar(flat::FlattenedSystem, name::AbstractString)::Bool
 end
 
 # Return a copy of a ModelVariable with a new (array) shape. From esm 1.0.0 the
-# rewritten `arrayop` EQUATION is the ONLY source of truth for a promoted
+# rewritten `faq` EQUATION is the ONLY source of truth for a promoted
 # variable's definition — there is no scalar `expression` on the declaration
 # left to clear, so this is a shape change and nothing else.
 function _with_shape(v::ModelVariable, shape::Vector{String})::ModelVariable

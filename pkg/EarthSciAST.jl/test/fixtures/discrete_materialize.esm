@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "discrete_materialize",
     "description": "Discrete-cadence materialization (the middle cadence phase) fixture. `g[j] = sum_i W[i,j]*src[i]` is a conservative-regrid-shaped CONTRACTION mixing a CONST weight matrix W (const_arrays) with a live forcing buffer src (param_arrays): state-free + PARAM-TAINTED -> a discrete cache filled once per refresh. `k[j] = sum_i W[i,j]*offset` reads only const data (W, the scalar param offset): state-free but NOT param-tainted -> it is CONST-cadence and MUST stay on the inline path, never a per-refresh cache (the regression guard against an over-broad cut). D(c[j]) = g[j] + k[j] couples both into the continuous state."
@@ -34,7 +34,7 @@
       "equations": [
         {
           "lhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": [
               "j"
@@ -60,7 +60,7 @@
             }
           },
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": [
               "j"
@@ -95,7 +95,7 @@
         {
           "lhs": "g",
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": [
               "j"
@@ -136,7 +136,7 @@
         {
           "lhs": "k",
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": [
               "j"

@@ -13,7 +13,7 @@ Three layers are exercised:
    Sutherland–Hodgman path (dependency-free) and via ``spherely`` (S2) when it is
    installed (skipped otherwise); ``polygon_area`` evaluates as an ordinary
    ``sum_product`` FAQ over the derived clip-ring index set, reusing the M1
-   ``_eval_arrayop`` machinery — including the actual AST baked into the planar
+   ``_eval_faq`` machinery — including the actual AST baked into the planar
    fixture.
 3. **Tolerance** — the B.5 / §5.8.2 combined rel+abs area gate with the sliver
    floor.
@@ -283,7 +283,7 @@ def test_polygon_intersection_area_disjoint_is_zero() -> None:
 def test_polygon_intersection_area_inside_aggregate_body() -> None:
     """As a scalar leaf it evaluates inside an aggregate body (a 1-term sum)."""
     agg = ExprNode(
-        op="aggregate",
+        op="faq",
         semiring="sum_product",
         output_idx=[],
         args=[],
@@ -573,7 +573,7 @@ def _shoelace_faq(clip_symbol: str, ring_set: str) -> ExprNode:
     )
     body = ExprNode(op="*", args=[0.5, cross])
     return ExprNode(
-        op="aggregate",
+        op="faq",
         semiring="sum_product",
         output_idx=[],
         args=[clip_symbol],

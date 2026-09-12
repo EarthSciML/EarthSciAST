@@ -61,9 +61,10 @@ function _aggregate_oplus_identity(semiring::Union{String,Nothing},
     return (r, _OPLUS_IDENTITY[r])
 end
 
-# True for both the canonical `aggregate` op tag and its deprecated `arrayop`
-# alias (§5.6). The evaluator dispatches on the two identically.
-@inline _is_aggregate_op(op::AbstractString) = (op == "arrayop" || op == "aggregate")
+# True for the canonical `faq` op tag — the ONLY spelling that reaches here.
+# `aggregate` is normalized away at the wire boundary and `arrayop` is rejected
+# there (docs/content/rfcs/faq-node-rename.md §5.2).
+@inline _is_faq_op(op::AbstractString) = (op == "faq")
 
 # Combine a vector of expressions with the semiring ⊕ (`oplus`), returning the
 # 0̄ identity (`zerobar`) for an empty reduction. Build-time helper for
@@ -713,7 +714,7 @@ function _resolve_join_in_expr(expr::OpExpr, index_sets::AbstractDict, vi_maps=_
     new_lower = expr.lower === nothing ? nothing : _resolve_join_in_expr(expr.lower, index_sets, vi_maps, const_arrays, var_shapes, obs_defs)
     new_upper = expr.upper === nothing ? nothing : _resolve_join_in_expr(expr.upper, index_sets, vi_maps, const_arrays, var_shapes, obs_defs)
     new_filter = expr.filter === nothing ? nothing : _resolve_join_in_expr(expr.filter, index_sets, vi_maps, const_arrays, var_shapes, obs_defs)
-    gates = (_is_aggregate_op(expr.op) && expr.join !== nothing) ?
+    gates = (_is_faq_op(expr.op) && expr.join !== nothing) ?
             _resolve_join_gates_for(expr, index_sets, vi_maps, const_arrays, var_shapes, obs_defs) : expr.join_gates
     return reconstruct(expr; args=new_args, expr_body=new_body,
                        values=new_values, lower=new_lower, upper=new_upper,

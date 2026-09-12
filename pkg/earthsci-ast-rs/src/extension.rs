@@ -58,7 +58,7 @@
 
 /// Aggregate (`sum_product` / semiring FAQ) range resolution.
 pub mod aggregate {
-    pub use crate::aggregate::{
+    pub use crate::faq::{
         ReduceKind, Semiring, resolve_aggregate_ranges, resolve_expr_ranges_with_extents,
     };
 }

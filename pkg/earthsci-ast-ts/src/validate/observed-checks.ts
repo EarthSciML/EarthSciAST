@@ -43,7 +43,7 @@ import { extractVariableReferences, collectIndexSymbols } from './expr-utils.js'
  * would hand a different one of them to two runs over the same document.
  *
  * Binder-introduced symbols are subtracted before the intersection, exactly as
- * {@link validateReferenceIntegrity} subtracts them: an `aggregate` range key,
+ * {@link validateReferenceIntegrity} subtracts them: a `faq` range key,
  * an `index` position, an `argmin` witness is a scoped iteration symbol, not a
  * reference, so one that happens to share a name with an observed must not
  * manufacture an edge.

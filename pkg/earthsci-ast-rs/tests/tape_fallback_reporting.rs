@@ -112,7 +112,7 @@ const FALLBACK_MODEL: &str = r#"
 /// fully taped.
 const TAPED_MODEL: &str = r#"
     {
-      "esm": "1.0.0",
+      "esm": "1.1.0",
       "metadata": {
         "name": "taped_reporting"
       },
@@ -164,7 +164,7 @@ const TAPED_MODEL: &str = r#"
             {
               "lhs": "k",
               "rhs": {
-                "op": "aggregate",
+                "op": "faq",
                 "args": [],
                 "output_idx": [
                   "i"

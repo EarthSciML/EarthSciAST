@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "elementwise_obs_gather",
     "description": "An ARRAY-shaped observed defined ELEMENTWISE over other arrays (f = 1 + cos(pi*zc), h = u*f) and read ONLY through an `index(.., j)` gather inside an `aggregate` body. Regression fixture for issue #175: the folded body `index(1 + cos(pi*zc), j)` used to drop the gather and leave `zc` bare (E_TREEWALK_UNBOUND_VARIABLE)."
@@ -39,7 +39,7 @@
         {
           "lhs": "colsum",
           "rhs": {
-            "op": "aggregate", "semiring": "sum_product",
+            "op": "faq", "semiring": "sum_product",
             "output_idx": ["i"],
             "ranges": { "i": [1, 4], "j": [1, 4] },
             "args": ["h"],
@@ -50,7 +50,7 @@
         {
           "lhs": "total",
           "rhs": {
-            "op": "aggregate", "semiring": "sum_product",
+            "op": "faq", "semiring": "sum_product",
             "output_idx": [],
             "ranges": { "j": [1, 4] },
             "args": ["f"],

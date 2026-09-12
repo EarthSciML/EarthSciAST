@@ -1,0 +1,51 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "unregistered_semiring",
+    "description": "INVALID (bead ess-my4.1.1): a `faq` node whose `semiring` value (\"tropical_max\") is not a member of the closed registry enum [sum_product, max_product, min_sum, max_sum, bool_and_or] (RFC semiring-faq-unified-ir §5.1). Adding a semiring is a spec change, not a per-file extension, so the schema MUST reject an unregistered name. This is a pure schema (enum) violation — caught by every binding.",
+    "authors": [
+      "EarthSciAST/polecats/gastown.nux"
+    ],
+    "tags": [
+      "faq",
+      "semiring",
+      "invalid",
+      "schema"
+    ]
+  },
+  "models": {
+    "BadSemiring": {
+      "variables": {
+        "u": {
+          "type": "unknown"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": ["i"],
+            "expr": {
+              "op": "D",
+              "args": [{ "op": "index", "args": ["u", "i"] }],
+              "wrt": "t"
+            },
+            "ranges": { "i": [1, 3] }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": ["i"],
+            "semiring": "tropical_max",
+            "expr": {
+              "op": "-",
+              "args": [{ "op": "index", "args": ["u", "i"] }]
+            },
+            "ranges": { "i": [1, 3] }
+          }
+        }
+      ]
+    }
+  }
+}

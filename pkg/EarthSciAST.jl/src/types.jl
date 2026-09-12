@@ -222,29 +222,29 @@ end
     OpExpr(op::String, args::Vector{ASTExpr}; wrt, dim, int_var, lower, upper, output_idx, expr_body, reduce, ranges, regions, values, shape, perm, axis, fn)
 
 Operator expression node containing:
-- `op`: operator name (e.g., "+", "*", "log", "D", "arrayop")
+- `op`: operator name (e.g., "+", "*", "log", "D", "faq")
 - `args`: vector of argument expressions
 - `wrt`: variable name for differentiation (optional; for `D`)
 - `dim`: dimension for spatial operators (optional; for `grad`, `div`)
 - `int_var`: integration variable name (optional; for `integral`, matches JSON field "var")
 - `lower`: lower integration bound expression (optional; for `integral`)
 - `upper`: upper integration bound expression (optional; for `integral`)
-- `output_idx`: for `arrayop`, list of result index symbols (String) or literal
+- `output_idx`: for `faq`, list of result index symbols (String) or literal
   singleton dimensions (Int 1). Mirrors SymbolicUtils.ArrayOp.output_idx.
-- `expr_body`: for `arrayop`, the scalar body evaluated at each index point
+- `expr_body`: for `faq`, the scalar body evaluated at each index point
   (a nested `ASTExpr` tree). Named `expr_body` — not `expr` — to avoid shadowing
   the `EarthSciAST.ASTExpr` abstract type.
-- `reduce`: for `arrayop`/`aggregate`, the reduction operator applied to
+- `reduce`: for `faq`, the reduction operator applied to
   contracted indices (one of "+", "*", "max", "min"; default "+"). Names the
   semiring ⊕ only; it is the shorthand retained for files that omit `semiring`
   (RFC semiring-faq-unified-ir §5.1).
-- `semiring`: for `arrayop`/`aggregate`, the named semiring `(⊕, ⊗)` with
+- `semiring`: for `faq`, the named semiring `(⊕, ⊗)` with
   normative identity elements that parameterizes the reduction (closed registry:
   "sum_product", "max_product", "min_sum", "max_sum", "bool_and_or"). Absent ⇒
   "sum_product", reproducing today's einsum semantics. When present it supersedes
   `reduce`; the ⊕/⊗ operators and BOTH identities come from the registry table,
   never the file (RFC §5.1).
-- `ranges`: for `arrayop`, map from index symbol name to iteration range
+- `ranges`: for `faq`, map from index symbol name to iteration range
   (vector of 2 or 3 ints `[start, stop]` / `[start, step, stop]`).
 - `regions`: for `makearray`, list of sub-region boxes, each a list of
   `[start, stop]` pairs per output dimension. A bound is normally an `Int`
@@ -320,7 +320,7 @@ mutable struct OpExpr <: ASTExpr
     # integer (0-based index) or a string (entry of the table's outputs).
     output::Any
 
-    # ── M2: value-equality joins + filter predicates on aggregate/arrayop ──
+    # ── M2: value-equality joins + filter predicates on faq ──
     # (RFC semiring-faq-unified-ir §5.3 / §7.2; schema bead ess-my4.2.1).
     #
     # `join`   — the parsed join clauses, an inner equi-join of factors by key

@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "RecurrenceDoubling",
     "description": "The minimal causal self-reference (esm-spec 4.3.1.1): s[1]=1, s[k]=2*s[k-1], answer [1,2,4,8]. The base case is an `ifelse` guard INSIDE the body, which is the required spelling -- a self-read of an unpublished cell is a fault, never a zero (CONFORMANCE_SPEC 5.19.4), so the guard is what keeps the first cell from reading position 0. Pinned with zero tolerance: every value here is exactly representable, so this fixture pins the VALUE and the fixtures beside it pin the ORDER.",
@@ -8,7 +8,7 @@
     ],
     "tags": [
       "recurrence",
-      "aggregate",
+      "faq",
       "causal-self-reference"
     ]
   },
@@ -38,7 +38,7 @@
         {
           "lhs": "s",
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": [
               "k"

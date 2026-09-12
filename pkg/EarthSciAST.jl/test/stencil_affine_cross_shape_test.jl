@@ -36,7 +36,7 @@ function _cs_model(N)
     vars = Dict{String,ESM_CS.ModelVariable}(
         "a" => ESM_CS.ModelVariable(ESM_CS.UnknownVariable),
         "u" => ESM_CS.ModelVariable(ESM_CS.UnknownVariable))
-    ao2(body, lhs) = ESM_CS.OpExpr("arrayop", ESM_CS.ASTExpr[];
+    ao2(body, lhs) = ESM_CS.OpExpr("faq", ESM_CS.ASTExpr[];
         output_idx = Any["i", "j"], expr_body = body,
         ranges = Dict("i" => [1, N], "j" => [1, N]))
     ESM_CS.Model(vars, [
@@ -144,7 +144,7 @@ end
     vars = Dict{String,ESM_CS.ModelVariable}(
         "w" => ESM_CS.ModelVariable(ESM_CS.UnknownVariable),
         "u" => ESM_CS.ModelVariable(ESM_CS.UnknownVariable))
-    ao2(body) = ESM_CS.OpExpr("arrayop", ESM_CS.ASTExpr[];
+    ao2(body) = ESM_CS.OpExpr("faq", ESM_CS.ASTExpr[];
         output_idx = Any["i", "j"], expr_body = body,
         ranges = Dict("i" => [1, N], "j" => [1, N]))
     model = ESM_CS.Model(vars, [

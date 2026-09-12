@@ -4,17 +4,17 @@
 # `index_promoted_refs_by_loop!` workaround): `promote_downstream_shapes` lifts a
 # scalar-authored physics chain fed by array sources (Fast-JX j-rates fed by
 # [lon,lat,lev] met fields) into the grid shape and rewrites each promoted
-# variable's OWN defining equation into an `arrayop` — but it left its CONSUMERS
+# variable's OWN defining equation into a `faq` — but it left its CONSUMERS
 # alone. A pointwise-lifted species ODE indexes only the operands that carried a
 # shape AT FLATTEN TIME, so the later-promoted variable survives as a bare
-# scalar name inside the per-cell `aggregate` body, and the evaluator fails to
+# scalar name inside the per-cell `faq` body, and the evaluator fails to
 # bind it (E_TREEWALK_UNBOUND_VARIABLE) — which is why `EarthSciAST.simulate`
 # could not mount Fast-JX. The post-discretize `index_promoted_refs!` companion
 # cannot close it either: it takes ONE `spatial_loops` list while each consumer
 # equation iterates its OWN loop names.
 #
 # The fix: `promote_downstream_shapes` now rewrites bare references to newly
-# promoted variables inside loop-carrying aggregate/arrayop bodies into
+# promoted variables inside loop-carrying faq bodies into
 # `index(var, <loops>)` gathers bound in the body's own scope (name-aligned
 # against the ranges' index sets; positional over the producer's `output_idx`
 # as fallback). `index_consumer_refs=false` restores the pre-fix behaviour and
@@ -26,7 +26,7 @@ const E = ESS
 op(o, a...) = Dict{String,Any}("op"=>o, "args"=>collect(Any, a))
 ix(a...)    = Dict{String,Any}("op"=>"index", "args"=>collect(Any, a))
 isref(n)    = Dict{String,Any}("from"=>n)
-agg(oi, ranges, body) = Dict{String,Any}("op"=>"aggregate",
+agg(oi, ranges, body) = Dict{String,Any}("op"=>"faq",
     "semiring"=>"sum_product", "output_idx"=>oi, "ranges"=>ranges,
     "args"=>Any[], "expr"=>body)
 
@@ -55,9 +55,21 @@ function lifted_consumer_doc()
           Dict{String,Any}("lhs"=>lhs, "rhs"=>rhs)])))
 end
 
-# First aggregate RHS among the equations (the lifted species ODE).
+# The CONSUMER equation's RHS — the one that references the promoted variable.
+#
+# Selected by its LHS being structured (an indexed-`faq` LHS in the array cases,
+# `D(z)` in the contracted-reduction case) rather than a bare variable: shape
+# promotion also lifts the promoted observed `M.j` itself into an array
+# producer, so more than one equation now carries a `faq` RHS, and the promoted
+# observed is exactly the bare-variable-LHS definition.
+#
+# The two used to be separable by TAG — the lift emitted `arrayop` while the
+# consumer carried `aggregate` — but those were always the same node, and esm
+# 1.1.0 collapses them to `faq` (docs/content/rfcs/faq-node-rename.md). This
+# helper never meant "the only `faq`"; it meant "the consumer".
 consumer_rhs(sys) = only(eq for eq in sys.equations
-                         if eq.rhs isa E.OpExpr && eq.rhs.op == "aggregate").rhs
+                         if eq.rhs isa E.OpExpr && eq.rhs.op == "faq" &&
+                            !(eq.lhs isa E.VarExpr)).rhs
 
 @testset "consumer refs to promoted vars are gathered in-loop" begin
     flat = lifted_consumer_doc() |> roundtrip

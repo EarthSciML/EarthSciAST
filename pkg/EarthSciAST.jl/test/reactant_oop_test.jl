@@ -60,7 +60,7 @@ _ix(v, i...) = Dict{String,Any}("op" => "index", "args" => Any[v, i...])
 _o(o, a...) = Dict{String,Any}("op" => o, "args" => Any[a...])
 _cst(v) = Dict{String,Any}("op" => "const", "value" => v)
 _fnop(nm, a...) = Dict{String,Any}("op" => "fn", "name" => nm, "args" => Any[a...])
-_ao(e) = Dict{String,Any}("op" => "arrayop", "output_idx" => Any["i"],
+_ao(e) = Dict{String,Any}("op" => "faq", "output_idx" => Any["i"],
     "ranges" => Dict{String,Any}("i" => Dict{String,Any}("from" => "n")),
     "args" => Any[], "expr" => e)
 _doc(name, vars, eqs; index_sets = nothing) = begin

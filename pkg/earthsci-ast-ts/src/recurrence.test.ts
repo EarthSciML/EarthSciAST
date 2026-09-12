@@ -84,13 +84,13 @@ describe('a well-founded recurrence is ADMITTED (§5.19.5, converse duty)', () =
 
 /**
  * A one-variable model whose array unknown `s` over `steps` is defined by an
- * `aggregate` with frame `[k]` and body `selfRead * 2`. Only the self-read
+ * `faq` with frame `[k]` and body `selfRead * 2`. Only the self-read
  * varies between cases, so every finding below is attributable to it, and the
  * equation stays at index 0 because the findings are pinned by JSON Pointer.
  */
 function recurrenceDoc(selfRead: Expression, body?: Expression): EsmFile {
   return {
-    esm: '1.0.0',
+    esm: '1.1.0',
     metadata: { name: 'RecurrenceShape', description: 'shape under test', authors: ['t'] },
     index_sets: { steps: { kind: 'interval', size: 4 } },
     models: {
@@ -100,7 +100,7 @@ function recurrenceDoc(selfRead: Expression, body?: Expression): EsmFile {
           {
             lhs: 's',
             rhs: {
-              op: 'aggregate',
+              op: 'faq',
               args: [],
               output_idx: ['k'],
               ranges: { k: { from: 'steps' } },
@@ -271,7 +271,7 @@ describe('cycles through DISTINCT variables are still rejected (§5.19.5)', () =
         {
           lhs: 's',
           rhs: {
-            op: 'aggregate',
+            op: 'faq',
             args: [],
             output_idx: ['k'],
             ranges: { k: { from: 'steps' } },
@@ -299,7 +299,7 @@ describe('what is NOT a recurrence', () => {
     // it through the well-foundedness table would reject every upwind scheme in
     // the corpus.
     const result = validate({
-      esm: '1.0.0',
+      esm: '1.1.0',
       metadata: { name: 'Upwind', description: 'd', authors: ['t'] },
       index_sets: { cells: { kind: 'interval', size: 4 } },
       models: {
@@ -309,7 +309,7 @@ describe('what is NOT a recurrence', () => {
             {
               lhs: { op: 'D', args: ['u'], wrt: 't' },
               rhs: {
-                op: 'aggregate',
+                op: 'faq',
                 args: [],
                 output_idx: ['i'],
                 ranges: { i: { from: 'cells' } },

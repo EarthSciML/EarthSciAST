@@ -41,7 +41,7 @@ const EA = EarthSciAST
 _op(o, args...) = Dict{String,Any}("op" => o, "args" => Any[args...])
 _ix(f, args...) = Dict{String,Any}("op" => "index", "args" => Any[f, args...])
 function _agg(output_idx, ranges, expr; kw...)
-    d = Dict{String,Any}("op" => "aggregate", "output_idx" => collect(output_idx),
+    d = Dict{String,Any}("op" => "faq", "output_idx" => collect(output_idx),
                          "ranges" => Dict{String,Any}(
                              k => (v isa AbstractString ? Dict{String,Any}("from" => v) : v)
                              for (k, v) in ranges),

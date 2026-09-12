@@ -14,7 +14,7 @@
 #
 # For an observed defined by a CONTRACTING aggregate over const arrays
 #   conc[rcv] = Σ_c A[c,rcv] * E[c]
-# _resolve_index_of_arrayop (src/tree_walk/resolve.jl:258) unrolls the contraction
+# _resolve_index_of_faq (src/tree_walk/resolve.jl:258) unrolls the contraction
 # into an N_src-wide `+` term-tree PER output cell, and _compile const-folds every
 # A[c,rcv] / E[c] const-array read into a distinct _NK_LITERAL keyed by THAT cell's
 # indices. So the entire N_src-wide tree is rebuilt AND recompiled for every one of
@@ -50,7 +50,7 @@ _idxv(var, ix...) = _op("index", _v(var), [_v(String(s)) for s in ix]...)
 #   contracted   : c     (range [1, N_src], const int range => no index_sets needed)
 function make_conc_agg(N_src::Int)
     body = _op("*", _idxv("A", "c", "rcv"), _idxv("E", "c"))
-    return _op("aggregate"; output_idx=Any["rcv"], semiring="sum_product",
+    return _op("faq"; output_idx=Any["rcv"], semiring="sum_product",
                expr_body=body, ranges=Dict{String,Any}("c" => Any[1, N_src]))
 end
 
@@ -247,7 +247,7 @@ let
            occursin("_index_at_cell", ln) || occursin("evaluate_cellwise", ln) ||
            occursin("_eval_cellwise", ln) || occursin("_combine", ln) ||
            occursin("_foreach_aggregate", ln) || occursin("_mknode", ln) ||
-           occursin("_resolve_index_of_arrayop", ln) || occursin("reconstruct", ln) ||
+           occursin("_resolve_index_of_faq", ln) || occursin("reconstruct", ln) ||
            occursin("_sub_preserving", ln) || occursin("canonical", ln)
             println(ln)
         end
@@ -277,7 +277,7 @@ let
         return hit, nblocks
     end
     println("\n--- fraction of sampled call-stacks passing through each stage ---")
-    for stage in ("_resolve_index_of_arrayop", "_resolve_indices", "_compile",
+    for stage in ("_resolve_index_of_faq", "_resolve_indices", "_compile",
                   "_index_at_cell", "_combine_with_reducer", "_foreach_aggregate_term",
                   "reconstruct", "_sub_preserving")
         h, nb = frac_through(stage)

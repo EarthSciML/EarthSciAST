@@ -18,7 +18,7 @@ package esm
 //   - array & call-shaped tier: array literals `[…]` (`const`), indexing
 //     `a[i, j]` (`index`), dotted closed-function calls `datetime.year(t)` (`fn`),
 //     the `true` literal, and `integral` / `reshape` / `transpose` / `concat`;
-//   - reduction & array-query tier: `aggregate` reductions
+//   - reduction & array-query tier: `faq` reductions
 //     `sum[i] (expr) where {i in set, j in lo:hi} join(a=b) if pred distinct
 //     key=k [semiring=…]` (all clause shapes), the `argmin`/`argmax`
 //     arg-witnesses `argmin[g] (expr) where {…}`, template application
@@ -105,7 +105,7 @@ var (
 // exprStructuralRefusals are the structural ops whose defining data lives
 // OUTSIDE `args` AND which have no text surface yet — refused, pending a
 // dedicated syntax pass. (`integral`, `reshape`, `transpose`, `concat`, `fn`,
-// `const`, `index`, `true`, `aggregate`, `apply_expression_template`,
+// `const`, `index`, `true`, `faq`, `apply_expression_template`,
 // `polygon_intersection_area`, `intersect_polygon` and `makearray` DO have a
 // surface and are reconstructed below; they are intentionally absent here.
 // `table_lookup` IS listed: its surface is the bracket form `visc[T=temp]`,
@@ -612,7 +612,7 @@ func (p *exprTextParser) aggregateAhead() bool {
 	return false
 }
 
-// parseAggregate parses an `aggregate` reduction (esm-spec §4.2) — the inverse
+// parseAggregate parses a `faq` reduction (esm-spec §4.2) — the inverse
 // of formatAggregate:
 //
 //	sym '[' out_idx ']' '(' expr ')' ('where' '{' ranges '}')? ('join' '(' … ')')?
@@ -692,7 +692,7 @@ func (p *exprTextParser) parseAggregate(sym string) Expression {
 		semiring = &s
 	}
 
-	node := ExprNode{Op: "aggregate", OutputIdx: outputIdx}
+	node := ExprNode{Op: "faq", OutputIdx: outputIdx}
 	if semiring != nil {
 		node.Semiring = semiring
 	} else if red, ok := exprReduceBySym[sym]; ok {

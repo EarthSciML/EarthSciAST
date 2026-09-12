@@ -469,7 +469,7 @@ impl Ctx<'_> {
         };
         let op = map.get("op").and_then(|v| v.as_str());
         let is_relational = op.is_some_and(|o| RELATIONAL_OPS.contains(&o))
-            || (op == Some("aggregate")
+            || (op == Some("faq")
                 && map
                     .get("distinct")
                     .and_then(|v| v.as_bool())
@@ -1160,7 +1160,7 @@ mod tests {
             "equations": [{
                 "lhs": {"op": "index", "args": ["edge_exists", "e"]},
                 "rhs": {
-                    "op": "aggregate", "distinct": true, "semiring": "bool_and_or",
+                    "op": "faq", "distinct": true, "semiring": "bool_and_or",
                     "output_idx": ["e"], "ranges": {"f": {"from": "faces"}},
                     "key": {"op": "skolem", "label": "edge", "args": [{"op": "index", "args": ["u", "f"]}]},
                     "expr": {"op": "true", "args": []}
@@ -1184,12 +1184,12 @@ mod tests {
             },
             "equations": [
                 {"lhs": {"op": "index", "args": ["a", "x"]},
-                 "rhs": {"op": "aggregate", "id": "nodeA", "distinct": true,
+                 "rhs": {"op": "faq", "id": "nodeA", "distinct": true,
                          "semiring": "bool_and_or", "output_idx": ["x"],
                          "ranges": {"y": {"from": "setB"}},
                          "expr": {"op": "true", "args": []}}},
                 {"lhs": {"op": "index", "args": ["b", "x"]},
-                 "rhs": {"op": "aggregate", "id": "nodeB", "distinct": true,
+                 "rhs": {"op": "faq", "id": "nodeB", "distinct": true,
                          "semiring": "bool_and_or", "output_idx": ["x"],
                          "ranges": {"y": {"from": "setA"}},
                          "expr": {"op": "true", "args": []}}}

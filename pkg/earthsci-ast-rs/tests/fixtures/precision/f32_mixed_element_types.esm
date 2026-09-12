@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "MixedElementTypesAreRefused",
     "description": "`quant` follows the document (Float32) and `key` declares Float64. Their product is refused, naming both: widening it would make a quantity declared binary32 come out binary64 with nothing in the result to say so, and narrowing it would destroy the binary64 key — which is the very corruption per-variable element types exist to prevent. The author says which was meant by computing the step into a variable whose own element_type states it."
@@ -17,7 +17,7 @@
         {
           "lhs": "y",
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": ["i"],
             "ranges": { "i": { "from": "one" } },

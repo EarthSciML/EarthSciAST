@@ -145,7 +145,7 @@ function wholeArrayLhsTarget(lhs: Expression): string | undefined {
  * arithmetic, the elementary functions, the comparisons and conditionals, and a
  * `broadcast` whose `fn` names one of them — because those are the only nodes
  * for which "corresponding elements" is what the expression MEANS. Every other
- * op consumes its operands whole under its own contract: `aggregate` and
+ * op consumes its operands whole under its own contract: `faq` and
  * `makearray` name their own axes, `index` gathers, the §4.3.5 shape ops
  * restructure, and a geometry kernel legitimately returns a result of an
  * entirely unrelated shape.

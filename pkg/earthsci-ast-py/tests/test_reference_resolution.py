@@ -29,7 +29,7 @@ from earthsci_ast.reference_resolution import (
 
 def _agg(**kw):
     """A minimal aggregate node dict."""
-    node = {"op": "aggregate", "args": []}
+    node = {"op": "faq", "args": []}
     node.update(kw)
     return node
 
@@ -61,7 +61,7 @@ def test_from_faq_resolves_to_node_by_id():
     assert e.target == f"{VertexKind.NODE}:edge_faq"
     # the resolved target is the specific node carrying that id
     assert g.vertices[e.target].node_id == "edge_faq"
-    assert g.vertices[e.target].op == "aggregate"
+    assert g.vertices[e.target].op == "faq"
     # and it is queryable as a dependency edge: edges depends on the node.
     assert e.target in g.dependencies(f"{VertexKind.INDEX_SET}:edges")
 
@@ -337,7 +337,7 @@ def test_cross_model_from_faq_corpus_fixture_resolves():
     """The shared cross-binding fixture for the §9.7.5 ruling."""
     from conftest import load_fixture
 
-    doc = load_fixture("valid/aggregate/cross_model_from_faq.esm")
+    doc = load_fixture("valid/faq/cross_model_from_faq.esm")
     graphs = resolve_references(doc)
     assert set(graphs) == {"EdgeProducer", "FluxConsumer"}
     faq = graphs["FluxConsumer"].edges_of_kind(EdgeKind.FROM_FAQ)
@@ -400,7 +400,7 @@ def _four_class_doc(on):
                     {
                         "lhs": "y",
                         "rhs": {
-                            "op": "aggregate",
+                            "op": "faq",
                             "id": "j",
                             "args": ["w"],
                             "output_idx": [],

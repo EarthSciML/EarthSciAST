@@ -75,7 +75,7 @@ def generate(count: int) -> list:
     # Build a child strategy that feeds the array-op constructors with
     # non-trivial subtrees drawn from the full expression strategy. Each
     # array-op strategy then becomes root of a fixture.
-    arrayop_root = st.one_of(
+    faq_root = st.one_of(
         _op_aggregate(_expr_strategy),
         _op_makearray(_expr_strategy),
         _op_reshape(_expr_strategy),
@@ -83,7 +83,7 @@ def generate(count: int) -> list:
         _op_concat(_expr_strategy),
         _op_broadcast(_expr_strategy),
     )
-    array_rooted = _collect(arrayop_root, remainder)
+    array_rooted = _collect(faq_root, remainder)
 
     return (general + array_rooted)[:count]
 

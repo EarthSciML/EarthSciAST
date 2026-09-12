@@ -11,6 +11,7 @@ import copy
 import json
 import os
 import re
+import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -1688,6 +1689,10 @@ def _load_ref_data(
     ref_str = expand_ref_env(ref_str)  # esm-spec §4.7 ${VAR} expansion
     content = _fetch_ref_content(ref_str, base_path)
     ref_data = json.loads(content)
+    # A REFERENCED document is a document: same wire boundary as the root
+    # (docs/content/rfcs/faq-node-rename.md §5.2). Without this the `aggregate`
+    # alias and `arrayop` both survive a `{ref}` all the way into `emit`.
+    prepare_document_ops(ref_data)
 
     # Determine the new base_path for nested refs (and template imports).
     if ref_str.startswith("http://") or ref_str.startswith("https://"):
@@ -2347,11 +2352,13 @@ def load_document(
     Args:
         document: The already-parsed document.
     """
-    # Shallow-copy so the top-level ``data.pop(...)`` of the schema-forbidden
-    # ``continuous_events`` / ``discrete_events`` keys below does not mutate a
-    # caller's dict as a side effect.
+    # DEEP-copy: the top-level ``data.pop(...)`` of the schema-forbidden
+    # ``continuous_events`` / ``discrete_events`` keys below needs only a
+    # shallow copy, but ``prepare_document_ops`` rewrites ``op`` values on
+    # NESTED nodes, which a shallow copy still shares with the caller. Rust, Go
+    # and Julia all hand the pipeline their own copy; this makes the five agree.
     return _load_data(
-        dict(document),
+        copy.deepcopy(document),
         base_path if base_path is not None else os.getcwd(),
         metaparameters,
         None,
@@ -2379,6 +2386,12 @@ def _load_data(
     program could change meaning when a file appeared or vanished. The three
     entry points above say which they are.
     """
+
+    # esm 1.1.0: rewrite the deprecated `aggregate` op spelling to the canonical
+    # `faq` at the wire boundary, ahead of every other pass, so the version
+    # gates, the schema, the typed tree and `emit` all see exactly one tag
+    # (docs/content/rfcs/faq-node-rename.md).
+    prepare_document_ops(data)
 
     # Strip top-level events (not allowed by schema, but accepted for tooling roundtrip)
     top_continuous_events = data.pop("continuous_events", None) if isinstance(data, dict) else None
@@ -2587,3 +2600,117 @@ def _load_data(
             esm_file.events.append(_parse_discrete_event(ev))
 
     return esm_file
+
+
+class EsmDeprecationWarning(UserWarning):
+    """A deprecated ESM construct was accepted and normalized.
+
+    Subclasses :class:`UserWarning`, not :class:`DeprecationWarning`, on
+    purpose: Python filters ``DeprecationWarning`` outside ``__main__``, so a
+    library-issued one is invisible to exactly the users who need it — the four
+    other bindings all print unconditionally.
+    """
+
+
+def _rewrite_op_aliases(node: object) -> int:
+    """Depth-first rewrite of ``"op": "aggregate"`` to ``"op": "faq"``.
+
+    Returns how many nodes were rewritten.
+    """
+    n = 0
+    if isinstance(node, dict):
+        if node.get("op") == "aggregate":
+            node["op"] = "faq"
+            n += 1
+        for value in node.values():
+            n += _rewrite_op_aliases(value)
+    elif isinstance(node, list):
+        for value in node:
+            n += _rewrite_op_aliases(value)
+    return n
+
+
+def _find_op(node: object, op: str, at: str = "") -> str | None:
+    """Path of the first node carrying ``"op": <op>``, or ``None``."""
+    if isinstance(node, dict):
+        if node.get("op") == op:
+            return at
+        for key, child in node.items():
+            hit = _find_op(child, op, f"{at}/{key}")
+            if hit is not None:
+                return hit
+    elif isinstance(node, list):
+        for i, child in enumerate(node):
+            hit = _find_op(child, op, f"{at}/{i}")
+            if hit is not None:
+                return hit
+    return None
+
+
+def _version_below_v11(data: object) -> bool:
+    """Does ``data`` declare an ``esm`` version below 1.1.0?"""
+    if not isinstance(data, dict):
+        return False
+    esm = data.get("esm")
+    if not isinstance(esm, str):
+        return False
+    parts = esm.split(".")
+    try:
+        major, minor = int(parts[0]), int(parts[1])
+    except (IndexError, ValueError):
+        return False
+    return (major, minor) < (1, 1)
+
+
+def prepare_document_ops(data: object) -> int:
+    """The wire boundary for expression-node ``op`` spellings, applied to EVERY
+    document — root, ``{ref}``-loaded child, template library, coupling library.
+
+    Three steps, in this order:
+
+    1. ``arrayop`` (removed at esm 0.8.0) is rejected BY NAME. It is a
+       well-formed identifier, so esm-spec §4.2 would otherwise admit it as an
+       OPEN rewrite-target op: the document would load silently and fail much
+       later as ``unlowered_operator``, or never.
+    2. The ``faq`` version gate, on the AUTHORED form — ``faq`` arrives at esm
+       1.1.0 (esm-spec §2.2.4, same rule as the top-level ``solver`` block).
+       This runs BEFORE normalization deliberately: ``aggregate`` *is* the
+       pre-1.1.0 spelling, so a 1.0.0 document carrying the alias is legal and
+       must not be caught here.
+    3. ``aggregate`` is normalized to ``faq`` and the declared version is raised
+       to the 1.1.0 floor with it, so the upgraded document is self-consistent
+       rather than spelling a 1.1.0 construct under an older version.
+
+    Returns the number of nodes normalized. See
+    ``docs/content/rfcs/faq-node-rename.md``.
+    """
+    path = _find_op(data, "arrayop")
+    if path is not None:
+        raise ParseError(
+            f'removed_op at {path}: \'"op": "arrayop"\' was removed at esm 0.8.0 and is '
+            'not a deprecated alias; use \'"op": "faq"\' (the Functional Aggregate Query '
+            "node). See docs/content/rfcs/faq-node-rename.md."
+        )
+    faq_at = _find_op(data, "faq")
+    if faq_at is not None and _version_below_v11(data):
+        declared = data.get("esm") if isinstance(data, dict) else None
+        raise ParseError(
+            f"faq_version_too_old at {faq_at}: the `faq` op arrives at esm 1.1.0; file "
+            f'declares {declared}. Use \'"op": "aggregate"\' (the deprecated pre-1.1.0 '
+            "spelling) or raise the declared version. "
+            "See docs/content/rfcs/faq-node-rename.md."
+        )
+    n = _rewrite_op_aliases(data)
+    if n:
+        if isinstance(data, dict) and _version_below_v11(data):
+            data["esm"] = "1.1.0"
+        warnings.warn(
+            'deprecated_op_alias: \'"op": "aggregate"\' is the pre-1.1.0 spelling of '
+            f'\'"op": "faq"\' (Functional Aggregate Query); {n} '
+            f"{'node was' if n == 1 else 'nodes were'} normalized on load. The alias is "
+            "REMOVED at esm 2.0.0 -- re-emit this document to migrate it "
+            "(docs/content/rfcs/faq-node-rename.md).",
+            EsmDeprecationWarning,
+            stacklevel=2,
+        )
+    return n

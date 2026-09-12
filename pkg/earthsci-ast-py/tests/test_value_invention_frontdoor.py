@@ -78,9 +78,7 @@ def _empty_ctx(index_sets: dict, derived_extents: dict) -> EvalContext:
 
 
 def test_edge_enumeration_materializes_to_m3_golden() -> None:
-    mj = _load_model(
-        "tests/valid/aggregate/edge_enumeration_area_eff.esm", "EdgeEnumerationAreaEff"
-    )
+    mj = _load_model("tests/valid/faq/edge_enumeration_area_eff.esm", "EdgeEnumerationAreaEff")
     # Canonical 2-triangle mesh connectivity (the ragged face_vertices factors).
     ca = {
         "n_verts_on_face": np.array([3.0, 3.0]),
@@ -104,9 +102,7 @@ def test_edge_enumeration_materializes_to_m3_golden() -> None:
 def test_edge_enumeration_adversarial_inputs_collapse_to_golden() -> None:
     """§5.5.4: permuted faces / reversed winding all yield the identical
     canonically-sorted edge set (the relational engine's job)."""
-    mj = _load_model(
-        "tests/valid/aggregate/edge_enumeration_area_eff.esm", "EdgeEnumerationAreaEff"
-    )
+    mj = _load_model("tests/valid/faq/edge_enumeration_area_eff.esm", "EdgeEnumerationAreaEff")
     base = {
         "n_verts_on_face": np.array([3.0, 3.0]),
         "verts_on_face": np.array([[1.0, 2.0, 3.0], [2.0, 3.0, 4.0]]),
@@ -172,9 +168,7 @@ def test_regridder_candidate_set_bin_skolem_equijoin() -> None:
 
 
 def test_resolver_resolves_derived_set_via_value_invention_extent() -> None:
-    mj = _load_model(
-        "tests/valid/aggregate/edge_enumeration_area_eff.esm", "EdgeEnumerationAreaEff"
-    )
+    mj = _load_model("tests/valid/faq/edge_enumeration_area_eff.esm", "EdgeEnumerationAreaEff")
     ca = {
         "n_verts_on_face": np.array([3.0, 3.0]),
         "verts_on_face": np.array([[1.0, 2.0, 3.0], [2.0, 3.0, 4.0]]),
@@ -192,9 +186,7 @@ def test_resolver_still_raises_without_materialization() -> None:
     """Sanity: a derived set whose producer was never materialized still raises
     (the geometry clip-ring path is untouched, and a typo cannot silently become
     an empty set)."""
-    mj = _load_model(
-        "tests/valid/aggregate/edge_enumeration_area_eff.esm", "EdgeEnumerationAreaEff"
-    )
+    mj = _load_model("tests/valid/faq/edge_enumeration_area_eff.esm", "EdgeEnumerationAreaEff")
     ctx = _empty_ctx(index_sets=mj["index_sets"], derived_extents={})
     with pytest.raises(NumpyInterpreterError, match="not materialized"):
         _resolve_range_spec({"from": "edges"}, ctx)
@@ -224,7 +216,7 @@ def test_continuous_relational_node_is_rejected() -> None:
             {
                 "lhs": {"op": "index", "args": ["tag", "p"]},
                 "rhs": {
-                    "op": "aggregate",
+                    "op": "faq",
                     "id": "tag_set",
                     "semiring": "bool_and_or",
                     "distinct": True,
@@ -260,7 +252,7 @@ def test_no_op_for_plain_model() -> None:
 #     port-parity tests: the SAME coordinate factors → the SAME buffer.
 # --------------------------------------------------------------------------- #
 
-ARGMIN_REL = "tests/valid/aggregate/nearest_generator_argmin.esm"
+ARGMIN_REL = "tests/valid/faq/nearest_generator_argmin.esm"
 
 
 def test_argmin_nearest_generator_smallest_id_tiebreak() -> None:
@@ -315,7 +307,7 @@ def test_argmax_farthest_generator_smallest_id_tiebreak() -> None:
             {
                 "lhs": {"op": "index", "args": ["far", "i"]},
                 "rhs": {
-                    "op": "aggregate",
+                    "op": "faq",
                     "output_idx": ["i"],
                     "ranges": {"i": {"from": "points"}},
                     "expr": {
@@ -367,7 +359,7 @@ def test_argmin_empty_candidate_set_is_error() -> None:
             {
                 "lhs": {"op": "index", "args": ["assign", "i"]},
                 "rhs": {
-                    "op": "aggregate",
+                    "op": "faq",
                     "output_idx": ["i"],
                     "ranges": {"i": {"from": "points"}},
                     "expr": {
@@ -410,7 +402,7 @@ def test_argmin_continuous_assignment_is_rejected() -> None:
             {
                 "lhs": {"op": "index", "args": ["assign", "i"]},
                 "rhs": {
-                    "op": "aggregate",
+                    "op": "faq",
                     "output_idx": ["i"],
                     "ranges": {"i": {"from": "points"}},
                     "expr": {
@@ -443,7 +435,7 @@ def test_argmin_continuous_assignment_is_rejected() -> None:
 # library helper only). The fixture factors here are IDENTICAL to the Julia / Rust
 # port-parity tests — agreement on num / den / centroid IS the conformance proof.
 
-CENTROID_REL = "tests/valid/aggregate/nearest_generator_centroid.esm"
+CENTROID_REL = "tests/valid/faq/nearest_generator_centroid.esm"
 
 
 def test_centroid_group_aggregate_over_argmin_key() -> None:
@@ -527,7 +519,7 @@ def test_centroid_grouped_reduction_reading_state_is_rejected() -> None:
             {
                 "lhs": {"op": "index", "args": ["assign", "i"]},
                 "rhs": {
-                    "op": "aggregate",
+                    "op": "faq",
                     "output_idx": ["i"],
                     "ranges": {"i": {"from": "points"}},
                     "args": ["px", "gx"],
@@ -561,7 +553,7 @@ def test_centroid_grouped_reduction_reading_state_is_rejected() -> None:
             {
                 "lhs": {"op": "index", "args": ["num", "g"]},
                 "rhs": {
-                    "op": "aggregate",
+                    "op": "faq",
                     "output_idx": ["g"],
                     "ranges": {"g": {"from": "generators"}, "p": {"from": "points"}},
                     "semiring": "sum_product",
@@ -631,7 +623,7 @@ def test_join_key_prepass_skips_reductions_over_join_carrying_observeds() -> Non
             {
                 "lhs": {"op": "index", "args": ["src_bin", "i"]},
                 "rhs": {
-                    "op": "aggregate",
+                    "op": "faq",
                     "output_idx": ["i"],
                     "ranges": {"i": {"from": "cells"}},
                     "expr": {

@@ -32,7 +32,7 @@ use earthsci_ast::simulate_array::{ArrayCompiled, RhsStats};
 /// ```
 fn geom_json(n: usize) -> String {
     const TEMPLATE: &str = r#"{
- "esm": "1.0.0",
+ "esm": "1.1.0",
  "metadata": {"name": "tape_const_geom"},
  "models": {
   "Geom": {
@@ -43,16 +43,16 @@ fn geom_json(n: usize) -> String {
      "c": {"type": "unknown", "shape": ["i"]}
    },
    "equations": [
-                {"lhs": "c", "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+                {"lhs": "c", "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
                "ranges": {"i": [1, __N__]},
                "expr": {"op": "+", "args": [
                  {"op": "cos", "args": [{"op": "*", "args": ["a_geom", "i"]}]},
                  "b_geom"]}}},
     {
-     "lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+     "lhs": {"op": "faq", "args": [], "output_idx": ["i"],
              "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "i"]}], "wrt": "t"},
              "ranges": {"i": [1, __N__]}},
-     "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+     "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
              "ranges": {"i": [1, __N__]},
              "expr": {"op": "-", "args": [
                {"op": "*", "args": [

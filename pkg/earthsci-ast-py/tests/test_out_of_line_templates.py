@@ -72,7 +72,7 @@ def _defining(doc: dict, model: str, var: str):
 # ---------------------------------------------------------------------------
 
 _BRIDGE_CASES = [
-    ("aggregate_int_ratio_golden", "fixture.esm", "expanded.esm"),
+    ("faq_int_ratio_golden", "fixture.esm", "expanded.esm"),
     ("arrhenius_smoke", "fixture.esm", "expanded.esm"),
     ("constrained_match_scope", "fixture.esm", "expanded.esm"),
     ("coupling_transform_expression", "fixture.esm", "expanded.esm"),
@@ -141,10 +141,11 @@ def test_emit_materialized_registry():
     adv = doc["models"]["Advection"]
     # Rule 8 version stamp: emitting a surviving reference requires Option B,
     # i.e. `esm >= 0.9.0`. It is a FLOOR, not an assignment (§9.6.4 rule 8:
-    # "0.9.0 OR LATER") — the 1.0.0 source keeps its own version rather than
-    # being stamped up to whatever the library currently implements, or down to
-    # an unloadable 0.9.0.
-    assert doc["esm"] == "1.0.0"
+    # "0.9.0 OR LATER") — the source keeps its own version rather than being
+    # stamped up to whatever the library currently implements, or down to an
+    # unloadable 0.9.0. This fixture is 1.1.0: its imported rules lower to
+    # `faq`, which requires 1.1.0.
+    assert doc["esm"] == "1.1.0"
     assert "expression_template_imports" not in adv  # imports consumed
     reg = adv["expression_templates"]
     assert set(reg.keys()) == {"central_D_lon_interior", "dlon_deg"}  # match-less only
@@ -178,7 +179,7 @@ def test_eager_target_bearing():
     # lowered by the `central` rule → an aggregate. No surviving ref.
     deager = _defining(loaded, "m", "d_eager")
     assert deager["op"] == "index"
-    assert deager["args"][0]["op"] == "aggregate"
+    assert deager["args"][0]["op"] == "faq"
     # NEGATIVE: scale_c (target-free) reference SURVIVES.
     dsurv = _defining(loaded, "m", "d_survive")
     assert _isapply(dsurv["args"][0]) and dsurv["args"][0]["name"] == "scale_c"

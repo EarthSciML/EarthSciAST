@@ -205,7 +205,7 @@ def overlap_candidate_set(
 #   * the value-invention producer (``value_invention._vi_enumerate_join``)
 #     enumerates ranges LAZILY (a ragged ``of`` bound depends on its parent
 #     binding), so it recurses; BOTH gated symbols are contracted there.
-#   * the dense aggregate expansion (``numpy_interpreter._eval_arrayop_scalar``)
+#   * the dense aggregate expansion (``numpy_interpreter._eval_faq_scalar``)
 #     walks the contracted cartesian product once per OUTPUT cell, and that
 #     output cell has usually already bound one of the two gated symbols.
 #

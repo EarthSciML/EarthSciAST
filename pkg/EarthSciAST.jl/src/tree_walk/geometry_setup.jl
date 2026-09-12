@@ -131,7 +131,7 @@ end
 # Unlike `intersect_polygon` (which surfaces a data-dependent clip ring as a
 # `kind:"derived"` index set the `polygon_area` FAQ ranges over, RFC §8.1), the
 # fused leaf exposes NO ring: it evaluates to an ordinary Float64 scalar, so it
-# drops into any expression — an ODE RHS or an `aggregate` body — with no ragged
+# drops into any expression — an ODE RHS or a `faq` body — with no ragged
 # intermediate. Both constituent kernels are reused verbatim: `intersect_polygon`
 # (the clip, planar or S2) and `_polygon_area_via_faq` (the shoelace / Van
 # Oosterom–Strackee area over the CLOSED ring, run through the generic aggregate
@@ -386,12 +386,12 @@ end
 
 # A clip ranged over an outer index set: an array-producing aggregate whose body
 # is `index(intersect_polygon(src[outer], tgt[outer]), ring, coord)`. The
-# array-producing form is the on-disk `aggregate` op with a non-empty `output_idx`
-# (schema v0.8.0; the op enum dropped `arrayop`), OR the internal `arrayop` alias
-# `shape_promotion.jl` still emits — `_is_aggregate_op` accepts both, and the
+# array-producing form is the on-disk `faq` op with a non-empty `output_idx`
+# (schema v0.8.0; the op enum dropped `faq`), OR the internal `faq` alias
+# `shape_promotion.jl` still emits — `_is_faq_op` accepts both, and the
 # non-empty `output_idx` guard keeps a SCALAR reduction (empty `output_idx`) out.
 _is_ranged_clip(rhs) =
-    rhs isa OpExpr && _is_aggregate_op(rhs.op) &&
+    rhs isa OpExpr && _is_faq_op(rhs.op) &&
     rhs.output_idx !== nothing && !isempty(rhs.output_idx) &&
     rhs.expr_body isa OpExpr &&
     (rhs.expr_body::OpExpr).op == "index" &&
@@ -403,16 +403,16 @@ _is_ranged_clip(rhs) =
 # vertex count (the pad repeats the closing vertex so the shoelace pad-edges add
 # zero area), into one dense const array `[outer…, maxn+1, coord]`; record the
 # clip_ring extent so the polygon_area FAQ ranges `[1, maxn]` over it.
-function _materialize_ranged_clip(arrayop, env, index_sets, derived_extents,
+function _materialize_ranged_clip(faq, env, index_sets, derived_extents,
                                   var_shapes=Dict{String,Vector{String}}())
-    body  = arrayop.expr_body::OpExpr          # index(intersect_polygon(...), w, c)
+    body  = faq.expr_body::OpExpr          # index(intersect_polygon(...), w, c)
     ipoly = body.args[1]::OpExpr
     ringvar  = (body.args[2]::VarExpr).name
     coordvar = (body.args[3]::VarExpr).name
-    outer = String[v for v in arrayop.output_idx if v != ringvar && v != coordvar]
-    outer_ext = Int[_geo_index_extent(arrayop.ranges[v], index_sets, derived_extents)
+    outer = String[v for v in faq.output_idx if v != ringvar && v != coordvar]
+    outer_ext = Int[_geo_index_extent(faq.ranges[v], index_sets, derived_extents)
                     for v in outer]
-    coord_ext = _geo_index_extent(arrayop.ranges[coordvar], index_sets, derived_extents)
+    coord_ext = _geo_index_extent(faq.ranges[coordvar], index_sets, derived_extents)
     manifold = ipoly.manifold
     manifold === nothing && throw(TreeWalkError("E_TREEWALK_GEOMETRY_NO_MANIFOLD",
         "ranged intersect_polygon requires a manifold"))
@@ -460,8 +460,8 @@ function _materialize_ranged_clip(arrayop, env, index_sets, derived_extents,
             end
         end
     end
-    ringset = arrayop.ranges[ringvar] isa IndexSetRef ?
-              (arrayop.ranges[ringvar]::IndexSetRef).from : ringvar
+    ringset = faq.ranges[ringvar] isa IndexSetRef ?
+              (faq.ranges[ringvar]::IndexSetRef).from : ringvar
     derived_extents[ringset] = maxn
     ipoly.id === nothing || (derived_extents[ipoly.id] = maxn)
     return clip
@@ -795,10 +795,10 @@ end
 # position axis. (`_overlap_env_sym` in tree_walk/semiring.jl insists on a 1-D
 # factor and so cannot resolve that ring form; the two disagree, and the ring
 # form is the one every shipped `conservative_overlap_*_gated` template uses.)
-function _geo_overlap_gate(arrayop, ctx::_GeoCtx, setof, scope, cache)
-    arrayop.join === nothing && return nothing
+function _geo_overlap_gate(faq, ctx::_GeoCtx, setof, scope, cache)
+    faq.join === nothing && return nothing
     _geom_overlap_gate_disabled() && return nothing
-    for clause in arrayop.join
+    for clause in faq.join
         clause isa _OverlapJoinSpec || continue
         isempty(clause.src_env) && continue
         isempty(clause.tgt_env) && continue
@@ -859,7 +859,7 @@ end
 # a decline costs speed, never correctness.
 function _geo_overlap_drive(ov::_GeoOverlapGate, out::Vector{String},
                             contract::Vector{String}, exts::Vector{Int},
-                            index_sets, derived_extents, arrayop)
+                            index_sets, derived_extents, faq)
     g = ov.gate
     nout = length(out)
     if isempty(contract)
@@ -880,7 +880,7 @@ function _geo_overlap_drive(ov::_GeoOverlapGate, out::Vector{String},
     # A CONTRACTION: bind the output indices (the planner only needs to know
     # WHICH are bound, so the probe cell's positions are immaterial) and ask
     # what the still-free contracted symbols may be restricted to.
-    cexts = Int[_geo_index_extent(arrayop.ranges[c], index_sets, derived_extents)
+    cexts = Int[_geo_index_extent(faq.ranges[c], index_sets, derived_extents)
                 for c in contract]
     probe = Dict{String,Int}(o => 1 for o in out)
     plan = _overlap_drive_plan(g, contract, probe,
@@ -982,7 +982,7 @@ function _geom_sweep_restrict_contract!(arr::Array{Float64,N}, body, gates, filt
 end
 
 # Materialize a geometry-derived array observed (e.g. `area[p]`, `A_ij[i,j]`) by
-# evaluating its `arrayop` body once per output cell against the (already
+# evaluating its `faq` body once per output cell against the (already
 # materialized) geometry in `env`.
 #
 # Two shapes are handled uniformly. A pure MAP (`output_idx == ranges` keys, e.g.
@@ -992,21 +992,21 @@ end
 # row-sum) — sums the body over the contracted indices for each output cell. Both
 # honor the aggregate's `join` / `filter` gate (`_geo_gate_ok`): a rejected
 # contraction tuple contributes the additive identity 0̄ (RFC §5.3 / §5.8). This is
-# the setup-time twin of the ODE arrayop einsum path.
-function _materialize_geom_array(arrayop, env, index_sets, derived_extents,
+# the setup-time twin of the ODE faq einsum path.
+function _materialize_geom_array(faq, env, index_sets, derived_extents,
                                  var_shapes=Dict{String,Vector{String}}();
                                  ov_cache=nothing)
-    out  = String[v for v in arrayop.output_idx]
-    exts = Int[_geo_index_extent(arrayop.ranges[v], index_sets, derived_extents) for v in out]
+    out  = String[v for v in faq.output_idx]
+    exts = Int[_geo_index_extent(faq.ranges[v], index_sets, derived_extents) for v in out]
     # Contracted indices: `ranges` keys not among the output indices (§5.1). Their
     # extents are reduced (⊕ = + for the sum_product FAQ) per output cell.
-    contract = String[k for k in keys(arrayop.ranges) if !(k in out)]
-    # Seed the loop-var → index-set map with this arrayop's output AND contracted
+    contract = String[k for k in keys(faq.ranges) if !(k in out)]
+    # Seed the loop-var → index-set map with this faq's output AND contracted
     # indices, so a join can resolve a key column indexed by either (per-cell F_tgt
     # keys on an outer output var; the row-sum keys on the contracted `i`).
     setof = Dict{String,String}()
     for v in Iterators.flatten((out, contract))
-        r = arrayop.ranges[v]
+        r = faq.ranges[v]
         r isa IndexSetRef && (setof[v] = r.from)
     end
     ctx = _GeoCtx(env, index_sets, derived_extents, var_shapes)
@@ -1024,9 +1024,9 @@ function _materialize_geom_array(arrayop, env, index_sets, derived_extents,
         scope[v] = nslots[]
     end
     g = _GeoCompileCtx(ctx, scope, setof, nslots)
-    gates = _geo_slot_gates(arrayop, g)
-    filt = arrayop.filter === nothing ? nothing : _geo_compile(arrayop.filter, g)
-    body = _geo_compile(arrayop.expr_body, g)
+    gates = _geo_slot_gates(faq, g)
+    filt = faq.filter === nothing ? nothing : _geo_compile(faq.filter, g)
+    body = _geo_compile(faq.expr_body, g)
     u = zeros(Float64, nslots[])
     nout = length(out)
     arr  = zeros(Float64, exts...)
@@ -1036,10 +1036,10 @@ function _materialize_geom_array(arrayop, env, index_sets, derived_extents,
     # shapes the conservative-regrid templates produce are driven here; anything
     # else keeps the dense sweep with the membership test applied per tuple
     # (`ov`), which is the same admitted set at the full product's cost.
-    ov = _geo_overlap_gate(arrayop, ctx, setof, scope, ov_cache)
+    ov = _geo_overlap_gate(faq, ctx, setof, scope, ov_cache)
     drive = ov === nothing ? nothing :
             _geo_overlap_drive(ov, out, contract, exts, index_sets, derived_extents,
-                               arrayop)
+                               faq)
     ovdense = drive === nothing ? ov : nothing     # gate per tuple only if not driven
     if ov === nothing
         _GEOM_OVERLAP_NONE[] += 1
@@ -1077,8 +1077,8 @@ function _materialize_geom_array(arrayop, env, index_sets, derived_extents,
             _geom_sweep_map_ref!(arr, exts, body, gates, filt, u, nout, ovdense)
         end
     else
-        init, fold = _geo_reduce_fold(arrayop.reduce, arrayop.semiring)
-        cexts = Int[_geo_index_extent(arrayop.ranges[c], index_sets, derived_extents)
+        init, fold = _geo_reduce_fold(faq.reduce, faq.semiring)
+        cexts = Int[_geo_index_extent(faq.ranges[c], index_sets, derived_extents)
                     for c in contract]
         ncon = length(contract)
         if drive !== nothing
@@ -1113,8 +1113,8 @@ function _materialize_geom_array(arrayop, env, index_sets, derived_extents,
         if isempty(contract)
             _geom_sweep_map_ref!(ref, exts, body, gates, filt, zero(u), nout, nothing)
         else
-            init2, fold2 = _geo_reduce_fold(arrayop.reduce, arrayop.semiring)
-            cexts2 = Int[_geo_index_extent(arrayop.ranges[c], index_sets, derived_extents)
+            init2, fold2 = _geo_reduce_fold(faq.reduce, faq.semiring)
+            cexts2 = Int[_geo_index_extent(faq.ranges[c], index_sets, derived_extents)
                          for c in contract]
             _geom_sweep_contract_ref!(ref, exts, cexts2, body, gates, filt, zero(u),
                                       nout, length(contract), init2, fold2, nothing)
@@ -1166,7 +1166,7 @@ function _body_needs_general_eval(e::OpExpr)
 end
 
 # True iff `rhs` is a build-once NON-GEOMETRY MAP aggregate that NEEDS the general
-# evaluator: an array-producing `aggregate`/`arrayop` (non-empty `output_idx`) that
+# evaluator: an array-producing `faq` (non-empty `output_idx`) that
 # is a pure MAP — every range key is an output index, so no top-level CONTRACTION —
 # carries no join/filter gate, and whose body reaches an op OUTSIDE the geometry
 # vocabulary `_GEO_EVAL_OPS` (`and`/`fn`/`const`/`exp`/`log`/…) — i.e. a promoted
@@ -1176,7 +1176,7 @@ end
 # skolem-bin producer, a loader-field reindex — uses ONLY `_GEO_EVAL_OPS` and so
 # stays on the compiled geometry path (`_materialize_geom_array`), byte-identical.
 function _is_setup_general_map(rhs)
-    (rhs isa OpExpr && _is_aggregate_op(rhs.op)) || return false
+    (rhs isa OpExpr && _is_faq_op(rhs.op)) || return false
     (rhs.output_idx !== nothing && any(s -> s isa AbstractString, rhs.output_idx)) || return false
     rhs.expr_body === nothing && return false
     (rhs.join === nothing && rhs.join_gates === nothing && rhs.filter === nothing) || return false
@@ -1202,7 +1202,7 @@ end
 # the "gather compiled once, evaluated per cell" shape a per-cell physics lookup
 # needs. `_is_setup_general_map` has already established the preconditions
 # (aggregate op, all-String `output_idx`, non-nothing `expr_body`, no
-# join/join_gates/filter, pure MAP), so `_resolve_index_of_arrayop` takes its
+# join/join_gates/filter, pure MAP), so `_resolve_index_of_faq` takes its
 # no-contraction early return and the body is a single substituted tree.
 #
 # BIT-EXACTNESS. The fast path engages only where the compiled tree is provably
@@ -1320,7 +1320,7 @@ end
 
 # Materialize a build-once NON-GEOMETRY MAP aggregate by evaluating its body once
 # per output cell through the GENERAL build-time cell pipeline: `_eval_cellwise`
-# wraps the MAP as `index(agg, cell…)`, `_resolve_index_of_arrayop` substitutes the
+# wraps the MAP as `index(agg, cell…)`, `_resolve_index_of_faq` substitutes the
 # output indices, then `_compile`/`_eval_node` run the full scalar language against
 # the materialized `env` (its array entries become gatherable const arrays, its
 # scalar params bind by name). Byte-identical to the ODE RHS resolver — the twin of
@@ -1409,7 +1409,7 @@ end
 # ============================================================
 # Build-once NON-aggregate whole-array observeds (makearray / reshape)
 # ============================================================
-# A build-once array observed need not be an `aggregate` MAP. A discretization
+# A build-once array observed need not be a `faq` MAP. A discretization
 # rule lowers `D(field)` to a `makearray` STENCIL (the `central_D1x/D1y_periodic`
 # rules' interior + periodic-boundary regions, each region a nested
 # central-difference aggregate over the regridded field), and a shape rewrite may
@@ -1523,7 +1523,7 @@ function _setup_source_array(src, env, index_sets, derived_extents,
                              registered_functions)
     if src isa VarExpr && haskey(env, src.name) && env[src.name] isa AbstractArray
         return env[src.name]
-    elseif src isa OpExpr && _is_aggregate_op(src.op) &&
+    elseif src isa OpExpr && _is_faq_op(src.op) &&
            src.output_idx !== nothing && !isempty(src.output_idx)
         return _materialize_geom_array(src, env, index_sets, derived_extents)
     elseif src isa OpExpr && _is_setup_wholearray_op(src)
@@ -1543,11 +1543,11 @@ end
 # Every VarExpr name appearing anywhere in `expr` — the NON-BINDING twin of
 # `free_variables`: it enumerates children through the ONE shared
 # `child_exprs`/`foreach_subexpr` traversal (so it sees EVERY expression-bearing
-# `OpExpr` field: args, aggregate/arrayop `expr_body`, integral `lower`/`upper`,
+# `OpExpr` field: args, faq `expr_body`, integral `lower`/`upper`,
 # makearray `values`, aggregate `filter` predicates, value-invention `key`s,
 # table-lookup `table_axes`, and expression-valued dense `ranges` bounds), plus
 # the `wrt` differentiation target, exactly as `free_variables` does. Unlike
-# `free_variables` it does NOT subtract an arrayop/aggregate's bound loop
+# `free_variables` it does NOT subtract a faq's bound loop
 # symbols — we need the vars an expression READS, and every caller intersects
 # the result with declared variable names (which drops the bound indices).
 #
@@ -1917,7 +1917,7 @@ function _agg_bound_syms(e::OpExpr)
 end
 
 # Materializable NON-const-op aggregate array observeds: name → expression. A
-# build-time coordinate derivation can fold only these (an aggregate/arrayop over
+# build-time coordinate derivation can fold only these (a faq over
 # build-time data); a `const`-op / kwarg-supplied array observed is already seeded
 # into `env` and is not a materialization candidate.
 function _agg_array_obs_defs(model, env)
@@ -1925,7 +1925,7 @@ function _agg_array_obs_defs(model, env)
     for (n, e) in observed_definitions(model)
         _is_array_shape(model.variables[n].shape) || continue
         haskey(env, n) && continue
-        (e isa OpExpr && _is_aggregate_op(e.op)) || continue
+        (e isa OpExpr && _is_faq_op(e.op)) || continue
         d[n] = e
     end
     return d
@@ -2121,7 +2121,7 @@ function _derive_overlap_env_factors(model, index_sets, const_arrays_kw, param_o
             e = get(obs_defs, n, nothing)
             e === nothing && continue
             length(get(var_shapes, n, String[])) == 1 || continue
-            (e isa OpExpr && _is_aggregate_op(e.op)) || continue
+            (e isa OpExpr && _is_faq_op(e.op)) || continue
             bound = _agg_bound_syms(e); ok = true
             for r in _referenced_var_names(e)
                 r in bound && continue

@@ -293,9 +293,9 @@ export function validateReservedModelNames(
  * The sites, exhaustively:
  *
  *   1. `variables` — states, parameters and observed alike (one map, §4.2).
- *   2. `index_sets` — the document-scoped registry; an `aggregate` may name a
+ *   2. `index_sets` — the document-scoped registry; a `faq` may name a
  *      set positionally, so the name is an identifier, not a variable.
- *   3. BINDER symbols — `arrayop`/`aggregate` `output_idx`, `argmin`/`argmax`
+ *   3. BINDER symbols — `faq` `output_idx`, `argmin`/`argmax`
  *      witnesses, an `integral`'s integration `var`. Scope-local, so they are
  *      supplied per-scope by the caller, not here.
  *   4. IMPLICIT coordinates — the domain's `independent_variable` and the
@@ -789,18 +789,18 @@ export function validateDefaultUnits(model: Model, modelPath: string): Structura
 }
 
 // ---------------------------------------------------------------------------
-// F-6 static `aggregate` semantics (RFC semiring-faq-unified-ir).
+// F-6 static `faq` semantics (RFC semiring-faq-unified-ir).
 //
 // Three checks decidable from the SINGLE document — no evaluation, solver, or
 // other file. Each descends every expression position of a model
-// (`forEachExpressionScope`), finds the `aggregate` nodes reachable inside, and
+// (`forEachExpressionScope`), finds the `faq` nodes reachable inside, and
 // reports at the CONTAINING EXPRESSION FIELD's JSON Pointer (`.../equations/i/
 // lhs` or `/rhs`), the Phase-2 pointer convention, because that is where the
 // shared corpus pins the finding.
 // ---------------------------------------------------------------------------
 
 /**
- * Every `aggregate` node reachable from `expr`, including nested ones (an
+ * Every `faq` node reachable from `expr`, including nested ones (an
  * aggregate carried inside another aggregate's `expr`/`key` body). Descent is
  * the shared `forEachChild` full-child walk, so aggregates hidden in any
  * expression-bearing field are found; `ranges`/`join` are structural metadata,
@@ -811,7 +811,7 @@ function collectAggregates(expr: Expression): ExpressionNode[] {
   const found: ExpressionNode[] = []
   const visit = (node: Expr): void => {
     if (!isExprNode(node)) return
-    if (node.op === 'aggregate') found.push(node)
+    if (node.op === 'faq') found.push(node)
     forEachChild(node, visit)
   }
   visit(expr)
@@ -819,7 +819,7 @@ function collectAggregates(expr: Expression): ExpressionNode[] {
 }
 
 /**
- * The join-key columns of an `aggregate` — the index symbols named on either
+ * The join-key columns of a `faq` — the index symbols named on either
  * side of every `join[k].on` pair. These are the columns whose VALUES must
  * compare equal, so their member types must be exact-equality types.
  */
@@ -880,7 +880,7 @@ function invalidJoinKeyMember(
 }
 
 /**
- * F-6 check `join_key_invalid_type` (RFC §5.3 / §5.7 rule 1): an `aggregate`
+ * F-6 check `join_key_invalid_type` (RFC §5.3 / §5.7 rule 1): a `faq`
  * whose value-equality `join` keys on a column drawn from a categorical index
  * set whose `members` contain a FLOAT or a NULL. Emitted once per offending
  * aggregate at its containing equation field.
@@ -1044,7 +1044,7 @@ export function validateAggregateJoinSides(
 }
 
 /**
- * F-6 check `undefined_index_set` (RFC §5.2): an `aggregate` `ranges` entry
+ * F-6 check `undefined_index_set` (RFC §5.2): a `faq` `ranges` entry
  * `{ from: NAME }` whose NAME is not a key of the document-scoped `index_sets`
  * registry. No implicit interval is inferred, so a typo cannot silently become
  * an empty set. Emitted per offending aggregate field.
@@ -1100,7 +1100,7 @@ const RELATIONAL_SEMIRINGS: ReadonlySet<string> = new Set(['bool_and_or'])
 
 /**
  * F-6 check `relational_node_in_continuous` (CONFORMANCE_SPEC §5.7 guard 2):
- * a relational / value-invention `aggregate` (`distinct: true` under a
+ * a relational / value-invention `faq` (`distinct: true` under a
  * relational semiring) whose `key`/`expr` reads a declared STATE variable. Such
  * a node's cadence class is CONTINUOUS (class = max over inputs; a state input
  * is CONTINUOUS), and relational work may not run on the per-step hot path.

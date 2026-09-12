@@ -44,7 +44,7 @@ function _inv_param_model(N; g=3.0, h=7.0)
 end
 
 # D(c[i]) = (s·s)·c[i];  D(s) = 0.  s is a 0-D state — a fixed slot inside the
-# arrayop → s·s is loop-invariant but moves with the integrator.
+# faq → s·s is loop-invariant but moves with the integrator.
 function _inv_state_model(N)
     vars = Dict{String,ESM.ModelVariable}(
         "c" => ESM.ModelVariable(ESM.UnknownVariable),

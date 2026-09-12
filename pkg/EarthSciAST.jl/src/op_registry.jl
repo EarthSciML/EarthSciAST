@@ -371,10 +371,8 @@ const _OP_TABLE = _OpSpec[
     _op("transpose"; category=:array, cse=true, known=true),
     _op("concat";    category=:array, cse=true, known=true),
 
-    # ── Aggregates (semiring FAQ; RFC §5.3/§7.2) ──
-    _op("arrayop";   category=:aggregate, cse=true, geo=true, known=true,
-        arrprod=true, selfidx=true),
-    _op("aggregate"; category=:aggregate, cse=true, geo=true, known=true,
+    # ── Functional Aggregate Query (semiring FAQ; RFC §5.3/§7.2) ──
+    _op("faq";       category=:aggregate, cse=true, geo=true, known=true,
         arrprod=true, selfidx=true),
 
     # ── Geometry kernel leaves (RFC §8.1) & value invention (RFC §5.5) ──
@@ -454,7 +452,7 @@ lifted over an array. This is the positive half of esm-spec §4.3.4's
 "`fn` must name a scalar operator (arithmetic, elementary function,
 comparison, etc.)"; its complement is the STRUCTURAL half of the vocabulary —
 `:array` (`index`/`makearray`/`broadcast`/`reshape`/`transpose`/`concat`),
-`:aggregate` (`arrayop`/`aggregate`), `:calculus` (`D`/`ic`/`grad`/`div`/
+`:aggregate` (`faq`), `:calculus` (`D`/`ic`/`grad`/`div`/
 `laplacian`), `:function` (`fn`/`call`), `:data` (`const`/`enum`),
 `:geometry`, `:value_invention` — none of which is a scalar operator.
 
@@ -489,7 +487,7 @@ The `broadcast.fn` contract of esm-spec §4.3.4, as pure data: `nothing` when
 
 - `:missing`    — the `broadcast` node carries no `fn` field (or an empty one),
 - `:unknown`    — `fn` names no registry op,
-- `:non_scalar` — `fn` names a STRUCTURAL op (`aggregate`, `index`,
+- `:non_scalar` — `fn` names a STRUCTURAL op (`faq`, `index`,
                   `makearray`, `grad`, …), not a scalar operator,
 - `:arity`      — `fn` is a scalar op but `nargs` is outside its arity.
 

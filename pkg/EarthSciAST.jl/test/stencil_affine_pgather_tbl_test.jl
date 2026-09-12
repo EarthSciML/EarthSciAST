@@ -92,7 +92,7 @@ function _pgt_obschain_model(N)
         _op("*", _n(1.0 - w), _idx("F0", _clamp_lo(_op("-", e, _i(1))))),
         _op("*", _n(w), _idx("F0", _clamp_hi(e, N))))
     Mbody = ed(_v("e"))
-    M = ESM.OpExpr("aggregate", ESM.ASTExpr[]; output_idx=Any["e"],
+    M = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["e"],
                    expr_body=Mbody, ranges=Dict{String,Any}("e" => Any[1, N + 1]))
     # esm 1.0.0 (§5.4/§6.3.1): `M` is a plain `unknown`; what made it OBSERVED —
     # its defining expression — is now the bare-variable-LHS equation `M ~ …`.

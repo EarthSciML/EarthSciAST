@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "pde_inline_observed_param_rank2",
     "description": "§6.6.5 inline-test assertions on a RANK-2 array observed whose expression references a model PARAMETER. Guards the build-time cellwise-evaluation parameter-binding fix: model parameters are load-time constants and are in scope for a directly-asserted observed; state is not. The observed `scaled` = k * base with parameter k (default 1.5)."
@@ -77,7 +77,7 @@
         {
           "lhs": "scaled",
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "semiring": "sum_product",
             "output_idx": [
               "i",

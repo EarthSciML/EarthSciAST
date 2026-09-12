@@ -631,7 +631,7 @@ fn json_scalar_string(v: &serde_json::Value) -> String {
     }
 }
 
-/// Big-operator symbol for an `aggregate` reduction (semiring supersedes the
+/// Big-operator symbol for a `faq` reduction (semiring supersedes the
 /// bare `reduce`). See tests/display/RENDERING_CONTRACT.md.
 fn aggregate_symbol(semiring: Option<&str>, reduce: &str, fmt: Fmt) -> &'static str {
     enum Fam {
@@ -705,7 +705,7 @@ fn format_ranges_clause(ranges: &std::collections::HashMap<String, RangeSpec>, f
     }
 }
 
-/// Render an `aggregate` node per tests/display/RENDERING_CONTRACT.md §aggregate.
+/// Render a `faq` node per tests/display/RENDERING_CONTRACT.md §aggregate.
 fn format_aggregate(node: &ExpressionNode, fmt: Fmt) -> String {
     let out_idx = node
         .output_idx
@@ -1067,7 +1067,7 @@ fn format_structural_op(node: &ExpressionNode, fmt: Fmt) -> Option<String> {
             Some(format!("{name}({inner}, manifold={manifold}{id_part})"))
         }
 
-        "aggregate" => Some(format_aggregate(node, fmt)),
+        "faq" => Some(format_aggregate(node, fmt)),
 
         "argmin" | "argmax" => Some(format_arg_witness(node, fmt)),
 

@@ -18,7 +18,7 @@ import { join as pathJoin } from 'path'
 import { loadString, toJson, validateText, flatten } from './index.js'
 import { fixturesDir } from './test-helpers.js'
 
-const fixture = pathJoin(fixturesDir(), 'valid', 'aggregate', 'join_on_self_join_syms.esm')
+const fixture = pathJoin(fixturesDir(), 'valid', 'faq', 'join_on_self_join_syms.esm')
 
 /** Every `join` clause of the flattened document, in order. */
 function flattenedJoinClauses(doc: ReturnType<typeof loadString>): Record<string, unknown>[] {

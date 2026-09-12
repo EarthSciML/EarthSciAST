@@ -81,14 +81,14 @@ The full authoring stance, normatively:
 | `function_tables` | | Component-scoped sampled function tables — named axes plus literal nested-array data, referenced by the `table_lookup` AST op (see Section 9.5) |
 | `coupling` | | Composition and coupling rules |
 | `domain` | | The single temporal domain shared by all components (see Section 11) |
-| `index_sets` | | Document-scoped registry of named iteration domains (grid axes, categorical dimensions, data-derived sets) referenced by `aggregate` ranges (RFC semiring-faq-unified-ir §5.2) |
+| `index_sets` | | Document-scoped registry of named iteration domains (grid axes, categorical dimensions, data-derived sets) referenced by `faq` ranges (RFC semiring-faq-unified-ir §5.2) |
 | `coordinates` | | Document-scoped, **optional** registry marking existing data arrays (or inline literal vectors) as physical coordinates and attaching CF metadata (`standard_name`/`units`/`axis`). Purely additive — a document without it validates and emits bare integer axes (§2.1; RFC streaming-output-sinks §8) |
 | `expression_templates` | | Top-level rewrite rules / templates — the payload of a **template-library file** (§9.7.1). Only valid in a library file; component-local templates stay inside their `model` / `reaction_system` (§9.6.1) |
 | `expression_template_imports` | | Ordered imports of template-library files (§9.7.2) — at top level, only valid in a library file layering on other libraries; inside a `model` / `reaction_system` (§9.7.2); or, as **scope-directed injection** into another component's scope, on a §4.7 subsystem-ref edge, a §10 coupling entry, or a §6.6 / §6.7 test / analysis (§9.7.10) |
-| `metaparameters` | | Document-scoped named integers bound at load (import/subsystem edges, loader API, or defaults) and admissible in `index_sets` sizes, `aggregate` dense ranges, and `makearray` regions (§9.7.6) |
+| `metaparameters` | | Document-scoped named integers bound at load (import/subsystem edges, loader API, or defaults) and admissible in `index_sets` sizes, `faq` dense ranges, and `makearray` regions (§9.7.6) |
 | `solver` | | Document-scoped, **optional**, purely **advisory** solver hints — stiffness, integration tolerances, and a splitting hint the document knows about itself (§2.2). Purely additive: a document without it validates, flattens and emits exactly as before. Arrives at esm 1.1.0 |
 
-Spatial grid geometry is **not** a special top-level concept. Coordinates, extents, spacing, CRS parameters, connectivity, and metric arrays are ordinary data — loaded through a `data_sources` entry or declared as unknowns/parameters — and grid topology and metrics are constructed declaratively with the `aggregate` Functional Aggregate Query op (RFC semiring-faq-unified-ir). The `operators`, `registered_functions`, `grids`, `staggering_rules`, and `discretizations` blocks present in earlier drafts are **removed**.
+Spatial grid geometry is **not** a special top-level concept. Coordinates, extents, spacing, CRS parameters, connectivity, and metric arrays are ordinary data — loaded through a `data_sources` entry or declared as unknowns/parameters — and grid topology and metrics are constructed declaratively with the `faq` Functional Aggregate Query op (RFC semiring-faq-unified-ir). The `operators`, `registered_functions`, `grids`, `staggering_rules`, and `discretizations` blocks present in earlier drafts are **removed**.
 
 At least one of `models`, `reaction_systems`, `data_sources`, or `expression_templates` must be present. A `data_sources`-only document is a valid **source-catalog file**: it declares ingest configuration that other documents draw from, but it is not a component and is not referenceable as a subsystem (§4.7). A document whose payload is top-level `expression_templates` is a **template-library file** (§9.7.1) — importable via `expression_template_imports`, and the carrier format of the [EarthSciDiscretizations](https://github.com/EarthSciML/EarthSciDiscretizations) standard library.
 
@@ -524,7 +524,7 @@ one; and its bounds carry **no measure**, because the format has none (§6.6.5 c
 
 **Do not reach for `integral` to write a discrete cumulative sum.** If what you want is a
 prefix reduction over an index set — a running total, a cumulative distribution, a
-column-integrated burden on a discretized axis — that is an ordinary `aggregate` with a
+column-integrated burden on a discretized axis — that is an ordinary `faq` with a
 monotone `filter`, it is in the evaluable core, and every executing binding runs it today.
 See §4.3.1 "Cumulative (prefix) reductions", which also gives the measure-weighted Riemann-sum
 form that is the discrete counterpart of ∫ₓₘᵢₙˣ u dx′.
@@ -585,7 +585,7 @@ by this spec.
 
 | Op | Required extra fields | Meaning |
 |---|---|---|
-| `aggregate` | `output_idx`, `expr` | Functional Aggregate Query node: a semiring aggregate of a product of factors over named index sets. Specializes to Einstein-notation tensor contraction with implicit reductions over non-output indices; its full surface (`semiring`, `from`/`of` ranges, `join`, `distinct`, `key`, `filter`) is specified in RFC semiring-faq-unified-ir. Its `expr` is also the one place a causal SELF-REFERENCE is admitted — the format's only spelling for a recurrence over an index axis (§4.3.1.1). See Section 4.3.1. |
+| `faq` | `output_idx`, `expr` | Functional Aggregate Query node: a semiring reduction of a product of factors over named index sets. Specializes to Einstein-notation tensor contraction with implicit reductions over non-output indices; its full surface (`semiring`, `from`/`of` ranges, `join`, `distinct`, `key`, `filter`) is specified in RFC semiring-faq-unified-ir. Its `expr` is also the one place a causal SELF-REFERENCE is admitted — the format's only spelling for a recurrence over an index axis (§4.3.1.1). See Section 4.3.1. |
 | `makearray` | `regions`, `values` | Block assembly of an array from overlapping sub-region assignments. Later regions overwrite earlier ones. See Section 4.3.2. |
 | `index` | — | Element or sub-array access. `args[0]` is the array; `args[1..]` are the index expressions. See Section 4.3.3. |
 | `broadcast` | `fn` | Element-wise application of scalar operator `fn` to one or more broadcast-compatible operands; means what `{op: fn, args}` means, applied element-wise (so a ONE-operand `broadcast` applies `fn` unarily). `fn` MUST name a scalar operator, applied at an arity that operator admits, else `invalid_broadcast_fn`. See Section 4.3.4. |
@@ -593,9 +593,56 @@ by this spec.
 | `transpose` | — (optional `perm`) | Axis permutation of `args[0]`. See Section 4.3.5. |
 | `concat` | `axis` | Concatenate the operand arrays along the given axis. See Section 4.3.5. |
 
+##### The `faq` tag, and its one deprecated alias
+
+`faq` — Functional Aggregate Query — is the canonical tag from esm **1.1.0**.
+The node is named for what it is rather than for one of its specializations:
+it reduces over a semiring, but it also joins (`join`), filters (`filter`),
+and under `bool_and_or` with `distinct` produces an INDEX SET rather than an
+array, reducing nothing at all.
+
+- **`aggregate`** is the pre-1.1.0 spelling and is a **DEPRECATED ALIAS**. A
+  loader MUST accept it, MUST normalize the node to `faq` at the wire boundary
+  — ahead of the version gates and schema validation, so that nothing
+  downstream of the loader, `emit` included, ever sees the alias — and MUST
+  report the warning diagnostic `deprecated_op_alias` once per document per
+  alias. The alias is **REMOVED at esm 2.0.0**.
+- **`arrayop`** is the pre-0.8.0 spelling and is **NOT accepted**. It was
+  removed at 0.8.0 and is rejected **BY NAME**, with the hard error
+  `removed_op` — not left to the open tier. `arrayop` is a well-formed
+  identifier, so §4.2's OPEN rewrite-target tier would otherwise admit it: the
+  document would load silently and fail much later as `unlowered_operator`, or
+  never.
+
+A document that spells the node `faq` declares `esm: 1.1.0` or later, the same
+rule the top-level `solver` block follows (§2.2.4), enforced with the hard error
+`faq_version_too_old`. The gate reads the **authored** form, before
+normalization: `aggregate` *is* the pre-1.1.0 spelling, so a 1.0.0 document
+carrying the alias is legal — it is normalized, and its declared version is
+raised to the 1.1.0 floor with it, so the upgraded document is self-consistent
+rather than spelling a 1.1.0 construct under an older version.
+
+Both of these, and the alias normalization, happen at ONE wire boundary per
+binding, applied to EVERY document a load touches — the root, a `{ref}`-loaded
+child, a template library, a coupling library. Doing it per call site is what
+let `arrayop` survive its own 0.8.0 removal.
+
+Because a loader normalizes rather than preserves, `emit` writes `faq` for a
+document authored with `aggregate`. The §9.6.4 round-trip invariant is
+therefore stated over documents **at the current schema version**: `emit ∘
+load` is a byte-wise fixed point for those, and a document carrying a
+deprecated alias is upgraded exactly once, on its first load.
+
+The **text surface is unchanged**. The head keyword in the text form is the
+⊕-word (`sum`, `prod`, `max`, `min`, `any`) chosen from `semiring` / `reduce`
+— the ASCII spelling of the big operator in the unicode and LaTeX renderings —
+not the node's name. See `tests/display/RENDERING_CONTRACT.md`.
+
+See `docs/content/rfcs/faq-node-rename.md`.
+
 #### Relational / value-invention & geometry (FAQ companions)
 
-These accompany `aggregate` in Functional Aggregate Query expressions (RFC semiring-faq-unified-ir §5). The relational ops (`skolem`, `rank`) run at build/setup time to invent index values and dense IDs; `argmin`/`argmax` are index-returning reductions; `intersect_polygon` is a geometry kernel leaf.
+These accompany `faq` in Functional Aggregate Query expressions (RFC semiring-faq-unified-ir §5). The relational ops (`skolem`, `rank`) run at build/setup time to invent index values and dense IDs; `argmin`/`argmax` are index-returning reductions; `intersect_polygon` is a geometry kernel leaf.
 
 | Op | Fields | Meaning |
 |---|---|---|
@@ -603,18 +650,18 @@ These accompany `aggregate` in Functional Aggregate Query expressions (RFC semir
 | `rank` | — | Assign a dense 0-based ID to each element by its position in the sorted `distinct` sequence of the input. Build-time. See RFC §5.7. |
 | `argmin`, `argmax` | `output_idx`, `expr`, `arg` | Index-returning reductions: the index at which the aggregated body attains its minimum / maximum over the contracted index set. |
 | `intersect_polygon` | `manifold` | Geometry kernel leaf: the clipped intersection polygon of two cells (a ring of data-dependent length), composed with a `polygon_area` `sum_product` FAQ for conservative regridding (§8.6). |
-| `polygon_intersection_area` | `manifold` | Geometry kernel leaf returning the **scalar** overlap area of two cells — the fused `polygon_area ∘ intersect_polygon`. Exposes no ragged clip ring, so a per-pair overlap-area factor `A_ij = polygon_intersection_area(src_i, tgt_j)` is a dense, evaluable `aggregate` (§8.6.1). |
+| `polygon_intersection_area` | `manifold` | Geometry kernel leaf returning the **scalar** overlap area of two cells — the fused `polygon_area ∘ intersect_polygon`. Exposes no ragged clip ring, so a per-pair overlap-area factor `A_ij = polygon_intersection_area(src_i, tgt_j)` is a dense, evaluable `faq` (§8.6.1). |
 | `true` | — (`args: []`) | Nullary boolean-literal constant — e.g. an always-true join / `filter` predicate. |
 
 ### 4.3 Array / Tensor Semantics
 
 Earth-system models frequently need to serialize operations on arrays and tensors — discretized PDEs, matrix multiplies, stencils, index contractions, block assemblies. The array ops listed in Section 4.2 cover these cases. Their data model mirrors [`SymbolicUtils.jl`](https://github.com/JuliaSymbolics/SymbolicUtils.jl)'s `ArrayOp` and `ArrayMaker` (see `src/types.jl`, `src/arrayop.jl`, `src/arraymaker.jl`).
 
-**Implicit dimensions.** Array ops use an *implicit* dimension model: there is no per-variable `dimensions` field on schema variables. Index symbols are local to the enclosing `aggregate` node, and lengths are resolved at runtime from the declared `index_sets` and the shapes of the operand arrays. A given string can be a variable reference in most contexts but serves as an index symbol inside `aggregate.output_idx`, `aggregate.expr`, and `aggregate.ranges` keys. Callers must not rely on cross-node scoping of index symbols.
+**Implicit dimensions.** Array ops use an *implicit* dimension model: there is no per-variable `dimensions` field on schema variables. Index symbols are local to the enclosing `faq` node, and lengths are resolved at runtime from the declared `index_sets` and the shapes of the operand arrays. A given string can be a variable reference in most contexts but serves as an index symbol inside `aggregate.output_idx`, `aggregate.expr`, and `aggregate.ranges` keys. Callers must not rely on cross-node scoping of index symbols.
 
-#### 4.3.1 `aggregate`
+#### 4.3.1 `faq`
 
-An `aggregate` node represents a generalized Einstein-notation expression — the `sum_product` specialization of the Functional Aggregate Query (RFC semiring-faq-unified-ir).
+A `faq` node represents a generalized Einstein-notation expression — the `sum_product` specialization of the Functional Aggregate Query (RFC semiring-faq-unified-ir).
 
 Fields:
 - `output_idx`: array. Each entry is either a string (a symbolic index variable) or the integer literal `1` (a singleton dimension that can be inserted for reshape/broadcast, mirroring `@arrayop (i, 1, j, 1) ...`).
@@ -635,7 +682,7 @@ evaluated with each index taking every value in its inferred (or declared) range
 
 ```json
 {
-  "op": "aggregate",
+  "op": "faq",
   "output_idx": ["i", "j"],
   "expr": {
     "op": "*",
@@ -654,7 +701,7 @@ Here `k` is contracted (reduced with the default `+`) while `i` and `j` form the
 
 ```json
 {
-  "op": "aggregate",
+  "op": "faq",
   "output_idx": ["i", "j"],
   "expr": {
     "op": "+",
@@ -680,7 +727,7 @@ The `ranges` entries use the form `[start, stop]` to say that the interior point
 
 ```json
 {
-  "op": "aggregate",
+  "op": "faq",
   "output_idx": ["j"],
   "expr": { "op": "index", "args": ["A", "i", "j"] },
   "reduce": "+",
@@ -691,7 +738,7 @@ The `ranges` entries use the form `[start, stop]` to say that the interior point
 Here `i` is contracted with `+`, yielding `result[j] = Σᵢ A[i, j]`.
 
 **Cumulative (prefix) reductions — normative.** A cumulative sum, running maximum, or any
-other prefix reduction over an index set is expressed as an ordinary `aggregate` whose
+other prefix reduction over an index set is expressed as an ordinary `faq` whose
 `filter` compares the contracted index symbol against an output index symbol. This is the
 **canonical spelling**; the format ships no separate `cumsum` / `scan` operator, and a
 binding MUST NOT introduce one under a private op name. The `integral` op (§4.2) is *not* the
@@ -699,7 +746,7 @@ discrete cumulative form — it is an unlowered rewrite target (see the note the
 
 ```json
 {
-  "op": "aggregate",
+  "op": "faq",
   "output_idx": ["i"],
   "reduce": "+",
   "ranges": { "i": { "from": "x" }, "j": { "from": "x" } },
@@ -735,7 +782,7 @@ Because both key columns then live on the same axis, the pair `[left, right]` ca
 say which range symbol each is read at; the side assignment, the `syms` spelling that
 overrides it, and the refusal when three ranges draw one index set are normative in
 **CONFORMANCE_SPEC.md §5.5.8**. The shared fixture is
-`tests/valid/aggregate/join_on_self_join.esm`; the rationale is
+`tests/valid/faq/join_on_self_join.esm`; the rationale is
 `docs/content/rfcs/self-join-two-ranges-over-one-index-set.md`.
 
 **Accumulation order is ascending `j` for every variant, and is normative.** A `filter`
@@ -786,7 +833,7 @@ body as an ordinary factor, which the author declares as an ordinary variable or
 
 ```json
 {
-  "op": "aggregate",
+  "op": "faq",
   "output_idx": ["i"],
   "reduce": "+",
   "ranges": { "i": { "from": "x" }, "j": { "from": "x" } },
@@ -808,15 +855,15 @@ prefix sum and an authoring error for an integral.
 
 The prefix reduction above covers every fold whose *terms* are independent of the
 result. A fold whose next term is a function of the previous **answer** — a
-recurrence — is expressed by letting the defining `aggregate`'s body read the array
-being defined, at a strictly earlier position along one of the aggregate's own
+recurrence — is expressed by letting the defining `faq`'s body read the array
+being defined, at a strictly earlier position along one of the `faq`'s own
 output axes:
 
 ```json
 {
   "lhs": "s",
   "rhs": {
-    "op": "aggregate", "args": [], "output_idx": ["k"],
+    "op": "faq", "args": [], "output_idx": ["k"],
     "ranges": { "k": { "from": "steps" } },
     "expr": { "op": "ifelse", "args": [
       { "op": "<=", "args": ["k", 1] },
@@ -837,9 +884,9 @@ under a private op name. The rationale and the alternatives considered are in
 `docs/content/rfcs/causal-self-reference-recurrence.md`.
 
 **Recognition.** An equation is a **recurrence definition** of the unknown `V` when
-its LHS names `V` — bare (`V ~ …`) or through the §4.3 indexed-aggregate LHS form
-(`aggregate{expr: V[k…]} ~ …`) — and its RHS contains at least one `index(V, …)`
-read. Each such read is a **causal self-read**. The aggregate's `output_idx` symbols
+its LHS names `V` — bare (`V ~ …`) or through the §4.3 indexed-`faq` LHS form
+(`faq{expr: V[k…]} ~ …`) — and its RHS contains at least one `index(V, …)`
+read. Each such read is a **causal self-read**. The `faq`'s `output_idx` symbols
 and their `ranges` are the **cell frame** `(k₁ … k_r)` with bounds `R₁ … R_r`.
 Nothing is declared: the recurrence, its axis and its lag are all read off the
 document, and a binding MUST reject a self-read it cannot justify rather than
@@ -881,7 +928,7 @@ defensible.
 
 The **straddling** row is not a loophole; it is what lets a bounded-lag fold be
 written without enumerating its terms. The natural spelling of a fold with an
-additive non-recurrent term is one aggregate whose contracted index runs from `0`,
+additive non-recurrent term is one `faq` whose contracted index runs from `0`,
 the `0` term carrying the non-recurrent part and the rest carrying
 `f(V[k−a])` under a guard:
 
@@ -905,9 +952,9 @@ runtime-guarded; **no evaluation rule depends on either**, so neither is authore
 1. Cells of `V` are visited with axis `d` as the **outermost loop, ascending** over
    `R_d`; the remaining axes iterate inside it, ascending, in `output_idx` order.
 2. At each cell the RHS is evaluated **restricted to that cell**: the frame symbols
-   are bound to the cell's coordinates and the aggregate's own contraction, `filter`
+   are bound to the cell's coordinates and the `faq`'s own contraction, `filter`
    and `reduce` apply at that cell exactly as §4.3.1 specifies for a non-recurrent
-   aggregate — including §4.3.1's ascending accumulation order. The body's
+   `faq` — including §4.3.1's ascending accumulation order. The body's
    arithmetic is not special-cased, which is what lets a recurrence compose with a
    contraction, a banded `filter`, or a `reduce: "*"` fold.
 3. The cell's value is **published before the sweep advances**, so a later cell's
@@ -966,13 +1013,13 @@ error, not a boundary case, and every binding MUST reject it:
 | Bare `V` (not through `index`) anywhere in `V`'s own RHS | `recurrence_not_wellfounded` |
 | Recurrence axis whose range is ragged, derived, or not a unit-step ascending interval | `recurrence_not_wellfounded` |
 | A self-read reachable only through a construct that cannot be restricted to one cell — a `makearray` region value, a `reshape` / `transpose` / `concat` operand | `recurrence_unsupported_form` |
-| RHS that is not an `aggregate` over `V`'s frame, or whose output ranges are not statically resolvable | `recurrence_unsupported_form` |
+| RHS that is not a `faq` over `V`'s frame, or whose output ranges are not statically resolvable | `recurrence_unsupported_form` |
 
 The `makearray` row is worth stating explicitly, because §4.3.2's overlap rule
 ("later entries overwrite earlier ones") reads like a licence to define position `k`
 from position `k−1`. It is not one: the region order fixes which **write wins**, not
 the order in which cells are **evaluated**, and a region's value expression is
-evaluated once for the whole region. Write the recurrence as one `aggregate` with the
+evaluated once for the whole region. Write the recurrence as one `faq` with the
 base case as a guard instead.
 
 A binding that has to exempt the self-edge from an existing cycle check MUST gate
@@ -1019,7 +1066,7 @@ Fields:
   "values": [
     "x_row",
     {
-      "op": "aggregate",
+      "op": "faq",
       "output_idx": [1, "i"],
       "expr": {
         "op": "+",
@@ -1033,7 +1080,7 @@ Fields:
     1,
     { "op": "index", "args": ["z", 1] },
     {
-      "op": "aggregate",
+      "op": "faq",
       "output_idx": [],
       "expr": {
         "op": "*",
@@ -1076,7 +1123,7 @@ A stencil gather of a **const array** (a pre-computed factor: Fornberg weights, 
 
 **Meaning.** `{ "op": "broadcast", "fn": F, "args": A }` denotes exactly what `{ "op": F, "args": A }` denotes, applied element-wise over the broadcast operands. That equivalence is the whole definition, and it settles the ONE-OPERAND case: a `broadcast` with a single operand applies `fn` **unarily**. `broadcast(fn: "-", [x])` is `-x`, `broadcast(fn: "log", [x])` is `log(x)`, and `broadcast(fn: "+", [x])` is `x` — for the same reason the bare `{"op": "+", "args": [x]}` node is `x`, because `+` is n-ary from one operand. A one-operand `broadcast` MUST NOT be treated as the identity on its operand: that discards `fn`, and a binding that folds `args` through a binary kernel degenerates to exactly that on a single-element list.
 
-The `fn` value must name a **scalar operator** — one whose meaning is a pointwise map from scalar operands to a scalar result: the §4.2 arithmetic (`+ - * / ^ neg`), elementary functions (`exp log log10 sqrt abs sign floor ceil`, the trigonometric and hyperbolic families, `atan2`, `min`, `max`), comparisons (`== != < <= > >=`), logical connectives (`and or not`), and `ifelse`. It may NOT name an op whose meaning is not pointwise — the array/tensor ops (`aggregate`, `makearray`, `index`, `reshape`, `transpose`, `concat`, and `broadcast` itself), the closed-registry invocation `fn`, the form ops (`D`, `ic`, `Pre`, `const`, `true`, `enum`, `table_lookup`, `apply_expression_template`), or the relational and geometry ops.
+The `fn` value must name a **scalar operator** — one whose meaning is a pointwise map from scalar operands to a scalar result: the §4.2 arithmetic (`+ - * / ^ neg`), elementary functions (`exp log log10 sqrt abs sign floor ceil`, the trigonometric and hyperbolic families, `atan2`, `min`, `max`), comparisons (`== != < <= > >=`), logical connectives (`and or not`), and `ifelse`. It may NOT name an op whose meaning is not pointwise — the array/tensor ops (`faq`, `makearray`, `index`, `reshape`, `transpose`, `concat`, and `broadcast` itself), the closed-registry invocation `fn`, the form ops (`D`, `ic`, `Pre`, `const`, `true`, `enum`, `table_lookup`, `apply_expression_template`), or the relational and geometry ops.
 
 **Validation.** A schema-valid `broadcast` node must carry an `fn` naming a scalar operator as defined above, applied to a number of `args` that operator admits under its §4.2 arity (so `broadcast(fn: "min", [x])` and `broadcast(fn: "sin", [a, b])` are rejected for exactly the reason the bare `min(x)` and `sin(a, b)` nodes are). Bindings **MUST emit an `invalid_broadcast_fn` error** when this invariant is violated — including when `fn` is absent, for which there is no default; **loading MUST fail**. This mirrors the §4.4 rule for `fn`-node names: an operator name that no binding can resolve must never reach an evaluator, because the failure is otherwise silent.
 
@@ -1090,13 +1137,13 @@ Broadcasts do not fuse: a nested expression of broadcasts decomposes into primit
    - **Axis order is immaterial.** A `["lat","lon"]` operand in a `["lon","lat","lev"]` result aligns `lat` to `lat` and `lon` to `lon` — i.e. it transposes. It is never reinterpreted positionally.
    - An operand carrying an index set that is **not** among the result's is **not** broadcast-compatible. It has no axis to align to, so bindings MUST reject the document with the structural diagnostic `array_shape_mismatch` (Section 7). Both shapes are declared, so this is decidable statically and MUST be decided at validation time — it is not a runtime concern and not a warning.
 
-   The name-aligned result is by construction identical, element for element, to the explicit `aggregate` spelling of the same expression over the result's axes: `{"op":"*","args":["w2","z1"]}` with `w2: ["lon","lat"]`, `z1: ["lev"]` and a `["lon","lat","lev"]` result denotes exactly `sum_{i,j,k} index(w2,i,j) * index(z1,k)` (a full map, contracting nothing). The two spellings MUST agree bit for bit. Positionally flattening the operands into the result's linear layout — padding the shorter one — is **not** conforming: it produces finite, plausible, wrong values.
+   The name-aligned result is by construction identical, element for element, to the explicit `faq` spelling of the same expression over the result's axes: `{"op":"*","args":["w2","z1"]}` with `w2: ["lon","lat"]`, `z1: ["lev"]` and a `["lon","lat","lev"]` result denotes exactly `sum_{i,j,k} index(w2,i,j) * index(z1,k)` (a full map, contracting nothing). The two spellings MUST agree bit for bit. Positionally flattening the operands into the result's linear layout — padding the shorter one — is **not** conforming: it produces finite, plausible, wrong values.
 
 2. **Anonymous operands align positionally.** An operand with no declared index sets — the result of a `reshape`, `transpose`, `concat`, or `makearray`, a `const` literal array, or a variable whose shape was never declared — names no axes, so there is nothing to align by. Such operands broadcast **positionally**, left-aligned, with the lower-rank operand padded on the **trailing** axes with singletons (the `SymbolicUtils.jl` / Julia convention, not the NumPy one): a `(3,)` operand against a `(1,3)` operand pads to `(3,1)` and the pair broadcasts to `(3,3)`, so `broadcast(+, a, reshape(b,[1,3]))[i,j] = a[i] + b[j]`. Two operands whose extents disagree on an axis where neither is 1 are incompatible.
 
 An expression mixing the two regimes aligns each operand under its own: a named operand is placed by name, an anonymous one positionally.
 
-These rules apply only where element correspondence is what the expression *means* — that is, under the elementwise operators. Every other op consumes its operands whole under its own contract: `aggregate` and `makearray` name their axes, `index` gathers, the shape ops of Section 4.3.5 restructure, and the relational and geometry ops (Section 4.2) may return a result of an entirely unrelated shape.
+These rules apply only where element correspondence is what the expression *means* — that is, under the elementwise operators. Every other op consumes its operands whole under its own contract: `faq` and `makearray` name their axes, `index` gathers, the shape ops of Section 4.3.5 restructure, and the relational and geometry ops (Section 4.2) may return a result of an entirely unrelated shape.
 
 #### 4.3.5 `reshape`, `transpose`, `concat`
 
@@ -1261,7 +1308,7 @@ A ref MAY contain `${VAR}` tokens (e.g. `"${ESD_ROOT}/grids/cartesian_uniform_1d
 
 *Edge pipeline (normative).* For one mount edge, in order: (1) the referenced document resolves in its OWN scope — its `expression_template_imports` (with *their* §9.7.7 renames), this edge's `bindings` and §9.7.10 injection, its metaparameter close and fold, its §9.7.5 index-set merge, and the §9.6.3 fixpoint — i.e. §9.7.6 site 3's "resolved as a complete document and folded to concrete integers at the mount", verbatim; (2) `index_set_rename` applies to that resolved document as ONE simultaneous substitution (swaps are well-defined; chains do not cascade); (3) the renamed `index_sets` merge into the mounting document's registry under their post-rename names, deep-equal-or-error exactly as above, and the component splices in. Consequently the map's KEYS speak the **mounted document's own post-resolution vocabulary** — the axis names a standalone load of that file would show — exactly as §9.7.7's `rename` speaks the target's export vocabulary. A leaf that itself imported a grid library under `prefix: "g"` is mounted with `{"g.lev": "soil.lev"}`. Renaming is **per edge**: step 2 covers what THIS referenced document declares and imports, and an axis reaching the registry through a mount *nested inside* the referenced document is renamed (or not) at that nested edge, by its own `index_set_rename`. Renames therefore compose down the reference DAG by composition, never by cascade, and no binding has to decide whether a nested contribution belongs to the inner or the outer edge.
 
-*Transitivity (normative occurrence sites).* A mount-edge rename rewrites the declaration key AND every reference to the old name inside the mounted document. The list is §9.7.7's — `index_sets` registry key; `of` parent lists of ragged/derived definitions; `{"from": <name>}` references; the axis-naming scalar fields `wrt`, `dim` and `integral`'s `var`, plus an `integral` `lower`/`upper` bound that is a **bare string naming a renamed index set**; `where` `shape` constraint entries (§9.6.1); and an `aggregate` `join` clause's `on` key-column entries, each rewritten **iff** it is a key of this edge's map (a loop symbol or a data column is left as spelled) — plus the three sites that exist only because a mount carries a whole component rather than a set of declarations: **`ModelVariable` / `Parameter` `shape` entries**, **`Assertion.coords` KEYS** (§6.6.5), and **`DataSourceSelectAxis.gated_by`** (§8.9.2). Never rewritten: `from_faq` and expression-node `id` (node identities, not axis names); a ragged set's `offsets` / `values` / `member_factor` (keyed-factor variable names — §9.7.7's `rebind` domain); `aggregate` `output_idx` entries, `ranges` KEYS and a `join` clause's `syms` (bound index symbols, never index-set names); `coordinates.<k>.source` (a data-array name); and the §9.7.7 protected structural scalars.
+*Transitivity (normative occurrence sites).* A mount-edge rename rewrites the declaration key AND every reference to the old name inside the mounted document. The list is §9.7.7's — `index_sets` registry key; `of` parent lists of ragged/derived definitions; `{"from": <name>}` references; the axis-naming scalar fields `wrt`, `dim` and `integral`'s `var`, plus an `integral` `lower`/`upper` bound that is a **bare string naming a renamed index set**; `where` `shape` constraint entries (§9.6.1); and a `faq` `join` clause's `on` key-column entries, each rewritten **iff** it is a key of this edge's map (a loop symbol or a data column is left as spelled) — plus the three sites that exist only because a mount carries a whole component rather than a set of declarations: **`ModelVariable` / `Parameter` `shape` entries**, **`Assertion.coords` KEYS** (§6.6.5), and **`DataSourceSelectAxis.gated_by`** (§8.9.2). Never rewritten: `from_faq` and expression-node `id` (node identities, not axis names); a ragged set's `offsets` / `values` / `member_factor` (keyed-factor variable names — §9.7.7's `rebind` domain); `faq` `output_idx` entries, `ranges` KEYS and a `join` clause's `syms` (bound index symbols, never index-set names); `coordinates.<k>.source` (a data-array name); and the §9.7.7 protected structural scalars.
 
 *Checks.* A key MUST name an index set of the resolved mounted document, else `subsystem_index_set_rename_unknown_name` — renames never invent names, matching §9.7.7. Targets MUST be dotted identifiers (§9.7.7 grammar), else `template_import_rename_invalid`; post-rename names MUST be distinct within the edge, else `template_import_rename_collision`. Identity entries are no-ops; an absent or empty map leaves resolution exactly as it was. The map need not be total — an axis the mount does not name passes through unrenamed, which is what keeps a *deliberately shared* axis (a common mesh, a common vertical coordinate) merging deep-equal across two mounts.
 
@@ -1434,7 +1481,7 @@ Three outcomes, and only three. The distinction that matters is between *"the fi
 
 Two consequences follow, and both have been violated in this repository:
 
-1. **An undeterminable dimension MUST NOT be reported as dimensionless.** Returning "dimensionless" for an op the checker does not model manufactures *false* mismatches against real, well-formed files — every structural op (`index`, `fn`, `aggregate`, `table_lookup`, `makearray`, …) would poison the equation containing it. Return "unknown" and skip.
+1. **An undeterminable dimension MUST NOT be reported as dimensionless.** Returning "dimensionless" for an op the checker does not model manufactures *false* mismatches against real, well-formed files — every structural op (`index`, `fn`, `faq`, `table_lookup`, `makearray`, …) would poison the equation containing it. Return "unknown" and skip.
 2. **An incomplete registry MUST NOT be papered over by downgrading the severity.** If a binding cannot parse `J/(mol*K)` or does not know `V`, the fix is the parser and the registry — *not* re-classifying an unresolvable unit as a warning, and not coercing it to dimensionless. Both of those turn a missing feature into a silently-disabled check across every file in the corpus.
 
 An error is reported at the **JSON Pointer of the node that carries the defect** — `/models/<M>/equations/<i>` for an equation, `/models/<M>/variables/<v>` for a declaration, `/reaction_systems/<S>/reactions/<i>` for a rate.
@@ -1464,7 +1511,7 @@ unreachable. Declaring one is a **hard error** (`is_valid: false`), code
 
 **The reserved set is `{ domain.independent_variable (default "t"), "_var" }`**,
 and this section is its normative home: the sibling `reserved_index_symbol`
-rule — which rejects an `aggregate` binder (a `ranges` key or an `output_idx`
+rule — which rejects a `faq` binder (a `ranges` key or an `output_idx`
 entry, §4.3.1) spelled with one of these names, for the same reason and with the
 same silent failure mode — uses **this** set, so the two cannot drift apart. It
 follows the *document*: a file that renames its independent variable to `s`
@@ -1568,9 +1615,9 @@ A checker MUST resolve the free symbols of **every** Expression in the document,
 | `coupling[i].connector.equations[j].expression` | …`/connector/equations/j/expression` | `unresolved_scoped_ref` |
 | `coupling[i].transform` (Expression form) | `/coupling/i/transform` | `unresolved_scoped_ref` |
 
-**The set of DECLARATION sites must be complete, or this rule turns into false REJECTS.** A name resolves if it is declared in `models[M].variables`, is a species of a reaction system, is bound by an enclosing construct (an `aggregate`/`integral` index or bound `var`, a `dim` name), **or is injected by a `callback` coupling entry — `coupling[i].config.callback_variables[j].name` IS a declaration site.** And there are **no bare/undeclared names**: a forcing field delivered by the host at runtime MUST still be declared — as a `parameter` carrying the `update` that supplies it (§5.4). An undeclared forcing name is indistinguishable from a typo — which is exactly the false negative this section closes — so the escape hatch cannot coexist with the rule.
+**The set of DECLARATION sites must be complete, or this rule turns into false REJECTS.** A name resolves if it is declared in `models[M].variables`, is a species of a reaction system, is bound by an enclosing construct (a `faq`/`integral` index or bound `var`, a `dim` name), **or is injected by a `callback` coupling entry — `coupling[i].config.callback_variables[j].name` IS a declaration site.** And there are **no bare/undeclared names**: a forcing field delivered by the host at runtime MUST still be declared — as a `parameter` carrying the `update` that supplies it (§5.4). An undeclared forcing name is indistinguishable from a typo — which is exactly the false negative this section closes — so the escape hatch cannot coexist with the rule.
 
-**And within an Expression, the walk MUST descend every child field, not just `args`.** An `ExpressionNode` carries eight further Expression-valued children: `expr`, `filter`, `key` (aggregate), `lower`, `upper` (integral bounds), `values` (makearray), `axes` (table_lookup) and `bindings` (apply_expression_template). A hand-rolled walker that recurses `args` alone misses an undefined name in any of them *even inside an equation*. (`ranges` and `regions` carry load-time metaparameter/index expressions rather than runtime variable references, and are a separate concern — §9.7.6.)
+**And within an Expression, the walk MUST descend every child field, not just `args`.** An `ExpressionNode` carries eight further Expression-valued children: `expr`, `filter`, `key` (`faq`), `lower`, `upper` (integral bounds), `values` (makearray), `axes` (table_lookup) and `bindings` (apply_expression_template). A hand-rolled walker that recurses `args` alone misses an undefined name in any of them *even inside an equation*. (`ranges` and `regions` carry load-time metaparameter/index expressions rather than runtime variable references, and are a separate concern — §9.7.6.)
 
 **`join` is the mixed case, and the distinction is load-bearing.** A `join` clause holds no Expression children at all — it is an object of plain strings — so the walk above has nothing to descend into there. But those strings are **not** structural metadata: an `overlap` clause's `src_env` / `tgt_env` name const-array **factor variables**, and an `on` key column MAY name a declared component-local buffer. They are variable references that merely happen to be *encoded as strings*; they resolve against the same variable registry every other reference does, and flattening therefore dot-namespaces them under a declared-local gate — normatively, **CONFORMANCE_SPEC §5.5.6**. What keeps them out of *this* section's undefined-name rule is not that they are non-references but that an `on` column is **polymorphic**: a loop symbol bound by the enclosing `ranges`, a document-scoped index set (§9.7.5), or a declared local variable — and only the last of the three lives in the variable namespace. Handing every join string to the free-symbol walk would therefore manufacture false rejects, which is precisely the failure mode this section exists to prevent. A binding MAY diagnose a join name that resolves nowhere, but it must do so against the variable **and** index-set registries under that gate, not through this walk.
 
@@ -2144,7 +2191,7 @@ Optional arrayed-variable fields:
 
 | Field | Description |
 |---|---|
-| `shape` | Ordered list of index-set names (keys in the document-scoped `index_sets` registry) the variable is arrayed over. Omitted or null means the variable is scalar. Index expressions into the variable (`index`, `aggregate` ranges) resolve against these sets. The names are also what an **array-level expression** aligns its operands by: in `D(dp) ~ w2 * z1` the operands are matched to `dp`'s axes by index-set name and replicated along the axes they do not declare, and an operand carrying an index set `dp` is not shaped over is rejected (`array_shape_mismatch`). See Section 4.3.4. |
+| `shape` | Ordered list of index-set names (keys in the document-scoped `index_sets` registry) the variable is arrayed over. Omitted or null means the variable is scalar. Index expressions into the variable (`index`, `faq` ranges) resolve against these sets. The names are also what an **array-level expression** aligns its operands by: in `D(dp) ~ w2 * z1` the operands are matched to `dp`'s axes by index-set name and replicated along the axes they do not declare, and an operand carrying an index set `dp` is not shaped over is rejected (`array_shape_mismatch`). See Section 4.3.4. |
 | `location` | Optional advisory placement tag for a staggered quantity (e.g., `"cell_center"`, `"edge_normal"`, `"x_face"`, `"vertex"`). Metadata only — the index set a quantity lives on is given by `shape`. Omitted means no explicit placement. |
 
 **Inline array data.** A shaped variable's `default` is a **number**, or a
@@ -2591,7 +2638,7 @@ Pointwise scalar assertions (the default — neither `coords` nor `reduce`) only
 
 `reference` may be:
 
-- an inline `Expression` whose free variables are the domain dimension names (e.g., `sin(π x)`), evaluated by the runtime over every grid point at the assertion `time`. For a field shaped over index sets (§5.2) the dimension names are the index-set names of the asserted variable's declared `shape`, each bound at every grid point to the **1-based position along that axis** — the same index space `coords` reads under convention 1 — so `index(table, lev)` reads a per-cell entry of a lookup array and `sin(π (x − ½) / N)` is the cell-centre analytic form, with no explicit gather. A reference that mentions a dimension name free is evaluated per cell exactly as if wrapped in an `aggregate` whose output indices are the dimension names in shape order; a reference that mentions none — a literal, a parameter expression, or an `aggregate` that already produces the whole field under its own loop symbols (including one that rebinds a dimension name as its own loop symbol) — is evaluated as written; or
+- an inline `Expression` whose free variables are the domain dimension names (e.g., `sin(π x)`), evaluated by the runtime over every grid point at the assertion `time`. For a field shaped over index sets (§5.2) the dimension names are the index-set names of the asserted variable's declared `shape`, each bound at every grid point to the **1-based position along that axis** — the same index space `coords` reads under convention 1 — so `index(table, lev)` reads a per-cell entry of a lookup array and `sin(π (x − ½) / N)` is the cell-centre analytic form, with no explicit gather. A reference that mentions a dimension name free is evaluated per cell exactly as if wrapped in a `faq` whose output indices are the dimension names in shape order; a reference that mentions none — a literal, a parameter expression, or a `faq` that already produces the whole field under its own loop symbols (including one that rebinds a dimension name as its own loop symbol) — is evaluated as written; or
 - `{type: "from_file", path, format?}` pointing at a precomputed snapshot in the same shape as the field (resolved and validated per convention 3 above).
 
 **Build-time evaluation scope.** Every reference resolved *before* the simulation runs — an inline `Expression` `reference` (above), the analytic materialization of a directly-asserted state-free array observed, a coordinate-expression `ic` (§11.4.1), and an `ic` seeded from a state-free array observed (§11.4) — resolves the model's **parameters** as in-scope names, bound to their load-time constant values (`parameter_overrides`-or-default), in addition to the domain dimension names. Model **unknowns** are NOT in scope (there is no trajectory value at build time); a build-time reference to an unknown is an error. Parameters are load-time constants, so binding them is deterministic and does not depend on the trajectory. This lets a parameter-dependent reference / observed / `ic` resolve directly — e.g. a free-name grid-geometry template `x0 + (i − 1/2)·dx` whose `x0`/`dx` are parameters — without declaring those scalars as constant-backed unknowns.
@@ -2647,7 +2694,7 @@ A reusable PDE leaf is written against the operator sugar (`grad`, `div`, `lapla
 
 The target is implicit — the enclosing model/reaction system, exactly as the assertion target is (§6.6). The injected rule lowers the component's rewrite-targets in the **per-test ephemeral build** (§9.7.10 timing): the resulting spatial field is collapsed to a scalar via `coords` or `reduce` at the assertion `time` and checked by the §6.6.5 machinery. Because each test carries its own list and runs as an independent build, one suite may exercise the component under several schemes (central vs. upwind, a convergence sweep over `bindings`) with no conflict between tests and no edit to the component. `bindings` close the library's grid-size metaparameters, which must agree with the index-set sizes the component's variables are shaped over (an inconsistency is the ordinary `template_import_index_set_conflict` / shape error at the build). Unlike the component's own `expression_template_imports` (§9.7.6), a test's list is authored per-run configuration and **does** survive `parse → emit` (§9.7.10 round-trip); the enclosing component round-trips with its operator sugar intact.
 
-**Such a leaf declares no `index_sets` of its own.** The grid is what the injected library brings, so the leaf's variable `shape` entries and its `aggregate` `ranges` `{"from": NAME}` both name sets that reach the effective registry (§9.7.5) only once the component's template scope closes (§9.7.4) — and a leaf that declared them locally could not be rebound to a second grid at all (`template_import_index_set_conflict`), destroying the convergence sweep this section exists to allow. Loading or validating such a document standalone therefore MUST NOT reject an index-set name it does not declare: `undefined_index_set` is deferred exactly as §9.6.1 defers `template_constraint_unknown_index_set` for a standalone library file. A name still unresolved after injection remains an error at the build, so a typo is still caught.
+**Such a leaf declares no `index_sets` of its own.** The grid is what the injected library brings, so the leaf's variable `shape` entries and its `faq` `ranges` `{"from": NAME}` both name sets that reach the effective registry (§9.7.5) only once the component's template scope closes (§9.7.4) — and a leaf that declared them locally could not be rebound to a second grid at all (`template_import_index_set_conflict`), destroying the convergence sweep this section exists to allow. Loading or validating such a document standalone therefore MUST NOT reject an index-set name it does not declare: `undefined_index_set` is deferred exactly as §9.6.1 defers `template_constraint_unknown_index_set` for a standalone library file. A name still unresolved after injection remains an error at the build, so a typo is still caught.
 
 ### 6.7 Analyses
 
@@ -3116,7 +3163,7 @@ Authentication, credential management, and per-variable temporal availability co
 
 | Field | Required | Description |
 |---|---|---|
-| `kind` | ✓ | Structural kind: `"grid"` (gridded array source), `"points"` (scattered point/station source), or `"static"` (time-invariant source). Any grid geometry the source reads — coordinates, connectivity, metric arrays — arrives as ordinary parameters bound to its file variables and is consumed downstream by `aggregate` FAQs; it needs no special descriptor. Scientific role (emissions, meteorology, elevation, …) is **not** schema-validated and belongs in `metadata.tags`. |
+| `kind` | ✓ | Structural kind: `"grid"` (gridded array source), `"points"` (scattered point/station source), or `"static"` (time-invariant source). Any grid geometry the source reads — coordinates, connectivity, metric arrays — arrives as ordinary parameters bound to its file variables and is consumed downstream by `faq` nodes; it needs no special descriptor. Scientific role (emissions, meteorology, elevation, …) is **not** schema-validated and belongs in `metadata.tags`. |
 | `source` | ✓ | File discovery object (see §8.2). |
 | `temporal` | | Temporal coverage and record layout (see §8.3). |
 | `determinism` | | Reproducibility contract for binary formats — endian / float format / integer width. A binding that cannot honor the declared layout MUST reject the file at load rather than reinterpret bytes. |
@@ -3203,7 +3250,7 @@ Both **static declaration** (`records_per_file` + `frequency`) and **runtime dis
 
 ### 8.4 (Reserved)
 
-The former native-grid descriptor was removed in v0.8.0: grid geometry a source reads (coordinates, connectivity, metric arrays) arrives as ordinary parameters (§8.5), consumed downstream by `aggregate` FAQs. The subsection number is retained so §8.5–§8.8 references stay stable.
+The former native-grid descriptor was removed in v0.8.0: grid geometry a source reads (coordinates, connectivity, metric arrays) arrives as ordinary parameters (§8.5), consumed downstream by `faq` nodes. The subsection number is retained so §8.5–§8.8 references stay stable.
 
 ### 8.5 Binding a parameter to a source
 
@@ -3248,8 +3295,8 @@ consuming variable's grid is expressed like any other coupling, as an ordinary
 expression in the coupling relationship between the two variables (§10). Because
 the numeric core of every standard regridder is a Functional Aggregate Query —
 the overlap-area `sum_product` apply, the normalization group-by, and the
-temporal-interpolation blend are all `aggregate` nodes (RFC
-semiring-faq-unified-ir §A.8) — a regridding coupling is just an `aggregate`
+temporal-interpolation blend are all `faq` nodes (RFC
+semiring-faq-unified-ir §A.8) — a regridding coupling is just a `faq`
 expression over the source field and the (FAQ-constructed or loaded) overlap
 weights. The kernels map cleanly:
 
@@ -3264,7 +3311,7 @@ weights. The kernels map cleanly:
   followed by a `sum_product` mean, with a `missing_value` fill expressed as an
   `ifelse` over the per-cell contributor count.
 
-None of this needs schema support beyond `aggregate` and the geometry leaves
+None of this needs schema support beyond `faq` and the geometry leaves
 (`intersect_polygon`, `polygon_intersection_area`): a regridding rule is a normal
 coupling expression, authored inline or referenced as an ESD subsystem. The
 carrier is the `variable_map` entry's `transform` field, which admits a full
@@ -3301,7 +3348,7 @@ the same manifold and tolerance, so cross-binding agreement is inherited from it
 two constituent kernels — exactly the `interp.linear` / `interp.bilinear`
 fused-leaf pattern of §9.2 (a named opaque op standing in for an AST composition
 whose intermediate is problematic, here ragged rather than merely verbose). With
-it, the narrow phase over the candidate set is an ordinary **dense** `aggregate`:
+it, the narrow phase over the candidate set is an ordinary **dense** `faq`:
 
 ```
 A_ij[i, j] = polygon_intersection_area(src_poly_i, tgt_poly_j)     // over candidate_pairs
@@ -3330,7 +3377,7 @@ from the plain distinct-vertex ring MUST be accepted by every binding:
    final vertex. This is the rectangular-storage padding a mixed-valence mesh
    requires: an MPAS pentagon stored in a hexagon-shaped `[cells, NVERT, 2]`
    ring stack repeats its last vertex to fill the fixed `NVERT` slots, so the
-   dense narrow-phase `A_ij` aggregate can gather per-cell rings of uniform
+   dense narrow-phase `A_ij` `faq` can gather per-cell rings of uniform
    extent.
 
 A binding MUST evaluate such a ring as its **deduplicated** form: consecutive
@@ -3950,7 +3997,7 @@ An `expression_templates` entry is a **rewrite rule**: a set of metavariable `pa
 | **Named template expansion** | *absent* | an explicit `apply_expression_template` node |
 | **Operator lowering** (e.g. `grad`, `div`, `laplacian`) | an operator pattern like `{op:"grad", args:["f"], dim:"d"}` | auto-applied wherever the pattern matches |
 
-The mechanism is purely structural — no evaluation, no metaprogramming. **PDE-operator discretization — including its boundary conditions — is not special schema machinery; it is an ordinary rewrite rule** that lowers a rewrite-target op (a spatial `D` on a right-hand side, or the `grad`/`div`/`laplacian` sugar, §4.2) into an `aggregate` + `makearray` stencil with the boundary treatment baked into the `makearray` (§9.6.8). There is no separate boundary-condition declaration anywhere in the format. See `docs/content/rfcs/ast-expression-templates.md` for motivation; this section pins the normative load-time behavior.
+The mechanism is purely structural — no evaluation, no metaprogramming. **PDE-operator discretization — including its boundary conditions — is not special schema machinery; it is an ordinary rewrite rule** that lowers a rewrite-target op (a spatial `D` on a right-hand side, or the `grad`/`div`/`laplacian` sugar, §4.2) into a `faq` + `makearray` stencil with the boundary treatment baked into the `makearray` (§9.6.8). There is no separate boundary-condition declaration anywhere in the format. See `docs/content/rfcs/ast-expression-templates.md` for motivation; this section pins the normative load-time behavior.
 
 #### 9.6.1 The `expression_templates` block
 
@@ -4107,7 +4154,7 @@ special-case older versions to recover Option A matching. Motivation and measure
      document's own
      metaparameters are **not** closed. They stay open; every §9.7.6 admissible structural
      site whose metaparameter expression still names one of them (an
-     `index_sets.<name>.size`, an `aggregate` dense `ranges` entry, a `makearray` `regions`
+     `index_sets.<name>.size`, a `faq` dense `ranges` entry, a `makearray` `regions`
      bound) stays **symbolic exactly as authored**; a metaparameter name in an expression
      position stays a bare string. §9.7.6 site 5 ("Defaults, last") does **not** run on this
      path, and an open metaparameter here is **not** `metaparameter_unbound` — with or
@@ -4305,11 +4352,11 @@ The Option B RFC adds (see `docs/content/rfcs/out-of-line-expression-templates.m
 
 #### 9.6.8 Discretizing spatial derivatives (rewrite rules over `D`)
 
-A spatial derivative — a `D` op with a spatial `wrt`, appearing on a right-hand side — is a **rewrite-target** (§4.2): it has no evaluator and MUST be lowered to an `aggregate` + `makearray` stencil by a `match` rewrite rule (§9.6) before evaluation, exactly as `table_lookup` lowers to `interp.*` (§9.5). There is **no** discretization block and **no** boundary-condition declaration anywhere in the format. A discretized derivative over a finite domain is inseparable from its boundary treatment, so **the boundary conditions are part of the rewrite rule itself**: the rule body is a single `makearray` whose interior region is the stencil `aggregate` and whose boundary-face regions encode the BC (later regions overwrite earlier, §4.3.2). Boundary conditions cannot be — and must not be — specified anywhere else.
+A spatial derivative — a `D` op with a spatial `wrt`, appearing on a right-hand side — is a **rewrite-target** (§4.2): it has no evaluator and MUST be lowered to a `faq` + `makearray` stencil by a `match` rewrite rule (§9.6) before evaluation, exactly as `table_lookup` lowers to `interp.*` (§9.5). There is **no** discretization block and **no** boundary-condition declaration anywhere in the format. A discretized derivative over a finite domain is inseparable from its boundary treatment, so **the boundary conditions are part of the rewrite rule itself**: the rule body is a single `makearray` whose interior region is the stencil `faq` and whose boundary-face regions encode the BC (later regions overwrite earlier, §4.3.2). Boundary conditions cannot be — and must not be — specified anywhere else.
 
 **This format ships no discretization rules.** The standard library of finite-difference / finite-volume rules (central, upwind, WENO, Godunov, the BC variants) and its conformance golden live in [EarthSciDiscretizations](https://github.com/EarthSciML/EarthSciDiscretizations). A `.esm` file obtains discretization either by declaring in-file `expression_templates` with a `match` on `D`, or by importing a rule from that library via `expression_template_imports` (§9.7). The library is layered — a grid file (index sets + geometry metaparameters), an interior-stencil file importing it, and a BC file importing *that* and wrapping the stencil into the complete `match` rule — so one rule file serves every resolution through metaparameter bindings (§9.7.6).
 
-A discretization rule names its scheme and BC in its identity. `central_D_lon_zero_grad_bc` matches `D(f, wrt: "lon")` and builds a `makearray` from the interior central-difference `aggregate` plus two one-sided boundary faces for the zero-gradient condition (here over a grid with `lon` size 144, `lat` size 91):
+A discretization rule names its scheme and BC in its identity. `central_D_lon_zero_grad_bc` matches `D(f, wrt: "lon")` and builds a `makearray` from the interior central-difference `faq` plus two one-sided boundary faces for the zero-gradient condition (here over a grid with `lon` size 144, `lat` size 91):
 
 ```json
 "central_D_lon_zero_grad_bc": {
@@ -4319,19 +4366,19 @@ A discretization rule names its scheme and BC in its identity. `central_D_lon_ze
     "op": "makearray",
     "regions": [ [[2, 143], [1, 91]], [[1, 1], [1, 91]], [[144, 144], [1, 91]] ],
     "values": [
-      { "op": "aggregate", "output_idx": ["i", "j"], "args": ["f"],
+      { "op": "faq", "output_idx": ["i", "j"], "args": ["f"],
         "ranges": { "i": [2, 143], "j": { "from": "lat" } },
         "expr": { "op": "/", "args": [
           { "op": "-", "args": [
             { "op": "index", "args": ["f", { "op": "+", "args": ["i", 1] }, "j"] },
             { "op": "index", "args": ["f", { "op": "-", "args": ["i", 1] }, "j"] } ] },
           { "op": "*", "args": [2, "dx"] } ] } },
-      { "op": "aggregate", "output_idx": ["j"], "args": ["f"],
+      { "op": "faq", "output_idx": ["j"], "args": ["f"],
         "ranges": { "j": { "from": "lat" } },
         "expr": { "op": "/", "args": [
           { "op": "-", "args": [ { "op": "index", "args": ["f", 2, "j"] },
                                  { "op": "index", "args": ["f", 1, "j"] } ] }, "dx" ] } },
-      { "op": "aggregate", "output_idx": ["j"], "args": ["f"],
+      { "op": "faq", "output_idx": ["j"], "args": ["f"],
         "ranges": { "j": { "from": "lat" } },
         "expr": { "op": "/", "args": [
           { "op": "-", "args": [ { "op": "index", "args": ["f", 144, "j"] },
@@ -4414,11 +4461,11 @@ Nothing in this subsection changes what a document *means*. Two spellings of the
             "expression": { "op": "D", "wrt": "lon", "args": ["q"] } }
 ```
 
-and then read `dqdlon` where the derivative is needed, rather than writing the `D` inline inside an `aggregate` body and indexing it per cell. A named observed is materialized once over its own box; the inline form asks for a sub-array *per cell of the enclosing aggregate*, which a binding must recognize as loop-invariant before it can hoist it.
+and then read `dqdlon` where the derivative is needed, rather than writing the `D` inline inside a `faq` body and indexing it per cell. A named observed is materialized once over its own box; the inline form asks for a sub-array *per cell of the enclosing `faq`*, which a binding must recognize as loop-invariant before it can hoist it.
 
-**Prefer array-level template bodies.** A template whose `body` is array-level arithmetic composes cleanly at every call site. A template whose body is a per-cell `aggregate` wrapping an operator re-creates the nested shape one layer down at each site, even where every application is correctly named.
+**Prefer array-level template bodies.** A template whose `body` is array-level arithmetic composes cleanly at every call site. A template whose body is a per-cell `faq` wrapping an operator re-creates the nested shape one layer down at each site, even where every application is correctly named.
 
-**Why this is guidance and not a requirement.** A nested `aggregate` whose own `output_idx` (or contracted index) *rebinds* an enclosing index symbol only shadows it: inside the nested body that name denotes the nested aggregate's own index, so the node does not depend on the enclosing loop and a binding may materialize it once. Bindings are expected to recognize that case, and the common collision — a discretization template keyed on the grid's index names, inlined inside an equation body keyed on the same names — is exactly it. What remains genuinely per-cell is a nested body that reads an enclosing index it does **not** rebind, e.g. `aggregate[j](u[j] · i)` inside `aggregate[i](…)`: its value differs for every enclosing cell, so it cannot be hoisted at all, and no spelling rule can rescue it.
+**Why this is guidance and not a requirement.** A nested `faq` whose own `output_idx` (or contracted index) *rebinds* an enclosing index symbol only shadows it: inside the nested body that name denotes the nested `faq`'s own index, so the node does not depend on the enclosing loop and a binding may materialize it once. Bindings are expected to recognize that case, and the common collision — a discretization template keyed on the grid's index names, inlined inside an equation body keyed on the same names — is exactly it. What remains genuinely per-cell is a nested body that reads an enclosing index it does **not** rebind, e.g. `aggregate[j](u[j] · i)` inside `aggregate[i](…)`: its value differs for every enclosing cell, so it cannot be hoisted at all, and no spelling rule can rescue it.
 
 Bindings that compile rules ahead of evaluation SHOULD report, per solve, which rules they could not compile and why, so that a costly spelling is diagnosable rather than merely slow. In this repository's Rust binding that list is `SolutionMetadata::tape_fallbacks` (`metadata.tapeFallbacks` over the wasm/JS boundary), the `tape_report` wasm entry point answers the same question without integrating, and `cargo run --release --example tape_report -- <model.esm>` does so natively.
 
@@ -4470,7 +4517,7 @@ A top-level `metaparameters` object declares document-scoped named integers:
 
 `type` is required and MUST be `"integer"` (the only kind). A metaparameter name MUST NOT collide with any variable, parameter, species, or index-set name visible in the document (`metaparameter_name_conflict`); there is no shadowing.
 
-**Admissible sites.** A *metaparameter expression* is an integer literal, a declared metaparameter name, or `{"op": <"+"|"-"|"*"|"/">, "args": [...]}` over metaparameter expressions (unary `-` allowed). Metaparameter expressions are admissible wherever the schema previously required a bare integer in a structural position: `index_sets.<name>.size` (interval kind), `aggregate` dense `ranges` tuple entries, `makearray` `regions` bound pairs, **and as an import-edge / subsystem-edge binding VALUE** (`expression_template_imports[k].bindings` / a §4.7 subsystem-ref `bindings`, below). These sites fold to concrete integers at load with exact 64-bit integer arithmetic; `/` MUST divide exactly, and overflow is an error (`metaparameter_type_error`). A binding value's free names resolve in the **importing** document's metaparameter scope, so a child metaparameter may be *derived* from the importer's — e.g. a regridder mounted with `{"NTGT": {"op": "*", "args": ["NX", "NY"]}}` closes its target-cell count from the fire grid's `NX`/`NY` in one edge, which import renaming (name→name, §9.7.7) cannot express. In ordinary **expression positions**, a metaparameter name appears as a bare string (the variable-reference surface syntax) and is substituted as an integer literal at load; no folding happens in expression positions — `{"op": "/", "args": [360, "NLON"]}` becomes `{"op": "/", "args": [360, 144]}` and stays an AST division.
+**Admissible sites.** A *metaparameter expression* is an integer literal, a declared metaparameter name, or `{"op": <"+"|"-"|"*"|"/">, "args": [...]}` over metaparameter expressions (unary `-` allowed). Metaparameter expressions are admissible wherever the schema previously required a bare integer in a structural position: `index_sets.<name>.size` (interval kind), `faq` dense `ranges` tuple entries, `makearray` `regions` bound pairs, **and as an import-edge / subsystem-edge binding VALUE** (`expression_template_imports[k].bindings` / a §4.7 subsystem-ref `bindings`, below). These sites fold to concrete integers at load with exact 64-bit integer arithmetic; `/` MUST divide exactly, and overflow is an error (`metaparameter_type_error`). A binding value's free names resolve in the **importing** document's metaparameter scope, so a child metaparameter may be *derived* from the importer's — e.g. a regridder mounted with `{"NTGT": {"op": "*", "args": ["NX", "NY"]}}` closes its target-cell count from the fire grid's `NX`/`NY` in one edge, which import renaming (name→name, §9.7.7) cannot express. In ordinary **expression positions**, a metaparameter name appears as a bare string (the variable-reference surface syntax) and is substituted as an integer literal at load; no folding happens in expression positions — `{"op": "/", "args": [360, "NLON"]}` becomes `{"op": "/", "args": [360, 144]}` and stays an AST division.
 
 **What is NOT an expression position (normative).** Substitution is per-FIELD, not per-node: a structural string field of an Expression node holds a *name*, not a reference to a value, and MUST be copied verbatim even when a bound metaparameter spells it exactly. Three families of field are structural in this sense. (i) The **axis-naming scalars** — `wrt`, `dim` (§4.9.1), and `integral`'s integration variable `var` (§4.2), the same three the §9.7.7 rename walk rewrites through the index-set rename map — name a spatial coordinate, so with `x` bound to 3 the node `{"op": "grad", "args": ["x"], "dim": "x"}` MUST become `{"op": "grad", "args": [3], "dim": "x"}`: the `args` occurrence folds and the `dim` occurrence does not. (ii) The **node-header fields** `op`, `id` and `expect_cadence` describe the node itself rather than parameterizing whatever operator it carries; an operator NAME is not an expression position, so with `max` bound to 3 the node `{"op": "max", "args": ["k", "max"]}` MUST become `{"op": "max", "args": ["k", 3]}` — substituting the `op` slot yields a document that is not an Expression at all. (iii) The **op-parameterizing registry fields** — `reduce`, `semiring`, `manifold`, `fn`, `table`, `side`, `attrs`, `members` and `from_faq` — are closed-registry ids, literal enums, or (for `attrs`) named scalar attributes of an open rewrite-target op mirroring the fixed `dim`/`side`/`wrt`/`var` slots. They too hold names rather than values, so `{"op": "aggregate", "reduce": "max", …}` MUST keep `"reduce": "max"` while any `"max"` in its `expr` folds to 3. A `where` match-scoping block is likewise structural (§9.6.1). The one structural-looking field that IS an expression position is an `integral` `lower`/`upper` bound (§4.2), which substitutes like any other. This asymmetry is easy to miss because a metaparameter may not collide with a visible variable, parameter, species, or index-set name — but a `dim` value names a coordinate *structurally* (§4.9.1 clause ii), with no `index_sets` entry required, and an operator name — or a reduction/semiring id — is in no namespace the collision check covers at all, so all three rules are reachable in a legal document.
 
@@ -4500,11 +4547,11 @@ A library's declared names are generic by design — a grid family declares inde
 
 **Transitivity (normative occurrence sites).** A rename rewrites the declaration key AND every reference to the old name inside the surviving imported declarations:
 
-- *index set*: registry key; `of` parent lists of ragged/derived index-set definitions; `{"from": <name>}` references wherever the form is admitted; and the axis-naming scalar fields of Expression nodes in template `body` **and `match`** — `wrt`, `dim`, and `integral`'s integration variable `var` (§4.2), plus an `integral` `lower`/`upper` bound whose value is a **bare string naming a renamed index set** (the cumulative form `"upper": "x"`; a bound that is a literal, a parameter reference, or any other expression is an ordinary expression position and is left to the metaparameter/rebind substitution); and an `aggregate` `join` clause's `on` key-column entries (§4.9.5), each rewritten **iff** it is a key of this edge's index-set rename map — an `on` name resolves as a loop symbol, then the index set one of the node's ranges draws `{from}`, then a data column (CONFORMANCE_SPEC §5.5.8), and only the middle class is an axis occurrence, so a loop symbol or a data-column name is left to the rebind/metaparameter substitution exactly as before. A clause's `syms` are bound index symbols and are never rewritten. So a rule matching `D(f, wrt: "x")` imported under `prefix: "fine"` becomes an instance matching `D(f, wrt: "fine.x")`, firing only on its own axis — and, identically, a rule matching `integral(f, var: "x", lower: 0, upper: "x")` imported under `rename: {"x": "lev"}` becomes an instance matching `integral(f, var: "lev", lower: 0, upper: "lev")`, so a discretization library that ships an `integral` rule family is instantiable per axis exactly as a `D` rule family is. Template `params` shadow coincident names exactly as in §9.6.1.
-- *metaparameter*: declaration key; every bare-string occurrence in expression positions of template bodies/matches (the §9.7.6 variable-reference surface syntax, param-shadowed); and names inside metaparameter expressions in the structural integer sites (index-set `size`, `aggregate` dense `ranges`, `makearray` `regions`). Later binding sites (deeper edges, loader API, defaults) close the metaparameter under its new name.
+- *index set*: registry key; `of` parent lists of ragged/derived index-set definitions; `{"from": <name>}` references wherever the form is admitted; and the axis-naming scalar fields of Expression nodes in template `body` **and `match`** — `wrt`, `dim`, and `integral`'s integration variable `var` (§4.2), plus an `integral` `lower`/`upper` bound whose value is a **bare string naming a renamed index set** (the cumulative form `"upper": "x"`; a bound that is a literal, a parameter reference, or any other expression is an ordinary expression position and is left to the metaparameter/rebind substitution); and a `faq` `join` clause's `on` key-column entries (§4.9.5), each rewritten **iff** it is a key of this edge's index-set rename map — an `on` name resolves as a loop symbol, then the index set one of the node's ranges draws `{from}`, then a data column (CONFORMANCE_SPEC §5.5.8), and only the middle class is an axis occurrence, so a loop symbol or a data-column name is left to the rebind/metaparameter substitution exactly as before. A clause's `syms` are bound index symbols and are never rewritten. So a rule matching `D(f, wrt: "x")` imported under `prefix: "fine"` becomes an instance matching `D(f, wrt: "fine.x")`, firing only on its own axis — and, identically, a rule matching `integral(f, var: "x", lower: 0, upper: "x")` imported under `rename: {"x": "lev"}` becomes an instance matching `integral(f, var: "lev", lower: 0, upper: "lev")`, so a discretization library that ships an `integral` rule family is instantiable per axis exactly as a `D` rule family is. Template `params` shadow coincident names exactly as in §9.6.1.
+- *metaparameter*: declaration key; every bare-string occurrence in expression positions of template bodies/matches (the §9.7.6 variable-reference surface syntax, param-shadowed); and names inside metaparameter expressions in the structural integer sites (index-set `size`, `faq` dense `ranges`, `makearray` `regions`). Later binding sites (deeper edges, loader API, defaults) close the metaparameter under its new name.
 - *template*: scope key; `apply_expression_template.name` references in the surviving bodies (in practice already inlined by the target's own §9.7.3 composition, but bindings that compose lazily MUST rewrite them).
 
-**Free-name rebinding.** `rebind` maps *free* names — names the target does not declare: strings in variable-reference positions of template bodies/matches (including `aggregate` `args` entries and `index` gathers) and the `offsets`/`values` keyed factors of ragged index sets — to replacement variable names. This is the mechanism that (a) lets two instances of a keyed-factor rule family (the MPAS pattern: `areaCell`, `dvEdge`, `nEdgesOnCell`, `edgesOnCell`, `edgeSignOnCell`) coexist by pointing each instance at its own mesh's arrays, and (b) un-reserves the library's factor names in the consumer, which may then use them for unrelated variables. A dotted target is an ordinary §4.6 scoped reference (e.g. `meshA.areaCell` into a mounted subsystem) — exactly the alias the bare-name-observed-alias pattern builds by hand. A `rebind` key MUST occur free in the surviving declarations: a key that occurs nowhere, or that names a *declared* name (use `rename`), is `template_import_rebind_unknown_name`; a key that addresses a bound index symbol (`output_idx` entry or `ranges` key) is `template_import_rename_invalid`. Targets MUST be fresh — colliding with a remaining free name, a bound index symbol, a template param, or another rename/rebind target would silently merge or capture and is `template_import_rename_collision`. Rebinds and renames apply as ONE simultaneous substitution (swaps are well-defined; chains do not cascade).
+**Free-name rebinding.** `rebind` maps *free* names — names the target does not declare: strings in variable-reference positions of template bodies/matches (including `faq` `args` entries and `index` gathers) and the `offsets`/`values` keyed factors of ragged index sets — to replacement variable names. This is the mechanism that (a) lets two instances of a keyed-factor rule family (the MPAS pattern: `areaCell`, `dvEdge`, `nEdgesOnCell`, `edgesOnCell`, `edgeSignOnCell`) coexist by pointing each instance at its own mesh's arrays, and (b) un-reserves the library's factor names in the consumer, which may then use them for unrelated variables. A dotted target is an ordinary §4.6 scoped reference (e.g. `meshA.areaCell` into a mounted subsystem) — exactly the alias the bare-name-observed-alias pattern builds by hand. A `rebind` key MUST occur free in the surviving declarations: a key that occurs nowhere, or that names a *declared* name (use `rename`), is `template_import_rebind_unknown_name`; a key that addresses a bound index symbol (`output_idx` entry or `ranges` key) is `template_import_rename_invalid`. Targets MUST be fresh — colliding with a remaining free name, a bound index symbol, a template param, or another rename/rebind target would silently merge or capture and is `template_import_rename_collision`. Rebinds and renames apply as ONE simultaneous substitution (swaps are well-defined; chains do not cascade).
 
 **Two instances, dedup, and diamonds.** Because renaming precedes the merge, §9.7.4/§9.7.5 need no new machinery: different renames of the same file yield differently-named, independently-registered definitions; identical edges (same `ref`, instantiation, renames, rebinds) yield deep-equal definitions that dedupe at first occurrence. There is deliberately no dedup *across* renames.
 
@@ -4697,7 +4744,7 @@ For `variable_map` coupling entries, `transform` specifies how the source variab
 
 Every `variable_map` transform performs a **replacement**: the target is bound to the source, optionally scaled by `factor`. `factor` is a scaling coefficient valid only on the scaling transforms (`additive`, `multiplicative`, `conversion_factor`); a `factor` on `param_to_var` or `identity` — which have nothing to scale — or alongside an Expression transform — which spells its own arithmetic — is rejected at load. The three scaling transforms are equivalent in effect for a `variable_map` and differ only in documented intent. Genuine additive/multiplicative **term composition** (adding a source/sink term, or multiplying a tendency in place) is a `couple`/ConnectorSystem concern (§10.3), not a `variable_map`.
 
-**Expression-transform evaluation contract.** When `transform` is an Expression — always an **operator node** (the degenerate bare-reference and literal Expression spellings are not admissible in this slot: bare replacement is what the named transforms already provide, and the string space is reserved for their names) — the entry binds the target to a **derived value**: flattening (§10.7) removes the `to` parameter and introduces in its place a derived (observed) variable — same name, units, and shape — whose defining expression is the transform, so every reference to the target evaluates the expression's value exactly as an authored observed would. The expression's free variables follow the connector-equation convention (§10.3, §4.6): every variable reference MUST be a fully-scoped reference (`System.var`) resolvable in the flattened coupled system. The expression MUST reference the entry's `from` variable — it is the data-flow edge the entry declares — and MAY reference any other variable, parameter, or observed in scope of the flattened system (this is what the §8.6 regridding form relies on: the receiving component's build-once overlap weights, normalization row-sums, and sliver tolerance appear alongside the source field). The expression's value must be shaped like the target (its units are the target's declared units; validators MAY check consistency as for `identity`). Template invocations (`apply_expression_template`) are legal anywhere in the transform: they resolve at load, before validation and flattening, against the template registry of the component that owns the `to` target — the receiving component — which is where a regridding library import (§9.7) naturally lives. Eager invocations expand in the §9.6.4-rule-3 pre-pass; the rest survive and denote their expansion (§9.6.4 rule 2), resolved at flatten/evaluation against the carried registry (§9.6.4 rule 7). As with all of §9.6.4, round-trip emits the reference-preserving form. **One carve-out for coupling-library edges (§10.9).** When a `variable_map` edge arrives via a `coupling_import` expansion (§10.10) rather than being authored inline, its `to` owner is a role and is not known until binding, so its transform templates cannot expand at load. For such an edge, transform-template expansion is deferred to the flatten-time expansion step (§10.10, `esm-libraries-spec.md` §4.7.5): the invocations expand against the *bound* `to` owner's registry immediately after role substitution. Because this is *after* the §9.6.3 fixpoint, a library edge's transform MUST expand to an already-lowered form (a regridding `aggregate`/`index` carries no rewrite-target operator); a transform template that would introduce `grad` / `div` / spatial `D` is rejected with `coupling_library_illegal_payload`.
+**Expression-transform evaluation contract.** When `transform` is an Expression — always an **operator node** (the degenerate bare-reference and literal Expression spellings are not admissible in this slot: bare replacement is what the named transforms already provide, and the string space is reserved for their names) — the entry binds the target to a **derived value**: flattening (§10.7) removes the `to` parameter and introduces in its place a derived (observed) variable — same name, units, and shape — whose defining expression is the transform, so every reference to the target evaluates the expression's value exactly as an authored observed would. The expression's free variables follow the connector-equation convention (§10.3, §4.6): every variable reference MUST be a fully-scoped reference (`System.var`) resolvable in the flattened coupled system. The expression MUST reference the entry's `from` variable — it is the data-flow edge the entry declares — and MAY reference any other variable, parameter, or observed in scope of the flattened system (this is what the §8.6 regridding form relies on: the receiving component's build-once overlap weights, normalization row-sums, and sliver tolerance appear alongside the source field). The expression's value must be shaped like the target (its units are the target's declared units; validators MAY check consistency as for `identity`). Template invocations (`apply_expression_template`) are legal anywhere in the transform: they resolve at load, before validation and flattening, against the template registry of the component that owns the `to` target — the receiving component — which is where a regridding library import (§9.7) naturally lives. Eager invocations expand in the §9.6.4-rule-3 pre-pass; the rest survive and denote their expansion (§9.6.4 rule 2), resolved at flatten/evaluation against the carried registry (§9.6.4 rule 7). As with all of §9.6.4, round-trip emits the reference-preserving form. **One carve-out for coupling-library edges (§10.9).** When a `variable_map` edge arrives via a `coupling_import` expansion (§10.10) rather than being authored inline, its `to` owner is a role and is not known until binding, so its transform templates cannot expand at load. For such an edge, transform-template expansion is deferred to the flatten-time expansion step (§10.10, `esm-libraries-spec.md` §4.7.5): the invocations expand against the *bound* `to` owner's registry immediately after role substitution. Because this is *after* the §9.6.3 fixpoint, a library edge's transform MUST expand to an already-lowered form (a regridding `faq`/`index` carries no rewrite-target operator); a transform template that would introduce `grad` / `div` / spatial `D` is rejected with `coupling_library_illegal_payload`.
 
 ### 10.5 Coupling across grids and dimensionality
 
@@ -4705,7 +4752,7 @@ Coupled components may live on different index sets (resolutions), or differ in 
 
 #### Regridding
 
-When a variable is mapped between two components on different index sets — or from a data-fed parameter's native grid onto a model's grid — the coupling entry's `transform` is a **regridding expression**: an ordinary `aggregate` (FAQ) that maps the source field onto the target grid (overlap-area weighting, interpolation, or slicing a higher-dimensional field at a fixed level are all just `aggregate` index expressions; §8.6, RFC semiring-faq-unified-ir §A.8). There is no separate geometric-relationship declaration. This is the Expression form of `transform` (§10.4): the target parameter becomes a derived variable defined by the expression, whose scoped references reach the source field and the receiving component's build-once weight arrays. The expression is authored inline, or — the usual factoring — invokes overlap-weight templates imported from a regridding library (§9.7), expanded at load per §9.6.4:
+When a variable is mapped between two components on different index sets — or from a data-fed parameter's native grid onto a model's grid — the coupling entry's `transform` is a **regridding expression**: an ordinary `faq` (FAQ) that maps the source field onto the target grid (overlap-area weighting, interpolation, or slicing a higher-dimensional field at a fixed level are all just `faq` index expressions; §8.6, RFC semiring-faq-unified-ir §A.8). There is no separate geometric-relationship declaration. This is the Expression form of `transform` (§10.4): the target parameter becomes a derived variable defined by the expression, whose scoped references reach the source field and the receiving component's build-once weight arrays. The expression is authored inline, or — the usual factoring — invokes overlap-weight templates imported from a regridding library (§9.7), expanded at load per §9.6.4:
 
 ```json
 {
@@ -4753,7 +4800,7 @@ A coupling chain may need both a regridding expression and lifting; express each
 ### 10.6 Coupling Rules
 
 1. **Same-grid coupling** needs neither a regridding transform nor `lifting` (§10.1–10.4).
-2. **Different grids / resolutions** → a regridding `transform` expression (an `aggregate`).
+2. **Different grids / resolutions** → a regridding `transform` expression (a `faq`).
 3. **0-D ↔ spatial coupling** → a `lifting` strategy (default `pointwise`).
 4. **0-D ↔ 0-D coupling** → standard scalar coupling.
 5. **0-D intermediary between two spatial components** → separate entries (regrid in, lift out).
@@ -5080,7 +5127,7 @@ The `domain` supports the following fields:
 
 | Field | Required | Description |
 |---|---|---|
-| `independent_variable` | | Name of the time variable (default: `"t"`). It is **implicitly declared** in every model's expression scope — writing `t` in an equation, an event condition or an affect is never `undefined_variable` (§4.9.1) — and it is correspondingly **reserved**: no `variables` key, species, or reaction parameter may be spelled with it (`reserved_variable_name`), and no `aggregate` binder may bind it (`reserved_index_symbol`). Both rules read their reserved set from §4.9.1.1, so renaming the independent variable moves both onto the new name and frees `t`. |
+| `independent_variable` | | Name of the time variable (default: `"t"`). It is **implicitly declared** in every model's expression scope — writing `t` in an equation, an event condition or an affect is never `undefined_variable` (§4.9.1) — and it is correspondingly **reserved**: no `variables` key, species, or reaction parameter may be spelled with it (`reserved_variable_name`), and no `faq` binder may bind it (`reserved_index_symbol`). Both rules read their reserved set from §4.9.1.1, so renaming the independent variable moves both onto the new name and frees `t`. |
 | `temporal` | | Temporal extent: `start`, `end`, `reference_time` (ISO 8601) |
 | `element_type` | | The precision the document is **evaluated in**: `"Float64"` (default) or `"Float32"`. See §11.3.1 — this is a semantic declaration, not a storage hint. |
 | `array_type` | | Array implementation type (e.g., `"Array"`) |
@@ -5187,7 +5234,7 @@ An `ic` equation MUST NOT be placed inside a reaction system's `constraint_equat
 
 ### 11.5 Boundary conditions
 
-Boundary conditions are **not** a declarable construct — there is no `boundary_conditions` field and no boundary-condition op. A discretized spatial operator over a finite domain is inseparable from its boundary treatment, so the boundary condition lives **inside the discretization rewrite rule** that lowers `grad`/`div`/`laplacian` to an `aggregate` + `makearray` stencil: the interior region is the stencil, and the boundary-face `makearray` regions encode the BC (Dirichlet → fixed value; Neumann/zero-gradient → one-sided difference; Robin → the solved boundary expression; a seam shared with another variable → an `index` into that variable; periodic → the gather's periodic policy, no override). See §9.6.8. A boundary condition therefore cannot be specified anywhere outside its discretization rule.
+Boundary conditions are **not** a declarable construct — there is no `boundary_conditions` field and no boundary-condition op. A discretized spatial operator over a finite domain is inseparable from its boundary treatment, so the boundary condition lives **inside the discretization rewrite rule** that lowers `grad`/`div`/`laplacian` to a `faq` + `makearray` stencil: the interior region is the stencil, and the boundary-face `makearray` regions encode the BC (Dirichlet → fixed value; Neumann/zero-gradient → one-sided difference; Robin → the solved boundary expression; a seam shared with another variable → an `index` into that variable; periodic → the gather's periodic policy, no override). See §9.6.8. A boundary condition therefore cannot be specified anywhere outside its discretization rule.
 
 **BCs from data.** The boundary-face value may be an `index` into a **data-fed parameter** (one whose `update` draws from a `data_sources` entry) exactly as it may index any other variable — so a Dirichlet or seam boundary value can be supplied from data (`index(O3_boundary, …)` in the boundary region). This is the same index-into-another-variable mechanism; it needs no special construct.
 
@@ -5195,7 +5242,7 @@ Boundary conditions are **not** a declarable construct — there is no `boundary
 
 ## 12. (Reserved)
 
-The former **Interfaces** section was removed in v0.8.0. Cross-grid coupling between components on different domains is now expressed as ordinary regridding expressions in the coupling relationship between two variables (§8.6, §10.5) — an `aggregate` (FAQ) over index sets, not a separate interface construct. The section number is retained so §13–§15 references stay stable.
+The former **Interfaces** section was removed in v0.8.0. Cross-grid coupling between components on different domains is now expressed as ordinary regridding expressions in the coupling relationship between two variables (§8.6, §10.5) — a `faq` (FAQ) over index sets, not a separate interface construct. The section number is retained so §13–§15 references stay stable.
 
 ---
 
@@ -5284,17 +5331,17 @@ A minimal but complete `.esm` file representing atmospheric chemistry with advec
             "op": "makearray",
             "regions": [ [[2, 143], [1, 91]], [[1, 1], [1, 91]], [[144, 144], [1, 91]] ],
             "values": [
-              { "op": "aggregate", "output_idx": ["i", "j"], "args": ["f"],
+              { "op": "faq", "output_idx": ["i", "j"], "args": ["f"],
                 "ranges": { "i": [2, 143], "j": { "from": "lat" } },
                 "expr": { "op": "/", "args": [
                   { "op": "-", "args": [
                     { "op": "index", "args": ["f", { "op": "+", "args": ["i", 1] }, "j"] },
                     { "op": "index", "args": ["f", { "op": "-", "args": ["i", 1] }, "j"] } ] },
                   { "op": "*", "args": [2, "dx"] } ] } },
-              { "op": "aggregate", "output_idx": ["j"], "args": ["f"], "ranges": { "j": { "from": "lat" } },
+              { "op": "faq", "output_idx": ["j"], "args": ["f"], "ranges": { "j": { "from": "lat" } },
                 "expr": { "op": "/", "args": [
                   { "op": "-", "args": [ { "op": "index", "args": ["f", 2, "j"] }, { "op": "index", "args": ["f", 1, "j"] } ] }, "dx" ] } },
-              { "op": "aggregate", "output_idx": ["j"], "args": ["f"], "ranges": { "j": { "from": "lat" } },
+              { "op": "faq", "output_idx": ["j"], "args": ["f"], "ranges": { "j": { "from": "lat" } },
                 "expr": { "op": "/", "args": [
                   { "op": "-", "args": [ { "op": "index", "args": ["f", 144, "j"] }, { "op": "index", "args": ["f", 143, "j"] } ] }, "dx" ] } }
             ]
@@ -5307,17 +5354,17 @@ A minimal but complete `.esm` file representing atmospheric chemistry with advec
             "op": "makearray",
             "regions": [ [[1, 144], [2, 90]], [[1, 144], [1, 1]], [[1, 144], [91, 91]] ],
             "values": [
-              { "op": "aggregate", "output_idx": ["i", "j"], "args": ["f"],
+              { "op": "faq", "output_idx": ["i", "j"], "args": ["f"],
                 "ranges": { "i": { "from": "lon" }, "j": [2, 90] },
                 "expr": { "op": "/", "args": [
                   { "op": "-", "args": [
                     { "op": "index", "args": ["f", "i", { "op": "+", "args": ["j", 1] }] },
                     { "op": "index", "args": ["f", "i", { "op": "-", "args": ["j", 1] }] } ] },
                   { "op": "*", "args": [2, "dy"] } ] } },
-              { "op": "aggregate", "output_idx": ["i"], "args": ["f"], "ranges": { "i": { "from": "lon" } },
+              { "op": "faq", "output_idx": ["i"], "args": ["f"], "ranges": { "i": { "from": "lon" } },
                 "expr": { "op": "/", "args": [
                   { "op": "-", "args": [ { "op": "index", "args": ["f", "i", 2] }, { "op": "index", "args": ["f", "i", 1] } ] }, "dy" ] } },
-              { "op": "aggregate", "output_idx": ["i"], "args": ["f"], "ranges": { "i": { "from": "lon" } },
+              { "op": "faq", "output_idx": ["i"], "args": ["f"], "ranges": { "i": { "from": "lon" } },
                 "expr": { "op": "/", "args": [
                   { "op": "-", "args": [ { "op": "index", "args": ["f", "i", 91] }, { "op": "index", "args": ["f", "i", 90] } ] }, "dy" ] } }
             ]
@@ -5370,7 +5417,7 @@ A minimal but complete `.esm` file representing atmospheric chemistry with advec
 }
 ```
 
-The spatial axes (`lon`, `lat`) are `index_sets`; the `Advection` model's variables are shaped over them, and `grad` is lowered by the in-file `central_grad_*_zero_grad_bc` rewrite rules (§9.6.8) — each a `makearray` that combines the interior central-difference `aggregate` with the two boundary-face regions encoding the zero-gradient condition. The boundary conditions live **inside** the discretization rule; there is no separate boundary-condition declaration. Wind and temperature come from the `GEOSFP` source as ordinary data-fed parameters — declared on the models that use them, with a `data` update naming the source. Note what is *absent* from the `coupling` block as a result: the three `variable_map` edges that used to wire loader fields into the two models are gone, because the parameter now *is* the loaded field.
+The spatial axes (`lon`, `lat`) are `index_sets`; the `Advection` model's variables are shaped over them, and `grad` is lowered by the in-file `central_grad_*_zero_grad_bc` rewrite rules (§9.6.8) — each a `makearray` that combines the interior central-difference `faq` with the two boundary-face regions encoding the zero-gradient condition. The boundary conditions live **inside** the discretization rule; there is no separate boundary-condition declaration. Wind and temperature come from the `GEOSFP` source as ordinary data-fed parameters — declared on the models that use them, with a `data` update naming the source. Note what is *absent* from the `coupling` block as a result: the three `variable_map` edges that used to wire loader fields into the two models are gone, because the parameter now *is* the loaded field.
 
 **Note:** Every component shares the single `domain`; there is no per-model domain field. A model is spatial if its variables are shaped over index sets, 0-D otherwise.
 
@@ -5414,9 +5461,9 @@ The composition rules are arguably more important than the individual models, si
 
 ### Coupling across grids is a regridding expression
 
-Coupling between components on different grids (or from a data-fed parameter's native grid onto a model's) carries its geometry in the coupling entry's `transform` — an `aggregate` regridding expression that maps the source field onto the target grid (slicing, overlap-area weighting, interpolation). There is no separate interface or geometry-relationship construct; the regridding is an ordinary FAQ over index sets, the same algebra as everything else in the format. This means:
+Coupling between components on different grids (or from a data-fed parameter's native grid onto a model's) carries its geometry in the coupling entry's `transform` — a `faq` regridding expression that maps the source field onto the target grid (slicing, overlap-area weighting, interpolation). There is no separate interface or geometry-relationship construct; the regridding is an ordinary FAQ over index sets, the same algebra as everything else in the format. This means:
 
-- Grid transfer is expressed with the same `aggregate` machinery as discretization and reductions — one mechanism, not a special geometry layer.
+- Grid transfer is expressed with the same `faq` machinery as discretization and reductions — one mechanism, not a special geometry layer.
 - A reusable regridding rule can be factored as an `expression_templates` rewrite rule and shared across coupling entries.
 
 ### 0D systems are first-class coupling intermediaries

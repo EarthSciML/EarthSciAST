@@ -48,7 +48,7 @@ def _find_nodes(node, predicate, found=None):
 
 @pytest.mark.parametrize("fixture_name", ["join_filter.esm", "join_disaggregation_m2m.esm"])
 def test_roundtrip_preserves_join_and_filter(fixture_name):
-    fixture = _VALID / "aggregate" / fixture_name
+    fixture = _VALID / "faq" / fixture_name
     original = json.loads(fixture.read_text())
     orig_joins = _find_nodes(original, lambda n: "join" in n and "op" in n)
     assert orig_joins, f"{fixture_name} carries no join nodes; bad fixture pick"
@@ -64,7 +64,7 @@ def test_roundtrip_preserves_join_and_filter(fixture_name):
 
 def test_roundtrip_preserves_distinct_and_key():
     """distinct/key survive a load→save cycle on a real fixture."""
-    fixture = _VALID / "aggregate" / "skolem_distinct_rank.esm"
+    fixture = _VALID / "faq" / "skolem_distinct_rank.esm"
     original = json.loads(fixture.read_text())
     orig_nodes = _find_nodes(original, lambda n: "op" in n and ("distinct" in n or "key" in n))
     assert orig_nodes, "fixture carries no distinct/key nodes; bad fixture pick"

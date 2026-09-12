@@ -8,7 +8,7 @@
 # `parameter_overrides`, solves across the test's `time_span`, and
 # verifies each `Assertion` against the resolved tolerance (assertion
 # → test → model). Without this, a regression in the `tests`-block
-# execution path outside of the arrayop-specific fixtures would pass CI.
+# execution path outside of the faq-specific fixtures would pass CI.
 using Test
 using EarthSciAST
 import ModelingToolkit

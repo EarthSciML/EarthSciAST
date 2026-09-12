@@ -243,7 +243,7 @@ def parameters(model: Any) -> list[str]:
 
 def _base_name(expr: Any) -> str | None:
     """The variable an LHS position ultimately names: a bare string is itself,
-    ``index(u, …)`` is ``u``, and an ``aggregate`` whose ``expr`` is an ``index``
+    ``index(u, …)`` is ``u``, and an ``faq`` whose ``expr`` is an ``index``
     (the arrayed definition ``y[i] ~ f(…)`` as documents actually spell it) is
     that index's base. Anything else has no single base name.
 
@@ -260,7 +260,7 @@ def _base_name(expr: Any) -> str | None:
     if op == "index":
         args = _args(expr)
         return _base_name(args[0]) if args else None
-    if op == "aggregate":
+    if op == "faq":
         inner = _slot(expr, "expr", "expr")
         if inner is not None and _op(inner) == "index":
             return _base_name(inner)
@@ -291,13 +291,13 @@ def _is_spatial_derivative(node: Any) -> bool:
 def _derivative_targets(lhs: Any) -> set[str]:
     """The base variables credited as ODE states by one equation LHS.
 
-    A derivative LHS may be wrapped: ``D(u)``, ``D(u[i])``, and an ``aggregate``
+    A derivative LHS may be wrapped: ``D(u)``, ``D(u[i])``, and an ``faq``
     whose ``expr`` is a ``D(...)`` (the arrayed per-cell ODE form) all credit the
     base variable.
     """
     if _is_time_derivative(lhs):
         return {name for name in (_base_name(a) for a in _args(lhs)) if name}
-    if _op(lhs) == "aggregate":
+    if _op(lhs) == "faq":
         inner = _slot(lhs, "expr", "expr")
         return _derivative_targets(inner) if inner is not None else set()
     return set()

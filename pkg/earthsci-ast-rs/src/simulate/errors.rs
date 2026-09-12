@@ -5,7 +5,7 @@ use super::*;
 // ============================================================================
 
 // `CompileError` is defined in the non-gated `crate::compile_error` module so
-// the WASM-compiled `aggregate` / `join` passes can name it; re-exported here
+// the WASM-compiled `faq` / `join` passes can name it; re-exported here
 // to preserve the native `crate::simulate::CompileError` path.
 pub use crate::compile_error::CompileError;
 

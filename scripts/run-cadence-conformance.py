@@ -294,7 +294,7 @@ def assert_no_continuous_relational(node: Any, model: dict) -> None:
     if not isinstance(node, dict):
         return
     op = node.get("op")
-    is_relational = op in RELATIONAL_OPS or (op == "aggregate" and node.get("distinct"))
+    is_relational = op in RELATIONAL_OPS or (op == "faq" and node.get("distinct"))
     if is_relational and classify(node, model) == "continuous":
         raise CadenceError(
             f"relational/value-invention node op={op!r} classifies CONTINUOUS — "
@@ -678,7 +678,7 @@ def _negative_controls(models: dict) -> int:
             {
                 "lhs": {"op": "index", "args": ["edge_exists", "e"]},
                 "rhs": {
-                    "op": "aggregate",
+                    "op": "faq",
                     "distinct": True,
                     "semiring": "bool_and_or",
                     "output_idx": ["e"],
@@ -712,7 +712,7 @@ def _negative_controls(models: dict) -> int:
             {
                 "lhs": {"op": "index", "args": ["a", "x"]},
                 "rhs": {
-                    "op": "aggregate",
+                    "op": "faq",
                     "id": "nodeA",
                     "distinct": True,
                     "semiring": "bool_and_or",
@@ -724,7 +724,7 @@ def _negative_controls(models: dict) -> int:
             {
                 "lhs": {"op": "index", "args": ["b", "x"]},
                 "rhs": {
-                    "op": "aggregate",
+                    "op": "faq",
                     "id": "nodeB",
                     "distinct": True,
                     "semiring": "bool_and_or",

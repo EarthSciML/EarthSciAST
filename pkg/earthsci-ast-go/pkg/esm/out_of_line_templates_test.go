@@ -168,7 +168,7 @@ func TestOOL_BridgeGate_ExpandEqualsExpandedGolden(t *testing.T) {
 		return string(out)
 	}
 	cases := []struct{ dir, fixture, golden string }{
-		{"aggregate_int_ratio_golden", "fixture.esm", "expanded.esm"},
+		{"faq_int_ratio_golden", "fixture.esm", "expanded.esm"},
 		{"arrhenius_smoke", "fixture.esm", "expanded.esm"},
 		{"constrained_match_scope", "fixture.esm", "expanded.esm"},
 		{"coupling_transform_expression", "fixture.esm", "expanded.esm"},
@@ -246,11 +246,13 @@ func TestOOL_EmitMaterializedRegistry(t *testing.T) {
 		t.Fatalf("decode emit: %v", err)
 	}
 	adv := doc["models"].(map[string]any)["Advection"].(map[string]any)
-	// Rule 8's version stamp is a FLOOR — "esm: 0.9.0 OR LATER" — so a 1.0.0
-	// document stays 1.0.0 on emit rather than being downgraded. The golden
-	// (emitted.esm) is the byte-exact pin; this asserts the floor holds.
-	if doc["esm"] != "1.0.0" {
-		t.Errorf("esm = %v; want 1.0.0 (rule 8 stamp is a floor, not an assignment)", doc["esm"])
+	// Rule 8's version stamp is a FLOOR — "esm: 0.9.0 OR LATER" — so a document
+	// already above the floor keeps its own version on emit rather than being
+	// downgraded to it. This fixture is 1.1.0 (its imported templates lower to
+	// `faq`, which requires 1.1.0). The golden (emitted.esm) is the byte-exact
+	// pin; this asserts the floor holds.
+	if doc["esm"] != "1.1.0" {
+		t.Errorf("esm = %v; want 1.1.0 (rule 8 stamp is a floor, not an assignment)", doc["esm"])
 	}
 	if _, has := adv["expression_template_imports"]; has {
 		t.Errorf("expression_template_imports should be consumed")
@@ -335,7 +337,7 @@ func TestOOL_EagerTargetBearing(t *testing.T) {
 	if deager["op"] != "index" {
 		t.Errorf("d_eager op = %v; want index", deager["op"])
 	}
-	if inner, ok := deager["args"].([]any)[0].(map[string]any); !ok || inner["op"] != "aggregate" {
+	if inner, ok := deager["args"].([]any)[0].(map[string]any); !ok || inner["op"] != "faq" {
 		t.Errorf("d_eager arg[0] op = %v; want aggregate (D lowered at load)", deager["args"].([]any)[0])
 	}
 	// NEGATIVE: scale_c (target-free) reference SURVIVES.
@@ -603,7 +605,7 @@ func TestOOL_EmitIdempotentByteWise(t *testing.T) {
 		{"opacity_negative", "fixture.esm"},
 		{"opacity_priority_shadowing", "fixture.esm"},
 		{"flatten_registry_merge", "fixture.esm"},
-		{"aggregate_int_ratio_golden", "fixture.esm"},
+		{"faq_int_ratio_golden", "fixture.esm"},
 		{"arrhenius_smoke", "fixture.esm"},
 		{"constrained_match_scope", "fixture.esm"},
 		{"coupling_transform_expression", "fixture.esm"},

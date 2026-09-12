@@ -144,7 +144,7 @@ fn document(url: &str, extra_reader_options: Option<(&str, Value)>, sizing: Sizi
         reader_options[k] = v;
     }
     json!({
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {
             "name": "DataSourceIngestCli",
             "description": "One data source, one bound parameter, one inline test on its column mean."
@@ -194,7 +194,7 @@ fn document(url: &str, extra_reader_options: Option<(&str, Value)>, sizing: Sizi
                 "equations": [{
                     "lhs": "annual_obs",
                     "rhs": {
-                        "op": "aggregate",
+                        "op": "faq",
                         "output_idx": ["r"],
                         "ranges": {"r": {"from": "records"}},
                         "args": ["annual"],
@@ -245,7 +245,7 @@ fn document_with_scalar_total(url: &str, sizing: Sizing, expected_total: f64) ->
         .push(json!({
             "lhs": "annual_total",
             "rhs": {
-                "op": "aggregate",
+                "op": "faq",
                 "output_idx": [],
                 "ranges": {"r": {"from": "records"}},
                 "args": ["annual"],

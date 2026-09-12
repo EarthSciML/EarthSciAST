@@ -1,8 +1,8 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "bare_rank_lift",
-    "description": "Cross-binding conformance fixture for esm-spec §4.3.4 name-based broadcast in a BARE array-level equation (issue #100). The whole-array equation D(dp) ~ w1 has a rank-1 operand `w1`, declared over `lat` alone, in a rank-3 `[lon,lat,lev]` result. Operands of a bare array-level expression align by index-set NAME, so `w1` supplies the `lat` axis and REPLICATES along `lon` and `lev`: dp[i,j,k](t=1) = w1[j] = 10 j, constant in i and k. This is exactly what the explicit aggregate spelling sum_{i,j,k} index(w1, j) computes, and the two spellings MUST agree cell for cell. A binding that instead flattens `w1` into the result's linear layout lays its two elements along `lon` and zero-fills the third `lon` cell, producing dp[1,1,1]=10, dp[2,1,1]=20, dp[3,1,1]=0 — plausible, finite, and wrong.",
+    "description": "Cross-binding conformance fixture for esm-spec §4.3.4 name-based broadcast in a BARE array-level equation (issue #100). The whole-array equation D(dp) ~ w1 has a rank-1 operand `w1`, declared over `lat` alone, in a rank-3 `[lon,lat,lev]` result. Operands of a bare array-level expression align by index-set NAME, so `w1` supplies the `lat` axis and REPLICATES along `lon` and `lev`: dp[i,j,k](t=1) = w1[j] = 10 j, constant in i and k. This is exactly what the explicit faq spelling sum_{i,j,k} index(w1, j) computes, and the two spellings MUST agree cell for cell. A binding that instead flattens `w1` into the result's linear layout lays its two elements along `lon` and zero-fills the third `lon` cell, producing dp[1,1,1]=10, dp[2,1,1]=20, dp[3,1,1]=0 — plausible, finite, and wrong.",
     "authors": [
       "EarthSciAST Test Suite"
     ],
@@ -71,7 +71,7 @@
         {
           "lhs": "w1",
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": [
               "j"

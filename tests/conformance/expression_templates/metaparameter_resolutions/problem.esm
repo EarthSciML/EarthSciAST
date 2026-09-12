@@ -1,8 +1,8 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "decay_problem",
-    "description": "Problem file sized by metaparameter N (default 2): N appears in an expression position (npts), in an aggregate dense range bound (ramp, folded at load), and in an AST division that must NOT fold (half)"
+    "description": "Problem file sized by metaparameter N (default 2): N appears in an expression position (npts), in a faq dense range bound (ramp, folded at load), and in an AST division that must NOT fold (half)"
   },
   "metaparameters": {
     "N": {
@@ -65,7 +65,7 @@
         {
           "lhs": "ramp",
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "i"
             ],

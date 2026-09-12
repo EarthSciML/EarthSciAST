@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "pde_inline_observed_indexed_lhs",
     "description": "§6.3.1 admits TWO LHS spellings for the equation that DEFINES an unknown: bare (`y ~ f(...)`) and indexed (`y[i] ~ f(...)`, which defines the whole array `y`). Neither is restricted by rank, and the spec is explicit that the defining form is read through the LHS's BASE NAME. Every array-shaped observed in this document is written the INDEXED way, spelled `aggregate{k}(index(w, k)) ~ ...` — `wf` is STATE-FREE and `ws` is STATE-DEPENDENT, the two classes a binding routes differently (build-materialized vs. evaluated at the sampled state). Both right-hand sides are exactly integrable: D(u) = wf = 2k is a per-cell constant, so u[k](t) = 2*k*t; D(v) = ws = 3*u is then linear in t, so v[k](t) = 3*k*t^2. Every solver family of order >= 2 reproduces both to machine precision, so the assertions are integrator-independent."
@@ -42,14 +42,14 @@
         {
           "_comment": "wf[k] ~ 2*k -- the INDEXED (aggregate) LHS spelling, state-free.",
           "lhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": ["k"],
             "ranges": { "k": { "from": "lev" } },
             "expr": { "op": "index", "args": ["wf", "k"] }
           },
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": ["k"],
             "ranges": { "k": { "from": "lev" } },
@@ -59,14 +59,14 @@
         {
           "_comment": "ws[k] ~ 3*u[k] -- the INDEXED LHS spelling, state-dependent.",
           "lhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": ["k"],
             "ranges": { "k": { "from": "lev" } },
             "expr": { "op": "index", "args": ["ws", "k"] }
           },
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": ["u"],
             "output_idx": ["k"],
             "ranges": { "k": { "from": "lev" } },
@@ -80,7 +80,7 @@
         { "lhs": { "op": "ic", "args": ["v"] }, "rhs": 0.0 },
         {
           "lhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": ["k"],
             "ranges": { "k": { "from": "lev" } },
@@ -91,7 +91,7 @@
             }
           },
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": ["k"],
             "ranges": { "k": { "from": "lev" } },
@@ -100,7 +100,7 @@
         },
         {
           "lhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": ["k"],
             "ranges": { "k": { "from": "lev" } },
@@ -111,7 +111,7 @@
             }
           },
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": ["k"],
             "ranges": { "k": { "from": "lev" } },

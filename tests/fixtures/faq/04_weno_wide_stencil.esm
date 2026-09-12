@@ -1,0 +1,89 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "faq_04_weno_wide_stencil",
+    "description": "WENO-like wide stencil on u[1:20]. flux[i] = u[i] - 5u[i+1] + 10u[i+2] - 10u[i+3] + 5u[i+4] - u[i+5] for 1-based i in 1:15 (offset +2 absorbed into flux indexing). D(u[i+3]) = -(flux[i+1] - flux[i]) for 1-based i in 1:14. Boundary cells [1,2,3,18,19,20] held at zero via scalar BCs. Mirrors MTK fork test #4. Smoke test: with zero initial condition the solution stays at zero and the solver integrates successfully — verifies the 6-point stencil compiles and links into the faq block-tearing path.",
+    "authors": ["EarthSciAST/polecats/brahmin"],
+    "tags": ["faq", "conformance", "wide_stencil", "flux"]
+  },
+  "models": {
+    "WENO": {
+      "variables": {
+        "u": { "type": "unknown" },
+        "flux": { "type": "unknown" }
+      },
+      "equations": [
+        {
+          "_comment": "flux[i] = u[i] - 5u[i+1] + 10u[i+2] - 10u[i+3] + 5u[i+4] - u[i+5], 1-based i in 1..15",
+          "lhs": {
+            "op": "faq", "args": [], "output_idx": ["i"],
+            "expr": { "op": "index", "args": ["flux", "i"] },
+            "ranges": { "i": [1, 15] }
+          },
+          "rhs": {
+            "op": "faq", "args": [], "output_idx": ["i"],
+            "expr": {
+              "op": "+",
+              "args": [
+                { "op": "index", "args": ["u", "i"] },
+                { "op": "*", "args": [-5, { "op": "index", "args": ["u", { "op": "+", "args": ["i", 1] }] }] },
+                { "op": "*", "args": [10, { "op": "index", "args": ["u", { "op": "+", "args": ["i", 2] }] }] },
+                { "op": "*", "args": [-10, { "op": "index", "args": ["u", { "op": "+", "args": ["i", 3] }] }] },
+                { "op": "*", "args": [5, { "op": "index", "args": ["u", { "op": "+", "args": ["i", 4] }] }] },
+                { "op": "*", "args": [-1, { "op": "index", "args": ["u", { "op": "+", "args": ["i", 5] }] }] }
+              ]
+            },
+            "ranges": { "i": [1, 15] }
+          }
+        },
+        {
+          "_comment": "D(u[i+3]) = -(flux[i+1] - flux[i]), 1-based i in 1..14",
+          "lhs": {
+            "op": "faq", "args": [], "output_idx": ["i"],
+            "expr": { "op": "D", "args": [{ "op": "index", "args": ["u", { "op": "+", "args": ["i", 3] }] }], "wrt": "t" },
+            "ranges": { "i": [1, 14] }
+          },
+          "rhs": {
+            "op": "faq", "args": [], "output_idx": ["i"],
+            "expr": {
+              "op": "-",
+              "args": [
+                { "op": "-", "args": [
+                  { "op": "index", "args": ["flux", { "op": "+", "args": ["i", 1] }] },
+                  { "op": "index", "args": ["flux", "i"] }
+                ]}
+              ]
+            },
+            "ranges": { "i": [1, 14] }
+          }
+        },
+        { "lhs": { "op": "D", "args": [{ "op": "index", "args": ["u", 1] }],  "wrt": "t" }, "rhs": 0.0 },
+        { "lhs": { "op": "D", "args": [{ "op": "index", "args": ["u", 2] }],  "wrt": "t" }, "rhs": 0.0 },
+        { "lhs": { "op": "D", "args": [{ "op": "index", "args": ["u", 3] }],  "wrt": "t" }, "rhs": 0.0 },
+        { "lhs": { "op": "D", "args": [{ "op": "index", "args": ["u", 18] }], "wrt": "t" }, "rhs": 0.0 },
+        { "lhs": { "op": "D", "args": [{ "op": "index", "args": ["u", 19] }], "wrt": "t" }, "rhs": 0.0 },
+        { "lhs": { "op": "D", "args": [{ "op": "index", "args": ["u", 20] }], "wrt": "t" }, "rhs": 0.0 }
+      ],
+      "tolerance": { "rel": 0.0, "abs": 1.0e-10 },
+      "tests": [
+        {
+          "id": "zero_ic_stability",
+          "description": "With u[i] = 0 everywhere the right-hand side is identically zero, so the solver must return Success and u[i] must remain at 0. Sanity check only — non-trivial numerical conformance for this stencil lives in the native Julia MTK-fork test.",
+          "initial_conditions": {
+            "u[1]": 0.0, "u[2]": 0.0, "u[3]": 0.0, "u[4]": 0.0, "u[5]": 0.0,
+            "u[6]": 0.0, "u[7]": 0.0, "u[8]": 0.0, "u[9]": 0.0, "u[10]": 0.0,
+            "u[11]": 0.0, "u[12]": 0.0, "u[13]": 0.0, "u[14]": 0.0, "u[15]": 0.0,
+            "u[16]": 0.0, "u[17]": 0.0, "u[18]": 0.0, "u[19]": 0.0, "u[20]": 0.0
+          },
+          "time_span": { "start": 0.0, "end": 0.01 },
+          "assertions": [
+            { "variable": "u[1]",  "time": 0.01, "expected": 0.0 },
+            { "variable": "u[10]", "time": 0.01, "expected": 0.0 },
+            { "variable": "u[17]", "time": 0.01, "expected": 0.0 },
+            { "variable": "u[20]", "time": 0.01, "expected": 0.0 }
+          ]
+        }
+      ]
+    }
+  }
+}

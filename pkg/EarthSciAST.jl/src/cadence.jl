@@ -419,7 +419,7 @@ function assert_no_continuous_relational(node, model, memo::ClassMemo=ClassMemo(
     isa(node, AbstractDict) || return
     op = get(node, "op", nothing)
     is_relational = (op in RELATIONAL_OPS) ||
-                    (op == "aggregate" && get(node, "distinct", false) == true)
+                    (op == "faq" && get(node, "distinct", false) == true)
     if is_relational && classify(node, model, memo) == "continuous"
         throw(CadenceError(
             "relational/value-invention node op=$(repr(op)) classifies CONTINUOUS — " *

@@ -119,14 +119,14 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (idempotent; standalone runs too)
 
     @testset "array state with seed_ic! + element IC override" begin
         esm = Dict{String,Any}(
-            "esm" => "0.5.0", "metadata" => Dict{String,Any}("name" => "A"),
+            "esm" => "1.1.0", "metadata" => Dict{String,Any}("name" => "A"),
             "index_sets" => Dict{String,Any}("n" => Dict{String,Any}("kind" => "interval", "size" => 3)),
             "models" => Dict{String,Any}("M" => Dict{String,Any}(
                 "variables" => Dict{String,Any}("u" => Dict{String,Any}("type" => "unknown", "shape" => Any["n"])),
                 "equations" => Any[Dict{String,Any}(
-                    "lhs" => Dict{String,Any}("op" => "arrayop", "output_idx" => Any["i"],
+                    "lhs" => Dict{String,Any}("op" => "faq", "output_idx" => Any["i"],
                         "ranges" => Dict{String,Any}("i" => Dict{String,Any}("from" => "n")), "args" => Any[], "expr" => _D(_idx("u", "i"))),
-                    "rhs" => Dict{String,Any}("op" => "arrayop", "output_idx" => Any["i"],
+                    "rhs" => Dict{String,Any}("op" => "faq", "output_idx" => Any["i"],
                         "ranges" => Dict{String,Any}("i" => Dict{String,Any}("from" => "n")), "args" => Any[], "expr" => _idx("u", "i")))])))
         seed! = (u0, vm) -> (u0[vm["M.u[2]"]] = 2.0; u0[vm["M.u[3]"]] = 3.0)
         r = solve(ESM_S.esm_problem(esm, (0.0, 1.0);
@@ -138,14 +138,14 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (idempotent; standalone runs too)
     @testset "seed_expression_ic! over a grid" begin
         # u[i] state on a 4-cell axis; seed u(x) = x^2 at coords [10,20,30,40].
         esm = Dict{String,Any}(
-            "esm" => "0.5.0", "metadata" => Dict{String,Any}("name" => "G"),
+            "esm" => "1.1.0", "metadata" => Dict{String,Any}("name" => "G"),
             "index_sets" => Dict{String,Any}("n" => Dict{String,Any}("kind" => "interval", "size" => 4)),
             "models" => Dict{String,Any}("M" => Dict{String,Any}(
                 "variables" => Dict{String,Any}("u" => Dict{String,Any}("type" => "unknown", "shape" => Any["n"])),
                 "equations" => Any[Dict{String,Any}(
-                    "lhs" => Dict{String,Any}("op" => "arrayop", "output_idx" => Any["i"],
+                    "lhs" => Dict{String,Any}("op" => "faq", "output_idx" => Any["i"],
                         "ranges" => Dict{String,Any}("i" => Dict{String,Any}("from" => "n")), "args" => Any[], "expr" => _D(_idx("u", "i"))),
-                    "rhs" => Dict{String,Any}("op" => "arrayop", "output_idx" => Any["i"],
+                    "rhs" => Dict{String,Any}("op" => "faq", "output_idx" => Any["i"],
                         "ranges" => Dict{String,Any}("i" => Dict{String,Any}("from" => "n")), "args" => Any[], "expr" => 0.0))])))
         expr = expression_from_json(Dict{String,Any}("op" => "*", "args" => Any["x", "x"]))
         seed! = (u0, vm) -> seed_expression_ic!(u0, vm, "M.u", expr, ["x" => [10.0, 20.0, 30.0, 40.0]])

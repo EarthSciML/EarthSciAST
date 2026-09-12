@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "UndeclaredOperand",
     "description": "An equation naming an operand that is declared NOWHERE in the document — not a variable, not a parameter, not a metaparameter, not an index set. `esm validate` rejects it; so must EVERY evaluation route (CONFORMANCE_SPEC §5.23).\n\nThe body is `max(known, undeclaredFloor)` because that is the shape that makes the failure invisible: an unbound name resolving to a NaN sentinel is dropped by IEEE-754 `max`, which returns the non-NaN operand, so `max(known, undeclaredFloor)` evaluates as `max(known)` = 2.0 — finite, plausible, and missing a floor the author wrote. `clamped` is an ARRAY observed so it goes through the array runtime on both routes; `known` is 2.0 so a route that drops the operand answers 2.0 and is caught by name.",
@@ -45,7 +45,7 @@
           "_comment": "`undeclaredFloor` appears in no declaration block anywhere in this document. That is the whole fixture.",
           "lhs": "clamped",
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": [
               "i"

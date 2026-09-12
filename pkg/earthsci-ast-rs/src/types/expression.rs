@@ -258,13 +258,13 @@ pub fn region_bounds(pair: &[RegionBound; 2]) -> Option<[i64; 2]> {
     Some([pair[0].as_i64()?, pair[1].as_i64()?])
 }
 
-/// A single `arrayop`/`aggregate` index range (RFC semiring-faq-unified-ir
+/// A single `faq` index range (RFC semiring-faq-unified-ir
 /// §5.2). Either a dense inclusive integer interval `[lo, hi]` (the original,
 /// and still the most common form) or a reference to a declared index set.
 ///
 /// Index-set references are resolved to concrete `[lo, hi]` intervals against
 /// the document `index_sets` registry by
-/// [`crate::aggregate::resolve_aggregate_ranges`] before the evaluator runs, so
+/// [`crate::faq::resolve_aggregate_ranges`] before the evaluator runs, so
 /// every range the evaluator actually iterates is a [`RangeSpec::Interval`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -291,7 +291,7 @@ pub enum RangeSpec {
     /// A resolved **ragged** inner range (RFC `semiring-faq-unified-ir` §5.2):
     /// the lower bound is implicitly `1` and the upper bound is the per-parent
     /// length `offsets[of…]`, gathered dynamically per output tuple at eval
-    /// time. Produced only by [`crate::aggregate::resolve_aggregate_ranges`] on
+    /// time. Produced only by [`crate::faq::resolve_aggregate_ranges`] on
     /// the simulation clone (it bakes the index set's `offsets` backing-factor
     /// name into the range so the evaluator needs no registry); it is never
     /// authored in or serialized back to a file, so it appears **last** in this
@@ -307,7 +307,7 @@ pub enum RangeSpec {
     /// `semiring-faq-unified-ir` §5.5 / §8.1): the lower bound is implicitly `1`
     /// and the upper bound is the data-dependent vertex count of the ring its
     /// producing FAQ node materialized at runtime, looked up by that node's id
-    /// (`from_faq`). Produced only by [`crate::aggregate::resolve_aggregate_ranges`]
+    /// (`from_faq`). Produced only by [`crate::faq::resolve_aggregate_ranges`]
     /// on the simulation clone (it bakes the producer's id into the range so the
     /// evaluator needs no registry); like [`RangeSpec::RaggedDyn`] it is never
     /// authored in or serialized back to a file, so it appears **last** in this
@@ -356,7 +356,7 @@ impl RangeSpec {
     }
 }
 
-/// One value-equality join clause on an `aggregate`/`arrayop` node (RFC
+/// One value-equality join clause on a `faq` node (RFC
 /// semiring-faq-unified-ir §5.3). `on` lists one or more `[left, right]`
 /// key-column pairs; a combined ⊗-product term is contributed only for index
 /// combinations whose key columns are equal on **every** listed pair (an inner
@@ -407,7 +407,7 @@ pub struct JoinClause {
 }
 
 /// A spatial overlap join-gate clause (`{ "overlap": { … } }`), the broad-phase
-/// alternative to an `on` value-equality clause on an `aggregate` (CONFORMANCE_SPEC
+/// alternative to an `on` value-equality clause on a `faq` (CONFORMANCE_SPEC
 /// §5.5.6). `src_env`/`tgt_env` name const-array envelope factors (arity 1 rings /
 /// 2 point / 4 rectangle); `eps` inflates both envelopes outward before the
 /// closed-AABB intersection test. Resolved by [`crate::value_invention`].
@@ -509,7 +509,7 @@ pub struct ExpressionNode {
     pub wrt: Option<String>,
 
     /// Dimensional analysis hint; also names the spatial dimension a `grad` /
-    /// `aggregate` op iterates over.
+    /// `faq` op iterates over.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dim: Option<String>,
 
@@ -527,13 +527,13 @@ pub struct ExpressionNode {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upper: Option<Box<Expr>>,
 
-    /// Body expression for `arrayop` nodes (the scalar body evaluated for
+    /// Body expression for `faq` nodes (the scalar body evaluated for
     /// each tuple of loop-index values). Out-of-band from `args` because the
     /// serialized schema uses a sidecar `expr` field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expr: Option<Box<Expr>>,
 
-    /// Output index names for `arrayop`/`aggregate` (e.g. `["i", "j"]`).
+    /// Output index names for `faq` (e.g. `["i", "j"]`).
     ///
     /// Each entry is normally a symbolic index name (string), but the schema
     /// (and the semiring IR) also admits a bare integer literal for a singleton
@@ -551,22 +551,22 @@ pub struct ExpressionNode {
     )]
     pub output_idx: Option<Vec<String>>,
 
-    /// Per-index ranges for `arrayop`/`aggregate`. Each entry is either a dense
+    /// Per-index ranges for `faq`. Each entry is either a dense
     /// inclusive integer interval `[lo, hi]` (the original form) or a reference
     /// to a declared index set, `{ "from": <name>, "of"?: [...] }` (RFC
     /// semiring-faq-unified-ir §5.2). Index-set references are resolved to
     /// concrete intervals against the model `index_sets` registry by
-    /// [`crate::aggregate::resolve_aggregate_ranges`] before evaluation.
+    /// [`crate::faq::resolve_aggregate_ranges`] before evaluation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ranges: Option<HashMap<String, RangeSpec>>,
 
-    /// Reduction operator (`"+"`, `"*"`, `"max"`, `"min"`) for `arrayop`
+    /// Reduction operator (`"+"`, `"*"`, `"max"`, `"min"`) for `faq`
     /// contractions over indices appearing in `expr` but not `output_idx`.
     /// Names the semiring's ⊕ only; see `semiring` for the full algebra.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reduce: Option<String>,
 
-    /// Named semiring `(⊕, ⊗)` for `aggregate`/`arrayop` reductions (RFC
+    /// Named semiring `(⊕, ⊗)` for `faq` reductions (RFC
     /// semiring-faq-unified-ir §5.1). One of `sum_product` (default),
     /// `max_product`, `min_sum`, `max_sum`, `bool_and_or`. When present it is
     /// authoritative: ⊕ (the `reduce`) and both identities come from the closed
@@ -575,7 +575,7 @@ pub struct ExpressionNode {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub semiring: Option<String>,
 
-    /// Value-equality `join` clauses for `aggregate`/`arrayop` (RFC
+    /// Value-equality `join` clauses for `faq` (RFC
     /// semiring-faq-unified-ir §5.3). An inner equi-join combining factors by
     /// the value equality of key columns, subsuming ESI `join`. Each clause's
     /// `on` lists `[left, right]` key-column pairs; absent ⇒ factors combine
@@ -585,7 +585,7 @@ pub struct ExpressionNode {
     pub join: Option<Vec<JoinClause>>,
 
     /// Boolean predicate restricting which index combinations contribute a
-    /// ⊗-product term to an `aggregate`/`arrayop` reduction (RFC
+    /// ⊗-product term to a `faq` reduction (RFC
     /// semiring-faq-unified-ir §5.3 / §7.2). Combinations for which the
     /// predicate evaluates false contribute the additive identity `0̄` — the
     /// explicit way to express a guarded sum. May reference any index symbol in
@@ -695,12 +695,12 @@ pub struct ExpressionNode {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arg: Option<String>,
 
-    /// For the `aggregate` op: when `true`, contract over distinct key values
+    /// For the `faq` op: when `true`, contract over distinct key values
     /// only (RFC semiring-faq-unified-ir §5.3).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub distinct: Option<bool>,
 
-    /// For the `aggregate` op: grouping-key expression (RFC
+    /// For the `faq` op: grouping-key expression (RFC
     /// semiring-faq-unified-ir §5.3).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<Box<Expr>>,
@@ -1158,7 +1158,7 @@ mod expr_deserialize_token_mapping_tests {
         // impl still reaches children in `args`, the scalar slots, and the
         // map slots.
         let src = r#"{
-            "op":"arrayop","args":[],"output_idx":["i"],
+            "op":"faq","args":[],"output_idx":["i"],
             "expr":{"op":"*","args":[{"op":"-","args":["a",1]},2.0]},
             "filter":{"op":">","args":["i",0]},
             "axes":{"z":{"op":"+","args":["b",3]}}

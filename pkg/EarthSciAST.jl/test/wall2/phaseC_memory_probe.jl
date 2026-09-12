@@ -18,7 +18,7 @@ _v(n)  = VarExpr(String(n))
 _num(x)= NumExpr(Float64(x))
 _op(op, a...; kw...) = OpExpr(String(op), ESM.ASTExpr[a...]; kw...)
 _idx(var, ix...) = _op("index", _v(var), [_v(String(s)) for s in ix]...)
-make_conc(N_src) = _op("aggregate"; output_idx=Any["rcv"], semiring="sum_product",
+make_conc(N_src) = _op("faq"; output_idx=Any["rcv"], semiring="sum_product",
     expr_body=_op("*", _idx("A","c","rcv"), _idx("E","c")),
     ranges=Dict{String,Any}("c"=>Any[1,N_src]))
 

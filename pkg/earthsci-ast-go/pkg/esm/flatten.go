@@ -727,7 +727,7 @@ func exprHasVarPlaceholder(expr Expression) bool {
 // qualified with the owner (`LANDFIRE.raw.fuel_model`) to match the lowered
 // subsystem variable name. `leaveAlone` holds the names that are not variable
 // references at all: the independent variable `t`, the `_var` placeholder, and —
-// added per node — an `aggregate`'s own loop symbols, which are local to its
+// added per node — a `faq`'s own loop symbols, which are local to its
 // body (esm-spec §4.3.1).
 //
 // `locals` is the component's own declared names, and gates ONLY the plain-string
@@ -755,7 +755,7 @@ func namespaceExprTree(expr Expression, prefix string, leaveAlone, subsystemKeys
 	// namespaced. They are binder NAMES, not child expressions, so the only
 	// handling needed is adding them to `leaveAlone` for the children.
 	localLeave := leaveAlone
-	if node.Op == "aggregate" {
+	if node.Op == "faq" {
 		localLeave = make(map[string]bool, len(leaveAlone)+len(node.OutputIdx)+len(node.Ranges))
 		for k, v := range leaveAlone {
 			localLeave[k] = v
@@ -818,7 +818,7 @@ func namespaceVariableUpdate(update any, prefix string, leaveAlone, subsystemKey
 //
 // `binders` — the loop symbols the node binds (`output_idx` entries, `ranges`
 // keys) — WINS over `locals`. An index symbol is local to the enclosing
-// `aggregate` and shadows any coincident variable name (esm-spec §4.3.1), and an
+// `faq` and shadows any coincident variable name (esm-spec §4.3.1), and an
 // `on` key column is resolved against this node's own ranges, so prefixing a
 // shadowed symbol makes it resolve to nothing.
 func namespaceJoinNames(join []any, binders map[string]bool, prefix string, locals map[string]bool) []any {
@@ -890,7 +890,7 @@ func namespaceJoinNames(join []any, binders map[string]bool, prefix string, loca
 
 // lhsDependentVar returns the dependent variable an equation LHS names:
 // `D(v, t)` and `D(index(v, …), t)` yield v, a bare name yields itself, and an
-// `aggregate` yields its body's. An expression LHS (an algebraic constraint)
+// `faq` yields its body's. An expression LHS (an algebraic constraint)
 // names no single variable and yields "".
 func lhsDependentVar(lhs Expression) string {
 	if s, ok := lhs.(string); ok {
@@ -917,7 +917,7 @@ func lhsDependentVar(lhs Expression) string {
 		}
 		return ""
 	}
-	if node.Op == "aggregate" && node.Expr != nil {
+	if node.Op == "faq" && node.Expr != nil {
 		return lhsDependentVar(node.Expr)
 	}
 	return ""
@@ -940,7 +940,7 @@ func exprHasArrayOp(expr Expression) bool {
 // different index subset of a state variable another equation also defines, so
 // assembleSystem exempts it from the scalar duplicate-LHS check.
 var arrayOps = map[string]struct{}{
-	"aggregate": {}, "broadcast": {}, "concat": {}, "index": {}, "makearray": {},
+	"faq": {}, "broadcast": {}, "concat": {}, "index": {}, "makearray": {},
 	"reshape": {}, "transpose": {},
 	"intersect_polygon": {}, "polygon_intersection_area": {},
 }
@@ -3033,7 +3033,7 @@ func deriveIndependentVars(flat *FlattenedSystem) {
 // because flattening moves the ground under it: `operator_compose` merges two
 // right-hand sides into one equation, `variable_map` deletes a parameter and
 // promotes a variable in its place, and the pointwise lift rewrites a scalar
-// state ODE into an `aggregate`. A per-component answer namespaced after the
+// state ODE into a `faq`. A per-component answer namespaced after the
 // fact would describe the document, not the system produced from it.
 //
 // The view hands the classifier the two DECLARED types and the raw update /

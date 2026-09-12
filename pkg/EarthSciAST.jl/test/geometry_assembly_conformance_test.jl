@@ -151,7 +151,7 @@ function _aij_extract_esm(defs)
     nc = length(defs["src_poly"]["value"][1][1])
     nS = length(defs["src_poly"]["value"])
     nT = length(defs["tgt_poly"]["value"])
-    agg(oidx, body) = Dict{String,Any}("op" => "aggregate", "output_idx" => collect(Any, oidx),
+    agg(oidx, body) = Dict{String,Any}("op" => "faq", "output_idx" => collect(Any, oidx),
         "ranges" => Dict{String,Any}("i" => Dict{String,Any}("from" => "src_cells"),
                                      "j" => Dict{String,Any}("from" => "tgt_cells")),
         "expr" => body)
@@ -258,13 +258,13 @@ function _apply_only_esm()
     ix(a...) = Dict{String,Any}("op" => "index", "args" => collect(Any, a))
     joinij = Any[Dict{String,Any}("on" => Any[Any["i", "j"]])]
     filt = Dict{String,Any}("op" => ">", "args" => Any[ix("A_ij", "i", "j"), "atol"])
-    Dlhs(sv) = Dict{String,Any}("op" => "aggregate", "args" => Any[], "output_idx" => Any["j"],
+    Dlhs(sv) = Dict{String,Any}("op" => "faq", "args" => Any[], "output_idx" => Any["j"],
         "expr" => Dict{String,Any}("op" => "D", "args" => Any[ix(sv, "j")], "wrt" => "t"),
         "ranges" => Dict{String,Any}("j" => Any[1, 4]))
-    aj_rhs = Dict{String,Any}("op" => "aggregate", "semiring" => "sum_product", "output_idx" => Any["j"],
+    aj_rhs = Dict{String,Any}("op" => "faq", "semiring" => "sum_product", "output_idx" => Any["j"],
         "ranges" => Dict{String,Any}("i" => Dict{String,Any}("from" => "src_cells"), "j" => Dict{String,Any}("from" => "tgt_cells")),
         "join" => joinij, "filter" => filt, "args" => Any["A_ij"], "expr" => ix("A_ij", "i", "j"))
-    ft_rhs = Dict{String,Any}("op" => "aggregate", "semiring" => "sum_product", "output_idx" => Any["j"],
+    ft_rhs = Dict{String,Any}("op" => "faq", "semiring" => "sum_product", "output_idx" => Any["j"],
         "ranges" => Dict{String,Any}("i" => Dict{String,Any}("from" => "src_cells"), "j" => Dict{String,Any}("from" => "tgt_cells")),
         "join" => joinij, "filter" => filt, "args" => Any["A_ij", "F_src", "dst_areas"],
         "expr" => Dict{String,Any}("op" => "/", "args" => Any[
@@ -333,7 +333,7 @@ end
         # in 1.0.0 "observed" is derived — it is an `unknown` with a defining equation.
         @test vars["A_ij"]["type"] == "unknown"
         @test haskey(defs, "A_ij")
-        @test defs["A_ij"]["op"] == "aggregate"
+        @test defs["A_ij"]["op"] == "faq"
         @test !haskey(vars["A_ij"], "value")
         # the narrow phase is the FUSED leaf: A_ij body = polygon_intersection_area(...).
         pias = _find_ops(defs["A_ij"], "polygon_intersection_area")

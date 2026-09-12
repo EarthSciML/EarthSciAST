@@ -7,7 +7,7 @@ The companion :mod:`test_geometry_kernel` exercises the ``intersect_polygon``
 leaf and the ``polygon_area`` FAQ at the ``eval_expr`` level. This module closes
 the loop: it drives the shared ``tests/valid/geometry/*.esm`` fixtures that carry
 inline ``tests`` blocks END-TO-END through :func:`simulate`, exactly as
-:mod:`test_aggregate_conformance` does for the M1 semiring fixtures (the
+:mod:`test_faq_conformance` does for the M1 semiring fixtures (the
 "Mechanism-A" runner).
 
 A geometry-ODE fixture integrates as a real ODE only because the array-op
@@ -208,7 +208,7 @@ def test_order_observed_equations_is_dependency_sorted() -> None:
     """An observed is ordered after every observed its RHS references."""
     clip = ExprNode(op="intersect_polygon", id="c", manifold="planar", args=["src", "tgt"])
     area = ExprNode(
-        op="aggregate",
+        op="faq",
         semiring="sum_product",
         output_idx=[],
         args=["clip"],

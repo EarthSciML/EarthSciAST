@@ -92,7 +92,7 @@ fn a_true_body_counts_instead_of_panicking() {
     assert_eq!(results[1].actual, Some(3.0), "the range carries three rows");
 }
 
-/// The nine core ops with NO rule, each as an `aggregate` BODY — the position
+/// The nine core ops with NO rule, each as a `faq` BODY — the position
 /// the reported document put `true` in. Every one must end in a DIAGNOSTIC.
 /// A panic fails this test by aborting it, which is the detection: before the
 /// gate, six of these nine reached `eval_op`'s `unreachable!` exactly as `true`
@@ -173,7 +173,7 @@ fn every_unevaluable_core_op_ends_in_a_diagnostic_not_a_panic() {
 
     for (op, refused_by, body) in cases {
         let file: EsmFile = serde_json::from_value(json!({
-            "esm": "1.0.0",
+            "esm": "1.1.0",
             "metadata": { "name": "UnevaluableProbe" },
             "index_sets": { "rows": { "kind": "interval", "size": 2 } },
             "models": { "M": {
@@ -184,7 +184,7 @@ fn every_unevaluable_core_op_ends_in_a_diagnostic_not_a_panic() {
                 "equations": [
                     { "lhs": "row", "rhs": { "op": "const", "args": [], "value": 1.0 } },
                     { "lhs": "probe",
-                      "rhs": { "op": "aggregate", "args": [], "semiring": "sum_product",
+                      "rhs": { "op": "faq", "args": [], "semiring": "sum_product",
                                "output_idx": [], "ranges": { "q": { "from": "rows" } },
                                "expr": body } }
                 ],

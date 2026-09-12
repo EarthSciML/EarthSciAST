@@ -1,0 +1,105 @@
+{
+  "category": "simulate_faq",
+  "version": "1.0",
+  "description": "Cross-port numeric conformance fixtures for the faq runtime (ess-zmm, extended for spatial PDE stencils by ess-bdm). Executing ports must simulate each fixture and assert that every inline 'tests' assertion matches within the declared tolerance. Non-executing ports explicitly skip with a documented reason. See README.md for the skip contract and adapter notes.",
+  "fixtures": [
+    {
+      "id": "fixtures/faq/15_discretized_1d_heat",
+      "path": "fixtures/faq/15_discretized_1d_heat.esm",
+      "tags": ["faq", "makearray", "stencil", "pde", "diffusion", "boundary_conditions", "spatial_dispatch"],
+      "executing_bindings": ["python", "rust", "julia"],
+      "skip_bindings": {
+        "typescript": "TypeScript binding has no faq numeric executor; round-trip only.",
+        "go": "Go binding has no faq numeric executor; round-trip only."
+      },
+      "notes": "Method-of-lines 1-D heat equation: a pure-map LHS-faq whose RHS body is index(makearray(interior + 2 Dirichlet ghost regions), i). The discretized stencil IR is the shared artifact; bindings evaluate it numerically and match the exact discrete eigenvalue solution u[i,t]=exp(lambda_1*t)*sin(pi*i/5), lambda_1=-9.5492 (rel tol 1e-3). Rust evaluates this VECTORIZED — whole-array shifted-slice stencils + region-materialized makearray, no per-cell scalarization (ess-bdm; simulate_array.rs try_eval_faq_vectorized, verified N-independent in tests/pde_vectorized_eval.rs). Python uses the numpy vectorized shifted-slice path (PR #25); Julia uses the tree-walk LHS-faq unroller (tree_walk_faq_test.jl testset 6)."
+    },
+    {
+      "id": "fixtures/faq/16_discretized_2d_heat",
+      "path": "fixtures/faq/16_discretized_2d_heat.esm",
+      "tags": ["faq", "makearray", "stencil", "pde", "diffusion", "boundary_conditions", "spatial_dispatch", "2d"],
+      "executing_bindings": ["python", "rust", "julia"],
+      "skip_bindings": {
+        "typescript": "TypeScript binding has no faq numeric executor; round-trip only.",
+        "go": "Go binding has no faq numeric executor; round-trip only."
+      },
+      "notes": "Method-of-lines 2-D heat equation on a 3x3 interior with Dirichlet ghost regions: a pure-map LHS-faq over [i,j] whose body is index(makearray(interior + edge/corner ghost regions), i, j). Same vectorized/no-scalarization Rust path as fixture 15, exercised at 2-D (shifted slices per axis). Conformance on a numeric-tolerance basis against the 2-D discrete eigenvalue solution (rel tol 1e-3). Julia: tree_walk_faq_test.jl testset 7; Python: numpy vectorized path."
+    },
+    {
+      "id": "fixtures/faq/23_faq_pure_matvec_contraction",
+      "path": "fixtures/faq/23_faq_pure_matvec_contraction.esm",
+      "tags": ["faq", "contraction", "einsum", "matvec", "reduce-plus", "reduce-max"],
+      "executing_bindings": ["python", "rust", "julia"],
+      "skip_bindings": {
+        "typescript": "TypeScript binding has no faq numeric executor; round-trip only.",
+        "go": "Go binding has no faq numeric executor; round-trip only."
+      },
+      "notes": "Julia executes via both the tree-walk path (build_evaluator generalized-einsum unroll, tree_walk.jl:294-370) and the MTK path (EarthSciASTMTKExt _build_faq_sym). The tree-walk path requires the LHS-faq form; the MTK path additionally handles the embedded form. Fixture 23 uses the LHS-faq form, which both Julia paths support."
+    },
+    {
+      "id": "fixtures/faq/21_reduce_max_min_ode",
+      "path": "fixtures/faq/21_reduce_max_min_ode.esm",
+      "tags": ["faq", "contraction", "reduce-max", "ode"],
+      "executing_bindings": ["python", "rust", "julia"],
+      "skip_bindings": {
+        "typescript": "TypeScript binding has no faq numeric executor.",
+        "go": "Go binding has no faq numeric executor."
+      }
+    },
+    {
+      "id": "fixtures/faq/22_reduce_min_ode",
+      "path": "fixtures/faq/22_reduce_min_ode.esm",
+      "tags": ["faq", "contraction", "reduce-min", "ode"],
+      "executing_bindings": ["python", "rust", "julia"],
+      "skip_bindings": {
+        "typescript": "TypeScript binding has no faq numeric executor.",
+        "go": "Go binding has no faq numeric executor."
+      }
+    },
+    {
+      "id": "fixtures/faq/24_faq_makearray_region_dispatch",
+      "path": "fixtures/faq/24_faq_makearray_region_dispatch.esm",
+      "tags": ["faq", "makearray", "region_dispatch", "pin_resolver"],
+      "executing_bindings": ["julia", "python", "rust"],
+      "skip_bindings": {
+        "typescript": "TypeScript binding has no faq numeric executor; round-trip only.",
+        "go": "Go binding has no faq numeric executor; round-trip only."
+      },
+      "notes": "Pins _resolve_index_of_makearray (ESS tree_walk.jl:1114) in the LHS-faq context: the RHS body is index(makearray(regions,values),i,j) where i,j are the faq output loop variables. The LHS-faq unroller substitutes concrete ints for i,j via _sub_preserving, then _resolve_indices calls the resolver. 3x3 2D domain with two overlapping regions (border=1.0, center=4.0). Python uses the scalar fallback in _eval_faq. Rust uses ctx.loop_binds in eval_faq/eval_index. (ess-e9l)"
+    },
+    {
+      "id": "fixtures/faq/20_faq_contraction_embedded",
+      "path": "fixtures/faq/20_faq_contraction_embedded.esm",
+      "tags": ["faq", "contraction", "embedded", "reduce-plus", "reduce-max"],
+      "executing_bindings": ["python", "rust"],
+      "skip_bindings": {
+        "julia": "Julia tree-walk (build_evaluator) rejects faq in expression position (E_TREEWALK_UNSUPPORTED_OP). Julia MTK path may handle scalar reduce via _faq_scalar_reduce but is not yet validated for the embedded-RHS form; tracked as ess-n0w.",
+        "typescript": "TypeScript binding has no faq numeric executor.",
+        "go": "Go binding has no faq numeric executor."
+      },
+      "notes": "Exercises the embedded contraction form: faq appears as the RHS of a scalar D equation, not as the LHS-faq form. This is the form that ess-n0w adds support for in the Julia tree-walk path."
+    },
+    {
+      "id": "fixtures/faq/25_cumulative_prefix_reduction",
+      "path": "fixtures/faq/25_cumulative_prefix_reduction.esm",
+      "tags": ["faq", "faq", "cumulative", "prefix-sum", "scan", "filter", "reduce-plus", "reduce-max"],
+      "executing_bindings": ["python", "rust", "julia"],
+      "skip_bindings": {
+        "typescript": "TypeScript binding has no faq numeric executor; round-trip only.",
+        "go": "Go binding has no faq numeric executor; round-trip only."
+      },
+      "notes": "Cumulative (prefix) reductions, esm-spec §4.3.1 — the canonical spelling of a running total is a `faq` whose `filter` compares the contracted index against an output index; the format ships no cumsum/scan op. All four monotone variants over one source field: inclusive/exclusive forward, inclusive reverse, and a forward running `max`. The exclusive variant's first cell reduces over the EMPTY set and pins that it takes the semiring's additive identity rather than erroring; the running max pins that the pattern is not `+`-specific — and caught a real bug, the Python bare-`reduce` shorthand seeding every fold with 0.0 instead of ⊕'s own identity, which clamped all-negative maxima to zero. Rust and Python recognize the FORWARD rows and evaluate them with an O(N) running accumulator instead of the O(N²) triangle; the rewrite is bit-identical because both fold the admitted window ascending in the same association (pinned by pkg/earthsci-ast-rs/tests/cumulative_prefix_scan.rs and pkg/earthsci-ast-py/tests/test_cumulative_prefix_scan.py). Julia evaluates the triangular form correctly but does not yet scan: its array backend unrolls a constant-bound contraction into per-cell-INDEPENDENT kernels (_unrolled_contraction_body), and a scan is sequential ACROSS output cells, which that kernel model has no slot for."
+    },
+    {
+      "id": "fixtures/faq/26_cumulative_integral_measure",
+      "path": "fixtures/faq/26_cumulative_integral_measure.esm",
+      "tags": ["faq", "faq", "cumulative", "integral", "measure", "quadrature", "filter", "reduce-plus"],
+      "executing_bindings": ["python", "rust", "julia"],
+      "skip_bindings": {
+        "typescript": "TypeScript binding has no faq numeric executor; round-trip only.",
+        "go": "Go binding has no faq numeric executor; round-trip only."
+      },
+      "notes": "The measure-weighted counterpart of fixture 25, esm-spec §4.3.1 'a cumulative sum is not a cumulative integral'. The format carries no measure concept (§6.6.5 convention 2), so a Riemann-sum cumulative integral multiplies the per-cell measure into the body as an ordinary factor. NON-UNIFORM cell widths are the point: an unweighted prefix sum of the same field would give [0.5, 1.75, 3.375, 5.25] instead of the analytic [0.25, 0.5625, 0.765625, 1.0], so this fixture fails loudly if any binding ever supplies or infers a measure of its own. The midpoint rule is exact for the linear integrand 2x, so the assertions are equalities, not discretization-error bounds."
+    }
+  ]
+}

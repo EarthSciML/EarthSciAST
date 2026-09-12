@@ -10,8 +10,8 @@ uncounted per-cell `AlgebraicRule::Scalar` observeds — the finding recorded in
 ef51292c).
 
 The independent check is behavioural: run each case twice, once normally and
-once with `ESS_VEC_DISABLE=1` (which forces `try_eval_arrayop_vectorized` to
-return `None` everywhere, at EVERY call site including `eval_arrayop`). A case
+once with `ESS_VEC_DISABLE=1` (which forces `try_eval_faq_vectorized` to
+return `None` everywhere, at EVERY call site including `eval_faq`). A case
 whose work really is on the vectorized path must get materially slower. A ratio
 near 1.0 means the overlay was never load-bearing for that case, and a
 "vectorized" verdict inferred from trace silence is vacuous for it.

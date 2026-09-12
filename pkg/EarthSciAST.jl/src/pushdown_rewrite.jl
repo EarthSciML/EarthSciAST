@@ -480,7 +480,7 @@ function _pd_detect_binning(ev::ModelVariable, agg::Union{ASTExpr,Nothing},
                             out_set::AbstractString;
                             out_is_cell::Union{Bool,Nothing}=nothing)
     (ev.shape !== nothing && length(ev.shape) == 1 && ev.shape[1] == out_set) || return nothing
-    (agg isa OpExpr && _is_aggregate_op(agg.op)) || return nothing
+    (agg isa OpExpr && _is_faq_op(agg.op)) || return nothing
     oz = _pd_oplus(agg); oz === nothing && return nothing
     (oz[1] == "+" && oz[2] == 0.0) || return nothing              # SEMIRING GUARD
     oi = agg.output_idx
@@ -576,7 +576,7 @@ Otherwise `(reason, template)`:
 function _pd_binning_refusal(ev::ModelVariable, agg::Union{ASTExpr,Nothing},
                              out_set::AbstractString)
     (ev.shape !== nothing && length(ev.shape) == 1 && ev.shape[1] == out_set) || return nothing
-    (agg isa OpExpr && _is_aggregate_op(agg.op)) || return nothing
+    (agg isa OpExpr && _is_faq_op(agg.op)) || return nothing
     oz = _pd_oplus(agg); oz === nothing && return nothing
     (oz[1] == "+" && oz[2] == 0.0) || return nothing
     oi = agg.output_idx
@@ -674,7 +674,7 @@ function _pd_detect(model::Model, obs_defs::AbstractDict, index_sets::AbstractDi
     rep_ename = nothing; rep_csym = nothing; rep_rsym = nothing
 
     for (cname, agg) in obs_defs
-        (agg isa OpExpr && _is_aggregate_op(agg.op)) || continue
+        (agg isa OpExpr && _is_faq_op(agg.op)) || continue
         oz = _pd_oplus(agg); oz === nothing && continue
         (oz[1] == "+" && oz[2] == 0.0) || continue                # SEMIRING GUARD
         oi = agg.output_idx
@@ -1007,7 +1007,7 @@ function _pd_gather_defn(F::AbstractString, shape::AbstractVector,
         ranges[sym] = Dict{String,Any}("from" => String(t))
     end
     defn = Dict{String,Any}(
-        "op" => "aggregate", "output_idx" => Any[Any["c"]; Any[s for s in syms]...],
+        "op" => "faq", "output_idx" => Any[Any["c"]; Any[s for s in syms]...],
         "ranges" => ranges, "args" => Any[F, mfactor],
         "expr" => _pd_ix(F, _pd_ix(mfactor, "c"), syms...))
     return (decl, defn)
@@ -1181,7 +1181,7 @@ function _pd_apply(esm, mname::AbstractString, plan, reg=nothing)
     producer = Dict{String,Any}(
         "lhs" => _pd_ix(memvar, "m"),
         "rhs" => Dict{String,Any}(
-            "op" => "aggregate", "output_idx" => Any["m"],
+            "op" => "faq", "output_idx" => Any["m"],
             "ranges" => Dict{String,Any}(
                 plan.rep_rsym => Dict{String,Any}("from" => plan.R),
                 plan.rep_csym => Dict{String,Any}("from" => C)),

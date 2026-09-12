@@ -17,7 +17,7 @@ serves other resolutions by binding `N`. No external data.
 Under **Option A** (expand-at-load) the region bodies inline into the makearrays;
 under **Option B** the references survive and each stencil body is a single
 factored declaration in the emitted registry. Its one-sided faces are RANK-2
-aggregates inside a rank-3 makearray, which the affine/symbolic stencil paths
+faq nodes inside a rank-3 makearray, which the affine/symbolic stencil paths
 decline ("reduced-rank region value") — so this fixture measures the
 REPRESENTATION factoring and pins the per-cell fallback chain, not the
 compile-once build.
@@ -26,7 +26,7 @@ compile-once build.
 (RFC step c). Same equation shape, but each axis's `match` rule lowers to a
 makearray with FIVE full-rank boundary-class regions (two one-sided faces, two
 near-face centered classes, a wide-stencil interior), and every region body is a
-rank-3 aggregate. The affine box processor therefore fires, and the per-cell
+rank-3 faq. The affine box processor therefore fires, and the per-cell
 branch keys form the genuine cross-product: a fused (expanded) build compiles
 one spine per `(x-class, y-class, z-class)` = **5×5×5 = 125** branch keys, while
 the compile-once tier compiles **5+5+5 = 15** template-body variants plus 125

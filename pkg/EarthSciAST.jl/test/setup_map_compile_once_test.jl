@@ -30,7 +30,7 @@ _op(o, args...) = Dict{String,Any}("op" => o, "args" => Any[args...])
 _ix(f, args...) = Dict{String,Any}("op" => "index", "args" => Any[f, args...])
 _v(n) = n     # a bare String IS a variable reference (parse.jl)
 function _map(output_idx, ranges, expr)
-    Dict{String,Any}("op" => "aggregate", "output_idx" => collect(output_idx),
+    Dict{String,Any}("op" => "faq", "output_idx" => collect(output_idx),
                      "ranges" => Dict{String,Any}(
                          k => (v isa AbstractString ?
                                Dict{String,Any}("from" => v) : v)
@@ -221,7 +221,7 @@ const ENV0 = Dict{String,Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
 
     @testset "an unsupported map still falls back, not throws" begin
         # A join/filter aggregate is refused on the symbolic path
-        # (`_resolve_index_of_arrayop` throws E_TREEWALK_COMPILE_ONCE_UNSUPPORTED);
+        # (`_resolve_index_of_faq` throws E_TREEWALK_COMPILE_ONCE_UNSUPPORTED);
         # the caller must swallow that and produce the reference values.
         body = _op("exp", _ix(_v("A"), _v("x"), _v("k")))
         j = _map(["x"], ["x" => "X", "k" => Any[1, 4]], body)

@@ -1,0 +1,59 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "faq_12_transpose_2d",
+    "description": "Exercises the `transpose` op on a 2x3 array state. u[1:2, 1:3] is held constant. A scalar `diff` integrates `index(transpose(u), 2, 1) - index(u, 1, 2)`, which must be identically zero if transpose swaps axes as expected, so diff stays 0. A second scalar `sample` integrates `index(transpose(u), 3, 1) = u[1, 3]` — starting from u[1,3]=33.0, sample(1) must equal 33.0.",
+    "authors": ["EarthSciAST/polecats/brahmin"],
+    "tags": ["faq", "conformance", "transpose"]
+  },
+  "models": {
+    "Transpose2D": {
+      "variables": {
+        "u":      { "type": "unknown" },
+        "diff":   { "type": "unknown" },
+        "sample": { "type": "unknown" }
+      },
+      "equations": [
+        { "lhs": { "op": "D", "args": [{ "op": "index", "args": ["u", 1, 1] }], "wrt": "t" }, "rhs": 0.0 },
+        { "lhs": { "op": "D", "args": [{ "op": "index", "args": ["u", 1, 2] }], "wrt": "t" }, "rhs": 0.0 },
+        { "lhs": { "op": "D", "args": [{ "op": "index", "args": ["u", 1, 3] }], "wrt": "t" }, "rhs": 0.0 },
+        { "lhs": { "op": "D", "args": [{ "op": "index", "args": ["u", 2, 1] }], "wrt": "t" }, "rhs": 0.0 },
+        { "lhs": { "op": "D", "args": [{ "op": "index", "args": ["u", 2, 2] }], "wrt": "t" }, "rhs": 0.0 },
+        { "lhs": { "op": "D", "args": [{ "op": "index", "args": ["u", 2, 3] }], "wrt": "t" }, "rhs": 0.0 },
+        {
+          "_comment": "D(diff) = index(transpose(u), 2, 1) - index(u, 1, 2) — this is zero by definition of transpose.",
+          "lhs": { "op": "D", "args": ["diff"], "wrt": "t" },
+          "rhs": {
+            "op": "-",
+            "args": [
+              { "op": "index", "args": [{ "op": "transpose", "args": ["u"] }, 2, 1] },
+              { "op": "index", "args": ["u", 1, 2] }
+            ]
+          }
+        },
+        {
+          "_comment": "D(sample) = index(transpose(u), 3, 1) = u[1, 3] = 33.0. Integrates linearly.",
+          "lhs": { "op": "D", "args": ["sample"], "wrt": "t" },
+          "rhs": { "op": "index", "args": [{ "op": "transpose", "args": ["u"] }, 3, 1] }
+        }
+      ],
+      "tolerance": { "rel": 0.0, "abs": 1.0e-9 },
+      "tests": [
+        {
+          "id": "transpose_element_check",
+          "description": "u held at u[i,j] = 11*i + j. diff stays 0; sample integrates u[1,3] = 33.0 giving sample(1) = 33.0.",
+          "initial_conditions": {
+            "u[1,1]": 12.0, "u[1,2]": 13.0, "u[1,3]": 33.0,
+            "u[2,1]": 23.0, "u[2,2]": 24.0, "u[2,3]": 25.0,
+            "diff": 0.0, "sample": 0.0
+          },
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "assertions": [
+            { "variable": "diff",   "time": 1.0, "expected": 0.0 },
+            { "variable": "sample", "time": 1.0, "expected": 33.0, "tolerance": { "rel": 1.0e-6 } }
+          ]
+        }
+      ]
+    }
+  }
+}

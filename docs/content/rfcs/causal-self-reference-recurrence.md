@@ -69,7 +69,7 @@ whereas a scalar self-read is just a gather on the array being written.)
 recognized structurally:
 
 > An equation whose LHS names an array-shaped unknown `V` (bare, `V ~ …`, or
-> indexed through the §4.3 `aggregate` LHS form, `aggregate{expr: V[k]} ~ …`), and
+> indexed through the §4.3 `aggregate` LHS form, `faq{expr: V[k]} ~ …`), and
 > whose RHS contains one or more `index(V, …)` reads, is a **recurrence
 > definition** of `V`.
 
@@ -327,7 +327,7 @@ expression. A recurrence needs a compiled per-cell body evaluated *inside* the
 lane loop, plus an out-of-place mirror. That is a larger change than the other
 two executing bindings needed and is tracked as binding debt rather than
 half-landed; the conformance fixtures declare Julia a `skip_bindings` port for
-this category with that reason, exactly as `20_arrayop_contraction_embedded`
+this category with that reason, exactly as `20_faq_contraction_embedded`
 already does for the embedded-aggregate form.
 
 Julia does implement the static half, and its own vacuity probe settled a

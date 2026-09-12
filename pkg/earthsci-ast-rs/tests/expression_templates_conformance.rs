@@ -135,7 +135,7 @@ fn unlowered_spatial_d_loads_but_is_gated_before_evaluation() {
 /// rather than something a user discovers at run time (esm-spec §4.2).
 ///
 /// Note what this fixture is NOT: a discrete cumulative sum. That is an
-/// `aggregate` with a monotone `filter`, is evaluable core, and runs today — see
+/// `faq` with a monotone `filter`, is evaluable core, and runs today — see
 /// `tests/cumulative_prefix_scan.rs` and esm-spec §4.3.1.
 #[test]
 fn unlowered_integral_loads_but_is_gated_before_evaluation() {

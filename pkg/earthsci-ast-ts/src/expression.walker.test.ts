@@ -51,7 +51,7 @@ describe('mapChildren — field preservation', () => {
 
   it('preserves aggregate structural metadata while visiting expr/filter/key', () => {
     const node: ExprNode = {
-      op: 'aggregate',
+      op: 'faq',
       args: ['A'],
       expr: { op: '*', args: ['A', 'w'] },
       filter: { op: '>', args: ['A', 0] },
@@ -215,7 +215,7 @@ describe('mapChildren / forEachChild — NumericLiteral leaves', () => {
 describe('forEachChild', () => {
   it('visits every child across args + structural fields in canonical order', () => {
     const node: ExprNode = {
-      op: 'aggregate',
+      op: 'faq',
       args: ['A', 'B'],
       expr: 'body',
       filter: 'pred',
@@ -306,14 +306,14 @@ describe('deepEqualExpr', () => {
 
   it('compares aggregate expression children and structural metadata', () => {
     const base: ExprNode = {
-      op: 'aggregate',
+      op: 'faq',
       args: ['A'],
       expr: { op: '*', args: ['A', 'w'] },
       filter: { op: '>', args: ['A', 0] },
       reduce: '+',
     } as unknown as ExprNode
     const same: ExprNode = {
-      op: 'aggregate',
+      op: 'faq',
       args: ['A'],
       expr: { op: '*', args: ['A', 'w'] },
       filter: { op: '>', args: ['A', 0] },

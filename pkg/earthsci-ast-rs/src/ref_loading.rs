@@ -293,7 +293,7 @@ fn load_ref_document(
                 ),
             )
         })?;
-        serde_json::from_str(&content).map_err(|e| {
+        let mut parsed: Value = serde_json::from_str(&content).map_err(|e| {
             err(
                 noun.code,
                 format!(
@@ -303,7 +303,15 @@ fn load_ref_document(
                     e
                 ),
             )
-        })
+        })?;
+        // A REFERENCED document is a document: it gets the same wire-boundary
+        // treatment as the root (removed-op rejection, the `faq` version gate,
+        // and `aggregate` -> `faq` normalization). Without this the alias and
+        // `arrayop` both survive a `{ref}` all the way into `emit`
+        // (docs/content/rfcs/faq-node-rename.md §5.2).
+        crate::parse::prepare_document_ops(&mut parsed)
+            .map_err(|e| err(noun.code, format!("{}: {e}", canonical.display())))?;
+        Ok(parsed)
     })();
 
     match loaded {

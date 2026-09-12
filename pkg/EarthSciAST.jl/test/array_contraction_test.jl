@@ -40,23 +40,23 @@ const _AC_ESS = EarthSciAST
 _ac_sr(s, r) = Float64((3s + 7r) % 11)
 _ac_e0(s)    = Float64(s % 5)
 
-_ac_lhs(v, idx, n) = Dict("op" => "aggregate", "args" => Any[], "output_idx" => Any[idx],
+_ac_lhs(v, idx, n) = Dict("op" => "faq", "args" => Any[], "output_idx" => Any[idx],
     "ranges" => Dict(idx => Any[1, n]),
     "expr" => Dict("op" => "D", "args" => Any[
         Dict("op" => "index", "args" => Any[v, idx])], "wrt" => "t"))
-_ac_zero(idx, n) = Dict("op" => "aggregate", "args" => Any[], "output_idx" => Any[idx],
+_ac_zero(idx, n) = Dict("op" => "faq", "args" => Any[], "output_idx" => Any[idx],
     "ranges" => Dict(idx => Any[1, n]), "expr" => 0.0)
 
 function _ac_doc(NS::Int, NR::Int)
     SR = [[_ac_sr(s, r) for r in 1:NR] for s in 1:NS]
-    agg = Dict{String,Any}("op" => "aggregate", "semiring" => "sum_product",
+    agg = Dict{String,Any}("op" => "faq", "semiring" => "sum_product",
         "args" => Any[], "output_idx" => Any["rcv"],
         "ranges" => Dict("rcv" => Any[1, NR], "s" => Any[1, NS]),
         "expr" => Dict("op" => "*", "args" => Any[
             Dict("op" => "index", "args" => Any[
                 Dict("op" => "const", "args" => Any[], "value" => SR), "s", "rcv"]),
             Dict("op" => "index", "args" => Any["E", "s"])]))
-    Dict{String,Any}("esm" => "0.8.0", "metadata" => Dict("name" => "ac_sr"),
+    Dict{String,Any}("esm" => "1.1.0", "metadata" => Dict("name" => "ac_sr"),
       "models" => Dict("R" => Dict{String,Any}(
         "variables" => Dict("E" => Dict("type" => "unknown", "shape" => Any["s"]),
                             "conc" => Dict("type" => "unknown", "shape" => Any["rcv"])),
@@ -202,12 +202,12 @@ const _AC_OFF = Dict("ESS_ARRAY_CONTRACTION_DISABLE" => "1")
     @testset "ESS_OOP_SSA keeps the scatter a nest reads ($where)" for
             (where, obs_nest) in (("state nest", false), ("observed nest", true))
         N = 16
-        ag1(b) = _AC_ESS.OpExpr("arrayop", _AC_ESS.ASTExpr[]; output_idx=Any["i"],
+        ag1(b) = _AC_ESS.OpExpr("faq", _AC_ESS.ASTExpr[]; output_idx=Any["i"],
             ranges=Dict("i" => _AC_ESS.IndexSetRef("x")), expr_body=b)
         # w[i] = 2·u[i] — an elementwise materialized observed, i.e. a
         # vectorizable producer whose ONLY reader is the nest below.
         weq = _AC_ESS.Equation(_v("w"), ag1(_op("*", _n(2.0), _idx("u", _v("i")))))
-        nest = _AC_ESS.OpExpr("aggregate", _AC_ESS.ASTExpr[]; output_idx=Any["i"],
+        nest = _AC_ESS.OpExpr("faq", _AC_ESS.ASTExpr[]; output_idx=Any["i"],
             reduce="+", ranges=Dict("i" => _AC_ESS.IndexSetRef("x"),
                                     "j" => _AC_ESS.IndexSetRef("x")),
             expr_body=_op("*", _op("+", _v("i"), _v("j")), _idx("w", _v("j"))))
@@ -246,7 +246,7 @@ const _AC_OFF = Dict("ESS_ARRAY_CONTRACTION_DISABLE" => "1")
         NI, NK = 4, 12
         valence = [Float64(2 + (i % 3)) for i in 1:NI]     # 2..4 neighbours per cell
         W = [[Float64((i + 2k) % 7) for k in 1:NK] for i in 1:NI]
-        agg = Dict{String,Any}("op" => "aggregate", "semiring" => "sum_product",
+        agg = Dict{String,Any}("op" => "faq", "semiring" => "sum_product",
             "args" => Any[], "output_idx" => Any["i"],
             "ranges" => Dict("i" => Any[1, NI],
                              "k" => Any[1, Dict("op" => "index",
@@ -255,7 +255,7 @@ const _AC_OFF = Dict("ESS_ARRAY_CONTRACTION_DISABLE" => "1")
                 Dict("op" => "index", "args" => Any[
                     Dict("op" => "const", "args" => Any[], "value" => W), "i", "k"]),
                 Dict("op" => "index", "args" => Any["q", "i"])]))
-        doc = Dict{String,Any}("esm" => "0.8.0", "metadata" => Dict("name" => "ac_ragged"),
+        doc = Dict{String,Any}("esm" => "1.1.0", "metadata" => Dict("name" => "ac_ragged"),
           "models" => Dict("R" => Dict{String,Any}(
             "variables" => Dict("q" => Dict("type" => "unknown", "shape" => Any["i"]),
                                 "out" => Dict("type" => "unknown", "shape" => Any["i"])),

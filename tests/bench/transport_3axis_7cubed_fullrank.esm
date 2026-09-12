@@ -1,8 +1,8 @@
 {
- "esm": "1.0.0",
+ "esm": "1.1.0",
  "metadata": {
   "name": "transport_3axis_7cubed_fullrank",
-  "description": "RFC out-of-line-expression-templates compile-once measurement fixture. A 7x7x7 single-tracer transport, rhs -(Dx(q)+Dy(q)+Dz(q)); each spatial derivative lowers by a match rule to a per-axis makearray with FIVE full-rank boundary-class regions (two one-sided faces, two near-face centered classes, a wide-stencil interior), every region value an apply_expression_template reference to a shared per-class stencil template. All region bodies are rank-3 aggregates, so the affine box processor fires: fused (expanded) builds compile one spine per (x-class, y-class, z-class) = 5*5*5 = 125 branch keys, while the compile-once tier compiles 5+5+5 = 15 body variants plus 125 tiny parent spines and calls the bodies as sub-kernels."
+  "description": "RFC out-of-line-expression-templates compile-once measurement fixture. A 7x7x7 single-tracer transport, rhs -(Dx(q)+Dy(q)+Dz(q)); each spatial derivative lowers by a match rule to a per-axis makearray with FIVE full-rank boundary-class regions (two one-sided faces, two near-face centered classes, a wide-stencil interior), every region value an apply_expression_template reference to a shared per-class stencil template. All region bodies are rank-3 faq nodes, so the affine box processor fires: fused (expanded) builds compile one spine per (x-class, y-class, z-class) = 5*5*5 = 125 branch keys, while the compile-once tier compiles 5+5+5 = 15 body variants plus 125 tiny parent spines and calls the bodies as sub-kernels."
  },
  "index_sets": {
   "x": {
@@ -26,7 +26,7 @@
       "f"
      ],
      "body": {
-      "op": "aggregate",
+      "op": "faq",
       "output_idx": [
        "i",
        "j",
@@ -291,7 +291,7 @@
       "f"
      ],
      "body": {
-      "op": "aggregate",
+      "op": "faq",
       "output_idx": [
        "i",
        "j",
@@ -382,7 +382,7 @@
       "f"
      ],
      "body": {
-      "op": "aggregate",
+      "op": "faq",
       "output_idx": [
        "i",
        "j",
@@ -439,7 +439,7 @@
       "f"
      ],
      "body": {
-      "op": "aggregate",
+      "op": "faq",
       "output_idx": [
        "i",
        "j",
@@ -496,7 +496,7 @@
       "f"
      ],
      "body": {
-      "op": "aggregate",
+      "op": "faq",
       "output_idx": [
        "i",
        "j",
@@ -717,7 +717,7 @@
       "f"
      ],
      "body": {
-      "op": "aggregate",
+      "op": "faq",
       "output_idx": [
        "i",
        "j",
@@ -982,7 +982,7 @@
       "f"
      ],
      "body": {
-      "op": "aggregate",
+      "op": "faq",
       "output_idx": [
        "i",
        "j",
@@ -1073,7 +1073,7 @@
       "f"
      ],
      "body": {
-      "op": "aggregate",
+      "op": "faq",
       "output_idx": [
        "i",
        "j",
@@ -1130,7 +1130,7 @@
       "f"
      ],
      "body": {
-      "op": "aggregate",
+      "op": "faq",
       "output_idx": [
        "i",
        "j",
@@ -1187,7 +1187,7 @@
       "f"
      ],
      "body": {
-      "op": "aggregate",
+      "op": "faq",
       "output_idx": [
        "i",
        "j",
@@ -1408,7 +1408,7 @@
       "f"
      ],
      "body": {
-      "op": "aggregate",
+      "op": "faq",
       "output_idx": [
        "i",
        "j",
@@ -1673,7 +1673,7 @@
       "f"
      ],
      "body": {
-      "op": "aggregate",
+      "op": "faq",
       "output_idx": [
        "i",
        "j",
@@ -1764,7 +1764,7 @@
       "f"
      ],
      "body": {
-      "op": "aggregate",
+      "op": "faq",
       "output_idx": [
        "i",
        "j",
@@ -1821,7 +1821,7 @@
       "f"
      ],
      "body": {
-      "op": "aggregate",
+      "op": "faq",
       "output_idx": [
        "i",
        "j",
@@ -1878,7 +1878,7 @@
       "f"
      ],
      "body": {
-      "op": "aggregate",
+      "op": "faq",
       "output_idx": [
        "i",
        "j",

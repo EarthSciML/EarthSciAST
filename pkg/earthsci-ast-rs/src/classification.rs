@@ -138,7 +138,7 @@ impl Classification {
         for eq in equations {
             match lhs_form(&eq.lhs) {
                 // `D(x)/dt ~ …`, including the wrapped spellings `D(x[i])` and
-                // an `aggregate` whose `expr` is the derivative.
+                // a `faq` whose `expr` is the derivative.
                 LhsForm::Derivative(name) => {
                     if unknowns.contains(name.as_str()) {
                         ode_states.insert(name);
@@ -556,9 +556,9 @@ pub enum LhsForm {
 /// Classify an equation LHS.
 ///
 /// A derivative LHS may be WRAPPED and still credits its base variable:
-/// `D(u)`, `D(u[i])` (an `index` under the `D`), and an `aggregate` whose
+/// `D(u)`, `D(u[i])` (an `index` under the `D`), and a `faq` whose
 /// `expr` is a `D(…)` — the arrayed spelling every discretized fixture uses.
-/// The same unwrapping applies to a bare LHS, so `aggregate{expr: y[i]}` still
+/// The same unwrapping applies to a bare LHS, so `faq{expr: y[i]}` still
 /// reads as a definition of `y`.
 pub fn lhs_form(lhs: &Expr) -> LhsForm {
     match lhs {
@@ -572,8 +572,8 @@ pub fn lhs_form(lhs: &Expr) -> LhsForm {
                 .and_then(base_variable)
                 .map(LhsForm::Derivative)
                 .unwrap_or(LhsForm::Expression),
-            // An `aggregate`/`arrayop` LHS is a shell around the real form.
-            "aggregate" | "arrayop" => node
+            // A `faq` LHS is a shell around the real form.
+            "faq" => node
                 .expr
                 .as_deref()
                 .map(lhs_form)
@@ -592,14 +592,14 @@ pub fn lhs_form(lhs: &Expr) -> LhsForm {
 }
 
 /// The base variable of an LHS operand, peeling the wrappers that do not
-/// change WHICH quantity is being written: `index`, `aggregate`/`arrayop`
+/// change WHICH quantity is being written: `index`, `faq`
 /// shells, and `broadcast`.
 fn base_variable(expr: &Expr) -> Option<String> {
     match expr {
         Expr::Variable(name) => Some(name.clone()),
         Expr::Operator(node) => match node.op.as_str() {
             "index" | "broadcast" => node.args.first().and_then(base_variable),
-            "aggregate" | "arrayop" => node
+            "faq" => node
                 .expr
                 .as_deref()
                 .and_then(base_variable)
@@ -755,7 +755,7 @@ mod tests {
         assert!(c.brownian_parameters.is_empty());
     }
 
-    /// A derivative LHS may be wrapped: `D(u[i])` and an `aggregate` whose
+    /// A derivative LHS may be wrapped: `D(u[i])` and a `faq` whose
     /// `expr` is the derivative both credit `u`.
     #[test]
     fn wrapped_derivative_lhs_credits_the_base_variable() {
@@ -765,7 +765,7 @@ mod tests {
                 "k": { "type": "parameter", "units": "1/s", "default": 1.0 }
             },
             "equations": [
-                { "lhs": { "op": "aggregate", "output_idx": ["i"],
+                { "lhs": { "op": "faq", "output_idx": ["i"],
                            "ranges": { "i": { "from": "cells" } },
                            "args": ["u"],
                            "expr": { "op": "D",

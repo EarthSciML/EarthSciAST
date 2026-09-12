@@ -1755,7 +1755,7 @@ class TestSection11Domain:
     v0.8.0 removed the named-``domains`` map together with the ``spatial`` /
     ``coordinate_transforms`` geometry block and the domain-level
     ``initial_conditions`` / ``boundary_conditions`` (grid geometry is now
-    expressed via the ``aggregate`` IR). Only the single ``domain`` with its
+    expressed via the ``faq`` IR). Only the single ``domain`` with its
     temporal block survives, so that is all this section pins.
     """
 

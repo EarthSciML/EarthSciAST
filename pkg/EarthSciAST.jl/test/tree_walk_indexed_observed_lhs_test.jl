@@ -38,7 +38,7 @@ const ESM_IOL = EarthSciAST
     N = 4
     isets = Dict("lev" => ESM_IOL.IndexSet("interval"; size = N))
     _iol_rng() = Dict{String,Any}("k" => ESM_IOL.IndexSetRef("lev"))
-    _iol_agg(body; kw...) = ESM_IOL.OpExpr("aggregate", ESM_IOL.ASTExpr[];
+    _iol_agg(body; kw...) = ESM_IOL.OpExpr("faq", ESM_IOL.ASTExpr[];
                                            output_idx = Any["k"],
                                            ranges = _iol_rng(),
                                            expr_body = body, kw...)
@@ -101,7 +101,7 @@ const ESM_IOL = EarthSciAST
         @test (pout[1].lhs::ESM_IOL.VarExpr).name == "w"
         wrapped = pout[1].rhs
         @test wrapped isa ESM_IOL.OpExpr
-        @test (wrapped::ESM_IOL.OpExpr).op == "aggregate"
+        @test (wrapped::ESM_IOL.OpExpr).op == "faq"
         @test (wrapped::ESM_IOL.OpExpr).output_idx == Any["k"]
         @test collect(keys((wrapped::ESM_IOL.OpExpr).ranges)) == ["k"]
         @test (wrapped::ESM_IOL.OpExpr).expr_body === pmodel.equations[1].rhs
@@ -125,7 +125,7 @@ const ESM_IOL = EarthSciAST
             _iol_agg(_iol_body())), _iol_deriv()])
         # A SCALAR reduction (empty `output_idx`) is no frame at all.
         @test untouched([ESM_IOL.Equation(
-            ESM_IOL.OpExpr("aggregate", ESM_IOL.ASTExpr[];
+            ESM_IOL.OpExpr("faq", ESM_IOL.ASTExpr[];
                            output_idx = Any[], ranges = _iol_rng(),
                            expr_body = _idx("w", _v("k"))),
             _iol_agg(_iol_body())), _iol_deriv()])

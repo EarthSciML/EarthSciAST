@@ -1,7 +1,7 @@
 # `broadcast` (esm-spec §4.3.4) + name-based operand alignment.
 #
 # Two semantics land here, both pinned against the SAME oracle: the explicit
-# `aggregate` spelling with per-cell `index` gathers, which this binding has
+# `faq` spelling with per-cell `index` gathers, which this binding has
 # always evaluated correctly.
 #
 #  1. `broadcast(fn=F, args)` ≡ `{"op":F,"args":args}`. The build lowers the node
@@ -13,7 +13,7 @@
 #     operand transposes (it is not reinterpreted positionally), and an operand
 #     naming an axis the result does not have is a hard error.
 #
-# Anonymous shapes (an `aggregate`/`arrayop`/`makearray` producer, whose
+# Anonymous shapes (a `faq`/`makearray` producer, whose
 # `output_idx` symbols are node-local) keep POSITIONAL semantics — pinned below
 # so the name rule can never silently widen to them.
 using Test
@@ -34,7 +34,7 @@ _bc_bcast(fn, a...) = fn === nothing ?
     Dict{String,Any}("op" => "broadcast", "args" => collect(Any, a)) :
     Dict{String,Any}("op" => "broadcast", "fn" => fn, "args" => collect(Any, a))
 _bc_agg(out, ranges, body) = Dict{String,Any}(
-    "op" => "aggregate", "output_idx" => collect(Any, out),
+    "op" => "faq", "output_idx" => collect(Any, out),
     "ranges" => Dict{String,Any}(k => Dict{String,Any}("from" => v)
                                  for (k, v) in ranges),
     "args" => Any[], "expr" => body)
@@ -108,7 +108,7 @@ end
 # `D(dp) = <rhs>` over the #100 variable set, under a given model name.
 _bc_model(name, rhs) = _bc_doc(name, _bc_vars(), Any[_bc_eq(_bc_D("dp"), rhs)])
 
-# The explicit per-cell oracle: `aggregate` over (i,j,k) with `body` written in
+# The explicit per-cell oracle: `faq` over (i,j,k) with `body` written in
 # those index symbols.
 _bc_oracle(name, body) = _bc_model(name, _bc_agg(("i", "j", "k"),
     ("i" => "lon", "j" => "lat", "k" => "lev"), body))
@@ -249,7 +249,7 @@ end
     cases = [
         (_bc_bcast("not_a_real_op", "x"), "unknown"),
         (_bc_bcast(nothing, "x"),         "missing"),
-        (_bc_bcast("aggregate", "x"),     "non_scalar"),
+        (_bc_bcast("faq", "x"),     "non_scalar"),
         (_bc_bcast("index", "x"),         "non_scalar"),
         (_bc_bcast("makearray", "x"),     "non_scalar"),
         (_bc_bcast("grad", "x"),          "non_scalar"),
@@ -300,7 +300,7 @@ end
         Any[_bc_eq(_bc_D("x"), node)])
     for (node, code) in [(_bc_bcast("not_a_real_op", "x"), "E_TREEWALK_BROADCAST_FN"),
                          (_bc_bcast(nothing, "x"),         "E_TREEWALK_BROADCAST_FN"),
-                         (_bc_bcast("aggregate", "x"),     "E_TREEWALK_BROADCAST_FN"),
+                         (_bc_bcast("faq", "x"),     "E_TREEWALK_BROADCAST_FN"),
                          (_bc_bcast("sin", "x", "x"),      "E_TREEWALK_BROADCAST_FN"),
                          (_bc_bcast("/", "x"),             "E_TREEWALK_BROADCAST_FN"),
                          (_bc_bcast("min", "x"),           "E_TREEWALK_BROADCAST_FN")]
@@ -363,7 +363,7 @@ end
     # scalar-fn category derivation cover the same vocabulary; the ops below are
     # the ones every binding must REFUSE to descend through, because each
     # consumes its operands whole under its own contract.
-    for n in ["aggregate", "arrayop", "index", "makearray", "broadcast",
+    for n in ["faq", "faq", "index", "makearray", "broadcast",
               "reshape", "transpose", "concat",
               "skolem", "intersect_polygon", "polygon_intersection_area",
               "grad", "div", "laplacian", "D", "ic", "fn", "call",
@@ -386,7 +386,7 @@ end
 end
 
 @testset "MTK exporter speaks the same `fn` vocabulary" begin
-    # The shared `tests/fixtures/arrayop/` corpus runs through the MTK exporter,
+    # The shared `tests/fixtures/faq/` corpus runs through the MTK exporter,
     # not the tree-walk evaluator, so its `broadcast` vocabulary must be the same
     # one `validate()` accepts. It used to be a hand-listed dozen ops; it is now
     # derived from the registry (arithmetic + elementary rows with a scalar fn).
@@ -401,11 +401,11 @@ end
     # Comparison / logical / control rows stay OUT: broadcasting them would
     # yield symbolic Booleans, not the spec's 1.0/0.0 comparison values.
     for n in ["<", "==", "and", "or", "not", "ifelse", "Pre", "pi",
-              "aggregate", "index", "makearray", "broadcast"]
+              "faq", "index", "makearray", "broadcast"]
         @test !haskey(fns, n)
     end
     # A unary broadcast lowers through the exporter to the plain unary op — the
-    # shape `tests/fixtures/arrayop/27_broadcast_unary.esm` exercises.
+    # shape `tests/fixtures/faq/27_broadcast_unary.esm` exercises.
     vd = Dict{String,Any}("u" => Symbolics.variable(:u))
     dd = Dict{String,Any}()
     for f in ["-", "exp", "sqrt", "abs", "sin", "tan"]
@@ -425,7 +425,7 @@ end
     # …and the §4.3.4 `fn` contract is enforced there too.
     for bad in [ESS.OpExpr("broadcast", ESS.ASTExpr[_v("u")]; fn="not_a_real_op"),
                 ESS.OpExpr("broadcast", ESS.ASTExpr[_v("u")]),
-                ESS.OpExpr("broadcast", ESS.ASTExpr[_v("u")]; fn="aggregate"),
+                ESS.OpExpr("broadcast", ESS.ASTExpr[_v("u")]; fn="faq"),
                 ESS.OpExpr("broadcast", ESS.ASTExpr[_v("u"), _v("u")]; fn="sin"),
                 ESS.OpExpr("broadcast", ESS.ASTExpr[_v("u")]; fn="min")]
         @test_throws ArgumentError MTKExt._build_broadcast(bad, vd, nothing, dd)
@@ -447,7 +447,7 @@ end
               "<", "==", "and", "not", "ifelse", "pi"]
         @test E._is_scalar_op(n)
     end
-    for n in ["aggregate", "arrayop", "index", "makearray", "broadcast",
+    for n in ["faq", "faq", "index", "makearray", "broadcast",
               "reshape", "transpose", "concat", "D", "ic", "grad", "div",
               "laplacian", "fn", "call", "const", "enum", "skolem",
               "intersect_polygon", "polygon_intersection_area",
@@ -460,7 +460,7 @@ end
     @test E._broadcast_fn_problem(nothing, 1).kind === :missing
     @test E._broadcast_fn_problem("", 1).kind === :missing
     @test E._broadcast_fn_problem("zzz", 1).kind === :unknown
-    @test E._broadcast_fn_problem("aggregate", 1).kind === :non_scalar
+    @test E._broadcast_fn_problem("faq", 1).kind === :non_scalar
 end
 
 end

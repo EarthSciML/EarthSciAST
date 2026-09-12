@@ -2,7 +2,7 @@
 //! (ess-bdm). These tests assert the structural property the bead requires —
 //! the discretized spatial RHS is evaluated as **whole-array kernels**, not a
 //! per-cell scalar loop — rather than just a numeric trajectory (the inline
-//! analytic assertions in `arrayop_simulate_tests` already cover the latter).
+//! analytic assertions in `faq_simulate_tests` already cover the latter).
 //!
 //! Three properties are checked:
 //!   1. The vectorized path is actually *taken* for 1-D and 2-D diffusion
@@ -24,7 +24,7 @@ use std::path::PathBuf;
 mod common;
 
 fn fixture(name: &str) -> PathBuf {
-    common::repo_fixture("fixtures/arrayop").join(name)
+    common::repo_fixture("fixtures/faq").join(name)
 }
 
 fn compile_fixture(name: &str) -> ArrayCompiled {
@@ -39,22 +39,22 @@ fn sample_state(n: usize) -> Vec<f64> {
 }
 
 /// A discretized 1-D heat equation on `n` cells, encoded exactly like
-/// `fixtures/arrayop/15_discretized_1d_heat.esm` (interior + two ghost
+/// `fixtures/faq/15_discretized_1d_heat.esm` (interior + two ghost
 /// regions) but parameterized by grid size, so the same stencil AST can be
 /// evaluated at two different N.
 fn heat1d_json(n: usize) -> String {
     const TEMPLATE: &str = r#"{
- "esm": "1.0.0",
+ "esm": "1.1.0",
  "metadata": {"name": "heat1d_param"},
  "models": {
   "Heat1D": {
    "variables": {"u": {"type": "unknown", "shape": ["i"]}},
    "equations": [
     {
-     "lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+     "lhs": {"op": "faq", "args": [], "output_idx": ["i"],
              "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "i"]}], "wrt": "t"},
              "ranges": {"i": [1, __N__]}},
-     "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+     "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
              "ranges": {"i": [1, __N__]},
              "expr": {"op": "index", "args": [
                {"op": "makearray", "args": [],
@@ -204,21 +204,21 @@ fn kernel_op_count_is_independent_of_grid_size() {
 /// A 1-D linear upwind advection `∂u/∂t = -v ∂u/∂x` discretized first-order
 /// upwind (v>0): `D(u[i]) = -(v/dx)*(u[i] - u[i-1])`, `i ∈ [1, n]`, with a zero
 /// inflow at the left edge (the `u[i-1]` read at `i=1` falls on the ghost cell
-/// → 0). A bare-arithmetic pure-map arrayop (no makearray) — the second stencil
+/// → 0). A bare-arithmetic pure-map faq (no makearray) — the second stencil
 /// shape the vectorized evaluator must handle.
 fn advection1d_json(n: usize, c: f64) -> String {
     const TEMPLATE: &str = r#"{
- "esm": "1.0.0",
+ "esm": "1.1.0",
  "metadata": {"name": "advection1d"},
  "models": {
   "Adv1D": {
    "variables": {"u": {"type": "unknown", "shape": ["i"]}},
    "equations": [
     {
-     "lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+     "lhs": {"op": "faq", "args": [], "output_idx": ["i"],
              "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "i"]}], "wrt": "t"},
              "ranges": {"i": [1, __N__]}},
-     "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+     "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
              "ranges": {"i": [1, __N__]},
              "expr": {"op": "*", "args": [__NEGC__, {"op": "-", "args": [
                 {"op": "index", "args": ["u", "i"]},
@@ -331,17 +331,17 @@ fn advection_1d_integrates_end_to_end_via_vectorized_path() {
 /// `sum_k 25·ifelse(k==0,-2,1)·u[i+k]` contracts `k ∈ [-1,1]`.
 fn einsum_heat1d_json(n: usize) -> String {
     const TEMPLATE: &str = r#"{
- "esm": "1.0.0",
+ "esm": "1.1.0",
  "metadata": {"name": "einsum_heat1d_param"},
  "models": {
   "Heat1DEinsum": {
    "variables": {"u": {"type": "unknown", "shape": ["i"]}},
    "equations": [
     {
-     "lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+     "lhs": {"op": "faq", "args": [], "output_idx": ["i"],
              "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "i"]}], "wrt": "t"},
              "ranges": {"i": [1, __N__]}},
-     "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+     "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
              "reduce": "+",
              "ranges": {"i": [1, __N__], "k": [-1, 1]},
              "expr": {"op": "*", "args": [
@@ -362,17 +362,17 @@ fn einsum_heat1d_json(n: usize) -> String {
 /// grid size — identical stencil AST at every size. Mirrors fixture 17.
 fn latlon_heat_json(nlon: usize, nlat: usize) -> String {
     const TEMPLATE: &str = r#"{
- "esm": "1.0.0",
+ "esm": "1.1.0",
  "metadata": {"name": "latlon_heat_param"},
  "models": {
   "HeatLatLon": {
    "variables": {"u": {"type": "unknown", "shape": ["i", "j"]}},
    "equations": [
     {
-     "lhs": {"op": "aggregate", "args": [], "output_idx": ["i", "j"],
+     "lhs": {"op": "faq", "args": [], "output_idx": ["i", "j"],
              "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "i", "j"]}], "wrt": "t"},
              "ranges": {"i": [1, __NLON__], "j": [1, __NLAT__]}},
-     "rhs": {"op": "aggregate", "args": [], "output_idx": ["i", "j"],
+     "rhs": {"op": "faq", "args": [], "output_idx": ["i", "j"],
              "ranges": {"i": [1, __NLON__], "j": [1, __NLAT__]},
              "expr": {"op": "*", "args": [0.4, {"op": "+", "args": [
                {"op": "index", "args": ["u",
@@ -415,7 +415,7 @@ fn latlon_heat_json(nlon: usize, nlat: usize) -> String {
 /// field feeding the spatial derivative) in miniature.
 fn varying_array_observed_json(n: usize) -> String {
     const TEMPLATE: &str = r#"{
- "esm": "1.0.0",
+ "esm": "1.1.0",
  "metadata": {"name": "obs_vec"},
  "models": {
   "ObsVec": {
@@ -424,20 +424,20 @@ fn varying_array_observed_json(n: usize) -> String {
      "w": {"type": "unknown", "shape": ["i"]}
    },
    "equations": [
-    {"lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+    {"lhs": {"op": "faq", "args": [], "output_idx": ["i"],
              "expr": {"op": "index", "args": ["w", "i"]},
              "ranges": {"i": [1, __N__]}},
-     "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"], "ranges": {"i": [1, __N__]},
+     "rhs": {"op": "faq", "args": [], "output_idx": ["i"], "ranges": {"i": [1, __N__]},
              "expr": {"op": "+", "args": [
                {"op": "*", "args": [
                  {"op": "index", "args": ["u", "i"]},
                  {"op": "index", "args": ["u", "i"]}]},
                {"op": "atan2", "args": [{"op": "index", "args": ["u", "i"]}, 2]}
              ]}}},
-    {"lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+    {"lhs": {"op": "faq", "args": [], "output_idx": ["i"],
              "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "i"]}], "wrt": "t"},
              "ranges": {"i": [1, __N__]}},
-     "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"], "ranges": {"i": [1, __N__]},
+     "rhs": {"op": "faq", "args": [], "output_idx": ["i"], "ranges": {"i": [1, __N__]},
              "expr": {"op": "index", "args": ["w", "i"]}}}
    ]
   }
@@ -495,15 +495,15 @@ fn varying_array_observed_vectorizes_and_matches_oracle() {
 /// vectorized contraction fold (`eval_vec_contracted`).
 fn filtered_einsum_json(n: usize) -> String {
     const TEMPLATE: &str = r#"{
- "esm": "1.0.0",
+ "esm": "1.1.0",
  "metadata": {"name": "filtered_einsum"},
  "models": {"M": {
    "variables": {"u": {"type": "unknown", "shape": ["i"]}},
    "equations": [
-    {"lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+    {"lhs": {"op": "faq", "args": [], "output_idx": ["i"],
              "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "i"]}], "wrt": "t"},
              "ranges": {"i": [1, __N__]}},
-     "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"], "reduce": "+",
+     "rhs": {"op": "faq", "args": [], "output_idx": ["i"], "reduce": "+",
              "ranges": {"i": [1, __N__], "k": [-1, 1]},
              "filter": {"op": "!=", "args": ["k", 0]},
              "expr": {"op": "index", "args": ["u", {"op": "+", "args": ["i", "k"]}]}}}
@@ -554,15 +554,15 @@ fn filtered_contraction_vectorizes_and_matches_oracle() {
 /// select exercises the whole-array comparison + `vec_select` path.
 fn array_ifelse_json(n: usize) -> String {
     const TEMPLATE: &str = r#"{
- "esm": "1.0.0",
+ "esm": "1.1.0",
  "metadata": {"name": "array_ifelse"},
  "models": {"M": {
    "variables": {"u": {"type": "unknown", "shape": ["i"]}},
    "equations": [
-    {"lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+    {"lhs": {"op": "faq", "args": [], "output_idx": ["i"],
              "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "i"]}], "wrt": "t"},
              "ranges": {"i": [1, __N__]}},
-     "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"], "ranges": {"i": [1, __N__]},
+     "rhs": {"op": "faq", "args": [], "output_idx": ["i"], "ranges": {"i": [1, __N__]},
              "expr": {"op": "ifelse", "args": [
                {"op": ">", "args": [{"op": "index", "args": ["u", "i"]}, 0.5]},
                {"op": "*", "args": [2, {"op": "index", "args": ["u", "i"]}]},
@@ -613,7 +613,7 @@ fn array_valued_ifelse_vectorizes_and_matches_oracle() {
 /// constant per RHS call and read as plain source arrays.
 fn regrid_gather_json(ni: usize, nj: usize) -> String {
     const TEMPLATE: &str = r#"{
- "esm": "1.0.0",
+ "esm": "1.1.0",
  "metadata": {"name": "regrid_gather"},
  "models": {"M": {
    "variables": {
@@ -622,10 +622,10 @@ fn regrid_gather_json(ni: usize, nj: usize) -> String {
      "F": {"type": "unknown", "shape": ["i"]}
    },
    "equations": [
-    {"lhs": {"op": "aggregate", "args": [], "output_idx": ["j"],
+    {"lhs": {"op": "faq", "args": [], "output_idx": ["j"],
              "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "j"]}], "wrt": "t"},
              "ranges": {"j": [1, __NJ__]}},
-     "rhs": {"op": "aggregate", "args": [], "output_idx": ["j"], "reduce": "+",
+     "rhs": {"op": "faq", "args": [], "output_idx": ["j"], "reduce": "+",
              "ranges": {"j": [1, __NJ__], "i": [1, __NI__]},
              "expr": {"op": "*", "args": [
                {"op": "index", "args": ["A", "i", "j"]},
@@ -736,17 +736,17 @@ fn periodic_wrap_kernel_op_count_is_independent_of_grid_size() {
 /// Every legal arity of the ops that used to diverge, in one vectorizable body.
 fn all_legal_arities_json(n: usize) -> String {
     const TEMPLATE: &str = r#"{
- "esm": "1.0.0",
+ "esm": "1.1.0",
  "metadata": {"name": "arity_matrix"},
  "models": {
   "ArityMatrix": {
    "variables": {"u": {"type": "unknown", "shape": ["i"]}},
    "equations": [
     {
-     "lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+     "lhs": {"op": "faq", "args": [], "output_idx": ["i"],
              "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "i"]}], "wrt": "t"},
              "ranges": {"i": [1, __N__]}},
-     "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+     "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
              "ranges": {"i": [1, __N__]},
              "expr": {"op": "+", "args": [
                {"op": "-",     "args": [{"op": "index", "args": ["u", "i"]}, 1]},
@@ -805,7 +805,7 @@ fn vectorized_matches_oracle_on_every_legal_arity() {
 fn array_filter_json() -> String {
     r#"
         {
-          "esm": "1.0.0",
+          "esm": "1.1.0",
           "metadata": {
             "name": "array_filter"
           },
@@ -828,7 +828,7 @@ fn array_filter_json() -> String {
               "equations": [
                 {
                   "lhs": {
-                    "op": "aggregate",
+                    "op": "faq",
                     "args": [],
                     "output_idx": [
                       "i"
@@ -854,7 +854,7 @@ fn array_filter_json() -> String {
                     }
                   },
                   "rhs": {
-                    "op": "aggregate",
+                    "op": "faq",
                     "args": [],
                     "output_idx": [
                       "i"
@@ -877,7 +877,7 @@ fn array_filter_json() -> String {
                 },
                 {
                   "lhs": {
-                    "op": "aggregate",
+                    "op": "faq",
                     "args": [],
                     "output_idx": [
                       "i"
@@ -903,7 +903,7 @@ fn array_filter_json() -> String {
                     }
                   },
                   "rhs": {
-                    "op": "aggregate",
+                    "op": "faq",
                     "args": [],
                     "output_idx": [
                       "i"
@@ -983,7 +983,7 @@ fn array_valued_filter_is_a_per_cell_mask_on_both_paths() {
 // Issue #101 — the shared unary-broadcast conformance fixture.
 // ============================================================================
 
-/// Run `fixtures/arrayop/27_broadcast_unary.esm` end-to-end and check its inline
+/// Run `fixtures/faq/27_broadcast_unary.esm` end-to-end and check its inline
 /// assertions, on BOTH evaluation paths.
 ///
 /// The fixture is the cross-binding pin (Julia and Python glob this directory

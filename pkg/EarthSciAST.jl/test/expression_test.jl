@@ -337,7 +337,7 @@ using JSON3
         E = EarthSciAST
         # aggregate whose body/filter/bounds/table-axes/key carry variables
         # invisible to an args-only traversal.
-        agg = OpExpr("aggregate", E.ASTExpr[];
+        agg = OpExpr("faq", E.ASTExpr[];
             output_idx=Any["i"],
             ranges=Dict{String,Any}(
                 "i" => E.IndexSetRef("cells"),

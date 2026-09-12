@@ -44,7 +44,7 @@ func edgeStrings(edges []ReferenceEdge) []string {
 // precisely to pin the two inter-node reference edges of RFC §6.1: a derived
 // index set → its `from_faq` node, and a node → the index set it references.
 func TestReferenceGraphNodeAddressingFixture(t *testing.T) {
-	doc := readRawDocument(t, filepath.Join(repoTestsDir(t), "valid", "aggregate", "node_addressing_from_faq.esm"))
+	doc := readRawDocument(t, filepath.Join(repoTestsDir(t), "valid", "faq", "node_addressing_from_faq.esm"))
 
 	graphs, err := ResolveReferences(doc)
 	if err != nil {
@@ -71,7 +71,7 @@ func TestReferenceGraphNodeAddressingFixture(t *testing.T) {
 	if !ok {
 		t.Fatalf("id-bearing aggregate not addressed by its id; vertices = %v", g.VertexKeys())
 	}
-	if producer.NodeID != "edge_enum" || producer.Op != "aggregate" {
+	if producer.NodeID != "edge_enum" || producer.Op != "faq" {
 		t.Fatalf("producer vertex = %+v", producer)
 	}
 	if producer.Path != "equations/0/rhs" {
@@ -142,7 +142,7 @@ func TestReferenceGraphNodeAddressingFixture(t *testing.T) {
 // "Python build_reference_graph -> ReferenceResolutionError
 // E_REF_UNDECLARED_INDEX_SET".
 func TestReferenceGraphRejectsUndeclaredIndexSet(t *testing.T) {
-	doc := readRawDocument(t, filepath.Join(repoTestsDir(t), "invalid", "aggregate", "undeclared_from_name.esm"))
+	doc := readRawDocument(t, filepath.Join(repoTestsDir(t), "invalid", "faq", "undeclared_from_name.esm"))
 
 	_, err := ResolveReferences(doc)
 	if err == nil {
@@ -281,7 +281,7 @@ func TestReferenceGraphJoinFactors(t *testing.T) {
 			map[string]any{
 				"lhs": "y",
 				"rhs": map[string]any{
-					"op":         "aggregate",
+					"op":         "faq",
 					"id":         "joined",
 					"args":       []any{"src"},
 					"output_idx": []any{"cell"},
@@ -326,7 +326,7 @@ func TestReferenceGraphJoinFactors(t *testing.T) {
 			map[string]any{
 				"lhs": "y",
 				"rhs": map[string]any{
-					"op":         "aggregate",
+					"op":         "faq",
 					"args":       []any{},
 					"output_idx": []any{},
 					"join":       []any{map[string]any{"on": []any{[]any{"nowhere", "x"}}}},
@@ -358,7 +358,7 @@ func TestReferenceGraphJoinBinderClasses(t *testing.T) {
 				map[string]any{
 					"lhs": "y",
 					"rhs": map[string]any{
-						"op":         "aggregate",
+						"op":         "faq",
 						"id":         "j",
 						"args":       []any{"w"},
 						"output_idx": []any{},
@@ -406,7 +406,7 @@ func TestReferenceGraphJoinBinderClasses(t *testing.T) {
 // `id` must be unique within a model, or nothing can be addressed by it.
 func TestReferenceGraphDuplicateNodeID(t *testing.T) {
 	agg := func() map[string]any {
-		return map[string]any{"op": "aggregate", "id": "dup", "args": []any{}, "output_idx": []any{}}
+		return map[string]any{"op": "faq", "id": "dup", "args": []any{}, "output_idx": []any{}}
 	}
 	model := map[string]any{
 		"equations": []any{
@@ -450,7 +450,7 @@ func TestReferenceGraphCycle(t *testing.T) {
 			map[string]any{
 				"lhs": "a",
 				"rhs": map[string]any{
-					"op":         "aggregate",
+					"op":         "faq",
 					"id":         "self",
 					"args":       []any{},
 					"output_idx": []any{},
@@ -496,7 +496,7 @@ func TestReferenceGraphCycle(t *testing.T) {
 // with the raw ones — the structural addresses they mint must be identical,
 // which is the whole point of routing both through the raw JSON view.
 func TestReferenceGraphTypedConveniences(t *testing.T) {
-	path := filepath.Join(repoTestsDir(t), "valid", "aggregate", "node_addressing_from_faq.esm")
+	path := filepath.Join(repoTestsDir(t), "valid", "faq", "node_addressing_from_faq.esm")
 	file, err := LoadPath(path)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -585,14 +585,14 @@ func TestFromFAQResolvesProducerInAnotherModel(t *testing.T) {
 			"Consumer": map[string]any{"equations": []any{map[string]any{
 				"lhs": "c",
 				"rhs": map[string]any{
-					"op": "aggregate", "args": []any{}, "output_idx": []any{},
+					"op": "faq", "args": []any{}, "output_idx": []any{},
 					"ranges": map[string]any{"e": map[string]any{"from": "edges"}},
 				},
 			}}},
 			"Producer": map[string]any{"equations": []any{map[string]any{
 				"lhs": "p",
 				"rhs": map[string]any{
-					"op": "aggregate", "args": []any{}, "id": "edge_faq",
+					"op": "faq", "args": []any{}, "id": "edge_faq",
 					"output_idx": []any{"edge"},
 					"ranges":     map[string]any{"f": map[string]any{"from": "faces"}},
 				},
@@ -629,7 +629,7 @@ func TestFromFAQResolvesProducerInAnotherModel(t *testing.T) {
 // document does not weaken the error — a name no node carries still fails.
 func TestFromFAQUnknownAcrossDocumentStillErrors(t *testing.T) {
 	agg := func(id string) map[string]any {
-		return map[string]any{"op": "aggregate", "id": id, "args": []any{}, "output_idx": []any{}}
+		return map[string]any{"op": "faq", "id": id, "args": []any{}, "output_idx": []any{}}
 	}
 	doc := map[string]any{
 		"index_sets": map[string]any{
@@ -651,7 +651,7 @@ func TestFromFAQUnknownAcrossDocumentStillErrors(t *testing.T) {
 // error now — one document-wide id namespace cannot hold two.
 func TestDuplicateNodeIDAcrossModels(t *testing.T) {
 	agg := func() map[string]any {
-		return map[string]any{"op": "aggregate", "id": "dup", "args": []any{}, "output_idx": []any{}}
+		return map[string]any{"op": "faq", "id": "dup", "args": []any{}, "output_idx": []any{}}
 	}
 	doc := map[string]any{
 		"models": map[string]any{
@@ -673,7 +673,7 @@ func TestDuplicateNodeIDAcrossModels(t *testing.T) {
 // TestCrossModelFromFAQCorpusFixture drives the shared cross-binding fixture.
 func TestCrossModelFromFAQCorpusFixture(t *testing.T) {
 	doc := readRawDocument(t, filepath.Join(
-		repoTestsDir(t), "valid", "aggregate", "cross_model_from_faq.esm"))
+		repoTestsDir(t), "valid", "faq", "cross_model_from_faq.esm"))
 	graphs, err := ResolveReferences(doc)
 	if err != nil {
 		t.Fatalf("ResolveReferences: %v", err)

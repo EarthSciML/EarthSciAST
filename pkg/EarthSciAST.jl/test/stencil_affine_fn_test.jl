@@ -1,6 +1,6 @@
 # Differential test for interp `:fn` nodes on the affine access-kernel path
 # (ess-affine). An interp leaf (`interp.linear` / `interp.bilinear` /
-# `interp.searchsorted`) inside an arrayop RHS used to force a whole-equation
+# `interp.searchsorted`) inside a faq RHS used to force a whole-equation
 # fallback (`_lower_to_access` threw `_StencilFallback`). It is now modelled: the
 # fn node is lowered with its `(fname, spec)` payload carried through, and
 # `_eval_acc_op` gained a `:fn` arm mirroring `_eval_node_op` (SAME cores, SAME

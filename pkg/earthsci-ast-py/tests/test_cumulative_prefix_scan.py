@@ -1,6 +1,6 @@
 """Cumulative (prefix) reductions — esm-spec §4.3.1.
 
-A prefix reduction is an ordinary ``aggregate`` whose ``filter`` compares the
+A prefix reduction is an ordinary ``faq`` whose ``filter`` compares the
 contracted index against an output index. Evaluated literally it is a triangular
 double loop; the interpreter recognizes the FORWARD rows (``<=``, ``<``) and
 collapses them to one ``ufunc.accumulate`` sweep.
@@ -48,7 +48,7 @@ def _make_ctx(values: dict[str, np.ndarray]) -> EvalContext:
 def _prefix_agg(cmp: str, n: int, reduce_op: str) -> ExprNode:
     """``result[i] = REDUCE_{j CMP i} u[j]`` over a dense 1..n interval."""
     return ExprNode(
-        op="aggregate",
+        op="faq",
         args=["u"],
         output_idx=["i"],
         reduce=reduce_op,
@@ -163,7 +163,7 @@ def test_body_referencing_the_scanned_symbol_is_declined_and_still_correct():
     n = 6
     u = np.array([1.0, 2.0, 4.0, 8.0, 16.0, 32.0])
     node = ExprNode(
-        op="aggregate",
+        op="faq",
         args=["u"],
         output_idx=["i"],
         reduce="+",
@@ -183,7 +183,7 @@ def test_measure_weighted_cumulative_integral():
     u = np.array([0.5, 1.25, 1.625, 1.875])  # 2x at the midpoints
     dx = np.array([0.5, 0.25, 0.125, 0.125])  # non-uniform cells
     node = ExprNode(
-        op="aggregate",
+        op="faq",
         args=["u", "dx"],
         output_idx=["i"],
         reduce="+",
@@ -240,7 +240,7 @@ def test_rank_2_output_scans_one_axis_and_leaves_the_other_independent():
     nr, nc = 3, 4
     m = np.array([[r * 10 + j for j in range(1, nc + 1)] for r in range(1, nr + 1)], dtype=float)
     node = ExprNode(
-        op="aggregate",
+        op="faq",
         args=["m"],
         output_idx=["r", "i"],
         reduce="+",

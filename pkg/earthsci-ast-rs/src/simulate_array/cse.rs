@@ -35,11 +35,11 @@
 //!   syntactically identical subtree.
 //! * **Environment identity** is enforced by keying the runtime memo on
 //!   `(scope, class)`, where a fresh `scope` is minted at every point the
-//!   overlay constructs a new `VecBox`: each `try_eval_arrayop_vectorized`
+//!   overlay constructs a new `VecBox`: each `try_eval_faq_vectorized`
 //!   entry, each contraction tuple in `eval_vec_contracted`, and each region of
 //!   `eval_vec_makearray`. Two occurrences under different boxes never share.
 //!
-//! Every binder in the IR (an `aggregate`/`arrayop` `output_idx` or `ranges`
+//! Every binder in the IR (a `faq` `output_idx` or `ranges`
 //! key, an `integral` `var`, a skolem `arg`, a template `bindings` key) either
 //! opens a new box on the vectorized path — and therefore a new scope here — or
 //! is not evaluated by the overlay at all, in which case [`ClassTable`] refuses
@@ -55,7 +55,7 @@
 //! Only classes that actually occur **twice or more within one static scope**
 //! are memoized. That keeps the memo small, and it means the root of a scope
 //! (multiplicity 1) is never memoized — which matters, because
-//! `try_eval_arrayop_vectorized` bails when its top-level result is a
+//! `try_eval_faq_vectorized` bails when its top-level result is a
 //! `VecValue::View`, and a memo hit is served as a view.
 //!
 //! ## Storage
@@ -179,9 +179,9 @@ use std::cell::RefCell;
 /// a fresh scope for its children (and stays unclassified), so a construct this
 /// module has not been taught about can never leak a sharing decision.
 ///
-/// Kept in lockstep with `eval_vec_op`: `aggregate` and `makearray` are
+/// Kept in lockstep with `eval_vec_op`: `faq` and `makearray` are
 /// deliberately ABSENT because they rebind the box (`eval_vec_nested_aggregate`
-/// re-enters `try_eval_arrayop_vectorized`; `eval_vec_makearray` builds a
+/// re-enters `try_eval_faq_vectorized`; `eval_vec_makearray` builds a
 /// per-region `rbx`), and everything else in `eval_vec_op` bails.
 pub(super) const BOX_TRANSPARENT_OPS: &[&str] = &[
     "+",
@@ -298,7 +298,7 @@ const PURE_BIT: u32 = 1 << 31;
 /// which one shared node can be both a repeated interior subtree of one rule
 /// and the root of another. The root exclusion (see [`ClassTable::analyse`])
 /// must win at such an address: a memo hit at the top level of
-/// `try_eval_arrayop_vectorized` is served as a `View`, and a top-level `View`
+/// `try_eval_faq_vectorized` is served as a `View`, and a top-level `View`
 /// makes the overlay bail to the per-cell oracle — silently pushing the rule
 /// off the vectorized path. Every `class_of` read path filters this value to
 /// `None`; [`ClassTable::intern`] keeps real ids (with or without
@@ -430,7 +430,7 @@ impl ClassTable {
         // served from the memo, so only those addresses are recorded.
         for &(addr, scope, class) in &std::mem::take(&mut self.seen) {
             // The body ROOT is deliberately never memoized. A memo hit is served
-            // as a `VecValue::View`, and `try_eval_arrayop_vectorized` bails to
+            // as a `VecValue::View`, and `try_eval_faq_vectorized` bails to
             // the per-cell oracle when its top-level result is a view (the oracle
             // scalarizes a bare whole-array body, so returning one would diverge)
             // — so memoizing the root could silently push a rule off the
@@ -439,7 +439,7 @@ impl ClassTable {
                 && self.counts.get(&(scope, class)).copied().unwrap_or(0) >= 2
                 // An address can be RE-classified: the trees handed to
                 // `analyse` are not all long-lived (a lowered aggregate body is
-                // rebuilt per call on the `eval_arrayop` path), so a later root
+                // rebuilt per call on the `eval_faq` path), so a later root
                 // can occupy storage an earlier one was analysed in. The map
                 // resolves that by last-writer-wins — the live tree is always
                 // the one that wrote last — so `pending` must carry an update,
@@ -536,7 +536,7 @@ impl ClassTable {
     ///
     /// `binders = None` means "no box symbol is in scope here", which makes the
     /// whole subtree non-pure. That is the conservative treatment given to every
-    /// binder-introducing operator (`aggregate`/`arrayop`/`makearray`): those
+    /// binder-introducing operator (`faq`/`makearray`): those
     /// re-enter the overlay under a DIFFERENT box, whose symbols this walk does
     /// not know, so nothing beneath them is ever cached.
     fn walk(
@@ -574,7 +574,7 @@ impl ClassTable {
             }
             Expr::Operator(node) => {
                 let transparent = BOX_TRANSPARENT_OPS.contains(&node.op.as_str());
-                let opener = matches!(node.op.as_str(), "aggregate" | "arrayop" | "makearray");
+                let opener = matches!(node.op.as_str(), "faq" | "makearray");
                 // Children of a box-transparent node stay in this scope; every
                 // other node's children go into a fresh one.
                 let child_scope = if transparent {
@@ -589,15 +589,15 @@ impl ClassTable {
                 };
                 // A node the overlay bails on evaluates none of its children; a
                 // nested aggregate underneath is analysed separately when the
-                // oracle reaches it through its own `try_eval_arrayop_vectorized`.
+                // oracle reaches it through its own `try_eval_faq_vectorized`.
                 let kids_evaluated = evaluated && (transparent || opener);
                 // Only a box-TRANSPARENT node keeps its children under this box,
                 // so only there does the caller's binder set still describe them.
-                // Every other node — `aggregate`/`arrayop`/`makearray`, or a
+                // Every other node — `faq`/`makearray`, or a
                 // construct the overlay bails on — evaluates its children under a
                 // DIFFERENT box whose symbols this walk does not know, so nothing
                 // beneath one is ever treated as pure. A nested aggregate
-                // re-enters `try_eval_arrayop_vectorized`, which analyses its own
+                // re-enters `try_eval_faq_vectorized`, which analyses its own
                 // body against its own binders, so nothing is permanently lost.
                 let child_binders = if transparent { binders } else { None };
                 let mut kids: SmallVec<[u32; 4]> = SmallVec::new();
@@ -1293,7 +1293,7 @@ impl CseRt {
         if i.depth == 0 {
             // SOUNDNESS: recycling here is safe precisely because `depth == 0`
             // means no vectorized evaluation is in flight, and every caller of
-            // `try_eval_arrayop_vectorized` consumes its result (copies the view
+            // `try_eval_faq_vectorized` consumes its result (copies the view
             // into an owned array, or scatters it into `dy`) before returning —
             // so no `VecValue` borrowing a slab can still be alive.
             //
@@ -1659,7 +1659,7 @@ mod tests {
         );
     }
 
-    /// A repeat that straddles an `aggregate` boundary is NOT shared: the two
+    /// A repeat that straddles a `faq` boundary is NOT shared: the two
     /// occurrences evaluate under different boxes.
     #[test]
     fn repeat_across_a_binder_is_not_shared() {
@@ -1668,7 +1668,7 @@ mod tests {
             vec![Expr::Variable("a".into()), Expr::Variable("b".into())],
         );
         let agg = Expr::operator(ExpressionNode {
-            op: "aggregate".to_string(),
+            op: "faq".to_string(),
             args: vec![],
             output_idx: Some(vec!["i".to_string()]),
             expr: Some(Box::new(inner)),
@@ -2092,7 +2092,7 @@ mod tests {
             ],
         );
         let agg = Expr::operator(ExpressionNode {
-            op: "aggregate".to_string(),
+            op: "faq".to_string(),
             args: vec![],
             output_idx: Some(vec!["j".to_string()]),
             expr: Some(Box::new(inner)),

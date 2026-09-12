@@ -1,0 +1,42 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "ref_parent_aliased",
+    "description": "Mounts a child that spells the DEPRECATED alias. Loading this (and resolving its subsystem refs) must normalize the child to `faq`, warn, and emit no `aggregate`.",
+    "authors": [
+      "EarthSciAST"
+    ],
+    "tags": [
+      "faq",
+      "deprecated_op_alias",
+      "ref",
+      "conformance"
+    ]
+  },
+  "models": {
+    "Host": {
+      "subsystems": {
+        "Kid": {
+          "ref": "ref_child_aliased.esm"
+        }
+      },
+      "variables": {
+        "u": {
+          "type": "unknown"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "u"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0
+        }
+      ]
+    }
+  }
+}

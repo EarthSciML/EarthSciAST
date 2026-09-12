@@ -1,4 +1,4 @@
-"""Box-specialized source codegen for arrayop bodies (the Tier-1 codegen tier).
+"""Box-specialized source codegen for faq bodies (the Tier-1 codegen tier).
 
 The compiled-closure tier (:func:`numpy_interpreter._compile_expr`) still pays,
 on EVERY evaluation, for work that is a pure function of the node and its

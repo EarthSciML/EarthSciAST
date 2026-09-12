@@ -57,7 +57,7 @@ def _shoelace_area_faq() -> ExprNode:
         ],
     )
     return ExprNode(
-        op="aggregate",
+        op="faq",
         semiring="sum_product",
         output_idx=[],
         args=["overlap_clip"],
@@ -145,7 +145,7 @@ def _spherical_area_faq() -> ExprNode:
     matching the ``polygon_area`` default."""
     v_next = ExprNode(op="+", args=["v", 1])
     return ExprNode(
-        op="aggregate",
+        op="faq",
         semiring="sum_product",
         output_idx=[],
         args=["overlap_clip"],

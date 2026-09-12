@@ -1,8 +1,8 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "bare_mixed_rank_product",
-    "description": "Cross-binding conformance fixture for esm-spec §4.3.4 name-based broadcast of TWO operands with disjoint missing axes (issue #100). The whole-array equation D(dp) ~ w2 * z1 multiplies a `[lon,lat]` field by a `[lev]` field into a `[lon,lat,lev]` result. Each operand broadcasts along the axes it does not declare — `w2` along `lev`, `z1` along `lon` and `lat` — so dp[i,j,k](t=1) = (i + 10 j) * 100 k, the outer product the index-set names describe, identical to the aggregate spelling sum_{i,j,k} index(w2,i,j) * index(z1,k). Because the two operands are missing DIFFERENT axes, no single positional rank-padding convention can produce this result: a binding that flattens both into the result's linear layout returns dp[1,1,2]=1100 instead of 2200 and zero in the last `lon` column.",
+    "description": "Cross-binding conformance fixture for esm-spec §4.3.4 name-based broadcast of TWO operands with disjoint missing axes (issue #100). The whole-array equation D(dp) ~ w2 * z1 multiplies a `[lon,lat]` field by a `[lev]` field into a `[lon,lat,lev]` result. Each operand broadcasts along the axes it does not declare — `w2` along `lev`, `z1` along `lon` and `lat` — so dp[i,j,k](t=1) = (i + 10 j) * 100 k, the outer product the index-set names describe, identical to the faq spelling sum_{i,j,k} index(w2,i,j) * index(z1,k). Because the two operands are missing DIFFERENT axes, no single positional rank-padding convention can produce this result: a binding that flattens both into the result's linear layout returns dp[1,1,2]=1100 instead of 2200 and zero in the last `lon` column.",
     "authors": [
       "EarthSciAST Test Suite"
     ],
@@ -87,7 +87,7 @@
         {
           "lhs": "w2",
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": [
               "i",
@@ -119,7 +119,7 @@
         {
           "lhs": "z1",
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": [
               "k"

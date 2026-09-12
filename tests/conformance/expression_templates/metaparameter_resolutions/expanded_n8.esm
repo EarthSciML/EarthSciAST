@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "description": "Convergence wrapper instantiating problem.esm at N = 8 via a 4.7 subsystem-ref binding (esm-spec 9.7.6 binding site 3)",
     "name": "wrapper_n8"
@@ -53,7 +53,7 @@
                   ],
                   "op": "*"
                 },
-                "op": "aggregate",
+                "op": "faq",
                 "output_idx": [
                   "i"
                 ],

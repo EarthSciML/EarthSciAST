@@ -3,7 +3,7 @@
 //! Drives the shared, pre-discretized method-of-lines fixtures in
 //! `tests/conformance/pde_simulation/manifest.json`. For every fixture it:
 //!   * evaluates the discretized RHS f(u, t) at each declared probe state via
-//!     the vectorized arrayop evaluator (`ArrayCompiled::debug_eval_rhs`, the
+//!     the vectorized faq evaluator (`ArrayCompiled::debug_eval_rhs`, the
 //!     same no-scalarization kernel the simulator uses), and
 //!   * integrates the trajectory from the declared initial conditions with the
 //!     pinned diffsol solver (manifest `solver`/`reltol`/`abstol`), sampling at
@@ -68,7 +68,7 @@ fn run_fixture(fx: &Value, base: &Path, integ: &Value) -> Result<Value, String> 
     let file = load_string(&json_str).map_err(|e| format!("load: {e:?}"))?;
     let params: HashMap<String, f64> = HashMap::new();
 
-    // --- RHS via the vectorized arrayop evaluator -------------------------
+    // --- RHS via the vectorized faq evaluator -------------------------
     let compiled = ArrayCompiled::from_file(&file).map_err(|e| format!("compile: {e:?}"))?;
     let names: Vec<String> = compiled.state_variable_names().to_vec();
     let mut rhs = Map::new();
@@ -222,7 +222,7 @@ fn run_fixture_full(fx: &Value, base: &Path, integ: &Value) -> Result<Value, Str
     let params: HashMap<String, f64> = HashMap::new();
     let names: Vec<String> = compiled.state_variable_names().to_vec();
 
-    // --- RHS at each probe via the vectorized arrayop evaluator ---------------
+    // --- RHS at each probe via the vectorized faq evaluator ---------------
     let mut rhs = Map::new();
     for probe in fx["rhs_probes"].as_array().ok_or("rhs_probes not array")? {
         let pid = probe["id"].as_str().ok_or("probe.id missing")?;

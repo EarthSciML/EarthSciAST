@@ -33,7 +33,7 @@ _op(op, args...; kw...) = OpExpr(String(op), ESM.ASTExpr[args...]; kw...)
 _idxv(var, ix...) = _op("index", _v(var), [_v(String(s)) for s in ix]...)
 
 # conc[rcv] = Σ_c A[c,rcv]·E[c]   (contracting aggregate over const arrays)
-make_conc(N_src) = _op("aggregate"; output_idx = Any["rcv"], semiring = "sum_product",
+make_conc(N_src) = _op("faq"; output_idx = Any["rcv"], semiring = "sum_product",
     expr_body = _op("*", _idxv("A", "c", "rcv"), _idxv("E", "c")),
     ranges = Dict{String,Any}("c" => Any[1, N_src]))
 
@@ -42,7 +42,7 @@ make_deaths(N_src; k = 1e-3) =
     _op("-", _op("exp", _op("*", _num(k), make_conc(N_src))), _num(1.0))
 
 # conc2[i,j] = Σ_c A3[c,i,j]·E[c]   (rank-2 output; two symbolic output indices)
-make_conc2(N_src) = _op("aggregate"; output_idx = Any["i", "j"], semiring = "sum_product",
+make_conc2(N_src) = _op("faq"; output_idx = Any["i", "j"], semiring = "sum_product",
     expr_body = _op("*", _idxv("A", "c", "i", "j"), _idxv("E", "c")),
     ranges = Dict{String,Any}("c" => Any[1, N_src]))
 
@@ -152,7 +152,7 @@ _percell(expr, cells; ca, params = Dict{String,Float64}()) =
         cells = [[r] for r in 1:N_rcv]
 
         # A runtime `filter` on the aggregate is NOT handled on the symbolic path.
-        aggf = _op("aggregate"; output_idx = Any["rcv"], semiring = "sum_product",
+        aggf = _op("faq"; output_idx = Any["rcv"], semiring = "sum_product",
             expr_body = _op("*", _idxv("A", "c", "rcv"), _idxv("E", "c")),
             ranges = Dict{String,Any}("c" => Any[1, N_src]),
             filter = _op("<", _v("c"), _num(10.0)))

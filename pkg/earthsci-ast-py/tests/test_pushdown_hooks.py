@@ -212,7 +212,7 @@ def test_binning_coords_seeded_from_overlap_producer():
     # overlap envelope references; no skolem bin_specs at all.
     x_expr = _obs(
         {
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": ["e"],
             "ranges": {"e": {"from": "recs"}},
             "args": ["lon"],
@@ -221,7 +221,7 @@ def test_binning_coords_seeded_from_overlap_producer():
     )
     producer = _obs(
         {
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": ["m"],
             "ranges": {"r": {"from": "recs"}, "c": {"from": "cells"}},
             "expr": {"op": "true", "args": []},
@@ -255,7 +255,7 @@ def test_binning_coords_seeded_producer_missing_input_degrades():
     # the VI front-door then degrades to maps_only exactly as before).
     x_expr = _obs(
         {
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": ["e"],
             "ranges": {"e": {"from": "recs"}},
             "args": ["lon"],
@@ -264,7 +264,7 @@ def test_binning_coords_seeded_producer_missing_input_degrades():
     )
     producer = _obs(
         {
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": ["m"],
             "ranges": {"r": {"from": "recs"}},
             "expr": {"op": "true", "args": []},

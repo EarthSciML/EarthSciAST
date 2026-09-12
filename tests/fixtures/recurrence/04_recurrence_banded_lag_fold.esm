@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "RecurrenceBandedLagFold",
     "description": "CONFORMANCE_SPEC 5.19.3 shapes 2 and 3 together: a BOUNDED-LAG fold written as ONE node, and an in-body reduction order pinned to the bit.\n\nr[y] = SUM over a of term(a), a contracted index running from 0, admitted by the banded filter a <= y-1. The a = 0 term carries the non-recurrent part b[y]; every a >= 1 term is -max(r[y-a], 0) * P[a], a clamped self-read at lag a. So the lag is SYMBOL-valued -- one node covers every lag in a's range instead of one hand-written term per lag -- and `lag = a` straddles zero, which esm-spec 4.3.1.1 admits precisely because the a = 0 cell is never evaluated (the guard selects the other branch) and a self-read of an unpublished cell could not return a value anyway.\n\nThe clamp is load-bearing here, not decoration: r[3] and r[5] are negative, so max(r, 0) zeroes their contribution to later cells and the recurrence is NOT linear. A closed form obtained by dropping the clamp reaches different numbers.\n\nORDER: the terms are folded ASCENDING in a (esm-spec 4.3.1, normative). At y = 3 that gives exactly -1.0; folding the same admitted window from its high end instead gives -1.0000000000000002. Zero tolerance, so a binding whose contraction sums pairwise or in reverse fails here.",
@@ -42,7 +42,7 @@
         {
           "lhs": "r",
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": [
               "y"

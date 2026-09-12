@@ -1,0 +1,36 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "TestModel",
+    "description": "Undefined variable hidden in a faq `expr` body (a non-args child field). The reference check must descend into `expr`, not only `args`, to catch it. All loop indices (`g`) are bound via `ranges`; `rate` is declared; only `undefined_xyz` is undefined."
+  },
+  "index_sets": {
+    "grp": { "kind": "interval", "size": 4 }
+  },
+  "models": {
+    "TestModel": {
+      "variables": {
+        "y": { "type": "unknown" },
+        "rate": { "type": "parameter" }
+      },
+      "equations": [
+        {
+          "lhs": { "op": "D", "args": ["y"], "wrt": "t" },
+          "rhs": {
+            "op": "faq",
+            "output_idx": [],
+            "args": ["rate"],
+            "ranges": { "g": { "from": "grp" } },
+            "expr": {
+              "op": "*",
+              "args": [
+                { "op": "index", "args": ["rate", "g"] },
+                "undefined_xyz"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

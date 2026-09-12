@@ -45,7 +45,7 @@ func recurrenceTestFileWithSets(sets map[string]IndexSet, vars map[string]ModelV
 }
 
 // stepsAggregate is the canonical recurrence spelling of esm-spec §4.3.1.1: an
-// `aggregate` over one output axis `k` drawn from "steps", whose body is `expr`.
+// `faq` over one output axis `k` drawn from "steps", whose body is `expr`.
 func stepsAggregate(expr Expression) ExprNode {
 	return ExprNode{
 		Op:        opAggregate,
@@ -357,7 +357,7 @@ func TestRecurrenceRejectedShapes(t *testing.T) {
 			wantCode: codeRecurrenceUnsupportedForm,
 		},
 		{
-			// No `aggregate` on either side, so there is no cell frame to sweep and
+			// No `faq` on either side, so there is no cell frame to sweep and
 			// no axis to read the lag against.
 			name:     "self-read with no cell frame at all",
 			rhs:      ExprNode{Op: "*", Args: []any{selfRead(int64(1)), 2.0}},

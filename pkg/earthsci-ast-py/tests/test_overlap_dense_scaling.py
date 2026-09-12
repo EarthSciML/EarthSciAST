@@ -126,7 +126,7 @@ def test_mirrored_dense_aggregate_is_gate_driven(geom):
     NPTS·NCELLS full product — and the values equal the oracle EXACTLY (one
     surviving term per record either way)."""
     doc = {
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "dense_overlap_mirror"},
         "index_sets": {
             "points": {"kind": "interval", "size": NPTS},
@@ -144,7 +144,7 @@ def test_mirrored_dense_aggregate_is_gate_driven(geom):
                     "P": _obs(
                         ["points"],
                         {
-                            "op": "aggregate",
+                            "op": "faq",
                             "semiring": "sum_product",
                             "output_idx": ["p"],
                             "ranges": {
@@ -205,7 +205,7 @@ def test_forward_rewritten_binning_aggregate_is_gate_driven(geom):
     annual = np.arange(1.0, NPTS + 1.0)
     sr = np.array([[float((i % 7) + j) for j in range(2)] for i in range(NCELLS)])
     binagg = {
-        "op": "aggregate",
+        "op": "faq",
         "output_idx": ["c"],
         "reduce": "+",
         "ranges": {"c": {"from": "cells"}, "r": {"from": "points"}},
@@ -217,7 +217,7 @@ def test_forward_rewritten_binning_aggregate_is_gate_driven(geom):
         ),
     }
     concagg = {
-        "op": "aggregate",
+        "op": "faq",
         "output_idx": ["rcv"],
         "reduce": "+",
         "ranges": {"s": {"from": "cells"}, "rcv": {"from": "rcv_cells"}},
@@ -225,7 +225,7 @@ def test_forward_rewritten_binning_aggregate_is_gate_driven(geom):
         "expr": _op("*", _ix("SR", "s", "rcv"), _ix("Emis", "s")),
     }
     doc = {
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "dense_overlap_forward"},
         "index_sets": {
             "points": {"kind": "interval", "size": NPTS},
@@ -305,7 +305,7 @@ def test_output_position_with_no_candidate_is_the_semiring_identity():
     """A record outside the grid is never visited by the driver, and MUST come
     out as 0̄ — not a hole, not NaN, not a stale buffer value."""
     doc = {
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "dense_overlap_identity_fill"},
         "index_sets": {
             "points": {"kind": "interval", "size": 3},
@@ -324,7 +324,7 @@ def test_output_position_with_no_candidate_is_the_semiring_identity():
                     "P": _obs(
                         ["points"],
                         {
-                            "op": "aggregate",
+                            "op": "faq",
                             "semiring": "sum_product",
                             "output_idx": ["p"],
                             "ranges": {
@@ -378,7 +378,7 @@ def test_scalar_reduction_drives_from_the_candidate_pairs(geom):
     pins this as the ``pairs`` shape: bind both from the sorted candidate pairs,
     which is a MUST-drive shape even though the node is not a producer."""
     doc = {
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "dense_overlap_pairs"},
         "index_sets": {
             "points": {"kind": "interval", "size": NPTS},
@@ -396,7 +396,7 @@ def test_scalar_reduction_drives_from_the_candidate_pairs(geom):
                     "T": {
                         "type": "unknown",
                         "defined_by": {
-                            "op": "aggregate",
+                            "op": "faq",
                             "semiring": "sum_product",
                             "output_idx": [],
                             "ranges": {
@@ -471,7 +471,7 @@ def test_driven_reduction_is_bit_identical_to_the_membership_tested_product(monk
     vals = np.sqrt(np.arange(1.0, npt + 1.0)) * np.pi
 
     doc = {
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "dense_overlap_order"},
         "index_sets": {
             "points": {"kind": "interval", "size": npt},
@@ -490,7 +490,7 @@ def test_driven_reduction_is_bit_identical_to_the_membership_tested_product(monk
                     "B": _obs(
                         ["cells"],
                         {
-                            "op": "aggregate",
+                            "op": "faq",
                             "semiring": "sum_product",
                             "output_idx": ["c"],
                             "ranges": {

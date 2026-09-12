@@ -28,8 +28,8 @@ const ESM = EarthSciAST
         N = 4
         M = [10.0, 20.0, 30.0, 40.0]
         vars = Dict("y" => ModelVariable(UnknownVariable))
-        lhs = _arrayop1d(_D_idx("y", _v("i")), "i", 1, N)
-        rhs = _arrayop1d(_idx("M", _op("+", _v("i"), _i(1))), "i", 1, N)
+        lhs = _faq1d(_D_idx("y", _v("i")), "i", 1, N)
+        rhs = _faq1d(_idx("M", _op("+", _v("i"), _i(1))), "i", 1, N)
         model = ESM.Model(vars, [ESM.Equation(lhs, rhs)])
         ics = Dict("y[$k]" => 0.0 for k in 1:N)
 
@@ -69,8 +69,8 @@ const ESM = EarthSciAST
         conn = [2.0, 3.0, 4.0, 1.0]    # permutation of valid u indices
         vars = Dict("y" => ModelVariable(UnknownVariable),
                     "u" => ModelVariable(UnknownVariable))
-        lhs = _arrayop1d(_D_idx("y", _v("i")), "i", 1, N)
-        rhs = _arrayop1d(_idx("u", _idx("conn", _op("+", _v("i"), _i(1)))), "i", 1, N)
+        lhs = _faq1d(_D_idx("y", _v("i")), "i", 1, N)
+        rhs = _faq1d(_idx("u", _idx("conn", _op("+", _v("i"), _i(1)))), "i", 1, N)
         model = ESM.Model(vars, [ESM.Equation(lhs, rhs)])
         ics = Dict{String,Float64}()
         for k in 1:N
@@ -143,8 +143,8 @@ const ESM = EarthSciAST
         N = 3
         M = [1.0, 2.0, 3.0]
         vars = Dict("y" => ModelVariable(UnknownVariable))
-        lhs = _arrayop1d(_D_idx("y", _v("i")), "i", 1, N)
-        rhs = _arrayop1d(_idx("M", _v("i")), "i", 1, N)
+        lhs = _faq1d(_D_idx("y", _v("i")), "i", 1, N)
+        rhs = _faq1d(_idx("M", _v("i")), "i", 1, N)
         model = ESM.Model(vars, [ESM.Equation(lhs, rhs)])
         ics = Dict("y[$k]" => 0.0 for k in 1:N)
 

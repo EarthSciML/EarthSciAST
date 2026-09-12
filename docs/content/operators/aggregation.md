@@ -1,11 +1,11 @@
 ---
 title: "Aggregation"
-description: "aggregate, its relational surface, argmin/argmax, and value invention with skolem and rank."
+description: "faq, its relational surface, argmin/argmax, and value invention with skolem and rank."
 ---
 
-## `aggregate`
+## `faq`
 
-The workhorse. An `aggregate` node is a generalized Einstein-notation
+The workhorse. A `faq` node is a generalized Einstein-notation
 expression: a semiring reduction of a body over named index sets.
 
 | Field | Meaning |
@@ -39,7 +39,7 @@ sum[i, j] (A[i, k] * B[k, j]) where {i in rows, j in cols, k in inner}
 **JSON**
 ```json
 {
-  "op": "aggregate",
+  "op": "faq",
   "output_idx": ["i", "j"],
   "ranges": { "i": { "from": "rows" }, "j": { "from": "cols" }, "k": { "from": "inner" } },
   "expr": {
@@ -65,7 +65,7 @@ sum[] (w[i]) where {i in cells}
 **JSON**
 ```json
 {
-  "op": "aggregate",
+  "op": "faq",
   "output_idx": [],
   "ranges": { "i": { "from": "cells" } },
   "expr": { "op": "index", "args": ["w", "i"] },
@@ -86,7 +86,7 @@ max[j] (A[i, j]) where {i in rows, j in cols}
 **JSON**
 ```json
 {
-  "op": "aggregate",
+  "op": "faq",
   "output_idx": ["j"],
   "reduce": "max",
   "ranges": { "i": { "from": "rows" }, "j": { "from": "cols" } },
@@ -112,7 +112,7 @@ max[j] (A[i, j]) where {i in rows, j in cols} [semiring=max_product]
 **JSON**
 ```json
 {
-  "op": "aggregate",
+  "op": "faq",
   "output_idx": ["j"],
   "semiring": "max_product",
   "ranges": { "i": { "from": "rows" }, "j": { "from": "cols" } },
@@ -134,7 +134,7 @@ sum[i] (ifelse(k == 0, -2, 1) * u[i + k]) where {i in 2:9, k in -1:1}
 **JSON**
 ```json
 {
-  "op": "aggregate",
+  "op": "faq",
   "output_idx": ["i"],
   "ranges": { "i": [2, 9], "k": [-1, 1] },
   "expr": {
@@ -164,7 +164,7 @@ sum[i] (flux[i, k]) where {i in cells, k in edges_of_cell(i)}
 **JSON**
 ```json
 {
-  "op": "aggregate",
+  "op": "faq",
   "output_idx": ["i"],
   "ranges": {
     "i": { "from": "cells" },
@@ -177,7 +177,7 @@ sum[i] (flux[i, k]) where {i in cells, k in edges_of_cell(i)}
 
 ## The relational surface
 
-Beyond contraction, `aggregate` carries `join`, `filter`, `distinct`, and `key`.
+Beyond contraction, `faq` carries `join`, `filter`, `distinct`, and `key`.
 This is what lets grid topology, binning, and conservative regridding be
 *computed* from ordinary data rather than declared in a dedicated block.
 
@@ -194,7 +194,7 @@ sum[j] (A[i, j]) where {i in src, j in tgt} if A[i, j] > atol
 **JSON**
 ```json
 {
-  "op": "aggregate",
+  "op": "faq",
   "output_idx": ["j"],
   "ranges": { "i": { "from": "src" }, "j": { "from": "tgt" } },
   "filter": { "op": ">", "args": [{ "op": "index", "args": ["A", "i", "j"] }, "atol"] },
@@ -213,7 +213,7 @@ sum[i] (q[k]) where {i in lev, k in lev} if k <= i
 **JSON**
 ```json
 {
-  "op": "aggregate",
+  "op": "faq",
   "output_idx": ["i"],
   "ranges": { "i": { "from": "lev" }, "k": { "from": "lev" } },
   "filter": { "op": "<=", "args": ["k", "i"] },
@@ -235,7 +235,7 @@ sum[j] (w[i, j] * q[i]) where {i in src, j in tgt} join(src_bin=tgt_bin)
 **JSON**
 ```json
 {
-  "op": "aggregate",
+  "op": "faq",
   "output_idx": ["j"],
   "semiring": "sum_product",
   "ranges": { "i": { "from": "src" }, "j": { "from": "tgt" } },
@@ -263,7 +263,7 @@ arity 2 for points — and `eps` inflates both outward before the test.
 
 ```json
 {
-  "op": "aggregate",
+  "op": "faq",
   "output_idx": ["j"],
   "ranges": { "i": { "from": "src_cells" }, "j": { "from": "tgt_cells" } },
   "join": [{
@@ -297,7 +297,7 @@ any[] (true) where {f in faces, v in verts_of_face(f), w in verts_of_face(f)} di
 **JSON**
 ```json
 {
-  "op": "aggregate",
+  "op": "faq",
   "output_idx": [],
   "semiring": "bool_and_or",
   "distinct": true,
@@ -359,7 +359,7 @@ argmax[g] (cost[g]) where {g in gens}
 ```
 
 The returned value is a 1-based generator id, so it can be used directly as an
-index. They accept the same `join` and `filter` gates as `aggregate`, which is
+index. They accept the same `join` and `filter` gates as `faq`, which is
 how a nearest-neighbour search is pruned to a candidate set.
 
 ## `skolem` — value invention

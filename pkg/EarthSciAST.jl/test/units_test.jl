@@ -364,7 +364,7 @@ using Unitful
         # An op with NO dimensional rule is UNDETERMINABLE — never
         # dimensionless. Reporting it as dimensionless would poison every
         # equation containing a structural op.
-        for op in ("aggregate", "index", "fn", "table_lookup")
+        for op in ("faq", "index", "fn", "table_lookup")
             @test EarthSciAST.get_expression_dimensions(
                 OpExpr(op, E[VarExpr("x")]), var_units) === nothing
             @test isempty(F(OpExpr(op, E[VarExpr("x")]), var_units))

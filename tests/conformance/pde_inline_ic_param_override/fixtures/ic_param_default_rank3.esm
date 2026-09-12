@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "ic_param_default_rank3",
     "description": "The control half of the ic_param_override_rank3 pair: the same document with the amplitude carried as amp's DECLARED DEFAULT (2.0) instead of an inline test parameter_overrides. Same equations, same assertions, same golden actuals. A binding that drops an ic-only override from the build-time scope passes this and fails its sibling.",
@@ -65,7 +65,7 @@
             ]
           },
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": [
               "i",
@@ -197,7 +197,7 @@
         },
         {
           "lhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": [
               "i",
@@ -235,7 +235,7 @@
             }
           },
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": [
               "i",

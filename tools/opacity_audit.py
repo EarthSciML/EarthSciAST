@@ -42,7 +42,7 @@ CLOSED_CORE = {
     "exp","log","log10","sqrt","abs","sign","sin","cos","tan","asin","acos","atan","atan2",
     "sinh","cosh","tanh","asinh","acosh","atanh","min","max","floor","ceil",
     "Pre","const","true",
-    "aggregate","makearray","index","broadcast","reshape","transpose","concat",
+    "faq","makearray","index","broadcast","reshape","transpose","concat",
     "skolem","rank","argmin","argmax","intersect_polygon","polygon_intersection_area",
     "fn","apply_expression_template","table_lookup","enum",
 }

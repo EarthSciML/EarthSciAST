@@ -258,7 +258,7 @@ def _pd_oplus(agg: dict) -> tuple[str, float] | None:
 
 
 def _is_aggregate_op(op: Any) -> bool:
-    return op in ("aggregate", "arrayop")
+    return op == "faq"
 
 
 def _pd_flip(op: str) -> str:
@@ -1034,7 +1034,7 @@ def _pd_gather_defn(
             )
         ranges[s] = {"from": t}
     return decl, {
-        "op": "aggregate",
+        "op": "faq",
         "output_idx": ["c"] + syms,
         "ranges": ranges,
         "args": [f, mfactor],
@@ -1311,7 +1311,7 @@ def _pd_apply(esm: dict, mname: str, plan: dict, templates: dict | None = None) 
     producer = {
         "lhs": _pd_ix(memvar, "m"),
         "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": ["m"],
             "ranges": {
                 plan["rep_rsym"]: {"from": plan["R"]},

@@ -53,7 +53,7 @@ const RXg = Reactant
 _g_Dt(v) = Dict{String,Any}("op" => "D", "args" => Any[v], "wrt" => "t")
 _g_ix(v, i...) = Dict{String,Any}("op" => "index", "args" => Any[v, i...])
 _g_o(o, a...) = Dict{String,Any}("op" => o, "args" => Any[a...])
-_g_ao(e) = Dict{String,Any}("op" => "arrayop", "output_idx" => Any["i"],
+_g_ao(e) = Dict{String,Any}("op" => "faq", "output_idx" => Any["i"],
     "ranges" => Dict{String,Any}("i" => Dict{String,Any}("from" => "n")),
     "args" => Any[], "expr" => e)
 

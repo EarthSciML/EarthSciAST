@@ -144,11 +144,11 @@ end
     @testset "Graceful errors on unsupported ops" begin
         # `wibble` is an unregistered open-tier op: it now surfaces as
         # `unlowered_operator` (asserted precisely in the gate testset below),
-        # NOT `E_TREEWALK_UNSUPPORTED_OP` — both are `TreeWalkError`. `arrayop`
+        # NOT `E_TREEWALK_UNSUPPORTED_OP` — both are `TreeWalkError`. `faq`
         # is a registered non-scalar CORE form and keeps its distinct
         # `E_TREEWALK_UNSUPPORTED_OP`.
         @test_throws ESM.TreeWalkError _eval1(_op("wibble", _n(1.0)))
-        @test_throws ESM.TreeWalkError _eval1(_op("arrayop", _n(1.0)))
+        @test_throws ESM.TreeWalkError _eval1(_op("faq", _n(1.0)))
         @test_throws ESM.TreeWalkError _eval1(_op("grad", _v("x");
                                                   dim="x");
                                                u_vals=Dict("x" => 1.0))

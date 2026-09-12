@@ -559,7 +559,7 @@ pub(super) fn materialize_observeds_pass(
                     Value::Scalar(s) => ArrayD::from_elem(IxDyn(&[]), s),
                 };
                 // `ESS_VEC_DEBUG`: a scalar-shaped observed rule whose body is an
-                // `aggregate` is materialized by `eval_arrayop`, which tries the
+                // `faq` is materialized by `eval_faq`, which tries the
                 // same overlay first. A non-empty bail log means it fell back to
                 // the per-cell walk — the dominant per-step cost for a model whose
                 // stencils live in observeds rather than in the `D(...)` rules.
@@ -636,7 +636,7 @@ pub(super) fn materialize_observeds_pass(
                 // A pure-map observed (output_idx over `ranges`, no contraction
                 // or filter) is structurally a `RhsRule::ArrayLoop` with no
                 // contracted index — a whole-array map. Evaluate it through the
-                // same verified vectorized overlay (`try_eval_arrayop_vectorized`
+                // same verified vectorized overlay (`try_eval_faq_vectorized`
                 // → `eval_vec`) the state-derivative rules use, instead of
                 // walking the body once per grid cell. This is the dominant cost
                 // for models with time/space-varying observeds (a coupled
@@ -662,8 +662,8 @@ pub(super) fn materialize_observeds_pass(
                         // observed: a model with dozens of array observeds
                         // re-materialized every step got an empty pool on each
                         // one, so every kernel intermediate hit the allocator.
-                        with_arrayop_pool(|pool| {
-                            try_eval_arrayop_vectorized(
+                        with_faq_pool(|pool| {
+                            try_eval_faq_vectorized(
                                 output_idx_names,
                                 output_ranges,
                                 body,
@@ -920,7 +920,7 @@ fn evaluate_rhs_legacy(
 
     // FAQ-materialized derived rings (RFC §8.1), keyed by producer node id. An
     // `intersect_polygon` clip self-registers its closed overlap ring here as it
-    // evaluates (see `eval_intersect_polygon`); a downstream `aggregate` over a
+    // evaluates (see `eval_intersect_polygon`); a downstream `faq` over a
     // `kind:"derived"` index set then sizes its contraction from the ring's
     // vertex count. Shared (interior-mutable) across the observed materialization
     // and the RHS rules so a ring registered while `clip` materializes is visible
@@ -1034,7 +1034,7 @@ fn evaluate_rhs_legacy(
                 // scalar loop walks the body, and (ess-mro) no heap allocation
                 // occurs: intermediates come from `pool`. A static `filter` is
                 // carried by masking each term with the reduction identity
-                // (`try_eval_arrayop_vectorized`); a ragged/derived-bound filter
+                // (`try_eval_faq_vectorized`); a ragged/derived-bound filter
                 // (dynamic contraction window) bails to the per-cell oracle.
                 let lhs_shifts = lhs_constant_shifts(lhs_idx_exprs, output_idx_names);
                 // Clear any stale trace so the log below belongs to THIS rule.
@@ -1047,7 +1047,7 @@ fn evaluate_rhs_legacy(
                         .and_then(|shifts| subblock_dest(vs, output_ranges, shifts))
                     {
                         let ctx = env.ctx(observed_arrays);
-                        if let Some((val, ops)) = try_eval_arrayop_vectorized(
+                        if let Some((val, ops)) = try_eval_faq_vectorized(
                             output_idx_names,
                             output_ranges,
                             body,

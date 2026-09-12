@@ -78,7 +78,7 @@ use std::sync::Arc;
 use ndarray::{ArrayD, Axis, IxDyn, Slice};
 use serde_json::Value as JsonValue;
 
-use crate::aggregate::resolve_expr_ranges_with_extents;
+use crate::faq::resolve_expr_ranges_with_extents;
 use crate::parse::LoadOptions;
 use crate::pushdown_rewrite::{
     GateAxis, ProviderGate, desugar_pushdown, pushdown_coupling_pairs, pushdown_provider_gates,
@@ -1653,7 +1653,7 @@ impl<'o> BuildState<'o> {
             .iter()
             .filter_map(|eq| match &eq.rhs {
                 Expr::Operator(node)
-                    if matches!(node.op.as_str(), "aggregate" | "arrayop")
+                    if node.op.as_str() == "faq"
                         && node.distinct == Some(true)
                         && node.join.as_ref().map(|j| !j.is_empty()).unwrap_or(false) =>
                 {

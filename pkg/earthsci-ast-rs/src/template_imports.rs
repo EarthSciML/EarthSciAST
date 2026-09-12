@@ -573,7 +573,7 @@ pub(crate) fn eval_meta_expr(
 }
 
 /// Fold metaparameter expressions in the structural integer sites —
-/// `aggregate` dense `ranges` tuple entries and `makearray` `regions` bound
+/// `faq` dense `ranges` tuple entries and `makearray` `regions` bound
 /// pairs — to concrete integers, in place, wherever they are already closed.
 /// Entries still carrying a bare name (a template-param slot, or an open
 /// metaparameter in a not-yet-fully-bound library) are left symbolic for a
@@ -589,7 +589,7 @@ fn fold_structural_sites(x: &mut Value, ctx: &str) -> Result<(), ExpressionTempl
             .and_then(|w| w.as_str())
             .unwrap_or_default()
             .to_string();
-        if op == "aggregate" {
+        if op == "faq" {
             if let Some(Value::Object(ranges)) = obj.get_mut("ranges") {
                 let keys: Vec<String> = ranges.keys().cloned().collect();
                 for k in keys {
@@ -1182,7 +1182,7 @@ pub(crate) fn apply_mount_index_set_rename(
 fn collect_bound_syms(x: &Value, out: &mut std::collections::HashSet<String>) {
     crate::json_visit::visit_values(x, &mut |_path, v| {
         let Some(obj) = v.as_object() else { return };
-        if obj.get("op").and_then(|w| w.as_str()) != Some("aggregate") {
+        if obj.get("op").and_then(|w| w.as_str()) != Some("faq") {
             return;
         }
         if let Some(oi) = obj.get("output_idx").and_then(|w| w.as_array()) {
@@ -1800,13 +1800,22 @@ fn load_import_raw(
             ),
         )
     })?;
-    let raw: Value = serde_json::from_str(&content).map_err(|e| {
+    let mut raw: Value = serde_json::from_str(&content).map_err(|e| {
         err(
             codes::TEMPLATE_IMPORT_UNRESOLVED,
             format!(
                 "{origin}: template-library ref '{}' is not valid JSON: {e}",
                 path.display()
             ),
+        )
+    })?;
+    // A template library is a document too, and its template BODIES carry
+    // expression nodes — so it needs the same wire-boundary treatment as the
+    // root (docs/content/rfcs/faq-node-rename.md §5.2).
+    crate::parse::prepare_document_ops(&mut raw).map_err(|e| {
+        err(
+            codes::TEMPLATE_IMPORT_UNRESOLVED,
+            format!("{origin}: {}: {e}", path.display()),
         )
     })?;
     let dir = path

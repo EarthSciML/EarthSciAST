@@ -1,4 +1,4 @@
-//! An `aggregate` binder that SHADOWS a globally-scoped name is rejected at
+//! A `faq` binder that SHADOWS a globally-scoped name is rejected at
 //! load — diagnostic `reserved_index_symbol`.
 //!
 //! `t` (the document's independent variable, esm-spec §11.3) and `_var` (the
@@ -120,7 +120,7 @@ fn the_control_spelling_loads_and_answers_two() {
 /// renamed independent variable.
 fn doc_binding(sym: &str, independent: Option<&str>) -> Value {
     let mut doc = json!({
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": { "name": "BinderProbe" },
         "index_sets": { "rows": { "kind": "interval", "size": 3 } },
         "models": {
@@ -128,7 +128,7 @@ fn doc_binding(sym: &str, independent: Option<&str>) -> Value {
                 "variables": { "total": { "type": "unknown" } },
                 "equations": [
                     { "lhs": "total",
-                      "rhs": { "op": "aggregate", "args": [], "semiring": "sum_product",
+                      "rhs": { "op": "faq", "args": [], "semiring": "sum_product",
                                "output_idx": [],
                                "ranges": { sym: { "from": "rows" } },
                                "expr": 1.0 } }

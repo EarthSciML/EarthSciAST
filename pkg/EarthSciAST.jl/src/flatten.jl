@@ -824,7 +824,7 @@ Classification is re-run over the flattened system rather than reused per
 component because flattening moves the ground under it: `operator_compose`
 merges two RHSs into one equation, `variable_map` deletes a parameter and
 promotes a variable in its place, and the §10.5 pointwise lift rewrites a scalar
-state ODE into an `aggregate`. A per-component answer namespaced after the fact
+state ODE into a `faq`. A per-component answer namespaced after the fact
 would describe the document, not the system produced from it.
 """
 function _classification_model(states::OrderedDict{String, ModelVariable},
@@ -1240,7 +1240,7 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
     # Step 3b: Pointwise spatial lift (§10.5). operator_compose has merged each
     # reaction/model state ODE with the spatial operator's advection; array-ify
     # those merged equations (promote the species to the grid shape and wrap in an
-    # `aggregate` over the grid) so the lifted reaction network runs pointwise.
+    # `faq` over the grid) so the lifted reaction network runs pointwise.
     _apply_pointwise_lift!(equations, states, params, observeds, index_sets, file.coupling;
                            template_registry=(isempty(template_registry) ? nothing :
                                               template_registry),

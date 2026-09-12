@@ -139,7 +139,7 @@ All implementations MUST implement `substitute` with the following behavior:
    language's native stack; implementations SHOULD support at least 200
    levels of structural nesting in typical configurations.
 3. **Operator-node metadata is preserved.** Fields such as `wrt`, `dim`
-   (and other sidecar fields like `arrayop`'s `expr`, `output_idx`,
+   (and other sidecar fields like `faq`'s `expr`, `output_idx`,
    `ranges`, `reduce`) are carried through unchanged.
 4. **Empty-args operator nodes are valid inputs.** A node with `"op": "+"`
    and no `args` (or `args: []`) MUST NOT panic or raise; it is returned
@@ -514,8 +514,8 @@ The categories a divergence can be scored against, and what "agree" means in eac
 | **Graph Structure** | Node / edge sets identical (as multisets) | Enforced by `tests/conformance/graph/cases.json`, which every binding drives. Node and edge ORDER is not a conformance property — bindings iterate their own maps — so lists compare as sorted multisets. The DOT / Mermaid BYTES are excluded: §4.8.3 requires both formats and specifies neither, and the bindings do not split in a way any tie-break resolves (see that corpus's README). |
 | **Simulation** | Numeric tolerance (§5.9) | The ONE category where a tolerance is legitimate, because the quantity being compared is a floating-point trajectory, not a serialization. Governed by §5.9's explicit rel/abs tolerances — a stated numeric tolerance on a numeric quantity, which is a different thing from a percentage of fixtures allowed to disagree. |
 | **Relational index sets / dense IDs** | Byte-identical | Outputs of the value-invention primitives (`distinct`, `skolem`, `rank`) and group-by / value-equality joins. Governed by the **§5.5 cross-binding determinism contract** — these outputs are consumed by other nodes, so a divergence is a different *model*, not different formatting. |
-| **Forward cumulative (prefix) reductions** | Bit-identical | An `aggregate` whose `filter` is a forward monotone comparison against an output index (`<=` / `<`, esm-spec §4.3.1). The admitted window is folded ascending, lowest `j` first, so the value is a fully determined left fold and not an "irreducibly floating-point" quantity — which is exactly what licenses a binding to evaluate it with an `O(N)` running accumulator instead of the `O(N²)` triangle. All three executing bindings do — Rust and Python with a running accumulator inside the array evaluator, Julia by splitting the equation into an elementwise term pass plus a post-pass fold (`tree_walk/scan.jl`) so its per-cell kernel model stays intact. All three are pinned against an independent triangular oracle at catastrophic-cancellation magnitudes (`pkg/earthsci-ast-rs/tests/cumulative_prefix_scan.rs`, `pkg/earthsci-ast-py/tests/test_cumulative_prefix_scan.py`, `pkg/EarthSciAST.jl/test/scan_prefix_test.jl`). The mirrored spellings `i >= j` / `i > j` are the same forward scan and are recognized as such. **Reverse** scans (`>=` / `>`) are explicitly NOT in this category: they fall through to each binding's general contraction machinery, whose summation order already differs (Python's dense reduce sums pairwise), so they are governed by the §5.9 simulation tolerance like any other contraction. |
-| **Causal self-reference (recurrence) along an index axis** | Bit-identical | An equation whose defining `aggregate` body reads the array being defined at a strictly earlier position on one output axis (esm-spec §4.3.1.1). The sweep order is fixed and each cell is published before the axis advances, so the value is a fully determined function of the document exactly as a left fold is — there is no reassociation left to choose, and a divergence is a defect rather than a floating-point fact. Governed by the **§5.19 recurrence contract**, which also forbids every reordering implementation strategy and requires fixtures that pin the arithmetic ORDER (a cancellation ladder, a lag > 1, a symbol-valued lag) rather than an exactly-representable answer a wrong order would also reach. |
+| **Forward cumulative (prefix) reductions** | Bit-identical | A `faq` whose `filter` is a forward monotone comparison against an output index (`<=` / `<`, esm-spec §4.3.1). The admitted window is folded ascending, lowest `j` first, so the value is a fully determined left fold and not an "irreducibly floating-point" quantity — which is exactly what licenses a binding to evaluate it with an `O(N)` running accumulator instead of the `O(N²)` triangle. All three executing bindings do — Rust and Python with a running accumulator inside the array evaluator, Julia by splitting the equation into an elementwise term pass plus a post-pass fold (`tree_walk/scan.jl`) so its per-cell kernel model stays intact. All three are pinned against an independent triangular oracle at catastrophic-cancellation magnitudes (`pkg/earthsci-ast-rs/tests/cumulative_prefix_scan.rs`, `pkg/earthsci-ast-py/tests/test_cumulative_prefix_scan.py`, `pkg/EarthSciAST.jl/test/scan_prefix_test.jl`). The mirrored spellings `i >= j` / `i > j` are the same forward scan and are recognized as such. **Reverse** scans (`>=` / `>`) are explicitly NOT in this category: they fall through to each binding's general contraction machinery, whose summation order already differs (Python's dense reduce sums pairwise), so they are governed by the §5.9 simulation tolerance like any other contraction. |
+| **Causal self-reference (recurrence) along an index axis** | Bit-identical | An equation whose defining `faq` body reads the array being defined at a strictly earlier position on one output axis (esm-spec §4.3.1.1). The sweep order is fixed and each cell is published before the axis advances, so the value is a fully determined function of the document exactly as a left fold is — there is no reassociation left to choose, and a divergence is a defect rather than a floating-point fact. Governed by the **§5.19 recurrence contract**, which also forbids every reordering implementation strategy and requires fixtures that pin the arithmetic ORDER (a cancellation ladder, a lag > 1, a symbol-valued lag) rather than an exactly-representable answer a wrong order would also reach. |
 | **Conservative-regridding geometry (areas / weights)** | Invariants exact; areas within rel + abs tol | The M4 geometry kernel (`intersect_polygon`, the `polygon_area` FAQ, the weights `W_ij`) is **tolerance-based** — FP polygon clipping cannot be made bit-identical. Gated primarily on the physical invariants (conservation + partition-of-unity), with a combined rel + abs area tolerance and a sliver floor; the integer **candidate overlap-pair index set** stays byte-identical (§5.5). Governed by the **§5.8 geometry tolerance contract**. |
 
 > **Note.** The only two places a tolerance is legitimate are the ones where the
@@ -795,7 +795,7 @@ numbers by one shared scheme, pinned to what the Julia reference's
    | `0.0` | `0` (rule 1) |
 
 3. **Literal type is by value, not by reader-inferred storage — everywhere,
-   including arithmetic operands and aggregate bodies (normative).** Rule 1 is
+   including arithmetic operands and `faq` bodies (normative).** Rule 1 is
    a property of a number's *value*, so it MUST hold at the AST-literal boundary
    **uniformly**, independent of any binding's JSON-reader number typing. A
    conforming reader whose number inference is context-dependent (Julia's
@@ -807,7 +807,7 @@ numbers by one shared scheme, pinned to what the Julia reference's
    the number appears. In particular this governs the **operand literal types of
    arithmetic ops** (`+ - * / ^ neg`): an integer operand stays an integer
    literal whether the operation sits at the top level, inside another
-   expression, or **inside an `aggregate` `expr` body / `makearray` values**.
+   expression, or **inside a `faq` `expr` body / `makearray` values**.
 
    The canonical consequence for division: **`/` is true, float-returning
    division at evaluation for every operand type** (integer operands never
@@ -815,14 +815,14 @@ numbers by one shared scheme, pinned to what the Julia reference's
    keeping integer operands as integer literals is value-preserving. An integer
    ratio such as `{"op":"/","args":[1,N]}` therefore has ONE canonical byte
    form — `{"op":"/","args":[1,N]}` — that all five bindings MUST produce
-   identically, inside and outside an aggregate. A binding that emits
+   identically, inside and outside a `faq`. A binding that emits
    `{"op":"/","args":[1.0,N.0]}` for an integer-spelled ratio is **non-conformant**.
-   Fixtures MAY spell an exact integer ratio (`1/N`) directly inside an
-   aggregate `expr` (e.g. cell-centre spacing `(i − 1/2)·(1/N)`); they need not
+   Fixtures MAY spell an exact integer ratio (`1/N`) directly inside a
+   `faq` `expr` (e.g. cell-centre spacing `(i − 1/2)·(1/N)`); they need not
    pre-fold it to a non-integral decimal to stay byte-portable. (Rule 1 still
    forbids relying on an integral *float* literal like `1.0` keeping its
    float-ness — that is `1` — so a semantically-float operand must be
-   non-integral; see `tests/valid/aggregate/coordinate_int_ratio_spacing.esm`
+   non-integral; see `tests/valid/faq/coordinate_int_ratio_spacing.esm`
    and the `round_trip` conformance manifest.)
 
 #### 5.5.4 Conformance requirement and the adversarial harness
@@ -891,12 +891,12 @@ discretization RFC to run unmodified through the evaluator.)
 > (`pkg/earthsci-ast-rs/tests/fixtures/pushdown/overlap_gate_point_in_rect.esm`)
 > materialises to the byte-identical support set `[1,2,4,9]` in both engines.
 
-A `join` clause on an `aggregate` may be a **spatial OVERLAP gate** instead of an
+A `join` clause on a `faq` may be a **spatial OVERLAP gate** instead of an
 `on` value-equality gate. It replaces uniform-grid bin-equality with **envelope
 candidacy**: a contracted `(src_pos, tgt_pos)` tuple is admitted iff the two range
 positions are in a **broad-phase candidate set** computed once from two envelope
 factor arrays. The narrow phase (exact rectangle / polygon test) stays as the
-aggregate's `filter`; the gate is ONLY the conservative broad phase.
+`faq`'s `filter`; the gate is ONLY the conservative broad phase.
 
 **Wire form.** A join clause is either `{ "on": [[l, r], …] }` (§5.3) **or**:
 
@@ -942,7 +942,7 @@ separates them without consulting the index-set registry.
 
 **Binders shadow declarations, and the ordering is normative.** The two tests can
 both match, because esm-spec §4.3.1 explicitly permits one string to be a
-variable reference in most contexts and an index symbol inside an `aggregate`'s
+variable reference in most contexts and an index symbol inside a `faq`'s
 `output_idx` / `expr` / `ranges` keys — so a component may legally declare a
 variable named `src` while one of its aggregates binds `src` as a range. Inside
 that node the string denotes the **loop symbol**, and an `on` key column is
@@ -1003,21 +1003,21 @@ result is:
 candidate set (positions 1-based, matching the enumeration bindings). The gate's
 candidate set is built ONCE per node (not per tuple).
 
-An overlap gate **DRIVES enumeration** of the aggregate it is attached to. This
-holds for **any** aggregate — an ordinary dense reduction as much as an
+An overlap gate **DRIVES enumeration** of the `faq` it is attached to. This
+holds for **any** `faq` — an ordinary dense reduction as much as an
 index-set-producing `distinct` producer; nothing in the contract distinguishes
 them, and a binding MUST NOT restrict the driver to the producer. The gate binds
 its two gated symbols from the candidate set rather than testing every tuple of
 the full product, so the cost is `O(|candidates|·∏ungated)` rather than
 `O(∏ranges)`. Which side is **skolemised**, reduced, or output is FREE: the gate
 resolves `src_env` → one loop symbol and `tgt_env` → the other purely from each
-side's declared 1-D shape, and the aggregate's own `output_idx` decides the
+side's declared 1-D shape, and the `faq`'s own `output_idx` decides the
 result's orientation independently. Concretely:
 
 * both gated symbols contracted ⇒ drive from the sorted candidate PAIRS, then
   take the cartesian product with any ungated ranges (the producer case);
 * one gated symbol already bound (it is an **output** index of a dense
-  aggregate) and the other contracted ⇒ the contracted one enumerates only that
+  `faq`) and the other contracted ⇒ the contracted one enumerates only that
   bound position's candidate partners, in the same ascending order its own range
   would have visited them;
 * both gated symbols bound ⇒ a single membership test.
@@ -1036,7 +1036,7 @@ admitted, in the same relative order. The three shapes above MUST be driven —
 that is what the MUST NOT above forbids sidestepping by looking at whether the
 node is a producer. A binding MAY fall back to the full product ONLY for a shape
 outside them, where it cannot show that the driven sequence preserves the
-⊕-accumulation order (an aggregate with additional contracted axes beside two
+⊕-accumulation order (a `faq` with additional contracted axes beside two
 contracted gated ones, say); such a fallback is slower but produces the same
 answer. The materialised member set is
 likewise IDENTICAL to the full-product path — the gate is conservative, so it
@@ -1046,15 +1046,15 @@ phase compares only floating-point envelopes but the emitted **keys are integer*
 of the candidate-generation backend.
 
 **Derived-set `member_factor` and `gated_select` pushdown.** A `kind:"derived"`
-index set produced by an overlap-gated `distinct` aggregate carries
+index set produced by an overlap-gated `distinct` `faq` carries
 `from_faq:"<producer id>"` and MAY carry `member_factor:"<var>"` — the buffer that
 receives the surviving member key per invented position (Hook 1: fed back as a
-`const` factor so an aggregate ranging over the compact derived axis can gather
+`const` factor so a `faq` ranging over the compact derived axis can gather
 the full-grid rows that axis selects). Gathering on the compact axis is what
-downstream aggregates do; it is not a claim about ORIENTATION. An aggregate that
+downstream `faq` nodes do; it is not a claim about ORIENTATION. A `faq` that
 reduces OVER the compact axis and outputs another one gathers exactly the same
 way, and so does one whose envelope factors are themselves such gathers — which
-is the case for the binning aggregate the pushdown desugar rewrites (§5.5.7). An
+is the case for the binning `faq` the pushdown desugar rewrites (§5.5.7). An
 overlap gate's `src_env` / `tgt_env` factors MUST be build-time const-array data
 by the time the broad phase runs; a factor that lives on a derived axis is
 therefore materialised AFTER the axis is sized and its `member_factor` is fed
@@ -1150,7 +1150,7 @@ for that binding but does not agree with the others. Comparing the `equations`
 array as an unordered multiset is NOT an acceptable substitute — it would accept
 exactly the hash-order instability this rule exists to exclude.
 
-**The BINNING aggregate.** The pattern's core is a `+`-semiring aggregate over
+**The BINNING `faq`.** The pattern's core is a `+`-semiring `faq` over
 exactly two 1-D index sets — a CELL set `C` and a RECORD set `R` — whose body
 carries a **containment predicate**: an `and`/`*` of comparisons, each between a
 factor subscripted by the cell symbol and one subscripted by the record symbol.
@@ -1166,7 +1166,7 @@ each carries:
 
 The second is the 2-D AABB test `cxmin ≤ rxmax ∧ rxmin ≤ cxmax ∧ cymin ≤ rymax
 ∧ rymin ≤ cymax` — a record with EXTENT (a polygon's or a line's bounding box)
-rather than a position. The exact geometry stays the aggregate's own narrow
+rather than a position. The exact geometry stays the `faq`'s own narrow
 phase, exactly as the point shape leaves the strict-vs-closed edge case to its
 `filter`; this is only the broad phase around it. §5.5.6 already admits an
 arity-4 envelope on either side independently, so nothing downstream of the
@@ -1191,8 +1191,8 @@ binding MUST therefore pair deterministically — by order of first appearance �
 and MUST NOT reject a predicate for being ambiguous, nor infer axes from factor
 NAMES.
 
-Both **orientations** of that aggregate are recognised. Which axis is the output
-is decided by the aggregate's own `output_idx`. For a POINT predicate, which
+Both **orientations** of that `faq` are recognised. Which axis is the output
+is decided by the `faq`'s own `output_idx`. For a POINT predicate, which
 symbol is the cell is decided by the predicate too — the rect side carries four
 bound factors against the point side's two coordinates, and only one assignment
 parses. An ENVELOPE predicate is **symmetric** and parses BOTH ways, so there
@@ -1233,7 +1233,7 @@ parameter shaped `[C, out]`, the rewrite emits:
    gated axis, and the (sorted) list of gated arrays.
 
 Emitting (5)'s gate is what stops the rewritten `E` from still visiting
-`|support| × |R|` pairs; with it, §5.5.6's driver makes the aggregate cost
+`|support| × |R|` pairs; with it, §5.5.6's driver makes the `faq` cost
 `O(|candidates|)`.
 
 **Cell-axis arrays (normative).** Re-pointing `E`'s reduction range renumbers
@@ -1279,7 +1279,7 @@ array and the subscript. Declining silently is not permitted, and neither is
 emitting the rewrite anyway: the first hides an ungated whole-array fetch, the
 second produces wrong numbers.
 
-**MIRRORED arm (gate only).** A per-record binning aggregate receives ONLY the
+**MIRRORED arm (gate only).** A per-record binning `faq` receives ONLY the
 `join.overlap` clause. It MUST NOT receive a derived index set, a producer, a
 member factor, a gathered rect family, or a `gated_select` entry, and its
 `shape`, `output_idx` and `ranges` MUST be left untouched. The reasons are
@@ -1291,7 +1291,7 @@ normative, not stylistic:
 * its cell axis is therefore NOT re-pointed, so its envelope factors are the
   document's own const-array rect factors, unrewritten.
 
-A mirrored aggregate consequently gets no provider gating: nothing it reads is
+A mirrored `faq` consequently gets no provider gating: nothing it reads is
 sliced to a support set.
 
 The mirrored arm is a **rider, not a trigger**: mirrors are collected only after
@@ -1313,7 +1313,7 @@ and **rule 2 governs it**: a reference denotes its expansion. Normatively:
 
 Emission is separately constrained, and in the opposite direction. The rewrite
 MUST re-point the rect factors by editing the **call site** — the reference's
-`bindings`, and the aggregate's own `ranges` / `shape` / `args` / `join` — and
+`bindings`, and the `faq`'s own `ranges` / `shape` / `args` / `join` — and
 MUST NOT edit the referenced template `body`. The body is shared across call
 sites (one of them being the generated producer `filter`, which keeps the
 FULL-GRID rect references) and is lowered once at the build boundary, which is
@@ -1322,7 +1322,7 @@ MUST be re-pointed: the bare factor name (`{"xmin": "src_W"}`) and the
 subscripted expression (`{"lo_x": index(src_W, c)}`).
 
 Consequently a rect factor named **free** in a template body — reachable from
-neither the call site's `bindings` nor the aggregate's `args` — cannot be
+neither the call site's `bindings` nor the `faq`'s `args` — cannot be
 re-pointed, and leaving it would index the compact per-support cell gathers with
 full-grid positions. That is a wrong-numbers defect, so it MUST be rejected, with
 diagnostic `template_body_references_pushdown_rewritten_variable`. The remedy is
@@ -1330,9 +1330,9 @@ the one §9.6.4's sibling guard `template_body_references_coupling_rewritten_var
 already prescribes: bind the value through the template's params.
 
 **Residual diagnostic.** The desugar MUST NOT decline silently on a document it
-can see is join-shaped. When an aggregate is the rank-1 factor of a `+`-semiring
+can see is join-shaped. When a `faq` is the rank-1 factor of a `+`-semiring
 mat-vec against a provider-backed rank-2 parameter (the join position) AND is
-itself a `+`-aggregate over two 1-D index sets whose output axis is that
+itself a `+`-`faq` over two 1-D index sets whose output axis is that
 parameter's first axis, but its containment predicate cannot be recovered, the
 implementation MUST emit a diagnostic naming the variable and stating the
 consequence — the provider-backed array is fetched WHOLESALE. The records are
@@ -1345,13 +1345,13 @@ template's name, or null) and `consequence`, sorted by
 `(variable, consumer, array)`. Human-readable text is not part of the contract.
 
 This is a diagnostic, **not** a rejection: the desugar's contract is that a
-document it does not recognise comes back byte-identical, and an aggregate with
+document it does not recognise comes back byte-identical, and a `faq` with
 no containment predicate at all is a legitimately dense reduction, not a defect —
 "not a join" and "a join I could not read" MUST be kept apart, and only the
 latter is reported.
 
 **Soundness guard.** Every arm fires only when the reduction's semiring is the
-additive `(+, 0)` monoid. A `max_product` / `min_sum` / etc. aggregate of the
+additive `(+, 0)` monoid. A `max_product` / `min_sum` / etc. `faq` of the
 same shape MUST be left untouched — the gate is conservative and the identity
 fill is semiring-specific, and the rewrite does not attempt to reason about
 either for a non-additive monoid.
@@ -1362,9 +1362,9 @@ either for a non-additive monoid.
 > `earthsci-ast-rs/src/join.rs` (resolution) + `src/relational.rs::equijoin`
 > (the match set) + `src/simulate_array/eval.rs` (the driver, shared verbatim
 > with the overlap gate). Cross-language conformance: the shared fixture
-> `tests/valid/aggregate/join_on_data_columns.esm`.
+> `tests/valid/faq/join_on_data_columns.esm`.
 
-A `join` clause on an `aggregate` spelled `{ "on": [[l, r], …] }` (§5.3) is a
+A `join` clause on a `faq` spelled `{ "on": [[l, r], …] }` (§5.3) is a
 **value-equality gate**. Its relational semantics were already fixed — inner
 only, many-to-many defined (`m·n` product terms), unmatched rows contribute the
 additive identity `0̄`, exact-equality keys only with **floats forbidden**. This
@@ -1457,17 +1457,17 @@ defect that is plainly in the text. Each carries a code:
 | `join_syms_unknown_symbol` | … bind a `syms` entry: it is not a key of that node's `ranges`. Left unchecked the side resolves to no symbol at all, and §5.3's degenerate-positional rule then silently DROPS the pair — an ungated full product, reported as a number rather than as a failure. |
 
 Both attach at the containing equation FIELD (`/models/<M>/equations/<i>/rhs`),
-the pointer convention the other aggregate checks use, and one finding per
-aggregate is enough.
+the pointer convention the other `faq` checks use, and one finding per
+`faq` is enough.
 
 A self-join introduces no new relational semantics and no new order: inner-only,
 many-to-many, identity fill for an unmatched row, the rule-5 match set sorted by
 canonical key, and the driven walk as an order-preserving subsequence of the
 full product all hold unchanged. Cross-binding conformance: the shared fixtures
-`tests/valid/aggregate/join_on_self_join.esm` (the default assignment) and
+`tests/valid/faq/join_on_self_join.esm` (the default assignment) and
 `join_on_self_join_syms.esm` (the explicit spelling, whose answer DIFFERS from
 the default's, so a binding that parses `syms` and ignores it fails it), and the
-three rejections under `tests/invalid/aggregate/build_time/`, pinned by
+three rejections under `tests/invalid/faq/build_time/`, pinned by
 `(code, path)` in `tests/invalid/expected_errors.json` — which is what
 `scripts/compare-conformance-outputs.py` enforces for every binding.
 
@@ -1509,7 +1509,7 @@ Cost is `O(|L| + |R| + |matches|)` plus one sort over the matched distinct keys
 gate's driver applies here **unchanged**, and a binding SHOULD implement one
 driver for both: the gate binds its two gated symbols from the match set rather
 than testing every tuple of the full product, so the cost is
-`O(|matches|·∏ungated)` rather than `O(∏ranges)`, on **any** aggregate. The
+`O(|matches|·∏ungated)` rather than `O(∏ranges)`, on **any** `faq`. The
 three binding cases are the same three:
 
 * both gated symbols contracted ⇒ drive from the sorted candidate PAIRS, then
@@ -1605,11 +1605,11 @@ apart is outside the contract by construction.
 ### 5.6 Closed Semiring Registry (normative)
 
 > This is the normative form of RFC `semiring-faq-unified-ir` §5.1 / §5.2 / §5.6.
-> The `aggregate` node (canonical tag for the former `arrayop`) is a **semiring
+> The `faq` node (canonical tag for the former `faq`) is a **semiring
 > FAQ**: a reduction `⊕_C ⊗_k factor_k` over a set of index ranges. The semiring
 > fixes the two operators and — critically for cross-binding agreement — their
 > **identity elements**. These rules are exercised by the worked-example fixtures
-> in `tests/valid/aggregate/` and the per-binding evaluator suites (see §5.6.4).
+> in `tests/valid/faq/` and the per-binding evaluator suites (see §5.6.4).
 
 **Governing principle.** The `(⊕, ⊗)` operators and **both** identity elements
 (`0̄`, the value of an empty `⊕`-reduction; `1̄`, the value of an empty
@@ -1651,7 +1651,7 @@ reject it for array-valued reductions.
 3. **An unregistered `semiring` is a hard error** in every binding (the enum is
    closed); it is also a schema violation (enum constraint), so non-evaluating
    bindings reject it at validation time
-   (`tests/invalid/aggregate/unregistered_semiring.esm`).
+   (`tests/invalid/faq/unregistered_semiring.esm`).
 
 #### 5.6.3 Empty / degenerate reductions
 
@@ -1665,15 +1665,17 @@ contribute `0̄` (they add nothing under any `⊕`). Concretely: an empty
 `max_sum` is `−∞`. (The non-finite identities are not integrable as ODE rates,
 so they are asserted at the per-binding unit level rather than through a solve.)
 
-#### 5.6.4 Index-set registry and the `aggregate` tag
+#### 5.6.4 Index-set registry and the `faq` tag
 
 A `ranges` entry MAY be a dense `[lo, hi]` / `[lo, step, hi]` tuple **or** an
 index-set reference `{"from": <name>}` / `{"from": <name>, "of": [<parents>]}`
 resolved against the document `index_sets` registry (RFC §5.2): `interval` →
 `[1, size]`, `categorical` → `[1, |members|]`, `ragged` → a per-cell dynamic
 bound. An undeclared `from` name is a hard error — no implicit interval is
-inferred. The canonical `op: "aggregate"` tag and the deprecated `op: "arrayop"`
-alias are evaluated identically (§5.6).
+inferred. The canonical tag is `op: "faq"`. The pre-1.1.0
+`op: "aggregate"` spelling is a DEPRECATED ALIAS, normalized to `faq` at the wire
+boundary and removed at esm 2.0.0; `op: "arrayop"` was removed at 0.8.0 and is
+not accepted (§5.6, docs/content/rfcs/faq-node-rename.md).
 
 The registry a `from` name resolves against is the **effective** one — the
 document's own `index_sets` merged with those of every template library imported
@@ -1686,15 +1688,15 @@ NOT report `undefined_index_set` for a document that declares no registry** —
 mirroring §9.6.1, where `template_constraint_unknown_index_set` does not run for
 a library file loaded or validated standalone. A document that DOES declare a
 registry is resolved against it at validation, and an absent `from` name is
-`undefined_index_set` (`tests/invalid/aggregate/undeclared_from_name.esm`); in
+`undefined_index_set` (`tests/invalid/faq/undeclared_from_name.esm`); in
 both cases a name still unresolved once injection has run is rejected by the
 evaluating bindings at build (`E_REF_UNDECLARED_INDEX_SET` and its per-binding
 peers), so no typo survives to run time. Positive control:
-`tests/conformance/expression_templates/inject_agnostic_aggregate/fixture.esm`.
+`tests/conformance/expression_templates/inject_agnostic_faq/fixture.esm`.
 
 #### 5.6.5 Conformance requirement
 
-The shared fixtures under `tests/valid/aggregate/` carry inline `tests`
+The shared fixtures under `tests/valid/faq/` carry inline `tests`
 assertions that **all evaluating bindings check against the same `expected`
 values**, so agreement is the cross-binding semiring-equivalence proof:
 
@@ -1706,16 +1708,16 @@ values**, so agreement is the cross-binding semiring-equivalence proof:
 | `categorical_index_set.esm` | a `categorical` `{from}` contraction (cardinality = member count) |
 
 - **Julia, Rust, Python** evaluate every fixture and match its inline
-  `expected` (`pkg/EarthSciAST.jl/test/aggregate_conformance_test.jl`,
-  `pkg/earthsci-ast-rs/tests/aggregate_conformance_tests.rs`,
-  `pkg/earthsci-ast-py/tests/test_aggregate_conformance.py`), and each
+  `expected` (`pkg/EarthSciAST.jl/test/faq_conformance_test.jl`,
+  `pkg/earthsci-ast-rs/tests/faq_conformance_tests.rs`,
+  `pkg/earthsci-ast-py/tests/test_faq_conformance.py`), and each
   asserts the full `0̄` / `1̄` identity table (including the non-finite rows) in
   its evaluator unit suite.
 - **Go, TypeScript** parse + schema-validate every valid fixture and reject the
-  invalid ones, covering the additive fields (`op:"aggregate"`, the `semiring`
+  invalid ones, covering the additive fields (`op:"faq"`, the `semiring`
   enum, `ranges` `{from}` references, the `index_sets` registry) with no
-  evaluator (`pkg/earthsci-ast-go/pkg/esm/aggregate_fixtures_test.go`,
-  `pkg/earthsci-ast-ts/src/aggregate-fixtures.test.ts`).
+  evaluator (`pkg/earthsci-ast-go/pkg/esm/faq_fixtures_test.go`,
+  `pkg/earthsci-ast-ts/src/faq-fixtures.test.ts`).
 
 ### 5.7 Cadence-Partition Pass (normative)
 
@@ -1763,7 +1765,7 @@ Two points fix the semantics:
    between events and must recompute every step. Classifying by cadence keeps
    such forcings out of `DISCRETE`, where they would silently go stale.
 2. **There is no "grid" class.** With topology first-class (§5.6.4), the mesh is
-   not a primitive input — it is `aggregate` nodes (`distinct`, `join`, `rank`)
+   not a primitive input — it is `faq` nodes (`distinct`, `join`, `rank`)
    over mesh primitive arrays. When those primitives are document literals the
    topology partition is `CONST` and folds into the artifact; when the mesh is
    reloaded at discrete events (AMR, moving meshes) the same nodes are
@@ -1963,7 +1965,7 @@ harness runs in two layers:
   `tests/conformance/cadence/README.md` for the adapter contract.
 
 Guard 2 (no relational engine on the hot path) is additionally pinned by the
-committed fixture `tests/invalid/aggregate/continuous_relational_node.esm` — a
+committed fixture `tests/invalid/faq/continuous_relational_node.esm` — a
 schema-valid document (accepted by Go / TypeScript, marked `resolver_only`) whose
 state-dependent `distinct` classifies `CONTINUOUS` and is rejected by the
 partition pass in all three evaluators.
@@ -2189,7 +2191,7 @@ agree, on a **numeric-tolerance** basis, when they evaluate and integrate shared
 driven by `scripts/run-pde-simulation-conformance.py`; bead ess-fmw).
 
 Go and TypeScript are **out of scope** — they implement only the rewrite half
-(no `arrayop`/`makearray` evaluator, no simulator).
+(no `faq`/`makearray` evaluator, no simulator).
 
 #### 5.9.1 What is compared
 
@@ -2419,13 +2421,13 @@ fixture lives in `tests/conformance/build_once_spatial_field/`.
 This closes two gaps the §5.8 / §5.11 fixtures do not cover, both on the
 build-once materialization ⇄ RHS seam:
 
-1. **A build-once array op that is NOT an aggregate.** A discretization rule
+1. **A build-once array op that is NOT a `faq`.** A discretization rule
    lowers `D(field)` to a `makearray` STENCIL (interior + periodic-boundary
-   regions, each a nested central-difference aggregate), and a shape rewrite may
+   regions, each a nested central-difference `faq`), and a shape rewrite may
    emit a `reshape`. Neither carries `output_idx`/`ranges`, so the setup-time
    materializer must evaluate them per output cell through the **same** build-time
    array pipeline the ODE RHS uses for `index(makearray, …)` — not only the
-   aggregate (`output_idx`) form.
+   `faq` (`output_idx`) form.
 2. **A build-once array crossing into the ODE RHS.** A field materialized at
    setup must be exposed to the ODE RHS as a **gatherable const array**, so a
    per-cell reference `index(darea, c)` (after shape promotion of a scalar
@@ -3038,7 +3040,7 @@ cannot see this class of corruption at all. A key set must be compared exactly.
 > section is the cross-binding *conformance* contract.
 
 A **recurrence definition** is an equation defining an array-shaped unknown `V`
-whose RHS `aggregate` body reads `index(V, …)` at a strictly earlier position along
+whose RHS `faq` body reads `index(V, …)` at a strictly earlier position along
 exactly one of the aggregate's output axes. It is the one construct in the format
 whose output cells are **not independent**, so its conformance contract is stated
 in terms of order, not only of value.
@@ -3053,7 +3055,7 @@ the §5.2 *Forward cumulative (prefix) reductions* company rather than under the
   inside it in `output_idx` order);
 * each cell's value is published before the axis advances, so the value read at a
   lag is the value the sweep already wrote — not a converged approximation to it;
-* the body at each cell is an ordinary cell-restricted `aggregate`, evaluated by
+* the body at each cell is an ordinary cell-restricted `faq`, evaluated by
   §4.3.1's own ascending accumulation order.
 
 Together these make the result a **fully determined** function of the document, in
@@ -3700,7 +3702,7 @@ record as deferred.
 > `reduce_contraction_gated`). Gates:
 > `earthsci-ast-rs/tests/join_on_conjunctive_gate.rs`.
 
-An `aggregate` may carry several gates — several `join` clauses, or several key
+A `faq` may carry several gates — several `join` clauses, or several key
 pairs over different symbol pairs within one clause (§5.5.8), or an `overlap`
 clause alongside an `on` one (§5.5.6). Their **semantics** were never in
 question: the gates compose by **conjunction**, and a combination is admitted
@@ -4348,7 +4350,7 @@ ELEMENTWISE readable through a gather. Given
 ```
 
 with `zc` shaped `[lev]`, a reader that says `index(f, j)` — the body of a column
-`aggregate`, say — is asking for `f`'s value at level `j`. A binding that inlines
+`faq`, say — is asking for `f`'s value at level `j`. A binding that inlines
 `f` into its readers by name substitution (a legitimate and common lowering) has
 `index(1 + cos(pi*zc), j)` in hand, and MUST resolve it by the identity above,
 transitively, until the gather lands on the array LEAVES:
@@ -4365,11 +4367,11 @@ and DROPS the index. The array leaf then survives into evaluation unbound.
 
 The gather must reach every array SOURCE a binding can gather at all — an array
 state slot, a live forcing buffer, a build-time const array, an array producer
-node (`makearray`, or an `aggregate`/`arrayop` that keeps at least one symbolic
+node (`makearray`, or a `faq` that keeps at least one symbolic
 output index). It must NOT descend into, or re-wrap:
 
 - an `index` node — already a scalar; the gather it carries is its own;
-- a SCALAR reduction (an `aggregate`/`arrayop` whose `output_idx` is empty) — it
+- a SCALAR reduction (a `faq` whose `output_idx` is empty) — it
   produces a scalar and gathering it is a rank error;
 - any non-elementwise op (a closed function `fn`, a geometry kernel, an
   unlowered rewrite target), which consumes whole arrays under its own contract.
@@ -4423,9 +4425,9 @@ and still means what it meant.
 **The rule.** Before evaluation, a binding MUST bind the field's dimension names
 in the reference. The pinned mechanism is the same in all three bindings
 (`bind_dimension_names`): a reference that mentions a dimension name **free** —
-as a variable reference not bound by an enclosing `aggregate` / `arrayop` /
+as a variable reference not bound by an enclosing `faq` /
 `makearray` loop symbol or an `integral`'s integration variable — is wrapped in
-an `aggregate` whose `output_idx` ARE the dimension names in shape order, each
+a `faq` whose `output_idx` ARE the dimension names in shape order, each
 ranging over its index set, and whose body is the reference; a reference that
 mentions none is passed through untouched. The wrap is capture-aware: a gather
 that rebinds a dimension name as its own loop symbol (`aggregate(x from x; …)`)
@@ -4501,8 +4503,8 @@ The `wrt` clause: **Julia** `test/inline_tests_test.jl`
 (`bind_dimension_names` wraps only a free mention), **Python**
 `tests/test_inline_tests.py::test_bind_dimension_names_wraps_only_a_free_mention`,
 **Rust** `inline_tests::tests::bind_dimension_names_wraps_only_a_free_mention`.
-The same three cases also pin the two other non-mentions the rule turns on: an
-`aggregate` that rebinds the dimension name, and an `integral` whose integration
+The same three cases also pin the two other non-mentions the rule turns on: a
+`faq` that rebinds the dimension name, and an `integral` whose integration
 variable is it.
 
 The scope clash: **Julia** `test/inline_tests_test.jl`
@@ -5438,11 +5440,14 @@ ever emitted it, and the code had zero real coverage.
 | `event_var_undeclared` | Structural | Event affects undeclared variable. NOT emitted for `_var` (esm-spec §6.4, §4.9.1) or for the independent variable. |
 | `equation_count_mismatch` (see above) | Structural | Unknowns vs equations. Algebraic and expression-LHS equations COUNT (esm-spec §4.9.4). |
 | `unit_dimension_mismatch` | Units | Dimensional analysis failure — a PROVABLE inconsistency (esm-spec §4.8.4). Emitted by the structural layer as `unit_inconsistency`. Hard error. |
+| `removed_op` | Structural | **Hard error.** An expression node uses an `op` spelling that was REMOVED rather than deprecated. Currently exactly one: `arrayop`, the pre-0.8.0 spelling of `faq`, removed at esm 0.8.0. It MUST be rejected BY NAME at the wire boundary, not left to fall through: `arrayop` is a well-formed identifier, so esm-spec §4.2 would otherwise admit it as an OPEN rewrite-target op, load it silently, and fail much later (or never) as `unlowered_operator`. Names the offending node's path. Julia's removed `call` op (v0.3.0) is the precedent. Fixture: `tests/invalid/faq/arrayop_op_removed.esm`. |
+| `faq_version_too_old` | Structural | **Hard error.** A document spells `"op": "faq"` while declaring `esm` below 1.1.0. `faq` arrives at esm 1.1.0, the same version gate the top-level `solver` block follows (esm-spec §2.2.4). The gate MUST read the AUTHORED form, before alias normalization: `aggregate` is the legal pre-1.1.0 spelling, so a 1.0.0 document carrying the alias must NOT be caught — it is normalized instead, with its declared version raised to the 1.1.0 floor so the upgraded document is self-consistent. The rule is transitive through lowering: a document whose EXPANDED form contains `faq` declares 1.1.0 even when its authored bytes do not. Fixtures: `tests/conformance/deprecated_op_alias/`. |
+| `deprecated_op_alias` | Structural | **WARNING, not an error.** An expression node uses a deprecated `op` spelling. The one alias is `aggregate`, the pre-1.1.0 spelling of `faq` (the Functional Aggregate Query node, docs/content/rfcs/faq-node-rename.md). The loader MUST normalize the node to `faq` at ONE wire boundary per binding, applied to EVERY document a load touches — the root, a `{ref}`-loaded child, a template library, a coupling library — ahead of the version gates and schema validation, so nothing downstream of the loader, `emit` included, sees the alias. Normalizing only the root is NOT sufficient and was the shipped bug: ref resolution then parses child files raw, and a child's alias reaches `emit` untouched. and MUST report this once per DOCUMENT per alias, naming the count, not once per node. The alias is REMOVED at esm 2.0.0. Like `operator_compose_partial_merge`, this is a CLASSIFICATION: each binding asserts it idiomatically (Julia `@warn`, Python `DeprecationWarning`, TypeScript `console.warn`, Rust/Go stderr). The older `arrayop` spelling is NOT an alias — it was removed at 0.8.0 and is rejected. Fixtures: `tests/conformance/deprecated_op_alias/`, `tests/invalid/faq/arrayop_op_removed.esm`. |
 | `unit_parse_error` | Units | Unrecognized unit string — does not parse under the esm-spec §4.8.2 grammar, or names a symbol absent from the §4.8.1 registry. Hard error, NOT a warning. |
 | `array_shape_mismatch` | Structural | An operand of a BARE array-level expression is declared over an index set the result is not shaped over (esm-spec §4.3.4). Operands align by index-set NAME: one declared over a SUBSET of the result's sets broadcasts along the missing axes and axis order is immaterial, but one carrying an EXTRA set has no axis to align to. Pointer: the containing expression field (`…/equations/i/rhs`, `…/variables/v/expression`). Both shapes are declared, so this is static — hard error, NOT a warning, and NOT a runtime concern. Fixture: `tests/invalid/array_broadcast/operand_index_set_not_in_result.esm`. |
 | `observed_cycle` | Structural | A dependency cycle among a model's OBSERVED unknowns (esm-spec §4.9.6): each observed on the cycle is defined by an equation whose RHS names the next, so no evaluation order satisfies every definition. Decidable from the equations alone — hard error in `validate`, in EVERY binding, executing or not. Pointer: `/models/<M>` (a cycle belongs to no single equation). `details.cycle` is the path in traversal order with the entry node repeated to close it — a PATH, so it is ordered semantically, not by §7.1.0. The self-edge of a §4.3.1.1 recurrence CANDIDATE is dropped (§5.19.5); every other self-reference (`x ~ x + 1`, `s ~ s + 1`) is a cycle of length one and IS reported. Fixture: `tests/invalid/observed_cycle_array_elementwise.esm`. |
 | `recurrence_not_wellfounded` | Structural | A causal self-read (esm-spec §4.3.1.1) that is not strictly earlier along exactly one axis: a read provably at the same cell or later on its axis, an index argument that is not affine in its frame symbol with coefficient 1, an offset on more than one axis, self-reads disagreeing on the axis, a bare read of the variable in its own RHS, or a recurrence axis that is ragged / derived / strided. Hard error in EVERY binding, executing or not (§5.19.5) — the pre-1.0 behaviour was a plausible wrong number. Pointer: the containing expression field (`…/equations/i/rhs`). |
-| `recurrence_unsupported_form` | Structural | A self-read the runtime cannot restrict to one cell: reached through a `makearray` region value or a `reshape`/`transpose`/`concat` operand, or in an equation whose RHS is not an `aggregate` over the variable's frame or whose output ranges are not statically resolvable (esm-spec §4.3.1.1). Distinct from `recurrence_not_wellfounded`: the READ is causal, the CARRIER cannot sequence it. |
+| `recurrence_unsupported_form` | Structural | A self-read the runtime cannot restrict to one cell: reached through a `makearray` region value or a `reshape`/`transpose`/`concat` operand, or in an equation whose RHS is not a `faq` over the variable's frame or whose output ranges are not statically resolvable (esm-spec §4.3.1.1). Distinct from `recurrence_not_wellfounded`: the READ is causal, the CARRIER cannot sequence it. |
 | `reserved_variable_name` | Structural | A declaration spelled with a globally-scoped name — the document's independent variable (`domain.independent_variable`, default `"t"`) or the §6.4 `_var` placeholder (esm-spec §4.9.1.1). Both are in scope in every model and resolve BY NAME, so the declaration is unreachable and every reader silently gets the implicit symbol instead. Covers all three declaration maps: `models[M].variables` (recursing into every INLINE subsystem, at any depth), `reaction_systems[S].species`, `reaction_systems[S].parameters`. Pointer: the offending key, e.g. `/models/M/variables/t`, `/models/M/subsystems/S/variables/t`. Hard error in EVERY binding — the pre-fix behaviour was a validated document whose equations silently read the simulation clock. The reserved set FOLLOWS the document, exactly as `reserved_index_symbol` does; a binding that hard-codes the literal `"t"` fails `tests/valid/independent_variable_renamed.esm`. |
 
 #### 7.1.0 List-valued diagnostic details are sorted

@@ -169,7 +169,7 @@ const CADENCE_MANIFEST = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "
             "variables" => Dict{String,Any}("u" => Dict{String,Any}("type" => "unknown")),
             "index_sets" => Dict{String,Any}("faces" => Dict{String,Any}("kind" => "interval", "size" => 4)))
         rhs = Dict{String,Any}(
-            "op" => "aggregate", "distinct" => true, "semiring" => "bool_and_or",
+            "op" => "faq", "distinct" => true, "semiring" => "bool_and_or",
             "output_idx" => Any["e"], "ranges" => Dict{String,Any}("f" => Dict{String,Any}("from" => "faces")),
             "key" => Dict{String,Any}("op" => "skolem", "label" => "edge",
                 "args" => Any[Dict{String,Any}("op" => "index", "args" => Any["u", "f"])]),
@@ -179,12 +179,12 @@ const CADENCE_MANIFEST = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "
     end
 
     @testset "neg: continuous relational FIXTURE rejected (guard 2)" begin
-        # The shared invalid fixture tests/invalid/aggregate/continuous_relational_node.esm
+        # The shared invalid fixture tests/invalid/faq/continuous_relational_node.esm
         # — SCHEMA-VALID (Go/TS accept it, marked resolver_only) but rejected by the
         # partition guard. The same fixture is rejected by the Rust and Python
         # siblings, so all three evaluators agree (bead ess-my4.3.11). In Julia the
         # guard lives in run_guards (not partition_model).
-        fixture = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid", "aggregate", "continuous_relational_node.esm")
+        fixture = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid", "faq", "continuous_relational_node.esm")
         model = _Cadence.load_model_json(fixture, "ContinuousRelationalNode")
         @test_throws _Cadence.CadenceError _CadPass.run_guards(model)
     end
@@ -197,12 +197,12 @@ const CADENCE_MANIFEST = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "
                 "setB" => Dict{String,Any}("kind" => "derived", "from_faq" => "nodeB")),
             "equations" => Any[
                 Dict{String,Any}("lhs" => Dict{String,Any}("op" => "index", "args" => Any["a", "x"]),
-                    "rhs" => Dict{String,Any}("op" => "aggregate", "id" => "nodeA", "distinct" => true,
+                    "rhs" => Dict{String,Any}("op" => "faq", "id" => "nodeA", "distinct" => true,
                         "semiring" => "bool_and_or", "output_idx" => Any["x"],
                         "ranges" => Dict{String,Any}("y" => Dict{String,Any}("from" => "setB")),
                         "expr" => Dict{String,Any}("op" => "true", "args" => Any[]))),
                 Dict{String,Any}("lhs" => Dict{String,Any}("op" => "index", "args" => Any["b", "x"]),
-                    "rhs" => Dict{String,Any}("op" => "aggregate", "id" => "nodeB", "distinct" => true,
+                    "rhs" => Dict{String,Any}("op" => "faq", "id" => "nodeB", "distinct" => true,
                         "semiring" => "bool_and_or", "output_idx" => Any["x"],
                         "ranges" => Dict{String,Any}("y" => Dict{String,Any}("from" => "setA")),
                         "expr" => Dict{String,Any}("op" => "true", "args" => Any[])))])

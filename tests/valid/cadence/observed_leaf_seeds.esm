@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "ObservedLeafSeeds",
     "description": "CONFORMANCE_SPEC §5.7.2: an OBSERVED unknown's cadence seed is the class of its DEFINING EQUATION's RHS, not a fixed class for the whole `unknown` type. Both wrong answers are discriminated here. Seeding every unknown CONTINUOUS is sound but stops `geom` folding at bind, and const-folding state-free observeds is what the geometry and projection-pushdown paths rely on. Seeding an observed CONST — what the 0.x code did, admitting it was imprecise and unexercised — wrongly folds `u_scaled`, which reads the state `u` and is genuinely CONTINUOUS. Only resolving through the defining equation gets both right. `geom_chain` additionally pins that the resolution is TRANSITIVE: it reads another observed, not a parameter, so a binding that resolves one level deep and then gives up misclassifies it.",
@@ -123,7 +123,7 @@
         {
           "_comment": "D(u[i])/dt = k_scaled * (u_scaled[i] - u[i]) / geom_chain. Mixes all three classes so the materialization frontier is observable.",
           "lhs": {
-            "op": "aggregate",
+            "op": "faq",
             "output_idx": [
               "i"
             ],
@@ -150,7 +150,7 @@
             }
           },
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "expect_cadence": "continuous",
             "output_idx": [
               "i"

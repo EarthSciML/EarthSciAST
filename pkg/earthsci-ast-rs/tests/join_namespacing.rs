@@ -185,7 +185,7 @@ fn flattened_overlap_producer_materializes_the_golden_support_set() {
 /// `Expr::Variable`. The committed M2 fixture's join is all four of them.
 #[test]
 fn join_on_loop_symbols_and_index_sets_are_left_alone() {
-    let fixture = include_str!("../../../tests/valid/aggregate/join_filter.esm");
+    let fixture = include_str!("../../../tests/valid/faq/join_filter.esm");
     let file = earthsci_ast::load_string(fixture).expect("parse");
     let flat = flatten(&file).expect("flatten");
     let node = flattened_producer(&flat.equations);
@@ -207,7 +207,7 @@ fn join_on_loop_symbols_and_index_sets_are_left_alone() {
 /// registry like any other reference.
 #[test]
 fn join_on_key_column_naming_a_local_buffer_is_namespaced() {
-    let fixture = include_str!("../../../tests/valid/aggregate/join_filter.esm");
+    let fixture = include_str!("../../../tests/valid/faq/join_filter.esm");
     let mut doc: Value = serde_json::from_str(fixture).expect("json");
     let vars = doc["models"]["EmissionsAggregate"]["variables"]
         .as_object_mut()
@@ -289,7 +289,7 @@ fn variable_map_removal_renames_join_envelope_names() {
 /// A LOOP SYMBOL SHADOWED by a same-named declared variable stays a loop symbol.
 ///
 /// esm-spec §4.3.1 lets one string be a variable reference in most contexts and
-/// an index symbol inside an `aggregate`'s `output_idx` / `expr` / `ranges` keys,
+/// an index symbol inside a `faq`'s `output_idx` / `expr` / `ranges` keys,
 /// so a model may legally declare a variable named `src` while an aggregate
 /// binds `src` as a range. Inside the node the string denotes the LOOP SYMBOL,
 /// and an `on` key column is resolved against THIS node's ranges — so prefixing
@@ -298,7 +298,7 @@ fn variable_map_removal_renames_join_envelope_names() {
 /// own binder set must win.
 #[test]
 fn shadowed_loop_symbol_stays_a_loop_symbol() {
-    let fixture = include_str!("../../../tests/valid/aggregate/join_filter.esm");
+    let fixture = include_str!("../../../tests/valid/faq/join_filter.esm");
     let mut doc: Value = serde_json::from_str(fixture).expect("json");
     // `src` is now BOTH a declared parameter and a `ranges` key of the producer.
     doc["models"]["EmissionsAggregate"]["variables"]["src"] =
@@ -322,7 +322,7 @@ fn shadowed_loop_symbol_stays_a_loop_symbol() {
 /// binder scan must skip rather than trip over.
 #[test]
 fn shadowed_output_index_stays_a_binder() {
-    let fixture = include_str!("../../../tests/valid/aggregate/join_filter.esm");
+    let fixture = include_str!("../../../tests/valid/faq/join_filter.esm");
     let mut doc: Value = serde_json::from_str(fixture).expect("json");
     doc["models"]["EmissionsAggregate"]["variables"]["o"] =
         serde_json::json!({ "type": "parameter" });

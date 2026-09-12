@@ -55,7 +55,7 @@ const golden = (goldenPath: string): unknown => JSON.parse(fs.readFileSync(golde
  * longer even agree on it: each former `type: 'observed'` variable became a
  * bare-LHS equation appended in that FILE's own `variables` key order, and the
  * goldens were regenerated with those keys sorted while the fixtures kept their
- * authored order (aggregate_int_ratio_golden's fixture yields `dx, c0` where
+ * authored order (faq_int_ratio_golden's fixture yields `dx, c0` where
  * its golden lists `c0, dx`). Canonicalizing both sides keeps these gates
  * pinning equation CONTENT — everything else still compares exactly.
  */
@@ -122,16 +122,16 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
     expect(f.index_sets.cells.size).toBe(10) // NC default, deduped once
   })
 
-  it('aggregate_int_ratio_golden: integer ratio inside a nested aggregate stays integer (§5.5.3.1)', () => {
+  it('faq_int_ratio_golden: integer ratio inside a nested aggregate stays integer (§5.5.3.1)', () => {
     // A `coord` template body cos(pi·aggregate((i−1/2)·(1/8))) expands so an
     // integer ratio {op:/,args:[1,8]} lands inside a nested, float-heavy
     // aggregate expr. Julia's JSON3 reader widened it to `1.0/8.0`; every other
     // binding keeps `[1,8]`, so the committed golden is `[1,8]` and this binding
     // must reproduce it.
-    expect(canonEqs(expandRaw(conf('aggregate_int_ratio_golden', 'fixture.esm')))).toEqual(
-      canonEqs(golden(conf('aggregate_int_ratio_golden', 'expanded.esm'))),
+    expect(canonEqs(expandRaw(conf('faq_int_ratio_golden', 'fixture.esm')))).toEqual(
+      canonEqs(golden(conf('faq_int_ratio_golden', 'expanded.esm'))),
     )
-    const d = expandRaw(conf('aggregate_int_ratio_golden', 'fixture.esm')) as any
+    const d = expandRaw(conf('faq_int_ratio_golden', 'fixture.esm')) as any
     expect(definingRhs(d.models.M, 'dx')).toEqual({ op: '/', args: [1, 8] })
     expect(definingRhs(d.models.M, 'c0').args[0].args[1].expr.args[1]).toEqual({
       op: '/',
@@ -197,7 +197,7 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
       ['P', 'lat', 3],
     ] as const) {
       const agg = definingRhs(d.models.Column, name)
-      expect(agg.op).toBe('aggregate')
+      expect(agg.op).toBe('faq')
       expect(agg.ranges.i).toEqual({ from: axis })
       expect(agg.ranges.j).toEqual({ from: axis })
       expect(agg.expr.args[1]).toEqual({ op: '/', args: [1, n] })
@@ -351,7 +351,7 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
       // Expression-position division stays an AST division (no folding).
       expect(definingRhs(sub, 'half')).toEqual({ op: '/', args: [n, 2] })
       // Structural site: the aggregate dense range folded exactly.
-      expect(definingRhs(sub, 'ramp').op).toBe('aggregate')
+      expect(definingRhs(sub, 'ramp').op).toBe('faq')
       expect(definingRhs(sub, 'ramp').ranges.i).toEqual([1, n / 2])
       // Typed round-trip matches the golden, fully structurally.
       const emitted = JSON.parse(toJson(f))
@@ -610,7 +610,7 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
     // has to stay balanced, esm-spec §4.4).
     const f = loadStr(`
     {
-      "esm": "1.0.0",
+      "esm": "1.1.0",
       "metadata": {"name": "fold"},
       "metaparameters": {"N": {"type": "integer", "default": 6}},
       "index_sets": {"cells": {"kind": "interval", "size": {"op": "*", "args": ["N", 2]}}},
@@ -625,7 +625,7 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
             {"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
              "rhs": {"op": "-", "args": ["x"]}},
             {"lhs": "agg",
-             "rhs": {"op": "aggregate", "output_idx": ["i"], "args": ["x"],
+             "rhs": {"op": "faq", "output_idx": ["i"], "args": ["x"],
                "ranges": {"i": [1, {"op": "-", "args": ["N", 1]}]},
                "expr": {"op": "*", "args": ["x", "i"]}}},
             {"lhs": "ma",

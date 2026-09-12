@@ -216,7 +216,7 @@ how regridding across grids is expressed:
   "from": "CoarseGrid.emis",
   "to": "FineGrid.E",
   "transform": {
-    "op": "aggregate",
+    "op": "faq",
     "output_idx": ["j"],
     "expr": {
       "op": "*",

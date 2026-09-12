@@ -31,7 +31,7 @@ const REPO_ROOT = normpath(joinpath(@__DIR__, "..", "..", ".."))
 const OVERLAP_FIXTURE = joinpath(REPO_ROOT, "pkg", "earthsci-ast-rs", "tests",
                                       "fixtures", "pushdown",
                                       "overlap_gate_point_in_rect.esm")
-const JOIN_FILTER_FIXTURE = joinpath(REPO_ROOT, "tests", "valid", "aggregate",
+const JOIN_FILTER_FIXTURE = joinpath(REPO_ROOT, "tests", "valid", "faq",
                                      "join_filter.esm")
 
 # The one flattened equation whose RHS carries a `join`.

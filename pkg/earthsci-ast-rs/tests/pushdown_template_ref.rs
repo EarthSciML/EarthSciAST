@@ -84,7 +84,7 @@ fn base_doc() -> Value {
         json!({"type": "unknown", "shape": ["rcv_cells"]}),
     );
     json!({
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "pd_tmpl"},
         "index_sets": {
             "src_cells": {"kind": "interval", "size": 4},
@@ -97,13 +97,13 @@ fn base_doc() -> Value {
             // definitions sorted by the name they define.
             "equations": [
                 {"lhs": "E_PM25",
-                 "rhs": {"op": "aggregate", "output_idx": ["c"], "ranges": eranges(),
+                 "rhs": {"op": "faq", "output_idx": ["c"], "ranges": eranges(),
                          "args": eargs(), "reduce": "+",
                          "expr": {"op": "*", "args": [
                              {"op": "ifelse", "args": [contain(), 1.0, 0.0]},
                              ix("emis_annual", "r")]}}},
                 {"lhs": "conc_PM25",
-                 "rhs": {"op": "aggregate", "output_idx": ["rcv"],
+                 "rhs": {"op": "faq", "output_idx": ["rcv"],
                          "ranges": {"s": {"from": "src_cells"},
                                     "rcv": {"from": "rcv_cells"}},
                          "args": ["SR_PM25", "E_PM25"], "reduce": "+",
@@ -152,7 +152,7 @@ fn structural_of(doc: &Value) -> Vec<Value> {
 
 /// Rebind `E_PM25`'s defining equation to an aggregate over `expr`.
 fn set_e(doc: &mut Value, expr: Value) {
-    let rhs = json!({"op": "aggregate", "output_idx": ["c"], "ranges": eranges(),
+    let rhs = json!({"op": "faq", "output_idx": ["c"], "ranges": eranges(),
                      "args": eargs(), "reduce": "+", "expr": expr});
     for eq in doc["models"]["Binned"]["equations"].as_array_mut().unwrap() {
         if eq["lhs"] == json!("E_PM25") {
@@ -309,7 +309,7 @@ fn dense_reduction_is_silent() {
     let mut d = base_doc();
     for eq in d["models"]["Binned"]["equations"].as_array_mut().unwrap() {
         if eq["lhs"] == json!("E_PM25") {
-            eq["rhs"] = json!({"op": "aggregate", "output_idx": ["c"],
+            eq["rhs"] = json!({"op": "faq", "output_idx": ["c"],
                                "ranges": eranges(), "args": ["emis_annual"],
                                "reduce": "+",
                                "expr": {"op": "*",

@@ -233,7 +233,7 @@ pub struct AssertionResult {
 }
 
 /// Evaluate an array-valued expression (elementwise ops over array-producing
-/// `aggregate`/`makearray` nodes — e.g. a grid-geometry template expanded by
+/// `faq`/`makearray` nodes — e.g. a grid-geometry template expanded by
 /// a §9.7 import, or a §6.6.5 analytic `reference`) at each 1-based integer
 /// cell of `cells`, returning one `f64` per cell.
 ///
@@ -283,7 +283,7 @@ pub fn evaluate_cellwise(
 }
 
 /// Whether `name` occurs FREE in `expr`: as a variable reference not bound by
-/// an enclosing `aggregate` / `arrayop` / `makearray` loop symbol (`output_idx`,
+/// an enclosing `faq` / `makearray` loop symbol (`output_idx`,
 /// a `ranges` key) or an `integral`'s integration variable. A node that binds
 /// `name` shadows it for its whole subtree.
 fn mentions_free(expr: &Expr, name: &str) -> bool {
@@ -309,10 +309,10 @@ fn mentions_free(expr: &Expr, name: &str) -> bool {
 /// (convention 1) — so `index(zc, lev)` reads the cell's coordinate from a
 /// geometry array and `sin(pi * (x - 0.5) / N)` is the cell-centre analytic
 /// form, with no explicit gather. A reference that mentions a dimension name
-/// FREE is turned into the whole field by wrapping it in an `aggregate` whose
+/// FREE is turned into the whole field by wrapping it in a `faq` whose
 /// output indices ARE the dimension names (in shape order, each ranging over
 /// its index set); one that mentions none — a literal, a parameter expression,
-/// or an `aggregate` that already produces the field under its own loop
+/// or a `faq` that already produces the field under its own loop
 /// symbols — is returned untouched, so nothing that evaluated before evaluates
 /// differently. Mirrors the Julia / Python `bind_dimension_names`.
 ///
@@ -370,7 +370,7 @@ pub fn bind_dimension_names(
     // so an `Expr` built programmatically (a non-finite `Expr::Number`, say)
     // must not abort the whole run through a panicking `expect`.
     let wrapped = serde_json::json!({
-        "op": "aggregate",
+        "op": "faq",
         "args": [],
         "output_idx": dims,
         "ranges": ranges,
@@ -2331,7 +2331,7 @@ mod tests {
     /// the §9.7 grid-geometry aggregate shape (post-import expansion).
     fn x_coord_aggregate() -> serde_json::Value {
         json!({
-            "op": "aggregate", "args": [], "output_idx": ["i"],
+            "op": "faq", "args": [], "output_idx": ["i"],
             "ranges": {"i": {"from": "x"}},
             "expr": {"op": "*",
                      "args": [{"op": "-", "args": ["i", 0.5]},
@@ -2351,7 +2351,7 @@ mod tests {
     fn decay_doc() -> serde_json::Value {
         let idx = json!({"op": "index", "args": ["u", "i"]});
         json!({
-            "esm": "1.0.0",
+            "esm": "1.1.0",
             "metadata": {"name": "pde_inline_decay"},
             "index_sets": {"x": {"kind": "interval", "size": N}},
             "models": {"M": {
@@ -2360,10 +2360,10 @@ mod tests {
                 },
                 "equations": [
                     {"lhs": {"op": "ic", "args": ["u"]}, "rhs": cos_pi_x()},
-                    {"lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+                    {"lhs": {"op": "faq", "args": [], "output_idx": ["i"],
                              "ranges": {"i": [1, N]},
                              "expr": {"op": "D", "args": [idx], "wrt": "t"}},
-                     "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+                     "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
                              "ranges": {"i": [1, N]},
                              "expr": {"op": "*", "args": [-1, idx]}}},
                 ],
@@ -2809,7 +2809,7 @@ mod tests {
     #[test]
     fn scalar_only_component_is_assertable() {
         let doc = json!({
-            "esm": "1.0.0",
+            "esm": "1.1.0",
             "metadata": {"name": "scalar_only"},
             "models": {"ScalarOnly": {
                 "variables": {
@@ -2856,7 +2856,7 @@ mod tests {
     #[test]
     fn scalar_observed_of_an_ode_component_is_assertable() {
         let doc = json!({
-            "esm": "1.0.0",
+            "esm": "1.1.0",
             "metadata": {"name": "scalar_ode_observed"},
             "models": {"M": {
                 "variables": {
@@ -2908,7 +2908,7 @@ mod tests {
     #[test]
     fn an_unmaterialized_scalar_assertion_is_an_error_not_a_zero() {
         let doc = json!({
-            "esm": "1.0.0",
+            "esm": "1.1.0",
             "metadata": {"name": "scalar_missing"},
             "models": {"ScalarOnly": {
                 "variables": {
@@ -2994,7 +2994,7 @@ mod tests {
                  {"op": "const", "args": [], "value": table}, "x"]}},
             {"variable": "u", "time": 0.0, "expected": 0.0,
              "tolerance": {"abs": 1e-12}, "reduce": "L2_error",
-             "reference": {"op": "aggregate", "args": [], "output_idx": ["x"],
+             "reference": {"op": "faq", "args": [], "output_idx": ["x"],
                            "ranges": {"x": {"from": "x"}}, "expr": free_x}},
             {"variable": "u", "time": 1.0, "expected": 0.0,
              "tolerance": {"abs": 1e-8}, "reduce": "L2_error",
@@ -3025,11 +3025,11 @@ mod tests {
         let Expr::Operator(node) = bind(&free, &dims) else {
             panic!("expected an aggregate wrapper");
         };
-        assert_eq!(node.op, "aggregate");
+        assert_eq!(node.op, "faq");
         assert_eq!(node.output_idx.as_deref(), Some(&["x".to_string()][..]));
         assert_eq!(node.expr.as_deref(), Some(&free));
         // Bound mention (the gather rebinds `x`): untouched.
-        let bound = parse(json!({"op": "aggregate", "args": [], "output_idx": ["x"],
+        let bound = parse(json!({"op": "faq", "args": [], "output_idx": ["x"],
                                  "ranges": {"x": {"from": "x"}},
                                  "expr": {"op": "+", "args": ["x", 1]}}));
         assert_eq!(bind(&bound, &dims), bound);
@@ -3069,7 +3069,7 @@ mod tests {
             lit
         );
         // And a gather that rebinds `x` itself keeps working.
-        let bound = parse(json!({"op": "aggregate", "args": [], "output_idx": ["x"],
+        let bound = parse(json!({"op": "faq", "args": [], "output_idx": ["x"],
                                  "ranges": {"x": {"from": "x"}},
                                  "expr": {"op": "+", "args": ["x", 1]}}));
         assert_eq!(
@@ -3107,7 +3107,7 @@ mod tests {
         let Expr::Operator(node) = wrapped else {
             panic!("expected an aggregate wrapper");
         };
-        assert_eq!(node.op, "aggregate");
+        assert_eq!(node.op, "faq");
         // A reference that does not mention the name is unaffected, and so is a
         // gather that rebinds it as its own loop symbol.
         let arrays = array_scope_names(["lev"]);
@@ -3116,7 +3116,7 @@ mod tests {
             bind_dimension_names(&lit, &dims, &no_params, &arrays).expect("no mention"),
             lit
         );
-        let bound = parse(json!({"op": "aggregate", "args": [], "output_idx": ["lev"],
+        let bound = parse(json!({"op": "faq", "args": [], "output_idx": ["lev"],
                                  "ranges": {"lev": {"from": "lev"}},
                                  "expr": {"op": "index", "args": ["table", "lev"]}}));
         assert_eq!(
@@ -3231,15 +3231,15 @@ mod tests {
     /// array runtime as cell rows because the runner REQUESTS it — never a
     /// stale build-time snapshot, always the value at the asserted time.
     fn observed_assert_doc() -> serde_json::Value {
-        let g = json!({"op": "aggregate", "args": [], "output_idx": ["i"],
+        let g = json!({"op": "faq", "args": [], "output_idx": ["i"],
                        "ranges": {"i": {"from": "x"}},
                        "expr": {"op": "*", "args": ["i", "i"]}});
-        let h = json!({"op": "aggregate", "args": ["u"], "output_idx": ["i"],
+        let h = json!({"op": "faq", "args": ["u"], "output_idx": ["i"],
                        "ranges": {"i": {"from": "x"}},
                        "expr": {"op": "+",
                                 "args": [{"op": "index", "args": ["u", "i"]}, 1]}});
         json!({
-            "esm": "1.0.0",
+            "esm": "1.1.0",
             "metadata": {"name": "observed_assertions"},
             "index_sets": {"x": {"kind": "interval", "size": 3}},
             "models": {"M": {
@@ -3377,7 +3377,7 @@ mod tests {
     fn run_inline_tests_coords_on_scalar_variable_rejected() {
         // coords on a scalar (0-D) variable is ill-formed per §6.6.5.
         let doc = json!({
-            "esm": "1.0.0",
+            "esm": "1.1.0",
             "metadata": {"name": "scalar_coords"},
             "models": {"M": {
                 "variables": {"z": {"type": "unknown", "units": "1", "default": 1.0}},
@@ -3420,7 +3420,7 @@ mod tests {
         let idx = json!({"op": "index", "args": ["u", "i", "j"]});
         let ranges = json!({"i": [1, 4], "j": [1, ny]});
         json!({
-            "esm": "1.0.0",
+            "esm": "1.1.0",
             "metadata": {"name": "pde_inline_2d"},
             "index_sets": {"x": {"kind": "interval", "size": 4},
                            "y": {"kind": "interval", "size": ny}},
@@ -3429,10 +3429,10 @@ mod tests {
                                     "shape": ["x", "y"]}},
                 "equations": [
                     {"lhs": {"op": "ic", "args": ["u"]}, "rhs": 0.0},
-                    {"lhs": {"op": "aggregate", "args": [],
+                    {"lhs": {"op": "faq", "args": [],
                              "output_idx": ["i", "j"], "ranges": ranges,
                              "expr": {"op": "D", "args": [idx], "wrt": "t"}},
-                     "rhs": {"op": "aggregate", "args": [],
+                     "rhs": {"op": "faq", "args": [],
                              "output_idx": ["i", "j"], "ranges": ranges,
                              "expr": 1.0}},
                 ],
@@ -3649,17 +3649,17 @@ mod tests {
                 "equations": [
                 {"lhs": "k", "rhs": {"op": "*", "args": ["a", "T"]}},
                     {"lhs": {"op": "ic", "args": ["x"]}, "rhs": 0.0},
-                    {"lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+                    {"lhs": {"op": "faq", "args": [], "output_idx": ["i"],
                              "ranges": {"i": [1, 1]},
                              "expr": {"op": "D", "args": [idx], "wrt": "t"}},
-                     "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+                     "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
                              "ranges": {"i": [1, 1]}, "expr": 0.0}},
                 ],
                 "tests": tests,
             })
         };
         json!({
-            "esm": "1.0.0",
+            "esm": "1.1.0",
             "metadata": {"name": "scalar_observed_param_override"},
             "index_sets": {"s": {"kind": "interval", "size": 1}},
             "models": {
@@ -3733,7 +3733,7 @@ mod tests {
     /// indistinguishable in the result list from one that was never looked at.
     fn reaction_decay_doc() -> serde_json::Value {
         json!({
-            "esm": "1.0.0",
+            "esm": "1.1.0",
             "metadata": {"name": "inline_test_reaction_system"},
             "reaction_systems": {"Decay": {
                 "species": {
@@ -3802,7 +3802,7 @@ mod tests {
             test["parameter_overrides"] = ov;
         }
         json!({
-            "esm": "1.0.0",
+            "esm": "1.1.0",
             "metadata": {"name": "ramp"},
             "models": {"M": {
                 "variables": {

@@ -1,0 +1,73 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "join_on_pair_not_pair",
+    "description": "INVALID (bead ess-my4.2.1): a `faq` node whose `join` clause has an `on` key-column pair of the wrong arity — `[\"src\"]` carries a single column instead of a [left, right] pair (RFC semiring-faq-unified-ir §5.3 / §8). The schema constrains each `on` entry to `minItems: 2, maxItems: 2` (an equi-join is always between two key columns), so a length-1 pair is a pure schema (array-length) violation — caught by every binding.",
+    "authors": [
+      "EarthSciAST/polecats/gastown.capable"
+    ],
+    "tags": [
+      "faq",
+      "join",
+      "invalid",
+      "schema"
+    ]
+  },
+  "index_sets": {
+    "sourceType": {
+      "kind": "categorical",
+      "members": [
+        "onroad",
+        "nonroad"
+      ]
+    }
+  },
+  "models": {
+    "BadJoinPair": {
+      "variables": {
+        "u": {
+          "type": "unknown"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "u"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "faq",
+            "output_idx": [],
+            "ranges": {
+              "src": {
+                "from": "sourceType"
+              }
+            },
+            "join": [
+              {
+                "on": [
+                  [
+                    "src"
+                  ]
+                ]
+              }
+            ],
+            "expr": {
+              "op": "index",
+              "args": [
+                "u",
+                "src"
+              ]
+            },
+            "args": [
+              "u"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

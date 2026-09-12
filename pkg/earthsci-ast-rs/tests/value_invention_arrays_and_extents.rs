@@ -211,7 +211,7 @@ fn derived_output_axis_is_sized_by_the_invented_set() {
 
     // E_VOC[s] = 2.5 * rate[s], s over the invented source-cell set.
     let mut expr: Expr = serde_json::from_value(json!({
-        "op": "aggregate",
+        "op": "faq",
         "args": [],
         "id": "e_voc",
         "semiring": "sum_product",
@@ -248,7 +248,7 @@ fn derived_output_axis_is_sized_by_the_invented_set() {
 fn derived_output_axis_without_extents_is_rejected() {
     let (_, index_sets) = isrm_model();
     let mut expr: Expr = serde_json::from_value(json!({
-        "op": "aggregate",
+        "op": "faq",
         "args": [],
         "id": "e_voc",
         "output_idx": ["s"],
@@ -277,7 +277,7 @@ fn derived_contraction_axis_is_sized_by_the_invented_set() {
     // conc[i] = Σ_s SR[i, s] * E[s], i over 9 population cells, s over the 4
     // invented source cells.
     let mut expr: Expr = serde_json::from_value(json!({
-        "op": "aggregate",
+        "op": "faq",
         "args": [],
         "id": "conc_soa",
         "semiring": "sum_product",
@@ -330,7 +330,7 @@ fn eval_context_extents_size_an_already_resolved_derived_bound() {
 
     // total = Σ_s E[s] — a scalar reduction over the invented set.
     let mut expr: Expr = serde_json::from_value(json!({
-        "op": "aggregate",
+        "op": "faq",
         "args": [],
         "id": "e_total",
         "semiring": "sum_product",

@@ -2,7 +2,7 @@
 #
 # An ARRAY-shaped OBSERVED written ELEMENTWISE over another array
 # (`f = 1 + cos(pi*zc)`, `zc` shaped `[lev]`) and consumed ONLY through an
-# `index(f, j)` gather inside an `aggregate` body. The reference binding (Julia)
+# `index(f, j)` gather inside a `faq` body. The reference binding (Julia)
 # runs the OFFICIAL `run_inline_tests` pathway over the committed fixtures and must
 # reproduce the committed goldens (which that same pathway minted). Python and
 # Rust gate the same goldens from their own runners.

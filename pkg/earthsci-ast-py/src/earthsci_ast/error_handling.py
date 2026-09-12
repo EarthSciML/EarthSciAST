@@ -307,7 +307,7 @@ UNKNOWN_ENUM_SYMBOL = "unknown_enum_symbol"
 RECURRENCE_NOT_WELLFOUNDED = "recurrence_not_wellfounded"
 #: A causal self-read the runtime cannot restrict to one cell -- reached only
 #: through a `makearray` region value or a whole-operand op -- or an RHS that is
-#: not an `aggregate` over the variable's frame.
+#: not a `faq` over the variable's frame.
 RECURRENCE_UNSUPPORTED_FORM = "recurrence_unsupported_form"
 
 

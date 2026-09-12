@@ -1,12 +1,12 @@
 //! The per-cell oracle interpreter: recursive [`Value`] evaluation of every
-//! expression node (arithmetic, transcendentals, array ops, `aggregate`
+//! expression node (arithmetic, transcendentals, array ops, `faq`
 //! contractions with ragged/derived bounds, geometry leaf ops) plus the
 //! standalone [`eval_expression`] entry point. This path is the correctness
 //! reference the vectorized overlay is verified against.
 
 use super::*;
-use crate::aggregate::effective_reduce_kind;
 use crate::compile_error::CompileError;
+use crate::faq::effective_reduce_kind;
 use crate::types::{ExpressionNode, JoinClause};
 
 /// Stack-inlined per-axis `(lo, hi)` range list, the same rank≤4 argument
@@ -36,7 +36,7 @@ pub(super) type RangeVec = SmallVec<[(i64, i64); 4]>;
 /// specific to a *contraction* bound, where an empty range is a well-defined
 /// answer. A derived range that has to size an OUTPUT axis never reaches here:
 /// it is resolved far earlier, and much more strictly, by
-/// `crate::aggregate::resolve_index_set_ref`, which errors rather than invent a
+/// `crate::faq::resolve_index_set_ref`, which errors rather than invent a
 /// zero-length axis.
 pub(super) fn derived_extent(from_faq: &str, ctx: &EvalCtx) -> i64 {
     if let Some(&n) = ctx.derived_extents.get(from_faq) {
@@ -238,7 +238,7 @@ pub fn is_evaluable_op(op: &str) -> bool {
         // `numpy_interpreter` and Julia's `_geo_compile` all evaluated it.
         | "D" | "Pre" | "const" | "true"
         // Array / geometry ops.
-        | "index" | "aggregate" | "makearray" | "reshape" | "transpose" | "concat"
+        | "index" | "faq" | "makearray" | "reshape" | "transpose" | "concat"
         | "broadcast" | "intersect_polygon" | "polygon_intersection_area"
         // Closed function registry.
         | "fn"
@@ -430,10 +430,10 @@ fn eval_op_named(op: &str, node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
 
         // Array ops.
         "index" => eval_index(node, ctx),
-        "aggregate" => eval_arrayop(node, ctx),
+        "faq" => eval_faq(node, ctx),
         // Conservative-regridding geometry kernel (RFC §8.1): clip two lon/lat
         // polygon rings on the node's `manifold`, producing the overlap ring as
-        // an `[N, 2]` array. `polygon_area` over it is an ordinary `aggregate`.
+        // an `[N, 2]` array. `polygon_area` over it is an ordinary `faq`.
         "intersect_polygon" => eval_intersect_polygon(node, ctx),
         // Fused geometry leaf (esm-spec §4.2 / §8.6.1): the SCALAR overlap area of
         // the two polygon operands under the node's `manifold`, defined to equal
@@ -465,7 +465,7 @@ fn eval_op_named(op: &str, node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         // Julia (`geometry_compile.jl`: `_NK_LITERAL, literal=1.0`) and this
         // crate's own `value_invention::vi_eval` (`Val::Bool(true)`) already
         // produce. In a `sum_product` contraction it is the multiplicative
-        // identity, so `aggregate{expr: true}` COUNTS the admitted tuples —
+        // identity, so `faq{expr: true}` COUNTS the admitted tuples —
         // which is exactly what a semi-join wants to say.
         "true" => Value::Scalar(1.0),
 
@@ -966,7 +966,7 @@ pub(super) fn broadcast_binary(op: &str, a: &ArrayD<f64>, b: &ArrayD<f64>) -> Ar
 /// *trailing* singleton dimensions so `(3,) + (1,3) → (3,3)`. This differs
 /// from NumPy's right-alignment convention; the fixtures were authored in
 /// Julia and expect this behavior (see
-/// `fixtures/arrayop/14_broadcast_elementwise.esm`).
+/// `fixtures/faq/14_broadcast_elementwise.esm`).
 pub(super) fn broadcast_shape(a: &[usize], b: &[usize]) -> Vec<usize> {
     let n = a.len().max(b.len());
     let mut out = vec![1usize; n];
@@ -1939,7 +1939,7 @@ pub(super) fn eval_intersect_polygon(node: &ExpressionNode, ctx: &mut EvalCtx) -
             let closed = close_ring(&ring);
             let arr = lonlat_to_arrayd(&closed);
             // Self-register the closed ring under the node `id` (RFC §8.1) so a
-            // downstream `aggregate` over a `kind:"derived"` index set
+            // downstream `faq` over a `kind:"derived"` index set
             // (`from_faq: <id>`) sizes its contraction from this ring's
             // distinct-vertex count (`rows − 1`); see [`derived_extent`].
             if let Some(id) = &node.id {
@@ -2027,12 +2027,12 @@ pub(super) fn lonlat_to_arrayd(ring: &[(f64, f64)]) -> ArrayD<f64> {
 }
 
 /// Evaluate a standalone expression against a set of named array inputs, reusing
-/// the array evaluator — in particular the M1 `aggregate` machinery in
-/// [`eval_arrayop`]. This is the entry point for computing a `polygon_area`
+/// the array evaluator — in particular the M1 `faq` machinery in
+/// [`eval_faq`]. This is the entry point for computing a `polygon_area`
 /// `sum_product` FAQ over an `intersect_polygon` ring (RFC §8.1): supply the
 /// clipped ring (and any companion arrays the integrand references) in `inputs`
 /// with the aggregate's `clip_ring` range already resolved to a concrete
-/// `[1, N]` interval, and the body is reduced exactly as any other `aggregate`.
+/// `[1, N]` interval, and the body is reduced exactly as any other `faq`.
 ///
 /// Returns [`Value::Scalar`] for a scalar FAQ output (`output_idx: []`),
 /// [`Value::Array`] otherwise.
@@ -2058,13 +2058,13 @@ pub fn eval_expression(
         params,
         param_names,
         t,
-        crate::aggregate::empty_derived_extents(),
+        crate::faq::empty_derived_extents(),
     )
 }
 
 /// [`eval_expression`] with the build-time **value-invention derived extents**
 /// in hand — the standalone evaluator's counterpart of
-/// [`crate::aggregate::resolve_aggregate_ranges_with_extents`].
+/// [`crate::faq::resolve_aggregate_ranges_with_extents`].
 ///
 /// `derived_extents` maps a producing aggregate's `id` (what a `kind:"derived"`
 /// index set names in its `from_faq`) to the cardinality of the distinct member
@@ -2260,7 +2260,7 @@ pub(crate) fn eval_observed_recurrence(
 
 /// Does `expr` read `name` through `index` — i.e. is it a self-read of the
 /// variable this expression defines? Walks `args` and every expression sidecar,
-/// so a read inside an `aggregate` body, a `filter` or a `makearray` region is
+/// so a read inside a `faq` body, a `filter` or a `makearray` region is
 /// found.
 fn expr_reads_self(expr: &Expr, name: &str) -> bool {
     let Expr::Operator(node) = expr else {
@@ -2356,7 +2356,7 @@ pub(super) struct ReduceSpec<'a> {
     pub(super) cell: Option<&'a CellBox<'a>>,
 }
 
-/// Evaluate an `aggregate`/`arrayop` `filter` predicate under the current loop
+/// Evaluate a `faq` `filter` predicate under the current loop
 /// binds and report whether the combination is **excluded** (§5.3): excluded
 /// iff a filter is present and evaluates to false. With no filter this is always
 /// `false`, so the reduction is byte-identical to the no-filter form.
@@ -2431,7 +2431,7 @@ pub(super) fn filter_excludes(
 /// dim uses this cell's dynamic per-parent extent (an empty extent reduces to
 /// the additive identity 0̄). `ctx.loop_binds` must already hold the output-index
 /// tuple; the contracted indices are bound here. This is the single contraction
-/// kernel shared by the standalone-aggregate ([`eval_arrayop`]) and compiled
+/// kernel shared by the standalone-aggregate ([`eval_faq`]) and compiled
 /// array-op-derivative ([`RhsRule::ArrayLoop`]) paths, mirroring the Julia
 /// `_expand_int_range_dyn` einsum loop and the Python `_expand_ragged` gather.
 pub(super) fn reduce_contraction(
@@ -3401,7 +3401,7 @@ fn reduce_over_pairs(spec: &ReduceSpec, tuples: &[(i64, i64)], ctx: &mut EvalCtx
     acc
 }
 
-/// A recognized **forward prefix scan**: an `aggregate` whose single contracted
+/// A recognized **forward prefix scan**: a `faq` whose single contracted
 /// index is admitted by a monotone `filter` against one output index symbol
 /// (esm-spec §4.3.1 "Cumulative (prefix) reductions").
 ///
@@ -3634,8 +3634,8 @@ pub(super) fn ragged_upper_bound(offsets: &str, of: &[String], ctx: &EvalCtx) ->
 
 thread_local! {
     /// Kernel-buffer pool for the vectorized overlay reached OUTSIDE the
-    /// compiled-rule driver: a standalone `aggregate` materialized by
-    /// [`eval_arrayop`], and an `AlgebraicRule::ArrayLoop` observed. Both used
+    /// compiled-rule driver: a standalone `faq` materialized by
+    /// [`eval_faq`], and an `AlgebraicRule::ArrayLoop` observed. Both used
     /// to build a `Pool::default()` per call, so their pool was empty every
     /// time and every kernel intermediate hit the allocator — the RHS-rule path
     /// has recycled through [`RhsScratch`]'s pool since ess-mro, but the
@@ -3656,16 +3656,16 @@ thread_local! {
 /// the borrow spans just the overlay attempt. The `try_borrow_mut` fallback to
 /// a private pool makes that structural claim unnecessary: a nested use loses
 /// the recycling, never correctness, and never panics.
-pub(super) fn with_arrayop_pool<R>(f: impl FnOnce(&mut Pool) -> R) -> R {
+pub(super) fn with_faq_pool<R>(f: impl FnOnce(&mut Pool) -> R) -> R {
     ARRAYOP_POOL.with(|p| match p.try_borrow_mut() {
         Ok(mut pool) => f(&mut pool),
         Err(_) => f(&mut Pool::default()),
     })
 }
 
-/// The evaluation parameters of a standalone `aggregate`/`arrayop` node.
+/// The evaluation parameters of a standalone `faq` node.
 ///
-/// Extracted in ONE place so the per-cell oracle ([`eval_arrayop`]) and the
+/// Extracted in ONE place so the per-cell oracle ([`eval_faq`]) and the
 /// vectorized overlay's nested-aggregate arm ([`eval_vec_nested_aggregate`])
 /// derive them from the same code. A divergence here (a different contracted-
 /// index order, a different `reduce` default) would silently make the fast path
@@ -3713,7 +3713,7 @@ impl ArrayOpSpec<'_> {
 
 /// Extract an aggregate node's evaluation parameters. `None` when the node
 /// carries no body (`expr`), which the oracle reports as `NaN`.
-pub(super) fn arrayop_spec(node: &ExpressionNode) -> Option<ArrayOpSpec<'_>> {
+pub(super) fn faq_spec(node: &ExpressionNode) -> Option<ArrayOpSpec<'_>> {
     // Borrow the node's index names / ranges / body rather than cloning them:
     // a standalone aggregate is re-evaluated on every observed materialization
     // (every RHS call), and the body can be a large stencil subtree — cloning it
@@ -3770,14 +3770,14 @@ pub(super) fn arrayop_spec(node: &ExpressionNode) -> Option<ArrayOpSpec<'_>> {
     })
 }
 
-pub(super) fn eval_arrayop(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
-    // Standalone arrayop (embedded as an expression, not as the top-level
+pub(super) fn eval_faq(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
+    // Standalone faq (embedded as an expression, not as the top-level
     // of an equation LHS/RHS). Build the output array by iterating
     // ranges, binding loop indices, evaluating the body.
     //
     // Supports generalized einsum: indices present in `ranges` but absent
     // from `output_idx` are contracted (summed/reduced) per `reduce`.
-    let spec = match arrayop_spec(node) {
+    let spec = match faq_spec(node) {
         Some(s) => s,
         None => return Value::Scalar(f64::NAN),
     };
@@ -3876,8 +3876,8 @@ pub(super) fn eval_arrayop(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         // model materializes dozens of standalone aggregates per RHS evaluation
         // and a per-call `Pool::default()` started empty every time, so every
         // kernel intermediate went to the allocator.
-        let materialized = with_arrayop_pool(|pool| {
-            try_eval_arrayop_vectorized(
+        let materialized = with_faq_pool(|pool| {
+            try_eval_faq_vectorized(
                 idx_names,
                 &ranges,
                 body,
@@ -3889,11 +3889,11 @@ pub(super) fn eval_arrayop(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
                 pool,
             )
             .map(|(vv, _ops)| {
-                // `try_eval_arrayop_vectorized` already verified the value covers
+                // `try_eval_faq_vectorized` already verified the value covers
                 // the output box exactly (bailing to `None` otherwise) and lifted
                 // a bare scalar into an owned box buffer, so a plain view→owned
                 // suffices.
-                let out = vv.view().expect("vectorized arrayop has a view").to_owned();
+                let out = vv.view().expect("vectorized faq has a view").to_owned();
                 vv.release(pool);
                 out
             })
@@ -4018,11 +4018,11 @@ pub(super) fn eval_arrayop(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     }
 }
 
-/// Would the per-cell [`eval_arrayop`] path recognize this `makearray` region
+/// Would the per-cell [`eval_faq`] path recognize this `makearray` region
 /// value as a forward prefix scan (esm-spec §4.3.1)?
 ///
 /// The whole-array overlay evaluates a region value through
-/// `eval_vec_nested_aggregate` → `try_eval_arrayop_vectorized`, which does NOT
+/// `eval_vec_nested_aggregate` → `try_eval_faq_vectorized`, which does NOT
 /// consult [`detect_prefix_scan`]: a cumulative aggregate would come out
 /// bit-identical but as an O(N²) triangular fold where the scan is O(N) — the
 /// exact regression `forward_scan_work_grows_linearly_not_quadratically` pins.
@@ -4042,7 +4042,7 @@ pub(super) fn region_value_is_prefix_scan(value: &Expr) -> bool {
     if n.filter.is_none() {
         return false;
     }
-    let Some(spec) = arrayop_spec(n) else {
+    let Some(spec) = faq_spec(n) else {
         return false;
     };
     let static_ranges = static_contract_ranges(&spec.contract_dims);
@@ -4102,8 +4102,8 @@ pub(super) fn eval_makearray(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value 
     // ---- Vectorized fast path (whole-array region writes) ------------------
     // A `makearray` used as an observed's whole body — every boundary-dispatch
     // stencil a discretization template expands to — reaches the evaluator HERE,
-    // not through `eval_arrayop`, so it had no overlay entry at all: its region
-    // values vectorized (they are `aggregate`s, which try the overlay
+    // not through `eval_faq`, so it had no overlay entry at all: its region
+    // values vectorized (they are `faq`s, which try the overlay
     // themselves) but the assembly around them stayed a per-cell
     // `CartesianTuples` walk writing through bounds-checked dynamic-stride
     // `ArrayD` indexing. `ESS_VEC_DEBUG` reported these observeds as
@@ -4134,7 +4134,7 @@ pub(super) fn eval_makearray(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value 
     // inside a loop something else already fell back to.
     //
     // The box carries NO output-index symbols, because a `makearray` reached
-    // here is not a cell of an enclosing `arrayop`: nothing is bound around it,
+    // here is not a cell of an enclosing `faq`: nothing is bound around it,
     // and each region value is evaluated exactly once (not once per cell), so
     // `eval_vec_nested_aggregate`'s hoisting precondition — "the nested body
     // must not depend on an enclosing bound index" — is vacuously satisfied and
@@ -4145,7 +4145,7 @@ pub(super) fn eval_makearray(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value 
         && ctx.loop_binds.is_empty()
         && !shape.contains(&0)
         && !values.iter().any(region_value_is_prefix_scan)
-        // See the same gate in `eval_arrayop`: CONFORMANCE_SPEC §5.19.2.
+        // See the same gate in `eval_faq`: CONFORMANCE_SPEC §5.19.2.
         && ctx.recur.is_none()
     {
         let bx = VecBox {
@@ -4155,7 +4155,7 @@ pub(super) fn eval_makearray(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value 
             cnames: &[],
             cvals: &[],
         };
-        let materialized = with_arrayop_pool(|pool| {
+        let materialized = with_faq_pool(|pool| {
             let mut ops = 0usize;
             eval_vec_makearray(node, &bx, &*ctx, pool, &mut ops).map(|vv| {
                 let out = vv
@@ -4589,7 +4589,7 @@ mod evaluability_gate_tests {
             "max",
             "ifelse",
             "index",
-            "aggregate",
+            "faq",
             "makearray",
             "broadcast",
             "reshape",
@@ -4626,7 +4626,7 @@ mod evaluability_gate_tests {
     /// a boolean LITERAL — so it belongs on the evaluable side of the audit
     /// above, and its value is fixed by this evaluator's own 0/1 boolean
     /// convention. Pinned as a number, not merely as "is_evaluable_op", because
-    /// the whole point of the fix is that `aggregate{expr: true}` COUNTS.
+    /// the whole point of the fix is that `faq{expr: true}` COUNTS.
     #[test]
     fn the_true_literal_evaluates_to_one() {
         assert!(crate::op_registry::is_core_op("true"), "§4.2 lists `true`");
@@ -4696,7 +4696,7 @@ mod evaluability_gate_tests {
             "enum",
             "table_lookup",
             "apply_expression_template",
-            "aggregate",
+            "faq",
             "makearray",
             "index",
             "broadcast",
@@ -4760,7 +4760,7 @@ mod geometry_eval_tests {
     //! `intersect_polygon` leaf is dispatched by [`eval_op`] (spherical →
     //! s2geometry via the `s2bindings` crate, planar → Sutherland–Hodgman), and
     //! `polygon_area` is computed as an ordinary `sum_product` aggregate over the
-    //! clipped ring, reduced by the M1 machinery in [`eval_arrayop`]. This is the
+    //! clipped ring, reduced by the M1 machinery in [`eval_faq`]. This is the
     //! Rust binding actually clipping and integrating, not just schema-validating.
     use super::*;
     use serde_json::json;
@@ -4827,7 +4827,7 @@ mod geometry_eval_tests {
         inputs.insert("clip".to_string(), ring_array(ring));
         inputs.insert("clip_next".to_string(), ring_array(&next));
         let agg: Expr = serde_json::from_value(json!({
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "semiring": "sum_product",
             "output_idx": [],
@@ -5033,7 +5033,7 @@ mod ragged_eval_tests {
     /// node and inject the resolved range directly.
     fn ragged_sum_node() -> Expr {
         let mut agg: Expr = serde_json::from_value(json!({
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "semiring": "sum_product",
             "output_idx": ["i"],
@@ -5107,7 +5107,7 @@ mod unbound_name_fault_tests {
     //! the dependency cycle that actually stalled the walk (esm-spec §4.9.6).
 
     use super::{lookup_variable, take_const_array_oob};
-    use crate::aggregate::empty_derived_extents;
+    use crate::faq::empty_derived_extents;
     use crate::simulate_array::{ArrMap, ConstArrayScope, EvalEnv};
     use ndarray::ArrayD;
     use std::cell::RefCell;

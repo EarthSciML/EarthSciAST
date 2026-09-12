@@ -1,4 +1,4 @@
-# A relation joined to ITSELF: two `aggregate` ranges over ONE index set
+# A relation joined to ITSELF: two `faq` ranges over ONE index set
 # (CONFORMANCE_SPEC §5.5.8 "Two ranges over one index set").
 #
 # Two ranges over one index set is already the documented spelling of a prefix
@@ -45,7 +45,7 @@ function _self_join_doc(n::Int; key_col = "row_prior", syms = nothing,
                         range_syms = ["a", "b"], out_sym = "a")
     clause = Dict{String,Any}("on" => [[key_col, "row_id"]])
     syms === nothing || (clause["syms"] = syms)
-    Dict("esm" => "1.0.0",
+    Dict("esm" => "1.1.0",
          "metadata" => Dict("name" => "self_join"),
          "index_sets" => Dict("rows" => Dict("kind" => "interval", "size" => n)),
          "models" => Dict("S" => Dict(
@@ -58,7 +58,7 @@ function _self_join_doc(n::Int; key_col = "row_prior", syms = nothing,
                                      "default" => 0.0)),
              "equations" => [Dict(
                  "lhs" => Dict("op" => "D", "args" => ["out"], "wrt" => "t"),
-                 "rhs" => Dict("op" => "aggregate", "args" => [],
+                 "rhs" => Dict("op" => "faq", "args" => [],
                      "output_idx" => [out_sym], "semiring" => "sum_product",
                      "reduce" => "+",
                      "ranges" => Dict(s => Dict("from" => "rows") for s in range_syms),

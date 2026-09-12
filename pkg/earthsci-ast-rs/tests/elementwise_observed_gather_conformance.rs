@@ -1,6 +1,6 @@
 //! Cross-language conformance: an ARRAY-shaped OBSERVED written ELEMENTWISE over
 //! another array and consumed ONLY through an `index(f, j)` gather inside an
-//! `aggregate` body (esm-spec §4.3.4 elementwise broadcast, §6.6.5 assertions).
+//! `faq` body (esm-spec §4.3.4 elementwise broadcast, §6.6.5 assertions).
 //!
 //! Shared fixtures + Julia-minted goldens live under
 //! `tests/conformance/elementwise_observed_gather/` (repo root); the Julia

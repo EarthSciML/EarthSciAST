@@ -841,14 +841,14 @@ mod tests {
     fn non_emissible_field_fails_closed() {
         // filter (Option<Box<Expr>>).
         let filtered = Expr::operator(ExpressionNode {
-            op: "aggregate".into(),
+            op: "faq".into(),
             args: vec![Expr::Variable("x".into())],
             filter: Some(Box::new(Expr::Variable("p".into()))),
             ..ExpressionNode::default()
         });
         // expr (Option<Box<Expr>>).
         let bodied = Expr::operator(ExpressionNode {
-            op: "arrayop".into(),
+            op: "faq".into(),
             args: vec![Expr::Variable("A".into())],
             expr: Some(Box::new(Expr::Variable("A".into()))),
             ..ExpressionNode::default()

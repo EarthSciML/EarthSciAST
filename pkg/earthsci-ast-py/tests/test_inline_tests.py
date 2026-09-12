@@ -34,7 +34,7 @@ def _x_coord_aggregate() -> dict:
     """Cell-center coordinates x_i = (i - 1/2)/N over the ``x`` index set —
     the §9.7 grid-geometry aggregate shape (post-import expansion)."""
     return {
-        "op": "aggregate",
+        "op": "faq",
         "args": [],
         "output_idx": ["i"],
         "ranges": {"i": {"from": "x"}},
@@ -51,7 +51,7 @@ def _decay_doc() -> dict:
     expression ic(u) = cos(pi x_i); exact solution e^{-t} cos(pi x_i)."""
     idx = {"op": "index", "args": ["u", "i"]}
     return {
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "pde_inline_decay"},
         "index_sets": {"x": {"kind": "interval", "size": N}},
         "models": {
@@ -63,14 +63,14 @@ def _decay_doc() -> dict:
                     {"lhs": {"op": "ic", "args": ["u"]}, "rhs": _cos_pi_x()},
                     {
                         "lhs": {
-                            "op": "aggregate",
+                            "op": "faq",
                             "args": [],
                             "output_idx": ["i"],
                             "ranges": {"i": [1, N]},
                             "expr": {"op": "D", "args": [idx], "wrt": "t"},
                         },
                         "rhs": {
-                            "op": "aggregate",
+                            "op": "faq",
                             "args": [],
                             "output_idx": ["i"],
                             "ranges": {"i": [1, N]},
@@ -385,13 +385,11 @@ def test_bind_dimension_names_wraps_only_a_free_mention():
     assert bind_dimension_names(lit, ["x"]) is lit
     free = ExprNode(op="+", args=["x", 1])
     wrapped = bind_dimension_names(free, ["x"])
-    assert isinstance(wrapped, ExprNode) and wrapped.op == "aggregate"
+    assert isinstance(wrapped, ExprNode) and wrapped.op == "faq"
     assert wrapped.output_idx == ["x"]
     assert wrapped.ranges == {"x": {"from": "x"}}
     assert wrapped.expr is free
-    bound = ExprNode(
-        op="aggregate", args=[], output_idx=["x"], ranges={"x": {"from": "x"}}, expr=free
-    )
+    bound = ExprNode(op="faq", args=[], output_idx=["x"], ranges={"x": {"from": "x"}}, expr=free)
     assert bind_dimension_names(bound, ["x"]) is bound
     integ = ExprNode(
         op="integral", args=[ExprNode(op="*", args=[2, "x"])], var="x", lower=0, upper=1
@@ -422,12 +420,10 @@ def test_bind_dimension_names_rejects_a_dimension_that_shadows_a_parameter():
     lit = ExprNode(op="*", args=[2.0, "k"])
     assert bind_dimension_names(lit, ["x"], {"x": 3.0}) is lit
     # A gather that rebinds `x` itself keeps working.
-    bound = ExprNode(
-        op="aggregate", args=[], output_idx=["x"], ranges={"x": {"from": "x"}}, expr=free
-    )
+    bound = ExprNode(op="faq", args=[], output_idx=["x"], ranges={"x": {"from": "x"}}, expr=free)
     assert bind_dimension_names(bound, ["x"], {"x": 3.0}) is bound
     # And with no scope supplied the wrap is unchanged.
-    assert bind_dimension_names(free, ["x"]).op == "aggregate"
+    assert bind_dimension_names(free, ["x"]).op == "faq"
 
 
 def test_bind_dimension_names_rejects_a_dimension_a_build_array_binds():
@@ -455,14 +451,14 @@ def test_bind_dimension_names_rejects_a_dimension_a_build_array_binds():
     # not clash — the same rule `_param_scope_with_aliases` applies.
     ambiguous = _array_scope_names({"A.lev": None, "B.lev": None})
     assert "lev" not in ambiguous
-    assert bind_dimension_names(free, ["lev"], None, ambiguous).op == "aggregate"
+    assert bind_dimension_names(free, ["lev"], None, ambiguous).op == "faq"
     # A reference that does not mention the name is unaffected, and so is a
     # gather that rebinds it as its own loop symbol.
     arrays = _array_scope_names({"lev": None})
     lit = ExprNode(op="*", args=[2.0, "k"])
     assert bind_dimension_names(lit, ["lev"], None, arrays) is lit
     bound = ExprNode(
-        op="aggregate", args=[], output_idx=["lev"], ranges={"lev": {"from": "lev"}}, expr=free
+        op="faq", args=[], output_idx=["lev"], ranges={"lev": {"from": "lev"}}, expr=free
     )
     assert bind_dimension_names(bound, ["lev"], None, arrays) is bound
 
@@ -500,7 +496,7 @@ def test_reference_binds_the_field_dimension_names():
             "tolerance": {"abs": 1e-12},
             "reduce": "L2_error",
             "reference": {
-                "op": "aggregate",
+                "op": "faq",
                 "args": [],
                 "output_idx": ["x"],
                 "ranges": {"x": {"from": "x"}},
@@ -573,14 +569,14 @@ def _array_observed_doc() -> dict:
     STATE-DEPENDENT (its field exists only on the trajectory), and ``nope`` is
     no variable of the component at all."""
     agg_g = {
-        "op": "aggregate",
+        "op": "faq",
         "args": [],
         "output_idx": ["i"],
         "ranges": {"i": {"from": "x"}},
         "expr": {"op": "*", "args": ["i", "i"]},
     }
     return {
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "pde_inline_array_observed"},
         "index_sets": {"x": {"kind": "interval", "size": 3}},
         "models": {
@@ -672,7 +668,7 @@ def _sibling_array_observed_doc() -> dict:
     """Two components; only ``M1`` defines the array observed ``g``. ``M2``'s
     test asserts a bare ``g`` it does not declare."""
     zero = {
-        "op": "aggregate",
+        "op": "faq",
         "args": [],
         "output_idx": ["i"],
         "ranges": {"i": {"from": "x"}},
@@ -713,7 +709,7 @@ def _sibling_array_observed_doc() -> dict:
         ],
     }
     return {
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "pde_inline_sibling_array_observed"},
         "index_sets": {"x": {"kind": "interval", "size": 3}},
         "models": {"M1": m1, "M2": m2},
@@ -837,7 +833,7 @@ def test_run_inline_tests_coords_validation_rejections():
 def test_run_inline_tests_coords_on_scalar_variable_rejected():
     """coords on a scalar (0-D) variable is ill-formed per §6.6.5."""
     doc = {
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "scalar_coords"},
         "models": {
             "M": {
@@ -876,7 +872,7 @@ def _doc_2d(ny):
     idx = {"op": "index", "args": ["u", "i", "j"]}
     ranges = {"i": [1, 4], "j": [1, ny]}
     return {
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "pde_inline_2d"},
         "index_sets": {"x": {"kind": "interval", "size": 4}, "y": {"kind": "interval", "size": ny}},
         "models": {
@@ -886,14 +882,14 @@ def _doc_2d(ny):
                     {"lhs": {"op": "ic", "args": ["u"]}, "rhs": 0.0},
                     {
                         "lhs": {
-                            "op": "aggregate",
+                            "op": "faq",
                             "args": [],
                             "output_idx": ["i", "j"],
                             "ranges": ranges,
                             "expr": {"op": "D", "args": [idx], "wrt": "t"},
                         },
                         "rhs": {
-                            "op": "aggregate",
+                            "op": "faq",
                             "args": [],
                             "output_idx": ["i", "j"],
                             "ranges": ranges,
@@ -1068,7 +1064,7 @@ def _scalar_observed_doc() -> dict:
         }
 
     return {
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "scalar_observed_param_override"},
         "models": {
             # M1 (a=2) is laid out first, so its `k` shadows M2's under a
@@ -1137,7 +1133,7 @@ def _reaction_decay_doc() -> dict:
     skipped SILENTLY, since a component that produced no rows is
     indistinguishable in the result list from one that was never looked at."""
     return {
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "inline_test_reaction_system"},
         "reaction_systems": {
             "Decay": {
@@ -1205,7 +1201,7 @@ def _ramp_doc(expected: float, test_overrides: dict | None = None) -> dict:
     if test_overrides is not None:
         test["parameter_overrides"] = test_overrides
     return {
-        "esm": "1.0.0",
+        "esm": "1.1.0",
         "metadata": {"name": "ramp"},
         "models": {
             "M": {

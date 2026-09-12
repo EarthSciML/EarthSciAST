@@ -100,7 +100,7 @@ _dmc_idx(vv, is...) = _dmc_op("index", _dmc_v(vv), is...)
 
 # `Fcache[j] = Σ raw[j]` over a LIVE forcing buffer `raw` — param-tainted. Whether it
 # is state-reaching depends ONLY on `extra`, the field under test.
-_dmc_agg(; kw...) = _dmc_op("aggregate"; output_idx=Any["j"], ranges=Dict("j" => [1, 4]),
+_dmc_agg(; kw...) = _dmc_op("faq"; output_idx=Any["j"], ranges=Dict("j" => [1, 4]),
     reduce="+", expr_body=_dmc_idx("raw", _dmc_v("j")), kw...)
 
 # Run the cadence split on a single def. Returns the discrete set.
@@ -118,7 +118,7 @@ _dmc_split(rhs) = first(_DM_ESS._discrete_materialize_split(
         @test _dmc_split(_dmc_agg()) == Set(["Fcache"])
         # And a state read from the BODY (the field the walker always saw) is still
         # correctly kept OUT — the pre-existing behavior, unchanged.
-        @test _dmc_split(_dmc_op("aggregate"; output_idx=Any["j"],
+        @test _dmc_split(_dmc_op("faq"; output_idx=Any["j"],
             ranges=Dict("j" => [1, 4]), reduce="+",
             expr_body=_dmc_op("*", _dmc_idx("raw", _dmc_v("j")),
                               _dmc_idx("u", _dmc_v("j"))))) == Set{String}()
@@ -146,7 +146,7 @@ _dmc_split(rhs) = first(_DM_ESS._discrete_materialize_split(
         # A table lookup whose axis coordinate is a state value.
         lookup = _dmc_op("table_lookup"; table="T",
             table_axes=Dict{String,_DM_ESS.ASTExpr}("x" => _dmc_idx("u", _dmc_v("j"))))
-        agg = _dmc_op("aggregate"; output_idx=Any["j"], ranges=Dict("j" => [1, 4]),
+        agg = _dmc_op("faq"; output_idx=Any["j"], ranges=Dict("j" => [1, 4]),
             reduce="+", expr_body=_dmc_op("*", _dmc_idx("raw", _dmc_v("j")), lookup))
         @test "u" in _DM_ESS._referenced_var_names(agg)
         @test _dmc_split(agg) == Set{String}()
@@ -154,7 +154,7 @@ _dmc_split(rhs) = first(_DM_ESS._discrete_materialize_split(
 
     @testset "state in a dense `ranges` bound ⇒ NOT discrete" begin
         # An expression-valued dense range bound (child_exprs walks these).
-        agg = _dmc_op("aggregate"; output_idx=Any["j"],
+        agg = _dmc_op("faq"; output_idx=Any["j"],
             ranges=Dict("j" => [1, 4], "i" => Any[_dmc_i(1), _dmc_idx("u", _dmc_i(1))]),
             reduce="+",
             expr_body=_dmc_op("*", _dmc_idx("raw", _dmc_v("j")), _dmc_v("i")))

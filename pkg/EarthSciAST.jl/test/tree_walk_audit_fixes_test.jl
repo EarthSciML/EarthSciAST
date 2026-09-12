@@ -90,7 +90,7 @@ _af_op(op, a...; kw...) = OpExpr(op, ESM.ASTExpr[a...]; kw...)
         # (`table`, `table_axes`, `output`, `distinct`, `key`) plus `ranges`
         # (which forces the reconstruct path even when nothing binds).
         keyexpr = _af_op("skolem", _af_v("i"))
-        node = OpExpr("aggregate", ESM.ASTExpr[_af_v("q")];
+        node = OpExpr("faq", ESM.ASTExpr[_af_v("q")];
                       output_idx=Any["i"],
                       ranges=Dict{String,Any}("i" => [1, 3]),
                       expr_body=_af_op("+", _af_v("q"), _af_v("z")),

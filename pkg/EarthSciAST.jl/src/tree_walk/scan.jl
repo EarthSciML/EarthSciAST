@@ -1,7 +1,7 @@
 # ========================================================================
 # tree_walk/scan.jl — cumulative (prefix) reductions in O(N)  (ess-scan)
 #
-# A cumulative sum is an ordinary `aggregate` whose `filter` admits the
+# A cumulative sum is an ordinary `faq` whose `filter` admits the
 # monotone window `j <= i` (esm-spec §4.3.1, "Cumulative (prefix)
 # reductions"). Nothing about that shape is special to the build until you
 # look at what it costs: `_unrolled_contraction_body` (build.jl) expands a

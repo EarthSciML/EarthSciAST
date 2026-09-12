@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "scalar_ic",
     "description": "esm-spec 11.4: a 0-D component's `ic` RHS is a scalar, and every state SHOULD have exactly one `ic` equation (a missing one falls back to the declared `default`). Every state here declares a `default` that DIFFERS from its `ic`, so a binding that drops the `ic` equation and seeds from the default is caught rather than masked. The three RHS forms are separated: `u` a plain literal, `q` a literal ARITHMETIC expression, `w` a PARAMETER-referencing expression (the 6.6.5 build-time evaluation scope). `y` is the non-vacuity anchor -- it carries no interesting ic of its own but integrates D(y)/dt = u, so the seeded value of `u` reaches y(1) through the dynamics and a dropped ic cannot hide in u0 alone. `z` declares NO ic at all and pins the default fallback.",

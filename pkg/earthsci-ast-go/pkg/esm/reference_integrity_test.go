@@ -44,7 +44,7 @@ func fullyPopulatedExprNode() (ExprNode, map[string]string) {
 		return sentinel
 	}
 	return ExprNode{
-		Op:        "aggregate",
+		Op:        "faq",
 		Args:      []any{mark("s_args", "args")},
 		Lower:     mark("s_lower", "lower"),
 		Upper:     mark("s_upper", "upper"),
@@ -151,7 +151,7 @@ func TestExprRefChildrenCoverTheKeystone(t *testing.T) {
 // than the node as a whole.
 func TestExprRefChildrenTagsPointerPaths(t *testing.T) {
 	node := ExprNode{
-		Op:        "aggregate",
+		Op:        "faq",
 		Args:      []any{"a0"},
 		Expr:      "e",
 		Lower:     "lo",

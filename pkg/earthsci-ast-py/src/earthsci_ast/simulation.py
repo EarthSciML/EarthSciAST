@@ -13,7 +13,7 @@ names consumed elsewhere — the CLI PDE adapter, the PDE inline-test runner, an
 a few targeted unit tests import them through ``earthsci_ast.simulation``.
 
 Discretized PDEs run through the array pathway: once spatial operators are
-rewritten to ``arrayop`` stencils, the spatial axis folds into array dimensions
+rewritten to ``faq`` stencils, the spatial axis folds into array dimensions
 (``independent_variables == ["t"]``). The guard in
 :func:`~earthsci_ast.problem.esm_problem` rejects only *undiscretized* spatial
 operators, not PDEs.

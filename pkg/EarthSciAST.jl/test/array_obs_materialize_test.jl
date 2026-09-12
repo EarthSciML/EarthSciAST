@@ -1,6 +1,6 @@
 # Factored array observeds ≡ the inlining build (differential).
 #
-# An array-shaped observed defined by an `aggregate`/`makearray` used to be
+# An array-shaped observed defined by a `faq`/`makearray` used to be
 # INLINED into every reader (`_collect_array_inline_vars`); it is now evaluated
 # ONCE PER RHS CALL into a dense buffer laid out above the ODE state, and readers
 # gather that buffer (build.jl §2b-f). `ESS_ARRAY_OBS_INLINE=1` restores the
@@ -40,7 +40,7 @@ end
     N = 8
     isets = Dict("x" => ESM_AOM.IndexSet("interval"; size = N))
     _rng = Dict("i" => ESM_AOM.IndexSetRef("x"))
-    _agg(body) = ESM_AOM.OpExpr("aggregate", ESM_AOM.ASTExpr[];
+    _agg(body) = ESM_AOM.OpExpr("faq", ESM_AOM.ASTExpr[];
                                 output_idx = Any["i"], ranges = copy(_rng),
                                 expr_body = body)
     vars = Dict(
@@ -138,7 +138,7 @@ end
             [ESM_AOM.Equation(_agg(_Didx("u", _v("i"))),
                               _agg(_idx("M", _idx("g", _v("i")))))])))
         # (c) `g` in an aggregate RANGE BOUND — must stay inlined.
-        redu = ESM_AOM.OpExpr("aggregate", ESM_AOM.ASTExpr[];
+        redu = ESM_AOM.OpExpr("faq", ESM_AOM.ASTExpr[];
                               output_idx = Any["i"],
                               ranges = Dict("i" => copy(_rng)["i"],
                                             "m" => Any[1, _idx("g", _v("i"))]),
@@ -167,7 +167,7 @@ end
     @testset "D of an array observed == D of the identical state" begin
         M = 6
         rngM = Dict("i" => Any[1, M])
-        aggM(body) = ESM_AOM.OpExpr("aggregate", ESM_AOM.ASTExpr[];
+        aggM(body) = ESM_AOM.OpExpr("faq", ESM_AOM.ASTExpr[];
                                     output_idx = Any["i"], ranges = copy(rngM),
                                     expr_body = body)
         # the lowered centered-difference-with-periodic-wrap region form
@@ -256,11 +256,11 @@ end
         Wm = [0.5 0.0 0.0; 0.5 0.0 0.0; 0.0 0.5 0.0;
               0.0 0.5 0.0; 0.0 0.0 0.5; 0.0 0.0 0.5]
         src = [0.0, 2.0, 1.0, 3.0, 2.0, 4.0]
-        gdef = ESM_AOM.OpExpr("aggregate", ESM_AOM.ASTExpr[];
+        gdef = ESM_AOM.OpExpr("faq", ESM_AOM.ASTExpr[];
             semiring = "sum_product", output_idx = Any["j"],
             ranges = Dict("i" => [1, 6], "j" => [1, 3]),
             expr_body = _op("*", _idx("W", _v("i"), _v("j")), _idx("src", _v("i"))))
-        aggJ(body) = ESM_AOM.OpExpr("aggregate", ESM_AOM.ASTExpr[];
+        aggJ(body) = ESM_AOM.OpExpr("faq", ESM_AOM.ASTExpr[];
             output_idx = Any["j"], ranges = Dict("j" => [1, 3]), expr_body = body)
         mR = ESM_AOM.Model(
             Dict("c" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["tgt"]),
@@ -281,8 +281,8 @@ end
 
     # ---- A materialized observed that CONTRACTS reaches the affine tier ----
     # `_materialized_fill_equation` synthesizes the fill as `index(<def>, i…)`,
-    # and `_compile_arrayop_equation!` detects a contraction by testing
-    # `rhs.op == "aggregate"` — so under the gather form it saw `index`, left
+    # and `_compile_faq_equation!` detects a contraction by testing
+    # `rhs.op == "faq"` — so under the gather form it saw `index`, left
     # `contract_names` empty, and skipped EVERY contraction tier. The affine
     # build was then handed `index(<contracting aggregate>, i…)`, which it cannot
     # model ("index(aggregate) with contracted index"), so the equation dropped
@@ -298,12 +298,12 @@ end
         isetsC = Dict("x" => ESM_AOM.IndexSet("interval"; size = Nx),
                       "y" => ESM_AOM.IndexSet("interval"; size = Ny))
         # s[i] = Σ_j u[i,j] — `j` is contracted (in `ranges`, not `output_idx`).
-        colsum = ESM_AOM.OpExpr("aggregate", ESM_AOM.ASTExpr[];
+        colsum = ESM_AOM.OpExpr("faq", ESM_AOM.ASTExpr[];
             output_idx = Any["i"], reduce = "+",
             ranges = Dict("i" => ESM_AOM.IndexSetRef("x"),
                           "j" => ESM_AOM.IndexSetRef("y")),
             expr_body = _idx("u", _v("i"), _v("j")))
-        agg2(body) = ESM_AOM.OpExpr("arrayop", ESM_AOM.ASTExpr[];
+        agg2(body) = ESM_AOM.OpExpr("faq", ESM_AOM.ASTExpr[];
             output_idx = Any["i", "j"],
             ranges = Dict("i" => ESM_AOM.IndexSetRef("x"),
                           "j" => ESM_AOM.IndexSetRef("y")),
@@ -370,11 +370,11 @@ end
     @testset "prefix scan over a factored observed ≡ the inlining build" begin
         Ns = 12
         isetsS = Dict("x" => ESM_AOM.IndexSet("interval"; size = Ns))
-        aggS(body) = ESM_AOM.OpExpr("aggregate", ESM_AOM.ASTExpr[];
+        aggS(body) = ESM_AOM.OpExpr("faq", ESM_AOM.ASTExpr[];
             output_idx = Any["i"], ranges = Dict("i" => Any[1, Ns]),
             expr_body = body)
         # c is a state whose RHS is Σ_{j<=i} g[j], and g is a factored observed.
-        scan_rhs = ESM_AOM.OpExpr("arrayop", ESM_AOM.ASTExpr[];
+        scan_rhs = ESM_AOM.OpExpr("faq", ESM_AOM.ASTExpr[];
             output_idx = Any["i"], reduce = "+",
             ranges = Dict("i" => Any[1, Ns], "j" => Any[1, Ns]),
             filter = _op("<=", _v("j"), _v("i")),
@@ -420,7 +420,7 @@ end
 @testset "inlined aggregate does not capture a reader's loop variable" begin
     NI, NK = 2, 4
     _agg(out, rngs, body) = Dict{String,Any}(
-        "op" => "aggregate", "args" => Any[], "output_idx" => Any[out...],
+        "op" => "faq", "args" => Any[], "output_idx" => Any[out...],
         "ranges" => Dict(rngs...), "expr" => body)
     _ix(a, ks...) = Dict{String,Any}("op" => "index", "args" => Any[a, ks...])
 
@@ -481,11 +481,11 @@ end
 @testset ":oop materializes array observeds and matches :inplace" begin
     Ns = 6
     isetsO = Dict("x" => ESM_AOM.IndexSet("interval"; size = Ns))
-    aggO(body) = ESM_AOM.OpExpr("aggregate", ESM_AOM.ASTExpr[];
+    aggO(body) = ESM_AOM.OpExpr("faq", ESM_AOM.ASTExpr[];
         output_idx = Any["i"], ranges = Dict("i" => Any[1, Ns]), expr_body = body)
     # tot = Σ_j u[j]^2 — a genuine CONTRACTION, so inlining it into every reader
     # is exactly the blow-up this pins against. Scalar-shaped, hence read by all.
-    totO = ESM_AOM.OpExpr("arrayop", ESM_AOM.ASTExpr[];
+    totO = ESM_AOM.OpExpr("faq", ESM_AOM.ASTExpr[];
         output_idx = Any["i"], reduce = "+",
         ranges = Dict("i" => Any[1, Ns], "j" => Any[1, Ns]),
         expr_body = _op("*", _idx("u", _v("j")), _idx("u", _v("j"))))

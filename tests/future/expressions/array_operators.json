@@ -1,12 +1,12 @@
 [
   {
-    "description": "Matrix multiplication via arrayop (Einstein contraction over k)",
-    "operator": "arrayop",
+    "description": "Matrix multiplication via faq (Einstein contraction over k)",
+    "operator": "faq",
     "required_fields": ["output_idx", "expr"],
     "examples": [
       {
         "input": {
-          "op": "aggregate",
+          "op": "faq",
           "output_idx": ["i", "j"],
           "expr": {
             "op": "*",
@@ -18,19 +18,19 @@
           "args": ["A", "B"]
         },
         "meaning": "C[i,j] = Σ_k A[i,k] * B[k,j] — matrix multiply. k is contracted with the default reducer (+).",
-        "reference": "SymbolicUtils/src/arrayop.jl:@arrayop macro, matmul example"
+        "reference": "SymbolicUtils/src/faq.jl:@faq macro, matmul example"
       }
     ],
     "required": true
   },
   {
-    "description": "Column sum reduction via arrayop with explicit reducer",
-    "operator": "arrayop",
+    "description": "Column sum reduction via faq with explicit reducer",
+    "operator": "faq",
     "required_fields": ["output_idx", "expr"],
     "examples": [
       {
         "input": {
-          "op": "aggregate",
+          "op": "faq",
           "output_idx": ["j"],
           "expr": { "op": "index", "args": ["A", "i", "j"] },
           "reduce": "+",
@@ -40,7 +40,7 @@
       },
       {
         "input": {
-          "op": "aggregate",
+          "op": "faq",
           "output_idx": ["j"],
           "expr": { "op": "index", "args": ["A", "i", "j"] },
           "reduce": "max",
@@ -52,13 +52,13 @@
     "required": true
   },
   {
-    "description": "2D 5-point Laplacian stencil — arrayop with affine index offsets",
-    "operator": "arrayop",
+    "description": "2D 5-point Laplacian stencil — faq with affine index offsets",
+    "operator": "faq",
     "required_fields": ["output_idx", "expr"],
     "examples": [
       {
         "input": {
-          "op": "aggregate",
+          "op": "faq",
           "output_idx": ["i", "j"],
           "expr": {
             "op": "+",
@@ -77,18 +77,18 @@
           "args": ["u"]
         },
         "meaning": "5-point Laplacian: (u[i+1,j] + u[i-1,j] + u[i,j+1] + u[i,j-1] - 4 u[i,j]) over interior points. ranges restrict i,j to the interior.",
-        "reference": "SymbolicUtils/src/arrayop.jl § Axis offsets"
+        "reference": "SymbolicUtils/src/faq.jl § Axis offsets"
       }
     ],
     "required": true
   },
   {
-    "description": "Reshape via arrayop with singleton output index — insert a unit dimension",
-    "operator": "arrayop",
+    "description": "Reshape via faq with singleton output index — insert a unit dimension",
+    "operator": "faq",
     "examples": [
       {
         "input": {
-          "op": "aggregate",
+          "op": "faq",
           "output_idx": ["i", 1, "j", 1],
           "expr": {
             "op": "*",
@@ -100,7 +100,7 @@
           "args": ["A", "B"]
         },
         "meaning": "(5, 1, 5, 1)-shaped result. Literal 1 entries in output_idx are singleton dimensions.",
-        "reference": "SymbolicUtils/src/arrayop.jl § Singleton dimensions"
+        "reference": "SymbolicUtils/src/faq.jl § Singleton dimensions"
       }
     ]
   },
@@ -122,7 +122,7 @@
           "values": [
             "x_row",
             {
-              "op": "aggregate",
+              "op": "faq",
               "output_idx": [1, "i"],
               "expr": {
                 "op": "+",
@@ -136,7 +136,7 @@
             1,
             { "op": "index", "args": ["z", 1] },
             {
-              "op": "aggregate",
+              "op": "faq",
               "output_idx": [],
               "expr": {
                 "op": "*",
@@ -210,7 +210,7 @@
       },
       {
         "input": { "op": "index", "args": ["u", { "op": "+", "args": ["i", 1] }, "j"] },
-        "meaning": "u[i+1, j] — offset stencil access inside an arrayop body."
+        "meaning": "u[i+1, j] — offset stencil access inside an faq body."
       }
     ],
     "required": true

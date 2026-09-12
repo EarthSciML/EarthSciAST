@@ -1,9 +1,9 @@
 //! Build-time error type shared by the simulate pipeline and the non-gated
-//! `aggregate` / `join` resolution passes.
+//! `faq` / `join` resolution passes.
 //!
 //! [`CompileError`] lives in its own module rather than inside `simulate`
 //! because `simulate` (and `simulate_array`) are `#[cfg(not(target_arch =
-//! "wasm32"))]` — they pull in the native ODE backend. The `aggregate` and
+//! "wasm32"))]` — they pull in the native ODE backend. The `faq` and
 //! `join` modules surface build-time resolution failures as `CompileError`
 //! but are compiled on every target, including `wasm32-unknown-unknown`.
 //! Keeping the type here lets those modules compile for WASM while `simulate`
@@ -26,11 +26,11 @@ pub enum CompileError {
     },
 
     /// The flattened system still carries a spatial independent variable — a
-    /// spatial operator that was never discretized into an `arrayop` stencil.
+    /// spatial operator that was never discretized into a `faq` stencil.
     /// Discretized PDEs fold their spatial axis into array dimensions, leaving
     /// `independent_variables == ["t"]`, and simulate fine.
     #[error(
-        "Unsupported dimensionality {independent_variables:?}: the simulator integrates systems whose only independent variable is time (independent_variables == [\"t\"]). A remaining spatial independent variable means a spatial operator was not discretized — apply the discretization template (an `expression_templates` `match` rewrite) that lowers it to an `arrayop` stencil, then simulate. Discretized PDEs run natively in this backend."
+        "Unsupported dimensionality {independent_variables:?}: the simulator integrates systems whose only independent variable is time (independent_variables == [\"t\"]). A remaining spatial independent variable means a spatial operator was not discretized — apply the discretization template (an `expression_templates` `match` rewrite) that lowers it to a `faq` stencil, then simulate. Discretized PDEs run natively in this backend."
     )]
     UnsupportedDimensionalityError {
         /// The actual independent variables found.
@@ -49,7 +49,7 @@ pub enum CompileError {
     /// optional sugar ops `grad` / `div` / `laplacian` / ...) survived the
     /// lowering fixpoint into an evaluation position (esm-spec §4.2 / §9.6.8).
     /// Such ops carry NO evaluator: a discretization `match` rewrite rule MUST
-    /// lower them to an `aggregate` / `makearray` stencil before evaluation.
+    /// lower them to a `faq` / `makearray` stencil before evaluation.
     /// The gate fires here — before evaluation, not at load — with the uniform
     /// `unlowered_operator` code that supersedes the former per-binding
     /// `UnreachableSpatialOperatorError` / `UnsupportedDimensionality` errors.

@@ -117,7 +117,7 @@ fn rust_partition_matches_golden() {
 /// marks it `resolver_only`). Bead ess-my4.3.11.
 #[test]
 fn rust_rejects_continuous_relational_fixture() {
-    let doc = load_json("tests/invalid/aggregate/continuous_relational_node.esm");
+    let doc = load_json("tests/invalid/faq/continuous_relational_node.esm");
     let model = &doc["models"]["ContinuousRelationalNode"];
     let err = partition_model(model)
         .expect_err("a CONTINUOUS-classified relational node must be rejected (guard 2)");

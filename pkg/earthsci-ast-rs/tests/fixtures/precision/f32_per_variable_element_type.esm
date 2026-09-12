@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "Float32DocumentWithBinary64Keys",
     "description": "One document, two element types. The quantities follow domain.element_type: \"Float32\" and round per operation; the KEYS declare `element_type: \"Float64\"` and stay exact. A ten-digit category code is ~2.26e9, 135x above binary32's exact-integer limit of 2^24, so under one document-wide precision 2260007005 reads back as 2260006912, floor(scc/1000)*1000 gives 2260006912 instead of 2260007000, and 2260007005 and 2260007015 test EQUAL — three different ways for a relational model to merge rows that are not the same row."
@@ -35,7 +35,7 @@
           "_comment": "The binary32 witness, unchanged by the presence of binary64 variables elsewhere in the same document.",
           "lhs": "quant",
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": ["i"],
             "ranges": { "i": { "from": "one" } },
@@ -58,7 +58,7 @@
           "_comment": "Ingress: a binary64 parameter reaches a binary64 unknown unrounded.",
           "lhs": "keyEcho",
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": ["i"],
             "ranges": { "i": { "from": "one" } },
@@ -69,7 +69,7 @@
           "_comment": "ARITHMETIC, which an ingress-only exemption would not survive: the fallback ladder that widens a code to its broader category.",
           "lhs": "keyBucket",
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": ["i"],
             "ranges": { "i": { "from": "one" } },
@@ -86,7 +86,7 @@
           "_comment": "A PREDICATE over binary64 keys inside a binary32 quantity's equation: the comparison is evaluated in binary64 and hands the arithmetic an exact flag, so two codes ten apart do not merge.",
           "lhs": "neighboursCollide",
           "rhs": {
-            "op": "aggregate",
+            "op": "faq",
             "args": [],
             "output_idx": ["i"],
             "ranges": { "i": { "from": "one" } },

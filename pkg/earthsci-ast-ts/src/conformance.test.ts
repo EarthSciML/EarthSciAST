@@ -183,13 +183,13 @@ describe('Conformance Test Suite', () => {
   })
 
   // RFC discretization §5.1 (gt-5s48): `index` is legal in any expression
-  // context, not only inside `arrayop.expr`. This test covers the scalar
+  // context, not only inside `faq.expr`. This test covers the scalar
   // case — integer-literal and composite-arithmetic index arguments on
   // the RHS of model equations — matching the Go adapter's approach. The
-  // shared cross-binding fixture at tests/indexing/idx_outside_arrayop.esm
-  // also uses `arrayop` in its integration harness; `arrayop` round-trip
+  // shared cross-binding fixture at tests/indexing/idx_outside_faq.esm
+  // also uses `faq` in its integration harness; `faq` round-trip
   // in the TypeScript binding is a separate gap and is tracked independently.
-  describe('RFC §5.1 — `index` outside arrayop', () => {
+  describe('RFC §5.1 — `index` outside faq', () => {
     it('should round-trip scalar `index` RHS (integer and composite args)', () => {
       const original = {
         esm: '1.0.0',
@@ -249,7 +249,7 @@ describe('Conformance Test Suite', () => {
 
     // Resolver-only invalid fixtures are SCHEMA-VALID but rejected only by an
     // evaluator/resolver the schema-only TS binding does not run — e.g. an
-    // `aggregate` `{ from }` range naming an index set absent from the registry
+    // `faq` `{ from }` range naming an index set absent from the registry
     // (RFC semiring-faq-unified-ir §5.2). tests/invalid/expected_errors.json
     // marks them `resolver_only: true`; for those, schema validation must PASS,
     // so this recursive invalid-fixture sweep does not flag the acceptance as a
@@ -301,7 +301,7 @@ describe('Conformance Test Suite', () => {
         // Resolver-only: the JSON-Schema layer must ACCEPT it (no schema_errors).
         // The defect is rejected only by an evaluator/resolver the TS binding
         // does not run (asserted by Julia/Rust/Python). Structural-layer gaps
-        // (e.g. the TS binding not yet modelling `aggregate` ODE equations) are
+        // (e.g. the TS binding not yet modelling `faq` ODE equations) are
         // unrelated to this contract and are intentionally not asserted here.
         expect(result.schema_errors).toHaveLength(0)
         return
