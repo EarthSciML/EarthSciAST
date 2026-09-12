@@ -159,6 +159,44 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
         std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
     });
 
+    // The metaparameter names every document this one MOUNTS declares (§4.7,
+    // either mount form, transitively). It widens the §9.7.6 site-4 check below:
+    // a loader-API binding — which is how a discovered §8.9.4 `extent` arrives —
+    // may name a metaparameter the LEAF declares and this document has no reason
+    // to restate. The edge forwards it into the leaf's own close, so the name is
+    // meaningful; only a name NO document in the assembly declares is the typo
+    // the check exists to catch.
+    //
+    // Collected HERE, not at the site-4 check itself: this binding resolves refs
+    // BEFORE the root's template machinery (Python is the other way round), so
+    // by the time `resolve_template_machinery` runs, the `{ref}` mount entries
+    // this walk reads have already been consumed and inlined.
+    //
+    // Guarded: the widening can only matter when the load carries loader-API
+    // bindings or the document declares an `extent`. A document with neither
+    // pays no extra ref reads — which also keeps a mounted file from being read
+    // twice on the ordinary path.
+    let mount_declared = if !options.metaparameters.is_empty()
+        || crate::template_imports::document_declares_an_extent(&json_value)
+    {
+        crate::template_imports::collect_mount_declared_metaparameters(&json_value, &base)
+    } else {
+        std::collections::BTreeSet::new()
+    };
+
+    // esm-spec §8.9.4, statically: an `extent` naming a metaparameter nobody
+    // declares is refused HERE rather than when the source is finally sampled at
+    // build, so `esm validate` catches the typo. It runs BEFORE ref resolution,
+    // on the AUTHORED tree: a mount CONSUMES the leaf's `metaparameters`
+    // (§9.7.6 site 3), so after inlining neither the declaration nor the `{ref}`
+    // stub that leads to it is still there to judge by.
+    crate::template_imports::check_data_source_extents(
+        &json_value,
+        &mount_declared,
+        &options.metaparameters,
+    )
+    .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
+
     // Resolve any subsystem refs before schema validation, per spec section
     // 2.1b. Callers that load from a known file path should use `load_path`,
     // which uses the file's own directory as the base. The loader-API
@@ -219,10 +257,12 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     // index_sets merge, metaparameter close+fold — before structural
     // validation and the §9.6.3 fixpoint, so validators run on the folded,
     // expanded form (esm-spec §9.6.4 / §9.7.6).
-    if let Some(resolved) = crate::template_imports::resolve_template_machinery(
+    if let Some(resolved) = crate::template_imports::resolve_template_machinery_scoped(
         &json_value,
         &base,
         &options.metaparameters,
+        &mount_declared,
+        false,
     )
     .map_err(|e| EsmError::SchemaValidation(e.to_string()))?
     {

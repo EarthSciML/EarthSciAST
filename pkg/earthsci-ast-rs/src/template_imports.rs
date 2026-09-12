@@ -44,7 +44,7 @@ use crate::lower_expression_templates::{
 };
 use indexmap::IndexMap;
 use serde_json::{Map, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Component, Path, PathBuf};
 
 const COMPONENT_KINDS: [&str; 2] = ["models", "reaction_systems"];
@@ -2118,6 +2118,187 @@ fn has_import_machinery(raw: &Value) -> bool {
     false
 }
 
+/// The metaparameter names declared by every document `raw` MOUNTS, at either
+/// §4.7 mount form, transitively through the mount DAG.
+///
+/// A §4.7 mount edge CONSUMES the referenced document's `metaparameters` AT the
+/// edge (§9.7.6 binding site 3), so those names never join the mounting
+/// document's own declared set — which is why a loader-API binding for one of
+/// them used to be refused at a root that had no reason to redeclare it. This
+/// walk is what lets the site-4 check (and the §8.9.4 `extent` check) ask "does
+/// ANYONE in this assembly declare that name?" instead of "does the root".
+///
+/// Reads only each referenced file's top-level `metaparameters` KEYS. A ref that
+/// cannot be read is IGNORED: this walk exists only to WIDEN acceptance, and the
+/// resolution error belongs to the ref resolver, which reports it with the
+/// proper mount pointer. Cycles terminate on the visited set of normalized
+/// paths, so a mount DAG that revisits a file — or points back at itself — still
+/// terminates.
+///
+/// Call it behind [`document_declares_an_extent`] / a non-empty loader-API map:
+/// nothing else can be affected by the widening, and the guard keeps the
+/// ordinary load from reading every mounted file a second time.
+///
+/// Mirrors the Python `collect_mount_declared_metaparameters`.
+pub(crate) fn collect_mount_declared_metaparameters(
+    raw: &Value,
+    base_path: &Path,
+) -> BTreeSet<String> {
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut out: BTreeSet<String> = BTreeSet::new();
+    collect_mount_declared_into(raw, base_path, &mut seen, &mut out);
+    out
+}
+
+fn collect_mount_declared_into(
+    raw: &Value,
+    base_path: &Path,
+    seen: &mut HashSet<String>,
+    out: &mut BTreeSet<String>,
+) {
+    let Some(obj) = raw.as_object() else {
+        return;
+    };
+    for compkind in COMPONENT_KINDS {
+        let Some(comps) = obj.get(compkind).and_then(|v| v.as_object()) else {
+            continue;
+        };
+        for comp in comps.values() {
+            let Some(cobj) = comp.as_object() else {
+                continue;
+            };
+            // A top-level `models.<k>` / `reaction_systems.<k>` `{ref}` mount.
+            visit_mount_ref(cobj, base_path, seen, out);
+            // A `subsystems.<j>` `{ref}` mount — §4.7's other form.
+            if let Some(subs) = cobj.get("subsystems").and_then(|v| v.as_object()) {
+                for sub in subs.values() {
+                    if let Some(sobj) = sub.as_object() {
+                        visit_mount_ref(sobj, base_path, seen, out);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// One mount edge of [`collect_mount_declared_into`]: read the referenced
+/// document's declared metaparameter names, then recurse into ITS mounts.
+fn visit_mount_ref(
+    entry: &Map<String, Value>,
+    base_path: &Path,
+    seen: &mut HashSet<String>,
+    out: &mut BTreeSet<String>,
+) {
+    let Some(ref_str) = entry.get("ref").and_then(|v| v.as_str()) else {
+        return;
+    };
+    // Remote refs are not fetched by this crate (the subsystem-ref loader
+    // rejects them outright); contributing nothing is the right widening.
+    if ref_str.starts_with("http://") || ref_str.starts_with("https://") {
+        return;
+    }
+    let path = lexical_normalize(&base_path.join(ref_str));
+    if !seen.insert(path.to_string_lossy().into_owned()) {
+        return;
+    }
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    let Ok(child) = serde_json::from_str::<Value>(&content) else {
+        return;
+    };
+    if let Some(decls) = child.get("metaparameters").and_then(|v| v.as_object()) {
+        out.extend(decls.keys().cloned());
+    }
+    let child_dir = path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| base_path.to_path_buf());
+    collect_mount_declared_into(&child, &child_dir, seen, out);
+}
+
+/// Whether any `data_sources` entry carries an `extent` (§8.9.4).
+///
+/// The cheap guard on [`collect_mount_declared_metaparameters`]: the widened
+/// site-4 check and [`check_data_source_extents`] are that walk's only callers,
+/// and neither can matter unless the load either carries loader-API bindings or
+/// the document declares an `extent`. A document with neither pays no ref reads
+/// for this at all, so the ordinary path is unchanged in behaviour AND in I/O.
+pub(crate) fn document_declares_an_extent(raw: &Value) -> bool {
+    raw.get("data_sources")
+        .and_then(|v| v.as_object())
+        .is_some_and(|sources| {
+            sources
+                .values()
+                .any(|src| src.get("extent").is_some_and(Value::is_object))
+        })
+}
+
+/// esm-spec §8.9.4: every `data_sources.<k>.extent.metaparameter` MUST name a
+/// metaparameter THIS document declares, or one a document it mounts declares.
+///
+/// A discovered extent is a §9.7.6 site-4 loader-API binding, and "binding an
+/// unknown name is an error" — but that error could only be raised once the
+/// source had been SAMPLED, which happens at build. So an `extent` naming a
+/// metaparameter nobody declares used to validate clean and fail only when the
+/// file was finally read, with a diagnostic about the loader API rather than
+/// about the typo. The condition is decidable from the document alone, so it is
+/// decided at load: `template_import_unknown_name`, the code §9.7.6 already
+/// gives an unknown name at a binding site. No new code — this IS that
+/// condition, checked earlier.
+pub(crate) fn check_data_source_extents(
+    raw: &Value,
+    mount_declared: &BTreeSet<String>,
+    api_meta: &BTreeMap<String, i64>,
+) -> Result<(), ExpressionTemplateError> {
+    let Some(sources) = raw.get("data_sources").and_then(|v| v.as_object()) else {
+        return Ok(());
+    };
+    // This is an AUTHORING check, and it must stay idempotent: a §4.7 mount
+    // CONSUMES the leaf's `metaparameters` (§9.7.6 site 3), so once a document
+    // has been resolved, a name only the leaf declared is declared nowhere and
+    // the `{ref}` stub the mount walk reads is gone — while the `extent` that
+    // named it is still there, having already done its job. A binding that
+    // re-loads its own resolved document (this one does, at build) must not be
+    // told that document is invalid. The shape only a resolved document has:
+    // no unresolved mount left, and every axis already a concrete integer.
+    if !document_has_unresolved_mount(raw) && index_sets_are_fully_folded(raw) {
+        return Ok(());
+    }
+    let declared = collect_metaparam_decls(raw, "document")?;
+    for (key, src) in sources {
+        let Some(name) = src
+            .get("extent")
+            .and_then(|e| e.get("metaparameter"))
+            .and_then(|v| v.as_str())
+        else {
+            continue;
+        };
+        // A name the loader API is CURRENTLY binding is supplied by definition,
+        // so it is not the typo this check exists to catch. That is also what
+        // keeps the check idempotent under inlining: a mount edge CONSUMES the
+        // leaf's `metaparameters`, so an already-inlined document no longer
+        // declares the name anywhere and no longer carries the `{ref}` stub the
+        // mount walk reads. Re-loading such a document — which this binding does
+        // at build, with the discovered extent bound — must not refuse what the
+        // authored document accepted.
+        if declared.contains_key(name)
+            || mount_declared.contains(name)
+            || api_meta.contains_key(name)
+        {
+            continue;
+        }
+        return Err(err(
+            codes::TEMPLATE_IMPORT_UNKNOWN_NAME,
+            format!(
+                "data_sources.{key}.extent binds metaparameter '{name}', which neither this \
+                 document nor any document it mounts declares (esm-spec §8.9.4, §9.7.6)"
+            ),
+        ));
+    }
+    Ok(())
+}
+
 /// Resolve every esm-spec §9.7 construct of the ROOT document `raw_data`
 /// (relative import refs resolve against `base_path`): imports recursively
 /// with per-edge instantiation, `index_sets` merge, metaparameter close
@@ -2143,15 +2324,46 @@ pub fn resolve_template_machinery(
     base_path: &Path,
     metaparameters: &BTreeMap<String, i64>,
 ) -> Result<Option<Value>, ExpressionTemplateError> {
+    resolve_template_machinery_scoped(raw_data, base_path, metaparameters, &BTreeSet::new(), false)
+}
+
+/// [`resolve_template_machinery`] plus the two §4.7 mount-scope facts the
+/// 3-argument entry point cannot know.
+///
+/// `mount_declared` widens the §9.7.6 site-4 check to the names declared by the
+/// documents this one MOUNTS — see [`collect_mount_declared_metaparameters`].
+/// `mounted_leaf` says this call IS a §4.7 mount edge, so an index-set `size`
+/// this scope cannot close stays symbolic for the MOUNTING registry to close
+/// (§9.7.6 site 5) instead of being `metaparameter_unbound` here.
+///
+/// A sibling rather than a widened signature: API_SPEC.md §8 pins
+/// `resolve_template_machinery` at `(&Value, &Path, &BTreeMap)` across the
+/// bindings, and Rust has no keyword arguments to hang the Python form's
+/// `mount_declared=` / `mounted_leaf=` on.
+pub(crate) fn resolve_template_machinery_scoped(
+    raw_data: &Value,
+    base_path: &Path,
+    metaparameters: &BTreeMap<String, i64>,
+    mount_declared: &BTreeSet<String>,
+    mounted_leaf: bool,
+) -> Result<Option<Value>, ExpressionTemplateError> {
     if !has_import_machinery(raw_data) {
-        if !metaparameters.is_empty() {
-            let names: Vec<&str> = metaparameters.keys().map(String::as_str).collect();
+        // A binding naming something a MOUNTED document declares is meaningful
+        // even here: this document has no §9.7 machinery of its OWN, and the
+        // mount edge forwards the name into the leaf's close. Only a name no
+        // document in the assembly declares is the typo this refuses.
+        let unknown: Vec<&str> = metaparameters
+            .keys()
+            .filter(|k| !mount_declared.contains(*k))
+            .map(String::as_str)
+            .collect();
+        if !unknown.is_empty() {
             return Err(err(
                 codes::TEMPLATE_IMPORT_UNKNOWN_NAME,
                 format!(
-                    "loader API binds metaparameter(s) {} but the document declares none \
-                     (esm-spec §9.7.6)",
-                    names.join(", ")
+                    "loader API binds metaparameter(s) {} which neither this document nor any \
+                     document it mounts declares (esm-spec §9.7.6)",
+                    unknown.join(", ")
                 ),
             ));
         }
@@ -2191,7 +2403,7 @@ pub fn resolve_template_machinery(
     )?;
 
     // --- close this document's metaparameters (§9.7.6 sites 4-5) ---
-    let values = close_document_metaparams(&doc_meta, metaparameters)?;
+    let values = close_document_metaparams(&doc_meta, metaparameters, mount_declared)?;
 
     // --- §9.7.6 name-collision check: no shadowing of visible names ---
     check_metaparam_collisions(&root, &doc_meta, &doc_isets)?;
@@ -2215,7 +2427,14 @@ pub fn resolve_template_machinery(
     substitute_closed_metaparams(&mut root, &mut top_templates, &mut doc_isets, &values);
 
     // --- fold structural sites on the closed document ---
-    fold_closed_document(&mut root, &mut top_templates, &mut doc_isets)?;
+    // `mounted_leaf` says a MOUNTING document's registry will receive these
+    // index sets and close them (§4.7 "Index-set merge"), so an axis this scope
+    // cannot size stays symbolic instead of being `metaparameter_unbound` here.
+    // Without it, whether a mounted leaf accepted an assembler-scoped axis
+    // turned on `has_import_machinery` — a WHOLE-DOCUMENT boolean — so adding an
+    // `expression_template_imports` entry for a library the leaf never calls
+    // changed whether the leaf's shape resolved.
+    fold_closed_document(&mut root, &mut top_templates, &mut doc_isets, !mounted_leaf)?;
 
     // --- root library file: validate template-body references ---
     if is_library {
@@ -2415,20 +2634,31 @@ fn resolve_component_imports(
 
 /// Phase 3 of [`resolve_template_machinery`]: close the document's
 /// metaparameters (§9.7.6 sites 4-5). Loader-API bindings win, then
-/// declaration defaults; a loader-API binding for an undeclared name is
-/// `template_import_unknown_name`, and any name still open afterwards is
-/// `metaparameter_unbound`. Returns the closed name → value map.
+/// declaration defaults; a loader-API binding for a name NO document in the
+/// assembly declares is `template_import_unknown_name`, and any name still open
+/// afterwards is `metaparameter_unbound`. Returns the closed name → value map.
+///
+/// `mount_declared` is the set of metaparameter names declared by the documents
+/// this one MOUNTS (§4.7, either mount form, transitively —
+/// [`collect_mount_declared_metaparameters`]). A loader-API binding may name one
+/// of those: it is meaningful even though THIS document does not declare it,
+/// because the mount edge forwards it into the leaf's own close for the names
+/// the leaf declares. Such a name is accepted and CONSUMED here — it closes
+/// nothing in this scope, so it is absent from the returned map (which is built
+/// from `doc_meta` alone). A name in NEITHER set is still a typo and still
+/// raises `template_import_unknown_name`: bindings never invent metaparameters.
 fn close_document_metaparams(
     doc_meta: &Map<String, Value>,
     metaparameters: &BTreeMap<String, i64>,
+    mount_declared: &BTreeSet<String>,
 ) -> Result<BTreeMap<String, i64>, ExpressionTemplateError> {
     for k in metaparameters.keys() {
-        if !doc_meta.contains_key(k) {
+        if !doc_meta.contains_key(k) && !mount_declared.contains(k) {
             return Err(err(
                 codes::TEMPLATE_IMPORT_UNKNOWN_NAME,
                 format!(
-                    "loader API binds metaparameter '{k}', which the document does not declare \
-                     (esm-spec §9.7.6)"
+                    "loader API binds metaparameter '{k}', which neither this document nor any \
+                     document it mounts declares (esm-spec §9.7.6)"
                 ),
             ));
         }
@@ -2562,14 +2792,23 @@ fn substitute_closed_metaparams(
 }
 
 /// Phase 6 of [`resolve_template_machinery`]: fold the structural integer
-/// sites of the now-closed document — aggregate `ranges` / makearray
-/// `regions` bounds in every component and top-level template
-/// ([`fold_structural_sites`]), then index-set `size` expressions in strict
-/// mode (a remaining open name is `metaparameter_unbound`).
+/// sites of the now-closed document — `faq` `ranges` / makearray `regions`
+/// bounds in every component and top-level template
+/// ([`fold_structural_sites`]), then the index-set `size` expressions.
+///
+/// `strict` says whether this document is the LAST scope that could close a
+/// name. At a ROOT document it is, so a still-open `size` is
+/// `metaparameter_unbound`. At a §4.7 mount edge it is NOT: the leaf resolves
+/// in its own scope, but its `index_sets` then merge into the MOUNTING
+/// document's registry (§4.7 "Index-set merge") and close there, so a name the
+/// leaf cannot bind stays symbolic and travels up rather than failing here.
+/// That is §9.7.6 site 5's "a metaparameter an edge leaves unbound … is closed
+/// at some enclosing document's close", applied to the axis the name sizes.
 fn fold_closed_document(
     root: &mut Map<String, Value>,
     top_templates: &mut Map<String, Value>,
     doc_isets: &mut Map<String, Value>,
+    strict: bool,
 ) -> Result<(), ExpressionTemplateError> {
     for compkind in COMPONENT_KINDS {
         let Some(Value::Object(comps)) = root.get_mut(compkind) else {
@@ -2585,7 +2824,7 @@ fn fold_closed_document(
         fold_structural_sites(&mut td, &format!("document.expression_templates.{tn}"))?;
         top_templates.insert(tn, td);
     }
-    fold_index_set_sizes(doc_isets, "document", true)
+    fold_index_set_sizes(doc_isets, "document", strict)
 }
 
 // ===================================================================
@@ -3017,4 +3256,46 @@ mod tests {
             assert_eq!(got.code, code, "expr {expr}");
         }
     }
+}
+
+/// Whether `doc` still carries an unresolved §4.7 mount — a `models.<k>` /
+/// `reaction_systems.<k>` `{ref}`, or a `subsystems.<k>` `{ref}`.
+fn document_has_unresolved_mount(doc: &Value) -> bool {
+    let Some(obj) = doc.as_object() else {
+        return false;
+    };
+    for kind in COMPONENT_KINDS {
+        let Some(comps) = obj.get(kind).and_then(|v| v.as_object()) else {
+            continue;
+        };
+        for comp in comps.values() {
+            if comp.get("ref").is_some() {
+                return true;
+            }
+            if let Some(subs) = comp.get("subsystems").and_then(|v| v.as_object())
+                && subs.values().any(|s| s.get("ref").is_some())
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Whether `doc` declares at least one index set and every interval `size` in
+/// the registry is already a concrete integer — the state a document reaches
+/// only after its metaparameters have closed and folded. Requiring at least one
+/// entry keeps the vacuous case (a document with no `index_sets` at all, where
+/// nothing has been folded) on the checked path.
+fn index_sets_are_fully_folded(doc: &Value) -> bool {
+    let Some(isets) = doc.get("index_sets").and_then(|v| v.as_object()) else {
+        return false;
+    };
+    if isets.is_empty() {
+        return false;
+    }
+    isets.values().all(|d| match d.get("size") {
+        None => true,
+        Some(v) => v.is_i64() || v.is_u64(),
+    })
 }

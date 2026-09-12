@@ -363,7 +363,14 @@ fn walk_top_level(
 
     if let Some(map) = obj.get_mut("models").and_then(|v| v.as_object_mut()) {
         for (_name, system) in map.iter_mut() {
-            walk_subsystems(system, base_path, visited, Some(&mut registry), parent_meta)?;
+            walk_subsystems(
+                system,
+                base_path,
+                visited,
+                Some(&mut registry),
+                parent_meta,
+                api_meta,
+            )?;
         }
     }
     if let Some(map) = obj
@@ -371,7 +378,7 @@ fn walk_top_level(
         .and_then(|v| v.as_object_mut())
     {
         for (_name, system) in map.iter_mut() {
-            walk_subsystems(system, base_path, visited, None, parent_meta)?;
+            walk_subsystems(system, base_path, visited, None, parent_meta, api_meta)?;
         }
     }
 
@@ -539,9 +546,24 @@ fn inline_toplevel_model_refs(
                 .unwrap_or_default();
             crate::template_imports::apply_scope_injections(&mut comp, &injected)?;
 
-            if let Some(mut resolved) =
-                crate::template_imports::resolve_template_machinery(&comp, &leaf_dir, &bindings)?
-            {
+            // This IS a §4.7 mount edge, so the leaf resolves under the two
+            // mount-scope facts a root document does not have:
+            //
+            // * `mount_declared` — what the leaf's OWN nested mounts declare —
+            //   so the §9.7.6 site-4 widening composes down the reference DAG;
+            // * `mounted_leaf` — the leaf is NOT the last scope that can close a
+            //   name. Its `index_sets` merge into THIS document's registry below
+            //   and close there (§9.7.6 site 5), so an axis sized by a name only
+            //   the assembler declares stays symbolic rather than failing here.
+            let leaf_mount_declared =
+                crate::template_imports::collect_mount_declared_metaparameters(&comp, &leaf_dir);
+            if let Some(mut resolved) = crate::template_imports::resolve_template_machinery_scoped(
+                &comp,
+                &leaf_dir,
+                &bindings,
+                &leaf_mount_declared,
+                true,
+            )? {
                 // A mounted component is a self-contained build boundary: lower
                 // under Option B, then `expand`, so the spliced component carries
                 // the fully-expanded Option-A image and the assembling document's
@@ -761,12 +783,19 @@ fn absolutize_nested_refs(value: &mut Value, base_dir: &Path) {
 /// Walk a model or reaction system value and resolve any refs in its
 /// `subsystems` map. `registry`, when `Some`, accumulates referenced files'
 /// top-level `index_sets` (esm-spec §4.7 model-subsystem merge).
+///
+/// `parent_meta` and `api_meta` are the two mounting-scope environments a
+/// `subsystems.<k>` edge needs, and they are NOT interchangeable — exactly as at
+/// the top-level `models.<k>` form ([`walk_top_level`]): edge `bindings`
+/// EXPRESSIONS fold against `parent_meta`, while only `api_meta` (the loader-API
+/// bindings, §9.7.6 site 4) backfills the leaf's own close.
 fn walk_subsystems(
     value: &mut Value,
     base_path: &Path,
     visited: &mut HashSet<PathBuf>,
     mut registry: Option<&mut Map<String, Value>>,
     parent_meta: &BTreeMap<String, i64>,
+    api_meta: &BTreeMap<String, i64>,
 ) -> Result<(), DiagnosticError> {
     let obj = match value.as_object_mut() {
         Some(o) => o,
@@ -792,6 +821,7 @@ fn walk_subsystems(
             visited,
             registry.as_deref_mut(),
             parent_meta,
+            api_meta,
         )?;
         subs.insert(name, resolved);
     }
@@ -859,6 +889,7 @@ fn resolve_value(
     visited: &mut HashSet<PathBuf>,
     registry: Option<&mut Map<String, Value>>,
     parent_meta: &BTreeMap<String, i64>,
+    api_meta: &BTreeMap<String, i64>,
 ) -> Result<Value, DiagnosticError> {
     if let Some(obj) = value.as_object()
         && let Some(ref_val) = obj.get("ref")
@@ -909,7 +940,34 @@ fn resolve_value(
         let edge_result: Result<(), DiagnosticError> = (|| {
             crate::lower_expression_templates::reject_expression_templates_pre_v04(&parsed)?;
             crate::template_imports::reject_template_imports_pre_v08(&parsed)?;
-            let bindings = read_edge_bindings(obj, parent_meta, "subsystem ref")?;
+            // §9.7.6 binding site 3: close the leaf's metaparameters. Explicit
+            // edge `bindings` win, backfilled by the LOADER-API bindings (site
+            // 4) for the names the leaf DECLARES — the SAME backfill the
+            // top-level `models.<k>` mount runs (§4.7 "Two mount forms, one
+            // mechanism"). Without it a discovered `extent` (§8.9.4) reached a
+            // top-level-mounted leaf and not a subsystem-mounted one, so the
+            // same two documents sized the same axis differently depending only
+            // on which attachment point the assembler picked — and the
+            // subsystem form sized it at the leaf's placeholder default, so the
+            // ingested field came back ZERO-LENGTH with no diagnostic at all.
+            //
+            // The backfill reads `api_meta`, NOT `parent_meta`. `parent_meta`
+            // additionally carries the mounting document's OWN declared
+            // defaults, and forwarding those would let an assembler's unrelated
+            // metaparameter silently resize a leaf axis the edge never bound.
+            // Names the leaf does not declare are never forwarded, so they
+            // cannot raise `template_import_unknown_name` against it.
+            let leaf_declared: Vec<String> = parsed
+                .get("metaparameters")
+                .and_then(|v| v.as_object())
+                .map(|o| o.keys().cloned().collect())
+                .unwrap_or_default();
+            let mut bindings: BTreeMap<String, i64> = api_meta
+                .iter()
+                .filter(|(k, _)| leaf_declared.contains(k))
+                .map(|(k, v)| (k.clone(), *v))
+                .collect();
+            bindings.extend(read_edge_bindings(obj, parent_meta, "subsystem ref")?);
             // esm-spec §9.7.10 form A: the edge's `expression_template_imports`
             // inject a discretization into the referenced component's own
             // scope, appended BEFORE resolution so the §9.6.3 fixpoint lowers
@@ -922,10 +980,21 @@ fn resolve_value(
                 .cloned()
                 .unwrap_or_default();
             crate::template_imports::apply_scope_injections(&mut parsed, &injected)?;
-            if let Some(mut resolved) = crate::template_imports::resolve_template_machinery(
+            // As at the top-level mount form: the leaf's own nested mounts
+            // widen its §9.7.6 site-4 check, and `mounted_leaf` keeps an axis
+            // this scope cannot size symbolic for the merge below to close
+            // (§9.7.6 site 5).
+            let leaf_mount_declared =
+                crate::template_imports::collect_mount_declared_metaparameters(
+                    &parsed,
+                    &parent_dir,
+                );
+            if let Some(mut resolved) = crate::template_imports::resolve_template_machinery_scoped(
                 &parsed,
                 &parent_dir,
                 &bindings,
+                &leaf_mount_declared,
+                true,
             )? {
                 // A referenced subsystem is a self-contained build boundary
                 // (mirrors Julia `_load_ref` → `_lower_and_coerce`): lower under
@@ -965,17 +1034,23 @@ fn resolve_value(
         // today, but a path left marked visited would silently skip the file
         // if resolution ever becomes partially recoverable.
         let nested_result = (|| -> Result<(), DiagnosticError> {
-            // The referenced document's own metaparameters were just closed and
-            // folded by `resolve_template_machinery` above, so any binding on
-            // its OWN nested subsystem refs arrives with metaparameter names
-            // already substituted to concrete integers — its refs fold against
-            // an empty environment (esm-spec §9.7.6: refs resolve post-close).
+            // `parent_meta` is empty: the referenced document's own
+            // metaparameters were just closed and folded by
+            // `resolve_template_machinery` above, so any binding on its OWN
+            // nested subsystem refs arrives with metaparameter names already
+            // substituted to concrete integers and folds against an empty
+            // environment (esm-spec §9.7.6: refs resolve post-close).
+            //
+            // `api_meta` is NOT empty: the loader-API bindings are a
+            // document-wide site-4 environment, and they reach every leaf in the
+            // subsystem DAG that DECLARES the name — mirroring the Python
+            // `_resolve_model_subsystems(..., api_meta=api_meta)` recursion.
             walk_top_level(
                 &mut parsed,
                 &parent_dir,
                 visited,
                 &BTreeMap::new(),
-                &BTreeMap::new(),
+                api_meta,
             )?;
             if let Some(reg) = registry
                 && let Some(loaded) = parsed.get("index_sets").and_then(|v| v.as_object())
@@ -992,7 +1067,14 @@ fn resolve_value(
     }
 
     let mut value = value;
-    walk_subsystems(&mut value, base_path, visited, registry, parent_meta)?;
+    walk_subsystems(
+        &mut value,
+        base_path,
+        visited,
+        registry,
+        parent_meta,
+        api_meta,
+    )?;
     Ok(value)
 }
 
