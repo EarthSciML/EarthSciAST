@@ -269,6 +269,7 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: |
           julia --project=pkg/EarthSciAST.jl scripts/generate-template-import-goldens.jl
+          julia --project=pkg/EarthSciAST.jl scripts/generate-pushdown-goldens.jl
           git diff --exit-code -- tests/
 
       - name: Process Julia coverage
