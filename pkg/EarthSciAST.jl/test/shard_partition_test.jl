@@ -52,6 +52,18 @@ using Test
         end
     end
 
+    # A test file reached by a PLAIN `include` would run in EVERY shard and
+    # never enter the registry, so nothing above would notice — the partition
+    # would still be internally consistent while the suite quietly ran that file
+    # twice. That is not hypothetical: a file added on main while this branch
+    # was in flight arrived exactly that way. So the source is checked directly.
+    @testset "no test file bypasses the shard registry" begin
+        rt = read(joinpath(@__DIR__, "runtests.jl"), String)
+        bypassed = [m.captures[1] for m in
+                    eachmatch(r"(?<!shard_)\binclude\("([A-Za-z0-9_]+_test\.jl)"\)", rt)]
+        @test isempty(bypassed)
+    end
+
     # …and that THIS process actually honoured the assignment: it ran its own
     # units, in order, and none of anyone else's. Without this the checks above
     # would only prove the arithmetic, not that `shard_claim` dispatches on it.
