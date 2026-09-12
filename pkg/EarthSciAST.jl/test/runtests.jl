@@ -95,6 +95,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("shape_promotion_consumer_refs_test.jl")  # promoted-var consumers gathered in-loop
     include("subsystem_ref_test.jl")
     include("mount_index_set_rename_test.jl")  # §4.7 mount-edge index_set_rename
+    include("toplevel_mount_edge_pipeline_test.jl")  # §4.7 edge pipeline, top-level {ref}
     include("reaction_system_ref_test.jl")
     include("editing_test.jl")
     include("data_loader_fixtures_test.jl")

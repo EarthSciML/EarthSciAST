@@ -398,8 +398,8 @@ binding inlines that form:
 
 | Binding | §4.7 subsystem edge | Top-level `{ref}` mount |
 |---|---|---|
-| Julia | implemented | **refused** — a raw pre-pass splices the leaf and defers its §9.7 resolution to the root, so there is no resolved mounted document to rename; the edge raises `subsystem_index_set_rename_unsupported_mount_form` |
-| Rust | implemented | same pre-pass, same refusal |
+| Julia | implemented | **implemented** at `models.<k>` (2026-09-11) — `_inline_toplevel_model_refs!` now runs the same §4.7 edge pipeline `_resolve_subsystem_ref` runs, so the leaf resolves in its own scope and there is a resolved mounted document to rename. Still **refused** at `reaction_systems.<k>`, which no other binding mounts: that inliner is still a raw pre-pass that defers the leaf's §9.7 resolution to the root, so the edge raises `subsystem_index_set_rename_unsupported_mount_form` |
+| Rust | implemented | **implemented** (2026-09-10) — `inline_toplevel_model_refs` now runs the same §4.7 edge pipeline `resolve_value` runs at a `subsystems.<k>` edge, so the leaf resolves in its own scope and there is a resolved mounted document to rename |
 | Python | implemented | **implemented** — both forms share `_load_ref_data`, which resolves the leaf fully at the mount; verified end-to-end |
 | TypeScript | implemented | the form is not inlined at all (a bare `{ref}` stub returns immediately), so the field is unreachable |
 | Go | implemented | the form does not exist |
@@ -481,15 +481,47 @@ breaks URL refs and offers no per-name control.
    would imply the §9.7.7 domain (templates ∪ index sets ∪ open metaparameters), only one
    third of which crosses a mount. Recommendation: keep `index_set_rename`.
 2. **How does the top-level `models.<k>` `{ref}` mount get to APPLYING the field?** (§4.11.)
-   Settled for now: normative at both forms, honoured by Python, refused with
-   `subsystem_index_set_rename_unsupported_mount_form` by Julia and Rust, unreachable in
-   TypeScript and Go. What remains open is the trade-off item 3 named — whether the deferring
-   bindings resolve a mounted leaf as a closed build boundary the way the subsystem edge does,
-   which costs them the loader-API metaparameters reaching a mounted leaf document-wide, or the
-   top-level merge is defined some other way. Until that is decided the refusal is the answer.
-   **This matters for the reporter**: EqWeFiC's assemblies use top-level `ref` mounts, so under
-   Julia and the Rust CLI they must move the component to a `subsystems.<k>` edge to use the
-   field, or wait for that resolution to converge. (An earlier draft said they were *pushed* to
+   **Resolved for Rust (2026-09-10)**: Rust took the first horn — a mounted leaf is a closed
+   build boundary at BOTH forms — and the cost item 3 named is smaller than it looked. The
+   loader-API metaparameters still reach the leaf, by the backfill Python already used: the
+   LOADER-API bindings (§9.7.6 site 4) seed the leaf's close for the names the LEAF declares, and
+   explicit edge `bindings` (site 3) win over them. The mounting document's own declared defaults
+   are NOT forwarded — they are its site-5 close, not a binding on anything it mounts, and
+   forwarding them would let an assembler's unrelated name silently resize a leaf axis and make
+   the two mount forms disagree. What is genuinely lost is an axis sized by a name only the
+   ASSEMBLER declares — with no leaf machinery it merges symbolically and the root's close
+   resolves it, but a leaf that has any §9.7 machinery folds strictly and rejects it with
+   `metaparameter_unbound`, exactly as Python and as the `subsystems.<k>` edge do. Whether the
+   edge close should be strict about such a name is the remaining open question, and it is a
+   spec question at both forms rather than a top-level one. Note what makes a leaf strict: a
+   whole-document boolean, whether it carries ANY §9.7 machinery at all. A component's
+   acceptance therefore flips on an `expression_template_imports` entry unrelated to the axis in
+   question. That is inherited from Python rather than invented here, but it is a footgun and
+   belongs in the same ruling.
+   A second consequence of merging a symbolic size is worth settling with it: on the
+   no-machinery path the registry merge compares declarations structurally, so a mount that
+   restates the leaf's axis VERBATIM (`size: "n_rows"`) is idempotent while one that restates it
+   with the concrete number the name folds to (`size: 7`) is a `subsystem_index_set_conflict`.
+   Python agrees, so it is convergent behaviour, but the asymmetry is surprising to an author.
+   **Julia took the same horn on 2026-09-11**, porting the Rust pipeline verbatim including the
+   backfill precedence. Status is now: honoured at the top-level `models.<k>` form by Julia,
+   Python and Rust; refused with `subsystem_index_set_rename_unsupported_mount_form` only at
+   Julia's top-level `reaction_systems.<k>` mount, which no other binding implements;
+   unreachable in TypeScript and Go.
+   Porting it surfaced a THIRD consequence that is not convergent, and it is a verdict split
+   rather than a value one: when an assembly both declares the metaparameter AND restates the
+   leaf's symbolic axis verbatim, Rust and Julia merge on the raw document — before their own
+   root close — so the two declarations are deep-equal and the document loads, while Python
+   merges after its root close and sees `size: 7` against the leaf's `size: "n_rows"`, which is
+   `subsystem_index_set_conflict`. Deleting the restatement loads in all three. The split
+   PREDATES this change — Rust accepted that document on `main` too, for a different reason
+   (the top-level form merged no leaf axes at all, so nothing could collide), and Python has
+   always refused it — so nothing regressed here; the port merely made the two bindings agree
+   with each other and put the disagreement with Python in plain sight. Where the §4.7 merge
+   sits relative to the mounting document's own §9.7.6 close is the question to settle, and it
+   belongs with this item.
+   **This matters for the reporter**: EqWeFiC's assemblies use top-level `ref` mounts, which now
+   apply the field in all three bindings that implement the form. (An earlier draft said they were *pushed* to
    the top-level form because `variable_map` cannot reach into a subsystem. That is **wrong**,
    and #198 item 1 established why: `variable_map` resolves subsystem endpoints in all five
    bindings — into a nested parameter, out of a nested unknown, between two subsystems of one
