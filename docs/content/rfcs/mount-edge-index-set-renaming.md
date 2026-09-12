@@ -491,13 +491,15 @@ breaks URL refs and offers no per-name control.
    the two mount forms disagree. What is genuinely lost is an axis sized by a name only the
    ASSEMBLER declares — with no leaf machinery it merges symbolically and the root's close
    resolves it, but a leaf that has any §9.7 machinery folds strictly and rejects it with
-   `metaparameter_unbound`, exactly as Python and as the `subsystems.<k>` edge do. Whether the
-   edge close should be strict about such a name is the remaining open question, and it is a
-   spec question at both forms rather than a top-level one. Note what makes a leaf strict: a
-   whole-document boolean, whether it carries ANY §9.7 machinery at all. A component's
-   acceptance therefore flips on an `expression_template_imports` entry unrelated to the axis in
-   question. That is inherited from Python rather than invented here, but it is a footgun and
-   belongs in the same ruling.
+   `metaparameter_unbound`.
+   **The strictness half is now SETTLED, in the permissive direction.** A mount edge is not the
+   last scope that could close a name — the leaf's `index_sets` merge into the mounting registry
+   immediately afterwards — so an axis the leaf cannot size stays symbolic and travels up, at
+   both mount forms, whatever machinery the leaf carries (§4.7, §9.7.6 site 5). That also
+   retires the footgun this item named: strictness was a whole-document boolean, so a
+   component's acceptance flipped on an `expression_template_imports` entry unrelated to the
+   axis in question, and factoring a shared expression into a library could stop a document's
+   shape from resolving. A ROOT document has no enclosing scope and stays strict.
    A second consequence of merging a symbolic size is worth settling with it: on the
    no-machinery path the registry merge compares declarations structurally, so a mount that
    restates the leaf's axis VERBATIM (`size: "n_rows"`) is idempotent while one that restates it
@@ -520,6 +522,16 @@ breaks URL refs and offers no per-name control.
    with each other and put the disagreement with Python in plain sight. Where the §4.7 merge
    sits relative to the mounting document's own §9.7.6 close is the question to settle, and it
    belongs with this item.
+   Two further things are true of that split and worth stating plainly, because they bear on
+   how much the open question costs in practice. First, it makes "drop the leaf's declaration
+   and let the assembler declare the name" a **non-portable** workaround rather than a remedy:
+   the same two documents give a concrete axis in Rust and Julia and an unfolded one in Python.
+   Second, Python does not so much ACCEPT that document as decline to decide it — the load
+   succeeds with the merged axis still carrying its symbolic `size`, because nothing folds
+   `index_sets` after the merge on that path. A reader comparing verdicts sees "passes" in all
+   three and a different resolved document in one, which is the worst shape a divergence can
+   take. Settling where the §4.7 merge sits relative to the mounting document's own §9.7.6
+   close is what closes both.
    **This matters for the reporter**: EqWeFiC's assemblies use top-level `ref` mounts, which now
    apply the field in all three bindings that implement the form. (An earlier draft said they were *pushed* to
    the top-level form because `variable_map` cannot reach into a subsystem. That is **wrong**,
