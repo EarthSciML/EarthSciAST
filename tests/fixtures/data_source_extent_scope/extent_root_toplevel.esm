@@ -1,0 +1,26 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "ExtentRootToplevel",
+    "description": "Owns the data source; mounts the axis leaf at the top-level `models.<k>` form and restates nothing."
+  },
+  "data_sources": {
+    "EGU_Emis": {
+      "kind": "points",
+      "source": {
+        "url_template": "file://./records.csv"
+      },
+      "extent": {
+        "metaparameter": "N_REC"
+      },
+      "metadata": {
+        "esio_format": "ff10"
+      }
+    }
+  },
+  "models": {
+    "Ingest": {
+      "ref": "./extent_axis_leaf.esm"
+    }
+  }
+}

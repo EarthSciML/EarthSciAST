@@ -1,0 +1,48 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "ExtentRootSubsystem",
+    "description": "The same assembly through the `subsystems.<k>` mount form. \u00a74.7: the two forms must size the axis identically."
+  },
+  "data_sources": {
+    "EGU_Emis": {
+      "kind": "points",
+      "source": {
+        "url_template": "file://./records.csv"
+      },
+      "extent": {
+        "metaparameter": "N_REC"
+      },
+      "metadata": {
+        "esio_format": "ff10"
+      }
+    }
+  },
+  "models": {
+    "Host": {
+      "system_kind": "nonlinear",
+      "variables": {
+        "z": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Host-local observed."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "z",
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": 0.0
+          }
+        }
+      ],
+      "subsystems": {
+        "Ingest": {
+          "ref": "./extent_axis_leaf.esm"
+        }
+      }
+    }
+  }
+}

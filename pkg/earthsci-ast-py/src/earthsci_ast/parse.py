@@ -1772,7 +1772,21 @@ def _load_ref_data(
     # Resolve the referenced document's §9.7 machinery under the effective
     # metaparameter close, then run the §9.6.3 rewrite fixpoint so the inlined
     # component carries only normal Expression ASTs (Option A round-trip).
-    resolved = resolve_template_machinery(ref_data, new_base, metaparameters=effective_bindings)
+    # `mounted_leaf=True`: this IS a §4.7 mount edge. The leaf resolves in its
+    # own scope, but its `index_sets` then merge into the MOUNTING document's
+    # registry and close there, so an axis sized by a name only the assembler
+    # declares stays symbolic rather than failing here (§9.7.6 site 5).
+    # `mount_declared` covers the leaf's OWN nested mounts, so the widening
+    # composes down the reference DAG.
+    from .template_imports import collect_mount_declared_metaparameters
+
+    resolved = resolve_template_machinery(
+        ref_data,
+        new_base,
+        metaparameters=effective_bindings,
+        mount_declared=collect_mount_declared_metaparameters(ref_data, new_base),
+        mounted_leaf=True,
+    )
     if resolved is not None:
         ref_data = resolved
     # Option B (esm-spec §9.6.4): lower preserves references; the mounted
@@ -1877,6 +1891,7 @@ def _resolve_subsystems_generic(
     *,
     resolve_ref: Callable[[Any, str, str, set, tuple[str, ...], str], Any],
     recurse_resolved: Callable[[Any, str, set, tuple[str, ...]], None],
+    api_meta: dict[str, int] | None = None,
 ) -> None:
     """Shared skeleton behind :func:`_resolve_model_subsystems` and
     :func:`_resolve_reaction_system_subsystems`.
@@ -1945,6 +1960,15 @@ def _resolve_subsystems_generic(
                     bindings,
                     "subsystem",
                     injected,
+                    # §4.7 "Two mount forms, one mechanism": the loader-API
+                    # bindings (§9.7.6 site 4) seed this edge's close for the
+                    # names the LEAF declares, exactly as at a top-level
+                    # `models.<k>` mount. Without it a discovered `extent`
+                    # (§8.9.4) reached a top-level-mounted leaf and not a
+                    # subsystem-mounted one, so the same two documents sized
+                    # the same axis differently depending only on which
+                    # attachment point the assembler picked.
+                    loader_metaparameters=api_meta,
                     index_set_rename=sub_value.get("index_set_rename"),
                     rename_where=f"subsystem ref '{ref_str}'",
                 )
@@ -1989,6 +2013,8 @@ def _resolve_model_subsystems(
     seen_refs: set,
     registry: dict[str, Any],
     chain: tuple[str, ...] = (),
+    *,
+    api_meta: dict[str, int] | None = None,
 ) -> None:
     """Recursively resolve subsystem refs within a Model.
 
@@ -2028,7 +2054,9 @@ def _resolve_model_subsystems(
 
     def recurse_resolved(sub_value, sub_base, sub_seen, sub_chain):
         if isinstance(sub_value, Model):
-            _resolve_model_subsystems(sub_value, sub_base, sub_seen, registry, sub_chain)
+            _resolve_model_subsystems(
+                sub_value, sub_base, sub_seen, registry, sub_chain, api_meta=api_meta
+            )
 
     _resolve_subsystems_generic(
         model,
@@ -2037,6 +2065,7 @@ def _resolve_model_subsystems(
         chain,
         resolve_ref=resolve_ref,
         recurse_resolved=recurse_resolved,
+        api_meta=api_meta,
     )
 
 
@@ -2045,6 +2074,8 @@ def _resolve_reaction_system_subsystems(
     base_path: str,
     seen_refs: set,
     chain: tuple[str, ...] = (),
+    *,
+    api_meta: dict[str, int] | None = None,
 ) -> None:
     """Recursively resolve subsystem refs within a ReactionSystem.
 
@@ -2062,13 +2093,17 @@ def _resolve_reaction_system_subsystems(
         if parsed.reaction_systems:
             sub_rs = next(iter(parsed.reaction_systems.values()))
             sub_rs.name = sub_name
-            _resolve_reaction_system_subsystems(sub_rs, new_base, new_seen, new_chain)
+            _resolve_reaction_system_subsystems(
+                sub_rs, new_base, new_seen, new_chain, api_meta=api_meta
+            )
             return sub_rs
         raise SubsystemRefError(f"Subsystem ref '{ref_str}' does not contain a reaction system")
 
     def recurse_resolved(sub_value, sub_base, sub_seen, sub_chain):
         if isinstance(sub_value, ReactionSystem):
-            _resolve_reaction_system_subsystems(sub_value, sub_base, sub_seen, sub_chain)
+            _resolve_reaction_system_subsystems(
+                sub_value, sub_base, sub_seen, sub_chain, api_meta=api_meta
+            )
 
     _resolve_subsystems_generic(
         rs,
@@ -2077,10 +2112,15 @@ def _resolve_reaction_system_subsystems(
         chain,
         resolve_ref=resolve_ref,
         recurse_resolved=recurse_resolved,
+        api_meta=api_meta,
     )
 
 
-def resolve_subsystem_refs(esm_file: EsmFile, base_path: str) -> None:
+def resolve_subsystem_refs(
+    esm_file: EsmFile,
+    base_path: str,
+    loader_metaparameters: dict[str, int] | None = None,
+) -> None:
     """Resolve all subsystem references in an ESM file.
 
     Walks all subsystems in models and reaction_systems. For each subsystem
@@ -2104,6 +2144,7 @@ def resolve_subsystem_refs(esm_file: EsmFile, base_path: str) -> None:
         SubsystemRefError: If a reference cannot be resolved or is invalid
     """
     seen: set = set()
+    api_meta = dict(loader_metaparameters or {})
 
     # The importing document's index-set registry (esm-spec §4.7): threaded
     # down the model subsystem walk so every referenced subsystem file's
@@ -2115,10 +2156,10 @@ def resolve_subsystem_refs(esm_file: EsmFile, base_path: str) -> None:
         esm_file.index_sets = registry
 
     for model in esm_file.models.values():
-        _resolve_model_subsystems(model, base_path, seen, registry)
+        _resolve_model_subsystems(model, base_path, seen, registry, api_meta=api_meta)
 
     for rs in esm_file.reaction_systems.values():
-        _resolve_reaction_system_subsystems(rs, base_path, seen)
+        _resolve_reaction_system_subsystems(rs, base_path, seen, api_meta=api_meta)
 
 
 def resolve_model_refs(
@@ -2413,6 +2454,11 @@ def _load_data(
         reject_template_imports_pre_v08,
         resolve_template_machinery,
     )
+    from .template_imports import (
+        check_data_source_extents,
+        collect_mount_declared_metaparameters,
+        document_declares_an_extent,
+    )
 
     reject_expression_templates_pre_v04(data)
 
@@ -2523,7 +2569,29 @@ def _load_data(
     # metaparameter close+fold — BEFORE any validator sees the tree (esm-spec
     # §9.7: "All resolution happens at load, before validation and before the
     # §9.6.3 fixpoint"). Returns None for documents without §9.7 machinery.
-    resolved = resolve_template_machinery(data, base_path, metaparameters=metaparameters)
+    #
+    # `mount_declared` is the metaparameter names every document this one MOUNTS
+    # declares (§4.7, either form, transitively). It widens the §9.7.6 site-4
+    # check: a loader-API binding — which is how a discovered §8.9.4 `extent`
+    # arrives — may name a metaparameter the LEAF declares and this document has
+    # no reason to restate. The edge forwards it into the leaf's own close, so
+    # the name is meaningful; only a name NO document in the assembly declares is
+    # the typo the check exists to catch.
+    # Guarded: the widening can only matter when the load carries loader-API
+    # bindings or the document declares an `extent`. A document with neither
+    # pays no extra ref reads — which also keeps a remote `{ref}` from being
+    # fetched twice on the ordinary path.
+    _mount_declared = (
+        collect_mount_declared_metaparameters(data, base_path)
+        if (metaparameters or document_declares_an_extent(data))
+        else frozenset()
+    )
+    # §8.9.4, statically: an `extent` naming a metaparameter nobody declares is
+    # refused HERE rather than when the source is finally sampled at build.
+    check_data_source_extents(data, base_path, _mount_declared)
+    resolved = resolve_template_machinery(
+        data, base_path, metaparameters=metaparameters, mount_declared=_mount_declared
+    )
     if resolved is not None:
         data = resolved
 
@@ -2578,7 +2646,11 @@ def _load_data(
     # Resolve subsystem references so subsystems land as concrete Model
     # / ReactionSystem objects (rather than `{ref: ...}` dicts) before the
     # enum-lowering pass walks their expression trees.
-    resolve_subsystem_refs(esm_file, base_path)
+    # The loader-API bindings reach this mount form too (§4.7 "Two mount forms,
+    # one mechanism"): a leaf mounted as a subsystem gets the same site-4
+    # backfill a top-level-mounted leaf gets, so a discovered `extent` sizes its
+    # axis at either attachment point.
+    resolve_subsystem_refs(esm_file, base_path, loader_metaparameters=metaparameters)
 
     # Lower `enum` op nodes to `const` integers using the file's `enums` block
     # (esm-spec §9.3). Runs after subsystem resolution so every expression
