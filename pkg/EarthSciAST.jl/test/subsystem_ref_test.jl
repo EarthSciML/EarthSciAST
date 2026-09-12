@@ -1,3 +1,7 @@
+using Test
+using EarthSciAST
+using JSON3
+
 @testset "Subsystem Reference Resolution Tests" begin
 
     @testset "SubsystemRefError construction" begin

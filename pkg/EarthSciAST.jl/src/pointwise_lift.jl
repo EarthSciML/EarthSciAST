@@ -73,7 +73,8 @@ function _detect_lift_loops(ma::OpExpr, lifted::Set{String}, rank::Int,
             body = get!(peek, e) do
                 try
                     _expand_expr_refs(e, reg)
-                catch
+                catch err
+                    _is_resource_error(err) && rethrow()
                     # Unknown template / bad bindings: leave detection to fail
                     # as before; the build path raises the real diagnostic.
                     nothing
@@ -339,7 +340,8 @@ function _lift_axis_names(mas::Vector{OpExpr}, loops::Vector{String},
             body = get!(peek, e) do
                 try
                     _expand_expr_refs(e, reg)
-                catch
+                catch err
+                    _is_resource_error(err) && rethrow()
                     nothing   # unknown template: the build path raises the real diagnostic
                 end
             end

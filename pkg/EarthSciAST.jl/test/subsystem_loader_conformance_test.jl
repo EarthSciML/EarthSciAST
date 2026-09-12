@@ -18,6 +18,7 @@ import SciMLBase
 import SciMLBase: solve, remake
 import OrdinaryDiffEqTsit5: Tsit5
 using JSON3
+include("testutils.jl")   # _require_fixture
 const _ESS_SL = EarthSciAST
 
 # Offline CONST stub provider: returns a fixed field array (empty refresh_times ⇒

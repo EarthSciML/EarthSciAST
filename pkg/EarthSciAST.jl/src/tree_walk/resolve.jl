@@ -553,7 +553,8 @@ function _try_build_contraction_loop(body::ASTExpr, contract_names::Vector{Strin
         # concrete RHS-build memo (same invariant the compile-once path relies on).
         _resolve_indices(subbed, array_var_info, var_map, const_arrays,
                          pgather, nothing, bsyms)
-    catch
+    catch err
+        _is_resource_error(err) && rethrow()
         return nothing
     end
     # Publish the refs so `_compile` lowers each surviving loop-var `VarExpr` to an

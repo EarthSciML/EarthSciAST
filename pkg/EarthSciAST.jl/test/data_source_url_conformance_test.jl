@@ -1,6 +1,7 @@
 using Test
 using EarthSciAST
 using JSON3
+include("testutils.jl")   # TESTUTILS_REPO_ROOT
 
 # esm-spec §8.2.1 data-source location resolution, against the SHARED pin.
 #

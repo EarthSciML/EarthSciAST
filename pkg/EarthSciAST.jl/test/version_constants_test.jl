@@ -8,6 +8,10 @@
 # as a `parse._CURRENT_VERSION` TUPLE. Every binding now exposes exactly
 # `SCHEMA_VERSION` and `LIBRARY_VERSION`, both strings.
 
+using Test
+using EarthSciAST
+using JSON3
+
 @testset "Version constants" begin
 
     @testset "SCHEMA_VERSION tracks the bundled schema \$id" begin

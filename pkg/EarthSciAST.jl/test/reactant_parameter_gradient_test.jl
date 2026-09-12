@@ -39,6 +39,7 @@
 
 using Test
 using Reactant
+using ForwardDiff
 
 const _PGR_RX = Reactant
 # Enzyme is a dependency OF Reactant, not of the test environment — reaching it

@@ -71,7 +71,7 @@ CORPUS_MANIFEST="$OUTPUT_DIR/corpus_manifest.json"
 # `standard-conformance-testing` job carries
 # `needs: [julia-tests, typescript-tests, python-tests, rust-tests, go-tests]`,
 # so it does not start until all five suites have passed, each across its whole
-# version matrix (julia 1.10/1.11/1.12, node 20/22, python 3.9-3.12, rust
+# version matrix (julia 1.10/1.12/1.13, node 20/22, python 3.9-3.12, rust
 # stable/beta/MSRV, go 1.21/1.22/1.23). Re-running them here repeated that work
 # at ONE pinned version apiece — strictly less coverage, for the entire cost.
 #

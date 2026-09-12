@@ -82,6 +82,27 @@ _normj(x) =
         Any[_normj(v) for v in x] : x
 
 """
+    corpus_is_resource_error(e) -> Bool
+
+Errors a fixture-corpus sweep must never swallow. Those sweeps tolerate a model
+that cannot build standalone by catching everything and skipping it — which
+also catches the process running out of memory or stack. Resource exhaustion
+then reads as an ordinary skip and the run stays green having tested nothing,
+which is exactly how a fixture whose grid exhausted the allocator sat in the
+corpus unnoticed. Rethrow these; skip on the rest.
+
+This is a BACKSTOP, not the primary defence. The library is expected to deliver
+these three unwrapped — `EarthSciAST._is_resource_error` marks the same set,
+and every speculative-evaluation `catch` in `src/` that would otherwise decline
+or rebrand consults it first — precisely so a resource error never reaches a
+sweep disguised as a `TreeWalkError`, which this predicate could not recognise.
+Keep the backstop anyway: it costs nothing and it is what catches the next
+`catch` site that forgets.
+"""
+corpus_is_resource_error(e) =
+    e isa OutOfMemoryError || e isa StackOverflowError || e isa InterruptException
+
+"""
     _require_fixture(path) -> Bool
 
 Return `true` when the fixture file (or directory) at `path` exists. When it

@@ -26,6 +26,7 @@
 using Test
 using Reactant
 using ComponentArrays
+using ForwardDiff
 
 const _PVR_RX = Reactant
 const _PVR_Enzyme = Reactant.Enzyme

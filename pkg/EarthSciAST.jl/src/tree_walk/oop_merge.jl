@@ -549,7 +549,8 @@ function _merge_oop_acc_kernels(kernels::AbstractVector{_AccKernel},
             K = _oop_merge_group(kernels, plans, js)
             pl = _build_oop_acc_plan(K)
             pl.vectorizable ? (K, pl) : nothing
-        catch
+        catch err
+            _is_resource_error(err) && rethrow()
             nothing
         end
         if merged === nothing
@@ -976,7 +977,8 @@ function _merge_oop_x_kernels(kernels::AbstractVector{_AccKernel},
             K = _oop_x_merge_group(kernels, plans, js)
             pl = _build_oop_acc_plan(K)
             pl.vectorizable ? (K, pl) : nothing
-        catch
+        catch err
+            _is_resource_error(err) && rethrow()
             nothing
         end
         if merged === nothing

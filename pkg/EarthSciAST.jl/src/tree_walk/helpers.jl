@@ -546,6 +546,10 @@ function _resolve_field_ic(target::AbstractString, rhs::EarthSciAST.ASTExpr,
         return Float64(evaluate_expr(rhs, params;
                                      registered_functions=registered_functions))
     catch err
+        # A resource error is not a reason to try the NEXT form — the next form
+        # allocates too — and step (4) would rebrand it as a statement about
+        # this RHS. Out, unwrapped.
+        _is_resource_error(err) && rethrow()
         push!(_errs, "as constant: $(sprint(showerror, err))")
     end
     # (3) Coordinate expression over the grid geometry (per-cell field); model
@@ -556,6 +560,7 @@ function _resolve_field_ic(target::AbstractString, rhs::EarthSciAST.ASTExpr,
                                   registered_functions=registered_functions,
                                   params=params)
         catch err
+            _is_resource_error(err) && rethrow()
             push!(_errs, "as coordinate expression: $(sprint(showerror, err))")
         end
     end
@@ -715,7 +720,8 @@ function _try_field_ic_fastpath(rhs, params::AbstractDict,
     end
     node = try
         _compile(body, Dict{String,Int}(), Set{Symbol}(psyms), reg)
-    catch
+    catch err
+        _is_resource_error(err) && rethrow()
         return nothing   # anything the closed-form guard missed → per-cell fallback
     end
     pbase = Float64[Float64(params[k]) for k in pkeys]
@@ -850,7 +856,8 @@ function _cellwise_compile_once_impl(expr::EarthSciAST.ASTExpr, nidx::Int,
                                     Dict{String,Int}(), const_arrays,
                                     _EMPTY_PGATHER, nothing, bound)
         _compile(resolved, Dict{String,Int}(), Set{Symbol}(psyms), reg)
-    catch
+    catch err
+        _is_resource_error(err) && rethrow()
         return nothing   # anything unsupported → per-cell fallback
     end
     base = ntuple(i -> Float64(params[pkeys[i]]), length(pkeys))

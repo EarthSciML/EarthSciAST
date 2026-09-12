@@ -155,7 +155,8 @@ _cfs_ics(N) = Dict{String,Float64}("$x[$k]" => 0.2j + 0.01k
                 try
                     f!, u0, p, _t, _vm = ESM.build_evaluator(file; model_name=name)
                     return (f=f!, u0=u0, p=p)
-                catch
+                catch e
+                    corpus_is_resource_error(e) && rethrow()
                     return nothing
                 end
             end
@@ -164,7 +165,8 @@ _cfs_ics(N) = Dict{String,Float64}("$x[$k]" => 0.2j + 0.01k
             du = zeros(length(u0))
             try
                 f!(du, u0, p, t)
-            catch
+            catch e
+                corpus_is_resource_error(e) && rethrow()
                 return nothing
             end
             return du
@@ -174,7 +176,8 @@ _cfs_ics(N) = Dict{String,Float64}("$x[$k]" => 0.2j + 0.01k
         for path in esms
             file = try
                 ESM.load_path(path)
-            catch
+            catch e
+                corpus_is_resource_error(e) && rethrow()
                 continue
             end
             file.models === nothing && continue

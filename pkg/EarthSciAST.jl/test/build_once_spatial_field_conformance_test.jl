@@ -17,6 +17,7 @@ import SciMLBase
 import SciMLBase: solve, remake
 import OrdinaryDiffEqTsit5: Tsit5
 using JSON3
+include("testutils.jl")   # _require_fixture
 const _ESS_BO = EarthSciAST
 
 @testset "build_once_spatial_field conformance — setup makearray + gather into ODE (§5.12)" begin

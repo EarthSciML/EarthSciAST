@@ -28,6 +28,7 @@ using DiffEqCallbacks            # loads EarthSciASTDataRefreshExt
 using SciMLBase                  # ext co-trigger (u_modified!)
 import OrdinaryDiffEqTsit5 as ODE  # Tsit5 + ODEProblem + solve (test-only solver dep)
 using JSON3
+include("testutils.jl")   # _require_fixture
 const _ESS_DM = EarthSciAST
 
 # A minimal offline mock Provider returning `src` at each interior anchor from the
