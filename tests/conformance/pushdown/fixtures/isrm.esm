@@ -142,7 +142,7 @@
             "PrimaryPM25": {
               "chunks": [
                 1,
-                100,
+                16,
                 64
               ],
               "dtype": "<f4",
@@ -164,7 +164,7 @@
             "SOA": {
               "chunks": [
                 1,
-                100,
+                16,
                 64
               ],
               "compressor": "blosc:lz4:clevel5:shuffle1",
@@ -198,7 +198,7 @@
             "pNH4": {
               "chunks": [
                 1,
-                100,
+                16,
                 64
               ],
               "dtype": "<f4",
@@ -211,7 +211,7 @@
             "pNO3": {
               "chunks": [
                 1,
-                100,
+                16,
                 64
               ],
               "dtype": "<f4",
@@ -224,7 +224,7 @@
             "pSO4": {
               "chunks": [
                 1,
-                100,
+                16,
                 64
               ],
               "dtype": "<f4",
@@ -238,7 +238,7 @@
           "consolidated": false,
           "format": "zarr",
           "gated_select": {
-            "_DRAFT": "Phase-2-core GATED-PROVIDER field (proposed). Replaces the runner's lazy_select ([0], ppl, :). Per-axis selection over the native SR dims sr_dim_order [emisLayer, source, receptor] = [3, 64, 64]; one axis is GATED BY a derived (value-invention) index set. Intended consumption: the engine DEFERS this provider's materialisation until materialize_value_invention has produced the gating set's members+extent, then delivers each `applies_to` array pre-sliced to the compact [emis_src_cells, rcv_cells] slab BEFORE the SR contraction (no 330 GB fold). Per-axis semantics: {\"fixed\":[i]} = take native index i and DROP the axis; {\"gated_by\":\"<derived index set>\"} = take that set's materialised members, in the set's canonical (sorted) member order, as the new axis (here emis_src_cells = the invented ppl); \"all\" = full axis (slice(None)).",
+            "_DRAFT": "Phase-2-core GATED-PROVIDER field (proposed). Replaces the runner's lazy_select ([0], ppl, :). Per-axis selection over the native SR dims sr_dim_order [emisLayer, source, receptor] = [3, 64, 64]; one axis is GATED BY a derived (value-invention) index set. Intended consumption: the engine DEFERS this provider's materialisation until materialize_value_invention has produced the gating set's members+extent, then delivers each `applies_to` array pre-sliced to the compact [emis_src_cells, rcv_cells] slab BEFORE the SR contraction (no 480 KiB fold). Per-axis semantics: {\"fixed\":[i]} = take native index i and DROP the axis; {\"gated_by\":\"<derived index set>\"} = take that set's materialised members, in the set's canonical (sorted) member order, as the new axis (here emis_src_cells = the invented ppl); \"all\" = full axis (slice(None)).",
             "applies_to": [
               "SOA",
               "pNO3",

@@ -84,12 +84,12 @@ is **deep-equal as parsed JSON** to the committed golden.
   the committed input is self-contained (no open metaparameters), at REDUCED
   GRID EXTENTS: `src_cells` and `rcv_cells` carry 64 rather than 52,411, and
   `pop_cells` 96 rather than 596,444, with every other spelling of those
-  extents — the metaparameter defaults, the data-source array shapes and the
-  chunk dimensions that spelled an extent, and the counts named in the
-  descriptions — reduced with them. (The `x_esd` chunk descriptors keep their
-  authored 100-row source chunking, which the reduction leaves larger than the
-  64-cell axis it chunks; a chunk wider than its array is legal zarr and
-  nothing in this repo reads the field.)
+  extents — the metaparameter defaults, the data-source array shapes and
+  chunk sizes, and every count named in a description — reduced with them.
+  No number in the document is left at production scale: the `x_esd` chunking
+  of the source axis came down 100 → 16 so no chunk is wider than the axis it
+  chunks, and the `gated_select._DRAFT` fold size came down 330 GB → 480 KiB
+  (it is quadratic in the extent).
   The rewrite this corpus pins is structural, so the extents were never what
   it tests, and at the real ones the document cannot be carried here at all:
   the Julia corpus sweeps build EVERY fixture in this tree, and the five
