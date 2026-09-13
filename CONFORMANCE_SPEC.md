@@ -5470,6 +5470,13 @@ the machine, is a third outcome: the adapter emits the whole-output form
 — but **only** for a binding listed in that engine's `bindings_optional`. An
 unavailable engine in a `bindings_required` binding **FAILS**.
 
+A fourth outcome is neither of those, and must not be confused with either: a
+fixture the adapter could not evaluate **at all** — the load threw, the build
+threw, the evaluation threw — is reported per-fixture as
+`{"error": "<ExcType>: <message>"}`. It **FAILS** for any binding and any engine.
+`compiled_required` does not excuse it, because unlike a refusal it says nothing
+about what an engine can lower.
+
 #### 5.38.4 The precision exclusion
 
 A fixture that carries a `precision` node, or an `element_type` other than
