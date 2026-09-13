@@ -1,0 +1,16 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "mount_chain_inner",
+    "description": "An ASSEMBLY that is itself mountable: its single top-level model is a `models.<k>` `{ref}` MOUNT EDGE onto tests/valid/mount_rename_soil_column.esm, carried through an index_set_rename {lev: soil_lev}. Loads standalone as a one-model document whose registry holds `soil_lev` (interval/4). Exists so tests/valid/mount_chain_outer.esm and tests/valid/mount_chain_via_subsystem.esm can mount an assembly rather than a leaf: esm-spec §4.7's top-level form lands its component as a TOP-LEVEL system precisely so an assembly can be named by file and mounted onward, so the form has to compose with itself. A binding that resolves only one level deep splices this file's unresolved `{ref}` edge in as though it were the component.",
+    "authors": ["EarthSciAST"],
+    "created": "2026-09-12T00:00:00Z",
+    "tags": ["subsystem", "index_sets", "mount", "rename", "chain", "issue-198"]
+  },
+  "models": {
+    "Soil": {
+      "ref": "./mount_rename_soil_column.esm",
+      "index_set_rename": { "lev": "soil_lev" }
+    }
+  }
+}

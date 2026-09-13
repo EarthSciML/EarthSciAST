@@ -17,10 +17,57 @@ func marshalCanonical(v any, indent bool) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	canonical, err = restoreUnresolvedTopLevelMounts(canonical, v)
+	if err != nil {
+		return nil, err
+	}
 	if indent {
 		return json.MarshalIndent(canonical, "", "  ")
 	}
 	return json.Marshal(canonical)
+}
+
+// restoreUnresolvedTopLevelMounts writes an UNRESOLVED top-level `models.<k>`
+// `{ref}` MOUNT EDGE back out as the edge it was authored as.
+//
+// `ESMFile.Models` is a `map[string]Model`, so a bare `{ref}` entry decodes to
+// an EMPTY Model. LoadString snapshots the edges off the text before that
+// decode and the ref resolver consumes them — but LoadString and LoadDocument
+// do NOT resolve refs (only LoadPath does), so a document that came in through
+// either and goes out again would otherwise emit `{"variables": null}` where
+// the mount was: the `ref`, its `bindings` and its `index_set_rename` gone,
+// with no error anywhere.
+//
+// The `subsystems.<k>` form never had this problem, because that map is
+// `map[string]any` and keeps the edge verbatim. esm-spec §4.7 "Two mount forms,
+// one mechanism" is what says the two must not differ here either.
+//
+// Only edges the resolver has NOT consumed are still in the map, so this can
+// never overwrite a mount that did resolve.
+func restoreUnresolvedTopLevelMounts(canonical any, v any) (any, error) {
+	file, ok := v.(*ESMFile)
+	if !ok || len(file.topLevelModelRefs) == 0 {
+		return canonical, nil
+	}
+	root, ok := canonical.(map[string]any)
+	if !ok {
+		return canonical, nil
+	}
+	models, ok := root["models"].(map[string]any)
+	if !ok {
+		return canonical, nil
+	}
+	for _, name := range sortedKeys(file.topLevelModelRefs) {
+		if _, present := models[name]; !present {
+			continue
+		}
+		edge, err := canonicalizeForJSON(file.topLevelModelRefs[name])
+		if err != nil {
+			return nil, err
+		}
+		models[name] = edge
+	}
+	return canonical, nil
 }
 
 // serializeDocument is the shared serialization core for the four exported

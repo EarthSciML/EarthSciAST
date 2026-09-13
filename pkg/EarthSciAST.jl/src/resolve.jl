@@ -660,9 +660,15 @@ needs, which are not interchangeable: this document's full closed environment
 (its declared `default`s overlaid with the API bindings) is the scope an edge
 `bindings` EXPRESSION folds against, while the API bindings ALONE backfill a
 mounted leaf's own close.
+
+`visited` lets a caller that is ALREADY resolving refs — `_load_local_ref`, when
+the file it mounted as a `subsystems.<k>` edge turns out to be an assembly —
+share its path-scoped cycle set, so a mount cycle that crosses the two forms is
+caught. Defaults to a fresh set for the document entry point.
 """
 function _inline_toplevel_model_refs(raw_data, base_path::String;
-        metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}())
+        metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}(),
+        visited::Set{String}=Set{String}())
     models = _get_field(raw_data, :models, nothing)
     models === nothing && return nothing
     has_stub = any(values(models)) do m
@@ -670,7 +676,7 @@ function _inline_toplevel_model_refs(raw_data, base_path::String;
     end
     has_stub || return nothing
     native = _to_ordered(raw_data)
-    _inline_toplevel_model_refs!(native, base_path, Set{String}();
+    _inline_toplevel_model_refs!(native, base_path, visited;
                                  parent_meta=_root_metaparameter_env(raw_data, metaparameters),
                                  api_meta=metaparameters)
     return native
@@ -1522,7 +1528,23 @@ function _load_local_ref(ref::String, base_path::String, visited::Set{String};
     # inject the edge's discretization into its single component's scope
     # (esm-spec §9.7.10 form A).
     ref_base = dirname(resolved_path)
-    file = _load_parsed(_read_json_document(content); base_path=ref_base,
+    # The mounted file may itself be an ASSEMBLY, whose own `models.<k>` entries
+    # are `{ref}` mount edges. Which attachment point mounted it does not change
+    # what it IS, and esm-spec §4.7 "Two mount forms, one mechanism" forbids
+    # answering an assembly differently at the two — so its own top-level mounts
+    # inline here, in its own directory, exactly as `_load_document` inlines them
+    # for a document loaded directly. Sharing `visited` makes a cycle that
+    # crosses the two mount forms a `SubsystemRefError` rather than a stack
+    # overflow. Returns `nothing` for the common leaf that mounts nothing.
+    #
+    # Before `_load_parsed`, because the typed pipeline has no `Model` to build
+    # from a bare `{ref}`: without this the mount reaches `_resolve_subsystem_ref`
+    # as an unresolved edge. Local refs only — the inliner reads its targets with
+    # `isfile`, so an assembly reached over http(s) is out of its reach (and out
+    # of `_load_remote_ref`'s, which is why that path is untouched).
+    ref_doc = _read_json_document(content)
+    inlined_ref = _inline_toplevel_model_refs(ref_doc, ref_base; visited=visited)
+    file = _load_parsed(inlined_ref === nothing ? ref_doc : inlined_ref; base_path=ref_base,
                         metaparameters=metaparameters,
                         injected_imports=injected_imports,
                         index_set_rename=index_set_rename,
