@@ -203,6 +203,63 @@ func inlineTopLevelModelRefs(file *ESMFile, basePath string, visited map[string]
 		// this component needs its own pass (RFC §5.4.6 int/float round-trip).
 		normalizeModelLiterals(&model)
 		file.Models[name] = model
+		// The edge is CONSUMED. What remains in topLevelModelRefs is the set of
+		// mounts nobody has resolved yet, which is what the serializer writes
+		// back out (restoreUnresolvedTopLevelMounts) and what makes a second
+		// ResolveSubsystemRefs call a no-op instead of a redundant re-resolve.
+		delete(file.topLevelModelRefs, name)
+	}
+	return nil
+}
+
+// inlineNestedTopLevelModelRefs inlines every top-level `models.<k>` MOUNT EDGE
+// that a MOUNTED document carries of its own, in that document's own directory
+// (esm-spec §4.7 "Two mount forms, one mechanism": the top-level form composes
+// with itself, because the component it lands is a top-level system and a
+// top-level system is what the form mounts).
+//
+// The edges go through resolveSubsystemMap — the one edge-pipeline
+// implementation in this binding — under the top-level mount form, so each
+// nested leaf gets the same normative order, the same diagnostics, and the same
+// `visited` path-scoped cycle set the root's edges get. That recursion re-enters
+// this function for ITS leaf, so a chain of any depth composes.
+//
+// esm-spec §6.6: a mounted component's inline `tests` do not cross a mount edge,
+// at any depth — dropped here on the raw map for the same reason the root's
+// inliner drops them, so the leaf's assertions are never interpreted by a
+// document that may go on to couple it.
+func inlineNestedTopLevelModelRefs(view map[string]any, basePath string, visited map[string]bool,
+	registry map[string]IndexSet, parentMeta map[string]int64, pathPrefix string) error {
+	models, ok := view["models"].(map[string]any)
+	if !ok || len(models) == 0 {
+		return nil
+	}
+	edges := map[string]any{}
+	for _, name := range sortedKeys(models) {
+		entry, ok := models[name].(map[string]any)
+		if !ok {
+			continue
+		}
+		if _, isString := entry["ref"].(string); !isString {
+			continue
+		}
+		if _, inline := entry["variables"]; inline {
+			continue
+		}
+		edges[name] = entry
+	}
+	if len(edges) == 0 {
+		return nil
+	}
+	if err := resolveSubsystemMap(edges, basePath, visited, registry, parentMeta,
+		pathPrefix, topLevelModelMount); err != nil {
+		return err
+	}
+	for name, resolved := range edges {
+		if m, ok := resolved.(map[string]any); ok {
+			delete(m, "tests")
+		}
+		models[name] = resolved
 	}
 	return nil
 }
@@ -368,7 +425,7 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 			bindings[bk] = bv
 		}
 
-		data, refKey, refBasePath, err := loadSubsystemRefBytes(ref, basePath, key, visited)
+		data, refKey, refBasePath, err := loadSubsystemRefBytes(ref, basePath, key, visited, form)
 		if err != nil {
 			return err
 		}
@@ -480,6 +537,27 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 			}
 		}
 
+		// The mounted document may itself be an ASSEMBLY — a document whose own
+		// `models.<k>` entries are `{ref}` mount edges. esm-spec §4.7's top-level
+		// form lands its component as a top-level system precisely so that an
+		// assembly can be named by file and mounted onward, so the form has to
+		// compose with itself. Inline those edges HERE, before the single system
+		// is extracted below, or `extractSingleSystemRaw` picks the leaf's
+		// UNRESOLVED `{ref}` edge and splices it in as though it were the
+		// component: the document loads clean and carries a bare mount edge
+		// where a model belongs.
+		//
+		// Not gated on `form`: it is the MOUNTED DOCUMENT's shape that decides,
+		// not which attachment point mounted it, and "two mount forms, one
+		// mechanism" forbids answering an assembly differently at the two. The
+		// recursion runs through resolveSubsystemMap, so `visited` gives it the
+		// same path-scoped cycle detection every other edge gets. Matches the
+		// Rust reference, which composes at both forms.
+		if err := inlineNestedTopLevelModelRefs(view, refBasePath, visited, registry, childMeta,
+			fmt.Sprintf("%s/%s/models", pathPrefix, key)); err != nil {
+			return fmt.Errorf("%s %q: resolving nested refs in %q: %w", form.noun, key, refKey, err)
+		}
+
 		// Remove from visited after successful resolution (allow the same file
 		// to be referenced from different subsystem trees, just not circularly)
 		delete(visited, refKey)
@@ -510,10 +588,10 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 // loadRefBytes. A ref already on the resolution stack is the circular-reference
 // error; a read/fetch failure is wrapped so it still reads "failed to read
 // referenced file …".
-func loadSubsystemRefBytes(ref, basePath, key string, visited map[string]bool) (data []byte, refKey, refBasePath string, err error) {
+func loadSubsystemRefBytes(ref, basePath, key string, visited map[string]bool, form mountForm) (data []byte, refKey, refBasePath string, err error) {
 	refKey = canonicalImportRef(ref, basePath)
 	if visited[refKey] {
-		return nil, refKey, "", fmt.Errorf("subsystem %q: circular reference detected for %q", key, ref)
+		return nil, refKey, "", fmt.Errorf("%s %q: circular reference detected for %q", form.noun, key, ref)
 	}
 	visited[refKey] = true
 
@@ -524,7 +602,7 @@ func loadSubsystemRefBytes(ref, basePath, key string, visited map[string]bool) (
 		// anonymous I/O failure — the code is what the shared corpus pins and
 		// what the other bindings emit.
 		return nil, refKey, "", newETErr(CodeUnresolvedSubsystemRef,
-			fmt.Sprintf("subsystem %q: reference %q could not be resolved — %v", key, ref, err))
+			fmt.Sprintf("%s %q: reference %q could not be resolved — %v", form.noun, key, ref, err))
 	}
 	return data, refKey, refBasePath, nil
 }

@@ -247,3 +247,42 @@ fn the_shared_toplevel_form_fixtures() {
         "the diagnostic names the mount form: {text}"
     );
 }
+
+/// An assembly mounted by another assembly, at both attachment points.
+///
+/// esm-spec §4.7 "Two mount forms, one mechanism": the top-level form lands its
+/// component as a TOP-LEVEL system, which is exactly what the form mounts — so
+/// it has to compose with itself, and which attachment point mounted a file
+/// cannot change what that file IS. Rust already composed at both forms; these
+/// pin it so the shared fixtures cannot drift away from the binding that
+/// defines the answer.
+#[test]
+fn a_mounted_assembly_resolves_through_at_either_form() {
+    let path = fixture("valid/mount_chain_outer.esm");
+    let file = load_path(&path).unwrap_or_else(|e| panic!("{} does not load: {e}", path.display()));
+    let models = file.models.as_ref().expect("models");
+    assert_eq!(
+        models["Deep"].variables["Tsoil"].shape.as_deref(),
+        Some(&["soil_lev".to_string()][..]),
+        "the inner mount must resolve through, not land as a bare edge"
+    );
+    let value = serde_json::to_value(&file).expect("document renders as JSON");
+    let sets = value.get("index_sets").expect("merged registry");
+    // The axis name the INNER edge chose reaches the OUTER document's registry.
+    assert_eq!(sets["soil_lev"]["size"], 4);
+    assert!(
+        sets.get("lev").is_none(),
+        "the pre-rename axis must not survive: {sets}"
+    );
+
+    let path = fixture("valid/mount_chain_via_subsystem.esm");
+    let file = load_path(&path).unwrap_or_else(|e| panic!("{} does not load: {e}", path.display()));
+    let value = serde_json::to_value(&file).expect("document renders as JSON");
+    let deep = &value["models"]["Host"]["subsystems"]["Deep"];
+    assert!(
+        deep.get("ref").is_none(),
+        "a bare mount edge was spliced in as the component: {deep}"
+    );
+    assert_eq!(deep["variables"]["Tsoil"]["shape"][0], "soil_lev");
+    assert_eq!(value["index_sets"]["soil_lev"]["size"], 4);
+}

@@ -182,3 +182,166 @@ func TestTopLevelModelRefDropsMountedTests(t *testing.T) {
 		t.Errorf("a mounted component's inline tests must not cross the mount edge; got %d", len(m.Tests))
 	}
 }
+
+// esm-spec §4.7 "Two mount forms, one mechanism": the top-level form lands its
+// component as a TOP-LEVEL system, which is exactly what the form mounts — so it
+// has to compose with itself. A binding that resolves one level deep picks the
+// leaf's own UNRESOLVED `{ref}` edge out of its `models` and treats it as the
+// component.
+func TestTopLevelModelRefResolvesAMountedAssembly(t *testing.T) {
+	f, err := LoadPath(filepath.Join("..", "..", "..", "..", "tests", "valid", "mount_chain_outer.esm"))
+	if err != nil {
+		t.Fatalf("LoadPath(mount_chain_outer.esm): %v", err)
+	}
+	deep, ok := f.Models["Deep"]
+	if !ok {
+		t.Fatalf("the assembly did not mount; models = %v", sortedKeys(f.Models))
+	}
+	if _, hasVar := deep.Variables["Tsoil"]; !hasVar {
+		t.Fatalf("the inner mount did not resolve through; variables = %v", sortedKeys(deep.Variables))
+	}
+	// The axis name the INNER edge chose reaches the OUTER document's registry.
+	if _, ok := f.IndexSets["soil_lev"]; !ok {
+		t.Errorf("the inner edge's renamed axis should merge up; index_sets = %v", sortedKeys(f.IndexSets))
+	}
+	if _, ok := f.IndexSets["lev"]; ok {
+		t.Errorf("the pre-rename axis must not survive; index_sets = %v", sortedKeys(f.IndexSets))
+	}
+}
+
+// Which attachment point mounted a file cannot change what that file IS.
+func TestSubsystemRefResolvesAMountedAssembly(t *testing.T) {
+	f, err := LoadPath(filepath.Join("..", "..", "..", "..", "tests", "valid", "mount_chain_via_subsystem.esm"))
+	if err != nil {
+		t.Fatalf("LoadPath(mount_chain_via_subsystem.esm): %v", err)
+	}
+	host, ok := f.Models["Host"]
+	if !ok {
+		t.Fatalf("models = %v", sortedKeys(f.Models))
+	}
+	deep, ok := host.Subsystems["Deep"].(map[string]any)
+	if !ok {
+		t.Fatalf("the subsystem did not resolve to a component; got %T", host.Subsystems["Deep"])
+	}
+	if _, stillAnEdge := deep["ref"]; stillAnEdge {
+		t.Fatalf("a bare mount edge was spliced in as the component: %v", deep)
+	}
+	vars, _ := deep["variables"].(map[string]any)
+	if _, hasVar := vars["Tsoil"]; !hasVar {
+		t.Errorf("the inner mount did not resolve through; got %v", deep)
+	}
+	if _, ok := f.IndexSets["soil_lev"]; !ok {
+		t.Errorf("the inner edge's renamed axis should merge up; index_sets = %v", sortedKeys(f.IndexSets))
+	}
+}
+
+// Composition without cycle detection is unbounded recursion. `visited` is
+// path-scoped (pushed on enter, popped on exit), so the same component file may
+// be mounted by several keys — only a cycle ALONG THE CURRENT PATH is the error.
+func TestTopLevelModelRefCycleAcrossTheChain(t *testing.T) {
+	dir := t.TempDir()
+	doc := func(name, ref string) string {
+		return `{"esm":"1.0.0","metadata":{"name":"` + name + `"},"models":{"M":{"ref":"` + ref + `"}}}`
+	}
+	for _, f := range []struct{ name, body string }{
+		{"a.esm", doc("a", "./b.esm")},
+		{"b.esm", doc("b", "./a.esm")},
+		{"root.esm", doc("root", "./a.esm")},
+	} {
+		if err := os.WriteFile(filepath.Join(dir, f.name), []byte(f.body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err := LoadPath(filepath.Join(dir, "root.esm"))
+	if err == nil {
+		t.Fatal("a mount cycle must be an error, not a silently truncated document")
+	}
+	if !strings.Contains(err.Error(), "circular") {
+		t.Errorf("the diagnostic should name the cycle; got: %v", err)
+	}
+	// ... and every frame of it names the mount form it is talking about. The
+	// chain here is top-level mounts end to end, so the word "subsystem" as a
+	// NOUN for one of these edges would be wrong wherever it appeared —
+	// including in the ref loader, which is the deepest frame and the last one
+	// to learn which form it was called at.
+	if strings.Contains(err.Error(), `subsystem "`) {
+		t.Errorf("a top-level mount was reported as a subsystem; got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "top-level model") {
+		t.Errorf("the diagnostic should name the mount form; got: %v", err)
+	}
+}
+
+// The other diagnostic the ref loader raises, at depth 1 so no outer frame can
+// supply the noun for it: a top-level mount whose target does not exist.
+func TestTopLevelModelRefMissingTargetNamesTheMountForm(t *testing.T) {
+	dir := t.TempDir()
+	root := `{"esm":"1.0.0","metadata":{"name":"root"},"models":{"M":{"ref":"./nope.esm"}}}`
+	rootPath := filepath.Join(dir, "root.esm")
+	if err := os.WriteFile(rootPath, []byte(root), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadPath(rootPath)
+	if err == nil {
+		t.Fatal("an unreadable mount target must be an error")
+	}
+	if strings.Contains(err.Error(), `subsystem "`) {
+		t.Errorf("a top-level mount was reported as a subsystem; got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "top-level model") {
+		t.Errorf("the diagnostic should name the mount form; got: %v", err)
+	}
+}
+
+// esm-spec §4.7 "Two mount forms, one mechanism", applied to ROUND TRIP. A
+// `subsystems.<k>` mount edge survives a load that does not resolve refs,
+// because that map is `map[string]any` and keeps it verbatim. `Models` is a
+// `map[string]Model`, so a top-level `{ref}` decodes to an EMPTY Model — and
+// LoadString/LoadDocument do not resolve refs, only LoadPath does. Without the
+// serializer writing the unconsumed edge back out, emitting such a document
+// drops the `ref`, its `bindings` and its `index_set_rename` with nothing red.
+func TestUnresolvedTopLevelMountSurvivesSerialization(t *testing.T) {
+	fixture := filepath.Join("..", "..", "..", "..", "tests", "valid", "mount_rename_two_columns_toplevel.esm")
+	data, err := os.ReadFile(fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := LoadString(string(data), WithBasePath(filepath.Dir(fixture)))
+	if err != nil {
+		t.Fatalf("LoadString: %v", err)
+	}
+	out, err := f.ToJSON()
+	if err != nil {
+		t.Fatalf("ToJSON: %v", err)
+	}
+	var round map[string]any
+	if err := json.Unmarshal(out, &round); err != nil {
+		t.Fatal(err)
+	}
+	models, _ := round["models"].(map[string]any)
+	soil, _ := models["Soil"].(map[string]any)
+	if soil["ref"] != "./mount_rename_soil_column.esm" {
+		t.Errorf("the mount edge's ref was lost; got %v", soil)
+	}
+	if _, ok := soil["index_set_rename"]; !ok {
+		t.Errorf("the mount edge's index_set_rename was lost; got %v", soil)
+	}
+
+	// ... and a mount the resolver DID consume is never written back as an edge.
+	rf, err := LoadPath(fixture)
+	if err != nil {
+		t.Fatalf("LoadPath: %v", err)
+	}
+	rout, err := rf.ToJSON()
+	if err != nil {
+		t.Fatalf("ToJSON(resolved): %v", err)
+	}
+	if err := json.Unmarshal(rout, &round); err != nil {
+		t.Fatal(err)
+	}
+	models, _ = round["models"].(map[string]any)
+	soil, _ = models["Soil"].(map[string]any)
+	if _, stillAnEdge := soil["ref"]; stillAnEdge {
+		t.Errorf("a resolved mount must emit its component, not the edge; got %v", soil)
+	}
+}

@@ -2006,6 +2006,19 @@ def _resolve_model_subsystems(
     """
 
     def resolve_ref(parsed, sub_name, new_base, new_seen, new_chain, ref_str):
+        # The mounted file may itself be an ASSEMBLY, whose own `models.<k>`
+        # entries are `{ref}` mount edges. Which attachment point mounted it
+        # does not change what it IS, and esm-spec §4.7 "Two mount forms, one
+        # mechanism" forbids answering an assembly differently at the two — so
+        # the leaf's own top-level mounts resolve here exactly as they do at a
+        # top-level mount, in the leaf's directory and against the leaf's own
+        # registry, before the merge below carries the result up.
+        #
+        # Without it `next(iter(parsed.models.values()))` below picks the leaf's
+        # UNRESOLVED `{ref}` dict and `sub_model.name = sub_name` raises
+        # `AttributeError: 'dict' object has no attribute 'name'`.
+        resolve_model_refs(parsed, new_base, _mount_chain=tuple(new_chain))
+
         # esm-spec §4.7: the mounted file's document-scoped index sets
         # (already metaparameter-folded) join the importing document's
         # registry, so the importer's variables may be shaped over the mesh
@@ -2126,6 +2139,7 @@ def resolve_model_refs(
     base_path: str,
     loader_metaparameters: dict[str, int] | None = None,
     parent_metaparameters: dict[str, int] | None = None,
+    _mount_chain: tuple[str, ...] = (),
 ) -> None:
     """Resolve all top-level model references in an ESM file.
 
@@ -2160,6 +2174,15 @@ def resolve_model_refs(
             declared metaparameters (e.g. NX/NY) under the loader's grid when the
             edge itself carries no explicit ``bindings``.
 
+        parent_metaparameters: The MOUNTING document's closed metaparameter
+            environment, the scope each edge's ``bindings`` expressions fold
+            against (esm-spec §9.7.6 binding site 3).
+        _mount_chain: Private. The canonical paths of the top-level mounts
+            currently on the resolution path, so that an assembly mounting an
+            assembly that mounts back is a ``CircularReferenceError`` rather
+            than unbounded recursion. Path-scoped, not visit-once: the same
+            component file may be mounted by several keys.
+
     Raises:
         CircularReferenceError: If circular references are detected
         SubsystemRefError: If a reference cannot be resolved or does not
@@ -2186,6 +2209,15 @@ def resolve_model_refs(
             else ref_str
         )
         seen = {canonical}
+        # ... and the same check across the TOP-LEVEL mount chain, which the
+        # per-mount `seen` above cannot see: `seen` is seeded fresh for each
+        # entry of this loop, so an assembly that mounts an assembly that mounts
+        # back would recurse forever without this.
+        if canonical in _mount_chain:
+            raise CircularReferenceError(
+                f"Circular top-level model reference detected: '{ref_str}' "
+                f"(chain: {' -> '.join((*_mount_chain, canonical))})"
+            )
 
         bindings = _subsystem_ref_bindings(model_value, f"models.{model_name}")
         injected = _subsystem_ref_injected_imports(model_value)
@@ -2202,6 +2234,27 @@ def resolve_model_refs(
         )
 
         parsed = _parse_esm_data(ref_data)
+
+        # The referenced document may itself be an ASSEMBLY — one whose own
+        # `models.<k>` entries are `{ref}` mount edges. esm-spec §4.7's
+        # top-level form lands its component as a top-level system precisely so
+        # an assembly can be named by file and mounted onward, so the form has
+        # to compose with itself.
+        #
+        # Resolved HERE, in the leaf's own directory and against the LEAF's
+        # registry — edge-pipeline step (1) is "the leaf resolves in its OWN
+        # scope" — and BEFORE the merge below, so what the leaf's own mounts
+        # brought in is part of what merges up. No metaparameters are forwarded:
+        # the leaf's own close and fold happened inside `_load_ref_data` above,
+        # so its nested edge bindings arrive already concrete (esm-spec §9.7.6:
+        # refs resolve post-close). Mirrors the Julia reference's
+        # `_inline_toplevel_model_refs!(comp, compdir, visited)` and Rust.
+        #
+        # Without it, `next(iter(parsed.models.values()))` below picks the leaf's
+        # UNRESOLVED `{ref}` dict and the next line raises
+        # `AttributeError: 'dict' object has no attribute 'name'` — a raw
+        # language-level error where a diagnostic belongs.
+        resolve_model_refs(parsed, new_base, _mount_chain=(*_mount_chain, canonical))
 
         # esm-spec §4.7: the referenced file's document-scoped index sets — now
         # metaparameter-folded and, for a §9.7.10 form-A mount edge, carrying the

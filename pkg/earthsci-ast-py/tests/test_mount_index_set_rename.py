@@ -21,6 +21,7 @@ import pytest
 
 from earthsci_ast import load_path
 from earthsci_ast.lower_expression_templates import ExpressionTemplateError
+from earthsci_ast.parse import CircularReferenceError
 
 TESTS = os.path.join(os.path.dirname(__file__), "..", "..", "..", "tests")
 
@@ -234,3 +235,48 @@ def test_an_unknown_rename_key_is_refused_at_a_top_level_model_ref_mount_too():
     assert "celsl" in str(excinfo.value)
     # The diagnostic says which mount form it is talking about.
     assert "top-level model ref" in str(excinfo.value)
+
+
+def test_a_mounted_assembly_resolves_through_at_a_top_level_model_ref():
+    # esm-spec §4.7 "Two mount forms, one mechanism": the top-level form lands
+    # its component as a TOP-LEVEL system, which is exactly what the form
+    # mounts — so it has to compose with itself. A binding that resolves one
+    # level deep picks the leaf's own UNRESOLVED ``{"ref": ...}`` dict out of
+    # its ``models`` and treats it as the component; here that used to be
+    # ``AttributeError: 'dict' object has no attribute 'name'``.
+    doc = load_path(_fixture("valid/mount_chain_outer.esm"))
+    assert doc.models["Deep"].variables["Tsoil"].shape == ["soil_lev"]
+    # The axis name the INNER edge chose reaches the OUTER document's registry.
+    assert doc.index_sets["soil_lev"]["size"] == 4, doc.index_sets
+    assert "lev" not in doc.index_sets, doc.index_sets
+
+
+def test_a_mounted_assembly_resolves_through_at_a_subsystem_ref_too():
+    # Which attachment point mounted a file cannot change what that file IS.
+    doc = load_path(_fixture("valid/mount_chain_via_subsystem.esm"))
+    deep = doc.models["Host"].subsystems["Deep"]
+    assert not isinstance(deep, dict), f"a bare mount edge was spliced in: {deep}"
+    assert deep.variables["Tsoil"].shape == ["soil_lev"]
+    assert doc.index_sets["soil_lev"]["size"] == 4, doc.index_sets
+
+
+def test_a_mount_cycle_across_the_chain_is_reported(tmp_path):
+    # Composition without cycle detection is unbounded recursion. The chain is
+    # path-scoped, so the same component file may be mounted by several keys —
+    # only a cycle ALONG THE CURRENT PATH is the error.
+    def doc(name: str, ref: str) -> str:
+        return json.dumps(
+            {
+                "esm": "1.0.0",
+                "metadata": {"name": name, "description": "mount cycle probe"},
+                "models": {"M": {"ref": ref}},
+            }
+        )
+
+    (tmp_path / "a.esm").write_text(doc("a", "./b.esm"))
+    (tmp_path / "b.esm").write_text(doc("b", "./a.esm"))
+    (tmp_path / "root.esm").write_text(doc("root", "./a.esm"))
+
+    with pytest.raises(CircularReferenceError) as excinfo:
+        load_path(str(tmp_path / "root.esm"))
+    assert "ircular" in str(excinfo.value)

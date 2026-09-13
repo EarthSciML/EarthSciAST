@@ -612,7 +612,21 @@ function walkSubsystemRefs(
         refChain,
         read,
         subPointer,
-        (parsed, refBasePath) => onRef(parsed, refBasePath, { subName, ref, pointer: subPointer }),
+        (parsed, refBasePath) => {
+          // The mounted file may itself be an ASSEMBLY, whose own `models.<k>`
+          // entries are `{ ref }` mount edges. Which attachment point mounted
+          // it does not change what it IS, and esm-spec §4.7 "Two mount forms,
+          // one mechanism" forbids answering an assembly differently at the
+          // two — so the leaf's own top-level mounts resolve here exactly as
+          // they do at a top-level mount, before `onRef` extracts its single
+          // component. Without it the extraction picks the leaf's UNRESOLVED
+          // `{ ref }` edge and splices it in as though it were the component.
+          inlineNestedTopLevelMounts(parsed, refBasePath, resolving, read, subPointer, [
+            ...refChain,
+            subName,
+          ])
+          onRef(parsed, refBasePath, { subName, ref, pointer: subPointer })
+        },
       )
     } else {
       // Even without a ref, recurse into nested subsystems.
@@ -657,7 +671,8 @@ function isTopLevelMountEdge(model: Model | SubsystemRef): model is SubsystemRef
  * conditions and this document may couple it (§6.6).
  *
  * The leaf's own nested refs then resolve through `resolveModelRefs` in the
- * LEAF's directory, so the index-set merge composes transitively.
+ * LEAF's directory, so the index-set merge composes transitively — and so do
+ * the leaf's OWN top-level mounts, through `inlineNestedTopLevelMounts` below.
  */
 function inlineTopLevelModelRef(
   file: EsmFile,
@@ -668,6 +683,7 @@ function inlineTopLevelModelRef(
   registry: Record<string, unknown>,
   read: SyncRefReader,
   pointer: string,
+  refChain: readonly string[] = [],
 ): void {
   const ref = edge.ref as string
   resolveRefEdge(
@@ -676,10 +692,28 @@ function inlineTopLevelModelRef(
     name,
     basePath,
     resolving,
-    [],
+    [...refChain],
     read,
     pointer,
     (parsed, refBasePath) => {
+      // The leaf's OWN top-level `models.<k>` mounts resolve FIRST, in the
+      // leaf's directory and against the leaf's own registry, sharing this
+      // walk's path-scoped `resolving` set. An assembly may be mounted by
+      // another assembly — that is the whole point of a form that lands its
+      // component as a top-level system — so this form has to compose with
+      // itself, and it composes exactly where the Julia reference
+      // (`_inline_toplevel_model_refs!`) and Rust compose it: after this edge's
+      // `index_set_rename` has spoken the leaf's own vocabulary (applied inside
+      // `resolveRefDocument` above), and BEFORE the merge below, so what the
+      // leaf's own mounts brought in is part of what merges up here.
+      //
+      // Without this, `Object.entries(parsed.models)[0]` below would pick the
+      // leaf's UNRESOLVED `{ ref }` edge and splice it in as if it were the
+      // component: a document that mounts an assembly would load clean and
+      // carry a bare mount edge where a model belongs, and a mount cycle would
+      // never reach the `resolving` check at all.
+      inlineNestedTopLevelMounts(parsed, refBasePath, resolving, read, pointer, [...refChain, name])
+
       // esm-spec §4.7 "Index-set merge", at either mount form: the resolved
       // leaf's document-scoped axes join this document's registry, so the
       // assembly may shape its coupling over them without redeclaring them.
@@ -706,6 +740,47 @@ function inlineTopLevelModelRef(
     },
     'top-level model',
   )
+}
+
+/**
+ * Inline every top-level `models.<k>` `{ ref }` mount edge a REFERENCED
+ * document carries of its own (esm-spec §4.7 "Two mount forms, one
+ * mechanism": the form composes with itself).
+ *
+ * The leaf's mounts merge their axes into the LEAF's registry, not into the
+ * mounting document's — step (1) of the edge pipeline is "the leaf resolves in
+ * its OWN scope" — and the leaf's resulting registry is what the caller then
+ * merges up under the deep-equal-or-`subsystem_index_set_conflict` rule. That
+ * ordering is what makes a two-level mount indistinguishable from the same
+ * component mounted directly, which is what §4.7 requires.
+ *
+ * `pointer` stays the MOUNTING document's pointer: a JSON Pointer names a
+ * location in the document the caller handed us, and the leaf is a different
+ * file, so the mount that brought the leaf in is the honest place to report.
+ */
+function inlineNestedTopLevelMounts(
+  leaf: EsmFile,
+  basePath: string,
+  resolving: Set<string>,
+  read: SyncRefReader,
+  pointer: string,
+  refChain: readonly string[],
+): void {
+  if (!leaf.models) return
+  const own: Record<string, unknown> =
+    (leaf.index_sets as Record<string, unknown> | undefined) ?? {}
+  let mounted = false
+  for (const [name, model] of Object.entries(leaf.models)) {
+    if (!isTopLevelMountEdge(model)) continue
+    mounted = true
+    inlineTopLevelModelRef(leaf, name, model, basePath, resolving, own, read, pointer, refChain)
+  }
+  // Same attach-back rule `resolveSubsystemRefsSync` applies to the root: a
+  // document that declared no `index_sets` gains the block only if a mount
+  // actually contributed an axis.
+  if (mounted && !leaf.index_sets && Object.keys(own).length > 0) {
+    ;(leaf as { index_sets?: unknown }).index_sets = own
+  }
 }
 
 /**

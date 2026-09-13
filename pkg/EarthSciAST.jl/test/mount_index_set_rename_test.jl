@@ -171,4 +171,48 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
         @test occursin("celsl", err.message)
         @test occursin("top-level model ref", err.message)
     end
+
+    @testset "an assembly mounted by another assembly resolves through" begin
+        # esm-spec §4.7 "Two mount forms, one mechanism": the top-level form
+        # lands its component as a TOP-LEVEL system, which is exactly what the
+        # form mounts — so it has to compose with itself, and which attachment
+        # point mounted a file cannot change what that file IS. A binding that
+        # resolves one level deep picks the leaf's own UNRESOLVED `{ref}` out of
+        # its `models` and treats it as the component.
+        file = EarthSciAST.load_path(valid("mount_chain_outer.esm"))
+        @test file.models["Deep"].variables["Tsoil"].shape == ["soil_lev"]
+        # The axis name the INNER edge chose reaches the OUTER document's registry.
+        @test file.index_sets["soil_lev"].size == 4
+        @test !haskey(file.index_sets, "lev")
+
+        file = EarthSciAST.load_path(valid("mount_chain_via_subsystem.esm"))
+        deep = file.models["Host"].subsystems["Deep"]
+        @test !(deep isa AbstractDict)   # a bare mount edge would still be one
+        @test deep.variables["Tsoil"].shape == ["soil_lev"]
+        @test file.index_sets["soil_lev"].size == 4
+    end
+
+    @testset "a mount cycle across the chain is reported" begin
+        # Composition without cycle detection is unbounded recursion. `visited`
+        # is path-scoped (pushed on enter, popped on exit), so the same component
+        # file may be mounted by several keys — only a cycle ALONG THE CURRENT
+        # PATH is the error.
+        dir = mktempdir()
+        doc(name, ref) = JSON3.write(Dict(
+            "esm" => "1.0.0",
+            "metadata" => Dict("name" => name, "description" => "mount cycle probe"),
+            "models" => Dict("M" => Dict("ref" => ref)),
+        ))
+        write(joinpath(dir, "a.esm"), doc("a", "./b.esm"))
+        write(joinpath(dir, "b.esm"), doc("b", "./a.esm"))
+        write(joinpath(dir, "root.esm"), doc("root", "./a.esm"))
+        err = try
+            EarthSciAST.load_path(joinpath(dir, "root.esm"))
+            nothing
+        catch e
+            e
+        end
+        @test err !== nothing
+        @test occursin("ircular", sprint(showerror, err))
+    end
 end

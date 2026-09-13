@@ -133,4 +133,48 @@ describe('mount-edge index_set_rename (esm-spec §4.7)', () => {
     expect(Object.keys(mounted.variables ?? {})).toEqual(['u'])
     expect(mounted.tests).toBeUndefined()
   })
+
+  // esm-spec §4.7 "Two mount forms, one mechanism": the top-level form lands its
+  // component as a TOP-LEVEL system, which is exactly what the form mounts — so
+  // it has to compose with itself. A binding that resolves one level deep picks
+  // the leaf's own UNRESOLVED `{ ref }` edge out of its `models` and splices it
+  // in as though it were the component: a document that mounts an assembly loads
+  // clean and carries a mount edge where a model belongs.
+  it('resolves an assembly mounted at a top-level `models.<k>` {ref}', () => {
+    const { file } = loadResolved('valid/mount_chain_outer.esm')
+    const models = file.models as Record<string, { variables?: object; ref?: string }>
+    expect(models.Deep?.ref).toBeUndefined()
+    expect(Object.keys(models.Deep?.variables ?? {})).toEqual(['Tsoil'])
+    // The axis name the INNER edge chose reaches the OUTER document's registry.
+    const sets = (file as unknown as { index_sets: Record<string, { size?: number }> }).index_sets
+    expect(sets.soil_lev?.size).toBe(4)
+    expect(sets.lev).toBeUndefined()
+  })
+
+  // Which attachment point mounted a file cannot change what that file IS.
+  it('resolves an assembly mounted at a `subsystems.<k>` {ref}', () => {
+    const { file } = loadResolved('valid/mount_chain_via_subsystem.esm')
+    const host = (file.models as Record<string, { subsystems?: Record<string, unknown> }>).Host
+    const deep = host?.subsystems?.Deep as { variables?: object; ref?: string }
+    expect(deep?.ref).toBeUndefined()
+    expect(Object.keys(deep?.variables ?? {})).toEqual(['Tsoil'])
+    const sets = (file as unknown as { index_sets: Record<string, { size?: number }> }).index_sets
+    expect(sets.soil_lev?.size).toBe(4)
+  })
+
+  // Composition without cycle detection is unbounded recursion. `resolving` is
+  // path-scoped, so the same component file may be mounted by several keys —
+  // only a cycle ALONG THE CURRENT PATH is the error.
+  it('reports a mount cycle that only exists across the chain', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'esm-mount-cycle-'))
+    const doc = (name: string, ref: string) => ({
+      esm: '1.0.0',
+      metadata: { name },
+      models: { M: { ref } },
+    })
+    writeFileSync(path.join(dir, 'a.esm'), JSON.stringify(doc('a', './b.esm')))
+    writeFileSync(path.join(dir, 'b.esm'), JSON.stringify(doc('b', './a.esm')))
+    const root = JSON.parse(JSON.stringify(doc('root', './a.esm'))) as unknown as EsmFile
+    expect(() => resolveSubsystemRefsSync(root, dir)).toThrow(/[Cc]ircular/)
+  })
 })

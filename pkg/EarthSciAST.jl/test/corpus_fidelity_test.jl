@@ -100,6 +100,12 @@ include("testutils.jl")
             "esm-spec §4.7: two `{ref}` subsystems are inlined and their index sets merged, one through a mount-edge `index_set_rename` that is consumed at the edge",
         "tests/valid/mount_rename_two_columns_toplevel.esm" =>
             "esm-spec §4.7: the same inline-at-load transform at the top-level `models.<k>` mount form — each referenced component is spliced in under its mount key and the edge, `index_set_rename` included, is consumed there",
+        "tests/valid/mount_chain_inner.esm" =>
+            "esm-spec §4.7: a one-model ASSEMBLY whose single `models.<k>` is itself a mount edge, consumed at load",
+        "tests/valid/mount_chain_outer.esm" =>
+            "esm-spec §4.7 \"Two mount forms, one mechanism\": an assembly mounting an assembly — the form composes with itself, so both edges are consumed at load",
+        "tests/valid/mount_chain_via_subsystem.esm" =>
+            "esm-spec §4.7: the same assembly-of-an-assembly at the `subsystems.<k>` attachment point; the mounted file's own top-level edge is consumed at load just the same",
         "pkg/EarthSciAST.jl/test/fixtures/round_trip/open_op_attrs_match.esm" =>
             "esm-spec §9.6.3 + §9.6.4 rule 5: the `attrs.gamma` match rule fires at load and its match-only registry is dropped",
     )

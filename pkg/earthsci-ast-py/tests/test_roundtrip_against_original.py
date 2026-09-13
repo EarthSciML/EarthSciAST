@@ -120,6 +120,21 @@ TRANSFORMING_FIXTURES: dict[str, str] = {
         "alike -- is consumed at load (esm-spec 4.7 'Two mount forms, one "
         "mechanism', Round trip)"
     ),
+    "mount_chain_inner.esm": (
+        "a one-model ASSEMBLY: its single `models.<k>` is itself a mount edge, "
+        "consumed at load (esm-spec 4.7 'Two mount forms, one mechanism')"
+    ),
+    "mount_chain_outer.esm": (
+        "an assembly mounting an assembly -- the mount form composes with itself, "
+        "so BOTH edges are consumed at load and neither survives the round trip "
+        "(esm-spec 4.7 'Two mount forms, one mechanism')"
+    ),
+    "mount_chain_via_subsystem.esm": (
+        "the same assembly-of-an-assembly reached at the `subsystems.<k>` "
+        "attachment point; which point mounted a file does not change what it is, "
+        "so its own top-level edge is consumed at load just the same "
+        "(esm-spec 4.7 'Two mount forms, one mechanism')"
+    ),
     "events_discrete_periodic.esm": _EMPTY_EVENT_ARRAY,
     "events_discrete_preset_times.esm": _EMPTY_EVENT_ARRAY,
     "full_coupled.esm": _EMPTY_EVENT_ARRAY,
