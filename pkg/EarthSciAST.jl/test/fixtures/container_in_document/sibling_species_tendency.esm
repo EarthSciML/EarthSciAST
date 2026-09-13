@@ -1,0 +1,163 @@
+{
+ "esm": "1.0.0",
+ "metadata": {
+  "name": "GapBProductOnly",
+  "description": "Minimal repro: a reaction system with a PRODUCT-ONLY species P, plus a sibling model whose observeds are D(Rs.<X>, t). The Rust CLI evaluates all three; the Julia MTK lowering fails with 'Variable Rs.P not found in variable dictionary'.",
+  "license": "MIT"
+ },
+ "reaction_systems": {
+  "Rs": {
+   "species": {
+    "A": {
+     "units": "mol/m^3",
+     "default": 2.0,
+     "description": "Substrate of R1."
+    },
+    "B": {
+     "units": "mol/m^3",
+     "default": 3.0,
+     "description": "Substrate of R2."
+    },
+    "P": {
+     "units": "mol/m^3",
+     "default": 0.0,
+     "description": "Product-only species: appears as a product in R1 and R2 and as a substrate nowhere."
+    }
+   },
+   "parameters": {
+    "k1": {
+     "units": "1/s",
+     "default": 0.5,
+     "description": "Rate coefficient of R1."
+    },
+    "k2": {
+     "units": "1/s",
+     "default": 0.25,
+     "description": "Rate coefficient of R2."
+    }
+   },
+   "reactions": [
+    {
+     "id": "R1",
+     "substrates": [
+      {
+       "species": "A",
+       "stoichiometry": 1
+      }
+     ],
+     "products": [
+      {
+       "species": "P",
+       "stoichiometry": 1
+      }
+     ],
+     "rate": "k1"
+    },
+    {
+     "id": "R2",
+     "substrates": [
+      {
+       "species": "B",
+       "stoichiometry": 1
+      }
+     ],
+     "products": [
+      {
+       "species": "P",
+       "stoichiometry": 2
+      }
+     ],
+     "rate": "k2"
+    }
+   ]
+  }
+ },
+ "models": {
+  "Tendencies": {
+   "variables": {
+    "dA_dt": {
+     "type": "unknown",
+     "units": "mol/m^3/s",
+     "description": "Instantaneous tendency of A."
+    },
+    "dB_dt": {
+     "type": "unknown",
+     "units": "mol/m^3/s",
+     "description": "Instantaneous tendency of B."
+    },
+    "dP_dt": {
+     "type": "unknown",
+     "units": "mol/m^3/s",
+     "description": "Instantaneous tendency of the product-only species P."
+    }
+   },
+   "equations": [
+    {
+     "lhs": "dA_dt",
+     "rhs": {
+      "op": "D",
+      "args": [
+       "Rs.A"
+      ],
+      "wrt": "t"
+     }
+    },
+    {
+     "lhs": "dB_dt",
+     "rhs": {
+      "op": "D",
+      "args": [
+       "Rs.B"
+      ],
+      "wrt": "t"
+     }
+    },
+    {
+     "lhs": "dP_dt",
+     "rhs": {
+      "op": "D",
+      "args": [
+       "Rs.P"
+      ],
+      "wrt": "t"
+     }
+    }
+   ],
+   "tests": [
+    {
+     "id": "tendencies_at_t0",
+     "description": "A = 2, B = 3 gives dA/dt = -1, dB/dt = -0.75, dP/dt = 0.5*2 + 2*0.25*3 = 2.5.",
+     "time_span": {
+      "start": 0,
+      "end": 1
+     },
+     "tolerance": {
+      "rel": 1e-09
+     },
+     "initial_conditions": {
+      "Rs.A": 2.0,
+      "Rs.B": 3.0,
+      "Rs.P": 0.0
+     },
+     "assertions": [
+      {
+       "variable": "dA_dt",
+       "time": 0.0,
+       "expected": -1.0
+      },
+      {
+       "variable": "dB_dt",
+       "time": 0.0,
+       "expected": -0.75
+      },
+      {
+       "variable": "dP_dt",
+       "time": 0.0,
+       "expected": 2.5
+      }
+     ]
+    }
+   ]
+  }
+ }
+}
