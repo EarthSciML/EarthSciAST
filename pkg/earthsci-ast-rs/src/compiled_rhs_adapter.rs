@@ -15,8 +15,15 @@
 //!   * `interpreter` — [`ArrayCompiled::debug_eval_rhs`] on the vectorized
 //!     evaluator, the same no-scalarization kernel the simulator uses. This is
 //!     the engine that runs today.
-//!   * `compiled` — the XlaBuilder emitter over the tape, which lands in phase
-//!     2. Until then the whole output is the contract's `unavailable` form.
+//!   * `compiled` — the XlaBuilder emitter over the tape
+//!     ([`crate::simulate_array::tape::xla_emit`]) run through PJRT
+//!     ([`crate::xla_runtime`]). Behind the non-default `xla` feature: a
+//!     binary built without it answers `--engine compiled` with the
+//!     contract's whole-output `unavailable` form, and so does one built with
+//!     it on a machine where the PJRT client will not start. A model the
+//!     emitter cannot lower completely becomes that fixture's `refused`
+//!     entry, carrying the rule and the reason — never a fallback to the
+//!     interpreter, never a silent skip.
 
 use std::collections::HashMap;
 use std::fs;
@@ -27,16 +34,22 @@ use serde_json::{Map, Value, json};
 use crate::load_string;
 use crate::simulate_array::ArrayCompiled;
 
-/// The reason string the `compiled` engine reports until phase 2 lands.
+/// The reason string the `compiled` engine reports when this binary was built
+/// WITHOUT the `xla` feature.
+///
+/// The feature is off by default (it links a separately-fetched 144 MB
+/// `xla_extension` release), so this is the answer an ordinary
+/// `cargo build --features conformance-adapters` gives, and it has to say how
+/// to get the other one.
 pub const COMPILED_UNAVAILABLE_REASON: &str =
-    "Rust compiled engine (XlaBuilder emitter over the tape) lands in phase 2";
+    "built without the `xla` feature: rebuild with --features conformance-adapters,xla      and XLA_EXTENSION_DIR pointing at an unpacked xla_extension release      (scripts/fetch-xla-extension.sh)";
 
 /// Which right-hand-side engine the adapter was asked for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Engine {
     /// The vectorized interpreter (`ArrayCompiled::debug_eval_rhs`).
     Interpreter,
-    /// The compiled backend; unavailable in phase 1.
+    /// The compiled backend: the XLA emitter over the tape, feature `xla`.
     Compiled,
 }
 
@@ -217,8 +230,86 @@ fn state_vec(names: &[String], state: &Map<String, Value>) -> Result<Vec<f64>, S
         .collect()
 }
 
-/// Evaluate one fixture's probes with the interpreter engine.
-fn run_fixture(fx: &Value, manifest_dir: &Path) -> Result<Value, String> {
+/// Why the `compiled` engine cannot run here at all, or `None` when it can.
+///
+/// Two different causes, one answer: the binary was built without the `xla`
+/// feature, or it has the feature but the PJRT client will not start (no
+/// usable `xla_extension`, no device for the requested platform). Both are the
+/// contract's whole-output `unavailable`, because neither says anything about
+/// what the emitter can or cannot lower.
+#[cfg(feature = "xla")]
+fn compiled_unavailable_reason() -> Option<String> {
+    crate::xla_runtime::client().err().map(|e| {
+        format!("XLA runtime is not usable on this machine: {e}")
+    })
+}
+
+#[cfg(not(feature = "xla"))]
+fn compiled_unavailable_reason() -> Option<String> {
+    Some(COMPILED_UNAVAILABLE_REASON.to_string())
+}
+
+/// Evaluate one fixture's probes with the compiled engine.
+///
+/// Returns the fixture entry: an `rhs` map, or the contract's `refused` entry
+/// when the emitter will not lower the model. An `Err` here is the contract's
+/// `error` (the load or the build threw), which `compiled_required` does not
+/// excuse.
+#[cfg(feature = "xla")]
+fn eval_compiled(
+    compiled: &ArrayCompiled,
+    fx: &Value,
+    names: &[String],
+    params: &HashMap<String, f64>,
+) -> Result<Value, String> {
+    use crate::xla_runtime::{CompileRhsError, CompiledRhs};
+
+    // ONE compile per fixture, reused across every probe — see the
+    // `xla_runtime` module docs on what is cached.
+    let program = match CompiledRhs::compile(compiled) {
+        Ok(p) => p,
+        Err(CompileRhsError::Refused(e)) => {
+            return Ok(json!({
+                "status": "refused",
+                "rule": e.rule,
+                "reason": e.reason,
+            }));
+        }
+        Err(CompileRhsError::Runtime(m)) => return Err(format!("xla: {m}")),
+    };
+    let param_vec = compiled.debug_resolve_params(params);
+    let mut rhs = Map::new();
+    for probe in fx["rhs_probes"].as_array().ok_or("rhs_probes not array")? {
+        let pid = probe["id"].as_str().ok_or("probe.id missing")?;
+        let state_obj = probe["state"].as_object().ok_or("probe.state missing")?;
+        let t = probe["t"].as_f64().unwrap_or(0.0);
+        let sv = state_vec(names, state_obj).map_err(|e| format!("probe {pid}: {e}"))?;
+        let du = program
+            .eval(&sv, &param_vec, t)
+            .map_err(|e| format!("probe {pid}: {e}"))?;
+        let mut m = Map::new();
+        for (i, n) in names.iter().enumerate() {
+            m.insert(bare(n).to_string(), json!(du[i]));
+        }
+        rhs.insert(pid.to_string(), Value::Object(m));
+    }
+    Ok(json!({ "rhs": Value::Object(rhs) }))
+}
+
+#[cfg(not(feature = "xla"))]
+fn eval_compiled(
+    _compiled: &ArrayCompiled,
+    _fx: &Value,
+    _names: &[String],
+    _params: &HashMap<String, f64>,
+) -> Result<Value, String> {
+    // Unreachable: `run_manifest` answers `unavailable` for the whole output
+    // before any fixture is loaded when the feature is off.
+    Err(COMPILED_UNAVAILABLE_REASON.to_string())
+}
+
+/// Evaluate one fixture's probes with the requested engine.
+fn run_fixture(fx: &Value, manifest_dir: &Path, engine: Engine) -> Result<Value, String> {
     let rel = fx["path"].as_str().ok_or("fixture.path missing")?;
     let path = resolve_fixture_path(manifest_dir, rel)?;
     let json_str = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -247,6 +338,9 @@ fn run_fixture(fx: &Value, manifest_dir: &Path) -> Result<Value, String> {
     };
 
     let names: Vec<String> = compiled.state_variable_names().to_vec();
+    if engine == Engine::Compiled {
+        return eval_compiled(&compiled, fx, &names, &params);
+    }
     let mut rhs = Map::new();
     for probe in fx["rhs_probes"].as_array().ok_or("rhs_probes not array")? {
         let pid = probe["id"].as_str().ok_or("probe.id missing")?;
@@ -265,9 +359,10 @@ fn run_fixture(fx: &Value, manifest_dir: &Path) -> Result<Value, String> {
 
 /// Run a whole manifest and build the report payload.
 ///
-/// For `Engine::Compiled` this is the contract's whole-output `unavailable`
-/// form — no fixture is loaded and nothing is evaluated. For
-/// `Engine::Interpreter` every fixture is evaluated; a fixture that fails is
+/// For `Engine::Compiled` the whole output is the contract's `unavailable`
+/// form when the engine cannot run here at all (no `xla` feature, or no usable
+/// PJRT client) — no fixture is loaded and nothing is evaluated. Otherwise, and
+/// always for `Engine::Interpreter`, every fixture is evaluated; a fixture that fails is
 /// reported as `{"error": "<text>"}` in its own entry and the run continues,
 /// so one bad fixture cannot hide the rest. The caller learns that a failure
 /// happened from [`Report::failed`], which the binary turns into a non-zero
@@ -276,13 +371,15 @@ fn run_fixture(fx: &Value, manifest_dir: &Path) -> Result<Value, String> {
 ///
 /// Unknown manifest fields are ignored throughout.
 pub fn run_manifest(manifest_path: &Path, engine: Engine) -> Result<Report, String> {
-    if engine == Engine::Compiled {
+    if engine == Engine::Compiled
+        && let Some(reason) = compiled_unavailable_reason()
+    {
         return Ok(Report {
             payload: json!({
                 "binding": "rust",
                 "engine": engine.as_str(),
                 "status": "unavailable",
-                "reason": COMPILED_UNAVAILABLE_REASON,
+                "reason": reason,
             }),
             failed: Vec::new(),
         });
@@ -303,7 +400,7 @@ pub fn run_manifest(manifest_path: &Path, engine: Engine) -> Result<Report, Stri
     let mut failed = Vec::new();
     for fx in manifest["fixtures"].as_array().unwrap_or(&empty) {
         let id = fx["id"].as_str().unwrap_or("<unknown>").to_string();
-        let entry = match run_fixture(fx, &manifest_dir) {
+        let entry = match run_fixture(fx, &manifest_dir, engine) {
             Ok(v) => v,
             Err(e) => {
                 eprintln!("fixture {id}: {e}");

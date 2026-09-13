@@ -190,6 +190,11 @@ pub(crate) mod problem;
 #[cfg(feature = "esio")]
 pub mod esio_provider;
 
+/// PJRT runtime for the compiled right-hand side (feature `xla`, OFF by
+/// default). See `simulate_array::tape::xla_emit` for the emitter it runs.
+#[cfg(feature = "xla")]
+pub mod xla_runtime;
+
 // Re-export main types
 pub use cadence::{
     Cadence, CadenceError, ClassSummary, MaterializationPoint, Partition, classify, compute_fold,

@@ -115,10 +115,11 @@ impl EmittedRhs {
     pub fn n_states(&self) -> usize {
         self.n_states
     }
-    /// Length of the positional parameter vector `p`. The emitted parameter is
-    /// `f64[max(params_len, 1)]`: XLA accepts a zero-element array, but a
-    /// caller that has no parameters should not have to construct one, and a
-    /// one-element dummy is cheaper to explain than a special case.
+    /// Length of the `p` buffer the compiled program expects, which is
+    /// `max(tape params, 1)`: a model with no parameters still gets a
+    /// one-element dummy, because a zero-element PJRT buffer is an awkward
+    /// thing to build on every call for no gain. A caller with fewer values
+    /// than this zero-fills the rest (`CompiledRhs::eval` does).
     pub fn params_len(&self) -> usize {
         self.params_len
     }
@@ -181,7 +182,9 @@ pub(crate) fn emit_program(
     Ok(EmittedRhs {
         computation,
         n_states: compiled.n_states,
-        params_len: prog.params_len,
+        // The DECLARED buffer length, which is what a caller has to feed:
+        // `Emitter::new` widens a zero-parameter model to `f64[1]`.
+        params_len: prog.params_len.max(1),
         n_instrs: prog.instrs.len(),
     })
 }
@@ -1088,13 +1091,25 @@ impl<'a> Emitter<'a> {
     /// write is a plain `dynamic_update_slice` at `dest_lo` rather than a
     /// strided scatter.
     fn emit_dy_write(&mut self, w: &DyWrite) -> R<()> {
-        let sv = &self.prog.state_vars[w.var as usize];
-        let vi = *self
-            .var_ix
-            .get(&sv.name)
-            .ok_or_else(|| self.err(format!("dy write names unknown variable {}", sv.name)))?;
-        let (_, vs) = &self.var_order[vi];
+        // `DyWrite::var` is only meaningful for the ARRAY form. A scalar rule
+        // (`RhsRule::Scalar` / `IndexedScalar`) carries `var: 0` as a dummy
+        // and addresses `dy` by the absolute flat slot in `scalar_flat`, so
+        // its owning variable has to be found from that slot instead — using
+        // `var` there would write into whichever variable happens to sit
+        // first in the layout.
+        let vi = match w.scalar_flat {
+            Some(flat) => self.var_owning_slot(flat)?,
+            None => {
+                let sv = &self.prog.state_vars[w.var as usize];
+                *self.var_ix.get(&sv.name).ok_or_else(|| {
+                    self.err(format!("dy write names unknown variable {}", sv.name))
+                })?
+            }
+        };
+        let (var_name, vs) = &self.var_order[vi];
+        let var_name = var_name.clone();
         let shape: Vec<usize> = vs.shape.clone();
+        let var_offset = vs.flat_offset;
         let val = self.slots[w.slot as usize]
             .clone()
             .ok_or_else(|| self.err("dy-write slot is undefined"))?;
@@ -1115,10 +1130,7 @@ impl<'a> Emitter<'a> {
                 if shape.is_empty() {
                     val
                 } else {
-                    if flat < vs.flat_offset {
-                        return Err(self.err("scalar dy write lands before its variable block"));
-                    }
-                    let mut rem = flat - vs.flat_offset;
+                    let mut rem = flat - var_offset;
                     let mut multi = vec![0usize; shape.len()];
                     for d in 0..shape.len() {
                         multi[d] = rem % shape[d];
@@ -1148,9 +1160,8 @@ impl<'a> Emitter<'a> {
                 } else {
                     if val_dims.len() != shape.len() {
                         return Err(self.err(format!(
-                            "dy write value has rank {} but variable {} has rank {}",
+                            "dy write value has rank {} but variable {var_name} has rank {}",
                             val_dims.len(),
-                            sv.name,
                             shape.len()
                         )));
                     }
@@ -1168,6 +1179,19 @@ impl<'a> Emitter<'a> {
         };
         self.blocks[vi] = Some(next);
         Ok(())
+    }
+
+    /// The variable whose flat block contains `flat`.
+    fn var_owning_slot(&self, flat: usize) -> R<usize> {
+        for (i, (_, vs)) in self.var_order.iter().enumerate() {
+            let n: usize = vs.shape.iter().product::<usize>().max(1);
+            if flat >= vs.flat_offset && flat < vs.flat_offset + n {
+                return Ok(i);
+            }
+        }
+        Err(self.err(format!(
+            "scalar dy write addresses flat slot {flat}, which lies in no variable block"
+        )))
     }
 
     /// Concatenate the per-variable blocks into the flat, column-major `du`.
