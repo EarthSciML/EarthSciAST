@@ -772,7 +772,7 @@ fn ab_observed_chain_and_broadcast() {
 }
 
 /// A model with a construct the overlay cannot vectorize (an array-valued
-/// `const` observed) becomes a FALLBACK rule; taped readers of the runtime
+/// recurrence observed) becomes a FALLBACK rule; taped readers of the runtime
 /// observed map and dy still match the interpreter bit for bit.
 #[test]
 fn ab_fallback_rule_interop() {
@@ -788,7 +788,17 @@ fn ab_fallback_rule_interop() {
                 "a": {"type": "unknown", "shape": ["c"]}
             },
             "equations": [
-                {"lhs": "k", "rhs": {"op": "const", "value": [1.0, 2.0, 3.0], "args": []}},
+                // A causal self-reference: the ONE observed kind the tape may
+                // never lower (CONFORMANCE_SPEC §5.19.2), so it is a stable
+                // way to put a fallback rule in the middle of a taped program.
+                {"lhs": "k", "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                    "ranges": {"i": [1, n]},
+                    "expr": {"op": "ifelse", "args": [
+                        {"op": "<=", "args": ["i", 1]},
+                        1.0,
+                        {"op": "*", "args": [
+                            idx("k", json!({"op": "-", "args": ["i", 1]})), 2.0]}
+                    ]}}},
                 {"lhs": "a", "rhs": {"op": "+", "args": ["psi", "k"]}},
                 {"lhs": {"op": "ic", "args": ["psi"]}, "rhs": 0.0},
                 {"lhs": {"op": "D", "args": ["psi"], "wrt": "t"},
@@ -800,7 +810,7 @@ fn ab_fallback_rule_interop() {
     let (prog, report) = compiled.build_tape(&HashSet::new());
     assert!(
         !report.fallbacks.is_empty(),
-        "the array-valued const must produce at least one fallback"
+        "the recurrence must produce at least one fallback"
     );
     let nstates = compiled.state_variable_names().len();
     let params = HashMap::new();
@@ -1737,5 +1747,310 @@ fn unary_broadcast_minus_negates() {
     let rhs = json!({"op": "broadcast", "fn": "-", "args": [idx("s", json!("i"))]});
     for dy in dy_three_ways(bcast_doc("neg_check", n, rhs), &state) {
         assert_bits_eq(&dy, &[-0.5, -1.0, -2.0], "broadcast(fn=\"-\") must negate");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2 tape growth: `Instr::ConstArray`, `Instr::Reduce`, and the observed
+// shapes that let a reader of a per-cell-produced observed stay on the tape.
+// ---------------------------------------------------------------------------
+
+/// How many instructions of a given opcode the program carries.
+fn opcount(prog: &TapeProgram, opcode: &str) -> usize {
+    prog.instrs
+        .iter()
+        .filter(|i| i.opcode() == opcode)
+        .count()
+}
+
+/// An array-valued `const` observed, consumed elementwise and through a
+/// gather. Before `Instr::ConstArray` the `const` rule bailed and took every
+/// reader with it.
+#[test]
+fn ab_const_array_observed() {
+    let n = 4;
+    let doc = json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_const_array"},
+        "models": {"M": {
+            "variables": {
+                "u": {"type": "unknown", "shape": ["i"]},
+                "zc": {"type": "unknown", "shape": ["i"]},
+                "f": {"type": "unknown", "shape": ["i"]}
+            },
+            "equations": [
+                {"lhs": "zc", "rhs": {"op": "const", "args": [],
+                                      "value": [0.25, -1.5, 2.0, 3.75]}},
+                {"lhs": "f", "rhs": {"op": "+", "args": [
+                    1, {"op": "cos", "args": [{"op": "*", "args": [3.5, "zc"]}]}]}},
+                d_eq("u", n, agg(n, json!({"op": "*", "args": [
+                    idx("f", json!("i")),
+                    idx("zc", wrap(json!({"op": "+", "args": ["i", 1]}), 1, n))
+                ]})))
+            ]
+        }}
+    });
+    let prog = ab_check(doc, 0, -2.0, 2.0);
+    assert_eq!(opcount(&prog, "ConstArray"), 1, "the literal is stored once");
+    assert_eq!(prog.const_data.len(), 1);
+    assert_eq!(&prog.const_data[0].shape[..], &[4]);
+    assert_eq!(&prog.const_data[0].values, &[0.25, -1.5, 2.0, 3.75]);
+    // CONST cadence: the literal is stored once per solve, not per RHS call.
+    let store = prog
+        .instrs
+        .iter()
+        .position(|i| matches!(i, Instr::ConstArray { .. }))
+        .expect("ConstArray emitted");
+    assert_eq!(prog.section_of(store), Cadence::Const);
+}
+
+/// Rank-0 `faq`s — every index contracted, scalar result — one per reduction
+/// kernel, each folded by `Instr::Reduce`. `sum` over a sign-mixed state is
+/// the order-sensitive case: a different association would move bits.
+#[test]
+fn ab_rank0_scalar_reductions() {
+    let n = 5;
+    let red = |kind: &str| {
+        json!({"op": "faq", "args": [], "output_idx": [], "reduce": kind,
+               "ranges": {"j": [1, n]},
+               "expr": {"op": "*", "args": [idx("u", json!("j")), 1.5]}})
+    };
+    let doc = json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_rank0_reduce"},
+        "models": {"M": {
+            "variables": {
+                "u": {"type": "unknown", "shape": ["i"]},
+                "s": {"type": "unknown", "default": 0.0},
+                "tot": {"type": "unknown"},
+                "prod": {"type": "unknown"},
+                "hi": {"type": "unknown"},
+                "lo": {"type": "unknown"}
+            },
+            "equations": [
+                {"lhs": "tot", "rhs": red("+")},
+                {"lhs": "prod", "rhs": red("*")},
+                {"lhs": "hi", "rhs": red("max")},
+                {"lhs": "lo", "rhs": red("min")},
+                {"lhs": {"op": "D", "args": ["s"], "wrt": "t"},
+                 "rhs": {"op": "+", "args": ["tot", "prod", "hi", "lo"]}},
+                d_eq("u", n, agg(n, json!({"op": "*", "args": ["tot", idx("u", json!("i"))]})))
+            ]
+        }}
+    });
+    let prog = ab_check(doc, 0, -2.0, 2.0);
+    assert_eq!(opcount(&prog, "Reduce"), 4, "one fold per reduction rule");
+    for i in &prog.instrs {
+        if let Instr::Reduce {
+            axes,
+            src_shape,
+            out,
+            ..
+        } = i
+        {
+            assert_eq!(&axes[..], &[0u8], "the single contracted axis");
+            assert_eq!(&src_shape[..], &[n as usize]);
+            assert!(prog.slots[*out as usize].scalar, "rank-0 output");
+        }
+    }
+}
+
+/// A two-axis rank-0 reduction: the fold order is LEXICOGRAPHIC over the
+/// contracted names (last fastest), which is `CartesianTuples`' odometer. A
+/// body that is not associativity-neutral (mixed magnitudes) would move bits
+/// under any other order, so the bitwise A/B is the assertion.
+#[test]
+fn ab_rank0_reduction_two_contracted_axes() {
+    let n = 4;
+    let doc = json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_rank0_reduce_2d"},
+        "models": {"M": {
+            "variables": {
+                "u": {"type": "unknown", "shape": ["i"]},
+                "s": {"type": "unknown", "default": 0.0},
+                "tot": {"type": "unknown"}
+            },
+            "equations": [
+                {"lhs": "tot", "rhs": {"op": "faq", "args": [], "output_idx": [],
+                    "ranges": {"j": [1, n], "k": [1, n]},
+                    "expr": {"op": "*", "args": [
+                        {"op": "^", "args": [10.0, "k"]},
+                        idx("u", json!("j"))]}}},
+                {"lhs": {"op": "D", "args": ["s"], "wrt": "t"}, "rhs": "tot"},
+                d_eq("u", n, agg(n, json!({"op": "*", "args": ["tot", idx("u", json!("i"))]})))
+            ]
+        }}
+    });
+    let prog = ab_check(doc, 0, -3.0, 3.0);
+    let reduce = prog
+        .instrs
+        .iter()
+        .find_map(|i| match i {
+            Instr::Reduce {
+                axes, src_shape, ..
+            } => Some((axes.clone(), src_shape.clone())),
+            _ => None,
+        })
+        .expect("Reduce emitted");
+    assert_eq!(&reduce.0[..], &[0u8, 1]);
+    assert_eq!(&reduce.1[..], &[n as usize, n as usize]);
+}
+
+/// A rank-0 reduction carrying a §5.3 `filter` stays per-cell on purpose: the
+/// oracle SKIPS an excluded tuple (`continue`), and a mask-to-identity fold is
+/// not bit-identical to skipping. The rule must fall back, not be taped.
+#[test]
+fn rank0_reduction_with_a_filter_falls_back() {
+    let n = 4;
+    let doc = json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_rank0_filter"},
+        "models": {"M": {
+            "variables": {
+                "u": {"type": "unknown", "shape": ["i"]},
+                "s": {"type": "unknown", "default": 0.0},
+                "tot": {"type": "unknown"}
+            },
+            "equations": [
+                {"lhs": "tot", "rhs": {"op": "faq", "args": [], "output_idx": [],
+                    "ranges": {"j": [1, n]},
+                    "filter": {"op": "<=", "args": ["j", 2]},
+                    "expr": idx("u", json!("j"))}},
+                {"lhs": {"op": "D", "args": ["s"], "wrt": "t"}, "rhs": "tot"},
+                d_eq("u", n, agg(n, idx("u", json!("i"))))
+            ]
+        }}
+    });
+    // `tot` falls back; `D(s)` still tapes, because the fallback producer's
+    // shape (0-d) is inferable — that is the shape-cascade fix at work.
+    let prog = ab_check(doc, 1, -2.0, 2.0);
+    assert_eq!(opcount(&prog, "Reduce"), 0);
+    let (name, reason) = prog
+        .rules
+        .iter()
+        .find_map(|r| match &r.status {
+            RuleStatus::Fallback(why) => Some((r.name.clone(), why.clone())),
+            RuleStatus::Taped => None,
+        })
+        .expect("one fallback");
+    assert_eq!(name, "tot");
+    assert!(reason.contains("filter"), "{reason}");
+}
+
+/// The shape cascade: an observed produced by a rule the tape REFUSES (a
+/// causal recurrence, which may never be taped) is still read on the tape by
+/// later rules, because its published box is inferable. Before, every reader
+/// bailed too.
+#[test]
+fn ab_reader_of_a_fallback_producer_stays_taped() {
+    let n = 6;
+    let doc = json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_fallback_producer_shape"},
+        "models": {"M": {
+            "variables": {
+                "u": {"type": "unknown", "shape": ["i"]},
+                "r": {"type": "unknown", "shape": ["i"]},
+                "g": {"type": "unknown", "shape": ["i"]}
+            },
+            "equations": [
+                // A causal self-reference: `r[i]` reads `r[i-1]`. Sequential
+                // sweep only (CONFORMANCE_SPEC §5.19.2) — never taped.
+                {"lhs": "r", "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                    "ranges": {"i": [1, n]},
+                    // The base case is an `ifelse` guard INSIDE the body: a
+                    // self-read of an unpublished cell is a fault, never a
+                    // zero (CONFORMANCE_SPEC §5.19.4).
+                    "expr": {"op": "ifelse", "args": [
+                        {"op": "<=", "args": ["i", 1]},
+                        idx("u", json!("i")),
+                        {"op": "+", "args": [
+                            idx("u", json!("i")),
+                            {"op": "*", "args": [
+                                0.5, idx("r", json!({"op": "-", "args": ["i", 1]}))]}
+                        ]}
+                    ]}}},
+                // …read elementwise, and through a shifted gather.
+                {"lhs": "g", "rhs": {"op": "*", "args": [2.0, "r"]}},
+                d_eq("u", n, agg(n, json!({"op": "-", "args": [
+                    idx("g", json!("i")),
+                    idx("r", wrap(json!({"op": "+", "args": ["i", 1]}), 1, n))
+                ]})))
+            ]
+        }}
+    });
+    // Exactly one fallback: the recurrence itself.
+    let prog = ab_check(doc, 1, -2.0, 2.0);
+    let fb: Vec<&str> = prog
+        .rules
+        .iter()
+        .filter(|r| matches!(r.status, RuleStatus::Fallback(_)))
+        .map(|r| r.name.as_str())
+        .collect();
+    assert_eq!(fb, vec!["r"]);
+    // The readers resolve `r` through the runtime observed map at its
+    // inferred box.
+    assert!(prog.obs_reads.iter().any(|n| n == "r"));
+}
+
+/// The phase-2 spike fixture end to end: all three gaps at once (an
+/// array-valued `const`, a reader of it, a prefix-scan aggregate and a rank-0
+/// reduction), loaded from the corpus rather than restated here.
+#[test]
+fn ab_elementwise_observed_gather_fixture() {
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/conformance/elementwise_observed_gather/fixtures/elementwise_gather.esm");
+    let file = crate::parse::load_path(&path).expect("corpus fixture loads");
+    let compiled = ArrayCompiled::from_file(&file).expect("fixture compiles");
+    for (label, fuse) in [("fused", Some(default_cfg())), ("unfused", None)] {
+        let (prog, report) = compiled.build_tape_opts(&HashSet::new(), fuse);
+        assert!(
+            report.fallbacks.is_empty(),
+            "{label}: {:?}",
+            report.fallbacks
+        );
+        assert_eq!(report.n_taped, 9, "{label}: all nine rules");
+        assert_eq!(opcount(&prog, "ConstArray"), 1, "{label}");
+        assert_eq!(opcount(&prog, "Reduce"), 1, "{label}");
+
+        let n = compiled.state_variable_names().len();
+        let params = HashMap::new();
+        let param_vec = compiled.debug_resolve_params(&params);
+        for seed in 0..3u64 {
+            let state = seeded_state(n, seed, -2.0, 2.0);
+            for &t in &[0.0, 1.0] {
+                let (dy_ref, _) = compiled.debug_eval_rhs(&state, t, &params, false);
+                let mut dy = vec![0.0f64; n];
+                run_reference(&prog, &compiled, &state, &param_vec, t, &mut dy);
+                for (k, (a, b)) in dy.iter().zip(dy_ref.iter()).enumerate() {
+                    assert_eq!(
+                        a.to_bits(),
+                        b.to_bits(),
+                        "{label} seed {seed} t {t}: dy[{k}] {a:?} vs {b:?}"
+                    );
+                }
+            }
+        }
+    }
+    // …and through the production fast executor on a warm scratch.
+    let n = compiled.state_variable_names().len();
+    let params = HashMap::new();
+    let param_vec = compiled.debug_resolve_params(&params);
+    let mut fast = compiled.debug_new_scratch_taped();
+    for seed in 0..3u64 {
+        let state = seeded_state(n, seed, -2.0, 2.0);
+        for &t in &[0.0, 1.0] {
+            let (dy_ref, _) = compiled.debug_eval_rhs(&state, t, &params, false);
+            assert_fast_matches(
+                &compiled,
+                &mut fast,
+                &param_vec,
+                &state,
+                t,
+                &dy_ref,
+                "elementwise_gather fixture",
+            );
+        }
     }
 }

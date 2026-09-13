@@ -7,7 +7,18 @@
 //! (`classify_axis_role`, `parse_wrap_axis_any`, `lhs_constant_shifts`,
 //! `subblock_dest`, `vec_op_code`, …), and every construct `eval_vec_op`
 //! would bail on becomes a *fallback rule* carrying the bail reason — so a
-//! rule is taped exactly when the overlay vectorizes it today.
+//! rule is taped essentially when the overlay vectorizes it today.
+//!
+//! *Essentially*, because there is exactly one deliberate exception, and it
+//! is documented where it lives ([`TapeBuilder::lower_scalar_reduction`]): a
+//! rank-0 `faq` — every index contracted, scalar result — which the overlay
+//! declines outright (`eval_faq` gates its fast path on a non-empty output
+//! box) and production therefore evaluates in the per-cell oracle. The tape
+//! lowers it as a boxed body plus one [`Instr::Reduce`], whose ROW-MAJOR
+//! visiting order IS the oracle's `CartesianTuples` odometer — so the
+//! reference the lowering is pinned against there is the oracle rather than
+//! the overlay, which is the same equivalence every other arm rests on, just
+//! reached directly.
 //!
 //! ## Value numbering
 //!
@@ -1173,8 +1184,14 @@ impl<'m> TapeBuilder<'m> {
         let Some(spec) = faq_spec(node) else {
             bail_tape!("aggregate: node carries no `expr` body");
         };
+        // A rank-0 aggregate NESTED in a box stays per-cell, mirroring
+        // `eval_vec_nested_aggregate`'s own bail: the enclosing rule would
+        // otherwise be taped under semantics the overlay does not implement.
+        // (The WHOLESALE rank-0 case is different and IS lowered — see
+        // [`Self::lower_scalar_reduction`] — because there the reference is
+        // the per-cell oracle, which the fold order reproduces exactly.)
         if spec.ranges.is_empty() {
-            bail_tape!("aggregate: rank-0 output (scalar reduction)");
+            bail_tape!("aggregate: rank-0 output (scalar reduction, nested in a box)");
         }
         // See the same guard in `eval_vec_nested_aggregate`: an overlap gate
         // drives the contraction, and the tape lowering has no driven form.
