@@ -12,6 +12,10 @@ checks against overlapping but inconsistent fixture sets (see gt-tvz).
 ```
 tests/conformance/
 ├── README.md                       # this file — the adapter contract
+├── compiled_rhs/                   # the compiled-backend RHS gate (CONFORMANCE_SPEC §5.38)
+│   ├── README.md                   #   the contract: manifest schema, adapter CLI, tolerance classes
+│   ├── manifest.json               #   fixtures, probes, tolerance classes, exclusions
+│   └── golden/<id>.json            #   the Julia-INTERPRETER RHS at every probe
 ├── deprecated_op_alias/            # the `aggregate` -> `faq` alias contract (esm 1.1.0)
 │   ├── aliased.esm                 #   input, authored with the deprecated spelling
 │   ├── canonical.esm               #   expected output, and a no-warning input
@@ -56,6 +60,9 @@ Classification of every stage in `scripts/test-conformance.sh`:
 | `PDE-simulation producer (julia/rust/python)` | reference-comparing (golden + analytic anchors) |
 | `full-pipeline PDE self-test` | reference-comparing (golden vs independent reference integrator) |
 | `full-pipeline PDE producer (julia/rust/python)` | reference-comparing (golden + independent reference) |
+| `compiled-RHS self-test` | reference-comparing (the committed golden must reproduce every independent `analytic_rhs` anchor; the negative controls assert the harness rejects a value moved 10x its tolerance budget, a missing element, a missing probe, and a refusal from a `compiled_required` binding) |
+| `compiled-RHS interpreter producer (julia/rust/python)` | reference-comparing (the Julia-interpreter golden AND the independent `analytic_rhs` anchors). For Rust and Python the golden leg is additionally **cross-binding-agreeing**; the anchor leg is what keeps a shared wrong answer visible |
+| `compiled-RHS compiled producer (julia/rust)` | reference-comparing — the golden is the Julia *interpreter*, which lies entirely outside every compiled path. A model the emitter cannot lower is a **named exclusion** in the report, never a silent skip (CONFORMANCE_SPEC §5.38.3) |
 | `recurrence` (`recurrence/`, driven by each binding's own suite) | **reference-comparing** — every assertion is a value pinned at zero tolerance, several against an INDEPENDENT oracle (`07`'s ascending fold in Python) rather than against another binding. Bit-identity is available here (CONFORMANCE_SPEC §5.19.1), so cross-binding agreement is a consequence of each binding matching the reference, not the test |
 | `deprecated_op_alias` (`deprecated_op_alias/manifest.json`, driven by each binding's own suite) | **reference-comparing** — `canonical.esm` is a committed golden outside the bindings, and the alias input must emit byte-identically to it. The warning-count assertion is a per-binding classification (CONFORMANCE_SPEC §7), not a wire format. |
 | **round-trip** (`round_trip/manifest.json`, below) | **reference-comparing** since the original fixture `F` became the oracle (was self-comparing) |
