@@ -47,15 +47,23 @@ _ac_lhs(v, idx, n) = Dict("op" => "faq", "args" => Any[], "output_idx" => Any[id
 _ac_zero(idx, n) = Dict("op" => "faq", "args" => Any[], "output_idx" => Any[idx],
     "ranges" => Dict(idx => Any[1, n]), "expr" => 0.0)
 
-function _ac_doc(NS::Int, NR::Int)
-    SR = [[_ac_sr(s, r) for r in 1:NR] for s in 1:NS]
-    agg = Dict{String,Any}("op" => "faq", "semiring" => "sum_product",
+# `reduce=nothing` keeps the declared `sum_product` semiring (the shape every
+# other case in this file uses); naming a reducer instead exercises the other
+# three ⊕ the tier admits. `coef`/`e` swap in data with no exact zero and no
+# integer value, so a ×-fold cannot collapse to 0̄ and a fold ORDER difference
+# shows up in the last bit.
+function _ac_doc(NS::Int, NR::Int; coef=_ac_sr, red=nothing)
+    SR = [[coef(s, r) for r in 1:NR] for s in 1:NS]
+    agg = Dict{String,Any}("op" => "faq",
         "args" => Any[], "output_idx" => Any["rcv"],
         "ranges" => Dict("rcv" => Any[1, NR], "s" => Any[1, NS]),
         "expr" => Dict("op" => "*", "args" => Any[
             Dict("op" => "index", "args" => Any[
                 Dict("op" => "const", "args" => Any[], "value" => SR), "s", "rcv"]),
             Dict("op" => "index", "args" => Any["E", "s"])]))
+    # The semiring, when declared, is authoritative over `reduce` (§5.1), so the
+    # two spellings are mutually exclusive rather than merged.
+    red === nothing ? (agg["semiring"] = "sum_product") : (agg["reduce"] = red)
     Dict{String,Any}("esm" => "1.1.0", "metadata" => Dict("name" => "ac_sr"),
       "models" => Dict("R" => Dict{String,Any}(
         "variables" => Dict("E" => Dict("type" => "unknown", "shape" => Any["s"]),
@@ -64,8 +72,10 @@ function _ac_doc(NS::Int, NR::Int)
           Dict("lhs" => _ac_lhs("E", "s", NS), "rhs" => _ac_zero("s", NS)),
           Dict("lhs" => _ac_lhs("conc", "rcv", NR), "rhs" => agg)])))
 end
-_ac_ics(NS, NR) = merge(Dict{String,Any}("E[$s]" => _ac_e0(s) for s in 1:NS),
-                        Dict{String,Any}("conc[$r]" => 0.0 for r in 1:NR))
+_ac_ics(NS, NR; e=_ac_e0) = merge(Dict{String,Any}("E[$s]" => e(s) for s in 1:NS),
+                                  Dict{String,Any}("conc[$r]" => 0.0 for r in 1:NR))
+_ac_sr_frac(s, r) = _ac_sr(s, r) / 4 + 0.5      # never 0, never an integer
+_ac_e0_frac(s)    = _ac_e0(s) + 0.25            # never 0
 _ac_exact(NS, NR) = [sum(_ac_sr(s, r) * _ac_e0(s) for s in 1:NS) for r in 1:NR]
 
 # Every build in this file pins the floor to 8, so the tier engages at sizes
@@ -119,6 +129,90 @@ const _AC_OFF = Dict("ESS_ARRAY_CONTRACTION_DISABLE" => "1")
         @test _ac_tally(tn, :array_contraction) == 1
         @test _ac_tally(tu, :array_contraction) == 0
         @test all(_ac_outs(dn, vn, NR)[r] === _ac_outs(du, vu, NR)[r] for r in 1:NR)
+    end
+
+    # ── Every ⊕ the tier admits, not just the sum ────────────────────────────
+    # `+` is the shape the tier was written for, but the admission test also lets
+    # `*`, `max` and `min` through, and all four are seeded from the semiring's 0̄
+    # and folded by the SAME `_NK_CONTRACTION_LOOP`. Pinned against both oracles
+    # at once, so a wrong identity or a reversed fold could not pass.
+    @testset "reducer $red folds exactly as the tier it replaces" for
+            red in ("*", "max", "min")
+        NS, NR = 16, 10
+        doc = _ac_doc(NS, NR; coef=_ac_sr_frac, red=red)
+        ics = _ac_ics(NS, NR; e=_ac_e0_frac)
+        dn, vn, tn = _ac_du(doc, ics)
+        do_, vo, to = _ac_du(doc, ics; env=_AC_OFF)
+        du_, vu, tu = _ac_du(doc, ics; env=Dict("ESS_CONTRACTION_LOOP" => "0"))
+        @test _ac_tally(tn, :array_contraction) == 1
+        @test _ac_tally(to, :array_contraction) == 0
+        @test _ac_tally(tu, :array_contraction) == 0
+        f = red == "*" ? (*) : red == "max" ? max : min
+        ex = [foldl(f, [_ac_sr_frac(s, r) * _ac_e0_frac(s) for s in 1:NS])
+              for r in 1:NR]
+        A = _ac_outs(dn, vn, NR)
+        @test all(A[r] === _ac_outs(do_, vo, NR)[r] for r in 1:NR)
+        @test all(A[r] === _ac_outs(du_, vu, NR)[r] for r in 1:NR)
+        @test all(A[r] === ex[r] for r in 1:NR)
+    end
+
+    # ── More than one index on each side ─────────────────────────────────────
+    # Every case above has ONE output index and ONE contracted index, which
+    # leaves the section runner's output odometer (`_ac_seek!`: dimension 1
+    # fastest, driven off `los`/`steps`/`lens`) and the nest order over several
+    # contracted indices unpinned. Two of each here, with the output extents
+    # DIFFERENT so a transposed counter pair could not pass, and the first output
+    # range starting at 2 so `los` is not the identity.
+    @testset "two output indices and two contracted indices" begin
+        NS1, NS2, R1LO, R1HI, NR2 = 3, 4, 2, 6, 7
+        c1(s, r) = _ac_sr(s, r)          # read at (contracted 1, output 1)
+        c2(s, r) = Float64((5s + 2r) % 13)  # read at (contracted 2, output 2)
+        e2(a, b) = Float64((a + 3b) % 5)
+        ax(idxs, rngs) = Dict("op" => "faq", "args" => Any[],
+            "output_idx" => Any[idxs...], "ranges" => Dict(rngs))
+        lhs(v, idxs, rngs) = merge(ax(idxs, rngs),
+            Dict("expr" => Dict("op" => "D", "wrt" => "t", "args" => Any[
+                Dict("op" => "index", "args" => Any[v, idxs...])])))
+        zro(idxs, rngs) = merge(ax(idxs, rngs), Dict("expr" => 0.0))
+        cst(v) = Dict("op" => "const", "args" => Any[], "value" => v)
+        # `c1` is stored over the FULL 1:R1HI axis: the const is subscripted by
+        # the output index itself, whose range starts at 2.
+        C1 = [[c1(s, r) for r in 1:R1HI] for s in 1:NS1]
+        C2 = [[c2(s, r) for r in 1:NR2] for s in 1:NS2]
+        srng = ["s1" => Any[1, NS1], "s2" => Any[1, NS2]]
+        orng = ["r1" => Any[R1LO, R1HI], "r2" => Any[1, NR2]]
+        agg = merge(ax(("r1", "r2"), vcat(orng, srng)),
+            Dict("semiring" => "sum_product",
+                 "expr" => Dict("op" => "*", "args" => Any[
+                    Dict("op" => "index", "args" => Any[cst(C1), "s1", "r1"]),
+                    Dict("op" => "*", "args" => Any[
+                        Dict("op" => "index", "args" => Any[cst(C2), "s2", "r2"]),
+                        Dict("op" => "index", "args" => Any["E", "s1", "s2"])])])))
+        doc = Dict{String,Any}("esm" => "1.1.0",
+          "metadata" => Dict("name" => "ac_sr2"),
+          "models" => Dict("R" => Dict{String,Any}(
+            "variables" => Dict(
+              "E" => Dict("type" => "unknown", "shape" => Any["s1", "s2"]),
+              "conc" => Dict("type" => "unknown", "shape" => Any["r1", "r2"])),
+            "equations" => Any[
+              Dict("lhs" => lhs("E", ("s1", "s2"), srng),
+                   "rhs" => zro(("s1", "s2"), srng)),
+              Dict("lhs" => lhs("conc", ("r1", "r2"), orng), "rhs" => agg)])))
+        ics = merge(
+            Dict{String,Any}("E[$a,$b]" => e2(a, b) for a in 1:NS1, b in 1:NS2),
+            Dict{String,Any}("conc[$r,$q]" => 0.0 for r in R1LO:R1HI, q in 1:NR2))
+        dn, vn, tn = _ac_du(doc, ics)
+        do_, vo, to = _ac_du(doc, ics; env=_AC_OFF)
+        @test _ac_tally(tn, :array_contraction) == 1
+        @test _ac_tally(to, :array_contraction) == 0
+        cells = [(r, q) for r in R1LO:R1HI, q in 1:NR2]
+        @test all(dn[vn["conc[$r,$q]"]] === do_[vo["conc[$r,$q]"]]
+                  for (r, q) in cells)
+        # Integer-valued data again, so the closed form is exactly representable.
+        @test all(dn[vn["conc[$r,$q]"]] ==
+                  sum(c1(a, r) * c2(b, q) * e2(a, b)
+                      for a in 1:NS1, b in 1:NS2)
+                  for (r, q) in cells)
     end
 
     @testset "zero-allocation steady-state f!" begin

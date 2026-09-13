@@ -4188,14 +4188,23 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
     # compiled whole-array kernel for an interpreted nest and costs far more per
     # RHS call than it ever saves once at build time.
     #
-    # "Grid-independent" here is a statement about RESOURCES — build wall time and
-    # build memory — not about a node count. The affine tier's lowering count for
-    # a contraction is N+1 in the output extent, so it is not literally constant;
-    # its wall time and footprint stay flat across the grid anyway, because those
-    # nodes are individually small. The per-cell path's node count grows the same
-    # way but each of ITS nodes carries a whole ∏|k…|-term body, which is what
-    # actually makes the build explode. Settled deliberately, so it does not get
-    # re-litigated from the lowering counter alone.
+    # "Grid-independent" describes an affine build that SUCCEEDS: it emits
+    # O(#structural groups) kernels and they go on to codegen. The ATTEMPT is a
+    # different quantity and is NOT flat. On a contraction the affine tier is
+    # handed the UNROLLED body — ∏|k…| terms — and classifies it over the output
+    # axis, so an attempt that DECLINES still costs O(#output cells · ∏|k…|) in
+    # wall time and build memory, and that cost is paid before this tier is even
+    # offered the equation. On the square source-receptor shape this tier exists
+    # for (#output cells == ∏|k…|) that term is quadratic in the grid, and once
+    # the nest has removed the per-cell build it is the dominant one left.
+    #
+    # KNOWN GAP, deliberately not closed here. Telling "affine will decline" from
+    # "affine will accept" without running the attempt needs a cost model the
+    # cascade does not have, and moving this tier ahead of affine is not the fix:
+    # it takes equations affine would have ACCEPTED and trades a codegen'd
+    # whole-array kernel for an interpreted nest, which costs far more per RHS
+    # call than any build-time saving. Neither effect is visible in the node
+    # lowering counter, so do not re-decide the ordering from that counter alone.
     #
     # `ESS_STENCIL_DISABLE=1` is excluded deliberately: it is documented as
     # forcing the per-cell reference, and a reference that routes through this

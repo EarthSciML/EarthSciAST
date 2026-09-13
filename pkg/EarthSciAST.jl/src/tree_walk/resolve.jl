@@ -578,13 +578,13 @@ end
 # ── Whole-array contraction loop nest (ess-array-contraction) ────────────────
 # Kill-switch + coverage floor for the tier that keeps the OUTPUT indices
 # symbolic too (see `_try_build_array_contraction`). The floor is on the
-# CONTRACTED length alone: every tier below pays ∏|k…| per structural group (the
-# affine tier's unrolled fold) or per output cell (the per-cell unroll), so the
-# decision cannot be read off the output extent — a square source-receptor
-# contraction has as many output cells as contracted ones and is unaffordable on
-# both. Below the floor nothing changes: the existing loop-vs-affine order
-# decides the equation exactly as before, so every small-reduction fixture stays
-# byte-for-byte identical.
+# CONTRACTED length alone, and it is only a conservative guard on the
+# small-reduction surface: WHICH tier gets an equation is decided by POSITION in
+# the cascade — `_compile_faq_equation!` offers this one only once the affine
+# tier has declined, so the alternative is always the per-cell fallback, which
+# pays ∏|k…| per OUTPUT CELL. Below the floor nothing changes: the existing
+# loop-vs-affine order decides the equation exactly as before, so every
+# small-reduction fixture stays byte-for-byte identical.
 #
 # `ESS_CONTRACTION_LOOP=0` disables this tier too: it is documented as forcing
 # the pure-unroll reference EVERYWHERE, and this tier is a contraction loop — one
