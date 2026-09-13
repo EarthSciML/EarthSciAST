@@ -276,7 +276,11 @@ jobs:
       # for it inside a step whose log is about something else.
       #
       # Manifest.toml is gitignored repo-wide, so `Pkg.develop` is what points
-      # the env at THIS checkout rather than a registered EarthSciAST.
+      # the env at THIS checkout rather than a registered EarthSciAST. It is
+      # also why this step is not free on a warm run: the manifest is rebuilt
+      # every time, since only the DEPOT (~/.julia) is what julia-actions/cache
+      # carries across runs. What the cache saves is the download and the
+      # precompile, which is the expensive part; the re-resolve is not.
       - name: Instantiate the Reactant adapter environment
         run: |
           julia --project=pkg/EarthSciAST.jl/scripts/compiled_rhs_reactant_env -e '
