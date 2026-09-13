@@ -38,6 +38,7 @@ import EarthSciAST
 const _E = EarthSciAST
 const _MLIR = Reactant.MLIR
 const _hlo = Reactant.MLIR.Dialects.stablehlo
+const _chlo = Reactant.MLIR.Dialects.chlo
 
 include("values.jl")
 include("ops.jl")

@@ -191,6 +191,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
         include("reactant_oop_intern_test.jl")       # one emitted read per (SSA value, window)
         include("reactant_oop_ssa_test.jl")          # ess-oop-ssa: skipped scatters/redirects visible in the raw module
         include("reactant_oop_gvn_test.jl")          # one emitted OP per (opcode, operand values)
+        include("reactant_direct_emit_test.jl")      # the COMPILED backend: StableHLO built directly from the _Node IR
     else
         @info "skipping reactant_oop_test.jl (set ESM_TEST_REACTANT=1, with Reactant " *
               "in the environment, to run the XLA tracing tests)"

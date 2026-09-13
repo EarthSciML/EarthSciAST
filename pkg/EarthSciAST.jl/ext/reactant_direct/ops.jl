@@ -50,6 +50,15 @@ const _DE_UNARY = Dict{Symbol,Any}(
     :expm1 => _hlo.exponential_minus_one, :log1p => _hlo.log_plus_one,
     :floor => _hlo.floor, :ceil => _hlo.ceil, :sign => _hlo.sign, :cbrt => _hlo.cbrt,
 )
+# The transcendentals StableHLO itself does not carry. CHLO is the
+# decomposition dialect the StableHLO pipeline already expands for `Ops.asin`
+# and friends, so these lower to the same programs Reactant's own builders
+# reach — not to a hand-rolled series here.
+const _DE_UNARY_CHLO = Dict{Symbol,Any}(
+    :asin => _chlo.asin, :acos => _chlo.acos, :atan => _chlo.atan,
+    :asinh => _chlo.asinh, :acosh => _chlo.acosh, :atanh => _chlo.atanh,
+    :sinh => _chlo.sinh, :cosh => _chlo.cosh, :erf => _chlo.erf,
+)
 const _DE_COMPARE = Dict{Symbol,String}(
     :< => "LT", :<= => "LE", :> => "GT", :>= => "GE", :(==) => "EQ", :!= => "NE",
 )
@@ -164,10 +173,20 @@ function _de_op(ctx::_DECtx, nd::_E._Node, c::Vector{_DEVal})::_DEVal
         return _de_chain(ctx, _hlo.maximum, c)
     elseif op === :min
         return _de_chain(ctx, _hlo.minimum, c)
+    elseif op === :atan2
+        n == 2 || _de_refuse("`atan2` with $n arguments", "`atan2` is binary.")
+        return _de_bin(ctx, _hlo.atan2, c[1], c[2])
+    elseif op === :atan && n == 2
+        # The registry spells the two-argument form both ways.
+        return _de_bin(ctx, _hlo.atan2, c[1], c[2])
     elseif haskey(_DE_UNARY, op)
         n == 1 || _de_refuse("unary `$op` with $n arguments",
                              "`$op` takes exactly one argument.")
         return _de_un(ctx, _DE_UNARY[op], c[1])
+    elseif haskey(_DE_UNARY_CHLO, op)
+        n == 1 || _de_refuse("unary `$op` with $n arguments",
+                             "`$op` takes exactly one argument.")
+        return _de_un(ctx, _DE_UNARY_CHLO[op], c[1])
     elseif haskey(_DE_COMPARE, op)
         n == 2 || _de_refuse("comparison `$op` with $n arguments",
                              "a comparison is binary.")
@@ -258,8 +277,9 @@ function _de_static_uncached(ctx::_DECtx, nd::_E._Node)::Bool
         # already O(1).
         nd.op === :fn && return false
         (haskey(_DE_UNARY, nd.op) || haskey(_DE_COMPARE, nd.op) ||
+         haskey(_DE_UNARY_CHLO, nd.op) ||
          nd.op in (:+, :*, :-, :neg, :/, :^, :pow, :max, :min, :ifelse, :not,
-                   :and, :or, :pi, :π, :e, :Pre)) || return false
+                   :and, :or, :pi, :π, :e, :Pre, :atan, :atan2)) || return false
         return all(ch -> _de_static(ctx, ch), nd.children)
     end
     return false
