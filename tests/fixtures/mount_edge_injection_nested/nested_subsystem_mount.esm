@@ -1,0 +1,18 @@
+{
+ "esm": "1.0.0",
+ "metadata": {
+  "name": "nested_subsystem_mount",
+  "description": "The same shape at the OTHER mount form: a subsystems.<k> {ref} of the same leaf with the lowering library injected at the mount edge. esm-spec 4.7 says the two mount forms are one mechanism, so this must agree with nested_model_mount.esm.",
+  "license": "MIT"
+ },
+ "models": {
+  "Root": {
+   "subsystems": {"L": {"ref": "./nested_mounted_leaf.esm", "expression_template_imports": [{"ref": "./nested_lowering_lib.esm"}]}},
+   "variables": {"z": {"type": "unknown", "units": "1", "description": "trivial own state"}},
+   "equations": [
+    {"lhs": {"op": "ic", "args": ["z"]}, "rhs": 1.0},
+    {"lhs": {"op": "D", "args": ["z"], "wrt": "t"}, "rhs": 0.0}
+   ]
+  }
+ }
+}

@@ -1,0 +1,11 @@
+{
+ "esm": "1.0.0",
+ "metadata": {
+  "name": "nested_lowering_lib",
+  "description": "Template library injected at a mount edge: lowers the rewrite-target operator input_x() to the coupling-target parameter x_in.",
+  "license": "MIT"
+ },
+ "expression_templates": {
+  "input_x": {"params": [], "match": {"op": "input_x", "args": []}, "body": "x_in"}
+ }
+}

@@ -1362,3 +1362,54 @@ fn version_gate_flags_every_9_7_construct() {
     .unwrap();
     reject_template_imports_pre_v08(&ok).expect("0.8.0 passes");
 }
+
+/// §9.7.10 "The shared operation" defines a mount-edge injection as extending
+/// the target's effective template scope "**as if the target had added those
+/// entries to the *end* of its own `expression_template_imports`**". A
+/// component's own imports lower a rewrite-target inside a component it mounts
+/// as a `subsystems.<k>` — §4.7 resolves a `{ref}` "before validation or any
+/// other processing", so the mounted content is part of the document the
+/// §9.6.3 fixpoint walks. The injection therefore MUST reach it too, or the
+/// two halves of one normative sentence disagree.
+///
+/// They did: the edge consumed the injected library at the mount and resolved
+/// the leaf's own nested `{ref}`s only afterwards, so a rewrite-target one
+/// level down escaped every rule and reached evaluation as `unlowered_operator`
+/// — unlowerable from any mount edge, by any spelling (issue #311). The three
+/// fixtures here are the same leaf under the three injection sites, and the
+/// control pins the equivalence rather than the implementation: if the
+/// self-import case ever stops lowering the grandchild, THAT is the bug, and
+/// the two mount cases should follow it.
+#[test]
+fn mount_edge_injection_reaches_the_leafs_own_nested_subsystem() {
+    let dir = repo_root().join("tests/fixtures/mount_edge_injection_nested");
+
+    // The rewrite target lives in the grandchild; lowering it yields `x_in`,
+    // whose default is 3.0. A surviving `{"op": "input_x"}` anywhere in the
+    // resolved document is the defect.
+    let unlowered = |f: &earthsci_ast::EsmFile, what: &str| {
+        let v = serde_json::to_value(f).expect("serialize resolved document");
+        assert!(
+            !v.to_string().contains("input_x"),
+            "{what}: the rewrite-target operator survived resolution"
+        );
+    };
+
+    // Control: the leaf declares the library itself. This is what §9.7.10's
+    // equivalence is stated against.
+    let f = load_path(dir.join("nested_self_import.esm"))
+        .expect("a component's own import must lower its subsystem's rewrite target");
+    unlowered(&f, "self-import control");
+
+    // Form A at the top-level `models.<k>` mount.
+    let f = load_path(dir.join("nested_model_mount.esm"))
+        .expect("a models.<k> mount-edge injection must reach the leaf's nested subsystem");
+    unlowered(&f, "models.<k> mount edge");
+
+    // The same at the `subsystems.<k>` mount — §4.7 "a binding MUST NOT make
+    // them differ", so this is a differential test of the two forms, not a
+    // second copy of the first.
+    let f = load_path(dir.join("nested_subsystem_mount.esm"))
+        .expect("a subsystems.<k> mount-edge injection must reach the leaf's nested subsystem");
+    unlowered(&f, "subsystems.<k> mount edge");
+}
