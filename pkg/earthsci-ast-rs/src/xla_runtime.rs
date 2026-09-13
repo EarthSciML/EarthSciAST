@@ -7,6 +7,8 @@
 //! ```no_run
 //! # use earthsci_ast::simulate_array::ArrayCompiled;
 //! # fn demo(model: &ArrayCompiled) -> Result<(), Box<dyn std::error::Error>> {
+//! # let state: Vec<f64> = Vec::new();
+//! # let params: Vec<f64> = Vec::new();
 //! let rhs = earthsci_ast::xla_runtime::CompiledRhs::compile(model)?;  // once per model
 //! let du = rhs.eval(&state, &params, 0.0)?;                           // per probe / step
 //! # Ok(()) }
