@@ -325,6 +325,15 @@ fn load_ref_document(
     }
 }
 
+/// The index-set names a document's top-level registry holds right now.
+fn index_set_names(value: &Value) -> std::collections::BTreeSet<String> {
+    value
+        .get("index_sets")
+        .and_then(|v| v.as_object())
+        .map(|o| o.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
 fn walk_top_level(
     value: &mut Value,
     base_path: &Path,
@@ -392,17 +401,22 @@ fn walk_top_level(
 /// that [`resolve_value`] runs at a `subsystems.<k>` edge, because "Two mount
 /// forms, one mechanism" forbids the two attachment points from differing:
 ///
-/// 1. the referenced document resolves in its OWN scope — the library gates,
-///    this edge's `bindings` and §9.7.10 form-A injection, its metaparameter
-///    close and fold, the §9.6.3 fixpoint;
-/// 2. this edge's `index_set_rename` applies to that resolved document;
+/// 1. the referenced document resolves in its OWN scope — its own nested refs,
+///    of EITHER form, through [`walk_top_level`] in the leaf's directory
+///    FIRST (esm-spec §4.7 "before validation or any other processing", so the
+///    fixpoint below sees the components the leaf mounts — issue #311), then
+///    the library gates, this edge's `bindings` and §9.7.10 form-A injection,
+///    its metaparameter close and fold, the §9.6.3 fixpoint;
+/// 2. this edge's `index_set_rename` applies to that resolved document, over
+///    the axes the leaf itself declares and imports only — an axis that
+///    arrived through one of those nested mounts is renamed at ITS edge;
 /// 3. the renamed `index_sets` merge into THIS document's registry under the
 ///    deep-equal-or-`subsystem_index_set_conflict` rule, and the component
 ///    splices in.
 ///
-/// The leaf's nested refs — of EITHER form — then resolve through
-/// [`walk_top_level`] in the leaf's own directory, sharing this walk's
-/// path-scoped cycle set, so the merge composes transitively. On top of the
+/// The nested walk shares this walk's path-scoped cycle set, so a self- or
+/// mutually-importing document is still `circular …` rather than unbounded
+/// recursion, and the merge composes transitively. On top of the
 /// shared pipeline this form additionally merges the leaf's `function_tables` /
 /// `data_sources` / `enums` up (parent wins on a key clash) and drops the leaf's
 /// inline `tests` (§6.6: they do not cross a mount edge).
@@ -538,7 +552,16 @@ fn inline_toplevel_model_refs(
             // this edge's close — which is exactly what a STANDALONE load of the
             // leaf hands them (`root_metaparameter_env` in `load_with_meta`).
             let leaf_env = root_metaparameter_env(&comp, &bindings);
+            let before_nested = index_set_names(&comp);
             walk_top_level(&mut comp, &leaf_dir, visited, &leaf_env, &BTreeMap::new())?;
+            // What the nested mounts just merged in. This edge's
+            // `index_set_rename` must not see it (esm-spec §4.7 "Renaming is
+            // per edge"); the four other bindings never do, because they
+            // resolve these refs after the rename.
+            let nested_contributed: std::collections::BTreeSet<String> = index_set_names(&comp)
+                .difference(&before_nested)
+                .cloned()
+                .collect();
 
             // §9.7.10 form A: the edge's `expression_template_imports` inject a
             // discretization into the leaf's own scope BEFORE resolution, so the
@@ -573,11 +596,13 @@ fn inline_toplevel_model_refs(
 
             // Step (2): `index_set_rename` speaks the resolved leaf's own
             // post-resolution vocabulary, so it applies HERE — after the close
-            // and fold above.
+            // and fold above, over the leaf's own and imported axes only (each
+            // nested edge renames what IT brings, at its own edge).
             crate::template_imports::apply_mount_index_set_rename(
                 &mut comp,
                 entry_obj,
                 &format!("top-level model ref '{ref_str}'"),
+                &nested_contributed,
             )?;
 
             let sel = entry_obj.get("model").and_then(|v| v.as_str());
@@ -927,6 +952,7 @@ fn resolve_value(
             // the two MUST agree. Nested edge `bindings` fold against the leaf's
             // own closed environment, as a standalone load would give them.
             let leaf_env = root_metaparameter_env(&parsed, &bindings);
+            let before_nested = index_set_names(&parsed);
             walk_top_level(
                 &mut parsed,
                 &parent_dir,
@@ -934,6 +960,12 @@ fn resolve_value(
                 &leaf_env,
                 &BTreeMap::new(),
             )?;
+            // What the nested mounts just merged in — excluded from this edge's
+            // `index_set_rename` below (esm-spec §4.7 "Renaming is per edge").
+            let nested_contributed: std::collections::BTreeSet<String> = index_set_names(&parsed)
+                .difference(&before_nested)
+                .cloned()
+                .collect();
             // esm-spec §9.7.10 form A: the edge's `expression_template_imports`
             // inject a discretization into the referenced component's own
             // scope, appended BEFORE resolution so the §9.6.3 fixpoint lowers
@@ -966,13 +998,16 @@ fn resolve_value(
             // imports, this edge's `bindings` and injection, its metaparameter
             // close and fold, the §9.6.3 fixpoint — so its `index_sets` are the
             // post-resolution vocabulary the edge's `index_set_rename` speaks.
-            // Before its own nested mounts resolve: each nested edge renames
-            // what IT contributes, at its own edge. Absent or empty ⇒ identity,
-            // so an edge that does not use the field resolves exactly as before.
+            // Scoped to what THIS document declares and imports: an axis that
+            // reached the registry through a mount nested inside it is renamed
+            // (or not) at that nested edge, so `nested_contributed` is held out.
+            // Absent or empty ⇒ identity, so an edge that does not use the field
+            // resolves exactly as before.
             crate::template_imports::apply_mount_index_set_rename(
                 &mut parsed,
                 obj,
                 &format!("subsystem ref '{ref_str}'"),
+                &nested_contributed,
             )?;
             Ok(())
         })();

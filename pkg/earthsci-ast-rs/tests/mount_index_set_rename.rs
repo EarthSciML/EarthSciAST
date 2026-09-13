@@ -286,3 +286,60 @@ fn a_mounted_assembly_resolves_through_at_either_form() {
     assert_eq!(deep["variables"]["Tsoil"]["shape"][0], "soil_lev");
     assert_eq!(value["index_sets"]["soil_lev"]["size"], 4);
 }
+
+/// esm-spec §4.7: "Renaming is **per edge**: step 2 covers what THIS referenced
+/// document declares and imports, and an axis reaching the registry through a
+/// mount *nested inside* the referenced document is renamed (or not) at that
+/// nested edge, by its own `index_set_rename`."
+///
+/// This binding resolves the leaf's own nested `{ref}`s BEFORE the edge's
+/// injection and the §9.6.3 fixpoint (issue #311, so an injected rule reaches a
+/// rewrite-target in the leaf's own subtree). That puts the nested
+/// contribution in `index_sets` by the time `index_set_rename` runs, where the
+/// four other bindings — which still resolve nested refs after the rename —
+/// cannot see it. Holding it out of this edge's vocabulary is what keeps the
+/// five agreeing: without it, Rust silently renamed an axis the edge has no
+/// standing to name, while Julia, Python, TypeScript and Go all refused the
+/// same document.
+///
+/// Measured 2026-09-13 on both fixtures below: Julia, Python, TypeScript and Go
+/// all raise `subsystem_index_set_rename_unknown_name` with this same message.
+#[test]
+fn a_mount_edge_rename_cannot_name_an_axis_a_nested_mount_contributed() {
+    for (rel, noun) in [
+        (
+            "fixtures/mount_edge_rename_nested_scope/rename_scope_nested_only_axis.esm",
+            "subsystem ref",
+        ),
+        (
+            "fixtures/mount_edge_rename_nested_scope/rename_scope_nested_only_axis_toplevel.esm",
+            "top-level model ref",
+        ),
+    ] {
+        let path = fixture(rel);
+        let err = load_path(&path).expect_err(
+            "`lev` is declared only by the leaf's own nested mount, so this edge cannot rename it",
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("subsystem_index_set_rename_unknown_name"),
+            "{rel}: expected subsystem_index_set_rename_unknown_name, got: {msg}"
+        );
+        assert!(
+            msg.contains(noun) && msg.contains("index set 'lev'"),
+            "{rel}: the diagnostic must name this edge and the axis: {msg}"
+        );
+    }
+}
+
+/// The same edge, one level in: mounting the GRANDCHILD directly does rename
+/// `lev`, because there it is what the referenced document itself declares.
+/// This is the other half of the per-edge rule — the exclusion above must not
+/// turn into "a nested axis can never be renamed".
+#[test]
+fn the_nested_edge_itself_may_rename_the_axis_it_contributes() {
+    let path = fixture("fixtures/mount_edge_rename_nested_scope/rename_scope_grandchild.esm");
+    let file = load_path(&path).unwrap_or_else(|e| panic!("{} does not load: {e}", path.display()));
+    let value = serde_json::to_value(&file).expect("document renders as JSON");
+    assert_eq!(value["index_sets"]["lev"]["size"], 4);
+}

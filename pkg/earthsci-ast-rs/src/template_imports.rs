@@ -1089,10 +1089,24 @@ fn mount_rename_walk(x: &mut Value, m: &IndexMap<String, String>) {
 ///
 /// An absent, `null` or empty map is the identity and leaves `doc` untouched,
 /// which is what makes the field purely additive.
+///
+/// `nested_contributed` names the index sets that reached `doc["index_sets"]`
+/// through a mount NESTED INSIDE the referenced document, not through its own
+/// declarations or its own `expression_template_imports`. They are excluded
+/// from this edge's vocabulary: §4.7 says "step 2 covers what THIS referenced
+/// document declares and imports, and an axis reaching the registry through a
+/// mount *nested inside* the referenced document is renamed (or not) at that
+/// nested edge, by its own `index_set_rename`". Naming one here is
+/// `subsystem_index_set_rename_unknown_name`, exactly as it is in the four
+/// other bindings — which never see the nested contribution at this point
+/// because they resolve the leaf's nested `{ref}`s after the rename. This
+/// binding resolves them before it (issue #311, so the §9.6.3 fixpoint can
+/// reach them), so the exclusion has to be explicit.
 pub(crate) fn apply_mount_index_set_rename(
     doc: &mut Value,
     edge: &Map<String, Value>,
     where_: &str,
+    nested_contributed: &std::collections::BTreeSet<String>,
 ) -> Result<(), ExpressionTemplateError> {
     let raw = edge.get("index_set_rename");
     if raw.is_none_or(Value::is_null) {
@@ -1103,7 +1117,12 @@ pub(crate) fn apply_mount_index_set_rename(
     let declared: Vec<String> = doc
         .get("index_sets")
         .and_then(|v| v.as_object())
-        .map(|o| o.keys().cloned().collect())
+        .map(|o| {
+            o.keys()
+                .filter(|k| !nested_contributed.contains(*k))
+                .cloned()
+                .collect()
+        })
         .unwrap_or_default();
 
     // Renames never invent names (esm-spec §4.7, mirroring §9.7.7).
@@ -1165,10 +1184,28 @@ pub(crate) fn apply_mount_index_set_rename(
                     }
                 }
             }
-            renamed.insert(
-                changed.get(name).cloned().unwrap_or_else(|| name.clone()),
-                decl,
-            );
+            let final_name = changed.get(name).cloned().unwrap_or_else(|| name.clone());
+            // A renamed axis may land on the name of an axis this edge does NOT
+            // rename — one a mount nested inside the referenced document
+            // contributed, which is in the registry here only because this
+            // binding resolves nested refs before the rename (issue #311). Deep
+            // equality is idempotent, a disagreement is the §4.7 merge rule's
+            // own `subsystem_index_set_conflict`; the other bindings reach the
+            // same two verdicts because the nested contribution arrives after
+            // their rename and meets it in `merge_subsystem_index_sets`.
+            if let Some(existing) = renamed.get(&final_name)
+                && existing != &decl
+            {
+                return Err(err(
+                    codes::SUBSYSTEM_INDEX_SET_CONFLICT,
+                    format!(
+                        "{where_}: `index_set_rename` maps index set '{name}' onto '{final_name}', \
+                         which a mount nested inside the referenced document already contributes \
+                         with a non-deep-equal declaration (esm-spec §4.7)"
+                    ),
+                ));
+            }
+            renamed.insert(final_name, decl);
         }
         *sets = renamed;
     }

@@ -1,0 +1,18 @@
+{
+ "esm": "1.0.0",
+ "metadata": {
+  "name": "rename_scope_nested_only_axis_toplevel",
+  "description": "The same edge at the top-level models.<k> mount form. esm-spec 4.7 'two mount forms, one mechanism', so the two must reach the same verdict.",
+  "license": "MIT"
+ },
+ "models": {
+  "L": {"ref": "./rename_scope_leaf.esm", "index_set_rename": {"lev": "soil_lev"}},
+  "Root": {
+   "variables": {"z": {"type": "unknown", "units": "1", "description": "own state"}},
+   "equations": [
+    {"lhs": {"op": "ic", "args": ["z"]}, "rhs": 1.0},
+    {"lhs": {"op": "D", "args": ["z"], "wrt": "t"}, "rhs": 0.0}
+   ]
+  }
+ }
+}
