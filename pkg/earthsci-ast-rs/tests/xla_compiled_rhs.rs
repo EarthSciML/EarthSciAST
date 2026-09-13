@@ -70,8 +70,7 @@ fn repo_root() -> PathBuf {
 
 fn manifest() -> Value {
     let p = repo_root().join("tests/conformance/compiled_rhs/manifest.json");
-    let text = std::fs::read_to_string(&p)
-        .unwrap_or_else(|e| panic!("read {}: {e}", p.display()));
+    let text = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("read {}: {e}", p.display()));
     serde_json::from_str(&text).expect("manifest parses")
 }
 
@@ -91,11 +90,10 @@ fn runtime_available() -> bool {
 }
 
 fn build(path: &Path) -> ArrayCompiled {
-    let text = std::fs::read_to_string(path)
-        .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let text =
+        std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
     let file = load_string(&text).unwrap_or_else(|e| panic!("load {}: {e:?}", path.display()));
-    ArrayCompiled::from_file(&file)
-        .unwrap_or_else(|e| panic!("compile {}: {e:?}", path.display()))
+    ArrayCompiled::from_file(&file).unwrap_or_else(|e| panic!("compile {}: {e:?}", path.display()))
 }
 
 /// `|got - want| <= atol + rtol * |want|` with the manifest's classes. The
@@ -119,8 +117,14 @@ fn within(class: &str, got: f64, want: f64, scale: f64) -> bool {
 /// What one fixture did.
 enum Outcome {
     /// Lowered; carries the worst `|got - want| / tolerance` ratio seen.
-    Ok { worst: f64, probes: usize },
-    Refused { rule: String, reason: String },
+    Ok {
+        worst: f64,
+        probes: usize,
+    },
+    Refused {
+        rule: String,
+        reason: String,
+    },
 }
 
 fn run_fixture(fx: &Value) -> Outcome {

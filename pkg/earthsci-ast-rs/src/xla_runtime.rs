@@ -181,11 +181,7 @@ impl CompiledRhs {
         }
         let mut pv = vec![0.0f64; self.params_len];
         pv[..params.len()].copy_from_slice(params);
-        let args = [
-            Literal::vec1(state),
-            Literal::vec1(&pv),
-            Literal::scalar(t),
-        ];
+        let args = [Literal::vec1(state), Literal::vec1(&pv), Literal::scalar(t)];
         let out = self
             .exe
             .execute::<Literal>(&args)

@@ -573,10 +573,8 @@ impl<'a> Emitter<'a> {
                 )?;
                 let ex = self.wrap(a.exp(), "sinh: exp")?;
                 let en = self.wrap(a.neg().and_then(|n| n.exp()), "sinh: exp(-x)")?;
-                let big = self.wrap(
-                    ex.sub_(&en).and_then(|s| s.mul_(&half)),
-                    "sinh: plain form",
-                )?;
+                let big =
+                    self.wrap(ex.sub_(&en).and_then(|s| s.mul_(&half)), "sinh: plain form")?;
                 let thresh = self.splat_like(a, 0.5)?;
                 let absx = self.wrap(a.abs(), "sinh: |x|")?;
                 let use_big = self.wrap(absx.gt(&thresh), "sinh: select")?;
@@ -628,10 +626,7 @@ impl<'a> Emitter<'a> {
                 let num = self.wrap(two.mul_(a), "atanh: 2x")?;
                 let den = self.wrap(one.sub_(a), "atanh: 1-x")?;
                 let q = self.wrap(num.div_(&den), "atanh: ratio")?;
-                self.wrap(
-                    q.log1p().and_then(|l| l.mul_(&half)),
-                    "atanh: 0.5*log1p",
-                )
+                self.wrap(q.log1p().and_then(|l| l.mul_(&half)), "atanh: 0.5*log1p")
             }
             UnCode::Not => {
                 let p = self.wrap(a.eq(&zero), "not")?;
@@ -661,7 +656,7 @@ impl<'a> Emitter<'a> {
             } = &self.prog.instrs[pc]
             {
                 let (nt, nf) = (*n_true as usize, *n_false as usize);
-                let cond = cond.clone();
+                let cond = *cond;
                 let t_start = pc + 1;
                 let f_start = t_start + nt;
                 let f_end = f_start + nf;
@@ -1012,7 +1007,12 @@ impl<'a> Emitter<'a> {
                     bshape.push(plan.shape[a] as i64);
                 }
             }
-            if bshape.len() != cur_dims.len() || !mapped_axes.iter().enumerate().all(|(i, &a)| a as usize == i) {
+            if bshape.len() != cur_dims.len()
+                || !mapped_axes
+                    .iter()
+                    .enumerate()
+                    .all(|(i, &a)| a as usize == i)
+            {
                 cur = self.wrap(
                     cur.broadcast_in_dim(&bshape, &mapped_axes),
                     "gather: broadcast_in_dim",

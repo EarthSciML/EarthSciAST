@@ -41,8 +41,11 @@ use crate::simulate_array::ArrayCompiled;
 /// `xla_extension` release), so this is the answer an ordinary
 /// `cargo build --features conformance-adapters` gives, and it has to say how
 /// to get the other one.
-pub const COMPILED_UNAVAILABLE_REASON: &str =
-    "built without the `xla` feature: rebuild with --features conformance-adapters,xla      and XLA_EXTENSION_DIR pointing at an unpacked xla_extension release      (scripts/fetch-xla-extension.sh)";
+pub const COMPILED_UNAVAILABLE_REASON: &str = concat!(
+    "built without the `xla` feature: rebuild with ",
+    "--features conformance-adapters,xla and XLA_EXTENSION_DIR pointing at an ",
+    "unpacked xla_extension release (scripts/fetch-xla-extension.sh)"
+);
 
 /// Which right-hand-side engine the adapter was asked for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -239,9 +242,9 @@ fn state_vec(names: &[String], state: &Map<String, Value>) -> Result<Vec<f64>, S
 /// what the emitter can or cannot lower.
 #[cfg(feature = "xla")]
 fn compiled_unavailable_reason() -> Option<String> {
-    crate::xla_runtime::client().err().map(|e| {
-        format!("XLA runtime is not usable on this machine: {e}")
-    })
+    crate::xla_runtime::client()
+        .err()
+        .map(|e| format!("XLA runtime is not usable on this machine: {e}"))
 }
 
 #[cfg(not(feature = "xla"))]
