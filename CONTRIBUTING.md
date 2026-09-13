@@ -269,7 +269,8 @@ export XLA_EXTENSION_DIR=$HOME/.cache/earthsci/xla/xla_extension-0.10.0-cpu/xla_
 export LIBCLANG_PATH=/path/to/llvm/lib      # the xla crate's build script runs bindgen
 
 cd pkg/earthsci-ast-rs
-cargo test --features xla                   # the emitter's own tests
+cargo test --features xla --lib --tests     # the emitter's own tests (doctests need
+                                            # LD_LIBRARY_PATH=$XLA_EXTENSION_DIR/lib; see the crate README)
 cargo build --features conformance-adapters,xla \
   --bin earthsci-compiled-rhs-adapter-rust  # the compiled_rhs adapter
 ```

@@ -229,10 +229,20 @@ cargo test  --features xla
 ```
 
 `build.rs` bakes `$XLA_EXTENSION_DIR/lib` into this crate's binaries, tests,
-examples and benches as an rpath, so nothing has to carry `LD_LIBRARY_PATH`
-at run time (`readelf -d <binary> | grep RUNPATH` to check). A default build
-neither links the extension nor needs any of this: `cargo check --all-targets`
-with default features stays green on a machine that has never heard of XLA.
+examples and benches as an rpath, so none of those has to carry
+`LD_LIBRARY_PATH` at run time (`readelf -d <binary> | grep RUNPATH` to check).
+The one exception is doctests: rustdoc links its own test binary and a build
+script's link arguments do not reach it, so with the feature on that binary
+fails to load the extension. Either skip the doc step or give it the path:
+
+```bash
+cargo test --features xla --lib --tests                       # everything but doctests
+LD_LIBRARY_PATH="$XLA_EXTENSION_DIR/lib" cargo test --features xla --doc
+```
+
+A default build neither links the extension nor needs any of this:
+`cargo check --all-targets` with default features stays green on a machine
+that has never heard of XLA.
 
 `EARTHSCI_XLA_PLATFORM=gpu` selects a GPU PJRT client (needs the `cuda12`
 extension and a visible device); CPU is the default and the only configuration
