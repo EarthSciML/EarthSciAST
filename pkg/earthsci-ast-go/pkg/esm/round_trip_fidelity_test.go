@@ -162,10 +162,19 @@ var transformingFixtures = map[string]string{
 
 	// Subsystem `{"ref": ...}` resolution: the mount is replaced in place by
 	// the referenced file's spliced-in variables and equations.
-	"lib_calendar_subsystem_inclusion.esm": "subsystem ref resolution",
-	"lib_solar_subsystem_inclusion.esm":    "subsystem ref resolution",
-	"subsystem_index_set_merge.esm":        "subsystem ref resolution + index_sets merge",
-	"mount_rename_two_columns.esm":         "subsystem ref resolution + index_sets merge under a mount-edge index_set_rename",
+	"lib_calendar_subsystem_inclusion.esm":  "subsystem ref resolution",
+	"lib_solar_subsystem_inclusion.esm":     "subsystem ref resolution",
+	"subsystem_index_set_merge.esm":         "subsystem ref resolution + index_sets merge",
+	"mount_rename_two_columns.esm":          "subsystem ref resolution + index_sets merge under a mount-edge index_set_rename",
+	"mount_rename_two_columns_toplevel.esm": "top-level `models.<k>` {ref} resolution + index_sets merge under a mount-edge index_set_rename",
+
+	// An assembly mounted by another assembly: the mount form composes with
+	// itself, so the inner edge is consumed at load too and BOTH levels are
+	// gone from the resolved document (esm-spec §4.7 "Two mount forms, one
+	// mechanism").
+	"mount_chain_inner.esm":         "top-level `models.<k>` {ref} resolution under a mount-edge index_set_rename",
+	"mount_chain_outer.esm":         "two-level top-level `models.<k>` {ref} resolution",
+	"mount_chain_via_subsystem.esm": "subsystem ref resolution of an assembly, whose own top-level {ref} resolves through",
 
 	// Enum lowering (esm-spec §9.3): `enum` op nodes are resolved to `const`
 	// integers at load time.

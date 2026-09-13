@@ -132,3 +132,8 @@ docs/.hugo_build.lock
 # Hypothesis property-test database (local cache, not source)
 .hypothesis/
 .spikeenv/
+
+# Agent scratch: CI-audit working directories (raw job logs, sweep scripts,
+# per-shard timing dumps). A report worth keeping belongs in audits/ instead —
+# a set of these was committed by accident once, see audits/julia_ci_runtime_audit_2026-09-12.md.
+.ciaudit/
