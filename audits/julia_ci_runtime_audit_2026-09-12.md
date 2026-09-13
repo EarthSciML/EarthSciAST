@@ -2,6 +2,35 @@
 Branch `audit/julia-ci-runtime` (off main 1d17a4673). Nothing in the repo was modified.
 All timings from GitHub Actions `conformance-testing.yml`, runs of 2026-09-12.
 
+## What landed, and what did not
+
+The audit labelled its candidate changes `A1`–`A3` and `B1`; those labels are used
+below without definition, so for a later reader:
+
+| label | change | outcome |
+|---|---|---|
+| A1 | drop `needs: [julia-tests, …]` from `standard-conformance-testing`, so the cross-language gate runs CONCURRENTLY with the binding suites instead of after the slowest Julia leg | **landed** (PR #308) |
+| A2 | stop the Julia depot cache keying on `run_id` — every leg of every run wrote a ~1 GB entry no later run could ever hit, blowing the 10 GB limit — and restore always / save only on `main` | **landed** (PR #308) |
+| A3 | `@testset verbose = true` in `runtests.jl`, for a per-testset time table | **landed** (PR #308) |
+| B1 | split the Julia suite across a 2-way `shard` matrix axis | **reverted, not shipped** |
+
+Note that `B1` at §2b names something different — a codegen tier in the
+per-testset table — and is unrelated to the shard proposal.
+
+B1 was reverted for two reasons, in order of weight. First, it does not pay:
+measured combined execution across both shards was 39.7 min (1.10) and 58.1 min
+(1.12) against 25.5 / 37.4 min serial — about **55% more total work**, because the
+per-testset times include JIT that both shards re-pay. The per-leg win is only
+~5 min. Second, §3's own conclusion below already predicted this: after A1 + A2,
+Julia leads Rust by only ~7 min, so a 2-way shard just makes `rust-tests (stable)`
+the long pole and buys nothing.
+
+One piece of history worth keeping straight: the shard branch's CI run
+`34720087398` went red, and the cause was NOT sharding. It was a `ParseError` in
+the shard registry's own guard regex (`shard_partition_test.jl:63`, an unescaped
+`"` inside a raw-string literal that terminated it early); the suite was
+11796 passed / 0 failed / 1 errored. **That run is not evidence against sharding.**
+
 ## 1. Baseline — whole workflow
 
 | run | total | long pole | julia max leg | rust max leg | standard-conformance |
@@ -120,7 +149,7 @@ structural numbers above are.
 
 ### 2c. Coverage overhead — measured, and it is ~zero
 
-Minimal dev-linked env (`.ciaudit/env`: EarthSciAST + ForwardDiff + JSON3 + Test,
+Minimal dev-linked env (EarthSciAST + ForwardDiff + JSON3 + Test,
 julia 1.12.6), running the three slowest codegen testsets
 (cg_foreign_scratch + direct_class_emission + cross_eq_class_emission = 390 s of the
 1.12 CI leg), under `--check-bounds=yes` with and without
