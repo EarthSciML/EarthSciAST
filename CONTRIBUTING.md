@@ -339,9 +339,9 @@ python3 scripts/assert-compiled-rhs-available.py \
   conformance-results/compiled_rhs/rust_compiled_report.json rust
 
 # --- what the julia-xla job does ----------------------------------------
-env=pkg/EarthSciAST.jl/scripts/compiled_rhs_reactant_env
-julia --project=$env -e 'using Pkg; Pkg.develop(path="pkg/EarthSciAST.jl"); Pkg.instantiate(); Pkg.precompile()'
-ESM_TEST_REACTANT=1 julia --project=$env \
+renv=pkg/EarthSciAST.jl/scripts/compiled_rhs_reactant_env
+julia --project=$renv -e 'using Pkg; Pkg.develop(path="pkg/EarthSciAST.jl"); Pkg.instantiate(); Pkg.precompile()'
+ESM_TEST_REACTANT=1 julia --project=$renv \
   -e 'cd("pkg/EarthSciAST.jl/test"); include("reactant_direct_emit_test.jl")'
 
 EARTHSCI_COMPILED_RHS_ADAPTER_JULIA="julia pkg/EarthSciAST.jl/scripts/compiled_rhs_adapter.jl" \

@@ -97,6 +97,19 @@ jobs:
     name: Rust XlaBuilder backend
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    # Disk, not speed, is the binding constraint. `cargo test --lib --tests`
+    # links ~90 separate integration-test binaries against the whole crate
+    # graph, and on a dev profile the great majority of what that writes is
+    # debug info; a local cold run of exactly these steps left a target tree of
+    # tens of GB, against a GitHub-hosted runner that has rather less free.
+    # Full debug info buys nothing a CI log can use that `line-tables-only`
+    # does not -- backtraces keep their file and line numbers -- and
+    # incremental artifacts are pure waste in a job that never builds twice.
+    # (The `rust-tests` job in conformance-testing.yml records the same tree
+    # running a runner out of space when it tried to cache it.)
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
     steps:
       - uses: actions/checkout@v4
 
