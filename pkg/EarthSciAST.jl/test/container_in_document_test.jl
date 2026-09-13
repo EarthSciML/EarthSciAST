@@ -20,6 +20,7 @@
 # what the system contains. These fixtures are the two symptoms and a control.
 using Test
 using EarthSciAST
+include("testutils.jl")  # shared prelude: TESTUTILS_REPO_ROOT
 import ModelingToolkit
 import Catalyst
 import OrdinaryDiffEqTsit5
@@ -51,4 +52,53 @@ const _cid_dir = joinpath(@__DIR__, "fixtures", "container_in_document")
     @test "tendencies_at_t0" in ids
     @test "template_reference_at_t0" in ids
     @test "plain_read_at_t0" in ids
+end
+
+# ---------------------------------------------------------------------------
+# The two ways a DOCUMENT build can be worse than the per-container one it
+# replaced. Both are about a container paying for a SIBLING, which is exactly
+# the boundary this file is here to pin, so they belong with the fixtures above
+# rather than in a file of their own. They run against real corpus documents in
+# `tests/` — hand-cut fixtures would restate what those already say.
+# ---------------------------------------------------------------------------
+
+function _file_counts(relpath::AbstractString)
+    p = joinpath(TESTUTILS_REPO_ROOT, relpath)
+    isfile(p) || error("fixture missing: $(relpath)")
+    res = EarthSciAST.AssertionResult[]
+    EarthSciAST.run_file_tests!(res, p)
+    return res
+end
+
+@testset "a SPATIAL sibling does not take the document's other containers with it" begin
+    # `tests/valid/units_dimensional_analysis.esm` declares five models. One —
+    # `FluidMechanics` — carries `grad(P, dim: x)`, which puts `x` in the
+    # DOCUMENT's independent variables, and `ModelingToolkit.System` refuses a
+    # flattened system with spatial independent variables (it redirects to
+    # `PDESystem`, which this MTK engine has no route to). Spatiality is a
+    # property of the whole flatten, so a document build would turn all five
+    # containers' tests into that one redirect. The four purely temporal models
+    # keep their assertions.
+    res = _file_counts("tests/valid/units_dimensional_analysis.esm")
+    passed = count(r -> r.status == EarthSciAST.PASS, res)
+    @test passed >= 13
+    # The spatial container itself still gets the redirect it always got, and it
+    # is the ONLY container that errors.
+    errs = filter(r -> r.status == EarthSciAST.ERROR, res)
+    @test all(r -> r.container_name == "FluidMechanics", errs)
+    @test all(r -> occursin("PDESystem", r.message), errs)
+end
+
+@testset "an operator_compose merge does not hide the state a test names" begin
+    # esm-spec §4.7.1 step 4 / issue #230: a renaming match DELETES the spelling
+    # the test keys on (`Sink.O3` folded onto `Chem.ozone`). Only a DOCUMENT
+    # build ever sees the coupling that does it, so this became reachable the
+    # moment the build moved to document scope; the flatten records the survivor
+    # in `merged_variable_renames` and the handle resolution follows it, as the
+    # tree-walk engine already did.
+    res = _file_counts(
+        "tests/conformance/merged_rename_reach/fixtures/" *
+        "inline_test_names_the_merged_away_state.esm")
+    @test !isempty(res)
+    @test all(r -> r.status == EarthSciAST.PASS, res)
 end
