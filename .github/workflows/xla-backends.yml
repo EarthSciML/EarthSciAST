@@ -173,6 +173,7 @@ jobs:
         run: python3 scripts/run-compiled-rhs-conformance.py --self-test
 
       - name: compiled_rhs tier — Rust compiled producer
+        id: producer
         env:
           EARTHSCI_COMPILED_RHS_ADAPTER_RUST: cargo run --quiet --manifest-path pkg/earthsci-ast-rs/Cargo.toml --features conformance-adapters,xla --bin earthsci-compiled-rhs-adapter-rust --
         run: |
@@ -184,15 +185,21 @@ jobs:
       # The not-a-skip gate. See the header: the runner exits 0 on an
       # `unavailable` rust/compiled engine because the manifest lists rust as
       # optional there, which is exactly right for the main workflow and
-      # exactly wrong here. `!cancelled()` so a failed producer step above
-      # still gets its report read and named, rather than the reason
-      # disappearing behind a bare red step.
+      # exactly wrong here.
+      #
+      # The condition runs this whenever the producer step ITSELF ran, pass or
+      # fail -- a producer that exited non-zero still wrote a report, and
+      # reading it names the fixture and reason instead of leaving a bare red
+      # step. It does NOT run when the producer was skipped because something
+      # earlier failed (a build error, a missing extension): there is no report
+      # to read then, and a second red step saying "cannot read report" would
+      # only bury the real one.
       - name: Assert the Rust compiled engine actually ran
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.producer.outcome != 'skipped' }}
         run: python3 scripts/assert-compiled-rhs-available.py conformance-results/compiled_rhs/rust_compiled_report.json rust
 
       - name: Upload the compiled_rhs report
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.producer.outcome != 'skipped' }}
         uses: actions/upload-artifact@v4
         with:
           name: compiled-rhs-rust-${{ github.run_number }}
@@ -267,6 +274,7 @@ jobs:
         run: python3 scripts/run-compiled-rhs-conformance.py --self-test
 
       - name: compiled_rhs tier — Julia compiled producer
+        id: producer
         env:
           EARTHSCI_COMPILED_RHS_ADAPTER_JULIA: julia pkg/EarthSciAST.jl/scripts/compiled_rhs_adapter.jl
         run: |
@@ -275,12 +283,13 @@ jobs:
             --bindings julia --engine compiled \
             --output conformance-results/compiled_rhs/julia_compiled_report.json
 
+      # Same condition, and the same reasoning, as the rust job's gate above.
       - name: Assert the Julia compiled engine actually ran
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.producer.outcome != 'skipped' }}
         run: python3 scripts/assert-compiled-rhs-available.py conformance-results/compiled_rhs/julia_compiled_report.json julia
 
       - name: Upload the compiled_rhs report
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.producer.outcome != 'skipped' }}
         uses: actions/upload-artifact@v4
         with:
           name: compiled-rhs-julia-${{ github.run_number }}
