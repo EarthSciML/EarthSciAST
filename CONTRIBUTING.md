@@ -281,6 +281,69 @@ than failing, and the adapter answers `--engine compiled` with the tier's
 above the crate's declared 1.89, which is the other reason CI names its
 features explicitly instead of using `--all-features`.
 
+#### The two workflows, and which one gates XLA
+
+The compiled backends are tested by a workflow of their own, and the split is
+deliberate:
+
+| | `.github/workflows/conformance-testing.yml` | `.github/workflows/xla-backends.yml` |
+|---|---|---|
+| Runs on | every push/PR touching `pkg/**`, `tests/**`, `scripts/**` | only pushes/PRs touching the Rust crate, the Julia package, `tests/conformance/compiled_rhs/**`, the tier runner, or the fetch script |
+| `xla` cargo feature | **never** — every `--features` list there names its features explicitly and omits `xla` (and `--all-features` is likewise avoided) | `conformance-adapters,xla`, with `XLA_EXTENSION_DIR` exported from a cached fetch |
+| Reactant | never — `ESM_TEST_REACTANT` is unset, so the `reactant_*_test.jl` files are skipped by `runtests.jl` | set to `1` for `test/reactant_direct_emit_test.jl`, run standalone from the adapter's own env |
+| `compiled-RHS compiled producer` stages | report `unavailable` and **skip visibly** | required: `scripts/assert-compiled-rhs-available.py` fails the job unless the binding's status in the report JSON is `ok` |
+| Cost | minutes | a 144 MB XLA download (cached per pinned version), a full `xla`-feature crate build, and a Reactant precompile — the Julia job budgets 120 minutes |
+
+The skip in the main workflow is legal because
+`tests/conformance/compiled_rhs/manifest.json` leaves
+`engines.compiled.bindings_required` empty and lists julia and rust under
+`bindings_optional`. That also means the tier runner **exits 0 on a skip**,
+which is why `xla-backends.yml` asserts on the report rather than trusting the
+exit code. A *refusal* — a model an emitter cannot lower — is a hard failure in
+both workflows wherever the fixture lists the binding in `compiled_required`;
+optionality covers availability only.
+
+Running the same commands locally:
+
+```bash
+# --- what the rust-xla job does -----------------------------------------
+scripts/fetch-xla-extension.sh --variant cpu --dest "$HOME/xla-ext"
+export XLA_EXTENSION_DIR=$HOME/xla-ext/xla_extension-0.10.0-cpu/xla_extension
+export LIBCLANG_PATH=/path/to/llvm/lib   # CI uses the distro's libclang-dev
+
+cargo build --manifest-path pkg/earthsci-ast-rs/Cargo.toml \
+  --features conformance-adapters,xla
+cargo test --manifest-path pkg/earthsci-ast-rs/Cargo.toml \
+  --features conformance-adapters,xla --lib --tests
+LD_LIBRARY_PATH=$XLA_EXTENSION_DIR/lib cargo test \
+  --manifest-path pkg/earthsci-ast-rs/Cargo.toml \
+  --features conformance-adapters,xla --doc
+
+python3 scripts/run-compiled-rhs-conformance.py --self-test
+EARTHSCI_COMPILED_RHS_ADAPTER_RUST="cargo run --quiet --manifest-path pkg/earthsci-ast-rs/Cargo.toml --features conformance-adapters,xla --bin earthsci-compiled-rhs-adapter-rust --" \
+  python3 scripts/run-compiled-rhs-conformance.py --bindings rust --engine compiled \
+    --output conformance-results/compiled_rhs/rust_compiled_report.json
+python3 scripts/assert-compiled-rhs-available.py \
+  conformance-results/compiled_rhs/rust_compiled_report.json rust
+
+# --- what the julia-xla job does ----------------------------------------
+env=pkg/EarthSciAST.jl/scripts/compiled_rhs_reactant_env
+julia --project=$env -e 'using Pkg; Pkg.develop(path="pkg/EarthSciAST.jl"); Pkg.instantiate(); Pkg.precompile()'
+ESM_TEST_REACTANT=1 julia --project=$env \
+  -e 'cd("pkg/EarthSciAST.jl/test"); include("reactant_direct_emit_test.jl")'
+
+EARTHSCI_COMPILED_RHS_ADAPTER_JULIA="julia pkg/EarthSciAST.jl/scripts/compiled_rhs_adapter.jl" \
+  python3 scripts/run-compiled-rhs-conformance.py --bindings julia --engine compiled \
+    --output conformance-results/compiled_rhs/julia_compiled_report.json
+python3 scripts/assert-compiled-rhs-available.py \
+  conformance-results/compiled_rhs/julia_compiled_report.json julia
+```
+
+`Pkg.test()` on the Julia package is *not* how the emitter's tests are run:
+the full target is heavy, and `reactant_direct_emit_test.jl` is written to run
+standalone from the adapter's Reactant environment (its own header documents
+the invocation above). Everything runs from the repository root.
+
 ### Go (earthsci-ast-go)
 
 - **Standards**: gofmt, go vet, standard Go conventions
