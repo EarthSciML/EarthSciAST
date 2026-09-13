@@ -29,6 +29,16 @@
 //! * [`Instr::Ramp`] is the coordinate-ramp idiom of `eval_vec_variable`.
 //! * [`Instr::Region`] is one `eval_vec_makearray` region write (later regions
 //!   overwrite earlier ones).
+//! * [`Instr::ConstArray`] materializes an inline array literal: the elements
+//!   `eval_const`/`json_to_value` produce for that node, in row-major order,
+//!   already precision-rounded at ingress — the same `f64`s the interpreter
+//!   would have read out of the same `Value::Array`.
+//! * [`Instr::Reduce`] folds a source box down over a set of axes with a
+//!   binary kernel, visiting the source in ROW-MAJOR order. That order is the
+//!   per-cell oracle's contraction odometer (`CartesianTuples`, LAST name
+//!   fastest) from the reduction identity, which is what makes a scalar
+//!   reduction bit-identical to `reduce_contraction`'s `acc = combine(acc,
+//!   term)` loop.
 //!
 //! Array operands within one instruction share one box (shape + 1-based
 //! origin), checked at lowering time — the same precondition `vec_combine`
@@ -142,6 +152,46 @@ pub(crate) enum Instr {
         region: u32,
         out: SlotId,
     },
+    /// Materialize the inline array literal `const_data[data]` into `out`:
+    /// a straight row-major store of the literal's elements, origin all-1s.
+    ///
+    /// One instruction regardless of the literal's size — the payload lives in
+    /// [`TapeProgram::const_data`], not in the instruction stream — and it is
+    /// classified CONST, so a solve stores each literal exactly once. (An
+    /// XlaBuilder emitter lowers this to a `ConstantLiteral` of the same
+    /// row-major buffer.)
+    ConstArray { data: u32, out: SlotId },
+    /// Reduce `src` over `axes` with `op`'s kernel, from `init`:
+    ///
+    /// ```text
+    /// out[*] = init
+    /// for k in ROW-MAJOR order of src_shape:
+    ///     out[drop(k, axes)] = kernel(op)(out[drop(k, axes)], src[k])
+    /// ```
+    ///
+    /// `axes` is ascending and duplicate-free; `out`'s box is `src_shape` with
+    /// those axes dropped (a scalar slot when every axis is reduced, which is
+    /// the rank-0 `faq` case). `init` is always the reduction's identity.
+    ///
+    /// **The visiting order is load-bearing.** Floating-point `+` is not
+    /// associative, so a reduction is only bit-identical to the interpreter if
+    /// it folds the same terms in the same order. Row-major (last axis
+    /// fastest) over the contraction box IS the per-cell oracle's
+    /// `CartesianTuples` odometer over the contracted names, and the tape
+    /// lowers the contraction box with its axes in that same name order. An
+    /// emitter that cannot promise this order (XLA's `reduce` leaves the
+    /// association to the backend) is free to emit it anyway — but then it is
+    /// no longer bitwise-pinned to the interpreter, only numerically equal.
+    Reduce {
+        op: BinCode,
+        init: f64,
+        src: SrcRef,
+        /// Source axes folded away, ASCENDING and duplicate-free.
+        axes: SmallVec<[u8; 4]>,
+        /// The expected source box (validation).
+        src_shape: DimU,
+        out: SlotId,
+    },
     /// Scalar-`ifelse` short circuit: if `cond != 0`, execute the next
     /// `n_true` instructions then skip the following `n_false`; else skip
     /// `n_true` and execute the following `n_false`. The untaken branch is
@@ -184,7 +234,9 @@ impl Instr {
             | Instr::Ramp { out, .. }
             | Instr::Fill { out, .. }
             | Instr::Copy { out, .. }
-            | Instr::Region { out, .. } => Some(*out),
+            | Instr::Region { out, .. }
+            | Instr::ConstArray { out, .. }
+            | Instr::Reduce { out, .. } => Some(*out),
             Instr::JmpIfZero { .. }
             | Instr::Fallback { .. }
             | Instr::Export { .. }
@@ -233,12 +285,14 @@ impl Instr {
                 op(a);
                 op(b);
             }
-            Instr::Gather { src, .. } | Instr::LoadElem { src, .. } => {
+            Instr::Gather { src, .. }
+            | Instr::LoadElem { src, .. }
+            | Instr::Reduce { src, .. } => {
                 if let SrcRef::Slot(s) = src {
                     f(*s);
                 }
             }
-            Instr::Ramp { .. } => {}
+            Instr::Ramp { .. } | Instr::ConstArray { .. } => {}
             Instr::Fill { v, .. } => op(v),
             Instr::Copy { a, .. } => op(a),
             Instr::Region { base, src, .. } => {
@@ -276,6 +330,8 @@ impl Instr {
             Instr::Fill { .. } => "Fill",
             Instr::Copy { .. } => "Copy",
             Instr::Region { .. } => "Region",
+            Instr::ConstArray { .. } => "ConstArray",
+            Instr::Reduce { .. } => "Reduce",
             Instr::JmpIfZero { .. } => "JmpIfZero",
             Instr::Fallback { .. } => "Fallback",
             Instr::Export { .. } => "Export",
@@ -536,6 +592,18 @@ pub(crate) struct GatherPlan {
     pub src_origin: DimI,
 }
 
+/// The payload of one [`Instr::ConstArray`]: an inline array literal's
+/// elements, materialized once at build time by `eval_const` and stored
+/// row-major (the layout every slab slot uses). Held on the program rather
+/// than in the instruction so the instruction stream stays O(1) per literal.
+#[derive(Clone, Debug)]
+pub(crate) struct ConstArrayData {
+    pub shape: DimU,
+    /// Row-major elements, exactly as `json_to_value` produced them
+    /// (precision-rounded at ingress under `element_type: "Float32"`).
+    pub values: Vec<f64>,
+}
+
 /// One makearray region: placement of a region write within its bounding box.
 #[derive(Clone, Debug)]
 pub(crate) struct RegionSpec {
@@ -636,6 +704,8 @@ pub(crate) struct TapeProgram {
     pub slots: Vec<SlotDesc>,
     pub plans: Vec<GatherPlan>,
     pub regions: Vec<RegionSpec>,
+    /// Inline array-literal payloads (`Instr::ConstArray` indexes here).
+    pub const_data: Vec<ConstArrayData>,
     pub state_vars: Vec<StateRef>,
     /// Observed names resolved through the runtime observed map
     /// (`Operand::Obs`/`SrcRef::Obs` index here).

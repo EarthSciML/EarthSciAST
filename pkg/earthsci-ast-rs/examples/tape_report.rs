@@ -7,6 +7,7 @@
 //! Trailing `KEY=VALUE` pairs are integer metaparameters (e.g. `NX=12 NY=7`);
 //! with none, the file's own defaults apply (the production grid).
 
+use earthsci_ast::flatten;
 use earthsci_ast::load_path_with_options;
 use earthsci_ast::simulate_array::ArrayCompiled;
 use std::collections::BTreeMap;
@@ -38,7 +39,16 @@ fn main() -> Result<(), String> {
     );
 
     let t1 = Instant::now();
-    let compiled = ArrayCompiled::from_file(&file).map_err(|e| format!("compile: {e:?}"))?;
+    // Mirror the production entry (`simulate::driver`): a multi-model document
+    // is flattened into one dot-namespaced system first, so the coupled
+    // corpus reaches the tape instead of failing at `from_file`.
+    let n_models = file.models.as_ref().map_or(0, |m| m.len());
+    let compiled = if n_models > 1 {
+        let flat = flatten(&file).map_err(|e| format!("flatten: {e:?}"))?;
+        ArrayCompiled::from_flattened(&flat).map_err(|e| format!("compile: {e:?}"))?
+    } else {
+        ArrayCompiled::from_file(&file).map_err(|e| format!("compile: {e:?}"))?
+    };
     eprintln!(
         "[info] ArrayCompiled::from_file in {:.2} s ({} state slots)",
         t1.elapsed().as_secs_f64(),
