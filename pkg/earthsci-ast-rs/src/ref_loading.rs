@@ -521,6 +521,25 @@ fn inline_toplevel_model_refs(
                 .collect();
             bindings.extend(read_edge_bindings(entry_obj, parent_meta, &mount_noun)?);
 
+            // §4.7: a `{ref}` resolves "before validation or any other
+            // processing", so the leaf's OWN nested refs — of either mount form,
+            // in the leaf's directory — are inlined HERE, before the §9.6.3
+            // fixpoint below. A leaf's template scope reaches the components it
+            // mounts (a rule declared in its own `expression_template_imports`
+            // lowers a rewrite-target inside its `subsystems.<k>`), and §9.7.10
+            // defines the edge injection as "as if the target had added those
+            // entries to the end of its own `expression_template_imports`" — so
+            // the fixpoint must see the mounted content for the two to agree.
+            // Resolving them after it left a nested rewrite-target unlowerable
+            // from any mount edge (issue #311).
+            //
+            // Nested edge `bindings` fold against the leaf's own closed
+            // metaparameter environment — its declared defaults overlaid with
+            // this edge's close — which is exactly what a STANDALONE load of the
+            // leaf hands them (`root_metaparameter_env` in `load_with_meta`).
+            let leaf_env = root_metaparameter_env(&comp, &bindings);
+            walk_top_level(&mut comp, &leaf_dir, visited, &leaf_env, &BTreeMap::new())?;
+
             // §9.7.10 form A: the edge's `expression_template_imports` inject a
             // discretization into the leaf's own scope BEFORE resolution, so the
             // §9.6.3 fixpoint lowers its rewrite-targets at the mount. Their own
@@ -554,24 +573,11 @@ fn inline_toplevel_model_refs(
 
             // Step (2): `index_set_rename` speaks the resolved leaf's own
             // post-resolution vocabulary, so it applies HERE — after the close
-            // and fold above, before the leaf's nested mounts contribute (each
-            // nested edge renames what IT brings, at its own edge).
+            // and fold above.
             crate::template_imports::apply_mount_index_set_rename(
                 &mut comp,
                 entry_obj,
                 &format!("top-level model ref '{ref_str}'"),
-            )?;
-
-            // The leaf's own nested refs, of EITHER mount form, in the leaf's
-            // directory. Its metaparameters closed and folded just above, so its
-            // nested edge bindings arrive already concrete and fold against an
-            // empty environment (esm-spec §9.7.6: refs resolve post-close).
-            walk_top_level(
-                &mut comp,
-                &leaf_dir,
-                visited,
-                &BTreeMap::new(),
-                &BTreeMap::new(),
             )?;
 
             let sel = entry_obj.get("model").and_then(|v| v.as_str());
@@ -910,6 +916,18 @@ fn resolve_value(
             crate::lower_expression_templates::reject_expression_templates_pre_v04(&parsed)?;
             crate::template_imports::reject_template_imports_pre_v08(&parsed)?;
             let bindings = read_edge_bindings(obj, parent_meta, "subsystem ref")?;
+            // esm-spec §4.7: a `{ref}` resolves "before validation or any other
+            // processing", so the referenced document's OWN nested refs are
+            // inlined HERE, before the §9.6.3 fixpoint below — otherwise a
+            // rewrite-target inside a component the leaf itself mounts is
+            // unlowerable from this edge, while the same library declared in the
+            // leaf's own `expression_template_imports` does lower it (#311).
+            // §9.7.10 defines the injection as "as if the target had added those
+            // entries to the end of its own `expression_template_imports`", so
+            // the two MUST agree. Nested edge `bindings` fold against the leaf's
+            // own closed environment, as a standalone load would give them.
+            let leaf_env = root_metaparameter_env(&parsed, &bindings);
+            walk_top_level(&mut parsed, &parent_dir, visited, &leaf_env, &BTreeMap::new())?;
             // esm-spec §9.7.10 form A: the edge's `expression_template_imports`
             // inject a discretization into the referenced component's own
             // scope, appended BEFORE resolution so the §9.6.3 fixpoint lowers
@@ -965,18 +983,9 @@ fn resolve_value(
         // today, but a path left marked visited would silently skip the file
         // if resolution ever becomes partially recoverable.
         let nested_result = (|| -> Result<(), DiagnosticError> {
-            // The referenced document's own metaparameters were just closed and
-            // folded by `resolve_template_machinery` above, so any binding on
-            // its OWN nested subsystem refs arrives with metaparameter names
-            // already substituted to concrete integers — its refs fold against
-            // an empty environment (esm-spec §9.7.6: refs resolve post-close).
-            walk_top_level(
-                &mut parsed,
-                &parent_dir,
-                visited,
-                &BTreeMap::new(),
-                &BTreeMap::new(),
-            )?;
+            // The leaf's own nested refs were inlined inside the edge closure
+            // above, before the fixpoint (#311); what remains here is the
+            // bottom-up index-set merge into the importing document.
             if let Some(reg) = registry
                 && let Some(loaded) = parsed.get("index_sets").and_then(|v| v.as_object())
             {
