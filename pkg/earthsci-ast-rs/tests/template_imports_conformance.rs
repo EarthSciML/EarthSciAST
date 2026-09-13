@@ -1412,4 +1412,12 @@ fn mount_edge_injection_reaches_the_leafs_own_nested_subsystem() {
     let f = load_path(dir.join("nested_subsystem_mount.esm"))
         .expect("a subsystems.<k> mount-edge injection must reach the leaf's nested subsystem");
     unlowered(&f, "subsystems.<k> mount edge");
+
+    // TWO mounts below the edge. The reordering is recursive — every edge
+    // resolves its own nested mounts before its own fixpoint — so an injection
+    // reaches the whole subtree the edge mounts, not just its first level.
+    // Without this the fix would read as a one-level special case.
+    let f = load_path(dir.join("nested_depth2_mount.esm"))
+        .expect("a mount-edge injection must reach a rewrite target two mounts down");
+    unlowered(&f, "two levels below the mount edge");
 }

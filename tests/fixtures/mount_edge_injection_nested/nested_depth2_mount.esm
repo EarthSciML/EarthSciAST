@@ -1,0 +1,18 @@
+{
+ "esm": "1.0.0",
+ "metadata": {
+  "name": "nested_depth2_mount",
+  "description": "A subsystems.<k> mount-edge injection whose rewrite target sits TWO mounts below the edge. The injection reaches it for the same reason it reaches one level down: each edge resolves its own nested mounts before its fixpoint, so the leaf's scope reaches its whole subtree.",
+  "license": "MIT"
+ },
+ "models": {
+  "Root": {
+   "subsystems": {"L": {"ref": "./nested_depth2_leaf.esm", "expression_template_imports": [{"ref": "./nested_lowering_lib.esm"}]}},
+   "variables": {"z": {"type": "unknown", "units": "1", "description": "trivial own state"}},
+   "equations": [
+    {"lhs": {"op": "ic", "args": ["z"]}, "rhs": 1.0},
+    {"lhs": {"op": "D", "args": ["z"], "wrt": "t"}, "rhs": 0.0}
+   ]
+  }
+ }
+}
