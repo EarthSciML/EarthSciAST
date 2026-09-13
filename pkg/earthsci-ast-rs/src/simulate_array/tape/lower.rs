@@ -2224,9 +2224,9 @@ impl<'m> TapeBuilder<'m> {
                 }
                 Some(acc)
             }
-            "neg" | "exp" | "log" | "ln" | "log10" | "sqrt" | "abs" | "sign" | "floor"
-            | "ceil" | "sin" | "cos" | "tan" | "asin" | "acos" | "atan" | "sinh" | "cosh"
-            | "tanh" | "asinh" | "acosh" | "atanh" | "not" | "Pre" => {
+            "neg" | "exp" | "log" | "ln" | "log10" | "sqrt" | "abs" | "sign" | "floor" | "ceil"
+            | "sin" | "cos" | "tan" | "asin" | "acos" | "atan" | "sinh" | "cosh" | "tanh"
+            | "asinh" | "acosh" | "atanh" | "not" | "Pre" => {
                 self.wholesale_shape(node.args.first()?)
             }
             // The oracle picks ONE branch at run time, so the shape is pinned
@@ -2291,7 +2291,6 @@ impl<'m> TapeBuilder<'m> {
             _ => None,
         }
     }
-
 
     fn begin_rule(&mut self, info: RuleInfo) {
         self.cur_rule = self.rules.len() as u32;

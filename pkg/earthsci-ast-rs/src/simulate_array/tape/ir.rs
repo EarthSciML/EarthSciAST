@@ -285,9 +285,7 @@ impl Instr {
                 op(a);
                 op(b);
             }
-            Instr::Gather { src, .. }
-            | Instr::LoadElem { src, .. }
-            | Instr::Reduce { src, .. } => {
+            Instr::Gather { src, .. } | Instr::LoadElem { src, .. } | Instr::Reduce { src, .. } => {
                 if let SrcRef::Slot(s) = src {
                     f(*s);
                 }

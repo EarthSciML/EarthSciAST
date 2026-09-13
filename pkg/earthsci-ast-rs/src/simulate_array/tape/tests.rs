@@ -1757,10 +1757,7 @@ fn unary_broadcast_minus_negates() {
 
 /// How many instructions of a given opcode the program carries.
 fn opcount(prog: &TapeProgram, opcode: &str) -> usize {
-    prog.instrs
-        .iter()
-        .filter(|i| i.opcode() == opcode)
-        .count()
+    prog.instrs.iter().filter(|i| i.opcode() == opcode).count()
 }
 
 /// An array-valued `const` observed, consumed elementwise and through a
@@ -1791,7 +1788,11 @@ fn ab_const_array_observed() {
         }}
     });
     let prog = ab_check(doc, 0, -2.0, 2.0);
-    assert_eq!(opcount(&prog, "ConstArray"), 1, "the literal is stored once");
+    assert_eq!(
+        opcount(&prog, "ConstArray"),
+        1,
+        "the literal is stored once"
+    );
     assert_eq!(prog.const_data.len(), 1);
     assert_eq!(&prog.const_data[0].shape[..], &[4]);
     assert_eq!(&prog.const_data[0].values, &[0.25, -1.5, 2.0, 3.75]);
@@ -1999,8 +2000,9 @@ fn ab_reader_of_a_fallback_producer_stays_taped() {
 /// reduction), loaded from the corpus rather than restated here.
 #[test]
 fn ab_elementwise_observed_gather_fixture() {
-    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/conformance/elementwise_observed_gather/fixtures/elementwise_gather.esm");
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(
+        "../../tests/conformance/elementwise_observed_gather/fixtures/elementwise_gather.esm",
+    );
     let file = crate::parse::load_path(&path).expect("corpus fixture loads");
     let compiled = ArrayCompiled::from_file(&file).expect("fixture compiles");
     for (label, fuse) in [("fused", Some(default_cfg())), ("unfused", None)] {
