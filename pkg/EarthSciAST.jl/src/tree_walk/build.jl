@@ -3959,6 +3959,25 @@ const _CASCADE_TALLY = Dict{Symbol,Int}()
 _tally_cascade!(k::Symbol) = (_CASCADE_TALLY[k] = get(_CASCADE_TALLY, k, 0) + 1; nothing)
 _reset_cascade_tally!() = (empty!(_CASCADE_TALLY); nothing)
 
+# One-line identity of a faq equation for the `ESS_STENCIL_DEBUG=1` notices: the
+# derivative target and its output axes with their extents, e.g.
+# `D(conc)[rcv=1024]`. Showing the LHS expression instead prints every field of
+# every node it contains — several hundred characters that identify the equation
+# no better than this does, and that bury the notice they are part of.
+function _faq_debug_label(lhs_body, idx_names::Vector{String}, range_iters)
+    name = "?"
+    if lhs_body isa OpExpr && lhs_body.op == "D" && !isempty(lhs_body.args)
+        inner = lhs_body.args[1]
+        if inner isa OpExpr && inner.op == "index" && !isempty(inner.args)
+            ve = inner.args[1]
+            ve isa VarExpr && (name = ve.name)
+        end
+    end
+    axes = join(("$(idx_names[d])=$(length(range_iters[d]))"
+                 for d in eachindex(idx_names)), ",")
+    return "D($(name))[$(axes)]"
+end
+
 function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
         array_contractions, covered::BitVector,
         eq::Equation, resolved_obs::Dict{String,ASTExpr},
@@ -4248,8 +4267,9 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
         # declines — a cascade tally can say which tier won, never which one
         # nearly did.
         get(ENV, "ESS_STENCIL_DEBUG", "") == "1" &&
-            (println(stderr, "[ess-array-contraction] DECLINED -> per-cell: ",
-                     "lhs=", sprint(show, lhs_body), " out_idx=", idx_names,
+            (println(stderr, "[ess-array-contraction] DECLINED ",
+                     "(symbolic body did not lower) -> per-cell: ",
+                     _faq_debug_label(lhs_body, idx_names, range_iters),
                      " contracted=", prod(length(c) for c in contract_const));
              flush(stderr))
     end
@@ -4265,9 +4285,8 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
     # IR and the fires are what you wanted. Name the equation that fell back, so a
     # cascade tally reading `:percell_acc => 1` can be turned into "which one".
     get(ENV, "ESS_STENCIL_DEBUG", "") == "1" &&
-        (println(stderr, "[ess-affine] DECLINED -> per-cell: lhs=",
-                 sprint(show, lhs_body), " out_idx=", idx_names,
-                 " ranges=", [(n, length(r)) for (n, r) in zip(idx_names, range_iters)]);
+        (println(stderr, "[ess-affine] DECLINED (no affine model) -> per-cell: ",
+                 _faq_debug_label(lhs_body, idx_names, range_iters));
          flush(stderr))
     _compile_faq_percell!(percell_scalar, acc_kernels, covered, lhs_body, rhs_body;
         idx_names=idx_names, range_iters=range_iters,
