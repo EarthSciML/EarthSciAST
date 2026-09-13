@@ -269,6 +269,22 @@ end
         @test leaf[:index_sets][:records][:size] == "N_REC"
     end
 
+    @testset "an unrelated assembler metaparameter is withheld from the leaf" begin
+        # The backfill's PER-NAME filter, driven from the SHARED fixture the
+        # other four bindings drive, rather than only from this file's inline
+        # one. The assembler declares `N_OTHER` and the leaf it mounts declares
+        # `N_REC`, so the loader-API map carries one name the leaf must receive
+        # and one it must not. A filter that withholds the whole map from a leaf
+        # declaring NOTHING looks correct against every other fixture here and
+        # still lets an assembler's unrelated metaparameter through to a leaf
+        # that declares something — which is how an unbound `NLEV: default 12`
+        # silently resizes a leaf axis the edge never bound (esm-spec §4.7, the
+        # PR #298 precedence invariant).
+        f = _extent_load("assembler_partial_overlap_root.esm";
+                         metaparameters=Dict("N_REC" => 3, "N_OTHER" => 7))
+        @test _extent_records(f).size == 3
+    end
+
     @testset "an extent naming a re-exported metaparameter loads" begin
         # The name reaches this document by §9.7.6 site-2 RE-EXPORT, not by
         # declaration and not through a mount. The document declares no
