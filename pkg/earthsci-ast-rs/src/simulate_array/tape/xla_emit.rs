@@ -52,6 +52,18 @@
 //! A fused group is a scalar micro-program over a register file — precisely
 //! the shape XLA's own fusion wants to choose for itself.
 //!
+//! ## Reductions are numerically, not bitwise, equal
+//!
+//! [`Instr::Reduce`] carries a load-bearing visiting order — row-major over
+//! the contraction box, which IS the per-cell oracle's odometer — because
+//! floating-point `+` is not associative. XLA's `reduce` does NOT pin the
+//! association: the backend is free to split the fold into lanes and combine
+//! them in any order. So a compiled reduction is bit-identical to the
+//! interpreter only by luck, and this emitter does not claim otherwise. The
+//! tier's `reduction` tolerance class (rtol 1e-11, atol scaled by the probe's
+//! largest magnitude) is what that lowering is measured against, and it was
+//! written for exactly this kind of summation-order difference.
+//!
 //! ## When the tape grows
 //!
 //! The instruction match ends in a catch-all arm that REFUSES with a message
@@ -352,9 +364,17 @@ impl<'a> Emitter<'a> {
     /// A scalar constant with `like`'s shape (so every binary op below has two
     /// operands of exactly the same shape and never leans on XLA's implicit
     /// rank-0 broadcast).
+    ///
+    /// The constant is built on `like`'s OWN builder, not on `self.b`. That is
+    /// what lets [`Self::bin`] and [`Self::un`] be reused inside a `reduce`
+    /// sub-computation, which lives on a separate [`XlaBuilder`]; mixing ops
+    /// from two builders is an error XLA reports far from its cause.
     fn splat_like(&self, like: &XlaOp, v: f64) -> R<XlaOp> {
         let d = self.dims(like)?;
-        let c = self.c(v)?;
+        let c = like
+            .builder()
+            .c0(v)
+            .map_err(|e| self.err(format!("constant: {e}")))?;
         if d.is_empty() {
             return Ok(c);
         }
@@ -895,6 +915,60 @@ impl<'a> Emitter<'a> {
                 let w = self.prog.dy_writes[*write as usize].clone();
                 self.emit_dy_write(&w)?;
             }
+            Instr::ConstArray { data, out } => {
+                let payload = &self.prog.const_data[*data as usize];
+                let dims = self.out_dims(*out);
+                if payload.shape.as_slice() != dims.as_slice() {
+                    return Err(self.err(format!(
+                        "ConstArray literal has shape {:?} but its slot's box is {dims:?}",
+                        &payload.shape[..]
+                    )));
+                }
+                // Row-major elements, which is the layout every slot uses, so
+                // the literal goes in as a flat r1 constant and is reshaped.
+                let flat = self.wrap(
+                    self.b.constant_r1(&payload.values[..]),
+                    "const array: literal",
+                )?;
+                let v = if dims.is_empty() {
+                    self.wrap(flat.reshape(&[]), "const array: reshape to scalar")?
+                } else {
+                    let d: Vec<i64> = dims.iter().map(|&x| x as i64).collect();
+                    self.wrap(flat.reshape(&d), "const array: reshape")?
+                };
+                self.define(*out, v);
+            }
+            Instr::Reduce {
+                op,
+                init,
+                src,
+                axes,
+                src_shape,
+                out,
+            } => {
+                let s = self.src(src)?;
+                let have = self.dims(&s)?;
+                if have != src_shape.as_slice() {
+                    return Err(self.err(format!(
+                        "reduce source has shape {have:?} but the instruction expects {:?}",
+                        &src_shape[..]
+                    )));
+                }
+                let comp = self.reduce_computation(*op)?;
+                let init_op = self.c(*init)?;
+                let dims: Vec<i64> = axes.iter().map(|&a| a as i64).collect();
+                let v = self.wrap(s.reduce(init_op, comp, &dims, false), "reduce")?;
+                // `keep_dims = false` drops exactly `axes`, which is how the
+                // tape defines the output box; check rather than trust.
+                let got = self.dims(&v)?;
+                let want = self.out_dims(*out);
+                if got != want {
+                    return Err(self.err(format!(
+                        "reduce produced shape {got:?} but its slot's box is {want:?}"
+                    )));
+                }
+                self.define(*out, v);
+            }
             Instr::Fallback { rule } => {
                 let info = &self.prog.rules[*rule as usize];
                 let reason = match &info.status {
@@ -922,11 +996,11 @@ impl<'a> Emitter<'a> {
                 ));
             }
             // ---- WHERE NEW TAPE INSTRUCTIONS PLUG IN --------------------
-            // The tape is growing in parallel (array constants, carried
-            // observed shapes, rank-0 reductions). Anything this emitter has
-            // not learned lands here and is REFUSED by name, so the gap shows
-            // up as a named refusal in the conformance report instead of as
-            // wrong numbers. Add the arm above, not a special case here.
+            // `ConstArray` and `Reduce` arrived this way and are lowered
+            // above. Anything this emitter has not learned lands here and is
+            // REFUSED by name, so the gap shows up as a named refusal in the
+            // conformance report instead of as wrong numbers. Add the arm
+            // above, not a special case here.
             #[allow(unreachable_patterns)]
             other => {
                 return Err(self.err(format!(
@@ -1179,6 +1253,22 @@ impl<'a> Emitter<'a> {
         };
         self.blocks[vi] = Some(next);
         Ok(())
+    }
+
+    /// The scalar `(a, b) -> kernel(op)(a, b)` sub-computation an
+    /// [`Instr::Reduce`] folds with, on its own [`XlaBuilder`] (XLA requires
+    /// the reducer to be a separate computation).
+    fn reduce_computation(&self, op: BinCode) -> R<XlaComputation> {
+        let rb = XlaBuilder::new("reduce_kernel");
+        let a = rb
+            .parameter(0, f64::TY, &[], "a")
+            .map_err(|e| self.err(format!("reduce kernel parameter a: {e}")))?;
+        let b = rb
+            .parameter(1, f64::TY, &[], "b")
+            .map_err(|e| self.err(format!("reduce kernel parameter b: {e}")))?;
+        let body = self.bin(op, &a, &b)?;
+        body.build()
+            .map_err(|e| self.err(format!("reduce kernel build: {e}")))
     }
 
     /// The variable whose flat block contains `flat`.

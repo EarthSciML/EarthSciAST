@@ -34,14 +34,15 @@ use serde_json::Value;
 /// Fixture ids the emitter is expected to lower completely. Anything else in
 /// the manifest must refuse, by name — see assertion 3 in the module docs.
 ///
-/// The four the manifest carries and this list does not —
-/// `elementwise_gather`, `explicit_gather`, `pde_inline_observed_rank2`,
-/// `pde_inline_observed_param_rank2` — all refuse for the SAME reason, and it
-/// is a gap in the TAPE, not in this emitter: their `const` data is
-/// array-valued, which the lowering bails on wholesale, so the rule reaches
-/// the emitter as a `Fallback`. They move into this list when the tape grows
-/// an array-constant instruction, with no change here beyond the move.
+/// As of the `Instr::ConstArray` / `Instr::Reduce` tape growth this is EVERY
+/// fixture in the tier. The four that used to refuse — `elementwise_gather`,
+/// `explicit_gather`, `pde_inline_observed_rank2`,
+/// `pde_inline_observed_param_rank2` — did so because their `const` data was
+/// array-valued, which the lowering bailed on wholesale; the emitter needed no
+/// change beyond an arm for the new instruction.
 const EXPECTED_LOWERED: &[&str] = &[
+    "elementwise_gather",
+    "explicit_gather",
     "diffusion_1d_dirichlet_n4",
     "diffusion_1d_neumann_n4",
     "diffusion_1d_zero_gradient_n4",
@@ -53,6 +54,8 @@ const EXPECTED_LOWERED: &[&str] = &[
     "events_cross_system_meteorology",
     "expr_graphs_variable_deps",
     "pde_inline_observed_indexed_lhs",
+    "pde_inline_observed_rank2",
+    "pde_inline_observed_param_rank2",
     "pde_inline_observed_state_dependent",
     "mount_rename_atm_column",
     "mount_rename_soil_column",
@@ -228,21 +231,27 @@ fn compiled_rhs_matches_the_interpreter_over_the_tier() {
 }
 
 /// A model with a `Fallback` rule is a HARD refusal naming the rule, never a
-/// mixed run and never a silent pass. `elementwise_gather` is the tier's
-/// standing example: its `faq` prefix sum is not on the tape today.
+/// mixed run and never a silent pass.
+///
+/// The fixture is a CAUSAL SELF-REFERENCE (`k[i]` reads `k[i-1]`), which
+/// CONFORMANCE_SPEC §5.19.2 forbids the tape from ever lowering — its cells
+/// are not independent and the tape's scheduler reorders and batches. That is
+/// what makes it durable here: unlike the array-valued `const` this test used
+/// to lean on, it cannot quietly become tapeable and turn the assertion into a
+/// tautology.
 #[test]
 fn a_fallback_rule_is_refused_by_name() {
     if !runtime_available() {
         return;
     }
-    let path = repo_root()
-        .join("tests/conformance/elementwise_observed_gather/fixtures/elementwise_gather.esm");
+    let path = repo_root().join("tests/fixtures/recurrence/01_recurrence_doubling.esm");
     let compiled = build(&path);
     match CompiledRhs::compile(&compiled) {
         Ok(_) => panic!(
-            "elementwise_gather now lowers completely. That is good news, not a bug: \
-             move it into EXPECTED_LOWERED above and give this test another \
-             fallback-carrying fixture."
+            "{} now lowers completely. If the tape really did learn causal \
+             self-reference, move this to another fallback-carrying fixture; if it \
+             did not, the emitter is silently dropping a Fallback instruction.",
+            path.display()
         ),
         Err(CompileRhsError::Refused(e)) => {
             assert!(!e.rule.is_empty(), "refusal names no rule");
