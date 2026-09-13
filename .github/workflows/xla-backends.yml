@@ -17,10 +17,17 @@ name: XLA Compiled Backends
 # push to `pkg/**`. So `conformance-testing.yml` deliberately names its cargo
 # features explicitly and never includes `xla`, never sets
 # `XLA_EXTENSION_DIR`, and never sets `ESM_TEST_REACTANT`. There, the
-# `compiled-RHS compiled producer` stages report `unavailable` and SKIP
-# VISIBLY — legal because the tier manifest lists julia and rust as
-# `bindings_optional` for the `compiled` engine
+# `compiled-RHS compiled producer` stages SKIP VISIBLY — legal because the tier
+# manifest lists julia and rust as `bindings_optional` for the `compiled` engine
 # (`tests/conformance/compiled_rhs/manifest.json`).
+#
+# The julia half of that skip had to be REPAIRED as part of this change. Rust's
+# stage skips on its own (no `XLA_EXTENSION_DIR`, so the adapter is built
+# without the feature and answers `unavailable`), but julia's adapter
+# self-bootstraps an environment that LISTS Reactant, so `Pkg.instantiate()`
+# installed it and the stage ran for real — in the main workflow, on every push.
+# `scripts/test-conformance.sh` now gates that stage on `ESM_TEST_REACTANT`,
+# which this job sets and the main workflow does not.
 #
 # HERE that same skip is a FAILURE. Both jobs run the tier and then assert on
 # the report JSON that the binding's status is literally `ok`, because the
@@ -206,6 +213,15 @@ jobs:
     name: Julia direct StableHLO backend
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    # Job-wide: this is the repository's opt-in for anything Reactant. It gates
+    # the `reactant_*_test.jl` files in the package's runtests.jl AND the julia
+    # compiled stage of scripts/test-conformance.sh, so setting it here is what
+    # makes this job the one place those run. (The tier steps below call the
+    # runner directly and do not consult it; it is set at the job level so that
+    # every Reactant-touching thing in this job agrees, and so the contrast with
+    # conformance-testing.yml, which never sets it, is visible in one place.)
+    env:
+      ESM_TEST_REACTANT: '1'
     steps:
       - uses: actions/checkout@v4
 
@@ -241,8 +257,6 @@ jobs:
       # documents -- `cd` into test/ (the file includes testutils.jl and reads
       # fixtures relative to it) and include it, from the Reactant env.
       - name: Direct StableHLO emitter tests
-        env:
-          ESM_TEST_REACTANT: '1'
         run: |
           julia --project=pkg/EarthSciAST.jl/scripts/compiled_rhs_reactant_env -e '
             cd("pkg/EarthSciAST.jl/test")

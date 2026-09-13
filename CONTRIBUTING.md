@@ -290,8 +290,8 @@ deliberate:
 |---|---|---|
 | Runs on | every push/PR touching `pkg/**`, `tests/**`, `scripts/**` | only pushes/PRs touching the Rust crate, the Julia package, `tests/conformance/compiled_rhs/**`, the tier runner, or the fetch script |
 | `xla` cargo feature | **never** — every `--features` list there names its features explicitly and omits `xla` (and `--all-features` is likewise avoided) | `conformance-adapters,xla`, with `XLA_EXTENSION_DIR` exported from a cached fetch |
-| Reactant | never — `ESM_TEST_REACTANT` is unset, so the `reactant_*_test.jl` files are skipped by `runtests.jl` | set to `1` for `test/reactant_direct_emit_test.jl`, run standalone from the adapter's own env |
-| `compiled-RHS compiled producer` stages | report `unavailable` and **skip visibly** | required: `scripts/assert-compiled-rhs-available.py` fails the job unless the binding's status in the report JSON is `ok` |
+| Reactant | never — `ESM_TEST_REACTANT` is unset, which skips both the `reactant_*_test.jl` files in `runtests.jl` and the julia compiled stage of `test-conformance.sh` | `ESM_TEST_REACTANT=1`, job-wide |
+| `compiled-RHS compiled producer` stages | **skip visibly** | required: `scripts/assert-compiled-rhs-available.py` fails the job unless the binding's status in the report JSON is `ok` |
 | Cost | minutes | a 144 MB XLA download (cached per pinned version), a full `xla`-feature crate build, and a Reactant precompile — the Julia job budgets 120 minutes |
 
 The skip in the main workflow is legal because
@@ -302,6 +302,18 @@ which is why `xla-backends.yml` asserts on the report rather than trusting the
 exit code. A *refusal* — a model an emitter cannot lower — is a hard failure in
 both workflows wherever the fixture lists the binding in `compiled_required`;
 optionality covers availability only.
+
+The two skips are not symmetric. Rust's compiled stage skips by itself: with no
+`XLA_EXTENSION_DIR`, `test-conformance.sh` builds the adapter without the `xla`
+feature and the adapter answers `unavailable`. Julia's does not, because the
+adapter's compiled lane self-bootstraps
+`pkg/EarthSciAST.jl/scripts/compiled_rhs_reactant_env`, and that environment
+*lists* Reactant — so `Pkg.instantiate()` installs it, `using Reactant`
+succeeds, and the adapter (which reserves `unavailable` for Reactant failing to
+load) runs for real. `test-conformance.sh` therefore gates the julia compiled
+stage on `ESM_TEST_REACTANT=1`, the same opt-in the package's own Reactant tests
+use. If you run `./scripts/test-conformance.sh` locally and want that stage,
+export it.
 
 Running the same commands locally:
 

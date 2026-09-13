@@ -717,11 +717,17 @@ run_pde_pipeline_conformance_python() {
 #   * a model a compiled engine cannot lower completely is a HARD ERROR in that
 #     binding, recorded as a NAMED EXCLUSION in the report, never a pass and
 #     never a silent skip; and
-#   * the compiled engines do not exist yet (phase 2 owns them), so a compiled
-#     producer answers `unavailable` with a reason and SKIPS VISIBLY. Julia and
-#     Rust are `bindings_optional` for that engine, which is what makes the skip
-#     legal; both are `bindings_required` for the interpreter engine, where an
-#     unavailable engine FAILS.
+#   * a compiled engine the environment does not provide SKIPS VISIBLY — the
+#     producer answers `unavailable` with a reason, or the stage declines to
+#     start one and says why. Julia and Rust are `bindings_optional` for that
+#     engine, which is what makes the skip legal; both are `bindings_required`
+#     for the interpreter engine, where an unavailable engine FAILS.
+#
+# Neither compiled engine is provisioned by
+# .github/workflows/conformance-testing.yml (no `xla` cargo feature, no
+# XLA_EXTENSION_DIR, no ESM_TEST_REACTANT), so both skip there.
+# .github/workflows/xla-backends.yml provisions both, runs this tier's compiled
+# producers itself, and REQUIRES them — a skip fails that workflow.
 # Contract: tests/conformance/compiled_rhs/README.md. Normative: CONFORMANCE_SPEC §5.38.
 COMPILED_RHS_RUNNER="$SCRIPT_DIR/run-compiled-rhs-conformance.py"
 
@@ -806,12 +812,30 @@ run_compiled_rhs_conformance_interpreter_python() {
 }
 
 # Julia's compiled lane is direct StableHLO emission through the Reactant
-# extension. Phase 2 wires it; until then the adapter answers `unavailable` with
-# that reason and this stage passes with the skip printed. Julia is
-# `bindings_optional` for the compiled engine, which is what makes that legal —
-# a REFUSAL (a model the emitter cannot lower) still fails whenever the fixture
-# lists julia in its `compiled_required`.
+# extension. OPT-IN under ESM_TEST_REACTANT=1, exactly as the package's own
+# reactant_*_test.jl files are (test/runtests.jl reads the same variable).
+#
+# The gate is not decoration. The adapter's compiled lane self-bootstraps
+# scripts/compiled_rhs_reactant_env, and that environment lists Reactant, so
+# `Pkg.instantiate()` INSTALLS Reactant — XLA runtime artifacts and all — and
+# `using Reactant` then succeeds on any machine that can reach a registry. The
+# adapter reserves its `unavailable` answer for Reactant failing to LOAD, so
+# without this gate the stage would never skip: every run of this script, the
+# main conformance workflow's included, would install Reactant and compile every
+# fixture through XLA. That is precisely the cost xla-backends.yml exists to keep
+# out of the workflow that runs on every push to pkg/**. (The stage's own comment
+# used to say phase 2 had not landed yet and the adapter therefore answered
+# `unavailable`; phase 2 landed in 85ef8c17a without touching this file.)
+#
+# When the variable IS set, julia is still `bindings_optional` for the compiled
+# engine, so an adapter that genuinely cannot load Reactant skips. A REFUSAL (a
+# model the emitter cannot lower) fails either way, whenever the fixture lists
+# julia in its `compiled_required`.
 run_compiled_rhs_conformance_compiled_julia() {
+    if [ "${ESM_TEST_REACTANT:-0}" != "1" ]; then
+        warning "julia / compiled engine not exercised: ESM_TEST_REACTANT is not 1 (set it, with Reactant installable, to run the direct StableHLO emitter; .github/workflows/xla-backends.yml does)"
+        return 0
+    fi
     _run_compiled_rhs_stage julia compiled "$JULIA_DIR" "Julia compiled (StableHLO)" \
         env EARTHSCI_COMPILED_RHS_ADAPTER_JULIA="julia $JULIA_DIR/scripts/compiled_rhs_adapter.jl"
 }
