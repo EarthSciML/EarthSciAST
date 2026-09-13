@@ -32,6 +32,10 @@
 #   ops.jl      the elementwise ladder, the ⊕-folds, the host const-fold
 #   interp.jl   closed functions (`:fn`): the six `interp.*` forms
 #   emit.jl     the walk — spines, kernels, sub-kernels, reduces, scans, the RHS
+#   device.jl   WHERE it runs: the XLA client (cpu/gpu), the cell-axis sharding
+#               of the flat state across several devices, and the device-input
+#               builders. Included BEFORE api.jl: `DirectRHS` has a
+#               `DirectPlace` field.
 #   api.jl      `direct_rhs` / `direct_rhs_with_buffers` and the call methods
 
 import EarthSciAST
@@ -44,4 +48,5 @@ include("values.jl")
 include("ops.jl")
 include("interp.jl")
 include("emit.jl")
+include("device.jl")
 include("api.jl")

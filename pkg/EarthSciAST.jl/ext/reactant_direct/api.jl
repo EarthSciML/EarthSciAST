@@ -17,10 +17,20 @@ instead, which takes the buffers as a fourth ARGUMENT.
 reads), for reports and for the tests' op census. It is informational: nothing
 gates on it.
 """
-mutable struct DirectRHS{F} <: Function
+mutable struct DirectRHS{F} <: DirectCallable
     f::F
     names::Dict{Int,String}
     stats::Dict{Symbol,Int}
+    # WHERE it runs: the XLA client and the cell-axis shard (device.jl), behind
+    # ONE field of ONE concrete, un-parameterized type. Not two fields, and not
+    # type parameters: `Reactant.@compile` is inferred through this callable's
+    # type, and widening that type with the client's and the sharding's own type
+    # parameters sends Julia's inference into a recursion deep enough to trip
+    # the stack-overflow guard at the CALL SITE — which surfaces as a wall of
+    # "detected a stack overflow" with nothing naming the field that caused it.
+    # `DirectPlace` stops the expansion: its fields are abstractly typed, so the
+    # wrapper's type stays exactly the `DirectRHS{F}` of the unsharded lane.
+    place::DirectPlace
 end
 
 """
@@ -37,7 +47,7 @@ nothing recompiles.
 Build one with [`direct_rhs_with_buffers`](@ref). It shares the wrapped RHS and
 the `stats` dictionary with the `DirectRHS` it came from.
 """
-struct DirectRHSBuffers{F} <: Function
+struct DirectRHSBuffers{F} <: DirectCallable
     d::DirectRHS{F}
 end
 
@@ -57,9 +67,18 @@ xla = Reactant.@compile d(ur, pr, tr)
 du  = Array(xla(ur, pr, tr))
 ```
 
-`var_map` is the evaluator's flat variable map; it is used only to NAME the
-originating rule in a refusal, and may be omitted (refusals then say "flat slot
-17").
+`var_map` is the evaluator's flat variable map; it NAMES the originating rule in
+a refusal, and it is what the cell-axis sharding checks the slab cut against. It
+may be omitted (refusals then say "flat slot 17", and the shard's block-alignment
+check is skipped because there are no block names to check).
+
+`client` chooses WHERE the program compiles and runs: `nothing` (Reactant's
+default backend), `:cpu`, `:gpu`, or an `XLA.AbstractClient`. `sharding` cuts the
+flat state's cell axis across several devices of that client: `nothing` (one
+device, the default), `:cells` (all addressable devices), or a device count.
+Build the device inputs with [`direct_state`](@ref), [`direct_params`](@ref) and
+[`direct_time`](@ref) so they land on the chosen client with the chosen shard;
+see device.jl for what a slab shard means and when it is refused.
 
 DIRECT EMISSION IS THE COMPILED PATH. A model containing any node kind or kernel
 shape the emitter cannot lower raises `EarthSciAST.DirectEmitError` naming the
@@ -75,14 +94,20 @@ is not Julia's `^`, `stablehlo.maximum`/`minimum` do not pin Julia's NaN
 propagation, and a long `⊕`-fold becomes one `stablehlo.reduce`, which XLA may
 reassociate (see ops.jl). Emitted programs are never compared.
 """
-function direct_rhs(f::_E._OopRHS; var_map = nothing)
+function direct_rhs(f::_E._OopRHS; var_map = nothing, client = nothing,
+                    sharding = nothing)
     names = Dict{Int,String}()
     if var_map !== nothing
         for (nm, idx) in var_map
             names[Int(idx)] = String(nm)
         end
     end
-    return DirectRHS(f, names, Dict{Symbol,Int}())
+    cl = direct_client(client)
+    n_states = getfield(f.rhs, :n_states)::Int
+    shard = _de_rule!("the flat state's cell axis") do
+        _de_resolve_shard(sharding, cl, n_states, names)
+    end
+    return DirectRHS(f, names, Dict{Symbol,Int}(), DirectPlace(cl, shard))
 end
 
 """
@@ -102,9 +127,12 @@ sync_forcing!(dev, forcing_buffers(fo))
 
 See [`DirectRHSBuffers`](@ref).
 """
+_de_place(d::DirectRHS) = d.place
+_de_place(b::DirectRHSBuffers) = b.d.place
+
 direct_rhs_with_buffers(d::DirectRHS) = DirectRHSBuffers(d)
-direct_rhs_with_buffers(f::_E._OopRHS; var_map = nothing) =
-    DirectRHSBuffers(direct_rhs(f; var_map = var_map))
+direct_rhs_with_buffers(f::_E._OopRHS; kwargs...) =
+    DirectRHSBuffers(direct_rhs(f; kwargs...))
 
 # ---- the emission itself -----------------------------------------------------
 
@@ -126,7 +154,15 @@ function _de_run(d::DirectRHS, u::TracedRArray{Float64,1}, p, t, bufs,
         _de_refuse("an assembled `du` of length $(out.len)",
             "the output slot map assembled to the wrong width; expected " *
             "$n_states.")
-    return TracedRArray{Float64,1}((), out.v, (n_states,))
+    du = TracedRArray{Float64,1}((), out.v, (n_states,))
+    # Pin `du` to the SAME cell-axis slab as `u`. Shardy would propagate a
+    # sharding through the body on its own, but the assembled `du` is one
+    # `concatenate` of many slot runs, and propagation through a concatenate is
+    # not guaranteed to land back on the state's partition; saying it outright
+    # keeps the result resident where the caller's next step expects it.
+    sh = direct_shard(d)
+    sh === nothing && return du
+    return Reactant.Ops.sharding_constraint(du, sh.state)
 end
 
 function (d::DirectRHS)(u::TracedRArray{Float64,1}, p, t)
