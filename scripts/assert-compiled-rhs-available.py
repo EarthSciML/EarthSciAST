@@ -58,7 +58,20 @@ def main(argv: list[str]) -> int:
         )
         return 2
 
+    # The whole point of this assertion is that the COMPILED engine ran. A
+    # report from the interpreter engine would sail through every check below —
+    # the interpreters are always available — so a producer step accidentally
+    # wired to `--engine interpreter` would turn this gate into a rubber stamp.
     engine = report.get("engine")
+    if engine != "compiled":
+        print(
+            f"assert-compiled-rhs-available: {report_path} is a report for the "
+            f"{engine!r} engine, not 'compiled'. This assertion only means "
+            "anything about a compiled-engine run.",
+            file=sys.stderr,
+        )
+        return 2
+
     entry = (report.get("bindings") or {}).get(binding)
     if entry is None:
         print(
