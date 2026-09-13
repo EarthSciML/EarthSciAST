@@ -318,7 +318,10 @@ fn the_idempotency_fixtures_say_what_they_are() {
         resolved.get("metaparameters").is_none(),
         "a mount consumed the leaf's declaration"
     );
-    assert_eq!(resolved["index_sets"]["records"]["size"], 3, "already folded");
+    assert_eq!(
+        resolved["index_sets"]["records"]["size"], 3,
+        "already folded"
+    );
     assert!(
         resolved["models"]["Ingest"].get("ref").is_none(),
         "already inlined"

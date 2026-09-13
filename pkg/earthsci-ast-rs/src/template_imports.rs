@@ -3151,6 +3151,65 @@ pub fn apply_scope_injections(
     Ok(())
 }
 
+/// Whether `doc` is in the shape only a RESOLVED document has — no unresolved
+/// §4.7 mount left, and at least one index set with every interval `size`
+/// already a concrete integer.
+///
+/// [`check_data_source_extents`] is an AUTHORING check and must stay
+/// idempotent. A §4.7 mount CONSUMES the leaf's `metaparameters` (§9.7.6 site
+/// 3), so once a document has been resolved, a name only the leaf declared is
+/// declared nowhere and the `{ref}` stub the mount walk reads is gone — while
+/// the `extent` that named it is still there, having already done its job. A
+/// binding that re-loads its own resolved document (this one does, at build,
+/// and again at the typed parse that follows it) must not be told that document
+/// is invalid. esm-spec §8.9.4 states the exemption normatively; the Python,
+/// TypeScript, Julia and Go twins spell it the same way.
+fn document_is_in_resolved_shape(doc: &Value) -> bool {
+    !document_has_unresolved_mount(doc) && index_sets_are_fully_folded(doc)
+}
+
+/// Whether `doc` still carries an unresolved §4.7 mount — a `models.<k>` /
+/// `reaction_systems.<k>` `{ref}`, or a `subsystems.<k>` `{ref}`.
+fn document_has_unresolved_mount(doc: &Value) -> bool {
+    let Some(obj) = doc.as_object() else {
+        return false;
+    };
+    for kind in COMPONENT_KINDS {
+        let Some(comps) = obj.get(kind).and_then(|v| v.as_object()) else {
+            continue;
+        };
+        for comp in comps.values() {
+            if comp.get("ref").is_some() {
+                return true;
+            }
+            if let Some(subs) = comp.get("subsystems").and_then(|v| v.as_object())
+                && subs.values().any(|s| s.get("ref").is_some())
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Whether `doc` declares at least one index set and every interval `size` in
+/// the registry is already a concrete integer — the state a document reaches
+/// only after its metaparameters have closed and folded. Requiring at least one
+/// entry keeps the vacuous case (a document with no `index_sets` at all, where
+/// nothing has been folded) on the checked path.
+fn index_sets_are_fully_folded(doc: &Value) -> bool {
+    let Some(isets) = doc.get("index_sets").and_then(|v| v.as_object()) else {
+        return false;
+    };
+    if isets.is_empty() {
+        return false;
+    }
+    isets.values().all(|d| match d.get("size") {
+        None => true,
+        Some(v) => v.is_i64() || v.is_u64(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3321,63 +3380,4 @@ mod tests {
             assert_eq!(got.code, code, "expr {expr}");
         }
     }
-}
-
-/// Whether `doc` still carries an unresolved §4.7 mount — a `models.<k>` /
-/// `reaction_systems.<k>` `{ref}`, or a `subsystems.<k>` `{ref}`.
-/// Whether `doc` is in the shape only a RESOLVED document has — no unresolved
-/// §4.7 mount left, and at least one index set with every interval `size`
-/// already a concrete integer.
-///
-/// [`check_data_source_extents`] is an AUTHORING check and must stay
-/// idempotent. A §4.7 mount CONSUMES the leaf's `metaparameters` (§9.7.6 site
-/// 3), so once a document has been resolved, a name only the leaf declared is
-/// declared nowhere and the `{ref}` stub the mount walk reads is gone — while
-/// the `extent` that named it is still there, having already done its job. A
-/// binding that re-loads its own resolved document (this one does, at build,
-/// and again at the typed parse that follows it) must not be told that document
-/// is invalid. esm-spec §8.9.4 states the exemption normatively; the Python,
-/// TypeScript, Julia and Go twins spell it the same way.
-fn document_is_in_resolved_shape(doc: &Value) -> bool {
-    !document_has_unresolved_mount(doc) && index_sets_are_fully_folded(doc)
-}
-
-fn document_has_unresolved_mount(doc: &Value) -> bool {
-    let Some(obj) = doc.as_object() else {
-        return false;
-    };
-    for kind in COMPONENT_KINDS {
-        let Some(comps) = obj.get(kind).and_then(|v| v.as_object()) else {
-            continue;
-        };
-        for comp in comps.values() {
-            if comp.get("ref").is_some() {
-                return true;
-            }
-            if let Some(subs) = comp.get("subsystems").and_then(|v| v.as_object())
-                && subs.values().any(|s| s.get("ref").is_some())
-            {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-/// Whether `doc` declares at least one index set and every interval `size` in
-/// the registry is already a concrete integer — the state a document reaches
-/// only after its metaparameters have closed and folded. Requiring at least one
-/// entry keeps the vacuous case (a document with no `index_sets` at all, where
-/// nothing has been folded) on the checked path.
-fn index_sets_are_fully_folded(doc: &Value) -> bool {
-    let Some(isets) = doc.get("index_sets").and_then(|v| v.as_object()) else {
-        return false;
-    };
-    if isets.is_empty() {
-        return false;
-    }
-    isets.values().all(|d| match d.get("size") {
-        None => true,
-        Some(v) => v.is_i64() || v.is_u64(),
-    })
 }

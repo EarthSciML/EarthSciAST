@@ -1834,8 +1834,10 @@ def collect_mount_declared_metaparameters(
             return
         try:
             expanded = expand_ref_env(ref_str)
-            key = expanded if expanded.startswith("http") else os.path.normpath(
-                os.path.join(str(base_path), expanded)
+            key = (
+                expanded
+                if expanded.startswith("http")
+                else os.path.normpath(os.path.join(str(base_path), expanded))
             )
             if key in seen:
                 return
@@ -2012,9 +2014,7 @@ def check_data_source_extents(
         if not isinstance(name, str) or name in declared:
             continue
         if reachable is None:
-            reachable = collect_mount_declared_metaparameters(
-                raw, base_path, follow_imports=True
-            )
+            reachable = collect_mount_declared_metaparameters(raw, base_path, follow_imports=True)
         if name in reachable:
             continue
         raise ExpressionTemplateError(
