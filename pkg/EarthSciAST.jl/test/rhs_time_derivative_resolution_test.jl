@@ -10,23 +10,27 @@
 # The end-to-end assertion goes through a STATE, not an observed — see part 2
 # for why that matters.
 #
-# PART 2 asserts this binding's own EXCLUSION from the shared
-# `rhs_time_derivative` conformance category, following the convention
-# `assertion_nonfinite` established: an exclusion is invisible by construction,
-# so it has to be asserted somewhere that goes red when it stops being true.
-# The two gaps are in `run_inline_tests`, not in the §4.2 transform:
+# PART 2 drives the shared `rhs_time_derivative` conformance category, fixture by
+# fixture and case by case, against the manifest's declared outcomes — Julia's
+# side of the same gate `test_rhs_time_derivative_conformance.py` and
+# `rhs_time_derivative_conformance.rs` run.
 #
-#   1. it cannot READ a 0-D observed — `_evaluate_assertion`'s pointwise branch
-#      resolves the asserted name against the state vector alone (`_scalar_slot`)
-#      with no state-free-observed fallback, so `dxdt ~ D(x, t)` answers
+# It used to assert Julia's EXCLUSION from that category instead. The exclusion
+# rested on two gaps in `run_inline_tests`, neither in the §4.2 transform:
+#
+#   1. it could not READ a 0-D observed — `_evaluate_assertion`'s pointwise
+#      branch resolved the asserted name against the state vector alone
+#      (`_scalar_slot`) with no observed fallback, so `dxdt ~ D(x, t)` answered
 #      "scalar state 'dxdt' not found";
-#   2. it does not REFUSE an unresolvable right-hand-side `D` — the category's
-#      two refusal fixtures build and solve without complaint, so the
-#      `unlowered_operator` contract §4.2 requires is unmet on this path (the
-#      gate in `tree_walk/compile.jl` belongs to the other runner).
+#   2. it did not REFUSE an unresolvable right-hand-side `D` — the category's
+#      two refusal fixtures built and solved without complaint, so the
+#      `unlowered_operator` contract §4.2 requires went unmet on this path.
 #
-# When either is fixed, part 2 fails and Julia should move into
-# `bindings_required` with a real adapter.
+# Closing (1) closed (2) with it: the refusal fixtures' `D` survives into the
+# observed body this branch now evaluates, and the evaluator's own
+# rewrite-target gate raises `unlowered_operator` there. So the manifest's
+# `scope_excluded.julia` entry is gone, `julia` is in `bindings_required`, and
+# what follows is the adapter that entry asked for.
 
 using Test
 using JSON3
@@ -188,43 +192,65 @@ end
     end
 end
 
-@testset "§4.2 right-hand-side D — Julia's exclusion from the shared category" begin
+@testset "§4.2 right-hand-side D — the shared conformance category, driven here" begin
     manifest = JSON3.read(read(joinpath(_RTD_DIR, "manifest.json"), String))
     @test manifest.category == "rhs_time_derivative"
 
-    # The exclusion must be declared, and it must carry a reason.
-    @test !("julia" in manifest.bindings_required)
-    @test haskey(manifest.scope_excluded, :julia)
-    @test !isempty(strip(String(manifest.scope_excluded.julia)))
-
-    # The fixture still LOADS and FLATTENS here — a category whose document one
-    # binding cannot even parse would be a format divergence hiding behind a
-    # scope exclusion, which is a different and worse thing than a runner gap.
-    for fixture in manifest.fixtures
-        p = joinpath(_RTD_DIR, String(fixture.path))
-        @test isfile(p)
-        @test EarthSciAST.flatten(load_path(p)) !== nothing
+    # Julia is IN the category now, and carries no exclusion. Both halves of
+    # this pair matter: a binding that drops out of `bindings_required` without
+    # writing down why is exactly what `scope_excluded` exists to prevent.
+    @test "julia" in manifest.bindings_required
+    @test !haskey(manifest.scope_excluded, :julia)
+    # Every binding still excluded must say WHY, as the Python and Rust gates
+    # also assert.
+    for (binding, reason) in pairs(manifest.scope_excluded)
+        @test !isempty(strip(String(reason)))
     end
+    # Both halves are present: dropping the refusal half would leave §4.2's
+    # "in particular not 0" sentence ungated.
+    @test Set(String(c.outcome) for fx in manifest.fixtures for c in fx.cases) ==
+          Set(["value", "refused"])
 
-    # And the gaps are real, so the exclusion is honest. Both are asserted
-    # directly: when either stops being true this test fails and Julia should
-    # join `bindings_required`.
-    @testset "gap 1: a 0-D observed is unreadable by run_inline_tests" begin
-        results = run_inline_tests(joinpath(_RTD_DIR, "fixtures", "tendency_resolution.esm");
-                                model_name="M", alg=OrdinaryDiffEqTsit5.Tsit5(),
-                                reltol=1e-12, abstol=1e-14)
-        row = only(r for r in results if r.variable == "dxdt")
-        @test row.actual === nothing
-        @test occursin("not found", row.message)
-    end
+    # The manifest's `integrators.julia` block is the contract for HOW this
+    # category is integrated here, exactly as `integrators.python` /
+    # `integrators.rust` are for the other two.
+    integ = manifest.integrators.julia
+    @test String(integ.solver) == "Tsit5"
 
-    @testset "gap 2: an unresolvable right-hand-side D is not refused" begin
-        results = run_inline_tests(joinpath(_RTD_DIR, "fixtures", "d_of_unsupported.esm");
-                                model_name="M", alg=OrdinaryDiffEqTsit5.Tsit5(),
-                                reltol=1e-12, abstol=1e-14)
-        row = only(r for r in results if r.variable == "dsq")
-        # §4.2 requires `unlowered_operator`. It is not produced: the run builds
-        # and solves, and only the assertion lookup fails.
-        @test !occursin("unlowered_operator", row.message)
+    for fx in manifest.fixtures
+        @testset "$(fx.id)" begin
+            path = joinpath(_RTD_DIR, String(fx.path))
+            @test isfile(path)
+            # A category whose document one binding cannot even parse would be a
+            # format divergence hiding behind a runner result.
+            @test EarthSciAST.flatten(load_path(path)) !== nothing
+            results = run_inline_tests(path; model_name=String(fx.model),
+                                       alg=OrdinaryDiffEqTsit5.Tsit5(),
+                                       reltol=Float64(integ.reltol),
+                                       abstol=Float64(integ.abstol))
+            for c in fx.cases
+                rows = [r for r in results if r.variable == String(c.variable)]
+                @test length(rows) == 1
+                isempty(rows) && continue
+                row = only(rows)
+                if String(c.outcome) == "value"
+                    # VERDICT and value. `passed` is the manifest's own column,
+                    # so a binding that reads the right number and grades it
+                    # wrong is caught too.
+                    @test row.actual !== nothing
+                    @test row.actual !== nothing &&
+                          isapprox(Float64(row.actual), Float64(c.expected);
+                                   rtol=1e-8, atol=1e-10)
+                    @test row.passed == Bool(c.passed)
+                else
+                    # REFUSED. No actual to record, and the cross-binding
+                    # contract is the diagnostic CODE (esm-spec §9.6.3
+                    # constraint 6) — each binding's prose around it differs.
+                    @test row.actual === nothing
+                    @test !row.passed
+                    @test occursin(String(c.diagnostic), row.message)
+                end
+            end
+        end
     end
 end
