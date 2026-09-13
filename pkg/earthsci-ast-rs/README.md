@@ -179,6 +179,64 @@ cargo clippy --all-targets --all-features
   opt-in experimental performance utilities in the `performance` module
   (benchmark support; not used by the core simulate paths)
 - `benchmarks`: enables the criterion bench target
+- `conformance-adapters`: the cross-language conformance adapter binaries
+- `esio`: the EarthSciIO data-provider bridge
+- `xla`: the compiled right-hand-side backend (see below)
+
+## Compiled right-hand side (`xla` feature)
+
+`simulate_array::tape` compiles a model's observed + RHS rules into a flat
+instruction program. With the **non-default** `xla` feature that program can
+also be emitted as an XLA computation
+
+```text
+rhs(u: f64[N], p: f64[M], t: f64[]) -> du: f64[N]
+```
+
+and run through PJRT (`earthsci_ast::xla_runtime`), instead of being
+interpreted by the slab executor.
+
+Two properties are deliberate:
+
+* **No fallback.** A model carrying any rule the emitter cannot lower is a
+  hard error naming the rule and the reason, never a partly-interpreted run.
+  The `compiled_rhs` conformance tier records such a model as a named
+  refusal.
+* **Numerical, not bitwise, agreement.** XLA's `exp`/`log`/`pow` are not
+  Rust's libm. The tier's tolerance classes
+  (`tests/conformance/compiled_rhs/README.md`) are the contract.
+
+### Setup
+
+The feature links a prebuilt `xla_extension` release (144 MB for CPU), which
+this repository does **not** vendor. Fetch it once, outside the checkout:
+
+```bash
+scripts/fetch-xla-extension.sh --variant cpu        # or --variant cuda12
+export XLA_EXTENSION_DIR=$HOME/.cache/earthsci/xla/xla_extension-0.10.0-cpu/xla_extension
+```
+
+The script verifies a pinned SHA-256 before unpacking and prints the exact
+`export` line for the directory it chose.
+
+Building also needs a C++ toolchain and libclang for the `xla` crate's
+bindgen step:
+
+```bash
+export LIBCLANG_PATH=/path/to/llvm/lib          # directory holding libclang.so
+cargo build --features xla
+cargo test  --features xla
+```
+
+`build.rs` bakes `$XLA_EXTENSION_DIR/lib` into this crate's binaries, tests,
+examples and benches as an rpath, so nothing has to carry `LD_LIBRARY_PATH`
+at run time (`readelf -d <binary> | grep RUNPATH` to check). A default build
+neither links the extension nor needs any of this: `cargo check --all-targets`
+with default features stays green on a machine that has never heard of XLA.
+
+`EARTHSCI_XLA_PLATFORM=gpu` selects a GPU PJRT client (needs the `cuda12`
+extension and a visible device); CPU is the default and the only configuration
+this backend has been exercised on.
 
 ## License
 

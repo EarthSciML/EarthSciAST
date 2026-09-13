@@ -251,10 +251,34 @@ cargo fmt
 cargo clippy -- -D warnings
 cargo test
 # The bench target is gated behind the `benchmarks` feature, so a plain
-# `cargo bench` builds nothing. CI compiles it with
-# `cargo check --all-features --benches`.
+# `cargo bench` builds nothing. CI compiles it with an explicit feature list
+# (see below for why it is not `--all-features`).
 cargo bench --features benchmarks  # for performance testing
 ```
+
+**The `xla` compiled backend.** The `xla` feature emits the tape IR as an XLA
+computation and runs it through PJRT (`pkg/earthsci-ast-rs/README.md` has the
+full description). It is OFF by default and **excluded from every
+`--all-features` invocation**, because it links a prebuilt 144 MB
+`xla_extension` release that is fetched separately and never vendored:
+
+```bash
+# once, outside the checkout
+scripts/fetch-xla-extension.sh --variant cpu
+export XLA_EXTENSION_DIR=$HOME/.cache/earthsci/xla/xla_extension-0.10.0-cpu/xla_extension
+export LIBCLANG_PATH=/path/to/llvm/lib      # the xla crate's build script runs bindgen
+
+cd pkg/earthsci-ast-rs
+cargo test --features xla                   # the emitter's own tests
+cargo build --features conformance-adapters,xla \
+  --bin earthsci-compiled-rhs-adapter-rust  # the compiled_rhs adapter
+```
+
+Without `XLA_EXTENSION_DIR` the feature's tests skip with a message rather
+than failing, and the adapter answers `--engine compiled` with the tier's
+`unavailable` outcome. Like `esio`, the feature may raise the effective MSRV
+above the crate's declared 1.89, which is the other reason CI names its
+features explicitly instead of using `--all-features`.
 
 ### Go (earthsci-ast-go)
 

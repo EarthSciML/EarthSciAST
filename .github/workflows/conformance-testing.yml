@@ -520,12 +520,22 @@ jobs:
         # else's crate supports our MSRV, which is not ours to claim.
         # `--all-features` has no "except" form, hence the list (`cli`/`solve`
         # arrive with the default feature set).
+        #
+        # Phase 2 added a SECOND feature no CI leg can turn on: `xla`. It links
+        # a prebuilt 144 MB `xla_extension` release that has to be fetched
+        # separately (`scripts/fetch-xla-extension.sh`) and pointed at with
+        # `XLA_EXTENSION_DIR`; without it the `xla` crate's build script fails
+        # outright. So `--all-features` is spelled out on EVERY leg now, not
+        # just the MSRV one -- including the bench-check and doc steps below,
+        # which used to inherit `--all-features` precisely so they would reuse
+        # this feature resolution, and still do.
         run: |
           if [ "${{ matrix.rust }}" = "1.89.0" ]; then
             cargo test --verbose --features \
               conformance-adapters,wasm,parallel,simd,zero_copy,custom_alloc,benchmarks,performance
           else
-            cargo test --verbose --all-features
+            cargo test --verbose --features \
+              conformance-adapters,wasm,parallel,simd,zero_copy,custom_alloc,benchmarks,performance,esio
           fi
 
       # `cargo test` does NOT build bench targets -- that needs `--benches` or
@@ -547,11 +557,15 @@ jobs:
       # hide behind an unrelated red suite -- which is how the drift got here.
       - name: Build bench targets
         if: ${{ !cancelled() && matrix.rust != '1.89.0' }}
-        run: cargo check --all-features --benches
+        run: |
+          cargo check --benches --features \
+            conformance-adapters,wasm,parallel,simd,zero_copy,custom_alloc,benchmarks,performance,esio
 
       - name: Generate Rust documentation
         if: matrix.rust == 'stable'
-        run: cargo doc --no-deps --all-features
+        run: |
+          cargo doc --no-deps --features \
+            conformance-adapters,wasm,parallel,simd,zero_copy,custom_alloc,benchmarks,performance,esio
 
   go-tests:
     runs-on: ubuntu-latest
