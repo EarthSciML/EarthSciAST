@@ -209,11 +209,128 @@ fn residency(fixture: &Path, iters: usize) -> Result<(), String> {
     Ok(())
 }
 
+/// What happens when you try to use a second device with xla 0.4.4.
+///
+/// Deliverable 4 of the GPU phase asked whether the crate exposes enough to
+/// SHARD a model's state across devices. It does not, and this subcommand is
+/// the evidence rather than the assertion: it runs each step of the intended
+/// path and prints what the runtime said.
+///
+/// The blocking facts are in the crate's C++ shim, `xla_rs/xla_rs.cc`:
+///
+/// * `compile` constructs `CompileOptions options;` and passes it unchanged,
+///   so every executable is built with `num_replicas = 1`,
+///   `num_partitions = 1`, `use_spmd_partitioning = false` and the default
+///   device assignment. There is no Rust-visible way to change any of them.
+/// * `execute` and `execute_b` both call `exe->Execute({input_buffer_ptrs},
+///   options)` — note the braces: ONE argument group. A replicated executable
+///   needs one group per replica, so even a compiled-for-N-replicas program
+///   could not be fed from here.
+/// * `XlaBuilder::SetSharding` / `OpSharding` are not wrapped at all, so
+///   per-operation sharding annotations cannot be attached to the emitted
+///   program.
+///
+/// What IS reachable: enumerating devices, PLACING a buffer on a chosen one
+/// (`buffer_from_host_buffer(.., Some(&device))`), and copying between them
+/// (`PjRtBuffer::copy_to_device`). This subcommand checks whether that is
+/// enough to at least run an executable against buffers resident on a
+/// non-default device — the last thing that might have worked by accident.
+fn multidevice(fixture: &Path) -> Result<(), String> {
+    let client = xla_runtime::client()?;
+    let n_dev = client.addressable_device_count();
+    println!("platform {} with {n_dev} addressable device(s)", client.platform_name());
+    if n_dev < 2 {
+        println!(
+            "only one addressable device here, so nothing to say about multi-device \
+             placement; ask the job for more (--gres=gpu:N)"
+        );
+        return Ok(());
+    }
+
+    let compiled = build(fixture);
+    let program = CompiledRhs::compile(&compiled).map_err(|e| e.to_string())?;
+    let params: HashMap<String, f64> = HashMap::new();
+    let pv = compiled.debug_resolve_params(&params);
+    let n = program.n_states();
+    let u: Vec<f64> = (0..n).map(|i| 1.0 + 0.25 * i as f64).collect();
+
+    let reference = program.eval(&u, &pv, 0.0).map_err(|e| e.to_string())?;
+    println!("reference (default device) computed {} values", reference.len());
+
+    let devices = client.addressable_devices();
+    for d in devices.iter() {
+        let placed = client.buffer_from_host_buffer(&u, &[n], Some(d));
+        match placed {
+            Err(e) => {
+                println!("device {}: placing u failed: {e}", d.id());
+                continue;
+            }
+            Ok(ub) => {
+                let pb = match client.buffer_from_host_buffer(&pv, &[pv.len()], Some(d)) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        println!("device {}: placing p failed: {e}", d.id());
+                        continue;
+                    }
+                };
+                let tb = match client.buffer_from_host_buffer(&[0.0f64], &[], Some(d)) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        println!("device {}: placing t failed: {e}", d.id());
+                        continue;
+                    }
+                };
+                match program.execute_on_buffers(&ub, &pb, &tb) {
+                    Ok(got) => {
+                        let worst = got
+                            .iter()
+                            .zip(reference.iter())
+                            .fold(0.0f64, |m, (a, b)| m.max((a - b).abs()));
+                        println!(
+                            "device {}: execute against buffers placed there SUCCEEDED, \
+                             max |diff from default device| = {worst:e}",
+                            d.id()
+                        );
+                    }
+                    Err(e) => println!("device {}: execute against buffers placed there: {e}", d.id()),
+                }
+            }
+        }
+    }
+
+    // Copying between devices is the other half of any sharding scheme; check
+    // it independently of execution, since it is the part that does work.
+    let src = client
+        .buffer_from_host_buffer(&u, &[n], Some(&devices[0]))
+        .map_err(|e| e.to_string())?;
+    match src.copy_to_device(client.addressable_devices().swap_remove(1)) {
+        Ok(moved) => {
+            let mut back = vec![0.0f64; n];
+            match moved.copy_raw_to_host_sync(&mut back, 0) {
+                Ok(()) => println!(
+                    "copy_to_device 0 -> 1 then back to host: {}",
+                    if back == u { "exact" } else { "DIFFERENT" }
+                ),
+                Err(e) => println!("copy_to_device 0 -> 1 then back to host: {e}"),
+            }
+        }
+        Err(e) => println!("copy_to_device 0 -> 1: {e}"),
+    }
+    Ok(())
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let r = match args.get(1).map(String::as_str) {
         Some("devices") => devices(),
         Some("largest") => largest(),
+        Some("multidevice") => {
+            let f = args
+                .get(2)
+                .map(PathBuf::from)
+                .unwrap_or_else(|| repo_root().join("tests/valid/mount_rename_atm_column.esm"));
+            multidevice(&f)
+        }
         Some("residency") => {
             let f = args.get(2).expect("residency <fixture.esm> [iterations]");
             let n: usize = args.get(3).map(|s| s.parse().expect("iterations")).unwrap_or(100);
@@ -223,7 +340,8 @@ fn main() {
             eprintln!(
                 "usage: earthsci-xla-device-probe devices\n       \
                  earthsci-xla-device-probe largest\n       \
-                 earthsci-xla-device-probe residency <fixture.esm> [iterations]"
+                 earthsci-xla-device-probe residency <fixture.esm> [iterations]\n       \
+                 earthsci-xla-device-probe multidevice [fixture.esm]"
             );
             std::process::exit(2);
         }

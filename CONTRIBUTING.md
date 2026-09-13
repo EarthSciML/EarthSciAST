@@ -281,6 +281,34 @@ than failing, and the adapter answers `--engine compiled` with the tier's
 above the crate's declared 1.89, which is the other reason CI names its
 features explicitly instead of using `--all-features`.
 
+**On a GPU.** `EARTHSCI_XLA_PLATFORM=gpu` selects a GPU PJRT client, and needs
+two separate things:
+
+```bash
+# 1. the CUDA extension -- and a REBUILD, because build.rs bakes the rpath
+scripts/fetch-xla-extension.sh --variant cuda12 --dest "$HOME/xla"
+export XLA_EXTENSION_DIR=$HOME/xla/xla_extension-0.10.0-cuda12/xla_extension
+cargo build --release --features conformance-adapters,xla
+
+# 2. the CUDA libraries that extension HARD-LINKS (cuDNN, NCCL, nvshmem,
+#    cuBLAS, cuFFT, cuSPARSE, nvJitLink, the CUDA runtime, NVRTC) and ptxas
+eval "$(scripts/setup-xla-gpu-libs.sh --prefix "$HOME/xla-gpu-libs" --quiet)"
+
+export TMPDIR=<real-disk scratch>      # XLA's compilation scratch; never a RAM-backed /tmp
+cargo test --release --features conformance-adapters,xla --test xla_compiled_rhs \
+  -- --nocapture --test-threads=1      # the GPU arm runs; on CPU it skips with a message
+```
+
+Those libraries are `DT_NEEDED` entries, so a missing one is a dynamic-loader
+failure before `main` ("error while loading shared libraries: libcudnn.so.9"),
+not a Rust error — no amount of error handling in `xla_runtime` can report it.
+Missing `ptxas` is the other classic: every GPU compilation fails with "No PTX
+compilation provider is available" unless `XLA_FLAGS` carries
+`--xla_gpu_cuda_data_dir`. The setup script prints both lines.
+
+The crate README has the device-resident API (`CompiledRhs::on_device`) and
+why multi-device sharding is not reachable through `xla` 0.4.4.
+
 ### Go (earthsci-ast-go)
 
 - **Standards**: gofmt, go vet, standard Go conventions

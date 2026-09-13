@@ -58,6 +58,44 @@
 //! without a transfer at all: it feeds the resident derivative back into the
 //! resident state through a second tiny compiled program.
 
+//! ## Multi-device, and why there is none
+//!
+//! Sharding a model's state across several devices is not reachable through
+//! `xla` 0.4.4. The gap is in the crate's C++ shim (`xla_rs/xla_rs.cc`), not
+//! in XLA, and it is three specific omissions:
+//!
+//! 1. **Compile options.** `status compile(...)` writes `CompileOptions
+//!    options;` and passes it straight to `CompileAndLoad`, so every
+//!    executable gets `num_replicas = 1`, `num_partitions = 1`,
+//!    `use_spmd_partitioning = false`, and the default device assignment. A
+//!    variant taking those four would need
+//!    `options.executable_build_options.set_num_replicas`,
+//!    `.set_num_partitions`, `.set_use_spmd_partitioning`, and
+//!    `.set_device_assignment(client->GetDefaultDeviceAssignment(r, p))` —
+//!    plus `.set_device_ordinal(k)` for the simpler "one single-device
+//!    executable per device" shape.
+//! 2. **Execution with one argument group per replica.** `execute` and
+//!    `execute_b` both call `exe->Execute({input_buffer_ptrs}, options)`. The
+//!    braces are the problem: that is ONE group. A replicated or partitioned
+//!    executable takes `std::vector<std::vector<PjRtBuffer*>>`, one inner
+//!    vector per replica. The output-unpacking code beneath already walks the
+//!    replica-major nesting, so only the input side and one more C signature
+//!    change. `ExecuteSharded(args, device, options)` would cover the
+//!    per-device dispatch shape.
+//! 3. **Sharding annotations.** `xla::XlaBuilder::SetSharding(const
+//!    OpSharding&)` / `ClearSharding()` are not wrapped, and neither is
+//!    `OpSharding` itself. Emitting a tiled sharding needs a constructor for
+//!    the proto (`type = OTHER`, `tile_assignment_dimensions`,
+//!    `tile_assignment_devices`) and a builder-scoped setter, so the emitter
+//!    can annotate the state parameter and let SPMD partitioning do the rest.
+//!
+//! That is on the order of two hundred lines of C++ in the shim plus about a
+//! hundred of Rust binding, in a third-party crate — a fork or an upstream
+//! patch, not a local change. Until it exists, work that is genuinely
+//! independent (separate models, separate probe sets) can be spread over
+//! devices with one PROCESS per device and `CUDA_VISIBLE_DEVICES`; work that
+//! needs one state split across devices cannot be expressed at all.
+//!
 use std::sync::OnceLock;
 
 use xla::{ArrayElement, Literal, PjRtBuffer, PjRtClient, PjRtLoadedExecutable, XlaBuilder};
@@ -259,6 +297,33 @@ impl CompiledRhs {
             )));
         }
         Ok(du)
+    }
+}
+
+impl CompiledRhs {
+    /// Run the compiled program against three buffers the CALLER placed, and
+    /// copy the result back.
+    ///
+    /// A diagnostic seam, not a hot path: [`DeviceRhs`] is the supported way
+    /// to keep state resident. This exists so a probe can ask what happens
+    /// when the arguments live on a device the executable was not compiled
+    /// for — the question multi-device support turns on, and one whose answer
+    /// is a runtime error message rather than a documented rule.
+    pub fn execute_on_buffers(
+        &self,
+        u: &PjRtBuffer,
+        p: &PjRtBuffer,
+        t: &PjRtBuffer,
+    ) -> Result<Vec<f64>, CompileRhsError> {
+        let out = self
+            .exe
+            .execute_b(&[u, p, t])
+            .map_err(|e| CompileRhsError::Runtime(format!("execute failed: {e}")))?;
+        let buf = take_single_output(out, "rhs")?;
+        let mut host = vec![0.0f64; self.n_states];
+        buf.copy_raw_to_host_sync(&mut host, 0)
+            .map_err(|e| CompileRhsError::Runtime(format!("copy back failed: {e}")))?;
+        Ok(host)
     }
 }
 

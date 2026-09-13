@@ -374,7 +374,7 @@ Hooks per binding (compiled engine):
 | Binding | RHS hook | Adapter |
 |---|---|---|
 | Julia | `EarthSciASTReactantExt.direct_rhs` → `Reactant.@compile` (direct StableHLO emission, `pkg/EarthSciAST.jl/ext/reactant_direct/`) | the same `compiled_rhs_adapter.jl`, under its own `scripts/compiled_rhs_reactant_env` |
-| Rust | the XlaBuilder emitter over the tape (`pkg/earthsci-ast-rs/src/simulate_array/tape/xla_emit.rs`, runtime `src/xla_runtime.rs`) | the same `earthsci-compiled-rhs-adapter-rust`, built with `--features conformance-adapters,xla` and `XLA_EXTENSION_DIR` set |
+| Rust | the XlaBuilder emitter over the tape (`pkg/earthsci-ast-rs/src/simulate_array/tape/xla_emit.rs`, runtime `src/xla_runtime.rs`) | the same `earthsci-compiled-rhs-adapter-rust`, built with `--features conformance-adapters,xla` and `XLA_EXTENSION_DIR` set. `EARTHSCI_XLA_PLATFORM=gpu` runs the same adapter on a CUDA device instead of the CPU — the emitter is platform-independent, so the tier's outcomes and tolerance classes are expected to be identical; `EARTHSCI_XLA_GPU_MEMORY_FRACTION` (default 0.75) and `EARTHSCI_XLA_GPU_PREALLOCATE=1` tune the device allocator. A GPU run additionally needs the `cuda12` extension and the CUDA libraries it hard-links: `pkg/earthsci-ast-rs/README.md` and `scripts/setup-xla-gpu-libs.sh`. |
 | Python | — | no compiled backend in this plan |
 
 An adapter whose compiled engine has not landed, or whose runtime is not
