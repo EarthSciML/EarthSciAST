@@ -1,0 +1,39 @@
+{
+ "esm": "1.0.0",
+ "metadata": {
+  "name": "GapATemplateRef",
+  "description": "Minimal repro: a model whose equation RHS is a NON-EAGER `apply_expression_template` reference, the esm-spec 9.6.4 Option B form that SURVIVES the load-time fixpoint as a leaf and is resolved by the build against the component's retained `expression_templates` registry. The Rust CLI evaluates it; the Julia MTK lowering fails with 'Unsupported operator: apply_expression_template'.",
+  "license": "MIT"
+ },
+ "models": {
+  "Rates": {
+   "expression_templates": {
+    "arrhenius": {
+     "params": ["A", "B", "T"],
+     "description": "Simplified Arrhenius k = A exp(-B/T), the WRFUserRateLaws ARR2 form.",
+     "body": {"op": "*", "args": ["A", {"op": "exp", "args": [{"op": "/", "args": [{"op": "*", "args": [-1, "B"]}, "T"]}]}]}
+    }
+   },
+   "variables": {
+    "T": {"type": "parameter", "units": "K", "default": 298.0, "description": "Air temperature."},
+    "k": {"type": "unknown", "units": "cm^3/s", "description": "Rate coefficient from the template."}
+   },
+   "equations": [
+    {"lhs": "k",
+     "rhs": {"op": "apply_expression_template", "args": [], "name": "arrhenius",
+             "bindings": {"A": 6.5e-12, "B": -120.0, "T": "T"}}}
+   ],
+   "tests": [
+    {
+     "id": "template_reference_at_t0",
+     "description": "At T = 298 K, k = 6.5e-12 exp(120/298) = 9.7229e-12.",
+     "time_span": {"start": 0, "end": 1},
+     "tolerance": {"rel": 1e-9},
+     "assertions": [
+      {"variable": "k", "time": 0.0, "expected": 9.722927348386447e-12}
+     ]
+    }
+   ]
+  }
+ }
+}

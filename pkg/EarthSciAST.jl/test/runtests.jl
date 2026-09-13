@@ -82,6 +82,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("simulate_e2e_test.jl")
     include("tests_blocks_execution_test.jl")
     include("run_esm_tests_test.jl")
+    include("container_in_document_test.jl")
     include("units_fixture_consumption_test.jl")
     include("array_ops_test.jl")
     include("catalyst_extension_test.jl")

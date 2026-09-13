@@ -612,6 +612,33 @@ function _compile_model(model, name::Symbol)
     return MTK.mtkcompile(sys)
 end
 
+# Build a model container from the WHOLE-DOCUMENT `FlattenedSystem` rather than
+# from the container in isolation.
+#
+# `MTK.System(::Model)` wraps the one model in a SYNTHETIC single-model
+# `EsmFile` (`flatten(::Model)`) and flattens that, which silently drops
+# everything the document supplies beyond the container itself:
+#
+#   * the document's `expression_templates` registry — `Model` has no such
+#     field, the registry is document-scoped — so `expand_flattened_refs` sees
+#     an EMPTY registry, becomes a no-op, and a §9.6.4 Option-B
+#     `apply_expression_template` reference survives into `_esm_to_symbolic`
+#     as `Unsupported operator: apply_expression_template`;
+#   * every SIBLING component's variables, so an equation reading another
+#     component's state (`D(Rs.A, t)`, or a plain `Rs.A`) dies in
+#     `_resolve_lowering_var` as `Variable 'Rs.A' not found in variable
+#     dictionary`.
+#
+# Both are one bug: the container is not the document. The Python gate builds
+# `esm_problem` over `flatten(ef)` and the Rust CLI builds over the whole
+# flattened document too (§6.6 selects WHICH tests run, not what the system
+# contains), so this path was the 1-of-3 outlier among the executing runners.
+function _compile_model_in_document(flat, name::Symbol)
+    MTK = _require_mtk()
+    sys = MTK.System(flat; name=name)
+    return MTK.mtkcompile(sys)
+end
+
 function _compile_reaction_system(rs, name::Symbol)
     MTK = _require_mtk()
     cat = _try_require(_CATALYST_PKGID)
@@ -696,10 +723,39 @@ function run_file_tests!(results::Vector{AssertionResult}, path::AbstractString;
     # so it applies to every container in the file.
     stiffness = esm_file.solver === nothing ? nothing : esm_file.solver.stiffness
 
+    # The document flatten every in-document container is built from, computed
+    # at most ONCE per file and only when a container that needs it actually
+    # has tests (a container with no tests is never compiled, so it is never
+    # lowered — the §9.5.3a refusal stays attached to a build that happens).
+    # Table lowering runs at FILE scope here because the flatten happens once,
+    # ahead of the per-container builds that would otherwise each lower their
+    # own.
+    doc_flat = nothing
+    doc_flat_err = nothing
+
     if esm_file.models !== nothing
+        if any(m -> !isempty(m.tests), values(esm_file.models))
+            try
+                lower_table_lookups!(esm_file)
+                doc_flat = flatten(esm_file;
+                                   base_path=dirname(abspath(String(path))))
+            catch err
+                doc_flat_err = err
+            end
+        end
         for (mname, model) in esm_file.models
+            if doc_flat_err !== nothing
+                for t in model.tests
+                    push!(results, AssertionResult(
+                        path, :model, String(mname), t.id, 0, "", NaN, NaN,
+                        nothing, ERROR,
+                        "Model compile failed: $(doc_flat_err)", 0.0))
+                end
+                continue
+            end
             _run_container_tests!(results, path, :model, String(mname), model,
-                                  _compile_model, "Model";
+                                  (_c, sym) -> _compile_model_in_document(doc_flat, sym),
+                                  "Model";
                                   function_tables=tables,
                                   stiff_files=stiff_files, stiffness=stiffness,
                                   solver_hints=esm_file.solver)
@@ -707,13 +763,48 @@ function run_file_tests!(results::Vector{AssertionResult}, path::AbstractString;
     end
 
     if esm_file.reaction_systems !== nothing
+        # A mechanism that shares its document with a model may read that
+        # model — RADM2's 156 reaction rates are scoped references to the
+        # component that evaluates its rate coefficients — and its tests may
+        # override that model's parameters. The isolated Catalyst build cannot
+        # see it: the species resolve, but the sibling's parameters are not on
+        # the compiled system, so the SOLVE fails rather than the build. Such a
+        # document is built from the same whole-document flatten the models use
+        # (§7.4 lowers the mechanism to its mass-action ODEs there).
+        #
+        # A document whose ONLY containers are reaction systems keeps the
+        # Catalyst route: it is the one that carries Catalyst's own default
+        # seeding, and it is the build the corpus's large mechanisms have
+        # always taken.
+        mixed = esm_file.models !== nothing && !isempty(esm_file.models)
         for (rname, rs) in esm_file.reaction_systems
-            _run_container_tests!(results, path, :reaction_system,
-                                  String(rname), rs, _compile_reaction_system,
-                                  "ReactionSystem"; esm_container=rs,
-                                  function_tables=tables,
-                                  stiff_files=stiff_files, stiffness=stiffness,
-                                  solver_hints=esm_file.solver)
+            if mixed && doc_flat_err === nothing && !isempty(rs.tests)
+                if doc_flat === nothing
+                    try
+                        lower_table_lookups!(esm_file)
+                        doc_flat = flatten(esm_file;
+                                           base_path=dirname(abspath(String(path))))
+                    catch err
+                        doc_flat_err = err
+                    end
+                end
+            end
+            if mixed && doc_flat_err === nothing && doc_flat !== nothing
+                _run_container_tests!(results, path, :reaction_system,
+                                      String(rname), rs,
+                                      (_c, sym) -> _compile_model_in_document(doc_flat, sym),
+                                      "ReactionSystem";
+                                      function_tables=tables,
+                                      stiff_files=stiff_files, stiffness=stiffness,
+                                      solver_hints=esm_file.solver)
+            else
+                _run_container_tests!(results, path, :reaction_system,
+                                      String(rname), rs, _compile_reaction_system,
+                                      "ReactionSystem"; esm_container=rs,
+                                      function_tables=tables,
+                                      stiff_files=stiff_files, stiffness=stiffness,
+                                      solver_hints=esm_file.solver)
+            end
         end
     end
 end
