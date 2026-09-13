@@ -211,6 +211,23 @@ class CompiledRhsHarness(AdapterHarness):
 # === Manifest loading =====================================================
 
 
+def tests_root(manifest_path: Path) -> Path:
+    """The corpus root a fixture ``path`` is relative to.
+
+    The schema says "relative to the repository's ``tests/`` directory", and this
+    is the one rule every adapter and the runner must agree on: walk up from the
+    manifest to the NEAREST ancestor directory named ``tests``, and fall back to
+    the manifest's own directory when there is none. Counting a fixed number of
+    parent hops instead would break the moment a manifest moved a level, and a
+    manifest kept outside the corpus still resolves against itself rather than
+    throwing."""
+    manifest_path = manifest_path.resolve()
+    for parent in manifest_path.parents:
+        if parent.name == "tests":
+            return parent
+    return manifest_path.parent
+
+
 def _validate_fixture(fx: dict, fid: str, path: Path) -> None:
     order = fx.get("state_order")
     if not isinstance(order, list) or not order or not all(isinstance(s, str) for s in order):
@@ -289,6 +306,13 @@ def load_manifest(path: Path) -> dict:
     engines = manifest.get("engines")
     if not isinstance(engines, dict) or any(e not in engines for e in ENGINES):
         raise ManifestError(f"{path}: engines must name both {ENGINES}")
+    # Resolve every fixture path the way the adapters do, and fail as a CONFIG
+    # error (exit 2) rather than letting each binding discover the typo on its
+    # own and report it as a different kind of breakage.
+    root = tests_root(path)
+    missing = [fx["id"] for fx in manifest["fixtures"] if not (root / fx["path"]).is_file()]
+    if missing:
+        raise ManifestError(f"{path}: fixture file(s) not found under {root}: {missing}")
     return manifest
 
 
@@ -430,8 +454,20 @@ def gate_fixture(
         require. Reported by name and reason, and it passes. Never silent.
       * ``mismatch`` — a value outside the class tolerance, or a missing element
         or probe.
+      * ``error`` — the adapter could not evaluate the fixture at all.
       * ``ok``.
     """
+    # `{"error": "<ExcType>: <message>"}` is the convention the per-binding
+    # adapters share for a fixture that threw. A THIRD outcome, treated as
+    # neither neighbour: unlike `refused` it is not a statement about what an
+    # engine can lower, so `compiled_required` does not excuse it, and unlike
+    # `unavailable` it is per-fixture rather than whole-output. It always fails.
+    if produced.get("error") is not None:
+        return {
+            "status": "error",
+            "error": str(produced["error"]),
+            "problems": [f"{binding} could not evaluate this fixture: {produced['error']}"],
+        }
     if produced.get("status") == "refused":
         required = binding in (fixture.get("compiled_required") or [])
         return {
@@ -625,6 +661,23 @@ def self_test(manifest_path: Path) -> int:
             f"named exclusion ({v['rule']})"
         )
 
+    # NC6: an errored fixture fails for ANY binding, required or not — it is not
+    # a statement about what an engine can lower, so `compiled_required` does not
+    # excuse it the way it excuses a refusal.
+    errored = {"error": "ValueError: injected by --self-test"}
+    for req, label in (([], "not-required"), (["julia"], "compiled_required")):
+        err_fx = copy.deepcopy(ref_fx)
+        err_fx["compiled_required"] = req
+        v = gate_fixture("julia", err_fx, errored, golden, ref_cls)
+        if v["status"] != "error":
+            rc = 1
+            _eprint(
+                f"self-test FAIL [neg/errored_{label}]: an errored fixture reported "
+                f"{v['status']!r}, must be 'error' (a failure)"
+            )
+        else:
+            print(f"self-test OK   [neg/errored_{label}]: an errored fixture fails the gate")
+
     # --- 4. The tolerance-class semantics themselves ------------------------
     # `reduction` and `float32` are declared by the manifest but carried by no
     # phase-1 fixture (the precision fixtures that would use `float32` are
@@ -715,12 +768,31 @@ def write_golden(manifest_path: Path, timeout: float | None) -> int:
                 "be minted from a refusal"
             )
             return 1
+        if produced.get("error") is not None:
+            _eprint(
+                f"--write-golden: the reference could not evaluate {fx['id']}: {produced['error']}"
+            )
+            return 1
+        # A golden carries EXACTLY the fixture's `state_order`, in that order. A
+        # binding whose shape inference invents an extra flat element (Python
+        # reaches a fifth `u[5]` on diffusion_1d_dirichlet_n4) must not put it in
+        # the golden, where it would become a requirement every other binding had
+        # to reproduce.
+        order = fx["state_order"]
+        rhs = {}
+        for pid, vec in produced.get("rhs", {}).items():
+            bare = _norm_map(vec)
+            absent = [n for n in order if n not in bare]
+            if absent:
+                _eprint(f"--write-golden: reference output for {fx['id']}[{pid}] omits {absent}")
+                return 1
+            rhs[pid] = {n: bare[n] for n in order}
         record = {
             "fixture": fx["id"],
             "reference_binding": ref,
             "engine": "interpreter",
             "tolerance_class": fx["tolerance_class"],
-            "rhs": {pid: _norm_map(vec) for pid, vec in produced.get("rhs", {}).items()},
+            "rhs": rhs,
         }
         gpath = golden_path(fx, manifest_path)
         gpath.parent.mkdir(parents=True, exist_ok=True)
@@ -863,6 +935,8 @@ def _print_summary(report: dict) -> None:
                 )
             elif st == "excluded":
                 print(f"      excluded {fid:44s} refused: {fr.get('rule')} — {fr.get('reason')}")
+            elif st == "error":
+                print(f"      ERROR    {fid}: {fr.get('error')}")
             else:
                 print(f"      FAIL     {fid}: {st}")
                 for p in (fr.get("problems") or [])[:6]:

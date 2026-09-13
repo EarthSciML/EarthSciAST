@@ -88,12 +88,23 @@ end
 # through; the bracketed index part never contains one.
 _bare(name::AbstractString) = occursin('.', name) ? String(split(name, '.'; limit = 2)[2]) : String(name)
 
-# Manifest `path` is relative to the repository's `tests/` directory, and the
-# manifest itself lives at tests/conformance/compiled_rhs/manifest.json — so the
-# corpus root is two levels above the manifest's own directory. Deriving it
-# rather than taking it from the environment keeps the adapter runnable from any
-# working directory, which is what the runner's tempfile handoff assumes.
-tests_root(manifest_path) = normpath(joinpath(dirname(abspath(manifest_path)), "..", ".."))
+# Manifest `path` is relative to the repository's `tests/` directory. Every
+# adapter and the runner resolve it the same way: walk up from the manifest to
+# the NEAREST ancestor directory named `tests`, falling back to the manifest's
+# own directory when there is none. A fixed number of parent hops would break the
+# moment a manifest moved a level; deriving the root rather than taking it from
+# the environment keeps the adapter runnable from any working directory, which is
+# what the runner's tempfile handoff assumes.
+function tests_root(manifest_path)
+    dir = dirname(abspath(manifest_path))
+    cur = dir
+    while true
+        basename(cur) == "tests" && return cur
+        parent = dirname(cur)
+        parent == cur && return dir
+        cur = parent
+    end
+end
 
 # The flat state layout the manifest's `state_order` names: bare element name ->
 # its index in `u`. Built from the evaluator's OWN var map, never by hand, so a
@@ -155,8 +166,12 @@ function fixture_rhs(fx, base)
         # call; mirror that so the probe reports a deterministic 0 there.
         du = zero(u)
         f!(du, u, p_fx, Float64(pr.t))
-        rhs[String(pr.id)] = Dict{String,Float64}(name => Float64(du[idx])
-                                                  for (name, idx) in slot)
+        # Emit EXACTLY the manifest's `state_order`, and nothing else. A binding
+        # whose shape inference invents an extra flat element must not smuggle it
+        # into the comparison, where it would become a requirement every other
+        # binding had to reproduce.
+        rhs[String(pr.id)] = Dict{String,Float64}(name => Float64(du[slot[name]])
+                                                  for name in order)
     end
     Dict("rhs" => rhs)
 end
