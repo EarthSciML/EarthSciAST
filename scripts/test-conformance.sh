@@ -816,11 +816,23 @@ run_compiled_rhs_conformance_compiled_julia() {
         env EARTHSCI_COMPILED_RHS_ADAPTER_JULIA="julia $JULIA_DIR/scripts/compiled_rhs_adapter.jl"
 }
 
-# Rust's compiled lane is XlaBuilder emission over the tape. Same phase-2 story
-# and same optional/refusal split as the Julia compiled stage above.
+# Rust's compiled lane is XlaBuilder emission over the tape, behind the opt-in
+# `xla` cargo feature, which needs the prebuilt XLA extension
+# (scripts/fetch-xla-extension.sh) at $XLA_EXTENSION_DIR plus a libclang for
+# its build script. When the variable is set the adapter is built with the
+# feature and the stage gates the compiled engine; when it is unset the
+# feature-less binary answers `unavailable` and the stage skips visibly.
+# Availability is optional; a REFUSAL is a failure (every fixture lists rust
+# in `compiled_required`).
 run_compiled_rhs_conformance_compiled_rust() {
+    local features="conformance-adapters"
+    if [ -n "${XLA_EXTENSION_DIR:-}" ]; then
+        features="conformance-adapters,xla"
+    else
+        log "XLA_EXTENSION_DIR is unset — the Rust compiled stage will report unavailable (run scripts/fetch-xla-extension.sh to enable it)"
+    fi
     _run_compiled_rhs_stage rust compiled "$RUST_DIR" "Rust compiled (XlaBuilder)" \
-        env EARTHSCI_COMPILED_RHS_ADAPTER_RUST="cargo run --quiet --manifest-path $RUST_DIR/Cargo.toml --features conformance-adapters --bin earthsci-compiled-rhs-adapter-rust --"
+        env EARTHSCI_COMPILED_RHS_ADAPTER_RUST="cargo run --quiet --manifest-path $RUST_DIR/Cargo.toml --features $features --bin earthsci-compiled-rhs-adapter-rust --"
 }
 
 run_property_corpus() {

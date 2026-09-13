@@ -275,7 +275,9 @@ Field rules:
 * `analytic_rhs` is optional per probe and is an anchor computed **without** any
   binding. Omit it rather than copy a binding's output into it.
 * `compiled_required` lists the bindings whose compiled engine must compile this
-  fixture. Empty in phase 1; phase 2 fills it as coverage lands. A refusal from a
+  fixture. Since phase 2 (2026-09-13) every fixture lists both `julia` and
+  `rust`: both compiled engines compile the whole tier, so a refusal from
+  either is a failure. A refusal from a
   binding not listed is reported as an exclusion; a refusal from a listed binding
   fails the gate.
 * Tolerance semantics: a value passes when `|got - want| <= atol + rtol * |want|`.
@@ -372,7 +374,7 @@ Hooks per binding (compiled engine):
 | Binding | RHS hook | Adapter |
 |---|---|---|
 | Julia | `EarthSciASTReactantExt.direct_rhs` → `Reactant.@compile` (direct StableHLO emission, `pkg/EarthSciAST.jl/ext/reactant_direct/`) | the same `compiled_rhs_adapter.jl`, under its own `scripts/compiled_rhs_reactant_env` |
-| Rust | the XlaBuilder emitter over the tape | (phase 2) |
+| Rust | the XlaBuilder emitter over the tape (`pkg/earthsci-ast-rs/src/simulate_array/tape/xla_emit.rs`, runtime `src/xla_runtime.rs`) | the same `earthsci-compiled-rhs-adapter-rust`, built with `--features conformance-adapters,xla` and `XLA_EXTENSION_DIR` set |
 | Python | — | no compiled backend in this plan |
 
 An adapter whose compiled engine has not landed, or whose runtime is not

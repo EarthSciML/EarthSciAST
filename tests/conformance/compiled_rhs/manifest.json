@@ -77,7 +77,10 @@
       "path": "conformance/elementwise_observed_gather/fixtures/elementwise_gather.esm",
       "model": "Column",
       "tolerance_class": "transcendental",
-      "compiled_required": [],
+      "compiled_required": [
+        "julia",
+        "rust"
+      ],
       "state_order": [
         "s",
         "u[1]",
@@ -166,7 +169,10 @@
       "path": "conformance/elementwise_observed_gather/fixtures/explicit_gather.esm",
       "model": "Column",
       "tolerance_class": "transcendental",
-      "compiled_required": [],
+      "compiled_required": [
+        "julia",
+        "rust"
+      ],
       "state_order": [
         "s",
         "u[1]",
@@ -255,7 +261,10 @@
       "path": "conformance/pde_simulation/fixtures/diffusion_1d_dirichlet_n4.esm",
       "model": "Diff1D",
       "tolerance_class": "reduction",
-      "compiled_required": [],
+      "compiled_required": [
+        "julia",
+        "rust"
+      ],
       "state_order": [
         "u[1]",
         "u[2]",
@@ -367,7 +376,10 @@
       "path": "conformance/pde_simulation/fixtures/diffusion_1d_neumann_n4.esm",
       "model": "Diff1D",
       "tolerance_class": "reduction",
-      "compiled_required": [],
+      "compiled_required": [
+        "julia",
+        "rust"
+      ],
       "state_order": [
         "u[1]",
         "u[2]",
@@ -479,7 +491,10 @@
       "path": "conformance/pde_simulation/fixtures/diffusion_1d_zero_gradient_n4.esm",
       "model": "Diff1D",
       "tolerance_class": "reduction",
-      "compiled_required": [],
+      "compiled_required": [
+        "julia",
+        "rust"
+      ],
       "state_order": [
         "u[1]",
         "u[2]",
@@ -591,7 +606,10 @@
       "path": "conformance/pde_simulation/fixtures/diffusion_1d_robin_n4.esm",
       "model": "Diff1D",
       "tolerance_class": "reduction",
-      "compiled_required": [],
+      "compiled_required": [
+        "julia",
+        "rust"
+      ],
       "state_order": [
         "u[1]",
         "u[2]",
@@ -703,7 +721,10 @@
       "path": "conformance/pde_simulation/fixtures/diffusion_1d_periodic_n4.esm",
       "model": "Diff1D",
       "tolerance_class": "reduction",
-      "compiled_required": [],
+      "compiled_required": [
+        "julia",
+        "rust"
+      ],
       "state_order": [
         "u[1]",
         "u[2]",
@@ -815,7 +836,10 @@
       "path": "conformance/pde_simulation/fixtures/diffusion_1d_periodic_n8.esm",
       "model": "Diff1D",
       "tolerance_class": "reduction",
-      "compiled_required": [],
+      "compiled_required": [
+        "julia",
+        "rust"
+      ],
       "state_order": [
         "u[1]",
         "u[2]",
@@ -979,7 +1003,10 @@
       "path": "conformance/pde_simulation/fixtures/diffusion_2d_dirichlet_n3.esm",
       "model": "Diff2D",
       "tolerance_class": "reduction",
-      "compiled_required": [],
+      "compiled_required": [
+        "julia",
+        "rust"
+      ],
       "state_order": [
         "u[1,1]",
         "u[2,1]",
@@ -1156,7 +1183,10 @@
       "path": "conformance/pde_simulation/fixtures/advection_1d_periodic_n4.esm",
       "model": "Advect1D",
       "tolerance_class": "reduction",
-      "compiled_required": [],
+      "compiled_required": [
+        "julia",
+        "rust"
+      ],
       "state_order": [
         "u[1]",
         "u[2]",
@@ -1268,7 +1298,10 @@
       "path": "valid/events_cross_system.esm",
       "model": "MeteorologicalSystem",
       "tolerance_class": "transcendental",
-      "compiled_required": [],
+      "compiled_required": [
+        "julia",
+        "rust"
+      ],
       "state_order": [
         "solar_intensity",
         "temperature",
@@ -1339,7 +1372,10 @@
       "path": "valid/expr_graphs_variable_deps.esm",
       "model": "VariableDependencyModel",
       "tolerance_class": "transcendental",
-      "compiled_required": [],
+      "compiled_required": [
+        "julia",
+        "rust"
+      ],
       "state_order": [
         "x",
         "y",
@@ -1410,7 +1446,10 @@
       "path": "conformance/pde_inline_observed_indexed_lhs/fixtures/observed_indexed_lhs.esm",
       "model": "M",
       "tolerance_class": "algebraic",
-      "compiled_required": [],
+      "compiled_required": [
+        "julia",
+        "rust"
+      ],
       "state_order": [
         "u[1]",
         "u[2]",
@@ -1526,7 +1565,10 @@
       "path": "conformance/pde_inline_observed_rank2/fixtures/observed_rank2.esm",
       "model": "M",
       "tolerance_class": "algebraic",
-      "compiled_required": [],
+      "compiled_required": [
+        "julia",
+        "rust"
+      ],
       "state_order": [
         "u[1,1]",
         "u[2,1]",
@@ -1624,7 +1666,10 @@
       "path": "conformance/pde_inline_observed_param_rank2/fixtures/observed_param_rank2.esm",
       "model": "M",
       "tolerance_class": "algebraic",
-      "compiled_required": [],
+      "compiled_required": [
+        "julia",
+        "rust"
+      ],
       "state_order": [
         "u[1,1]",
         "u[2,1]",
@@ -1722,7 +1767,10 @@
       "path": "conformance/pde_inline_observed_state_dependent/fixtures/observed_state_dependent.esm",
       "model": "M",
       "tolerance_class": "algebraic",
-      "compiled_required": [],
+      "compiled_required": [
+        "julia",
+        "rust"
+      ],
       "state_order": [
         "u[1]",
         "u[2]",
@@ -1838,7 +1886,10 @@
       "path": "valid/mount_rename_atm_column.esm",
       "model": "AtmColumn",
       "tolerance_class": "algebraic",
-      "compiled_required": [],
+      "compiled_required": [
+        "julia",
+        "rust"
+      ],
       "state_order": [
         "T[1]",
         "T[2]",
@@ -2413,7 +2464,10 @@
       "path": "valid/mount_rename_soil_column.esm",
       "model": "SoilColumn",
       "tolerance_class": "algebraic",
-      "compiled_required": [],
+      "compiled_required": [
+        "julia",
+        "rust"
+      ],
       "state_order": [
         "Tsoil[1]",
         "Tsoil[2]",
@@ -2493,7 +2547,10 @@
       "path": "valid/units_registry_grammar.esm",
       "model": "UnitsRegistryGrammar",
       "tolerance_class": "algebraic",
-      "compiled_required": [],
+      "compiled_required": [
+        "julia",
+        "rust"
+      ],
       "state_order": [
         "u"
       ],

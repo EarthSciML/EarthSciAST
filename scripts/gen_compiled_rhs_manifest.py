@@ -563,7 +563,7 @@ def build_manifest() -> dict:
                 "path": entry["path"],
                 "model": entry["model"],
                 "tolerance_class": entry["tolerance_class"],
-                "compiled_required": [],
+                "compiled_required": ["julia", "rust"],
                 "state_order": order,
                 "parameters": {},
                 "rhs_probes": build_probes(entry, layout, rng, pde_probes),
@@ -577,6 +577,10 @@ def build_manifest() -> dict:
         "engines": {
             "interpreter": {"bindings_required": ["julia", "rust", "python"]},
             "compiled": {"bindings_required": [], "bindings_optional": ["julia", "rust"]},
+            # Availability stays optional (no XLA extension or Reactant on a machine is a
+            # visible skip); a REFUSAL from either compiled engine is a failure via
+            # every fixture's `compiled_required` (both engines compile the whole tier
+            # since phase 2, 2026-09-13).
         },
         "scope_excluded": {
             "go": "rewrite-only port; no faq/makearray evaluator, no RHS hook",
