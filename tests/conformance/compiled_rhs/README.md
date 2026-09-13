@@ -367,10 +367,19 @@ Hooks per binding (interpreter engine):
 | Rust | `ArrayCompiled::debug_eval_rhs` (or the tape executor) | `pkg/earthsci-ast-rs/src/bin/earthsci-compiled-rhs-adapter-rust.rs`, feature `conformance-adapters` |
 | Python | `earthsci_ast.evaluate_rhs` | `pkg/earthsci-ast-py/src/earthsci_ast/cli/compiled_rhs_adapter.py` |
 
-Compiled-engine hooks land in phase 2 (Julia: the direct StableHLO emitter in
-the Reactant extension; Rust: the XlaBuilder emitter over the tape). Until
-then each adapter answers `--engine compiled` with `unavailable` and a reason
-that says so.
+Hooks per binding (compiled engine):
+
+| Binding | RHS hook | Adapter |
+|---|---|---|
+| Julia | `EarthSciASTReactantExt.direct_rhs` → `Reactant.@compile` (direct StableHLO emission, `pkg/EarthSciAST.jl/ext/reactant_direct/`) | the same `compiled_rhs_adapter.jl`, under its own `scripts/compiled_rhs_reactant_env` |
+| Rust | the XlaBuilder emitter over the tape | (phase 2) |
+| Python | — | no compiled backend in this plan |
+
+An adapter whose compiled engine has not landed, or whose runtime is not
+configured on this machine, answers `--engine compiled` with `unavailable` and a
+reason that says so. Julia's answers `unavailable` only when Reactant cannot be
+loaded at all: a model its emitter cannot lower is a `refused` fixture, never an
+unavailable engine, because the two readings are different facts.
 
 ## Runner
 
