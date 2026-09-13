@@ -1,0 +1,274 @@
+name: XLA Compiled Backends
+
+# The XLA-only leg of the compiled backends, kept OUT of
+# `conformance-testing.yml` on purpose.
+#
+# Two things in this repository emit an XLA program instead of walking a tree:
+#
+#   * Rust — `XlaBuilder` emission over the tape, behind the opt-in `xla` cargo
+#     feature. That feature links a prebuilt 144 MB `xla_extension` release
+#     that is fetched separately and never vendored, and its build script runs
+#     bindgen, so it needs a libclang too.
+#   * Julia — direct StableHLO emission in the Reactant extension
+#     (`pkg/EarthSciAST.jl/ext/reactant_direct/`). Reactant bundles an XLA
+#     runtime; precompiling it costs the better part of half an hour cold.
+#
+# Neither cost belongs in the main conformance workflow, which runs on every
+# push to `pkg/**`. So `conformance-testing.yml` deliberately names its cargo
+# features explicitly and never includes `xla`, never sets
+# `XLA_EXTENSION_DIR`, and never sets `ESM_TEST_REACTANT`. There, the
+# `compiled-RHS compiled producer` stages report `unavailable` and SKIP
+# VISIBLY — legal because the tier manifest lists julia and rust as
+# `bindings_optional` for the `compiled` engine
+# (`tests/conformance/compiled_rhs/manifest.json`).
+#
+# HERE that same skip is a FAILURE. Both jobs run the tier and then assert on
+# the report JSON that the binding's status is literally `ok`, because the
+# runner's own exit code cannot do it: with an empty
+# `engines.compiled.bindings_required` an `unavailable` binding exits 0. The
+# runner has no `--require-available` flag and the manifest and runner are not
+# this workflow's to change, so the assertion lives in a step of its own.
+# If a `--require-available` option is ever added to
+# `scripts/run-compiled-rhs-conformance.py`, replace the assert steps with it.
+
+on:
+  # The two path lists are spelled out twice, identically, on purpose:
+  # GitHub Actions does not support YAML anchors/aliases, so `&`/`*` here
+  # would not resolve. Keep them in sync by hand.
+  push:
+    branches: [ main ]
+    paths:
+      - 'pkg/earthsci-ast-rs/**'
+      - 'pkg/EarthSciAST.jl/**'
+      - 'tests/conformance/compiled_rhs/**'
+      - 'scripts/run-compiled-rhs-conformance.py'
+      - 'scripts/fetch-xla-extension.sh'
+      - '.github/workflows/xla-backends.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'pkg/earthsci-ast-rs/**'
+      - 'pkg/EarthSciAST.jl/**'
+      - 'tests/conformance/compiled_rhs/**'
+      - 'scripts/run-compiled-rhs-conformance.py'
+      - 'scripts/fetch-xla-extension.sh'
+      - '.github/workflows/xla-backends.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: xla-backends-${{ github.ref }}
+  # Same reasoning as the conformance workflow: these jobs are long (the julia
+  # leg is the better part of an hour cold), so a superseded run must not keep
+  # a runner busy while HEAD waits behind it.
+  cancel-in-progress: true
+
+env:
+  # The pinned `xla_extension` release. Must match VERSION in
+  # scripts/fetch-xla-extension.sh -- the cache key below is built from the
+  # script's own bytes, so a bump there invalidates the cache automatically,
+  # but this path has to be spelled out to export XLA_EXTENSION_DIR.
+  XLA_EXTENSION_VERSION: '0.10.0'
+  # Julia 1.12: the version the main workflow uses for its golden-regeneration
+  # and coverage leg, and recent enough for Reactant (which is x86_64-linux
+  # only for the prebuilt runtime this uses).
+  JULIA_VERSION: '1.12'
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Rust: the `xla` feature's own tests, then the compiled_rhs tier's Rust
+  # compiled producer.
+  #
+  # Expected duration cold: ~35-45 min, nearly all of it compiling the crate
+  # graph twice over (once for `--lib --tests`, once for the adapter binary the
+  # tier's `cargo run` builds -- same feature set, so the second is a no-op
+  # link). The 144 MB extension download happens once per cache key.
+  # ---------------------------------------------------------------------------
+  rust-xla:
+    name: Rust XlaBuilder backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      # Registry + git checkouts only, matching `rust-tests` in
+      # conformance-testing.yml: that job's comment records that caching
+      # `target` there blew past the 10 GiB per-repository Actions cache and
+      # ran the runner disk out. The same applies here, more so -- the `xla`
+      # feature's dependency graph is larger, not smaller.
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-xla-${{ hashFiles('pkg/earthsci-ast-rs/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-xla-
+
+      # The `xla` crate's build script runs bindgen over the extension headers,
+      # which needs libclang AND clang's own resource headers (stddef.h and
+      # friends live under the clang install, not in libclang-dev). On the
+      # cluster this repository is developed on these come from a module and
+      # need LIBCLANG_PATH / BINDGEN_EXTRA_CLANG_ARGS; on ubuntu-latest the
+      # distribution packages land where bindgen already looks, so neither
+      # variable is set here. No `continue-on-error` anywhere in this workflow:
+      # a missing tool must fail the job, never silently degrade it to a skip.
+      - name: Install libclang and a C++ toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libclang-dev clang g++
+
+      # Keyed on the fetch script itself: it pins both the release VERSION and
+      # the SHA-256 of each archive, so any bump to either changes this key and
+      # re-downloads. Nothing else can change what the script produces.
+      - name: Cache the xla_extension release
+        uses: actions/cache@v4
+        with:
+          path: ~/xla-ext
+          key: xla-ext-cpu-${{ env.XLA_EXTENSION_VERSION }}-${{ hashFiles('scripts/fetch-xla-extension.sh') }}
+
+      # Unconditional: the script is a no-op when the tree is already unpacked
+      # ("already unpacked: ..."), so a cache hit still verifies the tree is
+      # actually there rather than trusting the cache to have been complete.
+      # `--dest` is OUTSIDE the checkout, which the script enforces.
+      - name: Fetch the xla_extension release (cpu)
+        run: scripts/fetch-xla-extension.sh --variant cpu --dest "$HOME/xla-ext"
+
+      - name: Export XLA_EXTENSION_DIR
+        run: |
+          dir="$HOME/xla-ext/xla_extension-${XLA_EXTENSION_VERSION}-cpu/xla_extension"
+          test -d "$dir/lib" || { echo "missing $dir/lib"; exit 1; }
+          echo "XLA_EXTENSION_DIR=$dir" >> "$GITHUB_ENV"
+
+      - name: Build with the xla feature
+        working-directory: pkg/earthsci-ast-rs
+        run: cargo build --features conformance-adapters,xla --verbose
+
+      - name: Run Rust tests (lib + integration)
+        working-directory: pkg/earthsci-ast-rs
+        run: cargo test --features conformance-adapters,xla --lib --tests --verbose
+
+      # Doctests link the extension at RUN time rather than going through the
+      # crate's own build-script rpath, so they need the shared library on the
+      # loader path. (The crate README says the same.)
+      - name: Run Rust doctests
+        working-directory: pkg/earthsci-ast-rs
+        run: LD_LIBRARY_PATH="$XLA_EXTENSION_DIR/lib:${LD_LIBRARY_PATH:-}" cargo test --features conformance-adapters,xla --doc
+
+      - name: compiled_rhs harness self-test
+        run: python3 scripts/run-compiled-rhs-conformance.py --self-test
+
+      - name: compiled_rhs tier — Rust compiled producer
+        env:
+          EARTHSCI_COMPILED_RHS_ADAPTER_RUST: cargo run --quiet --manifest-path pkg/earthsci-ast-rs/Cargo.toml --features conformance-adapters,xla --bin earthsci-compiled-rhs-adapter-rust --
+        run: |
+          mkdir -p conformance-results/compiled_rhs
+          python3 scripts/run-compiled-rhs-conformance.py \
+            --bindings rust --engine compiled \
+            --output conformance-results/compiled_rhs/rust_compiled_report.json
+
+      # The not-a-skip gate. See the header: the runner exits 0 on an
+      # `unavailable` rust/compiled engine because the manifest lists rust as
+      # optional there, which is exactly right for the main workflow and
+      # exactly wrong here. `!cancelled()` so a failed producer step above
+      # still gets its report read and named, rather than the reason
+      # disappearing behind a bare red step.
+      - name: Assert the Rust compiled engine actually ran
+        if: ${{ !cancelled() }}
+        run: python3 scripts/assert-compiled-rhs-available.py conformance-results/compiled_rhs/rust_compiled_report.json rust
+
+      - name: Upload the compiled_rhs report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: compiled-rhs-rust-${{ github.run_number }}
+          path: conformance-results/compiled_rhs/rust_compiled_report.json
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Julia: the direct StableHLO emitter's own test file, then the compiled_rhs
+  # tier's Julia compiled producer.
+  #
+  # Expected duration: ~45-70 min COLD, of which Reactant's precompile alone is
+  # 25-40 min on a GitHub-hosted runner; ~15-20 min warm, when
+  # julia-actions/cache restores the depot. Hence timeout-minutes: 120 -- a
+  # cold run that also has to build artifacts must not be killed mid-precompile
+  # and leave nothing in the cache for the next one.
+  # ---------------------------------------------------------------------------
+  julia-xla:
+    name: Julia direct StableHLO backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Julia
+        uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ env.JULIA_VERSION }}
+          arch: x64   # Reactant's prebuilt XLA runtime is x86_64-linux only
+
+      - uses: julia-actions/cache@v2
+
+      # The adapter self-bootstraps this env on first use
+      # (compiled_rhs_adapter.jl: activate, `Pkg.develop` the package when
+      # Manifest.toml is absent, instantiate). Doing it as its own step here
+      # means Reactant precompiles ONCE, into the cache, and the test step and
+      # the tier step both find it warm -- instead of the first of them paying
+      # for it inside a step whose log is about something else.
+      #
+      # Manifest.toml is gitignored repo-wide, so `Pkg.develop` is what points
+      # the env at THIS checkout rather than a registered EarthSciAST.
+      - name: Instantiate the Reactant adapter environment
+        run: |
+          julia --project=pkg/EarthSciAST.jl/scripts/compiled_rhs_reactant_env -e '
+            using Pkg
+            Pkg.develop(path="pkg/EarthSciAST.jl")
+            Pkg.instantiate()
+            Pkg.precompile()
+          '
+
+      # `Pkg.test()` on the package is not used on purpose: the full target is
+      # heavy and runs the whole suite for the sake of one opt-in file. The
+      # driver below is the standalone invocation the test file's own header
+      # documents -- `cd` into test/ (the file includes testutils.jl and reads
+      # fixtures relative to it) and include it, from the Reactant env.
+      - name: Direct StableHLO emitter tests
+        env:
+          ESM_TEST_REACTANT: '1'
+        run: |
+          julia --project=pkg/EarthSciAST.jl/scripts/compiled_rhs_reactant_env -e '
+            cd("pkg/EarthSciAST.jl/test")
+            include("reactant_direct_emit_test.jl")
+          '
+
+      - name: compiled_rhs harness self-test
+        run: python3 scripts/run-compiled-rhs-conformance.py --self-test
+
+      - name: compiled_rhs tier — Julia compiled producer
+        env:
+          EARTHSCI_COMPILED_RHS_ADAPTER_JULIA: julia pkg/EarthSciAST.jl/scripts/compiled_rhs_adapter.jl
+        run: |
+          mkdir -p conformance-results/compiled_rhs
+          python3 scripts/run-compiled-rhs-conformance.py \
+            --bindings julia --engine compiled \
+            --output conformance-results/compiled_rhs/julia_compiled_report.json
+
+      - name: Assert the Julia compiled engine actually ran
+        if: ${{ !cancelled() }}
+        run: python3 scripts/assert-compiled-rhs-available.py conformance-results/compiled_rhs/julia_compiled_report.json julia
+
+      - name: Upload the compiled_rhs report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: compiled-rhs-julia-${{ github.run_number }}
+          path: conformance-results/compiled_rhs/julia_compiled_report.json
+          if-no-files-found: error
