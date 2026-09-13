@@ -22,7 +22,9 @@
 #   --engine compiled     direct StableHLO emission: the model's compiled
 #                         tree-walk IR is lowered op by op into a StableHLO
 #                         program (ext/reactant_direct/, `direct_rhs`), compiled
-#                         on Reactant's CPU client, and evaluated at every probe.
+#                         on an XLA client, and evaluated at every probe. WHICH
+#                         client is `EARTHSCI_JULIA_XLA_DEVICE` (see below);
+#                         the default is the host CPU.
 #                         There is NO fallback: a model the emitter cannot lower
 #                         completely is a hard `DirectEmitError`, reported as
 #                         that fixture's `refused` outcome with the rule and the
@@ -31,6 +33,26 @@
 #                         between the interpreter and itself, which is exactly
 #                         the reading the `refused` and `unavailable` outcomes
 #                         exist to prevent.
+#
+# WHICH DEVICE, AND WHY IT IS NOT IN THE REPORT.
+#
+#   EARTHSCI_JULIA_XLA_DEVICE=cpu   (the default) compile and run on the host
+#                                   CPU client. Always available.
+#   EARTHSCI_JULIA_XLA_DEVICE=gpu   compile and run on the attached accelerator.
+#                                   With no GPU on the machine this is the
+#                                   whole-output `unavailable` outcome, with the
+#                                   client error as the reason — never a pass,
+#                                   and never a silent fall back to the CPU,
+#                                   which would report a CPU run under a GPU
+#                                   label.
+#
+# The tier's report schema has no field for the platform: a fixture entry is the
+# probe values, a `refused`, or an `error`, and the README's "Adapter contract"
+# admits no extra keys, because a key one binding invents becomes a key every
+# other binding has to reproduce. So the platform is announced on STDERR, once,
+# as `compiled_rhs_adapter: julia engine=compiled device=... platform=...`, and
+# the runner's captured adapter stderr is where a reader confirms which device a
+# run used. Nothing parses that line.
 #
 # TWO ENVIRONMENTS, for the same reason. The interpreter engine reuses
 # scripts/pde_sim_adapter; the compiled engine gets its own
@@ -215,6 +237,16 @@ end
 # which is a FAILURE: unlike a refusal it says nothing about what the engine can
 # lower.
 
+# The device choice, read once. Anything other than the two spellings is a hard
+# error rather than a silent default: a typo that quietly ran on the CPU would
+# report a CPU run under a GPU label.
+const XLA_DEVICE = let d = lowercase(strip(get(ENV, "EARTHSCI_JULIA_XLA_DEVICE", "cpu")))
+    d == "" && (d = "cpu")
+    d in ("cpu", "gpu") ||
+        error("EARTHSCI_JULIA_XLA_DEVICE must be 'cpu' or 'gpu', got '$d'")
+    d
+end
+
 const REACTANT_LOAD_ERROR = Ref{Any}(nothing)
 const HAVE_REACTANT = if ENGINE != "compiled"
     false      # the interpreter lane's env does not carry Reactant, by design
@@ -228,11 +260,24 @@ else
     end
 end
 
-# Parameters as program inputs, so a fixture's `parameters` overrides change the
-# values fed to the SAME executable rather than forcing another compile.
-_device_params(::Nothing) = nothing
-_device_params(p::NamedTuple) =
-    NamedTuple{keys(p)}(map(v -> Reactant.ConcreteRNumber(Float64(v)), values(p)))
+# The client the compiled engine runs on, resolved ONCE (resolving it per
+# fixture would re-enter the GPU client initialization 19 times). Held as a
+# `Ref` so `main` can answer `unavailable` when the GPU client cannot be built,
+# before any fixture is attempted.
+const XLA_CLIENT = Ref{Any}(nothing)
+const XLA_CLIENT_ERROR = Ref{Any}(nothing)
+
+function resolve_client()
+    ext = Base.get_extension(EarthSciAST, :EarthSciASTReactantExt)
+    ext === nothing && error("the Reactant extension did not load")
+    try
+        XLA_CLIENT[] = ext.direct_client(XLA_DEVICE)
+        true
+    catch err
+        XLA_CLIENT_ERROR[] = err
+        false
+    end
+end
 
 function fixture_rhs_compiled(fx, base)
     ext = Base.get_extension(EarthSciAST, :EarthSciASTReactantExt)
@@ -255,11 +300,11 @@ function fixture_rhs_compiled(fx, base)
               "evaluator's state vector has $(length(u0))")
 
     p_fx = apply_parameters(p, get(fx, :parameters, nothing))
-    p_dev = _device_params(p_fx)
 
-    d = ext.direct_rhs(fo; var_map = var_map)
-    u_dev = Reactant.ConcreteRArray(copy(u0))
-    t_dev = Reactant.ConcreteRNumber(0.0)
+    d = ext.direct_rhs(fo; var_map = var_map, client = XLA_CLIENT[])
+    p_dev = ext.direct_params(d, p_fx)
+    u_dev = ext.direct_state(d, copy(u0))
+    t_dev = ext.direct_time(d, 0.0)
     compiled = Reactant.@compile sync = true d(u_dev, p_dev, t_dev)
 
     rhs = Dict{String,Any}()
@@ -268,8 +313,8 @@ function fixture_rhs_compiled(fx, base)
         for (rawname, val) in pairs(pr.state)
             u[slot[String(rawname)]] = Float64(val)
         end
-        du = Array(compiled(Reactant.ConcreteRArray(u), p_dev,
-                            Reactant.ConcreteRNumber(Float64(pr.t))))
+        du = Array(compiled(ext.direct_state(d, u), p_dev,
+                            ext.direct_time(d, Float64(pr.t))))
         rhs[String(pr.id)] = Dict{String,Float64}(name => Float64(du[slot[name]])
                                                   for name in order)
     end
@@ -300,6 +345,35 @@ function main()
             JSON3.write(io, payload)
         end
         return
+    end
+
+    if engine == "compiled" && !resolve_client()
+        # Same whole-output `unavailable` shape, for the same reason: the
+        # requested device is not configured on this machine. Asked for a GPU
+        # and given none, the honest answer is "not run here" — falling back to
+        # the CPU would report a CPU run under a GPU label.
+        payload = Dict(
+            "binding" => BINDING,
+            "engine" => engine,
+            "status" => "unavailable",
+            "reason" => "EARTHSCI_JULIA_XLA_DEVICE=$XLA_DEVICE, but that XLA " *
+                        "client could not be created on this machine: " *
+                        sprint(showerror, XLA_CLIENT_ERROR[]),
+        )
+        open(output_path, "w") do io
+            JSON3.write(io, payload)
+        end
+        return
+    end
+
+    if engine == "compiled"
+        # The platform announcement (see "WHICH DEVICE" above): stderr, because
+        # the report schema has no field for it.
+        println(stderr, "compiled_rhs_adapter: julia engine=compiled ",
+                "device=", XLA_DEVICE,
+                " platform=", Reactant.XLA.platform_name(XLA_CLIENT[]),
+                " addressable_devices=",
+                length(Reactant.XLA.addressable_devices(XLA_CLIENT[])))
     end
 
     manifest = JSON3.read(read(manifest_path, String))
