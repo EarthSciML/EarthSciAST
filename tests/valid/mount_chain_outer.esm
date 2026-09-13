@@ -1,0 +1,13 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "mount_chain_outer",
+    "description": "A two-level TOP-LEVEL mount chain (esm-spec §4.7 'Two mount forms, one mechanism'): this document mounts tests/valid/mount_chain_inner.esm, which is itself an assembly mounting tests/valid/mount_rename_soil_column.esm under an index_set_rename. Resolving it must land the soil column's own variables under the mount key `Deep` and carry `soil_lev` (interval/4) — the name the INNER edge chose — all the way up into this document's registry. A binding that resolves only the outer edge produces a document whose `models.Deep` is a bare `{ref}`: a mount edge sitting where a model belongs, with nothing red.",
+    "authors": ["EarthSciAST"],
+    "created": "2026-09-12T00:00:00Z",
+    "tags": ["subsystem", "index_sets", "mount", "rename", "chain", "issue-198"]
+  },
+  "models": {
+    "Deep": { "ref": "./mount_chain_inner.esm" }
+  }
+}

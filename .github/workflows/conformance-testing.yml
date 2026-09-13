@@ -242,8 +242,48 @@ jobs:
         with:
           version: ${{ matrix.julia-version }}
 
-      - name: Cache Julia packages
-        uses: julia-actions/cache@v2
+      # Depot cache: RESTORE on every run, SAVE only on `main`.
+      #
+      # `Pkg.test()` builds a separate environment (the `[targets] test` set)
+      # and precompiles it under `--check-bounds=yes` — a different
+      # `Base.CacheFlags` configuration from the one the step below builds, and
+      # ~437 packages deep. Warm that costs 40-70 s. Cold it costs 8-24 min,
+      # and it was cold on 6 of 15 legs sampled.
+      #
+      # Not because dependencies drifted — the resolved version sets of a cold
+      # leg (34703909739) and a warm one (34671026222) are byte-identical, 303
+      # entries, zero diff. Because the repo was permanently over GitHub's 10
+      # GB cache limit and in continuous LRU eviction:
+      # `actions/cache/usage` reported 11.6 GB across 24 caches, of which the
+      # ten largest were all julia depots. Every leg saved a ~0.8-1.5 GB cache
+      # under a `run_id`-unique key on EVERY run, and caches are scoped per
+      # ref, so each open PR kept its own full set. Three legs x ~1 GB x ~20
+      # runs/day went into a 10 GB budget.
+      #
+      # Saving only from `main` fixes that at the source. PR runs still restore
+      # it — a PR run CAN read its base branch's caches, and did: run
+      # 34700838214 (a pull request) restored the cache written by run
+      # 34671026222 (a push to main). Steady state is one depot per julia
+      # version, ~3 GB total, instead of one per version per live ref.
+      #
+      # The key is pinned to the package's Project.toml, not to the run, so
+      # main re-saves only when the dependency set changes; between those the
+      # exact-key hit makes the save step a no-op. Bump `v1` by hand to force a
+      # rebuild if a depot ever goes stale enough to be worth discarding.
+      - name: Restore Julia depot
+        id: julia-depot
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.julia/artifacts
+            ~/.julia/packages
+            ~/.julia/registries
+            ~/.julia/compiled
+            ~/.julia/scratchspaces
+            ~/.julia/logs
+          key: julia-depot-v1-${{ runner.os }}-${{ matrix.julia-version }}-${{ hashFiles('pkg/EarthSciAST.jl/Project.toml') }}
+          restore-keys: |
+            julia-depot-v1-${{ runner.os }}-${{ matrix.julia-version }}-
 
       - name: Install Julia dependencies
         run: |
@@ -284,6 +324,23 @@ jobs:
         with:
           files: lcov.info
           flags: julia
+
+      # See the restore step above for why this is main-only. `always()` so a
+      # red suite still banks the precompile work, which is just as valid; the
+      # `cache-hit` guard makes this a no-op on the runs that already had an
+      # exact-key hit, which is most of them.
+      - name: Save Julia depot
+        if: ${{ always() && github.ref == 'refs/heads/main' && steps.julia-depot.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.julia/artifacts
+            ~/.julia/packages
+            ~/.julia/registries
+            ~/.julia/compiled
+            ~/.julia/scratchspaces
+            ~/.julia/logs
+          key: julia-depot-v1-${{ runner.os }}-${{ matrix.julia-version }}-${{ hashFiles('pkg/EarthSciAST.jl/Project.toml') }}
 
   typescript-tests:
     runs-on: ubuntu-latest
@@ -546,34 +603,46 @@ jobs:
       - name: Build Go binary
         run: go build -v ./...
 
-  # Cross-language conformance testing — only runs if all per-language suites pass.
+  # Cross-language conformance testing — runs concurrently with the per-language suites.
   #
-  # Deliberately NOT gated on `lint`. It needs each binding to BUILD and pass
-  # its own suite, which is what the jobs below it establish; whether a file is
-  # prettier-clean has no bearing on whether the five bindings agree on a
-  # document. Gating it on style would put this suite back behind exactly the
-  # kind of nit that kept the whole workflow red for 40 runs. `lint` still runs
-  # and still fails the workflow on its own — it just does not withhold this
-  # signal while it does.
+  # Deliberately NOT gated on `lint`, and no longer gated on anything else
+  # either. Whether a file is prettier-clean has no bearing on whether the five
+  # bindings agree on a document. Gating this suite on style would put it back
+  # behind exactly the kind of nit that kept the whole workflow red for 40
+  # runs. `lint` still runs and still fails the workflow on its own — it just
+  # does not withhold this signal while it does.
   #
-  # THE `needs:` LIST IS THE SUITE GATE, and is now the ONLY thing performing
-  # that role (#224). The harness used to re-run all five suites itself before
-  # generating any conformance output, which duplicated exactly the work these
-  # five jobs had just finished — at ONE pinned version apiece, where the
-  # matrix covers julia 1.10/1.12/1.13, node 20/22, python 3.9-3.12, rust
-  # stable/beta/MSRV and go 1.21/1.22/1.23. Less coverage, for the whole cost.
+  # `--skip-binding-suites` below is still load-bearing and still means what it
+  # always did (#224). The harness used to re-run all five suites itself before
+  # generating any conformance output, duplicating exactly the work the
+  # per-language jobs do — and at ONE pinned version apiece, where those
+  # matrices cover several versions of each language. Less coverage, for the
+  # whole cost. That duplication is why this job had NEVER completed: across
+  # 174 workflow runs it executed 28 times and all 28 died at the 45-minute
+  # wall, the most recent still inside the first suite (`Pkg.test()`) 38.6
+  # minutes in, with no conformance output produced. What still runs here is
+  # everything only this job can do — the per-binding conformance PRODUCERS,
+  # the cross-language comparison, and the determinism / geometry / cadence /
+  # PDE gates.
   #
-  # That duplication is why this job had NEVER completed: across the last 174
-  # workflow runs it executed 28 times and all 28 died at the 45-minute wall,
-  # the most recent still inside the first suite (`Pkg.test()`) 38.6 minutes
-  # in, with no conformance output produced. `--skip-binding-suites` below
-  # removes the duplicate, NOT the gate: keep this `needs:` list in step with
-  # the per-language jobs, because dropping a language from it would let the
-  # harness run against a binding whose suite nobody checked.
+  # This job used to carry `needs: [julia-tests, typescript-tests,
+  # python-tests, rust-tests, go-tests]`, which made the list a SUITE GATE: the
+  # harness did not start until every binding's suite was green, and a red
+  # suite left conformance `skipped` with no verdict at all. That gate cost a
+  # flat ~22 minutes of wall clock on EVERY run, because it could not start
+  # until the slowest julia leg finished, and julia was the long pole in every
+  # run measured. The gate is gone; this job now runs concurrently with the
+  # suites and finishes long before them.
+  #
+  # WHAT THAT CHANGES: a conformance verdict can now appear alongside a RED
+  # binding suite. That verdict is real — the producers and comparators ran —
+  # but it was computed against a binding whose own suite did not pass, so it
+  # is not evidence that the binding is correct. Read the two signals
+  # separately. Nothing here weakens the workflow's overall verdict: every
+  # per-language job still fails the workflow on its own, exactly as before.
   standard-conformance-testing:
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    needs: [julia-tests, typescript-tests, python-tests, rust-tests, go-tests]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -707,11 +776,17 @@ jobs:
 
       # Report NOT RUN and stop. No artifact exists to download, no verdict
       # exists to comment, and inventing either is the bug this guards against.
+      #
+      # `skipped` used to be the common case: conformance was gated on the five
+      # binding suites, so a red suite skipped it. That gate is gone, and with
+      # no `needs:` left on the harness nothing can skip it any more — the
+      # branch is kept because a `skipped` result must never be read as a pass,
+      # whatever future edit reintroduces one.
       - name: Report that conformance did not run
         if: ${{ needs.standard-conformance-testing.result == 'skipped' || needs.standard-conformance-testing.result == 'cancelled' }}
         run: |
           if [ "$HARNESS_RESULT" = "skipped" ]; then
-            why="an upstream per-language job did not pass, so the harness never started"
+            why="the harness job did not run at all"
           else
             why="the harness was cancelled (its own 45-minute timeout, most likely)"
           fi
@@ -735,9 +810,14 @@ jobs:
           path: standard-results/
         continue-on-error: true
 
-      # Comment on PR with conformance results. Only when there IS a verdict:
-      # a PR whose python job failed should not also collect a conformance
-      # comment about results that were never computed.
+      # Comment on PR with conformance results. Only when there IS a verdict —
+      # a cancelled or never-run harness computed nothing, and a comment about
+      # results that do not exist is the bug this guards against.
+      #
+      # Since the suite gate was dropped, this comment CAN now appear on a PR
+      # whose python (or julia, or rust, …) job is red: the harness runs
+      # concurrently and reaches a verdict either way. That verdict stands on
+      # its own and is not a statement about the red binding.
       - name: Comment PR with enhanced conformance results
         if: ${{ github.event_name == 'pull_request' && (needs.standard-conformance-testing.result == 'success' || needs.standard-conformance-testing.result == 'failure') }}
         uses: actions/github-script@v7
