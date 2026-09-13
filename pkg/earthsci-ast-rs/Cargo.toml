@@ -54,6 +54,11 @@ name = "earthsci-pde-sim-adapter-rust"
 path = "src/bin/earthsci-pde-sim-adapter-rust.rs"
 required-features = ["conformance-adapters"]
 
+[[bin]]
+name = "earthsci-compiled-rhs-adapter-rust"
+path = "src/bin/earthsci-compiled-rhs-adapter-rust.rs"
+required-features = ["conformance-adapters"]
+
 [lib]
 name = "earthsci_ast"
 crate-type = ["cdylib", "rlib"]
