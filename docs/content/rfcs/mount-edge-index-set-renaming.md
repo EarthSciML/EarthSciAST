@@ -417,6 +417,45 @@ applying the field at both forms is what opened it properly. The four bindings t
 a top-level `reaction_systems.<k>` `{ref}` at all still neither apply nor refuse the field there,
 which is the one silence §4.7 forbids that survives.
 
+### 4.12 Mounting an assembly — the mount form composes with itself
+
+Found reviewing the top-level-form port, and fixed with it. A mounted document may itself be an
+assembly, whose own `models.<k>` entries are `{ref}` mount edges. The top-level form lands its
+component as a *top-level system*, and a top-level system is exactly what that form mounts, so
+the composition is not an extra feature — it is what the form already claims to do.
+
+Measured on `main` before the fix, with a three-file chain (root mounts an assembly, the
+assembly mounts a component):
+
+| Binding | chained top-level mount | mount cycle |
+|---|---|---|
+| Rust | resolves | `circular top-level model reference detected` |
+| Julia | resolves | `SubsystemRefError` |
+| Python | `AttributeError: 'dict' object has no attribute 'name'` | same |
+| TypeScript | **loads clean, splicing the leaf's unresolved `{ref}` edge in as the component** | same, no error |
+| Go | `ambiguous_subsystem_ref` — "resolves to a component that is not a model", which it is | same |
+
+The TypeScript row is the one that matters: a document that mounts an assembly loaded with a
+bare mount edge sitting where a model belongs, and a mount cycle came back as a resolved
+document pointing at itself. That is the silent-data-loss shape the top-level port exists to
+remove, one level deeper.
+
+The same gap existed at the **`subsystems.<k>` form** in four of five — only Rust composed there
+— because which attachment point mounted a file cannot change what that file *is*. Go and
+TypeScript answered it by splicing in the unresolved edge (silent); Python and Julia by failing.
+Both forms are fixed in all five, and the rule is now normative in esm-spec §4.7 ("Mounting an
+assembly"). Cycle detection is path-scoped everywhere, so one component file may still be
+mounted under several keys.
+
+Fixtures: `tests/valid/mount_chain_inner.esm` (a one-model assembly, mountable), and the two
+that mount it — `mount_chain_outer.esm` at the top-level form, `mount_chain_via_subsystem.esm`
+at the subsystem form. Cycles are pinned per binding rather than in the shared corpus, because
+the bindings' circular-reference diagnostics do not share a code.
+
+One limit stands: Julia's top-level inliner reads its targets with `isfile`, so an assembly
+reached over `http(s)://` does not compose there. No fixture, and no binding disagrees about a
+document — only about how far a remote chain reaches.
+
 ---
 
 ## 5. Alternatives considered and rejected
