@@ -19,22 +19,42 @@
 #   --engine interpreter  the MTK-free tree-walk evaluator (`build_evaluator` ->
 #                         `f!(du, u, p, t)`). This is what mints the tier's
 #                         goldens and what the cross-binding gate compares.
-#   --engine compiled     UNAVAILABLE in phase 1. Julia's compiled lane is direct
-#                         StableHLO emission through the Reactant extension, and
-#                         phase 2 owns it. Nothing is wired here on purpose: a
-#                         half-wired emitter that silently fell back to the
+#   --engine compiled     direct StableHLO emission: the model's compiled
+#                         tree-walk IR is lowered op by op into a StableHLO
+#                         program (ext/reactant_direct/, `direct_rhs`), compiled
+#                         on Reactant's CPU client, and evaluated at every probe.
+#                         There is NO fallback: a model the emitter cannot lower
+#                         completely is a hard `DirectEmitError`, reported as
+#                         that fixture's `refused` outcome with the rule and the
+#                         reason taken off the error. A fallback to the
 #                         interpreter would make this tier report agreement
 #                         between the interpreter and itself, which is exactly
-#                         the reading the `unavailable` outcome exists to prevent.
+#                         the reading the `refused` and `unavailable` outcomes
+#                         exist to prevent.
+#
+# TWO ENVIRONMENTS, for the same reason. The interpreter engine reuses
+# scripts/pde_sim_adapter; the compiled engine gets its own
+# scripts/compiled_rhs_reactant_env, because Reactant bundles an XLA runtime and
+# the reference lane must not depend on it. Both self-bootstrap.
 
 # Self-contained environment bootstrap, identical in shape to
-# pde_simulation_adapter.jl: the dedicated adapter project
-# (scripts/pde_sim_adapter/Project.toml) already pins EarthSciAST (dev'd from
-# ../..) + JSON3, so this adapter reuses it rather than standing up a second env.
-# Manifest.toml is gitignored repo-wide, so on a fresh checkout we re-establish
-# the local dev path then instantiate; on warm runs this is a fast resolve check.
+# pde_simulation_adapter.jl. Which env depends on the ENGINE, so `--engine` is
+# read here, straight off ARGS, before anything is loaded: the interpreter lane
+# keeps the existing pde_sim_adapter project (EarthSciAST dev'd from ../.. +
+# JSON3), the compiled lane gets compiled_rhs_reactant_env (the same, plus
+# Reactant). Manifest.toml is gitignored repo-wide, so on a fresh checkout we
+# re-establish the local dev path then instantiate; on warm runs this is a fast
+# resolve check.
 import Pkg
-let env = joinpath(@__DIR__, "pde_sim_adapter"), manifest = joinpath(env, "Manifest.toml")
+const ENGINE = let e = "interpreter"
+    for i in eachindex(ARGS)
+        ARGS[i] == "--engine" && i < length(ARGS) && (e = ARGS[i + 1])
+    end
+    e
+end
+let env = joinpath(@__DIR__, ENGINE == "compiled" ? "compiled_rhs_reactant_env" :
+                             "pde_sim_adapter"),
+    manifest = joinpath(env, "Manifest.toml")
     bootstrap() = begin
         Pkg.activate(env; io=devnull)
         isfile(manifest) ||
@@ -49,7 +69,7 @@ let env = joinpath(@__DIR__, "pde_sim_adapter"), manifest = joinpath(env, "Manif
         # has no value, so rebuild rather than fail the gate. `Pkg.develop` only
         # writes the Manifest here — EarthSciAST is already in the Project's
         # [deps], so the tracked Project.toml is not touched.
-        @warn "pde_sim_adapter env did not instantiate; rebuilding Manifest.toml" exception = (err, catch_backtrace())
+        @warn "$(basename(env)) env did not instantiate; rebuilding Manifest.toml" exception = (err, catch_backtrace())
         rm(manifest; force=true)
         bootstrap()
     end
@@ -176,18 +196,105 @@ function fixture_rhs(fx, base)
     Dict("rhs" => rhs)
 end
 
+# ── The compiled engine ────────────────────────────────────────────────────
+#
+# Direct StableHLO emission (ext/reactant_direct/): the fixture's model is built
+# out-of-place, its compiled IR is lowered into a StableHLO program, that program
+# is compiled on Reactant's CPU client, and every probe is evaluated by RUNNING
+# it. Nothing here evaluates a probe any other way.
+#
+# ONE COMPILE PER FIXTURE, not per probe: `u`, `t` and the parameters are all
+# program INPUTS (a `ConcreteRArray` and `ConcreteRNumber`s), so the probes of a
+# fixture differ only in the values fed to the same executable. A recompile per
+# probe would be an O(#probes) XLA compile that measured nothing the tier asks
+# about.
+#
+# A `DirectEmitError` is the fixture's `refused` outcome, with `rule` and
+# `reason` taken straight off the error — that is the hard-error ruling made
+# visible. Every other exception is the ordinary per-fixture `error` entry,
+# which is a FAILURE: unlike a refusal it says nothing about what the engine can
+# lower.
+
+const REACTANT_LOAD_ERROR = Ref{Any}(nothing)
+const HAVE_REACTANT = if ENGINE != "compiled"
+    false      # the interpreter lane's env does not carry Reactant, by design
+else
+    try
+        @eval using Reactant
+        true
+    catch err
+        REACTANT_LOAD_ERROR[] = err
+        false
+    end
+end
+
+# Parameters as program inputs, so a fixture's `parameters` overrides change the
+# values fed to the SAME executable rather than forcing another compile.
+_device_params(::Nothing) = nothing
+_device_params(p::NamedTuple) =
+    NamedTuple{keys(p)}(map(v -> Reactant.ConcreteRNumber(Float64(v)), values(p)))
+
+function fixture_rhs_compiled(fx, base)
+    ext = Base.get_extension(EarthSciAST, :EarthSciASTReactantExt)
+    ext === nothing && error("the Reactant extension did not load")
+
+    path = joinpath(base, String(fx.path))
+    file = load_path(path)
+    fo, u0, p, _, var_map = build_evaluator(file; model_name = String(fx.model),
+                                            form = :oop)
+    slot = bare_var_map(var_map)
+
+    order = [String(s) for s in fx.state_order]
+    for name in order
+        haskey(slot, name) ||
+            error("state_order element '$name' is not in the evaluator var map for " *
+                  "$(fx.id) (have: $(join(sort(collect(keys(slot))), ", ")))")
+    end
+    length(order) == length(u0) ||
+        error("state_order for $(fx.id) has $(length(order)) elements but the " *
+              "evaluator's state vector has $(length(u0))")
+
+    p_fx = apply_parameters(p, get(fx, :parameters, nothing))
+    p_dev = _device_params(p_fx)
+
+    d = ext.direct_rhs(fo; var_map = var_map)
+    u_dev = Reactant.ConcreteRArray(copy(u0))
+    t_dev = Reactant.ConcreteRNumber(0.0)
+    compiled = Reactant.@compile sync = true d(u_dev, p_dev, t_dev)
+
+    rhs = Dict{String,Any}()
+    for pr in fx.rhs_probes
+        u = copy(u0)
+        for (rawname, val) in pairs(pr.state)
+            u[slot[String(rawname)]] = Float64(val)
+        end
+        du = Array(compiled(Reactant.ConcreteRArray(u), p_dev,
+                            Reactant.ConcreteRNumber(Float64(pr.t))))
+        rhs[String(pr.id)] = Dict{String,Float64}(name => Float64(du[slot[name]])
+                                                  for name in order)
+    end
+    Dict("rhs" => rhs)
+end
+
 function main()
     manifest_path, output_path, engine = parse_args(ARGS)
+    engine == ENGINE ||
+        error("the bootstrap read engine '$ENGINE' off ARGS but parse_args read " *
+              "'$engine'; the adapter would be running in the wrong environment")
 
-    if engine == "compiled"
+    if engine == "compiled" && !HAVE_REACTANT
         # The whole-output `unavailable` shape (README "Adapter contract"): the
-        # runner prints the reason and skips, because `julia` is listed only in
-        # the compiled engine's `bindings_optional`. It is NEVER a pass.
+        # engine's runtime is not configured on this machine. The runner prints
+        # the reason and skips, because `julia` is listed only in the compiled
+        # engine's `bindings_optional`. It is NEVER a pass — which is why this
+        # arm fires ONLY when Reactant cannot be loaded at all, never because a
+        # model refused.
         payload = Dict(
             "binding" => BINDING,
             "engine" => engine,
             "status" => "unavailable",
-            "reason" => "Julia compiled engine (direct StableHLO emission) lands in phase 2",
+            "reason" => "Reactant could not be loaded, so there is no XLA client " *
+                        "to compile on: " * sprint(showerror, REACTANT_LOAD_ERROR[]),
         )
         open(output_path, "w") do io
             JSON3.write(io, payload)
@@ -198,13 +305,36 @@ function main()
     manifest = JSON3.read(read(manifest_path, String))
     base = tests_root(manifest_path)
     fixtures = Dict{String,Any}()
+    failed = false
     for fx in manifest.fixtures
-        fixtures[String(fx.id)] = fixture_rhs(fx, base)
+        id = String(fx.id)
+        if engine == "interpreter"
+            fixtures[id] = fixture_rhs(fx, base)
+            continue
+        end
+        try
+            fixtures[id] = fixture_rhs_compiled(fx, base)
+        catch err
+            if err isa EarthSciAST.DirectEmitError
+                fixtures[id] = Dict("status" => "refused",
+                                    "rule" => err.rule,
+                                    "reason" => string(err.construct, ": ", err.detail))
+            else
+                failed = true
+                fixtures[id] = Dict("error" => string(typeof(err), ": ",
+                                                      sprint(showerror, err)))
+            end
+        end
     end
     payload = Dict("binding" => BINDING, "engine" => engine, "fixtures" => fixtures)
     open(output_path, "w") do io
         JSON3.write(io, payload)
     end
+    # "A non-zero adapter exit with a valid report is allowed, and means at least
+    # one fixture errored" (README, Adapter contract). A REFUSAL is not an error:
+    # it is the documented outcome of the hard-error policy, and the runner
+    # decides whether it fails the gate from `compiled_required`.
+    failed && exit(1)
 end
 
 main()
