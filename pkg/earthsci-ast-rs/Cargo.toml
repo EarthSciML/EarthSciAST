@@ -59,6 +59,14 @@ name = "earthsci-compiled-rhs-adapter-rust"
 path = "src/bin/earthsci-compiled-rhs-adapter-rust.rs"
 required-features = ["conformance-adapters"]
 
+# Diagnostics for the XLA backend: which device the client picked, what the
+# `xla` crate reaches for multi-device work, and what a host round trip costs
+# against a device-resident evaluation. Not part of any conformance run.
+[[bin]]
+name = "earthsci-xla-device-probe"
+path = "src/bin/earthsci-xla-device-probe.rs"
+required-features = ["xla"]
+
 [lib]
 name = "earthsci_ast"
 crate-type = ["cdylib", "rlib"]
