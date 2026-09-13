@@ -763,7 +763,7 @@ function run_file_tests!(results::Vector{AssertionResult}, path::AbstractString;
     # `doc_flat === nothing && doc_flat_err === nothing` is the third state: the
     # document flatten SUCCEEDED but this engine cannot build from it, and the
     # per-container build is used instead (see the spatial fallback below).
-    models = esm_file.models === nothing ? nothing : esm_file.models
+    models = esm_file.models
     rsystems = esm_file.reaction_systems
     has_model_tests = models !== nothing &&
         any(m -> !isempty(m.tests), values(models))
