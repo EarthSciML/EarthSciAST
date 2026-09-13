@@ -28,11 +28,30 @@ import (
 // terminate on `seen`, keyed by the canonical ref identity.
 func collectMountDeclaredMetaparameters(view map[string]any, baseDir string) map[string]bool {
 	out := map[string]bool{}
-	collectMountDeclaredInto(out, map[string]bool{}, view, baseDir)
+	collectMountDeclaredInto(out, map[string]bool{}, view, baseDir, false)
 	return out
 }
 
-func collectMountDeclaredInto(out, seen map[string]bool, view map[string]any, baseDir string) {
+// collectImportReachableMetaparameters is collectMountDeclaredMetaparameters
+// plus the §9.7.2 `expression_template_imports` edges, at the document and the
+// component level, transitively.
+//
+// A DIFFERENT question from the mount one, and only checkDataSourceExtents asks
+// it: a metaparameter an imported library declares and the edge leaves unbound
+// is RE-EXPORTED into this document's own scope (§9.7.6 site 2), so the loader
+// API may bind it here — which the site-4 check already allows, because by the
+// time it runs the re-export has joined the document's declared set. The static
+// `extent` check runs on the AUTHORED tree, before any of that, so it has to
+// reach the same names by walking. It must NOT widen the site-4 check itself: a
+// name an import edge BINDS is consumed rather than re-exported, and site 4 is
+// right to refuse it.
+func collectImportReachableMetaparameters(view map[string]any, baseDir string) map[string]bool {
+	out := map[string]bool{}
+	collectMountDeclaredInto(out, map[string]bool{}, view, baseDir, true)
+	return out
+}
+
+func collectMountDeclaredInto(out, seen map[string]bool, view map[string]any, baseDir string, followImports bool) {
 	if view == nil {
 		return
 	}
@@ -63,8 +82,41 @@ func collectMountDeclaredInto(out, seen map[string]bool, view map[string]any, ba
 				out[name] = true
 			}
 		}
-		collectMountDeclaredInto(out, seen, child, childBase)
+		collectMountDeclaredInto(out, seen, child, childBase, followImports)
 	}
+	// The §9.7.2 import edges one scope carries, when asked for.
+	visitImports := func(holder map[string]any) {
+		if !followImports {
+			return
+		}
+		entries, ok := holder["expression_template_imports"].([]any)
+		if !ok {
+			return
+		}
+		for _, entry := range entries {
+			visitRef(entry)
+		}
+	}
+	// A `subsystems` map to any depth: an INLINE entry may itself hold the
+	// `{ref}` mount whose leaf declares the name.
+	var visitSubsystems func(holder map[string]any)
+	visitSubsystems = func(holder map[string]any) {
+		subs, ok := holder["subsystems"].(map[string]any)
+		if !ok {
+			return
+		}
+		for _, subRaw := range subs {
+			sub, ok := subRaw.(map[string]any)
+			if !ok {
+				continue
+			}
+			// A `subsystems.<k>` {ref}.
+			visitRef(sub)
+			visitImports(sub)
+			visitSubsystems(sub)
+		}
+	}
+	visitImports(view) // a DOCUMENT-level `expression_template_imports`
 	for _, kind := range templateComponentKinds {
 		comps, ok := view[kind].(map[string]any)
 		if !ok {
@@ -77,14 +129,85 @@ func collectMountDeclaredInto(out, seen map[string]bool, view map[string]any, ba
 			}
 			// A top-level `models.<k>` / `reaction_systems.<k>` {ref}.
 			visitRef(comp)
+			visitImports(comp)
+			visitSubsystems(comp)
+		}
+	}
+}
+
+// documentHasUnresolvedMount reports whether `view` still carries an unresolved
+// §4.7 mount — a top-level `models.<k>` / `reaction_systems.<k>` `{ref}` or a
+// `subsystems.<k>` `{ref}`.
+func documentHasUnresolvedMount(view map[string]any) bool {
+	for _, kind := range templateComponentKinds {
+		comps, ok := view[kind].(map[string]any)
+		if !ok {
+			continue
+		}
+		for _, compRaw := range comps {
+			comp, ok := compRaw.(map[string]any)
+			if !ok {
+				continue
+			}
+			if _, ok := comp["ref"]; ok {
+				return true
+			}
 			if subs, ok := comp["subsystems"].(map[string]any); ok {
-				for _, sub := range subs {
-					// A `subsystems.<k>` {ref}.
-					visitRef(sub)
+				for _, subRaw := range subs {
+					sub, ok := subRaw.(map[string]any)
+					if !ok {
+						continue
+					}
+					if _, ok := sub["ref"]; ok {
+						return true
+					}
 				}
 			}
 		}
 	}
+	return false
+}
+
+// indexSetsAreFullyFolded reports whether `view` declares at least one index set
+// and every interval `size` in the registry is already a concrete integer — the
+// state a document reaches only after its metaparameters have closed and folded.
+// Requiring at least one entry keeps the vacuous case (no `index_sets` at all,
+// where nothing has been folded) on the checked path.
+func indexSetsAreFullyFolded(view map[string]any) bool {
+	isets, ok := view["index_sets"].(map[string]any)
+	if !ok || len(isets) == 0 {
+		return false
+	}
+	for _, declRaw := range isets {
+		decl, ok := declRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+		size, present := decl["size"]
+		if !present || size == nil {
+			continue
+		}
+		if _, ok := asInt64Strict(size); !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// documentIsInResolvedShape reports whether `view` is in the shape only a
+// RESOLVED document has: no unresolved §4.7 mount left, and at least one index
+// set with every interval `size` already a concrete integer.
+//
+// checkDataSourceExtents is an AUTHORING check and has to stay idempotent. A
+// §4.7 mount CONSUMES the leaf's `metaparameters` (§9.7.6 site 3), so once a
+// document has been resolved, a name only the leaf declared is declared nowhere
+// and the `{ref}` stub the mount walk reads is gone — while the `extent` that
+// named it is still there, having already done its job. A binding that re-loads
+// its own resolved document (Rust does, at build) must not be told that document
+// is invalid. esm-spec §8.9.4 states the exemption normatively, so all five
+// bindings answer the same document the same way.
+func documentIsInResolvedShape(view map[string]any) bool {
+	return !documentHasUnresolvedMount(view) && indexSetsAreFullyFolded(view)
 }
 
 // documentDeclaresAnExtent reports whether any `data_sources` entry carries an
@@ -126,7 +249,7 @@ func rootMountContext(view map[string]any, baseDir string, metaparameters map[st
 	if len(metaparameters) > 0 || documentDeclaresAnExtent(view) {
 		mountDeclared = collectMountDeclaredMetaparameters(view, baseDir)
 	}
-	if err := checkDataSourceExtents(view, mountDeclared); err != nil {
+	if err := checkDataSourceExtents(view, baseDir, mountDeclared); err != nil {
 		return nil, err
 	}
 	return mountDeclared, nil
@@ -147,9 +270,12 @@ func rootMountContext(view map[string]any, baseDir string, metaparameters map[st
 //
 // This half of §8.9.4 is fully reachable in Go even though extent DISCOVERY is
 // not: nothing here samples a source.
-func checkDataSourceExtents(view map[string]any, mountDeclared map[string]bool) error {
+func checkDataSourceExtents(view map[string]any, baseDir string, mountDeclared map[string]bool) error {
 	sources, ok := view["data_sources"].(map[string]any)
 	if !ok {
+		return nil
+	}
+	if documentIsInResolvedShape(view) {
 		return nil
 	}
 	declared := map[string]bool{}
@@ -161,6 +287,7 @@ func checkDataSourceExtents(view map[string]any, mountDeclared map[string]bool) 
 	for name := range mountDeclared {
 		declared[name] = true
 	}
+	var reachable map[string]bool
 	// Sorted so a document with several bad extents fails deterministically.
 	for _, key := range sortedKeys(sources) {
 		src, ok := sources[key].(map[string]any)
@@ -173,6 +300,19 @@ func checkDataSourceExtents(view map[string]any, mountDeclared map[string]bool) 
 		}
 		name, ok := extent["metaparameter"].(string)
 		if !ok || declared[name] {
+			continue
+		}
+		// Widened LAZILY, only for a name about to be refused: a metaparameter
+		// an imported library declares and the edge leaves unbound is
+		// RE-EXPORTED into this document's scope (§9.7.6 site 2) and is a
+		// perfectly good loader-API binding target — but this check runs on the
+		// AUTHORED tree, before the imports resolve, so it has to walk for it. A
+		// conforming document pays nothing: the walk runs only on the path that
+		// would otherwise fail.
+		if reachable == nil {
+			reachable = collectImportReachableMetaparameters(view, baseDir)
+		}
+		if reachable[name] {
 			continue
 		}
 		return newETErr(CodeTemplateImportUnknownName,

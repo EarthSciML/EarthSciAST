@@ -3649,11 +3649,30 @@ restate the leaf's declaration, and a leaf mounted at either form is sized from
 the data identically (§4.7 "Two mount forms, one mechanism").
 
 **The name must be declared by someone, and that is checked statically.** An
-`extent` whose `metaparameter` is declared by neither this document nor any
-document it mounts is `template_import_unknown_name` (§9.6.6) **at load**, not
-when the source is finally read. The condition is decidable from the documents
-alone, and deferring it to the sample reported a typo as a loader-API failure at
-build time on a document that had validated clean.
+`extent` whose `metaparameter` no document in the assembly declares is
+`template_import_unknown_name` (§9.6.6) **at load**, not when the source is
+finally read. The condition is decidable from the documents alone, and deferring
+it to the sample reported a typo as a loader-API failure at build time on a
+document that had validated clean.
+
+*What counts as declared, and the two cases this check MUST NOT refuse.* The
+check exists to catch a typo, and refusing anything §9.7.6 site 4 would have
+accepted is a false positive, so the accepted set is exactly the set site 4
+binds over — read off the AUTHORED documents, because that is when this runs:
+this document's own `metaparameters`; the names a document it MOUNTS declares,
+at either §4.7 mount form, transitively; **and** the names a template library it
+IMPORTS declares and the import edge leaves unbound, which §9.7.6 site 2
+re-exports into this document's own scope (transitively, and at a
+`subsystems.<k>` scope as well as the document and component ones). Second, the
+check is an AUTHORING check and MUST be idempotent: a §4.7 mount CONSUMES the
+leaf's `metaparameters` (§9.7.6 site 3), so a resolved document declares a name
+only its leaf declared NOWHERE while still carrying the `extent` that named it
+and having already folded the axis. A binding that re-loads its own resolved
+document — the build path does — must not be told that document is invalid, so
+the check is SKIPPED for a document in resolved shape: no unresolved `{ref}`
+mount left, and at least one `index_sets` entry with every interval `size`
+already a concrete integer. Both exemptions are REQUIRED of every binding, since
+a binding that refuses either case refuses a document the others load.
 
 Without `extent` the count has to reach the engine some other way, and the only
 other way is a caller that reads the file first and passes a number in — which is

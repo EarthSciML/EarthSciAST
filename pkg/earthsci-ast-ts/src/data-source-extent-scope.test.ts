@@ -18,13 +18,13 @@
  *  * whether a leaf resolves does not turn on an `expression_template_imports`
  *    entry it never calls.
  *
- * SCOPE. This binding implements only the `subsystems.<k>` mount form — a
- * top-level `models.<k>` `{ref}` is carried in the schema types but never
- * inlined — and it does not implement §8.9.4 extent DISCOVERY (no data file is
- * ever sampled). So the shared fixtures that mount at the top level are used
- * only where the property under test does not need the mount to resolve, and
- * the cross-form equality the Python oracle pins is out of reach here. The
- * static half of §8.9.4 IS fully reachable: it is a pure document check.
+ * SCOPE. This binding mounts at BOTH §4.7 attachment points (the top-level
+ * `models.<k>` `{ref}` form landed with #198 item 4), so the cross-form equality
+ * §4.7 requires is reachable here and is pinned below. What is NOT implemented
+ * is §8.9.4 extent DISCOVERY: no data file is ever sampled, so the count is
+ * supplied directly as the site-4 loader-API binding discovery would have
+ * produced. The static half of §8.9.4 is fully reachable either way: it is a
+ * pure document check.
  *
  * The fixtures are shared with the other bindings and live under
  * `tests/fixtures/` rather than `tests/valid/`, because the corpus sweep would
@@ -165,5 +165,45 @@ describe('the backfill filter is PER-NAME, not merely per-document', () => {
     // leaf axis the edge never bound (esm-spec §4.7).
     const file = loadMounted('assembler_partial_overlap_root.esm', { N_REC: 3, N_OTHER: 7 })
     expect(sizeOf(file)).toBe(3)
+  })
+})
+
+describe('the two §4.7 mount forms size the axis identically', () => {
+  it('sizes the same leaf the same way at either attachment point', () => {
+    // The same leaf, the same data source, the same discovered count; the two
+    // assemblies differ only in which attachment point mounts the leaf. §4.7
+    // "Two mount forms, one mechanism" forbids them differing, and before the
+    // loader-API backfill reached the `subsystems.<k>` edge they did — silently,
+    // with a zero-length axis and a clean exit.
+    const top = loadMounted('extent_root_toplevel.esm', { N_REC: 3 })
+    const sub = loadMounted('extent_root_subsystem.esm', { N_REC: 3 })
+    expect(sizeOf(top)).toBe(3)
+    expect(sizeOf(sub)).toBe(3)
+    expect(records(top)).toEqual(records(sub))
+  })
+})
+
+describe('the static §8.9.4 check must not refuse what §9.7.6 accepts', () => {
+  it('accepts an `extent` naming a RE-EXPORTED metaparameter', () => {
+    // The name reaches this document by §9.7.6 site-2 re-export, not by
+    // declaration and not through a mount: it declares no `metaparameters` and
+    // mounts nothing, but IMPORTS a library that declares `N_REC` and does not
+    // bind it at the edge. The loader API may bind such a name, which is exactly
+    // what a discovered `extent` does. The static check runs on the AUTHORED
+    // tree, before the imports resolve, so it has to walk the import edges too
+    // or it refuses a document §9.7.6 accepts.
+    expect(sizeOf(loadMounted('extent_reexport_root.esm', { N_REC: 3 }))).toBe(3)
+    expect(sizeOf(loadMounted('extent_reexport_root.esm'))).toBe(0)
+  })
+
+  it('re-loads a document already in RESOLVED shape', () => {
+    // The check is an authoring check and has to be idempotent. A §4.7 mount
+    // CONSUMES the leaf's `metaparameters` (§9.7.6 site 3), so once
+    // `extent_root_toplevel.esm` has been resolved, `N_REC` is declared nowhere
+    // and the `{ref}` stub the mount walk reads is gone — while the `extent`
+    // that named it is still there, having already done its job. A binding that
+    // re-loads its own resolved document (Rust does, at build) must not be told
+    // that document is invalid.
+    expect(sizeOf(loadMounted('extent_resolved_shape.esm'))).toBe(3)
   })
 })

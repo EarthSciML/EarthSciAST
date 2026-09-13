@@ -1651,7 +1651,7 @@ resolution error belongs to the ref resolver, which reports it with the proper
 mount pointer. `seen` (canonical ref identity) cycle-guards the walk.
 """
 function _collect_mount_declared_metaparameters(raw, base_path::AbstractString,
-        seen::Set{String}=Set{String}())::Set{String}
+        seen::Set{String}=Set{String}(); follow_imports::Bool=false)::Set{String}
     out = Set{String}()
     _is_object(raw) || return out
     base = String(base_path)
@@ -1681,25 +1681,116 @@ function _collect_mount_declared_metaparameters(raw, base_path::AbstractString,
                 push!(out, string(n))
             end
         end
-        union!(out, _collect_mount_declared_metaparameters(child, child_base, seen))
+        union!(out, _collect_mount_declared_metaparameters(child, child_base, seen;
+                                                          follow_imports=follow_imports))
         return
     end
 
+    # The §9.7.2 import edges one scope carries, when asked for.
+    function visit_imports!(holder)
+        (follow_imports && _is_object(holder)) || return
+        entries = _raw_get(holder, "expression_template_imports")
+        entries isa AbstractVector || return
+        for entry in entries
+            visit_ref!(entry)
+        end
+        return
+    end
+
+    # A `subsystems` map to any depth: an INLINE entry may itself hold the
+    # `{ref}` mount whose leaf declares the name.
+    function visit_subsystems!(holder)
+        subs = _raw_get(holder, "subsystems")
+        (subs !== nothing && _is_object(subs)) || return
+        for (_, sub) in pairs(subs)
+            _is_object(sub) || continue
+            visit_ref!(sub)                        # a `subsystems.<j>` {ref}
+            visit_imports!(sub)
+            visit_subsystems!(sub)
+        end
+        return
+    end
+
+    visit_imports!(raw)   # a DOCUMENT-level `expression_template_imports`
     for compkind in _COMPONENT_KINDS
         comps = _raw_get(raw, compkind)
         (comps !== nothing && _is_object(comps)) || continue
         for (_, comp) in pairs(comps)
             _is_object(comp) || continue
             visit_ref!(comp)                       # top-level `models.<k>` {ref}
-            subs = _raw_get(comp, "subsystems")
-            (subs !== nothing && _is_object(subs)) || continue
-            for (_, sub) in pairs(subs)
-                visit_ref!(sub)                    # a `subsystems.<j>` {ref}
-            end
+            visit_imports!(comp)
+            visit_subsystems!(comp)
         end
     end
     return out
 end
+
+"""
+    _document_has_unresolved_mount(raw) -> Bool
+
+Whether `raw` still carries an unresolved §4.7 mount — a top-level
+`models.<k>` / `reaction_systems.<k>` `{ref}` or a `subsystems.<k>` `{ref}`.
+"""
+function _document_has_unresolved_mount(raw)::Bool
+    _is_object(raw) || return false
+    for compkind in _COMPONENT_KINDS
+        comps = _raw_get(raw, compkind)
+        (comps !== nothing && _is_object(comps)) || continue
+        for (_, comp) in pairs(comps)
+            _is_object(comp) || continue
+            _has_field(comp, :ref) && return true
+            subs = _raw_get(comp, "subsystems")
+            (subs !== nothing && _is_object(subs)) || continue
+            for (_, sub) in pairs(subs)
+                (_is_object(sub) && _has_field(sub, :ref)) && return true
+            end
+        end
+    end
+    return false
+end
+
+"""
+    _index_sets_are_fully_folded(raw) -> Bool
+
+Whether `raw` declares at least one index set and every interval `size` in the
+registry is already a concrete integer — the state a document reaches only
+after its metaparameters have closed and folded. Requiring at least one entry
+keeps the vacuous case (no `index_sets` at all, where nothing has been folded)
+on the checked path.
+"""
+function _index_sets_are_fully_folded(raw)::Bool
+    _is_object(raw) || return false
+    isets = _raw_get(raw, "index_sets")
+    (isets !== nothing && _is_object(isets)) || return false
+    any_entry = false
+    for (_, decl) in pairs(isets)
+        any_entry = true
+        _is_object(decl) || continue
+        sz = _raw_get(decl, "size")
+        sz === nothing && continue
+        (sz isa Integer && !(sz isa Bool)) || return false
+    end
+    return any_entry
+end
+
+"""
+    _document_is_in_resolved_shape(raw) -> Bool
+
+Whether `raw` is in the shape only a RESOLVED document has: no unresolved §4.7
+mount left, and at least one index set with every interval `size` already a
+concrete integer.
+
+[`check_data_source_extents`](@ref) is an AUTHORING check and has to stay
+idempotent. A §4.7 mount CONSUMES the leaf's `metaparameters` (§9.7.6 site 3),
+so once a document has been resolved, a name only the leaf declared is declared
+nowhere and the `{ref}` stub the mount walk reads is gone — while the `extent`
+that named it is still there, having already done its job. A binding that
+re-loads its own resolved document (Rust does, at build) must not be told that
+document is invalid. esm-spec §8.9.4 states the exemption normatively, so all
+five bindings answer the same document the same way.
+"""
+_document_is_in_resolved_shape(raw)::Bool =
+    !_document_has_unresolved_mount(raw) && _index_sets_are_fully_folded(raw)
 
 """
     _document_declares_an_extent(raw) -> Bool
@@ -1759,11 +1850,24 @@ function check_data_source_extents(raw, base_path::AbstractString,
         push!(sites, (string(key), String(name)))
     end
     isempty(sites) && return
+    _document_is_in_resolved_shape(raw) && return
     declared = Set{String}(keys(_collect_metaparam_decls(raw, "document")))
     union!(declared, mount_declared === nothing ?
            _collect_mount_declared_metaparameters(raw, base_path) : mount_declared)
+    # Widened LAZILY, only for a name about to be refused: a metaparameter an
+    # imported library declares and the edge leaves unbound is RE-EXPORTED into
+    # this document's scope (§9.7.6 site 2) and is a perfectly good loader-API
+    # binding target — but this check runs on the AUTHORED tree, before the
+    # imports resolve, so it has to walk for it. A conforming document pays
+    # nothing: the walk runs only on the path that would otherwise throw.
+    reachable = nothing
     for (key, name) in sites
         name in declared && continue
+        if reachable === nothing
+            reachable = _collect_mount_declared_metaparameters(raw, base_path;
+                                                               follow_imports=true)
+        end
+        name in reachable && continue
         throw(ExpressionTemplateError(
             ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME,
             "data_sources.$key.extent binds metaparameter '$name', which neither " *

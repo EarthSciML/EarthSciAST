@@ -1787,7 +1787,11 @@ def _finalize_document(
 
 
 def collect_mount_declared_metaparameters(
-    raw: Any, base_path: str, _seen: set[str] | None = None
+    raw: Any,
+    base_path: str,
+    _seen: set[str] | None = None,
+    *,
+    follow_imports: bool = False,
 ) -> frozenset[str]:
     """The metaparameter names declared by every document ``raw`` MOUNTS, at
     either §4.7 mount form, transitively through the mount DAG.
@@ -1802,7 +1806,19 @@ def collect_mount_declared_metaparameters(
     Reads only each referenced file's top-level ``metaparameters`` keys. A ref
     that cannot be read is ignored: this walk exists to WIDEN acceptance, and
     the resolution error belongs to the ref resolver, which reports it with the
-    proper mount pointer. Cycles terminate on ``_seen``."""
+    proper mount pointer. Cycles terminate on ``_seen``.
+
+    ``follow_imports`` additionally follows ``expression_template_imports``
+    refs (§9.7.2), at the document and the component level. That is a DIFFERENT
+    question from the mount one and only :func:`check_data_source_extents` asks
+    it: a metaparameter an imported library declares and the edge leaves unbound
+    is RE-EXPORTED into this document's own scope (§9.7.6 site 2), so the loader
+    API may bind it here — which the site-4 check already allows, because by the
+    time it runs the re-export has joined the document's declared set. The
+    static ``extent`` check runs on the AUTHORED tree, before any of that, so it
+    has to reach the same names by walking. It must NOT widen the site-4 check
+    itself: a name an import edge BINDS is consumed rather than re-exported, and
+    site 4 is right to refuse it."""
     from .parse import _fetch_ref_content, expand_ref_env
 
     if not _is_object(raw):
@@ -1839,8 +1855,36 @@ def collect_mount_declared_metaparameters(
             if expanded.startswith("http")
             else os.path.dirname(os.path.join(str(base_path), expanded))
         )
-        out.update(collect_mount_declared_metaparameters(child, child_base, seen))
+        out.update(
+            collect_mount_declared_metaparameters(
+                child, child_base, seen, follow_imports=follow_imports
+            )
+        )
 
+    def visit_imports(holder: Any) -> None:
+        """The §9.7.2 import edges one scope carries, when asked for."""
+        if not follow_imports or not _is_object(holder):
+            return
+        entries = holder.get("expression_template_imports")
+        if not isinstance(entries, list):
+            return
+        for entry in entries:
+            visit_ref(entry)
+
+    def visit_subsystems(holder: Any) -> None:
+        """A subsystem map, to any depth: an inline entry may itself hold the
+        `{ref}` mount whose leaf declares the name."""
+        subs = holder.get("subsystems")
+        if not _is_object(subs):
+            return
+        for sub in subs.values():
+            if not _is_object(sub):
+                continue
+            visit_ref(sub)  # a `subsystems.<k>` {ref}
+            visit_imports(sub)
+            visit_subsystems(sub)
+
+    visit_imports(raw)  # a DOCUMENT-level `expression_template_imports`
     for compkind in _COMPONENT_KINDS:
         comps = raw.get(compkind)
         if not _is_object(comps):
@@ -1849,11 +1893,66 @@ def collect_mount_declared_metaparameters(
             if not _is_object(comp):
                 continue
             visit_ref(comp)  # a top-level `models.<k>` / `reaction_systems.<k>` {ref}
-            subs = comp.get("subsystems")
-            if _is_object(subs):
-                for sub in subs.values():
-                    visit_ref(sub)  # a `subsystems.<k>` {ref}
+            visit_imports(comp)
+            visit_subsystems(comp)
     return frozenset(out)
+
+
+def _document_has_unresolved_mount(raw: Any) -> bool:
+    """Whether ``raw`` still carries an unresolved §4.7 mount — a top-level
+    ``models.<k>`` / ``reaction_systems.<k>`` ``{ref}`` or a ``subsystems.<k>``
+    ``{ref}``."""
+    if not _is_object(raw):
+        return False
+    for compkind in _COMPONENT_KINDS:
+        comps = raw.get(compkind)
+        if not _is_object(comps):
+            continue
+        for comp in comps.values():
+            if not _is_object(comp):
+                continue
+            if "ref" in comp:
+                return True
+            subs = comp.get("subsystems")
+            if _is_object(subs) and any(_is_object(x) and "ref" in x for x in subs.values()):
+                return True
+    return False
+
+
+def _index_sets_are_fully_folded(raw: Any) -> bool:
+    """Whether ``raw`` declares at least one index set and every interval
+    ``size`` in the registry is already a concrete integer — the state a
+    document reaches only after its metaparameters have closed and folded.
+    Requiring at least one entry keeps the vacuous case (no ``index_sets`` at
+    all, where nothing has been folded) on the checked path."""
+    isets = raw.get("index_sets") if _is_object(raw) else None
+    if not _is_object(isets) or not isets:
+        return False
+    for decl in isets.values():
+        if not _is_object(decl):
+            continue
+        size = decl.get("size")
+        if size is None:
+            continue
+        if isinstance(size, bool) or not isinstance(size, int):
+            return False
+    return True
+
+
+def document_is_in_resolved_shape(raw: Any) -> bool:
+    """Whether ``raw`` is in the shape only a RESOLVED document has: no
+    unresolved §4.7 mount left, and at least one index set with every interval
+    ``size`` already a concrete integer.
+
+    :func:`check_data_source_extents` is an AUTHORING check and has to stay
+    idempotent. A §4.7 mount CONSUMES the leaf's ``metaparameters`` (§9.7.6 site
+    3), so once a document has been resolved, a name only the leaf declared is
+    declared nowhere and the ``{ref}`` stub the mount walk reads is gone — while
+    the ``extent`` that named it is still there, having already done its job. A
+    binding that re-loads its own resolved document (Rust does, at build) must
+    not be told that document is invalid. esm-spec §8.9.4 states the exemption
+    normatively, so all five bindings answer the same document the same way."""
+    return not _document_has_unresolved_mount(raw) and _index_sets_are_fully_folded(raw)
 
 
 def document_declares_an_extent(raw: Any) -> bool:
@@ -1890,10 +1989,19 @@ def check_data_source_extents(
     sources = raw.get("data_sources")
     if not _is_object(sources):
         return
+    if document_is_in_resolved_shape(raw):
+        return
     declared = set(_collect_metaparam_decls(raw, "document"))
     if mount_declared is None:
         mount_declared = collect_mount_declared_metaparameters(raw, base_path)
     declared |= set(mount_declared)
+    # Widened LAZILY, only for a name about to be refused: a metaparameter an
+    # imported library declares and the edge leaves unbound is RE-EXPORTED into
+    # this document's scope (§9.7.6 site 2) and is a perfectly good loader-API
+    # binding target — but this check runs on the AUTHORED tree, before the
+    # imports resolve, so it has to walk for it. A conforming document pays
+    # nothing: the walk runs only on the path that would otherwise raise.
+    reachable: frozenset[str] | None = None
     for key, src in sources.items():
         if not _is_object(src):
             continue
@@ -1902,6 +2010,12 @@ def check_data_source_extents(
             continue
         name = extent.get("metaparameter")
         if not isinstance(name, str) or name in declared:
+            continue
+        if reachable is None:
+            reachable = collect_mount_declared_metaparameters(
+                raw, base_path, follow_imports=True
+            )
+        if name in reachable:
             continue
         raise ExpressionTemplateError(
             TEMPLATE_IMPORT_UNKNOWN_NAME,

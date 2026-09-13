@@ -1653,6 +1653,7 @@ export function collectMountDeclaredMetaparameters(
   basePath: string,
   options: TemplateResolveOptions = {},
   seen: Set<string> = new Set<string>(),
+  followImports = false,
 ): ReadonlySet<string> {
   const out = new Set<string>()
   if (!isObject(raw)) return out
@@ -1673,22 +1674,107 @@ export function collectMountDeclaredMetaparameters(
     if (!isObject(child)) return
     const decls = child.metaparameters
     if (isObject(decls)) for (const n of Object.keys(decls)) out.add(n)
-    for (const n of collectMountDeclaredMetaparameters(child, dirName(path), options, seen)) {
+    for (const n of collectMountDeclaredMetaparameters(
+      child,
+      dirName(path),
+      options,
+      seen,
+      followImports,
+    )) {
       out.add(n)
     }
   }
 
+  // The §9.7.2 import edges one scope carries, when asked for.
+  const visitImports = (holder: Record<string, unknown>): void => {
+    if (!followImports) return
+    const entries = holder.expression_template_imports
+    if (!Array.isArray(entries)) return
+    for (const entry of entries) visitRef(entry)
+  }
+
+  // A `subsystems` map to any depth: an INLINE entry may itself hold the
+  // `{ref}` mount whose leaf declares the name.
+  const visitSubsystems = (holder: Record<string, unknown>): void => {
+    const subs = holder.subsystems
+    if (!isObject(subs)) return
+    for (const sub of Object.values(subs)) {
+      if (!isObject(sub)) continue
+      visitRef(sub) // a `subsystems.<k>` {ref}
+      visitImports(sub)
+      visitSubsystems(sub)
+    }
+  }
+
+  visitImports(raw) // a DOCUMENT-level `expression_template_imports`
   for (const compKind of COMPONENT_KINDS) {
     const comps = raw[compKind]
     if (!isObject(comps)) continue
     for (const comp of Object.values(comps)) {
       if (!isObject(comp)) continue
       visitRef(comp) // a top-level `models.<k>` / `reaction_systems.<k>` {ref}
-      const subs = comp.subsystems
-      if (isObject(subs)) for (const sub of Object.values(subs)) visitRef(sub)
+      visitImports(comp)
+      visitSubsystems(comp)
     }
   }
   return out
+}
+
+/**
+ * Whether `raw` still carries an unresolved §4.7 mount — a top-level
+ * `models.<k>` / `reaction_systems.<k>` `{ref}` or a `subsystems.<k>` `{ref}`.
+ */
+function documentHasUnresolvedMount(raw: unknown): boolean {
+  if (!isObject(raw)) return false
+  for (const compKind of COMPONENT_KINDS) {
+    const comps = raw[compKind]
+    if (!isObject(comps)) continue
+    for (const comp of Object.values(comps)) {
+      if (!isObject(comp)) continue
+      if (comp.ref !== undefined) return true
+      const subs = comp.subsystems
+      if (isObject(subs) && Object.values(subs).some((s) => isObject(s) && s.ref !== undefined)) {
+        return true
+      }
+    }
+  }
+  return false
+}
+
+/**
+ * Whether `raw` declares at least one index set and every interval `size` in
+ * the registry is already a concrete integer — the state a document reaches
+ * only after its metaparameters have closed and folded. Requiring at least one
+ * entry keeps the vacuous case (no `index_sets` at all, where nothing has been
+ * folded) on the checked path.
+ */
+function indexSetsAreFullyFolded(raw: unknown): boolean {
+  if (!isObject(raw)) return false
+  const isets = raw.index_sets
+  if (!isObject(isets) || Object.keys(isets).length === 0) return false
+  return Object.values(isets).every((decl) => {
+    if (!isObject(decl)) return true
+    const size = decl.size
+    return size === undefined || (typeof size === 'number' && Number.isInteger(size))
+  })
+}
+
+/**
+ * Whether `raw` is in the shape only a RESOLVED document has: no unresolved
+ * §4.7 mount left, and at least one index set with every interval `size`
+ * already a concrete integer.
+ *
+ * `checkDataSourceExtents` is an AUTHORING check and has to stay idempotent. A
+ * §4.7 mount CONSUMES the leaf's `metaparameters` (§9.7.6 site 3), so once a
+ * document has been resolved, a name only the leaf declared is declared nowhere
+ * and the `{ref}` stub the mount walk reads is gone — while the `extent` that
+ * named it is still there, having already done its job. A binding that re-loads
+ * its own resolved document (Rust does, at build) must not be told that
+ * document is invalid. esm-spec §8.9.4 states the exemption normatively, so all
+ * five bindings answer the same document the same way.
+ */
+export function documentIsInResolvedShape(raw: unknown): boolean {
+  return !documentHasUnresolvedMount(raw) && indexSetsAreFullyFolded(raw)
 }
 
 /**
@@ -1731,16 +1817,32 @@ export function checkDataSourceExtents(
   if (!isObject(raw)) return
   const sources = raw.data_sources
   if (!isObject(sources)) return
+  if (documentIsInResolvedShape(raw)) return
   const declared = new Set<string>(Object.keys(collectMetaparamDecls(raw, DOCUMENT_ORIGIN)))
   for (const n of mountDeclared ?? collectMountDeclaredMetaparameters(raw, basePath, options)) {
     declared.add(n)
   }
+  // Widened LAZILY, only for a name about to be refused: a metaparameter an
+  // imported library declares and the edge leaves unbound is RE-EXPORTED into
+  // this document's scope (§9.7.6 site 2) and is a perfectly good loader-API
+  // binding target — but this check runs on the AUTHORED tree, before the
+  // imports resolve, so it has to walk for it. A conforming document pays
+  // nothing: the walk runs only on the path that would otherwise throw.
+  let reachable: ReadonlySet<string> | undefined
   for (const [key, src] of Object.entries(sources)) {
     if (!isObject(src)) continue
     const extent = src.extent
     if (!isObject(extent)) continue
     const name = extent.metaparameter
     if (typeof name !== 'string' || declared.has(name)) continue
+    reachable ??= collectMountDeclaredMetaparameters(
+      raw,
+      basePath,
+      options,
+      new Set<string>(),
+      true,
+    )
+    if (reachable.has(name)) continue
     throw new EsmMachineryError(
       ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME,
       `data_sources.${key}.extent binds metaparameter '${name}', which neither this document nor any document it mounts declares (esm-spec §8.9.4, §9.7.6)`,

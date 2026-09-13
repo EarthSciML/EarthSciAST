@@ -2,6 +2,8 @@ package esm
 
 import (
 	"encoding/json"
+	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -16,18 +18,17 @@ import (
 // WithMetaparameters{"N_REC": 3}) is exactly what extent discovery hands the
 // loader, and it exercises the same path without needing a file on disk.
 //
-// Scope note for this binding. Go implements the `subsystems.<k>` mount form
-// and does NOT implement the top-level `models.<k>` `{ref}` mount form, nor
-// §8.9.4 extent DISCOVERY (it carries only the decoded `extent` field). So the
-// subsystem-form fixtures carry the mount tests here, and the shared
-// `extent_root_toplevel.esm` appears only where its behaviour does not depend on
-// being mounted — the static §8.9.4 check, which is a pure document check and is
-// fully reachable.
+// Scope note for this binding. Go mounts at BOTH §4.7 attachment points (the
+// top-level `models.<k>` `{ref}` form landed with #198 item 4), so the
+// cross-form equality §4.7 requires is reachable here and is pinned below. What
+// Go does NOT implement is §8.9.4 extent DISCOVERY: it carries only the decoded
+// `extent` field and never samples a source, so the count is supplied directly
+// as the site-4 loader-API binding discovery would have produced.
 //
 // The fixtures are shared with the other bindings and live under
-// tests/fixtures/ rather than tests/valid/, because the corpus sweep would score
-// Go and TypeScript a false pass on the top-level mount form they do not
-// implement.
+// tests/fixtures/ rather than tests/valid/, because the corpus sweep scores a
+// document by its diagnostics, and several of these are about a VALUE (which
+// size an axis folds to) that a pass/fail sweep cannot see.
 
 func extentScopeDir(t *testing.T) string {
 	t.Helper()
@@ -293,5 +294,116 @@ func TestIndexSetSizeCodecRoundTrips(t *testing.T) {
 				t.Errorf("round-trip changed the declaration:\n  in:  %s\n  out: %s", tc.wire, out)
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The two §4.7 mount forms, and the static check's two idempotency cases
+// ---------------------------------------------------------------------------
+
+// TestExtentScope_BothMountFormsSizeTheAxisIdentically drives the SAME leaf,
+// the same data source and the same discovered count through both §4.7
+// attachment points.
+//
+// §4.7 "Two mount forms, one mechanism" forbids the two differing, and before
+// the loader-API backfill reached the `subsystems.<k>` edge they did — silently,
+// with a zero-length axis, a clean validate and a zero exit code.
+func TestExtentScope_BothMountFormsSizeTheAxisIdentically(t *testing.T) {
+	top, err := extentScopeLoad(t, "extent_root_toplevel.esm", map[string]int64{"N_REC": 3})
+	if err != nil {
+		t.Fatalf("load at the top-level models.<k> mount form: %v", err)
+	}
+	sub, err := extentScopeLoad(t, "extent_root_subsystem.esm", map[string]int64{"N_REC": 3})
+	if err != nil {
+		t.Fatalf("load at the subsystems.<k> mount form: %v", err)
+	}
+	if got := extentScopeSize(t, top); got != 3 {
+		t.Errorf("top-level mount sized the axis %d, want 3", got)
+	}
+	if got := extentScopeSize(t, sub); got != 3 {
+		t.Errorf("subsystem mount sized the axis %d, want 3", got)
+	}
+	if !reflect.DeepEqual(extentScopeRecords(t, top), extentScopeRecords(t, sub)) {
+		t.Errorf("the two mount forms produced different `records` declarations:\n  top-level: %+v\n  subsystem: %+v",
+			extentScopeRecords(t, top), extentScopeRecords(t, sub))
+	}
+}
+
+// TestExtentScope_ReExportedMetaparameterIsAccepted pins that the static §8.9.4
+// check does not refuse what §9.7.6 accepts.
+//
+// The name reaches this document by §9.7.6 site-2 RE-EXPORT, not by declaration
+// and not through a mount: the document declares no `metaparameters` and mounts
+// nothing, but IMPORTS a library that declares `N_REC` and does not bind it at
+// the edge. The loader API may bind such a name, which is exactly what a
+// discovered `extent` does. The static check runs on the AUTHORED tree, before
+// the imports resolve, so it has to walk the import edges too.
+func TestExtentScope_ReExportedMetaparameterIsAccepted(t *testing.T) {
+	doc, err := extentScopeLoad(t, "extent_reexport_root.esm", map[string]int64{"N_REC": 3})
+	if err != nil {
+		t.Fatalf("a re-exported metaparameter is a valid site-4 binding target: %v", err)
+	}
+	if got := extentScopeSize(t, doc); got != 3 {
+		t.Errorf("records sized %d, want 3", got)
+	}
+	standalone, err := extentScopeLoad(t, "extent_reexport_root.esm", nil)
+	if err != nil {
+		t.Fatalf("it loads standalone at the library's default too: %v", err)
+	}
+	if got := extentScopeSize(t, standalone); got != 0 {
+		t.Errorf("standalone records sized %d, want the library default 0", got)
+	}
+}
+
+// TestExtentScope_AResolvedDocumentReloads pins the check's idempotency.
+//
+// A §4.7 mount CONSUMES the leaf's `metaparameters` (§9.7.6 site 3), so once
+// `extent_root_toplevel.esm` has been resolved, `N_REC` is declared nowhere and
+// the `{ref}` stub the mount walk reads is gone — while the `extent` that named
+// it is still there, having already done its job. A binding that re-loads its
+// own resolved document (Rust does, at build) must not be told it is invalid.
+func TestExtentScope_AResolvedDocumentReloads(t *testing.T) {
+	doc, err := extentScopeLoad(t, "extent_resolved_shape.esm", nil)
+	if err != nil {
+		t.Fatalf("a document in resolved shape re-loads: %v", err)
+	}
+	if got := extentScopeSize(t, doc); got != 3 {
+		t.Errorf("records sized %d, want the already-folded 3", got)
+	}
+}
+
+// TestExtentScope_IdempotencyFixturesSayWhatTheyAre guards the two fixtures
+// above, which are load-bearing by ABSENCE: restoring either missing block would
+// leave every binding's suite green while deleting the property under test.
+func TestExtentScope_IdempotencyFixturesSayWhatTheyAre(t *testing.T) {
+	read := func(name string) map[string]any {
+		t.Helper()
+		data, err := os.ReadFile(filepath.Join(extentScopeDir(t), name))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		var raw map[string]any
+		if err := json.Unmarshal(data, &raw); err != nil {
+			t.Fatalf("decode %s: %v", name, err)
+		}
+		return raw
+	}
+	reexport := read("extent_reexport_root.esm")
+	if _, ok := reexport["metaparameters"]; ok {
+		t.Error("extent_reexport_root.esm must declare none: the name arrives by re-export")
+	}
+	resolved := read("extent_resolved_shape.esm")
+	if _, ok := resolved["metaparameters"]; ok {
+		t.Error("extent_resolved_shape.esm must declare none: a mount consumed the leaf's block")
+	}
+	models, _ := resolved["models"].(map[string]any)
+	ingest, _ := models["Ingest"].(map[string]any)
+	if _, ok := ingest["ref"]; ok {
+		t.Error("extent_resolved_shape.esm must be already inlined, not a `{ref}` mount")
+	}
+	isets, _ := resolved["index_sets"].(map[string]any)
+	records, _ := isets["records"].(map[string]any)
+	if fmt.Sprint(records["size"]) != "3" {
+		t.Errorf("extent_resolved_shape.esm `records.size` must be already folded, got %v", records["size"])
 	}
 }

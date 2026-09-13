@@ -123,6 +123,19 @@ function _load_document(raw_data, base_path::String;
     # ref resolver).
     mount_declared = (!isempty(metaparameters) || _document_declares_an_extent(raw_data)) ?
         _collect_mount_declared_metaparameters(raw_data, base_path) : Set{String}()
+    # esm-spec §8.9.4, statically: a `data_sources.<k>.extent` naming a
+    # metaparameter neither this document nor any document it mounts declares is
+    # `template_import_unknown_name` AT LOAD, so `validate` refuses it — rather
+    # than once the source is finally SAMPLED at build, which reported a typo as
+    # a loader-API failure on a document that had validated clean.
+    #
+    # HERE, on the AUTHORED tree, and not further down in `_load_parsed`: the
+    # inliners just below CONSUME the top-level mount stubs and fold the leaf's
+    # axes, so by then the document is in the resolved shape the check exempts
+    # (see `_document_is_in_resolved_shape`) and nothing would be checked at all.
+    # Rust runs it at the same point, ahead of ref resolution, for the same
+    # reason.
+    check_data_source_extents(raw_data, String(base_path), mount_declared)
     # Inline any top-level model `{ref}` stubs (schema §4.7: `models.*` is
     # oneOf [Model, {ref}]) before the typed pipeline, so a simulation file that
     # references its components by `{"ref": "..."}` — as the Python runner's
@@ -314,19 +327,6 @@ function _load_parsed(raw_data; base_path::AbstractString=pwd(),
     # boundary_conditions (v0.2.0 transitional shim per RFC §10.1 +
     # gt-2fvs mayor decision). A follow-up bead flips this to a hard error.
     _warn_deprecated_domain_bc(raw_data)
-
-    # esm-spec §8.9.4, statically: a `data_sources.<k>.extent` naming a
-    # metaparameter neither this document nor any document it mounts declares is
-    # `template_import_unknown_name` AT LOAD, so `validate` refuses it — rather
-    # than once the source is finally SAMPLED at build, which reported a typo as
-    # a loader-API failure on a document that had validated clean. Runs after
-    # schema validation so a malformed document still fails as a schema error.
-    #
-    # ROOT documents only. A mounted leaf's `extent` is checked when that leaf is
-    # itself the load target; at a mount edge the leaf has not been handed the
-    # assembly's scope yet, so checking it here would refuse assemblies the spec
-    # admits.
-    mounted_leaf || check_data_source_extents(raw_data, String(base_path), mount_declared)
 
     return _lower_and_coerce(raw_data, base_path;
                              metaparameters=metaparameters,

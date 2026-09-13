@@ -268,4 +268,46 @@ end
         @test leaf[:metaparameters][:N_REC][:default] == 0
         @test leaf[:index_sets][:records][:size] == "N_REC"
     end
+
+    @testset "an extent naming a re-exported metaparameter loads" begin
+        # The name reaches this document by §9.7.6 site-2 RE-EXPORT, not by
+        # declaration and not through a mount. The document declares no
+        # `metaparameters` and mounts nothing; it IMPORTS a library that declares
+        # `N_REC` and does not bind it at the edge, so the name joins this
+        # document's own scope and the loader API may bind it — which is exactly
+        # what a discovered `extent` does. The static check runs on the AUTHORED
+        # tree, before the imports resolve, so it has to walk the import edges
+        # too or it refuses a document §9.7.6 accepts.
+        f = _extent_load("extent_reexport_root.esm";
+                         metaparameters=Dict("N_REC" => 3))
+        @test _extent_records(f).size == 3
+        # …and standalone, at the library's default, with no bindings at all.
+        @test _extent_records(_extent_load("extent_reexport_root.esm")).size == 0
+    end
+
+    @testset "a resolved document re-loads" begin
+        # The check is an AUTHORING check and has to be idempotent. A §4.7 mount
+        # CONSUMES the leaf's `metaparameters` (§9.7.6 site 3), so once
+        # `extent_root_toplevel.esm` has been resolved, `N_REC` is declared
+        # nowhere and the `{ref}` stub the mount walk reads is gone — while the
+        # `extent` that named it is still there, having already done its job. A
+        # binding that re-loads its own resolved document (Rust does, at build)
+        # must not be told that document is invalid.
+        @test _extent_records(_extent_load("extent_resolved_shape.esm")).size == 3
+    end
+
+    @testset "the idempotency fixtures say what they are" begin
+        # Both fixtures above are load-bearing by ABSENCE, which a silent edit
+        # could restore without any suite going red.
+        reexport = JSON3.read(read(
+            joinpath(_EXTENT_SCOPE_DIR, "extent_reexport_root.esm"), String))
+        @test !haskey(reexport, :metaparameters)   # the name arrives by re-export
+        @test reexport[:index_sets][:records][:size] == "N_REC"
+        resolved = JSON3.read(read(
+            joinpath(_EXTENT_SCOPE_DIR, "extent_resolved_shape.esm"), String))
+        @test !haskey(resolved, :metaparameters)   # a mount consumed the leaf's block
+        @test resolved[:index_sets][:records][:size] == 3          # already folded
+        @test !haskey(resolved[:models][:Ingest], :ref)            # already inlined
+        @test resolved[:data_sources][:EGU_Emis][:extent][:metaparameter] == "N_REC"
+    end
 end

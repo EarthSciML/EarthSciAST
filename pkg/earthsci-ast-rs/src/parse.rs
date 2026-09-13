@@ -190,12 +190,8 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     // on the AUTHORED tree: a mount CONSUMES the leaf's `metaparameters`
     // (§9.7.6 site 3), so after inlining neither the declaration nor the `{ref}`
     // stub that leads to it is still there to judge by.
-    crate::template_imports::check_data_source_extents(
-        &json_value,
-        &mount_declared,
-        &options.metaparameters,
-    )
-    .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
+    crate::template_imports::check_data_source_extents(&json_value, &base, &mount_declared)
+        .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
 
     // Resolve any subsystem refs before schema validation, per spec section
     // 2.1b. Callers that load from a known file path should use `load_path`,

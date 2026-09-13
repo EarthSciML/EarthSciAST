@@ -2144,21 +2144,52 @@ pub(crate) fn collect_mount_declared_metaparameters(
     raw: &Value,
     base_path: &Path,
 ) -> BTreeSet<String> {
+    collect_declared_through_refs(raw, base_path, false)
+}
+
+/// [`collect_mount_declared_metaparameters`] plus the §9.7.2
+/// `expression_template_imports` edges, at the document and the component
+/// level, transitively.
+///
+/// A DIFFERENT question from the mount one, and only
+/// [`check_data_source_extents`] asks it: a metaparameter an imported library
+/// declares and the edge leaves unbound is RE-EXPORTED into this document's own
+/// scope (§9.7.6 site 2), so the loader API may bind it here — which the site-4
+/// check already allows, because by the time it runs the re-export has joined
+/// the document's declared set. The static `extent` check runs on the AUTHORED
+/// tree, before any of that, so it has to reach the same names by walking. It
+/// must NOT widen the site-4 check itself: a name an import edge BINDS is
+/// consumed rather than re-exported, and site 4 is right to refuse it.
+pub(crate) fn collect_import_reachable_metaparameters(
+    raw: &Value,
+    base_path: &Path,
+) -> BTreeSet<String> {
+    collect_declared_through_refs(raw, base_path, true)
+}
+
+fn collect_declared_through_refs(
+    raw: &Value,
+    base_path: &Path,
+    follow_imports: bool,
+) -> BTreeSet<String> {
     let mut seen: HashSet<String> = HashSet::new();
     let mut out: BTreeSet<String> = BTreeSet::new();
-    collect_mount_declared_into(raw, base_path, &mut seen, &mut out);
+    collect_mount_declared_into(raw, base_path, follow_imports, &mut seen, &mut out);
     out
 }
 
 fn collect_mount_declared_into(
     raw: &Value,
     base_path: &Path,
+    follow_imports: bool,
     seen: &mut HashSet<String>,
     out: &mut BTreeSet<String>,
 ) {
     let Some(obj) = raw.as_object() else {
         return;
     };
+    // A DOCUMENT-level `expression_template_imports`.
+    visit_import_edges(obj, base_path, follow_imports, seen, out);
     for compkind in COMPONENT_KINDS {
         let Some(comps) = obj.get(compkind).and_then(|v| v.as_object()) else {
             continue;
@@ -2168,15 +2199,55 @@ fn collect_mount_declared_into(
                 continue;
             };
             // A top-level `models.<k>` / `reaction_systems.<k>` `{ref}` mount.
-            visit_mount_ref(cobj, base_path, seen, out);
-            // A `subsystems.<j>` `{ref}` mount — §4.7's other form.
-            if let Some(subs) = cobj.get("subsystems").and_then(|v| v.as_object()) {
-                for sub in subs.values() {
-                    if let Some(sobj) = sub.as_object() {
-                        visit_mount_ref(sobj, base_path, seen, out);
-                    }
-                }
-            }
+            visit_mount_ref(cobj, base_path, follow_imports, seen, out);
+            visit_import_edges(cobj, base_path, follow_imports, seen, out);
+            visit_subsystem_tree(cobj, base_path, follow_imports, seen, out);
+        }
+    }
+}
+
+/// A `subsystems` map to any depth: an INLINE entry may itself hold the
+/// `{ref}` mount whose leaf declares the name.
+fn visit_subsystem_tree(
+    holder: &Map<String, Value>,
+    base_path: &Path,
+    follow_imports: bool,
+    seen: &mut HashSet<String>,
+    out: &mut BTreeSet<String>,
+) {
+    let Some(subs) = holder.get("subsystems").and_then(|v| v.as_object()) else {
+        return;
+    };
+    for sub in subs.values() {
+        let Some(sobj) = sub.as_object() else {
+            continue;
+        };
+        visit_mount_ref(sobj, base_path, follow_imports, seen, out);
+        visit_import_edges(sobj, base_path, follow_imports, seen, out);
+        visit_subsystem_tree(sobj, base_path, follow_imports, seen, out);
+    }
+}
+
+/// The §9.7.2 import edges one scope carries, when asked for.
+fn visit_import_edges(
+    holder: &Map<String, Value>,
+    base_path: &Path,
+    follow_imports: bool,
+    seen: &mut HashSet<String>,
+    out: &mut BTreeSet<String>,
+) {
+    if !follow_imports {
+        return;
+    }
+    let Some(entries) = holder
+        .get("expression_template_imports")
+        .and_then(|v| v.as_array())
+    else {
+        return;
+    };
+    for entry in entries {
+        if let Some(eobj) = entry.as_object() {
+            visit_mount_ref(eobj, base_path, follow_imports, seen, out);
         }
     }
 }
@@ -2186,6 +2257,7 @@ fn collect_mount_declared_into(
 fn visit_mount_ref(
     entry: &Map<String, Value>,
     base_path: &Path,
+    follow_imports: bool,
     seen: &mut HashSet<String>,
     out: &mut BTreeSet<String>,
 ) {
@@ -2214,7 +2286,7 @@ fn visit_mount_ref(
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| base_path.to_path_buf());
-    collect_mount_declared_into(&child, &child_dir, seen, out);
+    collect_mount_declared_into(&child, &child_dir, follow_imports, seen, out);
 }
 
 /// Whether any `data_sources` entry carries an `extent` (§8.9.4).
@@ -2248,24 +2320,23 @@ pub(crate) fn document_declares_an_extent(raw: &Value) -> bool {
 /// condition, checked earlier.
 pub(crate) fn check_data_source_extents(
     raw: &Value,
+    base_path: &Path,
     mount_declared: &BTreeSet<String>,
-    api_meta: &BTreeMap<String, i64>,
 ) -> Result<(), ExpressionTemplateError> {
     let Some(sources) = raw.get("data_sources").and_then(|v| v.as_object()) else {
         return Ok(());
     };
-    // This is an AUTHORING check, and it must stay idempotent: a §4.7 mount
-    // CONSUMES the leaf's `metaparameters` (§9.7.6 site 3), so once a document
-    // has been resolved, a name only the leaf declared is declared nowhere and
-    // the `{ref}` stub the mount walk reads is gone — while the `extent` that
-    // named it is still there, having already done its job. A binding that
-    // re-loads its own resolved document (this one does, at build) must not be
-    // told that document is invalid. The shape only a resolved document has:
-    // no unresolved mount left, and every axis already a concrete integer.
-    if !document_has_unresolved_mount(raw) && index_sets_are_fully_folded(raw) {
+    if document_is_in_resolved_shape(raw) {
         return Ok(());
     }
     let declared = collect_metaparam_decls(raw, "document")?;
+    // Widened LAZILY, only for a name about to be refused: a metaparameter an
+    // imported library declares and the edge leaves unbound is RE-EXPORTED into
+    // this document's scope (§9.7.6 site 2) and is a perfectly good loader-API
+    // binding target — but this check runs on the AUTHORED tree, before the
+    // imports resolve, so it has to walk for it. A conforming document pays
+    // nothing: the walk runs only on the path that would otherwise raise.
+    let mut reachable: Option<BTreeSet<String>> = None;
     for (key, src) in sources {
         let Some(name) = src
             .get("extent")
@@ -2274,18 +2345,12 @@ pub(crate) fn check_data_source_extents(
         else {
             continue;
         };
-        // A name the loader API is CURRENTLY binding is supplied by definition,
-        // so it is not the typo this check exists to catch. That is also what
-        // keeps the check idempotent under inlining: a mount edge CONSUMES the
-        // leaf's `metaparameters`, so an already-inlined document no longer
-        // declares the name anywhere and no longer carries the `{ref}` stub the
-        // mount walk reads. Re-loading such a document — which this binding does
-        // at build, with the discovered extent bound — must not refuse what the
-        // authored document accepted.
-        if declared.contains_key(name)
-            || mount_declared.contains(name)
-            || api_meta.contains_key(name)
-        {
+        if declared.contains_key(name) || mount_declared.contains(name) {
+            continue;
+        }
+        let reachable = reachable
+            .get_or_insert_with(|| collect_import_reachable_metaparameters(raw, base_path));
+        if reachable.contains(name) {
             continue;
         }
         return Err(err(
@@ -3260,6 +3325,23 @@ mod tests {
 
 /// Whether `doc` still carries an unresolved §4.7 mount — a `models.<k>` /
 /// `reaction_systems.<k>` `{ref}`, or a `subsystems.<k>` `{ref}`.
+/// Whether `doc` is in the shape only a RESOLVED document has — no unresolved
+/// §4.7 mount left, and at least one index set with every interval `size`
+/// already a concrete integer.
+///
+/// [`check_data_source_extents`] is an AUTHORING check and must stay
+/// idempotent. A §4.7 mount CONSUMES the leaf's `metaparameters` (§9.7.6 site
+/// 3), so once a document has been resolved, a name only the leaf declared is
+/// declared nowhere and the `{ref}` stub the mount walk reads is gone — while
+/// the `extent` that named it is still there, having already done its job. A
+/// binding that re-loads its own resolved document (this one does, at build,
+/// and again at the typed parse that follows it) must not be told that document
+/// is invalid. esm-spec §8.9.4 states the exemption normatively; the Python,
+/// TypeScript, Julia and Go twins spell it the same way.
+fn document_is_in_resolved_shape(doc: &Value) -> bool {
+    !document_has_unresolved_mount(doc) && index_sets_are_fully_folded(doc)
+}
+
 fn document_has_unresolved_mount(doc: &Value) -> bool {
     let Some(obj) = doc.as_object() else {
         return false;

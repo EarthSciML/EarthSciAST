@@ -259,3 +259,72 @@ fn the_fixtures_say_what_they_are() {
     assert_eq!(leaf["metaparameters"]["N_REC"]["default"], 0);
     assert_eq!(leaf["index_sets"]["records"]["size"], "N_REC");
 }
+
+// ---------------------------------------------------------------------------
+// The static check must not refuse what §9.7.6 accepts
+// ---------------------------------------------------------------------------
+
+/// The name reaches this document by §9.7.6 site-2 RE-EXPORT, not by
+/// declaration and not through a mount.
+///
+/// The document declares no `metaparameters` and mounts nothing; it IMPORTS a
+/// library that declares `N_REC` and does not bind it at the edge, so the name
+/// joins this document's own scope and the loader API may bind it — which is
+/// exactly what a discovered `extent` does. The static check runs on the
+/// AUTHORED tree, before the imports resolve, so it has to walk the import
+/// edges too or it refuses a document §9.7.6 accepts.
+#[test]
+fn an_extent_naming_a_re_exported_metaparameter_loads() {
+    let doc = load_path_with_options(fixture("extent_reexport_root.esm"), &api(&[("N_REC", 3)]))
+        .expect("a re-exported metaparameter is a valid site-4 binding target");
+    assert_eq!(records_size(&doc), Some(3));
+    let standalone = load_path(fixture("extent_reexport_root.esm"))
+        .expect("it loads standalone at the library's default too");
+    assert_eq!(records_size(&standalone), Some(0));
+}
+
+/// The check is an AUTHORING check and has to be idempotent.
+///
+/// A §4.7 mount CONSUMES the leaf's `metaparameters` (§9.7.6 site 3), so once
+/// `extent_root_toplevel.esm` has been resolved, `N_REC` is declared nowhere and
+/// the `{ref}` stub the mount walk reads is gone — while the `extent` that named
+/// it is still there, having already done its job. This binding re-loads its own
+/// resolved document at build, and must not be told that document is invalid.
+#[test]
+fn a_resolved_document_reloads() {
+    let doc = load_path(fixture("extent_resolved_shape.esm"))
+        .expect("a document in resolved shape re-loads");
+    assert_eq!(records_size(&doc), Some(3));
+}
+
+/// Both fixtures above are load-bearing by ABSENCE, which a silent edit could
+/// restore without any suite going red.
+#[test]
+fn the_idempotency_fixtures_say_what_they_are() {
+    let reexport: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(fixture("extent_reexport_root.esm")).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        reexport.get("metaparameters").is_none(),
+        "the name must arrive by re-export"
+    );
+    assert_eq!(reexport["index_sets"]["records"]["size"], "N_REC");
+    let resolved: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(fixture("extent_resolved_shape.esm")).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        resolved.get("metaparameters").is_none(),
+        "a mount consumed the leaf's declaration"
+    );
+    assert_eq!(resolved["index_sets"]["records"]["size"], 3, "already folded");
+    assert!(
+        resolved["models"]["Ingest"].get("ref").is_none(),
+        "already inlined"
+    );
+    assert_eq!(
+        resolved["data_sources"]["EGU_Emis"]["extent"]["metaparameter"],
+        "N_REC"
+    );
+}

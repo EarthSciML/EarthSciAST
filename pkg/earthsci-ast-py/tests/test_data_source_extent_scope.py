@@ -184,3 +184,52 @@ def test_the_fixtures_say_what_they_are():
     leaf = json.loads((_DIR / "extent_axis_leaf.esm").read_text())
     assert leaf["metaparameters"]["N_REC"]["default"] == 0
     assert leaf["index_sets"]["records"]["size"] == "N_REC"
+
+
+# ---------------------------------------------------------------------------
+# The static check must not refuse what §9.7.6 accepts
+# ---------------------------------------------------------------------------
+
+
+def test_an_extent_naming_a_re_exported_metaparameter_loads():
+    """The name reaches this document by §9.7.6 site-2 RE-EXPORT, not by
+    declaration and not through a mount.
+
+    The document declares no `metaparameters` and mounts nothing; it IMPORTS a
+    library that declares `N_REC` and does not bind it at the edge, so the name
+    joins this document's own scope and the loader API may bind it — which is
+    exactly what a discovered `extent` does. The static check runs on the
+    AUTHORED tree, before the imports resolve, so it has to walk the import
+    edges too or it refuses a document §9.7.6 accepts.
+    """
+    doc = load_path(str(_DIR / "extent_reexport_root.esm"), metaparameters={"N_REC": 3})
+    assert _records(doc)["size"] == 3
+    # …and standalone, at the library's default, with no bindings at all.
+    assert _records(load_path(str(_DIR / "extent_reexport_root.esm")))["size"] == 0
+
+
+def test_a_resolved_document_reloads():
+    """The check is an AUTHORING check and has to be idempotent.
+
+    A §4.7 mount CONSUMES the leaf's `metaparameters` (§9.7.6 site 3), so once
+    `extent_root_toplevel.esm` has been resolved, `N_REC` is declared nowhere
+    and the `{ref}` stub the mount walk reads is gone — while the `extent` that
+    named it is still there, having already done its job. A binding that
+    re-loads its own resolved document (Rust does, at build) must not be told
+    that document is invalid.
+    """
+    doc = load_path(str(_DIR / "extent_resolved_shape.esm"))
+    assert _records(doc)["size"] == 3
+
+
+def test_the_idempotency_fixtures_say_what_they_are():
+    """Both fixtures above are load-bearing by ABSENCE, which a silent edit
+    could restore without any suite going red."""
+    reexport = json.loads((_DIR / "extent_reexport_root.esm").read_text())
+    assert "metaparameters" not in reexport, "the name must arrive by re-export"
+    assert reexport["index_sets"]["records"]["size"] == "N_REC"
+    resolved = json.loads((_DIR / "extent_resolved_shape.esm").read_text())
+    assert "metaparameters" not in resolved, "a mount consumed the leaf's declaration"
+    assert resolved["index_sets"]["records"]["size"] == 3, "already folded"
+    assert "ref" not in resolved["models"]["Ingest"], "already inlined"
+    assert resolved["data_sources"]["EGU_Emis"]["extent"]["metaparameter"] == "N_REC"
