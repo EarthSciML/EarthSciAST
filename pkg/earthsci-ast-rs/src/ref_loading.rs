@@ -927,7 +927,13 @@ fn resolve_value(
             // the two MUST agree. Nested edge `bindings` fold against the leaf's
             // own closed environment, as a standalone load would give them.
             let leaf_env = root_metaparameter_env(&parsed, &bindings);
-            walk_top_level(&mut parsed, &parent_dir, visited, &leaf_env, &BTreeMap::new())?;
+            walk_top_level(
+                &mut parsed,
+                &parent_dir,
+                visited,
+                &leaf_env,
+                &BTreeMap::new(),
+            )?;
             // esm-spec §9.7.10 form A: the edge's `expression_template_imports`
             // inject a discretization into the referenced component's own
             // scope, appended BEFORE resolution so the §9.6.3 fixpoint lowers
