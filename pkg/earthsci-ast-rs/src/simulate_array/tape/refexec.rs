@@ -187,6 +187,50 @@ pub(super) fn run_reference(
                 }
                 slots[*out as usize] = Some(RefVal::Arr(o));
             }
+            Instr::ConstArray { data, out } => {
+                let d = &prog.const_data[*data as usize];
+                let arr = ArrayD::from_shape_vec(IxDyn(&d.shape[..]), d.values.clone())
+                    .expect("ConstArray payload matches its shape");
+                slots[*out as usize] = Some(RefVal::Arr(arr));
+            }
+            Instr::Reduce {
+                op,
+                init,
+                src,
+                axes,
+                src_shape,
+                out,
+            } => {
+                let f = binary_kernel_of(*op);
+                let sv = resolve_src(prog, &slots, &state_arrays, &obs, src);
+                assert_eq!(sv.shape(), &src_shape[..], "Reduce source box");
+                let desc = &prog.slots[*out as usize];
+                let mut acc = ArrayD::<f64>::from_elem(IxDyn(&desc.shape[..]), *init);
+                let keep: Vec<usize> = (0..sv.ndim())
+                    .filter(|d| !axes.contains(&(*d as u8)))
+                    .collect();
+                // `indexed_iter` walks a standard-layout array in row-major
+                // order — the order the `Instr::Reduce` contract fixes.
+                let sv = if sv.is_standard_layout() {
+                    sv
+                } else {
+                    sv.as_standard_layout().to_owned()
+                };
+                let mut dst_idx: Vec<usize> = vec![0; keep.len()];
+                for (idx, &x) in sv.indexed_iter() {
+                    for (j, &d) in keep.iter().enumerate() {
+                        dst_idx[j] = idx[d];
+                    }
+                    let a = &mut acc[IxDyn(&dst_idx)];
+                    *a = f(*a, x);
+                }
+                let val = if desc.scalar {
+                    RefVal::Scalar(acc[IxDyn(&[])])
+                } else {
+                    RefVal::Arr(acc)
+                };
+                slots[*out as usize] = Some(val);
+            }
             Instr::JmpIfZero {
                 cond,
                 n_true,

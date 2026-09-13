@@ -241,6 +241,73 @@ pub(super) fn run_range(
                     },
                 }
             }
+            Instr::ConstArray { data, out } => {
+                let d = &prog.const_data[*data as usize];
+                let off = slot_off[*out as usize];
+                debug_assert_eq!(d.values.len(), prog.slots[*out as usize].elems());
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        d.values.as_ptr(),
+                        slab_ptr.add(off),
+                        d.values.len(),
+                    );
+                }
+            }
+            Instr::Reduce {
+                op,
+                init,
+                src,
+                axes,
+                src_shape,
+                out,
+            } => {
+                let f = binary_kernel_of(*op);
+                let sv = resolve_src(src, env, slab_ptr, slot_off, obs);
+                debug_assert_eq!(&sv.shape[..], &src_shape[..], "Reduce source box");
+                let desc = &prog.slots[*out as usize];
+                let ooff = slot_off[*out as usize];
+                let dst = unsafe { slab_ptr.add(ooff) };
+                // Seed every output position with the identity, then fold.
+                let n_out = desc.elems();
+                unsafe {
+                    for k in 0..n_out {
+                        *dst.add(k) = *init;
+                    }
+                }
+                // Kept (un-reduced) source axes, in order; their row-major
+                // strides in the OUTPUT box line up positionally.
+                let nd = sv.shape.len();
+                let keep: SmallVec<[usize; 4]> =
+                    (0..nd).filter(|d| !axes.contains(&(*d as u8))).collect();
+                let out_rm = rm_strides(&desc.shape);
+                // Row-major (LAST axis fastest) walk of the source box — the
+                // oracle's odometer; see the `Instr::Reduce` docs.
+                let mut idx: SmallVec<[usize; 4]> = SmallVec::from_elem(0usize, nd);
+                let total: usize = sv.shape.iter().product();
+                for _ in 0..total {
+                    let mut soff = 0i64;
+                    let mut doff = 0i64;
+                    for d in 0..nd {
+                        soff += sv.strides[d] * idx[d] as i64;
+                    }
+                    for (j, &d) in keep.iter().enumerate() {
+                        doff += out_rm[j] * idx[d] as i64;
+                    }
+                    unsafe {
+                        let p = dst.offset(doff as isize);
+                        *p = f(*p, *sv.ptr.offset(soff as isize));
+                    }
+                    let mut d = nd;
+                    while d > 0 {
+                        d -= 1;
+                        idx[d] += 1;
+                        if idx[d] < sv.shape[d] {
+                            break;
+                        }
+                        idx[d] = 0;
+                    }
+                }
+            }
             Instr::JmpIfZero {
                 cond,
                 n_true,
