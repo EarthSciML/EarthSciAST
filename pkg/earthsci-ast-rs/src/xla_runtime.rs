@@ -89,6 +89,14 @@
 //!    `tile_assignment_devices`) and a builder-scoped setter, so the emitter
 //!    can annotate the state parameter and let SPMD partitioning do the rest.
 //!
+//! The way around the third item, were it the only one, would be to author the
+//! HLO text with `sharding={devices=[N,1]0,1,...}` annotations and read it
+//! back through `HloModuleProto::parse_and_return_unverified_module` and
+//! `XlaComputation::from_proto`, both of which the crate DOES expose. It does
+//! not help: sharding annotations are only acted on when `num_partitions > 1`
+//! and `use_spmd_partitioning` is set, so item 1 blocks that route too and the
+//! annotations would simply be stripped.
+//!
 //! That is on the order of two hundred lines of C++ in the shim plus about a
 //! hundred of Rust binding, in a third-party crate — a fork or an upstream
 //! patch, not a local change. Until it exists, work that is genuinely
@@ -378,7 +386,13 @@ impl CompiledRhs {
         let p = client
             .buffer_from_host_buffer(&pv, &[self.params_len], None)
             .map_err(|e| CompileRhsError::Runtime(format!("upload of p failed: {e}")))?;
-        Ok(DeviceRhs { rhs: self, u, p, du: None, stepper: None })
+        Ok(DeviceRhs {
+            rhs: self,
+            u,
+            p,
+            du: None,
+            stepper: None,
+        })
     }
 
     /// Shared argument checking: the length rules are the same whether the
@@ -493,10 +507,7 @@ impl DeviceRhs<'_> {
         let dtb = client
             .buffer_from_host_buffer(&[dt], &[], None)
             .map_err(|e| CompileRhsError::Runtime(format!("upload of dt failed: {e}")))?;
-        let du = self
-            .du
-            .as_ref()
-            .expect("eval_at just set the derivative");
+        let du = self.du.as_ref().expect("eval_at just set the derivative");
         let out = self
             .stepper
             .as_ref()

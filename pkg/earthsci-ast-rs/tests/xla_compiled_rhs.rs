@@ -316,7 +316,8 @@ fn compiled_rhs_on_the_gpu() {
         .unwrap_or_else(|e| panic!("GPU client: {e}"))
         .platform_name();
     assert!(
-        platform.to_ascii_lowercase().contains("cuda") || platform.to_ascii_lowercase().contains("gpu"),
+        platform.to_ascii_lowercase().contains("cuda")
+            || platform.to_ascii_lowercase().contains("gpu"),
         "EARTHSCI_XLA_PLATFORM=gpu was asked for but the client reports platform \
          {platform:?}; this run would have proved nothing about a device"
     );
@@ -346,7 +347,10 @@ fn compiled_rhs_on_the_gpu() {
          not a model one"
     );
     let extra: Vec<&String> = lowered.difference(&expected).collect();
-    assert!(extra.is_empty(), "fixtures lowered on the GPU that the CPU list does not have: {extra:?}");
+    assert!(
+        extra.is_empty(),
+        "fixtures lowered on the GPU that the CPU list does not have: {extra:?}"
+    );
 }
 
 /// The device-resident evaluator against the host round trip, on whatever
@@ -441,7 +445,8 @@ fn the_on_device_euler_loop_tracks_the_host_loop() {
     if !runtime_available() {
         return;
     }
-    let path = repo_root().join("tests/conformance/pde_simulation/fixtures/diffusion_1d_periodic_n8.esm");
+    let path =
+        repo_root().join("tests/conformance/pde_simulation/fixtures/diffusion_1d_periodic_n8.esm");
     let compiled = build(&path);
     let program = CompiledRhs::compile(&compiled).expect("diffusion_1d_periodic_n8 lowers");
     let params: HashMap<String, f64> = HashMap::new();

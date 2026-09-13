@@ -106,7 +106,7 @@ fn largest() -> Result<(), String> {
         };
         rows.push((n, id, status));
     }
-    rows.sort_by(|a, b| b.0.cmp(&a.0));
+    rows.sort_by_key(|r| std::cmp::Reverse(r.0));
     for (n, id, status) in rows {
         println!("{n:5}  {id:40}  {status}");
     }
@@ -121,12 +121,18 @@ fn residency(fixture: &Path, iters: usize) -> Result<(), String> {
     let pv = compiled.debug_resolve_params(&params);
     // A state that is not all-equal, so a lowering that dropped an index would
     // show up in the agreement check below rather than cancelling.
-    let u: Vec<f64> = (0..program.n_states()).map(|i| 1.0 + 0.25 * i as f64).collect();
+    let u: Vec<f64> = (0..program.n_states())
+        .map(|i| 1.0 + 0.25 * i as f64)
+        .collect();
     let t = 0.0;
 
     println!("fixture     {}", fixture.display());
     println!("platform    {}", program.platform());
-    println!("states      {} ({} variables)", program.n_states(), names.len());
+    println!(
+        "states      {} ({} variables)",
+        program.n_states(),
+        names.len()
+    );
     println!("instrs      {}", program.n_instrs());
     println!("iterations  {iters}");
 
@@ -238,7 +244,10 @@ fn residency(fixture: &Path, iters: usize) -> Result<(), String> {
 fn multidevice(fixture: &Path) -> Result<(), String> {
     let client = xla_runtime::client()?;
     let n_dev = client.addressable_device_count();
-    println!("platform {} with {n_dev} addressable device(s)", client.platform_name());
+    println!(
+        "platform {} with {n_dev} addressable device(s)",
+        client.platform_name()
+    );
     if n_dev < 2 {
         println!(
             "only one addressable device here, so nothing to say about multi-device \
@@ -260,7 +269,10 @@ fn multidevice(fixture: &Path) -> Result<(), String> {
     let u: Vec<f64> = (0..n).map(|i| 1.0 + 0.25 * i as f64).collect();
 
     let reference = program.eval(&u, &pv, 0.0).map_err(|e| e.to_string())?;
-    println!("reference (default device) computed {} values", reference.len());
+    println!(
+        "reference (default device) computed {} values",
+        reference.len()
+    );
 
     let devices = client.addressable_devices();
     for d in devices.iter() {
@@ -295,10 +307,17 @@ fn multidevice(fixture: &Path) -> Result<(), String> {
                             "device {}: execute against buffers placed there SUCCEEDED, \
                              max |diff from default device| = {worst:e}{}",
                             d.id(),
-                            if d.id() == 0 { "  (the control: device 0 is where the executable was assigned)" } else { "" }
+                            if d.id() == 0 {
+                                "  (the control: device 0 is where the executable was assigned)"
+                            } else {
+                                ""
+                            }
                         );
                     }
-                    Err(e) => println!("device {}: execute against buffers placed there: {e}", d.id()),
+                    Err(e) => println!(
+                        "device {}: execute against buffers placed there: {e}",
+                        d.id()
+                    ),
                 }
             }
         }
@@ -339,7 +358,10 @@ fn main() {
         }
         Some("residency") => {
             let f = args.get(2).expect("residency <fixture.esm> [iterations]");
-            let n: usize = args.get(3).map(|s| s.parse().expect("iterations")).unwrap_or(100);
+            let n: usize = args
+                .get(3)
+                .map(|s| s.parse().expect("iterations"))
+                .unwrap_or(100);
             residency(Path::new(f), n)
         }
         _ => {
