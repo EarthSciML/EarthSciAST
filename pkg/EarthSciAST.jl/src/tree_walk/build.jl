@@ -4241,6 +4241,17 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
             push!(array_contractions, ac)
             return nothing
         end
+        # A DECLINE is the interesting event: the gate admitted the equation, so
+        # the body failed to resolve or to lower with its indices symbolic and
+        # the equation silently drops to the per-cell build this tier exists to
+        # avoid. Announced for the same reason the affine tier announces its own
+        # declines — a cascade tally can say which tier won, never which one
+        # nearly did.
+        get(ENV, "ESS_STENCIL_DEBUG", "") == "1" &&
+            (println(stderr, "[ess-array-contraction] DECLINED -> per-cell: ",
+                     "lhs=", sprint(show, lhs_body), " out_idx=", idx_names,
+                     " contracted=", prod(length(c) for c in contract_const));
+             flush(stderr))
     end
 
     # Anything the affine build cannot model takes the per-cell fallback, whose

@@ -341,6 +341,56 @@ const _AC_OFF = Dict("ESS_ARRAY_CONTRACTION_DISABLE" => "1")
         @test rb[1](rb[2], rb[3], 0.0) == rs[1](rs[2], rs[3], 0.0)
     end
 
+    # ── The `:inplace` twin of the level fill ────────────────────────────────
+    # `_fill_obs_levels!` runs a level's nests through the SAME section as the
+    # state RHS, but the case above builds `:oop` only, so the in-place level arm
+    # is reached by no fixture. Build the observed-nest model both ways and pin
+    # the level fill against the kill-switch oracle AND against `:oop`.
+    @testset "a nest on a materialized observed level, in place" begin
+        N = 16
+        ag1(b) = _AC_ESS.OpExpr("faq", _AC_ESS.ASTExpr[]; output_idx=Any["i"],
+            ranges=Dict("i" => _AC_ESS.IndexSetRef("x")), expr_body=b)
+        weq = _AC_ESS.Equation(_v("w"), ag1(_op("*", _n(2.0), _idx("u", _v("i")))))
+        Cm = [[_ac_sr(j, i) for i in 1:N] for j in 1:N]
+        nest = _AC_ESS.OpExpr("faq", _AC_ESS.ASTExpr[]; output_idx=Any["i"],
+            reduce="+", ranges=Dict("i" => _AC_ESS.IndexSetRef("x"),
+                                    "j" => _AC_ESS.IndexSetRef("x")),
+            expr_body=_op("*", _op("index", _AC_ESS.OpExpr("const", _AC_ESS.ASTExpr[];
+                                                           value=Cm), _v("j"), _v("i")),
+                          _idx("w", _v("j"))))
+        vars = Dict("u" => _AC_ESS.ModelVariable(_AC_ESS.UnknownVariable; shape=["x"]),
+                    "w" => _AC_ESS.ModelVariable(_AC_ESS.UnknownVariable; shape=["x"]),
+                    "z" => _AC_ESS.ModelVariable(_AC_ESS.UnknownVariable; shape=["x"]))
+        eqs = [weq, _AC_ESS.Equation(_v("z"), nest),
+               _AC_ESS.Equation(ag1(_Didx("u", _v("i"))), ag1(_idx("z", _v("i"))))]
+        u0v = Dict("u[$i]" => Float64(i % 7) for i in 1:N)
+        bld(form, extra) = withenv((k => v for (k, v) in _ac_env(extra))...) do
+            _AC_ESS._reset_cascade_tally!()
+            (_AC_ESS._build_evaluator_impl(_AC_ESS.Model(vars, eqs);
+                index_sets=Dict("x" => _AC_ESS.IndexSet("interval"; size=N)),
+                initial_conditions=u0v, form=form),
+             copy(_AC_ESS._CASCADE_TALLY))
+        end
+        run_ip(extra) = begin
+            (r, t) = bld(:inplace, extra)
+            (f!, u0, p) = (r[1], r[2], r[3])
+            du = similar(u0); f!(du, u0, p, 0.0)
+            (du, r[5], t)
+        end
+        dn, vn, tn = run_ip(Dict{String,String}())
+        do_, vo, to = run_ip(_AC_OFF)
+        @test _ac_tally(tn, :array_contraction) == 1
+        @test _ac_tally(to, :array_contraction) == 0
+        @test all(dn[vn["u[$i]"]] === do_[vo["u[$i]"]] for i in 1:N)
+        # The closed form: u̇[i] = z[i] = Σ_j C[j,i]·2·u[j].
+        @test all(dn[vn["u[$i]"]] ==
+                  sum(_ac_sr(j, i) * 2.0 * Float64(j % 7) for j in 1:N)
+                  for i in 1:N)
+        (ro, _) = bld(:oop, Dict{String,String}())
+        duo = ro[1](ro[2], ro[3], 0.0)
+        @test all(duo[ro[5]["u[$i]"]] === dn[vn["u[$i]"]] for i in 1:N)
+    end
+
     @testset "a bound this tier cannot model declines and still answers" begin
         # A per-cell VARIABLE contracted bound (`index(valence, i)`): not a
         # constant integer range, so the tier's admission test rejects it before
