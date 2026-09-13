@@ -1,0 +1,229 @@
+{
+ "esm": "1.1.0",
+ "metadata": {
+  "name": "alias_export_order_control",
+  "description": "The control for bare_alias_observed.esm: mathematically identical, with the alias removed. It was green throughout, so a failure here indicts the fixtures rather than the export ordering.",
+  "license": "MIT"
+ },
+ "index_sets": {
+  "lev": {
+   "kind": "interval",
+   "size": 4
+  }
+ },
+ "models": {
+  "Column": {
+   "variables": {
+    "kappa": {
+     "type": "parameter",
+     "units": "1/s",
+     "default": 0.002,
+     "description": "diffusion rate per cell"
+    },
+    "omega": {
+     "type": "parameter",
+     "units": "1/s",
+     "default": 7.27220521664304e-05,
+     "description": "diurnal frequency"
+    },
+    "amp": {
+     "type": "parameter",
+     "units": "K",
+     "default": 10.0,
+     "description": "surface forcing amplitude"
+    },
+    "Tsfc0": {
+     "type": "parameter",
+     "units": "K",
+     "default": 288.0,
+     "description": "surface mean temperature"
+    },
+    "rlx": {
+     "type": "parameter",
+     "units": "1/s",
+     "default": 0.001,
+     "description": "surface relaxation rate"
+    },
+    "T": {
+     "type": "unknown",
+     "units": "K",
+     "shape": [
+      "lev"
+     ],
+     "description": "cell temperature"
+    },
+    "Tsfc": {
+     "type": "unknown",
+     "units": "K",
+     "description": "the prescribed surface temperature, defined directly"
+    },
+    "dTdt": {
+     "type": "unknown",
+     "units": "K/s",
+     "shape": [
+      "lev"
+     ],
+     "description": "per-cell tendency"
+    }
+   },
+   "equations": [
+    {
+     "lhs": "Tsfc",
+     "rhs": {
+      "op": "+",
+      "args": [
+       "Tsfc0",
+       {
+        "op": "*",
+        "args": [
+         "amp",
+         {
+          "op": "sin",
+          "args": [
+           {
+            "op": "*",
+            "args": [
+             "omega",
+             "t"
+            ]
+           }
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "lhs": "dTdt",
+     "rhs": {
+      "op": "faq",
+      "output_idx": [
+       "k"
+      ],
+      "args": [],
+      "ranges": {
+       "k": {
+        "from": "lev"
+       }
+      },
+      "expr": {
+       "op": "+",
+       "args": [
+        {
+         "op": "*",
+         "args": [
+          "kappa",
+          {
+           "op": "-",
+           "args": [
+            {
+             "op": "+",
+             "args": [
+              {
+               "op": "index",
+               "args": [
+                "T",
+                {
+                 "op": "max",
+                 "args": [
+                  1,
+                  {
+                   "op": "-",
+                   "args": [
+                    "k",
+                    1
+                   ]
+                  }
+                 ]
+                }
+               ]
+              },
+              {
+               "op": "index",
+               "args": [
+                "T",
+                {
+                 "op": "min",
+                 "args": [
+                  4,
+                  {
+                   "op": "+",
+                   "args": [
+                    "k",
+                    1
+                   ]
+                  }
+                 ]
+                }
+               ]
+              }
+             ]
+            },
+            {
+             "op": "*",
+             "args": [
+              2.0,
+              {
+               "op": "index",
+               "args": [
+                "T",
+                "k"
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        },
+        {
+         "op": "*",
+         "args": [
+          "rlx",
+          {
+           "op": "ifelse",
+           "args": [
+            {
+             "op": "==",
+             "args": [
+              "k",
+              1
+             ]
+            },
+            {
+             "op": "-",
+             "args": [
+              "Tsfc",
+              {
+               "op": "index",
+               "args": [
+                "T",
+                "k"
+               ]
+              }
+             ]
+            },
+            0.0
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": {
+      "op": "D",
+      "args": [
+       "T"
+      ],
+      "wrt": "t"
+     },
+     "rhs": "dTdt"
+    }
+   ]
+  }
+ }
+}
