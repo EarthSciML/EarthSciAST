@@ -576,6 +576,86 @@ function _try_build_contraction_loop(body::ASTExpr, contract_names::Vector{Strin
     return node
 end
 
+# ── Whole-array contraction loop nest (ess-array-contraction) ────────────────
+# Kill-switch + coverage floor for the tier that keeps the OUTPUT indices
+# symbolic too (see `_try_build_array_contraction`). The floor is on the
+# CONTRACTED length alone: every tier below pays ∏|k…| per structural group (the
+# affine tier's unrolled fold) or per output cell (the per-cell unroll), so the
+# decision cannot be read off the output extent — a square source-receptor
+# contraction has as many output cells as contracted ones and is unaffordable on
+# both. Below the floor nothing changes: the existing loop-vs-affine order
+# decides the equation exactly as before, so every small-reduction fixture stays
+# byte-for-byte identical.
+#
+# `ESS_CONTRACTION_LOOP=0` disables this tier too: it is documented as forcing
+# the pure-unroll reference EVERYWHERE, and this tier is a contraction loop — one
+# that also loops the output index. `ESS_ARRAY_CONTRACTION_DISABLE=1` is the
+# narrower switch that drops only this tier and leaves the per-cell loop in play,
+# which is what the differential test uses for its oracle.
+_array_contraction_enabled() =
+    _contraction_loop_enabled() && get(ENV, "ESS_ARRAY_CONTRACTION_DISABLE", "") != "1"
+function _array_contraction_min()
+    v = get(ENV, "ESS_ARRAY_CONTRACTION_MIN", "")
+    n = tryparse(Int, v)
+    return (n === nothing || n < 1) ? 1024 : n
+end
+
+# Resolve an array einsum's body ONCE with BOTH its output and its contracted
+# indices symbolic, so the whole equation compiles to a single node.
+#
+# `_try_build_contraction_loop` keeps only the CONTRACTED indices symbolic, which
+# still costs one resolve + `_compile` per OUTPUT CELL — the tier that fixed the
+# reduction length left the output extent to scale the build. Keeping the output
+# indices symbolic as well makes build IR O(1) in BOTH extents: the caller drives
+# the output loop counters at eval time and writes each cell's flat slot from a
+# precomputed vector (array_contraction.jl).
+#
+# The output symbols become reserved loop-var names like the contracted ones, so
+# the body's reads lower through the SAME runtime-gather machinery: a
+# const/provider array read at an output subscript becomes `_NK_CONST_GATHER`, a
+# state read `_NK_STATE_GATHER`, a bare output symbol `_NK_LOOPVAR`. Only the
+# contracted symbols get `__contract_loop` markers; the output refs are handed
+# back for the section runner to drive.
+#
+# Returns `(out_refs, marker)` in `out_names` order, or `nothing` when the body
+# does not resolve symbolically — the same "correctness first, fall back to the
+# existing cascade" contract `_try_build_contraction_loop` has.
+function _try_build_array_contraction(body::ASTExpr, out_names::Vector{String},
+        contract_names::Vector{String}, contract_ranges::AbstractVector,
+        oplus::String, zerobar::Float64,
+        array_var_info, var_map, const_arrays, pgather::AbstractDict)
+    nout = length(out_names)
+    all_names = vcat(out_names, contract_names)
+    fresh = String[_fresh_loopvar_name() for _ in all_names]
+    refs  = Base.RefValue{Int}[Ref(0) for _ in all_names]
+    subs  = Dict{String,ASTExpr}(all_names[d] => VarExpr(fresh[d])
+                                 for d in eachindex(all_names))
+    subbed = _sub_preserving(body, subs)
+    bsyms  = Set{String}(fresh)
+    resolved = try
+        # memo=nothing, as in `_try_build_contraction_loop`: a symbolic resolve
+        # must never share the concrete RHS-build memo.
+        _resolve_indices(subbed, array_var_info, var_map, const_arrays,
+                         pgather, nothing, bsyms)
+    catch
+        return nothing
+    end
+    for d in eachindex(fresh)
+        _LOOPVAR_REFS[Symbol(fresh[d])] = refs[d]
+    end
+    oplus_sym = Symbol(oplus)
+    node::ASTExpr = resolved
+    # Innermost-first over the contracted indices, matching the per-cell loop
+    # tier's nesting — so this tier's fold order IS that tier's fold order.
+    for d in eachindex(contract_names)
+        r = contract_ranges[d]
+        node = OpExpr("__contract_loop", ASTExpr[node];
+                      value=_ContractLoopBuild(refs[nout + d], first(r), last(r),
+                                               step(r), oplus_sym, zerobar))
+    end
+    return (refs[1:nout], node)
+end
+
 # Expand a scalar faq (empty output_idx) to a plain scalar ASTExpr by
 # unrolling all contracted indices at build time and combining them with the
 # declared reducer. This is the build-time equivalent of an einsum over a

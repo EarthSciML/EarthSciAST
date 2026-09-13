@@ -2859,9 +2859,9 @@ forcing_buffer_index(f::_OopRHS) = f.buffer_index
 
 # Fill ONE materialized-observed level out of place, mirroring
 # `_fill_obs_levels!` (build.jl) statement for statement — scalar entries, then
-# the level's access kernels, then its prefix reductions — but threading the
-# extended vector functionally, because a tracing backend's `_oop_store` returns
-# a new value rather than mutating.
+# the level's access kernels, its prefix reductions and its whole-array
+# contractions — but threading the extended vector functionally, because a
+# tracing backend's `_oop_store` returns a new value rather than mutating.
 #
 # Output AND state are both `ue`: a fill reads the state and every STRICTLY
 # LOWER level, which are already valid in `ue`, exactly as the in-place wrapper
@@ -2880,7 +2880,7 @@ forcing_buffer_index(f::_OopRHS) = f.buffer_index
                                  fb, empty_cache,
                                  ssaks::Vector{_OopSSAKernel}=_OOP_SSA_EMPTY_KS,
                                  vals::Vector{Any}=_OOP_SSA_NO_VALS) where {T}
-    scalars, kernels, plans, scans = lvl
+    scalars, kernels, plans, scans, acs = lvl
     ue = _oop_run_scalar_batches(ue, sb, ue, p, t, empty_cache, fb)
     for j in eachindex(kernels)
         plan = plans[j]
@@ -2890,6 +2890,8 @@ forcing_buffer_index(f::_OopRHS) = f.buffer_index
              _oop_run_acc_kernel(ue, ue, p, t, kernels[j], T)
     end
     isempty(scans) || (ue = _apply_scan_folds_oop(ue, scans))
+    isempty(acs) ||
+        (ue = _apply_array_contractions_oop(ue, ue, p, t, acs, empty_cache, fb))
     return ue
 end
 
@@ -3209,7 +3211,9 @@ function _ssa_pack_ref(pid_l::Vector{Int}, pos_l::Vector{Int}, pgather_ok::Bool)
 end
 
 function _build_oop_ssa_plan(mat_levels::Tuple, acc_kernels, acc_plans,
-                             rhs_list, cse_prelude, n_states::Int, n_total::Int)
+                             rhs_list, cse_prelude, n_states::Int, n_total::Int,
+                             array_contractions::AbstractVector{_ArrayContraction}=
+                                 _ArrayContraction[])
     _oop_ssa_enabled() || return _OOP_SSA_OFF
     ghost_ok = _oop_ssa_ghost_enabled()
     sub_ok = _oop_ssa_sub_enabled()
@@ -3279,14 +3283,27 @@ function _build_oop_ssa_plan(mat_levels::Tuple, acc_kernels, acc_plans,
     for (_, nd) in rhs_list
         _ssa_mark_node_reads!(resid, nd)
     end
+    # ess-array-contraction: the STATE nests write `du`, so they leave no
+    # residue of their own (as the state `scan_folds` do not) — but their bodies
+    # still READ `ue`, so every producer one of them reads must keep scattering.
+    for A in array_contractions
+        _ssa_mark_node_reads!(resid, A.body)
+    end
     for li in 1:nlev
-        scalars, _, _, scans = mat_levels[li]
+        scalars, _, _, scans, acs = mat_levels[li]
         for (_, nd) in scalars
             _ssa_mark_node_reads!(resid, nd)
         end
         for S in scans
             # the fold reads its own slots back
             markv!((S::_ScanFold).slots, _SSA_R_SCAN)
+        end
+        # ess-array-contraction: the nest's body is an ordinary `_Node` walked
+        # by `_oop_eval`, so every slot it reads comes off `ue` and NO producer
+        # feeding it may drop its scatter. Unmarked, a producer read only by a
+        # nest looks dead and is skipped, and the nest reads a zero buffer.
+        for A in acs
+            _ssa_mark_node_reads!(resid, (A::_ArrayContraction).body)
         end
     end
     # (The state-RHS `scan_folds` fold `du`, not `ue` — no residue here.)
@@ -3557,7 +3574,9 @@ function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
                        pgather::AbstractDict=_EMPTY_PGATHER,
                        scan_folds::AbstractVector{_ScanFold}=_ScanFold[],
                        mat_levels::Tuple=(),
-                       n_total::Int=n_states)
+                       n_total::Int=n_states,
+                       array_contractions::AbstractVector{_ArrayContraction}=
+                           _ArrayContraction[])
     n_cse = length(cse_prelude)
     # J5 covers BOTH IR families: the `_NK_PARAM_GATHER` scalar scan and the
     # acc-descriptor scan (`_AK_FORCING_BOX`/`_AK_ARR_FIXED`/`_AK_ARR_TBL_BOX`)
@@ -3594,7 +3613,7 @@ function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
     # the OFF singleton keeps every runtime branch on the pre-existing path).
     # `ssa_mat` mirrors `mat_levels`' tuple shape for the tail-recursive fill.
     ssa = _build_oop_ssa_plan(mat_levels, acc_kernels, acc_plans, rhs_list,
-                              cse_prelude, n_states, n_total)
+                              cse_prelude, n_states, n_total, array_contractions)
     ssa_mat = ssa.enabled ? Tuple(ssa.mat) :
               ntuple(_ -> _OOP_SSA_EMPTY_KS, length(mat_levels))
     buf_names = sort!(String[String(k) for k in keys(pgather)])
@@ -3686,6 +3705,13 @@ function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
         # Cumulative (prefix) reductions (ess-scan, scan.jl): fold the per-cell
         # terms the kernels above just stored, along each scanned axis.
         isempty(scan_folds) || (du = _apply_scan_folds_oop(du, scan_folds))
+
+        # Whole-array contractions (ess-array-contraction, array_contraction.jl):
+        # the same loop nests `f!` runs, in the same position, writing through
+        # the `_oop_store` seam so a traced output is never scalar-indexed.
+        isempty(array_contractions) ||
+            (du = _apply_array_contractions_oop(du, ue, p, t, array_contractions,
+                                                cache, fb))
         return du
     end
     return _OopRHS(rhs, host_bufs, buffer_index)

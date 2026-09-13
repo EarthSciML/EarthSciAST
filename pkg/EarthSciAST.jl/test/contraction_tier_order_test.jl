@@ -92,8 +92,14 @@ _cto_exact(NI, NJ, NK) =
 function _cto_build(NI, NJ, NK; env = Dict{String,String}(), form = :inplace)
     doc = _cto_doc(NI, NJ, NK)
     ics = _cto_ics(NI, NJ, NK)
+    # The whole-array contraction nest (ess-array-contraction) sits above BOTH
+    # tiers this file compares, so every case has to say which side of its floor
+    # it is on rather than inherit the ambient value — otherwise the routing
+    # under test is decided by the environment, not by the fixture.
     pairs = ["ESS_CONTRACTION_LOOP" => get(env, "ESS_CONTRACTION_LOOP", nothing),
              "ESS_CONTRACTION_LOOP_MIN" => get(env, "ESS_CONTRACTION_LOOP_MIN", "8"),
+             "ESS_ARRAY_CONTRACTION_MIN" =>
+                 get(env, "ESS_ARRAY_CONTRACTION_MIN", "1024"),
              "ESS_STENCIL_DISABLE" => get(env, "ESS_STENCIL_DISABLE", nothing)]
     dp = [ _cto_dpv(i, j, k) for i in 1:NI, j in 1:NJ, k in 1:NK ]
     withenv(pairs...) do
@@ -137,13 +143,36 @@ _cto_outs(du, vm, NI, NJ) = [ du[vm["out[$i,$j]"]] for i in 1:NI, j in 1:NJ ]
     end
 
     # ── The shape the contraction loop exists for. 4 output cells against 8
-    # terms — the unroll cannot be cheaper, so the loop keeps the equation.
-    @testset "narrow output, long reduction → contraction loop (unchanged)" begin
+    # terms — the unroll cannot be cheaper, so the loop keeps the equation, the
+    # reduction being far under the whole-array nest's floor.
+    @testset "narrow output, long reduction → contraction loop (under the floor)" begin
         NI, NJ, NK = 2, 2, 8
         @test NI * NJ < NK                  # the admission condition, stated
         du, vm, tally, _ = _cto_build(NI, NJ, NK)
         @test _cto_get(tally, :percell_loop) == 1
+        @test _cto_get(tally, :array_contraction) == 0
         @test _cto_outs(du, vm, NI, NJ) == _cto_exact(NI, NJ, NK)
+    end
+
+    # ── …and the SAME shape once the reduction clears the nest's floor. The
+    # per-cell loop lowers one node per OUTPUT CELL; the nest lowers one for the
+    # whole equation, so by the rule both tiers are selected on — take the
+    # equation when the alternative's build scales with an extent — the nest wins
+    # here too, narrow output or not. Pinned as a positive routing fact on both
+    # sides: the nest fired AND the loop did not.
+    @testset "narrow output, long reduction → the nest once above the floor" begin
+        NI, NJ, NK = 2, 2, 8
+        env = Dict("ESS_ARRAY_CONTRACTION_MIN" => "8")
+        du, vm, tally, _ = _cto_build(NI, NJ, NK; env = env)
+        @test _cto_get(tally, :array_contraction) == 1
+        @test _cto_get(tally, :percell_loop) == 0
+        @test _cto_get(tally, :percell_acc) == 0
+        # Numerics do not move with the tier: the loop's own answer, bit for bit.
+        du_l, vm_l, tally_l, _ = _cto_build(NI, NJ, NK)
+        @test _cto_get(tally_l, :percell_loop) == 1        # the oracle is the loop
+        A = _cto_outs(du, vm, NI, NJ)
+        @test all(A[i] === _cto_outs(du_l, vm_l, NI, NJ)[i] for i in eachindex(A))
+        @test A == _cto_exact(NI, NJ, NK)
     end
 
     # ── Numerics may not move. The affine tier's answer is pinned against BOTH

@@ -646,7 +646,9 @@ function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
                    const_slots::AbstractVector{Int},
                    time_slots::AbstractVector{Int},
                    dyn_slots::AbstractVector{Int},
-                   scan_folds::AbstractVector{_ScanFold}=_ScanFold[])
+                   scan_folds::AbstractVector{_ScanFold}=_ScanFold[],
+                   array_contractions::AbstractVector{_ArrayContraction}=
+                       _ArrayContraction[])
     # Build observability: with ESS_OOP_PROBE=1, record how each array kernel would
     # plan for the vectorized (traceable) `:oop` form — `:oop_vec` when it
     # vectorizes whole-array, else `:oopdecl_<reason>` — into the cascade tally, so
@@ -759,6 +761,14 @@ function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
         # threaded chunk and every codegen'd loop nest. Empty on every model
         # without a forward prefix reduction, which is the common case.
         isempty(scan_folds) || _apply_scan_folds!(du, scan_folds)
+
+        # ---- Whole-array contractions (ess-array-contraction) ----
+        # Each runs its own output loop nest over disjoint `du` slots, so it is
+        # ordered behind the kernel section for the same reason the folds are:
+        # every other section has finished writing. Empty on every model whose
+        # reductions stay under the tier's length floor, which is the common case.
+        isempty(array_contractions) ||
+            _apply_array_contractions!(du, u, p, t, array_contractions, T)
         return nothing
     end
     return f!
