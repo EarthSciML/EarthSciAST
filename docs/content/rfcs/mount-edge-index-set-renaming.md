@@ -376,12 +376,12 @@ Stated plainly, because the change touches the load pipeline:
    `array_shape_mismatch` at the site that names the stale axis, never as a silently
    mis-sized array — but two bindings could still disagree about *which* loud failure they
    give for the same document.
-3. **The two mount forms resolve at different times in different bindings** (§4.11). At a
-   §4.7 subsystem edge every binding resolves the leaf as a complete document at the mount,
-   which is what makes this change uniform there. The top-level `models.<k>` `{ref}` form
-   does not have that property in Julia or Rust, so the field cannot be applied there and is
-   refused instead (§4.11). #198 item 3 changed that form's index-set MERGE without changing
-   when the leaf resolves, which is what makes the refusal necessary rather than cosmetic.
+3. **Resolved (§4.11).** This entry recorded that the top-level `models.<k>` `{ref}` form did
+   not resolve the leaf as a complete document in Julia or Rust, so the field was refused
+   there. Every binding now runs one edge pipeline at both attachment points, so the leaf is
+   a resolved document at either, and the refusal is gone at both `models` forms. What the
+   entry was really about survives one form further out: the top-level
+   `reaction_systems.<k>` inliner, which only Julia has and which is still that raw pre-pass.
 4. **Interaction with an inline test's ephemeral build (§9.7.10 timing regime 2).** A test's
    injection rebuilds the enclosing component per test; a mount rename belongs to the
    composed document and should be invisible to a leaf's own tests run standalone. Believed
@@ -396,20 +396,65 @@ both (esm-spec §4.7 "Where it applies"). What differs is whether a binding can 
 the top-level `models.<k>` / `reaction_systems.<k>` `{ref}` form, and that follows how each
 binding inlines that form:
 
-| Binding | §4.7 subsystem edge | Top-level `{ref}` mount |
+| Binding | §4.7 subsystem edge | Top-level `models.<k>` `{ref}` mount |
 |---|---|---|
-| Julia | implemented | **implemented** at `models.<k>` (2026-09-11) — `_inline_toplevel_model_refs!` now runs the same §4.7 edge pipeline `_resolve_subsystem_ref` runs, so the leaf resolves in its own scope and there is a resolved mounted document to rename. Still **refused** at `reaction_systems.<k>`, which no other binding mounts: that inliner is still a raw pre-pass that defers the leaf's §9.7 resolution to the root, so the edge raises `subsystem_index_set_rename_unsupported_mount_form` |
-| Rust | implemented | **implemented** (2026-09-10) — `inline_toplevel_model_refs` now runs the same §4.7 edge pipeline `resolve_value` runs at a `subsystems.<k>` edge, so the leaf resolves in its own scope and there is a resolved mounted document to rename |
-| Python | implemented | **implemented** — both forms share `_load_ref_data`, which resolves the leaf fully at the mount; verified end-to-end |
-| TypeScript | implemented | the form is not inlined at all (a bare `{ref}` stub returns immediately), so the field is unreachable |
-| Go | implemented | the form does not exist |
+| Julia | implemented | **implemented** (2026-09-11) — `_inline_toplevel_model_refs!` runs the same §4.7 edge pipeline `_resolve_subsystem_ref` runs, so the leaf resolves in its own scope and there is a resolved mounted document to rename |
+| Rust | implemented | **implemented** (2026-09-10) — `inline_toplevel_model_refs` runs the same §4.7 edge pipeline `resolve_value` runs at a `subsystems.<k>` edge |
+| Python | implemented | **implemented** — both forms share `_load_ref_data`, which resolves the leaf fully at the mount |
+| TypeScript | implemented | **implemented** — `inlineTopLevelModelRef` calls the same `resolveRefEdge` / `resolveRefDocument` the subsystem walk calls; previously a bare `{ref}` stub was left in place and the edge silently ignored |
+| Go | implemented | **implemented** — `inlineTopLevelModelRefs` hands the edge to `resolveSubsystemMap`, the one edge-pipeline implementation in that binding, through a one-entry holder map. `ESMFile.Models` is a `map[string]Model`, so previously the mount decoded to an EMPTY model and the `ref`, `bindings` and `index_set_rename` were all discarded with no diagnostic |
+
+One attachment point still refuses: Julia's top-level `reaction_systems.<k>` inliner, which no
+other binding mounts at all. It is still a raw pre-pass that defers the leaf's §9.7 resolution
+to the root, so there is no resolved mounted document to rename and the edge raises
+`subsystem_index_set_rename_unsupported_mount_form`.
 
 Refusing rather than ignoring is the load-bearing part, and it became load-bearing when #198
-item 3 landed: that change makes the top-level form MERGE the leaf's `index_sets` in Julia and
-Rust. Before it, an ignored `index_set_rename` there merged nothing and the axes simply did not
-arrive. After it, an ignored rename would merge the leaf under its **pre-rename** axis names —
-silently, in the one place the field exists to make loud. The refusal keeps that door shut
-until the two forms resolve alike.
+item 3 landed: that change makes the top-level form MERGE the leaf's `index_sets`. An ignored
+`index_set_rename` there would merge the leaf under its **pre-rename** axis names — silently, in
+the one place the field exists to make loud. That is what the refusal was holding shut, and
+applying the field at both forms is what opened it properly. The four bindings that do not mount
+a top-level `reaction_systems.<k>` `{ref}` at all still neither apply nor refuse the field there,
+which is the one silence §4.7 forbids that survives.
+
+### 4.12 Mounting an assembly — the mount form composes with itself
+
+Found reviewing the top-level-form port, and fixed with it. A mounted document may itself be an
+assembly, whose own `models.<k>` entries are `{ref}` mount edges. The top-level form lands its
+component as a *top-level system*, and a top-level system is exactly what that form mounts, so
+the composition is not an extra feature — it is what the form already claims to do.
+
+Measured on `main` before the fix, with a three-file chain (root mounts an assembly, the
+assembly mounts a component):
+
+| Binding | chained top-level mount | mount cycle |
+|---|---|---|
+| Rust | resolves | `circular top-level model reference detected` |
+| Julia | resolves | `SubsystemRefError` |
+| Python | `AttributeError: 'dict' object has no attribute 'name'` | same |
+| TypeScript | **loads clean, splicing the leaf's unresolved `{ref}` edge in as the component** | same, no error |
+| Go | `ambiguous_subsystem_ref` — "resolves to a component that is not a model", which it is | same |
+
+The TypeScript row is the one that matters: a document that mounts an assembly loaded with a
+bare mount edge sitting where a model belongs, and a mount cycle came back as a resolved
+document pointing at itself. That is the silent-data-loss shape the top-level port exists to
+remove, one level deeper.
+
+The same gap existed at the **`subsystems.<k>` form** in four of five — only Rust composed there
+— because which attachment point mounted a file cannot change what that file *is*. Go and
+TypeScript answered it by splicing in the unresolved edge (silent); Python and Julia by failing.
+Both forms are fixed in all five, and the rule is now normative in esm-spec §4.7 ("Mounting an
+assembly"). Cycle detection is path-scoped everywhere, so one component file may still be
+mounted under several keys.
+
+Fixtures: `tests/valid/mount_chain_inner.esm` (a one-model assembly, mountable), and the two
+that mount it — `mount_chain_outer.esm` at the top-level form, `mount_chain_via_subsystem.esm`
+at the subsystem form. Cycles are pinned per binding rather than in the shared corpus, because
+the bindings' circular-reference diagnostics do not share a code.
+
+One limit stands: Julia's top-level inliner reads its targets with `isfile`, so an assembly
+reached over `http(s)://` does not compose there. No fixture, and no binding disagrees about a
+document — only about how far a remote chain reaches.
 
 ---
 
@@ -504,10 +549,11 @@ breaks URL refs and offers no per-name control.
    with the concrete number the name folds to (`size: 7`) is a `subsystem_index_set_conflict`.
    Python agrees, so it is convergent behaviour, but the asymmetry is surprising to an author.
    **Julia took the same horn on 2026-09-11**, porting the Rust pipeline verbatim including the
-   backfill precedence. Status is now: honoured at the top-level `models.<k>` form by Julia,
-   Python and Rust; refused with `subsystem_index_set_rename_unsupported_mount_form` only at
-   Julia's top-level `reaction_systems.<k>` mount, which no other binding implements;
-   unreachable in TypeScript and Go.
+   backfill precedence. **TypeScript and Go implemented the form on 2026-09-12** (#198 item 4),
+   each by routing a top-level edge into the edge-pipeline implementation it already had rather
+   than writing a second one. Status is now: honoured at the top-level `models.<k>` form by ALL
+   FIVE; refused with `subsystem_index_set_rename_unsupported_mount_form` only at Julia's
+   top-level `reaction_systems.<k>` mount, which no other binding implements.
    Porting it surfaced a THIRD consequence that is not convergent, and it is a verdict split
    rather than a value one: when an assembly both declares the metaparameter AND restates the
    leaf's symbolic axis verbatim, Rust and Julia merge on the raw document — before their own
@@ -520,6 +566,23 @@ breaks URL refs and offers no per-name control.
    with each other and put the disagreement with Python in plain sight. Where the §4.7 merge
    sits relative to the mounting document's own §9.7.6 close is the question to settle, and it
    belongs with this item.
+   **TypeScript and Go landed on Python's side, and by construction rather than by choice
+   (2026-09-12).** Both already merged a `subsystems.<k>` mount's axes AFTER their own root
+   close — TypeScript because `loadString` folds the document before `resolveSubsystemRefs`
+   runs, Go because its typed `ESMFile.IndexSets` is decoded from the post-close text — so
+   putting the top-level form at the same pipeline point is what "a binding MUST NOT make the
+   two forms differ" required, and it carried the merge order with it. The count is therefore
+   three-to-two, and the three are the side on which the #198 fold-before-merge report does NOT
+   reproduce: on the pre-close side a leaf that DOES close (any leaf with §9.7 machinery)
+   contributes `size: 40` against an importer's still-symbolic `size: "NLEV"`, which is
+   `subsystem_index_set_conflict` for two identical declarations. That is the same document the
+   reporter filed, and it still fails in Rust at both forms and in Julia at the top-level form.
+   Settling the merge order settles that report too; they are one question.
+   A THIRD answer exists and is not a side at all: **Julia at a `subsystems.<k>` mount, and Go
+   at either mount form, cannot represent a symbolic `size`** — both index-set types hold an
+   integer — so they abort the mount with a raw `MethodError(Int64, ("n_rows",))` /
+   `json: cannot unmarshal string into ... IndexSet.size` rather than a diagnostic. Whichever
+   side wins, those two need the representation before they can implement it.
    **This matters for the reporter**: EqWeFiC's assemblies use top-level `ref` mounts, which now
    apply the field in all three bindings that implement the form. (An earlier draft said they were *pushed* to
    the top-level form because `variable_map` cannot reach into a subsystem. That is **wrong**,
@@ -570,6 +633,12 @@ Shared corpus (every `.esm` under `tests/valid/**` and `tests/invalid/**` is swe
   registry holds **both** `lev` (59) and `soil_lev` (4).
 - `tests/invalid/template_imports/mount_rename_unknown_index_set.esm` (+
   `expected_errors.json`, `resolver_only`) — `subsystem_index_set_rename_unknown_name`.
+- `tests/valid/mount_rename_two_columns_toplevel.esm` and
+  `tests/invalid/template_imports/mount_rename_unknown_index_set_toplevel.esm` — the same two
+  assemblies written at the TOP-LEVEL `models.<k>` attachment point. They are the differential
+  test §4.7 "Two mount forms, one mechanism" asks for: a binding that applies the field at one
+  form and ignores it at the other passes the first pair and fails this one. Each mounts the
+  same leaves as its sibling, so the two pairs differ in exactly the attachment point.
 
 Per-binding regression tests (`mount_index_set_rename` / `mount-index-set-rename` in each
 package) pin two things in all five: the rename rewrites the registry key **and** the mounted
@@ -610,3 +679,13 @@ called from `resolve.jl::_lower_and_coerce`; TypeScript
 `template-imports.ts::applyMountIndexSetRename` called from `ref-loading.ts::resolveRefDocument`;
 Go `template_rename.go::applyMountIndexSetRename` called from
 `subsystem_ref.go::resolveSubsystemMap`.
+
+Every one of those is reached from BOTH attachment points, which is the property that makes
+step 1's "the target resolves in its OWN scope" mean the same thing at either: Rust's
+`inline_toplevel_model_refs` and Julia's `_inline_toplevel_model_refs!` each inline the same
+pipeline their subsystem edge runs, Python's two forms share `_load_ref_data` outright, and
+TypeScript's `inlineTopLevelModelRef` and Go's `inlineTopLevelModelRefs` route a top-level edge
+into the existing subsystem-edge code rather than duplicating it. A second implementation of the
+pipeline is the thing to avoid here — not because it would be more code, but because "the two
+forms differ only in where the mounted component lands" then holds by construction instead of by
+two files agreeing.

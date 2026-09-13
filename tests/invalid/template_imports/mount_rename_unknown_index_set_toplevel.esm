@@ -1,0 +1,13 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "mount_rename_unknown_index_set_toplevel",
+    "description": "INVALID — RESOLVER-LEVEL (esm-spec §4.7 'Mount-edge index-set renaming', 'Where it applies'). The twin of mount_rename_unknown_index_set.esm at the TOP-LEVEL `models.<k>` mount form: the same mesh file, whose resolved registry declares `cells` and `vertices`, is mounted under index_set_rename {\"celsl\": \"cells_b\"} — a misspelling of `cells`. `index_set_rename` is normative at BOTH attachment points with the same meaning and the same pipeline, so the key check is too: this MUST fail at load with subsystem_index_set_rename_unknown_name, exactly as the subsystems.<k> spelling does. A binding that applies the field at one form and ignores it at the other would accept this document and merge the mesh under its pre-rename names."
+  },
+  "models": {
+    "M": {
+      "ref": "../../valid/subsystem_mesh_lib.esm",
+      "index_set_rename": { "celsl": "cells_b" }
+    }
+  }
+}

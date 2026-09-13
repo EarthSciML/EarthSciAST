@@ -2396,6 +2396,14 @@
     "resolver_error_code": "subsystem_index_set_rename_unknown_name",
     "notes": "Resolver-level invalid (esm-spec \u00a74.7 'Mount-edge index-set renaming'). The document is SCHEMA-VALID \u2014 `index_set_rename` is a legal SubsystemRef field and its value is a string\u2192string object \u2014 so schema-only bindings accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code`. The mount edge renames 'celsl', a misspelling of the mounted mesh file's 'cells': a mount-edge rename never invents names (the \u00a79.7.7 rule at a component-mount edge), so the typo must fail loudly at the edge that authored it rather than silently renaming nothing."
   },
+  "mount_rename_unknown_index_set_toplevel.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": true,
+    "resolver_only": true,
+    "resolver_error_code": "subsystem_index_set_rename_unknown_name",
+    "notes": "Resolver-level invalid (esm-spec \u00a74.7 'Mount-edge index-set renaming', 'Where it applies'). The top-level `models.<k>` twin of mount_rename_unknown_index_set.esm. The document is SCHEMA-VALID \u2014 `index_set_rename` is a legal SubsystemRef field at either attachment point and its value is a string\u2192string object \u2014 so a binding that only checks the schema accepts it (is_valid: true); the invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code`. The mount edge renames 'celsl', a misspelling of the mounted mesh file's 'cells'. The point of the pair is that the two mount forms are one mechanism: a binding that applies the field at a subsystems.<k> edge but ignores it at a top-level models.<k> edge passes the first fixture and fails this one."
+  },
   "body_apply_cycle.esm": {
     "schema_errors": [],
     "structural_errors": [],

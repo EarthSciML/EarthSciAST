@@ -1252,6 +1252,17 @@ type ESMFile struct {
 	// cannot be merged from a document that has already thrown its inputs
 	// away.
 	componentTemplates map[string]*orderedMap
+	// topLevelModelRefs holds the raw `{ref, bindings, index_set_rename,
+	// expression_template_imports}` edge of every top-level `models.<k>` MOUNT
+	// EDGE, keyed by mount name (esm-spec §4.7 "Two mount forms, one
+	// mechanism"). The schema gives `models.<k>` `oneOf [Model, SubsystemRef]`,
+	// but `Models` is a `map[string]Model`, so decoding a bare `{ref}` entry
+	// yields an EMPTY Model and loses the mount. LoadString snapshots the edges
+	// off the text before that decode; inlineTopLevelModelRefs consumes them at
+	// the same point in the pipeline the `subsystems.<k>` form resolves, which
+	// is what keeps the two forms on one side of the root's §9.7.6 close.
+	// Empty for a document with no such mount, and for a struct built in code.
+	topLevelModelRefs map[string]map[string]any
 }
 
 // declarationOrder returns the authored key order recorded for `path`, or nil

@@ -1,0 +1,32 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "mount_chain_via_subsystem",
+    "description": "The same assembly-of-an-assembly as tests/valid/mount_chain_outer.esm, reached at the OTHER attachment point: tests/valid/mount_chain_inner.esm is mounted as a `subsystems.<k>` edge instead of a top-level `models.<k>` edge. esm-spec §4.7 'Two mount forms, one mechanism' says the forms differ only in where the mounted component lands, so which point mounted a file cannot change what that file IS — an assembly stays an assembly, and its own top-level mounts resolve either way. Here the soil column lands nested at `Host.Deep` rather than top-level, and `soil_lev` reaches this document's registry just the same.",
+    "authors": ["EarthSciAST"],
+    "created": "2026-09-12T00:00:00Z",
+    "tags": ["subsystem", "index_sets", "mount", "rename", "chain", "issue-198"]
+  },
+  "models": {
+    "Host": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0,
+          "description": "host scalar state"
+        }
+      },
+      "equations": [
+        {
+          "_comment": "The host's own dynamics do not touch the mounted column; the fixture pins that mounting an ASSEMBLY as a subsystem resolves it through.",
+          "lhs": { "op": "D", "args": ["x"], "wrt": "t" },
+          "rhs": { "op": "*", "args": [-0.5, "x"] }
+        }
+      ],
+      "subsystems": {
+        "Deep": { "ref": "./mount_chain_inner.esm" }
+      }
+    }
+  }
+}
