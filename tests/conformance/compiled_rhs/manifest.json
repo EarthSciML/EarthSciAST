@@ -254,7 +254,7 @@
       "id": "diffusion_1d_dirichlet_n4",
       "path": "conformance/pde_simulation/fixtures/diffusion_1d_dirichlet_n4.esm",
       "model": "Diff1D",
-      "tolerance_class": "algebraic",
+      "tolerance_class": "reduction",
       "compiled_required": [],
       "state_order": [
         "u[1]",
@@ -366,7 +366,7 @@
       "id": "diffusion_1d_neumann_n4",
       "path": "conformance/pde_simulation/fixtures/diffusion_1d_neumann_n4.esm",
       "model": "Diff1D",
-      "tolerance_class": "algebraic",
+      "tolerance_class": "reduction",
       "compiled_required": [],
       "state_order": [
         "u[1]",
@@ -478,7 +478,7 @@
       "id": "diffusion_1d_zero_gradient_n4",
       "path": "conformance/pde_simulation/fixtures/diffusion_1d_zero_gradient_n4.esm",
       "model": "Diff1D",
-      "tolerance_class": "algebraic",
+      "tolerance_class": "reduction",
       "compiled_required": [],
       "state_order": [
         "u[1]",
@@ -590,7 +590,7 @@
       "id": "diffusion_1d_robin_n4",
       "path": "conformance/pde_simulation/fixtures/diffusion_1d_robin_n4.esm",
       "model": "Diff1D",
-      "tolerance_class": "algebraic",
+      "tolerance_class": "reduction",
       "compiled_required": [],
       "state_order": [
         "u[1]",
@@ -702,7 +702,7 @@
       "id": "diffusion_1d_periodic_n4",
       "path": "conformance/pde_simulation/fixtures/diffusion_1d_periodic_n4.esm",
       "model": "Diff1D",
-      "tolerance_class": "algebraic",
+      "tolerance_class": "reduction",
       "compiled_required": [],
       "state_order": [
         "u[1]",
@@ -814,7 +814,7 @@
       "id": "diffusion_1d_periodic_n8",
       "path": "conformance/pde_simulation/fixtures/diffusion_1d_periodic_n8.esm",
       "model": "Diff1D",
-      "tolerance_class": "algebraic",
+      "tolerance_class": "reduction",
       "compiled_required": [],
       "state_order": [
         "u[1]",
@@ -978,7 +978,7 @@
       "id": "diffusion_2d_dirichlet_n3",
       "path": "conformance/pde_simulation/fixtures/diffusion_2d_dirichlet_n3.esm",
       "model": "Diff2D",
-      "tolerance_class": "algebraic",
+      "tolerance_class": "reduction",
       "compiled_required": [],
       "state_order": [
         "u[1,1]",
@@ -1155,7 +1155,7 @@
       "id": "advection_1d_periodic_n4",
       "path": "conformance/pde_simulation/fixtures/advection_1d_periodic_n4.esm",
       "model": "Advect1D",
-      "tolerance_class": "algebraic",
+      "tolerance_class": "reduction",
       "compiled_required": [],
       "state_order": [
         "u[1]",

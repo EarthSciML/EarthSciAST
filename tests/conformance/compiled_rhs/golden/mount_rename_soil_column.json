@@ -1,0 +1,32 @@
+{
+  "engine": "interpreter",
+  "fixture": "mount_rename_soil_column",
+  "reference_binding": "julia",
+  "rhs": {
+    "default": {
+      "Tsoil[1]": -140.0,
+      "Tsoil[2]": -140.0,
+      "Tsoil[3]": -140.0,
+      "Tsoil[4]": -140.0
+    },
+    "perturbed_1": {
+      "Tsoil[1]": -206.8182172818355,
+      "Tsoil[2]": -240.445774531223,
+      "Tsoil[3]": -276.501599260509,
+      "Tsoil[4]": -238.2677909665195
+    },
+    "perturbed_2": {
+      "Tsoil[1]": -109.653881289971,
+      "Tsoil[2]": -53.661267858298,
+      "Tsoil[3]": -23.6482825223825,
+      "Tsoil[4]": -238.663180750387
+    },
+    "perturbed_3": {
+      "Tsoil[1]": -25.5423647402285,
+      "Tsoil[2]": -260.393405102084,
+      "Tsoil[3]": -232.4859268121425,
+      "Tsoil[4]": -40.8531391735655
+    }
+  },
+  "tolerance_class": "algebraic"
+}

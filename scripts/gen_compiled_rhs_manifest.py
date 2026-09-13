@@ -221,7 +221,17 @@ def _pde_entry(fid, bc, n, kind, model):
         "id": fid,
         "path": f"conformance/pde_simulation/fixtures/{fid}.esm",
         "model": model,
-        "tolerance_class": "algebraic",
+        # `reduction`, not `algebraic`. A method-of-lines stencil IS a fold, and
+        # these eight are the tier's only fixtures with EXACT CANCELLATION rows:
+        # the `ramp` probe on `diffusion_1d_periodic_n8` has an interior row whose
+        # exact value is 0, which the AST stencil reaches as exactly 0.0 and the
+        # anchor's matrix-vector product reaches as -2.8e-14 — a summation-order
+        # difference of 1 ulp of the row's operands, nothing more. A relative
+        # bound on an exact zero is an impossible bound, which is what the
+        # `reduction` class's SCALED absolute floor exists to fix (here 1e-14 *
+        # 200 = 2e-12). Classing these `algebraic` would fail that one cell for
+        # every binding forever, for a defect none of them has.
+        "tolerance_class": "reduction",
         "anchor": _linear_operator(L, b, order),
         "domain": "any",
         "pde_spec": fid,
