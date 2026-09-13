@@ -70,23 +70,30 @@ function _file_counts(relpath::AbstractString)
     return res
 end
 
-@testset "a SPATIAL sibling does not take the document's other containers with it" begin
+@testset "a document this engine cannot build refuses ALL of its containers" begin
     # `tests/valid/units_dimensional_analysis.esm` declares five models. One —
-    # `FluidMechanics` — carries `grad(P, dim: x)`, which puts `x` in the
-    # DOCUMENT's independent variables, and `ModelingToolkit.System` refuses a
-    # flattened system with spatial independent variables (it redirects to
-    # `PDESystem`, which this MTK engine has no route to). Spatiality is a
-    # property of the whole flatten, so a document build would turn all five
-    # containers' tests into that one redirect. The four purely temporal models
-    # keep their assertions.
+    # `FluidMechanics` — carries `grad(P, dim: x)`, an unlowered rewrite-target
+    # operator that puts `x` in the DOCUMENT's independent variables, and
+    # `ModelingToolkit.System` refuses a flattened system with spatial
+    # independent variables (it redirects to `PDESystem`, which this MTK engine
+    # has no route to). Spatiality is a property of the whole flatten, so the
+    # refusal reaches all five containers and not just the one that caused it.
+    #
+    # That is deliberate and it is the CROSS-BINDING number: the Rust CLI
+    # reports 0 pass / 18 err on this same file, refusing the whole document for
+    # the same unlowered `grad` (`esm test tests/valid/units_dimensional_analysis.esm`).
+    # A document must not validate under one binding and fail under another, so
+    # the four purely temporal siblings do NOT get a private per-container build
+    # that would pass 13 assertions here alone. If this assertion ever goes red
+    # with a NON-ZERO pass count, Julia and Rust have diverged about this
+    # document — check `esm test` on it before changing the number.
     res = _file_counts("tests/valid/units_dimensional_analysis.esm")
-    passed = count(r -> r.status == EarthSciAST.PASS, res)
-    @test passed >= 13
-    # The spatial container itself still gets the redirect it always got, and it
-    # is the ONLY container that errors.
-    errs = filter(r -> r.status == EarthSciAST.ERROR, res)
-    @test all(r -> r.container_name == "FluidMechanics", errs)
-    @test all(r -> occursin("PDESystem", r.message), errs)
+    @test !isempty(res)
+    @test count(r -> r.status == EarthSciAST.PASS, res) == 0   # Rust: 0
+    @test all(r -> r.status == EarthSciAST.ERROR, res)
+    @test all(r -> occursin("PDESystem", r.message), res)
+    # All five containers are refused, not only the one carrying the `grad`.
+    @test length(Set(r.container_name for r in res)) == 5
 end
 
 @testset "an operator_compose merge does not hide the state a test names" begin

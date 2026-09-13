@@ -760,9 +760,15 @@ function run_file_tests!(results::Vector{AssertionResult}, path::AbstractString;
     # ahead of the per-container builds that would otherwise each lower their
     # own.
     #
-    # `doc_flat === nothing && doc_flat_err === nothing` is the third state: the
-    # document flatten SUCCEEDED but this engine cannot build from it, and the
-    # per-container build is used instead (see the spatial fallback below).
+    # A container in a document this engine cannot build gets that document's
+    # failure, NOT a private per-container build that would paper over it. One
+    # component's unlowered `grad` making the whole flatten spatial — which
+    # `ModelingToolkit.System` refuses, redirecting to `PDESystem` — refuses
+    # every container in that document, which is what the Rust CLI already does
+    # for the same file (`tests/valid/units_dimensional_analysis.esm`: 0 pass in
+    # both). A document must not validate under one binding and fail under
+    # another, and that outranks the assertions a per-container fallback would
+    # keep alive here alone.
     models = esm_file.models
     rsystems = esm_file.reaction_systems
     has_model_tests = models !== nothing &&
@@ -788,25 +794,8 @@ function run_file_tests!(results::Vector{AssertionResult}, path::AbstractString;
     if has_model_tests || has_mixed_rs_tests
         try
             lower_table_lookups!(esm_file)
-            flat = flatten(esm_file; base_path=dirname(abspath(String(path))))
-            # The ODE-vs-PDE split (`_has_spatial_ivs`, src/flatten.jl):
-            # `ModelingToolkit.System` REFUSES a flattened system with spatial
-            # independent variables and redirects to `PDESystem`, which this MTK
-            # engine has no route to. Spatiality is a property of the DOCUMENT,
-            # not of the container that caused it — one component's
-            # `grad(P, dim: x)` makes `independent_variables` `[:t, :x]` for the
-            # whole flatten — so building the document here would turn EVERY
-            # container's tests into the same PDE redirect, including the purely
-            # temporal siblings that built and passed one at a time before.
-            # `tests/valid/units_dimensional_analysis.esm` is the case: five
-            # models, one `grad` in `FluidMechanics`, and thirteen assertions
-            # that pass per container and none that survive a document build.
-            #
-            # So a spatial document keeps the per-container build. It is the only
-            # build this engine can do there, it is exactly what ran before, and
-            # the container that IS spatial still gets the same PDE redirect it
-            # always got.
-            _has_spatial_ivs(flat) || (doc_flat = flat)
+            doc_flat = flatten(esm_file;
+                               base_path=dirname(abspath(String(path))))
         catch err
             doc_flat_err = err
         end
