@@ -705,6 +705,124 @@ run_pde_pipeline_conformance_python() {
             --output "$OUTPUT_DIR/pde_simulation_pipeline/python_report.json"
 }
 
+# === Compiled right-hand-side conformance (compiled_rhs) ===
+# The gate for the two COMPILED backends (Julia direct StableHLO emission through
+# Reactant; Rust XlaBuilder emission through the `xla` crate) and, today, the
+# cross-binding gate for the three INTERPRETERS themselves: every engine must
+# reproduce the reference interpreter's f(u, p, t) at fixed probe states, within
+# the tolerance of the fixture's class (algebraic / transcendental / reduction /
+# float32). Agreement is NUMERICAL — nothing here inspects an emitted program.
+#
+# Two rulings shape these stages:
+#   * a model a compiled engine cannot lower completely is a HARD ERROR in that
+#     binding, recorded as a NAMED EXCLUSION in the report, never a pass and
+#     never a silent skip; and
+#   * the compiled engines do not exist yet (phase 2 owns them), so a compiled
+#     producer answers `unavailable` with a reason and SKIPS VISIBLY. Julia and
+#     Rust are `bindings_optional` for that engine, which is what makes the skip
+#     legal; both are `bindings_required` for the interpreter engine, where an
+#     unavailable engine FAILS.
+# Contract: tests/conformance/compiled_rhs/README.md. Normative: CONFORMANCE_SPEC §5.38.
+COMPILED_RHS_RUNNER="$SCRIPT_DIR/run-compiled-rhs-conformance.py"
+
+run_compiled_rhs_conformance_self_test() {
+    log "Running compiled-RHS conformance harness self-test..."
+    if python3 "$COMPILED_RHS_RUNNER" --self-test; then
+        success "Compiled-RHS conformance harness self-test passed"
+        return 0
+    else
+        error "Compiled-RHS conformance harness self-test failed"
+        return 1
+    fi
+}
+
+# Report the `unavailable` engines a run recorded, so a compiled producer that
+# legitimately skipped says so in the stage log rather than passing in silence.
+# Reads the report the runner just wrote; a run that produced none prints nothing.
+_compiled_rhs_report_unavailable() {
+    local report="$1"
+    [ -f "$report" ] || return 0
+    python3 - "$report" <<'PY' || true
+import json, sys
+try:
+    with open(sys.argv[1]) as f:
+        report = json.load(f)
+except (OSError, ValueError):
+    sys.exit(0)
+for u in report.get("unavailable") or []:
+    print(f"{u['binding']} / {u['engine']} engine unavailable: {u['reason']}")
+for r in report.get("refusals") or []:
+    print(f"{r['binding']} / {r['engine']} refused {r['fixture']}: "
+          f"{r['rule']} — {r['reason']} [{r['verdict']}]")
+PY
+}
+
+_run_compiled_rhs_stage() {
+    local binding="$1" engine="$2" dir="$3" label="$4"
+    shift 4
+    if ! check_language_availability "$binding" "$dir"; then
+        error "A REQUIRED binding\'s toolchain is missing — this gate cannot run, so it FAILS (it must never silently pass)"
+        return 1
+    fi
+    local report="$OUTPUT_DIR/compiled_rhs/${binding}_${engine}_report.json"
+    log "Running compiled-RHS conformance ($label)..."
+    local rc=0
+    "$@" python3 "$COMPILED_RHS_RUNNER" \
+        --bindings "$binding" \
+        --engine "$engine" \
+        --output "$report" || rc=$?
+    local note
+    note="$(_compiled_rhs_report_unavailable "$report")"
+    if [ -n "$note" ]; then
+        while IFS= read -r line; do
+            [ -n "$line" ] && warning "$line"
+        done <<< "$note"
+    fi
+    return $rc
+}
+
+# Julia is the reference binding: its interpreter adapter re-evaluates every probe
+# through the tree-walk evaluator and the runner asserts a match to the committed
+# golden (the golden it produced) AND to every independent analytic_rhs anchor.
+run_compiled_rhs_conformance_interpreter_julia() {
+    _run_compiled_rhs_stage julia interpreter "$JULIA_DIR" "Julia interpreter" \
+        env EARTHSCI_COMPILED_RHS_ADAPTER_JULIA="julia $JULIA_DIR/scripts/compiled_rhs_adapter.jl"
+}
+
+# Rust drives the vectorized faq evaluator (ArrayCompiled::debug_eval_rhs / the
+# tape executor) through the `conformance-adapters` feature binary.
+run_compiled_rhs_conformance_interpreter_rust() {
+    _run_compiled_rhs_stage rust interpreter "$RUST_DIR" "Rust interpreter" \
+        env EARTHSCI_COMPILED_RHS_ADAPTER_RUST="cargo run --quiet --manifest-path $RUST_DIR/Cargo.toml --features conformance-adapters --bin earthsci-compiled-rhs-adapter-rust --"
+}
+
+# Python drives evaluate_rhs (the NumPy interpreter). PYTHONPATH is pinned to this
+# worktree's package src so the adapter resolves from this checkout and not from a
+# stray editable install pointing at another worktree.
+run_compiled_rhs_conformance_interpreter_python() {
+    _run_compiled_rhs_stage python interpreter "$PYTHON_DIR" "Python interpreter" \
+        env EARTHSCI_COMPILED_RHS_ADAPTER_PYTHON="python3 -m earthsci_ast.cli.compiled_rhs_adapter" \
+            PYTHONPATH="$PYTHON_DIR/src:${PYTHONPATH:-}"
+}
+
+# Julia's compiled lane is direct StableHLO emission through the Reactant
+# extension. Phase 2 wires it; until then the adapter answers `unavailable` with
+# that reason and this stage passes with the skip printed. Julia is
+# `bindings_optional` for the compiled engine, which is what makes that legal —
+# a REFUSAL (a model the emitter cannot lower) still fails whenever the fixture
+# lists julia in its `compiled_required`.
+run_compiled_rhs_conformance_compiled_julia() {
+    _run_compiled_rhs_stage julia compiled "$JULIA_DIR" "Julia compiled (StableHLO)" \
+        env EARTHSCI_COMPILED_RHS_ADAPTER_JULIA="julia $JULIA_DIR/scripts/compiled_rhs_adapter.jl"
+}
+
+# Rust's compiled lane is XlaBuilder emission over the tape. Same phase-2 story
+# and same optional/refusal split as the Julia compiled stage above.
+run_compiled_rhs_conformance_compiled_rust() {
+    _run_compiled_rhs_stage rust compiled "$RUST_DIR" "Rust compiled (XlaBuilder)" \
+        env EARTHSCI_COMPILED_RHS_ADAPTER_RUST="cargo run --quiet --manifest-path $RUST_DIR/Cargo.toml --features conformance-adapters --bin earthsci-compiled-rhs-adapter-rust --"
+}
+
 run_property_corpus() {
     log "Running property-corpus round-trip across bindings..."
     local corpus="$PROJECT_ROOT/tests/property_corpus/expressions"
@@ -891,6 +1009,13 @@ main() {
     run_stage "full-pipeline PDE producer (julia)" run_pde_pipeline_conformance_julia
     run_stage "full-pipeline PDE producer (rust)" run_pde_pipeline_conformance_rust
     run_stage "full-pipeline PDE producer (python)" run_pde_pipeline_conformance_python
+
+    run_stage "compiled-RHS self-test" run_compiled_rhs_conformance_self_test
+    run_stage "compiled-RHS interpreter producer (julia)" run_compiled_rhs_conformance_interpreter_julia
+    run_stage "compiled-RHS interpreter producer (rust)" run_compiled_rhs_conformance_interpreter_rust
+    run_stage "compiled-RHS interpreter producer (python)" run_compiled_rhs_conformance_interpreter_python
+    run_stage "compiled-RHS compiled producer (julia)" run_compiled_rhs_conformance_compiled_julia
+    run_stage "compiled-RHS compiled producer (rust)" run_compiled_rhs_conformance_compiled_rust
 
     print_timing_summary
 

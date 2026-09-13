@@ -1,0 +1,28 @@
+{
+  "engine": "interpreter",
+  "fixture": "events_cross_system_meteorology",
+  "reference_binding": "julia",
+  "rhs": {
+    "default": {
+      "solar_intensity": 0.0,
+      "temperature": -0.9784077658834655,
+      "wind_speed": 0.0
+    },
+    "perturbed_1": {
+      "solar_intensity": -65.13002107897324,
+      "temperature": 2.026505545160391,
+      "wind_speed": 0.0018495779205590403
+    },
+    "perturbed_2": {
+      "solar_intensity": -16.1177437184112,
+      "temperature": -5.0156639837350685,
+      "wind_speed": 0.004991670832341408
+    },
+    "perturbed_3": {
+      "solar_intensity": 44.92346135725535,
+      "temperature": 2.5352667599528806,
+      "wind_speed": 0.012370197962726148
+    }
+  },
+  "tolerance_class": "transcendental"
+}
