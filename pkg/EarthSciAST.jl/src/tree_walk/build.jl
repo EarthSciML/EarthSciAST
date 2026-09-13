@@ -4188,6 +4188,15 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
     # compiled whole-array kernel for an interpreted nest and costs far more per
     # RHS call than it ever saves once at build time.
     #
+    # "Grid-independent" here is a statement about RESOURCES — build wall time and
+    # build memory — not about a node count. The affine tier's lowering count for
+    # a contraction is N+1 in the output extent, so it is not literally constant;
+    # its wall time and footprint stay flat across the grid anyway, because those
+    # nodes are individually small. The per-cell path's node count grows the same
+    # way but each of ITS nodes carries a whole ∏|k…|-term body, which is what
+    # actually makes the build explode. Settled deliberately, so it does not get
+    # re-litigated from the lowering counter alone.
+    #
     # `ESS_STENCIL_DISABLE=1` is excluded deliberately: it is documented as
     # forcing the per-cell reference, and a reference that routes through this
     # tier instead is not a reference. The floor stays as a conservative guard on

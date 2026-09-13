@@ -62,9 +62,17 @@ function _ob_halo(M::Int; ghost::Bool=false)
     (doc, ics, NI, NJ, M)
 end
 
+# Lane batching is a property of the PER-CELL contraction loop's `rhs_list`
+# entries, so every fixture here has to actually reach that tier. The whole-array
+# contraction nest (ess-array-contraction) sits above it and takes any reduction
+# that clears its floor for the whole equation at once — leaving no per-cell
+# entries to batch. These reductions are far under the shipped floor, but the
+# floor is named rather than inherited so the routing under test is a fact of the
+# fixture and not of the ambient environment.
 _ob_build(doc, ics; form=:inplace, loop=true, batch=true) =
     withenv("ESS_CONTRACTION_LOOP" => (loop ? "1" : "0"),
             "ESS_CONTRACTION_LOOP_MIN" => "8",
+            "ESS_ARRAY_CONTRACTION_MIN" => "1024",
             "ESS_OOP_BATCH" => (batch ? "1" : "0")) do
         build_evaluator(doc; initial_conditions=ics, form=form)
     end
@@ -162,9 +170,12 @@ _ob_build(doc, ics; form=:inplace, loop=true, batch=true) =
         model = _OB_ESS.Model(vars, eqs)
         ics = Dict{String,Any}("v[$j]" => 0.0 for j in 1:N)
         for j in 1:N, k in 1:M; ics["q[$j,$k]"] = Float64(3j + k); end
+        # Same reason as `_ob_build`: the fill has to reach the per-cell
+        # contraction loop for there to be lane entries to batch.
         bld(; form=:inplace, batch=true, loop=true) =
             withenv("ESS_CONTRACTION_LOOP" => (loop ? "1" : "0"),
                     "ESS_CONTRACTION_LOOP_MIN" => "8",
+                    "ESS_ARRAY_CONTRACTION_MIN" => "1024",
                     "ESS_OOP_BATCH" => (batch ? "1" : "0")) do
                 build_evaluator(model; index_sets = isets, initial_conditions = ics,
                                 form = form)
