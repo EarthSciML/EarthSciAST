@@ -49,6 +49,10 @@ on:
       - 'pkg/EarthSciAST.jl/**'
       - 'tests/conformance/compiled_rhs/**'
       - 'scripts/run-compiled-rhs-conformance.py'
+      # The runner imports this; a change here can move the tier's verdict
+      # without touching the runner itself.
+      - 'scripts/conformance_lib.py'
+      - 'scripts/assert-compiled-rhs-available.py'
       - 'scripts/fetch-xla-extension.sh'
       - '.github/workflows/xla-backends.yml'
   pull_request:
@@ -58,6 +62,8 @@ on:
       - 'pkg/EarthSciAST.jl/**'
       - 'tests/conformance/compiled_rhs/**'
       - 'scripts/run-compiled-rhs-conformance.py'
+      - 'scripts/conformance_lib.py'
+      - 'scripts/assert-compiled-rhs-available.py'
       - 'scripts/fetch-xla-extension.sh'
       - '.github/workflows/xla-backends.yml'
   workflow_dispatch:
