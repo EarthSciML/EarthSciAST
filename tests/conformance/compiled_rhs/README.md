@@ -315,10 +315,29 @@ and `0.0` are the same value, and some bindings emit the signed zero (Python doe
 on `advection_1d_periodic_n4`'s `const1`).
 
 Fixture `path` is relative to the repository's `tests/` directory. Every adapter
-and the runner resolve it the same way: walk up from the manifest to the
-**nearest ancestor directory named `tests`**, falling back to the manifest's own
-directory when there is none. A fixed number of parent hops would break the moment
-a manifest moved a level.
+and the runner resolve it the same way: walk up from the manifest's ABSOLUTE path
+to the **nearest ancestor directory named `tests`**, falling back to the
+manifest's own directory when there is none. A fixed number of parent hops would
+break the moment a manifest moved a level. (An adapter may additionally accept a
+path spelled relative to the manifest directory; the runner's own check uses the
+rule above.)
+
+Goldens are **not bit-comparable across bindings**, and nothing here asks them to
+be. Rust reaches `diffusion_1d_dirichlet_n4`'s `ic` probe about 2e-16 relative
+from the anchor and not left-right symmetric in the last bit; Python differs from
+the Julia golden by up to about 3e-16 relative on the same fixture. Both are far
+inside the `algebraic` class. The golden is a numeric reference, not a wire
+format.
+
+**A non-zero adapter exit with a valid report is allowed**, and means at least
+one fixture errored. An adapter that cannot evaluate a fixture writes the whole
+report — per-fixture `error` entries included — and may then exit non-zero (the
+Rust adapter does). The runner reads and gates the report regardless of the exit
+code: aborting on it would throw away the entries that say WHICH fixture broke
+and why, and would collapse "one fixture errored" into the same indistinguishable
+"the adapter fell over" the harness reports for a crash. The per-fixture entries
+decide the verdict. An adapter that exits non-zero **without** writing a parsable
+report is still classified as a broken adapter.
 
 Three other outcomes exist, and all three must be explicit:
 

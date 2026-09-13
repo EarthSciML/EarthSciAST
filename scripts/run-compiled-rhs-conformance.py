@@ -199,7 +199,19 @@ class CompiledRhsHarness(AdapterHarness):
                 }
             payload.setdefault("binding", binding)
             payload.setdefault("engine", self.engine)
+            # A VALID report is read and gated whatever the adapter's exit code.
+            # An adapter that hit a fixture it could not evaluate writes the whole
+            # report — per-fixture `{"error": …}` entries included — and THEN
+            # exits non-zero (the Rust adapter does). Aborting on the exit code
+            # would throw away the very entries that say which fixture broke and
+            # why, and would collapse "one fixture errored" into the same
+            # indistinguishable "the adapter fell over" the harness reports for a
+            # segfault. The per-fixture entries decide the verdict; the exit code
+            # is kept for the report and nothing else.
             payload["adapter_status"] = "ok"
+            payload["exit_code"] = proc.returncode
+            if stderr:
+                payload["stderr"] = stderr
             return payload
         finally:
             try:
@@ -880,6 +892,10 @@ def run_suite(
             report["bindings"][b] = b_report
             continue
         b_ok = True
+        if ar.get("exit_code"):
+            b_report["exit_code"] = ar["exit_code"]
+            if ar.get("stderr"):
+                b_report["stderr"] = ar["stderr"]
         for fx in fixtures:
             produced = ar.get("fixtures", {}).get(fx["id"])
             if produced is None:
