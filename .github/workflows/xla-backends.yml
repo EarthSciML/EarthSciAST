@@ -94,10 +94,13 @@ jobs:
   # Rust: the `xla` feature's own tests, then the compiled_rhs tier's Rust
   # compiled producer.
   #
-  # Expected duration cold: ~35-45 min, nearly all of it compiling the crate
-  # graph twice over (once for `--lib --tests`, once for the adapter binary the
-  # tier's `cargo run` builds -- same feature set, so the second is a no-op
-  # link). The 144 MB extension download happens once per cache key.
+  # Where the time goes: nearly all of it is compiling the crate graph with the
+  # `xla` feature on and linking the test binaries. The tier step's `cargo run`
+  # uses the SAME feature set as the build step, so it relinks rather than
+  # rebuilds. The 144 MB extension download happens once per cache key. The
+  # 90-minute budget is sized for a cold cache on a hosted runner, which is
+  # slower than the development machine these steps were rehearsed on; it is a
+  # ceiling, not a measurement.
   # ---------------------------------------------------------------------------
   rust-xla:
     name: Rust XlaBuilder backend
@@ -229,11 +232,17 @@ jobs:
   # Julia: the direct StableHLO emitter's own test file, then the compiled_rhs
   # tier's Julia compiled producer.
   #
-  # Expected duration: ~45-70 min COLD, of which Reactant's precompile alone is
-  # 25-40 min on a GitHub-hosted runner; ~15-20 min warm, when
-  # julia-actions/cache restores the depot. Hence timeout-minutes: 120 -- a
-  # cold run that also has to build artifacts must not be killed mid-precompile
-  # and leave nothing in the cache for the next one.
+  # Where the time goes: on a COLD depot, overwhelmingly Reactant -- resolving
+  # it, downloading its XLA runtime artifacts, and precompiling it -- and after
+  # that, one XLA compile per fixture. A warm depot (julia-actions/cache) skips
+  # the first of those entirely; only the compiles remain.
+  #
+  # timeout-minutes: 120 is deliberately generous rather than tuned. A cold run
+  # killed mid-precompile leaves nothing in the cache, so the next run is cold
+  # too and the job never converges. Better to let the first one finish long.
+  # These steps were rehearsed against an already-warm depot, so the cold
+  # figure here is a budget, not a measurement -- tighten it once real runs
+  # have reported.
   # ---------------------------------------------------------------------------
   julia-xla:
     name: Julia direct StableHLO backend
