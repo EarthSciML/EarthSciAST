@@ -265,3 +265,213 @@ fn a_fallback_rule_is_refused_by_name() {
         Err(CompileRhsError::Runtime(m)) => panic!("xla runtime: {m}"),
     }
 }
+
+/// `true` when this process asked for a GPU client. The client is a
+/// process-wide singleton keyed off `EARTHSCI_XLA_PLATFORM`, so the whole test
+/// binary runs on one platform; a GPU run is `EARTHSCI_XLA_PLATFORM=gpu cargo
+/// test`, not a per-test choice.
+fn gpu_requested() -> bool {
+    matches!(
+        std::env::var("EARTHSCI_XLA_PLATFORM").as_deref(),
+        Ok("gpu") | Ok("cuda")
+    )
+}
+
+/// The tier on the GPU: the same fixtures, the same tolerance classes, the
+/// same expected lowering set.
+///
+/// Two things this asserts that the CPU arm cannot:
+///
+/// 1. that the client really is a GPU one. `PjRtClient::gpu` failing would
+///    reach [`CompileRhsError::Runtime`], but a build that silently fell back
+///    to CPU would pass every numeric assertion in this file while proving
+///    nothing about a device. The platform name is checked first, before any
+///    fixture runs.
+/// 2. that the DEVICE-RESIDENT path agrees with the host round trip *exactly*.
+///    Not within a tolerance: the two run the identical executable on the
+///    identical inputs, so the only way they differ is if one of them is
+///    reading a buffer it should not — a stale output, an argument on the
+///    wrong device. A tolerance here would hide precisely the bug the path can
+///    have.
+///
+/// Skips loudly when `EARTHSCI_XLA_PLATFORM` is not `gpu`: on a machine with
+/// no device this must be a message, not a failure, and not a silent pass.
+#[test]
+fn compiled_rhs_on_the_gpu() {
+    if !runtime_available() {
+        return;
+    }
+    if !gpu_requested() {
+        eprintln!(
+            "SKIP: EARTHSCI_XLA_PLATFORM is not set to gpu, so this arm has no device \
+             to run on. A GPU run needs the CUDA extension \
+             (scripts/fetch-xla-extension.sh --variant cuda12), the CUDA libraries it \
+             hard-links (scripts/setup-xla-gpu-libs.sh), and \
+             EARTHSCI_XLA_PLATFORM=gpu."
+        );
+        return;
+    }
+
+    let platform = earthsci_ast::xla_runtime::client()
+        .unwrap_or_else(|e| panic!("GPU client: {e}"))
+        .platform_name();
+    assert!(
+        platform.to_ascii_lowercase().contains("cuda") || platform.to_ascii_lowercase().contains("gpu"),
+        "EARTHSCI_XLA_PLATFORM=gpu was asked for but the client reports platform \
+         {platform:?}; this run would have proved nothing about a device"
+    );
+    eprintln!("GPU client platform: {platform}");
+
+    let m = manifest();
+    let mut lowered: HashSet<String> = HashSet::new();
+    for fx in m["fixtures"].as_array().expect("fixtures") {
+        let id = fx["id"].as_str().expect("id").to_string();
+        match run_fixture(fx) {
+            Outcome::Ok { worst, probes } => {
+                eprintln!("{id:38} ok   {probes} probes, worst {worst:.3e} of tolerance");
+                lowered.insert(id);
+            }
+            Outcome::Refused { rule, reason } => {
+                assert!(!rule.is_empty(), "{id}: refusal with no rule named");
+                eprintln!("{id:38} refused (rule {rule}): {reason}");
+            }
+        }
+    }
+    let expected: HashSet<String> = EXPECTED_LOWERED.iter().map(|s| s.to_string()).collect();
+    let missing: Vec<&String> = expected.difference(&lowered).collect();
+    assert!(
+        missing.is_empty(),
+        "these fixtures lower on the CPU but not on the GPU: {missing:?} — the \
+         emitter is platform-independent, so a difference here is a backend gap, \
+         not a model one"
+    );
+    let extra: Vec<&String> = lowered.difference(&expected).collect();
+    assert!(extra.is_empty(), "fixtures lowered on the GPU that the CPU list does not have: {extra:?}");
+}
+
+/// The device-resident evaluator against the host round trip, on whatever
+/// platform this binary is running.
+///
+/// Runs on CPU too, deliberately: residency is a transfer question, not a GPU
+/// question, and the aliasing mistakes it can make (reusing a stale output,
+/// forgetting to re-upload) are visible on either backend. The GPU is where it
+/// PAYS, not where it is correct or not.
+#[test]
+fn the_device_resident_path_agrees_with_the_host_round_trip() {
+    if !runtime_available() {
+        return;
+    }
+    let m = manifest();
+    let mut checked = 0usize;
+    for fx in m["fixtures"].as_array().expect("fixtures") {
+        let rel = fx["path"].as_str().expect("fixture.path");
+        let path = repo_root().join("tests").join(rel);
+        let compiled = build(&path);
+        let program = match CompiledRhs::compile(&compiled) {
+            Ok(p) => p,
+            Err(CompileRhsError::Refused(_)) => continue,
+            Err(CompileRhsError::Runtime(msg)) => panic!("{rel}: xla runtime: {msg}"),
+        };
+        let params: HashMap<String, f64> = HashMap::new();
+        let pv = compiled.debug_resolve_params(&params);
+        let names: Vec<String> = compiled.state_variable_names().to_vec();
+
+        for probe in fx["rhs_probes"].as_array().expect("rhs_probes") {
+            let t = probe["t"].as_f64().unwrap_or(0.0);
+            let state_obj = probe["state"].as_object().expect("probe.state");
+            let u: Vec<f64> = names
+                .iter()
+                .map(|n| {
+                    let bare = n.split_once('.').map(|x| x.1).unwrap_or(n);
+                    state_obj
+                        .get(n)
+                        .or_else(|| state_obj.get(bare))
+                        .and_then(Value::as_f64)
+                        .expect("probe state")
+                })
+                .collect();
+            let host = program.eval(&u, &pv, t).expect("host round trip");
+            let mut dev = program.on_device(&u, &pv).expect("upload");
+            dev.eval_at(t).expect("resident eval");
+            let resident = dev.du_to_host().expect("copy back");
+            assert_eq!(
+                host, resident,
+                "{rel}: the device-resident path and the host round trip ran the same \
+                 executable on the same inputs and disagreed; one of them is not \
+                 evaluating what it claims"
+            );
+
+            // A second evaluation must not return the first one's buffer: set
+            // a different state and require the answer to move (or to be
+            // legitimately identical because the right-hand side is constant,
+            // which the interpreter settles).
+            let mut shifted = u.clone();
+            for v in shifted.iter_mut() {
+                *v += 0.5;
+            }
+            dev.set_state(&shifted).expect("re-upload");
+            dev.eval_at(t).expect("resident eval 2");
+            let after = dev.du_to_host().expect("copy back 2");
+            let expected_after = program.eval(&shifted, &pv, t).expect("host round trip 2");
+            assert_eq!(
+                after, expected_after,
+                "{rel}: after set_state the resident path did not re-evaluate — a \
+                 stale output buffer would look exactly like this"
+            );
+            checked += 1;
+        }
+    }
+    assert!(checked > 0, "no fixture exercised the device-resident path");
+    eprintln!("device-resident path matched the host round trip on {checked} probe states");
+}
+
+/// The on-device time loop: `u <- u + dt * f(u, p, t)` with nothing crossing
+/// to the host between steps, against the same recurrence done through the
+/// host.
+///
+/// The comparison is a TOLERANCE one, unlike the two above, and for a reason
+/// worth stating: the device loop keeps `u` in device memory across steps
+/// while the host loop rounds it into a `Vec<f64>` and back. Both are f64 and
+/// both do the same arithmetic, so they should agree to the last bit — but the
+/// device update is a separate compiled program, and XLA is free to fuse and
+/// reassociate it. A step count this small keeps any such difference far
+/// inside the algebraic class.
+#[test]
+fn the_on_device_euler_loop_tracks_the_host_loop() {
+    if !runtime_available() {
+        return;
+    }
+    let path = repo_root().join("tests/conformance/pde_simulation/fixtures/diffusion_1d_periodic_n8.esm");
+    let compiled = build(&path);
+    let program = CompiledRhs::compile(&compiled).expect("diffusion_1d_periodic_n8 lowers");
+    let params: HashMap<String, f64> = HashMap::new();
+    let pv = compiled.debug_resolve_params(&params);
+    let n = program.n_states();
+    let u0: Vec<f64> = (0..n).map(|i| 1.0 + 0.25 * i as f64).collect();
+    let dt = 1e-6;
+    let steps = 20;
+
+    let mut host = u0.clone();
+    for k in 0..steps {
+        let du = program.eval(&host, &pv, dt * k as f64).expect("host rhs");
+        for (h, d) in host.iter_mut().zip(du.iter()) {
+            *h += dt * d;
+        }
+    }
+
+    let mut dev = program.on_device(&u0, &pv).expect("upload");
+    for k in 0..steps {
+        dev.euler_step(dt * k as f64, dt).expect("device step");
+    }
+    let device = dev.state_to_host().expect("copy back");
+
+    assert_eq!(device.len(), host.len());
+    let scale = host.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+    for (i, (d, h)) in device.iter().zip(host.iter()).enumerate() {
+        assert!(
+            within("algebraic", *d, *h, scale),
+            "slot {i}: on-device loop {d:e} vs host loop {h:e} after {steps} steps"
+        );
+    }
+    eprintln!("on-device euler loop tracked the host loop over {steps} steps on {n} slots");
+}
