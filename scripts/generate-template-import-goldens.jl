@@ -124,8 +124,16 @@ let n = EarthSciAST.MAX_TEMPLATE_EXPANSION_DEPTH + 1
                     "name" => "c_" * lpad(i + 1, 2, '0'),
                     "bindings" => Dict{String,Any}()))
     end
+    # GENERATED FILE: the `esm` version here is the one the fixture is COMMITTED
+    # with, so keep it in step with the rest of tests/invalid/template_imports/
+    # (the 1.0.0 corpus baseline) rather than with the newest spec version. It is
+    # deliberately NOT EarthSciAST.SCHEMA_VERSION: nothing in this document uses a
+    # post-1.0.0 construct, and tracking the library constant would rewrite the
+    # committed fixture -- an unrelated diff for whoever next runs this script --
+    # on every spec bump. The 0.8.0 that used to sit here was the §9.7 version
+    # gate, not the corpus version, and left the generator non-idempotent (#256).
     doc = Dict{String,Any}(
-        "esm" => "0.8.0",
+        "esm" => "1.0.0",
         "metadata" => Dict{String,Any}(
             "name" => "body_chain_too_deep",
             "description" => "GENERATED (scripts/generate-template-import-goldens.jl): a $(n)-template body-reference chain c_01 -> ... -> c_$(lpad(n, 2, '0')); the longest chain exceeds MAX_TEMPLATE_EXPANSION_DEPTH = $(n - 1) templates (template_body_expansion_too_deep, esm-spec 9.7.3)."),

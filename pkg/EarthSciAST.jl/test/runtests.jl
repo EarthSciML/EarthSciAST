@@ -4,7 +4,14 @@ using JSON3
 
 include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _require_fixture
 
-@testset "EarthSciAST.jl Tests" begin
+# `verbose = true` prints the per-testset table — name, counts, and TIME — for
+# every testset one level down, on every run. Without it a fully passing
+# `DefaultTestSet` collapses to a single summary line and the only way to learn
+# where the ~30-45 minutes go is to find a run that happened to FAIL, because a
+# failure is what makes Julia print the tree — so the profile was only ever
+# observable on a red run. One word, no runtime cost, and the suite reports its
+# own cost from here on.
+@testset verbose = true "EarthSciAST.jl Tests" begin
 
     # ---- Public API surface (api-surface.json at the repo root; API_SPEC.md) ----
     # First, deliberately: if the export block and the manifest have diverged,
@@ -17,6 +24,13 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     # break without any local test noticing — an exception outside the
     # `EarthSciASTError` root, or a diagnostic code spelled as an inline literal.
     include("error_hierarchy_test.jl")
+
+    # ---- Test-file prelude hygiene (this directory) ----
+    # The third such invariant, and the one THIS file is complicit in: every
+    # name is already in `Main` by the time a given include runs, so a file that
+    # imports nothing passes here and dies standalone. Early, and reading only
+    # text, so it costs nothing and reports before the run it cannot trust.
+    include("test_file_prelude_test.jl")
 
     # ---- Core types, parse, validate, display (src/types.jl, parse.jl,
     #      validate.jl, display.jl, graph.jl) ----
