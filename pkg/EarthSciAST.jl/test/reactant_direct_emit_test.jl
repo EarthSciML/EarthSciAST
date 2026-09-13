@@ -178,7 +178,7 @@ end
 # `buffers === nothing` uses the three-argument form; otherwise the explicit
 # buffers form, with the SAME host buffers the interpreter reads.
 function _de_compare(name, fo, fi!, p, samples; buffers = nothing, rtol = 1e-12,
-                     census = true)
+                     census = true, traced_census = true)
     d = EXT_DE.direct_rhs(fo)
     callee = buffers === nothing ? d : EXT_DE.direct_rhs_with_buffers(d)
     pr = _de_dev(p)
@@ -199,8 +199,12 @@ function _de_compare(name, fo, fi!, p, samples; buffers = nothing, rtol = 1e-12,
         @test du_o == du_i             # the two interpreters are bit-identical
         aerr = maximum(abs.(du_d .- du_i))
         rerr = maximum(abs.(du_d .- du_i) ./ max.(abs.(du_i), 1e-300))
-        push!(rows, (string("t=", t, " u=", repr(round.(u; sigdigits = 3))), aerr, rerr,
-                     maximum(abs.(du_i))))
+        # The sample LABEL, not the sample: a 343-cell state printed in full is
+        # three screens of log for one row.
+        head = repr(round.(u[1:min(end, 4)]; sigdigits = 3))
+        push!(rows, (string("t=", t, " u[1:", min(length(u), 4), "]=", head,
+                            length(u) > 4 ? " …($(length(u)))" : ""),
+                     aerr, rerr, maximum(abs.(du_i))))
         @test isapprox(du_d, du_i; rtol = rtol, atol = 0.0)
     end
     println("  numerical comparison (", name, "):")
@@ -215,15 +219,20 @@ function _de_compare(name, fo, fi!, p, samples; buffers = nothing, rtol = 1e-12,
     mod_direct = buffers === nothing ?
         repr(RX_DE.@code_hlo optimize = false callee(ur, pr, tr)) :
         repr(RX_DE.@code_hlo optimize = false callee(ur, pr, tr, buffers))
+    _de_dump(name, "direct", mod_direct)
+    cd_ = _de_census(mod_direct)
+    _de_print_census("direct (raw)", cd_)
+    # The traced emitter is an ORACLE, and it does not lower every model this
+    # backend does (a scalar-spine `interp.*` is the standing example — see
+    # test/reactant_oop_test.jl, "interp.* does not trace"). Skip its census
+    # where it cannot answer rather than let an oracle gap fail the backend.
+    traced_census || return (d, cd_, Dict{String,Int}())
     traced = buffers === nothing ? fo : ESM_DE.rhs_with_buffers(fo)
     mod_traced = buffers === nothing ?
         repr(RX_DE.@code_hlo optimize = false traced(ur, pr, tr)) :
         repr(RX_DE.@code_hlo optimize = false traced(ur, pr, tr, buffers))
-    _de_dump(name, "direct", mod_direct)
     _de_dump(name, "traced", mod_traced)
-    cd_ = _de_census(mod_direct)
     ct_ = _de_census(mod_traced)
-    _de_print_census("direct (raw)", cd_)
     _de_print_census("traced (raw)", ct_)
     return (d, cd_, ct_)
 end
@@ -359,8 +368,23 @@ end
         # In range, on a knot, and both clamps.
         samples = [([1.5], 0.0), ([2.0], 0.0), ([-1.0], 0.0), ([9.0], 0.0),
                    ([3.25], 1.0)]
-        d, cd_, ct_ = _de_compare("interp_linear", fo, fi!, p, samples)
+        # No traced census here: the traced emitter CANNOT lower this model. Its
+        # scalar `:fn` arm calls the `_interp_linear_core` kernel, which takes an
+        # `x::Real` and branches on it, and a `TracedRNumber` is neither — the
+        # standing gap test/reactant_oop_test.jl pins as "interp.* does not
+        # trace". Direct emission lowers it because `_de_fn` routes through the
+        # BRANCH-FREE lane evaluators instead, at every query position the core
+        # branches on: in range, on a knot, and both clamps.
+        d, cd_, _ = _de_compare("interp_linear", fo, fi!, p, samples;
+                                traced_census = false)
         @test get(d.stats, :interp_linear, 0) == 1
+        @test get(cd_, "gather", 0) >= 1     # knot addressing, not a select ladder
+        # The traced emitter's refusal on this same model is pinned by
+        # test/reactant_oop_test.jl ("interp.* does not trace"). It is NOT
+        # re-asserted here: reaching it overflows the Julia stack inside the
+        # scalar core's own dispatch, and a Julia stack overflow prints
+        # "program state may be corrupted" and leaves that corruption behind for
+        # every test after it. One file pinning an oracle gap is enough.
     end
 
     @testset "the hard-error path names the construct and the rule" begin

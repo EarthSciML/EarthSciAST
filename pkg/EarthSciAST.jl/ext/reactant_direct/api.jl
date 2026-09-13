@@ -154,6 +154,23 @@ function (b::DirectRHSBuffers)(u::TracedRArray{Float64,1}, p, t, buffers)
     return _de_run(d, u, p, t, buffers, hostkeys)
 end
 
+# PRECISION. Every emitted value is a `tensor<Lxf64>`, so a state in any other
+# element type is refused by name rather than silently widened. A
+# precision-changing model (a Float32 `element_type`) is out of scope for this
+# phase — answering it in a precision the document did not declare is a wrong
+# number with nothing in the result to say so — and the `compiled_rhs` manifest
+# excludes exactly those fixtures for the same reason.
+(d::DirectRHS)(u::TracedRArray{T,1}, p, t) where {T} = _de_wrong_eltype(T)
+(b::DirectRHSBuffers)(u::TracedRArray{T,1}, p, t, buffers) where {T} =
+    _de_wrong_eltype(T)
+
+_de_wrong_eltype(::Type{T}) where {T} =
+    _de_refuse("a state vector with element type $T",
+        "direct emission is Float64 throughout — every emitted value is a " *
+        "`tensor<Lxf64>` — and it will not widen a narrower state into Float64 " *
+        "behind the author's back. Precision-changing models are out of scope " *
+        "for this phase; run them with the interpreter.")
+
 # Called outside a trace: say so, rather than failing somewhere in MLIR.
 (d::DirectRHS)(u, p, t) = _de_not_traced(u)
 (b::DirectRHSBuffers)(u, p, t, buffers) = _de_not_traced(u)
