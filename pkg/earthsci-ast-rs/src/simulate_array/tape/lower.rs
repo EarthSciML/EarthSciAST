@@ -7,7 +7,18 @@
 //! (`classify_axis_role`, `parse_wrap_axis_any`, `lhs_constant_shifts`,
 //! `subblock_dest`, `vec_op_code`, …), and every construct `eval_vec_op`
 //! would bail on becomes a *fallback rule* carrying the bail reason — so a
-//! rule is taped exactly when the overlay vectorizes it today.
+//! rule is taped essentially when the overlay vectorizes it today.
+//!
+//! *Essentially*, because there is exactly one deliberate exception, and it
+//! is documented where it lives ([`TapeBuilder::lower_scalar_reduction`]): a
+//! rank-0 `faq` — every index contracted, scalar result — which the overlay
+//! declines outright (`eval_faq` gates its fast path on a non-empty output
+//! box) and production therefore evaluates in the per-cell oracle. The tape
+//! lowers it as a boxed body plus one [`Instr::Reduce`], whose ROW-MAJOR
+//! visiting order IS the oracle's `CartesianTuples` odometer — so the
+//! reference the lowering is pinned against there is the oracle rather than
+//! the overlay, which is the same equivalence every other arm rests on, just
+//! reached directly.
 //!
 //! ## Value numbering
 //!
@@ -197,6 +208,8 @@ pub(crate) struct TapeBuilder<'m> {
     slots: Vec<SlotDesc>,
     plans: Vec<GatherPlan>,
     regions: Vec<RegionSpec>,
+    /// Inline array-literal payloads, one per lowered array-valued `const`.
+    const_data: Vec<ConstArrayData>,
     state_vars: Vec<StateRef>,
     state_ix: FxHashMap<String, u16>,
     obs_reads: Vec<String>,
@@ -230,6 +243,7 @@ struct RuleTxn {
     slots: usize,
     plans: usize,
     regions: usize,
+    const_data: usize,
     dy_writes: usize,
     stream_lens: [usize; 3],
     hoist_journal: usize,
@@ -261,6 +275,7 @@ impl<'m> TapeBuilder<'m> {
             slots: Vec::new(),
             plans: Vec::new(),
             regions: Vec::new(),
+            const_data: Vec::new(),
             state_vars,
             state_ix,
             obs_reads: Vec::new(),
@@ -740,6 +755,36 @@ impl<'m> TapeBuilder<'m> {
         LV::Arr(out)
     }
 
+    /// Materialize an inline array literal as a CONST-section slot
+    /// ([`Instr::ConstArray`]): one instruction and one slab store per solve,
+    /// whatever the literal's size. The box is the literal's own shape at the
+    /// all-1s origin — the convention under which a wholesale-evaluated array
+    /// is read (`lookup_variable` serves stored arrays origin-blind).
+    fn emit_const_array(&mut self, a: &ndarray::ArrayD<f64>) -> LResult<LV> {
+        let shape: DimU = a.shape().iter().copied().collect();
+        if shape.is_empty() {
+            // `json_to_value` never produces one (a rank-0 literal arrives as
+            // `Value::Scalar`), and a 0-d array slot would need scalar, not
+            // array, operand semantics.
+            bail_tape!("wholesale: rank-0 array-valued `const`");
+        }
+        if shape.contains(&0) {
+            bail_tape!("wholesale: empty array-valued `const`");
+        }
+        // `iter()` is the LOGICAL row-major walk, which is the slab layout.
+        let values: Vec<f64> = a.iter().copied().collect();
+        let data = self.const_data.len() as u32;
+        self.const_data.push(ConstArrayData {
+            shape: shape.clone(),
+            values,
+        });
+        let sec = self.placement(Cadence::Const);
+        let origin = DimI::from_elem(1, shape.len());
+        let out = self.new_slot(&shape, &origin, false, sec);
+        self.emit(Instr::ConstArray { data, out }, sec);
+        Ok(LV::Arr(out))
+    }
+
     /// Fill an array slot over `box` with a scalar LV (`Fill` broadcast).
     fn emit_fill(&mut self, v: &LV, shape: &[usize], origin: &[i64], cad_floor: Cadence) -> LV {
         let want = self.lv_cadence(v).max(cad_floor);
@@ -1139,8 +1184,14 @@ impl<'m> TapeBuilder<'m> {
         let Some(spec) = faq_spec(node) else {
             bail_tape!("aggregate: node carries no `expr` body");
         };
+        // A rank-0 aggregate NESTED in a box stays per-cell, mirroring
+        // `eval_vec_nested_aggregate`'s own bail: the enclosing rule would
+        // otherwise be taped under semantics the overlay does not implement.
+        // (The WHOLESALE rank-0 case is different and IS lowered — see
+        // [`Self::lower_scalar_reduction`] — because there the reference is
+        // the per-cell oracle, which the fold order reproduces exactly.)
         if spec.ranges.is_empty() {
-            bail_tape!("aggregate: rank-0 output (scalar reduction)");
+            bail_tape!("aggregate: rank-0 output (scalar reduction, nested in a box)");
         }
         // See the same guard in `eval_vec_nested_aggregate`: an overlap gate
         // drives the contraction, and the tape lowering has no driven form.
@@ -1504,7 +1555,10 @@ impl<'m> TapeBuilder<'m> {
             },
             "const" => match eval_const(node) {
                 Value::Scalar(s) => Ok(LV::Lit(s)),
-                Value::Array(_) => bail_tape!("wholesale: array-valued `const`"),
+                // The wholesale `eval` serves an inline array literal as the
+                // whole array, origin-blind — which is exactly a materialized
+                // 1-origin box. `Instr::ConstArray` stores it once per solve.
+                Value::Array(a) => self.emit_const_array(&a),
             },
             "index" => self.lower_wholesale_index(node),
             "faq" => self.lower_wholesale_aggregate(node),
@@ -1600,7 +1654,7 @@ impl<'m> TapeBuilder<'m> {
             return Ok(self.reorigin_to_one(v));
         }
         if spec.ranges.is_empty() {
-            bail_tape!("aggregate: rank-0 output (scalar reduction, per-cell)");
+            return self.lower_scalar_reduction(&spec);
         }
         let v = self.lower_faq(
             spec.idx_names,
@@ -1612,6 +1666,110 @@ impl<'m> TapeBuilder<'m> {
             spec.filter,
         )?;
         Ok(self.reorigin_to_one(v))
+    }
+
+    /// A rank-0 `faq` — every index contracted, no output axis — compiled as
+    /// "promote the contracted indices to a box, then fold the box away".
+    ///
+    /// This is the one aggregate shape the whole-array overlay declines
+    /// (`eval_faq` gates its fast path on `!shape.is_empty()`), so production
+    /// evaluates it in the per-cell oracle's [`reduce_contraction`]: `acc =
+    /// identity`, then one `acc = reduce.combine(acc, term)` per contraction
+    /// tuple, enumerated by `CartesianTuples` — lexicographic over
+    /// `contract_names`, LAST name fastest. [`Instr::Reduce`] folds its source
+    /// box in row-major order, and the box built here carries the contracted
+    /// names as axes in that same order, so the two fold the same terms in the
+    /// same association.
+    ///
+    /// Two shapes stay per-cell:
+    /// * a `filter`, because the oracle SKIPS an excluded tuple rather than
+    ///   combining the identity into it (`continue`, not `acc ⊕ 0̄`) — and the
+    ///   two differ on signed zero and on NaN, so a mask-to-identity lowering
+    ///   would not be bit-identical;
+    /// * a boolean reduction (`or`/`and`), which has no binary kernel.
+    fn lower_scalar_reduction(&mut self, spec: &ArrayOpSpec) -> LResult<LV> {
+        if spec.filter.is_some() {
+            bail_tape!(
+                "reduction: rank-0 reduction with a filter (the oracle SKIPS excluded \
+                 tuples; a mask-to-identity fold is not bit-identical)"
+            );
+        }
+        let Some(combine_op) = reduce_combine_op(spec.reduce) else {
+            bail_tape!("reduction: boolean reduction (or/and) has no combine kernel");
+        };
+        let identity = spec.reduce.identity();
+        if spec.contract_names.is_empty() {
+            // No axes at all: `reduce_contraction`'s pointwise arm evaluates
+            // the body once and scalarizes it.
+            let v = self.lower_wholesale(spec.body)?;
+            return Ok(if self.lv_box(&v).is_some() {
+                LV::Lit(f64::NAN)
+            } else {
+                v
+            });
+        }
+        let mut lo: DimI = DimI::new();
+        let mut shape: DimU = DimU::new();
+        for d in &spec.contract_dims {
+            match d {
+                ContractDim::Static(l, h) => {
+                    lo.push(*l);
+                    shape.push((h - l + 1).max(0) as usize);
+                }
+                other => bail_tape!("reduction: non-static contraction dim ({other:?})"),
+            }
+        }
+        // An empty window enumerates no tuples: the fold is the identity.
+        if shape.contains(&0) {
+            return Ok(LV::Lit(identity));
+        }
+        // The body over the contraction box: the contracted names ARE its
+        // axis symbols, in `faq_spec`'s (sorted) order.
+        self.push_scope();
+        let bx = LBox {
+            syms: &spec.contract_names,
+            lo: lo.clone(),
+            shape: shape.clone(),
+            cnames: &[],
+            cvals: SmallVec::new(),
+        };
+        let v = self.lower_expr(spec.body, &bx);
+        self.pop_scope();
+        let v = v?;
+        // Same bail as `lower_faq`: the oracle scalarizes a bare whole-array
+        // body (`eval(body).as_scalar()` ⇒ NaN), which this box lowering does
+        // not reproduce.
+        if matches!(&v, LV::State(_) | LV::Obs { .. }) && self.lv_box(&v).is_some() {
+            bail_tape!("reduction: body reduced to a bare whole-array view");
+        }
+        // A body constant over the window still contributes one term PER
+        // tuple, so broadcast it over the box and fold that.
+        let src = match self.lv_box(&v) {
+            None => self.emit_fill(&v, &shape, &lo, Cadence::Const),
+            Some((s, o)) => {
+                if s != shape || o != lo {
+                    bail_tape!("reduction: body box does not match the contraction window");
+                }
+                v
+            }
+        };
+        let LV::Arr(src_slot) = src else {
+            unreachable!("the reduction source is an array slot");
+        };
+        let sec = self.placement(self.slots[src_slot as usize].cadence);
+        let out = self.new_slot(&[], &[], true, sec);
+        self.emit(
+            Instr::Reduce {
+                op: combine_op,
+                init: identity,
+                src: SrcRef::Slot(src_slot),
+                axes: (0..shape.len() as u8).collect(),
+                src_shape: shape,
+                out,
+            },
+            sec,
+        );
+        Ok(LV::Scalar(out))
     }
 
     /// `eval_makearray` mirror (wholesale): the bounding-box assembly around
@@ -1926,7 +2084,7 @@ pub(super) fn build_tape_program(
                 let ord = b.cur_rule;
                 b.emit(Instr::Fallback { rule: ord }, b.home);
                 b.rules[ord as usize].status = RuleStatus::Fallback(bail.reason);
-                let shape = fallback_observed_shape(rule);
+                let shape = b.fallback_observed_shape(rule);
                 b.obs_defined.insert(name, ObsVal::External { shape, tier });
             }
         }
@@ -1967,22 +2125,138 @@ pub(super) fn build_tape_program(
     (b.finish(exports, fuse), vn_hits)
 }
 
-/// The statically-known runtime shape of a fallback observed rule's value
-/// (origin-1 convention), or `None` when it cannot be known without
-/// evaluating.
-fn fallback_observed_shape(rule: &AlgebraicRule) -> Option<DimU> {
-    match rule {
-        // The per-cell (and vectorized) ArrayLoop paths both materialize the
-        // padded `[1, hi]` box; so does the recurrence sweep over its frame.
-        AlgebraicRule::ArrayLoop { output_ranges, .. }
-        | AlgebraicRule::Recurrence { output_ranges, .. } => Some(
-            output_ranges
-                .iter()
-                .map(|(_, hi)| (*hi).max(0) as usize)
-                .collect(),
-        ),
-        AlgebraicRule::Scalar { body, .. } => match &**body {
-            Expr::Operator(node) if node.op == "faq" => {
+impl<'m> TapeBuilder<'m> {
+    /// The statically-known runtime shape of a FALLBACK observed rule's
+    /// published array (origin-1 convention), or `None` when it cannot be
+    /// known without evaluating.
+    ///
+    /// This is what closes the shape cascade. A rule that reads an observed
+    /// resolves it to [`LV::Obs`], and every array instruction needs that
+    /// value's box at build time; before this existed, a `None` here made
+    /// EVERY reader of a per-cell-produced observed bail too, so one
+    /// unsupported producer took its whole downstream cone with it. The shapes
+    /// come from the same places the interpreter's do — `var_shapes` for a
+    /// state, the already-recorded shape for an earlier observed, the `faq`
+    /// ranges / `makearray` bounding box / `const` literal for a materializing
+    /// operator — so a claimed box is the box the interpreter will publish.
+    /// Anything not derivable stays `None`, which is the old behaviour.
+    fn fallback_observed_shape(&self, rule: &AlgebraicRule) -> Option<DimU> {
+        match rule {
+            // The per-cell (and vectorized) ArrayLoop paths both materialize
+            // the padded `[1, hi]` box; so does the recurrence sweep over its
+            // frame.
+            AlgebraicRule::ArrayLoop { output_ranges, .. }
+            | AlgebraicRule::Recurrence { output_ranges, .. } => Some(
+                output_ranges
+                    .iter()
+                    .map(|(_, hi)| (*hi).max(0) as usize)
+                    .collect(),
+            ),
+            // `materialize_observeds_pass` stores `eval(body)` verbatim (a
+            // scalar becomes a 0-d array), so the rule's shape IS the
+            // wholesale value's shape.
+            AlgebraicRule::Scalar { body, .. } => self.wholesale_shape(body),
+        }
+    }
+
+    /// Shape-only mirror of [`Self::lower_wholesale`]: what box would
+    /// `eval(e)` produce, without lowering (or evaluating) anything? `None`
+    /// = not statically derivable. `Some(empty)` = a scalar / 0-d value.
+    ///
+    /// Deliberately partial and deliberately conservative: every arm that
+    /// cannot pin the box exactly returns `None`, because a WRONG box here is
+    /// not a missed optimization — a reader would compile a kernel against a
+    /// box the interpreter does not publish.
+    fn wholesale_shape(&self, e: &Expr) -> Option<DimU> {
+        match e {
+            Expr::Number(_) | Expr::Integer(_) => Some(DimU::new()),
+            Expr::Variable(name) => self.wholesale_var_shape(name),
+            Expr::Operator(node) => self.wholesale_op_shape(node),
+        }
+    }
+
+    fn wholesale_var_shape(&self, name: &str) -> Option<DimU> {
+        if name == "t" {
+            return Some(DimU::new());
+        }
+        if let Some(&ix) = self.state_ix.get(name) {
+            return Some(self.state_vars[ix as usize].shape.clone());
+        }
+        if let Some(ov) = self.obs_defined.get(name) {
+            return match ov {
+                ObsVal::Taped(lv) => Some(match self.lv_box(lv) {
+                    None => DimU::new(),
+                    Some((s, _)) => s,
+                }),
+                ObsVal::External { shape, .. } => shape.clone(),
+            };
+        }
+        if self.param_names.iter().any(|p| p == name) {
+            return Some(DimU::new());
+        }
+        // Forcing / the NaN sentinel: shape unknowable without the runtime.
+        None
+    }
+
+    /// Broadcast two operand shapes the way `combine` does for the shapes the
+    /// TAPE admits: equal boxes, or a scalar against a box. A rank/extent
+    /// mismatch is ndarray's trailing-pad broadcast, which the tape does not
+    /// lower and this pass does not predict.
+    fn broadcast_shape(a: Option<DimU>, b: Option<DimU>) -> Option<DimU> {
+        let (a, b) = (a?, b?);
+        if a.is_empty() {
+            Some(b)
+        } else if b.is_empty() || a == b {
+            Some(a)
+        } else {
+            None
+        }
+    }
+
+    fn wholesale_op_shape(&self, node: &Arc<ExpressionNode>) -> Option<DimU> {
+        let op = node.op.as_str();
+        match op {
+            "+" | "-" | "*" | "/" | "^" | "min" | "max" | "and" | "or" | "atan2" | "==" | "!="
+            | "<" | "<=" | ">" | ">=" => {
+                let mut acc = self.wholesale_shape(node.args.first()?)?;
+                for a in &node.args[1..] {
+                    acc = Self::broadcast_shape(Some(acc), self.wholesale_shape(a))?;
+                }
+                Some(acc)
+            }
+            "neg" | "exp" | "log" | "ln" | "log10" | "sqrt" | "abs" | "sign" | "floor" | "ceil"
+            | "sin" | "cos" | "tan" | "asin" | "acos" | "atan" | "sinh" | "cosh" | "tanh"
+            | "asinh" | "acosh" | "atanh" | "not" | "Pre" => {
+                self.wholesale_shape(node.args.first()?)
+            }
+            // The oracle picks ONE branch at run time, so the shape is pinned
+            // only when both branches agree.
+            "ifelse" => {
+                if node.args.len() != 3 {
+                    return Some(DimU::new()); // the NaN sentinel
+                }
+                let t = self.wholesale_shape(&node.args[1])?;
+                let f = self.wholesale_shape(&node.args[2])?;
+                (t == f).then_some(t)
+            }
+            "D" => Some(DimU::new()), // the NaN sentinel
+            "const" => match eval_const(node) {
+                Value::Scalar(_) => Some(DimU::new()),
+                Value::Array(a) => Some(a.shape().iter().copied().collect()),
+            },
+            // `index_into` with a full index yields one element; a partial
+            // index yields a sub-array whose extents this pass does not chase.
+            "index" => {
+                let (base, idx) = node.args.split_first()?;
+                let bshape = self.wholesale_shape(base)?;
+                if bshape.is_empty() {
+                    return idx.is_empty().then(DimU::new);
+                }
+                (idx.len() >= bshape.len()).then(DimU::new)
+            }
+            // `eval_faq` materializes exactly its output box (rank-0 ⇒ a 0-d
+            // array), whichever inner path it takes.
+            "faq" => {
                 let spec = faq_spec(node)?;
                 Some(
                     spec.ranges
@@ -1991,7 +2265,8 @@ fn fallback_observed_shape(rule: &AlgebraicRule) -> Option<DimU> {
                         .collect(),
                 )
             }
-            Expr::Operator(node) if node.op == "makearray" => {
+            // `eval_makearray` assembles the regions' bounding box.
+            "makearray" => {
                 let regions = node.regions.as_ref()?;
                 let first = regions.first()?;
                 let ndim = first.len();
@@ -2013,15 +2288,10 @@ fn fallback_observed_shape(rule: &AlgebraicRule) -> Option<DimU> {
                         .collect(),
                 )
             }
-            // A literal / scalar-arithmetic body materializes 0-d; anything
-            // else (an array alias, a reshape, …) is unknowable statically.
-            Expr::Number(_) | Expr::Integer(_) => Some(DimU::new()),
             _ => None,
-        },
+        }
     }
-}
 
-impl<'m> TapeBuilder<'m> {
     fn begin_rule(&mut self, info: RuleInfo) {
         self.cur_rule = self.rules.len() as u32;
         self.home = info.cadence;
@@ -2049,6 +2319,7 @@ impl<'m> TapeBuilder<'m> {
             slots: self.slots.len(),
             plans: self.plans.len(),
             regions: self.regions.len(),
+            const_data: self.const_data.len(),
             dy_writes: self.dy_writes.len(),
             stream_lens: [
                 self.streams[0].len(),
@@ -2064,6 +2335,7 @@ impl<'m> TapeBuilder<'m> {
         self.slots.truncate(txn.slots);
         self.plans.truncate(txn.plans);
         self.regions.truncate(txn.regions);
+        self.const_data.truncate(txn.const_data);
         self.dy_writes.truncate(txn.dy_writes);
         for s in 0..3 {
             let stream = &mut self.streams[s];
@@ -2466,6 +2738,7 @@ impl<'m> TapeBuilder<'m> {
             slots: std::mem::take(&mut self.slots),
             plans: std::mem::take(&mut self.plans),
             regions: std::mem::take(&mut self.regions),
+            const_data: std::mem::take(&mut self.const_data),
             state_vars: std::mem::take(&mut self.state_vars),
             obs_reads: std::mem::take(&mut self.obs_reads),
             dy_writes: std::mem::take(&mut self.dy_writes),
@@ -2553,7 +2826,10 @@ fn color_slab(prog: &mut TapeProgram) {
         // for alias-safe (index-aligned elementwise) instructions.
         let alias_safe = !matches!(
             prog.instrs[i],
-            Instr::Gather { .. } | Instr::Region { .. } | Instr::Fused { .. }
+            Instr::Gather { .. }
+                | Instr::Region { .. }
+                | Instr::Fused { .. }
+                | Instr::Reduce { .. }
         );
         let mut defs_here: SmallVec<[SlotId; 2]> = SmallVec::new();
         prog.instrs[i].for_each_def(&prog.fused, |o| {

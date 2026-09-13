@@ -71,6 +71,7 @@
       "surface_test": "pkg/earthsci-ast-rs/tests/api_surface.rs",
       "public_modules": [
         "adapter_support",
+        "compiled_rhs_adapter",
         "esio_provider",
         "extension",
         "intern",
@@ -79,7 +80,8 @@
         "precision_infer",
         "provider",
         "simulate_array",
-        "wasm"
+        "wasm",
+        "xla_runtime"
       ],
       "public_module_note": "`cargo public-api` needs a nightly toolchain and is not installed here, so the test is the vendored equivalent: it parses the crate root, which is the only source of `earthsci_ast::<name>` paths. Module interiors are extension seams reachable as `earthsci_ast::<module>::<name>`."
     },

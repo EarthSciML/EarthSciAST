@@ -14,9 +14,7 @@
 
 use std::path::PathBuf;
 
-use earthsci_ast::compiled_rhs_adapter::{
-    COMPILED_UNAVAILABLE_REASON, Engine, parse_args, run_manifest,
-};
+use earthsci_ast::compiled_rhs_adapter::{Engine, parse_args, run_manifest};
 use serde_json::Value;
 
 /// rtol for the anchor comparison. The tier's own `algebraic` class is 1e-13
@@ -112,17 +110,28 @@ fn interpreter_engine_matches_analytic_anchors() {
     assert!(checked >= 20, "only {checked} elements compared");
 }
 
-/// `--engine compiled` answers with the contract's whole-output `unavailable`
-/// form: no `fixtures` key, a `status` and a `reason` naming phase 2.
+/// Without the `xla` feature, `--engine compiled` answers with the contract's
+/// whole-output `unavailable` form: no `fixtures` key, a `status`, and a
+/// `reason` that says how to get a build which does have the engine.
+///
+/// This is the shape an ordinary `cargo build --features
+/// conformance-adapters` produces, so it is the one most runs of the adapter
+/// will hit. The feature-on behaviour is
+/// [`compiled_engine_evaluates_or_refuses_every_fixture`] below and
+/// `tests/xla_compiled_rhs.rs`.
+#[cfg(not(feature = "xla"))]
 #[test]
-fn compiled_engine_is_unavailable_in_phase_1() {
+fn compiled_engine_is_unavailable_without_the_xla_feature() {
     let report = run_manifest(&manifest_path(), Engine::Compiled)
         .expect("adapter run")
         .payload;
     assert_eq!(report["binding"], "rust");
     assert_eq!(report["engine"], "compiled");
     assert_eq!(report["status"], "unavailable");
-    assert_eq!(report["reason"], COMPILED_UNAVAILABLE_REASON);
+    assert_eq!(
+        report["reason"],
+        earthsci_ast::compiled_rhs_adapter::COMPILED_UNAVAILABLE_REASON
+    );
     assert!(
         report.get("fixtures").is_none(),
         "the unavailable form is WHOLE-OUTPUT; it must not carry per-fixture results"
@@ -136,6 +145,52 @@ fn compiled_engine_is_unavailable_in_phase_1() {
             .payload["status"],
         "unavailable"
     );
+}
+
+/// With the `xla` feature, `--engine compiled` produces a real per-fixture
+/// report: every entry is either an `rhs` map or the contract's `refused`
+/// entry with a rule and a reason, and never an `error`.
+///
+/// A machine with the feature compiled in but no usable PJRT client still
+/// answers the whole-output `unavailable` form, which is accepted here rather
+/// than failed: that is the contract's own outcome for exactly this case.
+#[cfg(feature = "xla")]
+#[test]
+fn compiled_engine_evaluates_or_refuses_every_fixture() {
+    let report = run_manifest(&manifest_path(), Engine::Compiled)
+        .expect("adapter run")
+        .payload;
+    assert_eq!(report["binding"], "rust");
+    assert_eq!(report["engine"], "compiled");
+    let Some(fixtures) = report.get("fixtures").and_then(|f| f.as_object()) else {
+        assert_eq!(
+            report["status"], "unavailable",
+            "a compiled run with no `fixtures` must say why"
+        );
+        eprintln!("SKIP: {}", report["reason"]);
+        return;
+    };
+    assert!(!fixtures.is_empty(), "no fixture was attempted");
+    let mut n_ok = 0;
+    let mut n_refused = 0;
+    for (id, entry) in fixtures {
+        if entry.get("rhs").is_some() {
+            n_ok += 1;
+        } else if entry["status"] == "refused" {
+            assert!(
+                entry["rule"].as_str().is_some_and(|r| !r.is_empty()),
+                "{id}: refusal names no rule"
+            );
+            assert!(
+                entry["reason"].as_str().is_some_and(|r| !r.is_empty()),
+                "{id}: refusal gives no reason"
+            );
+            n_refused += 1;
+        } else {
+            panic!("{id}: neither numbers nor a refusal: {entry}");
+        }
+    }
+    assert!(n_ok > 0, "every fixture refused ({n_refused} of them)");
 }
 
 /// The CLI contract: both paths required, `--engine` optional and defaulting to
