@@ -603,11 +603,20 @@ def main() -> int:
     )
     args = ap.parse_args()
     manifest = build_manifest()
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(manifest, indent=2) + "\n")
+    out = args.output
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(manifest, indent=2) + "\n")
     n_probes = sum(len(fx["rhs_probes"]) for fx in manifest["fixtures"])
+    # `--output` may point anywhere (regenerating into a scratch path to diff
+    # against the committed manifest is how the reproducibility claim in the
+    # tier README is checked), so render the path relative to the repo only when
+    # it actually lies inside it.
+    try:
+        shown = out.resolve().relative_to(REPO)
+    except ValueError:
+        shown = out
     print(
-        f"wrote {args.output.relative_to(REPO)}: {len(manifest['fixtures'])} fixture(s), "
+        f"wrote {shown}: {len(manifest['fixtures'])} fixture(s), "
         f"{n_probes} probe(s), {len(manifest['excluded'])} exclusion(s)"
     )
     return 0
