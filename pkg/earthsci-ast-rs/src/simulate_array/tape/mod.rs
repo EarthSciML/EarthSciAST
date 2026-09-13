@@ -20,6 +20,10 @@ mod lower;
 mod refexec;
 #[cfg(test)]
 mod tests;
+// Phase 2: the XLA emitter over this IR (feature `xla`, OFF by default). Last
+// in the list because it is the only optional one.
+#[cfg(feature = "xla")]
+pub mod xla_emit;
 
 pub(crate) use exec::tape_disabled;
 pub(in crate::simulate_array) use exec::{TapeCtx, run_tape_call};
