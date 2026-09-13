@@ -116,8 +116,8 @@ sh_probes(u0) = [(copy(u0), 0.0),
         end
         @testset "$nd devices agree with the interpreter and with one device" begin
             shard, _, d = sh_compiled(fix; ndev = nd)
-            @test d.shard !== nothing
-            @test d.shard.ndevices == nd
+            @test EXT_SH.direct_shard(d) !== nothing
+            @test EXT_SH.direct_devicecount(d) == nd
             for (u, t) in sh_probes(u0)
                 @test shard(u, t) ≈ ref(u, t) rtol = 1e-12
                 @test shard(u, t) ≈ one_dev(u, t) rtol = 1e-12
