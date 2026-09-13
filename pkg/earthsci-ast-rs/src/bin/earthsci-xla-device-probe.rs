@@ -250,7 +250,12 @@ fn multidevice(fixture: &Path) -> Result<(), String> {
     let compiled = build(fixture);
     let program = CompiledRhs::compile(&compiled).map_err(|e| e.to_string())?;
     let params: HashMap<String, f64> = HashMap::new();
-    let pv = compiled.debug_resolve_params(&params);
+    // `eval` and `on_device` pad this for you; placing the buffers by hand
+    // here means doing it by hand, or the executable rejects argument 1 for a
+    // shape mismatch and the device-0 CONTROL fails for a reason that has
+    // nothing to do with devices.
+    let mut pv = compiled.debug_resolve_params(&params);
+    pv.resize(program.params_len(), 0.0);
     let n = program.n_states();
     let u: Vec<f64> = (0..n).map(|i| 1.0 + 0.25 * i as f64).collect();
 
@@ -288,8 +293,9 @@ fn multidevice(fixture: &Path) -> Result<(), String> {
                             .fold(0.0f64, |m, (a, b)| m.max((a - b).abs()));
                         println!(
                             "device {}: execute against buffers placed there SUCCEEDED, \
-                             max |diff from default device| = {worst:e}",
-                            d.id()
+                             max |diff from default device| = {worst:e}{}",
+                            d.id(),
+                            if d.id() == 0 { "  (the control: device 0 is where the executable was assigned)" } else { "" }
                         );
                     }
                     Err(e) => println!("device {}: execute against buffers placed there: {e}", d.id()),
