@@ -373,15 +373,32 @@ Hooks per binding (compiled engine):
 
 | Binding | RHS hook | Adapter |
 |---|---|---|
-| Julia | `EarthSciASTReactantExt.direct_rhs` → `Reactant.@compile` (direct StableHLO emission, `pkg/EarthSciAST.jl/ext/reactant_direct/`) | the same `compiled_rhs_adapter.jl`, under its own `scripts/compiled_rhs_reactant_env` |
+| Julia | `EarthSciASTReactantExt.direct_rhs` → `Reactant.@compile` (direct StableHLO emission, `pkg/EarthSciAST.jl/ext/reactant_direct/`) | the same `compiled_rhs_adapter.jl`, under its own `scripts/compiled_rhs_reactant_env`; `EARTHSCI_JULIA_XLA_DEVICE=cpu|gpu` (default `cpu`) picks the XLA client |
 | Rust | the XlaBuilder emitter over the tape (`pkg/earthsci-ast-rs/src/simulate_array/tape/xla_emit.rs`, runtime `src/xla_runtime.rs`) | the same `earthsci-compiled-rhs-adapter-rust`, built with `--features conformance-adapters,xla` and `XLA_EXTENSION_DIR` set |
 | Python | — | no compiled backend in this plan |
 
 An adapter whose compiled engine has not landed, or whose runtime is not
 configured on this machine, answers `--engine compiled` with `unavailable` and a
-reason that says so. Julia's answers `unavailable` only when Reactant cannot be
-loaded at all: a model its emitter cannot lower is a `refused` fixture, never an
-unavailable engine, because the two readings are different facts.
+reason that says so. Julia's answers `unavailable` in exactly two cases —
+Reactant cannot be loaded at all, or `EARTHSCI_JULIA_XLA_DEVICE` named a client
+that cannot be created here (asking for `gpu` on a machine with none). A model
+its emitter cannot lower is a `refused` fixture, never an unavailable engine,
+because the two readings are different facts; and a GPU that is not there is
+never answered by falling back to the CPU, because that would report a CPU run
+under a GPU label.
+
+**Which device a Julia compiled run used is not in the report.** A fixture entry
+is the probe values, a `refused`, or an `error`, and this contract admits no
+extra keys — a key one binding invents becomes a key every other binding has to
+reproduce. The adapter therefore announces the platform once on **stderr**,
+
+```
+compiled_rhs_adapter: julia engine=compiled device=gpu platform=cuda addressable_devices=1
+```
+
+which the runner captures with the rest of the adapter's stderr. Nothing parses
+that line. The tolerance classes are the same on either device: they are the
+contract, not a property of the hardware.
 
 ## Runner
 
