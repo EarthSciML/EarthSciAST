@@ -140,6 +140,23 @@ fn bare(name: &str) -> &str {
     name.split_once('.').map(|x| x.1).unwrap_or(name)
 }
 
+/// One probe value as JSON. `json!(f64)` writes NaN and ±inf as `null`, which
+/// the runner cannot turn back into a number, so a non-finite value goes out as
+/// the string Python's `float()` parses (`"NaN"`, `"Infinity"`, `"-Infinity"`)
+/// and a regression that produces one is reported against its element instead
+/// of aborting the whole tier run.
+fn num(v: f64) -> Value {
+    if v.is_finite() {
+        json!(v)
+    } else if v.is_nan() {
+        json!("NaN")
+    } else if v > 0.0 {
+        json!("Infinity")
+    } else {
+        json!("-Infinity")
+    }
+}
+
 /// Resolve a manifest `fixtures[].path` to a file on disk.
 ///
 /// The contract spells the path relative to the repository's `tests/`
@@ -292,7 +309,7 @@ fn eval_compiled(
             .map_err(|e| format!("probe {pid}: {e}"))?;
         let mut m = Map::new();
         for (i, n) in names.iter().enumerate() {
-            m.insert(bare(n).to_string(), json!(du[i]));
+            m.insert(bare(n).to_string(), num(du[i]));
         }
         rhs.insert(pid.to_string(), Value::Object(m));
     }
@@ -353,7 +370,7 @@ fn run_fixture(fx: &Value, manifest_dir: &Path, engine: Engine) -> Result<Value,
         let (dy, _stats) = compiled.debug_eval_rhs(&sv, t, &params, false);
         let mut m = Map::new();
         for (i, n) in names.iter().enumerate() {
-            m.insert(bare(n).to_string(), json!(dy[i]));
+            m.insert(bare(n).to_string(), num(dy[i]));
         }
         rhs.insert(pid.to_string(), Value::Object(m));
     }
