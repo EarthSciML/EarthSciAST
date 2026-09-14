@@ -1310,8 +1310,41 @@ function _evaluate_assertion(a, sim, var_map::AbstractDict,
 
     if a.coords === nothing && a.reduce === nothing
         slot = _scalar_slot(var_map, a.variable, String(mname), renames)
-        slot == 0 && throw(InlineTestError("scalar state '$(a.variable)' not found"))
-        return state[slot]
+        slot == 0 || return state[slot]
+        # Not an ODE state — so an OBSERVED, a variable the document defines by
+        # an algebraic equation rather than a time derivative. esm-spec §6.6
+        # names no such restriction: `V = n*R*T/P` is as assertable as the state
+        # it is computed from, the Rust CLI's `observed_field(prob, name)`
+        # returns it, and this path refused every one of them with "scalar state
+        # '<v>' not found" — 10 of 10 assertions in
+        # `tests/valid/units_propagation.esm`, every assertion in
+        # `units_conversions.esm`, 2 of 5 in
+        # `tests/conformance/rhs_time_derivative/fixtures/tendency_resolution.esm`.
+        #
+        # `_observed_field` already answers for one: it treats a SHAPELESS
+        # observed as rank 0 (one empty cell index) precisely so a contracted
+        # scalar is readable, and it puts the trajectory sample in scope, so a
+        # state-DEPENDENT observed evaluates at the state the solver had. Same
+        # function, same scope, same ordering as the `coords` / `reduce` path
+        # below — this is a second entry to it, not a second evaluator.
+        state_arrays, state_scalars = _state_scope(var_map, state)
+        state_scalars["t"] = Float64(sim.t[ti])
+        obs = _observed_field(insp, eval_file, String(mname), String(a.variable);
+                              state_arrays=state_arrays, state_scalars=state_scalars)
+        obs === nothing &&
+            throw(InlineTestError("scalar state '$(a.variable)' not found"))
+        field, cell_tuples = obs
+        # A SHAPED observed named by a bare assertion is a different error from
+        # an absent one: §6.6.5 says pick a cell with `coords` or collapse the
+        # field with `reduce`, and silently returning element one would answer a
+        # question the author did not ask.
+        length(field) == 1 || throw(InlineTestError(
+            "'$(a.variable)' is a field of $(length(field)) cells; a scalar " *
+            "assertion on it needs `coords` or `reduce` (esm-spec §6.6.5)"))
+        isempty(cell_tuples) || isempty(first(cell_tuples)) || throw(InlineTestError(
+            "'$(a.variable)' is a shaped variable; a scalar assertion on it " *
+            "needs `coords` or `reduce` (esm-spec §6.6.5)"))
+        return field[1]
     end
 
     # `coords` validation runs BEFORE field materialization so a coords

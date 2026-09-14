@@ -4,6 +4,9 @@
 # Each `Model` and `ReactionSystem` may carry a `tests` block (ESM spec §6.6)
 # of scalar `(variable, time, expected, [tolerance])` assertions. This module
 # walks a given set of root directories, parses every `.esm` file via `load`,
+# builds each container from its WHOLE DOCUMENT (§6.6: a test declared on a
+# component the document itself declares "is built from the document it lives
+# in, coupling and all" — see `_compile_model_in_document`),
 # simulates each InlineTest on the resulting MTK system, samples each Assertion via
 # the solution interpolant, and compares to the declared expected value with
 # the tolerance resolved per spec §6.6.4 — PER FIELD over four levels
@@ -332,7 +335,10 @@ _assertion_fail_message(actual, expected, rtol::Float64, atol::Float64) =
 # exposes compiled-system properties by stripping the system's own name
 # prefix, so the accessible property for "ModelName.sub.var" is "sub_var"
 # (model-relative form), not "ModelName_sub_var".
-function _resolve_handle(simp, sys_name::Symbol, var_spec::AbstractString)
+const _NO_RENAMES = Dict{String,String}()
+
+function _resolve_handle(simp, sys_name::Symbol, var_spec::AbstractString,
+                         renames::AbstractDict=_NO_RENAMES)
     _require_mtk()   # guard only: fail early with a clear error when MTK is absent
     sanitized = replace(String(var_spec), "." => "_")
     qualified = Symbol(String(sys_name) * "_" * sanitized)
@@ -354,6 +360,23 @@ function _resolve_handle(simp, sys_name::Symbol, var_spec::AbstractString)
         relative_san = Symbol(replace(relative, "." => "_"))
         if hasproperty(simp, relative_san)
             return getproperty(simp, relative_san)
+        end
+    end
+    # An `operator_compose` RENAMING match (esm-spec §4.7.1 step 4) DELETES the
+    # state spelling this test keys on — `Sink.O3` folded onto `Chem.ozone` —
+    # and the flatten records where it went (`merged_variable_renames`, issue
+    # #230, CONFORMANCE_SPEC §5.35). Only a DOCUMENT build carries such a map,
+    # so this arm is dead on the per-container path and on an uncoupled
+    # document; on a coupled one it is what keeps a test that names its own
+    # local variable resolvable after the merge moved it. The tree-walk engine
+    # resolves through the same map (`_scope_to_component`, inline_tests.jl).
+    if !isempty(renames)
+        scoped = String(sys_name) * "." * String(var_spec)
+        for key in (scoped, String(var_spec))
+            target = get(renames, key, nothing)
+            target === nothing && continue
+            merged = Symbol(replace(String(target), "." => "_"))
+            hasproperty(simp, merged) && return getproperty(simp, merged)
         end
     end
     throw(ArgumentError("Variable '$(var_spec)' not found on compiled system " *
@@ -568,12 +591,16 @@ struct MtkTestEngine
     # `container.tolerance`, resolved on its own chain in `_run_test_frame!`.
     reltol::Float64
     abstol::Float64
+    # `merged_variable_renames` from the document flatten this engine's system
+    # was built from — see `_resolve_handle`. Empty on the per-container path.
+    renames::Dict{String,String}
 
     MtkTestEngine(simp, sys_name, container_kind, solver, defaults_u0, defaults_p;
                   reltol::Float64=DEFAULT_TEST_RELTOL,
-                  abstol::Float64=DEFAULT_TEST_ABSTOL) =
+                  abstol::Float64=DEFAULT_TEST_ABSTOL,
+                  renames::AbstractDict=_NO_RENAMES) =
         new(simp, sys_name, container_kind, solver, defaults_u0, defaults_p,
-            reltol, abstol)
+            reltol, abstol, Dict{String,String}(renames))
 end
 
 function _engine_setup(e::MtkTestEngine, t)
@@ -581,11 +608,11 @@ function _engine_setup(e::MtkTestEngine, t)
     try
         u0_map = copy(e.defaults_u0)
         for (spec, val) in t.initial_conditions
-            u0_map[_resolve_handle(e.simp, e.sys_name, spec)] = Float64(val)
+            u0_map[_resolve_handle(e.simp, e.sys_name, spec, e.renames)] = Float64(val)
         end
         p_map = copy(e.defaults_p)
         for (spec, val) in t.parameter_overrides
-            p_map[_resolve_handle(e.simp, e.sys_name, spec)] = Float64(val)
+            p_map[_resolve_handle(e.simp, e.sys_name, spec, e.renames)] = Float64(val)
         end
         tspan = (t.time_span.start, t.time_span.stop)
         merged = isempty(p_map) ? u0_map : Base.merge(u0_map, p_map)
@@ -602,13 +629,40 @@ function _engine_setup(e::MtkTestEngine, t)
 end
 
 _engine_actual(e::MtkTestEngine, sol, a) =
-    sol(a.time, idxs=_resolve_handle(e.simp, e.sys_name, a.variable))
+    sol(a.time, idxs=_resolve_handle(e.simp, e.sys_name, a.variable, e.renames))
 
 _engine_error_message(::MtkTestEngine, err) = "Sample/compare failed: $(err)"
 
 function _compile_model(model, name::Symbol)
     MTK = _require_mtk()
     sys = MTK.System(model; name=name)
+    return MTK.mtkcompile(sys)
+end
+
+# Build a model container from the WHOLE-DOCUMENT `FlattenedSystem` rather than
+# from the container in isolation.
+#
+# `MTK.System(::Model)` wraps the one model in a SYNTHETIC single-model
+# `EsmFile` (`flatten(::Model)`) and flattens that, which silently drops
+# everything the document supplies beyond the container itself:
+#
+#   * the document's `expression_templates` registry — `Model` has no such
+#     field, the registry is document-scoped — so `expand_flattened_refs` sees
+#     an EMPTY registry, becomes a no-op, and a §9.6.4 Option-B
+#     `apply_expression_template` reference survives into `_esm_to_symbolic`
+#     as `Unsupported operator: apply_expression_template`;
+#   * every SIBLING component's variables, so an equation reading another
+#     component's state (`D(Rs.A, t)`, or a plain `Rs.A`) dies in
+#     `_resolve_lowering_var` as `Variable 'Rs.A' not found in variable
+#     dictionary`.
+#
+# Both are one bug: the container is not the document. The Python gate builds
+# `esm_problem` over `flatten(ef)` and the Rust CLI builds over the whole
+# flattened document too (§6.6 selects WHICH tests run, not what the system
+# contains), so this path was the 1-of-3 outlier among the executing runners.
+function _compile_model_in_document(flat, name::Symbol)
+    MTK = _require_mtk()
+    sys = MTK.System(flat; name=name)
     return MTK.mtkcompile(sys)
 end
 
@@ -639,6 +693,7 @@ function _run_container_tests!(results::Vector{AssertionResult},
                                compile::Function, label::AbstractString;
                                esm_container=nothing,
                                function_tables=nothing,
+                               renames::AbstractDict=_NO_RENAMES,
                                stiff_files=STIFF_SOLVER_OVERRIDE_FILENAMES,
                                stiffness=nothing, solver_hints=nothing)
     isempty(container.tests) && return
@@ -670,7 +725,8 @@ function _run_container_tests!(results::Vector{AssertionResult},
     # the runner's own defaults; each falls through independently.
     reltol, abstol = _test_integration_tolerances(solver_hints)
     engine = MtkTestEngine(simp, sys_name, container_kind, solver,
-                           defaults_u0, defaults_p; reltol=reltol, abstol=abstol)
+                           defaults_u0, defaults_p; reltol=reltol, abstol=abstol,
+                           renames=renames)
     _run_test_frame!(results, engine, path, container_kind, String(name),
                      container.tolerance, container.tests)
 end
@@ -696,24 +752,100 @@ function run_file_tests!(results::Vector{AssertionResult}, path::AbstractString;
     # so it applies to every container in the file.
     stiffness = esm_file.solver === nothing ? nothing : esm_file.solver.stiffness
 
-    if esm_file.models !== nothing
-        for (mname, model) in esm_file.models
+    # The document flatten every in-document container is built from, computed
+    # at most ONCE per file and only when a container that needs it actually
+    # has tests (a container with no tests is never compiled, so it is never
+    # lowered — the §9.5.3a refusal stays attached to a build that happens).
+    # Table lowering runs at FILE scope here because the flatten happens once,
+    # ahead of the per-container builds that would otherwise each lower their
+    # own.
+    #
+    # A container in a document this engine cannot build gets that document's
+    # failure, NOT a private per-container build that would paper over it. One
+    # component's unlowered `grad` making the whole flatten spatial — which
+    # `ModelingToolkit.System` refuses, redirecting to `PDESystem` — refuses
+    # every container in that document, which is what the Rust CLI already does
+    # for the same file (`tests/valid/units_dimensional_analysis.esm`: 0 pass in
+    # both). A document must not validate under one binding and fail under
+    # another, and that outranks the assertions a per-container fallback would
+    # keep alive here alone.
+    models = esm_file.models
+    rsystems = esm_file.reaction_systems
+    has_model_tests = models !== nothing &&
+        any(m -> !isempty(m.tests), values(models))
+    # A mechanism that shares its document with a model may read that model —
+    # RADM2's 156 reaction rates are scoped references to the component that
+    # evaluates its rate coefficients — and its tests may override that model's
+    # parameters. The isolated Catalyst build cannot see it: the species
+    # resolve, but the sibling's parameters are not on the compiled system, so
+    # the SOLVE fails rather than the build. Such a document is built from the
+    # same whole-document flatten the models use (§7.4 lowers the mechanism to
+    # its mass-action ODEs there).
+    #
+    # A document whose ONLY containers are reaction systems keeps the Catalyst
+    # route: it is the one that carries Catalyst's own default seeding, and it
+    # is the build the corpus's large mechanisms have always taken.
+    mixed = models !== nothing && !isempty(models)
+    has_mixed_rs_tests = mixed && rsystems !== nothing &&
+        any(rs -> !isempty(rs.tests), values(rsystems))
+
+    doc_flat = nothing
+    doc_flat_err = nothing
+    if has_model_tests || has_mixed_rs_tests
+        try
+            lower_table_lookups!(esm_file)
+            doc_flat = flatten(esm_file;
+                               base_path=dirname(abspath(String(path))))
+        catch err
+            doc_flat_err = err
+        end
+    end
+    # Every state spelling an `operator_compose` renaming match DELETED, mapped
+    # onto the survivor it was folded into (§4.7.1 step 4, issue #230). Only a
+    # DOCUMENT build can carry one — a container built alone has no coupling —
+    # so this is empty on every other path.
+    doc_renames = doc_flat === nothing ?
+        Dict{String,String}() : doc_flat.metadata.merged_variable_renames
+
+    if models !== nothing
+        for (mname, model) in models
+            if doc_flat_err !== nothing
+                for t in model.tests
+                    push!(results, AssertionResult(
+                        path, :model, String(mname), t.id, 0, "", NaN, NaN,
+                        nothing, ERROR,
+                        "Model compile failed: $(doc_flat_err)", 0.0))
+                end
+                continue
+            end
+            compile = doc_flat === nothing ? _compile_model :
+                (_c, sym) -> _compile_model_in_document(doc_flat, sym)
             _run_container_tests!(results, path, :model, String(mname), model,
-                                  _compile_model, "Model";
-                                  function_tables=tables,
+                                  compile, "Model";
+                                  function_tables=tables, renames=doc_renames,
                                   stiff_files=stiff_files, stiffness=stiffness,
                                   solver_hints=esm_file.solver)
         end
     end
 
-    if esm_file.reaction_systems !== nothing
-        for (rname, rs) in esm_file.reaction_systems
-            _run_container_tests!(results, path, :reaction_system,
-                                  String(rname), rs, _compile_reaction_system,
-                                  "ReactionSystem"; esm_container=rs,
-                                  function_tables=tables,
-                                  stiff_files=stiff_files, stiffness=stiffness,
-                                  solver_hints=esm_file.solver)
+    if rsystems !== nothing
+        for (rname, rs) in rsystems
+            if mixed && doc_flat !== nothing
+                _run_container_tests!(results, path, :reaction_system,
+                                      String(rname), rs,
+                                      (_c, sym) -> _compile_model_in_document(doc_flat, sym),
+                                      "ReactionSystem";
+                                      function_tables=tables, renames=doc_renames,
+                                      stiff_files=stiff_files, stiffness=stiffness,
+                                      solver_hints=esm_file.solver)
+            else
+                _run_container_tests!(results, path, :reaction_system,
+                                      String(rname), rs, _compile_reaction_system,
+                                      "ReactionSystem"; esm_container=rs,
+                                      function_tables=tables,
+                                      stiff_files=stiff_files, stiffness=stiffness,
+                                      solver_hints=esm_file.solver)
+            end
         end
     end
 end
