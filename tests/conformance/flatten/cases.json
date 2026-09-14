@@ -4258,6 +4258,102 @@
       "lifted_shapes": {}
     },
     {
+      "id": "ic_tendency",
+      "tier": "rhs_time_derivative",
+      "fixture": "conformance/rhs_time_derivative/fixtures/ic_tendency.esm",
+      "system_kind": "ode",
+      "independent_variables": [
+        "t"
+      ],
+      "state_variables": [
+        {
+          "name": "M.x",
+          "role": "state",
+          "units": "1",
+          "default": 2.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "M"
+        },
+        {
+          "name": "M.y",
+          "role": "state",
+          "units": "1/s",
+          "default": 1.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "M"
+        }
+      ],
+      "parameters": [
+        {
+          "name": "M.k",
+          "role": "parameter",
+          "units": "1/s",
+          "default": 3.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "M"
+        },
+        {
+          "name": "M.q",
+          "role": "parameter",
+          "units": "1/s^2",
+          "default": 3.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "M"
+        }
+      ],
+      "observed_variables": [],
+      "algebraic_variables": [],
+      "brownian_parameters": [],
+      "discrete_parameters": [],
+      "equation_count": 2,
+      "equations": [
+        {
+          "lhs": "D(M.x)/Dt",
+          "rhs": "(-M.k) * M.x",
+          "source_system": "M"
+        },
+        {
+          "lhs": "D(M.y)/Dt",
+          "rhs": "M.q",
+          "source_system": "M"
+        }
+      ],
+      "continuous_events": [],
+      "discrete_events": [],
+      "domain": {
+        "independent_variable": null,
+        "element_type": null,
+        "array_type": null
+      },
+      "metadata": {
+        "source_systems": [
+          "M"
+        ],
+        "coupling_rules": [],
+        "operator_applies": [],
+        "callbacks": []
+      },
+      "index_sets": [],
+      "function_tables": [],
+      "template_registry": [],
+      "field_ics": [
+        {
+          "state": "M.y",
+          "expr": "(-M.k) * M.x"
+        }
+      ],
+      "loader_fields": [],
+      "lifted_shapes": {}
+    },
+    {
       "id": "advection_reaction_loaded_ic_bc",
       "tier": "field_ics",
       "fixture": "valid/advection_reaction_loaded_ic_bc.esm",

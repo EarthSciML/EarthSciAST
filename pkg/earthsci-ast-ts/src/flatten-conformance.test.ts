@@ -158,7 +158,7 @@ describe('flatten conformance corpus (esm-libraries-spec §4.7.5 step 4)', () =>
     // coupling endpoints with THREE segments, so a binding resolving them by
     // splitting on the first dot is distinguishable from one that walks the
     // whole §4.6 path.
-    expect(corpus.cases.length).toBe(27)
+    expect(corpus.cases.length).toBe(28)
     // 4 = template_import_lib, couple_multiplicative_no_tendency, the
     // nonterminating rewrite, and `coupling_resolution_edge_cases`, whose EDGE
     // CASE 10 maps onto a target the document declares nowhere.

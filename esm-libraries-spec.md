@@ -1121,6 +1121,11 @@ All libraries (including Core tier) must implement the flattening algorithm. Fla
    quotient rules through `+ - neg * /`. A `D` the table cannot answer, and a cyclic chain, is left
    standing for the `unlowered_operator` gate. Left-hand sides are never rewritten.
 
+   **`ic` right-hand sides are resolved too.** An `ic` equation (esm-spec §11.4) is still in the
+   equation list when this step runs, and step 4 classifies it out into `field_ics` afterwards, so
+   `ic(y) ~ D(x, t)` reaches `field_ics` as `x`'s resolved tendency, not as a standing `D`. An `ic`
+   left-hand side contributes no tendency and no definition to the resolution table.
+
    The step reads the equation list as it stands when it runs, so its position changes its answer.
    It MUST run:
    - **after step 1**, or a scoped `D(Chem.A, t)` naming a reaction-system species finds no
@@ -1136,7 +1141,8 @@ All libraries (including Core tier) must implement the flattening algorithm. Fla
 
    It runs **before** step 4 derives anything from the equations (`independent_variables`, the
    §6.3.1 subsets), so those derivations see the resolved form. The cross-binding gate is
-   `tests/conformance/flatten/cases.json` (the `tendency_resolution` and `merged_tendency` cases)
+   `tests/conformance/flatten/cases.json` (the `tendency_resolution`, `merged_tendency` and
+   `ic_tendency` cases)
    and, for bindings with an inline-test runner, `tests/conformance/rhs_time_derivative/`.
 
 4. **Collect the flattened system.** The result is a single flat system containing:

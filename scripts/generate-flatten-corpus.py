@@ -297,6 +297,13 @@ CASES: list[tuple[str, str, str]] = [
         "merged_tendency",
         "conformance/rhs_time_derivative/fixtures/merged_tendency.esm",
     ),
+    # A right-hand-side `D` inside an `ic` equation is resolved too: the step
+    # runs before `ic` equations are classified out into `field_ics`.
+    (
+        "rhs_time_derivative",
+        "ic_tendency",
+        "conformance/rhs_time_derivative/fixtures/ic_tendency.esm",
+    ),
     # --- field_ics: deferred `ic` equations (esm-spec §11.4.1) ---------------
     # Also the richest loader_fields / lifted_shapes case in the tree.
     (
