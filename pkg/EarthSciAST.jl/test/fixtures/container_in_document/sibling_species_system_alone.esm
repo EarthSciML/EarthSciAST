@@ -1,0 +1,100 @@
+{
+ "esm": "1.0.0",
+ "metadata": {
+  "name": "GapBSystemAlone",
+  "description": "Control: the reaction system alone, with its own inline test on a species trajectory. No sibling model. Establishes that the mechanism itself builds and integrates in every binding.",
+  "license": "MIT"
+ },
+ "reaction_systems": {
+  "Rs": {
+   "species": {
+    "A": {
+     "units": "mol/m^3",
+     "default": 2.0,
+     "description": "Substrate of R1."
+    },
+    "B": {
+     "units": "mol/m^3",
+     "default": 3.0,
+     "description": "Substrate of R2."
+    },
+    "P": {
+     "units": "mol/m^3",
+     "default": 0.0,
+     "description": "Product-only species: appears as a product in R1 and R2 and as a substrate nowhere."
+    }
+   },
+   "parameters": {
+    "k1": {
+     "units": "1/s",
+     "default": 0.5,
+     "description": "Rate coefficient of R1."
+    },
+    "k2": {
+     "units": "1/s",
+     "default": 0.25,
+     "description": "Rate coefficient of R2."
+    }
+   },
+   "reactions": [
+    {
+     "id": "R1",
+     "substrates": [
+      {
+       "species": "A",
+       "stoichiometry": 1
+      }
+     ],
+     "products": [
+      {
+       "species": "P",
+       "stoichiometry": 1
+      }
+     ],
+     "rate": "k1"
+    },
+    {
+     "id": "R2",
+     "substrates": [
+      {
+       "species": "B",
+       "stoichiometry": 1
+      }
+     ],
+     "products": [
+      {
+       "species": "P",
+       "stoichiometry": 2
+      }
+     ],
+     "rate": "k2"
+    }
+   ],
+   "tests": [
+    {
+     "id": "species_trajectory",
+     "description": "A decays at 0.5/s from 2.0, so A(1) = 2 exp(-0.5).",
+     "time_span": {
+      "start": 0,
+      "end": 1
+     },
+     "tolerance": {
+      "rel": 1e-06
+     },
+     "initial_conditions": {
+      "A": 2.0,
+      "B": 3.0,
+      "P": 0.0
+     },
+     "assertions": [
+      {
+       "variable": "A",
+       "time": 1.0,
+       "expected": 1.2130613194252668
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

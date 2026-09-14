@@ -5,12 +5,13 @@
 //! `tests/conformance/rhs_time_derivative/` (repo root); the Python runner
 //! (`test_rhs_time_derivative_conformance.py`) gates the same manifest.
 //!
-//! Julia is `scope_excluded`, for reasons in neither its transform nor this
-//! rule: its `run_inline_tests` cannot read a 0-D OBSERVED at all, and it does not
-//! REFUSE an unresolvable right-hand-side `D`. It does implement the resolve
-//! half (`flatten` step 3c), pinned on its side by
-//! `rhs_time_derivative_resolution_test.jl` through a state the runner can
-//! read. The manifest spells both gaps out.
+//! Julia was `scope_excluded` until its `run_inline_tests` learned to read a
+//! 0-D OBSERVED; the same change made the refusal fixtures reach the
+//! evaluator's rewrite-target gate, so it now REFUSES an unresolvable
+//! right-hand-side `D` too. All three bindings are `bindings_required`, and
+//! Julia drives the manifest from `rhs_time_derivative_resolution_test.jl`
+//! part 2. Go and TypeScript remain excluded — no simulator, no inline-test
+//! runner — and the manifest says why.
 //!
 //! The category pins OUTCOME CLASSES rather than a numeric golden, because half
 //! of it has no number to record:
