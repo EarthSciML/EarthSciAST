@@ -45,6 +45,18 @@
 //! produced by rules that FELL BACK, so an `Operand::Obs` read of a
 //! per-cell-produced observed still carries a box and its readers stay on
 //! the tape (`TapeBuilder::wholesale_shape`).
+//!
+//! ## Closed functions
+//!
+//! A fourth piece is likewise not an instruction. The esm-spec §9.2
+//! `datetime.*` family — `year`, `month`, `day`, `hour`, `minute`, `second`,
+//! `day_of_year`, `julian_day`, `is_leap_year` — is expanded at LOWERING time
+//! into the arithmetic above (one floored divmod by 86400, then floors,
+//! remainders, comparisons and selects on integer-valued `f64`s), so all
+//! three executors gained it at once and none of them can drift from
+//! another. The `interp.*` entries of the same registry are not lowered: they
+//! read a table, and a rule that calls one becomes a fallback naming the
+//! function.
 
 mod exec;
 mod fuse;

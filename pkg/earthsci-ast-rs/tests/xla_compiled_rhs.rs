@@ -480,3 +480,130 @@ fn the_on_device_euler_loop_tracks_the_host_loop() {
     }
     eprintln!("on-device euler loop tracked the host loop over {steps} steps on {n} slots");
 }
+
+// ---------------------------------------------------------------------------
+// Closed functions: the esm-spec §9.2 `datetime.*` family.
+//
+// This stands on its own rather than leaning on a tier fixture: the family is
+// lowered by the TAPE (into floors, remainders, comparisons and selects), so
+// the emitter needed no new arm, and a test that only ran the manifest would
+// not notice if it had.
+// ---------------------------------------------------------------------------
+
+/// The nine calendar entries, in the order the fixture declares `f0..f8`.
+const DATETIME_NAMES: &[&str] = &[
+    "datetime.year",
+    "datetime.month",
+    "datetime.day",
+    "datetime.hour",
+    "datetime.minute",
+    "datetime.second",
+    "datetime.day_of_year",
+    "datetime.julian_day",
+    "datetime.is_leap_year",
+];
+
+/// `f7` is `datetime.julian_day` — the one entry the spec allows to drift.
+const JULIAN_DAY_VAR: &str = "f7";
+
+/// Probe times: the epoch, both sides of a day boundary, a fractional second
+/// each side of the epoch, two leap days, the last second of a leap day, two
+/// year boundaries, a leap century (2000), two non-leap centuries (1900
+/// backwards and 2100 forwards) and a deeply negative time (0001-01-01).
+const DATETIME_TIMES: &[f64] = &[
+    0.0,
+    -1.0,
+    -0.5,
+    86_399.999,
+    86_400.0,
+    946_684_800.0,     // 2000-01-01T00:00:00Z
+    951_782_400.0,     // 2000-02-29T00:00:00Z (leap day)
+    951_868_799.0,     // 2000-02-29T23:59:59Z
+    1_709_164_800.0,   // 2024-02-29T00:00:00Z
+    1_735_689_599.0,   // 2024-12-31T23:59:59Z
+    1_735_689_600.0,   // 2025-01-01T00:00:00Z
+    -2_208_988_800.0,  // 1900-01-01T00:00:00Z (non-leap century)
+    -2_203_891_201.0,  // 1900-02-28T23:59:59Z
+    4_102_444_800.0,   // 2100-01-01T00:00:00Z (non-leap century)
+    -62_135_596_800.0, // 0001-01-01T00:00:00Z
+    1_500_000_000.25,
+    -1_500_000_000.25,
+];
+
+/// One 0-d tendency per calendar entry, each reading the solver time.
+fn datetime_doc() -> String {
+    let vars: Vec<String> = (0..DATETIME_NAMES.len())
+        .map(|k| format!(r#""f{k}": {{"type": "unknown", "default": 0.0}}"#))
+        .collect();
+    let eqs: Vec<String> = DATETIME_NAMES
+        .iter()
+        .enumerate()
+        .map(|(k, name)| {
+            format!(
+                r#"{{"lhs": {{"op": "D", "args": ["f{k}"], "wrt": "t"}},
+                     "rhs": {{"op": "fn", "name": "{name}", "args": ["t"]}}}}"#
+            )
+        })
+        .collect();
+    format!(
+        r#"{{"esm": "1.1.0",
+             "metadata": {{"name": "CompiledDatetime"}},
+             "models": {{"M": {{"variables": {{{}}}, "equations": [{}]}}}}}}"#,
+        vars.join(","),
+        eqs.join(",")
+    )
+}
+
+/// The compiled lane's `datetime.*` against the interpreter's closed-function
+/// registry.
+///
+/// The eight integer-valued entries are asserted BIT-identical, not within a
+/// tolerance: the whole lowering is `+ - * /`, `floor`, `ceil`, comparisons and
+/// selects on integer-valued `f64`s, all of which IEEE-754 pins identically in
+/// the interpreter's kernels and in XLA. A tolerance here would hide exactly
+/// the kind of off-by-one-day error the lowering can have. `julian_day` gets
+/// the spec's 1 ulp, because it ends in a genuine floating-point divide.
+#[test]
+fn compiled_datetime_family_matches_the_interpreter() {
+    if !runtime_available() {
+        return;
+    }
+    let file = load_string(&datetime_doc()).expect("datetime document loads");
+    let compiled = ArrayCompiled::from_file(&file).expect("datetime document compiles");
+    let program = match CompiledRhs::compile(&compiled) {
+        Ok(p) => p,
+        Err(CompileRhsError::Refused(e)) => panic!(
+            "the datetime family must lower completely; refused rule {}: {}",
+            e.rule, e.reason
+        ),
+        Err(CompileRhsError::Runtime(m)) => panic!("xla runtime: {m}"),
+    };
+    let names: Vec<String> = compiled.state_variable_names().to_vec();
+    assert_eq!(names.len(), DATETIME_NAMES.len(), "one tendency per entry");
+    let params: HashMap<String, f64> = HashMap::new();
+    let param_vec = compiled.debug_resolve_params(&params);
+    let u = vec![0.0f64; names.len()];
+    for &t in DATETIME_TIMES {
+        let (want, _) = compiled.debug_eval_rhs(&u, t, &params, false);
+        let got = program.eval(&u, &param_vec, t).expect("compiled eval");
+        assert_eq!(got.len(), want.len(), "t={t}: length");
+        for (i, (g, w)) in got.iter().zip(want.iter()).enumerate() {
+            if names[i].ends_with(JULIAN_DAY_VAR) {
+                // 1 ulp of `w` in the worst binade.
+                let ulp = w.abs() * f64::EPSILON;
+                assert!(
+                    (g - w).abs() <= ulp,
+                    "t={t}: datetime.julian_day compiled {g:.17e} vs interpreter \
+                     {w:.17e} (more than 1 ulp)"
+                );
+            } else {
+                assert_eq!(
+                    g.to_bits(),
+                    w.to_bits(),
+                    "t={t}: tendency {} compiled {g} vs interpreter {w}",
+                    names[i]
+                );
+            }
+        }
+    }
+}
