@@ -1,0 +1,20 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "ExtentReexportLib",
+    "description": "A template library that DECLARES the record count. An importer that does not bind it re-exports the name into its own scope (esm-spec \u00a79.7.6 site 2)."
+  },
+  "metaparameters": {
+    "N_REC": {
+      "type": "integer",
+      "default": 0,
+      "description": "Records in the source. A placeholder the source overrides."
+    }
+  },
+  "expression_templates": {
+    "two": {
+      "params": [],
+      "body": 2.0
+    }
+  }
+}

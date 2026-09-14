@@ -80,8 +80,17 @@ func LoadPath(path string, opts ...LoadOption) (*ESMFile, error) {
 		rootMetaEnv = metaEnvFromDecls(rootView["metaparameters"], applyLoadOptions(opts).metaparameters)
 	}
 
+	// The loader-API bindings themselves, kept SEPARATE from rootMetaEnv above.
+	// They reach the `subsystems.<k>` mount form too (esm-spec §4.7 "Two mount
+	// forms, one mechanism"): a leaf mounted as a subsystem gets the same §9.7.6
+	// site-4 backfill a top-level-mounted leaf gets, so a discovered §8.9.4
+	// `extent` sizes its axis at either attachment point. rootMetaEnv is a FOLD
+	// environment — this document's declared defaults included — and must not be
+	// forwarded in its place.
+	apiMeta := applyLoadOptions(opts).metaparameters
+
 	// Resolve subsystem references relative to the file's directory
-	if err := resolveSubsystemRefsWithMeta(esmFile, basePath, rootMetaEnv); err != nil {
+	if err := resolveSubsystemRefsWithMeta(esmFile, basePath, rootMetaEnv, apiMeta); err != nil {
 		return nil, fmt.Errorf("failed to resolve subsystem references: %w", err)
 	}
 
@@ -118,6 +127,37 @@ func LoadString(jsonStr string, opts ...LoadOption) (*ESMFile, error) {
 		return nil, err
 	}
 	jsonStr = prepared
+
+	// esm-spec §4.7 / §8.9.4: the mount-declared metaparameter set and the static
+	// `extent` check are computed HERE, on the AUTHORED text, before anything
+	// resolves — and deliberately as early as the wire boundary allows.
+	//
+	// Both read the unresolved `{ref}` mount edges: a §4.7 mount CONSUMES the
+	// leaf's `metaparameters` at its edge (§9.7.6 site 3), so once refs are
+	// resolved those names are gone and the walk finds nothing. That makes the
+	// placement load-bearing rather than incidental, and it must not drift later:
+	// resolving refs ahead of the root machinery is a legitimate thing to want
+	// (a rewrite target inside a mounted component only lowers if the content is
+	// spliced in first), and the moment it happens anywhere below this line, a
+	// conforming `extent` naming a mounted leaf's metaparameter would be refused.
+	//
+	// Moving the check AFTER the close is not the alternative it appears to be:
+	// the close folds this document's own `index_sets` sizes to integers, which
+	// makes `documentIsInResolvedShape` true for any mount-less document and
+	// silently exempts it — so the purest typo, a single file whose `extent`
+	// misspells a metaparameter it declares itself, stops being caught at all.
+	// Measured both ways; see esm-spec §8.9.4.
+	var authoredMountDeclared map[string]bool
+	{
+		authoredView, derr := decodeJSONView([]byte(jsonStr))
+		if derr == nil {
+			md, cerr := rootMountContext(authoredView, o.basePath, o.metaparameters)
+			if cerr != nil {
+				return nil, cerr
+			}
+			authoredMountDeclared = md
+		}
+	}
 
 	// v0.4.0 expression_templates / apply_expression_template are rejected
 	// when the file declares esm < 0.4.0 (RFC §5.4 spec-version gate), and
@@ -187,7 +227,8 @@ func LoadString(jsonStr string, opts ...LoadOption) (*ESMFile, error) {
 	// order normative for every map a FlattenedSystem carries.
 	authoredOrders := extractTemplateOrders(jsonStr)
 
-	expanded, componentTemplates, err := resolveAndLowerJSONCapturing(jsonStr, o.basePath, o.metaparameters)
+	expanded, componentTemplates, err := resolveAndLowerJSONCapturing(jsonStr, o.basePath, o.metaparameters,
+		authoredMountDeclared)
 	if err != nil {
 		return nil, err
 	}

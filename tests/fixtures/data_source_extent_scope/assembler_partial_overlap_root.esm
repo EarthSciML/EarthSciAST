@@ -1,0 +1,55 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "AssemblerPartialOverlapRoot",
+    "description": "Declares an UNRELATED metaparameter alongside the one its mounted leaf declares. The site-4 backfill must hand the leaf `N_REC` and withhold `N_OTHER`."
+  },
+  "metaparameters": {
+    "N_OTHER": {
+      "type": "integer",
+      "default": 1,
+      "description": "Assembler-scoped and nothing to do with the leaf; the mount edge never binds it."
+    }
+  },
+  "data_sources": {
+    "EGU_Emis": {
+      "kind": "points",
+      "source": {
+        "url_template": "file://./records.csv"
+      },
+      "extent": {
+        "metaparameter": "N_REC"
+      },
+      "metadata": {
+        "esio_format": "ff10"
+      }
+    }
+  },
+  "models": {
+    "Host": {
+      "system_kind": "nonlinear",
+      "variables": {
+        "z": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Host-local observed."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "z",
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": 0.0
+          }
+        }
+      ],
+      "subsystems": {
+        "Ingest": {
+          "ref": "./extent_axis_leaf.esm"
+        }
+      }
+    }
+  }
+}

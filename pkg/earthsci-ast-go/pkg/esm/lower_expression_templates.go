@@ -1593,7 +1593,9 @@ func applyExpressionTemplatesToJSON(jsonStr string) (string, error) {
 // tie-breaking honours imports-then-locals order. Returns the rewritten JSON;
 // the input is not modified.
 func resolveAndLowerJSON(jsonStr, basePath string, metaparameters map[string]int64) (string, error) {
-	out, _, err := resolveAndLowerJSONCapturing(jsonStr, basePath, metaparameters)
+	// nil: this entry point is handed raw text with no authored set captured for
+	// it, so the §4.7 mount context is computed from that text below.
+	out, _, err := resolveAndLowerJSONCapturing(jsonStr, basePath, metaparameters, nil)
 	return out, err
 }
 
@@ -1606,7 +1608,8 @@ func resolveAndLowerJSON(jsonStr, basePath string, metaparameters map[string]int
 // representation (esm-libraries-spec §4.7.5 step 4), and Expand-at-build
 // deletes exactly the inputs that merge needs. Capturing them here is the only
 // point at which they still exist: `expandDocument` runs two lines below.
-func resolveAndLowerJSONCapturing(jsonStr, basePath string, metaparameters map[string]int64) (string, map[string]*orderedMap, error) {
+func resolveAndLowerJSONCapturing(jsonStr, basePath string, metaparameters map[string]int64,
+	authoredMountDeclared map[string]bool) (string, map[string]*orderedMap, error) {
 	var view map[string]any
 	dec := json.NewDecoder(strings.NewReader(jsonStr))
 	dec.UseNumber()
@@ -1622,7 +1625,22 @@ func resolveAndLowerJSONCapturing(jsonStr, basePath string, metaparameters map[s
 	if err := applyCouplingInjections(view); err != nil {
 		return "", nil, err
 	}
-	if _, err := resolveTemplateMachinery(view, orders, basePath, metaparameters); err != nil {
+	// The §4.7 mount context of a ROOT document. `LoadString` computed it on the
+	// AUTHORED text and hands it in, because the walk reads unresolved `{ref}`
+	// edges and `view` here may already have had its refs resolved. Recomputed
+	// only for the callers that have no authored set to give (the guard inside
+	// keeps a load with neither loader-API bindings nor an `extent` off the
+	// filesystem entirely).
+	mountDeclared := authoredMountDeclared
+	if mountDeclared == nil {
+		md, err := rootMountContext(view, basePath, metaparameters)
+		if err != nil {
+			return "", nil, err
+		}
+		mountDeclared = md
+	}
+	if _, err := resolveTemplateMachinery(view, orders, basePath, metaparameters,
+		resolveOpts{mountDeclared: mountDeclared}); err != nil {
 		return "", nil, err
 	}
 	if err := lowerExpressionTemplatesOrdered(view, orders); err != nil {

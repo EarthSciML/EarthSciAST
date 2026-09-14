@@ -33,7 +33,7 @@ use std::path::{Path, PathBuf};
 /// mount (e.g. `NTGT = NX*NY`), captured BEFORE the root template-machinery
 /// pass consumes the `metaparameters` block. Mirrors the Python `load_string()`
 /// `root_meta_env`.
-fn root_metaparameter_env(
+pub(crate) fn root_metaparameter_env(
     value: &Value,
     api_meta: &BTreeMap<String, i64>,
 ) -> BTreeMap<String, i64> {
@@ -84,7 +84,39 @@ pub fn resolve_subsystem_refs_raw(
     value: &mut Value,
     base_path: &Path,
 ) -> Result<(), DiagnosticError> {
-    resolve_subsystem_refs_with_metaparameters(value, base_path, &BTreeMap::new())
+    let staged = resolve_subsystem_refs_with_metaparameters(value, base_path, &BTreeMap::new())?;
+    // This seam has no §9.7.6 close of its own to defer past — it IS just ref
+    // resolution — so the staged §4.7 contributions land immediately.
+    apply_staged_index_sets(value, staged, &BTreeMap::new())
+}
+
+/// Merge the §4.7 contributions a deferred root walk STAGED into the mounting
+/// document's registry (esm-spec §4.7 "Index-set merge").
+///
+/// The other half of the inline/merge split: `walk_top_level` spliced the
+/// referenced content in early, so the root's own §9.7 machinery can lower
+/// through it, and held the `index_sets` back until the mounting document had
+/// closed. This is where they arrive, compared deep-equal against a registry
+/// whose own sizes the close has already folded.
+pub(crate) fn apply_staged_index_sets(
+    value: &mut Value,
+    staged: Map<String, Value>,
+    env: &BTreeMap<String, i64>,
+) -> Result<(), DiagnosticError> {
+    if staged.is_empty() {
+        return Ok(());
+    }
+    let Some(obj) = value.as_object_mut() else {
+        return Ok(());
+    };
+    let mut registry: Map<String, Value> = obj
+        .get("index_sets")
+        .and_then(|v| v.as_object())
+        .cloned()
+        .unwrap_or_default();
+    merge_subsystem_index_sets(&mut registry, &staged, "a §4.7 mount", env)?;
+    obj.insert("index_sets".to_string(), Value::Object(registry));
+    Ok(())
 }
 
 /// Resolve every subsystem `{ "ref": ... }` in a TYPED document, in place.
@@ -130,10 +162,18 @@ pub fn resolve_subsystem_refs_with_metaparameters(
     value: &mut Value,
     base_path: &Path,
     api_meta: &BTreeMap<String, i64>,
-) -> Result<(), DiagnosticError> {
+) -> Result<Map<String, Value>, DiagnosticError> {
     let root_meta = root_metaparameter_env(value, api_meta);
     let mut visited = HashSet::new();
-    walk_top_level(value, base_path, &mut visited, &root_meta, api_meta)
+    walk_top_level(
+        value,
+        base_path,
+        &mut visited,
+        &root_meta,
+        api_meta,
+        true,
+        &root_meta,
+    )
 }
 
 /// A one-line rendering of an index-set declaration for the collision message
@@ -165,8 +205,15 @@ fn merge_subsystem_index_sets(
     registry: &mut Map<String, Value>,
     loaded: &Map<String, Value>,
     ref_str: &str,
+    env: &BTreeMap<String, i64>,
 ) -> Result<(), DiagnosticError> {
-    for (n, decl) in loaded {
+    for (n, raw) in loaded {
+        // esm-spec §4.7 "Index-set merge": fold the incoming contribution
+        // against the MOUNTING document's closed environment before comparing.
+        // Two IDENTICAL declarations, one folded and one not, are otherwise a
+        // `subsystem_index_set_conflict` — issue #198.
+        let owned = crate::template_imports::fold_mount_contribution(raw, env);
+        let decl = &owned;
         if let Some(existing) = registry.get(n) {
             if existing != decl {
                 return Err(err(
@@ -331,10 +378,42 @@ fn walk_top_level(
     visited: &mut HashSet<PathBuf>,
     parent_meta: &BTreeMap<String, i64>,
     api_meta: &BTreeMap<String, i64>,
-) -> Result<(), DiagnosticError> {
+    defer: bool,
+    caller_env: &BTreeMap<String, i64>,
+) -> Result<Map<String, Value>, DiagnosticError> {
+    // esm-spec §4.7 "Which environment a contribution folds against": the
+    // registry a contribution lands in here belongs to THIS document, so the
+    // fold environment is this document's own CLOSED one — not the caller's.
+    //
+    // Closed means the edge `bindings` that closed this document are part of it,
+    // overlaid on its own `default`s: §9.7.6 site 3 says an explicit edge binding
+    // wins over the referenced document's default. `caller_env` carries them in.
+    // Filtered to the names this document DECLARES, which is the same filter
+    // site 4 applies to the backfill — an outer metaparameter this document
+    // never declared must not size an axis here. At depth zero the overlay is a
+    // no-op: `caller_env` IS this environment there.
+    //
+    // Without it one resolved document disagrees with ITSELF: an axis the
+    // document declares goes through `resolve_template_machinery` with the edge
+    // bindings and folds to 7, while an axis contributed by its own nested mount
+    // folded against the unoverlaid defaults and came out 4.
+    let merge_env = {
+        let mut env = root_metaparameter_env(value, api_meta);
+        let declared: Vec<String> = value
+            .get("metaparameters")
+            .and_then(|v| v.as_object())
+            .map(|o| o.keys().cloned().collect())
+            .unwrap_or_default();
+        for (k, v) in caller_env {
+            if declared.contains(k) {
+                env.insert(k.clone(), *v);
+            }
+        }
+        env
+    };
     let obj = match value.as_object_mut() {
         Some(o) => o,
-        None => return Ok(()),
+        None => return Ok(Map::new()),
     };
 
     // esm-spec §4.7 / §9.7.10: a top-level `models.<k>` that is a bare `{ref}`
@@ -348,22 +427,53 @@ fn walk_top_level(
     // against `parent_meta` (the mounting document's full closed environment),
     // while only `api_meta` — the loader-API bindings, §9.7.6 site 4 —
     // backfills the leaf's own close. See `inline_toplevel_model_refs`.
-    inline_toplevel_model_refs(obj, base_path, visited, parent_meta, api_meta)?;
+    // `defer` splits INLINING from MERGING (esm-spec §4.7). The content must be
+    // spliced in HERE, before the root's own §9.7 machinery, so a rewrite target
+    // inside a mounted component lowers at all; but the `index_sets` it
+    // contributes must not join the registry until the mounting document has
+    // CLOSED (§9.7.6 site 3: "subsystem refs resolve post-close"). At the root
+    // the contributions are therefore collected and handed back for
+    // `parse::load_value` to merge after the close; nested scopes have already
+    // closed by the time they get here and merge in place.
+    let mut staged: Map<String, Value> = Map::new();
+    inline_toplevel_model_refs(
+        obj,
+        base_path,
+        visited,
+        parent_meta,
+        api_meta,
+        if defer { Some(&mut staged) } else { None },
+        &merge_env,
+    )?;
 
     // The importing document's index-set registry starts from its own
     // top-level `index_sets` — already carrying whatever the top-level model
     // mounts above merged in, since they run first — and model subsystem refs
     // merge theirs into it (esm-spec §4.7). Reaction-system subsystem refs do
     // NOT merge (Julia resolver scope), so they thread `None`.
-    let mut registry: Map<String, Value> = obj
-        .get("index_sets")
-        .and_then(|v| v.as_object())
-        .cloned()
-        .unwrap_or_default();
+    // When deferring, the registry starts EMPTY and the document's own
+    // `index_sets` are left alone: they are the mounting document's to close,
+    // and the contributions are compared against them only afterwards.
+    let mut registry: Map<String, Value> = if defer {
+        staged
+    } else {
+        obj.get("index_sets")
+            .and_then(|v| v.as_object())
+            .cloned()
+            .unwrap_or_default()
+    };
 
     if let Some(map) = obj.get_mut("models").and_then(|v| v.as_object_mut()) {
         for (_name, system) in map.iter_mut() {
-            walk_subsystems(system, base_path, visited, Some(&mut registry), parent_meta)?;
+            walk_subsystems(
+                system,
+                base_path,
+                visited,
+                Some(&mut registry),
+                parent_meta,
+                api_meta,
+                &merge_env,
+            )?;
         }
     }
     if let Some(map) = obj
@@ -371,17 +481,28 @@ fn walk_top_level(
         .and_then(|v| v.as_object_mut())
     {
         for (_name, system) in map.iter_mut() {
-            walk_subsystems(system, base_path, visited, None, parent_meta)?;
+            walk_subsystems(
+                system,
+                base_path,
+                visited,
+                None,
+                parent_meta,
+                api_meta,
+                &merge_env,
+            )?;
         }
     }
 
     // Write the merged registry back so the merged axes are visible post-load
     // (and, for a file loaded as a subsystem ref, so the importer can read this
     // file's complete index_sets to merge in turn).
+    if defer {
+        return Ok(registry);
+    }
     if !registry.is_empty() {
         obj.insert("index_sets".to_string(), Value::Object(registry));
     }
-    Ok(())
+    Ok(Map::new())
 }
 
 /// Inline every top-level `models.<k>` MOUNT EDGE — a bare `{ref}` (has `ref`,
@@ -422,6 +543,8 @@ fn inline_toplevel_model_refs(
     visited: &mut HashSet<PathBuf>,
     parent_meta: &BTreeMap<String, i64>,
     api_meta: &BTreeMap<String, i64>,
+    mut staged: Option<&mut Map<String, Value>>,
+    merge_env: &BTreeMap<String, i64>,
 ) -> Result<(), DiagnosticError> {
     let edge_names: Vec<String> = match obj.get("models").and_then(|v| v.as_object()) {
         Some(models) => models
@@ -539,9 +662,24 @@ fn inline_toplevel_model_refs(
                 .unwrap_or_default();
             crate::template_imports::apply_scope_injections(&mut comp, &injected)?;
 
-            if let Some(mut resolved) =
-                crate::template_imports::resolve_template_machinery(&comp, &leaf_dir, &bindings)?
-            {
+            // This IS a §4.7 mount edge, so the leaf resolves under the two
+            // mount-scope facts a root document does not have:
+            //
+            // * `mount_declared` — what the leaf's OWN nested mounts declare —
+            //   so the §9.7.6 site-4 widening composes down the reference DAG;
+            // * `mounted_leaf` — the leaf is NOT the last scope that can close a
+            //   name. Its `index_sets` merge into THIS document's registry below
+            //   and close there (§9.7.6 site 5), so an axis sized by a name only
+            //   the assembler declares stays symbolic rather than failing here.
+            let leaf_mount_declared =
+                crate::template_imports::collect_mount_declared_metaparameters(&comp, &leaf_dir);
+            if let Some(mut resolved) = crate::template_imports::resolve_template_machinery_scoped(
+                &comp,
+                &leaf_dir,
+                &bindings,
+                &leaf_mount_declared,
+                true,
+            )? {
                 // A mounted component is a self-contained build boundary: lower
                 // under Option B, then `expand`, so the spliced component carries
                 // the fully-expanded Option-A image and the assembling document's
@@ -572,6 +710,8 @@ fn inline_toplevel_model_refs(
                 visited,
                 &BTreeMap::new(),
                 &BTreeMap::new(),
+                false,
+                &bindings,
             )?;
 
             let sel = entry_obj.get("model").and_then(|v| v.as_str());
@@ -637,11 +777,17 @@ fn inline_toplevel_model_refs(
         if let Some(loaded) = comp.get("index_sets").and_then(|v| v.as_object()).cloned()
             && !loaded.is_empty()
         {
-            let registry = obj
-                .entry("index_sets".to_string())
-                .or_insert_with(|| Value::Object(Map::new()));
-            if let Some(registry) = registry.as_object_mut() {
-                merge_subsystem_index_sets(registry, &loaded, ref_str)?;
+            // Deferred at the ROOT (see `walk_top_level`): the contribution is
+            // staged, not merged, until the mounting document has closed.
+            if let Some(staged) = staged.as_deref_mut() {
+                merge_subsystem_index_sets(staged, &loaded, ref_str, merge_env)?;
+            } else {
+                let registry = obj
+                    .entry("index_sets".to_string())
+                    .or_insert_with(|| Value::Object(Map::new()));
+                if let Some(registry) = registry.as_object_mut() {
+                    merge_subsystem_index_sets(registry, &loaded, ref_str, merge_env)?;
+                }
             }
         }
         for blk in ["function_tables", "data_sources", "enums"] {
@@ -761,12 +907,20 @@ fn absolutize_nested_refs(value: &mut Value, base_dir: &Path) {
 /// Walk a model or reaction system value and resolve any refs in its
 /// `subsystems` map. `registry`, when `Some`, accumulates referenced files'
 /// top-level `index_sets` (esm-spec §4.7 model-subsystem merge).
+///
+/// `parent_meta` and `api_meta` are the two mounting-scope environments a
+/// `subsystems.<k>` edge needs, and they are NOT interchangeable — exactly as at
+/// the top-level `models.<k>` form ([`walk_top_level`]): edge `bindings`
+/// EXPRESSIONS fold against `parent_meta`, while only `api_meta` (the loader-API
+/// bindings, §9.7.6 site 4) backfills the leaf's own close.
 fn walk_subsystems(
     value: &mut Value,
     base_path: &Path,
     visited: &mut HashSet<PathBuf>,
     mut registry: Option<&mut Map<String, Value>>,
     parent_meta: &BTreeMap<String, i64>,
+    api_meta: &BTreeMap<String, i64>,
+    merge_env: &BTreeMap<String, i64>,
 ) -> Result<(), DiagnosticError> {
     let obj = match value.as_object_mut() {
         Some(o) => o,
@@ -792,6 +946,8 @@ fn walk_subsystems(
             visited,
             registry.as_deref_mut(),
             parent_meta,
+            api_meta,
+            merge_env,
         )?;
         subs.insert(name, resolved);
     }
@@ -859,6 +1015,8 @@ fn resolve_value(
     visited: &mut HashSet<PathBuf>,
     registry: Option<&mut Map<String, Value>>,
     parent_meta: &BTreeMap<String, i64>,
+    api_meta: &BTreeMap<String, i64>,
+    merge_env: &BTreeMap<String, i64>,
 ) -> Result<Value, DiagnosticError> {
     if let Some(obj) = value.as_object()
         && let Some(ref_val) = obj.get("ref")
@@ -906,10 +1064,44 @@ fn resolve_value(
         // (esm-spec §9.7.6 binding site 3), then run the §9.6.3 fixpoint so
         // the inlined component carries only concrete Expression ASTs.
         let parent_dir = canonical.parent().unwrap_or(base_path).to_path_buf();
+        // The edge `bindings` that CLOSE this leaf, hoisted out of the closure:
+        // the nested walk below needs them as its fold environment (esm-spec §4.7
+        // "Which environment a contribution folds against" — an axis this leaf's
+        // own mounts contribute is sized in THIS leaf's closed scope, and site 3
+        // says the edge binding wins over the leaf's own default).
+        let mut edge_bindings: BTreeMap<String, i64> = BTreeMap::new();
         let edge_result: Result<(), DiagnosticError> = (|| {
             crate::lower_expression_templates::reject_expression_templates_pre_v04(&parsed)?;
             crate::template_imports::reject_template_imports_pre_v08(&parsed)?;
-            let bindings = read_edge_bindings(obj, parent_meta, "subsystem ref")?;
+            // §9.7.6 binding site 3: close the leaf's metaparameters. Explicit
+            // edge `bindings` win, backfilled by the LOADER-API bindings (site
+            // 4) for the names the leaf DECLARES — the SAME backfill the
+            // top-level `models.<k>` mount runs (§4.7 "Two mount forms, one
+            // mechanism"). Without it a discovered `extent` (§8.9.4) reached a
+            // top-level-mounted leaf and not a subsystem-mounted one, so the
+            // same two documents sized the same axis differently depending only
+            // on which attachment point the assembler picked — and the
+            // subsystem form sized it at the leaf's placeholder default, so the
+            // ingested field came back ZERO-LENGTH with no diagnostic at all.
+            //
+            // The backfill reads `api_meta`, NOT `parent_meta`. `parent_meta`
+            // additionally carries the mounting document's OWN declared
+            // defaults, and forwarding those would let an assembler's unrelated
+            // metaparameter silently resize a leaf axis the edge never bound.
+            // Names the leaf does not declare are never forwarded, so they
+            // cannot raise `template_import_unknown_name` against it.
+            let leaf_declared: Vec<String> = parsed
+                .get("metaparameters")
+                .and_then(|v| v.as_object())
+                .map(|o| o.keys().cloned().collect())
+                .unwrap_or_default();
+            let mut bindings: BTreeMap<String, i64> = api_meta
+                .iter()
+                .filter(|(k, _)| leaf_declared.contains(k))
+                .map(|(k, v)| (k.clone(), *v))
+                .collect();
+            bindings.extend(read_edge_bindings(obj, parent_meta, "subsystem ref")?);
+            edge_bindings = bindings.clone();
             // esm-spec §9.7.10 form A: the edge's `expression_template_imports`
             // inject a discretization into the referenced component's own
             // scope, appended BEFORE resolution so the §9.6.3 fixpoint lowers
@@ -922,10 +1114,21 @@ fn resolve_value(
                 .cloned()
                 .unwrap_or_default();
             crate::template_imports::apply_scope_injections(&mut parsed, &injected)?;
-            if let Some(mut resolved) = crate::template_imports::resolve_template_machinery(
+            // As at the top-level mount form: the leaf's own nested mounts
+            // widen its §9.7.6 site-4 check, and `mounted_leaf` keeps an axis
+            // this scope cannot size symbolic for the merge below to close
+            // (§9.7.6 site 5).
+            let leaf_mount_declared =
+                crate::template_imports::collect_mount_declared_metaparameters(
+                    &parsed,
+                    &parent_dir,
+                );
+            if let Some(mut resolved) = crate::template_imports::resolve_template_machinery_scoped(
                 &parsed,
                 &parent_dir,
                 &bindings,
+                &leaf_mount_declared,
+                true,
             )? {
                 // A referenced subsystem is a self-contained build boundary
                 // (mirrors Julia `_load_ref` → `_lower_and_coerce`): lower under
@@ -965,22 +1168,30 @@ fn resolve_value(
         // today, but a path left marked visited would silently skip the file
         // if resolution ever becomes partially recoverable.
         let nested_result = (|| -> Result<(), DiagnosticError> {
-            // The referenced document's own metaparameters were just closed and
-            // folded by `resolve_template_machinery` above, so any binding on
-            // its OWN nested subsystem refs arrives with metaparameter names
-            // already substituted to concrete integers — its refs fold against
-            // an empty environment (esm-spec §9.7.6: refs resolve post-close).
+            // `parent_meta` is empty: the referenced document's own
+            // metaparameters were just closed and folded by
+            // `resolve_template_machinery` above, so any binding on its OWN
+            // nested subsystem refs arrives with metaparameter names already
+            // substituted to concrete integers and folds against an empty
+            // environment (esm-spec §9.7.6: refs resolve post-close).
+            //
+            // `api_meta` is NOT empty: the loader-API bindings are a
+            // document-wide site-4 environment, and they reach every leaf in the
+            // subsystem DAG that DECLARES the name — mirroring the Python
+            // `_resolve_model_subsystems(..., api_meta=api_meta)` recursion.
             walk_top_level(
                 &mut parsed,
                 &parent_dir,
                 visited,
                 &BTreeMap::new(),
-                &BTreeMap::new(),
+                api_meta,
+                false,
+                &edge_bindings,
             )?;
             if let Some(reg) = registry
                 && let Some(loaded) = parsed.get("index_sets").and_then(|v| v.as_object())
             {
-                merge_subsystem_index_sets(reg, &loaded.clone(), ref_str)?;
+                merge_subsystem_index_sets(reg, &loaded.clone(), ref_str, merge_env)?;
             }
             Ok(())
         })();
@@ -992,7 +1203,15 @@ fn resolve_value(
     }
 
     let mut value = value;
-    walk_subsystems(&mut value, base_path, visited, registry, parent_meta)?;
+    walk_subsystems(
+        &mut value,
+        base_path,
+        visited,
+        registry,
+        parent_meta,
+        api_meta,
+        merge_env,
+    )?;
     Ok(value)
 }
 

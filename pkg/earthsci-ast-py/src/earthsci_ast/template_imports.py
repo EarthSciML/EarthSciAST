@@ -519,6 +519,39 @@ def _fold_structural_sites(x: Any, ctx: str) -> None:
         _fold_structural_sites(v, ctx)
 
 
+def fold_mount_contribution(decl: Any, env: dict[str, int]) -> Any:
+    """Fold ONE §4.7 mount contribution's interval ``size`` against the MOUNTING
+    document's already-closed metaparameter environment, before the deep-equal
+    comparison that merges it (esm-spec §4.7 "Index-set merge").
+
+    This is the step that makes the merge order answerable. A §4.7 mount
+    resolves POST-CLOSE (§9.7.6 site 3: "the mounting document closes its own
+    metaparameters before its refs resolve"), so by the time a contribution
+    arrives the registry side has already folded to integers. Comparing an
+    unfolded contribution against a folded registry entry makes two IDENTICAL
+    declarations collide, which is issue #198; and leaving the contribution
+    unfolded publishes a resolved document whose axis still carries a
+    metaparameter name, which contradicts "the mounted form is fully concrete
+    when it splices in" and §9.7.6 site 5's "closed at some enclosing document's
+    close". Folding here answers both.
+
+    A ``size`` that is already an integer is returned untouched. A ``size`` whose
+    free names are NOT all in ``env`` stays symbolic rather than raising: the
+    enclosing document is not obliged to be able to close a name the assembly
+    never declared, and leaving it open preserves what loads today."""
+    if not _is_object(decl):
+        return decl
+    sz = decl.get("size")
+    if sz is None or _is_int(sz):
+        return decl
+    folded = _try_fold(_substitute_metaparams(sz, env), "index set size")
+    if folded is None:
+        return decl
+    out = dict(decl)
+    out["size"] = folded
+    return out
+
+
 def _fold_index_set_sizes(index_sets: dict[str, Any], ctx: str, *, strict: bool) -> None:
     """Fold interval ``size`` metaparameter expressions in an ``index_sets``
     registry. With ``strict=True`` (the root document, after its
@@ -1601,21 +1634,33 @@ def _resolve_component_imports(
 
 
 def _close_document_metaparameters(
-    doc_meta: dict[str, Any], api_raw: dict[str, Any]
+    doc_meta: dict[str, Any],
+    api_raw: dict[str, Any],
+    mount_declared: frozenset[str] = frozenset(),
 ) -> dict[str, int]:
     """§9.7.6 sites 4-5: close the document's metaparameters — already-closed
     edge bindings won earlier; now loader-API bindings (``api_raw``) win over
     declared defaults, and a name still open after both is
-    ``metaparameter_unbound``. Returns the closed ``name -> int`` value map."""
+    ``metaparameter_unbound``. Returns the closed ``name -> int`` value map.
+
+    ``mount_declared`` is the set of metaparameter names declared by the
+    documents this one MOUNTS (§4.7, either mount form, transitively). A
+    loader-API binding may name one of those: it is meaningful even though this
+    document does not declare it, because the mount edge forwards it into the
+    leaf's own close for the names the leaf declares. Such a name is accepted
+    and CONSUMED here — it closes nothing in this scope, so it is absent from
+    the returned map. A name in neither set is still a typo and still raises
+    ``template_import_unknown_name``: bindings never invent metaparameters."""
     api: dict[str, int] = {}
     for k, v in api_raw.items():
         api[str(k)] = _require_int(v, f"loader API metaparameter '{k}'")
     for k in sorted(api):
-        if k not in doc_meta:
+        if k not in doc_meta and k not in mount_declared:
             raise ExpressionTemplateError(
                 TEMPLATE_IMPORT_UNKNOWN_NAME,
-                f"loader API binds metaparameter '{k}', which the document "
-                "does not declare (esm-spec §9.7.6)",
+                f"loader API binds metaparameter '{k}', which neither this "
+                "document nor any document it mounts declares "
+                "(esm-spec §9.7.6)",
             )
     values: dict[str, int] = {}
     open_names: list[str] = []
@@ -1698,12 +1743,25 @@ def _substitute_closed_metaparameters(
 
 
 def _fold_closed_document(
-    root: dict[str, Any], top_templates: dict[str, Any], doc_isets: dict[str, Any]
+    root: dict[str, Any],
+    top_templates: dict[str, Any],
+    doc_isets: dict[str, Any],
+    *,
+    strict: bool = True,
 ) -> None:
     """Fold the structural integer sites (``faq`` ranges, ``makearray``
     regions) across components + root templates, and the interval ``size``
-    expressions in the index-set registry (strict: a still-open name is
-    ``metaparameter_unbound``). Mutates in place."""
+    expressions in the index-set registry. Mutates in place.
+
+    ``strict`` says whether this document is the LAST scope that could close a
+    name. At a root document it is, so a still-open ``size`` is
+    ``metaparameter_unbound``. At a §4.7 mount edge it is NOT: the leaf resolves
+    in its own scope, but its ``index_sets`` then merge into the MOUNTING
+    document's registry (§4.7 "Index-set merge") and close there, so a name the
+    leaf cannot bind stays symbolic and travels up rather than failing here.
+    That is §9.7.6 site 5's "a metaparameter an edge leaves unbound ... is
+    closed at some enclosing document's close", applied to the axis the name
+    sizes."""
     for compkind in _COMPONENT_KINDS:
         comps = root.get(compkind)
         if not _is_object(comps):
@@ -1713,7 +1771,7 @@ def _fold_closed_document(
                 _fold_structural_sites(comp, f"{compkind}.{cname}")
     for tn, td in top_templates.items():
         _fold_structural_sites(td, f"document.expression_templates.{tn}")
-    _fold_index_set_sizes(doc_isets, "document", strict=True)
+    _fold_index_set_sizes(doc_isets, "document", strict=strict)
 
 
 def _finalize_document(
@@ -1761,10 +1819,252 @@ def _finalize_document(
     return root
 
 
+def collect_mount_declared_metaparameters(
+    raw: Any,
+    base_path: str,
+    _seen: set[str] | None = None,
+    *,
+    follow_imports: bool = False,
+) -> frozenset[str]:
+    """The metaparameter names declared by every document ``raw`` MOUNTS, at
+    either §4.7 mount form, transitively through the mount DAG.
+
+    A §4.7 mount edge consumes the referenced document's ``metaparameters`` at
+    the edge (§9.7.6 binding site 3), so those names never reach the mounting
+    document's own declared set — which is why a loader-API binding for one of
+    them used to be refused at a root that had no reason to redeclare it. This
+    walk is what lets the site-4 check (and the §8.9.4 ``extent`` check) ask
+    "does ANYONE in this assembly declare that name?" instead of "does the root".
+
+    Reads only each referenced file's top-level ``metaparameters`` keys. A ref
+    that cannot be read is ignored: this walk exists to WIDEN acceptance, and
+    the resolution error belongs to the ref resolver, which reports it with the
+    proper mount pointer. Cycles terminate on ``_seen``.
+
+    ``follow_imports`` additionally follows ``expression_template_imports``
+    refs (§9.7.2), at the document and the component level. That is a DIFFERENT
+    question from the mount one and only :func:`check_data_source_extents` asks
+    it: a metaparameter an imported library declares and the edge leaves unbound
+    is RE-EXPORTED into this document's own scope (§9.7.6 site 2), so the loader
+    API may bind it here — which the site-4 check already allows, because by the
+    time it runs the re-export has joined the document's declared set. The
+    static ``extent`` check runs on the AUTHORED tree, before any of that, so it
+    has to reach the same names by walking. It must NOT widen the site-4 check
+    itself: a name an import edge BINDS is consumed rather than re-exported, and
+    site 4 is right to refuse it."""
+    from .parse import _fetch_ref_content, expand_ref_env
+
+    if not _is_object(raw):
+        return frozenset()
+    seen: set[str] = set() if _seen is None else _seen
+    out: set[str] = set()
+
+    def visit_ref(ref_value: Any) -> None:
+        if not _is_object(ref_value):
+            return
+        ref_str = ref_value.get("ref")
+        if not isinstance(ref_str, str):
+            return
+        try:
+            expanded = expand_ref_env(ref_str)
+            key = (
+                expanded
+                if expanded.startswith("http")
+                else os.path.normpath(os.path.join(str(base_path), expanded))
+            )
+            if key in seen:
+                return
+            seen.add(key)
+            import json as _json
+
+            child = _json.loads(_fetch_ref_content(expanded, str(base_path)))
+        except Exception:
+            return
+        if not _is_object(child):
+            return
+        decls = child.get("metaparameters")
+        if _is_object(decls):
+            out.update(str(n) for n in decls)
+        child_base = (
+            expanded.rsplit("/", 1)[0]
+            if expanded.startswith("http")
+            else os.path.dirname(os.path.join(str(base_path), expanded))
+        )
+        out.update(
+            collect_mount_declared_metaparameters(
+                child, child_base, seen, follow_imports=follow_imports
+            )
+        )
+
+    def visit_imports(holder: Any) -> None:
+        """The §9.7.2 import edges one scope carries, when asked for."""
+        if not follow_imports or not _is_object(holder):
+            return
+        entries = holder.get("expression_template_imports")
+        if not isinstance(entries, list):
+            return
+        for entry in entries:
+            visit_ref(entry)
+
+    def visit_subsystems(holder: Any) -> None:
+        """A subsystem map, to any depth: an inline entry may itself hold the
+        `{ref}` mount whose leaf declares the name."""
+        subs = holder.get("subsystems")
+        if not _is_object(subs):
+            return
+        for sub in subs.values():
+            if not _is_object(sub):
+                continue
+            visit_ref(sub)  # a `subsystems.<k>` {ref}
+            visit_imports(sub)
+            visit_subsystems(sub)
+
+    visit_imports(raw)  # a DOCUMENT-level `expression_template_imports`
+    for compkind in _COMPONENT_KINDS:
+        comps = raw.get(compkind)
+        if not _is_object(comps):
+            continue
+        for comp in comps.values():
+            if not _is_object(comp):
+                continue
+            visit_ref(comp)  # a top-level `models.<k>` / `reaction_systems.<k>` {ref}
+            visit_imports(comp)
+            visit_subsystems(comp)
+    return frozenset(out)
+
+
+def _document_has_unresolved_mount(raw: Any) -> bool:
+    """Whether ``raw`` still carries an unresolved §4.7 mount — a top-level
+    ``models.<k>`` / ``reaction_systems.<k>`` ``{ref}`` or a ``subsystems.<k>``
+    ``{ref}``."""
+    if not _is_object(raw):
+        return False
+    for compkind in _COMPONENT_KINDS:
+        comps = raw.get(compkind)
+        if not _is_object(comps):
+            continue
+        for comp in comps.values():
+            if not _is_object(comp):
+                continue
+            if "ref" in comp:
+                return True
+            subs = comp.get("subsystems")
+            if _is_object(subs) and any(_is_object(x) and "ref" in x for x in subs.values()):
+                return True
+    return False
+
+
+def _index_sets_are_fully_folded(raw: Any) -> bool:
+    """Whether ``raw`` declares at least one index set and every interval
+    ``size`` in the registry is already a concrete integer — the state a
+    document reaches only after its metaparameters have closed and folded.
+    Requiring at least one entry keeps the vacuous case (no ``index_sets`` at
+    all, where nothing has been folded) on the checked path."""
+    isets = raw.get("index_sets") if _is_object(raw) else None
+    if not _is_object(isets) or not isets:
+        return False
+    for decl in isets.values():
+        if not _is_object(decl):
+            continue
+        size = decl.get("size")
+        if size is None:
+            continue
+        if isinstance(size, bool) or not isinstance(size, int):
+            return False
+    return True
+
+
+def document_is_in_resolved_shape(raw: Any) -> bool:
+    """Whether ``raw`` is in the shape only a RESOLVED document has: no
+    unresolved §4.7 mount left, and at least one index set with every interval
+    ``size`` already a concrete integer.
+
+    :func:`check_data_source_extents` is an AUTHORING check and has to stay
+    idempotent. A §4.7 mount CONSUMES the leaf's ``metaparameters`` (§9.7.6 site
+    3), so once a document has been resolved, a name only the leaf declared is
+    declared nowhere and the ``{ref}`` stub the mount walk reads is gone — while
+    the ``extent`` that named it is still there, having already done its job. A
+    binding that re-loads its own resolved document (Rust does, at build) must
+    not be told that document is invalid. esm-spec §8.9.4 states the exemption
+    normatively, so all five bindings answer the same document the same way."""
+    return not _document_has_unresolved_mount(raw) and _index_sets_are_fully_folded(raw)
+
+
+def document_declares_an_extent(raw: Any) -> bool:
+    """Whether any ``data_sources`` entry carries an ``extent`` (§8.9.4).
+
+    The cheap guard on the mount walk below: the widened site-4 check and the
+    ``extent`` check are the only two callers, and neither can matter unless the
+    load either carries loader-API bindings or the document declares an
+    ``extent``. A document with neither pays no ref reads for this at all."""
+    if not _is_object(raw):
+        return False
+    sources = raw.get("data_sources")
+    if not _is_object(sources):
+        return False
+    return any(_is_object(s) and _is_object(s.get("extent")) for s in sources.values())
+
+
+def check_data_source_extents(
+    raw: Any, base_path: str, mount_declared: frozenset[str] | None = None
+) -> None:
+    """esm-spec §8.9.4: every ``data_sources.<k>.extent.metaparameter`` MUST name
+    a metaparameter this document declares, or one a document it mounts declares.
+
+    A discovered extent is a §9.7.6 site-4 loader-API binding, and "binding an
+    unknown name is an error" — but that error could only be raised once the
+    source had been SAMPLED, which happens at build. So an ``extent`` naming a
+    metaparameter nobody declares used to validate clean and fail only when the
+    file was read, with a diagnostic about the loader API rather than about the
+    typo. This is the same condition checked statically, off the document alone,
+    so ``validate`` refuses it: ``template_import_unknown_name``, the code
+    §9.7.6 already gives an unknown name at a binding site."""
+    if not _is_object(raw):
+        return
+    sources = raw.get("data_sources")
+    if not _is_object(sources):
+        return
+    if document_is_in_resolved_shape(raw):
+        return
+    declared = set(_collect_metaparam_decls(raw, "document"))
+    if mount_declared is None:
+        mount_declared = collect_mount_declared_metaparameters(raw, base_path)
+    declared |= set(mount_declared)
+    # Widened LAZILY, only for a name about to be refused: a metaparameter an
+    # imported library declares and the edge leaves unbound is RE-EXPORTED into
+    # this document's scope (§9.7.6 site 2) and is a perfectly good loader-API
+    # binding target — but this check runs on the AUTHORED tree, before the
+    # imports resolve, so it has to walk for it. A conforming document pays
+    # nothing: the walk runs only on the path that would otherwise raise.
+    reachable: frozenset[str] | None = None
+    for key, src in sources.items():
+        if not _is_object(src):
+            continue
+        extent = src.get("extent")
+        if not _is_object(extent):
+            continue
+        name = extent.get("metaparameter")
+        if not isinstance(name, str) or name in declared:
+            continue
+        if reachable is None:
+            reachable = collect_mount_declared_metaparameters(raw, base_path, follow_imports=True)
+        if name in reachable:
+            continue
+        raise ExpressionTemplateError(
+            TEMPLATE_IMPORT_UNKNOWN_NAME,
+            f"data_sources.{key}.extent binds metaparameter '{name}', which "
+            "neither this document nor any document it mounts declares "
+            "(esm-spec §8.9.4, §9.7.6)",
+        )
+
+
 def resolve_template_machinery(
     raw: Any,
     base_path: str,
     metaparameters: dict[str, int] | None = None,
+    *,
+    mount_declared: frozenset[str] | None = None,
+    mounted_leaf: bool = False,
 ) -> dict[str, Any] | None:
     """Resolve every esm-spec §9.7 construct of the ROOT document ``raw``
     (relative import refs resolve against ``base_path``): imports recursively
@@ -1782,16 +2082,28 @@ def resolve_template_machinery(
     Option A expands call sites, it does not delete declarations). ``None`` when
     the document carries no §9.7 machinery (the legacy fast path). Does not
     mutate the input.
+
+    ``mount_declared`` widens the site-4 check to the names declared by the
+    documents this one mounts — see
+    :func:`collect_mount_declared_metaparameters`. ``mounted_leaf`` says this
+    call IS a §4.7 mount edge, so index-set sizes this scope cannot close stay
+    symbolic for the mounting registry to close (§9.7.6 site 5).
     """
 
     api_raw = dict(metaparameters or {})
+    mounted = frozenset() if mount_declared is None else mount_declared
     if not _has_import_machinery(raw):
-        if api_raw:
-            names = ", ".join(sorted(str(k) for k in api_raw))
+        # A binding naming something a MOUNTED document declares is meaningful
+        # even here: this document has no §9.7 machinery of its own, and the
+        # mount edge forwards the name into the leaf's close. Only a name no
+        # document in the assembly declares is the typo this refuses.
+        unknown = sorted(str(k) for k in api_raw if str(k) not in mounted)
+        if unknown:
             raise ExpressionTemplateError(
                 TEMPLATE_IMPORT_UNKNOWN_NAME,
-                f"loader API binds metaparameter(s) {names} but the document "
-                "declares none (esm-spec §9.7.6)",
+                f"loader API binds metaparameter(s) {', '.join(unknown)} which "
+                "neither this document nor any document it mounts declares "
+                "(esm-spec §9.7.6)",
             )
         return None
 
@@ -1818,7 +2130,7 @@ def resolve_template_machinery(
     # place); the two phases that rebind a registry return the new value.
     is_library, top_templates = _resolve_root_library(root, base_dir, stack, doc_meta, doc_isets)
     _resolve_component_imports(root, base_dir, stack, doc_meta, doc_isets)
-    values = _close_document_metaparameters(doc_meta, api_raw)
+    values = _close_document_metaparameters(doc_meta, api_raw, mounted)
     _reject_metaparameter_shadowing(root, doc_meta, doc_isets)
     # Expression-position substitution folds THIS document's own closed
     # metaparameters and nothing else. An `expression_template_imports[k].bindings`
@@ -1836,7 +2148,14 @@ def resolve_template_machinery(
     # as the edge binding VALUE (`{"N": "NY"}`), which §9.7.6 resolves in the
     # importing scope.
     doc_isets = _substitute_closed_metaparameters(root, top_templates, doc_isets, values)
-    _fold_closed_document(root, top_templates, doc_isets)
+    # `mounted_leaf` says a MOUNTING document's registry will receive these
+    # index sets and close them (§4.7 "Index-set merge"), so an axis this scope
+    # cannot size stays symbolic instead of being `metaparameter_unbound` here.
+    # Without it, whether a mounted leaf accepts an assembler-scoped axis turned
+    # on `_has_import_machinery` — a whole-document boolean — so adding an
+    # `expression_template_imports` entry for a library the leaf never calls
+    # changed whether the leaf's shape resolved.
+    _fold_closed_document(root, top_templates, doc_isets, strict=not mounted_leaf)
     return _finalize_document(root, is_library, top_templates, doc_isets, declarations)
 
 

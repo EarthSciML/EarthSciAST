@@ -22,7 +22,7 @@ import (
 // The function modifies file in-place, replacing reference objects with the
 // resolved model or reaction system content.
 func ResolveSubsystemRefs(file *ESMFile, basePath string) error {
-	return resolveSubsystemRefsWithMeta(file, basePath, nil)
+	return resolveSubsystemRefsWithMeta(file, basePath, nil, nil)
 }
 
 // resolveSubsystemRefsWithMeta is ResolveSubsystemRefs threaded with the
@@ -35,7 +35,15 @@ func ResolveSubsystemRefs(file *ESMFile, basePath string) error {
 // with the loader-API bindings) and passes it here BEFORE the root's
 // metaparameters are consumed by the template-machinery resolver. Direct
 // callers (which have no mounting metaparameters) pass nil.
-func resolveSubsystemRefsWithMeta(file *ESMFile, basePath string, parentMeta map[string]int64) error {
+//
+// `apiMeta` is a DIFFERENT thing from `parentMeta` and the two must not be
+// confused: it is the raw loader-API binding map (esm-spec §9.7.6 binding site
+// 4) exactly as the caller supplied it, threaded down to seed each mount edge's
+// close for the names the LEAF declares (§4.7 "Two mount forms, one mechanism").
+// `parentMeta` is the mounting document's own closed environment — its declared
+// defaults included — and forwarding THAT into a leaf would let an assembler's
+// unrelated metaparameter silently resize a leaf axis the edge never bound.
+func resolveSubsystemRefsWithMeta(file *ESMFile, basePath string, parentMeta, apiMeta map[string]int64) error {
 	visited := make(map[string]bool)
 	// The importing document's index_sets registry (esm-spec §4.7): a mounted
 	// subsystem file's top-level index_sets merge into it, so a mounted mesh's
@@ -44,17 +52,21 @@ func resolveSubsystemRefsWithMeta(file *ESMFile, basePath string, parentMeta map
 	if file.IndexSets == nil {
 		file.IndexSets = map[string]IndexSet{}
 	}
-	return resolveSubsystemRefsInternal(file, basePath, visited, file.IndexSets, parentMeta)
+	// `parentMeta` at the ROOT is the root document's closed environment, and the
+	// registry it owns is the one every §4.7 contribution merges into — so the
+	// two travel together down the walk, `rootEnv` staying fixed while
+	// `parentMeta` narrows to each nested scope.
+	return resolveSubsystemRefsInternal(file, basePath, visited, file.IndexSets, parentMeta, apiMeta, parentMeta)
 }
 
 // resolveSubsystemRefsInternal is the recursive implementation that tracks
 // visited paths for circular reference detection and threads the importing
 // document's index_sets registry (esm-spec §4.7 index-set merge) and its closed
 // metaparameter environment (esm-spec §9.7.6 binding site 3).
-func resolveSubsystemRefsInternal(file *ESMFile, basePath string, visited map[string]bool, registry map[string]IndexSet, parentMeta map[string]int64) error {
+func resolveSubsystemRefsInternal(file *ESMFile, basePath string, visited map[string]bool, registry map[string]IndexSet, parentMeta, apiMeta, rootEnv map[string]int64) error {
 	// Top-level `models.<k>` mount edges FIRST: the component each one splices in
 	// may itself carry `subsystems`, and the walk below is what resolves those.
-	if err := inlineTopLevelModelRefs(file, basePath, visited, registry, parentMeta); err != nil {
+	if err := inlineTopLevelModelRefs(file, basePath, visited, registry, parentMeta, apiMeta, rootEnv); err != nil {
 		return err
 	}
 
@@ -63,7 +75,7 @@ func resolveSubsystemRefsInternal(file *ESMFile, basePath string, visited map[st
 	// struct into file.Models is needed.
 	for modelName, model := range file.Models {
 		prefix := fmt.Sprintf("/models/%s/subsystems", modelName)
-		if err := resolveSubsystemMap(model.Subsystems, basePath, visited, registry, parentMeta, prefix, subsystemMount); err != nil {
+		if err := resolveSubsystemMap(model.Subsystems, basePath, visited, registry, parentMeta, apiMeta, rootEnv, prefix, subsystemMount); err != nil {
 			return fmt.Errorf("model %q subsystems: %w", modelName, err)
 		}
 	}
@@ -72,7 +84,7 @@ func resolveSubsystemRefsInternal(file *ESMFile, basePath string, visited map[st
 	// in place).
 	for rsName, rs := range file.ReactionSystems {
 		prefix := fmt.Sprintf("/reaction_systems/%s/subsystems", rsName)
-		if err := resolveSubsystemMap(rs.Subsystems, basePath, visited, registry, parentMeta, prefix, subsystemMount); err != nil {
+		if err := resolveSubsystemMap(rs.Subsystems, basePath, visited, registry, parentMeta, apiMeta, rootEnv, prefix, subsystemMount); err != nil {
 			return fmt.Errorf("reaction_system %q subsystems: %w", rsName, err)
 		}
 	}
@@ -152,7 +164,7 @@ func extractTopLevelModelRefEdges(jsonStr string) map[string]map[string]any {
 // pipeline — merging a leaf's folded axis against an unfolded importer
 // declaration is the fold-before-merge collision issue #198 reported.
 func inlineTopLevelModelRefs(file *ESMFile, basePath string, visited map[string]bool,
-	registry map[string]IndexSet, parentMeta map[string]int64) error {
+	registry map[string]IndexSet, parentMeta, apiMeta, rootEnv map[string]int64) error {
 	if len(file.topLevelModelRefs) == 0 {
 		return nil
 	}
@@ -163,8 +175,8 @@ func inlineTopLevelModelRefs(file *ESMFile, basePath string, visited map[string]
 		edge := file.topLevelModelRefs[name]
 		ref, _ := edge["ref"].(string)
 		holder := map[string]any{name: edge}
-		if err := resolveSubsystemMap(holder, basePath, visited, registry, parentMeta,
-			"/models", topLevelModelMount); err != nil {
+		if err := resolveSubsystemMap(holder, basePath, visited, registry, parentMeta, apiMeta,
+			rootEnv, "/models", topLevelModelMount); err != nil {
 			return err
 		}
 		resolvedRaw, ok := holder[name].(map[string]any)
@@ -229,7 +241,7 @@ func inlineTopLevelModelRefs(file *ESMFile, basePath string, visited map[string]
 // inliner drops them, so the leaf's assertions are never interpreted by a
 // document that may go on to couple it.
 func inlineNestedTopLevelModelRefs(view map[string]any, basePath string, visited map[string]bool,
-	registry map[string]IndexSet, parentMeta map[string]int64, pathPrefix string) error {
+	registry map[string]IndexSet, parentMeta, apiMeta, rootEnv map[string]int64, pathPrefix string) error {
 	models, ok := view["models"].(map[string]any)
 	if !ok || len(models) == 0 {
 		return nil
@@ -251,8 +263,8 @@ func inlineNestedTopLevelModelRefs(view map[string]any, basePath string, visited
 	if len(edges) == 0 {
 		return nil
 	}
-	if err := resolveSubsystemMap(edges, basePath, visited, registry, parentMeta,
-		pathPrefix, topLevelModelMount); err != nil {
+	if err := resolveSubsystemMap(edges, basePath, visited, registry, parentMeta, apiMeta,
+		rootEnv, pathPrefix, topLevelModelMount); err != nil {
 		return err
 	}
 	for name, resolved := range edges {
@@ -284,6 +296,12 @@ func showIndexSet(s IndexSet) string {
 	if s.Size != nil {
 		parts = append(parts, fmt.Sprintf("size=%d", *s.Size))
 	}
+	if s.SizeExpr != nil {
+		// An unfolded size (esm-spec §4.7 "Index-set merge", §9.7.6 site 5):
+		// name it as authored so a collision between a symbolic and a folded
+		// declaration of one axis reads as the disagreement it is.
+		parts = append(parts, fmt.Sprintf("size=%v", s.SizeExpr))
+	}
 	if len(s.Members) > 0 {
 		parts = append(parts, fmt.Sprintf("members=%v", s.Members))
 	}
@@ -296,6 +314,48 @@ func showIndexSet(s IndexSet) string {
 	return strings.Join(parts, ", ")
 }
 
+// foldMountContribution folds ONE §4.7 mount contribution's interval `size`
+// against the MOUNTING document's already-closed metaparameter environment,
+// before the deep-equal comparison that merges it (esm-spec §4.7 "Index-set
+// merge").
+//
+// This is the step that makes the merge order answerable. A §4.7 mount resolves
+// POST-CLOSE (§9.7.6 site 3: "the mounting document closes its own
+// metaparameters before its refs resolve"), so by the time a contribution
+// arrives the registry side has already folded to integers. Comparing an
+// unfolded contribution against a folded registry entry makes two IDENTICAL
+// declarations collide, which is issue #198; and leaving the contribution
+// unfolded publishes a resolved document whose axis still carries a
+// metaparameter name, which contradicts "the mounted form is fully concrete when
+// it splices in" and §9.7.6 site 5's "closed at some enclosing document's close".
+//
+// A `size` already an integer is left alone. A `size` whose free names are NOT
+// all in env stays symbolic rather than erroring: the enclosing document is not
+// obliged to be able to close a name the assembly never declared.
+func foldMountContribution(declRaw any, env map[string]int64) any {
+	decl, ok := declRaw.(map[string]any)
+	if !ok {
+		return declRaw
+	}
+	size, present := decl["size"]
+	if !present || size == nil {
+		return declRaw
+	}
+	if _, isInt := asInt64Strict(size); isInt {
+		return declRaw
+	}
+	folded, err := evalMetaExpr(size, env, "index set size")
+	if err != nil {
+		return declRaw
+	}
+	out := make(map[string]any, len(decl))
+	for k, v := range decl {
+		out[k] = v
+	}
+	out["size"] = folded
+	return out
+}
+
 // mergeSubsystemIndexSets merges a referenced subsystem file's (already
 // metaparameter-folded) top-level `index_sets` into the importing document's
 // registry (esm-spec §4.7, mirroring the §9.7.5 template-import merge).
@@ -303,13 +363,14 @@ func showIndexSet(s IndexSet) string {
 // load-time error `subsystem_index_set_conflict` (§9.6.6) — the mounted-mesh
 // failure mode this makes loud. Mirrors the Julia reference
 // `_merge_subsystem_index_sets!`.
-func mergeSubsystemIndexSets(registry map[string]IndexSet, view map[string]any, ref string) error {
+func mergeSubsystemIndexSets(registry map[string]IndexSet, view map[string]any, ref string,
+	rootEnv map[string]int64) error {
 	isetsRaw, ok := view["index_sets"].(map[string]any)
 	if !ok {
 		return nil
 	}
 	for _, n := range sortedKeys(isetsRaw) {
-		b, err := json.Marshal(isetsRaw[n])
+		b, err := json.Marshal(foldMountContribution(isetsRaw[n], rootEnv))
 		if err != nil {
 			return fmt.Errorf("subsystem index set %q from ref %q: %w", n, ref, err)
 		}
@@ -360,7 +421,7 @@ var (
 // then the §9.6.3 rewrite fixpoint, then nested subsystem refs recursively.
 // Working on the raw view keeps full Expression fidelity (aggregate /
 // makearray fields the typed ExprNode does not model survive intact).
-func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map[string]bool, registry map[string]IndexSet, parentMeta map[string]int64, pathPrefix string, form mountForm) (err error) {
+func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map[string]bool, registry map[string]IndexSet, parentMeta, apiMeta, rootEnv map[string]int64, pathPrefix string, form mountForm) (err error) {
 	if len(subsystems) == 0 {
 		return nil
 	}
@@ -464,6 +525,37 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 		// rewrite-targets lower under the assembler-chosen discretization.
 		applySubsystemRefInjection(view, injected)
 
+		// esm-spec §4.7 "Two mount forms, one mechanism": the loader-API bindings
+		// (§9.7.6 site 4) SEED this edge's close, for the names the LEAF
+		// declares, exactly as they do at a top-level `models.<k>` mount. Without
+		// it a discovered `extent` (§8.9.4) reached a top-level-mounted leaf and
+		// not a subsystem-mounted one, so the same two documents sized the same
+		// axis differently depending only on which attachment point the assembler
+		// picked — and the subsystem-mounted one fell through to the leaf's own
+		// placeholder default, sizing the axis at 0 with no diagnostic at all.
+		//
+		// Two properties this must keep, both of them load-bearing:
+		//   - an EXPLICIT edge binding WINS. It is the assembler's deliberate
+		//     statement about this edge; the loader API is a default beneath it.
+		//   - the filter is the names the LEAF DECLARES, read off the leaf's own
+		//     `metaparameters` block. Handing a leaf a name it never declared
+		//     would be `template_import_unknown_name` against a document that
+		//     never asked for it, and would let an assembler's unrelated
+		//     metaparameter resize a leaf axis this edge never bound.
+		if len(apiMeta) > 0 {
+			if leafDecls, ok := view["metaparameters"].(map[string]any); ok {
+				for name, v := range apiMeta {
+					if _, declared := leafDecls[name]; !declared {
+						continue
+					}
+					if _, bound := bindings[name]; bound {
+						continue
+					}
+					bindings[name] = v
+				}
+			}
+		}
+
 		// Capture the referenced (mounted) document's own closed metaparameter
 		// environment BEFORE resolveTemplateMachinery consumes its
 		// `metaparameters` block: its declared integer defaults overlaid with
@@ -473,11 +565,50 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 		// resolve, esm-spec §9.7.6 "Ordering within load").
 		childMeta := metaEnvFromDecls(view["metaparameters"], bindings)
 
+		// The fold environment for everything this leaf's OWN mounts contribute
+		// (esm-spec §4.7 "Which environment a contribution folds against"). This
+		// binding threads ONE registry, so a nested contribution lands in the
+		// root's — but the SCOPE that sizes it is this leaf's, and §9.7.6 site 3
+		// says the edge `bindings` that closed this leaf win over its own
+		// `default`s. So: the enclosing environment, overlaid with this leaf's
+		// closed one for the names the LEAF DECLARES — the same filter site 4
+		// applies to the backfill, so an outer metaparameter the leaf never
+		// declared still cannot size an axis here, and a name only an outer scope
+		// declares still folds against that outer scope.
+		//
+		// Without the overlay one resolved document disagrees with ITSELF: an
+		// axis the leaf declares folds to the bound value while an axis its own
+		// nested mount contributes folds to the leaf's unbound default.
+		childFoldEnv := map[string]int64{}
+		for k, v := range rootEnv {
+			childFoldEnv[k] = v
+		}
+		if decls, ok := view["metaparameters"].(map[string]any); ok {
+			for name := range decls {
+				if v, bound := childMeta[name]; bound {
+					childFoldEnv[name] = v
+				}
+			}
+		}
+
 		// Resolve the referenced document's §9.7 machinery with this edge's
 		// bindings, then run the §9.6.3 rewrite fixpoint so the inlined
 		// component carries only normal Expression ASTs (Option A).
 		orders := extractTemplateOrders(string(data))
-		if _, err := resolveTemplateMachinery(view, orders, refBasePath, bindings); err != nil {
+		// This IS a §4.7 mount edge. `mountedLeaf` keeps an axis this leaf cannot
+		// size symbolic so it merges into the MOUNTING registry and closes there
+		// (§9.7.6 site 5), and `mountDeclared` covers the leaf's OWN nested
+		// mounts, so the site-4 widening composes down the reference DAG.
+		// Guarded for the same reason the root walk is: `leafMountDeclared` is
+		// read only by the site-4 check, which iterates `bindings`, so with no
+		// bindings at this edge the walk cannot change an outcome and the mounted
+		// document's own refs are not read a second time.
+		var leafMountDeclared map[string]bool
+		if len(bindings) > 0 {
+			leafMountDeclared = collectMountDeclaredMetaparameters(view, refBasePath)
+		}
+		if _, err := resolveTemplateMachinery(view, orders, refBasePath, bindings,
+			resolveOpts{mountDeclared: leafMountDeclared, mountedLeaf: true}); err != nil {
 			return err
 		}
 		if err := lowerExpressionTemplatesOrdered(view, orders); err != nil {
@@ -508,7 +639,7 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 		// metaparameter-folded) merge into the importing document's registry, so
 		// the importer's variables may be shaped over the mesh file's axes and a
 		// size/kind disagreement fails loudly (subsystem_index_set_conflict).
-		if err := mergeSubsystemIndexSets(registry, view, ref); err != nil {
+		if err := mergeSubsystemIndexSets(registry, view, ref, rootEnv); err != nil {
 			return err
 		}
 
@@ -530,7 +661,7 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 					// inlined at this entry's pointer — best-effort deeper prefix (not
 					// a corpus-pinned location).
 					nestedPrefix := fmt.Sprintf("%s/%s/subsystems", pathPrefix, key)
-					if err := resolveSubsystemMap(subs, refBasePath, visited, registry, childMeta, nestedPrefix, subsystemMount); err != nil {
+					if err := resolveSubsystemMap(subs, refBasePath, visited, registry, childMeta, apiMeta, childFoldEnv, nestedPrefix, subsystemMount); err != nil {
 						return fmt.Errorf("%s %q: resolving nested refs in %q: %w", form.noun, key, refKey, err)
 					}
 				}
@@ -553,8 +684,8 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 		// recursion runs through resolveSubsystemMap, so `visited` gives it the
 		// same path-scoped cycle detection every other edge gets. Matches the
 		// Rust reference, which composes at both forms.
-		if err := inlineNestedTopLevelModelRefs(view, refBasePath, visited, registry, childMeta,
-			fmt.Sprintf("%s/%s/models", pathPrefix, key)); err != nil {
+		if err := inlineNestedTopLevelModelRefs(view, refBasePath, visited, registry, childMeta, apiMeta,
+			childFoldEnv, fmt.Sprintf("%s/%s/models", pathPrefix, key)); err != nil {
 			return fmt.Errorf("%s %q: resolving nested refs in %q: %w", form.noun, key, refKey, err)
 		}
 

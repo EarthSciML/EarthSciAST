@@ -536,13 +536,15 @@ breaks URL refs and offers no per-name control.
    the two mount forms disagree. What is genuinely lost is an axis sized by a name only the
    ASSEMBLER declares — with no leaf machinery it merges symbolically and the root's close
    resolves it, but a leaf that has any §9.7 machinery folds strictly and rejects it with
-   `metaparameter_unbound`, exactly as Python and as the `subsystems.<k>` edge do. Whether the
-   edge close should be strict about such a name is the remaining open question, and it is a
-   spec question at both forms rather than a top-level one. Note what makes a leaf strict: a
-   whole-document boolean, whether it carries ANY §9.7 machinery at all. A component's
-   acceptance therefore flips on an `expression_template_imports` entry unrelated to the axis in
-   question. That is inherited from Python rather than invented here, but it is a footgun and
-   belongs in the same ruling.
+   `metaparameter_unbound`.
+   **The strictness half is now SETTLED, in the permissive direction.** A mount edge is not the
+   last scope that could close a name — the leaf's `index_sets` merge into the mounting registry
+   immediately afterwards — so an axis the leaf cannot size stays symbolic and travels up, at
+   both mount forms, whatever machinery the leaf carries (§4.7, §9.7.6 site 5). That also
+   retires the footgun this item named: strictness was a whole-document boolean, so a
+   component's acceptance flipped on an `expression_template_imports` entry unrelated to the
+   axis in question, and factoring a shared expression into a library could stop a document's
+   shape from resolving. A ROOT document has no enclosing scope and stays strict.
    A second consequence of merging a symbolic size is worth settling with it: on the
    no-machinery path the registry merge compares declarations structurally, so a mount that
    restates the leaf's axis VERBATIM (`size: "n_rows"`) is idempotent while one that restates it
@@ -566,6 +568,16 @@ breaks URL refs and offers no per-name control.
    with each other and put the disagreement with Python in plain sight. Where the §4.7 merge
    sits relative to the mounting document's own §9.7.6 close is the question to settle, and it
    belongs with this item.
+   Two further things are true of that split and worth stating plainly, because they bear on
+   how much the open question costs in practice. First, it makes "drop the leaf's declaration
+   and let the assembler declare the name" a **non-portable** workaround rather than a remedy:
+   the same two documents give a concrete axis in Rust and Julia and an unfolded one in Python.
+   Second, Python does not so much ACCEPT that document as decline to decide it — the load
+   succeeds with the merged axis still carrying its symbolic `size`, because nothing folds
+   `index_sets` after the merge on that path. A reader comparing verdicts sees "passes" in all
+   three and a different resolved document in one, which is the worst shape a divergence can
+   take. Settling where the §4.7 merge sits relative to the mounting document's own §9.7.6
+   close is what closes both.
    **TypeScript and Go landed on Python's side, and by construction rather than by choice
    (2026-09-12).** Both already merged a `subsystems.<k>` mount's axes AFTER their own root
    close — TypeScript because `loadString` folds the document before `resolveSubsystemRefs`
@@ -583,6 +595,38 @@ breaks URL refs and offers no per-name control.
    integer — so they abort the mount with a raw `MethodError(Int64, ("n_rows",))` /
    `json: cannot unmarshal string into ... IndexSet.size` rather than a diagnostic. Whichever
    side wins, those two need the representation before they can implement it.
+   **SETTLED (2026-09-13): post-close, and the contribution FOLDS as it merges.** Neither side
+   in the field was right, and the majority was not the tell — it was three copies of the same
+   omission. The specification says post-close twice and normatively (§9.7.6 site 3, "the
+   mounting document closes its own metaparameters before its refs resolve"; "Ordering within
+   load", "subsystem refs resolve post-close"), and the step list that appears to say otherwise
+   is §9.7.5's IMPORT merge, whose neighbour in that list is "resolve imports". But post-close
+   ALONE is what Python, TypeScript and Go were doing, and it published a resolved document
+   whose axis still carried a metaparameter name — contradicting the same paragraph's "the
+   mounted form is fully concrete when it splices in" and site 5's "closed at some enclosing
+   document's close". So the answer is post-close PLUS a fold of the contribution against the
+   mounting document's closed environment, before the deep-equal comparison. It is the only one
+   of the three behaviours that is right on both halves.
+   Measured across all five bindings on the reporter's own shape — an assembly and its leaf
+   both declaring `NLEV: 40` and `lev: {size: "NLEV"}` — the pre-close side raised
+   `subsystem_index_set_conflict` for two IDENTICAL declarations (Rust at both mount forms,
+   Julia at the top-level form only, which was itself a §4.7 "two mount forms" violation),
+   while the post-close side loaded it at 40. On the assembler-scoped shape
+   (`tests/fixtures/data_source_extent_scope/assembler_root_{no,with}_import.esm`) the
+   post-close-without-fold side published `size: "N_REC"` unfolded. Both now resolve to the one
+   answer in all five. Blast radius, measured before implementing: of 671 `.esm` documents under
+   `tests/`, exactly 2 have the precondition that distinguishes the orders — those two fixtures,
+   added by the same change — and all 112 `tests/valid` documents resolved identically under a
+   pre-close and a post-close binding, so no document that loaded stopped loading.
+   The asymmetry this creates with the RENAME is deliberate and is now stated in §4.7: an
+   enclosing edge may not rename an axis only a nested mount contributed, but it does close such
+   an axis's size. A name is authored vocabulary; a size is a value §9.7.6 site 5 chains upward.
+   **Implementation note.** Inlining and merging had to be split, because they were one step in
+   every binding: the referenced CONTENT must be spliced in early enough for the rewrite-rule
+   fixpoint to lower through it, while the `index_sets` it contributes must wait for the close.
+   Rust and Julia stage the root's contributions during ref resolution and apply them
+   immediately after the root's `resolve_template_machinery`; nested scopes had already closed
+   by the time they merged, so only the root's merge moved.
    **This matters for the reporter**: EqWeFiC's assemblies use top-level `ref` mounts, which now
    apply the field in all three bindings that implement the form. (An earlier draft said they were *pushed* to
    the top-level form because `variable_map` cannot reach into a subsystem. That is **wrong**,

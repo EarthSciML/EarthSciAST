@@ -1,0 +1,19 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "MountMergeOrderSubsystem",
+    "description": "The same two identical declarations at the `subsystems.<k>` mount form. §4.7: the two forms must answer this document the same way."
+  },
+  "metaparameters": {
+    "NLEV": { "type": "integer", "default": 40, "description": "Levels." }
+  },
+  "index_sets": { "lev": { "kind": "interval", "size": "NLEV" } },
+  "models": {
+    "Host": {
+      "system_kind": "nonlinear",
+      "variables": { "z": { "type": "unknown", "units": "1", "description": "Host-local observed." } },
+      "equations": [ { "lhs": "z", "rhs": { "op": "const", "args": [], "value": 0.0 } } ],
+      "subsystems": { "Col": { "ref": "./mount_merge_order_leaf.esm" } }
+    }
+  }
+}

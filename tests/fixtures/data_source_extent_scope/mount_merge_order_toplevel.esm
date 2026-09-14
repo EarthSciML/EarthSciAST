@@ -1,0 +1,12 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "MountMergeOrderToplevel",
+    "description": "Declares NLEV and `lev` IDENTICALLY to the leaf it mounts, at the top-level `models.<k>` form. Two identical declarations must not collide (issue #198)."
+  },
+  "metaparameters": {
+    "NLEV": { "type": "integer", "default": 40, "description": "Levels." }
+  },
+  "index_sets": { "lev": { "kind": "interval", "size": "NLEV" } },
+  "models": { "Col": { "ref": "./mount_merge_order_leaf.esm" } }
+}

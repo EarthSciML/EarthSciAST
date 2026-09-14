@@ -1,0 +1,50 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "MountEdgeFoldInner",
+    "description": "Contributes `lev`, sized by NLEV, which it does NOT declare — so the axis merges symbolically into whoever mounts it and must fold in THAT scope."
+  },
+  "index_sets": {
+    "lev": {
+      "kind": "interval",
+      "size": "NLEV"
+    }
+  },
+  "models": {
+    "Inner": {
+      "system_kind": "nonlinear",
+      "variables": {
+        "t": {
+          "type": "unknown",
+          "units": "K",
+          "shape": [
+            "lev"
+          ],
+          "description": "Temperature."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "t",
+          "rhs": {
+            "op": "faq",
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "lev"
+              }
+            },
+            "args": [],
+            "expr": {
+              "op": "const",
+              "args": [],
+              "value": 0.0
+            }
+          }
+        }
+      ]
+    }
+  }
+}
