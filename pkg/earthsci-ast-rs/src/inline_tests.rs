@@ -2902,6 +2902,96 @@ mod tests {
         );
     }
 
+    /// A ZERO-LENGTH time span on a component that INTEGRATES: the run's whole
+    /// answer is its initial state, and nothing is integrated to reach it.
+    ///
+    /// esm-spec §6.6.2 names this shape — "the instantaneous-derivative test
+    /// shape (observed tendencies asserted at `time: 0`)" — §6.6 constrains an
+    /// assertion's `time` only to lie in `[time_span.start, time_span.end]`,
+    /// which `0` does in `[0, 0]`, and the schema's `TimeSpan` carries no
+    /// `end > start` rule. Twenty-three corpus documents author it; twenty-two
+    /// are STATIC, so `solve` answers `NotDynamic` and the runner reads the
+    /// build. The twenty-third, `tests/valid/units_propagation.esm`, integrates
+    /// — and diffsol's `set_stop_time` refused the interval with "Stop time is
+    /// at the current state time", failing all ten of its assertions on a
+    /// complaint about having nothing to do while Julia and Python both
+    /// evaluated it.
+    #[test]
+    fn a_zero_length_time_span_answers_from_the_initial_state() {
+        // Same model as `scalar_observed_of_an_ode_component_is_assertable`,
+        // whose `{start: 0, end: 1}` run is the moving control for this one.
+        let model = json!({
+            "variables": {
+                "u": {"type": "unknown", "units": "1", "default": 1.0},
+                "k": {"type": "parameter", "units": "1/s", "default": 0.5},
+                "twice": {"type": "unknown", "units": "1"},
+            },
+            "equations": [
+                {"lhs": {"op": "D", "args": ["u"], "wrt": "t"},
+                 "rhs": {"op": "*", "args": [-1.0, {"op": "*", "args": ["k", "u"]}]}},
+                {"lhs": "twice", "rhs": {"op": "*", "args": [2.0, "u"]}},
+            ],
+            "tests": [{
+                "id": "at_the_initial_state",
+                "time_span": {"start": 0.0, "end": 0.0},
+                "assertions": [
+                    // The STATE, at its initial value — the control that says
+                    // the run happened at all.
+                    {"variable": "u", "time": 0.0, "expected": 1.0,
+                     "tolerance": {"rel": 1e-12}},
+                    // And the OBSERVED computed from it, which is what a
+                    // document writes this shape for.
+                    {"variable": "twice", "time": 0.0, "expected": 2.0,
+                     "tolerance": {"rel": 1e-12}},
+                ],
+            }],
+        });
+        let doc = json!({
+            "esm": "1.1.0",
+            "metadata": {"name": "zero_length_span"},
+            "models": {"M": model},
+        });
+        let file = load_string(&doc.to_string()).expect("doc loads");
+        let results = run_inline_tests(&file, Some("M"), &tight_opts());
+        assert_eq!(results.len(), 2);
+        for r in &results {
+            assert!(r.passed, "{}#{}: {}", r.variable, r.assertion_idx, r.message);
+        }
+        assert_eq!(results[0].actual, Some(1.0));
+        assert_eq!(results[1].actual, Some(2.0));
+
+        // The guard keys on the INTERVAL being empty, not on the clock reading
+        // zero: an empty span anywhere on the axis answers from the state the
+        // run starts in, which for `t0 = 2` is still the declared default.
+        let mut shifted = doc.clone();
+        shifted["models"]["M"]["tests"][0]["time_span"] = json!({"start": 2.0, "end": 2.0});
+        shifted["models"]["M"]["tests"][0]["assertions"][0]["time"] = json!(2.0);
+        shifted["models"]["M"]["tests"][0]["assertions"][1]["time"] = json!(2.0);
+        let file = load_string(&shifted.to_string()).expect("shifted doc loads");
+        let results = run_inline_tests(&file, Some("M"), &tight_opts());
+        assert_eq!(results.len(), 2);
+        for r in &results {
+            assert!(r.passed, "{}#{}: {}", r.variable, r.assertion_idx, r.message);
+        }
+        assert_eq!(results[1].actual, Some(2.0));
+
+        // And a NON-empty span is untouched — `set_stop_time` still runs on
+        // exactly the intervals it always accepted, and the trajectory moves.
+        let mut moving = doc.clone();
+        moving["models"]["M"]["tests"][0]["time_span"] = json!({"start": 0.0, "end": 1.0});
+        moving["models"]["M"]["tests"][0]["assertions"][1]["time"] = json!(1.0);
+        moving["models"]["M"]["tests"][0]["assertions"][1]["expected"] =
+            json!(1.2130613194252668);
+        moving["models"]["M"]["tests"][0]["assertions"][1]["tolerance"] =
+            json!({"rel": 1e-8});
+        let file = load_string(&moving.to_string()).expect("moving doc loads");
+        let results = run_inline_tests(&file, Some("M"), &tight_opts());
+        assert_eq!(results.len(), 2);
+        for r in &results {
+            assert!(r.passed, "{}#{}: {}", r.variable, r.assertion_idx, r.message);
+        }
+    }
+
     /// An unbound scalar must be DIAGNOSABLE, not a plausible zero: a pointwise
     /// assertion on a name the build materialized nothing for is an ERROR
     /// naming the variable.

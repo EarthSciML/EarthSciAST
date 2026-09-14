@@ -41,12 +41,6 @@ where
         }
     };
 
-    solver
-        .set_stop_time(t_end)
-        .map_err(|e| SimulateError::DiffsolError {
-            details: e.to_string(),
-        })?;
-
     // Progress observer (no-op when the caller supplied none). Both loops below
     // report through this, so a host sees the same stream whether it asked for
     // an interpolated output grid or the solver's natural steps.
@@ -76,6 +70,48 @@ where
     if matches!(report(0, t0, &initial_state), Flow::Cancel) {
         return Ok((times, state_rows, ReturnCode::Terminated));
     }
+
+    // An EMPTY interval integrates nothing, and its whole answer is the initial
+    // state. esm-spec §6.6.2 makes that a real test shape — "the
+    // instantaneous-derivative test shape (observed tendencies asserted at
+    // `time: 0`)" — and §6.6 constrains an assertion's `time` only to lie in
+    // `[time_span.start, time_span.end]`, which `0` does in `[0, 0]`; the
+    // schema's `TimeSpan` carries no `end > start` rule either. So a document
+    // may legitimately ask for `{start: 0, end: 0}` and does:
+    // `tests/valid/units_propagation.esm`, and 22 other corpus documents that
+    // only got away with it by being STATIC (no ODEs at all, so `solve` returns
+    // `NotDynamic` and the inline-test runner answers from the build).
+    //
+    // `set_stop_time` REFUSES that interval — "Stop time is at the current state
+    // time" — so the one dynamic document in that set failed all ten of its
+    // assertions on a solver complaint about having nothing to do, while Julia
+    // and Python both evaluated it. Answer it here instead, from the state the
+    // solver was initialized with, and never enter diffsol. Nothing about how
+    // diffsol is driven over a NON-empty interval changes: `set_stop_time` now
+    // runs just below, on exactly the intervals it always accepted.
+    //
+    // The `saveat` branch already did this for the requested times at or before
+    // `t0`; this is the same answer for the whole grid when the run cannot get
+    // past `t0`. A grid time BEYOND an empty interval is the courtesy
+    // extrapolation the tail of that branch performs, which for a run that
+    // never moves is the initial state too.
+    if t_end <= t0 {
+        match &opts.saveat {
+            Some(t_eval) => {
+                for &t in t_eval {
+                    push_state(&mut times, &mut state_rows, t, &initial_state);
+                }
+            }
+            None => push_state(&mut times, &mut state_rows, t0, &initial_state),
+        }
+        return Ok((times, state_rows, retcode));
+    }
+
+    solver
+        .set_stop_time(t_end)
+        .map_err(|e| SimulateError::DiffsolError {
+            details: e.to_string(),
+        })?;
 
     let mut step_count: usize = 0;
 
