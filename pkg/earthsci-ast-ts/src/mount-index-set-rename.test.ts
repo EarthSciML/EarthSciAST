@@ -18,6 +18,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import * as path from 'node:path'
 import { resolveSubsystemRefsSync } from './ref-loading.js'
+import { loadString, raiseFaqVersionFloor } from './parse.js'
 import type { EsmFile } from './types.js'
 
 const TESTS = path.resolve(__dirname, '../../../tests')
@@ -231,5 +232,45 @@ describe('a §4.7 merge folds against the environment of the registry it lands i
     const { file } = loadResolved('fixtures/mount_merge_fold_env/fold_env_root.esm')
     const sets = (file as unknown as { index_sets: Record<string, { size?: number }> }).index_sets
     expect(sets.prof?.size).toBe(4)
+  })
+})
+
+describe('the raised floor, at the seam the §4.7 inline/merge reorder needs it', () => {
+  // esm-spec §4.7 resolves a `{ ref }` "before validation or any other
+  // processing", which puts a mounted leaf's content in the document BEFORE the
+  // esm-version gates run. A legal 1.0.0 assembly that mounts a `faq`-using
+  // leaf then CONTAINS `faq` without ever having spelled it, and the gate
+  // refuses a document nobody authored wrongly. The Julia reference answers
+  // this by not gating an already-inlined document and raising the floor
+  // instead, "exactly as `emit` does"
+  // (docs/content/rfcs/faq-node-rename.md §5.5).
+  //
+  // This binding already has that stamp — `raiseFaqVersionFloor`, applied after
+  // ref resolution — and the reorder needs it applied before `loadString` gates
+  // the inlined document. Pinned here so the mechanism is in place and
+  // known-good ahead of the reorder rather than debugged alongside it.
+  it('admits a 1.0.0 document that contains `faq` only because a mount was inlined', () => {
+    const leaf = JSON.parse(
+      readFileSync(path.join(TESTS, 'valid/mount_rename_atm_column.esm'), 'utf8'),
+    ) as Record<string, unknown>
+    const inlined: Record<string, unknown> = {
+      esm: '1.0.0',
+      metadata: {
+        name: 'inlined_assembly',
+        description: 'a 1.0.0 assembly that CONTAINS faq only because a mount was inlined into it',
+        license: 'MIT',
+      },
+      index_sets: leaf.index_sets,
+      models: leaf.models,
+    }
+
+    // Ungated, it is refused.
+    expect(() => loadString(JSON.stringify(inlined))).toThrow(/faq_version_too_old/)
+
+    // With the floor raised, it loads — and the floor only ever raises.
+    raiseFaqVersionFloor(inlined)
+    expect(inlined.esm).toBe('1.1.0')
+    const file = loadString(JSON.stringify(inlined))
+    expect((file as unknown as { esm: string }).esm).toBe('1.1.0')
   })
 })

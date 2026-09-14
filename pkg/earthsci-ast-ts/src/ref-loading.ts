@@ -847,8 +847,12 @@ function walkSubsystemRefs(
   ) => void,
   onRecurse: (subsystem: unknown, subName: string, pointer: string) => void,
   apiMeta: Readonly<Record<string, number>>,
-  rootEnv: Readonly<Record<string, number>>,
 ): void {
+  // No `rootEnv` here any more. The only thing this walker used it for was
+  // folding a nested mount's contribution, and those contributions now land in
+  // the LEAF's registry and fold against the LEAF's close (esm-spec §4.7
+  // "Which environment it folds against"). The root's own merges still fold
+  // against the root's environment, in `onRef`, which carries its own.
   for (const [subName, subsystem] of Object.entries(subsystems)) {
     const sub = subsystem as RefEdge
     const ref = sub.ref
@@ -1186,7 +1190,6 @@ function resolveModelRefs(
         rootEnv,
       ),
     apiMeta,
-    rootEnv,
   )
 }
 
@@ -1243,7 +1246,6 @@ function resolveReactionSystemRefs(
         rootEnv,
       ),
     apiMeta,
-    rootEnv,
   )
 }
 

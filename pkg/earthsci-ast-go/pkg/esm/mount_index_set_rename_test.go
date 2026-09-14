@@ -420,3 +420,60 @@ func TestMergeFoldsAgainstTheRegistryItLandsIn(t *testing.T) {
 		t.Errorf("prof size = %v; want 4 (the LEAF's n_lev, not the assembly's 9)", got.Size)
 	}
 }
+
+// The RAISED FLOOR, at the seam the §4.7 inline/merge reorder needs it.
+//
+// esm-spec §4.7 resolves a `{ref}` "before validation or any other
+// processing", which puts a mounted leaf's content in the document BEFORE the
+// esm-version gates run. A legal 1.0.0 assembly that mounts a `faq`-using leaf
+// then CONTAINS `faq` without ever having spelled it, and the gate refuses a
+// document nobody authored wrongly. The Julia reference answers this by not
+// gating an already-inlined document and raising the floor instead, "exactly as
+// `emit` does" (docs/content/rfcs/faq-node-rename.md §5.5).
+//
+// This binding already has that stamp — `raiseFaqEsmFloor`, applied on emit —
+// and the reorder needs it applied one step earlier, to the inlined text before
+// LoadString gates it. Pinned here so the mechanism is in place and known-good
+// ahead of the reorder rather than debugged alongside it.
+func TestRaisedFloorAdmitsAnInlinedFaqDocument(t *testing.T) {
+	leaf, err := os.ReadFile(mrFixture(t, "valid", "mount_rename_atm_column.esm"))
+	if err != nil {
+		t.Fatalf("read the faq-using leaf: %v", err)
+	}
+	var leafDoc map[string]any
+	if err := json.Unmarshal(leaf, &leafDoc); err != nil {
+		t.Fatalf("decode the leaf: %v", err)
+	}
+	// The assembly as the reorder hands it to LoadString: the leaf's component
+	// already spliced in, and the assembly's own authored `esm` still 1.0.0.
+	inlined := map[string]any{
+		"esm": "1.0.0",
+		"metadata": map[string]any{
+			"name": "inlined_assembly", "description": "a 1.0.0 assembly that CONTAINS faq only because a mount was inlined into it", "license": "MIT",
+		},
+		"index_sets": leafDoc["index_sets"],
+		"models":     leafDoc["models"],
+	}
+	b, err := json.Marshal(inlined)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+
+	// Ungated, it is refused — which is the failure the reorder would otherwise
+	// surface on six of this package's tests.
+	if _, err := LoadString(string(b)); err == nil {
+		t.Fatal("a 1.0.0 document containing faq loaded ungated; the gate is not what this test thinks")
+	} else if !strings.Contains(err.Error(), "faq_version_too_old") {
+		t.Fatalf("want faq_version_too_old, got: %v", err)
+	}
+
+	// With the floor raised, it loads — and the floor only ever raises.
+	raised := raiseFaqEsmFloor(string(b))
+	f, err := LoadString(raised)
+	if err != nil {
+		t.Fatalf("the raised floor must admit the inlined document: %v", err)
+	}
+	if f.ESM != "1.1.0" {
+		t.Errorf("esm = %q; want the raised 1.1.0 floor", f.ESM)
+	}
+}
