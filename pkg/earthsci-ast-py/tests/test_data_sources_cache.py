@@ -218,6 +218,153 @@ class TestCachedFetcher:
 
 
 # ---------------------------------------------------------------------------
+# A warm `file://` entry is rechecked against the file it was copied from
+# (EarthSciML/EarthSciAST#293)
+# ---------------------------------------------------------------------------
+
+
+def _counting_file_fetcher(calls: list[str]):
+    """A ``(url) -> bytes`` fetcher that reads a ``file://`` URL and counts reads.
+
+    Counting the reads that reach the fetcher is what proves a warm entry was
+    served from the cache rather than re-copied; the returned bytes alone
+    cannot tell those apart for an unchanged source.
+    """
+
+    def fetch(url: str) -> bytes:
+        calls.append(url)
+        return Path(url[len("file://") :]).read_bytes()
+
+    return fetch
+
+
+class TestFileSourceRecheck:
+    @pytest.fixture(autouse=True)
+    def _default_env(self, monkeypatch):
+        monkeypatch.delenv("EARTHSCI_REVALIDATE_FILE", raising=False)
+
+    def _source(self, tmp_path, payload: bytes):
+        src = tmp_path / "corpus" / "runspecday.parquet"
+        src.parent.mkdir(parents=True, exist_ok=True)
+        src.write_bytes(payload)
+        return src, "file://" + src.as_posix()
+
+    def test_source_replaced_with_different_length_is_re_ingested(self, tmp_path):
+        src, url = self._source(tmp_path, b"A" * 371)
+        calls: list[str] = []
+        fetch = cached_fetcher(
+            fetcher=_counting_file_fetcher(calls), data_dir=tmp_path / "cache", offline=False
+        )
+        assert fetch(url) == b"A" * 371
+        src.write_bytes(b"B" * 363)
+        assert fetch(url) == b"B" * 363
+        assert len(calls) == 2
+
+    def test_source_replaced_with_same_length_is_re_ingested(self, tmp_path):
+        src, url = self._source(tmp_path, b"A" * 64)
+        calls: list[str] = []
+        fetch = cached_fetcher(
+            fetcher=_counting_file_fetcher(calls), data_dir=tmp_path / "cache", offline=False
+        )
+        fetch(url)
+        src.write_bytes(b"B" * 64)
+        assert fetch(url) == b"B" * 64, "a size-only check waves an equal-length edit through"
+
+    def test_unchanged_source_is_served_from_the_warm_entry(self, tmp_path):
+        _, url = self._source(tmp_path, b"A" * 371)
+        calls: list[str] = []
+        fetch = cached_fetcher(
+            fetcher=_counting_file_fetcher(calls), data_dir=tmp_path / "cache", offline=False
+        )
+        for _ in range(3):
+            assert fetch(url) == b"A" * 371
+        assert calls == [url], "an unchanged source must not be re-copied"
+
+    def test_deleted_source_is_an_error_not_the_old_bytes(self, tmp_path):
+        src, url = self._source(tmp_path, b"A" * 371)
+        fetch = cached_fetcher(
+            fetcher=_counting_file_fetcher([]), data_dir=tmp_path / "cache", offline=False
+        )
+        fetch(url)
+        src.unlink()
+        with pytest.raises(FileNotFoundError):
+            fetch(url)
+
+    def test_deleted_directory_is_an_error_through_the_opener(self, tmp_path):
+        src, url = self._source(tmp_path, b"A" * 371)
+        opener = cached_opener(
+            opener=lambda p: Path(p).read_bytes(),
+            fetcher=_counting_file_fetcher([]),
+            data_dir=tmp_path / "cache",
+            offline=False,
+        )
+        assert opener(url) == b"A" * 371
+        src.unlink()
+        src.parent.rmdir()
+        with pytest.raises(FileNotFoundError):
+            opener(url)
+
+    def test_opener_serves_the_replaced_source(self, tmp_path):
+        src, url = self._source(tmp_path, b"A" * 371)
+        opener = cached_opener(
+            opener=lambda p: Path(p).read_bytes(),
+            fetcher=_counting_file_fetcher([]),
+            data_dir=tmp_path / "cache",
+            offline=False,
+        )
+        opener(url)
+        src.write_bytes(b"B" * 363)
+        assert opener(url) == b"B" * 363
+
+    def test_remote_entry_is_not_rechecked(self, tmp_path):
+        calls: list[str] = []
+        fetch = cached_fetcher(
+            fetcher=lambda u: calls.append(u) or b"REMOTE",
+            data_dir=tmp_path,
+            offline=False,
+        )
+        fetch("https://h/data.nc")
+        fetch("https://h/data.nc")
+        assert calls == ["https://h/data.nc"]
+
+    def test_offline_read_is_not_rechecked(self, tmp_path):
+        # Offline trades freshness for hermeticity and has no fetcher to
+        # re-ingest with, matching EarthSciIO's cache.
+        src, url = self._source(tmp_path, b"A" * 371)
+        cached_fetcher(
+            fetcher=_counting_file_fetcher([]), data_dir=tmp_path / "cache", offline=False
+        )(url)
+        src.write_bytes(b"B" * 363)
+        assert cached_fetcher(data_dir=tmp_path / "cache", offline=True)(url) == b"A" * 371
+
+    def test_keyword_opt_out_serves_the_warm_entry(self, tmp_path):
+        src, url = self._source(tmp_path, b"A" * 371)
+        fetch = cached_fetcher(
+            fetcher=_counting_file_fetcher([]),
+            data_dir=tmp_path / "cache",
+            offline=False,
+            revalidate_file=False,
+        )
+        fetch(url)
+        src.write_bytes(b"B" * 363)
+        assert fetch(url) == b"A" * 371
+
+    @pytest.mark.parametrize(
+        ("value", "rechecked"),
+        [("0", False), ("off", False), (" FALSE ", False), ("1", True), ("of", True)],
+    )
+    def test_env_opt_out_only_on_an_explicit_denial(self, tmp_path, monkeypatch, value, rechecked):
+        monkeypatch.setenv("EARTHSCI_REVALIDATE_FILE", value)
+        src, url = self._source(tmp_path, b"A" * 371)
+        fetch = cached_fetcher(
+            fetcher=_counting_file_fetcher([]), data_dir=tmp_path / "cache", offline=False
+        )
+        fetch(url)
+        src.write_bytes(b"B" * 363)
+        assert fetch(url) == (b"B" * 363 if rechecked else b"A" * 371)
+
+
+# ---------------------------------------------------------------------------
 # Mirror failover integrates with the cached opener (offline)
 # ---------------------------------------------------------------------------
 
