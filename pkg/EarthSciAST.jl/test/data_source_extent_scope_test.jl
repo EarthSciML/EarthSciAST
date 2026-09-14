@@ -321,4 +321,22 @@ end
         @test !haskey(resolved[:models][:Ingest], :ref)            # already inlined
         @test resolved[:data_sources][:EGU_Emis][:extent][:metaparameter] == "N_REC"
     end
+
+    @testset "two identical declarations do not collide at either mount form" begin
+        # The shape issue #198 reported, driven from the SHARED fixtures so all
+        # five bindings answer the same two documents.
+        #
+        # The assembly and the leaf it mounts declare the SAME metaparameter and
+        # the SAME axis sized by it. A merge that runs BEFORE the mounting
+        # document's own §9.7.6 close compares the leaf's already-folded
+        # `size: 40` against the assembly's still-symbolic `size: "NLEV"` and
+        # calls two identical declarations a `subsystem_index_set_conflict` —
+        # which is what this binding did at the top-level form and not at the
+        # subsystem one, a §4.7 "two mount forms" violation in its own right.
+        top = _extent_load("mount_merge_order_toplevel.esm")
+        sub = _extent_load("mount_merge_order_subsystem.esm")
+        @test top.index_sets["lev"].size == 40
+        @test sub.index_sets["lev"].size == 40
+        @test top.index_sets["lev"] == sub.index_sets["lev"]
+    end
 end

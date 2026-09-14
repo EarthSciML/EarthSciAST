@@ -335,3 +335,23 @@ fn the_idempotency_fixtures_say_what_they_are() {
         "N_REC"
     );
 }
+
+/// The shape issue #198 reported, driven from the SHARED fixtures so all five
+/// bindings answer the same two documents.
+///
+/// The assembly and the leaf it mounts declare the SAME metaparameter and the
+/// SAME axis sized by it. A merge that runs BEFORE the mounting document's own
+/// §9.7.6 close compares the leaf's already-folded `size: 40` against the
+/// assembly's still-symbolic `size: "NLEV"` and calls two identical declarations
+/// a `subsystem_index_set_conflict` — which is what this binding did at BOTH
+/// mount forms until the merge was deferred past the close.
+#[test]
+fn two_identical_declarations_do_not_collide_at_either_mount_form() {
+    let top = load_path(fixture("mount_merge_order_toplevel.esm"))
+        .expect("two identical declarations must not collide at a top-level mount");
+    let sub =
+        load_path(fixture("mount_merge_order_subsystem.esm")).expect("nor at a subsystem mount");
+    let lev = |f: &EsmFile| f.index_sets.as_ref().expect("index_sets")["lev"].size;
+    assert_eq!(lev(&top), Some(40));
+    assert_eq!(lev(&sub), Some(40));
+}
