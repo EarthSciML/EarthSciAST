@@ -2955,7 +2955,11 @@ mod tests {
         let results = run_inline_tests(&file, Some("M"), &tight_opts());
         assert_eq!(results.len(), 2);
         for r in &results {
-            assert!(r.passed, "{}#{}: {}", r.variable, r.assertion_idx, r.message);
+            assert!(
+                r.passed,
+                "{}#{}: {}",
+                r.variable, r.assertion_idx, r.message
+            );
         }
         assert_eq!(results[0].actual, Some(1.0));
         assert_eq!(results[1].actual, Some(2.0));
@@ -2971,7 +2975,11 @@ mod tests {
         let results = run_inline_tests(&file, Some("M"), &tight_opts());
         assert_eq!(results.len(), 2);
         for r in &results {
-            assert!(r.passed, "{}#{}: {}", r.variable, r.assertion_idx, r.message);
+            assert!(
+                r.passed,
+                "{}#{}: {}",
+                r.variable, r.assertion_idx, r.message
+            );
         }
         assert_eq!(results[1].actual, Some(2.0));
 
@@ -2980,15 +2988,17 @@ mod tests {
         let mut moving = doc.clone();
         moving["models"]["M"]["tests"][0]["time_span"] = json!({"start": 0.0, "end": 1.0});
         moving["models"]["M"]["tests"][0]["assertions"][1]["time"] = json!(1.0);
-        moving["models"]["M"]["tests"][0]["assertions"][1]["expected"] =
-            json!(1.2130613194252668);
-        moving["models"]["M"]["tests"][0]["assertions"][1]["tolerance"] =
-            json!({"rel": 1e-8});
+        moving["models"]["M"]["tests"][0]["assertions"][1]["expected"] = json!(1.2130613194252668);
+        moving["models"]["M"]["tests"][0]["assertions"][1]["tolerance"] = json!({"rel": 1e-8});
         let file = load_string(&moving.to_string()).expect("moving doc loads");
         let results = run_inline_tests(&file, Some("M"), &tight_opts());
         assert_eq!(results.len(), 2);
         for r in &results {
-            assert!(r.passed, "{}#{}: {}", r.variable, r.assertion_idx, r.message);
+            assert!(
+                r.passed,
+                "{}#{}: {}",
+                r.variable, r.assertion_idx, r.message
+            );
         }
     }
 
