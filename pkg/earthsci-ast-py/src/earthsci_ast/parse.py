@@ -38,6 +38,7 @@ import jsonschema
 from jsonschema import validate
 
 from .error_handling import (
+    MOUNT_FORM_UNSUPPORTED,
     SUBSYSTEM_REF_IS_COUPLING_LIBRARY,
     SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY,
 )
@@ -2562,6 +2563,31 @@ load_string.__doc__ = (load_string.__doc__ or "") + _LOAD_ARGS_DOC
 load_document.__doc__ = (load_document.__doc__ or "") + _LOAD_ARGS_DOC
 
 
+def _refuse_toplevel_reaction_system_refs(data: Any) -> None:
+    """Refuse a top-level ``reaction_systems.<k>`` ``{ref}`` mount.
+
+    Raises :class:`SubsystemRefError` with ``mount_form_unsupported`` at
+    ``/reaction_systems/<k>`` for the first entry that is a bare ``{ref}`` — a
+    ``ref`` string and no ``species``, the Julia reference's discriminator for
+    this form. An inline reaction system is a component, not a mount, and passes
+    untouched; ``models.<k>`` and ``subsystems.<k>`` refs are unaffected.
+    """
+    rs = data.get("reaction_systems") if isinstance(data, dict) else None
+    if not isinstance(rs, dict):
+        return
+    for name in sorted(rs):
+        entry = rs[name]
+        if isinstance(entry, dict) and isinstance(entry.get("ref"), str) and "species" not in entry:
+            raise SubsystemRefError(
+                f"reaction_systems.{name}: a top-level `reaction_systems.<k>` `{{ref}}` mount "
+                f"(ref '{entry['ref']}') is not supported by this binding. Inline the reaction "
+                "system, or mount it at a `subsystems.<k>` `{ref}` edge (esm-spec §4.7 "
+                '"Two mount forms, one mechanism")',
+                code=MOUNT_FORM_UNSUPPORTED,
+                path=f"/reaction_systems/{name}",
+            )
+
+
 def _load_data(
     data: dict,
     base_path: str,
@@ -2651,6 +2677,12 @@ def _load_data(
 
     # Check version compatibility
     _check_version_compatibility(data.get("esm", ""))
+
+    # esm-spec §4.7: a top-level `reaction_systems.<k>` entry that is a bare
+    # `{ref}` is a mount edge at a form this binding does not implement. Coercing
+    # it would build an EMPTY reaction system and the document would load clean
+    # with nothing mounted, so refuse it here, at the entry.
+    _refuse_toplevel_reaction_system_refs(data)
 
     # esm-spec §9.7.10 form B: fold any coupling-entry injection map into the
     # named target components' own `expression_template_imports` BEFORE

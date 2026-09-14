@@ -1,0 +1,22 @@
+{
+ "esm": "1.0.0",
+ "metadata": {
+  "name": "nested_depth2_leaf",
+  "description": "The mounted leaf for the two-level case: it mounts nested_middle.esm, which mounts the component holding the rewrite target.",
+  "license": "MIT"
+ },
+ "models": {
+  "Leaf": {
+   "subsystems": {"mid": {"ref": "./nested_middle.esm"}},
+   "variables": {
+    "u": {"type": "unknown", "units": "1", "description": "accumulator"},
+    "uu": {"type": "unknown", "units": "1", "description": "observed copy of the middle link's value"}
+   },
+   "equations": [
+    {"lhs": {"op": "ic", "args": ["u"]}, "rhs": 0.0},
+    {"lhs": {"op": "D", "args": ["u"], "wrt": "t"}, "rhs": "mid.m"},
+    {"lhs": "uu", "rhs": "mid.m"}
+   ]
+  }
+ }
+}

@@ -2393,12 +2393,21 @@ target's export vocabulary.
 An absent (`nothing`) or empty map is the identity, which is what makes the field
 purely additive.
 """
-function apply_mount_index_set_rename(doc, rename_raw, where::AbstractString)
+function apply_mount_index_set_rename(doc, rename_raw, where::AbstractString;
+                                      nested_contributed::AbstractSet{String}=Set{String}())
     (rename_raw === nothing || !_is_object(doc)) && return doc
     requested = _name_map(rename_raw, "index_set_rename", where)
 
     isets = _get_field(doc, :index_sets, nothing)
-    declared = _is_object(isets) ? String[string(k) for k in keys(isets)] : String[]
+    # `nested_contributed` names the index sets that reached this registry ONLY
+    # through a mount nested inside the referenced document. esm-spec §4.7 scopes
+    # this edge to "what THIS referenced document declares and imports", so they
+    # are held out of the edge's vocabulary: naming one is
+    # `subsystem_index_set_rename_unknown_name`. A name the document ALSO
+    # declares itself is not in the set and is renamed normally — the §4.7 merge
+    # already made the two one axis, so the rename reaches the nested content.
+    declared = _is_object(isets) ?
+        String[string(k) for k in keys(isets) if !(string(k) in nested_contributed)] : String[]
 
     # Renames never invent names (esm-spec §4.7, mirroring §9.7.7).
     for key in keys(requested)
@@ -2442,7 +2451,18 @@ function apply_mount_index_set_rename(doc, rename_raw, where::AbstractString)
                                      for e in of]
                 end
             end
-            renamed[get(changed, string(name), string(name))] = decl
+            final = get(changed, string(name), string(name))
+            # A renamed axis may land on the name of an axis this edge does NOT
+            # rename — one a mount nested inside the referenced document
+            # contributed. Deep equality is idempotent; a disagreement is the
+            # §4.7 merge rule's own `subsystem_index_set_conflict`.
+            if haskey(renamed, final) && renamed[final] != decl
+                throw(ExpressionTemplateError(ERROR_CODES.SUBSYSTEM_INDEX_SET_CONFLICT,
+                    "$(where): `index_set_rename` maps index set '$(name)' onto " *
+                    "'$(final)', which a mount nested inside the referenced document " *
+                    "already contributes with a non-deep-equal declaration (esm-spec §4.7)"))
+            end
+            renamed[final] = decl
         end
         root["index_sets"] = renamed
     end

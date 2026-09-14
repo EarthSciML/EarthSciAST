@@ -1,0 +1,18 @@
+{
+ "esm": "1.0.0",
+ "metadata": {
+  "name": "nested_model_mount",
+  "description": "Top-level models.<k> {ref} mount (esm-spec 4.7) with the lowering library injected at the mount edge (9.7.10 form A). The rewrite target lives in the mounted leaf's OWN nested subsystem.",
+  "license": "MIT"
+ },
+ "models": {
+  "L": {"ref": "./nested_mounted_leaf.esm", "expression_template_imports": [{"ref": "./nested_lowering_lib.esm"}]},
+  "Root": {
+   "variables": {"z": {"type": "unknown", "units": "1", "description": "trivial own state"}},
+   "equations": [
+    {"lhs": {"op": "ic", "args": ["z"]}, "rhs": 1.0},
+    {"lhs": {"op": "D", "args": ["z"], "wrt": "t"}, "rhs": 0.0}
+   ]
+  }
+ }
+}

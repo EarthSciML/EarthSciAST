@@ -1,6 +1,8 @@
 package esm
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -797,7 +799,15 @@ func mountRenameWalk(x any, m map[string]string) {
 //
 // An absent, nil or empty map is the identity and leaves view untouched, which
 // is what makes the field purely additive.
-func applyMountIndexSetRename(view map[string]any, renameRaw any, where string) error {
+//
+// nestedContributed names the index sets that reached view["index_sets"] only
+// through a mount NESTED INSIDE the referenced document. esm-spec §4.7 scopes
+// this edge to "what THIS referenced document declares and imports", so those
+// names are held out of the edge's vocabulary and naming one is
+// `subsystem_index_set_rename_unknown_name`. A name the leaf ALSO declares
+// itself is not in the set and is renamed normally, which is what carries the
+// rename through the nested component the §4.7 merge already unified it with.
+func applyMountIndexSetRename(view map[string]any, renameRaw any, where string, nestedContributed map[string]bool) error {
 	if renameRaw == nil {
 		return nil
 	}
@@ -807,11 +817,16 @@ func applyMountIndexSetRename(view map[string]any, renameRaw any, where string) 
 	}
 
 	isets, _ := view["index_sets"].(map[string]any)
-	declared := sortedKeys(isets)
+	declared := make([]string, 0, len(isets))
+	for _, n := range sortedKeys(isets) {
+		if !nestedContributed[n] {
+			declared = append(declared, n)
+		}
+	}
 
 	// Renames never invent names (esm-spec §4.7, mirroring §9.7.7).
 	for _, key := range sortedKeys(requested) {
-		if _, ok := isets[key]; !ok {
+		if _, ok := isets[key]; !ok || nestedContributed[key] {
 			listed := "none"
 			if len(declared) > 0 {
 				listed = strings.Join(declared, ", ")
@@ -848,7 +863,8 @@ func applyMountIndexSetRename(view map[string]any, renameRaw any, where string) 
 	// deliberately leaves alone).
 	if isets != nil {
 		renamed := make(map[string]any, len(isets))
-		for name, decl := range isets {
+		for _, name := range sortedKeys(isets) {
+			decl := isets[name]
 			if d, ok := decl.(map[string]any); ok {
 				if of, ok := d["of"].([]any); ok {
 					for i, e := range of {
@@ -858,9 +874,27 @@ func applyMountIndexSetRename(view map[string]any, renameRaw any, where string) 
 					}
 				}
 			}
-			renamed[isetRenamed(name, changed)] = decl
+			final := isetRenamed(name, changed)
+			// A renamed axis may land on the name of an axis this edge does NOT
+			// rename — one a mount nested inside the referenced document
+			// contributed. Deep equality is idempotent, a disagreement is the
+			// §4.7 merge rule's own `subsystem_index_set_conflict`.
+			if existing, dup := renamed[final]; dup && !rawIndexSetDeepEqual(existing, decl) {
+				return newETErr(CodeSubsystemIndexSetConflict,
+					fmt.Sprintf("%s: `index_set_rename` maps index set '%s' onto '%s', which a mount nested inside the referenced document already contributes with a non-deep-equal declaration (esm-spec §4.7)", where, name, final))
+			}
+			renamed[final] = decl
 		}
 		view["index_sets"] = renamed
 	}
 	return nil
+}
+
+// rawIndexSetDeepEqual is indexSetDeepEqual on two RAW index-set declarations:
+// the §4.7 idempotent-redeclaration test, applied before the raw view is
+// coerced.
+func rawIndexSetDeepEqual(a, b any) bool {
+	ab, err1 := json.Marshal(a)
+	bb, err2 := json.Marshal(b)
+	return err1 == nil && err2 == nil && bytes.Equal(ab, bb)
 }

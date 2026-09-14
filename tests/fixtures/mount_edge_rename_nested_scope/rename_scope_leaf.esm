@@ -1,0 +1,15 @@
+{
+ "esm": "1.0.0",
+ "metadata": {
+  "name": "rename_scope_leaf",
+  "description": "The mounted leaf: it declares and imports no index set of its own, and mounts rename_scope_grandchild.esm, which declares lev.",
+  "license": "MIT"
+ },
+ "models": {
+  "Leaf": {
+   "subsystems": {"gc": {"ref": "./rename_scope_grandchild.esm"}},
+   "variables": {"u": {"type": "unknown", "units": "1", "description": "own state"}},
+   "equations": [{"lhs": {"op": "D", "args": ["u"], "wrt": "t"}, "rhs": 0.0}]
+  }
+ }
+}

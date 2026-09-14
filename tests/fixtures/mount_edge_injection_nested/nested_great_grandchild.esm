@@ -1,0 +1,17 @@
+{
+ "esm": "1.0.0",
+ "metadata": {
+  "name": "nested_great_grandchild",
+  "description": "Two mounts below the mount edge: the same rewrite-target operator, one level deeper than nested_grandchild.esm, so the reordered walk is pinned as recursive rather than one-level.",
+  "license": "MIT"
+ },
+ "models": {
+  "GreatGrandchild": {
+   "variables": {
+    "x_in": {"type": "parameter", "units": "1", "default": 3.0, "description": "coupling-target parameter"},
+    "y": {"type": "unknown", "units": "1", "description": "twice the injected input"}
+   },
+   "equations": [{"lhs": "y", "rhs": {"op": "*", "args": [2.0, {"op": "input_x", "args": []}]}}]
+  }
+ }
+}

@@ -291,6 +291,13 @@ export const ERROR_CODES = {
   SUBSYSTEM_INDEX_SET_RENAME_UNKNOWN_NAME: 'subsystem_index_set_rename_unknown_name',
   SUBSYSTEM_INDEX_SET_RENAME_UNSUPPORTED_MOUNT_FORM:
     'subsystem_index_set_rename_unsupported_mount_form',
+  /**
+   * A §4.7 `{ ref }` mount at a form this binding does not implement — a
+   * top-level `reaction_systems.<k>` `{ ref }` (esm-spec §4.7 "Two mount forms,
+   * one mechanism"). Refused at `/reaction_systems/<k>` rather than left as an
+   * unresolved stub.
+   */
+  MOUNT_FORM_UNSUPPORTED: 'mount_form_unsupported',
   SUBSYSTEM_REF_IS_COUPLING_LIBRARY: 'subsystem_ref_is_coupling_library',
   SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY: 'subsystem_ref_is_template_library',
 

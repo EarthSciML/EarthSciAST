@@ -1,0 +1,15 @@
+{
+ "esm": "1.0.0",
+ "metadata": {
+  "name": "rename_scope_grandchild",
+  "description": "The component a mounted leaf itself mounts. It is the ONLY declarer of the lev axis in the chain, so lev reaches the importing registry through a mount nested inside the leaf.",
+  "license": "MIT"
+ },
+ "index_sets": {"lev": {"kind": "interval", "size": 4}},
+ "models": {
+  "Grandchild": {
+   "variables": {"w": {"type": "unknown", "units": "1", "shape": ["lev"], "description": "a profile over the nested axis"}},
+   "equations": [{"lhs": {"op": "D", "args": ["w"], "wrt": "t"}, "rhs": 0.0}]
+  }
+ }
+}

@@ -1,0 +1,23 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "HoistExtentOk",
+    "description": "A path-based load of a document whose data source `extent` names N_REC, a metaparameter declared ONLY by the component it mounts. Loaded with no loader-API bindings, through the loader that inlines the root's refs BEFORE its own machinery. esm-spec 8.9.4: the static `extent` check must see names collected from the AUTHORED tree even when the caller has already inlined the refs, so this MUST load."
+  },
+  "data_sources": {
+    "EGU_Emis": {
+      "kind": "points",
+      "source": {"url_template": "file://./records.csv"},
+      "extent": {"metaparameter": "N_REC"},
+      "metadata": {"esio_format": "ff10"}
+    }
+  },
+  "models": {
+    "Host": {
+      "system_kind": "nonlinear",
+      "variables": {"z": {"type": "unknown", "units": "1", "description": "Host-local observed."}},
+      "equations": [{"lhs": "z", "rhs": {"op": "const", "args": [], "value": 0.0}}],
+      "subsystems": {"Ingest": {"ref": "../data_source_extent_scope/extent_axis_leaf.esm"}}
+    }
+  }
+}

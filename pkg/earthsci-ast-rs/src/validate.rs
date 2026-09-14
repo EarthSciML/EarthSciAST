@@ -168,6 +168,9 @@ pub enum StructuralErrorCode {
     /// A subsystem `ref` that resolved to a file NOT containing exactly one
     /// top-level system (zero or several), so which system to mount is ambiguous.
     AmbiguousSubsystemRef,
+    /// A §4.7 `{ref}` mount at a form this binding does not implement — a
+    /// top-level `reaction_systems.<k>` `{ref}`.
+    MountFormUnsupported,
     /// A `variable_map` `identity` coupling whose `from`/`to` variables carry
     /// declared, non-empty, and DIFFERING units (esm-spec §4.7.6). Static mirror
     /// of the flatten-time [`crate::flatten::FlattenError::DomainUnitMismatch`].
@@ -281,6 +284,7 @@ impl std::fmt::Display for StructuralErrorCode {
             Self::FactorWithExpressionTransform => codes::FACTOR_WITH_EXPRESSION_TRANSFORM,
             Self::UnresolvedSubsystemRef => codes::UNRESOLVED_SUBSYSTEM_REF,
             Self::AmbiguousSubsystemRef => codes::AMBIGUOUS_SUBSYSTEM_REF,
+            Self::MountFormUnsupported => codes::MOUNT_FORM_UNSUPPORTED,
             Self::DomainUnitMismatch => codes::DOMAIN_UNIT_MISMATCH,
             Self::JoinKeyInvalidType => codes::JOIN_KEY_INVALID_TYPE,
             Self::JoinSideAmbiguous => codes::JOIN_SIDE_AMBIGUOUS,

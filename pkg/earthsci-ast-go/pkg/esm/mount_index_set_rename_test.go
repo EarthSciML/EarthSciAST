@@ -2,6 +2,7 @@ package esm
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -343,5 +344,211 @@ func TestUnresolvedTopLevelMountSurvivesSerialization(t *testing.T) {
 	soil, _ = models["Soil"].(map[string]any)
 	if _, stillAnEdge := soil["ref"]; stillAnEdge {
 		t.Errorf("a resolved mount must emit its component, not the edge; got %v", soil)
+	}
+}
+
+// The per-edge rule of esm-spec §4.7 has two ends, and they are easy to
+// collapse into one. These two tests pin them apart.
+//
+// End one: an edge may NOT rename an axis that reached the registry ONLY
+// through a mount nested inside the referenced document — that axis is renamed
+// at ITS own edge, so naming it here is `subsystem_index_set_rename_unknown_name`.
+func TestMountRenameCannotNameAnAxisANestedMountContributed(t *testing.T) {
+	for _, tc := range []struct{ file, noun string }{
+		{"rename_scope_nested_only_axis.esm", "subsystem ref"},
+		{"rename_scope_nested_only_axis_toplevel.esm", "top-level model ref"},
+	} {
+		_, err := LoadPath(mrFixture(t, "fixtures", "mount_edge_rename_nested_scope", tc.file))
+		if err == nil {
+			t.Fatalf("%s: loaded, but `lev` is declared only by the leaf's own nested mount", tc.file)
+		}
+		if !strings.Contains(err.Error(), "subsystem_index_set_rename_unknown_name") {
+			t.Errorf("%s: want subsystem_index_set_rename_unknown_name, got: %v", tc.file, err)
+		}
+		if !strings.Contains(err.Error(), tc.noun) || !strings.Contains(err.Error(), "index set 'lev'") {
+			t.Errorf("%s: the diagnostic must name this edge and the axis: %v", tc.file, err)
+		}
+	}
+}
+
+// End two: an edge MUST rename an axis the referenced document declares
+// ITSELF, even where a component it mounts declares a deep-equal one of the
+// same name — §4.7's deep-equal merge has already made those ONE axis, so the
+// rename covers the whole resolved leaf. The observable difference is the
+// registry: `{soil_lev}` alone with the nested component's `shape` re-pointed,
+// not `{lev, soil_lev}` with the nested component still on `lev`.
+func TestMountRenameReachesAnAxisSharedWithANestedMount(t *testing.T) {
+	for _, name := range []string{
+		"rename_scope_shared_axis.esm",
+		"rename_scope_shared_axis_toplevel.esm",
+	} {
+		f, err := LoadPath(mrFixture(t, "fixtures", "mount_edge_rename_nested_scope", name))
+		if err != nil {
+			t.Fatalf("LoadPath(%s): %v", name, err)
+		}
+		if len(f.IndexSets) != 1 {
+			t.Errorf("%s: registry = %v; want exactly one entry, the post-rename name", name, f.IndexSets)
+		}
+		if s, ok := f.IndexSets["soil_lev"]; !ok || s.Size == nil || *s.Size != 4 {
+			t.Errorf("%s: soil_lev = %v; want size 4", name, f.IndexSets["soil_lev"])
+		}
+		b, err := json.Marshal(f)
+		if err != nil {
+			t.Fatalf("%s: marshal: %v", name, err)
+		}
+		if strings.Contains(string(b), `"lev"`) {
+			t.Errorf("%s: a reference to the pre-rename name survived in the mounted subtree", name)
+		}
+	}
+}
+
+// esm-spec §4.7 "Which environment it folds against": a merge folds against the
+// closed metaparameter environment of whatever registry it lands in.
+//
+// The grandchild sizes an axis "n_lev" and carries no §9.7 machinery, so the
+// name survives its own load unfolded; the leaf declares n_lev = 4 and mounts
+// it; the assembly declares an unrelated n_lev = 9 and mounts the leaf. The
+// axis lands in the LEAF's registry, so the leaf's close speaks and the answer
+// is 4. This binding answered 9 before the rule was settled, letting an
+// assembler's unrelated same-named metaparameter resize an axis the leaf owns.
+func TestMergeFoldsAgainstTheRegistryItLandsIn(t *testing.T) {
+	f, err := LoadPath(mrFixture(t, "fixtures", "mount_merge_fold_env", "fold_env_root.esm"))
+	if err != nil {
+		t.Fatalf("LoadPath(fold_env_root): %v", err)
+	}
+	got := f.IndexSets["prof"]
+	if got.Size == nil || *got.Size != 4 {
+		t.Errorf("prof size = %v; want 4 (the LEAF's n_lev, not the assembly's 9)", got.Size)
+	}
+
+	// And "the leaf's closed environment" means CLOSED: an explicit edge
+	// binding closes the referenced document and wins over its own default
+	// (§9.7.6 site 3), so the same axis is 7 when the edge binds 7. An axis the
+	// leaf declares ITSELF already folds to 7 through that close, so answering
+	// 4 here would make one resolved document disagree with itself.
+	bf, err := LoadPath(mrFixture(t, "fixtures", "mount_merge_fold_env", "fold_env_bound_root.esm"))
+	if err != nil {
+		t.Fatalf("LoadPath(fold_env_bound_root): %v", err)
+	}
+	bound := bf.IndexSets["prof"]
+	if bound.Size == nil || *bound.Size != 7 {
+		t.Errorf("prof size = %v; want 7 (the edge binding closes the leaf)", bound.Size)
+	}
+}
+
+// The RAISED FLOOR, at the seam the §4.7 inline/merge reorder needs it.
+//
+// esm-spec §4.7 resolves a `{ref}` "before validation or any other
+// processing", which puts a mounted leaf's content in the document BEFORE the
+// esm-version gates run. A legal 1.0.0 assembly that mounts a `faq`-using leaf
+// then CONTAINS `faq` without ever having spelled it, and the gate refuses a
+// document nobody authored wrongly. The Julia reference answers this by not
+// gating an already-inlined document and raising the floor instead, "exactly as
+// `emit` does" (docs/content/rfcs/faq-node-rename.md §5.5).
+//
+// This binding already has that stamp — `raiseFaqEsmFloor`, applied on emit —
+// and the reorder needs it applied one step earlier, to the inlined text before
+// LoadString gates it. Pinned here so the mechanism is in place and known-good
+// ahead of the reorder rather than debugged alongside it.
+func TestRaisedFloorAdmitsAnInlinedFaqDocument(t *testing.T) {
+	leaf, err := os.ReadFile(mrFixture(t, "valid", "mount_rename_atm_column.esm"))
+	if err != nil {
+		t.Fatalf("read the faq-using leaf: %v", err)
+	}
+	var leafDoc map[string]any
+	if err := json.Unmarshal(leaf, &leafDoc); err != nil {
+		t.Fatalf("decode the leaf: %v", err)
+	}
+	// The assembly as the reorder hands it to LoadString: the leaf's component
+	// already spliced in, and the assembly's own authored `esm` still 1.0.0.
+	inlined := map[string]any{
+		"esm": "1.0.0",
+		"metadata": map[string]any{
+			"name": "inlined_assembly", "description": "a 1.0.0 assembly that CONTAINS faq only because a mount was inlined into it", "license": "MIT",
+		},
+		"index_sets": leafDoc["index_sets"],
+		"models":     leafDoc["models"],
+	}
+	b, err := json.Marshal(inlined)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+
+	// Ungated, it is refused — which is the failure the reorder would otherwise
+	// surface on six of this package's tests.
+	if _, err := LoadString(string(b)); err == nil {
+		t.Fatal("a 1.0.0 document containing faq loaded ungated; the gate is not what this test thinks")
+	} else if !strings.Contains(err.Error(), "faq_version_too_old") {
+		t.Fatalf("want faq_version_too_old, got: %v", err)
+	}
+
+	// With the floor raised, it loads — and the floor only ever raises.
+	raised := raiseFaqEsmFloor(string(b))
+	f, err := LoadString(raised)
+	if err != nil {
+		t.Fatalf("the raised floor must admit the inlined document: %v", err)
+	}
+	if f.ESM != "1.1.0" {
+		t.Errorf("esm = %q; want the raised 1.1.0 floor", f.ESM)
+	}
+}
+
+// esm-spec §8.9.4 "When the check is evaluated", under the §4.7 root reorder.
+//
+// LoadPath inlines the root document's refs BEFORE LoadString's own §9.7
+// machinery, so the §9.6.3 fixpoint lowers through mounted content (issue
+// #311). That also consumes each mounted leaf's `metaparameters` at its edge,
+// so the text LoadString receives is no longer the authored text. The static
+// `extent` check must still see the names collected from the AUTHORED tree —
+// which LoadPath does by collecting them before it inlines and handing them to
+// LoadString through an unexported option.
+//
+// Measured before that option existed: with the reorder active, six of the
+// extent-scope tests failed with exactly the `ok` half's shape refused. So the
+// first half is the regression detector for the option; the second half proves
+// collecting from the authored tree widened the accepted set to what the mount
+// declares and no further.
+func TestReorderedLoadChecksExtentAgainstTheAuthoredTree(t *testing.T) {
+	ok := mrFixture(t, "fixtures", "mount_hoist_extent", "hoist_extent_ok.esm")
+	if _, err := LoadPath(ok); err != nil {
+		t.Fatalf("an `extent` naming a metaparameter declared only by a mounted leaf must load "+
+			"through the reordered path-based loader: %v", err)
+	}
+
+	typo := mrFixture(t, "fixtures", "mount_hoist_extent", "hoist_extent_typo.esm")
+	_, err := LoadPath(typo)
+	if err == nil {
+		t.Fatal("an `extent` misspelling the mounted leaf's metaparameter must still be refused")
+	}
+	if !strings.Contains(err.Error(), string(CodeTemplateImportUnknownName)) || !strings.Contains(err.Error(), "N_RECS") {
+		t.Errorf("error = %v; want %s naming N_RECS", err, CodeTemplateImportUnknownName)
+	}
+}
+
+// esm-spec §4.7: this binding does not implement the top-level
+// `reaction_systems.<k>` `{ref}` mount form, so it REFUSES the entry —
+// `mount_form_unsupported` at `/reaction_systems/<k>` — rather than decoding the
+// stub as an empty reaction system and loading clean with nothing mounted.
+// (Julia is the one binding that implements the form.)
+func TestTopLevelReactionSystemRefIsRefusedLoudly(t *testing.T) {
+	_, err := LoadPath(mrFixture(t, "fixtures", "mount_form_unsupported", "toplevel_reaction_system_ref.esm"))
+	if err == nil {
+		t.Fatal("a top-level reaction_systems.<k> {ref} loaded; it must be refused")
+	}
+	var et *ExpressionTemplateError
+	if !errors.As(err, &et) {
+		t.Fatalf("error %T %v; want an *ExpressionTemplateError", err, err)
+	}
+	if et.Code != CodeMountFormUnsupported {
+		t.Errorf("code = %q; want %q", et.Code, CodeMountFormUnsupported)
+	}
+	if et.Path != "/reaction_systems/Chem" {
+		t.Errorf("path = %q; want /reaction_systems/Chem", et.Path)
+	}
+
+	// The leaf itself — an inline reaction system, a component rather than a
+	// mount — still loads.
+	if _, err := LoadPath(mrFixture(t, "fixtures", "mount_form_unsupported", "reaction_system_leaf.esm")); err != nil {
+		t.Errorf("an inline reaction system must still load: %v", err)
 	}
 }

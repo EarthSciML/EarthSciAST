@@ -84,7 +84,10 @@ export class CircularReferenceError extends EsmDiagnosticError {
 export class RefLoadError extends EsmDiagnosticError {
   /** The reference path or URL that failed to load */
   public readonly ref: string
-  /** Canonical code: `unresolved_subsystem_ref` or `ambiguous_subsystem_ref`. */
+  /**
+   * Canonical code: `unresolved_subsystem_ref`, `ambiguous_subsystem_ref`, or
+   * `mount_form_unsupported` for a mount form this binding does not implement.
+   */
   declare readonly code: string
   /**
    * JSON Pointer of the SUBSYSTEM ENTRY that carries the bad ref (e.g.
@@ -203,6 +206,11 @@ export function resolveSubsystemRefsSync(
   const registry: Record<string, unknown> =
     (file.index_sets as Record<string, unknown> | undefined) ?? {}
 
+  // Which ROOT components mount a `subsystems.<k>` `{ ref }`, recorded BEFORE the
+  // walk below inlines them — afterwards the stubs are gone. Only these are
+  // re-lowered at the end (see `relowerThroughInlinedMounts`).
+  const mountingComponents = componentsWithSubsystemRefs(file)
+
   // Process all models. A top-level `models.<k>` that is a bare `{ ref }` is a
   // MOUNT EDGE in its own right (esm-spec §4.7 "Two mount forms, one
   // mechanism"), not a component with subsystems to walk, so it is inlined
@@ -251,6 +259,22 @@ export function resolveSubsystemRefsSync(
   // model walk).
   if (file.reaction_systems) {
     for (const [name, rs] of Object.entries(file.reaction_systems)) {
+      // esm-spec §4.7: a top-level `reaction_systems.<k>` entry that is a bare
+      // `{ ref }` — a `ref` string and no `species`, the Julia reference's
+      // discriminator for this form — is a mount edge at a form this binding
+      // does not implement. Refuse it at the entry rather than leave an
+      // unresolved stub where a reaction system belongs. An inline reaction
+      // system is a component, not a mount, and is walked as before.
+      const entry = rs as { ref?: unknown; species?: unknown }
+      if (typeof entry.ref === 'string' && entry.species === undefined) {
+        throw new RefLoadError(
+          entry.ref,
+          undefined,
+          ERROR_CODES.MOUNT_FORM_UNSUPPORTED,
+          `reaction_systems.${name}: a top-level \`reaction_systems.<k>\` \`{ref}\` mount (ref '${entry.ref}') is not supported by this binding. Inline the reaction system, or mount it at a \`subsystems.<k>\` \`{ref}\` edge (esm-spec §4.7 "Two mount forms, one mechanism")`,
+          `/reaction_systems/${name}`,
+        )
+      }
       resolveReactionSystemRefs(
         rs,
         basePath,
@@ -263,6 +287,10 @@ export function resolveSubsystemRefsSync(
       )
     }
   }
+
+  // esm-spec §9.7.10 / issue #311: re-run the §9.6.3 rewrite pass over each
+  // root component that just had mounted content spliced into it.
+  relowerThroughInlinedMounts(file, mountingComponents)
 
   // A mounted child may have brought `faq` into a parent that never spells it.
   // The parent's authored bytes are legal at 1.0.0, but the RESOLVED document
@@ -551,6 +579,12 @@ function resolveRefDocument(
   indexSetRename: unknown = undefined,
   apiMeta: Readonly<Record<string, number>> = {},
   mountForm: MountForm = 'subsystem',
+  resolveNestedMounts?: (
+    leaf: EsmFile,
+    leafRegistry: Record<string, unknown>,
+    leafEnv: Readonly<Record<string, number>>,
+  ) => void,
+  enclosingEnv: Readonly<Record<string, number>> = {},
 ): EsmFile {
   const mountLabel =
     mountForm === 'subsystem' ? `Subsystem ref '${ref}'` : `Top-level model ref '${ref}'`
@@ -568,8 +602,37 @@ function resolveRefDocument(
   }
   rejectExpressionTemplatesPreV04(parsed)
   rejectTemplateImportsPreV08(parsed)
+  // esm-spec §4.7: a `{ ref }` resolves "before validation or any other
+  // processing", so the referenced document's OWN nested mounts are inlined
+  // HERE, ahead of the §9.7.10 injection and the §9.6.3 fixpoint below.
+  // §9.7.10 defines the injection as "as if the target had added those entries
+  // to the END of its own `expression_template_imports`", and a component's own
+  // imports lower a rewrite-target inside a component it mounts — so the
+  // fixpoint has to see the mounted content or the two halves of that sentence
+  // disagree (issue #311).
+  //
+  // The contributions those mounts bring are STAGED in a leaf-local registry,
+  // not merged: THIS leaf has not closed yet — `resolveTemplateMachinery` is
+  // still below — and a §4.7 contribution must not join a registry before the
+  // mounting document's §9.7.6 close. `foldNestedIndexSets` lands them after
+  // it. Merging here would put the contribution back before the close, which is
+  // exactly what the merge-order fix removed.
+  const leafRegistry: Record<string, unknown> = {}
+  // esm-spec §4.7 "Two mount forms, one mechanism": the loader-API bindings
+  // (§9.7.6 site 4) backfill this edge's close for the names the LEAF declares,
+  // and an explicit edge binding wins over them. Computed HERE, before the
+  // nested walk, because the fold environment below is built from it.
+  const effectiveBindings = { ...backfillLeafBindings(parsed, apiMeta), ...bindings }
+  // The fold environment for everything this leaf's OWN mounts contribute:
+  // the ENCLOSING environment overlaid with this leaf's CLOSED one, for the names
+  // the leaf declares (esm-spec §4.7 "Which environment a contribution folds
+  // against"). See `childFoldEnv`.
+  const leafEnv = childFoldEnv(enclosingEnv, leafClosedEnv(parsed, effectiveBindings))
+  if (resolveNestedMounts) resolveNestedMounts(parsed, leafRegistry, leafEnv)
   // esm-spec §9.7.10 form A: fold the subsystem-ref edge's injected imports
-  // into the referenced component's scope before resolution.
+  // into the referenced component's scope before resolution — and, because the
+  // nested mounts are already inlined above, the rewrite-targets of the
+  // components the leaf itself mounts lower with it.
   const injectedRoot = applyScopeInjections(parsed, injectedImports)
   const machineryInput = (injectedRoot ?? parsed) as EsmFile
   // esm-spec §4.7 "Two mount forms, one mechanism": the loader-API bindings
@@ -583,7 +646,6 @@ function resolveRefDocument(
   // forwarding the mounting document's declared defaults instead would let an
   // assembler's unrelated metaparameter silently resize a leaf axis this edge
   // never bound. An explicit edge `binding` overrides the backfill.
-  const effectiveBindings = { ...backfillLeafBindings(machineryInput, apiMeta), ...bindings }
   // `resolveTemplateMachinery` returns null when the document carries no
   // §9.7 machinery (and rejects non-empty bindings against such a document
   // with `template_import_unknown_name`).
@@ -611,60 +673,124 @@ function resolveRefDocument(
   // referenced document has now resolved in its OWN scope — its imports, this
   // edge's `bindings` and injection, its metaparameter close and fold, the
   // §9.6.3 fixpoint — so its `index_sets` are the post-resolution vocabulary
-  // the edge's `index_set_rename` speaks. Before its own nested mounts resolve:
-  // each nested edge renames what IT contributes, at its own edge. Absent or
-  // empty ⇒ identity, so an edge that does not use the field resolves exactly
-  // as before.
-  applyMountIndexSetRename(out, indexSetRename, `${mountForm} ref '${ref}'`)
-  // The leaf's CLOSED metaparameter environment — its own declared integer
-  // defaults overlaid with the effective edge bindings that close it (§9.7.6
-  // site 3: an explicit edge binding wins over the leaf's own default), for the
-  // names the leaf DECLARES. It is what everything this leaf's OWN mounts
-  // contribute folds against (esm-spec §4.7 "Which environment a contribution
-  // folds against"). Carried on a non-enumerable sidecar, like
-  // `loaderMetaparameters`, because those mounts resolve in the caller and the
-  // `metaparameters` block it is computed from has been consumed by now.
-  const leafClosedEnv: Record<string, number> = {}
-  const leafDecls = (machineryInput as { metaparameters?: Record<string, unknown> }).metaparameters
-  if (leafDecls && typeof leafDecls === 'object' && !Array.isArray(leafDecls)) {
-    for (const [n, d] of Object.entries(leafDecls)) {
-      const dflt = (d as { default?: unknown } | null)?.default
-      if (typeof dflt === 'number' && Number.isInteger(dflt)) leafClosedEnv[n] = dflt
-      const bound = (effectiveBindings as Record<string, number>)[n]
-      if (bound !== undefined) leafClosedEnv[n] = bound
-    }
-  }
-  Object.defineProperty(out, 'leafClosedEnv', {
-    value: leafClosedEnv,
-    enumerable: false,
-    writable: true,
-    configurable: true,
-  })
+  // the edge's `index_set_rename` speaks. Scoped to what THIS document declares
+  // and imports: an axis that reached the registry only through a mount nested
+  // inside it is renamed (or not) at that nested edge. Absent or empty ⇒
+  // identity, so an edge that does not use the field resolves exactly as
+  // before.
+  const nestedContributed = foldNestedIndexSets(out, leafRegistry, ref, leafEnv)
+  applyMountIndexSetRename(out, indexSetRename, `${mountForm} ref '${ref}'`, nestedContributed)
   return out
 }
 
 /**
- * The fold environment for everything a mounted leaf's OWN mounts contribute
- * (esm-spec §4.7 "Which environment a contribution folds against").
+ * A mounted leaf's own CLOSED metaparameter environment: its declared integer
+ * `default`s overlaid with this edge's folded `bindings` (esm-spec §9.7.6 site
+ * 3), read BEFORE `resolveTemplateMachinery` consumes the block.
  *
- * This binding threads ONE registry, so a nested contribution lands in the
- * root's — but the SCOPE that sizes it is the leaf's. So: the enclosing
- * environment, overlaid with the leaf's closed one. The leaf's environment holds
- * only names the leaf DECLARES, which is the same filter §9.7.6 site 4 applies
- * to the backfill: an outer metaparameter the leaf never declared cannot size an
- * axis here, and a name only an outer scope declares still folds against that
- * outer scope. Without the overlay one resolved document disagrees with itself —
- * an axis the leaf declares folds to the bound value, an axis its own nested
- * mount contributes to the unbound default.
+ * This is the fold environment for every §4.7 contribution that lands in the
+ * LEAF's registry — its own nested mounts' axes. esm-spec §4.7 makes the rule
+ * explicit: a merge folds against the environment of whatever registry it lands
+ * in. Folding a leaf's nested contribution against the ROOT's environment
+ * instead let an assembler's unrelated metaparameter of the same name size an
+ * axis the leaf owns.
+ */
+function leafClosedEnv(leaf: EsmFile, bindings: Record<string, number>): Record<string, number> {
+  const env: Record<string, number> = {}
+  const decls = (leaf as { metaparameters?: unknown }).metaparameters
+  if (typeof decls === 'object' && decls !== null && !Array.isArray(decls)) {
+    for (const [name, d] of Object.entries(decls as Record<string, unknown>)) {
+      // Only the names the leaf DECLARES — the same filter §9.7.6 site 4
+      // applies to the backfill — each at its default, overlaid by the binding
+      // that closes it when there is one (site 3: the binding wins).
+      if (typeof d === 'object' && d !== null) {
+        const def = (d as { default?: unknown }).default
+        if (typeof def === 'number' && Number.isInteger(def)) env[name] = def
+      }
+      const bound = bindings[name]
+      if (bound !== undefined) env[name] = bound
+    }
+  }
+  return env
+}
+
+/**
+ * The fold environment for everything a mounted leaf's OWN mounts contribute
+ * (esm-spec §4.7 "Which environment a contribution folds against"): the
+ * ENCLOSING environment, overlaid with the leaf's CLOSED one.
+ *
+ * The leaf's environment holds only the names it DECLARES, so an outer
+ * metaparameter the leaf never declared cannot size an axis the leaf owns, and a
+ * name ONLY an outer scope declares still folds against that outer scope. Without
+ * the overlay one resolved document disagrees with itself — an axis the leaf
+ * declares folds to the bound value, an axis its own nested mount contributes to
+ * the unbound default.
  */
 function childFoldEnv(
   enclosing: Readonly<Record<string, number>>,
-  leaf: EsmFile,
+  leafClosed: Readonly<Record<string, number>>,
 ): Readonly<Record<string, number>> {
-  return {
-    ...enclosing,
-    ...((leaf as { leafClosedEnv?: Record<string, number> }).leafClosedEnv ?? {}),
+  return { ...enclosing, ...leafClosed }
+}
+
+/**
+ * Land the contributions a mounted leaf's OWN nested mounts staged, now that
+ * the leaf has CLOSED, and return the names that were theirs alone.
+ *
+ * The other half of the inline/merge split at a mount edge: the nested content
+ * was spliced in early so the §9.6.3 fixpoint could lower through it, and its
+ * `index_sets` were held back until this leaf's §9.7.6 close. They arrive here,
+ * folded against the leaf's own closed environment and compared deep-equal
+ * against a registry whose sizes that close has already folded.
+ *
+ * Splitting the names out is also what lets one edge answer esm-spec §4.7's two
+ * opposite questions about `index_set_rename` correctly:
+ *
+ * - an axis ONLY a nested mount declares is NOT this edge's to rename
+ *   ("Renaming is per edge … an axis reaching the registry through a mount
+ *   *nested inside* the referenced document is renamed (or not) at that nested
+ *   edge"), so naming it here is `subsystem_index_set_rename_unknown_name`;
+ * - an axis the leaf declares ITSELF is this edge's to rename even where a
+ *   nested mount declares a deep-equal one, because the §4.7 merge has made
+ *   those one axis — the rename then covers the whole resolved leaf, nested
+ *   component `shape` entries included, and the registry ends with the new name
+ *   only.
+ *
+ * A nested contribution whose name the leaf also declares is therefore dropped
+ * when the two are deep-equal (idempotent redeclaration) and is
+ * `subsystem_index_set_conflict` when they are not.
+ */
+function foldNestedIndexSets(
+  out: EsmFile,
+  leafRegistry: Record<string, unknown>,
+  ref: string,
+  leafEnv: Readonly<Record<string, number>>,
+): Set<string> {
+  const contributed = new Set<string>()
+  const names = Object.keys(leafRegistry)
+  if (names.length === 0) return contributed
+  const root = out as unknown as Record<string, unknown>
+  const existing = root.index_sets
+  const isets: Record<string, unknown> =
+    typeof existing === 'object' && existing !== null && !Array.isArray(existing)
+      ? (existing as Record<string, unknown>)
+      : {}
+  for (const n of names) {
+    const decl = foldMountContribution(leafRegistry[n], leafEnv)
+    if (Object.prototype.hasOwnProperty.call(isets, n)) {
+      if (!deepEqual(isets[n], decl)) {
+        throw new EsmMachineryError(
+          ERROR_CODES.SUBSYSTEM_INDEX_SET_CONFLICT,
+          `index set '${n}' contributed by a mount nested inside ref '${ref}' (${showIndexSet(decl)}) collides with a non-deep-equal declaration of the same name in that document itself (${showIndexSet(isets[n])}) — deep-equal redeclaration is idempotent, a size/kind disagreement is a load-time error (esm-spec §4.7)`,
+        )
+      }
+      continue
+    }
+    isets[n] = decl
+    contributed.add(n)
   }
+  root.index_sets = isets
+  return contributed
 }
 
 /**
@@ -710,6 +836,13 @@ function resolveRefEdge(
   inline: (parsed: EsmFile, refBasePath: string) => void,
   apiMeta: Readonly<Record<string, number>>,
   mountForm: MountForm = 'subsystem',
+  resolveNestedMounts?: (
+    leaf: EsmFile,
+    leafRegistry: Record<string, unknown>,
+    refBasePath: string,
+    leafEnv: Readonly<Record<string, number>>,
+  ) => void,
+  enclosingEnv: Readonly<Record<string, number>> = {},
 ): void {
   const chainKey = normalizeRef(ref, basePath)
 
@@ -743,6 +876,11 @@ function resolveRefEdge(
       sub.index_set_rename,
       apiMeta,
       mountForm,
+      resolveNestedMounts
+        ? (leaf, leafRegistry, leafEnv) =>
+            resolveNestedMounts(leaf, leafRegistry, refBasePath, leafEnv)
+        : undefined,
+      enclosingEnv,
     )
     inline(parsed, refBasePath)
   } finally {
@@ -775,6 +913,9 @@ function walkSubsystemRefs(
   apiMeta: Readonly<Record<string, number>>,
   rootEnv: Readonly<Record<string, number>>,
 ): void {
+  // `rootEnv` is the ENCLOSING environment for each leaf mounted here: the base
+  // its own nested contributions fold against, overlaid with the leaf's closed
+  // one (esm-spec §4.7 "Which environment a contribution folds against").
   for (const [subName, subsystem] of Object.entries(subsystems)) {
     const sub = subsystem as RefEdge
     const ref = sub.ref
@@ -790,27 +931,33 @@ function walkSubsystemRefs(
         read,
         subPointer,
         (parsed, refBasePath) => {
-          // The mounted file may itself be an ASSEMBLY, whose own `models.<k>`
-          // entries are `{ ref }` mount edges. Which attachment point mounted
-          // it does not change what it IS, and esm-spec §4.7 "Two mount forms,
-          // one mechanism" forbids answering an assembly differently at the
-          // two — so the leaf's own top-level mounts resolve here exactly as
-          // they do at a top-level mount, before `onRef` extracts its single
-          // component. Without it the extraction picks the leaf's UNRESOLVED
-          // `{ ref }` edge and splices it in as though it were the component.
-          inlineNestedTopLevelMounts(
-            parsed,
-            refBasePath,
-            resolving,
-            read,
-            subPointer,
-            [...refChain, subName],
-            apiMeta,
-            childFoldEnv(rootEnv, parsed),
-          )
           onRef(parsed, refBasePath, { subName, ref, pointer: subPointer })
         },
         apiMeta,
+        'subsystem',
+        // The leaf's own nested mounts, of EITHER form — the mounted file may
+        // itself be an ASSEMBLY, whose own `models.<k>` entries are `{ ref }`
+        // mount edges, and esm-spec §4.7 "Two mount forms, one mechanism"
+        // forbids answering an assembly differently at the two. They resolve
+        // inside `resolveRefDocument`, ahead of this edge's §9.7.10 injection
+        // and the §9.6.3 fixpoint, so the fixpoint reaches their
+        // rewrite-targets (issue #311) and so `onRef`'s extraction cannot pick
+        // an UNRESOLVED `{ ref }` edge and splice it in as the component.
+        // `leafEnv` is this leaf's fold environment — the enclosing one
+        // overlaid with the leaf's closed one (see `childFoldEnv`).
+        (leaf, leafRegistry, leafBasePath, leafEnv) =>
+          resolveLeafNestedMounts(
+            leaf,
+            leafRegistry,
+            leafBasePath,
+            resolving,
+            [...refChain, subName],
+            read,
+            subPointer,
+            apiMeta,
+            leafEnv,
+          ),
+        rootEnv,
       )
     } else {
       // Even without a ref, recurse into nested subsystems.
@@ -881,34 +1028,15 @@ function inlineTopLevelModelRef(
     [...refChain],
     read,
     pointer,
-    (parsed, refBasePath) => {
-      // The leaf's OWN top-level `models.<k>` mounts resolve FIRST, in the
-      // leaf's directory and against the leaf's own registry, sharing this
-      // walk's path-scoped `resolving` set. An assembly may be mounted by
-      // another assembly — that is the whole point of a form that lands its
-      // component as a top-level system — so this form has to compose with
-      // itself, and it composes exactly where the Julia reference
-      // (`_inline_toplevel_model_refs!`) and Rust compose it: after this edge's
-      // `index_set_rename` has spoken the leaf's own vocabulary (applied inside
-      // `resolveRefDocument` above), and BEFORE the merge below, so what the
-      // leaf's own mounts brought in is part of what merges up here.
+    (parsed) => {
+      // The leaf's OWN nested mounts — of either form, including a top-level
+      // `models.<k>` edge, because an assembly may be mounted by another
+      // assembly — have ALREADY resolved, inside `resolveRefDocument` above and
+      // ahead of the fixpoint (issue #311). Without that,
+      // `Object.entries(parsed.models)[0]` below would pick the leaf's
+      // UNRESOLVED `{ ref }` edge and splice it in as if it were the component,
+      // and a mount cycle would never reach the `resolving` check at all.
       //
-      // Without this, `Object.entries(parsed.models)[0]` below would pick the
-      // leaf's UNRESOLVED `{ ref }` edge and splice it in as if it were the
-      // component: a document that mounts an assembly would load clean and
-      // carry a bare mount edge where a model belongs, and a mount cycle would
-      // never reach the `resolving` check at all.
-      inlineNestedTopLevelMounts(
-        parsed,
-        refBasePath,
-        resolving,
-        read,
-        pointer,
-        [...refChain, name],
-        apiMeta,
-        childFoldEnv(rootEnv, parsed),
-      )
-
       // esm-spec §4.7 "Index-set merge", at either mount form: the resolved
       // leaf's document-scoped axes join this document's registry, so the
       // assembly may shape its coupling over them without redeclaring them.
@@ -931,21 +1059,115 @@ function inlineTopLevelModelRef(
       // esm-spec §6.6: inline tests do NOT cross a mount edge.
       delete (resolvedModel as { tests?: unknown }).tests
       if (file.models) file.models[name] = resolvedModel
-      resolveModelRefs(
-        resolvedModel,
-        refBasePath,
-        resolving,
-        [name],
-        registry,
-        read,
-        pointer,
-        apiMeta,
-        childFoldEnv(rootEnv, parsed),
-      )
     },
     apiMeta,
     'top-level model',
+    // `leafEnv` is this leaf's fold environment, as for the subsystem form.
+    (leaf, leafRegistry, leafBasePath, leafEnv) =>
+      resolveLeafNestedMounts(
+        leaf,
+        leafRegistry,
+        leafBasePath,
+        resolving,
+        [...refChain, name],
+        read,
+        pointer,
+        apiMeta,
+        leafEnv,
+      ),
+    rootEnv,
   )
+}
+
+/**
+ * The ROOT components — `"models.<name>"` / `"reaction_systems.<name>"` keys, the
+ * `componentTemplates` key shape — that mount a `subsystems.<k>` `{ ref }` at
+ * any depth.
+ */
+function componentsWithSubsystemRefs(file: EsmFile): Set<string> {
+  const out = new Set<string>()
+  const mounts = (comp: unknown): boolean => {
+    if (comp === null || typeof comp !== 'object' || Array.isArray(comp)) return false
+    const subs = (comp as { subsystems?: unknown }).subsystems
+    if (subs === null || typeof subs !== 'object' || Array.isArray(subs)) return false
+    for (const sub of Object.values(subs as Record<string, unknown>)) {
+      if (sub === null || typeof sub !== 'object' || Array.isArray(sub)) continue
+      if (typeof (sub as { ref?: unknown }).ref === 'string') return true
+      if (mounts(sub)) return true
+    }
+    return false
+  }
+  for (const section of ['models', 'reaction_systems'] as const) {
+    const comps = (file as unknown as Record<string, unknown>)[section]
+    if (comps === null || typeof comps !== 'object' || Array.isArray(comps)) continue
+    for (const [name, comp] of Object.entries(comps as Record<string, unknown>)) {
+      if (mounts(comp)) out.add(`${section}.${name}`)
+    }
+  }
+  return out
+}
+
+/**
+ * Re-run the esm-spec §9.6.3 rewrite pass over each ROOT component that just had
+ * mounted content spliced into it, using the rules that component resolved at
+ * load and that `load*` keeps on the non-enumerable `componentTemplates` sidecar.
+ *
+ * WHY. In this binding `loadPath` / `loadString` do not resolve `{ ref }` mounts
+ * — `resolveSubsystemRefs` is a separate entry point, run after the load has
+ * already lowered the document — so a rule a component declares in its own
+ * `expression_template_imports` never reached a rewrite-target inside a
+ * component it mounts. That is issue #311's CONTROL case, and §9.7.10 defines
+ * the mount-edge injection by reference to it ("as if the target had added those
+ * entries to the end of its own `expression_template_imports`"), so the two must
+ * agree. Rust, Go and Julia inline before their fixpoint; this binding lowers a
+ * second time instead, which keeps `loadPath`'s contract (it does not resolve
+ * refs) and still covers mounts only the async resolver can fetch.
+ *
+ * SAFE TO REPEAT. Only components recorded as mounting a `{ ref }` before
+ * resolution are touched, and the pass is a fixpoint: content the load already
+ * lowered carries no rewrite-target a rule can match again, so it comes back
+ * unchanged — pinned by a test that re-lowers an already-lowered root.
+ *
+ * WHAT IT CANNOT SEE. A match pattern is one expression tree, and splicing a
+ * subsystem in adds that subsystem's equations beside the component's own
+ * rather than grafting nodes into them — the component refers to mounted
+ * content only by scoped NAME (`sd.y`) — so no pattern can span the boundary
+ * between the two, and the second pass cannot differ from a first pass that
+ * saw both.
+ */
+function relowerThroughInlinedMounts(file: EsmFile, mountingComponents: Set<string>): void {
+  if (mountingComponents.size === 0) return
+  const templates = (file as { componentTemplates?: Record<string, unknown> }).componentTemplates
+  if (!templates) return
+  const root = file as unknown as Record<string, unknown>
+  for (const key of mountingComponents) {
+    const block = templates[key]
+    if (block === null || typeof block !== 'object' || Array.isArray(block)) continue
+    if (Object.keys(block as Record<string, unknown>).length === 0) continue
+    const dot = key.indexOf('.')
+    const section = key.slice(0, dot) as 'models' | 'reaction_systems'
+    const name = key.slice(dot + 1)
+    const comps = root[section] as Record<string, unknown> | undefined
+    const comp = comps?.[name]
+    if (!comps || comp === null || typeof comp !== 'object' || Array.isArray(comp)) continue
+    // A one-component document carrying just what the rewrite pass consults: the
+    // version it gates on, the registry `where` constraints resolve against, and
+    // the component with its rules re-attached. Coupling and sibling components
+    // are left out; the pass is per component and must not re-check them here.
+    const single: Record<string, unknown> = {
+      esm: root.esm,
+      index_sets: root.index_sets,
+      [section]: {
+        [name]: { ...(comp as Record<string, unknown>), expression_templates: block },
+      },
+    }
+    const lowered = expandDocument(lowerExpressionTemplates(single)) as Record<string, unknown>
+    const out = (lowered[section] as Record<string, unknown> | undefined)?.[name]
+    if (out !== null && typeof out === 'object' && !Array.isArray(out)) {
+      delete (out as { expression_templates?: unknown }).expression_templates
+      comps[name] = out
+    }
+  }
 }
 
 /**
@@ -973,21 +1195,18 @@ function inlineNestedTopLevelMounts(
   refChain: readonly string[],
   apiMeta: Readonly<Record<string, number>>,
   rootEnv: Readonly<Record<string, number>>,
+  registry: Record<string, unknown>,
 ): void {
   if (!leaf.models) return
-  const own: Record<string, unknown> =
-    (leaf.index_sets as Record<string, unknown> | undefined) ?? {}
-  let mounted = false
   for (const [name, model] of Object.entries(leaf.models)) {
     if (!isTopLevelMountEdge(model)) continue
-    mounted = true
     inlineTopLevelModelRef(
       leaf,
       name,
       model,
       basePath,
       resolving,
-      own,
+      registry,
       read,
       pointer,
       apiMeta,
@@ -995,11 +1214,65 @@ function inlineNestedTopLevelMounts(
       refChain,
     )
   }
-  // Same attach-back rule `resolveSubsystemRefsSync` applies to the root: a
-  // document that declared no `index_sets` gains the block only if a mount
-  // actually contributed an axis.
-  if (mounted && !leaf.index_sets && Object.keys(own).length > 0) {
-    ;(leaf as { index_sets?: unknown }).index_sets = own
+}
+
+/**
+ * Resolve a mounted leaf document's OWN nested mounts, of either §4.7 form, in
+ * the leaf's directory and against a LEAF-LOCAL index-set registry.
+ *
+ * Runs from inside `resolveRefDocument`, BEFORE this edge's §9.7.10 injection
+ * and the §9.6.3 fixpoint, so the fixpoint sees the components the leaf mounts
+ * (issue #311). It shares the caller's path-scoped `resolving` set, so a self-
+ * or mutually-mounting document is still a `CircularReferenceError` rather than
+ * unbounded recursion. The registry is leaf-local and lands only after this
+ * leaf's close, in `foldNestedIndexSets`.
+ */
+function resolveLeafNestedMounts(
+  leaf: EsmFile,
+  leafRegistry: Record<string, unknown>,
+  refBasePath: string,
+  resolving: Set<string>,
+  refChain: readonly string[],
+  read: SyncRefReader,
+  pointer: string,
+  apiMeta: Readonly<Record<string, number>>,
+  rootEnv: Readonly<Record<string, number>>,
+): void {
+  inlineNestedTopLevelMounts(
+    leaf,
+    refBasePath,
+    resolving,
+    read,
+    pointer,
+    refChain,
+    apiMeta,
+    rootEnv,
+    leafRegistry,
+  )
+  for (const model of Object.values(leaf.models ?? {})) {
+    resolveModelRefs(
+      model as Model,
+      refBasePath,
+      resolving,
+      [...refChain],
+      leafRegistry,
+      read,
+      pointer,
+      apiMeta,
+      rootEnv,
+    )
+  }
+  for (const rs of Object.values(leaf.reaction_systems ?? {})) {
+    resolveReactionSystemRefs(
+      rs as ReactionSystem,
+      refBasePath,
+      resolving,
+      [...refChain],
+      read,
+      pointer,
+      apiMeta,
+      rootEnv,
+    )
   }
 }
 
@@ -1046,21 +1319,10 @@ function resolveModelRefs(
         const firstEntry = Object.entries(parsed.models)[0]
         if (firstEntry) {
           const resolvedModel = firstEntry[1]
-          // Replace the ref subsystem with the resolved model content, then
-          // recursively resolve any refs in it, relative to the referenced
-          // file's own directory.
+          // Replace the ref subsystem with the resolved model content. Its own
+          // nested refs are already inlined — `resolveRefDocument` resolved
+          // them in the referenced file's own directory, before the fixpoint.
           subsystems[subName] = resolvedModel
-          resolveModelRefs(
-            resolvedModel,
-            refBasePath,
-            resolving,
-            [...refChain, subName],
-            registry,
-            read,
-            subPointer,
-            apiMeta,
-            childFoldEnv(rootEnv, parsed),
-          )
         }
       }
       // NOTE: no loader-only branch. In 0.x a referenced file whose sole
@@ -1121,20 +1383,10 @@ function resolveReactionSystemRefs(
         const firstEntry = Object.entries(parsed.reaction_systems)[0]
         if (firstEntry) {
           const resolvedRs = firstEntry[1]
-          // Replace the ref subsystem with the resolved content, then
-          // recursively resolve any refs in it, relative to the referenced
-          // file's own directory.
+          // Replace the ref subsystem with the resolved content. Its own nested
+          // refs are already inlined — `resolveRefDocument` resolved them in
+          // the referenced file's own directory, before the fixpoint.
           subsystems[subName] = resolvedRs
-          resolveReactionSystemRefs(
-            resolvedRs,
-            refBasePath,
-            resolving,
-            [...refChain, subName],
-            read,
-            subPointer,
-            apiMeta,
-            rootEnv,
-          )
         }
       }
     },

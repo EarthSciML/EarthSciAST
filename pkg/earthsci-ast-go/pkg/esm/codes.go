@@ -242,6 +242,12 @@ const (
 	// top-level `{ref}` at all, so it never raises this; the constant exists
 	// because the code table is cross-language uniform.
 	CodeSubsystemIndexSetRenameUnsupportedMountForm = "subsystem_index_set_rename_unsupported_mount_form"
+
+	// CodeMountFormUnsupported: a §4.7 `{ref}` mount at a form this binding does
+	// not implement — here, a top-level `reaction_systems.<k>` `{ref}` (esm-spec
+	// §4.7 "Two mount forms, one mechanism"). Refused at load, pointing at the
+	// entry, rather than decoded as an empty reaction system.
+	CodeMountFormUnsupported = "mount_form_unsupported"
 )
 
 // --- Diagnostic codes: structural validation, per ESM Libraries Spec Section

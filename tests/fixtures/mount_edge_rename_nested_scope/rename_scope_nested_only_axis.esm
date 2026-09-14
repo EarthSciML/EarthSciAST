@@ -1,0 +1,15 @@
+{
+ "esm": "1.0.0",
+ "metadata": {
+  "name": "rename_scope_nested_only_axis",
+  "description": "The mount edge names lev in index_set_rename, but lev is not part of what the referenced document declares or imports -- it arrives through a mount nested inside it. esm-spec 4.7 'Renaming is per edge' says that axis is renamed at ITS nested edge, so this edge is subsystem_index_set_rename_unknown_name.",
+  "license": "MIT"
+ },
+ "models": {
+  "Root": {
+   "subsystems": {"L": {"ref": "./rename_scope_leaf.esm", "index_set_rename": {"lev": "soil_lev"}}},
+   "variables": {"z": {"type": "unknown", "units": "1", "description": "own state"}},
+   "equations": [{"lhs": {"op": "D", "args": ["z"], "wrt": "t"}, "rhs": 0.0}]
+  }
+ }
+}

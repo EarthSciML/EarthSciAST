@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 )
 
@@ -390,6 +391,73 @@ func mergeSubsystemIndexSets(registry map[string]IndexSet, view map[string]any, 
 	return nil
 }
 
+// foldNestedIndexSets reconciles the axes a mounted leaf's OWN nested mounts
+// contributed with the leaf's own (by now metaparameter-folded) `index_sets`,
+// and records in nestedContributed the names that were the nested mounts' alone.
+//
+// Splitting them out is what lets one mount edge answer esm-spec §4.7's two
+// opposite questions about `index_set_rename` correctly:
+//
+//   - an axis ONLY a nested mount declares is NOT this edge's to rename
+//     ("Renaming is per edge … an axis reaching the registry through a mount
+//     nested inside the referenced document is renamed (or not) at that nested
+//     edge"), so naming it here is `subsystem_index_set_rename_unknown_name`;
+//   - an axis the leaf declares ITSELF is this edge's to rename even where a
+//     nested mount declares a deep-equal one, because the §4.7 merge already
+//     made those one axis — so the rename covers the whole resolved leaf,
+//     nested component `shape` entries included, and the registry ends with the
+//     new name only.
+//
+// A nested contribution whose name the leaf also declares is therefore dropped
+// when the two are deep-equal (idempotent redeclaration) and is
+// `subsystem_index_set_conflict` when they are not — the §4.7 merge rule, run
+// at the leaf instead of at the importer, which is where it ran before the
+// nested walk moved ahead of the fixpoint.
+func foldNestedIndexSets(view map[string]any, leafRegistry map[string]IndexSet, nestedContributed map[string]bool, ref string) error {
+	if len(leafRegistry) == 0 {
+		return nil
+	}
+	isets, _ := view["index_sets"].(map[string]any)
+	if isets == nil {
+		isets = map[string]any{}
+	}
+	names := make([]string, 0, len(leafRegistry))
+	for n := range leafRegistry {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		decl := leafRegistry[n]
+		if existingRaw, has := isets[n]; has {
+			b, err := json.Marshal(existingRaw)
+			if err != nil {
+				return fmt.Errorf("index set %q of ref %q: %w", n, ref, err)
+			}
+			var existing IndexSet
+			if err := json.Unmarshal(b, &existing); err != nil {
+				return fmt.Errorf("index set %q of ref %q: %w", n, ref, err)
+			}
+			if !indexSetDeepEqual(existing, decl) {
+				return newETErr(CodeSubsystemIndexSetConflict,
+					fmt.Sprintf("index set '%s' contributed by a mount nested inside ref '%s' (%s) collides with a non-deep-equal declaration of the same name in that document itself (%s) — deep-equal redeclaration is idempotent, a size/kind disagreement is a load-time error (esm-spec §4.7)", n, ref, showIndexSet(decl), showIndexSet(existing)))
+			}
+			continue
+		}
+		b, err := json.Marshal(decl)
+		if err != nil {
+			return fmt.Errorf("nested subsystem index set %q from ref %q: %w", n, ref, err)
+		}
+		var raw any
+		if err := json.Unmarshal(b, &raw); err != nil {
+			return fmt.Errorf("nested subsystem index set %q from ref %q: %w", n, ref, err)
+		}
+		isets[n] = raw
+		nestedContributed[n] = true
+	}
+	view["index_sets"] = isets
+	return nil
+}
+
 // mountForm names which of esm-spec §4.7's two attachment points a `{ref}` mount
 // edge sits at: a `subsystems.<k>` entry, or a top-level `models.<k>` entry.
 //
@@ -520,11 +588,6 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 				fmt.Sprintf("%s %q: ref %q targets a coupling-library file (%s); libraries are imported via a coupling_import coupling entry (esm-spec §10.9)", form.noun, key, ref, refKey))
 		}
 
-		// esm-spec §9.7.10 form A: fold the edge's injected imports into the
-		// referenced file's single top-level component BEFORE resolution, so its
-		// rewrite-targets lower under the assembler-chosen discretization.
-		applySubsystemRefInjection(view, injected)
-
 		// esm-spec §4.7 "Two mount forms, one mechanism": the loader-API bindings
 		// (§9.7.6 site 4) SEED this edge's close, for the names the LEAF
 		// declares, exactly as they do at a top-level `models.<k>` mount. Without
@@ -565,16 +628,17 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 		// resolve, esm-spec §9.7.6 "Ordering within load").
 		childMeta := metaEnvFromDecls(view["metaparameters"], bindings)
 
-		// The fold environment for everything this leaf's OWN mounts contribute
-		// (esm-spec §4.7 "Which environment a contribution folds against"). This
-		// binding threads ONE registry, so a nested contribution lands in the
-		// root's — but the SCOPE that sizes it is this leaf's, and §9.7.6 site 3
-		// says the edge `bindings` that closed this leaf win over its own
-		// `default`s. So: the enclosing environment, overlaid with this leaf's
-		// closed one for the names the LEAF DECLARES — the same filter site 4
-		// applies to the backfill, so an outer metaparameter the leaf never
-		// declared still cannot size an axis here, and a name only an outer scope
-		// declares still folds against that outer scope.
+		// The fold environment for everything this leaf's OWN nested mounts
+		// contribute (esm-spec §4.7 "Which environment a contribution folds
+		// against"): the ENCLOSING environment, overlaid with this leaf's CLOSED
+		// one for the names the LEAF DECLARES. §9.7.6 site 3 says the edge
+		// `bindings` that closed this leaf win over its own `default`s; the
+		// declared-names filter is the one site 4 applies to the backfill, so an
+		// outer metaparameter the leaf never declared cannot size an axis the leaf
+		// owns — and a name ONLY an outer scope declares still folds against that
+		// outer scope, which is what the enclosing base is for. Without it such a
+		// contribution stays symbolic, and this binding's typed `IndexSet` cannot
+		// hold a symbolic `size` at all.
 		//
 		// Without the overlay one resolved document disagrees with ITSELF: an
 		// axis the leaf declares folds to the bound value while an axis its own
@@ -590,6 +654,76 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 				}
 			}
 		}
+
+		// esm-spec §4.7: a `{ref}` resolves "before validation or any other
+		// processing", so the referenced document's OWN nested mounts are
+		// inlined HERE, ahead of the §9.7.10 injection and the §9.6.3 fixpoint
+		// below. §9.7.10 defines the injection as "as if the target had added
+		// those entries to the END of its own `expression_template_imports`",
+		// and a component's own imports lower a rewrite-target inside a
+		// component it mounts — so the fixpoint has to see the mounted content
+		// or the two halves of that sentence disagree. Resolving them after it
+		// left a nested rewrite-target unlowerable from any mount edge, by any
+		// spelling (issue #311).
+		//
+		// The nested contributions collect in a LEAF-LOCAL registry, not
+		// straight into the importing document's: the edge's
+		// `index_set_rename` below then sees the leaf exactly as a standalone
+		// load of it would, and only the renamed result travels up. It starts
+		// EMPTY rather than seeded from `view["index_sets"]` — the leaf's own
+		// axes are still RAW here, and one whose `size` is a metaparameter name
+		// does not decode into the typed IndexSet at all. Reconciling the two
+		// sides waits for `foldNestedIndexSets` below, after the fold.
+		leafRegistry := map[string]IndexSet{}
+		for _, kind := range templateComponentKinds {
+			comps, ok := view[kind].(map[string]any)
+			if !ok {
+				continue
+			}
+			for _, cname := range sortedKeys(comps) {
+				compObj, ok := comps[cname].(map[string]any)
+				if !ok {
+					continue
+				}
+				if subs, ok := compObj["subsystems"].(map[string]any); ok {
+					// The nested edges live inside the mounted component, which is
+					// inlined at this entry's pointer — best-effort deeper prefix (not
+					// a corpus-pinned location).
+					nestedPrefix := fmt.Sprintf("%s/%s/subsystems", pathPrefix, key)
+					if err := resolveSubsystemMap(subs, refBasePath, visited, leafRegistry, childMeta, apiMeta, childFoldEnv, nestedPrefix, subsystemMount); err != nil {
+						return fmt.Errorf("%s %q: resolving nested refs in %q: %w", form.noun, key, refKey, err)
+					}
+				}
+			}
+		}
+
+		// The mounted document may itself be an ASSEMBLY — a document whose own
+		// `models.<k>` entries are `{ref}` mount edges. esm-spec §4.7's top-level
+		// form lands its component as a top-level system precisely so that an
+		// assembly can be named by file and mounted onward, so the form has to
+		// compose with itself. Inline those edges HERE, with the rest of the
+		// leaf's nested mounts, or `extractSingleSystemRaw` picks the leaf's
+		// UNRESOLVED `{ref}` edge and splices it in as though it were the
+		// component: the document loads clean and carries a bare mount edge
+		// where a model belongs.
+		//
+		// Not gated on `form`: it is the MOUNTED DOCUMENT's shape that decides,
+		// not which attachment point mounted it, and "two mount forms, one
+		// mechanism" forbids answering an assembly differently at the two. The
+		// recursion runs through resolveSubsystemMap, so `visited` gives it the
+		// same path-scoped cycle detection every other edge gets. Matches the
+		// Rust reference, which composes at both forms.
+		if err := inlineNestedTopLevelModelRefs(view, refBasePath, visited, leafRegistry, childMeta, apiMeta,
+			childFoldEnv, fmt.Sprintf("%s/%s/models", pathPrefix, key)); err != nil {
+			return fmt.Errorf("%s %q: resolving nested refs in %q: %w", form.noun, key, refKey, err)
+		}
+
+		// esm-spec §9.7.10 form A: fold the edge's injected imports into the
+		// referenced file's single top-level component BEFORE resolution, so its
+		// rewrite-targets lower under the assembler-chosen discretization — and,
+		// because the nested mounts are already inlined above, so do the
+		// rewrite-targets of the components the leaf itself mounts.
+		applySubsystemRefInjection(view, injected)
 
 		// Resolve the referenced document's §9.7 machinery with this edge's
 		// bindings, then run the §9.6.3 rewrite fixpoint so the inlined
@@ -625,12 +759,27 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 		// this edge's `bindings` and injection, its metaparameter close and
 		// fold, the §9.6.3 fixpoint — so its `index_sets` are the
 		// post-resolution vocabulary the edge's `index_set_rename` speaks.
-		// Before its own nested mounts resolve: each nested edge renames what IT
-		// contributes, at its own edge. Absent or empty => identity, so an edge
-		// that does not use the field resolves exactly as before.
+		// Fold what those nested mounts contributed into the leaf's now-FOLDED
+		// `index_sets`, and remember which names were theirs alone. The edge's
+		// `index_set_rename` may NOT name one of those (esm-spec §4.7 "Renaming
+		// is per edge": an axis reaching the registry through a mount nested
+		// inside the referenced document is renamed at THAT edge), but it MUST
+		// still reach an axis the leaf declares itself even where a nested
+		// mount declares a deep-equal one — the §4.7 merge already made those
+		// one axis, so the rename covers the whole resolved leaf.
+		nestedContributed := map[string]bool{}
+		if err := foldNestedIndexSets(view, leafRegistry, nestedContributed, ref); err != nil {
+			return err
+		}
+
+		// Scoped to what THIS document declares and imports: an axis that
+		// reached the registry only through a mount nested inside it is renamed
+		// (or not) at that nested edge, so `nestedContributed` is held out.
+		// Absent or empty => identity, so an edge that does not use the field
+		// resolves exactly as before.
 		if m, ok := value.(map[string]any); ok {
 			if err := applyMountIndexSetRename(view, m["index_set_rename"],
-				fmt.Sprintf("%s ref %q", form.noun, ref)); err != nil {
+				fmt.Sprintf("%s ref %q", form.noun, ref), nestedContributed); err != nil {
 				return err
 			}
 		}
@@ -641,52 +790,6 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 		// size/kind disagreement fails loudly (subsystem_index_set_conflict).
 		if err := mergeSubsystemIndexSets(registry, view, ref, rootEnv); err != nil {
 			return err
-		}
-
-		// Recursively resolve subsystem refs nested in the loaded file's
-		// components, relative to its own directory; nested mounts merge their
-		// axes into the same importing-document registry (transitive, §4.7).
-		for _, kind := range templateComponentKinds {
-			comps, ok := view[kind].(map[string]any)
-			if !ok {
-				continue
-			}
-			for _, compRaw := range comps {
-				compObj, ok := compRaw.(map[string]any)
-				if !ok {
-					continue
-				}
-				if subs, ok := compObj["subsystems"].(map[string]any); ok {
-					// The nested edges live inside the mounted component, which is
-					// inlined at this entry's pointer — best-effort deeper prefix (not
-					// a corpus-pinned location).
-					nestedPrefix := fmt.Sprintf("%s/%s/subsystems", pathPrefix, key)
-					if err := resolveSubsystemMap(subs, refBasePath, visited, registry, childMeta, apiMeta, childFoldEnv, nestedPrefix, subsystemMount); err != nil {
-						return fmt.Errorf("%s %q: resolving nested refs in %q: %w", form.noun, key, refKey, err)
-					}
-				}
-			}
-		}
-
-		// The mounted document may itself be an ASSEMBLY — a document whose own
-		// `models.<k>` entries are `{ref}` mount edges. esm-spec §4.7's top-level
-		// form lands its component as a top-level system precisely so that an
-		// assembly can be named by file and mounted onward, so the form has to
-		// compose with itself. Inline those edges HERE, before the single system
-		// is extracted below, or `extractSingleSystemRaw` picks the leaf's
-		// UNRESOLVED `{ref}` edge and splices it in as though it were the
-		// component: the document loads clean and carries a bare mount edge
-		// where a model belongs.
-		//
-		// Not gated on `form`: it is the MOUNTED DOCUMENT's shape that decides,
-		// not which attachment point mounted it, and "two mount forms, one
-		// mechanism" forbids answering an assembly differently at the two. The
-		// recursion runs through resolveSubsystemMap, so `visited` gives it the
-		// same path-scoped cycle detection every other edge gets. Matches the
-		// Rust reference, which composes at both forms.
-		if err := inlineNestedTopLevelModelRefs(view, refBasePath, visited, registry, childMeta, apiMeta,
-			childFoldEnv, fmt.Sprintf("%s/%s/models", pathPrefix, key)); err != nil {
-			return fmt.Errorf("%s %q: resolving nested refs in %q: %w", form.noun, key, refKey, err)
 		}
 
 		// Remove from visited after successful resolution (allow the same file
@@ -852,4 +955,127 @@ func extractSingleSystemRaw(view map[string]any, path string) (any, error) {
 
 	// Unreachable, but satisfies the compiler
 	return nil, fmt.Errorf("unexpected state extracting system from %q", path)
+}
+
+// documentHasSubsystemRefs reports whether any component in the raw view mounts
+// a `{ref}` — at either esm-spec §4.7 form. The early root pass below re-encodes
+// the document, which sorts map keys, so it must be skipped outright for the
+// overwhelmingly common document that mounts nothing.
+func documentHasSubsystemRefs(view map[string]any) bool {
+	for _, kind := range templateComponentKinds {
+		comps, ok := view[kind].(map[string]any)
+		if !ok {
+			continue
+		}
+		for _, compRaw := range comps {
+			comp, ok := compRaw.(map[string]any)
+			if !ok {
+				continue
+			}
+			if _, isRef := comp["ref"].(string); isRef {
+				if _, inline := comp["variables"]; !inline {
+					return true
+				}
+			}
+			if subs, ok := comp["subsystems"].(map[string]any); ok {
+				for _, sub := range subs {
+					if s, ok := sub.(map[string]any); ok {
+						if _, isRef := s["ref"].(string); isRef {
+							return true
+						}
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
+// inlineRootRefsRaw splices every §4.7 mount the ROOT document carries — both
+// forms — into the raw view, BEFORE the root's own §9.7 machinery runs, and
+// STAGES the `index_sets` those mounts contribute instead of merging them.
+//
+// This is the root half of the inline/merge split. esm-spec §4.7 resolves a
+// `{ref}` "before validation or any other processing", and the §9.6.3 fixpoint
+// has to see the mounted content or a rewrite-target inside a mounted component
+// never lowers — the defect issue #311 reports, whose CONTROL case is a
+// document's own component declaring a rule library in its own
+// `expression_template_imports` and mounting the rewrite-target through a
+// `subsystems.<k>` `{ref}`. Inlining had to move ahead of the machinery for
+// that to work at all.
+//
+// The MERGE must not move with it. A §4.7 contribution joins the registry only
+// after the mounting document's §9.7.6 close, folded against that closed
+// environment before the deep-equal comparison. So the contributions are
+// collected here and handed back for the caller to apply after the close —
+// exactly the staging `walk_top_level(defer: true)` does in the Rust reference.
+// Merging them here would put them back before the close and reverse that rule;
+// `tests/fixtures/data_source_extent_scope/mount_merge_order_*.esm` is the
+// guard that catches it.
+func inlineRootRefsRaw(view map[string]any, basePath string, apiMeta map[string]int64) (map[string]IndexSet, error) {
+	if !documentHasSubsystemRefs(view) {
+		return nil, nil
+	}
+	visited := make(map[string]bool)
+	staged := map[string]IndexSet{}
+	// `parentMeta` is the root's own closed environment, captured by the caller
+	// before the machinery consumes the `metaparameters` block; `rootEnv` is the
+	// same thing, and stays fixed as the walk narrows into nested scopes.
+	parentMeta := metaEnvFromDecls(view["metaparameters"], apiMeta)
+	// Top-level `models.<k>` mount edges first: the component each one splices
+	// in may itself carry `subsystems`, and the walk below resolves those.
+	if err := inlineNestedTopLevelModelRefs(view, basePath, visited, staged, parentMeta, apiMeta,
+		parentMeta, "/models"); err != nil {
+		return nil, err
+	}
+	for _, kind := range templateComponentKinds {
+		comps, ok := view[kind].(map[string]any)
+		if !ok {
+			continue
+		}
+		for _, cname := range sortedKeys(comps) {
+			comp, ok := comps[cname].(map[string]any)
+			if !ok {
+				continue
+			}
+			subs, ok := comp["subsystems"].(map[string]any)
+			if !ok {
+				continue
+			}
+			prefix := fmt.Sprintf("/%s/%s/subsystems", kind, cname)
+			if err := resolveSubsystemMap(subs, basePath, visited, staged, parentMeta, apiMeta,
+				parentMeta, prefix, subsystemMount); err != nil {
+				return nil, fmt.Errorf("%s %q subsystems: %w", kind, cname, err)
+			}
+		}
+	}
+	return staged, nil
+}
+
+// applyStagedIndexSets merges the §4.7 contributions inlineRootRefsRaw staged
+// into the now-CLOSED document's registry (esm-spec §4.7 "Index-set merge").
+//
+// The other half of the split: the content spliced in early so the root's §9.7
+// machinery could lower through it, and the `index_sets` waited until here,
+// where they are compared deep-equal against a registry whose own sizes the
+// close has already folded.
+func applyStagedIndexSets(file *ESMFile, staged map[string]IndexSet, rootEnv map[string]int64) error {
+	if len(staged) == 0 {
+		return nil
+	}
+	if file.IndexSets == nil {
+		file.IndexSets = map[string]IndexSet{}
+	}
+	for _, n := range sortedKeys(staged) {
+		decl := staged[n]
+		if existing, has := file.IndexSets[n]; has {
+			if !indexSetDeepEqual(existing, decl) {
+				return newETErr(CodeSubsystemIndexSetConflict,
+					fmt.Sprintf("index set '%s' from a §4.7 mount (%s) collides with a non-deep-equal declaration already in the importing document's registry (%s) — deep-equal redeclaration is idempotent, a size/kind disagreement is a load-time error (esm-spec §4.7)", n, showIndexSet(decl), showIndexSet(existing)))
+			}
+			continue
+		}
+		file.IndexSets[n] = decl
+	}
+	return nil
 }

@@ -1,0 +1,23 @@
+{
+ "esm": "1.0.0",
+ "metadata": {
+  "name": "nested_self_import",
+  "description": "The equivalence CONTROL for esm-spec 9.7.10: the same leaf declaring the library in its OWN model-level expression_template_imports. 9.7.10 defines a mount-edge injection as 'as if the target had added those entries to the end of its own expression_template_imports', so this document and the two mount fixtures must agree.",
+  "license": "MIT"
+ },
+ "models": {
+  "Leaf": {
+   "expression_template_imports": [{"ref": "./nested_lowering_lib.esm"}],
+   "subsystems": {"sd": {"ref": "./nested_grandchild.esm"}},
+   "variables": {
+    "u": {"type": "unknown", "units": "1", "description": "accumulator"},
+    "uu": {"type": "unknown", "units": "1", "description": "observed copy of the grandchild's value"}
+   },
+   "equations": [
+    {"lhs": {"op": "ic", "args": ["u"]}, "rhs": 0.0},
+    {"lhs": {"op": "D", "args": ["u"], "wrt": "t"}, "rhs": "sd.y"},
+    {"lhs": "uu", "rhs": "sd.y"}
+   ]
+  }
+ }
+}
