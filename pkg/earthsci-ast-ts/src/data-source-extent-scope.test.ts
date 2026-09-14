@@ -249,3 +249,18 @@ describe('where the §4.7 merge sits relative to the mounting document’s close
     expect(axis(top, 'lev')).toEqual(axis(sub, 'lev'))
   })
 })
+
+describe('where the static §8.9.4 check runs', () => {
+  it('catches the purest typo, which only the authored tree can see', () => {
+    // One file, no mounts, no imports: it declares `N_REC`, sizes its axis by
+    // it, and the `extent` says `N_RECS`. On the AUTHORED tree that is refused.
+    // After the close it is not — the close folds `records.size` from `"N_REC"`
+    // to `0`, which makes the document satisfy `documentIsInResolvedShape` (no
+    // unresolved mount, every size an integer), and the idempotency exemption
+    // then skips the check entirely. Measured both ways; this test is what keeps
+    // the check on the authored tree.
+    expect(codeOf(() => loadMounted('extent_typo_no_mount.esm'))).toBe(
+      'template_import_unknown_name',
+    )
+  })
+})

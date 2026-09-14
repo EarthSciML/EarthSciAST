@@ -355,3 +355,21 @@ fn two_identical_declarations_do_not_collide_at_either_mount_form() {
     assert_eq!(lev(&top), Some(40));
     assert_eq!(lev(&sub), Some(40));
 }
+
+/// The purest typo, and the case that decides WHERE this check runs.
+///
+/// One file, no mounts, no imports: it declares `N_REC`, sizes its axis by it,
+/// and the `extent` says `N_RECS`. On the AUTHORED tree that is refused. After
+/// the close it is not — the close folds `records.size` from `"N_REC"` to `0`,
+/// which makes the document satisfy `document_is_in_resolved_shape` (no
+/// unresolved mount, every size an integer), and the idempotency exemption then
+/// skips the check entirely. Measured both ways; this test is what keeps the
+/// check early.
+#[test]
+fn the_purest_typo_is_caught_and_stays_caught() {
+    let err = load_path(fixture("extent_typo_no_mount.esm"))
+        .expect_err("a single-file `extent` typo must be refused at load");
+    let text = err.to_string();
+    assert!(text.contains("template_import_unknown_name"), "{text}");
+    assert!(text.contains("N_RECS"), "must name the misspelling: {text}");
+}

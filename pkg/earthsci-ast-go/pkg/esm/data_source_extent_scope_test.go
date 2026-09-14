@@ -466,3 +466,24 @@ func TestExtentScope_TwoIdenticalDeclarationsDoNotCollide(t *testing.T) {
 			top.IndexSets["lev"], sub.IndexSets["lev"])
 	}
 }
+
+// TestExtentScope_PurestTypoIsCaughtAndStaysCaught pins WHERE the check runs.
+//
+// One file, no mounts, no imports: it declares `N_REC`, sizes its axis by it,
+// and the `extent` says `N_RECS`. On the AUTHORED tree that is refused. After
+// the close it is not — the close folds `records.size` from "N_REC" to 0, which
+// makes the document satisfy documentIsInResolvedShape (no unresolved mount,
+// every size an integer), and the idempotency exemption then skips the check
+// entirely. Measured both ways; this test is what keeps the check early.
+func TestExtentScope_PurestTypoIsCaughtAndStaysCaught(t *testing.T) {
+	_, err := extentScopeLoad(t, "extent_typo_no_mount.esm", nil)
+	if err == nil {
+		t.Fatal("a single-file `extent` typo must be refused at load")
+	}
+	if !strings.Contains(err.Error(), string(CodeTemplateImportUnknownName)) {
+		t.Errorf("want %s, got %v", CodeTemplateImportUnknownName, err)
+	}
+	if !strings.Contains(err.Error(), "N_RECS") {
+		t.Errorf("the diagnostic must name the misspelling: %v", err)
+	}
+}

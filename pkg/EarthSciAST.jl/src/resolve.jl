@@ -1757,7 +1757,12 @@ function _load_local_ref(ref::String, base_path::String, visited::Set{String};
     # Recursively resolve refs in the loaded file, relative to its own directory.
     # `api_meta` travels with the walk, so a leaf mounted two edges down gets the
     # same site-4 backfill (filtered to what IT declares) the first one got.
-    _resolve_refs_in_file!(file, ref_base, visited; api_meta=api_meta)
+    # esm-spec §4.7 "Which environment a contribution folds against": the
+    # registry these nested mounts land in is THIS leaf's, so they fold against
+    # the leaf's own closed environment — its declared defaults overlaid with the
+    # loader-API bindings — not the root's.
+    _resolve_refs_in_file!(file, ref_base, visited; api_meta=api_meta,
+                           root_env=_root_metaparameter_env(raw_ref_doc, effective))
 
     return file
 end
