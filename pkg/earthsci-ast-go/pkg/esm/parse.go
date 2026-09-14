@@ -187,21 +187,34 @@ func LoadString(jsonStr string, opts ...LoadOption) (*ESMFile, error) {
 	// order normative for every map a FlattenedSystem carries.
 	authoredOrders := extractTemplateOrders(jsonStr)
 
+	// esm-spec §4.7 "Two mount forms, one mechanism": a top-level `models.<k>`
+	// that is a bare `{ref}` is a MOUNT EDGE, not a component. `ESMFile.Models`
+	// is a `map[string]Model`, so the decode below turns such an entry into an
+	// EMPTY Model and the edge — its `ref`, its `bindings`, its
+	// `index_set_rename`, its §9.7.10 form-A `expression_template_imports` — is
+	// gone. Snapshot the edges off the text so the ref resolver can run the
+	// §4.7 edge pipeline on them.
+	//
+	// Taken from the AUTHORED text, BEFORE the machinery pass below. That pass
+	// walks `models.<k>` as COMPONENTS and ends each one with
+	// `delete(comp, "expression_template_imports")` — it cannot tell a mount
+	// edge from a component — so a snapshot taken after it carried the edge's
+	// `ref` but had silently lost the edge's injection, and a §9.7.10 form-A
+	// injection at this mount form lowered nothing at all, even with the
+	// rewrite-target in the mounted leaf's own equation. Nothing in the edge
+	// needs the root's fold: `ref` and `index_set_rename` are strings, and
+	// `bindings` are metaparameter EXPRESSIONS folded at the edge against
+	// `rootMetaEnv`, which LoadPath captures from the raw document for exactly
+	// that reason. The merge of the leaf's axes into `file.IndexSets` still
+	// happens where it did, after the root close, so both mount forms stay on
+	// one side of esm-spec §9.7.6 as before.
+	topLevelModelRefs := extractTopLevelModelRefEdges(jsonStr)
+
 	expanded, componentTemplates, err := resolveAndLowerJSONCapturing(jsonStr, o.basePath, o.metaparameters)
 	if err != nil {
 		return nil, err
 	}
 	jsonStr = expanded
-
-	// esm-spec §4.7 "Two mount forms, one mechanism": a top-level `models.<k>`
-	// that is a bare `{ref}` is a MOUNT EDGE, not a component. `ESMFile.Models`
-	// is a `map[string]Model`, so the decode below turns such an entry into an
-	// EMPTY Model and the edge — its `ref`, its `bindings`, its
-	// `index_set_rename` — is gone. Snapshot the edges here, off the text, so
-	// the ref resolver can run the §4.7 edge pipeline on them; it runs at the
-	// same pipeline point the `subsystems.<k>` form resolves at, which is what
-	// puts both forms on one side of the root's §9.7.6 metaparameter close.
-	topLevelModelRefs := extractTopLevelModelRefEdges(jsonStr)
 
 	// Parse JSON into our struct. ESMFile implements json.Unmarshaler, so a
 	// top-level decoder's UseNumber setting would NOT reach the nested
