@@ -294,8 +294,18 @@ end
 # every argument is concrete and the compile is inferred exactly as it is from a
 # script that spelled the concrete constructors out. `run_rhs` is the same
 # barrier for the per-probe call.
-compile_rhs(d, u_dev, p_dev, t_dev) = Reactant.@compile sync = true d(u_dev, p_dev, t_dev)
-run_rhs(compiled, u_dev, p_dev, t_dev) = Array(compiled(u_dev, p_dev, t_dev))
+#
+# Defined only when Reactant is loaded: `Reactant.@compile` is a macro, so a
+# top-level definition would be expanded — and fail with `Reactant` undefined —
+# while this file loads for the INTERPRETER engine, whose environment carries no
+# Reactant on purpose.
+if HAVE_REACTANT
+    @eval begin
+        compile_rhs(d, u_dev, p_dev, t_dev) =
+            Reactant.@compile sync = true d(u_dev, p_dev, t_dev)
+        run_rhs(compiled, u_dev, p_dev, t_dev) = Array(compiled(u_dev, p_dev, t_dev))
+    end
+end
 
 function fixture_rhs_compiled(fx, base)
     ext = Base.get_extension(EarthSciAST, :EarthSciASTReactantExt)
