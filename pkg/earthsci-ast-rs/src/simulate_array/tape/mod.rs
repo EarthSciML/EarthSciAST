@@ -11,6 +11,40 @@
 //! the legacy interpreter, and `ESS_TAPE_CHECK=N` dual-runs and bit-compares
 //! the first N calls. The `debug_eval_rhs*` oracles, the samples pass and
 //! the FD Jacobian closure stay on the legacy interpreter path.
+//!
+//! ## Instruction set
+//!
+//! [`ir`] defines it and fixes each instruction's element semantics; the
+//! short version is that everything is straight-line and shape-static.
+//! Elementwise work is [`Instr::Bin`] / [`Instr::Un`] / [`Instr::Neg`] /
+//! [`Instr::Select`] (and, after the Step 4 fusion pass, [`Instr::Fused`]);
+//! data movement is [`Instr::Gather`] / [`Instr::LoadElem`] /
+//! [`Instr::Copy`] / [`Instr::Region`] / [`Instr::Fill`] / [`Instr::Ramp`];
+//! control flow is the one structured [`Instr::JmpIfZero`]; and the
+//! boundaries with the rest of the runtime are [`Instr::Export`],
+//! [`Instr::DyWrite`] and [`Instr::Fallback`].
+//!
+//! Two instructions carry data or a fold rather than a per-element map, and
+//! both exist so a whole downstream cone of rules stops falling back:
+//!
+//! * [`Instr::ConstArray`] materializes an inline array literal into a
+//!   CONST-section slot — one instruction and one store per solve, whatever
+//!   the literal's size, with the payload on
+//!   [`TapeProgram::const_data`]. Without it an array-valued `const` had no
+//!   representation at all (`Operand::Lit` is one `f64`; `Fill` broadcasts
+//!   one scalar), so every reader of such a constant bailed.
+//! * [`Instr::Reduce`] folds a source box over a set of axes with a binary
+//!   kernel, visiting the source in ROW-MAJOR order — which is the per-cell
+//!   oracle's contraction odometer, so a rank-0 `faq` (every index
+//!   contracted, scalar result) folds the same terms in the same
+//!   association the interpreter would. It is the one construct the tape
+//!   lowers that the whole-array overlay declines outright.
+//!
+//! A third piece of the same work is not an instruction: the lowering
+//! records every observed's statically inferable box, including the ones
+//! produced by rules that FELL BACK, so an `Operand::Obs` read of a
+//! per-cell-produced observed still carries a box and its readers stay on
+//! the tape (`TapeBuilder::wholesale_shape`).
 
 mod exec;
 mod fuse;
@@ -20,6 +54,10 @@ mod lower;
 mod refexec;
 #[cfg(test)]
 mod tests;
+// Phase 2: the XLA emitter over this IR (feature `xla`, OFF by default). Last
+// in the list because it is the only optional one.
+#[cfg(feature = "xla")]
+pub mod xla_emit;
 
 pub(crate) use exec::tape_disabled;
 pub(in crate::simulate_array) use exec::{TapeCtx, run_tape_call};

@@ -158,6 +158,58 @@ measured in the ReSEACT adjoint workstream are **not** caused by any of these:
 #3215 and #3216 shrink the module handed to XLA, so they help trace and compile
 time. Neither changes execution time. Only #3217 changes an architectural option.
 
+## Worth reporting, not yet filed
+
+### `call_llvm_generator` recurses once per level of a recursive traced callee
+
+**What happens.** Reactant's interpreter rewrites every type-unstable call
+inside a traced body into its generated `call_with_reactant`, and the generator
+(`Reactant/src/utils.jl`, `call_llvm_generator`) runs a full nested GPUCompiler
+inference to produce the replacement code. When the traced callee is itself
+recursive, that nesting follows the recursion: one generator invocation per
+level, each holding a GPUCompiler job open on the stack while the next one
+starts. The backtrace is a clean repeating cycle —
+
+```
+call_llvm_generator                     (Reactant/src/utils.jl)
+  GPUCompiler.emit_llvm -> irgen -> compile_method_instance
+    ci_cache_populate -> typeinf -> ... -> abstract_call_method
+      typeinf_edge -> retrieve_code_info -> get_staged -> jl_call_staged
+        call_llvm_generator                 (next level)
+```
+
+— repeated until the process either wedges inside `typeinf` with no error and no
+progress, or prints `detected a stack overflow` and dies with `SIGSEGV`.
+
+**Why it is worth reporting even though we worked around it.** The failure is
+intermittent (the depth reached depends on what inference has already cached),
+it is silent in the wedge case, and it gets *worse* with a larger stack, which
+sends the first person who meets it in exactly the wrong direction. A recursive
+host-side function in a traced body is not an exotic thing to write.
+
+**Reproducer step.** `EarthSciASTReactantExt`'s compiled backend
+(`ext/reactant_direct/`) is a recursive walk over a tree IR whose node payload is
+`Any`. Compile any fixture through it with the `@skip_rewrite_func` marks in
+`ext/reactant_direct/device.jl` removed — a small stencil model is enough — and
+the compile wedges or crashes on a fair fraction of runs at the default stack,
+and on nearly all of them at `ulimit -s 131072`.
+
+**Our workaround, which is also the documented answer.**
+`Reactant.@skip_rewrite_func` on the walk's entry function. A skipped call is
+left alone in the rewritten body and runs natively, and nothing reachable from
+it is rewritten either, so one mark covers the whole recursion. It is only safe
+because the walk needs no `@reactant_overlay` method: it builds `stablehlo.*`
+operations directly on the traced values' `mlir_data` and otherwise reads host
+data. The two places under it that do want Reactant's own semantics re-enter by
+name with `Reactant.call_with_reactant`.
+
+**What an upstream fix might look like** (for whoever files it): a depth counter
+in `call_llvm_generator` that raises a diagnostic naming the recursive callee
+instead of letting the nesting run to the guard, and a note in the
+`@skip_rewrite_func` docstring that a recursive traced callee is the case it
+exists for. Either would have turned several days of bisection into one error
+message.
+
 ## Not filed
 
 Recorded so nobody re-walks them.

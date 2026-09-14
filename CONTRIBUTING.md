@@ -251,10 +251,138 @@ cargo fmt
 cargo clippy -- -D warnings
 cargo test
 # The bench target is gated behind the `benchmarks` feature, so a plain
-# `cargo bench` builds nothing. CI compiles it with
-# `cargo check --all-features --benches`.
+# `cargo bench` builds nothing. CI compiles it with an explicit feature list
+# (see below for why it is not `--all-features`).
 cargo bench --features benchmarks  # for performance testing
 ```
+
+**The `xla` compiled backend.** The `xla` feature emits the tape IR as an XLA
+computation and runs it through PJRT (`pkg/earthsci-ast-rs/README.md` has the
+full description). It is OFF by default and **excluded from every
+`--all-features` invocation**, because it links a prebuilt 144 MB
+`xla_extension` release that is fetched separately and never vendored:
+
+```bash
+# once, outside the checkout
+scripts/fetch-xla-extension.sh --variant cpu
+export XLA_EXTENSION_DIR=$HOME/.cache/earthsci/xla/xla_extension-0.10.0-cpu/xla_extension
+export LIBCLANG_PATH=/path/to/llvm/lib      # the xla crate's build script runs bindgen
+
+cd pkg/earthsci-ast-rs
+cargo test --features xla --lib --tests     # the emitter's own tests (doctests need
+                                            # LD_LIBRARY_PATH=$XLA_EXTENSION_DIR/lib; see the crate README)
+cargo build --features conformance-adapters,xla \
+  --bin earthsci-compiled-rhs-adapter-rust  # the compiled_rhs adapter
+```
+
+Without `XLA_EXTENSION_DIR` the feature's tests skip with a message rather
+than failing, and the adapter answers `--engine compiled` with the tier's
+`unavailable` outcome. Like `esio`, the feature may raise the effective MSRV
+above the crate's declared 1.89, which is the other reason CI names its
+features explicitly instead of using `--all-features`.
+
+**On a GPU.** `EARTHSCI_XLA_PLATFORM=gpu` selects a GPU PJRT client, and needs
+two separate things:
+
+```bash
+# 1. the CUDA extension -- and a REBUILD, because build.rs bakes the rpath
+scripts/fetch-xla-extension.sh --variant cuda12 --dest "$HOME/xla"
+export XLA_EXTENSION_DIR=$HOME/xla/xla_extension-0.10.0-cuda12/xla_extension
+cargo build --release --features conformance-adapters,xla
+
+# 2. the CUDA libraries that extension HARD-LINKS (cuDNN, NCCL, nvshmem,
+#    cuBLAS, cuFFT, cuSPARSE, nvJitLink, the CUDA runtime, NVRTC) and ptxas
+eval "$(scripts/setup-xla-gpu-libs.sh --prefix "$HOME/xla-gpu-libs" --quiet)"
+
+export TMPDIR=<real-disk scratch>      # XLA's compilation scratch; never a RAM-backed /tmp
+cargo test --release --features conformance-adapters,xla --test xla_compiled_rhs \
+  -- --nocapture --test-threads=1      # the GPU arm runs; on CPU it skips with a message
+```
+
+Those libraries are `DT_NEEDED` entries, so a missing one is a dynamic-loader
+failure before `main` ("error while loading shared libraries: libcudnn.so.9"),
+not a Rust error — no amount of error handling in `xla_runtime` can report it.
+Missing `ptxas` is the other classic: every GPU compilation fails with "No PTX
+compilation provider is available" unless `XLA_FLAGS` carries
+`--xla_gpu_cuda_data_dir`. The setup script prints both lines.
+
+The crate README has the device-resident API (`CompiledRhs::on_device`) and
+why multi-device sharding is not reachable through `xla` 0.4.4.
+
+#### The two workflows, and which one gates XLA
+
+The compiled backends are tested by a workflow of their own, and the split is
+deliberate:
+
+| | `.github/workflows/conformance-testing.yml` | `.github/workflows/xla-backends.yml` |
+|---|---|---|
+| Runs on | every push/PR touching `pkg/**`, `tests/**`, `scripts/**` | only pushes/PRs touching the Rust crate, the Julia package, `tests/conformance/compiled_rhs/**`, the tier runner, or the fetch script |
+| `xla` cargo feature | **never** — every `--features` list there names its features explicitly and omits `xla` (and `--all-features` is likewise avoided) | `conformance-adapters,xla`, with `XLA_EXTENSION_DIR` exported from a cached fetch |
+| Reactant | never — `ESM_TEST_REACTANT` is unset, which skips both the `reactant_*_test.jl` files in `runtests.jl` and the julia compiled stage of `test-conformance.sh` | `ESM_TEST_REACTANT=1`, job-wide |
+| `compiled-RHS compiled producer` stages | **skip visibly** | required: `scripts/assert-compiled-rhs-available.py` fails the job unless the binding's status in the report JSON is `ok` |
+| Cost | minutes | a 144 MB XLA download (cached per pinned version), a full `xla`-feature crate build, and a Reactant precompile — the Julia job budgets 120 minutes |
+
+The skip in the main workflow is legal because
+`tests/conformance/compiled_rhs/manifest.json` leaves
+`engines.compiled.bindings_required` empty and lists julia and rust under
+`bindings_optional`. That also means the tier runner **exits 0 on a skip**,
+which is why `xla-backends.yml` asserts on the report rather than trusting the
+exit code. A *refusal* — a model an emitter cannot lower — is a hard failure in
+both workflows wherever the fixture lists the binding in `compiled_required`;
+optionality covers availability only.
+
+The two skips are not symmetric. Rust's compiled stage skips by itself: with no
+`XLA_EXTENSION_DIR`, `test-conformance.sh` builds the adapter without the `xla`
+feature and the adapter answers `unavailable`. Julia's does not, because the
+adapter's compiled lane self-bootstraps
+`pkg/EarthSciAST.jl/scripts/compiled_rhs_reactant_env`, and that environment
+*lists* Reactant — so `Pkg.instantiate()` installs it, `using Reactant`
+succeeds, and the adapter (which reserves `unavailable` for Reactant failing to
+load) runs for real. `test-conformance.sh` therefore gates the julia compiled
+stage on `ESM_TEST_REACTANT=1`, the same opt-in the package's own Reactant tests
+use. If you run `./scripts/test-conformance.sh` locally and want that stage,
+export it.
+
+Running the same commands locally:
+
+```bash
+# --- what the rust-xla job does -----------------------------------------
+scripts/fetch-xla-extension.sh --variant cpu --dest "$HOME/xla-ext"
+export XLA_EXTENSION_DIR=$HOME/xla-ext/xla_extension-0.10.0-cpu/xla_extension
+export LIBCLANG_PATH=/path/to/llvm/lib   # CI uses the distro's libclang-dev
+
+cargo build --manifest-path pkg/earthsci-ast-rs/Cargo.toml \
+  --features conformance-adapters,xla
+cargo test --manifest-path pkg/earthsci-ast-rs/Cargo.toml \
+  --features conformance-adapters,xla --lib --tests
+LD_LIBRARY_PATH=$XLA_EXTENSION_DIR/lib cargo test \
+  --manifest-path pkg/earthsci-ast-rs/Cargo.toml \
+  --features conformance-adapters,xla --doc
+
+python3 scripts/run-compiled-rhs-conformance.py --self-test
+EARTHSCI_COMPILED_RHS_ADAPTER_RUST="cargo run --quiet --manifest-path pkg/earthsci-ast-rs/Cargo.toml --features conformance-adapters,xla --bin earthsci-compiled-rhs-adapter-rust --" \
+  python3 scripts/run-compiled-rhs-conformance.py --bindings rust --engine compiled \
+    --output conformance-results/compiled_rhs/rust_compiled_report.json
+python3 scripts/assert-compiled-rhs-available.py \
+  conformance-results/compiled_rhs/rust_compiled_report.json rust
+
+# --- what the julia-xla job does ----------------------------------------
+renv=pkg/EarthSciAST.jl/scripts/compiled_rhs_reactant_env
+julia --project=$renv -e 'using Pkg; Pkg.develop(path="pkg/EarthSciAST.jl"); Pkg.instantiate(); Pkg.precompile()'
+ESM_TEST_REACTANT=1 julia --project=$renv \
+  -e 'cd("pkg/EarthSciAST.jl/test"); include("reactant_direct_emit_test.jl")'
+
+EARTHSCI_COMPILED_RHS_ADAPTER_JULIA="julia pkg/EarthSciAST.jl/scripts/compiled_rhs_adapter.jl" \
+  python3 scripts/run-compiled-rhs-conformance.py --bindings julia --engine compiled \
+    --output conformance-results/compiled_rhs/julia_compiled_report.json
+python3 scripts/assert-compiled-rhs-available.py \
+  conformance-results/compiled_rhs/julia_compiled_report.json julia
+```
+
+`Pkg.test()` on the Julia package is *not* how the emitter's tests are run:
+the full target is heavy, and `reactant_direct_emit_test.jl` is written to run
+standalone from the adapter's Reactant environment (its own header documents
+the invocation above). Everything runs from the repository root.
 
 ### Go (earthsci-ast-go)
 

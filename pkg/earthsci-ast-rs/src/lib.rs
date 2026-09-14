@@ -62,6 +62,11 @@ pub(crate) mod broad_phase;
 pub(crate) mod cadence;
 pub(crate) mod canonicalize;
 pub(crate) mod classification;
+/// Core of the `compiled_rhs` conformance adapter. In the library, not in
+/// `src/bin/`, so the integration test drives the binary's exact code path
+/// without spawning a process. Hidden from the published rustdoc surface.
+#[doc(hidden)]
+pub mod compiled_rhs_adapter;
 pub(crate) mod coupling;
 pub(crate) mod coupling_imports;
 pub(crate) mod dae;
@@ -184,6 +189,11 @@ pub(crate) mod problem;
 // (`earthsci_ast.data_sources.esio_provider`), and a caller opts in.
 #[cfg(feature = "esio")]
 pub mod esio_provider;
+
+/// PJRT runtime for the compiled right-hand side (feature `xla`, OFF by
+/// default). See `simulate_array::tape::xla_emit` for the emitter it runs.
+#[cfg(feature = "xla")]
+pub mod xla_runtime;
 
 // Re-export main types
 pub use cadence::{

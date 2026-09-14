@@ -705,6 +705,160 @@ run_pde_pipeline_conformance_python() {
             --output "$OUTPUT_DIR/pde_simulation_pipeline/python_report.json"
 }
 
+# === Compiled right-hand-side conformance (compiled_rhs) ===
+# The gate for the two COMPILED backends (Julia direct StableHLO emission through
+# Reactant; Rust XlaBuilder emission through the `xla` crate) and, today, the
+# cross-binding gate for the three INTERPRETERS themselves: every engine must
+# reproduce the reference interpreter's f(u, p, t) at fixed probe states, within
+# the tolerance of the fixture's class (algebraic / transcendental / reduction /
+# float32). Agreement is NUMERICAL — nothing here inspects an emitted program.
+#
+# Two rulings shape these stages:
+#   * a model a compiled engine cannot lower completely is a HARD ERROR in that
+#     binding, recorded as a NAMED EXCLUSION in the report, never a pass and
+#     never a silent skip; and
+#   * a compiled engine the environment does not provide SKIPS VISIBLY — the
+#     producer answers `unavailable` with a reason, or the stage declines to
+#     start one and says why. Julia and Rust are `bindings_optional` for that
+#     engine, which is what makes the skip legal; both are `bindings_required`
+#     for the interpreter engine, where an unavailable engine FAILS.
+#
+# Neither compiled engine is provisioned by
+# .github/workflows/conformance-testing.yml (no `xla` cargo feature, no
+# XLA_EXTENSION_DIR, no ESM_TEST_REACTANT), so both skip there.
+# .github/workflows/xla-backends.yml provisions both, runs this tier's compiled
+# producers itself, and REQUIRES them — a skip fails that workflow.
+# Contract: tests/conformance/compiled_rhs/README.md. Normative: CONFORMANCE_SPEC §5.38.
+COMPILED_RHS_RUNNER="$SCRIPT_DIR/run-compiled-rhs-conformance.py"
+
+run_compiled_rhs_conformance_self_test() {
+    log "Running compiled-RHS conformance harness self-test..."
+    if python3 "$COMPILED_RHS_RUNNER" --self-test; then
+        success "Compiled-RHS conformance harness self-test passed"
+        return 0
+    else
+        error "Compiled-RHS conformance harness self-test failed"
+        return 1
+    fi
+}
+
+# Report the `unavailable` engines a run recorded, so a compiled producer that
+# legitimately skipped says so in the stage log rather than passing in silence.
+# Reads the report the runner just wrote; a run that produced none prints nothing.
+_compiled_rhs_report_unavailable() {
+    local report="$1"
+    [ -f "$report" ] || return 0
+    python3 - "$report" <<'PY' || true
+import json, sys
+try:
+    with open(sys.argv[1]) as f:
+        report = json.load(f)
+except (OSError, ValueError):
+    sys.exit(0)
+for u in report.get("unavailable") or []:
+    print(f"{u['binding']} / {u['engine']} engine unavailable: {u['reason']}")
+for r in report.get("refusals") or []:
+    print(f"{r['binding']} / {r['engine']} refused {r['fixture']}: "
+          f"{r['rule']} — {r['reason']} [{r['verdict']}]")
+PY
+}
+
+_run_compiled_rhs_stage() {
+    local binding="$1" engine="$2" dir="$3" label="$4"
+    shift 4
+    if ! check_language_availability "$binding" "$dir"; then
+        error "A REQUIRED binding\'s toolchain is missing — this gate cannot run, so it FAILS (it must never silently pass)"
+        return 1
+    fi
+    local report="$OUTPUT_DIR/compiled_rhs/${binding}_${engine}_report.json"
+    log "Running compiled-RHS conformance ($label)..."
+    local rc=0
+    "$@" python3 "$COMPILED_RHS_RUNNER" \
+        --bindings "$binding" \
+        --engine "$engine" \
+        --output "$report" || rc=$?
+    local note
+    note="$(_compiled_rhs_report_unavailable "$report")"
+    if [ -n "$note" ]; then
+        while IFS= read -r line; do
+            [ -n "$line" ] && warning "$line"
+        done <<< "$note"
+    fi
+    return $rc
+}
+
+# Julia is the reference binding: its interpreter adapter re-evaluates every probe
+# through the tree-walk evaluator and the runner asserts a match to the committed
+# golden (the golden it produced) AND to every independent analytic_rhs anchor.
+run_compiled_rhs_conformance_interpreter_julia() {
+    _run_compiled_rhs_stage julia interpreter "$JULIA_DIR" "Julia interpreter" \
+        env EARTHSCI_COMPILED_RHS_ADAPTER_JULIA="julia $JULIA_DIR/scripts/compiled_rhs_adapter.jl"
+}
+
+# Rust drives the vectorized faq evaluator (ArrayCompiled::debug_eval_rhs / the
+# tape executor) through the `conformance-adapters` feature binary.
+run_compiled_rhs_conformance_interpreter_rust() {
+    _run_compiled_rhs_stage rust interpreter "$RUST_DIR" "Rust interpreter" \
+        env EARTHSCI_COMPILED_RHS_ADAPTER_RUST="cargo run --quiet --manifest-path $RUST_DIR/Cargo.toml --features conformance-adapters --bin earthsci-compiled-rhs-adapter-rust --"
+}
+
+# Python drives evaluate_rhs (the NumPy interpreter). PYTHONPATH is pinned to this
+# worktree's package src so the adapter resolves from this checkout and not from a
+# stray editable install pointing at another worktree.
+run_compiled_rhs_conformance_interpreter_python() {
+    _run_compiled_rhs_stage python interpreter "$PYTHON_DIR" "Python interpreter" \
+        env EARTHSCI_COMPILED_RHS_ADAPTER_PYTHON="python3 -m earthsci_ast.cli.compiled_rhs_adapter" \
+            PYTHONPATH="$PYTHON_DIR/src:${PYTHONPATH:-}"
+}
+
+# Julia's compiled lane is direct StableHLO emission through the Reactant
+# extension. OPT-IN under ESM_TEST_REACTANT=1, exactly as the package's own
+# reactant_*_test.jl files are (test/runtests.jl reads the same variable).
+#
+# The gate is not decoration. The adapter's compiled lane self-bootstraps
+# scripts/compiled_rhs_reactant_env, and that environment lists Reactant, so
+# `Pkg.instantiate()` INSTALLS Reactant — XLA runtime artifacts and all — and
+# `using Reactant` then succeeds on any machine that can reach a registry. The
+# adapter reserves its `unavailable` answer for Reactant failing to LOAD, so
+# without this gate the stage would never skip: every run of this script, the
+# main conformance workflow's included, would install Reactant and compile every
+# fixture through XLA. That is precisely the cost xla-backends.yml exists to keep
+# out of the workflow that runs on every push to pkg/**. (The stage's own comment
+# used to say phase 2 had not landed yet and the adapter therefore answered
+# `unavailable`; phase 2 landed in 85ef8c17a without touching this file.)
+#
+# When the variable IS set, julia is still `bindings_optional` for the compiled
+# engine, so an adapter that genuinely cannot load Reactant skips. A REFUSAL (a
+# model the emitter cannot lower) fails either way, whenever the fixture lists
+# julia in its `compiled_required`.
+run_compiled_rhs_conformance_compiled_julia() {
+    if [ "${ESM_TEST_REACTANT:-0}" != "1" ]; then
+        warning "julia / compiled engine not exercised: ESM_TEST_REACTANT is not 1 (set it, with Reactant installable, to run the direct StableHLO emitter; .github/workflows/xla-backends.yml does)"
+        return 0
+    fi
+    _run_compiled_rhs_stage julia compiled "$JULIA_DIR" "Julia compiled (StableHLO)" \
+        env EARTHSCI_COMPILED_RHS_ADAPTER_JULIA="julia $JULIA_DIR/scripts/compiled_rhs_adapter.jl"
+}
+
+# Rust's compiled lane is XlaBuilder emission over the tape, behind the opt-in
+# `xla` cargo feature, which needs the prebuilt XLA extension
+# (scripts/fetch-xla-extension.sh) at $XLA_EXTENSION_DIR plus a libclang for
+# its build script. When the variable is set the adapter is built with the
+# feature and the stage gates the compiled engine; when it is unset the
+# feature-less binary answers `unavailable` and the stage skips visibly.
+# Availability is optional; a REFUSAL is a failure (every fixture lists rust
+# in `compiled_required`).
+run_compiled_rhs_conformance_compiled_rust() {
+    local features="conformance-adapters"
+    if [ -n "${XLA_EXTENSION_DIR:-}" ]; then
+        features="conformance-adapters,xla"
+    else
+        log "XLA_EXTENSION_DIR is unset — the Rust compiled stage will report unavailable (run scripts/fetch-xla-extension.sh to enable it)"
+    fi
+    _run_compiled_rhs_stage rust compiled "$RUST_DIR" "Rust compiled (XlaBuilder)" \
+        env EARTHSCI_COMPILED_RHS_ADAPTER_RUST="cargo run --quiet --manifest-path $RUST_DIR/Cargo.toml --features $features --bin earthsci-compiled-rhs-adapter-rust --"
+}
+
 run_property_corpus() {
     log "Running property-corpus round-trip across bindings..."
     local corpus="$PROJECT_ROOT/tests/property_corpus/expressions"
@@ -891,6 +1045,13 @@ main() {
     run_stage "full-pipeline PDE producer (julia)" run_pde_pipeline_conformance_julia
     run_stage "full-pipeline PDE producer (rust)" run_pde_pipeline_conformance_rust
     run_stage "full-pipeline PDE producer (python)" run_pde_pipeline_conformance_python
+
+    run_stage "compiled-RHS self-test" run_compiled_rhs_conformance_self_test
+    run_stage "compiled-RHS interpreter producer (julia)" run_compiled_rhs_conformance_interpreter_julia
+    run_stage "compiled-RHS interpreter producer (rust)" run_compiled_rhs_conformance_interpreter_rust
+    run_stage "compiled-RHS interpreter producer (python)" run_compiled_rhs_conformance_interpreter_python
+    run_stage "compiled-RHS compiled producer (julia)" run_compiled_rhs_conformance_compiled_julia
+    run_stage "compiled-RHS compiled producer (rust)" run_compiled_rhs_conformance_compiled_rust
 
     print_timing_summary
 

@@ -1,0 +1,142 @@
+{
+  "category": "compiled_rhs",
+  "version": "1.0",
+  "description": "Crate-local stand-in for tests/conformance/compiled_rhs/manifest.json, following the schema in that tier's README. Every probe carries an analytic_rhs anchor computed WITHOUT any binding: the two PDE probes are copied from tests/conformance/pde_simulation/manifest.json (operator-matrix anchors), and the elementwise-gather anchor is the closed form f = 1 + cos(pi*[0,1,2,3]) = [2,0,2,0], colsum[i] = sum_{j<=i} f[j] = [2,2,4,4], total = 4. It exists so the Rust adapter has a self-contained regression test; the shipped manifest is owned by the tier.",
+  "reference_binding": "julia",
+  "engines": {
+    "interpreter": { "bindings_required": ["julia", "rust", "python"] },
+    "compiled": { "bindings_required": [], "bindings_optional": ["julia", "rust"] }
+  },
+  "tolerance_classes": {
+    "algebraic": { "rtol": 1e-13, "atol": 1e-300 },
+    "transcendental": { "rtol": 1e-12, "atol": 1e-300 },
+    "reduction": { "rtol": 1e-11, "atol_scaled": 1e-14 },
+    "float32": { "rtol": 1e-5, "atol": 1e-30 }
+  },
+  "excluded": [],
+  "fixtures": [
+    {
+      "id": "diffusion_1d_dirichlet_n4",
+      "path": "conformance/pde_simulation/fixtures/diffusion_1d_dirichlet_n4.esm",
+      "model": "Diff1D",
+      "tolerance_class": "algebraic",
+      "compiled_required": [],
+      "state_order": ["u[1]", "u[2]", "u[3]", "u[4]"],
+      "parameters": {},
+      "rhs_probes": [
+        {
+          "id": "const1",
+          "t": 0.0,
+          "state": { "u[1]": 1.0, "u[2]": 1.0, "u[3]": 1.0, "u[4]": 1.0 },
+          "analytic_rhs": {
+            "u[1]": -24.999999999999996,
+            "u[2]": 0.0,
+            "u[3]": 0.0,
+            "u[4]": -24.999999999999996
+          }
+        },
+        {
+          "id": "ramp",
+          "t": 0.0,
+          "state": { "u[1]": 1.0, "u[2]": 2.0, "u[3]": 3.0, "u[4]": 4.0 },
+          "analytic_rhs": {
+            "u[1]": 0.0,
+            "u[2]": 0.0,
+            "u[3]": 0.0,
+            "u[4]": -124.99999999999999
+          }
+        },
+        {
+          "id": "ic",
+          "t": 0.0,
+          "state": {
+            "u[1]": 0.8377852522924731,
+            "u[2]": 1.2010565162951536,
+            "u[3]": 1.2010565162951536,
+            "u[4]": 0.8377852522924732
+          },
+          "analytic_rhs": {
+            "u[1]": -11.862849707244816,
+            "u[2]": -9.08178160006701,
+            "u[3]": -9.08178160006701,
+            "u[4]": -11.862849707244816
+          }
+        }
+      ]
+    },
+    {
+      "id": "advection_1d_periodic_n4",
+      "path": "conformance/pde_simulation/fixtures/advection_1d_periodic_n4.esm",
+      "model": "Advect1D",
+      "tolerance_class": "algebraic",
+      "compiled_required": [],
+      "state_order": ["u[1]", "u[2]", "u[3]", "u[4]"],
+      "parameters": {},
+      "rhs_probes": [
+        {
+          "id": "const1",
+          "t": 0.0,
+          "state": { "u[1]": 1.0, "u[2]": 1.0, "u[3]": 1.0, "u[4]": 1.0 },
+          "analytic_rhs": { "u[1]": 0.0, "u[2]": 0.0, "u[3]": 0.0, "u[4]": 0.0 }
+        },
+        {
+          "id": "ramp",
+          "t": 0.0,
+          "state": { "u[1]": 1.0, "u[2]": 2.0, "u[3]": 3.0, "u[4]": 4.0 },
+          "analytic_rhs": { "u[1]": 12.0, "u[2]": -4.0, "u[3]": -4.0, "u[4]": -4.0 }
+        },
+        {
+          "id": "ic",
+          "t": 0.0,
+          "state": {
+            "u[1]": 1.5,
+            "u[2]": 1.0,
+            "u[3]": 0.5,
+            "u[4]": 0.9999999999999999
+          },
+          "analytic_rhs": {
+            "u[1]": -2.0000000000000004,
+            "u[2]": 2.0,
+            "u[3]": 2.0,
+            "u[4]": -1.9999999999999996
+          }
+        }
+      ]
+    },
+    {
+      "id": "elementwise_gather",
+      "path": "conformance/elementwise_observed_gather/fixtures/elementwise_gather.esm",
+      "model": "Column",
+      "tolerance_class": "transcendental",
+      "compiled_required": [],
+      "state_order": ["u[1]", "u[2]", "u[3]", "u[4]", "s"],
+      "parameters": {},
+      "rhs_probes": [
+        {
+          "id": "zeros",
+          "t": 0.0,
+          "state": { "u[1]": 0.0, "u[2]": 0.0, "u[3]": 0.0, "u[4]": 0.0, "s": 0.0 },
+          "analytic_rhs": {
+            "u[1]": 2.0,
+            "u[2]": 2.0,
+            "u[3]": 4.0,
+            "u[4]": 4.0,
+            "s": 4.0
+          }
+        },
+        {
+          "id": "state_independent",
+          "t": 0.5,
+          "state": { "u[1]": 3.0, "u[2]": -1.0, "u[3]": 7.5, "u[4]": 0.25, "s": 2.0 },
+          "analytic_rhs": {
+            "u[1]": 2.0,
+            "u[2]": 2.0,
+            "u[3]": 4.0,
+            "u[4]": 4.0,
+            "s": 4.0
+          }
+        }
+      ]
+    }
+  ]
+}
