@@ -118,7 +118,38 @@ _de_lookup_place(d) =
 # inference. `Reactant.@skip_rewrite_func` is the documented way to say that;
 # per its docstring it is invoked both at global scope (so precompilation sees
 # it) and from the extension's `__init__` (so a loaded-from-cache session does).
-_de_skip_rewrite!() = Reactant.@skip_rewrite_func _de_lookup_place
+# THE WALK ITSELF IS SKIPPED TOO, and for a stronger reason than tidiness.
+#
+# Reactant's interpreter rewrites every type-unstable call in a traced body into
+# its generated `call_with_reactant`, and that generator runs a whole nested
+# GPUCompiler inference to produce the replacement code. `_de_emit!` is a
+# RECURSIVE walk over the tree-walk IR, whose `_Node.payload` is `Any`, so
+# without this every level of the IR was one more nested generator: the compile
+# wedged inside `typeinf`, or printed "detected a stack overflow" and took the
+# process down with SIGSEGV, at a depth that depends on the fixture and on what
+# inference happened to have cached. A BIGGER stack makes it worse, not better —
+# it lets the nesting run deeper before the guard fires, so the crash lands
+# further inside Reactant's own machinery. The default stack is the right one.
+#
+# The walk does not need the interpreter. It builds `stablehlo.*` operations
+# directly on the traced values' `mlir_data` and otherwise reads host data, so
+# there is no `@reactant_overlay` method for the interpreter to find. Marking
+# the entry is enough: a skipped call is left alone in the rewritten body and
+# runs NATIVELY, and nothing reachable from it is rewritten either, so one mark
+# covers the whole recursion rather than one mark per function on the cycle.
+# (`Reactant.should_rewrite_call` consults the skip set per FUNCTION, not per
+# method signature, and it is consulted only where a rewritten body calls out.)
+#
+# The two places under the walk that DO want Reactant's own semantics say so by
+# name instead: `Reactant.Ops.reduce` re-enters the interpreter itself when it
+# traces a reduction body, and interp.jl hands its lane evaluators back with an
+# explicit `Reactant.call_with_reactant`. Both are O(1) in the grid and neither
+# nests, so the generator depth under `@compile` is now a small constant.
+function _de_skip_rewrite!()
+    Reactant.@skip_rewrite_func _de_lookup_place
+    Reactant.@skip_rewrite_func _de_emit!
+    return nothing
+end
 _de_skip_rewrite!()
 
 # ---- clients ----------------------------------------------------------------
