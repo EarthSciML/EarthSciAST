@@ -927,6 +927,105 @@ function _resolve_mount_edge_core(entry::AbstractDict, ref::String, refpath::Str
 end
 
 """
+    _inline_subsystem_refs!(native, base_path, visited; parent_meta, api_meta, staged) -> native
+
+The esm-spec §4.7 `subsystems.<k>` mount form on the NATIVE dictionary: every
+`models.<M>.subsystems.<S>` `{ref}` in `native` is resolved through the SAME
+per-edge core the top-level `models.<k>` form uses
+([`_resolve_mount_edge_core`](@ref)) and its single model is spliced in place,
+recursing through inline subsystems.
+
+This is what lets a `{ref}` be inlined BEFORE `_load_parsed` runs the document's
+own §9.7 machinery and §9.6.3 fixpoint — §4.7 resolves a ref "before validation
+or any other processing", and a rewrite-target inside a mounted component only
+lowers if the content is there when the fixpoint runs (issue #311). The typed
+walk (`_resolve_refs_in_file!`) ran after `_load_parsed`, which is too late.
+
+Only the CONTENT moves early. Each mount's `index_sets` go to `staged` when it
+is given — the ROOT, which has not closed yet — and merge after the close
+(`_merge_staged_index_sets!`); otherwise into `native`'s own registry.
+
+Remote (`http(s)://`) refs are left in place for the typed resolver, exactly as
+[`_inline_toplevel_model_refs!`](@ref) leaves them: it reads targets with
+`isfile`.
+
+Diagnostics match the typed walk byte for byte, because the shared corpus pins
+them for all five bindings (`tests/invalid/expected_errors.json`): the same
+codes, the same messages, and the same mount site stamped by `_with_mount_site`
+so `load_failure_structural_error` renders `/models/<parent>/subsystems/<sub>`.
+"""
+function _inline_subsystem_refs!(native::AbstractDict{String,Any}, base_path::String,
+                                 visited::Set{String};
+                                 parent_meta::AbstractDict{String,<:Integer}=Dict{String,Int}(),
+                                 api_meta::AbstractDict{String,<:Integer}=Dict{String,Int}(),
+                                 staged::Union{Nothing,AbstractDict{String,Any}}=nothing)
+    models = get(native, "models", nothing)
+    models isa AbstractDict || return native
+    for (mname, model) in collect(models)
+        model isa AbstractDict || continue
+        _inline_model_subsystems!(native, model, String(mname), base_path, visited;
+                                  parent_meta=parent_meta, api_meta=api_meta, staged=staged)
+    end
+    return native
+end
+
+function _inline_model_subsystems!(native::AbstractDict{String,Any}, model::AbstractDict,
+                                   parent_name::String, base_path::String, visited::Set{String};
+                                   parent_meta, api_meta, staged)
+    subs = get(model, "subsystems", nothing)
+    subs isa AbstractDict || return
+    for (sub_key, sub) in collect(subs)
+        sub isa AbstractDict || continue
+        sub_name = String(sub_key)
+        if haskey(sub, "ref") && sub["ref"] isa AbstractString
+            ref = _expand_ref_env(String(sub["ref"]))   # esm-spec §4.7 ${VAR} expansion
+            (_is_url(ref) || _is_url(base_path)) && continue   # typed resolver's
+            try
+                canonical = _canonical_ref(ref, base_path)
+                canonical in visited &&
+                    throw(SubsystemRefError("Circular subsystem reference detected: $(canonical)"))
+                push!(visited, canonical)
+                try
+                    refpath = abspath(joinpath(base_path, ref))
+                    isfile(refpath) || throw(SubsystemRefError(
+                        "Subsystem reference '$(ref)' could not be resolved — file does not exist";
+                        code=ERROR_CODES.UNRESOLVED_SUBSYSTEM_REF, ref=ref))
+                    comp, compdir = _resolve_mount_edge_core(sub, ref, refpath, base_path, visited;
+                        mount_noun="subsystem ref '$(ref)'", parent_meta=parent_meta,
+                        api_meta=api_meta)
+                    cmodels = get(comp, "models", nothing)
+                    (cmodels isa AbstractDict && length(cmodels) == 1) || throw(SubsystemRefError(
+                        "Subsystem reference '$(ref)' resolves to a file containing multiple " *
+                        "top-level systems; exactly one is required";
+                        code=ERROR_CODES.AMBIGUOUS_SUBSYSTEM_REF, ref=ref))
+                    cmodel = first(values(cmodels))
+                    _absolutize_nested_refs!(cmodel, compdir)
+                    subs[sub_key] = cmodel
+                    _merge_native_index_sets!(native, comp, ref; staged=staged)
+                finally
+                    delete!(visited, canonical)
+                end
+            catch e
+                # The typed `_load_ref` surfaces these two as-is and wraps anything
+                # else; the mount site is stamped by the only frame that knows it.
+                err = if e isa SubsystemRefError || e isa ExpressionTemplateError
+                    e
+                else
+                    SubsystemRefError("Failed to resolve subsystem ref '$(ref)': $(e)")
+                end
+                err isa SubsystemRefError ? throw(_with_mount_site(err, sub_name, parent_name)) :
+                                            throw(err)
+            end
+        else
+            # An inline subsystem: recurse, with this subsystem as the parent — the
+            # typed walk's `_resolve_model_refs!` names the mount site the same way.
+            _inline_model_subsystems!(native, sub, sub_name, base_path, visited;
+                                      parent_meta=parent_meta, api_meta=api_meta, staged=staged)
+        end
+    end
+end
+
+"""
     _inline_toplevel_model_refs!(native, base_path, visited; parent_meta, api_meta)
 
 In-place native-dict worker for [`_inline_toplevel_model_refs`](@ref).
