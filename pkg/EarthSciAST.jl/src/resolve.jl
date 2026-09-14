@@ -161,9 +161,11 @@ function _load_document(raw_data, base_path::String;
     # what stops the two mount forms from answering the same document
     # differently (§4.7 "Two mount forms, one mechanism").
     staged_isets = OrderedDict{String,Any}()
+    model_envs = Dict{String,Dict{String,Int}}()
     inlined_m = _inline_toplevel_model_refs(raw_data, base_path;
                                             metaparameters=metaparameters,
-                                            staged=staged_isets)
+                                            staged=staged_isets,
+                                            model_envs=model_envs)
     rs_src = inlined_m === nothing ? raw_data : inlined_m
     inlined_r = _inline_toplevel_reaction_system_refs(rs_src, base_path)
     inlined = inlined_r !== nothing ? inlined_r : inlined_m
@@ -197,7 +199,7 @@ function _load_document(raw_data, base_path::String;
     # merges deep-equal-or-`subsystem_index_set_conflict`.
     _merge_staged_index_sets!(file.index_sets, staged_isets, root_env)
     resolve_subsystem_refs!(file, base_path; loader_metaparameters=metaparameters,
-                            root_env=root_env)
+                            root_env=root_env, model_envs=model_envs)
     return file
 end
 
@@ -786,7 +788,8 @@ caught. Defaults to a fresh set for the document entry point.
 function _inline_toplevel_model_refs(raw_data, base_path::String;
         metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}(),
         visited::Set{String}=Set{String}(),
-        staged::Union{Nothing,AbstractDict{String,Any}}=nothing)
+        staged::Union{Nothing,AbstractDict{String,Any}}=nothing,
+        model_envs::Union{Nothing,AbstractDict{String,Dict{String,Int}}}=nothing)
     models = _get_field(raw_data, :models, nothing)
     models === nothing && return nothing
     has_stub = any(values(models)) do m
@@ -797,7 +800,8 @@ function _inline_toplevel_model_refs(raw_data, base_path::String;
     _inline_toplevel_model_refs!(native, base_path, visited;
                                  parent_meta=_root_metaparameter_env(raw_data, metaparameters),
                                  api_meta=metaparameters,
-                                 staged=staged)
+                                 staged=staged,
+                                 model_envs=model_envs)
     return native
 end
 
@@ -846,7 +850,8 @@ function _inline_toplevel_model_refs!(native::AbstractDict{String,Any}, base_pat
                                       visited::Set{String};
         parent_meta::AbstractDict{String,<:Integer}=Dict{String,Int}(),
         api_meta::AbstractDict{String,<:Integer}=Dict{String,Int}(),
-        staged::Union{Nothing,AbstractDict{String,Any}}=nothing)
+        staged::Union{Nothing,AbstractDict{String,Any}}=nothing,
+        model_envs::Union{Nothing,AbstractDict{String,Dict{String,Int}}}=nothing)
     models = get(native, "models", nothing)
     models isa AbstractDict || return
     for (name, entry) in collect(models)
@@ -949,6 +954,23 @@ function _inline_toplevel_model_refs!(native::AbstractDict{String,Any}, base_pat
             # unused, and the walk would re-read every nested ref for nothing.
             leaf_mount_declared = isempty(bindings) ? Set{String}() :
                 _collect_mount_declared_metaparameters(comp, compdir)
+            # The leaf's CLOSED environment — its own declared integer defaults
+            # overlaid with the bindings that close it (§9.7.6 site 3: an explicit
+            # edge binding wins over the leaf's own default), for the names the
+            # leaf DECLARES — laid over the enclosing environment. Computed HERE,
+            # before resolution consumes the `metaparameters` block. Everything
+            # this leaf's OWN mounts contribute folds against it (esm-spec §4.7
+            # "Which environment a contribution folds against"); without it one
+            # resolved document disagrees with itself, an axis the leaf declares
+            # folding to the bound value and an axis its nested mount contributes
+            # to the unbound default.
+            leaf_child_env = Dict{String,Int}(String(k) => Int(v) for (k, v) in parent_meta)
+            for (k, v) in _root_metaparameter_env(comp, Dict{String,Int}())
+                k in leaf_decls && (leaf_child_env[k] = v)
+            end
+            for (k, v) in bindings
+                k in leaf_decls && (leaf_child_env[k] = v)
+            end
             resolved = resolve_template_machinery(comp, compdir; metaparameters=bindings,
                                                   mount_declared=leaf_mount_declared,
                                                   mounted_leaf=true)
@@ -974,6 +996,9 @@ function _inline_toplevel_model_refs!(native::AbstractDict{String,Any}, base_pat
             # concrete and fold against an empty environment (esm-spec §9.7.6:
             # refs resolve post-close).
             _inline_toplevel_model_refs!(comp, compdir, visited)   # component-of-component
+            # What those nested mounts contributed landed in the LEAF's registry,
+            # so it folds against the leaf's closed environment (esm-spec §4.7).
+            _fold_mount_contributions!(get(comp, "index_sets", nothing), leaf_child_env)
             cmodels = get(comp, "models", nothing)
             cmodels isa AbstractDict || throw(SubsystemRefError(
                 "Top-level model ref '$(ref)' resolves to a file with no models block"))
@@ -1001,6 +1026,9 @@ function _inline_toplevel_model_refs!(native::AbstractDict{String,Any}, base_pat
             # the LEAF's directory, not at the parent it is about to land in.
             _absolutize_nested_refs!(cmodel, compdir)
             models[name] = cmodel
+            # The root walk resolves this spliced model's `subsystems.<k>` refs
+            # later; they must fold in THIS leaf's scope, not the root's.
+            model_envs === nothing || (model_envs[String(name)] = leaf_child_env)
             # esm-spec §4.7 "Index-set merge", pipeline step (3): the leaf's
             # document-scoped `index_sets` join THIS document's registry, exactly
             # as they do at a subsystem-ref edge (`_resolve_subsystem_ref`) — the
@@ -1274,10 +1302,11 @@ Circular references are detected and raise a `SubsystemRefError`.
 """
 function resolve_subsystem_refs!(file::EsmFile, base_path::String;
         loader_metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}(),
-        root_env::AbstractDict{String,<:Integer}=Dict{String,Int}())
+        root_env::AbstractDict{String,<:Integer}=Dict{String,Int}(),
+        model_envs::AbstractDict{String,<:AbstractDict{String,Int}}=Dict{String,Dict{String,Int}}())
     visited = Set{String}()
     _resolve_refs_in_file!(file, base_path, visited; api_meta=loader_metaparameters,
-                           root_env=root_env)
+                           root_env=root_env, model_envs=model_envs)
 end
 
 """
@@ -1287,14 +1316,18 @@ Internal recursive resolver for subsystem references in an EsmFile.
 """
 function _resolve_refs_in_file!(file::EsmFile, base_path::String, visited::Set{String};
         api_meta::AbstractDict{String,<:Integer}=Dict{String,Int}(),
-        root_env::AbstractDict{String,<:Integer}=Dict{String,Int}())
+        root_env::AbstractDict{String,<:Integer}=Dict{String,Int}(),
+        model_envs::AbstractDict{String,<:AbstractDict{String,Int}}=Dict{String,Dict{String,Int}}())
     # Resolve model subsystem refs. The document's own index-set registry is
     # threaded down the walk so every referenced subsystem file's top-level
     # `index_sets` merge into it (esm-spec §4.7, mirroring §9.7.5).
     if file.models !== nothing
         for (name, model) in file.models
+            # A top-level-mounted leaf's own subsystem refs fold in THAT leaf's
+            # closed scope (recorded by the inliner), not the root's (esm-spec §4.7).
             _resolve_model_refs!(file.models, name, model, base_path, visited,
-                                 file.index_sets; api_meta=api_meta, root_env=root_env)
+                                 file.index_sets; api_meta=api_meta,
+                                 root_env=get(model_envs, String(name), root_env))
         end
     end
 
