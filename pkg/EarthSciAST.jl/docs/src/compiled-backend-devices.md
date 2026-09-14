@@ -38,18 +38,40 @@ xla = Reactant.@compile sync = true d(ur, pr, tr)
 du  = Array(xla(ur, pr, tr))
 ```
 
+### Compile at the DEFAULT stack, and do not raise it
+
+`Reactant.@compile` on this backend needs no special stack size, and **raising
+the stack makes it worse rather than better** — `ulimit -s 131072` before a run
+is the one thing to avoid.
+
+That is worth saying out loud because the failure it prevents used to look like
+a stack problem. Reactant's interpreter rewrites every type-unstable call in a
+traced body into its generated `call_with_reactant`, and that generator runs a
+whole nested GPUCompiler inference to build the replacement. The emitter's walk
+over the compiled IR is recursive, so before it was made opaque to the rewrite
+every level of the tree was one more nested generator: the compile wedged inside
+`typeinf` with no error and no progress, or printed `detected a stack overflow`
+a dozen times and took the process down with `SIGSEGV`. It was intermittent —
+the depth reached depends on the fixture and on what inference had already
+cached — and a bigger stack simply let the nesting run deeper before the guard
+fired.
+
+The fix is in the emitter, not in the caller's environment: the walk's entry is
+marked `Reactant.@skip_rewrite_func`, so the interpreter calls it natively and
+builds no nested generator for the recursion (`ext/reactant_direct/device.jl`
+says why that is safe — the walk constructs `stablehlo.*` operations from the
+traced values' `mlir_data` and otherwise reads host data, so there is no
+`@reactant_overlay` method for the interpreter to find).
+
 ### Put a function between your program and `@compile`
 
 If the wrapper and the device inputs come out of calls Julia cannot infer — a
 document read at runtime, a fixture loop, anything where `fo` is not a concrete
 type — then `d`, `ur` and `tr` are all `Any` at the call site, and
-`Reactant.@compile` is inferred through them. Do not do that: it sends Julia's
-abstract interpreter into a recursion that trips the stack-overflow guard, and
-the process then WEDGES inside `typeinf` — no error, no progress, on the CPU
-client as readily as on a GPU one.
-
-Pass them through one plain function first. Julia specializes it on their
-runtime types, so inside it every argument is concrete:
+`Reactant.@compile` is inferred through them. Pass them through one plain
+function first; Julia specializes it on their runtime types, so inside it every
+argument is concrete, and the trace is inferred exactly as it is from a script
+that spelled the concrete constructors out:
 
 ```julia
 compile_rhs(d, ur, pr, tr) = Reactant.@compile sync = true d(ur, pr, tr)
@@ -156,6 +178,9 @@ export JULIA_DEPOT_PATH=/path/to/depot
 # scratch space both land in TMPDIR, so point it at real disk or the job will
 # fail in ways that look like memory pressure.
 export TMPDIR=$SLURM_SUBMIT_DIR/tmp; mkdir -p "$TMPDIR"
+
+# Leave the stack alone. `ulimit -s` is not part of this recipe; see
+# "Compile at the DEFAULT stack" above for why raising it is actively harmful.
 
 EARTHSCI_JULIA_XLA_DEVICE=gpu julia --project=. run_model.jl
 ```
