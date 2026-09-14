@@ -1349,4 +1349,9 @@ end
 # fallback, numerical rather than bitwise agreement).
 include("reactant_direct/mod.jl")
 
+# The compiled backend asks Reactant not to rewrite one host-side helper; the
+# request has to be re-made at load time as well as at precompile time (see
+# reactant_direct/device.jl).
+__init__() = _de_skip_rewrite!()
+
 end # module

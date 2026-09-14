@@ -34,8 +34,9 @@
 #   emit.jl     the walk — spines, kernels, sub-kernels, reduces, scans, the RHS
 #   device.jl   WHERE it runs: the XLA client (cpu/gpu), the cell-axis sharding
 #               of the flat state across several devices, and the device-input
-#               builders. Included BEFORE api.jl: `DirectRHS` has a
-#               `DirectPlace` field.
+#               builders, held BESIDE the callable rather than in it. Included
+#               BEFORE api.jl: it declares the `DirectCallable` supertype and
+#               the placement table api.jl registers into.
 #   api.jl      `direct_rhs` / `direct_rhs_with_buffers` and the call methods
 
 import EarthSciAST

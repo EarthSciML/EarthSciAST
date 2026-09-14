@@ -279,6 +279,24 @@ function resolve_client()
     end
 end
 
+# THE FUNCTION BARRIER IN FRONT OF `@compile`. Nothing here is inferable: the
+# evaluator, the wrapper and therefore the device inputs all come out of calls
+# whose types depend on a fixture read at runtime, so at the call site above
+# `d`, `u_dev` and `t_dev` are all `Any`. `Reactant.@compile` expands to
+# machinery — a generated function whose generator runs GPUCompiler — that is
+# inferred through those argument types, and inferring it through `Any`s sends
+# Julia's abstract interpreter into a recursion that trips the stack-overflow
+# guard and then WEDGES the process: it stops accumulating CPU inside `typeinf`
+# and never returns, on the CPU client as readily as on a GPU one.
+#
+# Passing the four values through a plain function first is the ordinary Julia
+# answer: Julia specializes `compile_rhs` on their runtime types, so INSIDE it
+# every argument is concrete and the compile is inferred exactly as it is from a
+# script that spelled the concrete constructors out. `run_rhs` is the same
+# barrier for the per-probe call.
+compile_rhs(d, u_dev, p_dev, t_dev) = Reactant.@compile sync = true d(u_dev, p_dev, t_dev)
+run_rhs(compiled, u_dev, p_dev, t_dev) = Array(compiled(u_dev, p_dev, t_dev))
+
 function fixture_rhs_compiled(fx, base)
     ext = Base.get_extension(EarthSciAST, :EarthSciASTReactantExt)
     ext === nothing && error("the Reactant extension did not load")
@@ -305,7 +323,7 @@ function fixture_rhs_compiled(fx, base)
     p_dev = ext.direct_params(d, p_fx)
     u_dev = ext.direct_state(d, copy(u0))
     t_dev = ext.direct_time(d, 0.0)
-    compiled = Reactant.@compile sync = true d(u_dev, p_dev, t_dev)
+    compiled = compile_rhs(d, u_dev, p_dev, t_dev)
 
     rhs = Dict{String,Any}()
     for pr in fx.rhs_probes
@@ -313,8 +331,8 @@ function fixture_rhs_compiled(fx, base)
         for (rawname, val) in pairs(pr.state)
             u[slot[String(rawname)]] = Float64(val)
         end
-        du = Array(compiled(ext.direct_state(d, u), p_dev,
-                            ext.direct_time(d, Float64(pr.t))))
+        du = run_rhs(compiled, ext.direct_state(d, u), p_dev,
+                     ext.direct_time(d, Float64(pr.t)))
         rhs[String(pr.id)] = Dict{String,Float64}(name => Float64(du[slot[name]])
                                                   for name in order)
     end

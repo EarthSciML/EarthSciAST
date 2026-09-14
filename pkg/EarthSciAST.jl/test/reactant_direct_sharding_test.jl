@@ -80,10 +80,18 @@ function sh_compiled(path; ndev = nothing)
     p_dev = EXT_SH.direct_params(d, p)
     u_dev = EXT_SH.direct_state(d, copy(u0))
     t_dev = EXT_SH.direct_time(d, 0.0)
-    xla = Reactant.@compile sync = true d(u_dev, p_dev, t_dev)
+    xla = sh_compile(d, u_dev, p_dev, t_dev)
     return (u, t) -> Array(xla(EXT_SH.direct_state(d, u), p_dev,
                                EXT_SH.direct_time(d, t))), copy(u0), d
 end
+
+# The function barrier the adapter uses, for the same reason: `d` and the device
+# inputs are all built from values read at runtime, so at the call site above
+# they are `Any`, and `Reactant.@compile` inferred through `Any` arguments sends
+# Julia's abstract interpreter into the recursion that trips the stack-overflow
+# guard. Passing them through a plain function first makes Julia specialize on
+# their runtime types, so the compile is inferred with concrete arguments.
+sh_compile(d, u_dev, p_dev, t_dev) = Reactant.@compile sync = true d(u_dev, p_dev, t_dev)
 
 # Deterministic probes: `u0` itself plus two reproducible perturbations, at two
 # times. A single probe at `u0` would pass on a program that ignored `u`.
