@@ -263,7 +263,10 @@ end
 struct _ConstGatherArray
     flat::Vector{Float64}   # column-major flattening of the source array (== vec(A))
     strides::Vector{Int}    # column-major strides: strides[d] = prod(size(A)[1:d-1])
-    len::Int                # length(flat) — bounds guard for the computed offset
+    len::Int                # length(flat)
+    dims::Vector{Int}       # size(A): each subscript is checked against its own axis
+    boundary::Vector{Symbol}  # per-axis policy (`_const_dim_boundary`) for an out-of-range subscript
+    name::String            # the array's registry name, for `E_TREEWALK_CONSTARRAY_OOB`
 end
 
 # Build-time constructor for a `_NK_CONST_GATHER` node (wall2 Phase B). Flattens `A`
@@ -272,7 +275,8 @@ end
 # node's subscript `children` (one per dimension, in dimension order). Phase C calls
 # this to lower a `index(const_array, subs...)` gather whose subscripts are not all
 # build-time constants. `subscript_nodes` must have one entry per dimension of `A`.
-function _const_gather_node(A::AbstractArray, subscript_nodes::Vector{_Node})
+function _const_gather_node(A::AbstractArray, subscript_nodes::Vector{_Node};
+                            name::AbstractString="")
     sz = size(A)
     length(subscript_nodes) == length(sz) || throw(ArgumentError(
         "_const_gather_node: expected $(length(sz)) subscript node(s) for a " *
@@ -296,9 +300,21 @@ function _const_gather_node(A::AbstractArray, subscript_nodes::Vector{_Node})
         strides[d] = acc
         acc *= sz[d]
     end
+    boundary = Symbol[_const_dim_boundary(A, d) for d in eachindex(sz)]
     return _mknode(kind=_NK_CONST_GATHER,
-                   payload=_ConstGatherArray(flat, strides, length(flat)),
+                   payload=_ConstGatherArray(flat, strides, length(flat), collect(Int, sz),
+                                             boundary, String(name)),
                    children=subscript_nodes)
+end
+
+# The 1-based position a run-time const gather reads on axis `d` for subscript
+# `sub`, resolved exactly as a build-time fold resolves it (`_resolve_const_index`).
+# Each axis is checked against its OWN extent: the linearized offset alone lets an
+# overflow on one axis land inside the array and read a neighbouring element.
+@inline function _const_gather_sub(cg::_ConstGatherArray, d::Int, sub::Int)
+    n = @inbounds cg.dims[d]
+    (1 <= sub <= n) && return sub
+    return _resolve_const_index_oob(@inbounds(cg.boundary[d]), cg.name, d, sub, n)
 end
 
 # ---- interp.* const-arg protocol (one table, both ends) ------------------------
@@ -628,7 +644,7 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
         # `_const_gather_node` (Phase B) so the offset is computed at eval time.
         if expr.value isa _ConstGatherRef
             ref = expr.value::_ConstGatherRef
-            return _const_gather_node(ref.vals, children)
+            return _const_gather_node(ref.vals, children; name=ref.name)
         end
         # Otherwise: index ops must be resolved to state-slot references by
         # _resolve_indices before reaching _compile; encountering one here
@@ -1638,18 +1654,18 @@ end
         # the subscript `children` are evaluated HERE and linearized HERE, so a
         # child that resolves to a runtime-varying value (Phase C: a bound output
         # index) reaches a different element with no rebuild. Subscripts are
-        # exact-integer-valued, so `round(Int, …)` recovers them without drift. The
-        # concrete `::_ConstGatherArray` assert keeps this arm monomorphic; the
-        # happy-path read allocates nothing (the guard only throws on failure).
+        # exact-integer-valued, so `round(Int, …)` recovers them without drift. Each
+        # subscript is resolved on its own axis (`_const_gather_sub`). The concrete
+        # `::_ConstGatherArray` assert keeps this arm monomorphic; the happy-path
+        # read allocates nothing (the guard only throws on failure).
         cg = n.payload::_ConstGatherArray
         children = n.children
         strides = cg.strides
         off = 1
         @inbounds for d in eachindex(children)
-            sub = round(Int, _eval_node(children[d], u, p, t, T))
+            sub = _const_gather_sub(cg, d, round(Int, _eval_node(children[d], u, p, t, T)))
             off += (sub - 1) * strides[d]
         end
-        (1 <= off <= cg.len) || throw(BoundsError(cg.flat, off))
         @inbounds return cg.flat[off]
     elseif k === _NK_TIME
         return t

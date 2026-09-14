@@ -1220,23 +1220,10 @@ end
 #     except `/`, which is TRUNCATING `div` for `_eval_const_int` and true division
 #     in `Float64`. So any `/` under an `index` subscript declines the fast path.
 #  3. Boundary policy (`_ca_boundaries_all_error`). An out-of-range subscript is
-#     resolved by `_resolve_const_index` per the array's declared policy when it
-#     folds, but the runtime gather linearizes unconditionally. For a plain
-#     (`:error`) array the two cannot disagree on a model that builds at all — an
-#     OOB fold THROWS, so a successful build has no OOB gather — but a
-#     `:periodic`/`:clamp` `BoundedConstArray` makes OOB legal and the two would
-#     then differ. Any non-`:error` const array declines the fast path.
-#
-# RESIDUAL, stated precisely: (3) argues from "the model builds today". On a model
-# that does NOT — one whose promoted MAP gathers a plain const array out of range —
-# the per-cell path raises `E_TREEWALK_CONSTARRAY_OOB`, while the compiled gather
-# raises `BoundsError` only if the LINEARIZED offset also leaves the array; an
-# overflow confined to a non-final dimension reads a neighbouring element instead.
-# So a model that today fails LOUDLY could now build with a wrong cell. This is the
-# same property the shipped `evaluate_cellwise` path has, and fixing it belongs in
-# the `_NK_CONST_GATHER` eval arm (a per-dimension bounds check) rather than here,
-# where it would also cost the runtime stencil kernels that share that arm.
-# `ESS_SETUP_MAP_COMPILE_ONCE_VERIFY=1` detects it in one run over a real model.
+#     resolved per axis by the array's declared policy on both paths — by
+#     `_resolve_const_index` when it folds, by `_const_gather_sub` in the runtime
+#     gather — so a plain (`:error`) array raises `E_TREEWALK_CONSTARRAY_OOB` on
+#     either. Any non-`:error` const array still declines the fast path.
 
 # `ESS_SETUP_MAP_COMPILE_ONCE_DISABLE=1` forces the per-cell loop, keeping it
 # available as the differential oracle (mirroring `ESS_STENCIL_DISABLE` /

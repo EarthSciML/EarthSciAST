@@ -92,6 +92,80 @@ fn a_state_or_observed_gather_keeps_the_zero_ghost_convention() {
     assert_eq!(eval_with(ConstArrayScope::empty(), 5).unwrap(), 0.0);
 }
 
+/// A `const` literal written inline as the `index` base is a const array in its
+/// own right (esm-spec §4.3.3): it needs no registry entry, and out of range on
+/// any axis it fails closed instead of reading the zero ghost.
+#[test]
+fn an_inline_const_literal_out_of_range_is_an_error_not_a_zero_ghost() {
+    let extents: HashMap<String, i64> = HashMap::new();
+    let inline = |args: Value| -> Result<f64, String> {
+        let e: Expr = serde_json::from_value(json!({"op": "index", "args": args})).unwrap();
+        eval_expression_with_extents(&e, &HashMap::new(), &[], &[], 0.0, &extents)
+            .map(|v| match v {
+                EvalValue::Scalar(s) => s,
+                EvalValue::Array(_) => f64::NAN,
+            })
+            .map_err(|e| e.to_string())
+    };
+    let t1 = json!({"op": "const", "args": [], "value": [10.0, 20.0, 30.0, 40.0]});
+    let t2 = json!({"op": "const", "args": [], "value": [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]});
+    assert_eq!(inline(json!([t1, 4])).unwrap(), 40.0);
+    assert_eq!(inline(json!([t2, 3, 2])).unwrap(), 6.0);
+    for args in [
+        json!([t1, 0]),
+        json!([t1, 5]),
+        json!([t2, 4, 1]),
+        json!([t2, 1, 3]),
+    ] {
+        let e = inline(args.clone()).expect_err("inline const OOB must fail closed");
+        assert!(
+            e.contains("E_TREEWALK_CONSTARRAY_OOB"),
+            "{args}: wrong diagnostic: {e}"
+        );
+    }
+}
+
+/// The same inline literal gathered over a whole axis inside a `faq`, which the
+/// vectorized and taped paths lower rather than the per-cell interpreter.
+#[test]
+fn an_inline_const_gather_over_a_whole_axis_fails_closed() {
+    let doc = json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "inline_const_array_oob"},
+        "index_sets": {"k": {"kind": "interval", "size": 4}},
+        "models": {"Gather": {
+            "variables": {"shifted": {"type": "unknown", "shape": ["k"]}},
+            "equations": [
+                {"lhs": "shifted", "rhs": {
+                        "op": "faq",
+                        "output_idx": ["i"],
+                        "ranges": {"i": {"from": "k"}},
+                        "args": [],
+                        "expr": {"op": "index", "args": [
+                            {"op": "const", "args": [], "value": M.to_vec()},
+                            {"op": "+", "args": ["i", 1]}
+                        ]}
+                    }}]
+        }}
+    });
+    let opts = ProblemOptions {
+        model_name: Some("Gather".into()),
+        ..Default::default()
+    };
+    let e = match esm_problem(&doc, (0.0, 0.0), opts) {
+        Err(e) => e,
+        Ok(prep) => panic!(
+            "an inline const gather past the end must fail closed; got {:?}",
+            observed_field(&prep, "shifted").map(|a| a.iter().copied().collect::<Vec<_>>())
+        ),
+    };
+    let msg = e.to_string();
+    assert!(
+        msg.contains("E_TREEWALK_CONSTARRAY_OOB"),
+        "wrong diagnostic: {msg}"
+    );
+}
+
 /// The measured symptom: an off-the-end FLAT gather over a whole axis, driven
 /// through the `prepare` front door where the caller's `const_arrays` are the
 /// const-array registry. It used to materialise `[0.0, 0.0, 0.0, 0.0]`.

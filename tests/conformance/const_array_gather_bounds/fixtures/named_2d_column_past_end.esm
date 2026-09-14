@@ -1,0 +1,100 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "named_2d_column_past_end",
+    "description": "an observed `tbl` defined by a `const` array, read at (1, 3): past the end of the SECOND axis only. Its row-major flat offset (3) lies inside the 6 elements, so a check on that offset alone reads another element.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ]
+  },
+  "index_sets": {
+    "a0": {
+      "kind": "interval",
+      "size": 3
+    },
+    "a1": {
+      "kind": "interval",
+      "size": 2
+    }
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "g": {
+          "type": "unknown"
+        },
+        "flux": {
+          "type": "unknown",
+          "default": 0.0
+        },
+        "tbl": {
+          "type": "unknown",
+          "shape": [
+            "a0",
+            "a1"
+          ]
+        }
+      },
+      "equations": [
+        {
+          "lhs": "tbl",
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": [
+              [
+                1.0,
+                2.0
+              ],
+              [
+                3.0,
+                4.0
+              ],
+              [
+                5.0,
+                6.0
+              ]
+            ]
+          }
+        },
+        {
+          "lhs": "g",
+          "rhs": {
+            "op": "index",
+            "args": [
+              "tbl",
+              1,
+              3
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "flux"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        }
+      ],
+      "tests": [
+        {
+          "id": "gather",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "assertions": [
+            {
+              "variable": "g",
+              "time": 0.0,
+              "expected": -1.0
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

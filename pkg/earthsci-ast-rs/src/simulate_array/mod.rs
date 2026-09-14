@@ -934,6 +934,10 @@ fn empty_declared_names() -> &'static HashSet<String> {
 /// per-dimension policy tuple) and of [`crate::value_invention`]'s
 /// `const_array_boundaries` input — the two engines must agree byte-for-byte on
 /// a resolved gather, so they resolve it by the same table.
+/// The name `E_TREEWALK_CONSTARRAY_OOB` reports for a `const` literal written
+/// inline as an `index` base, which has no variable name of its own.
+pub(crate) const INLINE_CONST_NAME: &str = "inline const";
+
 #[derive(Debug, Clone, Default)]
 pub struct ConstArrayScope {
     /// Names that are const-array factors.
@@ -977,6 +981,21 @@ impl ConstArrayScope {
     /// Is `name` a const-array factor here?
     pub fn is_const(&self, name: &str) -> bool {
         self.names.contains(name)
+    }
+
+    /// Is `base` a `const` literal written inline as an `index` base? It is a
+    /// const array in its own right (esm-spec §4.3.3), with no declared policy.
+    pub fn is_inline_const(base: &Expr) -> bool {
+        matches!(base, Expr::Operator(n) if n.op == "const")
+    }
+
+    /// Is an `index` over `base` a const-array gather: a named factor in this
+    /// scope, or a `const` literal written inline?
+    pub fn is_const_base(&self, base: &Expr) -> bool {
+        match base {
+            Expr::Variable(v) => self.is_const(v),
+            other => Self::is_inline_const(other),
+        }
     }
 
     /// `name`'s declared policy for dimension `d`, defaulting to
