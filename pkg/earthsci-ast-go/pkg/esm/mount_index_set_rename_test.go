@@ -400,3 +400,23 @@ func TestMountRenameReachesAnAxisSharedWithANestedMount(t *testing.T) {
 		}
 	}
 }
+
+// esm-spec §4.7 "Which environment it folds against": a merge folds against the
+// closed metaparameter environment of whatever registry it lands in.
+//
+// The grandchild sizes an axis "n_lev" and carries no §9.7 machinery, so the
+// name survives its own load unfolded; the leaf declares n_lev = 4 and mounts
+// it; the assembly declares an unrelated n_lev = 9 and mounts the leaf. The
+// axis lands in the LEAF's registry, so the leaf's close speaks and the answer
+// is 4. This binding answered 9 before the rule was settled, letting an
+// assembler's unrelated same-named metaparameter resize an axis the leaf owns.
+func TestMergeFoldsAgainstTheRegistryItLandsIn(t *testing.T) {
+	f, err := LoadPath(mrFixture(t, "fixtures", "mount_merge_fold_env", "fold_env_root.esm"))
+	if err != nil {
+		t.Fatalf("LoadPath(fold_env_root): %v", err)
+	}
+	got := f.IndexSets["prof"]
+	if got.Size == nil || *got.Size != 4 {
+		t.Errorf("prof size = %v; want 4 (the LEAF's n_lev, not the assembly's 9)", got.Size)
+	}
+}

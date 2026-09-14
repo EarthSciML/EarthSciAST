@@ -387,3 +387,27 @@ fn a_mount_edge_rename_reaches_an_axis_the_leaf_shares_with_its_own_nested_mount
         );
     }
 }
+
+/// esm-spec §4.7 "Which environment it folds against": a merge folds against
+/// the closed metaparameter environment of whatever registry it lands in.
+///
+/// The fixture makes the two candidate environments disagree on purpose. The
+/// grandchild sizes an axis `"n_lev"` and carries no §9.7 machinery, so the
+/// name survives its own load unfolded; the leaf declares `n_lev: 4` and mounts
+/// it; the assembly declares an unrelated `n_lev: 9` and mounts the leaf. The
+/// axis lands in the LEAF's registry, so the leaf's close is the one that
+/// speaks and the answer is 4. Folding against the assembly's environment
+/// instead gives 9 — an unrelated same-named metaparameter one level up
+/// silently resizing an axis the leaf owns, which is exactly what Go and
+/// TypeScript did before this rule was settled (both measured at 9).
+#[test]
+fn a_merge_folds_against_the_environment_of_the_registry_it_lands_in() {
+    let path = fixture("fixtures/mount_merge_fold_env/fold_env_root.esm");
+    let file = load_path(&path).unwrap_or_else(|e| panic!("{} does not load: {e}", path.display()));
+    let value = serde_json::to_value(&file).expect("document renders as JSON");
+    assert_eq!(
+        value["index_sets"]["prof"]["size"], 4,
+        "the contributed axis must fold against the LEAF's n_lev (4), never the assembly's (9): {}",
+        value["index_sets"]
+    );
+}

@@ -663,7 +663,14 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 					// inlined at this entry's pointer — best-effort deeper prefix (not
 					// a corpus-pinned location).
 					nestedPrefix := fmt.Sprintf("%s/%s/subsystems", pathPrefix, key)
-					if err := resolveSubsystemMap(subs, refBasePath, visited, leafRegistry, childMeta, apiMeta, rootEnv, nestedPrefix, subsystemMount); err != nil {
+					// `childMeta`, not `rootEnv`, in the fold-environment slot:
+					// these contributions land in the LEAF's registry, and a
+					// §4.7 merge folds against the environment of whatever
+					// registry it lands in (esm-spec §4.7 "Index-set merge").
+					// Folding them against the ROOT's environment instead let an
+					// assembler's unrelated metaparameter of the same name size
+					// an axis the leaf owns.
+					if err := resolveSubsystemMap(subs, refBasePath, visited, leafRegistry, childMeta, apiMeta, childMeta, nestedPrefix, subsystemMount); err != nil {
 						return fmt.Errorf("%s %q: resolving nested refs in %q: %w", form.noun, key, refKey, err)
 					}
 				}
@@ -686,8 +693,10 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 		// recursion runs through resolveSubsystemMap, so `visited` gives it the
 		// same path-scoped cycle detection every other edge gets. Matches the
 		// Rust reference, which composes at both forms.
+		// `childMeta` in the fold-environment slot for the same reason as the
+		// subsystem walk above: these land in the LEAF's registry.
 		if err := inlineNestedTopLevelModelRefs(view, refBasePath, visited, leafRegistry, childMeta, apiMeta,
-			rootEnv, fmt.Sprintf("%s/%s/models", pathPrefix, key)); err != nil {
+			childMeta, fmt.Sprintf("%s/%s/models", pathPrefix, key)); err != nil {
 			return fmt.Errorf("%s %q: resolving nested refs in %q: %w", form.noun, key, refKey, err)
 		}
 

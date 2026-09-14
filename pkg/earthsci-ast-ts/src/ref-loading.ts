@@ -551,7 +551,11 @@ function resolveRefDocument(
   indexSetRename: unknown = undefined,
   apiMeta: Readonly<Record<string, number>> = {},
   mountForm: MountForm = 'subsystem',
-  resolveNestedMounts?: (leaf: EsmFile, leafRegistry: Record<string, unknown>) => void,
+  resolveNestedMounts?: (
+    leaf: EsmFile,
+    leafRegistry: Record<string, unknown>,
+    leafEnv: Readonly<Record<string, number>>,
+  ) => void,
 ): EsmFile {
   const mountLabel =
     mountForm === 'subsystem' ? `Subsystem ref '${ref}'` : `Top-level model ref '${ref}'`
@@ -585,7 +589,8 @@ function resolveRefDocument(
   // it. Merging here would put the contribution back before the close, which is
   // exactly what the merge-order fix removed.
   const leafRegistry: Record<string, unknown> = {}
-  if (resolveNestedMounts) resolveNestedMounts(parsed, leafRegistry)
+  const leafEnv = leafClosedEnv(parsed, bindings)
+  if (resolveNestedMounts) resolveNestedMounts(parsed, leafRegistry, leafEnv)
   // esm-spec §9.7.10 form A: fold the subsystem-ref edge's injected imports
   // into the referenced component's scope before resolution — and, because the
   // nested mounts are already inlined above, the rewrite-targets of the
@@ -636,9 +641,34 @@ function resolveRefDocument(
   // inside it is renamed (or not) at that nested edge. Absent or empty ⇒
   // identity, so an edge that does not use the field resolves exactly as
   // before.
-  const nestedContributed = foldNestedIndexSets(out, leafRegistry, ref, bindings)
+  const nestedContributed = foldNestedIndexSets(out, leafRegistry, ref, leafEnv)
   applyMountIndexSetRename(out, indexSetRename, `${mountForm} ref '${ref}'`, nestedContributed)
   return out
+}
+
+/**
+ * A mounted leaf's own CLOSED metaparameter environment: its declared integer
+ * `default`s overlaid with this edge's folded `bindings` (esm-spec §9.7.6 site
+ * 3), read BEFORE `resolveTemplateMachinery` consumes the block.
+ *
+ * This is the fold environment for every §4.7 contribution that lands in the
+ * LEAF's registry — its own nested mounts' axes. esm-spec §4.7 makes the rule
+ * explicit: a merge folds against the environment of whatever registry it lands
+ * in. Folding a leaf's nested contribution against the ROOT's environment
+ * instead let an assembler's unrelated metaparameter of the same name size an
+ * axis the leaf owns.
+ */
+function leafClosedEnv(leaf: EsmFile, bindings: Record<string, number>): Record<string, number> {
+  const env: Record<string, number> = {}
+  const decls = (leaf as { metaparameters?: unknown }).metaparameters
+  if (typeof decls === 'object' && decls !== null && !Array.isArray(decls)) {
+    for (const [name, d] of Object.entries(decls as Record<string, unknown>)) {
+      if (typeof d !== 'object' || d === null) continue
+      const def = (d as { default?: unknown }).default
+      if (typeof def === 'number' && Number.isInteger(def)) env[name] = def
+    }
+  }
+  return { ...env, ...bindings }
 }
 
 /**
@@ -748,6 +778,7 @@ function resolveRefEdge(
     leaf: EsmFile,
     leafRegistry: Record<string, unknown>,
     refBasePath: string,
+    leafEnv: Readonly<Record<string, number>>,
   ) => void,
 ): void {
   const chainKey = normalizeRef(ref, basePath)
@@ -783,7 +814,8 @@ function resolveRefEdge(
       apiMeta,
       mountForm,
       resolveNestedMounts
-        ? (leaf, leafRegistry) => resolveNestedMounts(leaf, leafRegistry, refBasePath)
+        ? (leaf, leafRegistry, leafEnv) =>
+            resolveNestedMounts(leaf, leafRegistry, refBasePath, leafEnv)
         : undefined,
     )
     inline(parsed, refBasePath)
@@ -844,7 +876,10 @@ function walkSubsystemRefs(
         // and the §9.6.3 fixpoint, so the fixpoint reaches their
         // rewrite-targets (issue #311) and so `onRef`'s extraction cannot pick
         // an UNRESOLVED `{ ref }` edge and splice it in as the component.
-        (leaf, leafRegistry, leafBasePath) =>
+        // `leafEnv`, not `rootEnv`: these contributions land in the LEAF's
+        // registry, and a §4.7 merge folds against the environment of whatever
+        // registry it lands in (esm-spec §4.7 "Index-set merge").
+        (leaf, leafRegistry, leafBasePath, leafEnv) =>
           resolveLeafNestedMounts(
             leaf,
             leafRegistry,
@@ -854,7 +889,7 @@ function walkSubsystemRefs(
             read,
             subPointer,
             apiMeta,
-            rootEnv,
+            leafEnv,
           ),
       )
     } else {
@@ -960,7 +995,8 @@ function inlineTopLevelModelRef(
     },
     apiMeta,
     'top-level model',
-    (leaf, leafRegistry, leafBasePath) =>
+    // `leafEnv`, not `rootEnv`, for the same reason as the subsystem form.
+    (leaf, leafRegistry, leafBasePath, leafEnv) =>
       resolveLeafNestedMounts(
         leaf,
         leafRegistry,
@@ -970,7 +1006,7 @@ function inlineTopLevelModelRef(
         read,
         pointer,
         apiMeta,
-        rootEnv,
+        leafEnv,
       ),
   )
 }

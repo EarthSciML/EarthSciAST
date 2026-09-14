@@ -216,3 +216,20 @@ describe('mount-edge index_set_rename is PER EDGE (esm-spec §4.7), at both ends
     },
   )
 })
+
+describe('a §4.7 merge folds against the environment of the registry it lands in', () => {
+  // esm-spec §4.7 "Which environment it folds against". The fixture makes the
+  // two candidate environments disagree on purpose: the grandchild sizes an
+  // axis `"n_lev"` and carries no §9.7 machinery, so the name survives its own
+  // load unfolded; the leaf declares `n_lev: 4` and mounts it; the assembly
+  // declares an unrelated `n_lev: 9` and mounts the leaf. The axis lands in the
+  // LEAF's registry, so the leaf's close is the one that speaks.
+  //
+  // This binding answered 9 before the rule was settled, letting an assembler's
+  // unrelated same-named metaparameter resize an axis the leaf owns.
+  it("uses the LEAF's close for an axis its own nested mount contributed", () => {
+    const { file } = loadResolved('fixtures/mount_merge_fold_env/fold_env_root.esm')
+    const sets = (file as unknown as { index_sets: Record<string, { size?: number }> }).index_sets
+    expect(sets.prof?.size).toBe(4)
+  })
+})
