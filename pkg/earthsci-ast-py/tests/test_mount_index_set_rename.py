@@ -280,3 +280,25 @@ def test_a_mount_cycle_across_the_chain_is_reported(tmp_path):
     with pytest.raises(CircularReferenceError) as excinfo:
         load_path(str(tmp_path / "root.esm"))
     assert "ircular" in str(excinfo.value)
+
+
+def test_toplevel_reaction_system_ref_is_refused_loudly():
+    """esm-spec §4.7: this binding does not implement the top-level
+    ``reaction_systems.<k>`` ``{ref}`` mount form, so it REFUSES the entry —
+    ``mount_form_unsupported`` at ``/reaction_systems/<k>`` — rather than coercing
+    the stub into an empty reaction system and loading clean with nothing mounted.
+    (Julia is the one binding that implements the form.)"""
+    from earthsci_ast.parse import SubsystemRefError
+
+    fixture = os.path.join(TESTS, "fixtures", "mount_form_unsupported", "toplevel_reaction_system_ref.esm")
+    with pytest.raises(SubsystemRefError) as info:
+        load_path(fixture)
+    assert info.value.code == "mount_form_unsupported"
+    assert info.value.path == "/reaction_systems/Chem"
+
+    # The leaf itself — an inline reaction system, a component rather than a
+    # mount — still loads.
+    leaf = load_path(os.path.join(TESTS, "fixtures", "mount_form_unsupported", "reaction_system_leaf.esm"))
+    assert set(s.name for s in leaf.reaction_systems["Chem"].species) == {"A", "B"} or len(
+        leaf.reaction_systems["Chem"].species
+    ) == 2

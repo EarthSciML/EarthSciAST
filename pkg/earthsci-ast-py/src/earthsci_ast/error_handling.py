@@ -240,6 +240,11 @@ SUBSYSTEM_INDEX_SET_RENAME_UNKNOWN_NAME = "subsystem_index_set_rename_unknown_na
 SUBSYSTEM_INDEX_SET_RENAME_UNSUPPORTED_MOUNT_FORM = (
     "subsystem_index_set_rename_unsupported_mount_form"
 )
+# A §4.7 `{ref}` mount at a form this binding does not implement — a top-level
+# `reaction_systems.<k>` `{ref}` (esm-spec §4.7 "Two mount forms, one
+# mechanism"). Refused at `/reaction_systems/<k>` rather than coerced into an
+# empty reaction system.
+MOUNT_FORM_UNSUPPORTED = "mount_form_unsupported"
 
 # Scope-injection codes (esm-spec §9.7.10). `template_inject_target_is_loader`
 # is RETIRED in 1.0.0: a data source is not a component, so it can no longer be
