@@ -112,7 +112,9 @@ CONUS; the buffers exceed L3), so the emission-level census is the measure.
 The spike listed its remaining tier-3 fallbacks "in expected ReSEACT impact
 order" and put ghost-masked table gathers first. `oop_ssa_stats` now carries a
 per-reason blocker tally (which read surface still reads each surviving
-producer's block), and on the ReSEACT transport RHS at 6x6x8 it says:
+producer's block), and on the ReSEACT transport RHS at 6x6x8 it says (measured
+on a tree forked at `3aa046d65`, before #278 and #273; the counts on current
+`main` are in "Re-measured on `main`" below):
 
 | | spike | + this extension |
 |---|---|---|
@@ -170,7 +172,9 @@ fold.
    nothing unless EVERY tracked producer can go, and 15 of 17 is not 17 of 17 —
    the scan and sub-kernel blockers below survive it. So closing #4 alone
    changes no emitted program at the default; it would only pay as the LAST of
-   the transport blockers to fall. Do not re-attempt it on its own.
+   the transport blockers to fall. Do not re-attempt it on its own. (On
+   current `main` the transport build reports `blockers.scalar = 0` with no
+   scalar redirect at all; see "Re-measured on `main`" below.)
 5. ~~**Fragmented gathers**~~ (`nseg > min(64, max(8, L÷4))`) — CLOSED by tier
    2b: past the slice threshold a single-producer mapping gathers the producer's
    VALUE instead of the buffer. `frag` went 5 blocked producers → 0. A
@@ -296,6 +300,55 @@ read-graph fact) is identical in every arm and only `n_skipped_scatters` moves;
 `n_gate_declined` is the difference. On ReSEACT the default gate leaves
 chemistry exactly as the arms had it (59 of 59, `ue` dead) and takes transport
 to 0 of 17 — the redirects without the skip.
+
+### Re-measured on `main` (issue #296)
+
+Every count above was taken on a tree forked at `3aa046d65`, before #273 (the
+contraction tier's order) and #278 (the state-gather classification) landed,
+and the gate's verdict is a function of exactly those counts
+(`n_skippable == n_producers`). Re-taken with
+`tools/diag/p12_ssa_blockers.jl` at 6x6x8 on `main` at `becb423a6`, with the
+same ReSEACT model and the `faq`-tag fixes to the split. The same harness on the
+fork-point tree reproduces the tables above exactly (17 / 13, 97 / 100,
+731 / 885, the same blocker tally), so the differences are the emitter's:
+
+| transport (part 1) | fork point | `main` |
+|---|---|---|
+| producers | 17 | 20 |
+| statically skippable | 13 | 18 |
+| scatters skipped by the default gate | 0 | **0** |
+| top-level edges redirected | 97 / 100 | 203 / 211 |
+| sub-kernel descriptors redirected | 731 / 885 | 968 / 1 156 |
+| `n_ghost_edges` | 0 | 0 |
+| blocked producers, by reason | sub 2, scalar 2, scan 1 | sub 2, scan 1, dense 1 |
+| … blocked SOLELY by that reason | scalar 2, sub 1 | sub 1 |
+
+Chemistry (part 2) is unchanged: 59 producers, 59 skipped, 563 / 563 edges.
+
+**The gate's verdict did not flip.** Transport is still short of all-skippable,
+so the default gate still declines every transport skip and still takes every
+chemistry one. The two surviving producers are a 2 304-element level-1 fill
+held by a sub-kernel read, and a 288-element level-5 fill held by a scan fold, a
+dense gather and a sub-kernel read. The same build at 13x7x16 gives the same 20
+/ 18, the same two survivors and the same 968 / 1 156 sub-kernel descriptors, so
+the verdict does not move with the grid between those sizes.
+
+Two cautions follow:
+
+* The move is **not** mostly #278's gather reclassification. `main` with #278's
+  switches off (`ESS_STATE_BOX_DISABLE=1 ESS_LANE_AFFINE_KEY_DISABLE=1`) gives
+  the same 20 / 18 and changes only the top-level edges (189 / 197), and
+  `ESS_ARRAY_CONTRACTION_DISABLE=1` changes nothing. Which other change between
+  the fork point and `main` accounts for it (#273 is a candidate) was not
+  bisected.
+* The CONUS timings in this section priced the 17-producer build. The transport
+  program the gate emits is still "redirects without the skip", but it now
+  carries roughly twice the top-level redirects, and the open item below says
+  the redirects themselves are what costs the transport primal. Those transport
+  figures have not been re-taken on `main`. The gate is also now two producers
+  from flipping: a change that clears the sub-kernel, scan and dense blockers
+  above turns every transport skip back on, which is the regime #283 measured
+  as slower, so re-time transport before landing one.
 
 ### Measured: the gate wins on BOTH sides
 
