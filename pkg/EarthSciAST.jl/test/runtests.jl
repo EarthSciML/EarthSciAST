@@ -255,6 +255,10 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("array_contraction_test.jl")            # whole-array contraction loop nest (ess-array-contraction)
     include("oop_scalar_batch_test.jl")             # :oop lane-batched scalar entries (ess-oop-batch)
     include("tree_walk_tcadence_test.jl")           # B3 time-cadence tier (t-memoized slots)
+    # The untiered kill switch (ESS_UNTIERED): an in-place build that skips no
+    # prelude slot, pinned bit-for-bit against the out-of-place walker so the
+    # tiering tests above can use it as their differential oracle.
+    include("tree_walk_untiered_test.jl")
     include("tree_walk_xcse_test.jl")
     include("tree_walk_const_array_boundary_test.jl")
     include("tree_walk_semiring_test.jl")
