@@ -84,7 +84,10 @@ export class CircularReferenceError extends EsmDiagnosticError {
 export class RefLoadError extends EsmDiagnosticError {
   /** The reference path or URL that failed to load */
   public readonly ref: string
-  /** Canonical code: `unresolved_subsystem_ref` or `ambiguous_subsystem_ref`. */
+  /**
+   * Canonical code: `unresolved_subsystem_ref`, `ambiguous_subsystem_ref`, or
+   * `mount_form_unsupported` for a mount form this binding does not implement.
+   */
   declare readonly code: string
   /**
    * JSON Pointer of the SUBSYSTEM ENTRY that carries the bad ref (e.g.
@@ -256,6 +259,22 @@ export function resolveSubsystemRefsSync(
   // model walk).
   if (file.reaction_systems) {
     for (const [name, rs] of Object.entries(file.reaction_systems)) {
+      // esm-spec §4.7: a top-level `reaction_systems.<k>` entry that is a bare
+      // `{ ref }` — a `ref` string and no `species`, the Julia reference's
+      // discriminator for this form — is a mount edge at a form this binding
+      // does not implement. Refuse it at the entry rather than leave an
+      // unresolved stub where a reaction system belongs. An inline reaction
+      // system is a component, not a mount, and is walked as before.
+      const entry = rs as { ref?: unknown; species?: unknown }
+      if (typeof entry.ref === 'string' && entry.species === undefined) {
+        throw new RefLoadError(
+          entry.ref,
+          undefined,
+          ERROR_CODES.MOUNT_FORM_UNSUPPORTED,
+          `reaction_systems.${name}: a top-level \`reaction_systems.<k>\` \`{ref}\` mount (ref '${entry.ref}') is not supported by this binding. Inline the reaction system, or mount it at a \`subsystems.<k>\` \`{ref}\` edge (esm-spec §4.7 "Two mount forms, one mechanism")`,
+          `/reaction_systems/${name}`,
+        )
+      }
       resolveReactionSystemRefs(
         rs,
         basePath,

@@ -348,3 +348,28 @@ describe('issue #311 in this binding: the rewrite pass re-runs after resolveSubs
     expect(again).toEqual(leaf)
   })
 })
+
+describe('a top-level reaction_systems.<k> {ref} is refused loudly (esm-spec §4.7)', () => {
+  // This binding does not implement the top-level `reaction_systems.<k>` `{ ref }`
+  // mount form, so it refuses the entry — `mount_form_unsupported` at
+  // `/reaction_systems/<k>` — rather than leaving an unresolved stub where a
+  // reaction system belongs. (Julia is the one binding that implements the form.)
+  it('refuses the mount with mount_form_unsupported at the entry', () => {
+    let err: unknown
+    try {
+      loadResolved('fixtures/mount_form_unsupported/toplevel_reaction_system_ref.esm')
+    } catch (e) {
+      err = e
+    }
+    expect(err).toBeDefined()
+    expect((err as { code?: string }).code).toBe('mount_form_unsupported')
+    expect((err as { path?: string }).path).toBe('/reaction_systems/Chem')
+  })
+
+  it('still loads an inline reaction system, which is a component and not a mount', () => {
+    const { file } = loadResolved('fixtures/mount_form_unsupported/reaction_system_leaf.esm')
+    const rs = (file as unknown as { reaction_systems: Record<string, { species: object }> })
+      .reaction_systems
+    expect(Object.keys(rs.Chem.species)).toEqual(['A', 'B'])
+  })
+})
