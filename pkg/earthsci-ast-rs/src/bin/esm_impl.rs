@@ -4271,6 +4271,27 @@ fn collect_subsystem_ref_errors(
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."));
 
+    // A top-level `reaction_systems.<k>` `{ref}` is a mount form this binding
+    // does not implement: `mount_form_unsupported` at the entry itself
+    // (`ref_loading::refuse_toplevel_reaction_system_refs`).
+    if let Some(rs) = json.get("reaction_systems").and_then(|v| v.as_object()) {
+        for (name, entry) in rs {
+            if let Some(ref_str) = entry.get("ref").and_then(|v| v.as_str())
+                && entry.get("species").is_none()
+            {
+                out.push(StructuralError {
+                    path: format!("/reaction_systems/{name}"),
+                    code: StructuralErrorCode::MountFormUnsupported,
+                    message: format!(
+                        "a top-level `reaction_systems.<k>` `{{ref}}` mount (ref '{ref_str}') is \
+                         not supported by this binding"
+                    ),
+                    details: serde_json::json!({ "ref": ref_str }),
+                });
+            }
+        }
+    }
+
     for container in ["models", "reaction_systems"] {
         let Some(systems) = json.get(container).and_then(|v| v.as_object()) else {
             continue;

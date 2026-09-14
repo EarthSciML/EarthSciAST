@@ -381,6 +381,34 @@ fn index_set_names(value: &Value) -> std::collections::BTreeSet<String> {
         .unwrap_or_default()
 }
 
+/// Refuse a top-level `reaction_systems.<k>` `{ref}` mount with
+/// `mount_form_unsupported`, naming the entry. The conformance producer
+/// reports it at `/reaction_systems/<k>` (see `collect_subsystem_ref_errors`).
+fn refuse_toplevel_reaction_system_refs(obj: &Map<String, Value>) -> Result<(), DiagnosticError> {
+    let Some(rs) = obj.get("reaction_systems").and_then(|v| v.as_object()) else {
+        return Ok(());
+    };
+    for (name, entry) in rs {
+        let Some(entry) = entry.as_object() else {
+            continue;
+        };
+        if let Some(ref_str) = entry.get("ref").and_then(|v| v.as_str())
+            && !entry.contains_key("species")
+        {
+            return Err(err(
+                codes::MOUNT_FORM_UNSUPPORTED,
+                format!(
+                    "reaction_systems.{name}: a top-level `reaction_systems.<k>` `{{ref}}` mount \
+                     (ref '{ref_str}') is not supported by this binding. Inline the reaction \
+                     system, or mount it at a `subsystems.<k>` `{{ref}}` edge (esm-spec §4.7 \
+                     \"Two mount forms, one mechanism\")"
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn walk_top_level(
     value: &mut Value,
     base_path: &Path,
@@ -424,6 +452,14 @@ fn walk_top_level(
         Some(o) => o,
         None => return Ok(Map::new()),
     };
+
+    // esm-spec §4.7: a top-level `reaction_systems.<k>` entry that is a bare
+    // `{ref}` — a `ref` string and no `species`, the Julia reference's
+    // discriminator for this form — is a mount edge at a form this binding does
+    // not implement. Refuse it here, before the typed parse would reject the
+    // stub with an incidental `missing field species`. An inline reaction system
+    // is a component, not a mount, and passes untouched.
+    refuse_toplevel_reaction_system_refs(obj)?;
 
     // esm-spec §4.7 / §9.7.10: a top-level `models.<k>` that is a bare `{ref}`
     // (has `ref`, no inline `variables`) is a model-ref MOUNT EDGE — splice in

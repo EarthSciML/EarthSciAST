@@ -425,3 +425,29 @@ fn a_merge_folds_against_the_environment_of_the_registry_it_lands_in() {
         value["index_sets"]
     );
 }
+
+/// esm-spec §4.7: this binding does not implement the top-level
+/// `reaction_systems.<k>` `{ref}` mount form, so it REFUSES the entry with
+/// `mount_form_unsupported`, rather than failing on the incidental typed-parse
+/// error `missing field species` it used to give. The conformance producer
+/// reports the finding at `/reaction_systems/<k>`. (Julia is the one binding
+/// that implements the form.)
+#[test]
+fn a_toplevel_reaction_system_ref_is_refused_loudly() {
+    let path = fixture("fixtures/mount_form_unsupported/toplevel_reaction_system_ref.esm");
+    let err = load_path(&path).expect_err("a top-level reaction_systems.<k> {ref} must be refused");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("mount_form_unsupported"),
+        "want mount_form_unsupported, got: {msg}"
+    );
+    assert!(
+        msg.contains("reaction_systems.Chem"),
+        "the diagnostic must name the entry: {msg}"
+    );
+
+    // The leaf itself — an inline reaction system, a component rather than a
+    // mount — still loads.
+    let leaf = fixture("fixtures/mount_form_unsupported/reaction_system_leaf.esm");
+    load_path(&leaf).unwrap_or_else(|e| panic!("an inline reaction system must still load: {e}"));
+}
