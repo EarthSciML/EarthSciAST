@@ -156,6 +156,11 @@ def test_a_loader_binding_the_leaf_does_not_declare_is_not_forwarded_to_it():
     """
     doc = load_path(str(_DIR / "assembler_root_with_import.esm"), metaparameters={"N_REC": 5})
     assert doc is not None
+    # …and the axis lands at 5 because the ASSEMBLER's own close sized it, not
+    # because the leaf was handed the name. The leaf declares no
+    # `metaparameters` at all, so `records` merges up still symbolic and the
+    # mounting document closes it (§9.7.6 site 5, §4.7 "Index-set merge").
+    assert _records(doc)["size"] == 5
 
 
 def test_an_unrelated_assembler_metaparameter_is_withheld_from_the_leaf():

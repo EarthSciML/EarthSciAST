@@ -1848,6 +1848,7 @@ def _merge_subsystem_index_sets(
     registry: dict[str, Any],
     loaded_index_sets: dict[str, Any],
     ref: str,
+    root_env: dict[str, int] | None = None,
 ) -> None:
     """Merge a referenced subsystem file's top-level ``index_sets`` into the
     importing document's registry (esm-spec §4.7, mirroring the §9.7.5
@@ -1859,8 +1860,15 @@ def _merge_subsystem_index_sets(
     if not isinstance(loaded_index_sets, dict):
         return
     from .lower_expression_templates import ExpressionTemplateError
+    from .template_imports import fold_mount_contribution
 
     for n, decl in loaded_index_sets.items():
+        # esm-spec §4.7 "Index-set merge": a §4.7 mount resolves POST-CLOSE, so
+        # the registry side has already folded to integers. Fold the incoming
+        # contribution against the MOUNTING document's closed environment before
+        # comparing, or two identical declarations collide (issue #198) and a
+        # contribution the leaf could not size is published still symbolic.
+        decl = fold_mount_contribution(decl, root_env or {})
         if n in registry:
             if not _index_set_deep_equal(registry[n], decl):
                 raise ExpressionTemplateError(
@@ -2015,6 +2023,7 @@ def _resolve_model_subsystems(
     chain: tuple[str, ...] = (),
     *,
     api_meta: dict[str, int] | None = None,
+    root_env: dict[str, int] | None = None,
 ) -> None:
     """Recursively resolve subsystem refs within a Model.
 
@@ -2049,7 +2058,7 @@ def _resolve_model_subsystems(
         # (already metaparameter-folded) join the importing document's
         # registry, so the importer's variables may be shaped over the mesh
         # file's axes and a disagreement fails loudly (deep-equal-or-error).
-        _merge_subsystem_index_sets(registry, parsed.index_sets, ref_str)
+        _merge_subsystem_index_sets(registry, parsed.index_sets, ref_str, root_env)
 
         # Extract the single top-level model. A data source is NOT a component
         # from 1.0.0, so a referenced file carrying only `data_sources` no longer
@@ -2068,7 +2077,13 @@ def _resolve_model_subsystems(
     def recurse_resolved(sub_value, sub_base, sub_seen, sub_chain):
         if isinstance(sub_value, Model):
             _resolve_model_subsystems(
-                sub_value, sub_base, sub_seen, registry, sub_chain, api_meta=api_meta
+                sub_value,
+                sub_base,
+                sub_seen,
+                registry,
+                sub_chain,
+                api_meta=api_meta,
+                root_env=root_env,
             )
 
     _resolve_subsystems_generic(
@@ -2133,6 +2148,7 @@ def resolve_subsystem_refs(
     esm_file: EsmFile,
     base_path: str,
     loader_metaparameters: dict[str, int] | None = None,
+    parent_metaparameters: dict[str, int] | None = None,
 ) -> None:
     """Resolve all subsystem references in an ESM file.
 
@@ -2158,6 +2174,9 @@ def resolve_subsystem_refs(
     """
     seen: set = set()
     api_meta = dict(loader_metaparameters or {})
+    # The MOUNTING document's already-closed metaparameter environment, against
+    # which each §4.7 contribution folds as it merges (esm-spec §4.7).
+    root_env = dict(parent_metaparameters or {})
 
     # The importing document's index-set registry (esm-spec §4.7): threaded
     # down the model subsystem walk so every referenced subsystem file's
@@ -2169,7 +2188,9 @@ def resolve_subsystem_refs(
         esm_file.index_sets = registry
 
     for model in esm_file.models.values():
-        _resolve_model_subsystems(model, base_path, seen, registry, api_meta=api_meta)
+        _resolve_model_subsystems(
+            model, base_path, seen, registry, api_meta=api_meta, root_env=root_env
+        )
 
     for rs in esm_file.reaction_systems.values():
         _resolve_reaction_system_subsystems(rs, base_path, seen, api_meta=api_meta)
@@ -2307,7 +2328,9 @@ def resolve_model_refs(
         # flattened system is grid-less. Mirrors the subsystem-ref path's merge
         # (`_resolve_model_subsystems`) and the Julia/Rust single-root resolve,
         # which keep these axes in the flattened system.
-        _merge_subsystem_index_sets(registry, parsed.index_sets, ref_str)
+        _merge_subsystem_index_sets(
+            registry, parsed.index_sets, ref_str, dict(parent_metaparameters or {})
+        )
 
         # A top-level model ref must resolve to exactly one model. Unlike a
         # subsystem ref, a data loader or reaction system is not a valid
@@ -2703,7 +2726,12 @@ def _load_data(
     # one mechanism"): a leaf mounted as a subsystem gets the same site-4
     # backfill a top-level-mounted leaf gets, so a discovered `extent` sizes its
     # axis at either attachment point.
-    resolve_subsystem_refs(esm_file, base_path, loader_metaparameters=metaparameters)
+    resolve_subsystem_refs(
+        esm_file,
+        base_path,
+        loader_metaparameters=metaparameters,
+        parent_metaparameters=root_meta_env,
+    )
 
     # Lower `enum` op nodes to `const` integers using the file's `enums` block
     # (esm-spec §9.3). Runs after subsystem resolution so every expression

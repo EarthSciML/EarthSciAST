@@ -526,6 +526,23 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
   // discretization. `null` when no injection applies (the fast path).
   const injectedRoot = applyScopeInjections(data, options?.injectedImports ?? [])
   const machineryInput = injectedRoot ?? data
+  // The ROOT document's CLOSED metaparameter environment — its declared integer
+  // defaults overlaid with the loader-API bindings — captured BEFORE resolution
+  // consumes the `metaparameters` block. It is the scope each §4.7 mount
+  // contribution folds against as it merges (esm-spec §4.7 "Index-set merge"),
+  // and it leaves here on a non-enumerable sidecar because ref resolution is a
+  // separate entry point in this binding.
+  const rootMetaEnv: Record<string, number> = {}
+  {
+    const decls = (machineryInput as { metaparameters?: Record<string, unknown> }).metaparameters
+    if (decls && typeof decls === 'object' && !Array.isArray(decls)) {
+      for (const [n, d] of Object.entries(decls)) {
+        const dflt = (d as { default?: unknown } | null)?.default
+        if (typeof dflt === 'number' && Number.isInteger(dflt)) rootMetaEnv[n] = dflt
+      }
+    }
+    for (const [k, v] of Object.entries(options?.metaparameters ?? {})) rootMetaEnv[k] = v
+  }
   // The metaparameter names every document this one MOUNTS declares (esm-spec
   // §4.7, either mount form, transitively). It widens the §9.7.6 site-4 check:
   // a loader-API binding — which is how a discovered §8.9.4 `extent` arrives —
@@ -617,6 +634,19 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
       configurable: true,
     })
   }
+
+  // And the same sidecar again, for the ROOT document's CLOSED metaparameter
+  // environment (its declared integer defaults overlaid with the loader-API
+  // bindings). `resolveSubsystemRefsSync` needs it to fold each §4.7 mount
+  // contribution as it merges (esm-spec §4.7 "Index-set merge"), and by the time
+  // that entry point runs the `metaparameters` block resolution consumed is
+  // gone — so it is captured HERE, on the pre-resolution document, or not at all.
+  Object.defineProperty(loweredData, 'rootMetaEnv', {
+    value: rootMetaEnv,
+    enumerable: false,
+    writable: true,
+    configurable: true,
+  })
 
   // Step 5: Dimensional analysis — emit warnings but never fail the load.
   // Mirrors the Julia @warn behavior so TS callers get the same signal

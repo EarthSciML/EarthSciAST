@@ -519,6 +519,39 @@ def _fold_structural_sites(x: Any, ctx: str) -> None:
         _fold_structural_sites(v, ctx)
 
 
+def fold_mount_contribution(decl: Any, env: dict[str, int]) -> Any:
+    """Fold ONE §4.7 mount contribution's interval ``size`` against the MOUNTING
+    document's already-closed metaparameter environment, before the deep-equal
+    comparison that merges it (esm-spec §4.7 "Index-set merge").
+
+    This is the step that makes the merge order answerable. A §4.7 mount
+    resolves POST-CLOSE (§9.7.6 site 3: "the mounting document closes its own
+    metaparameters before its refs resolve"), so by the time a contribution
+    arrives the registry side has already folded to integers. Comparing an
+    unfolded contribution against a folded registry entry makes two IDENTICAL
+    declarations collide, which is issue #198; and leaving the contribution
+    unfolded publishes a resolved document whose axis still carries a
+    metaparameter name, which contradicts "the mounted form is fully concrete
+    when it splices in" and §9.7.6 site 5's "closed at some enclosing document's
+    close". Folding here answers both.
+
+    A ``size`` that is already an integer is returned untouched. A ``size`` whose
+    free names are NOT all in ``env`` stays symbolic rather than raising: the
+    enclosing document is not obliged to be able to close a name the assembly
+    never declared, and leaving it open preserves what loads today."""
+    if not _is_object(decl):
+        return decl
+    sz = decl.get("size")
+    if sz is None or _is_int(sz):
+        return decl
+    folded = _try_fold(_substitute_metaparams(sz, env), "index set size")
+    if folded is None:
+        return decl
+    out = dict(decl)
+    out["size"] = folded
+    return out
+
+
 def _fold_index_set_sizes(index_sets: dict[str, Any], ctx: str, *, strict: bool) -> None:
     """Fold interval ``size`` metaparameter expressions in an ``index_sets``
     registry. With ``strict=True`` (the root document, after its

@@ -32,6 +32,7 @@ import {
   applyMountIndexSetRename,
   applyScopeInjections,
   collectMountDeclaredMetaparameters,
+  foldMountContribution,
   evalMetaExpr,
   isTemplateLibraryDoc,
   rejectTemplateImportsPreV08,
@@ -184,6 +185,13 @@ export function resolveSubsystemRefsSync(
     loaderMetaparameters ??
     (file as { loaderMetaparameters?: Record<string, number> }).loaderMetaparameters ??
     {}
+  // The ROOT document's closed metaparameter environment, attached by `load*`
+  // on the same non-enumerable sidecar `loaderMetaparameters` uses. Each §4.7
+  // contribution folds against it as it merges (esm-spec §4.7 "Index-set
+  // merge"); by the time this entry point runs, the `metaparameters` block it
+  // was computed from has been consumed by resolution.
+  const rootEnv: Readonly<Record<string, number>> =
+    (file as { rootMetaEnv?: Record<string, number> }).rootMetaEnv ?? {}
 
   // The importing document's index-set registry (esm-spec §4.7): every
   // referenced subsystem file's top-level `index_sets` merge into it, threaded
@@ -213,9 +221,20 @@ export function resolveSubsystemRefsSync(
           read,
           pointer,
           apiMeta,
+          rootEnv,
         )
       } else {
-        resolveModelRefs(model, basePath, resolving, [name], registry, read, pointer, apiMeta)
+        resolveModelRefs(
+          model,
+          basePath,
+          resolving,
+          [name],
+          registry,
+          read,
+          pointer,
+          apiMeta,
+          rootEnv,
+        )
       }
     }
   }
@@ -240,6 +259,7 @@ export function resolveSubsystemRefsSync(
         read,
         `/reaction_systems/${name}`,
         apiMeta,
+        rootEnv,
       )
     }
   }
@@ -396,12 +416,19 @@ function mergeSubsystemIndexSets(
   registry: Record<string, unknown>,
   loaded: EsmFile,
   ref: string,
+  rootEnv: Record<string, number> = {},
 ): void {
   const loadedIsets = (loaded as { index_sets?: unknown }).index_sets
   if (typeof loadedIsets !== 'object' || loadedIsets === null || Array.isArray(loadedIsets)) {
     return
   }
-  for (const [n, decl] of Object.entries(loadedIsets as Record<string, unknown>)) {
+  for (const [n, raw] of Object.entries(loadedIsets as Record<string, unknown>)) {
+    // esm-spec §4.7 "Index-set merge": a §4.7 mount resolves POST-CLOSE, so the
+    // registry side has already folded to integers. Fold the incoming
+    // contribution against the MOUNTING document's closed environment before
+    // comparing, or two identical declarations collide (issue #198) and a
+    // contribution the leaf could not size is published still symbolic.
+    const decl = foldMountContribution(raw, rootEnv)
     if (Object.prototype.hasOwnProperty.call(registry, n)) {
       if (!deepEqual(registry[n], decl)) {
         throw new EsmMachineryError(
@@ -698,6 +725,7 @@ function walkSubsystemRefs(
   ) => void,
   onRecurse: (subsystem: unknown, subName: string, pointer: string) => void,
   apiMeta: Readonly<Record<string, number>>,
+  rootEnv: Readonly<Record<string, number>>,
 ): void {
   for (const [subName, subsystem] of Object.entries(subsystems)) {
     const sub = subsystem as RefEdge
@@ -730,6 +758,7 @@ function walkSubsystemRefs(
             subPointer,
             [...refChain, subName],
             apiMeta,
+            rootEnv,
           )
           onRef(parsed, refBasePath, { subName, ref, pointer: subPointer })
         },
@@ -791,6 +820,7 @@ function inlineTopLevelModelRef(
   read: SyncRefReader,
   pointer: string,
   apiMeta: Readonly<Record<string, number>>,
+  rootEnv: Readonly<Record<string, number>>,
   refChain: readonly string[] = [],
 ): void {
   const ref = edge.ref as string
@@ -828,12 +858,13 @@ function inlineTopLevelModelRef(
         pointer,
         [...refChain, name],
         apiMeta,
+        rootEnv,
       )
 
       // esm-spec §4.7 "Index-set merge", at either mount form: the resolved
       // leaf's document-scoped axes join this document's registry, so the
       // assembly may shape its coupling over them without redeclaring them.
-      mergeSubsystemIndexSets(registry, parsed, ref)
+      mergeSubsystemIndexSets(registry, parsed, ref, rootEnv)
 
       // §4.7 invariant: exactly ONE top-level system per referenced file.
       assertSingleTopLevelSystem(parsed, ref, pointer)
@@ -861,6 +892,7 @@ function inlineTopLevelModelRef(
         read,
         pointer,
         apiMeta,
+        rootEnv,
       )
     },
     apiMeta,
@@ -892,6 +924,7 @@ function inlineNestedTopLevelMounts(
   pointer: string,
   refChain: readonly string[],
   apiMeta: Readonly<Record<string, number>>,
+  rootEnv: Readonly<Record<string, number>>,
 ): void {
   if (!leaf.models) return
   const own: Record<string, unknown> =
@@ -910,6 +943,7 @@ function inlineNestedTopLevelMounts(
       read,
       pointer,
       apiMeta,
+      rootEnv,
       refChain,
     )
   }
@@ -933,6 +967,7 @@ function resolveModelRefs(
   read: SyncRefReader,
   pointer: string,
   apiMeta: Readonly<Record<string, number>>,
+  rootEnv: Readonly<Record<string, number>>,
 ): void {
   // A bare `{ ref }` stub (SubsystemRef) has no subsystems to walk; the
   // top-level model union admits it under v0.8.0, but only a full Model
@@ -952,7 +987,7 @@ function resolveModelRefs(
       // metaparameter-folded) join the importing document's registry, so the
       // importer's variables may be shaped over the mesh file's axes and a
       // disagreement fails loudly (`subsystem_index_set_conflict`).
-      mergeSubsystemIndexSets(registry, parsed, ref)
+      mergeSubsystemIndexSets(registry, parsed, ref, rootEnv)
 
       // esm-spec §4.7 invariant: a referenced subsystem file holds exactly ONE
       // top-level component — enforced, not assumed. A referenced file with no
@@ -976,6 +1011,7 @@ function resolveModelRefs(
             read,
             subPointer,
             apiMeta,
+            rootEnv,
           )
         }
       }
@@ -996,8 +1032,10 @@ function resolveModelRefs(
         read,
         subPointer,
         apiMeta,
+        rootEnv,
       ),
     apiMeta,
+    rootEnv,
   )
 }
 
@@ -1012,6 +1050,7 @@ function resolveReactionSystemRefs(
   read: SyncRefReader,
   pointer: string,
   apiMeta: Readonly<Record<string, number>>,
+  rootEnv: Readonly<Record<string, number>>,
 ): void {
   // A bare `{ ref }` stub (SubsystemRef) carries no subsystems to walk; only a
   // full ReactionSystem does.
@@ -1046,6 +1085,7 @@ function resolveReactionSystemRefs(
             read,
             subPointer,
             apiMeta,
+            rootEnv,
           )
         }
       }
@@ -1059,8 +1099,10 @@ function resolveReactionSystemRefs(
         read,
         subPointer,
         apiMeta,
+        rootEnv,
       ),
     apiMeta,
+    rootEnv,
   )
 }
 

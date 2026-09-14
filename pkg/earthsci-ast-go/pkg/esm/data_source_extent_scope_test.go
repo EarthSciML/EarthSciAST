@@ -250,6 +250,13 @@ func TestExtentScope_LoaderBindingTheLeafDoesNotDeclareIsNotForwarded(t *testing
 	if doc == nil {
 		t.Fatal("load returned no document")
 	}
+	// …and the axis lands at 5 because the ASSEMBLER's own close sized it, not
+	// because the leaf was handed the name. The leaf declares no
+	// `metaparameters` at all, so `records` merges up still symbolic and the
+	// mounting document closes it (§9.7.6 site 5, §4.7 "Index-set merge").
+	if got := extentScopeSize(t, doc); got != 5 {
+		t.Errorf("records sized %d, want the assembler's own close at 5", got)
+	}
 }
 
 // TestIndexSetSizeCodecRoundTrips pins the `size` codec in BOTH directions.

@@ -1721,6 +1721,39 @@ export function collectMountDeclaredMetaparameters(
 }
 
 /**
+ * Fold ONE §4.7 mount contribution's interval `size` against the MOUNTING
+ * document's already-closed metaparameter environment, before the deep-equal
+ * comparison that merges it (esm-spec §4.7 "Index-set merge").
+ *
+ * This is the step that makes the merge order answerable. A §4.7 mount resolves
+ * POST-CLOSE (§9.7.6 site 3: "the mounting document closes its own
+ * metaparameters before its refs resolve"), so by the time a contribution
+ * arrives the registry side has already folded to integers. Comparing an
+ * unfolded contribution against a folded registry entry makes two IDENTICAL
+ * declarations collide, which is issue #198; and leaving the contribution
+ * unfolded publishes a resolved document whose axis still carries a
+ * metaparameter name, which contradicts "the mounted form is fully concrete
+ * when it splices in" and §9.7.6 site 5's "closed at some enclosing document's
+ * close".
+ *
+ * A `size` already an integer is returned untouched. A `size` whose free names
+ * are NOT all in `env` stays symbolic rather than throwing: the enclosing
+ * document is not obliged to be able to close a name the assembly never
+ * declared, and leaving it open preserves what loads today.
+ */
+export function foldMountContribution(decl: unknown, env: Record<string, number>): unknown {
+  if (!isObject(decl)) return decl
+  const size = decl.size
+  if (size === undefined || size === null) return decl
+  if (typeof size === 'number' && Number.isInteger(size)) return decl
+  try {
+    return { ...decl, size: evalMetaExpr(size, env, 'index set size') }
+  } catch {
+    return decl
+  }
+}
+
+/**
  * Whether `raw` still carries an unresolved §4.7 mount — a top-level
  * `models.<k>` / `reaction_systems.<k>` `{ref}` or a `subsystems.<k>` `{ref}`.
  */

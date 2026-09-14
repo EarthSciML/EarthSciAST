@@ -150,7 +150,13 @@ describe('the site-4 backfill is FILTERED to the names the leaf declares', () =>
     // silently resize a leaf axis the edge never bound (esm-spec §4.7).
     const file = loadMounted('assembler_root_with_import.esm', { N_REC: 5 })
     expect(file).not.toBeNull()
-    expect(sizeOf(file)).not.toBe(5)
+    // …and the axis lands at 5 because the ASSEMBLER's own close sized it, not
+    // because the leaf was handed the name. The leaf declares no
+    // `metaparameters` at all, so `records` merges up still symbolic and the
+    // mounting document closes it (§9.7.6 site 5, §4.7 "Index-set merge").
+    // `assembler_partial_overlap_root.esm` below is where forwarding an
+    // UNRELATED name can actually be caught.
+    expect(sizeOf(file)).toBe(5)
   })
 })
 
