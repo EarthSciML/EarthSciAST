@@ -149,6 +149,17 @@ func TestExtentScope_UnusedTemplateImportDoesNotDecideResolution(t *testing.T) {
 		t.Errorf("records axis differs by an import the leaf never calls:\n with_import = %s\n no_import   = %s",
 			a, b)
 	}
+	// ABSOLUTE, and the same number in all five bindings. RFC
+	// mount-edge-index-set-renaming.md open question 2 is settled: the §4.7 merge
+	// runs post-close and folds the contribution against the mounting document's
+	// closed environment, so the axis the leaf cannot size lands at the
+	// assembler's own N_REC default of 3 everywhere.
+	if got := extentScopeSize(t, noImport); got != 3 {
+		t.Errorf("no_import records sized %d, want 3", got)
+	}
+	if got := extentScopeSize(t, withImport); got != 3 {
+		t.Errorf("with_import records sized %d, want 3", got)
+	}
 }
 
 // ---------------------------------------------------------------------------

@@ -140,10 +140,12 @@ fn the_same_leaf_sizes_its_axis_at_either_mount_form() {
 /// `metaparameter_unbound`. Factoring a shared expression into a library is not
 /// supposed to change whether a document's shape resolves.
 ///
-/// The assertion is DIFFERENTIAL rather than absolute on purpose: where the §4.7
-/// merge sits relative to the mounting document's own §9.7.6 close still differs
-/// across bindings (RFC `mount-edge-index-set-renaming.md` open question 2), so
-/// the portable contract is that the two spellings agree with each other.
+/// The assertion is ABSOLUTE, and is the same number in all five bindings. RFC
+/// `mount-edge-index-set-renaming.md` open question 2 is settled: the §4.7 merge
+/// runs post-close and folds the contribution against the mounting document's
+/// closed environment, so the axis the leaf cannot size lands at the assembler's
+/// own `N_REC` default of 3 everywhere. The differential is kept alongside it,
+/// because it is the property this test is actually named for.
 #[test]
 fn an_unused_template_import_does_not_change_whether_a_leaf_resolves() {
     let with_import = load_path(fixture("assembler_root_with_import.esm"))
@@ -155,6 +157,8 @@ fn an_unused_template_import_does_not_change_whether_a_leaf_resolves() {
         records_decl(&no_import),
         "an unused `expression_template_imports` entry must not decide the axis"
     );
+    assert_eq!(records_size(&no_import), Some(3));
+    assert_eq!(records_size(&with_import), Some(3));
 }
 
 // ---------------------------------------------------------------------------

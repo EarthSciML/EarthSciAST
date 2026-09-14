@@ -1726,6 +1726,68 @@ function _collect_mount_declared_metaparameters(raw, base_path::AbstractString,
 end
 
 """
+    fold_mount_contribution(decl, env) -> decl
+
+Fold ONE §4.7 mount contribution's interval `size` against the MOUNTING
+document's already-closed metaparameter environment, before the deep-equal
+comparison that merges it (esm-spec §4.7 "Index-set merge").
+
+This is the step that makes the merge order answerable. A §4.7 mount resolves
+POST-CLOSE (§9.7.6 site 3: "the mounting document closes its own metaparameters
+before its refs resolve"), so by the time a contribution arrives the registry
+side has already folded to integers. Comparing an unfolded contribution against
+a folded registry entry makes two IDENTICAL declarations collide, which is issue
+#198; and leaving the contribution unfolded publishes a resolved document whose
+axis still carries a metaparameter name, which contradicts "the mounted form is
+fully concrete when it splices in" and §9.7.6 site 5's "closed at some enclosing
+document's close".
+
+In THIS binding it does one more job: `IndexSet.size` is `Union{Int,Nothing}`, so
+a still-symbolic size cannot survive typed coercion at all. Folding here, on the
+native tree and after the leaf's own close, is what lets an assembler-scoped axis
+cross a `subsystems.<k>` mount without widening the typed registry.
+
+A `size` already an integer is returned unchanged. A `size` whose free names are
+NOT all in `env` stays symbolic rather than throwing: the enclosing document is
+not obliged to be able to close a name the assembly never declared.
+"""
+function fold_mount_contribution(decl, env::AbstractDict{String,<:Integer})
+    _is_object(decl) || return decl
+    sz = _raw_get(decl, "size")
+    sz === nothing && return decl
+    (sz isa Integer && !(sz isa Bool)) && return decl
+    folded = try
+        eval_meta_expr(_to_native_json(sz), Dict{String,Int}(String(k) => Int(v) for (k, v) in env),
+                       "index set size")
+    catch
+        return decl
+    end
+    out = OrderedDict{String,Any}()
+    for (k, v) in pairs(decl)
+        out[String(k)] = v
+    end
+    out["size"] = folded
+    return out
+end
+
+"""
+    _fold_mount_contributions!(native_index_sets, env) -> native_index_sets
+
+Apply [`fold_mount_contribution`](@ref) across one native `index_sets` block,
+in place. Used on a MOUNTED leaf's registry once its own close has run, so a
+size only the enclosing document can bind is concrete before coercion.
+"""
+function _fold_mount_contributions!(isets, env::AbstractDict{String,<:Integer})
+    (isets !== nothing && _is_object(isets)) || return isets
+    isempty(env) && return isets
+    for (n, decl) in collect(pairs(isets))
+        folded = fold_mount_contribution(decl, env)
+        folded === decl || (isets[n] = folded)
+    end
+    return isets
+end
+
+"""
     _document_has_unresolved_mount(raw) -> Bool
 
 Whether `raw` still carries an unresolved §4.7 mount — a top-level

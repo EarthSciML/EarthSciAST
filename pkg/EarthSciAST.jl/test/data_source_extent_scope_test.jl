@@ -139,22 +139,19 @@ end
         @test _extent_outcome("assembler_root_with_import.esm") ==
               _extent_outcome("assembler_root_no_import.esm")
 
-        # WHAT THAT OUTCOME CURRENTLY IS, in Julia, and why the assertion above
-        # is the whole of the portable contract here.
+        # …and the ABSOLUTE form, which Julia now reaches too.
         #
-        # These two fixtures mount at the `subsystems.<k>` form, where Julia
-        # merges the leaf's axes on the TYPED side (`_merge_subsystem_index_sets!`
-        # over `EsmFile.index_sets`), after the mounting document has already
-        # coerced. `IndexSet.size` is `Union{Int,Nothing}`, so an axis that is
-        # still symbolic when the leaf coerces cannot be carried across that
-        # boundary at all: the leaf fails in coercion, before any merge. That is
-        # true on both sides of this differential and was true before this change
-        # — it is the typed representation, not the strictness this change fixed
-        # — but it does mean Julia does not yet reach the ORACLE's absolute form
-        # (Python loads both and merges the symbolic axis up to the root's
-        # close). Pinned BROKEN rather than deleted, so it flips loudly the day
-        # the typed registry can hold a symbolic size.
-        @test_broken _extent_err(() -> _extent_load("assembler_root_no_import.esm")) === nothing
+        # These fixtures mount at the `subsystems.<k>` form, where Julia merges
+        # on the TYPED side and `IndexSet.size` is `Union{Int,Nothing}` — so a
+        # still-symbolic axis used to abort the mount before any merge. Settling
+        # RFC `mount-edge-index-set-renaming.md` open question 2 removed the need
+        # for that representation rather than widening it: the leaf closes what
+        # it can, then the contribution folds against the MOUNTING document's
+        # closed environment while still native, so coercion only ever sees an
+        # integer. The axis lands at the assembler's own `N_REC` default.
+        @test _extent_err(() -> _extent_load("assembler_root_no_import.esm")) === nothing
+        @test _extent_records(_extent_load("assembler_root_no_import.esm")).size == 3
+        @test _extent_records(_extent_load("assembler_root_with_import.esm")).size == 3
     end
 
     # -----------------------------------------------------------------------
@@ -195,16 +192,14 @@ end
         # asked for the name — and, worse, would let an assembler's unrelated
         # metaparameter silently resize a leaf axis the edge never bound
         # (esm-spec §4.7).
-        # Stated as a differential so it holds regardless of what the leaf's
-        # own resolution does with an assembler-scoped axis (see the testset
-        # above): binding a name the LEAF does not declare must leave the leaf's
-        # outcome EXACTLY as it was with no loader bindings at all. Forwarding
-        # the unfiltered map instead makes the bound load raise
-        # `template_import_unknown_name` from inside the leaf, and the two
-        # outcomes part company.
-        @test _extent_outcome("assembler_root_with_import.esm";
-                              metaparameters=Dict("N_REC" => 5)) ==
-              _extent_outcome("assembler_root_with_import.esm")
+        # …and the axis lands at 5 because the ASSEMBLER's own close sized it,
+        # not because the leaf was handed the name. The leaf declares no
+        # `metaparameters` at all, so `records` merges up still symbolic and the
+        # mounting document closes it (§9.7.6 site 5, §4.7 "Index-set merge").
+        # `assembler_partial_overlap_root.esm` below is where forwarding an
+        # UNRELATED name can actually be caught.
+        @test _extent_records(_extent_load("assembler_root_with_import.esm";
+                                           metaparameters=Dict("N_REC" => 5))).size == 5
     end
 
     @testset "the site-4 backfill at a `subsystems.<k>` edge, all four halves" begin

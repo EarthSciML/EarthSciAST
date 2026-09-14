@@ -595,6 +595,38 @@ breaks URL refs and offers no per-name control.
    integer — so they abort the mount with a raw `MethodError(Int64, ("n_rows",))` /
    `json: cannot unmarshal string into ... IndexSet.size` rather than a diagnostic. Whichever
    side wins, those two need the representation before they can implement it.
+   **SETTLED (2026-09-13): post-close, and the contribution FOLDS as it merges.** Neither side
+   in the field was right, and the majority was not the tell — it was three copies of the same
+   omission. The specification says post-close twice and normatively (§9.7.6 site 3, "the
+   mounting document closes its own metaparameters before its refs resolve"; "Ordering within
+   load", "subsystem refs resolve post-close"), and the step list that appears to say otherwise
+   is §9.7.5's IMPORT merge, whose neighbour in that list is "resolve imports". But post-close
+   ALONE is what Python, TypeScript and Go were doing, and it published a resolved document
+   whose axis still carried a metaparameter name — contradicting the same paragraph's "the
+   mounted form is fully concrete when it splices in" and site 5's "closed at some enclosing
+   document's close". So the answer is post-close PLUS a fold of the contribution against the
+   mounting document's closed environment, before the deep-equal comparison. It is the only one
+   of the three behaviours that is right on both halves.
+   Measured across all five bindings on the reporter's own shape — an assembly and its leaf
+   both declaring `NLEV: 40` and `lev: {size: "NLEV"}` — the pre-close side raised
+   `subsystem_index_set_conflict` for two IDENTICAL declarations (Rust at both mount forms,
+   Julia at the top-level form only, which was itself a §4.7 "two mount forms" violation),
+   while the post-close side loaded it at 40. On the assembler-scoped shape
+   (`tests/fixtures/data_source_extent_scope/assembler_root_{no,with}_import.esm`) the
+   post-close-without-fold side published `size: "N_REC"` unfolded. Both now resolve to the one
+   answer in all five. Blast radius, measured before implementing: of 671 `.esm` documents under
+   `tests/`, exactly 2 have the precondition that distinguishes the orders — those two fixtures,
+   added by the same change — and all 112 `tests/valid` documents resolved identically under a
+   pre-close and a post-close binding, so no document that loaded stopped loading.
+   The asymmetry this creates with the RENAME is deliberate and is now stated in §4.7: an
+   enclosing edge may not rename an axis only a nested mount contributed, but it does close such
+   an axis's size. A name is authored vocabulary; a size is a value §9.7.6 site 5 chains upward.
+   **Implementation note.** Inlining and merging had to be split, because they were one step in
+   every binding: the referenced CONTENT must be spliced in early enough for the rewrite-rule
+   fixpoint to lower through it, while the `index_sets` it contributes must wait for the close.
+   Rust and Julia stage the root's contributions during ref resolution and apply them
+   immediately after the root's `resolve_template_machinery`; nested scopes had already closed
+   by the time they merged, so only the root's merge moved.
    **This matters for the reporter**: EqWeFiC's assemblies use top-level `ref` mounts, which now
    apply the field in all three bindings that implement the form. (An earlier draft said they were *pushed* to
    the top-level form because `variable_map` cannot reach into a subsystem. That is **wrong**,
