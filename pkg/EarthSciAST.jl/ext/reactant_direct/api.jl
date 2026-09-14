@@ -16,21 +16,23 @@ instead, which takes the buffers as a fourth ARGUMENT.
 `stats` holds the op tallies of the last emission (kernels, folds, constants,
 reads), for reports and for the tests' op census. It is informational: nothing
 gates on it.
+
+The second type parameter is a `Bool` saying whether the wrapper was built with
+a cell-axis shard. It exists so that the unsharded specialization of the traced
+body does not contain the `sharding_constraint` call at all; see `_de_constrain`
+below for why that matters.
 """
-mutable struct DirectRHS{F} <: DirectCallable
+mutable struct DirectRHS{F,SHARDED} <: DirectCallable{SHARDED}
+    # THESE THREE FIELDS AND NO OTHERS. `Reactant.@compile d(u, p, t)` traces
+    # the callable itself, so every field here is walked by Reactant and
+    # inferred through at the call site. WHERE the program runs — the XLA
+    # client, the mesh, the shardings — is therefore held BESIDE the wrapper,
+    # in device.jl's `_DE_PLACES`, not in it; a placement field wedges the
+    # compile (see the long note in device.jl). Read the placement with
+    # `direct_client` / `direct_shard`.
     f::F
     names::Dict{Int,String}
     stats::Dict{Symbol,Int}
-    # WHERE it runs: the XLA client and the cell-axis shard (device.jl), behind
-    # ONE field of ONE concrete, un-parameterized type. Not two fields, and not
-    # type parameters: `Reactant.@compile` is inferred through this callable's
-    # type, and widening that type with the client's and the sharding's own type
-    # parameters sends Julia's inference into a recursion deep enough to trip
-    # the stack-overflow guard at the CALL SITE — which surfaces as a wall of
-    # "detected a stack overflow" with nothing naming the field that caused it.
-    # `DirectPlace` stops the expansion: its fields are abstractly typed, so the
-    # wrapper's type stays exactly the `DirectRHS{F}` of the unsharded lane.
-    place::DirectPlace
 end
 
 """
@@ -47,8 +49,8 @@ nothing recompiles.
 Build one with [`direct_rhs_with_buffers`](@ref). It shares the wrapped RHS and
 the `stats` dictionary with the `DirectRHS` it came from.
 """
-struct DirectRHSBuffers{F} <: DirectCallable
-    d::DirectRHS{F}
+struct DirectRHSBuffers{F,SHARDED} <: DirectCallable{SHARDED}
+    d::DirectRHS{F,SHARDED}
 end
 
 """
@@ -107,7 +109,9 @@ function direct_rhs(f::_E._OopRHS; var_map = nothing, client = nothing,
     shard = _de_rule!("the flat state's cell axis") do
         _de_resolve_shard(sharding, cl, n_states, names)
     end
-    return DirectRHS(f, names, Dict{Symbol,Int}(), DirectPlace(cl, shard))
+    return _de_register_place!(
+        DirectRHS{typeof(f),shard !== nothing}(f, names, Dict{Symbol,Int}()),
+        DirectPlace(cl, shard))
 end
 
 """
@@ -127,8 +131,10 @@ sync_forcing!(dev, forcing_buffers(fo))
 
 See [`DirectRHSBuffers`](@ref).
 """
-_de_place(d::DirectRHS) = d.place
-_de_place(b::DirectRHSBuffers) = b.d.place
+# The placement of a wrapper, looked up beside it. `DirectRHSBuffers` shares the
+# `DirectRHS` it was built from, so it shares its placement too.
+_de_place(d::DirectRHS) = _de_lookup_place(d)
+_de_place(b::DirectRHSBuffers) = _de_lookup_place(b.d)
 
 direct_rhs_with_buffers(d::DirectRHS) = DirectRHSBuffers(d)
 direct_rhs_with_buffers(f::_E._OopRHS; kwargs...) =
@@ -155,13 +161,31 @@ function _de_run(d::DirectRHS, u::TracedRArray{Float64,1}, p, t, bufs,
             "the output slot map assembled to the wrong width; expected " *
             "$n_states.")
     du = TracedRArray{Float64,1}((), out.v, (n_states,))
-    # Pin `du` to the SAME cell-axis slab as `u`. Shardy would propagate a
-    # sharding through the body on its own, but the assembled `du` is one
-    # `concatenate` of many slot runs, and propagation through a concatenate is
-    # not guaranteed to land back on the state's partition; saying it outright
-    # keeps the result resident where the caller's next step expects it.
-    sh = direct_shard(d)
-    sh === nothing && return du
+    return _de_constrain(du, d)
+end
+
+# Pin `du` to the SAME cell-axis slab as `u`. Shardy would propagate a sharding
+# through the body on its own, but the assembled `du` is one `concatenate` of
+# many slot runs, and propagation through a concatenate is not guaranteed to
+# land back on the state's partition; saying it outright keeps the result
+# resident where the caller's next step expects it.
+#
+# WHY THE SHARDEDNESS IS A TYPE PARAMETER AND NOT AN `if`. This is the tail of
+# the TRACED body, so Julia infers it, through GPUCompiler, as part of compiling
+# the program. Written as a runtime branch on `direct_shard(d)`, inference has to
+# descend into `Reactant.Ops.sharding_constraint` with an abstractly typed
+# `AbstractSharding` on EVERY compile, sharded or not. This lane already infers
+# close enough to Julia's stack-overflow guard to trip it several times per
+# compile (see the note above `compile_rhs` in scripts/compiled_rhs_adapter.jl),
+# and an unwind at the wrong point leaves the process stuck inside `typeinf`
+# with no error and no progress, so an avoidable descent is not affordable.
+# Selecting the tail on the wrapper's `SHARDED` parameter means the unsharded
+# specialization does not CONTAIN the call, so nothing infers it. The parameter
+# is a `Bool`: it widens the wrapper's type with an inert value, not with the
+# mesh's and the sharding's own recursive types.
+_de_constrain(du, ::DirectCallable{false}) = du
+function _de_constrain(du, d::DirectCallable{true})
+    sh = direct_shard(d)::DirectShard
     return Reactant.Ops.sharding_constraint(du, sh.state)
 end
 
