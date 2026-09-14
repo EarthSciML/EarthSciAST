@@ -2563,7 +2563,6 @@ load_string.__doc__ = (load_string.__doc__ or "") + _LOAD_ARGS_DOC
 load_document.__doc__ = (load_document.__doc__ or "") + _LOAD_ARGS_DOC
 
 
-
 def _refuse_toplevel_reaction_system_refs(data: Any) -> None:
     """Refuse a top-level ``reaction_systems.<k>`` ``{ref}`` mount.
 
@@ -2587,6 +2586,7 @@ def _refuse_toplevel_reaction_system_refs(data: Any) -> None:
                 code=MOUNT_FORM_UNSUPPORTED,
                 path=f"/reaction_systems/{name}",
             )
+
 
 def _load_data(
     data: dict,
