@@ -127,9 +127,14 @@ end
     lower_table_lookups!(rs::ReactionSystem, tables) -> ReactionSystem
 
 Lower one component against the DOCUMENT's table registry (`tables`, the
-`EsmFile.function_tables` map or `nothing`). The per-component form is what the
-inline-test runners call: they compile one container at a time, and a container
-with no tests is never built — so it is never lowered, and never refused.
+`EsmFile.function_tables` map or `nothing`).
+
+The per-component form is what the tree-walk inline-test runner calls when it
+compiles one container at a time: a container with no tests is never built, so
+it is never lowered, and never refused. The MTK runner (`run_file_tests!`)
+builds each container from the whole-document flatten, so it calls the
+`EsmFile` form once per file — but only once SOME container in that file has
+tests, which keeps the same promise at document granularity.
 """
 function lower_table_lookups!(model::Model, tables::_TableRegistry)::Model
     _no_tables(tables) && return model
