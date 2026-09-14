@@ -2,6 +2,7 @@ package esm
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -521,5 +522,33 @@ func TestReorderedLoadChecksExtentAgainstTheAuthoredTree(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), string(CodeTemplateImportUnknownName)) || !strings.Contains(err.Error(), "N_RECS") {
 		t.Errorf("error = %v; want %s naming N_RECS", err, CodeTemplateImportUnknownName)
+	}
+}
+
+// esm-spec §4.7: this binding does not implement the top-level
+// `reaction_systems.<k>` `{ref}` mount form, so it REFUSES the entry —
+// `mount_form_unsupported` at `/reaction_systems/<k>` — rather than decoding the
+// stub as an empty reaction system and loading clean with nothing mounted.
+// (Julia is the one binding that implements the form.)
+func TestTopLevelReactionSystemRefIsRefusedLoudly(t *testing.T) {
+	_, err := LoadPath(mrFixture(t, "fixtures", "mount_form_unsupported", "toplevel_reaction_system_ref.esm"))
+	if err == nil {
+		t.Fatal("a top-level reaction_systems.<k> {ref} loaded; it must be refused")
+	}
+	var et *ExpressionTemplateError
+	if !errors.As(err, &et) {
+		t.Fatalf("error %T %v; want an *ExpressionTemplateError", err, err)
+	}
+	if et.Code != CodeMountFormUnsupported {
+		t.Errorf("code = %q; want %q", et.Code, CodeMountFormUnsupported)
+	}
+	if et.Path != "/reaction_systems/Chem" {
+		t.Errorf("path = %q; want /reaction_systems/Chem", et.Path)
+	}
+
+	// The leaf itself — an inline reaction system, a component rather than a
+	// mount — still loads.
+	if _, err := LoadPath(mrFixture(t, "fixtures", "mount_form_unsupported", "reaction_system_leaf.esm")); err != nil {
+		t.Errorf("an inline reaction system must still load: %v", err)
 	}
 }

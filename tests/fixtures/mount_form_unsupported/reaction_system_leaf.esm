@@ -1,0 +1,18 @@
+{
+ "esm": "1.0.0",
+ "metadata": {
+  "name": "reaction_system_leaf",
+  "description": "A valid single-reaction-system document, mounted by reference from toplevel_reaction_system_ref.esm.",
+  "license": "MIT"
+ },
+ "reaction_systems": {
+  "Chem": {
+   "species": {
+    "A": {"units": "1", "default": 1.0, "description": "reactant"},
+    "B": {"units": "1", "default": 0.0, "description": "product"}
+   },
+   "parameters": {"k": {"units": "1/s", "default": 0.3, "description": "rate constant"}},
+   "reactions": [{"id": "R1", "substrates": [{"species": "A", "stoichiometry": 1}], "products": [{"species": "B", "stoichiometry": 1}], "rate": "k"}]
+  }
+ }
+}
