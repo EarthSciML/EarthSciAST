@@ -212,7 +212,7 @@ func TestMetaExpr_ImportEdgeProductBindingFoldsAtClose(t *testing.T) {
 	src := metaExprModelImporting(prod)
 	view := decodeFixture(t, src)
 	if _, err := resolveTemplateMachinery(view, extractTemplateOrders(src), dir,
-		map[string]int64{"NX": 3, "NY": 4}); err != nil {
+		map[string]int64{"NX": 3, "NY": 4}, resolveOpts{}); err != nil {
 		t.Fatalf("resolve (API): %v", err)
 	}
 	if got := metaExprIndexSize(t, view, "cells"); got != 12 {
@@ -222,7 +222,7 @@ func TestMetaExpr_ImportEdgeProductBindingFoldsAtClose(t *testing.T) {
 	// Via metaparameter defaults (3 * 4).
 	src2 := metaExprModelImporting(prod)
 	view2 := decodeFixture(t, src2)
-	if _, err := resolveTemplateMachinery(view2, extractTemplateOrders(src2), dir, nil); err != nil {
+	if _, err := resolveTemplateMachinery(view2, extractTemplateOrders(src2), dir, nil, resolveOpts{}); err != nil {
 		t.Fatalf("resolve (defaults): %v", err)
 	}
 	if got := metaExprIndexSize(t, view2, "cells"); got != 12 {

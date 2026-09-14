@@ -1,0 +1,24 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "MountMergeOrderLeaf",
+    "description": "Declares NLEV and the axis sized by it, so it closes STRICTLY at the mount edge and contributes a folded size."
+  },
+  "metaparameters": {
+    "NLEV": { "type": "integer", "default": 40, "description": "Levels." }
+  },
+  "index_sets": { "lev": { "kind": "interval", "size": "NLEV" } },
+  "models": {
+    "Column": {
+      "system_kind": "nonlinear",
+      "variables": {
+        "t": { "type": "unknown", "units": "K", "shape": ["lev"], "description": "Temperature." }
+      },
+      "equations": [
+        { "lhs": "t",
+          "rhs": { "op": "faq", "output_idx": ["i"], "ranges": { "i": { "from": "lev" } }, "args": [],
+                   "expr": { "op": "const", "args": [], "value": 0.0 } } }
+      ]
+    }
+  }
+}

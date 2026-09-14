@@ -1400,6 +1400,24 @@ impl<'o> BuildState<'o> {
         report_progress(opts, PreparePhase::Load, 0, None, "")?;
         let text = serde_json::to_string(rewritten)
             .map_err(|e| err(format!("serialize rewritten document: {e}")))?;
+        // A loader-API binding names something in the AUTHORED document. By the
+        // time this runs, the document may already have been inlined by an
+        // earlier load — a §4.7 mount CONSUMES the leaf's `metaparameters`
+        // (§9.7.6 site 3), so a name only the leaf declared is no longer
+        // declared anywhere and the `{ref}` stub the mount walk reads is gone.
+        // Re-binding it here would be refused as an unknown name, on a document
+        // whose axes that very binding already folded. Keep only what this
+        // document can still act on: a name it declares itself, or any name at
+        // all while it still carries an unresolved mount for the walk to find.
+        let metaparameters = if document_has_unresolved_mount(rewritten) {
+            metaparameters
+        } else {
+            let declared = rewritten.get("metaparameters").and_then(|v| v.as_object());
+            metaparameters
+                .into_iter()
+                .filter(|(k, _)| declared.is_some_and(|d| d.contains_key(k)))
+                .collect()
+        };
         let load_opts = LoadOptions {
             base_path: opts.base_path.clone(),
             metaparameters,
@@ -1959,4 +1977,33 @@ pub(crate) fn run_build_pipeline(
             )
         }
     })
+}
+
+/// Whether `doc` still carries an unresolved §4.7 mount — a `models.<k>` /
+/// `reaction_systems.<k>` `{ref}` or a `subsystems.<k>` `{ref}`.
+///
+/// Distinguishes an AUTHORED document, whose mounted leaves still have their
+/// `metaparameters` to be closed at the edge, from one an earlier load already
+/// inlined, where those declarations have been consumed and the loader-API
+/// names they served have nothing left to bind.
+fn document_has_unresolved_mount(doc: &JsonValue) -> bool {
+    let Some(obj) = doc.as_object() else {
+        return false;
+    };
+    for kind in ["models", "reaction_systems"] {
+        let Some(comps) = obj.get(kind).and_then(|v| v.as_object()) else {
+            continue;
+        };
+        for comp in comps.values() {
+            if comp.get("ref").is_some() {
+                return true;
+            }
+            if let Some(subs) = comp.get("subsystems").and_then(|v| v.as_object())
+                && subs.values().any(|s| s.get("ref").is_some())
+            {
+                return true;
+            }
+        }
+    }
+    false
 }

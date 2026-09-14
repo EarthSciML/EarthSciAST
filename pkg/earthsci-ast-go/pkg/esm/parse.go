@@ -80,8 +80,17 @@ func LoadPath(path string, opts ...LoadOption) (*ESMFile, error) {
 		rootMetaEnv = metaEnvFromDecls(rootView["metaparameters"], applyLoadOptions(opts).metaparameters)
 	}
 
+	// The loader-API bindings themselves, kept SEPARATE from rootMetaEnv above.
+	// They reach the `subsystems.<k>` mount form too (esm-spec §4.7 "Two mount
+	// forms, one mechanism"): a leaf mounted as a subsystem gets the same §9.7.6
+	// site-4 backfill a top-level-mounted leaf gets, so a discovered §8.9.4
+	// `extent` sizes its axis at either attachment point. rootMetaEnv is a FOLD
+	// environment — this document's declared defaults included — and must not be
+	// forwarded in its place.
+	apiMeta := applyLoadOptions(opts).metaparameters
+
 	// Resolve subsystem references relative to the file's directory
-	if err := resolveSubsystemRefsWithMeta(esmFile, basePath, rootMetaEnv); err != nil {
+	if err := resolveSubsystemRefsWithMeta(esmFile, basePath, rootMetaEnv, apiMeta); err != nil {
 		return nil, fmt.Errorf("failed to resolve subsystem references: %w", err)
 	}
 

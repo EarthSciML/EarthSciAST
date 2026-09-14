@@ -1,0 +1,251 @@
+/**
+ * A discovered `extent` binds where the NAME is declared, not only at the root.
+ *
+ * esm-spec §8.9.4 lets a data source measure its own record count and bind a
+ * metaparameter an index set is sized by. The count arrives as a §9.7.6 site-4
+ * loader-API binding, so these tests bind it directly: loading with
+ * `{ metaparameters: { N_REC: 3 } }` is exactly what extent discovery hands the
+ * loader, and it exercises the same path without needing a file on disk.
+ *
+ * Three separable properties are pinned here:
+ *
+ *  * the mounting document need not RESTATE a metaparameter the leaf it mounts
+ *    already declares (§9.7.6 site 4, widened past "the root document's");
+ *  * a `subsystems.<k>` mount edge forwards the loader-API bindings into the
+ *    leaf's own close, so the axis sizes from the data instead of falling
+ *    through to the leaf's placeholder default (§4.7 "Two mount forms, one
+ *    mechanism");
+ *  * whether a leaf resolves does not turn on an `expression_template_imports`
+ *    entry it never calls.
+ *
+ * SCOPE. This binding mounts at BOTH §4.7 attachment points (the top-level
+ * `models.<k>` `{ref}` form landed with #198 item 4), so the cross-form equality
+ * §4.7 requires is reachable here and is pinned below. What is NOT implemented
+ * is §8.9.4 extent DISCOVERY: no data file is ever sampled, so the count is
+ * supplied directly as the site-4 loader-API binding discovery would have
+ * produced. The static half of §8.9.4 is fully reachable either way: it is a
+ * pure document check.
+ *
+ * The fixtures are shared with the other bindings and live under
+ * `tests/fixtures/` rather than `tests/valid/`, because the corpus sweep would
+ * score this binding a false pass on the top-level mount form it does not
+ * implement.
+ */
+import { describe, expect, it } from 'vitest'
+import * as path from 'node:path'
+import { loadPath } from './parse.js'
+import { resolveSubsystemRefsSync } from './ref-loading.js'
+import { fixturesDir } from './test-helpers.js'
+import type { EsmFile } from './types.js'
+
+const DIR = fixturesDir('fixtures', 'data_source_extent_scope')
+
+/** Load a fixture and inline its `{ref}` mounts, as a host driving both steps does. */
+function loadMounted(name: string, metaparameters?: Record<string, number>): EsmFile {
+  const full = path.join(DIR, name)
+  const file = loadPath(full, metaparameters ? { metaparameters } : undefined)
+  resolveSubsystemRefsSync(file, path.dirname(full))
+  return file
+}
+
+/** The merged `records` axis declaration, whatever shape the registry holds. */
+function records(file: EsmFile): unknown {
+  return (file as unknown as { index_sets?: Record<string, unknown> }).index_sets?.records
+}
+
+function sizeOf(file: EsmFile): unknown {
+  return (records(file) as { size?: unknown } | undefined)?.size
+}
+
+/** Any named axis of the merged registry, and its `size`. */
+function axis(file: EsmFile, name: string): unknown {
+  return (file as unknown as { index_sets?: Record<string, unknown> }).index_sets?.[name]
+}
+
+function sizeOfAxis(file: EsmFile, name: string): unknown {
+  return (axis(file, name) as { size?: unknown } | undefined)?.size
+}
+
+/** The canonical diagnostic code off whatever the load threw. */
+function codeOf(fn: () => unknown): string {
+  try {
+    fn()
+  } catch (e) {
+    return (e as { code?: string }).code ?? String(e)
+  }
+  throw new Error('expected the load to throw, but it succeeded')
+}
+
+describe('§9.7.6 site 4 reaches a name only a MOUNTED document declares', () => {
+  it('does not make the root restate a mounted leaf’s metaparameter', () => {
+    // The thin root owns the `data_sources` entry and declares NO
+    // `metaparameters`; the leaf it mounts as a subsystem declares `N_REC` and
+    // is sized by it. The discovered extent is a loader-API binding, and the
+    // site-4 check used to ask only whether the ROOT declared the name — so
+    // every assembly had to carry a second, identical `metaparameters` block
+    // that configured nothing. The check now accepts a name declared by any
+    // document the root mounts, and the mount edge forwards the value into the
+    // leaf's own close.
+    const file = loadMounted('extent_root_subsystem.esm', { N_REC: 3 })
+    expect(sizeOf(file)).toBe(3)
+  })
+
+  it('still refuses a loader-API binding NO document declares', () => {
+    // Widening the check must not delete it. A name neither the root nor
+    // anything it mounts declares is still `template_import_unknown_name` —
+    // §9.7.6: bindings never invent metaparameters, a typo fails loudly.
+    expect(codeOf(() => loadMounted('extent_root_subsystem.esm', { N_RECS: 3 }))).toBe(
+      'template_import_unknown_name',
+    )
+  })
+
+  it('loads the declared case standalone, with no loader bindings at all', () => {
+    // The widened check and the static §8.9.4 check must not refuse the
+    // ordinary case: an `extent` whose metaparameter the mounted leaf declares
+    // loads at that leaf's own default (§8.9.4: "declare the metaparameter with
+    // a `default` so the document still validates and loads standalone").
+    const file = loadMounted('extent_root_subsystem.esm')
+    expect(sizeOf(file)).toBe(0)
+  })
+})
+
+describe('an UNUSED template import does not decide whether a leaf resolves', () => {
+  it('resolves the same with and without an import the leaf never calls', () => {
+    // Two assemblies differing by ONE import of a library the leaf never calls.
+    //
+    // Whether a mounted leaf folded strictly used to be a whole-document
+    // boolean — does it carry ANY §9.7 machinery — so adding that import
+    // flipped the leaf from "axis merges symbolically and the assembler closes
+    // it" to `metaparameter_unbound`. Factoring a shared expression into a
+    // library is not supposed to change whether a document's shape resolves.
+    //
+    // The assertion is ABSOLUTE, and is the same number in all five bindings.
+    // RFC `mount-edge-index-set-renaming.md` open question 2 is settled: the
+    // §4.7 merge runs post-close and folds the contribution against the
+    // mounting document's closed environment, so the axis the leaf cannot size
+    // lands at the assembler's own `N_REC` default of 3 everywhere. The
+    // differential is kept alongside it, because it is the property this test
+    // is actually named for.
+    const withImport = loadMounted('assembler_root_with_import.esm')
+    const noImport = loadMounted('assembler_root_no_import.esm')
+    expect(records(withImport)).toEqual(records(noImport))
+    expect(sizeOf(noImport)).toBe(3)
+    expect(sizeOf(withImport)).toBe(3)
+  })
+})
+
+describe('§8.9.4 statically: an extent nobody declares is refused at load', () => {
+  it('refuses an `extent` naming an undeclared metaparameter, naming it', () => {
+    // `extent` names `N_RECS`; neither the root nor the leaf it mounts declares
+    // it. This used to load clean and fail only once the source was SAMPLED, at
+    // build — the same validate/build split §9.7.6's own binding sites had. It
+    // is decidable from the document alone, so it is decided at load.
+    //
+    // Purely a document check, so it fires on the top-level-mount fixture even
+    // though this binding never inlines that mount form.
+    let err: unknown
+    try {
+      loadMounted('extent_undeclared_root.esm')
+    } catch (e) {
+      err = e
+    }
+    expect((err as { code?: string } | undefined)?.code).toBe('template_import_unknown_name')
+    expect(String((err as Error).message)).toContain('N_RECS')
+  })
+})
+
+describe('the site-4 backfill is FILTERED to the names the leaf declares', () => {
+  it('does not forward a loader binding the leaf does not declare', () => {
+    // Here the assembler declares `N_REC` and the leaf it mounts declares
+    // nothing. Forwarding the whole loader-API map into the leaf's close would
+    // raise `template_import_unknown_name` against a leaf that never asked for
+    // the name — and, worse, would let an assembler's unrelated metaparameter
+    // silently resize a leaf axis the edge never bound (esm-spec §4.7).
+    const file = loadMounted('assembler_root_with_import.esm', { N_REC: 5 })
+    expect(file).not.toBeNull()
+    // …and the axis lands at 5 because the ASSEMBLER's own close sized it, not
+    // because the leaf was handed the name. The leaf declares no
+    // `metaparameters` at all, so `records` merges up still symbolic and the
+    // mounting document closes it (§9.7.6 site 5, §4.7 "Index-set merge").
+    // `assembler_partial_overlap_root.esm` below is where forwarding an
+    // UNRELATED name can actually be caught.
+    expect(sizeOf(file)).toBe(5)
+  })
+})
+
+describe('the backfill filter is PER-NAME, not merely per-document', () => {
+  it('hands the leaf the name it declares and withholds the one it does not', () => {
+    // The assembler declares `N_OTHER` and the leaf declares `N_REC`, so the
+    // loader-API map carries one name the leaf must receive and one it must
+    // not. A filter that withholds the whole map from a leaf declaring NOTHING
+    // looks correct against every other fixture here and still lets an
+    // assembler's unrelated metaparameter through to a leaf that declares
+    // something — which is how an unbound `NLEV: default 12` silently resizes a
+    // leaf axis the edge never bound (esm-spec §4.7).
+    const file = loadMounted('assembler_partial_overlap_root.esm', { N_REC: 3, N_OTHER: 7 })
+    expect(sizeOf(file)).toBe(3)
+  })
+})
+
+describe('the two §4.7 mount forms size the axis identically', () => {
+  it('sizes the same leaf the same way at either attachment point', () => {
+    // The same leaf, the same data source, the same discovered count; the two
+    // assemblies differ only in which attachment point mounts the leaf. §4.7
+    // "Two mount forms, one mechanism" forbids them differing, and before the
+    // loader-API backfill reached the `subsystems.<k>` edge they did — silently,
+    // with a zero-length axis and a clean exit.
+    const top = loadMounted('extent_root_toplevel.esm', { N_REC: 3 })
+    const sub = loadMounted('extent_root_subsystem.esm', { N_REC: 3 })
+    expect(sizeOf(top)).toBe(3)
+    expect(sizeOf(sub)).toBe(3)
+    expect(records(top)).toEqual(records(sub))
+  })
+})
+
+describe('the static §8.9.4 check must not refuse what §9.7.6 accepts', () => {
+  it('accepts an `extent` naming a RE-EXPORTED metaparameter', () => {
+    // The name reaches this document by §9.7.6 site-2 re-export, not by
+    // declaration and not through a mount: it declares no `metaparameters` and
+    // mounts nothing, but IMPORTS a library that declares `N_REC` and does not
+    // bind it at the edge. The loader API may bind such a name, which is exactly
+    // what a discovered `extent` does. The static check runs on the AUTHORED
+    // tree, before the imports resolve, so it has to walk the import edges too
+    // or it refuses a document §9.7.6 accepts.
+    expect(sizeOf(loadMounted('extent_reexport_root.esm', { N_REC: 3 }))).toBe(3)
+    expect(sizeOf(loadMounted('extent_reexport_root.esm'))).toBe(0)
+  })
+
+  it('re-loads a document already in RESOLVED shape', () => {
+    // The check is an authoring check and has to be idempotent. A §4.7 mount
+    // CONSUMES the leaf's `metaparameters` (§9.7.6 site 3), so once
+    // `extent_root_toplevel.esm` has been resolved, `N_REC` is declared nowhere
+    // and the `{ref}` stub the mount walk reads is gone — while the `extent`
+    // that named it is still there, having already done its job. A binding that
+    // re-loads its own resolved document (Rust does, at build) must not be told
+    // that document is invalid.
+    expect(sizeOf(loadMounted('extent_resolved_shape.esm'))).toBe(3)
+  })
+})
+
+describe('where the §4.7 merge sits relative to the mounting document’s close', () => {
+  it('does not collide two identical declarations, at either mount form', () => {
+    // The shape issue #198 reported. The assembly and the leaf it mounts declare
+    // the SAME metaparameter and the SAME axis sized by it. A merge that runs
+    // BEFORE the mounting document's own §9.7.6 close compares the leaf's
+    // already-folded `size: 40` against the assembly's still-symbolic
+    // `size: "NLEV"` and calls two identical declarations a
+    // `subsystem_index_set_conflict`.
+    //
+    // RFC `mount-edge-index-set-renaming.md` open question 2 settled that: the
+    // merge runs post-close and folds the contribution against the mounting
+    // document's closed environment before comparing. This test is the GUARD —
+    // hoisting root ref resolution (and with it the merge) back before the close
+    // would turn it red, which is the regression the inline/merge split exists
+    // to prevent.
+    const top = loadMounted('mount_merge_order_toplevel.esm')
+    const sub = loadMounted('mount_merge_order_subsystem.esm')
+    expect(sizeOfAxis(top, 'lev')).toBe(40)
+    expect(sizeOfAxis(sub, 'lev')).toBe(40)
+    expect(axis(top, 'lev')).toEqual(axis(sub, 'lev'))
+  })
+})

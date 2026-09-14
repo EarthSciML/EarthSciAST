@@ -1112,7 +1112,7 @@ func TestTemplateImports_OnlyFiltersVisibilityNotInternalWiring(t *testing.T) {
 		`"expression_template_imports": [{"ref": "./lib.esm", "only": ["t_keep"]}],`, "")
 	view := decodeFixture(t, src)
 	orders := extractTemplateOrders(src)
-	if _, err := resolveTemplateMachinery(view, orders, dir, nil); err != nil {
+	if _, err := resolveTemplateMachinery(view, orders, dir, nil, resolveOpts{}); err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
 	tpl := view["models"].(map[string]any)["M"].(map[string]any)["expression_templates"].(map[string]any)
@@ -1194,7 +1194,7 @@ func TestTemplateImports_EdgeBindingUnknownNameAndNonInteger(t *testing.T) {
 	src := tiModelJSON(
 		`"expression_template_imports": [{"ref": "./lib.esm", "bindings": {"N": 2.5}}],`, "")
 	view := decodeFixture(t, src)
-	_, rerr := resolveTemplateMachinery(view, extractTemplateOrders(src), dir, nil)
+	_, rerr := resolveTemplateMachinery(view, extractTemplateOrders(src), dir, nil, resolveOpts{})
 	if code := tiErrCode(t, rerr); code != "metaparameter_type_error" {
 		t.Errorf("non-integer edge binding code = %s; want metaparameter_type_error", code)
 	}
