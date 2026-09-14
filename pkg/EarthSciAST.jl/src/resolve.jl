@@ -802,6 +802,131 @@ function _inline_toplevel_model_refs(raw_data, base_path::String;
 end
 
 """
+    _resolve_mount_edge_core(entry, ref, refpath, base_path, visited;
+                             mount_noun, parent_meta, api_meta) -> (comp, compdir)
+
+The per-edge core of the esm-spec §4.7 edge pipeline, shared by BOTH mount forms:
+read the referenced document, run its version gates and library rejections,
+close its metaparameters with this edge's `bindings` (§9.7.6 site 3, with the
+site-4 loader-API backfill for the names the leaf declares), apply this edge's
+§9.7.10 form-A injection, resolve its §9.7 machinery and run the §9.6.3
+fixpoint, and apply this edge's `index_set_rename`.
+
+The caller owns the cycle-detection push/pop on `visited` and everything the
+two mount forms do DIFFERENTLY once the leaf is resolved — a `models.<k>` edge
+selects one model and merges the leaf's by-name blocks, a `subsystems.<k>`
+edge requires exactly one component. Extracted so the `subsystems.<k>` form can
+run this same code on the native dictionary instead of a second copy of it on
+the typed tree (the duplication `_inline_toplevel_model_refs!`'s own docstring
+refuses).
+"""
+function _resolve_mount_edge_core(entry::AbstractDict, ref::String, refpath::String,
+                                  base_path::String, visited::Set{String};
+                                  mount_noun::String,
+                                  parent_meta::AbstractDict{String,<:Integer}=Dict{String,Int}(),
+                                  api_meta::AbstractDict{String,<:Integer}=Dict{String,Int}())
+    isfile(refpath) || throw(SubsystemRefError(
+        "Referenced model file not found: $(refpath) (from ref '$(ref)')"))
+    comp = _read_json_document(read(refpath, String))
+    comp isa AbstractDict{String,Any} || throw(SubsystemRefError(
+        "Referenced model file '$(ref)' did not parse as a JSON object"))
+    # esm-spec §4.7 "Edge pipeline" step (1): the referenced document
+    # resolves in its OWN scope, exactly as the `subsystems.<k>` edge
+    # resolves it in `_load_ref` — the two mount forms are one mechanism,
+    # so a binding MUST NOT make them differ. The version gates first
+    # (§5.4 / §9.6.5), then the library rejections: a §4.7 ref MUST NOT
+    # target a template library or a coupling library. Same rejection as
+    # `_load_local_ref` / `_load_remote_ref`.
+    reject_expression_templates_pre_v04(comp)
+    reject_template_imports_pre_v08(comp)
+    _reject_library_ref(comp, ref, refpath)
+    compdir = dirname(refpath)
+
+    # §9.7.6 binding site 3: close the leaf's metaparameters. Explicit
+    # edge `bindings` win, backfilled by the LOADER-API bindings (site 4)
+    # for the names the leaf DECLARES — see this function's docstring for
+    # why the backfill reads `api_meta` and never `parent_meta`.
+    leaf_decls = let md = get(comp, "metaparameters", nothing)
+        md isa AbstractDict ? Set(String[string(k) for k in keys(md)]) : Set{String}()
+    end
+    bindings = Dict{String,Int}()
+    for (k, v) in api_meta
+        string(k) in leaf_decls && (bindings[string(k)] = Int(v))
+    end
+    bindings_raw = get(entry, "bindings", nothing)
+    if bindings_raw !== nothing
+        bindings_raw isa AbstractDict || throw(ExpressionTemplateError(
+            ERROR_CODES.METAPARAMETER_TYPE_ERROR,
+            "$(mount_noun) `bindings` must be an object of metaparameter " *
+            "expressions (esm-spec §9.7.6)"))
+        for (bk, bv) in pairs(bindings_raw)
+            bctx = "$(mount_noun), binding '$(string(bk))'"
+            # Structural grammar check at the edge (bad op / empty args /
+            # float — even with a symbolic arg), then fold against the
+            # MOUNTING document's closed environment.
+            expr = require_meta_expr(_to_native_json(bv), bctx)
+            bindings[string(bk)] = Int(eval_meta_expr(expr, parent_meta, bctx))
+        end
+    end
+
+    # §9.7.10 form A: the edge's `expression_template_imports` inject a
+    # discretization into the LEAF's own scope BEFORE resolution, so the
+    # §9.6.3 fixpoint lowers its rewrite-targets at the mount and an
+    # assembler chooses the scheme for a discretization-agnostic PDE leaf
+    # without editing the leaf. Their own relative refs are authored by
+    # the assembler carrying the edge, so they absolutize against THIS
+    # document's directory, not the leaf's.
+    edge_imports = get(entry, "expression_template_imports", nothing)
+    injected = Any[]
+    if edge_imports isa AbstractVector && !isempty(edge_imports)
+        imports_native = _to_ordered(edge_imports)
+        _absolutize_nested_refs!(imports_native, base_path)
+        injected = Any[e for e in imports_native]
+    end
+    injected_root = apply_scope_injections(comp, injected)
+    injected_root === nothing || (comp = injected_root)
+
+    # Resolve the leaf's §9.7 machinery under that close, then run the
+    # §9.6.3 rewrite fixpoint, so the spliced component carries the
+    # fully-expanded Option-A image and the assembling document's
+    # lowering never resolves the leaf's template names against its own
+    # registry. A leaf with no machinery has nothing to resolve and flows
+    # on untouched (`resolve_template_machinery` returns `nothing`).
+    # `mounted_leaf=true`: this IS a §4.7 mount edge, so an index-set
+    # `size` the leaf cannot close stays SYMBOLIC — it merges into the
+    # mounting document's registry and closes there (§9.7.6 site 5).
+    # Whether that happened used to turn on `_has_import_machinery`, a
+    # whole-document boolean, so one `expression_template_imports` entry
+    # for a library the leaf never calls flipped the leaf from "axis
+    # merges and the assembler closes it" to `metaparameter_unbound`.
+    # `mount_declared` covers the leaf's OWN nested mounts, so the
+    # site-4 widening composes down the reference DAG. Guarded on the
+    # edge's close being non-empty: with nothing to check, the set is
+    # unused, and the walk would re-read every nested ref for nothing.
+    leaf_mount_declared = isempty(bindings) ? Set{String}() :
+        _collect_mount_declared_metaparameters(comp, compdir)
+    resolved = resolve_template_machinery(comp, compdir; metaparameters=bindings,
+                                          mount_declared=leaf_mount_declared,
+                                          mounted_leaf=true)
+    if resolved !== nothing
+        comp = expand_document(lower_expression_templates(resolved))
+    end
+
+    # Step (2): `index_set_rename` speaks the resolved leaf's own
+    # post-resolution vocabulary, so it applies HERE — after the close and
+    # fold above, before the leaf's nested mounts contribute (each nested
+    # edge renames what IT brings, at its own edge). esm-spec §4.7 "Where
+    # it applies" made this form's old refusal conditional on the gap that
+    # deferred §9.7 to the root; the pipeline above closes that gap, so
+    # the refusal is gone and the field applies at both mount forms.
+    rename_raw = get(entry, "index_set_rename", nothing)
+    if rename_raw !== nothing
+        comp = apply_mount_index_set_rename(comp, rename_raw, mount_noun)
+    end
+    return comp, compdir
+end
+
+"""
     _inline_toplevel_model_refs!(native, base_path, visited; parent_meta, api_meta)
 
 In-place native-dict worker for [`_inline_toplevel_model_refs`](@ref).
@@ -869,104 +994,8 @@ function _inline_toplevel_model_refs!(native::AbstractDict{String,Any}, base_pat
         end
         push!(visited, refpath)
         try
-            isfile(refpath) || throw(SubsystemRefError(
-                "Referenced model file not found: $(refpath) (from ref '$(ref)')"))
-            comp = _read_json_document(read(refpath, String))
-            comp isa AbstractDict{String,Any} || throw(SubsystemRefError(
-                "Referenced model file '$(ref)' did not parse as a JSON object"))
-            # esm-spec §4.7 "Edge pipeline" step (1): the referenced document
-            # resolves in its OWN scope, exactly as the `subsystems.<k>` edge
-            # resolves it in `_load_ref` — the two mount forms are one mechanism,
-            # so a binding MUST NOT make them differ. The version gates first
-            # (§5.4 / §9.6.5), then the library rejections: a §4.7 ref MUST NOT
-            # target a template library or a coupling library. Same rejection as
-            # `_load_local_ref` / `_load_remote_ref`.
-            reject_expression_templates_pre_v04(comp)
-            reject_template_imports_pre_v08(comp)
-            _reject_library_ref(comp, ref, refpath)
-            compdir = dirname(refpath)
-
-            # §9.7.6 binding site 3: close the leaf's metaparameters. Explicit
-            # edge `bindings` win, backfilled by the LOADER-API bindings (site 4)
-            # for the names the leaf DECLARES — see this function's docstring for
-            # why the backfill reads `api_meta` and never `parent_meta`.
-            leaf_decls = let md = get(comp, "metaparameters", nothing)
-                md isa AbstractDict ? Set(String[string(k) for k in keys(md)]) : Set{String}()
-            end
-            bindings = Dict{String,Int}()
-            for (k, v) in api_meta
-                string(k) in leaf_decls && (bindings[string(k)] = Int(v))
-            end
-            bindings_raw = get(entry, "bindings", nothing)
-            if bindings_raw !== nothing
-                bindings_raw isa AbstractDict || throw(ExpressionTemplateError(
-                    ERROR_CODES.METAPARAMETER_TYPE_ERROR,
-                    "$(mount_noun) `bindings` must be an object of metaparameter " *
-                    "expressions (esm-spec §9.7.6)"))
-                for (bk, bv) in pairs(bindings_raw)
-                    bctx = "$(mount_noun), binding '$(string(bk))'"
-                    # Structural grammar check at the edge (bad op / empty args /
-                    # float — even with a symbolic arg), then fold against the
-                    # MOUNTING document's closed environment.
-                    expr = require_meta_expr(_to_native_json(bv), bctx)
-                    bindings[string(bk)] = Int(eval_meta_expr(expr, parent_meta, bctx))
-                end
-            end
-
-            # §9.7.10 form A: the edge's `expression_template_imports` inject a
-            # discretization into the LEAF's own scope BEFORE resolution, so the
-            # §9.6.3 fixpoint lowers its rewrite-targets at the mount and an
-            # assembler chooses the scheme for a discretization-agnostic PDE leaf
-            # without editing the leaf. Their own relative refs are authored by
-            # the assembler carrying the edge, so they absolutize against THIS
-            # document's directory, not the leaf's.
-            edge_imports = get(entry, "expression_template_imports", nothing)
-            injected = Any[]
-            if edge_imports isa AbstractVector && !isempty(edge_imports)
-                imports_native = _to_ordered(edge_imports)
-                _absolutize_nested_refs!(imports_native, base_path)
-                injected = Any[e for e in imports_native]
-            end
-            injected_root = apply_scope_injections(comp, injected)
-            injected_root === nothing || (comp = injected_root)
-
-            # Resolve the leaf's §9.7 machinery under that close, then run the
-            # §9.6.3 rewrite fixpoint, so the spliced component carries the
-            # fully-expanded Option-A image and the assembling document's
-            # lowering never resolves the leaf's template names against its own
-            # registry. A leaf with no machinery has nothing to resolve and flows
-            # on untouched (`resolve_template_machinery` returns `nothing`).
-            # `mounted_leaf=true`: this IS a §4.7 mount edge, so an index-set
-            # `size` the leaf cannot close stays SYMBOLIC — it merges into the
-            # mounting document's registry and closes there (§9.7.6 site 5).
-            # Whether that happened used to turn on `_has_import_machinery`, a
-            # whole-document boolean, so one `expression_template_imports` entry
-            # for a library the leaf never calls flipped the leaf from "axis
-            # merges and the assembler closes it" to `metaparameter_unbound`.
-            # `mount_declared` covers the leaf's OWN nested mounts, so the
-            # site-4 widening composes down the reference DAG. Guarded on the
-            # edge's close being non-empty: with nothing to check, the set is
-            # unused, and the walk would re-read every nested ref for nothing.
-            leaf_mount_declared = isempty(bindings) ? Set{String}() :
-                _collect_mount_declared_metaparameters(comp, compdir)
-            resolved = resolve_template_machinery(comp, compdir; metaparameters=bindings,
-                                                  mount_declared=leaf_mount_declared,
-                                                  mounted_leaf=true)
-            if resolved !== nothing
-                comp = expand_document(lower_expression_templates(resolved))
-            end
-
-            # Step (2): `index_set_rename` speaks the resolved leaf's own
-            # post-resolution vocabulary, so it applies HERE — after the close and
-            # fold above, before the leaf's nested mounts contribute (each nested
-            # edge renames what IT brings, at its own edge). esm-spec §4.7 "Where
-            # it applies" made this form's old refusal conditional on the gap that
-            # deferred §9.7 to the root; the pipeline above closes that gap, so
-            # the refusal is gone and the field applies at both mount forms.
-            rename_raw = get(entry, "index_set_rename", nothing)
-            if rename_raw !== nothing
-                comp = apply_mount_index_set_rename(comp, rename_raw, mount_noun)
-            end
+            comp, compdir = _resolve_mount_edge_core(entry, ref, refpath, base_path, visited;
+                mount_noun=mount_noun, parent_meta=parent_meta, api_meta=api_meta)
 
             # The leaf's own nested top-level model-refs, in the leaf's directory,
             # sharing this walk's path-scoped cycle set. Its metaparameters closed
