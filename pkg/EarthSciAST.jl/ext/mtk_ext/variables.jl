@@ -109,6 +109,20 @@ function _index_set_extents(flat::FlattenedSystem)
     return extents
 end
 
+# `name => [1:n₁, …]` for every variable whose defining equation is a `const`
+# array (`tbl ~ {"op": "const", "value": [...]}`).
+function _const_observed_shapes(equations)
+    shapes = Dict{String,Vector{UnitRange{Int}}}()
+    for eq in equations
+        (eq.lhs isa VarExpr && eq.rhs isa OpExpr) || continue
+        rhs = eq.rhs::OpExpr
+        (rhs.op == "const" && rhs.value isa AbstractVector) || continue
+        dims = size(EarthSciAST._const_op_to_array(rhs.value))
+        shapes[(eq.lhs::VarExpr).name] = UnitRange{Int}[1:n for n in dims]
+    end
+    return shapes
+end
+
 # Resolve a variable's DECLARED `shape` (an ordered list of index-set names,
 # esm-spec §4.7) against the index-set extents. This is the shape of last
 # resort: `infer_array_shapes` and the LHS-arrayop shapes both win over it,
@@ -178,6 +192,10 @@ function _build_var_dict(flat::FlattenedSystem)
     inferred_shapes = infer_array_shapes(flat.equations)
     lhs_shapes = _lhs_arrayop_shapes(flat.equations, extents)
     merge!(inferred_shapes, lhs_shapes)  # LHS definition takes precedence
+    # An observed defined by a `const` array is exactly that array's size; the
+    # reads of it that `infer_array_shapes` sees (`index(tbl, 4)`) say nothing
+    # about its extent.
+    merge!(inferred_shapes, _const_observed_shapes(flat.equations))
 
     var_dict = Dict{String,Any}()
     states = Vector{Num}()

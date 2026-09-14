@@ -90,6 +90,21 @@ end
         end
     end
 
+    # A registered call reading an observed is rebuilt when MTK eliminates the
+    # alias, and has to stay a real scalar. `interp.linear` shares the
+    # registration pattern of the run-time gather above and failed the same way.
+    @testset "interp.linear at an observed query" begin
+        doc = _cai_doc(; inline=true, expected=15.0)
+        eqs = doc["models"]["Solo"]["equations"]
+        eqs[1]["rhs"] = 1.5
+        eqs[3]["rhs"] = Dict("op" => "fn", "name" => "interp.linear", "args" => Any[
+            Dict("op" => "const", "args" => Any[], "value" => [10.0, 20.0, 30.0]),
+            Dict("op" => "const", "args" => Any[], "value" => [1.0, 2.0, 3.0]), "T"])
+        r = _cai_run(doc)
+        @test r.status == EarthSciAST.PASS
+        @test r.actual == 15.0
+    end
+
     # `value[i][j]` is element (i, j): row 2, column 3 of [[1,2,3],[4,5,6]].
     @testset "2-D table is row-major" begin
         doc = _cai_doc(; inline=true, expected=6.0)

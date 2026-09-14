@@ -276,6 +276,8 @@ end
 @register_symbolic _esm_const_gather(table::Vector{Float64}, name::String, i) false
 @register_symbolic _esm_const_gather(table::Matrix{Float64}, name::String, i, j) false
 @register_symbolic _esm_const_gather(table::Array{Float64,3}, name::String, i, j, k) false
+# See the `interp.*` registrations: a rebuilt call must stay a real scalar.
+Symbolics.SymbolicUtils.promote_symtype(::typeof(_esm_const_gather), args...) = Real
 
 function _build_const_gather(table::Array{Float64}, name::String,
                              idx_args::AbstractVector, var_dict::Dict{String,Any},
@@ -500,6 +502,14 @@ end
 # define them separately.
 @register_symbolic _esm_interp_linear(table::Vector{Float64}, axis::Vector{Float64}, x) false
 @register_symbolic _esm_interp_bilinear(table::Vector{Vector{Float64}}, axis_x::Vector{Float64}, axis_y::Vector{Float64}, x, y) false
+
+# The registration's symtype promotion does not match a call whose table
+# arguments are constants, which is how every call looks once MTK rebuilds it
+# (alias elimination substitutes an observed into the query): the rebuilt call
+# gets symtype `Any` and `mtkcompile` cannot subtract it. Every one of these
+# calls is a real scalar, so say so for any argument types.
+Symbolics.SymbolicUtils.promote_symtype(::typeof(_esm_interp_linear), args...) = Real
+Symbolics.SymbolicUtils.promote_symtype(::typeof(_esm_interp_bilinear), args...) = Real
 
 # Recursively coerce a JSON-parsed const-array value into the concrete
 # vector type the registered op expects. Inputs may be Vector{Any} of
