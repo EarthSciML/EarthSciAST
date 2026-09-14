@@ -1,0 +1,16 @@
+{
+ "esm": "1.0.0",
+ "metadata": {
+  "name": "rename_scope_shared_leaf",
+  "description": "The leaf declares lev ITSELF and also mounts rename_scope_grandchild.esm, which declares a deep-equal lev. The esm-spec 4.7 merge makes those ONE axis, so an enclosing edge renaming lev reaches both.",
+  "license": "MIT"
+ },
+ "index_sets": {"lev": {"kind": "interval", "size": 4}},
+ "models": {
+  "Leaf": {
+   "subsystems": {"gc": {"ref": "./rename_scope_grandchild.esm"}},
+   "variables": {"u": {"type": "unknown", "units": "1", "shape": ["lev"], "description": "the leaf's own profile over the shared axis"}},
+   "equations": [{"lhs": {"op": "D", "args": ["u"], "wrt": "t"}, "rhs": 0.0}]
+  }
+ }
+}

@@ -1,0 +1,15 @@
+{
+ "esm": "1.0.0",
+ "metadata": {
+  "name": "rename_scope_shared_axis",
+  "description": "The other end of the per-edge rule from rename_scope_nested_only_axis.esm: the mount edge renames lev, which the referenced document declares ITSELF, and a component it mounts declares a deep-equal one of the same name. The rename MUST reach the whole resolved leaf -- registry {soil_lev} alone, and the nested component's shape re-pointed -- not leave a second registry entry behind.",
+  "license": "MIT"
+ },
+ "models": {
+  "Root": {
+   "subsystems": {"L": {"ref": "./rename_scope_shared_leaf.esm", "index_set_rename": {"lev": "soil_lev"}}},
+   "variables": {"z": {"type": "unknown", "units": "1", "description": "own state"}},
+   "equations": [{"lhs": {"op": "D", "args": ["z"], "wrt": "t"}, "rhs": 0.0}]
+  }
+ }
+}

@@ -178,3 +178,41 @@ describe('mount-edge index_set_rename (esm-spec §4.7)', () => {
     expect(() => resolveSubsystemRefsSync(root, dir)).toThrow(/[Cc]ircular/)
   })
 })
+
+describe('mount-edge index_set_rename is PER EDGE (esm-spec §4.7), at both ends', () => {
+  // End one: an edge may NOT rename an axis that reached the registry ONLY
+  // through a mount nested inside the referenced document — that axis is
+  // renamed at ITS own edge.
+  it.each([
+    ['rename_scope_nested_only_axis.esm', 'subsystem ref'],
+    ['rename_scope_nested_only_axis_toplevel.esm', 'top-level model ref'],
+  ])('refuses to rename an axis only a nested mount contributed (%s)', (name, noun) => {
+    expect(() => loadResolved(`fixtures/mount_edge_rename_nested_scope/${name}`)).toThrow(
+      /subsystem_index_set_rename_unknown_name/,
+    )
+    try {
+      loadResolved(`fixtures/mount_edge_rename_nested_scope/${name}`)
+    } catch (e) {
+      expect(String((e as Error).message)).toContain(noun)
+      expect(String((e as Error).message)).toContain("index set 'lev'")
+    }
+  })
+
+  // End two, which a future reader is most likely to collapse into end one: an
+  // edge MUST rename an axis the referenced document declares ITSELF, even
+  // where a component it mounts declares a deep-equal one of the same name.
+  // §4.7's deep-equal merge has already made those ONE axis, so the rename
+  // covers the whole resolved leaf: the registry is `{soil_lev}` alone with the
+  // nested component's `shape` re-pointed, not `{lev, soil_lev}` with the
+  // nested component still on `lev`.
+  it.each([['rename_scope_shared_axis.esm'], ['rename_scope_shared_axis_toplevel.esm']])(
+    'renames an axis the leaf shares with its own nested mount (%s)',
+    (name) => {
+      const { file } = loadResolved(`fixtures/mount_edge_rename_nested_scope/${name}`)
+      const sets = (file as unknown as { index_sets: Record<string, { size?: number }> }).index_sets
+      expect(Object.keys(sets)).toEqual(['soil_lev'])
+      expect(sets.soil_lev?.size).toBe(4)
+      expect(JSON.stringify(file)).not.toContain('"lev"')
+    },
+  )
+})

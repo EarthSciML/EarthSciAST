@@ -345,3 +345,58 @@ func TestUnresolvedTopLevelMountSurvivesSerialization(t *testing.T) {
 		t.Errorf("a resolved mount must emit its component, not the edge; got %v", soil)
 	}
 }
+
+// The per-edge rule of esm-spec §4.7 has two ends, and they are easy to
+// collapse into one. These two tests pin them apart.
+//
+// End one: an edge may NOT rename an axis that reached the registry ONLY
+// through a mount nested inside the referenced document — that axis is renamed
+// at ITS own edge, so naming it here is `subsystem_index_set_rename_unknown_name`.
+func TestMountRenameCannotNameAnAxisANestedMountContributed(t *testing.T) {
+	for _, tc := range []struct{ file, noun string }{
+		{"rename_scope_nested_only_axis.esm", "subsystem ref"},
+		{"rename_scope_nested_only_axis_toplevel.esm", "top-level model ref"},
+	} {
+		_, err := LoadPath(mrFixture(t, "fixtures", "mount_edge_rename_nested_scope", tc.file))
+		if err == nil {
+			t.Fatalf("%s: loaded, but `lev` is declared only by the leaf's own nested mount", tc.file)
+		}
+		if !strings.Contains(err.Error(), "subsystem_index_set_rename_unknown_name") {
+			t.Errorf("%s: want subsystem_index_set_rename_unknown_name, got: %v", tc.file, err)
+		}
+		if !strings.Contains(err.Error(), tc.noun) || !strings.Contains(err.Error(), "index set 'lev'") {
+			t.Errorf("%s: the diagnostic must name this edge and the axis: %v", tc.file, err)
+		}
+	}
+}
+
+// End two: an edge MUST rename an axis the referenced document declares
+// ITSELF, even where a component it mounts declares a deep-equal one of the
+// same name — §4.7's deep-equal merge has already made those ONE axis, so the
+// rename covers the whole resolved leaf. The observable difference is the
+// registry: `{soil_lev}` alone with the nested component's `shape` re-pointed,
+// not `{lev, soil_lev}` with the nested component still on `lev`.
+func TestMountRenameReachesAnAxisSharedWithANestedMount(t *testing.T) {
+	for _, name := range []string{
+		"rename_scope_shared_axis.esm",
+		"rename_scope_shared_axis_toplevel.esm",
+	} {
+		f, err := LoadPath(mrFixture(t, "fixtures", "mount_edge_rename_nested_scope", name))
+		if err != nil {
+			t.Fatalf("LoadPath(%s): %v", name, err)
+		}
+		if len(f.IndexSets) != 1 {
+			t.Errorf("%s: registry = %v; want exactly one entry, the post-rename name", name, f.IndexSets)
+		}
+		if s, ok := f.IndexSets["soil_lev"]; !ok || s.Size == nil || *s.Size != 4 {
+			t.Errorf("%s: soil_lev = %v; want size 4", name, f.IndexSets["soil_lev"])
+		}
+		b, err := json.Marshal(f)
+		if err != nil {
+			t.Fatalf("%s: marshal: %v", name, err)
+		}
+		if strings.Contains(string(b), `"lev"`) {
+			t.Errorf("%s: a reference to the pre-rename name survived in the mounted subtree", name)
+		}
+	}
+}

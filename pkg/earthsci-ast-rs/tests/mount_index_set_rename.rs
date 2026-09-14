@@ -343,3 +343,47 @@ fn the_nested_edge_itself_may_rename_the_axis_it_contributes() {
     let value = serde_json::to_value(&file).expect("document renders as JSON");
     assert_eq!(value["index_sets"]["lev"]["size"], 4);
 }
+
+/// The OTHER end of the per-edge rule from
+/// `a_mount_edge_rename_cannot_name_an_axis_a_nested_mount_contributed`, and
+/// the one a future reader is most likely to collapse into it.
+///
+/// That test says an edge may NOT rename an axis only a nested mount
+/// contributes. This one says an edge MUST rename an axis the referenced
+/// document declares ITSELF, even where a component it mounts declares a
+/// deep-equal one of the same name — because §4.7's deep-equal merge has
+/// already made those ONE axis, so a rename that reached only half of it would
+/// leave the mounted document referring to a name its own registry no longer
+/// holds.
+///
+/// The observable difference is the registry: `{soil_lev}` alone, with the
+/// nested component's `shape` re-pointed, NOT `{lev, soil_lev}` with the nested
+/// component still on `lev`. Measured 2026-09-13: Rust, Go and TypeScript all
+/// produce the former at both mount forms.
+#[test]
+fn a_mount_edge_rename_reaches_an_axis_the_leaf_shares_with_its_own_nested_mount() {
+    for rel in [
+        "fixtures/mount_edge_rename_nested_scope/rename_scope_shared_axis.esm",
+        "fixtures/mount_edge_rename_nested_scope/rename_scope_shared_axis_toplevel.esm",
+    ] {
+        let path = fixture(rel);
+        let file =
+            load_path(&path).unwrap_or_else(|e| panic!("{} does not load: {e}", path.display()));
+        let value = serde_json::to_value(&file).expect("document renders as JSON");
+        let sets = value
+            .get("index_sets")
+            .and_then(|v| v.as_object())
+            .unwrap_or_else(|| panic!("{rel}: the merged registry survives the mount"));
+        assert_eq!(
+            sets.keys().collect::<Vec<_>>(),
+            vec!["soil_lev"],
+            "{rel}: the shared axis must arrive ONCE, under the post-rename name: {sets:?}"
+        );
+        assert_eq!(sets["soil_lev"]["size"], 4, "{rel}");
+        let text = value.to_string();
+        assert!(
+            !text.contains("\"lev\""),
+            "{rel}: a reference to the pre-rename name survived somewhere in the mounted subtree"
+        );
+    }
+}
