@@ -32,6 +32,7 @@ from .flatten import (
 )
 from .index_alignment import align_expression, axis_sizes, declared_axes
 from .numpy_interpreter import (
+    ConstArrayOutOfRangeError,
     EvalContext,
     NumpyInterpreterError,
     _RaggedRange,
@@ -796,6 +797,8 @@ def _materialize_observeds(
             try:
                 val = _materialize_one_observed(name, rhs, ctx)
             except (NumpyInterpreterError, RecurrenceError) as exc:
+                if isinstance(exc, ConstArrayOutOfRangeError):
+                    raise
                 if skip_reasons is not None:
                     skip_reasons[name] = str(exc)
                 if _progress:

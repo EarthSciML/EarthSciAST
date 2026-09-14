@@ -255,6 +255,12 @@ class ComplexValueError(EarthSciAstError):
     """
 
 
+class ConstArrayOutOfRangeError(NumpyInterpreterError):
+    """``E_TREEWALK_CONSTARRAY_OOB``: a const-array gather read outside an axis
+    (CONFORMANCE_SPEC §5.5.5). A fault in the document, never an observed that is
+    merely not evaluable yet, so a tolerant build pass must not skip it."""
+
+
 class UnreachableSpatialOperatorError(NumpyInterpreterError):
     """Raised when an unlowered rewrite-target operator reaches the simulator's
     RHS evaluator — a spatial/right-hand-side ``D``, one of the open-tier sugar
@@ -1464,7 +1470,7 @@ def _check_const_gather_bounds(
         lo, hi = z.min(), z.max()
         if lo < 1 or hi > n:
             bad = int(lo if lo < 1 else hi)
-            raise NumpyInterpreterError(
+            raise ConstArrayOutOfRangeError(
                 f"E_TREEWALK_CONSTARRAY_OOB: const array '{name}' index {bad} "
                 f"out of range 1..{n} in dim {d + 1}"
             )
