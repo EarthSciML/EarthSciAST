@@ -165,7 +165,15 @@ pub fn resolve_subsystem_refs_with_metaparameters(
 ) -> Result<Map<String, Value>, DiagnosticError> {
     let root_meta = root_metaparameter_env(value, api_meta);
     let mut visited = HashSet::new();
-    walk_top_level(value, base_path, &mut visited, &root_meta, api_meta, true)
+    walk_top_level(
+        value,
+        base_path,
+        &mut visited,
+        &root_meta,
+        api_meta,
+        true,
+        &root_meta,
+    )
 }
 
 /// A one-line rendering of an index-set declaration for the collision message
@@ -380,34 +388,38 @@ fn walk_top_level(
     parent_meta: &BTreeMap<String, i64>,
     api_meta: &BTreeMap<String, i64>,
     defer: bool,
+    caller_env: &BTreeMap<String, i64>,
 ) -> Result<Map<String, Value>, DiagnosticError> {
     // esm-spec §4.7 "Which environment a contribution folds against": the
     // registry a contribution lands in here belongs to THIS document, so the
-    // fold environment is this document's own closed one — not the caller's.
-    // At the root the two coincide (`parent_meta` IS this env); one level down
-    // they do not, and folding a nested contribution against an empty or an
-    // outer environment leaves an axis only this leaf can size still symbolic.
+    // fold environment is this document's own CLOSED one — not the caller's.
     //
-    // Its own declared `default`s and the loader-API bindings are the base —
-    // and then the EDGE `bindings` that closed this document win over its
-    // defaults, esm-spec §9.7.6 site 3. `parent_meta` carries them: at a mount
-    // edge the caller hands down the leaf's closed environment, at depth zero
-    // the root's own. Only the names THIS document DECLARES are taken from it,
-    // the same filter site 4 applies to the backfill — an outer metaparameter
-    // this document never declared must not size an axis here.
+    // Closed means the edge `bindings` that closed this document are part of it,
+    // overlaid on its own `default`s: §9.7.6 site 3 says an explicit edge binding
+    // wins over the referenced document's default. `caller_env` carries them in.
+    // Filtered to the names this document DECLARES, which is the same filter
+    // site 4 applies to the backfill — an outer metaparameter this document
+    // never declared must not size an axis here. At depth zero the overlay is a
+    // no-op: `caller_env` IS this environment there.
     //
-    // Without the overlay a leaf's own axis and an axis its nested mount
-    // contributes fold to DIFFERENT values inside one resolved document: the
-    // leaf's own goes through `resolve_template_machinery(.., &bindings)` and
-    // sees the binding, the contributed one would not.
-    let mut merge_env = root_metaparameter_env(value, api_meta);
-    if let Some(decls) = value.get("metaparameters").and_then(|v| v.as_object()) {
-        let bound: Vec<(String, i64)> = decls
-            .keys()
-            .filter_map(|n| parent_meta.get(n).map(|v| (n.clone(), *v)))
-            .collect();
-        merge_env.extend(bound);
-    }
+    // Without it one resolved document disagrees with ITSELF: an axis the
+    // document declares goes through `resolve_template_machinery` with the edge
+    // bindings and folds to 7, while an axis contributed by its own nested mount
+    // folded against the unoverlaid defaults and came out 4.
+    let merge_env = {
+        let mut env = root_metaparameter_env(value, api_meta);
+        let declared: Vec<String> = value
+            .get("metaparameters")
+            .and_then(|v| v.as_object())
+            .map(|o| o.keys().cloned().collect())
+            .unwrap_or_default();
+        for (k, v) in caller_env {
+            if declared.contains(k) {
+                env.insert(k.clone(), *v);
+            }
+        }
+        env
+    };
     let obj = match value.as_object_mut() {
         Some(o) => o,
         None => return Ok(Map::new()),
@@ -670,7 +682,14 @@ fn inline_toplevel_model_refs(
             // not merged, because THIS leaf has not closed yet. They land in
             // `apply_staged_index_sets` after the close below.
             let staged_nested =
-                walk_top_level(&mut comp, &leaf_dir, visited, &leaf_env, api_meta, true)?;
+                // `caller_env` is this edge's `bindings` — the overlay that makes the
+                // leaf's fold environment CLOSED rather than just its defaults
+                // (see `walk_top_level`). `parent_meta` stays the leaf's full
+                // environment: this walk runs BEFORE the leaf's close, so a nested
+                // edge's binding EXPRESSIONS still name the leaf's metaparameters.
+                walk_top_level(
+                    &mut comp, &leaf_dir, visited, &leaf_env, api_meta, true, &bindings,
+                )?;
 
             // §9.7.10 form A: the edge's `expression_template_imports` inject a
             // discretization into the leaf's own scope BEFORE resolution, so the
@@ -1143,8 +1162,15 @@ fn resolve_value(
             // contribution back before a §9.7.6 close, which is exactly what
             // #317 removed.
             let leaf_env = root_metaparameter_env(&parsed, &bindings);
-            let staged_nested =
-                walk_top_level(&mut parsed, &parent_dir, visited, &leaf_env, api_meta, true)?;
+            let staged_nested = walk_top_level(
+                &mut parsed,
+                &parent_dir,
+                visited,
+                &leaf_env,
+                api_meta,
+                true,
+                &bindings,
+            )?;
             // esm-spec §9.7.10 form A: the edge's `expression_template_imports`
             // inject a discretization into the referenced component's own
             // scope, appended BEFORE resolution so the §9.6.3 fixpoint lowers

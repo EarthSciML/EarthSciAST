@@ -288,3 +288,22 @@ def test_the_purest_typo_is_caught_and_stays_caught():
     msg = str(excinfo.value)
     assert "template_import_unknown_name" in msg
     assert "N_RECS" in msg
+
+
+def test_a_leafs_nested_contribution_folds_at_the_edge_bound_value():
+    """A leaf declares NLEV default 4, an axis `own` of its own sized by it, and
+    mounts a component contributing `lev`, also sized by NLEV. The leaf is
+    mounted with `bindings: {NLEV: 7}`.
+
+    §9.7.6 site 3: an explicit edge binding closes the referenced document and
+    wins over its own default, so BOTH axes are 7. esm-spec §4.7 "Which
+    environment a contribution folds against": `lev` lands in the leaf's scope,
+    so it folds against the leaf's closed environment — edge bindings included —
+    not the root's. Before this was fixed, this binding published `lev` as the
+    unfolded string "NLEV" while `own` was 7: one resolved document disagreeing
+    with itself about one metaparameter. Checked at both mount forms.
+    """
+    for name in ("mount_edge_fold_toplevel.esm", "mount_edge_fold_subsystem.esm"):
+        doc = load_path(str(_DIR / name))
+        assert doc.index_sets["own"]["size"] == 7, name
+        assert doc.index_sets["lev"]["size"] == 7, name

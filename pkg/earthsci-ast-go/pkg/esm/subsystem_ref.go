@@ -628,6 +628,33 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 		// resolve, esm-spec §9.7.6 "Ordering within load").
 		childMeta := metaEnvFromDecls(view["metaparameters"], bindings)
 
+		// The fold environment for everything this leaf's OWN nested mounts
+		// contribute (esm-spec §4.7 "Which environment a contribution folds
+		// against"): the ENCLOSING environment, overlaid with this leaf's CLOSED
+		// one for the names the LEAF DECLARES. §9.7.6 site 3 says the edge
+		// `bindings` that closed this leaf win over its own `default`s; the
+		// declared-names filter is the one site 4 applies to the backfill, so an
+		// outer metaparameter the leaf never declared cannot size an axis the leaf
+		// owns — and a name ONLY an outer scope declares still folds against that
+		// outer scope, which is what the enclosing base is for. Without it such a
+		// contribution stays symbolic, and this binding's typed `IndexSet` cannot
+		// hold a symbolic `size` at all.
+		//
+		// Without the overlay one resolved document disagrees with ITSELF: an
+		// axis the leaf declares folds to the bound value while an axis its own
+		// nested mount contributes folds to the leaf's unbound default.
+		childFoldEnv := map[string]int64{}
+		for k, v := range rootEnv {
+			childFoldEnv[k] = v
+		}
+		if decls, ok := view["metaparameters"].(map[string]any); ok {
+			for name := range decls {
+				if v, bound := childMeta[name]; bound {
+					childFoldEnv[name] = v
+				}
+			}
+		}
+
 		// esm-spec §4.7: a `{ref}` resolves "before validation or any other
 		// processing", so the referenced document's OWN nested mounts are
 		// inlined HERE, ahead of the §9.7.10 injection and the §9.6.3 fixpoint
@@ -663,14 +690,7 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 					// inlined at this entry's pointer — best-effort deeper prefix (not
 					// a corpus-pinned location).
 					nestedPrefix := fmt.Sprintf("%s/%s/subsystems", pathPrefix, key)
-					// `childMeta`, not `rootEnv`, in the fold-environment slot:
-					// these contributions land in the LEAF's registry, and a
-					// §4.7 merge folds against the environment of whatever
-					// registry it lands in (esm-spec §4.7 "Index-set merge").
-					// Folding them against the ROOT's environment instead let an
-					// assembler's unrelated metaparameter of the same name size
-					// an axis the leaf owns.
-					if err := resolveSubsystemMap(subs, refBasePath, visited, leafRegistry, childMeta, apiMeta, childMeta, nestedPrefix, subsystemMount); err != nil {
+					if err := resolveSubsystemMap(subs, refBasePath, visited, leafRegistry, childMeta, apiMeta, childFoldEnv, nestedPrefix, subsystemMount); err != nil {
 						return fmt.Errorf("%s %q: resolving nested refs in %q: %w", form.noun, key, refKey, err)
 					}
 				}
@@ -693,10 +713,8 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 		// recursion runs through resolveSubsystemMap, so `visited` gives it the
 		// same path-scoped cycle detection every other edge gets. Matches the
 		// Rust reference, which composes at both forms.
-		// `childMeta` in the fold-environment slot for the same reason as the
-		// subsystem walk above: these land in the LEAF's registry.
 		if err := inlineNestedTopLevelModelRefs(view, refBasePath, visited, leafRegistry, childMeta, apiMeta,
-			childMeta, fmt.Sprintf("%s/%s/models", pathPrefix, key)); err != nil {
+			childFoldEnv, fmt.Sprintf("%s/%s/models", pathPrefix, key)); err != nil {
 			return fmt.Errorf("%s %q: resolving nested refs in %q: %w", form.noun, key, refKey, err)
 		}
 

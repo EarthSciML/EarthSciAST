@@ -1,0 +1,15 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "MountEdgeFoldToplevel",
+    "description": "Mounts the mid component at the top-level `models.<k>` form with `bindings: {NLEV: 7}`, overriding its default of 4. `own` and `lev` must both be 7."
+  },
+  "models": {
+    "M": {
+      "ref": "./mount_edge_fold_mid.esm",
+      "bindings": {
+        "NLEV": 7
+      }
+    }
+  }
+}

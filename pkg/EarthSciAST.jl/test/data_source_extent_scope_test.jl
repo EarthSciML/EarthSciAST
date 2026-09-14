@@ -354,4 +354,21 @@ end
         @test err.code == ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME
         @test occursin("N_RECS", err.message)
     end
+
+    @testset "a leaf's nested contribution folds at the edge-bound value" begin
+        # A leaf declares NLEV default 4, an axis `own` of its own sized by it,
+        # and mounts a component contributing `lev`, also sized by NLEV. The leaf
+        # is mounted with `bindings: {NLEV: 7}`. §9.7.6 site 3: the edge binding
+        # wins over the leaf's default, so BOTH axes are 7; esm-spec §4.7: `lev`
+        # lands in the leaf's scope and folds against the leaf's closed
+        # environment, not the root's. Before the fix this binding gave 7 at the
+        # subsystem form and aborted with `MethodError(Int64, ("NLEV",))` at the
+        # top-level form, where the spliced leaf's own subsystem refs were
+        # resolved later in the ROOT's scope.
+        for name in ("mount_edge_fold_toplevel.esm", "mount_edge_fold_subsystem.esm")
+            f = _extent_load(name)
+            @test f.index_sets["own"].size == 7
+            @test f.index_sets["lev"].size == 7
+        end
+    end
 end

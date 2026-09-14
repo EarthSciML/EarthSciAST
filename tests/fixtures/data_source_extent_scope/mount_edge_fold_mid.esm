@@ -1,0 +1,47 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "MountEdgeFoldMid",
+    "description": "Declares NLEV default 4, an axis `own` of its own sized by it, and mounts the inner component whose axis `lev` is sized by it too. Mounted with an edge binding, both axes must fold to the BOUND value (esm-spec §9.7.6 site 3, §4.7)."
+  },
+  "metaparameters": {
+    "NLEV": {
+      "type": "integer",
+      "default": 4,
+      "description": "Levels."
+    }
+  },
+  "models": {
+    "Mid": {
+      "system_kind": "nonlinear",
+      "variables": {
+        "z": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Mid-local observed."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "z",
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": 0.0
+          }
+        }
+      ],
+      "subsystems": {
+        "Inner": {
+          "ref": "./mount_edge_fold_inner.esm"
+        }
+      }
+    }
+  },
+  "index_sets": {
+    "own": {
+      "kind": "interval",
+      "size": "NLEV"
+    }
+  }
+}

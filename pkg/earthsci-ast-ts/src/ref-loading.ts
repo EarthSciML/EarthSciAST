@@ -556,6 +556,7 @@ function resolveRefDocument(
     leafRegistry: Record<string, unknown>,
     leafEnv: Readonly<Record<string, number>>,
   ) => void,
+  enclosingEnv: Readonly<Record<string, number>> = {},
 ): EsmFile {
   const mountLabel =
     mountForm === 'subsystem' ? `Subsystem ref '${ref}'` : `Top-level model ref '${ref}'`
@@ -589,7 +590,16 @@ function resolveRefDocument(
   // it. Merging here would put the contribution back before the close, which is
   // exactly what the merge-order fix removed.
   const leafRegistry: Record<string, unknown> = {}
-  const leafEnv = leafClosedEnv(parsed, bindings)
+  // esm-spec §4.7 "Two mount forms, one mechanism": the loader-API bindings
+  // (§9.7.6 site 4) backfill this edge's close for the names the LEAF declares,
+  // and an explicit edge binding wins over them. Computed HERE, before the
+  // nested walk, because the fold environment below is built from it.
+  const effectiveBindings = { ...backfillLeafBindings(parsed, apiMeta), ...bindings }
+  // The fold environment for everything this leaf's OWN mounts contribute:
+  // the ENCLOSING environment overlaid with this leaf's CLOSED one, for the names
+  // the leaf declares (esm-spec §4.7 "Which environment a contribution folds
+  // against"). See `childFoldEnv`.
+  const leafEnv = childFoldEnv(enclosingEnv, leafClosedEnv(parsed, effectiveBindings))
   if (resolveNestedMounts) resolveNestedMounts(parsed, leafRegistry, leafEnv)
   // esm-spec §9.7.10 form A: fold the subsystem-ref edge's injected imports
   // into the referenced component's scope before resolution — and, because the
@@ -608,7 +618,6 @@ function resolveRefDocument(
   // forwarding the mounting document's declared defaults instead would let an
   // assembler's unrelated metaparameter silently resize a leaf axis this edge
   // never bound. An explicit edge `binding` overrides the backfill.
-  const effectiveBindings = { ...backfillLeafBindings(machineryInput, apiMeta), ...bindings }
   // `resolveTemplateMachinery` returns null when the document carries no
   // §9.7 machinery (and rejects non-empty bindings against such a document
   // with `template_import_unknown_name`).
@@ -663,12 +672,37 @@ function leafClosedEnv(leaf: EsmFile, bindings: Record<string, number>): Record<
   const decls = (leaf as { metaparameters?: unknown }).metaparameters
   if (typeof decls === 'object' && decls !== null && !Array.isArray(decls)) {
     for (const [name, d] of Object.entries(decls as Record<string, unknown>)) {
-      if (typeof d !== 'object' || d === null) continue
-      const def = (d as { default?: unknown }).default
-      if (typeof def === 'number' && Number.isInteger(def)) env[name] = def
+      // Only the names the leaf DECLARES — the same filter §9.7.6 site 4
+      // applies to the backfill — each at its default, overlaid by the binding
+      // that closes it when there is one (site 3: the binding wins).
+      if (typeof d === 'object' && d !== null) {
+        const def = (d as { default?: unknown }).default
+        if (typeof def === 'number' && Number.isInteger(def)) env[name] = def
+      }
+      const bound = bindings[name]
+      if (bound !== undefined) env[name] = bound
     }
   }
-  return { ...env, ...bindings }
+  return env
+}
+
+/**
+ * The fold environment for everything a mounted leaf's OWN mounts contribute
+ * (esm-spec §4.7 "Which environment a contribution folds against"): the
+ * ENCLOSING environment, overlaid with the leaf's CLOSED one.
+ *
+ * The leaf's environment holds only the names it DECLARES, so an outer
+ * metaparameter the leaf never declared cannot size an axis the leaf owns, and a
+ * name ONLY an outer scope declares still folds against that outer scope. Without
+ * the overlay one resolved document disagrees with itself — an axis the leaf
+ * declares folds to the bound value, an axis its own nested mount contributes to
+ * the unbound default.
+ */
+function childFoldEnv(
+  enclosing: Readonly<Record<string, number>>,
+  leafClosed: Readonly<Record<string, number>>,
+): Readonly<Record<string, number>> {
+  return { ...enclosing, ...leafClosed }
 }
 
 /**
@@ -780,6 +814,7 @@ function resolveRefEdge(
     refBasePath: string,
     leafEnv: Readonly<Record<string, number>>,
   ) => void,
+  enclosingEnv: Readonly<Record<string, number>> = {},
 ): void {
   const chainKey = normalizeRef(ref, basePath)
 
@@ -817,6 +852,7 @@ function resolveRefEdge(
         ? (leaf, leafRegistry, leafEnv) =>
             resolveNestedMounts(leaf, leafRegistry, refBasePath, leafEnv)
         : undefined,
+      enclosingEnv,
     )
     inline(parsed, refBasePath)
   } finally {
@@ -847,12 +883,11 @@ function walkSubsystemRefs(
   ) => void,
   onRecurse: (subsystem: unknown, subName: string, pointer: string) => void,
   apiMeta: Readonly<Record<string, number>>,
+  rootEnv: Readonly<Record<string, number>>,
 ): void {
-  // No `rootEnv` here any more. The only thing this walker used it for was
-  // folding a nested mount's contribution, and those contributions now land in
-  // the LEAF's registry and fold against the LEAF's close (esm-spec §4.7
-  // "Which environment it folds against"). The root's own merges still fold
-  // against the root's environment, in `onRef`, which carries its own.
+  // `rootEnv` is the ENCLOSING environment for each leaf mounted here: the base
+  // its own nested contributions fold against, overlaid with the leaf's closed
+  // one (esm-spec §4.7 "Which environment a contribution folds against").
   for (const [subName, subsystem] of Object.entries(subsystems)) {
     const sub = subsystem as RefEdge
     const ref = sub.ref
@@ -880,9 +915,8 @@ function walkSubsystemRefs(
         // and the §9.6.3 fixpoint, so the fixpoint reaches their
         // rewrite-targets (issue #311) and so `onRef`'s extraction cannot pick
         // an UNRESOLVED `{ ref }` edge and splice it in as the component.
-        // `leafEnv`, not `rootEnv`: these contributions land in the LEAF's
-        // registry, and a §4.7 merge folds against the environment of whatever
-        // registry it lands in (esm-spec §4.7 "Index-set merge").
+        // `leafEnv` is this leaf's fold environment — the enclosing one
+        // overlaid with the leaf's closed one (see `childFoldEnv`).
         (leaf, leafRegistry, leafBasePath, leafEnv) =>
           resolveLeafNestedMounts(
             leaf,
@@ -895,6 +929,7 @@ function walkSubsystemRefs(
             apiMeta,
             leafEnv,
           ),
+        rootEnv,
       )
     } else {
       // Even without a ref, recurse into nested subsystems.
@@ -999,7 +1034,7 @@ function inlineTopLevelModelRef(
     },
     apiMeta,
     'top-level model',
-    // `leafEnv`, not `rootEnv`, for the same reason as the subsystem form.
+    // `leafEnv` is this leaf's fold environment, as for the subsystem form.
     (leaf, leafRegistry, leafBasePath, leafEnv) =>
       resolveLeafNestedMounts(
         leaf,
@@ -1012,6 +1047,7 @@ function inlineTopLevelModelRef(
         apiMeta,
         leafEnv,
       ),
+    rootEnv,
   )
 }
 
@@ -1190,6 +1226,7 @@ function resolveModelRefs(
         rootEnv,
       ),
     apiMeta,
+    rootEnv,
   )
 }
 
@@ -1246,6 +1283,7 @@ function resolveReactionSystemRefs(
         rootEnv,
       ),
     apiMeta,
+    rootEnv,
   )
 }
 

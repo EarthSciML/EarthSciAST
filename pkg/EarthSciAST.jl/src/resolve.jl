@@ -161,9 +161,11 @@ function _load_document(raw_data, base_path::String;
     # what stops the two mount forms from answering the same document
     # differently (§4.7 "Two mount forms, one mechanism").
     staged_isets = OrderedDict{String,Any}()
+    model_envs = Dict{String,Dict{String,Int}}()
     inlined_m = _inline_toplevel_model_refs(raw_data, base_path;
                                             metaparameters=metaparameters,
-                                            staged=staged_isets)
+                                            staged=staged_isets,
+                                            model_envs=model_envs)
     rs_src = inlined_m === nothing ? raw_data : inlined_m
     inlined_r = _inline_toplevel_reaction_system_refs(rs_src, base_path)
     inlined = inlined_r !== nothing ? inlined_r : inlined_m
@@ -214,7 +216,7 @@ function _load_document(raw_data, base_path::String;
     # merges deep-equal-or-`subsystem_index_set_conflict`.
     _merge_staged_index_sets!(file.index_sets, staged_isets, root_env)
     resolve_subsystem_refs!(file, base_path; loader_metaparameters=metaparameters,
-                            root_env=root_env)
+                            root_env=root_env, model_envs=model_envs)
     return file
 end
 
@@ -803,7 +805,8 @@ caught. Defaults to a fresh set for the document entry point.
 function _inline_toplevel_model_refs(raw_data, base_path::String;
         metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}(),
         visited::Set{String}=Set{String}(),
-        staged::Union{Nothing,AbstractDict{String,Any}}=nothing)
+        staged::Union{Nothing,AbstractDict{String,Any}}=nothing,
+        model_envs::Union{Nothing,AbstractDict{String,Dict{String,Int}}}=nothing)
     models = _get_field(raw_data, :models, nothing)
     models === nothing && return nothing
     has_stub = any(values(models)) do m
@@ -814,7 +817,8 @@ function _inline_toplevel_model_refs(raw_data, base_path::String;
     _inline_toplevel_model_refs!(native, base_path, visited;
                                  parent_meta=_root_metaparameter_env(raw_data, metaparameters),
                                  api_meta=metaparameters,
-                                 staged=staged)
+                                 staged=staged,
+                                 model_envs=model_envs)
     return native
 end
 
@@ -910,6 +914,22 @@ function _resolve_mount_edge_core(entry::AbstractDict, ref::String, refpath::Str
     # root makes. `leaf_env` is this leaf's CLOSED environment: its declared
     # defaults overlaid with this edge's `bindings`, which win (§9.7.6 site 3).
     leaf_env = _root_metaparameter_env(comp, bindings)
+    # The fold environment for what those nested mounts contribute (esm-spec §4.7
+    # "Which environment a contribution folds against"): the ENCLOSING environment
+    # overlaid with this leaf's CLOSED one — its declared defaults, then the
+    # bindings that close it — for the names the leaf DECLARES. The enclosing base
+    # is what lets a name ONLY an outer scope declares still fold against that
+    # outer scope; the declared-names filter is what stops an outer metaparameter
+    # the leaf never declared from sizing an axis the leaf owns. Kept apart from
+    # `leaf_env`, which nested edge binding EXPRESSIONS fold against and which
+    # must stay the leaf's own.
+    leaf_decls = let md = get(comp, "metaparameters", nothing)
+        md isa AbstractDict ? Set(String[string(k) for k in keys(md)]) : Set{String}()
+    end
+    leaf_fold_env = Dict{String,Int}(String(k) => Int(v) for (k, v) in parent_meta)
+    for (k, v) in leaf_env
+        k in leaf_decls && (leaf_fold_env[k] = v)
+    end
     leaf_staged = OrderedDict{String,Any}()
     _inline_toplevel_model_refs!(comp, compdir, visited;
                                  parent_meta=leaf_env, api_meta=api_meta, staged=leaf_staged)
@@ -968,7 +988,7 @@ function _resolve_mount_edge_core(entry::AbstractDict, ref::String, refpath::Str
         is isa AbstractDict ? Set{String}(String(k) for k in keys(is)) : Set{String}()
     end
     if !isempty(leaf_staged)
-        folded = OrderedDict{String,Any}(String(n) => fold_mount_contribution(d, leaf_env)
+        folded = OrderedDict{String,Any}(String(n) => fold_mount_contribution(d, leaf_fold_env)
                                          for (n, d) in leaf_staged)
         _merge_native_index_sets!(comp, OrderedDict{String,Any}("index_sets" => folded), ref)
     end
@@ -988,7 +1008,7 @@ function _resolve_mount_edge_core(entry::AbstractDict, ref::String, refpath::Str
         comp = apply_mount_index_set_rename(comp, rename_raw, mount_noun;
                                             nested_contributed=nested_contributed)
     end
-    return comp, compdir
+    return comp, compdir, leaf_fold_env
 end
 
 """
@@ -1082,7 +1102,7 @@ function _inline_model_subsystems!(native::AbstractDict{String,Any}, model::Abst
                     isfile(refpath) || throw(SubsystemRefError(
                         "Subsystem reference '$(ref)' could not be resolved — file does not exist";
                         code=ERROR_CODES.UNRESOLVED_SUBSYSTEM_REF, ref=ref))
-                    comp, compdir = _resolve_mount_edge_core(sub, ref, refpath, base_path, visited;
+                    comp, compdir, _ = _resolve_mount_edge_core(sub, ref, refpath, base_path, visited;
                         mount_noun="subsystem ref '$(ref)'", parent_meta=parent_meta,
                         api_meta=api_meta)
                     cmodels = get(comp, "models", nothing)
@@ -1162,7 +1182,8 @@ function _inline_toplevel_model_refs!(native::AbstractDict{String,Any}, base_pat
                                       visited::Set{String};
         parent_meta::AbstractDict{String,<:Integer}=Dict{String,Int}(),
         api_meta::AbstractDict{String,<:Integer}=Dict{String,Int}(),
-        staged::Union{Nothing,AbstractDict{String,Any}}=nothing)
+        staged::Union{Nothing,AbstractDict{String,Any}}=nothing,
+        model_envs::Union{Nothing,AbstractDict{String,Dict{String,Int}}}=nothing)
     models = get(native, "models", nothing)
     models isa AbstractDict || return
     for (name, entry) in collect(models)
@@ -1185,7 +1206,7 @@ function _inline_toplevel_model_refs!(native::AbstractDict{String,Any}, base_pat
         end
         push!(visited, refpath)
         try
-            comp, compdir = _resolve_mount_edge_core(entry, ref, refpath, base_path, visited;
+            comp, compdir, leaf_child_env = _resolve_mount_edge_core(entry, ref, refpath, base_path, visited;
                 mount_noun=mount_noun, parent_meta=parent_meta, api_meta=api_meta)
 
             # The leaf's own nested mounts — both forms — were inlined inside
@@ -1217,6 +1238,9 @@ function _inline_toplevel_model_refs!(native::AbstractDict{String,Any}, base_pat
             # the LEAF's directory, not at the parent it is about to land in.
             _absolutize_nested_refs!(cmodel, compdir)
             models[name] = cmodel
+            # The root walk resolves this spliced model's `subsystems.<k>` refs
+            # later; they must fold in THIS leaf's scope, not the root's.
+            model_envs === nothing || (model_envs[String(name)] = leaf_child_env)
             # esm-spec §4.7 "Index-set merge", pipeline step (3): the leaf's
             # document-scoped `index_sets` join THIS document's registry, exactly
             # as they do at a subsystem-ref edge (`_resolve_subsystem_ref`) — the
@@ -1490,10 +1514,11 @@ Circular references are detected and raise a `SubsystemRefError`.
 """
 function resolve_subsystem_refs!(file::EsmFile, base_path::String;
         loader_metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}(),
-        root_env::AbstractDict{String,<:Integer}=Dict{String,Int}())
+        root_env::AbstractDict{String,<:Integer}=Dict{String,Int}(),
+        model_envs::AbstractDict{String,<:AbstractDict{String,Int}}=Dict{String,Dict{String,Int}}())
     visited = Set{String}()
     _resolve_refs_in_file!(file, base_path, visited; api_meta=loader_metaparameters,
-                           root_env=root_env)
+                           root_env=root_env, model_envs=model_envs)
 end
 
 """
@@ -1503,14 +1528,18 @@ Internal recursive resolver for subsystem references in an EsmFile.
 """
 function _resolve_refs_in_file!(file::EsmFile, base_path::String, visited::Set{String};
         api_meta::AbstractDict{String,<:Integer}=Dict{String,Int}(),
-        root_env::AbstractDict{String,<:Integer}=Dict{String,Int}())
+        root_env::AbstractDict{String,<:Integer}=Dict{String,Int}(),
+        model_envs::AbstractDict{String,<:AbstractDict{String,Int}}=Dict{String,Dict{String,Int}}())
     # Resolve model subsystem refs. The document's own index-set registry is
     # threaded down the walk so every referenced subsystem file's top-level
     # `index_sets` merge into it (esm-spec §4.7, mirroring §9.7.5).
     if file.models !== nothing
         for (name, model) in file.models
+            # A top-level-mounted leaf's own subsystem refs fold in THAT leaf's
+            # closed scope (recorded by the inliner), not the root's (esm-spec §4.7).
             _resolve_model_refs!(file.models, name, model, base_path, visited,
-                                 file.index_sets; api_meta=api_meta, root_env=root_env)
+                                 file.index_sets; api_meta=api_meta,
+                                 root_env=get(model_envs, String(name), root_env))
         end
     end
 
