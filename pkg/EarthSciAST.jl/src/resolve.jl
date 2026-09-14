@@ -109,7 +109,8 @@ apart — the only difference between them is which `base_path` anchors the refs
 """
 function _load_document(raw_data, base_path::String;
                         metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}(),
-                        injected_imports::AbstractVector=Any[])::EsmFile
+                        injected_imports::AbstractVector=Any[],
+                        native_subsystem_refs::Bool=true)::EsmFile
     # esm-spec §9.7.6 site 4, widened past "the root document's" (§4.7): the
     # metaparameter names every document this one MOUNTS declares. Computed on
     # the AUTHORED tree — the inliner just below CONSUMES the top-level mount
@@ -161,10 +162,12 @@ function _load_document(raw_data, base_path::String;
     # what stops the two mount forms from answering the same document
     # differently (§4.7 "Two mount forms, one mechanism").
     staged_isets = OrderedDict{String,Any}()
+    staged_refs = Dict{String,String}()   # which mount contributed each staged axis
     model_envs = Dict{String,Dict{String,Int}}()
     inlined_m = _inline_toplevel_model_refs(raw_data, base_path;
                                             metaparameters=metaparameters,
                                             staged=staged_isets,
+                                            staged_refs=staged_refs,
                                             model_envs=model_envs)
     rs_src = inlined_m === nothing ? raw_data : inlined_m
     inlined_r = _inline_toplevel_reaction_system_refs(rs_src, base_path)
@@ -184,11 +187,14 @@ function _load_document(raw_data, base_path::String;
     # static `extent` check above were read off the authored tree. Only CONTENT
     # moves; the contributions are STAGED with the top-level form's and merged
     # after the close, just below `_load_parsed`.
-    if _document_has_subsystem_refs(doc)
+    # `native_subsystem_refs=false` skips this pass so the typed walk below does
+    # all of it — only `native_typed_agreement_test.jl` asks for that.
+    if native_subsystem_refs && _document_has_subsystem_refs(doc)
         doc = _to_ordered(doc)
         _inline_subsystem_refs!(doc, base_path, Set{String}();
                                 parent_meta=_root_metaparameter_env(raw_data, metaparameters),
-                                api_meta=metaparameters, staged=staged_isets)
+                                api_meta=metaparameters, staged=staged_isets,
+                                staged_refs=staged_refs)
     end
     # esm-spec §8.2.1: resolve every `data_sources[*].source` location against
     # this document's own directory, before the typed pipeline sees the field,
@@ -214,7 +220,7 @@ function _load_document(raw_data, base_path::String;
     # form: the root has now closed and folded its own `index_sets`, so each
     # staged contribution folds against that same closed environment and then
     # merges deep-equal-or-`subsystem_index_set_conflict`.
-    _merge_staged_index_sets!(file.index_sets, staged_isets, root_env)
+    _merge_staged_index_sets!(file.index_sets, staged_isets, root_env; refs=staged_refs)
     resolve_subsystem_refs!(file, base_path; loader_metaparameters=metaparameters,
                             root_env=root_env, model_envs=model_envs)
     return file
@@ -235,23 +241,20 @@ declarations agree instead of colliding (issue #198).
 """
 function _merge_staged_index_sets!(registry::AbstractDict{String,IndexSet},
                                    staged::AbstractDict{String,Any},
-                                   env::AbstractDict{String,<:Integer})
+                                   env::AbstractDict{String,<:Integer};
+                                   refs::AbstractDict{String,String}=Dict{String,String}())
     isempty(staged) && return registry
     for (n, raw) in pairs(staged)
         decl = coerce_index_set(fold_mount_contribution(raw, env))
         if haskey(registry, n)
+            # Named by the mount that contributed it, in the typed walk's words:
+            # this merge now receives BOTH mount forms' contributions, so the
+            # form cannot be assumed.
             _index_set_deep_equal(registry[n], decl) ||
                 throw(ExpressionTemplateError(ERROR_CODES.SUBSYSTEM_INDEX_SET_CONFLICT,
-                    "index set '$(n)' from a top-level `models.<k>` mount " *
-                    "($(_index_set_show(decl))) collides with a non-deep-equal " *
-                    "declaration already in the importing document's registry " *
-                    "($(_index_set_show(registry[n]))) — contributed by the " *
-                    "document's own `index_sets` or by an earlier mount. A " *
-                    "mounted file's top-level index_sets merge into the importing " *
-                    "document's registry; deep-equal redeclaration is idempotent, " *
-                    "a size/kind disagreement is a load-time error (esm-spec §4.7). " *
-                    "If the two are genuinely different axes that happen to share " *
-                    "a name, rename one at its mount edge with `index_set_rename`."))
+                    _subsystem_index_set_conflict_message(n, get(refs, String(n), "a §4.7 mount"),
+                                                          _index_set_show(decl),
+                                                          _index_set_show(registry[n]))))
         else
             registry[n] = decl
         end
@@ -747,7 +750,8 @@ A three-way verdict split on that one document, recorded (not fixed) in
 which is what the merge exists to make possible, loads in all three.
 """
 function _merge_native_index_sets!(native::AbstractDict{String,Any}, comp, ref::String;
-                                  staged::Union{Nothing,AbstractDict{String,Any}}=nothing)
+                                  staged::Union{Nothing,AbstractDict{String,Any}}=nothing,
+                                  staged_refs::Union{Nothing,AbstractDict{String,String}}=nothing)
     loaded = get(comp, "index_sets", nothing)
     (loaded isa AbstractDict && !isempty(loaded)) || return native
     # Deferred at the ROOT: the contribution is STAGED, not merged, until the
@@ -774,6 +778,8 @@ function _merge_native_index_sets!(native::AbstractDict{String,Any}, comp, ref::
                 "{\"ref\": \"$(ref)\", \"index_set_rename\": {\"$(n)\": \"$(n)_2\"}}."))
         else
             registry[n] = decl
+            # Which mount contributed it, so the deferred merge can name it.
+            staged_refs === nothing || (staged_refs[String(n)] = ref)
         end
     end
     return native
@@ -806,6 +812,7 @@ function _inline_toplevel_model_refs(raw_data, base_path::String;
         metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}(),
         visited::Set{String}=Set{String}(),
         staged::Union{Nothing,AbstractDict{String,Any}}=nothing,
+        staged_refs::Union{Nothing,AbstractDict{String,String}}=nothing,
         model_envs::Union{Nothing,AbstractDict{String,Dict{String,Int}}}=nothing)
     models = _get_field(raw_data, :models, nothing)
     models === nothing && return nothing
@@ -818,6 +825,7 @@ function _inline_toplevel_model_refs(raw_data, base_path::String;
                                  parent_meta=_root_metaparameter_env(raw_data, metaparameters),
                                  api_meta=metaparameters,
                                  staged=staged,
+                                 staged_refs=staged_refs,
                                  model_envs=model_envs)
     return native
 end
@@ -1066,24 +1074,30 @@ them for all five bindings (`tests/invalid/expected_errors.json`): the same
 codes, the same messages, and the same mount site stamped by `_with_mount_site`
 so `load_failure_structural_error` renders `/models/<parent>/subsystems/<sub>`.
 """
+# One of TWO paths for the §4.7 `subsystems.<k>` form: this native pass serves
+# LOADING; `_resolve_refs_in_file!` (the typed walk) serves remote refs and direct
+# callers of `resolve_subsystem_refs!`. `test/native_typed_agreement_test.jl` runs
+# both over the local-ref corpus and fails if they disagree.
 function _inline_subsystem_refs!(native::AbstractDict{String,Any}, base_path::String,
                                  visited::Set{String};
                                  parent_meta::AbstractDict{String,<:Integer}=Dict{String,Int}(),
                                  api_meta::AbstractDict{String,<:Integer}=Dict{String,Int}(),
-                                 staged::Union{Nothing,AbstractDict{String,Any}}=nothing)
+                                 staged::Union{Nothing,AbstractDict{String,Any}}=nothing,
+                                 staged_refs::Union{Nothing,AbstractDict{String,String}}=nothing)
     models = get(native, "models", nothing)
     models isa AbstractDict || return native
     for (mname, model) in collect(models)
         model isa AbstractDict || continue
         _inline_model_subsystems!(native, model, String(mname), base_path, visited;
-                                  parent_meta=parent_meta, api_meta=api_meta, staged=staged)
+                                  parent_meta=parent_meta, api_meta=api_meta, staged=staged,
+                                  staged_refs=staged_refs)
     end
     return native
 end
 
 function _inline_model_subsystems!(native::AbstractDict{String,Any}, model::AbstractDict,
                                    parent_name::String, base_path::String, visited::Set{String};
-                                   parent_meta, api_meta, staged)
+                                   parent_meta, api_meta, staged, staged_refs=nothing)
     subs = get(model, "subsystems", nothing)
     subs isa AbstractDict || return
     for (sub_key, sub) in collect(subs)
@@ -1113,7 +1127,7 @@ function _inline_model_subsystems!(native::AbstractDict{String,Any}, model::Abst
                     cmodel = first(values(cmodels))
                     _absolutize_nested_refs!(cmodel, compdir)
                     subs[sub_key] = cmodel
-                    _merge_native_index_sets!(native, comp, ref; staged=staged)
+                    _merge_native_index_sets!(native, comp, ref; staged=staged, staged_refs=staged_refs)
                 finally
                     delete!(visited, canonical)
                 end
@@ -1132,7 +1146,8 @@ function _inline_model_subsystems!(native::AbstractDict{String,Any}, model::Abst
             # An inline subsystem: recurse, with this subsystem as the parent — the
             # typed walk's `_resolve_model_refs!` names the mount site the same way.
             _inline_model_subsystems!(native, sub, sub_name, base_path, visited;
-                                      parent_meta=parent_meta, api_meta=api_meta, staged=staged)
+                                      parent_meta=parent_meta, api_meta=api_meta, staged=staged,
+                                      staged_refs=staged_refs)
         end
     end
 end
@@ -1183,6 +1198,7 @@ function _inline_toplevel_model_refs!(native::AbstractDict{String,Any}, base_pat
         parent_meta::AbstractDict{String,<:Integer}=Dict{String,Int}(),
         api_meta::AbstractDict{String,<:Integer}=Dict{String,Int}(),
         staged::Union{Nothing,AbstractDict{String,Any}}=nothing,
+        staged_refs::Union{Nothing,AbstractDict{String,String}}=nothing,
         model_envs::Union{Nothing,AbstractDict{String,Dict{String,Int}}}=nothing)
     models = get(native, "models", nothing)
     models isa AbstractDict || return
@@ -1252,7 +1268,7 @@ function _inline_toplevel_model_refs!(native::AbstractDict{String,Any}, base_pat
             # by-name blocks below, the importer does NOT silently win a clash: a
             # non-deep-equal collision is the load-time error
             # `subsystem_index_set_conflict`.
-            _merge_native_index_sets!(native, comp, ref; staged=staged)
+            _merge_native_index_sets!(native, comp, ref; staged=staged, staged_refs=staged_refs)
             # Merge the by-name blocks the model's AST references; the parent wins
             # on a key clash (its own definitions take precedence).
             for blk in ("function_tables", "data_sources", "enums")
@@ -1526,6 +1542,10 @@ end
 
 Internal recursive resolver for subsystem references in an EsmFile.
 """
+# One of TWO paths for the §4.7 `subsystems.<k>` form: this typed walk serves
+# remote refs and direct callers of `resolve_subsystem_refs!`; `_inline_subsystem_refs!`
+# (the native pass) serves LOADING. `test/native_typed_agreement_test.jl` runs both
+# over the local-ref corpus and fails if they disagree.
 function _resolve_refs_in_file!(file::EsmFile, base_path::String, visited::Set{String};
         api_meta::AbstractDict{String,<:Integer}=Dict{String,Int}(),
         root_env::AbstractDict{String,<:Integer}=Dict{String,Int}(),
@@ -1602,6 +1622,27 @@ _index_set_deep_equal(a::IndexSet, b::IndexSet) =
     a.member_factor == b.member_factor
 
 # One-line display of an IndexSet for the conflict diagnostic.
+# The `subsystem_index_set_conflict` message for a mounted document's axis `n`,
+# contributed by the mount of `ref`, colliding with a non-deep-equal declaration
+# already in the importing document's registry. ONE builder for every merge site —
+# the typed walk (`_merge_subsystem_index_sets!`) and the native pass's deferred
+# merge (`_merge_staged_index_sets!`) — so the two report the same failure in the
+# same words; `native_typed_agreement_test.jl` compares them.
+_subsystem_index_set_conflict_message(n, ref, decl_show, existing_show) =
+    "index set '$(n)' from subsystem ref '$(ref)' " *
+    "($(decl_show)) collides with a non-deep-equal " *
+    "declaration already in the importing document's registry " *
+    "($(existing_show)) — contributed by the " *
+    "document's own `index_sets` or by an earlier mount. A " *
+    "referenced subsystem file's top-level index_sets merge into " *
+    "the importing document's registry; deep-equal redeclaration " *
+    "is idempotent, a size/kind disagreement is a load-time error " *
+    "(esm-spec §4.7). If the two are genuinely different axes that " *
+    "happen to share a name, rename one at its mount edge with " *
+    "`index_set_rename` (esm-spec §4.7 \"Mount-edge index-set " *
+    "renaming\"), e.g. {\"ref\": \"$(ref)\", " *
+    "\"index_set_rename\": {\"$(n)\": \"$(n)_2\"}}."
+
 _index_set_show(s::IndexSet) =
     "kind=$(s.kind)" * (s.size === nothing ? "" : ", size=$(s.size)") *
     (s.members === nothing ? "" : ", members=$(s.members)") *
@@ -1627,19 +1668,8 @@ function _merge_subsystem_index_sets!(registry::AbstractDict{String,IndexSet},
         if haskey(registry, n)
             _index_set_deep_equal(registry[n], decl) ||
                 throw(ExpressionTemplateError(ERROR_CODES.SUBSYSTEM_INDEX_SET_CONFLICT,
-                    "index set '$(n)' from subsystem ref '$(ref)' " *
-                    "($(_index_set_show(decl))) collides with a non-deep-equal " *
-                    "declaration already in the importing document's registry " *
-                    "($(_index_set_show(registry[n]))) — contributed by the " *
-                    "document's own `index_sets` or by an earlier mount. A " *
-                    "referenced subsystem file's top-level index_sets merge into " *
-                    "the importing document's registry; deep-equal redeclaration " *
-                    "is idempotent, a size/kind disagreement is a load-time error " *
-                    "(esm-spec §4.7). If the two are genuinely different axes that " *
-                    "happen to share a name, rename one at its mount edge with " *
-                    "`index_set_rename` (esm-spec §4.7 \"Mount-edge index-set " *
-                    "renaming\"), e.g. {\"ref\": \"$(ref)\", " *
-                    "\"index_set_rename\": {\"$(n)\": \"$(n)_2\"}}."))
+                    _subsystem_index_set_conflict_message(n, ref, _index_set_show(decl),
+                                                          _index_set_show(registry[n]))))
         else
             registry[n] = decl
         end
