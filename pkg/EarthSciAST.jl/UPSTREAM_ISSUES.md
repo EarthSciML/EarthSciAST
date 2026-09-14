@@ -160,6 +160,64 @@ time. Neither changes execution time. Only #3217 changes an architectural option
 
 ## Worth reporting, not yet filed
 
+### `x / c` is rewritten to `x * fl(1/c)` on f64, and `floor` can then read one short
+
+**What happens.** The StableHLO pipeline's algebraic simplifier turns a division
+by a floating-point constant into a multiplication by its reciprocal, on `f64`,
+with no fast-math flag asked for. The optimized module for `floor.(x ./ 3600000.0)`
+is, in full:
+
+```mlir
+%cst = stablehlo.constant dense<2.7777777777777776E-7> : tensor<5xf64>
+%0 = stablehlo.multiply %arg0, %cst : tensor<5xf64>
+%1 = stablehlo.floor %0 : tensor<5xf64>
+```
+
+A reciprocal is a second rounding. `fl(1/3600000)` is below the true reciprocal,
+so `3600000.0 * fl(1/3600000)` is `0.9999999999999999` and the `floor` of it is
+`0` where the host's `floor(3600000.0 / 3600000.0)` is `1`. Measured on Reactant
+0.2.285 / CPU (PJRT), Julia 1.12.6:
+
+```julia
+using Reactant
+f(x) = floor.(x ./ 3600000.0)
+x = Reactant.ConcreteRArray([3600000.0, 7200000.0, 25200000.0, 21600000.0, 46800000.0])
+Array((Reactant.@compile sync=true f(x))(x))   # [0.0, 1.0, 6.0, 6.0, 13.0]
+floor.(Array(x) ./ 3600000.0)                  # [1.0, 2.0, 7.0, 6.0, 13.0]
+```
+
+The same thing happens for `c = 146097`. It is not every constant — `86400000`,
+`60000`, `1000`, `365`, `153` are all exact — which is what makes it hard to
+notice: most operands give the right answer and the ones on an exact multiple of
+`c` do not.
+
+**Why it is worth reporting.** `floor(a / b)` on exact integers is the standard
+spelling of floored integer division in a float-only IR, and it is EXACT under a
+correctly rounded divide (IEEE 754 §5.4), which is what makes the idiom safe to
+write. The rewrite silently withdraws that guarantee, and the failures land
+exactly on the round numbers a test is most likely to use and a model is most
+likely to care about — midnight, the top of the hour, the start of a 400-year
+era. A simplifier that only applied the rewrite when `1/c` is exactly
+representable (a power of two) would keep the optimization where it is free and
+drop it where it is not.
+
+**Where it bit us.** The closed `datetime.*` calendar
+(`src/registered_functions.jl`) decomposes `t_utc` with `floor(a/b)`, and both
+unsafe constants are divisors in it: `3600000` ms per hour and `146097` days per
+400-year era. Compiled through either backend, `datetime.hour` returned the
+previous hour at exactly the top of every hour. The host path was never wrong,
+so nothing in the interpreter's exhaustive `Dates` oracle
+(`test/datetime_arithmetic_test.jl`) could see it.
+
+**Our workaround.** `_cdiv` recovers the floor from the remainder rather than
+trusting the quotient: `r = a - q*b` is exact for exact-integer operands, and two
+selects repair any quotient that is within one unit of the truth. Branch-free,
+value-identical on the host, and independent of which constants a given
+simplifier decides are safe. See the note above `_cdiv` in
+`src/registered_functions.jl`, and the tier-level reading in
+`tests/conformance/compiled_rhs/README.md` (§"Readings taken", item 8), which is
+where the next binding to lower a calendar will look.
+
 ### `call_llvm_generator` recurses once per level of a recursive traced callee
 
 **What happens.** Reactant's interpreter rewrites every type-unstable call

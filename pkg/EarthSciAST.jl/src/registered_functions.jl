@@ -415,7 +415,33 @@ end
 # `q·2⁻⁵³ < 1/b` — that is, whenever `q·b = a` stays under `2⁵³`, which is the
 # SAME condition as `a` being an exact integer in the first place. No separate
 # magnitude bound to track: if the inputs are exact, the quotient is right.
-@inline _cdiv(a, b) = floor(a / b)
+#
+# THAT ARGUMENT ASSUMES A CORRECTLY ROUNDED DIVIDE, AND A COMPILED BACKEND IS
+# NOT OBLIGED TO GIVE ONE. XLA's algebraic simplifier rewrites `x / c` for a
+# constant `c` into `x * (1/c)`, and a reciprocal is a second rounding: for
+# `c = 3600000` (milliseconds per hour) `fl(1/c)` is just under the true
+# reciprocal, so at exactly one hour the product is 0.9999999999999999 and
+# `floor` reads the hour as 0. `c = 146097` (days per 400-year era) is the
+# calendar's other unsafe divisor. Nothing about the calendar is wrong there —
+# the DIVIDE is, by one unit in the last place — and the host path was never
+# affected, which is exactly what makes it the kind of bug a compiled lane
+# ships with: it fires only when the quotient is an exact integer, so most
+# times of day are right and the hour boundary is not.
+#
+# So the floor is RECOVERED from the remainder instead of trusted. `r = a - q*b`
+# is EXACT whenever `a` and `q*b` are exact integers below `2⁵³`, which the
+# precondition already guarantees, and the true floor is the unique `q` with
+# `0 ≤ r < b`. Two selects therefore repair any quotient that is within one
+# unit of the truth — which every divide of any kind is, correctly rounded or
+# not — and on a host, where `q` was already right, both selects are no-ops and
+# the value is bit-identical to what `floor(a / b)` returned before. Branch-free,
+# so it lowers to the same kind of program it did as a bare divide.
+@inline function _cdiv(a, b)
+    q = floor(a / b)
+    r = a - q * b
+    return ifelse(r < 0, q - oftype(q, 1),
+                  ifelse(r >= b, q + oftype(q, 1), q))
+end
 
 # Truncation toward zero, spelled with the two primitives the traced backends
 # already lower. `Base.trunc` would do on the host but is a third op to demand
