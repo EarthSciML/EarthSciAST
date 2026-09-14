@@ -165,7 +165,15 @@ pub fn resolve_subsystem_refs_with_metaparameters(
 ) -> Result<Map<String, Value>, DiagnosticError> {
     let root_meta = root_metaparameter_env(value, api_meta);
     let mut visited = HashSet::new();
-    walk_top_level(value, base_path, &mut visited, &root_meta, api_meta, true, &root_meta)
+    walk_top_level(
+        value,
+        base_path,
+        &mut visited,
+        &root_meta,
+        api_meta,
+        true,
+        &root_meta,
+    )
 }
 
 /// A one-line rendering of an index-set declaration for the collision message
