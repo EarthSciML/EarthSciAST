@@ -834,9 +834,15 @@ impl<'m> TapeBuilder<'m> {
     // `a`, `b` is the integer quotient whenever `|a| << 2^52`, because the
     // division's <= 0.5 ulp error is then far smaller than the `1/b` gap that
     // separates a non-integral quotient from the integer below it. IEEE-754
-    // pins `floor`, `ceil`, `+`, `-`, `*` and `/` identically in the
-    // interpreter's kernels and in XLA, so the compiled lane returns the same
-    // bits rather than merely the same numbers.
+    // pins `floor`, `ceil`, `+`, `-` and `*` identically in the interpreter's
+    // kernels and in XLA, so the compiled lane returns the same bits rather
+    // than merely the same numbers.
+    //
+    // `/` IS THE ONE EXCEPTION, and it is why every floored and truncated
+    // division below recovers its quotient from the remainder instead of
+    // trusting it: a compiled backend may answer `x / c` with `x * fl(1/c)`,
+    // which is a second rounding, and at an exact-integer quotient that reads
+    // one short. See `dt_floor_div`.
     //
     // The reference reproduced step for step is `crate::registered_functions`
     // (Hinnant's `civil_from_days` for the calendar, Fliegel-van Flandern for
@@ -984,18 +990,67 @@ impl<'m> TapeBuilder<'m> {
         self.dt_select(neg, up, down)
     }
 
-    /// `floor(a / k)` — floored integer division (`k > 0`).
+    /// `floor(a / k)` — floored integer division (`k > 0`), with the quotient
+    /// RECOVERED FROM THE REMAINDER rather than trusted.
+    ///
+    /// The module header's argument — `floor(a / k)` on exact integers is the
+    /// exact integer quotient, because the division's rounding is far smaller
+    /// than the gap separating a non-integral quotient from the integer below
+    /// it — assumes a CORRECTLY ROUNDED DIVIDE, and a compiled backend is not
+    /// obliged to give one. XLA's algebraic simplifier rewrites `x / c` for a
+    /// constant `c` into `x * fl(1/c)`, and a reciprocal is a second rounding.
+    /// Of this family's divisors, `146097` (days per 400-year era) is the one
+    /// that does not survive it: `fl(1/146097)` is below the true reciprocal,
+    /// so a `z` sitting exactly on an era boundary comes back a hair under the
+    /// integer and `floor` reads the era one short. Nothing about the calendar
+    /// is wrong there — the DIVIDE is, by one unit in the last place — but the
+    /// result is a whole day of error in the date, which no tolerance class
+    /// covers and none should.
+    ///
+    /// It is also the kind of defect a compiled lane ships with: it fires only
+    /// where the quotient is an exact integer, so every other day of the era is
+    /// right, and the host path (which the A/B tests exercise) is never
+    /// affected at all.
+    ///
+    /// So the quotient is a CANDIDATE. `r = a - q*k` is exact whenever `a` and
+    /// `q*k` are exact integers below `2^53`, which this family's precondition
+    /// already guarantees, and the true floor is the unique `q` with
+    /// `0 <= r < k`. Two selects therefore repair any quotient within one unit
+    /// of the truth — which every divide of any kind is, correctly rounded or
+    /// not — and on a host, where `q` was already right, both are no-ops and
+    /// the value is bit for bit what the bare `floor(a / k)` returned. Branch
+    /// free, so it stays the same kind of program a bare divide was.
     fn dt_floor_div(&mut self, a: LV, k: f64) -> LResult<LV> {
-        let q = self.dt_op(BinCode::Div, a, k)?;
-        Ok(self.emit_un(UnCode::Floor, q))
+        let q = self.dt_op(BinCode::Div, a.clone(), k)?;
+        let q = self.emit_un(UnCode::Floor, q);
+        let whole = self.dt_op(BinCode::Mul, q.clone(), k)?;
+        let r = self.emit_bin(BinCode::Sub, a, whole)?;
+        let below = self.dt_op(BinCode::Lt, r.clone(), 0.0)?;
+        let above = self.dt_op(BinCode::Ge, r, k)?;
+        let down = self.dt_op(BinCode::Sub, q.clone(), 1.0)?;
+        let up = self.dt_op(BinCode::Add, q.clone(), 1.0)?;
+        let inner = self.dt_select(above, up, q)?;
+        self.dt_select(below, down, inner)
     }
 
     /// `a / k` rounded TOWARD ZERO — Rust's `i64` division, which the
     /// Fliegel-van Flandern formula depends on (using a floored division for
     /// its `(m - 14) / 12` term would shift January and February by a day).
+    ///
+    /// Built on [`Self::dt_floor_div`]'s repaired quotient rather than on a raw
+    /// one, for the reason spelled out there, and then stepped back toward zero
+    /// on the negative side: for `k > 0` the two roundings agree except where
+    /// `a` is negative AND the division does not come out even, and the
+    /// repaired remainder is exactly the evenness test.
     fn dt_trunc_div(&mut self, a: LV, k: f64) -> LResult<LV> {
-        let q = self.dt_op(BinCode::Div, a, k)?;
-        self.dt_trunc(q)
+        let q = self.dt_floor_div(a.clone(), k)?;
+        let whole = self.dt_op(BinCode::Mul, q.clone(), k)?;
+        let r = self.emit_bin(BinCode::Sub, a.clone(), whole)?; // exact, in [0, k)
+        let uneven = self.dt_op(BinCode::Gt, r, 0.0)?;
+        let neg = self.dt_op(BinCode::Lt, a, 0.0)?;
+        let step = self.emit_bin(BinCode::And, neg, uneven)?;
+        let up = self.dt_op(BinCode::Add, q.clone(), 1.0)?;
+        self.dt_select(step, up, q)
     }
 
     /// The reference casts the day count and the truncated seconds-of-day to

@@ -251,6 +251,19 @@ needs them:
    nothing. This is not a tolerance question — an hour that is one out is an
    error of 1.0 — so no class covers it and none should.
 
+   Rust's tape lowering hit the SAME defect independently and now recovers its
+   quotients the same way. Its divisors are different, because it decomposes
+   whole seconds rather than milliseconds: `x * fl(1/86400)`, `fl(1/3600)` and
+   `fl(1/60)` all round back to the exact integer, so the hour boundary is
+   safe there, and `146097` is the one divisor that is not. That constant is
+   the era, so the dates it moves are March 1 of 0400, 0800 and 1600 — none of
+   which is a probe in this manifest, and none of which any fixture here
+   should be contorted into reaching. **The lesson is that this tier's probes
+   cannot be the only guard.** Which exact multiples round low is a property of
+   each binding's own constants, so the check belongs in each binding's unit
+   tests, at ITS divisors' boundaries, with the tier as the cross-binding
+   backstop it already is.
+
 9. **`float32` carries no fixture in phase 1**, because the precision fixtures
    that would use it are excluded by §5.38.4. `--self-test` therefore gates every
    class's floor arithmetic directly, on a synthetic probe, rather than leaving
