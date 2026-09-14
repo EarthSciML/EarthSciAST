@@ -15,8 +15,9 @@
 #
 #   1. NOTHING MOVED AT Float64. Same bits, still zero allocations, still zero after
 #      the Dual buffers have been created (the lazy alt-buffer must not leak into the
-#      Float64 path). Bit-identity is asserted with `==` against the `form = :oop`
-#      emitter, which is independently pinned bit-identical to the pre-change `f!`.
+#      Float64 path). Bit-identity is asserted with `==` against an `ESS_UNTIERED=1`
+#      build — the same emitter with every prelude slot refilled on every call — which
+#      is itself pinned bit-identical to the out-of-place emitter.
 #
 #   2. FORWARDDIFF WORKS THROUGH IT, on BOTH axes. The parameter axis is not a
 #      variation of the state axis but a separate failure mode: there `u` stays
@@ -140,7 +141,13 @@ _gi_call(f!, u, p, t) = (du = zero(u); f!(du, u, p, t); du)
 _gi_pcall(f!, u, p, t, ::Type{V}) where {V} =
     (du = zeros(V, length(u)); f!(du, u, p, t); du)
 
-_gi_both(doc) = (ESM.build_evaluator(doc)[1], ESM.build_evaluator(doc; form = :oop)[1])
+# The TIERED `f!` and its UNTIERED twin (`ESS_UNTIERED=1`, tree_walk/const_tier.jl):
+# the same emitter with every prelude slot classified dynamic, so it refills the whole
+# prelude on every call and takes no cadence skip. That is the Float64 oracle below.
+_gi_both(doc) = (ESM.build_evaluator(doc)[1],
+                 withenv("ESS_UNTIERED" => "1") do
+                     ESM.build_evaluator(doc)[1]
+                 end)
 
 # Central-difference Jacobian of the TRUSTED Float64 `f!` w.r.t. the state.
 function _gi_fd_state_jac(f!, u, p, t; h = 1e-6)
@@ -158,10 +165,12 @@ end
 
     # ---- 1. Nothing moved at Float64 ----------------------------------------
 
-    @testset "bit-identical at Float64 to the :oop emitter" begin
-        # The oracle: `form = :oop` is independently pinned bit-identical to the
-        # pre-change `f!` (tree_walk_oop_test.jl), so agreeing with it `==` means the
-        # genericity refactor changed no Float64 bit. `==`, never `isapprox`.
+    @testset "bit-identical at Float64 to the untiered build" begin
+        # The oracle: an `ESS_UNTIERED=1` build refills every prelude slot on every
+        # call, so it carries nothing across calls that a scratch-reuse or
+        # cadence-skip bug could go stale in — and it is itself pinned bit-identical
+        # to the out-of-place emitter (tree_walk_untiered_test.jl). Agreeing with it
+        # `==` means the genericity refactor changed no Float64 bit. Never `isapprox`.
         cases = ["reaction-diffusion N=16" => _gi_rd(16),
                  "reaction-diffusion N=129" => _gi_rd(129),
                  "0-D with a CSE prelude" => _gi_zerod(),
@@ -173,7 +182,7 @@ end
                 _, u0, p, _, _ = ESM.build_evaluator(doc)
                 u = length(u0) == 1 ? [1.5] : _gi_seed(length(u0))
                 for t in (0.0, 0.37, 1.9)
-                    @test _gi_call(fi, u, p, t) == fo(u, p, t)
+                    @test _gi_call(fi, u, p, t) == _gi_call(fo, u, p, t)
                 end
             end
         end
@@ -202,7 +211,7 @@ end
         fi, fo = _gi_both(doc)
         _, u0, p, _, _ = ESM.build_evaluator(doc)
         u = _gi_seed(length(u0))
-        want = fo(u, p, 0.0)
+        want = _gi_call(fo, u, p, 0.0)
 
         du = zero(u)
         @test rhs_alloc_bytes(fi, du, u, p, 0.0) == 0

@@ -1138,23 +1138,29 @@ _ct_k(p) = p.A * exp(-p.Ea / (p.R * p.Tref))
     end
 
     # ----------------------------------------------------------------
-    # (9) `:inplace` (tiered) ≡ `:oop` (untiered — it allocates a fresh cache per call
-    # and refills every slot, so it IS the pre-tier evaluator). Bit-for-bit, across a
-    # `p` change and repeated calls.
+    # (9) The tiered `f!` ≡ the UNTIERED `f!` (`ESS_UNTIERED=1`, const_tier.jl):
+    # the same emitter with every slot classified dynamic, so it refills the whole
+    # prelude on every call and skips nothing. Bit-for-bit, across a `p` change and
+    # repeated calls. (`tree_walk_untiered_test.jl` is what pins that build against
+    # the out-of-place walker, so this comparison keeps the reach it had when the
+    # walker stood here.)
     # ----------------------------------------------------------------
-    @testset "`form=:inplace` (tiered) agrees bit-for-bit with `form=:oop`" begin
+    @testset "`form=:inplace` (tiered) agrees bit-for-bit with the untiered build" begin
         fi, u0, p, _ts, _vm, di = ESM._build_evaluator_impl(_ct_arrhenius(); form=:inplace)
-        fo, _u0, _p, _ts2, _vm2, dobj =
-            ESM._build_evaluator_impl(_ct_arrhenius(); form=:oop)
+        fu, _u0, _p, _ts2, _vm2, dun = withenv("ESS_UNTIERED" => "1") do
+            ESM._build_evaluator_impl(_ct_arrhenius(); form=:inplace)
+        end
 
-        # The classification is a property of the PRELUDE, so an `:oop` build reports
-        # the same counts — it simply does not act on them.
-        @test di.n_const_slots == dobj.n_const_slots == 5
-        @test di.n_dynamic_slots == dobj.n_dynamic_slots == 0
+        # The classification is a property of the PRELUDE; the switch only changes
+        # which tier each slot is ROUTED to, and it routes them all to dynamic.
+        @test di.n_const_slots == 5 && di.n_dynamic_slots == 0
+        @test dun.n_const_slots == 0 && dun.n_time_slots == 0
+        @test dun.n_dynamic_slots == 5
+        @test di.n_cse_slots == dun.n_cse_slots
 
         p2 = merge(p, (; A = 7.0 * p.A, R = 8.0))
         for (u, pp) in ((u0, p), (u0, p2), ([0.4, -1.3], p), (u0, p), ([2.0, 2.0], p2))
-            @test _ct_call(fi, u, pp, 0.0) == fo(u, pp, 0.0)
+            @test _ct_call(fi, u, pp, 0.0) == _ct_call(fu, u, pp, 0.0)
         end
     end
 end

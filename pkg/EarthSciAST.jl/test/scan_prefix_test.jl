@@ -67,11 +67,17 @@ end
 #   :scan     — the default build (the rewrite fires)
 #   :percell  — ESS_STENCIL_DISABLE=1, the maximally independent reference
 #   :interp   — ESS_CODEGEN_DISABLE=1, affine but interpreted
+#   :untiered — ESS_UNTIERED=1, the prelude refilled in full on every call
 #   :oop      — the out-of-place emitter
 function _scan_du(model; tier=:scan)
-    envs = tier === :percell ? ("ESS_STENCIL_DISABLE" => "1", "ESS_CODEGEN_DISABLE" => nothing) :
-           tier === :interp  ? ("ESS_STENCIL_DISABLE" => nothing, "ESS_CODEGEN_DISABLE" => "1") :
-                               ("ESS_STENCIL_DISABLE" => nothing, "ESS_CODEGEN_DISABLE" => nothing)
+    envs = tier === :percell ? ("ESS_STENCIL_DISABLE" => "1", "ESS_CODEGEN_DISABLE" => nothing,
+                                "ESS_UNTIERED" => nothing) :
+           tier === :interp  ? ("ESS_STENCIL_DISABLE" => nothing, "ESS_CODEGEN_DISABLE" => "1",
+                                "ESS_UNTIERED" => nothing) :
+           tier === :untiered ? ("ESS_STENCIL_DISABLE" => nothing, "ESS_CODEGEN_DISABLE" => nothing,
+                                 "ESS_UNTIERED" => "1") :
+                               ("ESS_STENCIL_DISABLE" => nothing, "ESS_CODEGEN_DISABLE" => nothing,
+                                "ESS_UNTIERED" => nothing)
     withenv(envs...) do
         ESM._reset_cascade_tally!()
         f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(model;
@@ -188,7 +194,7 @@ end
             @test get(a.tally, :scan, 0) == 1
             @test _bits(a.du) == _bits(_scan_du(m; tier=:percell).du)
             @test _bits(a.du) == _bits(_scan_du(m; tier=:interp).du)
-            @test _bits(a.du) == _bits(_scan_du(m; tier=:oop).du)
+            @test _bits(a.du) == _bits(_scan_du(m; tier=:untiered).du)
         end
     end
 
