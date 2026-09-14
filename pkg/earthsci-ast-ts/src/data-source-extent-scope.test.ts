@@ -57,6 +57,15 @@ function sizeOf(file: EsmFile): unknown {
   return (records(file) as { size?: unknown } | undefined)?.size
 }
 
+/** Any named axis of the merged registry, and its `size`. */
+function axis(file: EsmFile, name: string): unknown {
+  return (file as unknown as { index_sets?: Record<string, unknown> }).index_sets?.[name]
+}
+
+function sizeOfAxis(file: EsmFile, name: string): unknown {
+  return (axis(file, name) as { size?: unknown } | undefined)?.size
+}
+
 /** The canonical diagnostic code off whatever the load threw. */
 function codeOf(fn: () => unknown): string {
   try {
@@ -215,5 +224,28 @@ describe('the static §8.9.4 check must not refuse what §9.7.6 accepts', () => 
     // re-loads its own resolved document (Rust does, at build) must not be told
     // that document is invalid.
     expect(sizeOf(loadMounted('extent_resolved_shape.esm'))).toBe(3)
+  })
+})
+
+describe('where the §4.7 merge sits relative to the mounting document’s close', () => {
+  it('does not collide two identical declarations, at either mount form', () => {
+    // The shape issue #198 reported. The assembly and the leaf it mounts declare
+    // the SAME metaparameter and the SAME axis sized by it. A merge that runs
+    // BEFORE the mounting document's own §9.7.6 close compares the leaf's
+    // already-folded `size: 40` against the assembly's still-symbolic
+    // `size: "NLEV"` and calls two identical declarations a
+    // `subsystem_index_set_conflict`.
+    //
+    // RFC `mount-edge-index-set-renaming.md` open question 2 settled that: the
+    // merge runs post-close and folds the contribution against the mounting
+    // document's closed environment before comparing. This test is the GUARD —
+    // hoisting root ref resolution (and with it the merge) back before the close
+    // would turn it red, which is the regression the inline/merge split exists
+    // to prevent.
+    const top = loadMounted('mount_merge_order_toplevel.esm')
+    const sub = loadMounted('mount_merge_order_subsystem.esm')
+    expect(sizeOfAxis(top, 'lev')).toBe(40)
+    expect(sizeOfAxis(sub, 'lev')).toBe(40)
+    expect(axis(top, 'lev')).toEqual(axis(sub, 'lev'))
   })
 })

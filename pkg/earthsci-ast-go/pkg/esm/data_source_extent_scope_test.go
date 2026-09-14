@@ -425,3 +425,44 @@ func TestExtentScope_IdempotencyFixturesSayWhatTheyAre(t *testing.T) {
 		t.Errorf("extent_resolved_shape.esm `records.size` must be already folded, got %v", records["size"])
 	}
 }
+
+// TestExtentScope_TwoIdenticalDeclarationsDoNotCollide is the shape issue #198
+// reported, at both §4.7 attachment points.
+//
+// The assembly and the leaf it mounts declare the SAME metaparameter and the
+// SAME axis sized by it. A merge that runs BEFORE the mounting document's own
+// §9.7.6 close compares the leaf's already-folded `size: 40` against the
+// assembly's still-symbolic `size: "NLEV"` and calls two identical declarations
+// a `subsystem_index_set_conflict`.
+//
+// RFC mount-edge-index-set-renaming.md open question 2 settled that: the merge
+// runs post-close and folds the contribution against the mounting document's
+// closed environment before comparing. This test is the GUARD — hoisting root
+// ref resolution (and with it the merge) back before the close would turn it
+// red, which is the regression the inline/merge split exists to prevent.
+func TestExtentScope_TwoIdenticalDeclarationsDoNotCollide(t *testing.T) {
+	top, err := extentScopeLoad(t, "mount_merge_order_toplevel.esm", nil)
+	if err != nil {
+		t.Fatalf("top-level mount of two identical declarations: %v", err)
+	}
+	sub, err := extentScopeLoad(t, "mount_merge_order_subsystem.esm", nil)
+	if err != nil {
+		t.Fatalf("subsystem mount of two identical declarations: %v", err)
+	}
+	for _, c := range []struct {
+		name string
+		doc  *ESMFile
+	}{{"top-level", top}, {"subsystem", sub}} {
+		is, ok := c.doc.IndexSets["lev"]
+		if !ok {
+			t.Fatalf("%s: index set 'lev' absent", c.name)
+		}
+		if is.Size == nil || *is.Size != 40 {
+			t.Errorf("%s: lev.size = %v / %v, want 40", c.name, is.Size, is.SizeExpr)
+		}
+	}
+	if !reflect.DeepEqual(top.IndexSets["lev"], sub.IndexSets["lev"]) {
+		t.Errorf("the two mount forms disagree:\n top-level: %+v\n subsystem: %+v",
+			top.IndexSets["lev"], sub.IndexSets["lev"])
+	}
+}

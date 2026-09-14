@@ -242,3 +242,31 @@ def test_the_idempotency_fixtures_say_what_they_are():
     assert resolved["index_sets"]["records"]["size"] == 3, "already folded"
     assert "ref" not in resolved["models"]["Ingest"], "already inlined"
     assert resolved["data_sources"]["EGU_Emis"]["extent"]["metaparameter"] == "N_REC"
+
+
+# ---------------------------------------------------------------------------
+# Where the §4.7 merge sits relative to the mounting document's own close
+# ---------------------------------------------------------------------------
+
+
+def test_two_identical_declarations_do_not_collide_at_either_mount_form():
+    """The shape issue #198 reported, at both §4.7 attachment points.
+
+    The assembly and the leaf it mounts declare the SAME metaparameter and the
+    SAME axis sized by it. A merge that runs BEFORE the mounting document's own
+    §9.7.6 close compares the leaf's already-folded `size: 40` against the
+    assembly's still-symbolic `size: "NLEV"` and calls two identical declarations
+    a `subsystem_index_set_conflict`.
+
+    RFC `mount-edge-index-set-renaming.md` open question 2 settled that: the
+    merge runs post-close and folds the contribution against the mounting
+    document's closed environment before comparing. This test is the guard —
+    moving ref resolution (and with it the merge) back before the close would
+    turn it red, which is the regression the inline/merge split exists to
+    prevent.
+    """
+    top = load_path(str(_DIR / "mount_merge_order_toplevel.esm"))
+    sub = load_path(str(_DIR / "mount_merge_order_subsystem.esm"))
+    assert top.index_sets["lev"]["size"] == 40
+    assert sub.index_sets["lev"]["size"] == 40
+    assert top.index_sets["lev"] == sub.index_sets["lev"]
