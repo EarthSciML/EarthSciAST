@@ -2227,6 +2227,14 @@ convention `from_file` reference data follows (§6.6.5 convention 3). A
 **scalar** on a shaped variable keeps its broadcast meaning — the one value
 applies to every element — so nothing about existing documents changes.
 
+Inline array data is **only** a shaped variable's value. On a variable that
+declares no `shape` — omitted, `null`, or empty — there is nothing for the array
+to fill and no scalar reading of it, so such a `default` MUST be rejected at load
+with the structural diagnostic `array_default_without_shape`, reported at the
+offending `default`. The rule covers both declared types and the variables of
+every inline subsystem. A binding MUST NOT resolve it by dropping the variable
+from scope or by substituting a number.
+
 A shaped variable's value is **build-time constant data** — the whole union, the
 broadcast scalar included: it is fixed at load, so a binding MAY bind it through
 whatever channel it already uses for constant arrays rather than through its

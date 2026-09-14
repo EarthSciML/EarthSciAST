@@ -324,6 +324,10 @@ diagnostic_code_registry! {
 
     /// A `ranges[*]`/expression reference to an undeclared array index set.
     ARRAY_SHAPE_MISMATCH = "array_shape_mismatch";
+    /// Inline ARRAY data as the `default` of a variable that declares no
+    /// `shape` (esm-spec §6.3). Inline array data is a shaped variable's value,
+    /// so with no shape there is nothing for the array to fill.
+    ARRAY_DEFAULT_WITHOUT_SHAPE = "array_default_without_shape";
     /// An equation graph that depends on itself.
     CIRCULAR_DEPENDENCY = "circular_dependency";
     /// A parameter `update` naming no declared data source.
@@ -511,6 +515,7 @@ mod error_code_tests {
             "apply_expression_template_recursive_body",
             "apply_expression_template_unknown_template",
             "apply_expression_template_version_too_old",
+            "array_default_without_shape",
             "array_shape_mismatch",
             "circular_dependency",
             "closed_function_arg_type",

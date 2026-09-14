@@ -968,6 +968,30 @@ describe('spec-sanctioned constructs the checker used to reject', () => {
  * the other way round. Issue #200 — a fuel time-lag constant declared as `t`
  * validated clean, then silently became the simulation clock.
  */
+/**
+ * esm-spec §6.3 — inline array data is only a SHAPED variable's value. On a
+ * variable with no `shape` there is nothing for the array to fill, so
+ * `array_default_without_shape` rejects the declaration at load.
+ */
+describe('array default without shape (§6.3)', () => {
+  it('rejects an unshaped parameter and a subsystem unknown, not the shaped control', () => {
+    const text = readFileSync(
+      join(REPO_ROOT, 'tests', 'invalid', 'array_default_without_shape.esm'),
+      'utf8',
+    )
+    const result = validateText(text)
+    expect(result.is_valid).toBe(false)
+    const found = result.structural_errors
+      .filter((e) => e.code === 'array_default_without_shape')
+      .map((e) => [e.path, (e.details as Record<string, unknown>).variable_type])
+      .sort()
+    expect(found).toEqual([
+      ['/models/Decay/subsystems/Inner/variables/x/default', 'unknown'],
+      ['/models/Decay/variables/k/default', 'parameter'],
+    ])
+  })
+})
+
 describe('reserved declaration names (§4.9.1.1)', () => {
   const reserved = (result: ValidationResult) =>
     result.structural_errors.filter((e) => e.code === 'reserved_variable_name')

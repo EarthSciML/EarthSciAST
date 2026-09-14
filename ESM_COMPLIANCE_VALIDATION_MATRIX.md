@@ -288,6 +288,21 @@ Where:
 > A reaction system's own `subsystems` map is NOT walked by any binding (no
 > binding walked it before this rule either); it is the one remaining gap.
 
+### BEHAV-04-H: Inline Array Data Requires a Shape (esm-spec §6.3)
+| ID | Requirement | Spec Reference | Testable | Test Category |
+|---|---|---|---|---|
+| BEHAV-04-H-001 | Inline array data as the `default` of a variable that declares no `shape` (omitted, `null` or empty) MUST be a hard structural error, `array_default_without_shape`, at the offending `default`. Inline array data is a shaped variable's value, so with no shape there is nothing for it to fill; a binding MUST NOT drop the variable from scope or substitute a number instead | esm-spec.md §6.3 | Yes | validation |
+| BEHAV-04-H-002 | The rule covers both declared types (`parameter`, `unknown`) and the `variables` of every inline subsystem, at any depth; the same data on a SHAPED variable stays valid | esm-spec.md §6.3, §4.7 | Yes | validation |
+
+> **Binding status (2026-09-14)**: implemented in **all five** bindings as a structural
+> check — Julia (`validate.jl::_check_array_defaults_have_shape!`), Python
+> (`structural_checks.py::_check_array_default_without_shape`), TypeScript
+> (`validate/model-checks.ts::validateArrayDefaultsHaveShape`), Rust
+> (`structural.rs::check_array_defaults_have_shape`) and Go
+> (`validate.go::validateArrayDefaultsHaveShape`). Not a schema constraint: whether an
+> array `default` is legal depends on the sibling `shape` field. Fixture:
+> `tests/invalid/array_default_without_shape.esm`.
+
 ### BEHAV-04-E: Subsystem-Mounted Data-Loader Consumption (RFC pure-io-data-loaders §4.3)
 | ID | Requirement | Spec Reference | Testable | Test Category |
 |---|---|---|---|---|

@@ -102,6 +102,10 @@ class ErrorCode(Enum):
     # Both resolve BY NAME ahead of the declaration maps, so the declaration is
     # unreachable and its readers silently get the implicit symbol instead.
     RESERVED_VARIABLE_NAME = "reserved_variable_name"
+    # Inline array data as the `default` of a variable that declares no `shape`
+    # (esm-spec §6.3). Inline array data is a SHAPED variable's value, so with no
+    # shape there is nothing for the array to fill.
+    ARRAY_DEFAULT_WITHOUT_SHAPE = "array_default_without_shape"
     MISSING_REQUIRED_FIELD = "missing_required_field"
     UNIT_MISMATCH = "unit_mismatch"
     # Codes emitted by earthsci_ast.validation (previously ad-hoc string

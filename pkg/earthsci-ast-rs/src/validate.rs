@@ -258,6 +258,15 @@ pub enum StructuralErrorCode {
     /// document: renaming the independent variable moves the rejection onto the
     /// new name and frees `t`.
     ReservedVariableName,
+    /// Inline ARRAY data as the `default` of a variable that declares no
+    /// `shape` — omitted, null or empty (esm-spec §6.3).
+    ///
+    /// Inline array data is a SHAPED variable's value: its nesting is matched
+    /// against the declared shape, so with no shape there is nothing for it to
+    /// fill and no scalar reading of it. Rejected at the declaration so the
+    /// document fails to load instead of reaching a runtime that would have to
+    /// drop the variable from scope or fabricate a value for it.
+    ArrayDefaultWithoutShape,
 }
 
 use crate::diagnostic::codes;
@@ -297,6 +306,7 @@ impl std::fmt::Display for StructuralErrorCode {
             Self::ArrayShapeMismatch => codes::ARRAY_SHAPE_MISMATCH,
             Self::ObservedCycle => codes::OBSERVED_CYCLE,
             Self::ReservedVariableName => codes::RESERVED_VARIABLE_NAME,
+            Self::ArrayDefaultWithoutShape => codes::ARRAY_DEFAULT_WITHOUT_SHAPE,
         };
         write!(f, "{s}")
     }

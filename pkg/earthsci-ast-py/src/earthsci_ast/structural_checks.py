@@ -1998,6 +1998,49 @@ def _check_reserved_declaration_names(data: dict[str, Any], errors: list[str]) -
             scan(rs["parameters"], f"/reaction_systems/{rname}/parameters", owner, "parameter")
 
 
+def _check_array_default_without_shape(data: dict[str, Any], errors: list[str]) -> None:
+    """``array_default_without_shape``: inline array data as the ``default`` of a
+    variable that declares no ``shape`` (esm-spec §6.3).
+
+    Inline array data is a SHAPED variable's value: its nesting is matched
+    against the declared ``shape``. With no shape (omitted, null or empty) there
+    is nothing for the array to fill and no scalar reading of it, so the
+    document is malformed. Rejected here, at the declaration, rather than left
+    to a runtime that would have to drop the parameter or fabricate a value.
+    Inline subsystems are models, so they are walked too.
+    """
+
+    def scan_model(m: Any, pointer: str, owner: str) -> None:
+        if not isinstance(m, dict):
+            return
+        variables = m.get("variables")
+        if isinstance(variables, dict):
+            for name in sorted(variables, key=str):
+                var = variables[name]
+                if not isinstance(var, dict) or not isinstance(var.get("default"), list):
+                    continue
+                if var.get("shape"):
+                    continue
+                errors.append(
+                    (
+                        f"{pointer}/variables/{name}/default",
+                        f"{owner} variable '{name}' has inline array data as its default "
+                        "but declares no shape; inline array data is a shaped variable's "
+                        "value (esm-spec §6.3)",
+                        {"variable": str(name), "variable_type": str(var.get("type"))},
+                    )
+                )
+        subsystems = m.get("subsystems")
+        if isinstance(subsystems, dict):
+            for sname in sorted(subsystems, key=str):
+                scan_model(subsystems[sname], f"{pointer}/subsystems/{sname}", f"Model '{sname}'")
+
+    models = data.get("models")
+    if isinstance(models, dict):
+        for mname in sorted(models, key=str):
+            scan_model(models[mname], f"/models/{mname}", f"Model '{mname}'")
+
+
 def _check_event_affects_parameter(data: dict[str, Any], errors: list[str]) -> None:
     """``event_affects_parameter``: an event ``affects`` LHS naming a PARAMETER.
 
@@ -3126,6 +3169,12 @@ def _validate_structural(data: dict[str, Any], file_path=None) -> None:
     collect(
         "reserved_variable_name",
         lambda sub: _check_reserved_declaration_names(data, sub),
+    )
+    # Inline array data is a shaped variable's value (esm-spec §6.3); on a
+    # variable with no `shape` it has nothing to fill.
+    collect(
+        "array_default_without_shape",
+        lambda sub: _check_array_default_without_shape(data, sub),
     )
     collect("system_kind_mismatch", lambda sub: _check_system_kind(data, sub))
     collect("invalid_metadata_format", lambda sub: _check_metadata_formats(data, sub))

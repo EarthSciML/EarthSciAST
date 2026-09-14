@@ -528,6 +528,16 @@ function validate_structural(file::EsmFile)::Vector{StructuralError}
         end
     end
 
+    # 3f. Inline array data is a SHAPED variable's value (esm-spec §6.3,
+    # `array_default_without_shape`): on a variable with no `shape` it has
+    # nothing to fill and no scalar reading, so the declaration is malformed.
+    if file.models !== nothing
+        for model_name in sort!(collect(keys(file.models)))
+            _check_array_defaults_have_shape!(errors, file.models[model_name],
+                                              "/models/$model_name", "Model '$model_name'")
+        end
+    end
+
     # 4. Validate event consistency. Unlike balance and reference integrity, this
     # still RUNS for a coupled model — it is where a genuinely undeclared event
     # target is caught — but with the §6.4 `_var` placeholder credited (finding (b)).
@@ -1129,6 +1139,37 @@ function _check_reserved_model_names!(errors::Vector{StructuralError}, model::Mo
     for (subsys_name, subsys) in model_subsystems(model)
         _check_reserved_model_names!(errors, subsys, "$path/subsystems/$subsys_name",
                                      "Model '$subsys_name'"; indep=indep)
+    end
+    return errors
+end
+
+"""
+    _check_array_defaults_have_shape!(errors, model, path, owner)
+
+`array_default_without_shape` for every variable of `model`, and of its
+subsystems, whose `default` is inline ARRAY data but which declares no `shape`
+(omitted or empty) — esm-spec §6.3. Inline array data is a shaped variable's
+value: its nesting is matched against the declared shape, so with no shape there
+is nothing for it to fill. Variables are walked in sorted order, as every binding
+can produce.
+"""
+function _check_array_defaults_have_shape!(errors::Vector{StructuralError}, model::Model,
+                                           path::String, owner::AbstractString)
+    for name in sort!(collect(keys(model.variables)))
+        var = model.variables[name]
+        is_inline_array(var.default) || continue
+        (var.shape === nothing || isempty(var.shape)) || continue
+        push!(errors, StructuralError(
+            "$path/variables/$name/default",
+            "$owner variable '$name' has inline array data as its default but declares " *
+            "no shape; inline array data is a shaped variable's value (esm-spec §6.3)",
+            ERROR_CODES.ARRAY_DEFAULT_WITHOUT_SHAPE,
+            Dict{String,Any}("variable" => name,
+                             "variable_type" => _variable_type_word(var.type))))
+    end
+    for (subsys_name, subsys) in sort!(collect(model_subsystems(model)); by=first)
+        _check_array_defaults_have_shape!(errors, subsys, "$path/subsystems/$subsys_name",
+                                          "Model '$subsys_name'")
     end
     return errors
 end
