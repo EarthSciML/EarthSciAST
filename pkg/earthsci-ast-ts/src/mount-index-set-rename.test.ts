@@ -19,6 +19,7 @@ import { tmpdir } from 'node:os'
 import * as path from 'node:path'
 import { resolveSubsystemRefsSync } from './ref-loading.js'
 import { loadString, raiseFaqVersionFloor } from './parse.js'
+import { expandDocument, lowerExpressionTemplates } from './lower-expression-templates.js'
 import type { EsmFile } from './types.js'
 
 const TESTS = path.resolve(__dirname, '../../../tests')
@@ -283,5 +284,67 @@ describe('the raised floor, at the seam the §4.7 inline/merge reorder needs it'
     expect(inlined.esm).toBe('1.1.0')
     const file = loadString(JSON.stringify(inlined))
     expect((file as unknown as { esm: string }).esm).toBe('1.1.0')
+  })
+})
+
+describe('issue #311 in this binding: the rewrite pass re-runs after resolveSubsystemRefs', () => {
+  // `loadPath` / `loadString` do not resolve `{ ref }` mounts in this binding, so
+  // a rule a component declares in its own `expression_template_imports` only
+  // reaches a rewrite-target inside a component it mounts once
+  // `resolveSubsystemRefs` has spliced the mount in and re-run the §9.6.3 pass
+  // over that component. Rust, Go and Julia inline before their fixpoint instead.
+  const fixture = (name: string) => path.join(TESTS, 'fixtures/mount_edge_injection_nested', name)
+  const equation = (file: EsmFile, lhs: string) =>
+    (
+      file as unknown as { models: Record<string, { equations: { lhs: unknown; rhs: unknown }[] }> }
+    ).models.Leaf.equations.find((e) => e.lhs === lhs)?.rhs
+
+  it.each([
+    ['nested_self_import.esm'],
+    ['nested_subsystem_mount.esm'],
+    ['nested_model_mount.esm'],
+    ['nested_depth2_mount.esm'],
+  ])('lowers the rewrite-target inside the mounted component (%s)', (name) => {
+    const base = path.dirname(fixture(name))
+    const file = loadString(readFileSync(fixture(name), 'utf8'), { basePath: base })
+    resolveSubsystemRefsSync(file, base)
+    // `componentTemplates` is non-enumerable, so a rule's own `match` pattern
+    // never shows up here — only a surviving call site would.
+    expect(JSON.stringify(file)).not.toContain('"op":"input_x"')
+  })
+
+  // The re-run must be IDEMPOTENT: content the ordinary load already lowered is
+  // not rewritten a second time. The fixture's component has a rewrite-target
+  // in its OWN equation, which lowers during the load before any ref resolves,
+  // and mounts the grandchild whose target lowers only after resolution.
+  it('leaves a target the load already lowered exactly as the load left it', () => {
+    const name = 'nested_self_import_own_target.esm'
+    const base = path.dirname(fixture(name))
+    const file = loadString(readFileSync(fixture(name), 'utf8'), { basePath: base })
+    const ownBeforeResolve = structuredClone(equation(file, 'own'))
+    expect(JSON.stringify(ownBeforeResolve)).not.toContain('input_x')
+
+    resolveSubsystemRefsSync(file, base)
+    expect(JSON.stringify(file)).not.toContain('"op":"input_x"')
+    expect(equation(file, 'own')).toEqual(ownBeforeResolve)
+
+    // And running the lowering pass once more over the resolved component, with
+    // the same rules, changes nothing at all.
+    const templates = (file as unknown as { componentTemplates: Record<string, unknown> })
+      .componentTemplates['models.Leaf']
+    const leaf = (file as unknown as { models: Record<string, Record<string, unknown>> }).models
+      .Leaf
+    const single = {
+      esm: (file as unknown as { esm: string }).esm,
+      index_sets: (file as unknown as { index_sets?: unknown }).index_sets,
+      models: { Leaf: { ...leaf, expression_templates: templates } },
+    }
+    const again = (
+      expandDocument(lowerExpressionTemplates(single)) as {
+        models: Record<string, Record<string, unknown>>
+      }
+    ).models.Leaf
+    delete again.expression_templates
+    expect(again).toEqual(leaf)
   })
 })

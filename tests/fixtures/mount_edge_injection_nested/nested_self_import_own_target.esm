@@ -1,0 +1,24 @@
+{
+ "esm": "1.0.0",
+ "metadata": {
+  "name": "nested_self_import_own_target",
+  "description": "The CONTROL shape plus a rewrite-target in the component's OWN equation. That target lowers during the ordinary load, BEFORE any {ref} is resolved; the one inside the mounted subsystem lowers only once the mount is spliced in. A binding that lowers a second time after resolving refs must leave the first one exactly as the load left it -- the pass has to be idempotent.",
+  "license": "MIT"
+ },
+ "models": {
+  "Leaf": {
+   "expression_template_imports": [{"ref": "./nested_lowering_lib.esm"}],
+   "subsystems": {"sd": {"ref": "./nested_grandchild.esm"}},
+   "variables": {
+    "x_in": {"type": "parameter", "units": "1", "default": 5.0, "description": "the component's own coupling-target parameter"},
+    "u": {"type": "unknown", "units": "1", "description": "accumulator"},
+    "own": {"type": "unknown", "units": "1", "description": "lowered from this component's own rewrite-target"}
+   },
+   "equations": [
+    {"lhs": {"op": "ic", "args": ["u"]}, "rhs": 0.0},
+    {"lhs": {"op": "D", "args": ["u"], "wrt": "t"}, "rhs": "sd.y"},
+    {"lhs": "own", "rhs": {"op": "*", "args": [3.0, {"op": "input_x", "args": []}]}}
+   ]
+  }
+ }
+}

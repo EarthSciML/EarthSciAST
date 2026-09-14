@@ -203,6 +203,11 @@ export function resolveSubsystemRefsSync(
   const registry: Record<string, unknown> =
     (file.index_sets as Record<string, unknown> | undefined) ?? {}
 
+  // Which ROOT components mount a `subsystems.<k>` `{ ref }`, recorded BEFORE the
+  // walk below inlines them — afterwards the stubs are gone. Only these are
+  // re-lowered at the end (see `relowerThroughInlinedMounts`).
+  const mountingComponents = componentsWithSubsystemRefs(file)
+
   // Process all models. A top-level `models.<k>` that is a bare `{ ref }` is a
   // MOUNT EDGE in its own right (esm-spec §4.7 "Two mount forms, one
   // mechanism"), not a component with subsystems to walk, so it is inlined
@@ -263,6 +268,10 @@ export function resolveSubsystemRefsSync(
       )
     }
   }
+
+  // esm-spec §9.7.10 / issue #311: re-run the §9.6.3 rewrite pass over each
+  // root component that just had mounted content spliced into it.
+  relowerThroughInlinedMounts(file, mountingComponents)
 
   // A mounted child may have brought `faq` into a parent that never spells it.
   // The parent's authored bytes are legal at 1.0.0, but the RESOLVED document
@@ -1049,6 +1058,97 @@ function inlineTopLevelModelRef(
       ),
     rootEnv,
   )
+}
+
+/**
+ * The ROOT components — `"models.<name>"` / `"reaction_systems.<name>"` keys, the
+ * `componentTemplates` key shape — that mount a `subsystems.<k>` `{ ref }` at
+ * any depth.
+ */
+function componentsWithSubsystemRefs(file: EsmFile): Set<string> {
+  const out = new Set<string>()
+  const mounts = (comp: unknown): boolean => {
+    if (comp === null || typeof comp !== 'object' || Array.isArray(comp)) return false
+    const subs = (comp as { subsystems?: unknown }).subsystems
+    if (subs === null || typeof subs !== 'object' || Array.isArray(subs)) return false
+    for (const sub of Object.values(subs as Record<string, unknown>)) {
+      if (sub === null || typeof sub !== 'object' || Array.isArray(sub)) continue
+      if (typeof (sub as { ref?: unknown }).ref === 'string') return true
+      if (mounts(sub)) return true
+    }
+    return false
+  }
+  for (const section of ['models', 'reaction_systems'] as const) {
+    const comps = (file as unknown as Record<string, unknown>)[section]
+    if (comps === null || typeof comps !== 'object' || Array.isArray(comps)) continue
+    for (const [name, comp] of Object.entries(comps as Record<string, unknown>)) {
+      if (mounts(comp)) out.add(`${section}.${name}`)
+    }
+  }
+  return out
+}
+
+/**
+ * Re-run the esm-spec §9.6.3 rewrite pass over each ROOT component that just had
+ * mounted content spliced into it, using the rules that component resolved at
+ * load and that `load*` keeps on the non-enumerable `componentTemplates` sidecar.
+ *
+ * WHY. In this binding `loadPath` / `loadString` do not resolve `{ ref }` mounts
+ * — `resolveSubsystemRefs` is a separate entry point, run after the load has
+ * already lowered the document — so a rule a component declares in its own
+ * `expression_template_imports` never reached a rewrite-target inside a
+ * component it mounts. That is issue #311's CONTROL case, and §9.7.10 defines
+ * the mount-edge injection by reference to it ("as if the target had added those
+ * entries to the end of its own `expression_template_imports`"), so the two must
+ * agree. Rust, Go and Julia inline before their fixpoint; this binding lowers a
+ * second time instead, which keeps `loadPath`'s contract (it does not resolve
+ * refs) and still covers mounts only the async resolver can fetch.
+ *
+ * SAFE TO REPEAT. Only components recorded as mounting a `{ ref }` before
+ * resolution are touched, and the pass is a fixpoint: content the load already
+ * lowered carries no rewrite-target a rule can match again, so it comes back
+ * unchanged — pinned by a test that re-lowers an already-lowered root.
+ *
+ * WHAT IT CANNOT SEE. A match pattern is one expression tree, and splicing a
+ * subsystem in adds that subsystem's equations beside the component's own
+ * rather than grafting nodes into them — the component refers to mounted
+ * content only by scoped NAME (`sd.y`) — so no pattern can span the boundary
+ * between the two, and the second pass cannot differ from a first pass that
+ * saw both.
+ */
+function relowerThroughInlinedMounts(file: EsmFile, mountingComponents: Set<string>): void {
+  if (mountingComponents.size === 0) return
+  const templates = (file as { componentTemplates?: Record<string, unknown> }).componentTemplates
+  if (!templates) return
+  const root = file as unknown as Record<string, unknown>
+  for (const key of mountingComponents) {
+    const block = templates[key]
+    if (block === null || typeof block !== 'object' || Array.isArray(block)) continue
+    if (Object.keys(block as Record<string, unknown>).length === 0) continue
+    const dot = key.indexOf('.')
+    const section = key.slice(0, dot) as 'models' | 'reaction_systems'
+    const name = key.slice(dot + 1)
+    const comps = root[section] as Record<string, unknown> | undefined
+    const comp = comps?.[name]
+    if (!comps || comp === null || typeof comp !== 'object' || Array.isArray(comp)) continue
+    // A one-component document carrying just what the rewrite pass consults: the
+    // version it gates on, the registry `where` constraints resolve against, and
+    // the component with its rules re-attached. Coupling and sibling components
+    // are left out; the pass is per component and must not re-check them here.
+    const single: Record<string, unknown> = {
+      esm: root.esm,
+      index_sets: root.index_sets,
+      [section]: {
+        [name]: { ...(comp as Record<string, unknown>), expression_templates: block },
+      },
+    }
+    const lowered = expandDocument(lowerExpressionTemplates(single)) as Record<string, unknown>
+    const out = (lowered[section] as Record<string, unknown> | undefined)?.[name]
+    if (out !== null && typeof out === 'object' && !Array.isArray(out)) {
+      delete (out as { expression_templates?: unknown }).expression_templates
+      comps[name] = out
+    }
+  }
 }
 
 /**
