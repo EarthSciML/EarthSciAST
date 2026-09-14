@@ -171,6 +171,23 @@ function _load_document(raw_data, base_path::String;
     # tree the parse boundary produces, so there is no re-serialize
     # type-launder between them and the typed pipeline.
     doc = inlined === nothing ? raw_data : inlined
+    # esm-spec §4.7: the root's own `subsystems.<k>` mounts inline HERE, BEFORE
+    # `_load_parsed` runs this document's §9.7 machinery and §9.6.3 fixpoint — a
+    # `{ref}` resolves "before validation or any other processing", and a rule
+    # this document's own component declares only reaches a rewrite-target inside
+    # a component it mounts if the content is spliced in first (issue #311). The
+    # typed walk at the end of this function ran after the fixpoint, too late.
+    #
+    # Below the §8.9.4 line, which is where it must be: `mount_declared` and the
+    # static `extent` check above were read off the authored tree. Only CONTENT
+    # moves; the contributions are STAGED with the top-level form's and merged
+    # after the close, just below `_load_parsed`.
+    if _document_has_subsystem_refs(doc)
+        doc = _to_ordered(doc)
+        _inline_subsystem_refs!(doc, base_path, Set{String}();
+                                parent_meta=_root_metaparameter_env(raw_data, metaparameters),
+                                api_meta=metaparameters, staged=staged_isets)
+    end
     # esm-spec §8.2.1: resolve every `data_sources[*].source` location against
     # this document's own directory, before the typed pipeline sees the field,
     # so the typed `DataSourceLocation`, the EarthSciIO provider extension
@@ -869,6 +886,36 @@ function _resolve_mount_edge_core(entry::AbstractDict, ref::String, refpath::Str
         end
     end
 
+    # esm-spec §8.9.4 "When the check is evaluated": COLLECT FIRST. The
+    # mount-declared set is read off the leaf AS AUTHORED — its nested `{ref}`
+    # edges still unresolved — because the nested walk just below consumes each
+    # of those mounted leaves' `metaparameters` at its edge (§9.7.6 site 3),
+    # after which the names a conforming `extent` reaches are gone. Guarded on
+    # the edge's close being non-empty: with nothing to check the set is unused,
+    # and the walk would re-read every nested ref for nothing.
+    leaf_mount_declared = isempty(bindings) ? Set{String}() :
+        _collect_mount_declared_metaparameters(comp, compdir)
+
+    # esm-spec §4.7: a `{ref}` resolves "before validation or any other
+    # processing", so the leaf's OWN nested mounts — BOTH forms — inline HERE,
+    # ahead of this edge's §9.7.10 injection and the §9.6.3 fixpoint below.
+    # §9.7.10 defines the injection as "as if the target had added those entries
+    # to the END of its own `expression_template_imports`", and a component's own
+    # imports lower a rewrite-target inside a component it mounts — so the
+    # fixpoint must see the mounted content or the two halves of that sentence
+    # disagree (issue #311). They ran after the rename before, which was too late.
+    #
+    # Only CONTENT moves. Their `index_sets` are STAGED, because THIS leaf has not
+    # closed yet, and land after its close below — the same inline/merge split the
+    # root makes. `leaf_env` is this leaf's CLOSED environment: its declared
+    # defaults overlaid with this edge's `bindings`, which win (§9.7.6 site 3).
+    leaf_env = _root_metaparameter_env(comp, bindings)
+    leaf_staged = OrderedDict{String,Any}()
+    _inline_toplevel_model_refs!(comp, compdir, visited;
+                                 parent_meta=leaf_env, api_meta=api_meta, staged=leaf_staged)
+    _inline_subsystem_refs!(comp, compdir, visited;
+                            parent_meta=leaf_env, api_meta=api_meta, staged=leaf_staged)
+
     # §9.7.10 form A: the edge's `expression_template_imports` inject a
     # discretization into the LEAF's own scope BEFORE resolution, so the
     # §9.6.3 fixpoint lowers its rewrite-targets at the mount and an
@@ -900,11 +947,8 @@ function _resolve_mount_edge_core(entry::AbstractDict, ref::String, refpath::Str
     # for a library the leaf never calls flipped the leaf from "axis
     # merges and the assembler closes it" to `metaparameter_unbound`.
     # `mount_declared` covers the leaf's OWN nested mounts, so the
-    # site-4 widening composes down the reference DAG. Guarded on the
-    # edge's close being non-empty: with nothing to check, the set is
-    # unused, and the walk would re-read every nested ref for nothing.
-    leaf_mount_declared = isempty(bindings) ? Set{String}() :
-        _collect_mount_declared_metaparameters(comp, compdir)
+    # site-4 widening composes down the reference DAG; it was collected above,
+    # before the nested walk, for the reason given there.
     resolved = resolve_template_machinery(comp, compdir; metaparameters=bindings,
                                           mount_declared=leaf_mount_declared,
                                           mounted_leaf=true)
@@ -912,18 +956,66 @@ function _resolve_mount_edge_core(entry::AbstractDict, ref::String, refpath::Str
         comp = expand_document(lower_expression_templates(resolved))
     end
 
+    # The leaf has now CLOSED, so what its own nested mounts staged can land:
+    # each contribution folded against the leaf's closed environment — esm-spec
+    # §4.7 "Which environment it folds against": a merge folds against the
+    # environment of whatever registry it lands in — then merged by the §4.7
+    # deep-equal-or-`subsystem_index_set_conflict` rule. A contribution
+    # deep-equal to an axis the leaf declares itself adds no key, which is what
+    # keeps that axis renameable just below.
+    comp isa AbstractDict{String,Any} || (comp = _to_ordered(comp))
+    before_nested = let is = get(comp, "index_sets", nothing)
+        is isa AbstractDict ? Set{String}(String(k) for k in keys(is)) : Set{String}()
+    end
+    if !isempty(leaf_staged)
+        folded = OrderedDict{String,Any}(String(n) => fold_mount_contribution(d, leaf_env)
+                                         for (n, d) in leaf_staged)
+        _merge_native_index_sets!(comp, OrderedDict{String,Any}("index_sets" => folded), ref)
+    end
+    nested_contributed = let is = get(comp, "index_sets", nothing)
+        is isa AbstractDict ?
+            setdiff(Set{String}(String(k) for k in keys(is)), before_nested) : Set{String}()
+    end
+
     # Step (2): `index_set_rename` speaks the resolved leaf's own
-    # post-resolution vocabulary, so it applies HERE — after the close and
-    # fold above, before the leaf's nested mounts contribute (each nested
-    # edge renames what IT brings, at its own edge). esm-spec §4.7 "Where
-    # it applies" made this form's old refusal conditional on the gap that
-    # deferred §9.7 to the root; the pipeline above closes that gap, so
-    # the refusal is gone and the field applies at both mount forms.
+    # post-resolution vocabulary, so it applies HERE — after the close and fold
+    # above. Its VOCABULARY is what this document declares and imports, so the
+    # names only its nested mounts contributed are held out (§4.7 "Renaming is
+    # per edge"); its REACH is the whole resolved leaf, so an axis the leaf
+    # declares itself is renamed through the nested content too.
     rename_raw = get(entry, "index_set_rename", nothing)
     if rename_raw !== nothing
-        comp = apply_mount_index_set_rename(comp, rename_raw, mount_noun)
+        comp = apply_mount_index_set_rename(comp, rename_raw, mount_noun;
+                                            nested_contributed=nested_contributed)
     end
     return comp, compdir
+end
+
+"""
+    _document_has_subsystem_refs(doc) -> Bool
+
+Whether any `models.<M>` in `doc` mounts a LOCAL `subsystems.<S>` `{ref}` at any
+depth. The early §4.7 subsystem pass in `_load_document` copies the document, so
+it is skipped outright for the common document that mounts nothing.
+"""
+function _document_has_subsystem_refs(doc)::Bool
+    models = _get_field(doc, :models, nothing)
+    _is_json_object(models) || return false
+    has(m) = begin
+        subs = _get_field(m, :subsystems, nothing)
+        _is_json_object(subs) || return false
+        for (_, sub) in pairs(subs)
+            _is_json_object(sub) || continue
+            r = _get_field(sub, :ref, nothing)
+            r isa AbstractString && return true
+            has(sub) && return true
+        end
+        false
+    end
+    for (_, m) in pairs(models)
+        _is_json_object(m) && has(m) && return true
+    end
+    return false
 end
 
 """
@@ -1096,12 +1188,8 @@ function _inline_toplevel_model_refs!(native::AbstractDict{String,Any}, base_pat
             comp, compdir = _resolve_mount_edge_core(entry, ref, refpath, base_path, visited;
                 mount_noun=mount_noun, parent_meta=parent_meta, api_meta=api_meta)
 
-            # The leaf's own nested top-level model-refs, in the leaf's directory,
-            # sharing this walk's path-scoped cycle set. Its metaparameters closed
-            # and folded just above, so its nested edge bindings arrive already
-            # concrete and fold against an empty environment (esm-spec §9.7.6:
-            # refs resolve post-close).
-            _inline_toplevel_model_refs!(comp, compdir, visited)   # component-of-component
+            # The leaf's own nested mounts — both forms — were inlined inside
+            # `_resolve_mount_edge_core`, before its fixpoint (issue #311).
             cmodels = get(comp, "models", nothing)
             cmodels isa AbstractDict || throw(SubsystemRefError(
                 "Top-level model ref '$(ref)' resolves to a file with no models block"))
