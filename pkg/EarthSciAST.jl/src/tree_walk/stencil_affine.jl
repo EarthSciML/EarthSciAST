@@ -604,9 +604,10 @@ const _AFFINE_MAX_DELTA_SEGS = 16
 # uniform segment. Mid-domain makearray REGION boundaries — which need not lie near
 # an end — are harvested structurally up front (`_region_cut_candidates`) and
 # probed explicitly, so they are never missed. Anything neither scan nor candidate
-# reaches is still caught by per-box corner verification (→ fallback), exactly as
-# the old full sweep's misses were: correctness never depends on cut completeness,
-# only speed.
+# reaches is still caught by per-box verification in `_derive_lane_repl` (→ an
+# exact table): at the corners for a structurally affine subscript, at every cell
+# otherwise. Correctness depends on that verification being exact, never on cut
+# completeness, which only buys speed.
 #
 # `okey` is the verified output affine map; the first scan of each dim keys state
 # lanes by their Δ (wrap boxes), falling back to the base key when the Δ-keyed
