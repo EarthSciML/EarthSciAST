@@ -264,3 +264,20 @@ describe('where the static §8.9.4 check runs', () => {
     )
   })
 })
+
+describe('which environment a mounted leaf’s nested contributions fold against', () => {
+  it('folds them at the edge-bound value, at either mount form', () => {
+    // A leaf declares NLEV default 4, an axis `own` of its own sized by it, and
+    // mounts a component contributing `lev`, also sized by NLEV. The leaf is
+    // mounted with `bindings: {NLEV: 7}`. §9.7.6 site 3: the edge binding wins
+    // over the leaf's default, so BOTH axes are 7; esm-spec §4.7: `lev` lands in
+    // the leaf's scope and folds against the leaf's closed environment, not the
+    // root's. Before the fix this binding left `lev` as the unfolded string
+    // "NLEV" while `own` was 7.
+    for (const name of ['mount_edge_fold_toplevel.esm', 'mount_edge_fold_subsystem.esm']) {
+      const file = loadMounted(name)
+      expect(sizeOfAxis(file, 'own')).toBe(7)
+      expect(sizeOfAxis(file, 'lev')).toBe(7)
+    }
+  })
+})

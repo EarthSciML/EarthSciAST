@@ -373,3 +373,25 @@ fn the_purest_typo_is_caught_and_stays_caught() {
     assert!(text.contains("template_import_unknown_name"), "{text}");
     assert!(text.contains("N_RECS"), "must name the misspelling: {text}");
 }
+
+/// Which environment a mounted leaf's nested contributions fold against.
+///
+/// A leaf declares NLEV default 4, an axis `own` of its own sized by it, and
+/// mounts a component contributing `lev`, also sized by NLEV. The leaf is
+/// mounted with `bindings: {NLEV: 7}`. §9.7.6 site 3: the edge binding wins over
+/// the leaf's default, so BOTH axes are 7; esm-spec §4.7: `lev` lands in the
+/// leaf's registry and folds against the leaf's closed environment. Before the
+/// fix this binding resolved `own` to 7 and `lev` to 4 — one document
+/// disagreeing with itself. Checked at both mount forms.
+#[test]
+fn a_leafs_nested_contribution_folds_at_the_edge_bound_value() {
+    for name in [
+        "mount_edge_fold_toplevel.esm",
+        "mount_edge_fold_subsystem.esm",
+    ] {
+        let doc = load_path(fixture(name)).expect("loads");
+        let isets = doc.index_sets.as_ref().expect("index_sets");
+        assert_eq!(isets["own"].size, Some(7), "{name}: own");
+        assert_eq!(isets["lev"].size, Some(7), "{name}: lev");
+    }
+}

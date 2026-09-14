@@ -487,3 +487,31 @@ func TestExtentScope_PurestTypoIsCaughtAndStaysCaught(t *testing.T) {
 		t.Errorf("the diagnostic must name the misspelling: %v", err)
 	}
 }
+
+// TestExtentScope_NestedContributionFoldsAtTheEdgeBoundValue pins which
+// environment a mounted leaf's nested contributions fold against.
+//
+// A leaf declares NLEV default 4, an axis `own` of its own sized by it, and
+// mounts a component contributing `lev`, also sized by NLEV. The leaf is mounted
+// with `bindings: {NLEV: 7}`. §9.7.6 site 3: the edge binding wins over the
+// leaf's default, so BOTH axes are 7; esm-spec §4.7: `lev` lands in the leaf's
+// scope and folds against the leaf's closed environment, not the root's. Before
+// the fix this binding left `lev` as the unfolded string "NLEV" while `own` was
+// 7. Checked at both mount forms.
+func TestExtentScope_NestedContributionFoldsAtTheEdgeBoundValue(t *testing.T) {
+	for _, name := range []string{"mount_edge_fold_toplevel.esm", "mount_edge_fold_subsystem.esm"} {
+		doc, err := extentScopeLoad(t, name, nil)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		for _, axis := range []string{"own", "lev"} {
+			is, ok := doc.IndexSets[axis]
+			if !ok {
+				t.Fatalf("%s: index set %q absent", name, axis)
+			}
+			if is.Size == nil || *is.Size != 7 {
+				t.Errorf("%s: %s.size = %v / %v, want 7", name, axis, is.Size, is.SizeExpr)
+			}
+		}
+	}
+}

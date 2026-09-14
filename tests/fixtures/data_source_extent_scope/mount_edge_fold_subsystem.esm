@@ -1,0 +1,37 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "MountEdgeFoldSubsystem",
+    "description": "The same edge binding NLEV=7 at the `subsystems.<k>` mount form. `own` and `lev` must both be 7, identically to the top-level form."
+  },
+  "models": {
+    "Host": {
+      "system_kind": "nonlinear",
+      "variables": {
+        "y": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Host-local."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "y",
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": 0.0
+          }
+        }
+      ],
+      "subsystems": {
+        "M": {
+          "ref": "./mount_edge_fold_mid.esm",
+          "bindings": {
+            "NLEV": 7
+          }
+        }
+      }
+    }
+  }
+}
