@@ -1,0 +1,23 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "HoistExtentTypo",
+    "description": "INVALID. The same shape as hoist_extent_ok.esm with the `extent` misspelling the mounted leaf's N_REC as N_RECS. Collecting from the authored tree must widen the accepted set to what the mount declares and no further, so the typo MUST still be refused with template_import_unknown_name."
+  },
+  "data_sources": {
+    "EGU_Emis": {
+      "kind": "points",
+      "source": {"url_template": "file://./records.csv"},
+      "extent": {"metaparameter": "N_RECS"},
+      "metadata": {"esio_format": "ff10"}
+    }
+  },
+  "models": {
+    "Host": {
+      "system_kind": "nonlinear",
+      "variables": {"z": {"type": "unknown", "units": "1", "description": "Host-local observed."}},
+      "equations": [{"lhs": "z", "rhs": {"op": "const", "args": [], "value": 0.0}}],
+      "subsystems": {"Ingest": {"ref": "../data_source_extent_scope/extent_axis_leaf.esm"}}
+    }
+  }
+}

@@ -491,3 +491,35 @@ func TestRaisedFloorAdmitsAnInlinedFaqDocument(t *testing.T) {
 		t.Errorf("esm = %q; want the raised 1.1.0 floor", f.ESM)
 	}
 }
+
+// esm-spec §8.9.4 "When the check is evaluated", under the §4.7 root reorder.
+//
+// LoadPath inlines the root document's refs BEFORE LoadString's own §9.7
+// machinery, so the §9.6.3 fixpoint lowers through mounted content (issue
+// #311). That also consumes each mounted leaf's `metaparameters` at its edge,
+// so the text LoadString receives is no longer the authored text. The static
+// `extent` check must still see the names collected from the AUTHORED tree —
+// which LoadPath does by collecting them before it inlines and handing them to
+// LoadString through an unexported option.
+//
+// Measured before that option existed: with the reorder active, six of the
+// extent-scope tests failed with exactly the `ok` half's shape refused. So the
+// first half is the regression detector for the option; the second half proves
+// collecting from the authored tree widened the accepted set to what the mount
+// declares and no further.
+func TestReorderedLoadChecksExtentAgainstTheAuthoredTree(t *testing.T) {
+	ok := mrFixture(t, "fixtures", "mount_hoist_extent", "hoist_extent_ok.esm")
+	if _, err := LoadPath(ok); err != nil {
+		t.Fatalf("an `extent` naming a metaparameter declared only by a mounted leaf must load "+
+			"through the reordered path-based loader: %v", err)
+	}
+
+	typo := mrFixture(t, "fixtures", "mount_hoist_extent", "hoist_extent_typo.esm")
+	_, err := LoadPath(typo)
+	if err == nil {
+		t.Fatal("an `extent` misspelling the mounted leaf's metaparameter must still be refused")
+	}
+	if !strings.Contains(err.Error(), string(CodeTemplateImportUnknownName)) || !strings.Contains(err.Error(), "N_RECS") {
+		t.Errorf("error = %v; want %s naming N_RECS", err, CodeTemplateImportUnknownName)
+	}
+}

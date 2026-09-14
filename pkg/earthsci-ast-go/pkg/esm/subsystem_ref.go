@@ -938,3 +938,126 @@ func extractSingleSystemRaw(view map[string]any, path string) (any, error) {
 	// Unreachable, but satisfies the compiler
 	return nil, fmt.Errorf("unexpected state extracting system from %q", path)
 }
+
+// documentHasSubsystemRefs reports whether any component in the raw view mounts
+// a `{ref}` — at either esm-spec §4.7 form. The early root pass below re-encodes
+// the document, which sorts map keys, so it must be skipped outright for the
+// overwhelmingly common document that mounts nothing.
+func documentHasSubsystemRefs(view map[string]any) bool {
+	for _, kind := range templateComponentKinds {
+		comps, ok := view[kind].(map[string]any)
+		if !ok {
+			continue
+		}
+		for _, compRaw := range comps {
+			comp, ok := compRaw.(map[string]any)
+			if !ok {
+				continue
+			}
+			if _, isRef := comp["ref"].(string); isRef {
+				if _, inline := comp["variables"]; !inline {
+					return true
+				}
+			}
+			if subs, ok := comp["subsystems"].(map[string]any); ok {
+				for _, sub := range subs {
+					if s, ok := sub.(map[string]any); ok {
+						if _, isRef := s["ref"].(string); isRef {
+							return true
+						}
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
+// inlineRootRefsRaw splices every §4.7 mount the ROOT document carries — both
+// forms — into the raw view, BEFORE the root's own §9.7 machinery runs, and
+// STAGES the `index_sets` those mounts contribute instead of merging them.
+//
+// This is the root half of the inline/merge split. esm-spec §4.7 resolves a
+// `{ref}` "before validation or any other processing", and the §9.6.3 fixpoint
+// has to see the mounted content or a rewrite-target inside a mounted component
+// never lowers — the defect issue #311 reports, whose CONTROL case is a
+// document's own component declaring a rule library in its own
+// `expression_template_imports` and mounting the rewrite-target through a
+// `subsystems.<k>` `{ref}`. Inlining had to move ahead of the machinery for
+// that to work at all.
+//
+// The MERGE must not move with it. A §4.7 contribution joins the registry only
+// after the mounting document's §9.7.6 close, folded against that closed
+// environment before the deep-equal comparison. So the contributions are
+// collected here and handed back for the caller to apply after the close —
+// exactly the staging `walk_top_level(defer: true)` does in the Rust reference.
+// Merging them here would put them back before the close and reverse that rule;
+// `tests/fixtures/data_source_extent_scope/mount_merge_order_*.esm` is the
+// guard that catches it.
+func inlineRootRefsRaw(view map[string]any, basePath string, apiMeta map[string]int64) (map[string]IndexSet, error) {
+	if !documentHasSubsystemRefs(view) {
+		return nil, nil
+	}
+	visited := make(map[string]bool)
+	staged := map[string]IndexSet{}
+	// `parentMeta` is the root's own closed environment, captured by the caller
+	// before the machinery consumes the `metaparameters` block; `rootEnv` is the
+	// same thing, and stays fixed as the walk narrows into nested scopes.
+	parentMeta := metaEnvFromDecls(view["metaparameters"], apiMeta)
+	// Top-level `models.<k>` mount edges first: the component each one splices
+	// in may itself carry `subsystems`, and the walk below resolves those.
+	if err := inlineNestedTopLevelModelRefs(view, basePath, visited, staged, parentMeta, apiMeta,
+		parentMeta, "/models"); err != nil {
+		return nil, err
+	}
+	for _, kind := range templateComponentKinds {
+		comps, ok := view[kind].(map[string]any)
+		if !ok {
+			continue
+		}
+		for _, cname := range sortedKeys(comps) {
+			comp, ok := comps[cname].(map[string]any)
+			if !ok {
+				continue
+			}
+			subs, ok := comp["subsystems"].(map[string]any)
+			if !ok {
+				continue
+			}
+			prefix := fmt.Sprintf("/%s/%s/subsystems", kind, cname)
+			if err := resolveSubsystemMap(subs, basePath, visited, staged, parentMeta, apiMeta,
+				parentMeta, prefix, subsystemMount); err != nil {
+				return nil, fmt.Errorf("%s %q subsystems: %w", kind, cname, err)
+			}
+		}
+	}
+	return staged, nil
+}
+
+// applyStagedIndexSets merges the §4.7 contributions inlineRootRefsRaw staged
+// into the now-CLOSED document's registry (esm-spec §4.7 "Index-set merge").
+//
+// The other half of the split: the content spliced in early so the root's §9.7
+// machinery could lower through it, and the `index_sets` waited until here,
+// where they are compared deep-equal against a registry whose own sizes the
+// close has already folded.
+func applyStagedIndexSets(file *ESMFile, staged map[string]IndexSet, rootEnv map[string]int64) error {
+	if len(staged) == 0 {
+		return nil
+	}
+	if file.IndexSets == nil {
+		file.IndexSets = map[string]IndexSet{}
+	}
+	for _, n := range sortedKeys(staged) {
+		decl := staged[n]
+		if existing, has := file.IndexSets[n]; has {
+			if !indexSetDeepEqual(existing, decl) {
+				return newETErr(CodeSubsystemIndexSetConflict,
+					fmt.Sprintf("index set '%s' from a §4.7 mount (%s) collides with a non-deep-equal declaration already in the importing document's registry (%s) — deep-equal redeclaration is idempotent, a size/kind disagreement is a load-time error (esm-spec §4.7)", n, showIndexSet(decl), showIndexSet(existing)))
+			}
+			continue
+		}
+		file.IndexSets[n] = decl
+	}
+	return nil
+}

@@ -22,6 +22,36 @@ type LoadOption func(*loadOptions)
 type loadOptions struct {
 	basePath       string
 	metaparameters map[string]int64
+	// authoredMountDeclared is the esm-spec §8.9.4 mount-declared metaparameter
+	// set, collected — and checked — from the AUTHORED bytes by a caller that
+	// inlines §4.7 refs before handing the document to LoadString. Only
+	// meaningful when authoredMountDeclaredSet is true; see
+	// withAuthoredMountDeclared. Unexported, with no exported way to set it.
+	authoredMountDeclared    map[string]bool
+	authoredMountDeclaredSet bool
+}
+
+// withAuthoredMountDeclared hands LoadString the §8.9.4 mount-declared
+// metaparameter set a caller already collected from the AUTHORED document.
+//
+// esm-spec §8.9.4 "When the check is evaluated": the static `extent` check must
+// see the names read off the authored tree. A §4.7 mount CONSUMES the leaf's
+// `metaparameters` at its edge, so once refs are inlined a conforming `extent`
+// naming a mounted leaf's metaparameter can no longer be satisfied. LoadPath
+// inlines the root's refs BEFORE LoadString — so the §9.6.3 fixpoint lowers
+// through the mounted content (issue #311) — which means the text LoadString
+// receives is no longer the authored text, and recomputing the set from it would
+// refuse exactly those documents. So LoadPath runs the one collector on the
+// authored bytes first and passes the result down here instead.
+//
+// Unexported on purpose: LoadString's public contract is that it does not
+// resolve refs, and a bare LoadString call keeps computing the set from the
+// text it is given, exactly as before.
+func withAuthoredMountDeclared(md map[string]bool) LoadOption {
+	return func(o *loadOptions) {
+		o.authoredMountDeclared = md
+		o.authoredMountDeclaredSet = true
+	}
 }
 
 // WithMetaparameters binds the ROOT document's open metaparameters at the
@@ -63,33 +93,93 @@ func LoadPath(path string, opts ...LoadOption) (*ESMFile, error) {
 	}
 
 	basePath := filepath.Dir(path)
-	esmFile, err := LoadString(string(data),
-		append([]LoadOption{WithBasePath(basePath)}, opts...)...)
-	if err != nil {
-		return nil, err
-	}
+	// The loader-API bindings, kept SEPARATE from rootMetaEnv below. They reach
+	// the `subsystems.<k>` mount form too (esm-spec §4.7 "Two mount forms, one
+	// mechanism"): a leaf mounted as a subsystem gets the same §9.7.6 site-4
+	// backfill a top-level-mounted leaf gets, so a discovered §8.9.4 `extent`
+	// sizes its axis at either attachment point. rootMetaEnv is a FOLD
+	// environment — this document's declared defaults included — and must not be
+	// forwarded in its place.
+	apiMeta := applyLoadOptions(opts).metaparameters
 
 	// Capture the ROOT document's closed metaparameter environment (declared
 	// integer defaults overlaid with the loader-API bindings) from the raw JSON
 	// BEFORE LoadString's template-machinery pass has consumed the
 	// `metaparameters` block — the resolved esmFile no longer carries it. This
 	// is the scope against which a §4.7 subsystem mount edge's binding
-	// EXPRESSIONS fold (e.g. `NTGT = NX*NY`, esm-spec §9.7.6 binding site 3).
+	// EXPRESSIONS fold (e.g. `NTGT = NX*NY`, esm-spec §9.7.6 binding site 3),
+	// and the scope a §4.7 contribution folds against as it merges.
 	var rootMetaEnv map[string]int64
+	var staged map[string]IndexSet
+	var mountOpts []LoadOption
 	if rootView, verr := decodeJSONView(data); verr == nil {
-		rootMetaEnv = metaEnvFromDecls(rootView["metaparameters"], applyLoadOptions(opts).metaparameters)
+		rootMetaEnv = metaEnvFromDecls(rootView["metaparameters"], apiMeta)
+
+		// esm-spec §8.9.4 "When the check is evaluated": collect the
+		// mount-declared metaparameter set — and run the static `extent` check —
+		// on the AUTHORED view, HERE, before the inlining below consumes each
+		// mounted leaf's `metaparameters`. The same collector LoadString would
+		// run, run once, and handed down so LoadString does not recompute it from
+		// text that is no longer the authored text.
+		md, cerr := rootMountContext(rootView, basePath, apiMeta)
+		if cerr != nil {
+			return nil, cerr
+		}
+		mountOpts = []LoadOption{withAuthoredMountDeclared(md)}
+
+		// esm-spec §4.7: a `{ref}` resolves "before validation or any other
+		// processing". Splice the root's own mounts in HERE, ahead of
+		// LoadString's §9.7 machinery, so the §9.6.3 fixpoint lowers through the
+		// mounted content — without this a rule the root's own component
+		// declares in its own `expression_template_imports` never reaches a
+		// rewrite-target inside a component that component mounts (issue #311).
+		//
+		// Only the CONTENT moves. The `index_sets` those mounts contribute are
+		// STAGED and applied after LoadString has closed the root (§9.7.6), by
+		// `applyStagedIndexSets` below. Merging them here would put a §4.7
+		// contribution back before the close, which is what
+		// `tests/fixtures/data_source_extent_scope/mount_merge_order_*.esm`
+		// guards against.
+		//
+		// Returns nil for a document that mounts nothing — nearly all of them —
+		// and only then is the authored text handed on untouched: the re-encode
+		// below sorts map keys, and the document's own declaration order is
+		// recovered by `extractTemplateOrders` inside LoadString.
+		st, ierr := inlineRootRefsRaw(rootView, basePath, apiMeta)
+		if ierr != nil {
+			return nil, fmt.Errorf("failed to resolve subsystem references: %w", ierr)
+		}
+		if st != nil {
+			inlined, merr := json.Marshal(rootView)
+			if merr != nil {
+				return nil, fmt.Errorf("re-encoding the document after §4.7 inlining: %w", merr)
+			}
+			// The RAISED FLOOR (docs/content/rfcs/faq-node-rename.md §5.5). This
+			// document is no longer the AUTHORED one: a legal 1.0.0 assembly that
+			// mounts a `faq`-using leaf now CONTAINS `faq` without ever having
+			// spelled it, and LoadString's `faq_version_too_old` gate would refuse
+			// a document nobody authored wrongly. The floor only ever raises, and
+			// it is the same stamp emit applies — one step earlier. Pinned by
+			// TestRaisedFloorAdmitsAnInlinedFaqDocument.
+			data = []byte(raiseFaqEsmFloor(string(inlined)))
+			staged = st
+		}
 	}
 
-	// The loader-API bindings themselves, kept SEPARATE from rootMetaEnv above.
-	// They reach the `subsystems.<k>` mount form too (esm-spec §4.7 "Two mount
-	// forms, one mechanism"): a leaf mounted as a subsystem gets the same §9.7.6
-	// site-4 backfill a top-level-mounted leaf gets, so a discovered §8.9.4
-	// `extent` sizes its axis at either attachment point. rootMetaEnv is a FOLD
-	// environment — this document's declared defaults included — and must not be
-	// forwarded in its place.
-	apiMeta := applyLoadOptions(opts).metaparameters
+	esmFile, err := LoadString(string(data),
+		append(append([]LoadOption{WithBasePath(basePath)}, opts...), mountOpts...)...)
+	if err != nil {
+		return nil, err
+	}
 
-	// Resolve subsystem references relative to the file's directory
+	// The root has now CLOSED, so the staged §4.7 contributions can land.
+	if err := applyStagedIndexSets(esmFile, staged, rootMetaEnv); err != nil {
+		return nil, fmt.Errorf("failed to resolve subsystem references: %w", err)
+	}
+
+	// Anything the early pass could not reach — a remote `{ref}` — still
+	// resolves here. For a document that pass inlined, no `{ref}` is left and
+	// this is a no-op.
 	if err := resolveSubsystemRefsWithMeta(esmFile, basePath, rootMetaEnv, apiMeta); err != nil {
 		return nil, fmt.Errorf("failed to resolve subsystem references: %w", err)
 	}
@@ -148,7 +238,12 @@ func LoadString(jsonStr string, opts ...LoadOption) (*ESMFile, error) {
 	// misspells a metaparameter it declares itself, stops being caught at all.
 	// Measured both ways; see esm-spec §8.9.4.
 	var authoredMountDeclared map[string]bool
-	{
+	if o.authoredMountDeclaredSet {
+		// A caller that inlined refs first already ran the collector and the
+		// check on the AUTHORED bytes (withAuthoredMountDeclared). The text here
+		// is not the authored text, so neither is run again on it.
+		authoredMountDeclared = o.authoredMountDeclared
+	} else {
 		authoredView, derr := decodeJSONView([]byte(jsonStr))
 		if derr == nil {
 			md, cerr := rootMountContext(authoredView, o.basePath, o.metaparameters)
