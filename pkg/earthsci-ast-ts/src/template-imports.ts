@@ -1792,6 +1792,16 @@ function resolvePerComponentImports(
     if (!isObject(comps)) continue
     for (const [cname, comp] of Object.entries(comps)) {
       if (!isObject(comp)) continue
+      // esm-spec §4.7: a `models.<k>` entry that is a bare `{ ref }` is a MOUNT
+      // EDGE, not a component, and its `expression_template_imports` are a
+      // §9.7.10 form-A INJECTION addressed to the leaf the edge mounts — not an
+      // import this document resolves in its own scope. Consuming them here
+      // (which ended `delete comp.expression_template_imports`) meant the edge
+      // reached the ref resolver with its injection already gone, so a form-A
+      // injection at this mount form lowered nothing at all, even with the
+      // rewrite-target in the mounted leaf's own equation. The same
+      // `ref`-with-no-`variables` discriminator `isTopLevelMountEdge` uses.
+      if (typeof comp.ref === 'string' && comp.variables === undefined) continue
       const imports = comp.expression_template_imports
       if (imports === undefined) continue
       const corigin = `${compKind}.${cname}`
@@ -2326,17 +2336,30 @@ function mountRenameWalk(x: unknown, m: Record<string, string>): void {
  * An absent, null or empty map is the identity and leaves `doc` untouched,
  * which is what makes the field purely additive.
  */
-export function applyMountIndexSetRename(doc: unknown, renameRaw: unknown, where: string): void {
+export function applyMountIndexSetRename(
+  doc: unknown,
+  renameRaw: unknown,
+  where: string,
+  nestedContributed: ReadonlySet<string> = new Set(),
+): void {
   if (renameRaw === undefined || renameRaw === null || !isObject(doc)) return
   const requested = nameMap(renameRaw, 'index_set_rename', where)
 
   const root = doc as Record<string, unknown>
   const isets = isObject(root.index_sets) ? (root.index_sets as Record<string, unknown>) : {}
-  const declared = Object.keys(isets)
+  // `nestedContributed` names the index sets that reached `index_sets` only
+  // through a mount NESTED INSIDE the referenced document. esm-spec §4.7
+  // scopes this edge to "what THIS referenced document declares and imports",
+  // so they are held out of the edge's vocabulary and naming one is
+  // `subsystem_index_set_rename_unknown_name`. A name the leaf ALSO declares
+  // itself is NOT in the set and is renamed normally — the §4.7 merge already
+  // made the two one axis, so the rename carries through the nested component
+  // and the registry ends with one entry under the new name, not two.
+  const declared = Object.keys(isets).filter((n) => !nestedContributed.has(n))
 
   // Renames never invent names (esm-spec §4.7, mirroring §9.7.7).
   for (const key of Object.keys(requested)) {
-    if (!Object.prototype.hasOwnProperty.call(isets, key)) {
+    if (!Object.prototype.hasOwnProperty.call(isets, key) || nestedContributed.has(key)) {
       throw new EsmMachineryError(
         ERROR_CODES.SUBSYSTEM_INDEX_SET_RENAME_UNKNOWN_NAME,
         `${where}: \`index_set_rename\` names index set '${key}', which the resolved mounted document does not declare (it declares: ${declared.length > 0 ? declared.join(', ') : 'none'}). Keys speak the MOUNTED document's own post-resolution vocabulary (esm-spec §4.7 "Mount-edge index-set renaming")`,
@@ -2375,7 +2398,18 @@ export function applyMountIndexSetRename(doc: unknown, renameRaw: unknown, where
         )
       }
     }
-    renamed[name in changed ? changed[name] : name] = decl
+    const final = name in changed ? changed[name] : name
+    // A renamed axis may land on the name of an axis this edge does NOT rename
+    // — one a mount nested inside the referenced document contributed. Deep
+    // equality is idempotent; a disagreement is the §4.7 merge rule's own
+    // `subsystem_index_set_conflict`.
+    if (Object.prototype.hasOwnProperty.call(renamed, final) && !deepEqual(renamed[final], decl)) {
+      throw new EsmMachineryError(
+        ERROR_CODES.SUBSYSTEM_INDEX_SET_CONFLICT,
+        `${where}: \`index_set_rename\` maps index set '${name}' onto '${final}', which a mount nested inside the referenced document already contributes with a non-deep-equal declaration (esm-spec §4.7)`,
+      )
+    }
+    renamed[final] = decl
   }
   root.index_sets = renamed
 }
