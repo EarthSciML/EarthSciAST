@@ -1018,7 +1018,8 @@ func findingCode(err error) string {
 // PropagateDimension walks an Expression AST and returns the resulting Unit.
 // It mirrors the Julia reference implementation (get_expression_dimensions):
 //
-//   - numeric literals → dimensionless
+//   - numeric literals → indeterminate (nil, nil), except where their meaning is
+//     determined: neutral in "+"/"-", and read by value as an exponent
 //   - variable names → looked up in env; unknown variables return nil, nil
 //     (dimensional analysis is best-effort when unit annotations are missing)
 //   - "+", "-" require all operands to share a dimension
