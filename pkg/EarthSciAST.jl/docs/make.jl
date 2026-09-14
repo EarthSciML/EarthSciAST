@@ -16,6 +16,7 @@ makedocs(;
         "Home" => "index.md",
         "Getting Started" => "getting-started.md",
         "Simulation Runners" => "simulation-runners.md",
+        "Compiled Backend Devices" => "compiled-backend-devices.md",
     ],
     warnonly=true,
 )

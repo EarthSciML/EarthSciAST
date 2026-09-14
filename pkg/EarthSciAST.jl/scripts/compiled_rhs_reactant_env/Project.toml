@@ -1,0 +1,12 @@
+# Environment for `compiled_rhs_adapter.jl --engine compiled` ONLY.
+#
+# The interpreter engine reuses scripts/pde_sim_adapter, which does not (and
+# should not) carry Reactant: Reactant bundles an XLA runtime, and putting it in
+# the environment every interpreter run instantiates would make the reference
+# lane depend on it. The compiled engine is the one that needs it, so it gets its
+# own env, self-bootstrapped by the adapter exactly as pde_simulation_adapter.jl
+# bootstraps its own (Manifest.toml is gitignored repo-wide).
+[deps]
+EarthSciAST = "c7bf5e87-b31b-4281-bdce-ffb8a46ec87c"
+JSON3 = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
+Reactant = "3c362404-f566-11ee-1572-e11a4b42c853"

@@ -1341,4 +1341,17 @@ function _oop_bilinear_corners(tbl::_RxTbl, i::_RxIdx, j::_RxIdx,
             _rx_unwrap(_rx_take(flat, lin .+ Int64(dk + dl)), L))
 end
 
+# ---- the COMPILED backend: StableHLO built directly from the compiled IR ----
+#
+# A second, non-tracing lowering of the same out-of-place RHS. Public entry
+# points `direct_rhs` / `direct_rhs_with_buffers`; see reactant_direct/mod.jl for
+# what it is and reactant_direct/api.jl for the contract (hard errors, no
+# fallback, numerical rather than bitwise agreement).
+include("reactant_direct/mod.jl")
+
+# The compiled backend asks Reactant not to rewrite one host-side helper; the
+# request has to be re-made at load time as well as at precompile time (see
+# reactant_direct/device.jl).
+__init__() = _de_skip_rewrite!()
+
 end # module

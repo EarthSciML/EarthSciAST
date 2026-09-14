@@ -1,0 +1,36 @@
+{
+  "engine": "interpreter",
+  "fixture": "elementwise_gather",
+  "reference_binding": "julia",
+  "rhs": {
+    "default": {
+      "s": 4.0,
+      "u[1]": 2.0,
+      "u[2]": 2.0,
+      "u[3]": 4.0,
+      "u[4]": 4.0
+    },
+    "perturbed_1": {
+      "s": 4.0,
+      "u[1]": 2.0,
+      "u[2]": 2.0,
+      "u[3]": 4.0,
+      "u[4]": 4.0
+    },
+    "perturbed_2": {
+      "s": 4.0,
+      "u[1]": 2.0,
+      "u[2]": 2.0,
+      "u[3]": 4.0,
+      "u[4]": 4.0
+    },
+    "perturbed_3": {
+      "s": 4.0,
+      "u[1]": 2.0,
+      "u[2]": 2.0,
+      "u[3]": 4.0,
+      "u[4]": 4.0
+    }
+  },
+  "tolerance_class": "transcendental"
+}

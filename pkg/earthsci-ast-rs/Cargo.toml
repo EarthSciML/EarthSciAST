@@ -54,6 +54,19 @@ name = "earthsci-pde-sim-adapter-rust"
 path = "src/bin/earthsci-pde-sim-adapter-rust.rs"
 required-features = ["conformance-adapters"]
 
+[[bin]]
+name = "earthsci-compiled-rhs-adapter-rust"
+path = "src/bin/earthsci-compiled-rhs-adapter-rust.rs"
+required-features = ["conformance-adapters"]
+
+# Diagnostics for the XLA backend: which device the client picked, what the
+# `xla` crate reaches for multi-device work, and what a host round trip costs
+# against a device-resident evaluation. Not part of any conformance run.
+[[bin]]
+name = "earthsci-xla-device-probe"
+path = "src/bin/earthsci-xla-device-probe.rs"
+required-features = ["xla"]
+
 [lib]
 name = "earthsci_ast"
 crate-type = ["cdylib", "rlib"]
@@ -149,6 +162,19 @@ criterion = { version = "0.5", optional = true }
 # netcdf/hdf5 C build requirements.
 earthsciio = { version = "0.1.2", optional = true }
 time = { version = "0.3", optional = true }
+# OPT-IN XLA compiled backend (feature `xla`, src/simulate_array/tape/xla_emit.rs
+# + src/xla_runtime.rs). Emits the tape IR as an XLA computation through
+# XlaBuilder and runs it on a PJRT client. OFF by default and NOT a
+# `default-features` dependency for the same reasons the `esio` bridge is
+# opt-in: the crate links a 144 MB prebuilt `xla_extension` shared library that
+# must be fetched separately (`scripts/fetch-xla-extension.sh`) and pointed at
+# with `XLA_EXTENSION_DIR`, and its build script runs bindgen (libclang).
+#
+# NOTE: like `esio`, turning this on may raise the effective MSRV above this
+# crate's declared 1.89 -- the `xla` crate and its transitive dependencies
+# carry their own `rust-version` floors -- so the MSRV leg of CI tests every
+# feature EXCEPT this one.
+xla = { version = "0.4", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.3", features = ["wasm_js"] }
@@ -200,6 +226,13 @@ wasm = ["wasm-bindgen", "serde-wasm-bindgen", "js-sys", "web-sys"]
 # 1.89 -- earthsciio pulls zarrs, whose own `rust-version` is 1.91 -- so the
 # MSRV leg of CI tests every feature EXCEPT this one.
 esio = ["dep:earthsciio", "dep:time"]
+# OPT-IN XLA compiled right-hand-side backend. See the `xla` dependency comment
+# above: OFF by default, needs an unpacked `xla_extension` release pointed at by
+# `XLA_EXTENSION_DIR` both to BUILD (bindgen + link) and to RUN (the build
+# script emits an rpath for our own binaries), and is excluded from the MSRV
+# leg of CI. `cargo check --all-targets` with default features neither links it
+# nor needs the extension.
+xla = ["dep:xla"]
 # Performance features
 parallel = ["rayon"]
 simd = ["wide", "bytemuck"]

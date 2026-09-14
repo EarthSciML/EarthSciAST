@@ -1,0 +1,20 @@
+{
+  "engine": "interpreter",
+  "fixture": "units_registry_grammar",
+  "reference_binding": "julia",
+  "rhs": {
+    "default": {
+      "u": -0.01
+    },
+    "perturbed_1": {
+      "u": -0.00952409492775
+    },
+    "perturbed_2": {
+      "u": -0.0071693188386399995
+    },
+    "perturbed_3": {
+      "u": -0.010527070392590002
+    }
+  },
+  "tolerance_class": "algebraic"
+}

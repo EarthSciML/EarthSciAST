@@ -23,14 +23,19 @@ use std::collections::HashMap;
 
 use earthsci_ast::{SolveOptions, load_string};
 
-/// `k` is an array-valued `const` observed, which the whole-array overlay does
-/// not cover (`vec_coverage_frontier::frontier_array_valued_const_falls_back`),
-/// so the rule that reads it cannot be taped. Kept deliberately unrelated to
-/// the nested-aggregate shadowing this release taught the admission test about:
-/// this fixture must keep falling back for the assertion to mean anything.
+/// `k` is a CAUSAL SELF-REFERENCE (esm-spec §4.3.1.1): `k[i]` reads `k[i-1]`,
+/// with the required `ifelse` base-case guard. Its cells are not independent,
+/// so CONFORMANCE_SPEC §5.19.2 forbids the tape (whose scheduler reorders and
+/// batches) from ever lowering it — which is what makes it a durable fixture
+/// here: this file must keep falling back for the assertion to mean anything.
+///
+/// It used to be an array-valued `const`, which the tape lowered as of the
+/// phase-2 `Instr::ConstArray` work; the overlay still declines that one
+/// (`vec_coverage_frontier::frontier_array_valued_const_falls_back`), but the
+/// tape no longer does, so it stopped exercising this path.
 const FALLBACK_MODEL: &str = r#"
     {
-      "esm": "1.0.0",
+      "esm": "1.1.0",
       "metadata": {
         "name": "fallback_reporting"
       },
@@ -82,13 +87,49 @@ const FALLBACK_MODEL: &str = r#"
             {
               "lhs": "k",
               "rhs": {
-                "op": "const",
-                "value": [
-                  1.0,
-                  2.0,
-                  3.0
+                "op": "faq",
+                "args": [],
+                "output_idx": [
+                  "i"
                 ],
-                "args": []
+                "ranges": {
+                  "i": [
+                    1,
+                    3
+                  ]
+                },
+                "expr": {
+                  "op": "ifelse",
+                  "args": [
+                    {
+                      "op": "<=",
+                      "args": [
+                        "i",
+                        1
+                      ]
+                    },
+                    1.0,
+                    {
+                      "op": "*",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "k",
+                            {
+                              "op": "-",
+                              "args": [
+                                "i",
+                                1
+                              ]
+                            }
+                          ]
+                        },
+                        2.0
+                      ]
+                    }
+                  ]
+                }
               }
             },
             {
@@ -217,8 +258,8 @@ fn a_surviving_fallback_is_named_in_the_solution_metadata() {
     let fb = &sol.metadata.tape_fallbacks;
     assert!(
         !fb.is_empty(),
-        "the array-valued `const` rule falls back, so the solve must report it; \
-         got an empty list. If this fixture became vectorizable, that is good \
+        "the causal-recurrence rule falls back, so the solve must report it; \
+         got an empty list. If this fixture became tapeable, that is good \
          news — replace it with a construct that is still on the frontier \
          (see tests/vec_coverage_frontier.rs) rather than deleting the test."
     );
@@ -230,7 +271,7 @@ fn a_surviving_fallback_is_named_in_the_solution_metadata() {
         );
     }
     assert!(
-        fb.iter().any(|(_, reason)| reason.contains("const")),
+        fb.iter().any(|(_, reason)| reason.contains("recurrence")),
         "the reason must identify the unsupported construct: {fb:?}"
     );
 }
