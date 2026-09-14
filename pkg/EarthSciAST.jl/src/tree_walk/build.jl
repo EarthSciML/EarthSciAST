@@ -2958,19 +2958,23 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # class-merged section is exactly the ordering `_make_rhs` gives the state
     # equations. Dropping them would leave the buffer holding the per-cell TERMS
     # instead of their running accumulation — a silent wrong answer, so the
-    # plumbing is not optional even while the list is empty.
+    # plumbing is not optional.
     #
-    # It IS empty today, and deliberately so: `_detect_prefix_scan` fires only on
-    # an equation whose RHS is a top-level `faq`, and a fill's RHS is the
-    # GATHER `index(<def>, i…)` (see `_materialized_fill_equation` for why that
-    # spelling, and what handing it the bare aggregate would reach). An observed
-    # whose own body is a prefix reduction therefore keeps the triangular path —
-    # exactly as it did when it was inlined into a reader with the scan buried in
-    # that reader's body: for `S[i] = Σ_{j<=i} u[j]`, `n_scan_folds == 0` under
-    # both the factored and the inlining build. What the scan path does keep,
-    # unchanged, is the shape it was written for — a STATE equation that is
-    # itself a prefix reduction — including in a model that also materializes
-    # observeds, where the two mechanisms compose bit-for-bit.
+    # The list is NOT empty in general, and it is `_unwrap_identity_gather` that
+    # fills it. A fill's RHS is the GATHER `index(<def>, i…)`
+    # (`_materialized_fill_equation`), which hides the aggregate from
+    # `_compile_faq_equation!` — but when the producer underneath actually
+    # CONTRACTS, the wrapper is lifted, `_detect_prefix_scan` sees the aggregate
+    # and a materialized observed defined by a prefix reduction lands here as a
+    # per-level `_ScanFold`. ReSEACT's diagnosed vertical air-mass flux
+    # (`Mz[ke] = -Σ_{k < ke} …` over the level NODES contracting the level
+    # centres) is exactly that shape, and it arrives as one fold on the level
+    # that materializes `Mz`. Note the consequence a consumer of `mat_levels`
+    # has to handle: a STAGGERED fold's last output node is left uncovered by the
+    # term kernels on purpose (see `_scan_term_iters`), so the fold reads a slot
+    # of the observed's buffer that nothing in the fill wrote — zero out of a
+    # freshly allocated extended vector, whatever the in-place buffer held
+    # before — and folds it into an accumulator it then discards.
     # `mat_levels` carries the `:inplace` shape
     # `(scalars, _KernelSection, scans, array_contractions)` that
     # `_fill_obs_levels!` consumes; `mat_levels_oop` carries the same fills as

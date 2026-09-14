@@ -306,7 +306,7 @@ end
 # One vectorized kernel: the sub-kernels' invariant tiers, then this kernel's
 # invariant and per-cell tiers, the spine, and the scatter into the target slot
 # map. Mirrors `_oop_run_acc_vec` step for step.
-function _de_run_kernel!(ctx::_DECtx, out::Vector{_DESlot}, K::_E._AccKernel,
+function _de_run_kernel!(ctx::_DECtx, out::_DEMap, K::_E._AccKernel,
                          plan::_E._OopAccPlan)
     plan.vectorizable ||
         _de_refuse("a per-cell fallback access kernel",
@@ -345,7 +345,7 @@ end
 # Level-major, exactly as the traced extension's `_scan_lanes_oop`: one whole
 # LEVEL per step, so the emitted program is O(scan length) and independent of the
 # number of lanes at each level.
-function _de_scan!(ctx::_DECtx, m::Vector{_DESlot}, S::_E._ScanFold)
+function _de_scan!(ctx::_DECtx, m::_DEMap, S::_E._ScanFold)
     len = S.len
     len >= 1 || return nothing
     nl = div(length(S.slots), len)
@@ -374,11 +374,71 @@ end
 
 # ---- the whole RHS -----------------------------------------------------------
 
+# The static write plan, computed BEFORE the walk over exactly the plan data the
+# walk consumes (see `_DEMap`): which SECTION of this emission first writes each
+# slot of the extended state and of `du`. A read of a slot no section writes —
+# or one only this same section writes — takes the zero the interpreter's freshly
+# allocated extended vector supplies there; a read of a slot a LATER section
+# writes is a mis-ordered level plan, and that is what the emitter still refuses.
+function _de_plan_writes!(ctx::_DECtx, rhs, du::_DEMap)
+    ue = ctx.ue
+    mat = getfield(rhs, :mat_levels)
+    nlev = length(mat)
+    sections = Vector{String}(undef, nlev + 1)
+    for (li, lvl) in enumerate(mat)
+        sections[li] = "materialization level $li"
+        scalars, kernels, plans, scans = lvl
+        sec = Int32(li)
+        for (slot, _) in scalars
+            _de_mark!(ue, (slot,), sec)
+        end
+        for j in eachindex(kernels)
+            _de_mark!(ue, plans[j].out_slots, sec)
+        end
+        for S in scans
+            _de_mark!(ue, (S::_E._ScanFold).slots, sec)
+        end
+    end
+    sections[nlev + 1] = "the state-equation section"
+    sec = Int32(nlev + 1)
+    for (slot, _) in getfield(rhs, :rhs_list)
+        _de_mark!(du, (slot,), sec)
+    end
+    plans = getfield(rhs, :acc_plans)
+    for j in eachindex(plans)
+        _de_mark!(du, plans[j].out_slots, sec)
+    end
+    for S in getfield(rhs, :scan_folds)
+        _de_mark!(du, (S::_E._ScanFold).slots, sec)
+    end
+    _DE_SECTIONS[] = sections
+    return nothing
+end
+
 function _de_emit!(ctx::_DECtx, rhs)::_DEVal
     n_states = ctx.n_states
+    # ess-array-contraction: whole-array einsums are a SECTION of the interpreted
+    # RHS (`_apply_array_contractions_oop`) that this walk has no arm for. Left
+    # alone their output slots would just assemble to zero — a silent wrong
+    # answer, which is the one thing this emitter does not do. The list is empty
+    # on every model whose reductions stay under the tier's floor, which is every
+    # model the backend has been run on; say so rather than emit a program that
+    # is missing a section.
+    let nac = length(getfield(rhs, :array_contractions)) +
+              sum(length(lvl[5]) for lvl in getfield(rhs, :mat_levels); init=0)
+        nac == 0 ||
+            _de_refuse("$nac whole-array contraction(s)",
+                "the array-contraction tier (ess-array-contraction, " *
+                "`_apply_array_contractions_oop`) is a section of the " *
+                "interpreted RHS with no arm in this walk. Emitting the rest " *
+                "would leave its output slots zero, so the emission stops here.")
+    end
+    du = _DEMap(n_states)
+    _de_plan_writes!(ctx, rhs, du)
     # Materialized observed levels, filled into the extended slot map.
     mat = getfield(rhs, :mat_levels)
     for (li, lvl) in enumerate(mat)
+        ctx.section = Int32(li)
         scalars, kernels, plans, scans = lvl
         empty_cache = _DEVal[]
         for (slot, nd) in scalars
@@ -400,6 +460,8 @@ function _de_emit!(ctx::_DECtx, rhs)::_DEVal
             end
         end
     end
+    # Everything from here on writes `du`, never `ue`: one section.
+    ctx.section = Int32(length(mat) + 1)
     # CSE prelude.
     prelude = getfield(rhs, :cse_prelude)
     cache = Vector{_DEVal}(undef, length(prelude))
@@ -409,7 +471,6 @@ function _de_emit!(ctx::_DECtx, rhs)::_DEVal
         end
     end
     # State equations.
-    du = Vector{_DESlot}(nothing, n_states)
     for (slot, nd) in getfield(rhs, :rhs_list)
         _de_rule!("the state equation for $(_de_slotname(ctx, slot))") do
             _de_write!(ctx, du, Int[slot], _de_scalar(ctx, nd, cache))

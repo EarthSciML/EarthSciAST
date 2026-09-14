@@ -16,8 +16,50 @@ struct _DEVal
 end
 
 # Slot map entry: which emitted value holds this slot, and at which lane
-# position. `nothing` ⇒ nothing has written the slot in this emission.
+# position. `nothing` ⇒ nothing has written the slot YET.
 const _DESlot = Union{Nothing,Tuple{_DEVal,Int}}
+
+# A slot map, plus the STATIC write plan the read forms need to interpret a
+# `nothing` entry. `writer[s]` is the SECTION of the emission that first writes
+# slot `s` (0 ⇒ no section writes it at all); sections are numbered in emission
+# order — one per materialization level, then one for the state equations — and
+# `_DE_SECTIONS` names them.
+#
+# The plan exists because a `nothing` entry means two different things, and only
+# one of them is a bug. Both readings start from the same fact: the interpreter
+# runs THESE units in THIS order over an extended vector that starts at zero
+# (`_oop_du_zeros` allocates it fresh per call), so at any point in the walk an
+# unwritten slot holds 0.0 on host.
+#
+#   A ZERO THIS SECTION IS ENTITLED TO — nothing writes the slot, or the only
+#   writer is this same section, which has not reached the write yet. The
+#   interpreter reads 0.0 there too, so the emitter must supply one. An
+#   in-place prefix scan is the standing example: at each step it READS its own
+#   slot and then overwrites it with the running accumulation, and the last step
+#   of a lane reads a position no term kernel ever fills.
+#
+#   AN ORDERING VIOLATION — a LATER section writes the slot, i.e. a fill level
+#   reads a level above it. The level plan is then wrong: the out-of-place
+#   evaluator silently folds in a zero, the in-place one folds in the PREVIOUS
+#   CALL's value out of its reused buffer, and the two stop agreeing. Refusing
+#   is the right answer, and the message names the section that writes it.
+#
+# Built once by `_de_plan_writes!` before the walk, from the same plan data the
+# walk consumes, so the two cannot disagree.
+struct _DEMap
+    m::Vector{_DESlot}
+    writer::Vector{Int32}
+end
+_DEMap(n::Int) = _DEMap(Vector{_DESlot}(nothing, n), zeros(Int32, n))
+
+function _de_mark!(M::_DEMap, slots, section::Int32)
+    w = M.writer
+    for s in slots
+        (1 <= s <= length(w)) || continue
+        @inbounds w[s] == 0 && (w[s] = section)
+    end
+    return nothing
+end
 
 # ---- where we are, for the error messages -----------------------------------
 #
@@ -56,7 +98,7 @@ mutable struct _DECtx
     n_states::Int
     p::Any
     t::_DEVal
-    ue::Vector{_DESlot}                     # extended-state slot map (1..n_total)
+    ue::_DEMap                              # extended-state slot map (1..n_total)
     consts::Dict{UInt64,_DEVal}             # scalar literal bit pattern -> value
     arrconsts::Dict{Vector{Float64},_DEVal} # array constant content -> value
     # Live forcing buffers, threaded exactly as the interpreter's `_OopForcing`
@@ -70,19 +112,24 @@ mutable struct _DECtx
     reduce_min::Int                         # fold length at which a chain becomes a reduce
     names::Dict{Int,String}                 # flat slot -> element name (for the rule text)
     stats::Dict{Symbol,Int}
+    # Which SECTION of the emission is running: materialization level `li` while
+    # the fills are emitted, `nlev + 1` from the CSE prelude onwards. The read
+    # forms compare it against the write plan (`_DEMap`) to tell a zero this
+    # section is entitled to from a level read out of order.
+    section::Int32
 end
 
 function _DECtx(n_states::Int, n_total::Int, p, t::_DEVal, uval::_DEVal,
                 bufs, hostkeys::Vector{Vector{Float64}}, names::Dict{Int,String})
-    ue = Vector{_DESlot}(nothing, n_total)
+    ue = _DEMap(n_total)
     for s in 1:n_states
-        ue[s] = (uval, s)
+        ue.m[s] = (uval, s)
     end
     return _DECtx(n_states, p, t, ue, Dict{UInt64,_DEVal}(),
                   Dict{Vector{Float64},_DEVal}(), bufs, hostkeys,
                   Union{Nothing,_DEVal}[nothing for _ in hostkeys],
                   IdDict{_E._Node,Bool}(), _de_reduce_min(), names,
-                  Dict{Symbol,Int}())
+                  Dict{Symbol,Int}(), Int32(0))
 end
 
 # A ⊕-fold this long stops being a chain of binary ops and becomes ONE
@@ -92,6 +139,14 @@ end
 # tunable rather than hard-wired.
 _de_reduce_min() =
     something(tryparse(Int, get(ENV, "ESM_DIRECT_EMIT_REDUCE_MIN", "32")), 32)
+
+# Section names for the refusal text. Sections are numbered in emission order:
+# `1 … nlev` are the materialization levels, `nlev + 1` is everything after them
+# (the CSE prelude, the state equations, their kernels and their prefix scans),
+# which writes only `du`. The vector is per-emission, set by `_de_plan_writes!`.
+const _DE_SECTIONS = Ref{Vector{String}}(String[])
+_de_sectionname(k::Integer) =
+    (v = _DE_SECTIONS[]; 1 <= k <= length(v) ? v[k] : "emission section $k")
 
 # Name a flat slot for an error message: the caller's `var_map` spelling when it
 # passed one, the bare slot otherwise.
@@ -231,17 +286,40 @@ end
 # a dense gather costs an O(L) i64 constant. When the vector genuinely shatters
 # (more runs than half its length, and not tiny) AND lies in one producer, a
 # single gather is the cheaper program and is emitted instead.
-function _de_emit_runs(ctx::_DECtx, srcs::Vector{Tuple{_DEVal,Int}})::_DEVal
+#
+# A `nothing` entry is a STRUCTURAL ZERO (see `_DEMap`): a run of them becomes
+# one zero constant of that width, the same piece `_de_assemble` emits for an
+# unwritten output run. A read that mixes them with real producers therefore
+# still costs one piece per run and nothing per zero lane.
+const _DESlotSrc = Union{Nothing,_DEVal}
+
+function _de_emit_runs(ctx::_DECtx, srcs::Vector{_DESlot})::_DEVal
     n = length(srcs)
     n == 0 && _de_refuse("an empty read", "a read of zero positions reached the emitter.")
-    runs = Tuple{_DEVal,Int,Int,Int}[]   # (src, lo, hi, stride)
+    # (src, lo, hi, stride); `src === nothing` ⇒ a zero run, `hi` its width.
+    runs = Tuple{_DESlotSrc,Int,Int,Int}[]
+    nzero = 0
     i = 1
     while i <= n
-        sv, p0 = srcs[i]
+        e = srcs[i]
+        if e === nothing
+            j = i
+            while j + 1 <= n && srcs[j + 1] === nothing
+                j += 1
+            end
+            push!(runs, (nothing, 1, j - i + 1, 1))
+            nzero += 1
+            i = j + 1
+            continue
+        end
+        sv, p0 = e::Tuple{_DEVal,Int}
         j = i
         stride = 1
-        while j + 1 <= n && srcs[j + 1][1].v == sv.v
-            d = srcs[j + 1][2] - srcs[j][2]
+        while j + 1 <= n
+            nx = srcs[j + 1]
+            nx === nothing && break
+            nx[1].v == sv.v || break
+            d = nx[2] - (srcs[j]::Tuple{_DEVal,Int})[2]
             if j == i
                 d >= 1 || break
                 stride = d
@@ -250,41 +328,65 @@ function _de_emit_runs(ctx::_DECtx, srcs::Vector{Tuple{_DEVal,Int}})::_DEVal
             end
             j += 1
         end
-        push!(runs, (sv, p0, srcs[j][2], stride))
+        push!(runs, (sv, p0, (srcs[j]::Tuple{_DEVal,Int})[2], stride))
         i = j + 1
     end
-    if length(runs) > 1 && n > 8 && length(runs) > n ÷ 2 &&
-       all(r[1].v == runs[1][1].v for r in runs)
-        return _de_gather_op(ctx, runs[1][1], [e[2] for e in srcs])
+    if nzero == 0 && length(runs) > 1 && n > 8 && length(runs) > n ÷ 2 &&
+       all((r[1]::_DEVal).v == (runs[1][1]::_DEVal).v for r in runs)
+        return _de_gather_op(ctx, runs[1][1]::_DEVal,
+                             Int[(e::Tuple{_DEVal,Int})[2] for e in srcs])
     end
-    pieces = _DEVal[_de_slice(ctx, r[1], r[2], r[3], r[4]) for r in runs]
+    pieces = _DEVal[r[1] === nothing ? _de_arrconst(ctx, zeros(Float64, r[3])) :
+                    _de_slice(ctx, r[1]::_DEVal, r[2], r[3], r[4]) for r in runs]
     return _de_concat(ctx, pieces)
 end
 
 # One value, many positions (a forcing buffer read, a CSR body read).
 _de_take(ctx::_DECtx, src::_DEVal, positions::Vector{Int})::_DEVal =
-    _de_emit_runs(ctx, Tuple{_DEVal,Int}[(src, q) for q in positions])
+    _de_emit_runs(ctx, _DESlot[(src, q) for q in positions])
 
 # ---- slot-map reads and writes -----------------------------------------------
+#
+# `nothing` back from `_de_src` is a structural zero, NOT "no answer": the
+# caller emits a zero of the right width. The refusal is kept for the one case
+# that is genuinely an ordering bug — a slot a later unit writes.
 
-@inline function _de_src(ctx::_DECtx, m::Vector{_DESlot}, s::Int)
-    (1 <= s <= length(m)) || _de_refuse("a read outside the slot map",
-        "slot $s is outside the extended state (length $(length(m))).")
-    e = m[s]
-    e === nothing && _de_refuse("a read-before-write",
-        "$(_de_slotname(ctx, s)) is read before anything in this emission wrote " *
-        "it. On host the flat buffer would supply a zero here; the emitter has " *
-        "no such buffer, so the ordering must come from the fill levels.")
-    return e
+# The `nothing` decision, factored out of `_de_src` so it is exercisable on its
+# own. `nothing` back means "emit a zero here": either no section writes the
+# slot at all, or the only writer is `section` itself, which is still running.
+# A write by a LATER section is the ordering violation, and it refuses.
+@inline function _de_unwritten(M::_DEMap, s::Int, section::Int32,
+                               name::AbstractString)
+    w = @inbounds M.writer[s]
+    (w == 0 || w <= section) && return nothing
+    _de_refuse("a read-before-write",
+        "$name is read while emitting $(_de_sectionname(section)), and " *
+        "$(_de_sectionname(w)) writes it LATER. The ordering must come from " *
+        "the fill levels, which are supposed to guarantee that a level reads " *
+        "only levels below it. On host the read takes whatever the extended " *
+        "buffer holds at that point — a zero from the out-of-place runner's " *
+        "fresh vector, the PREVIOUS CALL's value from the in-place runner's " *
+        "reused one — so the two interpreters no longer agree either, and it " *
+        "is the level plan that has to change.")
 end
 
-_de_read(ctx::_DECtx, m::Vector{_DESlot}, s::Int)::_DEVal =
-    (e = _de_src(ctx, m, s); _de_slice(ctx, e[1], e[2], e[2]))
+@inline function _de_src(ctx::_DECtx, M::_DEMap, s::Int)::_DESlot
+    (1 <= s <= length(M.m)) || _de_refuse("a read outside the slot map",
+        "slot $s is outside the extended state (length $(length(M.m))).")
+    e = @inbounds M.m[s]
+    e === nothing || return e
+    return _de_unwritten(M, s, ctx.section, _de_slotname(ctx, s))
+end
 
-_de_gather(ctx::_DECtx, m::Vector{_DESlot}, slots::Vector{Int})::_DEVal =
-    _de_emit_runs(ctx, Tuple{_DEVal,Int}[_de_src(ctx, m, s) for s in slots])
+_de_read(ctx::_DECtx, M::_DEMap, s::Int)::_DEVal =
+    (e = _de_src(ctx, M, s); e === nothing ? _de_const(ctx, 0.0) :
+                             _de_slice(ctx, e[1], e[2], e[2]))
 
-function _de_write!(ctx::_DECtx, m::Vector{_DESlot}, slots::Vector{Int}, val::_DEVal)
+_de_gather(ctx::_DECtx, M::_DEMap, slots::Vector{Int})::_DEVal =
+    _de_emit_runs(ctx, _DESlot[_de_src(ctx, M, s) for s in slots])
+
+function _de_write!(ctx::_DECtx, M::_DEMap, slots::Vector{Int}, val::_DEVal)
+    m = M.m
     if val.len == 1
         for s in slots
             m[s] = (val, 1)
@@ -305,7 +407,8 @@ end
 # same producer become slices, unwritten runs become a zero constant, and one
 # concatenate joins them. This is the same reference-preserving read the
 # descriptors take, applied to the output.
-function _de_assemble(ctx::_DECtx, m::Vector{_DESlot}, n::Int)::_DEVal
+function _de_assemble(ctx::_DECtx, M::_DEMap, n::Int)::_DEVal
+    m = M.m
     pieces = _DEVal[]
     i = 1
     while i <= n

@@ -297,6 +297,54 @@ function _de_compare(name, fo, fi!, p, samples; buffers = nothing, rtol = 1e-12,
     return (d, cd_, ct_)
 end
 
+# ---- staggered prefix-scan fixtures -----------------------------------------
+# `c` on the n+1 nodes, terms on the n centres. `u` is held fixed so the
+# equation under test owns `c` alone, and the fold lands on `du`.
+function _de_scan_stag(n::Int; reduce = "+")
+    vars = Dict("u" => ESM_DE.ModelVariable(ESM_DE.UnknownVariable),
+                "c" => ESM_DE.ModelVariable(ESM_DE.UnknownVariable))
+    rhs = ESM_DE.OpExpr("faq", ESM_DE.ASTExpr[]; output_idx = Any["i"],
+        expr_body = _idx("u", _v("j")),
+        ranges = Dict("i" => [1, n + 1], "j" => [1, n]), reduce = reduce,
+        filter = _op("<", _v("j"), _v("i")))
+    ESM_DE.Model(vars, [
+        ESM_DE.Equation(_ao1(_Didx("c", _v("i")), "i", 1, n + 1), rhs),
+        ESM_DE.Equation(_ao1(_Didx("u", _v("i")), "i", 1, n),
+                        _ao1(_n(0.0), "i", 1, n)),
+    ])
+end
+
+# The same staggered scan as a MATERIALIZED ARRAY OBSERVED's fill, which is
+# the shape ReSEACT actually carries: `Mz` is an array observed, so its
+# aggregate is evaluated once per call into a buffer above the ODE state
+# (`_unwrap_identity_gather` lifts the fill's identity gather so the scan is
+# detected), and the uncovered node is a slot of the EXTENDED map rather
+# than of `du`. `D(u[i]) = Mz[i+1] - Mz[i]` reads the buffer at two distinct
+# index expressions, which is what keeps `Mz` materialized.
+function _de_scan_stag_obs(n::Int)
+    isets = Dict("lev" => ESM_DE.IndexSet("interval"; size = n),
+                 "levn" => ESM_DE.IndexSet("interval"; size = n + 1))
+    agg_lev(body) = ESM_DE.OpExpr("faq", ESM_DE.ASTExpr[];
+        output_idx = Any["i"], expr_body = body,
+        ranges = Dict{String,Any}("i" => ESM_DE.IndexSetRef("lev")))
+    mz = ESM_DE.OpExpr("faq", ESM_DE.ASTExpr[]; output_idx = Any["ke"],
+        expr_body = _op("*", _v("w"), _idx("u", _v("k"))),
+        ranges = Dict{String,Any}("ke" => ESM_DE.IndexSetRef("levn"),
+                                  "k" => ESM_DE.IndexSetRef("lev")),
+        reduce = "+", filter = _op("<", _v("k"), _v("ke")))
+    vars = Dict(
+        "u" => ESM_DE.ModelVariable(ESM_DE.UnknownVariable; shape = ["lev"]),
+        "Mz" => ESM_DE.ModelVariable(ESM_DE.UnknownVariable; shape = ["levn"]),
+        "w" => ESM_DE.ModelVariable(ESM_DE.ParameterVariable; default = 0.75))
+    eqs = [
+        ESM_DE.Equation(_v("Mz"), mz),
+        ESM_DE.Equation(agg_lev(_Didx("u", _v("i"))),
+                        agg_lev(_op("-", _idx("Mz", _op("+", _v("i"), _i(1))),
+                                    _idx("Mz", _v("i"))))),
+    ]
+    return ESM_DE.Model(vars, eqs), isets
+end
+
 @testset "direct StableHLO emission from the compiled IR" begin
     @testset "elementwise_gather conformance fixture" begin
         fixture = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance",
@@ -506,6 +554,104 @@ end
             push!(yrs, du_d[_de_slot(vmap, "c_year")])
         end
         @test sort!(unique(yrs)) == [1968.0, 1969.0, 1970.0, 2020.0, 2023.0]
+    end
+
+    # ---- prefix scans over slots the term build does not cover ---------------
+    #
+    # A STAGGERED strict prefix reduction — `c[i] = ⊕_{j < i} u[j]` with `i` over
+    # the n+1 NODES of an axis and `j` over its n CENTRES — is how a cumulative
+    # flux is spelled on a staggered grid (ReSEACT's diagnosed vertical air-mass
+    # flux). `_scan_term_iters` (build.jl) admits it and, by design, leaves the
+    # LAST node uncovered by the term build: the fold writes every node but only
+    # ever reads a slot into an accumulator it then discards, so nothing the
+    # uncovered slot holds can reach an output.
+    #
+    # The emitter keeps a slot MAP, not a zeroed buffer, so that read arrives as
+    # "nothing has written this slot". It used to be an unconditional refusal.
+    # It is not a refusal: the interpreter reads the zero its freshly allocated
+    # vector supplies, and the emitter must supply the same zero. What IS still
+    # a refusal is a slot a LATER section writes, which is a mis-ordered level
+    # plan — pinned below on the write plan itself.
+
+    @testset "a staggered prefix scan over `du`'s uncovered last node" begin
+        n = 12
+        m = _de_scan_stag(n)
+        foS, u0S, pS, _, vmS, dgS = ESM_DE._build_evaluator_impl(m; form = :oop)
+        fiS!, _, _, _, _, _ = ESM_DE._build_evaluator_impl(m; form = :inplace)
+        # The rewrite fired, and the fold is over the STATE equations (`du`).
+        @test dgS.n_scan_folds == 1
+        @test length(getfield(ESM_DE.rhs_with_buffers(foS), :scan_folds)) == 1
+        @test getfield(ESM_DE.rhs_with_buffers(foS), :n_total) ==
+              getfield(ESM_DE.rhs_with_buffers(foS), :n_states)   # nothing materialized
+        u = _de_seed(length(u0S))
+        samples = [(copy(u), 0.0), (u .* 1.5 .- 0.05, 3.25)]
+        _de_compare("scan_staggered_du", foS, fiS!, pS, samples; census = false)
+        # The last node really is the running total of every centre — a program
+        # that stopped one step short, or that refused, would not get here.
+        d = EXT_DE.direct_rhs(foS; var_map = vmS)
+        xla = RX_DE.@compile sync = true d(RX_DE.ConcreteRArray(copy(u)),
+                                           _de_dev(pS), RX_DE.ConcreteRNumber(0.0))
+        du = Array(xla(RX_DE.ConcreteRArray(copy(u)), _de_dev(pS),
+                       RX_DE.ConcreteRNumber(0.0)))
+        terms = Float64[u[vmS["u[$j]"]] for j in 1:n]
+        @test du[vmS["c[1]"]] == 0.0
+        @test du[vmS["c[$(n + 1)]"]] ≈ sum(terms) rtol = 1e-13
+    end
+
+    @testset "a staggered prefix scan over a materialized observed's buffer" begin
+        n = 9
+        m, isets = _de_scan_stag_obs(n)
+        ics = Dict("u[$j]" => 0.4 * j - 1.3 for j in 1:n)
+        foO, u0O, pO, _, vmO, dgO = ESM_DE._build_evaluator_impl(m;
+            index_sets = isets, initial_conditions = ics, form = :oop)
+        fiO!, _, _, _, _, _ = ESM_DE._build_evaluator_impl(m;
+            index_sets = isets, initial_conditions = ics, form = :inplace)
+        rO = ESM_DE.rhs_with_buffers(foO)
+        # `Mz` is materialized, its fill carries the fold, and the fold's slots
+        # are in the EXTENDED map — the ReSEACT shape, not the `du` one.
+        @test dgO.n_mat_array_obs == 1
+        @test dgO.n_mat_array_cells == n + 1
+        @test dgO.n_scan_folds == 1
+        @test isempty(getfield(rO, :scan_folds))
+        matO = getfield(rO, :mat_levels)
+        @test sum(length(lvl[4]) for lvl in matO) == 1
+        # The uncovered slot: the fold's last position in its (single) lane, and
+        # no fill kernel of the level lists it as an output.
+        SO = first(lvl for lvl in matO if !isempty(lvl[4]))[4][1]
+        @test SO.len == n + 1 && length(SO.slots) == n + 1 && !SO.inclusive
+        lastslot = SO.slots[end]
+        @test lastslot > getfield(rO, :n_states)
+        @test !any(lastslot in pl.out_slots for lvl in matO for pl in lvl[3])
+        samples = [(copy(u0O), 0.0), (u0O .* 0.7 .+ 0.11, 9.5)]
+        _de_compare("scan_staggered_obs", foO, fiO!, pO, samples; census = false)
+    end
+
+    @testset "the write plan: a zero this section may take, a later level refused" begin
+        # `_de_unwritten` is the whole decision, and it needs no MLIR context.
+        M = EXT_DE._DEMap(6)
+        EXT_DE._de_mark!(M, (2, 3), Int32(2))      # written at level 2
+        EXT_DE._de_mark!(M, (5,), Int32(7))        # written at level 7
+        EXT_DE._DE_SECTIONS[] = ["materialization level $k" for k in 1:8]
+        # Nothing writes slot 1: a zero, whatever section is reading.
+        @test EXT_DE._de_unwritten(M, 1, Int32(1), "x") === nothing
+        @test EXT_DE._de_unwritten(M, 1, Int32(8), "x") === nothing
+        # Slot 2's writer is THIS section, still running (the in-place scan).
+        @test EXT_DE._de_unwritten(M, 2, Int32(2), "x") === nothing
+        # Slot 5 is written at level 7: from level 2 that is a later section.
+        err = nothing
+        try
+            EXT_DE._de_unwritten(M, 5, Int32(2), "Mz[10]")
+        catch e
+            err = e
+        end
+        @test err isa ESM_DE.DirectEmitError
+        @test occursin("read-before-write", err.construct)
+        @test occursin("Mz[10]", err.detail)
+        @test occursin("materialization level 7", err.detail)   # names the writer
+        @test occursin("materialization level 2", err.detail)   # and the reader
+        # From level 7 itself, and from anything after it, the same slot is a zero.
+        @test EXT_DE._de_unwritten(M, 5, Int32(7), "Mz[10]") === nothing
+        @test EXT_DE._de_unwritten(M, 5, Int32(8), "Mz[10]") === nothing
     end
 
     @testset "the hard-error path names the construct and the rule" begin
