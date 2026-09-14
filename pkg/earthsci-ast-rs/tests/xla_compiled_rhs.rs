@@ -60,6 +60,10 @@ const EXPECTED_LOWERED: &[&str] = &[
     "mount_rename_atm_column",
     "mount_rename_soil_column",
     "units_registry_grammar",
+    // Added by the fixture the tier gained after this list was written; the Rust
+    // lowering and the fixture landed on separate branches, so nothing had ever
+    // run one against the other until the two were merged.
+    "datetime_log10",
 ];
 
 fn repo_root() -> PathBuf {
@@ -509,7 +513,9 @@ const JULIAN_DAY_VAR: &str = "f7";
 /// Probe times: the epoch, both sides of a day boundary, a fractional second
 /// each side of the epoch, two leap days, the last second of a leap day, two
 /// year boundaries, a leap century (2000), two non-leap centuries (1900
-/// backwards and 2100 forwards) and a deeply negative time (0001-01-01).
+/// backwards and 2100 forwards), a deeply negative time (0001-01-01) and four
+/// 400-year era boundaries, where a reciprocal-rewritten divide floors the era
+/// one short.
 const DATETIME_TIMES: &[f64] = &[
     0.0,
     -1.0,
@@ -528,6 +534,16 @@ const DATETIME_TIMES: &[f64] = &[
     -62_135_596_800.0, // 0001-01-01T00:00:00Z
     1_500_000_000.25,
     -1_500_000_000.25,
+    // The start of a 400-year Gregorian era (March 1 of 0400, 0800, 1600 —
+    // `z = day + 719468` an exact multiple of 146097). `fl(1/146097)` is below
+    // the true reciprocal, so a backend that answers `z / 146097` with
+    // `z * fl(1/146097)` floors the era one short and the whole date moves by
+    // a day; these three are the multiples at which that product actually
+    // rounds low.
+    -49_539_254_400.0, // 0400-03-01T00:00:00Z (era boundary)
+    -36_916_473_600.0, // 0800-03-01T00:00:00Z (era boundary)
+    -11_670_912_000.0, // 1600-03-01T00:00:00Z (era boundary)
+    951_868_800.0,     // 2000-03-01T00:00:00Z (era boundary, product exact)
 ];
 
 /// One 0-d tendency per calendar entry, each reading the solver time.
