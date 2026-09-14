@@ -128,6 +128,37 @@ func LoadString(jsonStr string, opts ...LoadOption) (*ESMFile, error) {
 	}
 	jsonStr = prepared
 
+	// esm-spec §4.7 / §8.9.4: the mount-declared metaparameter set and the static
+	// `extent` check are computed HERE, on the AUTHORED text, before anything
+	// resolves — and deliberately as early as the wire boundary allows.
+	//
+	// Both read the unresolved `{ref}` mount edges: a §4.7 mount CONSUMES the
+	// leaf's `metaparameters` at its edge (§9.7.6 site 3), so once refs are
+	// resolved those names are gone and the walk finds nothing. That makes the
+	// placement load-bearing rather than incidental, and it must not drift later:
+	// resolving refs ahead of the root machinery is a legitimate thing to want
+	// (a rewrite target inside a mounted component only lowers if the content is
+	// spliced in first), and the moment it happens anywhere below this line, a
+	// conforming `extent` naming a mounted leaf's metaparameter would be refused.
+	//
+	// Moving the check AFTER the close is not the alternative it appears to be:
+	// the close folds this document's own `index_sets` sizes to integers, which
+	// makes `documentIsInResolvedShape` true for any mount-less document and
+	// silently exempts it — so the purest typo, a single file whose `extent`
+	// misspells a metaparameter it declares itself, stops being caught at all.
+	// Measured both ways; see esm-spec §8.9.4.
+	var authoredMountDeclared map[string]bool
+	{
+		authoredView, derr := decodeJSONView([]byte(jsonStr))
+		if derr == nil {
+			md, cerr := rootMountContext(authoredView, o.basePath, o.metaparameters)
+			if cerr != nil {
+				return nil, cerr
+			}
+			authoredMountDeclared = md
+		}
+	}
+
 	// v0.4.0 expression_templates / apply_expression_template are rejected
 	// when the file declares esm < 0.4.0 (RFC §5.4 spec-version gate), and
 	// the v0.8.0 §9.7 constructs (expression_template_imports, top-level
@@ -219,7 +250,8 @@ func LoadString(jsonStr string, opts ...LoadOption) (*ESMFile, error) {
 	// one side of esm-spec §9.7.6 as before.
 	topLevelModelRefs := extractTopLevelModelRefEdges(jsonStr)
 
-	expanded, componentTemplates, err := resolveAndLowerJSONCapturing(jsonStr, o.basePath, o.metaparameters)
+	expanded, componentTemplates, err := resolveAndLowerJSONCapturing(jsonStr, o.basePath, o.metaparameters,
+		authoredMountDeclared)
 	if err != nil {
 		return nil, err
 	}

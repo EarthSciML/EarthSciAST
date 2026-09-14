@@ -381,6 +381,33 @@ fn walk_top_level(
     api_meta: &BTreeMap<String, i64>,
     defer: bool,
 ) -> Result<Map<String, Value>, DiagnosticError> {
+    // esm-spec §4.7 "Which environment a contribution folds against": the
+    // registry a contribution lands in here belongs to THIS document, so the
+    // fold environment is this document's own closed one — not the caller's.
+    // At the root the two coincide (`parent_meta` IS this env); one level down
+    // they do not, and folding a nested contribution against an empty or an
+    // outer environment leaves an axis only this leaf can size still symbolic.
+    //
+    // Its own declared `default`s and the loader-API bindings are the base —
+    // and then the EDGE `bindings` that closed this document win over its
+    // defaults, esm-spec §9.7.6 site 3. `parent_meta` carries them: at a mount
+    // edge the caller hands down the leaf's closed environment, at depth zero
+    // the root's own. Only the names THIS document DECLARES are taken from it,
+    // the same filter site 4 applies to the backfill — an outer metaparameter
+    // this document never declared must not size an axis here.
+    //
+    // Without the overlay a leaf's own axis and an axis its nested mount
+    // contributes fold to DIFFERENT values inside one resolved document: the
+    // leaf's own goes through `resolve_template_machinery(.., &bindings)` and
+    // sees the binding, the contributed one would not.
+    let mut merge_env = root_metaparameter_env(value, api_meta);
+    if let Some(decls) = value.get("metaparameters").and_then(|v| v.as_object()) {
+        let bound: Vec<(String, i64)> = decls
+            .keys()
+            .filter_map(|n| parent_meta.get(n).map(|v| (n.clone(), *v)))
+            .collect();
+        merge_env.extend(bound);
+    }
     let obj = match value.as_object_mut() {
         Some(o) => o,
         None => return Ok(Map::new()),
@@ -413,6 +440,7 @@ fn walk_top_level(
         parent_meta,
         api_meta,
         if defer { Some(&mut staged) } else { None },
+        &merge_env,
     )?;
 
     // The importing document's index-set registry starts from its own
@@ -441,6 +469,7 @@ fn walk_top_level(
                 Some(&mut registry),
                 parent_meta,
                 api_meta,
+                &merge_env,
             )?;
         }
     }
@@ -449,7 +478,15 @@ fn walk_top_level(
         .and_then(|v| v.as_object_mut())
     {
         for (_name, system) in map.iter_mut() {
-            walk_subsystems(system, base_path, visited, None, parent_meta, api_meta)?;
+            walk_subsystems(
+                system,
+                base_path,
+                visited,
+                None,
+                parent_meta,
+                api_meta,
+                &merge_env,
+            )?;
         }
     }
 
@@ -509,6 +546,7 @@ fn inline_toplevel_model_refs(
     parent_meta: &BTreeMap<String, i64>,
     api_meta: &BTreeMap<String, i64>,
     mut staged: Option<&mut Map<String, Value>>,
+    merge_env: &BTreeMap<String, i64>,
 ) -> Result<(), DiagnosticError> {
     let edge_names: Vec<String> = match obj.get("models").and_then(|v| v.as_object()) {
         Some(models) => models
@@ -770,13 +808,13 @@ fn inline_toplevel_model_refs(
             // Deferred at the ROOT (see `walk_top_level`): the contribution is
             // staged, not merged, until the mounting document has closed.
             if let Some(staged) = staged.as_deref_mut() {
-                merge_subsystem_index_sets(staged, &loaded, ref_str, parent_meta)?;
+                merge_subsystem_index_sets(staged, &loaded, ref_str, merge_env)?;
             } else {
                 let registry = obj
                     .entry("index_sets".to_string())
                     .or_insert_with(|| Value::Object(Map::new()));
                 if let Some(registry) = registry.as_object_mut() {
-                    merge_subsystem_index_sets(registry, &loaded, ref_str, parent_meta)?;
+                    merge_subsystem_index_sets(registry, &loaded, ref_str, merge_env)?;
                 }
             }
         }
@@ -910,6 +948,7 @@ fn walk_subsystems(
     mut registry: Option<&mut Map<String, Value>>,
     parent_meta: &BTreeMap<String, i64>,
     api_meta: &BTreeMap<String, i64>,
+    merge_env: &BTreeMap<String, i64>,
 ) -> Result<(), DiagnosticError> {
     let obj = match value.as_object_mut() {
         Some(o) => o,
@@ -936,6 +975,7 @@ fn walk_subsystems(
             registry.as_deref_mut(),
             parent_meta,
             api_meta,
+            merge_env,
         )?;
         subs.insert(name, resolved);
     }
@@ -1004,6 +1044,7 @@ fn resolve_value(
     registry: Option<&mut Map<String, Value>>,
     parent_meta: &BTreeMap<String, i64>,
     api_meta: &BTreeMap<String, i64>,
+    merge_env: &BTreeMap<String, i64>,
 ) -> Result<Value, DiagnosticError> {
     if let Some(obj) = value.as_object()
         && let Some(ref_val) = obj.get("ref")
@@ -1194,7 +1235,7 @@ fn resolve_value(
             if let Some(reg) = registry
                 && let Some(loaded) = parsed.get("index_sets").and_then(|v| v.as_object())
             {
-                merge_subsystem_index_sets(reg, &loaded.clone(), ref_str, parent_meta)?;
+                merge_subsystem_index_sets(reg, &loaded.clone(), ref_str, merge_env)?;
             }
             Ok(())
         })();
@@ -1213,6 +1254,7 @@ fn resolve_value(
         registry,
         parent_meta,
         api_meta,
+        merge_env,
     )?;
     Ok(value)
 }

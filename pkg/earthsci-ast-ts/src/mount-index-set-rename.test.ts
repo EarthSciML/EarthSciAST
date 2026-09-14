@@ -233,6 +233,17 @@ describe('a §4.7 merge folds against the environment of the registry it lands i
     const sets = (file as unknown as { index_sets: Record<string, { size?: number }> }).index_sets
     expect(sets.prof?.size).toBe(4)
   })
+
+  // And "the leaf's closed environment" means CLOSED: an explicit edge binding
+  // closes the referenced document and wins over its own default (§9.7.6 site
+  // 3), so the same axis is 7 when the edge binds 7. An axis the leaf declares
+  // ITSELF already folds to 7 through that close, so answering 4 here would
+  // make one resolved document disagree with itself.
+  it("takes an edge binding over the leaf's own default in that close", () => {
+    const { file } = loadResolved('fixtures/mount_merge_fold_env/fold_env_bound_root.esm')
+    const sets = (file as unknown as { index_sets: Record<string, { size?: number }> }).index_sets
+    expect(sets.prof?.size).toBe(7)
+  })
 })
 
 describe('the raised floor, at the seam the §4.7 inline/merge reorder needs it', () => {

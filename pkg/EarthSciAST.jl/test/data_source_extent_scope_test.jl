@@ -339,4 +339,19 @@ end
         @test sub.index_sets["lev"].size == 40
         @test top.index_sets["lev"] == sub.index_sets["lev"]
     end
+
+    @testset "the purest typo is caught, and stays caught" begin
+        # One file, no mounts, no imports: it declares `N_REC`, sizes its axis by
+        # it, and the `extent` says `N_RECS`. On the AUTHORED tree that is
+        # refused. After the close it is not — the close folds `records.size`
+        # from `"N_REC"` to `0`, which makes the document satisfy
+        # `_document_is_in_resolved_shape` (no unresolved mount, every size an
+        # integer), and the idempotency exemption then skips the check entirely.
+        # Measured both ways; this test is what keeps the check on the authored
+        # tree.
+        err = _extent_err(() -> _extent_load("extent_typo_no_mount.esm"))
+        @test err isa ExpressionTemplateError
+        @test err.code == ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME
+        @test occursin("N_RECS", err.message)
+    end
 end

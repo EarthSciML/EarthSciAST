@@ -419,6 +419,20 @@ func TestMergeFoldsAgainstTheRegistryItLandsIn(t *testing.T) {
 	if got.Size == nil || *got.Size != 4 {
 		t.Errorf("prof size = %v; want 4 (the LEAF's n_lev, not the assembly's 9)", got.Size)
 	}
+
+	// And "the leaf's closed environment" means CLOSED: an explicit edge
+	// binding closes the referenced document and wins over its own default
+	// (§9.7.6 site 3), so the same axis is 7 when the edge binds 7. An axis the
+	// leaf declares ITSELF already folds to 7 through that close, so answering
+	// 4 here would make one resolved document disagree with itself.
+	bf, err := LoadPath(mrFixture(t, "fixtures", "mount_merge_fold_env", "fold_env_bound_root.esm"))
+	if err != nil {
+		t.Fatalf("LoadPath(fold_env_bound_root): %v", err)
+	}
+	bound := bf.IndexSets["prof"]
+	if bound.Size == nil || *bound.Size != 7 {
+		t.Errorf("prof size = %v; want 7 (the edge binding closes the leaf)", bound.Size)
+	}
 }
 
 // The RAISED FLOOR, at the seam the §4.7 inline/merge reorder needs it.

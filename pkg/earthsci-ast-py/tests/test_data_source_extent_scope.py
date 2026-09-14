@@ -270,3 +270,21 @@ def test_two_identical_declarations_do_not_collide_at_either_mount_form():
     assert top.index_sets["lev"]["size"] == 40
     assert sub.index_sets["lev"]["size"] == 40
     assert top.index_sets["lev"] == sub.index_sets["lev"]
+
+
+def test_the_purest_typo_is_caught_and_stays_caught():
+    """One file, no mounts, no imports: it declares `N_REC`, sizes its axis by
+    it, and the `extent` says `N_RECS`.
+
+    This is the case that decides WHERE the check runs. On the authored tree it
+    is refused. After the close it is not: the close folds `records.size` from
+    `"N_REC"` to `0`, which makes the document satisfy
+    :func:`document_is_in_resolved_shape` — no unresolved mount, every size an
+    integer — and the idempotency exemption then skips the check entirely.
+    Measured both ways; this test is what keeps the check on the authored tree.
+    """
+    with pytest.raises(Exception) as excinfo:
+        load_path(str(_DIR / "extent_typo_no_mount.esm"))
+    msg = str(excinfo.value)
+    assert "template_import_unknown_name" in msg
+    assert "N_RECS" in msg

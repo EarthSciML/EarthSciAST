@@ -564,6 +564,22 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
   // esm-spec §8.9.4, statically: an `extent` naming a metaparameter nobody
   // declares is refused HERE rather than when the source is finally sampled at
   // build.
+  //
+  // ON THE AUTHORED TREE, and that placement is load-bearing rather than
+  // incidental (esm-spec §8.9.4 "When the check is evaluated"). Both this check
+  // and `mountDeclared` above read the UNRESOLVED `{ref}` mount edges: a §4.7
+  // mount CONSUMES the leaf's `metaparameters` at its edge (§9.7.6 site 3), so
+  // once refs are resolved the names a conforming `extent` legitimately reaches
+  // are gone. Resolving refs ahead of the root machinery is a legitimate thing
+  // to want — a rewrite target inside a mounted component only lowers if the
+  // content is spliced in first — so if that ever happens in this binding it
+  // must happen BELOW this line, not above it.
+  //
+  // Moving the check after the close is not the alternative it looks like: the
+  // close folds this document's own `index_sets` sizes to integers, which makes
+  // `documentIsInResolvedShape` true for any mount-less document and exempts it,
+  // so a single file whose `extent` misspells a metaparameter it declares itself
+  // stops being caught. Measured both ways.
   checkDataSourceExtents(machineryInput, basePath, mountDeclared ?? new Set<string>(), {
     readFile: options?.readFile,
   })

@@ -410,4 +410,18 @@ fn a_merge_folds_against_the_environment_of_the_registry_it_lands_in() {
         "the contributed axis must fold against the LEAF's n_lev (4), never the assembly's (9): {}",
         value["index_sets"]
     );
+
+    // And "the leaf's closed environment" means CLOSED: an explicit edge
+    // binding closes the referenced document and wins over its own default
+    // (§9.7.6 site 3), so the same axis is 7 when the edge binds 7. An axis the
+    // leaf declares ITSELF already folds to 7 through that close, so answering
+    // 4 here would make one resolved document disagree with itself.
+    let path = fixture("fixtures/mount_merge_fold_env/fold_env_bound_root.esm");
+    let file = load_path(&path).unwrap_or_else(|e| panic!("{} does not load: {e}", path.display()));
+    let value = serde_json::to_value(&file).expect("document renders as JSON");
+    assert_eq!(
+        value["index_sets"]["prof"]["size"], 7,
+        "an edge binding closes the leaf, so the contributed axis folds to 7: {}",
+        value["index_sets"]
+    );
 }
