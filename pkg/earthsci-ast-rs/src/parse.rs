@@ -200,7 +200,12 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     // (`NTGT = NX*NY`, esm-spec §9.7.6 site 3) folds against the root document's
     // closed metaparameter environment (defaults overlaid with the API
     // bindings) at the mount.
-    crate::ref_loading::resolve_subsystem_refs_with_metaparameters(
+    // The §4.7 contributions are STAGED here, not merged: the content is spliced
+    // in now (the root's own §9.7 machinery has to lower through it), but its
+    // `index_sets` do not join the registry until the root has CLOSED — §9.7.6
+    // site 3, "subsystem refs resolve post-close". They are applied just below,
+    // immediately after `resolve_template_machinery_scoped`.
+    let staged_index_sets = crate::ref_loading::resolve_subsystem_refs_with_metaparameters(
         &mut json_value,
         &base,
         &options.metaparameters,
@@ -264,6 +269,16 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     {
         json_value = resolved;
     }
+
+    // esm-spec §4.7 "Index-set merge", the deferred half: the root has now
+    // closed and folded its own `index_sets`, so the staged mount contributions
+    // merge against a registry of concrete sizes, each folded against the same
+    // closed environment first. Before structural validation, which needs the
+    // complete registry.
+    let closed_env =
+        crate::ref_loading::root_metaparameter_env(&json_value, &options.metaparameters);
+    crate::ref_loading::apply_staged_index_sets(&mut json_value, staged_index_sets, &closed_env)
+        .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
 
     // Post-schema structural + semantic checks (version compatibility,
     // cross-field format rules, reference integrity, cyclic coupling) — the

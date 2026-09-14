@@ -420,18 +420,21 @@ fn the_loader_api_backfills_a_leaf_and_an_edge_binding_outranks_it() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// FALSIFICATION 7 — the OTHER new refusal, pinned so it is visible rather than
-/// discovered.
+/// FALSIFICATION 7, INVERTED — the restatement asymmetry is gone.
 ///
-/// A `size` a mounted leaf cannot close reaches the merge unfolded, and
-/// `merge_subsystem_index_sets` compares declarations structurally. So the
-/// idempotence of a restatement is SYNTACTIC there: restating the leaf's axis
-/// verbatim merges clean (FALSIFICATION 2), but restating it with the concrete
-/// number the name folds to is a conflict — even though the two say the same
-/// thing once the root closes. This loaded before the edge pipeline ran here.
-/// Python refuses it identically, so it is a convergence, not a divergence.
+/// This used to pin a refusal: a `size` the mounted leaf could not close reached
+/// the merge unfolded, so idempotence was SYNTACTIC. Restating the leaf's axis
+/// verbatim (`size: "n_rows"`) merged clean while restating it with the concrete
+/// number the name folds to (`size: 7`) was `subsystem_index_set_conflict` —
+/// even though the two say the same thing once the root closes. The more
+/// concrete, more obviously-correct spelling was the one rejected.
+///
+/// RFC `mount-edge-index-set-renaming.md` open question 2 settled that: the §4.7
+/// merge runs POST-CLOSE and folds the contribution against the mounting
+/// document's closed environment before comparing, so both spellings fold to 7
+/// and both are idempotent. All five bindings agree.
 #[test]
-fn a_concrete_restatement_of_a_symbolic_leaf_axis_collides() {
+fn a_concrete_restatement_of_a_symbolic_leaf_axis_is_idempotent() {
     let dir = scratch("concrete_restatement");
     write(
         &dir,
@@ -454,19 +457,14 @@ fn a_concrete_restatement_of_a_symbolic_leaf_axis_collides() {
             "models":{"M":{"ref":"./leaf.esm"}}}"#,
     );
 
-    let e =
-        load_path(&host).expect_err("a concrete restatement is not deep-equal to a symbolic one");
-    let text = e.to_string();
-    assert!(
-        text.contains("subsystem_index_set_conflict"),
-        "stable code required, not an i64 coercion panic: {text}"
+    let doc = load_path(&host)
+        .expect("a concrete restatement folds to the same integer and is idempotent");
+    let rows = |f: &earthsci_ast::EsmFile| f.index_sets.as_ref().expect("index_sets")["rows"].size;
+    assert_eq!(
+        rows(&doc),
+        Some(7),
+        "one registry entry at the folded size, not a collision"
     );
-    for needle in ["n_rows", "size=7"] {
-        assert!(
-            text.contains(needle),
-            "the diagnostic must name both contributors ({needle}): {text}"
-        );
-    }
 
     let _ = std::fs::remove_dir_all(&dir);
 }

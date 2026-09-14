@@ -2289,6 +2289,43 @@ fn visit_mount_ref(
     collect_mount_declared_into(&child, &child_dir, follow_imports, seen, out);
 }
 
+/// Fold ONE §4.7 mount contribution's interval `size` against the MOUNTING
+/// document's already-closed metaparameter environment, before the deep-equal
+/// comparison that merges it (esm-spec §4.7 "Index-set merge").
+///
+/// This is the step that makes the merge order answerable. A §4.7 mount resolves
+/// POST-CLOSE (§9.7.6 site 3: "the mounting document closes its own
+/// metaparameters before its refs resolve"), so by the time a contribution
+/// arrives the registry side has already folded to integers. Comparing an
+/// unfolded contribution against a folded registry entry makes two IDENTICAL
+/// declarations collide, which is issue #198; and leaving the contribution
+/// unfolded publishes a resolved document whose axis still carries a
+/// metaparameter name, which contradicts "the mounted form is fully concrete
+/// when it splices in" and §9.7.6 site 5's "closed at some enclosing document's
+/// close".
+///
+/// A `size` already an integer is returned unchanged. A `size` whose free names
+/// are NOT all in `env` stays symbolic rather than erroring: the enclosing
+/// document is not obliged to be able to close a name the assembly never
+/// declared, and leaving it open preserves what loads today.
+pub(crate) fn fold_mount_contribution(decl: &Value, env: &BTreeMap<String, i64>) -> Value {
+    let Some(obj) = decl.as_object() else {
+        return decl.clone();
+    };
+    let Some(size) = obj.get("size") else {
+        return decl.clone();
+    };
+    if size.is_i64() || size.is_u64() || size.is_null() {
+        return decl.clone();
+    }
+    let Ok(folded) = eval_meta_expr(size, env, "index set size") else {
+        return decl.clone();
+    };
+    let mut out = obj.clone();
+    out.insert("size".to_string(), Value::from(folded));
+    Value::Object(out)
+}
+
 /// Whether any `data_sources` entry carries an `extent` (§8.9.4).
 ///
 /// The cheap guard on [`collect_mount_declared_metaparameters`]: the widened
