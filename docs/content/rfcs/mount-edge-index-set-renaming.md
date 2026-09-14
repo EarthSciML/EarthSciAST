@@ -414,8 +414,10 @@ item 3 landed: that change makes the top-level form MERGE the leaf's `index_sets
 `index_set_rename` there would merge the leaf under its **pre-rename** axis names — silently, in
 the one place the field exists to make loud. That is what the refusal was holding shut, and
 applying the field at both forms is what opened it properly. The four bindings that do not mount
-a top-level `reaction_systems.<k>` `{ref}` at all still neither apply nor refuse the field there,
-which is the one silence §4.7 forbids that survives.
+a top-level `reaction_systems.<k>` `{ref}` at all — Rust, TypeScript, Go and Python — refuse the
+whole entry with `mount_form_unsupported` at `/reaction_systems/<k>` (esm-spec §4.7 "Two mount
+forms, one mechanism", §9.6.6), so the field is not silently ignored there either. Implementing
+that form in those four is follow-up work.
 
 ### 4.12 Mounting an assembly — the mount form composes with itself
 
