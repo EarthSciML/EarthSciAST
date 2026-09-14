@@ -2240,6 +2240,15 @@ broadcast — the value is then unindexable, and the failure surfaces far from t
 declaration (a non-finite right-hand side, an out-of-rank gather, a refusal to
 build) rather than as anything naming the variable.
 
+Because the broadcast is materialized, its cost is the declared grid's, not the
+scalar's: the whole grid is filled at build time whether or not anything reads
+the array, so memory grows with the product of the declared extents. A shaped
+parameter whose real values come from a data source and whose `default` is a
+scalar placeholder should therefore be built with that data supplied. Supplied
+data takes the place of the `default`, so no fill is made. Built without its
+data at production extents, such a document allocates the full grid for every
+such parameter and can exhaust memory before the build reports anything.
+
 A test supplies the same union through `parameter_overrides` /
 `initial_conditions` (§6.6.2), which is what lets a column-physics component
 carry its profiles per regime without one generated document per regime.
