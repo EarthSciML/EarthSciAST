@@ -128,17 +128,17 @@ function _mtk_extended_op(op::AbstractString, expr::OpExpr,
     elseif op == "fn"
         return _build_fn(expr, var_dict, t_sym, dim_dict)
     elseif op == "const"
-        # esm-spec §9.2: a `const` node IS its value. Only the SCALAR form
-        # lowers here — an ARRAY-valued `const` is a table argument, extracted
-        # at the `interp.*` call site by `_build_fn` (a bare array in a scalar
-        # symbolic expression has no meaning MTK can trace). Until this arm
-        # existed, a perfectly ordinary `{"op": "const", "value": 0.0}` RHS —
-        # the form every binding's conformance fixtures write a literal in —
-        # died as "Unsupported operator: const".
+        # esm-spec §9.2: a `const` node IS its value. A scalar lowers to the
+        # number. An ARRAY lowers to a dense `Array{Float64}` (`value[i][j]` is
+        # element `(i, j)`): it is the RHS of a const-array observed, which the
+        # system builders lower element by element (`_push_lowered_equation!`).
+        # An array read through `index` never reaches this arm — `_build_index`
+        # takes it as a const-array gather — and an `interp.*` table is
+        # extracted at its call site by `_build_fn`.
         expr.value isa Real && return expr.value
-        throw(ArgumentError("`const` with a $(typeof(expr.value)) value is supported " *
-              "only as an `interp.*` table / axis argument in MTK lowering " *
-              "(esm-spec §9.2)"))
+        expr.value isa AbstractVector && return EarthSciAST._const_op_to_array(expr.value)
+        throw(ArgumentError("`const` with a $(typeof(expr.value)) value has no " *
+              "MTK lowering (esm-spec §9.2)"))
     else
         throw(ArgumentError("Unsupported operator: $op"))
     end
@@ -214,6 +214,116 @@ function _build_makearray(expr::OpExpr, var_dict::Dict{String,Any},
     return result
 end
 
+# ---- Const-array gathers (esm-spec §9.2, CONFORMANCE_SPEC §5.5.5) ----
+#
+# `index(table, e_1, …, e_D)` where `table` is a `const` array — written
+# inline, or an observed whose definition is a `const` array — reads build-time
+# literal data, exactly as the tree-walk's const-array registry does. An index
+# that lowers to a number resolves now; any other index is read at run time
+# through a registered gather, so MTK sees one opaque scalar per read. Either
+# way an out-of-range index raises `E_TREEWALK_CONSTARRAY_OOB`: a document
+# carries no boundary policy for a const array, so the §5.5.5 default applies,
+# and the zero ghost of a state/observed gather is never used.
+
+# `dim_dict` key of the name → `Array{Float64}` registry of const-array
+# observeds, filled by `_register_const_array_observeds!`.
+const _CONST_ARRAYS_KEY = "__esm_const_array_observeds__"
+
+# Record every observed defined by a `const` array so a gather on its name
+# reads the literal data rather than the symbolic array variable.
+function _register_const_array_observeds!(dim_dict::Dict{String,Any}, flat)
+    registry = Dict{String,Array{Float64}}()
+    for eq in flat.equations
+        (eq.lhs isa VarExpr && eq.rhs isa OpExpr) || continue
+        rhs = eq.rhs::OpExpr
+        (rhs.op == "const" && rhs.value isa AbstractVector) || continue
+        registry[(eq.lhs::VarExpr).name] = EarthSciAST._const_op_to_array(rhs.value)
+    end
+    isempty(registry) || (dim_dict[_CONST_ARRAYS_KEY] = registry)
+    return nothing
+end
+
+# `(table, name)` when `base` is a const-array gather base, else `(nothing, "")`.
+function _const_index_base(base::EsmExpr, dim_dict::Dict{String,Any})
+    if base isa OpExpr && base.op == "const" && base.value isa AbstractVector
+        return EarthSciAST._const_op_to_array(base.value), "inline const"
+    elseif base isa VarExpr
+        registry = get(dim_dict, _CONST_ARRAYS_KEY, nothing)
+        if registry !== nothing && haskey(registry, base.name)
+            return registry[base.name], base.name
+        end
+    end
+    return nothing, ""
+end
+
+function _esm_const_gather(table::Vector{Float64}, name::String, i::Real)::Float64
+    return table[EarthSciAST._resolve_const_index(table, name, 1, round(Int, i), size(table, 1))]
+end
+
+function _esm_const_gather(table::Matrix{Float64}, name::String, i::Real, j::Real)::Float64
+    ri = EarthSciAST._resolve_const_index(table, name, 1, round(Int, i), size(table, 1))
+    rj = EarthSciAST._resolve_const_index(table, name, 2, round(Int, j), size(table, 2))
+    return table[ri, rj]
+end
+
+function _esm_const_gather(table::Array{Float64,3}, name::String, i::Real, j::Real, k::Real)::Float64
+    ri = EarthSciAST._resolve_const_index(table, name, 1, round(Int, i), size(table, 1))
+    rj = EarthSciAST._resolve_const_index(table, name, 2, round(Int, j), size(table, 2))
+    rk = EarthSciAST._resolve_const_index(table, name, 3, round(Int, k), size(table, 3))
+    return table[ri, rj, rk]
+end
+
+@register_symbolic _esm_const_gather(table::Vector{Float64}, name::String, i) false
+@register_symbolic _esm_const_gather(table::Matrix{Float64}, name::String, i, j) false
+@register_symbolic _esm_const_gather(table::Array{Float64,3}, name::String, i, j, k) false
+
+function _build_const_gather(table::Array{Float64}, name::String,
+                             idx_args::AbstractVector, var_dict::Dict{String,Any},
+                             t_sym, dim_dict::Dict{String,Any})
+    length(idx_args) == ndims(table) ||
+        throw(EarthSciAST.TreeWalkError("E_TREEWALK_CONSTARRAY_NDIM",
+              "const array '$(name)' is $(ndims(table))D but got " *
+              "$(length(idx_args)) indices"))
+    idxs = Any[]
+    for a in idx_args
+        v = _esm_to_symbolic(a, var_dict, t_sym, dim_dict)
+        # `Num <: Real`, so test the unwrapped value: only a NUMBER resolves now.
+        n = Symbolics.value(v)
+        if n isa Real
+            isinteger(n) || throw(ArgumentError(
+                "index argument must be an integer, got $(n)"))
+            v = Int(n)
+        end
+        push!(idxs, v)
+    end
+    if all(i -> i isa Integer, idxs)
+        resolved = ntuple(d -> EarthSciAST._resolve_const_index(
+            table, name, d, idxs[d], size(table, d)), ndims(table))
+        return table[resolved...]
+    end
+    ndims(table) <= 3 || throw(ArgumentError(
+        "MTK lowering gathers a const array of at most 3 dimensions at a " *
+        "run-time index; '$(name)' has $(ndims(table))"))
+    return _esm_const_gather(table, name, idxs...)
+end
+
+# Push `lhs ~ rhs`, or one equation per element when `rhs` is a const array
+# (an observed defined by a `const` array).
+function _push_lowered_equation!(eqs::AbstractVector, lhs, rhs)
+    # `Array{Float64}`, not `AbstractArray{<:Real}`: a `makearray` lowers to an
+    # `Array{Num}` (`Num <: Real`) and keeps its whole-array equation.
+    if rhs isa Array{Float64}
+        size(lhs) == size(rhs) || throw(ArgumentError(
+            "`const` array of size $(size(rhs)) defines a variable of size $(size(lhs))"))
+        for I in CartesianIndices(rhs)
+            push!(eqs, lhs[I] ~ rhs[I])
+        end
+    else
+        push!(eqs, lhs ~ rhs)
+    end
+    return eqs
+end
+
 # Build an `index` node: `args[1]` is the array-shaped operand, `args[2:]`
 # are the index expressions.
 #
@@ -226,6 +336,13 @@ end
 # Out-of-bounds periodic reads return 0 (zero-ghost convention).
 function _build_index(expr::OpExpr, var_dict::Dict{String,Any},
                       t_sym, dim_dict::Dict{String,Any})
+    # A const-array gather (CONFORMANCE_SPEC §5.5.5) never takes the zero ghost
+    # below, so it is routed before the operand is lowered.
+    table, table_name = _const_index_base(expr.args[1], dim_dict)
+    table === nothing ||
+        return _build_const_gather(table, table_name, expr.args[2:end],
+                                   var_dict, t_sym, dim_dict)
+
     arr = _esm_to_symbolic(expr.args[1], var_dict, t_sym, dim_dict)
     idx_args = expr.args[2:end]
 
