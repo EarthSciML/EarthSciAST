@@ -1,0 +1,112 @@
+{
+  "engine": "interpreter",
+  "fixture": "datetime_log10",
+  "reference_binding": "julia",
+  "rhs": {
+    "day_boundary": {
+      "cal_day": 2.0,
+      "cal_day_of_year": 2.0,
+      "cal_hour": 0.0,
+      "cal_is_leap_year": 0.0,
+      "cal_julian_day": 2440588.5,
+      "cal_local_hour": -4.88,
+      "cal_minute": 0.0,
+      "cal_month": 1.0,
+      "cal_second": 0.0,
+      "cal_year": 1970.0,
+      "lg": 1.7840727226612296
+    },
+    "day_boundary_below": {
+      "cal_day": 1.0,
+      "cal_day_of_year": 1.0,
+      "cal_hour": 23.0,
+      "cal_is_leap_year": 0.0,
+      "cal_julian_day": 2440588.4999971064,
+      "cal_local_hour": -5.88,
+      "cal_minute": 59.0,
+      "cal_month": 1.0,
+      "cal_second": 59.0,
+      "cal_year": 1970.0,
+      "lg": 1.791101876372466
+    },
+    "default": {
+      "cal_day": 1.0,
+      "cal_day_of_year": 1.0,
+      "cal_hour": 0.0,
+      "cal_is_leap_year": 0.0,
+      "cal_julian_day": 2440587.5,
+      "cal_local_hour": -4.88,
+      "cal_minute": 0.0,
+      "cal_month": 1.0,
+      "cal_second": 0.0,
+      "cal_year": 1970.0,
+      "lg": 1.3979400086720377
+    },
+    "leap_day_2020": {
+      "cal_day": 29.0,
+      "cal_day_of_year": 60.0,
+      "cal_hour": 12.0,
+      "cal_is_leap_year": 1.0,
+      "cal_julian_day": 2458909.0242592595,
+      "cal_local_hour": 7.12,
+      "cal_minute": 34.0,
+      "cal_month": 2.0,
+      "cal_second": 56.0,
+      "cal_year": 2020.0,
+      "lg": 1.6219341190123298
+    },
+    "pre_epoch_fraction": {
+      "cal_day": 31.0,
+      "cal_day_of_year": 365.0,
+      "cal_hour": 23.0,
+      "cal_is_leap_year": 0.0,
+      "cal_julian_day": 2440587.4999942128,
+      "cal_local_hour": -5.88,
+      "cal_minute": 59.0,
+      "cal_month": 12.0,
+      "cal_second": 59.0,
+      "cal_year": 1969.0,
+      "lg": 1.1048208196884586
+    },
+    "pre_epoch_leap_1968": {
+      "cal_day": 29.0,
+      "cal_day_of_year": 60.0,
+      "cal_hour": 6.0,
+      "cal_is_leap_year": 1.0,
+      "cal_julian_day": 2439915.75,
+      "cal_local_hour": 1.12,
+      "cal_minute": 0.0,
+      "cal_month": 2.0,
+      "cal_second": 0.0,
+      "cal_year": 1968.0,
+      "lg": 1.1902615579748945
+    },
+    "pre_epoch_second": {
+      "cal_day": 31.0,
+      "cal_day_of_year": 365.0,
+      "cal_hour": 23.0,
+      "cal_is_leap_year": 0.0,
+      "cal_julian_day": 2440587.499988426,
+      "cal_local_hour": -5.88,
+      "cal_minute": 59.0,
+      "cal_month": 12.0,
+      "cal_second": 59.0,
+      "cal_year": 1969.0,
+      "lg": 1.7260729994017223
+    },
+    "year_end_2023": {
+      "cal_day": 31.0,
+      "cal_day_of_year": 365.0,
+      "cal_hour": 23.0,
+      "cal_is_leap_year": 0.0,
+      "cal_julian_day": 2460310.4999942128,
+      "cal_local_hour": -5.88,
+      "cal_minute": 59.0,
+      "cal_month": 12.0,
+      "cal_second": 59.0,
+      "cal_year": 2023.0,
+      "lg": 1.5746929268880958
+    }
+  },
+  "tolerance_class": "transcendental"
+}
