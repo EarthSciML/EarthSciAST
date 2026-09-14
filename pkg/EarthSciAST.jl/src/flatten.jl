@@ -1246,8 +1246,9 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
                                               template_registry),
                            lifted_shapes=lifted_shapes)
 
-    # Step 3c: Resolve a right-hand-side STRUCTURAL time derivative of an ODE
-    # unknown to the tendency this system defines for it (esm-spec §4.2). Runs
+    # Step 3c (esm-libraries-spec §4.7.5 step 3a): Resolve a right-hand-side
+    # STRUCTURAL time derivative of an ODE unknown to the tendency this system
+    # defines for it (esm-spec §4.2). Runs
     # after the lift so it sees the equations the lift produced, and after Step
     # 1+2 so a reaction network's mass-action tendency (§7.4) is available to a
     # sibling model's scoped `D(Chem.O3, t)`.
