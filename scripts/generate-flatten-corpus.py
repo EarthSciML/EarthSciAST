@@ -281,6 +281,22 @@ CASES: list[tuple[str, str, str]] = [
         "autocatalytic_reaction",
         "simulation/autocatalytic_reaction.esm",
     ),
+    # --- right-hand-side structural `D` resolution (esm-spec §4.2) -----------
+    # esm-libraries-spec §4.7.5 step 3a. The first document carries the
+    # own-state, chained, and scoped-into-a-mechanism shapes; the second reads an
+    # `operator_compose`-MERGED tendency through a right-hand-side `D`, which is
+    # the case that pins the step's position after the coupling rules: resolving
+    # before them yields only the mechanism's term.
+    (
+        "rhs_time_derivative",
+        "tendency_resolution",
+        "conformance/rhs_time_derivative/fixtures/tendency_resolution.esm",
+    ),
+    (
+        "rhs_time_derivative",
+        "merged_tendency",
+        "conformance/rhs_time_derivative/fixtures/merged_tendency.esm",
+    ),
     # --- field_ics: deferred `ic` equations (esm-spec §11.4.1) ---------------
     # Also the richest loader_fields / lifted_shapes case in the tree.
     (
