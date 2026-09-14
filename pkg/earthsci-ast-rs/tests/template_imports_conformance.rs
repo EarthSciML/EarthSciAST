@@ -309,6 +309,67 @@ fn metaparam_axis_name_collision_matches_golden() {
     assert_eq!(r["args"][3]["args"], json!(["c", 3]));
 }
 
+/// metaparam_structural_field_collision: loop symbols, references, enums, units
+/// and free text are names, and a map key is a declared name rather than a
+/// field (esm-spec §9.7.6). Five metaparameters are spelled like structural
+/// values — `row_id` (a join key column, free text), `a` (loop symbols), `m` (a
+/// unit symbol), `edge` (a placement tag, a comment, citation text), `ode` (an
+/// enum) — and each also sits in an expression position, where it closes.
+#[test]
+fn metaparam_structural_field_collision_matches_golden() {
+    let d = expand_raw(&conf(&[
+        "metaparam_structural_field_collision",
+        "fixture.esm",
+    ]));
+    assert_eq!(
+        d,
+        golden(&conf(&[
+            "metaparam_structural_field_collision",
+            "expanded.esm"
+        ]))
+    );
+    let model = &d["models"]["M"];
+    assert_eq!(model["system_kind"], "ode");
+    assert_eq!(
+        model["reference"],
+        json!({"citation": "edge", "doi": "edge", "url": "edge", "notes": "row_id"})
+    );
+    assert_eq!(model["variables"]["u"]["default_units"], "m");
+    assert_eq!(model["variables"]["u"]["location"], "edge");
+    let deqs: Vec<&Value> = model["equations"]
+        .as_array()
+        .expect("equations")
+        .iter()
+        .filter(|eq| !eq["lhs"].is_string())
+        .collect();
+    assert_eq!(deqs.len(), 1);
+    assert_eq!(deqs[0]["_comment"], "edge");
+    assert_eq!(deqs[0]["rhs"]["args"], json!(["c", 3]));
+
+    // A join clause's key columns and the loop symbols they are read at are
+    // names; substituting them makes the document schema-invalid.
+    let r = obs_def(model, "r");
+    assert_eq!(r["output_idx"], json!(["a"]));
+    assert_eq!(
+        r["join"],
+        json!([{"on": [["row_id", "row_id"]], "syms": ["a", "b"]}])
+    );
+    assert_eq!(r["expr"]["args"], json!([22, 5]));
+    let k = obs_def(model, "k");
+    assert_eq!(k["arg"], "a");
+    assert_eq!(k["ranges"]["a"], json!([1, 11]));
+    assert_eq!(k["expr"]["args"], json!(["c", 7]));
+
+    // A map key is a declared name, not a field: variables named `source` and
+    // `type` still have their guesses substituted.
+    assert_eq!(
+        model["guesses"],
+        json!({"source": {"op": "*", "args": [5, 2]}, "type": {"op": "*", "args": [5, 3]}})
+    );
+    assert_eq!(obs_def(model, "source")["args"], json!(["c", 22]));
+    assert_eq!(obs_def(model, "type")["args"], json!(["c", 7]));
+}
+
 /// import_where_rename_unknown_index_set: a `where` shape naming a set the
 /// library never declares survives the rename as spelled and is rejected at rule
 /// registration — the fix does not paper over genuine typos.

@@ -180,10 +180,18 @@ end
 #                 walk; the kind is kept distinct from `:node` because the two
 #                 answer different questions about a node (what it IS vs how
 #                 its op is parameterized).
+#   :opaque     — a loop symbol, reference, id, enum, unit or free text that is
+#                 not an expression position but that the rename walk does not
+#                 protect: opaque to metaparameter substitution ONLY. (`of` and
+#                 `on` also keep their dedicated rename-walk branches.)
 #   :positional — no derived-set membership; handled by a dedicated branch in
 #                 `_rename_walk` / `_collect_ref_names!`: `from` ({from:
-#                 <indexSet>} references map through `isetmap`) and `of`
-#                 (aggregate bound-index lists are copied verbatim).
+#                 <indexSet>} references map through `isetmap`).
+#
+# The classification of every string-capable schema property, and the key set
+# derived from it, lives in
+# `tests/metaparameter_substitution/field_classification.json`; the test suite
+# fails when `_META_SUBST_SKIP_KEYS` or `_NAME_KEYED_MAP_KEYS` disagree with it.
 const _STRUCTURAL_FIELDS = (
     "metadata"                    => :protected,
     "params"                      => :protected,
@@ -230,8 +238,50 @@ const _STRUCTURAL_FIELDS = (
     "attrs"                       => :registry,
     "members"                     => :registry,
     "from_faq"                    => :registry,
+    # Loop symbols and bound index names of a `faq` node (join key columns and
+    # the symbols they are read at, the arg-witness symbol, the output index
+    # signature, a dependent range's parent indices). Loop symbols are outside
+    # the namespaces `metaparameter_name_conflict` covers.
+    "on"                          => :opaque,
+    "syms"                        => :opaque,
+    "arg"                         => :opaque,
+    "output_idx"                  => :opaque,
+    "of"                          => :opaque,
+    # A `table_lookup` output name.
+    "output"                      => :opaque,
+    "handler_id"                  => :opaque,
+    # References to files, components, data sources, data columns and the
+    # import-edge rename vocabulary.
+    "ref"                         => :opaque,
+    "model"                       => :opaque,
+    "reaction_system"             => :opaque,
+    "prefix"                      => :opaque,
+    "rename"                      => :opaque,
+    "rebind"                      => :opaque,
+    "index_set_rename"            => :opaque,
+    "source"                      => :opaque,
+    "file_variable"               => :opaque,
+    "path"                        => :opaque,
+    # Closed enums.
+    "direction"                   => :opaque,
+    "hook"                        => :opaque,
+    "root_find"                   => :opaque,
+    "system_kind"                 => :opaque,
+    "element_type"                => :opaque,
+    "scale"                       => :opaque,
+    "format"                      => :opaque,
+    "unmapped"                    => :opaque,
+    # Units (unit symbols such as `m`, `s`, `K` are valid identifiers) and
+    # free text.
+    "default_units"               => :opaque,
+    "label"                       => :opaque,
+    "location"                    => :opaque,
+    "notes"                       => :opaque,
+    "citation"                    => :opaque,
+    "doi"                         => :opaque,
+    "url"                         => :opaque,
+    "_comment"                    => :opaque,
     "from"                        => :positional,
-    "of"                          => :positional,
 )
 
 # Keys whose VALUES are never expression positions: metaparameter names are
@@ -245,12 +295,24 @@ const _STRUCTURAL_FIELDS = (
 #
 # Every structural kind but `:bound` and `:positional` is in: an expression
 # position is the ONLY thing substitution may rewrite, and `:bound` is the one
-# structural-table entry that IS one. This makes the set coincide with
-# `_RENAME_PROTECTED_KEYS` below; both stay derived from the table separately
-# because they answer different questions and a future kind may split them.
+# structural-table entry that IS one. `:opaque` is in this set but not in
+# `_RENAME_PROTECTED_KEYS` below, so the two sets are derived separately.
 const _META_SUBST_SKIP_KEYS = Set{String}(
     k for (k, kind) in _STRUCTURAL_FIELDS
-    if kind === :protected || kind === :axis || kind === :node || kind === :registry)
+    if kind === :protected || kind === :axis || kind === :node ||
+       kind === :registry || kind === :opaque)
+
+# Keys whose value is a map keyed by AUTHOR-CHOSEN names (variables, species,
+# loop symbols, template params, …). A map key is a declared name, not a field,
+# so it is never looked up in `_META_SUBST_SKIP_KEYS`: a variable named `source`
+# or a template param named `label` still has its value substituted. A key in
+# both sets (`where`, `rename`, …) is skipped whole.
+const _NAME_KEYED_MAP_KEYS = Set{String}([
+    "variables", "species", "parameters", "guesses", "subsystems",
+    "expression_templates", "ranges", "axes", "bindings", "config", "coords",
+    "initial_conditions", "parameter_overrides", "pinned_coords", "map",
+    "rename", "rebind", "index_set_rename", "where",
+])
 
 # Scalar Expression-node fields whose string value names an AXIS / index set
 # (rewritten by the index-set rename map, param-shadowed like §9.6.1).
@@ -278,17 +340,41 @@ const _RENAME_PROTECTED_KEYS = Set{String}(
 Substitute closed metaparameter names — appearing as bare strings, the
 variable-reference surface syntax — with their integer values, everywhere
 except the `_META_SUBST_SKIP_KEYS` structural fields (esm-spec §9.7.6:
-expression-position substitution; no folding here).
+expression-position substitution; no folding here). The entries of a
+`_NAME_KEYED_MAP_KEYS` map are walked without a skip lookup on their names.
 """
 function _substitute_metaparams(x, values::AbstractDict{String})
     return _map_json(x) do key, n
-        key !== nothing && key in _META_SUBST_SKIP_KEYS && return _to_ordered(n)
+        if key !== nothing
+            key in _META_SUBST_SKIP_KEYS && return _to_ordered(n)
+            key in _NAME_KEYED_MAP_KEYS && _is_object(n) &&
+                return _substitute_metaparams_map(n, values)
+        end
         if n isa AbstractString
             s = string(n)
             haskey(values, s) && return values[s]
         end
         return _JSON_DESCEND
     end
+end
+
+function _substitute_metaparams_map(n, values::AbstractDict{String})
+    return OrderedDict{String,Any}(
+        string(k) => _substitute_metaparams(v, values) for (k, v) in pairs(n))
+end
+
+"""
+    _substitute_metaparams_field(key, v, values)
+
+[`_substitute_metaparams`](@ref) applied to the value `v` of the object field
+`key`, for a caller that iterates an object's fields itself: the field is
+skipped, walked as a name-keyed map, or walked, exactly as it would be inside
+the recursive walk.
+"""
+function _substitute_metaparams_field(key::AbstractString, v, values::AbstractDict{String})
+    key in _META_SUBST_SKIP_KEYS && return _to_ordered(v)
+    key in _NAME_KEYED_MAP_KEYS && _is_object(v) && return _substitute_metaparams_map(v, values)
+    return _substitute_metaparams(v, values)
 end
 
 """
@@ -1587,7 +1673,7 @@ function _substitute_closed_metaparams!(root::OrderedDict{String,Any},
                         tpl[tn] = _substitute_metaparams_decl(td, values)
                     end
                 else
-                    comp[k] = _substitute_metaparams(comp[k], values)
+                    comp[k] = _substitute_metaparams_field(k, comp[k], values)
                 end
             end
         end

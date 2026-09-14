@@ -831,7 +831,7 @@ func substituteClosedMetaparams(view map[string]any, topTemplates, docIsets *ord
 						continue
 					}
 				}
-				comp[k] = substituteMetaparams(comp[k], substVals)
+				comp[k] = substituteMetaparamsField(k, comp[k], substVals)
 			}
 		}
 	}

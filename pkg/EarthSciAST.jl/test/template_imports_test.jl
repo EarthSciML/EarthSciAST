@@ -349,6 +349,56 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         @test rargs[4]["args"] == Any["c", 3]
     end
 
+    @testset "metaparam_structural_field_collision: loop symbols, references, enums, units, text, map keys (§9.7.6)" begin
+        # Five metaparameters are spelled like structural values: `row_id` (a
+        # join key column, free text), `a` (loop symbols), `m` (a unit symbol),
+        # `edge` (a placement tag, a comment, citation text), `ode` (an enum).
+        # Each also sits in an expression position, where it closes.
+        @test _expand_raw(conf("metaparam_structural_field_collision", "fixture.esm")) ==
+              _golden(conf("metaparam_structural_field_collision", "expanded.esm"))
+
+        d = _expand_raw(conf("metaparam_structural_field_collision", "fixture.esm"))
+        m = d["models"]["M"]
+        @test m["system_kind"] == "ode"
+        @test m["reference"] == Dict("citation" => "edge", "doi" => "edge",
+                                     "url" => "edge", "notes" => "row_id")
+        @test m["variables"]["u"]["default_units"] == "m"
+        @test m["variables"]["u"]["location"] == "edge"
+        deq = only(filter(eq -> !(eq["lhs"] isa AbstractString), m["equations"]))
+        @test deq["_comment"] == "edge"
+        @test deq["rhs"]["args"] == Any["c", 3]
+
+        # A join clause's key columns and the loop symbols they are read at are
+        # names; substituting them makes the document schema-invalid.
+        r = _defrhs(d, "M", "r")
+        @test r["output_idx"] == Any["a"]
+        @test r["join"][1]["on"] == Any[Any["row_id", "row_id"]]
+        @test r["join"][1]["syms"] == Any["a", "b"]
+        @test r["expr"]["args"] == Any[22, 5]
+        k = _defrhs(d, "M", "k")
+        @test k["arg"] == "a"
+        @test k["ranges"]["a"] == Any[1, 11]
+        @test k["expr"]["args"] == Any["c", 7]
+
+        # A map key is a declared name, not a field: variables named `source` and
+        # `type` still have their guesses substituted.
+        @test m["guesses"]["source"]["args"] == Any[5, 2]
+        @test m["guesses"]["type"]["args"] == Any[5, 3]
+        @test _defrhs(d, "M", "source")["args"] == Any["c", 22]
+        @test _defrhs(d, "M", "type")["args"] == Any["c", 7]
+    end
+
+    @testset "metaparameter substitution tables match the shared classification (§9.7.6)" begin
+        # The key sets are derived from a classification of every string-capable
+        # schema property (scripts/check-metaparameter-substitution-fields.py);
+        # all five bindings compare against the same file.
+        cls = JSON3.read(read(joinpath(repo_root, "tests", "metaparameter_substitution",
+                                       "field_classification.json"), String))
+        @test EarthSciAST._META_SUBST_SKIP_KEYS == Set{String}(String.(cls["skip_keys"]))
+        @test EarthSciAST._NAME_KEYED_MAP_KEYS ==
+              Set{String}(String.(cls["name_keyed_map_keys"]))
+    end
+
     @testset "loader-API bindings (§9.7.6 site 4) and defaults (site 5)" begin
         problem = conf("metaparameter_resolutions", "problem.esm")
         fdef = EarthSciAST.load_path(problem)

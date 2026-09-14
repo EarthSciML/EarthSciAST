@@ -3401,7 +3401,7 @@ export const schema: AnySchemaObject = {
                       "type": "string"
                     }
                   ],
-                  "description": "Inclusive first index (default 0). A string names a `metaparameters` entry and resolves to its default."
+                  "description": "Inclusive first index (default 0). A string names a `metaparameters` entry and resolves to its closed value (esm-spec §9.7.6)."
                 },
                 "stop": {
                   "oneOf": [
@@ -3413,7 +3413,7 @@ export const schema: AnySchemaObject = {
                       "type": "string"
                     }
                   ],
-                  "description": "Exclusive last index. A string names a `metaparameters` entry and resolves to its default, so a prefix is declared in the model's own terms (`W[0:N_SRC]`) rather than as a repeated literal that can drift from the index set sized by the same metaparameter."
+                  "description": "Exclusive last index. A string names a `metaparameters` entry and resolves to its closed value (esm-spec §9.7.6), so a prefix is declared in the model's own terms (`W[0:N_SRC]`) rather than as a repeated literal that can drift from the index set sized by the same metaparameter."
                 },
                 "step": {
                   "oneOf": [

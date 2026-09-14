@@ -21,6 +21,8 @@ import {
   lowerExpressionTemplates,
 } from './lower-expression-templates.js'
 import {
+  META_SUBST_SKIP_KEYS,
+  NAME_KEYED_MAP_KEYS,
   appendComponentImports,
   rejectTemplateImportsPreV08,
   resolveTemplateMachinery,
@@ -257,6 +259,60 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
     // slots, not `args` — scalar attribute NAMES, never expressions.
     expect(rArgs[3].attrs).toEqual({ limiter: 'max' })
     expect(rArgs[3].args).toEqual(['c', 3])
+  })
+
+  it('metaparam_structural_field_collision: loop symbols, references, enums, units, text and map keys (§9.7.6)', () => {
+    // Five metaparameters are spelled like structural values — `row_id` (a join
+    // key column, free text), `a` (loop symbols), `m` (a unit symbol), `edge` (a
+    // placement tag, a comment, citation text), `ode` (an enum) — and each also
+    // sits in an expression position, where it closes.
+    const d = expandRaw(conf('metaparam_structural_field_collision', 'fixture.esm')) as any
+    expect(canonEqs(d)).toEqual(
+      canonEqs(golden(conf('metaparam_structural_field_collision', 'expanded.esm'))),
+    )
+    const m = d.models.M
+    expect(m.system_kind).toBe('ode')
+    expect(m.reference).toEqual({ citation: 'edge', doi: 'edge', url: 'edge', notes: 'row_id' })
+    expect(m.variables.u.default_units).toBe('m')
+    expect(m.variables.u.location).toBe('edge')
+    const deqs = m.equations.filter((eq: any) => typeof eq.lhs !== 'string')
+    expect(deqs).toHaveLength(1)
+    expect(deqs[0]._comment).toBe('edge')
+    expect(deqs[0].rhs.args).toEqual(['c', 3])
+
+    // A join clause's key columns and the loop symbols they are read at are
+    // names; substituting them makes the document schema-invalid.
+    const r = definingRhs(m, 'r')
+    expect(r.output_idx).toEqual(['a'])
+    expect(r.join).toEqual([{ on: [['row_id', 'row_id']], syms: ['a', 'b'] }])
+    expect(r.expr.args).toEqual([22, 5])
+    const k = definingRhs(m, 'k')
+    expect(k.arg).toBe('a')
+    expect(k.ranges.a).toEqual([1, 11])
+    expect(k.expr.args).toEqual(['c', 7])
+
+    // A map key is a declared name, not a field: variables named `source` and
+    // `type` still have their guesses substituted.
+    expect(m.guesses).toEqual({
+      source: { op: '*', args: [5, 2] },
+      type: { op: '*', args: [5, 3] },
+    })
+    expect(definingRhs(m, 'source').args).toEqual(['c', 22])
+    expect(definingRhs(m, 'type').args).toEqual(['c', 7])
+  })
+
+  it('metaparameter substitution tables match the shared classification (§9.7.6)', () => {
+    // The key sets are derived from a classification of every string-capable
+    // schema property (scripts/check-metaparameter-substitution-fields.py); all
+    // five bindings compare against the same file.
+    const cls = JSON.parse(
+      fs.readFileSync(
+        fixturesDir('metaparameter_substitution', 'field_classification.json'),
+        'utf8',
+      ),
+    )
+    expect([...META_SUBST_SKIP_KEYS].sort()).toEqual([...cls.skip_keys].sort())
+    expect([...NAME_KEYED_MAP_KEYS].sort()).toEqual([...cls.name_keyed_map_keys].sort())
   })
 
   it('import_where_rename_unknown_index_set: bad where set after rename rejected', () => {

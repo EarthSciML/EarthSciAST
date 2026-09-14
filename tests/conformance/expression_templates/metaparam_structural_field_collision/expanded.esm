@@ -1,0 +1,201 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "description": "esm-spec 9.7.6: the fourth structural family (loop symbols, references, enums, units, free text) and the name-keyed-map rule. Five metaparameters are spelled exactly like structural string values in the model - `row_id` like a join key column (`on`) and like free text (`notes`), `a` like the loop symbols in `syms` / `output_idx` / `arg`, `m` like a `default_units` unit symbol, `edge` like a `location` tag, a `_comment` and the citation text, `ode` like the `system_kind` enum - and every one ALSO occurs in a genuine expression position, where it closes to its integer default (22 / 11 / 5 / 7 / 3). Two variables are named like structural keys, `source` and `type`; a map key is a declared name, not a field, so their `guesses` entries still close. The golden pins every structural value verbatim and every expression position closed.",
+    "name": "metaparam_structural_field_collision"
+  },
+  "metaparameters": {
+    "a": {
+      "default": 11,
+      "description": "spelled like a faq loop symbol",
+      "type": "integer"
+    },
+    "edge": {
+      "default": 7,
+      "description": "spelled like a placement tag and free text",
+      "type": "integer"
+    },
+    "m": {
+      "default": 5,
+      "description": "spelled like a unit symbol",
+      "type": "integer"
+    },
+    "ode": {
+      "default": 3,
+      "description": "spelled like a system_kind enum value",
+      "type": "integer"
+    },
+    "row_id": {
+      "default": 22,
+      "description": "spelled like a join key column",
+      "type": "integer"
+    }
+  },
+  "models": {
+    "M": {
+      "equations": [
+        {
+          "_comment": "edge",
+          "lhs": {
+            "args": [
+              "c"
+            ],
+            "op": "D",
+            "wrt": "t"
+          },
+          "rhs": {
+            "args": [
+              "c",
+              3
+            ],
+            "op": "*"
+          }
+        },
+        {
+          "lhs": "r",
+          "rhs": {
+            "args": [],
+            "expr": {
+              "args": [
+                22,
+                5
+              ],
+              "op": "*"
+            },
+            "join": [
+              {
+                "on": [
+                  [
+                    "row_id",
+                    "row_id"
+                  ]
+                ],
+                "syms": [
+                  "a",
+                  "b"
+                ]
+              }
+            ],
+            "op": "faq",
+            "output_idx": [
+              "a"
+            ],
+            "ranges": {
+              "a": [
+                1,
+                3
+              ],
+              "b": [
+                1,
+                3
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "k",
+          "rhs": {
+            "arg": "a",
+            "args": [
+              "c"
+            ],
+            "expr": {
+              "args": [
+                "c",
+                7
+              ],
+              "op": "*"
+            },
+            "op": "argmax",
+            "output_idx": [],
+            "ranges": {
+              "a": [
+                1,
+                11
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "source",
+          "rhs": {
+            "args": [
+              "c",
+              22
+            ],
+            "op": "*"
+          }
+        },
+        {
+          "lhs": "type",
+          "rhs": {
+            "args": [
+              "c",
+              7
+            ],
+            "op": "+"
+          }
+        }
+      ],
+      "guesses": {
+        "source": {
+          "args": [
+            5,
+            2
+          ],
+          "op": "*"
+        },
+        "type": {
+          "args": [
+            5,
+            3
+          ],
+          "op": "*"
+        }
+      },
+      "reference": {
+        "citation": "edge",
+        "doi": "edge",
+        "notes": "row_id",
+        "url": "edge"
+      },
+      "system_kind": "ode",
+      "variables": {
+        "c": {
+          "default": 0.5,
+          "description": "the integrated state",
+          "type": "unknown",
+          "units": "1"
+        },
+        "k": {
+          "description": "arg-witness carrier: arg",
+          "type": "unknown",
+          "units": "1"
+        },
+        "r": {
+          "description": "join carrier: on, syms, output_idx",
+          "type": "unknown",
+          "units": "1"
+        },
+        "source": {
+          "description": "a variable named like the `source` reference field",
+          "type": "unknown",
+          "units": "1"
+        },
+        "type": {
+          "description": "a variable named like the `type` enum field",
+          "type": "unknown",
+          "units": "1"
+        },
+        "u": {
+          "default": 1,
+          "default_units": "m",
+          "description": "unit and placement carrier",
+          "location": "edge",
+          "type": "parameter",
+          "units": "m"
+        }
+      }
+    }
+  }
+}

@@ -273,6 +273,57 @@ _REGISTRY_KEYS = frozenset(
     }
 )
 
+#: Loop symbols, references, ids, enums, units and free text: not expression
+#: positions, but not protected by the rename walk either, so opaque to
+#: metaparameter substitution ONLY. ``of`` and ``on`` keep their dedicated
+#: rename-walk branches. Mirrors the ``:opaque`` kind of ``_STRUCTURAL_FIELDS``
+#: in the Julia reference.
+_OPAQUE_KEYS = frozenset(
+    {
+        # Loop symbols and bound index names of a `faq` node, outside the
+        # namespaces `metaparameter_name_conflict` covers.
+        "on",
+        "syms",
+        "arg",
+        "output_idx",
+        "of",
+        # A `table_lookup` output name.
+        "output",
+        "handler_id",
+        # References to files, components, data sources, data columns and the
+        # import-edge rename vocabulary.
+        "ref",
+        "model",
+        "reaction_system",
+        "prefix",
+        "rename",
+        "rebind",
+        "index_set_rename",
+        "source",
+        "file_variable",
+        "path",
+        # Closed enums.
+        "direction",
+        "hook",
+        "root_find",
+        "system_kind",
+        "element_type",
+        "scale",
+        "format",
+        "unmapped",
+        # Units (unit symbols such as `m`, `s`, `K` are valid identifiers) and
+        # free text.
+        "default_units",
+        "label",
+        "location",
+        "notes",
+        "citation",
+        "doi",
+        "url",
+        "_comment",
+    }
+)
+
 #: Keys whose VALUES are never expression positions: metaparameter names are
 #: substituted as bare variable-reference strings, so structural string fields
 #: must not be rewritten. Template ``params`` shadowing is handled separately
@@ -281,14 +332,46 @@ _REGISTRY_KEYS = frozenset(
 #: All five bindings MUST hold the SAME set here — a divergence is silent until
 #: a document happens to name a metaparameter after a structural field's value
 #: (``tests/conformance/expression_templates/metaparam_axis_name_collision``).
+#: The classification it is derived from lives in
+#: ``tests/metaparameter_substitution/field_classification.json``, and the test
+#: suite fails when this set or :data:`_NAME_KEYED_MAP_KEYS` disagrees with it.
 #:
 #: Every structural kind but ``bound`` and ``positional`` is in: an expression
 #: position is the ONLY thing substitution may rewrite, and ``bound`` is the one
-#: structural-table entry that IS one. This makes the set coincide with
-#: :data:`_RENAME_PROTECTED_KEYS` below; both stay derived from the kind sets
-#: separately because they answer different questions and a future kind may
-#: split them.
-_META_SUBST_SKIP_KEYS = _PROTECTED_KEYS | _AXIS_KEYS | _NODE_HEADER_KEYS | _REGISTRY_KEYS
+#: structural-table entry that IS one. :data:`_OPAQUE_KEYS` is in this set but
+#: not in :data:`_RENAME_PROTECTED_KEYS`, so the two are derived separately.
+_META_SUBST_SKIP_KEYS = (
+    _PROTECTED_KEYS | _AXIS_KEYS | _NODE_HEADER_KEYS | _REGISTRY_KEYS | _OPAQUE_KEYS
+)
+
+#: Keys whose value is a map keyed by AUTHOR-CHOSEN names (variables, species,
+#: loop symbols, template params, …). A map key is a declared name, not a
+#: field, so it is never looked up in :data:`_META_SUBST_SKIP_KEYS`: a variable
+#: named ``source`` or a template param named ``label`` still has its value
+#: substituted. A key in both sets (``where``, ``rename``, …) is skipped whole.
+_NAME_KEYED_MAP_KEYS = frozenset(
+    {
+        "variables",
+        "species",
+        "parameters",
+        "guesses",
+        "subsystems",
+        "expression_templates",
+        "ranges",
+        "axes",
+        "bindings",
+        "config",
+        "coords",
+        "initial_conditions",
+        "parameter_overrides",
+        "pinned_coords",
+        "map",
+        "rename",
+        "rebind",
+        "index_set_rename",
+        "where",
+    }
+)
 
 
 def _substitute_metaparams(x: Any, values: dict[str, int]) -> Any:
@@ -304,9 +387,21 @@ def _substitute_metaparams(x: Any, values: dict[str, int]) -> Any:
     # verbatim rather than recursed. Every bare string elsewhere folds to its
     # closed integer value.
     def _item(_node: dict, key: str, value: Any, recurse) -> Any:
-        return copy.deepcopy(value) if key in _META_SUBST_SKIP_KEYS else recurse(value)
+        return _substitute_metaparams_field(key, value, values, recurse)
 
     return _rewrite_json(x, on_str=lambda s: values.get(s, s), on_value=_item, share=False)
+
+
+def _substitute_metaparams_field(key: str, value: Any, values: dict[str, int], recurse=None) -> Any:
+    """:func:`_substitute_metaparams` applied to the value of the object field
+    ``key``, for a caller that iterates an object's fields itself: the field is
+    skipped, walked as a name-keyed map, or walked, exactly as inside the
+    recursive walk."""
+    if key in _META_SUBST_SKIP_KEYS:
+        return copy.deepcopy(value)
+    if key in _NAME_KEYED_MAP_KEYS and _is_object(value):
+        return {name: _substitute_metaparams(entry, values) for name, entry in value.items()}
+    return recurse(value) if recurse is not None else _substitute_metaparams(value, values)
 
 
 def _substitute_metaparams_decl(decl: Any, values: dict[str, int]) -> Any:
@@ -802,11 +897,11 @@ _RENAME_AXIS_KEYS = _AXIS_KEYS
 _RENAME_BOUND_KEYS = ("lower", "upper")
 
 #: Object keys whose values are never variable-reference positions for the
-#: rename walk: the metaparameter skip set plus the remaining scalar structural
-#: ExpressionNode fields (the op-parameterizing closed-registry ids and literal
-#: enums). ``from``, ``wrt``/``dim``, apply-``name``, and ``of`` are handled
-#: positionally in the walk.
-_RENAME_PROTECTED_KEYS = _META_SUBST_SKIP_KEYS | _REGISTRY_KEYS
+#: rename walk: the protected, axis, node-header and op-parameterizing registry
+#: kinds (``_RENAME_PROTECTED_KEYS`` in the Julia reference). ``from``,
+#: ``wrt``/``dim``, apply-``name``, and ``of`` are handled positionally in the
+#: walk.
+_RENAME_PROTECTED_KEYS = _PROTECTED_KEYS | _AXIS_KEYS | _NODE_HEADER_KEYS | _REGISTRY_KEYS
 
 #: Object keys whose values a variable-reference collector must NOT descend
 #: into: ``from`` / ``wrt`` / ``dim`` name index sets, ``of`` names bound index
@@ -1735,7 +1830,7 @@ def _substitute_closed_metaparameters(
                         for tn in list(tpl.keys()):
                             tpl[tn] = _substitute_metaparams_decl(tpl[tn], values)
                     else:
-                        comp[k] = _substitute_metaparams(comp[k], values)
+                        comp[k] = _substitute_metaparams_field(k, comp[k], values)
         for tn in list(top_templates.keys()):
             top_templates[tn] = _substitute_metaparams_decl(top_templates[tn], values)
         doc_isets = {n: _substitute_metaparams(d, values) for n, d in doc_isets.items()}

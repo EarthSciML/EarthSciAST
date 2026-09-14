@@ -1,0 +1,69 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "metaparam_structural_field_collision",
+    "description": "esm-spec 9.7.6: the fourth structural family (loop symbols, references, enums, units, free text) and the name-keyed-map rule. Five metaparameters are spelled exactly like structural string values in the model - `row_id` like a join key column (`on`) and like free text (`notes`), `a` like the loop symbols in `syms` / `output_idx` / `arg`, `m` like a `default_units` unit symbol, `edge` like a `location` tag, a `_comment` and the citation text, `ode` like the `system_kind` enum - and every one ALSO occurs in a genuine expression position, where it closes to its integer default (22 / 11 / 5 / 7 / 3). Two variables are named like structural keys, `source` and `type`; a map key is a declared name, not a field, so their `guesses` entries still close. The golden pins every structural value verbatim and every expression position closed."
+  },
+  "metaparameters": {
+    "row_id": { "type": "integer", "default": 22, "description": "spelled like a join key column" },
+    "a": { "type": "integer", "default": 11, "description": "spelled like a faq loop symbol" },
+    "m": { "type": "integer", "default": 5, "description": "spelled like a unit symbol" },
+    "edge": { "type": "integer", "default": 7, "description": "spelled like a placement tag and free text" },
+    "ode": { "type": "integer", "default": 3, "description": "spelled like a system_kind enum value" }
+  },
+  "models": {
+    "M": {
+      "system_kind": "ode",
+      "reference": { "citation": "edge", "doi": "edge", "url": "edge", "notes": "row_id" },
+      "variables": {
+        "c": { "type": "unknown", "units": "1", "default": 0.5, "description": "the integrated state" },
+        "u": { "type": "parameter", "units": "m", "default_units": "m", "location": "edge", "default": 1, "description": "unit and placement carrier" },
+        "r": { "type": "unknown", "units": "1", "description": "join carrier: on, syms, output_idx" },
+        "k": { "type": "unknown", "units": "1", "description": "arg-witness carrier: arg" },
+        "source": { "type": "unknown", "units": "1", "description": "a variable named like the `source` reference field" },
+        "type": { "type": "unknown", "units": "1", "description": "a variable named like the `type` enum field" }
+      },
+      "guesses": {
+        "source": { "op": "*", "args": ["m", 2] },
+        "type": { "op": "*", "args": ["m", 3] }
+      },
+      "equations": [
+        {
+          "_comment": "edge",
+          "lhs": { "op": "D", "args": ["c"], "wrt": "t" },
+          "rhs": { "op": "*", "args": ["c", "ode"] }
+        },
+        {
+          "lhs": "r",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": ["a"],
+            "ranges": { "a": [1, 3], "b": [1, 3] },
+            "join": [{ "on": [["row_id", "row_id"]], "syms": ["a", "b"] }],
+            "expr": { "op": "*", "args": ["row_id", "m"] }
+          }
+        },
+        {
+          "lhs": "k",
+          "rhs": {
+            "op": "argmax",
+            "args": ["c"],
+            "arg": "a",
+            "output_idx": [],
+            "ranges": { "a": [1, "a"] },
+            "expr": { "op": "*", "args": ["c", "edge"] }
+          }
+        },
+        {
+          "lhs": "source",
+          "rhs": { "op": "*", "args": ["c", "row_id"] }
+        },
+        {
+          "lhs": "type",
+          "rhs": { "op": "+", "args": ["c", "edge"] }
+        }
+      ]
+    }
+  }
+}

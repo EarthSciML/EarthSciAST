@@ -123,6 +123,82 @@ const REGISTRY_KEYS: [&str; 9] = [
     "reduce", "semiring", "manifold", "fn", "table", "side", "attrs", "members", "from_faq",
 ];
 
+/// Loop symbols, references, ids, enums, units and free text: not expression
+/// positions, but not protected by the rename walk either, so opaque to
+/// metaparameter substitution ONLY. `of` and `on` keep their dedicated
+/// rename-walk branches. Mirrors the `:opaque` kind of `_STRUCTURAL_FIELDS` in
+/// the Julia reference.
+const OPAQUE_KEYS: [&str; 33] = [
+    // Loop symbols and bound index names of a `faq` node, outside the namespaces
+    // `metaparameter_name_conflict` covers.
+    "on",
+    "syms",
+    "arg",
+    "output_idx",
+    "of",
+    // A `table_lookup` output name.
+    "output",
+    "handler_id",
+    // References to files, components, data sources, data columns and the
+    // import-edge rename vocabulary.
+    "ref",
+    "model",
+    "reaction_system",
+    "prefix",
+    "rename",
+    "rebind",
+    "index_set_rename",
+    "source",
+    "file_variable",
+    "path",
+    // Closed enums.
+    "direction",
+    "hook",
+    "root_find",
+    "system_kind",
+    "element_type",
+    "scale",
+    "format",
+    "unmapped",
+    // Units (unit symbols such as `m`, `s`, `K` are valid identifiers) and free
+    // text.
+    "default_units",
+    "label",
+    "location",
+    "notes",
+    "citation",
+    "doi",
+    "url",
+    "_comment",
+];
+
+/// Keys whose value is a map keyed by AUTHOR-CHOSEN names (variables, species,
+/// loop symbols, template params, …). A map key is a declared name, not a field,
+/// so it is never tested with [`is_meta_subst_skipped`]: a variable named
+/// `source` or a template param named `label` still has its value substituted.
+/// A key that is also skipped (`where`, `rename`, …) is skipped whole.
+const NAME_KEYED_MAP_KEYS: [&str; 19] = [
+    "variables",
+    "species",
+    "parameters",
+    "guesses",
+    "subsystems",
+    "expression_templates",
+    "ranges",
+    "axes",
+    "bindings",
+    "config",
+    "coords",
+    "initial_conditions",
+    "parameter_overrides",
+    "pinned_coords",
+    "map",
+    "rename",
+    "rebind",
+    "index_set_rename",
+    "where",
+];
+
 /// `integral` bound fields (esm-spec §4.2). Unlike `var` these are full
 /// Expression positions — a numeric literal, a parameter reference, an AST
 /// subtree — so they stay variable-reference positions for `varmap`; only a
@@ -141,21 +217,28 @@ const RENAME_BOUND_KEYS: [&str; 2] = ["lower", "upper"];
 ///
 /// Every structural kind but `bound` and `positional` is in: an expression
 /// position is the ONLY thing substitution may rewrite, and `bound` is the one
-/// structural-table entry that IS one. This makes the predicate coincide with
-/// [`is_rename_protected`]; both stay separate because they answer different
-/// questions and a future kind may split them.
+/// structural-table entry that IS one. [`OPAQUE_KEYS`] is in this predicate but
+/// not in [`is_rename_protected`], so the two are derived separately.
+///
+/// The classification this set is derived from lives in
+/// `tests/metaparameter_substitution/field_classification.json`; a unit test
+/// fails when this predicate or [`NAME_KEYED_MAP_KEYS`] disagrees with it.
 fn is_meta_subst_skipped(k: &str) -> bool {
     PROTECTED_KEYS.contains(&k)
         || RENAME_AXIS_KEYS.contains(&k)
         || NODE_HEADER_KEYS.contains(&k)
         || REGISTRY_KEYS.contains(&k)
+        || OPAQUE_KEYS.contains(&k)
 }
 
 /// True when object key `k` is a structural scalar field the §9.7.7 rename walk
 /// must never rewrite (`_RENAME_PROTECTED_KEYS` in the Julia reference: the
-/// metaparameter skip set ∪ [`REGISTRY_KEYS`]).
+/// protected, axis, node-header and registry kinds).
 fn is_rename_protected(k: &str) -> bool {
-    is_meta_subst_skipped(k) || REGISTRY_KEYS.contains(&k)
+    PROTECTED_KEYS.contains(&k)
+        || RENAME_AXIS_KEYS.contains(&k)
+        || NODE_HEADER_KEYS.contains(&k)
+        || REGISTRY_KEYS.contains(&k)
 }
 
 use crate::diagnostic::{codes, err};
@@ -299,7 +382,9 @@ fn collect_metaparam_decls(
 /// importer's still-open names) spliced in for a deferred fold at the
 /// importer's close (esm-spec §9.7.6 binding value flow, site 1).
 /// Hand-rolled rather than `crate::json_visit`: descent is key-dependent
-/// (the [`is_meta_subst_skipped`] entries are copied verbatim, not walked).
+/// (the [`is_meta_subst_skipped`] entries are copied verbatim, not walked, and
+/// the entries of a [`NAME_KEYED_MAP_KEYS`] map are walked without a skip test
+/// on their names).
 fn substitute_metaparams(x: &Value, values: &BTreeMap<String, Value>) -> Value {
     match x {
         Value::String(s) => match values.get(s) {
@@ -314,15 +399,29 @@ fn substitute_metaparams(x: &Value, values: &BTreeMap<String, Value>) -> Value {
         Value::Object(obj) => {
             let mut out = Map::new();
             for (k, v) in obj {
-                if is_meta_subst_skipped(k.as_str()) {
-                    out.insert(k.clone(), v.clone());
-                } else {
-                    out.insert(k.clone(), substitute_metaparams(v, values));
-                }
+                out.insert(k.clone(), substitute_metaparams_field(k, v, values));
             }
             Value::Object(out)
         }
         _ => x.clone(),
+    }
+}
+
+/// [`substitute_metaparams`] applied to the value `v` of the object field `k`,
+/// for a caller that iterates an object's fields itself: the field is skipped,
+/// walked as a name-keyed map, or walked, exactly as inside the recursive walk.
+fn substitute_metaparams_field(k: &str, v: &Value, values: &BTreeMap<String, Value>) -> Value {
+    if is_meta_subst_skipped(k) {
+        return v.clone();
+    }
+    match v {
+        Value::Object(entries) if NAME_KEYED_MAP_KEYS.contains(&k) => Value::Object(
+            entries
+                .iter()
+                .map(|(name, entry)| (name.clone(), substitute_metaparams(entry, values)))
+                .collect(),
+        ),
+        _ => substitute_metaparams(v, values),
     }
 }
 
@@ -2912,7 +3011,7 @@ fn substitute_closed_metaparams(
                         }
                     }
                 } else if let Some(v) = comp.get(&k) {
-                    let nv = substitute_metaparams(v, values);
+                    let nv = substitute_metaparams_field(&k, v, values);
                     comp.insert(k, nv);
                 }
             }
@@ -3452,6 +3551,52 @@ mod tests {
                 .and_then(|_| eval_meta_expr(&expr, &e, "t").map(|_| ()))
                 .unwrap_err();
             assert_eq!(got.code, code, "expr {expr}");
+        }
+    }
+
+    /// The skip set and the name-keyed map set are derived from a classification
+    /// of every string-capable schema property
+    /// (`scripts/check-metaparameter-substitution-fields.py`); all five bindings
+    /// compare against the same file.
+    #[test]
+    fn metaparameter_substitution_tables_match_shared_classification() {
+        use std::collections::BTreeSet;
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/metaparameter_substitution/field_classification.json");
+        let cls: Value = serde_json::from_str(
+            &std::fs::read_to_string(&path).expect("read the classification file"),
+        )
+        .expect("parse the classification file");
+        let listed = |key: &str| -> BTreeSet<String> {
+            cls[key]
+                .as_array()
+                .unwrap_or_else(|| panic!("{key} is not an array"))
+                .iter()
+                .map(|v| v.as_str().expect("key names are strings").to_string())
+                .collect()
+        };
+        let skipped: BTreeSet<String> = PROTECTED_KEYS
+            .iter()
+            .chain(RENAME_AXIS_KEYS.iter())
+            .chain(NODE_HEADER_KEYS.iter())
+            .chain(REGISTRY_KEYS.iter())
+            .chain(OPAQUE_KEYS.iter())
+            .map(|k| k.to_string())
+            .collect();
+        assert_eq!(skipped, listed("skip_keys"));
+        for k in &skipped {
+            assert!(is_meta_subst_skipped(k), "{k:?} is not skipped");
+        }
+        let maps: BTreeSet<String> = NAME_KEYED_MAP_KEYS.iter().map(|k| k.to_string()).collect();
+        assert_eq!(maps, listed("name_keyed_map_keys"));
+        // The substitution-only kind must not leak into the rename walk's
+        // protected set: that set is derived from the kinds, not from the skip
+        // predicate.
+        for k in OPAQUE_KEYS {
+            assert!(
+                !is_rename_protected(k),
+                "{k:?} leaked into is_rename_protected"
+            );
         }
     }
 }

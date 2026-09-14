@@ -486,11 +486,11 @@ export type DataSourceSelectAxis =
   | {
       range: {
         /**
-         * Inclusive first index (default 0). A string names a `metaparameters` entry and resolves to its default.
+         * Inclusive first index (default 0). A string names a `metaparameters` entry and resolves to its closed value (esm-spec §9.7.6).
          */
         start?: number | string;
         /**
-         * Exclusive last index. A string names a `metaparameters` entry and resolves to its default, so a prefix is declared in the model's own terms (`W[0:N_SRC]`) rather than as a repeated literal that can drift from the index set sized by the same metaparameter.
+         * Exclusive last index. A string names a `metaparameters` entry and resolves to its closed value (esm-spec §9.7.6), so a prefix is declared in the model's own terms (`W[0:N_SRC]`) rather than as a repeated literal that can drift from the index set sized by the same metaparameter.
          */
         stop: number | string;
         /**
