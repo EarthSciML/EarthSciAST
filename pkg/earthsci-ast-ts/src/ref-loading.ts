@@ -616,7 +616,55 @@ function resolveRefDocument(
   // empty ⇒ identity, so an edge that does not use the field resolves exactly
   // as before.
   applyMountIndexSetRename(out, indexSetRename, `${mountForm} ref '${ref}'`)
+  // The leaf's CLOSED metaparameter environment — its own declared integer
+  // defaults overlaid with the effective edge bindings that close it (§9.7.6
+  // site 3: an explicit edge binding wins over the leaf's own default), for the
+  // names the leaf DECLARES. It is what everything this leaf's OWN mounts
+  // contribute folds against (esm-spec §4.7 "Which environment a contribution
+  // folds against"). Carried on a non-enumerable sidecar, like
+  // `loaderMetaparameters`, because those mounts resolve in the caller and the
+  // `metaparameters` block it is computed from has been consumed by now.
+  const leafClosedEnv: Record<string, number> = {}
+  const leafDecls = (machineryInput as { metaparameters?: Record<string, unknown> }).metaparameters
+  if (leafDecls && typeof leafDecls === 'object' && !Array.isArray(leafDecls)) {
+    for (const [n, d] of Object.entries(leafDecls)) {
+      const dflt = (d as { default?: unknown } | null)?.default
+      if (typeof dflt === 'number' && Number.isInteger(dflt)) leafClosedEnv[n] = dflt
+      const bound = (effectiveBindings as Record<string, number>)[n]
+      if (bound !== undefined) leafClosedEnv[n] = bound
+    }
+  }
+  Object.defineProperty(out, 'leafClosedEnv', {
+    value: leafClosedEnv,
+    enumerable: false,
+    writable: true,
+    configurable: true,
+  })
   return out
+}
+
+/**
+ * The fold environment for everything a mounted leaf's OWN mounts contribute
+ * (esm-spec §4.7 "Which environment a contribution folds against").
+ *
+ * This binding threads ONE registry, so a nested contribution lands in the
+ * root's — but the SCOPE that sizes it is the leaf's. So: the enclosing
+ * environment, overlaid with the leaf's closed one. The leaf's environment holds
+ * only names the leaf DECLARES, which is the same filter §9.7.6 site 4 applies
+ * to the backfill: an outer metaparameter the leaf never declared cannot size an
+ * axis here, and a name only an outer scope declares still folds against that
+ * outer scope. Without the overlay one resolved document disagrees with itself —
+ * an axis the leaf declares folds to the bound value, an axis its own nested
+ * mount contributes to the unbound default.
+ */
+function childFoldEnv(
+  enclosing: Readonly<Record<string, number>>,
+  leaf: EsmFile,
+): Readonly<Record<string, number>> {
+  return {
+    ...enclosing,
+    ...((leaf as { leafClosedEnv?: Record<string, number> }).leafClosedEnv ?? {}),
+  }
 }
 
 /**
@@ -758,7 +806,7 @@ function walkSubsystemRefs(
             subPointer,
             [...refChain, subName],
             apiMeta,
-            rootEnv,
+            childFoldEnv(rootEnv, parsed),
           )
           onRef(parsed, refBasePath, { subName, ref, pointer: subPointer })
         },
@@ -858,7 +906,7 @@ function inlineTopLevelModelRef(
         pointer,
         [...refChain, name],
         apiMeta,
-        rootEnv,
+        childFoldEnv(rootEnv, parsed),
       )
 
       // esm-spec §4.7 "Index-set merge", at either mount form: the resolved
@@ -892,7 +940,7 @@ function inlineTopLevelModelRef(
         read,
         pointer,
         apiMeta,
-        rootEnv,
+        childFoldEnv(rootEnv, parsed),
       )
     },
     apiMeta,
@@ -1011,7 +1059,7 @@ function resolveModelRefs(
             read,
             subPointer,
             apiMeta,
-            rootEnv,
+            childFoldEnv(rootEnv, parsed),
           )
         }
       }
