@@ -107,6 +107,31 @@ end
             "datetime.year", Any[1.0e300])
     end
 
+    # ---- The eltype-generic kernel beside the Float64 core -----------------
+    @testset "each row's kernel is its `core` without the narrowing" begin
+        # `core` is what every INTERPRETER tier calls at `T === Float64`;
+        # `kernel` is what a COMPILING backend lowers, because the narrowing
+        # `core` ends in (`_cal_i32`, `Float64(…)`) has no meaning on a value
+        # that is neither — a tensor lane. The two must be the same number on
+        # every `Float64` the interpreter can be asked, or the compiled lane and
+        # the interpreted lane are TWO CALENDARS, which is the one thing the
+        # branch-free rewrite exists to prevent. Same grid as the oracle
+        # testset above, so the boundaries are the same boundaries.
+        for t in _dtc_grid()
+            for (name, _) in _DTC_FIELDS
+                sp = ESM._fn_typed_core_spec(name)
+                k = ESM._fn_typed_core_kernel(sp.id)
+                @test Float64(k(t)) === ESM._fn_typed_core_call(sp.id, t)
+            end
+            spj = ESM._fn_typed_core_spec("datetime.julian_day")
+            kj = ESM._fn_typed_core_kernel(spj.id)
+            @test kj(t) === ESM._fn_typed_core_call(spj.id, t)
+        end
+        # An id outside the table is a loud registry error, not a bounds crash.
+        @test_throws ESM.ClosedFunctionError ESM._fn_typed_core_kernel(0)
+        @test_throws ESM.ClosedFunctionError ESM._fn_typed_core_kernel(99)
+    end
+
     # ---- Payload minting + scalar walker, typed vs boxed (negative control) -
     tnode() = ESM._mknode(kind=ESM._NK_TIME)
     fnnode(name, spec, kids...) = ESM._mknode(kind=ESM._NK_OP, op=:fn,

@@ -647,28 +647,50 @@ end
 # (the TOTALITY CONTRACT above) and EXACTLY the boxed registry's `Float64`
 # composition — including the `_cal_i32` Int32 range check, whose throw is
 # part of the pinned semantics for absurd inputs.
+#
+# `kernel` is that composition's ELTYPE-GENERIC heart: the branch-free
+# arithmetic itself, without `core`'s `Float64` pin and without `_cal_i32`'s
+# Int32 range check. On a `Float64` argument it computes the same number `core`
+# does (the pin and the check narrow a value, they do not change one), and on a
+# value type that has no `Float64` and no `Int32` — a traced number, a tensor
+# lane — it is the only one of the two that has an answer at all. It is what a
+# COMPILING backend lowers: `ext/reactant_direct/interp.jl` asks for the row's
+# kernel by `id` and emits the ops the branch-free calendar is written from,
+# rather than re-deriving the calendar in a second dialect. Two implementations
+# of one calendar is two calendars (see the section header above), so there is
+# exactly one, and every tier reaches it.
 const _FN_TYPED_SCALAR_CORES = (
-    (fname = "datetime.year", arity = 1,
+    (fname = "datetime.year", arity = 1, kernel = _cal_year,
      core = t -> Float64(_cal_i32("datetime.year", _cal_year(t)))),
-    (fname = "datetime.month", arity = 1,
+    (fname = "datetime.month", arity = 1, kernel = _cal_month,
      core = t -> Float64(_cal_i32("datetime.month", _cal_month(t)))),
-    (fname = "datetime.day", arity = 1,
+    (fname = "datetime.day", arity = 1, kernel = _cal_day,
      core = t -> Float64(_cal_i32("datetime.day", _cal_day(t)))),
-    (fname = "datetime.hour", arity = 1,
+    (fname = "datetime.hour", arity = 1, kernel = _cal_hour,
      core = t -> Float64(_cal_i32("datetime.hour", _cal_hour(t)))),
-    (fname = "datetime.minute", arity = 1,
+    (fname = "datetime.minute", arity = 1, kernel = _cal_minute,
      core = t -> Float64(_cal_i32("datetime.minute", _cal_minute(t)))),
-    (fname = "datetime.second", arity = 1,
+    (fname = "datetime.second", arity = 1, kernel = _cal_second,
      core = t -> Float64(_cal_i32("datetime.second", _cal_second(t)))),
-    (fname = "datetime.day_of_year", arity = 1,
+    (fname = "datetime.day_of_year", arity = 1, kernel = _cal_day_of_year,
      core = t -> Float64(_cal_i32("datetime.day_of_year", _cal_day_of_year(t)))),
-    (fname = "datetime.is_leap_year", arity = 1,
+    (fname = "datetime.is_leap_year", arity = 1, kernel = _cal_is_leap_year,
      core = t -> Float64(_cal_i32("datetime.is_leap_year", _cal_is_leap_year(t)))),
     # Already `Float64`-valued — the boxed arm's `convert(T, ::Float64)` was
     # the identity, so the core is the raw kernel.
-    (fname = "datetime.julian_day", arity = 1,
+    (fname = "datetime.julian_day", arity = 1, kernel = _datetime_julian_day,
      core = _datetime_julian_day),
 )
+
+# The eltype-generic kernel of row `id`, for a backend that must lower the
+# function rather than call it. BUILD/EMISSION TIME ONLY: indexing the
+# heterogeneous const tuple at a runtime `id` is type-unstable, which is
+# irrelevant once per emitted node and unacceptable in `_fn_typed_core_call`'s
+# per-value ladder — hence the two different shapes over the one table.
+function _fn_typed_core_kernel(id::Int)
+    (1 <= id <= length(_FN_TYPED_SCALAR_CORES)) || _fn_typed_core_id_oob(id)
+    return _FN_TYPED_SCALAR_CORES[id].kernel
+end
 
 # The typed-core declaration for `fname`, or `nothing` when the function keeps
 # the boxed path (`interp.searchsorted` DELIBERATELY has no row — its typed

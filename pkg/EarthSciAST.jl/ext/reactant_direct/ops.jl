@@ -50,6 +50,21 @@ const _DE_UNARY = Dict{Symbol,Any}(
     :expm1 => _hlo.exponential_minus_one, :log1p => _hlo.log_plus_one,
     :floor => _hlo.floor, :ceil => _hlo.ceil, :sign => _hlo.sign, :cbrt => _hlo.cbrt,
 )
+# `log10` is the one registry op with neither a StableHLO nor a CHLO opcode.
+# `log(x) / ln(10)` is what the Rust lane emits for it (`UnCode::Log10`,
+# simulate_array/tape/xla_emit.rs), with the SAME constant — `log(10.0)` and
+# Rust's `f64::consts::LN_10` are the same Float64 — so the two compiled
+# backends compute it identically and can share a conformance fixture. It is
+# NOT Julia's `log10`, which is correctly rounded and can differ from the
+# quotient in the last bit; that difference lives inside the `transcendental`
+# tolerance class (rtol 1e-12), which is the class every fixture using it
+# carries. Emitted as a divide rather than a multiply by `log10(ℯ)` because a
+# division rounds once where the reciprocal rounds twice.
+function _de_log10(ctx::_DECtx, a::_DEVal)::_DEVal
+    return _de_bin(ctx, _hlo.divide, _de_un(ctx, _hlo.log, a),
+                   _de_const(ctx, log(10.0)))
+end
+
 # The transcendentals StableHLO itself does not carry. CHLO is the
 # decomposition dialect the StableHLO pipeline already expands for `Ops.asin`
 # and friends, so these lower to the same programs Reactant's own builders
@@ -179,6 +194,10 @@ function _de_op(ctx::_DECtx, nd::_E._Node, c::Vector{_DEVal})::_DEVal
     elseif op === :atan && n == 2
         # The registry spells the two-argument form both ways.
         return _de_bin(ctx, _hlo.atan2, c[1], c[2])
+    elseif op === :log10
+        n == 1 || _de_refuse("unary `log10` with $n arguments",
+                             "`log10` takes exactly one argument.")
+        return _de_log10(ctx, c[1])
     elseif haskey(_DE_UNARY, op)
         n == 1 || _de_refuse("unary `$op` with $n arguments",
                              "`$op` takes exactly one argument.")
@@ -279,7 +298,7 @@ function _de_static_uncached(ctx::_DECtx, nd::_E._Node)::Bool
         (haskey(_DE_UNARY, nd.op) || haskey(_DE_COMPARE, nd.op) ||
          haskey(_DE_UNARY_CHLO, nd.op) ||
          nd.op in (:+, :*, :-, :neg, :/, :^, :pow, :max, :min, :ifelse, :not,
-                   :and, :or, :pi, :π, :e, :Pre, :atan, :atan2)) || return false
+                   :and, :or, :pi, :π, :e, :Pre, :atan, :atan2, :log10)) || return false
         return all(ch -> _de_static(ctx, ch), nd.children)
     end
     return false
