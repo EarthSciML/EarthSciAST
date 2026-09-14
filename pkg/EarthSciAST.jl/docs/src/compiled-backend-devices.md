@@ -38,6 +38,27 @@ xla = Reactant.@compile sync = true d(ur, pr, tr)
 du  = Array(xla(ur, pr, tr))
 ```
 
+### Put a function between your program and `@compile`
+
+If the wrapper and the device inputs come out of calls Julia cannot infer — a
+document read at runtime, a fixture loop, anything where `fo` is not a concrete
+type — then `d`, `ur` and `tr` are all `Any` at the call site, and
+`Reactant.@compile` is inferred through them. Do not do that: it sends Julia's
+abstract interpreter into a recursion that trips the stack-overflow guard, and
+the process then WEDGES inside `typeinf` — no error, no progress, on the CPU
+client as readily as on a GPU one.
+
+Pass them through one plain function first. Julia specializes it on their
+runtime types, so inside it every argument is concrete:
+
+```julia
+compile_rhs(d, ur, pr, tr) = Reactant.@compile sync = true d(ur, pr, tr)
+
+xla = compile_rhs(d, ur, pr, tr)
+```
+
+The `compiled_rhs` adapter and the sharding test both do exactly this.
+
 `ext.direct_platform(d)` reports what the wrapper settled on (`"cuda x1"`,
 `"cpu x4"`), which is worth logging: asking for `:gpu` on a machine with no GPU
 **throws** rather than quietly running on the CPU, and a run that silently
@@ -62,6 +83,15 @@ d = ext.direct_rhs(fo; var_map = vmap, client = :gpu, sharding = 4)       # the 
 `direct_state` then builds `u` already distributed, and the emitted `du` carries
 the matching sharding constraint, so the result stays where the next step
 expects it. Nothing else in the call changes.
+
+Whether a wrapper is sharded is part of its TYPE (`DirectRHS{F,SHARDED}`), and
+the placement itself — the client and the mesh — is held beside the wrapper
+rather than in it. Both are for the same reason as the function barrier above:
+`Reactant.@compile` traces and infers the callable it is given, so the callable
+carries no XLA object, and the one-device case is a separate method that does
+not contain the sharding call at all. Read the placement through
+`direct_client`, `direct_shard`, `direct_devicecount` and `direct_platform`;
+there is no `place` field to reach for.
 
 ### Which axis, and why that one
 
