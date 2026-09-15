@@ -5,11 +5,13 @@ CurrentModule = EarthSciAST
 # Compiled backend: choosing a device, and sharding across several
 
 The compiled backend (`EarthSciASTReactantExt`, `direct_rhs`) lowers a model's
-compiled tree-walk IR straight into StableHLO. Nothing in the emitted program
-names a device: the same module compiles on a host CPU or on an attached GPU,
-and **which one is fixed by the client of the arrays you feed it**. This page is
-about that choice and about cutting the state across several devices of one
-client.
+compiled tree-walk IR straight into StableHLO. `build_evaluator(doc; form =
+:oop)` is how you get that IR: it returns the build product a backend consumes,
+not a host evaluator — host evaluation is the default in-place `f!`. Nothing in
+the emitted program names a device: the same module compiles on a host CPU or on
+an attached GPU, and **which one is fixed by the client of the arrays you feed
+it**. This page is about that choice and about cutting the state across several
+devices of one client.
 
 The emitter lives in a package extension, so reach it through
 `Base.get_extension`:

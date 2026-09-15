@@ -16,7 +16,7 @@
 #     with same values / different partials never reuses another chunk's seed,
 #   * step-rejection safety (revisiting a `t` is a pure re-evaluation),
 #   * a BIT-EXACT differential oracle vs `ESS_TCADENCE_DISABLE=1` and vs the
-#     untiered `:oop` emitter over a mixed call sequence,
+#     fully untiered `ESS_UNTIERED=1` build over a mixed call sequence,
 #   * an actual stiff Rosenbrock solve (ForwardDiff AND finite-difference
 #     Jacobians): identical solutions with the tier on and off.
 
@@ -283,12 +283,16 @@ end
 
     # ----------------------------------------------------------------
     # THE DIFFERENTIAL ORACLE. Tiered `f!` ≡ `ESS_TCADENCE_DISABLE=1` build ≡
-    # untiered `:oop`, BIT-FOR-BIT, over a mixed sequence: repeated t (the
-    # skip), new t, perturbed u, changed p, in-place forcing refresh through
-    # the supported (notify) surface, and a revisited t. Same buffer feeds all
-    # three builds, refreshes are notified, so all three must agree exactly.
+    # `ESS_UNTIERED=1` build, BIT-FOR-BIT, over a mixed sequence: repeated t
+    # (the skip), new t, perturbed u, changed p, in-place forcing refresh
+    # through the supported (notify) surface, and a revisited t. Same buffer
+    # feeds all three builds, refreshes are notified, so all three must agree
+    # exactly. The two switches are nested, and both arms earn their place: the
+    # narrow one demotes the TIME slots only, the wide one demotes the const
+    # tier too, so `f!` skips nothing at all. (`tree_walk_untiered_test.jl`
+    # pins the wide build against the out-of-place walker.)
     # ----------------------------------------------------------------
-    @testset "bit-exact differential oracle: tiered ≡ disabled ≡ :oop" begin
+    @testset "bit-exact differential oracle: tiered ≡ disabled ≡ untiered" begin
         K, M = 5, 3
         buf = [6.0]
         mk() = _tc_fastjx_model(K, M)
@@ -297,10 +301,12 @@ end
         fdis, _u2, _p2, _ts2, _vm2, ddis = withenv("ESS_TCADENCE_DISABLE" => "1") do
             ESM._build_evaluator_impl(mk(); param_arrays=pa())
         end
-        foop, _u3, _p3, _ts3, _vm3, _doop =
-            ESM._build_evaluator_impl(mk(); param_arrays=pa(), form=:oop)
+        fun, _u3, _p3, _ts3, _vm3, dun = withenv("ESS_UNTIERED" => "1") do
+            ESM._build_evaluator_impl(mk(); param_arrays=pa())
+        end
         @test di.n_time_slots > 0
         @test ddis.n_time_slots == 0
+        @test dun.n_const_slots == 0 && dun.n_time_slots == 0
 
         p2 = merge(p, (; w = 0.9, scale = 2.25))
         seq = Any[]
@@ -323,9 +329,9 @@ end
             u, pp, t = step
             a = _tc_call(fi, u, pp, t)
             b = _tc_call(fdis, u, pp, t)
-            c = foop(u, pp, t)
+            c = _tc_call(fun, u, pp, t)
             @test a == b
-            @test collect(c) == a
+            @test c == a
         end
     end
 

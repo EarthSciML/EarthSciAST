@@ -20,11 +20,11 @@
 # eltype-generic, so ForwardDiff runs through it over the state or the parameters
 # (a stiff solve gets an exact AD Jacobian for free).
 #
-# `build_evaluator(model; form = :oop)` returns an OUT-OF-PLACE `f(u, p, t) → du` in
-# the same slot (tree_walk/oop.jl). It is NOT a faster or more differentiable `f!` —
-# it is the one that can be TRACED: it captures no host buffers and contains no
-# per-lane scalar loops, the two things XLA/Reactant and device backends cannot
-# accept. Reach for it for tracing, not for derivatives.
+# `build_evaluator(model; form = :oop)` returns the COMPILED INTERMEDIATE
+# REPRESENTATION in the same slot (tree_walk/oop.jl) rather than a second
+# evaluator: the same node spines and access kernels `f!` is lowered from, as
+# data, for a compiled backend to emit a program from. `direct_rhs`
+# (ext/reactant_direct/) is the one in tree. It does not evaluate on host.
 #
 # Dict and EsmFile convenience entry points select a model by name (or
 # the single model, if the file carries only one).
@@ -49,9 +49,11 @@ include("tree_walk/compile.jl")          # §3-4 `_Node` IR, scalar CSE, scalar 
 include("tree_walk/array_contraction.jl") #     whole-array contraction nest
 include("tree_walk/geometry_compile.jl") # §2c  geometry body compiler (needs `_Node`)
 include("tree_walk/access_kernel.jl")    # §4b  unified array-kernel IR (`_AccKernel`)
-include("tree_walk/oop.jl")              # §4d  out-of-place emitter over the same IR
+include("tree_walk/scalar_ops.jl")       #      op ladder, subscript resolver, forcing args
+include("tree_walk/interp_lanes.jl")     #      branch-free `interp.*` over whole lanes
+include("tree_walk/oop.jl")              # §4d  the out-of-place build product
 include("tree_walk/acc_merge.jl")        # §4e  per-cell merge + `_make_rhs`
-include("tree_walk/oop_merge.jl")        #      `:oop` kernel-CLASS merge
+include("tree_walk/oop_merge.jl")        #      kernel-CLASS merge, for both forms
 include("tree_walk/xcse.jl")             #      cross-kernel / kernel↔prelude fn-CSE
 include("tree_walk/codegen_kernel.jl")   # §4f  Julia-codegen tier for access kernels
 include("tree_walk/const_tier.jl")       # §4g  cadence partition of the scalar prelude

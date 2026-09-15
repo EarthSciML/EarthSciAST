@@ -6,7 +6,7 @@
 #   1. The ForwardDiff Jacobian of an AFFINE-built in-place `f!` is bit-identical
 #      to the per-cell reference's — over STATE and over a PARAMETER. Same primal
 #      arithmetic ⇒ same Duals ⇒ same Jacobian, to the bit.
-#   2. A `form=:oop` affine build equals the in-place affine build and the per-cell
+#   2. An affine build equals the per-cell
 #      reference bit-for-bit, and it too differentiates.
 #
 # Every case asserts the affine path actually FIRED (n_acc_kernels ≥ 1 and it owned
@@ -19,13 +19,12 @@ const ESM = EarthSciAST
 
 # Build an evaluator under the (default) affine path or the byte-identical
 # per-cell reference (ESS_STENCIL_DISABLE=1). Returns (f, u0, p, vmap, diag);
-# `f` is `f!(du,u,p,t)` for :inplace or `f(u,p,t)->du` for :oop.
-function _affine_f(model, ics; affine::Bool, form=:inplace, const_arrays=Dict())
+function _affine_f(model, ics; affine::Bool, const_arrays=Dict())
     envs = affine ? ("ESS_STENCIL_DISABLE" => nothing,) :
                     ("ESS_STENCIL_DISABLE" => "1",)
     withenv(envs...) do
         f, u0, p, _tspan, vmap, diag =
-            ESM._build_evaluator_impl(model; initial_conditions=ics, form=form,
+            ESM._build_evaluator_impl(model; initial_conditions=ics,
                                       const_arrays=const_arrays)
         (f, u0, p, vmap, diag)
     end
@@ -123,28 +122,13 @@ end
         @test jp(f_aff) == jp(f_ref)
     end
 
-    # ---- 3. Out-of-place affine build: bit-identical value + differentiable ----
-    @testset "form=:oop affine ≡ in-place affine ≡ per-cell (N=$N)" for N in (8, 24)
-        ics = Dict("u[$k]" => sin(0.3k) + 0.1k for k in 1:N)
-        f_oop, u0, p, _, d = _affine_f(_stencil_model(N), ics; affine=true, form=:oop)
-        f_iip, _, _, _, _  = _affine_f(_stencil_model(N), ics; affine=true, form=:inplace)
-        f_ref, _, _, _, _  = _affine_f(_stencil_model(N), ics; affine=false, form=:inplace)
-        @test d.n_acc_kernels >= 1
-        du_oop = f_oop(u0, p, 0.0)
-        @test du_oop == _du(f_iip, u0, p)        # oop ≡ affine in-place, bit-for-bit
-        @test du_oop == _du(f_ref, u0, p)        # …and ≡ the per-cell reference
-        # the out-of-place emitter is eltype-generic too — its state Jacobian
-        # matches the in-place affine one.
-        @test ForwardDiff.jacobian(uu -> f_oop(uu, p, 0.0), u0) == _jac_u(f_iip, u0, p)
-    end
-
-    # ---- 4. 2-D out-of-place, exercising the strided-box functional scatter ----
-    @testset "form=:oop affine ≡ per-cell — 2D 5-point (N=$N)" for N in (5, 12)
+    # ---- 3. 2-D affine box ≡ the per-cell reference ---------------------------
+    @testset "affine ≡ per-cell — 2D 5-point (N=$N)" for N in (5, 12)
         ics = Dict("u[$i,$j]" => sin(0.2i) + 0.3cos(0.1j) + 0.01i * j
                    for i in 1:N, j in 1:N)
-        f_oop, u0, p, _, d = _affine_f(_ad_2d_model(N), ics; affine=true, form=:oop)
-        f_ref, _, _, _, _  = _affine_f(_ad_2d_model(N), ics; affine=false, form=:inplace)
+        f_aff, u0, p, _, d = _affine_f(_ad_2d_model(N), ics; affine=true)
+        f_ref, _, _, _, _  = _affine_f(_ad_2d_model(N), ics; affine=false)
         @test d.n_acc_kernels >= 1
-        @test f_oop(u0, p, 0.0) == _du(f_ref, u0, p)
+        @test _du(f_aff, u0, p) == _du(f_ref, u0, p)
     end
 end

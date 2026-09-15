@@ -3,7 +3,7 @@
 # `datetime.*` used to reach every evaluator tier through the boxed
 # `(fname, nothing)` payload: args in a `Vector{Any}`, dispatched by name
 # through `_eval_closed_fn` — an allocation per call, and one opaque call per
-# lane on the `:oop` lane path. The
+# lane on the vectorized access-kernel path. The
 # registry now DECLARES a typed scalar core per all-scalar function
 # (`_FN_TYPED_SCALAR_CORES`, registered_functions.jl), `_compile_fn_node`
 # mints the `(fname, _FnTypedCoreSpec)` payload, and every tier's `Float64`
@@ -14,7 +14,7 @@
 #     oracle — each core is by construction the same composition) and to
 #     direct `Dates`-derived values over a boundary-spanning timestamp grid;
 #   * a datetime-carrying kernel is bit-identical across the scalar
-#     interpreter, the codegen tier and the `:oop` host path;
+#     interpreter and the codegen tier;
 #   * the codegen path through a `datetime.*` spine is ZERO-ALLOCATION,
 #     with the boxed twin kernel as the sensitivity control;
 #   * ForwardDiff `Dual` input still takes the pre-change boxed route and
@@ -105,6 +105,31 @@ end
         @test_throws ESM.ClosedFunctionError ESM._fn_typed_core_call(spy.id, NaN)
         @test_throws ESM.ClosedFunctionError evaluate_closed_function(
             "datetime.year", Any[1.0e300])
+    end
+
+    # ---- The eltype-generic kernel beside the Float64 core -----------------
+    @testset "each row's kernel is its `core` without the narrowing" begin
+        # `core` is what every INTERPRETER tier calls at `T === Float64`;
+        # `kernel` is what a COMPILING backend lowers, because the narrowing
+        # `core` ends in (`_cal_i32`, `Float64(…)`) has no meaning on a value
+        # that is neither — a tensor lane. The two must be the same number on
+        # every `Float64` the interpreter can be asked, or the compiled lane and
+        # the interpreted lane are TWO CALENDARS, which is the one thing the
+        # branch-free rewrite exists to prevent. Same grid as the oracle
+        # testset above, so the boundaries are the same boundaries.
+        for t in _dtc_grid()
+            for (name, _) in _DTC_FIELDS
+                sp = ESM._fn_typed_core_spec(name)
+                k = ESM._fn_typed_core_kernel(sp.id)
+                @test Float64(k(t)) === ESM._fn_typed_core_call(sp.id, t)
+            end
+            spj = ESM._fn_typed_core_spec("datetime.julian_day")
+            kj = ESM._fn_typed_core_kernel(spj.id)
+            @test kj(t) === ESM._fn_typed_core_call(spj.id, t)
+        end
+        # An id outside the table is a loud registry error, not a bounds crash.
+        @test_throws ESM.ClosedFunctionError ESM._fn_typed_core_kernel(0)
+        @test_throws ESM.ClosedFunctionError ESM._fn_typed_core_kernel(99)
     end
 
     # ---- Payload minting + scalar walker, typed vs boxed (negative control) -
@@ -202,20 +227,19 @@ end
                                       _ao1(body, "i", 1, N))])
     end
 
-    @testset "kernel bit-identity: interpreter ≡ codegen ≡ :oop" begin
+    @testset "kernel bit-identity: interpreter ≡ codegen" begin
         N = 24
         ics = Dict("u[$k]" => 0.2 + 0.15k for k in 1:N)
-        build(; form=:inplace, env...) =
+        build(; env...) =
             withenv((String(k) => v for (k, v) in pairs(env))...) do
             ESM._reset_cascade_tally!()
             f, u0, p, _t, _vm, _d = ESM._build_evaluator_impl(_dtc_model(N);
-                initial_conditions=ics, form=form)
+                initial_conditions=ics)
             (f, u0, p, copy(ESM._CASCADE_TALLY))
         end
         fref, u0, pref, _ = build(; ESS_STENCIL_DISABLE="1", ESS_CODEGEN_DISABLE="1")
         fint, _, pint, _ = build(; ESS_CODEGEN_DISABLE="1")   # kernel interpreter
         fcg, _, pcg, cgtally = build()
-        foop, _, poop, _ = build(; form=:oop)
         @test get(cgtally, :codegen_kernel, 0) >= 1   # codegen really fired
 
         run!(f!, u, p, t) = (d = zeros(length(u)); f!(d, u, p, t); d)
@@ -228,7 +252,6 @@ end
             dref = run!(fref, u, pref, t)
             @test all(run!(fint, u, pint, t) .=== dref)
             @test all(run!(fcg, u, pcg, t) .=== dref)
-            @test all(foop(u, poop, t) .=== dref)
             # Dates-derived expected values, composed in the spine's own
             # order (`convert(Float64, doy) + jd*1e-3`), so the comparison is
             # exact for the field term and ≤ ulps for the julian_day product.

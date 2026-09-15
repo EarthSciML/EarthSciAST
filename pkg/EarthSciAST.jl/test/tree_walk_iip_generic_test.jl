@@ -15,8 +15,8 @@
 #
 #   1. NOTHING MOVED AT Float64. Same bits, still zero allocations, still zero after
 #      the Dual buffers have been created (the lazy alt-buffer must not leak into the
-#      Float64 path). Bit-identity is asserted with `==` against the `form = :oop`
-#      emitter, which is independently pinned bit-identical to the pre-change `f!`.
+#      Float64 path). Bit-identity is asserted with `==` against an `ESS_UNTIERED=1`
+#      build — the same emitter with every prelude slot refilled on every call.
 #
 #   2. FORWARDDIFF WORKS THROUGH IT, on BOTH axes. The parameter axis is not a
 #      variation of the state axis but a separate failure mode: there `u` stays
@@ -140,7 +140,13 @@ _gi_call(f!, u, p, t) = (du = zero(u); f!(du, u, p, t); du)
 _gi_pcall(f!, u, p, t, ::Type{V}) where {V} =
     (du = zeros(V, length(u)); f!(du, u, p, t); du)
 
-_gi_both(doc) = (ESM.build_evaluator(doc)[1], ESM.build_evaluator(doc; form = :oop)[1])
+# The TIERED `f!` and its UNTIERED twin (`ESS_UNTIERED=1`, tree_walk/const_tier.jl):
+# the same emitter with every prelude slot classified dynamic, so it refills the whole
+# prelude on every call and takes no cadence skip. That is the Float64 oracle below.
+_gi_both(doc) = (ESM.build_evaluator(doc)[1],
+                 withenv("ESS_UNTIERED" => "1") do
+                     ESM.build_evaluator(doc)[1]
+                 end)
 
 # Central-difference Jacobian of the TRUSTED Float64 `f!` w.r.t. the state.
 function _gi_fd_state_jac(f!, u, p, t; h = 1e-6)
@@ -158,10 +164,12 @@ end
 
     # ---- 1. Nothing moved at Float64 ----------------------------------------
 
-    @testset "bit-identical at Float64 to the :oop emitter" begin
-        # The oracle: `form = :oop` is independently pinned bit-identical to the
-        # pre-change `f!` (tree_walk_oop_test.jl), so agreeing with it `==` means the
-        # genericity refactor changed no Float64 bit. `==`, never `isapprox`.
+    @testset "bit-identical at Float64 to the untiered build" begin
+        # The oracle: an `ESS_UNTIERED=1` build refills every prelude slot on every
+        # call, so it carries nothing across calls that a scratch-reuse or
+        # cadence-skip bug could go stale in — and it is itself pinned bit-identical
+        # to the out-of-place emitter (tree_walk_untiered_test.jl). Agreeing with it
+        # `==` means the genericity refactor changed no Float64 bit. Never `isapprox`.
         cases = ["reaction-diffusion N=16" => _gi_rd(16),
                  "reaction-diffusion N=129" => _gi_rd(129),
                  "0-D with a CSE prelude" => _gi_zerod(),
@@ -173,7 +181,7 @@ end
                 _, u0, p, _, _ = ESM.build_evaluator(doc)
                 u = length(u0) == 1 ? [1.5] : _gi_seed(length(u0))
                 for t in (0.0, 0.37, 1.9)
-                    @test _gi_call(fi, u, p, t) == fo(u, p, t)
+                    @test _gi_call(fi, u, p, t) == _gi_call(fo, u, p, t)
                 end
             end
         end
@@ -202,7 +210,7 @@ end
         fi, fo = _gi_both(doc)
         _, u0, p, _, _ = ESM.build_evaluator(doc)
         u = _gi_seed(length(u0))
-        want = fo(u, p, 0.0)
+        want = _gi_call(fo, u, p, 0.0)
 
         du = zero(u)
         @test rhs_alloc_bytes(fi, du, u, p, 0.0) == 0
@@ -228,10 +236,13 @@ end
         n = length(u)
         @test all(J[i, j] == 0.0 for i in 1:n, j in 1:n if abs(i - j) > 1)
 
-        # And it must agree with the out-of-place emitter's Jacobian bit for bit —
+        # And it must agree bit for bit with the per-cell reference's Jacobian:
         # the two walk the same IR, so a divergence means one of them is lying.
-        fo = ESM.build_evaluator(doc; form = :oop)[1]
-        @test J == ForwardDiff.jacobian(uu -> fo(uu, p, 0.0), u)
+        fr! = withenv("ESS_STENCIL_DISABLE" => "1") do
+            ESM.build_evaluator(doc)[1]
+        end
+        @test J == ForwardDiff.jacobian(
+            uu -> (d = similar(uu, eltype(uu)); fill!(d, 0); fr!(d, uu, p, 0.0); d), u)
     end
 
     @testset "ForwardDiff: Jacobian w.r.t. the STATE, through the CSE prelude" begin
@@ -350,13 +361,15 @@ end
         @test sol.retcode == ReturnCode.Success
         @test all(isfinite, sol.u[end])
 
-        # Against the same problem solved through the allocating out-of-place emitter
-        # (a different evaluator, same IR): the two trajectories must agree.
-        fo = ESM.build_evaluator(doc; form = :oop)[1]
-        solo = OrdinaryDiffEqRosenbrock.solve(
-            ODEProblem(fo, u, (0.0, 2.0), p), OrdinaryDiffEqRosenbrock.Rosenbrock23();
+        # Against the same problem solved through the per-cell reference build
+        # (a different lowering, same IR): the two trajectories must agree.
+        fr! = withenv("ESS_STENCIL_DISABLE" => "1") do
+            ESM.build_evaluator(doc)[1]
+        end
+        solr = OrdinaryDiffEqRosenbrock.solve(
+            ODEProblem(fr!, u, (0.0, 2.0), p), OrdinaryDiffEqRosenbrock.Rosenbrock23();
             abstol = 1e-10, reltol = 1e-10)
-        @test maximum(abs, sol.u[end] .- solo.u[end]) < 1e-6
+        @test maximum(abs, sol.u[end] .- solr.u[end]) < 1e-6
     end
 
     # ---- 5. The value-type rule ----------------------------------------------
@@ -391,16 +404,6 @@ end
         end
         @test err isa ESM.TreeWalkError
         @test err.code == "E_TREEWALK_FLOAT32_STATE"
-
-        fo = ESM.build_evaluator(doc; form = :oop)[1]
-        erro = try
-            fo(u32, p, 0.0)
-            nothing
-        catch e
-            e
-        end
-        @test erro isa ESM.TreeWalkError
-        @test erro.code == "E_TREEWALK_FLOAT32_STATE"
 
         # Float64 state through the same closures still works (the guard is a
         # statically-folded no-op there).

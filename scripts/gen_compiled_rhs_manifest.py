@@ -46,6 +46,7 @@ Run:  python3 scripts/gen_compiled_rhs_manifest.py
 from __future__ import annotations
 
 import argparse
+import datetime as _dt
 import json
 import math
 import random
@@ -193,6 +194,78 @@ def _first_order_decay(state, t):
     return {"u": -0.01 * state["u"]}
 
 
+# --- the `datetime.*` + `log10` anchor ------------------------------------
+#
+# Python's own proleptic-Gregorian calendar (`datetime.date`) plus the spec's
+# arithmetic, which is what makes this an INDEPENDENT anchor: nothing below
+# transcribes a binding's decomposition, it asks the standard library what the
+# civil date of a day number is. The two pieces of the spec a stdlib calendar
+# does NOT supply, and that every binding must get right, are spelled out here
+# because they are exactly where a calendar goes wrong:
+#
+#   * MILLISECOND TRUNCATION. `datetime.*` decomposes `trunc(1000*t)` whole
+#     milliseconds, toward zero, not `t` seconds (esm-spec §9.2.1). A binding
+#     that decomposes seconds directly disagrees at every sub-millisecond
+#     boundary, which the `year_end_2023` probe's half-second sits on.
+#   * FLOORED DIVISION. Days and milliseconds-of-day come from a FLOORED
+#     divmod, so `t = -1` is 1969-12-31T23:59:59 and not "day 0, -1000 ms".
+#     Python's `divmod` on integers already floors; the note is here because a
+#     binding written in a truncating language does not.
+#
+# `julian_day` is the one continuous member: an integer Julian day number from
+# the civil date, plus the spec's `(seconds_of_day - 43200)/86400` fractional
+# offset taken from the RAW `t` (floored `%`, which is Python's and Julia's
+# `mod`, not C's `fmod`).
+
+_UNIX_EPOCH_JDN = 2440588  # the Julian day number of 1970-01-01
+
+
+def _civil_fields(t: float):
+    """(year, month, day, hour, minute, second, day_of_year, is_leap_year) at `t`."""
+    ms = math.trunc(1000.0 * t)
+    days, msod = divmod(ms, 86400000)  # floored, per the spec
+    date = _dt.date(1970, 1, 1) + _dt.timedelta(days=days)
+    doy = date.toordinal() - _dt.date(date.year, 1, 1).toordinal() + 1
+    leap = 1 if (date.year % 4 == 0 and (date.year % 100 != 0 or date.year % 400 == 0)) else 0
+    return (
+        date.year,
+        date.month,
+        date.day,
+        msod // 3600000,
+        (msod % 3600000) // 60000,
+        (msod % 60000) // 1000,
+        doy,
+        leap,
+    )
+
+
+def _julian_day(t: float) -> float:
+    y, mo, d = _civil_fields(t)[:3]
+    jdn = _UNIX_EPOCH_JDN + (_dt.date(y, mo, d) - _dt.date(1970, 1, 1)).days
+    return jdn + (t % 86400.0 - 43200.0) / 86400.0
+
+
+def _datetime_log10(state, t):
+    """`datetime_log10`, model `DatetimeLog10`. Nine equations, one per closed
+    calendar function, plus `hour(t + tz_offset) + longitude/15` and
+    `k_log * log10(lg)`."""
+    tz_offset, longitude, k_log = 3600.0, -88.2, 2.0
+    y, mo, d, hh, mi, ss, doy, leap = _civil_fields(t)
+    return {
+        "cal_year": float(y),
+        "cal_month": float(mo),
+        "cal_day": float(d),
+        "cal_hour": float(hh),
+        "cal_minute": float(mi),
+        "cal_second": float(ss),
+        "cal_day_of_year": float(doy),
+        "cal_julian_day": _julian_day(t),
+        "cal_is_leap_year": float(leap),
+        "cal_local_hour": float(_civil_fields(t + tz_offset)[3]) + longitude / 15.0,
+        "lg": k_log * math.log10(state["lg"]),
+    }
+
+
 # === The fixture table ====================================================
 #
 # `pde_spec` marks the eight pre-discretized fixtures whose three original probes
@@ -336,6 +409,34 @@ FIXTURE_TABLE = [
         "anchor": _first_order_decay,
         "domain": "any",
     },
+    {
+        "id": "datetime_log10",
+        "path": "conformance/compiled_rhs/fixtures/datetime_log10.esm",
+        "model": "DatetimeLog10",
+        # `transcendental`, for `log10` and `julian_day`. The eight integer
+        # fields are exact in every binding and 1e-12 is slack on them; the two
+        # that are not exact are a synthesized `log(x)/ln(10)` and a ~2.4e6
+        # Julian day whose fractional part is one rounded divide.
+        "tolerance_class": "transcendental",
+        "anchor": _datetime_log10,
+        # `lg` is the argument of a `log10`, so the state must stay positive.
+        "domain": "positive",
+        # The tier's ONLY fixture with hand-chosen probe times, because its RHS
+        # is a CALENDAR: the default 0.37 / 1.0 / 2.5 all land inside the first
+        # three seconds of 1970-01-01 and would leave every branch of the
+        # decomposition untested. These seven are the cases a calendar gets
+        # wrong. (`t = 0` — the epoch, itself a day AND a year boundary — is
+        # already the `default` probe.)
+        "probe_times": [
+            ("pre_epoch_second", -1.0),  # negative; 1969-12-31T23:59:59
+            ("pre_epoch_fraction", -0.5),  # negative and sub-second
+            ("pre_epoch_leap_1968", -58039200.0),  # negative, on a leap day
+            ("leap_day_2020", 1582979696.0),  # 2020-02-29T12:34:56
+            ("year_end_2023", 1704067199.5),  # year boundary, half a second short
+            ("day_boundary_below", 86399.75),  # just below a day boundary
+            ("day_boundary", 86400.0),  # exactly on one
+        ],
+    },
 ]
 
 
@@ -474,13 +575,21 @@ def build_probes(entry: dict, layout: dict, rng: random.Random, pde_probes: dict
             }
         )
 
-    for k, t in enumerate(PERTURB_TIMES, start=1):
+    # `probe_times` overrides the three default perturbation times for a fixture
+    # whose RHS is a function of `t` that 0.37 / 1.0 / 2.5 cannot exercise — the
+    # calendar. It changes the times and the probe IDS, never the state rule: the
+    # states still come from the one seeded stream, drawn in the same order, so
+    # the table regenerates byte-for-byte either way.
+    times = entry.get("probe_times") or [
+        (f"perturbed_{k}", t) for k, t in enumerate(PERTURB_TIMES, start=1)
+    ]
+    for pid, t in times:
         state = {}
         for name in order:
             state[name] = _perturb(float(u0[name]), rng.uniform(-1.0, 1.0), entry["domain"])
         probes.append(
             {
-                "id": f"perturbed_{k}",
+                "id": pid,
                 "t": t,
                 "state": state,
                 "analytic_rhs": _as_float_map(anchor(state, t), order),

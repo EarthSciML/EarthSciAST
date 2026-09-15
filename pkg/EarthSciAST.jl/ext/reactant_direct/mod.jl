@@ -18,9 +18,8 @@
 # `L == 1`. There is NO extended flat state buffer `ue`: a materialized
 # observed's fill result is recorded in a SLOT MAP (slot -> (producer value,
 # position)), and a later read of those slots becomes slices of the producer
-# values plus one concatenate — the reference-preserving form
-# src/tree_walk/SSA_SPIKE.md reaches for from the other side. `du` is assembled
-# the same way, unwritten slots becoming a zero-constant run.
+# values plus one concatenate. `du` is assembled the same way, unwritten slots
+# becoming a zero-constant run.
 #
 # HARD ERRORS, NOT FALLBACKS. Anything this backend cannot lower raises
 # `EarthSciAST.DirectEmitError` naming the node kind / descriptor kind / kernel
@@ -32,6 +31,8 @@
 #   ops.jl      the elementwise ladder, the ⊕-folds, the host const-fold
 #   interp.jl   closed functions (`:fn`): the six `interp.*` forms
 #   emit.jl     the walk — spines, kernels, sub-kernels, reduces, scans, the RHS
+#   batch.jl    the LANE-BATCHED scalar surface: the `:oop` build's congruent
+#               per-cell entry groups emitted once over their lane axis
 #   device.jl   WHERE it runs: the XLA client (cpu/gpu), the cell-axis sharding
 #               of the flat state across several devices, and the device-input
 #               builders, held BESIDE the callable rather than in it. Included
@@ -49,5 +50,6 @@ include("values.jl")
 include("ops.jl")
 include("interp.jl")
 include("emit.jl")
+include("batch.jl")
 include("device.jl")
 include("api.jl")

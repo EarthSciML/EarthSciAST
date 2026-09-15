@@ -18,7 +18,6 @@
 #     silent decline would make every comparison pass trivially.
 #   * The decline conditions: reverse scans, and bodies that reference the
 #     scanned output symbol, must keep the triangular path AND stay correct.
-#   * `:oop` ≡ `:inplace`, the property the in-place tests lean on elsewhere.
 using Test
 using EarthSciAST
 include("testutils.jl")
@@ -67,21 +66,21 @@ end
 #   :scan     — the default build (the rewrite fires)
 #   :percell  — ESS_STENCIL_DISABLE=1, the maximally independent reference
 #   :interp   — ESS_CODEGEN_DISABLE=1, affine but interpreted
-#   :oop      — the out-of-place emitter
+#   :untiered — ESS_UNTIERED=1, the prelude refilled in full on every call
 function _scan_du(model; tier=:scan)
-    envs = tier === :percell ? ("ESS_STENCIL_DISABLE" => "1", "ESS_CODEGEN_DISABLE" => nothing) :
-           tier === :interp  ? ("ESS_STENCIL_DISABLE" => nothing, "ESS_CODEGEN_DISABLE" => "1") :
-                               ("ESS_STENCIL_DISABLE" => nothing, "ESS_CODEGEN_DISABLE" => nothing)
+    envs = tier === :percell ? ("ESS_STENCIL_DISABLE" => "1", "ESS_CODEGEN_DISABLE" => nothing,
+                                "ESS_UNTIERED" => nothing) :
+           tier === :interp  ? ("ESS_STENCIL_DISABLE" => nothing, "ESS_CODEGEN_DISABLE" => "1",
+                                "ESS_UNTIERED" => nothing) :
+           tier === :untiered ? ("ESS_STENCIL_DISABLE" => nothing, "ESS_CODEGEN_DISABLE" => nothing,
+                                 "ESS_UNTIERED" => "1") :
+                               ("ESS_STENCIL_DISABLE" => nothing, "ESS_CODEGEN_DISABLE" => nothing,
+                                "ESS_UNTIERED" => nothing)
     withenv(envs...) do
         ESM._reset_cascade_tally!()
-        f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(model;
-            form = tier === :oop ? :oop : :inplace)
+        f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(model)
         u = Float64[_sc_val(k) for k in 1:length(u0)]
-        du = if tier === :oop
-            collect(f!(u, p, 0.0))
-        else
-            buf = zero(u0); f!(buf, u, p, 0.0); buf
-        end
+        du = (buf = zero(u0); f!(buf, u, p, 0.0); buf)
         (du=du, vm=vm, diag=diag, tally=copy(ESM._CASCADE_TALLY))
     end
 end
@@ -188,7 +187,7 @@ end
             @test get(a.tally, :scan, 0) == 1
             @test _bits(a.du) == _bits(_scan_du(m; tier=:percell).du)
             @test _bits(a.du) == _bits(_scan_du(m; tier=:interp).du)
-            @test _bits(a.du) == _bits(_scan_du(m; tier=:oop).du)
+            @test _bits(a.du) == _bits(_scan_du(m; tier=:untiered).du)
         end
     end
 
@@ -239,13 +238,6 @@ end
         b = _scan_du(front)
         @test b.diag.n_scan_folds == 0
         @test _bits(b.du) == _bits(_scan_du(front; tier=:percell).du)
-    end
-
-    @testset ":oop emitter agrees with :inplace bitwise" begin
-        for filt in ("<=", "<"), red in ("+", "max")
-            m = _scan_model(12; filt=filt, reduce=red)
-            @test _bits(_scan_du(m).du) == _bits(_scan_du(m; tier=:oop).du)
-        end
     end
 
     @testset "identity gather over a CONTRACTING producer unwraps" begin

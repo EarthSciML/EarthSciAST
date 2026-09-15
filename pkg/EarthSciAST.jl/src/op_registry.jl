@@ -584,7 +584,7 @@ Every evaluator ladder applies the Base predicate and maps its `Bool` through
 `1.0`/`0.0` (spec comparison semantics); the per-ladder arm shape (scalar
 ternary, `@.` blend, broadcast blend) lives with each generator. Consumers:
 `_eval_node_comparison` (compile.jl), `_eval_acc_comparison` (access_kernel.jl),
-`_oop_comparison` (oop.jl), `_eval_acc_comparison` (access_kernel.jl).
+`_comparison` (scalar_ops.jl), `_eval_acc_comparison` (access_kernel.jl).
 """
 const _COMPARISON_ELEMENTWISE_OPS = Tuple(
     _ladder_row(s) for s in _OP_TABLE if s.category === :comparison)

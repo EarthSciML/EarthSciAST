@@ -1,4 +1,4 @@
-# ---- Models (copied from test/tree_walk_oop_test.jl) -------------------------
+# ---- Models ------------------------------------------------------------------
 _Dt(v) = Dict{String,Any}("op" => "D", "args" => Any[v], "wrt" => "t")
 _ix(v, i...) = Dict{String,Any}("op" => "index", "args" => Any[v, i...])
 _o(o, a...) = Dict{String,Any}("op" => o, "args" => Any[a...])

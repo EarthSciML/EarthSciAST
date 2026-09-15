@@ -376,13 +376,9 @@ export
     # checkpoint callback (DiscreteCallback in the DiffEqCallbacks extension).
     gather_flat!, any_of, slurm_walltime_predicate, spot_preemption_predicate,
     build_checkpoint_callback, zarr_restart_state,
-    # Out-of-place RHS explicit-buffers surface (perf-plan B2): the traced-
-    # argument binding of the live forcing buffers, plus the refresh-side hook
-    # that mirrors a host refresh into the compiled program's argument arrays.
-    rhs_with_buffers, forcing_buffers, forcing_buffer_index, sync_forcing!,
-    # Trace-time `(tensor, window)` read-interning counters (ess-oop-intern):
-    # the engagement witness for the out-of-place emitter's traced read memo.
-    oop_intern_stats, oop_intern_stats_reset!,
+    # Live forcing buffers of an out-of-place build, plus the refresh-side hook
+    # that mirrors a host refresh into a compiled program's argument arrays.
+    forcing_buffers, forcing_buffer_index, sync_forcing!,
     # The simulation Problem (esm-libraries-spec §2.5, API_SPEC §5.8): ONE noun
     # and ONE verb. `esm_problem` absorbs the whole deterministic-per-document
     # pipeline (load → discretize → build_evaluator → seed → callbacks); the

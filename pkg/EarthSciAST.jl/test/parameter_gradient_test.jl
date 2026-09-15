@@ -19,21 +19,10 @@
 # WHAT IS ASSERTED HERE (the host layer):
 #
 #   `ForwardDiff.gradient` of a scalar functional of the RHS w.r.t. the parameter
-#   vector, through the in-place `f!` AND through `form = :oop`, agreeing to
-#   rtol 1e-12 — the two emitters run the same operations in the same order, so
-#   this is a tight bound, not a fitted one. Central finite differences check that
-#   both are the RIGHT number (~1e-6), and a non-zero test gives the whole thing
-#   teeth: a build that froze the parameters would pass an emitter-vs-emitter
-#   comparison of two zeros.
-#
-# The TRACED layers (reverse-mode ∂/∂p and ∂/∂u under Reactant/XLA, `p`-is-a-real-
-# XLA-input, and the reverse-over-`@trace while` `@test_broken`) live in
-# test/reactant_parameter_gradient_test.jl, included from the bottom of this file
-# under `ESM_TEST_REACTANT=1` — the same gate test/reactant_oop_test.jl uses, and
-# for the same reason (Reactant bundles an XLA runtime). They are a separate FILE
-# rather than a branch in this one because `Reactant.@trace` / `@compile` are
-# MACROS: an `if` around them still macro-expands, so merely mentioning them in an
-# un-taken branch would break the default, Reactant-free suite.
+#   vector, through the in-place `f!`. Central finite differences check that it
+#   is the RIGHT number (~1e-6), and a non-zero test gives the whole thing teeth:
+#   a build that froze the parameters would return zeros and still look
+#   self-consistent.
 
 using Test
 using EarthSciAST
@@ -41,8 +30,7 @@ using ForwardDiff
 
 const _PG_ESM = EarthSciAST
 
-# The 1-D reaction–diffusion model from test/reactant_oop_test.jl (`_rd`), kept
-# here verbatim so this file runs with NO Reactant in the session. It is the right
+# A 1-D reaction–diffusion model. It is the right
 # model for a parameter gradient because all four parameters reach `du` by
 # different routes: `k_diff` linearly through the stencil, `k_rxn` linearly
 # through the reaction term, and `Ea`/`T` nonlinearly through the hoisted
@@ -88,35 +76,30 @@ const _PG_T = 0.37
 const _PG_W = [1.0 + 0.05k for k in 1:_PG_N]
 
 const _PG_FI, _, _PG_P0, _, _ = _PG_ESM.build_evaluator(_PG_DOC)
-const _PG_FO, _, _, _, _ = _PG_ESM.build_evaluator(_PG_DOC; form = :oop)
 const _PG_SYMS = keys(_PG_P0)
 const _PG_PVEC0 = collect(Float64, values(_PG_P0))
 _pg_nt(pv) = NamedTuple{_PG_SYMS}(Tuple(pv))
 
-# The scalar functional, once per emitter. Note `du`'s eltype comes from `pv`,
-# NOT from `u`: under ∂/∂p the state stays Float64 and only `p` is Dual.
-_pg_obj(u, p, t) = sum(_PG_W .* _PG_FO(u, p, t))
-_pg_J_oop(pv) = _pg_obj(_PG_U, _pg_nt(pv), _PG_T)
-function _pg_J_iip(pv)
-    du = zeros(eltype(pv), _PG_N)
-    _PG_FI(du, _PG_U, _pg_nt(pv), _PG_T)
+# The scalar functional. Note `du`'s eltype comes from `pv`, NOT from `u`:
+# under ∂/∂p the state stays Float64 and only `p` is Dual.
+function _pg_obj(u, p, t)
+    du = zeros(promote_type(eltype(u), eltype(values(p))), _PG_N)
+    _PG_FI(du, u, p, t)
     return sum(_PG_W .* du)
 end
+_pg_J_iip(pv) = _pg_obj(_PG_U, _pg_nt(pv), _PG_T)
 
-# The host reference every traced assertion is measured against.
-const _PG_G_OOP = ForwardDiff.gradient(_pg_J_oop, _PG_PVEC0)
+const _PG_G_P = ForwardDiff.gradient(_pg_J_iip, _PG_PVEC0)
 const _PG_G_U = ForwardDiff.gradient(uu -> _pg_obj(uu, _PG_P0, _PG_T), _PG_U)
 
 @testset "∂(RHS)/∂(parameter vector) — host" begin
 
-    @testset "ForwardDiff ∂/∂p agrees across both emitters" begin
-        @test length(_PG_G_OOP) == length(_PG_PVEC0) == 4
+    @testset "ForwardDiff ∂/∂p is finite and non-zero" begin
+        @test length(_PG_G_P) == length(_PG_PVEC0) == 4
         # Teeth: a build that constant-folded the parameters would give zeros and
-        # still satisfy the agreement test below.
-        @test all(isfinite, _PG_G_OOP)
-        @test all(!iszero, _PG_G_OOP)
-        @test isapprox(ForwardDiff.gradient(_pg_J_iip, _PG_PVEC0), _PG_G_OOP;
-                       rtol = 1e-12)
+        # still satisfy the finite-difference agreement below, at zero.
+        @test all(isfinite, _PG_G_P)
+        @test all(!iszero, _PG_G_P)
     end
 
     @testset "…and both are the right number (central differences)" begin
@@ -128,9 +111,9 @@ const _PG_G_U = ForwardDiff.gradient(uu -> _pg_obj(uu, _PG_P0, _PG_T), _PG_U)
             h = 1e-6 * max(abs(_PG_PVEC0[k]), 1.0)
             hi = copy(_PG_PVEC0); hi[k] += h
             lo = copy(_PG_PVEC0); lo[k] -= h
-            fd[k] = (_pg_J_oop(hi) - _pg_J_oop(lo)) / (2h)
+            fd[k] = (_pg_J_iip(hi) - _pg_J_iip(lo)) / (2h)
         end
-        @test isapprox(_PG_G_OOP, fd; rtol = 1e-6)
+        @test isapprox(_PG_G_P, fd; rtol = 1e-6)
     end
 
     @testset "∂/∂p and ∂/∂u are computed in DIFFERENT value types" begin
@@ -141,12 +124,4 @@ const _PG_G_U = ForwardDiff.gradient(uu -> _pg_obj(uu, _PG_P0, _PG_T), _PG_U)
         @test all(!iszero, _PG_G_U)
         @test eltype(_PG_U) === Float64          # untouched by the ∂/∂p pass above
     end
-end
-
-# ---- Traced (Reactant/XLA) — opt-in ----------------------------------------
-if get(ENV, "ESM_TEST_REACTANT", "0") == "1"
-    include("reactant_parameter_gradient_test.jl")
-else
-    @info "skipping the traced ∂/∂p tests (reactant_parameter_gradient_test.jl); " *
-          "set ESM_TEST_REACTANT=1, with Reactant in the environment, to run them"
 end

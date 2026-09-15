@@ -1,0 +1,312 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "datetime_log10",
+    "description": "The `compiled_rhs` gate for the two constructs a compiled backend cannot reach by lowering arithmetic alone: the nine-function `datetime.*` closed calendar (esm-spec \u00a79.2.1) and `log10`. Every one of the nine functions has its own equation, so a backend that lowers eight of them fails HERE rather than in a model. The probe times are chosen for the cases a calendar gets wrong: NEGATIVE times (floored division, not truncated), both signs of a leap day, a year boundary, a sub-second remainder (the family truncates to whole milliseconds), and `t` exactly on and just below a day boundary. `datetime.julian_day` is the one continuous member and is pinned to the same tolerance as the rest; the eight integer fields are exact in every binding and the class's 1e-12 is slack on them.",
+    "authors": [
+      "Chris Tessum with Claude"
+    ],
+    "created": "2026-09-14T00:00:00Z",
+    "tags": [
+      "conformance",
+      "compiled_rhs",
+      "datetime",
+      "closed_functions",
+      "log10"
+    ]
+  },
+  "models": {
+    "DatetimeLog10": {
+      "reference": {
+        "notes": "esm-spec \u00a79.2.1 (`datetime.*` calendar decomposition) and \u00a74.2 (`log10`)."
+      },
+      "variables": {
+        "cal_year": {
+          "type": "unknown",
+          "units": "dimensionless",
+          "default": 0.0,
+          "description": "The proleptic-Gregorian year. Its derivative IS the calendar field, so each probe reads the decomposition of that probe's `t` directly."
+        },
+        "cal_month": {
+          "type": "unknown",
+          "units": "dimensionless",
+          "default": 0.0,
+          "description": "Month of year, 1-12. Its derivative IS the calendar field, so each probe reads the decomposition of that probe's `t` directly."
+        },
+        "cal_day": {
+          "type": "unknown",
+          "units": "dimensionless",
+          "default": 0.0,
+          "description": "Day of month, 1-31. Its derivative IS the calendar field, so each probe reads the decomposition of that probe's `t` directly."
+        },
+        "cal_hour": {
+          "type": "unknown",
+          "units": "dimensionless",
+          "default": 0.0,
+          "description": "Hour of day, 0-23. Its derivative IS the calendar field, so each probe reads the decomposition of that probe's `t` directly."
+        },
+        "cal_minute": {
+          "type": "unknown",
+          "units": "dimensionless",
+          "default": 0.0,
+          "description": "Minute of hour, 0-59. Its derivative IS the calendar field, so each probe reads the decomposition of that probe's `t` directly."
+        },
+        "cal_second": {
+          "type": "unknown",
+          "units": "dimensionless",
+          "default": 0.0,
+          "description": "Second of minute, 0-59. Its derivative IS the calendar field, so each probe reads the decomposition of that probe's `t` directly."
+        },
+        "cal_day_of_year": {
+          "type": "unknown",
+          "units": "dimensionless",
+          "default": 0.0,
+          "description": "Day of year, 1-366. Its derivative IS the calendar field, so each probe reads the decomposition of that probe's `t` directly."
+        },
+        "cal_julian_day": {
+          "type": "unknown",
+          "units": "dimensionless",
+          "default": 0.0,
+          "description": "Julian day, the one continuous member of the family. Its derivative IS the calendar field, so each probe reads the decomposition of that probe's `t` directly."
+        },
+        "cal_is_leap_year": {
+          "type": "unknown",
+          "units": "dimensionless",
+          "default": 0.0,
+          "description": "1 on a leap year, 0 otherwise. Its derivative IS the calendar field, so each probe reads the decomposition of that probe's `t` directly."
+        },
+        "cal_local_hour": {
+          "type": "unknown",
+          "units": "dimensionless",
+          "default": 0.0,
+          "description": "`datetime.hour` reached through an OFFSET argument and consumed by ordinary arithmetic: `hour(t + tz_offset) + longitude/15`. This is the shape a real emissions model uses for local solar hour, and it pins two things the nine bare calls cannot \u2014 that the family's argument may be an expression rather than the bare time, and that an integer-valued result flows into a Float64 expression without an integer type escaping the program."
+        },
+        "lg": {
+          "type": "unknown",
+          "units": "dimensionless",
+          "default": 5.0,
+          "description": "The `log10` probe, and the fixture's only STATE-DEPENDENT equation: `D(lg) = k_log * log10(lg)`. `log10` has neither a StableHLO nor a CHLO opcode, so every compiled backend synthesizes it as `log(x)/ln(10)`; the fixture's `transcendental` class is what admits that last-bit difference from a correctly-rounded `log10`."
+        },
+        "tz_offset": {
+          "type": "parameter",
+          "units": "s",
+          "default": 3600.0,
+          "description": "Seconds added to `t` before the local-hour decomposition."
+        },
+        "longitude": {
+          "type": "parameter",
+          "units": "degrees",
+          "default": -88.2,
+          "description": "Longitude, degrees east; `longitude/15` is its hour offset."
+        },
+        "k_log": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 2.0,
+          "description": "Scale on the `log10` term."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "cal_year"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "fn",
+            "name": "datetime.year",
+            "args": [
+              "t"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "cal_month"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "fn",
+            "name": "datetime.month",
+            "args": [
+              "t"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "cal_day"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "fn",
+            "name": "datetime.day",
+            "args": [
+              "t"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "cal_hour"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "fn",
+            "name": "datetime.hour",
+            "args": [
+              "t"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "cal_minute"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "fn",
+            "name": "datetime.minute",
+            "args": [
+              "t"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "cal_second"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "fn",
+            "name": "datetime.second",
+            "args": [
+              "t"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "cal_day_of_year"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "fn",
+            "name": "datetime.day_of_year",
+            "args": [
+              "t"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "cal_julian_day"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "fn",
+            "name": "datetime.julian_day",
+            "args": [
+              "t"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "cal_is_leap_year"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "fn",
+            "name": "datetime.is_leap_year",
+            "args": [
+              "t"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "cal_local_hour"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "+",
+            "args": [
+              {
+                "op": "fn",
+                "name": "datetime.hour",
+                "args": [
+                  {
+                    "op": "+",
+                    "args": [
+                      "t",
+                      "tz_offset"
+                    ]
+                  }
+                ]
+              },
+              {
+                "op": "/",
+                "args": [
+                  "longitude",
+                  15.0
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "lg"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              "k_log",
+              {
+                "op": "log10",
+                "args": [
+                  "lg"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

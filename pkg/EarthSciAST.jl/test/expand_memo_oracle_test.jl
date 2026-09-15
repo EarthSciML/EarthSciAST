@@ -11,8 +11,8 @@
 # `sites` recording (`haskey` boundary checks) and the lockstep site translator
 # (DAG-safe `seen` guard) are unaffected. This pins that byte-for-byte on the
 # compile-once fixture (which carries the surviving refs the memo acts on),
-# under the per-cell reference (ESS_STENCIL_DISABLE=1), and the :oop emitter,
-# and cross-checks against the Expand-at-load path (ESS_TEMPLATE_REF_DISABLE=1),
+# under the per-cell reference (ESS_STENCIL_DISABLE=1), and cross-checks
+# against the Expand-at-load path (ESS_TEMPLATE_REF_DISABLE=1),
 # which never builds the memo at all.
 
 using Test
@@ -32,27 +32,23 @@ const ESM = EarthSciAST
 
     # Build `fix` under an env overlay (wrapping LOAD too, so the load-time
     # Expand-at-load hatch takes effect) and return (du probes, u0, var_map).
-    function build_and_probe(fix::AbstractString; env=(), form::Symbol=:inplace)
+    function build_and_probe(fix::AbstractString; env=())
         withenv(env...) do
             flat = flatten(load_path(fix))
-            f, u0, p, _, vmap = build_evaluator(flat; form=form)
+            f, u0, p, _, vmap = build_evaluator(flat)
             dus = Vector{Float64}[]
             for (ti, u) in zip((0.0, 0.7, 3.25), probe_states(length(u0)))
-                if form === :oop
-                    push!(dus, Vector{Float64}(f(u, p, ti)))
-                else
-                    du = similar(u0)
-                    f(du, u, p, ti)
-                    push!(dus, copy(du))
-                end
+                du = similar(u0)
+                f(du, u, p, ti)
+                push!(dus, copy(du))
             end
             (dus, u0, vmap)
         end
     end
 
-    function memo_oracle(fix; form=:inplace, nstates=nothing)
-        on  = build_and_probe(fix; env=(("ESS_EXPAND_MEMO_DISABLE" => nothing),), form=form)
-        off = build_and_probe(fix; env=(("ESS_EXPAND_MEMO_DISABLE" => "1"),),  form=form)
+    function memo_oracle(fix; nstates=nothing)
+        on  = build_and_probe(fix; env=(("ESS_EXPAND_MEMO_DISABLE" => nothing),))
+        off = build_and_probe(fix; env=(("ESS_EXPAND_MEMO_DISABLE" => "1"),))
         @test on[3] == off[3]                       # identical state map
         @test on[2] == off[2]                       # identical u0 (bitwise Float64 ==)
         for k in eachindex(on[1])
@@ -63,10 +59,9 @@ const ESM = EarthSciAST
         return on
     end
 
-    @testset "compile-once fixture: memo ON ≡ OFF (inplace / per-cell / oop)" begin
+    @testset "compile-once fixture: memo ON ≡ OFF (inplace / per-cell)" begin
         FIX = bench("transport_3axis_7cubed_fullrank.esm")
         on = memo_oracle(FIX)                                     # default affine path
-        memo_oracle(FIX; form=:oop)                              # out-of-place emitter
         # Per-cell reference: the memo runs at the same expansion boundary,
         # before any tier choice, so ESS_STENCIL_DISABLE composes with it.
         onpc  = build_and_probe(FIX; env=(("ESS_STENCIL_DISABLE" => "1"),))

@@ -410,12 +410,13 @@ build_refresh_callback(args...; kwargs...) = throw(RefreshError(
 
 Copy every live forcing buffer in `src` into the same-named array of `dest`, in
 place (`copyto!` element copy — `dest`'s arrays are never rebound). The refresh
-hook for a compiled out-of-place RHS: when the RHS was `@compile`d through
-[`rhs_with_buffers`](@ref) with device arrays (`Reactant.ConcreteRArray`s) as
-its buffers argument, those arrays are real XLA inputs, and a `copyto!` into
-them between calls IS seen by the already-compiled program — so mirroring the
-freshly refreshed host buffers into them at each cadence boundary keeps the
-compiled forcing live, with no retrace and no reallocation.
+hook for a compiled out-of-place RHS: when the RHS was `@compile`d through the
+explicit-buffers form (`direct_rhs_with_buffers`, in the Reactant extension)
+with device arrays (`Reactant.ConcreteRArray`s) as its buffers argument, those
+arrays are real XLA inputs, and a `copyto!` into them between calls IS seen by
+the already-compiled program — so mirroring the freshly refreshed host buffers
+into them at each cadence boundary keeps the compiled forcing live, with no
+retrace and no reallocation.
 
 Wire it through [`build_refresh_callback`](@ref)'s `post_refresh` hook, which
 runs at each cadence boundary AFTER the host buffers are refreshed (and after
@@ -423,10 +424,12 @@ the [`DiscreteMaterializer`](@ref) caches are refilled, when `post_refresh`
 chains `materialize!` first):
 
 ```julia
-fo = build_evaluator(model; form = :oop, param_arrays = forcing)[1]
-host = forcing_buffers(fo)                        # aliased host buffers, stable order
-dev  = map(Reactant.ConcreteRArray, host)         # the compiled program's inputs
-rhs  = @compile rhs_with_buffers(fo)(u_r, p_r, t_r, dev)
+ext  = Base.get_extension(EarthSciAST, :EarthSciASTReactantExt)
+fo   = build_evaluator(model; form = :oop, param_arrays = forcing)[1]
+host = forcing_buffers(fo)                  # aliased host buffers, stable order
+dev  = map(Reactant.ConcreteRArray, host)   # the compiled program's inputs
+db   = ext.direct_rhs_with_buffers(fo)
+rhs  = @compile db(u_r, p_r, t_r, dev)
 cb, tstops = build_refresh_callback(;
     providers, buffers = RefreshBuffers(forcing),
     post_refresh = () -> sync_forcing!(dev, host))

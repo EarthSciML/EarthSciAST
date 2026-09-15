@@ -89,7 +89,7 @@ _cto_exact(NI, NJ, NK) =
 
 # Build once, returning `(du, var_map, tally, node_lowerings)`. `env` overrides are
 # applied around the build only.
-function _cto_build(NI, NJ, NK; env = Dict{String,String}(), form = :inplace)
+function _cto_build(NI, NJ, NK; env = Dict{String,String}())
     doc = _cto_doc(NI, NJ, NK)
     ics = _cto_ics(NI, NJ, NK)
     # The whole-array contraction nest (ess-array-contraction) sits above BOTH
@@ -109,17 +109,13 @@ function _cto_build(NI, NJ, NK; env = Dict{String,String}(), form = :inplace)
         local f, u0, p, vm
         try
             f, u0, p, _, vm = build_evaluator(doc; initial_conditions = ics,
-                                              const_arrays = Dict("dp" => dp), form = form)
+                                              const_arrays = Dict("dp" => dp))
         finally
             _CTO_ESS._BENCH_ON[] = false
         end
         tally = copy(_CTO_ESS._CASCADE_TALLY)
         nodes = _CTO_ESS._BENCH_COMPILE_CALLS[]
-        du = if form === :oop
-            f(u0, p, 0.0)
-        else
-            d = similar(u0); f(d, u0, p, 0.0); d
-        end
+        du = (d = similar(u0); f(d, u0, p, 0.0); d)
         (du, vm, tally, nodes)
     end
 end
@@ -192,9 +188,6 @@ _cto_outs(du, vm, NI, NJ) = [ du[vm["out[$i,$j]"]] for i in 1:NI, j in 1:NJ ]
         @test A == _cto_outs(du_u, vm_u, NI, NJ)
         @test A == _cto_outs(du_p, vm_p, NI, NJ)
         @test A == _cto_exact(NI, NJ, NK)
-        # …and through the `:oop` build, which merges the same kernels differently.
-        du_o, vm_o, _, _ = _cto_build(NI, NJ, NK; form = :oop)
-        @test _cto_outs(du_o, vm_o, NI, NJ) == A
     end
 
     # ── The point of the whole thing: build IR for the column sum does not grow

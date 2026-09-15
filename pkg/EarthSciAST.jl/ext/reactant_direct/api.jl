@@ -38,9 +38,9 @@ end
 """
     DirectRHSBuffers
 
-The explicit-buffers form of [`DirectRHS`](@ref) — `d(u, p, t, buffers)` — the
-direct twin of `rhs_with_buffers(f)`. `buffers` is a container aligned with
-`forcing_buffers(f)` (same length, same name-sorted order); pass device arrays
+The explicit-buffers form of [`DirectRHS`](@ref): `d(u, p, t, buffers)`, where
+`buffers` is a container aligned with `forcing_buffers(f)` (same length, same
+name-sorted order); pass device arrays
 (`ConcreteRArray`s) and refresh them in place with `copyto!` / `sync_forcing!`
 at each cadence boundary. Because they arrive through the argument list they are
 real program INPUTS, so a refresh is seen by the already-compiled program and
@@ -84,11 +84,10 @@ see device.jl for what a slab shard means and when it is refused.
 
 DIRECT EMISSION IS THE COMPILED PATH. A model containing any node kind or kernel
 shape the emitter cannot lower raises `EarthSciAST.DirectEmitError` naming the
-construct and the rule it came from. There is no fallback to the interpreter and
-no fallback to the traced emitter — a compiled lane that silently answered with
-a different evaluator would make the `compiled_rhs` conformance tier report
-agreement between the interpreter and itself. The traced emitter (`@compile
-fo(u, p, t)`) remains available as an ORACLE for tests that ask for it by name.
+construct and the rule it came from. There is no fallback to the interpreter — a
+compiled lane that silently answered with a different evaluator would make the
+`compiled_rhs` conformance tier report agreement between the interpreter and
+itself.
 
 AGREEMENT WITH THE INTERPRETER is numerical, within the tolerance classes of
 tests/conformance/compiled_rhs/README.md, never bit-for-bit: `stablehlo.power`
@@ -118,7 +117,7 @@ end
     direct_rhs_with_buffers(d) -> DirectRHSBuffers
     direct_rhs_with_buffers(f; var_map = nothing) -> DirectRHSBuffers
 
-The explicit-buffers form, the direct twin of `rhs_with_buffers`:
+The explicit-buffers form:
 
 ```julia
 fo  = build_evaluator(model; form = :oop, param_arrays = forcing)[1]

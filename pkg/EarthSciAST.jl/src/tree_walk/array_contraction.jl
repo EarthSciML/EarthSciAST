@@ -19,7 +19,7 @@
 # scan.jl states for its prefix folds: the access-kernel / affine / codegen /
 # oop-merge passes all model per-cell scalar terms, and a section is invisible to
 # every one of them. The body is an ordinary compiled `_Node`, so it evaluates
-# through the SAME `_eval_node` / `_oop_eval` walkers (and therefore the same
+# through the SAME `_eval_node` walker (and therefore the same
 # ForwardDiff path) as every other tree-walk node.
 
 # `refs` are the output loop counters, in output-index order with dimension 1
@@ -77,25 +77,4 @@ function _apply_array_contraction!(du, u, p, t, ac::_ArrayContraction,
         du[outs[c]] = _eval_node(body, u, p, t, T)
     end
     return nothing
-end
-
-# ---- The `:oop` emitter's form of the same nest ----
-# Identical values written in an identical order, so a Float64 `:oop` run stays
-# bit-identical to `:inplace`. The only difference is mechanical: writes go
-# through the `_oop_store` seam and `du` is rebound, the discipline every other
-# oop runner follows (scan.jl's `_scan_lanes_oop` says why).
-function _apply_array_contractions_oop(du, u, p, t,
-        acs::AbstractVector{_ArrayContraction},
-        cache::AbstractVector{T}, fb) where {T}   # `fb::_OopForcing` — oop.jl is
-                                                  # included after this file
-    for j in eachindex(acs)
-        ac = acs[j]
-        outs = ac.outs
-        body = ac.body
-        for c in eachindex(outs)
-            _ac_seek!(ac, c)
-            du = _oop_store(du, outs[c], _oop_eval(body, u, p, t, cache, fb))
-        end
-    end
-    return du
 end

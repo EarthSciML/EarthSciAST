@@ -225,14 +225,13 @@ end
 # ====================================================================
 @testset "tree_walk CSE respects lazy guards (ifelse / and / or)" begin
 
-    # `run_rhs(model, form)` → the `du` vector, for whichever RHS form. The two
-    # emitters must agree: a Float64 `:oop` run is bit-identical to `:inplace`, which
-    # requires `_oop_eval_op` to short-circuit the guard ops exactly as `_eval_node_op`
-    # does (it filled every child into a buffer before dispatch, i.e. it was EAGER —
-    # so `:oop` threw on models `f!` ran fine, with or without CSE).
-    function _guard_rhs(model, form::Symbol)
-        f, u0, p, _ts, var_map, diag = ESM._build_evaluator_impl(model; form=form)
-        du = form === :inplace ? (d = similar(u0); f(d, u0, p, 0.0); d) : f(u0, p, 0.0)
+    # `_guard_rhs(model)` → the `du` vector. The scalar walker must SHORT-CIRCUIT
+    # the guard ops (`ifelse`/`and`/`or`): an eager walk that filled every child
+    # into a buffer before dispatch would evaluate the guarded branch and throw on
+    # models the lazy one runs fine, with or without CSE.
+    function _guard_rhs(model)
+        f, u0, p, _ts, var_map, diag = ESM._build_evaluator_impl(model)
+        du = (d = similar(u0); f(d, u0, p, 0.0); d)
         return du, var_map, diag
     end
 
@@ -256,21 +255,19 @@ end
                 ESM.Equation(_cse_D("b"), _cse_op("*", _cse_n(2), guarded())),
             ])
 
-        for form in (:inplace, :oop)
-            # Guard NOT taken (a < 0): `sqrt(a)` must never be evaluated.
-            du, vm, diag = _guard_rhs(model(-1.0), form)
-            @test du[vm["a"]] === 0.0
-            @test du[vm["b"]] === 0.0
-            # The guarded `sqrt(a)` is left inline (behind its guard), but the whole
-            # `ifelse` — which IS unconditional, twice — is still shared.
-            @test diag.n_cse_slots >= 1
-            @test !isnan(du[vm["a"]])
+        # Guard NOT taken (a < 0): `sqrt(a)` must never be evaluated.
+        du, vm, diag = _guard_rhs(model(-1.0))
+        @test du[vm["a"]] === 0.0
+        @test du[vm["b"]] === 0.0
+        # The guarded `sqrt(a)` is left inline (behind its guard), but the whole
+        # `ifelse` — which IS unconditional, twice — is still shared.
+        @test diag.n_cse_slots >= 1
+        @test !isnan(du[vm["a"]])
 
-            # Guard TAKEN (a >= 0): the shared branch still computes, and shares.
-            du4, vm4, _ = _guard_rhs(model(4.0), form)
-            @test du4[vm4["a"]] === sqrt(4.0)
-            @test du4[vm4["b"]] === 2.0 * sqrt(4.0)
-        end
+        # Guard TAKEN (a >= 0): the shared branch still computes, and shares.
+        du4, vm4, _ = _guard_rhs(model(4.0))
+        @test du4[vm4["a"]] === sqrt(4.0)
+        @test du4[vm4["b"]] === 2.0 * sqrt(4.0)
     end
 
     # ----------------------------------------------------------------
@@ -290,13 +287,11 @@ end
             ESM.Equation[ESM.Equation(_cse_D("a"), disj()),
                          ESM.Equation(_cse_D("b"), disj())])
 
-        for form in (:inplace, :oop)
-            du, vm, _diag = _guard_rhs(m, form)
-            # `a < 0` is true, so the disjunction short-circuits to 1.0 without ever
-            # touching `log(-1.0)`.
-            @test du[vm["a"]] === 1.0
-            @test du[vm["b"]] === 1.0
-        end
+        du, vm, _diag = _guard_rhs(m)
+        # `a < 0` is true, so the disjunction short-circuits to 1.0 without ever
+        # touching `log(-1.0)`.
+        @test du[vm["a"]] === 1.0
+        @test du[vm["b"]] === 1.0
     end
 
     # `and` is the mirror image: arg 2 runs only when arg 1 is TRUE.
@@ -311,11 +306,9 @@ end
             ),
             ESM.Equation[ESM.Equation(_cse_D("a"), conj()),
                          ESM.Equation(_cse_D("b"), conj())])
-        for form in (:inplace, :oop)
-            du, vm, _ = _guard_rhs(m, form)
-            @test du[vm["a"]] === 0.0
-            @test du[vm["b"]] === 0.0
-        end
+        du, vm, _ = _guard_rhs(m)
+        @test du[vm["a"]] === 0.0
+        @test du[vm["b"]] === 0.0
     end
 
     # ----------------------------------------------------------------
@@ -1138,23 +1131,29 @@ _ct_k(p) = p.A * exp(-p.Ea / (p.R * p.Tref))
     end
 
     # ----------------------------------------------------------------
-    # (9) `:inplace` (tiered) ≡ `:oop` (untiered — it allocates a fresh cache per call
-    # and refills every slot, so it IS the pre-tier evaluator). Bit-for-bit, across a
-    # `p` change and repeated calls.
+    # (9) The tiered `f!` ≡ the UNTIERED `f!` (`ESS_UNTIERED=1`, const_tier.jl):
+    # the same emitter with every slot classified dynamic, so it refills the whole
+    # prelude on every call and skips nothing. Bit-for-bit, across a `p` change and
+    # repeated calls. (`tree_walk_untiered_test.jl` pins the switch itself — that
+    # every slot really is classified dynamic — which is what makes it usable as
+    # an oracle here.)
     # ----------------------------------------------------------------
-    @testset "`form=:inplace` (tiered) agrees bit-for-bit with `form=:oop`" begin
+    @testset "`form=:inplace` (tiered) agrees bit-for-bit with the untiered build" begin
         fi, u0, p, _ts, _vm, di = ESM._build_evaluator_impl(_ct_arrhenius(); form=:inplace)
-        fo, _u0, _p, _ts2, _vm2, dobj =
-            ESM._build_evaluator_impl(_ct_arrhenius(); form=:oop)
+        fu, _u0, _p, _ts2, _vm2, dun = withenv("ESS_UNTIERED" => "1") do
+            ESM._build_evaluator_impl(_ct_arrhenius(); form=:inplace)
+        end
 
-        # The classification is a property of the PRELUDE, so an `:oop` build reports
-        # the same counts — it simply does not act on them.
-        @test di.n_const_slots == dobj.n_const_slots == 5
-        @test di.n_dynamic_slots == dobj.n_dynamic_slots == 0
+        # The classification is a property of the PRELUDE; the switch only changes
+        # which tier each slot is ROUTED to, and it routes them all to dynamic.
+        @test di.n_const_slots == 5 && di.n_dynamic_slots == 0
+        @test dun.n_const_slots == 0 && dun.n_time_slots == 0
+        @test dun.n_dynamic_slots == 5
+        @test di.n_cse_slots == dun.n_cse_slots
 
         p2 = merge(p, (; A = 7.0 * p.A, R = 8.0))
         for (u, pp) in ((u0, p), (u0, p2), ([0.4, -1.3], p), (u0, p), ([2.0, 2.0], p2))
-            @test _ct_call(fi, u, pp, 0.0) == fo(u, pp, 0.0)
+            @test _ct_call(fi, u, pp, 0.0) == _ct_call(fu, u, pp, 0.0)
         end
     end
 end

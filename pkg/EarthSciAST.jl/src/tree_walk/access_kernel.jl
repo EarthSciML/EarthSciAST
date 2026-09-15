@@ -413,7 +413,7 @@ end
 # The MECHANICAL arms of `_eval_acc_op` — unary elementwise, comparisons,
 # fixed-2-ary `/`/`^`/`pow`/`atan2`, and the n-ary `min`/`max` folds — are
 # GENERATED from the same registry tables that grow the other three ladders
-# (`_eval_node_op` / `_eval_acc_op` / `_oop_op`), so a mechanical op added to
+# (`_eval_node_op` / `_eval_acc_op` / `_scalar_op`), so a mechanical op added to
 # `_OP_TABLE` reaches the access spine automatically. Probe protocol as
 # everywhere: `nothing` ⇒ not in the table ⇒ the ladder falls through.
 # DELIBERATELY NO ARITY GUARDS on the unary/comparison/binary arms — the

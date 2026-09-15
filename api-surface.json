@@ -93,17 +93,17 @@
     }
   },
   "counts": {
-    "symbols": 885,
+    "symbols": 883,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
-      "julia": 305,
-      "typescript": 238,
+      "julia": 302,
+      "typescript": 239,
       "python": 250,
       "rust": 339,
       "go": 408
     },
     "by_tier": {
-      "extension": 612,
+      "extension": 610,
       "stable": 273
     }
   },
@@ -1594,19 +1594,19 @@
       }
     },
     {
-      "name": "code_unknown_expression_type",
-      "kind": "constant",
-      "tier": "extension",
-      "bindings": {
-        "go": "CodeUnknownExpressionType"
-      }
-    },
-    {
       "name": "code_unevaluable_operator",
       "kind": "constant",
       "tier": "extension",
       "bindings": {
         "go": "CodeUnevaluableOperator"
+      }
+    },
+    {
+      "name": "code_unknown_expression_type",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeUnknownExpressionType"
       }
     },
     {
@@ -4869,22 +4869,6 @@
       }
     },
     {
-      "name": "oop_intern_stats",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "julia": "oop_intern_stats"
-      }
-    },
-    {
-      "name": "oop_intern_stats_reset",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "julia": "oop_intern_stats_reset!"
-      }
-    },
-    {
       "name": "op_const",
       "kind": "constant",
       "tier": "extension",
@@ -6130,14 +6114,6 @@
       }
     },
     {
-      "name": "rhs_with_buffers",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "julia": "rhs_with_buffers"
-      }
-    },
-    {
       "name": "role_algebraic",
       "kind": "constant",
       "tier": "extension",
@@ -7274,6 +7250,14 @@
       }
     },
     {
+      "name": "unevaluable_operator_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "UnevaluableOperatorError"
+      }
+    },
+    {
       "name": "unit",
       "kind": "type",
       "tier": "stable",
@@ -7461,14 +7445,6 @@
         "typescript": "unknowns"
       },
       "notes": "spelling differs from the §2 rule: julia=unknown_names (expected unknowns); multiple spellings exported by: julia"
-    },
-    {
-      "name": "unevaluable_operator_error",
-      "kind": "error",
-      "tier": "extension",
-      "bindings": {
-        "typescript": "UnevaluableOperatorError"
-      }
     },
     {
       "name": "unlowered_operator_error",
