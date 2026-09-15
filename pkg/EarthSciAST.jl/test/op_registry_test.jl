@@ -27,6 +27,7 @@ const ESM = EarthSciAST
             "sin", "cos", "tan", "asin", "acos", "atan",
             "sinh", "cosh", "tanh",
             "max", "min", "floor", "ceil",
+            "ifelse",
         ])
         @test ESM._WS4_FOLDABLE_ELEMENTWISE_OPS isa Set{String}
     end

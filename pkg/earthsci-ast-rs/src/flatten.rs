@@ -834,10 +834,8 @@ const TEMPLATE_BODY_NON_OPERAND_KEYS: &[&str] = &[
 fn template_body_var_names(body: &serde_json::Value) -> BTreeSet<String> {
     fn walk(node: &serde_json::Value, operand: bool, out: &mut BTreeSet<String>) {
         match node {
-            serde_json::Value::String(name) => {
-                if operand {
-                    out.insert(name.clone());
-                }
+            serde_json::Value::String(name) if operand => {
+                out.insert(name.clone());
             }
             serde_json::Value::Array(items) => {
                 for item in items {
