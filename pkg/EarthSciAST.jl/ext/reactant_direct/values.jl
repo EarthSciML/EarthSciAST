@@ -114,6 +114,17 @@ mutable struct _DECtx
     # Producer-set -> the one concatenation a cross-producer gather reads from,
     # so a read set that recurs (and on a stencil they all do) pays for it once.
     gather_bases::Dict{Tuple{Vector{_MLIR.IR.Value},Bool},Tuple{_DEVal,Vector{Int},Int}}
+    # EMITTER-SIDE CSE OF READS. Two reads of the same span of the same value
+    # are the same SSA value, and on a stencil that happens constantly: measured
+    # on ReSEACT's transport half at 288 cells, the reverse-mode program was
+    # emitted with 58,620 `stablehlo.slice` of which only 14,476 were DISTINCT —
+    # one span appearing a hundred times. The pipeline does find them
+    # (`cse_slice`), by comparing operations pairwise, which is quadratic in a
+    # population three quarters of which the emitter knows to be redundant
+    # before it writes it. Emission is one straight-line block, so an earlier
+    # value always dominates a later use and the reuse needs no scope check.
+    slices::Dict{Tuple{_MLIR.IR.Value,Int,Int,Int},_DEVal}
+    concats::Dict{Vector{_MLIR.IR.Value},_DEVal}
     stats::Dict{Symbol,Int}
     # Which SECTION of the emission is running: materialization level `li` while
     # the fills are emitted, `nlev + 1` from the CSE prelude onwards. The read
@@ -134,6 +145,8 @@ function _DECtx(n_states::Int, n_total::Int, p, t::_DEVal, uval::_DEVal,
                   IdDict{_E._Node,Bool}(), _de_reduce_min(), names,
                   Dict{Tuple{Vector{_MLIR.IR.Value},Bool},
                        Tuple{_DEVal,Vector{Int},Int}}(),
+                  Dict{Tuple{_MLIR.IR.Value,Int,Int,Int},_DEVal}(),
+                  Dict{Vector{_MLIR.IR.Value},_DEVal}(),
                   Dict{Symbol,Int}(), Int32(0))
 end
 
@@ -238,22 +251,32 @@ end
 function _de_slice(ctx::_DECtx, src::_DEVal, lo::Int, hi::Int, stride::Int=1)::_DEVal
     L = length(lo:stride:hi)
     (L == src.len && lo == 1 && stride == 1) && return src
+    key = (src.v, lo, hi, stride)
+    hit = get(ctx.slices, key, nothing)
+    hit === nothing || return hit
     _de_tally!(ctx, :slice)
     op = _hlo.slice(src.v; result_0=_de_ty(L),
                     start_indices=_MLIR.IR.DenseArrayAttribute(Int64[lo - 1]),
                     limit_indices=_MLIR.IR.DenseArrayAttribute(Int64[hi]),
                     strides=_MLIR.IR.DenseArrayAttribute(Int64[stride]),
                     location=_de_loc())
-    return _DEVal(_de_res(op), L)
+    out = _DEVal(_de_res(op), L)
+    ctx.slices[key] = out
+    return out
 end
 
 function _de_concat(ctx::_DECtx, pieces::Vector{_DEVal})::_DEVal
     length(pieces) == 1 && return pieces[1]
+    key = _MLIR.IR.Value[pc.v for pc in pieces]
+    hit = get(ctx.concats, key, nothing)
+    hit === nothing || return hit
     _de_tally!(ctx, :concatenate)
     L = sum(pc.len for pc in pieces)
-    op = _hlo.concatenate(_MLIR.IR.Value[pc.v for pc in pieces]; result_0=_de_ty(L),
+    op = _hlo.concatenate(key; result_0=_de_ty(L),
                           dimension=0, location=_de_loc())
-    return _DEVal(_de_res(op), L)
+    out = _DEVal(_de_res(op), L)
+    ctx.concats[key] = out
+    return out
 end
 
 # A true `stablehlo.gather` of `src` at 1-based `positions` — the form a read
