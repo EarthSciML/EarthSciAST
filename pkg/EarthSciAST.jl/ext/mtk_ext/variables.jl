@@ -357,6 +357,13 @@ function _condition_to_root_equation(cond::ASTExpr, var_dict, t_sym, dim_dict)
     return _esm_to_symbolic(cond, var_dict, t_sym, dim_dict) ~ 0
 end
 
+# esm-spec §5.2: `root_find` "maps to DiffEq `rootfind` option", defaulting to
+# `"left"`. `"all"` has no `RootfindOpt` counterpart, so it keeps the default.
+function _rootfind_option(root_find::Union{Nothing,AbstractString})
+    root_find == "right" && return ModelingToolkit.SciMLBase.RightRootFind
+    return ModelingToolkit.SciMLBase.LeftRootFind
+end
+
 function _build_continuous_events(flat::FlattenedSystem, var_dict, t_sym, dim_dict,
                                   state_syms)
     cbs = Any[]
@@ -383,7 +390,8 @@ function _build_continuous_events(flat::FlattenedSystem, var_dict, t_sym, dim_di
         # MTK wraps into a SymbolicAffect, or `nothing` for no affect on that edge.
         push!(cbs, ModelingToolkit.SymbolicContinuousCallback(
             conds, isempty(affects) ? nothing : affects;
-            affect_neg = isempty(affect_neg) ? nothing : affect_neg))
+            affect_neg = isempty(affect_neg) ? nothing : affect_neg,
+            rootfind = _rootfind_option(ev.root_find)))
     end
     return cbs
 end

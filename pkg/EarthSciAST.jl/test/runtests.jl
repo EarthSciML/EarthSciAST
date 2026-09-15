@@ -81,9 +81,9 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("mtk_metadata_test.jl")
     include("simulate_e2e_test.jl")
     include("tests_blocks_execution_test.jl")
-    # The ModelingToolkit export runs a continuous event's `affect_neg` on the
-    # negative-going crossing (esm-spec §5.2, issue #356).
-    include("mtk_continuous_event_affect_neg_test.jl")
+    # The ModelingToolkit export honours a continuous event's `affect_neg` and
+    # `root_find` (esm-spec §5.2, issue #356).
+    include("mtk_continuous_event_options_test.jl")
     include("run_esm_tests_test.jl")
     include("container_in_document_test.jl")
     include("units_fixture_consumption_test.jl")
