@@ -57,17 +57,12 @@ import numpy as np
 from . import op_registry
 from .esm_types import EsmFile, ExprNode
 from .expr_walk import iter_children
-
-# `DEFAULT_ABSTOL` / `DEFAULT_RELTOL` are a pure RE-EXPORT here (see the note
-# under `DEFAULT_ALG`): nothing in this module names them any more, because no
-# entry point may default to a concrete tolerance — that would occupy level 1 of
-# the §2.2.2 chain and the document could never win. Hence the `noqa`.
-from .solver import DEFAULT_ABSTOL, DEFAULT_RELTOL, resolve_tolerances  # noqa: F401
 from .flatten import (
     FlattenedSystem,
     UnsupportedDimensionalityError,
     _has_array_op,
     flatten,
+    infer_variable_shapes,
 )
 from .lower_table_lookup import lower_table_lookups
 from .numpy_interpreter import _EVALUABLE_CORE_OPS, UnreachableSpatialOperatorError
@@ -78,6 +73,7 @@ from .pushdown_rewrite import (
     _pushdown_provider_gates,
     desugar_pushdown,
 )
+from .reference_resolution import E_REF_UNDECLARED_INDEX_SET
 from .simulation_array import (
     BuildInspection,
     _build_numpy_rhs,
@@ -111,6 +107,12 @@ from .simulation_scalar import (
     _ScalarRhsBuild,
     _simulate_scalar,
 )
+
+# `DEFAULT_ABSTOL` / `DEFAULT_RELTOL` are a pure RE-EXPORT here (see the note
+# under `DEFAULT_ALG`): nothing in this module names them any more, because no
+# entry point may default to a concrete tolerance — that would occupy level 1 of
+# the §2.2.2 chain and the document could never win. Hence the `noqa`.
+from .solver import DEFAULT_ABSTOL, DEFAULT_RELTOL, resolve_tolerances  # noqa: F401
 from .sympy_bridge import SimulationError
 from .template_imports import resolve_template_machinery
 
@@ -585,6 +587,9 @@ def esm_problem(
     # reachability check.
     _assert_no_unlowered_operator(flat)
 
+    # A declared shape over an undeclared index set, on a state nothing sizes.
+    _assert_shaped_states_have_extent(flat)
+
     # esm-spec §6.6.2 "Unrecognized override keys": a `p` key that names no
     # single parameter is an ERROR, raised at the one front door every pathway
     # routes through so the three executing bindings agree. Ignoring it silently
@@ -787,6 +792,49 @@ def _declares_resolvable_shape(flat: FlattenedSystem) -> bool:
             if resolved:
                 return True
     return False
+
+
+def _assert_shaped_states_have_extent(flat: FlattenedSystem) -> None:
+    """Refuse a shaped state that names an undeclared index set and has no extent.
+
+    esm-spec §6.3 makes a variable's ``shape`` a list of keys in the
+    ``index_sets`` registry. A state whose declared shape names a set the
+    registry does not hold, and which no equation indexes, has no extent from
+    either source: the declaration cannot size it and usage inference gives it
+    none. Building it anyway lays a field the document says is arrayed out as a
+    single scalar slot. §9.7.10 allows such a name only until a grid is
+    injected, and "a name still unresolved after injection remains an error at
+    the build", so the build refuses it with the same code the ``ranges``
+    ``from`` resolver uses. Julia's tree-walk refuses these states
+    (``E_TREEWALK_UNDECLARED_INDEX_SET``) and Rust's array build does too.
+
+    Two cases are deliberately left alone. A name the registry holds but cannot
+    size yet (a ``derived`` set value invention materializes) is a declared set,
+    not an undeclared one. A state its equations index over literal ranges gets
+    its extent from them, which is how Julia builds it as well.
+    """
+    registry = flat.index_sets or {}
+    inferred: dict[str, tuple[int, ...]] | None = None
+    for name, var in flat.state_variables.items():
+        declared = getattr(var, "shape", None)
+        if not declared:
+            continue
+        undeclared = [axis for axis in declared if axis not in registry]
+        if not undeclared:
+            continue
+        if inferred is None:
+            inferred = infer_variable_shapes(flat)
+            inferred.update(flat.lifted_shapes or {})
+        if inferred.get(name):
+            continue
+        raise SimulationError(
+            f"{E_REF_UNDECLARED_INDEX_SET}: state {name!r} declares shape "
+            f"{list(declared)}, but index set(s) {undeclared} are not declared in "
+            f"the document `index_sets` registry and no equation indexes the "
+            f"state, so it has no extent; declare them, or inject the grid that "
+            f"does (esm-spec §6.3, §9.7.10: a name still unresolved after "
+            f"injection is an error at the build)"
+        )
 
 
 def _assert_no_unlowered_operator(flat: FlattenedSystem) -> None:
