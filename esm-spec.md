@@ -4397,6 +4397,8 @@ The import-renaming RFC adds (see `docs/content/rfcs/template-import-renaming.md
 - `import_rebind_keyed_factors/` — an MPAS-style ragged keyed-factor rule with its factor contract rebound to the consumer's `meshA_*` arrays (§9.7.7).
 - `import_rename_diamond/` — identical renamed edges dedupe; a differently-renamed edge registers distinctly; the equal-priority tie between two axis-less rule instances is pinned by the §9.7.4 order (§9.7.7).
 - `import_rename_integral_axis/` — one cumulative-`integral` rule library instantiated twice (prefix `col`/`row`, rename `x` → `lev`/`lat`, N = 4/3); transitive rename through the match's `var` and bare-axis-name `upper` bound, so each instance fires only on its own axis (§9.7.7).
+- `import_library_enum/` — a library that declares an enum and names it in its own template body: the importer loads without the enum (`expanded.esm`), and an importer redeclaring the enum with a different value does not change the library's constant while its own `enum` ops resolve against its own block (`expanded_importer_redeclares.esm`) (§9.3).
+- `import_library_enum_undeclared/` — invalid: a library body naming an enum the library does not declare → `unknown_enum` at load, reported against the library and the template, whether or not the importer declares that enum (§9.3).
 
 The match-scoping RFC adds (see `docs/content/rfcs/match-pattern-scoping-constraints.md`):
 
