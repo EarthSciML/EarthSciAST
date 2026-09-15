@@ -2358,9 +2358,13 @@ fn lower_algebraic_body(
     array_axes: &HashMap<String, Vec<String>>,
     index_sets: &HashMap<String, IndexSet>,
 ) -> Result<AlgebraicRule, CompileError> {
+    let declared_shape = array_axes
+        .get(name)
+        .and_then(|axes| resolve_declared_shape(axes, index_sets));
     let scalar_rule = |body: Expr| AlgebraicRule::Scalar {
         var: name.to_string(),
         body: Rc::new(body),
+        declared_shape: declared_shape.clone(),
     };
     let Some(target_axes) = array_axes.get(name) else {
         return Ok(scalar_rule(body));
