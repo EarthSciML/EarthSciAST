@@ -2114,13 +2114,14 @@ pub(super) fn lower_recurrence(
                              which axis the recurrence folds along, and in which direction, is \
                              decidable. An index that does not carry '{}' with coefficient 1 \
                              (a bare constant, `2*{}`, another axis's symbol) is rejected \
-                             rather than guessed at (esm-spec §4.3.1.1).",
+                             rather than guessed at (esm-spec §4.3.1.1). {}",
                             idx_names[d],
                             idx_names[d],
                             idx_names[d],
                             idx_names[d],
                             idx_names[d],
-                            idx_names[d]
+                            idx_names[d],
+                            crate::structural::data_lag_guidance(var, &idx_names[d])
                         ),
                     ));
                 }
