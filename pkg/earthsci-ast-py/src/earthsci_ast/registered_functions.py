@@ -590,6 +590,52 @@ def lower_enum_ops_for_file(
     return walk(target)
 
 
+def lower_mounted_document_enums(document: dict[str, Any]) -> dict[str, Any]:
+    """Return raw ``document``, mounted at a §4.7 edge, with its ``enum`` ops
+    lowered against its own ``enums`` block (esm-spec §9.3).
+
+    Called once the document has resolved in its own scope and before its
+    component is spliced into the mounting document, whose block is a different
+    one. ``enums`` do not merge across a mount, so this is the only block those
+    ops can name.
+
+    A template declaration's body is lowered with that template's ``params``
+    left open, as at the import edge: an op spelled with a parameter resolves at
+    the call site. Everything else is lowered with no open names. Raises
+    :class:`EnumLoweringError`. ``document`` is not modified.
+    """
+
+    def lower_templates(templates: dict[str, Any]) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        for name, decl in templates.items():
+            if isinstance(decl, dict) and "body" in decl:
+                params = decl.get("params")
+                open_names = (
+                    frozenset(p for p in params if isinstance(p, str))
+                    if isinstance(params, list)
+                    else frozenset()
+                )
+                decl = {**decl, "body": lower_enum_ops_for_file(document, decl["body"], open_names)}
+            out[name] = decl
+        return out
+
+    def walk(node: Any) -> Any:
+        if isinstance(node, list):
+            return [walk(v) for v in node]
+        if not isinstance(node, dict):
+            return node
+        if node.get("op") == "enum":
+            return lower_enum_ops_for_file(document, node)
+        return {
+            k: lower_templates(v)
+            if k == "expression_templates" and isinstance(v, dict)
+            else walk(v)
+            for k, v in node.items()
+        }
+
+    return walk(document)
+
+
 def lower_enums(file: EsmFile) -> EsmFile:
     """Return ``file`` with every ``enum`` op replaced by a ``const`` integer
     per the file's ``enums`` block (esm-spec §9.3).
