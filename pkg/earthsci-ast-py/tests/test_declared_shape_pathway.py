@@ -265,13 +265,23 @@ def test_a_shaped_parameter_with_inline_array_data_binds_on_the_bare_spelling(tm
     assert list(trajectory[:, -1]) == pytest.approx([1.0, 2.0, 3.0, 4.0], rel=1e-5, abs=1e-6)
 
 
-def test_an_unresolvable_declared_shape_still_routes_to_the_scalar_pathway(tmp_path):
+def test_an_unresolvable_declared_shape_is_not_a_routing_signal_and_is_refused(tmp_path):
     """The arm mirrors ``_build_numpy_rhs``'s own fallback: a shape whose axes
     resolve against no ``index_sets`` entry is not evidence of a concrete
-    extent, so the routing is left exactly as it was."""
+    extent, so it does not route the document to the array pathway.
+
+    Nor may the build lay ``theta`` out as one scalar slot: ``lev`` names no
+    registry entry and no equation indexes ``theta``, so it has no extent at
+    all. ``esm_problem`` refuses it, as Julia and Rust do (issue #249)."""
+    from earthsci_ast.flatten import flatten
+    from earthsci_ast.problem import _declares_resolvable_shape
+    from earthsci_ast.sympy_bridge import SimulationError
+
     path = _write(tmp_path, UNRESOLVABLE_SHAPE, "unresolvable.esm.json")
 
-    assert esm_problem(path, (0.0, 1.0)).pathway == "scalar"
+    assert not _declares_resolvable_shape(flatten(load_path(path)))
+    with pytest.raises(SimulationError, match="E_REF_UNDECLARED_INDEX_SET"):
+        esm_problem(path, (0.0, 1.0))
 
 
 def test_a_document_with_no_shape_anywhere_still_routes_to_the_scalar_pathway(tmp_path):
