@@ -80,6 +80,10 @@ const ERROR_CODES = (
     # to run it would leave the defect undiagnosed.
     RECURRENCE_NOT_WELLFOUNDED = "recurrence_not_wellfounded",
     RECURRENCE_UNSUPPORTED_FORM = "recurrence_unsupported_form",
+    # A bare-index observed definition (`index(V, k…) ~ rhs`, esm-spec §6.3.1)
+    # outside the one runnable form, refused when the model is built for
+    # simulation (CONFORMANCE_SPEC §5.36.2).
+    INDEXED_DEFINITION_UNSUPPORTED_FORM = "indexed_definition_unsupported_form",
     RELATIONAL_NODE_IN_CONTINUOUS = "relational_node_in_continuous",
     # A DECLARATION — a `variables` key, a reaction species, or a reaction
     # parameter — spelled with a globally-scoped name: the document's

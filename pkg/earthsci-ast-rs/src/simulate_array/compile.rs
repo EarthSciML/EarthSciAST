@@ -2256,6 +2256,14 @@ fn build_observed_rules(
         let Some(eq) = def_eq.get(name.as_str()) else {
             continue;
         };
+        // A bare-index LHS (`index(V, k…) ~ rhs`, esm-spec §6.3.1) binds none of
+        // its subscripts, so it runs only in the form whose range the RHS
+        // supplies; see [`check_bare_index_definition`].
+        if let Expr::Operator(lhs) = &eq.lhs
+            && lhs.op == "index"
+        {
+            check_bare_index_definition(name, lhs, &eq.rhs, &array_axes)?;
+        }
         // A CAUSAL SELF-REFERENCE (esm-spec §4.3.1.1) is recognized before
         // either ordinary lowering, because both of them would compile the
         // self-read as a gather on a variable that is not bound anywhere — the
@@ -2332,6 +2340,58 @@ fn build_observed_rules(
         }
     }
     dependency_order_observed(observed_rules)
+}
+
+/// Refuse a bare-index observed definition that is not the runnable form.
+///
+/// `index(V, k…) ~ rhs` binds none of `k…`, so the range has to come from the
+/// right-hand side: the definition runs exactly when `rhs` is a `faq` whose
+/// `output_idx` names the subscripts, in order (esm-spec §6.3.1,
+/// CONFORMANCE_SPEC §5.36.2). That RHS is already the whole array, which is what
+/// the wholesale lowering evaluates. Any other spelling — a scalar RHS, an offset
+/// or permuted subscript, a subscript count that disagrees with `V`'s declared
+/// rank — would be lowered as if its RHS were the whole array, which writes the
+/// wrong cells for an offset and cannot integrate for a scalar, so it is refused.
+///
+/// Flatten namespaces a free subscript (`k` becomes `Model.k`) but not a `faq`
+/// binder, so a subscript matches its binder in either spelling.
+fn check_bare_index_definition(
+    name: &str,
+    lhs: &ExpressionNode,
+    rhs: &Expr,
+    array_axes: &HashMap<String, Vec<String>>,
+) -> Result<(), CompileError> {
+    let subs = lhs.args.get(1..).unwrap_or_default();
+    let prefix = name.rfind('.').map_or("", |p| &name[..=p]);
+    let names_binder = |sub: &Expr, binder: &String| match sub {
+        Expr::Variable(v) => v == binder || v.strip_prefix(prefix) == Some(binder.as_str()),
+        _ => false,
+    };
+    let binds_subscripts = match rhs {
+        Expr::Operator(node) if is_faq_op(&node.op) => match node.output_idx.as_deref() {
+            Some(frame) => {
+                !subs.is_empty()
+                    && frame.len() == subs.len()
+                    && subs.iter().zip(frame).all(|(s, b)| names_binder(s, b))
+            }
+            None => false,
+        },
+        _ => false,
+    };
+    let rank_agrees = match array_axes.get(name) {
+        Some(axes) => axes.len() == subs.len(),
+        None => true,
+    };
+    if binds_subscripts && rank_agrees {
+        return Ok(());
+    }
+    Err(CompileError::InterpreterBuildError {
+        details: format!(
+            "indexed_definition_unsupported_form: '{name}' is defined by a bare-index LHS that \
+             is not runnable; the RHS must be a `faq` whose `output_idx` names the LHS \
+             subscripts in order (esm-spec §6.3.1)"
+        ),
+    })
 }
 
 /// Wrap one algebraic body — a declared observed's `expression`, or the RHS of

@@ -317,6 +317,20 @@ RECURRENCE_UNSUPPORTED_FORM = "recurrence_unsupported_form"
 
 
 # ===========================================================================
+# Running an arrayed definition written with a bare-index LHS (esm-spec §6.3.1,
+# CONFORMANCE_SPEC §5.36.2), reported when a model is built for simulation.
+# ===========================================================================
+
+#: A bare-index LHS ``index(V, k…) ~ rhs`` defining an observed that is not the
+#: runnable form: the subscripts are not plain symbols, or the RHS is not a
+#: ``faq`` whose ``output_idx`` names exactly those symbols in order (a scalar
+#: RHS, an offset such as ``V[k+1]``, a permutation), or their count disagrees
+#: with ``V``'s declared rank. Refused rather than run, because no range binds
+#: the subscripts and filling the array from anything else would be a guess.
+INDEXED_DEFINITION_UNSUPPORTED_FORM = "indexed_definition_unsupported_form"
+
+
+# ===========================================================================
 # Observed dependency cycle (esm-spec §4.9.6), reported by the structural
 # validator at `/models/<M>`.
 #

@@ -1172,14 +1172,14 @@ def _normalized_indexed_definition(eq: Equation, model: Model, states: set[str])
     an ODE state and whose declared ``shape`` has the frame's rank. Anything else
     returns None and the equation is passed through untouched.
 
-    Only the ``aggregate`` shell is rewritten, never the bare ``index(V, i)``
-    spelling §6.3.1's worked example uses. This is a rewrite of the flattened
-    ``equations`` list that no other binding performs, and the shared flatten
-    corpus compares that list's rendering across all five;
-    ``edge_enumeration_area_eff`` already pins a bare-index definition LHS, so
-    widening the rewrite to it would move Python's answer alone. Nothing needs
-    it to: which BUCKET a definition lands in is read from the §6.3.1
-    classification in :func:`_collect_model`, which sees through both spellings.
+    Only the ``aggregate`` shell is rewritten here. The bare ``index(V, i)``
+    spelling §6.3.1's worked example uses is run after flattening instead, by
+    :func:`earthsci_ast.simulation_array._bare_index_definition_rhs`: this is a
+    rewrite of the flattened ``equations`` list that no other binding performs,
+    and the shared flatten corpus compares that list's rendering across all
+    five, where ``edge_enumeration_area_eff`` pins a bare-index definition LHS.
+    Which BUCKET a definition lands in is read from the §6.3.1 classification in
+    :func:`_collect_model`, which sees through both spellings.
     """
     lhs = eq.lhs
     if not (isinstance(lhs, ExprNode) and is_aggregate_op(lhs.op)):

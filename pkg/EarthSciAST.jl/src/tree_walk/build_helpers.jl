@@ -442,12 +442,26 @@ end
 # subtraction, so an RHS aggregate that binds `k` itself counts as closed.
 # Byte-identical (the ORIGINAL equations vector, by identity) for any model with
 # no indexed observed LHS.
-function _normalize_indexed_observed_lhs(eqs::Vector{Equation}, model::Model)
+#
+# The BARE-INDEX spelling `index(V, k…) ~ rhs` (no shell) binds none of its
+# subscripts, so its range has to come from the RHS: it runs exactly when the RHS
+# is a `faq` whose `output_idx` names the subscripts in order, and it then
+# normalizes to `V ~ rhs` (CONFORMANCE_SPEC §5.36.2). Any other bare-index
+# definition of an observed is refused with `indexed_definition_unsupported_form`
+# rather than left to fall through to a shape error. A value-invention output
+# (`vi_vars`) is materialized by its own engine and filtered out of the ODE
+# later, so its definitions are left exactly as authored.
+function _normalize_indexed_observed_lhs(eqs::Vector{Equation}, model::Model;
+                                         vi_vars=Set{String}())
     observed_here = Set{String}(observed_unknowns(model))
     isempty(observed_here) && return eqs
     out = nothing
     for (i, eq) in enumerate(eqs)
-        rewritten = _rewrite_indexed_observed_lhs(eq, model, observed_here)
+        rewritten = if eq.lhs isa OpExpr && (eq.lhs::OpExpr).op == "index"
+            _rewrite_bare_index_observed_lhs(eq, model, observed_here, vi_vars)
+        else
+            _rewrite_indexed_observed_lhs(eq, model, observed_here)
+        end
         if rewritten === nothing
             out === nothing || push!(out, eq)
         else
@@ -510,6 +524,39 @@ function _rewrite_indexed_observed_lhs(eq::Equation, model::Model,
                      ranges=Dict{String,Any}(s => ranges[s] for s in syms),
                      expr_body=rhs)
     end
+    return Equation(VarExpr(name), rhs; _comment=eq._comment)
+end
+
+# One bare-index equation of `_normalize_indexed_observed_lhs`: `V ~ rhs` when it
+# is the runnable form, `nothing` when `V` is not an observed this pass owns (an
+# ODE state, an algebraic unknown, a value-invention output), and a refusal
+# otherwise. Flatten namespaces a free LHS subscript (`k` becomes `Model.k`) but
+# not a `faq` binder, so a subscript matches its binder in either spelling.
+function _rewrite_bare_index_observed_lhs(eq::Equation, model::Model,
+                                          observed_here::Set{String}, vi_vars)
+    gather = eq.lhs::OpExpr
+    isempty(gather.args) && return nothing
+    head = gather.args[1]
+    head isa VarExpr || return nothing
+    name = (head::VarExpr).name
+    (name in observed_here && !(name in vi_vars)) || return nothing
+    subs = view(gather.args, 2:length(gather.args))
+    prefix = (dot = findlast('.', name)) === nothing ? "" : name[1:dot]
+    rhs = eq.rhs
+    frame = rhs isa OpExpr && (rhs::OpExpr).op == "faq" ? (rhs::OpExpr).output_idx : nothing
+    binds = frame !== nothing && !isempty(subs) && length(frame) == length(subs) &&
+        all(zip(subs, frame)) do (s, b)
+            s isa VarExpr && b isa AbstractString &&
+                ((s::VarExpr).name == b || (s::VarExpr).name == prefix * b)
+        end
+    var = get(model.variables, name, nothing)
+    rank_agrees = var === nothing || !_is_array_shape(var.shape) ||
+        length(var.shape) == length(subs)
+    (binds && rank_agrees) ||
+        throw(TreeWalkError(ERROR_CODES.INDEXED_DEFINITION_UNSUPPORTED_FORM,
+            "'$name' is defined by a bare-index LHS that is not runnable; the RHS " *
+            "must be a faq whose output_idx names the LHS subscripts in order " *
+            "(esm-spec §6.3.1)"))
     return Equation(VarExpr(name), rhs; _comment=eq._comment)
 end
 

@@ -250,6 +250,17 @@ const (
 	CodeMountFormUnsupported = "mount_form_unsupported"
 )
 
+// --- Diagnostic codes: running an arrayed definition (esm-spec §6.3.1). ---
+const (
+	// CodeIndexedDefinitionUnsupportedForm: a bare-index observed definition
+	// `index(V, k…) ~ rhs` outside the runnable form (the RHS is not a `faq`
+	// whose `output_idx` names the subscripts in order), refused when a
+	// simulating binding builds the model. Go does not simulate, so it never
+	// raises this; the constant exists because the code table is
+	// cross-language uniform.
+	CodeIndexedDefinitionUnsupportedForm = "indexed_definition_unsupported_form"
+)
+
 // --- Diagnostic codes: structural validation, per ESM Libraries Spec Section
 // 3.4. Moved here verbatim from validate.go, where this block used to be
 // declared; the names and values are unchanged and are pinned by

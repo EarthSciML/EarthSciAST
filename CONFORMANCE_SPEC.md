@@ -5121,26 +5121,13 @@ Julia-minted golden. A binding can pass §5.34 and fail this one: Julia's
 `aggregate` shell), and its tree-walk **build** still refused the document
 outright.
 
-**Scope: the `aggregate`-shelled spelling only.** This section pins
+**Scope: both arrayed spellings.** §5.36.1 gates the shelled spelling
 `aggregate{k…}(index(V, k…)) ~ …`, whose `ranges` bind the frame symbols.
-§6.3.1's *other* arrayed spelling — a **bare** `index(V, i)` LHS with no shell,
-the form the spec's own worked example writes (`rg_src_bin[a] ~ …`) — is
-classified correctly by all five bindings (§5.34's `wb`) and **run by none**: a
-bare `index` LHS carries no binder for `i`, so the frame would have to be
-inferred from the declared `shape`, which is a normative decision this section
-does not make. Issue #291 carries it.
-
-What this section DOES require in the meantime is that a binding which cannot
-run the spelling **refuses** it — reporting **no actual** and **naming the
-offending variable** — rather than answering from a solver slot nothing wrote. A
-binding that returns `0.0` from a never-written slot grades a wrong document
-**green**: an assertion whose expected value happens to be `0.0` passes on a
-number that was never computed. Julia refuses with
-`E_TREEWALK_UNSUPPORTED_SHAPE`; Python refuses with `Unresolved symbol`, having
-hit the wall at a later phase. The two codes are **not** required to match while
-neither binding runs the spelling — what is required is that neither invents a
-value. Python answered `0.0` here until PR #290's §4.7.5 dual membership stopped
-resolving an arrayed observed as a bare state slot.
+§6.3.1's other arrayed spelling — a **bare** `index(V, k…)` LHS with no shell,
+the form the spec's own worked example writes (`rg_src_bin[a] ~ …`) — binds none
+of its subscripts. esm-spec §6.3.1 runs it only when a right-hand `faq` supplies
+the range, and requires every other bare-index definition to be refused.
+§5.36.2 gates both halves (issue #291).
 
 esm-spec §6.3.1 admits **two** LHS spellings for the equation that DEFINES an
 unknown, and states the criterion semantically: the defining form is read
@@ -5250,6 +5237,65 @@ absent and a false `distinct` alike.
 
 **TypeScript**, **Go** — rewrite-only ports with no simulator; no rows apply.
 
+
+#### 5.36.2 The bare-index spelling: runs when the RHS binds the range, refused otherwise
+
+A bare `index(V, k…) ~ rhs` runs exactly when every subscript is a plain symbol,
+`rhs` is a `faq` whose `output_idx` names those symbols in the same order, and
+the subscript count equals `V`'s rank if `V` declares a `shape`. It then means
+`V ~ rhs` (esm-spec §6.3.1). Any other bare-index definition of an observed MUST
+be **refused** with `indexed_definition_unsupported_form` (esm-spec §9.6.6):
+every assertion reports **no actual** and is not passed, and the message carries
+the code and **names the offending variable**. A best-effort answer is not
+allowed, because each wrong answer here is plausible: filling the array from a
+scalar RHS, or writing `V[k+1]`'s shifted window as though it were the whole
+array, produces a number that looks like a result. Value-invention outputs are
+materialized by their own engine and are outside this rule.
+
+**Gate.** The category holds three more fixtures, driven by the same three
+per-binding runners:
+
+* `fixtures/observed_bare_index_lhs.esm`, with the Julia-minted golden
+  `golden/observed_bare_index_lhs.json` — the runnable form, on §5.36.1's
+  numbers: `wb` is STATE-FREE, `wbs` is STATE-DEPENDENT, and `wn` declares NO
+  `shape`, so its right-hand `faq` is the only thing that sizes it. `wn` is read
+  through the shaped state `z` it drives (`D(z) = wn`) rather than asserted
+  directly, because an inline assertion needs a declared axis to address and
+  Rust reports an unshaped array observed as having no cells.
+* `fixtures/refuse_scalar_rhs.esm` — `w_scalar[k] ~ 5.0`.
+* `fixtures/refuse_offset_subscript.esm` — `w_offset[k+1] ~ faq{k}(2*k)`.
+
+The two refusal fixtures are listed under the manifest's `refusals` key, with
+the required `diagnostic` and the variable the message must name. Both assert
+`5.0`, which an inventing binding could plausibly produce, so only the outcome
+separates a refusal from a wrong number.
+
+Measured before this section: **Julia** refused all three fixtures, the runnable
+one included, with `E_TREEWALK_UNSUPPORTED_SHAPE`; **Python** refused all three
+with `Unresolved symbol`; **Rust** ran the runnable fixture correctly, answered
+`6` for `w_offset[3]` (the right-hand array written unshifted), and failed inside
+the integrator ("Exceeded maximum number of error test failures") on the scalar
+right side. After it, all three run `observed_bare_index_lhs` 12 / 12 and refuse
+both refusal fixtures with the code.
+
+Where each binding does it — never in the flattened `equations`, which the
+shared flatten corpus compares across all five bindings and where
+`edge_enumeration_area_eff` records a bare-index LHS as authored:
+
+* **Julia** — `_rewrite_bare_index_observed_lhs`, called from
+  `_normalize_indexed_observed_lhs` (tree_walk/build_helpers.jl) at build;
+* **Python** — `simulation_array._bare_index_definition_rhs`, as the array build
+  splits the flattened equations into observed definitions and drivers;
+* **Rust** — `check_bare_index_definition` (simulate_array/compile.rs), where the
+  observed rules are built.
+
+Each matches a subscript spelled as authored (`k`) or as flatten namespaces a
+free symbol (`M.k`), since a `faq` binder is not namespaced.
+
+Structural validation does not agree on the offset fixture: Rust's validator
+reports the `k` in `w_offset[k+1]` as an undeclared variable, while Python's
+loads the document. The runners do not validate, so the gate is unaffected. The
+disagreement is recorded here and not settled.
 
 ### 5.37 The §6.6.3 Assertion Predicate Itself (normative)
 
