@@ -135,6 +135,36 @@ TRANSFORMING_FIXTURES: dict[str, str] = {
         "so its own top-level edge is consumed at load just the same "
         "(esm-spec 4.7 'Two mount forms, one mechanism')"
     ),
+    "toplevel_ref_index_set_merge.esm": (
+        "the top-level `models.<k>` twin of subsystem_index_set_merge.esm: the "
+        "referenced component is spliced in under its mount key and its "
+        "top-level `index_sets` merge into the importing document's registry "
+        "(esm-spec 4.7 'Two mount forms, one mechanism')"
+    ),
+    "toplevel_ref_metaparameter_axis.esm": (
+        "a top-level `models.<k>` mount consumed at load, whose leaf axis sized "
+        "by the leaf's own metaparameter merges folded (esm-spec 4.7, 9.7.6)"
+    ),
+    "toplevel_ref_metaparameter_axis_lib.esm": _METAPARAMETER_FOLDING,
+    "mount_forwarded_axis_column.esm": (
+        "`expression_template_imports` is consumed at load and the imported "
+        "library's axis, sized by the forwarded metaparameter, merges folded "
+        "into this document's registry (esm-spec 9.7.5, 9.7.6)"
+    ),
+    "mount_forwarded_axis_nested.esm": (
+        _SUBSYSTEM_REF_RESOLUTION + ", plus the referenced file's axis merging into the importing "
+        "document's registry"
+    ),
+    "mount_forwarded_axis_nested_4.esm": (
+        _SUBSYSTEM_REF_RESOLUTION
+        + ", with the edge's `bindings` consumed at the edge and the referenced "
+        "file's axis merging at the bound size"
+    ),
+    "mount_forwarded_axis_toplevel_beside_nested.esm": (
+        "a top-level `models.<k>` mount beside a nested `subsystems.<k>` mount "
+        "of the same component: both edges are consumed at load and the two "
+        "contributions of the axis merge into one registry entry (esm-spec 4.7)"
+    ),
     "events_discrete_periodic.esm": _EMPTY_EVENT_ARRAY,
     "events_discrete_preset_times.esm": _EMPTY_EVENT_ARRAY,
     "full_coupled.esm": _EMPTY_EVENT_ARRAY,
