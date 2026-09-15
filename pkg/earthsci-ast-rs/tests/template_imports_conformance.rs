@@ -1386,7 +1386,7 @@ fn root_templates_beside_component_payload_rejected() {
         ("coupling", r#""coupling": []"#),
         ("domain", r#""domain": {"temporal": {}}"#),
     ] {
-        let e = load_string(&format!("{head}{snippet}}"))
+        let e = load_string(&format!("{head}{snippet}}}"))
             .expect_err(&format!("{key}: must fail to load"));
         let msg = e.to_string();
         assert!(
