@@ -671,8 +671,8 @@ impl ArrayCompiled {
         // [`CompileError::UnevaluableOperatorError`]. Runs BEFORE
         // [`strip_value_invention`] so a bin-skolem `join` feeding an argmin is still
         // intact when the buffer is computed. A NO-OP (byte-identical) for every
-        // model without an arg-witness op — the conservative-regrid skolem/distinct
-        // path is left entirely to `strip_value_invention` below.
+        // model without an arg-witness op; `skolem`/`distinct` producers are
+        // handled by the two passes below.
         materialize_vi_outputs_to_data(&mut model_owned, &mut index_sets_owned, vi_arrays)?;
         // Build-time value invention for every non-geometry derived index set
         // (`skolem`/`distinct`/`rank`, RFC §6.1): the producer's member count sizes
@@ -683,10 +683,12 @@ impl ArrayCompiled {
         let index_sets = &index_sets_owned;
         // Drop value-invention (relational) scaffolding — skolem-id bin maps and
         // membership sets over `kind: "derived"` index sets — plus the broad-phase
-        // `join.on` gates keyed on them, BEFORE join/range resolution. The dense
-        // runtime evaluates the geometric narrow phase densely; the elided gate is
-        // numerically inert there (see `strip_value_invention`). A no-op unless a
-        // `skolem` op or a derived-set-shaped variable is present.
+        // `join.on` gates keyed on them, BEFORE join/range resolution. The extents
+        // counted above are all that survive of such a set: its members and
+        // skolem maps are not materialized, and the elided gate is numerically
+        // inert only where a dense narrow phase follows (see
+        // `strip_value_invention`). A no-op unless a `skolem` op or a
+        // derived-set-shaped variable is present.
         strip_value_invention(&mut model_owned, index_sets)?;
         // The model's CONST-ARRAY registry (CONFORMANCE_SPEC §5.5.5): the
         // `const`-literal factor variables — Fornberg weights, mesh
@@ -877,10 +879,11 @@ impl ArrayCompiled {
 /// that was reported: any of the nine now raises `unevaluable_operator` naming
 /// itself.
 ///
-/// Ordering matters and is already right: `materialize_vi_outputs_to_data` and
-/// `strip_value_invention` run BEFORE the staged build, so a legitimate
-/// relational producer has become `const` data by the time this sees the model
-/// — what remains is genuinely unevaluable.
+/// Ordering matters and is already right: `materialize_vi_outputs_to_data`,
+/// `materialize_derived_extents` and `strip_value_invention` run BEFORE the
+/// staged build, so by the time this sees the model an arg-witness output has
+/// become `const` data and a skolem or derived-set producer has been dropped —
+/// what remains is genuinely unevaluable.
 fn reject_unlowered_spatial_ops(model: &Model) -> Result<(), CompileError> {
     for eq in &model.equations {
         check_evaluable_side(&eq.lhs)?;
@@ -3033,15 +3036,15 @@ pub(super) fn strip_vi_joins(expr: &mut Expr, vi_cols: &HashSet<String>) {
 /// The dense Rust array runtime evaluates FAQ aggregates and the fused geometry
 /// leaf, but does NOT materialize value-invention buffers — skolem-id maps
 /// (`skolem`/`rank`) or a membership set over a `kind: "derived"` (FAQ-produced)
-/// index set. A variable that is one of these, and the `join.on` gate keyed on
+/// index set. [`materialize_derived_extents`] has already counted each such
+/// set's members, so a range over it is sized; its per-element values are not
+/// available. A variable that is one of these, and the `join.on` gate keyed on
 /// it, are relational scaffolding around a densely-evaluable narrow phase. For a
 /// conservative regrid the narrow phase is `polygon_intersection_area`, which is
 /// zero on exactly the pairs the bin-skolem gate would prune, so the dense
-/// contraction is numerically identical (see [`strip_vi_joins`]). This keeps the
-/// coupled regrid runnable without porting the build-time relational engine,
-/// while leaving genuine (loop-symbol) joins and non-VI models byte-identical:
-/// the pass is a no-op unless a `skolem` op or a derived-set-shaped variable is
-/// present.
+/// contraction is numerically identical (see [`strip_vi_joins`]). Genuine
+/// (loop-symbol) joins and non-VI models stay byte-identical: the pass is a
+/// no-op unless a `skolem` op or a derived-set-shaped variable is present.
 pub(super) fn strip_value_invention(
     model: &mut Model,
     index_sets: &HashMap<String, IndexSet>,
@@ -3514,9 +3517,10 @@ fn refuse_unmaterialized_derived_ranges(
 /// simulate end-to-end. Derived index sets named by a materialized producer are
 /// densified to intervals via [`rewrite_derived_index_sets`] (the same handoff
 /// [`apply_value_invention`] performs). A NO-OP — and byte-identical — for any
-/// model without an arg-witness op (gated by [`model_contains_arg_witness`]), so
-/// the conservative-regrid skolem/distinct path handled by
-/// [`strip_value_invention`] is untouched.
+/// model without an arg-witness op (gated by [`model_contains_arg_witness`]). A
+/// `skolem`/`distinct` producer in such a model is sized by
+/// [`materialize_derived_extents`] and then dropped by
+/// [`strip_value_invention`].
 ///
 /// `caller_arrays` is the caller-supplied factor-array channel (see
 /// [`vi_factor_arrays`]): loader-fed envelope/connectivity factors that are not

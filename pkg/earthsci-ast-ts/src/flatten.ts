@@ -95,7 +95,7 @@ export type FlattenOptions = CouplingImportOptions
  * parity.
  */
 export class FlattenError extends EsmDiagnosticError {
-  constructor(message: string, code = 'flatten_error') {
+  constructor(message: string, code: string = ERROR_CODES.FLATTEN_ERROR) {
     super(code, message)
     this.name = 'FlattenError'
   }
@@ -108,7 +108,7 @@ export class FlattenError extends EsmDiagnosticError {
  */
 export class ConflictingDerivativeError extends FlattenError {
   constructor(message: string) {
-    super(message, 'conflicting_derivative')
+    super(message, ERROR_CODES.CONFLICTING_DERIVATIVE)
     this.name = 'ConflictingDerivativeError'
   }
 }
@@ -201,7 +201,7 @@ export class OperatorComposeAmbiguousBareNameError extends FlattenError {
  */
 export class DomainUnitMismatchError extends FlattenError {
   constructor(message: string) {
-    super(message, 'domain_unit_mismatch')
+    super(message, ERROR_CODES.DOMAIN_UNIT_MISMATCH)
     this.name = 'DomainUnitMismatchError'
   }
 }
@@ -213,7 +213,7 @@ export class DomainUnitMismatchError extends FlattenError {
  */
 export class DimensionPromotionError extends FlattenError {
   constructor(message: string) {
-    super(message, 'dimension_promotion')
+    super(message, ERROR_CODES.DIMENSION_PROMOTION)
     this.name = 'DimensionPromotionError'
   }
 }
@@ -2404,7 +2404,7 @@ function checkVariableMapEndpoints(
           'to no variable, parameter or observed in the flattened system (esm-spec §4.6, ' +
           '§10.4). A scoped reference walks EVERY dot-separated segment, so a subsystem ' +
           "endpoint is spelled '<Model>.<Subsystem>.<name>'.",
-        'unresolved_scoped_ref',
+        ERROR_CODES.UNRESOLVED_SCOPED_REF,
       )
     }
   }
