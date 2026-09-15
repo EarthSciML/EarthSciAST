@@ -5,17 +5,19 @@
 
 # ---- parameters and time -----------------------------------------------------
 
-function _de_param(ctx::_DECtx, nd::_E._Node)::_DEVal
+_de_param(ctx::_DECtx, nd::_E._Node)::_DEVal = _de_param(ctx, nd.sym)
+
+function _de_param(ctx::_DECtx, sym::Symbol)::_DEVal
     p = ctx.p
     p isa NamedTuple ||
         _de_refuse("a parameter read on a `p` of type $(typeof(p))",
             "the emitter reads parameters by NAME out of a NamedTuple, the " *
             "shape `build_evaluator` hands back. A vector `p` (`ComponentVector`, " *
             "`Vector`) reaches parameters by flat index and is not wired here.")
-    hasproperty(p, nd.sym) ||
-        _de_refuse("the parameter `$(nd.sym)`",
+    hasproperty(p, sym) ||
+        _de_refuse("the parameter `$(sym)`",
             "it is not a field of the parameter NamedTuple passed to this call.")
-    x = getfield(p, nd.sym)
+    x = getfield(p, sym)
     if x isa TracedRNumber{Float64}
         _de_tally!(ctx, :param_input)
         op = _hlo.reshape(x.mlir_data; result_0=_de_ty(1), location=_de_loc())
@@ -26,7 +28,7 @@ function _de_param(ctx::_DECtx, nd::_E._Node)::_DEVal
         # inputs (an override then needs no recompile).
         return _de_const(ctx, Float64(x))
     end
-    _de_refuse("the parameter `$(nd.sym)` of type $(typeof(x))",
+    _de_refuse("the parameter `$(sym)` of type $(typeof(x))",
         "a parameter is either a host `Real` (baked as a constant) or a traced " *
         "`Float64` scalar (a program input).")
 end
@@ -50,7 +52,7 @@ function _de_scalar(ctx::_DECtx, nd::_E._Node, cache::Vector{_DEVal})::_DEVal
     if k === _E._NK_LITERAL
         return _de_const(ctx, nd.literal)
     elseif k === _E._NK_STATE
-        return _de_read(ctx, ctx.ue, nd.idx)
+        return _de_read(ctx, ctx.ue, nd.idx, :state)
     elseif k === _E._NK_PARAM
         return _de_param(ctx, nd)
     elseif k === _E._NK_TIME
@@ -85,12 +87,12 @@ function _de_scalar(ctx::_DECtx, nd::_E._Node, cache::Vector{_DEVal})::_DEVal
             (sg.lo[d] <= sub <= sg.hi[d]) || return _de_const(ctx, 0.0)   # ghost cell
             off += (sub - sg.lo[d]) * sg.strides[d]
         end
-        return _de_read(ctx, ctx.ue, sg.slot_flat[off + 1])
+        return _de_read(ctx, ctx.ue, sg.slot_flat[off + 1], :stategather)
     elseif k === _E._NK_PARAM_GATHER
         # Live forcing, read from the `buffers` ARGUMENT (never from the build's
         # captured host array — see `_de_buffer`).
         buf = _de_buffer(ctx, nd.payload::Vector{Float64})
-        return _de_slice(ctx, buf, nd.idx, nd.idx)
+        return _de_slice(ctx, buf, nd.idx, nd.idx; why=:pgather)
     elseif k === _E._NK_OP
         if nd.op === :fn
             return _de_fn(ctx, nd, ch -> _de_scalar(ctx, ch, cache))
@@ -228,13 +230,13 @@ function _de_acck(ctx::_DECtx, nd::_E._Node, K::_E._AccKernel, plan::_E._OopAccP
             isempty(m) && return g
             return _de_select(ctx, _de_boolconst(ctx, m), g.len, _de_const(ctx, 0.0), g)
         elseif ak === _E._AK_STATE_FIXED
-            return _de_read(ctx, ctx.ue, a.idx)
+            return _de_read(ctx, ctx.ue, a.idx, :akfixed)
         elseif ak === _E._AK_SCALAR
             return _de_const(ctx, a.v)
         elseif ak === _E._AK_ARR_FIXED
             # LIVE forcing, invariant slot: one element of a program input.
             buf = _de_buffer(ctx, a.arr)
-            return _de_slice(ctx, buf, a.idx, a.idx)
+            return _de_slice(ctx, buf, a.idx, a.idx; why=:akarrfixed)
         elseif ak === _E._AK_FORCING_BOX || ak === _E._AK_ARR_TBL_BOX
             # LIVE forcing lanes: one read of a program input at host-frozen
             # indices — slices plus a concatenate, or one gather.
@@ -437,16 +439,15 @@ function _de_emit!(ctx::_DECtx, rhs)::_DEVal
     _de_plan_writes!(ctx, rhs, du)
     # Materialized observed levels, filled into the extended slot map.
     mat = getfield(rhs, :mat_levels)
+    mat_batches = getfield(rhs, :mat_batches)
     for (li, lvl) in enumerate(mat)
         ctx.section = Int32(li)
         scalars, kernels, plans, scans = lvl
         empty_cache = _DEVal[]
-        for (slot, nd) in scalars
-            _de_rule!("the observed fill of $(_de_slotname(ctx, slot)) " *
-                      "(materialization level $li)") do
-                _de_write!(ctx, ctx.ue, Int[slot], _de_scalar(ctx, nd, empty_cache))
-            end
-        end
+        _de_at!(ctx, :mat_scalar)
+        _de_scalar_surface!(ctx, ctx.ue, mat_batches[li], empty_cache,
+                            "the observed fill at materialization level $li")
+        _de_at!(ctx, :mat_kernel)
         for j in eachindex(kernels)
             _de_rule!("the observed fill kernel writing " *
                       "$(_de_slotsname(ctx, plans[j].out_slots)) " *
@@ -454,6 +455,7 @@ function _de_emit!(ctx::_DECtx, rhs)::_DEVal
                 _de_run_kernel!(ctx, ctx.ue, kernels[j], plans[j])
             end
         end
+        _de_at!(ctx, :mat_scan)
         for S in scans
             _de_rule!("a prefix scan at materialization level $li") do
                 _de_scan!(ctx, ctx.ue, S)
@@ -465,28 +467,33 @@ function _de_emit!(ctx::_DECtx, rhs)::_DEVal
     # CSE prelude.
     prelude = getfield(rhs, :cse_prelude)
     cache = Vector{_DEVal}(undef, length(prelude))
+    _de_at!(ctx, :prelude)
     for s in eachindex(prelude)
         _de_rule!("shared subexpression $s of the CSE prelude") do
             cache[s] = _de_scalar(ctx, prelude[s], cache)
         end
     end
-    # State equations.
-    for (slot, nd) in getfield(rhs, :rhs_list)
-        _de_rule!("the state equation for $(_de_slotname(ctx, slot))") do
-            _de_write!(ctx, du, Int[slot], _de_scalar(ctx, nd, cache))
-        end
-    end
+    # State equations, through the LANE-BATCHED surface (batch.jl): the
+    # leftover singles are the per-entry walk, each group is one whole-lane
+    # emission whose varying state leaves are gathers rather than a
+    # one-element slice per cell.
+    _de_at!(ctx, :rhs_scalar)
+    _de_scalar_surface!(ctx, du, getfield(rhs, :rhs_batches), cache,
+                        "the state equation")
     kernels = getfield(rhs, :acc_kernels)
     plans = getfield(rhs, :acc_plans)
+    _de_at!(ctx, :kernel)
     for j in eachindex(kernels)
         _de_rule!("the access kernel writing $(_de_slotsname(ctx, plans[j].out_slots))") do
             _de_run_kernel!(ctx, du, kernels[j], plans[j])
         end
     end
+    _de_at!(ctx, :scan)
     for S in getfield(rhs, :scan_folds)
         _de_rule!("a prefix scan over the state equations") do
             _de_scan!(ctx, du, S)
         end
     end
+    _de_at!(ctx, :assemble)
     return _de_assemble(ctx, du, n_states)
 end

@@ -109,6 +109,7 @@ mutable struct _DECtx
     hostkeys::Vector{Vector{Float64}}
     bufvals::Vector{Union{Nothing,_DEVal}}
     static::IdDict{_E._Node,Bool}           # memoized "this subtree is host-computable"
+    bstatic::IdDict{Any,Bool}               # the same, for a lane-batched subtree
     reduce_min::Int                         # fold length at which a chain becomes a reduce
     names::Dict{Int,String}                 # flat slot -> element name (for the rule text)
     # Producer-set -> the one concatenation a cross-producer gather reads from,
@@ -131,6 +132,10 @@ mutable struct _DECtx
     # forms compare it against the write plan (`_DEMap`) to tell a zero this
     # section is entitled to from a level read out of order.
     section::Int32
+    # WHICH EMITTER SITE is running — the scalar spine, a fill level, an access
+    # kernel, a scan, the output assembly. Purely a tally key for the read
+    # attribution below; nothing reads it back and nothing branches on it.
+    site::Symbol
 end
 
 function _DECtx(n_states::Int, n_total::Int, p, t::_DEVal, uval::_DEVal,
@@ -142,12 +147,13 @@ function _DECtx(n_states::Int, n_total::Int, p, t::_DEVal, uval::_DEVal,
     return _DECtx(n_states, p, t, ue, Dict{UInt64,_DEVal}(),
                   Dict{Vector{Float64},_DEVal}(), bufs, hostkeys,
                   Union{Nothing,_DEVal}[nothing for _ in hostkeys],
-                  IdDict{_E._Node,Bool}(), _de_reduce_min(), names,
+                  IdDict{_E._Node,Bool}(), IdDict{Any,Bool}(),
+                  _de_reduce_min(), names,
                   Dict{Tuple{Vector{_MLIR.IR.Value},Bool},
                        Tuple{_DEVal,Vector{Int},Int}}(),
                   Dict{Tuple{_MLIR.IR.Value,Int,Int,Int},_DEVal}(),
                   Dict{Vector{_MLIR.IR.Value},_DEVal}(),
-                  Dict{Symbol,Int}(), Int32(0))
+                  Dict{Symbol,Int}(), Int32(0), :none)
 end
 
 # A ⊕-fold this long stops being a chain of binary ops and becomes ONE
@@ -184,6 +190,26 @@ _de_ty(L::Int) = _MLIR.IR.TensorType(Int64[L], _MLIR.IR.Type(Float64))
 _de_ty_i1(L::Int) = _MLIR.IR.TensorType(Int64[L], _MLIR.IR.Type(Bool))
 _de_ty_i64(dims::Vector{Int}) = _MLIR.IR.TensorType(Int64.(dims), _MLIR.IR.Type(Int64))
 _de_tally!(ctx::_DECtx, k::Symbol) = (ctx.stats[k] = get(ctx.stats, k, 0) + 1; nothing)
+
+# READ ATTRIBUTION. Every emitted `slice` / `gather` / `concatenate` is tallied
+# a second time under `<op>@<site>.<why>` — which EMITTER SITE was running and
+# which read form asked for it. A flat total says a module carries N slices; it
+# does not say whether they are a stencil's reads, a kernel's invariant scalars
+# or the output assembly, and those need different fixes.
+#
+# THIS IS NOT DECORATION. The single-position slice was the op the
+# post-differentiation `enzyme-hlo-opt` run is quadratic in, four levers had
+# been spent against it, and the fifth was aimed at the scalar spine on the
+# reasoning that a per-cell walk must be where one-element reads come from.
+# Measured on ReSEACT's transport half at 288 cells, the scalar spine emitted
+# NONE: 1,728 of the 2,869 slices in one right-hand side were `_de_assemble`'s,
+# a surface that had its own run-walk and never reached the read cost model.
+# Naming the site is what turned a plausible answer into the right one.
+#
+# `_de_at!` names the site; `_de_site!` charges an emitted op to it.
+_de_at!(ctx::_DECtx, s::Symbol) = (ctx.site = s; nothing)
+_de_site!(ctx::_DECtx, pre::Symbol, why::Symbol) =
+    _de_tally!(ctx, Symbol(pre, "@", ctx.site, ".", why))
 _de_res(op) = _MLIR.IR.result(op)
 
 # `_DEVal` ↔ Reactant's traced array, for the two places that reuse Reactant's
@@ -248,13 +274,15 @@ function _de_bcast(ctx::_DECtx, a::_DEVal, L::Int)::_DEVal
     return _DEVal(_de_res(op), L)
 end
 
-function _de_slice(ctx::_DECtx, src::_DEVal, lo::Int, hi::Int, stride::Int=1)::_DEVal
+function _de_slice(ctx::_DECtx, src::_DEVal, lo::Int, hi::Int, stride::Int=1;
+                   why::Symbol=:other)::_DEVal
     L = length(lo:stride:hi)
     (L == src.len && lo == 1 && stride == 1) && return src
     key = (src.v, lo, hi, stride)
     hit = get(ctx.slices, key, nothing)
     hit === nothing || return hit
     _de_tally!(ctx, :slice)
+    _de_site!(ctx, L == 1 ? :slice1 : :sliceN, why)
     op = _hlo.slice(src.v; result_0=_de_ty(L),
                     start_indices=_MLIR.IR.DenseArrayAttribute(Int64[lo - 1]),
                     limit_indices=_MLIR.IR.DenseArrayAttribute(Int64[hi]),
@@ -271,6 +299,7 @@ function _de_concat(ctx::_DECtx, pieces::Vector{_DEVal})::_DEVal
     hit = get(ctx.concats, key, nothing)
     hit === nothing || return hit
     _de_tally!(ctx, :concatenate)
+    _de_site!(ctx, :concat, :x)
     L = sum(pc.len for pc in pieces)
     op = _hlo.concatenate(key; result_0=_de_ty(L),
                           dimension=0, location=_de_loc())
@@ -283,6 +312,7 @@ end
 # takes when its index vector shatters into more runs than slices are worth.
 function _de_gather_op(ctx::_DECtx, src::_DEVal, positions::Vector{Int})::_DEVal
     _de_tally!(ctx, :gather)
+    _de_site!(ctx, :gather, :x)
     L = length(positions)
     idx = reshape(Int64.(positions) .- 1, L, 1)
     idxop = _hlo.constant(; output=_de_ty_i64([L, 1]),
@@ -502,7 +532,7 @@ function _de_emit_runs(ctx::_DECtx, srcs::Vector{_DESlot})::_DEVal
         g === nothing || return g
     end
     pieces = _DEVal[r[1] === nothing ? _de_arrconst(ctx, zeros(Float64, r[3])) :
-                    _de_slice(ctx, r[1]::_DEVal, r[2], r[3], r[4]) for r in runs]
+                    _de_slice(ctx, r[1]::_DEVal, r[2], r[3], r[4]; why=:runs) for r in runs]
     return _de_concat(ctx, pieces)
 end
 
@@ -543,9 +573,9 @@ end
     return _de_unwritten(M, s, ctx.section, _de_slotname(ctx, s))
 end
 
-_de_read(ctx::_DECtx, M::_DEMap, s::Int)::_DEVal =
+_de_read(ctx::_DECtx, M::_DEMap, s::Int, why::Symbol=:read1)::_DEVal =
     (e = _de_src(ctx, M, s); e === nothing ? _de_const(ctx, 0.0) :
-                             _de_slice(ctx, e[1], e[2], e[2]))
+                             _de_slice(ctx, e[1], e[2], e[2]; why=why))
 
 _de_gather(ctx::_DECtx, M::_DEMap, slots::Vector{Int})::_DEVal =
     _de_emit_runs(ctx, _DESlot[_de_src(ctx, M, s) for s in slots])
@@ -568,36 +598,28 @@ function _de_write!(ctx::_DECtx, M::_DEMap, slots::Vector{Int}, val::_DEVal)
     return nothing
 end
 
-# Assemble a slot map into one rank-1 value: runs of consecutive positions in the
-# same producer become slices, unwritten runs become a zero constant, and one
-# concatenate joins them. This is the same reference-preserving read the
-# descriptors take, applied to the output.
-function _de_assemble(ctx::_DECtx, M::_DEMap, n::Int)::_DEVal
-    m = M.m
-    pieces = _DEVal[]
-    i = 1
-    while i <= n
-        e = m[i]
-        if e === nothing
-            j = i
-            while j + 1 <= n && m[j + 1] === nothing
-                j += 1
-            end
-            push!(pieces, _de_arrconst(ctx, zeros(Float64, j - i + 1)))
-            i = j + 1
-        else
-            sv, p0 = e
-            j = i
-            while j + 1 <= n && m[j + 1] !== nothing && m[j + 1][1].v == sv.v &&
-                  m[j + 1][2] == m[j][2] + 1
-                j += 1
-            end
-            push!(pieces, _de_slice(ctx, sv, p0, m[j][2]))
-            i = j + 1
-        end
-    end
-    return _de_concat(ctx, pieces)
-end
+# Assemble a slot map into one rank-1 value: a READ of the whole map, at
+# positions `1:n`, through the one read form every other surface uses.
+#
+# THIS USED TO BE ITS OWN RUN-WALK, and that is where most of the emitter's
+# single-position slices came from. The output slot map of a stencil model is
+# INTERLEAVED — a kernel's result value holds its own cells, and the next slot
+# in ascending order usually belongs to a different value or to a different
+# position inside the same one — so the "runs of consecutive positions in the
+# same producer" a local walk can find are mostly runs of ONE, and each of those
+# costs a `stablehlo.slice` of a single element. Measured on ReSEACT's transport
+# half at 288 cells: 2,160 pieces over 3,744 slots, of which 1,728 were single
+# positions — 60% of every slice the emitter wrote, and the largest block of the
+# population the post-differentiation `cse_slice` pattern is quadratic in.
+#
+# There was never a reason for the output to decide this differently from every
+# other read: `_de_emit_runs` decomposes the same positions into the same runs
+# and then applies the COST MODEL to them — one gather when the map shatters,
+# slices plus a concatenate when it does not, structural zeros folded into
+# either. An unwritten slot is a `nothing` entry, which is exactly the
+# structural zero the read form already knows how to carry.
+_de_assemble(ctx::_DECtx, M::_DEMap, n::Int)::_DEVal =
+    _de_emit_runs(ctx, _DESlot[@inbounds M.m[i] for i in 1:n])
 
 # ---- live forcing buffers as program INPUTS ----------------------------------
 #

@@ -165,8 +165,9 @@ end
 #     agree to within an ulp or two on ordinary arguments, which is inside
 #     `transcendental` (rtol 1e-12), not inside `algebraic`. A literal INTEGER
 #     exponent is the common case and both lower it by repeated multiplication.
-function _de_op(ctx::_DECtx, nd::_E._Node, c::Vector{_DEVal})::_DEVal
-    op = nd.op
+_de_op(ctx::_DECtx, nd::_E._Node, c::Vector{_DEVal})::_DEVal = _de_op(ctx, nd.op, c)
+
+function _de_op(ctx::_DECtx, op::Symbol, c::Vector{_DEVal})::_DEVal
     n = length(c)
     if op === :+
         return _de_chain(ctx, _hlo.add, c)

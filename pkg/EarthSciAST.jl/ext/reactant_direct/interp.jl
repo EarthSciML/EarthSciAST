@@ -87,10 +87,15 @@
 # per-lane loop, and never a per-lane call.
 _de_fn_lanes(k::F, x::TracedRArray{Float64,1}) where {F} = k.(x)
 
-function _de_fn(ctx::_DECtx, nd::_E._Node, ev::F)::_DEVal where {F}
-    pl = nd.payload
-    ch = nd.children
-    q(i::Int) = _de_traced(ev(ch[i]))
+_de_fn(ctx::_DECtx, nd::_E._Node, ev::F) where {F} =
+    _de_fn_pl(ctx, nd.payload, _DEVal[ev(ch) for ch in nd.children])
+
+# The `:fn` lowering, taking the payload and the ALREADY-EMITTED argument
+# values, so the scalar walk, the access-kernel walk and the lane-batched walk
+# reach it the same way.
+function _de_fn_pl(ctx::_DECtx, pl, args::Vector{_DEVal})::_DEVal
+    ch = args
+    q(i::Int) = _de_traced(args[i])
     if pl isa Tuple{String,_E._InterpLinearSpec} ||
        pl isa Tuple{String,_E._InterpLinearLaneSpec}
         _de_tally!(ctx, :interp_linear)

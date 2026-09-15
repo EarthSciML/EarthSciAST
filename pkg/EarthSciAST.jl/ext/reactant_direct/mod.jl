@@ -32,6 +32,8 @@
 #   ops.jl      the elementwise ladder, the ⊕-folds, the host const-fold
 #   interp.jl   closed functions (`:fn`): the six `interp.*` forms
 #   emit.jl     the walk — spines, kernels, sub-kernels, reduces, scans, the RHS
+#   batch.jl    the LANE-BATCHED scalar surface: the `:oop` build's congruent
+#               per-cell entry groups emitted once over their lane axis
 #   device.jl   WHERE it runs: the XLA client (cpu/gpu), the cell-axis sharding
 #               of the flat state across several devices, and the device-input
 #               builders, held BESIDE the callable rather than in it. Included
@@ -49,5 +51,6 @@ include("values.jl")
 include("ops.jl")
 include("interp.jl")
 include("emit.jl")
+include("batch.jl")
 include("device.jl")
 include("api.jl")

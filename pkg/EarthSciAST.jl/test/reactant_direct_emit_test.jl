@@ -345,6 +345,73 @@ function _de_scan_stag_obs(n::Int)
     return ESM_DE.Model(vars, eqs), isets
 end
 
+# ---- the lane-batched scalar surface (ess-oop-batch) -------------------------
+#
+# The shape that surface exists for, from test/oop_scalar_batch_test.jl: a
+# mass-weighted halo tent. Per OUTPUT CELL one `_NK_CONTRACTION_LOOP` whose body
+# reads the state at a loop-var-dependent slot (`_NK_STATE_GATHER`) times a
+# per-cell frozen weight (`_NK_CONST_GATHER`). Every output cell is congruent,
+# so the whole surface is ONE group of `NI*NJ` lanes — and each of the tent's
+# `M*M` iterations is one whole-lane read instead of one one-element slice per
+# cell. `NI = NJ = 6` because the read cost model wants at least eight pieces
+# before it prefers a gather: at four lanes there is nothing to decide.
+function _de_halo(; NI = 6, NJ = 6, M = 3)
+    NQ = max(NI, NJ) + M - 1
+    W = [[[[Float64((i + 2j + 3k + 5l) % 7) for l in 1:M] for k in 1:M]
+          for j in 1:NJ] for i in 1:NI]
+    donor(a, b) = Dict{String,Any}("op" => "-",
+        "args" => Any[Dict{String,Any}("op" => "+", "args" => Any[a, b]), 1])
+    agg = Dict{String,Any}("op" => "faq", "semiring" => "sum_product", "args" => Any[],
+        "output_idx" => Any["i", "j"],
+        "ranges" => Dict{String,Any}("i" => Any[1, NI], "j" => Any[1, NJ],
+                                     "k" => Any[1, M], "l" => Any[1, M]),
+        "expr" => Dict{String,Any}("op" => "*", "args" => Any[
+            Dict{String,Any}("op" => "index", "args" => Any[
+                Dict{String,Any}("op" => "const", "args" => Any[], "value" => W),
+                "i", "j", "k", "l"]),
+            Dict{String,Any}("op" => "index",
+                             "args" => Any["q", donor("i", "k"), donor("j", "l")])]))
+    zero_rhs = Dict{String,Any}("op" => "faq", "args" => Any[],
+        "output_idx" => Any["a", "b"],
+        "ranges" => Dict{String,Any}("a" => Any[1, NQ], "b" => Any[1, NQ]), "expr" => 0.0)
+    q_lhs = Dict{String,Any}("op" => "faq", "args" => Any[],
+        "output_idx" => Any["a", "b"],
+        "ranges" => Dict{String,Any}("a" => Any[1, NQ], "b" => Any[1, NQ]),
+        "expr" => _de_Dt(_de_ix("q", "a", "b")))
+    out_lhs = Dict{String,Any}("op" => "faq", "args" => Any[],
+        "output_idx" => Any["i", "j"],
+        "ranges" => Dict{String,Any}("i" => Any[1, NI], "j" => Any[1, NJ]),
+        "expr" => _de_Dt(_de_ix("out", "i", "j")))
+    doc = Dict{String,Any}("esm" => "1.1.0",
+        "metadata" => Dict{String,Any}("name" => "de_halo"),
+        "models" => Dict{String,Any}("R" => Dict{String,Any}(
+            "variables" => Dict{String,Any}(
+                "q" => _de_state(shape = Any["a", "b"]),
+                "out" => _de_state(shape = Any["i", "j"])),
+            "equations" => Any[
+                Dict{String,Any}("lhs" => q_lhs, "rhs" => zero_rhs),
+                Dict{String,Any}("lhs" => out_lhs, "rhs" => agg)])))
+    ics = Dict{String,Any}()
+    for i in 1:NI, j in 1:NJ
+        ics["out[$i,$j]"] = 0.0
+    end
+    for a in 1:NQ, b in 1:NQ
+        ics["q[$a,$b]"] = Float64(10a + b)
+    end
+    return (doc, ics, NI, NJ, M)
+end
+
+# The routing this fixture depends on is named rather than inherited: the
+# contraction loop tier has to take the reduction (so there ARE per-cell
+# `rhs_list` entries to batch) and the whole-array contraction tier must not
+# take it first.
+_de_halo_build(doc, ics; form = :oop, batch = true) =
+    withenv("ESS_CONTRACTION_LOOP" => "1", "ESS_CONTRACTION_LOOP_MIN" => "8",
+            "ESS_ARRAY_CONTRACTION_MIN" => "1024",
+            "ESS_OOP_BATCH" => (batch ? "1" : "0")) do
+        build_evaluator(doc; initial_conditions = ics, form = form)
+    end
+
 @testset "direct StableHLO emission from the compiled IR" begin
     @testset "elementwise_gather conformance fixture" begin
         fixture = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance",
@@ -567,19 +634,100 @@ end
         # The point of the mode: fewer slices, and the gathers that replace them.
         @test get(tallies["gather"], :slice, 0) < get(tallies["runs"], :slice, 0)
         @test get(tallies["gather"], :gather, 0) > get(tallies["runs"], :gather, 0)
-        # THIS FIXTURE CANNOT EXERCISE THE BUDGET, and that is worth pinning
-        # rather than hiding: every read in it lies in ONE producer (it is a
-        # single-tracer model with no second buffer), a one-producer base is not
-        # a concatenate at all, so there is no copy to charge and a 64-element
-        # budget emits the same program as the default. The cross-producer half
-        # — the half ReSEACT's transport stencil is made of, where the base is
-        # the 3744-slot state beside a 2304-slot buffer — is pinned
-        # arithmetically above, on `_de_gather_base_fits`.
-        @test tallies["base64"] == tallies["gather"]
+        # THE BUDGET, ON THIS FIXTURE, IS THE OUTPUT ASSEMBLY'S. None of the
+        # fixture's DESCRIPTOR reads can exercise it — every one of them lies in
+        # ONE producer (a single-tracer model with no second buffer), and a
+        # one-producer base is not a concatenate at all, so there is no copy to
+        # charge. The ASSEMBLY of `du` is the cross-producer read in this
+        # program: it reads every kernel result value at once, so its base IS a
+        # concatenate and a 64-element budget declines it. That is the whole
+        # visible difference — the assembly falls back to slices per run, the
+        # descriptor reads are emitted identically, and the numbers agree to the
+        # last bit either way (the `isapprox` above).
+        for k in (:kernels, :subcall, :arith, :broadcast_in_dim,
+                  Symbol("sliceN@kernel.runs"), Symbol("gather@kernel.x"),
+                  Symbol("concat@kernel.x"))
+            @test get(tallies["base64"], k, 0) == get(tallies["gather"], k, 0)
+        end
+        @test get(tallies["gather"], Symbol("gather@assemble.x"), 0) == 1
+        @test get(tallies["base64"], Symbol("gather@assemble.x"), 0) == 0
+        @test get(tallies["base64"], Symbol("slice1@assemble.runs"), 0) > 0
         # `always` gathers everything with more than one run, so it is the floor
         # on slices and the ceiling on gathers.
         @test get(tallies["always"], :slice, 0) <= get(tallies["gather"], :slice, 0)
         @test get(tallies["always"], :gather, 0) >= get(tallies["gather"], :gather, 0)
+    end
+
+    @testset "the lane-batched scalar surface: one whole-lane read per group" begin
+        doc, ics, NI, NJ, M = _de_halo()
+        fo, u0, p, _, vmap = _de_halo_build(doc, ics)
+        fi!, u0i, _, _, _ = _de_halo_build(doc, ics; form = :inplace)
+        @test u0 == u0i
+
+        # WITNESS, on the BUILD: the surface really is one group of NI*NJ
+        # congruent lanes with nothing left on the per-entry path. A silent
+        # decline back to singles would make every assertion below vacuous.
+        rhsf = getfield(fo, :rhs)
+        rb = getfield(rhsf, :rhs_batches)
+        @test length(rb.groups) == 1
+        @test rb.n_batched == NI * NJ
+        @test isempty(rb.rest)
+
+        n = length(u0)
+        samples = [(copy(u0), 0.0),
+                   (Float64[u0[k] + 0.25sin(0.3k) for k in 1:n], 1.0),
+                   (Float64[u0[k] * (1 + 0.1cos(0.7k)) for k in 1:n], -2.0)]
+        d, _, _ = _de_compare("halo (lane-batched)", fo, fi!, p, samples;
+                              traced_census = false)
+
+        # The GROUP was emitted as a group, once.
+        @test get(d.stats, :scalar_batch, 0) == 1
+
+        # And against the SAME build with the grouping disabled — the pre-batch
+        # emitter, entry by entry — which is the only comparison that says what
+        # the batched surface changed. Same numbers, and a program whose size
+        # no longer follows the cell count.
+        fn, u0n, pn, _, _ = _de_halo_build(doc, ics; batch = false)
+        @test isempty(getfield(getfield(fn, :rhs), :rhs_batches).groups)
+        dn, _, _ = _de_compare("halo (per-entry, ESS_OOP_BATCH=0)", fn, fi!, pn,
+                               samples; census = false)
+        println("  batched tally:   ", d.stats)
+        println("  per-entry tally: ", dn.stats)
+        @test get(dn.stats, :scalar_batch, 0) == 0
+
+        # ONE WHOLE-LANE READ PER TENT POSITION, and not one per cell. The
+        # per-entry walk reads the state one element at a time
+        # (`slice1@rhs_scalar.stategather`); the batched surface reads all
+        # `NI*NJ` lanes at once, so the site tally carries NO single-position
+        # read at all and exactly `M*M` whole-lane reads — one per position of
+        # the tent, whatever form the cost model gives each one.
+        rd1 = Symbol("slice1@rhs_scalar.stategather")
+        @test get(dn.stats, rd1, 0) > 0
+        @test get(d.stats, rd1, 0) == 0
+        @test get(d.stats, Symbol("concat@rhs_scalar.x"), 0) +
+              get(d.stats, Symbol("gather@rhs_scalar.x"), 0) == M * M
+
+        # WHY THAT IS NOT SPELLED "one gather". This fixture's whole-lane read
+        # is AFFINE — lane `(i,j)` reads donor slot `(i+k-1, j+l-1)`, so the
+        # lanes land on the state in arithmetic order and the read decomposes
+        # into a handful of long runs. The cost model then correctly prefers
+        # strided slices to a gather with its O(L) index constant, which is the
+        # decision `_de_gather_is_cheaper` exists to make. Force the other side
+        # of it and the whole-lane read IS one gather per tent position, with
+        # the same numbers.
+        withenv("ESM_DIRECT_EMIT_READ" => "always") do
+            da, _, _ = _de_compare("halo (lane-batched, gather)", fo, fi!, p,
+                                   samples; census = false)
+            println("  batched tally (always): ", da.stats)
+            @test get(da.stats, Symbol("gather@rhs_scalar.x"), 0) == M * M
+            @test get(da.stats, rd1, 0) == 0
+        end
+
+        # And the emitted program stops following the cell count: the group's
+        # arithmetic is emitted ONCE over the lane axis rather than once per
+        # cell.
+        @test get(d.stats, :arith, 0) * 4 < get(dn.stats, :arith, 0)
+        @test get(d.stats, :slice, 0) < get(dn.stats, :slice, 0)
     end
 
     @testset "a closed `interp.linear` function" begin

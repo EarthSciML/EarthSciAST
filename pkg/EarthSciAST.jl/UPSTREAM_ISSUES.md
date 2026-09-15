@@ -268,6 +268,57 @@ instead of letting the nesting run to the guard, and a note in the
 exists for. Either would have turned several days of bisection into one error
 message.
 
+### `enzyme-hlo-opt`'s `cse_slice` is quadratic in the slice count
+
+**What happens.** `enzyme-hlo-opt` runs a greedy rewrite driver, and one of its
+patterns, `cse_slice`, deduplicates `stablehlo.slice` operations by comparing
+them PAIRWISE through `mlir::OperationEquivalence::isEquivalentTo`. On a module
+carrying a few thousand slices that is invisible. On one carrying tens of
+thousands it is the whole compile, and it grows with the square.
+
+Where it shows up for us is the run of `enzyme-hlo-opt` over the module
+`enzyme` has just DIFFERENTIATED, because reverse mode multiplies the slice
+population: the reverse of a slice is a pad-and-add, so a primal with ~10,000
+slices differentiates into ~24,000 to ~28,000 slices plus ~9,000 pads. Measured
+on a four-stage SSPRK43 transport step at 288 cells, Reactant 0.2.285 / CPU:
+
+| | primal, before `enzyme` | adjoint, after `enzyme` |
+| --- | ---: | ---: |
+| `stablehlo.slice` | 9,932 | 27,610 |
+| `stablehlo.pad` | — | 9,583 |
+| `enzyme-hlo-opt` wall | 4.5 s | > 37 min, never finished |
+
+`perf record -F 199 -g`, 150 s, 29,727 samples, taken live on the second run:
+
+| share | symbol |
+| ---: | --- |
+| 19.8% | `mlir::OperationEquivalence::isEquivalentTo` (two frames) |
+| 6.9% | `mlir::enzyme::failIfDynamicShape` (the `CheckedOpRewritePattern` guard) |
+| 2.2% | `StaticSlice::get` |
+| 2.0% | `CSE<stablehlo::SliceOp>::matchAndRewriteImpl` |
+
+with the remainder in the generic accessors those frames call
+(`DenseArrayAttrImpl<long>`, `RankedTensorType::getShape`, `hasStaticShape`).
+
+**Why it is worth reporting.** The pass is not doing anything wrong — it is
+doing an O(n²) amount of the right thing, on a population that a hash of the
+(operand, start, limit, stride) tuple would deduplicate in one pass. The same
+module reached through a different emitter, carrying 2,712 slices instead,
+compiles its reverse in 115 s end to end.
+
+**Why excluding it is not the answer.** `cse_slice` is also what keeps the other
+slice patterns — `slice_elementwise` in particular, which CREATES two slices per
+rewrite — from multiplying an un-deduplicated set. Excluding both
+(`excluded_passes = slice_elementwise,cse_slice`) was OOM-killed thirteen
+minutes in. There is no pass exclusion that wins here.
+
+**Our workaround.** Emit fewer slices: memoize the emitter's own reads so a span
+is emitted once, and emit a congruent per-cell scalar surface ONCE over its lane
+axis (one gather) rather than once per cell (one one-element slice per cell).
+Both are properties of our emitter, not of the pass, which is why this is
+recorded here rather than treated as a blocker. See reseact.esm's
+COMPILE_COST.md for the measurement the numbers above come from.
+
 ## Not filed
 
 Recorded so nobody re-walks them.
