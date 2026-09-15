@@ -41,6 +41,11 @@ using Unitful
 # `false` = do not auto-generate SI prefixes for this symbol.
 Unitful.@unit _u_mmHg "mmHg" MillimetreOfMercury 133.322387415 * Unitful.u"Pa" false
 
+# The International Table BTU — exactly 1055.05585262 J (esm-spec §4.8.1), NOT
+# Unitful's `btu`, which is the rounded 1055.06 J. A scale error is invisible to
+# dimensional analysis, so the registry entry is defined here rather than borrowed.
+Unitful.@unit _u_btu "BTU" InternationalTableBTU 1055.05585262 * Unitful.u"J" false
+
 # Microatmosphere — the standard unit of seawater pCO2. Unitful defines `atm`
 # without an SI-prefix mechanism, so `uatm` must be spelled out.
 Unitful.@unit _u_uatm "uatm" MicroAtmosphere 1e-6 * Unitful.u"atm" false
@@ -164,7 +169,7 @@ const _UNIT_REGISTRY = Dict{String, Unitful.Units}(
     "inHg" => _u_inHg, "psi" => u"psi",
 
     # Energy.
-    "erg" => u"erg", "BTU" => u"btu", "Wh" => u"W*hr", "kWh" => u"kW*hr",
+    "erg" => u"erg", "BTU" => _u_btu, "Wh" => u"W*hr", "kWh" => u"kW*hr",
 
     # Electromagnetic. `C` is the COULOMB, per SI — never Celsius. Binding it
     # to Celsius injects a temperature dimension into every electromagnetic
@@ -779,12 +784,12 @@ const _EXACT_BY_UNIT_NAME = Dict{Symbol, ExactScale}(
     :Atmosphere => _exact_integer(101325), :Bar => _exact_pow10(5),
     :Torr => _exact_ratio(101325, 760),
     :PoundsPerSquareInch => _EXACT_POUND * _EXACT_GRAVITY / _exact_decimal("0.0254")^2,
-    :Erg => _exact_pow10(-7), :BritishThermalUnit => _exact_decimal("1055.05585262"),
+    :Erg => _exact_pow10(-7), :InternationalTableBTU => _exact_decimal("1055.05585262"),
     :Rankine => _exact_ratio(5, 9),
     :Degree => _exact_pi() / _exact_integer(180),
     :Percent => _exact_pow10(-2),
-    :PartsPerMillion => _exact_pow10(-6), :PartsPerBillion => _exact_pow10(-9),
-    :PartsPerTrillion => _exact_pow10(-12),
+    :Permillion => _exact_pow10(-6), :Perbillion => _exact_pow10(-9),
+    :Pertrillion => _exact_pow10(-12),
     :MillimetreOfMercury => _exact_decimal("133.322387415"),
     :MicroAtmosphere => _exact_decimal("0.101325"),
     :DobsonUnit => _exact_decimal("2.6867e20"),

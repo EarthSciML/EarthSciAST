@@ -208,6 +208,13 @@
       "scale_to_canonical": 0.017453292519943295,
       "units": "deg",
       "why": "esm-spec 4.8.1: pi/180 rad. The one registry scale that is not rational: an exact scale carries pi as a factor of its own."
+    },
+    {
+      "canonical": "J",
+      "scale_exact": "52752792631/50000000",
+      "scale_to_canonical": 1055.05585262,
+      "units": "BTU",
+      "why": "esm-spec 4.8.1: the International Table BTU, exactly 1055.05585262 J. One binding carried a general-purpose library's rounded 1055.06 J, which no dimensional check could see."
     }
   ],
   "kind": "unit_registry_verdicts",
