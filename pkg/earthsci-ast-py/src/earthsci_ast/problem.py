@@ -838,9 +838,7 @@ def _refuse_unsupported_constructs(flat: FlattenedSystem, file: EsmFile | None) 
     if found is not None:
         construct, event = found
         name = getattr(event, "name", None)
-        raise UnsupportedConstructError(
-            construct, f"'{name}'" if name else "(unnamed)", evaluator
-        )
+        raise UnsupportedConstructError(construct, f"'{name}'" if name else "(unnamed)", evaluator)
     for eq in flat.equations:
         if is_implicit_lhs(eq.lhs):
             raise UnsupportedConstructError(
