@@ -212,6 +212,15 @@ export const ERROR_CODES = {
   UNDEFINED_SPECIES: 'undefined_species',
   UNDEFINED_SYSTEM: 'undefined_system',
   UNDEFINED_VARIABLE: 'undefined_variable',
+  // `unknown_override_key` — an inline test's `initial_conditions` or
+  //   `parameter_overrides` key that matches no declared name under the esm-spec
+  //   §6.6.2 override-key rules. Static, so a typo'd key is named at validation
+  //   rather than only when a runtime builds the test.
+  UNKNOWN_OVERRIDE_KEY: 'unknown_override_key',
+  // `assertion_rank_mismatch` — an assertion whose form does not match the
+  //   declared rank of the variable it names (esm-spec §6.6.5): pointwise on a
+  //   shaped variable, or `coords` / `reduce` on a scalar one.
+  ASSERTION_RANK_MISMATCH: 'assertion_rank_mismatch',
   UNIT_ERROR: 'unit_error',
   // A PROVABLE dimensional inconsistency (metres plus kilograms, log of a
   // dimensional quantity, an equation whose sides cannot agree).

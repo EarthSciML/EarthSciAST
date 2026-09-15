@@ -429,6 +429,80 @@ fn test_undefined_variable_contexts() {
     }
 }
 
+/// esm-spec §6.6.2, §6.6.3, §6.6.5: an inline test's assertion target, override
+/// keys and assertion rank are checked at validation, each fixture reporting its
+/// pinned code at its pinned pointer (tests/invalid/expected_errors.json).
+#[test]
+fn test_inline_test_static_checks() {
+    let cases = [
+        (
+            "undefined_variable_in_assertion_variable",
+            include_str!("../../../tests/invalid/undefined_variable_in_assertion_variable.esm"),
+            "undefined_variable",
+            "/models/TestModel/tests/0/assertions/0/variable",
+        ),
+        (
+            "unknown_override_key_parameter_overrides",
+            include_str!("../../../tests/invalid/unknown_override_key_parameter_overrides.esm"),
+            "unknown_override_key",
+            "/models/TestModel/tests/0/parameter_overrides/kx",
+        ),
+        (
+            "unknown_override_key_initial_conditions",
+            include_str!("../../../tests/invalid/unknown_override_key_initial_conditions.esm"),
+            "unknown_override_key",
+            "/models/TestModel/tests/0/initial_conditions/yy",
+        ),
+        (
+            "unknown_override_key_reaction_system",
+            include_str!("../../../tests/invalid/unknown_override_key_reaction_system.esm"),
+            "unknown_override_key",
+            "/reaction_systems/TestReactions/tests/0/parameter_overrides/kx",
+        ),
+        (
+            "assertion_rank_mismatch_pointwise_on_shaped",
+            include_str!("../../../tests/invalid/assertion_rank_mismatch_pointwise_on_shaped.esm"),
+            "assertion_rank_mismatch",
+            "/models/TestModel/tests/0/assertions/0",
+        ),
+        (
+            "assertion_rank_mismatch_reduce_on_scalar",
+            include_str!("../../../tests/invalid/assertion_rank_mismatch_reduce_on_scalar.esm"),
+            "assertion_rank_mismatch",
+            "/models/TestModel/tests/0/assertions/0",
+        ),
+    ];
+    for (name, fixture, code, path) in cases {
+        let esm_file = load_string(fixture)
+            .unwrap_or_else(|e| panic!("{name} must load, but load_string failed: {e}"));
+        let found: Vec<(String, String)> = validate(&esm_file)
+            .structural_errors
+            .iter()
+            .map(|e| (e.code.to_string(), e.path.clone()))
+            .collect();
+        assert_eq!(
+            found,
+            vec![(code.to_string(), path.to_string())],
+            "{name} must report exactly its pinned finding"
+        );
+    }
+}
+
+/// Every spelling the inline-test static checks must accept validates clean.
+#[test]
+fn test_inline_test_static_check_spellings_are_accepted() {
+    let esm_file = load_string(include_str!(
+        "../../../tests/valid/inline_test_static_check_spellings.esm"
+    ))
+    .expect("the spellings fixture must load");
+    let found: Vec<(String, String)> = validate(&esm_file)
+        .structural_errors
+        .iter()
+        .map(|e| (e.code.to_string(), e.path.clone()))
+        .collect();
+    assert!(found.is_empty(), "unexpected findings: {found:?}");
+}
+
 /// Test undefined system reference
 #[test]
 fn test_undefined_system() {

@@ -2635,6 +2635,97 @@
     ],
     "is_valid": false
   },
+  "undefined_variable_in_assertion_variable.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/TestModel/tests/0/assertions/0/variable",
+        "code": "undefined_variable",
+        "message": "Variable \"undefined_xyz\" referenced in assertion variable but not declared",
+        "details": {
+          "variable": "undefined_xyz"
+        }
+      }
+    ],
+    "is_valid": false
+  },
+  "unknown_override_key_parameter_overrides.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/TestModel/tests/0/parameter_overrides/kx",
+        "code": "unknown_override_key",
+        "message": "Override key \"kx\" in parameter_overrides matches no declared name",
+        "details": {
+          "key": "kx",
+          "field": "parameter_overrides"
+        }
+      }
+    ],
+    "is_valid": false
+  },
+  "unknown_override_key_initial_conditions.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/TestModel/tests/0/initial_conditions/yy",
+        "code": "unknown_override_key",
+        "message": "Override key \"yy\" in initial_conditions matches no declared name",
+        "details": {
+          "key": "yy",
+          "field": "initial_conditions"
+        }
+      }
+    ],
+    "is_valid": false
+  },
+  "unknown_override_key_reaction_system.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/reaction_systems/TestReactions/tests/0/parameter_overrides/kx",
+        "code": "unknown_override_key",
+        "message": "Override key \"kx\" in parameter_overrides matches no declared name",
+        "details": {
+          "key": "kx",
+          "field": "parameter_overrides"
+        }
+      }
+    ],
+    "is_valid": false
+  },
+  "assertion_rank_mismatch_pointwise_on_shaped.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/TestModel/tests/0/assertions/0",
+        "code": "assertion_rank_mismatch",
+        "message": "Assertion on shaped variable \"u\" selects no scalar (give coords, reduce, or an element name)",
+        "details": {
+          "variable": "u",
+          "shape": [
+            "x"
+          ]
+        }
+      }
+    ],
+    "is_valid": false
+  },
+  "assertion_rank_mismatch_reduce_on_scalar.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/TestModel/tests/0/assertions/0",
+        "code": "assertion_rank_mismatch",
+        "message": "Assertion on scalar variable \"y\" carries coords or reduce",
+        "details": {
+          "variable": "y",
+          "shape": []
+        }
+      }
+    ],
+    "is_valid": false
+  },
   "undefined_variable_in_reaction_system_assertion_reference.esm": {
     "schema_errors": [],
     "structural_errors": [

@@ -385,6 +385,10 @@ diagnostic_code_registry! {
     /// the declaration maps, so the declaration is unreachable and every reader
     /// silently receives the implicit symbol instead (§4.9.1.1).
     RESERVED_VARIABLE_NAME = "reserved_variable_name";
+    /// An inline test's override key that matches no declared name (esm-spec §6.6.2).
+    UNKNOWN_OVERRIDE_KEY = "unknown_override_key";
+    /// An assertion whose form does not match its target's declared rank (esm-spec §6.6.5).
+    ASSERTION_RANK_MISMATCH = "assertion_rank_mismatch";
     /// A provable dimensional inconsistency, promoted from a unit finding.
     UNIT_INCONSISTENCY = "unit_inconsistency";
     /// A declared unit string that denotes no real unit, promoted from a
@@ -512,6 +516,7 @@ mod error_code_tests {
             "apply_expression_template_unknown_template",
             "apply_expression_template_version_too_old",
             "array_shape_mismatch",
+            "assertion_rank_mismatch",
             "circular_dependency",
             "closed_function_arg_type",
             "closed_function_arity",
@@ -605,6 +610,7 @@ mod error_code_tests {
             "unknown_closed_function",
             "unknown_enum",
             "unknown_enum_symbol",
+            "unknown_override_key",
             "unparseable_unit",
             "unresolved_scoped_ref",
             "unresolved_subsystem_ref",

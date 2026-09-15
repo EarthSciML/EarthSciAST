@@ -451,6 +451,10 @@ function validate_structural(file::EsmFile)::Vector{StructuralError}
     # 2. Validate reference integrity
     append!(errors, validate_reference_integrity(file))
 
+    # 2b. An inline test's assertion targets, override keys and assertion ranks
+    # (esm-spec §6.6.2, §6.6.3, §6.6.5).
+    append!(errors, _validate_inline_tests(file))
+
     # 3. Validate reaction system consistency
     if file.reaction_systems !== nothing
         for (rs_name, rs) in file.reaction_systems
