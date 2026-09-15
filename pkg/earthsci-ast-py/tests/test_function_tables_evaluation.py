@@ -28,6 +28,7 @@ from conftest import CONFORMANCE_DIR
 from earthsci_ast import load_document, load_path, to_json
 from earthsci_ast.error_handling import ErrorCode
 from earthsci_ast.esm_types import ExprNode
+from earthsci_ast.flatten import flatten
 from earthsci_ast.lower_table_lookup import TableLookupError, lower_table_lookups
 from earthsci_ast.inline_tests import run_inline_tests
 from earthsci_ast.problem import esm_problem
@@ -109,6 +110,39 @@ def test_table_lookup_observed_is_readable_from_a_build():
     assert prob.flat.observed_variables  # `y` is observed, not an ODE state
     # p = 2.5 sits midway between the 2.0 and 3.0 knots.
     assert float(prob.observed_field("M.y")) == pytest.approx(25.0)
+
+
+def test_both_problem_carriers_lower_a_table_lookup():
+    """`esm_problem` takes a caller-flattened system as well as a document, and
+    `flatten` carries `function_tables` precisely so that carrier stays
+    runnable. Both carriers must lower, and agree.
+
+    `linear/` integrates the constant tendency
+    `table_lookup(sigma_O3_298, lambda_idx = 4.5)`, the midpoint of the
+    8.70e-18 and 7.90e-18 knots, so `k_O3(1)` is that value."""
+    from earthsci_ast.problem import solve
+
+    expected = 8.70e-18 + 0.5 * (7.90e-18 - 8.70e-18)
+    path = FIXTURES_ROOT / "linear" / "fixture.esm"
+    flat = flatten(load_path(path))
+    for label, carrier in (("file", load_path(path)), ("flattened", flat)):
+        prob = esm_problem(carrier, (0.0, 1.0))
+        sol = solve(prob, reltol=1e-12, abstol=1e-30)
+        assert sol["M.k_O3"][-1] == pytest.approx(expected, rel=1e-9), label
+
+    # The pass works on a copy: the caller's flattened system keeps the
+    # authored node, and the problem's own system carries none.
+    assert any(
+        isinstance(eq.rhs, ExprNode) and eq.rhs.op == "table_lookup" for eq in flat.equations
+    )
+    assert not any("table_lookup" in eq.rhs_str for eq in prob.flat.equations)
+
+
+def test_out_of_bounds_error_is_refused_on_the_flattened_carrier():
+    flat = flatten(load_path(FIXTURES_ROOT / "out_of_bounds_error" / "fixture.esm"))
+    with pytest.raises(TableLookupError) as excinfo:
+        esm_problem(flat, (0.0, 1.0))
+    assert excinfo.value.code == ErrorCode.TABLE_OUT_OF_BOUNDS_UNSUPPORTED.value
 
 
 # ---------------------------------------------------------------------------
