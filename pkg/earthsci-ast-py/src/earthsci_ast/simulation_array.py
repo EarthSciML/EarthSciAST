@@ -63,6 +63,7 @@ from .simulation_common import (
 from .sympy_bridge import SimulationError
 from .value_invention import (
     ValueInventionError,
+    _vi_detect,
     _vi_lhs_base,
     materialize_value_invention,
 )
@@ -3031,7 +3032,10 @@ def _simulate_with_numpy(
                 _fill_build_inspection(
                     inspect, flat, build, float(tspan[0]), loader_arrays=loader_arrays
                 )
-        if build.total_size == 0 and not build.has_value_invention_states:
+        if build.total_size == 0:
+            # A system whose only states were value-invention producers (dropped
+            # from the ODE at setup) is stateless in the same sense, so its
+            # observed graph is answered the same way.
             if build.ordered_observed:
                 # A CALCULATOR-shaped array document: no ODE state, but a real
                 # observed graph — the shape a recurrence definition naturally

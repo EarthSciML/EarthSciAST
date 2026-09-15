@@ -392,6 +392,11 @@ const (
 	// CodeUnsupportedOperator: evaluation reached a well-formed op for which
 	// this binding's evaluator has no rule.
 	CodeUnsupportedOperator = "unsupported_operator"
+	// CodeDerivedIndexSetUnmaterialized: an expression ranges over a
+	// `kind: "derived"` index set whose producer could not be materialized at
+	// build (esm-spec §9.6.6). Registered for the cross-binding vocabulary;
+	// this binding has no simulator, so nothing here raises it.
+	CodeDerivedIndexSetUnmaterialized = "derived_index_set_unmaterialized"
 )
 
 // --- Spec enum literal: ModelVariable.Type (esm-spec §6.3). esm 1.0.0 declares

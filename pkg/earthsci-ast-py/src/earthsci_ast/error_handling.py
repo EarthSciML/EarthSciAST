@@ -146,6 +146,10 @@ class ErrorCode(Enum):
     # a declared error semantics is a wrong answer with nothing in the result to
     # say so.
     TABLE_OUT_OF_BOUNDS_UNSUPPORTED = "table_out_of_bounds_unsupported"
+    # §9.6.6: an expression ranges over a `kind: "derived"` index set whose
+    # producer could not be materialized at build. Refused rather than contracted
+    # as an empty range, which would read as a plausible 0.
+    DERIVED_INDEX_SET_UNMATERIALIZED = "derived_index_set_unmaterialized"
 
 
 # ===========================================================================
