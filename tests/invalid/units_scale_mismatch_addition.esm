@@ -1,0 +1,46 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "UnitsScaleMismatchAddition",
+    "description": "Invalid: adds a length in metres to a length in kilometres. The operands of `+` must agree in dimension AND scale (esm-spec §4.8.3); both are lengths, but the numbers being added are in different units.",
+    "authors": [
+      "Chris Tessum with Claude"
+    ],
+    "created": "2026-09-14T00:00:00Z"
+  },
+  "models": {
+    "BadUnitsModel": {
+      "variables": {
+        "length": {
+          "type": "parameter",
+          "units": "m",
+          "default": 5.0,
+          "description": "Length in metres"
+        },
+        "length_km": {
+          "type": "parameter",
+          "units": "km",
+          "default": 2.0,
+          "description": "Length in kilometres"
+        },
+        "total_length": {
+          "type": "unknown",
+          "units": "m",
+          "description": "Invalid: metres plus kilometres with no conversion"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "total_length",
+          "rhs": {
+            "op": "+",
+            "args": [
+              "length",
+              "length_km"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1085,6 +1085,7 @@ def _validate_observed_dimensions(
             DimensionalMismatchError,
             UnitValidator,
             UnparseableUnitError,
+            exact_scale_of,
             parse_unit,
         )
 
@@ -1121,9 +1122,10 @@ def _validate_observed_dimensions(
                 continue  # its own declared unit is unparseable — already reported
 
             declared = known[vname].dimensionality
+            declared_scale = exact_scale_of(known[vname])
             path = f"/models/{model.name}/variables/{vname}"
             try:
-                computed = validator._get_expression_dimension(definition)
+                typed = validator._type(definition)
             except DimensionalMismatchError as exc:
                 # A provable inconsistency INSIDE the expression (adding metres
                 # to kilograms, a transcendental with a dimensional argument).
@@ -1140,9 +1142,31 @@ def _validate_observed_dimensions(
                 )
                 continue
 
-            if computed is None:
+            if typed is None:
                 continue  # undeterminable (§4.8.4) — skip, never assume dimensionless
+            computed = typed.dim
+            if computed == declared and typed.scale == declared_scale:
+                continue
             if computed == declared:
+                # Same dimension, different unit (esm-spec §4.8.3): the number the
+                # expression produces is not in the unit the variable declares.
+                structural_errors.append(
+                    ValidationError(
+                        path=path,
+                        message=(
+                            f"Observed variable '{vname}' is declared as '{var.units}' "
+                            f"(scale {declared_scale}) but its expression has scale "
+                            f"{typed.scale}"
+                        ),
+                        code=ErrorCode.UNIT_INCONSISTENCY.value,
+                        details={
+                            "variable": vname,
+                            "declared_units": var.units,
+                            "declared_scale": str(declared_scale),
+                            "expression_scale": str(typed.scale),
+                        },
+                    )
+                )
                 continue
 
             structural_errors.append(
