@@ -157,7 +157,7 @@ const _OOP_NO_BATCH = _OopScalarBatches(_OopScalarBatch[], Tuple{Int,_Node}[], 0
 #   pinned:    tree shape, every op, param syms, cache slot ids, loop ranges +
 #              ⊕ + 0̄, fn identity (typed-core id / boxed name / interp spec
 #              object), the forcing BUFFER identity, pow's literal exponent
-#              (so a Dual walk keeps the power rule — see `_oop_pow`)
+#              (so a Dual walk keeps the power rule)
 #   wildcard:  state slot idx, forcing offset idx, value-position literals,
 #              const/state-gather payloads AND their whole subscript subtrees
 #              (each lane resolves its own — congruence across lanes is not

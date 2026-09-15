@@ -41,7 +41,7 @@
 # scalar walk's constant. `ESS_OOP_BATCH=0` puts every entry in `rest` and this
 # file then emits nothing at all.
 #
-# ORDER. `rest` first, then the groups, exactly as `_oop_run_scalar_batches`
+# ORDER. `rest` first, then the groups, exactly as the grouping's own order
 # runs them. The reorder is sound for the reason stated at the ess-oop-batch
 # section header: entries within one surface write DISJOINT slots and never read
 # each other, so it moves only writes.
@@ -248,7 +248,7 @@ end
 
 # ---- one scalar surface ------------------------------------------------------
 #
-# `_oop_run_scalar_batches` in SSA form: the leftover singles through the
+# The batch surface in SSA form: the leftover singles through the
 # per-entry scalar walk, then each group as one whole-lane evaluation landing
 # through one write into the target slot map.
 

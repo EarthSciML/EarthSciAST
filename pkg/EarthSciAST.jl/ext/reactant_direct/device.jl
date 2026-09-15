@@ -7,9 +7,9 @@
 # WHY THIS IS A SEPARATE CONCERN FROM EMISSION. Nothing in the emitted
 # StableHLO names a device: the same module compiles on either platform, and the
 # platform is fixed by the CLIENT of the arrays fed to it. So device choice
-# lives here, on the wrapper, and reaches
-# XLA only through the `ConcreteRArray`/`ConcreteRNumber` constructors that
-# `direct_state`, `direct_params` and `direct_time` call.
+# lives here, on the wrapper, and reaches XLA only through the
+# `ConcreteRArray`/`ConcreteRNumber` constructors that `direct_state`,
+# `direct_params` and `direct_time` call.
 #
 # THE FLAT STATE IS A CONCATENATION OF PER-VARIABLE CELL BLOCKS. The tree-walk's
 # layout (src/tree_walk/build.jl, "flat state-vector cell names") is: state

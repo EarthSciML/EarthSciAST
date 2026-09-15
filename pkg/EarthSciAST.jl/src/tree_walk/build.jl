@@ -369,9 +369,8 @@ end
 #     whose defining aggregate's own output ranges are not the dense `1…n` the
 #     buffer layout addresses;
 #   * every array observed at all with `ESS_ARRAY_OBS_INLINE=1`, which restores
-#     the pre-change build exactly. (The `:oop` emitter used to be excluded here
-#     too; it now materializes on the same terms as `:inplace` — see the
-#     `mat_array_vars` note in `_build_lower_and_classify`.)
+#     the pre-change build exactly. Both build forms materialize on the same
+#     terms — see the `mat_array_vars` note in `_build_lower_and_classify`.
 #
 # GHOST CELLS. A materialized observed is a first-class array field of its
 # declared shape, so a gather OUTSIDE that shape reads the ghost literal 0.0 —
@@ -2455,15 +2454,12 @@ function _build_lower_and_classify(model::Model;
     # observed.
     #
     # BOTH EMITTERS. This was `:inplace`-only, on the reasoning that the `:oop`
-    # emitter builds its own `du` and had no buffer to fill. That made inlining
-    # MANDATORY under `:oop`, and inlining is superlinear: a reader spliced with
-    # a reduction body pays the whole body per output cell. On a real chemistry
-    # model that is the difference between a build that fits in memory and one
-    # that exhausts the host, so the traced build was not merely slower, it was
-    # impossible. `_make_rhs_oop` now fills the same
-    # observed block through the `_oop_du_zeros`/`_oop_store` seam that already
-    # exists for exactly this reason (a backend may implement the writes
-    # functionally on an immutable traced value).
+    # out-of-place build had no buffer to fill. That made inlining MANDATORY
+    # there, and inlining is superlinear: a reader spliced with a reduction body
+    # pays the whole body per output cell. On a real chemistry model that is the
+    # difference between a build that fits in memory and one that exhausts the
+    # host, so a compiled build was not merely slower, it was impossible. Both
+    # forms now carry the same materialized-observed fill levels.
     mat_array_vars = _collect_materialized_array_obs(model, equations,
                                                      array_inline_vars, discrete_vars)
 
@@ -3041,8 +3037,8 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # Collapse per-cell-fragmented same-structure kernels into lane-batched
     # class kernels — value-exact (bit-identical output on every runner), and on a
     # class-fragmented model an order-of-magnitude reduction in kernel count. For
-    # the `:oop` emitter it is the difference between an XLA trace that finishes
-    # and one that does not. MUST run here, before the xcse
+    # a compiled backend it is the difference between a program that compiles and
+    # one that does not. MUST run here, before the xcse
     # gate below: xcse rewrites kernel invariant-tier defs into SCALAR-cache
     # reads (`_NK_CACHED` payloads that are no kernel's scratch), which the
     # merge signature/clone does not model — merge first, then xcse runs over
@@ -3073,8 +3069,8 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # A lane-invariant fn/interp subtree appearing in several array kernels'
     # invariant tiers (and possibly in scalar equations too) collapses to ONE
     # shared scalar prelude slot; each kernel's inv def becomes a bare cache
-    # read. `:inplace` only — the `:oop` emitter fills its own per-call prelude
-    # vector, never the `_CSECache` the kernel-side reads consult. Runs BEFORE
+    # read. `:inplace` only — a compiled backend emits the prelude itself and
+    # never consults the `_CSECache` the kernel-side reads do. Runs BEFORE
     # the percell append (the ESS_STENCIL_DISABLE reference trees stay exactly
     # the `_compile` output) and BEFORE the cadence split (a hoisted
     # parameter-only def still joins the const tier). ESS_XCSE_DISABLE=1
@@ -3112,10 +3108,11 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # ---- Default tspan ----
     tspan_default = _pick_tspan(tspan, model)
 
-    # ---- Closure ----
-    # Two emitters over the SAME compiled IR (tree_walk/oop.jl explains why both
-    # exist): `:inplace` is the zero-alloc Float64 production RHS; `:oop` is the
-    # eltype-generic `f(u, p, t) → du` that ForwardDiff/Enzyme can differentiate.
+    # ---- The RHS slot ----
+    # Two products of the SAME compiled IR (tree_walk/oop.jl explains why both
+    # exist): `:inplace` is the zero-alloc, eltype-generic Float64 evaluator
+    # `f!(du, u, p, t)`; `:oop` is the compiled IR itself, for a compiled
+    # backend to lower. `:oop` does not evaluate on the host.
     f! = if form === :inplace
         # The factored array-observed fills wrap the state RHS: `f!` copies `u`
         # into the extended value vector, fills every observed buffer in
@@ -3337,11 +3334,10 @@ function _build_evaluator_impl_inner(model::Model;
                          # `parameter_classes(prep)` needs no sixth return value
                          # — the same reasoning as `param_map`.
                          _param_classes::Union{Nothing,AbstractDict}=nothing,
-                         # Which RHS to emit from the compiled IR (tree_walk/oop.jl):
-                         # `:inplace` → the zero-alloc Float64 `f!(du, u, p, t)`;
-                         # `:oop` → the eltype-generic `f(u, p, t) → du` that
-                         # ForwardDiff/Enzyme can differentiate. Same IR, same
-                         # evaluation order, so a Float64 `:oop` run is bit-identical.
+                         # What to return in the RHS slot (tree_walk/oop.jl):
+                         # `:inplace` → the zero-alloc, eltype-generic evaluator
+                         # `f!(du, u, p, t)`; `:oop` → the compiled IR a compiled
+                         # backend lowers, which does not evaluate on the host.
                          form::Symbol=:inplace,
                          # Surviving `apply_expression_template` registry for the
                          # selected model (esm-spec §9.6.4 Option B; name → raw
@@ -3740,8 +3736,8 @@ end
 #   axis would need a term at the last node, which does not exist.
 #
 #   The last output node is then left UNCOVERED by the term build and untouched
-#   by the term kernels. That is safe by inspection of `_scan_lanes!` /
-#   `_scan_lanes_oop` (scan.jl): the strict fold WRITES `du[s] = acc` at every
+#   by the term kernels. That is safe by inspection of `_scan_lanes!`
+#   (scan.jl): the strict fold WRITES `du[s] = acc` at every
 #   cell and only reads the slot into a `term` it accumulates into an `acc` that
 #   the loop then discards — so whatever the slot held on entry (0̄ from `du`
 #   zeroing, or a stale observed-buffer value) cannot reach an output. The fold

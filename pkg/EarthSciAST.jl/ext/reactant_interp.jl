@@ -17,7 +17,7 @@
 # Both are O(1) ops in the TABLE, so the emitted program stops depending on the
 # table size at all.
 #
-# BIT-IDENTITY, which is the acceptance bar (test/tree_walk_oop_test.jl pins the
+# BIT-IDENTITY, which is the acceptance bar (test/interp_lanes_test.jl pins the
 # lane forms against the scalar `_interp_*_core` kernels over dense query sweeps
 # including both clamps and NaN):
 #

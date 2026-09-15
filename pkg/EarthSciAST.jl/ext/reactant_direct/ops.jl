@@ -119,7 +119,7 @@ function _de_reduce_terms(ctx::_DECtx, op::Symbol, zbar::Float64,
 end
 
 # The SEEDLESS left fold an n-ary operator node takes: `((c1 ⊕ c2) ⊕ c3)…`,
-# the interpreter's `_scalar_op` association order, and never a reduce — an
+# the interpreter's association order (`_eval_node_op`), and never a reduce — an
 # operator node has no 0̄ to seed a monoid with, and seeding `+` with `0.0`
 # would turn a sum of `-0.0`s into `0.0`.
 function _de_chain(ctx::_DECtx, f::F, c::Vector{_DEVal})::_DEVal where {F}
@@ -148,8 +148,9 @@ end
 
 # ---- the op ladder -----------------------------------------------------------
 #
-# Left-folds n-ary `+`/`*` exactly as the interpreter's `_scalar_op` does, so every
-# intermediate has broadcast's shape and the interpreter's association order.
+# Left-folds n-ary `+`/`*` in the interpreter's association order
+# (`_eval_node_op`), so every intermediate has broadcast's shape and the same
+# grouping.
 #
 # TWO PLACES THIS IS NOT BIT-IDENTICAL TO THE INTERPRETER, both accepted inside
 # the `compiled_rhs` tolerance classes and both recorded here rather than in a
@@ -244,7 +245,8 @@ function _de_op(ctx::_DECtx, op::Symbol, c::Vector{_DEVal})::_DEVal
     _de_refuse("the operator `$op`",
         "it is not in the direct-emission op ladder. Add it to `_de_op` " *
         "(ext/reactant_direct/ops.jl) with the StableHLO op that matches the " *
-        "interpreter's `_scalar_op` arm, or lower it away before the backend.")
+        "interpreter's arm for it (`_eval_node_op`), or lower it away before " *
+        "the backend.")
 end
 
 # ---- host const-fold ---------------------------------------------------------
@@ -257,9 +259,9 @@ end
 # to `range` host multiply-adds and, after interning, a handful of constants.
 #
 # It is also strictly MORE faithful than emitting the ops would be: the value is
-# computed in Float64 by the same `_scalar_op` the interpreter calls, so a folded
-# subtree agrees with the interpreter bit for bit, where `stablehlo.power` and
-# friends would not.
+# computed in Float64 by `_scalar_op`, whose arm order is pinned against
+# `_eval_node_op` by test/scalar_ops_test.jl, so a folded subtree agrees with the
+# interpreter bit for bit, where `stablehlo.power` and friends would not.
 #
 # `_de_static` is memoized per node (structural, so a loop body asked once per
 # `k` pays the walk once); `_de_hostval` is re-evaluated per `k`, because a
@@ -342,8 +344,9 @@ function _de_hostval(ctx::_DECtx, nd::_E._Node)::Float64
         end
         return s
     end
-    # `_NK_OP`: the interpreter's own ladder, at Float64, so a folded subtree is
-    # bit-identical to what `f!` computes for it.
+    # `_NK_OP`: the shared ladder, at Float64. Its arms are pinned against the
+    # interpreter's (`_eval_node_op`) by test/scalar_ops_test.jl, so a folded
+    # subtree is bit-identical to what `f!` computes for it.
     c = Any[_de_hostval(ctx, ch) for ch in nd.children]
     return Float64(_E._scalar_op(nd.op, c, Float64))
 end

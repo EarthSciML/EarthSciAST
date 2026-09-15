@@ -140,7 +140,8 @@ _de_akindname(k::UInt8) = get(_DE_AKINDS, k, "access descriptor kind $(Int(k))")
 
 # ---- template sub-kernels ----------------------------------------------------
 #
-# The emission twin of `_OopSubRT`: the parent plan's FLAT transitive sub list
+# The per-call runtime for a kernel's template SUB-KERNELS: the parent plan's
+# FLAT transitive sub list
 # with its aligned lane plans, and one CSE tier per sub. The invariant tier is
 # emitted once per kernel by the prologue (as the interpreter's runner fills it
 # once per call); the per-cell tier is re-emitted at each subcall site, which is
@@ -169,7 +170,7 @@ end
 
 # ---- CSR reduces -------------------------------------------------------------
 #
-# `_oop_reduce_fold` in SSA form. The body has already been emitted ONCE over the
+# The CSR segment fold, in SSA form. The body has already been emitted ONCE over the
 # flat E-lane buffer; each cell's answer is `zerobar ⊕ body[seg[c]] ⊕ … ` in
 # ascending (CSR) order. Emitted as `W = max segment width` whole-lane steps:
 # step `m` reads each cell's `m`-th entry (a read of the body value at
@@ -307,7 +308,8 @@ end
 
 # One vectorized kernel: the sub-kernels' invariant tiers, then this kernel's
 # invariant and per-cell tiers, the spine, and the scatter into the target slot
-# map. Mirrors `_oop_run_acc_vec` step for step.
+# map. One kernel: sub-kernel invariant tiers, then this kernel's own CSE tiers
+# in slot order, the spine over whole lanes, and ONE write.
 function _de_run_kernel!(ctx::_DECtx, out::_DEMap, K::_E._AccKernel,
                          plan::_E._OopAccPlan)
     plan.vectorizable ||
@@ -419,7 +421,7 @@ end
 function _de_emit!(ctx::_DECtx, rhs)::_DEVal
     n_states = ctx.n_states
     # ess-array-contraction: whole-array einsums are a SECTION of the interpreted
-    # RHS (`_apply_array_contractions_oop`) that this walk has no arm for. Left
+    # RHS (`_apply_array_contraction!`) that this walk has no arm for. Left
     # alone their output slots would just assemble to zero — a silent wrong
     # answer, which is the one thing this emitter does not do. The list is empty
     # on every model whose reductions stay under the tier's floor, which is every
@@ -430,7 +432,7 @@ function _de_emit!(ctx::_DECtx, rhs)::_DEVal
         nac == 0 ||
             _de_refuse("$nac whole-array contraction(s)",
                 "the array-contraction tier (ess-array-contraction, " *
-                "`_apply_array_contractions_oop`) is a section of the " *
+                "`_apply_array_contraction!`) is a section of the " *
                 "interpreted RHS with no arm in this walk. Emitting the rest " *
                 "would leave its output slots zero, so the emission stops here.")
     end

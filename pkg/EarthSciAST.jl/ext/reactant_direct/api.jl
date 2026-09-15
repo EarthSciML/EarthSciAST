@@ -38,9 +38,9 @@ end
 """
     DirectRHSBuffers
 
-The explicit-buffers form of [`DirectRHS`](@ref) — `d(u, p, t, buffers)` — the
-explicit-buffers form. `buffers` is a container aligned with
-`forcing_buffers(f)` (same length, same name-sorted order); pass device arrays
+The explicit-buffers form of [`DirectRHS`](@ref): `d(u, p, t, buffers)`, where
+`buffers` is a container aligned with `forcing_buffers(f)` (same length, same
+name-sorted order); pass device arrays
 (`ConcreteRArray`s) and refresh them in place with `copyto!` / `sync_forcing!`
 at each cadence boundary. Because they arrive through the argument list they are
 real program INPUTS, so a refresh is seen by the already-compiled program and

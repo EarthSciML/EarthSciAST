@@ -1,5 +1,5 @@
 # The count-locate seam under a TRACE, without a reduction
-# (ext/EarthSciASTReactantExt.jl, `_knot_count`).
+# (ext/reactant_interp.jl, `_knot_count`).
 #
 # WHAT THIS PINS. The locate seam was emitting one `stablehlo.reduce` per interp
 # call site — ~32 per ReSEACT chemistry RHS evaluation, ~103 per ROS23 step — and
@@ -7,7 +7,7 @@
 # ReSEACT/CONUS, bit-exact, for +2.7% emitted ops. (An earlier rationale credited
 # that to reduces being hard fusion boundaries, priced by a toy at ~6x; that
 # model was FALSIFIED — see the `count-locate` header in
-# ext/EarthSciASTReactantExt.jl, which records the retraction.) The seam now
+# ext/reactant_interp.jl, which records the retraction.) The seam now
 # computes the count elementwise in three tiers (LADDER for a small axis, AFFINE
 # guess + two-gather correction for a big uniform one, and the old REDUCE as the
 # documented fallback), selectable with `ESS_RX_LOCATE` for A/B measurement.
@@ -300,7 +300,7 @@ const _LC_AXES = Dict{String,Vector{Float64}}(
         qs = _lc_normal(_lc_queries(ax))
         ref = Float64[ESM._interp_linear_core(tbl, ax, q) for q in qs]
         got = _lc_withmode("auto", () -> begin
-            f = x -> ESM._interp_linear_lanes(h, x, RX.TracedRNumber{Float64})
+            f = x -> ESM._interp_linear_lanes(h, x)
             qr = RX.ConcreteRArray(qs)
             Array((RX.@compile sync = true f(qr))(qr))
         end)
@@ -310,7 +310,7 @@ const _LC_AXES = Dict{String,Vector{Float64}}(
         # ON a knot the answer is the table entry EXACTLY (no blend runs), which
         # is the case a wrong locate silently turns into `t_{k-1} + 1·Δ`.
         onknot = _lc_withmode("auto", () -> begin
-            f = x -> ESM._interp_linear_lanes(h, x, RX.TracedRNumber{Float64})
+            f = x -> ESM._interp_linear_lanes(h, x)
             qr = RX.ConcreteRArray(copy(ax))
             Array((RX.@compile sync = true f(qr))(qr))
         end)
@@ -323,7 +323,7 @@ const _LC_AXES = Dict{String,Vector{Float64}}(
         sref = Float64[ESM._interp_searchsorted_core("interp.searchsorted", q, xs)
                        for q in sq]
         sgot = _lc_withmode("auto", () -> begin
-            f = x -> ESM._interp_searchsorted_lanes(s, x, RX.TracedRNumber{Float64})
+            f = x -> ESM._interp_searchsorted_lanes(s, x)
             qr = RX.ConcreteRArray(sq)
             Array((RX.@compile sync = true f(qr))(qr))
         end)

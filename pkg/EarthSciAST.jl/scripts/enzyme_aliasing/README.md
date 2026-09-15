@@ -38,7 +38,7 @@ at N=16, fails identically:
 ```
 Enzyme.Compiler.IllegalTypeAnalysisException
   Failure within method: _oop_eval(::_Node, ::Vector{Float64}, ::@NamedTuple{...},
-                                  ::Float64, ::Vector{Float64}, ::_Forcing{...})
+                                  ::Float64, ::Vector{Float64}, ::_OopForcing{...})
   @ src/tree_walk/oop.jl:822
   Caused by: getproperty @ Base_compiler.jl:54
              _oop_eval @ src/tree_walk/oop.jl:846
@@ -261,10 +261,10 @@ argument for each, not blanket.
 
 ### Size estimate for the cheap option
 
-~10-20 `EnzymeRules.inactive` declarations plus arm extraction across the three
-walkers (`_oop_eval` / `_oop_eval_batch` in `oop.jl`, `_eval_node` in `compile.jl`,
-`_eval_acc` in `access_kernel.jl`), **plus** a restructure of `_oop_fn`/`_eval_closed_fn`
-to drop the `Vector{Any}`. Call it 2-4 days. It does not remove the flag on its own
+~10-20 `EnzymeRules.inactive` declarations plus arm extraction across the two
+walkers that remain (`_eval_node` in `compile.jl`, `_eval_acc` in
+`access_kernel.jl`), **plus** a restructure of `_eval_closed_fn` to drop the
+`Vector{Any}`. Call it 2-4 days. It does not remove the flag on its own
 unless blocker 3 is also solved, and it adds a permanent, invisible correctness
 obligation (every `inactive` is an unchecked assertion). **Recommendation: do not do
 this** unless CPU reverse mode becomes load-bearing. It buys removing a wart at the
@@ -290,9 +290,7 @@ lowering that exists to the tiers it does not yet cover". Those are:
 
 - **The scalar tier of `f!`**: the CSE prelude (three cadence tiers) and `rhs_list`,
   both still walked by the `_eval_node` interpreter. This is what the 0-D model hits.
-- **The `:oop` emitter entirely**: `_oop_eval`, `_oop_eval_batch`, the oop acc walkers.
-  `oop.jl` (2,678 lines) + `oop_merge.jl` (1,077) are interpreters end to end.
-- **The boxed closed-function path**, in both, which no lowering fixes by itself —
+- **The boxed closed-function path**, which no lowering fixes by itself —
   it needs a typed calling convention (a tuple, or a per-name generated dispatch)
   rather than `Vector{Any}` + `String`.
 

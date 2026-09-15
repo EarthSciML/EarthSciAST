@@ -1,13 +1,13 @@
 # ========================================================================
-# Scalar operator ladder, gather-subscript resolution, forcing arguments
+# Scalar operator ladder and gather-subscript resolution
 # ========================================================================
 #
-# The pieces of the compiled scalar IR that are shared by every consumer of a
-# build: the operator ladder that turns an `_NK_OP` node into a value, the
-# resolver that turns a gather subscript into a build-time integer, and the
-# per-call container that carries the live forcing buffers through the argument
-# list. A compiled backend folds constant subtrees through the SAME ladder at
-# Float64, so a folded subtree is bit-identical to what `f!` computes.
+# The two pieces of the compiled scalar IR that every consumer of a build shares:
+# the ladder that turns an `_NK_OP` node into a value, and the resolver that
+# turns a gather subscript into a build-time integer. A compiled backend folds
+# constant subtrees through the ladder at Float64, in the arm order
+# test/scalar_ops_test.jl pins against the scalar walker, so a folded subtree
+# matches what `f!` computes for it.
 
 # ---- The shared op ladder ---------------------------------------------------
 #
@@ -54,9 +54,9 @@ end
 # The fixed-2-ary elementwise arms (`/`, `^`, `pow`, `atan2`), GENERATED from
 # `_BINARY_ELEMENTWISE_OPS`. NB the `^` arm here is only the FALLBACK for a
 # malformed arity: a well-formed 2-ary `^`/`pow` is intercepted upstream by
-# the walkers' literal-exponent arms and never reaches the shared ladder: a
-# literal exponent must stay a host `Float64` so a Dual walk keeps the power
-# rule.
+# the walkers' literal-exponent arms (`_eval_node_op`, `_eval_acc_op`) and never
+# reaches the shared ladder: a literal exponent must stay a host `Float64` so a
+# Dual walk keeps the power rule.
 let arms = :(return nothing)
     for row in reverse(_BINARY_ELEMENTWISE_OPS)
         arms = Core.Expr(:if, :(op === $(QuoteNode(row.sym))),

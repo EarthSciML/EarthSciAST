@@ -28,7 +28,7 @@ const _DESlot = Union{Nothing,Tuple{_DEVal,Int}}
 # The plan exists because a `nothing` entry means two different things, and only
 # one of them is a bug. Both readings start from the same fact: the interpreter
 # runs THESE units in THIS order over an extended vector that starts at zero
-# (`_oop_du_zeros` allocates it fresh per call), so at any point in the walk an
+# (the interpreter allocates it fresh per call), so at any point in the walk an
 # unwritten slot holds 0.0 on host.
 #
 #   A ZERO THIS SECTION IS ENTITLED TO — nothing writes the slot, or the only
@@ -101,10 +101,12 @@ mutable struct _DECtx
     ue::_DEMap                              # extended-state slot map (1..n_total)
     consts::Dict{UInt64,_DEVal}             # scalar literal bit pattern -> value
     arrconsts::Dict{Vector{Float64},_DEVal} # array constant content -> value
-    # Live forcing buffers, threaded exactly as the interpreter's `_Forcing`
-    # threads them: `hostkeys` are the build's aliased host arrays in the
-    # container's order, `bufs` is THIS call's container (traced program inputs),
-    # `bufvals` memoizes the emitted rank-1 view of each.
+    # Live forcing buffers. `hostkeys` are the build's aliased host arrays in the
+    # container's (name-sorted) order, `bufs` is THIS call's container of traced
+    # program inputs aligned with it, and `bufvals` memoizes the emitted rank-1
+    # view of each. A descriptor names its buffer by host array IDENTITY, so a
+    # read resolves by scanning `hostkeys` for it and taking the same position
+    # out of `bufs`.
     bufs::Any
     hostkeys::Vector{Vector{Float64}}
     bufvals::Vector{Union{Nothing,_DEVal}}
@@ -362,12 +364,12 @@ const _DESlotSrc = Union{Nothing,_DEVal}
 # THE RULE THIS REPLACES DECIDED SOMETHING ELSE. It asked whether the read had
 # more runs than HALF its positions — an average run shorter than two — and it
 # additionally required every run to lie in ONE producer and the read to contain
-# no structural zero. Measured on ReSEACT's transport half at 288 cells, all
-# three clauses missed: the PPM stencil's reads average two to four positions
-# per run (so `> n ÷ 2` is false), and of the 506 reads that reach a
-# concatenate, 241 are single-producer and 255 span TWO. The step therefore
-# arrived at XLA as 55,117 slices, and the reverse-mode program as 1.82 MILLION.
-# See reseact.esm's COMPILE_COST.md for the measurement.
+# no structural zero. On a real transport stencil all three clauses miss: the
+# reads average two to four positions per run (so `> n ÷ 2` is false), and most
+# of the reads that reach a concatenate span more than one producer. The step
+# then arrives at XLA as slices alone, and the reverse-mode program with them
+# multiplied by the tape. See reseact.esm's COMPILE_COST.md for the
+# measurement.
 #
 # BOTH SIDES OF THE TRADE WERE MEASURED, on ReSEACT's two halves at 288 cells,
 # and the gather wins both, which is why it is the default. The transport half's
@@ -630,9 +632,8 @@ _de_assemble(ctx::_DECtx, M::_DEMap, n::Int)::_DEVal =
 # NaN.
 #
 # So the emitter reads buffers through the ARGUMENT LIST: an identity (`===`)
-# scan over the
-# build's host arrays, in the container's own order, swapping in this call's
-# argument entry. O(#forcing VARIABLES) per read, never O(#cells).
+# scan over the build's host arrays, in the container's own order, swapping in
+# this call's argument entry. O(#forcing VARIABLES) per read, never O(#cells).
 function _de_buffer(ctx::_DECtx, arr::Vector{Float64})::_DEVal
     ks = ctx.hostkeys
     for j in eachindex(ks)

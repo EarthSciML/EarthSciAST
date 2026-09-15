@@ -375,10 +375,10 @@ end
 # branch and no table — the exact inverse of the Fliegel–van Flandern formula
 # `_datetime_julian_day` already runs in the forward direction below. Every
 # step is `+ - * /`, `floor`, a comparison and a `select`, all of which the
-# `:oop` runners already lower (`ifelse` is a VALUE-level select — both arms
+# compiled backends already lower (`ifelse` is a VALUE-level select — both arms
 # are computed and the condition picks one — not control flow, which is
-# precisely why `interp.searchsorted` traces today; see `_oop_interp_
-# searchsorted`).
+# precisely why `interp.searchsorted` lowers today; see
+# `_interp_searchsorted_lanes`, src/tree_walk/interp_lanes.jl).
 #
 # THIS IS THE ONLY IMPLEMENTATION. It replaces the `Dates` path for EVERY
 # value type rather than sitting beside it as a traced-only twin, because two
@@ -1079,9 +1079,10 @@ end
 #     `_interp_*_core` kernel on `specs[lane]`'s own table/axis, so per-lane
 #     results are bit-identical to the unmerged kernels by construction.
 #   * `*_cols` is the knot-major transpose (`col[k][lane] == specs[lane].…[k]`)
-#     the :oop lane evaluator broadcasts over: `_oop_interp_*_lanes` runs the
-#     IDENTICAL locate/select/blend op sequence with each scalar knot replaced
-#     by its length-L lane column, so lane `l` sees exactly its own knots.
+#     the lane evaluators broadcast over: `_interp_*_lanes`
+#     (src/tree_walk/interp_lanes.jl) runs the IDENTICAL locate/select/blend op
+#     sequence with each scalar knot replaced by its length-L lane column, so
+#     lane `l` sees exactly its own knots.
 #   * `s1..off` mirror the `_AccStateTblBox` box lane addressing
 #     (lane = off + (midx₁-1)s1 + (midx₂-1)s2 + (midx₃-1)s3; the merge mints
 #     `(1,0,0,1)` with `_outs_cells`, i.e. lane == the merged cell ordinal).
