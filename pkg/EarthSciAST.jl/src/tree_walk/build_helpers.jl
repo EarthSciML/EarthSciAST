@@ -707,8 +707,9 @@ end
 # ---- Elementwise array-observed fold (WS4: readable PDE-leaf decomposition) ----
 # Fold every ARRAY-shaped observed whose (already-discretization-lowered) defining
 # equation RHS is an ELEMENTWISE expression — top-level op in
-# `_WS4_FOLDABLE_ELEMENTWISE_OPS` — into the equations that read it, in dependency
-# order, returning `(rewritten_equations, folded_names)`.
+# `_WS4_FOLDABLE_ELEMENTWISE_OPS`, or a scalar that replicates over the declared
+# shape — into the equations that read it, in dependency order, returning
+# `(rewritten_equations, folded_names)`.
 #
 # This lets a library PDE leaf be authored with readable intermediate array fields
 # (a level-set's `grad_safe = grad_mag + ε`, `U_n = (u·∇ψ)/grad_safe`,
@@ -743,10 +744,22 @@ function _fold_elementwise_array_observeds(equations::Vector{Equation}, model::M
             defs[lhs.name] = eq.rhs
         end
     end
+    # A SCALAR right-hand side — a number, or a reference to an unshaped declared
+    # variable — is the zero-operand case of the same elementwise rule: it
+    # replicates along every axis of the observed's declared shape (esm-spec
+    # §4.3.4), so it folds exactly as `rhs + 0` would. A reference to a SHAPED
+    # variable is a bare alias and stays with its own handler.
+    function is_scalar_rhs(rhs)
+        rhs isa NumExpr && return true
+        rhs isa VarExpr || return false
+        var = get(model.variables, rhs.name, nothing)
+        return var !== nothing && !_is_array_shape(var.shape)
+    end
     targets = Dict{String,ASTExpr}()
     for (name, rhs) in defs
-        if is_array_obs(name) && rhs isa OpExpr &&
-           rhs.op in _WS4_FOLDABLE_ELEMENTWISE_OPS
+        if is_array_obs(name) &&
+           ((rhs isa OpExpr && rhs.op in _WS4_FOLDABLE_ELEMENTWISE_OPS) ||
+            is_scalar_rhs(rhs))
             targets[name] = rhs
         end
     end

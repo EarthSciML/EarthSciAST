@@ -221,7 +221,7 @@ const _OP_TABLE = _OpSpec[
 
     # ── Control (`ifelse` tests its condition `!= 0`; `Pre` is the MTK
     #    previous-value marker, a pass-through on the tree-walk path) ──
-    _op("ifelse"; arity=3:3, category=:control,
+    _op("ifelse"; arity=3:3, category=:control, ws4=true,
         stencil=true, geo=true, known=true, builtin=true),
     _op("Pre";    arity=1:1, category=:control, stencil=true, known=true,
         builtin=true),
