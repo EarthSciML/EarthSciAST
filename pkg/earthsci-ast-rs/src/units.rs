@@ -174,7 +174,7 @@ impl ExactScale {
         let mut rest = n;
         let mut p = 2u64;
         while p * p <= rest {
-            while rest % p == 0 {
+            while rest.is_multiple_of(p) {
                 out.bump(ScaleFactor::Prime(p), Rational::int(1));
                 rest /= p;
             }
@@ -2825,7 +2825,7 @@ mod tests {
         assert_eq!(exact("mi"), "201168/125");
         assert_eq!(exact("hp"), "37284993579113511/50000000000000");
         assert_eq!(exact("DU"), "268670000000000000000");
-        assert_eq!(parse_unit("psi").unwrap().scale(), 6894.757_293_168_361);
+        assert_eq!(parse_unit("psi").unwrap().scale(), 6_894.757_293_168_361);
         assert_eq!(parse_unit("Torr").unwrap().scale(), 101_325.0 / 760.0);
         assert_eq!(parse_unit("degF").unwrap().scale(), 5.0 / 9.0);
     }
