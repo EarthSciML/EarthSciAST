@@ -332,6 +332,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("datetime_arithmetic_test.jl")
     include("datetime_typed_core_test.jl")     # registry-declared typed cores (ess-dtcore)
     include("closed_functions_mtk_test.jl")
+    include("const_array_index_mtk_test.jl")    # #286: a bare const array as an index base
     include("function_tables_test.jl")
     include("function_tables_lowering_test.jl")
     # …and the same lowering on the path that EVALUATES a document (#188):
