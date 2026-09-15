@@ -4590,7 +4590,11 @@ including `const_arrays`, `param_arrays`, `const_array_boundaries`,
 * `parameter_overrides::AbstractDict` — override the default
   values for specific parameters. A value is a real number, or — for a SHAPED
   parameter — INLINE ARRAY DATA, which is registered as build-time data in
-  `const_arrays` rather than as a scalar `p` slot (esm-spec §6.3 / §6.6.2). Keys may be spelled either LOCALLY
+  `const_arrays` rather than as a scalar `p` slot (esm-spec §6.3 / §6.6.2). A
+  SCALAR `default` on a shaped parameter is filled densely over the whole
+  declared grid unless `const_arrays` or `param_arrays` already supplies that
+  name, so a large data-backed parameter should be built with its data
+  supplied. Keys may be spelled either LOCALLY
   (`pert_amp`, the form esm-spec §6.6 pins for a test's
   `parameter_overrides`) or with the flattening qualification the run
   document carries (`SimpleClimate.pert_amp`); both resolve to the same
