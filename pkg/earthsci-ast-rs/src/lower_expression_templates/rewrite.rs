@@ -606,6 +606,10 @@ fn expand_eager(
     })
 }
 
+/// Decides, for an `apply_expression_template` node's object fields, whether
+/// [`expand_refs_where`] expands that reference.
+type ExpandRefPredicate<'a> = dyn Fn(&[(String, Sv)]) -> bool + 'a;
+
 /// The reference-expansion walk behind [`expand_eager`]: expand,
 /// innermost-first, every `apply_expression_template` node for which `expand`
 /// holds (asked after the node's bindings are expanded), and return every other
@@ -615,7 +619,7 @@ fn expand_refs_where(
     named: &Named,
     scope: &str,
     memo: &mut PtrMemo<Sv>,
-    expand: &dyn Fn(&[(String, Sv)]) -> bool,
+    expand: &ExpandRefPredicate,
 ) -> Result<Sv, ExpressionTemplateError> {
     match &**node {
         SNode::Obj(fields) => {
