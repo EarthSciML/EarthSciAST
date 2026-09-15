@@ -3450,20 +3450,24 @@ pub(super) fn unmaterialized_derived_error(
         .map(|(name, _)| name.as_str())
         .collect();
     names.sort_unstable();
-    let set = names.first().copied().unwrap_or("<unnamed>");
+    // The standalone evaluator entry has no index-set registry to name the set from.
+    let subject = match names.first() {
+        Some(set) => format!("derived index set '{set}' (from_faq '{from_faq}')"),
+        None => format!("the derived index set produced by '{from_faq}'"),
+    };
     match failure {
         Some(reason)
             if reason.contains(crate::diagnostic::codes::RELATIONAL_NODE_IN_CONTINUOUS) =>
         {
             CompileError::ValueInventionRefused {
                 code: crate::diagnostic::codes::RELATIONAL_NODE_IN_CONTINUOUS,
-                reason: format!("derived index set '{set}' (from_faq '{from_faq}'): {reason}"),
+                reason: format!("{subject}: {reason}"),
             }
         }
         _ => CompileError::ValueInventionRefused {
             code: crate::diagnostic::codes::DERIVED_INDEX_SET_UNMATERIALIZED,
             reason: format!(
-                "derived index set '{set}' (from_faq '{from_faq}') is not materialized: {}",
+                "{subject} is not materialized: {}",
                 failure.unwrap_or("no geometry or value-invention producer supplied its extent")
             ),
         },
