@@ -38,6 +38,8 @@ use serde_json::Value;
 
 use crate::compile_error::CompileError;
 use crate::diagnostic::codes;
+use crate::flatten::FlattenedSystem;
+use crate::substitute::{map_exprs_in_continuous_event, map_exprs_in_discrete_event};
 use crate::types::{
     AssertionReference, EsmFile, Expr, ExpressionNode, FunctionTable, FunctionTableAxis, Model,
 };
@@ -153,6 +155,75 @@ pub(crate) fn lowered_copy(file: &EsmFile) -> Option<EsmFile> {
     }
     let mut owned = file.clone();
     lower_table_lookups(&mut owned).ok().map(|()| owned)
+}
+
+/// `flat` with every `table_lookup` lowered, or `None` when it declares no
+/// `function_tables`.
+///
+/// The [`lower_table_lookups`] pass for the other carrier
+/// [`crate::problem::esm_problem`] accepts: a system the caller flattened for
+/// themselves, which carries `function_tables` for exactly this reason. It
+/// visits the positions a flattened system has in place of a model's: the
+/// equations, both event lists, the deferred `field_ics`, and each variable's
+/// `update` expressions. The §6.3.1 subset maps hold their own copies of the
+/// variables they classify, so they are lowered alongside their parents.
+///
+/// Unlike [`lowered_copy`], a failure is returned: `esm_problem` is the only
+/// caller, and it has no later stage that would refuse the document by name.
+pub(crate) fn lowered_flattened_copy(
+    flat: &FlattenedSystem,
+) -> Result<Option<FlattenedSystem>, CompileError> {
+    let tables = &flat.function_tables;
+    if tables.is_empty() {
+        return Ok(None);
+    }
+
+    let mut first_err: Option<CompileError> = None;
+    let mut lower = |expr: &Expr| -> Expr {
+        match lower_expr(expr, tables) {
+            Ok(lowered) => lowered,
+            Err(e) => {
+                first_err.get_or_insert(e);
+                expr.clone()
+            }
+        }
+    };
+
+    let mut owned = flat.clone();
+    for eq in &mut owned.equations {
+        eq.lhs = lower(&eq.lhs);
+        eq.rhs = lower(&eq.rhs);
+    }
+    owned.continuous_events = flat
+        .continuous_events
+        .iter()
+        .map(|event| map_exprs_in_continuous_event(event, &mut lower))
+        .collect();
+    owned.discrete_events = flat
+        .discrete_events
+        .iter()
+        .map(|event| map_exprs_in_discrete_event(event, &mut lower))
+        .collect();
+    for (_, rhs) in &mut owned.field_ics {
+        *rhs = lower(rhs);
+    }
+    for variables in [
+        &mut owned.state_variables,
+        &mut owned.parameters,
+        &mut owned.observed_variables,
+        &mut owned.algebraic_variables,
+        &mut owned.brownian_parameters,
+        &mut owned.discrete_parameters,
+    ] {
+        for var in variables.values_mut() {
+            var.for_each_expression_mut(&mut |expr| *expr = lower(expr));
+        }
+    }
+
+    match first_err {
+        Some(e) => Err(e),
+        None => Ok(Some(owned)),
+    }
 }
 
 /// Whether `expr` carries a `table_lookup` anywhere. The guard that keeps a
