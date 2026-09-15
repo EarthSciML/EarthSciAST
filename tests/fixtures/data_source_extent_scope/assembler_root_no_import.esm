@@ -1,0 +1,55 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "AssemblerRootNoImport",
+    "description": "Declares the metaparameter the mounted leaf's axis is sized by. Mounted as a subsystem, so every binding can run it."
+  },
+  "metaparameters": {
+    "N_REC": {
+      "type": "integer",
+      "default": 3,
+      "description": "Assembler-scoped record count."
+    }
+  },
+  "data_sources": {
+    "EGU_Emis": {
+      "kind": "points",
+      "source": {
+        "url_template": "file://./records.csv"
+      },
+      "extent": {
+        "metaparameter": "N_REC"
+      },
+      "metadata": {
+        "esio_format": "ff10"
+      }
+    }
+  },
+  "models": {
+    "Host": {
+      "system_kind": "nonlinear",
+      "variables": {
+        "z": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Host-local observed."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "z",
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": 0.0
+          }
+        }
+      ],
+      "subsystems": {
+        "Ingest": {
+          "ref": "./assembler_axis_leaf_no_import.esm"
+        }
+      }
+    }
+  }
+}

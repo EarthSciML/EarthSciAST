@@ -300,6 +300,11 @@ diagnostic_code_registry! {
     /// rather than merge the leaf under its pre-rename axis names.
     SUBSYSTEM_INDEX_SET_RENAME_UNSUPPORTED_MOUNT_FORM =
         "subsystem_index_set_rename_unsupported_mount_form";
+    /// A §4.7 `{ref}` mount at a form this binding does not implement — a
+    /// top-level `reaction_systems.<k>` `{ref}` (§4.7 "Two mount forms, one
+    /// mechanism"). Refused at the entry rather than failing later on an
+    /// incidental typed-parse error.
+    MOUNT_FORM_UNSUPPORTED = "mount_form_unsupported";
     /// A `subsystem` ref pointing at a COUPLING library, which exports roles
     /// rather than a mountable system.
     SUBSYSTEM_REF_IS_COUPLING_LIBRARY = "subsystem_ref_is_coupling_library";
@@ -397,6 +402,10 @@ diagnostic_code_registry! {
     UNDEFINED_SYSTEM = "undefined_system";
     /// A reference to a variable the component does not declare.
     UNDEFINED_VARIABLE = "undefined_variable";
+    /// An evaluable-core op (esm-spec §4.2) with no evaluation rule in the
+    /// evaluator a model was built for (esm-spec §9.6.6). Carried by
+    /// `CompileError::UnevaluableOperatorError`.
+    UNEVALUABLE_OPERATOR = "unevaluable_operator";
     /// A scoped reference (`A.b`) that resolves to nothing.
     UNRESOLVED_SCOPED_REF = "unresolved_scoped_ref";
 
@@ -545,6 +554,7 @@ mod error_code_tests {
             "metaparameter_name_conflict",
             "metaparameter_type_error",
             "metaparameter_unbound",
+            "mount_form_unsupported",
             "null_reaction",
             "observed_cycle",
             "operator_variable_missing",
@@ -594,6 +604,7 @@ mod error_code_tests {
             "undefined_species",
             "undefined_system",
             "undefined_variable",
+            "unevaluable_operator",
             "unit_inconsistency",
             "unit_parse_error",
             "unknown_closed_function",

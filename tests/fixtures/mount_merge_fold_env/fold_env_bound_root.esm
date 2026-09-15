@@ -1,0 +1,16 @@
+{
+ "esm": "1.0.0",
+ "metadata": {
+  "name": "fold_env_bound_root",
+  "description": "The same shape as fold_env_root.esm, but this edge BINDS n_lev = 7. esm-spec 9.7.6 site 3 says an explicit edge binding closes the referenced document and wins over its own default, so the leaf's closed environment is 7 and the axis its nested mount contributes must fold to 7 -- not to the leaf's own default 4, and not to this assembler's unrelated 9. An axis the leaf declares ITSELF already folds to 7 through the edge close, so anything else makes one resolved document disagree with itself.",
+  "license": "MIT"
+ },
+ "metaparameters": {"n_lev": {"type": "integer", "default": 9, "description": "this assembler's own unrelated count"}},
+ "models": {
+  "Root": {
+   "subsystems": {"L": {"ref": "./fold_env_leaf.esm", "bindings": {"n_lev": 7}}},
+   "variables": {"z": {"type": "unknown", "units": "1", "description": "own state"}},
+   "equations": [{"lhs": {"op": "D", "args": ["z"], "wrt": "t"}, "rhs": 0.0}]
+  }
+ }
+}

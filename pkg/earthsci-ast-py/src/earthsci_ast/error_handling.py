@@ -240,6 +240,11 @@ SUBSYSTEM_INDEX_SET_RENAME_UNKNOWN_NAME = "subsystem_index_set_rename_unknown_na
 SUBSYSTEM_INDEX_SET_RENAME_UNSUPPORTED_MOUNT_FORM = (
     "subsystem_index_set_rename_unsupported_mount_form"
 )
+# A §4.7 `{ref}` mount at a form this binding does not implement — a top-level
+# `reaction_systems.<k>` `{ref}` (esm-spec §4.7 "Two mount forms, one
+# mechanism"). Refused at `/reaction_systems/<k>` rather than coerced into an
+# empty reaction system.
+MOUNT_FORM_UNSUPPORTED = "mount_form_unsupported"
 
 # Scope-injection codes (esm-spec §9.7.10). `template_inject_target_is_loader`
 # is RETIRED in 1.0.0: a data source is not a component, so it can no longer be
@@ -327,6 +332,18 @@ RECURRENCE_UNSUPPORTED_FORM = "recurrence_unsupported_form"
 #: in `validate` with the names on the cycle. The §4.3.1.1 recurrence SELF-EDGE
 #: is not one of these edges (see `RECURRENCE_NOT_WELLFOUNDED` above).
 OBSERVED_CYCLE = "observed_cycle"
+
+
+# ===========================================================================
+# Evaluable-core op with no evaluation rule (esm-spec §9.6.6), raised as
+# ``earthsci_ast.numpy_interpreter.UnevaluableOperatorError``.
+# ===========================================================================
+
+#: An op that IS in the §4.2 evaluable core reached an evaluator with no rule for
+#: it (a value-invention or load-time-lowered op an earlier stage should have
+#: eliminated). The complement of ``unlowered_operator``; refused before
+#: evaluation, naming the op.
+UNEVALUABLE_OPERATOR = "unevaluable_operator"
 
 
 # ===========================================================================

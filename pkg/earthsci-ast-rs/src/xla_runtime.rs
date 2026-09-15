@@ -163,11 +163,13 @@ pub fn client() -> Result<&'static PjRtClient, String> {
                 PjRtClient::gpu(frac, prealloc)
                     .map_err(|e| format!("PjRtClient::gpu failed ({e}).\n{}", gpu_setup_hint()))
             }
+            Ok("cpu") | Err(_) => {
+                PjRtClient::cpu().map_err(|e| format!("PjRtClient::cpu failed: {e}"))
+            }
             Ok(other) => Err(format!(
                 "EARTHSCI_XLA_PLATFORM={other:?} is not a platform this build knows \
                  (want cpu|gpu)"
             )),
-            Err(_) => PjRtClient::cpu().map_err(|e| format!("PjRtClient::cpu failed: {e}")),
         })
         .as_ref()
         .map_err(|e| e.clone())

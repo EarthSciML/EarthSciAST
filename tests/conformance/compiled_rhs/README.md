@@ -376,6 +376,13 @@ adapter --manifest <manifest.json> --output <out.json> [--engine interpreter|com
 }
 ```
 
+Plain JSON has no literal for a non-finite element value. The runner reads one
+spelled as a string Python's `float()` parses (`"NaN"`, `"Infinity"`,
+`"-Infinity"`, which is what the Rust adapter writes because `serde_json` would
+otherwise emit `null`), as a bare `NaN`/`Infinity` token, or as `null`, which it
+takes as NaN, so the element fails its comparison by name instead of aborting the
+run.
+
 The `rhs` map for a probe carries **exactly** the fixture's `state_order`
 elements, in that order, with the model namespace stripped. A binding whose shape
 inference reaches an element the manifest does not name (Python's reaches a fifth

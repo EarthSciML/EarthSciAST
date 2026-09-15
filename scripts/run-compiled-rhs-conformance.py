@@ -347,8 +347,17 @@ def _bare(name: str) -> str:
     return name.split(".", 1)[1] if "." in name else name
 
 
+def _num(v) -> float:
+    """One element value as a float. Non-finite values arrive as the strings
+    ``"NaN"``/``"Infinity"``/``"-Infinity"``, which ``float`` parses. A ``null``
+    (what a JSON writer emits for a non-finite number it will not spell out)
+    becomes NaN, so the element fails its comparison by name rather than the
+    run dying on ``float(None)``."""
+    return math.nan if v is None else float(v)
+
+
 def _norm_map(d: dict | None) -> dict[str, float]:
-    return {_bare(k): float(v) for k, v in (d or {}).items()}
+    return {_bare(k): _num(v) for k, v in (d or {}).items()}
 
 
 def probe_atol(want: dict[str, float], cls: dict) -> float:

@@ -38,6 +38,7 @@ import jsonschema
 from jsonschema import validate
 
 from .error_handling import (
+    MOUNT_FORM_UNSUPPORTED,
     SUBSYSTEM_REF_IS_COUPLING_LIBRARY,
     SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY,
 )
@@ -1769,10 +1770,44 @@ def _load_ref_data(
             bv, parent_metaparameters or {}, f"mount of '{ref_str}', binding '{bk}'"
         )
 
+    # The leaf's CLOSED metaparameter environment: its own declared integer
+    # defaults, overlaid with the effective edge bindings that close it (§9.7.6
+    # site 3 — an explicit edge binding wins over the leaf's own default), for
+    # the names the leaf DECLARES. Captured HERE, before resolution consumes the
+    # `metaparameters` block. It is the environment everything this leaf's OWN
+    # mounts contribute folds against (esm-spec §4.7 "Which environment a
+    # contribution folds against"), and it leaves this function because those
+    # mounts resolve in the caller.
+    leaf_env: dict[str, int] = {}
+    for _mn, _md in (ref_data.get("metaparameters") or {}).items():
+        if (
+            isinstance(_md, dict)
+            and isinstance(_md.get("default"), int)
+            and not isinstance(_md.get("default"), bool)
+        ):
+            leaf_env[str(_mn)] = _md["default"]
+    for _bk, _bv in effective_bindings.items():
+        if _bk in leaf_decls:
+            leaf_env[_bk] = _bv
+
     # Resolve the referenced document's §9.7 machinery under the effective
     # metaparameter close, then run the §9.6.3 rewrite fixpoint so the inlined
     # component carries only normal Expression ASTs (Option A round-trip).
-    resolved = resolve_template_machinery(ref_data, new_base, metaparameters=effective_bindings)
+    # `mounted_leaf=True`: this IS a §4.7 mount edge. The leaf resolves in its
+    # own scope, but its `index_sets` then merge into the MOUNTING document's
+    # registry and close there, so an axis sized by a name only the assembler
+    # declares stays symbolic rather than failing here (§9.7.6 site 5).
+    # `mount_declared` covers the leaf's OWN nested mounts, so the widening
+    # composes down the reference DAG.
+    from .template_imports import collect_mount_declared_metaparameters
+
+    resolved = resolve_template_machinery(
+        ref_data,
+        new_base,
+        metaparameters=effective_bindings,
+        mount_declared=collect_mount_declared_metaparameters(ref_data, new_base),
+        mounted_leaf=True,
+    )
     if resolved is not None:
         ref_data = resolved
     # Option B (esm-spec §9.6.4): lower preserves references; the mounted
@@ -1793,7 +1828,7 @@ def _load_ref_data(
 
     apply_mount_index_set_rename(ref_data, index_set_rename, rename_where)
 
-    return ref_data, new_base
+    return ref_data, new_base, leaf_env
 
 
 # Index-set declaration fields compared by the §4.7 / §9.7.5 deep-equal test
@@ -1830,10 +1865,31 @@ def _index_set_show(s: Any) -> str:
     return ", ".join(parts)
 
 
+def _child_fold_env(
+    enclosing_env: dict[str, int] | None, leaf_env: dict[str, int] | None
+) -> dict[str, int]:
+    """The fold environment for everything a mounted leaf's OWN mounts contribute
+    (esm-spec §4.7 "Which environment a contribution folds against").
+
+    This binding threads ONE registry, so a nested contribution lands in the
+    root's — but the SCOPE that sizes it is the leaf's. So: the enclosing
+    environment, overlaid with the leaf's closed one. ``leaf_env`` holds only the
+    names the leaf DECLARES (see :func:`_load_ref_data`), which is the same filter
+    §9.7.6 site 4 applies to the backfill: an outer metaparameter the leaf never
+    declared cannot size an axis here, and a name only an outer scope declares
+    still folds against that outer scope. Without the overlay one resolved
+    document disagrees with itself — an axis the leaf declares folds to the bound
+    value, an axis its own nested mount contributes to the unbound default."""
+    out = dict(enclosing_env or {})
+    out.update(leaf_env or {})
+    return out
+
+
 def _merge_subsystem_index_sets(
     registry: dict[str, Any],
     loaded_index_sets: dict[str, Any],
     ref: str,
+    root_env: dict[str, int] | None = None,
 ) -> None:
     """Merge a referenced subsystem file's top-level ``index_sets`` into the
     importing document's registry (esm-spec §4.7, mirroring the §9.7.5
@@ -1845,8 +1901,15 @@ def _merge_subsystem_index_sets(
     if not isinstance(loaded_index_sets, dict):
         return
     from .lower_expression_templates import ExpressionTemplateError
+    from .template_imports import fold_mount_contribution
 
     for n, decl in loaded_index_sets.items():
+        # esm-spec §4.7 "Index-set merge": a §4.7 mount resolves POST-CLOSE, so
+        # the registry side has already folded to integers. Fold the incoming
+        # contribution against the MOUNTING document's closed environment before
+        # comparing, or two identical declarations collide (issue #198) and a
+        # contribution the leaf could not size is published still symbolic.
+        decl = fold_mount_contribution(decl, root_env or {})
         if n in registry:
             if not _index_set_deep_equal(registry[n], decl):
                 raise ExpressionTemplateError(
@@ -1875,8 +1938,9 @@ def _resolve_subsystems_generic(
     seen_refs: set,
     chain: tuple[str, ...],
     *,
-    resolve_ref: Callable[[Any, str, str, set, tuple[str, ...], str], Any],
+    resolve_ref: Callable[[Any, str, str, set, tuple[str, ...], str, dict[str, int]], Any],
     recurse_resolved: Callable[[Any, str, set, tuple[str, ...]], None],
+    api_meta: dict[str, int] | None = None,
 ) -> None:
     """Shared skeleton behind :func:`_resolve_model_subsystems` and
     :func:`_resolve_reaction_system_subsystems`.
@@ -1939,12 +2003,21 @@ def _resolve_subsystems_generic(
             kind = "reaction_systems" if isinstance(component, ReactionSystem) else "models"
             mount_pointer = f"/{kind}/{component.name}/subsystems/{sub_name}"
             try:
-                ref_data, new_base = _load_ref_data(
+                ref_data, new_base, leaf_env = _load_ref_data(
                     ref_str,
                     base_path,
                     bindings,
                     "subsystem",
                     injected,
+                    # §4.7 "Two mount forms, one mechanism": the loader-API
+                    # bindings (§9.7.6 site 4) seed this edge's close for the
+                    # names the LEAF declares, exactly as at a top-level
+                    # `models.<k>` mount. Without it a discovered `extent`
+                    # (§8.9.4) reached a top-level-mounted leaf and not a
+                    # subsystem-mounted one, so the same two documents sized
+                    # the same axis differently depending only on which
+                    # attachment point the assembler picked.
+                    loader_metaparameters=api_meta,
                     index_set_rename=sub_value.get("index_set_rename"),
                     rename_where=f"subsystem ref '{ref_str}'",
                 )
@@ -1962,7 +2035,7 @@ def _resolve_subsystems_generic(
                         path=mount_pointer,
                     )
                 resolved_subsystems[sub_name] = resolve_ref(
-                    parsed, sub_name, new_base, new_seen, new_chain, ref_str
+                    parsed, sub_name, new_base, new_seen, new_chain, ref_str, leaf_env
                 )
             except SubsystemRefError as exc:
                 if not getattr(exc, "code", ""):
@@ -1989,6 +2062,9 @@ def _resolve_model_subsystems(
     seen_refs: set,
     registry: dict[str, Any],
     chain: tuple[str, ...] = (),
+    *,
+    api_meta: dict[str, int] | None = None,
+    root_env: dict[str, int] | None = None,
 ) -> None:
     """Recursively resolve subsystem refs within a Model.
 
@@ -2005,7 +2081,7 @@ def _resolve_model_subsystems(
             deterministic chain in the circular-reference error.
     """
 
-    def resolve_ref(parsed, sub_name, new_base, new_seen, new_chain, ref_str):
+    def resolve_ref(parsed, sub_name, new_base, new_seen, new_chain, ref_str, leaf_env):
         # The mounted file may itself be an ASSEMBLY, whose own `models.<k>`
         # entries are `{ref}` mount edges. Which attachment point mounted it
         # does not change what it IS, and esm-spec §4.7 "Two mount forms, one
@@ -2017,13 +2093,23 @@ def _resolve_model_subsystems(
         # Without it `next(iter(parsed.models.values()))` below picks the leaf's
         # UNRESOLVED `{ref}` dict and `sub_model.name = sub_name` raises
         # `AttributeError: 'dict' object has no attribute 'name'`.
-        resolve_model_refs(parsed, new_base, _mount_chain=tuple(new_chain))
+        # Everything this LEAF's own mounts contribute folds against the leaf's
+        # closed scope overlaid on the enclosing one (esm-spec §4.7), and the
+        # loader-API bindings keep travelling down the walk (§9.7.6 site 4).
+        child_env = _child_fold_env(root_env, leaf_env)
+        resolve_model_refs(
+            parsed,
+            new_base,
+            loader_metaparameters=api_meta,
+            parent_metaparameters=child_env,
+            _mount_chain=tuple(new_chain),
+        )
 
         # esm-spec §4.7: the mounted file's document-scoped index sets
         # (already metaparameter-folded) join the importing document's
         # registry, so the importer's variables may be shaped over the mesh
         # file's axes and a disagreement fails loudly (deep-equal-or-error).
-        _merge_subsystem_index_sets(registry, parsed.index_sets, ref_str)
+        _merge_subsystem_index_sets(registry, parsed.index_sets, ref_str, root_env)
 
         # Extract the single top-level model. A data source is NOT a component
         # from 1.0.0, so a referenced file carrying only `data_sources` no longer
@@ -2035,13 +2121,29 @@ def _resolve_model_subsystems(
             sub_model.name = sub_name
             # Recursively resolve nested subsystem refs; nested subsystem
             # index sets merge into the SAME (top document) registry.
-            _resolve_model_subsystems(sub_model, new_base, new_seen, registry, new_chain)
+            _resolve_model_subsystems(
+                sub_model,
+                new_base,
+                new_seen,
+                registry,
+                new_chain,
+                api_meta=api_meta,
+                root_env=child_env,
+            )
             return sub_model
         raise SubsystemRefError(f"Subsystem ref '{ref_str}' does not contain a model")
 
     def recurse_resolved(sub_value, sub_base, sub_seen, sub_chain):
         if isinstance(sub_value, Model):
-            _resolve_model_subsystems(sub_value, sub_base, sub_seen, registry, sub_chain)
+            _resolve_model_subsystems(
+                sub_value,
+                sub_base,
+                sub_seen,
+                registry,
+                sub_chain,
+                api_meta=api_meta,
+                root_env=root_env,
+            )
 
     _resolve_subsystems_generic(
         model,
@@ -2050,6 +2152,7 @@ def _resolve_model_subsystems(
         chain,
         resolve_ref=resolve_ref,
         recurse_resolved=recurse_resolved,
+        api_meta=api_meta,
     )
 
 
@@ -2058,6 +2161,8 @@ def _resolve_reaction_system_subsystems(
     base_path: str,
     seen_refs: set,
     chain: tuple[str, ...] = (),
+    *,
+    api_meta: dict[str, int] | None = None,
 ) -> None:
     """Recursively resolve subsystem refs within a ReactionSystem.
 
@@ -2070,18 +2175,22 @@ def _resolve_reaction_system_subsystems(
             circular-reference error.
     """
 
-    def resolve_ref(parsed, sub_name, new_base, new_seen, new_chain, ref_str):
+    def resolve_ref(parsed, sub_name, new_base, new_seen, new_chain, ref_str, leaf_env):
         # Extract the single top-level reaction system
         if parsed.reaction_systems:
             sub_rs = next(iter(parsed.reaction_systems.values()))
             sub_rs.name = sub_name
-            _resolve_reaction_system_subsystems(sub_rs, new_base, new_seen, new_chain)
+            _resolve_reaction_system_subsystems(
+                sub_rs, new_base, new_seen, new_chain, api_meta=api_meta
+            )
             return sub_rs
         raise SubsystemRefError(f"Subsystem ref '{ref_str}' does not contain a reaction system")
 
     def recurse_resolved(sub_value, sub_base, sub_seen, sub_chain):
         if isinstance(sub_value, ReactionSystem):
-            _resolve_reaction_system_subsystems(sub_value, sub_base, sub_seen, sub_chain)
+            _resolve_reaction_system_subsystems(
+                sub_value, sub_base, sub_seen, sub_chain, api_meta=api_meta
+            )
 
     _resolve_subsystems_generic(
         rs,
@@ -2090,10 +2199,16 @@ def _resolve_reaction_system_subsystems(
         chain,
         resolve_ref=resolve_ref,
         recurse_resolved=recurse_resolved,
+        api_meta=api_meta,
     )
 
 
-def resolve_subsystem_refs(esm_file: EsmFile, base_path: str) -> None:
+def resolve_subsystem_refs(
+    esm_file: EsmFile,
+    base_path: str,
+    loader_metaparameters: dict[str, int] | None = None,
+    parent_metaparameters: dict[str, int] | None = None,
+) -> None:
     """Resolve all subsystem references in an ESM file.
 
     Walks all subsystems in models and reaction_systems. For each subsystem
@@ -2117,6 +2232,10 @@ def resolve_subsystem_refs(esm_file: EsmFile, base_path: str) -> None:
         SubsystemRefError: If a reference cannot be resolved or is invalid
     """
     seen: set = set()
+    api_meta = dict(loader_metaparameters or {})
+    # The MOUNTING document's already-closed metaparameter environment, against
+    # which each §4.7 contribution folds as it merges (esm-spec §4.7).
+    root_env = dict(parent_metaparameters or {})
 
     # The importing document's index-set registry (esm-spec §4.7): threaded
     # down the model subsystem walk so every referenced subsystem file's
@@ -2128,10 +2247,12 @@ def resolve_subsystem_refs(esm_file: EsmFile, base_path: str) -> None:
         esm_file.index_sets = registry
 
     for model in esm_file.models.values():
-        _resolve_model_subsystems(model, base_path, seen, registry)
+        _resolve_model_subsystems(
+            model, base_path, seen, registry, api_meta=api_meta, root_env=root_env
+        )
 
     for rs in esm_file.reaction_systems.values():
-        _resolve_reaction_system_subsystems(rs, base_path, seen)
+        _resolve_reaction_system_subsystems(rs, base_path, seen, api_meta=api_meta)
 
 
 def resolve_model_refs(
@@ -2221,7 +2342,7 @@ def resolve_model_refs(
 
         bindings = _subsystem_ref_bindings(model_value, f"models.{model_name}")
         injected = _subsystem_ref_injected_imports(model_value)
-        ref_data, new_base = _load_ref_data(
+        ref_data, new_base, leaf_env = _load_ref_data(
             ref_str,
             base_path,
             bindings,
@@ -2244,17 +2365,26 @@ def resolve_model_refs(
         # Resolved HERE, in the leaf's own directory and against the LEAF's
         # registry — edge-pipeline step (1) is "the leaf resolves in its OWN
         # scope" — and BEFORE the merge below, so what the leaf's own mounts
-        # brought in is part of what merges up. No metaparameters are forwarded:
-        # the leaf's own close and fold happened inside `_load_ref_data` above,
-        # so its nested edge bindings arrive already concrete (esm-spec §9.7.6:
-        # refs resolve post-close). Mirrors the Julia reference's
+        # brought in is part of what merges up. The leaf's own close and fold
+        # happened inside `_load_ref_data` above, so its nested edge binding
+        # EXPRESSIONS arrive already concrete (esm-spec §9.7.6: refs resolve
+        # post-close) — but the axes its mounts contribute still fold against the
+        # leaf's CLOSED environment, so that is forwarded (esm-spec §4.7 "Which
+        # environment a contribution folds against"). Mirrors the Julia reference's
         # `_inline_toplevel_model_refs!(comp, compdir, visited)` and Rust.
         #
         # Without it, `next(iter(parsed.models.values()))` below picks the leaf's
         # UNRESOLVED `{ref}` dict and the next line raises
         # `AttributeError: 'dict' object has no attribute 'name'` — a raw
         # language-level error where a diagnostic belongs.
-        resolve_model_refs(parsed, new_base, _mount_chain=(*_mount_chain, canonical))
+        child_env = _child_fold_env(parent_metaparameters, leaf_env)
+        resolve_model_refs(
+            parsed,
+            new_base,
+            loader_metaparameters=loader_metaparameters,
+            parent_metaparameters=child_env,
+            _mount_chain=(*_mount_chain, canonical),
+        )
 
         # esm-spec §4.7: the referenced file's document-scoped index sets — now
         # metaparameter-folded and, for a §9.7.10 form-A mount edge, carrying the
@@ -2266,7 +2396,9 @@ def resolve_model_refs(
         # flattened system is grid-less. Mirrors the subsystem-ref path's merge
         # (`_resolve_model_subsystems`) and the Julia/Rust single-root resolve,
         # which keep these axes in the flattened system.
-        _merge_subsystem_index_sets(registry, parsed.index_sets, ref_str)
+        _merge_subsystem_index_sets(
+            registry, parsed.index_sets, ref_str, dict(parent_metaparameters or {})
+        )
 
         # A top-level model ref must resolve to exactly one model. Unlike a
         # subsystem ref, a data loader or reaction system is not a valid
@@ -2287,7 +2419,15 @@ def resolve_model_refs(
         # Recursively resolve the spliced model's own subsystem refs, relative
         # to the referenced file's directory; nested subsystem index sets merge
         # into the importing document's registry (esm-spec §4.7).
-        _resolve_model_subsystems(sub_model, new_base, seen, registry, (canonical,))
+        _resolve_model_subsystems(
+            sub_model,
+            new_base,
+            seen,
+            registry,
+            (canonical,),
+            api_meta=loader_metaparameters,
+            root_env=child_env,
+        )
         resolved_models[model_name] = sub_model
 
     esm_file.models = resolved_models
@@ -2423,6 +2563,31 @@ load_string.__doc__ = (load_string.__doc__ or "") + _LOAD_ARGS_DOC
 load_document.__doc__ = (load_document.__doc__ or "") + _LOAD_ARGS_DOC
 
 
+def _refuse_toplevel_reaction_system_refs(data: Any) -> None:
+    """Refuse a top-level ``reaction_systems.<k>`` ``{ref}`` mount.
+
+    Raises :class:`SubsystemRefError` with ``mount_form_unsupported`` at
+    ``/reaction_systems/<k>`` for the first entry that is a bare ``{ref}`` — a
+    ``ref`` string and no ``species``, the Julia reference's discriminator for
+    this form. An inline reaction system is a component, not a mount, and passes
+    untouched; ``models.<k>`` and ``subsystems.<k>`` refs are unaffected.
+    """
+    rs = data.get("reaction_systems") if isinstance(data, dict) else None
+    if not isinstance(rs, dict):
+        return
+    for name in sorted(rs):
+        entry = rs[name]
+        if isinstance(entry, dict) and isinstance(entry.get("ref"), str) and "species" not in entry:
+            raise SubsystemRefError(
+                f"reaction_systems.{name}: a top-level `reaction_systems.<k>` `{{ref}}` mount "
+                f"(ref '{entry['ref']}') is not supported by this binding. Inline the reaction "
+                "system, or mount it at a `subsystems.<k>` `{ref}` edge (esm-spec §4.7 "
+                '"Two mount forms, one mechanism")',
+                code=MOUNT_FORM_UNSUPPORTED,
+                path=f"/reaction_systems/{name}",
+            )
+
+
 def _load_data(
     data: dict,
     base_path: str,
@@ -2466,6 +2631,11 @@ def _load_data(
         reject_template_imports_pre_v08,
         resolve_template_machinery,
     )
+    from .template_imports import (
+        check_data_source_extents,
+        collect_mount_declared_metaparameters,
+        document_declares_an_extent,
+    )
 
     reject_expression_templates_pre_v04(data)
 
@@ -2507,6 +2677,12 @@ def _load_data(
 
     # Check version compatibility
     _check_version_compatibility(data.get("esm", ""))
+
+    # esm-spec §4.7: a top-level `reaction_systems.<k>` entry that is a bare
+    # `{ref}` is a mount edge at a form this binding does not implement. Coercing
+    # it would build an EMPTY reaction system and the document would load clean
+    # with nothing mounted, so refuse it here, at the entry.
+    _refuse_toplevel_reaction_system_refs(data)
 
     # esm-spec §9.7.10 form B: fold any coupling-entry injection map into the
     # named target components' own `expression_template_imports` BEFORE
@@ -2576,7 +2752,45 @@ def _load_data(
     # metaparameter close+fold — BEFORE any validator sees the tree (esm-spec
     # §9.7: "All resolution happens at load, before validation and before the
     # §9.6.3 fixpoint"). Returns None for documents without §9.7 machinery.
-    resolved = resolve_template_machinery(data, base_path, metaparameters=metaparameters)
+    #
+    # `mount_declared` is the metaparameter names every document this one MOUNTS
+    # declares (§4.7, either form, transitively). It widens the §9.7.6 site-4
+    # check: a loader-API binding — which is how a discovered §8.9.4 `extent`
+    # arrives — may name a metaparameter the LEAF declares and this document has
+    # no reason to restate. The edge forwards it into the leaf's own close, so
+    # the name is meaningful; only a name NO document in the assembly declares is
+    # the typo the check exists to catch.
+    # Guarded: the widening can only matter when the load carries loader-API
+    # bindings or the document declares an `extent`. A document with neither
+    # pays no extra ref reads — which also keeps a remote `{ref}` from being
+    # fetched twice on the ordinary path.
+    _mount_declared = (
+        collect_mount_declared_metaparameters(data, base_path)
+        if (metaparameters or document_declares_an_extent(data))
+        else frozenset()
+    )
+    # §8.9.4, statically: an `extent` naming a metaparameter nobody declares is
+    # refused HERE rather than when the source is finally sampled at build.
+    #
+    # ON THE AUTHORED TREE, and that placement is load-bearing rather than
+    # incidental (esm-spec §8.9.4 "When the check is evaluated"). Both this check
+    # and `_mount_declared` above read the UNRESOLVED `{ref}` mount edges: a §4.7
+    # mount CONSUMES the leaf's `metaparameters` at its edge (§9.7.6 site 3), so
+    # once refs are resolved the names a conforming `extent` legitimately reaches
+    # are gone. Resolving refs ahead of the root machinery is a legitimate thing
+    # to want — a rewrite target inside a mounted component only lowers if the
+    # content is spliced in first — so if that ever happens in this binding it
+    # must happen BELOW this line, not above it.
+    #
+    # Moving the check after the close is not the alternative it looks like: the
+    # close folds this document's own `index_sets` sizes to integers, which makes
+    # `document_is_in_resolved_shape` true for any mount-less document and
+    # exempts it, so a single file whose `extent` misspells a metaparameter it
+    # declares itself stops being caught. Measured both ways.
+    check_data_source_extents(data, base_path, _mount_declared)
+    resolved = resolve_template_machinery(
+        data, base_path, metaparameters=metaparameters, mount_declared=_mount_declared
+    )
     if resolved is not None:
         data = resolved
 
@@ -2631,7 +2845,16 @@ def _load_data(
     # Resolve subsystem references so subsystems land as concrete Model
     # / ReactionSystem objects (rather than `{ref: ...}` dicts) before the
     # enum-lowering pass walks their expression trees.
-    resolve_subsystem_refs(esm_file, base_path)
+    # The loader-API bindings reach this mount form too (§4.7 "Two mount forms,
+    # one mechanism"): a leaf mounted as a subsystem gets the same site-4
+    # backfill a top-level-mounted leaf gets, so a discovered `extent` sizes its
+    # axis at either attachment point.
+    resolve_subsystem_refs(
+        esm_file,
+        base_path,
+        loader_metaparameters=metaparameters,
+        parent_metaparameters=root_meta_env,
+    )
 
     # Lower `enum` op nodes to `const` integers using the file's `enums` block
     # (esm-spec §9.3). Runs after subsystem resolution so every expression

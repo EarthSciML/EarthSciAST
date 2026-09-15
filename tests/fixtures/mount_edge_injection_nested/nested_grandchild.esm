@@ -1,0 +1,17 @@
+{
+ "esm": "1.0.0",
+ "metadata": {
+  "name": "nested_grandchild",
+  "description": "The component a mounted leaf itself mounts. Its equation carries the rewrite-target operator input_x(); it declares the coupling-target parameter x_in the injected library lowers that operator to.",
+  "license": "MIT"
+ },
+ "models": {
+  "Grandchild": {
+   "variables": {
+    "x_in": {"type": "parameter", "units": "1", "default": 3.0, "description": "coupling-target parameter"},
+    "y": {"type": "unknown", "units": "1", "description": "twice the injected input"}
+   },
+   "equations": [{"lhs": "y", "rhs": {"op": "*", "args": [2.0, {"op": "input_x", "args": []}]}}]
+  }
+ }
+}

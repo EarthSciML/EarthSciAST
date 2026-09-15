@@ -1,0 +1,22 @@
+{
+ "esm": "1.0.0",
+ "metadata": {
+  "name": "nested_mounted_leaf",
+  "description": "The mounted leaf: it carries no rewrite target of its own, but mounts nested_grandchild.esm as a subsystem, whose equation does.",
+  "license": "MIT"
+ },
+ "models": {
+  "Leaf": {
+   "subsystems": {"sd": {"ref": "./nested_grandchild.esm"}},
+   "variables": {
+    "u": {"type": "unknown", "units": "1", "description": "accumulator"},
+    "uu": {"type": "unknown", "units": "1", "description": "observed copy of the grandchild's value"}
+   },
+   "equations": [
+    {"lhs": {"op": "ic", "args": ["u"]}, "rhs": 0.0},
+    {"lhs": {"op": "D", "args": ["u"], "wrt": "t"}, "rhs": "sd.y"},
+    {"lhs": "uu", "rhs": "sd.y"}
+   ]
+  }
+ }
+}

@@ -1,0 +1,16 @@
+{
+ "esm": "1.0.0",
+ "metadata": {
+  "name": "fold_env_leaf",
+  "description": "Mounts fold_env_grandchild.esm and declares n_lev = 4 itself. The grandchild's axis lands in THIS document's registry, so it folds against THIS document's closed environment: 4.",
+  "license": "MIT"
+ },
+ "metaparameters": {"n_lev": {"type": "integer", "default": 4, "description": "the leaf's own layer count"}},
+ "models": {
+  "Leaf": {
+   "subsystems": {"gc": {"ref": "./fold_env_grandchild.esm"}},
+   "variables": {"u": {"type": "unknown", "units": "1", "description": "own state"}},
+   "equations": [{"lhs": {"op": "D", "args": ["u"], "wrt": "t"}, "rhs": 0.0}]
+  }
+ }
+}

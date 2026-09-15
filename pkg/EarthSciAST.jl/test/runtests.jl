@@ -62,6 +62,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("display_conformance_test.jl")
     include("expression_parse_conformance_test.jl")  # infix-text parser ≡ TS oracle
     include("units_test.jl")
+    include("unit_exact_scale_test.jl")
     include("graph_test.jl")
     include("graph_conformance_test.jl")  # component/expression graphs ≡ TS oracle
 
@@ -111,6 +112,11 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("subsystem_ref_test.jl")
     include("mount_index_set_rename_test.jl")  # §4.7 mount-edge index_set_rename
     include("toplevel_mount_edge_pipeline_test.jl")  # §4.7 edge pipeline, top-level {ref}
+    include("native_subsystem_walk_test.jl")  # §4.7 subsystems.<k> form on the native dict
+    include("native_typed_agreement_test.jl")  # the native pass and the typed walk agree
+    # §8.9.4 discovered `extent` + §9.7.6 site 4 widened past the root's own
+    # declarations; the shared fixtures both mount forms are pinned against.
+    include("data_source_extent_scope_test.jl")
     include("reaction_system_ref_test.jl")
     include("editing_test.jl")
     include("data_loader_fixtures_test.jl")
@@ -261,6 +267,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("tree_walk_binning_alias_test.jl")
     include("op_registry_test.jl")
     include("tree_walk_op_table_test.jl")
+    include("unevaluable_operator_test.jl")         # §9.6.6 core op with no rule, refused at build
     include("op_capability_audit_test.jl")          # cross-tier op/fn-payload capability drift
     include("tree_walk_audit_fixes_test.jl")
 

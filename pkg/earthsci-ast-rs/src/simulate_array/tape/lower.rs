@@ -2669,15 +2669,22 @@ impl<'m> TapeBuilder<'m> {
             | "asinh" | "acosh" | "atanh" | "not" | "Pre" => {
                 self.wholesale_shape(node.args.first()?)
             }
-            // The oracle picks ONE branch at run time, so the shape is pinned
-            // only when both branches agree.
+            // Mirrors `eval_ifelse`: a scalar condition picks ONE branch at run
+            // time, so the shape is pinned only when both branches agree; an
+            // array condition selects element-wise over the broadcast of the
+            // condition and both branches, so a scalar-branch `ifelse` over an
+            // array test publishes the TEST's box.
             "ifelse" => {
                 if node.args.len() != 3 {
                     return Some(DimU::new()); // the NaN sentinel
                 }
+                let c = self.wholesale_shape(&node.args[0])?;
                 let t = self.wholesale_shape(&node.args[1])?;
                 let f = self.wholesale_shape(&node.args[2])?;
-                (t == f).then_some(t)
+                if c.is_empty() {
+                    return (t == f).then_some(t);
+                }
+                Self::broadcast_shape(Self::broadcast_shape(Some(c), Some(t)), Some(f))
             }
             "D" => Some(DimU::new()), // the NaN sentinel
             "const" => match eval_const(node) {

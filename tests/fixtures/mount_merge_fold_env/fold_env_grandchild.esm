@@ -1,0 +1,15 @@
+{
+ "esm": "1.0.0",
+ "metadata": {
+  "name": "fold_env_grandchild",
+  "description": "Declares an axis whose size is the metaparameter NAME n_lev and carries NO 9.7 machinery of its own, so the name survives its own load unfolded and is folded by whichever registry it merges into.",
+  "license": "MIT"
+ },
+ "index_sets": {"prof": {"kind": "interval", "size": "n_lev"}},
+ "models": {
+  "Grandchild": {
+   "variables": {"w": {"type": "unknown", "units": "1", "shape": ["prof"], "description": "a profile over the symbolic axis"}},
+   "equations": [{"lhs": {"op": "D", "args": ["w"], "wrt": "t"}, "rhs": 0.0}]
+  }
+ }
+}

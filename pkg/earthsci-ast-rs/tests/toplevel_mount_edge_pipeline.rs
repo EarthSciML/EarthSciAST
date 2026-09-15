@@ -125,8 +125,10 @@ fn a_folded_leaf_axis_still_collides_loudly() {
 
 /// FALSIFICATION 2 — backward compatibility, the case that matters most. A leaf
 /// that is NOT self-contained (its axes are sized by names only the assembler
-/// declares) has no metaparameters to close, so nothing folds at the edge and
-/// the symbolic `size` merges up for the ROOT's close to resolve. That is the
+/// declares) cannot size that axis at the edge, so the symbolic `size` merges up
+/// for the ROOT's close to resolve — the same deferral
+/// `a_mounted_leaf_defers_an_assembler_scoped_size_to_the_assemblers_close`
+/// pins for a leaf that DOES carry machinery. That is the
 /// shape of every verbose assembly written against the old behaviour: it must
 /// keep loading whether it restates the leaf's axes byte-identically or not,
 /// and both spellings must produce the same registry.
@@ -222,33 +224,44 @@ fn a_consumed_mount_edge_round_trips_to_a_fixed_point() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The strictness boundary the close introduces, pinned so it is visible rather
-/// than discovered. §9.7.6 site 3 resolves a mounted leaf "as a complete
-/// document and folded to concrete integers at the mount", so the leaf's OWN
-/// close is strict: once the leaf has any §9.7 machinery to resolve, an axis
-/// sized by a name the leaf does not declare is `metaparameter_unbound` at the
-/// edge — it never reaches the mounting document's close. A leaf with NO
-/// machinery has no close to be strict about, so the same size merges
-/// symbolically (the test above). Both behaviours match this binding's own
-/// `subsystems.<k>` edge, which is what §4.7 requires, and THIS document —
-/// machinery plus an assembler-scoped size — is refused by Python too. Whether
-/// the edge close SHOULD be strict about a name only the assembler can bind is
-/// a spec question, not a divergence.
+/// A mounted leaf DEFERS a size it cannot close, and the assembler's close
+/// resolves it — §9.7.6 site 5 ("a metaparameter an edge leaves unbound … is
+/// closed at some enclosing document's close") applied to the axis the name
+/// sizes.
 ///
-/// Python does NOT agree across the whole no-machinery path, though, and the
-/// split is pre-existing rather than introduced here: Rust and Julia merge a
-/// mounted leaf's `index_sets` BEFORE the mounting document's own §9.7.6 close,
-/// Python merges AFTER. So for a host that declares `n_rows` and also restates
-/// the leaf's axis verbatim (`size: "n_rows"`), Rust and Julia compare two
-/// identical symbolic declarations and accept, while Python compares its
-/// already-folded `size: 7` against the leaf's `"n_rows"` and raises
-/// `subsystem_index_set_conflict`. Deleting the restatement — the terse
-/// spelling this change exists to enable — loads in all three. Recorded in
-/// `docs/content/rfcs/mount-edge-index-set-renaming.md` §6; settling which side
-/// merges is a spec question and is not attempted here.
+/// A leaf resolved at a §4.7 mount edge is NOT the last scope that can close a
+/// name. Its `index_sets` merge into the MOUNTING document's registry (§4.7
+/// "Index-set merge") and close there, so an axis sized by a name only the
+/// assembler declares stays symbolic at the edge and folds at the root instead
+/// of being `metaparameter_unbound` here.
+///
+/// This test used to pin the opposite, and what decided it is why that was
+/// wrong: strictness turned on `has_import_machinery`, a WHOLE-DOCUMENT boolean.
+/// The leaf below differs from the one in
+/// `an_assembler_scoped_axis_merges_symbolically_with_or_without_restatement`
+/// only by declaring an UNRELATED metaparameter — so adding one metaparameter a
+/// leaf uses for something else, or one `expression_template_imports` entry for
+/// a library it never calls, flipped its axis from "merges symbolically and the
+/// assembler closes it" to `metaparameter_unbound`. Whether a document's shape
+/// resolves must not depend on that.
+///
+/// The leaf's own close stays strict about its OWN declared names: a leaf
+/// metaparameter with no `default` and no edge binding is still
+/// `metaparameter_unbound` at the mount. What defers is only the index-set
+/// `size` fold, because that one has a later scope to run in.
+///
+/// Python agrees on this document. The two bindings still differ on WHERE the
+/// §4.7 merge sits relative to the mounting document's own §9.7.6 close — Rust
+/// and Julia merge before it, Python after — so a host that ALSO restates the
+/// leaf's axis verbatim (`size: "n_rows"`) loads here and raises
+/// `subsystem_index_set_conflict` in Python, which compares its already-folded
+/// `size: 7` against the leaf's `"n_rows"`. Deleting the restatement loads in
+/// all three. Recorded in `docs/content/rfcs/mount-edge-index-set-renaming.md`
+/// §6 open question 2; settling which side merges is a spec question and is not
+/// attempted here.
 #[test]
-fn a_leaf_with_machinery_is_strict_about_an_assembler_scoped_size() {
-    let dir = scratch("strict");
+fn a_mounted_leaf_defers_an_assembler_scoped_size_to_the_assemblers_close() {
+    let dir = scratch("deferred");
     write(
         &dir,
         "leaf.esm",
@@ -270,10 +283,12 @@ fn a_leaf_with_machinery_is_strict_about_an_assembler_scoped_size() {
             "models":{"M":{"ref":"./leaf.esm"}}}"#,
     );
 
-    let e = load_path(&host).expect_err("the leaf's own close is strict");
-    assert!(
-        e.to_string().contains("metaparameter_unbound") && e.to_string().contains("n_rows"),
-        "a proper diagnostic, not an i64 coercion panic: {e}"
+    let doc = load_path(&host)
+        .expect("a mounted leaf defers a size only the assembler can close (esm-spec §9.7.6)");
+    assert_eq!(
+        doc.index_sets.as_ref().expect("index_sets")["rows"].size,
+        Some(7),
+        "the leaf's symbolic size merged up and the assembler's own close folded it"
     );
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -405,18 +420,21 @@ fn the_loader_api_backfills_a_leaf_and_an_edge_binding_outranks_it() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// FALSIFICATION 7 — the OTHER new refusal, pinned so it is visible rather than
-/// discovered.
+/// FALSIFICATION 7, INVERTED — the restatement asymmetry is gone.
 ///
-/// On the no-machinery path a symbolic `size` reaches the merge unfolded, and
-/// `merge_subsystem_index_sets` compares declarations structurally. So the
-/// idempotence of a restatement is SYNTACTIC there: restating the leaf's axis
-/// verbatim merges clean (FALSIFICATION 2), but restating it with the concrete
-/// number the name folds to is a conflict — even though the two say the same
-/// thing once the root closes. This loaded before the edge pipeline ran here.
-/// Python refuses it identically, so it is a convergence, not a divergence.
+/// This used to pin a refusal: a `size` the mounted leaf could not close reached
+/// the merge unfolded, so idempotence was SYNTACTIC. Restating the leaf's axis
+/// verbatim (`size: "n_rows"`) merged clean while restating it with the concrete
+/// number the name folds to (`size: 7`) was `subsystem_index_set_conflict` —
+/// even though the two say the same thing once the root closes. The more
+/// concrete, more obviously-correct spelling was the one rejected.
+///
+/// RFC `mount-edge-index-set-renaming.md` open question 2 settled that: the §4.7
+/// merge runs POST-CLOSE and folds the contribution against the mounting
+/// document's closed environment before comparing, so both spellings fold to 7
+/// and both are idempotent. All five bindings agree.
 #[test]
-fn a_concrete_restatement_of_a_symbolic_leaf_axis_collides() {
+fn a_concrete_restatement_of_a_symbolic_leaf_axis_is_idempotent() {
     let dir = scratch("concrete_restatement");
     write(
         &dir,
@@ -439,19 +457,14 @@ fn a_concrete_restatement_of_a_symbolic_leaf_axis_collides() {
             "models":{"M":{"ref":"./leaf.esm"}}}"#,
     );
 
-    let e =
-        load_path(&host).expect_err("a concrete restatement is not deep-equal to a symbolic one");
-    let text = e.to_string();
-    assert!(
-        text.contains("subsystem_index_set_conflict"),
-        "stable code required, not an i64 coercion panic: {text}"
+    let doc = load_path(&host)
+        .expect("a concrete restatement folds to the same integer and is idempotent");
+    let rows = |f: &earthsci_ast::EsmFile| f.index_sets.as_ref().expect("index_sets")["rows"].size;
+    assert_eq!(
+        rows(&doc),
+        Some(7),
+        "one registry entry at the folded size, not a collision"
     );
-    for needle in ["n_rows", "size=7"] {
-        assert!(
-            text.contains(needle),
-            "the diagnostic must name both contributors ({needle}): {text}"
-        );
-    }
 
     let _ = std::fs::remove_dir_all(&dir);
 }

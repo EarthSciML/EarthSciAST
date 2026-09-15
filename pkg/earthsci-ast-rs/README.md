@@ -228,8 +228,8 @@ cargo build --features xla
 cargo test  --features xla
 ```
 
-`build.rs` bakes `$XLA_EXTENSION_DIR/lib` into this crate's binaries, tests,
-examples and benches as an rpath, so none of those has to carry
+`build.rs` bakes `$XLA_EXTENSION_DIR/lib` into this crate's binaries, cdylib,
+unit and integration tests, examples and benches as an rpath, so none of those has to carry
 `LD_LIBRARY_PATH` at run time (`readelf -d <binary> | grep RUNPATH` to check).
 The one exception is doctests: rustdoc links its own test binary and a build
 script's link arguments do not reach it, so with the feature on that binary

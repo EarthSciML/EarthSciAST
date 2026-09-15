@@ -157,6 +157,25 @@ export type EsmFile = ESMFormat1 &
      * the file object must re-attach it if the result will be flattened.
      */
     componentTemplates?: Record<string, unknown>
+
+    /**
+     * NON-SCHEMA, LOADER-POPULATED. The loader-API metaparameter bindings this
+     * document was loaded with (esm-spec §9.7.6 binding site 4) — the map a
+     * discovered §8.9.4 `extent` arrives as.
+     *
+     * `loadInput` (`parse.ts`) attaches it so `resolveSubsystemRefsSync` can
+     * BACKFILL each `subsystems.<k>` mount edge's close with it (§4.7 "Two mount
+     * forms, one mechanism"): in this binding ref resolution is a separate step
+     * from `load`, so the bindings have no other route from the loader call to
+     * the mount edge. Filtered at the edge to the names the LEAF declares, and
+     * an explicit edge `binding` always wins.
+     *
+     * NON-ENUMERABLE for the same reason `componentTemplates` is: the
+     * conformance round-trip compares loaded documents structurally, and a
+     * loader sidecar is not part of the document. Absent unless the document was
+     * loaded with `metaparameters`.
+     */
+    loaderMetaparameters?: Record<string, number>
   }
 
 /** @deprecated Prefer {@link ExpressionNode} (the generated name). */

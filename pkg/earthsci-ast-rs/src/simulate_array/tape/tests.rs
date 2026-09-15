@@ -1172,6 +1172,67 @@ fn ab_wholesale_makearray_and_elementwise_observeds() {
     assert!(prog.n_const > 0);
 }
 
+/// A FALLBACK observed `m` whose wholesale body is an `ifelse` over an ARRAY
+/// test with scalar branches. `eval_ifelse` broadcasts to the test's box, so
+/// the shape recorded for `m` must be that box. A scalar claim compiles `m`'s
+/// readers against a scalar: `s` below as a scalar kernel (which then panics on
+/// the scalar read of the published array), or the literal `index(m, 2)` as
+/// the scalar-base NaN. The parameter index is what keeps `m` off the tape
+/// (`wholesale: non-literal index argument`).
+fn fallback_ifelse_array_condition_doc(reader: serde_json::Value) -> serde_json::Value {
+    let n = 3;
+    json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_fallback_ifelse"},
+        "index_sets": {"c": {"kind": "interval", "size": n}},
+        "models": {"M": {
+            "variables": {
+                "psi": {"type": "unknown", "shape": ["c"]},
+                "m": {"type": "unknown", "shape": ["c"]},
+                "s": {"type": "unknown"},
+                "a": {"type": "unknown", "shape": ["c"]},
+                "p": {"type": "parameter", "default": 2.0}
+            },
+            "equations": [
+                {"lhs": "m", "rhs": {"op": "ifelse", "args": [
+                    {"op": ">", "args": ["psi", {"op": "index", "args": ["psi", "p"]}]},
+                    1.0,
+                    0.0
+                ]}},
+                {"lhs": "s", "rhs": reader},
+                {"lhs": "a", "rhs": {"op": "+", "args": ["psi", "s"]}},
+                {"lhs": {"op": "ic", "args": ["psi"]}, "rhs": 0.0},
+                {"lhs": {"op": "D", "args": ["psi"], "wrt": "t"},
+                 "rhs": {"op": "-", "args": ["a"]}}
+            ]
+        }}
+    })
+}
+
+fn check_fallback_ifelse_array_condition(reader: serde_json::Value) {
+    let doc = fallback_ifelse_array_condition_doc(reader);
+    let (_prog, report) = compile(doc.clone()).build_tape(&HashSet::new());
+    assert!(
+        report
+            .fallbacks
+            .iter()
+            .any(|(name, reason)| name == "m" && reason.contains("non-literal index")),
+        "`m` must be the fallback rule this test is about: {:?}",
+        report.fallbacks
+    );
+    ab_check(doc, 1, -1.0, 1.0);
+}
+
+#[test]
+fn ab_fallback_ifelse_array_condition_elementwise_reader() {
+    check_fallback_ifelse_array_condition(json!({"op": "*", "args": ["m", 2.0]}));
+}
+
+#[test]
+fn ab_fallback_ifelse_array_condition_indexed_reader() {
+    check_fallback_ifelse_array_condition(json!({"op": "index", "args": ["m", 2]}));
+}
+
 /// End-to-end A/B against a real model file (opt-in): set `TAPE_AB_MODEL` to
 /// an .esm path (e.g. simpleclimate.esm) and optionally `TAPE_AB_MP` to
 /// `NX=12,NY=7,NZ=7`. Builds the tape, obtains the model's own u0 through a

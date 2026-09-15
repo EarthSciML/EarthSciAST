@@ -286,3 +286,168 @@ fn a_mounted_assembly_resolves_through_at_either_form() {
     assert_eq!(deep["variables"]["Tsoil"]["shape"][0], "soil_lev");
     assert_eq!(value["index_sets"]["soil_lev"]["size"], 4);
 }
+
+/// esm-spec §4.7: "Renaming is **per edge**: step 2 covers what THIS referenced
+/// document declares and imports, and an axis reaching the registry through a
+/// mount *nested inside* the referenced document is renamed (or not) at that
+/// nested edge, by its own `index_set_rename`."
+///
+/// This binding resolves the leaf's own nested `{ref}`s BEFORE the edge's
+/// injection and the §9.6.3 fixpoint (issue #311, so an injected rule reaches a
+/// rewrite-target in the leaf's own subtree). That puts the nested
+/// contribution in `index_sets` by the time `index_set_rename` runs, where the
+/// four other bindings — which still resolve nested refs after the rename —
+/// cannot see it. Holding it out of this edge's vocabulary is what keeps the
+/// five agreeing: without it, Rust silently renamed an axis the edge has no
+/// standing to name, while Julia, Python, TypeScript and Go all refused the
+/// same document.
+///
+/// Measured 2026-09-13 on both fixtures below: Julia, Python, TypeScript and Go
+/// all raise `subsystem_index_set_rename_unknown_name` with this same message.
+#[test]
+fn a_mount_edge_rename_cannot_name_an_axis_a_nested_mount_contributed() {
+    for (rel, noun) in [
+        (
+            "fixtures/mount_edge_rename_nested_scope/rename_scope_nested_only_axis.esm",
+            "subsystem ref",
+        ),
+        (
+            "fixtures/mount_edge_rename_nested_scope/rename_scope_nested_only_axis_toplevel.esm",
+            "top-level model ref",
+        ),
+    ] {
+        let path = fixture(rel);
+        let err = load_path(&path).expect_err(
+            "`lev` is declared only by the leaf's own nested mount, so this edge cannot rename it",
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("subsystem_index_set_rename_unknown_name"),
+            "{rel}: expected subsystem_index_set_rename_unknown_name, got: {msg}"
+        );
+        assert!(
+            msg.contains(noun) && msg.contains("index set 'lev'"),
+            "{rel}: the diagnostic must name this edge and the axis: {msg}"
+        );
+    }
+}
+
+/// The same edge, one level in: mounting the GRANDCHILD directly does rename
+/// `lev`, because there it is what the referenced document itself declares.
+/// This is the other half of the per-edge rule — the exclusion above must not
+/// turn into "a nested axis can never be renamed".
+#[test]
+fn the_nested_edge_itself_may_rename_the_axis_it_contributes() {
+    let path = fixture("fixtures/mount_edge_rename_nested_scope/rename_scope_grandchild.esm");
+    let file = load_path(&path).unwrap_or_else(|e| panic!("{} does not load: {e}", path.display()));
+    let value = serde_json::to_value(&file).expect("document renders as JSON");
+    assert_eq!(value["index_sets"]["lev"]["size"], 4);
+}
+
+/// The OTHER end of the per-edge rule from
+/// `a_mount_edge_rename_cannot_name_an_axis_a_nested_mount_contributed`, and
+/// the one a future reader is most likely to collapse into it.
+///
+/// That test says an edge may NOT rename an axis only a nested mount
+/// contributes. This one says an edge MUST rename an axis the referenced
+/// document declares ITSELF, even where a component it mounts declares a
+/// deep-equal one of the same name — because §4.7's deep-equal merge has
+/// already made those ONE axis, so a rename that reached only half of it would
+/// leave the mounted document referring to a name its own registry no longer
+/// holds.
+///
+/// The observable difference is the registry: `{soil_lev}` alone, with the
+/// nested component's `shape` re-pointed, NOT `{lev, soil_lev}` with the nested
+/// component still on `lev`. Measured 2026-09-13: Rust, Go and TypeScript all
+/// produce the former at both mount forms.
+#[test]
+fn a_mount_edge_rename_reaches_an_axis_the_leaf_shares_with_its_own_nested_mount() {
+    for rel in [
+        "fixtures/mount_edge_rename_nested_scope/rename_scope_shared_axis.esm",
+        "fixtures/mount_edge_rename_nested_scope/rename_scope_shared_axis_toplevel.esm",
+    ] {
+        let path = fixture(rel);
+        let file =
+            load_path(&path).unwrap_or_else(|e| panic!("{} does not load: {e}", path.display()));
+        let value = serde_json::to_value(&file).expect("document renders as JSON");
+        let sets = value
+            .get("index_sets")
+            .and_then(|v| v.as_object())
+            .unwrap_or_else(|| panic!("{rel}: the merged registry survives the mount"));
+        assert_eq!(
+            sets.keys().collect::<Vec<_>>(),
+            vec!["soil_lev"],
+            "{rel}: the shared axis must arrive ONCE, under the post-rename name: {sets:?}"
+        );
+        assert_eq!(sets["soil_lev"]["size"], 4, "{rel}");
+        let text = value.to_string();
+        assert!(
+            !text.contains("\"lev\""),
+            "{rel}: a reference to the pre-rename name survived somewhere in the mounted subtree"
+        );
+    }
+}
+
+/// esm-spec §4.7 "Which environment it folds against": a merge folds against
+/// the closed metaparameter environment of whatever registry it lands in.
+///
+/// The fixture makes the two candidate environments disagree on purpose. The
+/// grandchild sizes an axis `"n_lev"` and carries no §9.7 machinery, so the
+/// name survives its own load unfolded; the leaf declares `n_lev: 4` and mounts
+/// it; the assembly declares an unrelated `n_lev: 9` and mounts the leaf. The
+/// axis lands in the LEAF's registry, so the leaf's close is the one that
+/// speaks and the answer is 4. Folding against the assembly's environment
+/// instead gives 9 — an unrelated same-named metaparameter one level up
+/// silently resizing an axis the leaf owns, which is exactly what Go and
+/// TypeScript did before this rule was settled (both measured at 9).
+#[test]
+fn a_merge_folds_against_the_environment_of_the_registry_it_lands_in() {
+    let path = fixture("fixtures/mount_merge_fold_env/fold_env_root.esm");
+    let file = load_path(&path).unwrap_or_else(|e| panic!("{} does not load: {e}", path.display()));
+    let value = serde_json::to_value(&file).expect("document renders as JSON");
+    assert_eq!(
+        value["index_sets"]["prof"]["size"], 4,
+        "the contributed axis must fold against the LEAF's n_lev (4), never the assembly's (9): {}",
+        value["index_sets"]
+    );
+
+    // And "the leaf's closed environment" means CLOSED: an explicit edge
+    // binding closes the referenced document and wins over its own default
+    // (§9.7.6 site 3), so the same axis is 7 when the edge binds 7. An axis the
+    // leaf declares ITSELF already folds to 7 through that close, so answering
+    // 4 here would make one resolved document disagree with itself.
+    let path = fixture("fixtures/mount_merge_fold_env/fold_env_bound_root.esm");
+    let file = load_path(&path).unwrap_or_else(|e| panic!("{} does not load: {e}", path.display()));
+    let value = serde_json::to_value(&file).expect("document renders as JSON");
+    assert_eq!(
+        value["index_sets"]["prof"]["size"], 7,
+        "an edge binding closes the leaf, so the contributed axis folds to 7: {}",
+        value["index_sets"]
+    );
+}
+
+/// esm-spec §4.7: this binding does not implement the top-level
+/// `reaction_systems.<k>` `{ref}` mount form, so it REFUSES the entry with
+/// `mount_form_unsupported`, rather than failing on the incidental typed-parse
+/// error `missing field species` it used to give. The conformance producer
+/// reports the finding at `/reaction_systems/<k>`. (Julia is the one binding
+/// that implements the form.)
+#[test]
+fn a_toplevel_reaction_system_ref_is_refused_loudly() {
+    let path = fixture("fixtures/mount_form_unsupported/toplevel_reaction_system_ref.esm");
+    let err = load_path(&path).expect_err("a top-level reaction_systems.<k> {ref} must be refused");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("mount_form_unsupported"),
+        "want mount_form_unsupported, got: {msg}"
+    );
+    assert!(
+        msg.contains("reaction_systems.Chem"),
+        "the diagnostic must name the entry: {msg}"
+    );
+
+    // The leaf itself — an inline reaction system, a component rather than a
+    // mount — still loads.
+    let leaf = fixture("fixtures/mount_form_unsupported/reaction_system_leaf.esm");
+    load_path(&leaf).unwrap_or_else(|e| panic!("an inline reaction system must still load: {e}"));
+}

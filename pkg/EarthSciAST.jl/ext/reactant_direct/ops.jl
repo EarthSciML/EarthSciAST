@@ -242,6 +242,15 @@ function _de_op(ctx::_DECtx, op::Symbol, c::Vector{_DEVal})::_DEVal
     elseif op === :Pre
         return c[1]
     end
+    # NOT `unevaluable_operator` (esm-spec §9.6.6), deliberately. That code is
+    # for an op in the §4.2 EVALUABLE CORE that the tree-walk evaluator has no
+    # rule for, and `_compile_op` (src/tree_walk/compile.jl) refuses one while
+    # the evaluator is BUILT — so no such op can reach here: the emitter only
+    # ever walks a `_CompiledIR` that already passed that gate. What this tail
+    # catches is the other thing: an op the interpreter CAN evaluate but that
+    # this StableHLO ladder has not been taught. That is a backend-coverage gap,
+    # not a document-level refusal, so it reports the emitter's own
+    # `DirectEmitError` (`E_DIRECT_EMIT_UNSUPPORTED`) with the rule breadcrumb.
     _de_refuse("the operator `$op`",
         "it is not in the direct-emission op ladder. Add it to `_de_op` " *
         "(ext/reactant_direct/ops.jl) with the StableHLO op that matches the " *

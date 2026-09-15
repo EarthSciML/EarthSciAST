@@ -466,6 +466,20 @@ func hasImportMachinery(view map[string]any) bool {
 	return false
 }
 
+// resolveOpts is the esm-spec §4.7 mount context a resolveTemplateMachinery call
+// runs under. The zero value is a ROOT document: nothing mounted is known, and
+// this scope is the last that can close a name.
+type resolveOpts struct {
+	// mountDeclared widens the §9.7.6 site-4 check to the metaparameter names
+	// declared by the documents this one mounts — see
+	// collectMountDeclaredMetaparameters.
+	mountDeclared map[string]bool
+	// mountedLeaf says this call IS a §4.7 mount edge, so index-set sizes this
+	// scope cannot close stay symbolic for the mounting registry to close
+	// (§9.7.6 site 5).
+	mountedLeaf bool
+}
+
 // resolveTemplateMachinery resolves every esm-spec §9.7 construct of the ROOT
 // document `view`, IN PLACE (relative import refs resolve against `baseDir`):
 // imports recursively with per-edge instantiation, `index_sets` merge,
@@ -488,16 +502,22 @@ func hasImportMachinery(view map[string]any) bool {
 // (§9.6.4 rule 5). Returns false when the document carries no §9.7 machinery
 // (the legacy fast path).
 func resolveTemplateMachinery(view map[string]any, orders map[string][]string,
-	baseDir string, metaparameters map[string]int64) (bool, error) {
+	baseDir string, metaparameters map[string]int64, opts resolveOpts) (bool, error) {
 	if !hasImportMachinery(view) {
-		if len(metaparameters) > 0 {
-			names := make([]string, 0, len(metaparameters))
-			for k := range metaparameters {
-				names = append(names, k)
+		// A binding naming something a MOUNTED document declares is meaningful
+		// even here: this document has no §9.7 machinery of its own, and the
+		// mount edge forwards the name into the leaf's own close. Only a name no
+		// document in the assembly declares is the typo this refuses.
+		var unknown []string
+		for k := range metaparameters {
+			if !opts.mountDeclared[k] {
+				unknown = append(unknown, k)
 			}
-			sort.Strings(names)
+		}
+		if len(unknown) > 0 {
+			sort.Strings(unknown)
 			return false, newETErr(CodeTemplateImportUnknownName,
-				fmt.Sprintf("loader API binds metaparameter(s) %s but the document declares none (esm-spec §9.7.6)", strings.Join(names, ", ")))
+				fmt.Sprintf("loader API binds metaparameter(s) %s which neither this document nor any document it mounts declares (esm-spec §9.7.6)", strings.Join(unknown, ", ")))
 		}
 		return false, nil
 	}
@@ -549,7 +569,7 @@ func resolveTemplateMachinery(view map[string]any, orders map[string][]string,
 	}
 
 	// --- close this document's metaparameters (§9.7.6 sites 4-5) ---
-	values, err := closeDocumentMetaparams(docMeta, metaparameters)
+	values, err := closeDocumentMetaparams(docMeta, metaparameters, opts.mountDeclared)
 	if err != nil {
 		return false, err
 	}
@@ -563,7 +583,14 @@ func resolveTemplateMachinery(view map[string]any, orders map[string][]string,
 	substituteClosedMetaparams(view, topTemplates, docIsets, values)
 
 	// --- fold structural sites on the closed document ---
-	if err := foldClosedDocument(view, topTemplates, docIsets); err != nil {
+	// `mountedLeaf` says a MOUNTING document's registry will receive these index
+	// sets and close them (§4.7 "Index-set merge"), so an axis this scope cannot
+	// size stays symbolic instead of being `metaparameter_unbound` here. Without
+	// it, whether a mounted leaf accepts an assembler-scoped axis turned on
+	// hasImportMachinery — a whole-document boolean — so adding an
+	// `expression_template_imports` entry for a library the leaf never calls
+	// changed whether the leaf's shape resolved.
+	if err := foldClosedDocument(view, topTemplates, docIsets, !opts.mountedLeaf); err != nil {
 		return false, err
 	}
 
@@ -680,16 +707,26 @@ func resolveComponentImports(view map[string]any, orders map[string][]string,
 // declared `default`. A loader-API name the document does not declare is
 // `template_import_unknown_name`; a metaparameter still open after bindings and
 // defaults is `metaparameter_unbound`.
-func closeDocumentMetaparams(docMeta *orderedMap, metaparameters map[string]int64) (map[string]int64, error) {
+//
+// `mountDeclared` is the set of metaparameter names declared by the documents
+// this one MOUNTS (esm-spec §4.7, either mount form, transitively). A loader-API
+// binding may name one of those: it is meaningful even though this document does
+// not declare it, because the mount edge forwards it into the leaf's own close
+// for the names the leaf declares. Such a name is accepted and CONSUMED here —
+// it closes nothing in this scope, so it is absent from the returned map. A name
+// in NEITHER set is still a typo and still raises
+// `template_import_unknown_name`: bindings never invent metaparameters.
+func closeDocumentMetaparams(docMeta *orderedMap, metaparameters map[string]int64,
+	mountDeclared map[string]bool) (map[string]int64, error) {
 	apiNames := make([]string, 0, len(metaparameters))
 	for k := range metaparameters {
 		apiNames = append(apiNames, k)
 	}
 	sort.Strings(apiNames)
 	for _, k := range apiNames {
-		if !docMeta.has(k) {
+		if !docMeta.has(k) && !mountDeclared[k] {
 			return nil, newETErr(CodeTemplateImportUnknownName,
-				fmt.Sprintf("loader API binds metaparameter '%s', which the document does not declare (esm-spec §9.7.6)", k))
+				fmt.Sprintf("loader API binds metaparameter '%s', which neither this document nor any document it mounts declares (esm-spec §9.7.6)", k))
 		}
 	}
 	values := map[string]int64{}
@@ -809,9 +846,17 @@ func substituteClosedMetaparams(view map[string]any, topTemplates, docIsets *ord
 // foldClosedDocument folds the structural integer sites (aggregate ranges,
 // makearray region bounds) of the closed document and the interval index-set
 // sizes (esm-spec §9.7.6): components, then the root library templates, then the
-// document index sets with strict=true (any remaining open size is
-// `metaparameter_unbound`).
-func foldClosedDocument(view map[string]any, topTemplates, docIsets *orderedMap) error {
+// document index sets.
+//
+// `strict` says whether this document is the LAST scope that could close a name.
+// At a ROOT document it is, so a still-open `size` is `metaparameter_unbound`.
+// At a §4.7 mount edge it is NOT: the leaf resolves in its own scope, but its
+// `index_sets` then merge into the MOUNTING document's registry (§4.7
+// "Index-set merge") and close there, so a name the leaf cannot bind stays
+// symbolic and travels up rather than failing here. That is §9.7.6 site 5's "a
+// metaparameter an edge leaves unbound ... is closed at some enclosing
+// document's close", applied to the axis the name sizes.
+func foldClosedDocument(view map[string]any, topTemplates, docIsets *orderedMap, strict bool) error {
 	for _, kind := range templateComponentKinds {
 		comps, ok := view[kind].(map[string]any)
 		if !ok {
@@ -830,5 +875,5 @@ func foldClosedDocument(view map[string]any, topTemplates, docIsets *orderedMap)
 			return err
 		}
 	}
-	return foldIndexSetSizes(docIsets, "document", true)
+	return foldIndexSetSizes(docIsets, "document", strict)
 }

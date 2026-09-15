@@ -88,9 +88,28 @@ export interface TemplateResolveOptions {
    * reference). Supplied by the `load*` entry points; optional for direct/raw use.
    */
   validateSchema?: ((raw: unknown) => TemplateSchemaError[]) | undefined
+  /**
+   * Metaparameter names declared by the documents this one MOUNTS (esm-spec
+   * §4.7, either mount form, transitively) — see
+   * {@link collectMountDeclaredMetaparameters}. Widens the §9.7.6 site-4
+   * check: a loader-API binding naming one of these is meaningful even though
+   * THIS document does not declare it, because the mount edge forwards it into
+   * the leaf's own close.
+   */
+  mountDeclared?: ReadonlySet<string> | undefined
+  /**
+   * This call IS a §4.7 mount edge, so index-set sizes this scope cannot close
+   * stay symbolic for the MOUNTING document's registry to close (§9.7.6 site
+   * 5) instead of being `metaparameter_unbound` here. A root document leaves it
+   * unset.
+   */
+  mountedLeaf?: boolean | undefined
 }
 
 const COMPONENT_KINDS = ['models', 'reaction_systems'] as const
+
+/** Shared empty name set, so the widened checks allocate nothing on the root path. */
+const EMPTY_NAME_SET: ReadonlySet<string> = new Set<string>()
 
 // A template-library file MUST NOT declare any of these (esm-spec §9.7.1).
 const LIBRARY_FORBIDDEN_KEYS = [
@@ -1608,6 +1627,263 @@ function hasImportMachinery(raw: unknown): boolean {
 }
 
 /**
+ * The metaparameter names declared by every document `raw` MOUNTS, at either
+ * §4.7 mount form, transitively through the mount DAG.
+ *
+ * A §4.7 mount edge consumes the referenced document's `metaparameters` at the
+ * edge (§9.7.6 binding site 3), so those names never reach the mounting
+ * document's own declared set — which is why a loader-API binding for one of
+ * them used to be refused at a root that had no reason to redeclare it. This
+ * walk is what lets the site-4 check (and the §8.9.4 `extent` check) ask "does
+ * ANYONE in this assembly declare that name?" instead of "does the root".
+ *
+ * Reads only each referenced file's top-level `metaparameters` keys. A ref that
+ * cannot be read is IGNORED: this walk exists to WIDEN acceptance, and the
+ * resolution error belongs to the ref resolver, which reports it with the proper
+ * mount pointer. Remote refs are likewise skipped — the synchronous loader
+ * cannot fetch them. Cycles terminate on `seen`.
+ *
+ * Note this reads the top-level `models.<k>` / `reaction_systems.<k>` `{ref}`
+ * mount shape as well as `subsystems.<k>`, even though THIS binding inlines only
+ * the latter: the schema admits the form, reading it costs nothing, and it keeps
+ * the acceptance set identical across bindings. It adds no mounting logic.
+ */
+export function collectMountDeclaredMetaparameters(
+  raw: unknown,
+  basePath: string,
+  options: TemplateResolveOptions = {},
+  seen: Set<string> = new Set<string>(),
+  followImports = false,
+): ReadonlySet<string> {
+  const out = new Set<string>()
+  if (!isObject(raw)) return out
+
+  const visitRef = (refValue: unknown): void => {
+    if (!isObject(refValue)) return
+    const ref = refValue.ref
+    if (typeof ref !== 'string' || isRemoteRef(ref)) return
+    const path = normalizeRef(ref, basePath)
+    if (seen.has(path)) return
+    seen.add(path)
+    let child: unknown
+    try {
+      child = JSON.parse((options.readFile ?? readFileSyncNode)(path))
+    } catch {
+      return
+    }
+    if (!isObject(child)) return
+    const decls = child.metaparameters
+    if (isObject(decls)) for (const n of Object.keys(decls)) out.add(n)
+    for (const n of collectMountDeclaredMetaparameters(
+      child,
+      dirName(path),
+      options,
+      seen,
+      followImports,
+    )) {
+      out.add(n)
+    }
+  }
+
+  // The §9.7.2 import edges one scope carries, when asked for.
+  const visitImports = (holder: Record<string, unknown>): void => {
+    if (!followImports) return
+    const entries = holder.expression_template_imports
+    if (!Array.isArray(entries)) return
+    for (const entry of entries) visitRef(entry)
+  }
+
+  // A `subsystems` map to any depth: an INLINE entry may itself hold the
+  // `{ref}` mount whose leaf declares the name.
+  const visitSubsystems = (holder: Record<string, unknown>): void => {
+    const subs = holder.subsystems
+    if (!isObject(subs)) return
+    for (const sub of Object.values(subs)) {
+      if (!isObject(sub)) continue
+      visitRef(sub) // a `subsystems.<k>` {ref}
+      visitImports(sub)
+      visitSubsystems(sub)
+    }
+  }
+
+  visitImports(raw) // a DOCUMENT-level `expression_template_imports`
+  for (const compKind of COMPONENT_KINDS) {
+    const comps = raw[compKind]
+    if (!isObject(comps)) continue
+    for (const comp of Object.values(comps)) {
+      if (!isObject(comp)) continue
+      visitRef(comp) // a top-level `models.<k>` / `reaction_systems.<k>` {ref}
+      visitImports(comp)
+      visitSubsystems(comp)
+    }
+  }
+  return out
+}
+
+/**
+ * Fold ONE §4.7 mount contribution's interval `size` against the MOUNTING
+ * document's already-closed metaparameter environment, before the deep-equal
+ * comparison that merges it (esm-spec §4.7 "Index-set merge").
+ *
+ * This is the step that makes the merge order answerable. A §4.7 mount resolves
+ * POST-CLOSE (§9.7.6 site 3: "the mounting document closes its own
+ * metaparameters before its refs resolve"), so by the time a contribution
+ * arrives the registry side has already folded to integers. Comparing an
+ * unfolded contribution against a folded registry entry makes two IDENTICAL
+ * declarations collide, which is issue #198; and leaving the contribution
+ * unfolded publishes a resolved document whose axis still carries a
+ * metaparameter name, which contradicts "the mounted form is fully concrete
+ * when it splices in" and §9.7.6 site 5's "closed at some enclosing document's
+ * close".
+ *
+ * A `size` already an integer is returned untouched. A `size` whose free names
+ * are NOT all in `env` stays symbolic rather than throwing: the enclosing
+ * document is not obliged to be able to close a name the assembly never
+ * declared, and leaving it open preserves what loads today.
+ */
+export function foldMountContribution(decl: unknown, env: Record<string, number>): unknown {
+  if (!isObject(decl)) return decl
+  const size = decl.size
+  if (size === undefined || size === null) return decl
+  if (typeof size === 'number' && Number.isInteger(size)) return decl
+  try {
+    return { ...decl, size: evalMetaExpr(size, env, 'index set size') }
+  } catch {
+    return decl
+  }
+}
+
+/**
+ * Whether `raw` still carries an unresolved §4.7 mount — a top-level
+ * `models.<k>` / `reaction_systems.<k>` `{ref}` or a `subsystems.<k>` `{ref}`.
+ */
+function documentHasUnresolvedMount(raw: unknown): boolean {
+  if (!isObject(raw)) return false
+  for (const compKind of COMPONENT_KINDS) {
+    const comps = raw[compKind]
+    if (!isObject(comps)) continue
+    for (const comp of Object.values(comps)) {
+      if (!isObject(comp)) continue
+      if (comp.ref !== undefined) return true
+      const subs = comp.subsystems
+      if (isObject(subs) && Object.values(subs).some((s) => isObject(s) && s.ref !== undefined)) {
+        return true
+      }
+    }
+  }
+  return false
+}
+
+/**
+ * Whether `raw` declares at least one index set and every interval `size` in
+ * the registry is already a concrete integer — the state a document reaches
+ * only after its metaparameters have closed and folded. Requiring at least one
+ * entry keeps the vacuous case (no `index_sets` at all, where nothing has been
+ * folded) on the checked path.
+ */
+function indexSetsAreFullyFolded(raw: unknown): boolean {
+  if (!isObject(raw)) return false
+  const isets = raw.index_sets
+  if (!isObject(isets) || Object.keys(isets).length === 0) return false
+  return Object.values(isets).every((decl) => {
+    if (!isObject(decl)) return true
+    const size = decl.size
+    return size === undefined || (typeof size === 'number' && Number.isInteger(size))
+  })
+}
+
+/**
+ * Whether `raw` is in the shape only a RESOLVED document has: no unresolved
+ * §4.7 mount left, and at least one index set with every interval `size`
+ * already a concrete integer.
+ *
+ * `checkDataSourceExtents` is an AUTHORING check and has to stay idempotent. A
+ * §4.7 mount CONSUMES the leaf's `metaparameters` (§9.7.6 site 3), so once a
+ * document has been resolved, a name only the leaf declared is declared nowhere
+ * and the `{ref}` stub the mount walk reads is gone — while the `extent` that
+ * named it is still there, having already done its job. A binding that re-loads
+ * its own resolved document (Rust does, at build) must not be told that
+ * document is invalid. esm-spec §8.9.4 states the exemption normatively, so all
+ * five bindings answer the same document the same way.
+ */
+export function documentIsInResolvedShape(raw: unknown): boolean {
+  return !documentHasUnresolvedMount(raw) && indexSetsAreFullyFolded(raw)
+}
+
+/**
+ * Whether any `data_sources` entry carries an `extent` (§8.9.4).
+ *
+ * The cheap guard on the mount walk above: the widened site-4 check and the
+ * `extent` check are the only two callers, and neither can matter unless the
+ * load either carries loader-API bindings or the document declares an `extent`.
+ * A document with neither pays no ref reads for this at all.
+ */
+export function documentDeclaresAnExtent(raw: unknown): boolean {
+  if (!isObject(raw)) return false
+  const sources = raw.data_sources
+  if (!isObject(sources)) return false
+  return Object.values(sources).some((s) => isObject(s) && isObject(s.extent))
+}
+
+/**
+ * esm-spec §8.9.4: every `data_sources.<k>.extent.metaparameter` MUST name a
+ * metaparameter this document declares, or one a document it mounts declares.
+ *
+ * A discovered extent is a §9.7.6 site-4 loader-API binding, and "binding an
+ * unknown name is an error" — but that error could only be raised once the
+ * source had been SAMPLED, which happens at build. So an `extent` naming a
+ * metaparameter nobody declares used to validate clean and fail only when the
+ * file was read, with a diagnostic about the loader API rather than about the
+ * typo. This is the same condition checked statically, off the document alone,
+ * so `validate` refuses it: `template_import_unknown_name`, the code §9.7.6
+ * already gives an unknown name at a binding site.
+ *
+ * Reachable in full here even though `extent` DISCOVERY is not implemented in
+ * this binding: the check is a pure document check and needs no data file.
+ */
+export function checkDataSourceExtents(
+  raw: unknown,
+  basePath: string,
+  mountDeclared?: ReadonlySet<string>,
+  options: TemplateResolveOptions = {},
+): void {
+  if (!isObject(raw)) return
+  const sources = raw.data_sources
+  if (!isObject(sources)) return
+  if (documentIsInResolvedShape(raw)) return
+  const declared = new Set<string>(Object.keys(collectMetaparamDecls(raw, DOCUMENT_ORIGIN)))
+  for (const n of mountDeclared ?? collectMountDeclaredMetaparameters(raw, basePath, options)) {
+    declared.add(n)
+  }
+  // Widened LAZILY, only for a name about to be refused: a metaparameter an
+  // imported library declares and the edge leaves unbound is RE-EXPORTED into
+  // this document's scope (§9.7.6 site 2) and is a perfectly good loader-API
+  // binding target — but this check runs on the AUTHORED tree, before the
+  // imports resolve, so it has to walk for it. A conforming document pays
+  // nothing: the walk runs only on the path that would otherwise throw.
+  let reachable: ReadonlySet<string> | undefined
+  for (const [key, src] of Object.entries(sources)) {
+    if (!isObject(src)) continue
+    const extent = src.extent
+    if (!isObject(extent)) continue
+    const name = extent.metaparameter
+    if (typeof name !== 'string' || declared.has(name)) continue
+    reachable ??= collectMountDeclaredMetaparameters(
+      raw,
+      basePath,
+      options,
+      new Set<string>(),
+      true,
+    )
+    if (reachable.has(name)) continue
+    throw new EsmMachineryError(
+      ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME,
+      `data_sources.${key}.extent binds metaparameter '${name}', which neither this document nor any document it mounts declares (esm-spec §8.9.4, §9.7.6)`,
+    )
+  }
+}
+
+/**
  * Resolve every esm-spec §9.7 construct of the ROOT document `rawData`
  * (relative import refs resolve against `basePath`): imports recursively
  * with per-edge instantiation, `index_sets` merge, metaparameter close
@@ -1628,12 +1904,20 @@ export function resolveTemplateMachinery(
   options: TemplateResolveOptions = {},
 ): JsonObject | null {
   const api = readApiBindings(options)
+  const mountDeclared = options.mountDeclared ?? EMPTY_NAME_SET
 
   if (!hasImportMachinery(rawData)) {
-    if (Object.keys(api).length > 0) {
+    // A binding naming something a MOUNTED document declares is meaningful even
+    // here: this document has no §9.7 machinery of its own, and the mount edge
+    // forwards the name into the leaf's close. Only a name no document in the
+    // assembly declares is the typo this refuses.
+    const unknown = Object.keys(api)
+      .filter((k) => !mountDeclared.has(k))
+      .sort()
+    if (unknown.length > 0) {
       throw new EsmMachineryError(
         ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME,
-        `loader API binds metaparameter(s) ${Object.keys(api).sort().join(', ')} but the document declares none (esm-spec §9.7.6)`,
+        `loader API binds metaparameter(s) ${unknown.join(', ')} which neither this document nor any document it mounts declares (esm-spec §9.7.6)`,
       )
     }
     return null
@@ -1666,7 +1950,7 @@ export function resolveTemplateMachinery(
   resolvePerComponentImports(root, docIsets, docMeta, baseDir, stack, options)
 
   // Phase 4 — close this document's metaparameters (§9.7.6 sites 4-5).
-  const values = closeMetaparameters(docMeta, api)
+  const values = closeMetaparameters(docMeta, api, mountDeclared)
 
   // Phase 5 — §9.7.6 name-collision check: no shadowing of visible names.
   checkMetaparamNameCollisions(root, docMeta, docIsets)
@@ -1674,8 +1958,20 @@ export function resolveTemplateMachinery(
   // Phase 6 — expression-position substitution of the closed values.
   const foldedIsets = substituteClosedValues(root, topTemplates, docIsets, values)
 
-  // Phase 7 — fold structural sites on the closed document.
-  foldClosedDocument(root, topTemplates, foldedIsets)
+  // Phase 7 — fold structural sites on the closed document. `mountedLeaf` says
+  // a MOUNTING document's registry will receive these index sets and close them
+  // (§4.7 "Index-set merge"), so an axis this scope cannot size stays symbolic
+  // instead of being `metaparameter_unbound` here. Without it, whether a mounted
+  // leaf accepts an assembler-scoped axis turned on `hasImportMachinery` — a
+  // whole-document boolean — so adding an `expression_template_imports` entry
+  // for a library the leaf never calls changed whether the leaf's shape
+  // resolved.
+  foldClosedDocument(
+    root,
+    topTemplates,
+    foldedIsets,
+    options.mountedLeaf === true ? 'defer' : 'reject',
+  )
 
   // Phase 8 — root library compose + expand call sites, preserving declarations.
   return finalizeDocument(
@@ -1792,6 +2088,16 @@ function resolvePerComponentImports(
     if (!isObject(comps)) continue
     for (const [cname, comp] of Object.entries(comps)) {
       if (!isObject(comp)) continue
+      // esm-spec §4.7: a `models.<k>` entry that is a bare `{ ref }` is a MOUNT
+      // EDGE, not a component, and its `expression_template_imports` are a
+      // §9.7.10 form-A INJECTION addressed to the leaf the edge mounts — not an
+      // import this document resolves in its own scope. Consuming them here
+      // (which ended `delete comp.expression_template_imports`) meant the edge
+      // reached the ref resolver with its injection already gone, so a form-A
+      // injection at this mount form lowered nothing at all, even with the
+      // rewrite-target in the mounted leaf's own equation. The same
+      // `ref`-with-no-`variables` discriminator `isTopLevelMountEdge` uses.
+      if (typeof comp.ref === 'string' && comp.variables === undefined) continue
       const imports = comp.expression_template_imports
       if (imports === undefined) continue
       const corigin = `${compKind}.${cname}`
@@ -1838,16 +2144,26 @@ function resolvePerComponentImports(
  * bindings win, then `default`s. Throws `template_import_unknown_name` for an
  * API binding of an undeclared name, `metaparameter_unbound` if any remains
  * open. Returns the closed name → integer environment.
+ *
+ * `mountDeclared` is the set of metaparameter names declared by the documents
+ * this one MOUNTS (§4.7, either mount form, transitively). A loader-API binding
+ * may name one of those: it is meaningful even though this document does not
+ * declare it, because the mount edge forwards it into the leaf's own close for
+ * the names the leaf declares. Such a name is accepted and CONSUMED here — it
+ * closes nothing in this scope, so it is absent from the returned environment.
+ * A name in NEITHER set is still a typo and still raises
+ * `template_import_unknown_name`: bindings never invent metaparameters.
  */
 function closeMetaparameters(
   docMeta: JsonObject,
   api: Record<string, number>,
+  mountDeclared: ReadonlySet<string> = EMPTY_NAME_SET,
 ): Record<string, number> {
   for (const k of Object.keys(api).sort()) {
-    if (!Object.prototype.hasOwnProperty.call(docMeta, k)) {
+    if (!Object.prototype.hasOwnProperty.call(docMeta, k) && !mountDeclared.has(k)) {
       throw new EsmMachineryError(
         ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME,
-        `loader API binds metaparameter '${k}', which the document does not declare (esm-spec §9.7.6)`,
+        `loader API binds metaparameter '${k}', which neither this document nor any document it mounts declares (esm-spec §9.7.6)`,
       )
     }
   }
@@ -1949,13 +2265,23 @@ function substituteClosedValues(
 
 /**
  * Phase 7 — fold the structural integer sites of the closed document
- * (`faq` ranges, `makearray` regions, index-set `size`s). A remaining
- * open index-set size is `metaparameter_unbound` at the root (`'reject'`).
+ * (`faq` ranges, `makearray` regions, index-set `size`s).
+ *
+ * `openPolicy` says whether this document is the LAST scope that could close a
+ * name. At a ROOT document it is, so a remaining open index-set size is
+ * `metaparameter_unbound` (`'reject'`). At a §4.7 mount edge it is NOT: the
+ * leaf resolves in its own scope, but its `index_sets` then merge into the
+ * MOUNTING document's registry (§4.7 "Index-set merge") and close there, so a
+ * name the leaf cannot bind stays symbolic and travels up (`'defer'`) rather
+ * than failing here. That is §9.7.6 site 5's "a metaparameter an edge leaves
+ * unbound … is closed at some enclosing document's close", applied to the axis
+ * the name sizes.
  */
 function foldClosedDocument(
   root: JsonObject,
   topTemplates: JsonObject,
   docIsets: JsonObject,
+  openPolicy: OpenSizePolicy = 'reject',
 ): void {
   for (const compKind of COMPONENT_KINDS) {
     const comps = root[compKind]
@@ -1968,7 +2294,7 @@ function foldClosedDocument(
   for (const [tn, td] of Object.entries(topTemplates)) {
     foldStructuralSites(td, `document.expression_templates.${tn}`)
   }
-  foldIndexSetSizes(docIsets, DOCUMENT_ORIGIN, 'reject')
+  foldIndexSetSizes(docIsets, DOCUMENT_ORIGIN, openPolicy)
 }
 
 /**
@@ -2326,17 +2652,30 @@ function mountRenameWalk(x: unknown, m: Record<string, string>): void {
  * An absent, null or empty map is the identity and leaves `doc` untouched,
  * which is what makes the field purely additive.
  */
-export function applyMountIndexSetRename(doc: unknown, renameRaw: unknown, where: string): void {
+export function applyMountIndexSetRename(
+  doc: unknown,
+  renameRaw: unknown,
+  where: string,
+  nestedContributed: ReadonlySet<string> = new Set(),
+): void {
   if (renameRaw === undefined || renameRaw === null || !isObject(doc)) return
   const requested = nameMap(renameRaw, 'index_set_rename', where)
 
   const root = doc as Record<string, unknown>
   const isets = isObject(root.index_sets) ? (root.index_sets as Record<string, unknown>) : {}
-  const declared = Object.keys(isets)
+  // `nestedContributed` names the index sets that reached `index_sets` only
+  // through a mount NESTED INSIDE the referenced document. esm-spec §4.7
+  // scopes this edge to "what THIS referenced document declares and imports",
+  // so they are held out of the edge's vocabulary and naming one is
+  // `subsystem_index_set_rename_unknown_name`. A name the leaf ALSO declares
+  // itself is NOT in the set and is renamed normally — the §4.7 merge already
+  // made the two one axis, so the rename carries through the nested component
+  // and the registry ends with one entry under the new name, not two.
+  const declared = Object.keys(isets).filter((n) => !nestedContributed.has(n))
 
   // Renames never invent names (esm-spec §4.7, mirroring §9.7.7).
   for (const key of Object.keys(requested)) {
-    if (!Object.prototype.hasOwnProperty.call(isets, key)) {
+    if (!Object.prototype.hasOwnProperty.call(isets, key) || nestedContributed.has(key)) {
       throw new EsmMachineryError(
         ERROR_CODES.SUBSYSTEM_INDEX_SET_RENAME_UNKNOWN_NAME,
         `${where}: \`index_set_rename\` names index set '${key}', which the resolved mounted document does not declare (it declares: ${declared.length > 0 ? declared.join(', ') : 'none'}). Keys speak the MOUNTED document's own post-resolution vocabulary (esm-spec §4.7 "Mount-edge index-set renaming")`,
@@ -2375,7 +2714,18 @@ export function applyMountIndexSetRename(doc: unknown, renameRaw: unknown, where
         )
       }
     }
-    renamed[name in changed ? changed[name] : name] = decl
+    const final = name in changed ? changed[name] : name
+    // A renamed axis may land on the name of an axis this edge does NOT rename
+    // — one a mount nested inside the referenced document contributed. Deep
+    // equality is idempotent; a disagreement is the §4.7 merge rule's own
+    // `subsystem_index_set_conflict`.
+    if (Object.prototype.hasOwnProperty.call(renamed, final) && !deepEqual(renamed[final], decl)) {
+      throw new EsmMachineryError(
+        ERROR_CODES.SUBSYSTEM_INDEX_SET_CONFLICT,
+        `${where}: \`index_set_rename\` maps index set '${name}' onto '${final}', which a mount nested inside the referenced document already contributes with a non-deep-equal declaration (esm-spec §4.7)`,
+      )
+    }
+    renamed[final] = decl
   }
   root.index_sets = renamed
 }

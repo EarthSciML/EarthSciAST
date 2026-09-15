@@ -1,0 +1,16 @@
+{
+ "esm": "1.0.0",
+ "metadata": {
+  "name": "fold_env_root",
+  "description": "Mounts fold_env_leaf.esm and declares an UNRELATED n_lev = 9 of its own. The grandchild's axis merges into the LEAF's registry, so it must fold to the leaf's 4 and never to this document's 9: a merge folds against the environment of whatever registry it lands in (esm-spec 4.7).",
+  "license": "MIT"
+ },
+ "metaparameters": {"n_lev": {"type": "integer", "default": 9, "description": "this assembler's own unrelated layer count"}},
+ "models": {
+  "Root": {
+   "subsystems": {"L": {"ref": "./fold_env_leaf.esm"}},
+   "variables": {"z": {"type": "unknown", "units": "1", "description": "own state"}},
+   "equations": [{"lhs": {"op": "D", "args": ["z"], "wrt": "t"}, "rhs": 0.0}]
+  }
+ }
+}

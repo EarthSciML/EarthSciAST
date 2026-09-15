@@ -93,18 +93,18 @@
     }
   },
   "counts": {
-    "symbols": 879,
+    "symbols": 883,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
       "julia": 302,
-      "typescript": 238,
+      "typescript": 239,
       "python": 250,
-      "rust": 337,
-      "go": 406
+      "rust": 339,
+      "go": 408
     },
     "by_tier": {
-      "extension": 607,
-      "stable": 272
+      "extension": 610,
+      "stable": 273
     }
   },
   "planned": [
@@ -1274,6 +1274,14 @@
       }
     },
     {
+      "name": "code_mount_form_unsupported",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeMountFormUnsupported"
+      }
+    },
+    {
       "name": "code_operator_compose_ambiguous_bare_name",
       "kind": "constant",
       "tier": "extension",
@@ -1578,6 +1586,14 @@
       }
     },
     {
+      "name": "code_unevaluable_operator",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeUnevaluableOperator"
+      }
+    },
+    {
       "name": "code_unknown_expression_type",
       "kind": "constant",
       "tier": "extension",
@@ -1599,14 +1615,6 @@
       "tier": "extension",
       "bindings": {
         "go": "CodeUnresolvedSubsystemRef"
-      }
-    },
-    {
-      "name": "code_unsupported_operator",
-      "kind": "constant",
-      "tier": "extension",
-      "bindings": {
-        "go": "CodeUnsupportedOperator"
       }
     },
     {
@@ -3176,6 +3184,15 @@
       "tier": "extension",
       "bindings": {
         "julia": "EventType"
+      }
+    },
+    {
+      "name": "exact_scale",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "ExactScale",
+        "rust": "ExactScale"
       }
     },
     {
@@ -6222,6 +6239,14 @@
       }
     },
     {
+      "name": "scale_factor",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "ScaleFactor"
+      }
+    },
+    {
       "name": "scatter_grid",
       "kind": "function",
       "tier": "extension",
@@ -7214,6 +7239,14 @@
       "tier": "extension",
       "bindings": {
         "julia": "UnboundVariableError"
+      }
+    },
+    {
+      "name": "unevaluable_operator_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "UnevaluableOperatorError"
       }
     },
     {

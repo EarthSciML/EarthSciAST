@@ -127,7 +127,7 @@ Rust counterpart, a Rust performance knob that has no reason to exist in
 TypeScript. Being in this tier is not a demerit — it is a promise that the
 symbol is *reachable and documented*, and a warning that it is not portable.
 
-**638 symbols.** Known members, called out by name:
+**641 symbols.** Known members, called out by name:
 
 - **Julia's build/inspection seam** — `build_evaluator`, `BuildInspection`,
   `evaluate_expr`, `expanded_model`, `expand_flattened_refs`, `param_map`,
@@ -1038,6 +1038,7 @@ reading that as a gap.
 | `ephemeral_injected_file` | function | – | `ephemeralInjectedFile` | – | `ephemeral_injected_file` | – |
 | `error_code_names` | function | `error_code_names` | – | – | `error_code_names` | – |
 | `evaluate_cellwise` | function | `evaluate_cellwise` | – | – | `evaluate_cellwise` | – |
+| `exact_scale` | type | – | – | – | `ExactScale` | `ExactScale` |
 | `expand` | function | – | – | `Expand` | – | `Expand` |
 | `expand_document` | function | – | `expandDocument` | `expand_document` | – | – |
 | `expr` | type | – | – | `Expr` | `Expr` | – |
@@ -1120,7 +1121,7 @@ reading that as a gap.
 
 ## 7. Extension seams
 
-638 symbols. They are enumerated in `api-surface.json` with
+641 symbols. They are enumerated in `api-surface.json` with
 `"tier": "extension"`; this section says what the families are and why each is
 allowed to differ.
 

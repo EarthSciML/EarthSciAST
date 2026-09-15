@@ -32,9 +32,10 @@ fn main() {
         return;
     };
     let lib = std::path::Path::new(&dir).join("lib");
-    // One arg per target kind: `rustc-link-arg` alone would also hit the
-    // rlib/cdylib, where a link arg is meaningless.
-    for kind in ["bins", "tests", "examples", "benches"] {
-        println!("cargo:rustc-link-arg-{kind}=-Wl,-rpath,{}", lib.display());
-    }
+    // The unscoped form, not one `rustc-link-arg-<kind>` per target kind:
+    // `-tests` reaches only the `tests/` integration binaries, NOT the lib's
+    // own unit-test harness (`cargo test --lib`), which then fails to start
+    // with the error above. rustc ignores a link arg on the rlib, and the
+    // cdylib wants the rpath as much as a binary does.
+    println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib.display());
 }

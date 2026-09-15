@@ -1496,16 +1496,29 @@ end
 # --- phase 3: close this document's metaparameters (§9.7.6 sites 4-5) ---
 # Loader-API bindings win, then declaration defaults; any name still open is
 # `metaparameter_unbound`. Returns the closed name → Int64 environment.
+#
+# `mount_declared` is the set of metaparameter names declared by the documents
+# this one MOUNTS (§4.7, either mount form, transitively —
+# `_collect_mount_declared_metaparameters`). A loader-API binding may name one
+# of those: it is meaningful even though THIS document does not declare it,
+# because the mount edge forwards it into the leaf's own close for the names
+# the leaf declares. Such a name is accepted and CONSUMED here — it closes
+# nothing in this scope, so it is absent from the returned environment (the
+# loop below builds that environment from `doc_meta` alone). A name in NEITHER
+# set is still a typo and still raises `template_import_unknown_name`:
+# bindings never invent metaparameters (§9.7.6).
 function _close_document_metaparams(doc_meta::OrderedDict{String,Any},
-        metaparameters::AbstractDict{String,<:Integer})::Dict{String,Int64}
+        metaparameters::AbstractDict{String,<:Integer},
+        mount_declared::AbstractSet{String}=Set{String}())::Dict{String,Int64}
     api = Dict{String,Int64}()
     for (k, v) in pairs(metaparameters)
         api[string(k)] = _require_int(v, "loader API metaparameter '$(string(k))'")
     end
     for k in sort(collect(keys(api)))
-        haskey(doc_meta, k) || throw(ExpressionTemplateError(
+        (haskey(doc_meta, k) || k in mount_declared) || throw(ExpressionTemplateError(
             ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME,
-            "loader API binds metaparameter '$k', which the document does not declare (esm-spec §9.7.6)"))
+            "loader API binds metaparameter '$k', which neither this document " *
+            "nor any document it mounts declares (esm-spec §9.7.6)"))
     end
     values = Dict{String,Int64}()
     open_names = String[]
@@ -1590,9 +1603,19 @@ function _substitute_closed_metaparams!(root::OrderedDict{String,Any},
 end
 
 # --- phase 6: fold structural sites on the closed document ---
+#
+# `strict` says whether this document is the LAST scope that could close a
+# name. At a ROOT document it is, so a still-open index-set `size` is
+# `metaparameter_unbound`. At a §4.7 mount edge it is NOT: the leaf resolves in
+# its own scope, but its `index_sets` then merge into the MOUNTING document's
+# registry (§4.7 "Index-set merge") and close there, so an axis this scope
+# cannot size stays SYMBOLIC and travels up rather than failing here. That is
+# §9.7.6 site 5's "a metaparameter an edge leaves unbound ... is closed at some
+# enclosing document's close", applied to the axis the name sizes.
 function _fold_closed_document!(root::OrderedDict{String,Any},
                                 top_templates::OrderedDict{String,Any},
-                                doc_isets::OrderedDict{String,Any})
+                                doc_isets::OrderedDict{String,Any};
+                                strict::Bool=true)
     for compkind in _COMPONENT_KINDS
         comps = get(root, compkind, nothing)
         (comps !== nothing && _is_object(comps)) || continue
@@ -1604,13 +1627,322 @@ function _fold_closed_document!(root::OrderedDict{String,Any},
     for (tn, td) in pairs(top_templates)
         _fold_structural_sites!(td, "document.expression_templates.$tn")
     end
-    _fold_index_set_sizes!(doc_isets, "document"; strict=true)
+    _fold_index_set_sizes!(doc_isets, "document"; strict=strict)
+    return
+end
+
+"""
+    _collect_mount_declared_metaparameters(raw, base_path) -> Set{String}
+
+The metaparameter names declared by every document `raw` MOUNTS, at either
+§4.7 mount form — a top-level `models.<k>` / `reaction_systems.<k>` `{ref}` and
+a `subsystems.<j>` `{ref}` — transitively through the mount DAG.
+
+A §4.7 mount edge CONSUMES the referenced document's `metaparameters` at the
+edge (§9.7.6 binding site 3), so those names never reach the mounting
+document's own declared set — which is why a loader-API binding for one of them
+used to be refused at a root that had no reason to redeclare it. This walk is
+what lets the site-4 check (and the §8.9.4 `extent` check) ask "does ANYONE in
+this assembly declare that name?" instead of "does the root".
+
+Reads only each referenced file's top-level `metaparameters` KEYS. A ref that
+cannot be read is IGNORED: this walk exists only to WIDEN acceptance, and the
+resolution error belongs to the ref resolver, which reports it with the proper
+mount pointer. `seen` (canonical ref identity) cycle-guards the walk.
+"""
+function _collect_mount_declared_metaparameters(raw, base_path::AbstractString,
+        seen::Set{String}=Set{String}(); follow_imports::Bool=false)::Set{String}
+    out = Set{String}()
+    _is_object(raw) || return out
+    base = String(base_path)
+
+    function visit_ref!(ref_value)
+        _is_object(ref_value) || return
+        rv = _raw_get(ref_value, "ref")
+        rv isa AbstractString || return
+        ref_str = String(rv)
+        key = try
+            _canonical_ref(_expand_ref_env(ref_str), base)
+        catch
+            return
+        end
+        key in seen && return
+        push!(seen, key)
+        loaded = try
+            _load_import_raw(ref_str, base, "mount-declared walk")
+        catch
+            return   # unreadable ref: not this walk's diagnostic to raise
+        end
+        child, child_base = loaded
+        _is_object(child) || return
+        decls = _raw_get(child, "metaparameters")
+        if decls !== nothing && _is_object(decls)
+            for (n, _) in pairs(decls)
+                push!(out, string(n))
+            end
+        end
+        union!(out, _collect_mount_declared_metaparameters(child, child_base, seen;
+                                                          follow_imports=follow_imports))
+        return
+    end
+
+    # The §9.7.2 import edges one scope carries, when asked for.
+    function visit_imports!(holder)
+        (follow_imports && _is_object(holder)) || return
+        entries = _raw_get(holder, "expression_template_imports")
+        entries isa AbstractVector || return
+        for entry in entries
+            visit_ref!(entry)
+        end
+        return
+    end
+
+    # A `subsystems` map to any depth: an INLINE entry may itself hold the
+    # `{ref}` mount whose leaf declares the name.
+    function visit_subsystems!(holder)
+        subs = _raw_get(holder, "subsystems")
+        (subs !== nothing && _is_object(subs)) || return
+        for (_, sub) in pairs(subs)
+            _is_object(sub) || continue
+            visit_ref!(sub)                        # a `subsystems.<j>` {ref}
+            visit_imports!(sub)
+            visit_subsystems!(sub)
+        end
+        return
+    end
+
+    visit_imports!(raw)   # a DOCUMENT-level `expression_template_imports`
+    for compkind in _COMPONENT_KINDS
+        comps = _raw_get(raw, compkind)
+        (comps !== nothing && _is_object(comps)) || continue
+        for (_, comp) in pairs(comps)
+            _is_object(comp) || continue
+            visit_ref!(comp)                       # top-level `models.<k>` {ref}
+            visit_imports!(comp)
+            visit_subsystems!(comp)
+        end
+    end
+    return out
+end
+
+"""
+    fold_mount_contribution(decl, env) -> decl
+
+Fold ONE §4.7 mount contribution's interval `size` against the MOUNTING
+document's already-closed metaparameter environment, before the deep-equal
+comparison that merges it (esm-spec §4.7 "Index-set merge").
+
+This is the step that makes the merge order answerable. A §4.7 mount resolves
+POST-CLOSE (§9.7.6 site 3: "the mounting document closes its own metaparameters
+before its refs resolve"), so by the time a contribution arrives the registry
+side has already folded to integers. Comparing an unfolded contribution against
+a folded registry entry makes two IDENTICAL declarations collide, which is issue
+#198; and leaving the contribution unfolded publishes a resolved document whose
+axis still carries a metaparameter name, which contradicts "the mounted form is
+fully concrete when it splices in" and §9.7.6 site 5's "closed at some enclosing
+document's close".
+
+In THIS binding it does one more job: `IndexSet.size` is `Union{Int,Nothing}`, so
+a still-symbolic size cannot survive typed coercion at all. Folding here, on the
+native tree and after the leaf's own close, is what lets an assembler-scoped axis
+cross a `subsystems.<k>` mount without widening the typed registry.
+
+A `size` already an integer is returned unchanged. A `size` whose free names are
+NOT all in `env` stays symbolic rather than throwing: the enclosing document is
+not obliged to be able to close a name the assembly never declared.
+"""
+function fold_mount_contribution(decl, env::AbstractDict{String,<:Integer})
+    _is_object(decl) || return decl
+    sz = _raw_get(decl, "size")
+    sz === nothing && return decl
+    (sz isa Integer && !(sz isa Bool)) && return decl
+    folded = try
+        eval_meta_expr(_to_native_json(sz), Dict{String,Int}(String(k) => Int(v) for (k, v) in env),
+                       "index set size")
+    catch
+        return decl
+    end
+    out = OrderedDict{String,Any}()
+    for (k, v) in pairs(decl)
+        out[String(k)] = v
+    end
+    out["size"] = folded
+    return out
+end
+
+"""
+    _fold_mount_contributions!(native_index_sets, env) -> native_index_sets
+
+Apply [`fold_mount_contribution`](@ref) across one native `index_sets` block,
+in place. Used on a MOUNTED leaf's registry once its own close has run, so a
+size only the enclosing document can bind is concrete before coercion.
+"""
+function _fold_mount_contributions!(isets, env::AbstractDict{String,<:Integer})
+    (isets !== nothing && _is_object(isets)) || return isets
+    isempty(env) && return isets
+    for (n, decl) in collect(pairs(isets))
+        folded = fold_mount_contribution(decl, env)
+        folded === decl || (isets[n] = folded)
+    end
+    return isets
+end
+
+"""
+    _document_has_unresolved_mount(raw) -> Bool
+
+Whether `raw` still carries an unresolved §4.7 mount — a top-level
+`models.<k>` / `reaction_systems.<k>` `{ref}` or a `subsystems.<k>` `{ref}`.
+"""
+function _document_has_unresolved_mount(raw)::Bool
+    _is_object(raw) || return false
+    for compkind in _COMPONENT_KINDS
+        comps = _raw_get(raw, compkind)
+        (comps !== nothing && _is_object(comps)) || continue
+        for (_, comp) in pairs(comps)
+            _is_object(comp) || continue
+            _has_field(comp, :ref) && return true
+            subs = _raw_get(comp, "subsystems")
+            (subs !== nothing && _is_object(subs)) || continue
+            for (_, sub) in pairs(subs)
+                (_is_object(sub) && _has_field(sub, :ref)) && return true
+            end
+        end
+    end
+    return false
+end
+
+"""
+    _index_sets_are_fully_folded(raw) -> Bool
+
+Whether `raw` declares at least one index set and every interval `size` in the
+registry is already a concrete integer — the state a document reaches only
+after its metaparameters have closed and folded. Requiring at least one entry
+keeps the vacuous case (no `index_sets` at all, where nothing has been folded)
+on the checked path.
+"""
+function _index_sets_are_fully_folded(raw)::Bool
+    _is_object(raw) || return false
+    isets = _raw_get(raw, "index_sets")
+    (isets !== nothing && _is_object(isets)) || return false
+    any_entry = false
+    for (_, decl) in pairs(isets)
+        any_entry = true
+        _is_object(decl) || continue
+        sz = _raw_get(decl, "size")
+        sz === nothing && continue
+        (sz isa Integer && !(sz isa Bool)) || return false
+    end
+    return any_entry
+end
+
+"""
+    _document_is_in_resolved_shape(raw) -> Bool
+
+Whether `raw` is in the shape only a RESOLVED document has: no unresolved §4.7
+mount left, and at least one index set with every interval `size` already a
+concrete integer.
+
+[`check_data_source_extents`](@ref) is an AUTHORING check and has to stay
+idempotent. A §4.7 mount CONSUMES the leaf's `metaparameters` (§9.7.6 site 3),
+so once a document has been resolved, a name only the leaf declared is declared
+nowhere and the `{ref}` stub the mount walk reads is gone — while the `extent`
+that named it is still there, having already done its job. A binding that
+re-loads its own resolved document (Rust does, at build) must not be told that
+document is invalid. esm-spec §8.9.4 states the exemption normatively, so all
+five bindings answer the same document the same way.
+"""
+_document_is_in_resolved_shape(raw)::Bool =
+    !_document_has_unresolved_mount(raw) && _index_sets_are_fully_folded(raw)
+
+"""
+    _document_declares_an_extent(raw) -> Bool
+
+Whether any `data_sources` entry carries an `extent` (esm-spec §8.9.4).
+
+The cheap guard on the mount walk above: the widened §9.7.6 site-4 check and
+[`check_data_source_extents`](@ref) are its only callers, and neither can
+matter unless the load either carries loader-API bindings or the document
+declares an `extent`. A document with neither pays no ref reads for this at all
+— which also keeps a remote `{ref}` from being fetched once for the walk and
+again for the ref resolver.
+"""
+function _document_declares_an_extent(raw)::Bool
+    _is_object(raw) || return false
+    sources = _raw_get(raw, "data_sources")
+    (sources !== nothing && _is_object(sources)) || return false
+    for (_, src) in pairs(sources)
+        _is_object(src) || continue
+        ex = _raw_get(src, "extent")
+        (ex !== nothing && _is_object(ex)) && return true
+    end
+    return false
+end
+
+"""
+    check_data_source_extents(raw, base_path, mount_declared=nothing)
+
+esm-spec §8.9.4: every `data_sources.<k>.extent.metaparameter` MUST name a
+metaparameter THIS document declares, or one a document it MOUNTS declares.
+
+A discovered extent is a §9.7.6 site-4 loader-API binding, and "binding an
+unknown name is an error" — but that error could only be raised once the source
+had been SAMPLED, which happens at build. So an `extent` naming a metaparameter
+nobody declares used to validate clean and fail only when the file was read,
+with a diagnostic about the loader API rather than about the typo. The
+condition is decidable from the documents alone, so it is decided HERE, at
+load, and `validate` refuses it: `template_import_unknown_name`, the code
+§9.7.6 already gives an unknown name at a binding site (no new code — §9.6.6
+codes are the cross-binding contract).
+"""
+function check_data_source_extents(raw, base_path::AbstractString,
+        mount_declared::Union{Nothing,AbstractSet{String}}=nothing)
+    _is_object(raw) || return
+    sources = _raw_get(raw, "data_sources")
+    (sources !== nothing && _is_object(sources)) || return
+    # Collect the extent sites FIRST: a document with no `extent` at all must
+    # not pay the mount walk, and must not reach `_collect_metaparam_decls`
+    # (whose own type diagnostics belong to resolution, not to this check).
+    sites = Tuple{String,String}[]
+    for (key, src) in pairs(sources)
+        _is_object(src) || continue
+        extent = _raw_get(src, "extent")
+        (extent !== nothing && _is_object(extent)) || continue
+        name = _raw_get(extent, "metaparameter")
+        name isa AbstractString || continue
+        push!(sites, (string(key), String(name)))
+    end
+    isempty(sites) && return
+    _document_is_in_resolved_shape(raw) && return
+    declared = Set{String}(keys(_collect_metaparam_decls(raw, "document")))
+    union!(declared, mount_declared === nothing ?
+           _collect_mount_declared_metaparameters(raw, base_path) : mount_declared)
+    # Widened LAZILY, only for a name about to be refused: a metaparameter an
+    # imported library declares and the edge leaves unbound is RE-EXPORTED into
+    # this document's scope (§9.7.6 site 2) and is a perfectly good loader-API
+    # binding target — but this check runs on the AUTHORED tree, before the
+    # imports resolve, so it has to walk for it. A conforming document pays
+    # nothing: the walk runs only on the path that would otherwise throw.
+    reachable = nothing
+    for (key, name) in sites
+        name in declared && continue
+        if reachable === nothing
+            reachable = _collect_mount_declared_metaparameters(raw, base_path;
+                                                               follow_imports=true)
+        end
+        name in reachable && continue
+        throw(ExpressionTemplateError(
+            ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME,
+            "data_sources.$key.extent binds metaparameter '$name', which neither " *
+            "this document nor any document it mounts declares " *
+            "(esm-spec §8.9.4, §9.7.6)"))
+    end
     return
 end
 
 """
     resolve_template_machinery(raw_data, base_path;
-                               metaparameters=Dict{String,Int}(), load_ref=nothing)
+                               metaparameters=Dict{String,Int}(), load_ref=nothing,
+                               mount_declared=nothing, mounted_leaf=false)
 
 Resolve every esm-spec §9.7 construct of the ROOT document `raw_data`
 (relative import refs resolve against `base_path`): imports recursively with
@@ -1631,16 +1963,30 @@ consumed — that IS an import edge — and the top-level `expression_templates`
 (esm-spec §9.6.4 rule 5: Option A expands call sites, it does not delete
 declarations; a template-library file MUST round-trip to itself). `nothing`
 when the document carries no §9.7 machinery (the legacy fast path).
+
+`mount_declared` widens the §9.7.6 site-4 check to the names declared by the
+documents this one mounts — see
+[`_collect_mount_declared_metaparameters`](@ref). `mounted_leaf` says this call
+IS a §4.7 mount edge, so an index-set `size` this scope cannot close stays
+symbolic for the MOUNTING registry to close (§9.7.6 site 5).
 """
 function resolve_template_machinery(raw_data, base_path::AbstractString;
         metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}(),
-        load_ref=nothing)
+        load_ref=nothing,
+        mount_declared::Union{Nothing,AbstractSet{String}}=nothing,
+        mounted_leaf::Bool=false)
+    mounted = mount_declared === nothing ? Set{String}() : mount_declared
     if !_has_import_machinery(raw_data)
-        isempty(metaparameters) || throw(ExpressionTemplateError(
+        # A binding naming something a MOUNTED document declares is meaningful
+        # even here: this document has no §9.7 machinery of its own, and the
+        # mount edge forwards the name into the leaf's close. Only a name NO
+        # document in the assembly declares is the typo this refuses.
+        unknown = sort(collect(String[string(k) for k in keys(metaparameters)
+                                      if !(string(k) in mounted)]))
+        isempty(unknown) || throw(ExpressionTemplateError(
             ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME,
-            "loader API binds metaparameter(s) " *
-            "$(join(sort(collect(String[string(k) for k in keys(metaparameters)])), ", ")) " *
-            "but the document declares none (esm-spec §9.7.6)"))
+            "loader API binds metaparameter(s) $(join(unknown, ", ")) which neither " *
+            "this document nor any document it mounts declares (esm-spec §9.7.6)"))
         return nothing
     end
     loader = load_ref === nothing ? _load_import_raw : load_ref
@@ -1673,10 +2019,19 @@ function resolve_template_machinery(raw_data, base_path::AbstractString;
         OrderedDict{String,Any}()
     _resolve_component_imports!(root, base_dir, stack, doc_isets, doc_meta;
                                 load_ref=loader)
-    values = _close_document_metaparams(doc_meta, metaparameters)
+    values = _close_document_metaparams(doc_meta, metaparameters, mounted)
     _check_metaparam_name_conflicts(root, doc_meta, doc_isets)
     doc_isets = _substitute_closed_metaparams!(root, top_templates, doc_isets, values)
-    _fold_closed_document!(root, top_templates, doc_isets)
+    # `mounted_leaf` says a MOUNTING document's registry will receive these
+    # index sets and close them (§4.7 "Index-set merge"), so an axis this scope
+    # cannot size stays symbolic instead of being `metaparameter_unbound` here.
+    # Without it, whether a mounted leaf accepted an assembler-scoped axis
+    # turned on `_has_import_machinery` — a WHOLE-DOCUMENT boolean — so adding
+    # one `expression_template_imports` entry for a library the leaf never
+    # calls changed whether the leaf's shape resolved at all (§4.7: "a
+    # component's shape is not allowed to stop resolving because a shared
+    # expression was factored into a library it imports and never calls").
+    _fold_closed_document!(root, top_templates, doc_isets; strict=!mounted_leaf)
 
     # --- phase 7: root library file — compose bodies (VALIDATION only), consume
     #     the import EDGE, restore the DECLARATIONS verbatim ---
@@ -2038,12 +2393,21 @@ target's export vocabulary.
 An absent (`nothing`) or empty map is the identity, which is what makes the field
 purely additive.
 """
-function apply_mount_index_set_rename(doc, rename_raw, where::AbstractString)
+function apply_mount_index_set_rename(doc, rename_raw, where::AbstractString;
+                                      nested_contributed::AbstractSet{String}=Set{String}())
     (rename_raw === nothing || !_is_object(doc)) && return doc
     requested = _name_map(rename_raw, "index_set_rename", where)
 
     isets = _get_field(doc, :index_sets, nothing)
-    declared = _is_object(isets) ? String[string(k) for k in keys(isets)] : String[]
+    # `nested_contributed` names the index sets that reached this registry ONLY
+    # through a mount nested inside the referenced document. esm-spec §4.7 scopes
+    # this edge to "what THIS referenced document declares and imports", so they
+    # are held out of the edge's vocabulary: naming one is
+    # `subsystem_index_set_rename_unknown_name`. A name the document ALSO
+    # declares itself is not in the set and is renamed normally — the §4.7 merge
+    # already made the two one axis, so the rename reaches the nested content.
+    declared = _is_object(isets) ?
+        String[string(k) for k in keys(isets) if !(string(k) in nested_contributed)] : String[]
 
     # Renames never invent names (esm-spec §4.7, mirroring §9.7.7).
     for key in keys(requested)
@@ -2087,7 +2451,18 @@ function apply_mount_index_set_rename(doc, rename_raw, where::AbstractString)
                                      for e in of]
                 end
             end
-            renamed[get(changed, string(name), string(name))] = decl
+            final = get(changed, string(name), string(name))
+            # A renamed axis may land on the name of an axis this edge does NOT
+            # rename — one a mount nested inside the referenced document
+            # contributed. Deep equality is idempotent; a disagreement is the
+            # §4.7 merge rule's own `subsystem_index_set_conflict`.
+            if haskey(renamed, final) && renamed[final] != decl
+                throw(ExpressionTemplateError(ERROR_CODES.SUBSYSTEM_INDEX_SET_CONFLICT,
+                    "$(where): `index_set_rename` maps index set '$(name)' onto " *
+                    "'$(final)', which a mount nested inside the referenced document " *
+                    "already contributes with a non-deep-equal declaration (esm-spec §4.7)"))
+            end
+            renamed[final] = decl
         end
         root["index_sets"] = renamed
     end

@@ -208,6 +208,12 @@ const ERROR_CODES = (
     # than merge the leaf under its pre-rename axis names.
     SUBSYSTEM_INDEX_SET_RENAME_UNSUPPORTED_MOUNT_FORM =
         "subsystem_index_set_rename_unsupported_mount_form",
+    # A §4.7 `{ref}` mount at a form a binding does not implement — the
+    # top-level `reaction_systems.<k>` `{ref}`, which Rust, TypeScript, Go and
+    # Python refuse with this code. This binding implements that form, so it never
+    # raises it; the constant exists because the code table is cross-language
+    # uniform.
+    MOUNT_FORM_UNSUPPORTED = "mount_form_unsupported",
 
     # ── Enum lowering (esm-spec §9.3; registered_functions.jl, raised as
     #    `EnumLoweringError`). The two `unknown_*` values are the ones the
@@ -263,6 +269,11 @@ const ERROR_CODES = (
     #    surfaces when a rewrite-target operator (an RHS-position `D`, or
     #    `grad`/`div`/`laplacian`) reaches evaluation unlowered. ────────────
     UNLOWERED_OPERATOR = "unlowered_operator",
+    # ── Its complement (esm-spec §9.6.6): an op that IS in the §4.2 evaluable
+    #    core but that the tree-walk evaluator has no rule for (an array/query or
+    #    value-invention op outside the position that consumes it, an unlowered
+    #    `enum`). Refused when the evaluator is BUILT, never at evaluation. ────
+    UNEVALUABLE_OPERATOR = "unevaluable_operator",
 )
 
 """

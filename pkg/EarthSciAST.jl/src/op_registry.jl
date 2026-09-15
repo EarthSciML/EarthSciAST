@@ -379,6 +379,14 @@ const _OP_TABLE = _OpSpec[
     _op("intersect_polygon";         category=:geometry, geo=true),
     _op("polygon_intersection_area"; category=:geometry, geo=true),
     _op("skolem";                    category=:value_invention, geo=true),
+    # The rest of the §4.2 value-invention family. Registered so they are read as
+    # evaluable-core ops rather than open-tier rewrite targets (`_op_in_T`): the
+    # tree-walk evaluator has no rule for any of them, so one reaching the build
+    # is refused with `unevaluable_operator`, not `unlowered_operator`.
+    _op("rank";                      category=:value_invention),
+    _op("distinct";                  category=:value_invention),
+    _op("argmin";                    category=:value_invention),
+    _op("argmax";                    category=:value_invention),
 ]
 
 # Name → spec lookup (load-time derived; ops are unique by construction —

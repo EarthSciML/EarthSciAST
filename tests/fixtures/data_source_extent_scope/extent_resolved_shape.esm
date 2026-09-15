@@ -1,0 +1,84 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "ExtentResolvedShape",
+    "description": "The shape `extent_root_toplevel.esm` RESOLVES to: the leaf inlined, its `metaparameters` consumed at the mount, the axis folded, the `extent` still present. Re-loading it must not be refused."
+  },
+  "data_sources": {
+    "EGU_Emis": {
+      "kind": "points",
+      "source": {
+        "url_template": "file://./records.csv"
+      },
+      "extent": {
+        "metaparameter": "N_REC"
+      },
+      "metadata": {
+        "esio_format": "ff10"
+      }
+    }
+  },
+  "index_sets": {
+    "records": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "Ingest": {
+      "system_kind": "nonlinear",
+      "variables": {
+        "annual": {
+          "type": "parameter",
+          "units": "kg/yr",
+          "default": 0.0,
+          "shape": [
+            "records"
+          ],
+          "description": "Per-record annual emissions, read from the source.",
+          "update": {
+            "kind": "data",
+            "source": "EGU_Emis",
+            "from": {
+              "file_variable": "ANN_VALUE"
+            }
+          }
+        },
+        "annual_obs": {
+          "type": "unknown",
+          "units": "kg/yr",
+          "shape": [
+            "records"
+          ],
+          "description": "Identity over the ingested column."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "annual_obs",
+          "rhs": {
+            "op": "faq",
+            "output_idx": [
+              "r"
+            ],
+            "ranges": {
+              "r": {
+                "from": "records"
+              }
+            },
+            "args": [
+              "annual"
+            ],
+            "expr": {
+              "op": "index",
+              "args": [
+                "annual",
+                "r"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}
