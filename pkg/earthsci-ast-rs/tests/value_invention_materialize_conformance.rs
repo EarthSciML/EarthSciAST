@@ -93,9 +93,17 @@ fn value_invention_materialize_outcomes_match_the_manifest() {
                         r.message
                     );
                     let code = c["code"].as_str().expect("code");
-                    assert!(r.message.contains(code), "{id}#{idx}: want `{code}`: {}", r.message);
+                    assert!(
+                        r.message.contains(code),
+                        "{id}#{idx}: want `{code}`: {}",
+                        r.message
+                    );
                     if let Some(name) = c["names"].as_str() {
-                        assert!(r.message.contains(name), "{id}#{idx}: want `{name}`: {}", r.message);
+                        assert!(
+                            r.message.contains(name),
+                            "{id}#{idx}: want `{name}`: {}",
+                            r.message
+                        );
                     }
                 }
                 other => panic!("{id}#{idx}: unknown outcome {other:?}"),
