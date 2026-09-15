@@ -125,6 +125,7 @@ jobs:
         with:
           toolchain: ${{ env.RUST_LINT_VERSION }}
           components: rustfmt, clippy
+          targets: aarch64-unknown-linux-gnu
 
       - name: Cache Rust dependencies
         uses: actions/cache@v4
@@ -180,6 +181,16 @@ jobs:
         if: ${{ !cancelled() }}
         working-directory: pkg/earthsci-ast-rs
         run: cargo clippy --all-targets -- -D warnings
+
+      # The same crate linted for a NON-x86 target. The SIMD bit-identity
+      # comparisons (`tape/exec/simd_tests.rs`) and the AVX clones they check
+      # compile only on x86_64, so a helper or variable used only inside them
+      # warns on every other architecture -- which the x86_64 step above can
+      # never see (#243). Check-only: no aarch64 linker or C compiler needed.
+      - name: cargo clippy (aarch64)
+        if: ${{ !cancelled() }}
+        working-directory: pkg/earthsci-ast-rs
+        run: cargo clippy --lib --tests --target aarch64-unknown-linux-gnu --features simd -- -D warnings
 
       # --- TypeScript ---------------------------------------------------
       - name: Install TypeScript dependencies
