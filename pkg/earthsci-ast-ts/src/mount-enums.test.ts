@@ -32,11 +32,13 @@ async function load(fixture: string): Promise<Record<string, unknown>> {
 function rhs(file: Record<string, unknown>, dotted: string): unknown {
   const parts = dotted.split('.')
   const variable = parts.pop() as string
-  let node = (file.models as Record<string, any>)[parts[0] as string]
-  for (const sub of parts.slice(1)) node = node.subsystems[sub]
-  const eq = (node.equations as Array<{ lhs: unknown; rhs: unknown }>).find(
-    (e) => e.lhs === variable,
-  )
+  type Component = {
+    subsystems?: Record<string, Component>
+    equations: Array<{ lhs: unknown; rhs: unknown }>
+  }
+  let node = (file.models as Record<string, Component>)[parts[0] as string] as Component
+  for (const sub of parts.slice(1)) node = (node.subsystems ?? {})[sub] as Component
+  const eq = node.equations.find((e) => e.lhs === variable)
   return eq?.rhs
 }
 
