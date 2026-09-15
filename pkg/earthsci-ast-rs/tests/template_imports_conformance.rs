@@ -392,7 +392,10 @@ fn import_rename_name_keyed_map_entries_matches_golden() {
     );
     let total = obs_def(&d["models"]["M"], "total");
     assert_eq!(total["ranges"], json!({"dim": {"from": "L.cells"}}));
-    assert_eq!(total["expr"]["args"][1], json!({"op": "*", "args": ["kk", "kk2"]}));
+    assert_eq!(
+        total["expr"]["args"][1],
+        json!({"op": "*", "args": ["kk", "kk2"]})
+    );
 }
 
 /// import_where_rename_unknown_index_set: a `where` shape naming a set the
