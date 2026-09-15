@@ -25,6 +25,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -142,6 +143,10 @@ func evalFixtureExpr(expr any, bindings map[string]float64) (float64, bool) {
 			return math.Tan(args[0]), true
 		case "abs":
 			return math.Abs(args[0]), true
+		case "min":
+			return slices.Min(args), true
+		case "max":
+			return slices.Max(args), true
 		default:
 			panic(fmt.Sprintf("unsupported op: %q", opRaw))
 		}
