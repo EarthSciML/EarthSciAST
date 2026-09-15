@@ -16,7 +16,9 @@ use earthsci_ast::Expr;
 use earthsci_ast::extension::lower_expression_templates::{
     MAX_TEMPLATE_EXPANSION_DEPTH, expand, lower_expression_templates,
 };
-use earthsci_ast::{LoadOptions, load_path, load_path_with_options, load_string_with_options};
+use earthsci_ast::{
+    LoadOptions, load_path, load_path_with_options, load_string, load_string_with_options,
+};
 use earthsci_ast::{reject_template_imports_pre_v08, resolve_template_machinery};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -781,6 +783,7 @@ fn invalid_fixtures_fail_with_exact_codes() {
     // by the unit tests below, directly against the gate functions.
     for code in [
         "template_import_not_library",
+        "template_library_illegal_payload",
         "subsystem_ref_is_template_library",
         "template_import_cycle",
         "template_import_name_conflict",
@@ -1361,6 +1364,36 @@ fn version_gate_flags_every_9_7_construct() {
     )
     .unwrap();
     reject_template_imports_pre_v08(&ok).expect("0.8.0 passes");
+}
+
+/// A top-level `expression_templates` block makes the document a
+/// template-library file, which declares none of these keys (esm-spec §9.7.1).
+/// Rules are component-local (§9.6.3 constraint 4), so beside a component the
+/// block would be visible to nothing; loading refuses it instead.
+#[test]
+fn root_templates_beside_component_payload_rejected() {
+    let head = r#"{"esm": "1.0.0", "metadata": {"name": "impure"}, "expression_templates": {"double": {"params": ["a"], "body": {"op": "*", "args": [2, "a"]}}}, "#;
+    for (key, snippet) in [
+        (
+            "models",
+            r#""models": {"M": {"variables": {"x": {"type": "unknown", "default": 1.0}}, "equations": []}}"#,
+        ),
+        (
+            "reaction_systems",
+            r#""reaction_systems": {"R": {"species": {}, "reactions": []}}"#,
+        ),
+        ("data_sources", r#""data_sources": {}"#),
+        ("coupling", r#""coupling": []"#),
+        ("domain", r#""domain": {"temporal": {}}"#),
+    ] {
+        let e = load_string(&format!("{head}{snippet}}}"))
+            .expect_err(&format!("{key}: must fail to load"));
+        let msg = e.to_string();
+        assert!(
+            msg.contains("[template_library_illegal_payload]"),
+            "{key}: expected code [template_library_illegal_payload], got: {msg}"
+        );
+    }
 }
 
 /// §9.7.10 "The shared operation" defines a mount-edge injection as extending

@@ -385,6 +385,9 @@ function _load_parsed(raw_data; base_path::AbstractString=pwd(),
     # expression_templates, metaparameters) are rejected when the file
     # declares esm < 0.8.0 (esm-spec §9.6.5).
     reject_template_imports_pre_v08(raw_data)
+    # Top-level `expression_templates` beside a component payload is a
+    # template-library payload no component can see (esm-spec §9.7.1).
+    _reject_impure_template_library(raw_data)
     # The top-level `solver` block arrives at esm 1.1.0 (esm-spec §2.2.4).
     reject_solver_pre_v11(raw_data)
 

@@ -2628,6 +2628,7 @@ def _load_data(
     from .solver import reject_solver_pre_v11
     from .template_imports import (
         apply_scope_injections,
+        reject_impure_template_library,
         reject_template_imports_pre_v08,
         resolve_template_machinery,
     )
@@ -2643,6 +2644,9 @@ def _load_data(
     # expression_templates, metaparameters) are rejected when the file
     # declares esm < 0.8.0 (esm-spec §9.6.5).
     reject_template_imports_pre_v08(data)
+    # Top-level `expression_templates` beside a component payload is a
+    # template-library payload no component can see (esm-spec §9.7.1).
+    reject_impure_template_library(data)
 
     # The top-level `solver` block arrives at esm 1.1.0; a file declaring an
     # earlier version that carries one is rejected (esm-spec §2.2.4).

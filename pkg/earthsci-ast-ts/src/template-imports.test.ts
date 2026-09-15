@@ -420,6 +420,7 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
     // itself is still live and is unit-tested directly further down.
     for (const code of [
       'template_import_not_library',
+      'template_library_illegal_payload',
       'subsystem_ref_is_template_library',
       'template_import_cycle',
       'template_import_name_conflict',
@@ -855,6 +856,25 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
      "metaparameters": {"N": {"type": "integer", "default": 1}},
      "expression_templates": {"t": {"params": [], "body": 1}}}`)
     expect(() => rejectTemplateImportsPreV08(ok)).not.toThrow()
+  })
+
+  // A top-level `expression_templates` block makes the document a
+  // template-library file, which declares none of these keys (esm-spec §9.7.1).
+  // Rules are component-local (§9.6.3 constraint 4), so beside a component the
+  // block would be visible to nothing; loading refuses it instead.
+  it.each([
+    [
+      'models',
+      '"models": {"M": {"variables": {"x": {"type": "unknown", "default": 1.0}}, "equations": []}}',
+    ],
+    ['reaction_systems', '"reaction_systems": {"R": {"species": {}, "reactions": []}}'],
+    ['data_sources', '"data_sources": {}'],
+    ['coupling', '"coupling": []'],
+    ['domain', '"domain": {"temporal": {}}'],
+  ])('root document: top-level templates beside %s are rejected', (_key, snippet) => {
+    const head =
+      '{"esm": "1.0.0", "metadata": {"name": "impure"}, "expression_templates": {"double": {"params": ["a"], "body": {"op": "*", "args": [2, "a"]}}}, '
+    expect(errCode(() => loadString(head + snippet + '}'))).toBe('template_library_illegal_payload')
   })
 
   // Regression: the §9.7.10 injected-imports append (shared by template-imports
