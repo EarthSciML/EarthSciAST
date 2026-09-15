@@ -2835,6 +2835,14 @@
       }
     },
     {
+      "name": "error_array_default_without_shape",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "ErrorArrayDefaultWithoutShape"
+      }
+    },
+    {
       "name": "error_circular_dependency",
       "kind": "constant",
       "tier": "extension",

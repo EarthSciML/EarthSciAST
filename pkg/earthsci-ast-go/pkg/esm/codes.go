@@ -303,6 +303,11 @@ const (
 	// clock in place of a fuel time-lag constant.
 	// (tests/invalid/reserved_variable_name_*.esm).
 	ErrorReservedVariableName = "reserved_variable_name"
+	// ErrorArrayDefaultWithoutShape is inline array data as the `default` of a
+	// variable that declares no `shape` (esm-spec §6.3). Inline array data is a
+	// SHAPED variable's value, so with no shape there is nothing for the array
+	// to fill (tests/invalid/array_default_without_shape.esm).
+	ErrorArrayDefaultWithoutShape = "array_default_without_shape"
 )
 
 // --- Diagnostic codes: structural validation, peers of the Error* block

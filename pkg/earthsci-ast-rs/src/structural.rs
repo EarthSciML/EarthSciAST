@@ -52,6 +52,14 @@ pub(crate) fn validate_model(
             errors,
         );
     }
+    // esm-spec §6.3: inline array data is a shaped variable's value, so on a
+    // variable with no `shape` it has nothing to fill.
+    check_array_defaults_have_shape(
+        model,
+        &format!("/models/{model_name}"),
+        &format!("Model '{model_name}'"),
+        errors,
+    );
 
     ctx.check_equation_balance(errors);
     let unit_env = ctx.check_unit_declarations(errors);
@@ -920,6 +928,109 @@ fn check_reserved_subsystem_names<'a, I>(
         if let Some(nested) = value.get("subsystems").and_then(|v| v.as_object()) {
             check_reserved_subsystem_names(
                 esm_file,
+                nested.iter(),
+                &format!("{sub_path}/subsystems"),
+                errors,
+            );
+        }
+    }
+}
+
+/// One `array_default_without_shape` finding, at the offending `default` field.
+fn array_default_without_shape(
+    model_path: &str,
+    owner: &str,
+    name: &str,
+    var_type: &str,
+) -> StructuralError {
+    StructuralError {
+        path: format!("{model_path}/variables/{name}/default"),
+        code: StructuralErrorCode::ArrayDefaultWithoutShape,
+        message: format!(
+            "{owner} variable '{name}' has inline array data as its default but declares no \
+             shape; inline array data is a shaped variable's value (esm-spec §6.3)"
+        ),
+        details: serde_json::json!({ "variable": name, "variable_type": var_type }),
+    }
+}
+
+/// `array_default_without_shape` for every variable of `model`, and of its
+/// inline subsystems, whose `default` is inline ARRAY data but which declares
+/// no `shape` (esm-spec §6.3).
+///
+/// Inline array data is a SHAPED variable's value, so with no shape (omitted,
+/// null or empty) there is nothing for it to fill. `prepare::scalar_params`
+/// still keeps such a parameter out of the build's scalar scope, so a route
+/// that skips validation reads it fail-closed rather than as a fabricated
+/// number; this is the load-time rejection that names the declaration.
+fn check_array_defaults_have_shape(
+    model: &crate::Model,
+    model_path: &str,
+    owner: &str,
+    errors: &mut Vec<StructuralError>,
+) {
+    let mut names: Vec<&String> = model.variables.keys().collect();
+    names.sort();
+    for name in names {
+        let var = &model.variables[name];
+        let is_array = matches!(var.default, Some(crate::types::InlineValue::Array(_)));
+        let shaped = var.shape.as_ref().is_some_and(|s| !s.is_empty());
+        if is_array && !shaped {
+            let var_type = serde_json::to_value(var.var_type)
+                .ok()
+                .and_then(|v| v.as_str().map(str::to_string))
+                .unwrap_or_default();
+            errors.push(array_default_without_shape(
+                model_path, owner, name, &var_type,
+            ));
+        }
+    }
+    if let Some(subsystems) = &model.subsystems {
+        check_subsystem_array_defaults(
+            subsystems.iter(),
+            &format!("{model_path}/subsystems"),
+            errors,
+        );
+    }
+}
+
+/// [`check_array_defaults_have_shape`] over every INLINE subsystem, recursively.
+/// `Model::subsystems` is untyped (an entry may be an unresolved `{"ref": …}`,
+/// which has no `variables`), so the walk is over raw JSON.
+fn check_subsystem_array_defaults<'a, I>(
+    subsystems: I,
+    base_path: &str,
+    errors: &mut Vec<StructuralError>,
+) where
+    I: IntoIterator<Item = (&'a String, &'a serde_json::Value)>,
+{
+    let mut entries: Vec<(&String, &serde_json::Value)> = subsystems.into_iter().collect();
+    entries.sort_by(|a, b| a.0.cmp(b.0));
+    for (name, value) in entries {
+        let sub_path = format!("{base_path}/{name}");
+        if let Some(vars) = value.get("variables").and_then(|v| v.as_object()) {
+            let mut keys: Vec<&String> = vars.keys().collect();
+            keys.sort();
+            for key in keys {
+                let var = &vars[key.as_str()];
+                let is_array = var.get("default").is_some_and(|d| d.is_array());
+                let shaped = var
+                    .get("shape")
+                    .and_then(|s| s.as_array())
+                    .is_some_and(|s| !s.is_empty());
+                if is_array && !shaped {
+                    let var_type = var.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                    errors.push(array_default_without_shape(
+                        &sub_path,
+                        &format!("Model '{name}'"),
+                        key,
+                        var_type,
+                    ));
+                }
+            }
+        }
+        if let Some(nested) = value.get("subsystems").and_then(|v| v.as_object()) {
+            check_subsystem_array_defaults(
                 nested.iter(),
                 &format!("{sub_path}/subsystems"),
                 errors,

@@ -208,6 +208,10 @@ export const ERROR_CODES = {
   //   unreachable and every reader silently receives the implicit symbol
   //   instead — the simulation clock in place of the declared quantity.
   RESERVED_VARIABLE_NAME: 'reserved_variable_name',
+  // Inline array data as the `default` of a variable that declares no `shape`
+  //   (esm-spec §6.3). Inline array data is a SHAPED variable's value, so with
+  //   no shape there is nothing for the array to fill.
+  ARRAY_DEFAULT_WITHOUT_SHAPE: 'array_default_without_shape',
   UNDEFINED_PARAMETER: 'undefined_parameter',
   UNDEFINED_SPECIES: 'undefined_species',
   UNDEFINED_SYSTEM: 'undefined_system',
