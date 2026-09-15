@@ -1605,8 +1605,7 @@ def _check_inline_tests(data: dict[str, Any], errors: list) -> None:
                                     (
                                         "unknown_override_key",
                                         f"{base}/{field}/{_pointer_token(key)}",
-                                        f'Override key "{key}" in {field} matches no '
-                                        f"declared name",
+                                        f'Override key "{key}" in {field} matches no declared name',
                                         {"key": key, "field": field},
                                     )
                                 )
