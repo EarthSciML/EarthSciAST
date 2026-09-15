@@ -27,7 +27,11 @@ fn box_with_ic(ic_rhs: Value) -> earthsci_ast::FlattenedSystem {
     });
     let file = load_string(&doc.to_string()).expect("loads");
     let flat = flatten(&file).expect("flattens");
-    assert_eq!(flat.field_ics.len(), 1, "the ic equation is routed to field_ics");
+    assert_eq!(
+        flat.field_ics.len(),
+        1,
+        "the ic equation is routed to field_ics"
+    );
     flat
 }
 
