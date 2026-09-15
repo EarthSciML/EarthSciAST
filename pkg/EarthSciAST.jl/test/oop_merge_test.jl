@@ -32,7 +32,7 @@ function _om_build(model, ics; merged::Bool, param_arrays=Dict{String,Any}())
         (fo, u0, p, vm)
     end
 end
-_om_nkernels(fo) = length(getfield(ESM.rhs_with_buffers(fo), :acc_kernels))
+_om_nkernels(fo) = length(getfield(getfield(fo, :rhs), :acc_kernels))
 _ip(f!, u, p, t) = (du = zero(u); f!(du, u, p, t); du)
 
 # Two SAME-STRUCTURE equations over different states — one merge class of two

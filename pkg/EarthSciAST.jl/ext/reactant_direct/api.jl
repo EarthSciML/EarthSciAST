@@ -39,7 +39,7 @@ end
     DirectRHSBuffers
 
 The explicit-buffers form of [`DirectRHS`](@ref) — `d(u, p, t, buffers)` — the
-direct twin of `rhs_with_buffers(f)`. `buffers` is a container aligned with
+explicit-buffers form. `buffers` is a container aligned with
 `forcing_buffers(f)` (same length, same name-sorted order); pass device arrays
 (`ConcreteRArray`s) and refresh them in place with `copyto!` / `sync_forcing!`
 at each cadence boundary. Because they arrive through the argument list they are
@@ -118,7 +118,7 @@ end
     direct_rhs_with_buffers(d) -> DirectRHSBuffers
     direct_rhs_with_buffers(f; var_map = nothing) -> DirectRHSBuffers
 
-The explicit-buffers form, the direct twin of `rhs_with_buffers`:
+The explicit-buffers form:
 
 ```julia
 fo  = build_evaluator(model; form = :oop, param_arrays = forcing)[1]

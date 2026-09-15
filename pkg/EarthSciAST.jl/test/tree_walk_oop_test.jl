@@ -351,9 +351,9 @@ end
         # section hosts them all.
         ks = getfield(fi, :kernel_section)
         @test ks.n_emitted + length(ks.kernels) > 0
-        # `fo` is the `_OopRHS` wrapper (B2); the walk closure — and its captured
-        # lane plans — is the explicit-buffers form behind `rhs_with_buffers`.
-        oplans = getfield(ESM.rhs_with_buffers(fo), :acc_plans)
+        # `fo` is the `_OopRHS` wrapper; the compiled IR — and its lane plans —
+        # is its `rhs` field.
+        oplans = getfield(getfield(fo, :rhs), :acc_plans)
         @test !isempty(oplans) && all(P -> P.vectorizable, oplans)
     end
 

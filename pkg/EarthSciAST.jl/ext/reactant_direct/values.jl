@@ -645,7 +645,7 @@ function _de_buffer(ctx::_DECtx, arr::Vector{Float64})::_DEVal
                 _de_refuse("a forcing buffer argument of type $(typeof(x))",
                     "buffer $j of the `buffers` argument is not a traced " *
                     "rank-1 Float64 array. Pass `map(ConcreteRArray, " *
-                    "forcing_buffers(f))`, the container `rhs_with_buffers` " *
+                    "forcing_buffers(f))`, the container the explicit-buffers form " *
                     "expects.")
             v = _DEVal(x.mlir_data, length(x))
             ctx.bufvals[j] = v

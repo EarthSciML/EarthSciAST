@@ -35,10 +35,10 @@
 #   from. Three refusals are pinned: an operator with no StableHLO form, the
 #   three-argument call on a live-forcing model, and a host (untraced) call.
 #
-#   THE OP CENSUS against the traced emitter is printed for the report and, for
-#   the two structural fixtures, asserted where the assertion is about the IR
-#   ("one constant per distinct literal", "no `dynamic_update_slice`") rather
-#   than about XLA. It is never a gate on the traced backend's totals.
+#   THE OP CENSUS of the emitted module is printed for the report and, for the
+#   two structural fixtures, asserted where the assertion is about the IR ("one
+#   constant per distinct literal", "no `dynamic_update_slice`") rather than
+#   about XLA.
 
 using Test
 using EarthSciAST
@@ -52,7 +52,7 @@ const RX_DE = Reactant
 const EXT_DE = Base.get_extension(EarthSciAST, :EarthSciASTReactantExt)
 @assert EXT_DE !== nothing "the Reactant extension did not load"
 
-# ---- document builders (the same shapes test/reactant_oop_test.jl uses) ------
+# ---- document builders -------------------------------------------------------
 
 _de_Dt(v) = Dict{String,Any}("op" => "D", "args" => Any[v], "wrt" => "t")
 _de_ix(v, i...) = Dict{String,Any}("op" => "index", "args" => Any[v, i...])
@@ -238,7 +238,7 @@ end
 # `buffers === nothing` uses the three-argument form; otherwise the explicit
 # buffers form, with the SAME host buffers the interpreter reads.
 function _de_compare(name, fo, fi!, p, samples; buffers = nothing, rtol = 1e-12,
-                     census = true, traced_census = true)
+                     census = true)
     d = EXT_DE.direct_rhs(fo)
     callee = buffers === nothing ? d : EXT_DE.direct_rhs_with_buffers(d)
     pr = _de_dev(p)
@@ -273,28 +273,16 @@ function _de_compare(name, fo, fi!, p, samples; buffers = nothing, rtol = 1e-12,
     for (s, a, r, m) in rows
         println("    ", rpad(s, 44), rpad(string(a), 14), rpad(string(r), 14), m)
     end
-    census || return (d, Dict{String,Int}(), Dict{String,Int}())
-    # Raw module censuses for both backends. INFORMATIONAL — the traced emitter
-    # is an oracle here, never a gate.
+    census || return (d, Dict{String,Int}())
+    # The raw module census. INFORMATIONAL — printed so a change in emitted shape
+    # is visible in the log, never a gate.
     mod_direct = buffers === nothing ?
         repr(RX_DE.@code_hlo optimize = false callee(ur, pr, tr)) :
         repr(RX_DE.@code_hlo optimize = false callee(ur, pr, tr, buffers))
     _de_dump(name, "direct", mod_direct)
     cd_ = _de_census(mod_direct)
     _de_print_census("direct (raw)", cd_)
-    # The traced emitter is an ORACLE, and it does not lower every model this
-    # backend does (a scalar-spine `interp.*` is the standing example — see
-    # test/reactant_oop_test.jl, "interp.* does not trace"). Skip its census
-    # where it cannot answer rather than let an oracle gap fail the backend.
-    traced_census || return (d, cd_, Dict{String,Int}())
-    traced = buffers === nothing ? fo : ESM_DE.rhs_with_buffers(fo)
-    mod_traced = buffers === nothing ?
-        repr(RX_DE.@code_hlo optimize = false traced(ur, pr, tr)) :
-        repr(RX_DE.@code_hlo optimize = false traced(ur, pr, tr, buffers))
-    _de_dump(name, "traced", mod_traced)
-    ct_ = _de_census(mod_traced)
-    _de_print_census("traced (raw)", ct_)
-    return (d, cd_, ct_)
+    return (d, cd_)
 end
 
 # ---- staggered prefix-scan fixtures -----------------------------------------
@@ -430,7 +418,7 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
                    (collect(1.0:n), 0.37),
                    (sin.(1.0:n) .* 3.0, 1.0),
                    (fill(-2.5, n), 0.5)]
-        d, cd_, ct_ = _de_compare("elementwise_gather", fo, fi!, p, samples)
+        d, cd_ = _de_compare("elementwise_gather", fo, fi!, p, samples)
 
         # The RHS of this fixture is state-independent and u0 = 0 over a unit
         # span, so du at t = 0 IS the golden solution at t = 1.
@@ -464,7 +452,7 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
         fi!, _, _, _, _ = build_evaluator(_de_rd(N))
         u1 = collect(range(0.2, 1.7; length = N))
         samples = [(u1, 0.0), (u1 .^ 2 .- 0.5, 2.0), (reverse(u1) .* 1.3, 10.0)]
-        d, cd_, ct_ = _de_compare("reaction_diffusion", fo, fi!, p, samples)
+        d, cd_ = _de_compare("reaction_diffusion", fo, fi!, p, samples)
         @test get(cd_, "dynamic_update_slice", 0) == 0
         @test get(cd_, "gather", 0) == 0
     end
@@ -485,7 +473,7 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
 
         u = _de_seed(N)
         samples = [(u, 0.0), (u .* 2.0 .+ 0.3, 1.5)]
-        d, cd_, ct_ = _de_compare("forcing_buffers", fo, fi!, p, samples; buffers = dev)
+        d, cd_ = _de_compare("forcing_buffers", fo, fi!, p, samples; buffers = dev)
         @test get(d.stats, :forcing_input, 0) >= 1    # read as an input, not baked
 
         # THE POINT: a host refresh mirrored into the SAME device arrays is seen
@@ -532,7 +520,7 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
         n = length(u0)
         u1 = Float64[sin(0.1 * i) + 1.5 for i in 1:n]
         u2 = Float64[0.5 + 0.01 * i + cos(0.3 * i)^2 for i in 1:n]
-        d, _, _ = _de_compare("template_subkernels", fo, fi!, p,
+        d, _ = _de_compare("template_subkernels", fo, fi!, p,
                               [(u1, 0.0), (u2, 0.75)]; census = false)
         @test get(d.stats, :subcall, 0) >= 1
     end
@@ -677,8 +665,7 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
         samples = [(copy(u0), 0.0),
                    (Float64[u0[k] + 0.25sin(0.3k) for k in 1:n], 1.0),
                    (Float64[u0[k] * (1 + 0.1cos(0.7k)) for k in 1:n], -2.0)]
-        d, _, _ = _de_compare("halo (lane-batched)", fo, fi!, p, samples;
-                              traced_census = false)
+        d, _ = _de_compare("halo (lane-batched)", fo, fi!, p, samples)
 
         # The GROUP was emitted as a group, once.
         @test get(d.stats, :scalar_batch, 0) == 1
@@ -689,7 +676,7 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
         # no longer follows the cell count.
         fn, u0n, pn, _, _ = _de_halo_build(doc, ics; batch = false)
         @test isempty(getfield(getfield(fn, :rhs), :rhs_batches).groups)
-        dn, _, _ = _de_compare("halo (per-entry, ESS_OOP_BATCH=0)", fn, fi!, pn,
+        dn, _ = _de_compare("halo (per-entry, ESS_OOP_BATCH=0)", fn, fi!, pn,
                                samples; census = false)
         println("  batched tally:   ", d.stats)
         println("  per-entry tally: ", dn.stats)
@@ -716,7 +703,7 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
         # of it and the whole-lane read IS one gather per tent position, with
         # the same numbers.
         withenv("ESM_DIRECT_EMIT_READ" => "always") do
-            da, _, _ = _de_compare("halo (lane-batched, gather)", fo, fi!, p,
+            da, _ = _de_compare("halo (lane-batched, gather)", fo, fi!, p,
                                    samples; census = false)
             println("  batched tally (always): ", da.stats)
             @test get(da.stats, Symbol("gather@rhs_scalar.x"), 0) == M * M
@@ -736,30 +723,20 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
         # In range, on a knot, and both clamps.
         samples = [([1.5], 0.0), ([2.0], 0.0), ([-1.0], 0.0), ([9.0], 0.0),
                    ([3.25], 1.0)]
-        # No traced census here: the traced emitter CANNOT lower this model. Its
-        # scalar `:fn` arm calls the `_interp_linear_core` kernel, which takes an
-        # `x::Real` and branches on it, and a `TracedRNumber` is neither — the
-        # standing gap test/reactant_oop_test.jl pins as "interp.* does not
-        # trace". Direct emission lowers it because `_de_fn` routes through the
-        # BRANCH-FREE lane evaluators instead, at every query position the core
-        # branches on: in range, on a knot, and both clamps.
-        d, cd_, _ = _de_compare("interp_linear", fo, fi!, p, samples;
-                                traced_census = false)
+        # `_de_fn` routes a scalar-spine `interp.*` through the BRANCH-FREE lane
+        # evaluators, so every query position the scalar `_interp_linear_core`
+        # would branch on — in range, on a knot, and both clamps — lowers as the
+        # same straight-line program.
+        d, cd_ = _de_compare("interp_linear", fo, fi!, p, samples)
         @test get(d.stats, :interp_linear, 0) == 1
         @test get(cd_, "gather", 0) >= 1     # knot addressing, not a select ladder
-        # The traced emitter's refusal on this same model is pinned by
-        # test/reactant_oop_test.jl ("interp.* does not trace"). It is NOT
-        # re-asserted here: reaching it overflows the Julia stack inside the
-        # scalar core's own dispatch, and a Julia stack overflow prints
-        # "program state may be corrupted" and leaves that corruption behind for
-        # every test after it. One file pinning an oracle gap is enough.
     end
 
     @testset "the `datetime.*` calendar and `log10`" begin
         fo, u0, p, _, vmap = build_evaluator(_de_dtdoc(); form = :oop)
         fi!, _, _, _, _ = build_evaluator(_de_dtdoc())
         samples = [(copy(u0), t) for t in _DE_DT_TIMES]
-        d, cd_, _ = _de_compare("datetime_log10", fo, fi!, p, samples)
+        d, cd_ = _de_compare("datetime_log10", fo, fi!, p, samples)
         # Ten `:fn` calls lowered — the nine fields plus the offset `hour`.
         @test get(d.stats, :closed_scalar, 0) >= 10
         # `log10` is a `log` and a `divide`, never a `log10` op (there is none).
@@ -840,9 +817,9 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
         fiS!, _, _, _, _, _ = ESM_DE._build_evaluator_impl(m; form = :inplace)
         # The rewrite fired, and the fold is over the STATE equations (`du`).
         @test dgS.n_scan_folds == 1
-        @test length(getfield(ESM_DE.rhs_with_buffers(foS), :scan_folds)) == 1
-        @test getfield(ESM_DE.rhs_with_buffers(foS), :n_total) ==
-              getfield(ESM_DE.rhs_with_buffers(foS), :n_states)   # nothing materialized
+        @test length(getfield(getfield(foS, :rhs), :scan_folds)) == 1
+        @test getfield(getfield(foS, :rhs), :n_total) ==
+              getfield(getfield(foS, :rhs), :n_states)   # nothing materialized
         u = _de_seed(length(u0S))
         samples = [(copy(u), 0.0), (u .* 1.5 .- 0.05, 3.25)]
         _de_compare("scan_staggered_du", foS, fiS!, pS, samples; census = false)
@@ -866,7 +843,7 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
             index_sets = isets, initial_conditions = ics, form = :oop)
         fiO!, _, _, _, _, _ = ESM_DE._build_evaluator_impl(m;
             index_sets = isets, initial_conditions = ics, form = :inplace)
-        rO = ESM_DE.rhs_with_buffers(foO)
+        rO = getfield(foO, :rhs)
         # `Mz` is materialized, its fill carries the fold, and the fold's slots
         # are in the EXTENDED map — the ReSEACT shape, not the `du` one.
         @test dgO.n_mat_array_obs == 1

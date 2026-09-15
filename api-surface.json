@@ -4844,22 +4844,6 @@
       }
     },
     {
-      "name": "oop_intern_stats",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "julia": "oop_intern_stats"
-      }
-    },
-    {
-      "name": "oop_intern_stats_reset",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "julia": "oop_intern_stats_reset!"
-      }
-    },
-    {
       "name": "op_const",
       "kind": "constant",
       "tier": "extension",
@@ -6102,14 +6086,6 @@
       "bindings": {
         "python": "ReturnCode",
         "rust": "ReturnCode"
-      }
-    },
-    {
-      "name": "rhs_with_buffers",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "julia": "rhs_with_buffers"
       }
     },
     {

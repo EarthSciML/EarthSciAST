@@ -178,23 +178,19 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("parameter_gradient_test.jl")            # ∂(RHS)/∂p, both emitters (traced arm opt-in)
     include("parameter_vector_abi_test.jl")          # `p::AbstractVector`/ComponentVector ≡ NamedTuple, bit for bit
     include("parameter_classes_test.jl")             # numeric/structural/const-folded/forcing partition + the narrowed solve-time refusal
-    # XLA tracing of the out-of-place RHS (ext/EarthSciASTReactantExt.jl). OPT-IN:
-    # Reactant bundles an XLA runtime; it is in the test target so `Pkg.test()`
-    # resolves it, but it is only LOADED when ESM_TEST_REACTANT=1 — the default
-    # suite must keep running (and passing) without it. See the header of
-    # test/reactant_oop_test.jl.
+    # The Reactant/XLA backend (ext/EarthSciASTReactantExt.jl). OPT-IN: Reactant
+    # bundles an XLA runtime; it is in the test target so `Pkg.test()` resolves
+    # it, but it is only LOADED when ESM_TEST_REACTANT=1 — the default suite must
+    # keep running (and passing) without it. See the header of
+    # test/reactant_direct_emit_test.jl.
     if get(ENV, "ESM_TEST_REACTANT", "0") == "1"
-        include("reactant_oop_test.jl")
         include("reactant_lane_dedup_test.jl")       # merged lane tables ≢ grid size
         include("reactant_locate_test.jl")           # count-locate ≢ a reduction, and bit-exact
-        include("reactant_scan_test.jl")             # traced prefix scan ≢ grid size
-        include("reactant_oop_intern_test.jl")       # one emitted read per (SSA value, window)
-        include("reactant_oop_gvn_test.jl")          # one emitted OP per (opcode, operand values)
         include("reactant_direct_emit_test.jl")      # the COMPILED backend: StableHLO built directly from the _Node IR
         include("reactant_direct_sharding_test.jl") # multi-device: needs ESM_TEST_REACTANT_GPU=1 too, else self-skips
     else
-        @info "skipping reactant_oop_test.jl (set ESM_TEST_REACTANT=1, with Reactant " *
-              "in the environment, to run the XLA tracing tests)"
+        @info "skipping the reactant_*_test.jl files (set ESM_TEST_REACTANT=1, " *
+              "with Reactant in the environment, to run the compiled backend)"
     end
     include("tree_walk_allocation_test.jl")
     include("tree_walk_param_gather_test.jl")

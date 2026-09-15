@@ -25,15 +25,6 @@
 #   both are the RIGHT number (~1e-6), and a non-zero test gives the whole thing
 #   teeth: a build that froze the parameters would pass an emitter-vs-emitter
 #   comparison of two zeros.
-#
-# The TRACED layers (reverse-mode ∂/∂p and ∂/∂u under Reactant/XLA, `p`-is-a-real-
-# XLA-input, and the reverse-over-`@trace while` `@test_broken`) live in
-# test/reactant_parameter_gradient_test.jl, included from the bottom of this file
-# under `ESM_TEST_REACTANT=1` — the same gate test/reactant_oop_test.jl uses, and
-# for the same reason (Reactant bundles an XLA runtime). They are a separate FILE
-# rather than a branch in this one because `Reactant.@trace` / `@compile` are
-# MACROS: an `if` around them still macro-expands, so merely mentioning them in an
-# un-taken branch would break the default, Reactant-free suite.
 
 using Test
 using EarthSciAST
@@ -41,8 +32,7 @@ using ForwardDiff
 
 const _PG_ESM = EarthSciAST
 
-# The 1-D reaction–diffusion model from test/reactant_oop_test.jl (`_rd`), kept
-# here verbatim so this file runs with NO Reactant in the session. It is the right
+# A 1-D reaction–diffusion model. It is the right
 # model for a parameter gradient because all four parameters reach `du` by
 # different routes: `k_diff` linearly through the stencil, `k_rxn` linearly
 # through the reaction term, and `Ea`/`T` nonlinearly through the hoisted
@@ -141,12 +131,4 @@ const _PG_G_U = ForwardDiff.gradient(uu -> _pg_obj(uu, _PG_P0, _PG_T), _PG_U)
         @test all(!iszero, _PG_G_U)
         @test eltype(_PG_U) === Float64          # untouched by the ∂/∂p pass above
     end
-end
-
-# ---- Traced (Reactant/XLA) — opt-in ----------------------------------------
-if get(ENV, "ESM_TEST_REACTANT", "0") == "1"
-    include("reactant_parameter_gradient_test.jl")
-else
-    @info "skipping the traced ∂/∂p tests (reactant_parameter_gradient_test.jl); " *
-          "set ESM_TEST_REACTANT=1, with Reactant in the environment, to run them"
 end

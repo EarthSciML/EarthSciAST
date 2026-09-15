@@ -50,7 +50,7 @@ registry is a CROSS-BINDING wire contract whose values every binding must be
 able to emit. This one is a Julia-local backend diagnostic — Rust's compiled
 lane refuses through its own vocabulary — so registering it would put a code in
 the shared contract that four bindings can never raise. Same reading, and the
-same placement, as `E_TREEWALK_XLA_LIVE_FORCING`.
+same placement, as the `E_TREEWALK_*` codes above.
 """
 const E_DIRECT_EMIT_UNSUPPORTED = "E_DIRECT_EMIT_UNSUPPORTED"
 

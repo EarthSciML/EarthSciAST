@@ -200,19 +200,10 @@ end
 # `f(u, p, t)` still reads the exact aliased storage it always did — the
 # fallback arm in `_forcing_slab` (an arr absent from `hostkeys`, e.g. a
 # hand-built test kernel) reads the host array directly, the pre-B2 behavior.
-#
-# The third field is the per-call READ MEMO (ess-oop-intern; see the
-# `_oop_gather` seam). It rides here because this is the one per-call context
-# object the walker already threads to every read site, and because that makes
-# the memo's lifetime exactly one RHS invocation with no global state and no
-# teardown. `M === Nothing` on host and the field is zero-sized, so a host build
-# is unchanged in layout, allocation and code.
-struct _Forcing{B,M}
+struct _Forcing{B}
     bufs::B                             # this CALL's buffer container (host or traced)
     hostkeys::Vector{Vector{Float64}}   # host buffer identities, aligned with `bufs`
-    memo::M                             # per-call (tensor, window) read memo, or `nothing`
 end
-_Forcing(bufs, hostkeys) = _Forcing(bufs, hostkeys, nothing)
 const _NO_FORCING = _Forcing((;), Vector{Float64}[])
 
 @inline function _forcing_slab(fb::_Forcing, arr::Vector{Float64})

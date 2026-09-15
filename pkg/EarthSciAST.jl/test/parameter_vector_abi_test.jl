@@ -36,11 +36,6 @@
 #      every container; measured, an index into a homogeneous vector is strictly
 #      better than the runtime-symbol `getfield` on a heterogeneous NamedTuple
 #      that build.jl warns about (~48 B/call when the union boxes).
-#
-# The TRACED half — `∂/∂p` w.r.t. a traced `ComponentVector`, with no global
-# `Reactant.allowscalar(true)` — is in test/reactant_param_vector_test.jl, gated on
-# `ESM_TEST_REACTANT=1` and included from the bottom of this file (the Reactant
-# macros are why it is a separate file; see parameter_gradient_test.jl's note).
 
 using Test
 using EarthSciAST
@@ -69,7 +64,7 @@ _pv_doc(name, vars, eqs; index_sets = nothing) = begin
     d
 end
 
-# 1-D reaction–diffusion (reactant_oop_test.jl's `_rd`): the ARRAY path — access
+# 1-D reaction–diffusion: the ARRAY path — access
 # kernels, the lane-invariant `exp(-Ea/T)` hoist, and the codegen tier.
 function _pv_rd(N)
     stencil = _pv_o("+", _pv_o("-", _pv_ix("c", _pv_o("-", "i", 1.0)),
@@ -220,13 +215,4 @@ _pv_ip(f!, u, p, t) = (du = zero(u); f!(du, u, p, t); du)
             end
         end
     end
-end
-
-# ---- Traced (Reactant/XLA) — opt-in ----------------------------------------
-if get(ENV, "ESM_TEST_REACTANT", "0") == "1"
-    include("reactant_param_vector_test.jl")
-else
-    @info "skipping the traced parameter-vector tests " *
-          "(reactant_param_vector_test.jl); set ESM_TEST_REACTANT=1, with " *
-          "Reactant in the environment, to run them"
 end

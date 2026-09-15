@@ -252,9 +252,10 @@ _ld_has_scalar(hlo, v::String) = occursin("dense<$v> : tensor<f64>", hlo)
         @test all(isapprox(a, b; rtol = 1e-14) for (a, b) in zip(goff, ref))
     end
 
-    # The same claims through the FRONT DOOR: `build_evaluator(doc; form=:oop)`
-    # — so the build-time intern pool, the kernel-class merge, and the ext's
-    # seams are all in the traced pipeline, not just a hand-built lane spec.
+    # The same claims through the FRONT DOOR: a model built by
+    # `build_evaluator(doc; form=:oop)` and emitted by the compiled backend — so
+    # the build-time intern pool, the kernel-class merge and the knot-addressing
+    # seams are all in the pipeline, not just a hand-built lane spec.
     # Four members over one axis: u/v/w carry two distinct table CONTENTS in
     # three spellings (Float64, Int — the coercion twin AST interning cannot
     # unify — and a distinct copy), so they merge into ONE class whose flat
@@ -296,12 +297,15 @@ _ld_has_scalar(hlo, v::String) = occursin("dense<$v> : tensor<f64>", hlo)
                     eq("z", Dict{String,Any}("op" => "*",
                         "args" => Any[2.0, bil("z", ta_f)]))])))
 
+        RXE = Base.get_extension(EarthSciAST, :EarthSciASTReactantExt)
         fo, _, p, _, _ = ESM.build_evaluator(doc; form = :oop)
         fi, _, _, _, _ = ESM.build_evaluator(doc)
         Lm = 3N                                # the merged u/v/w class's lanes
         u = Float64[4.2 + 0.23(k % 17) for k in 1:(4N)]
         ur, tr = RX.ConcreteRArray(u), RX.ConcreteRNumber(0.0)
-        s = repr(RX.@code_hlo optimize = false fo(ur, p, tr))
+        d = RXE.direct_rhs(fo)
+        pr = RXE.direct_params(d, p)
+        s = repr(RX.@code_hlo optimize = false d(ur, pr, tr))
 
         @test _ld_npayload(s, 18) == 1        # merged class: 9·D, D = 2 contents
         @test _ld_npayload(s, 9) == 1         # z's class: content A once more
@@ -312,9 +316,10 @@ _ld_has_scalar(hlo, v::String) = occursin("dense<$v> : tensor<f64>", hlo)
 
         # Oracle build+trace: bound columns return on the merged class (z's
         # scalar-spec form has none to lose); the table inventory is unmoved.
-        s_off, fo_off = withenv("ESS_LANE_INTERN_DISABLE" => "1") do
+        s_off, d_off = withenv("ESS_LANE_INTERN_DISABLE" => "1") do
             g, _, _, _, _ = ESM.build_evaluator(doc; form = :oop)
-            repr(RX.@code_hlo optimize = false g(ur, p, tr)), g
+            dg = RXE.direct_rhs(g)
+            repr(RX.@code_hlo optimize = false dg(ur, pr, tr)), dg
         end
         @test _ld_has_col(s_off, "7.250000e+00", Lm)
         @test _ld_has_col(s_off, "5.000000e+00", Lm)
@@ -323,10 +328,10 @@ _ld_has_scalar(hlo, v::String) = occursin("dense<$v> : tensor<f64>", hlo)
         # Numbers: the compiled module agrees with the trusted in-place f!,
         # interned and oracle alike (XLA reassociates — tolerance, not ==).
         du = zero(u); fi(du, u, p, 0.0)
-        got = Array((RX.@compile sync = true fo(ur, p, tr))(ur, p, tr))
+        got = Array((RX.@compile sync = true d(ur, pr, tr))(ur, pr, tr))
         @test all(isapprox(a, b; rtol = 1e-12, atol = 1e-13) for (a, b) in zip(got, du))
         got_off = withenv("ESS_LANE_INTERN_DISABLE" => "1") do
-            Array((RX.@compile sync = true fo_off(ur, p, tr))(ur, p, tr))
+            Array((RX.@compile sync = true d_off(ur, pr, tr))(ur, pr, tr))
         end
         @test all(isapprox(a, b; rtol = 1e-12, atol = 1e-13) for (a, b) in zip(got_off, du))
     end

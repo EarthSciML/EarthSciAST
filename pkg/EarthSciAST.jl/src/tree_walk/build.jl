@@ -3131,8 +3131,8 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
             _ObsExtVec(n_total), n_states, Tuple(mat_levels))
     elseif form === :oop
         # `pgather` (raw `param_arrays` buffers + discrete-cadence caches) rides
-        # along so the OOP RHS can expose its live forcing buffers as ARGUMENTS
-        # (`_OopRHS` / `rhs_with_buffers`, B2) — the traceable binding.
+        # along so the out-of-place build can expose its live forcing buffers as
+        # ARGUMENTS (`_OopRHS`) — the binding a compiled backend needs.
         @_bench :make_rhs_oop _make_rhs_oop(rhs_list, scalar_prelude, acc_kernels, n_states, pgather,
                       scan_folds, Tuple(mat_levels_oop), n_total,
                       array_contractions)
@@ -4621,9 +4621,9 @@ including `const_arrays`, `param_arrays`, `const_array_boundaries`,
   `ODEProblem(f, u0, tspan, p)` unchanged. The `:oop` RHS additionally
   carries an explicit-buffers form for tracing backends — its live forcing
   buffers (`param_arrays` + discrete caches) exposed as ARGUMENTS via
-  [`rhs_with_buffers`](@ref) / [`forcing_buffers`](@ref) /
-  [`forcing_buffer_index`](@ref), so `@compile` receives them as real XLA
-  inputs and an in-place refresh stays visible to the compiled program.
+  [`forcing_buffers`](@ref) / [`forcing_buffer_index`](@ref), so `@compile`
+  receives them as real XLA inputs and an in-place refresh stays visible to
+  the compiled program.
 """
 function build_evaluator(model::Model; kwargs...)
     f!, u0, p, tspan_default, var_map, _diag = _build_evaluator_impl(model; kwargs...)
