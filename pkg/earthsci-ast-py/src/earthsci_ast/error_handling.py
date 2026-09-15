@@ -329,6 +329,19 @@ RECURRENCE_UNSUPPORTED_FORM = "recurrence_unsupported_form"
 
 
 # ===========================================================================
+# Evaluator refusal (esm-spec §9.6.6), raised as
+# ``earthsci_ast.expression.UnsupportedConstructError`` by ``esm_problem`` for
+# every pathway, before anything is built.
+# ===========================================================================
+
+#: A discrete event or an implicit equation (an equation whose LHS is an
+#: expression rather than an unknown, ``D(unknown)`` or ``ic(unknown)``) reached
+#: an evaluator that cannot run it. Refused rather than skipped: a run without
+#: the construct reports the initial value as its answer.
+UNSUPPORTED_CONSTRUCT = "unsupported_construct"
+
+
+# ===========================================================================
 # Observed dependency cycle (esm-spec §4.9.6), reported by the structural
 # validator at `/models/<M>`.
 #

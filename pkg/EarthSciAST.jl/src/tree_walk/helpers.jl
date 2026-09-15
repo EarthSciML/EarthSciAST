@@ -19,6 +19,40 @@ function _equation_tag(eq::Equation)
     return string(typeof(eq.lhs))
 end
 
+# A discrete event as a diagnostic names it: `'name'`, or `(unnamed)`.
+_discrete_event_label(ev::DiscreteEvent) = ev.name === nothing ? "(unnamed)" : "'$(ev.name)'"
+
+# The tree-walk evaluator's refusal of a discrete event (esm-spec §9.6.6), one
+# message for every entry that can still see the events: `build_evaluator` on a
+# model or on a flattened system, and `simulate` / `run_inline_tests`.
+_discrete_event_refusal(label::AbstractString) = TreeWalkError(
+    ERROR_CODES.UNSUPPORTED_CONSTRUCT,
+    "discrete event $(label) is not supported by the Julia tree-walk evaluator; " *
+    "refusing the build rather than running the model without it")
+
+# Throw the refusal when a flattened system carries a discrete event. Called
+# before `flattened_to_esm`, which does not carry events into the run document,
+# so the model-level check at the build entry would never see them.
+function _refuse_flat_discrete_events(flat::FlattenedSystem)
+    isempty(flat.discrete_events) ||
+        throw(_discrete_event_refusal(_discrete_event_label(flat.discrete_events[1])))
+    return nothing
+end
+
+# The first discrete event `model` or any of its subsystems declares, rendered
+# for a diagnostic (`'name'`, or `(unnamed)`); `nothing` when there is none.
+function _first_discrete_event(model::Model)::Union{Nothing,String}
+    if !isempty(model.discrete_events)
+        return _discrete_event_label(model.discrete_events[1])
+    end
+    for sub in values(model.subsystems)
+        sub isa Model || continue
+        found = _first_discrete_event(sub)
+        found === nothing || return found
+    end
+    return nothing
+end
+
 # Variable substitution that preserves every OpExpr field — the
 # package-level `substitute` only carries `wrt`/`dim` and drops
 # `handler_id`, `fn`, etc., which would corrupt `call`/`broadcast`

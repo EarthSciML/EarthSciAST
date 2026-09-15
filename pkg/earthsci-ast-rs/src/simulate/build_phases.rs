@@ -42,13 +42,11 @@ pub(super) fn reject_unsupported_features(flat: &FlattenedSystem) -> Result<(), 
                 .to_string(),
         });
     }
-    if !flat.discrete_events.is_empty() {
-        return Err(CompileError::UnsupportedFeatureError {
-            feature: "discrete_events".to_string(),
-            message: "v1 does not support discrete events. \
-                      Track the future Rust events bead for support."
-                .to_string(),
-        });
+    if let Some(event) = flat.discrete_events.first() {
+        return Err(crate::compile_error::discrete_event_refusal(
+            crate::compile_error::SCALAR_EVALUATOR,
+            event.name.as_deref(),
+        ));
     }
     Ok(())
 }
@@ -108,6 +106,15 @@ pub(super) fn classify_equations(
         if let Some(&idx) = state_index.get(target) {
             state_ic_raw[idx] = Some(rhs.clone());
         }
+    }
+    // An implicit equation constrains its operands without defining any of
+    // them, and this interpreter has no algebraic solve: skipping it would leave
+    // the unknown at its initial value and report that as the answer.
+    if let Some(eq) = crate::compile_error::first_implicit_equation(&flat.equations) {
+        return Err(crate::compile_error::implicit_equation_refusal(
+            crate::compile_error::SCALAR_EVALUATOR,
+            eq,
+        ));
     }
     for eq in &flat.equations {
         if let Some(state_name) = state_lhs_name(&eq.lhs) {

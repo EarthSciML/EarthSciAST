@@ -474,13 +474,11 @@ impl ArrayCompiled {
                     .to_string(),
             });
         }
-        if !flat.discrete_events.is_empty() {
-            return Err(CompileError::UnsupportedFeatureError {
-                feature: "discrete_events".to_string(),
-                message: "array-op path does not support discrete events. \
-                          Track the future Rust events bead for support."
-                    .to_string(),
-            });
+        if let Some(event) = flat.discrete_events.first() {
+            return Err(crate::compile_error::discrete_event_refusal(
+                crate::compile_error::ARRAY_EVALUATOR,
+                event.name.as_deref(),
+            ));
         }
 
         // Re-merge the typed variable maps into one registry. The maps are
@@ -612,6 +610,17 @@ impl ArrayCompiled {
         // scope (RFC §5.4; the Julia `_factor_scope` mirror). Both are no-ops —
         // and the registry copy is byte-identical — for models without
         // subsystems / ragged sets.
+        // A discrete event is refused before anything is built. This is the
+        // SINGLE-MODEL route's check: `from_flattened` checks the flattened
+        // event list itself, because the synthetic model it hands down carries
+        // no events. Subsystems are searched too, since mounting keeps only
+        // their variables and equations.
+        if let Some(name) = crate::compile_error::first_discrete_event(&model_owned) {
+            return Err(crate::compile_error::discrete_event_refusal(
+                crate::compile_error::ARRAY_EVALUATOR,
+                name.as_deref(),
+            ));
+        }
         let mut index_sets_owned = index_sets.clone();
         mount_subsystems(&mut model_owned, &mut index_sets_owned)?;
         // esm-spec §4.2, the two halves of the right-hand-side `D` rule, applied
@@ -748,6 +757,16 @@ impl ArrayCompiled {
             // (0) Reject spatial differential operators anywhere in the model's
             // equations or observed-variable expressions (esm-i7b).
             reject_unlowered_spatial_ops(model)?;
+
+            // (0a) Reject an implicit equation: this runtime has no algebraic
+            // solve, and every stage below would skip the equation, leaving the
+            // unknown at its initial value.
+            if let Some(eq) = crate::compile_error::first_implicit_equation(&model.equations) {
+                return Err(crate::compile_error::implicit_equation_refusal(
+                    crate::compile_error::ARRAY_EVALUATOR,
+                    eq,
+                ));
+            }
 
             // (0b) Reject a reference to a variable bound in NONE of the model's
             // binding categories — the array-path analogue of the scalar
