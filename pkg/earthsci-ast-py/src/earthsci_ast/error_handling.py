@@ -384,6 +384,10 @@ OPERATOR_ARITY = "operator_arity"
 INVALID_BROADCAST_FN = "invalid_broadcast_fn"
 ARRAY_SHAPE_MISMATCH = "array_shape_mismatch"
 AGGREGATE_SEMANTICS = "aggregate_semantics"
+#: The collect-level label of the inline-test pass (esm-spec §6.6.2-§6.6.5). Each
+#: finding normally carries its own code (`undefined_variable`,
+#: `unknown_override_key`, `assertion_rank_mismatch`); this is the fallback.
+INLINE_TEST_SEMANTICS = "inline_test_semantics"
 CIRCULAR_DEPENDENCY = "circular_dependency"
 INVALID_METADATA_FORMAT = "invalid_metadata_format"
 INVALID_TEMPORAL_RESOLUTION = "invalid_temporal_resolution"
