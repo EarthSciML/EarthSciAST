@@ -191,6 +191,11 @@ class EvalContext:
     # cell of the fold (CONFORMANCE_SPEC §5.19.3a). Empty ⇒ no variable declares
     # its own precision, which is every document that does not say otherwise.
     element_types: dict[str, str] = field(default_factory=dict)
+    # Names of the observeds defined by a ``const`` array (esm-spec §4.3.3). An
+    # ``index`` on one of them, or on a ``const`` literal written inline, is a
+    # const-array gather: an out-of-range index raises
+    # ``E_TREEWALK_CONSTARRAY_OOB`` (CONFORMANCE_SPEC §5.5.5).
+    const_array_names: frozenset[str] = field(default_factory=frozenset)
 
 
 def ragged_factor_scope(
@@ -248,6 +253,12 @@ class ComplexValueError(EarthSciAstError):
     unresolved — it is wrong. Raising outside that hierarchy makes the
     diagnostic propagate to the caller intact.
     """
+
+
+class ConstArrayOutOfRangeError(NumpyInterpreterError):
+    """``E_TREEWALK_CONSTARRAY_OOB``: a const-array gather read outside an axis
+    (CONFORMANCE_SPEC §5.5.5). A fault in the document, never an observed that is
+    merely not evaluable yet, so a tolerant build pass must not skip it."""
 
 
 class UnreachableSpatialOperatorError(NumpyInterpreterError):
@@ -1173,6 +1184,7 @@ def _build_compiled_node(expr: ExprNode) -> Callable[[EvalContext], Any]:
         # and so cannot know which context will run it; the test is therefore
         # per call, and is one ``is None`` for every document with no recurrence.
         arr_name = args[0] if isinstance(args[0], str) else None
+        base = args[0]
         if not idx_c:
             return lambda ctx: _gather_index(arr_c(ctx), [])
 
@@ -1180,7 +1192,7 @@ def _build_compiled_node(expr: ExprNode) -> Callable[[EvalContext], Any]:
             idxs = [c(ctx) for c in idx_c]
             if ctx.recur is not None and arr_name == ctx.recur.name:
                 return ctx.recur.read(idxs)
-            return _gather_index(arr_c(ctx), idxs)
+            return _gather_index(arr_c(ctx), idxs, _const_gather_name(base, ctx))
 
         return f_index
 
@@ -1427,18 +1439,61 @@ def _eval_polygon_intersection_area(expr: ExprNode, ctx: EvalContext) -> float:
     return float(polygon_area_via_faq(ring, manifold))
 
 
+#: The name ``E_TREEWALK_CONSTARRAY_OOB`` reports for a ``const`` literal written
+#: inline as an ``index`` base, which has no variable name of its own.
+_INLINE_CONST_NAME = "inline const"
+
+
+def _const_gather_name(base: Any, ctx: EvalContext) -> str | None:
+    """The const array an ``index`` over ``base`` reads, or ``None`` when it is not a
+    const-array gather (esm-spec §4.3.3): a ``const`` literal written inline, or a
+    name ``ctx.const_array_names`` lists."""
+    if isinstance(base, ExprNode):
+        return _INLINE_CONST_NAME if base.op == "const" else None
+    if isinstance(base, str) and base in ctx.const_array_names:
+        return base
+    return None
+
+
+def _check_const_gather_bounds(
+    arr_val: np.ndarray, idxs: Sequence[float | np.ndarray], name: str
+) -> None:
+    """Raise ``E_TREEWALK_CONSTARRAY_OOB`` when a 1-based subscript of a const-array
+    gather lies outside its own axis (CONFORMANCE_SPEC §5.5.5). NumPy would otherwise
+    wrap an index of 0 or below to the far end of the axis, and report one past the
+    end as a bare ``IndexError``."""
+    for d, i in enumerate(idxs[: arr_val.ndim]):
+        n = arr_val.shape[d]
+        z = np.rint(np.asarray(i, dtype=float))
+        if z.size == 0:
+            continue
+        lo, hi = z.min(), z.max()
+        if lo < 1 or hi > n:
+            bad = int(lo if lo < 1 else hi)
+            raise ConstArrayOutOfRangeError(
+                f"E_TREEWALK_CONSTARRAY_OOB: const array '{name}' index {bad} "
+                f"out of range 1..{n} in dim {d + 1}"
+            )
+
+
 def _gather_index(
-    arr_val: float | np.ndarray, idxs: list[float | np.ndarray]
+    arr_val: float | np.ndarray,
+    idxs: list[float | np.ndarray],
+    const_name: str | None = None,
 ) -> float | np.ndarray:
     """The gather at the core of an ``index`` node: ``arr_val`` already evaluated
     to a value and ``idxs`` to its (1-based) subscripts. Factored out of
     :func:`_eval_index` so the compiled ``index`` closure (:func:`_compile_expr`)
-    performs the byte-identical gather and the two paths can never drift."""
+    performs the byte-identical gather and the two paths can never drift.
+    ``const_name`` names the const array when this is a const-array gather
+    (:func:`_const_gather_name`), whose subscripts are bounds-checked per axis."""
     if not isinstance(arr_val, np.ndarray):
         # Scalar passed through: if no indices, return it; otherwise that's an error.
         if not idxs:
             return float(arr_val)
         raise NumpyInterpreterError("index applied to scalar value")
+    if const_name is not None:
+        _check_const_gather_bounds(arr_val, idxs, const_name)
     # Vectorized gather: at least one subscript is an ndarray (the stencil fast
     # path binds index symbols to ranges). Convert 1-based -> 0-based and gather
     # with the *same* NumPy indexing semantics as the scalar branch below
@@ -1492,7 +1547,7 @@ def _eval_index(expr: ExprNode, ctx: EvalContext) -> float | np.ndarray:
         return ctx.recur.read([eval_expr(a, ctx) for a in expr.args[1:]])
     arr_val = eval_expr(expr.args[0], ctx)
     idxs = [eval_expr(a, ctx) for a in expr.args[1:]]
-    return _gather_index(arr_val, idxs)
+    return _gather_index(arr_val, idxs, _const_gather_name(expr.args[0], ctx))
 
 
 def _decompose_body_as_scaled_product(

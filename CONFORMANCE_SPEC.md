@@ -874,6 +874,13 @@ the factor's declared `dims`). The closed set of per-dimension policies and thei
 | `clamp` | `clamp(i, 1, N)` = edge-extend | The correct finite policy for a metric / geometry factor at a non-periodic boundary (e.g. a latitude pole). **NOT** the zero-ghost convention, which is physically wrong for a metric. |
 | `error` *(default)* | throw / raise `E_TREEWALK_CONSTARRAY_OOB` | Any factor **without** a declared policy. Genuine out-of-bounds bugs in connectivity / stencil-weight factors stay caught. |
 
+**Which gathers are const-array gathers.** The `index` base is a const array when
+it is a `const` node written inline, or a variable whose defining equation is a
+`const` node (esm-spec §4.3.3). An inline literal has no declared policy, so it
+takes the `error` default. Each index `e_d` is checked against its own dimension
+size `N_d`. A check on the flattened offset alone is not conforming: it lets an
+overflow on one axis read another element.
+
 In-range gathers are unaffected. The zero-ghost convention (`u[OOB] → 0`) remains
 the state-**variable** gather's boundary default and is **never** applied to a
 const-array gather. All evaluating bindings (Julia, Rust, Python) MUST agree
@@ -5516,6 +5523,48 @@ for Julia and Rust (both `bindings_optional` until phase 2, so an `unavailable`
 answer skips **visibly** with its reason printed). Any mismatch beyond tolerance,
 any required-binding refusal, and any required-binding `unavailable` exits
 non-zero.
+
+### 5.39 An Out-of-Range Const-Array Gather Fails, on Every Axis and in Both Spellings (normative)
+
+§5.5.5 makes `E_TREEWALK_CONSTARRAY_OOB` the default for a const-array gather
+out of range, and esm-spec §4.3.3 says which bases are const arrays: a `const`
+literal written inline, or a variable whose defining equation is one. This
+category pins both halves across the evaluating bindings, through each binding's
+own inline-test runner.
+
+#### 5.39.1 Fixture
+
+`tests/conformance/const_array_gather_bounds/` carries twelve one-assertion
+documents, six per spelling: a 5-element table read in range, at index 0, and one
+past the end; and a 3×2 table read in range, past the end of the first axis only
+(`(4, 1)`), and past the end of the second axis only (`(1, 3)`). Each document
+holds one assertion because the fault aborts the whole build or solve. The
+manifest gives each case an `outcome`: `pass` with the `expected` value, or
+`error` with the `error_code` the result's message must contain. An error case's
+assertion expects `-1`, which no read of either table produces, so a binding that
+returns a number cannot pass it by accident.
+
+The two single-axis cases are the per-axis check. `(4, 1)` has a column-major
+flattened offset inside the table, and `(1, 3)` has a row-major one, so a binding
+that checks only the flattened offset reads a neighbouring element on at least one
+of them, whichever layout it uses.
+
+#### 5.39.2 Gate
+
+Per-binding runners drive every fixture: **Julia** —
+`pkg/EarthSciAST.jl/test/conformance_const_array_gather_bounds_test.jl`; **Python** —
+`pkg/earthsci-ast-py/tests/test_const_array_gather_bounds_conformance.py`; **Rust** —
+`pkg/earthsci-ast-rs/tests/const_array_gather_bounds_conformance.rs`.
+`bindings_required` is `["julia", "python", "rust"]`. Go and TypeScript have no
+evaluator for `index` and are `scope_excluded`; each asserts its own exclusion and
+loads every fixture in `const_array_gather_bounds_scope_test.go` and
+`const-array-gather-bounds-scope.test.ts`.
+
+**What this category does not cover.** A document cannot declare a boundary
+policy, so `periodic` and `clamp` stay pinned by the per-binding unit tests of
+§5.5.5. Each binding's run-time gather paths (Julia's compile-once `_NK_CONST_GATHER`
+arm, Rust's vectorized and taped lowering, Python's generated code) are pinned by
+per-binding unit tests, because which path a document takes is an internal choice.
 
 
 ## 6. CI Integration

@@ -232,7 +232,14 @@ _const_dim_boundary(::AbstractArray, ::Int) = :error
 function _resolve_const_index(arr::AbstractArray, name::AbstractString,
                               d::Int, i::Int, n::Int)
     (1 <= i <= n) && return i
-    pol = _const_dim_boundary(arr, d)
+    return _resolve_const_index_oob(_const_dim_boundary(arr, d), name, d, i, n)
+end
+
+# The out-of-range half of `_resolve_const_index`, for a caller that holds the
+# dimension's policy symbol rather than the array (the run-time `_NK_CONST_GATHER`
+# arm, `_const_gather_sub`).
+@noinline function _resolve_const_index_oob(pol::Symbol, name::AbstractString,
+                                            d::Int, i::Int, n::Int)
     if n >= 1
         pol === :periodic && return mod1(i, n)
         pol === :clamp && return clamp(i, 1, n)

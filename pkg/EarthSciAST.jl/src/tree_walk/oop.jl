@@ -991,9 +991,9 @@ function _oop_index_int(n::_Node, u, p, t, cache::AbstractVector{T},
         cg = n.payload::_ConstGatherArray
         off = 1
         @inbounds for d in eachindex(n.children)
-            off += (_oop_index_int(n.children[d], u, p, t, cache, fb) - 1) * cg.strides[d]
+            sub = _const_gather_sub(cg, d, _oop_index_int(n.children[d], u, p, t, cache, fb))
+            off += (sub - 1) * cg.strides[d]
         end
-        (1 <= off <= cg.len) || throw(BoundsError(cg.flat, off))
         return round(Int, @inbounds cg.flat[off])
     elseif k === _NK_OP
         op = n.op
@@ -1034,10 +1034,9 @@ function _oop_const_gather(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_Oop
     strides = cg.strides
     off = 1
     @inbounds for d in eachindex(children)
-        sub = _oop_index_int(children[d], u, p, t, cache, fb)
+        sub = _const_gather_sub(cg, d, _oop_index_int(children[d], u, p, t, cache, fb))
         off += (sub - 1) * strides[d]
     end
-    (1 <= off <= cg.len) || throw(BoundsError(cg.flat, off))
     return convert(T, @inbounds cg.flat[off])
 end
 
@@ -1629,10 +1628,10 @@ function _oop_eval_batch(b::_OopBatchNode, u, p, t, cache::AbstractVector{T},
             cg = nd.payload::_ConstGatherArray
             off = 1
             for d in eachindex(nd.children)
-                off += (_oop_index_int(nd.children[d], u, p, t, cache, fb) - 1) *
-                       cg.strides[d]
+                sub = _const_gather_sub(cg, d,
+                                        _oop_index_int(nd.children[d], u, p, t, cache, fb))
+                off += (sub - 1) * cg.strides[d]
             end
-            (1 <= off <= cg.len) || throw(BoundsError(cg.flat, off))
             vals[l] = cg.flat[off]
         end
         allsame = true
