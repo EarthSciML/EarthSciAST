@@ -169,7 +169,11 @@ fn an_inline_const_gather_over_a_whole_axis_fails_closed() {
     };
     // In range (`C[i]`): the whole-axis read is unchanged.
     let ok = run(0);
-    assert!(ok.passed, "in-range whole-axis gather must pass: {}", ok.message);
+    assert!(
+        ok.passed,
+        "in-range whole-axis gather must pass: {}",
+        ok.message
+    );
     // Past the end on the last cell (`C[i + 1]`).
     let r = run(1);
     assert!(
