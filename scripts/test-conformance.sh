@@ -172,6 +172,15 @@ build_corpus_manifest() {
     return 1
 }
 
+# Every string-capable property in esm-schema.json must be classified for
+# esm-spec §9.7.6 metaparameter substitution, so a field the schema gains is a
+# red run rather than a field substitution silently rewrites. Each binding's
+# own test suite checks its skip table against the same classification file.
+check_metaparameter_substitution_fields() {
+    log "Checking the metaparameter-substitution field classification..."
+    python3 "$SCRIPT_DIR/check-metaparameter-substitution-fields.py"
+}
+
 # Every binding in this repo is REQUIRED. A missing toolchain is a broken
 # environment, not a smaller test run.
 #
@@ -984,6 +993,9 @@ main() {
         error "Corpus manifest could not be built — nothing to test"
         exit 1
     fi
+
+    run_stage "metaparameter-substitution field classification" \
+        check_metaparameter_substitution_fields
 
     declare -a successful_languages=()
     declare -a failed_languages=()
