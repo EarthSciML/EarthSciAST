@@ -126,6 +126,11 @@ export const ERROR_CODES = {
   //   reported here. Distinct from `circular_dependency`, which is a cycle among
   //   MODELS reached through scoped references.
   OBSERVED_CYCLE: 'observed_cycle',
+  // `ambiguous_output_name` — an output name that matches no variable exactly
+  //   and whose last dotted segment is shared by more than one variable
+  //   (CONFORMANCE_SPEC §5.17.4). This binding has no output derivation; the
+  //   entry exists because the code vocabulary is uniform across bindings.
+  AMBIGUOUS_OUTPUT_NAME: 'ambiguous_output_name',
   // `recurrence_not_wellfounded` — a causal self-read (esm-spec §4.3.1.1) that
   //   is not strictly earlier along exactly ONE of its aggregate's output axes:
   //   a read provably at the same cell or later on its axis (`k`, `k+c`), an

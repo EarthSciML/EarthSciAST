@@ -112,6 +112,11 @@ const (
 	// than resolved: rewriting it would silently diverge from the
 	// expand-at-load image of the same document.
 	CodeTemplateBodyReferencesCouplingRewrittenVariable = "template_body_references_coupling_rewritten_variable"
+	// CodeAmbiguousOutputName: an output name that matches no variable exactly
+	// and whose last dotted segment is shared by more than one variable
+	// (CONFORMANCE_SPEC §5.17.4). This binding has no output derivation; the
+	// constant exists because the code vocabulary is uniform across bindings.
+	CodeAmbiguousOutputName = "ambiguous_output_name"
 	// CodeMakearrayRegionInverted: a `makearray` region's stop precedes its
 	// start, so the region denotes no cells (esm-spec §4.3.5).
 	CodeMakearrayRegionInverted = "makearray_region_inverted"

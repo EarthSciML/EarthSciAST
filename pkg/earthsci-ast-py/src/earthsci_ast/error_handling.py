@@ -335,6 +335,18 @@ OBSERVED_CYCLE = "observed_cycle"
 
 
 # ===========================================================================
+# Output names (CONFORMANCE_SPEC §5.17.4).
+# ===========================================================================
+
+#: A name read from a result that matches no variable exactly and whose last
+#: dotted segment is shared by more than one variable. A last-segment match is
+#: accepted only when it designates exactly one variable, so a read cannot
+#: silently return a variable it did not name. Raised by
+#: :class:`~earthsci_ast.simulation_common.AmbiguousOutputNameError`.
+AMBIGUOUS_OUTPUT_NAME = "ambiguous_output_name"
+
+
+# ===========================================================================
 # The registry itself (API_SPEC.md §8 / H-2).
 #
 # `ERROR_CODES` is the canonical, PUBLIC name for this binding's diagnostic-code
