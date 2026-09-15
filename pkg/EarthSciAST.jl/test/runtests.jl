@@ -275,6 +275,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("reference_graph_test.jl")
     include("cadence_test.jl")
     include("value_invention_frontdoor_test.jl")
+    include("value_invention_materialize_conformance_test.jl")  # issue #266: distinct over a derived axis counts its members
 
     # ---- Cross-binding conformance harness adapters (tests/conformance/*) ----
     include("faq_conformance_test.jl")
