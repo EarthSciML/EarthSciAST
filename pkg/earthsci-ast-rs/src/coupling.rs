@@ -288,6 +288,89 @@ pub(crate) fn validate_coupling(
     }
 }
 
+/// Validate the edges each `coupling_import` expands to (esm-spec §10.10.3).
+///
+/// [`validate_coupling`] walks the SOURCE `coupling` array, where an import is
+/// still `{ type, ref, bind }` and its edges do not exist, so a mis-bind — a
+/// structurally complete `bind` that points a role at a component lacking a
+/// variable the library references — used to pass `validate` and surface only
+/// at flatten. Here each import is expanded on its own (against the base the
+/// loader recorded for it) and its edges go through the same scoped-reference
+/// checks as a hand-authored edge. A finding is re-pointed at the import entry
+/// and names the library, the role, the bound component and the missing
+/// variable. An import that cannot be expanded at all (a missing library, an
+/// unbound role, ...) is left to flatten, which owns those §10.11 diagnostics.
+pub(crate) fn validate_imported_coupling(
+    esm_file: &EsmFile,
+    system_refs: &HashMap<String, SystemInfo>,
+    errors: &mut Vec<StructuralError>,
+) {
+    let Some(coupling) = esm_file.coupling.as_ref() else {
+        return;
+    };
+    for (idx, entry) in coupling.iter().enumerate() {
+        let crate::CouplingEntry::CouplingImport {
+            reference,
+            bind,
+            base_dir,
+            ..
+        } = entry
+        else {
+            continue;
+        };
+        // Expanding reads the library from disk; without a base the loader
+        // recorded, the ref would resolve against the working directory, so an
+        // import whose document has no known location is left to flatten.
+        if base_dir.is_none() {
+            continue;
+        }
+        let mut single = esm_file.clone();
+        single.coupling = Some(vec![entry.clone()]);
+        let Ok(Some(edges)) = crate::coupling_imports::expand_coupling_imports(
+            &single,
+            &crate::coupling_imports::CouplingImportOptions::default(),
+        ) else {
+            continue;
+        };
+        let mut found = Vec::new();
+        validate_coupling(&edges, system_refs, esm_file, &mut found);
+        for mut e in found {
+            if !matches!(e.code, StructuralErrorCode::UnresolvedScopedRef) {
+                continue;
+            }
+            let scoped = e
+                .details
+                .get("reference")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let component = scoped
+                .rsplit_once('.')
+                .map(|(c, _)| c.to_string())
+                .unwrap_or_else(|| scoped.clone());
+            let roles: Vec<&str> = bind
+                .iter()
+                .flatten()
+                .filter(|(_, bound)| **bound == component)
+                .map(|(role, _)| role.as_str())
+                .collect();
+            let role = roles.join(", ");
+            e.message = format!(
+                "coupling_import '{reference}' binds role '{role}' to '{component}', which does \
+                 not provide '{scoped}' referenced by the library: {}",
+                e.message
+            );
+            if let Some(obj) = e.details.as_object_mut() {
+                obj.insert("coupling_import".to_string(), serde_json::json!(reference));
+                obj.insert("role".to_string(), serde_json::json!(role));
+                obj.insert("bound_component".to_string(), serde_json::json!(component));
+            }
+            e.path = format!("/coupling/{idx}");
+            errors.push(e);
+        }
+    }
+}
+
 /// Validate a `couple` / `operator_compose` entry: the first two systems must
 /// exist, and exactly 2 systems are required. `label` is the human-readable
 /// coupling name in the arity error; `coupling_type` is the snake-case tag

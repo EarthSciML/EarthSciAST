@@ -15,6 +15,8 @@ import type {
   CouplingVariableMap,
   SubsystemRef,
   ParameterUpdate,
+  CouplingEntry,
+  CouplingImport,
 } from '../types.js'
 import type { StructuralError } from './types.js'
 import {
@@ -24,6 +26,7 @@ import {
   splitScopedRef,
 } from './expr-utils.js'
 import { isExpressionLike } from '../traverse.js'
+import { expandCouplingImports } from '../coupling-imports.js'
 
 /**
  * Flag any `{ref}` (unresolved SubsystemRef) entries in one component's
@@ -242,7 +245,70 @@ export function validateCouplingIntegrity(esmFile: EsmFile): StructuralError[] {
     }
   }
 
+  errors.push(...validateImportedCouplingEdges(esmFile))
   return errors
+}
+
+/**
+ * Validate the edges each `coupling_import` expands to (esm-spec §10.10.3).
+ *
+ * The loop above walks the SOURCE `coupling` array, where an import is still
+ * `{ type, ref, bind }` and its edges do not exist, so a mis-bind — a
+ * structurally complete `bind` that points a role at a component lacking a
+ * variable the library references — passed `validate` and surfaced only at
+ * flatten. When a base is known (`ValidateOptions.basePath`), each import is
+ * expanded on its own against it and its edges go through the same checks as a
+ * hand-authored edge; a
+ * finding is re-pointed at the import entry and names the library, the role and
+ * the bound component. An import that cannot be expanded at all is left to
+ * flatten, which owns those §10.11 diagnostics.
+ */
+function validateImportedCouplingEdges(esmFile: EsmFile): StructuralError[] {
+  const findings: StructuralError[] = []
+  // Expanding an import reads its library from disk. `validate()` does no file
+  // I/O without a `basePath` (ValidateOptions), so the check runs only when the
+  // loader recorded one for this document.
+  if (esmFile.couplingImportBase === undefined) return findings
+  const coupling = esmFile.coupling ?? []
+  for (let i = 0; i < coupling.length; i++) {
+    const entry = coupling[i]
+    if (entry.type !== 'coupling_import') continue
+    const imp = entry as CouplingImport
+    const single = { ...esmFile, coupling: [entry] } as EsmFile
+    if (esmFile.couplingImportBase !== undefined) {
+      Object.defineProperty(single, 'couplingImportBase', {
+        value: esmFile.couplingImportBase,
+        enumerable: false,
+        writable: true,
+        configurable: true,
+      })
+    }
+    let edges: CouplingEntry[] | undefined
+    try {
+      edges = expandCouplingImports(single)
+    } catch {
+      continue
+    }
+    if (!edges || edges.length === 0) continue
+    for (const e of validateCouplingIntegrity({ ...esmFile, coupling: edges } as EsmFile)) {
+      if (e.code !== ERROR_CODES.UNRESOLVED_SCOPED_REF) continue
+      const details = (e.details ?? {}) as Record<string, unknown>
+      const reference = typeof details.reference === 'string' ? details.reference : ''
+      const dot = reference.lastIndexOf('.')
+      const component = dot >= 0 ? reference.slice(0, dot) : reference
+      const role = Object.entries(imp.bind ?? {})
+        .filter(([, bound]) => bound === component)
+        .map(([r]) => r)
+        .join(', ')
+      findings.push({
+        ...e,
+        path: `/coupling/${i}`,
+        message: `coupling_import '${imp.ref}' binds role '${role}' to '${component}', which does not provide '${reference}' referenced by the library: ${e.message}`,
+        details: { ...details, coupling_import: imp.ref, role, bound_component: component },
+      })
+    }
+  }
+  return findings
 }
 
 /**

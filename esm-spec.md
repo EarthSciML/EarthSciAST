@@ -5153,6 +5153,16 @@ handled exactly as two inline edges doing the same, and the flattening algorithm
 (libraries-spec §4.7), so no order-dependent outcome is asserted. Authors should route each role to
 its own target rather than share one.
 
+**Making an import required.** A coupling-target parameter that a library edge is meant to fill SHOULD
+be declared **without a `default`**. `default` is optional (§6.3), and a parameter with neither a
+default nor a supplied value is an error when a problem is built from the document (a run-time
+`parameter_overrides` value, §6.6.2, or an API parameter still satisfies it). So if the
+`coupling_import` that fills it is omitted — or its `bind` points the role elsewhere — the omission
+fails loudly at build instead of silently running with a placeholder value. A target that does
+carry a `default` is, by that declaration, optional: omitting its import is not an error. `validate`
+cannot reject an uncoupled default-less parameter on its own, because the value may legitimately
+arrive at run time.
+
 ### 10.11 Coupling-import diagnostics
 
 | Code | Raised when |

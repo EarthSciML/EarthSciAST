@@ -497,3 +497,96 @@ fn a_loaded_documents_base_wins_and_its_ref_round_trips_verbatim() {
         "loader-only base leaked into the document"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Validation of imported edges and required targets (esm-spec §10.10.3)
+// ---------------------------------------------------------------------------
+
+/// A structurally complete `bind` that points a role at a component lacking a
+/// referenced variable is reported by `validate` on the SOURCE document, not
+/// only at flatten, and the finding names the import, role and component.
+#[test]
+fn validate_reports_a_mis_bound_import_on_the_source_document() {
+    let file = earthsci_ast::load_path(coupling_corpus("import_misbind_downstream.esm"))
+        .expect("import_misbind_downstream.esm loads");
+    let result = earthsci_ast::validate(&file);
+    let misbind = result
+        .structural_errors
+        .iter()
+        .find(|e| {
+            e.code.to_string() == "unresolved_scoped_ref"
+                && e.details.get("coupling_import").is_some()
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "no import-attributed unresolved_scoped_ref in {:?}",
+                result.structural_errors
+            )
+        });
+    assert_eq!(misbind.details["bound_component"], "RothermelNoW0");
+    assert!(
+        misbind.details["reference"]
+            .as_str()
+            .unwrap()
+            .ends_with(".w0")
+    );
+    assert!(!result.is_valid);
+}
+
+/// A coupling target declared without a `default` makes an omitted import an
+/// error at build, naming the target (esm-spec §10.10.3, "Making an import
+/// required"); a value supplied at run time still satisfies it, which is why
+/// `validate` cannot reject the uncoupled parameter on its own.
+#[test]
+fn a_default_less_coupling_target_makes_an_omitted_import_an_error() {
+    let doc = json!({
+        "esm": "1.0.0",
+        "metadata": { "name": "required_target" },
+        "models": {
+            "FuelModelLookup": {
+                "variables": { "sigma": { "type": "parameter", "units": "1/m", "default": 2 } },
+                "equations": []
+            },
+            "Spread": {
+                "variables": {
+                    "sigma": { "type": "parameter", "units": "1/m" },
+                    "r": { "type": "unknown", "units": "1/m", "default": 0 }
+                },
+                "equations": [ { "lhs": { "op": "D", "args": ["r"], "wrt": "t" }, "rhs": "sigma" } ]
+            }
+        },
+        "coupling": []
+    });
+    let file = load_string_with_options(
+        &doc.to_string(),
+        &LoadOptions {
+            base_path: None,
+            metaparameters: BTreeMap::new(),
+        },
+    )
+    .expect("loads");
+    let opts = earthsci_ast::SolveOptions::default();
+    let run = |p: std::collections::HashMap<String, f64>| {
+        earthsci_ast::esm_problem(
+            &file,
+            (0.0, 1.0),
+            earthsci_ast::ProblemOptions {
+                p,
+                compile: earthsci_ast::Compile::Always,
+                ..Default::default()
+            },
+        )
+        .and_then(|prob| earthsci_ast::solve(&prob, &opts))
+    };
+    match run(std::collections::HashMap::new()) {
+        Err(earthsci_ast::SimulateError::InvalidParameter { name }) => {
+            assert_eq!(name, "Spread.sigma")
+        }
+        other => panic!("expected InvalidParameter for the uncoupled target, got {other:?}"),
+    }
+    run(std::collections::HashMap::from([(
+        "Spread.sigma".to_string(),
+        2.0,
+    )]))
+    .expect("a run-time value satisfies the default-less target");
+}
