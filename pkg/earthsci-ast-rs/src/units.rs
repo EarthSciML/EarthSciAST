@@ -1569,8 +1569,7 @@ pub fn reject_const_units_pre_v12(
                 if obj.contains_key("op") && obj.contains_key("units") {
                     return Some(at.to_string());
                 }
-                obj.iter()
-                    .find_map(|(k, v)| find(v, &format!("{at}/{k}")))
+                obj.iter().find_map(|(k, v)| find(v, &format!("{at}/{k}")))
             }
             serde_json::Value::Array(items) => items
                 .iter()
@@ -2968,6 +2967,76 @@ mod tests {
                 .iter()
                 .any(UnitFinding::is_error)
         );
+    }
+
+    /// A `const` that declares its units has that unit, a `const` without units
+    /// stays undeterminable, and an unresolvable declared unit is listed for the
+    /// structural layer (esm-spec §4.8.5).
+    #[test]
+    fn a_const_with_declared_units_has_that_unit() {
+        let konst = |units: Option<&str>| {
+            Expr::Operator(ExpressionNode {
+                op: "const".into(),
+                value: Some(serde_json::json!(0.44704)),
+                units: units.map(str::to_string),
+                ..ExpressionNode::default()
+            })
+        };
+        let env = env_of(&[
+            ("speed_mph", "mi/h"),
+            ("speed_ms", "m/s"),
+            ("speed_kg", "kg"),
+        ]);
+        let rhs = |units| op("*", vec![Expr::Variable("speed_mph".into()), konst(units)]);
+        let eq = |lhs: &str, units| Equation {
+            comment: None,
+            lhs: Expr::Variable(lhs.into()),
+            rhs: rhs(units),
+        };
+        assert!(
+            !check_equation_dimensions(&eq("speed_ms", Some("m*h/(mi*s)")), &env)
+                .iter()
+                .any(UnitFinding::is_error),
+            "mi/h times a const declared m*h/(mi*s) is exactly m/s"
+        );
+        assert!(
+            check_equation_dimensions(&eq("speed_kg", Some("m*h/(mi*s)")), &env)
+                .iter()
+                .any(UnitFinding::is_error),
+            "declared kg against m/s is a provable mismatch"
+        );
+        assert!(
+            !check_equation_dimensions(&eq("speed_kg", None), &env)
+                .iter()
+                .any(UnitFinding::is_error),
+            "a const without units is undeterminable, so nothing is checked"
+        );
+        assert_eq!(
+            unresolvable_const_units(&rhs(Some("mph"))),
+            vec!["mph".to_string()]
+        );
+        assert!(unresolvable_const_units(&rhs(Some("m*h/(mi*s)"))).is_empty());
+    }
+
+    #[test]
+    fn const_units_are_gated_at_esm_1_2_0() {
+        let doc = |esm: &str| {
+            serde_json::json!({
+                "esm": esm,
+                "models": {"M": {"equations": [{"lhs": "x", "rhs":
+                    {"op": "const", "args": [], "value": 1.0, "units": "m"}}]}}
+            })
+        };
+        let err = reject_const_units_pre_v12(&doc("1.1.0")).expect_err("1.1.0 must be rejected");
+        assert!(
+            err.to_string().contains("const_units_version_too_old"),
+            "{err}"
+        );
+        assert!(
+            err.to_string().contains("/models/M/equations/0/rhs"),
+            "{err}"
+        );
+        assert!(reject_const_units_pre_v12(&doc("1.2.0")).is_ok());
     }
 
     #[test]
