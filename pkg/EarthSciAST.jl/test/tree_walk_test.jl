@@ -144,9 +144,9 @@ end
     @testset "Graceful errors on unsupported ops" begin
         # `wibble` is an unregistered open-tier op: it now surfaces as
         # `unlowered_operator` (asserted precisely in the gate testset below),
-        # NOT `E_TREEWALK_UNSUPPORTED_OP` — both are `TreeWalkError`. `faq`
-        # is a registered non-scalar CORE form and keeps its distinct
-        # `E_TREEWALK_UNSUPPORTED_OP`.
+        # NOT `unevaluable_operator` — both are `TreeWalkError`. `faq`
+        # is a registered non-scalar CORE form and reports
+        # `unevaluable_operator` (esm-spec §9.6.6).
         @test_throws ESM.TreeWalkError _eval1(_op("wibble", _n(1.0)))
         @test_throws ESM.TreeWalkError _eval1(_op("faq", _n(1.0)))
         @test_throws ESM.TreeWalkError _eval1(_op("grad", _v("x");
@@ -181,7 +181,7 @@ end
         # The gate is GENERIC, not a grad/div/laplacian name list: an arbitrary
         # OPEN-TIER user op (no evaluable-core registry entry) reaching the
         # compiler is the SAME violation and gets the SAME `unlowered_operator`
-        # code — NOT `E_TREEWALK_UNSUPPORTED_OP` (esm-spec §4.2 / §9.6.6 uniform
+        # code — NOT `unevaluable_operator` (esm-spec §4.2 / §9.6.6 uniform
         # rule; mirrors the other bindings). Decided by the `_op_in_T` tier
         # predicate, so grad/div/laplacian carry no bespoke registry flag.
         # (`integral`/`table_lookup` are also in T but carry their OWN earlier
@@ -195,7 +195,7 @@ end
             end
             @test err isa ESM.TreeWalkError
             @test err.code == "unlowered_operator"
-            @test err.code != "E_TREEWALK_UNSUPPORTED_OP"
+            @test err.code != "unevaluable_operator"
             @test occursin(opname, err.detail)
         end
     end

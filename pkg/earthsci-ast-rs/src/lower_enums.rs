@@ -142,6 +142,47 @@ fn walk(
     Ok(out)
 }
 
+/// Lower the `enum`-op nodes under `target` against the `enums` block of
+/// `document`, the file that wrote `target`. Mutates `target` in place.
+///
+/// An `enum` op is file-local (esm-spec §9.3): it resolves against the block
+/// of the file it is written in. [`lower_enums_raw`] runs once over the root
+/// document, so a tree that crosses a file boundary before that pass (a
+/// template-library body reaching an importer, §9.7.5) is lowered here, at the
+/// edge, while its own file's block is still at hand.
+///
+/// An op with an argument spelled by a name in `open_names` is left in place:
+/// a template parameter substitutes position-blind (§9.6.3 constraint 5), so
+/// the call site decides what it spells and the op resolves there. An op whose
+/// arguments are not two strings is left for [`lower_enums_raw`], which owns
+/// the malformed-op diagnostic.
+pub(crate) fn lower_enum_ops_for_file(
+    document: &Value,
+    target: &mut Value,
+    open_names: &std::collections::HashSet<String>,
+) -> Result<(), EnumLoweringError> {
+    let mut paths: Vec<String> = Vec::new();
+    find_enum_paths(target, &mut paths);
+    if paths.is_empty() {
+        return Ok(());
+    }
+    let enums = parse_enums_block(document)?;
+    crate::json_visit::try_visit_values_mut(target, &mut |v| {
+        if let Value::Object(obj) = v
+            && obj.get("op").and_then(|w| w.as_str()) == Some(ENUM_OP)
+            && let Some([Value::String(name), Value::String(symbol)]) = obj
+                .get("args")
+                .and_then(|a| a.as_array())
+                .map(Vec::as_slice)
+            && !open_names.contains(name)
+            && !open_names.contains(symbol)
+        {
+            *v = lower_enum_node(obj, &enums)?;
+        }
+        Ok(())
+    })
+}
+
 /// Record the path of every `enum`-op node under `view`, in pre-order. The
 /// walk also descends into a matched node's own fields (they hold only the
 /// two name strings in a well-formed node, so nothing further matches there).

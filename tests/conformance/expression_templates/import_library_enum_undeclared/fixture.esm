@@ -1,0 +1,35 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "library_enum_undeclared",
+    "description": "Imports a template whose body names an enum that neither the library (lib.esm) nor this importer declares. Rejected at load with `unknown_enum`, reported against the library and the template."
+  },
+  "models": {
+    "Consumer": {
+      "expression_template_imports": [
+        {
+          "ref": "./lib.esm"
+        }
+      ],
+      "variables": {
+        "y": {
+          "type": "unknown",
+          "units": "1"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "y",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "plus_horsepower_code",
+            "bindings": {
+              "x": 1
+            }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -7,7 +7,8 @@ package esm
 // input expression per declared axis, and §9.5.3 gives the exact §9.2
 // closed-function tree it stands for. Nothing downstream of the loader
 // evaluated it: `table_lookup` is in expression.go's closedNonScalarOps, so the
-// scalar evaluator refused it with `unsupported_operator` while the SAME lookup
+// scalar evaluator refused it with `unsupported_operator` (since renamed
+// `unevaluable_operator`) while the SAME lookup
 // spelled by hand in the lowered form evaluated fine. The lowering existed only
 // inside function_tables_lowering_test.go's harness — never on a path a caller
 // could reach (issue #188).

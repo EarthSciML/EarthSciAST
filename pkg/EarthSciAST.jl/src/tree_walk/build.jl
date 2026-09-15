@@ -4571,7 +4571,7 @@ pipeline. `faq` and `makearray` are supported in expression
 position: scalar `faq` (empty `output_idx`) is expanded inline;
 `index(faq(...), k...)` and `index(makearray(...), k...)` are
 resolved at build time. Other array-typed ops (`broadcast`, `reshape`,
-`transpose`, `concat`) raise `E_TREEWALK_UNSUPPORTED_OP`.
+`transpose`, `concat`) are refused at build with `unevaluable_operator`.
 
 The returned `f!` closure reads `u`, the captured parameter vector
 `p` (a NamedTuple keyed by parameter name), and `t`, and writes
@@ -5150,9 +5150,22 @@ function build_evaluator(esm::AbstractDict;
         end
     end
 
+    # A value-invention key column may be an unknown defined by a `const`
+    # equation (esm-spec §4.2): that is build-time data exactly as a supplied
+    # const array is, so the relational engine reads it. The extra entries are
+    # scoped to value invention; `kwd[:const_arrays]` is not widened.
+    _vi_ca = _ca
+    if model !== nothing
+        for (n, defn) in observed_definitions(model)
+            (_is_array_shape(model.variables[n].shape) && _is_const_op(defn)) || continue
+            haskey(_ca, n) && continue
+            _vi_ca === _ca && (_vi_ca = copy(_ca))
+            _vi_ca[n] = _const_op_to_array((defn::OpExpr).value)
+        end
+    end
     _vi = model === nothing ? nothing :
           _with_param_reads(_preads) do
-              materialize_value_invention(model, file.index_sets, _ca, _params)
+              materialize_value_invention(model, file.index_sets, _vi_ca, _params)
           end
 
     # ---- Phase 2b Hook 1: value-invention MEMBERS fed back as const factors ----

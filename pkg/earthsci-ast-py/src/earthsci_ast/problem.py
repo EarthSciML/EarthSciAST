@@ -70,7 +70,11 @@ from .flatten import (
     flatten,
 )
 from .lower_table_lookup import lower_table_lookups
-from .numpy_interpreter import _EVALUABLE_CORE_OPS, UnreachableSpatialOperatorError
+from .numpy_interpreter import (
+    _EVALUABLE_CORE_OPS,
+    UnevaluableOperatorError,
+    UnreachableSpatialOperatorError,
+)
 from .parse import load_document, load_path
 from .pushdown_rewrite import (
     _inject_pushdown_aliases,
@@ -824,6 +828,10 @@ def _assert_no_unlowered_operator(flat: FlattenedSystem) -> None:
     lowered is untouched here. What the walk refuses is a rewrite-target op that
     no rule eliminated — dead or live, which is §9.6.3's point.
 
+    The same walk refuses an evaluable-core op no pathway evaluates
+    (``unevaluable_operator``, esm-spec §9.6.6) — before any pathway is chosen,
+    so an op in an untaken ``ifelse`` branch is refused rather than skipped.
+
     Runs AFTER the §4.7.6.12 surviving-spatial-dimension check above, so a
     document that trips both keeps the diagnostic it has always reported. Both
     carry ``code = "unlowered_operator"``.
@@ -835,7 +843,19 @@ def _assert_no_unlowered_operator(flat: FlattenedSystem) -> None:
         _walk_for_unlowered(rhs, structural_derivative_ok=False)
 
 
-def _walk_for_unlowered(expr: Any, *, structural_derivative_ok: bool) -> None:
+#: Evaluable-core ops no Python pathway evaluates, refused at the front door with
+#: ``unevaluable_operator`` (esm-spec §9.6.6) when they stand OUTSIDE a ``faq``.
+#: Inside one they may be a value-invention producer (``value_invention``'s
+#: ``_VI_BODY_OPS`` / ``_VI_ARGWITNESS_OPS``), which the build materializes before
+#: anything is evaluated, so the walk leaves those to that stage.
+_FRONT_DOOR_UNEVALUABLE_OPS: frozenset[str] = frozenset(
+    {"rank", "distinct", "argmin", "argmax", "enum", "apply_expression_template"}
+)
+
+
+def _walk_for_unlowered(
+    expr: Any, *, structural_derivative_ok: bool, inside_faq: bool = False
+) -> None:
     """Raise on the first non-evaluable-core node in ``expr`` (pre-order).
 
     ``structural_derivative_ok`` marks an equation-LHS tree, the one position
@@ -852,8 +872,14 @@ def _walk_for_unlowered(expr: Any, *, structural_derivative_ok: bool) -> None:
             raise UnreachableSpatialOperatorError(op)
     elif op not in _EVALUABLE_CORE_OPS:
         raise UnreachableSpatialOperatorError(op)
+    elif op in _FRONT_DOOR_UNEVALUABLE_OPS and not inside_faq and not structural_derivative_ok:
+        raise UnevaluableOperatorError(op)
     for child in iter_children(expr):
-        _walk_for_unlowered(child, structural_derivative_ok=structural_derivative_ok)
+        _walk_for_unlowered(
+            child,
+            structural_derivative_ok=structural_derivative_ok,
+            inside_faq=inside_faq or op == "faq",
+        )
 
 
 # --------------------------------------------------------------------------- #

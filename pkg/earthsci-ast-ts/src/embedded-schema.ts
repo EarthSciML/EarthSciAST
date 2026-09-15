@@ -2623,7 +2623,7 @@ export const schema: AnySchemaObject = {
     },
     "Assertion": {
       "type": "object",
-      "description": "A single scalar check against a model variable at a specific (variable, time) point. PDE-aware variants pin a spatial point via `coords`, or reduce the field to a scalar via `reduce` (domain-integral, mean, max, min, or error-norm). `coords` and `reduce` are mutually exclusive; if neither is given the assertion is pointwise and only valid on a 0-D component. Error-norm reductions (L2_error, Linf_error) require `reference`.",
+      "description": "A single scalar check against a model variable at a specific (variable, time) point. PDE-aware variants pin a spatial point via `coords`, or reduce the field to a scalar via `reduce` (domain-integral, mean, max, min, or error-norm). `coords` and `reduce` are mutually exclusive; if neither is given the assertion is pointwise and is valid only on a variable declared without a `shape` or on an element name such as `u[1]` (esm-spec §6.6.5). Error-norm reductions (L2_error, Linf_error) require `reference`.",
       "required": [
         "variable",
         "time"
@@ -3401,7 +3401,7 @@ export const schema: AnySchemaObject = {
                       "type": "string"
                     }
                   ],
-                  "description": "Inclusive first index (default 0). A string names a `metaparameters` entry and resolves to its default."
+                  "description": "Inclusive first index (default 0). A string names a `metaparameters` entry and resolves to its closed value (esm-spec §9.7.6)."
                 },
                 "stop": {
                   "oneOf": [
@@ -3413,7 +3413,7 @@ export const schema: AnySchemaObject = {
                       "type": "string"
                     }
                   ],
-                  "description": "Exclusive last index. A string names a `metaparameters` entry and resolves to its default, so a prefix is declared in the model's own terms (`W[0:N_SRC]`) rather than as a repeated literal that can drift from the index set sized by the same metaparameter."
+                  "description": "Exclusive last index. A string names a `metaparameters` entry and resolves to its closed value (esm-spec §9.7.6), so a prefix is declared in the model's own terms (`W[0:N_SRC]`) rather than as a repeated literal that can drift from the index set sized by the same metaparameter."
                 },
                 "step": {
                   "oneOf": [
