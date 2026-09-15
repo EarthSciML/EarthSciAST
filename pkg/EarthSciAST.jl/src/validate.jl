@@ -2244,11 +2244,6 @@ function _callback_injected_names(file::EsmFile)::Set{String}
     return names
 end
 
-"""
-    validate_model_references(file::EsmFile, model::Model, path::String) -> Vector{StructuralError}
-
-Validate variable references within a model.
-"""
 # The assertion `reference` expressions of a component's inline tests (§6.6).
 function _validate_test_references(file::EsmFile, tests, path::String,
                                    scope::Set{String})::Vector{StructuralError}
@@ -2263,6 +2258,12 @@ function _validate_test_references(file::EsmFile, tests, path::String,
     end
     return errors
 end
+
+"""
+    validate_model_references(file::EsmFile, model::Model, path::String) -> Vector{StructuralError}
+
+Validate variable references within a model.
+"""
 
 function validate_model_references(file::EsmFile, model::Model, path::String;
                                    model_name::AbstractString="",
