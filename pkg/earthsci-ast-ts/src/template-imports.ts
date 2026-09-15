@@ -310,6 +310,57 @@ const REGISTRY_KEYS = [
 // that metaparameter substitution must NOT skip.
 const BOUND_KEYS = ['lower', 'upper'] as const
 
+// Loop symbols, references, ids, enums, units and free text: not expression
+// positions, but not protected by the rename walk either, so opaque to
+// metaparameter substitution ONLY. `of` and `on` keep their dedicated
+// rename-walk branches. Mirrors the `:opaque` kind of `_STRUCTURAL_FIELDS` in the
+// Julia reference.
+const OPAQUE_KEYS = [
+  // Loop symbols and bound index names of a `faq` node. `metaparameter_name_conflict`
+  // refuses a metaparameter spelled like a loop symbol, so a metaparameter reaches
+  // these fields only as an `on` data-column name; they are names wherever they
+  // appear, so they are skipped rather than left to that check.
+  'on',
+  'syms',
+  'arg',
+  'output_idx',
+  'of',
+  // A `table_lookup` output name.
+  'output',
+  'handler_id',
+  // References to files, components, data sources, data columns and the
+  // import-edge rename vocabulary.
+  'ref',
+  'model',
+  'reaction_system',
+  'prefix',
+  'rename',
+  'rebind',
+  'index_set_rename',
+  'source',
+  'file_variable',
+  'path',
+  // Closed enums.
+  'direction',
+  'hook',
+  'root_find',
+  'system_kind',
+  'element_type',
+  'scale',
+  'format',
+  'unmapped',
+  // Units (unit symbols such as `m`, `s`, `K` are valid identifiers) and free
+  // text.
+  'default_units',
+  'label',
+  'location',
+  'notes',
+  'citation',
+  'doi',
+  'url',
+  '_comment',
+] as const
+
 // Keys whose VALUES are never expression positions: metaparameter names are
 // substituted as bare variable-reference strings, so structural string fields
 // must not be rewritten. Template `params` shadowing is handled separately in
@@ -318,25 +369,55 @@ const BOUND_KEYS = ['lower', 'upper'] as const
 // All five bindings MUST hold the SAME set here — a divergence is silent until
 // a document happens to name a metaparameter after a structural field's value
 // (`tests/conformance/expression_templates/metaparam_axis_name_collision`).
+// The classification it is derived from lives in
+// `tests/metaparameter_substitution/field_classification.json`, and the test
+// suite fails when this set or `NAME_KEYED_MAP_KEYS` disagrees with it.
 //
 // Every structural kind but `bound` and `positional` is in: an expression
 // position is the ONLY thing substitution may rewrite, and `bound` is the one
-// structural-table entry that IS one. This makes the set coincide with
-// `RENAME_PROTECTED_KEYS` below; both stay derived from the kind arrays
-// separately because they answer different questions and a future kind may split
-// them.
-const META_SUBST_SKIP_KEYS = new Set<string>([
+// structural-table entry that IS one. `OPAQUE_KEYS` is in this set but not in
+// `RENAME_PROTECTED_KEYS`, so the two are derived separately.
+export const META_SUBST_SKIP_KEYS: ReadonlySet<string> = new Set<string>([
   ...PROTECTED_KEYS,
   ...AXIS_KEYS,
   ...NODE_HEADER_KEYS,
   ...REGISTRY_KEYS,
+  ...OPAQUE_KEYS,
+])
+
+// Keys whose value is a map keyed by AUTHOR-CHOSEN names (variables, species,
+// loop symbols, template params, …). A map key is a declared name, not a field,
+// so it is never looked up in `META_SUBST_SKIP_KEYS`: a variable named `source`
+// or a template param named `label` still has its value substituted. A key in
+// both sets (`where`, `rename`, …) is skipped whole.
+export const NAME_KEYED_MAP_KEYS: ReadonlySet<string> = new Set<string>([
+  'variables',
+  'species',
+  'parameters',
+  'guesses',
+  'subsystems',
+  'expression_templates',
+  'ranges',
+  'axes',
+  'bindings',
+  'config',
+  'coords',
+  'initial_conditions',
+  'parameter_overrides',
+  'pinned_coords',
+  'map',
+  'rename',
+  'rebind',
+  'index_set_rename',
+  'where',
 ])
 
 /**
  * Substitute closed metaparameter names — appearing as bare strings, the
  * variable-reference surface syntax — with their integer values, everywhere
  * except the `META_SUBST_SKIP_KEYS` structural fields (esm-spec §9.7.6:
- * expression-position substitution; no folding here).
+ * expression-position substitution; no folding here). The entries of a
+ * `NAME_KEYED_MAP_KEYS` map are walked without a skip lookup on their names.
  */
 export function substituteMetaparams(x: Json, values: Record<string, Json>): Json {
   if (typeof x === 'string') {
@@ -348,11 +429,28 @@ export function substituteMetaparams(x: Json, values: Record<string, Json>): Jso
   if (isObject(x)) {
     const out: JsonObject = {}
     for (const k of Object.keys(x)) {
-      out[k] = META_SUBST_SKIP_KEYS.has(k) ? deepClone(x[k]) : substituteMetaparams(x[k], values)
+      out[k] = substituteMetaparamsField(k, x[k], values)
     }
     return out
   }
   return x
+}
+
+/**
+ * `substituteMetaparams` applied to the value `v` of the object field `k`, for a
+ * caller that iterates an object's fields itself: the field is skipped, walked
+ * as a name-keyed map, or walked, exactly as inside the recursive walk.
+ */
+function substituteMetaparamsField(k: string, v: Json, values: Record<string, Json>): Json {
+  if (META_SUBST_SKIP_KEYS.has(k)) return deepClone(v)
+  if (NAME_KEYED_MAP_KEYS.has(k) && isObject(v)) {
+    const out: JsonObject = {}
+    for (const name of Object.keys(v)) {
+      out[name] = substituteMetaparams(v[name], values)
+    }
+    return out
+  }
+  return substituteMetaparams(v, values)
 }
 
 /**
@@ -854,11 +952,15 @@ const RENAME_AXIS_KEYS = new Set<string>(AXIS_KEYS)
 const RENAME_BOUND_KEYS = new Set<string>(BOUND_KEYS)
 
 // Object keys whose values are never variable-reference positions for the
-// rename walk: the metaparameter skip set plus the remaining scalar structural
-// ExpressionNode fields (the op-parameterizing closed-registry ids and literal
-// enums). `from`, `wrt`/`dim`, apply-`name`, and `of` are handled positionally
-// in the walk.
-const RENAME_PROTECTED_KEYS = new Set<string>([...META_SUBST_SKIP_KEYS, ...REGISTRY_KEYS])
+// rename walk: the protected, axis, node-header and op-parameterizing registry
+// kinds (`_RENAME_PROTECTED_KEYS` in the Julia reference). `from`, `wrt`/`dim`,
+// apply-`name`, and `of` are handled positionally in the walk.
+const RENAME_PROTECTED_KEYS = new Set<string>([
+  ...PROTECTED_KEYS,
+  ...AXIS_KEYS,
+  ...NODE_HEADER_KEYS,
+  ...REGISTRY_KEYS,
+])
 
 /**
  * One transitive-substitution pass over an imported declaration (esm-spec
@@ -962,6 +1064,16 @@ function renameWalk(
         out[k] = renameJoinOn(v, isetmap, (e) =>
           Object.prototype.hasOwnProperty.call(varmap, e) ? varmap[e]! : e,
         )
+      } else if (NAME_KEYED_MAP_KEYS.has(k) && isObject(v)) {
+        // A map keyed by author-chosen names (a `ranges` loop symbol, an
+        // apply-node `bindings` param): an entry name is a declared name, not a
+        // field, so it is never dispatched on (esm-spec §9.7.6 map-key rule). A
+        // `ranges` entry named `dim` still has its `from` renamed.
+        const walked: JsonObject = {}
+        for (const name of Object.keys(v)) {
+          walked[name] = renameWalk(v[name], varmap, isetmap, tplmap)
+        }
+        out[k] = walked
       } else if (k === 'of' || RENAME_PROTECTED_KEYS.has(k)) {
         out[k] = deepClone(v)
       } else {
@@ -1040,10 +1152,13 @@ function renameDecl(
 }
 
 /**
- * Bound index symbols of a declaration: aggregate `output_idx` entries and
- * `ranges` keys (at any nesting depth). Rebinding one would desynchronize the
- * ranges KEYS (object keys, unreachable by value substitution) from their
- * `expr` occurrences, so it is rejected outright.
+ * Bound index symbols (loop symbols) of a subtree: the `output_idx` entries and
+ * `ranges` keys of every Expression node, at any nesting depth — the binder
+ * definition of the `reserved_index_symbol` rule (esm-spec §4.9.1.1), which is
+ * not limited to `faq` (`argmin` / `argmax` bind the same way). Rebinding one
+ * would desynchronize the ranges KEYS (object keys, unreachable by value
+ * substitution) from their `expr` occurrences, so it is rejected outright; a
+ * metaparameter spelled like one is `metaparameter_name_conflict`.
  */
 function collectBoundSyms(out: Set<string>, x: Json): Set<string> {
   if (Array.isArray(x)) {
@@ -1051,7 +1166,7 @@ function collectBoundSyms(out: Set<string>, x: Json): Set<string> {
     return out
   }
   if (!isObject(x)) return out
-  if (x.op === 'faq') {
+  if (x.op !== undefined) {
     const oi = x.output_idx
     if (Array.isArray(oi)) {
       for (const e of oi) if (typeof e === 'string') out.add(e)
@@ -1084,7 +1199,13 @@ function collectRefNames(out: Set<string>, x: Json, shadowed: Set<string>): Set<
       if (k === 'from' || RENAME_AXIS_KEYS.has(k) || k === 'of' || RENAME_PROTECTED_KEYS.has(k)) {
         continue
       }
-      collectRefNames(out, x[k], shadowed)
+      const v = x[k]
+      // `renameWalk`'s name-keyed map rule: an entry name is never pruned.
+      if (NAME_KEYED_MAP_KEYS.has(k) && isObject(v)) {
+        for (const name of Object.keys(v)) collectRefNames(out, v[name], shadowed)
+        continue
+      }
+      collectRefNames(out, v, shadowed)
     }
     return out
   }
@@ -1610,6 +1731,9 @@ function processLibrary(
   // mutated in place, so scope.templates sees the closed bodies).
   composeTemplateBodies(scope.templates as TemplatesArg, origin)
   expandLibraryEnumCalls(raw, scope.templates, isObject(ownRaw) ? Object.keys(ownRaw) : [], origin)
+  // In the library's own scope, before an importing edge's `bindings`
+  // instantiate the templates and consume the names it closes.
+  checkMetaparamLoopSymbols(Object.keys(scope.metaparams), origin, [scope.templates])
   return scope
 }
 
@@ -2039,7 +2163,7 @@ export function resolveTemplateMachinery(
   const values = closeMetaparameters(docMeta, api, mountDeclared)
 
   // Phase 5 — §9.7.6 name-collision check: no shadowing of visible names.
-  checkMetaparamNameCollisions(root, docMeta, docIsets)
+  checkMetaparamNameCollisions(root, topTemplates, docMeta, docIsets)
 
   // Phase 6 — expression-position substitution of the closed values.
   const foldedIsets = substituteClosedValues(root, topTemplates, docIsets, values)
@@ -2277,11 +2401,34 @@ function closeMetaparameters(
 }
 
 /**
+ * Reject a metaparameter name that spells a loop symbol (a `ranges` key or
+ * `output_idx` entry of an Expression node) anywhere in `trees` (esm-spec
+ * §9.7.6). Substitution rewrites every bare string that spells a bound
+ * metaparameter, and inside the node that binds it a loop symbol is exactly such
+ * a string, so no field rule can tell the two apart.
+ */
+function checkMetaparamLoopSymbols(names: string[], origin: string, trees: Json[]): void {
+  if (names.length === 0) return
+  const bound = new Set<string>()
+  for (const t of trees) collectBoundSyms(bound, t)
+  for (const name of names) {
+    if (bound.has(name)) {
+      throw new EsmMachineryError(
+        ERROR_CODES.METAPARAMETER_NAME_CONFLICT,
+        `${origin}: metaparameter '${name}' collides with a loop symbol (a \`ranges\` key or \`output_idx\` entry) (esm-spec §9.7.6)`,
+      )
+    }
+  }
+}
+
+/**
  * Phase 5 — reject a metaparameter name that collides with a visible
- * variable / parameter / species / index-set name (esm-spec §9.7.6).
+ * variable / parameter / species / index-set name, or with a loop symbol
+ * (esm-spec §9.7.6).
  */
 function checkMetaparamNameCollisions(
   root: JsonObject,
+  topTemplates: JsonObject,
   docMeta: JsonObject,
   docIsets: JsonObject,
 ): void {
@@ -2307,6 +2454,9 @@ function checkMetaparamNameCollisions(
       )
     }
   }
+  // Components carry their imported templates by now; `topTemplates` is a root
+  // library's effective top-level sequence, imports included.
+  checkMetaparamLoopSymbols(Object.keys(docMeta), 'document', [root, topTemplates])
 }
 
 /**
@@ -2334,7 +2484,7 @@ function substituteClosedValues(
             tpl[tn] = substituteMetaparamsDecl(td, values)
           }
         } else {
-          comp[k] = substituteMetaparams(comp[k], values)
+          comp[k] = substituteMetaparamsField(k, comp[k], values)
         }
       }
     }

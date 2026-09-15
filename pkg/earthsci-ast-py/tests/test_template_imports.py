@@ -26,6 +26,10 @@ from earthsci_ast.lower_expression_templates import (
 from earthsci_ast.parse import SchemaValidationError, load_path, load_string
 from earthsci_ast.serialize import _serialize_esm_file, emit_esm_string, to_json
 from earthsci_ast.template_imports import (
+    _META_SUBST_SKIP_KEYS,
+    _NAME_KEYED_MAP_KEYS,
+    _OPAQUE_KEYS,
+    _RENAME_PROTECTED_KEYS,
     MAX_TEMPLATE_EXPANSION_DEPTH,
     _substitute_metaparams,
     reject_template_imports_pre_v08,
@@ -131,6 +135,9 @@ def _err_code(fn) -> str | None:
         # §9.7.6 substitution is per-FIELD: a metaparameter named after the
         # structural string field beside it must not rewrite that field.
         ("metaparam_axis_name_collision", "fixture.esm", "expanded.esm"),
+        ("metaparam_structural_field_collision", "fixture.esm", "expanded.esm"),
+        # §9.7.7 rename through map entries spelled like structural keys.
+        ("import_rename_name_keyed_map_entries", "fixture.esm", "expanded.esm"),
         # §9.3: a library's `enum` ops resolve against the library's own block.
         ("import_library_enum", "fixture.esm", "expanded.esm"),
         (
@@ -1190,3 +1197,76 @@ def test_metaparam_substitution_is_per_field_not_per_node():
     # slots, not `args` — scalar attribute NAMES, never expressions.
     assert rargs[3]["attrs"] == {"limiter": "max"}
     assert rargs[3]["args"] == ["c", 3]
+
+
+def test_metaparam_structural_field_collision():
+    """§9.7.6: loop symbols, references, enums, units and free text are names,
+    and a map key is a declared name rather than a field.
+
+    Four metaparameters are spelled like structural values — ``row_id`` (a join
+    key column, free text), ``m`` (a unit symbol), ``edge`` (a placement tag, a
+    comment, citation text), ``ode`` (an enum) — and each also sits in an
+    expression position, where it closes; so does ``a``, a dense range bound
+    beside the loop symbol ``p`` (a metaparameter spelled like a loop symbol is
+    ``metaparameter_name_conflict``). Substituting the join clause turns
+    ``{"on": [["row_id", "row_id"]], ...}`` into ``{"on": [[22, 22]], ...}``,
+    which is not schema-valid.
+    """
+    fixture = os.path.join(CONF, "metaparam_structural_field_collision", "fixture.esm")
+    d = _expand_raw(fixture)
+    with open(os.path.join(CONF, "metaparam_structural_field_collision", "expanded.esm")) as fh:
+        assert d == json.load(fh)
+
+    m = d["models"]["M"]
+    assert m["system_kind"] == "ode"
+    assert m["reference"] == {"citation": "edge", "doi": "edge", "url": "edge", "notes": "row_id"}
+    assert m["variables"]["u"]["default_units"] == "m"
+    assert m["variables"]["u"]["location"] == "edge"
+    (deq,) = [eq for eq in m["equations"] if not isinstance(eq["lhs"], str)]
+    assert deq["_comment"] == "edge"
+    assert deq["rhs"]["args"] == ["c", 3]
+
+    r = _defining(d, "M", "r")
+    assert r["output_idx"] == ["p"]
+    assert r["join"] == [{"on": [["row_id", "row_id"]], "syms": ["p", "b"]}]
+    assert r["expr"]["args"] == [22, 5]
+    k = _defining(d, "M", "k")
+    assert k["arg"] == "p"
+    assert k["ranges"]["p"] == [1, 11]
+    assert k["expr"]["args"] == ["c", 7]
+
+    # A map key is a declared name, not a field: variables named `source` and
+    # `type` still have their guesses substituted.
+    assert m["guesses"] == {
+        "source": {"op": "*", "args": [5, 2]},
+        "type": {"op": "*", "args": [5, 3]},
+    }
+    assert _defining(d, "M", "source")["args"] == ["c", 22]
+    assert _defining(d, "M", "type")["args"] == ["c", 7]
+
+
+def test_metaparameter_substitution_tables_match_shared_classification():
+    """The skip set and the name-keyed map set are derived from a classification
+    of every string-capable schema property
+    (``scripts/check-metaparameter-substitution-fields.py``); all five bindings
+    compare against the same file."""
+    path = (
+        conftest.CONFORMANCE_DIR.parent / "metaparameter_substitution" / "field_classification.json"
+    )
+    cls = json.loads(path.read_text())
+    assert set(_META_SUBST_SKIP_KEYS) == set(cls["skip_keys"])
+    assert set(_NAME_KEYED_MAP_KEYS) == set(cls["name_keyed_map_keys"])
+    # The substitution-only kind must not leak into the rename walk's protected
+    # set: that set is derived from the kinds, not from the skip set.
+    assert not (_OPAQUE_KEYS & _RENAME_PROTECTED_KEYS)
+
+
+def test_import_rename_walks_name_keyed_map_entries():
+    """§9.7.7 + §9.7.6 map-key rule: the rename walk never dispatches on a map
+    entry name. A `ranges` entry spelled `dim` still has its `from` follow the
+    prefix, and apply-node `bindings` entries spelled `units` / `dim` are
+    variable-reference positions, so their free names are rebindable."""
+    d = _expand_raw(os.path.join(CONF, "import_rename_name_keyed_map_entries", "fixture.esm"))
+    total = _defining(d, "M", "total")
+    assert total["ranges"] == {"dim": {"from": "L.cells"}}
+    assert total["expr"]["args"][1] == {"op": "*", "args": ["kk", "kk2"]}

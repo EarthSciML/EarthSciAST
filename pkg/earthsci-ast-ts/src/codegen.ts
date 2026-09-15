@@ -60,9 +60,9 @@ export interface EvaluateOptions {
  * gate in tree_walk.jl.
  */
 export class UnloweredOperatorError extends EsmDiagnosticError {
-  declare readonly code: 'unlowered_operator'
+  declare readonly code: typeof ERROR_CODES.UNLOWERED_OPERATOR
   constructor(message: string) {
-    super('unlowered_operator', `[unlowered_operator] ${message}`)
+    super(ERROR_CODES.UNLOWERED_OPERATOR, `[unlowered_operator] ${message}`)
     this.name = 'UnloweredOperatorError'
   }
 }
@@ -253,7 +253,7 @@ function evalExprNode(
   } else if (typeof expr === 'string') {
     const bound = bindings.get(expr)
     if (bound !== undefined) return bound
-    throw new EvaluatorError('unbound_variable', `Unbound variable: ${expr}`)
+    throw new EvaluatorError(ERROR_CODES.UNBOUND_VARIABLE, `Unbound variable: ${expr}`)
   } else if (typeof expr === 'object' && expr !== null && (expr as ExpressionNode).op) {
     // Narrow the schema-level `{ [k]: unknown }` expression object to the rich
     // `ExpressionNode` view once, at this boundary, so the branches below read
@@ -271,12 +271,12 @@ function evalExprNode(
       if (typeof value === 'number') return value
       if (Array.isArray(value)) {
         throw new EvaluatorError(
-          'const_not_scalar',
+          ERROR_CODES.CONST_NOT_SCALAR,
           'const node with array value cannot be evaluated as a scalar; arrays are consumed by container ops (e.g. interp.searchsorted, index)',
         )
       }
       throw new EvaluatorError(
-        'const_not_scalar',
+        ERROR_CODES.CONST_NOT_SCALAR,
         `const node with non-numeric value: ${typeof value}`,
       )
     }
@@ -297,7 +297,10 @@ function evalExprNode(
     if (node.op === 'fn') {
       const fnName = node.name
       if (typeof fnName !== 'string') {
-        throw new EvaluatorError('fn_missing_name', 'fn op missing required string `name` field')
+        throw new EvaluatorError(
+          ERROR_CODES.FN_MISSING_NAME,
+          'fn op missing required string `name` field',
+        )
       }
       const fnArgs: unknown[] = node.args.map((arg): unknown => {
         const arr = constArrayValue(arg)
@@ -394,5 +397,5 @@ function evalExprNode(
     return info.evaluate(args)
   }
 
-  throw new EvaluatorError('invalid_expression', 'Invalid expression type')
+  throw new EvaluatorError(ERROR_CODES.INVALID_EXPRESSION, 'Invalid expression type')
 }

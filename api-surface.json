@@ -93,17 +93,17 @@
     }
   },
   "counts": {
-    "symbols": 889,
+    "symbols": 908,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
       "julia": 305,
       "typescript": 239,
       "python": 250,
       "rust": 339,
-      "go": 411
+      "go": 430
     },
     "by_tier": {
-      "extension": 616,
+      "extension": 635,
       "stable": 273
     }
   },
@@ -1034,6 +1034,14 @@
       }
     },
     {
+      "name": "code_apply_expression_template_version_too_old",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeApplyExpressionTemplateVersionTooOld"
+      }
+    },
+    {
       "name": "code_array_shape_mismatch",
       "kind": "constant",
       "tier": "extension",
@@ -1063,6 +1071,30 @@
       "tier": "extension",
       "bindings": {
         "go": "CodeCadenceObservedCycle"
+      }
+    },
+    {
+      "name": "code_closed_function_arity",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeClosedFunctionArity"
+      }
+    },
+    {
+      "name": "code_closed_function_overflow",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeClosedFunctionOverflow"
+      }
+    },
+    {
+      "name": "code_const_units_version_too_old",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeConstUnitsVersionTooOld"
       }
     },
     {
@@ -1202,11 +1234,59 @@
       }
     },
     {
+      "name": "code_interp_axis_length_mismatch",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeInterpAxisLengthMismatch"
+      }
+    },
+    {
+      "name": "code_interp_axis_too_short",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeInterpAxisTooShort"
+      }
+    },
+    {
+      "name": "code_interp_na_n_in_axis",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeInterpNaNInAxis"
+      }
+    },
+    {
+      "name": "code_interp_non_monotonic_axis",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeInterpNonMonotonicAxis"
+      }
+    },
+    {
       "name": "code_invalid_broadcast_fn",
       "kind": "constant",
       "tier": "extension",
       "bindings": {
         "go": "CodeInvalidBroadcastFn"
+      }
+    },
+    {
+      "name": "code_invalid_enum_arg",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeInvalidEnumArg"
+      }
+    },
+    {
+      "name": "code_invalid_enum_arity",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeInvalidEnumArity"
       }
     },
     {
@@ -1370,6 +1450,38 @@
       }
     },
     {
+      "name": "code_rewrite_rule_nonterminating",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeRewriteRuleNonterminating"
+      }
+    },
+    {
+      "name": "code_searchsorted_na_n_in_table",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeSearchsortedNaNInTable"
+      }
+    },
+    {
+      "name": "code_searchsorted_non_monotonic",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeSearchsortedNonMonotonic"
+      }
+    },
+    {
+      "name": "code_solver_version_too_old",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeSolverVersionTooOld"
+      }
+    },
+    {
       "name": "code_subsystem_index_set_conflict",
       "kind": "constant",
       "tier": "extension",
@@ -1498,6 +1610,14 @@
       }
     },
     {
+      "name": "code_template_import_index_set_conflict",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTemplateImportIndexSetConflict"
+      }
+    },
+    {
       "name": "code_template_import_is_coupling_library",
       "kind": "constant",
       "tier": "extension",
@@ -1570,6 +1690,14 @@
       }
     },
     {
+      "name": "code_template_import_version_too_old",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTemplateImportVersionTooOld"
+      }
+    },
+    {
       "name": "code_template_inject_target_not_component",
       "kind": "constant",
       "tier": "extension",
@@ -1599,6 +1727,30 @@
       "tier": "extension",
       "bindings": {
         "go": "CodeUnevaluableOperator"
+      }
+    },
+    {
+      "name": "code_unknown_closed_function",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeUnknownClosedFunction"
+      }
+    },
+    {
+      "name": "code_unknown_enum",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeUnknownEnum"
+      }
+    },
+    {
+      "name": "code_unknown_enum_symbol",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeUnknownEnumSymbol"
       }
     },
     {

@@ -401,6 +401,70 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         @test rargs[4]["args"] == Any["c", 3]
     end
 
+    @testset "metaparam_structural_field_collision: loop symbols, references, enums, units, text, map keys (§9.7.6)" begin
+        # Four metaparameters are spelled like structural values: `row_id` (a
+        # join key column, free text), `m` (a unit symbol), `edge` (a placement
+        # tag, a comment, citation text), `ode` (an enum). Each also sits in an
+        # expression position, where it closes; so does `a`, a dense range bound
+        # beside the loop symbol `p` (a metaparameter spelled like a loop symbol
+        # is `metaparameter_name_conflict`).
+        @test _expand_raw(conf("metaparam_structural_field_collision", "fixture.esm")) ==
+              _golden(conf("metaparam_structural_field_collision", "expanded.esm"))
+
+        d = _expand_raw(conf("metaparam_structural_field_collision", "fixture.esm"))
+        m = d["models"]["M"]
+        @test m["system_kind"] == "ode"
+        @test m["reference"] == Dict("citation" => "edge", "doi" => "edge",
+                                     "url" => "edge", "notes" => "row_id")
+        @test m["variables"]["u"]["default_units"] == "m"
+        @test m["variables"]["u"]["location"] == "edge"
+        deq = only(filter(eq -> !(eq["lhs"] isa AbstractString), m["equations"]))
+        @test deq["_comment"] == "edge"
+        @test deq["rhs"]["args"] == Any["c", 3]
+
+        # A join clause's key columns and the loop symbols they are read at are
+        # names; substituting them makes the document schema-invalid.
+        r = _defrhs(d, "M", "r")
+        @test r["output_idx"] == Any["p"]
+        @test r["join"][1]["on"] == Any[Any["row_id", "row_id"]]
+        @test r["join"][1]["syms"] == Any["p", "b"]
+        @test r["expr"]["args"] == Any[22, 5]
+        k = _defrhs(d, "M", "k")
+        @test k["arg"] == "p"
+        @test k["ranges"]["p"] == Any[1, 11]
+        @test k["expr"]["args"] == Any["c", 7]
+
+        # A map key is a declared name, not a field: variables named `source` and
+        # `type` still have their guesses substituted.
+        @test m["guesses"]["source"]["args"] == Any[5, 2]
+        @test m["guesses"]["type"]["args"] == Any[5, 3]
+        @test _defrhs(d, "M", "source")["args"] == Any["c", 22]
+        @test _defrhs(d, "M", "type")["args"] == Any["c", 7]
+    end
+
+    @testset "import_rename_name_keyed_map_entries: rename never dispatches on a map entry name (§9.7.7)" begin
+        # A `ranges` entry spelled `dim` still has its `from` follow the prefix,
+        # and apply-node `bindings` entries spelled `units` / `dim` are
+        # variable-reference positions, so their free names are rebindable
+        # (esm-spec §9.7.6 map-key rule).
+        d = _expand_raw(conf("import_rename_name_keyed_map_entries", "fixture.esm"))
+        @test d == _golden(conf("import_rename_name_keyed_map_entries", "expanded.esm"))
+        total = _defrhs(d, "M", "total")
+        @test total["ranges"] == Dict("dim" => Dict("from" => "L.cells"))
+        @test total["expr"]["args"][2] == Dict("op" => "*", "args" => Any["kk", "kk2"])
+    end
+
+    @testset "metaparameter substitution tables match the shared classification (§9.7.6)" begin
+        # The key sets are derived from a classification of every string-capable
+        # schema property (scripts/check-metaparameter-substitution-fields.py);
+        # all five bindings compare against the same file.
+        cls = JSON3.read(read(joinpath(repo_root, "tests", "metaparameter_substitution",
+                                       "field_classification.json"), String))
+        @test EarthSciAST._META_SUBST_SKIP_KEYS == Set{String}(String.(cls["skip_keys"]))
+        @test EarthSciAST._NAME_KEYED_MAP_KEYS ==
+              Set{String}(String.(cls["name_keyed_map_keys"]))
+    end
+
     @testset "loader-API bindings (§9.7.6 site 4) and defaults (site 5)" begin
         problem = conf("metaparameter_resolutions", "problem.esm")
         fdef = EarthSciAST.load_path(problem)

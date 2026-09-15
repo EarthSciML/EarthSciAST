@@ -63,6 +63,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("expression_parse_conformance_test.jl")  # infix-text parser ≡ TS oracle
     include("units_test.jl")
     include("unit_exact_scale_test.jl")
+    include("const_units_test.jl")
     include("graph_test.jl")
     include("graph_conformance_test.jl")  # component/expression graphs ≡ TS oracle
 
