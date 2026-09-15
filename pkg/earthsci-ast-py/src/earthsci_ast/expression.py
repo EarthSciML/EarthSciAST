@@ -221,12 +221,12 @@ class SimulationError(EarthSciAstError):
 
 
 class UnsupportedConstructError(SimulationError):
-    """A discrete event or an implicit equation reached an evaluator that cannot
-    run it (esm-spec §9.6.6 ``unsupported_construct``).
+    """A continuous event, a discrete event or an implicit equation reached an
+    evaluator that cannot run it (esm-spec §9.6.6 ``unsupported_construct``).
 
     Neither the SymPy scalar pathway nor the NumPy array interpreter has event
-    handling or an algebraic solve, and skipping the construct would report the
-    initial value as the answer, so the build is refused instead.
+    handling or an algebraic solve, and skipping the construct would report a
+    wrong answer, so the build is refused instead.
     """
 
     #: Stable cross-binding diagnostic code (esm-spec §9.6.6).

@@ -365,21 +365,25 @@ function _build_continuous_events(flat::FlattenedSystem, var_dict, t_sym, dim_di
             _condition_to_root_equation(c, var_dict, t_sym, dim_dict)
             for c in ev.conditions
         ]
-        affects = filter(!isnothing,
-                         [_affect_to_eq(a, var_dict, t_sym, dim_dict, state_syms)
-                          for a in ev.affects])
+        to_eqs(list) = filter(!isnothing,
+                              [_affect_to_eq(a, var_dict, t_sym, dim_dict, state_syms)
+                               for a in list])
+        affects = to_eqs(ev.affects)
+        # esm-spec §5.2: `affect_neg` fires on NEGATIVE-going crossings, and "if
+        # `null` or absent, `affects` is used for both directions". The absent
+        # case is what makes the bouncing ball bounce: it crosses `height ~ 0` on
+        # the negative edge (falling), so an event that fired only on the
+        # positive edge would never trigger.
+        affect_neg = ev.affect_neg === nothing ? affects : to_eqs(ev.affect_neg)
         # NOTE: parenthesized guard — the bare `a || b && continue` form
         # parses as `a || (b && continue)`, letting an event with EMPTY
         # conditions fall through to `conds[1]` (BoundsError).
-        (isempty(conds) || isempty(affects)) && continue
-        # `conditions` is a Vector{Equation}; `affect` a Vector{Equation} that
-        # MTK wraps into a SymbolicAffect. `affect_neg` is deliberately left at
-        # its MTK default — which is `affect` — because esm-spec §5.2 says the
-        # same thing: "If `null` or absent, `affects` is used for both
-        # directions." That default is what makes the bouncing ball bounce: it
-        # crosses `height ~ 0` on the NEGATIVE edge (falling), so an event that
-        # fired only on the positive edge would never trigger.
-        push!(cbs, ModelingToolkit.SymbolicContinuousCallback(conds, affects))
+        (isempty(conds) || (isempty(affects) && isempty(affect_neg))) && continue
+        # `conditions` is a Vector{Equation}; each affect a Vector{Equation} that
+        # MTK wraps into a SymbolicAffect, or `nothing` for no affect on that edge.
+        push!(cbs, ModelingToolkit.SymbolicContinuousCallback(
+            conds, isempty(affects) ? nothing : affects;
+            affect_neg = isempty(affect_neg) ? nothing : affect_neg))
     end
     return cbs
 end

@@ -15,20 +15,21 @@ use thiserror::Error;
 /// Errors raised when building a compiled model from a flattened system.
 #[derive(Error, Debug)]
 pub enum CompileError {
-    /// A model construct this evaluator cannot run: a discrete event, or an
-    /// implicit equation (an equation whose LHS is an expression rather than an
-    /// unknown, `D(unknown)` or `ic(unknown)`). esm-spec §9.6.6
+    /// A model construct this evaluator cannot run: a continuous or discrete
+    /// event, or an implicit equation (an equation whose LHS is an expression
+    /// rather than an unknown, `D(unknown)` or `ic(unknown)`). esm-spec §9.6.6
     /// `unsupported_construct`.
     ///
     /// Refused at build rather than skipped: a model run without its event, or
-    /// without its residual solved, reports the initial value as its answer,
-    /// and nothing in that answer says a construct was dropped.
+    /// without its residual solved, reports a wrong answer, and nothing in that
+    /// answer says a construct was dropped.
     #[error(
         "unsupported_construct: {construct} {detail} is not supported by the {evaluator}; \
          refusing the build rather than running the model without it (esm-spec §9.6.6)"
     )]
     UnsupportedConstruct {
-        /// Which construct: [`DISCRETE_EVENT`] or [`IMPLICIT_EQUATION`].
+        /// Which construct: [`CONTINUOUS_EVENT`], [`DISCRETE_EVENT`] or
+        /// [`IMPLICIT_EQUATION`].
         construct: &'static str,
         /// Which evaluator refused it, e.g. `"Rust array evaluator"`.
         evaluator: &'static str,
@@ -37,10 +38,10 @@ pub enum CompileError {
     },
 
     /// The flattened system contains a feature the v1 simulator does not support
-    /// (e.g. continuous events).
+    /// (e.g. a join over data-derived columns).
     #[error("Unsupported feature '{feature}': {message}")]
     UnsupportedFeatureError {
-        /// Feature name (e.g. `"continuous_events"`).
+        /// Feature name (e.g. `"value-equality join over data-derived columns"`).
         feature: String,
         /// Why this is rejected and what to do about it.
         message: String,
@@ -322,6 +323,9 @@ impl CompileError {
     }
 }
 
+/// [`CompileError::UnsupportedConstruct`]'s `construct` for a
+/// `continuous_events` entry.
+pub const CONTINUOUS_EVENT: &str = "continuous event";
 /// [`CompileError::UnsupportedConstruct`]'s `construct` for a `discrete_events`
 /// entry.
 pub const DISCRETE_EVENT: &str = "discrete event";
@@ -333,13 +337,28 @@ pub const SCALAR_EVALUATOR: &str = "Rust scalar ODE interpreter";
 /// The array runtime (`crate::simulate_array`), as a refusal names it.
 pub const ARRAY_EVALUATOR: &str = "Rust array evaluator";
 
-/// The refusal of a discrete event by `evaluator`, naming the event.
-pub fn discrete_event_refusal(evaluator: &'static str, name: Option<&str>) -> CompileError {
+/// The refusal of an event by `evaluator`: `construct` is [`CONTINUOUS_EVENT`]
+/// or [`DISCRETE_EVENT`], and the message names the event.
+pub fn event_refusal(
+    construct: &'static str,
+    evaluator: &'static str,
+    name: Option<&str>,
+) -> CompileError {
     CompileError::UnsupportedConstruct {
-        construct: DISCRETE_EVENT,
+        construct,
         evaluator,
         detail: name.map_or_else(|| "(unnamed)".to_string(), |n| format!("'{n}'")),
     }
+}
+
+/// The refusal of a continuous event by `evaluator`, naming the event.
+pub fn continuous_event_refusal(evaluator: &'static str, name: Option<&str>) -> CompileError {
+    event_refusal(CONTINUOUS_EVENT, evaluator, name)
+}
+
+/// The refusal of a discrete event by `evaluator`, naming the event.
+pub fn discrete_event_refusal(evaluator: &'static str, name: Option<&str>) -> CompileError {
+    event_refusal(DISCRETE_EVENT, evaluator, name)
 }
 
 /// The first equation that constrains its operands only implicitly. An `ic`

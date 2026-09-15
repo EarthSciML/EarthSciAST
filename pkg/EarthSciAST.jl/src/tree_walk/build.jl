@@ -3362,16 +3362,16 @@ function _build_evaluator_impl_inner(model::Model;
                          # against the model's own subsystems and name prefixes
                          # alone.
                          _model_name::Union{Nothing,AbstractString}=nothing)
-    # A discrete event is refused before anything is built (esm-spec §9.6.6):
-    # this evaluator has no event handling, so a model built without its events
-    # would report the initial value as its answer. This check covers a model
+    # An event, continuous or discrete, is refused before anything is built
+    # (esm-spec §9.6.6): this evaluator has no event handling, so a model built
+    # without its events would report a wrong answer. This check covers a model
     # handed to `build_evaluator` directly. A FLATTENED system reaches this entry
     # through `flattened_to_esm`, which does not carry events, so `simulate` (and
     # with it `run_inline_tests`) and `build_evaluator(::FlattenedSystem)` refuse
     # it earlier, while the events are still in hand. The ModelingToolkit export
-    # runs discrete events and does not come through here.
-    ev = _first_discrete_event(model)
-    ev === nothing || throw(_discrete_event_refusal(ev))
+    # runs both kinds of event and does not come through here.
+    ev = _first_event(model)
+    ev === nothing || throw(_event_refusal(ev))
     # Runtime contraction-loop var registry (ess-runtime-contraction) is a
     # build-scoped resolve→compile side channel; clear any stale entries from a
     # prior build so it never accumulates across builds. Loop-var names are
@@ -5250,9 +5250,9 @@ function build_evaluator(flat::FlattenedSystem; kwargs...)
     # (Expand at load) is the one differential escape hatch (RFC §12 gate 3).
     # A no-op for a reference-free system.
     #
-    # `flattened_to_esm` does not carry discrete events, so they are refused
-    # HERE, while the flattened system still holds them (esm-spec §9.6.6).
-    _refuse_flat_discrete_events(flat)
+    # `flattened_to_esm` does not carry events, so they are refused HERE, while
+    # the flattened system still holds them (esm-spec §9.6.6).
+    _refuse_flat_events(flat)
     return build_evaluator(flattened_to_esm(flat); kwargs...)
 end
 

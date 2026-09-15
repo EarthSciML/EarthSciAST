@@ -370,8 +370,8 @@ diagnostic_code_registry! {
     RECURRENCE_NOT_WELLFOUNDED = "recurrence_not_wellfounded";
     /// A causal self-read the runtime cannot restrict to one cell.
     RECURRENCE_UNSUPPORTED_FORM = "recurrence_unsupported_form";
-    /// A discrete event or an implicit equation reached an evaluator that
-    /// cannot run it (esm-spec §9.6.6).
+    /// A continuous or discrete event, or an implicit equation, reached an
+    /// evaluator that cannot run it (esm-spec §9.6.6).
     UNSUPPORTED_CONSTRUCT = "unsupported_construct";
     /// A relational node in a continuous (ODE-position) expression.
     RELATIONAL_NODE_IN_CONTINUOUS = "relational_node_in_continuous";

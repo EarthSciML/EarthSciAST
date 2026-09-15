@@ -139,7 +139,7 @@ unsupported construct. Codes are stable (`E_TREEWALK_*`):
 | `E_TREEWALK_UNSUPPORTED_OP` | Op cannot be evaluated by the scalar walker (typically a PDE / array op that should have been rewritten by `discretize`). |
 | `E_TREEWALK_UNSUPPORTED_SHAPE` | A variable still has `shape` set — the model is not yet scalarized. |
 | `E_TREEWALK_UNSUPPORTED_BROWNIAN` | Brownian variables are not supported by the deterministic ODE walker. |
-| `unsupported_construct` | The model declares a discrete event, or an implicit equation (an expression LHS such as `s - f(s) ~ 0`). The walker runs neither; use the ModelingToolkit runner, which does (esm-spec §9.6.6). |
+| `unsupported_construct` | The model declares a continuous event, a discrete event, or an implicit equation (an expression LHS such as `s - f(s) ~ 0`). The walker runs none of them; use the ModelingToolkit runner, which does (esm-spec §9.6.6). |
 | `E_TREEWALK_UNSUPPORTED_EQUATION` | Any other equation LHS that is neither `D(state, wrt=t)` nor an observed-variable assignment. |
 | `E_TREEWALK_UNBOUND_VARIABLE` | Free variable is neither a state, parameter, nor `t`. |
 | `E_TREEWALK_DUPLICATE_DERIVATIVE` | More than one equation defines `D(state, wrt=t)` for the same state. |

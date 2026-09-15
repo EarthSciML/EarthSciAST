@@ -1,0 +1,88 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "ContinuousEventOnTheScalarPath",
+    "description": "A continuous event resets the unknown `x`, which climbs at rate 1, back to 0 each time it crosses 1, so x(2.5) = 0.5. The document has no array variable, so it takes the SCALAR evaluator. No binding's scalar evaluator runs continuous events: Julia's tree-walk evaluator ignored the event and reported 2.5, and Python's SymPy pathway stopped at the first crossing without applying the affect. Every such evaluator MUST refuse the document with `unsupported_construct` naming the construct and the evaluator (issue #356). Julia's ModelingToolkit export runs continuous events and is not covered by this category.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "conformance",
+      "unsupported_construct",
+      "events"
+    ]
+  },
+  "models": {
+    "ContinuousEventOnTheScalarPath": {
+      "tolerance": {
+        "abs": 1e-06
+      },
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Climbs at rate 1 from 0; reset to 0 when it reaches 1."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 1.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "x"
+            ]
+          },
+          "rhs": 0.0
+        }
+      ],
+      "continuous_events": [
+        {
+          "name": "reset",
+          "conditions": [
+            {
+              "op": "-",
+              "args": [
+                "x",
+                1.0
+              ]
+            }
+          ],
+          "affects": [
+            {
+              "lhs": "x",
+              "rhs": 0.0
+            }
+          ],
+          "description": "x := 0 whenever x crosses 1."
+        }
+      ],
+      "tests": [
+        {
+          "id": "a_threshold_reset_makes_a_sawtooth",
+          "description": "Intended behaviour: x resets at t = 1 and t = 2, so x(2.5) = 0.5. Without the event x(2.5) = 2.5. An evaluator that cannot run the event must refuse rather than report 2.5.",
+          "time_span": {
+            "start": 0.0,
+            "end": 2.5
+          },
+          "assertions": [
+            {
+              "variable": "x",
+              "time": 2.5,
+              "expected": 0.5
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

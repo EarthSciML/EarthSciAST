@@ -468,13 +468,11 @@ impl ArrayCompiled {
                 independent_variables: flat.independent_variables.clone(),
             });
         }
-        if !flat.continuous_events.is_empty() {
-            return Err(CompileError::UnsupportedFeatureError {
-                feature: "continuous_events".to_string(),
-                message: "array-op path does not support continuous (root-finding) events. \
-                          Track the future Rust events bead for support."
-                    .to_string(),
-            });
+        if let Some(event) = flat.continuous_events.first() {
+            return Err(crate::compile_error::continuous_event_refusal(
+                crate::compile_error::ARRAY_EVALUATOR,
+                event.name.as_deref(),
+            ));
         }
         if let Some(event) = flat.discrete_events.first() {
             return Err(crate::compile_error::discrete_event_refusal(
@@ -612,13 +610,14 @@ impl ArrayCompiled {
         // scope (RFC §5.4; the Julia `_factor_scope` mirror). Both are no-ops —
         // and the registry copy is byte-identical — for models without
         // subsystems / ragged sets.
-        // A discrete event is refused before anything is built. This is the
-        // SINGLE-MODEL route's check: `from_flattened` checks the flattened
-        // event list itself, because the synthetic model it hands down carries
-        // no events. Subsystems are searched too, since mounting keeps only
-        // their variables and equations.
-        if let Some(name) = first_discrete_event(&model_owned) {
-            return Err(crate::compile_error::discrete_event_refusal(
+        // An event, continuous or discrete, is refused before anything is
+        // built. This is the SINGLE-MODEL route's check: `from_flattened` checks
+        // the flattened event lists itself, because the synthetic model it hands
+        // down carries no events. Subsystems are searched too, since mounting
+        // keeps only their variables and equations.
+        if let Some((construct, name)) = first_event(&model_owned) {
+            return Err(crate::compile_error::event_refusal(
+                construct,
                 crate::compile_error::ARRAY_EVALUATOR,
                 name.as_deref(),
             ));
@@ -867,30 +866,38 @@ impl ArrayCompiled {
 // extracted verbatim from the former inline implementation.
 // ============================================================================
 
-/// The name of the first discrete event `model` or any of its inline subsystems
-/// declares (`Some(None)` for an unnamed one), searching the subsystems' raw
-/// JSON because mounting carries only their variables and equations.
-fn first_discrete_event(model: &Model) -> Option<Option<String>> {
-    fn in_json(value: &serde_json::Value) -> Option<Option<String>> {
-        if let Some(event) = value
-            .get("discrete_events")
-            .and_then(|v| v.as_array())
-            .and_then(|events| events.first())
-        {
-            return Some(
-                event
-                    .get("name")
-                    .and_then(|n| n.as_str())
-                    .map(str::to_string),
-            );
+/// The first event `model` or any of its inline subsystems declares, a
+/// continuous one before a discrete one: its construct
+/// ([`crate::compile_error::CONTINUOUS_EVENT`] or
+/// [`crate::compile_error::DISCRETE_EVENT`]) and its name (`None` for an unnamed
+/// one). The subsystems are searched in their raw JSON, because mounting carries
+/// only their variables and equations.
+fn first_event(model: &Model) -> Option<(&'static str, Option<String>)> {
+    use crate::compile_error::{CONTINUOUS_EVENT, DISCRETE_EVENT};
+    fn in_json(value: &serde_json::Value) -> Option<(&'static str, Option<String>)> {
+        for (key, construct) in [
+            ("continuous_events", CONTINUOUS_EVENT),
+            ("discrete_events", DISCRETE_EVENT),
+        ] {
+            if let Some(event) = value
+                .get(key)
+                .and_then(|v| v.as_array())
+                .and_then(|events| events.first())
+            {
+                let name = event.get("name").and_then(|n| n.as_str());
+                return Some((construct, name.map(str::to_string)));
+            }
         }
         value
             .get("subsystems")
             .and_then(|s| s.as_object())
             .and_then(|subs| subs.values().find_map(in_json))
     }
+    if let Some(event) = model.continuous_events.as_ref().and_then(|e| e.first()) {
+        return Some((CONTINUOUS_EVENT, event.name.clone()));
+    }
     if let Some(event) = model.discrete_events.as_ref().and_then(|e| e.first()) {
-        return Some(event.name.clone());
+        return Some((DISCRETE_EVENT, event.name.clone()));
     }
     model
         .subsystems

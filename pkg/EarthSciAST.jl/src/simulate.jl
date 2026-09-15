@@ -152,10 +152,11 @@ function _prepare_run_doc(input; metaparameters::AbstractDict = Dict{String,Int}
         input = flatten(input)
     end
     if input isa FlattenedSystem
-        # esm-spec §9.6.6: refuse a discrete event while the flattened system
-        # still carries it. `flattened_to_esm` below does not emit events, so the
-        # tree-walk build never sees one and would run the model without it.
-        _refuse_flat_discrete_events(input)
+        # esm-spec §9.6.6: refuse an event, continuous or discrete, while the
+        # flattened system still carries it. `flattened_to_esm` below does not
+        # emit events, so the tree-walk build never sees one and would run the
+        # model without it.
+        _refuse_flat_events(input)
         # esm-spec §9.5.3: lower `table_lookup` to its `interp.*` form HERE —
         # the one point every input kind (path, native Dict, EsmFile,
         # already-flattened system) has funnelled into, and the first point

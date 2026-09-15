@@ -798,15 +798,17 @@ def _declares_resolvable_shape(flat: FlattenedSystem) -> bool:
 
 
 def _refuse_unsupported_constructs(flat: FlattenedSystem) -> None:
-    """esm-spec §9.6.6 ``unsupported_construct`` — refuse a discrete event or an
-    implicit equation before any pathway is built.
+    """esm-spec §9.6.6 ``unsupported_construct`` — refuse an event (continuous or
+    discrete) or an implicit equation before any pathway is built.
 
-    Neither the SymPy scalar pathway nor the NumPy array interpreter runs a
-    discrete event, and neither solves an equation whose LHS is an expression.
-    Both used to build anyway: the event never fired, the residual was never
-    applied, and the run reported the initial value (issue #264). The evaluator
-    named in the message is the one the document's array-ness selects; a
-    discrete event is refused on every route, including the data-refresh ones.
+    Neither the SymPy scalar pathway nor the NumPy array interpreter runs an
+    event, and neither solves an equation whose LHS is an expression. Both used
+    to build anyway and report a number the document does not describe (issues
+    #264 and #356). The SymPy pathway's continuous-event root functions only
+    stop the integration at the first crossing; no affect is ever applied. The
+    evaluator named in the message is the one the document's array-ness
+    selects; an event is refused on every route, including the data-refresh
+    ones.
     """
     evaluator = (
         "Python array interpreter"
@@ -814,11 +816,15 @@ def _refuse_unsupported_constructs(flat: FlattenedSystem) -> None:
         or any(_has_array_op(eq.lhs) or _has_array_op(eq.rhs) for eq in flat.equations)
         else "Python scalar interpreter"
     )
-    if flat.discrete_events:
-        name = getattr(flat.discrete_events[0], "name", None)
-        raise UnsupportedConstructError(
-            "discrete event", f"'{name}'" if name else "(unnamed)", evaluator
-        )
+    for construct, events in (
+        ("continuous event", flat.continuous_events),
+        ("discrete event", flat.discrete_events),
+    ):
+        if events:
+            name = getattr(events[0], "name", None)
+            raise UnsupportedConstructError(
+                construct, f"'{name}'" if name else "(unnamed)", evaluator
+            )
     for eq in flat.equations:
         if is_implicit_lhs(eq.lhs):
             raise UnsupportedConstructError(
