@@ -111,6 +111,9 @@ mutable struct _DECtx
     static::IdDict{_E._Node,Bool}           # memoized "this subtree is host-computable"
     reduce_min::Int                         # fold length at which a chain becomes a reduce
     names::Dict{Int,String}                 # flat slot -> element name (for the rule text)
+    # Producer-set -> the one concatenation a cross-producer gather reads from,
+    # so a read set that recurs (and on a stencil they all do) pays for it once.
+    gather_bases::Dict{Tuple{Vector{_MLIR.IR.Value},Bool},Tuple{_DEVal,Vector{Int},Int}}
     stats::Dict{Symbol,Int}
     # Which SECTION of the emission is running: materialization level `li` while
     # the fills are emitted, `nlev + 1` from the CSE prelude onwards. The read
@@ -129,6 +132,8 @@ function _DECtx(n_states::Int, n_total::Int, p, t::_DEVal, uval::_DEVal,
                   Dict{Vector{Float64},_DEVal}(), bufs, hostkeys,
                   Union{Nothing,_DEVal}[nothing for _ in hostkeys],
                   IdDict{_E._Node,Bool}(), _de_reduce_min(), names,
+                  Dict{Tuple{Vector{_MLIR.IR.Value},Bool},
+                       Tuple{_DEVal,Vector{Int},Int}}(),
                   Dict{Symbol,Int}(), Int32(0))
 end
 
@@ -293,6 +298,105 @@ end
 # still costs one piece per run and nothing per zero lane.
 const _DESlotSrc = Union{Nothing,_DEVal}
 
+# ---- the read cost model -----------------------------------------------------
+#
+# WHEN ONE GATHER BEATS A SLICE PER RUN. The slice path costs one op per run
+# plus one concatenate, and no index data; a gather costs one op plus an O(n)
+# i64 index constant (and, across producers, one concatenate of the producer
+# values, which is cached). So the decision is the AVERAGE RUN LENGTH, and
+# `_DE_RUN_WORTH` is the length at which they break even.
+#
+# THE RULE THIS REPLACES DECIDED SOMETHING ELSE. It asked whether the read had
+# more runs than HALF its positions — an average run shorter than two — and it
+# additionally required every run to lie in ONE producer and the read to contain
+# no structural zero. Measured on ReSEACT's transport half at 288 cells, all
+# three clauses missed: the PPM stencil's reads average two to four positions
+# per run (so `> n ÷ 2` is false), and of the 506 reads that reach a
+# concatenate, 241 are single-producer and 255 span TWO. The step therefore
+# arrived at XLA as 55,117 slices against the traced emitter's 878 slices and
+# 392 gathers, and the reverse-mode program as 1.82 MILLION slices against
+# 2,712. See reseact.esm's COMPILE_COST.md for the measurement.
+#
+# BOTH SIDES OF THE TRADE WERE MEASURED, on ReSEACT's two halves at 288 cells,
+# and the gather wins both, which is why it is the default. The transport half's
+# optimized module goes from 18,060 ops to 6,510, its per-call median from
+# 3.3 ms to 1.9 ms, and the reverse-mode program the adjoint compiles becomes
+# tractable at all. The chemistry half, whose reads are not shattered, emits ONE
+# gather and is unchanged in every figure. `ESM_DIRECT_EMIT_READ=runs` restores
+# the previous shape exactly, as the negative control and as the escape if a
+# model is ever found where the concatenated base is the wrong trade.
+#
+# Neither setting changes a NUMBER: a gather of the same positions from the same
+# values is bit-identical to slices-plus-concatenate of them.
+const _DE_GATHER_MIN_PIECES = 8
+const _DE_RUN_WORTH = 4
+
+_de_read_mode() = get(ENV, "ESM_DIRECT_EMIT_READ", "gather")
+
+function _de_gather_is_cheaper(npieces::Int, n::Int)
+    _de_read_mode() == "runs" && return false
+    return npieces >= _DE_GATHER_MIN_PIECES && npieces * _DE_RUN_WORTH > n
+end
+
+# The base a cross-producer gather reads from: the DISTINCT producer values
+# concatenated once, plus one zero element when the read carries structural
+# zeros (a gather may read one position many times, so every zero lane points
+# at that single element). Returns the base, the offset of each producer inside
+# it, and the position of the zero — or `nothing` when the base would be so much
+# larger than the read that the concatenate is the new cost.
+function _de_gather_base(ctx::_DECtx, prods::Vector{_DEVal}, needzero::Bool, n::Int)
+    key = (_MLIR.IR.Value[q.v for q in prods], needzero)
+    hit = get(ctx.gather_bases, key, nothing)
+    hit === nothing || return hit
+    tot = sum(q.len for q in prods) + (needzero ? 1 : 0)
+    # A gather reads `n` of `tot`; concatenating a base far larger than the read
+    # trades a compile-time win for a runtime copy, which is not the trade.
+    tot > max(8 * n, 4096) && return nothing
+    offs = Int[]
+    acc = 0
+    for q in prods
+        push!(offs, acc)
+        acc += q.len
+    end
+    pieces = copy(prods)
+    zpos = 0
+    if needzero
+        push!(pieces, _de_const(ctx, 0.0))
+        zpos = acc + 1
+    end
+    base = _de_concat(ctx, pieces)
+    out = (base, offs, zpos)
+    ctx.gather_bases[key] = out
+    return out
+end
+
+function _de_runs_as_gather(ctx::_DECtx, srcs::Vector{_DESlot},
+                            runs::Vector{Tuple{_DESlotSrc,Int,Int,Int}},
+                            needzero::Bool)
+    prods = _DEVal[]
+    for r in runs
+        sv = r[1]
+        sv === nothing && continue
+        any(q -> q.v == (sv::_DEVal).v, prods) || push!(prods, sv::_DEVal)
+    end
+    # All zeros: the slice path already emits exactly one constant for that.
+    isempty(prods) && return nothing
+    got = _de_gather_base(ctx, prods, needzero, length(srcs))
+    got === nothing && return nothing
+    base, offs, zpos = got
+    pos = Vector{Int}(undef, length(srcs))
+    for (i, e) in enumerate(srcs)
+        if e === nothing
+            pos[i] = zpos
+        else
+            sv, q = e::Tuple{_DEVal,Int}
+            k = findfirst(x -> x.v == sv.v, prods)::Int
+            pos[i] = offs[k] + q
+        end
+    end
+    return _de_gather_op(ctx, base, pos)
+end
+
 function _de_emit_runs(ctx::_DECtx, srcs::Vector{_DESlot})::_DEVal
     n = length(srcs)
     n == 0 && _de_refuse("an empty read", "a read of zero positions reached the emitter.")
@@ -331,10 +435,9 @@ function _de_emit_runs(ctx::_DECtx, srcs::Vector{_DESlot})::_DEVal
         push!(runs, (sv, p0, (srcs[j]::Tuple{_DEVal,Int})[2], stride))
         i = j + 1
     end
-    if nzero == 0 && length(runs) > 1 && n > 8 && length(runs) > n ÷ 2 &&
-       all((r[1]::_DEVal).v == (runs[1][1]::_DEVal).v for r in runs)
-        return _de_gather_op(ctx, runs[1][1]::_DEVal,
-                             Int[(e::Tuple{_DEVal,Int})[2] for e in srcs])
+    if _de_gather_is_cheaper(length(runs), n)
+        g = _de_runs_as_gather(ctx, srcs, runs, nzero > 0)
+        g === nothing || return g
     end
     pieces = _DEVal[r[1] === nothing ? _de_arrconst(ctx, zeros(Float64, r[3])) :
                     _de_slice(ctx, r[1]::_DEVal, r[2], r[3], r[4]) for r in runs]

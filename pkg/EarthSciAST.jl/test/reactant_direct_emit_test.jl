@@ -470,6 +470,59 @@ end
         @test get(d.stats, :subcall, 0) >= 1
     end
 
+    @testset "the read cost model: slices per run, or one cross-producer gather" begin
+        # The DECISION is pure arithmetic and needs no MLIR context.
+        # `runs` is the negative control: the pre-2026-09-15 shape, never gathers.
+        withenv("ESM_DIRECT_EMIT_READ" => "runs") do
+            @test !EXT_DE._de_gather_is_cheaper(400, 1104)
+            @test !EXT_DE._de_gather_is_cheaper(600, 1000)
+        end
+        # The DEFAULT is the cost model, with nothing set.
+        withenv("ESM_DIRECT_EMIT_READ" => nothing) do
+            @test EXT_DE._de_gather_is_cheaper(400, 1104)
+            @test !EXT_DE._de_gather_is_cheaper(6, 216)
+        end
+        withenv("ESM_DIRECT_EMIT_READ" => "gather") do
+            # 400 runs over 1,104 positions: average run 2.8, shorter than the
+            # break-even 4, so one gather is the cheaper program. The rule this
+            # replaced asked `400 > 1104 ÷ 2` and said no.
+            @test EXT_DE._de_gather_is_cheaper(400, 1104)
+            @test EXT_DE._de_gather_is_cheaper(8, 24)
+            # Long affine runs stay on slices, which is what the slice path is for.
+            @test !EXT_DE._de_gather_is_cheaper(6, 216)      # avg 36
+            @test !EXT_DE._de_gather_is_cheaper(7, 20)       # below the piece floor
+        end
+
+        # And the two read forms are the SAME PROGRAM numerically. A 3-axis
+        # stencil over 343 cells is the shape that shatters: its reads span two
+        # producers and run two to four positions at a time.
+        fix = joinpath(TESTUTILS_REPO_ROOT, "tests", "bench",
+                       "transport_3axis_7cubed_fullrank.esm")
+        @test isfile(fix)
+        flat = ESM_DE.flatten(ESM_DE.load_path(fix))
+        fo, u0, p, _, _ = build_evaluator(flat; form = :oop)
+        fi!, _, _, _, _ = build_evaluator(flat)
+        n = length(u0)
+        u1 = Float64[sin(0.1 * i) + 1.5 for i in 1:n]
+        ref = _de_ip(fi!, u1, p, 0.4)
+        pr = _de_dev(p)
+        ur = RX_DE.ConcreteRArray(copy(u1)); tr = RX_DE.ConcreteRNumber(0.4)
+        tallies = Dict{String,Dict{Symbol,Int}}()
+        for mode in ("runs", "gather")
+            withenv("ESM_DIRECT_EMIT_READ" => mode) do
+                d = EXT_DE.direct_rhs(fo)
+                xla = RX_DE.@compile sync = true d(ur, pr, tr)
+                @test isapprox(Array(xla(ur, pr, tr)), ref; rtol = 1e-12, atol = 0.0)
+                tallies[mode] = copy(d.stats)
+            end
+        end
+        println("  read-form tallies: runs=", tallies["runs"],
+                "\n                     gather=", tallies["gather"])
+        # The point of the mode: fewer slices, and the gathers that replace them.
+        @test get(tallies["gather"], :slice, 0) < get(tallies["runs"], :slice, 0)
+        @test get(tallies["gather"], :gather, 0) > get(tallies["runs"], :gather, 0)
+    end
+
     @testset "a closed `interp.linear` function" begin
         fo, u0, p, _, _ = build_evaluator(_de_interpdoc(); form = :oop)
         fi!, _, _, _, _ = build_evaluator(_de_interpdoc())
