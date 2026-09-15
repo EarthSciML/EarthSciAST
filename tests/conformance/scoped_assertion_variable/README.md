@@ -36,6 +36,13 @@ Before the fix the `coords` and `reduce` assertions errored with
 `shadowed_mount.esm` the pointwise `Leaf.u` silently read the top-level leaf
 (`exp(−1)`) instead of the subsystem (`2`).
 
+`nested_mount.esm` also gates a Rust routing gap the scoped name exposed: `Host`
+declares no derivative and no shaped variable of its own — both live in the
+mounted leaf — and Rust chose the simulation backend from top-level models
+only, so the document went to the scalar backend, which cannot hold an array
+`const`, and failed to build whatever its tests asserted. Rust now asks the
+backend questions of the whole mount tree (`simulate_array::model_tree_any`).
+
 ## What each binding asserts
 
 Driven by per-binding test files rather than by a harness manifest, in the
