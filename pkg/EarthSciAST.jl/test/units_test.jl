@@ -315,11 +315,40 @@ using Unitful
         eq = Equation(OpExpr("D", E[VarExpr("y")]; wrt="t"), NumExpr(0.0))
         @test isempty(EarthSciAST.equation_unit_findings(eq, Dict("y" => "kg")))
 
-        # ...but an ALL-literal sum really is a pure number, and a literal in
-        # ADDITIVE position is dimension-NEUTRAL (it adopts its sibling's unit).
-        @test D(OpExpr("+", E[NumExpr(1.0), NumExpr(2.0)]), var_units) == Unitful.NoUnits
+        # ...a literal in ADDITIVE position is dimension-NEUTRAL (it adopts its
+        # sibling's unit)...
         tk = D(OpExpr("-", E[VarExpr("x"), NumExpr(273.15)]), var_units)
         @test tk !== nothing && dimension(tk) == Unitful.𝐋
+
+        # ...but a sum with NO determinable operand is undeterminable, never
+        # dimensionless (esm-spec §4.8.3, §4.8.4): for an integer as well as a
+        # float literal, in min/max as in +/-, and under a unary `+`.
+        for lits in (E[NumExpr(1.0), NumExpr(2.0)], E[IntExpr(1), IntExpr(2)]),
+                op in ("+", "-", "min", "max")
+            @test D(OpExpr(op, lits), var_units) === nothing
+        end
+        @test D(OpExpr("+", E[IntExpr(2)]), var_units) === nothing
+        @test D(OpExpr("+", E[NumExpr(2.5)]), var_units) === nothing
+        @test D(OpExpr("*", E[VarExpr("x"), OpExpr("+", E[IntExpr(1), IntExpr(2)])]),
+                var_units) === nothing
+        @test isempty(EarthSciAST.equation_unit_findings(
+            Equation(VarExpr("x"), OpExpr("+", E[IntExpr(1), IntExpr(2)])), var_units))
+        # A unary `+` carries its operand's unit, exactly as a unary `-` does.
+        px = D(OpExpr("+", E[VarExpr("x")]), var_units)
+        @test px !== nothing && dimension(px) == Unitful.𝐋
+
+        # A sum whose operands are partly undeterminable has the unit of the
+        # determinable ones: `x + 0.5*x` is a length, so equating it with a mass
+        # is a provable mismatch, and so is taking its exp.
+        half_x = OpExpr("*", E[NumExpr(0.5), VarExpr("x")])
+        for op in ("+", "-", "min", "max")
+            d = D(OpExpr(op, E[VarExpr("x"), half_x]), var_units)
+            @test d !== nothing && dimension(d) == Unitful.𝐋
+            @test !isempty(EarthSciAST.equation_unit_findings(
+                Equation(VarExpr("y"), OpExpr(op, E[VarExpr("x"), half_x])), var_units))
+        end
+        @test !isempty(EarthSciAST.expression_unit_findings(
+            OpExpr("exp", E[OpExpr("+", E[VarExpr("x"), half_x])]), var_units))
 
         # A unary negation of a literal counts as a literal (esm-spec §4.8.3):
         # `x + -(273.15)` adopts x's unit exactly as `x + -273.15` does, at any

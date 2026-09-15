@@ -328,8 +328,8 @@ function computeDimensions(
   // its inconsistency between DECLARED quantities (`length + mass`, `ln(mass)`,
   // `m^kg`), never via a literal. Literals still behave correctly where their
   // meaning IS determined: additively they are neutral and adopt their
-  // sibling's dimension (`T - 273.15` → K), an all-literal expression is
-  // dimensionless (`1 + 2`), and an exponent is read by VALUE (`x^2`).
+  // sibling's dimension (`T - 273.15` → K), and an exponent is read by VALUE
+  // (`x^2`). A sum of nothing but literals (`1 + 2`) stays indeterminate.
   if (typeof expr === 'number' || isNumericLiteral(expr)) {
     return unknown()
   }
@@ -360,29 +360,21 @@ function computeDimensions(
   switch (op) {
     case '+':
     case '-': {
-      // A unary minus carries its operand's unit unchanged. That makes a negated
-      // literal (`-(273.15)`) as indeterminate as the literal itself, so in an
-      // enclosing sum it is skipped like any other unknown operand and counts as
-      // a literal for the neutral rule below (esm-spec §4.8.3).
-      if (op === '-' && args.length === 1) return finish(get(0))
-
       // Compare only the operands we actually know; an unknown operand is
-      // skipped rather than defaulted. The result is the first known dimension
-      // (or unknown if none is).
+      // skipped rather than defaulted. The result is the first known dimension,
+      // or unknown if none is (esm-spec §4.8.3, §4.8.4): `x + 0.5 * y` has the
+      // unit of `x`, while `1 + 2` is indeterminate, not dimensionless. A unary
+      // `+` or `-` therefore carries its operand's unit unchanged.
       //
       // A BARE NUMERIC LITERAL in additive position is dimensionally NEUTRAL,
-      // not dimensionless: it adopts the dimension of what it is added to. This
-      // is how physical models are actually written — `T - 273.15`, `1 - phi`,
-      // `biomass + 0.5` — where the literal silently carries the sibling's
-      // unit. Treating it as dimensionless instead reported a mismatch on every
-      // such line in the valid corpus. It costs no real coverage: a genuine
-      // inconsistency (`length + mass`) is between two DECLARED quantities, and
-      // is still caught.
+      // not dimensionless: being indeterminate, it is skipped and adopts the
+      // dimension of what it is added to. This is how physical models are
+      // actually written — `T - 273.15`, `1 - phi`, `biomass + 0.5` — where the
+      // literal silently carries the sibling's unit. It costs no real coverage:
+      // a genuine inconsistency (`length + mass`) is between two DECLARED
+      // quantities, and is still caught.
       let first: ParsedUnit | null = null
-      let sawNonLiteral = false
       for (let i = 0; i < argDims.length; i++) {
-        if (literalValue(args[i]) !== null) continue
-        sawNonLiteral = true
         const other = get(i)
         if (other === null) continue
         if (first === null) {
@@ -401,8 +393,6 @@ function computeDimensions(
           )
         }
       }
-      // Every operand was a literal (`1 + 2`) ⇒ dimensionless.
-      if (!sawNonLiteral) return finish(dimensionless())
       return finish(first)
     }
 
@@ -636,12 +626,9 @@ function computeDimensions(
       }
       // `max(x, 0)` / `min(rate, 1e-6)` clamp against a bare literal that
       // carries the operand's implicit unit — literals are neutral here for the
-      // same reason they are in `+`/`-`.
+      // same reason they are in `+`/`-`, and `min(1, 2)` is indeterminate.
       let ref: ParsedUnit | null = null
-      let sawNonLiteral = false
       for (let i = 0; i < argDims.length; i++) {
-        if (literalValue(args[i]) !== null) continue
-        sawNonLiteral = true
         const other = get(i)
         if (other === null) continue
         if (ref === null) {
@@ -660,7 +647,6 @@ function computeDimensions(
           )
         }
       }
-      if (!sawNonLiteral) return finish(dimensionless())
       return finish(ref)
     }
 

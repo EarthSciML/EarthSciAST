@@ -614,10 +614,9 @@ end
 # own rules:
 #
 #   * ADDITIVE position (`T - 273.15`, `1 - phi`) — dimensionally NEUTRAL: the
-#     literal adopts its siblings' dimension, so `_same_dimensions_over` SKIPS
-#     literal operands rather than comparing them. An all-literal sum (`1 + 2`)
-#     is a pure number. A NEGATED literal (`-(273.15)`) counts as a literal
-#     here too; see `_is_negated_literal`.
+#     literal adopts its siblings' dimension, because `_same_dimensions_over`
+#     skips every undeterminable operand rather than comparing it. A sum with
+#     no determinable operand (`1 + 2`, `+(2)`) is itself undeterminable.
 #   * an EXPONENT (`x^2`) — read by VALUE off the AST, which is what makes `^`
 #     computable at all.
 #   * a TRANSCENDENTAL ARGUMENT (`exp(2)`) — indeterminate, hence unconstrained,
@@ -628,14 +627,6 @@ end
 # ---------------------------------------------------------------------------
 _is_literal(e::ASTExpr) = e isa NumExpr || e isa IntExpr
 
-# A literal under one or more unary minus signs (`-(273.15)`, `-(-(273))`). A
-# unary minus carries its operand's unit, so such an operand is exactly as
-# indeterminate as the literal it negates, and it is neutral in an additive
-# position just as `-273.15` is (esm-spec §4.8.3).
-_is_negated_literal(e::ASTExpr) =
-    e isa OpExpr && e.op == "-" && length(e.args) == 1 &&
-    (_is_literal(e.args[1]) || _is_negated_literal(e.args[1]))
-
 # The numeric value of a literal AST node, or `nothing` if it is not one. The
 # `^` rule reads its exponent through this rather than through the dimensional
 # engine (which reports every literal as indeterminate).
@@ -645,14 +636,6 @@ function _literal_value(e::ASTExpr)
     return nothing
 end
 
-# Same-dimensions core shared by the "+"/"-" rule and the "min"/"max" rule:
-# every NON-LITERAL argument whose dimensions can be determined must agree, and
-# the result carries them. `describe(first_dim, dim)` renders the
-# op-family-specific inconsistency message.
-#
-# A mismatch between two KNOWN operand dimensions is provable → recorded. If any
-# non-literal operand is unknown the result is unknown (`nothing`) even when the
-# knowns agree, because the unknown one could disagree with all of them.
 # ---------------------------------------------------------------------------
 # EXACT UNIT SCALES (esm-spec §4.8.1 "Scales are EXACT").
 #
@@ -830,20 +813,19 @@ end
 
 _same_unit(a, b) = dimension(a) == dimension(b) && _exact_scale(a) == _exact_scale(b)
 
+# Same-dimensions core shared by "+"/"-", "min"/"max", comparisons and `atan2`
+# (esm-spec §4.8.3): every operand whose unit can be determined must agree with
+# the others, and the result is that unit. `describe(first_dim, dim)` renders
+# the op-family-specific inconsistency message.
+#
+# An operand whose unit cannot be determined — a literal, a product with a
+# literal factor, an undeclared variable — is skipped, never compared: it can
+# neither hide nor manufacture a mismatch between the known ones. So `x + 0.5*y`
+# has x's unit, and a literal adopts its siblings' unit. With no determinable
+# operand at all (`1 + 2`, `min(1, 2)`) the result is undeterminable, never
+# dimensionless (§4.8.4).
 function _same_dimensions_over(args, var_units, findings, describe)
-    # Literals impose no constraint here — see the implicit-units note above.
-    constrained = [a for a in args if !_is_literal(a)]
-    # An ALL-literal sum (`1 + 2`) is a pure number: nothing carries an implicit
-    # unit for the literals to adopt, so the result really is dimensionless.
-    isempty(constrained) && return Unitful.NoUnits
-    # Negated literals are skipped too, but they are not pure numbers: a sum of
-    # nothing else (`-(1) + -(2)`) is indeterminate, as `-(1)` alone is.
-    filter!(a -> !_is_negated_literal(a), constrained)
-    isempty(constrained) && return nothing
-
-    # Still descend the literals' subtrees? They have none — a literal is a leaf.
-    arg_dims = [_expr_dimensions!(findings, arg, var_units) for arg in constrained]
-
+    arg_dims = [_expr_dimensions!(findings, arg, var_units) for arg in args]
     valid_dims = filter(d -> d !== nothing, arg_dims)
     isempty(valid_dims) && return nothing
 
@@ -856,17 +838,14 @@ function _same_dimensions_over(args, var_units, findings, describe)
             return nothing
         end
     end
-
-    # All KNOWN operands agree. Only claim the dimension when every non-literal
-    # operand was known — otherwise an undeclared operand leaves it indeterminate.
-    length(valid_dims) == length(arg_dims) ? first_dim : nothing
+    return first_dim
 end
 
-# "+" / "-": all arguments must have the same dimensions. A unary minus carries
-# its operand's unit unchanged, so `-(273.15)` is indeterminate, not a
-# dimensionless all-literal sum.
+# "+" / "-": all arguments must have the same dimensions. A unary `+` or `-`
+# carries its operand's unit unchanged, so `+(2)` and `-(273.15)` are
+# undeterminable, exactly as the literal is.
 function _same_dimension_rule(expr, var_units, findings)
-    (expr.op == "-" && length(expr.args) == 1) &&
+    length(expr.args) == 1 &&
         return _expr_dimensions!(findings, expr.args[1], var_units)
     return _same_dimensions_over(expr.args, var_units, findings,
         (first_dim, dim) -> "Cannot $(expr.op == "-" ? "subtract" : "add") quantities with " *

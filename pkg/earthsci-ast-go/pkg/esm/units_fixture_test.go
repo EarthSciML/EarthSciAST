@@ -270,6 +270,7 @@ func TestUnitsFixturesInlineTestsExecution(t *testing.T) {
 		"units_dimensional_analysis.esm",
 		"units_propagation.esm",
 		"units_negated_literal_neutral.esm",
+		"units_sum_undeterminable_operands.esm",
 	}
 	totalTests := 0
 	for _, name := range fixtures {

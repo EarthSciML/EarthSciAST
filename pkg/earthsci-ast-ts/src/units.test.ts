@@ -214,9 +214,40 @@ describe('Unit parsing and dimensional analysis', () => {
         expect(result.diagnostics.filter((d) => d.code === 'dimensional_mismatch')).toEqual([])
       })
 
-      it('makes an all-literal expression dimensionless', () => {
-        const bindings = createUnitBindings({})
-        expect(dimsOf(checkDimensions({ op: '+', args: [1, 2] }, bindings))).toEqual({})
+      // esm-spec §4.8.3, §4.8.4: a sum with no determinable operand is
+      // indeterminate, never dimensionless — for an integer as well as a float
+      // literal, in min/max as in +/-, and under a unary `+`.
+      it('leaves a sum with no determinable operand indeterminate', () => {
+        const bindings = createUnitBindings({ x: 'm' })
+        for (const lits of [
+          [1, 2],
+          [1.5, 2.5],
+        ]) {
+          for (const op of ['+', '-', 'min', 'max']) {
+            expect(checkDimensions({ op, args: lits }, bindings).dimensions).toBeNull()
+          }
+        }
+        expect(checkDimensions({ op: '+', args: [2] }, bindings).dimensions).toBeNull()
+        expect(checkDimensions({ op: '+', args: [2.5] }, bindings).dimensions).toBeNull()
+        expect(
+          checkDimensions({ op: '*', args: ['x', { op: '+', args: [1, 2] }] }, bindings).dimensions,
+        ).toBeNull()
+      })
+
+      it('gives a unary + its operand unit, so x + +(2) is a length', () => {
+        const bindings = createUnitBindings({ x: 'm' })
+        expect(dimsOf(checkDimensions({ op: '+', args: ['x'] }, bindings))).toEqual({ m: 1 })
+        const result = checkDimensions({ op: '+', args: ['x', { op: '+', args: [2] }] }, bindings)
+        expect(result.diagnostics.filter((d) => d.code === 'dimensional_mismatch')).toEqual([])
+        expect(dimsOf(result)).toEqual({ m: 1 })
+      })
+
+      it('gives a partly indeterminate sum the unit of its known operands', () => {
+        const bindings = createUnitBindings({ x: 'm', y: 'm' })
+        const halfY = { op: '*', args: [0.5, 'y'] }
+        for (const op of ['+', '-', 'min', 'max']) {
+          expect(dimsOf(checkDimensions({ op, args: ['x', halfY] }, bindings))).toEqual({ m: 1 })
+        }
       })
 
       // esm-spec §4.8.3: a unary negation of a literal counts as a literal, so

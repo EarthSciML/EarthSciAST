@@ -27,6 +27,7 @@ const FIXTURES = [
   'units_dimensional_analysis.esm',
   'units_propagation.esm',
   'units_negated_literal_neutral.esm',
+  'units_sum_undeterminable_operands.esm',
 ]
 
 type AnyTol = AssertionTolerance | undefined

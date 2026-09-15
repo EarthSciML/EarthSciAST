@@ -303,24 +303,64 @@ func TestPropagateDimensionLiteral(t *testing.T) {
 	}
 }
 
-// Where a literal's meaning IS determined, it still behaves correctly: an
-// all-literal sum is a pure number, and additively a literal adopts its
-// sibling's dimension rather than forcing it to be dimensionless.
+// Additively a literal adopts its sibling's dimension rather than forcing it to
+// be dimensionless, and a sum with no determinable operand is indeterminate,
+// never dimensionless (esm-spec §4.8.3, §4.8.4).
 func TestPropagateDimensionLiteralNeutrality(t *testing.T) {
-	env := mkEnv(t, map[string]string{"T": "K"})
+	env := mkEnv(t, map[string]string{"T": "K", "x": "m", "y": "m"})
 
-	sum := ExprNode{Op: "+", Args: []any{1.0, 2.0}}
-	u, err := PropagateDimension(sum, env)
-	if err != nil {
-		t.Fatal(err)
+	// An all-literal sum or min/max, for an integer as well as a float, and a
+	// unary `+` of a literal, are all indeterminate.
+	for _, args := range [][]any{{1.0, 2.0}, {int64(1), int64(2)}} {
+		for _, op := range []string{"+", "-", "min", "max"} {
+			u, err := PropagateDimension(ExprNode{Op: op, Args: args}, env)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if u != nil {
+				t.Errorf("%s over literals %v must be indeterminate, got %v", op, args, u.Dim)
+			}
+		}
 	}
-	if u == nil || !u.Dim.IsDimensionless() {
-		t.Errorf("1 + 2 must be dimensionless, got %v", u)
+	for _, lit := range []any{2.5, int64(2)} {
+		u, err := PropagateDimension(ExprNode{Op: "+", Args: []any{lit}}, env)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if u != nil {
+			t.Errorf("+(%v) must be indeterminate, got %v", lit, u.Dim)
+		}
+	}
+
+	// A unary `+` carries its operand's unit, so `x + +(2)` is a length.
+	for _, expr := range []ExprNode{
+		{Op: "+", Args: []any{"x"}},
+		{Op: "+", Args: []any{"x", ExprNode{Op: "+", Args: []any{2.0}}}},
+	} {
+		u, err := PropagateDimension(expr, env)
+		if err != nil {
+			t.Fatalf("%v must not be a mismatch: %v", expr, err)
+		}
+		if u == nil || !u.Dim.Equal(dim(dimLength, 1)) {
+			t.Errorf("%v must be m, got %v", expr, u)
+		}
+	}
+
+	// A partly indeterminate sum has the unit of its known operands.
+	halfY := ExprNode{Op: "*", Args: []any{0.5, "y"}}
+	for _, op := range []string{"+", "-", "min", "max"} {
+		u, err := PropagateDimension(ExprNode{Op: op, Args: []any{"x", halfY}}, env)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if u == nil || !u.Dim.Equal(dim(dimLength, 1)) {
+			t.Errorf("%s(x, 0.5*y) must be m, got %v", op, u)
+		}
 	}
 
 	// T - 273.15 is kelvin, not a mismatch.
 	offset := ExprNode{Op: "-", Args: []any{"T", 273.15}}
-	u, err = PropagateDimension(offset, env)
+	u, err := PropagateDimension(offset, env)
 	if err != nil {
 		t.Fatalf("T - 273.15 must not be a mismatch: %v", err)
 	}

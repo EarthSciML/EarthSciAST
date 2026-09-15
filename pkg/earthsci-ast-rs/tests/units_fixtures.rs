@@ -28,6 +28,10 @@ const UNITS_FIXTURES: &[(&str, &str)] = &[
         "units_negated_literal_neutral.esm",
         include_str!("../../../tests/valid/units_negated_literal_neutral.esm"),
     ),
+    (
+        "units_sum_undeterminable_operands.esm",
+        include_str!("../../../tests/valid/units_sum_undeterminable_operands.esm"),
+    ),
 ];
 
 #[test]

@@ -1280,8 +1280,9 @@ func propagateDimension(expr Expression, env map[string]Unit) (*Unit, error) {
 		// inconsistency is stated between DECLARED quantities (`length + mass`,
 		// `ln(mass)`, `m^kg`). Literals still behave correctly where their
 		// meaning IS determined: additively they are neutral and adopt their
-		// sibling's dimension (`T - 273.15` → K), an all-literal expression is
-		// dimensionless (`1 + 2`), and an exponent is read by VALUE (`x^2`).
+		// sibling's dimension (`T - 273.15` → K), and an exponent is read by
+		// VALUE (`x^2`). A sum of nothing but literals (`1 + 2`) stays
+		// indeterminate.
 		return nil, nil
 	case string:
 		if u, ok := env[e]; ok {
@@ -1304,24 +1305,21 @@ func propagateDimension(expr Expression, env map[string]Unit) (*Unit, error) {
 func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 	switch node.Op {
 	case "+", "-":
-		// Unary minus: propagate its single operand.
-		if node.Op == "-" && len(node.Args) == 1 {
-			return propagateDimension(node.Args[0], env)
-		}
-		// A bare literal in ADDITIVE position is dimensionally NEUTRAL, not
-		// dimensionless: it adopts the dimension of what it is added to. That is
-		// how models are actually written — `T - 273.15`, `1 - phi`,
+		// Every operand whose dimension is known must agree, and the result is
+		// that unit; an indeterminate operand is skipped, never compared
+		// (esm-spec §4.8.3). So `x + 0.5*y` has the unit of x, a unary `+` or
+		// `-` carries its operand's unit, and with no known operand at all
+		// (`1 + 2`, `+(2)`) the result is indeterminate, never dimensionless
+		// (§4.8.4).
+		//
+		// A bare literal in ADDITIVE position is therefore dimensionally
+		// NEUTRAL: it adopts the dimension of what it is added to. That is how
+		// models are actually written — `T - 273.15`, `1 - phi`,
 		// `biomass + 0.5` — with the literal silently carrying its sibling's
-		// unit. Literal operands are therefore skipped, not compared. It costs no
-		// coverage: a genuine inconsistency (`length + mass`) is between two
-		// DECLARED quantities and is still caught.
+		// unit. It costs no coverage: a genuine inconsistency (`length + mass`)
+		// is between two DECLARED quantities and is still caught.
 		var first *Unit
-		sawNonLiteral := false
 		for i, arg := range node.Args {
-			if _, isLiteral := toFloat64(arg); isLiteral {
-				continue
-			}
-			sawNonLiteral = true
 			u, err := propagateDimension(arg, env)
 			if err != nil {
 				return nil, err
@@ -1341,10 +1339,6 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 				return nil, mismatchErrf("scale mismatch in %q: arg 0 has %s at scale %s, arg %d at scale %s",
 					node.Op, first.Dim, first.Exact, i, u.Exact)
 			}
-		}
-		if !sawNonLiteral {
-			// An all-literal sum ("1 + 2") is a pure number.
-			return &Unit{Scale: 1}, nil
 		}
 		return first, nil
 

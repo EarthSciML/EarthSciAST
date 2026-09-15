@@ -844,34 +844,23 @@ fn propagate_operator_dim(
     }
 }
 
-/// True for a bare numeric literal, which is dimensionally NEUTRAL in an
-/// additive position rather than dimensionless. See [`propagate_dim`].
-fn is_literal(expr: &Expr) -> bool {
-    matches!(expr, Expr::Number(_) | Expr::Integer(_))
-}
-
 /// Report a provable mismatch among the operands that DID resolve, and return
 /// the shared dimension. Used by `+`/`-`, `min`/`max`, comparisons and `atan2`.
 ///
 /// Two operands are only ever compared when BOTH dimensions were determined —
 /// an undeterminable operand is skipped, never assumed dimensionless, so it can
-/// neither hide nor manufacture a mismatch.
-///
-/// Bare numeric literals are skipped entirely: they adopt the dimension of what
-/// they are combined with (`T - 273.15` is a temperature). If EVERY operand is
-/// a bare literal (`1 + 2`), the result is dimensionless.
+/// neither hide nor manufacture a mismatch (esm-spec §4.8.3). A numeric literal
+/// is undeterminable, so it adopts the dimension of what it is combined with
+/// (`T - 273.15` is a temperature), and `x + 0.5 * y` has the dimension of `x`.
+/// If NO operand resolves (`1 + 2`), the result is undeterminable, never
+/// dimensionless (§4.8.4).
 fn propagate_matching_dim(
     op: &ExpressionNode,
     env: &HashMap<String, Unit>,
     findings: &mut Vec<UnitFinding>,
 ) -> Dim {
     let mut first: Option<Unit> = None;
-    let mut saw_non_literal = false;
     for arg in &op.args {
-        if is_literal(arg) {
-            continue;
-        }
-        saw_non_literal = true;
         let dim = propagate_dim(arg, env, findings);
         let Some(unit) = dim.known() else {
             continue;
@@ -897,9 +886,6 @@ fn propagate_matching_dim(
             _ => {}
         }
     }
-    if !saw_non_literal {
-        return Dim::Known(Unit::dimensionless());
-    }
     match first {
         Some(unit) => Dim::Known(unit),
         None => Dim::Unknown,
@@ -907,19 +893,13 @@ fn propagate_matching_dim(
 }
 
 /// `+` / `-`: every operand must share dimensions; the result carries them.
-/// A unary minus propagates its single argument unchanged.
+/// A unary `+` or `-` carries its single operand's dimension unchanged, so
+/// `+(2)` is as undeterminable as `2`.
 fn propagate_additive_dim(
     op: &ExpressionNode,
     env: &HashMap<String, Unit>,
     findings: &mut Vec<UnitFinding>,
 ) -> Dim {
-    if op.args.is_empty() {
-        return Dim::Known(Unit::dimensionless());
-    }
-    // Unary minus: propagate the single argument.
-    if op.op == "-" && op.args.len() == 1 {
-        return propagate_dim(&op.args[0], env, findings);
-    }
     propagate_matching_dim(op, env, findings)
 }
 
@@ -3186,12 +3166,53 @@ mod tests {
         );
         assert!(check_expression_dimensions(&expr, None, &env).is_empty());
 
-        // And an all-literal expression is dimensionless.
-        let expr = op("+", vec![Expr::Number(1.0), Expr::Number(2.0)]);
-        assert!(
-            Unit::propagate(&expr, &HashMap::new())
-                .unwrap()
-                .is_dimensionless()
+        // But a sum with NO determinable operand is undeterminable, never
+        // dimensionless (esm-spec §4.8.3, §4.8.4): for an integer as well as a
+        // float literal, in `min`/`max` as in `+`/`-`, and under a unary `+`.
+        let literal_pairs = [
+            vec![Expr::Number(1.0), Expr::Number(2.0)],
+            vec![Expr::Integer(1), Expr::Integer(2)],
+        ];
+        for args in literal_pairs {
+            for name in ["+", "-", "min", "max"] {
+                assert!(
+                    matches!(
+                        Unit::propagate(&op(name, args.clone()), &HashMap::new()),
+                        Err(UnitError::UnknownUnit(_))
+                    ),
+                    "{name} over literals must be undeterminable"
+                );
+            }
+        }
+        for lit in [Expr::Integer(2), Expr::Number(2.5)] {
+            assert!(matches!(
+                Unit::propagate(&op("+", vec![lit]), &HashMap::new()),
+                Err(UnitError::UnknownUnit(_))
+            ));
+        }
+    }
+
+    /// A sum whose operands are partly undeterminable has the unit of the
+    /// determinable ones (esm-spec §4.8.3), and a unary `+` carries its
+    /// operand's unit.
+    #[test]
+    fn propagate_sum_with_undeterminable_operand_takes_known_unit() {
+        let env = env_of(&[("x", "m"), ("y", "m")]);
+        let half_y = op("*", vec![Expr::Number(0.5), Expr::Variable("y".into())]);
+        for name in ["+", "-", "min", "max"] {
+            let expr = op(name, vec![Expr::Variable("x".into()), half_y.clone()]);
+            let u = Unit::propagate(&expr, &env).unwrap();
+            assert_eq!(
+                u.dimensions.get(&Dimension::Length),
+                Some(&Rational::int(1)),
+                "{name}"
+            );
+        }
+        let plus_x = op("+", vec![Expr::Variable("x".into())]);
+        let u = Unit::propagate(&plus_x, &env).unwrap();
+        assert_eq!(
+            u.dimensions.get(&Dimension::Length),
+            Some(&Rational::int(1))
         );
     }
 

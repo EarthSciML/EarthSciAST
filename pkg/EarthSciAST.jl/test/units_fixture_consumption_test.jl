@@ -99,7 +99,8 @@ end
     fixtures = ["units_conversions.esm",
                 "units_dimensional_analysis.esm",
                 "units_propagation.esm",
-                "units_negated_literal_neutral.esm"]
+                "units_negated_literal_neutral.esm",
+                "units_sum_undeterminable_operands.esm"]
 
     any_tests_across_fixtures = false
     for fname in fixtures
