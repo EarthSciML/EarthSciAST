@@ -7,6 +7,9 @@
     "leaf_two.esm": {
       "LeafTwo.value": 2
     },
+    "leaf_template_call.esm": {
+      "LeafCall.value": 2
+    },
     "toplevel.esm": {
       "One.value": 1,
       "Two.value": 2
@@ -24,6 +27,14 @@
     "nested.esm": {
       "Mid.value": 5,
       "Mid.Two.value": 2
+    },
+    "toplevel_template_call.esm": {
+      "Leaf.value": 2,
+      "Probe.own": 7
+    },
+    "subsystems_template_call.esm": {
+      "Probe.Leaf.value": 2,
+      "Probe.own": 7
     }
   },
   "errors": {
