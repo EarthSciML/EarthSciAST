@@ -566,8 +566,8 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # differential half of the testset above. Before this, the top-level
         # inliner merged only function_tables/data_sources/enums and silently
         # dropped the leaf's axes, so an assembly had to redeclare them.
-        dir = joinpath(repo_root, "tests", "fixtures", "toplevel_ref_index_sets")
-        f = EarthSciAST.load_path(joinpath(dir, "toplevel_ref_index_set_merge.esm"))
+        valid_dir = joinpath(repo_root, "tests", "valid")
+        f = EarthSciAST.load_path(joinpath(valid_dir, "toplevel_ref_index_set_merge.esm"))
         @test f.index_sets["cells"].size == 5        # deep-equal redeclaration
         @test f.index_sets["vertices"].size == 4     # merged in from the mesh file
         # The mount is a real splice, not a surviving `{ref}` stub.
@@ -576,7 +576,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # A non-deep-equal collision is `subsystem_index_set_conflict` — the SAME
         # diagnostic the subsystems-edge form raises, not last-writer-wins.
         err = try
-            EarthSciAST.load_path(joinpath(dir, "toplevel_ref_index_set_conflict.esm"))
+            EarthSciAST.load_path(joinpath(invalid_dir, "toplevel_ref_index_set_conflict.esm"))
             nothing
         catch e
             e
@@ -591,7 +591,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # `NLEV` (default 4), so it folds AT THE EDGE, in the leaf's scope, and
         # reaches the registry as 4 — the importer redeclares nothing. This used
         # to be held back by a fold guard and the axis stayed undeclared.
-        m = EarthSciAST.load_path(joinpath(dir, "toplevel_ref_metaparameter_axis.esm"))
+        m = EarthSciAST.load_path(joinpath(valid_dir, "toplevel_ref_metaparameter_axis.esm"))
         @test m.index_sets["lev"].size == 4
     end
 
