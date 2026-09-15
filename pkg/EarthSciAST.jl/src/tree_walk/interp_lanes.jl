@@ -12,8 +12,8 @@
 # ---- interp knot addressing: the seams a TRACER replaces --------------------
 #
 # The three primitive shapes the lane forms below are built from, factored out
-# as SEAMS for exactly the reason `_oop_read_state` is one: the branch-free
-# select-ladder lowering is RIGHT for host / ForwardDiff — a handful of fused
+# as SEAMS so a backend can replace the lowering without forking the evaluators:
+# the branch-free select-ladder form is RIGHT for host / ForwardDiff — a handful of fused
 # broadcasts over a 2–3 knot table, no branch, no allocation per knot — and
 # catastrophically WRONG for a tracer on a big table, where every ladder step is
 # a separate traced op and the emitted program is O(table) PER CALL SITE.
@@ -36,7 +36,7 @@
 #         backend instead locates elementwise (a capped ladder for a small axis,
 #         an arithmetic guess corrected by two gathers for a big uniform one, the
 #         reduce as a fallback) — see the `count-locate` header in
-#         ext/EarthSciASTReactantExt.jl and test/reactant_locate_test.jl for the
+#         ext/reactant_interp.jl and test/reactant_locate_test.jl for the
 #         exactness argument and its pins.
 #   `_knot_pair(v, i)`             `(v[i], v[i+1])` elementwise, `i` an
 #         exactly-integral Float64 lane index in `[1, length(v)-1]`. SELECTION,
@@ -112,8 +112,8 @@ end
 
 # ---- interp.* over whole LANES: locate → gather → blend ----------------------
 #
-# The de-scalarized interp forms the affine access-kernel path evaluates (and the
-# forms an XLA/Reactant trace needs): NO branch on the query, NO opaque scalar
+# The de-scalarized interp forms a compiled backend emits: NO branch on the
+# query, NO opaque scalar
 # core inside a broadcast — every step is elementwise arithmetic + a knot-
 # addressing seam, so a traced query lane vector flows through as whole-array ops
 # and the emitted program's size is independent of the GRID. (It is independent
@@ -131,12 +131,12 @@ end
 #   * clamps: the same outer `x ≤ axis[1]` / `x ≥ axis[n]` selects the cores
 #     early-return on. A NaN query fails both compares, takes the blend arm, and
 #     `w = (NaN − aᵢ)/…` propagates NaN — the cores' documented NaN semantics.
-# The oop test file pins these against the scalar cores over dense query sweeps
-# (in-range, knots, both clamps, NaN).
+# test/interp_lanes_test.jl pins these against the scalar cores over dense query
+# sweeps (in-range, knots, both clamps, NaN).
 #
 # `q` may be a lane vector OR a scalar (an invariant query) — broadcast serves
 # both, exactly like the rest of this emitter.
-function _interp_linear_lanes(h::_InterpLinearSpec, q, ::Type{T}) where {T}
+function _interp_linear_lanes(h::_InterpLinearSpec, q)
     axis = h.axis; table = h.table
     n = length(axis)
     cnt = _knot_count(axis, q, <=)
@@ -148,7 +148,7 @@ function _interp_linear_lanes(h::_InterpLinearSpec, q, ::Type{T}) where {T}
                    ifelse.(q .>= axis[n], table[n], blend))
 end
 
-function _interp_searchsorted_lanes(h::_InterpSearchsortedSpec, q, ::Type{T}) where {T}
+function _interp_searchsorted_lanes(h::_InterpSearchsortedSpec, q)
     xs = h.xs
     n = length(xs)
     n == 0 && return one.(q .* 0 .+ 1.0)     # empty table → 1 lane-wide (core's rule)
@@ -158,7 +158,7 @@ function _interp_searchsorted_lanes(h::_InterpSearchsortedSpec, q, ::Type{T}) wh
     return ifelse.(q .!= q, Float64(n + 1), r)
 end
 
-function _interp_bilinear_lanes(h::_InterpBilinearSpec, x, y, ::Type{T}) where {T}
+function _interp_bilinear_lanes(h::_InterpBilinearSpec, x, y)
     ax = h.axis_x; ay = h.axis_y; table = h.table
     Nx = length(ax); Ny = length(ay)
     # Per-axis clamp of the QUERY (the core's x_q/y_q), then count-locate.
@@ -219,7 +219,7 @@ function _lane_bound(col::Vector{Float64})
     return v1
 end
 
-function _interp_linear_lanes(h::_InterpLinearLaneSpec, q, ::Type{T}) where {T}
+function _interp_linear_lanes(h::_InterpLinearLaneSpec, q)
     axis = h.axis_cols; table = h.table_cols
     n = length(axis)
     cnt = _knot_count(axis, q, <=)
@@ -232,8 +232,7 @@ function _interp_linear_lanes(h::_InterpLinearLaneSpec, q, ::Type{T}) where {T}
                            blend))
 end
 
-function _interp_searchsorted_lanes(h::_InterpSearchsortedLaneSpec, q,
-                                        ::Type{T}) where {T}
+function _interp_searchsorted_lanes(h::_InterpSearchsortedLaneSpec, q)
     xs = h.xs_cols
     n = length(xs)
     n == 0 && return one.(q .* 0 .+ 1.0)     # empty table → 1 lane-wide (core's rule)
@@ -241,8 +240,7 @@ function _interp_searchsorted_lanes(h::_InterpSearchsortedLaneSpec, q,
     return ifelse.(q .!= q, Float64(n + 1), r)
 end
 
-function _interp_bilinear_lanes(h::_InterpBilinearLaneSpec, x, y,
-                                    ::Type{T}) where {T}
+function _interp_bilinear_lanes(h::_InterpBilinearLaneSpec, x, y)
     ax = h.axis_x_cols; ay = h.axis_y_cols; table = h.table_cols
     Nx = length(ax); Ny = length(ay)
     ax1 = _lane_bound(ax[1]); axN = _lane_bound(ax[Nx])

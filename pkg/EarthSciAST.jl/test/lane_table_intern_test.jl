@@ -16,7 +16,8 @@
 #      the default build and the ESS_LANE_INTERN_DISABLE=1 /
 #      ESS_KERNEL_CLASS_MERGE_DISABLE=1 / ESS_STENCIL_DISABLE=1 /
 #      ESS_CODEGEN_DISABLE=1 oracles, at Float64 and under ForwardDiff Dual
-#      via the Jacobian.
+#      via the Jacobian; and the merged lane evaluators are `===` each member
+#      lane's own ORIGINAL scalar core.
 #   3. THE CLAMP-BOUND COLLAPSE IS SOUND. `_lane_bound` collapses an
 #      all-BITWISE-equal boundary column to its one scalar (so a trace embeds a
 #      scalar constant, not an O(lanes) tensor — the gap
@@ -276,12 +277,24 @@ end
         end
     end
 
-    # ---- the branch-free lane evaluators: the TRACER's program, run on host
-    # data by evaluating at a non-`Real` value type (`Number` is not `<: Real`,
-    # so dispatch takes the generic branch-free methods — the ones a Reactant
-    # trace executes — while every operand is an ordinary Float64 container).
-    # Reference: the `T <: Real` host dispatch, which calls each lane's
-    # ORIGINAL scalar core — the identity the merge is defined by.
+    # ---- the branch-free lane evaluators, on host data.
+    #
+    # These are the program a compiled backend emits: locate → gather → blend
+    # with no branch on the query. Run here over ordinary Float64 containers so
+    # the lowering is exercised without a tracer.
+    #
+    # THE REFERENCE IS EACH LANE'S OWN SCALAR CORE. `h.specs[l]` is member `l`'s
+    # ORIGINAL, unmerged spec, so calling `_interp_*_core` on it is the call the
+    # unmerged kernel would have made for that lane — which is exactly the
+    # identity the kernel-class merge is defined by. Comparison is `===`, so a
+    # NaN pins as NaN and a signed zero does not pass for its opposite.
+    _lti_bilin_ref(h, xs, ys) = [ESM._interp_bilinear_core(
+            h.specs[l].table, h.specs[l].axis_x, h.specs[l].axis_y,
+            xs isa AbstractVector ? xs[l] : xs,
+            ys isa AbstractVector ? ys[l] : ys) for l in eachindex(h.specs)]
+    _lti_lin_ref(h, xs) = [ESM._interp_linear_core(
+            h.specs[l].table, h.specs[l].axis,
+            xs isa AbstractVector ? xs[l] : xs) for l in eachindex(h.specs)]
 
     @testset "branch-free bilinear ≡ per-lane cores under the bound collapse" begin
         band(b) = ESM._InterpBilinearSpec(
@@ -295,27 +308,25 @@ end
         # Sweep spans both clamps, every knot, interior blends, and NaN.
         xs = Float64[-0.7, 0.0, 0.31, 1.0, 1.62, 2.0, 2.9, NaN, 0.5, 1.99]
         ys = Float64[2.6, 2.0, 1.75, 1.0, 0.42, 0.0, -0.3, 0.25, NaN, 1.0]
-        ref = ESM._interp_bilinear_lanes(h, xs, ys, Float64)
-        got = ESM._interp_bilinear_lanes(h, xs, ys, Number)
+        ref = _lti_bilin_ref(h, xs, ys)
+        got = ESM._interp_bilinear_lanes(h, xs, ys)
         @test length(got) == L && all(got .=== ref)
         # Kill switch: the lane-wide-bound program computes the same bits.
         goff = withenv("ESS_LANE_INTERN_DISABLE" => "1") do
-            ESM._interp_bilinear_lanes(h, xs, ys, Number)
+            ESM._interp_bilinear_lanes(h, xs, ys)
         end
         @test all(goff .=== ref)
         # Lane-INVARIANT scalar query: the collapsed bound must not collapse
         # the lane axis (the `Lq` trap) — the result keeps its L lanes, on
         # both clamp arms and in range.
         for yq in (-0.5, 1.25, 2.5)
-            gs = ESM._interp_bilinear_lanes(h, xs, yq, Number)
-            rs = ESM._interp_bilinear_lanes(h, xs, fill(yq, L), Float64)
-            @test length(gs) == L && all(gs .=== rs)
+            gs = ESM._interp_bilinear_lanes(h, xs, yq)
+            @test length(gs) == L && all(gs .=== _lti_bilin_ref(h, xs, yq))
         end
         # BOTH queries scalar — the maximally collapsed program still owes one
         # value per lane (tables differ per lane).
-        gb = ESM._interp_bilinear_lanes(h, 0.75, 1.25, Number)
-        rb = ESM._interp_bilinear_lanes(h, fill(0.75, L), fill(1.25, L), Float64)
-        @test length(gb) == L && all(gb .=== rb)
+        gb = ESM._interp_bilinear_lanes(h, 0.75, 1.25)
+        @test length(gb) == L && all(gb .=== _lti_bilin_ref(h, 0.75, 1.25))
     end
 
     @testset "branch-free linear ≡ per-lane cores under the edge collapse" begin
@@ -326,18 +337,16 @@ end
         h1 = ESM._InterpLinearLaneSpec(ESM._InterpLinearSpec[sp for _ in 1:6],
                                        1, 0, 0, 1)
         xs = Float64[-2.0, 0.0, 1.5, 3.99, 4.0, 6.3]
-        @test all(ESM._interp_linear_lanes(h1, xs, Number) .===
-                  ESM._interp_linear_lanes(h1, xs, Float64))
-        g1 = ESM._interp_linear_lanes(h1, 2.25, Number)
+        @test all(ESM._interp_linear_lanes(h1, xs) .=== _lti_lin_ref(h1, xs))
+        g1 = ESM._interp_linear_lanes(h1, 2.25)
         @test length(g1) == 6
-        @test all(g1 .=== ESM._interp_linear_lanes(h1, fill(2.25, 6), Float64))
+        @test all(g1 .=== _lti_lin_ref(h1, 2.25))
         # Mixed edge columns (a second content): bounds stay lane-wide, and
         # the program is still `===` the cores — clamp arms included.
         sp2 = ESM._InterpLinearSpec(copy(_LTI_TB), [0.5, 1.0, 2.0, 3.0, 3.5])
         h2 = ESM._InterpLinearLaneSpec(
             ESM._InterpLinearSpec[l <= 3 ? sp : sp2 for l in 1:6], 1, 0, 0, 1)
         xs2 = Float64[-2.0, 0.4, 5.0, 0.6, 3.6, NaN]
-        @test all(ESM._interp_linear_lanes(h2, xs2, Number) .===
-                  ESM._interp_linear_lanes(h2, xs2, Float64))
+        @test all(ESM._interp_linear_lanes(h2, xs2) .=== _lti_lin_ref(h2, xs2))
     end
 end

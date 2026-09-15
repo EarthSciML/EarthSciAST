@@ -333,8 +333,7 @@ end
 
 # ---- the lane-batched scalar surface (ess-oop-batch) -------------------------
 #
-# The shape that surface exists for, from test/oop_scalar_batch_test.jl: a
-# mass-weighted halo tent. Per OUTPUT CELL one `_NK_CONTRACTION_LOOP` whose body
+# The shape that surface exists for: a mass-weighted halo tent. Per OUTPUT CELL one `_NK_CONTRACTION_LOOP` whose body
 # reads the state at a loop-var-dependent slot (`_NK_STATE_GATHER`) times a
 # per-cell frozen weight (`_NK_CONST_GATHER`). Every output cell is congruent,
 # so the whole surface is ONE group of `NI*NJ` lanes — and each of the tent's
@@ -931,5 +930,156 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
 
         # And a HOST call says so rather than failing somewhere in MLIR.
         @test_throws ESM_DE.DirectEmitError d(copy(u0), p, 0.0)
+    end
+
+    # ---- reverse-mode autodiff, and `p` as a real program input -------------
+    #
+    # An adjoint step needs BOTH vector-Jacobian products of the right-hand side:
+    # ∂/∂u (the state VJP) and ∂/∂p (the parameter one). Both are asserted here
+    # against CENTRAL DIFFERENCES on `f!`, the evaluator, at the same point.
+    #
+    # Finite differences rather than host ForwardDiff for two reasons: this file
+    # runs standalone from the adapter's Reactant environment, which carries no
+    # AD package (see CONTRIBUTING.md); and a reference computed by a DIFFERENT
+    # method than the thing under test is the stronger check. The ForwardDiff
+    # half of the chain is pinned host-side in test/parameter_gradient_test.jl,
+    # against these same central differences.
+    #
+    # THE TOLERANCE IS 1e-6, which is what central differences at
+    # h = 1e-6·max(|θ|,1) are worth on this model (~1e-9 truncation), and is a
+    # real assertion about the VALUE rather than a rounding allowance. XLA also
+    # reassociates sums and contracts multiply-adds into FMAs — both
+    # value-changing, both the point of compiling — and differentiating amplifies
+    # that, so equality would be asserting that XLA did not optimize.
+    #
+    # Enzyme is a dependency OF Reactant, not of this environment, so it is
+    # reached through `Reactant.Enzyme`.
+    @testset "reverse-mode ∂/∂p and ∂/∂u agree with the host" begin
+        EZ = RX_DE.Enzyme
+        N = 12
+        fo, u0, p, _, _ = build_evaluator(_de_rd(N); form = :oop)
+        fi!, _, _, _, _ = build_evaluator(_de_rd(N))
+        syms = keys(p)
+        pv0 = collect(Float64, values(p))
+        u = Float64[0.6sin(0.7k) + 1.2 for k in 1:N]
+        t = 0.37
+        # A non-uniform weight, so the functional is not `sum`: a plain sum can
+        # hide a per-cell sign or ordering error by cancellation.
+        w = Float64[1.0 + 0.05k for k in 1:N]
+
+        # The host answers, by central differences on `f!`.
+        hobj(uu, q) = sum(w .* _de_ip(fi!, uu, q, t))
+        function _cdiff(f, x0)
+            g = similar(x0)
+            for k in eachindex(x0)
+                h = 1e-6 * max(abs(x0[k]), 1.0)
+                hi = copy(x0); hi[k] += h
+                lo = copy(x0); lo[k] -= h
+                g[k] = (f(hi) - f(lo)) / (2h)
+            end
+            g
+        end
+        g_p = _cdiff(θ -> hobj(u, NamedTuple{syms}(Tuple(θ))), pv0)
+        g_u = _cdiff(uu -> hobj(uu, p), u)
+        # Teeth: a build that froze the parameters would return zeros here and
+        # still satisfy every agreement test below.
+        @test all(isfinite, g_p) && all(!iszero, g_p)
+        @test all(isfinite, g_u) && all(!iszero, g_u)
+
+        d = EXT_DE.direct_rhs(fo)
+        obj(uu, q, tt) = sum(w .* d(uu, q, tt))
+        ur = RX_DE.ConcreteRArray(copy(u))
+        pr = _de_dev(p)
+        tr = RX_DE.ConcreteRNumber(t)
+
+        gp = (uu, q, tt) -> EZ.gradient(EZ.Reverse, obj, EZ.Const(uu), q,
+                                        EZ.Const(tt))[2]
+        xp = RX_DE.@compile sync = true gp(ur, pr, tr)
+        got_p = [Float64(getfield(xp(ur, pr, tr), sym)) for sym in syms]
+        @test isapprox(got_p, g_p; rtol = 1e-6)
+
+        gu = (uu, q, tt) -> EZ.gradient(EZ.Reverse, obj, uu, EZ.Const(q),
+                                        EZ.Const(tt))[1]
+        xu = RX_DE.@compile sync = true gu(ur, pr, tr)
+        @test isapprox(Array(xu(ur, pr, tr)), g_u; rtol = 1e-6)
+    end
+
+    @testset "`p` is a REAL program input, not a baked-in constant" begin
+        # The silent-staleness trap for parameters, and the reason a sweep costs
+        # ONE compile: `_de_param` folds a host `Real` but keeps a
+        # `ConcreteRNumber` as an input (emit.jl). Compile once, then hand the
+        # SAME program different values and check the answer follows — pinned in
+        # BOTH directions, the way `t` is, since a baked-in `p` returns the same
+        # plausible numbers for ever with no error.
+        N = 12
+        fo, u0, p, _, _ = build_evaluator(_de_rd(N); form = :oop)
+        fi!, _, _, _, _ = build_evaluator(_de_rd(N))
+        syms = keys(p)
+        pv0 = collect(Float64, values(p))
+        nt(pv) = NamedTuple{syms}(Tuple(pv))
+        u = Float64[0.6sin(0.7k) + 1.2 for k in 1:N]
+        ur = RX_DE.ConcreteRArray(copy(u))
+        tr = RX_DE.ConcreteRNumber(0.25)
+
+        d = EXT_DE.direct_rhs(fo)
+        xla = RX_DE.@compile sync = true d(ur, _de_dev(p), tr)
+        a = Array(xla(ur, _de_dev(p), tr))
+        @test isapprox(a, _de_ip(fi!, u, p, 0.25); rtol = 1e-12, atol = 0.0)
+
+        pv2 = copy(pv0)
+        pv2[findfirst(==(:k_diff), collect(syms))] *= 2.0
+        b = Array(xla(ur, _de_dev(nt(pv2)), tr))           # no recompile
+        # It MOVED (so it was not frozen) …
+        @test !isapprox(a, b; rtol = 1e-12)
+        @test maximum(abs, b .- a) > 1e-6
+        # … to the right place …
+        @test isapprox(b, _de_ip(fi!, u, nt(pv2), 0.25); rtol = 1e-12, atol = 0.0)
+        # … and back again: no hysteresis in the compiled program.
+        @test Array(xla(ur, _de_dev(p), tr)) == a
+    end
+
+    @testset "reverse mode through a `@trace while` region (BROKEN upstream)" begin
+        # An upstream tripwire, kept from the retired traced-emitter suite
+        # (Reactant.jl #3218 / Enzyme-JAX #2939's neighbourhood; see
+        # UPSTREAM_ISSUES.md). NOT an EarthSciAST loop — the smallest possible
+        # `Reactant.@trace while`, a FIXED trip count, no adaptivity, no model.
+        # It is reduced this far precisely so that when it flips green there is
+        # no doubt what got fixed.
+        EZ = RX_DE.Enzyme
+        H, NSTEP, k0 = 0.01, 20, 0.7
+        u = Float64[0.6sin(0.7k) + 1.2 for k in 1:12]
+        # `u ← u(1 + kH)` NSTEP times, so the loop computes
+        # `Σu·(1+kH)^NSTEP` and its k-derivative is closed form — no AD package
+        # needed for the reference, and no truncation error in it either.
+        gref = sum(u) * NSTEP * H * (1 + k0 * H)^(NSTEP - 1)
+
+        function traced(uu, k, nlim)
+            i = zero(k)
+            RX_DE.@trace while i < nlim
+                uu = uu .+ k .* uu .* H
+                i = i + one(k)
+            end
+            return sum(uu)
+        end
+
+        ur = RX_DE.ConcreteRArray(copy(u))
+        kr = RX_DE.ConcreteRNumber(k0)
+        nr = RX_DE.ConcreteRNumber(Float64(NSTEP))
+
+        # FORWARD mode crosses it exactly — a real, passing test, and the reason
+        # the `@test_broken` below is about REVERSE mode rather than about
+        # `@trace while` being untraceable.
+        fwd = (uu, k, n) -> EZ.autodiff(EZ.Forward, traced, EZ.Const(uu),
+                                        EZ.Duplicated(k, one(k)), EZ.Const(n))[1]
+        xf = RX_DE.@compile sync = true fwd(ur, kr, nr)
+        @test isapprox(Float64(xf(ur, kr, nr)), gref; rtol = 1e-8)
+
+        # REVERSE mode does not.
+        rev = (uu, k, n) -> EZ.gradient(EZ.Reverse, traced, EZ.Const(uu), k,
+                                        EZ.Const(n))[2]
+        @test_broken begin
+            xg = RX_DE.@compile sync = true rev(ur, kr, nr)
+            isapprox(Float64(xg(ur, kr, nr)), gref; rtol = 1e-8)
+        end
     end
 end

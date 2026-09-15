@@ -22,7 +22,7 @@
 # gather is exact because it selects rather than blends, and the clamp and NaN
 # arms mirror the scalar `_interp_*_core` kernels branch for branch — all of it
 # pinned against those cores over dense query sweeps by
-# test/tree_walk_oop_test.jl. Re-deriving that in a second dialect would buy
+# test/interp_lanes_test.jl. Re-deriving that in a second dialect would buy
 # nothing and could only diverge. The cost is that this ONE subtree is built
 # through Reactant's broadcast tracing rather than op by op; it is O(1) in the
 # grid and in the table, so the program stays IR-shaped.
@@ -99,18 +99,18 @@ function _de_fn_pl(ctx::_DECtx, pl, args::Vector{_DEVal})::_DEVal
        pl isa Tuple{String,_E._InterpLinearLaneSpec}
         _de_tally!(ctx, :interp_linear)
         return _de_untraced(Reactant.call_with_reactant(
-            _E._interp_linear_lanes, pl[2], q(1), TracedRNumber{Float64}))
+            _E._interp_linear_lanes, pl[2], q(1)))
     elseif pl isa Tuple{String,_E._InterpBilinearSpec} ||
            pl isa Tuple{String,_E._InterpBilinearLaneSpec}
         _de_tally!(ctx, :interp_bilinear)
         x = q(1); y = q(2)
         return _de_untraced(Reactant.call_with_reactant(
-            _E._interp_bilinear_lanes, pl[2], x, y, TracedRNumber{Float64}))
+            _E._interp_bilinear_lanes, pl[2], x, y))
     elseif pl isa Tuple{String,_E._InterpSearchsortedSpec} ||
            pl isa Tuple{String,_E._InterpSearchsortedLaneSpec}
         _de_tally!(ctx, :interp_searchsorted)
         return _de_untraced(Reactant.call_with_reactant(
-            _E._interp_searchsorted_lanes, pl[2], q(1), TracedRNumber{Float64}))
+            _E._interp_searchsorted_lanes, pl[2], q(1)))
     elseif pl isa Tuple{String,_E._FnTypedCoreSpec}
         spec = pl[2]
         (spec.arity == 1 && length(ch) == 1) ||

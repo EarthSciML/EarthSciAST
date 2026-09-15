@@ -1134,9 +1134,9 @@ _ct_k(p) = p.A * exp(-p.Ea / (p.R * p.Tref))
     # (9) The tiered `f!` ≡ the UNTIERED `f!` (`ESS_UNTIERED=1`, const_tier.jl):
     # the same emitter with every slot classified dynamic, so it refills the whole
     # prelude on every call and skips nothing. Bit-for-bit, across a `p` change and
-    # repeated calls. (`tree_walk_untiered_test.jl` is what pins that build against
-    # the out-of-place walker, so this comparison keeps the reach it had when the
-    # walker stood here.)
+    # repeated calls. (`tree_walk_untiered_test.jl` pins the switch itself — that
+    # every slot really is classified dynamic — which is what makes it usable as
+    # an oracle here.)
     # ----------------------------------------------------------------
     @testset "`form=:inplace` (tiered) agrees bit-for-bit with the untiered build" begin
         fi, u0, p, _ts, _vm, di = ESM._build_evaluator_impl(_ct_arrhenius(); form=:inplace)
