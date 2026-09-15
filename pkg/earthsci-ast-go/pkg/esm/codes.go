@@ -154,6 +154,14 @@ const (
 	CodeCouplingRoleUnused = "coupling_role_unused"
 )
 
+// --- Diagnostic codes: §4.8.5 declared units on a `const` node (raised via
+// newETErr from units.go). ---
+const (
+	// CodeConstUnitsVersionTooOld: a document declaring esm < 1.2.0 carries
+	// `units` on an expression node.
+	CodeConstUnitsVersionTooOld = "const_units_version_too_old"
+)
+
 // --- Diagnostic codes: §10.3 / esm-libraries-spec §4.7.2 `couple` connector
 // semantics (raised from flatten.go's applyCouple). ---
 const (

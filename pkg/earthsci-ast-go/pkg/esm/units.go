@@ -1617,7 +1617,7 @@ func rejectConstUnitsPreV12(view map[string]any) error {
 		_, hasUnits := obj["units"]
 		if hasOp && hasUnits {
 			return newETErr(
-				"const_units_version_too_old",
+				CodeConstUnitsVersionTooOld,
 				fmt.Sprintf("declared `units` on an expression node require esm >= 1.2.0; file declares %s (offending path: %s)", esmRaw, path),
 			)
 		}
