@@ -1,0 +1,32 @@
+{
+  "code": "unevaluable_operator",
+  "stage": "evaluate",
+  "description": "Operators that ARE in the esm-spec §4.2 evaluable-core set but that no binding's scalar evaluator has a rule for: a document carrying one must have had it eliminated by an earlier stage (value invention). Each case places the op in the UNTAKEN branch of an `ifelse`, so an evaluator that only raises when evaluation happens to reach the node answers 1.0 instead of refusing. §9.6.6 requires the check to precede evaluation: every binding must refuse each expression with `unevaluable_operator` and name the op. `control` is the counterweight: the same shape with an ordinary operand must still evaluate. A binding with a public scalar expression evaluator (`evaluate`) feeds it `expression` with `bindings`; a binding whose evaluator is built from a model builds `D(u) = expression` with `u` a state and `p` a parameter, and expects the build to refuse.",
+  "bindings": { "p": 2.0, "u": 1.0 },
+  "control": {
+    "expression": { "op": "ifelse", "args": [ { "op": ">", "args": ["u", 100.0] }, "p", 1.0 ] },
+    "expected": 1.0
+  },
+  "cases": [
+    {
+      "id": "rank_in_untaken_branch",
+      "op": "rank",
+      "expression": { "op": "ifelse", "args": [ { "op": ">", "args": ["u", 100.0] }, { "op": "rank", "args": ["p"] }, 1.0 ] }
+    },
+    {
+      "id": "distinct_in_untaken_branch",
+      "op": "distinct",
+      "expression": { "op": "ifelse", "args": [ { "op": ">", "args": ["u", 100.0] }, { "op": "distinct", "args": ["p"] }, 1.0 ] }
+    },
+    {
+      "id": "argmin_in_untaken_branch",
+      "op": "argmin",
+      "expression": { "op": "ifelse", "args": [ { "op": ">", "args": ["u", 100.0] }, { "op": "argmin", "args": [], "arg": "i", "ranges": { "i": [1, 3] }, "expr": "p" }, 1.0 ] }
+    },
+    {
+      "id": "argmax_in_untaken_branch",
+      "op": "argmax",
+      "expression": { "op": "ifelse", "args": [ { "op": ">", "args": ["u", 100.0] }, { "op": "argmax", "args": [], "arg": "i", "ranges": { "i": [1, 3] }, "expr": "p" }, 1.0 ] }
+    }
+  ]
+}
