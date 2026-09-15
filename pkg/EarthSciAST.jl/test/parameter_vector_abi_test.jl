@@ -131,7 +131,6 @@ _pv_ip(f!, u, p, t) = (du = zero(u); f!(du, u, p, t); du)
                                ("0-D with a CSE prelude", _pv_zerod(), 2)]
             @testset "$name" begin
                 fi, u0, p, _, _ = _PV_ESM.build_evaluator(doc)
-                fo, _, _, _, _ = _PV_ESM.build_evaluator(doc; form = :oop)
                 u = length(u0) == 2 ? [0.7, 0.4] : _pv_seed(N)
                 t = 0.37
 
@@ -139,14 +138,8 @@ _pv_ip(f!, u, p, t) = (du = zero(u); f!(du, u, p, t); du)
                 pv = collect(Float64, values(p))            # dense only
 
                 ref_ip = _pv_ip(fi, u, p, t)
-                ref_oop = fo(u, p, t)
-                # The pre-existing pin, restated here so a failure localizes.
-                @test ref_ip == ref_oop
-
                 @test _pv_ip(fi, u, cv, t) == ref_ip
                 @test _pv_ip(fi, u, pv, t) == ref_ip
-                @test fo(u, cv, t) == ref_oop
-                @test fo(u, pv, t) == ref_oop
 
                 # The value type is derived from all three arguments for a vector
                 # `p` exactly as it is for a NamedTuple one.
@@ -161,7 +154,6 @@ _pv_ip(f!, u, p, t) = (du = zero(u); f!(du, u, p, t); du)
         N = 16
         doc = _pv_rd(N)
         fi, _, p, _, _ = _PV_ESM.build_evaluator(doc)
-        fo, _, _, _, _ = _PV_ESM.build_evaluator(doc; form = :oop)
         u = _pv_seed(N)
         t = 0.37
         w = [1.0 + 0.05k for k in 1:N]
@@ -169,34 +161,31 @@ _pv_ip(f!, u, p, t) = (du = zero(u); f!(du, u, p, t); du)
         pv0 = collect(Float64, values(p))
         ax = getaxes(ComponentVector(p))
 
+        obj(q) = begin
+            du = zeros(promote_type(eltype(u), eltype(q)), N)
+            fi(du, u, q, t)
+            sum(w .* du)
+        end
         # The NamedTuple reference, i.e. what parameter_gradient_test.jl pins.
         g_ref = ForwardDiff.gradient(
-            θ -> sum(w .* fo(u, NamedTuple{syms}(Tuple(θ)), t)), pv0)
+            θ -> obj(NamedTuple{syms}(Tuple(θ))), pv0)
         @test all(!iszero, g_ref)
 
         # Same gradient, `p` handed over as a plain Vector …
-        @test ForwardDiff.gradient(θ -> sum(w .* fo(u, θ, t)), pv0) == g_ref
-        # … and as a ComponentVector, through BOTH emitters.
-        g_cv = ForwardDiff.gradient(
-            θ -> sum(w .* fo(u, ComponentVector(θ, ax...), t)), pv0)
+        @test ForwardDiff.gradient(obj, pv0) == g_ref
+        # … and as a ComponentVector.
+        g_cv = ForwardDiff.gradient(θ -> obj(ComponentVector(θ, ax...)), pv0)
         @test g_cv == g_ref
-        g_cv_ip = ForwardDiff.gradient(θ -> begin
-                q = ComponentVector(θ, ax...)
-                du = zeros(eltype(θ), N)
-                fi(du, u, q, t)
-                sum(w .* du)
-            end, pv0)
-        @test isapprox(g_cv_ip, g_ref; rtol = 1e-12)
     end
 
     @testset "a SHORT parameter vector is refused, not read past" begin
         # The one failure mode a vector `p` has and a NamedTuple `p` does not.
         # `_read_param_data` is deliberately not `@inbounds` so this raises.
         N = 8
-        fo, _, p, _, _ = _PV_ESM.build_evaluator(_pv_rd(N); form = :oop)
+        fi, _, p, _, _ = _PV_ESM.build_evaluator(_pv_rd(N))
         u = _pv_seed(N)
         short = collect(Float64, values(p))[1:(end - 1)]
-        @test_throws BoundsError fo(u, short, 0.0)
+        @test_throws BoundsError _pv_ip(fi, u, short, 0.0)
     end
 
     @testset "no allocation regression on the scalar parameter read" begin

@@ -15,8 +15,8 @@
 #   2. BIT-IDENTITY. du is `===` per element (NaN/-0.0 count; never ≈) between
 #      the default build and the ESS_LANE_INTERN_DISABLE=1 /
 #      ESS_KERNEL_CLASS_MERGE_DISABLE=1 / ESS_STENCIL_DISABLE=1 /
-#      ESS_CODEGEN_DISABLE=1 oracles, at Float64 (both `:inplace` and `:oop`)
-#      and under ForwardDiff Dual via the Jacobian.
+#      ESS_CODEGEN_DISABLE=1 oracles, at Float64 and under ForwardDiff Dual
+#      via the Jacobian.
 #   3. THE CLAMP-BOUND COLLAPSE IS SOUND. `_lane_bound` collapses an
 #      all-BITWISE-equal boundary column to its one scalar (so a trace embeds a
 #      scalar constant, not an O(lanes) tensor — the gap
@@ -203,14 +203,6 @@ function _lti_flavour(model, ics, ::Type{LaneT}; members::Int, ncontent::Int,
         @test _lti_bitsame(duc, _lti_du(fm, u, pm, t))    # ≡ unmerged
         @test _lti_bitsame(duc, _lti_du(fs, u, ps, t))    # ≡ per-cell scalar
         @test _lti_bitsame(duc, _lti_du(fon, u, p, t))    # ≡ codegen-disabled
-    end
-    # `:oop` emitter too — the branch-free forms' host consumer.
-    gc = _lti_build(model, ics; form=:oop)[1]
-    gi = _lti_build(model, ics; form=:oop, intern=false)[1]
-    for k in 1:3, t in (0.0, 0.7)
-        u = k == 1 ? copy(uc) : _lti_probe(length(uc), k)
-        @test _lti_bitsame(gc(u, pc, t), gi(u, pi_, t))
-        @test _lti_bitsame(gc(u, pc, t), _lti_du(fc, u, pc, t))
     end
     # ForwardDiff Dual (values + partials via the Jacobian).
     if jacobian

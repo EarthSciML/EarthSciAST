@@ -172,8 +172,8 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("lane_table_intern_test.jl")             # content-equal lane tables `===` at build (ESS_LANE_INTERN_DISABLE oracle)
     include("direct_class_emission_test.jl")         # per-cell scalarizer emits class kernels directly (ESS_DIRECT_CLASS_EMIT_DISABLE oracle)
     include("cross_eq_class_emission_test.jl")       # cross-equation + affine-box classes emitted directly; repair pass zero-merge (ESS_CROSS_EQ_CLASS_EMIT_DISABLE oracle)
-    include("tree_walk_oop_test.jl")
-    include("oop_merge_test.jl")                     # :oop kernel-CLASS merge ≡ unmerged
+    include("scalar_ops_test.jl")                    # the shared op ladder + gather-subscript resolver
+    include("oop_merge_test.jl")                     # kernel-CLASS merge ≡ unmerged (both build forms)
     include("tree_walk_iip_generic_test.jl")
     include("parameter_gradient_test.jl")            # ∂(RHS)/∂p, both emitters (traced arm opt-in)
     include("parameter_vector_abi_test.jl")          # `p::AbstractVector`/ComponentVector ≡ NamedTuple, bit for bit
@@ -247,11 +247,10 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("contraction_loop_test.jl")             # runtime contraction loop (ess-runtime-contraction)
     include("contraction_tier_order_test.jl")       # loop-vs-affine tier ORDER (ess-runtime-contraction × ess-affine)
     include("array_contraction_test.jl")            # whole-array contraction loop nest (ess-array-contraction)
-    include("oop_scalar_batch_test.jl")             # :oop lane-batched scalar entries (ess-oop-batch)
     include("tree_walk_tcadence_test.jl")           # B3 time-cadence tier (t-memoized slots)
     # The untiered kill switch (ESS_UNTIERED): an in-place build that skips no
-    # prelude slot, pinned bit-for-bit against the out-of-place walker so the
-    # tiering tests above can use it as their differential oracle.
+    # prelude slot, which is what the tiering tests above use as their
+    # differential oracle.
     include("tree_walk_untiered_test.jl")
     include("tree_walk_xcse_test.jl")
     include("tree_walk_const_array_boundary_test.jl")

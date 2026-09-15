@@ -252,11 +252,9 @@ function _de_compare(name, fo, fi!, p, samples; buffers = nothing, rtol = 1e-12,
     rows = Tuple{String,Float64,Float64,Float64}[]
     for (u, t) in samples
         du_i = _de_ip(fi!, u, p, t)
-        du_o = fo(u, p, t)
         uu = RX_DE.ConcreteRArray(copy(u)); tt = RX_DE.ConcreteRNumber(t)
         du_d = Array(buffers === nothing ? compiled(uu, pr, tt) :
                                            compiled(uu, pr, tt, buffers))
-        @test du_o == du_i             # the two interpreters are bit-identical
         aerr = maximum(abs.(du_d .- du_i))
         rerr = maximum(abs.(du_d .- du_i) ./ max.(abs.(du_i), 1e-300))
         # The sample LABEL, not the sample: a 343-cell state printed in full is

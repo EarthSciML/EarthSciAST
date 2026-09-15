@@ -416,8 +416,8 @@ end
 # `gk` is CONTRACTED in `w` and an OUTPUT index in `mean`, so inlining `w` into
 # `mean` puts the two binders in the same body. Materializing `w` (the default
 # `:inplace` build) hides the collision behind a buffer gather, which is why the
-# defect was invisible there and reached only the INLINING builds:
-# `ESS_ARRAY_OBS_INLINE=1` and `form = :oop` (which never materializes).
+# defect was invisible there and reached only the INLINING build
+# (`ESS_ARRAY_OBS_INLINE=1`).
 @testset "inlined aggregate does not capture a reader's loop variable" begin
     NI, NK = 2, 4
     _agg(out, rngs, body) = Dict{String,Any}(
@@ -458,28 +458,21 @@ end
         du = similar(u0); f!(du, u0, p, 0.0)
         [du[vm["q[$i,$k]"]] for i in 1:NI, k in 1:NK]
     end
-    fo, u0o, po, _, vmo = EarthSciAST.build_evaluator(doc; initial_conditions = ics,
-                                                      form = :oop)
-    duo = fo(u0o, po, 0.0)
-
     ref = [want(i, k) for i in 1:NI, k in 1:NK]
     @test du_iip(inline = false) == ref          # factored: was already right
     @test du_iip(inline = true)  == ref          # inlined: the capture path
-    @test [duo[vmo["q[$i,$k]"]] for i in 1:NI, k in 1:NK] == ref   # :oop never materializes
 end
 
-# `:oop` materializes too, and agrees with `:inplace` bit for bit.
+# An out-of-place BUILD materializes array observeds too, and its plan agrees
+# with the in-place build's.
 #
-# Materialization used to be `:inplace`-only, which made INLINING mandatory under
-# `:oop` — and inlining is superlinear, because a reader spliced with a reduction
-# body pays that whole body per output cell. On ReSEACT the same emitter took
-# 2 GiB materialized and blew past 39 GiB inlined at the smallest grid that model
-# builds, so the traced build was not merely slower, it was impossible.
-#
-# The oracle is the one this file uses throughout: `:oop` is documented as
-# emitting the same IR in the same evaluation order, so the two must agree
-# EXACTLY, not approximately.
-@testset ":oop materializes array observeds and matches :inplace" begin
+# Materialization used to be `:inplace`-only, which made INLINING mandatory for
+# the out-of-place form — and inlining is superlinear, because a reader spliced
+# with a reduction body pays that whole body per output cell. On ReSEACT the
+# same model took 2 GiB materialized and blew past 39 GiB inlined at the
+# smallest grid it builds, so a compiled build was not merely slower, it was
+# impossible.
+@testset "an out-of-place build materializes array observeds too" begin
     Ns = 6
     isetsO = Dict("x" => ESM_AOM.IndexSet("interval"; size = Ns))
     aggO(body) = ESM_AOM.OpExpr("faq", ESM_AOM.ASTExpr[];
@@ -508,9 +501,12 @@ end
     @test oop[6].n_mat_array_obs == 1
 
     du = similar(iip[2]); iip[1](du, iip[2], iip[3], 0.0)
-    duo = oop[1](oop[2], oop[3], 0.0)
     want = [sum((0.5j)^2 for j in 1:Ns) - 0.5 * i for i in 1:Ns]
     @test [du[iip[5]["u[$i]"]] for i in 1:Ns] == want
-    @test [duo[oop[5]["u[$i]"]] for i in 1:Ns] ==
-          [du[iip[5]["u[$i]"]] for i in 1:Ns]      # bit-identical, not merely close
+    # The two builds agree on the fill plan: same materialized cell count, and
+    # the out-of-place product's extended state is that much wider than `du`.
+    @test oop[6].n_mat_array_cells == iip[6].n_mat_array_cells
+    ir = getfield(oop[1], :rhs)
+    @test getfield(ir, :n_total) - getfield(ir, :n_states) ==
+          oop[6].n_mat_array_cells
 end

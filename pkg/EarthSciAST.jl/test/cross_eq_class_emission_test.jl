@@ -131,7 +131,7 @@ _xq_probe(n, k) = Float64[1.0 + 0.9 * sin(1.3i + 0.7k) for i in 1:n]
 # scalar reference.
 function _xq_build(model, ics; crosseq::Bool=true, direct::Bool=true,
                    merge::Bool=true, codegen::Bool=true, stencil::Bool=true,
-                   form::Symbol=:inplace, const_arrays=Dict{String,Any}())
+                   const_arrays=Dict{String,Any}())
     withenv("ESS_CROSS_EQ_CLASS_EMIT_DISABLE" => (crosseq ? nothing : "1"),
             "ESS_DIRECT_CLASS_EMIT_DISABLE" => (direct ? nothing : "1"),
             "ESS_KERNEL_CLASS_MERGE_DISABLE" => (merge ? nothing : "1"),
@@ -139,7 +139,7 @@ function _xq_build(model, ics; crosseq::Bool=true, direct::Bool=true,
             "ESS_STENCIL_DISABLE" => (stencil ? nothing : "1")) do
         ESM._reset_cascade_tally!()
         f, u0, p, _t, vm, diag = ESM._build_evaluator_impl(model;
-            initial_conditions=ics, form=form, const_arrays=const_arrays)
+            initial_conditions=ics, const_arrays=const_arrays)
         (f=f, u0=u0, p=p, vm=vm, diag=diag, tally=copy(ESM._CASCADE_TALLY))
     end
 end
@@ -307,18 +307,6 @@ _xq_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
             @test _xq_bitsame(dud, _xq_du(rref.f, u, rref.p, t))
         end
 
-        # :oop emitter, same identities (+ ≡ the in-place values).
-        odef = _xq_build(model, ics; const_arrays=consts, form=:oop)
-        ooff = _xq_build(model, ics; const_arrays=consts, crosseq=false, form=:oop)
-        ospl = _xq_build(model, ics; const_arrays=consts, merge=false, form=:oop)
-        for k in 1:2, t in (0.0, 0.7)
-            u = k == 1 ? copy(odef.u0) : _xq_probe(2N, k)
-            duo = odef.f(u, odef.p, t)
-            @test _xq_bitsame(duo, ooff.f(u, ooff.p, t))
-            @test _xq_bitsame(duo, ospl.f(u, ospl.p, t))
-            @test _xq_bitsame(duo, _xq_du(ron.f, u, ron.p, t))
-        end
-
         # ForwardDiff Duals: values AND partials bit-identical through the
         # cross-equation / affine-box class kernels.
         Jn = ForwardDiff.jacobian((du, u) -> ron.f(du, u, ron.p, 0.4),
@@ -329,16 +317,6 @@ _xq_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
                                   zero(rspl.u0), rspl.u0)
         @test _xq_bitsame(Jn, Jo)
         @test _xq_bitsame(Jn, Js)
-        # The :oop emitter compares against ITS OWN kill-switch oracles.
-        # (Deliberately NOT against the in-place Jacobian: the two emitters'
-        # Dual partial accumulation differs by `-0.0` vs `0.0` signed zeros on
-        # some fixtures — a pre-existing cross-emitter artifact, identical
-        # with the stage on and off, and not this change's to pin.)
-        Joop  = ForwardDiff.jacobian(u -> odef.f(u, odef.p, 0.4), odef.u0)
-        Joopo = ForwardDiff.jacobian(u -> ooff.f(u, ooff.p, 0.4), ooff.u0)
-        Joops = ForwardDiff.jacobian(u -> ospl.f(u, ospl.p, 0.4), ospl.u0)
-        @test _xq_bitsame(Joop, Joopo)
-        @test _xq_bitsame(Joop, Joops)
     end
 
     @testset "(c) grid independence of the pooled emitter" begin

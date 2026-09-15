@@ -358,5 +358,4 @@ end
 
 # Host integer evaluation of a gather subscript (loop counters + literals),
 # reusing the emitter's own resolver — no state can appear in a subscript.
-_de_index_int(nd::_E._Node) =
-    _E._index_int(nd, nothing, nothing, 0.0, Float64[], _E._NO_FORCING)
+_de_index_int(nd::_E._Node) = _E._index_int(nd)

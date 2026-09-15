@@ -17,7 +17,7 @@
 #   * zero per-call allocation in the steady-state `f!` (`rhs_alloc_bytes`);
 #   * build IR FLAT in the contracted extent AND in the output extent — the
 #     node-lowering count is identical across a 64× range of each;
-#   * `:oop` bit-identical to `:inplace`, and ForwardDiff through the nest;
+#   * ForwardDiff through the nest;
 #   * the FLOOR: a reduction under `ESS_ARRAY_CONTRACTION_MIN` is left to the
 #     existing loop-vs-affine order, unchanged;
 #   * the DECLINE: a reduction this tier cannot model (a per-cell variable bound)
@@ -82,11 +82,11 @@ _ac_exact(NS, NR) = [sum(_ac_sr(s, r) * _ac_e0(s) for s in 1:NS) for r in 1:NR]
 # where the oracle tiers are still cheap enough to run against it.
 _ac_env(extra) = merge(Dict("ESS_ARRAY_CONTRACTION_MIN" => "8"), extra)
 
-function _ac_build(doc, ics; env=Dict{String,String}(), form=:inplace,
+function _ac_build(doc, ics; env=Dict{String,String}(),
                    const_arrays=Dict{String,Vector{Float64}}())
     withenv((k => v for (k, v) in _ac_env(env))...) do
         _AC_ESS._reset_cascade_tally!()
-        r = build_evaluator(doc; initial_conditions=ics, form=form,
+        r = build_evaluator(doc; initial_conditions=ics,
                             const_arrays=const_arrays)
         (r, copy(_AC_ESS._CASCADE_TALLY))
     end
@@ -223,16 +223,6 @@ const _AC_OFF = Dict("ESS_ARRAY_CONTRACTION_DISABLE" => "1")
         @test rhs_alloc_bytes(f!, du, u0, p, 0.0) == 0
     end
 
-    @testset ":oop is bit-identical to :inplace" begin
-        NS, NR = 16, 16
-        doc, ics = _ac_doc(NS, NR), _ac_ics(NS, NR)
-        di, vi, _ = _ac_du(doc, ics)
-        (fo, u0o, po, _, vo), to = _ac_build(doc, ics; form=:oop)
-        @test _ac_tally(to, :array_contraction) == 1
-        duo = fo(u0o, po, 0.0)
-        @test all(duo[vo["conc[$r]"]] === di[vi["conc[$r]"]] for r in 1:NR)
-    end
-
     @testset "ForwardDiff differentiates through the nest" begin
         # ∂(du_conc[r])/∂E[s] = SR[s,r] — the contraction is linear in the state
         # it gathers, so the whole Jacobian row is known in closed form.
@@ -286,11 +276,10 @@ const _AC_OFF = Dict("ESS_ARRAY_CONTRACTION_DISABLE" => "1")
         @test all(_ac_outs(dl, vl, NR)[r] === _ac_outs(do_, vo, NR)[r] for r in 1:NR)
     end
 
-    # ── The `:inplace` twin of the level fill ────────────────────────────────
+    # ── A nest on a materialized observed LEVEL ───────────────────────
     # `_fill_obs_levels!` runs a level's nests through the SAME section as the
-    # state RHS, but the case above builds `:oop` only, so the in-place level arm
-    # is reached by no fixture. Build the observed-nest model both ways and pin
-    # the level fill against the kill-switch oracle AND against `:oop`.
+    # state RHS. Pin the level fill against the kill-switch oracle and against
+    # the closed form.
     @testset "a nest on a materialized observed level, in place" begin
         N = 16
         ag1(b) = _AC_ESS.OpExpr("faq", _AC_ESS.ASTExpr[]; output_idx=Any["i"],
@@ -309,15 +298,15 @@ const _AC_OFF = Dict("ESS_ARRAY_CONTRACTION_DISABLE" => "1")
         eqs = [weq, _AC_ESS.Equation(_v("z"), nest),
                _AC_ESS.Equation(ag1(_Didx("u", _v("i"))), ag1(_idx("z", _v("i"))))]
         u0v = Dict("u[$i]" => Float64(i % 7) for i in 1:N)
-        bld(form, extra) = withenv((k => v for (k, v) in _ac_env(extra))...) do
+        bld(extra) = withenv((k => v for (k, v) in _ac_env(extra))...) do
             _AC_ESS._reset_cascade_tally!()
             (_AC_ESS._build_evaluator_impl(_AC_ESS.Model(vars, eqs);
                 index_sets=Dict("x" => _AC_ESS.IndexSet("interval"; size=N)),
-                initial_conditions=u0v, form=form),
+                initial_conditions=u0v),
              copy(_AC_ESS._CASCADE_TALLY))
         end
         run_ip(extra) = begin
-            (r, t) = bld(:inplace, extra)
+            (r, t) = bld(extra)
             (f!, u0, p) = (r[1], r[2], r[3])
             du = similar(u0); f!(du, u0, p, 0.0)
             (du, r[5], t)
@@ -331,9 +320,6 @@ const _AC_OFF = Dict("ESS_ARRAY_CONTRACTION_DISABLE" => "1")
         @test all(dn[vn["u[$i]"]] ==
                   sum(_ac_sr(j, i) * 2.0 * Float64(j % 7) for j in 1:N)
                   for i in 1:N)
-        (ro, _) = bld(:oop, Dict{String,String}())
-        duo = ro[1](ro[2], ro[3], 0.0)
-        @test all(duo[ro[5]["u[$i]"]] === dn[vn["u[$i]"]] for i in 1:N)
     end
 
     @testset "a bound this tier cannot model declines and still answers" begin

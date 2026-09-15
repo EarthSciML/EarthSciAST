@@ -16,8 +16,7 @@
 #   1. NOTHING MOVED AT Float64. Same bits, still zero allocations, still zero after
 #      the Dual buffers have been created (the lazy alt-buffer must not leak into the
 #      Float64 path). Bit-identity is asserted with `==` against an `ESS_UNTIERED=1`
-#      build — the same emitter with every prelude slot refilled on every call — which
-#      is itself pinned bit-identical to the out-of-place emitter.
+#      build — the same emitter with every prelude slot refilled on every call.
 #
 #   2. FORWARDDIFF WORKS THROUGH IT, on BOTH axes. The parameter axis is not a
 #      variation of the state axis but a separate failure mode: there `u` stays
@@ -237,10 +236,13 @@ end
         n = length(u)
         @test all(J[i, j] == 0.0 for i in 1:n, j in 1:n if abs(i - j) > 1)
 
-        # And it must agree with the out-of-place emitter's Jacobian bit for bit —
+        # And it must agree bit for bit with the per-cell reference's Jacobian:
         # the two walk the same IR, so a divergence means one of them is lying.
-        fo = ESM.build_evaluator(doc; form = :oop)[1]
-        @test J == ForwardDiff.jacobian(uu -> fo(uu, p, 0.0), u)
+        fr! = withenv("ESS_STENCIL_DISABLE" => "1") do
+            ESM.build_evaluator(doc)[1]
+        end
+        @test J == ForwardDiff.jacobian(
+            uu -> (d = similar(uu, eltype(uu)); fill!(d, 0); fr!(d, uu, p, 0.0); d), u)
     end
 
     @testset "ForwardDiff: Jacobian w.r.t. the STATE, through the CSE prelude" begin
@@ -359,13 +361,15 @@ end
         @test sol.retcode == ReturnCode.Success
         @test all(isfinite, sol.u[end])
 
-        # Against the same problem solved through the allocating out-of-place emitter
-        # (a different evaluator, same IR): the two trajectories must agree.
-        fo = ESM.build_evaluator(doc; form = :oop)[1]
-        solo = OrdinaryDiffEqRosenbrock.solve(
-            ODEProblem(fo, u, (0.0, 2.0), p), OrdinaryDiffEqRosenbrock.Rosenbrock23();
+        # Against the same problem solved through the per-cell reference build
+        # (a different lowering, same IR): the two trajectories must agree.
+        fr! = withenv("ESS_STENCIL_DISABLE" => "1") do
+            ESM.build_evaluator(doc)[1]
+        end
+        solr = OrdinaryDiffEqRosenbrock.solve(
+            ODEProblem(fr!, u, (0.0, 2.0), p), OrdinaryDiffEqRosenbrock.Rosenbrock23();
             abstol = 1e-10, reltol = 1e-10)
-        @test maximum(abs, sol.u[end] .- solo.u[end]) < 1e-6
+        @test maximum(abs, sol.u[end] .- solr.u[end]) < 1e-6
     end
 
     # ---- 5. The value-type rule ----------------------------------------------
@@ -400,16 +404,6 @@ end
         end
         @test err isa ESM.TreeWalkError
         @test err.code == "E_TREEWALK_FLOAT32_STATE"
-
-        fo = ESM.build_evaluator(doc; form = :oop)[1]
-        erro = try
-            fo(u32, p, 0.0)
-            nothing
-        catch e
-            e
-        end
-        @test erro isa ESM.TreeWalkError
-        @test erro.code == "E_TREEWALK_FLOAT32_STATE"
 
         # Float64 state through the same closures still works (the guard is a
         # statically-folded no-op there).

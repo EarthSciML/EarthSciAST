@@ -245,14 +245,6 @@ end
         # zero-alloc in place (the codegen tier hosts the table gather)
         f!(du, u0, p, 0.0)
         @test (@allocated f!(du, u0, p, 0.0)) == 0
-
-        # oop: gather-of-gather resolved host-side, bit-identical
-        fo, u0o, po, _, _ = build_evaluator(model; initial_conditions=ics,
-            const_arrays=ca, form=:oop)
-        duo = fo(u0o, po, 0.0)
-        for i in 1:N
-            @test duo[vmap["y[$i]"]] == du[vmap["y[$i]"]]
-        end
     end
 
     # ---------- GUARDED SINGULARITIES on the codegen tier ----------

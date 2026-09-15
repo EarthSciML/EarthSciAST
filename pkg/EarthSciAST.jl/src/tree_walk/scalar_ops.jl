@@ -171,49 +171,6 @@ function _scalar_op(op::Symbol, c::AbstractVector, ::Type{T}) where {T}
     end
 end
 
-# ---- Live forcing buffers as ARGUMENTS (B2) ----------------------------------
-#
-# The compiled IR reaches a live forcing buffer (`param_arrays` entries and
-# DiscreteMaterializer caches, both registered in the build's `pgather` dict) by
-# ALIAS: an `_NK_PARAM_GATHER` payload and the `arr` field of a forcing acc
-# descriptor (`_AK_ARR_FIXED` / `_AK_FORCING_BOX` / `_AK_ARR_TBL_BOX`) are the
-# same host `Vector{Float64}` the caller bound. On host that aliasing IS the
-# live-refresh channel. Under an XLA trace it is the silent-staleness bug: a
-# captured host array is a trace-time CONSTANT.
-#
-# So the out-of-place RHS carries the buffers through its ARGUMENT LIST instead:
-# the explicit form is `rhs(u, p, t, buffers)`, where `buffers` is a NamedTuple
-# of arrays in a STABLE order (buffer names sorted; see `_make_rhs_oop`). At each
-# read site the walker swaps the node's aliased host array for the aligned entry
-# of the `buffers` argument via `_forcing_slab` — an identity (`===`) scan
-# over `hostkeys`, the host buffers in the container's own order (built once per
-# RHS). A LINEAR scan, not an `IdDict`, and that is load-bearing: the scan runs
-# per forcing read per call, O(#buffers) with #buffers the handful of forcing
-# VARIABLES (never cells) — and an `IdDict` capture is untraceable (its
-# `Memory{Any}` hash table throws inside Reactant's closure walk), which would
-# break tracing for every model, forcing or not. A backend passes device arrays
-# (`ConcreteRArray`s) in `buffers`, and an in-place `copyto!` into those SAME
-# arrays between calls is a real input update the compiled program sees (see
-# ext/EarthSciASTReactantExt.jl).
-#
-# The host wrapper (`_OopRHS`) forwards the build's own host buffers, so
-# `f(u, p, t)` still reads the exact aliased storage it always did — the
-# fallback arm in `_forcing_slab` (an arr absent from `hostkeys`, e.g. a
-# hand-built test kernel) reads the host array directly, the pre-B2 behavior.
-struct _Forcing{B}
-    bufs::B                             # this CALL's buffer container (host or traced)
-    hostkeys::Vector{Vector{Float64}}   # host buffer identities, aligned with `bufs`
-end
-const _NO_FORCING = _Forcing((;), Vector{Float64}[])
-
-@inline function _forcing_slab(fb::_Forcing, arr::Vector{Float64})
-    ks = fb.hostkeys
-    @inbounds for j in eachindex(ks)
-        ks[j] === arr && return fb.bufs[j]
-    end
-    return arr
-end
-
 # Evaluate an INDEX subtree to a concrete `Int`.
 #
 # WHY THIS IS NOT `_oop_eval`. A gather's subscripts are integer index arithmetic
@@ -232,8 +189,7 @@ end
 # Deliberately NARROW: exactly the kinds an index expression can contain. Anything
 # else is a genuinely state-dependent subscript, which cannot be resolved at trace
 # time at all, and says so rather than silently tracing into the same dead end.
-function _index_int(n::_Node, u, p, t, cache::AbstractVector{T},
-                        fb::_Forcing)::Int where {T}
+function _index_int(n::_Node)::Int
     k = n.kind
     if k === _NK_LOOPVAR
         return (n.payload::Base.RefValue{Int})[]
@@ -243,7 +199,7 @@ function _index_int(n::_Node, u, p, t, cache::AbstractVector{T},
         cg = n.payload::_ConstGatherArray
         off = 1
         @inbounds for d in eachindex(n.children)
-            off += (_index_int(n.children[d], u, p, t, cache, fb) - 1) * cg.strides[d]
+            off += (_index_int(n.children[d]) - 1) * cg.strides[d]
         end
         (1 <= off <= cg.len) || throw(BoundsError(cg.flat, off))
         return round(Int, @inbounds cg.flat[off])
@@ -253,22 +209,22 @@ function _index_int(n::_Node, u, p, t, cache::AbstractVector{T},
         if op === :+
             s = 0
             @inbounds for d in eachindex(c)
-                s += _index_int(c[d], u, p, t, cache, fb)
+                s += _index_int(c[d])
             end
             return s
         elseif op === :-
-            length(c) == 1 && return -_index_int(c[1], u, p, t, cache, fb)
-            return _index_int(c[1], u, p, t, cache, fb) -
-                   _index_int(c[2], u, p, t, cache, fb)
+            length(c) == 1 && return -_index_int(c[1])
+            return _index_int(c[1]) -
+                   _index_int(c[2])
         elseif op === :*
             s = 1
             @inbounds for d in eachindex(c)
-                s *= _index_int(c[d], u, p, t, cache, fb)
+                s *= _index_int(c[d])
             end
             return s
         elseif op === :/
-            return div(_index_int(c[1], u, p, t, cache, fb),
-                       _index_int(c[2], u, p, t, cache, fb))
+            return div(_index_int(c[1]),
+                       _index_int(c[2]))
         end
     end
     throw(TreeWalkError("E_TREEWALK_TRACED_SUBSCRIPT",

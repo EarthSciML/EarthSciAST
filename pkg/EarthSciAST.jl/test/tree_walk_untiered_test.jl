@@ -3,16 +3,14 @@
 # WHAT THIS FILE IS FOR. The cadence tiers of the in-place prelude (const_tier.jl)
 # let `f!` SKIP refilling a slot whose inputs provably have not moved. Every test
 # that pins "the skip changed no number" needs a reference evaluator that skips
-# nothing, and that reference has always been the out-of-place walker: it allocates
-# a fresh cache per call, so it has nothing valid to skip TO and refills the whole
-# prelude in ascending slot order.
+# nothing, and `ESS_UNTIERED=1` is it: the switch classifies every prelude slot
+# DYNAMIC, so `f!` refills all of them, in ascending slot order, on every call.
 #
-# `ESS_UNTIERED=1` gives the SAME guarantee from the in-place emitter: it classifies
-# every prelude slot DYNAMIC, so `f!` refills all of them, in ascending slot order,
-# on every call. This file is the bridge that pins the two references against each
-# other — `f!(untiered) == :oop` AND `f!(tiered) == f!(untiered)`, bit for bit — so
-# the other tiering tests can use the in-place switch as their oracle and still be
-# asserting exactly what the walker comparison asserted.
+# This file is what makes that reference trustworthy — it pins the switch itself
+# (every slot really is classified dynamic, and the prelude is otherwise unchanged)
+# and then `f!(tiered) == f!(untiered)` bit for bit over the call sequences the
+# tiers are allowed to skip on. The other tiering tests use the switch as their
+# oracle.
 #
 # THE FIXTURES exercise the two tiers separately and then together:
 #
@@ -50,7 +48,6 @@ _ut_untiered(mk; kw...) =
     withenv("ESS_UNTIERED" => "1") do
         ESM._build_evaluator_impl(mk(); kw...)
     end
-_ut_oop(mk; kw...) = ESM._build_evaluator_impl(mk(); form=:oop, kw...)
 
 # ---------------------------------------------------------------------------
 # Fixture 1 — the parameter-only Arrhenius chain: `k = A*exp(-Ea/(R*Tref))`
@@ -130,7 +127,7 @@ _ut_doc_build(file, name; kw...) = ESM._build_evaluator_impl(
     _template_reg=ESM._component_template_reg(file, name),
     _model_name=String(name), kw...)
 
-@testset "untiered kill switch (ESS_UNTIERED) ≡ the out-of-place walker" begin
+@testset "untiered kill switch (ESS_UNTIERED) ≡ the tiered prelude" begin
 
     # ----------------------------------------------------------------
     # (1) The switch does what it says: no slot is left in a skippable tier,
@@ -160,14 +157,13 @@ _ut_doc_build(file, name; kw...) = ESM._build_evaluator_impl(
     end
 
     # ----------------------------------------------------------------
-    # (2) CONST tier. `f!(untiered)` ≡ `:oop` and `f!(tiered)` ≡ `f!(untiered)`
-    # across a parameter change, a parameter change BACK (the stamp must not
-    # confuse "same values, different object"), and repeated calls.
+    # (2) CONST tier. `f!(tiered)` ≡ `f!(untiered)` across a parameter change, a
+    # parameter change BACK (the stamp must not confuse "same values, different
+    # object"), and repeated calls.
     # ----------------------------------------------------------------
-    @testset "const tier: tiered ≡ untiered ≡ :oop (Arrhenius)" begin
+    @testset "const tier: tiered ≡ untiered (Arrhenius)" begin
         fi, u0, p, _ts, _vm, _di = _ut_tiered(_ut_arrhenius)
         fu, _u2, _p2, _ts2, _vm2, _du = _ut_untiered(_ut_arrhenius)
-        fo, _u3, _p3, _ts3, _vm3, _do = _ut_oop(_ut_arrhenius)
 
         p2 = merge(p, (; A = 7.0 * p.A, R = 8.0))
         seq = [(u0, p, 0.0), (u0, p, 0.0), (u0, p2, 0.0), ([0.4, -1.3], p, 0.0),
@@ -175,7 +171,6 @@ _ut_doc_build(file, name; kw...) = ESM._build_evaluator_impl(
                (u0, p, 0.0)]
         for (u, pp, t) in seq
             a = _ut_call(fu, u, pp, t)
-            @test _ut_same(a, fo(u, pp, t))          # the bridge: untiered ≡ walker
             @test _ut_same(_ut_call(fi, u, pp, t), a)
         end
     end
@@ -187,14 +182,13 @@ _ut_doc_build(file, name; kw...) = ESM._build_evaluator_impl(
     # an in-place buffer refresh announced through `notify_forcing_refresh!`,
     # and a revisited t (the rejected-step shape).
     # ----------------------------------------------------------------
-    @testset "time tier: tiered ≡ untiered ≡ :oop (forcing buffer)" begin
+    @testset "time tier: tiered ≡ untiered (forcing buffer)" begin
         K, M = 5, 3
         buf = [6.0]
         mk() = _ut_fastjx_model(K, M)
         pa() = Dict("F" => buf)
         fi, u0, p, _ts, _vm, di = _ut_tiered(mk; param_arrays=pa())
         fu, _u2, _p2, _ts2, _vm2, _du = _ut_untiered(mk; param_arrays=pa())
-        fo, _u3, _p3, _ts3, _vm3, _do = _ut_oop(mk; param_arrays=pa())
         @test di.n_time_slots > 0
 
         p2 = merge(p, (; w = 0.9, scale = 2.25))
@@ -217,7 +211,6 @@ _ut_doc_build(file, name; kw...) = ESM._build_evaluator_impl(
             end
             u, pp, t = step
             a = _ut_call(fu, u, pp, t)
-            @test _ut_same(a, fo(u, pp, t))
             @test _ut_same(_ut_call(fi, u, pp, t), a)
         end
     end
@@ -226,7 +219,7 @@ _ut_doc_build(file, name; kw...) = ESM._build_evaluator_impl(
     # (4) Repo documents with observed chains. The `p` arm is per fixture: the
     # geometry model declares no parameters at all, which is its own shape.
     # ----------------------------------------------------------------
-    @testset "tests/valid fixtures: tiered ≡ untiered ≡ :oop" begin
+    @testset "tests/valid fixtures: tiered ≡ untiered" begin
         cases = (
             # (file, model, a second `p` builder or `nothing`)
             ("units_moves_registry.esm", "UnitsMovesRegistry",
@@ -244,7 +237,6 @@ _ut_doc_build(file, name; kw...) = ESM._build_evaluator_impl(
                     withenv("ESS_UNTIERED" => "1") do
                         _ut_doc_build(file, name)
                     end
-                fo, _u3, _p3, _ts3, _vm3, _do = _ut_doc_build(file, name; form=:oop)
 
                 # The fixture must actually HAVE a prelude, or this proves nothing.
                 nslots = di.n_const_slots + di.n_time_slots + di.n_dynamic_slots
@@ -256,7 +248,6 @@ _ut_doc_build(file, name; kw...) = ESM._build_evaluator_impl(
                 u1 = u0 .+ 0.5
                 for pp in ps, u in (u0, u1, u0), t in (0.0, 0.0, 0.75, 0.0)
                     a = _ut_call(fu, u, pp, t)
-                    @test _ut_same(a, fo(u, pp, t))
                     @test _ut_same(_ut_call(fi, u, pp, t), a)
                 end
             end
