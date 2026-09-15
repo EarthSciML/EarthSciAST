@@ -143,6 +143,19 @@ pub enum CompileError {
         op: String,
     },
 
+    /// An expression ranges over a `kind: "derived"` index set whose
+    /// value-invention producer could not be materialized at build (esm-spec
+    /// §4.2 / §9.6.6). Refused rather than contracted as an empty range, which
+    /// folds to the additive identity and reads as a plausible 0.
+    #[error("{code}: {reason}")]
+    ValueInventionRefused {
+        /// `derived_index_set_unmaterialized`, or `relational_node_in_continuous`
+        /// when the producer reads live state.
+        code: &'static str,
+        /// The index set, its producer, and why the producer could not run.
+        reason: String,
+    },
+
     /// A `table_lookup` node that cannot be lowered to its esm-spec §9.5.3
     /// `interp.linear` / `interp.bilinear` / `index` form — an unknown table,
     /// an axis-key set that does not match the table's declared axes, an
