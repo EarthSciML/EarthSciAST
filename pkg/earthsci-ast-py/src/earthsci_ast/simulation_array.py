@@ -819,17 +819,19 @@ def _materialize_observeds(
         # on a scalar operand) must not be cast to a real here — see
         # `numpy_interpreter._require_real`.
         val = _require_real(val, f"observed '{name}'")
-        # A scalar value on a SHAPED observed replicates along every axis of its
-        # declared shape (esm-spec §4.3.4) — whether the body was a scalar as
-        # written or evaluated to one (an `ifelse` whose predicate is a constant
-        # takes its scalar branch).
-        target_shape = ctx.state_shapes.get(name)
-        if target_shape and np.ndim(val) == 0:
-            val = np.full(target_shape, float(val))
         if isinstance(val, np.ndarray) and val.ndim > 0:
             ctx.derived_rings[name] = val
+            ctx.observed_values.pop(name, None)
         else:
             ctx.observed_values[name] = float(val)
+            # A scalar value on a SHAPED observed replicates along every axis of
+            # its declared shape (esm-spec §4.3.4) — whether the body was a
+            # scalar as written or evaluated to one (an `ifelse` whose predicate
+            # is a constant takes its scalar branch). Readers that gather cells
+            # find the full field; the scalar stays for the output row.
+            target_shape = ctx.state_shapes.get(name)
+            if target_shape:
+                ctx.derived_rings[name] = np.full(target_shape, float(val))
 
 
 @dataclass
