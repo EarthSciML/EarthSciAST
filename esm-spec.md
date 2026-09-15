@@ -2292,6 +2292,30 @@ observed. A binding that needs the strict `y ~ f(…)` form — for inlining
 specifically — recovers it as a **narrower** set alongside `observed_unknowns`
 (Python spells it `inlined_unknowns`); it does not narrow the partition.
 
+**Running a bare-index definition.** Classification credits every indexed LHS;
+*running* one also needs its index range. The shelled spelling
+`faq{k…}(index(V, k…)) ~ rhs` carries that range in its `ranges`. A bare
+`index(V, k…) ~ rhs` binds none of its subscripts, so a binding that simulates
+it takes the range from the right-hand side, and runs the definition exactly
+when all three hold:
+
+1. every subscript is a plain symbol;
+2. `rhs` is a `faq` whose `output_idx` names those symbols, in the same order;
+3. if `V` declares a `shape`, the number of subscripts equals its rank.
+
+That `rhs` already denotes the whole array, so the equation means `V ~ rhs`.
+`V` need not declare a `shape`: the `faq` sizes it.
+
+Every other bare-index definition of an observed MUST be refused with
+`indexed_definition_unsupported_form`, naming `V`, rather than run. That covers
+a right-hand side with no `faq` (`w[k] ~ 5.0`), an offset or other non-identity
+subscript (`y[i+1] ~ …`), subscripts the `faq` does not bind in order, and a rank
+disagreement. In each of those nothing binds the range, and filling the array
+from the declared shape, or writing a shifted window, would be a guess this
+rule does not make. Value-invention outputs (a `skolem`, `distinct` or `rank`
+producer, or an arg-witness reducer) are materialized by their own engine and
+are outside this rule. CONFORMANCE_SPEC.md §5.36.2 gates both halves.
+
 **Parameters.** These four sets **partition** the parameters:
 
 | Function | Returns |
@@ -4339,6 +4363,7 @@ Bindings MUST emit the following stable diagnostic codes (cross-language uniform
 | `rewrite_rule_nonterminating` | The rewrite fixpoint did not converge within `MAX_REWRITE_PASSES` (64) passes (§9.6.3). |
 | `unlowered_operator` | A rewrite-target op (§4.2) reached evaluation/compilation without being lowered — no rule eliminated it. Fires before evaluation, not necessarily at load (loading is permissive). One uniform code superseding the former per-language spatial-op errors (`E_TREEWALK_UNREACHABLE_SPATIAL_OP` / `UnreachableSpatialOperatorError` / `UnsupportedDimensionalityError`). |
 | `unevaluable_operator` | An op that IS in the evaluable-core set (§4.2) reached an evaluator that has no evaluation rule for it. The complement of `unlowered_operator`, and the two are distinguished by which side of §4.2 the op falls on: `unlowered_operator` means the op is OUTSIDE evaluable-core and no rewrite rule eliminated it (the document is under-lowered), whereas `unevaluable_operator` means the op is INSIDE evaluable-core but *this* evaluator cannot produce a value for it — because an earlier pipeline stage (value invention, or a lowering pass) should have eliminated it, or because the document was built for a different runtime (a binding may legitimately offer more than one evaluator, e.g. a scalar ODE interpreter alongside a whole-array one, with different rule sets). Like `unlowered_operator` it fires BEFORE evaluation and MUST name the offending op. It is reported rather than evaluated to a NaN sentinel: a silent NaN is indistinguishable from a legitimate numerical result and would propagate into the solution. |
+| `indexed_definition_unsupported_form` | A bare-index definition of an observed, `index(V, k…) ~ rhs`, is not the runnable form of §6.3.1: `rhs` is not a `faq` whose `output_idx` names the subscripts in order, a subscript is not a plain symbol, or the subscript count disagrees with `V`'s declared rank. Raised when the model is built for simulation, naming `V`; running it would fill the array from a range nothing binds. |
 | `template_import_version_too_old` | File declares `esm` < 0.8.0 but carries `expression_template_imports`, top-level `expression_templates`, or `metaparameters` (§9.6.5). |
 | `template_import_unresolved` | An import `ref` failed to load or parse (reports path/URL and cause) (§9.7.2). |
 | `template_import_not_library` | Import target is not a pure template-library file (§9.7.1). |

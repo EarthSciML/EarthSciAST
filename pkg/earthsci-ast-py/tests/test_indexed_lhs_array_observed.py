@@ -40,6 +40,8 @@ import warnings
 import pytest
 
 from earthsci_ast.classification import is_observed_unknown, observed_unknowns
+from earthsci_ast.error_handling import INDEXED_DEFINITION_UNSUPPORTED_FORM
+from earthsci_ast.esm_types import ExprNode
 from earthsci_ast.flatten import _normalize_indexed_observed_lhs, flatten
 from earthsci_ast.parse import load_path
 from earthsci_ast.inline_tests import run_inline_tests
@@ -362,48 +364,71 @@ def test_the_indexed_spelling_still_routes_to_the_array_pathway(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# The BARE-INDEX LHS, which this normalizer does NOT handle, must FAIL LOUDLY
+# The BARE-INDEX LHS (issue #291): runs when a right-hand faq binds exactly its
+# subscripts, and is refused with a named code otherwise
 # --------------------------------------------------------------------------- #
 
-# w[k] ~ 5 — esm-spec §6.3.1's own worked-example spelling (`rg_src_bin[a] ~ …`),
-# with NO `aggregate` shell and so no `ranges` binding `k`.
-EQ_W_BARE_INDEX = {"lhs": _idx("w"), "rhs": 5.0}
+# w[k] ~ aggregate{k}(2*u[k]) — esm-spec §6.3.1's worked-example spelling
+# (`rg_src_bin[a] ~ …`): NO shell on the LHS, and the RHS faq binds `k`.
+EQ_W_BARE_INDEX = {"lhs": _idx("w"), "rhs": _agg({"op": "*", "args": [2.0, _idx("u")]})}
 
 
-def test_a_bare_index_lhs_is_refused_and_not_silently_integrated(tmp_path):
-    """No binding RUNS §6.3.1's bare-index arrayed definition yet (issue #291),
-    and the one thing that MUST hold until one does is that the document is
-    REFUSED rather than answered from a slot nothing wrote.
+def test_a_bare_index_lhs_with_a_binding_rhs_faq_runs_like_its_bare_twin(tmp_path):
+    """The runnable form of CONFORMANCE_SPEC §5.36.2. It used to fail with
+    ``Unresolved symbol: 'Column.w'``: the equation reached the ODE driver as an
+    unrecognized algebraic equation, and nothing ever materialized ``w``."""
+    bare_index = _actuals(tmp_path, "bi", [EQ_W_BARE_INDEX, EQ_D_INDEXED], ASSERT_U_AND_W)
+    bare = _actuals(tmp_path, "bib", [EQ_W_BARE, EQ_D_INDEXED], ASSERT_U_AND_W)
 
-    This binding used to warn ``unrecognized algebraic equation`` and return
-    ``0.0``, which grades a wrong document GREEN — an assertion expecting ``0.0``
-    passes on a value that was never computed. PR #290's §4.7.5 dual membership
-    closed that: the arrayed observed is no longer resolvable as a bare state
-    slot, so the solve fails outright and every assertion reports
-    ``actual=None``. Julia refuses the same document with
-    ``E_TREEWALK_UNSUPPORTED_SHAPE``.
+    assert bare_index["w"] == pytest.approx(2 * E2, rel=1e-6)
+    assert bare_index["w"] == pytest.approx(bare["w"], rel=1e-12)
+    assert bare_index["u"] == pytest.approx(bare["u"], rel=1e-12)
 
-    The two bindings still spell the refusal differently — Julia names the
-    unsupported SHAPE, this binding names the UNRESOLVED SYMBOL — because they
-    hit the wall at different phases. What is pinned here is the part that
-    matters and that both share: no pass, no actual, and the offending variable
-    named. Do not weaken this to a message match without checking Julia's.
 
-    The normalizer is deliberately not widened to cover the spelling: a bare
-    ``index`` LHS carries no ``ranges`` binder for ``i``, so the frame would have
-    to be inferred from the declared ``shape``, and that is a cross-binding
-    semantic decision. Widening it HERE would be doubly wrong — the rewrite
-    mutates the flattened ``equations`` list that the shared corpus compares
-    across all five bindings, and no other binding mutates it.
-    """
-    equations = [EQ_W_BARE_INDEX, EQ_D_INDEXED]
-    path = _write(tmp_path, _doc("bi", equations, ASSERT_U_AND_W), "bi.esm.json")
+def test_the_bare_index_lhs_stays_as_authored_in_the_flattened_equations(tmp_path):
+    """The shared flatten corpus compares the flattened ``equations`` across all
+    five bindings, so running the spelling must not rewrite it there."""
+    path = _write(tmp_path, _doc("bf", [EQ_W_BARE_INDEX, EQ_D_INDEXED], ASSERT_U), "bf.esm.json")
+    lhs = flatten(load_path(path)).equations[0].lhs
+
+    assert isinstance(lhs, ExprNode)
+    assert lhs.op == "index"
+
+
+@pytest.mark.parametrize(
+    "name,equation",
+    [
+        # A SCALAR RHS binds no range, so nothing says which cells it fills.
+        ("scalar_rhs", {"lhs": _idx("w"), "rhs": 5.0}),
+        # An OFFSET subscript writes a shifted window, not the whole array.
+        (
+            "offset_subscript",
+            {
+                "lhs": {"op": "index", "args": ["w", {"op": "+", "args": ["k", 1]}]},
+                "rhs": _agg({"op": "*", "args": [2.0, _idx("u")]}),
+            },
+        ),
+        # A subscript the RHS faq does not bind.
+        (
+            "unbound_subscript",
+            {"lhs": _idx("w", "j"), "rhs": _agg({"op": "*", "args": [2.0, _idx("u")]})},
+        ),
+    ],
+)
+def test_a_bare_index_lhs_outside_the_runnable_form_is_refused(tmp_path, name, equation):
+    """No pass, no actual, the ``indexed_definition_unsupported_form`` code, and
+    the offending variable named. Before this, every one of these failed with
+    ``Unresolved symbol`` and no code."""
+    path = _write(
+        tmp_path, _doc(name, [equation, EQ_D_INDEXED], ASSERT_U_AND_W), name + ".esm.json"
+    )
     results = run_inline_tests(path)
 
     assert results, "the document must still produce assertion results"
     for r in results:
         assert not r.passed
-        assert r.actual is None, "a refused document must report no actual, not 0.0"
+        assert r.actual is None, "a refused document must report no actual"
+        assert INDEXED_DEFINITION_UNSUPPORTED_FORM in (r.message or ""), r.message
         assert "Column.w" in (r.message or ""), (
             f"the refusal must name the offending variable: {r.message!r}"
         )
