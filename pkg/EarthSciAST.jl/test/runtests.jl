@@ -105,6 +105,9 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     # by-name endpoints of every coupling entry that has not run yet and onto a
     # runner's override keys (issue #230).
     include("merged_rename_reach_conformance_test.jl")
+    # A discrete event or an implicit equation is refused by the tree-walk
+    # evaluator with `unsupported_construct`, never run without it (issue #264).
+    include("unsupported_construct_conformance_test.jl")
     include("pointwise_lift_axis_names_test.jl")  # §10.5 lift axes by NAME, not by extent
     include("coupling_imports_test.jl")
     include("flattened_to_esm_test.jl")
