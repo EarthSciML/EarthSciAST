@@ -24,6 +24,7 @@ import {
 } from './op-registry.js'
 import { forEachComponent, forEachEquation } from './traverse.js'
 import { observedDefinitions } from './classification.js'
+import { ERROR_CODES } from './errors.js'
 
 export type { CanonicalDims, ParsedUnit } from './unit-conversion.js'
 
@@ -747,7 +748,7 @@ function addBinding(
   if (parsed === null) {
     warnings.push({
       message: `Unit string '${units}' is not a recognised unit`,
-      code: 'unparseable_unit',
+      code: ERROR_CODES.UNPARSEABLE_UNIT,
       // A JSON Pointer, because `validate()` promotes this finding to a
       // structural error and uses `location` verbatim as its `path`. It points
       // at the VARIABLE (`/models/M/variables/v`), which is where the shared
@@ -792,7 +793,7 @@ function checkAndReport(
   } catch (error) {
     warnings.push({
       message: `${errorContext}: ${error instanceof Error ? error.message : String(error)}`,
-      code: 'analysis',
+      code: ERROR_CODES.ANALYSIS,
       location,
     })
   }
@@ -830,7 +831,7 @@ function reportUnparseableVariableUnits(
     if (tryParseUnit(variable.units) !== null) continue
     warnings.push({
       message: `Unit string '${variable.units}' is not a recognised unit`,
-      code: 'unparseable_unit',
+      code: ERROR_CODES.UNPARSEABLE_UNIT,
       location: `${location}/variables/${name}`,
       variable: name,
       units: variable.units,
@@ -986,7 +987,7 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
               diagnostics,
               mismatch: {
                 message: derivMessage,
-                code: 'dimensional_mismatch',
+                code: ERROR_CODES.DIMENSIONAL_MISMATCH,
                 location: eqLocation,
                 equation: equationText(),
               },
@@ -1000,7 +1001,7 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
             lhs !== null && rhs !== null && !dimsEqual(lhs.dims, rhs.dims)
               ? {
                   message: `Dimensional mismatch in equation: LHS has ${formatDims(lhs.dims)}, RHS has ${formatDims(rhs.dims)}`,
-                  code: 'dimensional_mismatch',
+                  code: ERROR_CODES.DIMENSIONAL_MISMATCH,
                   location: eqLocation,
                   equation: equationText(),
                 }
@@ -1053,7 +1054,7 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
                   varDims !== null && exprDims !== null && !dimsEqual(exprDims.dims, varDims.dims)
                     ? {
                         message: `Dimensional mismatch in observed variable ${varName}: declared as ${formatDims(varDims.dims)}, expression evaluates to ${formatDims(exprDims.dims)}`,
-                        code: 'dimensional_mismatch',
+                        code: ERROR_CODES.DIMENSIONAL_MISMATCH,
                         location: varLocation,
                       }
                     : null

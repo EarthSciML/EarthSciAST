@@ -16,7 +16,7 @@
  */
 
 /** Stable diagnostic codes raised by the registry. */
-import { EsmDiagnosticError } from './errors.js'
+import { EsmDiagnosticError, ERROR_CODES } from './errors.js'
 
 export type ClosedFunctionErrorCode =
   | 'unknown_closed_function'
@@ -59,7 +59,7 @@ const INT32_MAX = 2147483647
 function checkInt32(name: string, v: number): number {
   if (!Number.isFinite(v) || v < INT32_MIN || v > INT32_MAX) {
     throw new ClosedFunctionError(
-      'closed_function_overflow',
+      ERROR_CODES.CLOSED_FUNCTION_OVERFLOW,
       `${name} result ${v} overflows signed 32-bit integer range`,
     )
   }
@@ -140,7 +140,7 @@ function julianDayValue(tUtc: number): number {
 function decomposeUtcSeconds(tUtc: number): DateParts {
   if (!Number.isFinite(tUtc)) {
     throw new ClosedFunctionError(
-      'closed_function_overflow',
+      ERROR_CODES.CLOSED_FUNCTION_OVERFLOW,
       `datetime input ${tUtc} is not a finite value`,
     )
   }
@@ -176,7 +176,7 @@ function decomposeUtcSeconds(tUtc: number): DateParts {
 function requireArity(name: string, args: unknown[], expected: number): void {
   if (args.length !== expected) {
     throw new ClosedFunctionError(
-      'closed_function_arity',
+      ERROR_CODES.CLOSED_FUNCTION_ARITY,
       `${name} expects ${expected} argument(s); got ${args.length}`,
     )
   }
@@ -185,7 +185,7 @@ function requireArity(name: string, args: unknown[], expected: number): void {
 function asNumber(name: string, v: unknown, idx = 0): number {
   if (typeof v === 'number') return v
   throw new ClosedFunctionError(
-    'closed_function_arity',
+    ERROR_CODES.CLOSED_FUNCTION_ARITY,
     `${name} argument #${idx + 1} must be a scalar number; got ${typeof v}`,
   )
 }
@@ -201,19 +201,19 @@ export function validateSearchsortedTable(
 ): void {
   if (xs.length === 0) {
     throw new ClosedFunctionError(
-      'closed_function_arity',
+      ERROR_CODES.CLOSED_FUNCTION_ARITY,
       `${where}: xs table is empty (must have at least one entry)`,
     )
   }
   for (let i = 0; i < xs.length; i++) {
     if (Number.isNaN(xs[i]!)) {
-      throw new ClosedFunctionError('searchsorted_nan_in_table', `${where}: xs[${i + 1}] is NaN`)
+      throw new ClosedFunctionError(ERROR_CODES.SEARCHSORTED_NAN_IN_TABLE, `${where}: xs[${i + 1}] is NaN`)
     }
   }
   for (let i = 1; i < xs.length; i++) {
     if (xs[i]! < xs[i - 1]!) {
       throw new ClosedFunctionError(
-        'searchsorted_non_monotonic',
+        ERROR_CODES.SEARCHSORTED_NON_MONOTONIC,
         `${where}: xs is not non-decreasing at index ${i + 1} (xs[${i + 1}]=${xs[i]} < xs[${i}]=${xs[i - 1]})`,
       )
     }
@@ -252,19 +252,19 @@ export function searchsortedFirst(x: number, xs: readonly number[]): number {
 export function validateInterpAxis(axis: readonly number[], where: string): void {
   if (axis.length < 2) {
     throw new ClosedFunctionError(
-      'interp_axis_too_short',
+      ERROR_CODES.INTERP_AXIS_TOO_SHORT,
       `${where}: axis has ${axis.length} entries (must have at least 2)`,
     )
   }
   for (let i = 0; i < axis.length; i++) {
     if (Number.isNaN(axis[i]!)) {
-      throw new ClosedFunctionError('interp_nan_in_axis', `${where}: axis[${i + 1}] is NaN`)
+      throw new ClosedFunctionError(ERROR_CODES.INTERP_NAN_IN_AXIS, `${where}: axis[${i + 1}] is NaN`)
     }
   }
   for (let i = 1; i < axis.length; i++) {
     if (axis[i]! <= axis[i - 1]!) {
       throw new ClosedFunctionError(
-        'interp_non_monotonic_axis',
+        ERROR_CODES.INTERP_NON_MONOTONIC_AXIS,
         `${where}: axis is not strictly increasing at index ${i + 1} (axis[${i + 1}]=${axis[i]} ≤ axis[${i}]=${axis[i - 1]})`,
       )
     }
@@ -297,7 +297,7 @@ function asNumberMatrix(name: string, v: unknown): number[][] {
     !v.every((row) => Array.isArray(row) && row.every((e) => typeof e === 'number'))
   ) {
     throw new ClosedFunctionError(
-      'interp_table_not_const',
+      ERROR_CODES.INTERP_TABLE_NOT_CONST,
       `${name}: table must be a const-array of const-arrays of numbers`,
     )
   }
@@ -315,7 +315,7 @@ function asNumberMatrix(name: string, v: unknown): number[][] {
 export function interpLinear(table: readonly number[], axis: readonly number[], x: number): number {
   if (table.length !== axis.length) {
     throw new ClosedFunctionError(
-      'interp_axis_length_mismatch',
+      ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
       `interp.linear: len(table)=${table.length} != len(axis)=${axis.length}`,
     )
   }
@@ -355,14 +355,14 @@ export function interpBilinear(
   const ny = axisY.length
   if (table.length !== nx) {
     throw new ClosedFunctionError(
-      'interp_axis_length_mismatch',
+      ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
       `interp.bilinear: outer len(table)=${table.length} != len(axis_x)=${nx}`,
     )
   }
   for (let r = 0; r < table.length; r++) {
     if (table[r]!.length !== ny) {
       throw new ClosedFunctionError(
-        'interp_axis_length_mismatch',
+        ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
         `interp.bilinear: table row ${r + 1} has length ${table[r]!.length}, expected len(axis_y)=${ny}`,
       )
     }
@@ -473,21 +473,21 @@ const CLOSED_FUNCTION_DISPATCH: Record<string, ClosedFunctionHandler> = {
     // searchsorted's xs predates the interp_* codes and is spec-pinned to the
     // arity diagnostic (esm-spec §9.2); pass it explicitly through the shared
     // const-array helper so the code lives at one call site.
-    const xs = asNumberArray(name, args[1], 'xs (arg 2)', 'closed_function_arity')
+    const xs = asNumberArray(name, args[1], 'xs (arg 2)', ERROR_CODES.CLOSED_FUNCTION_ARITY)
     return searchsortedFirst(x, xs)
   },
   'interp.linear': (name, args) => {
     requireArity(name, args, 3)
-    const table = asNumberArray(name, args[0], 'table', 'interp_table_not_const')
-    const axis = asNumberArray(name, args[1], 'axis', 'interp_axis_not_const')
+    const table = asNumberArray(name, args[0], 'table', ERROR_CODES.INTERP_TABLE_NOT_CONST)
+    const axis = asNumberArray(name, args[1], 'axis', ERROR_CODES.INTERP_AXIS_NOT_CONST)
     const x = asNumber(name, args[2], 2)
     return interpLinear(table, axis, x)
   },
   'interp.bilinear': (name, args) => {
     requireArity(name, args, 5)
     const table = asNumberMatrix(name, args[0])
-    const axisX = asNumberArray(name, args[1], 'axis_x', 'interp_axis_not_const')
-    const axisY = asNumberArray(name, args[2], 'axis_y', 'interp_axis_not_const')
+    const axisX = asNumberArray(name, args[1], 'axis_x', ERROR_CODES.INTERP_AXIS_NOT_CONST)
+    const axisY = asNumberArray(name, args[2], 'axis_y', ERROR_CODES.INTERP_AXIS_NOT_CONST)
     const x = asNumber(name, args[3], 3)
     const y = asNumber(name, args[4], 4)
     return interpBilinear(table, axisX, axisY, x, y)
@@ -525,7 +525,7 @@ export function dispatchClosedFunction(name: string, args: unknown[]): number {
   const handler = CLOSED_FUNCTION_DISPATCH[name]
   if (!handler) {
     throw new ClosedFunctionError(
-      'unknown_closed_function',
+      ERROR_CODES.UNKNOWN_CLOSED_FUNCTION,
       `'${name}' is not in the v0.3.0 closed function registry`,
     )
   }

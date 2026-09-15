@@ -340,6 +340,28 @@ export const ERROR_CODES = {
   UNKNOWN_CLOSED_FUNCTION: 'unknown_closed_function',
   CLOSED_FUNCTION_ARITY: 'closed_function_arity',
   CLOSED_FUNCTION_OVERFLOW: 'closed_function_overflow',
+  INTERP_AXIS_LENGTH_MISMATCH: 'interp_axis_length_mismatch',
+  INTERP_AXIS_NOT_CONST: 'interp_axis_not_const',
+  INTERP_AXIS_TOO_SHORT: 'interp_axis_too_short',
+  INTERP_NAN_IN_AXIS: 'interp_nan_in_axis',
+  INTERP_NON_MONOTONIC_AXIS: 'interp_non_monotonic_axis',
+  INTERP_TABLE_NOT_CONST: 'interp_table_not_const',
+  SEARCHSORTED_NAN_IN_TABLE: 'searchsorted_nan_in_table',
+  SEARCHSORTED_NON_MONOTONIC: 'searchsorted_non_monotonic',
+  // ---- evaluation: the tree-walking evaluator (codegen.ts; raised as
+  //      UnloweredOperatorError / EvaluatorError). `unlowered_operator` is the
+  //      esm-spec §9.6.6 code; the rest are this runner's evaluator codes. ----
+  CONST_NOT_SCALAR: 'const_not_scalar',
+  ENUM_NOT_LOWERED: 'enum_not_lowered',
+  FN_MISSING_NAME: 'fn_missing_name',
+  INVALID_EXPRESSION: 'invalid_expression',
+  UNBOUND_VARIABLE: 'unbound_variable',
+  UNLOWERED_OPERATOR: 'unlowered_operator',
+  UNSUPPORTED_OPERATOR: 'unsupported_operator',
+  // ---- flatten: FlattenError and its subclasses (flatten.ts) ----
+  CONFLICTING_DERIVATIVE: 'conflicting_derivative',
+  DIMENSION_PROMOTION: 'dimension_promotion',
+  FLATTEN_ERROR: 'flatten_error',
 } as const
 
 /** A diagnostic code string from {@link ERROR_CODES}. */

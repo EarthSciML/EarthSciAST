@@ -25,7 +25,7 @@
 import type { EsmFile } from './types.js'
 import { isNumericLiteral } from './numeric-literal.js'
 import { EXPRESSION_CHILD_KEYS } from './expression.js'
-import { EsmDiagnosticError } from './errors.js'
+import { EsmDiagnosticError, ERROR_CODES } from './errors.js'
 
 /** Shared source of truth for "which op fields carry child expressions". */
 const EXPRESSION_CHILD_KEY_SET: ReadonlySet<string> = new Set(EXPRESSION_CHILD_KEYS)
@@ -83,7 +83,7 @@ function lowerExprUncached(expr: object, enums: EnumsMap, memo: Map<object, unkn
         typeof args[1] !== 'string'
       ) {
         throw new EnumLoweringError(
-          'enum_op_malformed',
+          ERROR_CODES.ENUM_OP_MALFORMED,
           `enum op requires args = [enum_name, member_name] (two strings); got ${JSON.stringify(args)}`,
         )
       }
@@ -91,13 +91,13 @@ function lowerExprUncached(expr: object, enums: EnumsMap, memo: Map<object, unkn
       const decl = enums[enumName]
       if (!decl) {
         throw new EnumLoweringError(
-          'enum_not_declared',
+          ERROR_CODES.ENUM_NOT_DECLARED,
           `enum '${enumName}' is referenced by an 'enum' op but not declared in the file's top-level 'enums' block`,
         )
       }
       if (!Object.prototype.hasOwnProperty.call(decl, memberName)) {
         throw new EnumLoweringError(
-          'enum_member_not_found',
+          ERROR_CODES.ENUM_MEMBER_NOT_FOUND,
           `enum '${enumName}' has no member '${memberName}'`,
         )
       }
