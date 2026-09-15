@@ -362,6 +362,10 @@ export const ERROR_CODES = {
   CONFLICTING_DERIVATIVE: 'conflicting_derivative',
   DIMENSION_PROMOTION: 'dimension_promotion',
   FLATTEN_ERROR: 'flatten_error',
+
+  // ---- evaluator: an evaluable-core op with no scalar rule (codegen.ts;
+  //      UnevaluableOperatorError, esm-spec §9.6.6) ----
+  UNEVALUABLE_OPERATOR: 'unevaluable_operator',
 } as const
 
 /** A diagnostic code string from {@link ERROR_CODES}. */

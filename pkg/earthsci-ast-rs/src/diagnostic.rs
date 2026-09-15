@@ -405,6 +405,10 @@ diagnostic_code_registry! {
     UNDEFINED_SYSTEM = "undefined_system";
     /// A reference to a variable the component does not declare.
     UNDEFINED_VARIABLE = "undefined_variable";
+    /// An evaluable-core op (esm-spec §4.2) with no evaluation rule in the
+    /// evaluator a model was built for (esm-spec §9.6.6). Carried by
+    /// `CompileError::UnevaluableOperatorError`.
+    UNEVALUABLE_OPERATOR = "unevaluable_operator";
     /// A scoped reference (`A.b`) that resolves to nothing.
     UNRESOLVED_SCOPED_REF = "unresolved_scoped_ref";
 
@@ -603,6 +607,7 @@ mod error_code_tests {
             "undefined_species",
             "undefined_system",
             "undefined_variable",
+            "unevaluable_operator",
             "unit_inconsistency",
             "unit_parse_error",
             "unknown_closed_function",

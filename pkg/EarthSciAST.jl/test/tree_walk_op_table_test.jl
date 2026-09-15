@@ -63,13 +63,13 @@ end
 # unsupported-op arm (a DomainError or arity error would still prove the arm
 # exists, but the chosen arguments avoid those anyway).
 function _ot_scalar_supported(op::String)
-    node = _ot_node(op)
     try
+        node = _ot_node(op)
         v = ESM._eval_node(node, Float64[], NamedTuple(), 0.0)
         return v isa Float64
     catch err
         if err isa ESM.TreeWalkError
-            return err.code != "E_TREEWALK_UNSUPPORTED_OP"
+            return err.code != "unevaluable_operator"
         end
         rethrow()
     end
@@ -86,15 +86,15 @@ function _ot_acc_kernel(op::String)
                           ESM._FixedBound(0), 0.0)
 end
 function _ot_vector_supported(op::String)
-    K = _ot_acc_kernel(op)
     du = zeros(2)
     try
+        K = _ot_acc_kernel(op)
         ESM._run_acc_kernel!(du, Float64[], NamedTuple(), 0.0, K)
         return true
     catch err
         if err isa ESM.TreeWalkError
             return !(err.code in ("E_TREEWALK_ACC_UNSUPPORTED_OP",
-                                  "E_TREEWALK_UNSUPPORTED_OP"))
+                                  "unevaluable_operator"))
         end
         rethrow()
     end
