@@ -316,8 +316,8 @@ export const ERROR_CODES = {
   // ---- enums: §9.3 load-time enum lowering (lower-enums.ts;
   //      EnumLoweringError codes) ----
   ENUM_OP_MALFORMED: 'enum_op_malformed',
-  ENUM_NOT_DECLARED: 'enum_not_declared',
-  ENUM_MEMBER_NOT_FOUND: 'enum_member_not_found',
+  UNKNOWN_ENUM: 'unknown_enum',
+  UNKNOWN_ENUM_SYMBOL: 'unknown_enum_symbol',
 
   // ---- function tables: §9.5.3 `table_lookup` lowering (lower-table-lookups.ts;
   //      TableLookupLoweringError codes, named by esm-spec §9.5.5) ----

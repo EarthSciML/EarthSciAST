@@ -534,6 +534,62 @@ class EnumLoweringError(EarthSciAstError, ValueError):
         self.message = message
 
 
+def lower_enum_ops_for_file(
+    document: Any, target: Any, open_names: frozenset[str] | set[str] = frozenset()
+) -> Any:
+    """Return raw-JSON ``target`` with its ``enum`` ops lowered against the
+    ``enums`` block of ``document``, the file that wrote ``target``.
+
+    An ``enum`` op is file-local (esm-spec §9.3): it resolves against the block
+    of the file it is written in. :func:`lower_enums` runs once over the root
+    document, so a tree that crosses a file boundary before that pass (a
+    template-library body reaching an importer, §9.7.5) is lowered here, at the
+    edge, while its own file's block is still at hand.
+
+    An op with an argument spelled by a name in ``open_names`` is left in place:
+    a template parameter substitutes position-blind (§9.6.3 constraint 5), so
+    the call site decides what it spells and the op resolves there. An op whose
+    arguments are not two strings is left for :func:`lower_enums`.
+
+    Raises :class:`EnumLoweringError` (``unknown_enum`` /
+    ``unknown_enum_symbol``). ``target`` is not modified.
+    """
+    enums = document.get("enums") if isinstance(document, dict) else None
+    if not isinstance(enums, dict):
+        enums = {}
+
+    def walk(node: Any) -> Any:
+        if isinstance(node, list):
+            return [walk(v) for v in node]
+        if not isinstance(node, dict):
+            return node
+        if node.get("op") == "enum":
+            args = node.get("args")
+            if (
+                not isinstance(args, list)
+                or len(args) != 2
+                or not all(isinstance(a, str) for a in args)
+                or any(a in open_names for a in args)
+            ):
+                return node
+            enum_name, symbol = args
+            mapping = enums.get(enum_name)
+            if not isinstance(mapping, dict):
+                raise EnumLoweringError(
+                    UNKNOWN_ENUM,
+                    f"enum `{enum_name}` is not declared in the file's `enums` block",
+                )
+            if symbol not in mapping:
+                raise EnumLoweringError(
+                    UNKNOWN_ENUM_SYMBOL,
+                    f"symbol `{symbol}` is not declared under enum `{enum_name}`",
+                )
+            return {"op": "const", "args": [], "value": mapping[symbol]}
+        return {k: walk(v) for k, v in node.items()}
+
+    return walk(target)
+
+
 def lower_enums(file: EsmFile) -> EsmFile:
     """Return ``file`` with every ``enum`` op replaced by a ``const`` integer
     per the file's ``enums`` block (esm-spec §9.3).

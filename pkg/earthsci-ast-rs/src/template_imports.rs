@@ -2085,6 +2085,9 @@ fn process_library(
         }
     }
     validate_templates(&own, origin)?;
+    for (n, d) in own.iter_mut() {
+        lower_library_template_enums(raw, n, d, origin)?;
+    }
     for (n, d) in own {
         merge_named(
             &mut scope.templates,
@@ -2124,6 +2127,40 @@ fn process_library(
     // downstream `only` filtering can hide a referenced template.
     validate_template_body_references(&scope.templates, origin)?;
     Ok(scope)
+}
+
+/// Lower the `enum` ops in one of a template library's OWN template bodies
+/// against the library's `enums` block (esm-spec §9.3), before the template
+/// reaches an importer whose block is a different one. An op spelled with one
+/// of the template's `params` stays open and resolves at the call site.
+fn lower_library_template_enums(
+    library: &Value,
+    name: &str,
+    decl: &mut Value,
+    origin: &str,
+) -> Result<(), ExpressionTemplateError> {
+    let params: HashSet<String> = decl
+        .get("params")
+        .and_then(|p| p.as_array())
+        .map(|ps| {
+            ps.iter()
+                .filter_map(|p| p.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    let Some(body) = decl.get_mut("body") else {
+        return Ok(());
+    };
+    crate::lower_enums::lower_enum_ops_for_file(library, body, &params).map_err(|e| {
+        err(
+            e.code,
+            format!(
+                "{origin}: template '{name}': {} — an `enum` op in a template library \
+                 resolves against that library's own `enums` block (esm-spec §9.3)",
+                e.message
+            ),
+        )
+    })
 }
 
 // ---------------------------------------------------------------------------

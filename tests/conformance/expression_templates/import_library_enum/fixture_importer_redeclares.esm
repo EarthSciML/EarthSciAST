@@ -1,0 +1,44 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "library_enum_importer_redeclares",
+    "description": "The importer declares an enum of the same name as the library's (lib.esm) with a DIFFERENT value for `g_per_hp_hr` (7, where the library says 1). Enums are file-local (esm-spec §9.3): the imported template body keeps the library's 1, while the importer's own `enum` ops, including one it binds into the template's parameter, resolve against the importer's 7."
+  },
+  "enums": {
+    "activity_unit": { "g_per_hp_hr": 7, "g_per_gallon": 2 }
+  },
+  "models": {
+    "Consumer": {
+      "expression_template_imports": [{ "ref": "./lib.esm" }],
+      "variables": {
+        "isPerHorsepowerHour": { "type": "unknown", "units": "1" },
+        "importerCode": { "type": "unknown", "units": "1" },
+        "callerBoundCode": { "type": "unknown", "units": "1" }
+      },
+      "equations": [
+        {
+          "lhs": "isPerHorsepowerHour",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "is_rate_per_horsepower_hour",
+            "bindings": { "unit_code": 1 }
+          }
+        },
+        {
+          "lhs": "importerCode",
+          "rhs": { "op": "enum", "args": ["activity_unit", "g_per_hp_hr"] }
+        },
+        {
+          "lhs": "callerBoundCode",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "is_rate_per_horsepower_hour",
+            "bindings": { "unit_code": { "op": "enum", "args": ["activity_unit", "g_per_hp_hr"] } }
+          }
+        }
+      ]
+    }
+  }
+}

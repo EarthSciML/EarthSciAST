@@ -258,6 +258,42 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         @test code == "template_constraint_unknown_index_set"
     end
 
+    @testset "import_library_enum: a library's enum ops resolve in the library's block (§9.3)" begin
+        @test _expand_raw(conf("import_library_enum", "fixture.esm")) ==
+              _golden(conf("import_library_enum", "expanded.esm"))
+        @test _expand_raw(conf("import_library_enum", "fixture_importer_redeclares.esm")) ==
+              _golden(conf("import_library_enum", "expanded_importer_redeclares.esm"))
+        # The importer's same-name enum (g_per_hp_hr = 7) does not reach the
+        # library body, which keeps the library's 1; the importer's own enum ops,
+        # including one bound into the template's parameter, resolve against 7.
+        doc = _normj(serialize_esm_file(EarthSciAST.load_path(
+            conf("import_library_enum", "fixture_importer_redeclares.esm"))))
+        library_body = _defrhs(doc, "Consumer", "isPerHorsepowerHour")
+        @test library_body["op"] == "=="
+        @test library_body["args"][2]["op"] == "const"
+        @test library_body["args"][2]["value"] == 1
+        @test _defrhs(doc, "Consumer", "importerCode")["value"] == 7
+        caller_bound = _defrhs(doc, "Consumer", "callerBoundCode")
+        @test caller_bound["args"][1]["value"] == 7
+        @test caller_bound["args"][2]["value"] == 1
+    end
+
+    @testset "import_library_enum_undeclared: unknown_enum reported against the library (§9.3)" begin
+        for fixture in ("fixture.esm", "fixture_importer_declares.esm")
+            err = try
+                EarthSciAST.load_path(conf("import_library_enum_undeclared", fixture))
+                nothing
+            catch e
+                e
+            end
+            @test err isa ExpressionTemplateError
+            err isa ExpressionTemplateError || continue
+            @test err.code == "unknown_enum"
+            @test occursin("lib.esm", err.message)
+            @test occursin("plus_horsepower_code", err.message)
+        end
+    end
+
     @testset "import_rebind_keyed_factors: MPAS-style free-name rebinding (§9.7.7)" begin
         @test _expand_raw(conf("import_rebind_keyed_factors", "fixture.esm")) ==
               _golden(conf("import_rebind_keyed_factors", "expanded.esm"))

@@ -1,0 +1,19 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "activity_unit_library",
+    "description": "Template library that declares an `enums` block and names one of its members inside its own template body. Per esm-spec §9.3 the `enum` op resolves against THIS file's block, at the import edge, whatever the importer declares."
+  },
+  "enums": {
+    "activity_unit": { "g_per_hp_hr": 1, "g_per_gallon": 2 }
+  },
+  "expression_templates": {
+    "is_rate_per_horsepower_hour": {
+      "params": ["unit_code"],
+      "body": {
+        "op": "==",
+        "args": ["unit_code", { "op": "enum", "args": ["activity_unit", "g_per_hp_hr"] }]
+      }
+    }
+  }
+}

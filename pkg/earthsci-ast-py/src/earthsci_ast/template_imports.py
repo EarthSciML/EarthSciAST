@@ -1478,6 +1478,8 @@ def _process_library(raw: Any, base_dir: str, stack: list[str], origin: str) -> 
 
     _validate_templates(own, origin)
     for n, d in own.items():
+        _lower_library_template_enums(raw, n, d, origin)
+    for n, d in own.items():
         _merge_named(scope.templates, n, d, TEMPLATE_IMPORT_NAME_CONFLICT, "template", origin)
 
     isets = raw.get("index_sets")
@@ -1499,6 +1501,29 @@ def _process_library(raw: Any, base_dir: str, stack: list[str], origin: str) -> 
     # mutated in place, so scope.templates sees the closed bodies).
     _compose_template_bodies(scope.templates, origin)
     return scope
+
+
+def _lower_library_template_enums(library: Any, name: str, decl: Any, origin: str) -> None:
+    """Lower the ``enum`` ops in one of a template library's OWN template bodies
+    against the library's ``enums`` block (esm-spec §9.3), before the template
+    reaches an importer whose block is a different one. An op spelled with one
+    of the template's ``params`` stays open and resolves at the call site."""
+    if not _is_object(decl) or "body" not in decl:
+        return
+    params = decl.get("params")
+    open_names = (
+        frozenset(p for p in params if isinstance(p, str)) if _is_array(params) else frozenset()
+    )
+    from .registered_functions import EnumLoweringError, lower_enum_ops_for_file
+
+    try:
+        decl["body"] = lower_enum_ops_for_file(library, decl["body"], open_names)
+    except EnumLoweringError as e:
+        raise ExpressionTemplateError(
+            e.code,
+            f"{origin}: template '{name}': {e.message} — an `enum` op in a template "
+            "library resolves against that library's own `enums` block (esm-spec §9.3)",
+        ) from e
 
 
 # ---------------------------------------------------------------------------

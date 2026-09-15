@@ -1392,7 +1392,14 @@ function _process_library(raw, dir::String, stack::Vector{String},
         end
     end
 
-    _merge_own_templates!(scope.templates, raw, origin)
+    own = _collect_own_templates(raw, origin)
+    for (n, d) in own
+        own[n] = _lower_library_template_enums(raw, n, d, origin)
+    end
+    for (n, d) in own
+        _merge_named!(scope.templates, n, d, ERROR_CODES.TEMPLATE_IMPORT_NAME_CONFLICT,
+                      "template", origin)
+    end
 
     isets = _raw_get(raw, "index_sets")
     if isets !== nothing && _is_object(isets)
@@ -1410,6 +1417,28 @@ function _process_library(raw, dir::String, stack::Vector{String},
     # §9.7.3 body-reference DAG validation in the library's own scope.
     _compose_template_bodies!(scope.templates, origin)
     return scope
+end
+
+# Lower the `enum` ops in one of a template library's OWN template bodies
+# against the library's `enums` block (esm-spec §9.3), before the template
+# reaches an importer whose block is a different one. An op spelled with one of
+# the template's `params` stays open and resolves at the call site.
+function _lower_library_template_enums(library, name::String, decl, origin::String)
+    (_is_object(decl) && _raw_haskey(decl, "body")) || return decl
+    params_raw = _raw_get(decl, "params")
+    params = Set{String}(String(p) for p in
+        (params_raw !== nothing && _is_array(params_raw) ? params_raw : Any[])
+        if p isa AbstractString)
+    body = try
+        _lower_enum_ops_for_file(library, _raw_get(decl, "body"), params)
+    catch e
+        e isa EnumLoweringError || rethrow()
+        throw(ExpressionTemplateError(e.code,
+            "$origin: template '$name': $(e.message) — an `enum` op in a template " *
+            "library resolves against that library's own `enums` block (esm-spec §9.3)"))
+    end
+    decl["body"] = body
+    return decl
 end
 
 # ---------------------------------------------------------------------------

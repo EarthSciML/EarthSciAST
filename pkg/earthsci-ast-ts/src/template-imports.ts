@@ -42,6 +42,7 @@ import {
   rejectExpressionTemplatesPreV04,
   validateTemplates,
 } from './lower-expression-templates.js'
+import { EnumLoweringError, lowerEnumOpsForFile } from './lower-enums.js'
 import { isNumericLiteral } from './numeric-literal.js'
 import { deepClone, isObject } from './object-utils.js'
 import { isRemoteRef, normalizeRef, readFileSyncNode } from './path-utils.js'
@@ -1532,6 +1533,7 @@ function buildScope(
   origin: string,
   opts: TemplateResolveOptions,
   cloneOwn: boolean,
+  transformOwn?: (name: string, decl: unknown) => unknown,
 ): TemplateScope {
   const scope = newScope()
   if (Array.isArray(imports)) {
@@ -1548,6 +1550,9 @@ function buildScope(
     }
   }
   validateTemplates(own as TemplatesArg, origin)
+  if (transformOwn) {
+    for (const n of Object.keys(own)) own[n] = transformOwn(n, own[n])
+  }
   for (const [n, d] of Object.entries(own)) {
     mergeNamed(scope.templates, n, d, ERROR_CODES.TEMPLATE_IMPORT_NAME_CONFLICT, 'template', origin)
   }
@@ -1571,7 +1576,9 @@ function processLibrary(
 ): TemplateScope {
   const importsRaw = isObject(raw) ? raw.expression_template_imports : undefined
   const ownRaw = isObject(raw) ? raw.expression_templates : undefined
-  const scope = buildScope(importsRaw, ownRaw, dir, stack, origin, opts, true)
+  const scope = buildScope(importsRaw, ownRaw, dir, stack, origin, opts, true, (name, decl) =>
+    lowerLibraryTemplateEnums(raw, name, decl, origin),
+  )
 
   if (isObject(raw) && isObject(raw.index_sets)) {
     for (const [n, d] of Object.entries(raw.index_sets)) {
@@ -1601,6 +1608,33 @@ function processLibrary(
   // mutated in place, so scope.templates sees the closed bodies).
   composeTemplateBodies(scope.templates as TemplatesArg, origin)
   return scope
+}
+
+/**
+ * Lower the `enum` ops in one of a template library's OWN template bodies
+ * against the library's `enums` block (esm-spec §9.3), before the template
+ * reaches an importer whose block is a different one. An op spelled with one
+ * of the template's `params` stays open and resolves at the call site.
+ */
+function lowerLibraryTemplateEnums(
+  library: unknown,
+  name: string,
+  decl: unknown,
+  origin: string,
+): unknown {
+  if (!isObject(decl) || !('body' in decl)) return decl
+  const params = Array.isArray(decl.params)
+    ? decl.params.filter((p): p is string => typeof p === 'string')
+    : []
+  try {
+    return { ...decl, body: lowerEnumOpsForFile(library, decl.body, new Set(params)) }
+  } catch (e) {
+    if (!(e instanceof EnumLoweringError)) throw e
+    throw new EsmMachineryError(
+      e.code,
+      `${origin}: template '${name}': ${e.message} — an \`enum\` op in a template library resolves against that library's own \`enums\` block (esm-spec §9.3)`,
+    )
+  }
 }
 
 // ---------------------------------------------------------------------------

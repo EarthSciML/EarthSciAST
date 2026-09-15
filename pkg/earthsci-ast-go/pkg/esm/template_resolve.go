@@ -397,6 +397,9 @@ func processLibrary(view map[string]any, fileOrders map[string][]string,
 	}
 
 	tpl, _ := view["expression_templates"].(map[string]any)
+	if err := lowerLibraryTemplateEnums(view, tpl, origin); err != nil {
+		return nil, err
+	}
 	if err := mergeOwnTemplates(scope, tpl, fileOrders["/expression_templates"], origin); err != nil {
 		return nil, err
 	}
@@ -427,6 +430,47 @@ func processLibrary(view map[string]any, fileOrders map[string][]string,
 		return nil, err
 	}
 	return scope, nil
+}
+
+// lowerLibraryTemplateEnums lowers the `enum` ops in a template library's OWN
+// template bodies (tpl, IN PLACE) against the library's `enums` block
+// (esm-spec §9.3), before the templates reach an importer whose block is a
+// different one. An op spelled with one of a template's `params` stays open and
+// resolves at the call site.
+func lowerLibraryTemplateEnums(library, tpl map[string]any, origin string) error {
+	if tpl == nil {
+		return nil
+	}
+	if err := validateTemplates(tpl, origin); err != nil {
+		return err
+	}
+	for _, name := range sortedKeys(tpl) {
+		decl, ok := tpl[name].(map[string]any)
+		if !ok {
+			continue
+		}
+		body, has := decl["body"]
+		if !has {
+			continue
+		}
+		open := map[string]bool{}
+		if params, ok := decl["params"].([]any); ok {
+			for _, p := range params {
+				if s, ok := p.(string); ok {
+					open[s] = true
+				}
+			}
+		}
+		lowered, err := lowerEnumOpsForFile(library, body, open)
+		if err != nil {
+			if le, ok := err.(*EnumLoweringError); ok {
+				return newETErr(le.Code, fmt.Sprintf("%s: template '%s': %s — an `enum` op in a template library resolves against that library's own `enums` block (esm-spec §9.3)", origin, name, le.Message))
+			}
+			return err
+		}
+		decl["body"] = lowered
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------

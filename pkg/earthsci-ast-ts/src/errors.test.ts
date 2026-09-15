@@ -32,7 +32,8 @@ describe('ERROR_CODES', () => {
     expect(ERROR_CODES.TEMPLATE_IMPORT_CYCLE).toBe('template_import_cycle')
     expect(ERROR_CODES.COUPLING_IMPORT_UNRESOLVED).toBe('coupling_import_unresolved')
     expect(ERROR_CODES.UNKNOWN_CLOSED_FUNCTION).toBe('unknown_closed_function')
-    expect(ERROR_CODES.ENUM_MEMBER_NOT_FOUND).toBe('enum_member_not_found')
+    expect(ERROR_CODES.UNKNOWN_ENUM).toBe('unknown_enum')
+    expect(ERROR_CODES.UNKNOWN_ENUM_SYMBOL).toBe('unknown_enum_symbol')
   })
 })
 

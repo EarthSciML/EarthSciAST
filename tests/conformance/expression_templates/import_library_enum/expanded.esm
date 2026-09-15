@@ -1,0 +1,33 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "description": "Imports a template whose body names an enum member declared only in the library (lib.esm). The importer declares no `enums` block and must still load: the library's `enum` op resolves against the library's own block (esm-spec §9.3).",
+    "name": "library_enum_importer"
+  },
+  "models": {
+    "Consumer": {
+      "equations": [
+        {
+          "lhs": "isPerHorsepowerHour",
+          "rhs": {
+            "args": [
+              1,
+              {
+                "args": [],
+                "op": "const",
+                "value": 1
+              }
+            ],
+            "op": "=="
+          }
+        }
+      ],
+      "variables": {
+        "isPerHorsepowerHour": {
+          "type": "unknown",
+          "units": "1"
+        }
+      }
+    }
+  }
+}

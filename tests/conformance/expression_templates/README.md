@@ -295,6 +295,28 @@ everything recorded at `ESM_COMPLIANCE_VALIDATION_MATRIX.md` EXPR-09-E-008 — G
 alone substituted `dim`, the other four alone substituted `op` / `id` /
 `expect_cadence`, and all five substituted the registry fields.
 
+### `import_library_enum/` (expanded.esm, expanded_importer_redeclares.esm)
+
+Enums across a template import (esm-spec §9.3, §9.7.5). `lib.esm` declares
+`activity_unit` and names `activity_unit.g_per_hp_hr` inside its template body.
+An `enum` op resolves against the block of the file that wrote it, so the op is
+lowered at the import edge against the LIBRARY's block, and the goldens carry it
+as `{op: const, value: 1}`. `fixture.esm` declares no `enums` and still loads.
+`fixture_importer_redeclares.esm` declares `activity_unit` itself with
+`g_per_hp_hr = 7`: the library's template still computes with 1, while the
+importer's own `enum` ops (a bare one, and one bound into the template's
+`unit_code` parameter) stay `enum` ops in the golden and lower to 7 against the
+importer's block at typed load. Each binding's suite pins those three typed
+values beside the golden.
+
+### `import_library_enum_undeclared/` (error.json, `unknown_enum`, load)
+
+The library's body names `activity_unit`, which the library does not declare.
+Rejected at the import edge with `unknown_enum`, and the message names the
+library file and the template (`plus_horsepower_code`). `fixture.esm` declares
+the enum nowhere; `fixture_importer_declares.esm` declares it in the importer,
+which does not rescue the library.
+
 ## Flatten-time registry merge (esm-spec §9.6.4 rule 7 / §10.7)
 
 Every fixture here is consumed through the shared `flatten_template_registries`
