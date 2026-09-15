@@ -1268,6 +1268,7 @@ function _walk_aggregates!(errors::Vector{StructuralError}, file::EsmFile,
     isa(expr, OpExpr) || return errors
     if expr.op == "faq"
         _check_undefined_index_set!(errors, expr, anchor, registry)
+        _check_ragged_values_gathered!(errors, file, expr, anchor)
         _check_join_key_type!(errors, file, expr, anchor)
         _check_join_sides!(errors, expr, anchor, var_shapes)
         _check_relational_in_continuous!(errors, expr, anchor, state_vars)
@@ -1313,7 +1314,70 @@ function _check_undefined_index_set!(errors::Vector{StructuralError}, agg::OpExp
     return errors
 end
 
+# Body ops that make a `faq` a value-invention node. Over such a node a ragged
+# range binds the MEMBER `values[parent, k]` itself (esm-spec §4.3.1 "Ragged
+# ranges"), so its `values` gather is implicit rather than authored.
+const _VALUE_INVENTION_BODY_OPS = ("skolem", "rank", "distinct", "argmin", "argmax")
+
+function _is_value_invention_faq(agg::OpExpr)
+    agg.distinct === true && return true
+    agg.key isa OpExpr && agg.key.op == "skolem" && return true
+    return agg.expr_body isa OpExpr && agg.expr_body.op in _VALUE_INVENTION_BODY_OPS
+end
+
+# Whether `expr` holds a surviving `apply_expression_template` reference
+# (esm-spec §9.6.4), whose body a static walk of this document cannot see.
+function _contains_template_reference(expr::ASTExpr)
+    found = false
+    foreach_subexpr_once(expr) do e
+        e isa OpExpr && e.op == "apply_expression_template" && (found = true)
+        nothing
+    end
+    return found
+end
+
+# esm-spec §4.3.1 "Ragged ranges" (issue #259): a range over a `kind: "ragged"`
+# index set binds the POSITION k in 1..offsets[parent], never a member, so a
+# body (`expr` / `filter`) that never reads the set's `values` array reads
+# positions where the author meant members. One finding per such range.
+#
+# Not decided for a value-invention node, which binds the member itself, nor for
+# a body that still holds a template reference, which may do the gather out of
+# sight. A set the document does not declare (a §9.7.10 agnostic leaf) is left
+# to the build, as `_check_undefined_index_set!` does.
+function _check_ragged_values_gathered!(errors::Vector{StructuralError}, file::EsmFile,
+                                        agg::OpExpr, anchor::String)
+    (agg.ranges === nothing || isempty(file.index_sets)) && return errors
+    _is_value_invention_faq(agg) && return errors
+    body = ASTExpr[b for b in (agg.expr_body, agg.filter) if b !== nothing]
+    any(_contains_template_reference, body) && return errors
+    refs = Set{String}()
+    for b in body
+        _referenced_var_names(b, refs)
+    end
+    for sym in sort!(collect(keys(agg.ranges)))
+        rv = agg.ranges[sym]
+        rv isa IndexSetRef || continue
+        iset = get(file.index_sets, rv.from, nothing)
+        (iset isa IndexSet && iset.kind == "ragged" && iset.values !== nothing) || continue
+        values = iset.values::String
+        any(r -> r == values || endswith(r, "." * values), refs) && continue
+        parent = isempty(rv.of) ? "<parent>" : join(rv.of, ", ")
+        push!(errors, StructuralError(
+            anchor,
+            "faq range '$sym' iterates ragged index set '$(rv.from)', so it binds the " *
+            "POSITION k in 1..$(something(iset.offsets, "offsets"))[$parent], not a " *
+            "member; the body never reads the set's `values` array '$values'. Gather " *
+            "the member explicitly: index($values, $parent, $sym)",
+            ERROR_CODES.RAGGED_VALUES_NOT_GATHERED,
+            Dict{String,Any}("range" => sym, "index_set" => rv.from, "values" => values)
+        ))
+    end
+    return errors
+end
+
 # The two static `join` SIDE checks of CONFORMANCE_SPEC §5.5.8, decidable from
+
 # this ONE document — the node's `ranges`, the declared variable shapes and the
 # clause itself are all here, so no evaluation, no runtime data and no other file
 # are needed. Both are stated about the DOCUMENT rather than about where any one

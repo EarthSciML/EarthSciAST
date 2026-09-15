@@ -1671,11 +1671,29 @@ A `ranges` entry MAY be a dense `[lo, hi]` / `[lo, step, hi]` tuple **or** an
 index-set reference `{"from": <name>}` / `{"from": <name>, "of": [<parents>]}`
 resolved against the document `index_sets` registry (RFC §5.2): `interval` →
 `[1, size]`, `categorical` → `[1, |members|]`, `ragged` → a per-cell dynamic
-bound. An undeclared `from` name is a hard error — no implicit interval is
-inferred. The canonical tag is `op: "faq"`. The pre-1.1.0
+bound `[1, offsets[i]]` over POSITIONS (below). An undeclared `from` name is a
+hard error — no implicit interval is inferred. The canonical tag is
+`op: "faq"`. The pre-1.1.0
 `op: "aggregate"` spelling is a DEPRECATED ALIAS, normalized to `faq` at the wire
 boundary and removed at esm 2.0.0; `op: "arrayop"` was removed at 0.8.0 and is
 not accepted (§5.6, docs/content/rfcs/faq-node-rename.md).
+
+**Ragged ranges bind positions (normative; esm-spec §4.3.1 "Ragged ranges").**
+A range `{"from": <ragged set>, "of": ["i"]}` binds the POSITION `k` in
+`1..offsets[i]`: `offsets` is the per-parent LENGTH (not a cumulative offset),
+and `values` is a PADDED `[parent, max length]` array that the body gathers
+explicitly, `index(values, i, k)`. Every evaluating binding MUST bind positions,
+not members, in an ordinary `faq`, and every binding's `validate()` MUST reject a
+`faq` whose ragged range's `values` array its body (`expr` / `filter`) never
+reads, with `ragged_values_not_gathered` at the containing expression field —
+such a body reads positions where members were meant. Two cases are not decided:
+a body still holding an `apply_expression_template` reference, and a set the
+document does not declare. **The one exception is value invention:** a
+value-invention `faq` (`distinct: true`, a `skolem` `key`, or a `skolem` /
+`rank` / `distinct` / `argmin` / `argmax` body, §5.5) binds the member
+`values[i, k]` itself, so no gather is authored and the check does not apply.
+Positive control: `tests/valid/faq/ragged_member_gather.esm` (10, 50, 150);
+rejection: `tests/invalid/faq/ragged_values_not_gathered.esm`.
 
 The registry a `from` name resolves against is the **effective** one — the
 document's own `index_sets` merged with those of every template library imported
@@ -5588,6 +5606,7 @@ ever emitted it, and the code had zero real coverage.
 | `unit_parse_error` | Units | Unrecognized unit string — does not parse under the esm-spec §4.8.2 grammar, or names a symbol absent from the §4.8.1 registry. Hard error, NOT a warning. |
 | `array_shape_mismatch` | Structural | An operand of a BARE array-level expression is declared over an index set the result is not shaped over (esm-spec §4.3.4). Operands align by index-set NAME: one declared over a SUBSET of the result's sets broadcasts along the missing axes and axis order is immaterial, but one carrying an EXTRA set has no axis to align to. Pointer: the containing expression field (`…/equations/i/rhs`, `…/variables/v/expression`). Both shapes are declared, so this is static — hard error, NOT a warning, and NOT a runtime concern. Fixture: `tests/invalid/array_broadcast/operand_index_set_not_in_result.esm`. |
 | `observed_cycle` | Structural | A dependency cycle among a model's OBSERVED unknowns (esm-spec §4.9.6): each observed on the cycle is defined by an equation whose RHS names the next, so no evaluation order satisfies every definition. Decidable from the equations alone — hard error in `validate`, in EVERY binding, executing or not. Pointer: `/models/<M>` (a cycle belongs to no single equation). `details.cycle` is the path in traversal order with the entry node repeated to close it — a PATH, so it is ordered semantically, not by §7.1.0. The self-edge of a §4.3.1.1 recurrence CANDIDATE is dropped (§5.19.5); every other self-reference (`x ~ x + 1`, `s ~ s + 1`) is a cycle of length one and IS reported. Fixture: `tests/invalid/observed_cycle_array_elementwise.esm`. |
+| `ragged_values_not_gathered` | Structural | A `faq` that is not a value-invention node ranges over a `kind: "ragged"` index set, but its body never reads that set's `values` array (esm-spec §4.3.1 "Ragged ranges", §5.6.4). The range binds the POSITION k in 1..offsets[parent], so the body reads positions where members were meant — a plausible wrong number rather than a failure. Hard error in `validate()` in EVERY binding. Pointer: the containing expression field (`…/equations/i/rhs`). Fixture: `tests/invalid/faq/ragged_values_not_gathered.esm`. |
 | `recurrence_not_wellfounded` | Structural | A causal self-read (esm-spec §4.3.1.1) that is not strictly earlier along exactly one axis: a read provably at the same cell or later on its axis, an index argument that is not affine in its frame symbol with coefficient 1, an offset on more than one axis, self-reads disagreeing on the axis, a bare read of the variable in its own RHS, or a recurrence axis that is ragged / derived / strided. Hard error in EVERY binding, executing or not (§5.19.5) — the pre-1.0 behaviour was a plausible wrong number. Pointer: the containing expression field (`…/equations/i/rhs`). |
 | `recurrence_unsupported_form` | Structural | A self-read the runtime cannot restrict to one cell: reached through a `makearray` region value or a `reshape`/`transpose`/`concat` operand, or in an equation whose RHS is not a `faq` over the variable's frame or whose output ranges are not statically resolvable (esm-spec §4.3.1.1). Distinct from `recurrence_not_wellfounded`: the READ is causal, the CARRIER cannot sequence it. |
 | `reserved_variable_name` | Structural | A declaration spelled with a globally-scoped name — the document's independent variable (`domain.independent_variable`, default `"t"`) or the §6.4 `_var` placeholder (esm-spec §4.9.1.1). Both are in scope in every model and resolve BY NAME, so the declaration is unreachable and every reader silently gets the implicit symbol instead. Covers all three declaration maps: `models[M].variables` (recursing into every INLINE subsystem, at any depth), `reaction_systems[S].species`, `reaction_systems[S].parameters`. Pointer: the offending key, e.g. `/models/M/variables/t`, `/models/M/subsystems/S/variables/t`. Hard error in EVERY binding — the pre-fix behaviour was a validated document whose equations silently read the simulation clock. The reserved set FOLLOWS the document, exactly as `reserved_index_symbol` does; a binding that hard-codes the literal `"t"` fails `tests/valid/independent_variable_renamed.esm`. |

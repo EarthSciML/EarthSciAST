@@ -73,7 +73,14 @@ const ERROR_CODES = (
     # surprise at build time; the self-edge of a §4.3.1.1 recurrence CANDIDATE
     # is an ordering WITHIN one variable and is not one of these edges.
     OBSERVED_CYCLE = "observed_cycle",
+    # esm-spec §4.3.1 "Ragged ranges" (issue #259): a non-value-invention `faq`
+    # ranges over a `kind: "ragged"` index set but its body never reads that
+    # set's `values` array. The range symbol binds the POSITION k in
+    # 1..offsets[parent], not a member, so the body reads positions — a
+    # plausible wrong number rather than a failure.
+    RAGGED_VALUES_NOT_GATHERED = "ragged_values_not_gathered",
     # Causal self-reference (esm-spec §4.3.1.1, CONFORMANCE_SPEC §5.19.5).
+
     # A VALIDATION category, so both codes are owed by every binding whether or
     # not it evaluates array numerics: the pre-1.0 behaviour of an ill-founded
     # self-read was a plausible wrong number, and a binding that only declined

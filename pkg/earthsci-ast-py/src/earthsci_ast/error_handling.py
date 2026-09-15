@@ -317,6 +317,20 @@ RECURRENCE_UNSUPPORTED_FORM = "recurrence_unsupported_form"
 
 
 # ===========================================================================
+# Ragged range without a member gather (esm-spec §4.3.1 "Ragged ranges";
+# CONFORMANCE_SPEC.md §5.6.4), reported by the structural validator at the
+# containing expression field.
+# ===========================================================================
+
+#: A ``faq`` that is not a value-invention node ranges over a ``kind: "ragged"``
+#: index set, but its body never reads that set's ``values`` array. The range
+#: symbol binds the POSITION k in 1..offsets[parent], not a member, so without an
+#: ``index(values, parent, k)`` gather the body reads positions -- a plausible
+#: wrong number rather than a failure.
+RAGGED_VALUES_NOT_GATHERED = "ragged_values_not_gathered"
+
+
+# ===========================================================================
 # Observed dependency cycle (esm-spec §4.9.6), reported by the structural
 # validator at `/models/<M>`.
 #

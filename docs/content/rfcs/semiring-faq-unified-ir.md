@@ -227,14 +227,19 @@ scope has closed.
 **How a ragged set binds to its backing array.** A `kind: "ragged"` set is the
 named, first-class form of the per-cell dynamic bound the evaluator already
 expands (`_expand_int_range_dyn`). It binds to **two keyed factors (§5.4)** drawn
-from `args`/`const_arrays`: an `offsets`/length factor giving `|set(i)|` for each
-parent tuple `i` (e.g. MPAS `nEdgesOnCell`), and a `values` factor giving the
-member at `(i, k)` for `k ∈ 1…|set(i)|` (e.g. `edgesOnCell`). Iterating
+from `args`/`const_arrays`: an `offsets` factor giving the per-parent LENGTH
+`|set(i)|` for each parent tuple `i` (e.g. MPAS `nEdgesOnCell`), and a `values`
+factor giving the member at `(i, k)` for `k ∈ 1…|set(i)|` (e.g. `edgesOnCell`),
+laid out as a padded `[parent, max length]` array. Iterating
 `{from:"edges_of_cell", of:["i"]}` is therefore exactly the existing
-`[1, index(n_edges_on_cell, i)]` dynamic bound plus a gather through the `values`
-factor — no new evaluator path, only a name and a declared binding. CSR/offset
-layout (`offsets[i]…offsets[i+1]`) is the canonical encoding; a fixed-valence
-grid is the degenerate constant-`offsets` case.
+`[1, index(n_edges_on_cell, i)]` dynamic bound: the range symbol `k` binds the
+POSITION, and the body gathers the member through the `values` factor
+explicitly, `index(edge_of_cell, i, k)` — no new evaluator path, only a name and
+a declared binding. A body that never reads `values` is rejected
+(`ragged_values_not_gathered`, esm-spec §4.3.1 "Ragged ranges"); the one
+exception is a value-invention node (§5.5), whose ragged range binds the member
+`values[i, k]` itself. A fixed-valence grid is the degenerate constant-`offsets`
+case.
 
 ### 5.3 Value-equality joins (`on`)
 Today factors combine only by sharing an index *name* (positional). `join.on`
@@ -733,8 +738,8 @@ must be declared), the additive Draft-2020-12 changes are:
     "members": { "type": "array" },                         // categorical
     "from_faq":{ "type": "string" },                        // derived (§5.5 node id)
     "of":      { "type": "array", "items": { "type": "string" } }, // ragged parents
-    "offsets": { "type": "string" },                        // ragged: length/CSR factor
-    "values":  { "type": "string" }                         // ragged: member factor
+    "offsets": { "type": "string" },                        // ragged: per-parent length factor
+    "values":  { "type": "string" }                         // ragged: padded member factor
   },
   "allOf": [
     { "if": { "properties": { "kind": { "const": "interval" } } },
