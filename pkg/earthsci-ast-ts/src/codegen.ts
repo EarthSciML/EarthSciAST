@@ -128,7 +128,10 @@ const CORE_OPS_WITHOUT_REGISTRY_ROW: ReadonlySet<string> = new Set([
 
 /** The diagnostic for an op the scalar evaluator has no rule for. */
 function unevaluableOperator(node: ExpressionNode): Error {
-  if (node.op === 'D' || (getOpInfo(node.op) === undefined && !CORE_OPS_WITHOUT_REGISTRY_ROW.has(node.op))) {
+  if (
+    node.op === 'D' ||
+    (getOpInfo(node.op) === undefined && !CORE_OPS_WITHOUT_REGISTRY_ROW.has(node.op))
+  ) {
     const wrt = node.op === 'D' && typeof node.wrt === 'string' ? ` (wrt=${node.wrt})` : ''
     return new UnloweredOperatorError(
       `unlowered rewrite-target operator '${node.op}'${wrt} reached evaluation: ` +

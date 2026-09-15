@@ -83,7 +83,9 @@ describe('unevaluable_operator versus unlowered_operator', () => {
   }
 
   it('enum is unevaluable_operator', () => {
-    const err = refusal(() => evaluateExpression({ op: 'enum', args: ['colors', 'red'] } as Expr, x))
+    const err = refusal(() =>
+      evaluateExpression({ op: 'enum', args: ['colors', 'red'] } as Expr, x),
+    )
     expect(err?.code).toBe('unevaluable_operator')
   })
 
