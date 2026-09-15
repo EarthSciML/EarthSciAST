@@ -266,8 +266,13 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # The importer's same-name enum (g_per_hp_hr = 7) does not reach the
         # library body, which keeps the library's 1; the importer's own enum ops,
         # including one bound into the template's parameter, resolve against 7.
-        doc = _normj(serialize_esm_file(EarthSciAST.load_path(
-            conf("import_library_enum", "fixture_importer_redeclares.esm"))))
+        # Once lowered, the library body carries no load-eliminated op, so its
+        # reference is not target-bearing and survives load (esm-spec §9.6.4
+        # rule 1); the values are checked on its expansion (rule 2).
+        f = EarthSciAST.load_path(
+            conf("import_library_enum", "fixture_importer_redeclares.esm"))
+        EarthSciAST._expand_refs!(f)
+        doc = _normj(serialize_esm_file(f))
         library_body = _defrhs(doc, "Consumer", "isPerHorsepowerHour")
         @test library_body["op"] == "=="
         @test library_body["args"][2]["op"] == "const"
