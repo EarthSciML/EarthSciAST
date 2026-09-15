@@ -1522,6 +1522,160 @@ def _check_variable_references(
                         )
 
 
+_ELEMENT_SUFFIX = re.compile(r"^(.*?)\[[^\]]*\]$")
+
+
+def _strip_element_suffix(name: str) -> tuple[str, bool]:
+    """``u[1]`` -> ``("u", True)``; a name without an element suffix is unchanged."""
+    m = _ELEMENT_SUFFIX.match(name)
+    return (m.group(1), True) if m else (name, False)
+
+
+def _pointer_token(key: str) -> str:
+    """Escape one JSON Pointer reference token (RFC 6901)."""
+    return key.replace("~", "~0").replace("/", "~1")
+
+
+def _test_target_declarations(component: dict[str, Any], section: str) -> dict[str, Any]:
+    """The names an inline test's assertion may target by a bare name, mapped to
+    the declared ``shape`` (``None`` when absent): a model's ``variables``, or a
+    reaction system's ``species`` (which carry no shape) and ``parameters``."""
+    if section == "models":
+        return {
+            n: (v.get("shape") if isinstance(v, dict) else None)
+            for n, v in (component.get("variables") or {}).items()
+        }
+    out: dict[str, Any] = {n: None for n in (component.get("species") or {})}
+    for n, v in (component.get("parameters") or {}).items():
+        out[n] = v.get("shape") if isinstance(v, dict) else None
+    return out
+
+
+def _declared_override_names(data: dict[str, Any]) -> tuple[set, set, bool]:
+    """The document's declared names qualified as a flatten qualifies them
+    (``<component>.<name>``, ``<component>.<subsystem>.<name>`` at any depth),
+    the component and subsystem names rule 2 of esm-spec §6.6.2 validates a
+    key's leading segments against, and whether every mount is resolved."""
+    names: set = set()
+    namespaces: set = set()
+    complete = True
+
+    def walk(prefix: str, component: Any, section: str) -> None:
+        nonlocal complete
+        if not isinstance(component, dict) or "ref" in component:
+            complete = False
+            return
+        namespaces.add(prefix.rsplit(".", 1)[-1])
+        for name in _test_target_declarations(component, section):
+            names.add(f"{prefix}.{name}")
+        for sub_name, sub in (component.get("subsystems") or {}).items():
+            walk(f"{prefix}.{sub_name}", sub, section)
+
+    for section in ("models", "reaction_systems"):
+        for cname, component in (data.get(section) or {}).items():
+            walk(cname, component, section)
+    return names, namespaces, complete
+
+
+def _override_key_matches(key: str, names: set, namespaces: set) -> bool:
+    """Whether ``key`` reaches a declared name under esm-spec §6.6.2 rules 1-3:
+    an exact hit; a dotted suffix of the key that is a name, every dropped
+    leading segment naming a component or subsystem; or the key a dotted suffix
+    of some name. Ambiguity is a runtime diagnostic, so one match suffices."""
+    if key in names:
+        return True
+    parts = key.split(".")
+    for i in range(1, len(parts)):
+        if ".".join(parts[i:]) in names and all(p in namespaces for p in parts[:i]):
+            return True
+    tail = "." + key
+    return any(n.endswith(tail) for n in names)
+
+
+def _check_inline_tests(data: dict[str, Any], errors: list) -> None:
+    """Static checks on every inline test (esm-spec §6.6):
+
+    * an assertion ``variable`` that is a bare name (element suffix removed) the
+      component does not declare is ``undefined_variable`` (§6.6.3); a dotted
+      target is resolved by the runtime;
+    * an ``initial_conditions`` / ``parameter_overrides`` key that matches no
+      declared name is ``unknown_override_key`` (§6.6.2); skipped when the
+      document holds an unresolved mount a key could name into;
+    * an assertion whose form does not match the declared rank of its target is
+      ``assertion_rank_mismatch`` (§6.6.5).
+    """
+    names, namespaces, complete = _declared_override_names(data)
+    for section in ("models", "reaction_systems"):
+        for cname, component in (data.get(section) or {}).items():
+            if not isinstance(component, dict) or "ref" in component:
+                continue
+            declared = _test_target_declarations(component, section)
+            for ti, test in enumerate(component.get("tests") or []):
+                if not isinstance(test, dict):
+                    continue
+                base = f"/{section}/{cname}/tests/{ti}"
+                if complete:
+                    for field in ("initial_conditions", "parameter_overrides"):
+                        for key in test.get(field) or {}:
+                            bare_key, _ = _strip_element_suffix(key)
+                            if not _override_key_matches(bare_key, names, namespaces):
+                                errors.append(
+                                    (
+                                        "unknown_override_key",
+                                        f"{base}/{field}/{_pointer_token(key)}",
+                                        f'Override key "{key}" in {field} matches no declared name',
+                                        {"key": key, "field": field},
+                                    )
+                                )
+                for ai, assertion in enumerate(test.get("assertions") or []):
+                    if not isinstance(assertion, dict):
+                        continue
+                    target = assertion.get("variable")
+                    if not isinstance(target, str):
+                        continue
+                    bare, is_element = _strip_element_suffix(target)
+                    if "." in bare:
+                        continue
+                    pointer = f"{base}/assertions/{ai}"
+                    if bare not in declared:
+                        errors.append(
+                            (
+                                "undefined_variable",
+                                f"{pointer}/variable",
+                                f'Variable "{bare}" referenced in assertion variable '
+                                f"but not declared",
+                                {"variable": bare},
+                            )
+                        )
+                        continue
+                    if is_element:
+                        continue
+                    shape = declared[bare]
+                    shape = list(shape) if isinstance(shape, list) else []
+                    selects = (
+                        assertion.get("coords") is not None or assertion.get("reduce") is not None
+                    )
+                    if shape and not selects:
+                        errors.append(
+                            (
+                                "assertion_rank_mismatch",
+                                pointer,
+                                f'Assertion on shaped variable "{bare}" selects no scalar '
+                                f"(give coords, reduce, or an element name)",
+                                {"variable": bare, "shape": shape},
+                            )
+                        )
+                    elif not shape and selects:
+                        errors.append(
+                            (
+                                "assertion_rank_mismatch",
+                                pointer,
+                                f'Assertion on scalar variable "{bare}" carries coords or reduce',
+                                {"variable": bare, "shape": []},
+                            )
+                        )
+
+
 def _update_rules_with_paths(update: Any):
     """Yield ``(path_suffix, rule)`` for a parameter's ``update``: ``("", rule)``
     for the single-rule object form and ``("[i]", rule)`` for each entry of the
@@ -3159,6 +3313,9 @@ def _validate_structural(data: dict[str, Any], file_path=None) -> None:
     # `undefined_variable` and Python was the only binding spelling it otherwise
     # — a cross-language conformance gap, not a cosmetic one.
     collect("undefined_variable", lambda sub: _check_variable_references(data, tables, sub))
+    # An inline test's assertion target, override keys and assertion rank (esm-spec
+    # §6.6.2, §6.6.3, §6.6.5). Each finding carries its own code via a 4-tuple.
+    collect("inline_test_semantics", lambda sub: _check_inline_tests(data, sub))
     # Three statically-decidable aggregate defects (join_key_invalid_type,
     # relational_node_in_continuous, undefined_index_set). Each finding carries
     # its own explicit code via a 4-tuple, so the collect-level code is only a

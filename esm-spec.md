@@ -2581,6 +2581,8 @@ An **exact hit (rule 1) is never part of a collision**: it identifies its variab
 
 Silently ignoring an unrecognized key is specifically non-conforming. It produces a *wrong answer rather than a missing one*: the author writes an override, nothing happens, the run proceeds on the declared defaults, and — for a key inside an inline `test` — the runner still reports a pass/fail verdict for a configuration that was never actually exercised. The error type is language-idiomatic (an exception, a `Result` error, a returned diagnostic); the **classification** of each key is the cross-binding contract, gated by the `override_key_diagnostics` conformance category (CONFORMANCE_SPEC §5.15).
 
+**Unknown keys are also a validation error.** Whether a key matches any name at all does not depend on the build, so a validator MUST also reject an unknown key, with `unknown_override_key` at the key's pointer (`…/tests/i/parameter_overrides/<key>` or `…/tests/i/initial_conditions/<key>`, the key escaped as a JSON Pointer token). The names a validator resolves keys against are the document's declared names, qualified the way a flatten qualifies them. Each top-level component's variables, species and parameters are `<component>.<name>`, and each inline subsystem's are `<component>.<subsystem>.<name>`, at any depth. The component and subsystem names are the qualifiers rule 2 checks. A trailing element suffix (`u[1]`) is removed from the key first, because a runtime addresses the elements of a shaped state by it. The validator reports only a key that matches no name under rules 1-3. Ambiguous keys and colliding keys depend on the names the build carries (a single-model build carries bare names), so they remain runtime diagnostics. A document that still holds an unresolved `{ref}` mount skips the check, because a key may name a declaration inside the mount.
+
 #### 6.6.3 Assertion Semantics
 
 Each assertion is a per-(variable, time) check against a scalar expected value:
@@ -2595,6 +2597,8 @@ Each assertion is a per-(variable, time) check against a scalar expected value:
 | `reduce` | | PDE only: collapse the spatial field to a scalar before comparison. One of `integral`, `mean`, `max`, `min`, `L2_error`, `Linf_error`. Mutually exclusive with `coords`. |
 
 Assertions are stored **inline** only — there is no file-reference option. Tests should be small (a handful of assertion points), not full reference trajectories.
+
+**A bare target must be declared.** A validator MUST reject an assertion whose `variable` is a bare name that the asserting component does not declare, with `undefined_variable` at `…/tests/i/assertions/j/variable`. A trailing element suffix (`u[1]`) is removed first. A model declares its `variables`; a reaction system declares its `species` and `parameters`. A dotted `variable` is not checked at validation: it names a declaration in a subsystem or another component, and resolves at run time as a scoped reference (§4.6).
 
 An assertion passes when the computed value `actual` satisfies
 
@@ -2659,10 +2663,14 @@ This resolution is pinned by the `tolerance_resolution` conformance category (CO
 
 #### 6.6.5 PDE-Aware Assertions
 
-Pointwise scalar assertions (the default — neither `coords` nor `reduce`) only make sense on 0-D components: there is one trajectory per variable, indexed by time alone. On a component whose variables are shaped over one or more spatial index sets, every assertion MUST select a scalar via either `coords` or `reduce`. Validators MUST reject:
+A pointwise assertion (the default — neither `coords` nor `reduce`) reads one trajectory, indexed by time alone. That is a scalar variable, or one element of a shaped variable named by an element name (`u[1]`, `u[2,3]`). An assertion on a whole shaped field MUST select a scalar via either `coords` or `reduce`.
 
-- a 0-D component carrying an assertion with `coords` or `reduce` set; and
-- a PDE component carrying a pointwise assertion (no `coords`, no `reduce`).
+Whether an assertion must select a scalar is decided **per assertion**, from the declared `shape` of the variable it names. It is not decided from the component as a whole, because one component may declare scalar and shaped variables side by side. Validators MUST reject, with `assertion_rank_mismatch` at the assertion's pointer (`…/tests/i/assertions/j`):
+
+- a pointwise assertion on a variable declared with a non-empty `shape`, unless its target is an element name; and
+- an assertion with `coords` or `reduce` on a variable declared without a `shape`, or with an empty one.
+
+The check applies to a target the asserting component declares by a bare name: a model variable, or a reaction system's parameter or species (a species has no `shape`). A target written as an element name is exempt from the second rule as well. A dotted target names a declaration elsewhere (§6.6.3) and is left to the runtime.
 
 `coords` keys MUST match the spatial index-set names the field is shaped over. Three conventions, established by the cross-binding parity implementations, are **pinned** (determinism requires one answer; conforming runtimes MUST implement exactly these):
 
