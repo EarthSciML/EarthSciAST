@@ -1628,6 +1628,9 @@ A checker MUST resolve the free symbols of **every** Expression in the document,
 | `models[M].discrete_events[i].affects[j].rhs` | …`/discrete_events/i/affects/j/rhs` | `undefined_variable` |
 | `models[M].tests[i].assertions[j].reference` | …`/tests/i/assertions/j/reference` | `undefined_variable` |
 | `reaction_systems[S].reactions[i].rate` | …`/reactions/i/rate` | `undefined_parameter` |
+| `reaction_systems[S].constraint_equations[i].{lhs,rhs}` | …`/constraint_equations/i/rhs` | `undefined_variable` |
+| `reaction_systems[S].{continuous_events,discrete_events}[i]` (every field the `models` rows above list) | …`/discrete_events/i/trigger/expression` | `undefined_variable` |
+| `reaction_systems[S].tests[i].assertions[j].reference` | …`/tests/i/assertions/j/reference` | `undefined_variable` |
 | `models[M].variables[v].update.from.unit_conversion` | …`/variables/v/update/from/unit_conversion` | `undefined_variable` |
 | `coupling[i].connector.equations[j].expression` | …`/connector/equations/j/expression` | `unresolved_scoped_ref` |
 | `coupling[i].transform` (Expression form) | `/coupling/i/transform` | `unresolved_scoped_ref` |
@@ -1639,6 +1642,8 @@ A checker MUST resolve the free symbols of **every** Expression in the document,
 **`join` is the mixed case, and the distinction is load-bearing.** A `join` clause holds no Expression children at all — it is an object of plain strings — so the walk above has nothing to descend into there. But those strings are **not** structural metadata: an `overlap` clause's `src_env` / `tgt_env` name const-array **factor variables**, and an `on` key column MAY name a declared component-local buffer. They are variable references that merely happen to be *encoded as strings*; they resolve against the same variable registry every other reference does, and flattening therefore dot-namespaces them under a declared-local gate — normatively, **CONFORMANCE_SPEC §5.5.6**. What keeps them out of *this* section's undefined-name rule is not that they are non-references but that an `on` column is **polymorphic**: a loop symbol bound by the enclosing `ranges`, a document-scoped index set (§9.7.5), or a declared local variable — and only the last of the three lives in the variable namespace. Handing every join string to the free-symbol walk would therefore manufacture false rejects, which is precisely the failure mode this section exists to prevent. A binding MAY diagnose a join name that resolves nowhere, but it must do so against the variable **and** index-set registries under that gate, not through this walk.
 
 The rule is one sentence — *resolve the free symbols of every Expression* — and the way to satisfy it is one shared traversal (a `mapChildren`/`forEachChild` combinator over the node's Expression-valued fields), used by every pass. Every binding that hand-rolled a per-pass walker grew this hole, and grew it in a different place. `tests/invalid/undefined_variable_in_*.esm` and `tests/invalid/unresolved_scoped_ref_in_*.esm` pin one fixture per field, container and sidecar alike.
+
+**A site carries the same code on a reaction system as on a model.** A reaction system's constraint equations, events and inline-test references are the same sites as a model's, so an undefined name in one is `undefined_variable`, never `undefined_parameter`. Only a reaction `rate` reports `undefined_parameter`. `tests/invalid/undefined_variable_in_reaction_system_*.esm` pin the four reaction-system sites: a test reference, a constraint equation, a discrete event trigger and a continuous event condition.
 
 **And the duty is the EVALUATOR's too, not only the validator's.** A binding that
 resolves free symbols correctly in `validate` and then evaluates an unresolvable

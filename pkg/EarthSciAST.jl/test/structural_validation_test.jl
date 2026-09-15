@@ -580,6 +580,29 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
             end
         end
 
+        # A reaction system's inline tests, constraint equations and events are the
+        # same sites as a model's: an undefined name in one is `undefined_variable`
+        # at the carrying field's pointer (tests/invalid/expected_errors.json).
+        for (fixture, pointer) in (
+                ("undefined_variable_in_reaction_system_assertion_reference.esm",
+                 "/reaction_systems/TestReactions/tests/0/assertions/0/reference"),
+                ("undefined_variable_in_reaction_system_constraint_equation.esm",
+                 "/reaction_systems/TestReactions/constraint_equations/0/rhs"),
+                ("undefined_variable_in_reaction_system_continuous_event_condition.esm",
+                 "/reaction_systems/TestReactions/continuous_events/0/conditions/0"),
+                ("undefined_variable_in_reaction_system_discrete_event_trigger.esm",
+                 "/reaction_systems/TestReactions/discrete_events/0/trigger/expression"))
+            @testset "Invalid fixture $fixture is rejected" begin
+                fixture_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid", fixture)
+                if _require_fixture(fixture_path)
+                    result = EarthSciAST.validate(EarthSciAST.load_path(fixture_path))
+                    @test !result.is_valid
+                    @test any(e -> e.error_type == "undefined_variable" && e.path == pointer,
+                              result.structural_errors)
+                end
+            end
+        end
+
         # No false positive: an aggregate whose body references a bound loop
         # index (`i`, introduced by `ranges`) and a declared variable must NOT
         # flag the bound index. Built via the typed API so it is schema-free.
