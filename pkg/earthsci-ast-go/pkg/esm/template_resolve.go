@@ -397,6 +397,9 @@ func processLibrary(view map[string]any, fileOrders map[string][]string,
 	}
 
 	tpl, _ := view["expression_templates"].(map[string]any)
+	if err := lowerLibraryTemplateEnums(view, tpl, origin); err != nil {
+		return nil, err
+	}
 	if err := mergeOwnTemplates(scope, tpl, fileOrders["/expression_templates"], origin); err != nil {
 		return nil, err
 	}
@@ -426,7 +429,121 @@ func processLibrary(view map[string]any, fileOrders map[string][]string,
 	if err := composeTemplateBodies(scope.templates.m, origin); err != nil {
 		return nil, err
 	}
+	if err := expandLibraryEnumCalls(view, scope.templates.m, tpl, origin); err != nil {
+		return nil, err
+	}
 	return scope, nil
+}
+
+// lowerLibraryTemplateEnums lowers the `enum` ops in a template library's OWN
+// template bodies (tpl, IN PLACE) against the library's `enums` block
+// (esm-spec §9.3), before the templates reach an importer whose block is a
+// different one. An op spelled with one of a template's `params` stays open and
+// resolves at the call site.
+func lowerLibraryTemplateEnums(library, tpl map[string]any, origin string) error {
+	if tpl == nil {
+		return nil
+	}
+	if err := validateTemplates(tpl, origin); err != nil {
+		return err
+	}
+	for _, name := range sortedKeys(tpl) {
+		decl, ok := tpl[name].(map[string]any)
+		if !ok {
+			continue
+		}
+		body, has := decl["body"]
+		if !has {
+			continue
+		}
+		lowered, err := lowerLibraryTemplateBody(library, name, decl, body, origin)
+		if err != nil {
+			return err
+		}
+		decl["body"] = lowered
+	}
+	return nil
+}
+
+// lowerLibraryTemplateBody lowers the `enum` ops in body, a body of the
+// library's template name (decl), against the library's `enums` block. An op
+// spelled with one of decl's `params` stays open.
+func lowerLibraryTemplateBody(library map[string]any, name string, decl map[string]any, body any, origin string) (any, error) {
+	open := map[string]bool{}
+	if params, ok := decl["params"].([]any); ok {
+		for _, p := range params {
+			if s, ok := p.(string); ok {
+				open[s] = true
+			}
+		}
+	}
+	lowered, err := lowerEnumOpsForFile(library, body, open)
+	if err != nil {
+		if le, ok := err.(*EnumLoweringError); ok {
+			return nil, newETErr(le.Code, fmt.Sprintf("%s: template '%s': %s — an `enum` op in a template library resolves against that library's own `enums` block (esm-spec §9.3)", origin, name, le.Message))
+		}
+		return nil, err
+	}
+	return lowered, nil
+}
+
+// expandLibraryEnumCalls resolves the `enum` symbols a template library binds in
+// its OWN calls (esm-spec §9.3). After lowerLibraryTemplateEnums, the only
+// `enum` ops left in the library's scope are spelled with a template parameter.
+// A call to a template that can still produce one binds that parameter here, in
+// the library, so each of the library's own template bodies has those calls
+// expanded (the eager expansion esm-spec §9.6.4 rule 3 requires at load anyway)
+// and the result lowered against the library's block. An op the expansion leaves
+// spelled with the calling template's own parameter stays open for the
+// importer's binding. Runs after composeTemplateBodies, so the reference DAG is
+// acyclic; every new body is computed from the registry before any is replaced.
+func expandLibraryEnumCalls(library, named, own map[string]any, origin string) error {
+	if len(own) == 0 {
+		return nil
+	}
+	bearing := templateOpBearing(named, func(op string) bool { return op == OpEnum })
+	expand := func(n map[string]any) bool {
+		name, _ := n["name"].(string)
+		return bearing[name]
+	}
+	bodies := map[string]any{}
+	for _, name := range sortedKeys(own) {
+		decl, ok := named[name].(map[string]any)
+		if !ok {
+			continue
+		}
+		body, has := decl["body"]
+		if !has {
+			continue
+		}
+		var refs []string
+		collectApplyNames(&refs, body)
+		calls := false
+		for _, r := range refs {
+			if bearing[r] {
+				calls = true
+				break
+			}
+		}
+		if !calls {
+			continue
+		}
+		expanded, _, err := expandRefsShared(body, named, origin, expandMemo{}, expand)
+		if err != nil {
+			return err
+		}
+		lowered, err := lowerLibraryTemplateBody(library, name, decl, expanded, origin)
+		if err != nil {
+			return err
+		}
+		bodies[name] = lowered
+	}
+	for _, name := range sortedKeys(bodies) {
+		decl := cloneMapAny(named[name].(map[string]any))
+		decl["body"] = bodies[name]
+		named[name] = decl
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------

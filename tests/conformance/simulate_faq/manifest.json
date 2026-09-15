@@ -73,7 +73,7 @@
       "tags": ["faq", "contraction", "embedded", "reduce-plus", "reduce-max"],
       "executing_bindings": ["python", "rust"],
       "skip_bindings": {
-        "julia": "Julia tree-walk (build_evaluator) rejects faq in expression position (E_TREEWALK_UNSUPPORTED_OP). Julia MTK path may handle scalar reduce via _faq_scalar_reduce but is not yet validated for the embedded-RHS form; tracked as ess-n0w.",
+        "julia": "Julia tree-walk (build_evaluator) rejects faq in expression position (unevaluable_operator). Julia MTK path may handle scalar reduce via _faq_scalar_reduce but is not yet validated for the embedded-RHS form; tracked as ess-n0w.",
         "typescript": "TypeScript binding has no faq numeric executor.",
         "go": "Go binding has no faq numeric executor."
       },

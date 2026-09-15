@@ -258,6 +258,58 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         @test code == "template_constraint_unknown_index_set"
     end
 
+    @testset "import_library_enum: a library's enum ops resolve in the library's block (§9.3)" begin
+        @test _expand_raw(conf("import_library_enum", "fixture.esm")) ==
+              _golden(conf("import_library_enum", "expanded.esm"))
+        @test _expand_raw(conf("import_library_enum", "fixture_importer_redeclares.esm")) ==
+              _golden(conf("import_library_enum", "expanded_importer_redeclares.esm"))
+        # The importer's same-name enum (g_per_hp_hr = 7) does not reach the
+        # library body, which keeps the library's 1; the importer's own enum ops,
+        # including one bound into the template's parameter, resolve against 7.
+        # Once lowered, the library body carries no load-eliminated op, so its
+        # reference is not target-bearing and survives load (esm-spec §9.6.4
+        # rule 1); the values are checked on its expansion (rule 2).
+        f = EarthSciAST.load_path(
+            conf("import_library_enum", "fixture_importer_redeclares.esm"))
+        EarthSciAST._expand_refs!(f)
+        doc = _normj(serialize_esm_file(f))
+        library_body = _defrhs(doc, "Consumer", "isPerHorsepowerHour")
+        @test library_body["op"] == "=="
+        @test library_body["args"][2]["op"] == "const"
+        @test library_body["args"][2]["value"] == 1
+        @test _defrhs(doc, "Consumer", "importerCode")["value"] == 7
+        caller_bound = _defrhs(doc, "Consumer", "callerBoundCode")
+        @test caller_bound["args"][1]["value"] == 7
+        @test caller_bound["args"][2]["value"] == 1
+        # The library's own call binds `g_per_gallon`, so it keeps the library's
+        # 2; a symbol the importer binds, directly or through a forwarded
+        # parameter, takes the importer's 9.
+        @test _defrhs(doc, "Consumer", "gallonCode")["value"] == 2
+        @test _defrhs(doc, "Consumer", "importerBoundCode")["value"] == 9
+        @test _defrhs(doc, "Consumer", "forwardedCode")["value"] == 9
+        # An importer declaring no enums still loads the library's own call.
+        f = EarthSciAST.load_path(conf("import_library_enum", "fixture.esm"))
+        EarthSciAST._expand_refs!(f)
+        doc = _normj(serialize_esm_file(f))
+        @test _defrhs(doc, "Consumer", "gallonCode")["value"] == 2
+    end
+
+    @testset "import_library_enum_undeclared: unknown_enum reported against the library (§9.3)" begin
+        for fixture in ("fixture.esm", "fixture_importer_declares.esm")
+            err = try
+                EarthSciAST.load_path(conf("import_library_enum_undeclared", fixture))
+                nothing
+            catch e
+                e
+            end
+            @test err isa ExpressionTemplateError
+            err isa ExpressionTemplateError || continue
+            @test err.code == "unknown_enum"
+            @test occursin("lib.esm", err.message)
+            @test occursin("plus_horsepower_code", err.message)
+        end
+    end
+
     @testset "import_rebind_keyed_factors: MPAS-style free-name rebinding (§9.7.7)" begin
         @test _expand_raw(conf("import_rebind_keyed_factors", "fixture.esm")) ==
               _golden(conf("import_rebind_keyed_factors", "expanded.esm"))
@@ -566,8 +618,8 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # differential half of the testset above. Before this, the top-level
         # inliner merged only function_tables/data_sources/enums and silently
         # dropped the leaf's axes, so an assembly had to redeclare them.
-        dir = joinpath(repo_root, "tests", "fixtures", "toplevel_ref_index_sets")
-        f = EarthSciAST.load_path(joinpath(dir, "toplevel_ref_index_set_merge.esm"))
+        valid_dir = joinpath(repo_root, "tests", "valid")
+        f = EarthSciAST.load_path(joinpath(valid_dir, "toplevel_ref_index_set_merge.esm"))
         @test f.index_sets["cells"].size == 5        # deep-equal redeclaration
         @test f.index_sets["vertices"].size == 4     # merged in from the mesh file
         # The mount is a real splice, not a surviving `{ref}` stub.
@@ -576,7 +628,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # A non-deep-equal collision is `subsystem_index_set_conflict` — the SAME
         # diagnostic the subsystems-edge form raises, not last-writer-wins.
         err = try
-            EarthSciAST.load_path(joinpath(dir, "toplevel_ref_index_set_conflict.esm"))
+            EarthSciAST.load_path(joinpath(invalid_dir, "toplevel_ref_index_set_conflict.esm"))
             nothing
         catch e
             e
@@ -591,7 +643,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # `NLEV` (default 4), so it folds AT THE EDGE, in the leaf's scope, and
         # reaches the registry as 4 — the importer redeclares nothing. This used
         # to be held back by a fold guard and the axis stayed undeclared.
-        m = EarthSciAST.load_path(joinpath(dir, "toplevel_ref_metaparameter_axis.esm"))
+        m = EarthSciAST.load_path(joinpath(valid_dir, "toplevel_ref_metaparameter_axis.esm"))
         @test m.index_sets["lev"].size == 4
     end
 

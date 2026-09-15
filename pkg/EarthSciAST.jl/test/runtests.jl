@@ -62,6 +62,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("display_conformance_test.jl")
     include("expression_parse_conformance_test.jl")  # infix-text parser ≡ TS oracle
     include("units_test.jl")
+    include("unit_exact_scale_test.jl")
     include("graph_test.jl")
     include("graph_conformance_test.jl")  # component/expression graphs ≡ TS oracle
 
@@ -270,6 +271,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("tree_walk_binning_alias_test.jl")
     include("op_registry_test.jl")
     include("tree_walk_op_table_test.jl")
+    include("unevaluable_operator_test.jl")         # §9.6.6 core op with no rule, refused at build
     include("op_capability_audit_test.jl")          # cross-tier op/fn-payload capability drift
     include("tree_walk_audit_fixes_test.jl")
 
@@ -278,6 +280,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("reference_graph_test.jl")
     include("cadence_test.jl")
     include("value_invention_frontdoor_test.jl")
+    include("value_invention_materialize_conformance_test.jl")  # issue #266: distinct over a derived axis counts its members
 
     # ---- Cross-binding conformance harness adapters (tests/conformance/*) ----
     include("faq_conformance_test.jl")

@@ -5,9 +5,7 @@
 //! lowering helpers.
 
 use super::*;
-use crate::faq::{
-    effective_reduce_kind, is_faq_op, resolve_aggregate_ranges, validate_oplus_spellings,
-};
+use crate::faq::{effective_reduce_kind, is_faq_op, validate_oplus_spellings};
 use crate::flatten::FlattenedSystem;
 use crate::op_registry::{OpError, is_builtin_function_name};
 use crate::simulate::{CompileError, SimulateError};
@@ -685,6 +683,12 @@ impl ArrayCompiled {
         // model without an arg-witness op — the conservative-regrid skolem/distinct
         // path is left entirely to `strip_value_invention` below.
         materialize_vi_outputs_to_data(&mut model_owned, &mut index_sets_owned, vi_arrays)?;
+        // Build-time value invention for every non-geometry derived index set
+        // (`skolem`/`distinct`/`rank`, RFC §6.1): the producer's member count sizes
+        // a range over the set. Runs before `strip_value_invention` drops the
+        // producer. A producer that cannot run is recorded rather than raised, and
+        // is refused below only if a surviving expression ranges over its set.
+        let derived = materialize_derived_extents(&model_owned, &index_sets_owned, vi_arrays);
         let index_sets = &index_sets_owned;
         // Drop value-invention (relational) scaffolding — skolem-id bin maps and
         // membership sets over `kind: "derived"` index sets — plus the broad-phase
@@ -719,7 +723,14 @@ impl ArrayCompiled {
         // Then rewrite every `{ "from": <index set> }` range reference (§5.2)
         // into a concrete `[lo, hi]` interval before shape inference / rule
         // building, so every downstream consumer sees only dense intervals.
-        resolve_aggregate_ranges(&mut model_owned, index_sets)?;
+        crate::faq::resolve_aggregate_ranges_with_extents(
+            &mut model_owned,
+            index_sets,
+            &derived.extents,
+        )?;
+        // A range over a non-geometry derived set that value invention did not
+        // size would contract as empty and read 0 (esm-spec §9.6.6): refuse it.
+        refuse_unmaterialized_derived_ranges(&model_owned, index_sets, &derived)?;
         // Reject any aggregate whose ⊕ is spelled outside the schema's closed
         // `reduce` / `semiring` enums. The gate lives here, at the one funnel
         // every array-runtime build passes through, because the seams that
@@ -3399,6 +3410,151 @@ pub fn run_value_invention<S: std::hash::BuildHasher>(
     materialize_value_invention(&model_json, &const_arrays, &params, &HashMap::new()).map_err(|e| {
         CompileError::build_err(format!("value-invention materialize failed: {}", e.0))
     })
+}
+
+/// The build-time extents of a model's non-geometry derived index sets, and why
+/// value invention failed when it did.
+pub(super) struct DerivedMaterialization {
+    /// `from_faq` producer id → member count, as [`run_value_invention`] reports.
+    pub(super) extents: HashMap<String, i64>,
+    /// Ids of the geometry ring producers, whose sets the runtime sizes itself.
+    geometry_ids: HashSet<String>,
+    /// The engine's error, if it could not run.
+    failure: Option<String>,
+}
+
+/// Run value invention when the model has a derived index set whose producer is
+/// not a geometry ring. A model without one pays only the scan.
+fn materialize_derived_extents(
+    model: &Model,
+    index_sets: &HashMap<String, IndexSet>,
+    caller_arrays: Option<&HashMap<String, ArrayD<f64>>>,
+) -> DerivedMaterialization {
+    let mut geometry_ids = HashSet::new();
+    for eq in &model.equations {
+        collect_geometry_producer_ids(&eq.rhs, &mut geometry_ids);
+    }
+    for var in model.variables.values() {
+        var.for_each_expression(&mut |expr| collect_geometry_producer_ids(expr, &mut geometry_ids));
+    }
+    let mut out = DerivedMaterialization {
+        extents: HashMap::new(),
+        geometry_ids,
+        failure: None,
+    };
+    let needs_value_invention = index_sets.values().any(|is| {
+        is.kind == "derived"
+            && is
+                .from_faq
+                .as_deref()
+                .is_some_and(|f| !out.geometry_ids.contains(f))
+    });
+    if needs_value_invention {
+        match run_value_invention(model, index_sets, caller_arrays) {
+            Ok(result) => out.extents = result.extents,
+            Err(e) => out.failure = Some(e.to_string()),
+        }
+    }
+    out
+}
+
+/// The `from_faq` of the first range in `expr` over a derived set that neither
+/// `extents` sizes nor a geometry producer in `geometry_ids` materializes.
+pub(super) fn first_unmaterialized_derived_range(
+    expr: &Expr,
+    extents: &HashMap<String, i64>,
+    geometry_ids: &HashSet<String>,
+) -> Option<String> {
+    let Expr::Operator(node) = expr else {
+        return None;
+    };
+    if let Some(ranges) = &node.ranges {
+        let mut unmaterialized: Vec<&str> = ranges
+            .values()
+            .filter_map(|spec| spec.derived())
+            .filter(|f| !extents.contains_key(*f) && !geometry_ids.contains(*f))
+            .collect();
+        unmaterialized.sort_unstable();
+        if let Some(f) = unmaterialized.first() {
+            return Some((*f).to_string());
+        }
+    }
+    let mut found = None;
+    node.any_child(&mut |child| {
+        found = first_unmaterialized_derived_range(child, extents, geometry_ids);
+        found.is_some()
+    });
+    found
+}
+
+/// The refusal for a range over the derived set produced by `from_faq`. A
+/// producer refused by the cadence guard keeps that guard's code.
+pub(super) fn unmaterialized_derived_error(
+    from_faq: &str,
+    index_sets: &HashMap<String, IndexSet>,
+    failure: Option<&str>,
+) -> CompileError {
+    let mut names: Vec<&str> = index_sets
+        .iter()
+        .filter(|(_, is)| is.from_faq.as_deref() == Some(from_faq))
+        .map(|(name, _)| name.as_str())
+        .collect();
+    names.sort_unstable();
+    // The standalone evaluator entry has no index-set registry to name the set from.
+    let subject = match names.first() {
+        Some(set) => format!("derived index set '{set}' (from_faq '{from_faq}')"),
+        None => format!("the derived index set produced by '{from_faq}'"),
+    };
+    match failure {
+        Some(reason)
+            if reason.contains(crate::diagnostic::codes::RELATIONAL_NODE_IN_CONTINUOUS) =>
+        {
+            CompileError::ValueInventionRefused {
+                code: crate::diagnostic::codes::RELATIONAL_NODE_IN_CONTINUOUS,
+                reason: format!("{subject}: {reason}"),
+            }
+        }
+        _ => CompileError::ValueInventionRefused {
+            code: crate::diagnostic::codes::DERIVED_INDEX_SET_UNMATERIALIZED,
+            reason: format!(
+                "{subject} is not materialized: {}",
+                failure.unwrap_or("no geometry or value-invention producer supplied its extent")
+            ),
+        },
+    }
+}
+
+fn refuse_unmaterialized_derived_ranges(
+    model: &Model,
+    index_sets: &HashMap<String, IndexSet>,
+    derived: &DerivedMaterialization,
+) -> Result<(), CompileError> {
+    let mut found: Option<String> = None;
+    let mut visit = |expr: &Expr| {
+        if found.is_none() {
+            found =
+                first_unmaterialized_derived_range(expr, &derived.extents, &derived.geometry_ids);
+        }
+    };
+    for eq in &model.equations {
+        visit(&eq.lhs);
+        visit(&eq.rhs);
+    }
+    for eq in model.initialization_equations.iter().flatten() {
+        visit(&eq.lhs);
+        visit(&eq.rhs);
+    }
+    for var in model.variables.values() {
+        var.for_each_expression(&mut |expr| visit(expr));
+    }
+    match found {
+        Some(from_faq) => Err(unmaterialized_derived_error(
+            &from_faq,
+            index_sets,
+            derived.failure.as_deref(),
+        )),
+        None => Ok(()),
+    }
 }
 
 /// Wire the value-invention front door into the array run path: run the

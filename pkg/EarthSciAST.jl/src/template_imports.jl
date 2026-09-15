@@ -1392,7 +1392,14 @@ function _process_library(raw, dir::String, stack::Vector{String},
         end
     end
 
-    _merge_own_templates!(scope.templates, raw, origin)
+    own = _collect_own_templates(raw, origin)
+    for (n, d) in own
+        own[n] = _lower_library_template_enums(raw, n, d, origin)
+    end
+    for (n, d) in own
+        _merge_named!(scope.templates, n, d, ERROR_CODES.TEMPLATE_IMPORT_NAME_CONFLICT,
+                      "template", origin)
+    end
 
     isets = _raw_get(raw, "index_sets")
     if isets !== nothing && _is_object(isets)
@@ -1409,7 +1416,71 @@ function _process_library(raw, dir::String, stack::Vector{String},
 
     # §9.7.3 body-reference DAG validation in the library's own scope.
     _compose_template_bodies!(scope.templates, origin)
+    _expand_library_enum_calls!(scope.templates, raw, collect(String, keys(own)), origin)
     return scope
+end
+
+# Resolve the `enum` symbols a template library binds in its OWN calls
+# (esm-spec §9.3). After `_lower_library_template_enums`, the only `enum` ops
+# left in the library's scope are spelled with a template parameter. A call to a
+# template that can still produce one binds that parameter here, in the library,
+# so each of the library's own template bodies has those calls expanded (the
+# eager expansion esm-spec §9.6.4 rule 3 requires at load anyway) and the result
+# lowered against the library's block. An op the expansion leaves spelled with
+# the calling template's own parameter stays open for the importer's binding.
+# Runs after `_compose_template_bodies!`, so the reference DAG is acyclic; every
+# new body is computed before any is replaced.
+function _expand_library_enum_calls!(named, library, own_names::Vector{String},
+                                     origin::String)
+    bearing = _transitive_op_flags(named, op -> op == "enum")
+    calls_bearing = node -> begin
+        nm = _raw_get(node, "name")
+        nm isa AbstractString && get(bearing, String(nm), false)
+    end
+    bodies = OrderedDict{String,Any}()
+    for n in own_names
+        decl = get(named, n, nothing)
+        (decl !== nothing && _is_object(decl) && _raw_haskey(decl, "body")) || continue
+        body = _raw_get(decl, "body")
+        any(r -> get(bearing, r, false), _collect_apply_names!(String[], body)) || continue
+        expanded = _expand_refs_walk(body, named, origin, calls_bearing, IdDict{Any,Any}())
+        bodies[n] = _lower_library_template_body(library, n, decl, expanded, origin)
+    end
+    for (n, body) in bodies
+        decl = OrderedDict{String,Any}(string(k) => v for (k, v) in pairs(named[n]))
+        decl["body"] = body
+        named[n] = decl
+    end
+    return named
+end
+
+# Lower the `enum` ops in one of a template library's OWN template bodies
+# against the library's `enums` block (esm-spec §9.3), before the template
+# reaches an importer whose block is a different one. An op spelled with one of
+# the template's `params` stays open and resolves at the call site.
+function _lower_library_template_enums(library, name::String, decl, origin::String)
+    (_is_object(decl) && _raw_haskey(decl, "body")) || return decl
+    decl["body"] = _lower_library_template_body(library, name, decl,
+                                                _raw_get(decl, "body"), origin)
+    return decl
+end
+
+# `body`, a body of the library's template `name` (`decl`), with its `enum` ops
+# lowered against the library's `enums` block. An op spelled with one of
+# `decl`'s `params` stays open.
+function _lower_library_template_body(library, name::String, decl, body, origin::String)
+    params_raw = _raw_get(decl, "params")
+    params = Set{String}(String(p) for p in
+        (params_raw !== nothing && _is_array(params_raw) ? params_raw : Any[])
+        if p isa AbstractString)
+    try
+        return _lower_enum_ops_for_file(library, body, params)
+    catch e
+        e isa EnumLoweringError || rethrow()
+        throw(ExpressionTemplateError(e.code,
+            "$origin: template '$name': $(e.message) — an `enum` op in a template " *
+            "library resolves against that library's own `enums` block (esm-spec §9.3)"))
+    end
 end
 
 # ---------------------------------------------------------------------------

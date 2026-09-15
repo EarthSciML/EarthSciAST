@@ -326,6 +326,74 @@ fn import_where_rename_unknown_index_set_rejected() {
     );
 }
 
+/// import_library_enum: a template library's `enum` ops resolve against the
+/// library's own `enums` block (esm-spec §9.3), so the importer needs no copy of
+/// it, and an importer redeclaring the enum with a different value (7 where the
+/// library says 1) does not change what the library's template computes.
+#[test]
+fn import_library_enum_resolves_in_the_library_scope() {
+    assert_eq!(
+        expand_raw(&conf(&["import_library_enum", "fixture.esm"])),
+        golden(&conf(&["import_library_enum", "expanded.esm"]))
+    );
+    assert_eq!(
+        expand_raw(&conf(&[
+            "import_library_enum",
+            "fixture_importer_redeclares.esm"
+        ])),
+        golden(&conf(&[
+            "import_library_enum",
+            "expanded_importer_redeclares.esm"
+        ]))
+    );
+    let f = load_path(conf(&[
+        "import_library_enum",
+        "fixture_importer_redeclares.esm",
+    ]))
+    .expect("importer redeclaring the library's enum loads");
+    let doc = serde_json::to_value(&f).expect("serialize");
+    let model = &doc["models"]["Consumer"];
+    let library_body = obs_def(model, "isPerHorsepowerHour");
+    assert_eq!(library_body["op"], json!("=="));
+    assert_eq!(library_body["args"][1]["op"], json!("const"));
+    assert_eq!(library_body["args"][1]["value"], json!(1));
+    assert_eq!(obs_def(model, "importerCode")["value"], json!(7));
+    let caller_bound = obs_def(model, "callerBoundCode");
+    assert_eq!(caller_bound["args"][0]["value"], json!(7));
+    assert_eq!(caller_bound["args"][1]["value"], json!(1));
+    // The library's own call binds `g_per_gallon`, so it keeps the library's 2; a
+    // symbol the importer binds, directly or through a forwarded parameter, takes 9.
+    assert_eq!(obs_def(model, "gallonCode")["value"], json!(2));
+    assert_eq!(obs_def(model, "importerBoundCode")["value"], json!(9));
+    assert_eq!(obs_def(model, "forwardedCode")["value"], json!(9));
+    // An importer declaring no enums still loads the library's own call.
+    let f = load_path(conf(&["import_library_enum", "fixture.esm"]))
+        .expect("importer with no enums loads the library's own call");
+    let doc = serde_json::to_value(&f).expect("serialize");
+    assert_eq!(
+        obs_def(&doc["models"]["Consumer"], "gallonCode")["value"],
+        json!(2)
+    );
+}
+
+/// import_library_enum_undeclared: a library body naming an enum the library
+/// does not declare is `unknown_enum`, reported against the library and the
+/// template — even when the importer declares that enum (esm-spec §9.3).
+#[test]
+fn import_library_enum_undeclared_is_reported_against_the_library() {
+    for fixture in ["fixture.esm", "fixture_importer_declares.esm"] {
+        let e = load_path(conf(&["import_library_enum_undeclared", fixture]))
+            .expect_err("library enum the library does not declare must fail to load");
+        let msg = e.to_string();
+        assert!(msg.contains("[unknown_enum]"), "{fixture}: got: {msg}");
+        assert!(msg.contains("lib.esm"), "{fixture}: got: {msg}");
+        assert!(
+            msg.contains("plus_horsepower_code"),
+            "{fixture}: got: {msg}"
+        );
+    }
+}
+
 /// import_rebind_keyed_factors: `rebind` rewrites a free keyed-factor name in an
 /// imported template body/registry, transitively through every occurrence.
 #[test]
@@ -379,8 +447,9 @@ fn subsystem_index_sets_merge_into_document() {
 /// silently dropped and an assembly had to redeclare its leaves' axes.
 #[test]
 fn toplevel_ref_mount_merges_leaf_index_sets() {
-    let dir = repo_root().join("tests/fixtures/toplevel_ref_index_sets");
-    let f = load_path(dir.join("toplevel_ref_index_set_merge.esm")).expect("top-level mount load");
+    let valid = repo_root().join("tests/valid");
+    let f =
+        load_path(valid.join("toplevel_ref_index_set_merge.esm")).expect("top-level mount load");
     let isets = f.index_sets.as_ref().expect("index_sets");
     assert_eq!(isets["cells"].size, Some(5));
     assert_eq!(isets["vertices"].size, Some(4));
@@ -394,8 +463,10 @@ fn toplevel_ref_mount_merges_leaf_index_sets() {
 
     // A non-deep-equal collision is `subsystem_index_set_conflict` — the SAME
     // diagnostic the subsystems-edge form raises, not last-writer-wins.
-    let e = load_path(dir.join("toplevel_ref_index_set_conflict.esm"))
-        .expect_err("size disagreement must be rejected");
+    let e = load_path(
+        repo_root().join("tests/invalid/template_imports/toplevel_ref_index_set_conflict.esm"),
+    )
+    .expect_err("size disagreement must be rejected");
     assert!(
         e.to_string().contains("[subsystem_index_set_conflict]"),
         "got: {e}"
@@ -408,7 +479,7 @@ fn toplevel_ref_mount_merges_leaf_index_sets() {
     // `NLEV` (default 4), so it folds AT THE EDGE, in the leaf's scope, and
     // reaches the registry as 4 — the importer redeclares nothing. This used to
     // be held back by a fold guard and the axis stayed undeclared.
-    let f = load_path(dir.join("toplevel_ref_metaparameter_axis.esm"))
+    let f = load_path(valid.join("toplevel_ref_metaparameter_axis.esm"))
         .expect("a metaparameter-sized leaf axis must fold at the edge and merge");
     let isets = f.index_sets.as_ref().expect("index_sets");
     assert_eq!(

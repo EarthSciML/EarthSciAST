@@ -2388,6 +2388,22 @@
     "resolver_error_code": "subsystem_index_set_conflict",
     "notes": "Resolver-level invalid (esm-spec \u00a74.7 'Index-set merge'). The document is SCHEMA-VALID \u2014 a subsystem ref and top-level index_sets are both legal schema \u2014 so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. The document's own index_sets.cells (interval, size 7) collides with the mounted subsystem file's cells (interval, size 5) from ../../valid/subsystem_mesh_lib.esm: a referenced subsystem file's top-level index_sets merge into the importing document's registry (deep-equal idempotent, mirroring \u00a79.7.5), so the size disagreement is a load-time error instead of the importer's declaration silently winning."
   },
+  "toplevel_ref_index_set_conflict.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": true,
+    "resolver_only": true,
+    "resolver_error_code": "subsystem_index_set_conflict",
+    "notes": "Resolver-level invalid (esm-spec \u00a74.7 'Index-set merge', 'Two mount forms, one mechanism'). The top-level `models.<k>` twin of subsystem_index_set_conflict.esm. The document is SCHEMA-VALID, so a binding that only checks the schema accepts it (is_valid: true); the invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code`. Lives under tests/invalid/template_imports/. The document's own index_sets.cells (interval, size 7) collides with cells (interval, size 5) from ../../valid/subsystem_mesh_lib.esm, mounted through a top-level models.M {ref} instead of a subsystems entry. A binding that merges a mounted leaf's axes at one attachment point but not the other passes one fixture of the pair and fails the other."
+  },
+  "mount_forwarded_axis_size_conflict.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": true,
+    "resolver_only": true,
+    "resolver_error_code": "subsystem_index_set_conflict",
+    "notes": "Resolver-level invalid (esm-spec \u00a74.7 'Index-set merge'). The size-disagreement companion of tests/valid/mount_forwarded_axis_toplevel_beside_nested.esm (issue #236). The document is SCHEMA-VALID, so a binding that only checks the schema accepts it (is_valid: true); the invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code`. Lives under tests/invalid/template_imports/. The same grid-library axis `lev`, sized by a forwarded metaparameter NLEV, arrives through a top-level `models.A` mount closed at 59 and through a nested `subsystems.col` mount bound to NLEV = 4. Both contributions are concrete and disagree, so the merge refuses with subsystem_index_set_conflict. It is not template_import_index_set_conflict, which is what a binding that merges the top-level contribution unfolded reports."
+  },
   "mount_rename_unknown_index_set.esm": {
     "schema_errors": [],
     "structural_errors": [],
@@ -2563,6 +2579,20 @@
     ],
     "is_valid": false
   },
+  "undefined_variable_in_reaction_system_continuous_event_condition.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/reaction_systems/TestReactions/continuous_events/0/conditions/0",
+        "code": "undefined_variable",
+        "message": "Variable \"undefined_xyz\" referenced in continuous event condition but not declared",
+        "details": {
+          "variable": "undefined_xyz"
+        }
+      }
+    ],
+    "is_valid": false
+  },
   "undefined_variable_in_discrete_event_trigger.esm": {
     "schema_errors": [],
     "structural_errors": [
@@ -2596,6 +2626,141 @@
     "structural_errors": [
       {
         "path": "/models/TestModel/tests/0/assertions/0/reference",
+        "code": "undefined_variable",
+        "message": "Variable \"undefined_xyz\" referenced in assertion reference expression but not declared",
+        "details": {
+          "variable": "undefined_xyz"
+        }
+      }
+    ],
+    "is_valid": false
+  },
+  "undefined_variable_in_reaction_system_constraint_equation.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/reaction_systems/TestReactions/constraint_equations/0/rhs",
+        "code": "undefined_variable",
+        "message": "Variable 'undefined_xyz' referenced in equation is not declared",
+        "details": {
+          "variable": "undefined_xyz",
+          "equation_index": 0,
+          "expected_in": "variables"
+        }
+      }
+    ],
+    "is_valid": false
+  },
+  "undefined_variable_in_reaction_system_discrete_event_trigger.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/reaction_systems/TestReactions/discrete_events/0/trigger/expression",
+        "code": "undefined_variable",
+        "message": "Variable \"undefined_xyz\" referenced in discrete event trigger expression but not declared",
+        "details": {
+          "variable": "undefined_xyz"
+        }
+      }
+    ],
+    "is_valid": false
+  },
+  "undefined_variable_in_assertion_variable.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/TestModel/tests/0/assertions/0/variable",
+        "code": "undefined_variable",
+        "message": "Variable \"undefined_xyz\" referenced in assertion variable but not declared",
+        "details": {
+          "variable": "undefined_xyz"
+        }
+      }
+    ],
+    "is_valid": false
+  },
+  "unknown_override_key_parameter_overrides.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/TestModel/tests/0/parameter_overrides/kx",
+        "code": "unknown_override_key",
+        "message": "Override key \"kx\" in parameter_overrides matches no declared name",
+        "details": {
+          "key": "kx",
+          "field": "parameter_overrides"
+        }
+      }
+    ],
+    "is_valid": false
+  },
+  "unknown_override_key_initial_conditions.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/TestModel/tests/0/initial_conditions/yy",
+        "code": "unknown_override_key",
+        "message": "Override key \"yy\" in initial_conditions matches no declared name",
+        "details": {
+          "key": "yy",
+          "field": "initial_conditions"
+        }
+      }
+    ],
+    "is_valid": false
+  },
+  "unknown_override_key_reaction_system.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/reaction_systems/TestReactions/tests/0/parameter_overrides/kx",
+        "code": "unknown_override_key",
+        "message": "Override key \"kx\" in parameter_overrides matches no declared name",
+        "details": {
+          "key": "kx",
+          "field": "parameter_overrides"
+        }
+      }
+    ],
+    "is_valid": false
+  },
+  "assertion_rank_mismatch_pointwise_on_shaped.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/TestModel/tests/0/assertions/0",
+        "code": "assertion_rank_mismatch",
+        "message": "Assertion on shaped variable \"u\" selects no scalar (give coords, reduce, or an element name)",
+        "details": {
+          "variable": "u",
+          "shape": [
+            "x"
+          ]
+        }
+      }
+    ],
+    "is_valid": false
+  },
+  "assertion_rank_mismatch_reduce_on_scalar.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/TestModel/tests/0/assertions/0",
+        "code": "assertion_rank_mismatch",
+        "message": "Assertion on scalar variable \"y\" carries coords or reduce",
+        "details": {
+          "variable": "y",
+          "shape": []
+        }
+      }
+    ],
+    "is_valid": false
+  },
+  "undefined_variable_in_reaction_system_assertion_reference.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/reaction_systems/TestReactions/tests/0/assertions/0/reference",
         "code": "undefined_variable",
         "message": "Variable \"undefined_xyz\" referenced in assertion reference expression but not declared",
         "details": {
@@ -3100,5 +3265,40 @@
     "parse_error": true,
     "is_valid": false,
     "notes": "Rejected at LOAD, at the wire boundary, BY NAME \u2014 not by JSON Schema and not by a structural check, so there is no (keyword, path) or (code, path) tuple to pin. Uses the `parse_error` category, whose contract is exactly 'must be rejected at load'; the category is slightly broader than its 'not even JSON' docstring, because `arrayop` IS well-formed JSON and a well-formed `op` identifier \u2014 that is the whole point. Without a by-name rejection esm-spec \u00a74.2 would admit it as an OPEN rewrite-target op and the document would load silently, failing much later as `unlowered_operator`, or never. See CONFORMANCE_SPEC \u00a77 `removed_op` and docs/content/rfcs/faq-node-rename.md \u00a75.4."
+  },
+  "units_scale_mismatch_equation.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/variables/speed_ms",
+        "code": "unit_inconsistency",
+        "message": "Declared units of m/s do not match the expression's units of mi/h",
+        "details": {
+          "variable": "speed_ms",
+          "declared_units": "m/s",
+          "expression_units": "mi/h"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "A scale disagreement (esm-spec \u00a74.8.3): every operand dimension agrees and the exact scales do not. Pinned at the observed variable's declaration, as tests/invalid/units_inconsistent_addition.esm pins its dimension mismatch."
+  },
+  "units_scale_mismatch_addition.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/variables/total_length",
+        "code": "unit_inconsistency",
+        "message": "Cannot add quantities with different units: 'm' + 'km'",
+        "details": {
+          "operation": "addition",
+          "left_units": "m",
+          "right_units": "km",
+          "variable": "total_length"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "A scale disagreement (esm-spec \u00a74.8.3): every operand dimension agrees and the exact scales do not. Pinned at the observed variable's declaration, as tests/invalid/units_inconsistent_addition.esm pins its dimension mismatch."
   }
 }

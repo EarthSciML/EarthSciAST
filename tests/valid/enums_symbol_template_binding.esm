@@ -1,0 +1,73 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "EnumsSymbolTemplateBinding",
+    "description": "A template whose `enum` op spells its SYMBOL with a template parameter, called with that symbol bound as a bare string (esm-spec §9.3, §9.6.1, §9.6.9). Substitution is position-blind (§9.6.3 constraint 5), so the expansion is `{op: enum, args: [\"activity_unit\", \"g_per_gallon\"]}`, which lowers to the constant 2. A document is valid iff its expansion is valid (§9.6.9), and the expansion carries no variable reference to `g_per_gallon`, so the bare string binding is an enum symbol, not an undeclared variable. `callerCode` pins the same value on the caller's own `enum` op.",
+    "authors": [
+      "EarthSciML"
+    ],
+    "created": "2026-09-15T00:00:00Z",
+    "tags": [
+      "enums",
+      "expression-templates",
+      "fixture"
+    ]
+  },
+  "enums": {
+    "activity_unit": {
+      "g_per_hp_hr": 1,
+      "g_per_gallon": 2
+    }
+  },
+  "models": {
+    "EnumsSymbolTemplateBinding": {
+      "expression_templates": {
+        "activity_code": {
+          "params": [
+            "sym"
+          ],
+          "body": {
+            "op": "enum",
+            "args": [
+              "activity_unit",
+              "sym"
+            ]
+          }
+        }
+      },
+      "variables": {
+        "templateCode": {
+          "type": "unknown",
+          "units": "1"
+        },
+        "callerCode": {
+          "type": "unknown",
+          "units": "1"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "templateCode",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "activity_code",
+            "bindings": {
+              "sym": "g_per_gallon"
+            }
+          }
+        },
+        {
+          "lhs": "callerCode",
+          "rhs": {
+            "op": "enum",
+            "args": [
+              "activity_unit",
+              "g_per_gallon"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}
