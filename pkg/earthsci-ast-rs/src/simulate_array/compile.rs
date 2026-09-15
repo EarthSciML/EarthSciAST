@@ -5,9 +5,7 @@
 //! lowering helpers.
 
 use super::*;
-use crate::faq::{
-    effective_reduce_kind, is_faq_op, validate_oplus_spellings,
-};
+use crate::faq::{effective_reduce_kind, is_faq_op, validate_oplus_spellings};
 use crate::flatten::FlattenedSystem;
 use crate::op_registry::{OpError, is_builtin_function_name};
 use crate::simulate::{CompileError, SimulateError};
