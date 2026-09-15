@@ -492,6 +492,42 @@ end
             @test !EXT_DE._de_gather_is_cheaper(6, 216)      # avg 36
             @test !EXT_DE._de_gather_is_cheaper(7, 20)       # below the piece floor
         end
+        # `always` is the measurement lever: gather anything with more than one
+        # run, and no budget on the base.
+        withenv("ESM_DIRECT_EMIT_READ" => "always") do
+            @test EXT_DE._de_gather_is_cheaper(2, 10_000)
+            @test !EXT_DE._de_gather_is_cheaper(1, 216)
+            @test EXT_DE._de_gather_base_fits(4, false, 10_000_000)
+        end
+
+        # THE BASE BUDGET, the other half of the decision and the one that
+        # decided ReSEACT's transport half. Wanting the gather is not enough:
+        # a cross-producer gather also needs the producers concatenated, and
+        # that concatenate is what the budget bounds.
+        withenv("ESM_DIRECT_EMIT_READ" => nothing,
+                "ESM_DIRECT_GATHER_BASE_MAX" => nothing) do
+            # One producer, no structural zero: `_de_concat` of a single piece
+            # IS that piece, so there is no copy to charge and no size at which
+            # to decline.
+            @test EXT_DE._de_gather_base_fits(1, false, 476_928)
+            # The shape that matters: ReSEACT's stencil reads 432 positions out
+            # of the 3744-slot extended state beside a 2304-slot buffer. The
+            # per-read rule this replaced compared 6048 against `max(8*432,
+            # 4096)` and declined; the copy is 6048 elements, paid once for all
+            # 240 reads that share the producer set.
+            @test EXT_DE._de_gather_base_fits(2, false, 3744 + 2304)
+            # A base whose copy is larger than the budget still declines.
+            @test !EXT_DE._de_gather_base_fits(2, false, (1 << 16) + 1)
+            @test EXT_DE._de_gather_base_fits(2, false, 1 << 16)
+            # And a structural zero makes even a single producer a concatenate.
+            @test !EXT_DE._de_gather_base_fits(1, true, 476_928)
+        end
+        # The override reproduces the per-read rule's effect on this model, and
+        # is how the negative control in reseact.esm's COMPILE_COST.md was run.
+        withenv("ESM_DIRECT_GATHER_BASE_MAX" => "4096") do
+            @test !EXT_DE._de_gather_base_fits(2, false, 3744 + 2304)
+            @test EXT_DE._de_gather_base_fits(1, false, 476_928)
+        end
 
         # And the two read forms are the SAME PROGRAM numerically. A 3-axis
         # stencil over 343 cells is the shape that shatters: its reads span two
@@ -508,7 +544,7 @@ end
         pr = _de_dev(p)
         ur = RX_DE.ConcreteRArray(copy(u1)); tr = RX_DE.ConcreteRNumber(0.4)
         tallies = Dict{String,Dict{Symbol,Int}}()
-        for mode in ("runs", "gather")
+        for mode in ("runs", "gather", "always")
             withenv("ESM_DIRECT_EMIT_READ" => mode) do
                 d = EXT_DE.direct_rhs(fo)
                 xla = RX_DE.@compile sync = true d(ur, pr, tr)
@@ -516,11 +552,34 @@ end
                 tallies[mode] = copy(d.stats)
             end
         end
-        println("  read-form tallies: runs=", tallies["runs"],
-                "\n                     gather=", tallies["gather"])
+        # And the budget is a SHAPE decision, not a numerical one: the same
+        # model emitted with the per-read budget the default replaces has to
+        # agree to the last bit.
+        withenv("ESM_DIRECT_GATHER_BASE_MAX" => "64") do
+            d = EXT_DE.direct_rhs(fo)
+            xla = RX_DE.@compile sync = true d(ur, pr, tr)
+            @test isapprox(Array(xla(ur, pr, tr)), ref; rtol = 1e-12, atol = 0.0)
+            tallies["base64"] = copy(d.stats)
+        end
+        for (k, v) in sort!(collect(tallies); by = first)
+            println("  read-form tally ", rpad(k, 7), " ", v)
+        end
         # The point of the mode: fewer slices, and the gathers that replace them.
         @test get(tallies["gather"], :slice, 0) < get(tallies["runs"], :slice, 0)
         @test get(tallies["gather"], :gather, 0) > get(tallies["runs"], :gather, 0)
+        # THIS FIXTURE CANNOT EXERCISE THE BUDGET, and that is worth pinning
+        # rather than hiding: every read in it lies in ONE producer (it is a
+        # single-tracer model with no second buffer), a one-producer base is not
+        # a concatenate at all, so there is no copy to charge and a 64-element
+        # budget emits the same program as the default. The cross-producer half
+        # — the half ReSEACT's transport stencil is made of, where the base is
+        # the 3744-slot state beside a 2304-slot buffer — is pinned
+        # arithmetically above, on `_de_gather_base_fits`.
+        @test tallies["base64"] == tallies["gather"]
+        # `always` gathers everything with more than one run, so it is the floor
+        # on slices and the ceiling on gathers.
+        @test get(tallies["always"], :slice, 0) <= get(tallies["gather"], :slice, 0)
+        @test get(tallies["always"], :gather, 0) >= get(tallies["gather"], :gather, 0)
     end
 
     @testset "a closed `interp.linear` function" begin

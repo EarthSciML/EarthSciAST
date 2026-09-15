@@ -328,13 +328,21 @@ const _DESlotSrc = Union{Nothing,_DEVal}
 #
 # Neither setting changes a NUMBER: a gather of the same positions from the same
 # values is bit-identical to slices-plus-concatenate of them.
+#
+# `ESM_DIRECT_EMIT_READ=always` is the third setting and it is a MEASUREMENT
+# LEVER, not a recommendation: it gathers every read that decomposes into more
+# than one run and lifts the base budget, which bounds from above what the read
+# form can buy and tells a measurement whether a threshold or the base budget is
+# the clause doing the declining.
 const _DE_GATHER_MIN_PIECES = 8
 const _DE_RUN_WORTH = 4
 
 _de_read_mode() = get(ENV, "ESM_DIRECT_EMIT_READ", "gather")
 
 function _de_gather_is_cheaper(npieces::Int, n::Int)
-    _de_read_mode() == "runs" && return false
+    mode = _de_read_mode()
+    mode == "runs" && return false
+    mode == "always" && return npieces > 1
     return npieces >= _DE_GATHER_MIN_PIECES && npieces * _DE_RUN_WORTH > n
 end
 
@@ -342,16 +350,47 @@ end
 # concatenated once, plus one zero element when the read carries structural
 # zeros (a gather may read one position many times, so every zero lane points
 # at that single element). Returns the base, the offset of each producer inside
-# it, and the position of the zero — or `nothing` when the base would be so much
-# larger than the read that the concatenate is the new cost.
-function _de_gather_base(ctx::_DECtx, prods::Vector{_DEVal}, needzero::Bool, n::Int)
+# it, and the position of the zero — or `nothing` when the concatenate the base
+# needs would copy more than `_DE_GATHER_BASE_MAX` elements.
+#
+# WHAT THE BASE COSTS IS THE COPY, AND ONLY ONCE. The base is cached on the
+# emission context keyed by the producer set, so its concatenate is emitted once
+# however many reads use it, and a base over ONE producer with no structural
+# zero is not a concatenate at all — `_de_concat` of a single piece is that
+# piece. The budget is therefore an absolute bound on the copy, charged only
+# when a copy happens.
+#
+# CHARGING IT TO ONE READ IS WHAT THE FIRST VERSION DID, and on ReSEACT's
+# transport half at 288 cells that declined the stencil's own base. 640 reads
+# there share 37 distinct producer sets, and 240 of them read 432 positions in
+# 168 to 312 runs out of TWO producers — the 3744-slot extended state beside a
+# 2304-slot buffer, 6048 elements — which `max(8n, 4096)` refused at 4096.
+# Three quarters of the slices the emitter still handed to Enzyme, 43,368 of
+# 58,620, came from those 240 reads; see reseact.esm's COMPILE_COST.md for what
+# they cost the reverse-mode compile.
+# `ESM_DIRECT_GATHER_BASE_MAX` overrides the budget, and is the other half of
+# the measurement lever: 4096 reproduces the shape the per-read rule produced on
+# this model, which is the negative control the numbers above were measured
+# against.
+const _DE_GATHER_BASE_MAX = 1 << 16
+
+function _de_gather_base_max()
+    _de_read_mode() == "always" && return typemax(Int)
+    v = get(ENV, "ESM_DIRECT_GATHER_BASE_MAX", "")
+    return isempty(v) ? _DE_GATHER_BASE_MAX :
+           something(tryparse(Int, v), _DE_GATHER_BASE_MAX)
+end
+
+# Pure, so the decision can be pinned by a test at sizes no fixture reaches.
+_de_gather_base_fits(nprods::Int, needzero::Bool, tot::Int) =
+    ((nprods == 1 && !needzero) ? 0 : tot) <= _de_gather_base_max()
+
+function _de_gather_base(ctx::_DECtx, prods::Vector{_DEVal}, needzero::Bool)
     key = (_MLIR.IR.Value[q.v for q in prods], needzero)
     hit = get(ctx.gather_bases, key, nothing)
     hit === nothing || return hit
     tot = sum(q.len for q in prods) + (needzero ? 1 : 0)
-    # A gather reads `n` of `tot`; concatenating a base far larger than the read
-    # trades a compile-time win for a runtime copy, which is not the trade.
-    tot > max(8 * n, 4096) && return nothing
+    _de_gather_base_fits(length(prods), needzero, tot) || return nothing
     offs = Int[]
     acc = 0
     for q in prods
@@ -381,7 +420,7 @@ function _de_runs_as_gather(ctx::_DECtx, srcs::Vector{_DESlot},
     end
     # All zeros: the slice path already emits exactly one constant for that.
     isempty(prods) && return nothing
-    got = _de_gather_base(ctx, prods, needzero, length(srcs))
+    got = _de_gather_base(ctx, prods, needzero)
     got === nothing && return nothing
     base, offs, zpos = got
     pos = Vector{Int}(undef, length(srcs))
