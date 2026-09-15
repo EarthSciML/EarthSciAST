@@ -1430,14 +1430,14 @@ def _check_variable_references(
     references (esm-spec §5).
     """
     global_symbols = tables["global_symbols"]
-    for mname, m in data.get("models", {}).items():
+    for m, sites in _component_reference_sites(data):
         subsystems = m.get("subsystems") or {}
         # Scalar-field template params (§9.6.1): a call-site STRING binding for
         # one is field vocabulary (`manifold: "planar"`), not a reference —
         # strip those bindings before the reference walk (never mutating the
         # document). See :func:`_scalar_field_param_map`.
         sf_map = _scalar_field_param_map(_model_template_registry(data, m))
-        for location, expr, check_bare, phrase, extra in _model_expression_sites(m, mname):
+        for location, expr, check_bare, phrase, extra in sites:
             bound_symbols = _expression_bound_symbols(expr)
             if sf_map:
                 expr = _strip_scalar_field_bindings(expr, sf_map)
@@ -1671,18 +1671,37 @@ def _model_expression_sites(m: dict[str, Any], mname: str):
                     {},
                 )
 
-    for i, t in enumerate(m.get("tests", []) or []):
+    yield from _test_reference_sites(m, f"models/{mname}")
+
+
+def _test_reference_sites(component: dict[str, Any], location: str):
+    """An inline test's assertion ``reference`` expressions (§6.6), in the
+    :func:`_model_expression_sites` tuple shape. A test is the same site on a
+    reaction system as on a model, so both component kinds share this."""
+    for i, t in enumerate(component.get("tests", []) or []):
         if not isinstance(t, dict):
             continue
         for j, a in enumerate(t.get("assertions", []) or []):
             if isinstance(a, dict) and a.get("reference") is not None:
                 yield (
-                    f"models/{mname}/tests[{i}]/assertions[{j}]/reference",
+                    f"{location}/tests[{i}]/assertions[{j}]/reference",
                     a["reference"],
                     True,
                     "assertion reference expression",
                     {},
                 )
+
+
+def _component_reference_sites(data: dict[str, Any]):
+    """Yield ``(component, sites)`` for every component whose expressions the
+    reference-integrity check walks: each model's full site list, and each
+    reaction system's inline-test references."""
+    for mname, m in (data.get("models") or {}).items():
+        if isinstance(m, dict):
+            yield m, _model_expression_sites(m, mname)
+    for rsname, rs in (data.get("reaction_systems") or {}).items():
+        if isinstance(rs, dict):
+            yield rs, _test_reference_sites(rs, f"reaction_systems/{rsname}")
 
 
 def _pointer(location: str) -> str:

@@ -2011,6 +2011,27 @@ function validate_reference_integrity(file::EsmFile)::Vector{StructuralError}
         end
     end
 
+    # A reaction system's inline tests are the same site as a model's (§6.6): an
+    # assertion `reference` is checked against the system's species and parameters
+    # plus the document's implicit names, widened to the document scope when the
+    # system is coupled, exactly as `validate_model_references` scopes a model.
+    if file.reaction_systems !== nothing
+        coupled = _coupled_system_names(file)
+        for (rs_name, rs) in file.reaction_systems
+            isempty(rs.tests) && continue
+            is_coupled = rs_name ∈ coupled
+            scope = is_coupled ? _document_declared_names(file) :
+                Set{String}(vcat([sp.name for sp in rs.species], [p.name for p in rs.parameters]))
+            is_coupled && push!(scope, _OPERATOR_PLACEHOLDER_VAR)
+            union!(scope, keys(file.index_sets))
+            push!(scope, _indep_var(file))
+            union!(scope, _coordinate_names(file))
+            union!(scope, _callback_injected_names(file))
+            append!(errors, _validate_test_references(file, rs.tests,
+                                                      "/reaction_systems/$rs_name", scope))
+        end
+    end
+
     # Validate coupling references
     for (i, coupling_entry) in enumerate(file.coupling)
         append!(errors, validate_coupling_references(file, coupling_entry, "/coupling/$(i-1)"))
@@ -2211,6 +2232,21 @@ end
 
 Validate variable references within a model.
 """
+# The assertion `reference` expressions of a component's inline tests (§6.6).
+function _validate_test_references(file::EsmFile, tests, path::String,
+                                   scope::Set{String})::Vector{StructuralError}
+    errors = StructuralError[]
+    for (i, t) in enumerate(tests)
+        for (j, a) in enumerate(t.assertions)
+            ref = a.reference
+            ref === nothing && continue
+            append!(errors, validate_expression_references(
+                file, ref, "$path/tests/$(i-1)/assertions/$(j-1)/reference"; scope=scope))
+        end
+    end
+    return errors
+end
+
 function validate_model_references(file::EsmFile, model::Model, path::String;
                                    model_name::AbstractString="",
                                    is_coupled::Bool=false)::Vector{StructuralError}
@@ -2319,14 +2355,7 @@ function validate_model_references(file::EsmFile, model::Model, path::String;
     end
 
     # 4. Inline `tests` blocks: an assertion may carry a `reference` expression.
-    for (i, t) in enumerate(model.tests)
-        for (j, a) in enumerate(t.assertions)
-            ref = a.reference
-            ref === nothing && continue
-            append!(errors, validate_expression_references(
-                file, ref, "$path/tests/$(i-1)/assertions/$(j-1)/reference"; scope=scope))
-        end
-    end
+    append!(errors, _validate_test_references(file, model.tests, path, scope))
 
     # Validate discrete event references. `scope` is threaded now — without it
     # the descent happened but the bare-variable check was a no-op.

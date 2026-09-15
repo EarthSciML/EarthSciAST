@@ -1828,8 +1828,8 @@ func (s *structuralScan) validateReactionSystem(systemName string, system *React
 	// reference integrity entered a reaction system through `reaction.rate` and
 	// nowhere else, so an undeclared species in a constraint equation, an event
 	// trigger/condition or an event affect was accepted silently. An undeclared
-	// BARE name anywhere in a reaction system is an `undefined_parameter` — the
-	// code the shared corpus pins for this component kind (see the rate check).
+	// BARE name in these is an `undefined_parameter`, as in a rate (see the rate
+	// check). The inline tests are checked below, outside this override.
 	s.withUndefinedCode(ErrorUndefinedParameter, func() {
 		for i, eq := range system.ConstraintEquations {
 			s.validateEquationRefs(eq, allVars, fmt.Sprintf("%s/constraint_equations/%d", basePath, i), systemName)
@@ -1847,8 +1847,10 @@ func (s *structuralScan) validateReactionSystem(systemName string, system *React
 			s.validateContinuousEvent(&event, allVars,
 				fmt.Sprintf("%s/continuous_events/%d", basePath, i), nil, systemName)
 		}
-		s.validateTestRefs(system.Tests, allVars, basePath, systemName)
 	})
+	// An inline test's assertion `reference` is the same site on a reaction system
+	// as on a model (§6.6), so it reports `undefined_variable` as the model's does.
+	s.validateTestRefs(system.Tests, allVars, basePath, systemName)
 
 	// v0.8.0 §11.4.1: an `ic`-op equation MUST NOT appear inside a reaction
 	// system's `constraint_equations`. A reaction system has no `equations`

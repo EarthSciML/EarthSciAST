@@ -2605,6 +2605,20 @@
     ],
     "is_valid": false
   },
+  "undefined_variable_in_reaction_system_assertion_reference.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/reaction_systems/TestReactions/tests/0/assertions/0/reference",
+        "code": "undefined_variable",
+        "message": "Variable \"undefined_xyz\" referenced in assertion reference expression but not declared",
+        "details": {
+          "variable": "undefined_xyz"
+        }
+      }
+    ],
+    "is_valid": false
+  },
   "undefined_variable_in_unit_conversion.esm": {
     "schema_errors": [],
     "structural_errors": [

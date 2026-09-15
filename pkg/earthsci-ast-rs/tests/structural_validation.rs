@@ -404,6 +404,12 @@ fn test_undefined_variable_contexts() {
             "undefined_variable_in_nested_expr",
             include_str!("../../../tests/invalid/undefined_variable_in_nested_expr.esm"),
         ),
+        (
+            "undefined_variable_in_reaction_system_assertion_reference",
+            include_str!(
+                "../../../tests/invalid/undefined_variable_in_reaction_system_assertion_reference.esm"
+            ),
+        ),
     ];
 
     for (name, fixture) in fixtures {

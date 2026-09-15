@@ -2501,6 +2501,41 @@ pub(crate) fn validate_reaction_system(
         }
     }
 
+    // An inline test's assertion `reference` (§6.6) is the same site on a
+    // reaction system as on a model: an Expression over the system's species and
+    // parameters, widened to the document scope when the system is coupled, as
+    // `ModelCtx::new` scopes a model.
+    if rs.tests.as_ref().is_some_and(|t| !t.is_empty()) {
+        let mut scope: HashSet<String> = defined_species
+            .union(&defined_parameters)
+            .cloned()
+            .collect();
+        scope.extend(implicitly_declared_symbols(esm_file));
+        if coupled_system_names(esm_file).contains(rs_name) {
+            scope.extend(document_declared_names(esm_file));
+        }
+        for (t_idx, test) in rs.tests.iter().flatten().enumerate() {
+            for (a_idx, assertion) in test.assertions.iter().enumerate() {
+                let Some(crate::types::AssertionReference::Expression(reference)) =
+                    &assertion.reference
+                else {
+                    continue;
+                };
+                let mut ref_scope = scope.clone();
+                collect_bound_symbols(reference, &mut ref_scope);
+                validate_expression_references_with_systems(
+                    reference,
+                    &ref_scope,
+                    system_refs,
+                    &HashSet::new(),
+                    &format!("{rs_path}/tests/{t_idx}/assertions/{a_idx}/reference"),
+                    0,
+                    errors,
+                );
+            }
+        }
+    }
+
     // Stoichiometric rate-dimension check (spec §7.4).
     validate_reaction_rate_units(rs_name, rs, errors);
 

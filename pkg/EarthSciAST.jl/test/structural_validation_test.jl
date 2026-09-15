@@ -580,6 +580,21 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
             end
         end
 
+        # A reaction system's inline test is the same site as a model's: an
+        # undefined name in an assertion `reference` is `undefined_variable` at the
+        # reference's pointer (tests/invalid/expected_errors.json).
+        @testset "Invalid fixture undefined_variable_in_reaction_system_assertion_reference.esm is rejected" begin
+            fixture_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid",
+                                    "undefined_variable_in_reaction_system_assertion_reference.esm")
+            if _require_fixture(fixture_path)
+                result = EarthSciAST.validate(EarthSciAST.load_path(fixture_path))
+                @test !result.is_valid
+                @test any(e -> e.error_type == "undefined_variable" &&
+                               e.path == "/reaction_systems/TestReactions/tests/0/assertions/0/reference",
+                          result.structural_errors)
+            end
+        end
+
         # No false positive: an aggregate whose body references a bound loop
         # index (`i`, introduced by `ranges`) and a declared variable must NOT
         # flag the bound index. Built via the typed API so it is schema-free.
