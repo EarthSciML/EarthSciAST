@@ -125,44 +125,58 @@ fn an_inline_const_literal_out_of_range_is_an_error_not_a_zero_ghost() {
     }
 }
 
-/// The same inline literal gathered over a whole axis inside a `faq`, which the
-/// vectorized and taped paths lower rather than the per-cell interpreter.
+/// The same inline literal gathered over a whole axis of an array right-hand side,
+/// `D(u[i]) = C[i + 1]`, which the vectorized and taped paths lower rather than
+/// the per-cell interpreter. The last cell reads past the end of `C`.
 #[test]
 fn an_inline_const_gather_over_a_whole_axis_fails_closed() {
-    let doc = json!({
-        "esm": "1.1.0",
-        "metadata": {"name": "inline_const_array_oob"},
-        "index_sets": {"k": {"kind": "interval", "size": 4}},
-        "models": {"Gather": {
-            "variables": {"shifted": {"type": "unknown", "shape": ["k"]}},
-            "equations": [
-                {"lhs": "shifted", "rhs": {
-                        "op": "faq",
-                        "output_idx": ["i"],
-                        "ranges": {"i": {"from": "k"}},
-                        "args": [],
-                        "expr": {"op": "index", "args": [
-                            {"op": "const", "args": [], "value": M.to_vec()},
-                            {"op": "+", "args": ["i", 1]}
-                        ]}
-                    }}]
-        }}
-    });
-    let opts = ProblemOptions {
-        model_name: Some("Gather".into()),
+    use earthsci_ast::{Alg, SolveOptions, load_string, run_inline_tests_with_base_dir};
+    let gather = |offset: i64| {
+        json!({
+            "esm": "1.1.0",
+            "metadata": {"name": "inline_const_array_oob"},
+            "index_sets": {"k": {"kind": "interval", "size": 4}},
+            "models": {"Gather": {
+                "variables": {"u": {"type": "unknown", "shape": ["k"], "default": 0.0}},
+                "equations": [{
+                    "lhs": {"op": "faq", "output_idx": ["i"], "ranges": {"i": {"from": "k"}},
+                            "args": [],
+                            "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "i"]}],
+                                     "wrt": "t"}},
+                    "rhs": {"op": "faq", "output_idx": ["i"], "ranges": {"i": {"from": "k"}},
+                            "args": [],
+                            "expr": {"op": "index", "args": [
+                                {"op": "const", "args": [], "value": M.to_vec()},
+                                {"op": "+", "args": ["i", offset]}
+                            ]}}
+                }],
+                "tests": [{"id": "gather", "time_span": {"start": 0.0, "end": 1.0},
+                           "assertions": [{"variable": "u", "time": 1.0, "reduce": "max",
+                                           "expected": 40.0}]}]
+            }}
+        })
+        .to_string()
+    };
+    let opts = SolveOptions {
+        alg: Alg::Erk,
         ..Default::default()
     };
-    let e = match esm_problem(&doc, (0.0, 0.0), opts) {
-        Err(e) => e,
-        Ok(prep) => panic!(
-            "an inline const gather past the end must fail closed; got {:?}",
-            observed_field(&prep, "shifted").map(|a| a.iter().copied().collect::<Vec<_>>())
-        ),
+    let run = |offset: i64| {
+        let file = load_string(&gather(offset)).expect("document loads");
+        let results = run_inline_tests_with_base_dir(&file, Some("Gather"), &opts, None);
+        assert_eq!(results.len(), 1);
+        results.into_iter().next().unwrap()
     };
-    let msg = e.to_string();
+    // In range (`C[i]`): the whole-axis read is unchanged.
+    let ok = run(0);
+    assert!(ok.passed, "in-range whole-axis gather must pass: {}", ok.message);
+    // Past the end on the last cell (`C[i + 1]`).
+    let r = run(1);
     assert!(
-        msg.contains("E_TREEWALK_CONSTARRAY_OOB"),
-        "wrong diagnostic: {msg}"
+        !r.passed && r.message.contains("E_TREEWALK_CONSTARRAY_OOB"),
+        "an inline const gather past the end must fail closed; got actual {:?}: {}",
+        r.actual,
+        r.message
     );
 }
 
