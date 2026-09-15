@@ -1,0 +1,282 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "ShapedObservedScalarBroadcast",
+    "description": "An observed declared over an index set whose right-hand side is a SCALAR \u2014 written as one, or evaluating to one because an `ifelse` predicate is constant \u2014 replicates that value into every cell of its declared shape (esm-spec \u00a74.3.4). Issue #262.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ]
+  },
+  "index_sets": {
+    "row_ax": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "offGuard": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.0,
+          "description": "A constant-false predicate: every ifelse below takes its scalar branch."
+        },
+        "onGuard": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.0,
+          "description": "The control: a constant-true predicate keeps the array branch."
+        },
+        "level": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2.5,
+          "description": "A scalar parameter read by a shaped observed."
+        },
+        "col": {
+          "type": "unknown",
+          "shape": [
+            "row_ax"
+          ],
+          "units": "1",
+          "description": "A three-cell const array column."
+        },
+        "literal": {
+          "type": "unknown",
+          "shape": [
+            "row_ax"
+          ],
+          "units": "1",
+          "description": "A shaped observed whose RHS is a scalar literal."
+        },
+        "from_param": {
+          "type": "unknown",
+          "shape": [
+            "row_ax"
+          ],
+          "units": "1",
+          "description": "A shaped observed whose RHS is a scalar parameter."
+        },
+        "folded": {
+          "type": "unknown",
+          "shape": [
+            "row_ax"
+          ],
+          "units": "1",
+          "description": "ifelse(offGuard > 0, col, -4.0): evaluates to the scalar -4.0."
+        },
+        "kept": {
+          "type": "unknown",
+          "shape": [
+            "row_ax"
+          ],
+          "units": "1",
+          "description": "The control, ifelse(onGuard > 0, col, -4.0): evaluates to col."
+        },
+        "s": {
+          "type": "unknown",
+          "units": "1",
+          "default": 2.0,
+          "description": "A scalar state held constant."
+        },
+        "state_folded": {
+          "type": "unknown",
+          "shape": [
+            "row_ax"
+          ],
+          "units": "1",
+          "description": "ifelse(offGuard > 0, col, s): a STATE-DEPENDENT scalar on a shaped observed."
+        },
+        "u": {
+          "type": "unknown",
+          "shape": [
+            "row_ax"
+          ],
+          "units": "1",
+          "default": 1.0,
+          "description": "Integrates literal + state_folded, so the broadcast is also read by the dynamics."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "col",
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": [
+              10.0,
+              20.0,
+              30.0
+            ]
+          }
+        },
+        {
+          "lhs": "literal",
+          "rhs": 1.5
+        },
+        {
+          "lhs": "from_param",
+          "rhs": "level"
+        },
+        {
+          "lhs": "folded",
+          "rhs": {
+            "op": "ifelse",
+            "args": [
+              {
+                "op": ">",
+                "args": [
+                  "offGuard",
+                  0.0
+                ]
+              },
+              "col",
+              -4.0
+            ]
+          }
+        },
+        {
+          "lhs": "kept",
+          "rhs": {
+            "op": "ifelse",
+            "args": [
+              {
+                "op": ">",
+                "args": [
+                  "onGuard",
+                  0.0
+                ]
+              },
+              "col",
+              -4.0
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "s"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": "state_folded",
+          "rhs": {
+            "op": "ifelse",
+            "args": [
+              {
+                "op": ">",
+                "args": [
+                  "offGuard",
+                  0.0
+                ]
+              },
+              "col",
+              "s"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "u"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "+",
+            "args": [
+              "literal",
+              "state_folded"
+            ]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "scalar_rhs_broadcasts",
+          "description": "Every cell of each shaped observed carries the scalar its right-hand side evaluates to; `u` integrates their sum, 1.5 + 2.0, from 1.0.",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "assertions": [
+            {
+              "variable": "literal",
+              "time": 1.0,
+              "expected": 1.5,
+              "coords": {
+                "row_ax": 1
+              }
+            },
+            {
+              "variable": "literal",
+              "time": 1.0,
+              "expected": 1.5,
+              "coords": {
+                "row_ax": 3
+              }
+            },
+            {
+              "variable": "from_param",
+              "time": 1.0,
+              "expected": 2.5,
+              "coords": {
+                "row_ax": 2
+              }
+            },
+            {
+              "variable": "folded",
+              "time": 1.0,
+              "expected": -4.0,
+              "coords": {
+                "row_ax": 1
+              }
+            },
+            {
+              "variable": "folded",
+              "time": 1.0,
+              "expected": -4.0,
+              "reduce": "min"
+            },
+            {
+              "variable": "folded",
+              "time": 1.0,
+              "expected": -4.0,
+              "reduce": "max"
+            },
+            {
+              "variable": "kept",
+              "time": 1.0,
+              "expected": 30.0,
+              "coords": {
+                "row_ax": 3
+              }
+            },
+            {
+              "variable": "state_folded",
+              "time": 1.0,
+              "expected": 2.0,
+              "coords": {
+                "row_ax": 2
+              }
+            },
+            {
+              "variable": "u",
+              "time": 1.0,
+              "expected": 4.5,
+              "coords": {
+                "row_ax": 3
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

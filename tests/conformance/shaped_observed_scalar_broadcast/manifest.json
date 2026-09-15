@@ -1,0 +1,136 @@
+{
+  "category": "shaped_observed_scalar_broadcast",
+  "version": "1.0",
+  "description": "Cross-binding conformance for a SHAPED observed whose right-hand side is a SCALAR (esm-spec \u00a74.3.4): the scalar replicates along every axis of the observed's declared shape, exactly as a scalar operand replicates inside a shaped result. The fixture covers a scalar written as one (`literal ~ 1.5`, `from_param ~ level`), a scalar produced at evaluation time by an `ifelse` whose predicate is a constant (`folded`), the same `ifelse` with the array branch taken as a control (`kept`), and a state-dependent scalar branch (`state_folded`) that the dynamics also read. Before the fix Rust dropped the declared shape when the value came out scalar and failed with `array state '<name>' has no cells in var_map` (issue #262); Python did the same for a right-hand side that is a scalar as written. Julia is the reference binding; its `run_inline_tests` minted golden/scalar_rhs_broadcast.json.",
+  "reference_binding": "julia",
+  "bindings_required": [
+    "julia",
+    "python",
+    "rust"
+  ],
+  "scope_excluded": {
+    "go": "rewrite-only port; no simulator / inline PDE-test runner",
+    "typescript": "rewrite-only port; no simulator / inline PDE-test runner"
+  },
+  "integrators": {
+    "julia": {
+      "algorithm": "Tsit5",
+      "reltol": 1e-12,
+      "abstol": 1e-14
+    },
+    "python": {
+      "method": "RK45",
+      "rtol": 1e-12,
+      "atol": 1e-14
+    },
+    "rust": {
+      "solver": "Erk",
+      "reltol": 1e-12,
+      "abstol": 1e-14
+    }
+  },
+  "tolerances": {
+    "assertion_rtol": 1e-09,
+    "assertion_atol": 1e-11
+  },
+  "fixtures": [
+    {
+      "id": "scalar_rhs_broadcast",
+      "path": "fixtures/scalar_rhs_broadcast.esm",
+      "model": "M",
+      "tags": [
+        "pde-inline-test",
+        "esm-spec-4.3.4",
+        "array-observed",
+        "scalar-broadcast",
+        "coords",
+        "reduce-min",
+        "reduce-max"
+      ],
+      "shape": {
+        "row_ax": 3
+      },
+      "note": "The scalar branches are non-zero, so a zero-filled array cannot pass. `u` integrates a constant 3.5 from 1.0, which every pinned solver family integrates exactly.",
+      "assertions": [
+        {
+          "test_id": "scalar_rhs_broadcasts",
+          "assertion_idx": 1,
+          "variable": "literal",
+          "coords": {
+            "row_ax": 1
+          },
+          "expected": 1.5
+        },
+        {
+          "test_id": "scalar_rhs_broadcasts",
+          "assertion_idx": 2,
+          "variable": "literal",
+          "coords": {
+            "row_ax": 3
+          },
+          "expected": 1.5
+        },
+        {
+          "test_id": "scalar_rhs_broadcasts",
+          "assertion_idx": 3,
+          "variable": "from_param",
+          "coords": {
+            "row_ax": 2
+          },
+          "expected": 2.5
+        },
+        {
+          "test_id": "scalar_rhs_broadcasts",
+          "assertion_idx": 4,
+          "variable": "folded",
+          "coords": {
+            "row_ax": 1
+          },
+          "expected": -4.0
+        },
+        {
+          "test_id": "scalar_rhs_broadcasts",
+          "assertion_idx": 5,
+          "variable": "folded",
+          "reduce": "min",
+          "expected": -4.0
+        },
+        {
+          "test_id": "scalar_rhs_broadcasts",
+          "assertion_idx": 6,
+          "variable": "folded",
+          "reduce": "max",
+          "expected": -4.0
+        },
+        {
+          "test_id": "scalar_rhs_broadcasts",
+          "assertion_idx": 7,
+          "variable": "kept",
+          "coords": {
+            "row_ax": 3
+          },
+          "expected": 30.0
+        },
+        {
+          "test_id": "scalar_rhs_broadcasts",
+          "assertion_idx": 8,
+          "variable": "state_folded",
+          "coords": {
+            "row_ax": 2
+          },
+          "expected": 2.0
+        },
+        {
+          "test_id": "scalar_rhs_broadcasts",
+          "assertion_idx": 9,
+          "variable": "u",
+          "coords": {
+            "row_ax": 3
+          },
+          "expected": 4.5
+        }
+      ],
+      "golden": "golden/scalar_rhs_broadcast.json"
+    }
+  ]
+}
