@@ -3332,5 +3332,118 @@
     ],
     "is_valid": false,
     "notes": "A scale disagreement (esm-spec \u00a74.8.3): every operand dimension agrees and the exact scales do not. Pinned at the observed variable's declaration, as tests/invalid/units_inconsistent_addition.esm pins its dimension mismatch."
+  },
+  "units_const_declared_mismatch.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/variables/speed_ms",
+        "code": "unit_inconsistency",
+        "message": "Declared units of m/s do not match the expression's units of mi/h",
+        "details": {
+          "variable": "speed_ms",
+          "declared_units": "m/s"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "A unit-bearing const takes part in scale agreement (esm-spec \u00a74.8.5): mi/h times a constant declared `1` is mi/h, not m/s. Pinned at the observed variable, as tests/invalid/units_scale_mismatch_equation.esm is."
+  },
+  "units_const_template_mismatch.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/variables/speed_kg",
+        "code": "unit_inconsistency",
+        "message": "Declared units of kg do not match the expression's units of m/s",
+        "details": {
+          "variable": "speed_kg",
+          "declared_units": "kg"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "A template call has the unit of its expansion (esm-spec \u00a74.8.5 item 5); the to_ms body's const declares m*h/(mi*s), so the call is m/s against the declared kg."
+  },
+  "units_const_unparseable.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/equations/0/rhs",
+        "code": "unit_parse_error",
+        "message": "Unit string 'mph' is not a recognised unit",
+        "details": {
+          "units": "mph"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "A const's declared units resolve like a variable's (esm-spec \u00a74.8.5 item 2); a string that does not resolve is unit_parse_error at the containing expression field."
+  },
+  "units_on_non_const_node.esm": {
+    "schema_errors": [
+      {
+        "path": "/models/BadUnitsModel/equations/0/rhs/op",
+        "message": "must be equal to constant",
+        "keyword": "const"
+      }
+    ],
+    "structural_errors": [],
+    "is_valid": false,
+    "notes": "`units` is legal only on a const node (esm-spec \u00a74.8.5 item 1): the ExpressionNode schema requires op to be `const` when units is present."
+  },
+  "const_units_version_too_old.esm": {
+    "resolver_only": true,
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "notes": "Rejected at load with `const_units_version_too_old` (esm-spec \u00a74.8.5 item 6): declared units on a const node arrive at esm 1.2.0 and this document declares 1.1.0. Gated before schema validation so the author sees the version hint rather than a generic unknown-property error."
+  },
+  "units_const_additive_mismatch.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/variables/length_sum",
+        "code": "unit_inconsistency",
+        "message": "Cannot add quantities with different units: 'm' + 'kg'",
+        "details": {
+          "variable": "length_sum",
+          "declared_units": "m"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "A unit-bearing const is not a neutral literal in an additive position (esm-spec \u00a74.8.3, \u00a74.8.5): m + const(1, kg) is a provable mismatch. Pinned at the observed variable, as units_const_declared_mismatch.esm is."
+  },
+  "units_const_negated_additive_mismatch.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/variables/length_sum",
+        "code": "unit_inconsistency",
+        "message": "Cannot add quantities with different units: 'm' + 'kg'",
+        "details": {
+          "variable": "length_sum",
+          "declared_units": "m"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "A unary minus carries its operand's unit, so -(const(1, kg)) is kg and not a neutral literal (esm-spec \u00a74.8.3, \u00a74.8.5)."
+  },
+  "units_const_template_unparseable.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/equations/0/rhs",
+        "code": "unit_parse_error",
+        "message": "Unit string 'mph' is not a recognised unit",
+        "details": {
+          "units": "mph"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "A template call has the unit of its expansion (esm-spec \u00a74.8.5 item 5), so an unresolvable declared unit on a const in the called body is unit_parse_error at the calling equation's expression field (\u00a74.8.5 item 2)."
   }
 }

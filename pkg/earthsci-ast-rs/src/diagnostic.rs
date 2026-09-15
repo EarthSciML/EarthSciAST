@@ -191,6 +191,9 @@ diagnostic_code_registry! {
     /// A top-level `solver` block in a document declaring `esm` < 1.1.0
     /// (esm-spec §2.2.4, §2.2.5).
     SOLVER_VERSION_TOO_OLD = "solver_version_too_old";
+    /// Declared `units` on an expression node in a document declaring `esm` <
+    /// 1.2.0 (esm-spec §4.8.5).
+    CONST_UNITS_VERSION_TOO_OLD = "const_units_version_too_old";
     /// An `inject` whose target names a data LOADER rather than a component.
     TEMPLATE_INJECT_TARGET_IS_LOADER = "template_inject_target_is_loader";
     /// An `inject` whose target resolves to something that is not a component.
@@ -531,6 +534,7 @@ mod error_code_tests {
             "closed_function_arg_type",
             "closed_function_arity",
             "closed_function_overflow",
+            "const_units_version_too_old",
             "coupling_edge_unknown_role",
             "coupling_import_bind_not_a_component",
             "coupling_import_not_library",
