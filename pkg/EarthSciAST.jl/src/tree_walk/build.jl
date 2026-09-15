@@ -3387,6 +3387,10 @@ function _build_evaluator_impl_inner(model::Model;
             "expression_templates registry reached the build; construct via " *
             "an EsmFile/document front-door (esm-spec §9.6.4 Option B)"))
     end
+    # ---- §9.6.3 constraint 6: walk every equation for an unlowered op ----
+    # BEFORE any pass that drops a tree (the elementwise fold, dead-observed
+    # elimination), so an op in a tree the build would discard is still refused.
+    _reject_unlowered_operators(model)
     # ---- `broadcast` lowering (esm-spec §4.3.4; see `_lower_broadcast_model`) ----
     # Rewrite every `broadcast(fn=F, …)` node to its plain scalar-op spelling
     # `F(…)` BEFORE any other pass sees it, so `broadcast` has exactly the
@@ -5080,6 +5084,12 @@ function build_evaluator(esm::AbstractDict;
             _expand_model_refs!(model, _tmpl_reg)
         end
     end
+
+    # ---- §9.6.3 constraint 6 at the FRONT-DOOR pre-passes ----
+    # The binning-coordinate derivation and value invention below evaluate
+    # observed bodies before `_build_evaluator_impl` is reached, so the
+    # rewrite-target walk runs here too, ahead of them.
+    model === nothing || _reject_unlowered_operators(model)
 
     # ---- Caller-key canonicalization (esm-spec §6.6) ----
     # Rewrite the caller's LOCAL-named `parameter_overrides` onto this
