@@ -102,6 +102,14 @@ class ErrorCode(Enum):
     # Both resolve BY NAME ahead of the declaration maps, so the declaration is
     # unreachable and its readers silently get the implicit symbol instead.
     RESERVED_VARIABLE_NAME = "reserved_variable_name"
+    # esm-spec §6.6.2: an inline test's `initial_conditions` / `parameter_overrides`
+    # key that matches no declared name under the override-key rules. Static, so a
+    # typo'd key is named at validation rather than only when a runtime builds it.
+    UNKNOWN_OVERRIDE_KEY = "unknown_override_key"
+    # esm-spec §6.6.5: an assertion whose form does not match the declared rank of
+    # the variable it names -- pointwise on a shaped variable, or `coords` /
+    # `reduce` on a scalar one.
+    ASSERTION_RANK_MISMATCH = "assertion_rank_mismatch"
     MISSING_REQUIRED_FIELD = "missing_required_field"
     UNIT_MISMATCH = "unit_mismatch"
     # Codes emitted by earthsci_ast.validation (previously ad-hoc string
@@ -146,6 +154,10 @@ class ErrorCode(Enum):
     # a declared error semantics is a wrong answer with nothing in the result to
     # say so.
     TABLE_OUT_OF_BOUNDS_UNSUPPORTED = "table_out_of_bounds_unsupported"
+    # §9.6.6: an expression ranges over a `kind: "derived"` index set whose
+    # producer could not be materialized at build. Refused rather than contracted
+    # as an empty range, which would read as a plausible 0.
+    DERIVED_INDEX_SET_UNMATERIALIZED = "derived_index_set_unmaterialized"
 
 
 # ===========================================================================

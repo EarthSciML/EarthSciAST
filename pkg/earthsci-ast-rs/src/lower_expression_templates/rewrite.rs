@@ -55,23 +55,29 @@ impl PtrSet {
 /// references to other templates — that transitive step is
 /// `template_target_bearing`. Mirrors the Julia reference `_direct_T_op`.
 fn direct_t_op(node: &Sv, seen: &mut PtrSet) -> bool {
+    direct_op(node, seen, &op_in_t)
+}
+
+/// True iff `node` contains, anywhere within it, an object whose `op`
+/// satisfies `pred`. [`direct_t_op`] is this with the tier-**T** predicate.
+fn direct_op(node: &Sv, seen: &mut PtrSet, pred: &dyn Fn(&str) -> bool) -> bool {
     match &**node {
         SNode::Arr(items) => {
             if !seen.insert(node) {
                 return false;
             }
-            items.iter().any(|c| direct_t_op(c, seen))
+            items.iter().any(|c| direct_op(c, seen, pred))
         }
         SNode::Obj(fields) => {
             if !seen.insert(node) {
                 return false;
             }
             if let Some(op) = obj_op(fields)
-                && op_in_t(op)
+                && pred(op)
             {
                 return true;
             }
-            fields.iter().any(|(_, v)| direct_t_op(v, seen))
+            fields.iter().any(|(_, v)| direct_op(v, seen, pred))
         }
         _ => false,
     }
@@ -595,6 +601,26 @@ fn expand_eager(
     scope: &str,
     memo: &mut PtrMemo<Sv>,
 ) -> Result<Sv, ExpressionTemplateError> {
+    expand_refs_where(node, named, scope, memo, &|fields| {
+        ref_is_eager(fields, target_bearing)
+    })
+}
+
+/// Decides, for an `apply_expression_template` node's object fields, whether
+/// [`expand_refs_where`] expands that reference.
+type ExpandRefPredicate<'a> = dyn Fn(&[(String, Sv)]) -> bool + 'a;
+
+/// The reference-expansion walk behind [`expand_eager`]: expand,
+/// innermost-first, every `apply_expression_template` node for which `expand`
+/// holds (asked after the node's bindings are expanded), and return every other
+/// reference intact. Mirrors the Julia reference `_expand_refs_walk`.
+fn expand_refs_where(
+    node: &Sv,
+    named: &Named,
+    scope: &str,
+    memo: &mut PtrMemo<Sv>,
+    expand: &ExpandRefPredicate,
+) -> Result<Sv, ExpressionTemplateError> {
     match &**node {
         SNode::Obj(fields) => {
             if let Some(hit) = memo.get(node) {
@@ -609,7 +635,7 @@ fn expand_eager(
                 {
                     let mut nb = Vec::with_capacity(b.len());
                     for (k, v) in b {
-                        let rv = expand_eager(v, named, target_bearing, scope, memo)?;
+                        let rv = expand_refs_where(v, named, scope, memo, expand)?;
                         b_changed |= !Rc::ptr_eq(&rv, v);
                         nb.push((k.clone(), rv));
                     }
@@ -617,9 +643,9 @@ fn expand_eager(
                         newfields[b_idx].1 = Rc::new(SNode::Obj(nb));
                     }
                 }
-                if ref_is_eager(&newfields, target_bearing) {
+                if expand(&newfields) {
                     let body = expand_apply(&newfields, named, scope)?;
-                    expand_eager(&body, named, target_bearing, scope, memo)?
+                    expand_refs_where(&body, named, scope, memo, expand)?
                 } else if b_changed {
                     Rc::new(SNode::Obj(newfields))
                 } else {
@@ -629,7 +655,7 @@ fn expand_eager(
                 let mut changed = false;
                 let mut out = Vec::with_capacity(fields.len());
                 for (k, v) in fields {
-                    let rv = expand_eager(v, named, target_bearing, scope, memo)?;
+                    let rv = expand_refs_where(v, named, scope, memo, expand)?;
                     changed |= !Rc::ptr_eq(&rv, v);
                     out.push((k.clone(), rv));
                 }
@@ -649,7 +675,7 @@ fn expand_eager(
             let mut changed = false;
             let mut out = Vec::with_capacity(items.len());
             for v in items {
-                let rv = expand_eager(v, named, target_bearing, scope, memo)?;
+                let rv = expand_refs_where(v, named, scope, memo, expand)?;
                 changed |= !Rc::ptr_eq(&rv, v);
                 out.push(rv);
             }
@@ -663,6 +689,50 @@ fn expand_eager(
         }
         _ => Ok(node.clone()),
     }
+}
+
+/// For each template of `templates` named in `names` whose body calls a template
+/// that can still produce an `enum` op, that body with those calls expanded
+/// (esm-spec §9.3, §9.6.4 rule 3); names whose bodies make no such call are
+/// omitted. Every body is computed from `templates` as given. The template
+/// import edge uses this to resolve the symbols a library binds in its own
+/// calls against the library's `enums` block.
+pub(crate) fn expand_enum_bearing_calls(
+    templates: &Map<String, Value>,
+    names: &[String],
+    scope: &str,
+) -> Result<Vec<(String, Value)>, ExpressionTemplateError> {
+    let named: Named = templates
+        .iter()
+        .map(|(k, v)| (k.clone(), to_shared(v)))
+        .collect();
+    let is_enum = |op: &str| op == "enum";
+    let bearing = transitive_reachable(&named, |body| {
+        direct_op(body, &mut PtrSet::default(), &is_enum)
+    });
+    let calls_bearing = |fields: &[(String, Sv)]| {
+        matches!(obj_get(fields, "name").map(|v| &**v),
+            Some(SNode::Str(n)) if bearing.get(n).copied().unwrap_or(false))
+    };
+    let mut out = Vec::new();
+    for name in names {
+        let Some(decl) = named.get(name) else {
+            continue;
+        };
+        let body = decl_body(decl);
+        let mut refs = Vec::new();
+        collect_apply_names_sv(&body, &mut refs, &mut PtrSet::default());
+        if !refs
+            .iter()
+            .any(|r| bearing.get(r).copied().unwrap_or(false))
+        {
+            continue;
+        }
+        let mut memo = PtrMemo::default();
+        let expanded = expand_refs_where(&body, &named, scope, &mut memo, &calls_bearing)?;
+        out.push((name.clone(), to_value(&expanded)));
+    }
+    Ok(out)
 }
 
 /// Convenience wrapper: run [`expand_eager`] with a fresh memo.

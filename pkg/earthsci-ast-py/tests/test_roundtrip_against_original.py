@@ -99,6 +99,10 @@ TRANSFORMING_FIXTURES: dict[str, str] = {
         "`enum` nodes are lowered to `const` against the document's top-level "
         "`enums` block at load (esm-spec §9.3)"
     ),
+    "enums_symbol_template_binding.esm": (
+        "the template call spelling the enum symbol is expanded (esm-spec §9.6.4 "
+        "rule 3) and its `enum` node lowered to `const` at load (esm-spec §9.3)"
+    ),
     "lib_calendar_subsystem_inclusion.esm": _SUBSYSTEM_REF_RESOLUTION,
     "lib_solar_subsystem_inclusion.esm": _SUBSYSTEM_REF_RESOLUTION,
     "subsystem_index_set_merge.esm": (

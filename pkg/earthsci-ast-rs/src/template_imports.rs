@@ -2214,6 +2214,9 @@ fn process_library(
         }
     }
     validate_templates(&own, origin)?;
+    for (n, d) in own.iter_mut() {
+        lower_library_template_enums(raw, n, d, origin)?;
+    }
     for (n, d) in own {
         merge_named(
             &mut scope.templates,
@@ -2252,10 +2255,84 @@ fn process_library(
     // §9.7.3 body-reference validation in the library's own scope, before any
     // downstream `only` filtering can hide a referenced template.
     validate_template_body_references(&scope.templates, origin)?;
+    let own_names: Vec<String> = raw
+        .get("expression_templates")
+        .and_then(|v| v.as_object())
+        .map(|t| t.keys().cloned().collect())
+        .unwrap_or_default();
+    expand_library_enum_calls(raw, &mut scope.templates, &own_names, origin)?;
     // In the library's own scope, before an importing edge's `bindings`
     // instantiate the templates and consume the names it closes.
     check_metaparam_loop_symbols(scope.metaparams.keys(), origin, &[&scope.templates])?;
     Ok(scope)
+}
+
+/// Resolve the `enum` symbols a template library binds in its OWN calls
+/// (esm-spec §9.3). After [`lower_library_template_enums`], the only `enum` ops
+/// left in the library's scope are spelled with a template parameter. A call to
+/// a template that can still produce one binds that parameter here, in the
+/// library, so each of the library's own template bodies has those calls
+/// expanded (the eager expansion esm-spec §9.6.4 rule 3 requires at load anyway)
+/// and the result lowered against the library's block. An op the expansion
+/// leaves spelled with the calling template's own parameter stays open for the
+/// importer's binding. Runs after the body-reference DAG check, so expansion
+/// terminates; every new body is computed before any is replaced.
+fn expand_library_enum_calls(
+    library: &Value,
+    templates: &mut Map<String, Value>,
+    own_names: &[String],
+    origin: &str,
+) -> Result<(), ExpressionTemplateError> {
+    let expanded =
+        crate::lower_expression_templates::expand_enum_bearing_calls(templates, own_names, origin)?;
+    let mut decls = Vec::with_capacity(expanded.len());
+    for (name, body) in expanded {
+        let Some(decl) = templates.get(&name) else {
+            continue;
+        };
+        let mut decl = decl.clone();
+        decl["body"] = body;
+        lower_library_template_enums(library, &name, &mut decl, origin)?;
+        decls.push((name, decl));
+    }
+    for (name, decl) in decls {
+        templates.insert(name, decl);
+    }
+    Ok(())
+}
+
+/// Lower the `enum` ops in one of a template library's OWN template bodies
+/// against the library's `enums` block (esm-spec §9.3), before the template
+/// reaches an importer whose block is a different one. An op spelled with one
+/// of the template's `params` stays open and resolves at the call site.
+fn lower_library_template_enums(
+    library: &Value,
+    name: &str,
+    decl: &mut Value,
+    origin: &str,
+) -> Result<(), ExpressionTemplateError> {
+    let params: HashSet<String> = decl
+        .get("params")
+        .and_then(|p| p.as_array())
+        .map(|ps| {
+            ps.iter()
+                .filter_map(|p| p.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    let Some(body) = decl.get_mut("body") else {
+        return Ok(());
+    };
+    crate::lower_enums::lower_enum_ops_for_file(library, body, &params).map_err(|e| {
+        err(
+            e.code,
+            format!(
+                "{origin}: template '{name}': {} — an `enum` op in a template library \
+                 resolves against that library's own `enums` block (esm-spec §9.3)",
+                e.message
+            ),
+        )
+    })
 }
 
 // ---------------------------------------------------------------------------

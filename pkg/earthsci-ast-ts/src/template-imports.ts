@@ -38,10 +38,13 @@ import {
   collectApplyNames,
   composeTemplateBodies,
   deepEqual,
+  expandReferencesWhere,
   lowerExpressionTemplates,
   rejectExpressionTemplatesPreV04,
+  templateOpBearing,
   validateTemplates,
 } from './lower-expression-templates.js'
+import { EnumLoweringError, lowerEnumOpsForFile } from './lower-enums.js'
 import { isNumericLiteral } from './numeric-literal.js'
 import { deepClone, isObject } from './object-utils.js'
 import { isRemoteRef, normalizeRef, readFileSyncNode } from './path-utils.js'
@@ -1653,6 +1656,7 @@ function buildScope(
   origin: string,
   opts: TemplateResolveOptions,
   cloneOwn: boolean,
+  transformOwn?: (name: string, decl: unknown) => unknown,
 ): TemplateScope {
   const scope = newScope()
   if (Array.isArray(imports)) {
@@ -1669,6 +1673,9 @@ function buildScope(
     }
   }
   validateTemplates(own as TemplatesArg, origin)
+  if (transformOwn) {
+    for (const n of Object.keys(own)) own[n] = transformOwn(n, own[n])
+  }
   for (const [n, d] of Object.entries(own)) {
     mergeNamed(scope.templates, n, d, ERROR_CODES.TEMPLATE_IMPORT_NAME_CONFLICT, 'template', origin)
   }
@@ -1692,7 +1699,9 @@ function processLibrary(
 ): TemplateScope {
   const importsRaw = isObject(raw) ? raw.expression_template_imports : undefined
   const ownRaw = isObject(raw) ? raw.expression_templates : undefined
-  const scope = buildScope(importsRaw, ownRaw, dir, stack, origin, opts, true)
+  const scope = buildScope(importsRaw, ownRaw, dir, stack, origin, opts, true, (name, decl) =>
+    lowerLibraryTemplateEnums(raw, name, decl, origin),
+  )
 
   if (isObject(raw) && isObject(raw.index_sets)) {
     for (const [n, d] of Object.entries(raw.index_sets)) {
@@ -1721,10 +1730,87 @@ function processLibrary(
   // §9.7.3 body composition in the library's own scope (decl objects are
   // mutated in place, so scope.templates sees the closed bodies).
   composeTemplateBodies(scope.templates as TemplatesArg, origin)
+  expandLibraryEnumCalls(raw, scope.templates, isObject(ownRaw) ? Object.keys(ownRaw) : [], origin)
   // In the library's own scope, before an importing edge's `bindings`
   // instantiate the templates and consume the names it closes.
   checkMetaparamLoopSymbols(Object.keys(scope.metaparams), origin, [scope.templates])
   return scope
+}
+
+/**
+ * Resolve the `enum` symbols a template library binds in its OWN calls
+ * (esm-spec §9.3). After {@link lowerLibraryTemplateEnums}, the only `enum` ops
+ * left in the library's scope are spelled with a template parameter. A call to a
+ * template that can still produce one binds that parameter here, in the library,
+ * so each of the library's own template bodies has those calls expanded (the
+ * eager expansion esm-spec §9.6.4 rule 3 requires at load anyway) and the result
+ * lowered against the library's block. An op the expansion leaves spelled with
+ * the calling template's own parameter stays open for the importer's binding.
+ * Runs after {@link composeTemplateBodies}, so the reference DAG is acyclic;
+ * every new body is computed before any is replaced.
+ */
+function expandLibraryEnumCalls(
+  library: unknown,
+  named: JsonObject,
+  ownNames: readonly string[],
+  origin: string,
+): void {
+  const bearing = templateOpBearing(named, (op) => op === 'enum')
+  const callsBearing = (node: Record<string, unknown>): boolean =>
+    typeof node.name === 'string' && bearing[node.name] === true
+  const bodies: Record<string, unknown> = {}
+  for (const n of ownNames) {
+    const decl = named[n]
+    if (!isObject(decl) || !('body' in decl)) continue
+    if (!collectApplyNames(decl.body, []).some((r) => bearing[r] === true)) continue
+    const expanded = expandReferencesWhere(decl.body, named, origin, callsBearing)
+    bodies[n] = lowerLibraryTemplateBody(library, n, decl, expanded, origin)
+  }
+  for (const [n, body] of Object.entries(bodies)) {
+    named[n] = { ...(named[n] as JsonObject), body }
+  }
+}
+
+/**
+ * Lower the `enum` ops in one of a template library's OWN template bodies
+ * against the library's `enums` block (esm-spec §9.3), before the template
+ * reaches an importer whose block is a different one. An op spelled with one
+ * of the template's `params` stays open and resolves at the call site.
+ */
+function lowerLibraryTemplateEnums(
+  library: unknown,
+  name: string,
+  decl: unknown,
+  origin: string,
+): unknown {
+  if (!isObject(decl) || !('body' in decl)) return decl
+  return { ...decl, body: lowerLibraryTemplateBody(library, name, decl, decl.body, origin) }
+}
+
+/**
+ * `body`, a body of the library's template `name` (`decl`), with its `enum` ops
+ * lowered against the library's `enums` block. An op spelled with one of
+ * `decl`'s `params` stays open.
+ */
+function lowerLibraryTemplateBody(
+  library: unknown,
+  name: string,
+  decl: Record<string, unknown>,
+  body: unknown,
+  origin: string,
+): unknown {
+  const params = Array.isArray(decl.params)
+    ? decl.params.filter((p): p is string => typeof p === 'string')
+    : []
+  try {
+    return lowerEnumOpsForFile(library, body, new Set(params))
+  } catch (e) {
+    if (!(e instanceof EnumLoweringError)) throw e
+    throw new EsmMachineryError(
+      e.code,
+      `${origin}: template '${name}': ${e.message} — an \`enum\` op in a template library resolves against that library's own \`enums\` block (esm-spec §9.3)`,
+    )
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -91,6 +91,11 @@ export const ERROR_CODES = {
   //   reads a declared STATE variable, so the cadence partition would class the
   //   node CONTINUOUS — forbidden on the hot path (CONFORMANCE_SPEC §5.7 guard 2).
   RELATIONAL_NODE_IN_CONTINUOUS: 'relational_node_in_continuous',
+  // `derived_index_set_unmaterialized` — an expression ranges over a
+  //   `kind: "derived"` index set whose producer could not be materialized at
+  //   build (esm-spec §9.6.6). Registered for the cross-binding vocabulary; this
+  //   binding has no simulator, so nothing here raises it.
+  DERIVED_INDEX_SET_UNMATERIALIZED: 'derived_index_set_unmaterialized',
   // `undefined_index_set` — a `faq` `ranges` entry `{ from: NAME }`
   //   naming an index set absent from the document `index_sets` registry
   //   (RFC semiring-faq-unified-ir §5.2; no implicit interval is inferred).
@@ -212,6 +217,15 @@ export const ERROR_CODES = {
   UNDEFINED_SPECIES: 'undefined_species',
   UNDEFINED_SYSTEM: 'undefined_system',
   UNDEFINED_VARIABLE: 'undefined_variable',
+  // `unknown_override_key` — an inline test's `initial_conditions` or
+  //   `parameter_overrides` key that matches no declared name under the esm-spec
+  //   §6.6.2 override-key rules. Static, so a typo'd key is named at validation
+  //   rather than only when a runtime builds the test.
+  UNKNOWN_OVERRIDE_KEY: 'unknown_override_key',
+  // `assertion_rank_mismatch` — an assertion whose form does not match the
+  //   declared rank of the variable it names (esm-spec §6.6.5): pointwise on a
+  //   shaped variable, or `coords` / `reduce` on a scalar one.
+  ASSERTION_RANK_MISMATCH: 'assertion_rank_mismatch',
   UNIT_ERROR: 'unit_error',
   // A PROVABLE dimensional inconsistency (metres plus kilograms, log of a
   // dimensional quantity, an equation whose sides cannot agree).
@@ -316,8 +330,8 @@ export const ERROR_CODES = {
   // ---- enums: §9.3 load-time enum lowering (lower-enums.ts;
   //      EnumLoweringError codes) ----
   ENUM_OP_MALFORMED: 'enum_op_malformed',
-  ENUM_NOT_DECLARED: 'enum_not_declared',
-  ENUM_MEMBER_NOT_FOUND: 'enum_member_not_found',
+  UNKNOWN_ENUM: 'unknown_enum',
+  UNKNOWN_ENUM_SYMBOL: 'unknown_enum_symbol',
 
   // ---- function tables: §9.5.3 `table_lookup` lowering (lower-table-lookups.ts;
   //      TableLookupLoweringError codes, named by esm-spec §9.5.5) ----

@@ -159,8 +159,7 @@
           },
           "parameter_overrides": {
             "m": 10.0,
-            "a": 2.0,
-            "t": 1.0
+            "a": 2.0
           },
           "time_span": {
             "start": 0.0,
