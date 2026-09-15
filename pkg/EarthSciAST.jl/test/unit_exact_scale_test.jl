@@ -5,6 +5,7 @@
 # and operands that must agree have to agree in scale as well as dimension.
 
 using Test
+include("testutils.jl")
 using EarthSciAST
 using Unitful
 
