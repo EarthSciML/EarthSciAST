@@ -1020,7 +1020,7 @@ fn from_file_reference(
 enum ComponentAt<'a> {
     /// A top-level model (borrowed) or a mounted subsystem (read out of the
     /// JSON the typed document keeps it as).
-    Model(Cow<'a, Model>),
+    Model(Box<Cow<'a, Model>>),
     ReactionSystem(&'a crate::types::ReactionSystem),
 }
 
@@ -1046,7 +1046,7 @@ fn component_at<'a>(file: &'a EsmFile, path: &str) -> Option<ComponentAt<'a>> {
     let mut segs = path.split('.');
     let head = segs.next()?;
     let mut cur = match file.models.as_ref().and_then(|ms| ms.get(head)) {
-        Some(m) => ComponentAt::Model(Cow::Borrowed(m)),
+        Some(m) => ComponentAt::Model(Box::new(Cow::Borrowed(m))),
         None => ComponentAt::ReactionSystem(file.reaction_systems.as_ref()?.get(head)?),
     };
     for seg in segs {
@@ -1055,7 +1055,7 @@ fn component_at<'a>(file: &'a EsmFile, path: &str) -> Option<ComponentAt<'a>> {
             ComponentAt::ReactionSystem(r) => r.subsystems.as_ref(),
         }?;
         let (model, _) = crate::simulate_array::parse_subsystem_model(seg, subs.get(seg)?).ok()?;
-        cur = ComponentAt::Model(Cow::Owned(model));
+        cur = ComponentAt::Model(Box::new(Cow::Owned(model)));
     }
     Some(cur)
 }
@@ -1064,7 +1064,7 @@ fn component_at<'a>(file: &'a EsmFile, path: &str) -> Option<ComponentAt<'a>> {
 /// a path that names nothing.
 fn model_at<'a>(file: &'a EsmFile, path: &str) -> Option<Cow<'a, Model>> {
     match component_at(file, path)? {
-        ComponentAt::Model(m) => Some(m),
+        ComponentAt::Model(m) => Some(*m),
         ComponentAt::ReactionSystem(_) => None,
     }
 }
