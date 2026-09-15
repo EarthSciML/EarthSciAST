@@ -259,6 +259,7 @@ export {
   compileExpression,
   evaluateExpression,
   UnloweredOperatorError,
+  UnevaluableOperatorError,
   EvaluatorError,
 } from './codegen.js'
 export type { CompiledExpression } from './codegen.js'

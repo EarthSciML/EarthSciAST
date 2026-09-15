@@ -1392,17 +1392,17 @@ def _literal_param_map(registry: dict[str, Any]) -> dict[str, frozenset[str]]:
     return {name: params_of(name, ()) for name in registry}
 
 
-def _strip_literal_bindings(expr: Any, sf_map: dict[str, frozenset[str]]) -> Any:
+def _strip_literal_bindings(expr: Any, literal_map: dict[str, frozenset[str]]) -> Any:
     """Non-mutating copy of ``expr`` with every ``apply_expression_template``
     node's STRING bindings for literal-only params (see
     :func:`_literal_param_map`) removed, so the reference walker does not read
     field vocabulary (``manifold: "planar"``) or an enum symbol as a variable
     reference. Expression-valued bindings are kept — their references are real."""
     if isinstance(expr, list):
-        return [_strip_literal_bindings(x, sf_map) for x in expr]
+        return [_strip_literal_bindings(x, literal_map) for x in expr]
     if not isinstance(expr, dict):
         return expr
-    out = {k: _strip_literal_bindings(v, sf_map) for k, v in expr.items()}
+    out = {k: _strip_literal_bindings(v, literal_map) for k, v in expr.items()}
     name = out.get("name")
     bindings = out.get("bindings")
     if (
@@ -1410,7 +1410,7 @@ def _strip_literal_bindings(expr: Any, sf_map: dict[str, frozenset[str]]) -> Any
         and isinstance(name, str)
         and isinstance(bindings, dict)
     ):
-        sf = sf_map.get(name, frozenset())
+        sf = literal_map.get(name, frozenset())
         if sf:
             out["bindings"] = {
                 k: v for k, v in bindings.items() if not (k in sf and isinstance(v, str))
@@ -1447,7 +1447,7 @@ def _check_variable_references(
     references (esm-spec §5).
     """
     global_symbols = tables["global_symbols"]
-    for mname, m in data.get("models", {}).items():
+    for m, sites in _component_reference_sites(data):
         subsystems = m.get("subsystems") or {}
         # Literal-only template params (§9.6.1 scalar fields, §9.3 `enum` args):
         # a call-site STRING binding for one is field vocabulary
@@ -1455,7 +1455,7 @@ def _check_variable_references(
         # those bindings before the reference walk (never mutating the
         # document). See :func:`_literal_param_map`.
         literal_map = _literal_param_map(_model_template_registry(data, m))
-        for location, expr, check_bare, phrase, extra in _model_expression_sites(m, mname):
+        for location, expr, check_bare, phrase, extra in sites:
             bound_symbols = _expression_bound_symbols(expr)
             if literal_map:
                 expr = _strip_literal_bindings(expr, literal_map)
@@ -1645,12 +1645,20 @@ def _model_expression_sites(m: dict[str, Any], mname: str):
                     {},
                 )
 
-    for i, ev in enumerate(m.get("continuous_events", []) or []):
+    yield from _event_expression_sites(m, f"models/{mname}")
+    yield from _test_reference_sites(m, f"models/{mname}")
+
+
+def _event_expression_sites(component: dict[str, Any], location: str):
+    """A component's continuous- and discrete-event expressions, in the
+    :func:`_model_expression_sites` tuple shape. An event is the same site on a
+    reaction system as on a model, so both component kinds share this."""
+    for i, ev in enumerate(component.get("continuous_events", []) or []):
         if not isinstance(ev, dict):
             continue
         for j, cond in enumerate(ev.get("conditions", []) or []):
             yield (
-                f"models/{mname}/continuous_events[{i}]/conditions[{j}]",
+                f"{location}/continuous_events[{i}]/conditions[{j}]",
                 cond,
                 True,
                 "continuous event condition",
@@ -1660,20 +1668,20 @@ def _model_expression_sites(m: dict[str, Any], mname: str):
             for j, aff in enumerate(ev.get(key, []) or []):
                 if isinstance(aff, dict) and "rhs" in aff:
                     yield (
-                        f"models/{mname}/continuous_events[{i}]/{key}[{j}]/rhs",
+                        f"{location}/continuous_events[{i}]/{key}[{j}]/rhs",
                         aff["rhs"],
                         True,
                         "continuous event affect RHS",
                         {},
                     )
 
-    for i, ev in enumerate(m.get("discrete_events", []) or []):
+    for i, ev in enumerate(component.get("discrete_events", []) or []):
         if not isinstance(ev, dict):
             continue
         trigger = ev.get("trigger")
         if isinstance(trigger, dict) and trigger.get("expression") is not None:
             yield (
-                f"models/{mname}/discrete_events[{i}]/trigger/expression",
+                f"{location}/discrete_events[{i}]/trigger/expression",
                 trigger["expression"],
                 True,
                 "discrete event trigger expression",
@@ -1682,25 +1690,64 @@ def _model_expression_sites(m: dict[str, Any], mname: str):
         for j, aff in enumerate(ev.get("affects", []) or []):
             if isinstance(aff, dict) and "rhs" in aff:
                 yield (
-                    f"models/{mname}/discrete_events[{i}]/affects[{j}]/rhs",
+                    f"{location}/discrete_events[{i}]/affects[{j}]/rhs",
                     aff["rhs"],
                     True,
                     "discrete event affect RHS",
                     {},
                 )
 
-    for i, t in enumerate(m.get("tests", []) or []):
+
+def _reaction_system_expression_sites(rs: dict[str, Any], rsname: str):
+    """A reaction system's reference sites outside its reaction rates: its
+    constraint equations, events and inline-test references. Each is the same
+    site as on a model and reports ``undefined_variable`` as the model's does;
+    a reaction ``rate`` keeps ``undefined_parameter`` (:func:`_check_reaction_systems`)."""
+    location = f"reaction_systems/{rsname}"
+    for i, eq in enumerate(rs.get("constraint_equations", []) or []):
+        if not isinstance(eq, dict):
+            continue
+        for side in ("lhs", "rhs"):
+            if side in eq:
+                yield (
+                    f"{location}/constraint_equations[{i}]/{side}",
+                    eq[side],
+                    True,
+                    None,
+                    {"equation_index": i, "expected_in": "variables"},
+                )
+    yield from _event_expression_sites(rs, location)
+    yield from _test_reference_sites(rs, location)
+
+
+def _test_reference_sites(component: dict[str, Any], location: str):
+    """An inline test's assertion ``reference`` expressions (§6.6), in the
+    :func:`_model_expression_sites` tuple shape. A test is the same site on a
+    reaction system as on a model, so both component kinds share this."""
+    for i, t in enumerate(component.get("tests", []) or []):
         if not isinstance(t, dict):
             continue
         for j, a in enumerate(t.get("assertions", []) or []):
             if isinstance(a, dict) and a.get("reference") is not None:
                 yield (
-                    f"models/{mname}/tests[{i}]/assertions[{j}]/reference",
+                    f"{location}/tests[{i}]/assertions[{j}]/reference",
                     a["reference"],
                     True,
                     "assertion reference expression",
                     {},
                 )
+
+
+def _component_reference_sites(data: dict[str, Any]):
+    """Yield ``(component, sites)`` for every component whose expressions the
+    reference-integrity check walks: each model's full site list, and each
+    reaction system's sites outside its reaction rates."""
+    for mname, m in (data.get("models") or {}).items():
+        if isinstance(m, dict):
+            yield m, _model_expression_sites(m, mname)
+    for rsname, rs in (data.get("reaction_systems") or {}).items():
+        if isinstance(rs, dict):
+            yield rs, _reaction_system_expression_sites(rs, rsname)
 
 
 def _pointer(location: str) -> str:
@@ -2402,9 +2449,18 @@ def _check_conversion_factor_consistency(data: dict[str, Any], errors: list[str]
             except _pint_unverifiable_errors():
                 # unparseable unit: cannot verify, skip.
                 continue
-            factor = linear_factor(n_src, n_lhs)
-            if factor is None or factor == 0:
+            if linear_factor(n_src, n_lhs) is None:
+                continue  # affine or unconvertible
+            # Identical exact scales imply no conversion, so the coefficient is free;
+            # otherwise the expected factor is formed EXACTLY and rounded once, so the
+            # tolerance below only absorbs the literal's spelling (esm-spec §4.8.1).
+            from .units import unit_exact_scale
+
+            src_scale = unit_exact_scale(n_src)
+            lhs_scale = unit_exact_scale(n_lhs)
+            if src_scale == lhs_scale:
                 continue
+            factor = float(src_scale / lhs_scale)
             if abs(numeric - factor) <= 1e-9 * max(abs(factor), 1.0):
                 continue  # matches within tolerance
             errors.append(

@@ -18,7 +18,7 @@
 //! get_expression_dimensions`).
 
 use crate::types::{Equation, Expr, ExpressionNode};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use thiserror::Error;
 
 /// A dimension exponent.
@@ -133,13 +133,215 @@ fn gcd(a: i32, b: i32) -> i32 {
     if b == 0 { a } else { gcd(b, a % b) }
 }
 
+/// One factor of an [`ExactScale`]: a prime number, or π.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ScaleFactor {
+    /// A prime number.
+    Prime(u64),
+    /// The circle constant, which only the degree of arc carries (`deg` is π/180 rad).
+    Pi,
+}
+
+/// The EXACT scale of a unit relative to SI (esm-spec §4.8.1 "Scales are EXACT").
+///
+/// Stored as a product of prime powers and a power of π, each with a rational
+/// exponent: `mi` is 2⁴·3²·5⁻³·11·127. Multiplying units adds exponents, dividing
+/// subtracts them and a rational power multiplies them, so a composite unit's scale
+/// never rounds and `sqrt(km)` stays exact. Equality is exact, which is what lets a
+/// checker decide `m + km` or `m/s = mi/h` without a floating-point tolerance. The
+/// floating-point [`Unit::scale`] is kept for NUMERIC conversion only.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ExactScale {
+    factors: BTreeMap<ScaleFactor, Rational>,
+}
+
+impl ExactScale {
+    /// The scale 1.
+    #[must_use]
+    pub fn one() -> Self {
+        Self::default()
+    }
+
+    /// A positive whole number.
+    ///
+    /// # Panics
+    ///
+    /// Panics on zero, which is not a scale.
+    #[must_use]
+    pub fn integer(n: u64) -> Self {
+        assert!(n > 0, "a unit scale must be positive");
+        let mut out = Self::one();
+        let mut rest = n;
+        let mut p = 2u64;
+        while p * p <= rest {
+            while rest.is_multiple_of(p) {
+                out.bump(ScaleFactor::Prime(p), Rational::int(1));
+                rest /= p;
+            }
+            p += if p == 2 { 1 } else { 2 };
+        }
+        if rest > 1 {
+            out.bump(ScaleFactor::Prime(rest), Rational::int(1));
+        }
+        out
+    }
+
+    /// `num/den` for positive whole numbers.
+    #[must_use]
+    pub fn ratio(num: u64, den: u64) -> Self {
+        Self::integer(num).divide(&Self::integer(den))
+    }
+
+    /// `10^k`.
+    #[must_use]
+    pub fn power_of_ten(k: i32) -> Self {
+        let mut out = Self::one();
+        out.bump(ScaleFactor::Prime(2), Rational::int(k));
+        out.bump(ScaleFactor::Prime(5), Rational::int(k));
+        out
+    }
+
+    /// π.
+    #[must_use]
+    pub fn pi() -> Self {
+        let mut out = Self::one();
+        out.bump(ScaleFactor::Pi, Rational::int(1));
+        out
+    }
+
+    /// The exact value of a positive decimal literal as the registry writes it
+    /// (`"0.3048"`, `"133.322387415"`, `"2.6867e20"`).
+    ///
+    /// # Panics
+    ///
+    /// Panics on anything that is not such a literal: the registry is a fixed
+    /// table, so a typo in it is a bug to fail on loudly.
+    #[must_use]
+    pub fn decimal(s: &str) -> Self {
+        let (mantissa, exp) = match s.split_once(['e', 'E']) {
+            Some((m, e)) => (m, e.parse::<i32>().expect("registry decimal exponent")),
+            None => (s, 0),
+        };
+        let (int_part, frac_part) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+        let digits = format!("{int_part}{frac_part}");
+        let n: u64 = digits
+            .trim_start_matches('0')
+            .parse()
+            .expect("registry decimal mantissa");
+        let places = i32::try_from(frac_part.len()).expect("registry decimal places");
+        Self::integer(n).multiply(&Self::power_of_ten(exp - places))
+    }
+
+    fn bump(&mut self, factor: ScaleFactor, by: Rational) {
+        let e = self.factors.entry(factor).or_insert(Rational::int(0));
+        *e = e.add(by);
+        if e.is_zero() {
+            self.factors.remove(&factor);
+        }
+    }
+
+    /// The scale of a product of units.
+    #[must_use]
+    pub fn multiply(&self, other: &Self) -> Self {
+        let mut out = self.clone();
+        for (f, e) in &other.factors {
+            out.bump(*f, *e);
+        }
+        out
+    }
+
+    /// The scale of a quotient of units.
+    #[must_use]
+    pub fn divide(&self, other: &Self) -> Self {
+        let mut out = self.clone();
+        for (f, e) in &other.factors {
+            out.bump(*f, e.mul(Rational::int(-1)));
+        }
+        out
+    }
+
+    /// The scale of a unit raised to a rational power.
+    #[must_use]
+    pub fn power(&self, exponent: Rational) -> Self {
+        let mut out = Self::one();
+        for (f, e) in &self.factors {
+            out.bump(*f, e.mul(exponent));
+        }
+        out
+    }
+
+    /// Whether this is exactly 1.
+    #[must_use]
+    pub fn is_one(&self) -> bool {
+        self.factors.is_empty()
+    }
+
+    /// The nearest `f64`, for diagnostics and tests. Two scales are never
+    /// compared through this.
+    #[must_use]
+    pub fn to_f64(&self) -> f64 {
+        self.factors.iter().fold(1.0, |acc, (f, e)| {
+            let base = match f {
+                ScaleFactor::Prime(p) => *p as f64,
+                ScaleFactor::Pi => std::f64::consts::PI,
+            };
+            acc * base.powf(e.as_f64())
+        })
+    }
+
+    /// `p/q`, `p/q*pi` or `p/q*pi^k` in lowest terms (`/q` omitted when it is 1),
+    /// the spelling `tests/conformance/unit_registry` pins. `None` when an exponent
+    /// is not whole (`sqrt(km)`) or the numbers do not fit in 128 bits.
+    #[must_use]
+    pub fn ratio_string(&self) -> Option<String> {
+        let (mut num, mut den, mut pi) = (1u128, 1u128, 0i32);
+        for (f, e) in &self.factors {
+            if e.den != 1 {
+                return None;
+            }
+            match f {
+                ScaleFactor::Pi => pi = e.num,
+                ScaleFactor::Prime(p) => {
+                    let pow = u128::from(*p).checked_pow(e.num.unsigned_abs())?;
+                    if e.num > 0 {
+                        num = num.checked_mul(pow)?;
+                    } else {
+                        den = den.checked_mul(pow)?;
+                    }
+                }
+            }
+        }
+        let mut s = num.to_string();
+        if den != 1 {
+            s = format!("{s}/{den}");
+        }
+        Some(match pi {
+            0 => s,
+            1 => format!("{s}*pi"),
+            k => format!("{s}*pi^{k}"),
+        })
+    }
+}
+
+impl std::fmt::Display for ExactScale {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.ratio_string() {
+            Some(s) => write!(f, "{s}"),
+            None => write!(f, "{:e}", self.to_f64()),
+        }
+    }
+}
+
 /// Represents a physical unit with dimensions
 #[derive(Debug, Clone, PartialEq)]
 pub struct Unit {
     /// Base dimensions with their (rational) powers
     dimensions: HashMap<Dimension, Rational>,
-    /// Scale factor for unit conversions
+    /// Scale factor for NUMERIC unit conversions. It never decides a
+    /// dimensional verdict; see [`ExactScale`].
     scale: f64,
+    /// The exact scale every scale agreement is decided on (esm-spec §4.8.1).
+    exact: ExactScale,
 }
 
 /// Base physical dimensions — the eight canonical axes shared across the
@@ -315,6 +517,24 @@ impl Unit {
         self.scale
     }
 
+    /// The exact scale this unit's agreements are decided on (esm-spec §4.8.1).
+    pub fn exact_scale(&self) -> &ExactScale {
+        &self.exact
+    }
+
+    /// Whether two units agree in dimension AND exact scale — what `+`, `-`,
+    /// comparisons and the two sides of an equation require (esm-spec §4.8.3).
+    pub fn same_unit(&self, other: &Unit) -> bool {
+        self.is_compatible(other) && self.exact == other.exact
+    }
+
+    /// This unit with its exact scale set. Every registry entry whose scale is
+    /// not 1 is built through this.
+    fn with_exact(mut self, exact: ExactScale) -> Self {
+        self.exact = exact;
+        self
+    }
+
     /// Whether two units measure the same physical quantity, ignoring scale
     /// (`atm` and `Pa` are the same dimension at different scales).
     pub fn same_dimensions(&self, other: &Unit) -> bool {
@@ -326,22 +546,32 @@ impl Unit {
         Unit {
             dimensions: HashMap::new(),
             scale: 1.0,
+            exact: ExactScale::one(),
         }
     }
 
     /// Create a unit with a single dimension raised to an integer power.
+    ///
+    /// `scale` is the NUMERIC conversion factor only; the unit's
+    /// [`ExactScale`] is 1, so a scaled unit built here agrees exactly with its
+    /// unscaled base (esm-spec §4.8.3). Use [`parse_unit`] for a scaled unit.
     pub fn base(dimension: Dimension, power: i32, scale: f64) -> Self {
         Unit::base_rational(dimension, Rational::int(power), scale)
     }
 
     /// Create a unit with a single dimension raised to a RATIONAL power (e.g.
-    /// `s^-1/2`, the dimension of an SDE noise intensity).
+    /// `s^-1/2`, the dimension of an SDE noise intensity). As with [`Unit::base`],
+    /// the exact scale is 1 whatever `scale` is.
     pub fn base_rational(dimension: Dimension, power: Rational, scale: f64) -> Self {
         let mut dimensions = HashMap::new();
         if !power.is_zero() {
             dimensions.insert(dimension, power);
         }
-        Unit { dimensions, scale }
+        Unit {
+            dimensions,
+            scale,
+            exact: ExactScale::one(),
+        }
     }
 
     /// Check if two units have compatible dimensions
@@ -367,12 +597,16 @@ impl Unit {
 
     /// Multiply two units
     pub fn multiply(&self, other: &Unit) -> Unit {
-        self.combine(other, Rational::add, self.scale * other.scale)
+        let mut unit = self.combine(other, Rational::add, self.scale * other.scale);
+        unit.exact = self.exact.multiply(&other.exact);
+        unit
     }
 
     /// Divide two units
     pub fn divide(&self, other: &Unit) -> Unit {
-        self.combine(other, Rational::sub, self.scale / other.scale)
+        let mut unit = self.combine(other, Rational::sub, self.scale / other.scale);
+        unit.exact = self.exact.divide(&other.exact);
+        unit
     }
 
     /// Merge `other`'s exponents into a copy of `self`'s with `op`, dropping any
@@ -386,7 +620,11 @@ impl Unit {
                 dimensions.remove(dim);
             }
         }
-        Unit { dimensions, scale }
+        Unit {
+            dimensions,
+            scale,
+            exact: ExactScale::one(),
+        }
     }
 
     /// Raise unit to an integer power.
@@ -407,6 +645,7 @@ impl Unit {
         Unit {
             dimensions,
             scale: self.scale.powf(exponent.as_f64()),
+            exact: self.exact.power(exponent),
         }
     }
 
@@ -647,6 +886,14 @@ fn propagate_matching_dim(
                     describe(unit)
                 )));
             }
+            Some(f) if f.exact != unit.exact => {
+                findings.push(UnitFinding::error(format!(
+                    "Incompatible scales in '{}': {} vs {}",
+                    op.op,
+                    describe_scaled(f),
+                    describe_scaled(unit)
+                )));
+            }
             _ => {}
         }
     }
@@ -731,9 +978,10 @@ fn propagate_power_dim(
     let Some(base_unit) = base.known() else {
         return Dim::Unknown;
     };
-    // A dimensionless base stays dimensionless under any exponent, so a
-    // non-literal exponent is only a problem for a DIMENSIONAL base.
-    if base_unit.is_dimensionless() {
+    // A dimensionless base of scale 1 stays exactly that under any exponent, so
+    // a non-literal exponent is only a problem for a DIMENSIONAL or SCALED base
+    // (`x^2` with `x` in `%` has scale 1/10000).
+    if base_unit.is_dimensionless() && base_unit.exact.is_one() {
         return Dim::Known(Unit::dimensionless());
     }
 
@@ -965,6 +1213,14 @@ fn propagate_ifelse_dim(
             )));
             Dim::Unknown
         }
+        (Some(a), Some(b)) if a.exact != b.exact => {
+            findings.push(UnitFinding::error(format!(
+                "'ifelse' branches must share a scale: {} vs {}",
+                describe_scaled(a),
+                describe_scaled(b)
+            )));
+            Dim::Unknown
+        }
         (Some(a), Some(_)) => Dim::Known(a.clone()),
         _ => Dim::Unknown,
     }
@@ -1013,12 +1269,12 @@ fn propagate_array_dim(
             };
             let mut mismatched = false;
             for other in resolved {
-                if !first.is_compatible(other) {
+                if !first.same_unit(other) {
                     mismatched = true;
                     findings.push(UnitFinding::error(format!(
-                        "'makearray' regions must share dimensions: {} vs {}",
-                        describe(&first),
-                        describe(other)
+                        "'makearray' regions must share units: {} vs {}",
+                        describe_scaled(&first),
+                        describe_scaled(other)
                     )));
                 }
             }
@@ -1092,6 +1348,16 @@ fn describe(unit: &Unit) -> String {
         .collect();
     parts.sort();
     parts.join("*")
+}
+
+/// [`describe`], followed by the exact scale when it is not 1 — what a scale
+/// disagreement has to show, since the dimensions alone are identical.
+fn describe_scaled(unit: &Unit) -> String {
+    if unit.exact.is_one() {
+        describe(unit)
+    } else {
+        format!("{} (scale {})", describe(unit), unit.exact)
+    }
 }
 
 /// Build a `HashMap<String, Unit>` environment from model variable metadata,
@@ -1224,12 +1490,12 @@ pub fn check_equation_dimensions(eq: &Equation, env: &HashMap<String, Unit>) -> 
     }
 
     if let (Some(l), Some(r)) = (lhs.known(), rhs.known())
-        && !l.is_compatible(r)
+        && !l.same_unit(r)
     {
         findings.push(UnitFinding::error(format!(
             "Left-hand side has units of {} but right-hand side has units of {}",
-            describe(l),
-            describe(r)
+            describe_scaled(l),
+            describe_scaled(r)
         )));
     }
     findings
@@ -1258,12 +1524,12 @@ pub fn check_expression_dimensions(
     }
 
     if let (Some(declared), Some(actual)) = (declared, actual.known())
-        && !declared.is_compatible(actual)
+        && !declared.same_unit(actual)
     {
         findings.push(UnitFinding::error(format!(
             "Declared units of {} do not match the expression's units of {}",
-            describe(declared),
-            describe(actual)
+            describe_scaled(declared),
+            describe_scaled(actual)
         )));
     }
     findings
@@ -1422,6 +1688,7 @@ fn parse_normalized(s: &str, original: &str) -> Result<Unit, UnitError> {
         return Ok(Unit {
             dimensions: HashMap::new(),
             scale: 1.0,
+            exact: ExactScale::one(),
         });
     }
 
@@ -1436,35 +1703,35 @@ fn parse_normalized(s: &str, original: &str) -> Result<Unit, UnitError> {
 /// micro-something. Prefixes are tried LONGEST-first so `da` (deca) is not
 /// mistaken for `d` (deci).
 fn parse_si_prefixed(s: &str, base_units: &HashMap<String, Unit>) -> Option<Unit> {
-    /// (symbol, factor), longest symbol first.
-    const PREFIXES: [(&str, f64); 20] = [
-        ("da", 1e1),
-        ("Y", 1e24),
-        ("Z", 1e21),
-        ("E", 1e18),
-        ("P", 1e15),
-        ("T", 1e12),
-        ("G", 1e9),
-        ("M", 1e6),
-        ("k", 1e3),
-        ("h", 1e2),
-        ("d", 1e-1),
-        ("c", 1e-2),
-        ("m", 1e-3),
-        ("u", 1e-6),
-        ("n", 1e-9),
-        ("p", 1e-12),
-        ("f", 1e-15),
-        ("a", 1e-18),
-        ("z", 1e-21),
-        ("y", 1e-24),
+    /// (symbol, factor, power of ten), longest symbol first.
+    const PREFIXES: [(&str, f64, i32); 20] = [
+        ("da", 1e1, 1),
+        ("Y", 1e24, 24),
+        ("Z", 1e21, 21),
+        ("E", 1e18, 18),
+        ("P", 1e15, 15),
+        ("T", 1e12, 12),
+        ("G", 1e9, 9),
+        ("M", 1e6, 6),
+        ("k", 1e3, 3),
+        ("h", 1e2, 2),
+        ("d", 1e-1, -1),
+        ("c", 1e-2, -2),
+        ("m", 1e-3, -3),
+        ("u", 1e-6, -6),
+        ("n", 1e-9, -9),
+        ("p", 1e-12, -12),
+        ("f", 1e-15, -15),
+        ("a", 1e-18, -18),
+        ("z", 1e-21, -21),
+        ("y", 1e-24, -24),
     ];
     /// Symbols that admit an SI prefix.
     const PREFIXABLE: [&str; 13] = [
         "m", "g", "s", "mol", "K", "A", "cd", "L", "N", "Pa", "J", "W", "rad",
     ];
 
-    for (prefix, factor) in PREFIXES {
+    for (prefix, factor, power) in PREFIXES {
         let Some(base) = s.strip_prefix(prefix) else {
             continue;
         };
@@ -1473,6 +1740,7 @@ fn parse_si_prefixed(s: &str, base_units: &HashMap<String, Unit>) -> Option<Unit
         }
         let mut unit = base_units.get(base)?.clone();
         unit.scale *= factor;
+        unit.exact = unit.exact.multiply(&ExactScale::power_of_ten(power));
         return Some(unit);
     }
     None
@@ -1580,9 +1848,18 @@ fn build_base_units() -> HashMap<String, Unit> {
 
     // Length units
     units.insert("m".to_string(), Unit::base(Dimension::Length, 1, 1.0));
-    units.insert("cm".to_string(), Unit::base(Dimension::Length, 1, 0.01));
-    units.insert("km".to_string(), Unit::base(Dimension::Length, 1, 1000.0));
-    units.insert("mm".to_string(), Unit::base(Dimension::Length, 1, 0.001));
+    units.insert(
+        "cm".to_string(),
+        Unit::base(Dimension::Length, 1, 0.01).with_exact(ExactScale::power_of_ten(-2)),
+    );
+    units.insert(
+        "km".to_string(),
+        Unit::base(Dimension::Length, 1, 1000.0).with_exact(ExactScale::power_of_ten(3)),
+    );
+    units.insert(
+        "mm".to_string(),
+        Unit::base(Dimension::Length, 1, 0.001).with_exact(ExactScale::power_of_ten(-3)),
+    );
     units.insert("meter".to_string(), Unit::base(Dimension::Length, 1, 1.0));
     units.insert("meters".to_string(), Unit::base(Dimension::Length, 1, 1.0));
     // The international foot, exact by definition since 1959: 1 ft = 0.3048 m.
@@ -1590,7 +1867,10 @@ fn build_base_units() -> HashMap<String, Unit> {
     // stores STKHGT and STKDIAM in feet — and a format for air-quality models
     // that cannot spell the unit its own input files use forces every such
     // column to be declared in a unit it is not stored in.
-    units.insert("ft".to_string(), Unit::base(Dimension::Length, 1, 0.3048));
+    units.insert(
+        "ft".to_string(),
+        Unit::base(Dimension::Length, 1, 0.3048).with_exact(ExactScale::decimal("0.3048")),
+    );
     // The international mile, exact by definition since the same 1959
     // agreement: 1 mi = 5280 ft = 1609.344 m. It is the unit the US onroad
     // transportation inventory is written in end to end — EPA MOVES stores
@@ -1610,30 +1890,52 @@ fn build_base_units() -> HashMap<String, Unit> {
     // so this entry cannot drift away from the one that defines it.
     units.insert(
         "mi".to_string(),
-        Unit::base(Dimension::Length, 1, 5280.0 * units["ft"].scale),
+        Unit::base(Dimension::Length, 1, 5280.0 * units["ft"].scale)
+            .with_exact(ExactScale::integer(5280).multiply(&units["ft"].exact)),
     );
 
     // Time units
     units.insert("s".to_string(), Unit::base(Dimension::Time, 1, 1.0));
-    units.insert("min".to_string(), Unit::base(Dimension::Time, 1, 60.0));
-    units.insert("h".to_string(), Unit::base(Dimension::Time, 1, 3600.0));
-    units.insert("hr".to_string(), Unit::base(Dimension::Time, 1, 3600.0));
-    units.insert("hour".to_string(), Unit::base(Dimension::Time, 1, 3600.0));
+    units.insert(
+        "min".to_string(),
+        Unit::base(Dimension::Time, 1, 60.0).with_exact(ExactScale::integer(60)),
+    );
+    units.insert(
+        "h".to_string(),
+        Unit::base(Dimension::Time, 1, 3600.0).with_exact(ExactScale::integer(3600)),
+    );
+    units.insert(
+        "hr".to_string(),
+        Unit::base(Dimension::Time, 1, 3600.0).with_exact(ExactScale::integer(3600)),
+    );
+    units.insert(
+        "hour".to_string(),
+        Unit::base(Dimension::Time, 1, 3600.0).with_exact(ExactScale::integer(3600)),
+    );
     // The canonical spelling of the day is `day`. A bare `d` is deliberately NOT
     // a unit (esm-spec §4.8.1): a one-letter symbol reads as the deci- prefix or
     // as a differential, so admitting it would make `d` ambiguous at every site.
-    units.insert("day".to_string(), Unit::base(Dimension::Time, 1, 86400.0));
+    units.insert(
+        "day".to_string(),
+        Unit::base(Dimension::Time, 1, 86400.0).with_exact(ExactScale::integer(86400)),
+    );
 
     // Mass units
     units.insert("kg".to_string(), Unit::base(Dimension::Mass, 1, 1.0));
-    units.insert("g".to_string(), Unit::base(Dimension::Mass, 1, 0.001));
+    units.insert(
+        "g".to_string(),
+        Unit::base(Dimension::Mass, 1, 0.001).with_exact(ExactScale::power_of_ten(-3)),
+    );
     // The international avoirdupois pound, exact by definition since 1959:
     // 1 lb = 0.45359237 kg. US emission rates are tabulated in it — MOVES's
     // NONROAD brake-specific fuel consumption is `lb/(hp*h)` and its gasoline
     // density constant CMFGAS is 6.237 lb/gal — and it is the unit `short_ton`
     // below is DEFINED in, so having the ton and not the pound left the
     // derived unit spellable and the base one not.
-    units.insert("lb".to_string(), Unit::base(Dimension::Mass, 1, 0.45359237));
+    units.insert(
+        "lb".to_string(),
+        Unit::base(Dimension::Mass, 1, 0.45359237).with_exact(ExactScale::decimal("0.45359237")),
+    );
     // The two tons, both spelled UNAMBIGUOUSLY and neither spelled `ton`. A bare
     // `ton` is three different masses (short 907.18474 kg, metric 1000 kg, long
     // 1016.0469088 kg), and a table whose job is to make a declared unit mean
@@ -1645,9 +1947,13 @@ fn build_base_units() -> HashMap<String, Unit> {
     // 907.18474, for the same reason `mi` reads the foot back out.
     units.insert(
         "short_ton".to_string(),
-        Unit::base(Dimension::Mass, 1, 2000.0 * units["lb"].scale),
+        Unit::base(Dimension::Mass, 1, 2000.0 * units["lb"].scale)
+            .with_exact(ExactScale::integer(2000).multiply(&units["lb"].exact)),
     );
-    units.insert("tonne".to_string(), Unit::base(Dimension::Mass, 1, 1000.0));
+    units.insert(
+        "tonne".to_string(),
+        Unit::base(Dimension::Mass, 1, 1000.0).with_exact(ExactScale::power_of_ten(3)),
+    );
 
     // Amount units
     units.insert("mol".to_string(), Unit::base(Dimension::Amount, 1, 1.0));
@@ -1676,7 +1982,8 @@ fn build_base_units() -> HashMap<String, Unit> {
     // Degrees of arc — the same axis, scaled. (`deg` is the short spelling; the
     // TEMPERATURE `degC`/`degF` are separate entries and are matched first, so
     // there is no collision.)
-    let degree = Unit::base(Dimension::Angle, 1, std::f64::consts::PI / 180.0);
+    let degree = Unit::base(Dimension::Angle, 1, std::f64::consts::PI / 180.0)
+        .with_exact(ExactScale::pi().divide(&ExactScale::integer(180)));
     units.insert("degrees".to_string(), degree.clone());
     units.insert("degree".to_string(), degree.clone());
     units.insert("deg".to_string(), degree);
@@ -1689,7 +1996,10 @@ fn build_base_units() -> HashMap<String, Unit> {
     units.insert("sr".to_string(), Unit::base(Dimension::Angle, 2, 1.0));
 
     // Volume (L = dm³ = 10⁻³ m³)
-    units.insert("L".to_string(), Unit::base(Dimension::Length, 3, 0.001));
+    units.insert(
+        "L".to_string(),
+        Unit::base(Dimension::Length, 3, 0.001).with_exact(ExactScale::power_of_ten(-3)),
+    );
     // The US liquid gallon, exact by definition: 231 in³ = 3.785 411 784 L
     // (NIST SP 811 App. B). It is spelled `gal` and not `gallon` for the same
     // reason `ft` has no `foot`, and it is the US liquid gallon and not the
@@ -1700,18 +2010,19 @@ fn build_base_units() -> HashMap<String, Unit> {
     // in g/gal.
     units.insert(
         "gal".to_string(),
-        Unit::base(Dimension::Length, 3, 0.003_785_411_784),
+        Unit::base(Dimension::Length, 3, 0.003_785_411_784)
+            .with_exact(ExactScale::decimal("0.003785411784")),
     );
 
     // Frequency: Hz = s⁻¹.
     units.insert("Hz".to_string(), Unit::base(Dimension::Time, -1, 1.0));
 
-    // Fahrenheit shares the TEMPERATURE axis with kelvin, like `degC`: the
-    // three differ by affine offset/scale, which a multiplicative dimension
-    // algebra cannot express and dimensional analysis does not need.
+    // Fahrenheit shares the TEMPERATURE axis with kelvin, like `degC`, at a
+    // scale of exactly 5/9 K (esm-spec §4.8.1). Its affine offset is not
+    // modelled, and not checked.
     units.insert(
         "degF".to_string(),
-        Unit::base(Dimension::Temperature, 1, 1.0),
+        Unit::base(Dimension::Temperature, 1, 5.0 / 9.0).with_exact(ExactScale::ratio(5, 9)),
     );
 
     // Year — the JULIAN year, 365.25 days = 31_557_600 s exactly. That is the
@@ -1723,11 +2034,11 @@ fn build_base_units() -> HashMap<String, Unit> {
     // exactly what that fixture is for.
     units.insert(
         "year".to_string(),
-        Unit::base(Dimension::Time, 1, 31_557_600.0),
+        Unit::base(Dimension::Time, 1, 31_557_600.0).with_exact(ExactScale::integer(31_557_600)),
     );
     units.insert(
         "yr".to_string(),
-        Unit::base(Dimension::Time, 1, 31_557_600.0),
+        Unit::base(Dimension::Time, 1, 31_557_600.0).with_exact(ExactScale::integer(31_557_600)),
     );
 
     // Derived units
@@ -1738,7 +2049,7 @@ fn build_base_units() -> HashMap<String, Unit> {
     );
 
     // Concentration: mol/L (mol/m^3)
-    let liter = Unit::base(Dimension::Length, 3, 0.001);
+    let liter = Unit::base(Dimension::Length, 3, 0.001).with_exact(ExactScale::power_of_ten(-3));
     units.insert(
         "mol/L".to_string(),
         Unit::base(Dimension::Amount, 1, 1.0).divide(&liter),
@@ -1767,12 +2078,15 @@ fn build_base_units() -> HashMap<String, Unit> {
     units.insert("J".to_string(), joule.clone());
     let mut kj = joule.clone();
     kj.scale *= 1000.0;
+    kj.exact = kj.exact.multiply(&ExactScale::power_of_ten(3));
     units.insert("kJ".to_string(), kj);
     let mut cal = joule.clone();
     cal.scale *= 4.184;
+    cal.exact = cal.exact.multiply(&ExactScale::decimal("4.184"));
     units.insert("cal".to_string(), cal);
     let mut kcal = joule.clone();
     kcal.scale *= 4184.0;
+    kcal.exact = kcal.exact.multiply(&ExactScale::integer(4184));
     units.insert("kcal".to_string(), kcal);
 
     // Power: kg*m^2/s^3 (Watt)
@@ -1796,6 +2110,12 @@ fn build_base_units() -> HashMap<String, Unit> {
     let pound = units["lb"].scale;
     let mut horsepower = watt.clone();
     horsepower.scale *= 550.0 * foot * pound * 9.80665;
+    horsepower.exact = horsepower.exact.multiply(
+        &ExactScale::integer(550)
+            .multiply(&units["ft"].exact)
+            .multiply(&units["lb"].exact)
+            .multiply(&ExactScale::decimal("9.80665")),
+    );
     units.insert("hp".to_string(), horsepower);
 
     // Electromagnetic family, all derived from the ampere.
@@ -1828,38 +2148,76 @@ fn build_base_units() -> HashMap<String, Unit> {
     );
 
     // Non-SI energies, as multiples of the joule.
-    let joule_scaled = |scale: f64| {
+    let joule_scaled = |scale: f64, exact: ExactScale| {
         let mut u = joule.clone();
         u.scale *= scale;
+        u.exact = u.exact.multiply(&exact);
         u
     };
-    units.insert("erg".to_string(), joule_scaled(1e-7));
-    units.insert("BTU".to_string(), joule_scaled(1_055.055_852_62));
+    units.insert(
+        "erg".to_string(),
+        joule_scaled(1e-7, ExactScale::power_of_ten(-7)),
+    );
+    units.insert(
+        "BTU".to_string(),
+        joule_scaled(1_055.055_852_62, ExactScale::decimal("1055.05585262")),
+    );
     // The watt-hour, exactly 3600 J, and the kilowatt-hour it is the base of.
     // esm-spec §4.8.1's Energy row lists BOTH; Julia, Python, Go and TypeScript
     // carried both while this table had only `kWh`, so `units: "Wh"` resolved in
     // four bindings and was a hard error in this one. `W*h` composes either way,
     // which is why the gap was silent.
-    units.insert("Wh".to_string(), joule_scaled(3600.0));
-    units.insert("kWh".to_string(), joule_scaled(3.6e6));
+    units.insert(
+        "Wh".to_string(),
+        joule_scaled(3600.0, ExactScale::integer(3600)),
+    );
+    units.insert(
+        "kWh".to_string(),
+        joule_scaled(3.6e6, ExactScale::integer(3_600_000)),
+    );
 
     // ESM-specific units standard (docs/units-standard.md).
     // Mole-fraction family: dimensionless with scale factors.
     // ppmv/ppbv/pptv are volume-mixing-ratio aliases of ppm/ppb/ppt under
     // the ideal-gas approximation — identical dimension and scale.
-    let dimensionless_scaled = |scale: f64| Unit {
+    let dimensionless_scaled = |scale: f64, exact: ExactScale| Unit {
         dimensions: HashMap::new(),
         scale,
+        exact,
     };
-    units.insert("ppm".to_string(), dimensionless_scaled(1e-6));
-    units.insert("ppmv".to_string(), dimensionless_scaled(1e-6));
-    units.insert("ppb".to_string(), dimensionless_scaled(1e-9));
-    units.insert("ppbv".to_string(), dimensionless_scaled(1e-9));
-    units.insert("ppt".to_string(), dimensionless_scaled(1e-12));
-    units.insert("pptv".to_string(), dimensionless_scaled(1e-12));
+    units.insert(
+        "ppm".to_string(),
+        dimensionless_scaled(1e-6, ExactScale::power_of_ten(-6)),
+    );
+    units.insert(
+        "ppmv".to_string(),
+        dimensionless_scaled(1e-6, ExactScale::power_of_ten(-6)),
+    );
+    units.insert(
+        "ppb".to_string(),
+        dimensionless_scaled(1e-9, ExactScale::power_of_ten(-9)),
+    );
+    units.insert(
+        "ppbv".to_string(),
+        dimensionless_scaled(1e-9, ExactScale::power_of_ten(-9)),
+    );
+    units.insert(
+        "ppt".to_string(),
+        dimensionless_scaled(1e-12, ExactScale::power_of_ten(-12)),
+    );
+    units.insert(
+        "pptv".to_string(),
+        dimensionless_scaled(1e-12, ExactScale::power_of_ten(-12)),
+    );
     // Percent — dimensionless with a scale, like the mole-fraction family.
-    units.insert("%".to_string(), dimensionless_scaled(0.01));
-    units.insert("percent".to_string(), dimensionless_scaled(0.01));
+    units.insert(
+        "%".to_string(),
+        dimensionless_scaled(0.01, ExactScale::power_of_ten(-2)),
+    );
+    units.insert(
+        "percent".to_string(),
+        dimensionless_scaled(0.01, ExactScale::power_of_ten(-2)),
+    );
 
     // COUNTS carry no dimension axis: they count entities, they do not measure
     // one. Composites therefore fall out of the parser with the right dimension
@@ -1880,38 +2238,77 @@ fn build_base_units() -> HashMap<String, Unit> {
     units.insert("psu".to_string(), Unit::dimensionless());
 
     // Pressure: atmosphere, and the micro-atmosphere used for seawater pCO2.
-    units.insert("atm".to_string(), pascal_scaled(&units, 101_325.0));
-    units.insert("uatm".to_string(), pascal_scaled(&units, 0.101_325));
+    units.insert(
+        "atm".to_string(),
+        pascal_scaled(&units, 101_325.0, ExactScale::integer(101_325)),
+    );
+    units.insert(
+        "uatm".to_string(),
+        pascal_scaled(&units, 0.101_325, ExactScale::decimal("0.101325")),
+    );
     // Non-SI pressures, as multiples of the pascal.
-    units.insert("bar".to_string(), pascal_scaled(&units, 1e5));
-    units.insert("Torr".to_string(), pascal_scaled(&units, 133.322_368_421));
-    units.insert("mmHg".to_string(), pascal_scaled(&units, 133.322_387_415));
+    units.insert(
+        "bar".to_string(),
+        pascal_scaled(&units, 1e5, ExactScale::power_of_ten(5)),
+    );
+    // Torr is EXACTLY atm/760 (esm-spec §4.8.1) — not a rounded decimal, and not
+    // mmHg, which is the conventional 133.322387415 Pa.
+    units.insert(
+        "Torr".to_string(),
+        pascal_scaled(&units, 101_325.0 / 760.0, ExactScale::ratio(101_325, 760)),
+    );
+    units.insert(
+        "mmHg".to_string(),
+        pascal_scaled(
+            &units,
+            133.322_387_415,
+            ExactScale::decimal("133.322387415"),
+        ),
+    );
     // Inch of mercury — exactly 25.4 mmHg, the conventional value (NIST SP 811).
     // US barometric datasets store pressure in inHg; without this entry such a
     // column has no honest declaration, because a unit string carries no numeric
     // scale factor, so `25.4 mmHg` cannot be spelled either.
-    units.insert("inHg".to_string(), pascal_scaled(&units, 3_386.388_640_341));
-    units.insert("psi".to_string(), pascal_scaled(&units, 6_894.757_293_168));
+    units.insert(
+        "inHg".to_string(),
+        pascal_scaled(
+            &units,
+            3_386.388_640_341,
+            ExactScale::decimal("3386.388640341"),
+        ),
+    );
+    // psi is lbf/in² = pound × standard gravity ÷ inch², every factor exact
+    // (esm-spec §4.8.1), folded in that order for the numeric scale.
+    let psi_scale = units["lb"].scale * 9.80665 / (0.0254 * 0.0254);
+    let psi_exact = units["lb"]
+        .exact
+        .multiply(&ExactScale::decimal("9.80665"))
+        .divide(&ExactScale::decimal("0.0254").power(Rational::int(2)));
+    units.insert(
+        "psi".to_string(),
+        pascal_scaled(&units, psi_scale, psi_exact),
+    );
 
     // Dobson unit: areal number density of ozone molecules.
     // Since `molec` is dimensionless, Dobson resolves to `[length]^-2` with
     // scale 2.6867e20 molec/m^2.
     units.insert(
         "Dobson".to_string(),
-        Unit::base(Dimension::Length, -2, 2.6867e20),
+        Unit::base(Dimension::Length, -2, 2.6867e20).with_exact(ExactScale::decimal("2.6867e20")),
     );
     units.insert(
         "DU".to_string(),
-        Unit::base(Dimension::Length, -2, 2.6867e20),
+        Unit::base(Dimension::Length, -2, 2.6867e20).with_exact(ExactScale::decimal("2.6867e20")),
     );
 
     units
 }
 
 /// A pressure unit expressed as a multiple of the pascal already in `units`.
-fn pascal_scaled(units: &HashMap<String, Unit>, scale: f64) -> Unit {
+fn pascal_scaled(units: &HashMap<String, Unit>, scale: f64, exact: ExactScale) -> Unit {
     let mut u = units["Pa"].clone();
     u.scale *= scale;
+    u.exact = u.exact.multiply(&exact);
     u
 }
 
@@ -2253,6 +2650,7 @@ mod tests {
         assert_eq!(parse_unit("mL").unwrap(), {
             let mut l = parse_unit("L").unwrap();
             l.scale *= 1e-3;
+            l.exact = l.exact.multiply(&ExactScale::power_of_ten(-3));
             l
         });
         assert_eq!(
@@ -2402,6 +2800,131 @@ mod tests {
                 .iter()
                 .any(UnitFinding::is_error),
             "ratio m/kg is not a power of time ⇒ provable mismatch"
+        );
+    }
+
+    /// Every registry entry carries an exact scale, and it is the same number as
+    /// the floating-point one used for numeric conversion. An entry that forgot
+    /// its exact form would silently default to 1 and fail here.
+    #[test]
+    fn every_registry_scale_has_a_matching_exact_form() {
+        for (name, unit) in build_base_units() {
+            let exact = unit.exact_scale().to_f64();
+            assert!(
+                (exact - unit.scale()).abs() <= 1e-12 * unit.scale().abs(),
+                "{name}: exact scale {exact} disagrees with the float {}",
+                unit.scale()
+            );
+        }
+    }
+
+    /// The three entries the bindings disagreed on, and the scales whose exact
+    /// form is least obvious (esm-spec §4.8.1).
+    #[test]
+    fn reconciled_registry_scales_are_exact() {
+        let exact = |s: &str| parse_unit(s).unwrap().exact_scale().ratio_string().unwrap();
+        assert_eq!(exact("Torr"), "20265/152");
+        assert_eq!(exact("psi"), "8896443230521/1290320000");
+        assert_eq!(exact("degF"), "5/9");
+        assert_eq!(exact("deg"), "1/180*pi");
+        assert_eq!(exact("mi"), "201168/125");
+        assert_eq!(exact("hp"), "37284993579113511/50000000000000");
+        assert_eq!(exact("DU"), "268670000000000000000");
+        assert_eq!(parse_unit("psi").unwrap().scale(), 6_894.757_293_168_361);
+        assert_eq!(parse_unit("Torr").unwrap().scale(), 101_325.0 / 760.0);
+        assert_eq!(parse_unit("degF").unwrap().scale(), 5.0 / 9.0);
+    }
+
+    #[test]
+    fn adding_metres_to_kilometres_is_a_scale_mismatch() {
+        let env = env_of(&[("x", "m"), ("y", "km"), ("z", "m")]);
+        let var = |n: &str| Expr::Variable(n.into());
+        let findings = check_expression_dimensions(&op("+", vec![var("x"), var("y")]), None, &env);
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.is_error() && f.message.contains("scale")),
+            "m + km must be a scale mismatch: {findings:?}"
+        );
+        let findings = check_expression_dimensions(&op("+", vec![var("x"), var("z")]), None, &env);
+        assert!(!findings.iter().any(UnitFinding::is_error), "{findings:?}");
+    }
+
+    #[test]
+    fn an_equation_between_m_per_s_and_mi_per_h_is_a_scale_mismatch() {
+        let env = env_of(&[
+            ("speed_ms", "m/s"),
+            ("speed_mph", "mi/h"),
+            ("ms_per_mph", "m*h/(mi*s)"),
+        ]);
+        let var = |n: &str| Expr::Variable(n.into());
+        let bare = Equation {
+            comment: None,
+            lhs: var("speed_ms"),
+            rhs: var("speed_mph"),
+        };
+        assert!(
+            check_equation_dimensions(&bare, &env)
+                .iter()
+                .any(UnitFinding::is_error),
+            "m/s = mi/h agrees in dimension and not in scale"
+        );
+        let converted = Equation {
+            comment: None,
+            lhs: var("speed_ms"),
+            rhs: op("*", vec![var("speed_mph"), var("ms_per_mph")]),
+        };
+        assert!(
+            !check_equation_dimensions(&converted, &env)
+                .iter()
+                .any(UnitFinding::is_error),
+            "mi/h times m*h/(mi*s) is exactly m/s"
+        );
+    }
+
+    #[test]
+    fn ifelse_branches_must_agree_in_scale() {
+        let env = env_of(&[("flag", "1"), ("x", "m"), ("y", "km")]);
+        let var = |n: &str| Expr::Variable(n.into());
+        let e = op("ifelse", vec![var("flag"), var("x"), var("y")]);
+        assert!(
+            check_expression_dimensions(&e, None, &env)
+                .iter()
+                .any(UnitFinding::is_error)
+        );
+    }
+
+    #[test]
+    fn an_observed_expression_must_agree_with_its_declared_scale() {
+        let env = env_of(&[("y", "km")]);
+        let declared = parse_unit("m").unwrap();
+        assert!(
+            check_expression_dimensions(&Expr::Variable("y".into()), Some(&declared), &env)
+                .iter()
+                .any(UnitFinding::is_error)
+        );
+    }
+
+    #[test]
+    fn scaled_powers_and_roots_stay_exact() {
+        assert_eq!(
+            parse_unit("km^2")
+                .unwrap()
+                .power_rational(Rational::new(1, 2))
+                .exact_scale(),
+            parse_unit("km").unwrap().exact_scale()
+        );
+        let env = env_of(&[("p", "%"), ("q", "1")]);
+        let eq = Equation {
+            comment: None,
+            lhs: Expr::Variable("q".into()),
+            rhs: op("^", vec![Expr::Variable("p".into()), Expr::Integer(2)]),
+        };
+        assert!(
+            check_equation_dimensions(&eq, &env)
+                .iter()
+                .any(UnitFinding::is_error),
+            "a percentage squared has scale 1/10000, not 1"
         );
     }
 
@@ -2731,7 +3254,9 @@ mod tests {
 
     #[test]
     fn propagate_addition_matches() {
-        let env = env_of(&[("h1", "m"), ("h2", "cm")]);
+        // Both in metres: `+` needs its operands to agree in scale as well as
+        // dimension (esm-spec §4.8.3).
+        let env = env_of(&[("h1", "m"), ("h2", "m")]);
         let e = op(
             "+",
             vec![Expr::Variable("h1".into()), Expr::Variable("h2".into())],

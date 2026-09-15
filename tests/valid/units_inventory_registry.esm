@@ -64,8 +64,8 @@
         },
         "plume_over_stack": {
           "type": "unknown",
-          "units": "1",
-          "description": "DISCRIMINATOR: `ft` and `m` are COMMENSURATE, so their ratio is dimensionless. A binding that admitted `ft` on some axis other than [length] fails here."
+          "units": "ft/m",
+          "description": "stack_height \u00f7 reference_height, declared `ft/m`: `ft` and `m` are commensurate, so the ratio is dimensionless, but its scale is 0.3048, not 1. A scale-aware checker rejects this ratio declared as `1` (esm-spec \u00a74.8.3); the dimension and exact scale of each unit are pinned by tests/conformance/unit_registry."
         },
         "reference_height": {
           "type": "parameter",
@@ -86,8 +86,8 @@
         },
         "tonnage_ratio": {
           "type": "unknown",
-          "units": "1",
-          "description": "DISCRIMINATOR: short_ton ÷ tonne is dimensionless, and the two are DIFFERENT masses. A binding that aliased both to one entry still passes the dimension check here — which is exactly why tests/conformance/unit_registry pins the SCALES as well."
+          "units": "short_ton/tonne",
+          "description": "burden ÷ metric_burden, declared `short_ton/tonne`: dimensionless, and the two are DIFFERENT masses, so the scale is 0.90718474, not 1. A scale-aware checker rejects this ratio declared as `1` (esm-spec §4.8.3); the dimension and exact scale of each unit are pinned by tests/conformance/unit_registry."
         },
         "metric_burden": {
           "type": "parameter",
