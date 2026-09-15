@@ -203,6 +203,10 @@ DATA_SOURCE_URL_UNRESOLVED = "data_source_url_unresolved"
 
 SOLVER_VERSION_TOO_OLD = "solver_version_too_old"
 
+# Declared `units` on an expression node in a document declaring esm < 1.2.0
+# (esm-spec §4.8.5), raised as ``ConstUnitsError`` from ``units.py``.
+CONST_UNITS_VERSION_TOO_OLD = "const_units_version_too_old"
+
 # ===========================================================================
 # Template-library import / metaparameter codes (esm-spec §9.7), raised as
 # ``ExpressionTemplateError`` from ``template_imports.py`` (and

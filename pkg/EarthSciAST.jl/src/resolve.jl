@@ -387,6 +387,8 @@ function _load_parsed(raw_data; base_path::AbstractString=pwd(),
     reject_template_imports_pre_v08(raw_data)
     # The top-level `solver` block arrives at esm 1.1.0 (esm-spec §2.2.4).
     reject_solver_pre_v11(raw_data)
+    # Declared `units` on a `const` node arrive at esm 1.2.0 (esm-spec §4.8.5).
+    reject_const_units_pre_v12(raw_data)
 
     # Validate schema
     schema_errors = validate_schema(raw_data)
@@ -2070,6 +2072,8 @@ function _load_remote_ref(url::String, visited::Set{String}=Set{String}();
     reject_template_imports_pre_v08(raw_data)
     # The top-level `solver` block arrives at esm 1.1.0 (esm-spec §2.2.4).
     reject_solver_pre_v11(raw_data)
+    # Declared `units` on a `const` node arrive at esm 1.2.0 (esm-spec §4.8.5).
+    reject_const_units_pre_v12(raw_data)
 
     # A §4.7 subsystem ref MUST NOT target a template- or coupling-library
     # file (esm-spec §9.7.1, §10.9). No location suffix for a remote ref: the

@@ -24,7 +24,7 @@ import {
   rejectTemplateImportsPreV08,
   resolveTemplateMachinery,
 } from './template-imports.js'
-import { normalizeEmptySolver, rejectSolverPreV11 } from './solver.js'
+import { normalizeEmptySolver, rejectConstUnitsPreV12, rejectSolverPreV11 } from './solver.js'
 import { schema } from './embedded-schema.js'
 import { readFileSyncNode, dirnameOf } from './path-utils.js'
 import { deepClone } from './object-utils.js'
@@ -487,6 +487,8 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
   // as the gates above: the version hint beats a generic "extra property"
   // error.
   rejectSolverPreV11(validationView)
+  // Step 2e: declared `units` on a `const` node arrive at esm 1.2.0 (esm-spec §4.8.5).
+  rejectConstUnitsPreV12(validationView)
   // Then §2.2's one normalization — an EMPTY block means what absence means, so
   // it is dropped here rather than surviving to emit. Applied to BOTH views for
   // the same reason `resolveDataSourceUrls` is: in canonical mode

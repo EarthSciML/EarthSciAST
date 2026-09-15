@@ -825,6 +825,14 @@ fn propagate_operator_dim(
         "faq" | "makearray" | "index" | "reshape" | "transpose" | "concat" | "broadcast" => {
             propagate_array_dim(op, env, findings)
         }
+        // A `const` that DECLARES its units has that unit (esm-spec §4.8.5);
+        // without `units` it is undeterminable, like a bare literal. An
+        // unresolvable string is reported at the containing expression field by
+        // `structural.rs` (see [`unresolvable_const_units`]), not here.
+        "const" => match op.units.as_deref().map(parse_unit) {
+            Some(Ok(unit)) => Dim::Known(unit),
+            _ => Dim::Unknown,
+        },
         // No dimensional rule for this operator — an unregistered user op, or a
         // rewrite-target sugar op (`grad`/`div`/`laplacian`/`fn`/`table_lookup`/
         // `godunov_hamiltonian`/…) whose dimension is UNDETERMINABLE until a
@@ -1528,6 +1536,68 @@ pub fn check_expression_dimensions(
         )));
     }
     findings
+}
+
+/// Every declared `const` unit string in `expr` that does not resolve against
+/// the registry (esm-spec §4.8.5 item 2), in walk order.
+pub fn unresolvable_const_units(expr: &Expr) -> Vec<String> {
+    fn walk(expr: &Expr, out: &mut Vec<String>) {
+        if let Expr::Operator(node) = expr {
+            if node.op == "const"
+                && let Some(units) = &node.units
+                && parse_unit(units).is_err()
+            {
+                out.push(units.clone());
+            }
+            node.for_each_child(&mut |child| walk(child, out));
+        }
+    }
+    let mut out = Vec::new();
+    walk(expr, &mut out);
+    out
+}
+
+/// Reject declared `units` on any expression node in a document declaring
+/// `esm` < 1.2.0 (esm-spec §4.8.5 item 6), naming the first offending node.
+/// Runs on the raw JSON before schema validation, like the `solver` gate.
+pub fn reject_const_units_pre_v12(
+    view: &serde_json::Value,
+) -> Result<(), crate::diagnostic::DiagnosticError> {
+    fn find(value: &serde_json::Value, at: &str) -> Option<String> {
+        match value {
+            serde_json::Value::Object(obj) => {
+                if obj.contains_key("op") && obj.contains_key("units") {
+                    return Some(at.to_string());
+                }
+                obj.iter()
+                    .find_map(|(k, v)| find(v, &format!("{at}/{k}")))
+            }
+            serde_json::Value::Array(items) => items
+                .iter()
+                .enumerate()
+                .find_map(|(i, v)| find(v, &format!("{at}/{i}"))),
+            _ => None,
+        }
+    }
+    let Some(esm) = view.get("esm").and_then(|v| v.as_str()) else {
+        return Ok(());
+    };
+    let Some((major, minor, _)) = crate::diagnostic::parse_semver(esm) else {
+        return Ok(());
+    };
+    if (major, minor) >= (1, 2) {
+        return Ok(());
+    }
+    match find(view, "") {
+        None => Ok(()),
+        Some(path) => Err(crate::diagnostic::err(
+            crate::diagnostic::codes::CONST_UNITS_VERSION_TOO_OLD,
+            format!(
+                "declared `units` on an expression node require esm >= 1.2.0; file declares \
+                 {esm}. Offending path: {path}"
+            ),
+        )),
+    }
 }
 
 /// Parse a unit string into a Unit struct

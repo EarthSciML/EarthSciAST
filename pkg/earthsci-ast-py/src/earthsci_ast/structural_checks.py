@@ -2540,6 +2540,29 @@ _DECLARED_UNIT_SITES = (
 )
 
 
+def _check_const_unit_strings(data: dict[str, Any], errors: list) -> None:
+    """Flag a declared ``const`` unit string that does not resolve (esm-spec
+    §4.8.5 item 2), at the containing expression field
+    (``/models/<M>/equations/<i>/lhs`` or ``/rhs``)."""
+    try:
+        from .units import unresolvable_const_units
+    except ImportError:
+        return
+    for mname, model in (data.get("models") or {}).items():
+        for i, eq in enumerate(model.get("equations") or []):
+            if not isinstance(eq, dict):
+                continue
+            for field in ("lhs", "rhs"):
+                for units in unresolvable_const_units(eq.get(field)):
+                    errors.append(
+                        (
+                            f"/models/{mname}/equations/{i}/{field}",
+                            f"Unit string '{units}' is not a recognised unit",
+                            {"units": units},
+                        )
+                    )
+
+
 def _check_unparseable_units(data: dict[str, Any], errors: list) -> None:
     """Flag every DECLARED unit string that does not denote a real unit.
 
@@ -3145,6 +3168,7 @@ def _validate_structural(data: dict[str, Any], file_path=None) -> None:
     # findings with different codes (esm-spec §4.8.4) — the first tells the author
     # to fix a spelling, the second to fix the physics.
     collect("unit_parse_error", lambda sub: _check_unparseable_units(data, sub))
+    collect("unit_parse_error", lambda sub: _check_const_unit_strings(data, sub))
     collect("unit_inconsistency", lambda sub: _check_unit_consistency(data, tables, sub))
     collect("unit_inconsistency", lambda sub: _check_default_units_consistency(data, sub))
     collect("unit_inconsistency", lambda sub: _check_conversion_factor_consistency(data, sub))

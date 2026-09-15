@@ -309,6 +309,8 @@ mutable struct OpExpr <: ASTExpr
     fn::Union{String,Nothing}
     name::Union{String,Nothing}
     value::Any
+    # const (esm 1.2.0): the declared unit `value` is in (esm-spec §4.8.5).
+    units::Union{String,Nothing}
     # table_lookup (esm-spec §9.5, v0.4.0): the function_tables entry id this
     # node references. ``args`` MUST be empty for a table_lookup node — the
     # per-axis input expressions live in ``table_axes``.
@@ -430,7 +432,7 @@ mutable struct OpExpr <: ASTExpr
            semiring=nothing,
            ranges=nothing, regions=nothing, values=nothing,
            shape=nothing, perm=nothing, axis=nothing, fn=nothing,
-           name=nothing, value=nothing,
+           name=nothing, value=nothing, units=nothing,
            table=nothing, table_axes=nothing, output=nothing,
            join=nothing, filter=nothing, join_gates=nothing,
            id=nothing, manifold=nothing,
@@ -444,7 +446,7 @@ mutable struct OpExpr <: ASTExpr
            handler_id=nothing) =
         new(op, args, wrt, dim, int_var, lower, upper, output_idx, expr_body, reduce,
             semiring, ranges,
-            regions, values, shape, perm, axis, fn, name, value,
+            regions, values, shape, perm, axis, fn, name, value, units,
             table, table_axes, output, join, filter, join_gates,
             id, manifold, distinct, key, arg, bindings, label,
             expect_cadence, attrs)
@@ -543,6 +545,7 @@ const OPEXPR_FIELD_TABLE = (
     fn         = (wire = :fn,         kind = :scalar, parse = :string,          binds_scope = false),
     name       = (wire = :name,       kind = :scalar, parse = :string,          binds_scope = false),
     value      = (wire = :value,      kind = :scalar, parse = :json,            binds_scope = false),
+    units      = (wire = :units,      kind = :scalar, parse = :string,          binds_scope = false),
     table      = (wire = :table,      kind = :scalar, parse = :string,          binds_scope = false),
     table_axes = (wire = :axes,       kind = :expr_map, parse = nothing,        binds_scope = false),
     output     = (wire = :output,     kind = :scalar, parse = :int_or_string,   binds_scope = false),

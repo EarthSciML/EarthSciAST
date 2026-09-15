@@ -2648,6 +2648,11 @@ def _load_data(
     # earlier version that carries one is rejected (esm-spec §2.2.4).
     reject_solver_pre_v11(data)
 
+    # Declared `units` on a `const` node arrive at esm 1.2.0 (esm-spec §4.8.5).
+    from .units import reject_const_units_pre_v12
+
+    reject_const_units_pre_v12(data)
+
     # esm-spec §8.2.1: resolve every `data_sources[*].source` location against
     # this document's own directory, BEFORE schema validation and before typed
     # coercion, so the typed `DataSourceLocation`, the ingest providers and

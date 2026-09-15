@@ -29,6 +29,10 @@ type ExprNode struct {
 	// (esm-spec §4.2 / §9.3); `Args` MUST be empty for a const node. Any
 	// JSON value (number, integer, or nested array thereof).
 	Value any `json:"value,omitempty"`
+	// Units is the declared unit of a `const` node's Value (esm-spec §4.8.5,
+	// esm 1.2.0): a unit-bearing constant has that dimension and exact scale in
+	// dimensional analysis. Legal on no other op.
+	Units *string `json:"units,omitempty"`
 	// Table is the function_tables entry id targeted by a `table_lookup` op
 	// (esm-spec §9.5).
 	Table *string `json:"table,omitempty"`

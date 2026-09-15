@@ -240,6 +240,7 @@ export const ERROR_CODES = {
   // ---- solver hints: §2.2 document-scoped solver block (solver.ts;
   //      EsmMachineryError code) ----
   SOLVER_VERSION_TOO_OLD: 'solver_version_too_old',
+  CONST_UNITS_VERSION_TOO_OLD: 'const_units_version_too_old',
 
   // ---- templates: §9.6 expression-template lowering + §9.7 template-library
   //      imports (lower-expression-templates.ts, template-imports.ts;
