@@ -274,6 +274,10 @@ const ERROR_CODES = (
     #    value-invention op outside the position that consumes it, an unlowered
     #    `enum`). Refused when the evaluator is BUILT, never at evaluation. ────
     UNEVALUABLE_OPERATOR = "unevaluable_operator",
+    # A surviving expression ranges over a `kind: "derived"` index set whose
+    # producer could not be materialized at build (esm-spec §9.6.6). Refused
+    # rather than contracted as an empty range, which would read as 0.
+    DERIVED_INDEX_SET_UNMATERIALIZED = "derived_index_set_unmaterialized",
 )
 
 """

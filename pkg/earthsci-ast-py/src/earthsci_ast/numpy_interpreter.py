@@ -609,7 +609,8 @@ def _resolve_range_spec(spec: Any, ctx: EvalContext) -> Any:
         ring = ctx.derived_rings.get(faq)
         if ring is None:
             raise NumpyInterpreterError(
-                f"derived index set {name!r} (from_faq {faq!r}) is not materialized; "
+                f"derived_index_set_unmaterialized: derived index set {name!r} "
+                f"(from_faq {faq!r}) is not materialized; "
                 f"its producing node has not been evaluated. Materialized rings: "
                 f"{sorted(ctx.derived_rings)}, value-invention extents: "
                 f"{sorted(ctx.derived_extents)} (RFC §5.5 / §8.1)"
