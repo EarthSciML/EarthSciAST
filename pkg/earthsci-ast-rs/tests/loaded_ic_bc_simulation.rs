@@ -157,7 +157,7 @@ fn loaded_ic_bc_simulation_provider_injection() {
         alg: Alg::Erk,
         abstol: Some(1e-12),
         reltol: Some(1e-10),
-        maxiters: 10_000_000,
+        maxiters: Some(10_000_000),
         saveat: Some(vec![0.0, 600.0]),
         ..Default::default()
     };
