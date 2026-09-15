@@ -2,7 +2,7 @@
   "esm": "1.0.0",
   "metadata": {
     "name": "toplevel_ref_metaparameter_axis_lib",
-    "description": "A mountable leaf whose only axis is sized by its OWN metaparameter (NLEV, default 4) rather than a literal — the shape a grid-library component takes (esm-spec §9.7.6: an index_sets interval size MAY be a metaparameter expression). Mounted as a `subsystems` entry its metaparameters close and fold at the edge, so `lev` reaches the importer's registry as size 4. Mounted through a TOP-LEVEL `models.<k>` {ref} they do not close there at all, which is what the §4.7 merge's fold guard is pinned against by toplevel_ref_metaparameter_axis.esm.",
+    "description": "A mountable leaf whose only axis is sized by its OWN metaparameter (NLEV, default 4) rather than a literal — the shape a grid-library component takes (esm-spec §9.7.6: an index_sets interval size MAY be a metaparameter expression). Mounted as a `subsystems` entry its metaparameters close and fold at the edge, so `lev` reaches the importer's registry as size 4. Mounted through a TOP-LEVEL `models.<k>` {ref} they close and fold at that edge the same way (§4.7 'Two mount forms, one mechanism'), which tests/valid/toplevel_ref_metaparameter_axis.esm pins.",
     "authors": ["EarthSciAST"],
     "created": "2026-09-07T00:00:00Z",
     "tags": ["subsystem", "index_sets", "metaparameter", "mount", "toplevel-ref"]

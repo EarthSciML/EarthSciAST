@@ -1170,6 +1170,14 @@
       }
     },
     {
+      "name": "code_derived_index_set_unmaterialized",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeDerivedIndexSetUnmaterialized"
+      }
+    },
+    {
       "name": "code_domain_unit_mismatch",
       "kind": "constant",
       "tier": "extension",

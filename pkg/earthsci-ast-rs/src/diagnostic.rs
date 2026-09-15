@@ -337,6 +337,9 @@ diagnostic_code_registry! {
     /// into a source's location at all — or a resolved path carrying a `?`
     /// or `#`. The message names the offending data source and template.
     DATA_SOURCE_URL_UNRESOLVED = "data_source_url_unresolved";
+    /// An expression ranges over a `kind: "derived"` index set whose producer
+    /// could not be materialized at build (esm-spec §9.6.6).
+    DERIVED_INDEX_SET_UNMATERIALIZED = "derived_index_set_unmaterialized";
     /// A domain axis whose units disagree with the coordinate's.
     DOMAIN_UNIT_MISMATCH = "domain_unit_mismatch";
     /// A model whose equation count cannot match its unknown count.
@@ -534,6 +537,7 @@ mod error_code_tests {
             "coupling_role_unused",
             "data_source_undefined",
             "data_source_url_unresolved",
+            "derived_index_set_unmaterialized",
             "dimensional_mismatch",
             "domain_unit_mismatch",
             "enum_invalid_args",

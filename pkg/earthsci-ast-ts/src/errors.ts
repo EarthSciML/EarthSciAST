@@ -91,6 +91,11 @@ export const ERROR_CODES = {
   //   reads a declared STATE variable, so the cadence partition would class the
   //   node CONTINUOUS — forbidden on the hot path (CONFORMANCE_SPEC §5.7 guard 2).
   RELATIONAL_NODE_IN_CONTINUOUS: 'relational_node_in_continuous',
+  // `derived_index_set_unmaterialized` — an expression ranges over a
+  //   `kind: "derived"` index set whose producer could not be materialized at
+  //   build (esm-spec §9.6.6). Registered for the cross-binding vocabulary; this
+  //   binding has no simulator, so nothing here raises it.
+  DERIVED_INDEX_SET_UNMATERIALIZED: 'derived_index_set_unmaterialized',
   // `undefined_index_set` — a `faq` `ranges` entry `{ from: NAME }`
   //   naming an index set absent from the document `index_sets` registry
   //   (RFC semiring-faq-unified-ir §5.2; no implicit interval is inferred).
