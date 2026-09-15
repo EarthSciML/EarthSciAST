@@ -740,9 +740,12 @@ export function validateConversionFactorConsistency(
     }
     if (!dimsEqual(srcU.dims, lhsU.dims)) continue
     if (isAffineTempUnit(srcUnits) || isAffineTempUnit(lhsUnits)) continue
-    if (lhsU.scale === 0) continue
+    // Identical exact scales imply no conversion, so the coefficient is free;
+    // otherwise the expected factor is formed EXACTLY and rounded once, so the
+    // tolerance below only absorbs the literal's spelling (esm-spec §4.8.1).
+    if (srcU.exact.equals(lhsU.exact)) continue
 
-    const factor = srcU.scale / lhsU.scale
+    const factor = srcU.exact.divide(lhsU.exact).toNumber()
     if (factor === 0) continue
 
     const tol = 1e-9 * Math.max(Math.abs(factor), 1)
