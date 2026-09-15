@@ -54,8 +54,9 @@ end
 # The fixed-2-ary elementwise arms (`/`, `^`, `pow`, `atan2`), GENERATED from
 # `_BINARY_ELEMENTWISE_OPS`. NB the `^` arm here is only the FALLBACK for a
 # malformed arity: a well-formed 2-ary `^`/`pow` is intercepted upstream by
-# `_oop_pow` / `_oop_eval_acck`'s literal-exponent arm and never reaches the
-# shared ladder (see `_oop_pow` for why).
+# the walkers' literal-exponent arms and never reaches the shared ladder: a
+# literal exponent must stay a host `Float64` so a Dual walk keeps the power
+# rule.
 let arms = :(return nothing)
     for row in reverse(_BINARY_ELEMENTWISE_OPS)
         arms = Core.Expr(:if, :(op === $(QuoteNode(row.sym))),
@@ -173,13 +174,14 @@ end
 
 # Evaluate an INDEX subtree to a concrete `Int`.
 #
-# WHY THIS IS NOT `_oop_eval`. A gather's subscripts are integer index arithmetic
-# over enclosing loop counters and literals — they never read the state. But
-# `_oop_eval` returns the VALUE type, so under tracing a loop counter comes back
-# as a `TracedRNumber` holding a constant, and everything downstream inherits it:
-# `round(Int, ·)` stays traced, and the ghost-bounds test `lo <= sub <= hi` then
-# throws "non-boolean (TracedRNumber{Bool}) used in boolean context" — a control
-# decision XLA cannot make, on a quantity that was concrete all along.
+# WHY THIS IS NOT THE VALUE LADDER. A gather's subscripts are integer index
+# arithmetic over enclosing loop counters and literals — they never read the
+# state. Evaluating them through the value ladder would return the RHS's value
+# type, so under a trace a loop counter comes back as a `TracedRNumber` holding
+# a constant and everything downstream inherits it: `round(Int, ·)` stays traced,
+# and the ghost-bounds test `lo <= sub <= hi` then throws "non-boolean
+# (TracedRNumber{Bool}) used in boolean context" — a control decision XLA cannot
+# make, on a quantity that was concrete all along.
 #
 # Reached whenever a runtime contraction loop (ess-runtime-contraction) puts a
 # loop-var-dependent subscript on the traced RHS, which a mass-weighted column

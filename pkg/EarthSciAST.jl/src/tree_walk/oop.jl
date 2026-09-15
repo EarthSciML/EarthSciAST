@@ -50,52 +50,46 @@
 
 # ---- Lane-batched scalar entries (ess-oop-batch) -----------------------------
 #
-# WHY. The per-CELL scalar surface of this emitter — `rhs_list` entries a state
+# WHY. The per-CELL scalar surface of a build — `rhs_list` entries a state
 # equation lowers to when it declines the kernel path (a runtime contraction
 # loop routes there BY DESIGN, see resolve.jl's `_ARRAY_CELL_DEPTH` note), and
-# the per-column `scalars` of a materialized-observed fill level — is walked one
-# entry at a time through `_oop_eval`. Correct, and on host cheap; under a TRACE
-# it is the one remaining place the emitted program's size scales with the grid:
-# every entry re-traces its whole tree, so a contraction loop over L levels
-# inside a per-column fill emits O(columns × L) scalar-indexed reads — tens of
-# `stablehlo.dynamic_slice` ops per grid cell, which is what makes XLA compile
-# time blow up on a real grid.
+# the per-column `scalars` of a materialized-observed fill level — is one entry
+# per cell. Emitted one at a time, that is the one place a compiled program's
+# SIZE scales with the grid: every entry emits its whole tree, so a contraction
+# loop over L levels inside a per-column fill costs O(columns × L) single-element
+# reads, which is what makes XLA compile time blow up on a real grid.
 #
 # WHAT. Those entries are per-cell INSTANTIATIONS of one expression: same tree,
 # same ops, same loop ranges — only the baked-in cell data differ (state slots,
-# forcing offsets, gather subscripts, inlined per-cell constants). So at closure
-# build the entries are GROUPED by a canonical structural signature
-# (`_oop_batch_sig`) that wildcards exactly those lane-varying leaves, each
-# group is lowered ONCE to a lane-batched tree (`_OopBatchNode`,
-# `_oop_batch_lower`), and the whole group evaluates through `_oop_eval_batch`
-# as whole-array ops over its lane axis: a state leaf is ONE `_oop_gather` over
-# the per-lane slots, a contraction loop runs its L iterations ONCE with a
-# whole-lane accumulate per iteration, and the group's result lands through ONE
-# `_oop_scatter`. Emitted-program size: O(tree × L), independent of the lane
-# (grid) count.
+# forcing offsets, gather subscripts, inlined per-cell constants). So at BUILD
+# the entries are GROUPED by a canonical structural signature (`_oop_batch_sig`)
+# that wildcards exactly those lane-varying leaves, and each group is lowered
+# ONCE to a lane-batched tree (`_OopBatchNode`, `_oop_batch_lower`) a backend
+# emits as whole-array ops over its lane axis: a state leaf is ONE gather over
+# the per-lane slots, a contraction loop runs its L iterations once with a
+# whole-lane accumulate per iteration, and the group's result lands through one
+# scatter. Program size: O(tree × L), independent of the lane (grid) count.
 #
-# BIT-IDENTITY. Per lane, every arm performs the same operations in the same
-# order the scalar walker performs them (broadcast is elementwise; the loop
-# fold accumulates per lane in the same ascending-k order seeded from the same
-# 0̄; a ghost state-gather selects the same 0; a pow keeps its literal exponent
-# — the signature PINS the exponent, so a group never blends the power rule).
-# The one semantic divergence is inherited from every vectorized tier of this
-# codebase: `ifelse`/`and`/`or` evaluate EAGERLY over lanes (the `_scalar_op`
-# folded arms, value-identical to the lazy scalar arms) rather than
-# short-circuiting, so a guard that exists to dodge a DomainError does not
-# dodge it here — exactly the `_eval_acc` / `_oop_run_acc_vec` contract. Under
-# a trace the lazy arms could not run anyway (branching on a traced Bool
-# throws), so for the traced consumer this path is strictly more capable.
+# VALUE IDENTITY. Per lane, every arm performs the same operations in the same
+# order the scalar walker performs them (broadcast is elementwise; the loop fold
+# accumulates per lane in the same ascending-k order seeded from the same 0̄; a
+# ghost state-gather selects the same 0; a pow keeps its literal exponent — the
+# signature PINS the exponent, so a group never blends the power rule). The one
+# semantic divergence is inherited from every vectorized tier of this codebase:
+# `ifelse`/`and`/`or` evaluate EAGERLY over lanes rather than short-circuiting,
+# so a guard that exists to dodge a DomainError does not dodge it here — exactly
+# the `_eval_acc` contract. A compiled program could not branch on a traced Bool
+# anyway.
 #
 # SAFETY. Grouping is conservative: a signature mismatch, a singleton group, an
 # unknown node kind, or any congruence check failing in `_oop_batch_lower`
-# leaves the affected entries on the existing one-at-a-time scalar path,
-# unchanged. `ESS_OOP_BATCH=0` disables the whole feature (every entry single).
-# Entries within one batch surface write DISJOINT slots and never read each
-# other (rhs_list writes `du` reading only `ue`/cache; a fill level's scalars
-# read only strictly-lower levels — the level scheduler's invariant), so
-# evaluating groups after the leftover singles reorders only WRITES to disjoint
-# slots, never a read-after-write.
+# leaves the affected entries as singles, unchanged. `ESS_OOP_BATCH=0` disables
+# the whole feature (every entry single). Entries within one batch surface write
+# DISJOINT slots and never read each other (rhs_list writes `du` reading only the
+# extended state and the cache; a fill level's scalars read only strictly-lower
+# levels — the level scheduler's invariant), so emitting groups after the
+# leftover singles reorders only WRITES to disjoint slots, never a
+# read-after-write.
 _oop_batch_enabled() = get(ENV, "ESS_OOP_BATCH", "1") != "0"
 
 # One position of a lane-batched tree. `kind` mirrors the `_NK_*` of every
@@ -144,7 +138,7 @@ end
 # tree. `_OopScalarBatches` is one whole batch surface (rhs_list, or one fill
 # level's scalars): the groups plus the leftover singles in their ORIGINAL
 # relative order. `n_batched` is Σ group lanes — the build-observability number
-# (and the closure-reflection witness the tests pin).
+# a backend's tests pin to prove the grouping engaged.
 struct _OopScalarBatch
     slots::Vector{Int}
     root::_OopBatchNode
@@ -347,8 +341,8 @@ end
 # Group one batch surface. Groups (≥2 congruent lanes, lowered successfully)
 # come out in first-appearance order with lanes in original entry order; every
 # other entry stays in `rest`, original relative order preserved. With the
-# feature disabled (`ESS_OOP_BATCH=0`) everything is `rest` — byte-identical to
-# the pre-feature closure. `ESS_OOP_PROBE=1` tallies the outcome per entry
+# feature disabled (`ESS_OOP_BATCH=0`) everything is `rest`, the per-entry
+# surface. `ESS_OOP_PROBE=1` tallies the outcome per entry
 # (`:oop_batch_lane` / `:oop_batch_single`) and per group (`:oop_batch_group`).
 function _oop_batch_scalars(entries::AbstractVector{Tuple{Int,_Node}})
     (!_oop_batch_enabled() || length(entries) < 2) &&
@@ -488,7 +482,7 @@ end
 # sub-kernel class no longer declines — gordian subcall-vectorize evaluates each
 # template body as its own whole-array op over the parent lanes; a variable-valence
 # reduction no longer declines — gordian reduce-vectorize evaluates the body over a
-# flat CSR gather and folds each segment in child order, see `_oop_run_acc_vec`.)
+# flat CSR gather and folds each segment in child order.)
 # `in_reduce` permits the n-indexed descriptors that only make sense inside a fold.
 _oop_acc_vecable(n::_Node, K::_AccKernel) = _oop_acc_vecable(n, K, false)
 function _oop_acc_vecable(n::_Node, K::_AccKernel, in_reduce::Bool)

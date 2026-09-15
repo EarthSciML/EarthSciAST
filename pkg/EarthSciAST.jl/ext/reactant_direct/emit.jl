@@ -23,9 +23,9 @@ function _de_param(ctx::_DECtx, sym::Symbol)::_DEVal
         op = _hlo.reshape(x.mlir_data; result_0=_de_ty(1), location=_de_loc())
         return _DEVal(_de_res(op), 1)
     elseif x isa Real
-        # A HOST parameter is a compile-time constant, exactly as it is under the
-        # traced emitter. Pass `ConcreteRNumber`s to keep parameters as program
-        # inputs (an override then needs no recompile).
+        # A HOST parameter is a compile-time constant. Pass `ConcreteRNumber`s
+        # to keep parameters as program inputs (an override then needs no
+        # recompile).
         return _de_const(ctx, Float64(x))
     end
     _de_refuse("the parameter `$(sym)` of type $(typeof(x))",
@@ -344,9 +344,8 @@ end
 
 # ---- prefix scans ------------------------------------------------------------
 #
-# Level-major, exactly as the traced extension's `_scan_lanes_oop`: one whole
-# LEVEL per step, so the emitted program is O(scan length) and independent of the
-# number of lanes at each level.
+# Level-major: one whole LEVEL per step, so the emitted program is O(scan length)
+# and independent of the number of lanes at each level.
 function _de_scan!(ctx::_DECtx, m::_DEMap, S::_E._ScanFold)
     len = S.len
     len >= 1 || return nothing

@@ -1,8 +1,17 @@
 # Upstream issues we are waiting on
 
 Six issues filed 2026-08-24 against Reactant.jl and Enzyme-JAX, all found while
-compiling the ReSEACT atmospheric chemistry model through the Reactant backend
-(`ext/EarthSciASTReactantExt.jl` + `src/tree_walk/oop.jl`).
+compiling the ReSEACT atmospheric chemistry model through the Reactant backend.
+
+> **What has changed here since.** These were measured against the TRACED
+> emitter — the tree walk run with `TracedRNumber` in place of `Float64` — which
+> has been retired in favour of direct StableHLO emission from the compiled IR
+> (`ext/reactant_direct/`, `direct_rhs`). The direct emitter constructs
+> `stablehlo.*` operations itself rather than going through Julia's broadcast
+> tracing, so #3215 and #3216 no longer describe a cost this repository pays:
+> the notes below are the record of why they were filed, not a statement about
+> the backend as it stands. #2938, #3217, #3218 and #2939 are about the compile
+> pipeline and autodiff, and are unaffected by which emitter feeds them.
 
 Every candidate was re-verified against current versions before filing rather
 than filed from the older write-ups. That mattered — two of the most serious
@@ -59,26 +68,22 @@ agree. Two pieces of planned work emit exactly this shape and are gated on it:
 
 ### #3215 — scalar constants not memoized
 
-**Today:** `src/tree_walk/oop.jl`'s emission value-numbering seam (`ess-oop-gvn`)
-exists partly to work around this. Two uses of the same scalar get different SSA
-values, so structural CSE above them cannot see `k .* x` and `k .* x` as the same
-expression — the sharing has to be recovered by our own memo instead.
-
-**Unblocks:** simplifying or retiring part of the GVN seam, and smaller modules
-before XLA runs. On a chemistry RHS the duplicated scalars account for thousands
-of ops. Note this is a **trace-time and module-size** win, not an execution win —
-XLA's CSE already collapses the duplicates before they execute.
+**Superseded here.** The traced emitter's value-numbering seam (`ess-oop-gvn`)
+existed partly to work around this: two uses of the same scalar got different SSA
+values, so structural CSE above them could not see `k .* x` and `k .* x` as the
+same expression, and the sharing had to be recovered by our own memo. The direct
+emitter interns constants in its own emission context and never calls
+`Ops.constant(::Number)`, so the defect no longer reaches a module this
+repository emits. Filed because it is real upstream, and because any consumer
+that does trace Julia code pays it.
 
 ### #3216 — broadcast scaffolding
 
-**Today:** one elementwise `a .+ b` on two identically-shaped operands emits
-eleven `stablehlo` ops (5 transpose, 4 broadcast_in_dim, 1 constant, 1 add).
-
-**Unblocks:** the same thing as #3215 and by the same mechanism — Julia trace
-time, peak MLIR module size, and sharing that structural CSE can no longer find.
-Again **not** an execution win; XLA eliminates the redundancy. These two together
-are the reason the emitted module is much larger than the arithmetic requires,
-which is what makes trace and compile expensive at CONUS scale.
+**Superseded here.** One elementwise `a .+ b` on two identically-shaped operands
+traces to eleven `stablehlo` ops (5 transpose, 4 broadcast_in_dim, 1 constant, 1
+add). The direct emitter builds the one `stablehlo.add` itself, so the
+scaffolding is not in the module it hands XLA. Filed for the same reason as
+#3215: the defect is upstream and real for anyone tracing Julia code.
 
 ### #3217 — batched forward mode
 
@@ -148,8 +153,10 @@ measured in the ReSEACT adjoint workstream are **not** caused by any of these:
 - The ROS23 step is **bandwidth-bound**. It performs ~1,005 M element-ops of
   which only 4.1% is physics arithmetic; ~72% is traffic on >=500k-element
   buffers, dominated by whole-buffer `concatenate` rewrites of the flat extended
-  observed buffer. That is an emitter-shape problem in *our* code
-  (`_oop_prefix_copy` / `_oop_fill_levels`), not an upstream bug.
+  observed buffer. That was an emitter-shape problem in *our* code, not an
+  upstream bug: the traced emitter composed the extended state as one flat
+  buffer. The direct emitter has no such buffer — a materialized observed's fill
+  result is a slot map — which is the structural answer to it.
 - **Build cost** was ~90% geometry setup, addressed by the compile-once and
   rank-specialisation fixes in `src/tree_walk/geometry_setup.jl`.
 - **Compile cost** is sublinear in grid and driven by constant bytes, of which

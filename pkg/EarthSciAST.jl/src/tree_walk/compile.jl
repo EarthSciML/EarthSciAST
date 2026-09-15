@@ -721,7 +721,7 @@ end
 # This is deliberately not "refuse to recurse into guarded arms", which would lose
 # legitimate sharing within an arm and between an arm and an unconditional one.
 #
-# Guard laziness holds only on the SCALAR walkers (`_eval_node`, `_oop_eval`). The
+# Guard laziness holds only on the SCALAR walker (`_eval_node`). The
 # access-kernel `_eval_acc` is EAGER for `ifelse`/`and`/`or` BY CONSTRUCTION — it
 # broadcasts over lanes, and per-lane laziness would need masked evaluation — so a
 # guarded-domain expression inside a `faq` is NOT protected by its guard, with

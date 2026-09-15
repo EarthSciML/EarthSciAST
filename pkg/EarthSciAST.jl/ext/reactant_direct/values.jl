@@ -85,9 +85,9 @@ end
 """
     _de_refuse(construct, detail)
 
-The emitter's ONE refusal. Hard by design: no interpreter fallback, no fallback
-to the traced emitter. `construct` names the node kind / descriptor kind /
-kernel shape in the IR's own vocabulary; the rule comes from `_DE_RULE`.
+The emitter's ONE refusal. Hard by design: no interpreter fallback.
+`construct` names the node kind / descriptor kind / kernel shape in the IR's own
+vocabulary; the rule comes from `_DE_RULE`.
 """
 _de_refuse(construct::AbstractString, detail::AbstractString) =
     throw(_E.DirectEmitError(construct, _DE_RULE[], detail))
@@ -366,9 +366,8 @@ const _DESlotSrc = Union{Nothing,_DEVal}
 # three clauses missed: the PPM stencil's reads average two to four positions
 # per run (so `> n ÷ 2` is false), and of the 506 reads that reach a
 # concatenate, 241 are single-producer and 255 span TWO. The step therefore
-# arrived at XLA as 55,117 slices against the traced emitter's 878 slices and
-# 392 gathers, and the reverse-mode program as 1.82 MILLION slices against
-# 2,712. See reseact.esm's COMPILE_COST.md for the measurement.
+# arrived at XLA as 55,117 slices, and the reverse-mode program as 1.82 MILLION.
+# See reseact.esm's COMPILE_COST.md for the measurement.
 #
 # BOTH SIDES OF THE TRADE WERE MEASURED, on ReSEACT's two halves at 288 cells,
 # and the gather wins both, which is why it is the default. The transport half's
@@ -626,12 +625,12 @@ _de_assemble(ctx::_DECtx, M::_DEMap, n::Int)::_DEVal =
 # The compiled IR reaches a live forcing buffer by ALIAS: an `_NK_PARAM_GATHER`
 # payload and a forcing descriptor's `arr` field are the same host
 # `Vector{Float64}` the build bound. Emitting that host array as a CONSTANT is
-# the silent-staleness bug the traced extension's B2 note documents — XLA would
-# bake in whatever the buffer held at compile time and ignore every in-place
-# refresh for ever after, with no exception and no NaN.
+# the silent-staleness bug: XLA would bake in whatever the buffer held at compile
+# time and ignore every in-place refresh for ever after, with no exception and no
+# NaN.
 #
-# So the emitter reads buffers through the ARGUMENT LIST exactly as the
-# interpreter's `_forcing_slab` does: an identity (`===`) scan over the
+# So the emitter reads buffers through the ARGUMENT LIST: an identity (`===`)
+# scan over the
 # build's host arrays, in the container's own order, swapping in this call's
 # argument entry. O(#forcing VARIABLES) per read, never O(#cells).
 function _de_buffer(ctx::_DECtx, arr::Vector{Float64})::_DEVal

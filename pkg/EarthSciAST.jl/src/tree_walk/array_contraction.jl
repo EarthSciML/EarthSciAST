@@ -19,7 +19,7 @@
 # scan.jl states for its prefix folds: the access-kernel / affine / codegen /
 # oop-merge passes all model per-cell scalar terms, and a section is invisible to
 # every one of them. The body is an ordinary compiled `_Node`, so it evaluates
-# through the SAME `_eval_node` / `_oop_eval` walkers (and therefore the same
+# through the SAME `_eval_node` walker (and therefore the same
 # ForwardDiff path) as every other tree-walk node.
 
 # `refs` are the output loop counters, in output-index order with dimension 1

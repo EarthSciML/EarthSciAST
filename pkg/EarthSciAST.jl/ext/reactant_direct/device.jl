@@ -6,8 +6,8 @@
 #
 # WHY THIS IS A SEPARATE CONCERN FROM EMISSION. Nothing in the emitted
 # StableHLO names a device: the same module compiles on either platform, and the
-# platform is fixed by the CLIENT of the arrays fed to it, exactly as it is for
-# the traced emitter. So device choice lives here, on the wrapper, and reaches
+# platform is fixed by the CLIENT of the arrays fed to it. So device choice
+# lives here, on the wrapper, and reaches
 # XLA only through the `ConcreteRArray`/`ConcreteRNumber` constructors that
 # `direct_state`, `direct_params` and `direct_time` call.
 #

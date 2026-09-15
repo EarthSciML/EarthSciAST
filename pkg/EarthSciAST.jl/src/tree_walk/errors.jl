@@ -61,10 +61,9 @@ Raised when the direct StableHLO emitter meets a node kind, access-kernel
 descriptor or kernel SHAPE it cannot lower.
 
 It is a HARD error by design (the compiled-backends ruling of 2026-09-13):
-there is no fallback to the interpreter and no fallback to the traced emitter,
-because a compiled lane that silently answered with a different evaluator would
-make the `compiled_rhs` conformance tier report agreement between the
-interpreter and itself.
+there is no fallback to the interpreter, because a compiled lane that silently
+answered with a different evaluator would make the `compiled_rhs` conformance
+tier report agreement between the interpreter and itself.
 
 Fields:
 

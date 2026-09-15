@@ -4605,25 +4605,22 @@ including `const_arrays`, `param_arrays`, `const_array_boundaries`,
   the model has no tests, the null default `(0.0, 1.0)` is returned.
 * `registered_functions::Dict{String,<:Function}` — handlers for
   `call` ops, keyed by `handler_id`.
-* `form::Symbol` — which RHS to emit (`:inplace`, the default, or `:oop`).
-  `:inplace` gives the `f!(du, u, p, t)` above: zero-allocation at Float64
-  AND eltype-generic, so it both solves and differentiates (ForwardDiff
-  over the state or over the parameters; a stiff solve gets an exact AD
-  Jacobian for free). It is the right answer for almost everything.
-  `:oop` gives an out-of-place `f(u, p, t) → du`. Reach for it only to
-  TRACE — it is what XLA/Reactant and device backends can consume, because
-  it captures no host scratch buffers and contains no per-lane scalar
-  loops. It is not faster and not more differentiable than `f!`; it
-  allocates one temporary per AST node. Both come from the same compiled
-  IR in the same evaluation order, so a Float64 `:oop` call is
-  bit-identical to `f!` — which is why the in-place tests use it as their
-  oracle. SciML dispatches `ODEProblem` on RHS arity, so either drops into
-  `ODEProblem(f, u0, tspan, p)` unchanged. The `:oop` RHS additionally
-  carries an explicit-buffers form for tracing backends — its live forcing
-  buffers (`param_arrays` + discrete caches) exposed as ARGUMENTS via
-  [`forcing_buffers`](@ref) / [`forcing_buffer_index`](@ref), so `@compile`
-  receives them as real XLA inputs and an in-place refresh stays visible to
-  the compiled program.
+* `form::Symbol` — what to return in the RHS slot (`:inplace`, the
+  default, or `:oop`). `:inplace` gives the `f!(du, u, p, t)` above:
+  zero-allocation at Float64 AND eltype-generic, so it both solves and
+  differentiates (ForwardDiff over the state or over the parameters; a
+  stiff solve gets an exact AD Jacobian for free). It is the evaluator.
+  `:oop` gives the OUT-OF-PLACE BUILD PRODUCT instead — the compiled
+  intermediate representation itself, wrapped so that its arity (three
+  arguments) reads as out-of-place, plus the live forcing buffers this
+  build bound. It does not evaluate on the host: it is what a COMPILED
+  backend lowers into a program of its own. `direct_rhs`
+  (`EarthSciASTReactantExt`) is the one in tree; see
+  `docs/src/compiled-backend-devices.md`. Its live forcing buffers
+  (`param_arrays` + discrete caches) are exposed as ARGUMENTS via
+  [`forcing_buffers`](@ref) / [`forcing_buffer_index`](@ref), so a compiled
+  program receives them as real inputs and an in-place refresh
+  ([`sync_forcing!`](@ref)) stays visible to it.
 """
 function build_evaluator(model::Model; kwargs...)
     f!, u0, p, tspan_default, var_map, _diag = _build_evaluator_impl(model; kwargs...)

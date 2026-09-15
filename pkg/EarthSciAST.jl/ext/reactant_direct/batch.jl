@@ -144,7 +144,7 @@ end
 #
 # Returns a length-`L` lane vector, or a length-1 value where the subtree is
 # lane-invariant — `_de_bin` / `_de_fold_terms` broadcast the two together, so
-# they are interchangeable exactly as they are in `_oop_eval_batch`.
+# they are interchangeable exactly as they are in the batch lowering.
 
 function _de_batch(ctx::_DECtx, b::_E._OopBatchNode, L::Int,
                    cache::Vector{_DEVal})::_DEVal
@@ -174,7 +174,7 @@ function _de_batch(ctx::_DECtx, b::_E._OopBatchNode, L::Int,
                                   _de_take(ctx, buf, b.slots)
     elseif k === _E._NK_LOOPVAR
         # Per lane: congruent trees may bind DIFFERENT enclosing loops at this
-        # position, so read each lane's own counter (`_oop_eval_batch`'s note).
+        # position, so read each lane's own counter.
         refs = b.refs
         v1 = refs[1][]
         all(r -> r[] == v1, refs) && return _de_const(ctx, Float64(v1))

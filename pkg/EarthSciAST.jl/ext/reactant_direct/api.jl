@@ -84,11 +84,10 @@ see device.jl for what a slab shard means and when it is refused.
 
 DIRECT EMISSION IS THE COMPILED PATH. A model containing any node kind or kernel
 shape the emitter cannot lower raises `EarthSciAST.DirectEmitError` naming the
-construct and the rule it came from. There is no fallback to the interpreter and
-no fallback to the traced emitter — a compiled lane that silently answered with
-a different evaluator would make the `compiled_rhs` conformance tier report
-agreement between the interpreter and itself. The traced emitter (`@compile
-fo(u, p, t)`) remains available as an ORACLE for tests that ask for it by name.
+construct and the rule it came from. There is no fallback to the interpreter — a
+compiled lane that silently answered with a different evaluator would make the
+`compiled_rhs` conformance tier report agreement between the interpreter and
+itself.
 
 AGREEMENT WITH THE INTERPRETER is numerical, within the tolerance classes of
 tests/conformance/compiled_rhs/README.md, never bit-for-bit: `stablehlo.power`

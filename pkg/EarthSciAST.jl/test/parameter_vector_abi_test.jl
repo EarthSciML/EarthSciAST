@@ -84,7 +84,7 @@ function _pv_rd(N)
 end
 
 # 0-D with a shared subexpression: a non-empty CSE prelude, so the SCALAR `_Node`
-# walker (`_eval_node` / `_oop_eval`) is exercised and not only the array kernels.
+# walker (`_eval_node`) is exercised and not only the array kernels.
 # Between the two models every `_NK_PARAM` arm in the package is reached.
 function _pv_zerod()
     shared = _pv_o("*", _pv_o("exp", _pv_o("neg", _pv_o("/", "Ea", "T"))),

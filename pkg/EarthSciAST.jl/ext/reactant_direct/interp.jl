@@ -7,16 +7,15 @@
 # each with a shared table or with per-lane table columns (the kernel-class
 # merge's `_Interp*LaneSpec`).
 #
-# HOW. Through the SAME lane evaluators the vectorized interpreter and the
-# traced backend use (`_interp_*_lanes`, src/tree_walk/interp_lanes.jl) over this
-# emitter's own values, wrapped as traced arrays. Those evaluators are pure
+# HOW. Through the SAME lane evaluators the vectorized interpreter uses
+# (`_interp_*_lanes`, src/tree_walk/interp_lanes.jl), over this emitter's own
+# values, wrapped as traced arrays. Those evaluators are pure
 # locate → gather → blend: no branch on the query, no opaque scalar core. Their
 # three knot-addressing SEAMS (`_knot_count`, `_knot_pair` /
 # `_knot_pair2`, `_bilinear_corners`) are already specialized in this
 # extension to constant-time `stablehlo.gather`s of a constant table
-# (ext/reactant_interp.jl), so what lands in the
-# module is the gather lowering, not the O(table) select ladder — the same ops
-# the traced backend emits for the same node.
+# (ext/reactant_interp.jl), so what lands in the module is the gather lowering,
+# not the O(table) select ladder.
 #
 # WHY REUSE RATHER THAN RE-EMIT. The seams are where the interp lowering's
 # correctness lives: the count is exact because its terms are 0/1 integers, the

@@ -515,8 +515,8 @@ end
 # its compiled node flows into the stencil / access-kernel merge (acc_merge.jl,
 # stencil_affine.jl, oop_merge.jl), which model unrolled scalar terms — so the
 # loop node is confined to SCALAR contexts (rhs_list / scalar observeds), where the
-# eval-time consumers are exactly `_eval_node` / `_oop_eval` (both handle it) and
-# the CSE keyer (xcse.jl, which safely DECLINES an unknown kind → leaves it inline).
+# eval-time consumer is exactly `_eval_node` (which handles it) and the CSE keyer
+# (xcse.jl, which safely DECLINES an unknown kind → leaves it inline).
 const _ARRAY_CELL_DEPTH = Ref(0)
 
 # Opt-in / kill-switch and coverage floor. Default ON, but only for reductions at

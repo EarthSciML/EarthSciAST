@@ -20,11 +20,11 @@
 # eltype-generic, so ForwardDiff runs through it over the state or the parameters
 # (a stiff solve gets an exact AD Jacobian for free).
 #
-# `build_evaluator(model; form = :oop)` returns an OUT-OF-PLACE `f(u, p, t) → du` in
-# the same slot (tree_walk/oop.jl). It is NOT a faster or more differentiable `f!` —
-# it is the one that can be TRACED: it captures no host buffers and contains no
-# per-lane scalar loops, the two things XLA/Reactant and device backends cannot
-# accept. Reach for it for tracing, not for derivatives.
+# `build_evaluator(model; form = :oop)` returns the COMPILED INTERMEDIATE
+# REPRESENTATION in the same slot (tree_walk/oop.jl) rather than a second
+# evaluator: the same node spines and access kernels `f!` is lowered from, as
+# data, for a compiled backend to emit a program from. `direct_rhs`
+# (ext/reactant_direct/) is the one in tree. It does not evaluate on host.
 #
 # Dict and EsmFile convenience entry points select a model by name (or
 # the single model, if the file carries only one).

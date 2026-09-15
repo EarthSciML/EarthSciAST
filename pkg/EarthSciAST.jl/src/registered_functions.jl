@@ -443,8 +443,8 @@ end
                   ifelse(r >= b, q + oftype(q, 1), q))
 end
 
-# Truncation toward zero, spelled with the two primitives the traced backends
-# already lower. `Base.trunc` would do on the host but is a third op to demand
+# Truncation toward zero, spelled with the two primitives a compiled backend
+# already lowers. `Base.trunc` would do on the host but is a third op to demand
 # of a backend for no gain, and `floor` + a select is exactly the pair the rest
 # of this section is built from.
 @inline _ctrunc(x) = ifelse(x < 0, -floor(-x), floor(x))
