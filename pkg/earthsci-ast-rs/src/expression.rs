@@ -142,7 +142,10 @@ fn simplify_node(node: crate::types::ExpressionNode) -> Expr {
 /// `bindings` maps free-variable names to their `f64` values. The special
 /// key `"t"` supplies the simulation time (defaults to `0.0` if absent).
 /// Returns `Ok(f64)` on success, or `Err(Vec<String>)` listing unbound
-/// variable names if any variable in `expr` is missing from `bindings`.
+/// variable names if any variable in `expr` is missing from `bindings`, or
+/// carrying the diagnostic (`unlowered_operator` / `unevaluable_operator`, with
+/// the op named) for an operator this evaluator cannot evaluate. That check runs
+/// over the whole expression before any of it is evaluated (esm-spec §9.6.6).
 ///
 /// # Examples
 ///
