@@ -1,0 +1,115 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "scoped_assertion_leaf",
+    "description": "The mounted component for the scoped_assertion_variable fixtures: a decaying scalar state `u`, a scalar observed `v = 2u`, and an array observed `key = [7, 9, 4]` over `leaf_axis` - one of each kind of name an assertion can read. Passes its own test standalone.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ]
+  },
+  "index_sets": {
+    "leaf_axis": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "Leaf": {
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0,
+          "description": "Decaying state: u(t) = exp(-k t)."
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 1.0,
+          "description": "Decay rate."
+        },
+        "v": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Scalar observed: twice the state."
+        },
+        "key": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "leaf_axis"
+          ],
+          "description": "Array observed: the constant column [7, 9, 4]."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "u"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              -1.0,
+              "k",
+              "u"
+            ]
+          }
+        },
+        {
+          "lhs": "v",
+          "rhs": {
+            "op": "*",
+            "args": [
+              2.0,
+              "u"
+            ]
+          }
+        },
+        {
+          "lhs": "key",
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": [
+              7,
+              9,
+              4
+            ]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "leaf_alone",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "tolerance": {
+            "rel": 0.0001
+          },
+          "assertions": [
+            {
+              "variable": "u",
+              "time": 1.0,
+              "expected": 0.36787944117144233
+            },
+            {
+              "variable": "key",
+              "time": 1.0,
+              "expected": 9.0,
+              "coords": {
+                "leaf_axis": 2
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
