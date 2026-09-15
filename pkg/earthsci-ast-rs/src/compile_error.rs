@@ -381,9 +381,7 @@ pub fn discrete_event_refusal(evaluator: &'static str, name: Option<&str>) -> Co
 /// are searched in their raw JSON: mounting keeps only their variables and
 /// equations, and `flatten` does not lift a subsystem's events into the
 /// flattened system, so no check on the flattened event lists can see one.
-pub(crate) fn first_event(
-    model: &crate::types::Model,
-) -> Option<(&'static str, Option<String>)> {
+pub(crate) fn first_event(model: &crate::types::Model) -> Option<(&'static str, Option<String>)> {
     if let Some(event) = model.continuous_events.as_ref().and_then(|e| e.first()) {
         return Some((CONTINUOUS_EVENT, event.name.clone()));
     }
