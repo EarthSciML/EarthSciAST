@@ -139,7 +139,7 @@ where
             if next_idx >= t_eval.len() {
                 break;
             }
-            if step_count >= opts.maxiters {
+            if opts.maxiters.is_some_and(|cap| step_count >= cap) {
                 retcode = ReturnCode::MaxIters;
                 break;
             }
@@ -196,7 +196,7 @@ where
         // Native step grid: record the initial point, then every step.
         push_state(&mut times, &mut state_rows, t0, &initial_state);
         loop {
-            if step_count >= opts.maxiters {
+            if opts.maxiters.is_some_and(|cap| step_count >= cap) {
                 retcode = ReturnCode::MaxIters;
                 break;
             }

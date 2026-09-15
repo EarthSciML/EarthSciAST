@@ -141,8 +141,9 @@ pub struct Progress<'a> {
     pub t_end: f64,
     /// Accepted steps taken so far (`0` for the pre-loop report at `t0`).
     pub step: usize,
-    /// The configured [`SolveOptions::maxiters`] cap, for context.
-    pub maxiters: usize,
+    /// The configured [`SolveOptions::maxiters`] cap, for context; `None` when
+    /// the run is uncapped.
+    pub maxiters: Option<usize>,
     /// The integrator's state vector at `t`, in
     /// [`Compiled::state_variable_names`] order.
     ///
@@ -216,8 +217,23 @@ pub struct SolveOptions {
     /// Relative INTEGRATION tolerance, or `None` for "caller has no opinion".
     /// See [`SolveOptions::abstol`] for why this is an `Option`.
     pub reltol: Option<f64>,
-    /// Maximum number of integrator steps before bailing out. Defaults to `10_000`.
-    pub maxiters: usize,
+    /// Cap on accepted integrator steps, or `None` (the default) for no cap.
+    ///
+    /// `Some(n)` stops the run after `n` accepted steps with
+    /// [`ReturnCode::MaxIters`] and the trajectory computed so far. It counts
+    /// the integrator's time-loop steps, which is what SciML's `maxiters`
+    /// counts (`if integrator.iter > opts.maxiters`, SciMLBase
+    /// `integrator_interface.jl`); it is not a Newton or fixed-point iteration
+    /// limit, which implicit methods carry separately. `esm-libraries-spec.md`
+    /// §2.5.3 names the option but sets no default, and the bindings do not
+    /// agree on one: OrdinaryDiffEqCore defaults to `1_000_000` for adaptive
+    /// methods, and Python defaults to `None` but counts right-hand-side
+    /// evaluations rather than steps. This binding follows Python's default and
+    /// SciML's unit.
+    ///
+    /// An `Option`, like [`SolveOptions::abstol`], so "the caller asked for no
+    /// cap" is the default rather than a large number standing in for one.
+    pub maxiters: Option<usize>,
     /// If `Some`, the solution is sampled (via dense output / interpolation)
     /// at exactly these times. If `None`, the natural step times are
     /// returned.
@@ -300,7 +316,9 @@ impl Default for SolveOptions {
             // constants remain the bottom of that chain.
             abstol: None,
             reltol: None,
-            maxiters: 10_000,
+            // Uncapped unless the caller asks: a fixed step budget silently ends
+            // any integration long enough to need more steps than the budget.
+            maxiters: None,
             saveat: None,
             callback: None,
             progress: None,
