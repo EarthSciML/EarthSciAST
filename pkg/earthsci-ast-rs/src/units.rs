@@ -859,7 +859,7 @@ fn is_literal(expr: &Expr) -> bool {
 ///
 /// Bare numeric literals are skipped entirely: they adopt the dimension of what
 /// they are combined with (`T - 273.15` is a temperature). If EVERY operand is
-/// a literal (`1 + 2`, unary `-1`), the result is dimensionless.
+/// a bare literal (`1 + 2`), the result is dimensionless.
 fn propagate_matching_dim(
     op: &ExpressionNode,
     env: &HashMap<String, Unit>,

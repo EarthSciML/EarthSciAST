@@ -121,6 +121,7 @@
     { "id": "valid/units_conversions",              "path": "valid/units_conversions.esm",              "tags": ["units"] },
     { "id": "valid/units_dimensional_analysis",     "path": "valid/units_dimensional_analysis.esm",     "tags": ["units"] },
     { "id": "valid/units_propagation",              "path": "valid/units_propagation.esm",              "tags": ["units"] },
+    { "id": "valid/units_negated_literal_neutral",  "path": "valid/units_negated_literal_neutral.esm",  "tags": ["units"] },
 
     { "id": "valid/data_sources_comprehensive",     "path": "valid/data_sources_comprehensive.esm",     "tags": ["data_sources"] },
     { "id": "valid/data_sources_earthscidata_jl",   "path": "valid/data_sources_earthscidata_jl.esm",   "tags": ["data_sources"] },
