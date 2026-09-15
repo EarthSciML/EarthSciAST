@@ -98,7 +98,8 @@ end
     fixtures_root = joinpath(@__DIR__, "..", "..", "..", "tests", "valid")
     fixtures = ["units_conversions.esm",
                 "units_dimensional_analysis.esm",
-                "units_propagation.esm"]
+                "units_propagation.esm",
+                "units_negated_literal_neutral.esm"]
 
     any_tests_across_fixtures = false
     for fname in fixtures

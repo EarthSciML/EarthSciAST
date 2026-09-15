@@ -1477,7 +1477,7 @@ atom     := '1' | symbol | '(' unit ')'
 
 | Op | Rule |
 |---|---|
-| `+` `-` (n-ary) | All operands MUST share a dimension **and a scale**; the result is that unit. `x [m] + y [km]` is an ERROR — both are lengths, but the numbers being added are in different units. A bare numeric literal is neutral in this position and adopts its siblings' dimension and scale. |
+| `+` `-` (n-ary) | All operands MUST share a dimension **and a scale**; the result is that unit. `x [m] + y [km]` is an ERROR — both are lengths, but the numbers being added are in different units. A bare numeric literal is neutral in this position and adopts its siblings' dimension and scale. A unary negation of a numeric literal (`{"op": "-", "args": [273.15]}`, negated any number of times) counts as a literal for this rule: `T_k + -(273.15)` adopts the unit of `T_k` exactly as `T_k + -273.15` does. |
 | `*` `/` | Dimensions multiply / divide, and so do scales. |
 | `^` | The exponent MUST be dimensionless. With a **literal integer or rational** exponent the base dimension and scale are raised to it (`L^2` with `L` in `km` is `km^2`). With a **symbolic** exponent the result is UNDETERMINABLE (§4.8.4) — not dimensionless. |
 | `sqrt` | **HALVES** every exponent of the operand's dimension and scale — `sqrt(x)` with `x` in `m^2/s^2` is `m/s`. `sqrt` is NOT a transcendental and MUST NOT be given the dimensionless-argument rule; a checker that lists it with `log`/`exp` rejects the ordinary spelling of a wave speed or an RMS. |

@@ -321,6 +321,27 @@ using Unitful
         tk = D(OpExpr("-", E[VarExpr("x"), NumExpr(273.15)]), var_units)
         @test tk !== nothing && dimension(tk) == Unitful.𝐋
 
+        # A unary negation of a literal counts as a literal (esm-spec §4.8.3):
+        # `x + -(273.15)` adopts x's unit exactly as `x + -273.15` does, at any
+        # depth of negation, for an integer as well as a float, and in min/max.
+        neg(e) = OpExpr("-", E[e])
+        for lit in (NumExpr(273.15), IntExpr(273), neg(NumExpr(273.15))), op in ("+", "-", "min")
+            d = D(OpExpr(op, E[VarExpr("x"), neg(lit)]), var_units)
+            @test d !== nothing && dimension(d) == Unitful.𝐋
+            @test isempty(EarthSciAST.expression_unit_findings(
+                OpExpr(op, E[VarExpr("x"), neg(lit)]), var_units))
+        end
+        # Anywhere else a negation carries its operand's dimension, so a negated
+        # literal is as indeterminate as a bare one...
+        @test D(neg(NumExpr(1.0)), var_units) === nothing
+        @test D(OpExpr("+", E[neg(NumExpr(1.0)), neg(IntExpr(2))]), var_units) === nothing
+        @test D(OpExpr("*", E[neg(NumExpr(2.0)), VarExpr("x")]), var_units) === nothing
+        @test isempty(EarthSciAST.equation_unit_findings(
+            Equation(VarExpr("y"), neg(NumExpr(1.0))), Dict("y" => "kg")))
+        # ...and a negated DECLARED quantity is still checked.
+        @test !isempty(EarthSciAST.expression_unit_findings(
+            OpExpr("+", E[VarExpr("x"), neg(VarExpr("y"))]), var_units))
+
         # FABRICATION 2 — a product with an INDETERMINATE factor is
         # indeterminate, not the product of the factors it could resolve.
         @test D(OpExpr("*", E[VarExpr("x"), NumExpr(1.23)]), var_units) === nothing

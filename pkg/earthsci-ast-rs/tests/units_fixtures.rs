@@ -24,6 +24,10 @@ const UNITS_FIXTURES: &[(&str, &str)] = &[
         "units_propagation.esm",
         include_str!("../../../tests/valid/units_propagation.esm"),
     ),
+    (
+        "units_negated_literal_neutral.esm",
+        include_str!("../../../tests/valid/units_negated_literal_neutral.esm"),
+    ),
 ];
 
 #[test]

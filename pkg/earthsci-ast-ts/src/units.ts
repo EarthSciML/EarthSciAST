@@ -329,7 +329,7 @@ function computeDimensions(
   // `m^kg`), never via a literal. Literals still behave correctly where their
   // meaning IS determined: additively they are neutral and adopt their
   // sibling's dimension (`T - 273.15` → K), an all-literal expression is
-  // dimensionless (`1 + 2`, `-1`), and an exponent is read by VALUE (`x^2`).
+  // dimensionless (`1 + 2`), and an exponent is read by VALUE (`x^2`).
   if (typeof expr === 'number' || isNumericLiteral(expr)) {
     return unknown()
   }
@@ -360,6 +360,12 @@ function computeDimensions(
   switch (op) {
     case '+':
     case '-': {
+      // A unary minus carries its operand's unit unchanged. That makes a negated
+      // literal (`-(273.15)`) as indeterminate as the literal itself, so in an
+      // enclosing sum it is skipped like any other unknown operand and counts as
+      // a literal for the neutral rule below (esm-spec §4.8.3).
+      if (op === '-' && args.length === 1) return finish(get(0))
+
       // Compare only the operands we actually know; an unknown operand is
       // skipped rather than defaulted. The result is the first known dimension
       // (or unknown if none is).
@@ -395,7 +401,7 @@ function computeDimensions(
           )
         }
       }
-      // Every operand was a literal (`1 + 2`, or a unary `-1`) ⇒ dimensionless.
+      // Every operand was a literal (`1 + 2`) ⇒ dimensionless.
       if (!sawNonLiteral) return finish(dimensionless())
       return finish(first)
     }
