@@ -3,7 +3,11 @@
   "version": "1.0",
   "description": "Cross-binding conformance for the two model constructs no evaluator in the executing bindings runs: a DISCRETE EVENT (`discrete_events`) and an IMPLICIT EQUATION (an equation whose LHS is an expression rather than a bare unknown, an indexed unknown, `D(unknown)` or `ic(unknown)`). Before issue #264 both validated and were then silently dropped: the event never fired and the residual was never solved, so a run reported the initial value as its answer. The decision this category pins is REFUSAL: an evaluator that cannot run the construct MUST fail the build with the diagnostic `unsupported_construct` (esm-spec §9.6.6), and the message MUST name the construct and the evaluator. It pins no numbers. The `control` case is the event document with its event removed; it takes the same array evaluator and MUST still run, which is what attributes the refusals to the construct. Julia's ModelingToolkit export runs discrete events and hands implicit equations to `mtkcompile`, so it is outside this category; Go and TypeScript do not simulate and only register the code.",
   "code": "unsupported_construct",
-  "bindings": ["julia", "python", "rust"],
+  "bindings": [
+    "julia",
+    "python",
+    "rust"
+  ],
   "cases": [
     {
       "id": "discrete_event_on_the_array_path",
@@ -15,6 +19,20 @@
     {
       "id": "discrete_event_on_the_scalar_path",
       "path": "fixtures/discrete_event_on_the_scalar_path.esm",
+      "construct": "discrete event",
+      "evaluator_path": "scalar",
+      "expect": "refuse"
+    },
+    {
+      "id": "discrete_event_in_a_subsystem_on_the_array_path",
+      "path": "fixtures/discrete_event_in_a_subsystem_on_the_array_path.esm",
+      "construct": "discrete event",
+      "evaluator_path": "array",
+      "expect": "refuse"
+    },
+    {
+      "id": "discrete_event_in_a_subsystem_on_the_scalar_path",
+      "path": "fixtures/discrete_event_in_a_subsystem_on_the_scalar_path.esm",
       "construct": "discrete event",
       "evaluator_path": "scalar",
       "expect": "refuse"

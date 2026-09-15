@@ -595,7 +595,7 @@ def esm_problem(
     # esm-spec §9.6.6 `unsupported_construct`: neither evaluator runs a discrete
     # event or solves an implicit equation, so refuse both here, for every route,
     # rather than build a model that silently runs without them.
-    _refuse_unsupported_constructs(flat)
+    _refuse_unsupported_constructs(flat, file)
 
     # esm-spec §6.6.2 "Unrecognized override keys": a `p` key that names no
     # single parameter is an ERROR, raised at the one front door every pathway
@@ -801,7 +801,7 @@ def _declares_resolvable_shape(flat: FlattenedSystem) -> bool:
     return False
 
 
-def _refuse_unsupported_constructs(flat: FlattenedSystem) -> None:
+def _refuse_unsupported_constructs(flat: FlattenedSystem, file: EsmFile | None) -> None:
     """esm-spec §9.6.6 ``unsupported_construct`` — refuse a discrete event or an
     implicit equation before any pathway is built.
 
@@ -818,8 +818,17 @@ def _refuse_unsupported_constructs(flat: FlattenedSystem) -> None:
         or any(_has_array_op(eq.lhs) or _has_array_op(eq.rhs) for eq in flat.equations)
         else "Python scalar interpreter"
     )
-    if flat.discrete_events:
-        name = getattr(flat.discrete_events[0], "name", None)
+    # `flatten` lifts only the TOP-LEVEL components' events, so an event owned by
+    # an inline subsystem is not in `flat` at all; look for it in the document.
+    event = (
+        flat.discrete_events[0]
+        if flat.discrete_events
+        else _first_subsystem_discrete_event(file)
+        if file is not None
+        else None
+    )
+    if event is not None:
+        name = getattr(event, "name", None)
         raise UnsupportedConstructError(
             "discrete event", f"'{name}'" if name else "(unnamed)", evaluator
         )
@@ -830,6 +839,27 @@ def _refuse_unsupported_constructs(flat: FlattenedSystem) -> None:
                 f"`{_expr_to_string(eq.lhs)} ~ {_expr_to_string(eq.rhs)}`",
                 evaluator,
             )
+
+
+def _first_subsystem_discrete_event(file: EsmFile) -> Any:
+    """The first discrete event an inline subsystem declares, at any depth under
+    any model or reaction system of ``file``; ``None`` when there is none."""
+
+    def in_subsystems(component: Any) -> Any:
+        for sub in (getattr(component, "subsystems", None) or {}).values():
+            events = getattr(sub, "discrete_events", None)
+            if events:
+                return events[0]
+            found = in_subsystems(sub)
+            if found is not None:
+                return found
+        return None
+
+    for component in [*file.models.values(), *file.reaction_systems.values()]:
+        found = in_subsystems(component)
+        if found is not None:
+            return found
+    return None
 
 
 def _assert_no_unlowered_operator(flat: FlattenedSystem) -> None:
