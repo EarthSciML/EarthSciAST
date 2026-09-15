@@ -1,13 +1,13 @@
 {
   "enums": {
     "activity_unit": {
-      "g_per_gallon": 2,
+      "g_per_gallon": 9,
       "g_per_hp_hr": 7
     }
   },
   "esm": "1.0.0",
   "metadata": {
-    "description": "The importer declares an enum of the same name as the library's (lib.esm) with a DIFFERENT value for `g_per_hp_hr` (7, where the library says 1). Enums are file-local (esm-spec §9.3): the imported template body keeps the library's 1, while the importer's own `enum` ops, including one it binds into the template's parameter, resolve against the importer's 7.",
+    "description": "The importer declares an enum of the same name as the library's (lib.esm) with DIFFERENT values (`g_per_hp_hr` 7 and `g_per_gallon` 9, where the library says 1 and 2). Enums are file-local (esm-spec §9.3): the library's own `enum` op keeps 1 and the library's own call `gallon_code` keeps 2, while every symbol the IMPORTER spells resolves against the importer's block: its own `enum` ops, one it binds into a template parameter, a symbol it binds into `activity_code`, and one it binds through `code_via`'s forwarded parameter.",
     "name": "library_enum_importer_redeclares"
   },
   "models": {
@@ -56,10 +56,50 @@
             ],
             "op": "=="
           }
+        },
+        {
+          "lhs": "gallonCode",
+          "rhs": {
+            "args": [],
+            "op": "const",
+            "value": 2
+          }
+        },
+        {
+          "lhs": "importerBoundCode",
+          "rhs": {
+            "args": [
+              "activity_unit",
+              "g_per_gallon"
+            ],
+            "op": "enum"
+          }
+        },
+        {
+          "lhs": "forwardedCode",
+          "rhs": {
+            "args": [
+              "activity_unit",
+              "g_per_gallon"
+            ],
+            "op": "enum"
+          }
         }
       ],
       "variables": {
         "callerBoundCode": {
+          "type": "unknown",
+          "units": "1"
+        },
+        "forwardedCode": {
+          "type": "unknown",
+          "units": "1"
+        },
+        "gallonCode": {
+          "type": "unknown",
+          "units": "1"
+        },
+        "importerBoundCode": {
           "type": "unknown",
           "units": "1"
         },

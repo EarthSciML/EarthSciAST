@@ -301,12 +301,20 @@ Enums across a template import (esm-spec §9.3, §9.7.5). `lib.esm` declares
 `activity_unit` and names `activity_unit.g_per_hp_hr` inside its template body.
 An `enum` op resolves against the block of the file that wrote it, so the op is
 lowered at the import edge against the LIBRARY's block, and the goldens carry it
-as `{op: const, value: 1}`. `fixture.esm` declares no `enums` and still loads.
+as `{op: const, value: 1}`. `lib.esm` also has `activity_code`, whose `enum` op
+spells the symbol with its parameter; `gallon_code`, the library's own call to it
+binding `g_per_gallon`; and `code_via`, which forwards its own parameter into
+that call. The library's own call is expanded and lowered at the edge, so the
+goldens carry `gallonCode` as `{op: const, value: 2}`.
+
+`fixture.esm` declares no `enums` and still loads, `gallonCode` included.
 `fixture_importer_redeclares.esm` declares `activity_unit` itself with
-`g_per_hp_hr = 7`: the library's template still computes with 1, while the
-importer's own `enum` ops (a bare one, and one bound into the template's
-`unit_code` parameter) stay `enum` ops in the golden and lower to 7 against the
-importer's block at typed load. Each binding's suite pins those three typed
+`g_per_hp_hr = 7` and `g_per_gallon = 9`: the library's template still computes
+with 1 and the library's own call with 2, while every symbol the importer
+spells stays an `enum` op in the golden and lowers against the importer's block
+at typed load: a bare `enum` op (7), one bound into the template's `unit_code`
+parameter (7), a symbol bound into `activity_code` (9), and one bound through
+`code_via`'s forwarded parameter (9). Each binding's suite pins those typed
 values beside the golden.
 
 ### `import_library_enum_undeclared/` (error.json, `unknown_enum`, load)

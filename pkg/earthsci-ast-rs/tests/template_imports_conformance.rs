@@ -361,6 +361,19 @@ fn import_library_enum_resolves_in_the_library_scope() {
     let caller_bound = obs_def(model, "callerBoundCode");
     assert_eq!(caller_bound["args"][0]["value"], json!(7));
     assert_eq!(caller_bound["args"][1]["value"], json!(1));
+    // The library's own call binds `g_per_gallon`, so it keeps the library's 2; a
+    // symbol the importer binds, directly or through a forwarded parameter, takes 9.
+    assert_eq!(obs_def(model, "gallonCode")["value"], json!(2));
+    assert_eq!(obs_def(model, "importerBoundCode")["value"], json!(9));
+    assert_eq!(obs_def(model, "forwardedCode")["value"], json!(9));
+    // An importer declaring no enums still loads the library's own call.
+    let f = load_path(conf(&["import_library_enum", "fixture.esm"]))
+        .expect("importer with no enums loads the library's own call");
+    let doc = serde_json::to_value(&f).expect("serialize");
+    assert_eq!(
+        obs_def(&doc["models"]["Consumer"], "gallonCode")["value"],
+        json!(2)
+    );
 }
 
 /// import_library_enum_undeclared: a library body naming an enum the library

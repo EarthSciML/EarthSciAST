@@ -281,6 +281,17 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         caller_bound = _defrhs(doc, "Consumer", "callerBoundCode")
         @test caller_bound["args"][1]["value"] == 7
         @test caller_bound["args"][2]["value"] == 1
+        # The library's own call binds `g_per_gallon`, so it keeps the library's
+        # 2; a symbol the importer binds, directly or through a forwarded
+        # parameter, takes the importer's 9.
+        @test _defrhs(doc, "Consumer", "gallonCode")["value"] == 2
+        @test _defrhs(doc, "Consumer", "importerBoundCode")["value"] == 9
+        @test _defrhs(doc, "Consumer", "forwardedCode")["value"] == 9
+        # An importer declaring no enums still loads the library's own call.
+        f = EarthSciAST.load_path(conf("import_library_enum", "fixture.esm"))
+        EarthSciAST._expand_refs!(f)
+        doc = _normj(serialize_esm_file(f))
+        @test _defrhs(doc, "Consumer", "gallonCode")["value"] == 2
     end
 
     @testset "import_library_enum_undeclared: unknown_enum reported against the library (§9.3)" begin

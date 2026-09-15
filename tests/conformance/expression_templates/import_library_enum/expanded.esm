@@ -1,7 +1,7 @@
 {
   "esm": "1.0.0",
   "metadata": {
-    "description": "Imports a template whose body names an enum member declared only in the library (lib.esm). The importer declares no `enums` block and must still load: the library's `enum` op resolves against the library's own block (esm-spec §9.3).",
+    "description": "Imports templates whose bodies name enum members declared only in the library (lib.esm). The importer declares no `enums` block and must still load: the library's own `enum` op, and the symbol the library binds in its own call `gallon_code`, resolve against the library's block (esm-spec §9.3).",
     "name": "library_enum_importer"
   },
   "models": {
@@ -20,9 +20,21 @@
             ],
             "op": "=="
           }
+        },
+        {
+          "lhs": "gallonCode",
+          "rhs": {
+            "args": [],
+            "op": "const",
+            "value": 2
+          }
         }
       ],
       "variables": {
+        "gallonCode": {
+          "type": "unknown",
+          "units": "1"
+        },
         "isPerHorsepowerHour": {
           "type": "unknown",
           "units": "1"

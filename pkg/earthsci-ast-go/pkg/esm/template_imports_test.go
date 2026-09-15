@@ -570,12 +570,37 @@ func TestTemplateImports_LibraryEnumKeepsLibraryValue(t *testing.T) {
 		"isPerHorsepowerHour": `{"args":[1,{"args":[],"op":"const","value":1}],"op":"=="}`,
 		"importerCode":        `{"args":[],"op":"const","value":7}`,
 		"callerBoundCode":     `{"args":[{"args":[],"op":"const","value":7},{"args":[],"op":"const","value":1}],"op":"=="}`,
+		// The library's own call binds `g_per_gallon`, so it keeps the library's 2;
+		// a symbol the importer binds, directly or through a forwarded
+		// parameter, takes the importer's 9.
+		"gallonCode":        `{"args":[],"op":"const","value":2}`,
+		"importerBoundCode": `{"args":[],"op":"const","value":9}`,
+		"forwardedCode":     `{"args":[],"op":"const","value":9}`,
 	}
 	for lhs, w := range want {
 		if got[lhs] != w {
 			t.Errorf("%s = %s; want %s", lhs, got[lhs], w)
 		}
 	}
+}
+
+// TestTemplateImports_LibraryEnumOwnCallNeedsNoImporterEnums pins that a symbol a
+// library binds in its own call resolves against the library's `enums` block,
+// so an importer that declares no enums still loads (esm-spec §9.3).
+func TestTemplateImports_LibraryEnumOwnCallNeedsNoImporterEnums(t *testing.T) {
+	f, err := LoadPath(tiConfDir(t, "import_library_enum", "fixture.esm"))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	for _, eq := range f.Models["Consumer"].Equations {
+		if lhs, _ := eq.LHS.(string); lhs == "gallonCode" {
+			if got, want := tiCanonJSON(t, eq.RHS), `{"args":[],"op":"const","value":2}`; got != want {
+				t.Fatalf("gallonCode = %s; want %s", got, want)
+			}
+			return
+		}
+	}
+	t.Fatal("no gallonCode equation")
 }
 
 // TestTemplateImports_LibraryEnumUndeclared pins that a library body naming an
