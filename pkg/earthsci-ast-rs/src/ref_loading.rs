@@ -575,7 +575,7 @@ fn walk_top_level(
 /// mutually-importing document is still `circular …` rather than unbounded
 /// recursion, and the merge composes transitively. On top of the
 /// shared pipeline this form additionally merges the leaf's `function_tables` /
-/// `data_sources` / `enums` up (parent wins on a key clash) and drops the leaf's
+/// `data_sources` up (parent wins on a key clash) and drops the leaf's
 /// inline `tests` (§6.6: they do not cross a mount edge).
 ///
 /// `parent_meta` is the MOUNTING document's closed metaparameter environment
@@ -773,6 +773,14 @@ fn inline_toplevel_model_refs(
                 comp = resolved;
             }
 
+            // esm-spec §9.3: the leaf's `enum` ops resolve against ITS OWN
+            // `enums` block, here, while that block is still at hand. The
+            // mounting document's block is a different one and `enums` do not
+            // merge across a mount, so an importer declaring an enum of the same
+            // name cannot change what the leaf computes. The leaf's own nested
+            // mounts were lowered at their own edges above.
+            lower_mounted_enums_at_edge(&mut comp, &mount_noun)?;
+
             // The leaf has now CLOSED, so the contributions its own nested
             // mounts staged can land — folded against the leaf's own closed
             // environment and compared deep-equal, the §4.7 merge rule run at
@@ -873,7 +881,9 @@ fn inline_toplevel_model_refs(
                 }
             }
         }
-        for blk in ["function_tables", "data_sources", "enums"] {
+        // Not `enums`: it is file-local (esm-spec §9.3), and the leaf's `enum`
+        // ops were already lowered against it at the edge.
+        for blk in ["function_tables", "data_sources"] {
             let Some(src) = comp.get(blk).and_then(|v| v.as_object()) else {
                 continue;
             };
@@ -892,6 +902,21 @@ fn inline_toplevel_model_refs(
         }
     }
     Ok(())
+}
+
+/// Lower `doc`'s `enum` ops against its own `enums` block at a §4.7 mount edge
+/// (esm-spec §9.3), naming the edge in the diagnostic.
+fn lower_mounted_enums_at_edge(doc: &mut Value, mount_noun: &str) -> Result<(), DiagnosticError> {
+    crate::lower_enums::lower_mounted_document_enums(doc).map_err(|e| {
+        err(
+            e.code,
+            format!(
+                "{mount_noun}: {} — an `enum` op in a mounted file resolves against that \
+                 file's own `enums` block (esm-spec §9.3)",
+                e.message
+            ),
+        )
+    })
 }
 
 /// Extract the single top-level model from a referenced component file (or the
@@ -1245,6 +1270,9 @@ fn resolve_value(
                 crate::lower_expression_templates::expand(&mut resolved)?;
                 parsed = resolved;
             }
+            // esm-spec §9.3: the referenced document's `enum` ops resolve
+            // against ITS OWN `enums` block, here, as at the top-level form.
+            lower_mounted_enums_at_edge(&mut parsed, &format!("subsystem ref '{ref_str}'"))?;
             // The leaf has now CLOSED, so the contributions its own nested
             // mounts staged can land — folded against the leaf's own closed
             // environment and compared deep-equal, the §4.7 merge rule run at
