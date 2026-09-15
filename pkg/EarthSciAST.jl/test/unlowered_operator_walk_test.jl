@@ -78,6 +78,15 @@ end
         @test err isa _UW.TreeWalkError && err.code == "unlowered_operator"
     end
 
+    @testset "an unlowered op in an initial condition is refused" begin
+        doc = _uw_box(1.0)
+        push!(doc["models"]["Box"]["equations"], Dict{String,Any}(
+            "lhs" => _uw_op("ic", "c"), "rhs" => _uw_op("godunov_hamiltonian", 2.0)))
+        err = _uw_error(() -> esm_problem(doc, (0.0, 1.0)))
+        @test err isa _UW.TreeWalkError && err.code == "unlowered_operator"
+        @test err isa _UW.TreeWalkError && occursin("godunov_hamiltonian", err.detail)
+    end
+
     @testset "the build_evaluator front door refuses it too" begin
         err = _uw_error(() -> build_evaluator(_uw_box(_uw_op("laplacian", "c"))))
         @test err isa _UW.TreeWalkError && err.code == "unlowered_operator"

@@ -526,6 +526,14 @@ impl ArrayCompiled {
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
         let mut compiled = Self::from_model(&model, &index_sets)?;
+        // `flatten` routed every `ic` equation out of `flat.equations`, so the
+        // synthetic model's stage-(0) walk never saw an initial-condition
+        // right-hand side. Walk them here, before anything evaluates one
+        // (esm-spec §9.6.3 constraint 6), so an unlowered op in an initial
+        // condition is refused at build exactly as it is in an equation.
+        for (_, rhs) in &flat.field_ics {
+            check_evaluable(rhs)?;
+        }
         // Carry the classified scoped-reference `ic` equations through so `u0` is
         // folded from the provider-served loaded initial fields at build time.
         compiled.field_ics = flat.field_ics.clone();
