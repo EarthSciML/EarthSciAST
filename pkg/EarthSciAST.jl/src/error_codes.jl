@@ -269,6 +269,10 @@ const ERROR_CODES = (
     #    surfaces when a rewrite-target operator (an RHS-position `D`, or
     #    `grad`/`div`/`laplacian`) reaches evaluation unlowered. ────────────
     UNLOWERED_OPERATOR = "unlowered_operator",
+    # A surviving expression ranges over a `kind: "derived"` index set whose
+    # producer could not be materialized at build (esm-spec §9.6.6). Refused
+    # rather than contracted as an empty range, which would read as 0.
+    DERIVED_INDEX_SET_UNMATERIALIZED = "derived_index_set_unmaterialized",
 )
 
 """
