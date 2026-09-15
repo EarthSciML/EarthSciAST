@@ -5530,9 +5530,10 @@ the construct and the evaluator. Before issue #264 they built the model without
 the construct: the event never fired, the residual was never solved, and an
 inline test reported the initial value as its answer.
 
-**Shape.** Golden-free. Six refusal cases: one per construct per evaluator path
-(scalar and array), plus a discrete event owned by an inline SUBSYSTEM on each
-path. The subsystem cases pin that the refusal does not depend on where the event
+**Shape.** Golden-free. Seven refusal cases: one per construct per evaluator
+path (scalar and array), a discrete event owned by an inline SUBSYSTEM on each
+path, and an implicit equation spelled as a time derivative of an expression
+(`D(a + b) ~ 3`), which credits no state and so is implicit, not a derivative. The subsystem cases pin that the refusal does not depend on where the event
 is declared: a binding whose `flatten` does not lift a subsystem's events must
 look for them in the document, or it runs the model without the event. One
 CONTROL: the array discrete-event document with its event removed, which MUST

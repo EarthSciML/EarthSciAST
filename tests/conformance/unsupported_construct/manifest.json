@@ -52,6 +52,13 @@
       "expect": "refuse"
     },
     {
+      "id": "implicit_equation_as_the_derivative_of_an_expression",
+      "path": "fixtures/implicit_equation_as_the_derivative_of_an_expression.esm",
+      "construct": "implicit equation",
+      "evaluator_path": "scalar",
+      "expect": "refuse"
+    },
+    {
       "id": "control",
       "path": "fixtures/control_array_path_without_the_construct.esm",
       "evaluator_path": "array",
