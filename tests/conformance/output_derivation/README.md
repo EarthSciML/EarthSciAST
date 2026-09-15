@@ -56,10 +56,11 @@ same change that added this corpus (RFC §16.12):
 
 | File | What it is |
 |------|------------|
-| `manifest.json` | The cases: fixture, golden, `slot_names`, `observed`, plus the input and representation contracts. |
+| `manifest.json` | The cases: fixture, golden, `slot_names`, `observed`, plus the input and representation contracts. `refusals` lists requests that must be refused, each with the diagnostic code it `raises`. |
 | `fixtures/scalar_0d.esm` | A purely 0-D model — four bare scalars, one of them `observed`. The case that exposed divergence 1. |
 | `fixtures/gridded.esm` | One 3×2 `[lon, lat]` grid, two variables, both axes carrying `coordinates` entries. |
 | `fixtures/mixed.esm` | Scalars **and** two different gridded signatures in one document ⇒ exactly three grids. Record axis named `t`. |
+| `fixtures/shared_tail.esm` | Two components that both declare an observed `O3`, so the last segment `O3` designates two variables. Pins the request-name rule (CONFORMANCE_SPEC §5.17.4): an exact request selects only its own variable, and a shared last segment is refused with `ambiguous_output_name`. |
 | `golden/*.json` | The derived plan each binding must reproduce. |
 
 ## The inputs, and why they are what they are
@@ -117,4 +118,6 @@ bug cannot hide behind the test.
 3. Write the expected plan to `golden/<id>.json` **by hand** — a golden blessed
    from an implementation's own output only pins that implementation's current
    behaviour, which is precisely the failure this corpus exists to prevent.
-4. Run both runners.
+4. A request that must be REFUSED gets a `refusals[]` entry instead, with no golden
+   and the registered code it `raises`.
+5. Run both runners.
