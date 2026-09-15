@@ -792,8 +792,8 @@ fn test_error_discrete_events_rejected() {
     let err = Compiled::from_flattened(&flat).unwrap_err();
     let msg = err.to_string();
     assert!(
-        msg.contains("discrete_events"),
-        "expected discrete_events in error, got: {msg}"
+        msg.starts_with("unsupported_construct: discrete event 'ping'"),
+        "expected the unsupported_construct refusal, got: {msg}"
     );
 }
 

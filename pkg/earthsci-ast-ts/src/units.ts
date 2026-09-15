@@ -732,6 +732,16 @@ function computeDimensions(
     case 'Pre':
       return finish(get(0))
 
+    case 'const': {
+      // A `const` that DECLARES its units has that unit (esm-spec §4.8.5);
+      // without `units` it is undeterminable, like a bare literal. An
+      // unresolvable string is reported at the containing expression field, not
+      // here.
+      const declared = (node as { units?: string }).units
+      if (declared === undefined) return unknown()
+      return finish(tryParseUnit(declared))
+    }
+
     default:
       // Structural / not-dimensionally-modelled ops (`index`, `fn`,
       // `faq`, `const`, `makearray`, `table_lookup`, `faq`, ...) AND
@@ -994,6 +1004,21 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
         // corpus pins `unit_inconsistency` at
         // `/models/<M>/equations/<i>` (tests/invalid/expected_errors.json).
         const eqLocation = `${location}/${equationsKey}/${index}`
+        // A declared `const` unit string that does not resolve is a defect at the
+        // containing expression field (esm-spec §4.8.5 item 2).
+        for (const [field, side] of [
+          ['lhs', equation.lhs],
+          ['rhs', equation.rhs],
+        ] as const) {
+          for (const units of unresolvableConstUnits(side)) {
+            warnings.push({
+              message: `Unit string '${units}' is not a recognised unit`,
+              code: ERROR_CODES.UNPARSEABLE_UNIT,
+              location: `${eqLocation}/${field}`,
+              units,
+            })
+          }
+        }
         checkAndReport(warnings, eqLocation, 'Error checking equation dimensions', () => {
           const lhsResult = checkDimensions(equation.lhs, bindings)
           const rhsResult = checkDimensions(equation.rhs, bindings)
@@ -1334,6 +1359,27 @@ function sameUnit(a: ParsedUnit, b: ParsedUnit): boolean {
 /** {@link formatDims}, followed by the exact scale when it is not 1. */
 function formatUnit(u: ParsedUnit): string {
   return u.exact.isOne() ? formatDims(u.dims) : `${formatDims(u.dims)} (scale ${u.exact})`
+}
+
+/**
+ * Every declared `const` unit string in `expr` that does not resolve against the
+ * registry (esm-spec §4.8.5 item 2), in walk order.
+ */
+function unresolvableConstUnits(expr: unknown): string[] {
+  const out: string[] = []
+  const walk = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      for (const child of node) walk(child)
+    } else if (node !== null && typeof node === 'object') {
+      const obj = node as Record<string, unknown>
+      if (obj.op === 'const' && typeof obj.units === 'string' && tryParseUnit(obj.units) === null) {
+        out.push(obj.units)
+      }
+      for (const child of Object.values(obj)) walk(child)
+    }
+  }
+  walk(expr)
+  return out
 }
 
 export function dimsEqual(a: CanonicalDims, b: CanonicalDims): boolean {

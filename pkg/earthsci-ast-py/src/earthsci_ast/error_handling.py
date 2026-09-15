@@ -215,6 +215,10 @@ DATA_SOURCE_URL_UNRESOLVED = "data_source_url_unresolved"
 
 SOLVER_VERSION_TOO_OLD = "solver_version_too_old"
 
+# Declared `units` on an expression node in a document declaring esm < 1.2.0
+# (esm-spec §4.8.5), raised as ``ConstUnitsError`` from ``units.py``.
+CONST_UNITS_VERSION_TOO_OLD = "const_units_version_too_old"
+
 # ===========================================================================
 # Template-library import / metaparameter codes (esm-spec §9.7), raised as
 # ``ExpressionTemplateError`` from ``template_imports.py`` (and
@@ -326,6 +330,19 @@ RECURRENCE_NOT_WELLFOUNDED = "recurrence_not_wellfounded"
 #: through a `makearray` region value or a whole-operand op -- or an RHS that is
 #: not a `faq` over the variable's frame.
 RECURRENCE_UNSUPPORTED_FORM = "recurrence_unsupported_form"
+
+
+# ===========================================================================
+# Evaluator refusal (esm-spec §9.6.6), raised as
+# ``earthsci_ast.expression.UnsupportedConstructError`` by ``esm_problem`` for
+# every pathway, before anything is built.
+# ===========================================================================
+
+#: A discrete event or an implicit equation (an equation whose LHS is an
+#: expression rather than an unknown, ``D(unknown)`` or ``ic(unknown)``) reached
+#: an evaluator that cannot run it. Refused rather than skipped: a run without
+#: the construct reports the initial value as its answer.
+UNSUPPORTED_CONSTRUCT = "unsupported_construct"
 
 
 # ===========================================================================

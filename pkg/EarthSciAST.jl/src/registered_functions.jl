@@ -1198,6 +1198,62 @@ function _lower_raw_enum_ops(node, enums, open_names::AbstractSet{String})
 end
 
 """
+    _lower_mounted_document_enums(document, target=document) -> target′
+
+Return raw-JSON `target`, taken from a document mounted at a §4.7 edge, with its
+`enum` ops lowered against `document`'s own `enums` block (esm-spec §9.3).
+`target` is not modified.
+
+Called once the mounted document has resolved in its own scope and before its
+component is spliced into the mounting document, whose block is a different one.
+`enums` do not merge across a mount, so this is the only block those ops can
+name.
+
+A template declaration's body is lowered with that template's `params` left
+open, as at the import edge ([`_lower_enum_ops_for_file`](@ref)): an op spelled
+with a parameter resolves at the call site. Everything else is lowered with no
+open names. Raises [`EnumLoweringError`](@ref).
+"""
+function _lower_mounted_document_enums(document, target=document)
+    enums = _is_object(document) ? _raw_get(document, "enums") : nothing
+    return _lower_mounted_enum_ops(target, enums)
+end
+
+function _lower_mounted_enum_ops(node, enums)
+    if _is_array(node)
+        return Any[_lower_mounted_enum_ops(v, enums) for v in node]
+    elseif _is_object(node)
+        _raw_get(node, "op") == "enum" && return _lower_raw_enum_ops(node, enums, Set{String}())
+        out = OrderedDict{String,Any}()
+        for (k, v) in pairs(node)
+            key = string(k)
+            out[key] = key == "expression_templates" && _is_object(v) ?
+                _lower_template_body_enums(v, enums) : _lower_mounted_enum_ops(v, enums)
+        end
+        return out
+    end
+    return node
+end
+
+function _lower_template_body_enums(templates, enums)
+    out = OrderedDict{String,Any}()
+    for (name, decl) in pairs(templates)
+        if _is_object(decl) && _raw_haskey(decl, "body")
+            params_raw = _raw_get(decl, "params")
+            params = Set{String}(String(p) for p in
+                (params_raw !== nothing && _is_array(params_raw) ? params_raw : Any[])
+                if p isa AbstractString)
+            lowered = OrderedDict{String,Any}(string(k) => v for (k, v) in pairs(decl))
+            lowered["body"] = _lower_raw_enum_ops(_raw_get(decl, "body"), enums, params)
+            out[string(name)] = lowered
+        else
+            out[string(name)] = decl
+        end
+    end
+    return out
+end
+
+"""
     lower_enums(file::EsmFile) -> EsmFile
 
 The PURE form: return a DEEP COPY of `file` with every `enum` op replaced by

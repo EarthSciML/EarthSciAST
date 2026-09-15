@@ -161,6 +161,9 @@ const ERROR_CODES = (
     # ── Document-scoped solver hints (esm-spec §2.2; solver.jl). ─────────
     SOLVER_VERSION_TOO_OLD = "solver_version_too_old",
 
+    # ── Declared units on a const node (esm-spec §4.8.5; units.jl). ──────
+    CONST_UNITS_VERSION_TOO_OLD = "const_units_version_too_old",
+
     # ── Template-library imports + load-time metaparameters (esm-spec §9.7;
     #    template_imports.jl). ──────────────────────────────────────────────
     TEMPLATE_IMPORT_VERSION_TOO_OLD = "template_import_version_too_old",
@@ -285,6 +288,12 @@ const ERROR_CODES = (
     # producer could not be materialized at build (esm-spec §9.6.6). Refused
     # rather than contracted as an empty range, which would read as 0.
     DERIVED_INDEX_SET_UNMATERIALIZED = "derived_index_set_unmaterialized",
+    # ── Evaluator refusal (tree_walk/; esm-spec §9.6.6). A discrete event or an
+    #    implicit equation reached the tree-walk evaluator, which runs neither.
+    #    Refused at build rather than skipped, because a run without the
+    #    construct reports the initial value as its answer. The ModelingToolkit
+    #    export runs both and never raises it. ─────────────────────────────────
+    UNSUPPORTED_CONSTRUCT = "unsupported_construct",
 )
 
 """
