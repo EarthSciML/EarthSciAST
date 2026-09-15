@@ -207,7 +207,10 @@ export function validateSearchsortedTable(
   }
   for (let i = 0; i < xs.length; i++) {
     if (Number.isNaN(xs[i]!)) {
-      throw new ClosedFunctionError(ERROR_CODES.SEARCHSORTED_NAN_IN_TABLE, `${where}: xs[${i + 1}] is NaN`)
+      throw new ClosedFunctionError(
+        ERROR_CODES.SEARCHSORTED_NAN_IN_TABLE,
+        `${where}: xs[${i + 1}] is NaN`,
+      )
     }
   }
   for (let i = 1; i < xs.length; i++) {
@@ -258,7 +261,10 @@ export function validateInterpAxis(axis: readonly number[], where: string): void
   }
   for (let i = 0; i < axis.length; i++) {
     if (Number.isNaN(axis[i]!)) {
-      throw new ClosedFunctionError(ERROR_CODES.INTERP_NAN_IN_AXIS, `${where}: axis[${i + 1}] is NaN`)
+      throw new ClosedFunctionError(
+        ERROR_CODES.INTERP_NAN_IN_AXIS,
+        `${where}: axis[${i + 1}] is NaN`,
+      )
     }
   }
   for (let i = 1; i < axis.length; i++) {

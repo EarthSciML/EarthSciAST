@@ -42,7 +42,8 @@ function sourceFiles(dir: string): string[] {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, entry.name)
     if (entry.isDirectory()) out.push(...sourceFiles(full))
-    else if (full.endsWith('.ts') && !full.endsWith('.test.ts') && !full.endsWith('.d.ts')) out.push(full)
+    else if (full.endsWith('.ts') && !full.endsWith('.test.ts') && !full.endsWith('.d.ts'))
+      out.push(full)
   }
   return out.sort()
 }
@@ -85,11 +86,19 @@ function scan(): Scan {
         const base = ext?.types[0]?.expression
         if (base && ts.isIdentifier(base)) superclass.set(node.name.text, base.text)
       }
-      if (ts.isConstructorDeclaration(node) && ts.isClassDeclaration(node.parent) && node.parent.name) {
+      if (
+        ts.isConstructorDeclaration(node) &&
+        ts.isClassDeclaration(node.parent) &&
+        node.parent.name
+      ) {
         const i = codeParamIndex(node.parameters)
         if (i >= 0) ctorCodeIndex.set(node.parent.name.text, i)
       }
-      if ((ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node)) && node.name && ts.isIdentifier(node.name)) {
+      if (
+        (ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node)) &&
+        node.name &&
+        ts.isIdentifier(node.name)
+      ) {
         const i = codeParamIndex(node.parameters)
         if (i >= 0) fnCodeIndex.set(`${sf.fileName}\0${node.name.text}`, i)
       }
@@ -100,7 +109,11 @@ function scan(): Scan {
   const classesWithCtor = new Set<string>()
   for (const sf of parsed) {
     const visit = (node: ts.Node): void => {
-      if (ts.isConstructorDeclaration(node) && ts.isClassDeclaration(node.parent) && node.parent.name) {
+      if (
+        ts.isConstructorDeclaration(node) &&
+        ts.isClassDeclaration(node.parent) &&
+        node.parent.name
+      ) {
         classesWithCtor.add(node.parent.name.text)
       }
       ts.forEachChild(node, visit)
@@ -123,7 +136,11 @@ function scan(): Scan {
     for (const stmt of sf.statements) {
       if (!ts.isVariableStatement(stmt)) continue
       for (const decl of stmt.declarationList.declarations) {
-        if (ts.isIdentifier(decl.name) && decl.initializer && ts.isStringLiteralLike(decl.initializer)) {
+        if (
+          ts.isIdentifier(decl.name) &&
+          decl.initializer &&
+          ts.isStringLiteralLike(decl.initializer)
+        ) {
           fileStringConsts.set(decl.name.text, decl.initializer.text)
         }
       }
@@ -131,7 +148,11 @@ function scan(): Scan {
 
     const check = (expr: ts.Expression | undefined, context: string): void => {
       if (!expr) return
-      while (ts.isParenthesizedExpression(expr) || ts.isAsExpression(expr) || ts.isSatisfiesExpression(expr)) {
+      while (
+        ts.isParenthesizedExpression(expr) ||
+        ts.isAsExpression(expr) ||
+        ts.isSatisfiesExpression(expr)
+      ) {
         expr = expr.expression
       }
       const literal = ts.isStringLiteralLike(expr)
@@ -148,7 +169,9 @@ function scan(): Scan {
       const where = `${rel}:${line}: ${context}`
       if (ts.isStringLiteralLike(expr)) {
         result.checked++
-        result.violations.push(`${where} raises the literal code '${expr.text}'; use ERROR_CODES instead`)
+        result.violations.push(
+          `${where} raises the literal code '${expr.text}'; use ERROR_CODES instead`,
+        )
       } else if (
         ts.isPropertyAccessExpression(expr) &&
         ts.isIdentifier(expr.expression) &&
@@ -156,7 +179,9 @@ function scan(): Scan {
       ) {
         result.checked++
         if (!Object.prototype.hasOwnProperty.call(ERROR_CODES, expr.name.text)) {
-          result.violations.push(`${where} raises ERROR_CODES.${expr.name.text}, which the registry does not define`)
+          result.violations.push(
+            `${where} raises ERROR_CODES.${expr.name.text}, which the registry does not define`,
+          )
         }
       } else if (ts.isIdentifier(expr) && fileStringConsts.has(expr.text)) {
         result.checked++

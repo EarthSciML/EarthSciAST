@@ -186,7 +186,10 @@ function evalExprNode(
     if (node.op === 'fn') {
       const fnName = node.name
       if (typeof fnName !== 'string') {
-        throw new EvaluatorError(ERROR_CODES.FN_MISSING_NAME, 'fn op missing required string `name` field')
+        throw new EvaluatorError(
+          ERROR_CODES.FN_MISSING_NAME,
+          'fn op missing required string `name` field',
+        )
       }
       const fnArgs: unknown[] = node.args.map((arg): unknown => {
         const arr = constArrayValue(arg)
