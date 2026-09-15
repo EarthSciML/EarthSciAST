@@ -432,6 +432,11 @@ func processLibrary(view map[string]any, fileOrders map[string][]string,
 	if err := expandLibraryEnumCalls(view, scope.templates.m, tpl, origin); err != nil {
 		return nil, err
 	}
+	// In the library's own scope, before an importing edge's `bindings`
+	// instantiate the templates and consume the names it closes.
+	if err := checkMetaparamLoopSymbols(scope.metaparams.keys, origin, scope.templates.m); err != nil {
+		return nil, err
+	}
 	return scope, nil
 }
 
@@ -692,7 +697,7 @@ func resolveTemplateMachinery(view map[string]any, orders map[string][]string,
 	}
 
 	// --- §9.7.6 name-collision check: no shadowing of visible names ---
-	if err := checkMetaparamNameCollisions(view, docMeta, docIsets); err != nil {
+	if err := checkMetaparamNameCollisions(view, topTemplates, docMeta, docIsets); err != nil {
 		return false, err
 	}
 
@@ -872,11 +877,34 @@ func closeDocumentMetaparams(docMeta *orderedMap, metaparameters map[string]int6
 	return values, nil
 }
 
+// checkMetaparamLoopSymbols enforces esm-spec §9.7.6 for loop symbols: a
+// metaparameter name must not spell a `ranges` key or `output_idx` entry of an
+// Expression node anywhere in trees. Substitution rewrites every bare string that
+// spells a bound metaparameter, and inside the node that binds it a loop symbol
+// is exactly such a string, so no field rule can tell the two apart.
+func checkMetaparamLoopSymbols(names []string, origin string, trees ...any) error {
+	if len(names) == 0 {
+		return nil
+	}
+	bound := map[string]struct{}{}
+	for _, t := range trees {
+		collectBoundSyms(bound, t)
+	}
+	for _, name := range names {
+		if _, ok := bound[name]; ok {
+			return newETErr(CodeMetaparamNameConflict,
+				fmt.Sprintf("%s: metaparameter '%s' collides with a loop symbol (a `ranges` key or `output_idx` entry) (esm-spec §9.7.6)", origin, name))
+		}
+	}
+	return nil
+}
+
 // checkMetaparamNameCollisions enforces esm-spec §9.7.6: a declared
 // metaparameter name must not shadow any visible index-set / variable / species
-// / parameter name. A collision is `metaparameter_name_conflict`. No-op when the
-// document declares no metaparameters.
-func checkMetaparamNameCollisions(view map[string]any, docMeta, docIsets *orderedMap) error {
+// / parameter name, nor any loop symbol. A collision is
+// `metaparameter_name_conflict`. No-op when the document declares no
+// metaparameters.
+func checkMetaparamNameCollisions(view map[string]any, topTemplates, docMeta, docIsets *orderedMap) error {
 	if docMeta.len() == 0 {
 		return nil
 	}
@@ -909,7 +937,9 @@ func checkMetaparamNameCollisions(view map[string]any, docMeta, docIsets *ordere
 				fmt.Sprintf("metaparameter '%s' collides with a visible variable/parameter/species/index-set name (esm-spec §9.7.6)", name))
 		}
 	}
-	return nil
+	// Components carry their imported templates by now; topTemplates is a root
+	// library's effective top-level sequence, imports included.
+	return checkMetaparamLoopSymbols(docMeta.keys, "document", view, topTemplates.m)
 }
 
 // substituteClosedMetaparams substitutes the closed metaparameter values into
@@ -948,7 +978,7 @@ func substituteClosedMetaparams(view map[string]any, topTemplates, docIsets *ord
 						continue
 					}
 				}
-				comp[k] = substituteMetaparams(comp[k], substVals)
+				comp[k] = substituteMetaparamsField(k, comp[k], substVals)
 			}
 		}
 	}

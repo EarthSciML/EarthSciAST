@@ -360,6 +360,64 @@ OBSERVED_CYCLE = "observed_cycle"
 
 
 # ===========================================================================
+# Codes raised outside the families above, collected here so `ERROR_CODES`
+# (which is built from this module's globals) carries every code the package
+# raises. Each value is the string its raise site already emitted.
+# ===========================================================================
+
+#: A subsystem `ref` that does not resolve to a file (esm-spec §4.7).
+UNRESOLVED_SUBSYSTEM_REF = "unresolved_subsystem_ref"
+#: A subsystem `ref` whose file carries MORE THAN ONE top-level system. The mount
+#: names exactly one component, so there is no rule for choosing among them.
+AMBIGUOUS_SUBSYSTEM_REF = "ambiguous_subsystem_ref"
+#: A §4.7 ref mount's merged `index_sets` name collides with a non-deep-equal
+#: definition in the importing document's registry (esm-spec §9.6.6).
+SUBSYSTEM_INDEX_SET_CONFLICT = "subsystem_index_set_conflict"
+
+#: A rewrite-target op reached evaluation without being lowered (esm-spec
+#: §9.6.6).
+UNLOWERED_OPERATOR = "unlowered_operator"
+
+#: `couple` / `operator_compose` flatten-time refusals (esm-spec §10.3,
+#: esm-libraries-spec §4.7.1-§4.7.2), raised from :mod:`earthsci_ast.flatten`.
+COUPLE_MULTIPLICATIVE_NO_TENDENCY = "couple_multiplicative_no_tendency"
+OPERATOR_COMPOSE_NO_MERGE = "operator_compose_no_merge"
+OPERATOR_COMPOSE_REQUIRE_MATCH_UNMATCHED = "operator_compose_require_match_unmatched"
+OPERATOR_COMPOSE_AMBIGUOUS_BARE_NAME = "operator_compose_ambiguous_bare_name"
+
+#: The projection-pushdown rewrite met a join it does not recognise
+#: (:mod:`earthsci_ast.pushdown_rewrite`).
+PUSHDOWN_JOIN_UNRECOGNISED = "pushdown_join_unrecognised"
+
+#: Structural-validation finding codes (:mod:`earthsci_ast.structural_checks`,
+#: :mod:`earthsci_ast.validation`).
+OPERATOR_ARITY = "operator_arity"
+#: A `broadcast` node's `fn` is absent, not a scalar operator, or applied at an
+#: arity that operator does not admit (esm-spec §4.3.4 / §9.6.6).
+INVALID_BROADCAST_FN = "invalid_broadcast_fn"
+ARRAY_SHAPE_MISMATCH = "array_shape_mismatch"
+AGGREGATE_SEMANTICS = "aggregate_semantics"
+#: The collect-level label of the inline-test pass (esm-spec §6.6.2-§6.6.5). Each
+#: finding normally carries its own code (`undefined_variable`,
+#: `unknown_override_key`, `assertion_rank_mismatch`); this is the fallback.
+INLINE_TEST_SEMANTICS = "inline_test_semantics"
+CIRCULAR_DEPENDENCY = "circular_dependency"
+INVALID_METADATA_FORMAT = "invalid_metadata_format"
+INVALID_TEMPORAL_RESOLUTION = "invalid_temporal_resolution"
+UNCOVERED_STATE_VARIABLE = "uncovered_state_variable"
+REACTION_CONSISTENCY = "reaction_consistency"
+MISSING_REGISTERED_FUNCTION = "missing_registered_function"
+RELATIONAL_NODE_IN_CONTINUOUS = "relational_node_in_continuous"
+UNDEFINED_INDEX_SET = "undefined_index_set"
+JOIN_KEY_INVALID_TYPE = "join_key_invalid_type"
+JOIN_SYMS_UNKNOWN_SYMBOL = "join_syms_unknown_symbol"
+JOIN_SIDE_AMBIGUOUS = "join_side_ambiguous"
+#: A unit-analysis finding that is neither a dimensional mismatch nor an
+#: unparseable unit.
+ANALYSIS = "analysis"
+
+
+# ===========================================================================
 # Evaluable-core op with no evaluation rule (esm-spec §9.6.6), raised as
 # ``earthsci_ast.numpy_interpreter.UnevaluableOperatorError``.
 # ===========================================================================

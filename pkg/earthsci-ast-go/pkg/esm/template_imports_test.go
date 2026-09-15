@@ -142,6 +142,12 @@ func TestTemplateImports_ConformanceGoldens(t *testing.T) {
 		// §9.7.6 substitution is per-FIELD: a metaparameter named after the
 		// structural string field beside it must not rewrite that field.
 		{"metaparam_axis_name_collision", "fixture.esm", "expanded.esm"},
+		// §9.7.6 fourth structural family (loop symbols, references, enums,
+		// units, free text) and map keys as declared names.
+		{"metaparam_structural_field_collision", "fixture.esm", "expanded.esm"},
+		// §9.7.7 rename through map entries spelled like structural keys: a
+		// map entry name is never dispatched on.
+		{"import_rename_name_keyed_map_entries", "fixture.esm", "expanded.esm"},
 		// esm-spec §9.3: a library's `enum` ops resolve against the library's own block.
 		{"import_library_enum", "fixture.esm", "expanded.esm"},
 		{"import_library_enum", "fixture_importer_redeclares.esm", "expanded_importer_redeclares.esm"},
@@ -263,6 +269,120 @@ func TestTemplateImports_MetaparamSubstitutionIsPerField(t *testing.T) {
 	if a := open["args"].([]any); a[1] != float64(3) {
 		t.Errorf("open-op args[1] = %#v; want 3", a[1])
 	}
+}
+
+// TestTemplateImports_MetaparamStructuralFieldCollision pins the fourth §9.7.6
+// structural family and the name-keyed-map rule over the shared fixture. Five
+// metaparameters are spelled like structural values — `row_id` (a join key
+// column, free text), `m` (a unit symbol), `edge` (a placement tag, a comment,
+// citation text), `ode` (an enum) — and each also sits in an expression
+// position, where it closes; so does `a`, a dense range bound beside the loop
+// symbol `p` (a metaparameter spelled like a loop symbol is
+// `metaparameter_name_conflict`).
+func TestTemplateImports_MetaparamStructuralFieldCollision(t *testing.T) {
+	path := tiConfDir(t, "metaparam_structural_field_collision", "fixture.esm")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	out, err := resolveAndLowerJSON(string(data), filepath.Dir(path), nil)
+	if err != nil {
+		t.Fatalf("resolve+lower: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(out), &doc); err != nil {
+		t.Fatalf("decode expanded: %v", err)
+	}
+	m := doc["models"].(map[string]any)["M"].(map[string]any)
+	eqs := m["equations"].([]any)
+	defRHS := func(name string) map[string]any {
+		t.Helper()
+		for _, e := range eqs {
+			eq := e.(map[string]any)
+			if lhs, ok := eq["lhs"].(string); ok && lhs == name {
+				return eq["rhs"].(map[string]any)
+			}
+		}
+		t.Fatalf("no defining equation for %q", name)
+		return nil
+	}
+	want := func(what string, got any, wantJSON string) {
+		t.Helper()
+		var w any
+		if err := json.Unmarshal([]byte(wantJSON), &w); err != nil {
+			t.Fatalf("bad expectation %s: %v", wantJSON, err)
+		}
+		if tiCanonJSON(t, got) != tiCanonJSON(t, w) {
+			t.Errorf("%s = %s; want %s", what, tiCanonJSON(t, got), wantJSON)
+		}
+	}
+
+	want("system_kind", m["system_kind"], `"ode"`)
+	want("reference", m["reference"], `{"citation":"edge","doi":"edge","url":"edge","notes":"row_id"}`)
+	u := m["variables"].(map[string]any)["u"].(map[string]any)
+	want("u.default_units", u["default_units"], `"m"`)
+	want("u.location", u["location"], `"edge"`)
+	for _, e := range eqs {
+		eq := e.(map[string]any)
+		if _, bare := eq["lhs"].(string); bare {
+			continue
+		}
+		want("D equation _comment", eq["_comment"], `"edge"`)
+		want("D equation rhs.args", eq["rhs"].(map[string]any)["args"], `["c",3]`)
+	}
+
+	// A join clause's key columns and the loop symbols they are read at are
+	// names; substituting them makes the document schema-invalid.
+	r := defRHS("r")
+	want("r.output_idx", r["output_idx"], `["p"]`)
+	want("r.join", r["join"], `[{"on":[["row_id","row_id"]],"syms":["p","b"]}]`)
+	want("r.expr.args", r["expr"].(map[string]any)["args"], `[22,5]`)
+	k := defRHS("k")
+	want("k.arg", k["arg"], `"p"`)
+	want("k.ranges.p", k["ranges"].(map[string]any)["p"], `[1,11]`)
+	want("k.expr.args", k["expr"].(map[string]any)["args"], `["c",7]`)
+
+	// A map key is a declared name, not a field: variables named `source` and
+	// `type` still have their guesses substituted.
+	want("guesses", m["guesses"], `{"source":{"op":"*","args":[5,2]},"type":{"op":"*","args":[5,3]}}`)
+	want("source rhs.args", defRHS("source")["args"], `["c",22]`)
+	want("type rhs.args", defRHS("type")["args"], `["c",7]`)
+}
+
+// TestMetaparamSubstitution_TablesMatchSharedClassification compares the skip
+// set and the name-keyed map set to the classification of every string-capable
+// schema property (scripts/check-metaparameter-substitution-fields.py); all
+// five bindings compare against the same file.
+func TestMetaparamSubstitution_TablesMatchSharedClassification(t *testing.T) {
+	path := filepath.Join(tiRepoRoot(t), "tests", "metaparameter_substitution",
+		"field_classification.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	var cls struct {
+		SkipKeys []string `json:"skip_keys"`
+		MapKeys  []string `json:"name_keyed_map_keys"`
+	}
+	if err := json.Unmarshal(data, &cls); err != nil {
+		t.Fatalf("decode %s: %v", path, err)
+	}
+	compare := func(name string, have map[string]struct{}, want []string) {
+		t.Helper()
+		wantSet := keySet(want)
+		for k := range wantSet {
+			if _, ok := have[k]; !ok {
+				t.Errorf("%s is missing %q", name, k)
+			}
+		}
+		for k := range have {
+			if _, ok := wantSet[k]; !ok {
+				t.Errorf("%s has %q, which the classification does not", name, k)
+			}
+		}
+	}
+	compare("metaSubstSkipKeys", metaSubstSkipKeys, cls.SkipKeys)
+	compare("nameKeyedMapKeys", nameKeyedMapKeys, cls.MapKeys)
 }
 
 // TestMatchScoping_ConformanceGoldens drives the §9.6.1 `where` match-scoping
