@@ -67,7 +67,11 @@ from .flatten import (
     flatten,
 )
 from .lower_table_lookup import lower_table_lookups
-from .numpy_interpreter import _EVALUABLE_CORE_OPS, UnreachableSpatialOperatorError
+from .numpy_interpreter import (
+    _EVALUABLE_CORE_OPS,
+    UnevaluableOperatorError,
+    UnreachableSpatialOperatorError,
+)
 from .parse import load_document, load_path
 from .pushdown_rewrite import (
     _inject_pushdown_aliases,
@@ -591,7 +595,7 @@ def esm_problem(
     # esm-spec §9.6.6 `unsupported_construct`: neither evaluator runs a discrete
     # event or solves an implicit equation, so refuse both here, for every route,
     # rather than build a model that silently runs without them.
-    _refuse_unsupported_constructs(flat)
+    _refuse_unsupported_constructs(flat, file)
 
     # esm-spec §6.6.2 "Unrecognized override keys": a `p` key that names no
     # single parameter is an ERROR, raised at the one front door every pathway
@@ -797,7 +801,7 @@ def _declares_resolvable_shape(flat: FlattenedSystem) -> bool:
     return False
 
 
-def _refuse_unsupported_constructs(flat: FlattenedSystem) -> None:
+def _refuse_unsupported_constructs(flat: FlattenedSystem, file: EsmFile | None) -> None:
     """esm-spec §9.6.6 ``unsupported_construct`` — refuse an event (continuous or
     discrete) or an implicit equation before any pathway is built.
 
@@ -816,15 +820,27 @@ def _refuse_unsupported_constructs(flat: FlattenedSystem) -> None:
         or any(_has_array_op(eq.lhs) or _has_array_op(eq.rhs) for eq in flat.equations)
         else "Python scalar interpreter"
     )
-    for construct, events in (
-        ("continuous event", flat.continuous_events),
-        ("discrete event", flat.discrete_events),
-    ):
-        if events:
-            name = getattr(events[0], "name", None)
-            raise UnsupportedConstructError(
-                construct, f"'{name}'" if name else "(unnamed)", evaluator
+    # `flatten` lifts only the TOP-LEVEL components' events, so an event owned by
+    # an inline subsystem is not in `flat` at all; look for it in the document.
+    found = next(
+        (
+            (construct, events[0])
+            for construct, events in (
+                ("continuous event", flat.continuous_events),
+                ("discrete event", flat.discrete_events),
             )
+            if events
+        ),
+        None,
+    )
+    if found is None and file is not None:
+        found = _first_subsystem_event(file)
+    if found is not None:
+        construct, event = found
+        name = getattr(event, "name", None)
+        raise UnsupportedConstructError(
+            construct, f"'{name}'" if name else "(unnamed)", evaluator
+        )
     for eq in flat.equations:
         if is_implicit_lhs(eq.lhs):
             raise UnsupportedConstructError(
@@ -832,6 +848,32 @@ def _refuse_unsupported_constructs(flat: FlattenedSystem) -> None:
                 f"`{_expr_to_string(eq.lhs)} ~ {_expr_to_string(eq.rhs)}`",
                 evaluator,
             )
+
+
+def _first_subsystem_event(file: EsmFile) -> tuple[str, Any] | None:
+    """The first event an inline subsystem declares, at any depth under any model
+    or reaction system of ``file``, a continuous one before a discrete one, as
+    ``(construct, event)``; ``None`` when there is none."""
+
+    def in_subsystems(component: Any) -> tuple[str, Any] | None:
+        for sub in (getattr(component, "subsystems", None) or {}).values():
+            for construct, attr in (
+                ("continuous event", "continuous_events"),
+                ("discrete event", "discrete_events"),
+            ):
+                events = getattr(sub, attr, None)
+                if events:
+                    return construct, events[0]
+            found = in_subsystems(sub)
+            if found is not None:
+                return found
+        return None
+
+    for component in [*file.models.values(), *file.reaction_systems.values()]:
+        found = in_subsystems(component)
+        if found is not None:
+            return found
+    return None
 
 
 def _assert_no_unlowered_operator(flat: FlattenedSystem) -> None:
@@ -869,6 +911,10 @@ def _assert_no_unlowered_operator(flat: FlattenedSystem) -> None:
     lowered is untouched here. What the walk refuses is a rewrite-target op that
     no rule eliminated — dead or live, which is §9.6.3's point.
 
+    The same walk refuses an evaluable-core op no pathway evaluates
+    (``unevaluable_operator``, esm-spec §9.6.6) — before any pathway is chosen,
+    so an op in an untaken ``ifelse`` branch is refused rather than skipped.
+
     Runs AFTER the §4.7.6.12 surviving-spatial-dimension check above, so a
     document that trips both keeps the diagnostic it has always reported. Both
     carry ``code = "unlowered_operator"``.
@@ -880,7 +926,19 @@ def _assert_no_unlowered_operator(flat: FlattenedSystem) -> None:
         _walk_for_unlowered(rhs, structural_derivative_ok=False)
 
 
-def _walk_for_unlowered(expr: Any, *, structural_derivative_ok: bool) -> None:
+#: Evaluable-core ops no Python pathway evaluates, refused at the front door with
+#: ``unevaluable_operator`` (esm-spec §9.6.6) when they stand OUTSIDE a ``faq``.
+#: Inside one they may be a value-invention producer (``value_invention``'s
+#: ``_VI_BODY_OPS`` / ``_VI_ARGWITNESS_OPS``), which the build materializes before
+#: anything is evaluated, so the walk leaves those to that stage.
+_FRONT_DOOR_UNEVALUABLE_OPS: frozenset[str] = frozenset(
+    {"rank", "distinct", "argmin", "argmax", "enum", "apply_expression_template"}
+)
+
+
+def _walk_for_unlowered(
+    expr: Any, *, structural_derivative_ok: bool, inside_faq: bool = False
+) -> None:
     """Raise on the first non-evaluable-core node in ``expr`` (pre-order).
 
     ``structural_derivative_ok`` marks an equation-LHS tree, the one position
@@ -897,8 +955,14 @@ def _walk_for_unlowered(expr: Any, *, structural_derivative_ok: bool) -> None:
             raise UnreachableSpatialOperatorError(op)
     elif op not in _EVALUABLE_CORE_OPS:
         raise UnreachableSpatialOperatorError(op)
+    elif op in _FRONT_DOOR_UNEVALUABLE_OPS and not inside_faq and not structural_derivative_ok:
+        raise UnevaluableOperatorError(op)
     for child in iter_children(expr):
-        _walk_for_unlowered(child, structural_derivative_ok=structural_derivative_ok)
+        _walk_for_unlowered(
+            child,
+            structural_derivative_ok=structural_derivative_ok,
+            inside_faq=inside_faq or op == "faq",
+        )
 
 
 # --------------------------------------------------------------------------- #

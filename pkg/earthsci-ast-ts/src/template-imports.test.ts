@@ -267,6 +267,51 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
     ).toBe('template_constraint_unknown_index_set')
   })
 
+  it("import_library_enum: a library's enum ops resolve against the library's own block (§9.3)", () => {
+    expect(canonEqs(expandRaw(conf('import_library_enum', 'fixture.esm')))).toEqual(
+      canonEqs(golden(conf('import_library_enum', 'expanded.esm'))),
+    )
+    expect(
+      canonEqs(expandRaw(conf('import_library_enum', 'fixture_importer_redeclares.esm'))),
+    ).toEqual(canonEqs(golden(conf('import_library_enum', 'expanded_importer_redeclares.esm'))))
+    // The importer's same-name enum (g_per_hp_hr = 7) does not reach the library
+    // body, which keeps the library's 1; the importer's own enum ops, including
+    // one bound into the template's parameter, resolve against the importer's.
+    const m = (loadPath(conf('import_library_enum', 'fixture_importer_redeclares.esm')) as any)
+      .models.Consumer
+    const libraryBody = definingRhs(m, 'isPerHorsepowerHour')
+    expect(libraryBody.op).toBe('==')
+    expect(libraryBody.args[1]).toMatchObject({ op: 'const', value: 1 })
+    expect(definingRhs(m, 'importerCode')).toMatchObject({ op: 'const', value: 7 })
+    const callerBound = definingRhs(m, 'callerBoundCode')
+    expect(callerBound.args[0]).toMatchObject({ op: 'const', value: 7 })
+    expect(callerBound.args[1]).toMatchObject({ op: 'const', value: 1 })
+    // The library's own call binds `g_per_gallon`, so it keeps the library's 2; a
+    // symbol the importer binds, directly or through a forwarded parameter, takes 9.
+    expect(definingRhs(m, 'gallonCode')).toMatchObject({ op: 'const', value: 2 })
+    expect(definingRhs(m, 'importerBoundCode')).toMatchObject({ op: 'const', value: 9 })
+    expect(definingRhs(m, 'forwardedCode')).toMatchObject({ op: 'const', value: 9 })
+    // An importer declaring no enums still loads the library's own call.
+    const noEnums = (loadPath(conf('import_library_enum', 'fixture.esm')) as any).models.Consumer
+    expect(definingRhs(noEnums, 'gallonCode')).toMatchObject({ op: 'const', value: 2 })
+  })
+
+  it.each(['fixture.esm', 'fixture_importer_declares.esm'])(
+    'import_library_enum_undeclared/%s: unknown_enum reported against the library (§9.3)',
+    (fixture) => {
+      let caught: unknown
+      try {
+        loadPath(conf('import_library_enum_undeclared', fixture))
+      } catch (e) {
+        caught = e
+      }
+      expect((caught as { code?: string } | undefined)?.code).toBe('unknown_enum')
+      const message = String((caught as Error | undefined)?.message)
+      expect(message).toContain('lib.esm')
+      expect(message).toContain('plus_horsepower_code')
+    },
+  )
+
   it('import_rebind_keyed_factors: free-name rebind rewrites body + registry factors (§9.7.7)', () => {
     // rebind row_count/row_cols/row_w -> meshA_* transitively through the ragged
     // index set's offsets/values AND the rule body; the consumer's own

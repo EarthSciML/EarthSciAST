@@ -131,33 +131,33 @@
         },
         "length_ratio": {
           "type": "unknown",
-          "units": "1",
-          "description": "DISCRIMINATOR: `mi` and `m` are COMMENSURATE, so their ratio is dimensionless. A binding that admitted `mi` on some axis other than [length] fails here."
+          "units": "mi/m",
+          "description": "link_length \u00f7 reference_length, declared `mi/m`: `mi` and `m` are commensurate, so the ratio is dimensionless, but its scale is 1609.344, not 1. A scale-aware checker rejects this ratio declared as `1` (esm-spec \u00a74.8.3); the dimension and exact scale of each unit are pinned by tests/conformance/unit_registry."
         },
         "speed_ratio": {
           "type": "unknown",
-          "units": "1",
-          "description": "DISCRIMINATOR: (mi/h) ÷ (m/s) is dimensionless -- the compound, not the symbol."
+          "units": "(mi/h)/(m/s)",
+          "description": "(mi/h) ÷ (m/s), declared `(mi/h)/(m/s)`: dimensionless, scale 0.44704 -- the compound, not the symbol. A scale-aware checker rejects this ratio declared as `1` (esm-spec §4.8.3); the dimension and exact scale of each unit are pinned by tests/conformance/unit_registry."
         },
         "power_ratio": {
           "type": "unknown",
-          "units": "1",
-          "description": "DISCRIMINATOR: `hp` ÷ `W` is dimensionless, so `hp` must be a POWER and not, say, a force or an energy."
+          "units": "hp/W",
+          "description": "`hp` ÷ `W`, declared `hp/W`: dimensionless, scale 745.6998715822702 (550 ft·lbf/s). A scale-aware checker rejects this ratio declared as `1` (esm-spec §4.8.3); the dimension and exact scale of each unit are pinned by tests/conformance/unit_registry."
         },
         "gallon_ratio": {
           "type": "unknown",
-          "units": "1",
-          "description": "DISCRIMINATOR: `gal` ÷ `L` is dimensionless, so `gal` must be a [length]^3."
+          "units": "gal/L",
+          "description": "`gal` ÷ `L`, declared `gal/L`: dimensionless, scale 3.785411784 (the US liquid gallon). A scale-aware checker rejects this ratio declared as `1` (esm-spec §4.8.3); the dimension and exact scale of each unit are pinned by tests/conformance/unit_registry."
         },
         "pressure_ratio": {
           "type": "unknown",
-          "units": "1",
-          "description": "DISCRIMINATOR: `inHg` ÷ `Pa` is dimensionless. This is the assertion whose absence let `inHg` live in one binding for three days."
+          "units": "inHg/Pa",
+          "description": "`inHg` ÷ `Pa`, declared `inHg/Pa`: dimensionless, scale 3386.388640341. `inHg` has to resolve in every binding for this document to load at all. A scale-aware checker rejects this ratio declared as `1` (esm-spec §4.8.3); the dimension and exact scale of each unit are pinned by tests/conformance/unit_registry."
         },
         "pound_per_ton": {
           "type": "unknown",
-          "units": "1",
-          "description": "DISCRIMINATOR: `lb` ÷ `short_ton` is dimensionless, and the two are the SAME mass here (2000 : 1) -- which is exactly why tests/conformance/unit_registry pins the SCALES as well, since the dimension check alone passes either rounding."
+          "units": "lb/short_ton",
+          "description": "`lb` ÷ `short_ton`, declared `lb/short_ton`: dimensionless, scale exactly 1/2000. A scale-aware checker rejects this ratio declared as `1` (esm-spec §4.8.3); the dimension and exact scale of each unit are pinned by tests/conformance/unit_registry."
         },
         "fuel_mass_rate": {
           "type": "unknown",

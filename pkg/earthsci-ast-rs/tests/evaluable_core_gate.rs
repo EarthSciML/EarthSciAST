@@ -61,8 +61,8 @@
 use std::collections::HashMap;
 
 use earthsci_ast::{
-    Compiled, EsmFile, SolveOptions, load_path, run_inline_tests, run_inline_tests_with_base_dir,
-    validate,
+    Compiled, EsmFile, Expr, SolveOptions, evaluate, load_path, run_inline_tests,
+    run_inline_tests_with_base_dir, validate,
 };
 use serde_json::json;
 
@@ -449,5 +449,49 @@ fn an_ordinary_scalar_document_still_answers() {
         r.passed,
         "p*10 + Pre(sqrt(25)) = 25 must still evaluate: actual={:?} {}",
         r.actual, r.message
+    );
+}
+
+/// The shared cross-binding fixture (`tests/conformance/unevaluable_operator/`,
+/// esm-spec §9.6.6) through the public `evaluate`. Each case puts the op in the
+/// UNTAKEN branch of an `ifelse`, so only a check that precedes evaluation
+/// refuses it — and the refusal must carry the wire code and name the op, the
+/// same as in the other four bindings.
+#[test]
+fn the_shared_unevaluable_operator_fixture_is_refused_by_evaluate() {
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/conformance/unevaluable_operator/cases.json");
+    let fixture: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("read fixture"))
+            .expect("fixture is JSON");
+    let code = fixture["code"].as_str().expect("code");
+    let bindings: HashMap<String, f64> =
+        serde_json::from_value(fixture["bindings"].clone()).expect("bindings");
+
+    let cases = fixture["cases"].as_array().expect("cases");
+    assert!(!cases.is_empty());
+    for case in cases {
+        let id = case["id"].as_str().expect("id");
+        let op = case["op"].as_str().expect("op");
+        let expr: Expr =
+            serde_json::from_value(case["expression"].clone()).expect("expression decodes");
+        match evaluate(&expr, &bindings) {
+            Ok(v) => panic!("{id}: `{op}` has no evaluation rule, but evaluate answered {v}"),
+            Err(messages) => {
+                let joined = messages.join("; ");
+                assert!(
+                    joined.contains(code) && joined.contains(&format!("'{op}'")),
+                    "{id}: want `{code}` naming '{op}', got: {joined}"
+                );
+            }
+        }
+    }
+
+    let control: Expr =
+        serde_json::from_value(fixture["control"]["expression"].clone()).expect("control");
+    let expected = fixture["control"]["expected"].as_f64().expect("expected");
+    assert_eq!(
+        evaluate(&control, &bindings).expect("control evaluates"),
+        expected
     );
 }

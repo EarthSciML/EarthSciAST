@@ -1,0 +1,36 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "mount_forwarded_axis_column",
+    "description": "A 59-layer column component that does NOT declare its axis: it imports `lev` from the grid library tests/valid/mount_forwarded_axis_grid_lib.esm and forwards its own metaparameter through the import (`bindings: {NLEV: NLEV}`, own NLEV default 59), so the axis closes and folds to 59 in this document's scope. This is the grid-library shape of issue #236. It loads standalone with `lev` = 59. It is mounted at a top-level `models.<k>` beside a nested mount of itself in tests/valid/mount_forwarded_axis_toplevel_beside_nested.esm.",
+    "authors": ["EarthSciAST"],
+    "created": "2026-09-15T00:00:00Z",
+    "tags": ["index_sets", "metaparameter", "template-library", "mount", "column"]
+  },
+  "metaparameters": {
+    "NLEV": { "type": "integer", "default": 59, "description": "column levels" }
+  },
+  "models": {
+    "Column": {
+      "expression_template_imports": [
+        { "ref": "./mount_forwarded_axis_grid_lib.esm", "bindings": { "NLEV": "NLEV" } }
+      ],
+      "variables": {
+        "T": {
+          "type": "unknown",
+          "units": "K",
+          "shape": ["lev"],
+          "default": 273.0,
+          "description": "layer temperature"
+        }
+      },
+      "equations": [
+        {
+          "_comment": "Newtonian relaxation per layer, broadcast over lev: d(T)/dt = -T.",
+          "lhs": { "op": "D", "args": ["T"], "wrt": "t" },
+          "rhs": { "op": "*", "args": [-1.0, "T"] }
+        }
+      ]
+    }
+  }
+}

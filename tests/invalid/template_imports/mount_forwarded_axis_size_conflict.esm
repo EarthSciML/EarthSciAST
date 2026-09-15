@@ -1,0 +1,14 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "mount_forwarded_axis_size_conflict",
+    "description": "INVALID, resolver-level (esm-spec §4.7 'Index-set merge'). This is the size-disagreement companion of tests/valid/mount_forwarded_axis_toplevel_beside_nested.esm. `models.A` mounts ../../valid/mount_forwarded_axis_column.esm at TOP LEVEL, where the grid-library axis `lev` closes at the column's own NLEV = 59. `models.W` mounts ../../valid/mount_forwarded_axis_nested_4.esm, whose NESTED `subsystems.col` mounts the same column with `bindings: {NLEV: 4}`, so `lev` closes at 4. Both contributions are concrete, and they disagree, so the load MUST fail with subsystem_index_set_conflict, the §4.7 merge diagnostic with its index_set_rename remedy. It must not be template_import_index_set_conflict, and neither size may silently win.",
+    "authors": ["EarthSciAST"],
+    "created": "2026-09-15T00:00:00Z",
+    "tags": ["subsystem", "index_sets", "metaparameter", "merge", "mount", "toplevel-ref", "conflict", "issue-236"]
+  },
+  "models": {
+    "A": { "ref": "../../valid/mount_forwarded_axis_column.esm" },
+    "W": { "ref": "../../valid/mount_forwarded_axis_nested_4.esm" }
+  }
+}

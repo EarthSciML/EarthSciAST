@@ -24,8 +24,9 @@ pub enum CompileError {
     /// without its residual solved, reports a wrong answer, and nothing in that
     /// answer says a construct was dropped.
     #[error(
-        "unsupported_construct: {construct} {detail} is not supported by the {evaluator}; \
-         refusing the build rather than running the model without it (esm-spec §9.6.6)"
+        "{code}: {construct} {detail} is not supported by the {evaluator}; \
+         refusing the build rather than running the model without it (esm-spec §9.6.6)",
+        code = crate::diagnostic::codes::UNSUPPORTED_CONSTRUCT
     )]
     UnsupportedConstruct {
         /// Which construct: [`CONTINUOUS_EVENT`], [`DISCRETE_EVENT`] or
@@ -163,6 +164,19 @@ pub enum CompileError {
     UnevaluableOperatorError {
         /// The offending operator name (e.g. `"skolem"`).
         op: String,
+    },
+
+    /// An expression ranges over a `kind: "derived"` index set whose
+    /// value-invention producer could not be materialized at build (esm-spec
+    /// §4.2 / §9.6.6). Refused rather than contracted as an empty range, which
+    /// folds to the additive identity and reads as a plausible 0.
+    #[error("{code}: {reason}")]
+    ValueInventionRefused {
+        /// `derived_index_set_unmaterialized`, or `relational_node_in_continuous`
+        /// when the producer reads live state.
+        code: &'static str,
+        /// The index set, its producer, and why the producer could not run.
+        reason: String,
     },
 
     /// A `table_lookup` node that cannot be lowered to its esm-spec §9.5.3
@@ -361,10 +375,77 @@ pub fn discrete_event_refusal(evaluator: &'static str, name: Option<&str>) -> Co
     event_refusal(DISCRETE_EVENT, evaluator, name)
 }
 
-/// The first equation that constrains its operands only implicitly. An `ic`
-/// LHS is an initial condition, and a derivative-operator LHS the
-/// classification cannot credit is a rewrite target the `unlowered_operator`
-/// gate reports; neither is counted.
+/// The first event `model` or any of its inline subsystems declares, a
+/// continuous one before a discrete one: its construct ([`CONTINUOUS_EVENT`] or
+/// [`DISCRETE_EVENT`]) and its name (`None` for an unnamed one). The subsystems
+/// are searched in their raw JSON: mounting keeps only their variables and
+/// equations, and `flatten` does not lift a subsystem's events into the
+/// flattened system, so no check on the flattened event lists can see one.
+pub(crate) fn first_event(
+    model: &crate::types::Model,
+) -> Option<(&'static str, Option<String>)> {
+    if let Some(event) = model.continuous_events.as_ref().and_then(|e| e.first()) {
+        return Some((CONTINUOUS_EVENT, event.name.clone()));
+    }
+    if let Some(event) = model.discrete_events.as_ref().and_then(|e| e.first()) {
+        return Some((DISCRETE_EVENT, event.name.clone()));
+    }
+    model
+        .subsystems
+        .as_ref()
+        .and_then(|subs| subs.values().find_map(first_event_in_json))
+}
+
+/// [`first_event`] over every model and reaction system in `file`, subsystems
+/// included.
+pub(crate) fn first_event_in_file(
+    file: &crate::types::EsmFile,
+) -> Option<(&'static str, Option<String>)> {
+    let in_models = file
+        .models
+        .as_ref()
+        .and_then(|models| models.values().find_map(first_event));
+    in_models.or_else(|| {
+        file.reaction_systems.as_ref().and_then(|systems| {
+            systems.values().find_map(|rs| {
+                if let Some(event) = rs.continuous_events.as_ref().and_then(|e| e.first()) {
+                    return Some((CONTINUOUS_EVENT, event.name.clone()));
+                }
+                if let Some(event) = rs.discrete_events.as_ref().and_then(|e| e.first()) {
+                    return Some((DISCRETE_EVENT, event.name.clone()));
+                }
+                rs.subsystems
+                    .as_ref()
+                    .and_then(|subs| subs.values().find_map(first_event_in_json))
+            })
+        })
+    })
+}
+
+fn first_event_in_json(value: &serde_json::Value) -> Option<(&'static str, Option<String>)> {
+    for (key, construct) in [
+        ("continuous_events", CONTINUOUS_EVENT),
+        ("discrete_events", DISCRETE_EVENT),
+    ] {
+        if let Some(event) = value
+            .get(key)
+            .and_then(|v| v.as_array())
+            .and_then(|events| events.first())
+        {
+            let name = event.get("name").and_then(|n| n.as_str());
+            return Some((construct, name.map(str::to_string)));
+        }
+    }
+    value
+        .get("subsystems")
+        .and_then(|s| s.as_object())
+        .and_then(|subs| subs.values().find_map(first_event_in_json))
+}
+
+/// The first equation that constrains its operands only implicitly, including a
+/// time derivative of an expression (`D(a + b) ~ 3`), which credits no state. An
+/// `ic` LHS is an initial condition, and a spatial-derivative LHS is a rewrite
+/// target the `unlowered_operator` gate reports; neither is counted.
 pub fn first_implicit_equation(
     equations: &[crate::types::Equation],
 ) -> Option<&crate::types::Equation> {
@@ -373,7 +454,8 @@ pub fn first_implicit_equation(
     equations.iter().find(|eq| {
         let structural = matches!(
             &eq.lhs,
-            Expr::Operator(n) if matches!(n.op.as_str(), "ic" | "D" | "grad" | "div" | "laplacian")
+            Expr::Operator(n) if matches!(n.op.as_str(), "ic" | "grad" | "div" | "laplacian")
+                || (n.op == "D" && n.wrt.as_deref().is_some_and(|w| w != "t"))
         );
         !structural && matches!(lhs_form(&eq.lhs), LhsForm::Expression)
     })

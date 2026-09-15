@@ -11,6 +11,7 @@ import sympy as sp
 
 from . import op_registry
 from .classification import ode_states
+from .error_handling import UNSUPPORTED_CONSTRUCT
 from .errors import EarthSciAstError
 from .esm_types import Expr, ExprNode, Model
 from .expr_walk import iter_children, map_children
@@ -230,14 +231,14 @@ class UnsupportedConstructError(SimulationError):
     """
 
     #: Stable cross-binding diagnostic code (esm-spec §9.6.6).
-    code = "unsupported_construct"
+    code = UNSUPPORTED_CONSTRUCT
 
     def __init__(self, construct: str, detail: str, evaluator: str) -> None:
         self.construct = construct
         self.detail = detail
         self.evaluator = evaluator
         super().__init__(
-            f"unsupported_construct: {construct} {detail} is not supported by the "
+            f"{UNSUPPORTED_CONSTRUCT}: {construct} {detail} is not supported by the "
             f"{evaluator}; refusing the build rather than running the model without "
             f"it (esm-spec §9.6.6)"
         )

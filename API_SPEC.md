@@ -1037,6 +1037,7 @@ reading that as a gap.
 | `ephemeral_injected_file` | function | – | `ephemeralInjectedFile` | – | `ephemeral_injected_file` | – |
 | `error_code_names` | function | `error_code_names` | – | – | `error_code_names` | – |
 | `evaluate_cellwise` | function | `evaluate_cellwise` | – | – | `evaluate_cellwise` | – |
+| `exact_scale` | type | – | – | – | `ExactScale` | `ExactScale` |
 | `expand` | function | – | – | `Expand` | – | `Expand` |
 | `expand_document` | function | – | `expandDocument` | `expand_document` | – | – |
 | `expr` | type | – | – | `Expr` | `Expr` | – |
