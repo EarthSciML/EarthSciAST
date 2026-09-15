@@ -250,8 +250,6 @@ func dimFactor(symbol string, e Rat) string {
 	}
 }
 
-// Unit is a named physical unit with a dimension vector and a scale factor
-// relative to the canonical SI combination represented by Dim.
 // ExactScale is the EXACT scale of a unit relative to SI (esm-spec §4.8.1
 // "Scales are EXACT"): a product of prime powers and a power of pi, each with a
 // rational exponent, so mi is 2^4 * 3^2 * 5^-3 * 11 * 127. Multiplying units
@@ -458,6 +456,8 @@ func sortedPrimes(m map[uint64]Rat) []uint64 {
 	return keys
 }
 
+// Unit is a named physical unit with a dimension vector and a scale factor
+// relative to the canonical SI combination represented by Dim.
 type Unit struct {
 	Dim    Dimension
 	Scale  float64
@@ -632,7 +632,7 @@ func buildUnitRegistry() map[string]Unit {
 	// carries no numeric scale factor, so "25.4 mmHg" cannot be spelled either.
 	r["inHg"] = Unit{Dim: r["Pa"].Dim, Scale: 3386.388640341, Exact: exactDecimal("3386.388640341")}
 	// psi is lbf/in^2 = pound * standard gravity / inch^2, every factor exact
-	// (esm-spec §4.8.1); it used to carry a 13-significant-figure rounding.
+	// (esm-spec §4.8.1).
 	r["psi"] = Unit{
 		Dim:   r["Pa"].Dim,
 		Scale: r["lb"].Scale * 9.80665 / (0.0254 * 0.0254),

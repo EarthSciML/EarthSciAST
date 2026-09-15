@@ -44,6 +44,10 @@ const ERROR_CODES = (
     # ── Structural validation (validate.jl; the `error_type` of a
     #    `StructuralError`, pinned by tests/invalid/expected_errors.json) ────
     ARRAY_SHAPE_MISMATCH = "array_shape_mismatch",
+    # esm-spec §6.6.5: an assertion whose form does not match the declared rank of
+    # the variable it names -- pointwise on a shaped variable, or `coords` /
+    # `reduce` on a scalar one.
+    ASSERTION_RANK_MISMATCH = "assertion_rank_mismatch",
     CIRCULAR_DEPENDENCY = "circular_dependency",
     CONFLICTING_DERIVATIVE = "conflicting_derivative",
     DATA_SOURCE_UNDEFINED = "data_source_undefined",
@@ -97,6 +101,9 @@ const ERROR_CODES = (
     UNDEFINED_SPECIES = "undefined_species",
     UNDEFINED_SYSTEM = "undefined_system",
     UNDEFINED_VARIABLE = "undefined_variable",
+    # esm-spec §6.6.2: an inline test's `initial_conditions` / `parameter_overrides`
+    # key that matches no declared name under the override-key rules.
+    UNKNOWN_OVERRIDE_KEY = "unknown_override_key",
     UNRESOLVED_SCOPED_REF = "unresolved_scoped_ref",
 
     # ── Units (units.jl §4.8.4). Both are HARD errors: `UNIT_INCONSISTENCY`
@@ -272,6 +279,15 @@ const ERROR_CODES = (
     #    surfaces when a rewrite-target operator (an RHS-position `D`, or
     #    `grad`/`div`/`laplacian`) reaches evaluation unlowered. ────────────
     UNLOWERED_OPERATOR = "unlowered_operator",
+    # ── Its complement (esm-spec §9.6.6): an op that IS in the §4.2 evaluable
+    #    core but that the tree-walk evaluator has no rule for (an array/query or
+    #    value-invention op outside the position that consumes it, an unlowered
+    #    `enum`). Refused when the evaluator is BUILT, never at evaluation. ────
+    UNEVALUABLE_OPERATOR = "unevaluable_operator",
+    # A surviving expression ranges over a `kind: "derived"` index set whose
+    # producer could not be materialized at build (esm-spec §9.6.6). Refused
+    # rather than contracted as an empty range, which would read as 0.
+    DERIVED_INDEX_SET_UNMATERIALIZED = "derived_index_set_unmaterialized",
 )
 
 """

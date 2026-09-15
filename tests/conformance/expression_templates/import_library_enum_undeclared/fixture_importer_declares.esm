@@ -1,0 +1,41 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "library_enum_importer_declares",
+    "description": "Imports a template whose body names an enum that only THIS importer declares. The library's `enum` op does not resolve against the importer's block (esm-spec \u00a79.3), so load fails with `unknown_enum`, reported against the library and the template."
+  },
+  "enums": {
+    "activity_unit": {
+      "g_per_hp_hr": 1,
+      "g_per_gallon": 2
+    }
+  },
+  "models": {
+    "Consumer": {
+      "expression_template_imports": [
+        {
+          "ref": "./lib.esm"
+        }
+      ],
+      "variables": {
+        "y": {
+          "type": "unknown",
+          "units": "1"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "y",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "plus_horsepower_code",
+            "bindings": {
+              "x": 1
+            }
+          }
+        }
+      ]
+    }
+  }
+}

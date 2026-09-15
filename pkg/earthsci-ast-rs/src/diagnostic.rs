@@ -337,6 +337,9 @@ diagnostic_code_registry! {
     /// into a source's location at all — or a resolved path carrying a `?`
     /// or `#`. The message names the offending data source and template.
     DATA_SOURCE_URL_UNRESOLVED = "data_source_url_unresolved";
+    /// An expression ranges over a `kind: "derived"` index set whose producer
+    /// could not be materialized at build (esm-spec §9.6.6).
+    DERIVED_INDEX_SET_UNMATERIALIZED = "derived_index_set_unmaterialized";
     /// A domain axis whose units disagree with the coordinate's.
     DOMAIN_UNIT_MISMATCH = "domain_unit_mismatch";
     /// A model whose equation count cannot match its unknown count.
@@ -388,6 +391,10 @@ diagnostic_code_registry! {
     /// the declaration maps, so the declaration is unreachable and every reader
     /// silently receives the implicit symbol instead (§4.9.1.1).
     RESERVED_VARIABLE_NAME = "reserved_variable_name";
+    /// An inline test's override key that matches no declared name (esm-spec §6.6.2).
+    UNKNOWN_OVERRIDE_KEY = "unknown_override_key";
+    /// An assertion whose form does not match its target's declared rank (esm-spec §6.6.5).
+    ASSERTION_RANK_MISMATCH = "assertion_rank_mismatch";
     /// A provable dimensional inconsistency, promoted from a unit finding.
     UNIT_INCONSISTENCY = "unit_inconsistency";
     /// A declared unit string that denotes no real unit, promoted from a
@@ -405,6 +412,10 @@ diagnostic_code_registry! {
     UNDEFINED_SYSTEM = "undefined_system";
     /// A reference to a variable the component does not declare.
     UNDEFINED_VARIABLE = "undefined_variable";
+    /// An evaluable-core op (esm-spec §4.2) with no evaluation rule in the
+    /// evaluator a model was built for (esm-spec §9.6.6). Carried by
+    /// `CompileError::UnevaluableOperatorError`.
+    UNEVALUABLE_OPERATOR = "unevaluable_operator";
     /// A scoped reference (`A.b`) that resolves to nothing.
     UNRESOLVED_SCOPED_REF = "unresolved_scoped_ref";
 
@@ -515,6 +526,7 @@ mod error_code_tests {
             "apply_expression_template_unknown_template",
             "apply_expression_template_version_too_old",
             "array_shape_mismatch",
+            "assertion_rank_mismatch",
             "circular_dependency",
             "closed_function_arg_type",
             "closed_function_arity",
@@ -531,6 +543,7 @@ mod error_code_tests {
             "coupling_role_unused",
             "data_source_undefined",
             "data_source_url_unresolved",
+            "derived_index_set_unmaterialized",
             "dimensional_mismatch",
             "domain_unit_mismatch",
             "enum_invalid_args",
@@ -604,11 +617,13 @@ mod error_code_tests {
             "undefined_species",
             "undefined_system",
             "undefined_variable",
+            "unevaluable_operator",
             "unit_inconsistency",
             "unit_parse_error",
             "unknown_closed_function",
             "unknown_enum",
             "unknown_enum_symbol",
+            "unknown_override_key",
             "unparseable_unit",
             "unresolved_scoped_ref",
             "unresolved_subsystem_ref",

@@ -91,6 +91,7 @@ pub mod extension;
 pub(crate) mod flatten;
 pub(crate) mod geometry;
 pub(crate) mod graph;
+pub(crate) mod inline_test_checks;
 pub mod intern;
 pub(crate) mod join;
 pub(crate) mod json_visit;

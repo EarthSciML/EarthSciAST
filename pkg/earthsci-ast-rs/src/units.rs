@@ -551,12 +551,17 @@ impl Unit {
     }
 
     /// Create a unit with a single dimension raised to an integer power.
+    ///
+    /// `scale` is the NUMERIC conversion factor only; the unit's
+    /// [`ExactScale`] is 1, so a scaled unit built here agrees exactly with its
+    /// unscaled base (esm-spec §4.8.3). Use [`parse_unit`] for a scaled unit.
     pub fn base(dimension: Dimension, power: i32, scale: f64) -> Self {
         Unit::base_rational(dimension, Rational::int(power), scale)
     }
 
     /// Create a unit with a single dimension raised to a RATIONAL power (e.g.
-    /// `s^-1/2`, the dimension of an SDE noise intensity).
+    /// `s^-1/2`, the dimension of an SDE noise intensity). As with [`Unit::base`],
+    /// the exact scale is 1 whatever `scale` is.
     pub fn base_rational(dimension: Dimension, power: Rational, scale: f64) -> Self {
         let mut dimensions = HashMap::new();
         if !power.is_zero() {

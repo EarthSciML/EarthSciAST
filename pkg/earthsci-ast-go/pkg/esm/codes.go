@@ -303,6 +303,15 @@ const (
 	// clock in place of a fuel time-lag constant.
 	// (tests/invalid/reserved_variable_name_*.esm).
 	ErrorReservedVariableName = "reserved_variable_name"
+	// ErrorUnknownOverrideKey is an inline test's `initial_conditions` or
+	// `parameter_overrides` key that matches no declared name under the esm-spec
+	// §6.6.2 override-key rules (tests/invalid/unknown_override_key_*.esm).
+	ErrorUnknownOverrideKey = "unknown_override_key"
+	// ErrorAssertionRankMismatch is an assertion whose form does not match the
+	// declared rank of the variable it names (esm-spec §6.6.5): pointwise on a
+	// shaped variable, or `coords` / `reduce` on a scalar one
+	// (tests/invalid/assertion_rank_mismatch_*.esm).
+	ErrorAssertionRankMismatch = "assertion_rank_mismatch"
 )
 
 // --- Diagnostic codes: structural validation, peers of the Error* block
@@ -385,13 +394,20 @@ const (
 // TypeScript emit exactly this string — so it belongs in the registry rather
 // than at the call site. ---
 const (
-	// CodeUnloweredOperator: evaluation reached an op that the load-time
-	// lowering passes should already have rewritten away (an `enum` symbol, an
-	// unexpanded template application), so no evaluator rule applies to it.
+	// CodeUnloweredOperator: evaluation reached a rewrite-target op — one
+	// OUTSIDE the esm-spec §4.2 evaluable core (a spatial or right-hand-side
+	// `D`, `grad`, a user op) — that no rewrite rule eliminated.
 	CodeUnloweredOperator = "unlowered_operator"
-	// CodeUnsupportedOperator: evaluation reached a well-formed op for which
-	// this binding's evaluator has no rule.
-	CodeUnsupportedOperator = "unsupported_operator"
+	// CodeUnevaluableOperator: evaluation reached an op that IS in the esm-spec
+	// §4.2 evaluable core but that this evaluator has no rule for (esm-spec
+	// §9.6.6): an array/query or value-invention op, or an `enum` that should
+	// have been lowered at load. The complement of CodeUnloweredOperator.
+	CodeUnevaluableOperator = "unevaluable_operator"
+	// CodeDerivedIndexSetUnmaterialized: an expression ranges over a
+	// `kind: "derived"` index set whose producer could not be materialized at
+	// build (esm-spec §9.6.6). Registered for the cross-binding vocabulary;
+	// this binding has no simulator, so nothing here raises it.
+	CodeDerivedIndexSetUnmaterialized = "derived_index_set_unmaterialized"
 )
 
 // --- Spec enum literal: ModelVariable.Type (esm-spec §6.3). esm 1.0.0 declares
