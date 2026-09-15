@@ -1,6 +1,6 @@
 # ESM Format Specification
 
-**EarthSciML Abstract Syntax Tree Format — Version 1.1.0**
+**EarthSciML Abstract Syntax Tree Format — Version 1.2.0**
 
 > **1.0.0 is a clean break.** The five declared variable types collapse to two:
 > `unknown` (the solver solves for it; its behavior is stated by **equations**)
@@ -579,7 +579,7 @@ by this spec.
 
 | Op | Required extra fields | Meaning |
 |---|---|---|
-| `const` | `value` | Inline literal value embedded in the expression tree. `value` is any JSON value (number, integer, or nested array of numbers/integers); `args` MUST be empty `[]`. Used to carry small inline tables that participate in `index` lookups, `interp.searchsorted` queries, and other AST positions where a JSON array is needed but a bare scalar number won't do. Large arrays belong in a `data_sources` entry. |
+| `const` | `value`, optional `units` | Inline literal value embedded in the expression tree. `value` is any JSON value (number, integer, or nested array of numbers/integers); `args` MUST be empty `[]`. The optional `units` (esm 1.2.0) declares the unit `value` is in, which gives the constant a dimension and exact scale in dimensional analysis (§4.8.5). Used to carry small inline tables that participate in `index` lookups, `interp.searchsorted` queries, and other AST positions where a JSON array is needed but a bare scalar number won't do. Large arrays belong in a `data_sources` entry. |
 
 #### Array / Tensor
 
@@ -1509,6 +1509,30 @@ Two consequences follow, and both have been violated in this repository:
 2. **An incomplete registry MUST NOT be papered over by downgrading the severity.** If a binding cannot parse `J/(mol*K)` or does not know `V`, the fix is the parser and the registry — *not* re-classifying an unresolvable unit as a warning, and not coercing it to dimensionless. Both of those turn a missing feature into a silently-disabled check across every file in the corpus.
 
 An error is reported at the **JSON Pointer of the node that carries the defect** — `/models/<M>/equations/<i>` for an equation, `/models/<M>/variables/<v>` for a declaration, `/reaction_systems/<S>/reactions/<i>` for a rate.
+
+#### 4.8.5 Declared units on a constant
+
+A bare numeric literal has an undeterminable dimension (§4.8.4): nothing says whether `0.44704` is a pure number or a conversion from mi/h to m/s, so a product containing one is not checked. From **esm 1.2.0** a `const` node MAY declare the unit its `value` is in:
+
+```json
+{ "lhs": "speed_ms",
+  "rhs": { "op": "*", "args": [
+    "speed_mph",
+    { "op": "const", "args": [], "value": 0.44704, "units": "m*h/(mi*s)" } ] } }
+```
+
+With `speed_ms` declared `m/s` and `speed_mph` declared `mi/h`, the right-hand side has the dimension and exact scale of `m/s` (§4.8.1, §4.8.3), so the equation is checked; declaring `speed_ms` as `kg`, or omitting the constant, is a provable mismatch.
+
+1. **Only on `const`.** `units` is legal on a `const` node and on no other; the schema rejects it elsewhere.
+2. **Resolved like a variable's units.** The string is resolved against the §4.8.1 registry with the §4.8.2 grammar. A string that does not resolve is `unit_parse_error`, reported at the **containing expression field** — `/models/<M>/equations/<i>/rhs` or `.../lhs` — the same pointer an undefined name in that expression is reported at.
+3. **The unit, not the number.** A unit-bearing `const` has the declared dimension and exact scale in every §4.8.3 rule. Its numeric `value` is NEVER checked against its units: `const(0.4470, units "m*h/(mi*s)")` is accepted just as `const(0.44704, ...)` is.
+4. **Nothing else changes.** A bare numeric literal, and a `const` without `units`, keep the undeterminable dimension of §4.8.4.
+5. **Templates are checked through their expansion.** An `apply_expression_template` call has the dimension of its expansion (§9.6.4 rule 2), so a unit-bearing `const` inside a template body makes every call of that template checkable. A checker that sees an unexpanded call expands it before propagating dimensions.
+6. **Version gate.** A document declaring `esm` below `1.2.0` that carries `units` on any expression node is rejected with `const_units_version_too_old`, naming the offending node's pointer.
+
+| Code | Meaning |
+|---|---|
+| `const_units_version_too_old` | File declares `esm` < 1.2.0 but an expression node carries `units` (§4.8.5). |
 
 ### 4.9 Name Resolution: what a checker MUST NOT call undefined
 
