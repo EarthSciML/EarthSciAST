@@ -374,7 +374,10 @@ fn import_library_enum_undeclared_is_reported_against_the_library() {
         let msg = e.to_string();
         assert!(msg.contains("[unknown_enum]"), "{fixture}: got: {msg}");
         assert!(msg.contains("lib.esm"), "{fixture}: got: {msg}");
-        assert!(msg.contains("plus_horsepower_code"), "{fixture}: got: {msg}");
+        assert!(
+            msg.contains("plus_horsepower_code"),
+            "{fixture}: got: {msg}"
+        );
     }
 }
 

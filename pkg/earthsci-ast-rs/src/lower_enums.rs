@@ -170,8 +170,10 @@ pub(crate) fn lower_enum_ops_for_file(
     crate::json_visit::try_visit_values_mut(target, &mut |v| {
         if let Value::Object(obj) = v
             && obj.get("op").and_then(|w| w.as_str()) == Some(ENUM_OP)
-            && let Some([Value::String(name), Value::String(symbol)]) =
-                obj.get("args").and_then(|a| a.as_array()).map(Vec::as_slice)
+            && let Some([Value::String(name), Value::String(symbol)]) = obj
+                .get("args")
+                .and_then(|a| a.as_array())
+                .map(Vec::as_slice)
             && !open_names.contains(name)
             && !open_names.contains(symbol)
         {
