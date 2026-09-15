@@ -543,7 +543,8 @@ function validate_structural(file::EsmFile)::Vector{StructuralError}
             # was missing entirely until the 2026-07-14 audit (finding J1), which
             # is why `validate()` accepted every dimensionally-inconsistent
             # fixture in the shared corpus.
-            append!(errors, validate_model_unit_consistency(model, "/models/$model_name"))
+            append!(errors, validate_model_unit_consistency(
+                _units_view(file, model_name, model), "/models/$model_name"))
         end
     end
 
@@ -1648,6 +1649,19 @@ function _check_broadcast_axes!(errors::Vector{StructuralError}, expr::ASTExpr,
     end
     walk(expr)
     return errors
+end
+
+# The model the units engine judges: its surviving `apply_expression_template`
+# references expanded against the component's registry, so a call has the unit
+# of its expansion (esm-spec §4.8.5 item 5, §9.6.4 rule 2). The expansion is made
+# on a copy; the rest of `validate` keeps the reference-preserving model.
+function _units_view(file::EsmFile, model_name::AbstractString, model::Model)
+    file.component_templates === nothing && return model
+    reg = get(file.component_templates, "models.$model_name", nothing)
+    reg === nothing && return model
+    view = deepcopy(model)
+    _expand_model_refs!(view, reg)
+    return view
 end
 
 """

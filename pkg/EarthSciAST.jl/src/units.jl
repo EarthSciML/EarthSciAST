@@ -1505,12 +1505,15 @@ function model_unit_findings(model::Model)::Vector{UnitFinding}
     for (i, eq) in enumerate(model.equations)
         for msg in equation_unit_findings(eq, var_units)
             push!(out, UnitFinding("equations/$(i-1)", msg, UNIT_DIMENSION_MISMATCH))
+        end
+        # A declared `const` unit string that does not resolve is a defect at the
+        # containing expression field (esm-spec §4.8.5 item 2), whatever kind of
+        # equation it sits in.
         for (field, side) in (("lhs", eq.lhs), ("rhs", eq.rhs))
             for units in unresolvable_const_units(side)
                 push!(out, UnitFinding("equations/$(i-1)/$field",
                     "Unit string '$units' is not a recognised unit", UNIT_PARSE_ERROR))
             end
-        end
         end
     end
 
