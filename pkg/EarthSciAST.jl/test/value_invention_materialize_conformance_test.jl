@@ -8,6 +8,7 @@
 using Test
 using JSON3
 using EarthSciAST
+import OrdinaryDiffEqTsit5
 
 include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
@@ -24,7 +25,8 @@ const _VIM_DIR = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance",
     for fx in manifest.fixtures
         @testset "$(fx.id)" begin
             results = run_inline_tests(joinpath(_VIM_DIR, String(fx.path));
-                                       model_name=String(fx.model))
+                                       model_name=String(fx.model),
+                                       alg=OrdinaryDiffEqTsit5.Tsit5())
             @test length(results) == length(fx.cases)
             for case in fx.cases
                 idx = findfirst(r -> r.test_id == String(fx.test_id) &&
@@ -34,6 +36,7 @@ const _VIM_DIR = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance",
                 r = results[idx]
                 @test r.variable == String(case.variable)
                 if case.outcome == "value"
+                    r.passed || @info "$(fx.id) did not pass" r.message
                     @test r.passed
                     @test r.actual !== nothing && isapprox(r.actual, case.expected; rtol=1e-12)
                 else
