@@ -10,10 +10,10 @@
         { "ref": "./maplib.esm", "prefix": "L", "rebind": { "k": "kk", "k2": "kk2" } }
       ],
       "variables": {
-        "u": { "type": "parameter", "units": "1", "default": 1.0, "shape": ["L.cells"] },
-        "kk": { "type": "parameter", "units": "1", "default": 2.0 },
-        "kk2": { "type": "parameter", "units": "1", "default": 3.0 },
-        "x": { "type": "unknown", "units": "1", "default": 0.0 },
+        "u": { "type": "parameter", "units": "1", "default": 1.5, "shape": ["L.cells"] },
+        "kk": { "type": "parameter", "units": "1", "default": 2.5 },
+        "kk2": { "type": "parameter", "units": "1", "default": 3.5 },
+        "x": { "type": "unknown", "units": "1", "default": 0.5 },
         "total": { "type": "unknown", "units": "1" }
       },
       "equations": [
