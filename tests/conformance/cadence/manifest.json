@@ -386,6 +386,55 @@
         "inputs": {},
         "expected": {}
       }
+    },
+    {
+      "id": "arrayed_observed_seeds",
+      "fixture": "tests/valid/cadence/arrayed_observed_seeds.esm",
+      "model": "ArrayedObservedSeeds",
+      "doc": "CONFORMANCE_SPEC §5.7.2 with esm-spec §6.3.1, the ARRAYED observed leaf seed. An observed is recognised through its LHS's BASE NAME at any rank, so `wf` (the `faq{i}(wf[i]) ~ …` shell) and `wb` (the bare-index `wb[i] ~ …`) are observed and, being STATE-FREE, seed CONST: their two annotated reads in `u`'s tendency are CONST and each is a const->continuous frontier cut. A binding that recognises an observed only by a bare-variable LHS (the narrower inlining set, which does not narrow the partition) seeds them CONTINUOUS, deriving const=2 continuous=5 and no frontier cut. `ws` is the state-dependent control; `u`, whose LHS is a `D` under the same `faq` shell, stays an ODE state. The two const->artifact output buffers are the CONST definitions of `wf` and `wb` themselves, which materialize because they are arrayed.",
+      "class_summary": {
+        "const": 4,
+        "discrete": 0,
+        "continuous": 3
+      },
+      "hot_tree_empty": false,
+      "event_handler_empty": true,
+      "materialization_points": [
+        {
+          "label": "wf_read",
+          "kind": "expr_edge",
+          "threshold": "const->continuous",
+          "provenance": "compile",
+          "array": "wf",
+          "doc": "The read index(wf, i) of the state-free arrayed observed `wf` feeds the CONTINUOUS product."
+        },
+        {
+          "label": "wb_read",
+          "kind": "expr_edge",
+          "threshold": "const->continuous",
+          "provenance": "compile",
+          "array": "wb",
+          "doc": "The read index(wb, i) of the state-free arrayed observed `wb` feeds the CONTINUOUS difference."
+        },
+        {
+          "label": "wf",
+          "kind": "output_buffer",
+          "threshold": "const->artifact",
+          "provenance": "compile",
+          "doc": "The CONST definition of the arrayed observed `wf` folds into an artifact buffer."
+        },
+        {
+          "label": "wb",
+          "kind": "output_buffer",
+          "threshold": "const->artifact",
+          "provenance": "compile",
+          "doc": "The CONST definition of the arrayed observed `wb` folds into an artifact buffer."
+        }
+      ],
+      "const_fold": {
+        "inputs": {},
+        "expected": {}
+      }
     }
   ]
 }
