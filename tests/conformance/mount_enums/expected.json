@@ -1,0 +1,32 @@
+{
+  "description": "What each fixture loads to (esm-spec §9.3, §4.7). `loads` maps a dotted path — model, then any subsystem keys, then a variable — to the integer constant its single defining equation's right-hand side lowers to. `errors` maps a fixture to the diagnostic code its load raises.",
+  "loads": {
+    "leaf_one.esm": {
+      "LeafOne.value": 1
+    },
+    "leaf_two.esm": {
+      "LeafTwo.value": 2
+    },
+    "toplevel.esm": {
+      "One.value": 1,
+      "Two.value": 2
+    },
+    "toplevel_importer_redeclares.esm": {
+      "One.value": 1,
+      "Two.value": 2,
+      "Probe.own": 7
+    },
+    "subsystems.esm": {
+      "Probe.One.value": 1,
+      "Probe.Two.value": 2,
+      "Probe.own": 7
+    },
+    "nested.esm": {
+      "Mid.value": 5,
+      "Mid.Two.value": 2
+    }
+  },
+  "errors": {
+    "assembly_names_leaf_enum.esm": "unknown_enum"
+  }
+}
