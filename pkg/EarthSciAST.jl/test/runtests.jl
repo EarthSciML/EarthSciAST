@@ -173,6 +173,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("direct_class_emission_test.jl")         # per-cell scalarizer emits class kernels directly (ESS_DIRECT_CLASS_EMIT_DISABLE oracle)
     include("cross_eq_class_emission_test.jl")       # cross-equation + affine-box classes emitted directly; repair pass zero-merge (ESS_CROSS_EQ_CLASS_EMIT_DISABLE oracle)
     include("scalar_ops_test.jl")                    # the shared op ladder + gather-subscript resolver
+    include("scalar_batch_test.jl")                  # lane-batched grouping of the per-cell scalar surface (ess-oop-batch)
     include("oop_merge_test.jl")                     # kernel-CLASS merge ≡ unmerged (both build forms)
     include("tree_walk_iip_generic_test.jl")
     include("parameter_gradient_test.jl")            # ∂(RHS)/∂p, both emitters (traced arm opt-in)
