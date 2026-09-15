@@ -240,8 +240,10 @@ const _STRUCTURAL_FIELDS = (
     "from_faq"                    => :registry,
     # Loop symbols and bound index names of a `faq` node (join key columns and
     # the symbols they are read at, the arg-witness symbol, the output index
-    # signature, a dependent range's parent indices). Loop symbols are outside
-    # the namespaces `metaparameter_name_conflict` covers.
+    # signature, a dependent range's parent indices). `metaparameter_name_conflict`
+    # refuses a metaparameter spelled like a loop symbol, so a metaparameter
+    # reaches these fields only as an `on` data-column name; they are names
+    # wherever they appear, so they are skipped rather than left to that check.
     "on"                          => :opaque,
     "syms"                        => :opaque,
     "arg"                         => :opaque,
@@ -932,15 +934,17 @@ function _rename_decl(decl, varmap::AbstractDict{String,String},
     return _rename_walk(decl, v2, i2, tplmap)
 end
 
-# Bound index symbols of a declaration: aggregate `output_idx` entries and
-# `ranges` keys (at any nesting depth). Rebinding one would desynchronize the
-# ranges KEYS (object keys, unreachable by value substitution) from their
-# `expr` occurrences, so it is rejected outright.
+# Bound index symbols (loop symbols) of a subtree: the `output_idx` entries and
+# `ranges` keys of every Expression node, at any nesting depth — the binder
+# definition of the `reserved_index_symbol` rule (esm-spec §4.9.1.1), which is
+# not limited to `faq` (`argmin` / `argmax` bind the same way). Rebinding one
+# would desynchronize the ranges KEYS (object keys, unreachable by value
+# substitution) from their `expr` occurrences, so it is rejected outright; a
+# metaparameter spelled like one is `metaparameter_name_conflict`.
 function _collect_bound_syms!(out::Set{String}, x)
     _walk_json(x) do _, n
         _is_object(n) || return true
-        op = _raw_get(n, "op")
-        (op !== nothing && string(op) == "faq") || return true
+        _raw_get(n, "op") === nothing && return true
         oi = _raw_get(n, "output_idx")
         if oi !== nothing && _is_array(oi)
             for e in oi
@@ -1495,6 +1499,9 @@ function _process_library(raw, dir::String, stack::Vector{String},
 
     # §9.7.3 body-reference DAG validation in the library's own scope.
     _compose_template_bodies!(scope.templates, origin)
+    # In the library's own scope, before an importing edge's `bindings`
+    # instantiate the templates and consume the names it closes.
+    _check_metaparam_loop_symbols(keys(scope.metaparams), origin, scope.templates)
     return scope
 end
 
@@ -1623,8 +1630,29 @@ function _close_document_metaparams(doc_meta::OrderedDict{String,Any},
     return values
 end
 
+# §9.7.6: a metaparameter name must not spell a loop symbol (a `ranges` key or
+# `output_idx` entry of an Expression node) anywhere in `trees`. Substitution
+# rewrites every bare string that spells a bound metaparameter, and inside the
+# node that binds it a loop symbol is exactly such a string, so no field rule
+# can tell the two apart.
+function _check_metaparam_loop_symbols(names, origin::String, trees...)
+    isempty(names) && return
+    bound = Set{String}()
+    for t in trees
+        _collect_bound_syms!(bound, t)
+    end
+    for name in names
+        string(name) in bound && throw(ExpressionTemplateError(
+            ERROR_CODES.METAPARAMETER_NAME_CONFLICT,
+            "$origin: metaparameter '$name' collides with a loop symbol " *
+            "(a `ranges` key or `output_idx` entry) (esm-spec §9.7.6)"))
+    end
+    return
+end
+
 # --- phase 4: §9.7.6 name-collision check — no shadowing of visible names ---
 function _check_metaparam_name_conflicts(root::OrderedDict{String,Any},
+                                         top_templates::OrderedDict{String,Any},
                                          doc_meta::OrderedDict{String,Any},
                                          doc_isets::OrderedDict{String,Any})
     isempty(doc_meta) && return
@@ -1649,6 +1677,9 @@ function _check_metaparam_name_conflicts(root::OrderedDict{String,Any},
             "metaparameter '$name' collides with a visible " *
             "variable/parameter/species/index-set name (esm-spec §9.7.6)"))
     end
+    # Components carry their imported templates by now; `top_templates` is a
+    # root library's effective top-level sequence, imports included.
+    _check_metaparam_loop_symbols(keys(doc_meta), "document", root, top_templates)
     return
 end
 
@@ -2106,7 +2137,7 @@ function resolve_template_machinery(raw_data, base_path::AbstractString;
     _resolve_component_imports!(root, base_dir, stack, doc_isets, doc_meta;
                                 load_ref=loader)
     values = _close_document_metaparams(doc_meta, metaparameters, mounted)
-    _check_metaparam_name_conflicts(root, doc_meta, doc_isets)
+    _check_metaparam_name_conflicts(root, top_templates, doc_meta, doc_isets)
     doc_isets = _substitute_closed_metaparams!(root, top_templates, doc_isets, values)
     # `mounted_leaf` says a MOUNTING document's registry will receive these
     # index sets and close them (§4.7 "Index-set merge"), so an axis this scope

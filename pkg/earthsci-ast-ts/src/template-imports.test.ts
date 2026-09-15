@@ -262,10 +262,12 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
   })
 
   it('metaparam_structural_field_collision: loop symbols, references, enums, units, text and map keys (§9.7.6)', () => {
-    // Five metaparameters are spelled like structural values — `row_id` (a join
-    // key column, free text), `a` (loop symbols), `m` (a unit symbol), `edge` (a
-    // placement tag, a comment, citation text), `ode` (an enum) — and each also
-    // sits in an expression position, where it closes.
+    // Four metaparameters are spelled like structural values — `row_id` (a join
+    // key column, free text), `m` (a unit symbol), `edge` (a placement tag, a
+    // comment, citation text), `ode` (an enum) — and each also sits in an
+    // expression position, where it closes; so does `a`, a dense range bound
+    // beside the loop symbol `p` (a metaparameter spelled like a loop symbol is
+    // `metaparameter_name_conflict`).
     const d = expandRaw(conf('metaparam_structural_field_collision', 'fixture.esm')) as any
     expect(canonEqs(d)).toEqual(
       canonEqs(golden(conf('metaparam_structural_field_collision', 'expanded.esm'))),
@@ -283,12 +285,12 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
     // A join clause's key columns and the loop symbols they are read at are
     // names; substituting them makes the document schema-invalid.
     const r = definingRhs(m, 'r')
-    expect(r.output_idx).toEqual(['a'])
-    expect(r.join).toEqual([{ on: [['row_id', 'row_id']], syms: ['a', 'b'] }])
+    expect(r.output_idx).toEqual(['p'])
+    expect(r.join).toEqual([{ on: [['row_id', 'row_id']], syms: ['p', 'b'] }])
     expect(r.expr.args).toEqual([22, 5])
     const k = definingRhs(m, 'k')
-    expect(k.arg).toBe('a')
-    expect(k.ranges.a).toEqual([1, 11])
+    expect(k.arg).toBe('p')
+    expect(k.ranges.p).toEqual([1, 11])
     expect(k.expr.args).toEqual(['c', 7])
 
     // A map key is a declared name, not a field: variables named `source` and

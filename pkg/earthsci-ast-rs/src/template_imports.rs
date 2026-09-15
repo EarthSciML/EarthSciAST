@@ -129,8 +129,10 @@ const REGISTRY_KEYS: [&str; 9] = [
 /// rename-walk branches. Mirrors the `:opaque` kind of `_STRUCTURAL_FIELDS` in
 /// the Julia reference.
 const OPAQUE_KEYS: [&str; 33] = [
-    // Loop symbols and bound index names of a `faq` node, outside the namespaces
-    // `metaparameter_name_conflict` covers.
+    // Loop symbols and bound index names of a `faq` node. `metaparameter_name_conflict`
+    // refuses a metaparameter spelled like a loop symbol, so a metaparameter reaches
+    // these fields only as an `on` data-column name; they are names wherever they
+    // appear, so they are skipped rather than left to that check.
     "on",
     "syms",
     "arg",
@@ -1311,14 +1313,17 @@ pub(crate) fn apply_mount_index_set_rename(
     Ok(())
 }
 
-/// Bound index symbols of a declaration: aggregate `output_idx` entries and
-/// `ranges` keys (at any nesting depth). Rebinding one would desynchronize the
-/// ranges KEYS from their `expr` occurrences, so it is rejected. Mirrors the
-/// Julia `_collect_bound_syms!`.
+/// Bound index symbols (loop symbols) of a subtree: the `output_idx` entries and
+/// `ranges` keys of every Expression node, at any nesting depth — the binder
+/// definition of the `reserved_index_symbol` rule (esm-spec §4.9.1.1), which is
+/// not limited to `faq` (`argmin` / `argmax` bind the same way). Rebinding one
+/// would desynchronize the ranges KEYS from their `expr` occurrences, so it is
+/// rejected; a metaparameter spelled like one is `metaparameter_name_conflict`.
+/// Mirrors the Julia `_collect_bound_syms!`.
 fn collect_bound_syms(x: &Value, out: &mut std::collections::HashSet<String>) {
     crate::json_visit::visit_values(x, &mut |_path, v| {
         let Some(obj) = v.as_object() else { return };
-        if obj.get("op").and_then(|w| w.as_str()) != Some("faq") {
+        if !obj.contains_key("op") {
             return;
         }
         if let Some(oi) = obj.get("output_idx").and_then(|w| w.as_array()) {
@@ -2222,6 +2227,9 @@ fn process_library(
     // §9.7.3 body-reference validation in the library's own scope, before any
     // downstream `only` filtering can hide a referenced template.
     validate_template_body_references(&scope.templates, origin)?;
+    // In the library's own scope, before an importing edge's `bindings`
+    // instantiate the templates and consume the names it closes.
+    check_metaparam_loop_symbols(scope.metaparams.keys(), origin, &[&scope.templates])?;
     Ok(scope)
 }
 
@@ -2644,7 +2652,7 @@ pub(crate) fn resolve_template_machinery_scoped(
     let values = close_document_metaparams(&doc_meta, metaparameters, mount_declared)?;
 
     // --- §9.7.6 name-collision check: no shadowing of visible names ---
-    check_metaparam_collisions(&root, &doc_meta, &doc_isets)?;
+    check_metaparam_collisions(&root, &top_templates, &doc_meta, &doc_isets)?;
 
     // --- expression-position substitution of the closed values ---
     //
@@ -2928,11 +2936,47 @@ fn close_document_metaparams(
     Ok(values)
 }
 
+/// The §9.7.6 name-collision check for loop symbols: a metaparameter name must
+/// not spell a `ranges` key or `output_idx` entry of an Expression node anywhere
+/// in `trees` (`metaparameter_name_conflict`). Substitution rewrites every bare
+/// string that spells a bound metaparameter, and inside the node that binds it a
+/// loop symbol is exactly such a string, so no field rule can tell the two apart.
+fn check_metaparam_loop_symbols<'a>(
+    names: impl IntoIterator<Item = &'a String>,
+    origin: &str,
+    trees: &[&Map<String, Value>],
+) -> Result<(), ExpressionTemplateError> {
+    let mut names = names.into_iter().peekable();
+    if names.peek().is_none() {
+        return Ok(());
+    }
+    let mut bound = std::collections::HashSet::new();
+    for tree in trees {
+        for v in tree.values() {
+            collect_bound_syms(v, &mut bound);
+        }
+    }
+    for name in names {
+        if bound.contains(name) {
+            return Err(err(
+                codes::METAPARAMETER_NAME_CONFLICT,
+                format!(
+                    "{origin}: metaparameter '{name}' collides with a loop symbol \
+                     (a `ranges` key or `output_idx` entry) (esm-spec §9.7.6)"
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Phase 4 of [`resolve_template_machinery`]: the §9.7.6 name-collision
 /// check — a declared metaparameter must not shadow any visible variable /
-/// parameter / species / index-set name (`metaparameter_name_conflict`).
+/// parameter / species / index-set name, nor any loop symbol
+/// (`metaparameter_name_conflict`).
 fn check_metaparam_collisions(
     root: &Map<String, Value>,
+    top_templates: &Map<String, Value>,
     doc_meta: &Map<String, Value>,
     doc_isets: &Map<String, Value>,
 ) -> Result<(), ExpressionTemplateError> {
@@ -2965,7 +3009,9 @@ fn check_metaparam_collisions(
             ));
         }
     }
-    Ok(())
+    // Components carry their imported templates by now; `top_templates` is a
+    // root library's effective top-level sequence, imports included.
+    check_metaparam_loop_symbols(doc_meta.keys(), "document", &[root, top_templates])
 }
 
 /// Phase 5 of [`resolve_template_machinery`]: expression-position

@@ -313,8 +313,10 @@ const BOUND_KEYS = ['lower', 'upper'] as const
 // rename-walk branches. Mirrors the `:opaque` kind of `_STRUCTURAL_FIELDS` in the
 // Julia reference.
 const OPAQUE_KEYS = [
-  // Loop symbols and bound index names of a `faq` node, outside the namespaces
-  // `metaparameter_name_conflict` covers.
+  // Loop symbols and bound index names of a `faq` node. `metaparameter_name_conflict`
+  // refuses a metaparameter spelled like a loop symbol, so a metaparameter reaches
+  // these fields only as an `on` data-column name; they are names wherever they
+  // appear, so they are skipped rather than left to that check.
   'on',
   'syms',
   'arg',
@@ -1137,10 +1139,13 @@ function renameDecl(
 }
 
 /**
- * Bound index symbols of a declaration: aggregate `output_idx` entries and
- * `ranges` keys (at any nesting depth). Rebinding one would desynchronize the
- * ranges KEYS (object keys, unreachable by value substitution) from their
- * `expr` occurrences, so it is rejected outright.
+ * Bound index symbols (loop symbols) of a subtree: the `output_idx` entries and
+ * `ranges` keys of every Expression node, at any nesting depth — the binder
+ * definition of the `reserved_index_symbol` rule (esm-spec §4.9.1.1), which is
+ * not limited to `faq` (`argmin` / `argmax` bind the same way). Rebinding one
+ * would desynchronize the ranges KEYS (object keys, unreachable by value
+ * substitution) from their `expr` occurrences, so it is rejected outright; a
+ * metaparameter spelled like one is `metaparameter_name_conflict`.
  */
 function collectBoundSyms(out: Set<string>, x: Json): Set<string> {
   if (Array.isArray(x)) {
@@ -1148,7 +1153,7 @@ function collectBoundSyms(out: Set<string>, x: Json): Set<string> {
     return out
   }
   if (!isObject(x)) return out
-  if (x.op === 'faq') {
+  if (x.op !== undefined) {
     const oi = x.output_idx
     if (Array.isArray(oi)) {
       for (const e of oi) if (typeof e === 'string') out.add(e)
@@ -1700,6 +1705,9 @@ function processLibrary(
   // §9.7.3 body composition in the library's own scope (decl objects are
   // mutated in place, so scope.templates sees the closed bodies).
   composeTemplateBodies(scope.templates as TemplatesArg, origin)
+  // In the library's own scope, before an importing edge's `bindings`
+  // instantiate the templates and consume the names it closes.
+  checkMetaparamLoopSymbols(Object.keys(scope.metaparams), origin, [scope.templates])
   return scope
 }
 
@@ -2053,7 +2061,7 @@ export function resolveTemplateMachinery(
   const values = closeMetaparameters(docMeta, api, mountDeclared)
 
   // Phase 5 — §9.7.6 name-collision check: no shadowing of visible names.
-  checkMetaparamNameCollisions(root, docMeta, docIsets)
+  checkMetaparamNameCollisions(root, topTemplates, docMeta, docIsets)
 
   // Phase 6 — expression-position substitution of the closed values.
   const foldedIsets = substituteClosedValues(root, topTemplates, docIsets, values)
@@ -2291,11 +2299,34 @@ function closeMetaparameters(
 }
 
 /**
+ * Reject a metaparameter name that spells a loop symbol (a `ranges` key or
+ * `output_idx` entry of an Expression node) anywhere in `trees` (esm-spec
+ * §9.7.6). Substitution rewrites every bare string that spells a bound
+ * metaparameter, and inside the node that binds it a loop symbol is exactly such
+ * a string, so no field rule can tell the two apart.
+ */
+function checkMetaparamLoopSymbols(names: string[], origin: string, trees: Json[]): void {
+  if (names.length === 0) return
+  const bound = new Set<string>()
+  for (const t of trees) collectBoundSyms(bound, t)
+  for (const name of names) {
+    if (bound.has(name)) {
+      throw new EsmMachineryError(
+        ERROR_CODES.METAPARAMETER_NAME_CONFLICT,
+        `${origin}: metaparameter '${name}' collides with a loop symbol (a \`ranges\` key or \`output_idx\` entry) (esm-spec §9.7.6)`,
+      )
+    }
+  }
+}
+
+/**
  * Phase 5 — reject a metaparameter name that collides with a visible
- * variable / parameter / species / index-set name (esm-spec §9.7.6).
+ * variable / parameter / species / index-set name, or with a loop symbol
+ * (esm-spec §9.7.6).
  */
 function checkMetaparamNameCollisions(
   root: JsonObject,
+  topTemplates: JsonObject,
   docMeta: JsonObject,
   docIsets: JsonObject,
 ): void {
@@ -2321,6 +2352,9 @@ function checkMetaparamNameCollisions(
       )
     }
   }
+  // Components carry their imported templates by now; `topTemplates` is a root
+  // library's effective top-level sequence, imports included.
+  checkMetaparamLoopSymbols(Object.keys(docMeta), 'document', [root, topTemplates])
 }
 
 /**

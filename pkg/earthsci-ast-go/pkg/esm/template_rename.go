@@ -348,10 +348,14 @@ func renameDecl(decl any, varmap, isetmap, tplmap map[string]string) any {
 	return renameWalk(decl, v2, i2, tplmap)
 }
 
-// collectBoundSyms accumulates the bound index symbols of a declaration:
-// aggregate `output_idx` entries and `ranges` keys (at any nesting depth).
-// Rebinding one would desynchronize the ranges KEYS (object keys, unreachable by
-// value substitution) from their `expr` occurrences, so it is rejected outright.
+// collectBoundSyms accumulates the bound index symbols (loop symbols) of a
+// subtree: the `output_idx` entries and `ranges` keys of every Expression node,
+// at any nesting depth — the binder definition of the `reserved_index_symbol`
+// rule (esm-spec §4.9.1.1), which is not limited to `faq` (`argmin` / `argmax`
+// bind the same way). Rebinding one would desynchronize the ranges KEYS (object
+// keys, unreachable by value substitution) from their `expr` occurrences, so it
+// is rejected outright; a metaparameter spelled like one is
+// `metaparameter_name_conflict`.
 func collectBoundSyms(out map[string]struct{}, x any) {
 	switch v := x.(type) {
 	case []any:
@@ -359,7 +363,7 @@ func collectBoundSyms(out map[string]struct{}, x any) {
 			collectBoundSyms(out, c)
 		}
 	case map[string]any:
-		if op, _ := v["op"].(string); op == "faq" {
+		if _, isNode := v["op"]; isNode {
 			if oi, ok := v["output_idx"].([]any); ok {
 				for _, e := range oi {
 					if es, ok := e.(string); ok {

@@ -2444,6 +2444,30 @@
     "resolver_error_code": "metaparameter_name_conflict",
     "notes": "Resolver-level invalid (esm-spec \u00a79.7, RFC template-library-imports). The document is SCHEMA-VALID \u2014 the \u00a79.7 constructs are legal schema \u2014 so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. Metaparameter x collides with the model state variable x; a metaparameter name must not collide with any visible variable/parameter/species/index-set name \u2014 there is no shadowing (esm-spec \u00a79.7.6)."
   },
+  "metaparameter_loop_symbol_conflict.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": true,
+    "resolver_only": true,
+    "resolver_error_code": "metaparameter_name_conflict",
+    "notes": "Resolver-level invalid (esm-spec \u00a79.7, RFC template-library-imports). The document is SCHEMA-VALID \u2014 the \u00a79.7 constructs are legal schema \u2014 so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. Metaparameter i collides with the faq loop symbol i (a `ranges` key). Inside the faq body the bare string \"i\" is both the loop symbol and a spelling of the metaparameter, so no field-based skip rule can tell them apart; without the check the body closes to {\"op\": \"index\", \"args\": [\"u\", 11]}, a constant index outside the 3-cell axis. A metaparameter name must not collide with a loop symbol (a `ranges` key or `output_idx` entry of any Expression node, the esm-spec \u00a74.9.1.1 binder definition) (esm-spec \u00a79.7.6)."
+  },
+  "metaparameter_loop_symbol_conflict_import.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": true,
+    "resolver_only": true,
+    "resolver_error_code": "metaparameter_name_conflict",
+    "notes": "Resolver-level invalid (esm-spec \u00a79.7, RFC template-library-imports). The document is SCHEMA-VALID \u2014 the \u00a79.7 constructs are legal schema \u2014 so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. Imports metaparameter_loop_symbol_conflict_lib.esm and closes its metaparameter i at the edge (`bindings`: {\"i\": 2}). The library's template body binds loop symbol i, which the edge instantiation would rewrite to 2; the collision is refused in the imported library's own scope, so closing the name at the edge does not bypass the check (esm-spec \u00a79.7.6)."
+  },
+  "metaparameter_loop_symbol_conflict_lib.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": true,
+    "resolver_only": true,
+    "resolver_error_code": "metaparameter_name_conflict",
+    "notes": "Resolver-level invalid (esm-spec \u00a79.7, RFC template-library-imports). The document is SCHEMA-VALID \u2014 the \u00a79.7 constructs are legal schema \u2014 so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. A template library whose metaparameter i collides with the loop symbol i of its own template body. Refused on a standalone load and when imported (see metaparameter_loop_symbol_conflict_import.esm) (esm-spec \u00a79.7.6)."
+  },
   "rename_unknown_name.esm": {
     "schema_errors": [],
     "structural_errors": [],

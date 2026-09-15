@@ -280,8 +280,11 @@ _REGISTRY_KEYS = frozenset(
 #: in the Julia reference.
 _OPAQUE_KEYS = frozenset(
     {
-        # Loop symbols and bound index names of a `faq` node, outside the
-        # namespaces `metaparameter_name_conflict` covers.
+        # Loop symbols and bound index names of a `faq` node.
+        # `metaparameter_name_conflict` refuses a metaparameter spelled like a
+        # loop symbol, so a metaparameter reaches these fields only as an `on`
+        # data-column name; they are names wherever they appear, so they are
+        # skipped rather than left to that check.
         "on",
         "syms",
         "arg",
@@ -1187,13 +1190,16 @@ def apply_mount_index_set_rename(doc: Any, rename_raw: Any, where: str) -> None:
 
 
 def _collect_bound_syms(out: set, x: Any) -> set:
-    """Bound index symbols of a declaration: aggregate ``output_idx`` entries and
-    ``ranges`` keys (at any nesting depth). Rebinding one would desynchronize the
-    ranges KEYS from their ``expr`` occurrences, so it is rejected outright."""
+    """Bound index symbols (loop symbols) of a subtree: the ``output_idx`` entries
+    and ``ranges`` keys of every Expression node, at any nesting depth — the
+    binder definition of the ``reserved_index_symbol`` rule (esm-spec §4.9.1.1),
+    which is not limited to ``faq`` (``argmin`` / ``argmax`` bind the same way).
+    Rebinding one would desynchronize the ranges KEYS from their ``expr``
+    occurrences, so it is rejected outright; a metaparameter spelled like one is
+    ``metaparameter_name_conflict``."""
 
     def _visit(node: dict[str, Any], _path: str) -> None:
-        op = node.get("op")
-        if op is not None and str(op) == "faq":
+        if node.get("op") is not None:
             oi = node.get("output_idx")
             if _is_array(oi):
                 for e in oi:
@@ -1593,6 +1599,9 @@ def _process_library(raw: Any, base_dir: str, stack: list[str], origin: str) -> 
     # §9.7.3 body composition in the library's own scope (decl objects are
     # mutated in place, so scope.templates sees the closed bodies).
     _compose_template_bodies(scope.templates, origin)
+    # In the library's own scope, before an importing edge's ``bindings``
+    # instantiate the templates and consume the names it closes.
+    _reject_metaparameter_loop_symbols(scope.metaparams, origin, scope.templates)
     return scope
 
 
@@ -1777,11 +1786,34 @@ def _close_document_metaparameters(
     return values
 
 
+def _reject_metaparameter_loop_symbols(names: Any, origin: str, *trees: Any) -> None:
+    """§9.7.6: a metaparameter name MUST NOT spell a loop symbol (a ``ranges``
+    key or ``output_idx`` entry of an Expression node) anywhere in ``trees``
+    (``metaparameter_name_conflict``). Substitution rewrites every bare string
+    that spells a bound metaparameter, and inside the node that binds it a loop
+    symbol is exactly such a string, so no field rule can tell the two apart."""
+    if not names:
+        return
+    bound: set[str] = set()
+    for t in trees:
+        _collect_bound_syms(bound, t)
+    for name in names:
+        if name in bound:
+            raise ExpressionTemplateError(
+                METAPARAMETER_NAME_CONFLICT,
+                f"{origin}: metaparameter '{name}' collides with a loop symbol "
+                "(a `ranges` key or `output_idx` entry) (esm-spec §9.7.6)",
+            )
+
+
 def _reject_metaparameter_shadowing(
-    root: dict[str, Any], doc_meta: dict[str, Any], doc_isets: dict[str, Any]
+    root: dict[str, Any],
+    top_templates: dict[str, Any],
+    doc_meta: dict[str, Any],
+    doc_isets: dict[str, Any],
 ) -> None:
     """§9.7.6 name-collision check: a document metaparameter MUST NOT shadow a
-    visible index-set / variable / species / parameter name
+    visible index-set / variable / species / parameter name or a loop symbol
     (``metaparameter_name_conflict``)."""
     if doc_meta:
         visible = set(doc_isets.keys())
@@ -1804,6 +1836,9 @@ def _reject_metaparameter_shadowing(
                     "variable/parameter/species/index-set name "
                     "(esm-spec §9.7.6)",
                 )
+        # Components carry their imported templates by now; ``top_templates``
+        # is a root library's effective top-level sequence, imports included.
+        _reject_metaparameter_loop_symbols(doc_meta, "document", root, top_templates)
 
 
 def _substitute_closed_metaparameters(
@@ -2226,7 +2261,7 @@ def resolve_template_machinery(
     is_library, top_templates = _resolve_root_library(root, base_dir, stack, doc_meta, doc_isets)
     _resolve_component_imports(root, base_dir, stack, doc_meta, doc_isets)
     values = _close_document_metaparameters(doc_meta, api_raw, mounted)
-    _reject_metaparameter_shadowing(root, doc_meta, doc_isets)
+    _reject_metaparameter_shadowing(root, top_templates, doc_meta, doc_isets)
     # Expression-position substitution folds THIS document's own closed
     # metaparameters and nothing else. An `expression_template_imports[k].bindings`
     # entry closes the metaparameters of the IMPORTED document (esm-spec §9.7.6

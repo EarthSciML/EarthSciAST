@@ -136,8 +136,11 @@ var registryKeys = []string{
 // rename-walk branches. Mirrors the `:opaque` kind of `_STRUCTURAL_FIELDS` in
 // the Julia reference.
 var opaqueKeys = []string{
-	// Loop symbols and bound index names of a `faq` node, outside the
-	// namespaces `metaparameter_name_conflict` covers.
+	// Loop symbols and bound index names of a `faq` node.
+	// `metaparameter_name_conflict` refuses a metaparameter spelled like a loop
+	// symbol, so a metaparameter reaches these fields only as an `on` data-column
+	// name; they are names wherever they appear, so they are skipped rather than
+	// left to that check.
 	"on", "syms", "arg", "output_idx", "of",
 	// A `table_lookup` output name.
 	"output",

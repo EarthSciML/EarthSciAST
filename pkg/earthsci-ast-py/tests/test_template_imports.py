@@ -1152,12 +1152,14 @@ def test_metaparam_structural_field_collision():
     """§9.7.6: loop symbols, references, enums, units and free text are names,
     and a map key is a declared name rather than a field.
 
-    Five metaparameters are spelled like structural values — ``row_id`` (a join
-    key column, free text), ``a`` (loop symbols), ``m`` (a unit symbol),
-    ``edge`` (a placement tag, a comment, citation text), ``ode`` (an enum) —
-    and each also sits in an expression position, where it closes. Substituting
-    the join clause turns ``{"on": [["row_id", "row_id"]], "syms": ["a", "b"]}``
-    into ``{"on": [[22, 22]], "syms": [11, "b"]}``, which is not schema-valid.
+    Four metaparameters are spelled like structural values — ``row_id`` (a join
+    key column, free text), ``m`` (a unit symbol), ``edge`` (a placement tag, a
+    comment, citation text), ``ode`` (an enum) — and each also sits in an
+    expression position, where it closes; so does ``a``, a dense range bound
+    beside the loop symbol ``p`` (a metaparameter spelled like a loop symbol is
+    ``metaparameter_name_conflict``). Substituting the join clause turns
+    ``{"on": [["row_id", "row_id"]], ...}`` into ``{"on": [[22, 22]], ...}``,
+    which is not schema-valid.
     """
     fixture = os.path.join(CONF, "metaparam_structural_field_collision", "fixture.esm")
     d = _expand_raw(fixture)
@@ -1174,12 +1176,12 @@ def test_metaparam_structural_field_collision():
     assert deq["rhs"]["args"] == ["c", 3]
 
     r = _defining(d, "M", "r")
-    assert r["output_idx"] == ["a"]
-    assert r["join"] == [{"on": [["row_id", "row_id"]], "syms": ["a", "b"]}]
+    assert r["output_idx"] == ["p"]
+    assert r["join"] == [{"on": [["row_id", "row_id"]], "syms": ["p", "b"]}]
     assert r["expr"]["args"] == [22, 5]
     k = _defining(d, "M", "k")
-    assert k["arg"] == "a"
-    assert k["ranges"]["a"] == [1, 11]
+    assert k["arg"] == "p"
+    assert k["ranges"]["p"] == [1, 11]
     assert k["expr"]["args"] == ["c", 7]
 
     # A map key is a declared name, not a field: variables named `source` and

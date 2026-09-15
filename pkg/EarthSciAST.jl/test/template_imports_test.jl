@@ -350,10 +350,12 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
     end
 
     @testset "metaparam_structural_field_collision: loop symbols, references, enums, units, text, map keys (§9.7.6)" begin
-        # Five metaparameters are spelled like structural values: `row_id` (a
-        # join key column, free text), `a` (loop symbols), `m` (a unit symbol),
-        # `edge` (a placement tag, a comment, citation text), `ode` (an enum).
-        # Each also sits in an expression position, where it closes.
+        # Four metaparameters are spelled like structural values: `row_id` (a
+        # join key column, free text), `m` (a unit symbol), `edge` (a placement
+        # tag, a comment, citation text), `ode` (an enum). Each also sits in an
+        # expression position, where it closes; so does `a`, a dense range bound
+        # beside the loop symbol `p` (a metaparameter spelled like a loop symbol
+        # is `metaparameter_name_conflict`).
         @test _expand_raw(conf("metaparam_structural_field_collision", "fixture.esm")) ==
               _golden(conf("metaparam_structural_field_collision", "expanded.esm"))
 
@@ -371,13 +373,13 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # A join clause's key columns and the loop symbols they are read at are
         # names; substituting them makes the document schema-invalid.
         r = _defrhs(d, "M", "r")
-        @test r["output_idx"] == Any["a"]
+        @test r["output_idx"] == Any["p"]
         @test r["join"][1]["on"] == Any[Any["row_id", "row_id"]]
-        @test r["join"][1]["syms"] == Any["a", "b"]
+        @test r["join"][1]["syms"] == Any["p", "b"]
         @test r["expr"]["args"] == Any[22, 5]
         k = _defrhs(d, "M", "k")
-        @test k["arg"] == "a"
-        @test k["ranges"]["a"] == Any[1, 11]
+        @test k["arg"] == "p"
+        @test k["ranges"]["p"] == Any[1, 11]
         @test k["expr"]["args"] == Any["c", 7]
 
         # A map key is a declared name, not a field: variables named `source` and

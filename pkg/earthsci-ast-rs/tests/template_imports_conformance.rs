@@ -311,10 +311,12 @@ fn metaparam_axis_name_collision_matches_golden() {
 
 /// metaparam_structural_field_collision: loop symbols, references, enums, units
 /// and free text are names, and a map key is a declared name rather than a
-/// field (esm-spec §9.7.6). Five metaparameters are spelled like structural
-/// values — `row_id` (a join key column, free text), `a` (loop symbols), `m` (a
-/// unit symbol), `edge` (a placement tag, a comment, citation text), `ode` (an
-/// enum) — and each also sits in an expression position, where it closes.
+/// field (esm-spec §9.7.6). Four metaparameters are spelled like structural
+/// values — `row_id` (a join key column, free text), `m` (a unit symbol), `edge`
+/// (a placement tag, a comment, citation text), `ode` (an enum) — and each also
+/// sits in an expression position, where it closes; so does `a`, a dense range
+/// bound beside the loop symbol `p` (a metaparameter spelled like a loop symbol
+/// is `metaparameter_name_conflict`).
 #[test]
 fn metaparam_structural_field_collision_matches_golden() {
     let d = expand_raw(&conf(&[
@@ -349,15 +351,15 @@ fn metaparam_structural_field_collision_matches_golden() {
     // A join clause's key columns and the loop symbols they are read at are
     // names; substituting them makes the document schema-invalid.
     let r = obs_def(model, "r");
-    assert_eq!(r["output_idx"], json!(["a"]));
+    assert_eq!(r["output_idx"], json!(["p"]));
     assert_eq!(
         r["join"],
-        json!([{"on": [["row_id", "row_id"]], "syms": ["a", "b"]}])
+        json!([{"on": [["row_id", "row_id"]], "syms": ["p", "b"]}])
     );
     assert_eq!(r["expr"]["args"], json!([22, 5]));
     let k = obs_def(model, "k");
-    assert_eq!(k["arg"], "a");
-    assert_eq!(k["ranges"]["a"], json!([1, 11]));
+    assert_eq!(k["arg"], "p");
+    assert_eq!(k["ranges"]["p"], json!([1, 11]));
     assert_eq!(k["expr"]["args"], json!(["c", 7]));
 
     // A map key is a declared name, not a field: variables named `source` and

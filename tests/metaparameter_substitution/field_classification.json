@@ -23,7 +23,7 @@
       "node_header": "Describes the Expression node itself (op, id, expect_cadence).",
       "axis": "Names a spatial axis or integration variable (wrt, dim, var).",
       "registry": "A closed-registry id or literal enum parameterizing the node's op.",
-      "loop_symbol": "A loop symbol or bound index name of a faq node; loop symbols are not in the namespaces metaparameter_name_conflict covers.",
+      "loop_symbol": "A loop symbol or bound index name of a faq node. metaparameter_name_conflict refuses a metaparameter spelled like a loop symbol, so a metaparameter reaches these fields only as an on data-column name; they are names wherever they appear, so they are structural rather than left to that check.",
       "identifier": "An id or name of a declaration, event, test, plot or handler.",
       "reference": "Names a file, component, data source, template-import vocabulary or data column rather than a value.",
       "enum": "A closed enumeration value.",

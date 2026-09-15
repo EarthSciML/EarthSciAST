@@ -268,9 +268,11 @@ func TestTemplateImports_MetaparamSubstitutionIsPerField(t *testing.T) {
 // TestTemplateImports_MetaparamStructuralFieldCollision pins the fourth §9.7.6
 // structural family and the name-keyed-map rule over the shared fixture. Five
 // metaparameters are spelled like structural values — `row_id` (a join key
-// column, free text), `a` (loop symbols), `m` (a unit symbol), `edge` (a
-// placement tag, a comment, citation text), `ode` (an enum) — and each also sits
-// in an expression position, where it closes.
+// column, free text), `m` (a unit symbol), `edge` (a placement tag, a comment,
+// citation text), `ode` (an enum) — and each also sits in an expression
+// position, where it closes; so does `a`, a dense range bound beside the loop
+// symbol `p` (a metaparameter spelled like a loop symbol is
+// `metaparameter_name_conflict`).
 func TestTemplateImports_MetaparamStructuralFieldCollision(t *testing.T) {
 	path := tiConfDir(t, "metaparam_structural_field_collision", "fixture.esm")
 	data, err := os.ReadFile(path)
@@ -326,12 +328,12 @@ func TestTemplateImports_MetaparamStructuralFieldCollision(t *testing.T) {
 	// A join clause's key columns and the loop symbols they are read at are
 	// names; substituting them makes the document schema-invalid.
 	r := defRHS("r")
-	want("r.output_idx", r["output_idx"], `["a"]`)
-	want("r.join", r["join"], `[{"on":[["row_id","row_id"]],"syms":["a","b"]}]`)
+	want("r.output_idx", r["output_idx"], `["p"]`)
+	want("r.join", r["join"], `[{"on":[["row_id","row_id"]],"syms":["p","b"]}]`)
 	want("r.expr.args", r["expr"].(map[string]any)["args"], `[22,5]`)
 	k := defRHS("k")
-	want("k.arg", k["arg"], `"a"`)
-	want("k.ranges.a", k["ranges"].(map[string]any)["a"], `[1,11]`)
+	want("k.arg", k["arg"], `"p"`)
+	want("k.ranges.p", k["ranges"].(map[string]any)["p"], `[1,11]`)
 	want("k.expr.args", k["expr"].(map[string]any)["args"], `["c",7]`)
 
 	// A map key is a declared name, not a field: variables named `source` and
