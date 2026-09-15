@@ -756,22 +756,24 @@ fn inline_toplevel_model_refs(
             //   the assembler declares stays symbolic rather than failing here.
             let leaf_mount_declared =
                 crate::template_imports::collect_mount_declared_metaparameters(&comp, &leaf_dir);
-            if let Some(mut resolved) = crate::template_imports::resolve_template_machinery_scoped(
+            let mut resolved = crate::template_imports::resolve_template_machinery_scoped(
                 &comp,
                 &leaf_dir,
                 &bindings,
                 &leaf_mount_declared,
                 true,
-            )? {
-                // A mounted component is a self-contained build boundary: lower
-                // under Option B, then `expand`, so the spliced component carries
-                // the fully-expanded Option-A image and the assembling document's
-                // lowering never resolves the leaf's template names against its
-                // own registry.
-                crate::lower_expression_templates::lower_expression_templates(&mut resolved)?;
-                crate::lower_expression_templates::expand(&mut resolved)?;
-                comp = resolved;
-            }
+            )?
+            .unwrap_or_else(|| std::mem::take(&mut comp));
+            // A mounted component is a self-contained build boundary: lower
+            // under Option B, then `expand`, so the spliced component carries
+            // the fully-expanded Option-A image and the assembling document's
+            // lowering never resolves the leaf's template names against its
+            // own registry. A leaf with no §9.7 machinery still expands here:
+            // its own calls bind their parameters, so an `enum` op a parameter
+            // spells resolves against the leaf's block below (esm-spec §9.3).
+            crate::lower_expression_templates::lower_expression_templates(&mut resolved)?;
+            crate::lower_expression_templates::expand(&mut resolved)?;
+            comp = resolved;
 
             // esm-spec §9.3: the leaf's `enum` ops resolve against ITS OWN
             // `enums` block, here, while that block is still at hand. The
@@ -1253,23 +1255,25 @@ fn resolve_value(
                     &parsed,
                     &parent_dir,
                 );
-            if let Some(mut resolved) = crate::template_imports::resolve_template_machinery_scoped(
+            let mut resolved = crate::template_imports::resolve_template_machinery_scoped(
                 &parsed,
                 &parent_dir,
                 &bindings,
                 &leaf_mount_declared,
                 true,
-            )? {
-                // A referenced subsystem is a self-contained build boundary
-                // (mirrors Julia `_load_ref` → `_lower_and_coerce`): lower under
-                // Option B, then `expand` so the inlined component carries the
-                // fully-expanded Option-A image with no surviving references —
-                // the parent document's lowering must not resolve the
-                // subsystem's own template names against the parent registry.
-                crate::lower_expression_templates::lower_expression_templates(&mut resolved)?;
-                crate::lower_expression_templates::expand(&mut resolved)?;
-                parsed = resolved;
-            }
+            )?
+            .unwrap_or_else(|| std::mem::take(&mut parsed));
+            // A referenced subsystem is a self-contained build boundary
+            // (mirrors Julia `_load_ref` → `_lower_and_coerce`): lower under
+            // Option B, then `expand` so the inlined component carries the
+            // fully-expanded Option-A image with no surviving references —
+            // the parent document's lowering must not resolve the
+            // subsystem's own template names against the parent registry. A
+            // leaf with no §9.7 machinery still expands, as at the top-level
+            // form (esm-spec §9.3).
+            crate::lower_expression_templates::lower_expression_templates(&mut resolved)?;
+            crate::lower_expression_templates::expand(&mut resolved)?;
+            parsed = resolved;
             // esm-spec §9.3: the referenced document's `enum` ops resolve
             // against ITS OWN `enums` block, here, as at the top-level form.
             lower_mounted_enums_at_edge(&mut parsed, &format!("subsystem ref '{ref_str}'"))?;
