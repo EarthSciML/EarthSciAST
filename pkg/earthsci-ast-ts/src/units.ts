@@ -1013,7 +1013,7 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
           for (const units of unresolvableConstUnits(side)) {
             warnings.push({
               message: `Unit string '${units}' is not a recognised unit`,
-              code: 'unparseable_unit',
+              code: ERROR_CODES.UNPARSEABLE_UNIT,
               location: `${eqLocation}/${field}`,
               units,
             })
