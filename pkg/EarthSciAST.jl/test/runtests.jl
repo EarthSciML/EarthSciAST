@@ -327,6 +327,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("conformance_override_key_diagnostics_test.jl")
     include("conformance_pde_inline_reference_dimension_names_test.jl")  # §6.6.5 reference dimension names
     include("rhs_time_derivative_resolution_test.jl")   # §4.2 right-hand-side D: Julia resolves; its exclusion
+    include("unlowered_operator_walk_test.jl")          # §9.6.3 c.6: unlowered op in a tree the build discards
     include("closed_functions_test.jl")
     include("closed_functions_autodiff_test.jl")
     include("datetime_arithmetic_test.jl")
