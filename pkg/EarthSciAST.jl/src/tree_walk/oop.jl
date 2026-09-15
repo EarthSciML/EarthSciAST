@@ -92,7 +92,7 @@
 # with the codegen tier on, Enzyme fails on the emitted RuntimeGeneratedFunction with
 # an internal `UndefVarError`.
 #
-# THE ONE LADDER. `_oop_op` evaluates an op over ALREADY-EVALUATED children using
+# THE ONE LADDER. `_scalar_op` evaluates an op over ALREADY-EVALUATED children using
 # broadcast (`.+`, `sin.`, …) throughout. Broadcasting two scalars yields a scalar,
 # so the SAME ladder serves the scalar walker (children all `T`) and the
 # access-kernel lane walker (children a mix of `T` and `Vector{T}`) — no third arm
@@ -151,7 +151,7 @@ const _oop_value_type = _rhs_value_type
 #
 # WHY THIS IS A THIRD ARGUMENT AND NOT A GLOBAL. The memo has to die with the
 # trace that created it: an SSA value from a finished module is not usable in the
-# next one. So it is carried by `_OopForcing`, which `_make_rhs_oop`'s closure
+# next one. So it is carried by `_Forcing`, which `_make_rhs_oop`'s closure
 # constructs FRESH on every call and threads to every read site — the memo's
 # lifetime is then exactly one RHS invocation, by construction. Nothing to tear
 # down, nothing to leak on an exception, nothing shared between threads, and no
@@ -218,7 +218,7 @@ const _oop_value_type = _rhs_value_type
 # ext/EarthSciASTReactantExt.jl for the switches and their default.
 
 # The arithmetic ladder, value-numbered. `memo` is `nothing` on host and for any
-# backend that does not specialize it, so this is `_oop_op(op, c, T)` verbatim.
+# backend that does not specialize it, so this is `_scalar_op(op, c, T)` verbatim.
 #
 # A backend may also use this seam to emit the op DIRECTLY rather than through Julia
 # broadcast (ess-oop-native): Reactant's broadcast lowering manufactures identity
@@ -228,8 +228,8 @@ const _oop_value_type = _rhs_value_type
 # StableHLO form IS the IEEE operation Julia's operator is (`+ - * /` and negation)
 # and falls back to this ladder for everything else, which stays the reference for
 # op semantics.
-@inline _oop_op(op::Symbol, c::AbstractVector, ::Type{T}, memo) where {T} =
-    _oop_op(op, c, T)
+@inline _scalar_op(op::Symbol, c::AbstractVector, ::Type{T}, memo) where {T} =
+    _scalar_op(op, c, T)
 
 # A build-time constant entering the value type. On host `convert(T, x)`, which
 # is what every call site said before this seam existed.
@@ -387,167 +387,6 @@ end
     return du
 end
 
-# ---- The shared op ladder ---------------------------------------------------
-#
-# The mechanical unary arms (`sin` … `ceil`), GENERATED from the op-registry table
-# exactly as `_eval_acc_op`'s matching arms (access_kernel.jl) are, so a unary op added
-# to the registry reaches every ladder (scalar / oop / access-kernel) at once. `nothing` ⇒ not a mechanical unary op ⇒ the caller's ladder falls
-# through. The comparison / binary / min-max probes below follow the same
-# protocol from their own registry tables.
-let arms = :(return nothing)
-    for row in reverse(_UNARY_ELEMENTWISE_OPS)
-        arms = Core.Expr(:if, :(op === $(QuoteNode(row.sym))),
-                         quote
-                             _expect_arity_n(op, c, 1)
-                             return $(row.sym).(c[1])
-                         end,
-                         arms)
-    end
-    @eval @inline function _oop_unary_elementwise(op::Symbol, c::AbstractVector)
-        $arms
-    end
-end
-
-# The comparison arms (`<` … `!=` → 1/0 in the value type), GENERATED from
-# `_COMPARISON_ELEMENTWISE_OPS` the same way. A comparison is piecewise
-# constant, so `one(T)`/`zero(T)` carry the correct (zero) derivative under AD.
-# `$(fnsym).(a, b)` is broadcast sugar for the hand-written infix `a .< b`, so
-# the fused blend is unchanged.
-let arms = :(return nothing)
-    for row in reverse(_COMPARISON_ELEMENTWISE_OPS)
-        arms = Core.Expr(:if, :(op === $(QuoteNode(row.sym))),
-                         quote
-                             _expect_arity_n(op, c, 2)
-                             return ifelse.($(row.fnsym).(c[1], c[2]), one(T), zero(T))
-                         end,
-                         arms)
-    end
-    @eval @inline function _oop_comparison(op::Symbol, c::AbstractVector,
-                                           ::Type{T}) where {T}
-        $arms
-    end
-end
-
-# The fixed-2-ary elementwise arms (`/`, `^`, `pow`, `atan2`), GENERATED from
-# `_BINARY_ELEMENTWISE_OPS`. NB the `^` arm here is only the FALLBACK for a
-# malformed arity: a well-formed 2-ary `^`/`pow` is intercepted upstream by
-# `_oop_pow` / `_oop_eval_acck`'s literal-exponent arm and never reaches the
-# shared ladder (see `_oop_pow` for why).
-let arms = :(return nothing)
-    for row in reverse(_BINARY_ELEMENTWISE_OPS)
-        arms = Core.Expr(:if, :(op === $(QuoteNode(row.sym))),
-                         quote
-                             _expect_arity_n(op, c, 2)
-                             return $(row.fnsym).(c[1], c[2])
-                         end,
-                         arms)
-    end
-    @eval @inline function _oop_binary_elementwise(op::Symbol, c::AbstractVector)
-        $arms
-    end
-end
-
-# The n-ary `min`/`max` folds (arity ≥ 2), GENERATED from `_NARY_MINMAX_OPS` —
-# same guard and fold order as the in-place ladders.
-let arms = :(return nothing)
-    for row in reverse(_NARY_MINMAX_OPS)
-        arms = Core.Expr(:if, :(op === $(QuoteNode(row.sym))),
-                         quote
-                             length(c) < 2 && throw(TreeWalkError("E_TREEWALK_ARITY",
-                                 $(row.name * " needs ≥2 args")))
-                             r = $(row.fnsym).(c[1], c[2])
-                             for i in 3:length(c)
-                                 r = $(row.fnsym).(r, c[i])
-                             end
-                             return r
-                         end,
-                         arms)
-    end
-    @eval @inline function _oop_minmax(op::Symbol, c::AbstractVector)
-        $arms
-    end
-end
-
-# Apply `op` to already-evaluated children. Every arm broadcasts, so `c` may hold
-# scalars (the scalar walker), arrays (the access-kernel lane walker), or a mix — and the
-# fold ORDER matches `_eval_node_op` / `_eval_acc_op` arm for arm, which is what
-# keeps a Float64 run of this emitter bit-identical to `f!`.
-function _oop_op(op::Symbol, c::AbstractVector, ::Type{T}) where {T}
-    if op === :+
-        length(c) == 1 && return c[1]
-        r = c[1] .+ c[2]
-        for i in 3:length(c)
-            r = r .+ c[i]
-        end
-        return r
-    elseif op === :*
-        length(c) == 1 && return c[1]
-        r = c[1] .* c[2]
-        for i in 3:length(c)
-            r = r .* c[i]
-        end
-        return r
-    elseif op === :-
-        length(c) == 1 && return .-c[1]
-        length(c) == 2 && return c[1] .- c[2]
-        throw(TreeWalkError("E_TREEWALK_ARITY", "- expects 1 or 2 args"))
-    elseif op === :neg
-        _expect_arity_n(op, c, 1)
-        return .-c[1]
-    # Fixed-2-ary elementwise (`/`, `^`, `pow`, `atan2`) — GENERATED from the
-    # registry (`_oop_binary_elementwise` above). The probe sits where `/` sat.
-    elseif (bin = _oop_binary_elementwise(op, c)) !== nothing
-        return bin
-
-    # Comparisons → 1/0 in the value type — GENERATED from the registry
-    # (`_oop_comparison` above, where the piecewise-constant AD note lives).
-    elseif (cmp = _oop_comparison(op, c, T)) !== nothing
-        return cmp
-
-    # Logical — folded (not short-circuited), matching `_eval_acc_op`; every child
-    # is evaluated either way, so the values agree with the scalar arm too.
-    elseif op === :and
-        r = one(T)
-        for a in eachindex(c)
-            r = ifelse.((r .!= 0) .& (c[a] .!= 0), one(T), zero(T))
-        end
-        return r
-    elseif op === :or
-        r = zero(T)
-        for a in eachindex(c)
-            r = ifelse.((r .!= 0) .| (c[a] .!= 0), one(T), zero(T))
-        end
-        return r
-    elseif op === :not
-        _expect_arity_n(op, c, 1)
-        return ifelse.(c[1] .== 0, one(T), zero(T))
-    elseif op === :ifelse
-        _expect_arity_n(op, c, 3)
-        return ifelse.(c[1] .!= 0, c[2], c[3])
-
-    elseif (unary = _oop_unary_elementwise(op, c)) !== nothing
-        return unary
-    elseif op === :atan
-        length(c) == 1 && return atan.(c[1])
-        length(c) == 2 && return atan.(c[1], c[2])
-        throw(TreeWalkError("E_TREEWALK_ARITY", "atan expects 1 or 2 args"))
-    # n-ary min/max (arity ≥ 2) — GENERATED from the registry (`_oop_minmax`
-    # above). (`atan2` is handled by the binary probe near the ladder top.)
-    elseif (mm = _oop_minmax(op, c)) !== nothing
-        return mm
-
-    elseif op === :pi || op === :π
-        return T(pi)
-    elseif op === :e
-        return T(ℯ)
-    elseif op === :Pre
-        _expect_arity_n(op, c, 1)
-        return c[1]
-    else
-        throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_OP", String(op)))
-    end
-end
-
 # ---- interp.* under a generic value type ------------------------------------
 #
 # The SAME `_interp_*_core` kernels the in-place path calls (registered_functions.jl),
@@ -562,258 +401,6 @@ end
     convert(T, _interp_bilinear_core(h.table, h.axis_x, h.axis_y, x, y))
 @inline _oop_interp_searchsorted(h::_InterpSearchsortedSpec, x, ::Type{T}) where {T} =
     convert(T, _interp_searchsorted_core("interp.searchsorted", x, h.xs))
-
-# ---- interp knot addressing: the seams a TRACER replaces --------------------
-#
-# The three primitive shapes the lane forms below are built from, factored out
-# as SEAMS for exactly the reason `_oop_read_state` is one: the branch-free
-# select-ladder lowering is RIGHT for host / ForwardDiff — a handful of fused
-# broadcasts over a 2–3 knot table, no branch, no allocation per knot — and
-# catastrophically WRONG for a tracer on a big table, where every ladder step is
-# a separate traced op and the emitted program is O(table) PER CALL SITE.
-#
-# On a photolysis-style component with several bilinear calls over tables of a few
-# thousand entries, the ladder traces to a program dominated by `select`/`compare`
-# scaffolding rather than arithmetic, and XLA compile can exhaust host memory.
-#
-# A tracer has a constant-time primitive for precisely this — `stablehlo.gather`
-# on a constant table — so a backend replaces the three ladders HERE rather than
-# forking the three lane evaluators. What a backend method must honour,
-# bit-for-bit:
-#
-#   `_oop_knot_count(knots, q, cmp)`   Σ_k [cmp(knots[k], q)] as a Float64 lane
-#         value. The terms are 0.0/1.0 and n ≪ 2^53, so the sum is EXACT in any
-#         association order, and so is any other route to the same integer: what
-#         a backend owes is the ladder's VALUE, not its shape, for every query
-#         including NaN (which fails every compare and contributes 0.0 here).
-#         A `reduce` along the knot axis is the obvious lowering; the Reactant
-#         backend instead locates elementwise (a capped ladder for a small axis,
-#         an arithmetic guess corrected by two gathers for a big uniform one, the
-#         reduce as a fallback) — see the `count-locate` header in
-#         ext/EarthSciASTReactantExt.jl and test/reactant_locate_test.jl for the
-#         exactness argument and its pins.
-#   `_oop_knot_pair(v, i)`             `(v[i], v[i+1])` elementwise, `i` an
-#         exactly-integral Float64 lane index in `[1, length(v)-1]`. SELECTION,
-#         never a blend — the table entry comes through bit-exact (no `0·Inf`,
-#         no signed-zero surprise), which a gather also gives by construction.
-#   `_oop_knot_pair2(a, b, i)`         the same, for two same-length tables at
-#         one index, sharing the ladder's compares (the linear evaluator's
-#         axis+table pair; kept fused so the host op count is UNCHANGED).
-#   `_oop_bilinear_corners(tbl, i, j, Nx, Ny)`  the four `tbl[i+a][j+b]`,
-#         `a,b ∈ {0,1}`, same selection contract, `i ∈ [1,Nx-1]`, `j ∈ [1,Ny-1]`.
-#
-# `knots`/`v`/`a`/`b` is a `Vector{Float64}` (one table shared by every lane) or
-# a `Vector{Vector{Float64}}` of lane COLUMNS (`_Interp*LaneSpec`, one table per
-# lane, `col[k][l]`); `tbl` is `Vector{Vector{Float64}}` (scalar spec,
-# `tbl[k][l]`) or a `Matrix{Vector{Float64}}` of lane columns (`tbl[k,l][lane]`).
-# Both are build-time host constants either way, so a backend can materialize
-# them as constant tensors. `_oop_knot_at` is the one place that difference is
-# read, so a backend's methods need not repeat it.
-@inline _oop_knot_at(v::AbstractVector{Float64}, k::Int) = @inbounds v[k]
-@inline _oop_knot_at(v::AbstractVector{Vector{Float64}}, k::Int) = @inbounds v[k]
-@inline _oop_tbl_at(t::Vector{Vector{Float64}}, k::Int, l::Int) = @inbounds t[k][l]
-@inline _oop_tbl_at(t::Matrix{Vector{Float64}}, k::Int, l::Int) = @inbounds t[k, l]
-
-@inline function _oop_knot_count(knots, q, cmp::F) where {F}
-    n = length(knots)
-    cnt = ifelse.(cmp.(_oop_knot_at(knots, 1), q), 1.0, 0.0)
-    for k in 2:n
-        cnt = cnt .+ ifelse.(cmp.(_oop_knot_at(knots, k), q), 1.0, 0.0)
-    end
-    return cnt
-end
-
-@inline function _oop_knot_pair(v, i)
-    n = length(v)
-    lo = _oop_knot_at(v, 1) .+ zero.(i)
-    hi = _oop_knot_at(v, 2) .+ zero.(i)
-    for k in 2:(n - 1)
-        sel = i .== Float64(k)
-        lo = ifelse.(sel, _oop_knot_at(v, k),     lo)
-        hi = ifelse.(sel, _oop_knot_at(v, k + 1), hi)
-    end
-    return lo, hi
-end
-
-@inline function _oop_knot_pair2(a, b, i)
-    n = length(a)
-    alo = _oop_knot_at(a, 1) .+ zero.(i); ahi = _oop_knot_at(a, 2) .+ zero.(i)
-    blo = _oop_knot_at(b, 1) .+ zero.(i); bhi = _oop_knot_at(b, 2) .+ zero.(i)
-    for k in 2:(n - 1)
-        sel = i .== Float64(k)
-        alo = ifelse.(sel, _oop_knot_at(a, k),     alo)
-        ahi = ifelse.(sel, _oop_knot_at(a, k + 1), ahi)
-        blo = ifelse.(sel, _oop_knot_at(b, k),     blo)
-        bhi = ifelse.(sel, _oop_knot_at(b, k + 1), bhi)
-    end
-    return alo, ahi, blo, bhi
-end
-
-@inline function _oop_bilinear_corners(tbl, i, j, Nx::Int, Ny::Int)
-    z = zero.(i .+ j)
-    t_ij    = _oop_tbl_at(tbl, 1, 1) .+ z; t_i1j   = _oop_tbl_at(tbl, 2, 1) .+ z
-    t_ijp1  = _oop_tbl_at(tbl, 1, 2) .+ z; t_i1jp1 = _oop_tbl_at(tbl, 2, 2) .+ z
-    for k in 1:(Nx - 1), l in 1:(Ny - 1)
-        (k == 1 && l == 1) && continue
-        sel = (i .== Float64(k)) .& (j .== Float64(l))
-        t_ij    = ifelse.(sel, _oop_tbl_at(tbl, k,     l),     t_ij)
-        t_i1j   = ifelse.(sel, _oop_tbl_at(tbl, k + 1, l),     t_i1j)
-        t_ijp1  = ifelse.(sel, _oop_tbl_at(tbl, k,     l + 1), t_ijp1)
-        t_i1jp1 = ifelse.(sel, _oop_tbl_at(tbl, k + 1, l + 1), t_i1jp1)
-    end
-    return t_ij, t_i1j, t_ijp1, t_i1jp1
-end
-
-# ---- interp.* over whole LANES: locate → gather → blend ----------------------
-#
-# The de-scalarized interp forms the affine access-kernel path evaluates (and the
-# forms an XLA/Reactant trace needs): NO branch on the query, NO opaque scalar
-# core inside a broadcast — every step is elementwise arithmetic + a knot-
-# addressing seam, so a traced query lane vector flows through as whole-array ops
-# and the emitted program's size is independent of the GRID. (It is independent
-# of the TABLE too, but only on a backend that gives the seams above a gather;
-# the default lowering is the O(table) select ladder — see the seam header.)
-#
-# BIT-IDENTICAL to the scalar cores, by mirroring their decision trees with
-# `ifelse` selects instead of branches:
-#   * locate: `i = clamp(Σ_k [axis[k] ≤ x], 1, n-1)` — for a validated strictly-
-#     increasing axis this is exactly the scan's "largest k with axis[k] ≤ x".
-#   * gather: `_oop_knot_pair` / `_oop_bilinear_corners` SELECT (never blend)
-#     the cell's endpoints, so table entries come through exactly (no `0·Inf`, no
-#     signed-zero surprises).
-#   * blend: the cores' pinned form `tᵢ + w·(tᵢ₊₁ − tᵢ)` verbatim.
-#   * clamps: the same outer `x ≤ axis[1]` / `x ≥ axis[n]` selects the cores
-#     early-return on. A NaN query fails both compares, takes the blend arm, and
-#     `w = (NaN − aᵢ)/…` propagates NaN — the cores' documented NaN semantics.
-# The oop test file pins these against the scalar cores over dense query sweeps
-# (in-range, knots, both clamps, NaN).
-#
-# `q` may be a lane vector OR a scalar (an invariant query) — broadcast serves
-# both, exactly like the rest of this emitter.
-function _oop_interp_linear_lanes(h::_InterpLinearSpec, q, ::Type{T}) where {T}
-    axis = h.axis; table = h.table
-    n = length(axis)
-    cnt = _oop_knot_count(axis, q, <=)
-    i = min.(max.(cnt, 1.0), Float64(n - 1))
-    ai, ai1, ti, ti1 = _oop_knot_pair2(axis, table, i)
-    w = (q .- ai) ./ (ai1 .- ai)
-    blend = ti .+ w .* (ti1 .- ti)
-    return ifelse.(q .<= axis[1], table[1],
-                   ifelse.(q .>= axis[n], table[n], blend))
-end
-
-function _oop_interp_searchsorted_lanes(h::_InterpSearchsortedSpec, q, ::Type{T}) where {T}
-    xs = h.xs
-    n = length(xs)
-    n == 0 && return one.(q .* 0 .+ 1.0)     # empty table → 1 lane-wide (core's rule)
-    # smallest i with xs[i] ≥ x  ==  #(xs .< x) + 1; NaN → n+1 (selected explicitly,
-    # since `xs[k] < NaN` is false everywhere and would land on 1).
-    r = _oop_knot_count(xs, q, <) .+ 1.0
-    return ifelse.(q .!= q, Float64(n + 1), r)
-end
-
-function _oop_interp_bilinear_lanes(h::_InterpBilinearSpec, x, y, ::Type{T}) where {T}
-    ax = h.axis_x; ay = h.axis_y; table = h.table
-    Nx = length(ax); Ny = length(ay)
-    # Per-axis clamp of the QUERY (the core's x_q/y_q), then count-locate.
-    x_q = ifelse.(x .<= ax[1], ax[1], ifelse.(x .>= ax[Nx], ax[Nx], x))
-    y_q = ifelse.(y .<= ay[1], ay[1], ifelse.(y .>= ay[Ny], ay[Ny], y))
-    i = min.(max.(_oop_knot_count(ax, x_q, <=), 1.0), Float64(Nx - 1))
-    j = min.(max.(_oop_knot_count(ay, y_q, <=), 1.0), Float64(Ny - 1))
-    xi, xip1 = _oop_knot_pair(ax, i)
-    yj, yjp1 = _oop_knot_pair(ay, j)
-    t_ij, t_i1j, t_ijp1, t_i1jp1 = _oop_bilinear_corners(table, i, j, Nx, Ny)
-    wx = (x_q .- xi) ./ (xip1 .- xi)
-    wy = (y_q .- yj) ./ (yjp1 .- yj)
-    row_j   = t_ij   .+ wx .* (t_i1j   .- t_ij)
-    row_jp1 = t_ijp1 .+ wx .* (t_i1jp1 .- t_ijp1)
-    return row_j .+ wy .* (row_jp1 .- row_j)
-end
-
-# ---- interp.* with PER-LANE spec tables (kernel-class merge) -----------------
-#
-# The lane-tabled twins of the three evaluators above, for a merged kernel
-# class whose members carry DIFFERENT same-shape interp tables
-# (`_Interp*LaneSpec`, registered_functions.jl). Same locate → gather → blend
-# through the SAME seams, with every scalar knot read (`axis[k]` / `table[k]` /
-# `xs[k]`) replaced by its length-L lane COLUMN (`col[k][l] == specs[l].…[k]`).
-# All the selects are elementwise, so lane `l` computes exactly what the
-# scalar-spec evaluator computes on `specs[l]` — bit-identical to the unmerged
-# kernels by construction. The columns are host `Vector{Float64}` constants, so
-# a Reactant trace embeds them as constant tensors exactly like scalar knots,
-# and the emitted program stays independent of the lane count's origin. `q` may
-# be a lane vector OR an invariant scalar; the columns force a length-L result
-# either way (each lane still owns its own table).
-#
-# CLAMP/EDGE BOUNDS are the exception to "every knot read is a seam": the outer
-# clamp (`ax[1]`/`ax[Nx]`, and the linear form's edge values `table[1]`/
-# `table[n]`) is a plain broadcast over the boundary COLUMN, so under a trace
-# each such column would be embedded as a lane-wide constant even when every lane
-# holds the same bound — the one remaining O(lanes) constant after the knot/table
-# gathers went grid-independent (see test/reactant_lane_dedup_test.jl).
-# `_oop_lane_bound` collapses a boundary column whose lanes are all BITWISE
-# equal (`isequal` per element: NaN unifies, `-0.0` stays apart from `0.0` —
-# the same key the trace-time lane dedup groups by) to its one scalar, which a
-# trace then embeds as a scalar constant. Bit-identical by construction: the
-# broadcasts consume one value per lane either way, and it is the same value.
-# RESULT LENGTH is unchanged in every case — the length-L knot columns flow
-# through `_oop_knot_count`/`_oop_knot_pair`/`_oop_bilinear_corners` on every
-# path, so the lane axis is carried by the located/gathered terms even when a
-# collapsed bound meets a lane-invariant scalar query (the `Lq` trap the
-# Reactant ext's `_rx_knot_matrix` guard documents). A mixed column (lanes
-# genuinely differing in their bound) stays a column — exactly today.
-# `ESS_LANE_INTERN_DISABLE=1` turns the collapse off with the rest of the
-# lane-intern feature, restoring today's lane-wide bounds as the oracle.
-function _oop_lane_bound(col::Vector{Float64})
-    _lane_intern_disabled() && return col
-    @inbounds v1 = col[1]
-    @inbounds for k in 2:length(col)
-        isequal(col[k], v1) || return col
-    end
-    return v1
-end
-
-function _oop_interp_linear_lanes(h::_InterpLinearLaneSpec, q, ::Type{T}) where {T}
-    axis = h.axis_cols; table = h.table_cols
-    n = length(axis)
-    cnt = _oop_knot_count(axis, q, <=)
-    i = min.(max.(cnt, 1.0), Float64(n - 1))
-    ai, ai1, ti, ti1 = _oop_knot_pair2(axis, table, i)
-    w = (q .- ai) ./ (ai1 .- ai)
-    blend = ti .+ w .* (ti1 .- ti)
-    return ifelse.(q .<= _oop_lane_bound(axis[1]), _oop_lane_bound(table[1]),
-                   ifelse.(q .>= _oop_lane_bound(axis[n]), _oop_lane_bound(table[n]),
-                           blend))
-end
-
-function _oop_interp_searchsorted_lanes(h::_InterpSearchsortedLaneSpec, q,
-                                        ::Type{T}) where {T}
-    xs = h.xs_cols
-    n = length(xs)
-    n == 0 && return one.(q .* 0 .+ 1.0)     # empty table → 1 lane-wide (core's rule)
-    r = _oop_knot_count(xs, q, <) .+ 1.0
-    return ifelse.(q .!= q, Float64(n + 1), r)
-end
-
-function _oop_interp_bilinear_lanes(h::_InterpBilinearLaneSpec, x, y,
-                                    ::Type{T}) where {T}
-    ax = h.axis_x_cols; ay = h.axis_y_cols; table = h.table_cols
-    Nx = length(ax); Ny = length(ay)
-    ax1 = _oop_lane_bound(ax[1]); axN = _oop_lane_bound(ax[Nx])
-    ay1 = _oop_lane_bound(ay[1]); ayN = _oop_lane_bound(ay[Ny])
-    x_q = ifelse.(x .<= ax1, ax1, ifelse.(x .>= axN, axN, x))
-    y_q = ifelse.(y .<= ay1, ay1, ifelse.(y .>= ayN, ayN, y))
-    i = min.(max.(_oop_knot_count(ax, x_q, <=), 1.0), Float64(Nx - 1))
-    j = min.(max.(_oop_knot_count(ay, y_q, <=), 1.0), Float64(Ny - 1))
-    xi, xip1 = _oop_knot_pair(ax, i)
-    yj, yjp1 = _oop_knot_pair(ay, j)
-    t_ij, t_i1j, t_ijp1, t_i1jp1 = _oop_bilinear_corners(table, i, j, Nx, Ny)
-    wx = (x_q .- xi) ./ (xip1 .- xi)
-    wy = (y_q .- yj) ./ (yjp1 .- yj)
-    row_j   = t_ij   .+ wx .* (t_i1j   .- t_ij)
-    row_jp1 = t_ijp1 .+ wx .* (t_i1jp1 .- t_ijp1)
-    return row_j .+ wy .* (row_jp1 .- row_j)
-end
 
 # ---- interp.* over lanes, ON HOST: just call the core per lane ---------------
 #
@@ -836,91 +423,39 @@ end
 # costs orders of magnitude more than the cores, at Float64 and at `Dual` alike —
 # on host, where the ladder buys nothing. That is not a tracing problem; it is the
 # tracer's program running on host.
-@inline _oop_interp_linear_lanes(h::_InterpLinearSpec, q, ::Type{T}) where {T<:Real} =
+@inline _interp_linear_lanes(h::_InterpLinearSpec, q, ::Type{T}) where {T<:Real} =
     _oop_interp_linear.(Ref(h), q, T)
-@inline _oop_interp_searchsorted_lanes(h::_InterpSearchsortedSpec, q,
+@inline _interp_searchsorted_lanes(h::_InterpSearchsortedSpec, q,
                                        ::Type{T}) where {T<:Real} =
     _oop_interp_searchsorted.(Ref(h), q, T)
-@inline _oop_interp_bilinear_lanes(h::_InterpBilinearSpec, x, y,
+@inline _interp_bilinear_lanes(h::_InterpBilinearSpec, x, y,
                                    ::Type{T}) where {T<:Real} =
     _oop_interp_bilinear.(Ref(h), x, y, T)
 
 # The per-lane spec twins. `h.specs[l]` is the member kernel's ORIGINAL spec, so
 # this is the unmerged kernel's own call on lane `l` — the identity the merge is
 # defined by, reached directly instead of through the knot-column ladder.
-@inline _oop_interp_linear_lanes(h::_InterpLinearLaneSpec, q, ::Type{T}) where {T<:Real} =
+@inline _interp_linear_lanes(h::_InterpLinearLaneSpec, q, ::Type{T}) where {T<:Real} =
     _oop_interp_linear.(h.specs, q, T)
-@inline _oop_interp_searchsorted_lanes(h::_InterpSearchsortedLaneSpec, q,
+@inline _interp_searchsorted_lanes(h::_InterpSearchsortedLaneSpec, q,
                                        ::Type{T}) where {T<:Real} =
     _oop_interp_searchsorted.(h.specs, q, T)
-@inline _oop_interp_bilinear_lanes(h::_InterpBilinearLaneSpec, x, y,
+@inline _interp_bilinear_lanes(h::_InterpBilinearLaneSpec, x, y,
                                    ::Type{T}) where {T<:Real} =
     _oop_interp_bilinear.(h.specs, x, y, T)
-
-# ---- Live forcing buffers as ARGUMENTS (B2) ----------------------------------
-#
-# The compiled IR reaches a live forcing buffer (`param_arrays` entries and
-# DiscreteMaterializer caches, both registered in the build's `pgather` dict) by
-# ALIAS: an `_NK_PARAM_GATHER` payload and the `arr` field of a forcing acc
-# descriptor (`_AK_ARR_FIXED` / `_AK_FORCING_BOX` / `_AK_ARR_TBL_BOX`) are the
-# same host `Vector{Float64}` the caller bound. On host that aliasing IS the
-# live-refresh channel. Under an XLA trace it is the silent-staleness bug: a
-# captured host array is a trace-time CONSTANT.
-#
-# So the out-of-place RHS carries the buffers through its ARGUMENT LIST instead:
-# the explicit form is `rhs(u, p, t, buffers)`, where `buffers` is a NamedTuple
-# of arrays in a STABLE order (buffer names sorted; see `_make_rhs_oop`). At each
-# read site the walker swaps the node's aliased host array for the aligned entry
-# of the `buffers` argument via `_oop_forcing_slab` — an identity (`===`) scan
-# over `hostkeys`, the host buffers in the container's own order (built once per
-# RHS). A LINEAR scan, not an `IdDict`, and that is load-bearing: the scan runs
-# per forcing read per call, O(#buffers) with #buffers the handful of forcing
-# VARIABLES (never cells) — and an `IdDict` capture is untraceable (its
-# `Memory{Any}` hash table throws inside Reactant's closure walk), which would
-# break tracing for every model, forcing or not. A backend passes device arrays
-# (`ConcreteRArray`s) in `buffers`, and an in-place `copyto!` into those SAME
-# arrays between calls is a real input update the compiled program sees (see
-# ext/EarthSciASTReactantExt.jl).
-#
-# The host wrapper (`_OopRHS`) forwards the build's own host buffers, so
-# `f(u, p, t)` still reads the exact aliased storage it always did — the
-# fallback arm in `_oop_forcing_slab` (an arr absent from `hostkeys`, e.g. a
-# hand-built test kernel) reads the host array directly, the pre-B2 behavior.
-#
-# The third field is the per-call READ MEMO (ess-oop-intern; see the
-# `_oop_gather` seam). It rides here because this is the one per-call context
-# object the walker already threads to every read site, and because that makes
-# the memo's lifetime exactly one RHS invocation with no global state and no
-# teardown. `M === Nothing` on host and the field is zero-sized, so a host build
-# is unchanged in layout, allocation and code.
-struct _OopForcing{B,M}
-    bufs::B                             # this CALL's buffer container (host or traced)
-    hostkeys::Vector{Vector{Float64}}   # host buffer identities, aligned with `bufs`
-    memo::M                             # per-call (tensor, window) read memo, or `nothing`
-end
-_OopForcing(bufs, hostkeys) = _OopForcing(bufs, hostkeys, nothing)
-const _OOP_NO_FORCING = _OopForcing((;), Vector{Float64}[])
-
-@inline function _oop_forcing_slab(fb::_OopForcing, arr::Vector{Float64})
-    ks = fb.hostkeys
-    @inbounds for j in eachindex(ks)
-        ks[j] === arr && return fb.bufs[j]
-    end
-    return arr
-end
 
 # ---- Scalar walker (`_Node`) ------------------------------------------------
 #
 # The generic twin of `_eval_node`. Type-stable in `T`: every leaf converts into the
 # value type (so a `Float64` literal beside a `Dual` state does not widen the tree
-# to a `Union`), and `_oop_op` returns `T` when all of its children are `T`.
+# to a `Union`), and `_scalar_op` returns `T` when all of its children are `T`.
 #
 # `cache` carries the CSE prelude's per-call values, so `_NK_CACHED` resolves the
 # same way it does under `f!` — the OOP form keeps CSE rather than re-walking shared
 # subexpressions. `f!` reads the same slots out of a `Vector{Float64}` captured on
 # the node; here they come from a `Vector{T}` allocated per call, which is what makes
 # CSE survive differentiation at all.
-function _oop_eval(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_OopForcing)::T where {T}
+function _oop_eval(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_Forcing)::T where {T}
     k = n.kind
     if k === _NK_LITERAL
         return _oop_const(T, n.literal, fb.memo)
@@ -933,11 +468,11 @@ function _oop_eval(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_OopForcing)
     elseif k === _NK_PARAM_GATHER
         # Live forcing buffer (ess-14f.3) — data, so it enters as a constant of
         # the value type (zero derivative), exactly as it should. Read through
-        # the `buffers` ARGUMENT (`_oop_forcing_slab` swaps the node's aliased
+        # the `buffers` ARGUMENT (`_forcing_slab` swaps the node's aliased
         # host array for the aligned argument entry), so a tracing backend sees
         # a real input, not a baked-in trace-time constant.
         return convert(T, _oop_read_forcing(
-            _oop_forcing_slab(fb, n.payload::Vector{Float64}), n.idx, fb.memo))
+            _forcing_slab(fb, n.payload::Vector{Float64}), n.idx, fb.memo))
     elseif k === _NK_CACHED
         return @inbounds cache[n.idx]
     elseif k === _NK_CONTRACTION
@@ -962,79 +497,13 @@ end
 # path never traces — but a runtime contraction loop (ess-runtime-contraction) can
 # put a const-gather (a loop-var-subscripted weight) on the traced `:oop` RHS, so
 # it needs the same lowering here to stay bit-identical to `f!`.
-# Evaluate an INDEX subtree to a concrete `Int`.
-#
-# WHY THIS IS NOT `_oop_eval`. A gather's subscripts are integer index arithmetic
-# over enclosing loop counters and literals — they never read the state. But
-# `_oop_eval` returns the VALUE type, so under tracing a loop counter comes back
-# as a `TracedRNumber` holding a constant, and everything downstream inherits it:
-# `round(Int, ·)` stays traced, and the ghost-bounds test `lo <= sub <= hi` then
-# throws "non-boolean (TracedRNumber{Bool}) used in boolean context" — a control
-# decision XLA cannot make, on a quantity that was concrete all along.
-#
-# Reached whenever a runtime contraction loop (ess-runtime-contraction) puts a
-# loop-var-dependent subscript on the traced RHS, which a mass-weighted column
-# integral does as soon as the reduction is long enough to clear
-# `ESS_CONTRACTION_LOOP_MIN`.
-#
-# Deliberately NARROW: exactly the kinds an index expression can contain. Anything
-# else is a genuinely state-dependent subscript, which cannot be resolved at trace
-# time at all, and says so rather than silently tracing into the same dead end.
-function _oop_index_int(n::_Node, u, p, t, cache::AbstractVector{T},
-                        fb::_OopForcing)::Int where {T}
-    k = n.kind
-    if k === _NK_LOOPVAR
-        return (n.payload::Base.RefValue{Int})[]
-    elseif k === _NK_LITERAL
-        return round(Int, n.literal)
-    elseif k === _NK_CONST_GATHER
-        cg = n.payload::_ConstGatherArray
-        off = 1
-        @inbounds for d in eachindex(n.children)
-            off += (_oop_index_int(n.children[d], u, p, t, cache, fb) - 1) * cg.strides[d]
-        end
-        (1 <= off <= cg.len) || throw(BoundsError(cg.flat, off))
-        return round(Int, @inbounds cg.flat[off])
-    elseif k === _NK_OP
-        op = n.op
-        c = n.children
-        if op === :+
-            s = 0
-            @inbounds for d in eachindex(c)
-                s += _oop_index_int(c[d], u, p, t, cache, fb)
-            end
-            return s
-        elseif op === :-
-            length(c) == 1 && return -_oop_index_int(c[1], u, p, t, cache, fb)
-            return _oop_index_int(c[1], u, p, t, cache, fb) -
-                   _oop_index_int(c[2], u, p, t, cache, fb)
-        elseif op === :*
-            s = 1
-            @inbounds for d in eachindex(c)
-                s *= _oop_index_int(c[d], u, p, t, cache, fb)
-            end
-            return s
-        elseif op === :/
-            return div(_oop_index_int(c[1], u, p, t, cache, fb),
-                       _oop_index_int(c[2], u, p, t, cache, fb))
-        end
-    end
-    throw(TreeWalkError("E_TREEWALK_TRACED_SUBSCRIPT",
-        "an out-of-place gather subscript must resolve to a build-time / " *
-        "loop-counter integer, but this one is node kind $(k)" *
-        (k === _NK_OP ? " (op $(n.op))" : "") *
-        ". A subscript computed from the STATE cannot be resolved while tracing " *
-        "— XLA would need the value to pick a slot. Run the interpreted " *
-        "evaluator (`form = :inplace`), which resolves it per call."))
-end
-
-function _oop_const_gather(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_OopForcing)::T where {T}
+function _oop_const_gather(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_Forcing)::T where {T}
     cg = n.payload::_ConstGatherArray
     children = n.children
     strides = cg.strides
     off = 1
     @inbounds for d in eachindex(children)
-        sub = _oop_index_int(children[d], u, p, t, cache, fb)
+        sub = _index_int(children[d], u, p, t, cache, fb)
         off += (sub - 1) * strides[d]
     end
     (1 <= off <= cg.len) || throw(BoundsError(cg.flat, off))
@@ -1044,14 +513,14 @@ end
 # OOP twin of `_eval_state_gather` (ess-runtime-contraction). Same slot computation
 # and ghost convention; reads the state through `_oop_read_state` so a tracing
 # backend sees the real input, and returns `T` on both arms.
-function _oop_state_gather(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_OopForcing)::T where {T}
+function _oop_state_gather(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_Forcing)::T where {T}
     sg = n.payload::_StateGather
     children = n.children
     off = 0
     @inbounds for d in eachindex(children)
-        # `_oop_index_int`, not `_oop_eval`: the ghost test below is a CONTROL
-        # decision, so `sub` has to be a host `Int`. See `_oop_index_int`.
-        sub = _oop_index_int(children[d], u, p, t, cache, fb)
+        # `_index_int`, not `_oop_eval`: the ghost test below is a CONTROL
+        # decision, so `sub` has to be a host `Int`. See `_index_int`.
+        sub = _index_int(children[d], u, p, t, cache, fb)
         (sg.lo[d] <= sub <= sg.hi[d]) || return zero(T)   # ghost cell
         off += (sub - sg.lo[d]) * sg.strides[d]
     end
@@ -1062,7 +531,7 @@ end
 # OOP twin of `_eval_contraction_loop` (ess-runtime-contraction). Same static-range
 # iteration, same 0̄-seeded ⊕-fold, so a Float64 `:oop` run stays bit-identical to
 # `f!` — the property the in-place tests use `:oop` as an oracle for.
-function _oop_contraction_loop(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_OopForcing)::T where {T}
+function _oop_contraction_loop(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_Forcing)::T where {T}
     spec = n.payload::_ContractLoop
     ref = spec.ref
     body = @inbounds n.children[1]
@@ -1093,7 +562,7 @@ function _oop_contraction_loop(n::_Node, u, p, t, cache::AbstractVector{T}, fb::
     return s
 end
 
-function _oop_eval_op(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_OopForcing)::T where {T}
+function _oop_eval_op(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_Forcing)::T where {T}
     n.op === :fn && return _oop_fn(n, u, p, t, cache, fb)
     if n.op === :^ || n.op === :pow
         return _oop_pow(n.op, n.children, u, p, t, cache, fb)
@@ -1101,10 +570,10 @@ function _oop_eval_op(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_OopForci
     # A GUARD MUST GUARD. `ifelse`/`and`/`or` are lazy on the in-place scalar walker
     # (`_eval_node_op`), and this emitter promises a Float64 `:oop` run is bit-
     # identical to `:inplace` — but the generic path below fills EVERY child into `c`
-    # before dispatching to `_oop_op`, which would make them eager here and throw
+    # before dispatching to `_scalar_op`, which would make them eager here and throw
     # `DomainError` on `ifelse(a >= 0, sqrt(a), 0)` at `a = -1`, a model `f!` runs
     # fine. So they short-circuit here, ahead of the child loop, exactly the way `fn`
-    # and `^` already return early. (`_oop_op` keeps its folded arms: it is SHARED
+    # and `^` already return early. (`_scalar_op` keeps its folded arms: it is SHARED
     # with `_oop_eval_acck`'s op arm, where evaluation is over lanes and eager
     # by construction — the same scalar/array divergence `_eval_acc` has.)
     ch = n.children
@@ -1128,7 +597,7 @@ function _oop_eval_op(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_OopForci
     @inbounds for i in eachindex(ch)
         c[i] = _oop_eval(ch[i], u, p, t, cache, fb)
     end
-    return _oop_op(n.op, c, T, fb.memo)
+    return _scalar_op(n.op, c, T, fb.memo)
 end
 
 # A LITERAL EXPONENT STAYS A LITERAL. Everywhere else, widening a `Float64` constant
@@ -1144,7 +613,7 @@ end
 # Both branches return the value type (`T^Float64` and `T^T` alike), so this stays
 # type-stable, and at Float64 it is the same `^` call the in-place ladder makes.
 @inline function _oop_pow(op::Symbol, ch::Vector{_Node}, u, p, t,
-                          cache::AbstractVector{T}, fb::_OopForcing)::T where {T}
+                          cache::AbstractVector{T}, fb::_Forcing)::T where {T}
     _expect_arity_n(op, ch, 2)
     base = _oop_eval(ch[1], u, p, t, cache, fb)
     e = ch[2]
@@ -1154,7 +623,7 @@ end
 
 # Semiring fold, seeded from the 0̄ identity baked on the node — same order as
 # `_eval_contraction`, so the sum is bit-identical at Float64.
-function _oop_contraction(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_OopForcing)::T where {T}
+function _oop_contraction(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_Forcing)::T where {T}
     op = n.op
     ch = n.children
     s = _oop_const(T, n.literal, fb.memo)
@@ -1189,7 +658,7 @@ end
 # differentiation variable for a Rosenbrock ∂f/∂t term), and a traced walk
 # keeps the decomposition inside the program (`evaluate_closed_function_ad`),
 # exactly as before typed cores existed.
-function _oop_fn(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_OopForcing)::T where {T}
+function _oop_fn(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_Forcing)::T where {T}
     pl = n.payload
     c = n.children
     if pl isa Tuple{String,_InterpLinearSpec}
@@ -1245,7 +714,7 @@ end
 # 0̄; a ghost state-gather selects the same 0; a pow keeps its literal exponent
 # — the signature PINS the exponent, so a group never blends the power rule).
 # The one semantic divergence is inherited from every vectorized tier of this
-# codebase: `ifelse`/`and`/`or` evaluate EAGERLY over lanes (the `_oop_op`
+# codebase: `ifelse`/`and`/`or` evaluate EAGERLY over lanes (the `_scalar_op`
 # folded arms, value-identical to the lazy scalar arms) rather than
 # short-circuiting, so a guard that exists to dodge a DomainError does not
 # dodge it here — exactly the `_eval_acc` / `_oop_run_acc_vec` contract. Under
@@ -1271,7 +740,7 @@ _oop_batch_enabled() = get(ENV, "ESS_OOP_BATCH", "1") != "0"
 #   _NK_PARAM_GATHER  `payload` the ONE shared buffer; shared `idx` or `slots`
 #   _NK_CONST_GATHER / _NK_STATE_GATHER  `nodes`: each lane's ORIGINAL node,
 #                     resolved per lane at eval (subscripts are host integer
-#                     arithmetic — `_oop_index_int` — so this is host work; the
+#                     arithmetic — `_index_int` — so this is host work; the
 #                     state read is still one whole-array gather)
 #   _NK_LOOPVAR       `refs`: each lane's counter Ref (values read per lane)
 #   _NK_CONTRACTION_LOOP  shared `op`/`literal`/`lo:step:hi`; `refs` all lanes'
@@ -1562,11 +1031,11 @@ end
 # `_oop_acck_fn` contract.
 function _oop_batch_fn(pl, cv::Vector{Any}, ::Type{T}) where {T}
     if pl isa Tuple{String,_InterpLinearSpec}
-        return _oop_interp_linear_lanes(pl[2], cv[1], T)
+        return _interp_linear_lanes(pl[2], cv[1], T)
     elseif pl isa Tuple{String,_InterpBilinearSpec}
-        return _oop_interp_bilinear_lanes(pl[2], cv[1], cv[2], T)
+        return _interp_bilinear_lanes(pl[2], cv[1], cv[2], T)
     elseif pl isa Tuple{String,_InterpSearchsortedSpec}
-        return _oop_interp_searchsorted_lanes(pl[2], cv[1], T)
+        return _interp_searchsorted_lanes(pl[2], cv[1], T)
     elseif pl isa Tuple{String,_FnTypedCoreSpec}
         T === Float64 && return _fn_typed_core_call.(pl[2].id, cv[1])
         fname = pl[1]
@@ -1587,7 +1056,7 @@ end
 # what `_oop_eval` computes on that lane's original node (see the bit-identity
 # note at the section header).
 function _oop_eval_batch(b::_OopBatchNode, u, p, t, cache::AbstractVector{T},
-                         fb::_OopForcing) where {T}
+                         fb::_Forcing) where {T}
     k = b.kind
     if k === _NK_LITERAL
         return isempty(b.lanes_f) ? _oop_const(T, b.literal, fb.memo) : b.lanes_f
@@ -1601,7 +1070,7 @@ function _oop_eval_batch(b::_OopBatchNode, u, p, t, cache::AbstractVector{T},
     elseif k === _NK_CACHED
         return @inbounds cache[b.idx]
     elseif k === _NK_PARAM_GATHER
-        buf = _oop_forcing_slab(fb, b.payload::Vector{Float64})
+        buf = _forcing_slab(fb, b.payload::Vector{Float64})
         return isempty(b.slots) ? convert(T, _oop_read_forcing(buf, b.idx, fb.memo)) :
                _oop_gather(buf, b.slots, fb.memo)
     elseif k === _NK_LOOPVAR
@@ -1618,7 +1087,7 @@ function _oop_eval_batch(b::_OopBatchNode, u, p, t, cache::AbstractVector{T},
         return same ? convert(T, v1) : Float64[Float64(r[]) for r in refs]
     elseif k === _NK_CONST_GATHER
         # Host-resolved per lane (subscripts are loop-counter integer
-        # arithmetic; `_oop_index_int` guarantees a host Int — the same
+        # arithmetic; `_index_int` guarantees a host Int — the same
         # resolution `_oop_const_gather` performs per entry), collapsed to one
         # scalar when every lane reads the same value.
         nds = b.nodes
@@ -1629,7 +1098,7 @@ function _oop_eval_batch(b::_OopBatchNode, u, p, t, cache::AbstractVector{T},
             cg = nd.payload::_ConstGatherArray
             off = 1
             for d in eachindex(nd.children)
-                off += (_oop_index_int(nd.children[d], u, p, t, cache, fb) - 1) *
+                off += (_index_int(nd.children[d], u, p, t, cache, fb) - 1) *
                        cg.strides[d]
             end
             (1 <= off <= cg.len) || throw(BoundsError(cg.flat, off))
@@ -1641,7 +1110,7 @@ function _oop_eval_batch(b::_OopBatchNode, u, p, t, cache::AbstractVector{T},
         end
         return allsame ? convert(T, @inbounds vals[1]) : vals
     elseif k === _NK_STATE_GATHER
-        # Per-lane slot resolution on host (`_oop_index_int`, the CONTROL-side
+        # Per-lane slot resolution on host (`_index_int`, the CONTROL-side
         # ghost test `_oop_state_gather` performs), then ONE whole-array gather;
         # ghost lanes gather a SAFE slot and select 0 — the in-place runners'
         # `s == 0 ? 0.0 : u[s]`, bit-identical (the `_AK_STATE_TBL_BOX` pattern).
@@ -1656,7 +1125,7 @@ function _oop_eval_batch(b::_OopBatchNode, u, p, t, cache::AbstractVector{T},
             off = 0
             g = false
             for d in eachindex(nd.children)
-                sub = _oop_index_int(nd.children[d], u, p, t, cache, fb)
+                sub = _index_int(nd.children[d], u, p, t, cache, fb)
                 if !(sg.lo[d] <= sub <= sg.hi[d])
                     g = true
                     break
@@ -1742,7 +1211,7 @@ function _oop_eval_batch(b::_OopBatchNode, u, p, t, cache::AbstractVector{T},
         for i in eachindex(ch)
             c[i] = _oop_eval_batch(ch[i], u, p, t, cache, fb)
         end
-        return _oop_op(op, c, T, fb.memo)
+        return _scalar_op(op, c, T, fb.memo)
     end
 end
 
@@ -1751,7 +1220,7 @@ end
 # the surface are disjoint and the entries never read each other (section
 # header), so the values are the per-entry scalar walk's, bit for bit.
 function _oop_run_scalar_batches(du, sb::_OopScalarBatches, ue, p, t,
-                                 cache::AbstractVector{T}, fb::_OopForcing) where {T}
+                                 cache::AbstractVector{T}, fb::_Forcing) where {T}
     rl = sb.rest
     @inbounds for i in eachindex(rl)
         slot, node = rl[i]
@@ -2549,7 +2018,7 @@ end
 # walk — a `_NK_SUBCALL` looks its sub up there, never in the descending `K`/`plan`).
 function _oop_eval_acck(nd::_Node, u, p, t, K::_AccKernel, plan::_OopAccPlan,
                         invvals::Vector{Any}, cellvals::Vector{Any},
-                        sub::_OopSubRT, fb::_OopForcing, ::Type{T},
+                        sub::_OopSubRT, fb::_Forcing, ::Type{T},
                         ssa::_OopSSACtx=_OOP_SSA_CTX_OFF) where {T}
     k = nd.kind
     if k === _NK_ACCESS
@@ -2588,15 +2057,15 @@ function _oop_eval_acck(nd::_Node, u, p, t, K::_AccKernel, plan::_OopAccPlan,
             return _oop_const(T, a.v, fb.memo)
         elseif ak === _AK_ARR_FIXED
             # LIVE forcing (invariant slot): re-read per call — data, zero
-            # derivative. Through the `buffers` argument (see `_OopForcing`), so
+            # derivative. Through the `buffers` argument (see `_Forcing`), so
             # a trace reads a real input; the seam makes the scalar read legal.
-            return convert(T, _oop_read_forcing(_oop_forcing_slab(fb, a.arr),
+            return convert(T, _oop_read_forcing(_forcing_slab(fb, a.arr),
                                                a.idx, fb.memo))
         elseif ak === _AK_FORCING_BOX || ak === _AK_ARR_TBL_BOX
             # LIVE forcing lanes: re-gathered per call from the `buffers`
             # argument — one whole-array gather at host-frozen indices, which
             # traces as-is (the indices are constants; the buffer is an input).
-            return _oop_gather(_oop_forcing_slab(fb, a.arr), plan.forc[nd.idx], fb.memo)
+            return _oop_gather(_forcing_slab(fb, a.arr), plan.forc[nd.idx], fb.memo)
         else
             # CONST_AFFINE / CONST_BOX / LOOP_IDX / CONST_CELL: frozen lane data.
             return plan.consts[nd.idx]
@@ -2685,31 +2154,31 @@ function _oop_eval_acck(nd::_Node, u, p, t, K::_AccKernel, plan::_OopAccPlan,
         for i in eachindex(ch)
             c[i] = _oop_eval_acck(ch[i], u, p, t, K, plan, invvals, cellvals, sub, fb, T, ssa)
         end
-        return _oop_op(op, c, T, fb.memo)
+        return _scalar_op(op, c, T, fb.memo)
     end
 end
 
 function _oop_acck_fn(nd::_Node, u, p, t, K::_AccKernel, plan::_OopAccPlan,
                       invvals::Vector{Any}, cellvals::Vector{Any},
-                      sub::_OopSubRT, fb::_OopForcing, ::Type{T},
+                      sub::_OopSubRT, fb::_Forcing, ::Type{T},
                       ssa::_OopSSACtx=_OOP_SSA_CTX_OFF) where {T}
     pl = nd.payload
     ch = nd.children
     ev(x) = _oop_eval_acck(x, u, p, t, K, plan, invvals, cellvals, sub, fb, T, ssa)
     if pl isa Tuple{String,_InterpLinearSpec}
-        return _oop_interp_linear_lanes(pl[2], ev(ch[1]), T)
+        return _interp_linear_lanes(pl[2], ev(ch[1]), T)
     elseif pl isa Tuple{String,_InterpBilinearSpec}
-        return _oop_interp_bilinear_lanes(pl[2], ev(ch[1]), ev(ch[2]), T)
+        return _interp_bilinear_lanes(pl[2], ev(ch[1]), ev(ch[2]), T)
     elseif pl isa Tuple{String,_InterpSearchsortedSpec}
-        return _oop_interp_searchsorted_lanes(pl[2], ev(ch[1]), T)
+        return _interp_searchsorted_lanes(pl[2], ev(ch[1]), T)
     elseif pl isa Tuple{String,_InterpLinearLaneSpec}
         # Per-lane spec tables (kernel-class merge): the lane-column twins of
         # the arms above — lane l reads its member's own knots.
-        return _oop_interp_linear_lanes(pl[2], ev(ch[1]), T)
+        return _interp_linear_lanes(pl[2], ev(ch[1]), T)
     elseif pl isa Tuple{String,_InterpBilinearLaneSpec}
-        return _oop_interp_bilinear_lanes(pl[2], ev(ch[1]), ev(ch[2]), T)
+        return _interp_bilinear_lanes(pl[2], ev(ch[1]), ev(ch[2]), T)
     elseif pl isa Tuple{String,_InterpSearchsortedLaneSpec}
-        return _oop_interp_searchsorted_lanes(pl[2], ev(ch[1]), T)
+        return _interp_searchsorted_lanes(pl[2], ev(ch[1]), T)
     elseif pl isa Tuple{String,_FnTypedCoreSpec}
         # Registry-declared typed scalar core (ess-dtcore). At `T === Float64`
         # ONE typed broadcast over the lane vector — same `_fn_typed_core_call`
@@ -2743,7 +2212,7 @@ end
 # then K's own CSE tiers in slot order (invariant scalars first), the spine over
 # whole lanes, and ONE scatter.
 function _oop_run_acc_vec(du, u, p, t, K::_AccKernel, plan::_OopAccPlan,
-                          ::Type{T}, fb::_OopForcing=_OOP_NO_FORCING,
+                          ::Type{T}, fb::_Forcing=_NO_FORCING,
                           ssak::_OopSSAKernel=_OOP_SSA_KERNEL_OFF,
                           vals::Vector{Any}=_OOP_SSA_NO_VALS) where {T}
     ssa = _oop_ssa_ctx(ssak, vals)
@@ -3632,7 +3101,7 @@ function (ir::_CompiledIR)(u, p, t, buffers)
     # call returns, which is why nothing has to be torn down. See the
     # interning note at the `_oop_gather` seam for why ONE INVOCATION is both
     # the correct scope and the largest sound one.
-    fb = _OopForcing(buffers, host_keys, _oop_new_memo(u))
+    fb = _Forcing(buffers, host_keys, _oop_new_memo(u))
     T = _oop_value_type(u, p, t)
 
     # Factored array observeds, filled per call into the block above the ODE

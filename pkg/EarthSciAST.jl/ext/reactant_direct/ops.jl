@@ -119,7 +119,7 @@ function _de_reduce_terms(ctx::_DECtx, op::Symbol, zbar::Float64,
 end
 
 # The SEEDLESS left fold an n-ary operator node takes: `((c1 ⊕ c2) ⊕ c3)…`,
-# the interpreter's `_oop_op` association order, and never a reduce — an
+# the interpreter's `_scalar_op` association order, and never a reduce — an
 # operator node has no 0̄ to seed a monoid with, and seeding `+` with `0.0`
 # would turn a sum of `-0.0`s into `0.0`.
 function _de_chain(ctx::_DECtx, f::F, c::Vector{_DEVal})::_DEVal where {F}
@@ -148,7 +148,7 @@ end
 
 # ---- the op ladder -----------------------------------------------------------
 #
-# Left-folds n-ary `+`/`*` exactly as the interpreter's `_oop_op` does, so every
+# Left-folds n-ary `+`/`*` exactly as the interpreter's `_scalar_op` does, so every
 # intermediate has broadcast's shape and the interpreter's association order.
 #
 # TWO PLACES THIS IS NOT BIT-IDENTICAL TO THE INTERPRETER, both accepted inside
@@ -244,7 +244,7 @@ function _de_op(ctx::_DECtx, op::Symbol, c::Vector{_DEVal})::_DEVal
     _de_refuse("the operator `$op`",
         "it is not in the direct-emission op ladder. Add it to `_de_op` " *
         "(ext/reactant_direct/ops.jl) with the StableHLO op that matches the " *
-        "interpreter's `_oop_op` arm, or lower it away before the backend.")
+        "interpreter's `_scalar_op` arm, or lower it away before the backend.")
 end
 
 # ---- host const-fold ---------------------------------------------------------
@@ -257,7 +257,7 @@ end
 # to `range` host multiply-adds and, after interning, a handful of constants.
 #
 # It is also strictly MORE faithful than emitting the ops would be: the value is
-# computed in Float64 by the same `_oop_op` the interpreter calls, so a folded
+# computed in Float64 by the same `_scalar_op` the interpreter calls, so a folded
 # subtree agrees with the interpreter bit for bit, where `stablehlo.power` and
 # friends would not.
 #
@@ -345,7 +345,7 @@ function _de_hostval(ctx::_DECtx, nd::_E._Node)::Float64
     # `_NK_OP`: the interpreter's own ladder, at Float64, so a folded subtree is
     # bit-identical to what `f!` computes for it.
     c = Any[_de_hostval(ctx, ch) for ch in nd.children]
-    return Float64(_E._oop_op(nd.op, c, Float64))
+    return Float64(_E._scalar_op(nd.op, c, Float64))
 end
 
 # Fold if we can; `nothing` if the subtree is not host data.
@@ -359,4 +359,4 @@ end
 # Host integer evaluation of a gather subscript (loop counters + literals),
 # reusing the emitter's own resolver — no state can appear in a subscript.
 _de_index_int(nd::_E._Node) =
-    _E._oop_index_int(nd, nothing, nothing, 0.0, Float64[], _E._OOP_NO_FORCING)
+    _E._index_int(nd, nothing, nothing, 0.0, Float64[], _E._NO_FORCING)

@@ -1,6 +1,6 @@
 # Build-time lane-table interning (tree_walk/acc_merge.jl `_lane_intern`,
 # `ESS_LANE_INTERN_DISABLE=1` oracle) + the clamp/edge-bound collapse
-# (tree_walk/oop.jl `_oop_lane_bound`).
+# (tree_walk/interp_lanes.jl `_lane_bound`).
 #
 # WHAT THIS PINS.
 #   1. SHARING IS IN THE BUILD PRODUCT. After a default build, content-equal
@@ -17,7 +17,7 @@
 #      ESS_KERNEL_CLASS_MERGE_DISABLE=1 / ESS_STENCIL_DISABLE=1 /
 #      ESS_CODEGEN_DISABLE=1 oracles, at Float64 (both `:inplace` and `:oop`)
 #      and under ForwardDiff Dual via the Jacobian.
-#   3. THE CLAMP-BOUND COLLAPSE IS SOUND. `_oop_lane_bound` collapses an
+#   3. THE CLAMP-BOUND COLLAPSE IS SOUND. `_lane_bound` collapses an
 #      all-BITWISE-equal boundary column to its one scalar (so a trace embeds a
 #      scalar constant, not an O(lanes) tensor — the gap
 #      test/reactant_lane_dedup_test.jl documents), keeps `-0.0`≠`0.0` columns
@@ -267,20 +267,20 @@ end
         @test t1 !== t2 && ESM._fn_spec_content_equal(t1, t2)
     end
 
-    @testset "_oop_lane_bound: bitwise all-equal collapses, nothing else" begin
+    @testset "_lane_bound: bitwise all-equal collapses, nothing else" begin
         c = [2.5, 2.5, 2.5, 2.5]
-        @test ESM._oop_lane_bound(c) === 2.5              # scalar, not a column
+        @test ESM._lane_bound(c) === 2.5              # scalar, not a column
         nn = [NaN, NaN, NaN]
-        r = ESM._oop_lane_bound(nn)
+        r = ESM._lane_bound(nn)
         @test r isa Float64 && isnan(r)                   # NaN unifies (isequal)
         z = [0.0, -0.0, 0.0]
-        @test ESM._oop_lane_bound(z) === z                # signed zeros stay split
+        @test ESM._lane_bound(z) === z                # signed zeros stay split
         m = [1.0, 2.0, 1.0]
-        @test ESM._oop_lane_bound(m) === m                # mixed column untouched
+        @test ESM._lane_bound(m) === m                # mixed column untouched
         one_lane = [7.0]
-        @test ESM._oop_lane_bound(one_lane) === 7.0
+        @test ESM._lane_bound(one_lane) === 7.0
         withenv("ESS_LANE_INTERN_DISABLE" => "1") do
-            @test ESM._oop_lane_bound(c) === c            # kill switch: identity
+            @test ESM._lane_bound(c) === c            # kill switch: identity
         end
     end
 
@@ -303,26 +303,26 @@ end
         # Sweep spans both clamps, every knot, interior blends, and NaN.
         xs = Float64[-0.7, 0.0, 0.31, 1.0, 1.62, 2.0, 2.9, NaN, 0.5, 1.99]
         ys = Float64[2.6, 2.0, 1.75, 1.0, 0.42, 0.0, -0.3, 0.25, NaN, 1.0]
-        ref = ESM._oop_interp_bilinear_lanes(h, xs, ys, Float64)
-        got = ESM._oop_interp_bilinear_lanes(h, xs, ys, Number)
+        ref = ESM._interp_bilinear_lanes(h, xs, ys, Float64)
+        got = ESM._interp_bilinear_lanes(h, xs, ys, Number)
         @test length(got) == L && all(got .=== ref)
         # Kill switch: the lane-wide-bound program computes the same bits.
         goff = withenv("ESS_LANE_INTERN_DISABLE" => "1") do
-            ESM._oop_interp_bilinear_lanes(h, xs, ys, Number)
+            ESM._interp_bilinear_lanes(h, xs, ys, Number)
         end
         @test all(goff .=== ref)
         # Lane-INVARIANT scalar query: the collapsed bound must not collapse
         # the lane axis (the `Lq` trap) — the result keeps its L lanes, on
         # both clamp arms and in range.
         for yq in (-0.5, 1.25, 2.5)
-            gs = ESM._oop_interp_bilinear_lanes(h, xs, yq, Number)
-            rs = ESM._oop_interp_bilinear_lanes(h, xs, fill(yq, L), Float64)
+            gs = ESM._interp_bilinear_lanes(h, xs, yq, Number)
+            rs = ESM._interp_bilinear_lanes(h, xs, fill(yq, L), Float64)
             @test length(gs) == L && all(gs .=== rs)
         end
         # BOTH queries scalar — the maximally collapsed program still owes one
         # value per lane (tables differ per lane).
-        gb = ESM._oop_interp_bilinear_lanes(h, 0.75, 1.25, Number)
-        rb = ESM._oop_interp_bilinear_lanes(h, fill(0.75, L), fill(1.25, L), Float64)
+        gb = ESM._interp_bilinear_lanes(h, 0.75, 1.25, Number)
+        rb = ESM._interp_bilinear_lanes(h, fill(0.75, L), fill(1.25, L), Float64)
         @test length(gb) == L && all(gb .=== rb)
     end
 
@@ -334,18 +334,18 @@ end
         h1 = ESM._InterpLinearLaneSpec(ESM._InterpLinearSpec[sp for _ in 1:6],
                                        1, 0, 0, 1)
         xs = Float64[-2.0, 0.0, 1.5, 3.99, 4.0, 6.3]
-        @test all(ESM._oop_interp_linear_lanes(h1, xs, Number) .===
-                  ESM._oop_interp_linear_lanes(h1, xs, Float64))
-        g1 = ESM._oop_interp_linear_lanes(h1, 2.25, Number)
+        @test all(ESM._interp_linear_lanes(h1, xs, Number) .===
+                  ESM._interp_linear_lanes(h1, xs, Float64))
+        g1 = ESM._interp_linear_lanes(h1, 2.25, Number)
         @test length(g1) == 6
-        @test all(g1 .=== ESM._oop_interp_linear_lanes(h1, fill(2.25, 6), Float64))
+        @test all(g1 .=== ESM._interp_linear_lanes(h1, fill(2.25, 6), Float64))
         # Mixed edge columns (a second content): bounds stay lane-wide, and
         # the program is still `===` the cores — clamp arms included.
         sp2 = ESM._InterpLinearSpec(copy(_LTI_TB), [0.5, 1.0, 2.0, 3.0, 3.5])
         h2 = ESM._InterpLinearLaneSpec(
             ESM._InterpLinearSpec[l <= 3 ? sp : sp2 for l in 1:6], 1, 0, 0, 1)
         xs2 = Float64[-2.0, 0.4, 5.0, 0.6, 3.6, NaN]
-        @test all(ESM._oop_interp_linear_lanes(h2, xs2, Number) .===
-                  ESM._oop_interp_linear_lanes(h2, xs2, Float64))
+        @test all(ESM._interp_linear_lanes(h2, xs2, Number) .===
+                  ESM._interp_linear_lanes(h2, xs2, Float64))
     end
 end

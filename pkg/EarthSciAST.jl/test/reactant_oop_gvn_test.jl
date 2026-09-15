@@ -1,5 +1,5 @@
 # Trace-time emission VALUE NUMBERING (ess-oop-gvn; ext/EarthSciASTReactantExt.jl's
-# four-argument `_oop_op`, `_oop_const`, `_oop_powlit` and the three-argument
+# four-argument `_scalar_op`, `_oop_const`, `_oop_powlit` and the three-argument
 # scalar reads).
 #
 # THE DEFECT THIS PINS, and why it is a different one from ess-oop-intern.

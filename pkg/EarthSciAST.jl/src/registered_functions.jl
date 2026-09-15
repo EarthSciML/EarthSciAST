@@ -366,7 +366,7 @@ end
 #      it cannot record "construct a Julia object".
 #   3. `Dates.month` walks a cumulative-length table and `isleapyear` branches
 #      on `y % 4 / % 100 / % 400`. A trace cannot TAKE a branch whose
-#      condition is a traced value — the same wall `_oop_index_int` (oop.jl)
+#      condition is a traced value — the same wall `_index_int` (scalar_ops.jl)
 #      exists to keep subscript arithmetic away from.
 #
 # So the calendar is re-derived here as ARITHMETIC. Nothing about it is

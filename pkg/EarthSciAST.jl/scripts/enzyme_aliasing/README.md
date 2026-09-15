@@ -31,7 +31,7 @@ at N=16, fails identically:
 ```
 Enzyme.Compiler.IllegalTypeAnalysisException
   Failure within method: _oop_eval(::_Node, ::Vector{Float64}, ::@NamedTuple{...},
-                                  ::Float64, ::Vector{Float64}, ::_OopForcing{...})
+                                  ::Float64, ::Vector{Float64}, ::_Forcing{...})
   @ src/tree_walk/oop.jl:822
   Caused by: getproperty @ Base_compiler.jl:54
              _oop_eval @ src/tree_walk/oop.jl:846

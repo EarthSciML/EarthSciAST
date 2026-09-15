@@ -49,6 +49,8 @@ include("tree_walk/compile.jl")          # §3-4 `_Node` IR, scalar CSE, scalar 
 include("tree_walk/array_contraction.jl") #     whole-array contraction nest
 include("tree_walk/geometry_compile.jl") # §2c  geometry body compiler (needs `_Node`)
 include("tree_walk/access_kernel.jl")    # §4b  unified array-kernel IR (`_AccKernel`)
+include("tree_walk/scalar_ops.jl")       #      op ladder, subscript resolver, forcing args
+include("tree_walk/interp_lanes.jl")     #      branch-free `interp.*` over whole lanes
 include("tree_walk/oop.jl")              # §4d  out-of-place emitter over the same IR
 include("tree_walk/acc_merge.jl")        # §4e  per-cell merge + `_make_rhs`
 include("tree_walk/oop_merge.jl")        #      `:oop` kernel-CLASS merge

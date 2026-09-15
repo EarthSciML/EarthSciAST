@@ -21,7 +21,7 @@
 #
 # Also pinned here: the `x^2`-with-negative-x trap (a literal exponent must not be
 # lifted into the differentiable type — see `_oop_pow`), interp tables differentiated
-# on a state, and a ladder-coverage gate so `_oop_op` cannot drift away from the two
+# on a state, and a ladder-coverage gate so `_scalar_op` cannot drift away from the two
 # ladders it mirrors.
 #
 # Enzyme reverse mode needs `Enzyme.API.strictAliasing!(false)` on this RHS — see the
@@ -285,9 +285,9 @@ end
     # ---- Anti-drift ----------------------------------------------------------
 
     @testset "the shared ladder covers every op the scalar ladder does" begin
-        # `_oop_op` is a THIRD op ladder beside `_eval_node_op` and `_eval_acc_op`.
+        # `_scalar_op` is a THIRD op ladder beside `_eval_node_op` and `_eval_acc_op`.
         # Pin it to the scalar one by differential test: same op, same args, same
-        # value — bit for bit. A registry op added without an `_oop_op` arm fails here
+        # value — bit for bit. A registry op added without an `_scalar_op` arm fails here
         # rather than at some user's first `form = :oop` build.
         u = [0.3, -0.8]
         p = (a = 1.7,)
@@ -302,7 +302,7 @@ end
         for row in ESM._UNARY_ELEMENTWISE_OPS
             x = row.sym in (:sqrt, :log, :log10, :acosh) ? 1.7 :
                 row.sym in (:asin, :acos, :atanh) ? 0.4 : 0.6
-            @test ESM._oop_op(row.sym, [x], Float64) == scalar(row.sym, [x])
+            @test ESM._scalar_op(row.sym, [x], Float64) == scalar(row.sym, [x])
         end
 
         # The structurally distinct arms, including every arity that has its own path.
@@ -323,7 +323,7 @@ end
             (:pi, Float64[]), (:e, Float64[]), (:Pre, [4.25]),
         ]
         for (op, vals) in cases
-            @test ESM._oop_op(op, vals, Float64) == scalar(op, vals)
+            @test ESM._scalar_op(op, vals, Float64) == scalar(op, vals)
         end
     end
 
@@ -494,11 +494,11 @@ end
                                       [0.0, 1.0, 2.0, 3.0, 4.0])
         qs = vcat(collect(-1.0:0.037:5.0), [0.0, 1.0, 2.0, 3.0, 4.0, NaN, -0.0])
         @test all(isequal(a, b) for (a, b) in zip(
-            ESM._oop_interp_linear_lanes(lspec, qs, Float64),
+            ESM._interp_linear_lanes(lspec, qs, Float64),
             [ESM._interp_linear_core(lspec.table, lspec.axis, q) for q in qs]))
         sspec = ESM._InterpSearchsortedSpec([1.0, 2.0, 2.0, 3.0, 4.0])  # duplicate knot
         @test all(isequal(a, b) for (a, b) in zip(
-            ESM._oop_interp_searchsorted_lanes(sspec, qs, Float64),
+            ESM._interp_searchsorted_lanes(sspec, qs, Float64),
             [Float64(ESM._interp_searchsorted_core("interp.searchsorted", q, sspec.xs))
              for q in qs]))
         bspec = ESM._InterpBilinearSpec([[1.0, 1.5, 2.0], [1.1, 1.6, 2.1], [1.2, 1.7, 2.2]],
@@ -506,7 +506,7 @@ end
         xs = vcat(collect(-0.5:0.13:2.5), [0.0, 1.0, 2.0, NaN, 0.7])
         ys = reverse(vcat(collect(-0.5:0.13:2.5), [1.0, NaN, 0.0, 2.0, 1.3]))
         @test all(isequal(a, b) for (a, b) in zip(
-            ESM._oop_interp_bilinear_lanes(bspec, xs, ys, Float64),
+            ESM._interp_bilinear_lanes(bspec, xs, ys, Float64),
             [ESM._interp_bilinear_core(bspec.table, bspec.axis_x, bspec.axis_y, x, y)
              for (x, y) in zip(xs, ys)]))
     end

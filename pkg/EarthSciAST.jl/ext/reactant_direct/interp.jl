@@ -8,13 +8,13 @@
 # merge's `_Interp*LaneSpec`).
 #
 # HOW. Through the SAME lane evaluators the vectorized interpreter and the
-# traced backend use (`_oop_interp_*_lanes`, src/tree_walk/oop.jl) over this
+# traced backend use (`_interp_*_lanes`, src/tree_walk/interp_lanes.jl) over this
 # emitter's own values, wrapped as traced arrays. Those evaluators are pure
 # locate → gather → blend: no branch on the query, no opaque scalar core. Their
-# three knot-addressing SEAMS (`_oop_knot_count`, `_oop_knot_pair` /
-# `_oop_knot_pair2`, `_oop_bilinear_corners`) are already specialized in this
+# three knot-addressing SEAMS (`_knot_count`, `_knot_pair` /
+# `_knot_pair2`, `_bilinear_corners`) are already specialized in this
 # extension to constant-time `stablehlo.gather`s of a constant table
-# (EarthSciASTReactantExt.jl, "interp knot addressing"), so what lands in the
+# (ext/reactant_interp.jl), so what lands in the
 # module is the gather lowering, not the O(table) select ladder — the same ops
 # the traced backend emits for the same node.
 #
@@ -100,18 +100,18 @@ function _de_fn_pl(ctx::_DECtx, pl, args::Vector{_DEVal})::_DEVal
        pl isa Tuple{String,_E._InterpLinearLaneSpec}
         _de_tally!(ctx, :interp_linear)
         return _de_untraced(Reactant.call_with_reactant(
-            _E._oop_interp_linear_lanes, pl[2], q(1), TracedRNumber{Float64}))
+            _E._interp_linear_lanes, pl[2], q(1), TracedRNumber{Float64}))
     elseif pl isa Tuple{String,_E._InterpBilinearSpec} ||
            pl isa Tuple{String,_E._InterpBilinearLaneSpec}
         _de_tally!(ctx, :interp_bilinear)
         x = q(1); y = q(2)
         return _de_untraced(Reactant.call_with_reactant(
-            _E._oop_interp_bilinear_lanes, pl[2], x, y, TracedRNumber{Float64}))
+            _E._interp_bilinear_lanes, pl[2], x, y, TracedRNumber{Float64}))
     elseif pl isa Tuple{String,_E._InterpSearchsortedSpec} ||
            pl isa Tuple{String,_E._InterpSearchsortedLaneSpec}
         _de_tally!(ctx, :interp_searchsorted)
         return _de_untraced(Reactant.call_with_reactant(
-            _E._oop_interp_searchsorted_lanes, pl[2], q(1), TracedRNumber{Float64}))
+            _E._interp_searchsorted_lanes, pl[2], q(1), TracedRNumber{Float64}))
     elseif pl isa Tuple{String,_E._FnTypedCoreSpec}
         spec = pl[2]
         (spec.arity == 1 && length(ch) == 1) ||

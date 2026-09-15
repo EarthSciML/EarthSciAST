@@ -1,5 +1,5 @@
 # The count-locate seam under a TRACE, without a reduction
-# (ext/EarthSciASTReactantExt.jl, `_oop_knot_count`).
+# (ext/EarthSciASTReactantExt.jl, `_knot_count`).
 #
 # WHAT THIS PINS. The locate seam was emitting one `stablehlo.reduce` per interp
 # call site — ~32 per ReSEACT chemistry RHS evaluation, ~103 per ROS23 step — and
@@ -15,7 +15,7 @@
 # The tiers are an EMISSION choice, so the whole assertion is that they are
 # observationally identical:
 #
-#   1. every tier is BIT-IDENTICAL to the host ladder in tree_walk/oop.jl —
+#   1. every tier is BIT-IDENTICAL to the host ladder in tree_walk/interp_lanes.jl —
 #      `==`, not `isapprox`. That is assertable here where it is not for the
 #      interp evaluators as a whole (XLA reassociates the blend) because the
 #      count is a sum of exact 0.0/1.0 terms with `n ≪ 2^53`, and the affine
@@ -49,8 +49,8 @@ const ESM = EarthSciAST
 const RX = Reactant
 const RXE = Base.get_extension(EarthSciAST, :EarthSciASTReactantExt)
 
-# The reference: the host ladder, i.e. `_oop_knot_count`'s generic method.
-_lc_ref(knots, q::Float64, cmp) = ESM._oop_knot_count(knots, q, cmp)
+# The reference: the host ladder, i.e. `_knot_count`'s generic method.
+_lc_ref(knots, q::Float64, cmp) = ESM._knot_count(knots, q, cmp)
 
 # Queries that break locates. Every knot, both ULP neighbours of every knot,
 # outside both ends, the infinities, NaN and both zeros.
@@ -75,16 +75,16 @@ function _lc_queries(ax::Vector{Float64})
     return qs
 end
 
-# Trace `_oop_knot_count` over a lane VECTOR of queries and read the lanes back.
+# Trace `_knot_count` over a lane VECTOR of queries and read the lanes back.
 function _lc_traced(knots, qs::Vector{Float64}, cmp)
-    f = x -> ESM._oop_knot_count(knots, x, cmp)
+    f = x -> ESM._knot_count(knots, x, cmp)
     qr = RX.ConcreteRArray(qs)
     return Array((RX.@compile sync = true f(qr))(qr))
 end
 
 # The unoptimized module for the same trace, to look for `stablehlo.reduce`.
 function _lc_hlo(knots, qs::Vector{Float64}, cmp)
-    f = x -> ESM._oop_knot_count(knots, x, cmp)
+    f = x -> ESM._knot_count(knots, x, cmp)
     qr = RX.ConcreteRArray(qs)
     return repr(RX.@code_hlo optimize = false f(qr))
 end
@@ -272,18 +272,18 @@ const _LC_AXES = Dict{String,Vector{Float64}}(
             for mode in ("auto", "ladder", "reduce"), cmp in (<=, <)
                 # (a) a lane VECTOR query.
                 qs = Float64[(-1.0)^l * 1000l + 220.0 for l in 1:L]
-                ref = ESM._oop_knot_count(cols, qs, cmp)
+                ref = ESM._knot_count(cols, qs, cmp)
                 got = _lc_withmode(mode, () -> _lc_traced(cols, qs, cmp))
                 @test got == ref
                 # (b) a lane-INVARIANT scalar query still yields L lanes — the
                 # `Lq` trap: the result's lane axis comes from the KNOTS here.
                 gs = _lc_withmode(mode, () -> begin
-                    f = x -> ESM._oop_knot_count(cols, x, cmp)
+                    f = x -> ESM._knot_count(cols, x, cmp)
                     qr = RX.ConcreteRNumber(2200.0)
                     Array((RX.@compile sync = true f(qr))(qr))
                 end)
                 @test length(gs) == L
-                @test gs == ESM._oop_knot_count(cols, 2200.0, cmp)
+                @test gs == ESM._knot_count(cols, 2200.0, cmp)
             end
         end
     end
@@ -300,7 +300,7 @@ const _LC_AXES = Dict{String,Vector{Float64}}(
         qs = _lc_normal(_lc_queries(ax))
         ref = Float64[ESM._interp_linear_core(tbl, ax, q) for q in qs]
         got = _lc_withmode("auto", () -> begin
-            f = x -> ESM._oop_interp_linear_lanes(h, x, RX.TracedRNumber{Float64})
+            f = x -> ESM._interp_linear_lanes(h, x, RX.TracedRNumber{Float64})
             qr = RX.ConcreteRArray(qs)
             Array((RX.@compile sync = true f(qr))(qr))
         end)
@@ -310,7 +310,7 @@ const _LC_AXES = Dict{String,Vector{Float64}}(
         # ON a knot the answer is the table entry EXACTLY (no blend runs), which
         # is the case a wrong locate silently turns into `t_{k-1} + 1·Δ`.
         onknot = _lc_withmode("auto", () -> begin
-            f = x -> ESM._oop_interp_linear_lanes(h, x, RX.TracedRNumber{Float64})
+            f = x -> ESM._interp_linear_lanes(h, x, RX.TracedRNumber{Float64})
             qr = RX.ConcreteRArray(copy(ax))
             Array((RX.@compile sync = true f(qr))(qr))
         end)
@@ -323,7 +323,7 @@ const _LC_AXES = Dict{String,Vector{Float64}}(
         sref = Float64[ESM._interp_searchsorted_core("interp.searchsorted", q, xs)
                        for q in sq]
         sgot = _lc_withmode("auto", () -> begin
-            f = x -> ESM._oop_interp_searchsorted_lanes(s, x, RX.TracedRNumber{Float64})
+            f = x -> ESM._interp_searchsorted_lanes(s, x, RX.TracedRNumber{Float64})
             qr = RX.ConcreteRArray(sq)
             Array((RX.@compile sync = true f(qr))(qr))
         end)

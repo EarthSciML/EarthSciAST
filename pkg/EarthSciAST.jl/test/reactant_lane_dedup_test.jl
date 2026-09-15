@@ -23,7 +23,7 @@
 # what stop a dedup from silently mixing lanes up.
 #
 # The trailing testsets extend layer 3 to the lane-table-intern change's traced
-# side: the clamp-bound collapse (`_oop_lane_bound`) must land as SCALAR
+# side: the clamp-bound collapse (`_lane_bound`) must land as SCALAR
 # constants (lane-wide splat columns under the ESS_LANE_INTERN_DISABLE=1
 # oracle), and the module must hold ONE table payload per distinct CONTENT —
 # under both env settings, and through `build_evaluator(form=:oop)` itself.
@@ -112,8 +112,8 @@ _ld_has_scalar(hlo, v::String) = occursin("dense<$v> : tensor<f64>", hlo)
         xs = Float64[-0.4 + 0.13k for k in 0:(L - 1)]
         ys = Float64[2.4 - 0.11k for k in 0:(L - 1)]
 
-        ref = ESM._oop_interp_bilinear_lanes(h, xs, ys, Float64)   # host, per-spec
-        f = (x, y) -> ESM._oop_interp_bilinear_lanes(h, x, y, RX.TracedRNumber{Float64})
+        ref = ESM._interp_bilinear_lanes(h, xs, ys, Float64)   # host, per-spec
+        f = (x, y) -> ESM._interp_bilinear_lanes(h, x, y, RX.TracedRNumber{Float64})
         xr, yr = RX.ConcreteRArray(xs), RX.ConcreteRArray(ys)
         got = Array((RX.@compile sync = true f(xr, yr))(xr, yr))
 
@@ -133,7 +133,7 @@ _ld_has_scalar(hlo, v::String) = occursin("dense<$v> : tensor<f64>", hlo)
         # Asserted as membership rather than as "the largest constant". The
         # clamp bounds `ax[1]` / `ax[Nx]` used to survive as lane COLUMNS (4
         # L-wide constants per bilinear — 3.8 MB at 13×7×72, against the
-        # table's former 1.32 GB); `_oop_lane_bound` (oop.jl, part of the
+        # table's former 1.32 GB); `_lane_bound` (interp_lanes.jl, part of the
         # lane-table interning change) now collapses an all-equal boundary
         # column to its one scalar HOST-SIDE, so those constants no longer
         # reach the trace at all in this fixture (every lane shares `_AX`).
@@ -148,7 +148,7 @@ _ld_has_scalar(hlo, v::String) = occursin("dense<$v> : tensor<f64>", hlo)
             L = length(h.specs)
             xs = Float64[-0.4 + 0.13(k % 17) for k in 0:(L - 1)]
             ys = Float64[2.4 - 0.11(k % 13) for k in 0:(L - 1)]
-            f = (x, y) -> ESM._oop_interp_bilinear_lanes(h, x, y, RX.TracedRNumber{Float64})
+            f = (x, y) -> ESM._interp_bilinear_lanes(h, x, y, RX.TracedRNumber{Float64})
             xr, yr = RX.ConcreteRArray(xs), RX.ConcreteRArray(ys)
             (L, _f64_widths(repr(RX.@code_hlo optimize = false f(xr, yr))))
         end
@@ -167,31 +167,31 @@ _ld_has_scalar(hlo, v::String) = occursin("dense<$v> : tensor<f64>", hlo)
         # unwraps L. Same tables on every lane is exactly the collapsible case.
         h = _lane_spec(1, 6)                   # 1 band × 6 cells: all knots equal
         L = length(h.specs)
-        f = (x) -> ESM._oop_interp_bilinear_lanes(h, x, RX.ConcreteRNumber(1.25),
+        f = (x) -> ESM._interp_bilinear_lanes(h, x, RX.ConcreteRNumber(1.25),
                                                   RX.TracedRNumber{Float64})
         xs = Float64[0.2k for k in 0:(L - 1)]
         xr = RX.ConcreteRArray(xs)
         got = Array((RX.@compile sync = true f(xr))(xr))
         @test length(got) == L
-        ref = ESM._oop_interp_bilinear_lanes(h, xs, fill(1.25, L), Float64)
+        ref = ESM._interp_bilinear_lanes(h, xs, fill(1.25, L), Float64)
         @test all(isapprox(a, b; rtol = 1e-14) for (a, b) in zip(got, ref))
     end
 
     # ---- the lane-table-intern change's TRACED-SIDE claims, measured in HLO.
     #
     # Two claims landed host-side (tree_walk/acc_merge.jl `_lane_intern`,
-    # tree_walk/oop.jl `_oop_lane_bound`, both under ESS_LANE_INTERN_DISABLE=1)
+    # tree_walk/interp_lanes.jl `_lane_bound`, both under ESS_LANE_INTERN_DISABLE=1)
     # with their Reactant-side effect asserted only by argument. Pinned here on
     # the emitted module text (`@code_hlo optimize = false` — pre-canonicalize,
     # so every constant is still visible where the trace put it):
     #
-    #   * CLAMP/EDGE BOUNDS. `_oop_lane_bound` collapses an all-bitwise-equal
+    #   * CLAMP/EDGE BOUNDS. `_lane_bound` collapses an all-bitwise-equal
     #     boundary column to its one scalar HOST-side, so the trace embeds a
     #     `tensor<f64>` and never sees the column; under the kill switch the
     #     column reaches the broadcast and is embedded as a lane-wide
     #     `tensor<Lxf64>` splat — the O(lanes) constant the collapse retires
     #     (4 per bilinear; measured 3.6 MB → 32 B per 13×7×72 call site).
-    #     `_oop_lane_bound` reads the env var PER CALL, i.e. at TRACE time, so
+    #     `_lane_bound` reads the env var PER CALL, i.e. at TRACE time, so
     #     the oracle toggles around the trace, not around spec construction.
     #
     #   * TABLE CONSTANTS DO **NOT** REVERT under the kill switch — and must
@@ -216,7 +216,7 @@ _ld_has_scalar(hlo, v::String) = occursin("dense<$v> : tensor<f64>", hlo)
         L = length(h.specs)                    # 21 lanes, D = 3 tables, 1 axis
         xs = Float64[4.0 + 0.2k for k in 0:(L - 1)]   # spans both clamps
         ys = Float64[8.0 - 0.2k for k in 0:(L - 1)]
-        f = (x, y) -> ESM._oop_interp_bilinear_lanes(h, x, y,
+        f = (x, y) -> ESM._interp_bilinear_lanes(h, x, y,
                                                      RX.TracedRNumber{Float64})
         xr, yr = RX.ConcreteRArray(xs), RX.ConcreteRArray(ys)
         son = repr(RX.@code_hlo optimize = false f(xr, yr))
@@ -243,7 +243,7 @@ _ld_has_scalar(hlo, v::String) = occursin("dense<$v> : tensor<f64>", hlo)
         @test _ld_npayload(son, 3) == 1
 
         # Both programs still compute the per-lane host oracle's numbers.
-        ref = ESM._oop_interp_bilinear_lanes(h, xs, ys, Float64)
+        ref = ESM._interp_bilinear_lanes(h, xs, ys, Float64)
         gon = Array((RX.@compile sync = true f(xr, yr))(xr, yr))
         goff = withenv("ESS_LANE_INTERN_DISABLE" => "1") do
             Array((RX.@compile sync = true f(xr, yr))(xr, yr))

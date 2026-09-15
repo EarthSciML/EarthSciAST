@@ -86,7 +86,7 @@ end
 # oop runner follows (scan.jl's `_scan_lanes_oop` says why).
 function _apply_array_contractions_oop(du, u, p, t,
         acs::AbstractVector{_ArrayContraction},
-        cache::AbstractVector{T}, fb) where {T}   # `fb::_OopForcing` — oop.jl is
+        cache::AbstractVector{T}, fb) where {T}   # `fb::_Forcing` — scalar_ops.jl is
                                                   # included after this file
     for j in eachindex(acs)
         ac = acs[j]

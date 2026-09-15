@@ -101,7 +101,7 @@ mutable struct _DECtx
     ue::_DEMap                              # extended-state slot map (1..n_total)
     consts::Dict{UInt64,_DEVal}             # scalar literal bit pattern -> value
     arrconsts::Dict{Vector{Float64},_DEVal} # array constant content -> value
-    # Live forcing buffers, threaded exactly as the interpreter's `_OopForcing`
+    # Live forcing buffers, threaded exactly as the interpreter's `_Forcing`
     # threads them: `hostkeys` are the build's aliased host arrays in the
     # container's order, `bufs` is THIS call's container (traced program inputs),
     # `bufvals` memoizes the emitted rank-1 view of each.
@@ -631,7 +631,7 @@ _de_assemble(ctx::_DECtx, M::_DEMap, n::Int)::_DEVal =
 # refresh for ever after, with no exception and no NaN.
 #
 # So the emitter reads buffers through the ARGUMENT LIST exactly as the
-# interpreter's `_oop_forcing_slab` does: an identity (`===`) scan over the
+# interpreter's `_forcing_slab` does: an identity (`===`) scan over the
 # build's host arrays, in the container's own order, swapping in this call's
 # argument entry. O(#forcing VARIABLES) per read, never O(#cells).
 function _de_buffer(ctx::_DECtx, arr::Vector{Float64})::_DEVal
