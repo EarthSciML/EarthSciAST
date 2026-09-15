@@ -2,7 +2,8 @@
 Build-time value-invention front door
 (RFC semiring-faq-unified-ir §6.1 cadence-partition / §5.5 / §7.3).
 
-Replaces the `E_TREEWALK_DERIVED_INDEX_SET` throw (tree_walk.jl). A
+Sizes what the index-set resolver would otherwise refuse with
+`derived_index_set_unmaterialized` (tree_walk/resolve.jl). A
 `kind:"derived"` index set whose `from_faq` names a value-invention aggregate
 (skolem / distinct / rank) is materialised here, ONCE at setup, off the
 per-step hot path — the §6.1 CONST/DISCRETE materialisation point. The
