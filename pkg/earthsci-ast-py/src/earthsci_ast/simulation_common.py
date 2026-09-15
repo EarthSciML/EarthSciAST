@@ -18,7 +18,7 @@ from typing import Any
 
 import numpy as np
 
-from .errors import AmbiguousParameterError, UnknownParameterError
+from .errors import AmbiguousOutputNameError, AmbiguousParameterError, UnknownParameterError
 from .numpy_interpreter import _require_real
 from .sympy_bridge import SimulationError
 
@@ -169,17 +169,25 @@ class Solution:
         tails = [i for i, v in enumerate(self.vars) if v.rsplit(".", 1)[-1] == name]
         if len(tails) == 1:
             return tails[0]
+        if len(tails) > 1:
+            raise AmbiguousOutputNameError(name, [self.vars[i] for i in tails])
         return None
 
     def _element_rows(self, name: str) -> list[int]:
-        """Row indices of the element spellings of an array state ``name``."""
+        """Row indices of the element spellings of an array state ``name``.
+
+        The base named exactly wins; failing that, the ONE base whose last
+        dotted segment is ``name`` (CONFORMANCE_SPEC §5.17.4). A last segment
+        several bases share is refused rather than returning all of their rows.
+        """
         name = self.resolve_name(name)
-        out: list[int] = []
-        for i, v in enumerate(self.vars):
-            base = v.split("[", 1)[0]
-            if base == name or base.rsplit(".", 1)[-1] == name:
-                out.append(i)
-        return out
+        bases = [v.split("[", 1)[0] for v in self.vars]
+        if name in bases:
+            return [i for i, b in enumerate(bases) if b == name]
+        owners = sorted({b for b in bases if b.rsplit(".", 1)[-1] == name})
+        if len(owners) > 1:
+            raise AmbiguousOutputNameError(name, owners)
+        return [i for i, b in enumerate(bases) if owners and b == owners[0]]
 
     def __contains__(self, name: object) -> bool:
         try:

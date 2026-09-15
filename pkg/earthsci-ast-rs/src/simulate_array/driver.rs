@@ -1504,29 +1504,34 @@ impl ArrayCompiled {
         }
     }
 
-    /// The observed-rule names `requested` (bare or `Model.`-qualified) names.
+    /// The observed-rule names `requested` names.
     ///
-    /// The same both-ways match [`crate::derive_output_plan`] applies to an
-    /// output request, so a name that selects a variable there selects the rule
-    /// that produces it here: exact, or equal after dropping the dotted prefix
-    /// from either side. A name matching nothing is not an error — the output
-    /// plan diagnoses it with [`crate::OutputError::UnknownObserved`], which can
-    /// also see the state slots and so tells the caller the whole truth.
+    /// The rule [`crate::derive_output_plan`] applies to an output request
+    /// (CONFORMANCE_SPEC §5.17.4), over the observed rules: the exact name, else
+    /// the ONE rule whose last dotted segment equals the request's. A name that
+    /// matches nothing, or whose last segment several rules share, selects
+    /// nothing and is not an error here — the output plan diagnoses it with
+    /// [`crate::OutputError::UnknownObserved`] or
+    /// [`crate::OutputError::AmbiguousRequest`], and it also sees the state
+    /// slots, so it tells the caller the whole truth.
     #[cfg(feature = "solve")]
     fn resolve_requested_observeds(&self, requested: &[String]) -> HashSet<String> {
         if requested.is_empty() {
             return HashSet::new();
         }
-        let bare = |n: &str| n.rsplit('.').next().unwrap_or(n).to_string();
-        self.observed_rules
+        let vars: Vec<&str> = self
+            .observed_rules
             .iter()
-            .map(observed_rule_var)
-            .filter(|var| {
-                requested.iter().any(|r| {
-                    r == *var || bare(r) == **var || *r == bare(var) || bare(r) == bare(var)
-                })
-            })
-            .cloned()
+            .map(|r| observed_rule_var(r).as_str())
+            .collect();
+        requested
+            .iter()
+            .filter_map(
+                |r| match crate::data_output::match_output_request(r, &vars) {
+                    crate::data_output::RequestMatch::Named(var) => Some(var.to_string()),
+                    _ => None,
+                },
+            )
             .collect()
     }
 

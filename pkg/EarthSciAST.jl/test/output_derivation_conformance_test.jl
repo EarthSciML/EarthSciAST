@@ -113,6 +113,27 @@ end
         end
     end
 
+    # A request that designates no single variable is REFUSED with its registered
+    # code, never resolved to an arbitrary candidate (CONFORMANCE_SPEC §5.17.4).
+    @test !isempty(manifest["refusals"])
+    for case in manifest["refusals"]
+        id = String(case["id"])
+        @testset "$id (refused)" begin
+            doc = _od_doc(joinpath(_OD_ROOT, String(case["fixture"])))
+            slots = String[String(s) for s in case["slot_names"]]
+            observed = String[String(s) for s in case["observed"]]
+            var_map = Dict{String,Int}(s => i for (i, s) in enumerate(slots))
+            err = try
+                derive_output_plan(doc, var_map; observed = observed)
+                nothing
+            catch e
+                e
+            end
+            @test err isa OutputError
+            @test err isa OutputError && err.code == String(case["raises"])
+        end
+    end
+
     # The clause the corpus exists for, asserted directly so a regression names
     # itself rather than showing up as a golden diff.
     @testset "a scalar carries no synthetic axis and scalars share one grid" begin

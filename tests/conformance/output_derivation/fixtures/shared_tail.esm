@@ -1,0 +1,125 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "OutputDerivationSharedTail",
+    "description": "Output-derivation conformance fixture: two components that BOTH declare an observed `O3`, so the last dotted segment `O3` designates two variables. An `observed` request selects the variable it names EXACTLY; only when nothing matches exactly may it fall back to the one variable sharing its last segment, and a last segment several variables share is refused with `ambiguous_output_name` (CONFORMANCE_SPEC §5.17.4). A rule that compares last segments without counting candidates selects BOTH observeds for a request naming one, and writes a variable nobody asked for.",
+    "authors": [
+      "EarthSciML Test Suite"
+    ],
+    "created": "2026-09-14T00:00:00Z",
+    "tags": [
+      "conformance",
+      "output-derivation",
+      "streaming-output",
+      "scalar",
+      "request-names"
+    ]
+  },
+  "domain": {
+    "independent_variable": "time"
+  },
+  "models": {
+    "Chem": {
+      "reference": {
+        "notes": "One state and one observed `O3`."
+      },
+      "variables": {
+        "NO2": {
+          "type": "unknown",
+          "units": "ppb",
+          "default": 10.0,
+          "description": "Chem nitrogen dioxide."
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.1
+        },
+        "O3": {
+          "type": "unknown",
+          "units": "ppb",
+          "description": "Chem ozone, derived."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "NO2"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              -0.01,
+              "NO2"
+            ]
+          }
+        },
+        {
+          "lhs": "O3",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "k",
+              "NO2"
+            ]
+          }
+        }
+      ]
+    },
+    "Sink": {
+      "reference": {
+        "notes": "One state and an observed that shares the local name `O3` with Chem's."
+      },
+      "variables": {
+        "SO2": {
+          "type": "unknown",
+          "units": "ppb",
+          "default": 5.0,
+          "description": "Sink sulfur dioxide."
+        },
+        "kd": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.2
+        },
+        "O3": {
+          "type": "unknown",
+          "units": "ppb",
+          "description": "Sink ozone, derived."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "SO2"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              -0.02,
+              "SO2"
+            ]
+          }
+        },
+        {
+          "lhs": "O3",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "kd",
+              "SO2"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

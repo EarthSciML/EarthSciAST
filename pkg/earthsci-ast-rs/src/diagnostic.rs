@@ -363,6 +363,11 @@ diagnostic_code_registry! {
     /// no evaluation order satisfies both definitions. The self-edge of a
     /// §4.3.1.1 recurrence CANDIDATE is not such an edge and is dropped.
     OBSERVED_CYCLE = "observed_cycle";
+    /// An output name that matches no variable exactly and whose last dotted
+    /// segment is shared by more than one variable: `derive_output_plan`'s
+    /// `observed` request (CONFORMANCE_SPEC §5.17.4). A last-segment match is
+    /// accepted only when it designates exactly one variable.
+    AMBIGUOUS_OUTPUT_NAME = "ambiguous_output_name";
     /// An `operator` whose declared variable the model does not have.
     OPERATOR_VARIABLE_MISSING = "operator_variable_missing";
     /// A causal self-read (esm-spec §4.3.1.1) that is not strictly earlier
@@ -504,6 +509,7 @@ mod error_code_tests {
     #[test]
     fn the_diagnostic_vocabulary_is_pinned() {
         let expected: Vec<&str> = vec![
+            "ambiguous_output_name",
             "ambiguous_subsystem_ref",
             "analysis",
             "apply_expression_template_bindings_mismatch",
