@@ -77,6 +77,10 @@ include("testutils.jl")
             "esm-spec §9.7: `expression_template_imports` is consumed at load; the call site expands",
         "tests/valid/template_import_lib.esm" =>
             "esm-spec §9.7.6: metaparameter folding sizes `index_sets.cells`",
+        "tests/valid/template_import_faq_axis.esm" =>
+            "esm-spec §9.7.5: `expression_template_imports` is consumed at load; the imported `lev` merges into the registry",
+        "tests/valid/template_import_faq_axis_lib.esm" =>
+            "esm-spec §9.7.6: metaparameter folding sizes `index_sets.lev`",
         "tests/valid/template_import_rename_lib.esm" =>
             "esm-spec §9.7.6: metaparameter folding sizes `index_sets.edges`",
         # §9.7.6 metaparameter folding.

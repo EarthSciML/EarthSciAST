@@ -707,15 +707,19 @@ survives composition, which is the spelling composition produces anyway.
 
 `build_reference_graph(model, model_name="") -> ReferenceGraph` and
 `resolve_references(document) -> {str: ReferenceGraph}`, raising
-`ReferenceResolutionError`. Julia, Python and Rust only — TypeScript and Go do
-not implement the semiring-FAQ node addressing of RFC §6.1.
+`ReferenceResolutionError`. All five bindings export both (TypeScript
+`buildReferenceGraph` / `resolveReferences`, Go `BuildReferenceGraph` /
+`ResolveReferences`). `resolve_references` takes a **loaded** document — the
+output of `load_path` / `load_string` / `load_document`, or its JSON view — whose
+`expression_template_imports` and `{ref}` mounts are already resolved, because an
+imported file's `index_sets` reach the registry only at load (esm-spec §9.7.5) and
+a raw file whose `faq` ranges name an imported axis would otherwise report it as
+`E_REF_UNDECLARED_INDEX_SET`.
 
 > **⚠ A behavioural, not cosmetic, split.** Python's `build_reference_graph`
 > takes a third `index_sets` argument; Rust puts the same capability in a
-> separate `build_reference_graph_with_index_sets`; **Julia has no way to pass a
-> document-scoped registry at all** and reads the pre-0.8.0 model-nested
-> `model["index_sets"]` instead. For a v0.8.0 document whose `index_sets` sits
-> beside `models`, Julia and Python resolve differently. Rust also names the
+> separate `build_reference_graph_with_index_sets`; Julia takes it as an
+> optional third positional argument. Rust also names the
 > error `ReferenceError` where Julia and Python name it
 > `ReferenceResolutionError`.
 

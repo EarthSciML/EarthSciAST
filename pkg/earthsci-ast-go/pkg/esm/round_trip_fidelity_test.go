@@ -152,12 +152,14 @@ var transformingFixtures = map[string]string{
 	"derivative_trailing_boundary_operands.esm": "eager expression-template expansion",
 	"expression_templates_arrhenius.esm":        "eager expression-template expansion",
 	"template_import_minimal.esm":               "template-library import + eager expansion",
+	"template_import_faq_axis.esm":              "template-library import consumed + the imported axis merged and folded",
 
 	// Metaparameter close+fold (esm-spec §9.7.1): symbolic extents such as
 	// `"size": "N"` are folded to their integer values at load.
 	"data_sources_ingest_and_select.esm":    "metaparameter folding (N_REC/N_POP/N_SRC -> integers)",
 	"makearray_empty_region_min_extent.esm": "metaparameter folding (N -> integer)",
 	"template_import_lib.esm":               "metaparameter folding (N -> integer)",
+	"template_import_faq_axis_lib.esm":      "metaparameter folding (NLEV -> integer)",
 	"template_import_rename_lib.esm":        "metaparameter folding (M -> integer)",
 
 	// Subsystem `{"ref": ...}` resolution: the mount is replaced in place by
