@@ -843,18 +843,30 @@ function opInT(op: string): boolean {
  * object whose `op` is in **T** ({@link opInT}). Does NOT follow references to
  * other templates — that transitive step is {@link templateTargetBearing}.
  */
-function directTOp(node: Json, seen: Set<object> = new Set()): boolean {
+function directTOp(node: Json): boolean {
+  return directOp(node, opInT)
+}
+
+/**
+ * True iff `node` contains, anywhere within it, an object whose `op` satisfies
+ * `pred`. {@link directTOp} is this with the tier-**T** predicate.
+ */
+function directOp(
+  node: Json,
+  pred: (op: string) => boolean,
+  seen: Set<object> = new Set(),
+): boolean {
   if (Array.isArray(node)) {
     if (seen.has(node)) return false
     seen.add(node)
-    for (const c of node) if (directTOp(c, seen)) return true
+    for (const c of node) if (directOp(c, pred, seen)) return true
     return false
   }
   if (isObject(node)) {
     if (seen.has(node)) return false
     seen.add(node)
-    if (typeof node.op === 'string' && opInT(node.op)) return true
-    for (const k of Object.keys(node)) if (directTOp(node[k], seen)) return true
+    if (typeof node.op === 'string' && pred(node.op)) return true
+    for (const k of Object.keys(node)) if (directOp(node[k], pred, seen)) return true
     return false
   }
   return false
@@ -870,6 +882,20 @@ function directTOp(node: Json, seen: Set<object> = new Set()): boolean {
  * component registry.
  */
 export function templateTargetBearing(templates: Record<string, unknown>): Record<string, boolean> {
+  return templateOpBearing(templates, opInT)
+}
+
+/**
+ * Compute, for every template in `templates`, whether it can produce an object
+ * whose `op` satisfies `pred`: its body contains one anywhere (including inside
+ * nested references' `bindings`), or it references, transitively through the
+ * acyclic body-reference DAG, a template that can.
+ * {@link templateTargetBearing} is this with the tier-**T** predicate.
+ */
+export function templateOpBearing(
+  templates: Record<string, unknown>,
+  pred: (op: string) => boolean,
+): Record<string, boolean> {
   const tb: Record<string, boolean> = {}
   const inProgress = new Set<string>()
   const visit = (name: string): boolean => {
@@ -883,7 +909,7 @@ export function templateTargetBearing(templates: Record<string, unknown>): Recor
     }
     inProgress.add(name)
     const body = decl.body
-    let res = body !== undefined && directTOp(body)
+    let res = body !== undefined && directOp(body, pred)
     if (!res) {
       for (const r of collectApplyNames(body, [])) {
         if (!Object.prototype.hasOwnProperty.call(templates, r)) continue
@@ -934,6 +960,23 @@ function expandEager(
   scope: string,
   memo: Map<object, Json> = new Map(),
 ): Json {
+  return expandReferencesWhere(node, templates, scope, (n) => refIsEager(n, targetBearing), memo)
+}
+
+/**
+ * The reference-expansion walk behind {@link expandEager}: expand,
+ * innermost-first, every `apply_expression_template` node for which
+ * `shouldExpand` holds (asked after the node's bindings are expanded), and
+ * return every other reference intact. Sharing is preserved via an identity
+ * memo. Mirrors the Julia reference `_expand_refs_walk`.
+ */
+export function expandReferencesWhere(
+  node: Json,
+  templates: Record<string, unknown>,
+  scope: string,
+  shouldExpand: (node: Record<string, unknown>) => boolean,
+  memo: Map<object, Json> = new Map(),
+): Json {
   if (isObject(node)) {
     const hit = memo.get(node)
     if (hit !== undefined) return hit
@@ -946,7 +989,7 @@ function expandEager(
         const nb: Record<string, unknown> = {}
         let changed = false
         for (const k of Object.keys(b)) {
-          const rv = expandEager(b[k], templates, targetBearing, scope, memo)
+          const rv = expandReferencesWhere(b[k], templates, scope, shouldExpand, memo)
           if (rv !== b[k]) changed = true
           nb[k] = rv
         }
@@ -955,9 +998,9 @@ function expandEager(
           for (const k of Object.keys(node)) newnode[k] = k === 'bindings' ? nb : node[k]
         }
       }
-      if (refIsEager(newnode, targetBearing)) {
-        const body = expandApply(newnode, templates, scope)
-        res = expandEager(body, templates, targetBearing, scope, memo)
+      if (shouldExpand(newnode)) {
+        const body = expandApply(newnode, templates as Templates, scope)
+        res = expandReferencesWhere(body, templates, scope, shouldExpand, memo)
       } else {
         res = newnode
       }
@@ -965,7 +1008,7 @@ function expandEager(
       let changed = false
       const out: Record<string, unknown> = {}
       for (const k of Object.keys(node)) {
-        const rv = expandEager(node[k], templates, targetBearing, scope, memo)
+        const rv = expandReferencesWhere(node[k], templates, scope, shouldExpand, memo)
         if (rv !== node[k]) changed = true
         out[k] = rv
       }
@@ -979,7 +1022,7 @@ function expandEager(
     if (hit !== undefined) return hit
     let changed = false
     const out = node.map((v) => {
-      const rv = expandEager(v, templates, targetBearing, scope, memo)
+      const rv = expandReferencesWhere(v, templates, scope, shouldExpand, memo)
       if (rv !== v) changed = true
       return rv
     })

@@ -89,6 +89,8 @@ include("testutils.jl")
             "esm-spec §9.3: `enum` op nodes are lowered to `const` integers at load",
         "tests/valid/enums_zero_and_negative.esm" =>
             "esm-spec §9.3: `enum` op nodes are lowered to `const` integers at load",
+        "tests/valid/enums_symbol_template_binding.esm" =>
+            "esm-spec §9.6.4 rule 3, §9.3: the enum-bearing template call expands and lowers to `const` at load",
         # §4.7 subsystem `{ref}` resolution.
         "tests/valid/lib_calendar_subsystem_inclusion.esm" =>
             "esm-spec §4.7: a `{ref}` subsystem is resolved and inlined at load",
