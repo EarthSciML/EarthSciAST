@@ -151,6 +151,7 @@ var transformingFixtures = map[string]string{
 	"advection_reaction_loaded_ic_bc.esm":       "eager expression-template expansion",
 	"derivative_trailing_boundary_operands.esm": "eager expression-template expansion",
 	"expression_templates_arrhenius.esm":        "eager expression-template expansion",
+	"units_const_declared.esm":                  "eager expression-template expansion",
 	"template_import_minimal.esm":               "template-library import + eager expansion",
 
 	// Metaparameter close+fold (esm-spec §9.7.1): symbolic extents such as
@@ -191,8 +192,9 @@ var transformingFixtures = map[string]string{
 
 	// Enum lowering (esm-spec §9.3): `enum` op nodes are resolved to `const`
 	// integers at load time.
-	"enums_categorical_lookup.esm": "enum lowering to const",
-	"enums_zero_and_negative.esm":  "enum lowering to const",
+	"enums_categorical_lookup.esm":      "enum lowering to const",
+	"enums_zero_and_negative.esm":       "enum lowering to const",
+	"enums_symbol_template_binding.esm": "enum lowering to const, after expanding the template that spells the symbol",
 
 	// The v0.5.0 inline multi-series shorthand: an array-form `plots[].y` is
 	// normalized at load into a canonical single `y` plus a `series` list

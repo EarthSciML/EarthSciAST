@@ -837,6 +837,14 @@ fn propagate_operator_dim(
         "faq" | "makearray" | "index" | "reshape" | "transpose" | "concat" | "broadcast" => {
             propagate_array_dim(op, env, findings)
         }
+        // A `const` that DECLARES its units has that unit (esm-spec §4.8.5);
+        // without `units` it is undeterminable, like a bare literal. An
+        // unresolvable string is reported at the containing expression field by
+        // `structural.rs` (see [`unresolvable_const_units`]), not here.
+        "const" => match op.units.as_deref().map(parse_unit) {
+            Some(Ok(unit)) => Dim::Known(unit),
+            _ => Dim::Unknown,
+        },
         // No dimensional rule for this operator — an unregistered user op, or a
         // rewrite-target sugar op (`grad`/`div`/`laplacian`/`fn`/`table_lookup`/
         // `godunov_hamiltonian`/…) whose dimension is UNDETERMINABLE until a
@@ -1523,6 +1531,67 @@ pub fn check_expression_dimensions(
         )));
     }
     findings
+}
+
+/// Every declared `const` unit string in `expr` that does not resolve against
+/// the registry (esm-spec §4.8.5 item 2), in walk order.
+pub fn unresolvable_const_units(expr: &Expr) -> Vec<String> {
+    fn walk(expr: &Expr, out: &mut Vec<String>) {
+        if let Expr::Operator(node) = expr {
+            if node.op == "const"
+                && let Some(units) = &node.units
+                && parse_unit(units).is_err()
+            {
+                out.push(units.clone());
+            }
+            node.for_each_child(&mut |child| walk(child, out));
+        }
+    }
+    let mut out = Vec::new();
+    walk(expr, &mut out);
+    out
+}
+
+/// Reject declared `units` on any expression node in a document declaring
+/// `esm` < 1.2.0 (esm-spec §4.8.5 item 6), naming the first offending node.
+/// Runs on the raw JSON before schema validation, like the `solver` gate.
+pub fn reject_const_units_pre_v12(
+    view: &serde_json::Value,
+) -> Result<(), crate::diagnostic::DiagnosticError> {
+    fn find(value: &serde_json::Value, at: &str) -> Option<String> {
+        match value {
+            serde_json::Value::Object(obj) => {
+                if obj.contains_key("op") && obj.contains_key("units") {
+                    return Some(at.to_string());
+                }
+                obj.iter().find_map(|(k, v)| find(v, &format!("{at}/{k}")))
+            }
+            serde_json::Value::Array(items) => items
+                .iter()
+                .enumerate()
+                .find_map(|(i, v)| find(v, &format!("{at}/{i}"))),
+            _ => None,
+        }
+    }
+    let Some(esm) = view.get("esm").and_then(|v| v.as_str()) else {
+        return Ok(());
+    };
+    let Some((major, minor, _)) = crate::diagnostic::parse_semver(esm) else {
+        return Ok(());
+    };
+    if (major, minor) >= (1, 2) {
+        return Ok(());
+    }
+    match find(view, "") {
+        None => Ok(()),
+        Some(path) => Err(crate::diagnostic::err(
+            crate::diagnostic::codes::CONST_UNITS_VERSION_TOO_OLD,
+            format!(
+                "declared `units` on an expression node require esm >= 1.2.0; file declares \
+                 {esm}. Offending path: {path}"
+            ),
+        )),
+    }
 }
 
 /// Parse a unit string into a Unit struct
@@ -2893,6 +2962,76 @@ mod tests {
                 .iter()
                 .any(UnitFinding::is_error)
         );
+    }
+
+    /// A `const` that declares its units has that unit, a `const` without units
+    /// stays undeterminable, and an unresolvable declared unit is listed for the
+    /// structural layer (esm-spec §4.8.5).
+    #[test]
+    fn a_const_with_declared_units_has_that_unit() {
+        let konst = |units: Option<&str>| {
+            Expr::Operator(std::sync::Arc::new(ExpressionNode {
+                op: "const".into(),
+                value: Some(serde_json::json!(0.44704)),
+                units: units.map(str::to_string),
+                ..ExpressionNode::default()
+            }))
+        };
+        let env = env_of(&[
+            ("speed_mph", "mi/h"),
+            ("speed_ms", "m/s"),
+            ("speed_kg", "kg"),
+        ]);
+        let rhs = |units| op("*", vec![Expr::Variable("speed_mph".into()), konst(units)]);
+        let eq = |lhs: &str, units| Equation {
+            comment: None,
+            lhs: Expr::Variable(lhs.into()),
+            rhs: rhs(units),
+        };
+        assert!(
+            !check_equation_dimensions(&eq("speed_ms", Some("m*h/(mi*s)")), &env)
+                .iter()
+                .any(UnitFinding::is_error),
+            "mi/h times a const declared m*h/(mi*s) is exactly m/s"
+        );
+        assert!(
+            check_equation_dimensions(&eq("speed_kg", Some("m*h/(mi*s)")), &env)
+                .iter()
+                .any(UnitFinding::is_error),
+            "declared kg against m/s is a provable mismatch"
+        );
+        assert!(
+            !check_equation_dimensions(&eq("speed_kg", None), &env)
+                .iter()
+                .any(UnitFinding::is_error),
+            "a const without units is undeterminable, so nothing is checked"
+        );
+        assert_eq!(
+            unresolvable_const_units(&rhs(Some("mph"))),
+            vec!["mph".to_string()]
+        );
+        assert!(unresolvable_const_units(&rhs(Some("m*h/(mi*s)"))).is_empty());
+    }
+
+    #[test]
+    fn const_units_are_gated_at_esm_1_2_0() {
+        let doc = |esm: &str| {
+            serde_json::json!({
+                "esm": esm,
+                "models": {"M": {"equations": [{"lhs": "x", "rhs":
+                    {"op": "const", "args": [], "value": 1.0, "units": "m"}}]}}
+            })
+        };
+        let err = reject_const_units_pre_v12(&doc("1.1.0")).expect_err("1.1.0 must be rejected");
+        assert!(
+            err.to_string().contains("const_units_version_too_old"),
+            "{err}"
+        );
+        assert!(
+            err.to_string().contains("/models/M/equations/0/rhs"),
+            "{err}"
+        );
+        assert!(reject_const_units_pre_v12(&doc("1.2.0")).is_ok());
     }
 
     #[test]

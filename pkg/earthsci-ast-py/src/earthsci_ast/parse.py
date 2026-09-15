@@ -38,9 +38,11 @@ import jsonschema
 from jsonschema import validate
 
 from .error_handling import (
+    AMBIGUOUS_SUBSYSTEM_REF,
     MOUNT_FORM_UNSUPPORTED,
     SUBSYSTEM_REF_IS_COUPLING_LIBRARY,
     SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY,
+    UNRESOLVED_SUBSYSTEM_REF,
 )
 from .errors import EarthSciAstError, ParseError
 from .esm_types import (
@@ -137,14 +139,6 @@ class SubsystemRefError(EarthSciAstError):
         super().__init__(message)
         self.code = code
         self.path = path
-
-
-#: A subsystem `ref` that does not resolve to a file (esm-spec §4.7).
-UNRESOLVED_SUBSYSTEM_REF = "unresolved_subsystem_ref"
-
-#: A subsystem `ref` whose file carries MORE THAN ONE top-level system. The mount
-#: names exactly one component, so there is no rule for choosing among them.
-AMBIGUOUS_SUBSYSTEM_REF = "ambiguous_subsystem_ref"
 
 
 def _count_top_level_systems(parsed) -> int:
@@ -2443,7 +2437,6 @@ from .structural_checks import (  # noqa: E402
     _validate_structural,  # used by load(); re-exported for compatibility
 )
 
-
 _LOAD_ARGS_DOC = """
     Args:
         metaparameters: Optional name → integer bindings closing the ROOT
@@ -2619,22 +2612,20 @@ def _load_data(
     # when the file declares esm < 0.4.0 (RFC §5.4 spec-version gate).
     # Surfaced before schema validation so the user sees the version hint
     # instead of a generic schema error.
+    from ._data_source_urls import resolve_data_source_urls
     from .lower_expression_templates import (
         expand_document,
         lower_expression_templates,
         reject_expression_templates_pre_v04,
     )
-    from ._data_source_urls import resolve_data_source_urls
     from .solver import reject_solver_pre_v11
     from .template_imports import (
         apply_scope_injections,
-        reject_template_imports_pre_v08,
-        resolve_template_machinery,
-    )
-    from .template_imports import (
         check_data_source_extents,
         collect_mount_declared_metaparameters,
         document_declares_an_extent,
+        reject_template_imports_pre_v08,
+        resolve_template_machinery,
     )
 
     reject_expression_templates_pre_v04(data)
@@ -2647,6 +2638,11 @@ def _load_data(
     # The top-level `solver` block arrives at esm 1.1.0; a file declaring an
     # earlier version that carries one is rejected (esm-spec §2.2.4).
     reject_solver_pre_v11(data)
+
+    # Declared `units` on a `const` node arrive at esm 1.2.0 (esm-spec §4.8.5).
+    from .units import reject_const_units_pre_v12
+
+    reject_const_units_pre_v12(data)
 
     # esm-spec §8.2.1: resolve every `data_sources[*].source` location against
     # this document's own directory, BEFORE schema validation and before typed

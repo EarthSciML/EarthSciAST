@@ -1156,6 +1156,13 @@ const _BOOLEAN_OPS = _ops_with_dim_class(:boolean)
 
 # Operator name → dimensional rule. Ops absent from this table have no
 # dimensional rule and degrade silently to `nothing` (see `_expr_dimensions!`).
+# "const": a `const` that DECLARES its units has that unit (esm-spec §4.8.5);
+# without `units` it is undeterminable, like a bare literal. An unresolvable
+# string is reported at the containing expression field by `model_unit_findings`,
+# not here.
+_const_units_rule(expr, var_units, findings) =
+    expr.units === nothing ? nothing : _absolute_unit(parse_units(expr.units))
+
 const _DIMENSION_RULES = let rules = Dict{String, Function}(
         "+"      => _same_dimension_rule,
         "-"      => _same_dimension_rule,
@@ -1173,6 +1180,8 @@ const _DIMENSION_RULES = let rules = Dict{String, Function}(
         # the operand's value at the previous step, not a dimensionless one.
         "Pre"    => _preserve_dimension_rule,
         "D"      => _derivative_rule,
+        # A `const` that DECLARES its units has that unit (esm-spec §4.8.5).
+        "const"  => _const_units_rule,
     )
     for op in _TRANSCENDENTAL_OPS
         rules[op] = _dimensionless_arg_rule
@@ -1502,6 +1511,15 @@ function model_unit_findings(model::Model)::Vector{UnitFinding}
         for msg in equation_unit_findings(eq, var_units)
             push!(out, UnitFinding("equations/$(i-1)", msg, UNIT_DIMENSION_MISMATCH))
         end
+        # A declared `const` unit string that does not resolve is a defect at the
+        # containing expression field (esm-spec §4.8.5 item 2), whatever kind of
+        # equation it sits in.
+        for (field, side) in (("lhs", eq.lhs), ("rhs", eq.rhs))
+            for units in unresolvable_const_units(side)
+                push!(out, UnitFinding("equations/$(i-1)/$field",
+                    "Unit string '$units' is not a recognised unit", UNIT_PARSE_ERROR))
+            end
+        end
     end
 
     # 5. DEFINING equations — an equation whose LHS is a bare variable naming a
@@ -1637,4 +1655,64 @@ function infer_variable_units(var_name::AbstractString, equations::Vector{Equati
     end
 
     return nothing
+end
+
+"""
+    reject_const_units_pre_v12(raw_data)
+
+Reject declared `units` on any expression node in a document declaring `esm` <
+1.2.0 (esm-spec §4.8.5 item 6), naming the first offending node. Runs on the raw
+JSON before schema validation, like [`reject_solver_pre_v11`](@ref).
+"""
+function reject_const_units_pre_v12(raw_data)
+    raw_data === nothing && return
+    _is_object(raw_data) || return
+    esm_raw = _raw_get(raw_data, "esm")
+    esm_raw === nothing && return
+    m = match(r"^(\d+)\.(\d+)\.(\d+)$", string(esm_raw))
+    m === nothing && return
+    (parse(Int, m.captures[1]), parse(Int, m.captures[2])) >= (1, 2) && return
+    path = _find_units_bearing_node(raw_data, "")
+    path === nothing && return
+    throw(ExpressionTemplateError(
+        ERROR_CODES.CONST_UNITS_VERSION_TOO_OLD,
+        "declared `units` on an expression node require esm >= 1.2.0; " *
+        "file declares $(string(esm_raw)). Offending path: $path"))
+end
+
+function _find_units_bearing_node(node, at::String)
+    if _is_object(node)
+        (_raw_haskey(node, "op") && _raw_haskey(node, "units")) && return at
+        for (k, v) in pairs(node)
+            hit = _find_units_bearing_node(v, "$at/$(string(k))")
+            hit === nothing || return hit
+        end
+    elseif node isa AbstractVector
+        for (i, v) in enumerate(node)
+            hit = _find_units_bearing_node(v, "$at/$(i - 1)")
+            hit === nothing || return hit
+        end
+    end
+    return nothing
+end
+
+"""
+    unresolvable_const_units(expr::ASTExpr) -> Vector{String}
+
+Every declared `const` unit string in `expr` that does not resolve against the
+registry (esm-spec §4.8.5 item 2), in walk order.
+"""
+function unresolvable_const_units(expr)
+    out = String[]
+    _walk_const_units!(out, expr)
+    return out
+end
+
+function _walk_const_units!(out, expr)
+    expr isa OpExpr || return out
+    if expr.op == "const" && expr.units !== nothing && parse_units(expr.units) === nothing
+        push!(out, expr.units)
+    end
+    foreach_child(child -> _walk_const_units!(out, child), expr)
+    return out
 end

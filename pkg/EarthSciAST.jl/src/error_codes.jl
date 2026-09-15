@@ -44,6 +44,10 @@ const ERROR_CODES = (
     # ── Structural validation (validate.jl; the `error_type` of a
     #    `StructuralError`, pinned by tests/invalid/expected_errors.json) ────
     ARRAY_SHAPE_MISMATCH = "array_shape_mismatch",
+    # esm-spec §6.6.5: an assertion whose form does not match the declared rank of
+    # the variable it names -- pointwise on a shaped variable, or `coords` /
+    # `reduce` on a scalar one.
+    ASSERTION_RANK_MISMATCH = "assertion_rank_mismatch",
     CIRCULAR_DEPENDENCY = "circular_dependency",
     CONFLICTING_DERIVATIVE = "conflicting_derivative",
     DATA_SOURCE_UNDEFINED = "data_source_undefined",
@@ -97,6 +101,9 @@ const ERROR_CODES = (
     UNDEFINED_SPECIES = "undefined_species",
     UNDEFINED_SYSTEM = "undefined_system",
     UNDEFINED_VARIABLE = "undefined_variable",
+    # esm-spec §6.6.2: an inline test's `initial_conditions` / `parameter_overrides`
+    # key that matches no declared name under the override-key rules.
+    UNKNOWN_OVERRIDE_KEY = "unknown_override_key",
     UNRESOLVED_SCOPED_REF = "unresolved_scoped_ref",
 
     # ── Units (units.jl §4.8.4). Both are HARD errors: `UNIT_INCONSISTENCY`
@@ -153,6 +160,9 @@ const ERROR_CODES = (
 
     # ── Document-scoped solver hints (esm-spec §2.2; solver.jl). ─────────
     SOLVER_VERSION_TOO_OLD = "solver_version_too_old",
+
+    # ── Declared units on a const node (esm-spec §4.8.5; units.jl). ──────
+    CONST_UNITS_VERSION_TOO_OLD = "const_units_version_too_old",
 
     # ── Template-library imports + load-time metaparameters (esm-spec §9.7;
     #    template_imports.jl). ──────────────────────────────────────────────

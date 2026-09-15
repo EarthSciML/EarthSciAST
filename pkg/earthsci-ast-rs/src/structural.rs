@@ -349,6 +349,16 @@ impl<'a> ModelCtx<'a> {
             // property of the equation, not of one side.)
             for (field, expr) in [("lhs", &equation.lhs), ("rhs", &equation.rhs)] {
                 self.check_refs(expr, &format!("{eq_path}/{field}"), eq_idx, errors);
+                // A declared `const` unit string that does not resolve is a
+                // defect at the containing expression field (esm-spec §4.8.5).
+                for units in crate::units::unresolvable_const_units(expr) {
+                    errors.push(StructuralError {
+                        path: format!("{eq_path}/{field}"),
+                        code: StructuralErrorCode::UnitParseError,
+                        message: format!("Unit string '{units}' is not a recognised unit"),
+                        details: serde_json::json!({ "units": units }),
+                    });
+                }
             }
 
             // Validate dimensional consistency of the equation via expression-level
