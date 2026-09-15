@@ -515,6 +515,14 @@ function _compile_fn_node(expr::OpExpr, compile_child)
     return _mknode(kind=_NK_OP, op=:fn, children=children, payload=payload)
 end
 
+# The `unevaluable_operator` diagnostic (esm-spec §9.6.6): `op` IS in the §4.2
+# evaluable core, but this evaluator has no rule for it where it stands. `why`
+# names the stage that should have eliminated it.
+_unevaluable_operator(op, why::AbstractString) = TreeWalkError(
+    ERROR_CODES.UNEVALUABLE_OPERATOR,
+    "operator '$(op)' is an evaluable-core op with no evaluation rule in the tree-walk " *
+    "evaluator: $(why) (esm-spec §4.2 / §9.6.6).")
+
 function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeMemo)
     op_sym = Symbol(expr.op)
     payload = nothing
@@ -558,11 +566,15 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
         if v isa Real && !(v isa Bool)
             return _mknode(kind=_NK_LITERAL, literal=Float64(v))
         end
-        throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_OP",
-            "non-scalar `const` op outside an array-consuming position"))
+        throw(_unevaluable_operator(expr.op,
+            "a non-scalar `const` is consumed only by an array-consuming position"))
+    elseif op_sym === Symbol("true")
+        # The boolean literal (esm-spec §4.2), in the evaluator's float encoding.
+        # (`:true` is the Bool `true`, not a Symbol, so it cannot be compared here.)
+        return _mknode(kind=_NK_LITERAL, literal=1.0)
     elseif op_sym === :enum
-        throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_OP",
-            "`enum` op encountered after lowering — call `lower_enums!` before compile"))
+        throw(_unevaluable_operator(expr.op,
+            "`enum` must be lowered to `const` at load — call `lower_enums!` before compile"))
     elseif op_sym === :call
         # Removed in v0.3.0 (esm-spec §9 closure). `expression_from_json` already
         # rejects file-loaded `call` ops; reaching this arm means a caller
@@ -593,18 +605,18 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
         # already expanded to a plain arithmetic tree and never reaches here.
         # Reaching this branch means an array-producing aggregate (non-empty
         # output_idx) appeared without being wrapped in an index() call.
-        throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_OP",
-                            "$(expr.op) with non-empty output_idx in expression position " *
+        throw(_unevaluable_operator(expr.op,
+                            "with non-empty output_idx in expression position it " *
                             "requires wrapping in index($(expr.op)(...), k1, k2, ...)"))
     elseif op_sym === :makearray
         # makearray in expression position must be wrapped in index().
-        throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_OP",
-                            "makearray in expression position requires wrapping " *
+        throw(_unevaluable_operator(expr.op,
+                            "in expression position it requires wrapping " *
                             "in index(makearray(...), k1, k2, ...)"))
     elseif op_sym === :broadcast || op_sym === :reshape ||
            op_sym === :transpose || op_sym === :concat
-        throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_OP",
-                            "$(expr.op) (not yet supported in tree-walk path)"))
+        throw(_unevaluable_operator(expr.op,
+                            "the tree-walk path has no rule for this shape op"))
     elseif op_sym === :index
         # A forcing gather over a live `param_arrays` buffer (ess-14f.3): the
         # `index` branch of `_resolve_indices` already bounds-checked and
@@ -648,8 +660,7 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
     # own open-tier op is rejected identically to grad/div/laplacian, by predicate.
     # Mirrors the other bindings: unregistered/open-tier op → `unlowered_operator`;
     # a registered-but-non-scalar CORE form (const/faq/makearray/broadcast/…)
-    # keeps its distinct `E_TREEWALK_UNSUPPORTED_OP`, handled by the arms above and
-    # never reaching here. The `D` arm (bespoke `wrt` detail) likewise handles its
+    # reports `unevaluable_operator`, from the arms above or the rule gate below. The `D` arm (bespoke `wrt` detail) likewise handles its
     # own T member above. The gate fires before evaluation; the op is lowered to a
     # stencil by a discretization rule (e.g. EarthSciDiscretizations), not here.
     if _op_in_T(expr.op)
@@ -659,6 +670,13 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
             "(esm-spec §4.2 / §9.6.8). Open-tier ops are lowered by discretization " *
             "rules (e.g. EarthSciDiscretizations), not evaluated directly."))
     end
+    # ── Evaluable-core op with no rule (esm-spec §9.6.6) ──
+    # A core op `_eval_node_op` has no arm for (`skolem`, `rank`, `distinct`,
+    # `argmin`, `argmax`, `apply_expression_template`, …) is refused HERE, while
+    # the evaluator is built, rather than at the first RHS call.
+    _has_tree_walk_rule(expr.op) || throw(_unevaluable_operator(expr.op,
+        "an earlier pipeline stage (value invention, or a load-time lowering pass) " *
+        "must eliminate it"))
     return _mknode(kind=_NK_OP, op=op_sym, children=children, payload=payload)
 end
 
@@ -779,14 +797,29 @@ const _CSE_OPAQUE_OPS = _ops_with(:cse_opaque)
 #       `grad`/`div`/`laplacian`/`D`/… OR any unregistered custom op).
 # A rewrite-target op is NOT evaluable — a discretization rule must lower it
 # first — so it must never be hoisted into a guardless generic `_cse_rebuild`
-# node (which would defer to a bare `E_TREEWALK_UNSUPPORTED_OP` at eval).
+# node (which would defer the failure to evaluation). The same holds for a core
+# op with no ladder arm (3): hoisting one would skip `_compile_op`'s
+# `unevaluable_operator` gate.
 # Keeping every T op non-hoistable routes it to `_compile`/`_compile_op`, the
 # one path carrying the GENERIC `unlowered_operator` rejection gate. This is why
 # the grad/div/laplacian registry rows need no bespoke `cse=true`: their tier
 # membership already makes them non-hoistable, uniformly with an arbitrary user
 # op. Leaves (state/param/literal/time) are never hoisted — caching a leaf costs
 # more than the bare read it would replace.
-_cse_hoistable(e::OpExpr) = !(e.op in _CSE_OPAQUE_OPS) && !_op_in_T(e.op)
+_cse_hoistable(e::OpExpr) =
+    !(e.op in _CSE_OPAQUE_OPS) && !_op_in_T(e.op) && _has_tree_walk_rule(e.op)
+
+# The ops `_eval_node_op` has an arm for: the registry-generated mechanical arms
+# plus the hand-written ones. `_compile_op` refuses any other op reaching its
+# generic tail with `unevaluable_operator` (esm-spec §9.6.6).
+const _TREE_WALK_RULE_OPS = Set{Symbol}(vcat(
+    Symbol[row.sym for row in _UNARY_ELEMENTWISE_OPS],
+    Symbol[row.sym for row in _COMPARISON_ELEMENTWISE_OPS],
+    Symbol[row.sym for row in _BINARY_ELEMENTWISE_OPS],
+    Symbol[row.sym for row in _NARY_MINMAX_OPS],
+    Symbol[:+, :*, :-, :neg, :and, :or, :not, :ifelse, :atan, :pi, :π, :e, :Pre, :fn],
+))
+_has_tree_walk_rule(op::AbstractString) = Symbol(op) in _TREE_WALK_RULE_OPS
 _cse_hoistable(::ASTExpr) = false
 
 # ---- Keying an expression built over a live forcing buffer (ess-qic) ----------
@@ -2057,7 +2090,7 @@ function _eval_node_op(n::_Node, u, p, t, ::Type{T}) where {T}
         # ops never reach it.
         return _eval_geo_op(n, u, p, t, T)
     else
-        throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_OP", String(op)))
+        throw(_unevaluable_operator(op, "the scalar ladder has no arm for it"))
     end
 end
 

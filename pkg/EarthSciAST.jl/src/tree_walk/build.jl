@@ -4567,7 +4567,7 @@ pipeline. `faq` and `makearray` are supported in expression
 position: scalar `faq` (empty `output_idx`) is expanded inline;
 `index(faq(...), k...)` and `index(makearray(...), k...)` are
 resolved at build time. Other array-typed ops (`broadcast`, `reshape`,
-`transpose`, `concat`) raise `E_TREEWALK_UNSUPPORTED_OP`.
+`transpose`, `concat`) are refused at build with `unevaluable_operator`.
 
 The returned `f!` closure reads `u`, the captured parameter vector
 `p` (a NamedTuple keyed by parameter name), and `t`, and writes

@@ -339,6 +339,18 @@ OBSERVED_CYCLE = "observed_cycle"
 
 
 # ===========================================================================
+# Evaluable-core op with no evaluation rule (esm-spec §9.6.6), raised as
+# ``earthsci_ast.numpy_interpreter.UnevaluableOperatorError``.
+# ===========================================================================
+
+#: An op that IS in the §4.2 evaluable core reached an evaluator with no rule for
+#: it (a value-invention or load-time-lowered op an earlier stage should have
+#: eliminated). The complement of ``unlowered_operator``; refused before
+#: evaluation, naming the op.
+UNEVALUABLE_OPERATOR = "unevaluable_operator"
+
+
+# ===========================================================================
 # The registry itself (API_SPEC.md §8 / H-2).
 #
 # `ERROR_CODES` is the canonical, PUBLIC name for this binding's diagnostic-code
