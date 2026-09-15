@@ -126,7 +126,10 @@ fn both_problem_carriers_lower_a_table_lookup() {
     // Lowering the flattened carrier works on a copy: the caller's system
     // still holds the authored node.
     let rhs = serde_json::to_value(&flat.equations[0].rhs).expect("serialize");
-    assert_eq!(rhs["op"], "table_lookup", "caller's system untouched: {rhs}");
+    assert_eq!(
+        rhs["op"], "table_lookup",
+        "caller's system untouched: {rhs}"
+    );
 }
 
 /// The §9.5.3a refusal reaches the flattened carrier too, rather than that
