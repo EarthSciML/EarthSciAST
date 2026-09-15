@@ -2,7 +2,7 @@
   "esm": "1.1.0",
   "metadata": {
     "name": "ValueInventionStateKeyRefused",
-    "description": "Issue #266 refusal half. The same derived axis as composite_key_axis.esm, but the skolem key also reads the ODE state `u`, so the producer classifies CONTINUOUS and cannot be materialized at build time (CONFORMANCE_SPEC \u00a75.7 guard 2). A contraction over the derived axis MUST be refused with `derived_index_set_unmaterialized`; it MUST NOT read 0.",
+    "description": "Issue #266 refusal half. The same derived axis as composite_key_axis.esm, but the skolem key also reads the ODE state `u`, so the producer classifies CONTINUOUS and cannot be materialized at build time (CONFORMANCE_SPEC \u00a75.7 guard 2). A contraction over the derived axis MUST be refused with `relational_node_in_continuous`, at load (structural validation) or at build; it MUST NOT read 0.",
     "authors": [
       "EarthSciML Authors and Contributors"
     ]
