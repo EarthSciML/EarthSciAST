@@ -15,22 +15,13 @@
 # It gates rewrite-target OPS, not deadness: a dead observed whose body is fully
 # lowered is untouched (CONFORMANCE_SPEC §5.27.3).
 
-# Evaluable-core ops (esm-spec §4.2) with no row in the op registry
-# (op_registry.jl). Without them the "no registry row ⇒ open tier" rule below
-# would report a value-invention op, a template reference, or a `table_lookup`
-# (lowered further into the build) as unlowered.
-const _CORE_OPS_WITHOUT_REGISTRY_ROW = Set{String}([
-    "table_lookup", "apply_expression_template",
-    "rank", "distinct", "argmin", "argmax",
-])
-
-# The spatial-calculus sugar carries registry rows (category `:calculus`) but no
-# evaluator: a rewrite target like any unregistered op.
-const _REGISTERED_REWRITE_TARGET_OPS = Set{String}(["grad", "div", "laplacian"])
-
+# The rewrite-target tier is `_op_in_T`, the same predicate `_compile`'s gate
+# uses, less three members this walk cannot judge by name: `D` (core in its
+# equation-LHS role, handled below), `table_lookup` (lowered further into the
+# build), and `enum` (lowered at load; `_compile` reports a surviving one as
+# `unevaluable_operator`).
 _is_unlowered_op(op::String) =
-    op in _REGISTERED_REWRITE_TARGET_OPS ||
-    (EarthSciAST._op_spec(op) === nothing && !(op in _CORE_OPS_WITHOUT_REGISTRY_ROW))
+    _op_in_T(op) && !(op in ("D", "table_lookup", "enum"))
 
 # The first (pre-order) node of `e` outside the evaluable core, or `nothing`.
 # `lhs` marks an equation left-hand side, the one position where a time `D` is
