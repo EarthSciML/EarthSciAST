@@ -3081,8 +3081,9 @@ def flatten(esm_file: EsmFile, base_path: str = ".", load_ref=None) -> Flattened
     # Step 4b: pointwise spatial lift (esm-spec §10.5) over the expanded couplings.
     _apply_pointwise_lift(flat, coupling_entries)
 
-    # Step 4c: resolve a right-hand-side STRUCTURAL time derivative of an ODE
-    # unknown to the tendency this system defines for it. Runs after the lift so
+    # Step 4c (esm-libraries-spec §4.7.5 step 3a): resolve a right-hand-side
+    # STRUCTURAL time derivative of an ODE unknown to the tendency this system
+    # defines for it. Runs after the lift so
     # it sees the equations the lift produced, and after component collection so
     # a reaction network's mass-action tendency (§7.4) is available to a sibling
     # model's scoped `D(Chem.O3, t)`.

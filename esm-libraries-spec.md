@@ -1114,6 +1114,37 @@ All libraries (including Core tier) must implement the flattening algorithm. Fla
    - **`variable_map`**: Substitute the target parameter with the source variable. For `param_to_var`, replace all occurrences of `Target.param` with `Source.var` in the flattened equations and remove the parameter from the target's parameter list.
    - **`operator_apply` / `callback`**: Record in the flattened system's metadata as opaque runtime references.
 
+   **3a. Resolve right-hand-side structural time derivatives (esm-spec §4.2).** Rewrite every
+   right-hand-side `D` with `wrt: "t"` (or no `wrt`) into the tendency the system already defines,
+   by the resolution table of esm-spec §4.2: a state's own tendency, an observed's definition
+   differentiated by the chain rule, `0` for a time-invariant name, and the sum, product and
+   quotient rules through `+ - neg * /`. A `D` the table cannot answer, and a cyclic chain, is left
+   standing for the `unlowered_operator` gate. Left-hand sides are never rewritten.
+
+   **`ic` right-hand sides are resolved too.** An `ic` equation (esm-spec §11.4) is still in the
+   equation list when this step runs, and step 4 classifies it out into `field_ics` afterwards, so
+   `ic(y) ~ D(x, t)` reaches `field_ics` as `x`'s resolved tendency, not as a standing `D`. An `ic`
+   left-hand side contributes no tendency and no definition to the resolution table.
+
+   The step reads the equation list as it stands when it runs, so its position changes its answer.
+   It MUST run:
+   - **after step 1**, or a scoped `D(Chem.A, t)` naming a reaction-system species finds no
+     tendency, because the mass-action ODE (esm-spec §7.4) does not exist yet;
+   - **after step 2**, or the tendency table is keyed by un-namespaced names and a cross-component
+     reference misses;
+   - **after step 3, all three coupling kinds included**, because `operator_compose` SUMS the
+     right-hand sides of the equations it matches. Resolving before it reads only the first
+     contributing term — the chemistry tendency without the transport tendency — and that is a
+     wrong number rather than a missing one;
+   - **after the pointwise lift** (esm-spec §10.5), where a library performs one, so it sees the
+     equations the lift produced.
+
+   It runs **before** step 4 derives anything from the equations (`independent_variables`, the
+   §6.3.1 subsets), so those derivations see the resolved form. The cross-binding gate is
+   `tests/conformance/flatten/cases.json` (the `tendency_resolution`, `merged_tendency` and
+   `ic_tendency` cases)
+   and, for bindings with an inline-test runner, `tests/conformance/rhs_time_derivative/`.
+
 4. **Collect the flattened system.** The result is a single flat system containing:
    - **All equations** from all component systems, with coupling modifications applied, using dot-namespaced variable names.
    - **All state variables** (dot-namespaced), with duplicates merged where coupling unifies them.

@@ -2689,6 +2689,10 @@ func FlattenWithOptions(file *ESMFile, opts CouplingImportOptions) (*FlattenedSy
 	if err := applyPointwiseLift(flat, coupling); err != nil {
 		return nil, err
 	}
+	// esm-libraries-spec §4.7.5 step 3a: resolve every right-hand-side structural
+	// `D` to the tendency the system defines (esm-spec §4.2). After the coupling
+	// rules and the lift, so a merged state yields its WHOLE tendency.
+	resolveRHSTimeDerivatives(flat)
 	if file.Domain != nil {
 		flat.Domain = file.Domain
 	}
