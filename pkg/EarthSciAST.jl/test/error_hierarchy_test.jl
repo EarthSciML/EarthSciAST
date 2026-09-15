@@ -126,11 +126,7 @@ include("testutils.jl")
 
     @testset "every esm-spec §9.6.6 code is registered" begin
         # The §9.6.6 table is "cross-language uniform", so every binding's
-        # registry must carry every code in it. `unevaluable_operator` is
-        # registered across the bindings by the issue #247 work (branch
-        # claude/issue-247-unevaluable-operator); drop the exemption when that
-        # lands.
-        exempt = Set(["unevaluable_operator"])
+        # registry must carry every code in it.
         spec = read(joinpath(@__DIR__, "..", "..", "..", "esm-spec.md"), String)
         sections = filter(s -> startswith(s, "9.6.6 "), split(spec, "\n#### "))
         @test length(sections) == 1
@@ -139,6 +135,6 @@ include("testutils.jl")
         # Guard the extraction: a heading or table-layout change that matched
         # nothing would pass the membership check vacuously.
         @test length(codes) >= 30
-        @test isempty(setdiff(Set(codes), Set(error_code_names()), exempt))
+        @test isempty(setdiff(Set(codes), Set(error_code_names())))
     end
 end

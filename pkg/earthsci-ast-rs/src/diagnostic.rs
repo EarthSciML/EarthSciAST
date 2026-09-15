@@ -621,12 +621,6 @@ mod error_code_tests {
         assert_eq!(error_code_names(), expected);
     }
 
-    /// §9.6.6 codes no binding registers yet. `unevaluable_operator` is
-    /// registered across the bindings by the issue #247 work (branch
-    /// claude/issue-247-unevaluable-operator); drop it from this list when that
-    /// lands.
-    const SPEC_CODES_EXEMPT: &[&str] = &["unevaluable_operator"];
-
     /// The code column of the esm-spec §9.6.6 table. That table is
     /// "cross-language uniform", so every binding's registry must carry it.
     fn spec_diagnostic_codes() -> Vec<String> {
@@ -661,9 +655,7 @@ mod error_code_tests {
         let registered = error_code_names();
         let missing: Vec<&String> = codes
             .iter()
-            .filter(|c| {
-                !registered.contains(&c.as_str()) && !SPEC_CODES_EXEMPT.contains(&c.as_str())
-            })
+            .filter(|c| !registered.contains(&c.as_str()))
             .collect();
         assert!(
             missing.is_empty(),

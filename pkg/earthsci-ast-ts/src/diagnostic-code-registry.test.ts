@@ -30,13 +30,6 @@ import { ERROR_CODES } from './errors.js'
 const SRC = path.dirname(fileURLToPath(import.meta.url))
 const SPEC = path.resolve(SRC, '../../../esm-spec.md')
 
-/**
- * §9.6.6 codes no binding registers yet. `unevaluable_operator` is registered
- * across the bindings by the issue #247 work (branch
- * claude/issue-247-unevaluable-operator); drop it from this set when that lands.
- */
-const SPEC_CODES_EXEMPT = new Set(['unevaluable_operator'])
-
 function sourceFiles(dir: string): string[] {
   const out: string[] = []
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -258,7 +251,7 @@ describe('diagnostic code registry coverage', () => {
     // nothing would pass the membership check vacuously.
     expect(codes.length).toBeGreaterThanOrEqual(30)
     const registered = new Set<string>(Object.values(ERROR_CODES))
-    expect(codes.filter((c) => !registered.has(c) && !SPEC_CODES_EXEMPT.has(c))).toEqual([])
+    expect(codes.filter((c) => !registered.has(c))).toEqual([])
   })
 
   it('reports registry entries nothing raises (advisory)', () => {

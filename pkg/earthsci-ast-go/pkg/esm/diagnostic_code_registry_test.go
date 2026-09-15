@@ -35,14 +35,6 @@ import (
 	"testing"
 )
 
-// specDiagnosticCodesExempt lists §9.6.6 codes no binding registers yet.
-// `unevaluable_operator` is registered across the bindings by the issue #247
-// work (branch claude/issue-247-unevaluable-operator); drop it from this set
-// when that lands.
-var specDiagnosticCodesExempt = map[string]bool{
-	"unevaluable_operator": true,
-}
-
 var registryConstName = regexp.MustCompile(`^(Code|code|Error|UnitFinding)[A-Z]`)
 
 type parsedPackage struct {
@@ -230,7 +222,7 @@ func TestEveryRaisedDiagnosticCodeIsRegistered(t *testing.T) {
 		registered[value] = true
 	}
 	for _, code := range specDiagnosticCodes(t) {
-		if !registered[code] && !specDiagnosticCodesExempt[code] {
+		if !registered[code] {
 			t.Errorf("esm-spec §9.6.6 code %q has no registry constant in this binding", code)
 		}
 	}

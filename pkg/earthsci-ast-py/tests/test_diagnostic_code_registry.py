@@ -34,11 +34,6 @@ from earthsci_ast.error_handling import ERROR_CODES, ErrorCode
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "earthsci_ast"
 
-#: §9.6.6 codes no binding registers yet. ``unevaluable_operator`` is registered
-#: across the bindings by the issue #247 work (branch
-#: claude/issue-247-unevaluable-operator); drop it from this set when that lands.
-SPEC_CODES_EXEMPT = frozenset({"unevaluable_operator"})
-
 #: A diagnostic code: snake_case. The uppercase ``E_*`` names are a separate
 #: stable error-name vocabulary that no binding's code registry carries.
 _CODE_SHAPE = re.compile(r"^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$")
@@ -231,5 +226,5 @@ def test_every_spec_diagnostic_code_is_registered():
     # nothing would pass the membership check vacuously.
     assert len(codes) >= 30, codes
     registered = set(ERROR_CODES.values()) | {m.value for m in ErrorCode}
-    missing = [c for c in codes if c not in registered and c not in SPEC_CODES_EXEMPT]
+    missing = [c for c in codes if c not in registered]
     assert missing == [], missing
