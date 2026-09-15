@@ -99,6 +99,25 @@ eqn(lhs, rhs) = Dict{String,Any}("lhs" => lhs, "rhs" => rhs)
         @test err.code == ESS.E_REF_UNDECLARED_INDEX_SET
     end
 
+    @testset "the first undeclared range is reported in sorted key order" begin
+        # Both sides of one equation name an undeclared set. The walk visits
+        # object keys in sorted order, as Go does and as the other three do for
+        # a document authored lhs-before-rhs, so the `lhs` range is the one
+        # reported — not whichever key the Dict happens to hash first.
+        bad(i) = agg(output_idx = [i], ranges = Dict(i => Dict("from" => "nope")))
+        model = Dict{String,Any}(
+            "index_sets" => Dict("cells" => Dict("kind" => "interval", "size" => 4)),
+            "equations" => [eqn(bad("i"), bad("j"))])
+        err = try
+            build_reference_graph(model, "M")
+            nothing
+        catch e
+            e
+        end
+        @test err isa ReferenceResolutionError
+        @test occursin("at equations/0/lhs)", err.message)
+    end
+
     @testset "dense tuple ranges make no edge (back-compat)" begin
         node = agg(output_idx = ["i"], ranges = Dict("i" => [1, 64]))
         g = build_reference_graph(Dict{String,Any}("equations" => [eqn(node, 0)]), "M")
@@ -472,8 +491,12 @@ eqn(lhs, rhs) = Dict{String,Any}("lhs" => lhs, "rhs" => rhs)
         @test length(files) > 50
         failures = String[]
         for f in files
-            doc = JSON3.read(read(f, String), Dict{String,Any})
             try
+                # The pass runs on the LOADED document (API_SPEC.md §5.9):
+                # template imports and `{ref}` mounts have merged their index
+                # sets into the registry, so a range over an imported axis
+                # resolves.
+                doc = JSON3.read(ESS.to_json(ESS.load_path(f)), Dict{String,Any})
                 resolve_references(doc)
             catch e
                 push!(failures, string(relpath(f, validdir), ": ",

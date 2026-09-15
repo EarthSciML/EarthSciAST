@@ -167,8 +167,17 @@ fn every_shared_valid_fixture_resolves() {
 
     let mut failures = Vec::new();
     for path in &files {
-        let text = std::fs::read_to_string(path).expect("read fixture");
-        let doc: Value = serde_json::from_str(&text).expect("parse fixture");
+        // The pass runs on the LOADED document (API_SPEC.md §5.9): template
+        // imports and `{ref}` mounts have merged their index sets into the
+        // registry, so a range over an imported axis resolves.
+        let file = match earthsci_ast::load_path(path) {
+            Ok(f) => f,
+            Err(e) => {
+                failures.push(format!("{}: load: {e}", path.display()));
+                continue;
+            }
+        };
+        let doc = serde_json::to_value(&file).expect("render loaded fixture");
         if let Err(e) = resolve_references(&doc) {
             failures.push(format!("{}: {e}", path.display()));
         }

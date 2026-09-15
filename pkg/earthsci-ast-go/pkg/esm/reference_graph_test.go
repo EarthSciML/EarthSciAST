@@ -215,19 +215,16 @@ func TestReferenceGraphOverValidCorpus(t *testing.T) {
 		rel, _ := filepath.Rel(validDir, path)
 		rel = filepath.ToSlash(rel)
 		t.Run(rel, func(t *testing.T) {
-			raw, err := os.ReadFile(path)
+			// The pass runs on the LOADED document (API_SPEC.md §5.9): template
+			// imports and `{ref}` mounts have merged their index sets into the
+			// registry, so a range over an imported axis resolves.
+			file, err := LoadPath(path)
 			if err != nil {
-				t.Fatalf("read: %v", err)
-			}
-			var doc map[string]any
-			if err := json.Unmarshal(raw, &doc); err != nil {
-				// A handful of fixtures are deliberately not standalone JSON
-				// documents; the reference pass has nothing to say about them.
-				t.Skipf("not a JSON object: %v", err)
+				t.Fatalf("load: %v", err)
 			}
 
 			wantCode, wantRejected := referenceCorpusRejections[rel]
-			graphs, err := ResolveReferences(doc)
+			graphs, err := ResolveReferencesInFile(file)
 			if wantRejected {
 				seenRejections[rel] = true
 				if err == nil {
