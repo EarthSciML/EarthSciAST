@@ -2547,7 +2547,6 @@ pub(crate) fn validate_reaction_system(
 
     // Stoichiometric rate-dimension check (spec §7.4).
     validate_reaction_rate_units(rs_name, rs, errors);
-
 }
 
 /// Enforce the mass-action dimensional constraint from spec §7.4: rate
