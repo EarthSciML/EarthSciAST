@@ -2595,6 +2595,20 @@
     ],
     "is_valid": false
   },
+  "undefined_variable_in_reaction_system_continuous_event_condition.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/reaction_systems/TestReactions/continuous_events/0/conditions/0",
+        "code": "undefined_variable",
+        "message": "Variable \"undefined_xyz\" referenced in continuous event condition but not declared",
+        "details": {
+          "variable": "undefined_xyz"
+        }
+      }
+    ],
+    "is_valid": false
+  },
   "undefined_variable_in_discrete_event_trigger.esm": {
     "schema_errors": [],
     "structural_errors": [
@@ -2628,6 +2642,50 @@
     "structural_errors": [
       {
         "path": "/models/TestModel/tests/0/assertions/0/reference",
+        "code": "undefined_variable",
+        "message": "Variable \"undefined_xyz\" referenced in assertion reference expression but not declared",
+        "details": {
+          "variable": "undefined_xyz"
+        }
+      }
+    ],
+    "is_valid": false
+  },
+  "undefined_variable_in_reaction_system_constraint_equation.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/reaction_systems/TestReactions/constraint_equations/0/rhs",
+        "code": "undefined_variable",
+        "message": "Variable 'undefined_xyz' referenced in equation is not declared",
+        "details": {
+          "variable": "undefined_xyz",
+          "equation_index": 0,
+          "expected_in": "variables"
+        }
+      }
+    ],
+    "is_valid": false
+  },
+  "undefined_variable_in_reaction_system_discrete_event_trigger.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/reaction_systems/TestReactions/discrete_events/0/trigger/expression",
+        "code": "undefined_variable",
+        "message": "Variable \"undefined_xyz\" referenced in discrete event trigger expression but not declared",
+        "details": {
+          "variable": "undefined_xyz"
+        }
+      }
+    ],
+    "is_valid": false
+  },
+  "undefined_variable_in_reaction_system_assertion_reference.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/reaction_systems/TestReactions/tests/0/assertions/0/reference",
         "code": "undefined_variable",
         "message": "Variable \"undefined_xyz\" referenced in assertion reference expression but not declared",
         "details": {
