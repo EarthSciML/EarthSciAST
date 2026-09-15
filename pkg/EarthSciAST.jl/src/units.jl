@@ -625,7 +625,6 @@ end
 # Costs nothing on the invalid corpus, where every pinned inconsistency is
 # stated between DECLARED quantities (`length + mass`, `ln(mass)`, `m^kg`).
 # ---------------------------------------------------------------------------
-_is_literal(e::ASTExpr) = e isa NumExpr || e isa IntExpr
 
 # The numeric value of a literal AST node, or `nothing` if it is not one. The
 # `^` rule reads its exponent through this rather than through the dimensional
