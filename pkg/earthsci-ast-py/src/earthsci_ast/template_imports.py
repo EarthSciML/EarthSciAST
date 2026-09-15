@@ -1500,7 +1500,43 @@ def _process_library(raw: Any, base_dir: str, stack: list[str], origin: str) -> 
     # §9.7.3 body composition in the library's own scope (decl objects are
     # mutated in place, so scope.templates sees the closed bodies).
     _compose_template_bodies(scope.templates, origin)
+    _expand_library_enum_calls(raw, scope.templates, list(own), origin)
     return scope
+
+
+def _expand_library_enum_calls(
+    library: Any, named: dict[str, Any], own_names: list[str], origin: str
+) -> None:
+    """Resolve the ``enum`` symbols a template library binds in its OWN calls
+    (esm-spec §9.3). After :func:`_lower_library_template_enums`, the only
+    ``enum`` ops left in the library's scope are spelled with a template
+    parameter. A call to a template that can still produce one binds that
+    parameter here, in the library, so each of the library's own template bodies
+    has those calls expanded (the eager expansion esm-spec §9.6.4 rule 3 requires
+    at load anyway) and the result lowered against the library's block. An op the
+    expansion leaves spelled with the calling template's own parameter stays open
+    for the importer's binding. Runs after :func:`_compose_template_bodies`, so
+    the reference DAG is acyclic; every new body is computed before any is
+    replaced."""
+    from .lower_expression_templates import _expand, _template_bearing
+
+    bearing = _template_bearing(named, lambda op: op == "enum")
+
+    def calls_bearing(node: dict) -> bool:
+        name = node.get("name")
+        return isinstance(name, str) and bearing.get(name, False)
+
+    bodies: dict[str, Any] = {}
+    for n in own_names:
+        decl = named.get(n)
+        if not _is_object(decl) or "body" not in decl:
+            continue
+        if not any(bearing.get(r, False) for r in _collect_apply_names([], decl["body"])):
+            continue
+        expanded = _expand(decl["body"], named, origin, calls_bearing)
+        bodies[n] = _lower_library_template_body(library, n, decl, expanded, origin)
+    for n, body in bodies.items():
+        named[n] = {**named[n], "body": body}
 
 
 def _lower_library_template_enums(library: Any, name: str, decl: Any, origin: str) -> None:
@@ -1510,6 +1546,13 @@ def _lower_library_template_enums(library: Any, name: str, decl: Any, origin: st
     of the template's ``params`` stays open and resolves at the call site."""
     if not _is_object(decl) or "body" not in decl:
         return
+    decl["body"] = _lower_library_template_body(library, name, decl, decl["body"], origin)
+
+
+def _lower_library_template_body(library: Any, name: str, decl: Any, body: Any, origin: str) -> Any:
+    """``body``, a body of the library's template ``name`` (``decl``), with its
+    ``enum`` ops lowered against the library's ``enums`` block. An op spelled
+    with one of ``decl``'s ``params`` stays open."""
     params = decl.get("params")
     open_names = (
         frozenset(p for p in params if isinstance(p, str)) if _is_array(params) else frozenset()
@@ -1517,7 +1560,7 @@ def _lower_library_template_enums(library: Any, name: str, decl: Any, origin: st
     from .registered_functions import EnumLoweringError, lower_enum_ops_for_file
 
     try:
-        decl["body"] = lower_enum_ops_for_file(library, decl["body"], open_names)
+        return lower_enum_ops_for_file(library, body, open_names)
     except EnumLoweringError as e:
         raise ExpressionTemplateError(
             e.code,

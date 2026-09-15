@@ -6,6 +6,14 @@ import {
   UnitConversionError,
 } from './unit-conversion.js'
 
+/** A parsed unit's dimensions, scale and offset — its exact scale is pinned in unit-exact-scale.test.ts. */
+const shape = (u: { dims: unknown; scale: number; offset?: number } | null) =>
+  u === null
+    ? null
+    : u.offset === undefined
+      ? { dims: u.dims, scale: u.scale }
+      : { dims: u.dims, scale: u.scale, offset: u.offset }
+
 describe('unit-conversion', () => {
   describe('convertUnits — same dimension scaling', () => {
     it('converts length (km → m)', () => {
@@ -76,7 +84,7 @@ describe('unit-conversion', () => {
       // Binding it to Celsius put a temperature dimension into every
       // electromagnetic expression: a charge `q: "C"` times a field `E: "V/m"`
       // came out as kg*m*K/(s^3*A) instead of the newton it is.
-      expect(parseUnitForConversion('C')).toEqual({ dims: { A: 1, s: 1 }, scale: 1 })
+      expect(shape(parseUnitForConversion('C'))).toEqual({ dims: { A: 1, s: 1 }, scale: 1 })
       expect(unitsCompatible('C', 'K')).toBe(false)
       expect(unitsCompatible('C*V/m', 'N')).toBe(true)
     })
@@ -88,9 +96,15 @@ describe('unit-conversion', () => {
       // composition (as this once did) would hard-fail `°C/min`, an ordinary
       // declaration in the corpus, now that an unparseable unit is an error.
       expect(parseUnitForConversion('degC').offset).toBeCloseTo(273.15, 10)
-      expect(parseUnitForConversion('degC/min')).toEqual({ dims: { K: 1, s: -1 }, scale: 1 / 60 })
-      expect(parseUnitForConversion('°C/min')).toEqual({ dims: { K: 1, s: -1 }, scale: 1 / 60 })
-      expect(parseUnitForConversion('J/degC')).toEqual({
+      expect(shape(parseUnitForConversion('degC/min'))).toEqual({
+        dims: { K: 1, s: -1 },
+        scale: 1 / 60,
+      })
+      expect(shape(parseUnitForConversion('°C/min'))).toEqual({
+        dims: { K: 1, s: -1 },
+        scale: 1 / 60,
+      })
+      expect(shape(parseUnitForConversion('J/degC'))).toEqual({
         dims: { kg: 1, m: 2, s: -2, K: -1 },
         scale: 1,
       })
@@ -168,9 +182,9 @@ describe('unit-conversion', () => {
 
   describe('parseUnitForConversion', () => {
     it('parses dimensionless forms consistently', () => {
-      expect(parseUnitForConversion('')).toEqual({ dims: {}, scale: 1 })
-      expect(parseUnitForConversion('dimensionless')).toEqual({ dims: {}, scale: 1 })
-      expect(parseUnitForConversion('1')).toEqual({ dims: {}, scale: 1 })
+      expect(shape(parseUnitForConversion(''))).toEqual({ dims: {}, scale: 1 })
+      expect(shape(parseUnitForConversion('dimensionless'))).toEqual({ dims: {}, scale: 1 })
+      expect(shape(parseUnitForConversion('1'))).toEqual({ dims: {}, scale: 1 })
       expect(parseUnitForConversion('mol/mol').dims).toEqual({})
     })
 
@@ -216,12 +230,12 @@ describe('unit-conversion', () => {
         // The scanner is greedy over identifier characters, so juxtaposition can
         // only arise across a real token boundary: `ms` stays ONE symbol
         // (millisecond) and never becomes m*s.
-        expect(parseUnitForConversion('ms')).toEqual({ dims: { s: 1 }, scale: 1e-3 })
+        expect(shape(parseUnitForConversion('ms'))).toEqual({ dims: { s: 1 }, scale: 1e-3 })
       })
 
       it('accepts ** as a synonym for ^', () => {
         // The Python/pint spelling, which the corpus uses (`Pa*m**3`).
-        expect(parseUnitForConversion('m**3')).toEqual(parseUnitForConversion('m^3'))
+        expect(shape(parseUnitForConversion('m**3'))).toEqual(shape(parseUnitForConversion('m^3')))
         expect(parseUnitForConversion('Pa*m**3').dims).toEqual({ kg: 1, m: 2, s: -2 })
       })
 
@@ -238,8 +252,12 @@ describe('unit-conversion', () => {
 
       it('normalizes the non-ASCII spellings the corpus uses', () => {
         // µ (U+00B5) and μ (U+03BC) fold to `u`; `°C` folds to `degC`.
-        expect(parseUnitForConversion('μg/m^3')).toEqual(parseUnitForConversion('ug/m^3'))
-        expect(parseUnitForConversion('µg/m^3')).toEqual(parseUnitForConversion('ug/m^3'))
+        expect(shape(parseUnitForConversion('μg/m^3'))).toEqual(
+          shape(parseUnitForConversion('ug/m^3')),
+        )
+        expect(shape(parseUnitForConversion('µg/m^3'))).toEqual(
+          shape(parseUnitForConversion('ug/m^3')),
+        )
         expect(parseUnitForConversion('μmol/(m^2*s)').dims).toEqual({ mol: 1, m: -2, s: -1 })
         expect(parseUnitForConversion('°C').dims).toEqual({ K: 1 })
       })

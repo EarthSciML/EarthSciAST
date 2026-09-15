@@ -427,6 +427,19 @@ def test_library_enum_keeps_the_library_value_under_an_importer_redeclaration():
     caller_bound = _defining_typed(m, "callerBoundCode")
     assert caller_bound.args[0].value == 7
     assert caller_bound.args[1].value == 1
+    # The library's own call binds `g_per_gallon`, so it keeps the library's 2; a
+    # symbol the importer binds, directly or through a forwarded parameter, takes 9.
+    assert _defining_typed(m, "gallonCode").value == 2
+    assert _defining_typed(m, "importerBoundCode").value == 9
+    assert _defining_typed(m, "forwardedCode").value == 9
+
+
+def test_library_enum_own_call_needs_no_importer_enums():
+    """esm-spec §9.3: a symbol a library binds in its own call resolves against
+    the library's `enums` block, so an importer that declares no enums loads."""
+    f = load_path(os.path.join(CONF, "import_library_enum", "fixture.esm"))
+    gallon = _defining_typed(f.models["Consumer"], "gallonCode")
+    assert gallon.op == "const" and gallon.value == 2
 
 
 @pytest.mark.parametrize("fixture", ["fixture.esm", "fixture_importer_declares.esm"])

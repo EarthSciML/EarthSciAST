@@ -71,6 +71,21 @@ fn unit_registry_conformance_accepts() {
                 "{s:?} -> {canon:?}: scale {factor} != pinned {expected}"
             );
         }
+        // The EXACT scale is compared as a string, with no tolerance, and for
+        // the affine units too: it is what the checker decides agreement on
+        // (esm-spec §4.8.1), so it is what the five registries must share.
+        let expected = e["scale_exact"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{s:?} pins no scale_exact"));
+        let exact = got
+            .exact_scale()
+            .divide(want.exact_scale())
+            .ratio_string()
+            .unwrap_or_else(|| panic!("{s:?} -> {canon:?}: exact scale has no p/q form"));
+        assert_eq!(
+            exact, expected,
+            "{s:?} -> {canon:?}: exact scale {exact} != pinned {expected}"
+        );
     }
 }
 

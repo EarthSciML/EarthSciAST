@@ -1,0 +1,26 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "mount_forwarded_axis_nested_4",
+    "description": "The twin of tests/valid/mount_forwarded_axis_nested.esm with the nested edge bound to a different size: `subsystems.col` mounts tests/valid/mount_forwarded_axis_column.esm with `bindings: {NLEV: 4}`, so the column's forwarded NLEV closes at 4 and `lev` reaches this document's registry as 4. It loads standalone with `lev` = 4. Mounted beside a top-level mount of the same column at 59, it is the size disagreement in tests/invalid/template_imports/mount_forwarded_axis_size_conflict.esm.",
+    "authors": ["EarthSciAST"],
+    "created": "2026-09-15T00:00:00Z",
+    "tags": ["subsystem", "index_sets", "metaparameter", "mount", "bindings"]
+  },
+  "models": {
+    "Wrap": {
+      "subsystems": {
+        "col": { "ref": "./mount_forwarded_axis_column.esm", "bindings": { "NLEV": 4 } }
+      },
+      "variables": {
+        "q": { "type": "unknown", "units": "1", "default": 1.0, "description": "wrapper scalar state" }
+      },
+      "equations": [
+        {
+          "lhs": { "op": "D", "args": ["q"], "wrt": "t" },
+          "rhs": { "op": "*", "args": [-0.5, "q"] }
+        }
+      ]
+    }
+  }
+}

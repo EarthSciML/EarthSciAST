@@ -93,18 +93,18 @@
     }
   },
   "counts": {
-    "symbols": 883,
+    "symbols": 888,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
       "julia": 305,
-      "typescript": 238,
+      "typescript": 239,
       "python": 250,
-      "rust": 337,
-      "go": 407
+      "rust": 339,
+      "go": 410
     },
     "by_tier": {
-      "extension": 611,
-      "stable": 272
+      "extension": 615,
+      "stable": 273
     }
   },
   "planned": [
@@ -1146,6 +1146,14 @@
       }
     },
     {
+      "name": "code_derived_index_set_unmaterialized",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeDerivedIndexSetUnmaterialized"
+      }
+    },
+    {
       "name": "code_domain_unit_mismatch",
       "kind": "constant",
       "tier": "extension",
@@ -1586,6 +1594,14 @@
       }
     },
     {
+      "name": "code_unevaluable_operator",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeUnevaluableOperator"
+      }
+    },
+    {
       "name": "code_unknown_expression_type",
       "kind": "constant",
       "tier": "extension",
@@ -1607,14 +1623,6 @@
       "tier": "extension",
       "bindings": {
         "go": "CodeUnresolvedSubsystemRef"
-      }
-    },
-    {
-      "name": "code_unsupported_operator",
-      "kind": "constant",
-      "tier": "extension",
-      "bindings": {
-        "go": "CodeUnsupportedOperator"
       }
     },
     {
@@ -2835,6 +2843,14 @@
       }
     },
     {
+      "name": "error_assertion_rank_mismatch",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "ErrorAssertionRankMismatch"
+      }
+    },
+    {
       "name": "error_circular_dependency",
       "kind": "constant",
       "tier": "extension",
@@ -2988,6 +3004,14 @@
       "tier": "extension",
       "bindings": {
         "go": "ErrorUnitParseError"
+      }
+    },
+    {
+      "name": "error_unknown_override_key",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "ErrorUnknownOverrideKey"
       }
     },
     {
@@ -3184,6 +3208,15 @@
       "tier": "extension",
       "bindings": {
         "julia": "EventType"
+      }
+    },
+    {
+      "name": "exact_scale",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "ExactScale",
+        "rust": "ExactScale"
       }
     },
     {
@@ -6254,6 +6287,14 @@
       }
     },
     {
+      "name": "scale_factor",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "ScaleFactor"
+      }
+    },
+    {
       "name": "scatter_grid",
       "kind": "function",
       "tier": "extension",
@@ -7246,6 +7287,14 @@
       "tier": "extension",
       "bindings": {
         "julia": "UnboundVariableError"
+      }
+    },
+    {
+      "name": "unevaluable_operator_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "UnevaluableOperatorError"
       }
     },
     {

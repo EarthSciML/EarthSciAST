@@ -38,6 +38,12 @@ _ur_read(rel) = JSON.parsefile(joinpath(_UR_TESTS, rel))
             u === nothing && continue
             c === nothing && continue
             @test Unitful.dimension(u) == Unitful.dimension(c)
+            # The EXACT scale is compared as a string, with no tolerance, and for
+            # the affine units too: it is what a scale agreement is decided on
+            # (esm-spec §4.8.1), so it is what the five registries must share.
+            @test EarthSciAST.exact_ratio_string(
+                EarthSciAST._exact_scale(u) / EarthSciAST._exact_scale(c)) ==
+                String(entry["scale_exact"])
             scale = entry["scale_to_canonical"]
             # `null` is exactly the affine units, whose offset §4.8.1
             # deliberately does not model — their pure multiplicative factor is

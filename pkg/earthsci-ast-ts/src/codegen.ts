@@ -9,18 +9,23 @@
  * Structural / array ops and the closed-function registry are dispatched to
  * their consumers. `table_lookup` is the one op lowered rather than dispatched
  * — to its §9.5.3 `interp.*` form, one node at a time, on the way through; see
- * `lower-table-lookups.ts` for why that happens HERE and not at load. ANY op
- * the evaluable-core op-registry does not know — the open-tier rewrite-target
- * sugar `grad`/`div`/`laplacian`/`integral`, a user op, or a spatial /
- * right-hand-side `D` — is rejected here as an unlowered rewrite-target: it
- * must be lowered to a stencil by a rewrite rule before evaluation.
+ * `lower-table-lookups.ts` for why that happens HERE and not at load.
+ *
+ * Both entry points walk the whole expression BEFORE evaluating any of it
+ * (esm-spec §9.6.6) and refuse an operator this evaluator cannot evaluate: an op
+ * outside the §4.2 evaluable core — the open-tier sugar
+ * `grad`/`div`/`laplacian`/`integral`, a user op, or a spatial / right-hand-side
+ * `D` — with `unlowered_operator`, and a core op with no scalar rule — the
+ * array/query and value-invention ops, `Pre`, an unlowered `enum` — with
+ * `unevaluable_operator`. An op in an untaken `ifelse` branch is refused too.
  */
 
 import type { Expr, Expression, ExpressionNode } from './types.js'
 import { isNumericLiteral } from './numeric-literal.js'
 import { dispatchClosedFunction } from './closed-functions.js'
 import { getOpInfo, checkArity } from './op-registry.js'
-import { EsmDiagnosticError } from './errors.js'
+import { forEachChild } from './expression.js'
+import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
 import type { FunctionTables } from './lower-table-lookups.js'
 import { lowerTableLookupNode } from './lower-table-lookups.js'
 
@@ -63,6 +68,111 @@ export class UnloweredOperatorError extends EsmDiagnosticError {
 }
 
 /**
+ * Error carrying the stable, cross-binding `unevaluable_operator` diagnostic
+ * (esm-spec §9.6.6): an op that IS in the §4.2 evaluable-core set but that this
+ * scalar evaluator has no rule for. The complement of
+ * {@link UnloweredOperatorError}, which is for an op OUTSIDE the core, so it
+ * carries no rewrite-rule advice: the op needs an earlier pipeline stage (value
+ * invention, or a load-time lowering pass), not a rewrite rule.
+ */
+export class UnevaluableOperatorError extends EsmDiagnosticError {
+  declare readonly code: typeof ERROR_CODES.UNEVALUABLE_OPERATOR
+  /** The offending operator name. */
+  readonly op: string
+  constructor(op: string, remedy?: string) {
+    super(
+      ERROR_CODES.UNEVALUABLE_OPERATOR,
+      `[unevaluable_operator] operator '${op}' is an evaluable-core op with no evaluation rule ` +
+        `in the scalar evaluator: ${
+          remedy ??
+          'an earlier pipeline stage (value invention, or a load-time lowering pass) must ' +
+            'eliminate it, or the document belongs to a runtime that evaluates it'
+        } (esm-spec §4.2 / §9.6.6).`,
+    )
+    this.name = 'UnevaluableOperatorError'
+    this.op = op
+  }
+}
+
+/**
+ * Evaluable-core ops (esm-spec §4.2) with no row in the scalar op registry
+ * (`op-registry.ts`), which lists only ops with an arity contract. Membership
+ * here is what tells a closed-core op with no scalar rule
+ * (`unevaluable_operator`) apart from an open-tier op no rewrite rule lowered
+ * (`unlowered_operator`). `const`, `fn`, `true` and `table_lookup` are
+ * evaluated; the rest are refused.
+ */
+const CORE_OPS_WITHOUT_REGISTRY_ROW: ReadonlySet<string> = new Set([
+  'const',
+  'fn',
+  'true',
+  'table_lookup',
+  'enum',
+  'apply_expression_template',
+  'ic',
+  'faq',
+  'makearray',
+  'index',
+  'broadcast',
+  'reshape',
+  'transpose',
+  'concat',
+  'skolem',
+  'rank',
+  'distinct',
+  'argmin',
+  'argmax',
+  'intersect_polygon',
+  'polygon_intersection_area',
+])
+
+/** The diagnostic for an op the scalar evaluator has no rule for. */
+function unevaluableOperator(node: ExpressionNode): Error {
+  if (
+    node.op === 'D' ||
+    (getOpInfo(node.op) === undefined && !CORE_OPS_WITHOUT_REGISTRY_ROW.has(node.op))
+  ) {
+    const wrt = node.op === 'D' && typeof node.wrt === 'string' ? ` (wrt=${node.wrt})` : ''
+    return new UnloweredOperatorError(
+      `unlowered rewrite-target operator '${node.op}'${wrt} reached evaluation: ` +
+        `it must be lowered to a stencil by a rewrite rule before evaluation ` +
+        `(esm-spec §4.2 / §9.6.8). This format ships no discretization rules ` +
+        `(they live in EarthSciDiscretizations).`,
+    )
+  }
+  if (node.op === 'enum') {
+    return new UnevaluableOperatorError(
+      'enum',
+      "enum nodes must be lowered to 'const' integer nodes via lowerEnums() at load time",
+    )
+  }
+  return new UnevaluableOperatorError(node.op)
+}
+
+/**
+ * Walk `expr` without evaluating it and throw the diagnostic for the first
+ * operator (pre-order) the scalar evaluator cannot evaluate (esm-spec §9.6.6:
+ * the check precedes evaluation).
+ */
+function assertEvaluable(expr: Expr): void {
+  if (typeof expr !== 'object' || expr === null || isNumericLiteral(expr)) return
+  const node = expr as ExpressionNode
+  if (typeof node.op !== 'string') return
+  switch (node.op) {
+    case 'const':
+    case 'true':
+      return
+    case 'fn':
+    case 'table_lookup':
+      forEachChild(node, (child) => assertEvaluable(child))
+      return
+  }
+  const info = getOpInfo(node.op)
+  if (node.op === 'D' || info === undefined || !info.evaluate) throw unevaluableOperator(node)
+  forEachChild(node, (child) => assertEvaluable(child))
+}
+
+/**
  * Error raised by the tree-walking evaluator for a node it cannot reduce to a
  * scalar: an unbound variable, an unsupported operator, an unlowered `enum`, a
  * non-scalar `const`, a malformed `fn`, or a non-expression value. Carries a
@@ -96,6 +206,7 @@ export class EvaluatorError extends EsmDiagnosticError {
  * containing `table_lookup` nodes — see {@link EvaluateOptions}.
  */
 export function compileExpression(expr: Expr, options?: EvaluateOptions): CompiledExpression {
+  assertEvaluable(expr)
   return (bindings: Map<string, number>) => evalExprNode(expr, bindings, options)
 }
 
@@ -111,6 +222,7 @@ export function evaluateExpression(
   bindings: Map<string, number>,
   options?: EvaluateOptions,
 ): number {
+  assertEvaluable(expr)
   return evalExprNode(expr, bindings, options)
 }
 
@@ -172,12 +284,11 @@ function evalExprNode(
     // enum nodes should have been lowered to const at load time. If
     // we see one here, the file was evaluated before the lowering
     // pass ran.
-    if (node.op === 'enum') {
-      throw new EvaluatorError(
-        'enum_not_lowered',
-        "enum op encountered during evaluateExpression(); enum nodes must be lowered to 'const' integer nodes via lowerEnums() at load time",
-      )
-    }
+    if (node.op === 'enum') throw unevaluableOperator(node)
+
+    // `true`: the boolean literal (esm-spec §4.2), in the evaluator's float
+    // encoding.
+    if (node.op === 'true') return 1
 
     // fn: closed function registry dispatch (esm-spec §9.2). Most
     // args evaluate to scalars; interp.searchsorted's second arg is
@@ -226,17 +337,10 @@ function evalExprNode(
     // `unlowered_operator` diagnostic BEFORE evaluating args (mirrors the Julia
     // `_compile` gate). The const/enum/fn structural ops are handled above; a
     // registered-but-non-scalar op (`Pre`, `=`) passes this gate and falls
-    // through to the `unsupported_operator` arm below. Loading stays permissive
+    // through to the `unevaluable_operator` arm below. Both entry points have
+    // already refused all of these in their up-front walk. Loading stays permissive
     // — the open namespace tolerates these ops until evaluation.
-    if (node.op === 'D' || getOpInfo(node.op) === undefined) {
-      const wrt = node.op === 'D' && typeof node.wrt === 'string' ? ` (wrt=${node.wrt})` : ''
-      throw new UnloweredOperatorError(
-        `unlowered rewrite-target operator '${node.op}'${wrt} reached evaluation: ` +
-          `it must be lowered to a stencil by a rewrite rule before evaluation ` +
-          `(esm-spec §4.2 / §9.6.8). This format ships no discretization rules ` +
-          `(they live in EarthSciDiscretizations).`,
-      )
-    }
+    if (node.op === 'D' || getOpInfo(node.op) === undefined) throw unevaluableOperator(node)
 
     // LAZY OPS — evaluated BEFORE the eager `args.map` below.
     //
@@ -281,11 +385,9 @@ function evalExprNode(
     // rejected every UNREGISTERED op as `unlowered_operator`, so `info` is
     // defined here; a registered op that carries no scalar evaluator (`Pre`,
     // `=` — structural, not scalar-evaluable) is the only thing this arm
-    // reports as `unsupported_operator`.
+    // reports, as `unevaluable_operator`.
     const info = getOpInfo(node.op)
-    if (!info || !info.evaluate) {
-      throw new EvaluatorError('unsupported_operator', `Unsupported operator: ${node.op}`)
-    }
+    if (!info || !info.evaluate) throw new UnevaluableOperatorError(node.op)
 
     const args: number[] = node.args.map((arg) => evalExprNode(arg, bindings, options))
     checkArity(node.op, args.length)

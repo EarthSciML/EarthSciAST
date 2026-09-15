@@ -2,17 +2,67 @@
   "esm": "1.0.0",
   "metadata": {
     "name": "activity_unit_library",
-    "description": "Template library that declares an `enums` block and names one of its members inside its own template body. Per esm-spec §9.3 the `enum` op resolves against THIS file's block, at the import edge, whatever the importer declares."
+    "description": "Template library that declares an `enums` block and names its members inside its own template bodies. Per esm-spec §9.3 an `enum` op resolves against THIS file's block at the import edge, whatever the importer declares. `activity_code` spells the symbol with its parameter, so a caller decides the symbol: `gallon_code` is a call this library makes itself, binding `g_per_gallon`, so it resolves here; `code_via` forwards its own parameter, so the importer's binding decides it."
   },
   "enums": {
-    "activity_unit": { "g_per_hp_hr": 1, "g_per_gallon": 2 }
+    "activity_unit": {
+      "g_per_hp_hr": 1,
+      "g_per_gallon": 2
+    }
   },
   "expression_templates": {
     "is_rate_per_horsepower_hour": {
-      "params": ["unit_code"],
+      "params": [
+        "unit_code"
+      ],
       "body": {
         "op": "==",
-        "args": ["unit_code", { "op": "enum", "args": ["activity_unit", "g_per_hp_hr"] }]
+        "args": [
+          "unit_code",
+          {
+            "op": "enum",
+            "args": [
+              "activity_unit",
+              "g_per_hp_hr"
+            ]
+          }
+        ]
+      }
+    },
+    "activity_code": {
+      "params": [
+        "sym"
+      ],
+      "body": {
+        "op": "enum",
+        "args": [
+          "activity_unit",
+          "sym"
+        ]
+      }
+    },
+    "gallon_code": {
+      "params": [],
+      "body": {
+        "op": "apply_expression_template",
+        "args": [],
+        "name": "activity_code",
+        "bindings": {
+          "sym": "g_per_gallon"
+        }
+      }
+    },
+    "code_via": {
+      "params": [
+        "which"
+      ],
+      "body": {
+        "op": "apply_expression_template",
+        "args": [],
+        "name": "activity_code",
+        "bindings": {
+          "sym": "which"
+        }
       }
     }
   }

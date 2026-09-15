@@ -286,6 +286,14 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
     const callerBound = definingRhs(m, 'callerBoundCode')
     expect(callerBound.args[0]).toMatchObject({ op: 'const', value: 7 })
     expect(callerBound.args[1]).toMatchObject({ op: 'const', value: 1 })
+    // The library's own call binds `g_per_gallon`, so it keeps the library's 2; a
+    // symbol the importer binds, directly or through a forwarded parameter, takes 9.
+    expect(definingRhs(m, 'gallonCode')).toMatchObject({ op: 'const', value: 2 })
+    expect(definingRhs(m, 'importerBoundCode')).toMatchObject({ op: 'const', value: 9 })
+    expect(definingRhs(m, 'forwardedCode')).toMatchObject({ op: 'const', value: 9 })
+    // An importer declaring no enums still loads the library's own call.
+    const noEnums = (loadPath(conf('import_library_enum', 'fixture.esm')) as any).models.Consumer
+    expect(definingRhs(noEnums, 'gallonCode')).toMatchObject({ op: 'const', value: 2 })
   })
 
   it.each(['fixture.esm', 'fixture_importer_declares.esm'])(
