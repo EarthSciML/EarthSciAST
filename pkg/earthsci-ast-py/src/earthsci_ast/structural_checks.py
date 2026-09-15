@@ -52,7 +52,7 @@ from .classification import (
     ode_states,
     system_kind,
 )
-from .error_handling import OBSERVED_CYCLE
+from .error_handling import OBSERVED_CYCLE, RAGGED_VALUES_NOT_GATHERED
 from .json_walk import iter_child_values, walk_dict_exprs
 
 # StructuralValidationError is built lazily (and cached) so that its base class,
@@ -393,6 +393,77 @@ def _iter_aggregate_nodes(expr):
             yield from _iter_aggregate_nodes(value)
 
 
+#: Body ops that make a ``faq`` a value-invention node. Over such a node a ragged
+#: range binds the MEMBER ``values[parent, k]`` itself (esm-spec §4.3.1 "Ragged
+#: ranges"), so its ``values`` gather is implicit rather than authored.
+_VALUE_INVENTION_BODY_OPS = frozenset({"skolem", "rank", "distinct", "argmin", "argmax"})
+
+
+def _is_value_invention_faq(agg: dict[str, Any]) -> bool:
+    """Whether ``agg`` is a value-invention ``faq``: ``distinct: true``, a
+    ``skolem`` key, or a skolem / rank / distinct / arg-witness body."""
+    if agg.get("distinct") is True:
+        return True
+    key = agg.get("key")
+    if isinstance(key, dict) and key.get("op") == "skolem":
+        return True
+    body = agg.get("expr")
+    return isinstance(body, dict) and body.get("op") in _VALUE_INVENTION_BODY_OPS
+
+
+def _contains_template_reference(expr: Any) -> bool:
+    """Whether ``expr`` holds a surviving ``apply_expression_template`` reference
+    (esm-spec §9.6.4), whose body a static walk of this document cannot see."""
+    if not isinstance(expr, dict):
+        return False
+    if expr.get("op") == "apply_expression_template":
+        return True
+    return any(_contains_template_reference(child) for _, child in iter_child_values(expr))
+
+
+def _ragged_ranges_missing_values_gather(
+    agg: dict[str, Any], index_sets: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Every range of ``agg`` over a declared ``kind: "ragged"`` index set whose
+    ``values`` array the body (``expr`` / ``filter``) never reads.
+
+    Such a range symbol binds the POSITION k in 1..offsets[parent], so a body
+    that never gathers ``values`` reads positions where the author meant members
+    (``ragged_values_not_gathered``, esm-spec §4.3.1). Not decided for a
+    value-invention node, which binds the member itself, nor for a body that
+    still holds a template reference, which may do the gather out of sight."""
+    ranges = agg.get("ranges")
+    if not isinstance(ranges, dict) or _is_value_invention_faq(agg):
+        return []
+    body = [agg.get("expr"), agg.get("filter")]
+    if any(_contains_template_reference(part) for part in body):
+        return []
+    refs = _bare_string_leaves(body[0]) | _bare_string_leaves(body[1])
+    found: list[dict[str, Any]] = []
+    for sym in sorted(ranges):
+        spec = ranges[sym]
+        set_name = spec.get("from") if isinstance(spec, dict) else None
+        entry = index_sets.get(set_name) if isinstance(set_name, str) else None
+        if not (isinstance(entry, dict) and entry.get("kind") == "ragged"):
+            continue
+        values = entry.get("values")
+        if not isinstance(values, str):
+            continue
+        if any(ref == values or ref.endswith("." + values) for ref in refs):
+            continue
+        of = spec.get("of")
+        found.append(
+            {
+                "range": str(sym),
+                "index_set": set_name,
+                "values": values,
+                "offsets": entry.get("offsets"),
+                "of": [str(p) for p in of] if isinstance(of, list) else [],
+            }
+        )
+    return found
+
+
 def _join_key_columns(agg: dict[str, Any]) -> set[str]:
     """Range-variable names used as value-equality join key columns by any
     ``join`` clause carrying ``on`` on this aggregate (RFC §5.3). A clause is
@@ -494,7 +565,26 @@ def _check_aggregate_semantics(data: dict[str, Any], errors: list) -> None:
                                 {"index_set": name, "declared": sorted(index_sets)},
                             )
 
+                # --- ragged_values_not_gathered: a range over a ragged set binds
+                # the POSITION k in 1..offsets[parent], never a member (esm-spec
+                # §4.3.1), so a body that never reads the set's `values` array
+                # reads positions -- a plausible wrong number (issue #259).
+                for miss in _ragged_ranges_missing_values_gather(agg, index_sets):
+                    parent = ", ".join(miss["of"]) or "<parent>"
+                    emit(
+                        RAGGED_VALUES_NOT_GATHERED,
+                        pointer,
+                        f"faq range {miss['range']!r} iterates ragged index set "
+                        f"{miss['index_set']!r}, so it binds the POSITION k in "
+                        f"1..{miss['offsets']}[{parent}], not a member; the body never "
+                        f"reads the set's `values` array {miss['values']!r}. Gather the "
+                        f"member explicitly: index({miss['values']}, {parent}, "
+                        f"{miss['range']})",
+                        miss,
+                    )
+
                 # --- join_key_invalid_type: a value-equality join key column
+
                 # drawn from a categorical set with a float/null member.
                 if isinstance(ranges, dict):
                     for col in _join_key_columns(agg):
