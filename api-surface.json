@@ -1194,6 +1194,14 @@
       }
     },
     {
+      "name": "code_indexed_definition_unsupported_form",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeIndexedDefinitionUnsupportedForm"
+      }
+    },
+    {
       "name": "code_invalid_broadcast_fn",
       "kind": "constant",
       "tier": "extension",

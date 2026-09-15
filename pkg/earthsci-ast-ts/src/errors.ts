@@ -153,6 +153,13 @@ export const ERROR_CODES = {
   //   WINS, not the order cells are EVALUATED in, and a region's value
   //   expression is evaluated once for the whole region.
   RECURRENCE_UNSUPPORTED_FORM: 'recurrence_unsupported_form',
+  // `indexed_definition_unsupported_form` — a bare-index observed definition
+  //   `index(V, k…) ~ rhs` outside the runnable form of esm-spec §6.3.1 (the RHS
+  //   is not a `faq` whose `output_idx` names the subscripts in order). Raised
+  //   by the simulating bindings when a model is built; this binding does not
+  //   simulate and never raises it. It is registered because the §9.6.6 code
+  //   table is cross-language uniform.
+  INDEXED_DEFINITION_UNSUPPORTED_FORM: 'indexed_definition_unsupported_form',
   EQUATION_COUNT_MISMATCH: 'equation_count_mismatch',
   // `event_affects_parameter` — an event `affects` LHS names a PARAMETER
   //   (esm-spec §5.4). From 1.0.0 events affect UNKNOWNS ONLY: a parameter that
