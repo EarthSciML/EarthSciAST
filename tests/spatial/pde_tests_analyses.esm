@@ -7,6 +7,9 @@
     "created": "2026-04-19T00:00:00Z",
     "tags": ["pde", "spatial-assertions", "expression-ic", "field-plots"]
   },
+  "index_sets": {
+    "x": { "kind": "interval", "size": 100 }
+  },
   "models": {
     "HeatEquation1D": {
       "reference": {
@@ -17,7 +20,8 @@
           "type": "unknown",
           "units": "1",
           "default": 0.0,
-          "description": "Diffused field"
+          "description": "Diffused field",
+          "shape": ["x"]
         },
         "alpha": {
           "type": "parameter",
@@ -33,7 +37,7 @@
           "rhs": {
             "op": "sin",
             "args": [
-              { "op": "*", "args": [3.141592653589793, "x"] }
+              { "op": "*", "args": [3.141592653589793, { "op": "/", "args": [{ "op": "-", "args": ["x", 0.5] }, 100] }] }
             ]
           }
         },
@@ -51,7 +55,7 @@
       "tests": [
         {
           "id": "point_sample_at_center",
-          "description": "(a) Spatial-point assertion: sample u at x=0.5, t=0.1. Analytic value exp(-alpha pi^2 t) * sin(pi/2) = exp(-0.00986960) ~ 0.99018.",
+          "description": "(a) Spatial-point assertion: sample u at the grid centre, index-space position x=50.5 of 100 cells (§6.6.5 convention 1), t=0.1. Analytic value exp(-alpha pi^2 t) * sin(pi (50 - 1/2)/100) ~ 0.99006.",
           "time_span": { "start": 0.0, "end": 0.1 },
           "tolerance": { "rel": 0.0, "abs": 1.0e-3 },
           "assertions": [
@@ -59,7 +63,7 @@
               "variable": "u",
               "time": 0.1,
               "expected": 0.990178,
-              "coords": { "x": 0.5 }
+              "coords": { "x": 50.5 }
             }
           ]
         },
@@ -100,7 +104,7 @@
                   {
                     "op": "sin",
                     "args": [
-                      { "op": "*", "args": [3.141592653589793, "x"] }
+                      { "op": "*", "args": [3.141592653589793, { "op": "/", "args": [{ "op": "-", "args": ["x", 0.5] }, 100] }] }
                     ]
                   }
                 ]
