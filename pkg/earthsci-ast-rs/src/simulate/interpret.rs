@@ -105,7 +105,7 @@ pub fn fold_constant_expr(
         params.push(bindings[n]);
     }
     let resolved = resolve_expr(expr, &HashMap::new(), &param_index, &HashMap::new(), None)
-        .map_err(|e| vec![format!("{e:?}")])?;
+        .map_err(|e| vec![e.to_string()])?;
     let t_value = bindings.get("t").copied().unwrap_or(0.0);
     Ok(interpret(&resolved, &[], &params, &[], t_value))
 }

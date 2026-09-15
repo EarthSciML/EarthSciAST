@@ -385,13 +385,15 @@ const (
 // TypeScript emit exactly this string — so it belongs in the registry rather
 // than at the call site. ---
 const (
-	// CodeUnloweredOperator: evaluation reached an op that the load-time
-	// lowering passes should already have rewritten away (an `enum` symbol, an
-	// unexpanded template application), so no evaluator rule applies to it.
+	// CodeUnloweredOperator: evaluation reached a rewrite-target op — one
+	// OUTSIDE the esm-spec §4.2 evaluable core (a spatial or right-hand-side
+	// `D`, `grad`, a user op) — that no rewrite rule eliminated.
 	CodeUnloweredOperator = "unlowered_operator"
-	// CodeUnsupportedOperator: evaluation reached a well-formed op for which
-	// this binding's evaluator has no rule.
-	CodeUnsupportedOperator = "unsupported_operator"
+	// CodeUnevaluableOperator: evaluation reached an op that IS in the esm-spec
+	// §4.2 evaluable core but that this evaluator has no rule for (esm-spec
+	// §9.6.6): an array/query or value-invention op, or an `enum` that should
+	// have been lowered at load. The complement of CodeUnloweredOperator.
+	CodeUnevaluableOperator = "unevaluable_operator"
 )
 
 // --- Spec enum literal: ModelVariable.Type (esm-spec §6.3). esm 1.0.0 declares

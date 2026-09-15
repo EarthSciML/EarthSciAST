@@ -1594,6 +1594,14 @@
       }
     },
     {
+      "name": "code_unevaluable_operator",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeUnevaluableOperator"
+      }
+    },
+    {
       "name": "code_unlowered_operator",
       "kind": "constant",
       "tier": "extension",
@@ -1607,14 +1615,6 @@
       "tier": "extension",
       "bindings": {
         "go": "CodeUnresolvedSubsystemRef"
-      }
-    },
-    {
-      "name": "code_unsupported_operator",
-      "kind": "constant",
-      "tier": "extension",
-      "bindings": {
-        "go": "CodeUnsupportedOperator"
       }
     },
     {
@@ -7436,6 +7436,14 @@
         "typescript": "unknowns"
       },
       "notes": "spelling differs from the §2 rule: julia=unknown_names (expected unknowns); multiple spellings exported by: julia"
+    },
+    {
+      "name": "unevaluable_operator_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "UnevaluableOperatorError"
+      }
     },
     {
       "name": "unlowered_operator_error",

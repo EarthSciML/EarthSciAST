@@ -267,6 +267,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("tree_walk_binning_alias_test.jl")
     include("op_registry_test.jl")
     include("tree_walk_op_table_test.jl")
+    include("unevaluable_operator_test.jl")         # §9.6.6 core op with no rule, refused at build
     include("op_capability_audit_test.jl")          # cross-tier op/fn-payload capability drift
     include("tree_walk_audit_fixes_test.jl")
 

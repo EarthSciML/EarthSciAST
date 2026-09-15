@@ -340,6 +340,10 @@ export const ERROR_CODES = {
   UNKNOWN_CLOSED_FUNCTION: 'unknown_closed_function',
   CLOSED_FUNCTION_ARITY: 'closed_function_arity',
   CLOSED_FUNCTION_OVERFLOW: 'closed_function_overflow',
+
+  // ---- evaluator: an evaluable-core op with no scalar rule (codegen.ts;
+  //      UnevaluableOperatorError, esm-spec §9.6.6) ----
+  UNEVALUABLE_OPERATOR: 'unevaluable_operator',
 } as const
 
 /** A diagnostic code string from {@link ERROR_CODES}. */
