@@ -13,9 +13,10 @@ use earthsci_ast::extension::analysis::{
     find_longest_dependency_chain, find_strongly_connected_components,
 };
 use earthsci_ast::{
-    ExpressionGraphOptions, component_exists, component_graph, expression_graph,
-    expression_graph_with_options, stoichiometric_matrix, to_json, to_json_compact, validate,
-    validate_text,
+    EquationDimensionVerdict, ExpressionGraphOptions, StructuralErrorCode, Unit, build_unit_env,
+    component_exists, component_graph, equation_dimension_verdict, expression_graph,
+    expression_graph_with_options, parse_unit, stoichiometric_matrix, to_json, to_json_compact,
+    validate, validate_text,
 };
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
@@ -482,16 +483,57 @@ fn analyze_model_units(esm_file: &earthsci_ast::EsmFile) {
                 model.variables.len()
             );
 
-            // Check for dimensional consistency in equations
-            for (i, _equation) in model.equations.iter().enumerate() {
-                println!("  Equation {}: dimensional analysis needed", i + 1);
-                // Note: Full dimensional analysis would require evaluating expression units
+            for (i, equation, verdict) in model_equation_verdicts(model) {
+                let label = match equation_lhs_label(&equation.lhs) {
+                    Some(lhs) => format!("Equation {} ({lhs})", i + 1),
+                    None => format!("Equation {}", i + 1),
+                };
+                match verdict {
+                    EquationDimensionVerdict::Consistent(dim) => {
+                        println!("  {label}: consistent [{dim}]");
+                    }
+                    EquationDimensionVerdict::Mismatch(messages) => {
+                        println!("  {label}: MISMATCH — {}", messages.join("; "));
+                    }
+                    EquationDimensionVerdict::NotChecked(reason) => {
+                        println!("  {label}: NOT CHECKED — {reason}");
+                    }
+                }
             }
         }
     }
 }
 
-fn analyze_reaction_system_units(esm_file: &earthsci_ast::EsmFile) {
+/// The dimensional analyser's verdict on each of `model`'s equations, judged
+/// against the same unit environment `validate` uses.
+fn model_equation_verdicts(
+    model: &earthsci_ast::Model,
+) -> Vec<(usize, &earthsci_ast::Equation, EquationDimensionVerdict)> {
+    let (env, _) = build_unit_env(&model.variables);
+    model
+        .equations
+        .iter()
+        .enumerate()
+        .map(|(i, eq)| (i, eq, equation_dimension_verdict(eq, &env)))
+        .collect()
+}
+
+/// A short name for an equation's left-hand side: `x` or `D(x)`.
+fn equation_lhs_label(lhs: &earthsci_ast::Expr) -> Option<String> {
+    match lhs {
+        earthsci_ast::Expr::Variable(name) => Some(name.clone()),
+        earthsci_ast::Expr::Operator(op) if op.op == "D" => match op.args.first() {
+            Some(earthsci_ast::Expr::Variable(name)) => Some(format!("D({name})")),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn analyze_reaction_system_units(
+    esm_file: &earthsci_ast::EsmFile,
+    validation: &earthsci_ast::ValidationResult,
+) {
     if let Some(ref reaction_systems) = esm_file.reaction_systems {
         for (rs_id, rs) in reaction_systems {
             println!("Reaction System: {rs_id}");
@@ -513,10 +555,43 @@ fn analyze_reaction_system_units(esm_file: &earthsci_ast::EsmFile) {
                 rs.species.len()
             );
 
-            // Check rate expression units
-            for (i, _reaction) in rs.reactions.iter().enumerate() {
-                println!("  Reaction {} rate: dimensional analysis needed", i + 1);
-                // Rate expressions should have units consistent with d[species]/dt
+            // The stoichiometric rate check lives in `validate`; its findings are
+            // keyed by the reaction's pointer.
+            let env: HashMap<String, Unit> = rs
+                .species
+                .iter()
+                .map(|(name, s)| (name, &s.units))
+                .chain(rs.parameters.iter().map(|(name, p)| (name, &p.units)))
+                .filter_map(|(name, units)| {
+                    let unit = parse_unit(units.as_deref()?).ok()?;
+                    Some((name.clone(), unit))
+                })
+                .collect();
+            for (i, reaction) in rs.reactions.iter().enumerate() {
+                let path = format!("/reaction_systems/{rs_id}/reactions/{i}");
+                let mismatches: Vec<&str> = validation
+                    .structural_errors
+                    .iter()
+                    .filter(|e| {
+                        e.path == path && matches!(e.code, StructuralErrorCode::UnitInconsistency)
+                    })
+                    .map(|e| e.message.as_str())
+                    .collect();
+                if !mismatches.is_empty() {
+                    println!(
+                        "  Reaction {} rate: MISMATCH — {}",
+                        i + 1,
+                        mismatches.join("; ")
+                    );
+                    continue;
+                }
+                match Unit::propagate(&reaction.rate, &env) {
+                    Ok(_) => println!(
+                        "  Reaction {} rate: no stoichiometric mismatch found",
+                        i + 1
+                    ),
+                    Err(e) => println!("  Reaction {} rate: NOT CHECKED — {e}", i + 1),
+                }
             }
         }
     }
@@ -2868,23 +2943,64 @@ fn run_units(file: PathBuf, check: bool) -> Result<(), Box<dyn std::error::Error
 
     if check {
         println!("\n=== DIMENSIONAL CONSISTENCY CHECK ===");
-        // Use existing validation for unit checking
+        // A provable mismatch or an unresolvable unit string is a structural
+        // error, not a warning (esm-spec §4.8.4).
         let validation_result = validate(&esm_file);
+        let unit_errors: Vec<_> = validation_result
+            .structural_errors
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e.code,
+                    StructuralErrorCode::UnitInconsistency | StructuralErrorCode::UnitParseError
+                )
+            })
+            .collect();
 
+        if !unit_errors.is_empty() {
+            println!("Unit errors:");
+            for error in &unit_errors {
+                println!("  ✗ {}: {}", error.path, error.message);
+            }
+        }
         if !validation_result.unit_warnings.is_empty() {
             println!("Unit warnings:");
             for warning in &validation_result.unit_warnings {
                 println!("  ⚠ {}", warning.message);
             }
-        } else {
+        }
+
+        let (mut consistent, mut mismatched, mut not_checked) = (0, 0, 0);
+        for model in esm_file.models.iter().flat_map(|m| m.values()) {
+            for (_, _, verdict) in model_equation_verdicts(model) {
+                match verdict {
+                    EquationDimensionVerdict::Consistent(_) => consistent += 1,
+                    EquationDimensionVerdict::Mismatch(_) => mismatched += 1,
+                    EquationDimensionVerdict::NotChecked(_) => not_checked += 1,
+                }
+            }
+        }
+        println!(
+            "Equations: {consistent} consistent, {mismatched} mismatched, {not_checked} not checked"
+        );
+
+        if !unit_errors.is_empty() {
+            return Err(fail_silent());
+        }
+        if not_checked == 0 {
             println!("✓ All units are dimensionally consistent");
+        } else {
+            println!(
+                "✓ No dimensional mismatch found; run without --check to see why equations were not checked"
+            );
         }
     } else {
         println!("\n=== COMPREHENSIVE UNIT ANALYSIS ===");
 
         // Analyze units in all components
+        let validation_result = validate(&esm_file);
         analyze_model_units(&esm_file);
-        analyze_reaction_system_units(&esm_file);
+        analyze_reaction_system_units(&esm_file, &validation_result);
 
         // Unit system summary
         println!("\n=== UNIT SYSTEM SUMMARY ===");
