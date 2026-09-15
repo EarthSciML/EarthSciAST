@@ -582,12 +582,17 @@ fn check_linear_conversion_factor(
     if !src_scale.is_finite() || !dst_scale.is_finite() || dst_scale == 0.0 {
         return;
     }
-    // Identical units ⇒ no conversion is implied ⇒ the coefficient is free.
-    if (src_scale - dst_scale).abs() <= 1e-9 * src_scale.abs().max(dst_scale.abs()) {
+    // Identical scales ⇒ no conversion is implied ⇒ the coefficient is free.
+    // Decided exactly (esm-spec §4.8.1): a tolerance here would let the order a
+    // binding folded its scale arithmetic in decide whether a coefficient is
+    // checked at all.
+    if src.exact_scale() == declared.exact_scale() {
         return;
     }
 
-    let expected = src_scale / dst_scale;
+    // The expected factor is formed EXACTLY and rounded once; the tolerance
+    // below only absorbs the literal's own decimal spelling.
+    let expected = src.exact_scale().divide(declared.exact_scale()).to_f64();
     if (factor - expected).abs() <= 1e-6 * expected.abs() {
         return;
     }
