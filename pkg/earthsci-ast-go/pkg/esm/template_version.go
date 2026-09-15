@@ -65,3 +65,30 @@ func isTemplateLibraryDoc(view map[string]any) bool {
 	_, has := view["expression_templates"]
 	return has
 }
+
+// rejectImpureTemplateLibrary rejects a document carrying top-level
+// `expression_templates` beside a component payload. Such a document is a
+// template-library file (esm-spec §9.7.1), which MUST NOT declare `models`,
+// `reaction_systems`, `data_sources`, `coupling`, or `domain`. Rewrite rules are
+// component-local (§9.6.3 constraint 4), so beside a component the block is
+// visible to nothing: the document is rejected with
+// `template_library_illegal_payload` rather than loaded with the templates
+// silently inert. An import target is held to the same rule at the edge, as
+// `template_import_not_library`.
+func rejectImpureTemplateLibrary(view map[string]any) error {
+	if !isTemplateLibraryDoc(view) {
+		return nil
+	}
+	present := []string{}
+	for _, k := range libraryForbiddenKeys {
+		if _, has := view[k]; has {
+			present = append(present, "`"+k+"`")
+		}
+	}
+	if len(present) == 0 {
+		return nil
+	}
+	return newETErr(CodeTemplateLibraryIllegalPayload,
+		"top-level `expression_templates` makes this document a template-library file, which MUST NOT declare "+strings.Join(present, ", ")+
+			" (esm-spec §9.7.1); templates declared there are visible to no component. Declare them in the component's own `expression_templates` block (§9.6.1), or move them to a template-library file and import it with `expression_template_imports` (§9.7.2)")
+}

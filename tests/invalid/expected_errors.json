@@ -2348,6 +2348,14 @@
     "resolver_error_code": "subsystem_ref_is_template_library",
     "notes": "Resolver-level invalid (esm-spec \u00a79.7, RFC template-library-imports). The document is SCHEMA-VALID \u2014 the \u00a79.7 constructs are legal schema \u2014 so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. A \u00a74.7 subsystem ref targets ../../valid/template_import_lib.esm, a template-library file. The two reference mechanisms are disjoint (esm-spec \u00a79.7.1): libraries are imported via expression_template_imports, never included as subsystems."
   },
+  "root_templates_with_models.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": true,
+    "resolver_only": true,
+    "resolver_error_code": "template_library_illegal_payload",
+    "notes": "Resolver-level invalid (esm-spec \u00a79.7.1). The document is SCHEMA-VALID \u2014 the schema requires only one of the payload keys and does not make top-level `expression_templates` exclusive of `models` \u2014 so schema-only bindings (TypeScript, Go) accept it at the schema layer (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Every binding rejects it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. Top-level `expression_templates` is the payload of a template-library file, which MUST NOT declare `models`, `reaction_systems`, `data_sources`, `coupling`, or `domain` (esm-spec \u00a79.7.1); this document declares `models` and `domain` beside it. Rewrite rules are component-local (\u00a79.6.3 constraint 4), so the top-level `double` template would be visible to no component: before the check it loaded cleanly with the template silently inert. The import-edge form of the same purity rule is `template_import_not_library` (import_not_library.esm)."
+  },
   "import_name_conflict.esm": {
     "schema_errors": [],
     "structural_errors": [],

@@ -457,6 +457,7 @@ def test_invalid_fixture_set_covers_the_reachable_code_table():
     seen = {expected[f]["resolver_error_code"] for f in _invalid_fixture_names()}
     for code in [
         "template_import_not_library",
+        "template_library_illegal_payload",
         "subsystem_ref_is_template_library",
         "template_import_cycle",
         "template_import_name_conflict",
@@ -1023,6 +1024,30 @@ def test_version_gate_flags_every_v097_construct():
      "metaparameters": {"N": {"type": "integer", "default": 1}},
      "expression_templates": {"t": {"params": [], "body": 1}}}""")
     assert reject_template_imports_pre_v08(ok) is None
+
+
+@pytest.mark.parametrize(
+    ("key", "snippet"),
+    [
+        (
+            "models",
+            '"models": {"M": {"variables": {"x": {"type": "unknown", "default": 1.0}}, "equations": []}}',
+        ),
+        ("reaction_systems", '"reaction_systems": {"R": {"species": {}, "reactions": []}}'),
+        ("data_sources", '"data_sources": {}'),
+        ("coupling", '"coupling": []'),
+        ("domain", '"domain": {"temporal": {}}'),
+    ],
+)
+def test_root_templates_beside_component_payload_rejected(key, snippet):
+    """A top-level ``expression_templates`` block makes the document a
+    template-library file, which declares none of these keys (esm-spec §9.7.1).
+    Rules are component-local (§9.6.3 constraint 4), so beside a component the
+    block would be visible to nothing; loading refuses it instead."""
+    head = '{"esm": "1.0.0", "metadata": {"name": "impure"}, "expression_templates": {"double": {"params": ["a"], "body": {"op": "*", "args": [2, "a"]}}}, '
+    assert (
+        _err_code(lambda: load_string(head + snippet + "}")) == "template_library_illegal_payload"
+    ), key
 
 
 def test_zero_parameter_templates_are_legal():
