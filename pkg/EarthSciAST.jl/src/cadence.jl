@@ -142,27 +142,72 @@ _join(classes) = isempty(classes) ? "const" :
 Map each OBSERVED unknown of `model` to its defining equation's RHS, memoised on
 the model dict.
 
-An observed unknown is one an equation defines with a BARE-VARIABLE LHS
-(esm-spec §6.3.1). Before esm 1.0.0 this lived in `variables[v].expression`; the
-cadence pass must now read it from the model's `equations`, which is the one
-place the pass has to follow the format change. First definition wins, matching
-the reference implementation (`scripts/run-cadence-conformance.py`).
+An observed unknown is one an equation defines, read through the LHS's BASE
+NAME at any rank (esm-spec §6.3.1): `y ~ …`, `y[i] ~ …` and `faq{k}(y[k]) ~ …`
+all define `y`, while a `D` under the same shells is a tendency and defines
+nothing. This is the raw-JSON form of `observed_definitions` (classification.jl,
+via `_lhs_role`); the strict bare-variable form is the narrower INLINING set,
+which "does not narrow the partition", and seeding from it would seed a
+state-free arrayed observed `continuous` and stop it folding at bind. First
+definition wins, matching the reference implementation
+(`scripts/run-cadence-conformance.py`).
 """
 function _observed_definitions(model)
     cached = get(model, "_observed_defs", nothing)
     cached === nothing || return cached
     variables = get(model, "variables", Dict{String,Any}())
-    defs = Dict{String,Any}()
+    roles = Tuple{Symbol,String,Any}[]
     for eq in get(model, "equations", Any[])
         isa(eq, AbstractDict) || continue
-        lhs = get(eq, "lhs", nothing)
-        isa(lhs, AbstractString) || continue
-        v = get(variables, lhs, nothing)
+        role, name = _raw_lhs_role(get(eq, "lhs", nothing))
+        push!(roles, (role, name, eq))
+    end
+    states = Set(name for (role, name, _) in roles if role === :derivative)
+    defs = Dict{String,Any}()
+    for (role, name, eq) in roles
+        role === :definition || continue
+        name in states && continue
+        v = get(variables, name, nothing)
         (isa(v, AbstractDict) && get(v, "type", nothing) == "unknown") || continue
-        haskey(defs, lhs) || (defs[lhs] = get(eq, "rhs", nothing))
+        haskey(defs, name) || (defs[name] = get(eq, "rhs", nothing))
     end
     model["_observed_defs"] = defs
     return defs
+end
+
+"""Strip the array-addressing shells from a raw-JSON LHS: an `faq` addresses its
+`expr`, an `index` its first argument."""
+function _raw_lhs_unwrap(e)
+    while isa(e, AbstractDict)
+        op = get(e, "op", nothing)
+        args = get(e, "args", nothing)
+        if op == "faq" && get(e, "expr", nothing) !== nothing
+            e = e["expr"]
+        elseif op == "index" && isa(args, AbstractVector) && !isempty(args)
+            e = args[1]
+        else
+            break
+        end
+    end
+    return e
+end
+
+"""The raw-JSON counterpart of `_lhs_role` (classification.jl):
+`(:definition, y)` for `y`, `index(y, …)` or `faq{…}(index(y, …))`;
+`(:derivative, u)` for a time `D` of `u` under the same shells; otherwise
+`(:none, "")`."""
+function _raw_lhs_role(lhs)
+    head = _raw_lhs_unwrap(lhs)
+    isa(head, AbstractString) && return (:definition, String(head))
+    if isa(head, AbstractDict) && get(head, "op", nothing) == "D" &&
+       get(head, "wrt", "t") in ("t", nothing)
+        args = get(head, "args", nothing)
+        if isa(args, AbstractVector) && !isempty(args)
+            base = _raw_lhs_unwrap(args[1])
+            isa(base, AbstractString) && return (:derivative, String(base))
+        end
+    end
+    return (:none, "")
 end
 
 """

@@ -138,6 +138,19 @@ const CADENCE_MANIFEST = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "
         @test _Cadence.seed_leaf("dx", m) == "const"
         @test _Cadence.seed_leaf("Kdiff", m) == "discrete"
 
+        # An ARRAYED observed is recognised through its LHS's base name at any
+        # rank (esm-spec §6.3.1), so a state-free one folds too: the `faq`
+        # shell `faq{i}(wf[i]) ~ …` and the bare-index `wb[i] ~ …` both define
+        # an observed, while `faq{i}(D(u[i]))` stays a tendency of the state.
+        a = _Cadence.load_model_json(
+            joinpath(TESTUTILS_REPO_ROOT, "tests", "valid", "cadence",
+                     "arrayed_observed_seeds.esm"), "ArrayedObservedSeeds")
+        @test _Cadence.seed_leaf("wf", a) == "const"
+        @test _Cadence.seed_leaf("wb", a) == "const"
+        @test _Cadence.seed_leaf("ws", a) == "continuous"
+        @test _Cadence.seed_leaf("u", a) == "continuous"
+        @test sort!(collect(keys(_Cadence._observed_definitions(a)))) == ["wb", "wf", "ws"]
+
         # A definition CYCLE is reported, not silently seeded.
         cyc = Dict{String,Any}(
             "variables" => Dict{String,Any}(

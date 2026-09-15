@@ -39,8 +39,9 @@ tests/conformance/cadence/
 
 The fixtures themselves are valid ESM files under
 `tests/valid/cadence/` (`mixed_stencil.esm`, `pure_topology.esm`,
-`pure_pointwise.esm`, `discrete_remesh_stencil.esm`, and the loader-seeded pair
-`loader_temporal_seed.esm` / `loader_const_seed.esm`) — they validate against the
+`pure_pointwise.esm`, `discrete_remesh_stencil.esm`, the loader-seeded pair
+`loader_temporal_seed.esm` / `loader_const_seed.esm`, and the observed-seed pair
+`observed_leaf_seeds.esm` / `arrayed_observed_seeds.esm`) — they validate against the
 schema with no evaluator
 (like `tests/valid/faq/discrete_variable_refresh.esm`) and carry an
 `expect_cadence` assertion on every meaningful node. The runner is
@@ -59,6 +60,8 @@ classifier + folder** — the §5.7 contract as code — and the committed golde
 | `discrete_remesh_stencil` | `DISCRETE` topology + `CONTINUOUS` hot path | the §6.1 worked-trace **discrete-mesh path** (ess-my4.3.10): `mixed_stencil` with the topology (`nbr`/`coeff`) declared `discrete` (an AMR remesh-reloadable mesh) so the SAME topology gathers materialize at the `DISCRETE→CONTINUOUS` threshold — recomputed by the per-event handler on each remesh event instead of folding once at compile. With `mixed_stencil` (CONST topology) this is the const-vs-discrete topology pair: "mesh primitives as document literals → topology folds at compile; reloaded/refined mesh → same nodes are DISCRETE and re-run on the remesh event." |
 | `loader_temporal_seed` | loader-seeded `DISCRETE` + `CONTINUOUS` hot path | **loader-seeded cadence** (RFC `pure-io-data-loaders` §4.6, ess-v9a.5): a `discrete` variable fed by a `data_ingest` refresh whose source `DataLoader` declares a `temporal` block seeds `DISCRETE` (refresh trigger = the loader's update times) and materializes at `DISCRETE→CONTINUOUS` (bind provenance, recomputed on each ingest). |
 | `loader_const_seed` | loader-seeded `CONST` + `CONTINUOUS` hot path | the matched-pair sibling: IDENTICAL model, but the loader declares **no** `temporal`, so the SAME `discrete`+`data_ingest` variable is refined to `CONST` (folds at bind, never refreshes) and materializes at `CONST→CONTINUOUS`; the per-event handler is empty. Toggling the loader's `temporal` block alone flips the variable between the two cadences. |
+| `observed_leaf_seeds` | all three classes | an OBSERVED unknown seeds the class of its defining equation's RHS (§5.7.2): state-free `CONST`, discrete-reading `DISCRETE`, state-reading `CONTINUOUS`, resolved transitively |
+| `arrayed_observed_seeds` | `CONST` reads in a `CONTINUOUS` hot path | the same rule for an ARRAYED observed: a definition is recognised through its LHS's base name at any rank (esm-spec §6.3.1), so the state-free `faq{i}(wf[i]) ~ …` and bare-index `wb[i] ~ …` definitions seed `CONST` and their reads cut at `CONST→CONTINUOUS`, while `faq{i}(D(u[i]))` stays a tendency. A pass that recognises only a bare-variable LHS seeds both `CONTINUOUS` |
 
 The numeric tail of the §7.3 worked example — the downstream `sum_product`
 geometric FAQ that consumes the materialized edge set as a *primitive* index set
