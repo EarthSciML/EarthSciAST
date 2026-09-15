@@ -58,6 +58,54 @@ def test_unresolvable_const_units_are_listed():
     assert unresolvable_const_units(raw) == []
 
 
+def test_unresolvable_const_units_in_a_called_template_body_are_reported():
+    """A call has the unit of its expansion (esm-spec §4.8.5 item 5), so an
+    unresolvable declared unit in the called body is ``unit_parse_error`` at the
+    calling equation's field, as the other four bindings report it."""
+    doc = {
+        "esm": "1.2.0",
+        "metadata": {"name": "ConstUnits", "description": "probe"},
+        "models": {
+            "M": {
+                "expression_templates": {
+                    "to_ms": {
+                        "params": ["x"],
+                        "body": {
+                            "op": "*",
+                            "args": [
+                                "x",
+                                {"op": "const", "args": [], "value": 1.0, "units": "mph"},
+                            ],
+                        },
+                    }
+                },
+                "variables": {
+                    "speed_mph": {"type": "parameter", "units": "mi/h", "default": 30.0},
+                    "speed_ms": {"type": "unknown", "units": "m/s"},
+                },
+                "equations": [
+                    {
+                        "lhs": "speed_ms",
+                        "rhs": {
+                            "op": "apply_expression_template",
+                            "args": [],
+                            "name": "to_ms",
+                            "bindings": {"x": "speed_mph"},
+                        },
+                    }
+                ],
+            }
+        },
+    }
+    with pytest.raises(earthsci_ast.SchemaValidationError) as excinfo:
+        earthsci_ast.load_string(json.dumps(doc))
+    records = getattr(excinfo.value, "records", [])
+    assert any(
+        r.get("code") == "unit_parse_error" and r.get("path") == "/models/M/equations/0/rhs"
+        for r in records
+    ), records
+
+
 def _doc(esm: str) -> dict:
     return {
         "esm": esm,

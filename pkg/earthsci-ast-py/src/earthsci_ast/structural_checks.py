@@ -2762,17 +2762,24 @@ _DECLARED_UNIT_SITES = (
 def _check_const_unit_strings(data: dict[str, Any], errors: list) -> None:
     """Flag a declared ``const`` unit string that does not resolve (esm-spec
     §4.8.5 item 2), at the containing expression field
-    (``/models/<M>/equations/<i>/lhs`` or ``/rhs``)."""
+    (``/models/<M>/equations/<i>/lhs`` or ``/rhs``).
+
+    This runs before template references are expanded, so a call is read
+    through the body of the template it names (§4.8.5 item 5): a ``const`` in
+    that body belongs to every equation that calls it, as it does once the call
+    is expanded."""
     try:
         from .units import unresolvable_const_units
     except ImportError:
         return
     for mname, model in (data.get("models") or {}).items():
+        registry = model.get("expression_templates") or {}
         for i, eq in enumerate(model.get("equations") or []):
             if not isinstance(eq, dict):
                 continue
             for field in ("lhs", "rhs"):
-                for units in unresolvable_const_units(eq.get(field)):
+                side = [eq.get(field), *_called_template_bodies(eq.get(field), registry)]
+                for units in unresolvable_const_units(side):
                     errors.append(
                         (
                             f"/models/{mname}/equations/{i}/{field}",
@@ -2780,6 +2787,31 @@ def _check_const_unit_strings(data: dict[str, Any], errors: list) -> None:
                             {"units": units},
                         )
                     )
+
+
+def _called_template_bodies(expr: Any, registry: dict[str, Any]) -> list[Any]:
+    """The body of every template ``expr`` calls through
+    ``apply_expression_template``, directly or from inside another called body,
+    each once."""
+    bodies: list[Any] = []
+    seen: set[str] = set()
+    stack = [expr]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, list):
+            stack.extend(node)
+            continue
+        if not isinstance(node, dict):
+            continue
+        name = node.get("name")
+        if node.get("op") == "apply_expression_template" and isinstance(name, str):
+            template = registry.get(name)
+            if name not in seen and isinstance(template, dict):
+                seen.add(name)
+                bodies.append(template.get("body"))
+                stack.append(template.get("body"))
+        stack.extend(node.values())
+    return bodies
 
 
 def _check_unparseable_units(data: dict[str, Any], errors: list) -> None:
