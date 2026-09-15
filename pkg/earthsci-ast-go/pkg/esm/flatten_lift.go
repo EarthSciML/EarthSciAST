@@ -337,7 +337,7 @@ func scopeTemplateBody(raw any, prefix string, localNames, bound map[string]bool
 		for k, val := range v {
 			switch k {
 			case "op", "wrt", "dim", "fn", "name", "value", "table", "output",
-				"reduce", "semiring", "manifold", "label", "attrs", "ranges",
+				"reduce", "semiring", "manifold", "label", "attrs", "ranges", "units",
 				"regions", "output_idx", "distinct", "shape", "perm", "axis", "id":
 				// Sidecar / non-reference slots: carried verbatim, exactly the
 				// slots a reference rewrite must not touch (see
@@ -638,7 +638,7 @@ func collectTemplateBodyVarNames(raw any, bound, out map[string]bool) {
 		for k, val := range v {
 			switch k {
 			case "op", "wrt", "dim", "fn", "name", "value", "table", "output",
-				"reduce", "semiring", "manifold", "label", "attrs", "ranges",
+				"reduce", "semiring", "manifold", "label", "attrs", "ranges", "units",
 				"regions", "output_idx", "distinct", "shape", "perm", "axis", "id":
 				// Sidecar / non-reference slots, exactly the ones
 				// scopeTemplateBody carries verbatim.

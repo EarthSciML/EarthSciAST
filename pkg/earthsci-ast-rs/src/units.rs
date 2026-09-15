@@ -2975,12 +2975,12 @@ mod tests {
     #[test]
     fn a_const_with_declared_units_has_that_unit() {
         let konst = |units: Option<&str>| {
-            Expr::Operator(ExpressionNode {
+            Expr::Operator(std::sync::Arc::new(ExpressionNode {
                 op: "const".into(),
                 value: Some(serde_json::json!(0.44704)),
                 units: units.map(str::to_string),
                 ..ExpressionNode::default()
-            })
+            }))
         };
         let env = env_of(&[
             ("speed_mph", "mi/h"),

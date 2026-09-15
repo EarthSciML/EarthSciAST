@@ -151,6 +151,7 @@ var transformingFixtures = map[string]string{
 	"advection_reaction_loaded_ic_bc.esm":       "eager expression-template expansion",
 	"derivative_trailing_boundary_operands.esm": "eager expression-template expansion",
 	"expression_templates_arrhenius.esm":        "eager expression-template expansion",
+	"units_const_declared.esm":                  "eager expression-template expansion",
 	"template_import_minimal.esm":               "template-library import + eager expansion",
 
 	// Metaparameter close+fold (esm-spec §9.7.1): symbolic extents such as
