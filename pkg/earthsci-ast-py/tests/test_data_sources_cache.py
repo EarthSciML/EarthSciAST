@@ -351,6 +351,41 @@ class TestFileSourceRecheck:
         with pytest.raises(FileNotFoundError):
             opener(url)
 
+    def test_source_deleted_between_stat_and_hash_is_an_error(self, tmp_path, monkeypatch):
+        # The stat sees a regular file of the right length, then the corpus is
+        # removed before it is read. That is still "gone", not "cannot tell".
+        src, url = self._source(tmp_path, b"A" * 64)
+        fetch = cached_fetcher(
+            fetcher=_counting_file_fetcher([]), data_dir=tmp_path / "cache", offline=False
+        )
+        fetch(url)
+        real = cache_mod._sha256_file
+
+        def delete_then_hash(path):
+            if path == src and src.exists():
+                src.unlink()
+            return real(path)
+
+        monkeypatch.setattr(cache_mod, "_sha256_file", delete_then_hash)
+        with pytest.raises(FileNotFoundError):
+            fetch(url)
+
+    def test_unwalkable_source_path_abstains(self, tmp_path):
+        # A path component that is a regular file (ENOTDIR) says this host
+        # cannot see the corpus, not that it changed: the warm entry is served,
+        # the same verdict ("unknown") all three EarthSciIO tracks give.
+        src, url = self._source(tmp_path, b"A" * 64)
+        calls: list[str] = []
+        fetch = cached_fetcher(
+            fetcher=_counting_file_fetcher(calls), data_dir=tmp_path / "cache", offline=False
+        )
+        fetch(url)
+        src.unlink()
+        src.parent.rmdir()
+        src.parent.write_bytes(b"not a directory")
+        assert fetch(url) == b"A" * 64
+        assert calls == [url]
+
     def test_opener_serves_the_replaced_source(self, tmp_path):
         src, url = self._source(tmp_path, b"A" * 371)
         opener = cached_opener(

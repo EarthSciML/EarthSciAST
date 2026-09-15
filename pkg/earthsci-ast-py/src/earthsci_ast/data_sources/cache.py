@@ -143,14 +143,19 @@ def _file_source_is_current(url: str, cached: Path, memo: dict) -> bool:
     (EarthSciML/EarthSciAST#293). This compares the SOURCE with the cached copy:
 
     * not a ``file://`` URL → ``True`` (remote entries are not rechecked here);
-    * nothing at the path, or not a regular file → ``False``: re-fetch, and the
-      fetcher reports the absence;
-    * the path cannot be examined or read → ``True``: abstain rather than claim
-      a change that was not observed;
+    * nothing at the path (including a file deleted between the ``stat`` and
+      the hash), or not a regular file → ``False``: re-fetch, and the fetcher
+      reports the absence;
+    * the path cannot be examined or read for any other reason (no permission,
+      a path component that is not a directory, an I/O error) → ``True``:
+      abstain rather than claim a change that was not observed;
     * a different length → ``False``, without hashing;
     * a different sha256 → ``False``. Length alone waves through every
       equal-length edit (a float re-encode, a corrected value);
     * otherwise ``True``.
+
+    Only a missing file (``ENOENT``) counts as gone, as in all three EarthSciIO
+    tracks.
 
     ``memo`` remembers the ``(size, mtime)`` of both files at the last verdict
     of "current", so a run hashes each source once rather than on every read.
@@ -164,7 +169,7 @@ def _file_source_is_current(url: str, cached: Path, memo: dict) -> bool:
         return True
     try:
         src_st = source.stat()
-    except (FileNotFoundError, NotADirectoryError):
+    except FileNotFoundError:
         return False
     except OSError:
         return True
@@ -185,6 +190,10 @@ def _file_source_is_current(url: str, cached: Path, memo: dict) -> bool:
         hashed_at = time.time_ns()
         if _sha256_file(source) != _sha256_file(cached):
             return False
+    except FileNotFoundError:
+        # Either file vanished after its ``stat``: re-fetch rather than serve a
+        # copy whose source is gone (or a cache entry that is no longer there).
+        return False
     except OSError:
         return True
     memo[os.fspath(cached)] = (fingerprint, hashed_at)
