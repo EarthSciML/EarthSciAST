@@ -1,0 +1,39 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "MountEnumsTopLevel",
+    "description": "Issue #260: two leaves declare probe.Symbol as 1 and 2 and are mounted by top-level `models` `{ref}`s. This document declares no enums. Each leaf keeps its own value.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ]
+  },
+  "models": {
+    "One": {
+      "ref": "./leaf_one.esm"
+    },
+    "Two": {
+      "ref": "./leaf_two.esm"
+    },
+    "Probe": {
+      "variables": {
+        "gap": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Two.value - One.value: 1 when each leaf keeps its own value."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "gap",
+          "rhs": {
+            "op": "-",
+            "args": [
+              "Two.value",
+              "One.value"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}
