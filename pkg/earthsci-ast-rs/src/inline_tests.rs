@@ -1060,7 +1060,9 @@ fn model_at<'a>(file: &'a EsmFile, path: &str) -> Option<Cow<'a, Model>> {
     match component_at(file, path)? {
         ComponentAt::Model(m) => Some(Cow::Borrowed(m)),
         ComponentAt::ReactionSystem(_) => None,
-        ComponentAt::Subsystem(v) => serde_json::from_value::<Model>(v.clone()).ok().map(Cow::Owned),
+        ComponentAt::Subsystem(v) => serde_json::from_value::<Model>(v.clone())
+            .ok()
+            .map(Cow::Owned),
     }
 }
 
@@ -1159,14 +1161,12 @@ fn eval_assertion(
     } else {
         // No ODE slots: try a state-free ARRAY OBSERVED (a rule output
         // asserted directly, §6.6.5).
-        observed_field(file, model_name, variable, insp, index_sets).ok_or_else(
-            || {
-                format!(
-                    "array state '{}' has no cells in var_map",
-                    assertion.variable
-                )
-            },
-        )?
+        observed_field(file, model_name, variable, insp, index_sets).ok_or_else(|| {
+            format!(
+                "array state '{}' has no cells in var_map",
+                assertion.variable
+            )
+        })?
     };
     if let Some(target) = coords_target {
         let pos = cell_tuples
@@ -1309,12 +1309,25 @@ fn assertion_observed_requests(
     t: &crate::types::ModelTest,
 ) -> Vec<String> {
     let own = model_at(file, model_name);
-    let own_class = own.as_deref().map(crate::classification::Classification::of);
+    let own_class = own
+        .as_deref()
+        .map(crate::classification::Classification::of);
     let mut out: Vec<String> = Vec::new();
     for a in &t.assertions {
         let (owner, local) = resolve_asserted_name(file, model_name, &a.variable);
-        let scoped = if owner == model_name { None } else { model_at(file, &owner) };
-        let scoped_class = scoped.as_deref().map(crate::classification::Classification::of);
+        // A FIELD on another component is not requested: it is read through
+        // `state_cells` / `observed_field` from what the build materialized.
+        if owner != model_name && (a.coords.is_some() || a.reduce.is_some()) {
+            continue;
+        }
+        let scoped = if owner == model_name {
+            None
+        } else {
+            model_at(file, &owner)
+        };
+        let scoped_class = scoped
+            .as_deref()
+            .map(crate::classification::Classification::of);
         let (model, class) = if owner == model_name {
             (own.as_deref(), own_class.as_ref())
         } else {

@@ -27,9 +27,19 @@ fn run(name: &str) -> Vec<AssertionResult> {
 fn assert_actuals(results: &[AssertionResult], expected: &[f64]) {
     assert_eq!(results.len(), expected.len(), "{results:?}");
     for (r, want) in results.iter().zip(expected) {
-        assert!(r.passed, "{} (assertion {}): {}", r.variable, r.assertion_idx, r.message);
-        let got = r.actual.expect("a passing assertion carries its actual value");
-        assert!((got - want).abs() <= 1e-4 * want.abs(), "{}: {got} vs {want}", r.variable);
+        assert!(
+            r.passed,
+            "{} (assertion {}): {}",
+            r.variable, r.assertion_idx, r.message
+        );
+        let got = r
+            .actual
+            .expect("a passing assertion carries its actual value");
+        assert!(
+            (got - want).abs() <= 1e-4 * want.abs(),
+            "{}: {got} vs {want}",
+            r.variable
+        );
     }
 }
 
@@ -47,11 +57,17 @@ fn a_mounted_leaf_is_assertable_by_scoped_name() {
     for name in ["top_level_mount.esm", "nested_mount.esm"] {
         let results = run(name);
         assert_eq!(
-            results.iter().map(|r| r.variable.as_str()).collect::<Vec<_>>(),
+            results
+                .iter()
+                .map(|r| r.variable.as_str())
+                .collect::<Vec<_>>(),
             ["w", "Leaf.u", "Leaf.v", "Leaf.key", "Leaf.key"],
             "{name}: {results:?}"
         );
-        assert!(results.iter().all(|r| r.model == "Host"), "{name}: {results:?}");
+        assert!(
+            results.iter().all(|r| r.model == "Host"),
+            "{name}: {results:?}"
+        );
         assert_actuals(&results, &[3.0 * e, e, 2.0 * e, 7.0, 9.0]);
     }
 }
