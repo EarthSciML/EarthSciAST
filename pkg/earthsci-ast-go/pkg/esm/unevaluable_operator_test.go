@@ -113,3 +113,25 @@ func TestUnevaluableOperatorWalkReachesFnOperands(t *testing.T) {
 	_, err := Evaluate(node, map[string]float64{"x": 1})
 	requireEvaluationCode(t, "fn operand", err, "unevaluable_operator", "rank")
 }
+
+// The same up-front walk carries the §9.6.3 constraint 6 `unlowered_operator`
+// gate (issue #277): an op OUTSIDE the §4.2 core is refused even where lazy
+// evaluation would never reach it — an untaken `ifelse` branch, or an `and`/`or`
+// operand past the short-circuit.
+func TestUnloweredOperatorInUnreachedOperandIsRefused(t *testing.T) {
+	grad := ExprNode{Op: "grad", Args: []any{"p"}, Dim: strPtr("x")}
+	exprs := map[string]ExprNode{
+		"ifelse untaken branch": {Op: "ifelse", Args: []any{
+			ExprNode{Op: ">", Args: []any{"u", 100.0}}, grad, 1.0}},
+		"and after a false operand": {Op: "and", Args: []any{0.0, grad}},
+		"or after a true operand":   {Op: "or", Args: []any{1.0, grad}},
+	}
+	for label, expr := range exprs {
+		v, err := Evaluate(expr, map[string]float64{"u": 1, "p": 2})
+		if err == nil {
+			t.Errorf("%s: `grad` is unlowered and must be refused before evaluation, got value %v", label, v)
+			continue
+		}
+		requireEvaluationCode(t, label, err, "unlowered_operator", "grad")
+	}
+}

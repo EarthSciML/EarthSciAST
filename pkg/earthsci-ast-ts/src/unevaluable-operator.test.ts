@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { compileExpression, evaluateExpression } from './codegen.js'
+import { ERROR_CODES } from './errors.js'
 import type { Expr } from './types.js'
 
 interface Cases {
@@ -102,4 +103,34 @@ describe('unevaluable_operator versus unlowered_operator', () => {
       evaluateExpression({ op: 'ifelse', args: [{ op: 'true', args: [] }, 2, 3] } as Expr, x),
     ).toBe(2)
   })
+})
+
+describe('the up-front walk also carries the unlowered_operator gate (issue #277)', () => {
+  // An op OUTSIDE the §4.2 core is refused even where lazy evaluation would
+  // never reach it: an untaken `ifelse` branch, or an `and`/`or` operand past
+  // the short-circuit (esm-spec §9.6.3 constraint 6).
+  const grad = { op: 'grad', args: ['p'], dim: 'x' }
+  const cases: Record<string, Expr> = {
+    'ifelse untaken branch': {
+      op: 'ifelse',
+      args: [{ op: '>', args: ['u', 100] }, grad, 1],
+    } as Expr,
+    'and after a false operand': { op: 'and', args: [0, grad] } as Expr,
+    'or after a true operand': { op: 'or', args: [1, grad] } as Expr,
+  }
+  for (const [label, expr] of Object.entries(cases)) {
+    it(`evaluateExpression refuses grad in the ${label}`, () => {
+      const err = refusal(() => evaluateExpression(expr, bindings))
+      expect(err, 'grad must be refused, not evaluated').toBeDefined()
+      expect(err?.code).toBe('unlowered_operator')
+      expect(err?.message).toContain("'grad'")
+    })
+    it(`compileExpression refuses grad in the ${label}`, () => {
+      expect(refusal(() => compileExpression(expr))?.code).toBe('unlowered_operator')
+    })
+  }
+})
+
+it('registers unevaluable_operator in ERROR_CODES', () => {
+  expect(ERROR_CODES.UNEVALUABLE_OPERATOR).toBe('unevaluable_operator')
 })

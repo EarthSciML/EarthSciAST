@@ -16,6 +16,7 @@ import pytest
 from conftest import CONFORMANCE_DIR
 
 from earthsci_ast import numpy_interpreter
+from earthsci_ast.error_handling import ERROR_CODES
 from earthsci_ast.esm_types import ExprNode
 from earthsci_ast.numpy_interpreter import (
     NumpyInterpreterError,
@@ -145,3 +146,8 @@ def test_no_rule_set_matches_the_dispatch() -> None:
         except Exception:  # an arity or payload error: the arm exists
             has_rule = True
         assert has_rule == (op not in numpy_interpreter._NO_RULE_OPS), op
+
+
+def test_code_is_registered() -> None:
+    assert ERROR_CODES.UNEVALUABLE_OPERATOR == "unevaluable_operator"
+    assert UnevaluableOperatorError.code == ERROR_CODES.UNEVALUABLE_OPERATOR

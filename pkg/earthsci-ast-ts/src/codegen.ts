@@ -25,7 +25,7 @@ import { isNumericLiteral } from './numeric-literal.js'
 import { dispatchClosedFunction } from './closed-functions.js'
 import { getOpInfo, checkArity } from './op-registry.js'
 import { forEachChild } from './expression.js'
-import { EsmDiagnosticError } from './errors.js'
+import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
 import type { FunctionTables } from './lower-table-lookups.js'
 import { lowerTableLookupNode } from './lower-table-lookups.js'
 
@@ -76,12 +76,12 @@ export class UnloweredOperatorError extends EsmDiagnosticError {
  * invention, or a load-time lowering pass), not a rewrite rule.
  */
 export class UnevaluableOperatorError extends EsmDiagnosticError {
-  declare readonly code: 'unevaluable_operator'
+  declare readonly code: typeof ERROR_CODES.UNEVALUABLE_OPERATOR
   /** The offending operator name. */
   readonly op: string
   constructor(op: string, remedy?: string) {
     super(
-      'unevaluable_operator',
+      ERROR_CODES.UNEVALUABLE_OPERATOR,
       `[unevaluable_operator] operator '${op}' is an evaluable-core op with no evaluation rule ` +
         `in the scalar evaluator: ${
           remedy ??

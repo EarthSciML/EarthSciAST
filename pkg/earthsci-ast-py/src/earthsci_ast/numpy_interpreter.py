@@ -40,7 +40,7 @@ import numpy as np
 from . import broad_phase, op_registry, recurrence
 from .cadence import Partition
 from .cadence import partition as _partition_model
-from .error_handling import RECURRENCE_NOT_WELLFOUNDED
+from .error_handling import RECURRENCE_NOT_WELLFOUNDED, UNEVALUABLE_OPERATOR
 from .errors import EarthSciAstError
 from .esm_types import ARRAY_OPS, Expr, ExprNode
 from .expr_walk import any_child, iter_children
@@ -294,7 +294,7 @@ class UnevaluableOperatorError(NumpyInterpreterError):
     """
 
     #: Stable cross-binding diagnostic code (esm-spec §9.6.6).
-    code = "unevaluable_operator"
+    code = UNEVALUABLE_OPERATOR
 
     def __init__(self, op: str, remedy: str | None = None) -> None:
         self.op = op
