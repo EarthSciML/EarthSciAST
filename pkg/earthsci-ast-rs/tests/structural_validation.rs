@@ -404,6 +404,30 @@ fn test_undefined_variable_contexts() {
             "undefined_variable_in_nested_expr",
             include_str!("../../../tests/invalid/undefined_variable_in_nested_expr.esm"),
         ),
+        (
+            "undefined_variable_in_reaction_system_continuous_event_condition",
+            include_str!(
+                "../../../tests/invalid/undefined_variable_in_reaction_system_continuous_event_condition.esm"
+            ),
+        ),
+        (
+            "undefined_variable_in_reaction_system_assertion_reference",
+            include_str!(
+                "../../../tests/invalid/undefined_variable_in_reaction_system_assertion_reference.esm"
+            ),
+        ),
+        (
+            "undefined_variable_in_reaction_system_constraint_equation",
+            include_str!(
+                "../../../tests/invalid/undefined_variable_in_reaction_system_constraint_equation.esm"
+            ),
+        ),
+        (
+            "undefined_variable_in_reaction_system_discrete_event_trigger",
+            include_str!(
+                "../../../tests/invalid/undefined_variable_in_reaction_system_discrete_event_trigger.esm"
+            ),
+        ),
     ];
 
     for (name, fixture) in fixtures {
