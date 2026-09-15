@@ -40,6 +40,16 @@ const (
 	CodeTemplateImportNameConflict = "template_import_name_conflict"
 	CodeTemplateImportCycle        = "template_import_cycle"
 
+	// CodeTemplateImportVersionTooOld: a file declaring esm < 0.8.0 carries
+	// `expression_template_imports`, top-level `expression_templates`, or
+	// `metaparameters` (esm-spec §9.6.5).
+	CodeTemplateImportVersionTooOld = "template_import_version_too_old"
+	// CodeTemplateImportIndexSetConflict: a merged `index_sets` name collides
+	// with a non-deep-equal definition (esm-spec §9.7.5). This binding does not
+	// raise it yet; the constant exists because the §9.6.6 table is
+	// cross-language uniform.
+	CodeTemplateImportIndexSetConflict = "template_import_index_set_conflict"
+
 	// CodeTemplateImportNotLibrary: an `import` resolves to a file that is not a
 	// template library (it declares components, or declares no
 	// `expression_templates` / `coupling_roles` block at all).
@@ -119,6 +129,15 @@ const (
 	// not one of the spec's manifold kinds, or one inconsistent with the
 	// coordinates it is given.
 	CodeGeometryManifoldInvalid = "geometry_manifold_invalid"
+	// CodeApplyExpressionTemplateVersionTooOld: a file declaring esm < 0.4.0
+	// carries `expression_templates` or `apply_expression_template`.
+	CodeApplyExpressionTemplateVersionTooOld = "apply_expression_template_version_too_old"
+	// CodeRewriteRuleNonterminating: the rewrite fixpoint did not converge
+	// within MAX_REWRITE_PASSES passes (esm-spec §9.6.3).
+	CodeRewriteRuleNonterminating = "rewrite_rule_nonterminating"
+	// CodeSolverVersionTooOld: a top-level `solver` block in a file declaring
+	// esm < 1.1.0 (esm-spec §2.2.4).
+	CodeSolverVersionTooOld = "solver_version_too_old"
 )
 
 // --- Diagnostic codes: §10.9-§10.11 coupling libraries / coupling_import
@@ -378,6 +397,48 @@ const (
 	// say so. The document still LOADS and still round-trips; it simply does not
 	// evaluate.
 	CodeTableOutOfBoundsUnsupported = "table_out_of_bounds_unsupported"
+)
+
+// --- Diagnostic codes: §9.2 closed-function registry (raised via
+// newClosedFunctionError from registered_functions.go). ---
+const (
+	// CodeUnknownClosedFunction: an `fn` node names a function outside the
+	// closed registry.
+	CodeUnknownClosedFunction = "unknown_closed_function"
+	// CodeClosedFunctionArity: a closed function received the wrong number or
+	// kind of arguments, or an empty table.
+	CodeClosedFunctionArity = "closed_function_arity"
+	// CodeClosedFunctionOverflow: an integer-valued result overflows Int32.
+	CodeClosedFunctionOverflow = "closed_function_overflow"
+	// CodeSearchsortedNonMonotonic: a `searchsorted` table is not
+	// non-decreasing.
+	CodeSearchsortedNonMonotonic = "searchsorted_non_monotonic"
+	// CodeSearchsortedNaNInTable: a `searchsorted` table contains a NaN.
+	CodeSearchsortedNaNInTable = "searchsorted_nan_in_table"
+	// CodeInterpNonMonotonicAxis: an `interp` axis is not strictly increasing.
+	CodeInterpNonMonotonicAxis = "interp_non_monotonic_axis"
+	// CodeInterpAxisLengthMismatch: an `interp` axis length does not match the
+	// table's.
+	CodeInterpAxisLengthMismatch = "interp_axis_length_mismatch"
+	// CodeInterpNaNInAxis: an `interp` axis contains a NaN.
+	CodeInterpNaNInAxis = "interp_nan_in_axis"
+	// CodeInterpAxisTooShort: an `interp` axis has fewer than two points.
+	CodeInterpAxisTooShort = "interp_axis_too_short"
+)
+
+// --- Diagnostic codes: §9.3 enum lowering (raised via newEnumLoweringError
+// from lower_enums.go). ---
+const (
+	// CodeUnknownEnum: an `enum` node names an enum the file does not declare.
+	CodeUnknownEnum = "unknown_enum"
+	// CodeUnknownEnumSymbol: an `enum` node names a symbol its enum does not
+	// declare.
+	CodeUnknownEnumSymbol = "unknown_enum_symbol"
+	// CodeInvalidEnumArity: an `enum` node does not carry exactly two
+	// arguments.
+	CodeInvalidEnumArity = "invalid_enum_arity"
+	// CodeInvalidEnumArg: an `enum` node argument is not a string.
+	CodeInvalidEnumArg = "invalid_enum_arg"
 )
 
 // --- Diagnostic codes: expression EVALUATION (EvaluationError, raised from

@@ -195,27 +195,27 @@ func lowerExprNodeEnums(node ExprNode, enums map[string]map[string]int) (Express
 		// esm-spec §4.5: args are exactly two strings — the enum name and
 		// the symbolic key.
 		if len(node.Args) != 2 {
-			return nil, newEnumLoweringError("invalid_enum_arity",
+			return nil, newEnumLoweringError(CodeInvalidEnumArity,
 				fmt.Sprintf("`enum` op expects 2 args (enum_name, symbol_name), got %d", len(node.Args)))
 		}
 		enumName, ok := stringFromArg(node.Args[0])
 		if !ok {
-			return nil, newEnumLoweringError("invalid_enum_arg",
+			return nil, newEnumLoweringError(CodeInvalidEnumArg,
 				"`enum` op: first arg must be a string (enum name)")
 		}
 		symName, ok := stringFromArg(node.Args[1])
 		if !ok {
-			return nil, newEnumLoweringError("invalid_enum_arg",
+			return nil, newEnumLoweringError(CodeInvalidEnumArg,
 				"`enum` op: second arg must be a string (symbol name)")
 		}
 		mapping, ok := enums[enumName]
 		if !ok {
-			return nil, newEnumLoweringError("unknown_enum",
+			return nil, newEnumLoweringError(CodeUnknownEnum,
 				fmt.Sprintf("enum %q is not declared in the file's `enums` block", enumName))
 		}
 		v, ok := mapping[symName]
 		if !ok {
-			return nil, newEnumLoweringError("unknown_enum_symbol",
+			return nil, newEnumLoweringError(CodeUnknownEnumSymbol,
 				fmt.Sprintf("symbol %q is not declared under enum %q", symName, enumName))
 		}
 		return ExprNode{Op: OpConst, Args: []any{}, Value: int64(v)}, nil
