@@ -427,6 +427,18 @@ jobs:
       fail-fast: false
       matrix:
         rust: ['stable', 'beta', '1.89.0']  # 1.89.0 = MSRV
+    # Disk is the binding constraint here too, as in the `rust-xla` job in
+    # xla-backends.yml, which carries the same two settings. The test step links
+    # every integration-test binary against the whole crate graph, and on a dev
+    # profile most of what that writes is full debug info and incremental
+    # artifacts. Once enough test binaries accumulated, the stable and beta
+    # legs (the two that also build `esio`) began dying mid-compile with "No
+    # space left on device" before a single test ran. `line-tables-only` keeps
+    # file and line numbers in backtraces, which is all a CI log uses, and
+    # incremental artifacts are pure waste in a job that never builds twice.
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
     defaults:
       run:
         working-directory: pkg/earthsci-ast-rs
