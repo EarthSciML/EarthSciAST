@@ -1693,7 +1693,7 @@ pub(crate) fn has_differential_equations(file: &EsmFile, model_name: Option<&str
     models
         .iter()
         .filter(|(name, _)| model_name.is_none_or(|want| want == name.as_str()))
-        .any(|(_, m)| model_has_derivative(m))
+        .any(|(_, m)| crate::simulate_array::model_tree_any(m, &model_has_derivative))
 }
 
 fn model_has_derivative(model: &crate::types::Model) -> bool {

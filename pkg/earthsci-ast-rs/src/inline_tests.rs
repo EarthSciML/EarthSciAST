@@ -753,13 +753,7 @@ fn observed_field(
         }
         exts.push(usize::try_from(iset.size?).ok()?);
     }
-    // Flattening prefixes observed names with the owning model; the
-    // single-model path keeps the bare name.
-    let qualified = format!("{model_name}.{variable}");
-    let arr = insp
-        .setup_arrays
-        .get(&qualified)
-        .or_else(|| insp.setup_arrays.get(variable))?;
+    let arr = build_field(insp, model_name, variable)?;
     if arr.ndim() != exts.len()
         || arr
             .shape()
@@ -794,6 +788,24 @@ fn observed_field(
     Some((field, cells))
 }
 
+/// The field the build materialized for `variable` of the component at
+/// `model_name`, under whichever spelling the build keyed it by: flattening a
+/// multi-component document qualifies it with the whole component path
+/// (`Host.Leaf.key`), a single-model build keeps its own names bare (`key`) and
+/// mounts a subsystem's under the path below the model (`Leaf.key`).
+fn build_field<'a>(
+    insp: &'a BuildInspection,
+    model_name: &str,
+    variable: &str,
+) -> Option<&'a ndarray::ArrayD<f64>> {
+    let qualified = format!("{model_name}.{variable}");
+    let below_root = qualified.split_once('.').map(|(_, rest)| rest);
+    insp.setup_arrays
+        .get(&qualified)
+        .or_else(|| below_root.and_then(|k| insp.setup_arrays.get(k)))
+        .or_else(|| insp.setup_arrays.get(variable))
+}
+
 /// A §6.6.3 POINTWISE assertion's value when the variable has no trajectory
 /// row: the STATE-FREE SCALAR OBSERVED of that name, read from the
 /// [`BuildInspection`]'s materialized fields. The 0-D twin of
@@ -823,11 +835,7 @@ fn scalar_observed(
     if !crate::classification::Classification::of(&model).is_observed(variable) {
         return None;
     }
-    let qualified = format!("{model_name}.{variable}");
-    let arr = insp
-        .setup_arrays
-        .get(&qualified)
-        .or_else(|| insp.setup_arrays.get(variable))?;
+    let arr = build_field(insp, model_name, variable)?;
     // A 0-D field is stored rank-0 or as a single cell; anything else is not
     // this variable's field and is not guessed at.
     if arr.len() != 1 {
@@ -1010,59 +1018,54 @@ fn from_file_reference(
 
 /// A component a dotted component path names (esm-spec §4.6).
 enum ComponentAt<'a> {
-    Model(&'a Model),
+    /// A top-level model (borrowed) or a mounted subsystem (read out of the
+    /// JSON the typed document keeps it as).
+    Model(Cow<'a, Model>),
     ReactionSystem(&'a crate::types::ReactionSystem),
-    /// A resolved subsystem mount, which the typed document keeps as JSON.
-    Subsystem(&'a serde_json::Value),
 }
 
 impl ComponentAt<'_> {
     fn has_subsystem(&self, name: &str) -> bool {
-        match self {
-            Self::Model(m) => m.subsystems.as_ref().is_some_and(|s| s.contains_key(name)),
-            Self::ReactionSystem(r) => r.subsystems.as_ref().is_some_and(|s| s.contains_key(name)),
-            Self::Subsystem(v) => v.get("subsystems").and_then(|s| s.get(name)).is_some(),
-        }
+        let subs = match self {
+            Self::Model(m) => m.subsystems.as_ref(),
+            Self::ReactionSystem(r) => r.subsystems.as_ref(),
+        };
+        subs.is_some_and(|s| s.contains_key(name))
     }
 }
 
 /// The component a dotted component PATH names, or `None` (esm-spec §4.6): the
 /// first segment is a top-level `models` / `reaction_systems` key and each later
-/// one a key of its parent's `subsystems`. A mount still spelled `{"ref": …}` is
-/// not a component and ends the walk. Identical to the Julia and Python
-/// `_component_at`.
+/// one a key of its parent's `subsystems`. A mounted entry is read by the array
+/// compiler's own [`crate::simulate_array::parse_subsystem_model`], so the two
+/// shapes a resolved mount takes (the referenced file's whole document, or a
+/// bare model) and an unresolved `{"ref": …}` (which ends the walk) are
+/// classified exactly as the build classifies them. Identical to the Julia and
+/// Python `_component_at`.
 fn component_at<'a>(file: &'a EsmFile, path: &str) -> Option<ComponentAt<'a>> {
     let mut segs = path.split('.');
     let head = segs.next()?;
-    let top = match file.models.as_ref().and_then(|ms| ms.get(head)) {
-        Some(m) => ComponentAt::Model(m),
+    let mut cur = match file.models.as_ref().and_then(|ms| ms.get(head)) {
+        Some(m) => ComponentAt::Model(Cow::Borrowed(m)),
         None => ComponentAt::ReactionSystem(file.reaction_systems.as_ref()?.get(head)?),
     };
-    let Some(first) = segs.next() else {
-        return Some(top);
-    };
-    let subs = match top {
-        ComponentAt::Model(m) => m.subsystems.as_ref(),
-        ComponentAt::ReactionSystem(r) => r.subsystems.as_ref(),
-        ComponentAt::Subsystem(_) => None,
-    };
-    let mut value = subs?.get(first)?;
     for seg in segs {
-        value = value.get("subsystems")?.get(seg)?;
+        let subs = match &cur {
+            ComponentAt::Model(m) => m.subsystems.as_ref(),
+            ComponentAt::ReactionSystem(r) => r.subsystems.as_ref(),
+        }?;
+        let (model, _) = crate::simulate_array::parse_subsystem_model(seg, subs.get(seg)?).ok()?;
+        cur = ComponentAt::Model(Cow::Owned(model));
     }
-    (value.is_object() && value.get("ref").is_none()).then_some(ComponentAt::Subsystem(value))
+    Some(cur)
 }
 
-/// The MODEL a dotted component path names — borrowed for a top-level model,
-/// read out of its JSON for a subsystem — or `None` for a reaction system or a
-/// path that names nothing.
+/// The MODEL a dotted component path names, or `None` for a reaction system or
+/// a path that names nothing.
 fn model_at<'a>(file: &'a EsmFile, path: &str) -> Option<Cow<'a, Model>> {
     match component_at(file, path)? {
-        ComponentAt::Model(m) => Some(Cow::Borrowed(m)),
+        ComponentAt::Model(m) => Some(m),
         ComponentAt::ReactionSystem(_) => None,
-        ComponentAt::Subsystem(v) => serde_json::from_value::<Model>(v.clone())
-            .ok()
-            .map(Cow::Owned),
     }
 }
 
