@@ -2563,6 +2563,20 @@
     ],
     "is_valid": false
   },
+  "undefined_variable_in_reaction_system_continuous_event_condition.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/reaction_systems/TestReactions/continuous_events/0/conditions/0",
+        "code": "undefined_variable",
+        "message": "Variable \"undefined_xyz\" referenced in continuous event condition but not declared",
+        "details": {
+          "variable": "undefined_xyz"
+        }
+      }
+    ],
+    "is_valid": false
+  },
   "undefined_variable_in_discrete_event_trigger.esm": {
     "schema_errors": [],
     "structural_errors": [
@@ -3235,5 +3249,40 @@
     "parse_error": true,
     "is_valid": false,
     "notes": "Rejected at LOAD, at the wire boundary, BY NAME \u2014 not by JSON Schema and not by a structural check, so there is no (keyword, path) or (code, path) tuple to pin. Uses the `parse_error` category, whose contract is exactly 'must be rejected at load'; the category is slightly broader than its 'not even JSON' docstring, because `arrayop` IS well-formed JSON and a well-formed `op` identifier \u2014 that is the whole point. Without a by-name rejection esm-spec \u00a74.2 would admit it as an OPEN rewrite-target op and the document would load silently, failing much later as `unlowered_operator`, or never. See CONFORMANCE_SPEC \u00a77 `removed_op` and docs/content/rfcs/faq-node-rename.md \u00a75.4."
+  },
+  "units_scale_mismatch_equation.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/variables/speed_ms",
+        "code": "unit_inconsistency",
+        "message": "Declared units of m/s do not match the expression's units of mi/h",
+        "details": {
+          "variable": "speed_ms",
+          "declared_units": "m/s",
+          "expression_units": "mi/h"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "A scale disagreement (esm-spec \u00a74.8.3): every operand dimension agrees and the exact scales do not. Pinned at the observed variable's declaration, as tests/invalid/units_inconsistent_addition.esm pins its dimension mismatch."
+  },
+  "units_scale_mismatch_addition.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/variables/total_length",
+        "code": "unit_inconsistency",
+        "message": "Cannot add quantities with different units: 'm' + 'km'",
+        "details": {
+          "operation": "addition",
+          "left_units": "m",
+          "right_units": "km",
+          "variable": "total_length"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "A scale disagreement (esm-spec \u00a74.8.3): every operand dimension agrees and the exact scales do not. Pinned at the observed variable's declaration, as tests/invalid/units_inconsistent_addition.esm pins its dimension mismatch."
   }
 }

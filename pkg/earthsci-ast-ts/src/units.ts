@@ -11,6 +11,7 @@
 
 import type { Expression, ExpressionNode, EsmFile, Model } from './types.js'
 import {
+  ExactScale,
   type CanonicalDims,
   type ParsedUnit,
   parseUnitForConversion,
@@ -131,7 +132,7 @@ function arityWarning(op: string, label: string, count: number): string | null {
 }
 
 function dimensionless(): ParsedUnit {
-  return { dims: {}, scale: 1 }
+  return { dims: {}, scale: 1, exact: ExactScale.one() }
 }
 
 /**
@@ -145,7 +146,7 @@ function dimensionless(): ParsedUnit {
  * `solar_zenith_angle: "rad" = acos(cos_zenith)` typecheck.
  */
 function angle(): ParsedUnit {
-  return { dims: { rad: 1 }, scale: 1 }
+  return { dims: { rad: 1 }, scale: 1, exact: ExactScale.one() }
 }
 
 /**
@@ -231,7 +232,7 @@ function powerUnit(base: ParsedUnit, exp: number): ParsedUnit {
     dims[k as keyof CanonicalDims] = v * exp
   }
   pruneZeros(dims)
-  return { dims, scale: Math.pow(base.scale, exp) }
+  return { dims, scale: Math.pow(base.scale, exp), exact: base.exact.power(exp) }
 }
 
 /**
@@ -387,6 +388,11 @@ function computeDimensions(
             `Addition/subtraction requires same dimensions, got ${formatDims(first.dims)} and ${formatDims(other.dims)}`,
             'dimensional_mismatch',
           )
+        } else if (!first.exact.equals(other.exact)) {
+          warn(
+            `Addition/subtraction requires the same scale, got ${formatUnit(first)} and ${formatUnit(other)}`,
+            'dimensional_mismatch',
+          )
         }
       }
       // Every operand was a literal (`1 + 2`, or a unary `-1`) ⇒ dimensionless.
@@ -434,9 +440,10 @@ function computeDimensions(
       }
 
       if (base === null) return unknown()
-      // A dimensionless base stays dimensionless under any exponent, so a
-      // non-constant exponent is only a problem for a DIMENSIONAL base.
-      if (isDimensionless(base)) return finish(dimensionless())
+      // A dimensionless base of scale 1 stays exactly that under any exponent,
+      // so a non-constant exponent is only a problem for a DIMENSIONAL or SCALED
+      // base (`x^2` with `x` in `%` has scale 1/10000).
+      if (isDimensionless(base) && base.exact.isOne()) return finish(dimensionless())
 
       const expValue = literalValue(args[1])
       if (expValue === null) {
@@ -450,7 +457,7 @@ function computeDimensions(
         // (A DIMENSIONAL exponent, `m^kg`, is a different rule and stays a
         // provable mismatch — see just above.)
         warn(
-          `Cannot determine the dimension of a non-literal exponent applied to a dimensional quantity (base has ${formatDims(base.dims)})`,
+          `Cannot determine the unit of a non-literal exponent applied to a dimensional or scaled quantity (base has ${formatUnit(base)})`,
           'analysis',
         )
         return unknown()
@@ -587,6 +594,11 @@ function computeDimensions(
           `atan2() requires arguments with same dimensions, got ${formatDims(a.dims)} and ${formatDims(b.dims)}`,
           'dimensional_mismatch',
         )
+      } else if (a !== null && b !== null && !a.exact.equals(b.exact)) {
+        warn(
+          `atan2() requires arguments with the same scale, got ${formatUnit(a)} and ${formatUnit(b)}`,
+          'dimensional_mismatch',
+        )
       }
       return finish(angle())
     }
@@ -635,6 +647,11 @@ function computeDimensions(
             `${op}() requires all arguments to have same dimensions, got ${formatDims(ref.dims)} and ${formatDims(other.dims)}`,
             'dimensional_mismatch',
           )
+        } else if (!ref.exact.equals(other.exact)) {
+          warn(
+            `${op}() requires all arguments to have the same scale, got ${formatUnit(ref)} and ${formatUnit(other)}`,
+            'dimensional_mismatch',
+          )
         }
       }
       if (!sawNonLiteral) return finish(dimensionless())
@@ -658,6 +675,11 @@ function computeDimensions(
           `ifelse() branches must have same dimensions, got ${formatDims(a.dims)} and ${formatDims(b.dims)}`,
           'dimensional_mismatch',
         )
+      } else if (a !== null && b !== null && !a.exact.equals(b.exact)) {
+        warn(
+          `ifelse() branches must have the same scale, got ${formatUnit(a)} and ${formatUnit(b)}`,
+          'dimensional_mismatch',
+        )
       }
       return finish(a ?? b)
     }
@@ -678,6 +700,11 @@ function computeDimensions(
       if (a !== null && b !== null && !dimsEqual(a.dims, b.dims)) {
         warn(
           `${op} requires arguments with same dimensions, got ${formatDims(a.dims)} and ${formatDims(b.dims)}`,
+          'dimensional_mismatch',
+        )
+      } else if (a !== null && b !== null && !a.exact.equals(b.exact)) {
+        warn(
+          `${op} requires arguments with the same scale, got ${formatUnit(a)} and ${formatUnit(b)}`,
           'dimensional_mismatch',
         )
       }
@@ -997,9 +1024,9 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
           // mismatch. An indeterminate side (unknown variable, unmodelled op)
           // is skipped, never defaulted to dimensionless.
           const mismatch: UnitWarning | null =
-            lhs !== null && rhs !== null && !dimsEqual(lhs.dims, rhs.dims)
+            lhs !== null && rhs !== null && !sameUnit(lhs, rhs)
               ? {
-                  message: `Dimensional mismatch in equation: LHS has ${formatDims(lhs.dims)}, RHS has ${formatDims(rhs.dims)}`,
+                  message: `Dimensional mismatch in equation: LHS has ${formatUnit(lhs)}, RHS has ${formatUnit(rhs)}`,
                   code: 'dimensional_mismatch',
                   location: eqLocation,
                   equation: equationText(),
@@ -1050,9 +1077,9 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
                   : dimensionless()
                 const exprDims = exprResult.dimensions
                 const mismatch: UnitWarning | null =
-                  varDims !== null && exprDims !== null && !dimsEqual(exprDims.dims, varDims.dims)
+                  varDims !== null && exprDims !== null && !sameUnit(exprDims, varDims)
                     ? {
-                        message: `Dimensional mismatch in observed variable ${varName}: declared as ${formatDims(varDims.dims)}, expression evaluates to ${formatDims(exprDims.dims)}`,
+                        message: `Dimensional mismatch in observed variable ${varName}: declared as ${formatUnit(varDims)}, expression evaluates to ${formatUnit(exprDims)}`,
                         code: 'dimensional_mismatch',
                         location: varLocation,
                       }
@@ -1230,7 +1257,7 @@ function derivativeTimeMismatch(
 }
 
 function multiplyUnits(units: ParsedUnit[]): ParsedUnit {
-  const result: ParsedUnit = { dims: {}, scale: 1 }
+  const result: ParsedUnit = { dims: {}, scale: 1, exact: ExactScale.one() }
   for (const u of units) {
     for (const [k, v] of Object.entries(u.dims)) {
       if (v == null) continue
@@ -1238,19 +1265,21 @@ function multiplyUnits(units: ParsedUnit[]): ParsedUnit {
       result.dims[key] = (result.dims[key] ?? 0) + v
     }
     result.scale *= u.scale
+    result.exact = result.exact.multiply(u.exact)
   }
   pruneZeros(result.dims)
   return result
 }
 
 function divideUnits(a: ParsedUnit, b: ParsedUnit): ParsedUnit {
-  const result: ParsedUnit = { dims: { ...a.dims }, scale: a.scale }
+  const result: ParsedUnit = { dims: { ...a.dims }, scale: a.scale, exact: a.exact }
   for (const [k, v] of Object.entries(b.dims)) {
     if (v == null) continue
     const key = k as keyof CanonicalDims
     result.dims[key] = (result.dims[key] ?? 0) - v
   }
   result.scale /= b.scale
+  result.exact = result.exact.divide(b.exact)
   pruneZeros(result.dims)
   return result
 }
@@ -1285,6 +1314,19 @@ function isAngle(unit: ParsedUnit): boolean {
     if (v != null && v !== 0) return false
   }
   return true
+}
+
+/**
+ * Whether two units agree in dimension AND exact scale — what `+`, `-`,
+ * comparisons and the two sides of an equation require (esm-spec §4.8.3).
+ */
+function sameUnit(a: ParsedUnit, b: ParsedUnit): boolean {
+  return dimsEqual(a.dims, b.dims) && a.exact.equals(b.exact)
+}
+
+/** {@link formatDims}, followed by the exact scale when it is not 1. */
+function formatUnit(u: ParsedUnit): string {
+  return u.exact.isOne() ? formatDims(u.dims) : `${formatDims(u.dims)} (scale ${u.exact})`
 }
 
 export function dimsEqual(a: CanonicalDims, b: CanonicalDims): boolean {

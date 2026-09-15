@@ -2248,11 +2248,6 @@ function _callback_injected_names(file::EsmFile)::Set{String}
     return names
 end
 
-"""
-    validate_model_references(file::EsmFile, model::Model, path::String) -> Vector{StructuralError}
-
-Validate variable references within a model.
-"""
 # The assertion `reference` expressions of a component's inline tests (§6.6).
 function _validate_test_references(file::EsmFile, tests, path::String,
                                    scope::Set{String})::Vector{StructuralError}
@@ -2267,6 +2262,12 @@ function _validate_test_references(file::EsmFile, tests, path::String,
     end
     return errors
 end
+
+"""
+    validate_model_references(file::EsmFile, model::Model, path::String) -> Vector{StructuralError}
+
+Validate variable references within a model.
+"""
 
 function validate_model_references(file::EsmFile, model::Model, path::String;
                                    model_name::AbstractString="",
@@ -3429,7 +3430,12 @@ function _linear_conversion_factor(from_units::String, to_units::String)::Union{
         q0 = Unitful.ustrip(Unitful.uconvert(to_unit, 0.0 * from_unit))
         q1 = Unitful.ustrip(Unitful.uconvert(to_unit, 1.0 * from_unit))
         abs(q0) > 1e-12 && return nothing  # affine
-        return Float64(q1)
+        # Identical exact scales imply no conversion, so the coefficient is free;
+        # otherwise the expected factor is formed EXACTLY and rounded once, so the
+        # caller's tolerance only absorbs the literal's spelling (esm-spec §4.8.1).
+        from_exact, to_exact = _exact_scale(from_unit), _exact_scale(to_unit)
+        from_exact == to_exact && return nothing
+        return Float64(from_exact / to_exact)
     catch
         return nothing
     end

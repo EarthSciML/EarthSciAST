@@ -276,6 +276,11 @@ const ERROR_CODES = (
     #    surfaces when a rewrite-target operator (an RHS-position `D`, or
     #    `grad`/`div`/`laplacian`) reaches evaluation unlowered. ────────────
     UNLOWERED_OPERATOR = "unlowered_operator",
+    # ── Its complement (esm-spec §9.6.6): an op that IS in the §4.2 evaluable
+    #    core but that the tree-walk evaluator has no rule for (an array/query or
+    #    value-invention op outside the position that consumes it, an unlowered
+    #    `enum`). Refused when the evaluator is BUILT, never at evaluation. ────
+    UNEVALUABLE_OPERATOR = "unevaluable_operator",
 )
 
 """
