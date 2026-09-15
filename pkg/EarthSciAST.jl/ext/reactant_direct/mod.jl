@@ -18,9 +18,8 @@
 # `L == 1`. There is NO extended flat state buffer `ue`: a materialized
 # observed's fill result is recorded in a SLOT MAP (slot -> (producer value,
 # position)), and a later read of those slots becomes slices of the producer
-# values plus one concatenate — the reference-preserving form
-# src/tree_walk/SSA_SPIKE.md reaches for from the other side. `du` is assembled
-# the same way, unwritten slots becoming a zero-constant run.
+# values plus one concatenate. `du` is assembled the same way, unwritten slots
+# becoming a zero-constant run.
 #
 # HARD ERRORS, NOT FALLBACKS. Anything this backend cannot lower raises
 # `EarthSciAST.DirectEmitError` naming the node kind / descriptor kind / kernel

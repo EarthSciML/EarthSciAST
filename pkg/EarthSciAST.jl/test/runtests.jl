@@ -174,7 +174,6 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("cross_eq_class_emission_test.jl")       # cross-equation + affine-box classes emitted directly; repair pass zero-merge (ESS_CROSS_EQ_CLASS_EMIT_DISABLE oracle)
     include("tree_walk_oop_test.jl")
     include("oop_merge_test.jl")                     # :oop kernel-CLASS merge ≡ unmerged
-    include("tree_walk_oop_ssa_test.jl")             # ess-oop-ssa: producer-value references ≡ flat-buffer gathers (ESS_OOP_SSA)
     include("tree_walk_iip_generic_test.jl")
     include("parameter_gradient_test.jl")            # ∂(RHS)/∂p, both emitters (traced arm opt-in)
     include("parameter_vector_abi_test.jl")          # `p::AbstractVector`/ComponentVector ≡ NamedTuple, bit for bit
@@ -190,7 +189,6 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
         include("reactant_locate_test.jl")           # count-locate ≢ a reduction, and bit-exact
         include("reactant_scan_test.jl")             # traced prefix scan ≢ grid size
         include("reactant_oop_intern_test.jl")       # one emitted read per (SSA value, window)
-        include("reactant_oop_ssa_test.jl")          # ess-oop-ssa: skipped scatters/redirects visible in the raw module
         include("reactant_oop_gvn_test.jl")          # one emitted OP per (opcode, operand values)
         include("reactant_direct_emit_test.jl")      # the COMPILED backend: StableHLO built directly from the _Node IR
         include("reactant_direct_sharding_test.jl") # multi-device: needs ESM_TEST_REACTANT_GPU=1 too, else self-skips

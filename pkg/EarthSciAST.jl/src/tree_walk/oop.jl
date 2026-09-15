@@ -1828,198 +1828,9 @@ struct _OopSubRT
 end
 const _OOP_NO_SUB = _OopSubRT(_AccKernel[], _OopAccPlan[], Vector{Any}[], Vector{Any}[])
 
-# ---- SSA-style class-to-class references (ess-oop-ssa, spike) ----------------
-#
-# OFF by default; `ESS_OOP_SSA=1` (read at BUILD time) enables. With the flag
-# off, every structure below is the empty singleton and every guarded branch
-# folds to the pre-existing path, so the emitted program is unchanged.
-#
-# WHAT THIS REMOVES. The materialized-observed prelude communicates through the
-# flat extended vector `ue`: every fill kernel's whole result is scattered into
-# it (`_oop_scatter` — under a trace a whole-buffer `dynamic_update_slice` /
-# concatenate rewrite), and every consumer reads it back out through a dense
-# precomputed gather (`plan.gathers`). `ue` is a pure implementation artifact —
-# the RHS returns only `du` — yet on a merged-class chemistry build the traffic
-# through it dominates the compiled step (measured on ReSEACT at 288 cells:
-# 58.3% of the optimized module's element volume is data movement, and the
-# gather index constants alone are ~17 kB/cell). The gather index vectors are
-# affine lattices: mostly runs of consecutive slots, each run lying inside ONE
-# producer kernel's contiguous output block. So a consumer can reference its
-# producer's RESULT VALUE directly — the whole value when the descriptor reads
-# exactly one producer's block, a slice (or a few slices concatenated) when it
-# reads part of it — and the scatter into `ue` is emitted only where something
-# genuinely still reads the flat buffer.
-#
-# FOUR TIERS, decided per consumer DESCRIPTOR at build time:
-#   1. direct: the gather is one producer's entire block ⇒ the producer's SSA
-#      value, no op at all;
-#   2. slice: the gather decomposes into few consecutive-position runs, each
-#      inside one producer ⇒ per-run slices (+ one concatenate when > 1);
-#   2b. producer gather: too fragmented for slices but inside ONE producer ⇒
-#      one gather of that producer's VALUE at producer-local positions — the
-#      same single op, off the value rather than the flat buffer;
-#   3. fallback: anything else — multi-producer fragmented mappings, unowned
-#      slots, E-lane (in-reduce) reads, scalar-walker reads — keeps the
-#      existing dense gather from `ue`, byte-for-byte.
-#
-# THREE DESCRIPTOR SURFACES feed those tiers: a kernel's own descriptors, its
-# TEMPLATE SUB-KERNEL descriptors (same parent lanes, own `S.acc` table — see
-# `_OopSSAKernel.subs`), and GHOST-MASKED table gathers, whose masked lanes are
-# wildcards because the emitter's select discards them.
-#
-# SOUNDNESS RESTS ON THREE STATIC FACTS, all established by the existing build:
-#   * a fill level reads the state and STRICTLY LOWER levels only (the
-#     `_oop_fill_level` contract), so a producer's value exists before any
-#     redirect to it runs — enforced here by requiring producer.level <
-#     consumer.level (the state prefix `u` is level 0);
-#   * slot ownership is LAST-writer: a slot rewritten later (another kernel, a
-#     level's scalar fills, a level scan fold) is either owned by that later
-#     writer or disowned, and the level check above then refuses any redirect
-#     that would observe the wrong write;
-#   * a producer's scatter into `ue` is skipped ONLY when static accounting
-#     shows every read of its block was redirected — every non-redirected read
-#     surface (scalar `_Node` walks, E-lane plans, `_AK_STATE_FIXED` pins,
-#     level scan folds, declined descriptors — sub-kernel and ghost-masked
-#     plans only where THEY decline) marks its slots as residual, and reduces
-#     per producer into the blocker tally `oop_ssa_stats` reports; ANY per-cell
-#     (non-vectorizable) kernel disables
-#     skipping wholesale, because its reads cannot be enumerated.
-#
-# BIT-IDENTITY. A redirected read returns the exact array the scatter would
-# have copied into `ue` (or a slice of it), so consumer arithmetic sees the
-# same values in the same order; the host `:oop` ≡ `:inplace` pin holds with
-# the flag on, and the SSA test asserts it across the corpus.
-#
-# The RUNTIME residue is small by design: producer values live in one per-call
-# `Vector{Any}` (`vals`, entry 1 = the raw state `u`), recorded as each
-# producer runs; a producer whose spine hoisted to a lane-invariant SCALAR
-# records `nothing` and always scatters, and every redirect then falls back to
-# the (still valid) gather at run time — so the build-time `skip` decision
-# never outruns what actually happened.
-
-struct _OopSSASeg
-    pid::Int     # producer id (1 = the raw state `u`)
-    lo::Int      # first position inside the producer's result
-    len::Int     # run length
-end
-
-# ONE consumer descriptor's redirect. Exactly one form is populated:
-#
-#   * `segs` non-empty — consecutive-position RUNS: the producer's whole value
-#     (tier 1, no op at all) or one slice per run plus a concatenate (tier 2);
-#   * `pid != 0` — ONE producer, arbitrary positions: a single gather of that
-#     producer's VALUE at `pos` (tier 2b). This is the same single op the dense
-#     `ue` gather was, over an index vector of the same length — the win is not
-#     op count, it is that the read no longer touches the flat buffer, so the
-#     producer's scatter into it can go. It is what a FRAGMENTED mapping (one
-#     that shatters into more runs than slices are worth) takes instead of the
-#     fallback.
-#
-# Both empty ⇒ the descriptor keeps the dense `ue` gather (tier 3).
-struct _OopSSARef
-    segs::Vector{_OopSSASeg}
-    pid::Int
-    pos::Vector{Int}
-end
-const _OOP_SSA_NOREF = _OopSSARef(_OopSSASeg[], 0, Int[])
-
-# Per-kernel build-time SSA role: its producer id (0 ⇒ untracked), whether its
-# scatter into `ue` may be skipped (valid only when the runtime result is a
-# lane vector of the planned length), the per-descriptor redirect table
-# (aligned with `K.acc`; a `_OOP_SSA_NOREF` entry keeps the gather path), and
-# the same table for each TEMPLATE SUB-KERNEL, aligned with `plan.subs`.
-#
-# The sub tables are sound for the same reason the parent's are: a sub-kernel is
-# evaluated at the PARENT's lanes and `_build_oop_desc_vectors` resolves its
-# descriptors against that same lane enumeration, so its gather index vectors
-# are slot vectors into `ue` exactly like the parent's, decomposable by exactly
-# the same map. Only the TABLE differs (`S.acc`, not `K.acc`), which is why the
-# spike could not reuse the parent's.
-struct _OopSSAKernel
-    pid::Int
-    skip::Bool
-    desc::Vector{_OopSSARef}
-    subs::Vector{Vector{_OopSSARef}}
-end
-const _OOP_SSA_NO_SUBDESC = Vector{_OopSSARef}[]
-const _OOP_SSA_KERNEL_OFF = _OopSSAKernel(0, false, _OopSSARef[], _OOP_SSA_NO_SUBDESC)
-const _OOP_SSA_EMPTY_KS = _OopSSAKernel[]
-const _OOP_SSA_NO_VALS = Any[]
-
-# The walk-time context: the CURRENT descriptor table, this call's producer
-# values, and the parent kernel's per-sub tables (carried through unchanged, so
-# a NESTED `_NK_SUBCALL` — which resolves against the same flat `plan.subs`
-# list — keeps working). Downgraded to the OFF singleton on entering a
-# `_NK_REDUCE` body, whose E-lane plan indexes per ENTRY rather than per lane.
-struct _OopSSACtx
-    desc::Vector{_OopSSARef}
-    vals::Vector{Any}
-    subs::Vector{Vector{_OopSSARef}}
-end
-const _OOP_SSA_CTX_OFF = _OopSSACtx(_OopSSARef[], _OOP_SSA_NO_VALS, _OOP_SSA_NO_SUBDESC)
-
-@inline _oop_ssa_k(ks::Vector{_OopSSAKernel}, j::Int) =
-    isempty(ks) ? _OOP_SSA_KERNEL_OFF : @inbounds ks[j]
-
-@inline _oop_ssa_ctx(ssak::_OopSSAKernel, vals::Vector{Any}) =
-    (isempty(ssak.desc) && isempty(ssak.subs)) ? _OOP_SSA_CTX_OFF :
-    _OopSSACtx(ssak.desc, vals, ssak.subs)
-
-# The context for sub-kernel `j` of the kernel this context belongs to.
-@inline function _oop_ssa_subctx(ssa::_OopSSACtx, j::Int)
-    sv = ssa.subs
-    (isempty(sv) || j > length(sv)) && return _OOP_SSA_CTX_OFF
-    d = @inbounds sv[j]
-    isempty(d) && return _OOP_SSA_CTX_OFF
-    return _OopSSACtx(d, ssa.vals, sv)
-end
-
-# Resolve one redirected descriptor to a producer-value reference, or `nothing`
-# to take the gather fallback (no redirect, or a referenced producer recorded no
-# lane vector this call).
-@inline function _oop_ssa_ref(ssa::_OopSSACtx, i::Int, memo)
-    d = ssa.desc
-    isempty(d) && return nothing
-    r = @inbounds d[i]
-    if r.pid != 0
-        v = @inbounds ssa.vals[r.pid]
-        v isa AbstractArray || return nothing
-        return _oop_gather(v, r.pos, memo)               # tier 2b
-    end
-    segs = r.segs
-    isempty(segs) && return nothing
-    return _oop_ssa_resolve(ssa.vals, segs)
-end
-
-function _oop_ssa_resolve(vals::Vector{Any}, segs::Vector{_OopSSASeg})
-    if length(segs) == 1
-        s = @inbounds segs[1]
-        v = @inbounds vals[s.pid]
-        v isa AbstractArray || return nothing
-        (s.lo == 1 && s.len == length(v)) && return v          # tier 1: direct
-        return v[s.lo:(s.lo + s.len - 1)]                      # tier 2: one slice
-    end
-    pieces = Vector{Any}(undef, length(segs))
-    for k in eachindex(segs)
-        s = @inbounds segs[k]
-        v = @inbounds vals[s.pid]
-        v isa AbstractArray || return nothing
-        pieces[k] = v[s.lo:(s.lo + s.len - 1)]
-    end
-    return reduce(vcat, pieces)                                # tier 2: slices + concat
-end
-
-# The lane walker: value-returning, whole-array, routed through the same seams
-# as the in-place access-kernel runner — a lane-varying node yields a length-L vector, a
-# lane-invariant one a bare scalar, and broadcast makes them interchangeable.
-# `cellvals`/`invvals` are this call's CSE tier results (the out-of-place
-# expression of the scratch buffers) for kernel `K`, filled in slot order by the
-# caller; `sub` is the parent-scoped sub-kernel runtime (constant across the whole
-# walk — a `_NK_SUBCALL` looks its sub up there, never in the descending `K`/`plan`).
 function _oop_eval_acck(nd::_Node, u, p, t, K::_AccKernel, plan::_OopAccPlan,
                         invvals::Vector{Any}, cellvals::Vector{Any},
-                        sub::_OopSubRT, fb::_Forcing, ::Type{T},
-                        ssa::_OopSSACtx=_OOP_SSA_CTX_OFF) where {T}
+                        sub::_OopSubRT, fb::_Forcing, ::Type{T}) where {T}
     k = nd.kind
     if k === _NK_ACCESS
         a = K.acc[nd.idx]
@@ -2030,23 +1841,9 @@ function _oop_eval_acck(nd::_Node, u, p, t, K::_AccKernel, plan::_OopAccPlan,
             # appear inside a CSR reduce, where `plan` is the E-lane plan and
             # `gathers` already holds the per-entry `conn[(c-1)*width+n]` slots.
             # (`_AK_CONST_EDGE` falls through to the frozen-consts arm below.)
-            # An SSA-redirected descriptor (ess-oop-ssa) references its producer's
-            # value instead of gathering the flat buffer; `nothing` ⇒ gather.
-            v = _oop_ssa_ref(ssa, nd.idx, fb.memo)
-            v === nothing || return v
             return _oop_gather(u, plan.gathers[nd.idx], fb.memo)
         elseif ak === _AK_STATE_TBL_BOX
             m = plan.ghost[nd.idx]
-            # A redirected descriptor (ess-oop-ssa) references its producer's
-            # value instead of gathering the flat buffer. A GHOST-BEARING one
-            # redirects too (`_ssa_lane_owners`): its concrete lanes carry the
-            # producer positions the gather would have read, its masked lanes
-            # carry placeholders, and the select below overwrites exactly those
-            # with 0.0 — so the result is the gather's, element for element.
-            v = _oop_ssa_ref(ssa, nd.idx, fb.memo)
-            if v !== nothing
-                return isempty(m) ? v : ifelse.(m, zero(T), v)
-            end
             g = _oop_gather(u, plan.gathers[nd.idx], fb.memo)
             # ghost lanes (table slot 0) select 0.0 — the in-place runners'
             # `s == 0 ? 0.0 : u[s]`, bit-identical; the gather used a safe index.
@@ -2090,24 +1887,17 @@ function _oop_eval_acck(nd::_Node, u, p, t, K::_AccKernel, plan::_OopAccPlan,
         Sp = @inbounds sub.plans[j]
         iv = @inbounds sub.invvals[j]
         cv = @inbounds sub.cellvals[j]
-        # The sub's OWN redirect table (ess-oop-ssa): its descriptors were
-        # resolved against these same parent lanes, so they decompose by the
-        # same slot→(producer, position) map — but they index `S.acc`, which is
-        # why the table cannot be the parent's.
-        ssaS = _oop_ssa_subctx(ssa, j)
         rs = S.cse.recipes
         @inbounds for i in eachindex(rs)
-            cv[i] = _oop_eval_acck(rs[i], u, p, t, S, Sp, iv, cv, sub, fb, T, ssaS)
+            cv[i] = _oop_eval_acck(rs[i], u, p, t, S, Sp, iv, cv, sub, fb, T)
         end
-        return _oop_eval_acck(S.spine, u, p, t, S, Sp, iv, cv, sub, fb, T, ssaS)
+        return _oop_eval_acck(S.spine, u, p, t, S, Sp, iv, cv, sub, fb, T)
     elseif k === _NK_REDUCE
         # Variable-valence sum reduction, CSR-segmented (gordian reduce-vectorize):
         # evaluate the body ONCE over the flat E-lane buffer (its only state access
         # is the whole-array gather in the E-plan), then fold each cell's segment
         # SEQUENTIALLY in child (CSR) order, seeded from `zerobar` — bit-identical
         # to `_eval_acc`'s `s = zerobar; for m in 1:cnt; s += body(c,m)`.
-        # The E-plan indexes per ENTRY, not per lane, so the SSA redirect table
-        # (cell-lane positions) does not apply inside the body.
         Ep = @inbounds plan.red_plan[1]
         bodyE = _oop_eval_acck(nd.children[1], u, p, t, K, Ep, invvals, cellvals, sub, fb, T)
         return _oop_reduce_fold(bodyE, plan.red_seg, K.zerobar, T)
@@ -2120,21 +1910,21 @@ function _oop_eval_acck(nd::_Node, u, p, t, K::_AccKernel, plan::_OopAccPlan,
         res::Any = nd.literal     # scalar seed; the first broadcast promotes it
         if op === :+
             for i in eachindex(ch)
-                res = res .+ _oop_eval_acck(ch[i], u, p, t, K, plan, invvals, cellvals, sub, fb, T, ssa)
+                res = res .+ _oop_eval_acck(ch[i], u, p, t, K, plan, invvals, cellvals, sub, fb, T)
             end
         elseif op === :*
             for i in eachindex(ch)
-                res = res .* _oop_eval_acck(ch[i], u, p, t, K, plan, invvals, cellvals, sub, fb, T, ssa)
+                res = res .* _oop_eval_acck(ch[i], u, p, t, K, plan, invvals, cellvals, sub, fb, T)
             end
         elseif op === :max
             for i in eachindex(ch)
                 res = max.(res, _oop_eval_acck(ch[i], u, p, t, K, plan,
-                                               invvals, cellvals, sub, fb, T, ssa))
+                                               invvals, cellvals, sub, fb, T))
             end
         else  # :min
             for i in eachindex(ch)
                 res = min.(res, _oop_eval_acck(ch[i], u, p, t, K, plan,
-                                               invvals, cellvals, sub, fb, T, ssa))
+                                               invvals, cellvals, sub, fb, T))
             end
         end
         return res
@@ -2142,17 +1932,17 @@ function _oop_eval_acck(nd::_Node, u, p, t, K::_AccKernel, plan::_OopAccPlan,
         op = nd.op
         ch = nd.children
         if op === :fn
-            return _oop_acck_fn(nd, u, p, t, K, plan, invvals, cellvals, sub, fb, T, ssa)
+            return _oop_acck_fn(nd, u, p, t, K, plan, invvals, cellvals, sub, fb, T)
         elseif (op === :^ || op === :pow) && length(ch) == 2
             # A literal exponent stays a literal — see `_oop_pow`.
-            base = _oop_eval_acck(ch[1], u, p, t, K, plan, invvals, cellvals, sub, fb, T, ssa)
+            base = _oop_eval_acck(ch[1], u, p, t, K, plan, invvals, cellvals, sub, fb, T)
             e = ch[2]
             return e.kind === _NK_LITERAL ? _oop_powlit(base, e.literal, fb.memo) :
-                   base .^ _oop_eval_acck(e, u, p, t, K, plan, invvals, cellvals, sub, fb, T, ssa)
+                   base .^ _oop_eval_acck(e, u, p, t, K, plan, invvals, cellvals, sub, fb, T)
         end
         c = Vector{Any}(undef, length(ch))
         for i in eachindex(ch)
-            c[i] = _oop_eval_acck(ch[i], u, p, t, K, plan, invvals, cellvals, sub, fb, T, ssa)
+            c[i] = _oop_eval_acck(ch[i], u, p, t, K, plan, invvals, cellvals, sub, fb, T)
         end
         return _scalar_op(op, c, T, fb.memo)
     end
@@ -2160,11 +1950,10 @@ end
 
 function _oop_acck_fn(nd::_Node, u, p, t, K::_AccKernel, plan::_OopAccPlan,
                       invvals::Vector{Any}, cellvals::Vector{Any},
-                      sub::_OopSubRT, fb::_Forcing, ::Type{T},
-                      ssa::_OopSSACtx=_OOP_SSA_CTX_OFF) where {T}
+                      sub::_OopSubRT, fb::_Forcing, ::Type{T}) where {T}
     pl = nd.payload
     ch = nd.children
-    ev(x) = _oop_eval_acck(x, u, p, t, K, plan, invvals, cellvals, sub, fb, T, ssa)
+    ev(x) = _oop_eval_acck(x, u, p, t, K, plan, invvals, cellvals, sub, fb, T)
     if pl isa Tuple{String,_InterpLinearSpec}
         return _interp_linear_lanes(pl[2], ev(ch[1]), T)
     elseif pl isa Tuple{String,_InterpBilinearSpec}
@@ -2212,19 +2001,15 @@ end
 # then K's own CSE tiers in slot order (invariant scalars first), the spine over
 # whole lanes, and ONE scatter.
 function _oop_run_acc_vec(du, u, p, t, K::_AccKernel, plan::_OopAccPlan,
-                          ::Type{T}, fb::_Forcing=_NO_FORCING,
-                          ssak::_OopSSAKernel=_OOP_SSA_KERNEL_OFF,
-                          vals::Vector{Any}=_OOP_SSA_NO_VALS) where {T}
-    ssa = _oop_ssa_ctx(ssak, vals)
+                          ::Type{T}, fb::_Forcing=_NO_FORCING) where {T}
     sub = _oop_build_subrt(plan)
     for j in eachindex(sub.subs)
         S = @inbounds sub.subs[j]
         Sp = @inbounds sub.plans[j]
         iv = @inbounds sub.invvals[j]; cv = @inbounds sub.cellvals[j]
-        ssaS = _oop_ssa_subctx(ssa, j)
         ir = S.cse.inv_recipes
         @inbounds for i in eachindex(ir)
-            iv[i] = _oop_eval_acck(ir[i], u, p, t, S, Sp, iv, cv, sub, fb, T, ssaS)
+            iv[i] = _oop_eval_acck(ir[i], u, p, t, S, Sp, iv, cv, sub, fb, T)
         end
     end
     cse = K.cse
@@ -2232,23 +2017,13 @@ function _oop_run_acc_vec(du, u, p, t, K::_AccKernel, plan::_OopAccPlan,
     cellvals = Vector{Any}(undef, length(cse.recipes))
     for i in eachindex(cse.inv_recipes)
         invvals[i] = _oop_eval_acck(cse.inv_recipes[i], u, p, t, K, plan,
-                                    invvals, cellvals, sub, fb, T, ssa)
+                                    invvals, cellvals, sub, fb, T)
     end
     for i in eachindex(cse.recipes)
         cellvals[i] = _oop_eval_acck(cse.recipes[i], u, p, t, K, plan,
-                                     invvals, cellvals, sub, fb, T, ssa)
+                                     invvals, cellvals, sub, fb, T)
     end
-    res = _oop_eval_acck(K.spine, u, p, t, K, plan, invvals, cellvals, sub, fb, T, ssa)
-    # SSA producer record (ess-oop-ssa): a lane vector of the planned length is
-    # referencable by later redirects; anything else (a spine hoisted to one
-    # lane-invariant scalar) records `nothing`, so every redirect to it falls
-    # back to the gather at run time — which is why the scatter below must then
-    # run even when `skip` is set.
-    v = (res isa AbstractArray && length(res) == length(plan.out_slots)) ? res : nothing
-    if ssak.pid != 0
-        @inbounds vals[ssak.pid] = v
-    end
-    (ssak.skip && v !== nothing) && return du
+    res = _oop_eval_acck(K.spine, u, p, t, K, plan, invvals, cellvals, sub, fb, T)
     return _oop_scatter(du, plan.out_slots, res)
 end
 
@@ -2346,16 +2121,13 @@ forcing_buffer_index(f::_OopRHS) = f.buffer_index
 # scalar surface. Singles first, then groups; disjoint slots + the
 # strictly-lower-level read invariant make that reorder value-exact.
 @inline function _oop_fill_level(ue, lvl, sb::_OopScalarBatches, p, t, ::Type{T},
-                                 fb, empty_cache,
-                                 ssaks::Vector{_OopSSAKernel}=_OOP_SSA_EMPTY_KS,
-                                 vals::Vector{Any}=_OOP_SSA_NO_VALS) where {T}
+                                 fb, empty_cache) where {T}
     scalars, kernels, plans, scans, acs = lvl
     ue = _oop_run_scalar_batches(ue, sb, ue, p, t, empty_cache, fb)
     for j in eachindex(kernels)
         plan = plans[j]
         ue = plan.vectorizable ?
-             _oop_run_acc_vec(ue, ue, p, t, kernels[j], plan, T, fb,
-                              _oop_ssa_k(ssaks, j), vals) :
+             _oop_run_acc_vec(ue, ue, p, t, kernels[j], plan, T, fb) :
              _oop_run_acc_kernel(ue, ue, p, t, kernels[j], T)
     end
     isempty(scans) || (ue = _apply_scan_folds_oop(ue, scans))
@@ -2366,674 +2138,12 @@ end
 
 # Walk the levels as a TUPLE by tail recursion, for the reason `_fill_obs_levels!`
 # does: a `Vector` of heterogeneously-parameterized levels boxes each one and
-# costs an allocation per level per call. `ssat` rides along the same way (one
-# `Vector{_OopSSAKernel}` per level, empty ⇒ SSA off for that level).
-@inline _oop_fill_levels(ue, ::Tuple{}, sbs::Tuple, p, t, ::Type{T}, fb, ec,
-                         ssat::Tuple, vals::Vector{Any}) where {T} = ue
+# costs an allocation per level per call.
+@inline _oop_fill_levels(ue, ::Tuple{}, sbs::Tuple, p, t, ::Type{T}, fb, ec) where {T} = ue
 @inline function _oop_fill_levels(ue, levels::Tuple, sbs::Tuple, p, t, ::Type{T},
-                                  fb, ec, ssat::Tuple, vals::Vector{Any}) where {T}
-    ue = _oop_fill_level(ue, levels[1], sbs[1], p, t, T, fb, ec, ssat[1], vals)
-    return _oop_fill_levels(ue, Base.tail(levels), Base.tail(sbs), p, t, T, fb, ec,
-                            Base.tail(ssat), vals)
-end
-
-# ---- SSA build-time analysis (ess-oop-ssa) ----------------------------------
-
-_oop_ssa_enabled() = get(ENV, "ESS_OOP_SSA", "") == "1"
-
-# Bisect knobs for the three redirect arms added after the spike, all riding
-# inside `ESS_OOP_SSA=1` and all default ON. Setting one to 0 declines exactly
-# that arm while KEEPING the per-blocker attribution below, so one process can
-# A/B an arm without a second checkout — which is how the arms were measured
-# (setup wall on this filesystem is not a usable metric) — and so the test file
-# has a negative control for each.
-#
-#   ESS_OOP_SSA_GHOST=0     ghost-masked `_AK_STATE_TBL_BOX` descriptors
-#                           (`_ssa_lane_owners`' wildcard fill)
-#   ESS_OOP_SSA_SUB=0       template sub-kernel (`_NK_SUBCALL`) descriptor tables
-#   ESS_OOP_SSA_PGATHER=0   tier 2b, the single-producer value gather
-_oop_ssa_ghost_enabled()   = get(ENV, "ESS_OOP_SSA_GHOST", "1") != "0"
-_oop_ssa_sub_enabled()     = get(ENV, "ESS_OOP_SSA_SUB", "1") != "0"
-_oop_ssa_pgather_enabled() = get(ENV, "ESS_OOP_SSA_PGATHER", "1") != "0"
-
-# ---- The scatter-skip GATE (ess-oop-ssa-gate) --------------------------------
-#
-# Static skippability (`why == 0`: nothing reads the producer's block off `ue`
-# any more) says the scatter is REDUNDANT. It does not say that dropping it is
-# CHEAPER, and measurement says it often is not: a producer's
-# `dynamic_update_slice` into `ue` ALIASES its operand in the forward, so
-# XLA:CPU writes only the update and can fuse the producer's spine straight into
-# `ue`'s memory. Dropping the scatter takes that fusion away and makes the
-# producer's value a buffer of its own. On the PPM transport RHS that trade is a
-# loss; on the merged-class chemistry RHS it is a large win. So the skip is
-# GATED on producer facts, and the gate is what this knob group tunes.
-#
-#   ESS_OOP_SSA_SKIP=0            never skip a scatter (the redirects stay) --
-#                                 the negative control for the whole gate
-#   ESS_OOP_SSA_SKIP_MAXLEN=<n>   skip only a producer whose value is <= n
-#                                 elements (`-1` ⇒ no bound)
-#   ESS_OOP_SSA_SKIP_MINRATIO=<x> skip only a producer whose REDIRECTED read
-#                                 volume is >= x times its own block size
-#                                 (`0` ⇒ no bound)
-#
-# `ESS_OOP_SSA_SKIP_GATE=0` releases both bounds AND the whole-buffer gate
-# together, so every statically skippable scatter is skipped -- the ungated
-# behaviour the engagement tests A/B against.
-_oop_ssa_skip_enabled() = get(ENV, "ESS_OOP_SSA_SKIP", "1") != "0"
-_oop_ssa_skip_gated()   = get(ENV, "ESS_OOP_SSA_SKIP_GATE", "1") != "0"
-# Both PER-PRODUCER bounds are released by default: the measured
-# discriminator is not a producer property at all (see `ESS_OOP_SSA_SKIP_WHOLE`
-# below and SSA_SPIKE.md) -- they exist so the alternative hypotheses stay
-# bisectable without a rebuild.
-const _SSA_SKIP_MAXLEN_DEFAULT = typemax(Int)
-const _SSA_SKIP_MINRATIO_DEFAULT = 0.0
-function _oop_ssa_skip_maxlen()
-    v = get(ENV, "ESS_OOP_SSA_SKIP_MAXLEN", "")
-    isempty(v) && return _SSA_SKIP_MAXLEN_DEFAULT
-    n = tryparse(Int, v)
-    (n === nothing || n < 0) && return typemax(Int)
-    return n
-end
-function _oop_ssa_skip_minratio()
-    v = get(ENV, "ESS_OOP_SSA_SKIP_MINRATIO", "")
-    isempty(v) && return _SSA_SKIP_MINRATIO_DEFAULT
-    x = tryparse(Float64, v)
-    return x === nothing ? _SSA_SKIP_MINRATIO_DEFAULT : x
-end
-
-# `ESS_OOP_SSA_SKIP_PIDS=3,7,12` restricts skipping to those producer ids, and
-# `ESS_OOP_SSA_SKIP_PIDS=!17` skips everything EXCEPT them. Producer ids are
-# structural (the fill-kernel enumeration does not depend on the grid), so a
-# 6x6x8 `oop_ssa_producers` table names the same producers a CONUS build has:
-# this is the per-producer BISECT the gate's discriminator was found with, not
-# a knob a caller should set. Empty ⇒ no pid restriction.
-function _oop_ssa_skip_pids()
-    v = strip(get(ENV, "ESS_OOP_SSA_SKIP_PIDS", ""))
-    isempty(v) && return (false, Int[])
-    neg = startswith(v, "!")
-    neg && (v = v[2:end])
-    ids = Int[]
-    for tok in split(v, ',')
-        tok = strip(tok)
-        isempty(tok) && continue
-        n = tryparse(Int, tok)
-        n === nothing || push!(ids, n)
-    end
-    return (neg, ids)
-end
-
-# One producer's build-time facts, for the gate and for `oop_ssa_producers`.
-# `len` is the value's element count, `nread`/`elread` the redirected read
-# surfaces and element volume that now source from it, `nwhole` how many of
-# those take the whole value with no op at all (tier 1), and `why` the residual
-# reason bits that would keep the scatter alive regardless of the gate.
-struct _OopSSAProd
-    pid::Int
-    level::Int
-    len::Int
-    nread::Int
-    elread::Int
-    nwhole::Int
-    why::UInt8
-    skippable::Bool   # static accounting alone would drop the scatter
-    skip::Bool        # … and the gate agreed
-end
-
-# `ESS_OOP_SSA_SKIP_WHOLE=1` makes the skip ALL-OR-NOTHING per build: a
-# scatter is dropped only when EVERY tracked producer's is droppable, so `ue`
-# stops being written at all and the whole flat buffer dies. `=0` allows
-# partial skipping (what #283 shipped).
-_oop_ssa_skip_whole() = get(ENV, "ESS_OOP_SSA_SKIP_WHOLE", "1") != "0"
-
-# The per-producer half of the gate: given a STATICALLY skippable producer, is
-# dropping the scatter worth it? `maxlen`/`minratio` come from the knobs above.
-@inline function _ssa_skip_worth(pr_len::Int, elread::Int,
-                                 maxlen::Int, minratio::Float64)
-    pr_len <= maxlen || return false
-    minratio <= 0 && return true
-    return elread >= minratio * pr_len
-end
-
-# WHY a residual `ue` read exists, one bit per read surface, carried per slot in
-# the analysis' `resid` map and reduced per producer into the blocker tally
-# `oop_ssa_stats` reports. The tally is the campaign's steering instrument: a
-# producer's scatter survives because SOME surface still reads its block, and
-# only the per-reason breakdown says which extension would free it.
-const _SSA_R_SCALAR = 0x01   # scalar-walker read (`_NK_STATE`/`_NK_STATE_GATHER`)
-const _SSA_R_SCAN   = 0x02   # a fill level's scan fold reads its own slots back
-const _SSA_R_FIXED  = 0x04   # `_AK_STATE_FIXED` descriptor pin
-const _SSA_R_GHOST  = 0x08   # ghost-masked table gather kept dense
-const _SSA_R_DENSE  = 0x10   # descriptor whose gather did not decompose
-const _SSA_R_FRAG   = 0x20   # decomposed, but too fragmented to be worthwhile
-const _SSA_R_SUB    = 0x40   # sub-kernel (`_NK_SUBCALL`) descriptor plan gather
-const _SSA_R_ELANE  = 0x80   # E-lane (in-reduce) CSR plan gather
-const _SSA_R_NAMES = (:scalar, :scan, :fixed, :ghost, :dense, :frag, :sub, :elane)
-const _SSA_R_BITS = (_SSA_R_SCALAR, _SSA_R_SCAN, _SSA_R_FIXED, _SSA_R_GHOST,
-                     _SSA_R_DENSE, _SSA_R_FRAG, _SSA_R_SUB, _SSA_R_ELANE)
-
-# Redirect coverage + accounting for one build, kept on the closure for
-# reflection (`oop_ssa_stats`). "Edges" are the redirect CANDIDATES: top-level
-# cell-lane state-gather descriptors of vectorizable kernels; an edge is "fast"
-# when it was redirected to producer values. GHOST-MASKED descriptors are
-# counted in their OWN pair of columns (`n_gedges`/`n_gfast`), not in
-# `n_edges`/`n_fast`, so the plain-edge coverage number stays comparable across
-# the feature's revisions.
-struct _OopSSAStats
-    n_edges::Int
-    n_fast::Int
-    elems_edges::Int      # Σ gather lengths over all edges
-    elems_fast::Int       # Σ gather lengths over redirected edges
-    n_prod::Int           # tracked producers (fill kernels; excludes the state)
-    n_skip::Int           # producers whose `ue` scatter is ACTUALLY skipped
-    elems_skip::Int       # Σ out_slots lengths over skipped producers
-    n_skippable::Int      # … statically skippable, before the worthwhileness gate
-    elems_skippable::Int
-    dynamic::Bool         # a per-cell kernel exists ⇒ no scatter may be skipped
-    n_gedges::Int         # ghost-masked candidate descriptors
-    n_gfast::Int          # … of which redirected to producer values + select
-    elems_gedges::Int
-    elems_gfast::Int
-    n_sedges::Int         # TEMPLATE SUB-KERNEL candidate descriptors
-    n_sfast::Int          # … of which redirected
-    elems_sedges::Int
-    elems_sfast::Int
-    blk::NTuple{8,Int}      # producers whose residual set includes reason k
-    blk_only::NTuple{8,Int} # … producers blocked SOLELY by reason k
-end
-const _SSA_BLK0 = ntuple(_ -> 0, 8)
-
-struct _OopSSAPlan
-    enabled::Bool
-    nprod::Int                          # producer count INCLUDING pid 1 (the state)
-    mat::Vector{Vector{_OopSSAKernel}}  # per fill level, aligned with its kernels
-    fin::Vector{_OopSSAKernel}          # aligned with the state-RHS acc_kernels
-    stats::_OopSSAStats
-    prods::Vector{_OopSSAProd}          # per-producer facts (gate instrumentation)
-end
-const _OOP_SSA_OFF = _OopSSAPlan(false, 0, Vector{_OopSSAKernel}[], _OopSSAKernel[],
-                                 _OopSSAStats(0, 0, 0, 0, 0, 0, 0, 0, 0, false,
-                                              0, 0, 0, 0, 0, 0, 0, 0,
-                                              _SSA_BLK0, _SSA_BLK0),
-                                 _OopSSAProd[])
-
-# Residual `ue` reads of the scalar walkers: `_NK_STATE` pins one slot,
-# `_NK_STATE_GATHER` may read any slot in its table (its subscripts are
-# runtime loop counters). Everything else that reads the state does so through
-# an access-kernel plan, which the caller accounts separately.
-function _ssa_mark_node_reads!(resid::Vector{UInt8}, n::_Node)
-    k = n.kind
-    if k === _NK_STATE
-        1 <= n.idx <= length(resid) && (resid[n.idx] |= _SSA_R_SCALAR)
-    elseif k === _NK_STATE_GATHER
-        sg = n.payload::_StateGather
-        for s in sg.slot_flat
-            1 <= s <= length(resid) && (resid[s] |= _SSA_R_SCALAR)
-        end
-    end
-    for c in n.children
-        _ssa_mark_node_reads!(resid, c)
-    end
-    return nothing
-end
-
-# Resolve one gather-index vector to per-lane (producer, position) ownership, or
-# `nothing` when any lane is unowned or its producer does not strictly precede
-# the consumer (`cons_level`).
-#
-# `m` is the descriptor's GHOST mask (empty ⇒ none). A ghost-bearing
-# `_AK_STATE_TBL_BOX` is a BOUNDARY STENCIL: the in-place runners read
-# `s == 0 ? 0.0 : u[s]`, and the vectorized emitter reproduces that as one
-# gather at a SAFE index (slot 1 substituted for every ghost) followed by
-# `ifelse.(mask, 0, ·)`. Run decomposition over the substituted vector is
-# hopeless — the 1s shatter every run — but a masked lane's value is DISCARDED
-# by that select, so it is a WILDCARD here: fill it with whatever (producer,
-# position) CONTINUES a neighbouring run, forward from a resolved left neighbour
-# first, then backward from a resolved right one, and only fall back to a
-# placeholder when neither exists. A one-sided stencil at the grid edge then
-# collapses to a SINGLE slice of its producer, with the select the op it was.
-#
-# `prod_len[pid]` is the producer's value length (entry 1 = `n_states`, the raw
-# state), bounding the positions a filler may invent.
-function _ssa_lane_owners(g::Vector{Int}, m::Vector{Bool},
-                          own_pid::Vector{Int32}, own_pos::Vector{Int32},
-                          prod_level::Vector{Int}, prod_len::Vector{Int},
-                          cons_level::Int)
-    L = length(g)
-    n = length(own_pid)
-    masked = !isempty(m)
-    masked && length(m) != L && return nothing
-    pid_l = zeros(Int, L)               # 0 ⇒ unresolved (a masked lane, so far)
-    pos_l = zeros(Int, L)
-    nconc = 0
-    @inbounds for l in 1:L
-        masked && m[l] && continue
-        sl = g[l]
-        (1 <= sl <= n) || return nothing
-        pid = Int(own_pid[sl])
-        pid == 0 && return nothing
-        prod_level[pid] < cons_level || return nothing
-        pid_l[l] = pid
-        pos_l[l] = Int(own_pos[sl])
-        nconc += 1
-    end
-    # An ALL-ghost descriptor is a constant zero vector; that is a different
-    # (and much rarer) rewrite, so decline it here rather than model it.
-    nconc == 0 && return nothing
-    if masked && nconc < L
-        @inbounds for l in 2:L                        # extend forward
-            pid_l[l] == 0 || continue
-            pl = pid_l[l - 1]
-            (pl != 0 && pos_l[l - 1] + 1 <= prod_len[pl]) || continue
-            pid_l[l] = pl
-            pos_l[l] = pos_l[l - 1] + 1
-        end
-        @inbounds for l in (L - 1):-1:1               # then backward
-            pid_l[l] == 0 || continue
-            pr = pid_l[l + 1]
-            (pr != 0 && pos_l[l + 1] - 1 >= 1) || continue
-            pid_l[l] = pr
-            pos_l[l] = pos_l[l + 1] - 1
-        end
-        @inbounds for l in 1:L                        # placeholder: state slot 1
-            pid_l[l] == 0 || continue
-            prod_len[1] >= 1 || return nothing
-            pid_l[l] = 1
-            pos_l[l] = 1
-        end
-    end
-    return pid_l, pos_l
-end
-
-# A RUN decomposition must BEAT the gather it replaces: accept when the run
-# count is small against the lane count (each run is one slice; > 1 also costs a
-# concatenate). The cap must be ABSOLUTE as well as relative: lattice run counts
-# grow ~O(sqrt NC) with the grid, and a purely relative bound (L>>2 = 1,638 at
-# CONUS) admitted edges of hundreds of slices each -- the emitted module
-# overflowed XLA:CPU's contiguous JIT section arena ("Unable to allocate section
-# memory") at 13x7x72 while RSS sat at 6.7 GB. 64 leaves the measured 6x6x8
-# behaviour (L>>2 = 72) essentially unchanged. A mapping that fails this test is
-# NOT back to the flat buffer whenever it lies inside ONE producer: tier 2b then
-# gathers that producer's value, one op, same index volume (see `_OopSSARef`).
-@inline _ssa_worthwhile(L::Int, nseg::Int) = nseg <= min(64, max(8, L >> 2))
-
-# Pick the cheapest reference form for a resolved descriptor, or
-# `_OOP_SSA_NOREF` when none beats the dense `ue` gather.
-function _ssa_pack_ref(pid_l::Vector{Int}, pos_l::Vector{Int}, pgather_ok::Bool)
-    L = length(pid_l)
-    segs = _OopSSASeg[]
-    l = 1
-    @inbounds while l <= L
-        pid = pid_l[l]
-        lo = pos_l[l]
-        len = 1
-        while l + len <= L && pid_l[l + len] == pid && pos_l[l + len] == lo + len
-            len += 1
-        end
-        push!(segs, _OopSSASeg(pid, lo, len))
-        l += len
-    end
-    _ssa_worthwhile(L, length(segs)) && return _OopSSARef(segs, 0, Int[])
-    pgather_ok || return _OOP_SSA_NOREF
-    p1 = @inbounds pid_l[1]
-    all(==(p1), pid_l) && return _OopSSARef(_OopSSASeg[], p1, copy(pos_l))
-    return _OOP_SSA_NOREF
-end
-
-function _build_oop_ssa_plan(mat_levels::Tuple, acc_kernels, acc_plans,
-                             rhs_list, cse_prelude, n_states::Int, n_total::Int,
-                             array_contractions::AbstractVector{_ArrayContraction}=
-                                 _ArrayContraction[])
-    _oop_ssa_enabled() || return _OOP_SSA_OFF
-    ghost_ok = _oop_ssa_ghost_enabled()
-    sub_ok = _oop_ssa_sub_enabled()
-    pgather_ok = _oop_ssa_pgather_enabled()
-    skip_ok = _oop_ssa_skip_enabled()
-    gate_on = _oop_ssa_skip_gated()
-    gate_maxlen = gate_on ? _oop_ssa_skip_maxlen() : typemax(Int)
-    gate_minratio = gate_on ? _oop_ssa_skip_minratio() : 0.0
-    pid_neg, pid_list = _oop_ssa_skip_pids()
-    whole_only = gate_on && _oop_ssa_skip_whole()
-    nlev = length(mat_levels)
-
-    # ---- Slot ownership, in execution order (LAST writer owns) ----
-    own_pid = zeros(Int32, n_total)
-    own_pos = zeros(Int32, n_total)
-    @inbounds for s in 1:n_states           # pid 1: the raw state `u`, level 0
-        own_pid[s] = Int32(1); own_pos[s] = Int32(s)
-    end
-    prod_level = Int[0]
-    prod_slots = Vector{Int}[Int[]]         # pid 1 never scatters; empty slot list
-    prod_len = Int[n_states]                # pid 1's VALUE is `u` itself
-    matpids = Vector{Vector{Int}}(undef, nlev)
-    dynamic = any(pl -> !pl.vectorizable, acc_plans)
-    for li in 1:nlev
-        scalars, kernels, plans, scans = mat_levels[li]
-        for (slot, _) in scalars
-            @inbounds own_pid[slot] = Int32(0)
-        end
-        pids = zeros(Int, length(kernels))
-        for j in eachindex(kernels)
-            plan = plans[j]::_OopAccPlan
-            if plan.vectorizable
-                push!(prod_level, li)
-                push!(prod_slots, plan.out_slots)
-                push!(prod_len, length(plan.out_slots))
-                pid = length(prod_level)
-                pids[j] = pid
-                out = plan.out_slots
-                @inbounds for k in eachindex(out)
-                    own_pid[out[k]] = Int32(pid)
-                    own_pos[out[k]] = Int32(k)
-                end
-            else
-                # Per-cell fallback kernel: writes AND reads `ue` element-wise,
-                # so its slots are unowned and no scatter anywhere may be skipped.
-                dynamic = true
-                o, _, _, _ = _oop_acc_lanes(kernels[j].cells)
-                @inbounds for s in o
-                    own_pid[s] = Int32(0)
-                end
-            end
-        end
-        matpids[li] = pids
-        for S in scans, s in (S::_ScanFold).slots
-            @inbounds own_pid[s] = Int32(0)   # rewritten after the kernels run
-        end
-    end
-
-    # ---- Residual `ue` reads (everything that will NOT be redirected) ----
-    resid = zeros(UInt8, n_total)
-    markv!(v, why::UInt8) = (for s in v
-                                 1 <= s <= n_total && (resid[s] |= why)
-                             end)
-    for nd in cse_prelude
-        _ssa_mark_node_reads!(resid, nd)
-    end
-    for (_, nd) in rhs_list
-        _ssa_mark_node_reads!(resid, nd)
-    end
-    # ess-array-contraction: the STATE nests write `du`, so they leave no
-    # residue of their own (as the state `scan_folds` do not) — but their bodies
-    # still READ `ue`, so every producer one of them reads must keep scattering.
-    for A in array_contractions
-        _ssa_mark_node_reads!(resid, A.body)
-    end
-    for li in 1:nlev
-        scalars, _, _, scans, acs = mat_levels[li]
-        for (_, nd) in scalars
-            _ssa_mark_node_reads!(resid, nd)
-        end
-        for S in scans
-            # the fold reads its own slots back
-            markv!((S::_ScanFold).slots, _SSA_R_SCAN)
-        end
-        # ess-array-contraction: the nest's body is an ordinary `_Node` walked
-        # by `_oop_eval`, so every slot it reads comes off `ue` and NO producer
-        # feeding it may drop its scatter. Unmarked, a producer read only by a
-        # nest looks dead and is skipped, and the nest reads a zero buffer.
-        for A in acs
-            _ssa_mark_node_reads!(resid, (A::_ArrayContraction).body)
-        end
-    end
-    # (The state-RHS `scan_folds` fold `du`, not `ue` — no residue here.)
-
-    n_edges = 0; n_fast = 0; elems_edges = 0; elems_fast = 0
-    n_gedges = 0; n_gfast = 0; elems_gedges = 0; elems_gfast = 0
-    n_sedges = 0; n_sfast = 0; elems_sedges = 0; elems_sfast = 0
-
-    # ---- Per-producer redirected-read volume (the gate's input) ----
-    # A redirect makes the producer's VALUE the read surface, which is what
-    # forces it to be materialized; these tallies are how much reading now goes
-    # there, per producer, so the skip verdict can be priced instead of assumed.
-    nprod_all = length(prod_level)
-    rd_n = zeros(Int, nprod_all)      # redirected descriptors sourcing from pid
-    rd_el = zeros(Int, nprod_all)     # … their element volume out of pid
-    rd_whole = zeros(Int, nprod_all)  # … of which take the whole value (tier 1)
-    function record_ref!(ref::_OopSSARef)
-        if ref.pid != 0
-            rd_n[ref.pid] += 1
-            rd_el[ref.pid] += length(ref.pos)
-            return
-        end
-        segs = ref.segs
-        isempty(segs) && return
-        # one descriptor may straddle several producers; count it once each
-        for k in eachindex(segs)
-            sg = segs[k]
-            rd_el[sg.pid] += sg.len
-            seen = false
-            for k2 in 1:(k - 1)
-                if segs[k2].pid == sg.pid
-                    seen = true
-                    break
-                end
-            end
-            seen || (rd_n[sg.pid] += 1)
-        end
-        if length(segs) == 1
-            sg = segs[1]
-            (sg.lo == 1 && sg.len == prod_len[sg.pid]) && (rd_whole[sg.pid] += 1)
-        end
-    end
-
-    # ONE descriptor table — a kernel's own, or a sub-kernel's, both resolved
-    # against the SAME lane enumeration. Decides each descriptor's redirect and
-    # marks every read that stays on the gather path, with the reason that
-    # declined it. Returns the per-descriptor refs and whether any redirected.
-    function desc_table(acc::Vector{_AccDesc}, pl::_OopAccPlan, cons_level::Int,
-                        is_sub::Bool)
-        # A sub whose spine does not vectorize forces the parent non-vectorizable
-        # (`_build_oop_acc_plan`), so this cannot fire for a reached sub — but a
-        # fallback plan carries no per-descriptor vectors at all, so refuse it
-        # rather than index them.
-        pl.vectorizable || return (_OopSSARef[], false)
-        refs = _OopSSARef[_OOP_SSA_NOREF for _ in 1:length(acc)]
-        any_fast = false
-        for i in eachindex(acc)
-            a = acc[i]
-            if a.kind === _AK_STATE_FIXED
-                1 <= a.idx <= n_total && (resid[a.idx] |= _SSA_R_FIXED)
-            end
-            g = pl.gathers[i]
-            isempty(g) && continue
-            gh = pl.ghost[i]
-            ghosted = !isempty(gh)
-            if is_sub
-                n_sedges += 1
-                elems_sedges += length(g)
-            elseif ghosted
-                # Boundary stencil through a slot table with 0 entries: the
-                # redirect covers the concrete lanes and the emitter keeps the
-                # select against the (host, constant) ghost mask.
-                n_gedges += 1
-                elems_gedges += length(g)
-            else
-                n_edges += 1
-                elems_edges += length(g)
-            end
-            own = ((ghosted && !ghost_ok) || (is_sub && !sub_ok)) ? nothing :
-                  _ssa_lane_owners(g, gh, own_pid, own_pos, prod_level, prod_len,
-                                   cons_level)
-            ref = own === nothing ? _OOP_SSA_NOREF :
-                  _ssa_pack_ref(own[1], own[2], pgather_ok)
-            if ref === _OOP_SSA_NOREF
-                markv!(g, ghosted ? _SSA_R_GHOST :
-                          is_sub ? _SSA_R_SUB :
-                          own === nothing ? _SSA_R_DENSE : _SSA_R_FRAG)
-                continue
-            end
-            refs[i] = ref
-            record_ref!(ref)
-            any_fast = true
-            if is_sub
-                n_sfast += 1
-                elems_sfast += length(g)
-            elseif ghosted
-                n_gfast += 1
-                elems_gfast += length(g)
-            else
-                n_fast += 1
-                elems_fast += length(g)
-            end
-        end
-        return refs, any_fast
-    end
-
-    function consumer(K::_AccKernel, plan::_OopAccPlan, cons_level::Int)
-        plan.vectorizable || return _OOP_SSA_KERNEL_OFF
-        refs, top_fast = desc_table(K.acc, plan, cons_level, false)
-        subrefs = _OOP_SSA_NO_SUBDESC
-        sub_fast = false
-        if !isempty(plan.subs)
-            sv = Vector{Vector{_OopSSARef}}(undef, length(plan.subs))
-            for j in eachindex(plan.subs)
-                sr, sf = desc_table(plan.subs[j].acc, plan.sub_plans[j],
-                                    cons_level, true)
-                sv[j] = sf ? sr : _OopSSARef[]
-                sub_fast |= sf
-            end
-            sub_fast && (subrefs = sv)
-        end
-        for ep in plan.red_plan
-            for g in ep.gathers
-                markv!(g, _SSA_R_ELANE)
-            end
-        end
-        (top_fast || sub_fast) || return _OOP_SSA_KERNEL_OFF
-        return _OopSSAKernel(0, false, top_fast ? refs : _OopSSARef[], subrefs)
-    end
-
-    mat = Vector{Vector{_OopSSAKernel}}(undef, nlev)
-    for li in 1:nlev
-        _, kernels, plans, _ = mat_levels[li]
-        mat[li] = _OopSSAKernel[consumer(kernels[j], plans[j]::_OopAccPlan, li)
-                                for j in eachindex(kernels)]
-    end
-    fin = _OopSSAKernel[consumer(acc_kernels[j], acc_plans[j], nlev + 1)
-                        for j in eachindex(acc_kernels)]
-
-    # ---- Producer roles: attach pid + the scatter-skip verdict ----
-    #
-    # TWO verdicts, deliberately separate. `skippable` is the STATIC one the
-    # spike shipped: nothing reads this producer's block off `ue` any more, so
-    # the scatter is redundant. `skip` is that AND the worthwhileness gate
-    # (`_ssa_skip_worth`) — because a redundant scatter is not necessarily an
-    # expensive one, and on the transport RHS dropping it costs more than it
-    # saves. Declining the gate is always CORRECT: it emits a write nothing
-    # reads, exactly as the flag-off build does.
-    n_skip = 0; elems_skip = 0; n_skippable = 0; elems_skippable = 0
-    blk = zeros(Int, 8); blk_only = zeros(Int, 8)
-    prods = _OopSSAProd[]
-    # PASS 1: the static verdict and the residual-reason tally, per producer.
-    why_p = zeros(UInt8, nprod_all)
-    skippable_p = falses(nprod_all)
-    for li in 1:nlev
-        for pid in matpids[li]
-            pid == 0 && continue
-            why = UInt8(0)
-            @inbounds for sl in prod_slots[pid]
-                why |= resid[sl]
-            end
-            why_p[pid] = why
-            sk = !dynamic && why == 0
-            skippable_p[pid] = sk
-            if sk
-                n_skippable += 1
-                elems_skippable += length(prod_slots[pid])
-            else
-                for k in 1:8
-                    (why & _SSA_R_BITS[k]) == 0 && continue
-                    blk[k] += 1
-                    why == _SSA_R_BITS[k] && (blk_only[k] += 1)
-                end
-            end
-        end
-    end
-    # `ESS_OOP_SSA_SKIP_WHOLE`: with even ONE producer still scattering, `ue`
-    # is assembled anyway and a partial skip pays for the flat buffer AND for
-    # the skipped producers' own buffers. So unless every tracked producer can
-    # go, none does.
-    all_skippable = n_skippable == length(prod_level) - 1
-    build_ok = skip_ok && !(whole_only && !all_skippable)
-    # PASS 2: the gated verdict.
-    for li in 1:nlev
-        pids = matpids[li]
-        ks = mat[li]
-        for j in eachindex(pids)
-            pid = pids[j]
-            pid == 0 && continue
-            plen = length(prod_slots[pid])
-            pid_ok = isempty(pid_list) ? true : ((pid in pid_list) != pid_neg)
-            skip = skippable_p[pid] && build_ok && pid_ok &&
-                   _ssa_skip_worth(plen, rd_el[pid], gate_maxlen, gate_minratio)
-            if skip
-                n_skip += 1
-                elems_skip += plen
-            end
-            push!(prods, _OopSSAProd(pid, li, plen, rd_n[pid], rd_el[pid],
-                                     rd_whole[pid], why_p[pid],
-                                     skippable_p[pid], skip))
-            k0 = ks[j]
-            ks[j] = _OopSSAKernel(pid, skip, k0.desc, k0.subs)
-        end
-    end
-
-    stats = _OopSSAStats(n_edges, n_fast, elems_edges, elems_fast,
-                         length(prod_level) - 1, n_skip, elems_skip,
-                         n_skippable, elems_skippable, dynamic,
-                         n_gedges, n_gfast, elems_gedges, elems_gfast,
-                         n_sedges, n_sfast, elems_sedges, elems_sfast,
-                         NTuple{8,Int}(blk), NTuple{8,Int}(blk_only))
-    return _OopSSAPlan(true, length(prod_level), mat, fin, stats, prods)
-end
-
-"""
-    oop_ssa_stats(f) -> NamedTuple
-
-Build-time SSA-dataflow coverage of an out-of-place RHS (ess-oop-ssa,
-`ESS_OOP_SSA=1`): candidate class-to-class read edges vs. those redirected to
-producer values, and how many producer scatters into the flat extended buffer
-were statically eliminated. All zeros (with `enabled = false`) when the flag
-was off at build time.
-"""
-function oop_ssa_stats(f::_OopRHS)
-    p = f.rhs.ssa::_OopSSAPlan
-    s = p.stats
-    return (; enabled = p.enabled, n_edges = s.n_edges, n_fast = s.n_fast,
-            elems_edges = s.elems_edges, elems_fast = s.elems_fast,
-            n_ghost_edges = s.n_gedges, n_ghost_fast = s.n_gfast,
-            elems_ghost_edges = s.elems_gedges, elems_ghost_fast = s.elems_gfast,
-            n_sub_edges = s.n_sedges, n_sub_fast = s.n_sfast,
-            elems_sub_edges = s.elems_sedges, elems_sub_fast = s.elems_sfast,
-            n_producers = s.n_prod, n_skipped_scatters = s.n_skip,
-            elems_skipped = s.elems_skip,
-            n_skippable_scatters = s.n_skippable,
-            elems_skippable = s.elems_skippable,
-            n_gate_declined = s.n_skippable - s.n_skip,
-            dynamic = s.dynamic,
-            blockers = NamedTuple{_SSA_R_NAMES}(s.blk),
-            blockers_only = NamedTuple{_SSA_R_NAMES}(s.blk_only))
-end
-
-"""
-    oop_ssa_producers(f) -> Vector{NamedTuple}
-
-Per-producer build-time facts behind the scatter-skip GATE (ess-oop-ssa):
-each tracked fill kernel's fill `level`, its value length `len`, how many
-redirected read surfaces now source from it (`nread`) and at what element
-volume (`elread`), how many of those take its whole value with no op at all
-(`nwhole`), the residual-read reason bits that would keep its scatter alive
-(`why`, names as in `oop_ssa_stats().blockers`), whether static accounting
-alone would drop the scatter (`skippable`) and whether the gate agreed
-(`skip`). Empty when the flag was off at build time.
-"""
-function oop_ssa_producers(f::_OopRHS)
-    p = f.rhs.ssa::_OopSSAPlan
-    return [(; pid = q.pid, level = q.level, len = q.len, nread = q.nread,
-              elread = q.elread, nwhole = q.nwhole,
-              why = Tuple(_SSA_R_NAMES[k] for k in 1:8
-                          if (q.why & _SSA_R_BITS[k]) != 0),
-              skippable = q.skippable, skip = q.skip) for q in p.prods]
+                                  fb, ec) where {T}
+    ue = _oop_fill_level(ue, levels[1], sbs[1], p, t, T, fb, ec)
+    return _oop_fill_levels(ue, Base.tail(levels), Base.tail(sbs), p, t, T, fb, ec)
 end
 
 # ---- The build product -------------------------------------------------------
@@ -3042,7 +2152,7 @@ end
 # names. `build_evaluator(model; form = :oop)` hands one of these out inside an
 # `_OopRHS`; a backend reads the fields to emit a program, and the call method
 # below evaluates them directly on host (or traced) arrays.
-struct _CompiledIR{R,C,K,S,M,A,B,MB,SM}
+struct _CompiledIR{R,C,K,S,M,A,B,MB}
     rhs_list::R                        # (slot, node) scalar state equations
     cse_prelude::C                     # shared-subexpression prelude, in slot order
     acc_kernels::K                     # the unified array IR
@@ -3057,8 +2167,6 @@ struct _CompiledIR{R,C,K,S,M,A,B,MB,SM}
     n_cse::Int                         # `length(cse_prelude)`, cached
     live_forcing::Bool                 # this build binds a live forcing buffer
     host_keys::Vector{Vector{Float64}} # the buffers container's arrays, positionally
-    ssa::_OopSSAPlan                   # SSA-dataflow plan (ess-oop-ssa)
-    ssa_mat::SM                        # per-level SSA kernel tables, `mat_levels`-shaped
 end
 
 function (ir::_CompiledIR)(u, p, t, buffers)
@@ -3076,8 +2184,6 @@ function (ir::_CompiledIR)(u, p, t, buffers)
     n_cse = ir.n_cse
     live_forcing = ir.live_forcing
     host_keys = ir.host_keys
-    ssa = ir.ssa
-    ssa_mat = ir.ssa_mat
     _reject_float32_state(u)   # loud, statically-folded (see compile.jl)
     if live_forcing && _is_traced(u, p, t) && !_forcing_traced(buffers)
         throw(TreeWalkError("E_TREEWALK_XLA_LIVE_FORCING",
@@ -3114,18 +2220,10 @@ function (ir::_CompiledIR)(u, p, t, buffers)
     # the state prelude may reference their slots, and the in-place wrapper
     # gets this for free by evaluating its whole state RHS against `ue`.
     ue = u
-    # Per-call SSA producer values (ess-oop-ssa). Entry 1 is the raw state:
-    # a redirected read of the prefix slices `u` itself rather than the
-    # DUS-composed `ue`, which is both equal by construction and exactly the
-    # decoupling the feature exists for.
-    vals = ssa.enabled ? Vector{Any}(nothing, ssa.nprod) : _OOP_SSA_NO_VALS
-    if ssa.enabled
-        @inbounds vals[1] = u
-    end
     if !isempty(mat_levels)
         ue = _oop_prefix_copy(_oop_du_zeros(u, T, n_total), u, n_states)
         ue = _oop_fill_levels(ue, mat_levels, mat_batches, p, t, T, fb,
-                              _EMPTY_OOP_CACHE(T), ssa_mat, vals)
+                              _EMPTY_OOP_CACHE(T))
     end
 
     cache = Vector{T}(undef, n_cse)
@@ -3149,8 +2247,7 @@ function (ir::_CompiledIR)(u, p, t, buffers)
     for j in eachindex(acc_kernels)
         plan = acc_plans[j]
         du = plan.vectorizable ?
-             _oop_run_acc_vec(du, ue, p, t, acc_kernels[j], plan, T, fb,
-                              _oop_ssa_k(ssa.fin, j), vals) :
+             _oop_run_acc_vec(du, ue, p, t, acc_kernels[j], plan, T, fb) :
              _oop_run_acc_kernel(du, ue, p, t, acc_kernels[j], T)
     end
 
@@ -3206,13 +2303,6 @@ function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
     rhs_batches = _oop_batch_scalars(rhs_list)
     mat_batches = map(lvl -> _oop_batch_scalars(lvl[1]::Vector{Tuple{Int,_Node}}),
                       mat_levels)
-    # SSA-dataflow plan (ess-oop-ssa; `ESS_OOP_SSA=1`, read HERE at build time —
-    # the OFF singleton keeps every runtime branch on the pre-existing path).
-    # `ssa_mat` mirrors `mat_levels`' tuple shape for the tail-recursive fill.
-    ssa = _build_oop_ssa_plan(mat_levels, acc_kernels, acc_plans, rhs_list,
-                              cse_prelude, n_states, n_total, array_contractions)
-    ssa_mat = ssa.enabled ? Tuple(ssa.mat) :
-              ntuple(_ -> _OOP_SSA_EMPTY_KS, length(mat_levels))
     buf_names = sort!(String[String(k) for k in keys(pgather)])
     host_bufs = NamedTuple{Tuple(Symbol(n) for n in buf_names)}(
         Tuple((pgather[n]::_PGatherArray).flat for n in buf_names))
@@ -3221,6 +2311,6 @@ function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
     return _OopRHS(_CompiledIR(rhs_list, cse_prelude, acc_kernels, acc_plans,
                                scan_folds, mat_levels, array_contractions,
                                rhs_batches, mat_batches, n_states, n_total, n_cse,
-                               live_forcing, host_keys, ssa, ssa_mat),
+                               live_forcing, host_keys),
                    host_bufs, buffer_index)
 end
