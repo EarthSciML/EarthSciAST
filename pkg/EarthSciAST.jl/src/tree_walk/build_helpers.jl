@@ -750,7 +750,7 @@ function _fold_elementwise_array_observeds(equations::Vector{Equation}, model::M
     # §4.3.4), so it folds exactly as `rhs + 0` would. A reference to a SHAPED
     # variable is a bare alias and stays with its own handler.
     function is_scalar_rhs(rhs)
-        rhs isa NumExpr && return true
+        (rhs isa NumExpr || rhs isa IntExpr) && return true
         rhs isa VarExpr || return false
         var = get(model.variables, rhs.name, nothing)
         return var !== nothing && !_is_array_shape(var.shape)

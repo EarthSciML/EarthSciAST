@@ -1,7 +1,7 @@
 {
   "category": "shaped_observed_scalar_broadcast",
   "version": "1.0",
-  "description": "Cross-binding conformance for a SHAPED observed whose right-hand side is a SCALAR (esm-spec \u00a74.3.4): the scalar replicates along every axis of the observed's declared shape, exactly as a scalar operand replicates inside a shaped result. The fixture covers a scalar written as one (`literal ~ 1.5`, `from_param ~ level`), a scalar produced at evaluation time by an `ifelse` whose predicate is a constant (`folded`), the same `ifelse` with the array branch taken as a control (`kept`), and a state-dependent scalar branch (`state_folded`) that the dynamics also read. Before the fix Rust dropped the declared shape when the value came out scalar and failed with `array state '<name>' has no cells in var_map` (issue #262); Python did the same for a right-hand side that is a scalar as written. Julia is the reference binding; its `run_inline_tests` minted golden/scalar_rhs_broadcast.json.",
+  "description": "Cross-binding conformance for a SHAPED observed whose right-hand side is a SCALAR (esm-spec \u00a74.3.4): the scalar replicates along every axis of the observed's declared shape, exactly as a scalar operand replicates inside a shaped result. The fixture covers a scalar written as one (`literal ~ 1.5`, the whole number `whole ~ 3.0`, `from_param ~ level`), a scalar produced at evaluation time by an `ifelse` whose predicate is a constant (`folded`), the same `ifelse` with the array branch taken as a control (`kept`), and a state-dependent scalar branch (`state_folded`) that the dynamics also read. Before the fix Rust dropped the declared shape when the value came out scalar and failed with `array state '<name>' has no cells in var_map` (issue #262); Python did the same for a right-hand side that is a scalar as written. Julia is the reference binding; its `run_inline_tests` minted golden/scalar_rhs_broadcast.json.",
   "reference_binding": "julia",
   "bindings_required": [
     "julia",
@@ -128,6 +128,15 @@
             "row_ax": 3
           },
           "expected": 4.5
+        },
+        {
+          "test_id": "scalar_rhs_broadcasts",
+          "assertion_idx": 10,
+          "variable": "whole",
+          "coords": {
+            "row_ax": 2
+          },
+          "expected": 3.0
         }
       ],
       "golden": "golden/scalar_rhs_broadcast.json"

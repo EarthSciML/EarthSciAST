@@ -50,6 +50,14 @@
           "units": "1",
           "description": "A shaped observed whose RHS is a scalar literal."
         },
+        "whole": {
+          "type": "unknown",
+          "shape": [
+            "row_ax"
+          ],
+          "units": "1",
+          "description": "A shaped observed whose RHS is a whole-number literal."
+        },
         "from_param": {
           "type": "unknown",
           "shape": [
@@ -114,6 +122,10 @@
         {
           "lhs": "literal",
           "rhs": 1.5
+        },
+        {
+          "lhs": "whole",
+          "rhs": 3.0
         },
         {
           "lhs": "from_param",
@@ -272,6 +284,14 @@
               "expected": 4.5,
               "coords": {
                 "row_ax": 3
+              }
+            },
+            {
+              "variable": "whole",
+              "time": 1.0,
+              "expected": 3.0,
+              "coords": {
+                "row_ax": 2
               }
             }
           ]
