@@ -106,6 +106,22 @@ include("testutils.jl")
             "esm-spec §4.7 \"Two mount forms, one mechanism\": an assembly mounting an assembly — the form composes with itself, so both edges are consumed at load",
         "tests/valid/mount_chain_via_subsystem.esm" =>
             "esm-spec §4.7: the same assembly-of-an-assembly at the `subsystems.<k>` attachment point; the mounted file's own top-level edge is consumed at load just the same",
+        "tests/valid/toplevel_ref_index_set_merge.esm" =>
+            "esm-spec §4.7: the top-level `models.<k>` twin of subsystem_index_set_merge.esm — the component is spliced in under its mount key and its index sets merged",
+        "tests/valid/toplevel_ref_metaparameter_axis.esm" =>
+            "esm-spec §4.7 + §9.7.6: a top-level `models.<k>` mount consumed at load, whose leaf axis sized by the leaf's own metaparameter merges folded",
+        "tests/valid/toplevel_ref_metaparameter_axis_lib.esm" =>
+            "esm-spec §9.7.6: metaparameter NLEV folds `index_sets.lev`",
+        "tests/valid/mount_forwarded_axis_grid_lib.esm" =>
+            "esm-spec §9.7.6: metaparameter NLEV folds `index_sets.lev`",
+        "tests/valid/mount_forwarded_axis_column.esm" =>
+            "esm-spec §9.7.5 + §9.7.6: the template-library import is consumed and its axis, sized by the forwarded metaparameter, merges folded",
+        "tests/valid/mount_forwarded_axis_nested.esm" =>
+            "esm-spec §4.7: a `{ref}` subsystem is inlined and its index sets merged",
+        "tests/valid/mount_forwarded_axis_nested_4.esm" =>
+            "esm-spec §4.7: a `{ref}` subsystem is inlined under its edge `bindings` and its index sets merged at the bound size",
+        "tests/valid/mount_forwarded_axis_toplevel_beside_nested.esm" =>
+            "esm-spec §4.7: a top-level `models.<k>` mount beside a nested `subsystems.<k>` mount of the same component; both edges are consumed and the two contributions of the axis merge",
         "pkg/EarthSciAST.jl/test/fixtures/round_trip/open_op_attrs_match.esm" =>
             "esm-spec §9.6.3 + §9.6.4 rule 5: the `attrs.gamma` match rule fires at load and its match-only registry is dropped",
     )
