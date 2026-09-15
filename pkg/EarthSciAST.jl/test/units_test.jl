@@ -373,6 +373,22 @@ using Unitful
             OpExpr("ifelse", E[OpExpr(">", E[VarExpr("x"), VarExpr("y")]),
                                VarExpr("x"), VarExpr("x")]), var_units))
 
+        # A comparison skips an undeterminable operand and is dimensionless
+        # whatever its operands are; `and`/`or`/`not` place no requirement on
+        # their operands' units but report a mismatch inside one.
+        @test D(OpExpr(">", E[VarExpr("x"), half_x]), var_units) == Unitful.NoUnits
+        @test D(OpExpr(">", E[IntExpr(1), IntExpr(2)]), var_units) == Unitful.NoUnits
+        @test isempty(EarthSciAST.expression_unit_findings(
+            OpExpr(">", E[VarExpr("x"), half_x]), var_units))
+        @test D(OpExpr("and", E[VarExpr("x"), VarExpr("y")]), var_units) == Unitful.NoUnits
+        @test isempty(EarthSciAST.expression_unit_findings(
+            OpExpr("and", E[VarExpr("x"), VarExpr("y")]), var_units))
+        mismatch = OpExpr(">", E[VarExpr("x"), VarExpr("y")])
+        for e in (OpExpr("not", E[mismatch]), OpExpr("and", E[mismatch, cond]),
+                  OpExpr("or", E[cond, mismatch]))
+            @test !isempty(EarthSciAST.expression_unit_findings(e, var_units))
+        end
+
         # A unary negation of a literal counts as a literal (esm-spec §4.8.3):
         # `x + -(273.15)` adopts x's unit exactly as `x + -273.15` does, at any
         # depth of negation, for an integer as well as a float, and in min/max.

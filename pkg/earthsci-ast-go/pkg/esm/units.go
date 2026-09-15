@@ -1549,6 +1549,47 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 		r := varDim.Divide(wrtUnit)
 		return &r, nil
 
+	case ">", "<", ">=", "<=", "==", "!=":
+		// A comparison's known operands must share dimension and scale; an
+		// indeterminate operand is skipped, as in `+` (`x > 0` compares nothing
+		// that can disagree). The result is a dimensionless boolean whatever the
+		// operands are, including when none is known (esm-spec §4.8.3).
+		var first *Unit
+		for i, arg := range node.Args {
+			u, err := propagateDimension(arg, env)
+			if err != nil {
+				return nil, err
+			}
+			if u == nil {
+				continue
+			}
+			if first == nil {
+				first = u
+				continue
+			}
+			if !first.Dim.Equal(u.Dim) {
+				return nil, mismatchErrf("dimensional mismatch in %q: arg 0 has %s, arg %d has %s",
+					node.Op, first.Dim, i, u.Dim)
+			}
+			if !first.Exact.Equal(u.Exact) {
+				return nil, mismatchErrf("scale mismatch in %q: arg 0 has %s at scale %s, arg %d at scale %s",
+					node.Op, first.Dim, first.Exact, i, u.Exact)
+			}
+		}
+		return &Unit{Scale: 1}, nil
+
+	case "and", "or", "not":
+		// A boolean connective's result is a dimensionless boolean. Its operands
+		// carry no unit requirement of their own, but they are walked so a
+		// mismatch inside one (`not(x [m] > z [kg])`) is reported (esm-spec
+		// §4.8.3).
+		for _, arg := range node.Args {
+			if _, err := propagateDimension(arg, env); err != nil {
+				return nil, err
+			}
+		}
+		return &Unit{Scale: 1}, nil
+
 	case "ifelse":
 		// ifelse(cond, a, b): the two branches follow the `+` rule (esm-spec
 		// §4.8.3). Known branches must share dimension and scale, an

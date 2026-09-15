@@ -1061,6 +1061,16 @@ end
 # "sign": strips dimensions — the result is a dimensionless -1/0/+1.
 _dimensionless_result_rule(expr, var_units, findings) = Unitful.NoUnits
 
+# "and" / "or" / "not": the result is a dimensionless boolean. The operands carry
+# no unit requirement of their own, but they are walked so a mismatch inside one
+# (`not(x [m] > z [kg])`) is reported (esm-spec §4.8.3).
+function _boolean_rule(expr, var_units, findings)
+    for arg in expr.args
+        _expr_dimensions!(findings, arg, var_units)
+    end
+    return Unitful.NoUnits
+end
+
 # "<", ">", "<=", ">=", "==", "!=": the operands must be mutually commensurate
 # (comparing a length to a mass is provably wrong); the result is a
 # dimensionless boolean. Literal operands are dimension-neutral here for the
@@ -1177,9 +1187,9 @@ const _DIMENSION_RULES = let rules = Dict{String, Function}(
         rules[op] = _comparison_rule
     end
     for op in _BOOLEAN_OPS
-        # A boolean connective's operands are already booleans; the result is a
-        # dimensionless boolean either way.
-        rules[op] = _dimensionless_result_rule
+        # A boolean connective's result is a dimensionless boolean; its operands
+        # are still walked for the findings inside them.
+        rules[op] = _boolean_rule
     end
     rules
 end

@@ -823,7 +823,14 @@ fn propagate_operator_dim(
             propagate_matching_dim(op, env, findings);
             Dim::Known(Unit::dimensionless())
         }
-        "and" | "or" | "not" => Dim::Known(Unit::dimensionless()),
+        "and" | "or" | "not" => {
+            // A boolean connective's result is a dimensionless boolean. Its
+            // operands carry no unit requirement of their own, but they are
+            // walked so a mismatch inside one (`not(x [m] > z [kg])`) is
+            // reported (esm-spec §4.8.3).
+            propagate_args(op, env, findings);
+            Dim::Known(Unit::dimensionless())
+        }
         // Array operators: propagate the element dimension. Shape and
         // indexing are orthogonal to dimension (see gt-t5c / gt-vt3 — shapes
         // are a separate concern from unit checking).
@@ -3246,6 +3253,33 @@ mod tests {
             Unit::propagate(&literal_branches, &env),
             Err(UnitError::UnknownUnit(_))
         ));
+    }
+
+    /// A boolean connective places no requirement on its operands' units, but a
+    /// mismatch inside an operand is still reported (esm-spec §4.8.3).
+    #[test]
+    fn connectives_report_a_mismatch_inside_their_operands() {
+        let env = env_of(&[("x", "m"), ("z", "kg"), ("c", "1")]);
+        let mismatch = op(
+            ">",
+            vec![Expr::Variable("x".into()), Expr::Variable("z".into())],
+        );
+        let ok = op(">", vec![Expr::Variable("c".into()), Expr::Integer(0)]);
+        for expr in [
+            op("not", vec![mismatch.clone()]),
+            op("and", vec![mismatch.clone(), ok.clone()]),
+            op("or", vec![ok.clone(), mismatch.clone()]),
+        ] {
+            assert!(
+                !check_expression_dimensions(&expr, None, &env).is_empty(),
+                "{expr:?}"
+            );
+        }
+        let dimensional_operands = op(
+            "and",
+            vec![Expr::Variable("x".into()), Expr::Variable("z".into())],
+        );
+        assert!(check_expression_dimensions(&dimensional_operands, None, &env).is_empty());
     }
 
     /// An exponent is read BY VALUE, so `L^2` still yields an area even though

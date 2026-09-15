@@ -412,6 +412,52 @@ func TestPropagateDimensionIfelseBranches(t *testing.T) {
 	}
 }
 
+// A comparison's known operands must agree and its result is dimensionless; a
+// boolean connective places no requirement on its operands' units but reports a
+// mismatch inside one (esm-spec §4.8.3).
+func TestPropagateDimensionComparisonsAndConnectives(t *testing.T) {
+	env := mkEnv(t, map[string]string{"x": "m", "y": "m", "z": "kg", "c": "1"})
+	halfY := ExprNode{Op: "*", Args: []any{0.5, "y"}}
+	for _, expr := range []ExprNode{
+		{Op: ">", Args: []any{"x", "y"}},
+		{Op: "<=", Args: []any{"x", halfY}},
+		{Op: "==", Args: []any{1.0, int64(2)}},
+		{Op: "and", Args: []any{"x", "z"}},
+		{Op: "not", Args: []any{ExprNode{Op: "!=", Args: []any{"x", "y"}}}},
+	} {
+		u, err := PropagateDimension(expr, env)
+		if err != nil {
+			t.Fatalf("%v: %v", expr, err)
+		}
+		if u == nil || !u.Dim.IsDimensionless() {
+			t.Errorf("%v must be dimensionless, got %v", expr, u)
+		}
+	}
+
+	mismatch := ExprNode{Op: ">", Args: []any{"x", "z"}}
+	ok := ExprNode{Op: ">", Args: []any{"c", 0.0}}
+	for _, expr := range []ExprNode{
+		mismatch,
+		{Op: "not", Args: []any{mismatch}},
+		{Op: "and", Args: []any{mismatch, ok}},
+		{Op: "or", Args: []any{ok, mismatch}},
+		{Op: "ifelse", Args: []any{mismatch, "x", "y"}},
+	} {
+		if _, err := PropagateDimension(expr, env); findingCode(err) != UnitFindingDimensionalMismatch {
+			t.Errorf("%v must be a dimensional mismatch, got %v", expr, err)
+		}
+	}
+
+	// A comparison used as a factor contributes no dimension: `x * (c > 0)` is m.
+	u, err := PropagateDimension(ExprNode{Op: "*", Args: []any{"x", ok}}, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u == nil || !u.Dim.Equal(dim(dimLength, 1)) {
+		t.Errorf("x * (c > 0) must be m, got %v", u)
+	}
+}
+
 func TestPropagateDimensionVarLookup(t *testing.T) {
 	env := mkEnv(t, map[string]string{"x": "m", "t": "s"})
 	u, err := PropagateDimension("x", env)
