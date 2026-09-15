@@ -533,7 +533,10 @@ export function expandCouplingImports(
     return coupling
   }
   const loadRef = options.loadRef ?? defaultLoadRef
-  const basePath = options.basePath ?? '.'
+  // A document loaded from a known location resolves its relative imports
+  // against that location (esm-spec §10.10 -> §4.7); the option is the base for
+  // a document that carries none (built in memory, or loaded without a base).
+  const basePath = file.couplingImportBase ?? options.basePath ?? '.'
   const out: CouplingEntry[] = []
   for (const entry of coupling) {
     if ((entry as { type?: unknown }).type !== COUPLING_IMPORT_TYPE) {

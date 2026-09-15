@@ -664,6 +664,20 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
     configurable: true,
   })
 
+  // esm-spec §10.10 / §4.7: a relative `coupling_import` `ref` names a file
+  // relative to THIS document, not to the working directory `flatten` runs in.
+  // `flatten` never learns where the document came from, so the base is kept
+  // as a sidecar — the refs stay as authored, because the entry must round-trip
+  // verbatim (§10.10.3). Only an explicit base is recorded.
+  if (options?.basePath !== undefined) {
+    Object.defineProperty(loweredData, 'couplingImportBase', {
+      value: options.basePath,
+      enumerable: false,
+      writable: true,
+      configurable: true,
+    })
+  }
+
   // Step 5: Dimensional analysis — emit warnings but never fail the load.
   // Mirrors the Julia @warn behavior so TS callers get the same signal
   // without an API break.

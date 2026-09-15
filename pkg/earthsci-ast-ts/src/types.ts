@@ -176,6 +176,18 @@ export type EsmFile = ESMFormat1 &
      * loaded with `metaparameters`.
      */
     loaderMetaparameters?: Record<string, number>
+
+    /**
+     * NON-SCHEMA, LOADER-POPULATED. The directory relative `coupling_import`
+     * refs resolve against (esm-spec §10.10 -> §4.7: "relative to the directory
+     * of the referencing file"), recorded by `loadInput` when the load had an
+     * explicit `basePath` (`loadPath` always passes the file's directory) and
+     * preferred by `expandCouplingImports` over `CouplingImportOptions.basePath`.
+     * NON-ENUMERABLE for the same reason `componentTemplates` is: the
+     * `coupling_import` entry must round-trip verbatim (§10.10.3), so the base is
+     * kept beside the document, never written into its refs.
+     */
+    couplingImportBase?: string
   }
 
 /** @deprecated Prefer {@link ExpressionNode} (the generated name). */

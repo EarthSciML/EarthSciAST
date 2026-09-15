@@ -1103,6 +1103,12 @@ class CouplingImport(BaseCouplingEntry):
     coupling_type: CouplingType = field(default=CouplingType.COUPLING_IMPORT, init=False)
     ref: str | None = None
     bind: dict[str, str] = field(default_factory=dict)
+    # The directory relative ``ref``s resolve against (esm-spec §10.10 -> §4.7:
+    # "relative to the directory of the referencing file"), recorded at load from
+    # an explicit base and preferred over ``flatten``'s ``base_path``. Not part of
+    # the entry: excluded from comparison and never serialized, so the entry
+    # round-trips verbatim (§10.10.3).
+    base_dir: str | None = field(default=None, repr=False, compare=False)
 
 
 # Discriminated union of all coupling entry types

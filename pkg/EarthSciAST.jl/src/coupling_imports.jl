@@ -210,6 +210,26 @@ end
 # ---------------------------------------------------------------------------
 
 """
+    _COUPLING_IMPORT_BASE
+
+The directory a loaded document's relative `coupling_import` refs resolve
+against (esm-spec §10.10 -> §4.7: "relative to the directory of the referencing
+file"), keyed by the document's `coupling` vector. `flatten` never learns where a
+document came from, so the loader records the base here and
+[`expand_coupling_imports`](@ref) prefers it over its `base_path` keyword. Kept
+beside the document rather than in a struct field so the `coupling_import` entry
+round-trips verbatim (§10.10.3) and the record field tables need no change; weak,
+so an unreachable document's entry is collected with it.
+"""
+const _COUPLING_IMPORT_BASE = WeakKeyDict{Vector{CouplingEntry},String}()
+
+function _record_coupling_import_base!(file::EsmFile, base_path::AbstractString)
+    any(e -> e isa CouplingImport, file.coupling) || return file
+    _COUPLING_IMPORT_BASE[file.coupling] = String(base_path)
+    return file
+end
+
+"""
     _default_coupling_load_ref(ref, base_path) -> raw JSON doc
 
 Default resolver for a `coupling_import` `ref`: reads the local file the ref
@@ -467,7 +487,7 @@ function expand_coupling_imports(file::EsmFile; base_path::AbstractString=".",
         end
         local lib
         try
-            lib = loader(entry.ref, base_path)
+            lib = loader(entry.ref, get(_COUPLING_IMPORT_BASE, coupling, String(base_path)))
         catch e
             e isa ExpressionTemplateError && rethrow(e)
             throw(ExpressionTemplateError(

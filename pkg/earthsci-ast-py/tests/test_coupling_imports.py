@@ -462,3 +462,39 @@ def test_template_import_of_coupling_library_is_rejected(tmp_path):
     }
     path = _write(str(tmp_path), "assembly.esm", assembly)
     assert _err_code(lambda: load_path(path)) == "template_import_is_coupling_library"
+
+
+# ---------------------------------------------------------------------------
+# ref resolution base (esm-spec §10.10 -> §4.7)
+# ---------------------------------------------------------------------------
+
+_CORPUS = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "tests", "coupling_libraries"
+)
+
+
+def test_relative_import_resolves_against_importing_document(monkeypatch, tmp_path):
+    """A relative ``coupling_import`` ``ref`` names a file relative to the
+    importing document (§4.7), so ``flatten`` with its default ``base_path``
+    must find ``./rothermel_fuel.esm`` beside ``assembly_import.esm`` even from a
+    working directory that holds no such file. Before the fix the import resolved
+    against the working directory and raised ``coupling_import_unresolved``."""
+    monkeypatch.chdir(tmp_path)
+    assert not os.path.exists("rothermel_fuel.esm")
+    imported = flatten(load_path(os.path.join(_CORPUS, "assembly_import.esm")))
+    inline = flatten(load_path(os.path.join(_CORPUS, "assembly_inline.esm")))
+    assert imported == inline
+
+
+def test_loaded_base_wins_and_ref_round_trips_verbatim():
+    """The document's own base wins over an unrelated ``base_path``, and the
+    authored ``ref`` round-trips verbatim (§10.10.3): the base is recorded beside
+    the entry, never written into it."""
+    from earthsci_ast import to_json
+
+    esm = load_path(os.path.join(_CORPUS, "assembly_import.esm"))
+    flatten(esm, base_path=os.path.join("does", "not", "exist"))
+    (imp,) = [c for c in esm.coupling if isinstance(c, CouplingImport)]
+    assert imp.ref == "./rothermel_fuel.esm"
+    assert '"./rothermel_fuel.esm"' in to_json(esm)
+    assert "base_dir" not in to_json(esm)

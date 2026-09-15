@@ -423,6 +423,15 @@ func LoadString(jsonStr string, opts ...LoadOption) (*ESMFile, error) {
 		return nil, err
 	}
 
+	// esm-spec §10.10 / §4.7: a relative `coupling_import` `ref` names a file
+	// relative to THIS document, not to the working directory Flatten runs in.
+	// Flatten never learns where the document came from, so the base is recorded
+	// here — the refs themselves stay as authored, because the entry must
+	// round-trip verbatim (§10.10.3). The "." default is not a real base.
+	if o.basePath != "" && o.basePath != "." {
+		esmFile.couplingImportBase = o.basePath
+	}
+
 	// Reattach the authored declaration blocks (see authoredDeclarationBlocks).
 	esmFile.ExpressionTemplates = authoredTemplates
 	esmFile.Metaparameters = authoredMetaparams

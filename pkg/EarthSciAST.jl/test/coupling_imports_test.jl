@@ -252,3 +252,26 @@ _sc(e) = EarthSciAST.serialize_coupling_entry(e)
         @test back.bind == entry.bind
     end
 end
+
+# A relative `coupling_import` `ref` names a file relative to the importing
+# document (esm-spec §10.10 -> §4.7), so `flatten` with its default `base_path`
+# must find ./rothermel_fuel.esm beside assembly_import.esm from a working
+# directory that holds no such file. Before the fix the import resolved against
+# the working directory and threw `coupling_import_unresolved`.
+@testset "coupling_import ref resolves against the importing document (§10.10 -> §4.7)" begin
+    corpus = joinpath(TESTUTILS_REPO_ROOT, "tests", "coupling_libraries")
+    cd(mktempdir()) do
+        @test !isfile("rothermel_fuel.esm")
+        imported = flatten(load_path(joinpath(corpus, "assembly_import.esm")))
+        inline = flatten(load_path(joinpath(corpus, "assembly_inline.esm")))
+        se(f) = [EarthSciAST.serialize_equation(e) for e in f.equations]
+        @test se(imported) == se(inline)
+        @test sort(collect(keys(imported.parameters))) == sort(collect(keys(inline.parameters)))
+    end
+    # The document's own base wins over an unrelated keyword, and the authored
+    # `ref` round-trips verbatim (§10.10.3).
+    file = load_path(joinpath(corpus, "assembly_import.esm"))
+    @test flatten(file; base_path=joinpath("does", "not", "exist")) isa EarthSciAST.FlattenedSystem
+    @test only(e for e in file.coupling if e isa CouplingImport).ref == "./rothermel_fuel.esm"
+    @test occursin("\"./rothermel_fuel.esm\"", EarthSciAST.to_json(file))
+end

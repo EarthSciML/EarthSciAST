@@ -223,6 +223,9 @@ function _load_document(raw_data, base_path::String;
     _merge_staged_index_sets!(file.index_sets, staged_isets, root_env; refs=staged_refs)
     resolve_subsystem_refs!(file, base_path; loader_metaparameters=metaparameters,
                             root_env=root_env, model_envs=model_envs)
+    # esm-spec §10.10 / §4.7: relative `coupling_import` refs resolve against this
+    # document's directory, which `flatten` would otherwise never learn.
+    _record_coupling_import_base!(file, base_path)
     return file
 end
 

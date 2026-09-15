@@ -2507,7 +2507,13 @@ def load_path(
     resolved_base = base_path if base_path is not None else str(file_path.parent.resolve())
     with open(file_path) as f:
         data = json.load(f)
-    return _load_data(data, resolved_base, metaparameters, file_path)
+    esm_file = _load_data(data, resolved_base, metaparameters, file_path)
+    # esm-spec §10.10 / §4.7: relative `coupling_import` refs resolve against this
+    # file's directory, which `flatten` would otherwise never learn.
+    from .coupling_imports import record_coupling_import_base
+
+    record_coupling_import_base(esm_file, resolved_base)
+    return esm_file
 
 
 def load_string(
@@ -2522,9 +2528,16 @@ def load_string(
         json_text: The document as a JSON string.
     """
     data = json.loads(json_text)
-    return _load_data(
+    esm_file = _load_data(
         data, base_path if base_path is not None else os.getcwd(), metaparameters, None
     )
+    if base_path is not None:
+        # esm-spec §10.10 / §4.7: an explicit base anchors relative
+        # `coupling_import` refs; without one `flatten`'s own base applies.
+        from .coupling_imports import record_coupling_import_base
+
+        record_coupling_import_base(esm_file, base_path)
+    return esm_file
 
 
 def load_document(

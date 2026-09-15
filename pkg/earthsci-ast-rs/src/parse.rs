@@ -332,6 +332,13 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     esm_file.component_templates = component_templates;
     // esm-spec §2.2: an EMPTY `solver` block normalizes to absence at load.
     esm_file.solver = crate::solver::normalize_empty(esm_file.solver.take());
+    // esm-spec §10.10 / §4.7: relative `coupling_import` refs resolve against
+    // THIS document's directory, which flatten would otherwise never learn. Only
+    // an explicit base is recorded; a string load without one leaves flatten's
+    // own `base_path` in charge.
+    if options.base_path.is_some() {
+        crate::coupling_imports::record_coupling_import_base(&mut esm_file, &base);
+    }
 
     Ok(esm_file)
 }

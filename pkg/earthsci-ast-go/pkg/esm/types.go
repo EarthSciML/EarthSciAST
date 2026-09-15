@@ -1325,6 +1325,14 @@ type ESMFile struct {
 	// which case every consumer falls back to sorted-name order (see
 	// declarationOrder).
 	keyOrders map[string][]string
+
+	// couplingImportBase is the directory relative `coupling_import` refs resolve
+	// against (esm-spec §10.10 -> §4.7: "relative to the directory of the
+	// referencing file"). Recorded by LoadString from an explicit base (LoadPath
+	// always passes the file's directory) and preferred by expandCouplingImports
+	// over CouplingImportOptions.BasePath. Unexported, so it never reaches the
+	// wire: the `coupling_import` entry round-trips verbatim (§10.10.3).
+	couplingImportBase string
 	// componentTemplates holds each component's `expression_templates` block
 	// as it stood AFTER import resolution and BEFORE Expand-at-build stripped
 	// it, keyed "models.<name>" / "reaction_systems.<name>" -- the same key

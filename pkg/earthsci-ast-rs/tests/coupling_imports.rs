@@ -422,3 +422,78 @@ fn unresolved_when_the_ref_is_a_remote_url_under_the_default_loader() {
         "coupling_import_unresolved"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Ref resolution base (esm-spec §10.10 -> §4.7)
+// ---------------------------------------------------------------------------
+
+/// The conformance corpus directory, from this crate's manifest.
+fn coupling_corpus(name: &str) -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/coupling_libraries")
+        .join(name)
+}
+
+/// A relative `coupling_import` `ref` names a file relative to the IMPORTING
+/// document (§4.7 "Resolved relative to the directory of the referencing file"),
+/// so `flatten` with default options must find `./rothermel_fuel.esm` next to
+/// `assembly_import.esm` even though the test process runs in this crate's
+/// directory, where no such file exists. Before the fix the import resolved
+/// against the working directory and flatten failed with
+/// `coupling_import_unresolved`.
+#[test]
+fn a_relative_import_resolves_against_the_importing_document_not_the_working_directory() {
+    let import = earthsci_ast::load_path(coupling_corpus("assembly_import.esm"))
+        .expect("assembly_import.esm loads");
+    let inline = earthsci_ast::load_path(coupling_corpus("assembly_inline.esm"))
+        .expect("assembly_inline.esm loads");
+    assert!(
+        !std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("rothermel_fuel.esm")
+            .exists(),
+        "the test is only meaningful if the library is NOT beside the working directory"
+    );
+    let imported = flatten(&import).expect("import flattens with default options");
+    let expected = flatten(&inline).expect("inline flattens");
+    assert_eq!(
+        serde_json::to_value(&imported).unwrap(),
+        serde_json::to_value(&expected).unwrap()
+    );
+}
+
+/// The document's own base wins over an unrelated option, and the authored `ref`
+/// round-trips verbatim (esm-spec §10.10.3): the base is recorded beside the
+/// entry, never written into it.
+#[test]
+fn a_loaded_documents_base_wins_and_its_ref_round_trips_verbatim() {
+    let file = earthsci_ast::load_path(coupling_corpus("assembly_import.esm"))
+        .expect("assembly_import.esm loads");
+    flatten_with_options(
+        &file,
+        &CouplingImportOptions {
+            base_path: "does/not/exist".to_string(),
+            load_ref: None,
+        },
+    )
+    .expect("the document's base wins over the option");
+    let refs: Vec<&str> = file
+        .coupling
+        .as_ref()
+        .expect("coupling present")
+        .iter()
+        .filter_map(|e| match e {
+            CouplingEntry::CouplingImport { reference, .. } => Some(reference.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(refs, vec!["./rothermel_fuel.esm"]);
+    let json = earthsci_ast::to_json(&file).expect("serializes");
+    assert!(
+        json.contains("\"./rothermel_fuel.esm\""),
+        "authored ref lost on emit"
+    );
+    assert!(
+        !json.contains("base_dir"),
+        "loader-only base leaked into the document"
+    );
+}
