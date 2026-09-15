@@ -161,6 +161,9 @@ const ERROR_CODES = (
     # ── Document-scoped solver hints (esm-spec §2.2; solver.jl). ─────────
     SOLVER_VERSION_TOO_OLD = "solver_version_too_old",
 
+    # ── Declared units on a const node (esm-spec §4.8.5; units.jl). ──────
+    CONST_UNITS_VERSION_TOO_OLD = "const_units_version_too_old",
+
     # ── Template-library imports + load-time metaparameters (esm-spec §9.7;
     #    template_imports.jl). ──────────────────────────────────────────────
     TEMPLATE_IMPORT_VERSION_TOO_OLD = "template_import_version_too_old",

@@ -1,0 +1,151 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "UnitsConstDeclared",
+    "description": "Positive control for declared units on a const node (esm-spec §4.8.5). speed_ms is mi/h times a const declared m*h/(mi*s), which is exactly m/s; speed_ms_via_template reaches the same constant through a template body. The constant's numeric value is not checked. In an additive position a unit-bearing const is NOT a neutral literal: it has its declared unit, which agrees with its sibling here (sum_declared, and under a unary minus in difference_negated), while a const without units stays neutral (sum_neutral) (esm-spec §4.8.3, §4.8.5).",
+    "authors": [
+      "Chris Tessum with Claude"
+    ],
+    "created": "2026-09-14T00:00:00Z"
+  },
+  "models": {
+    "UnitsConstDeclared": {
+      "expression_templates": {
+        "to_ms": {
+          "params": [
+            "x"
+          ],
+          "body": {
+            "op": "*",
+            "args": [
+              "x",
+              {
+                "op": "const",
+                "args": [],
+                "value": 0.44704,
+                "units": "m*h/(mi*s)"
+              }
+            ]
+          },
+          "description": "Convert a speed in mi/h to m/s. The constant's declared units carry the conversion, so every call is dimensionally checkable."
+        }
+      },
+      "variables": {
+        "speed_mph": {
+          "type": "parameter",
+          "units": "mi/h",
+          "default": 30.0,
+          "description": "Link average speed in miles per hour"
+        },
+        "speed_ms": {
+          "type": "unknown",
+          "units": "m/s",
+          "description": "Link average speed in metres per second, converted by a unit-bearing const"
+        },
+        "speed_ms_via_template": {
+          "type": "unknown",
+          "units": "m/s",
+          "description": "The same conversion, reached through the to_ms template"
+        },
+        "length_m": {
+          "type": "parameter",
+          "units": "m",
+          "default": 2.0,
+          "description": "A length in metres"
+        },
+        "sum_declared": {
+          "type": "unknown",
+          "units": "m",
+          "description": "A length plus a const declared in metres"
+        },
+        "difference_negated": {
+          "type": "unknown",
+          "units": "m",
+          "description": "A length plus the negation of a const declared in metres"
+        },
+        "sum_neutral": {
+          "type": "unknown",
+          "units": "m",
+          "description": "A length plus a const without units, which adopts the sibling's unit"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "speed_ms",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "speed_mph",
+              {
+                "op": "const",
+                "args": [],
+                "value": 0.44704,
+                "units": "m*h/(mi*s)"
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "speed_ms_via_template",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "to_ms",
+            "bindings": {
+              "x": "speed_mph"
+            }
+          }
+        },
+        {
+          "lhs": "sum_declared",
+          "rhs": {
+            "op": "+",
+            "args": [
+              "length_m",
+              {
+                "op": "const",
+                "args": [],
+                "value": 1.0,
+                "units": "m"
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "difference_negated",
+          "rhs": {
+            "op": "+",
+            "args": [
+              "length_m",
+              {
+                "op": "-",
+                "args": [
+                  {
+                    "op": "const",
+                    "args": [],
+                    "value": 1.0,
+                    "units": "m"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "sum_neutral",
+          "rhs": {
+            "op": "+",
+            "args": [
+              "length_m",
+              {
+                "op": "const",
+                "args": [],
+                "value": 1.0
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

@@ -120,6 +120,7 @@ fn first_non_emissible_field(n: &ExpressionNode) -> Option<&'static str> {
         broadcast_fn: _, // JSON key `fn`
         name: _,
         value: _,
+        units: _,
         // TOLERATED-AND-IGNORED — no wire slot, presence is NOT an error
         // (Julia's `_CANONICAL_IGNORED_FIELDS`).
         arg: _,
@@ -587,6 +588,9 @@ fn emit_node_json(n: &ExpressionNode) -> String {
     }
     if let Some(ref v) = n.value {
         entries.push(("value".into(), emit_canonical_json_value(v)));
+    }
+    if let Some(ref u) = n.units {
+        entries.push(("units".into(), json_string(u)));
     }
     if let Some(ref s) = n.broadcast_fn {
         entries.push(("fn".into(), json_string(s)));
