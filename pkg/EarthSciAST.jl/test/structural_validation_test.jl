@@ -588,6 +588,8 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
                  "/reaction_systems/TestReactions/tests/0/assertions/0/reference"),
                 ("undefined_variable_in_reaction_system_constraint_equation.esm",
                  "/reaction_systems/TestReactions/constraint_equations/0/rhs"),
+                ("undefined_variable_in_reaction_system_continuous_event_condition.esm",
+                 "/reaction_systems/TestReactions/continuous_events/0/conditions/0"),
                 ("undefined_variable_in_reaction_system_discrete_event_trigger.esm",
                  "/reaction_systems/TestReactions/discrete_events/0/trigger/expression"))
             @testset "Invalid fixture $fixture is rejected" begin

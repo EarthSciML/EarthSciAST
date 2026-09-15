@@ -1135,6 +1135,7 @@ class TestReferenceIntegrityEveryExpressionBearingField:
             "undefined_variable_in_assertion_reference.esm",
             "undefined_variable_in_reaction_system_assertion_reference.esm",
             "undefined_variable_in_reaction_system_constraint_equation.esm",
+            "undefined_variable_in_reaction_system_continuous_event_condition.esm",
             "undefined_variable_in_reaction_system_discrete_event_trigger.esm",
             # the data-loader site
             "undefined_variable_in_unit_conversion.esm",

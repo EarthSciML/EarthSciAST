@@ -1643,7 +1643,7 @@ A checker MUST resolve the free symbols of **every** Expression in the document,
 
 The rule is one sentence — *resolve the free symbols of every Expression* — and the way to satisfy it is one shared traversal (a `mapChildren`/`forEachChild` combinator over the node's Expression-valued fields), used by every pass. Every binding that hand-rolled a per-pass walker grew this hole, and grew it in a different place. `tests/invalid/undefined_variable_in_*.esm` and `tests/invalid/unresolved_scoped_ref_in_*.esm` pin one fixture per field, container and sidecar alike.
 
-**A site carries the same code on a reaction system as on a model.** A reaction system's constraint equations, events and inline-test references are the same sites as a model's, so an undefined name in one is `undefined_variable`, never `undefined_parameter`. Only a reaction `rate` reports `undefined_parameter`. `tests/invalid/undefined_variable_in_reaction_system_*.esm` pin the three reaction-system sites.
+**A site carries the same code on a reaction system as on a model.** A reaction system's constraint equations, events and inline-test references are the same sites as a model's, so an undefined name in one is `undefined_variable`, never `undefined_parameter`. Only a reaction `rate` reports `undefined_parameter`. `tests/invalid/undefined_variable_in_reaction_system_*.esm` pin the four reaction-system sites: a test reference, a constraint equation, a discrete event trigger and a continuous event condition.
 
 **And the duty is the EVALUATOR's too, not only the validator's.** A binding that
 resolves free symbols correctly in `validate` and then evaluates an unresolvable
