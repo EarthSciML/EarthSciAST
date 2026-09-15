@@ -1549,6 +1549,43 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 		r := varDim.Divide(wrtUnit)
 		return &r, nil
 
+	case "ifelse":
+		// ifelse(cond, a, b): the two branches follow the `+` rule (esm-spec
+		// §4.8.3). Known branches must share dimension and scale, an
+		// indeterminate branch is skipped (`ifelse(c > 0, x, 0.5*y)` has the unit
+		// of x, whichever branch is the known one), and with no known branch the
+		// result is indeterminate. The condition is walked so a mismatch inside it
+		// is reported, but its own unit neither enters the result nor has to be
+		// dimensionless.
+		if len(node.Args) != 3 {
+			return nil, analysisErrf("'ifelse' requires 3 arguments, got %d", len(node.Args))
+		}
+		if _, err := propagateDimension(node.Args[0], env); err != nil {
+			return nil, err
+		}
+		var first *Unit
+		for _, arg := range node.Args[1:] {
+			u, err := propagateDimension(arg, env)
+			if err != nil {
+				return nil, err
+			}
+			if u == nil {
+				continue
+			}
+			if first == nil {
+				first = u
+				continue
+			}
+			if !first.Dim.Equal(u.Dim) {
+				return nil, mismatchErrf("ifelse branches must share a dimension: %s vs %s", first.Dim, u.Dim)
+			}
+			if !first.Exact.Equal(u.Exact) {
+				return nil, mismatchErrf("ifelse branches must share a scale: %s at scale %s vs scale %s",
+					first.Dim, first.Exact, u.Exact)
+			}
+		}
+		return first, nil
+
 	case "min", "max":
 		// Return dimension of first operand; require others to match.
 		var first *Unit

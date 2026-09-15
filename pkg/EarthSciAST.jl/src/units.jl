@@ -1045,19 +1045,18 @@ function _ustr(u)::String
     isempty(s) ? string(dimension(u)) : s
 end
 
-# "ifelse": ifelse(cond, a, b) — branches must share dimensions; the condition
-# is boolean and dimensionally irrelevant.
+# "ifelse": ifelse(cond, a, b) — the two branches follow the "+" rule (esm-spec
+# §4.8.3): determinable branches must share a unit and the result is that unit,
+# an undeterminable branch is skipped (`ifelse(c, x, 0.5*y)` has x's unit), and
+# with no determinable branch the result is undeterminable. The condition is
+# walked so a finding inside it (`x [m] > y [kg]`) is reported, but its own unit
+# neither enters the result nor has to be dimensionless.
 function _ifelse_rule(expr, var_units, findings)
     length(expr.args) == 3 || return nothing
-    t_dim = _expr_dimensions!(findings, expr.args[2], var_units)
-    f_dim = _expr_dimensions!(findings, expr.args[3], var_units)
-    (t_dim === nothing || f_dim === nothing) && return nothing
-    if !_same_unit(t_dim, f_dim)
-        push!(findings, "Unit inconsistency in ifelse branches: " *
-                        "'$(_ustr(t_dim))' vs '$(_ustr(f_dim))'")
-        return nothing
-    end
-    return t_dim
+    _expr_dimensions!(findings, expr.args[1], var_units)
+    return _same_dimensions_over(expr.args[2:3], var_units, findings,
+        (t_dim, f_dim) -> "Unit inconsistency in ifelse branches: " *
+                          "'$(_ustr(t_dim))' vs '$(_ustr(f_dim))'")
 end
 
 # "sign": strips dimensions — the result is a dimensionless -1/0/+1.

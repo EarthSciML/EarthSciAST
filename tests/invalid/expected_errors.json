@@ -3226,5 +3226,22 @@
     ],
     "is_valid": false,
     "notes": "esm-spec \u00a74.8.3: an undeterminable operand of + (here 0.5 * y, a product with a literal factor) is skipped, and the sum has the unit of its determinable operand, m. It is not undeterminable as a whole, so the kg declaration is a provable mismatch. Pinned at the observed variable's declaration, as tests/invalid/units_scale_mismatch_equation.esm pins its mismatch."
+  },
+  "units_ifelse_undeterminable_branch_mismatch.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/variables/total_mass",
+        "code": "unit_inconsistency",
+        "message": "Declared units of kg do not match the expression's units of m",
+        "details": {
+          "variable": "total_mass",
+          "declared_units": "kg",
+          "expression_units": "m"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.3: an undeterminable branch of ifelse (here 0.5 * y, a product with a literal factor) is skipped, and the ifelse has the unit of its determinable branch, m, exactly as a partly undeterminable sum does (tests/invalid/units_sum_undeterminable_operand_mismatch.esm). The condition c > 0 does not enter the unit. Pinned at the observed variable's declaration."
   }
 }

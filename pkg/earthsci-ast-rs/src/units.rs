@@ -1168,7 +1168,10 @@ fn propagate_sqrt_dim(
     }
 }
 
-/// `ifelse`: the two branches must share dimensions; the result carries them.
+/// `ifelse`: the two branches follow the `+` rule (esm-spec §4.8.3). When both
+/// are determinable they must share dimension and scale; when only one is, the
+/// result is its unit (`ifelse(c, x, 0.5 * y)` has the unit of `x`); when
+/// neither is (`ifelse(c, 1, 2)`), the result is undeterminable.
 fn propagate_ifelse_dim(
     op: &ExpressionNode,
     env: &HashMap<String, Unit>,
@@ -1201,8 +1204,8 @@ fn propagate_ifelse_dim(
             )));
             Dim::Unknown
         }
-        (Some(a), Some(_)) => Dim::Known(a.clone()),
-        _ => Dim::Unknown,
+        (Some(a), _) | (None, Some(a)) => Dim::Known(a.clone()),
+        (None, None) => Dim::Unknown,
     }
 }
 
@@ -3214,6 +3217,35 @@ mod tests {
             u.dimensions.get(&Dimension::Length),
             Some(&Rational::int(1))
         );
+    }
+
+    /// `ifelse` takes the unit of its determinable branch, whichever branch that
+    /// is, and with no determinable branch it is undeterminable (esm-spec
+    /// §4.8.3).
+    #[test]
+    fn ifelse_takes_the_unit_of_its_determinable_branch() {
+        let env = env_of(&[("x", "m"), ("y", "m"), ("c", "1")]);
+        let cond = op(">", vec![Expr::Variable("c".into()), Expr::Integer(0)]);
+        let x = Expr::Variable("x".into());
+        let half_y = op("*", vec![Expr::Number(0.5), Expr::Variable("y".into())]);
+        let branch_pairs = [
+            (x.clone(), half_y.clone()),
+            (half_y.clone(), x.clone()),
+            (Expr::Integer(2), x.clone()),
+        ];
+        for (then_branch, else_branch) in branch_pairs {
+            let expr = op("ifelse", vec![cond.clone(), then_branch, else_branch]);
+            let u = Unit::propagate(&expr, &env).unwrap();
+            assert_eq!(
+                u.dimensions.get(&Dimension::Length),
+                Some(&Rational::int(1))
+            );
+        }
+        let literal_branches = op("ifelse", vec![cond, Expr::Integer(1), Expr::Number(2.0)]);
+        assert!(matches!(
+            Unit::propagate(&literal_branches, &env),
+            Err(UnitError::UnknownUnit(_))
+        ));
     }
 
     /// An exponent is read BY VALUE, so `L^2` still yields an area even though

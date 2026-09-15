@@ -369,6 +369,49 @@ func TestPropagateDimensionLiteralNeutrality(t *testing.T) {
 	}
 }
 
+// ifelse takes the unit of its determinable branch, whichever branch that is,
+// is indeterminate with no determinable branch, still rejects two known branches
+// that disagree, and reports a mismatch inside its condition (esm-spec §4.8.3).
+func TestPropagateDimensionIfelseBranches(t *testing.T) {
+	env := mkEnv(t, map[string]string{"x": "m", "y": "m", "z": "kg", "xkm": "km", "c": "1"})
+	cond := ExprNode{Op: ">", Args: []any{"c", 0.0}}
+	halfY := ExprNode{Op: "*", Args: []any{0.5, "y"}}
+	ifelse := func(c any, a, b any) ExprNode { return ExprNode{Op: "ifelse", Args: []any{c, a, b}} }
+
+	for _, expr := range []ExprNode{
+		ifelse(cond, "x", halfY),
+		ifelse(cond, halfY, "x"),
+		ifelse(cond, int64(2), "x"),
+		ifelse(cond, "x", "y"),
+	} {
+		u, err := PropagateDimension(expr, env)
+		if err != nil {
+			t.Fatalf("%v: %v", expr, err)
+		}
+		if u == nil || !u.Dim.Equal(dim(dimLength, 1)) {
+			t.Errorf("%v must be m, got %v", expr, u)
+		}
+	}
+
+	u, err := PropagateDimension(ifelse(cond, int64(1), 2.0), env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u != nil {
+		t.Errorf("ifelse over literal branches must be indeterminate, got %v", u.Dim)
+	}
+
+	for _, expr := range []ExprNode{ifelse(cond, "x", "z"), ifelse(cond, "x", "xkm")} {
+		if _, err := PropagateDimension(expr, env); findingCode(err) != UnitFindingDimensionalMismatch {
+			t.Errorf("%v must be a dimensional mismatch, got %v", expr, err)
+		}
+	}
+	badCond := ifelse(ExprNode{Op: "exp", Args: []any{"x"}}, "x", "y")
+	if _, err := PropagateDimension(badCond, env); findingCode(err) != UnitFindingDimensionalMismatch {
+		t.Errorf("a mismatch inside the condition must be reported, got %v", err)
+	}
+}
+
 func TestPropagateDimensionVarLookup(t *testing.T) {
 	env := mkEnv(t, map[string]string{"x": "m", "t": "s"})
 	u, err := PropagateDimension("x", env)

@@ -332,23 +332,46 @@ using Unitful
         @test D(OpExpr("*", E[VarExpr("x"), OpExpr("+", E[IntExpr(1), IntExpr(2)])]),
                 var_units) === nothing
         @test isempty(EarthSciAST.equation_unit_findings(
-            Equation(VarExpr("x"), OpExpr("+", E[IntExpr(1), IntExpr(2)])), var_units))
+            Equation(OpExpr("D", E[VarExpr("x")]; wrt="t"),
+                     OpExpr("+", E[IntExpr(1), IntExpr(2)])), var_units))
         # A unary `+` carries its operand's unit, exactly as a unary `-` does.
         px = D(OpExpr("+", E[VarExpr("x")]), var_units)
         @test px !== nothing && dimension(px) == Unitful.𝐋
 
         # A sum whose operands are partly undeterminable has the unit of the
-        # determinable ones: `x + 0.5*x` is a length, so equating it with a mass
-        # is a provable mismatch, and so is taking its exp.
+        # determinable ones: `x + 0.5*x` is a length, so it cannot be the rate of
+        # change of a mass (`D(y)` with y in kg), and its exp is a provable
+        # mismatch too.
         half_x = OpExpr("*", E[NumExpr(0.5), VarExpr("x")])
         for op in ("+", "-", "min", "max")
             d = D(OpExpr(op, E[VarExpr("x"), half_x]), var_units)
             @test d !== nothing && dimension(d) == Unitful.𝐋
             @test !isempty(EarthSciAST.equation_unit_findings(
-                Equation(VarExpr("y"), OpExpr(op, E[VarExpr("x"), half_x])), var_units))
+                Equation(OpExpr("D", E[VarExpr("y")]; wrt="t"),
+                         OpExpr(op, E[VarExpr("x"), half_x])), var_units))
         end
         @test !isempty(EarthSciAST.expression_unit_findings(
             OpExpr("exp", E[OpExpr("+", E[VarExpr("x"), half_x])]), var_units))
+
+        # `ifelse` treats its two branches the same way: the determinable branch
+        # gives the unit, whichever it is; no determinable branch leaves it
+        # undeterminable; two known branches must still agree. The condition is
+        # checked for findings inside it but does not enter the unit.
+        cond = OpExpr(">", E[VarExpr("x"), IntExpr(0)])
+        for branches in (E[VarExpr("x"), half_x], E[half_x, VarExpr("x")],
+                         E[IntExpr(2), VarExpr("x")])
+            d = D(OpExpr("ifelse", E[cond, branches...]), var_units)
+            @test d !== nothing && dimension(d) == Unitful.𝐋
+        end
+        @test D(OpExpr("ifelse", E[cond, IntExpr(1), NumExpr(2.0)]), var_units) === nothing
+        @test !isempty(EarthSciAST.equation_unit_findings(
+            Equation(OpExpr("D", E[VarExpr("y")]; wrt="t"),
+                     OpExpr("ifelse", E[cond, VarExpr("x"), half_x])), var_units))
+        @test !isempty(EarthSciAST.expression_unit_findings(
+            OpExpr("ifelse", E[cond, VarExpr("x"), VarExpr("y")]), var_units))
+        @test !isempty(EarthSciAST.expression_unit_findings(
+            OpExpr("ifelse", E[OpExpr(">", E[VarExpr("x"), VarExpr("y")]),
+                               VarExpr("x"), VarExpr("x")]), var_units))
 
         # A unary negation of a literal counts as a literal (esm-spec §4.8.3):
         # `x + -(273.15)` adopts x's unit exactly as `x + -273.15` does, at any
