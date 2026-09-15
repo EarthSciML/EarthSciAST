@@ -221,6 +221,7 @@ _EXPR_WIRE_ORDER: tuple[str, ...] = (
     "name",
     "label",
     "value",
+    "units",
     "table",
     "table_axes",
     "output",
