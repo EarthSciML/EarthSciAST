@@ -979,8 +979,11 @@ function _resolve_mount_edge_core(entry::AbstractDict, ref::String, refpath::Str
     # §9.6.3 rewrite fixpoint, so the spliced component carries the
     # fully-expanded Option-A image and the assembling document's
     # lowering never resolves the leaf's template names against its own
-    # registry. A leaf with no machinery has nothing to resolve and flows
-    # on untouched (`resolve_template_machinery` returns `nothing`).
+    # registry. A leaf with no machinery has nothing to resolve
+    # (`resolve_template_machinery` returns `nothing`), but its component-local
+    # templates still expand here: its own calls bind their parameters, so an
+    # `enum` op a parameter spells resolves against the leaf's block below, not
+    # the mounting document's (esm-spec §9.3).
     # `mounted_leaf=true`: this IS a §4.7 mount edge, so an index-set
     # `size` the leaf cannot close stays SYMBOLIC — it merges into the
     # mounting document's registry and closes there (§9.7.6 site 5).
@@ -994,9 +997,7 @@ function _resolve_mount_edge_core(entry::AbstractDict, ref::String, refpath::Str
     resolved = resolve_template_machinery(comp, compdir; metaparameters=bindings,
                                           mount_declared=leaf_mount_declared,
                                           mounted_leaf=true)
-    if resolved !== nothing
-        comp = expand_document(lower_expression_templates(resolved))
-    end
+    comp = expand_document(lower_expression_templates(resolved === nothing ? comp : resolved))
 
     # esm-spec §9.3: the leaf's `enum` ops resolve against ITS OWN `enums` block,
     # here, while that block is still at hand. The mounting document's block is a
