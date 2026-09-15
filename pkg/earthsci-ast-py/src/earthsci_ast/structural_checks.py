@@ -2431,9 +2431,18 @@ def _check_conversion_factor_consistency(data: dict[str, Any], errors: list[str]
             except _pint_unverifiable_errors():
                 # unparseable unit: cannot verify, skip.
                 continue
-            factor = linear_factor(n_src, n_lhs)
-            if factor is None or factor == 0:
+            if linear_factor(n_src, n_lhs) is None:
+                continue  # affine or unconvertible
+            # Identical exact scales imply no conversion, so the coefficient is free;
+            # otherwise the expected factor is formed EXACTLY and rounded once, so the
+            # tolerance below only absorbs the literal's spelling (esm-spec §4.8.1).
+            from .units import unit_exact_scale
+
+            src_scale = unit_exact_scale(n_src)
+            lhs_scale = unit_exact_scale(n_lhs)
+            if src_scale == lhs_scale:
                 continue
+            factor = float(src_scale / lhs_scale)
             if abs(numeric - factor) <= 1e-9 * max(abs(factor), 1.0):
                 continue  # matches within tolerance
             errors.append(

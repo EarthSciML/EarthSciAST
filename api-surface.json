@@ -93,18 +93,18 @@
     }
   },
   "counts": {
-    "symbols": 883,
+    "symbols": 885,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
       "julia": 305,
       "typescript": 238,
       "python": 250,
-      "rust": 337,
-      "go": 407
+      "rust": 339,
+      "go": 408
     },
     "by_tier": {
-      "extension": 611,
-      "stable": 272
+      "extension": 612,
+      "stable": 273
     }
   },
   "planned": [
@@ -3187,6 +3187,15 @@
       }
     },
     {
+      "name": "exact_scale",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "ExactScale",
+        "rust": "ExactScale"
+      }
+    },
+    {
       "name": "expand",
       "kind": "function",
       "tier": "stable",
@@ -6251,6 +6260,14 @@
         "python": "sampled_parameters",
         "rust": "sampled_parameters",
         "typescript": "sampledParameters"
+      }
+    },
+    {
+      "name": "scale_factor",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "ScaleFactor"
       }
     },
     {

@@ -10,9 +10,11 @@ nothing else resolves. See :data:`_CONTRACT_DEFINITIONS`.
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, field
-from typing import Any
+from fractions import Fraction
+from typing import Any, NamedTuple
 
 from .classification import observed_definitions
 from .esm_types import EsmFile, Expr, ExprNode, Model, ReactionSystem
@@ -238,6 +240,196 @@ _CONTRACT_DEFINITIONS: tuple[str, ...] = (
     "@alias degC = Celsius",
     "@alias deg = degree = degrees",
 )
+
+# ---------------------------------------------------------------------------
+# Exact unit scales (esm-spec §4.8.1 "Scales are EXACT").
+#
+# pint does the DIMENSION algebra here, and pint's conversion factors are
+# floats. A scale AGREEMENT (`m + km`, `m/s = mi/h`) is decided on an exact
+# number instead: a product of prime powers and a power of pi, each with a
+# rational exponent, so `mi` is 2^4 * 3^2 * 5^-3 * 11 * 127 and `sqrt(km)` is
+# still exact. Floats never decide a verdict.
+# ---------------------------------------------------------------------------
+
+
+class ExactScale:
+    """An exact, positive unit scale: prime powers times a power of pi."""
+
+    __slots__ = ("_pi", "_primes")
+
+    def __init__(self, primes: dict[int, Fraction] | None = None, pi: Fraction = Fraction(0)):
+        self._primes = {p: Fraction(e) for p, e in (primes or {}).items() if e != 0}
+        self._pi = Fraction(pi)
+
+    @classmethod
+    def one(cls) -> ExactScale:
+        return cls()
+
+    @classmethod
+    def integer(cls, n: int) -> ExactScale:
+        if n <= 0:
+            raise ValueError("a unit scale must be positive")
+        primes: dict[int, Fraction] = {}
+        rest, p = n, 2
+        while p * p <= rest:
+            while rest % p == 0:
+                primes[p] = primes.get(p, Fraction(0)) + 1
+                rest //= p
+            p += 1 if p == 2 else 2
+        if rest > 1:
+            primes[rest] = primes.get(rest, Fraction(0)) + 1
+        return cls(primes)
+
+    @classmethod
+    def ratio(cls, num: int, den: int) -> ExactScale:
+        return cls.integer(num) / cls.integer(den)
+
+    @classmethod
+    def pow10(cls, k: int) -> ExactScale:
+        return cls({2: Fraction(k), 5: Fraction(k)})
+
+    @classmethod
+    def pi(cls) -> ExactScale:
+        return cls(pi=Fraction(1))
+
+    @classmethod
+    def decimal(cls, literal: str) -> ExactScale:
+        """The exact value of a positive decimal literal (``"0.3048"``,
+        ``"2.6867e20"``), read from its TEXT, never through a float."""
+        value = Fraction(literal)
+        return cls.integer(value.numerator) / cls.integer(value.denominator)
+
+    def __mul__(self, other: ExactScale) -> ExactScale:
+        primes = dict(self._primes)
+        for p, e in other._primes.items():
+            primes[p] = primes.get(p, Fraction(0)) + e
+        return ExactScale(primes, self._pi + other._pi)
+
+    def __truediv__(self, other: ExactScale) -> ExactScale:
+        primes = dict(self._primes)
+        for p, e in other._primes.items():
+            primes[p] = primes.get(p, Fraction(0)) - e
+        return ExactScale(primes, self._pi - other._pi)
+
+    def __pow__(self, exponent) -> ExactScale:
+        r = Fraction(exponent)
+        return ExactScale({p: e * r for p, e in self._primes.items()}, self._pi * r)
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, ExactScale):
+            return NotImplemented
+        return self._primes == other._primes and self._pi == other._pi
+
+    def __hash__(self) -> int:
+        return hash((tuple(sorted(self._primes.items())), self._pi))
+
+    def is_one(self) -> bool:
+        return not self._primes and self._pi == 0
+
+    def __float__(self) -> float:
+        value = math.pi ** float(self._pi)
+        for p in sorted(self._primes):
+            value *= float(p) ** float(self._primes[p])
+        return value
+
+    def ratio_string(self) -> str | None:
+        """``p/q``, ``p/q*pi`` or ``p/q*pi^k`` in lowest terms (``/q`` omitted
+        when it is 1) -- the spelling tests/conformance/unit_registry pins.
+        ``None`` when an exponent is not whole (``sqrt(km)``)."""
+        if self._pi.denominator != 1 or any(e.denominator != 1 for e in self._primes.values()):
+            return None
+        value = Fraction(1)
+        for p, e in self._primes.items():
+            value *= Fraction(p) ** int(e)
+        text = str(value.numerator)
+        if value.denominator != 1:
+            text += f"/{value.denominator}"
+        k = int(self._pi)
+        if k == 1:
+            text += "*pi"
+        elif k != 0:
+            text += f"*pi^{k}"
+        return text
+
+    def __repr__(self) -> str:
+        text = self.ratio_string()
+        return f"ExactScale({text if text is not None else float(self)!r})"
+
+    __str__ = __repr__
+
+
+_E = ExactScale
+_FOOT = _E.decimal("0.3048")
+_POUND = _E.decimal("0.45359237")
+_GRAVITY = _E.decimal("9.80665")
+
+#: The exact scale of every registry symbol whose scale is not 1, keyed by the
+#: name pint resolves it to (aliases -- `meter`, `hour`, `DU`, `ppmv`, `%` --
+#: resolve to these names). A symbol missing here is read as exactly 1, which is
+#: why ``tests/test_unit_exact_scales.py`` checks every contract symbol against
+#: pint's own float factor.
+_EXACT_SCALES: dict[str, ExactScale] = {
+    "g": _E.pow10(-3),
+    "mg": _E.pow10(-6),
+    "ug": _E.pow10(-9),
+    "lb": _POUND,
+    "short_ton": _E.integer(2000) * _POUND,
+    "tonne": _E.pow10(3),
+    "dm": _E.pow10(-1),
+    "cm": _E.pow10(-2),
+    "mm": _E.pow10(-3),
+    "um": _E.pow10(-6),
+    "nm": _E.pow10(-9),
+    "km": _E.pow10(3),
+    "ft": _FOOT,
+    "mi": _E.integer(5280) * _FOOT,
+    "ms": _E.pow10(-3),
+    "us": _E.pow10(-6),
+    "ns": _E.pow10(-9),
+    "min": _E.integer(60),
+    "h": _E.integer(3600),
+    "hr": _E.integer(3600),
+    "day": _E.integer(86400),
+    "yr": _E.integer(31557600),
+    "year": _E.integer(31557600),
+    "L": _E.pow10(-3),
+    "l": _E.pow10(-3),
+    "mL": _E.pow10(-6),
+    "gal": _E.decimal("0.003785411784"),
+    "kmol": _E.pow10(3),
+    "mmol": _E.pow10(-3),
+    "umol": _E.pow10(-6),
+    "nmol": _E.pow10(-9),
+    "M": _E.pow10(3),
+    "kJ": _E.pow10(3),
+    "cal": _E.decimal("4.184"),
+    "kcal": _E.integer(4184),
+    "kW": _E.pow10(3),
+    "MW": _E.pow10(6),
+    "hp": _E.integer(550) * _FOOT * _POUND * _GRAVITY,
+    "atm": _E.integer(101325),
+    "bar": _E.pow10(5),
+    "hPa": _E.pow10(2),
+    "kPa": _E.pow10(3),
+    "mbar": _E.pow10(2),
+    "Torr": _E.ratio(101325, 760),
+    "mmHg": _E.decimal("133.322387415"),
+    "inHg": _E.decimal("3386.388640341"),
+    "psi": _POUND * _GRAVITY / _E.decimal("0.0254") ** 2,
+    "uatm": _E.decimal("0.101325"),
+    "erg": _E.pow10(-7),
+    "BTU": _E.decimal("1055.05585262"),
+    "Wh": _E.integer(3600),
+    "kWh": _E.integer(3600000),
+    "degF": _E.ratio(5, 9),
+    "deg": _E.pi() / _E.integer(180),
+    "ppm": _E.pow10(-6),
+    "ppb": _E.pow10(-9),
+    "ppt": _E.pow10(-12),
+    "Dobson": _E.decimal("2.6867e20"),
+    "percent": _E.pow10(-2),
+}
+
 
 try:
     import pint
@@ -602,6 +794,35 @@ def unit_dimensionality(unit: str | None) -> UnitsContainer:
     return parse_unit(unit).dimensionality
 
 
+def exact_scale_of(unit) -> ExactScale:
+    """The exact scale of a parsed pint ``Unit`` (esm-spec §4.8.1).
+
+    Read from the unit's symbol exponents and the exact table, never from pint's
+    float conversion factor.
+    """
+    scale = ExactScale.one()
+    for name, exponent in unit._units.items():
+        entry = _EXACT_SCALES.get(name)
+        if entry is not None:
+            scale = scale * entry ** Fraction(exponent).limit_denominator(1000)
+    return scale
+
+
+def unit_exact_scale(unit: str | None) -> ExactScale:
+    """The exact scale of a declared unit string.
+
+    Raises :class:`UnparseableUnitError` when the string is not a unit.
+    """
+    return exact_scale_of(parse_unit(unit))
+
+
+class _Typed(NamedTuple):
+    """A subexpression's dimension together with its exact scale."""
+
+    dim: UnitsContainer
+    scale: ExactScale
+
+
 # ---------------------------------------------------------------------------
 # Operator dimension rules (esm-spec §4.2 evaluable core).
 #
@@ -961,17 +1182,27 @@ class UnitValidator:
         result = UnitValidationResult(is_valid=True)
 
         try:
-            lhs_dim = self._get_expression_dimension(equation.lhs)
-            rhs_dim = self._get_expression_dimension(equation.rhs)
+            lhs = self._type(equation.lhs)
+            rhs = self._type(equation.rhs)
 
-            if lhs_dim is not None and rhs_dim is not None:
-                if not self._dimensions_compatible(lhs_dim, rhs_dim):
+            if lhs is not None and rhs is not None:
+                if not self._dimensions_compatible(lhs.dim, rhs.dim):
                     result.add_error(
                         UNIT_FINDING_DIMENSIONAL_MISMATCH,
                         f"Equation {equation_id}: Dimensional mismatch - "
-                        f"LHS has dimension {lhs_dim}, RHS has dimension {rhs_dim}",
-                        lhs_units=str(lhs_dim),
-                        rhs_units=str(rhs_dim),
+                        f"LHS has dimension {lhs.dim}, RHS has dimension {rhs.dim}",
+                        lhs_units=str(lhs.dim),
+                        rhs_units=str(rhs.dim),
+                    )
+                elif lhs.scale != rhs.scale:
+                    # Same dimension, different unit (esm-spec §4.8.3).
+                    result.add_error(
+                        UNIT_FINDING_DIMENSIONAL_MISMATCH,
+                        f"Equation {equation_id}: Scale mismatch - "
+                        f"LHS has dimension {lhs.dim} at scale {lhs.scale}, "
+                        f"RHS at scale {rhs.scale}",
+                        lhs_units=str(lhs.dim),
+                        rhs_units=str(rhs.dim),
                     )
         # A PROVABLE inconsistency inside the expression tree is an ERROR — it
         # used to be filed as a "could not validate" warning, which meant a
@@ -1082,78 +1313,101 @@ class UnitValidator:
         because each of those states its inconsistency between two DECLARED
         quantities, never against a literal.
         """
+        typed = self._type(expr)
+        return None if typed is None else typed.dim
+
+    def _type(self, expr: Expr) -> _Typed | None:
+        """The dimension AND exact scale of an expression, or ``None`` when
+        indeterminate. See :meth:`_get_expression_dimension` for the literal
+        rule; the scale follows the same rules as the dimension (esm-spec §4.8.3).
+        """
         if isinstance(expr, bool):
-            # A boolean is a genuine dimensionless truth value, not a
-            # polymorphic numeric literal (bool is an int subclass in Python).
-            return self.ureg.dimensionless.dimensionality
+            return self._dimensionless
 
         if isinstance(expr, (int, float)):
             return None
 
         if isinstance(expr, str):
-            # Variable lookup
             if expr in self.known_units:
-                return self.known_units[expr].dimensionality
+                unit = self.known_units[expr]
+                return _Typed(unit.dimensionality, exact_scale_of(unit))
             # Undeclared symbol: unknown dimension, so it is skipped rather
             # than assumed dimensionless.
             return None
 
         if isinstance(expr, ExprNode):
-            return self._get_expr_node_dimension(expr)
+            return self._type_node(expr)
 
         return None
 
     @property
-    def _dimensionless(self) -> UnitsContainer:
-        return self.ureg.dimensionless.dimensionality
+    def _dimensionless(self) -> _Typed:
+        return _Typed(self.ureg.dimensionless.dimensionality, ExactScale.one())
 
     @property
-    def _angle(self) -> UnitsContainer:
-        """The `[angle]` dimension — the axis `rad` and `deg` live on."""
-        return self.ureg.parse_units("rad").dimensionality
+    def _angle(self) -> _Typed:
+        """The `[angle]` dimension at scale 1 -- the unit `rad`."""
+        return _Typed(self.ureg.parse_units("rad").dimensionality, ExactScale.one())
 
-    def _require_angle_or_dimensionless(self, dim: UnitsContainer | None, op: str) -> None:
-        """Raise if ``dim`` is known and is neither an angle nor dimensionless.
+    def _require_angle_or_dimensionless(self, typed: _Typed | None, op: str) -> None:
+        """Raise if ``typed`` is known and is neither an angle nor dimensionless.
 
         A circular function's argument is an ANGLE; a dimensionless argument is
         also admitted (a phase written as a pure number). Anything else —
         ``sin(kg)`` — is a provable inconsistency.
         """
-        if dim is None:
+        if typed is None:
             return
-        if self._dimensions_compatible(dim, self._angle):
+        if self._dimensions_compatible(typed.dim, self._angle.dim):
             return
-        if self._dimensions_compatible(dim, self._dimensionless):
+        if self._dimensions_compatible(typed.dim, self._dimensionless.dim):
             return
         raise DimensionalMismatchError(
-            f"{op} argument must be an angle or dimensionless, got {dim}"
+            f"{op} argument must be an angle or dimensionless, got {typed.dim}"
         )
 
-    def _agree(self, dims: list[UnitsContainer | None], op: str) -> UnitsContainer | None:
-        """Require every KNOWN dimension in ``dims`` to be the same, and return
-        it (or ``None`` if every operand's dimension is unknown).
+    def _agree(self, operands: list[_Typed | None], op: str) -> _Typed | None:
+        """Require every KNOWN operand to have the same dimension AND exact scale
+        (esm-spec §4.8.3), and return it (or ``None`` if every operand is
+        unknown).
 
         Unknown (``None``) operands are skipped rather than treated as
         dimensionless: an operand we cannot type must never manufacture a
         mismatch. Two *known* operands that disagree are a provable
-        inconsistency.
+        inconsistency -- metres against kilograms, and metres against
+        kilometres.
         """
-        known = [d for d in dims if d is not None]
+        known = [t for t in operands if t is not None]
         if not known:
             return None
         first = known[0]
-        for dim in known[1:]:
-            if not self._dimensions_compatible(first, dim):
-                raise DimensionalMismatchError(f"Incompatible dimensions in {op}: {first} vs {dim}")
+        for typed in known[1:]:
+            if not self._dimensions_compatible(first.dim, typed.dim):
+                raise DimensionalMismatchError(
+                    f"Incompatible dimensions in {op}: {first.dim} vs {typed.dim}"
+                )
+            if first.scale != typed.scale:
+                raise DimensionalMismatchError(
+                    f"Incompatible scales in {op}: {first.dim} at scale {first.scale} "
+                    f"vs scale {typed.scale}"
+                )
         return first
 
-    def _require_dimensionless(self, dim: UnitsContainer | None, op: str, what: str) -> None:
-        """Raise if ``dim`` is known and is NOT dimensionless."""
-        if dim is not None and not self._dimensions_compatible(dim, self._dimensionless):
-            raise DimensionalMismatchError(f"{op} {what} must be dimensionless, got {dim}")
+    def _require_dimensionless(self, typed: _Typed | None, op: str, what: str) -> None:
+        """Raise if ``typed`` is known and is NOT dimensionless."""
+        if typed is not None and not self._dimensions_compatible(
+            typed.dim, self._dimensionless.dim
+        ):
+            raise DimensionalMismatchError(f"{op} {what} must be dimensionless, got {typed.dim}")
 
     def _get_expr_node_dimension(self, node: ExprNode) -> UnitsContainer | None:
-        """Get the dimension of an expression node (an operator with arguments).
+        """The dimension of an operator node; see :meth:`_type_node`."""
+        typed = self._type_node(node)
+        return None if typed is None else typed.dim
+
+    def _type_node(self, node: ExprNode) -> _Typed | None:
+        """The dimension and exact scale of an expression node (an operator with
+        arguments).
 
         Returns ``None`` for "indeterminate" — an unknown operand, or an
         operator with no dimensional rule. ``None`` NEVER means dimensionless;
@@ -1165,104 +1419,112 @@ class UnitValidator:
             return None
 
         op = node.op
-        arg_dims = [self._get_expression_dimension(arg) for arg in node.args]
+        args = [self._type(arg) for arg in node.args]
 
-        # n-ary dimension-preserving ops: every operand must agree.
+        # n-ary unit-preserving ops: every operand must agree.
         if op in _DIM_PRESERVING_NARY:
-            return self._agree(arg_dims, op)
+            return self._agree(args, op)
 
         # Unary carry-through ops.
         if op in _DIM_PRESERVING_UNARY:
-            return arg_dims[0]
+            return args[0]
 
         if op in _DIMENSIONLESS_RESULT_OPS:
             return self._dimensionless
 
         if op in _COMPARISON_OPS:
             # Operands must be comparable; the boolean result is dimensionless.
-            self._agree(arg_dims, op)
+            self._agree(args, op)
             return self._dimensionless
 
         if op in _DIMENSIONLESS_ARG_FUNCS:
-            self._require_dimensionless(arg_dims[0], op, "argument")
+            self._require_dimensionless(args[0], op, "argument")
             return self._dimensionless
 
         if op in _CIRCULAR_FUNCS:
             # sin/cos/tan take an ANGLE or a dimensionless number, and return a
             # dimensionless ratio. `sin(kg)` is still an error.
-            self._require_angle_or_dimensionless(arg_dims[0], op)
+            self._require_angle_or_dimensionless(args[0], op)
             return self._dimensionless
 
         if op in _INVERSE_CIRCULAR_FUNCS:
             # asin/acos/atan take a dimensionless ratio and RETURN AN ANGLE.
-            self._require_dimensionless(arg_dims[0], op, "argument")
+            self._require_dimensionless(args[0], op, "argument")
             return self._angle
 
         if op == "atan2":
-            # atan2(y, x): both operands share a dimension; the result is an ANGLE.
-            self._agree(arg_dims, op)
+            # atan2(y, x): both operands share a unit; the result is an ANGLE.
+            self._agree(args, op)
             return self._angle
 
         if op == "sqrt":
-            base = arg_dims[0]
-            return None if base is None else base**0.5
+            base = args[0]
+            if base is None:
+                return None
+            return _Typed(base.dim**0.5, base.scale ** Fraction(1, 2))
 
         if op == "ifelse":
             # ifelse(cond, then, else): the condition is a dimensionless
             # boolean; the two branches must agree and give the result.
-            if len(arg_dims) < 3:
+            if len(args) < 3:
                 return None
-            return self._agree(arg_dims[1:3], op)
+            return self._agree(args[1:3], op)
 
         if op == "*":
             # A single unknown operand makes the whole product unknown —
             # folding only the KNOWN operands would report `unknown * t` as
             # [time], which is not the dimension of anything.
-            if any(d is None for d in arg_dims):
+            if any(t is None for t in args):
                 return None
-            result = self._dimensionless
-            for dim in arg_dims:
-                result = result * dim
-            return result
+            dim, scale = self._dimensionless
+            for typed in args:
+                dim, scale = dim * typed.dim, scale * typed.scale
+            return _Typed(dim, scale)
 
         if op == "/":
             # POSITIONAL: numerator is args[0], every later operand divides it.
-            # (The former code filtered None out of the operand list and then
-            # indexed it positionally, so `unknown / t` reported [time] — the
-            # exact inverse of the right answer.)
-            if any(d is None for d in arg_dims):
+            if any(t is None for t in args):
                 return None
-            result = arg_dims[0]
-            for dim in arg_dims[1:]:
-                result = result / dim
-            return result
+            dim, scale = args[0]
+            for typed in args[1:]:
+                dim, scale = dim / typed.dim, scale / typed.scale
+            return _Typed(dim, scale)
 
         if op == "^":
-            base = arg_dims[0]
-            exp_dim = arg_dims[1] if len(arg_dims) > 1 else None
+            base = args[0]
+            exponent = args[1] if len(args) > 1 else None
             # An exponent must always be dimensionless, whatever the base is.
-            self._require_dimensionless(exp_dim, op, "exponent")
+            self._require_dimensionless(exponent, op, "exponent")
             if base is None:
                 return None
-            if self._dimensions_compatible(base, self._dimensionless):
+            # A dimensionless base of scale 1 stays exactly that under any
+            # exponent; a dimensional OR scaled base (`x^2` with `x` in `%`)
+            # needs a literal exponent to give a unit.
+            if (
+                self._dimensions_compatible(base.dim, self._dimensionless.dim)
+                and base.scale.is_one()
+            ):
                 return self._dimensionless
-            # A dimensional base needs a literal exponent to give a dimension.
             if (
                 len(node.args) > 1
                 and isinstance(node.args[1], (int, float))
                 and not isinstance(node.args[1], bool)
             ):
-                return base ** node.args[1]
+                power = Fraction(str(node.args[1]))
+                return _Typed(base.dim ** node.args[1], base.scale**power)
             return None
 
         if op == "D":
-            # d(f)/d(wrt) has dimension dim(f) / dim(wrt). `wrt` is a sidecar
-            # field, not an arg, and is often an undeclared time symbol — in
-            # which case the dimension is indeterminate. Never assume seconds.
+            # d(f)/d(wrt) has the unit of f divided by that of wrt. `wrt` is a
+            # sidecar field, not an arg, and is often an undeclared time symbol —
+            # in which case the dimension is indeterminate. Never assume seconds.
             wrt = getattr(node, "wrt", None)
-            if arg_dims[0] is None or not wrt or wrt not in self.known_units:
+            if args[0] is None or not wrt or wrt not in self.known_units:
                 return None
-            return arg_dims[0] / self.known_units[wrt].dimensionality
+            wrt_unit = self.known_units[wrt]
+            return _Typed(
+                args[0].dim / wrt_unit.dimensionality, args[0].scale / exact_scale_of(wrt_unit)
+            )
 
         # Structural / array / query / rewrite-target ops (index, aggregate,
         # fn, const, makearray, table_lookup, grad, ...) carry no dimensional
