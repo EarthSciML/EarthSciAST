@@ -2011,14 +2011,17 @@ function validate_reference_integrity(file::EsmFile)::Vector{StructuralError}
         end
     end
 
-    # A reaction system's inline tests are the same site as a model's (§6.6): an
-    # assertion `reference` is checked against the system's species and parameters
-    # plus the document's implicit names, widened to the document scope when the
-    # system is coupled, exactly as `validate_model_references` scopes a model.
+    # A reaction system's constraint equations, events and inline tests are the
+    # same sites as a model's, and report `undefined_variable` as the model's do
+    # (only a reaction `rate` keeps `undefined_parameter`). Each is checked against
+    # the system's species and parameters plus the document's implicit names,
+    # widened to the document scope when the system is coupled, exactly as
+    # `validate_model_references` scopes a model.
     if file.reaction_systems !== nothing
         coupled = _coupled_system_names(file)
         for (rs_name, rs) in file.reaction_systems
-            isempty(rs.tests) && continue
+            isempty(rs.tests) && isempty(rs.constraint_equations) &&
+                isempty(rs.discrete_events) && isempty(rs.continuous_events) && continue
             is_coupled = rs_name ∈ coupled
             scope = is_coupled ? _document_declared_names(file) :
                 Set{String}(vcat([sp.name for sp in rs.species], [p.name for p in rs.parameters]))
@@ -2027,8 +2030,22 @@ function validate_reference_integrity(file::EsmFile)::Vector{StructuralError}
             push!(scope, _indep_var(file))
             union!(scope, _coordinate_names(file))
             union!(scope, _callback_injected_names(file))
-            append!(errors, _validate_test_references(file, rs.tests,
-                                                      "/reaction_systems/$rs_name", scope))
+            rs_path = "/reaction_systems/$rs_name"
+            for (i, eq) in enumerate(rs.constraint_equations)
+                append!(errors, validate_expression_references(
+                    file, eq.lhs, "$rs_path/constraint_equations/$(i-1)/lhs"; scope=scope))
+                append!(errors, validate_expression_references(
+                    file, eq.rhs, "$rs_path/constraint_equations/$(i-1)/rhs"; scope=scope))
+            end
+            for (i, event) in enumerate(rs.discrete_events)
+                append!(errors, validate_event_references(
+                    file, event, "$rs_path/discrete_events/$(i-1)"; scope=scope))
+            end
+            for (i, event) in enumerate(rs.continuous_events)
+                append!(errors, validate_event_references(
+                    file, event, "$rs_path/continuous_events/$(i-1)"; scope=scope))
+            end
+            append!(errors, _validate_test_references(file, rs.tests, rs_path, scope))
         end
     end
 

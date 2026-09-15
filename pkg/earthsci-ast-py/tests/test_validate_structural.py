@@ -1134,6 +1134,8 @@ class TestReferenceIntegrityEveryExpressionBearingField:
             "undefined_variable_in_discrete_event_affect.esm",
             "undefined_variable_in_assertion_reference.esm",
             "undefined_variable_in_reaction_system_assertion_reference.esm",
+            "undefined_variable_in_reaction_system_constraint_equation.esm",
+            "undefined_variable_in_reaction_system_discrete_event_trigger.esm",
             # the data-loader site
             "undefined_variable_in_unit_conversion.esm",
             # the two coupling sites (fully qualified refs -> unresolved_scoped_ref)

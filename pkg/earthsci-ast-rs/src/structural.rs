@@ -2449,6 +2449,19 @@ pub(crate) fn validate_reaction_system(
         );
     }
 
+    // The names a reaction system's constraint equations, events and inline-test
+    // references resolve against: its species and parameters plus the implicit
+    // symbols (§4.9.1), widened to the document scope when the system is coupled,
+    // as `ModelCtx::new` scopes a model.
+    let mut rs_scope: HashSet<String> = defined_species
+        .union(&defined_parameters)
+        .cloned()
+        .collect();
+    rs_scope.extend(implicitly_declared_symbols(esm_file));
+    if coupled_system_names(esm_file).contains(rs_name) {
+        rs_scope.extend(document_declared_names(esm_file));
+    }
+
     // v0.8.0 §11.4.1: an `ic`-op equation MUST NOT appear inside a reaction
     // system's `constraint_equations`. A reaction system has no `equations`
     // field and hosts no ICs — a species' initial value is its scalar
@@ -2477,23 +2490,18 @@ pub(crate) fn validate_reaction_system(
             }
 
             // Reference integrity applies to a constraint equation too — it is an
-            // expression over the system's species and parameters, and nothing
-            // checked it, so an undefined name inside one was a silent FALSE
-            // NEGATIVE (the same blind spot as `initialization_equations`).
-            let mut scope: HashSet<String> = defined_species
-                .union(&defined_parameters)
-                .cloned()
-                .collect();
-            // The independent variable and `_var` are in scope here too (§4.9.1).
-            scope.extend(implicitly_declared_symbols(esm_file));
+            // expression over the system's species and parameters — reported at
+            // the side that carries the defect, as a model equation is.
             let ce_path = format!("{rs_path}/constraint_equations/{ce_idx}");
-            for expr in [&eq.lhs, &eq.rhs] {
+            for (side, expr) in [("lhs", &eq.lhs), ("rhs", &eq.rhs)] {
+                let mut ref_scope = rs_scope.clone();
+                collect_bound_symbols(expr, &mut ref_scope);
                 validate_expression_references_with_systems(
                     expr,
-                    &scope,
+                    &ref_scope,
                     system_refs,
                     &HashSet::new(),
-                    &ce_path,
+                    &format!("{ce_path}/{side}"),
                     ce_idx,
                     errors,
                 );
@@ -2501,19 +2509,20 @@ pub(crate) fn validate_reaction_system(
         }
     }
 
+    // A reaction system's events are the same sites as a model's. A reaction
+    // system has no `variables` map, so there is no parameter for an affect to
+    // write and `event_affects_parameter` cannot arise here.
+    let no_variables = indexmap::IndexMap::new();
+    for (event_idx, event) in rs.discrete_events.iter().flatten().enumerate() {
+        validate_discrete_event(event, event_idx, &rs_path, &rs_scope, &no_variables, errors);
+    }
+    for (event_idx, event) in rs.continuous_events.iter().flatten().enumerate() {
+        validate_continuous_event(event, event_idx, &rs_path, &rs_scope, &no_variables, errors);
+    }
+
     // An inline test's assertion `reference` (§6.6) is the same site on a
-    // reaction system as on a model: an Expression over the system's species and
-    // parameters, widened to the document scope when the system is coupled, as
-    // `ModelCtx::new` scopes a model.
-    if rs.tests.as_ref().is_some_and(|t| !t.is_empty()) {
-        let mut scope: HashSet<String> = defined_species
-            .union(&defined_parameters)
-            .cloned()
-            .collect();
-        scope.extend(implicitly_declared_symbols(esm_file));
-        if coupled_system_names(esm_file).contains(rs_name) {
-            scope.extend(document_declared_names(esm_file));
-        }
+    // reaction system as on a model.
+    {
         for (t_idx, test) in rs.tests.iter().flatten().enumerate() {
             for (a_idx, assertion) in test.assertions.iter().enumerate() {
                 let Some(crate::types::AssertionReference::Expression(reference)) =
@@ -2521,7 +2530,7 @@ pub(crate) fn validate_reaction_system(
                 else {
                     continue;
                 };
-                let mut ref_scope = scope.clone();
+                let mut ref_scope = rs_scope.clone();
                 collect_bound_symbols(reference, &mut ref_scope);
                 validate_expression_references_with_systems(
                     reference,
@@ -2539,7 +2548,6 @@ pub(crate) fn validate_reaction_system(
     // Stoichiometric rate-dimension check (spec §7.4).
     validate_reaction_rate_units(rs_name, rs, errors);
 
-    // Note: Event validation would go here when ReactionSystem types support events
 }
 
 /// Enforce the mass-action dimensional constraint from spec §7.4: rate

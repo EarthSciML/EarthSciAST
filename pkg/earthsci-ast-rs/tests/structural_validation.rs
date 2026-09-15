@@ -410,6 +410,18 @@ fn test_undefined_variable_contexts() {
                 "../../../tests/invalid/undefined_variable_in_reaction_system_assertion_reference.esm"
             ),
         ),
+        (
+            "undefined_variable_in_reaction_system_constraint_equation",
+            include_str!(
+                "../../../tests/invalid/undefined_variable_in_reaction_system_constraint_equation.esm"
+            ),
+        ),
+        (
+            "undefined_variable_in_reaction_system_discrete_event_trigger",
+            include_str!(
+                "../../../tests/invalid/undefined_variable_in_reaction_system_discrete_event_trigger.esm"
+            ),
+        ),
     ];
 
     for (name, fixture) in fixtures {

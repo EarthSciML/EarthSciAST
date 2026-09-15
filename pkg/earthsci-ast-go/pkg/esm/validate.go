@@ -1824,32 +1824,26 @@ func (s *structuralScan) validateReactionSystem(systemName string, system *React
 	}
 
 	// A reaction system's CONSTRAINT EQUATIONS, EVENTS and inline TESTS are
-	// reference sites over its species + parameters, and none of them was reached:
-	// reference integrity entered a reaction system through `reaction.rate` and
-	// nowhere else, so an undeclared species in a constraint equation, an event
-	// trigger/condition or an event affect was accepted silently. An undeclared
-	// BARE name in these is an `undefined_parameter`, as in a rate (see the rate
-	// check). The inline tests are checked below, outside this override.
-	s.withUndefinedCode(ErrorUndefinedParameter, func() {
-		for i, eq := range system.ConstraintEquations {
-			s.validateEquationRefs(eq, allVars, fmt.Sprintf("%s/constraint_equations/%d", basePath, i), systemName)
-		}
-		// A reaction system has no `variables` map, so there is no parameter for
-		// an affect to write and `event_affects_parameter` cannot arise here; the
-		// nil model turns that check off while leaving reference integrity on.
-		for i, event := range system.DiscreteEvents {
-			event := event
-			eventPath := fmt.Sprintf("%s/discrete_events/%d", basePath, i)
-			s.validateDiscreteEvent(&event, allVars, eventPath, nil, systemName)
-		}
-		for i, event := range system.ContinuousEvents {
-			event := event
-			s.validateContinuousEvent(&event, allVars,
-				fmt.Sprintf("%s/continuous_events/%d", basePath, i), nil, systemName)
-		}
-	})
-	// An inline test's assertion `reference` is the same site on a reaction system
-	// as on a model (§6.6), so it reports `undefined_variable` as the model's does.
+	// reference sites over its species + parameters. Each is the same site on a
+	// reaction system as on a model, so an undeclared bare name in one is an
+	// `undefined_variable`, as it is in a model; only a reaction `rate` keeps
+	// `undefined_parameter` (see the rate check).
+	for i, eq := range system.ConstraintEquations {
+		s.validateEquationRefs(eq, allVars, fmt.Sprintf("%s/constraint_equations/%d", basePath, i), systemName)
+	}
+	// A reaction system has no `variables` map, so there is no parameter for an
+	// affect to write and `event_affects_parameter` cannot arise here; the nil
+	// model turns that check off while leaving reference integrity on.
+	for i, event := range system.DiscreteEvents {
+		event := event
+		eventPath := fmt.Sprintf("%s/discrete_events/%d", basePath, i)
+		s.validateDiscreteEvent(&event, allVars, eventPath, nil, systemName)
+	}
+	for i, event := range system.ContinuousEvents {
+		event := event
+		s.validateContinuousEvent(&event, allVars,
+			fmt.Sprintf("%s/continuous_events/%d", basePath, i), nil, systemName)
+	}
 	s.validateTestRefs(system.Tests, allVars, basePath, systemName)
 
 	// v0.8.0 §11.4.1: an `ic`-op equation MUST NOT appear inside a reaction

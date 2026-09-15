@@ -1627,12 +1627,20 @@ def _model_expression_sites(m: dict[str, Any], mname: str):
                     {},
                 )
 
-    for i, ev in enumerate(m.get("continuous_events", []) or []):
+    yield from _event_expression_sites(m, f"models/{mname}")
+    yield from _test_reference_sites(m, f"models/{mname}")
+
+
+def _event_expression_sites(component: dict[str, Any], location: str):
+    """A component's continuous- and discrete-event expressions, in the
+    :func:`_model_expression_sites` tuple shape. An event is the same site on a
+    reaction system as on a model, so both component kinds share this."""
+    for i, ev in enumerate(component.get("continuous_events", []) or []):
         if not isinstance(ev, dict):
             continue
         for j, cond in enumerate(ev.get("conditions", []) or []):
             yield (
-                f"models/{mname}/continuous_events[{i}]/conditions[{j}]",
+                f"{location}/continuous_events[{i}]/conditions[{j}]",
                 cond,
                 True,
                 "continuous event condition",
@@ -1642,20 +1650,20 @@ def _model_expression_sites(m: dict[str, Any], mname: str):
             for j, aff in enumerate(ev.get(key, []) or []):
                 if isinstance(aff, dict) and "rhs" in aff:
                     yield (
-                        f"models/{mname}/continuous_events[{i}]/{key}[{j}]/rhs",
+                        f"{location}/continuous_events[{i}]/{key}[{j}]/rhs",
                         aff["rhs"],
                         True,
                         "continuous event affect RHS",
                         {},
                     )
 
-    for i, ev in enumerate(m.get("discrete_events", []) or []):
+    for i, ev in enumerate(component.get("discrete_events", []) or []):
         if not isinstance(ev, dict):
             continue
         trigger = ev.get("trigger")
         if isinstance(trigger, dict) and trigger.get("expression") is not None:
             yield (
-                f"models/{mname}/discrete_events[{i}]/trigger/expression",
+                f"{location}/discrete_events[{i}]/trigger/expression",
                 trigger["expression"],
                 True,
                 "discrete event trigger expression",
@@ -1664,14 +1672,34 @@ def _model_expression_sites(m: dict[str, Any], mname: str):
         for j, aff in enumerate(ev.get("affects", []) or []):
             if isinstance(aff, dict) and "rhs" in aff:
                 yield (
-                    f"models/{mname}/discrete_events[{i}]/affects[{j}]/rhs",
+                    f"{location}/discrete_events[{i}]/affects[{j}]/rhs",
                     aff["rhs"],
                     True,
                     "discrete event affect RHS",
                     {},
                 )
 
-    yield from _test_reference_sites(m, f"models/{mname}")
+
+def _reaction_system_expression_sites(rs: dict[str, Any], rsname: str):
+    """A reaction system's reference sites outside its reaction rates: its
+    constraint equations, events and inline-test references. Each is the same
+    site as on a model and reports ``undefined_variable`` as the model's does;
+    a reaction ``rate`` keeps ``undefined_parameter`` (:func:`_check_reaction_systems`)."""
+    location = f"reaction_systems/{rsname}"
+    for i, eq in enumerate(rs.get("constraint_equations", []) or []):
+        if not isinstance(eq, dict):
+            continue
+        for side in ("lhs", "rhs"):
+            if side in eq:
+                yield (
+                    f"{location}/constraint_equations[{i}]/{side}",
+                    eq[side],
+                    True,
+                    None,
+                    {"equation_index": i, "expected_in": "variables"},
+                )
+    yield from _event_expression_sites(rs, location)
+    yield from _test_reference_sites(rs, location)
 
 
 def _test_reference_sites(component: dict[str, Any], location: str):
@@ -1695,13 +1723,13 @@ def _test_reference_sites(component: dict[str, Any], location: str):
 def _component_reference_sites(data: dict[str, Any]):
     """Yield ``(component, sites)`` for every component whose expressions the
     reference-integrity check walks: each model's full site list, and each
-    reaction system's inline-test references."""
+    reaction system's sites outside its reaction rates."""
     for mname, m in (data.get("models") or {}).items():
         if isinstance(m, dict):
             yield m, _model_expression_sites(m, mname)
     for rsname, rs in (data.get("reaction_systems") or {}).items():
         if isinstance(rs, dict):
-            yield rs, _test_reference_sites(rs, f"reaction_systems/{rsname}")
+            yield rs, _reaction_system_expression_sites(rs, rsname)
 
 
 def _pointer(location: str) -> str:
