@@ -15,8 +15,29 @@ use thiserror::Error;
 /// Errors raised when building a compiled model from a flattened system.
 #[derive(Error, Debug)]
 pub enum CompileError {
+    /// A model construct this evaluator cannot run: a discrete event, or an
+    /// implicit equation (an equation whose LHS is an expression rather than an
+    /// unknown, `D(unknown)` or `ic(unknown)`). esm-spec §9.6.6
+    /// `unsupported_construct`.
+    ///
+    /// Refused at build rather than skipped: a model run without its event, or
+    /// without its residual solved, reports the initial value as its answer,
+    /// and nothing in that answer says a construct was dropped.
+    #[error(
+        "unsupported_construct: {construct} {detail} is not supported by the {evaluator}; \
+         refusing the build rather than running the model without it (esm-spec §9.6.6)"
+    )]
+    UnsupportedConstruct {
+        /// Which construct: [`DISCRETE_EVENT`] or [`IMPLICIT_EQUATION`].
+        construct: &'static str,
+        /// Which evaluator refused it, e.g. `"Rust array evaluator"`.
+        evaluator: &'static str,
+        /// The offending instance: an event's name, or an equation's LHS.
+        detail: String,
+    },
+
     /// The flattened system contains a feature the v1 simulator does not support
-    /// (e.g. continuous or discrete events).
+    /// (e.g. continuous events).
     #[error("Unsupported feature '{feature}': {message}")]
     UnsupportedFeatureError {
         /// Feature name (e.g. `"continuous_events"`).
@@ -298,5 +319,78 @@ impl CompileError {
         CompileError::InterpreterBuildError {
             details: details.into(),
         }
+    }
+}
+
+/// [`CompileError::UnsupportedConstruct`]'s `construct` for a `discrete_events`
+/// entry.
+pub const DISCRETE_EVENT: &str = "discrete event";
+/// [`CompileError::UnsupportedConstruct`]'s `construct` for an equation whose
+/// LHS is an expression ([`crate::classification::LhsForm::Expression`]).
+pub const IMPLICIT_EQUATION: &str = "implicit equation";
+/// The scalar ODE interpreter (`crate::simulate`), as a refusal names it.
+pub const SCALAR_EVALUATOR: &str = "Rust scalar ODE interpreter";
+/// The array runtime (`crate::simulate_array`), as a refusal names it.
+pub const ARRAY_EVALUATOR: &str = "Rust array evaluator";
+
+/// The refusal of a discrete event by `evaluator`, naming the event.
+pub fn discrete_event_refusal(evaluator: &'static str, name: Option<&str>) -> CompileError {
+    CompileError::UnsupportedConstruct {
+        construct: DISCRETE_EVENT,
+        evaluator,
+        detail: name.map_or_else(|| "(unnamed)".to_string(), |n| format!("'{n}'")),
+    }
+}
+
+/// The first equation that constrains its operands only implicitly. An `ic`
+/// LHS is an initial condition, and a derivative-operator LHS the
+/// classification cannot credit is a rewrite target the `unlowered_operator`
+/// gate reports; neither is counted.
+pub fn first_implicit_equation(
+    equations: &[crate::types::Equation],
+) -> Option<&crate::types::Equation> {
+    use crate::classification::{LhsForm, lhs_form};
+    use crate::types::Expr;
+    equations.iter().find(|eq| {
+        let structural = matches!(
+            &eq.lhs,
+            Expr::Operator(n) if matches!(n.op.as_str(), "ic" | "D" | "grad" | "div" | "laplacian")
+        );
+        !structural && matches!(lhs_form(&eq.lhs), LhsForm::Expression)
+    })
+}
+
+/// The refusal of an implicit equation by `evaluator`, naming the equation.
+pub fn implicit_equation_refusal(
+    evaluator: &'static str,
+    equation: &crate::types::Equation,
+) -> CompileError {
+    CompileError::UnsupportedConstruct {
+        construct: IMPLICIT_EQUATION,
+        evaluator,
+        detail: format!(
+            "`{} ~ {}`",
+            crate::to_ascii(&equation.lhs),
+            crate::to_ascii(&equation.rhs)
+        ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unsupported_construct_carries_its_registered_code() {
+        let msg = discrete_event_refusal(ARRAY_EVALUATOR, Some("double")).to_string();
+        assert!(
+            msg.starts_with(&format!(
+                "{}:",
+                crate::diagnostic::codes::UNSUPPORTED_CONSTRUCT
+            )),
+            "{msg}"
+        );
+        assert!(msg.contains("discrete event 'double'"), "{msg}");
+        assert!(msg.contains(ARRAY_EVALUATOR), "{msg}");
     }
 }

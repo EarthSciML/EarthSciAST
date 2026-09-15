@@ -153,6 +153,11 @@ export const ERROR_CODES = {
   //   WINS, not the order cells are EVALUATED in, and a region's value
   //   expression is evaluated once for the whole region.
   RECURRENCE_UNSUPPORTED_FORM: 'recurrence_unsupported_form',
+  // `unsupported_construct` — a discrete event or an implicit equation (an
+  //   expression LHS) reached an evaluator that cannot run it (esm-spec §9.6.6).
+  //   This binding does not simulate, so it never raises it; the entry keeps
+  //   the §9.6.6 vocabulary uniform across the five registries.
+  UNSUPPORTED_CONSTRUCT: 'unsupported_construct',
   EQUATION_COUNT_MISMATCH: 'equation_count_mismatch',
   // `event_affects_parameter` — an event `affects` LHS names a PARAMETER
   //   (esm-spec §5.4). From 1.0.0 events affect UNKNOWNS ONLY: a parameter that

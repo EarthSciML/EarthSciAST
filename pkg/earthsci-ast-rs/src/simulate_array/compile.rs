@@ -476,13 +476,11 @@ impl ArrayCompiled {
                     .to_string(),
             });
         }
-        if !flat.discrete_events.is_empty() {
-            return Err(CompileError::UnsupportedFeatureError {
-                feature: "discrete_events".to_string(),
-                message: "array-op path does not support discrete events. \
-                          Track the future Rust events bead for support."
-                    .to_string(),
-            });
+        if let Some(event) = flat.discrete_events.first() {
+            return Err(crate::compile_error::discrete_event_refusal(
+                crate::compile_error::ARRAY_EVALUATOR,
+                event.name.as_deref(),
+            ));
         }
 
         // Re-merge the typed variable maps into one registry. The maps are
@@ -614,6 +612,17 @@ impl ArrayCompiled {
         // scope (RFC §5.4; the Julia `_factor_scope` mirror). Both are no-ops —
         // and the registry copy is byte-identical — for models without
         // subsystems / ragged sets.
+        // A discrete event is refused before anything is built. This is the
+        // SINGLE-MODEL route's check: `from_flattened` checks the flattened
+        // event list itself, because the synthetic model it hands down carries
+        // no events. Subsystems are searched too, since mounting keeps only
+        // their variables and equations.
+        if let Some(name) = first_discrete_event(&model_owned) {
+            return Err(crate::compile_error::discrete_event_refusal(
+                crate::compile_error::ARRAY_EVALUATOR,
+                name.as_deref(),
+            ));
+        }
         let mut index_sets_owned = index_sets.clone();
         mount_subsystems(&mut model_owned, &mut index_sets_owned)?;
         // esm-spec §4.2, the two halves of the right-hand-side `D` rule, applied
@@ -736,6 +745,16 @@ impl ArrayCompiled {
             // equations or observed-variable expressions (esm-i7b).
             reject_unlowered_spatial_ops(model)?;
 
+            // (0a) Reject an implicit equation: this runtime has no algebraic
+            // solve, and every stage below would skip the equation, leaving the
+            // unknown at its initial value.
+            if let Some(eq) = crate::compile_error::first_implicit_equation(&model.equations) {
+                return Err(crate::compile_error::implicit_equation_refusal(
+                    crate::compile_error::ARRAY_EVALUATOR,
+                    eq,
+                ));
+            }
+
             // (0b) Reject a reference to a variable bound in NONE of the model's
             // binding categories — the array-path analogue of the scalar
             // interpreter's `resolve_expr` "Unknown variable" gate, and the same
@@ -847,6 +866,37 @@ impl ArrayCompiled {
 // [`ArrayCompiled::from_model`], which composes them in order); the bodies are
 // extracted verbatim from the former inline implementation.
 // ============================================================================
+
+/// The name of the first discrete event `model` or any of its inline subsystems
+/// declares (`Some(None)` for an unnamed one), searching the subsystems' raw
+/// JSON because mounting carries only their variables and equations.
+fn first_discrete_event(model: &Model) -> Option<Option<String>> {
+    fn in_json(value: &serde_json::Value) -> Option<Option<String>> {
+        if let Some(event) = value
+            .get("discrete_events")
+            .and_then(|v| v.as_array())
+            .and_then(|events| events.first())
+        {
+            return Some(
+                event
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .map(str::to_string),
+            );
+        }
+        value
+            .get("subsystems")
+            .and_then(|s| s.as_object())
+            .and_then(|subs| subs.values().find_map(in_json))
+    }
+    if let Some(event) = model.discrete_events.as_ref().and_then(|e| e.first()) {
+        return Some(event.name.clone());
+    }
+    model
+        .subsystems
+        .as_ref()
+        .and_then(|subs| subs.values().find_map(in_json))
+}
 
 /// (0) Reject, at BUILD, every operator this runtime cannot evaluate — the
 /// open rewrite-target tier (`grad`/`div`/`laplacian`, a spatial `D`, a user op,

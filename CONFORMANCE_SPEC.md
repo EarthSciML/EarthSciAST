@@ -5517,6 +5517,35 @@ answer skips **visibly** with its reason printed). Any mismatch beyond tolerance
 any required-binding refusal, and any required-binding `unavailable` exits
 non-zero.
 
+### 5.39 Unsupported Constructs Are Refused, Not Dropped (normative)
+
+**Decision pinned.** A discrete event (`discrete_events`) and an implicit
+equation (an LHS that is an expression rather than an unknown, a time derivative
+of one, or `ic` of one) are two constructs none of the three executing bindings'
+simulators runs: not Julia's tree-walk evaluator, not Python's SymPy or NumPy
+pathways, not Rust's scalar interpreter or array runtime. Each of those
+evaluators MUST refuse a document carrying either construct at BUILD with the
+esm-spec §9.6.6 diagnostic `unsupported_construct`, and the message MUST name
+the construct and the evaluator. Before issue #264 they built the model without
+the construct: the event never fired, the residual was never solved, and an
+inline test reported the initial value as its answer.
+
+**Shape.** Golden-free. Four refusal cases, one per construct per evaluator path
+(scalar and array), and one CONTROL: the array discrete-event document with its
+event removed, which MUST still run and pass. The control is the non-vacuity
+anchor: a binding that refused every array document would otherwise satisfy the
+refusal cases.
+
+The manifest and fixtures live in `tests/conformance/unsupported_construct/`.
+Adapters: `pkg/EarthSciAST.jl/test/unsupported_construct_conformance_test.jl`;
+`pkg/earthsci-ast-py/tests/test_unsupported_construct_conformance.py`;
+`pkg/earthsci-ast-rs/tests/unsupported_construct_conformance.rs`. Go and
+TypeScript do not simulate; they only register the code.
+
+**Out of scope.** Julia's ModelingToolkit export runs discrete events and hands
+implicit equations to `mtkcompile`, so it never raises the code. Running either
+construct on an array evaluator is future work in every binding.
+
 
 ## 6. CI Integration
 

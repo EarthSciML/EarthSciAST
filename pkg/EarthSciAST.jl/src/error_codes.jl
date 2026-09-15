@@ -269,6 +269,12 @@ const ERROR_CODES = (
     #    surfaces when a rewrite-target operator (an RHS-position `D`, or
     #    `grad`/`div`/`laplacian`) reaches evaluation unlowered. ────────────
     UNLOWERED_OPERATOR = "unlowered_operator",
+    # ── Evaluator refusal (tree_walk/; esm-spec §9.6.6). A discrete event or an
+    #    implicit equation reached the tree-walk evaluator, which runs neither.
+    #    Refused at build rather than skipped, because a run without the
+    #    construct reports the initial value as its answer. The ModelingToolkit
+    #    export runs both and never raises it. ─────────────────────────────────
+    UNSUPPORTED_CONSTRUCT = "unsupported_construct",
 )
 
 """
