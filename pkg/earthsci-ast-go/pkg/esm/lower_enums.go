@@ -50,6 +50,11 @@ func newEnumLoweringError(code, msg string) *EnumLoweringError {
 // arguments are not two strings is left for LowerEnums, which owns the
 // malformed-op diagnostic.
 func lowerEnumOpsForFile(document map[string]any, target any, openNames map[string]bool) (any, error) {
+	return lowerRawEnumOps(target, rawEnumsBlock(document), openNames)
+}
+
+// rawEnumsBlock reads a raw document's `enums` block into its typed form.
+func rawEnumsBlock(document map[string]any) map[string]map[string]int {
 	enums := map[string]map[string]int{}
 	block, _ := document["enums"].(map[string]any)
 	for name, rawMembers := range block {
@@ -65,7 +70,82 @@ func lowerEnumOpsForFile(document map[string]any, target any, openNames map[stri
 		}
 		enums[name] = m
 	}
-	return lowerRawEnumOps(target, enums, openNames)
+	return enums
+}
+
+// lowerMountedDocumentEnums lowers, IN PLACE, the `enum` ops of a document
+// mounted at a §4.7 edge against that document's own `enums` block (esm-spec
+// §9.3), once it has resolved in its own scope and before its component is
+// spliced into the mounting document, whose block is a different one. `enums`
+// do not merge across a mount, so this is the only block those ops can name.
+//
+// A template declaration's body is lowered with that template's `params` left
+// open, as at the import edge: an op spelled with a parameter resolves at the
+// call site. Everything else is lowered with no open names.
+func lowerMountedDocumentEnums(document map[string]any) error {
+	enums := rawEnumsBlock(document)
+	for k, v := range document {
+		lowered, err := lowerMountedEnumOps(k, v, enums)
+		if err != nil {
+			return err
+		}
+		document[k] = lowered
+	}
+	return nil
+}
+
+func lowerMountedEnumOps(key string, node any, enums map[string]map[string]int) (any, error) {
+	if tpl, ok := node.(map[string]any); ok && key == "expression_templates" {
+		for name, rawDecl := range tpl {
+			decl, ok := rawDecl.(map[string]any)
+			if !ok {
+				continue
+			}
+			body, has := decl["body"]
+			if !has {
+				continue
+			}
+			open := map[string]bool{}
+			if params, ok := decl["params"].([]any); ok {
+				for _, p := range params {
+					if s, ok := p.(string); ok {
+						open[s] = true
+					}
+				}
+			}
+			lowered, err := lowerRawEnumOps(body, enums, open)
+			if err != nil {
+				return nil, err
+			}
+			decl["body"] = lowered
+			tpl[name] = decl
+		}
+		return tpl, nil
+	}
+	switch v := node.(type) {
+	case []any:
+		for i, el := range v {
+			lowered, err := lowerMountedEnumOps("", el, enums)
+			if err != nil {
+				return nil, err
+			}
+			v[i] = lowered
+		}
+		return v, nil
+	case map[string]any:
+		if op, _ := v["op"].(string); op == OpEnum {
+			return lowerRawEnumOps(v, enums, nil)
+		}
+		for k, el := range v {
+			lowered, err := lowerMountedEnumOps(k, el, enums)
+			if err != nil {
+				return nil, err
+			}
+			v[k] = lowered
+		}
+		return v, nil
+	}
+	return node, nil
 }
 
 func rawEnumValue(v any) (int, bool) {

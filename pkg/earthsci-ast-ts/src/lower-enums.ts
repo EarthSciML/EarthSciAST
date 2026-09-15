@@ -209,3 +209,49 @@ export function lowerEnumOpsForFile(
   }
   return walk(target)
 }
+
+/**
+ * Return raw `document`, mounted at a §4.7 edge, with its `enum` ops lowered
+ * against its own `enums` block (esm-spec §9.3). `document` is not modified.
+ *
+ * Called once the document has resolved in its own scope and before its
+ * component is spliced into the mounting document, whose block is a different
+ * one. `enums` do not merge across a mount, so this is the only block those ops
+ * can name.
+ *
+ * A template declaration's body is lowered with that template's `params` left
+ * open, as at the import edge: an op spelled with a parameter resolves at the
+ * call site. Everything else is lowered with no open names.
+ */
+export function lowerMountedDocumentEnums<T>(document: T): T {
+  const lowerTemplates = (templates: Record<string, unknown>): Record<string, unknown> => {
+    const out: Record<string, unknown> = {}
+    for (const [name, decl] of Object.entries(templates)) {
+      if (decl !== null && typeof decl === 'object' && 'body' in decl) {
+        const d = decl as { body: unknown; params?: unknown }
+        const params = Array.isArray(d.params)
+          ? d.params.filter((p): p is string => typeof p === 'string')
+          : []
+        out[name] = { ...d, body: lowerEnumOpsForFile(document, d.body, new Set(params)) }
+      } else {
+        out[name] = decl
+      }
+    }
+    return out
+  }
+  const walk = (node: unknown): unknown => {
+    if (Array.isArray(node)) return node.map(walk)
+    if (node === null || typeof node !== 'object' || isNumericLiteral(node)) return node
+    const obj = node as Record<string, unknown>
+    if (obj.op === 'enum') return lowerEnumOpsForFile(document, obj)
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(obj)) {
+      out[k] =
+        k === 'expression_templates' && v !== null && typeof v === 'object' && !Array.isArray(v)
+          ? lowerTemplates(v as Record<string, unknown>)
+          : walk(v)
+    }
+    return out
+  }
+  return walk(document) as T
+}

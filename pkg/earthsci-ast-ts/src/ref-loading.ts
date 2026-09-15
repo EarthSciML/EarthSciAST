@@ -40,6 +40,7 @@ import {
   resolveTemplateMachinery,
 } from './template-imports.js'
 import { isCouplingLibraryDoc } from './coupling-imports.js'
+import { EnumLoweringError, lowerMountedDocumentEnums } from './lower-enums.js'
 import {
   canonicalizePath,
   isRemoteRef,
@@ -665,10 +666,26 @@ function resolveRefDocument(
   // esm-spec §9.6.4 (Option B): lower to the reference-preserving form, then
   // apply the RFC §7.7 Expand-at-build strategy so the resolved subsystem is
   // the Option-A expanded image (bit-identical downstream behavior).
-  const out =
+  const expanded =
     resolved === null
       ? machineryInput
       : (expandDocument(lowerExpressionTemplates(resolved)) as EsmFile)
+  // esm-spec §9.3: the referenced document's `enum` ops resolve against ITS
+  // OWN `enums` block, here, while that block is still at hand. The mounting
+  // document's block is a different one and `enums` do not merge across a
+  // mount, so an importer declaring an enum of the same name cannot change what
+  // the leaf computes. The leaf's own nested mounts were lowered at their own
+  // edges above.
+  let out: EsmFile
+  try {
+    out = lowerMountedDocumentEnums(expanded)
+  } catch (e) {
+    if (!(e instanceof EnumLoweringError)) throw e
+    throw new EsmMachineryError(
+      e.code,
+      `${mountLabel}: ${e.message} — an \`enum\` op in a mounted file resolves against that file's own \`enums\` block (esm-spec §9.3)`,
+    )
+  }
   // esm-spec §4.7 "Mount-edge index-set renaming", pipeline step 2. The
   // referenced document has now resolved in its OWN scope — its imports, this
   // edge's `bindings` and injection, its metaparameter close and fold, the

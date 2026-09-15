@@ -620,7 +620,8 @@ _with_declarations(file::EsmFile, templates, metaparams;
 # requires a `Model` with `variables`, so the reference is inlined at the
 # raw-JSON level — before schema validation, expression-template lowering, and
 # coercion — and the blocks the model's AST references by name
-# (`function_tables`, `enums`, `data_sources`) are merged in from the component.
+# (`function_tables`, `data_sources`) are merged in from the component; `enums` stay
+# file-local and are lowered at the edge (esm-spec §9.3).
 # Nested subsystem `{ref}`s inside the component are rewritten to absolute paths
 # so the later `resolve_subsystem_refs!` pass (anchored at the *parent* dir)
 # still finds them. Resolution recurses (a component may itself reference another
@@ -789,7 +790,7 @@ end
     _inline_toplevel_model_refs(raw_data, base_path; metaparameters) -> Union{Nothing,Dict{String,Any}}
 
 Return a native ESM dict with every top-level model `{ref}` stub replaced by the
-referenced component's model (and its `index_sets` / `function_tables` / `enums`
+referenced component's model (and its `index_sets` / `function_tables`
 / `data_sources` merged in), or `nothing` when `raw_data` has no such stub.
 The stub path copies the document (`_to_ordered`, order-preserving) so the
 in-place worker never mutates the caller's tree; the reaction-system inliner
@@ -849,6 +850,19 @@ run this same code on the native dictionary instead of a second copy of it on
 the typed tree (the duplication `_inline_toplevel_model_refs!`'s own docstring
 refuses).
 """
+# Lower `target`'s `enum` ops against the `enums` block of `document`, the file
+# mounted at this §4.7 edge (esm-spec §9.3), naming the edge in the diagnostic.
+function _lower_mounted_enums_at_edge(document, target, mount_noun::AbstractString)
+    try
+        return _lower_mounted_document_enums(document, target)
+    catch e
+        e isa EnumLoweringError || rethrow()
+        throw(ExpressionTemplateError(e.code,
+            "$(mount_noun): $(e.message) — an `enum` op in a mounted file resolves " *
+            "against that file's own `enums` block (esm-spec §9.3)"))
+    end
+end
+
 function _resolve_mount_edge_core(entry::AbstractDict, ref::String, refpath::String,
                                   base_path::String, visited::Set{String};
                                   mount_noun::String,
@@ -983,6 +997,13 @@ function _resolve_mount_edge_core(entry::AbstractDict, ref::String, refpath::Str
     if resolved !== nothing
         comp = expand_document(lower_expression_templates(resolved))
     end
+
+    # esm-spec §9.3: the leaf's `enum` ops resolve against ITS OWN `enums` block,
+    # here, while that block is still at hand. The mounting document's block is a
+    # different one and `enums` do not merge across a mount, so an importer
+    # declaring an enum of the same name cannot change what the leaf computes.
+    # The leaf's own nested mounts were lowered at their own edges above.
+    comp = _lower_mounted_enums_at_edge(comp, comp, mount_noun)
 
     # The leaf has now CLOSED, so what its own nested mounts staged can land:
     # each contribution folded against the leaf's closed environment — esm-spec
@@ -1173,7 +1194,7 @@ forbids the two attachment points from differing:
 The leaf's own nested top-level model-refs then resolve in the leaf's directory,
 sharing this walk's path-scoped cycle set, so the merge composes transitively.
 On top of the shared pipeline this form additionally merges the leaf's
-`function_tables` / `data_sources` / `enums` up (parent wins on a key clash) and
+`function_tables` / `data_sources` up (parent wins on a key clash) and
 drops the leaf's inline `tests` (esm-spec §6.6: they do not cross a mount edge).
 
 `parent_meta` is the MOUNTING document's closed metaparameter environment (its
@@ -1270,8 +1291,10 @@ function _inline_toplevel_model_refs!(native::AbstractDict{String,Any}, base_pat
             # `subsystem_index_set_conflict`.
             _merge_native_index_sets!(native, comp, ref; staged=staged, staged_refs=staged_refs)
             # Merge the by-name blocks the model's AST references; the parent wins
-            # on a key clash (its own definitions take precedence).
-            for blk in ("function_tables", "data_sources", "enums")
+            # on a key clash (its own definitions take precedence). `enums` is not
+            # one of them: it is file-local (esm-spec §9.3), and the leaf's `enum`
+            # ops were already lowered against it at the edge.
+            for blk in ("function_tables", "data_sources")
                 src = get(comp, blk, nothing)
                 (src isa AbstractDict && !isempty(src)) || continue
                 dst = get!(() -> Dict{String,Any}(), native, blk)
@@ -1292,7 +1315,7 @@ end
 
 Return a native ESM dict with every top-level reaction_system `{ref}` stub
 replaced by the referenced component's reaction system (and its
-`function_tables` / `enums` / `data_sources` merged in), or `nothing` when
+`function_tables` / `data_sources` merged in), or `nothing` when
 `raw_data` has no such stub. The reaction-system analogue of
 [`_inline_toplevel_model_refs`](@ref) (schema §4.7: a `reaction_systems` entry is
 `oneOf [ReactionSystem, {ref}]`), so an assembly may mount an external
@@ -1320,7 +1343,7 @@ In-place native-dict worker for [`_inline_toplevel_reaction_system_refs`](@ref).
 Mirrors [`_inline_toplevel_model_refs!`](@ref): loads each stub's referenced file,
 splices in its single top-level reaction system (or the one named by a
 `"reaction_system"` selector), and merges the `function_tables` / `data_sources`
-/ `enums` blocks the reaction system's AST references (parent wins on a clash).
+blocks the reaction system's AST references (parent wins on a clash).
 Cycle detection is PATH-scoped, so the same single-reaction-system file may be
 mounted under several assembly keys.
 """
@@ -1385,6 +1408,12 @@ function _inline_toplevel_reaction_system_refs!(native::AbstractDict{String,Any}
             # esm-spec §6.6: inline tests do not cross a mount edge — the
             # reaction-system twin of the rule in `_inline_toplevel_model_refs!`.
             crsys isa AbstractDict && delete!(crsys, "tests")
+            # esm-spec §9.3: the reaction system's `enum` ops resolve against its
+            # OWN file's `enums` block, which does not merge into this document.
+            # Its §9.7 resolution is deferred to the root, so a template body keeps
+            # the ops its `params` spell for the call site.
+            crsys = _lower_mounted_enums_at_edge(comp, crsys,
+                                                 "top-level reaction system ref '$(ref)'")
             _absolutize_nested_refs!(crsys, compdir)
             rsystems[name] = crsys
             # esm-spec §9.7.10 form A at a TOP-LEVEL reaction-system-ref edge:
@@ -1399,7 +1428,8 @@ function _inline_toplevel_reaction_system_refs!(native::AbstractDict{String,Any}
             end
             # Merge the by-name blocks the reaction system's AST references; the
             # parent wins on a key clash (its own definitions take precedence).
-            for blk in ("function_tables", "data_sources", "enums")
+            # Not `enums`: it is file-local (esm-spec §9.3), lowered above.
+            for blk in ("function_tables", "data_sources")
                 src = get(comp, blk, nothing)
                 (src isa AbstractDict && !isempty(src)) || continue
                 dst = get!(() -> Dict{String,Any}(), native, blk)
