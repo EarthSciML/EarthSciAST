@@ -1,0 +1,5 @@
+{
+  "code": "unknown_enum",
+  "stage": "load",
+  "description": "A template library's body names enum `activity_unit`, which the library does not declare. An `enum` op resolves against the `enums` block of the file that wrote it (esm-spec §9.3), so it is lowered at the import edge against the library's block and rejected there, with a message naming the library file and the template. fixture.esm declares the enum nowhere; fixture_importer_declares.esm declares it in the importer only, which does not rescue the library (and must not silently lend it the importer's value)."
+}

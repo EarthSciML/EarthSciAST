@@ -1,0 +1,68 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "UndefinedVariableInAssertionVariable",
+    "description": "Invalid: an assertion's `variable` names `undefined_xyz`, which the model does not declare (esm-spec §6.6.3). `y` and `k` are declared; the ONLY defect is the assertion target. Before this check a typo'd target was reported only by a runtime that ran the test, and accepted by every validator. Expected error: undefined_variable @ /models/TestModel/tests/0/assertions/0/variable.",
+    "authors": [
+      "EarthSciML"
+    ],
+    "created": "2026-09-15T00:00:00Z"
+  },
+  "models": {
+    "TestModel": {
+      "variables": {
+        "y": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0,
+          "description": "State."
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 1.0,
+          "description": "Declared parameter."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "y"
+            ]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "t0",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "assertions": [
+            {
+              "variable": "undefined_xyz",
+              "time": 1.0,
+              "expected": 0.0
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -142,6 +142,9 @@ func TestTemplateImports_ConformanceGoldens(t *testing.T) {
 		// §9.7.6 substitution is per-FIELD: a metaparameter named after the
 		// structural string field beside it must not rewrite that field.
 		{"metaparam_axis_name_collision", "fixture.esm", "expanded.esm"},
+		// esm-spec §9.3: a library's `enum` ops resolve against the library's own block.
+		{"import_library_enum", "fixture.esm", "expanded.esm"},
+		{"import_library_enum", "fixture_importer_redeclares.esm", "expanded_importer_redeclares.esm"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.group+"/"+tc.golden, func(t *testing.T) {
@@ -544,6 +547,78 @@ func TestTemplateImports_RenameStillRewritesDimAxis(t *testing.T) {
 		if out[k] != "lev" {
 			t.Errorf("%s = %#v; want %q — the rename must follow the axis", k, out[k], "lev")
 		}
+	}
+}
+
+// TestTemplateImports_LibraryEnumKeepsLibraryValue pins esm-spec §9.3 across a
+// template import: the importer's same-name enum (g_per_hp_hr = 7) does not
+// reach the library's template body, which keeps the library's 1, while the
+// importer's own `enum` ops — including one bound into the template's
+// parameter — resolve against the importer's block.
+func TestTemplateImports_LibraryEnumKeepsLibraryValue(t *testing.T) {
+	f, err := LoadPath(tiConfDir(t, "import_library_enum", "fixture_importer_redeclares.esm"))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	got := map[string]string{}
+	for _, eq := range f.Models["Consumer"].Equations {
+		if lhs, ok := eq.LHS.(string); ok {
+			got[lhs] = tiCanonJSON(t, eq.RHS)
+		}
+	}
+	want := map[string]string{
+		"isPerHorsepowerHour": `{"args":[1,{"args":[],"op":"const","value":1}],"op":"=="}`,
+		"importerCode":        `{"args":[],"op":"const","value":7}`,
+		"callerBoundCode":     `{"args":[{"args":[],"op":"const","value":7},{"args":[],"op":"const","value":1}],"op":"=="}`,
+		// The library's own call binds `g_per_gallon`, so it keeps the library's 2;
+		// a symbol the importer binds, directly or through a forwarded
+		// parameter, takes the importer's 9.
+		"gallonCode":        `{"args":[],"op":"const","value":2}`,
+		"importerBoundCode": `{"args":[],"op":"const","value":9}`,
+		"forwardedCode":     `{"args":[],"op":"const","value":9}`,
+	}
+	for lhs, w := range want {
+		if got[lhs] != w {
+			t.Errorf("%s = %s; want %s", lhs, got[lhs], w)
+		}
+	}
+}
+
+// TestTemplateImports_LibraryEnumOwnCallNeedsNoImporterEnums pins that a symbol a
+// library binds in its own call resolves against the library's `enums` block,
+// so an importer that declares no enums still loads (esm-spec §9.3).
+func TestTemplateImports_LibraryEnumOwnCallNeedsNoImporterEnums(t *testing.T) {
+	f, err := LoadPath(tiConfDir(t, "import_library_enum", "fixture.esm"))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	for _, eq := range f.Models["Consumer"].Equations {
+		if lhs, _ := eq.LHS.(string); lhs == "gallonCode" {
+			if got, want := tiCanonJSON(t, eq.RHS), `{"args":[],"op":"const","value":2}`; got != want {
+				t.Fatalf("gallonCode = %s; want %s", got, want)
+			}
+			return
+		}
+	}
+	t.Fatal("no gallonCode equation")
+}
+
+// TestTemplateImports_LibraryEnumUndeclared pins that a library body naming an
+// enum the library does not declare is `unknown_enum`, reported against the
+// library and the template — even when the importer declares it (esm-spec §9.3).
+func TestTemplateImports_LibraryEnumUndeclared(t *testing.T) {
+	for _, fixture := range []string{"fixture.esm", "fixture_importer_declares.esm"} {
+		t.Run(fixture, func(t *testing.T) {
+			_, err := LoadPath(tiConfDir(t, "import_library_enum_undeclared", fixture))
+			if code := tiErrCode(t, err); code != "unknown_enum" {
+				t.Fatalf("code = %s; want unknown_enum", code)
+			}
+			for _, part := range []string{"lib.esm", "plus_horsepower_code"} {
+				if !strings.Contains(err.Error(), part) {
+					t.Errorf("error does not name %q: %v", part, err)
+				}
+			}
+		})
 	}
 }
 

@@ -2581,6 +2581,8 @@ An **exact hit (rule 1) is never part of a collision**: it identifies its variab
 
 Silently ignoring an unrecognized key is specifically non-conforming. It produces a *wrong answer rather than a missing one*: the author writes an override, nothing happens, the run proceeds on the declared defaults, and — for a key inside an inline `test` — the runner still reports a pass/fail verdict for a configuration that was never actually exercised. The error type is language-idiomatic (an exception, a `Result` error, a returned diagnostic); the **classification** of each key is the cross-binding contract, gated by the `override_key_diagnostics` conformance category (CONFORMANCE_SPEC §5.15).
 
+**Unknown keys are also a validation error.** Whether a key matches any name at all does not depend on the build, so a validator MUST also reject an unknown key, with `unknown_override_key` at the key's pointer (`…/tests/i/parameter_overrides/<key>` or `…/tests/i/initial_conditions/<key>`, the key escaped as a JSON Pointer token). The names a validator resolves keys against are the document's declared names, qualified the way a flatten qualifies them. Each top-level component's variables, species and parameters are `<component>.<name>`, and each inline subsystem's are `<component>.<subsystem>.<name>`, at any depth. The component and subsystem names are the qualifiers rule 2 checks. A trailing element suffix (`u[1]`) is removed from the key first, because a runtime addresses the elements of a shaped state by it. The validator reports only a key that matches no name under rules 1-3. Ambiguous keys and colliding keys depend on the names the build carries (a single-model build carries bare names), so they remain runtime diagnostics. A document that still holds an unresolved `{ref}` mount skips the check, because a key may name a declaration inside the mount.
+
 #### 6.6.3 Assertion Semantics
 
 Each assertion is a per-(variable, time) check against a scalar expected value:
@@ -2595,6 +2597,8 @@ Each assertion is a per-(variable, time) check against a scalar expected value:
 | `reduce` | | PDE only: collapse the spatial field to a scalar before comparison. One of `integral`, `mean`, `max`, `min`, `L2_error`, `Linf_error`. Mutually exclusive with `coords`. |
 
 Assertions are stored **inline** only — there is no file-reference option. Tests should be small (a handful of assertion points), not full reference trajectories.
+
+**A bare target must be declared.** A validator MUST reject an assertion whose `variable` is a bare name that the asserting component does not declare, with `undefined_variable` at `…/tests/i/assertions/j/variable`. A trailing element suffix (`u[1]`) is removed first. A model declares its `variables`; a reaction system declares its `species` and `parameters`. A dotted `variable` is not checked at validation: it names a declaration in a subsystem or another component, and resolves at run time as a scoped reference (§4.6).
 
 An assertion passes when the computed value `actual` satisfies
 
@@ -2659,10 +2663,14 @@ This resolution is pinned by the `tolerance_resolution` conformance category (CO
 
 #### 6.6.5 PDE-Aware Assertions
 
-Pointwise scalar assertions (the default — neither `coords` nor `reduce`) only make sense on 0-D components: there is one trajectory per variable, indexed by time alone. On a component whose variables are shaped over one or more spatial index sets, every assertion MUST select a scalar via either `coords` or `reduce`. Validators MUST reject:
+A pointwise assertion (the default — neither `coords` nor `reduce`) reads one trajectory, indexed by time alone. That is a scalar variable, or one element of a shaped variable named by an element name (`u[1]`, `u[2,3]`). An assertion on a whole shaped field MUST select a scalar via either `coords` or `reduce`.
 
-- a 0-D component carrying an assertion with `coords` or `reduce` set; and
-- a PDE component carrying a pointwise assertion (no `coords`, no `reduce`).
+Whether an assertion must select a scalar is decided **per assertion**, from the declared `shape` of the variable it names. It is not decided from the component as a whole, because one component may declare scalar and shaped variables side by side. Validators MUST reject, with `assertion_rank_mismatch` at the assertion's pointer (`…/tests/i/assertions/j`):
+
+- a pointwise assertion on a variable declared with a non-empty `shape`, unless its target is an element name; and
+- an assertion with `coords` or `reduce` on a variable declared without a `shape`, or with an empty one.
+
+The check applies to a target the asserting component declares by a bare name: a model variable, or a reaction system's parameter or species (a species has no `shape`). A target written as an element name is exempt from the second rule as well. A dotted target names a declaration elsewhere (§6.6.3) and is left to the runtime.
 
 `coords` keys MUST match the spatial index-set names the field is shaped over. Three conventions, established by the cross-binding parity implementations, are **pinned** (determinism requires one answer; conforming runtimes MUST implement exactly these):
 
@@ -3897,6 +3905,7 @@ The `enums` top-level block declares file-local symbol → integer mappings used
 - The two 1-based constructs in this format — `index`-op / index-set coordinates (§4.3.3, §5.2) and `makearray` regions (§4.3.2) — are separate and carry their own bounds validation. Using an enum member as an `index` argument (the §4.5 example) is an authoring choice that the `index` op bounds-checks like any other operand; it does not constrain what an `enums` block may declare.
 - Within a single enum, integer values MUST be unique — `0` is a value like any other, so two symbols MAY NOT both map to `0`. Across enums, values MAY collide (each enum defines its own namespace).
 - Two `.esm` files may declare an enum of the same name with different mappings: enums are file-local and never merged across files. References from a subsystem `ref` (§4.7) inherit the enums declared in the *referenced* file, not the enclosing one.
+- **Template libraries (§9.7).** An `enum` op written in a template-library file's template `body` resolves against **that library's** `enums` block, never the importer's. It is lowered at the import edge, while the library resolves in its own scope (§9.7.7 edge pipeline, step 1), so the templates reach the importer with the op already a `const` (§9.7.5). An importer therefore needs no copy of a library's enums, and an importer that declares an enum of the same name, with the same or a different mapping, does not change what the library's templates compute. An op whose enum-name or symbol argument is spelled by one of the template's `params` is decided by the file that binds that parameter: parameter substitution is position-blind (§9.6.3 constraint 5), so the binding decides what the op spells. **The library's own calls resolve in the library.** When a library template body calls a template in the library's scope (its own or one it imports) and that call binds the parameter, the edge expands each such call to a template that can still produce an `enum` op (the eager expansion §9.6.4 rule 3 requires at load) and lowers the result against the library's block. **Only parameters the importer binds resolve in the importer.** An op still spelled with a parameter after that step (because the importer calls the template directly, or because the calling library template forwards one of its own `params` into the call) stays as written and resolves with the importing document's enums after expansion. An op whose arguments are not two strings is left to the document-wide pass. A library body naming an enum or symbol the library does not declare, directly or through a symbol it binds in its own call, is `unknown_enum` / `unknown_enum_symbol` at load, reported against the library and the template, even when the importer declares that name.
 
 **Lowering contract:**
 
@@ -4412,6 +4421,8 @@ The import-renaming RFC adds (see `docs/content/rfcs/template-import-renaming.md
 - `import_rebind_keyed_factors/` — an MPAS-style ragged keyed-factor rule with its factor contract rebound to the consumer's `meshA_*` arrays (§9.7.7).
 - `import_rename_diamond/` — identical renamed edges dedupe; a differently-renamed edge registers distinctly; the equal-priority tie between two axis-less rule instances is pinned by the §9.7.4 order (§9.7.7).
 - `import_rename_integral_axis/` — one cumulative-`integral` rule library instantiated twice (prefix `col`/`row`, rename `x` → `lev`/`lat`, N = 4/3); transitive rename through the match's `var` and bare-axis-name `upper` bound, so each instance fires only on its own axis (§9.7.7).
+- `import_library_enum/` — a library that declares an enum, names it in its own template body, and binds a symbol into a parameter-spelled `enum` op in its own call: the importer loads without the enum (`expanded.esm`), and an importer redeclaring the enum with different values does not change the library's constants (its own `enum` op and its own call), while every symbol the importer spells, including one it binds directly or through a forwarded parameter, resolves against the importer's block (`expanded_importer_redeclares.esm`) (§9.3).
+- `import_library_enum_undeclared/` — invalid: a library body naming an enum the library does not declare → `unknown_enum` at load, reported against the library and the template, whether or not the importer declares that enum (§9.3).
 
 The match-scoping RFC adds (see `docs/content/rfcs/match-pattern-scoping-constraints.md`):
 
@@ -4584,6 +4595,8 @@ Renaming (§9.7.7) applies per edge **before** this merge, so the effective sequ
 #### 9.7.5 `index_sets` merge
 
 An imported file's top-level `index_sets` merge into the importing **document's** document-scoped registry, after metaparameter instantiation and after any edge renaming (§9.7.7) — i.e. under their **post-rename** names, with any rebound keyed factors already rewritten. This lets a grid library file own its axes: a consuming model's variables are shaped over the merged names without redeclaring them — and lets two instances of one grid family coexist as, e.g., `fine.x` and `coarse.x`. Deep-equal redeclaration is idempotent; a non-equal collision is `template_import_index_set_conflict`. A §4.7 subsystem reference edge merges the referenced file's top-level `index_sets` the same way, with its own diagnostic (`subsystem_index_set_conflict`, §4.7) and its own edge-level renaming field (`index_set_rename`, §4.7 "Mount-edge index-set renaming") — the mount-edge counterpart of this section's `prefix`/`rename`, restricted to index sets because they are the only declaration kind a mount contributes to the document registry.
+
+An imported file's `enums` block does **not** merge (§9.3). The library resolves its own `enum` ops before its templates cross the edge: each `enum` op in one of the library's own template bodies is lowered against the library's block, and each call those bodies make to a template that can still produce an `enum` op is expanded and lowered against the same block. An op still spelled with one of the calling template's `params` resolves at the importer's call site. What reaches the importer is the templates, not the enums they used. A library template whose own call is expanded this way reaches the importer with that call inlined, so the importer's references to it are no longer target-bearing on that account (§9.6.4 rule 3) and survive load uninlined (rules 1–2).
 
 #### 9.7.6 Load-time metaparameters
 

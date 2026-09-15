@@ -8,6 +8,7 @@ package esm
 // representation.
 
 import (
+	"encoding/json"
 	"fmt"
 )
 
@@ -31,6 +32,97 @@ func (e *EnumLoweringError) DiagnosticCode() string { return e.Code }
 
 func newEnumLoweringError(code, msg string) *EnumLoweringError {
 	return &EnumLoweringError{Code: code, Message: msg}
+}
+
+// lowerEnumOpsForFile returns raw-JSON target with its `enum` ops lowered
+// against the `enums` block of document, the file that wrote target. target is
+// not modified.
+//
+// An `enum` op is file-local (esm-spec §9.3): it resolves against the block of
+// the file it is written in. LowerEnums runs once over the root document, so a
+// tree that crosses a file boundary before that pass (a template-library body
+// reaching an importer, §9.7.5) is lowered here, at the edge, while its own
+// file's block is still at hand.
+//
+// An op with an argument spelled by a name in openNames is left in place: a
+// template parameter substitutes position-blind (§9.6.3 constraint 5), so the
+// call site decides what it spells and the op resolves there. An op whose
+// arguments are not two strings is left for LowerEnums, which owns the
+// malformed-op diagnostic.
+func lowerEnumOpsForFile(document map[string]any, target any, openNames map[string]bool) (any, error) {
+	enums := map[string]map[string]int{}
+	block, _ := document["enums"].(map[string]any)
+	for name, rawMembers := range block {
+		members, ok := rawMembers.(map[string]any)
+		if !ok {
+			continue
+		}
+		m := map[string]int{}
+		for sym, v := range members {
+			if n, ok := rawEnumValue(v); ok {
+				m[sym] = n
+			}
+		}
+		enums[name] = m
+	}
+	return lowerRawEnumOps(target, enums, openNames)
+}
+
+func rawEnumValue(v any) (int, bool) {
+	switch n := v.(type) {
+	case json.Number:
+		i, err := n.Int64()
+		return int(i), err == nil
+	case float64:
+		return int(n), n == float64(int(n))
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	}
+	return 0, false
+}
+
+func lowerRawEnumOps(node any, enums map[string]map[string]int, openNames map[string]bool) (any, error) {
+	switch v := node.(type) {
+	case []any:
+		out := make([]any, len(v))
+		for i, el := range v {
+			lowered, err := lowerRawEnumOps(el, enums, openNames)
+			if err != nil {
+				return nil, err
+			}
+			out[i] = lowered
+		}
+		return out, nil
+	case map[string]any:
+		if op, _ := v["op"].(string); op == OpEnum {
+			args, _ := v["args"].([]any)
+			if len(args) != 2 {
+				return v, nil
+			}
+			name, okName := args[0].(string)
+			sym, okSym := args[1].(string)
+			if !okName || !okSym || openNames[name] || openNames[sym] {
+				return v, nil
+			}
+			lowered, err := lowerExprNodeEnums(ExprNode{Op: OpEnum, Args: []any{name, sym}}, enums)
+			if err != nil {
+				return nil, err
+			}
+			return map[string]any{"op": OpConst, "args": []any{}, "value": lowered.(ExprNode).Value}, nil
+		}
+		out := make(map[string]any, len(v))
+		for k, el := range v {
+			lowered, err := lowerRawEnumOps(el, enums, openNames)
+			if err != nil {
+				return nil, err
+			}
+			out[k] = lowered
+		}
+		return out, nil
+	}
+	return node, nil
 }
 
 // LowerEnums resolves every `enum` op in the file to a

@@ -131,6 +131,13 @@ def _err_code(fn) -> str | None:
         # §9.7.6 substitution is per-FIELD: a metaparameter named after the
         # structural string field beside it must not rewrite that field.
         ("metaparam_axis_name_collision", "fixture.esm", "expanded.esm"),
+        # §9.3: a library's `enum` ops resolve against the library's own block.
+        ("import_library_enum", "fixture.esm", "expanded.esm"),
+        (
+            "import_library_enum",
+            "fixture_importer_redeclares.esm",
+            "expanded_importer_redeclares.esm",
+        ),
     ],
 )
 def test_import_conformance_matches_golden(group, fixture, golden):
@@ -403,6 +410,48 @@ def test_import_where_rename_unknown_index_set_rejected():
         )
         == "template_constraint_unknown_index_set"
     )
+
+
+def test_library_enum_keeps_the_library_value_under_an_importer_redeclaration():
+    """esm-spec §9.3: the importer's same-name enum (g_per_hp_hr = 7) does not
+    reach the library's template body, which keeps the library's 1; the
+    importer's own `enum` ops, including one bound into the template's
+    parameter, resolve against the importer's block."""
+    f = load_path(os.path.join(CONF, "import_library_enum", "fixture_importer_redeclares.esm"))
+    m = f.models["Consumer"]
+    library_body = _defining_typed(m, "isPerHorsepowerHour")
+    assert library_body.op == "=="
+    assert library_body.args[1].op == "const" and library_body.args[1].value == 1
+    importer_own = _defining_typed(m, "importerCode")
+    assert importer_own.op == "const" and importer_own.value == 7
+    caller_bound = _defining_typed(m, "callerBoundCode")
+    assert caller_bound.args[0].value == 7
+    assert caller_bound.args[1].value == 1
+    # The library's own call binds `g_per_gallon`, so it keeps the library's 2; a
+    # symbol the importer binds, directly or through a forwarded parameter, takes 9.
+    assert _defining_typed(m, "gallonCode").value == 2
+    assert _defining_typed(m, "importerBoundCode").value == 9
+    assert _defining_typed(m, "forwardedCode").value == 9
+
+
+def test_library_enum_own_call_needs_no_importer_enums():
+    """esm-spec §9.3: a symbol a library binds in its own call resolves against
+    the library's `enums` block, so an importer that declares no enums loads."""
+    f = load_path(os.path.join(CONF, "import_library_enum", "fixture.esm"))
+    gallon = _defining_typed(f.models["Consumer"], "gallonCode")
+    assert gallon.op == "const" and gallon.value == 2
+
+
+@pytest.mark.parametrize("fixture", ["fixture.esm", "fixture_importer_declares.esm"])
+def test_library_enum_undeclared_is_reported_against_the_library(fixture):
+    """esm-spec §9.3: a library body naming an enum the library does not declare
+    is `unknown_enum` at the import edge, naming the library and the template —
+    even when the importer declares that enum."""
+    with pytest.raises(ExpressionTemplateError) as excinfo:
+        load_path(os.path.join(CONF, "import_library_enum_undeclared", fixture))
+    assert excinfo.value.code == "unknown_enum"
+    assert "lib.esm" in str(excinfo.value)
+    assert "plus_horsepower_code" in str(excinfo.value)
 
 
 # ---------------------------------------------------------------------------

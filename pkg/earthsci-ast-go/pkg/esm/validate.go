@@ -470,6 +470,7 @@ func collectStructuralErrors(file *ESMFile) []StructuralError {
 	s.validateSubsystemRefs()
 	s.validateCircularReferences()
 	s.validateDataSourceReferences()
+	s.validateInlineTests()
 
 	return s.errors
 }

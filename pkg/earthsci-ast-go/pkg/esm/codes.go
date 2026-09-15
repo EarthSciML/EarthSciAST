@@ -322,6 +322,15 @@ const (
 	// clock in place of a fuel time-lag constant.
 	// (tests/invalid/reserved_variable_name_*.esm).
 	ErrorReservedVariableName = "reserved_variable_name"
+	// ErrorUnknownOverrideKey is an inline test's `initial_conditions` or
+	// `parameter_overrides` key that matches no declared name under the esm-spec
+	// §6.6.2 override-key rules (tests/invalid/unknown_override_key_*.esm).
+	ErrorUnknownOverrideKey = "unknown_override_key"
+	// ErrorAssertionRankMismatch is an assertion whose form does not match the
+	// declared rank of the variable it names (esm-spec §6.6.5): pointwise on a
+	// shaped variable, or `coords` / `reduce` on a scalar one
+	// (tests/invalid/assertion_rank_mismatch_*.esm).
+	ErrorAssertionRankMismatch = "assertion_rank_mismatch"
 )
 
 // --- Diagnostic codes: structural validation, peers of the Error* block
