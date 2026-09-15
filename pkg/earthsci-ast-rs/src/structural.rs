@@ -2522,26 +2522,24 @@ pub(crate) fn validate_reaction_system(
 
     // An inline test's assertion `reference` (§6.6) is the same site on a
     // reaction system as on a model.
-    {
-        for (t_idx, test) in rs.tests.iter().flatten().enumerate() {
-            for (a_idx, assertion) in test.assertions.iter().enumerate() {
-                let Some(crate::types::AssertionReference::Expression(reference)) =
-                    &assertion.reference
-                else {
-                    continue;
-                };
-                let mut ref_scope = rs_scope.clone();
-                collect_bound_symbols(reference, &mut ref_scope);
-                validate_expression_references_with_systems(
-                    reference,
-                    &ref_scope,
-                    system_refs,
-                    &HashSet::new(),
-                    &format!("{rs_path}/tests/{t_idx}/assertions/{a_idx}/reference"),
-                    0,
-                    errors,
-                );
-            }
+    for (t_idx, test) in rs.tests.iter().flatten().enumerate() {
+        for (a_idx, assertion) in test.assertions.iter().enumerate() {
+            let Some(crate::types::AssertionReference::Expression(reference)) =
+                &assertion.reference
+            else {
+                continue;
+            };
+            let mut ref_scope = rs_scope.clone();
+            collect_bound_symbols(reference, &mut ref_scope);
+            validate_expression_references_with_systems(
+                reference,
+                &ref_scope,
+                system_refs,
+                &HashSet::new(),
+                &format!("{rs_path}/tests/{t_idx}/assertions/{a_idx}/reference"),
+                0,
+                errors,
+            );
         }
     }
 
