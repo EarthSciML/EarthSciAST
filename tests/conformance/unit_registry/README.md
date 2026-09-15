@@ -37,9 +37,11 @@ good file, and not enough to catch three things that bit us in one week:
 
 | List | Contract |
 |---|---|
-| `accept` | The string MUST resolve; its DIMENSION must equal the binding's own result for `canonical`; and when `scale_to_canonical` is non-null, converting 1 `units` to `canonical` must give that factor within a 1e-12 relative tolerance. |
+| `accept` | The string MUST resolve; its DIMENSION must equal the binding's own result for `canonical`; when `scale_to_canonical` is non-null, converting 1 `units` to `canonical` must give that factor within a 1e-12 relative tolerance; and the binding's EXACT scale of `units` divided by that of `canonical` must equal `scale_exact` exactly. |
 | `reject` | The string MUST NOT resolve. Severity of the resulting finding is §4.8.4's; this file pins only that it does not resolve. |
 | `reject_scaling_factor` | MUST NOT resolve, **and** the diagnostic must contain `scaling factor`. |
+
+`scale_exact` is that ratio as an exact number, written `p/q` in lowest terms (`/q` omitted when it is 1), times `*pi` or `*pi^k` when π is a factor. It is compared as a STRING, so there is no tolerance: it is what makes the five registries agree exactly (esm-spec §4.8.1 "Scales are EXACT"), and it is present for the affine units too, because the checker compares their scale even though a numeric conversion would need an offset.
 
 `scale_to_canonical` is `null` exactly for the affine units. §4.8.1 deliberately
 does not model the offset, so their pure multiplicative factor is not a
