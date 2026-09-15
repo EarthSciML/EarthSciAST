@@ -245,6 +245,20 @@ func renameWalk(x any, varmap, isetmap, tplmap map[string]string) any {
 				})
 				continue
 			}
+			// A map keyed by author-chosen names (a `ranges` loop symbol, an
+			// apply-node `bindings` param): an entry name is a declared name, not
+			// a field, so it is never dispatched on (esm-spec §9.7.6 map-key
+			// rule). A `ranges` entry named `dim` still has its `from` renamed.
+			if _, isMap := nameKeyedMapKeys[k]; isMap {
+				if entries, ok := val.(map[string]any); ok {
+					walked := make(map[string]any, len(entries))
+					for name, entry := range entries {
+						walked[name] = renameWalk(entry, varmap, isetmap, tplmap)
+					}
+					out[k] = walked
+					continue
+				}
+			}
 			if k == "of" {
 				out[k] = deepCopyJSON(val)
 				continue
@@ -407,6 +421,15 @@ func collectRefNames(out map[string]struct{}, x any, shadowed map[string]struct{
 			}
 			if _, prot := renameProtectedKeys[k]; prot {
 				continue
+			}
+			// renameWalk's name-keyed map rule: an entry name is never pruned.
+			if _, isMap := nameKeyedMapKeys[k]; isMap {
+				if entries, ok := c.(map[string]any); ok {
+					for _, entry := range entries {
+						collectRefNames(out, entry, shadowed)
+					}
+					continue
+				}
 			}
 			collectRefNames(out, c, shadowed)
 		}

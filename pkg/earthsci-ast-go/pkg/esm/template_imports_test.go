@@ -145,6 +145,9 @@ func TestTemplateImports_ConformanceGoldens(t *testing.T) {
 		// §9.7.6 fourth structural family (loop symbols, references, enums,
 		// units, free text) and map keys as declared names.
 		{"metaparam_structural_field_collision", "fixture.esm", "expanded.esm"},
+		// §9.7.7 rename through map entries spelled like structural keys: a
+		// map entry name is never dispatched on.
+		{"import_rename_name_keyed_map_entries", "fixture.esm", "expanded.esm"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.group+"/"+tc.golden, func(t *testing.T) {

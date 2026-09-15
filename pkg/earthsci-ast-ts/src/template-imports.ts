@@ -1061,6 +1061,16 @@ function renameWalk(
         out[k] = renameJoinOn(v, isetmap, (e) =>
           Object.prototype.hasOwnProperty.call(varmap, e) ? varmap[e]! : e,
         )
+      } else if (NAME_KEYED_MAP_KEYS.has(k) && isObject(v)) {
+        // A map keyed by author-chosen names (a `ranges` loop symbol, an
+        // apply-node `bindings` param): an entry name is a declared name, not a
+        // field, so it is never dispatched on (esm-spec §9.7.6 map-key rule). A
+        // `ranges` entry named `dim` still has its `from` renamed.
+        const walked: JsonObject = {}
+        for (const name of Object.keys(v)) {
+          walked[name] = renameWalk(v[name], varmap, isetmap, tplmap)
+        }
+        out[k] = walked
       } else if (k === 'of' || RENAME_PROTECTED_KEYS.has(k)) {
         out[k] = deepClone(v)
       } else {
@@ -1186,7 +1196,13 @@ function collectRefNames(out: Set<string>, x: Json, shadowed: Set<string>): Set<
       if (k === 'from' || RENAME_AXIS_KEYS.has(k) || k === 'of' || RENAME_PROTECTED_KEYS.has(k)) {
         continue
       }
-      collectRefNames(out, x[k], shadowed)
+      const v = x[k]
+      // `renameWalk`'s name-keyed map rule: an entry name is never pruned.
+      if (NAME_KEYED_MAP_KEYS.has(k) && isObject(v)) {
+        for (const name of Object.keys(v)) collectRefNames(out, v[name], shadowed)
+        continue
+      }
+      collectRefNames(out, v, shadowed)
     }
     return out
   }

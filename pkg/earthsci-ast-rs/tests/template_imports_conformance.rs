@@ -372,6 +372,29 @@ fn metaparam_structural_field_collision_matches_golden() {
     assert_eq!(obs_def(model, "type")["args"], json!(["c", 7]));
 }
 
+/// import_rename_name_keyed_map_entries: the §9.7.7 rename walk never
+/// dispatches on a map entry name (esm-spec §9.7.6 map-key rule). A `ranges`
+/// entry spelled `dim` still has its `from` follow the prefix, and apply-node
+/// `bindings` entries spelled `units` / `dim` are variable-reference positions,
+/// so their free names are rebindable.
+#[test]
+fn import_rename_name_keyed_map_entries_matches_golden() {
+    let d = expand_raw(&conf(&[
+        "import_rename_name_keyed_map_entries",
+        "fixture.esm",
+    ]));
+    assert_eq!(
+        d,
+        golden(&conf(&[
+            "import_rename_name_keyed_map_entries",
+            "expanded.esm"
+        ]))
+    );
+    let total = obs_def(&d["models"]["M"], "total");
+    assert_eq!(total["ranges"], json!({"dim": {"from": "L.cells"}}));
+    assert_eq!(total["expr"]["args"][1], json!({"op": "*", "args": ["kk", "kk2"]}));
+}
+
 /// import_where_rename_unknown_index_set: a `where` shape naming a set the
 /// library never declares survives the rename as spelled and is rejected at rule
 /// registration — the fix does not paper over genuine typos.

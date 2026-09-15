@@ -317,6 +317,19 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
     expect([...NAME_KEYED_MAP_KEYS].sort()).toEqual([...cls.name_keyed_map_keys].sort())
   })
 
+  it('import_rename_name_keyed_map_entries: rename never dispatches on a map entry name (§9.7.7)', () => {
+    // A `ranges` entry spelled `dim` still has its `from` follow the prefix, and
+    // apply-node `bindings` entries spelled `units` / `dim` are variable-reference
+    // positions, so their free names are rebindable (esm-spec §9.7.6 map-key rule).
+    const d = expandRaw(conf('import_rename_name_keyed_map_entries', 'fixture.esm')) as any
+    expect(canonEqs(d)).toEqual(
+      canonEqs(golden(conf('import_rename_name_keyed_map_entries', 'expanded.esm'))),
+    )
+    const total = definingRhs(d.models.M, 'total')
+    expect(total.ranges).toEqual({ dim: { from: 'L.cells' } })
+    expect(total.expr.args[1]).toEqual({ op: '*', args: ['kk', 'kk2'] })
+  })
+
   it('import_where_rename_unknown_index_set: bad where set after rename rejected', () => {
     // A where shape naming a set the library never declares survives the rename
     // as spelled and is rejected at rule registration (esm-spec §9.6.6).

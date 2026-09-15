@@ -390,6 +390,18 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         @test _defrhs(d, "M", "type")["args"] == Any["c", 7]
     end
 
+    @testset "import_rename_name_keyed_map_entries: rename never dispatches on a map entry name (§9.7.7)" begin
+        # A `ranges` entry spelled `dim` still has its `from` follow the prefix,
+        # and apply-node `bindings` entries spelled `units` / `dim` are
+        # variable-reference positions, so their free names are rebindable
+        # (esm-spec §9.7.6 map-key rule).
+        d = _expand_raw(conf("import_rename_name_keyed_map_entries", "fixture.esm"))
+        @test d == _golden(conf("import_rename_name_keyed_map_entries", "expanded.esm"))
+        total = _defrhs(d, "M", "total")
+        @test total["ranges"] == Dict("dim" => Dict("from" => "L.cells"))
+        @test total["expr"]["args"][2] == Dict("op" => "*", "args" => Any["kk", "kk2"])
+    end
+
     @testset "metaparameter substitution tables match the shared classification (§9.7.6)" begin
         # The key sets are derived from a classification of every string-capable
         # schema property (scripts/check-metaparameter-substitution-fields.py);

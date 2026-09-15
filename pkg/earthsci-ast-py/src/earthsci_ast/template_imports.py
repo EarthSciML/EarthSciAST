@@ -1004,6 +1004,14 @@ def _rename_walk(
             # data-column name keeps the varmap fold it had before this rule
             # existed.
             return _rename_join_on(value, isetmap, lambda e: varmap.get(e, e))
+        if ks in _NAME_KEYED_MAP_KEYS and _is_object(value):
+            # A map keyed by author-chosen names (a `ranges` loop symbol, an
+            # apply-node `bindings` param): an entry name is a declared name, not
+            # a field, so it is never dispatched on (esm-spec §9.7.6 map-key
+            # rule). A `ranges` entry named `dim` still has its `from` renamed.
+            return {
+                name: _rename_walk(entry, varmap, isetmap, tplmap) for name, entry in value.items()
+            }
         if ks == "of" or ks in _RENAME_PROTECTED_KEYS:
             return copy.deepcopy(value)
         return recurse(value)
@@ -1217,13 +1225,29 @@ def _collect_bound_syms(out: set, x: Any) -> set:
 def _collect_ref_names(out: set, x: Any, shadowed: set) -> set:
     """Every bare string in a variable-reference position of a declaration (the
     positions ``varmap`` would rewrite), minus the per-template ``params`` shadow
-    set. Used for the rebind occurs-check and the freshness (collision) guard."""
+    set. Used for the rebind occurs-check and the freshness (collision) guard.
+    Prunes exactly what :func:`_rename_walk` does not rewrite through ``varmap``,
+    including its name-keyed map rule: an entry name is never tested against
+    the skip set."""
 
-    def _add(name: str) -> None:
-        if name not in shadowed:
-            out.add(name)
+    def rec(node: Any) -> None:
+        if isinstance(node, str):
+            if node not in shadowed:
+                out.add(node)
+        elif _is_array(node):
+            for child in node:
+                rec(child)
+        elif _is_object(node):
+            for key, value in node.items():
+                if key in _REF_NAME_SKIP_KEYS:
+                    continue
+                if key in _NAME_KEYED_MAP_KEYS and _is_object(value):
+                    for entry in value.values():
+                        rec(entry)
+                else:
+                    rec(value)
 
-    _walk_json(x, on_str=_add, skip_keys=_REF_NAME_SKIP_KEYS)
+    rec(x)
     return out
 
 

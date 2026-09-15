@@ -871,6 +871,15 @@ function _rename_walk(x, varmap::AbstractDict{String,String},
                 # or a data-column name keeps the varmap fold it had before this
                 # rule existed.
                 out[ks] = _rename_join_on(v, isetmap, e -> get(varmap, e, e))
+            elseif ks in _NAME_KEYED_MAP_KEYS && _is_object(v)
+                # A map keyed by author-chosen names (a `ranges` loop symbol, an
+                # apply-node `bindings` param): an entry name is a declared name,
+                # not a field, so it is never dispatched on (esm-spec §9.7.6
+                # map-key rule). A `ranges` entry named `dim` still has its
+                # `from` renamed.
+                out[ks] = OrderedDict{String,Any}(
+                    string(name) => _rename_walk(entry, varmap, isetmap, tplmap)
+                    for (name, entry) in pairs(v))
             elseif ks == "of" || ks in _RENAME_PROTECTED_KEYS
                 out[ks] = _to_ordered(v)
             else
@@ -971,6 +980,13 @@ function _collect_ref_names!(out::Set{String}, x, shadowed::Set{String})
         # variable-reference positions (see `_STRUCTURAL_FIELDS`).
         if key !== nothing && (key == "from" || key in _RENAME_AXIS_KEYS ||
                                key == "of" || key in _RENAME_PROTECTED_KEYS)
+            return false
+        end
+        # `_rename_walk`'s name-keyed map rule: an entry name is never pruned.
+        if key !== nothing && key in _NAME_KEYED_MAP_KEYS && _is_object(n)
+            for (_, entry) in pairs(n)
+                _collect_ref_names!(out, entry, shadowed)
+            end
             return false
         end
         if n isa AbstractString

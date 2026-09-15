@@ -136,6 +136,8 @@ def _err_code(fn) -> str | None:
         # structural string field beside it must not rewrite that field.
         ("metaparam_axis_name_collision", "fixture.esm", "expanded.esm"),
         ("metaparam_structural_field_collision", "fixture.esm", "expanded.esm"),
+        # §9.7.7 rename through map entries spelled like structural keys.
+        ("import_rename_name_keyed_map_entries", "fixture.esm", "expanded.esm"),
     ],
 )
 def test_import_conformance_matches_golden(group, fixture, golden):
@@ -1208,3 +1210,14 @@ def test_metaparameter_substitution_tables_match_shared_classification():
     # The substitution-only kind must not leak into the rename walk's protected
     # set: that set is derived from the kinds, not from the skip set.
     assert not (_OPAQUE_KEYS & _RENAME_PROTECTED_KEYS)
+
+
+def test_import_rename_walks_name_keyed_map_entries():
+    """§9.7.7 + §9.7.6 map-key rule: the rename walk never dispatches on a map
+    entry name. A `ranges` entry spelled `dim` still has its `from` follow the
+    prefix, and apply-node `bindings` entries spelled `units` / `dim` are
+    variable-reference positions, so their free names are rebindable."""
+    d = _expand_raw(os.path.join(CONF, "import_rename_name_keyed_map_entries", "fixture.esm"))
+    total = _defining(d, "M", "total")
+    assert total["ranges"] == {"dim": {"from": "L.cells"}}
+    assert total["expr"]["args"][1] == {"op": "*", "args": ["kk", "kk2"]}

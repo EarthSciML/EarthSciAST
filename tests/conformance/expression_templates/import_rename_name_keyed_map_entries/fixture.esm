@@ -1,0 +1,25 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "import_rename_name_keyed_map_entries",
+    "description": "Import-edge renaming (esm-spec 9.7.7) through map entries named like structural keys. A map key is a declared name, not a field (9.7.6), so the rename walk never dispatches on it. The library's faq loop symbol is spelled `dim`, so its `ranges` entry `dim: {from: cells}` still follows the prefix to L.cells. An apply-node `bindings` entry is spelled `units` and another `dim`, so their values are variable references: the free names k and k2 are found by the rebind check, and they are rebound to kk and kk2."
+  },
+  "models": {
+    "M": {
+      "expression_template_imports": [
+        { "ref": "./maplib.esm", "prefix": "L", "rebind": { "k": "kk", "k2": "kk2" } }
+      ],
+      "variables": {
+        "u": { "type": "parameter", "units": "1", "default": 1.0, "shape": ["L.cells"] },
+        "kk": { "type": "parameter", "units": "1", "default": 2.0 },
+        "kk2": { "type": "parameter", "units": "1", "default": 3.0 },
+        "x": { "type": "unknown", "units": "1", "default": 0.0 },
+        "total": { "type": "unknown", "units": "1" }
+      },
+      "equations": [
+        { "lhs": { "op": "D", "args": ["x"], "wrt": "t" }, "rhs": { "op": "-", "args": ["x"] } },
+        { "lhs": "total", "rhs": { "op": "total_of", "args": ["u"] } }
+      ]
+    }
+  }
+}

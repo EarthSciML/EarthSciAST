@@ -977,6 +977,22 @@ fn rename_walk(
                             varmap.get(s).cloned().unwrap_or_else(|| s.to_string())
                         }),
                     );
+                } else if let Some(entries) = v
+                    .as_object()
+                    .filter(|_| NAME_KEYED_MAP_KEYS.contains(&k.as_str()))
+                {
+                    // A map keyed by author-chosen names (a `ranges` loop
+                    // symbol, an apply-node `bindings` param): an entry name is
+                    // a declared name, not a field, so it is never dispatched on
+                    // (esm-spec §9.7.6 map-key rule). A `ranges` entry named
+                    // `dim` still has its `from` renamed.
+                    let walked = entries
+                        .iter()
+                        .map(|(name, entry)| {
+                            (name.clone(), rename_walk(entry, varmap, isetmap, tplmap))
+                        })
+                        .collect();
+                    out.insert(k.clone(), Value::Object(walked));
                 } else if k == "of" || is_rename_protected(k) {
                     out.insert(k.clone(), v.clone());
                 } else {
@@ -1372,7 +1388,16 @@ fn collect_ref_names(
                 {
                     continue;
                 }
-                collect_ref_names(v, shadowed, out);
+                // `rename_walk`'s name-keyed map rule: an entry name is never
+                // pruned.
+                match v.as_object() {
+                    Some(entries) if NAME_KEYED_MAP_KEYS.contains(&k.as_str()) => {
+                        for entry in entries.values() {
+                            collect_ref_names(entry, shadowed, out);
+                        }
+                    }
+                    _ => collect_ref_names(v, shadowed, out),
+                }
             }
         }
         _ => {}
