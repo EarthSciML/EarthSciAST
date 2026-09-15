@@ -1171,6 +1171,7 @@ capability and no binding is exempt.
 | EXPR-09-E-011 | Files declaring `esm` < 0.8.0 carrying any §9.7 construct MUST be rejected with `template_import_version_too_old` | esm-spec.md §9.6.5 | Yes | validation |
 | EXPR-09-E-012 | Round-trip MUST emit the expanded, folded form; no §9.7 construct survives `parse → emit` | esm-spec.md §9.7.6 | Yes | serialization |
 | EXPR-09-E-013 | All five bindings MUST produce byte-identical post-lowering canonical ASTs for `import_smoke`, `import_diamond`, `import_order_determinism`, `metaparameter_resolutions` | esm-spec.md §9.6.7 | `tests/conformance/expression_templates/import_*` | expression |
+| EXPR-09-E-014 | A document carrying top-level `expression_templates` beside `models` / `reaction_systems` / `data_sources` / `coupling` / `domain` MUST be rejected at load with `template_library_illegal_payload` (the templates would be visible to no component) | esm-spec.md §9.7.1, §9.6.6 | `tests/invalid/template_imports/root_templates_with_models.esm` | validation |
 
 ### EXPR-09-F: Import Renaming, Namespacing, and Free-Name Rebinding (esm-spec §9.7.7)
 
