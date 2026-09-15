@@ -38,9 +38,11 @@ import jsonschema
 from jsonschema import validate
 
 from .error_handling import (
+    AMBIGUOUS_SUBSYSTEM_REF,
     MOUNT_FORM_UNSUPPORTED,
     SUBSYSTEM_REF_IS_COUPLING_LIBRARY,
     SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY,
+    UNRESOLVED_SUBSYSTEM_REF,
 )
 from .errors import EarthSciAstError, ParseError
 from .esm_types import (
@@ -137,14 +139,6 @@ class SubsystemRefError(EarthSciAstError):
         super().__init__(message)
         self.code = code
         self.path = path
-
-
-#: A subsystem `ref` that does not resolve to a file (esm-spec §4.7).
-UNRESOLVED_SUBSYSTEM_REF = "unresolved_subsystem_ref"
-
-#: A subsystem `ref` whose file carries MORE THAN ONE top-level system. The mount
-#: names exactly one component, so there is no rule for choosing among them.
-AMBIGUOUS_SUBSYSTEM_REF = "ambiguous_subsystem_ref"
 
 
 def _count_top_level_systems(parsed) -> int:

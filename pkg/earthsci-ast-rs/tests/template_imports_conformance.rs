@@ -309,6 +309,95 @@ fn metaparam_axis_name_collision_matches_golden() {
     assert_eq!(r["args"][3]["args"], json!(["c", 3]));
 }
 
+/// metaparam_structural_field_collision: loop symbols, references, enums, units
+/// and free text are names, and a map key is a declared name rather than a
+/// field (esm-spec §9.7.6). Four metaparameters are spelled like structural
+/// values — `row_id` (a join key column, free text), `m` (a unit symbol), `edge`
+/// (a placement tag, a comment, citation text), `ode` (an enum) — and each also
+/// sits in an expression position, where it closes; so does `a`, a dense range
+/// bound beside the loop symbol `p` (a metaparameter spelled like a loop symbol
+/// is `metaparameter_name_conflict`).
+#[test]
+fn metaparam_structural_field_collision_matches_golden() {
+    let d = expand_raw(&conf(&[
+        "metaparam_structural_field_collision",
+        "fixture.esm",
+    ]));
+    assert_eq!(
+        d,
+        golden(&conf(&[
+            "metaparam_structural_field_collision",
+            "expanded.esm"
+        ]))
+    );
+    let model = &d["models"]["M"];
+    assert_eq!(model["system_kind"], "ode");
+    assert_eq!(
+        model["reference"],
+        json!({"citation": "edge", "doi": "edge", "url": "edge", "notes": "row_id"})
+    );
+    assert_eq!(model["variables"]["u"]["default_units"], "m");
+    assert_eq!(model["variables"]["u"]["location"], "edge");
+    let deqs: Vec<&Value> = model["equations"]
+        .as_array()
+        .expect("equations")
+        .iter()
+        .filter(|eq| !eq["lhs"].is_string())
+        .collect();
+    assert_eq!(deqs.len(), 1);
+    assert_eq!(deqs[0]["_comment"], "edge");
+    assert_eq!(deqs[0]["rhs"]["args"], json!(["c", 3]));
+
+    // A join clause's key columns and the loop symbols they are read at are
+    // names; substituting them makes the document schema-invalid.
+    let r = obs_def(model, "r");
+    assert_eq!(r["output_idx"], json!(["p"]));
+    assert_eq!(
+        r["join"],
+        json!([{"on": [["row_id", "row_id"]], "syms": ["p", "b"]}])
+    );
+    assert_eq!(r["expr"]["args"], json!([22, 5]));
+    let k = obs_def(model, "k");
+    assert_eq!(k["arg"], "p");
+    assert_eq!(k["ranges"]["p"], json!([1, 11]));
+    assert_eq!(k["expr"]["args"], json!(["c", 7]));
+
+    // A map key is a declared name, not a field: variables named `source` and
+    // `type` still have their guesses substituted.
+    assert_eq!(
+        model["guesses"],
+        json!({"source": {"op": "*", "args": [5, 2]}, "type": {"op": "*", "args": [5, 3]}})
+    );
+    assert_eq!(obs_def(model, "source")["args"], json!(["c", 22]));
+    assert_eq!(obs_def(model, "type")["args"], json!(["c", 7]));
+}
+
+/// import_rename_name_keyed_map_entries: the §9.7.7 rename walk never
+/// dispatches on a map entry name (esm-spec §9.7.6 map-key rule). A `ranges`
+/// entry spelled `dim` still has its `from` follow the prefix, and apply-node
+/// `bindings` entries spelled `units` / `dim` are variable-reference positions,
+/// so their free names are rebindable.
+#[test]
+fn import_rename_name_keyed_map_entries_matches_golden() {
+    let d = expand_raw(&conf(&[
+        "import_rename_name_keyed_map_entries",
+        "fixture.esm",
+    ]));
+    assert_eq!(
+        d,
+        golden(&conf(&[
+            "import_rename_name_keyed_map_entries",
+            "expanded.esm"
+        ]))
+    );
+    let total = obs_def(&d["models"]["M"], "total");
+    assert_eq!(total["ranges"], json!({"dim": {"from": "L.cells"}}));
+    assert_eq!(
+        total["expr"]["args"][1],
+        json!({"op": "*", "args": ["kk", "kk2"]})
+    );
+}
+
 /// import_where_rename_unknown_index_set: a `where` shape naming a set the
 /// library never declares survives the rename as spelled and is rejected at rule
 /// registration — the fix does not paper over genuine typos.
