@@ -1765,16 +1765,16 @@ function _oop_run_scalar_batches(du, sb::_OopScalarBatches, ue, p, t,
     return du
 end
 
-# ---- The closure ------------------------------------------------------------
+# ---- The out-of-place evaluation --------------------------------------------
 #
 # Mirrors `_make_rhs` phase for phase (CSE prelude → scalar equations → array
 # kernels) so the two emitters cannot diverge in evaluation ORDER, only in storage.
 # States with no `D(...)` equation keep `du = 0`, as under `f!`.
 #
 # Every touch of the output goes through the `_oop_du_zeros` / `_oop_store` /
-# `_oop_scatter` seams above, and the closure REBINDS `du` from each — so a backend
+# `_oop_scatter` seams above, and the walk REBINDS `du` from each — so a backend
 # whose output is immutable (a traced value) is expressible here without a second
-# closure. At Float64 the seams are the inline code they replaced.
+# evaluator. At Float64 the seams are the inline code they replaced.
 #
 # NO CONST-CADENCE TIER HERE, AND THAT IS NOT AN OVERSIGHT (4qf). `f!` skips its
 # const prelude slots when `p` has not moved because it refills a buffer it OWNS
@@ -1949,7 +1949,7 @@ end
 
 # ---- The vectorized (traceable) acc form ------------------------------------
 #
-# Per-kernel host-side lane index, built ONCE at closure build: the output slots
+# Per-kernel host-side lane index, built ONCE at build: the output slots
 # in the EXACT `_run_acc_kernel!` cell order, the loop multi-index per lane, and
 # — per access descriptor — either a precomputed state-gather slot vector, a
 # frozen const lane vector, or (for a LIVE forcing box) the flat indices to
@@ -3567,6 +3567,137 @@ function oop_ssa_producers(f::_OopRHS)
               skippable = q.skippable, skip = q.skip) for q in p.prods]
 end
 
+# ---- The build product -------------------------------------------------------
+#
+# The compiled tree-walk intermediate representation, carried under STABLE field
+# names. `build_evaluator(model; form = :oop)` hands one of these out inside an
+# `_OopRHS`; a backend reads the fields to emit a program, and the call method
+# below evaluates them directly on host (or traced) arrays.
+struct _CompiledIR{R,C,K,S,M,A,B,MB,SM}
+    rhs_list::R                        # (slot, node) scalar state equations
+    cse_prelude::C                     # shared-subexpression prelude, in slot order
+    acc_kernels::K                     # the unified array IR
+    acc_plans::Vector{_OopAccPlan}     # one vectorization plan per kernel
+    scan_folds::S                      # cumulative (prefix) reductions
+    mat_levels::M                      # materialized-observed fill levels
+    array_contractions::A              # whole-array contractions
+    rhs_batches::B                     # lane-batched form of `rhs_list`
+    mat_batches::MB                    # lane-batched form of each level's scalars
+    n_states::Int                      # flat ODE state length
+    n_total::Int                       # extended state length (states + materialized observeds)
+    n_cse::Int                         # `length(cse_prelude)`, cached
+    live_forcing::Bool                 # this build binds a live forcing buffer
+    host_keys::Vector{Vector{Float64}} # the buffers container's arrays, positionally
+    ssa::_OopSSAPlan                   # SSA-dataflow plan (ess-oop-ssa)
+    ssa_mat::SM                        # per-level SSA kernel tables, `mat_levels`-shaped
+end
+
+function (ir::_CompiledIR)(u, p, t, buffers)
+    rhs_list = ir.rhs_list
+    cse_prelude = ir.cse_prelude
+    acc_kernels = ir.acc_kernels
+    acc_plans = ir.acc_plans
+    scan_folds = ir.scan_folds
+    mat_levels = ir.mat_levels
+    array_contractions = ir.array_contractions
+    rhs_batches = ir.rhs_batches
+    mat_batches = ir.mat_batches
+    n_states = ir.n_states
+    n_total = ir.n_total
+    n_cse = ir.n_cse
+    live_forcing = ir.live_forcing
+    host_keys = ir.host_keys
+    ssa = ir.ssa
+    ssa_mat = ir.ssa_mat
+    _reject_float32_state(u)   # loud, statically-folded (see compile.jl)
+    if live_forcing && _is_traced(u, p, t) && !_forcing_traced(buffers)
+        throw(TreeWalkError("E_TREEWALK_XLA_LIVE_FORCING",
+            "This model binds a live forcing buffer through `param_arrays`, and " *
+            "an XLA/Reactant tracer cannot honour a HOST buffer: the tracer " *
+            "captures it as a CONSTANT. `@compile` would bake in its compile-time " *
+            "contents and then silently ignore every in-place refresh a " *
+            "data-refresh callback performs — the same numbers forever, with no " *
+            "exception and no NaN. Either compile the explicit-buffers form " *
+            "(`rhs_with_buffers(f)`) passing the forcing buffers as traced " *
+            "arguments (`ConcreteRArray`s; refresh them with `copyto!` / " *
+            "`sync_forcing!` at each cadence boundary), or drop `param_arrays` and " *
+            "pass the forcing data as `const_arrays` (frozen, inlined — correct if " *
+            "the data never changes), or run the interpreted evaluator, which does " *
+            "track the refresh."))
+    end
+    # `_oop_new_memo(u)` is `nothing` for every host element type — the field
+    # is then zero-sized and every `_oop_gather` third argument folds away.
+    # Under a Reactant trace the extension returns a fresh per-CALL
+    # `(SSA value, window)` read memo; it is built here and dropped when this
+    # call returns, which is why nothing has to be torn down. See the
+    # interning note at the `_oop_gather` seam for why ONE INVOCATION is both
+    # the correct scope and the largest sound one.
+    fb = _OopForcing(buffers, host_keys, _oop_new_memo(u))
+    T = _oop_value_type(u, p, t)
+
+    # Factored array observeds, filled per call into the block above the ODE
+    # state — the out-of-place twin of `_make_rhs_with_obs_buffers`. `ue` is
+    # `u` widened to `n_total`, so a reader's `index(<observed>, i…)` resolves
+    # through the ordinary array-gather path onto the observed's slots. With
+    # nothing materialized this is `ue === u` and the whole prelude folds away.
+    #
+    # The CSE cache is built from `ue`, NOT `u`: with observeds materialized
+    # the state prelude may reference their slots, and the in-place wrapper
+    # gets this for free by evaluating its whole state RHS against `ue`.
+    ue = u
+    # Per-call SSA producer values (ess-oop-ssa). Entry 1 is the raw state:
+    # a redirected read of the prefix slices `u` itself rather than the
+    # DUS-composed `ue`, which is both equal by construction and exactly the
+    # decoupling the feature exists for.
+    vals = ssa.enabled ? Vector{Any}(nothing, ssa.nprod) : _OOP_SSA_NO_VALS
+    if ssa.enabled
+        @inbounds vals[1] = u
+    end
+    if !isempty(mat_levels)
+        ue = _oop_prefix_copy(_oop_du_zeros(u, T, n_total), u, n_states)
+        ue = _oop_fill_levels(ue, mat_levels, mat_batches, p, t, T, fb,
+                              _EMPTY_OOP_CACHE(T), ssa_mat, vals)
+    end
+
+    cache = Vector{T}(undef, n_cse)
+    @inbounds for s in 1:n_cse
+        cache[s] = _oop_eval(cse_prelude[s], ue, p, t, cache, fb)
+    end
+
+    # Scalar state equations, through the lane-batched surface (ess-oop-
+    # batch): the leftover singles are the pre-feature per-entry walk; each
+    # group is one whole-lane evaluation + one scatter into disjoint slots.
+    du = _oop_du_zeros(u, T, n_states)
+    if !isempty(rhs_list)
+        du = _oop_run_scalar_batches(du, rhs_batches, ue, p, t, cache, fb)
+    end
+
+    # Access kernels (the unified array IR), out of place. The vectorized form
+    # (whole-array gathers/ops, one scatter — the TRACEABLE form) where the
+    # plan permits; the per-cell `_oop_store` walk otherwise. On host both
+    # produce the values `f!`'s in-place runners write, in the same slots, so
+    # a Float64 `:oop` run stays bit-identical to `:inplace`.
+    for j in eachindex(acc_kernels)
+        plan = acc_plans[j]
+        du = plan.vectorizable ?
+             _oop_run_acc_vec(du, ue, p, t, acc_kernels[j], plan, T, fb,
+                              _oop_ssa_k(ssa.fin, j), vals) :
+             _oop_run_acc_kernel(du, ue, p, t, acc_kernels[j], T)
+    end
+
+    # Cumulative (prefix) reductions (ess-scan, scan.jl): fold the per-cell
+    # terms the kernels above just stored, along each scanned axis.
+    isempty(scan_folds) || (du = _apply_scan_folds_oop(du, scan_folds))
+
+    # Whole-array contractions (ess-array-contraction, array_contraction.jl):
+    # the same loop nests `f!` runs, in the same position, writing through
+    # the `_oop_store` seam so a traced output is never scalar-indexed.
+    isempty(array_contractions) ||
+        (du = _apply_array_contractions_oop(du, ue, p, t, array_contractions,
+                                            cache, fb))
+    return du
+end
+
 function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
                        cse_prelude::AbstractVector{_Node},
                        acc_kernels::AbstractVector{_AccKernel},
@@ -3588,10 +3719,9 @@ function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
     # The kernel-CLASS merge (oop_merge.jl) no longer runs here: it is hoisted
     # into `_build_evaluator_impl` phase 4 (`_merge_acc_kernel_classes`), before
     # the xcse gate, so BOTH emitters receive already-merged kernels and this
-    # plan build is over the merged (fewer) list. `acc_kernels` (parameter,
-    # never reassigned) and `acc_plans` (bound exactly once) are captured
-    # UNBOXED by the `rhs` closure below, with the stable field names
-    # :acc_kernels / :acc_plans that external tooling reflects on.
+    # plan build is over the merged (fewer) list. `acc_kernels` and `acc_plans`
+    # reach the build product under the stable field names :acc_kernels /
+    # :acc_plans that external tooling reflects on.
     acc_plans = _OopAccPlan[_build_oop_acc_plan(K) for K in acc_kernels]
     # The buffers container (B2): every live forcing buffer this build registered
     # — raw `param_arrays` entries AND DiscreteMaterializer caches, both of which
@@ -3599,13 +3729,11 @@ function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
     # as a NamedTuple of the aliased flat host views. `host_keys` carries the same
     # arrays positionally: the walkers identity-match a node payload / acc
     # descriptor against it to swap the captured array for the argument entry.
-    # Lane-batched scalar surfaces (ess-oop-batch), grouped ONCE at closure
-    # build: the rhs_list per-cell entries and each fill level's per-column
-    # scalars. `rhs_list`/`mat_levels` stay captured under their stable field
-    # names (external tooling reflects on them); `rhs_batches`/`mat_batches`
-    # are ADDITIVE fields — the closure-reflection witness for the feature (a
-    # group count of zero means everything runs the scalar path, exactly as
-    # before this feature existed).
+    # Lane-batched scalar surfaces (ess-oop-batch), grouped ONCE at build:
+    # the rhs_list per-cell entries and each fill level's per-column scalars.
+    # `rhs_list`/`mat_levels` keep their own stable field names (external
+    # tooling reflects on them); `rhs_batches`/`mat_batches` are ADDITIVE
+    # fields — a group count of zero means everything runs the scalar path.
     rhs_batches = _oop_batch_scalars(rhs_list)
     mat_batches = map(lvl -> _oop_batch_scalars(lvl[1]::Vector{Tuple{Int,_Node}}),
                       mat_levels)
@@ -3621,98 +3749,9 @@ function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
         Tuple((pgather[n]::_PGatherArray).flat for n in buf_names))
     buffer_index = Dict{String,Int}(n => i for (i, n) in enumerate(buf_names))
     host_keys = Vector{Float64}[(pgather[n]::_PGatherArray).flat for n in buf_names]
-    function rhs(u, p, t, buffers)
-        _reject_float32_state(u)   # loud, statically-folded (see compile.jl)
-        if live_forcing && _is_traced(u, p, t) && !_forcing_traced(buffers)
-            throw(TreeWalkError("E_TREEWALK_XLA_LIVE_FORCING",
-                "This model binds a live forcing buffer through `param_arrays`, and " *
-                "an XLA/Reactant tracer cannot honour a HOST buffer: the tracer " *
-                "captures it as a CONSTANT. `@compile` would bake in its compile-time " *
-                "contents and then silently ignore every in-place refresh a " *
-                "data-refresh callback performs — the same numbers forever, with no " *
-                "exception and no NaN. Either compile the explicit-buffers form " *
-                "(`rhs_with_buffers(f)`) passing the forcing buffers as traced " *
-                "arguments (`ConcreteRArray`s; refresh them with `copyto!` / " *
-                "`sync_forcing!` at each cadence boundary), or drop `param_arrays` and " *
-                "pass the forcing data as `const_arrays` (frozen, inlined — correct if " *
-                "the data never changes), or run the interpreted evaluator, which does " *
-                "track the refresh."))
-        end
-        # `_oop_new_memo(u)` is `nothing` for every host element type — the field
-        # is then zero-sized and every `_oop_gather` third argument folds away.
-        # Under a Reactant trace the extension returns a fresh per-CALL
-        # `(SSA value, window)` read memo; it is built here and dropped when this
-        # call returns, which is why nothing has to be torn down. See the
-        # interning note at the `_oop_gather` seam for why ONE INVOCATION is both
-        # the correct scope and the largest sound one.
-        fb = _OopForcing(buffers, host_keys, _oop_new_memo(u))
-        T = _oop_value_type(u, p, t)
-
-        # Factored array observeds, filled per call into the block above the ODE
-        # state — the out-of-place twin of `_make_rhs_with_obs_buffers`. `ue` is
-        # `u` widened to `n_total`, so a reader's `index(<observed>, i…)` resolves
-        # through the ordinary array-gather path onto the observed's slots. With
-        # nothing materialized this is `ue === u` and the whole prelude folds away,
-        # leaving the closure byte-identical to the pre-change one.
-        #
-        # The CSE cache is built from `ue`, NOT `u`: with observeds materialized
-        # the state prelude may reference their slots, and the in-place wrapper
-        # gets this for free by evaluating its whole state RHS against `ue`.
-        ue = u
-        # Per-call SSA producer values (ess-oop-ssa). Entry 1 is the raw state:
-        # a redirected read of the prefix slices `u` itself rather than the
-        # DUS-composed `ue`, which is both equal by construction and exactly the
-        # decoupling the feature exists for.
-        vals = ssa.enabled ? Vector{Any}(nothing, ssa.nprod) : _OOP_SSA_NO_VALS
-        if ssa.enabled
-            @inbounds vals[1] = u
-        end
-        if !isempty(mat_levels)
-            ue = _oop_prefix_copy(_oop_du_zeros(u, T, n_total), u, n_states)
-            ue = _oop_fill_levels(ue, mat_levels, mat_batches, p, t, T, fb,
-                                  _EMPTY_OOP_CACHE(T), ssa_mat, vals)
-        end
-
-        cache = Vector{T}(undef, n_cse)
-        @inbounds for s in 1:n_cse
-            cache[s] = _oop_eval(cse_prelude[s], ue, p, t, cache, fb)
-        end
-
-        # Scalar state equations, through the lane-batched surface (ess-oop-
-        # batch): the leftover singles are the pre-feature per-entry walk; each
-        # group is one whole-lane evaluation + one scatter into disjoint slots.
-        # (The `isempty(rhs_list)` guard is also what keeps `rhs_list` a
-        # captured field of this closure — part of its stable reflection
-        # surface — now that the entries themselves live in `rhs_batches`.)
-        du = _oop_du_zeros(u, T, n_states)
-        if !isempty(rhs_list)
-            du = _oop_run_scalar_batches(du, rhs_batches, ue, p, t, cache, fb)
-        end
-
-        # Access kernels (the unified array IR), out of place. The vectorized form
-        # (whole-array gathers/ops, one scatter — the TRACEABLE form) where the
-        # plan permits; the per-cell `_oop_store` walk otherwise. On host both
-        # produce the values `f!`'s in-place runners write, in the same slots, so
-        # a Float64 `:oop` run stays bit-identical to `:inplace`.
-        for j in eachindex(acc_kernels)
-            plan = acc_plans[j]
-            du = plan.vectorizable ?
-                 _oop_run_acc_vec(du, ue, p, t, acc_kernels[j], plan, T, fb,
-                                  _oop_ssa_k(ssa.fin, j), vals) :
-                 _oop_run_acc_kernel(du, ue, p, t, acc_kernels[j], T)
-        end
-
-        # Cumulative (prefix) reductions (ess-scan, scan.jl): fold the per-cell
-        # terms the kernels above just stored, along each scanned axis.
-        isempty(scan_folds) || (du = _apply_scan_folds_oop(du, scan_folds))
-
-        # Whole-array contractions (ess-array-contraction, array_contraction.jl):
-        # the same loop nests `f!` runs, in the same position, writing through
-        # the `_oop_store` seam so a traced output is never scalar-indexed.
-        isempty(array_contractions) ||
-            (du = _apply_array_contractions_oop(du, ue, p, t, array_contractions,
-                                                cache, fb))
-        return du
-    end
-    return _OopRHS(rhs, host_bufs, buffer_index)
+    return _OopRHS(_CompiledIR(rhs_list, cse_prelude, acc_kernels, acc_plans,
+                               scan_folds, mat_levels, array_contractions,
+                               rhs_batches, mat_batches, n_states, n_total, n_cse,
+                               live_forcing, host_keys, ssa, ssa_mat),
+                   host_bufs, buffer_index)
 end
