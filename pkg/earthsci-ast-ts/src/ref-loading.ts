@@ -665,11 +665,11 @@ function resolveRefDocument(
   })
   // esm-spec §9.6.4 (Option B): lower to the reference-preserving form, then
   // apply the RFC §7.7 Expand-at-build strategy so the resolved subsystem is
-  // the Option-A expanded image (bit-identical downstream behavior).
-  const expanded =
-    resolved === null
-      ? machineryInput
-      : (expandDocument(lowerExpressionTemplates(resolved)) as EsmFile)
+  // the Option-A expanded image (bit-identical downstream behavior). A leaf with
+  // no §9.7 machinery still expands its component-local templates here: its own
+  // calls bind their parameters, so an `enum` op a parameter spells resolves
+  // against the leaf's block below, not the mounting document's (esm-spec §9.3).
+  const expanded = expandDocument(lowerExpressionTemplates(resolved ?? machineryInput)) as EsmFile
   // esm-spec §9.3: the referenced document's `enum` ops resolve against ITS
   // OWN `enums` block, here, while that block is still at hand. The mounting
   // document's block is a different one and `enums` do not merge across a
