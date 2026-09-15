@@ -95,6 +95,17 @@ function scan(): Scan {
         const i = codeParamIndex(node.parameters)
         if (i >= 0) fnCodeIndex.set(`${sf.fileName}\0${node.name.text}`, i)
       }
+      // A local helper bound to a name (`const warn = (message, code) => ...`)
+      // is a raise site exactly like a declared function.
+      if (
+        ts.isVariableDeclaration(node) &&
+        ts.isIdentifier(node.name) &&
+        node.initializer &&
+        (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer))
+      ) {
+        const i = codeParamIndex(node.initializer.parameters)
+        if (i >= 0) fnCodeIndex.set(`${sf.fileName}\0${node.name.text}`, i)
+      }
       ts.forEachChild(node, visit)
     }
     visit(sf)

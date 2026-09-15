@@ -341,7 +341,7 @@ function computeDimensions(
       // Unknown variable ⇒ UNKNOWN dimension, not dimensionless. Assuming
       // dimensionless here would manufacture mismatches against every
       // dimensional operand it meets.
-      warn(`Unknown variable: ${expr}`, 'analysis')
+      warn(`Unknown variable: ${expr}`, ERROR_CODES.ANALYSIS)
       return unknown()
     }
     return finish(dims)
@@ -387,12 +387,12 @@ function computeDimensions(
         if (!dimsEqual(first.dims, other.dims)) {
           warn(
             `Addition/subtraction requires same dimensions, got ${formatDims(first.dims)} and ${formatDims(other.dims)}`,
-            'dimensional_mismatch',
+            ERROR_CODES.DIMENSIONAL_MISMATCH,
           )
         } else if (!first.exact.equals(other.exact)) {
           warn(
             `Addition/subtraction requires the same scale, got ${formatUnit(first)} and ${formatUnit(other)}`,
-            'dimensional_mismatch',
+            ERROR_CODES.DIMENSIONAL_MISMATCH,
           )
         }
       }
@@ -410,7 +410,7 @@ function computeDimensions(
     case '/': {
       const arity = arityWarning('/', 'Division', argDims.length)
       if (arity) {
-        warn(arity, 'analysis')
+        warn(arity, ERROR_CODES.ANALYSIS)
         return unknown()
       }
       const num = get(0)
@@ -424,7 +424,7 @@ function computeDimensions(
     case 'pow': {
       const arity = arityWarning('^', 'Exponentiation', argDims.length)
       if (arity) {
-        warn(arity, 'analysis')
+        warn(arity, ERROR_CODES.ANALYSIS)
         return unknown()
       }
       const base = get(0)
@@ -435,7 +435,7 @@ function computeDimensions(
       if (expDims !== null && !isDimensionless(expDims)) {
         warn(
           `Exponent must be dimensionless, got ${formatDims(expDims.dims)}`,
-          'dimensional_mismatch',
+          ERROR_CODES.DIMENSIONAL_MISMATCH,
         )
         return unknown()
       }
@@ -459,7 +459,7 @@ function computeDimensions(
         // provable mismatch — see just above.)
         warn(
           `Cannot determine the unit of a non-literal exponent applied to a dimensional or scaled quantity (base has ${formatUnit(base)})`,
-          'analysis',
+          ERROR_CODES.ANALYSIS,
         )
         return unknown()
       }
@@ -480,7 +480,7 @@ function computeDimensions(
           : null
         : arityWarning('D', 'Derivative D()', args.length)
       if (arity) {
-        warn(arity, 'analysis')
+        warn(arity, ERROR_CODES.ANALYSIS)
         return unknown()
       }
       const operand = get(0)
@@ -529,7 +529,7 @@ function computeDimensions(
         if (arg !== null && !isDimensionless(arg) && !isAngle(arg)) {
           warn(
             `${op}() requires a dimensionless or angle argument, got ${formatDims(arg.dims)}`,
-            'dimensional_mismatch',
+            ERROR_CODES.DIMENSIONAL_MISMATCH,
           )
         }
       }
@@ -547,7 +547,7 @@ function computeDimensions(
         if (arg !== null && !isDimensionless(arg)) {
           warn(
             `${op}() requires dimensionless argument, got ${formatDims(arg.dims)}`,
-            'dimensional_mismatch',
+            ERROR_CODES.DIMENSIONAL_MISMATCH,
           )
         }
       }
@@ -574,7 +574,7 @@ function computeDimensions(
         if (arg !== null && !isDimensionless(arg)) {
           warn(
             `${op}() requires dimensionless argument, got ${formatDims(arg.dims)}`,
-            'dimensional_mismatch',
+            ERROR_CODES.DIMENSIONAL_MISMATCH,
           )
         }
       }
@@ -583,7 +583,7 @@ function computeDimensions(
     case 'atan2': {
       const arity = arityWarning('atan2', 'atan2()', argDims.length)
       if (arity) {
-        warn(arity, 'analysis')
+        warn(arity, ERROR_CODES.ANALYSIS)
         return unknown()
       }
       const a = get(0)
@@ -593,12 +593,12 @@ function computeDimensions(
       if (a !== null && b !== null && !dimsEqual(a.dims, b.dims)) {
         warn(
           `atan2() requires arguments with same dimensions, got ${formatDims(a.dims)} and ${formatDims(b.dims)}`,
-          'dimensional_mismatch',
+          ERROR_CODES.DIMENSIONAL_MISMATCH,
         )
       } else if (a !== null && b !== null && !a.exact.equals(b.exact)) {
         warn(
           `atan2() requires arguments with the same scale, got ${formatUnit(a)} and ${formatUnit(b)}`,
-          'dimensional_mismatch',
+          ERROR_CODES.DIMENSIONAL_MISMATCH,
         )
       }
       return finish(angle())
@@ -626,7 +626,7 @@ function computeDimensions(
     case 'max': {
       const arity = arityWarning(op, `${op}()`, argDims.length)
       if (arity) {
-        warn(arity, 'analysis')
+        warn(arity, ERROR_CODES.ANALYSIS)
         return unknown()
       }
       // `max(x, 0)` / `min(rate, 1e-6)` clamp against a bare literal that
@@ -646,12 +646,12 @@ function computeDimensions(
         if (!dimsEqual(ref.dims, other.dims)) {
           warn(
             `${op}() requires all arguments to have same dimensions, got ${formatDims(ref.dims)} and ${formatDims(other.dims)}`,
-            'dimensional_mismatch',
+            ERROR_CODES.DIMENSIONAL_MISMATCH,
           )
         } else if (!ref.exact.equals(other.exact)) {
           warn(
             `${op}() requires all arguments to have the same scale, got ${formatUnit(ref)} and ${formatUnit(other)}`,
-            'dimensional_mismatch',
+            ERROR_CODES.DIMENSIONAL_MISMATCH,
           )
         }
       }
@@ -662,24 +662,27 @@ function computeDimensions(
     case 'ifelse': {
       const arity = arityWarning('ifelse', 'ifelse()', argDims.length)
       if (arity) {
-        warn(arity, 'analysis')
+        warn(arity, ERROR_CODES.ANALYSIS)
         return unknown()
       }
       const cond = get(0)
       if (cond !== null && !isDimensionless(cond)) {
-        warn(`ifelse() condition must be dimensionless, got ${formatDims(cond.dims)}`, 'analysis')
+        warn(
+          `ifelse() condition must be dimensionless, got ${formatDims(cond.dims)}`,
+          ERROR_CODES.ANALYSIS,
+        )
       }
       const a = get(1)
       const b = get(2)
       if (a !== null && b !== null && !dimsEqual(a.dims, b.dims)) {
         warn(
           `ifelse() branches must have same dimensions, got ${formatDims(a.dims)} and ${formatDims(b.dims)}`,
-          'dimensional_mismatch',
+          ERROR_CODES.DIMENSIONAL_MISMATCH,
         )
       } else if (a !== null && b !== null && !a.exact.equals(b.exact)) {
         warn(
           `ifelse() branches must have the same scale, got ${formatUnit(a)} and ${formatUnit(b)}`,
-          'dimensional_mismatch',
+          ERROR_CODES.DIMENSIONAL_MISMATCH,
         )
       }
       return finish(a ?? b)
@@ -693,7 +696,7 @@ function computeDimensions(
     case '!=': {
       const arity = arityWarning(op, op, argDims.length)
       if (arity) {
-        warn(arity, 'analysis')
+        warn(arity, ERROR_CODES.ANALYSIS)
         return finish(dimensionless())
       }
       const a = get(0)
@@ -701,12 +704,12 @@ function computeDimensions(
       if (a !== null && b !== null && !dimsEqual(a.dims, b.dims)) {
         warn(
           `${op} requires arguments with same dimensions, got ${formatDims(a.dims)} and ${formatDims(b.dims)}`,
-          'dimensional_mismatch',
+          ERROR_CODES.DIMENSIONAL_MISMATCH,
         )
       } else if (a !== null && b !== null && !a.exact.equals(b.exact)) {
         warn(
           `${op} requires arguments with the same scale, got ${formatUnit(a)} and ${formatUnit(b)}`,
-          'dimensional_mismatch',
+          ERROR_CODES.DIMENSIONAL_MISMATCH,
         )
       }
       return finish(dimensionless())
@@ -718,7 +721,10 @@ function computeDimensions(
       for (let i = 0; i < argDims.length; i++) {
         const arg = get(i)
         if (arg !== null && !isDimensionless(arg)) {
-          warn(`${op} requires dimensionless arguments, got ${formatDims(arg.dims)}`, 'analysis')
+          warn(
+            `${op} requires dimensionless arguments, got ${formatDims(arg.dims)}`,
+            ERROR_CODES.ANALYSIS,
+          )
         }
       }
       return finish(dimensionless())
