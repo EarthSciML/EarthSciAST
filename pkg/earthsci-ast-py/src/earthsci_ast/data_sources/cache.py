@@ -34,6 +34,7 @@ import hashlib
 import os
 import stat
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Callable, Union
 from urllib.parse import urlsplit
@@ -58,6 +59,14 @@ _TRUTHY = frozenset({"1", "true", "yes", "on"})
 #: The only values that switch the recheck off. It defaults to ON, so this is
 #: not ``not _TRUTHY``: a typo in the knob leaves the protection in place.
 _FALSEY = frozenset({"0", "false", "no", "off"})
+
+#: Git's racy-timestamp rule. A filesystem records mtime only to its
+#: granularity: 1 s on Lustre, ext3, HFS+ and many NFS servers, 2 s on FAT. A
+#: same-size write in the same tick as an earlier hash keeps the same
+#: ``(size, mtime)``, so a verdict taken within one tick of either mtime cannot
+#: vouch for later bytes. Any later write sharing a 2 s FAT bucket lands before
+#: ``mtime + 2 s``, so 2 s with an inclusive comparison covers it.
+_RACY_MARGIN_NS = 2_000_000_000
 
 PathLike = Union[str, "os.PathLike[str]"]
 
@@ -145,6 +154,10 @@ def _file_source_is_current(url: str, cached: Path, memo: dict) -> bool:
 
     ``memo`` remembers the ``(size, mtime)`` of both files at the last verdict
     of "current", so a run hashes each source once rather than on every read.
+    A verdict taken while either mtime was within ``_RACY_MARGIN_NS`` of the
+    moment of hashing is never reused (git's "racy timestamp" rule): the next
+    check hashes again, and only one that sees both mtimes safely in the past
+    is trusted on later reads.
     """
     source = _local_source_path(url)
     if source is None:
@@ -162,13 +175,19 @@ def _file_source_is_current(url: str, cached: Path, memo: dict) -> bool:
         if src_st.st_size != cached_st.st_size:
             return False
         fingerprint = (src_st.st_size, src_st.st_mtime_ns, cached_st.st_mtime_ns)
-        if memo.get(os.fspath(cached)) == fingerprint:
+        remembered = memo.get(os.fspath(cached))
+        if (
+            remembered is not None
+            and remembered[0] == fingerprint
+            and max(src_st.st_mtime_ns, cached_st.st_mtime_ns) < remembered[1] - _RACY_MARGIN_NS
+        ):
             return True
+        hashed_at = time.time_ns()
         if _sha256_file(source) != _sha256_file(cached):
             return False
     except OSError:
         return True
-    memo[os.fspath(cached)] = fingerprint
+    memo[os.fspath(cached)] = (fingerprint, hashed_at)
     return True
 
 

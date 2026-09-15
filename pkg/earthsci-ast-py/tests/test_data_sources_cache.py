@@ -21,6 +21,7 @@ import datetime as dt
 import hashlib
 import os
 import tempfile
+import time
 from pathlib import Path
 from typing import Dict, List
 
@@ -238,6 +239,11 @@ def _counting_file_fetcher(calls: list[str]):
     return fetch
 
 
+def _set_mtime(path: Path, seconds: int) -> None:
+    ns = seconds * 1_000_000_000
+    os.utime(path, ns=(ns, ns))
+
+
 class TestFileSourceRecheck:
     @pytest.fixture(autouse=True)
     def _default_env(self, monkeypatch):
@@ -269,6 +275,47 @@ class TestFileSourceRecheck:
         fetch(url)
         src.write_bytes(b"B" * 64)
         assert fetch(url) == b"B" * 64, "a size-only check waves an equal-length edit through"
+
+    def test_same_size_replacement_within_one_timestamp_tick_is_re_ingested(self, tmp_path):
+        # A filesystem with whole-second mtimes (Lustre, ext3, HFS+; FAT keeps
+        # two seconds) gives a same-size replacement in the same second the SAME
+        # (size, mtime). Simulated by pinning the mtime, so the test does not
+        # depend on the filesystem it runs on.
+        tick = int(time.time())
+        src, url = self._source(tmp_path, b"A" * 64)
+        _set_mtime(src, tick)
+        fetch = cached_fetcher(
+            fetcher=_counting_file_fetcher([]), data_dir=tmp_path / "cache", offline=False
+        )
+        assert fetch(url) == b"A" * 64
+        assert fetch(url) == b"A" * 64  # a verdict of "current" is memoised here
+        src.write_bytes(b"B" * 64)
+        _set_mtime(src, tick)
+        assert fetch(url) == b"B" * 64
+
+    def test_recent_files_are_rehashed_until_their_mtimes_are_safely_past(
+        self, tmp_path, monkeypatch
+    ):
+        # Git's racy-timestamp rule: a verdict taken within the margin of either
+        # file's mtime is re-taken on the next check; once both mtimes are safely
+        # in the past, one re-hash is memoised and trusted again.
+        hashed: list[Path] = []
+        real = cache_mod._sha256_file
+        monkeypatch.setattr(cache_mod, "_sha256_file", lambda p: hashed.append(p) or real(p))
+        src, url = self._source(tmp_path, b"A" * 64)
+        data_dir = tmp_path / "cache"
+        fetch = cached_fetcher(fetcher=_counting_file_fetcher([]), data_dir=data_dir, offline=False)
+        fetch(url)  # ingest: both files were just written
+        for _ in range(3):
+            fetch(url)
+        assert len(hashed) == 6, "a racy verdict is never reused (two files per check)"
+
+        old = int(time.time()) - 60
+        _set_mtime(src, old)
+        _set_mtime(cache_mod.cache_path_for_url(url, data_dir=data_dir), old)
+        for _ in range(3):
+            fetch(url)
+        assert len(hashed) == 8, "one re-hash, then the memo is trusted again"
 
     def test_unchanged_source_is_served_from_the_warm_entry(self, tmp_path):
         _, url = self._source(tmp_path, b"A" * 371)
