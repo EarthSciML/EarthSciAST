@@ -993,8 +993,7 @@
           "description": "Root-finding direction.",
           "enum": [
             "left",
-            "right",
-            "all"
+            "right"
           ],
           "default": "left"
         },
@@ -3968,8 +3967,7 @@
           "type": "string",
           "enum": [
             "left",
-            "right",
-            "all"
+            "right"
           ]
         },
         "reinitialize": {

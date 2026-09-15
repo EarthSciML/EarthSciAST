@@ -732,8 +732,8 @@ struct ContinuousEvent <: EventType
     affects::Vector{AffectEquation}
     # The three remaining `ContinuousEvent` properties esm-schema.json defines.
     # `affect_neg` is the DIFFERENT-DIRECTION affect set (absent ⇒ `affects`
-    # applies to both crossings), `root_find` the crossing direction
-    # ("left" | "right" | "all"), `reinitialize` whether to reinitialize after
+    # applies to both crossings), `root_find` which side of the root the event
+    # lands on ("left" | "right", DiffEq's `rootfind`), `reinitialize` whether to reinitialize after
     # the event. All three are `Nothing`-able so PRESENCE round-trips: the
     # schema gives `root_find` and `reinitialize` defaults, and emitting a
     # default the author did not write is as much a rewrite as dropping one

@@ -555,7 +555,7 @@ def _parse_continuous_event(event_data: dict[str, Any]) -> ContinuousEvent:
     if "affect_neg" in event_data:
         affect_neg = [_parse_affect(affect) for affect in event_data["affect_neg"]]
 
-    root_find = event_data.get("root_find", "left")
+    root_find = event_data.get("root_find")
     reinitialize = event_data.get("reinitialize", False)
     description = event_data.get("description")
 

@@ -357,8 +357,8 @@ function _condition_to_root_equation(cond::ASTExpr, var_dict, t_sym, dim_dict)
     return _esm_to_symbolic(cond, var_dict, t_sym, dim_dict) ~ 0
 end
 
-# esm-spec §5.2: `root_find` "maps to DiffEq `rootfind` option", defaulting to
-# `"left"`. `"all"` has no `RootfindOpt` counterpart, so it keeps the default.
+# esm-spec §5.2: `root_find` names which side of the root the event lands on,
+# mapped to DiffEq's `rootfind` option; absent means `"left"`.
 function _rootfind_option(root_find::Union{Nothing,AbstractString})
     root_find == "right" && return ModelingToolkit.SciMLBase.RightRootFind
     return ModelingToolkit.SciMLBase.LeftRootFind

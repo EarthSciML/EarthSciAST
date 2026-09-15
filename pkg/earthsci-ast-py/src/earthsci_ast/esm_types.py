@@ -797,9 +797,10 @@ class ContinuousEvent:
     affect_neg: list[AffectEquation] | None = (
         None  # Added: affects for negative-going zero crossings
     )
-    root_find: Literal["left", "right", "all"] | None = (
-        "left"  # Added: root-finding direction with default
-    )
+    # Which side of the root the event lands on (esm-spec §5.2); ``None`` when
+    # the document does not say, which means "left". Kept as authored so an
+    # explicit "left" survives load -> save.
+    root_find: Literal["left", "right"] | None = None
     reinitialize: bool = False  # Added: whether to reinitialize after event
     priority: int = 0
     description: str | None = None  # Added: optional description

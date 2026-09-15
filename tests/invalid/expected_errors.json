@@ -3300,5 +3300,17 @@
     ],
     "is_valid": false,
     "notes": "A scale disagreement (esm-spec \u00a74.8.3): every operand dimension agrees and the exact scales do not. Pinned at the observed variable's declaration, as tests/invalid/units_inconsistent_addition.esm pins its dimension mismatch."
+  },
+  "root_find_all_removed.esm": {
+    "schema_errors": [
+      {
+        "path": "/models/Ball/continuous_events/0/root_find",
+        "message": "must be equal to one of the allowed values",
+        "keyword": "enum"
+      }
+    ],
+    "structural_errors": [],
+    "is_valid": false,
+    "notes": "`root_find` accepts only \"left\" (default) and \"right\", DiffEq's two rootfind sides; \"all\" was removed from the schema without a version bump because it never had an effect."
   }
 }

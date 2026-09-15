@@ -736,7 +736,7 @@ type ContinuousEvent struct {
 	Conditions   []Expression     `json:"conditions"`
 	Affects      []AffectEquation `json:"affects"`
 	AffectNeg    []AffectEquation `json:"affect_neg,omitempty"`
-	RootFind     *string          `json:"root_find,omitempty"` // "left", "right", "all"
+	RootFind     *string          `json:"root_find,omitempty"` // "left" (default) or "right"
 	Reinitialize *bool            `json:"reinitialize,omitempty"`
 	Description  *string          `json:"description,omitempty"`
 }

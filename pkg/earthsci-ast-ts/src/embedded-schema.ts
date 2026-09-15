@@ -1010,8 +1010,7 @@ export const schema: AnySchemaObject = {
           "description": "Root-finding direction.",
           "enum": [
             "left",
-            "right",
-            "all"
+            "right"
           ],
           "default": "left"
         },
@@ -3985,8 +3984,7 @@ export const schema: AnySchemaObject = {
           "type": "string",
           "enum": [
             "left",
-            "right",
-            "all"
+            "right"
           ]
         },
         "reinitialize": {

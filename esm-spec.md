@@ -1769,7 +1769,7 @@ Continuous events fire when a **condition expression crosses zero**. The runtime
 | `conditions` | ✓ | Array of expressions. Event fires when any expression crosses zero. |
 | `affects` | ✓ | Array of `{lhs, rhs}` affect equations. Empty array `[]` for pure detection (no state change). |
 | `affect_neg` | | Separate affects for negative-going zero crossings. If `null` or absent, `affects` is used for both directions. |
-| `root_find` | | Root-finding direction: `"left"` (default), `"right"`, or `"all"`. Maps to DiffEq `rootfind` option. |
+| `root_find` | | Which side of the root the event lands on: `"left"` (default) or `"right"`, mapped to DiffEq's `rootfind` option (`LeftRootFind` / `RightRootFind`). |
 | `reinitialize` | | Boolean. Whether to reinitialize the system after the event (default: `false`). |
 | `description` | | Human-readable description |
 
