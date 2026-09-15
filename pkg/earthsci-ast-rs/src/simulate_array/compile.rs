@@ -615,7 +615,7 @@ impl ArrayCompiled {
         // event list itself, because the synthetic model it hands down carries
         // no events. Subsystems are searched too, since mounting keeps only
         // their variables and equations.
-        if let Some(name) = first_discrete_event(&model_owned) {
+        if let Some(name) = crate::compile_error::first_discrete_event(&model_owned) {
             return Err(crate::compile_error::discrete_event_refusal(
                 crate::compile_error::ARRAY_EVALUATOR,
                 name.as_deref(),
@@ -877,37 +877,6 @@ impl ArrayCompiled {
 // [`ArrayCompiled::from_model`], which composes them in order); the bodies are
 // extracted verbatim from the former inline implementation.
 // ============================================================================
-
-/// The name of the first discrete event `model` or any of its inline subsystems
-/// declares (`Some(None)` for an unnamed one), searching the subsystems' raw
-/// JSON because mounting carries only their variables and equations.
-fn first_discrete_event(model: &Model) -> Option<Option<String>> {
-    fn in_json(value: &serde_json::Value) -> Option<Option<String>> {
-        if let Some(event) = value
-            .get("discrete_events")
-            .and_then(|v| v.as_array())
-            .and_then(|events| events.first())
-        {
-            return Some(
-                event
-                    .get("name")
-                    .and_then(|n| n.as_str())
-                    .map(str::to_string),
-            );
-        }
-        value
-            .get("subsystems")
-            .and_then(|s| s.as_object())
-            .and_then(|subs| subs.values().find_map(in_json))
-    }
-    if let Some(event) = model.discrete_events.as_ref().and_then(|e| e.first()) {
-        return Some(event.name.clone());
-    }
-    model
-        .subsystems
-        .as_ref()
-        .and_then(|subs| subs.values().find_map(in_json))
-}
 
 /// (0) Reject, at BUILD, every operator this runtime cannot evaluate — the
 /// open rewrite-target tier (`grad`/`div`/`laplacian`, a spatial `D`, a user op,

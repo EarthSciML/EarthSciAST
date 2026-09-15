@@ -24,8 +24,9 @@ pub enum CompileError {
     /// without its residual solved, reports the initial value as its answer,
     /// and nothing in that answer says a construct was dropped.
     #[error(
-        "unsupported_construct: {construct} {detail} is not supported by the {evaluator}; \
-         refusing the build rather than running the model without it (esm-spec §9.6.6)"
+        "{code}: {construct} {detail} is not supported by the {evaluator}; \
+         refusing the build rather than running the model without it (esm-spec §9.6.6)",
+        code = crate::diagnostic::codes::UNSUPPORTED_CONSTRUCT
     )]
     UnsupportedConstruct {
         /// Which construct: [`DISCRETE_EVENT`] or [`IMPLICIT_EQUATION`].
@@ -355,10 +356,65 @@ pub fn discrete_event_refusal(evaluator: &'static str, name: Option<&str>) -> Co
     }
 }
 
-/// The first equation that constrains its operands only implicitly. An `ic`
-/// LHS is an initial condition, and a derivative-operator LHS the
-/// classification cannot credit is a rewrite target the `unlowered_operator`
-/// gate reports; neither is counted.
+/// The name of the first discrete event `model` or any of its inline subsystems
+/// declares (`Some(None)` for an unnamed one). The subsystems are searched in
+/// their raw JSON: mounting keeps only their variables and equations, and
+/// `flatten` does not lift a subsystem's events into the flattened system, so
+/// no check on the flattened event list can see one.
+pub(crate) fn first_discrete_event(model: &crate::types::Model) -> Option<Option<String>> {
+    if let Some(event) = model.discrete_events.as_ref().and_then(|e| e.first()) {
+        return Some(event.name.clone());
+    }
+    model
+        .subsystems
+        .as_ref()
+        .and_then(|subs| subs.values().find_map(first_discrete_event_in_json))
+}
+
+/// [`first_discrete_event`] over every model and reaction system in `file`,
+/// subsystems included.
+pub(crate) fn first_discrete_event_in_file(file: &crate::types::EsmFile) -> Option<Option<String>> {
+    let in_models = file
+        .models
+        .as_ref()
+        .and_then(|models| models.values().find_map(first_discrete_event));
+    in_models.or_else(|| {
+        file.reaction_systems.as_ref().and_then(|systems| {
+            systems.values().find_map(|rs| {
+                if let Some(event) = rs.discrete_events.as_ref().and_then(|e| e.first()) {
+                    return Some(event.name.clone());
+                }
+                rs.subsystems
+                    .as_ref()
+                    .and_then(|subs| subs.values().find_map(first_discrete_event_in_json))
+            })
+        })
+    })
+}
+
+fn first_discrete_event_in_json(value: &serde_json::Value) -> Option<Option<String>> {
+    if let Some(event) = value
+        .get("discrete_events")
+        .and_then(|v| v.as_array())
+        .and_then(|events| events.first())
+    {
+        return Some(
+            event
+                .get("name")
+                .and_then(|n| n.as_str())
+                .map(str::to_string),
+        );
+    }
+    value
+        .get("subsystems")
+        .and_then(|s| s.as_object())
+        .and_then(|subs| subs.values().find_map(first_discrete_event_in_json))
+}
+
+/// The first equation that constrains its operands only implicitly, including a
+/// time derivative of an expression (`D(a + b) ~ 3`), which credits no state. An
+/// `ic` LHS is an initial condition, and a spatial-derivative LHS is a rewrite
+/// target the `unlowered_operator` gate reports; neither is counted.
 pub fn first_implicit_equation(
     equations: &[crate::types::Equation],
 ) -> Option<&crate::types::Equation> {
@@ -367,7 +423,8 @@ pub fn first_implicit_equation(
     equations.iter().find(|eq| {
         let structural = matches!(
             &eq.lhs,
-            Expr::Operator(n) if matches!(n.op.as_str(), "ic" | "D" | "grad" | "div" | "laplacian")
+            Expr::Operator(n) if matches!(n.op.as_str(), "ic" | "grad" | "div" | "laplacian")
+                || (n.op == "D" && n.wrt.as_deref().is_some_and(|w| w != "t"))
         );
         !structural && matches!(lhs_form(&eq.lhs), LhsForm::Expression)
     })

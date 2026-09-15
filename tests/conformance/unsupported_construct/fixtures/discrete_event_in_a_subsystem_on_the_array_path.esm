@@ -2,7 +2,7 @@
  "esm": "1.1.0",
  "metadata": {
   "name": "DiscreteEventInASubsystemOnTheArrayPath",
-  "description": "The array discrete-event document with its model, event included, mounted as the inline subsystem `Inner` of a trivial parent. An event owned by a subsystem is the one that can vanish before any build-time check sees it: Python's and Rust's flatten do not lift a subsystem's events into the flattened system, so an evaluator that checks only the flattened event list runs the model without it. Every evaluator MUST refuse it with `unsupported_construct` exactly as it refuses a top-level event.",
+  "description": "The array discrete-event document with its model, event included, mounted as the inline subsystem `Inner` of a parent that declares its own array (`z_seen`), so the document takes the array path in every binding. An event owned by a subsystem is the one that can vanish before any build-time check sees it: Python's and Rust's flatten do not lift a subsystem's events into the flattened system, so an evaluator that checks only the flattened event list runs the model without it. Every evaluator MUST refuse it with `unsupported_construct` exactly as it refuses a top-level event.",
   "authors": [
    "EarthSciML Authors and Contributors"
   ],
@@ -28,6 +28,14 @@
      "type": "unknown",
      "units": "1",
      "description": "A trivial parent state, so the parent is a model in its own right."
+    },
+    "z_seen": {
+     "type": "unknown",
+     "shape": [
+      "step_rows"
+     ],
+     "units": "1",
+     "description": "`z` broadcast over an axis, so the PARENT is array-shaped and every binding routes the document to its array evaluator."
     }
    },
    "equations": [
@@ -49,6 +57,22 @@
       ]
      },
      "rhs": 0.0
+    },
+    {
+     "lhs": "z_seen",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "k"
+      ],
+      "ranges": {
+       "k": {
+        "from": "step_rows"
+       }
+      },
+      "expr": "z"
+     }
     }
    ],
    "subsystems": {
