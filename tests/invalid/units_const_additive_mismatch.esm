@@ -1,0 +1,45 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "UnitsConstAdditiveMismatch",
+    "description": "Invalid: a const that declares units is not a neutral literal in an additive position (esm-spec §4.8.3, §4.8.5). It has its declared unit, kg, which cannot be added to a length in metres. The same const without units would adopt the sibling's unit.",
+    "authors": [
+      "Chris Tessum with Claude"
+    ],
+    "created": "2026-09-15T00:00:00Z"
+  },
+  "models": {
+    "BadUnitsModel": {
+      "variables": {
+        "length_m": {
+          "type": "parameter",
+          "units": "m",
+          "default": 2.0,
+          "description": "A length in metres"
+        },
+        "length_sum": {
+          "type": "unknown",
+          "units": "m",
+          "description": "Invalid: a length plus a const declared in kilograms"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "length_sum",
+          "rhs": {
+            "op": "+",
+            "args": [
+              "length_m",
+              {
+                "op": "const",
+                "args": [],
+                "value": 1.0,
+                "units": "kg"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}
