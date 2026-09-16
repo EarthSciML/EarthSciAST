@@ -11,6 +11,7 @@
 
 import type { Expression, ExpressionNode, EsmFile, Model } from './types.js'
 import {
+  ExactScale,
   type CanonicalDims,
   type ParsedUnit,
   parseUnitForConversion,
@@ -24,6 +25,7 @@ import {
 } from './op-registry.js'
 import { forEachComponent, forEachEquation } from './traverse.js'
 import { observedDefinitions } from './classification.js'
+import { ERROR_CODES } from './errors.js'
 
 export type { CanonicalDims, ParsedUnit } from './unit-conversion.js'
 
@@ -131,7 +133,7 @@ function arityWarning(op: string, label: string, count: number): string | null {
 }
 
 function dimensionless(): ParsedUnit {
-  return { dims: {}, scale: 1 }
+  return { dims: {}, scale: 1, exact: ExactScale.one() }
 }
 
 /**
@@ -145,7 +147,7 @@ function dimensionless(): ParsedUnit {
  * `solar_zenith_angle: "rad" = acos(cos_zenith)` typecheck.
  */
 function angle(): ParsedUnit {
-  return { dims: { rad: 1 }, scale: 1 }
+  return { dims: { rad: 1 }, scale: 1, exact: ExactScale.one() }
 }
 
 /**
@@ -231,7 +233,7 @@ function powerUnit(base: ParsedUnit, exp: number): ParsedUnit {
     dims[k as keyof CanonicalDims] = v * exp
   }
   pruneZeros(dims)
-  return { dims, scale: Math.pow(base.scale, exp) }
+  return { dims, scale: Math.pow(base.scale, exp), exact: base.exact.power(exp) }
 }
 
 /**
@@ -339,7 +341,7 @@ function computeDimensions(
       // Unknown variable ⇒ UNKNOWN dimension, not dimensionless. Assuming
       // dimensionless here would manufacture mismatches against every
       // dimensional operand it meets.
-      warn(`Unknown variable: ${expr}`, 'analysis')
+      warn(`Unknown variable: ${expr}`, ERROR_CODES.ANALYSIS)
       return unknown()
     }
     return finish(dims)
@@ -385,7 +387,12 @@ function computeDimensions(
         if (!dimsEqual(first.dims, other.dims)) {
           warn(
             `Addition/subtraction requires same dimensions, got ${formatDims(first.dims)} and ${formatDims(other.dims)}`,
-            'dimensional_mismatch',
+            ERROR_CODES.DIMENSIONAL_MISMATCH,
+          )
+        } else if (!first.exact.equals(other.exact)) {
+          warn(
+            `Addition/subtraction requires the same scale, got ${formatUnit(first)} and ${formatUnit(other)}`,
+            ERROR_CODES.DIMENSIONAL_MISMATCH,
           )
         }
       }
@@ -403,7 +410,7 @@ function computeDimensions(
     case '/': {
       const arity = arityWarning('/', 'Division', argDims.length)
       if (arity) {
-        warn(arity, 'analysis')
+        warn(arity, ERROR_CODES.ANALYSIS)
         return unknown()
       }
       const num = get(0)
@@ -417,7 +424,7 @@ function computeDimensions(
     case 'pow': {
       const arity = arityWarning('^', 'Exponentiation', argDims.length)
       if (arity) {
-        warn(arity, 'analysis')
+        warn(arity, ERROR_CODES.ANALYSIS)
         return unknown()
       }
       const base = get(0)
@@ -428,15 +435,16 @@ function computeDimensions(
       if (expDims !== null && !isDimensionless(expDims)) {
         warn(
           `Exponent must be dimensionless, got ${formatDims(expDims.dims)}`,
-          'dimensional_mismatch',
+          ERROR_CODES.DIMENSIONAL_MISMATCH,
         )
         return unknown()
       }
 
       if (base === null) return unknown()
-      // A dimensionless base stays dimensionless under any exponent, so a
-      // non-constant exponent is only a problem for a DIMENSIONAL base.
-      if (isDimensionless(base)) return finish(dimensionless())
+      // A dimensionless base of scale 1 stays exactly that under any exponent,
+      // so a non-constant exponent is only a problem for a DIMENSIONAL or SCALED
+      // base (`x^2` with `x` in `%` has scale 1/10000).
+      if (isDimensionless(base) && base.exact.isOne()) return finish(dimensionless())
 
       const expValue = literalValue(args[1])
       if (expValue === null) {
@@ -450,8 +458,8 @@ function computeDimensions(
         // (A DIMENSIONAL exponent, `m^kg`, is a different rule and stays a
         // provable mismatch — see just above.)
         warn(
-          `Cannot determine the dimension of a non-literal exponent applied to a dimensional quantity (base has ${formatDims(base.dims)})`,
-          'analysis',
+          `Cannot determine the unit of a non-literal exponent applied to a dimensional or scaled quantity (base has ${formatUnit(base)})`,
+          ERROR_CODES.ANALYSIS,
         )
         return unknown()
       }
@@ -472,7 +480,7 @@ function computeDimensions(
           : null
         : arityWarning('D', 'Derivative D()', args.length)
       if (arity) {
-        warn(arity, 'analysis')
+        warn(arity, ERROR_CODES.ANALYSIS)
         return unknown()
       }
       const operand = get(0)
@@ -521,7 +529,7 @@ function computeDimensions(
         if (arg !== null && !isDimensionless(arg) && !isAngle(arg)) {
           warn(
             `${op}() requires a dimensionless or angle argument, got ${formatDims(arg.dims)}`,
-            'dimensional_mismatch',
+            ERROR_CODES.DIMENSIONAL_MISMATCH,
           )
         }
       }
@@ -539,7 +547,7 @@ function computeDimensions(
         if (arg !== null && !isDimensionless(arg)) {
           warn(
             `${op}() requires dimensionless argument, got ${formatDims(arg.dims)}`,
-            'dimensional_mismatch',
+            ERROR_CODES.DIMENSIONAL_MISMATCH,
           )
         }
       }
@@ -566,7 +574,7 @@ function computeDimensions(
         if (arg !== null && !isDimensionless(arg)) {
           warn(
             `${op}() requires dimensionless argument, got ${formatDims(arg.dims)}`,
-            'dimensional_mismatch',
+            ERROR_CODES.DIMENSIONAL_MISMATCH,
           )
         }
       }
@@ -575,7 +583,7 @@ function computeDimensions(
     case 'atan2': {
       const arity = arityWarning('atan2', 'atan2()', argDims.length)
       if (arity) {
-        warn(arity, 'analysis')
+        warn(arity, ERROR_CODES.ANALYSIS)
         return unknown()
       }
       const a = get(0)
@@ -585,7 +593,12 @@ function computeDimensions(
       if (a !== null && b !== null && !dimsEqual(a.dims, b.dims)) {
         warn(
           `atan2() requires arguments with same dimensions, got ${formatDims(a.dims)} and ${formatDims(b.dims)}`,
-          'dimensional_mismatch',
+          ERROR_CODES.DIMENSIONAL_MISMATCH,
+        )
+      } else if (a !== null && b !== null && !a.exact.equals(b.exact)) {
+        warn(
+          `atan2() requires arguments with the same scale, got ${formatUnit(a)} and ${formatUnit(b)}`,
+          ERROR_CODES.DIMENSIONAL_MISMATCH,
         )
       }
       return finish(angle())
@@ -613,7 +626,7 @@ function computeDimensions(
     case 'max': {
       const arity = arityWarning(op, `${op}()`, argDims.length)
       if (arity) {
-        warn(arity, 'analysis')
+        warn(arity, ERROR_CODES.ANALYSIS)
         return unknown()
       }
       // `max(x, 0)` / `min(rate, 1e-6)` clamp against a bare literal that
@@ -633,7 +646,12 @@ function computeDimensions(
         if (!dimsEqual(ref.dims, other.dims)) {
           warn(
             `${op}() requires all arguments to have same dimensions, got ${formatDims(ref.dims)} and ${formatDims(other.dims)}`,
-            'dimensional_mismatch',
+            ERROR_CODES.DIMENSIONAL_MISMATCH,
+          )
+        } else if (!ref.exact.equals(other.exact)) {
+          warn(
+            `${op}() requires all arguments to have the same scale, got ${formatUnit(ref)} and ${formatUnit(other)}`,
+            ERROR_CODES.DIMENSIONAL_MISMATCH,
           )
         }
       }
@@ -644,19 +662,27 @@ function computeDimensions(
     case 'ifelse': {
       const arity = arityWarning('ifelse', 'ifelse()', argDims.length)
       if (arity) {
-        warn(arity, 'analysis')
+        warn(arity, ERROR_CODES.ANALYSIS)
         return unknown()
       }
       const cond = get(0)
       if (cond !== null && !isDimensionless(cond)) {
-        warn(`ifelse() condition must be dimensionless, got ${formatDims(cond.dims)}`, 'analysis')
+        warn(
+          `ifelse() condition must be dimensionless, got ${formatDims(cond.dims)}`,
+          ERROR_CODES.ANALYSIS,
+        )
       }
       const a = get(1)
       const b = get(2)
       if (a !== null && b !== null && !dimsEqual(a.dims, b.dims)) {
         warn(
           `ifelse() branches must have same dimensions, got ${formatDims(a.dims)} and ${formatDims(b.dims)}`,
-          'dimensional_mismatch',
+          ERROR_CODES.DIMENSIONAL_MISMATCH,
+        )
+      } else if (a !== null && b !== null && !a.exact.equals(b.exact)) {
+        warn(
+          `ifelse() branches must have the same scale, got ${formatUnit(a)} and ${formatUnit(b)}`,
+          ERROR_CODES.DIMENSIONAL_MISMATCH,
         )
       }
       return finish(a ?? b)
@@ -670,7 +696,7 @@ function computeDimensions(
     case '!=': {
       const arity = arityWarning(op, op, argDims.length)
       if (arity) {
-        warn(arity, 'analysis')
+        warn(arity, ERROR_CODES.ANALYSIS)
         return finish(dimensionless())
       }
       const a = get(0)
@@ -678,7 +704,12 @@ function computeDimensions(
       if (a !== null && b !== null && !dimsEqual(a.dims, b.dims)) {
         warn(
           `${op} requires arguments with same dimensions, got ${formatDims(a.dims)} and ${formatDims(b.dims)}`,
-          'dimensional_mismatch',
+          ERROR_CODES.DIMENSIONAL_MISMATCH,
+        )
+      } else if (a !== null && b !== null && !a.exact.equals(b.exact)) {
+        warn(
+          `${op} requires arguments with the same scale, got ${formatUnit(a)} and ${formatUnit(b)}`,
+          ERROR_CODES.DIMENSIONAL_MISMATCH,
         )
       }
       return finish(dimensionless())
@@ -690,13 +721,26 @@ function computeDimensions(
       for (let i = 0; i < argDims.length; i++) {
         const arg = get(i)
         if (arg !== null && !isDimensionless(arg)) {
-          warn(`${op} requires dimensionless arguments, got ${formatDims(arg.dims)}`, 'analysis')
+          warn(
+            `${op} requires dimensionless arguments, got ${formatDims(arg.dims)}`,
+            ERROR_CODES.ANALYSIS,
+          )
         }
       }
       return finish(dimensionless())
 
     case 'Pre':
       return finish(get(0))
+
+    case 'const': {
+      // A `const` that DECLARES its units has that unit (esm-spec §4.8.5);
+      // without `units` it is undeterminable, like a bare literal. An
+      // unresolvable string is reported at the containing expression field, not
+      // here.
+      const declared = (node as { units?: string }).units
+      if (declared === undefined) return unknown()
+      return finish(tryParseUnit(declared))
+    }
 
     default:
       // Structural / not-dimensionally-modelled ops (`index`, `fn`,
@@ -747,7 +791,7 @@ function addBinding(
   if (parsed === null) {
     warnings.push({
       message: `Unit string '${units}' is not a recognised unit`,
-      code: 'unparseable_unit',
+      code: ERROR_CODES.UNPARSEABLE_UNIT,
       // A JSON Pointer, because `validate()` promotes this finding to a
       // structural error and uses `location` verbatim as its `path`. It points
       // at the VARIABLE (`/models/M/variables/v`), which is where the shared
@@ -792,7 +836,7 @@ function checkAndReport(
   } catch (error) {
     warnings.push({
       message: `${errorContext}: ${error instanceof Error ? error.message : String(error)}`,
-      code: 'analysis',
+      code: ERROR_CODES.ANALYSIS,
       location,
     })
   }
@@ -830,7 +874,7 @@ function reportUnparseableVariableUnits(
     if (tryParseUnit(variable.units) !== null) continue
     warnings.push({
       message: `Unit string '${variable.units}' is not a recognised unit`,
-      code: 'unparseable_unit',
+      code: ERROR_CODES.UNPARSEABLE_UNIT,
       location: `${location}/variables/${name}`,
       variable: name,
       units: variable.units,
@@ -960,6 +1004,21 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
         // corpus pins `unit_inconsistency` at
         // `/models/<M>/equations/<i>` (tests/invalid/expected_errors.json).
         const eqLocation = `${location}/${equationsKey}/${index}`
+        // A declared `const` unit string that does not resolve is a defect at the
+        // containing expression field (esm-spec §4.8.5 item 2).
+        for (const [field, side] of [
+          ['lhs', equation.lhs],
+          ['rhs', equation.rhs],
+        ] as const) {
+          for (const units of unresolvableConstUnits(side)) {
+            warnings.push({
+              message: `Unit string '${units}' is not a recognised unit`,
+              code: ERROR_CODES.UNPARSEABLE_UNIT,
+              location: `${eqLocation}/${field}`,
+              units,
+            })
+          }
+        }
         checkAndReport(warnings, eqLocation, 'Error checking equation dimensions', () => {
           const lhsResult = checkDimensions(equation.lhs, bindings)
           const rhsResult = checkDimensions(equation.rhs, bindings)
@@ -986,7 +1045,7 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
               diagnostics,
               mismatch: {
                 message: derivMessage,
-                code: 'dimensional_mismatch',
+                code: ERROR_CODES.DIMENSIONAL_MISMATCH,
                 location: eqLocation,
                 equation: equationText(),
               },
@@ -997,10 +1056,10 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
           // mismatch. An indeterminate side (unknown variable, unmodelled op)
           // is skipped, never defaulted to dimensionless.
           const mismatch: UnitWarning | null =
-            lhs !== null && rhs !== null && !dimsEqual(lhs.dims, rhs.dims)
+            lhs !== null && rhs !== null && !sameUnit(lhs, rhs)
               ? {
-                  message: `Dimensional mismatch in equation: LHS has ${formatDims(lhs.dims)}, RHS has ${formatDims(rhs.dims)}`,
-                  code: 'dimensional_mismatch',
+                  message: `Dimensional mismatch in equation: LHS has ${formatUnit(lhs)}, RHS has ${formatUnit(rhs)}`,
+                  code: ERROR_CODES.DIMENSIONAL_MISMATCH,
                   location: eqLocation,
                   equation: equationText(),
                 }
@@ -1050,10 +1109,10 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
                   : dimensionless()
                 const exprDims = exprResult.dimensions
                 const mismatch: UnitWarning | null =
-                  varDims !== null && exprDims !== null && !dimsEqual(exprDims.dims, varDims.dims)
+                  varDims !== null && exprDims !== null && !sameUnit(exprDims, varDims)
                     ? {
-                        message: `Dimensional mismatch in observed variable ${varName}: declared as ${formatDims(varDims.dims)}, expression evaluates to ${formatDims(exprDims.dims)}`,
-                        code: 'dimensional_mismatch',
+                        message: `Dimensional mismatch in observed variable ${varName}: declared as ${formatUnit(varDims)}, expression evaluates to ${formatUnit(exprDims)}`,
+                        code: ERROR_CODES.DIMENSIONAL_MISMATCH,
                         location: varLocation,
                       }
                     : null
@@ -1230,7 +1289,7 @@ function derivativeTimeMismatch(
 }
 
 function multiplyUnits(units: ParsedUnit[]): ParsedUnit {
-  const result: ParsedUnit = { dims: {}, scale: 1 }
+  const result: ParsedUnit = { dims: {}, scale: 1, exact: ExactScale.one() }
   for (const u of units) {
     for (const [k, v] of Object.entries(u.dims)) {
       if (v == null) continue
@@ -1238,19 +1297,21 @@ function multiplyUnits(units: ParsedUnit[]): ParsedUnit {
       result.dims[key] = (result.dims[key] ?? 0) + v
     }
     result.scale *= u.scale
+    result.exact = result.exact.multiply(u.exact)
   }
   pruneZeros(result.dims)
   return result
 }
 
 function divideUnits(a: ParsedUnit, b: ParsedUnit): ParsedUnit {
-  const result: ParsedUnit = { dims: { ...a.dims }, scale: a.scale }
+  const result: ParsedUnit = { dims: { ...a.dims }, scale: a.scale, exact: a.exact }
   for (const [k, v] of Object.entries(b.dims)) {
     if (v == null) continue
     const key = k as keyof CanonicalDims
     result.dims[key] = (result.dims[key] ?? 0) - v
   }
   result.scale /= b.scale
+  result.exact = result.exact.divide(b.exact)
   pruneZeros(result.dims)
   return result
 }
@@ -1285,6 +1346,40 @@ function isAngle(unit: ParsedUnit): boolean {
     if (v != null && v !== 0) return false
   }
   return true
+}
+
+/**
+ * Whether two units agree in dimension AND exact scale — what `+`, `-`,
+ * comparisons and the two sides of an equation require (esm-spec §4.8.3).
+ */
+function sameUnit(a: ParsedUnit, b: ParsedUnit): boolean {
+  return dimsEqual(a.dims, b.dims) && a.exact.equals(b.exact)
+}
+
+/** {@link formatDims}, followed by the exact scale when it is not 1. */
+function formatUnit(u: ParsedUnit): string {
+  return u.exact.isOne() ? formatDims(u.dims) : `${formatDims(u.dims)} (scale ${u.exact})`
+}
+
+/**
+ * Every declared `const` unit string in `expr` that does not resolve against the
+ * registry (esm-spec §4.8.5 item 2), in walk order.
+ */
+function unresolvableConstUnits(expr: unknown): string[] {
+  const out: string[] = []
+  const walk = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      for (const child of node) walk(child)
+    } else if (node !== null && typeof node === 'object') {
+      const obj = node as Record<string, unknown>
+      if (obj.op === 'const' && typeof obj.units === 'string' && tryParseUnit(obj.units) === null) {
+        out.push(obj.units)
+      }
+      for (const child of Object.values(obj)) walk(child)
+    }
+  }
+  walk(expr)
+  return out
 }
 
 export function dimsEqual(a: CanonicalDims, b: CanonicalDims): boolean {

@@ -633,7 +633,7 @@ def _array_observed_doc() -> dict:
     }
 
 
-def test_array_observed_assertions_read_both_the_build_and_the_trajectory():
+def test_array_observed_assertions_read_both_the_build_and_the_trajectory(monkeypatch):
     """esm-spec §6.6.5 admits ANY shaped variable in a ``coords`` / ``reduce``
     assertion, and §5.23 makes a reference denote its expansion — so a
     STATE-DEPENDENT array observed is assertable exactly like a state-free one.
@@ -644,7 +644,12 @@ def test_array_observed_assertions_read_both_the_build_and_the_trajectory():
     SCALAR observeds as rows, so every such assertion errored with "has no
     cells in var_map". It is now evaluated at the trajectory sample through the
     same observed driver the RHS uses."""
-    f = load_string(json.dumps(_array_observed_doc()))
+    f = _load_rejected_then_unvalidated(
+        _array_observed_doc(),
+        monkeypatch,
+        "undefined_variable",
+        "/models/M/tests/0/assertions/3/variable",
+    )
     results = run_inline_tests(f, model_name="M", method="LSODA", rtol=1e-12, atol=1e-14)
     assert len(results) == 4
     by_idx = {r.assertion_idx: r for r in results}
@@ -716,7 +721,7 @@ def _sibling_array_observed_doc() -> dict:
     }
 
 
-def test_array_observed_assertion_never_reads_a_sibling_components_field():
+def test_array_observed_assertion_never_reads_a_sibling_components_field(monkeypatch):
     """An array observed field belongs to the ASSERTED component
     (CONFORMANCE_SPEC §5.27.1), and that holds for the trajectory-replay source
     exactly as it does for `state_cells`.
@@ -728,7 +733,12 @@ def test_array_observed_assertion_never_reads_a_sibling_components_field():
     — instead of erroring. Rust (`observed_field`, `assertion_observed_requests`)
     and Julia (`_observed_field`) both require the asserted model to declare the
     name; Python now does too."""
-    f = load_string(json.dumps(_sibling_array_observed_doc()))
+    f = _load_rejected_then_unvalidated(
+        _sibling_array_observed_doc(),
+        monkeypatch,
+        "undefined_variable",
+        "/models/M2/tests/0/assertions/0/variable",
+    )
     results = run_inline_tests(f, model_name="M2", method="LSODA", rtol=1e-12, atol=1e-14)
     assert len(results) == 1
     r = results[0]
@@ -789,6 +799,20 @@ def _coords_assert(coords, *, time=0.0, expected=0.0, abs_tol=1e-9, var="u"):
     }
 
 
+def _load_rejected_then_unvalidated(doc: dict, monkeypatch, code: str, path: str):
+    """Assert the load rejects ``doc`` with ``code`` at ``path`` (esm-spec §6.6.3 /
+    §6.6.5 make the defect a validation error), then load it past the load-time
+    structural pass so a test can still reach the RUNTIME guard for it -- the
+    guard every document built through the typed API relies on."""
+    import earthsci_ast.parse as _parse
+
+    with pytest.raises(_parse.SchemaValidationError) as exc:
+        load_string(json.dumps(doc))
+    assert (code, path) in [(r["code"], r["path"]) for r in exc.value.records]
+    monkeypatch.setattr(_parse, "_validate_structural", lambda *a, **k: None)
+    return load_string(json.dumps(doc))
+
+
 def _run(doc_or_file, **kwargs):
     f = load_string(json.dumps(doc_or_file)) if isinstance(doc_or_file, dict) else doc_or_file
     return run_inline_tests(f, model_name="M", method="LSODA", rtol=1e-12, atol=1e-14, **kwargs)
@@ -830,8 +854,9 @@ def test_run_inline_tests_coords_validation_rejections():
     assert "resolves to index 9" in results[2].message
 
 
-def test_run_inline_tests_coords_on_scalar_variable_rejected():
-    """coords on a scalar (0-D) variable is ill-formed per §6.6.5."""
+def test_run_inline_tests_coords_on_scalar_variable_rejected(monkeypatch):
+    """coords on a scalar (0-D) variable is ill-formed per §6.6.5: rejected at
+    load as ``assertion_rank_mismatch``, and by the runner if it gets that far."""
     doc = {
         "esm": "1.1.0",
         "metadata": {"name": "scalar_coords"},
@@ -849,7 +874,10 @@ def test_run_inline_tests_coords_on_scalar_variable_rejected():
             }
         },
     }
-    results = _run(doc)
+    f = _load_rejected_then_unvalidated(
+        doc, monkeypatch, "assertion_rank_mismatch", "/models/M/tests/0/assertions/0"
+    )
+    results = _run(f)
     assert len(results) == 1
     assert not results[0].passed
     assert "requires a spatially-shaped variable" in results[0].message

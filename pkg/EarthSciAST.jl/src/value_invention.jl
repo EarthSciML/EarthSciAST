@@ -2,7 +2,8 @@
 Build-time value-invention front door
 (RFC semiring-faq-unified-ir §6.1 cadence-partition / §5.5 / §7.3).
 
-Replaces the `E_TREEWALK_DERIVED_INDEX_SET` throw (tree_walk.jl). A
+Sizes what the index-set resolver would otherwise refuse with
+`derived_index_set_unmaterialized` (tree_walk/resolve.jl). A
 `kind:"derived"` index set whose `from_faq` names a value-invention aggregate
 (skolem / distinct / rank) is materialised here, ONCE at setup, off the
 per-step hot path — the §6.1 CONST/DISCRETE materialisation point. The
@@ -1141,12 +1142,22 @@ function materialize_value_invention(model::Model, index_sets::AbstractDict,
             "value-invention producer aggregate requires an `id` naming it for `from_faq`"))
         id = String(id)
         haskey(faq_to_set, id) || continue   # no derived set names this producer
-        # §5.7 guard 2: a relational node may not run on the hot path.
+        # §5.7 guard 2: a relational node may not run on the hot path. The code is
+        # the one structural validation reports for the same document.
         _vi_class(node, ctx.seeds, overrides) == _VI_CLASS_CONTINUOUS &&
-            throw(TreeWalkError("E_TREEWALK_VI_CONTINUOUS",
+            throw(TreeWalkError("relational_node_in_continuous",
                 "value-invention producer '$id' classifies CONTINUOUS — it may not run per " *
                 "step (RFC §5.7 guard 2); its inputs must be CONST/DISCRETE"))
-        mem = _vi_materialize_producer(ctx, node)
+        # Any other failure leaves the derived set with no members to count, so it
+        # is refused under the set's name rather than surfaced as an engine detail.
+        mem = try
+            _vi_materialize_producer(ctx, node)
+        catch err
+            err isa TreeWalkError || rethrow()
+            throw(TreeWalkError("derived_index_set_unmaterialized",
+                "derived index set '$(faq_to_set[id])' (from_faq '$id') cannot be " *
+                "materialized: $(err.code): $(err.detail)"))
+        end
         members[id] = mem
         extents[id] = length(mem)
     end

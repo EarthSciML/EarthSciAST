@@ -1,0 +1,48 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "library_enum_importer",
+    "description": "Imports templates whose bodies name enum members declared only in the library (lib.esm). The importer declares no `enums` block and must still load: the library's own `enum` op, and the symbol the library binds in its own call `gallon_code`, resolve against the library's block (esm-spec §9.3)."
+  },
+  "models": {
+    "Consumer": {
+      "expression_template_imports": [
+        {
+          "ref": "./lib.esm"
+        }
+      ],
+      "variables": {
+        "isPerHorsepowerHour": {
+          "type": "unknown",
+          "units": "1"
+        },
+        "gallonCode": {
+          "type": "unknown",
+          "units": "1"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "isPerHorsepowerHour",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "is_rate_per_horsepower_hour",
+            "bindings": {
+              "unit_code": 1
+            }
+          }
+        },
+        {
+          "lhs": "gallonCode",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "gallon_code",
+            "bindings": {}
+          }
+        }
+      ]
+    }
+  }
+}

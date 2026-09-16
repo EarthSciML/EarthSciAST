@@ -1,0 +1,12 @@
+{
+  "esm": "1.1.0",
+  "metadata": { "name": "metaparameter_loop_symbol_conflict_lib", "description": "Library whose metaparameter i collides with the loop symbol i of its template body; refused standalone and when imported, even when the import edge closes i (metaparameter_name_conflict, esm-spec 9.7.6)" },
+  "metaparameters": { "i": { "type": "integer", "default": 2 } },
+  "index_sets": { "cells": { "kind": "interval", "size": 3 } },
+  "expression_templates": {
+    "total_of": {
+      "params": ["v"],
+      "body": { "op": "faq", "args": [], "output_idx": [], "ranges": { "i": { "from": "cells" } }, "expr": { "op": "index", "args": ["v", "i"] } }
+    }
+  }
+}
