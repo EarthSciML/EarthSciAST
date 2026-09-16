@@ -1,0 +1,61 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "UnitsConstTemplateUnparseable",
+    "description": "Invalid: the to_ms template's body carries a const declaring `mph`, which is not a registry symbol (the unit is `mi/h`). A call has the unit of its expansion (esm-spec §4.8.5 item 5), so the unresolvable string is reported as unit_parse_error at the calling equation's expression field (§4.8.5 item 2).",
+    "authors": [
+      "Chris Tessum with Claude"
+    ],
+    "created": "2026-09-15T00:00:00Z"
+  },
+  "models": {
+    "BadUnitsModel": {
+      "expression_templates": {
+        "to_ms": {
+          "params": [
+            "x"
+          ],
+          "body": {
+            "op": "*",
+            "args": [
+              "x",
+              {
+                "op": "const",
+                "args": [],
+                "value": 0.44704,
+                "units": "mph"
+              }
+            ]
+          },
+          "description": "Convert a speed in mi/h to m/s, with a misspelled unit on the constant."
+        }
+      },
+      "variables": {
+        "speed_mph": {
+          "type": "parameter",
+          "units": "mi/h",
+          "default": 30.0,
+          "description": "Link average speed in miles per hour"
+        },
+        "speed_ms": {
+          "type": "unknown",
+          "units": "m/s",
+          "description": "Defined by a template call whose constant's declared units do not resolve"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "speed_ms",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "to_ms",
+            "bindings": {
+              "x": "speed_mph"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -41,6 +41,11 @@ using Unitful
 # `false` = do not auto-generate SI prefixes for this symbol.
 Unitful.@unit _u_mmHg "mmHg" MillimetreOfMercury 133.322387415 * Unitful.u"Pa" false
 
+# The International Table BTU — exactly 1055.05585262 J (esm-spec §4.8.1), NOT
+# Unitful's `btu`, which is the rounded 1055.06 J. A scale error is invisible to
+# dimensional analysis, so the registry entry is defined here rather than borrowed.
+Unitful.@unit _u_btu "BTU" InternationalTableBTU 1055.05585262 * Unitful.u"J" false
+
 # Microatmosphere — the standard unit of seawater pCO2. Unitful defines `atm`
 # without an SI-prefix mechanism, so `uatm` must be spelled out.
 Unitful.@unit _u_uatm "uatm" MicroAtmosphere 1e-6 * Unitful.u"atm" false
@@ -164,7 +169,7 @@ const _UNIT_REGISTRY = Dict{String, Unitful.Units}(
     "inHg" => _u_inHg, "psi" => u"psi",
 
     # Energy.
-    "erg" => u"erg", "BTU" => u"btu", "Wh" => u"W*hr", "kWh" => u"kW*hr",
+    "erg" => u"erg", "BTU" => _u_btu, "Wh" => u"W*hr", "kWh" => u"kW*hr",
 
     # Electromagnetic. `C` is the COULOMB, per SI — never Celsius. Binding it
     # to Celsius injects a temperature dimension into every electromagnetic
@@ -639,6 +644,183 @@ end
 # A mismatch between two KNOWN operand dimensions is provable → recorded. If any
 # non-literal operand is unknown the result is unknown (`nothing`) even when the
 # knowns agree, because the unknown one could disagree with all of them.
+# ---------------------------------------------------------------------------
+# EXACT UNIT SCALES (esm-spec §4.8.1 "Scales are EXACT").
+#
+# Unitful does the DIMENSION algebra here, and its conversion factors are
+# floats (`lb` is 0.45359237 as a Float64). A scale AGREEMENT — `m + km`,
+# `m/s = mi/h` — is decided on an exact number instead: a product of prime
+# powers and a power of π, each with a rational exponent, so `mi` is
+# 2^4 * 3^2 * 5^-3 * 11 * 127 and `sqrt(km)` is still exact. It is read off a
+# Unitful unit's components (base unit, power-of-ten prefix, rational power)
+# through the table below, never from Unitful's float factor.
+# ---------------------------------------------------------------------------
+
+"""
+    ExactScale
+
+The exact scale of a unit relative to SI: prime powers times a power of π, each
+with a rational exponent. Compared with `==`; `Float64` is for diagnostics only.
+"""
+struct ExactScale
+    primes::Dict{Int, Rational{Int}}
+    pi::Rational{Int}
+end
+
+ExactScale() = ExactScale(Dict{Int, Rational{Int}}(), 0 // 1)
+
+_exact_normalize(e::ExactScale) =
+    ExactScale(Dict(p => x for (p, x) in e.primes if !iszero(x)), e.pi)
+
+function _exact_integer(n::Integer)
+    n > 0 || throw(ArgumentError("a unit scale must be positive, got $n"))
+    primes = Dict{Int, Rational{Int}}()
+    rest = Int(n)
+    p = 2
+    while p * p <= rest
+        while rest % p == 0
+            primes[p] = get(primes, p, 0 // 1) + 1
+            rest ÷= p
+        end
+        p += p == 2 ? 1 : 2
+    end
+    rest > 1 && (primes[rest] = get(primes, rest, 0 // 1) + 1)
+    return ExactScale(primes, 0 // 1)
+end
+
+_exact_pow10(k::Integer) =
+    _exact_normalize(ExactScale(Dict(2 => Rational{Int}(k), 5 => Rational{Int}(k)), 0 // 1))
+
+_exact_ratio(num::Integer, den::Integer) = _exact_integer(num) / _exact_integer(den)
+
+_exact_pi() = ExactScale(Dict{Int, Rational{Int}}(), 1 // 1)
+
+# The exact value of a positive decimal literal as the registry writes it
+# ("0.3048", "2.6867e20"), read from its TEXT, never through a float.
+function _exact_decimal(literal::AbstractString)
+    m = match(r"^(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$", literal)
+    m === nothing && throw(ArgumentError("not a registry decimal: $literal"))
+    frac = something(m.captures[2], "")
+    mantissa = parse(Int, m.captures[1] * frac)
+    exp10 = (m.captures[3] === nothing ? 0 : parse(Int, m.captures[3])) - length(frac)
+    return _exact_integer(mantissa) * _exact_pow10(exp10)
+end
+
+function Base.:*(a::ExactScale, b::ExactScale)
+    primes = copy(a.primes)
+    for (p, x) in b.primes
+        primes[p] = get(primes, p, 0 // 1) + x
+    end
+    return _exact_normalize(ExactScale(primes, a.pi + b.pi))
+end
+
+function Base.:/(a::ExactScale, b::ExactScale)
+    primes = copy(a.primes)
+    for (p, x) in b.primes
+        primes[p] = get(primes, p, 0 // 1) - x
+    end
+    return _exact_normalize(ExactScale(primes, a.pi - b.pi))
+end
+
+function Base.:^(a::ExactScale, r::Real)
+    q = r isa Rational ? Rational{Int}(r) : Rational{Int}(rationalize(Int, float(r); tol = 1e-9))
+    return _exact_normalize(ExactScale(Dict(p => x * q for (p, x) in a.primes), a.pi * q))
+end
+
+Base.:(==)(a::ExactScale, b::ExactScale) = a.primes == b.primes && a.pi == b.pi
+Base.hash(a::ExactScale, h::UInt) = hash(a.pi, hash(a.primes, h))
+Base.isone(a::ExactScale) = isempty(a.primes) && iszero(a.pi)
+
+function Base.Float64(a::ExactScale)
+    v = Float64(π)^Float64(a.pi)
+    for p in sort!(collect(keys(a.primes)))
+        v *= Float64(p)^Float64(a.primes[p])
+    end
+    return v
+end
+
+"""
+    exact_ratio_string(scale::ExactScale) -> Union{String, Nothing}
+
+`p/q`, `p/q*pi` or `p/q*pi^k` in lowest terms (`/q` omitted when it is 1) — the
+spelling `tests/conformance/unit_registry` pins. `nothing` when an exponent is
+not whole (`sqrt(km)`).
+"""
+function exact_ratio_string(a::ExactScale)::Union{String, Nothing}
+    isinteger(a.pi) || return nothing
+    num, den = big(1), big(1)
+    for p in sort!(collect(keys(a.primes)))
+        x = a.primes[p]
+        isinteger(x) || return nothing
+        k = Int(x)
+        pw = big(p)^abs(k)
+        k > 0 ? (num *= pw) : (den *= pw)
+    end
+    s = string(num)
+    den != 1 && (s *= "/" * string(den))
+    k = Int(a.pi)
+    k == 1 ? (s *= "*pi") : (k != 0 && (s *= "*pi^$k"))
+    return s
+end
+
+Base.show(io::IO, a::ExactScale) =
+    print(io, something(exact_ratio_string(a), string(Float64(a))))
+
+const _EXACT_FOOT = _exact_decimal("0.3048")
+const _EXACT_POUND = _exact_decimal("0.45359237")
+const _EXACT_GRAVITY = _exact_decimal("9.80665")
+
+# The exact SI scale of every base Unitful unit the registry resolves to, keyed
+# by Unitful's unit NAME; the power-of-ten prefix and the power are applied by
+# `_exact_scale`. A name missing here reads as exactly 1, which is why
+# test/unit_exact_scale_test.jl checks every registry entry against Unitful's
+# own float factor.
+const _EXACT_BY_UNIT_NAME = Dict{Symbol, ExactScale}(
+    :Gram => _exact_pow10(-3),
+    :Minute => _exact_integer(60), :Hour => _exact_integer(3600),
+    :Day => _exact_integer(86400), :Year => _exact_integer(31557600),
+    :Liter => _exact_pow10(-3), :Molar => _exact_pow10(3),
+    :Calorie => _exact_decimal("4.184"),
+    :Atmosphere => _exact_integer(101325), :Bar => _exact_pow10(5),
+    :Torr => _exact_ratio(101325, 760),
+    :PoundsPerSquareInch => _EXACT_POUND * _EXACT_GRAVITY / _exact_decimal("0.0254")^2,
+    :Erg => _exact_pow10(-7), :InternationalTableBTU => _exact_decimal("1055.05585262"),
+    :Rankine => _exact_ratio(5, 9),
+    :Degree => _exact_pi() / _exact_integer(180),
+    :Percent => _exact_pow10(-2),
+    :Permillion => _exact_pow10(-6), :Perbillion => _exact_pow10(-9),
+    :Pertrillion => _exact_pow10(-12),
+    :MillimetreOfMercury => _exact_decimal("133.322387415"),
+    :MicroAtmosphere => _exact_decimal("0.101325"),
+    :DobsonUnit => _exact_decimal("2.6867e20"),
+    :InternationalFoot => _EXACT_FOOT,
+    :InternationalMile => _exact_integer(5280) * _EXACT_FOOT,
+    :AvoirdupoisPound => _EXACT_POUND,
+    :MechanicalHorsepower => _exact_integer(550) * _EXACT_FOOT * _EXACT_POUND * _EXACT_GRAVITY,
+    :USLiquidGallon => _exact_decimal("0.003785411784"),
+    :InchOfMercury => _exact_decimal("3386.388640341"),
+    :ShortTon => _exact_integer(2000) * _EXACT_POUND,
+    :MetricTon => _exact_pow10(3),
+)
+
+"""
+    _exact_scale(u) -> ExactScale
+
+The exact scale of a Unitful unit (esm-spec §4.8.1). An affine unit is read as
+its absolute counterpart: `°F` has the scale of `Ra`, 5/9 K.
+"""
+function _exact_scale(u)::ExactScale
+    a = _absolute_unit(u)
+    scale = ExactScale()
+    for x in typeof(a).parameters[1]
+        base = get(_EXACT_BY_UNIT_NAME, Unitful.name(x), ExactScale())
+        scale = scale * (base * _exact_pow10(x.tens))^x.power
+    end
+    return scale
+end
+
+_same_unit(a, b) = dimension(a) == dimension(b) && _exact_scale(a) == _exact_scale(b)
+
 function _same_dimensions_over(args, var_units, findings, describe)
     # Literals impose no constraint here — see the implicit-units note above.
     constrained = [a for a in args if !_is_literal(a)]
@@ -654,7 +836,9 @@ function _same_dimensions_over(args, var_units, findings, describe)
 
     first_dim = valid_dims[1]
     for dim in valid_dims[2:end]
-        if dimension(dim) != dimension(first_dim)
+        # Same dimension AND same exact scale (esm-spec §4.8.3): metres added to
+        # kilometres are different units even though both are lengths.
+        if !_same_unit(dim, first_dim)
             push!(findings, describe(first_dim, dim))
             return nothing
         end
@@ -742,9 +926,11 @@ function _power_rule(expr, var_units, findings)
             return nothing
         end
         base_dim === nothing && return nothing
-        # A dimensionless base stays dimensionless under ANY exponent; a
-        # dimensional one has no static dimension under a symbolic exponent.
-        dimension(base_dim) == dimension(Unitful.NoUnits) && return Unitful.NoUnits
+        # A dimensionless base of scale 1 stays exactly that under ANY exponent;
+        # a dimensional or SCALED one (`x^n` with `x` in `%`) has no static unit
+        # under a symbolic exponent.
+        (dimension(base_dim) == dimension(Unitful.NoUnits) && isone(_exact_scale(base_dim))) &&
+            return Unitful.NoUnits
         return nothing
     end
 
@@ -869,8 +1055,8 @@ function _ifelse_rule(expr, var_units, findings)
     t_dim = _expr_dimensions!(findings, expr.args[2], var_units)
     f_dim = _expr_dimensions!(findings, expr.args[3], var_units)
     (t_dim === nothing || f_dim === nothing) && return nothing
-    if dimension(t_dim) != dimension(f_dim)
-        push!(findings, "Dimensional inconsistency in ifelse branches: " *
+    if !_same_unit(t_dim, f_dim)
+        push!(findings, "Unit inconsistency in ifelse branches: " *
                         "'$(_ustr(t_dim))' vs '$(_ustr(f_dim))'")
         return nothing
     end
@@ -965,6 +1151,13 @@ const _BOOLEAN_OPS = _ops_with_dim_class(:boolean)
 
 # Operator name → dimensional rule. Ops absent from this table have no
 # dimensional rule and degrade silently to `nothing` (see `_expr_dimensions!`).
+# "const": a `const` that DECLARES its units has that unit (esm-spec §4.8.5);
+# without `units` it is undeterminable, like a bare literal. An unresolvable
+# string is reported at the containing expression field by `model_unit_findings`,
+# not here.
+_const_units_rule(expr, var_units, findings) =
+    expr.units === nothing ? nothing : _absolute_unit(parse_units(expr.units))
+
 const _DIMENSION_RULES = let rules = Dict{String, Function}(
         "+"      => _same_dimension_rule,
         "-"      => _same_dimension_rule,
@@ -982,6 +1175,8 @@ const _DIMENSION_RULES = let rules = Dict{String, Function}(
         # the operand's value at the previous step, not a dimensionless one.
         "Pre"    => _preserve_dimension_rule,
         "D"      => _derivative_rule,
+        # A `const` that DECLARES its units has that unit (esm-spec §4.8.5).
+        "const"  => _const_units_rule,
     )
     for op in _TRANSCENDENTAL_OPS
         rules[op] = _dimensionless_arg_rule
@@ -1149,7 +1344,7 @@ function equation_unit_findings(eq::Equation, var_units::AbstractDict)::Vector{S
         wrt_dim = _absolute_unit(parse_units(var_units[wrt]))
         wrt_dim === nothing && return findings
         lhs_dim = u_dim / wrt_dim
-        if dimension(lhs_dim) != dimension(rhs_dim)
+        if !_same_unit(lhs_dim, rhs_dim)
             push!(findings,
                   "Left-hand side has units '$(_ustr(lhs_dim))' but right-hand side " *
                   "has units '$(_ustr(rhs_dim))'")
@@ -1311,6 +1506,15 @@ function model_unit_findings(model::Model)::Vector{UnitFinding}
         for msg in equation_unit_findings(eq, var_units)
             push!(out, UnitFinding("equations/$(i-1)", msg, UNIT_DIMENSION_MISMATCH))
         end
+        # A declared `const` unit string that does not resolve is a defect at the
+        # containing expression field (esm-spec §4.8.5 item 2), whatever kind of
+        # equation it sits in.
+        for (field, side) in (("lhs", eq.lhs), ("rhs", eq.rhs))
+            for units in unresolvable_const_units(side)
+                push!(out, UnitFinding("equations/$(i-1)/$field",
+                    "Unit string '$units' is not a recognised unit", UNIT_PARSE_ERROR))
+            end
+        end
     end
 
     # 5. DEFINING equations — an equation whose LHS is a bare variable naming a
@@ -1343,7 +1547,7 @@ function model_unit_findings(model::Model)::Vector{UnitFinding}
         got = _expr_dimensions!(String[], eq.rhs, var_units)
         want = _absolute_unit(parse_units(declared))
         (got !== nothing && want !== nothing) || continue
-        dimension(got) == dimension(want) && continue
+        _same_unit(got, want) && continue
         push!(out, UnitFinding("variables/$name",
             "Observed variable '$name' is declared '$declared' but its " *
             "defining equation has units '$(_ustr(got))'",
@@ -1446,4 +1650,64 @@ function infer_variable_units(var_name::AbstractString, equations::Vector{Equati
     end
 
     return nothing
+end
+
+"""
+    reject_const_units_pre_v12(raw_data)
+
+Reject declared `units` on any expression node in a document declaring `esm` <
+1.2.0 (esm-spec §4.8.5 item 6), naming the first offending node. Runs on the raw
+JSON before schema validation, like [`reject_solver_pre_v11`](@ref).
+"""
+function reject_const_units_pre_v12(raw_data)
+    raw_data === nothing && return
+    _is_object(raw_data) || return
+    esm_raw = _raw_get(raw_data, "esm")
+    esm_raw === nothing && return
+    m = match(r"^(\d+)\.(\d+)\.(\d+)$", string(esm_raw))
+    m === nothing && return
+    (parse(Int, m.captures[1]), parse(Int, m.captures[2])) >= (1, 2) && return
+    path = _find_units_bearing_node(raw_data, "")
+    path === nothing && return
+    throw(ExpressionTemplateError(
+        ERROR_CODES.CONST_UNITS_VERSION_TOO_OLD,
+        "declared `units` on an expression node require esm >= 1.2.0; " *
+        "file declares $(string(esm_raw)). Offending path: $path"))
+end
+
+function _find_units_bearing_node(node, at::String)
+    if _is_object(node)
+        (_raw_haskey(node, "op") && _raw_haskey(node, "units")) && return at
+        for (k, v) in pairs(node)
+            hit = _find_units_bearing_node(v, "$at/$(string(k))")
+            hit === nothing || return hit
+        end
+    elseif node isa AbstractVector
+        for (i, v) in enumerate(node)
+            hit = _find_units_bearing_node(v, "$at/$(i - 1)")
+            hit === nothing || return hit
+        end
+    end
+    return nothing
+end
+
+"""
+    unresolvable_const_units(expr::ASTExpr) -> Vector{String}
+
+Every declared `const` unit string in `expr` that does not resolve against the
+registry (esm-spec §4.8.5 item 2), in walk order.
+"""
+function unresolvable_const_units(expr)
+    out = String[]
+    _walk_const_units!(out, expr)
+    return out
+end
+
+function _walk_const_units!(out, expr)
+    expr isa OpExpr || return out
+    if expr.op == "const" && expr.units !== nothing && parse_units(expr.units) === nothing
+        push!(out, expr.units)
+    end
+    foreach_child(child -> _walk_const_units!(out, child), expr)
+    return out
 end

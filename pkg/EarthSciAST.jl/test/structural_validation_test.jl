@@ -580,6 +580,58 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
             end
         end
 
+        # A reaction system's inline tests, constraint equations and events are the
+        # same sites as a model's: an undefined name in one is `undefined_variable`
+        # at the carrying field's pointer (tests/invalid/expected_errors.json).
+        for (fixture, pointer) in (
+                ("undefined_variable_in_reaction_system_assertion_reference.esm",
+                 "/reaction_systems/TestReactions/tests/0/assertions/0/reference"),
+                ("undefined_variable_in_reaction_system_constraint_equation.esm",
+                 "/reaction_systems/TestReactions/constraint_equations/0/rhs"),
+                ("undefined_variable_in_reaction_system_continuous_event_condition.esm",
+                 "/reaction_systems/TestReactions/continuous_events/0/conditions/0"),
+                ("undefined_variable_in_reaction_system_discrete_event_trigger.esm",
+                 "/reaction_systems/TestReactions/discrete_events/0/trigger/expression"))
+            @testset "Invalid fixture $fixture is rejected" begin
+                fixture_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid", fixture)
+                if _require_fixture(fixture_path)
+                    result = EarthSciAST.validate(EarthSciAST.load_path(fixture_path))
+                    @test !result.is_valid
+                    @test any(e -> e.error_type == "undefined_variable" && e.path == pointer,
+                              result.structural_errors)
+                end
+            end
+        end
+
+        # esm-spec §6.6.2, §6.6.3, §6.6.5: an inline test's assertion target,
+        # override keys and assertion rank are checked at validation. Each fixture
+        # reports exactly its pinned finding; the spellings fixture validates clean.
+        pins = JSON3.read(read(joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid",
+                                        "expected_errors.json"), String))
+        for fixture in ("undefined_variable_in_assertion_variable.esm",
+                        "unknown_override_key_parameter_overrides.esm",
+                        "unknown_override_key_initial_conditions.esm",
+                        "unknown_override_key_reaction_system.esm",
+                        "assertion_rank_mismatch_pointwise_on_shaped.esm",
+                        "assertion_rank_mismatch_reduce_on_scalar.esm")
+            @testset "Inline-test static check: $fixture" begin
+                fixture_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid", fixture)
+                if _require_fixture(fixture_path)
+                    result = EarthSciAST.validate(EarthSciAST.load_path(fixture_path))
+                    expected = [(String(e.code), String(e.path)) for e in pins[fixture].structural_errors]
+                    @test [(e.error_type, e.path) for e in result.structural_errors] == expected
+                end
+            end
+        end
+        @testset "Inline-test static check: every accepted spelling validates clean" begin
+            fixture_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid",
+                                    "inline_test_static_check_spellings.esm")
+            if _require_fixture(fixture_path)
+                result = EarthSciAST.validate(EarthSciAST.load_path(fixture_path))
+                @test isempty(result.structural_errors)
+            end
+        end
+
         # No false positive: an aggregate whose body references a bound loop
         # index (`i`, introduced by `ranges`) and a declared variable must NOT
         # flag the bound index. Built via the typed API so it is schema-free.

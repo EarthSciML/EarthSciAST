@@ -281,6 +281,21 @@ CASES: list[tuple[str, str, str]] = [
         "autocatalytic_reaction",
         "simulation/autocatalytic_reaction.esm",
     ),
+    # A reaction system's OWN events. `ReactionSystem` carries the same
+    # `continuous_events` / `discrete_events` blocks `Model` does, and Julia's
+    # and Rust's flatten used to drop them: the flattened system came out with
+    # no events, so every evaluator ran the document as if it had none. This
+    # case pins the lift, namespacing included.
+    (
+        "reaction_system",
+        "reaction_system_continuous_event",
+        "conformance/unsupported_construct/fixtures/continuous_event_on_a_reaction_system.esm",
+    ),
+    (
+        "reaction_system",
+        "reaction_system_discrete_event",
+        "conformance/unsupported_construct/fixtures/discrete_event_on_a_reaction_system.esm",
+    ),
     # --- field_ics: deferred `ic` equations (esm-spec §11.4.1) ---------------
     # Also the richest loader_fields / lifted_shapes case in the tree.
     (

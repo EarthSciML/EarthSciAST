@@ -470,6 +470,7 @@ func collectStructuralErrors(file *ESMFile) []StructuralError {
 	s.validateSubsystemRefs()
 	s.validateCircularReferences()
 	s.validateDataSourceReferences()
+	s.validateInlineTests()
 
 	return s.errors
 }
@@ -490,6 +491,46 @@ func (s *structuralScan) validateEquationRefs(eq Equation, allVars map[string]bo
 	}
 	s.validateExpressionVariables(eq.LHS, scope, eqPath+"/lhs", currentSystem)
 	s.validateExpressionVariables(eq.RHS, scope, eqPath+"/rhs", currentSystem)
+	// A declared `const` unit string that does not resolve is a defect at the
+	// containing expression field (esm-spec §4.8.5 item 2).
+	for _, side := range []struct {
+		field string
+		expr  Expression
+	}{{"lhs", eq.LHS}, {"rhs", eq.RHS}} {
+		for _, units := range unresolvableConstUnits(side.expr) {
+			s.addErr(StructuralError{
+				Path:    eqPath + "/" + side.field,
+				Code:    ErrorUnitParseError,
+				Message: fmt.Sprintf("Unit string '%s' is not a recognised unit", units),
+				Details: map[string]any{"units": units},
+			})
+		}
+	}
+}
+
+// unresolvableConstUnits returns every declared `const` unit string in expr that
+// does not resolve against the registry (esm-spec §4.8.5 item 2). The expression
+// is walked through its JSON form, which carries `units` via the struct tag.
+func unresolvableConstUnits(expr Expression) []string {
+	raw, err := json.Marshal(expr)
+	if err != nil {
+		return nil
+	}
+	var tree any
+	if err := json.Unmarshal(raw, &tree); err != nil {
+		return nil
+	}
+	var out []string
+	_ = walkJSONTree(tree, "", func(_ string, obj map[string]any) error {
+		units, ok := obj["units"].(string)
+		if obj["op"] == "const" && ok {
+			if _, perr := ParseUnit(units); perr != nil {
+				out = append(out, units)
+			}
+		}
+		return nil
+	})
+	return out
 }
 
 // expressionBoundSymbols returns every binder-introduced symbol a single
@@ -1896,31 +1937,27 @@ func (s *structuralScan) validateReactionSystem(systemName string, system *React
 	}
 
 	// A reaction system's CONSTRAINT EQUATIONS, EVENTS and inline TESTS are
-	// reference sites over its species + parameters, and none of them was reached:
-	// reference integrity entered a reaction system through `reaction.rate` and
-	// nowhere else, so an undeclared species in a constraint equation, an event
-	// trigger/condition or an event affect was accepted silently. An undeclared
-	// BARE name anywhere in a reaction system is an `undefined_parameter` — the
-	// code the shared corpus pins for this component kind (see the rate check).
-	s.withUndefinedCode(ErrorUndefinedParameter, func() {
-		for i, eq := range system.ConstraintEquations {
-			s.validateEquationRefs(eq, allVars, fmt.Sprintf("%s/constraint_equations/%d", basePath, i), systemName)
-		}
-		// A reaction system has no `variables` map, so there is no parameter for
-		// an affect to write and `event_affects_parameter` cannot arise here; the
-		// nil model turns that check off while leaving reference integrity on.
-		for i, event := range system.DiscreteEvents {
-			event := event
-			eventPath := fmt.Sprintf("%s/discrete_events/%d", basePath, i)
-			s.validateDiscreteEvent(&event, allVars, eventPath, nil, systemName)
-		}
-		for i, event := range system.ContinuousEvents {
-			event := event
-			s.validateContinuousEvent(&event, allVars,
-				fmt.Sprintf("%s/continuous_events/%d", basePath, i), nil, systemName)
-		}
-		s.validateTestRefs(system.Tests, allVars, basePath, systemName)
-	})
+	// reference sites over its species + parameters. Each is the same site on a
+	// reaction system as on a model, so an undeclared bare name in one is an
+	// `undefined_variable`, as it is in a model; only a reaction `rate` keeps
+	// `undefined_parameter` (see the rate check).
+	for i, eq := range system.ConstraintEquations {
+		s.validateEquationRefs(eq, allVars, fmt.Sprintf("%s/constraint_equations/%d", basePath, i), systemName)
+	}
+	// A reaction system has no `variables` map, so there is no parameter for an
+	// affect to write and `event_affects_parameter` cannot arise here; the nil
+	// model turns that check off while leaving reference integrity on.
+	for i, event := range system.DiscreteEvents {
+		event := event
+		eventPath := fmt.Sprintf("%s/discrete_events/%d", basePath, i)
+		s.validateDiscreteEvent(&event, allVars, eventPath, nil, systemName)
+	}
+	for i, event := range system.ContinuousEvents {
+		event := event
+		s.validateContinuousEvent(&event, allVars,
+			fmt.Sprintf("%s/continuous_events/%d", basePath, i), nil, systemName)
+	}
+	s.validateTestRefs(system.Tests, allVars, basePath, systemName)
 
 	// v0.8.0 §11.4.1: an `ic`-op equation MUST NOT appear inside a reaction
 	// system's `constraint_equations`. A reaction system has no `equations`

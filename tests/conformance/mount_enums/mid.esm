@@ -1,0 +1,43 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "MountEnumsMid",
+    "description": "A mounted file that itself mounts leaf_two.esm at a `subsystems.<k>` edge and declares probe.Symbol = 5 for its own `enum` op.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ]
+  },
+  "enums": {
+    "probe": {
+      "Symbol": 5
+    }
+  },
+  "models": {
+    "Mid": {
+      "subsystems": {
+        "Two": {
+          "ref": "./leaf_two.esm"
+        }
+      },
+      "variables": {
+        "value": {
+          "type": "unknown",
+          "units": "1",
+          "description": "The value this file's own `enums` block gives probe.Symbol."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "value",
+          "rhs": {
+            "op": "enum",
+            "args": [
+              "probe",
+              "Symbol"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

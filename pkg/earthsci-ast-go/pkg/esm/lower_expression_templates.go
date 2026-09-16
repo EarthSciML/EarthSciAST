@@ -1041,7 +1041,7 @@ func rewriteToFixpoint(node any, named map[string]any, rules []matchRule, scope 
 		}
 	}
 	return nil, newETErr(
-		"rewrite_rule_nonterminating",
+		CodeRewriteRuleNonterminating,
 		fmt.Sprintf("%s: expression-template rewriting did not converge within MaxRewritePasses=%d passes (last rewritten op '%s'). A `match` rule likely re-introduces its own pattern (esm-spec §9.6.3).", scope, MaxRewritePasses, last),
 	)
 }
@@ -1310,7 +1310,7 @@ func RejectExpressionTemplatesPreV04(view map[string]any) error {
 	findApplyPaths(view, "", &offences)
 	if len(offences) > 0 {
 		return newETErr(
-			"apply_expression_template_version_too_old",
+			CodeApplyExpressionTemplateVersionTooOld,
 			fmt.Sprintf("expression_templates / apply_expression_template require esm >= 0.4.0; file declares %s (offending paths: %s)", esmRaw, strings.Join(offences, ", ")),
 		)
 	}

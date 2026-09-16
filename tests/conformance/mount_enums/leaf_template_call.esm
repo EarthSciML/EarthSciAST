@@ -1,0 +1,53 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "MountEnumsLeafTemplateCall",
+    "description": "A leaf whose component-local template `pick` spells the enum SYMBOL with its parameter, and whose own equation calls `pick` binding that parameter to Symbol. The leaf binds the parameter, so the op resolves against THIS file's block, probe.Symbol = 2, mounted or not (esm-spec \u00a79.3).",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ]
+  },
+  "enums": {
+    "probe": {
+      "Symbol": 2
+    }
+  },
+  "models": {
+    "LeafCall": {
+      "expression_templates": {
+        "pick": {
+          "params": [
+            "sym"
+          ],
+          "body": {
+            "op": "enum",
+            "args": [
+              "probe",
+              "sym"
+            ]
+          }
+        }
+      },
+      "variables": {
+        "value": {
+          "type": "unknown",
+          "units": "1",
+          "description": "What this file's `enums` block gives probe.Symbol, read through the leaf's own template call."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "value",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "pick",
+            "bindings": {
+              "sym": "Symbol"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

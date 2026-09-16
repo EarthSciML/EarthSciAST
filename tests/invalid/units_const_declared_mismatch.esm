@@ -1,0 +1,45 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "UnitsConstDeclaredMismatch",
+    "description": "Invalid: the conversion constant is declared dimensionless (`1`), so mi/h times it is still mi/h, which disagrees in scale with the declared m/s (esm-spec §4.8.3, §4.8.5). Without declared units on the constant this equation was not checked at all.",
+    "authors": [
+      "Chris Tessum with Claude"
+    ],
+    "created": "2026-09-14T00:00:00Z"
+  },
+  "models": {
+    "BadUnitsModel": {
+      "variables": {
+        "speed_mph": {
+          "type": "parameter",
+          "units": "mi/h",
+          "default": 30.0,
+          "description": "Link average speed in miles per hour"
+        },
+        "speed_ms": {
+          "type": "unknown",
+          "units": "m/s",
+          "description": "Invalid: declared m/s, defined as mi/h times a dimensionless constant"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "speed_ms",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "speed_mph",
+              {
+                "op": "const",
+                "args": [],
+                "value": 0.44704,
+                "units": "1"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

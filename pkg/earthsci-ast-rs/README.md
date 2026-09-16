@@ -167,13 +167,19 @@ cargo fmt
 Lint:
 
 ```bash
-cargo clippy --all-targets --all-features
+# Every feature EXCEPT `xla`, which is what CI lints -- `--all-features`
+# would pull in `xla` and fail without a fetched `xla_extension` release.
+cargo clippy --all-targets --features \
+  conformance-adapters,wasm,parallel,simd,zero_copy,custom_alloc,benchmarks,performance,esio \
+  -- -D warnings
 ```
 
 ## Cargo features
 
-- `default`: `cli`
+- `default`: `cli`, `solve`
 - `cli`: the `esm` command-line binary (requires clap)
+- `solve`: the diffsol ODE solver behind `solve` / `init` /
+  `solve_to_completion` (building a `Problem` never needs it)
 - `wasm`: WebAssembly bindings (requires wasm-bindgen)
 - `parallel` / `simd` / `zero_copy` / `custom_alloc` / `performance`:
   opt-in experimental performance utilities in the `performance` module

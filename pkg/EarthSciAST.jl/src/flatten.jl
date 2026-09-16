@@ -1103,6 +1103,7 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
             rs_templates = file.component_templates === nothing ? nothing :
                 get(file.component_templates, "reaction_systems.$(name)", nothing)
             _collect_reaction_system!(states, params, equations,
+                                      continuous_events, discrete_events,
                                       rsys, name; templates=rs_templates)
             _attribute_equations!(eq_owners, equations, name)
         end

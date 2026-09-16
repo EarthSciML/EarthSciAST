@@ -1162,6 +1162,10 @@ class TestReferenceIntegrityEveryExpressionBearingField:
             "undefined_variable_in_discrete_event_trigger.esm",
             "undefined_variable_in_discrete_event_affect.esm",
             "undefined_variable_in_assertion_reference.esm",
+            "undefined_variable_in_reaction_system_assertion_reference.esm",
+            "undefined_variable_in_reaction_system_constraint_equation.esm",
+            "undefined_variable_in_reaction_system_continuous_event_condition.esm",
+            "undefined_variable_in_reaction_system_discrete_event_trigger.esm",
             # the data-loader site
             "undefined_variable_in_unit_conversion.esm",
             # the two coupling sites (fully qualified refs -> unresolved_scoped_ref)
@@ -1199,6 +1203,41 @@ class TestReferenceIntegrityEveryExpressionBearingField:
         )
         assert matches[0].message == expected["message"]
         assert matches[0].details == expected["details"]
+
+
+class TestInlineTestStaticChecks:
+    """esm-spec §6.6.2, §6.6.3 and §6.6.5: an inline test's assertion target, its
+    override keys and each assertion's rank are checked at validation, not only
+    when a runtime builds the test."""
+
+    @pytest.mark.parametrize(
+        "fixture_name",
+        [
+            "undefined_variable_in_assertion_variable.esm",
+            "unknown_override_key_parameter_overrides.esm",
+            "unknown_override_key_initial_conditions.esm",
+            "unknown_override_key_reaction_system.esm",
+            "assertion_rank_mismatch_pointwise_on_shaped.esm",
+            "assertion_rank_mismatch_reduce_on_scalar.esm",
+        ],
+    )
+    def test_fixture_reports_exactly_its_pin(self, fixture_name):
+        pins = json.loads((FIXTURES_ROOT / "invalid" / "expected_errors.json").read_text())
+        result = validate_text((FIXTURES_ROOT / "invalid" / fixture_name).read_text())
+        got = [(e.code, e.path, e.message, e.details) for e in result.structural_errors]
+        expected = [
+            (p["code"], p["path"], p["message"], p["details"])
+            for p in pins[fixture_name]["structural_errors"]
+        ]
+        assert result.schema_errors == []
+        assert got == expected
+
+    def test_every_accepted_spelling_validates_clean(self):
+        result = validate_text(
+            (FIXTURES_ROOT / "valid" / "inline_test_static_check_spellings.esm").read_text()
+        )
+        assert result.schema_errors == []
+        assert [(e.code, e.path) for e in result.structural_errors] == []
 
 
 class TestValidateBasePath:
