@@ -331,6 +331,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("conformance_pde_inline_ic_param_override_test.jl")
     include("conformance_pde_inline_array_overrides_test.jl")
     include("conformance_assertion_nonfinite_test.jl")  # §6.6.3 non-finite actuals
+    include("conformance_const_array_gather_bounds_test.jl")  # §5.5.5 out-of-range const-array gather
     include("assertion_tolerance_symmetry_test.jl")     # §6.6.3 symmetric relative bound
     include("conformance_assertion_tolerance_test.jl")  # §6.6.3 pass predicate (data-only)
     include("conformance_tolerance_resolution_test.jl")  # §6.6.4 per-field tolerance merge

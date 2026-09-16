@@ -1,0 +1,196 @@
+{
+  "category": "const_array_gather_bounds",
+  "version": "1.0",
+  "description": "Cross-binding conformance for an out-of-range const-array gather (esm-spec §4.3.3, CONFORMANCE_SPEC §5.5.5 and §5.40). The `index` base is a const array when it is a `const` literal written inline OR an observed defined by one; neither declares a boundary policy, so an index outside 1..N on ANY axis must fail the run with `E_TREEWALK_CONSTARRAY_OOB`. Each case is one document with one assertion, because the fault aborts the whole build or solve. Error cases carry an assertion `expected` of -1, a value no conforming or non-conforming read produces, so a binding that silently returns a number cannot pass by accident. The divergences this closes: Rust decided const-ness by the operand's NAME, so an inline literal took the state gather's zero ghost; Python had no const-array rule in its simulation gather, so index 0 wrapped to the last element and a past-the-end index surfaced as a bare NumPy IndexError; and Julia's run-time const gather checked only the flattened offset, so an overflow on a non-final axis read a neighbouring element. The 2-D cases overflow ONE axis each, on the first axis (whose column-major offset stays in range) and on the second (whose row-major offset stays in range), so a flat-offset-only check fails at least one of them in either memory layout.",
+  "reference_binding": "julia",
+  "bindings_required": [
+    "julia",
+    "python",
+    "rust"
+  ],
+  "scope_excluded": {
+    "go": "rewrite-only port; `index` has no scalar evaluator and there is no inline-test runner",
+    "typescript": "rewrite-only port; `index` has no scalar evaluator and there is no inline-test runner"
+  },
+  "integrators": {
+    "julia": {
+      "algorithm": "Tsit5",
+      "reltol": 1e-12,
+      "abstol": 1e-14
+    },
+    "python": {
+      "method": "RK45",
+      "rtol": 1e-12,
+      "atol": 1e-14
+    },
+    "rust": {
+      "solver": "Erk",
+      "reltol": 1e-12,
+      "abstol": 1e-14
+    }
+  },
+  "fixtures": [
+    {
+      "id": "named_1d_in_range",
+      "path": "fixtures/named_1d_in_range.esm",
+      "model": "M",
+      "test_id": "gather",
+      "base": "named",
+      "index": [
+        4
+      ],
+      "outcome": "pass",
+      "expected": 40.0,
+      "note": "Control: an observed `tbl` defined by a `const` array, read in range at 4 of 5."
+    },
+    {
+      "id": "named_1d_index_zero",
+      "path": "fixtures/named_1d_index_zero.esm",
+      "model": "M",
+      "test_id": "gather",
+      "base": "named",
+      "index": [
+        0
+      ],
+      "outcome": "error",
+      "error_code": "E_TREEWALK_CONSTARRAY_OOB",
+      "note": "an observed `tbl` defined by a `const` array, read at index 0. A binding that lets a 0-based container wrap it reads the last element (50)."
+    },
+    {
+      "id": "named_1d_past_end",
+      "path": "fixtures/named_1d_past_end.esm",
+      "model": "M",
+      "test_id": "gather",
+      "base": "named",
+      "index": [
+        6
+      ],
+      "outcome": "error",
+      "error_code": "E_TREEWALK_CONSTARRAY_OOB",
+      "note": "an observed `tbl` defined by a `const` array, read one past the end. A binding that applies the state gather's zero ghost reads 0."
+    },
+    {
+      "id": "named_2d_in_range",
+      "path": "fixtures/named_2d_in_range.esm",
+      "model": "M",
+      "test_id": "gather",
+      "base": "named",
+      "index": [
+        3,
+        2
+      ],
+      "outcome": "pass",
+      "expected": 6.0,
+      "note": "Control: an observed `tbl` defined by a `const` array, 3 rows x 2 columns, read at (3, 2). `value[i][j]` is element (i, j)."
+    },
+    {
+      "id": "named_2d_row_past_end",
+      "path": "fixtures/named_2d_row_past_end.esm",
+      "model": "M",
+      "test_id": "gather",
+      "base": "named",
+      "index": [
+        4,
+        1
+      ],
+      "outcome": "error",
+      "error_code": "E_TREEWALK_CONSTARRAY_OOB",
+      "note": "an observed `tbl` defined by a `const` array, read at (4, 1): past the end of the FIRST axis only. Its column-major flat offset (4) lies inside the 6 elements, so a check on that offset alone reads another element."
+    },
+    {
+      "id": "named_2d_column_past_end",
+      "path": "fixtures/named_2d_column_past_end.esm",
+      "model": "M",
+      "test_id": "gather",
+      "base": "named",
+      "index": [
+        1,
+        3
+      ],
+      "outcome": "error",
+      "error_code": "E_TREEWALK_CONSTARRAY_OOB",
+      "note": "an observed `tbl` defined by a `const` array, read at (1, 3): past the end of the SECOND axis only. Its row-major flat offset (3) lies inside the 6 elements, so a check on that offset alone reads another element."
+    },
+    {
+      "id": "inline_1d_in_range",
+      "path": "fixtures/inline_1d_in_range.esm",
+      "model": "M",
+      "test_id": "gather",
+      "base": "inline",
+      "index": [
+        4
+      ],
+      "outcome": "pass",
+      "expected": 40.0,
+      "note": "Control: a `const` literal written inline as the `index` base, read in range at 4 of 5."
+    },
+    {
+      "id": "inline_1d_index_zero",
+      "path": "fixtures/inline_1d_index_zero.esm",
+      "model": "M",
+      "test_id": "gather",
+      "base": "inline",
+      "index": [
+        0
+      ],
+      "outcome": "error",
+      "error_code": "E_TREEWALK_CONSTARRAY_OOB",
+      "note": "a `const` literal written inline as the `index` base, read at index 0. A binding that lets a 0-based container wrap it reads the last element (50)."
+    },
+    {
+      "id": "inline_1d_past_end",
+      "path": "fixtures/inline_1d_past_end.esm",
+      "model": "M",
+      "test_id": "gather",
+      "base": "inline",
+      "index": [
+        6
+      ],
+      "outcome": "error",
+      "error_code": "E_TREEWALK_CONSTARRAY_OOB",
+      "note": "a `const` literal written inline as the `index` base, read one past the end. A binding that applies the state gather's zero ghost reads 0."
+    },
+    {
+      "id": "inline_2d_in_range",
+      "path": "fixtures/inline_2d_in_range.esm",
+      "model": "M",
+      "test_id": "gather",
+      "base": "inline",
+      "index": [
+        3,
+        2
+      ],
+      "outcome": "pass",
+      "expected": 6.0,
+      "note": "Control: a `const` literal written inline as the `index` base, 3 rows x 2 columns, read at (3, 2). `value[i][j]` is element (i, j)."
+    },
+    {
+      "id": "inline_2d_row_past_end",
+      "path": "fixtures/inline_2d_row_past_end.esm",
+      "model": "M",
+      "test_id": "gather",
+      "base": "inline",
+      "index": [
+        4,
+        1
+      ],
+      "outcome": "error",
+      "error_code": "E_TREEWALK_CONSTARRAY_OOB",
+      "note": "a `const` literal written inline as the `index` base, read at (4, 1): past the end of the FIRST axis only. Its column-major flat offset (4) lies inside the 6 elements, so a check on that offset alone reads another element."
+    },
+    {
+      "id": "inline_2d_column_past_end",
+      "path": "fixtures/inline_2d_column_past_end.esm",
+      "model": "M",
+      "test_id": "gather",
+      "base": "inline",
+      "index": [
+        1,
+        3
+      ],
+      "outcome": "error",
+      "error_code": "E_TREEWALK_CONSTARRAY_OOB",
+      "note": "a `const` literal written inline as the `index` base, read at (1, 3): past the end of the SECOND axis only. Its row-major flat offset (3) lies inside the 6 elements, so a check on that offset alone reads another element."
+    }
+  ]
+}

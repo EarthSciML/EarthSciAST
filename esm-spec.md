@@ -1111,6 +1111,8 @@ Non-affine index expressions are legal; it is the author's responsibility to ens
 
 A stencil gather of a **const array** (a pre-computed factor: Fornberg weights, mesh connectivity, or a per-cell metric / geometry array) at an out-of-range index resolves per a declared **per-dimension boundary policy** — `periodic` (wrap, `mod1`), `clamp` (edge-extend), or the `error` default (raise `E_TREEWALK_CONSTARRAY_OOB`). This mirrors the grid periodicity honored by a state-variable gather and is normative across bindings; see `CONFORMANCE_SPEC.md` §5.5.5.
 
+The `index` base is a const array when it is **either** a `const` node written inline (`index({"op": "const", "value": [...]}, k)`) **or** a variable whose defining equation is a `const` node. The two spellings are the same data and gather identically: an inline literal has no declared boundary policy, so an out-of-range index on it raises `E_TREEWALK_CONSTARRAY_OOB` and never reads the zero ghost. Any other array-valued base — a state, an observed computed from other quantities, a `reshape` or `broadcast` result — is not a const array. Each index is checked against **its own** dimension, so `index(A, 4, 1)` on a 3×2 array is out of range even though a flattened offset for it would fall inside the array.
+
 #### 4.3.4 `broadcast`
 
 `broadcast` applies a scalar operator element-wise to one or more broadcast-compatible arrays. The operator is named in the `fn` field; the operands are in `args`.

@@ -34,6 +34,7 @@ from .flatten import (
 )
 from .index_alignment import align_expression, axis_sizes, declared_axes
 from .numpy_interpreter import (
+    ConstArrayOutOfRangeError,
     EvalContext,
     NumpyInterpreterError,
     _RaggedRange,
@@ -808,6 +809,8 @@ def _materialize_observeds(
             try:
                 val = _materialize_one_observed(name, rhs, ctx)
             except (NumpyInterpreterError, RecurrenceError) as exc:
+                if isinstance(exc, ConstArrayOutOfRangeError):
+                    raise
                 if skip_reasons is not None:
                     skip_reasons[name] = str(exc)
                 if _progress:
@@ -835,6 +838,16 @@ def _materialize_observeds(
             ctx.derived_rings[name] = val
         else:
             ctx.observed_values[name] = float(val)
+
+
+def _const_array_observed_names(ordered_observed: list[tuple[str, Expr]]) -> frozenset[str]:
+    """The observeds defined by a ``const`` array: an ``index`` on one is a
+    const-array gather (esm-spec §4.3.3, ``EvalContext.const_array_names``)."""
+    return frozenset(
+        name
+        for name, rhs in ordered_observed
+        if isinstance(rhs, ExprNode) and rhs.op == "const" and isinstance(rhs.value, (list, tuple))
+    )
 
 
 @dataclass
@@ -2035,6 +2048,7 @@ def _partition_and_materialize_observeds(
     _varying_names = _time_varying_observeds(ordered_observed, set(state_names))
     static_observed = [(n, r) for n, r in ordered_observed if n not in _varying_names]
     varying_observed = [(n, r) for n, r in ordered_observed if n in _varying_names]
+    const_array_names = _const_array_observed_names(ordered_observed)
 
     # Cadence split of the STATE-FREE static observeds (esm-spec §5.7 / cadence.py):
     # loader-INVARIANT geometry (no loader dependence at all — the regrid weights
@@ -2068,6 +2082,7 @@ def _partition_and_materialize_observeds(
         invariant_derived_rings = {}
         if invariant_static:
             _inv_ctx = EvalContext(
+                const_array_names=const_array_names,
                 state_layout=state_layout,
                 state_shapes=shapes,
                 param_values=param_values,
@@ -2109,6 +2124,7 @@ def _partition_and_materialize_observeds(
     static_derived_rings: dict[str, np.ndarray] = dict(invariant_derived_rings)
     if volatile_static:
         _vol_ctx = EvalContext(
+            const_array_names=const_array_names,
             state_layout=state_layout,
             state_shapes=shapes,
             param_values=param_values,
@@ -2711,9 +2727,11 @@ def _build_numpy_rhs(
     # predicate (all-finite) is unchanged.
     dy = np.zeros(total_size, dtype=float)
     _finite_mask = np.empty(total_size, dtype=bool)
+    const_array_names = _const_array_observed_names(ordered_observed)
 
     def rhs_function(t: float, y: np.ndarray) -> np.ndarray:
         ctx = EvalContext(
+            const_array_names=const_array_names,
             state_layout=state_layout,
             state_shapes=shapes,
             param_values=param_values,
@@ -2859,6 +2877,7 @@ def observed_at_state(
 
     def _ctx() -> EvalContext:
         return EvalContext(
+            const_array_names=_const_array_observed_names(build.ordered_observed),
             state_layout=build.state_layout,
             state_shapes=build.shapes,
             param_values=build.param_values,
@@ -2940,9 +2959,11 @@ def _simulate_observeds_only(
     ordered_observed = build.ordered_observed
     varying = _time_varying_observeds(ordered_observed, set(build.state_names))
     y_empty = np.zeros(0, dtype=float)
+    const_array_names = _const_array_observed_names(ordered_observed)
 
     def _ctx(t: float) -> EvalContext:
         return EvalContext(
+            const_array_names=const_array_names,
             state_layout=build.state_layout,
             state_shapes=build.shapes,
             param_values=build.param_values,
@@ -3091,12 +3112,14 @@ def _simulate_with_numpy(
         out_vars: list[str] = list(elem_names)
         if ordered_observed and y_out.size:
             try:
+                const_array_names = _const_array_observed_names(ordered_observed)
                 varying = _time_varying_observeds(ordered_observed, set(state_names))
                 if not varying:
                     # All observeds are constant along the trajectory: evaluate
                     # once and broadcast, instead of re-clipping at every one of
                     # the (dense) output nodes.
                     ctx = EvalContext(
+                        const_array_names=const_array_names,
                         state_layout=state_layout,
                         state_shapes=shapes,
                         param_values=param_values,
@@ -3133,6 +3156,7 @@ def _simulate_with_numpy(
                     obs_is_scalar: dict[str, bool] = {name: True for name, _ in varying_observed}
                     for j in range(t_out.size):
                         ctx = EvalContext(
+                            const_array_names=const_array_names,
                             state_layout=state_layout,
                             state_shapes=shapes,
                             param_values=param_values,

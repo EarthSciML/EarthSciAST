@@ -105,4 +105,29 @@ _par(sym::Symbol) = ESM._mknode(kind = ESM._NK_PARAM, sym = sym)
         @test ESM._eval_node(parnode, u, p, t) === A[1, 3, 1]
         @test (@allocated ESM._eval_node(parnode, u, p, t)) == 0
     end
+
+    # Each subscript is checked against its own axis. On a 3×2 array the
+    # column-major offsets of [4, 1] and [0, 2] fall inside the 6 elements, so a
+    # check on the offset alone read A[1, 2] and A[3, 1] instead of raising.
+    @testset "out of range on one axis raises E_TREEWALK_CONSTARRAY_OOB" begin
+        A = Float64[1 2; 3 4; 5 6]
+        gather_err(i, j) = try
+            ESM._eval_node(ESM._const_gather_node(A, ESM._Node[_lit(i), _lit(j)];
+                                                  name="A"), u, p0, t)
+            nothing
+        catch err
+            err
+        end
+        for (i, j) in ((4, 1), (0, 2), (1, 3), (2, 0))
+            err = gather_err(i, j)
+            @test err isa ESM.TreeWalkError && err.code == "E_TREEWALK_CONSTARRAY_OOB"
+        end
+        @test ESM._eval_node(ESM._const_gather_node(A, ESM._Node[_lit(3), _lit(2)]),
+                             u, p0, t) === 6.0
+        # A declared boundary policy resolves on the run-time path exactly as it
+        # does when the gather folds (`_resolve_const_index`).
+        B = ESM._wrap_bounded_const(A, [:periodic, :clamp], "B")
+        @test ESM._eval_node(ESM._const_gather_node(B, ESM._Node[_lit(4), _lit(3)]),
+                             u, p0, t) === A[1, 2]
+    end
 end
