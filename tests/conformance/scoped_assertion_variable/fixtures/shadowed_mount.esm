@@ -1,0 +1,125 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "scoped_assertion_shadowed_mount",
+    "description": "Both readings of `Leaf.key` exist: a top-level `Leaf` (the leaf document, key = [7, 9, 4]) and `Host`'s own inline subsystem `Leaf` (key = [1, 2, 3]). An assertion resolves the name by the rule the equation binder uses - a head that names a subsystem of the asserting component is relative - so `Host`'s assertions read its subsystem, and `w = 3 * Leaf.u` does too.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ]
+  },
+  "index_sets": {
+    "leaf_axis": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "Leaf": {
+      "ref": "./leaf.esm"
+    },
+    "Host": {
+      "variables": {
+        "w": {
+          "type": "unknown",
+          "units": "1",
+          "description": "3 * Leaf.u, bound to the SUBSYSTEM's constant u = 2."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "w",
+          "rhs": {
+            "op": "*",
+            "args": [
+              3.0,
+              "Leaf.u"
+            ]
+          }
+        }
+      ],
+      "subsystems": {
+        "Leaf": {
+          "variables": {
+            "u": {
+              "type": "unknown",
+              "units": "1",
+              "default": 2.0,
+              "description": "Held constant at 2."
+            },
+            "key": {
+              "type": "unknown",
+              "units": "1",
+              "shape": [
+                "leaf_axis"
+              ],
+              "description": "The column [1, 2, 3]: distinct from the top-level leaf's at every cell."
+            }
+          },
+          "equations": [
+            {
+              "lhs": {
+                "op": "D",
+                "args": [
+                  "u"
+                ],
+                "wrt": "t"
+              },
+              "rhs": 0.0
+            },
+            {
+              "lhs": "key",
+              "rhs": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  1,
+                  2,
+                  3
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "tests": [
+        {
+          "id": "the_subsystem_shadows_the_top_level_component",
+          "description": "Every expectation is the SUBSYSTEM's value; the top-level leaf would give 3exp(-1), exp(-1), 7 and 9.",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "tolerance": {
+            "rel": 0.0001
+          },
+          "assertions": [
+            {
+              "variable": "w",
+              "time": 1.0,
+              "expected": 6.0
+            },
+            {
+              "variable": "Leaf.u",
+              "time": 1.0,
+              "expected": 2.0
+            },
+            {
+              "variable": "Leaf.key",
+              "time": 1.0,
+              "expected": 1.0,
+              "coords": {
+                "leaf_axis": 1
+              }
+            },
+            {
+              "variable": "Leaf.key",
+              "time": 1.0,
+              "expected": 3.0,
+              "reduce": "max"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

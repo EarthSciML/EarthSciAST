@@ -110,6 +110,10 @@ class ErrorCode(Enum):
     # the variable it names -- pointwise on a shaped variable, or `coords` /
     # `reduce` on a scalar one.
     ASSERTION_RANK_MISMATCH = "assertion_rank_mismatch"
+    # Inline array data as the `default` of a variable that declares no `shape`
+    # (esm-spec §6.3). Inline array data is a SHAPED variable's value, so with no
+    # shape there is nothing for the array to fill.
+    ARRAY_DEFAULT_WITHOUT_SHAPE = "array_default_without_shape"
     MISSING_REQUIRED_FIELD = "missing_required_field"
     UNIT_MISMATCH = "unit_mismatch"
     # Codes emitted by earthsci_ast.validation (previously ad-hoc string
@@ -215,6 +219,10 @@ DATA_SOURCE_URL_UNRESOLVED = "data_source_url_unresolved"
 
 SOLVER_VERSION_TOO_OLD = "solver_version_too_old"
 
+# Declared `units` on an expression node in a document declaring esm < 1.2.0
+# (esm-spec §4.8.5), raised as ``ConstUnitsError`` from ``units.py``.
+CONST_UNITS_VERSION_TOO_OLD = "const_units_version_too_old"
+
 # ===========================================================================
 # Template-library import / metaparameter codes (esm-spec §9.7), raised as
 # ``ExpressionTemplateError`` from ``template_imports.py`` (and
@@ -225,6 +233,7 @@ TEMPLATE_IMPORT_VERSION_TOO_OLD = "template_import_version_too_old"
 TEMPLATE_IMPORT_UNRESOLVED = "template_import_unresolved"
 TEMPLATE_IMPORT_NOT_LIBRARY = "template_import_not_library"
 SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY = "subsystem_ref_is_template_library"
+TEMPLATE_LIBRARY_ILLEGAL_PAYLOAD = "template_library_illegal_payload"
 TEMPLATE_IMPORT_CYCLE = "template_import_cycle"
 TEMPLATE_IMPORT_NAME_CONFLICT = "template_import_name_conflict"
 TEMPLATE_IMPORT_UNKNOWN_NAME = "template_import_unknown_name"
@@ -329,6 +338,33 @@ RECURRENCE_UNSUPPORTED_FORM = "recurrence_unsupported_form"
 
 
 # ===========================================================================
+# Evaluator refusal (esm-spec §9.6.6), raised as
+# ``earthsci_ast.expression.UnsupportedConstructError`` by ``esm_problem`` for
+# every pathway, before anything is built.
+# ===========================================================================
+
+#: A continuous event, a discrete event or an implicit equation (an equation
+#: whose LHS is an expression rather than an unknown, ``D(unknown)`` or
+#: ``ic(unknown)``) reached an evaluator that cannot run it. Refused rather than
+#: skipped: a run without the construct reports a wrong answer.
+UNSUPPORTED_CONSTRUCT = "unsupported_construct"
+
+
+# ===========================================================================
+# Running an arrayed definition written with a bare-index LHS (esm-spec §6.3.1,
+# CONFORMANCE_SPEC §5.36.2), reported when a model is built for simulation.
+# ===========================================================================
+
+#: A bare-index LHS ``index(V, k…) ~ rhs`` defining an observed that is not the
+#: runnable form: the subscripts are not plain symbols, or the RHS is not a
+#: ``faq`` whose ``output_idx`` names exactly those symbols in order (a scalar
+#: RHS, an offset such as ``V[k+1]``, a permutation), or their count disagrees
+#: with ``V``'s declared rank. Refused rather than run, because no range binds
+#: the subscripts and filling the array from anything else would be a guess.
+INDEXED_DEFINITION_UNSUPPORTED_FORM = "indexed_definition_unsupported_form"
+
+
+# ===========================================================================
 # Observed dependency cycle (esm-spec §4.9.6), reported by the structural
 # validator at `/models/<M>`.
 #
@@ -344,6 +380,18 @@ RECURRENCE_UNSUPPORTED_FORM = "recurrence_unsupported_form"
 #: in `validate` with the names on the cycle. The §4.3.1.1 recurrence SELF-EDGE
 #: is not one of these edges (see `RECURRENCE_NOT_WELLFOUNDED` above).
 OBSERVED_CYCLE = "observed_cycle"
+
+
+# ===========================================================================
+# Output names (CONFORMANCE_SPEC §5.17.4).
+# ===========================================================================
+
+#: A name read from a result that matches no variable exactly and whose last
+#: dotted segment is shared by more than one variable. A last-segment match is
+#: accepted only when it designates exactly one variable, so a read cannot
+#: silently return a variable it did not name. Raised by
+#: :class:`~earthsci_ast.simulation_common.AmbiguousOutputNameError`.
+AMBIGUOUS_OUTPUT_NAME = "ambiguous_output_name"
 
 
 # ===========================================================================

@@ -614,9 +614,9 @@ end
 # own rules:
 #
 #   * ADDITIVE position (`T - 273.15`, `1 - phi`) — dimensionally NEUTRAL: the
-#     literal adopts its siblings' dimension, so `_same_dimensions_over` SKIPS
-#     literal operands rather than comparing them. An all-literal sum (`1 + 2`)
-#     is a pure number.
+#     literal adopts its siblings' dimension, because `_same_dimensions_over`
+#     skips every undeterminable operand rather than comparing it. A sum with
+#     no determinable operand (`1 + 2`, `+(2)`) is itself undeterminable.
 #   * an EXPONENT (`x^2`) — read by VALUE off the AST, which is what makes `^`
 #     computable at all.
 #   * a TRANSCENDENTAL ARGUMENT (`exp(2)`) — indeterminate, hence unconstrained,
@@ -625,7 +625,6 @@ end
 # Costs nothing on the invalid corpus, where every pinned inconsistency is
 # stated between DECLARED quantities (`length + mass`, `ln(mass)`, `m^kg`).
 # ---------------------------------------------------------------------------
-_is_literal(e::ASTExpr) = e isa NumExpr || e isa IntExpr
 
 # The numeric value of a literal AST node, or `nothing` if it is not one. The
 # `^` rule reads its exponent through this rather than through the dimensional
@@ -636,14 +635,6 @@ function _literal_value(e::ASTExpr)
     return nothing
 end
 
-# Same-dimensions core shared by the "+"/"-" rule and the "min"/"max" rule:
-# every NON-LITERAL argument whose dimensions can be determined must agree, and
-# the result carries them. `describe(first_dim, dim)` renders the
-# op-family-specific inconsistency message.
-#
-# A mismatch between two KNOWN operand dimensions is provable → recorded. If any
-# non-literal operand is unknown the result is unknown (`nothing`) even when the
-# knowns agree, because the unknown one could disagree with all of them.
 # ---------------------------------------------------------------------------
 # EXACT UNIT SCALES (esm-spec §4.8.1 "Scales are EXACT").
 #
@@ -821,16 +812,19 @@ end
 
 _same_unit(a, b) = dimension(a) == dimension(b) && _exact_scale(a) == _exact_scale(b)
 
+# Same-dimensions core shared by "+"/"-", "min"/"max", comparisons and `atan2`
+# (esm-spec §4.8.3): every operand whose unit can be determined must agree with
+# the others, and the result is that unit. `describe(first_dim, dim)` renders
+# the op-family-specific inconsistency message.
+#
+# An operand whose unit cannot be determined — a literal, a product with a
+# literal factor, an undeclared variable — is skipped, never compared: it can
+# neither hide nor manufacture a mismatch between the known ones. So `x + 0.5*y`
+# has x's unit, and a literal adopts its siblings' unit. With no determinable
+# operand at all (`1 + 2`, `min(1, 2)`) the result is undeterminable, never
+# dimensionless (§4.8.4).
 function _same_dimensions_over(args, var_units, findings, describe)
-    # Literals impose no constraint here — see the implicit-units note above.
-    constrained = [a for a in args if !_is_literal(a)]
-    # An ALL-literal sum (`1 + 2`) is a pure number: nothing carries an implicit
-    # unit for the literals to adopt, so the result really is dimensionless.
-    isempty(constrained) && return Unitful.NoUnits
-
-    # Still descend the literals' subtrees? They have none — a literal is a leaf.
-    arg_dims = [_expr_dimensions!(findings, arg, var_units) for arg in constrained]
-
+    arg_dims = [_expr_dimensions!(findings, arg, var_units) for arg in args]
     valid_dims = filter(d -> d !== nothing, arg_dims)
     isempty(valid_dims) && return nothing
 
@@ -843,17 +837,19 @@ function _same_dimensions_over(args, var_units, findings, describe)
             return nothing
         end
     end
-
-    # All KNOWN operands agree. Only claim the dimension when every non-literal
-    # operand was known — otherwise an undeclared operand leaves it indeterminate.
-    length(valid_dims) == length(arg_dims) ? first_dim : nothing
+    return first_dim
 end
 
-# "+" / "-": all arguments must have the same dimensions.
-_same_dimension_rule(expr, var_units, findings) =
-    _same_dimensions_over(expr.args, var_units, findings,
+# "+" / "-": all arguments must have the same dimensions. A unary `+` or `-`
+# carries its operand's unit unchanged, so `+(2)` and `-(273.15)` are
+# undeterminable, exactly as the literal is.
+function _same_dimension_rule(expr, var_units, findings)
+    length(expr.args) == 1 &&
+        return _expr_dimensions!(findings, expr.args[1], var_units)
+    return _same_dimensions_over(expr.args, var_units, findings,
         (first_dim, dim) -> "Cannot $(expr.op == "-" ? "subtract" : "add") quantities with " *
             "different units: '$(_ustr(first_dim))' $(expr.op) '$(_ustr(dim))'")
+end
 
 # "min" / "max" (esm-spec §4.2): all arguments must share dimensions; the
 # result carries them.
@@ -1048,23 +1044,32 @@ function _ustr(u)::String
     isempty(s) ? string(dimension(u)) : s
 end
 
-# "ifelse": ifelse(cond, a, b) — branches must share dimensions; the condition
-# is boolean and dimensionally irrelevant.
+# "ifelse": ifelse(cond, a, b) — the two branches follow the "+" rule (esm-spec
+# §4.8.3): determinable branches must share a unit and the result is that unit,
+# an undeterminable branch is skipped (`ifelse(c, x, 0.5*y)` has x's unit), and
+# with no determinable branch the result is undeterminable. The condition is
+# walked so a finding inside it (`x [m] > y [kg]`) is reported, but its own unit
+# neither enters the result nor has to be dimensionless.
 function _ifelse_rule(expr, var_units, findings)
     length(expr.args) == 3 || return nothing
-    t_dim = _expr_dimensions!(findings, expr.args[2], var_units)
-    f_dim = _expr_dimensions!(findings, expr.args[3], var_units)
-    (t_dim === nothing || f_dim === nothing) && return nothing
-    if !_same_unit(t_dim, f_dim)
-        push!(findings, "Unit inconsistency in ifelse branches: " *
-                        "'$(_ustr(t_dim))' vs '$(_ustr(f_dim))'")
-        return nothing
-    end
-    return t_dim
+    _expr_dimensions!(findings, expr.args[1], var_units)
+    return _same_dimensions_over(expr.args[2:3], var_units, findings,
+        (t_dim, f_dim) -> "Unit inconsistency in ifelse branches: " *
+                          "'$(_ustr(t_dim))' vs '$(_ustr(f_dim))'")
 end
 
 # "sign": strips dimensions — the result is a dimensionless -1/0/+1.
 _dimensionless_result_rule(expr, var_units, findings) = Unitful.NoUnits
+
+# "and" / "or" / "not": the result is a dimensionless boolean. The operands carry
+# no unit requirement of their own, but they are walked so a mismatch inside one
+# (`not(x [m] > z [kg])`) is reported (esm-spec §4.8.3).
+function _boolean_rule(expr, var_units, findings)
+    for arg in expr.args
+        _expr_dimensions!(findings, arg, var_units)
+    end
+    return Unitful.NoUnits
+end
 
 # "<", ">", "<=", ">=", "==", "!=": the operands must be mutually commensurate
 # (comparing a length to a mass is provably wrong); the result is a
@@ -1151,6 +1156,13 @@ const _BOOLEAN_OPS = _ops_with_dim_class(:boolean)
 
 # Operator name → dimensional rule. Ops absent from this table have no
 # dimensional rule and degrade silently to `nothing` (see `_expr_dimensions!`).
+# "const": a `const` that DECLARES its units has that unit (esm-spec §4.8.5);
+# without `units` it is undeterminable, like a bare literal. An unresolvable
+# string is reported at the containing expression field by `model_unit_findings`,
+# not here.
+_const_units_rule(expr, var_units, findings) =
+    expr.units === nothing ? nothing : _absolute_unit(parse_units(expr.units))
+
 const _DIMENSION_RULES = let rules = Dict{String, Function}(
         "+"      => _same_dimension_rule,
         "-"      => _same_dimension_rule,
@@ -1168,6 +1180,8 @@ const _DIMENSION_RULES = let rules = Dict{String, Function}(
         # the operand's value at the previous step, not a dimensionless one.
         "Pre"    => _preserve_dimension_rule,
         "D"      => _derivative_rule,
+        # A `const` that DECLARES its units has that unit (esm-spec §4.8.5).
+        "const"  => _const_units_rule,
     )
     for op in _TRANSCENDENTAL_OPS
         rules[op] = _dimensionless_arg_rule
@@ -1182,9 +1196,9 @@ const _DIMENSION_RULES = let rules = Dict{String, Function}(
         rules[op] = _comparison_rule
     end
     for op in _BOOLEAN_OPS
-        # A boolean connective's operands are already booleans; the result is a
-        # dimensionless boolean either way.
-        rules[op] = _dimensionless_result_rule
+        # A boolean connective's result is a dimensionless boolean; its operands
+        # are still walked for the findings inside them.
+        rules[op] = _boolean_rule
     end
     rules
 end
@@ -1497,6 +1511,15 @@ function model_unit_findings(model::Model)::Vector{UnitFinding}
         for msg in equation_unit_findings(eq, var_units)
             push!(out, UnitFinding("equations/$(i-1)", msg, UNIT_DIMENSION_MISMATCH))
         end
+        # A declared `const` unit string that does not resolve is a defect at the
+        # containing expression field (esm-spec §4.8.5 item 2), whatever kind of
+        # equation it sits in.
+        for (field, side) in (("lhs", eq.lhs), ("rhs", eq.rhs))
+            for units in unresolvable_const_units(side)
+                push!(out, UnitFinding("equations/$(i-1)/$field",
+                    "Unit string '$units' is not a recognised unit", UNIT_PARSE_ERROR))
+            end
+        end
     end
 
     # 5. DEFINING equations — an equation whose LHS is a bare variable naming a
@@ -1632,4 +1655,64 @@ function infer_variable_units(var_name::AbstractString, equations::Vector{Equati
     end
 
     return nothing
+end
+
+"""
+    reject_const_units_pre_v12(raw_data)
+
+Reject declared `units` on any expression node in a document declaring `esm` <
+1.2.0 (esm-spec §4.8.5 item 6), naming the first offending node. Runs on the raw
+JSON before schema validation, like [`reject_solver_pre_v11`](@ref).
+"""
+function reject_const_units_pre_v12(raw_data)
+    raw_data === nothing && return
+    _is_object(raw_data) || return
+    esm_raw = _raw_get(raw_data, "esm")
+    esm_raw === nothing && return
+    m = match(r"^(\d+)\.(\d+)\.(\d+)$", string(esm_raw))
+    m === nothing && return
+    (parse(Int, m.captures[1]), parse(Int, m.captures[2])) >= (1, 2) && return
+    path = _find_units_bearing_node(raw_data, "")
+    path === nothing && return
+    throw(ExpressionTemplateError(
+        ERROR_CODES.CONST_UNITS_VERSION_TOO_OLD,
+        "declared `units` on an expression node require esm >= 1.2.0; " *
+        "file declares $(string(esm_raw)). Offending path: $path"))
+end
+
+function _find_units_bearing_node(node, at::String)
+    if _is_object(node)
+        (_raw_haskey(node, "op") && _raw_haskey(node, "units")) && return at
+        for (k, v) in pairs(node)
+            hit = _find_units_bearing_node(v, "$at/$(string(k))")
+            hit === nothing || return hit
+        end
+    elseif node isa AbstractVector
+        for (i, v) in enumerate(node)
+            hit = _find_units_bearing_node(v, "$at/$(i - 1)")
+            hit === nothing || return hit
+        end
+    end
+    return nothing
+end
+
+"""
+    unresolvable_const_units(expr::ASTExpr) -> Vector{String}
+
+Every declared `const` unit string in `expr` that does not resolve against the
+registry (esm-spec §4.8.5 item 2), in walk order.
+"""
+function unresolvable_const_units(expr)
+    out = String[]
+    _walk_const_units!(out, expr)
+    return out
+end
+
+function _walk_const_units!(out, expr)
+    expr isa OpExpr || return out
+    if expr.op == "const" && expr.units !== nothing && parse_units(expr.units) === nothing
+        push!(out, expr.units)
+    end
+    foreach_child(child -> _walk_const_units!(out, child), expr)
+    return out
 end

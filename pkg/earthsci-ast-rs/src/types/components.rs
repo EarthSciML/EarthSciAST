@@ -595,7 +595,7 @@ pub enum CouplingEntry {
         /// Separate affects for negative-going zero crossings
         #[serde(skip_serializing_if = "Option::is_none")]
         affect_neg: Option<Vec<AffectEquation>>,
-        /// Root finding direction
+        /// Which side of the root the event lands on (esm-spec §5.2)
         #[serde(skip_serializing_if = "Option::is_none")]
         root_find: Option<RootFindDirection>,
         /// Whether to reinitialize the system after the event

@@ -1776,10 +1776,15 @@ pub(super) fn eval_index(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
             return index_into(arr, &raw, in_bounds, kind);
         }
     }
-    // The gather's PROVENANCE is decided by the operand's NAME, so a computed
+    // The gather's PROVENANCE is decided by the operand itself: a named const
+    // factor, or a `const` literal written inline (esm-spec §4.3.3). A computed
     // array operand (`index(reshape(...), i)`) is never a const-array gather.
     let const_kind = match &node.args[0] {
         Expr::Variable(name) => gather_kind(name, ctx),
+        base if ConstArrayScope::is_inline_const(base) => GatherKind::ConstArray {
+            name: INLINE_CONST_NAME,
+            scope: ctx.const_arrays,
+        },
         _ => GatherKind::ZeroGhost,
     };
     let array_val = eval(&node.args[0], ctx);

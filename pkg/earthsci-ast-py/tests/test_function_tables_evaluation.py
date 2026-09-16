@@ -28,6 +28,7 @@ from conftest import CONFORMANCE_DIR
 from earthsci_ast import load_document, load_path, to_json
 from earthsci_ast.error_handling import ErrorCode
 from earthsci_ast.esm_types import ExprNode
+from earthsci_ast.flatten import flatten
 from earthsci_ast.lower_table_lookup import TableLookupError, lower_table_lookups
 from earthsci_ast.inline_tests import run_inline_tests
 from earthsci_ast.problem import esm_problem
@@ -109,6 +110,123 @@ def test_table_lookup_observed_is_readable_from_a_build():
     assert prob.flat.observed_variables  # `y` is observed, not an ODE state
     # p = 2.5 sits midway between the 2.0 and 3.0 knots.
     assert float(prob.observed_field("M.y")) == pytest.approx(25.0)
+
+
+def test_both_problem_carriers_lower_a_table_lookup():
+    """`esm_problem` takes a caller-flattened system as well as a document, and
+    `flatten` carries `function_tables` precisely so that carrier stays
+    runnable. Both carriers must lower, and agree.
+
+    `linear/` integrates the constant tendency
+    `table_lookup(sigma_O3_298, lambda_idx = 4.5)`, the midpoint of the
+    8.70e-18 and 7.90e-18 knots, so `k_O3(1)` is that value."""
+    from earthsci_ast.problem import solve
+
+    expected = 8.70e-18 + 0.5 * (7.90e-18 - 8.70e-18)
+    path = FIXTURES_ROOT / "linear" / "fixture.esm"
+    flat = flatten(load_path(path))
+    for label, carrier in (("file", load_path(path)), ("flattened", flat)):
+        prob = esm_problem(carrier, (0.0, 1.0))
+        sol = solve(prob, reltol=1e-12, abstol=1e-30)
+        assert sol["M.k_O3"][-1] == pytest.approx(expected, rel=1e-9), label
+
+    # The pass works on a copy: the caller's flattened system keeps the
+    # authored node, and the problem's own system carries none.
+    assert any(
+        isinstance(eq.rhs, ExprNode) and eq.rhs.op == "table_lookup" for eq in flat.equations
+    )
+    assert not any("table_lookup" in eq.rhs_str for eq in prob.flat.equations)
+
+
+def test_out_of_bounds_error_is_refused_on_the_flattened_carrier():
+    flat = flatten(load_path(FIXTURES_ROOT / "out_of_bounds_error" / "fixture.esm"))
+    with pytest.raises(TableLookupError) as excinfo:
+        esm_problem(flat, (0.0, 1.0))
+    assert excinfo.value.code == ErrorCode.TABLE_OUT_OF_BOUNDS_UNSUPPORTED.value
+
+
+def test_the_flattened_pass_reaches_every_expression_position():
+    """Every position a `FlattenedSystem` can hold an expression in is lowered,
+    not just the equations: both event lists, the deferred `field_ics`, and each
+    variable's `update` — the §6.3.1 subset maps included, which re-link by name
+    to the maps they classify (the shape Julia's
+    `lower_table_lookups(::FlattenedSystem)` has).
+
+    `repr` is the whole-system probe: a dataclass repr recurses into every
+    field, so a `table_lookup` surviving ANYWHERE — including in an equation's
+    re-rendered display string — shows up in it."""
+    import copy
+    from collections import OrderedDict
+    from dataclasses import replace
+
+    from earthsci_ast.esm_types import (
+        AffectEquation,
+        ContinuousEvent,
+        DataSourceBinding,
+        DiscreteEvent,
+        DiscreteEventTrigger,
+        ParameterUpdate,
+    )
+    from earthsci_ast.flatten import FlattenedVariable
+    from earthsci_ast.lower_table_lookup import lower_flattened_table_lookups
+
+    flat = flatten(load_path(FIXTURES_ROOT / "linear" / "fixture.esm"))
+    authored = flat.equations[0].rhs
+    assert isinstance(authored, ExprNode) and authored.op == "table_lookup"
+
+    def tl():
+        return copy.deepcopy(authored)
+
+    scheduled = FlattenedVariable(
+        name="M.s",
+        type="parameter",
+        update=ParameterUpdate(kind="schedule", interval=1.0, expression=tl()),
+    )
+    conditional = FlattenedVariable(
+        name="M.c",
+        type="parameter",
+        update=ParameterUpdate(
+            kind="condition",
+            when=tl(),
+            expression=tl(),
+            from_source=DataSourceBinding(file_variable="v", unit_conversion=tl()),
+        ),
+    )
+    planted = replace(
+        flat,
+        continuous_events=[
+            ContinuousEvent(
+                name="c",
+                conditions=[tl()],
+                affects=[AffectEquation(lhs="M.k_O3", rhs=tl())],
+                affect_neg=[AffectEquation(lhs="M.k_O3", rhs=tl())],
+            )
+        ],
+        discrete_events=[
+            DiscreteEvent(
+                name="d",
+                trigger=DiscreteEventTrigger(type="condition", value=tl()),
+                affects=[AffectEquation(lhs="M.k_O3", rhs=tl())],
+            )
+        ],
+        field_ics=[("M.k_O3", tl())],
+        state_variables=OrderedDict([*flat.state_variables.items(), ("M.s", scheduled)]),
+        parameters=OrderedDict([*flat.parameters.items(), ("M.c", conditional)]),
+        observed_variables=OrderedDict([("M.o", scheduled)]),
+        algebraic_variables=OrderedDict([("M.s", scheduled)]),
+        brownian_parameters=OrderedDict([("M.c", conditional)]),
+        discrete_parameters=OrderedDict([("M.c", conditional)]),
+    )
+
+    lowered = lower_flattened_table_lookups(planted)
+    assert "table_lookup" not in repr(lowered)
+    # Pure: the caller's system keeps every authored node.
+    assert "table_lookup" in repr(planted)
+    # The subsets carry the SAME lowered object as the map they classify, so the
+    # flattened system cannot disagree with itself about a variable.
+    assert lowered.algebraic_variables["M.s"] is lowered.state_variables["M.s"]
+    assert lowered.brownian_parameters["M.c"] is lowered.parameters["M.c"]
+    assert lowered.discrete_parameters["M.c"] is lowered.parameters["M.c"]
 
 
 # ---------------------------------------------------------------------------

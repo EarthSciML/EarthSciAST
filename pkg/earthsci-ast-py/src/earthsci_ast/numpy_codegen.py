@@ -60,7 +60,9 @@ from .numpy_interpreter import (
     _apply_ifelse,
     _apply_minmax,
     _apply_not,
+    _check_const_gather_bounds,
     _compile_expr,
+    _const_gather_name,
     _gather_index,
     _resolve_symbol,
     eval_expr,
@@ -71,7 +73,9 @@ from .numpy_interpreter import (
 _MAX_LINES = 20000
 
 
-def _gather_hoisted(arr_val: Any, zi: tuple[np.ndarray, ...]) -> np.ndarray:
+def _gather_hoisted(
+    arr_val: Any, zi: tuple[np.ndarray, ...], const_name: str | None = None
+) -> np.ndarray:
     """The vectorized branch of :func:`_gather_index` with the 0-based intp
     index tuple ``zi`` precomputed at codegen time (every subscript was
     constant-folded, and at least one is an ndarray). Identical values and
@@ -80,6 +84,8 @@ def _gather_hoisted(arr_val: Any, zi: tuple[np.ndarray, ...]) -> np.ndarray:
     if not isinstance(arr_val, np.ndarray):
         # _gather_index's scalar branch with a non-empty subscript list.
         raise NumpyInterpreterError("index applied to scalar value")
+    if const_name is not None:
+        _check_const_gather_bounds(arr_val, [z + 1 for z in zi], const_name)
     if len(zi) != arr_val.ndim:
         raise NumpyInterpreterError(
             f"index got {len(zi)} indices for array of shape {arr_val.shape}"
@@ -95,6 +101,7 @@ _BASE_NS: dict[str, Any] = {
     "_resolve_symbol": _resolve_symbol,
     "_gather_index": _gather_index,
     "_gather_hoisted": _gather_hoisted,
+    "_const_gather_name": _const_gather_name,
     "_apply_div": _apply_div,
     "_apply_atan2": _apply_atan2,
     "_apply_cmp": _apply_cmp,
@@ -226,6 +233,9 @@ class _Emitter:
             arr = self.emit(args[0])
             subs = [self.emit(a) for a in args[1:]]
             var = self.fresh("t")
+            # Resolved per call like the closure tier: whether a NAMED base is a
+            # const array is a property of the context that runs the body.
+            cname = f"_const_gather_name({self.intern(args[0])}, ctx)"
             if not subs:
                 self.line(f"{var} = _gather_index({self.ref(arr)}, [])")
             elif all(k == "const" for k, _ in subs):
@@ -240,14 +250,20 @@ class _Emitter:
                         z = np.rint(i).astype(np.intp)
                         z -= 1
                         zi.append(z)
-                    self.line(f"{var} = _gather_hoisted({self.ref(arr)}, {self.intern(tuple(zi))})")
+                    self.line(
+                        f"{var} = _gather_hoisted({self.ref(arr)}, "
+                        f"{self.intern(tuple(zi))}, {cname})"
+                    )
                 else:
                     # All-scalar constant subscripts: the scalar branch (with
                     # its partial-index semantics) is cheap; keep it verbatim.
-                    self.line(f"{var} = _gather_index({self.ref(arr)}, {self.intern(list(vals))})")
+                    self.line(
+                        f"{var} = _gather_index({self.ref(arr)}, "
+                        f"{self.intern(list(vals))}, {cname})"
+                    )
             else:
                 items = ", ".join(self.ref(p) for p in subs)
-                self.line(f"{var} = _gather_index({self.ref(arr)}, [{items}])")
+                self.line(f"{var} = _gather_index({self.ref(arr)}, [{items}], {cname})")
             return ("dyn", var)
 
         if op in _SCALAR_FUNCS:

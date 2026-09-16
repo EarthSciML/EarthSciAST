@@ -1,0 +1,45 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "ConstUnitsVersionTooOld",
+    "description": "Invalid: a const node declares units, which arrive at esm 1.2.0, in a document declaring 1.1.0. Rejected with const_units_version_too_old (esm-spec §4.8.5 item 6).",
+    "authors": [
+      "Chris Tessum with Claude"
+    ],
+    "created": "2026-09-14T00:00:00Z"
+  },
+  "models": {
+    "BadVersionModel": {
+      "variables": {
+        "speed_mph": {
+          "type": "parameter",
+          "units": "mi/h",
+          "default": 30.0,
+          "description": "Link average speed in miles per hour"
+        },
+        "speed_ms": {
+          "type": "unknown",
+          "units": "m/s",
+          "description": "Converted by a unit-bearing const the declared version does not admit"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "speed_ms",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "speed_mph",
+              {
+                "op": "const",
+                "args": [],
+                "value": 0.44704,
+                "units": "m*h/(mi*s)"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

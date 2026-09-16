@@ -308,7 +308,15 @@ func LoadString(jsonStr string, opts ...LoadOption) (*ESMFile, error) {
 			if err := RejectTemplateImportsPreV08(preCheck); err != nil {
 				return nil, err
 			}
+			// Top-level `expression_templates` beside a component payload is a
+			// template-library payload no component can see (esm-spec §9.7.1).
+			if err := rejectImpureTemplateLibrary(preCheck); err != nil {
+				return nil, err
+			}
 			if err := RejectSolverPreV11(preCheck); err != nil {
+				return nil, err
+			}
+			if err := rejectConstUnitsPreV12(preCheck); err != nil {
 				return nil, err
 			}
 		}

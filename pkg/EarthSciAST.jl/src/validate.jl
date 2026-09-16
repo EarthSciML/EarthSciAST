@@ -532,6 +532,16 @@ function validate_structural(file::EsmFile)::Vector{StructuralError}
         end
     end
 
+    # 3f. Inline array data is a SHAPED variable's value (esm-spec §6.3,
+    # `array_default_without_shape`): on a variable with no `shape` it has
+    # nothing to fill and no scalar reading, so the declaration is malformed.
+    if file.models !== nothing
+        for model_name in sort!(collect(keys(file.models)))
+            _check_array_defaults_have_shape!(errors, file.models[model_name],
+                                              "/models/$model_name", "Model '$model_name'")
+        end
+    end
+
     # 4. Validate event consistency. Unlike balance and reference integrity, this
     # still RUNS for a coupled model — it is where a genuinely undeclared event
     # target is caught — but with the §6.4 `_var` placeholder credited (finding (b)).
@@ -547,7 +557,8 @@ function validate_structural(file::EsmFile)::Vector{StructuralError}
             # was missing entirely until the 2026-07-14 audit (finding J1), which
             # is why `validate()` accepted every dimensionally-inconsistent
             # fixture in the shared corpus.
-            append!(errors, validate_model_unit_consistency(model, "/models/$model_name"))
+            append!(errors, validate_model_unit_consistency(
+                _units_view(file, model_name, model), "/models/$model_name"))
         end
     end
 
@@ -1138,6 +1149,37 @@ function _check_reserved_model_names!(errors::Vector{StructuralError}, model::Mo
 end
 
 """
+    _check_array_defaults_have_shape!(errors, model, path, owner)
+
+`array_default_without_shape` for every variable of `model`, and of its
+subsystems, whose `default` is inline ARRAY data but which declares no `shape`
+(omitted or empty) — esm-spec §6.3. Inline array data is a shaped variable's
+value: its nesting is matched against the declared shape, so with no shape there
+is nothing for it to fill. Variables are walked in sorted order, as every binding
+can produce.
+"""
+function _check_array_defaults_have_shape!(errors::Vector{StructuralError}, model::Model,
+                                           path::String, owner::AbstractString)
+    for name in sort!(collect(keys(model.variables)))
+        var = model.variables[name]
+        is_inline_array(var.default) || continue
+        (var.shape === nothing || isempty(var.shape)) || continue
+        push!(errors, StructuralError(
+            "$path/variables/$name/default",
+            "$owner variable '$name' has inline array data as its default but declares " *
+            "no shape; inline array data is a shaped variable's value (esm-spec §6.3)",
+            ERROR_CODES.ARRAY_DEFAULT_WITHOUT_SHAPE,
+            Dict{String,Any}("variable" => name,
+                             "variable_type" => _variable_type_word(var.type))))
+    end
+    for (subsys_name, subsys) in sort!(collect(model_subsystems(model)); by=first)
+        _check_array_defaults_have_shape!(errors, subsys, "$path/subsystems/$subsys_name",
+                                          "Model '$subsys_name'")
+    end
+    return errors
+end
+
+"""
     _operator_composed_systems(file::EsmFile) -> Set{String}
 
 Every system named in an `operator_compose` coupling entry. Their equations are
@@ -1652,6 +1694,19 @@ function _check_broadcast_axes!(errors::Vector{StructuralError}, expr::ASTExpr,
     end
     walk(expr)
     return errors
+end
+
+# The model the units engine judges: its surviving `apply_expression_template`
+# references expanded against the component's registry, so a call has the unit
+# of its expansion (esm-spec §4.8.5 item 5, §9.6.4 rule 2). The expansion is made
+# on a copy; the rest of `validate` keeps the reference-preserving model.
+function _units_view(file::EsmFile, model_name::AbstractString, model::Model)
+    file.component_templates === nothing && return model
+    reg = get(file.component_templates, "models.$model_name", nothing)
+    reg === nothing && return model
+    view = deepcopy(model)
+    _expand_model_refs!(view, reg)
+    return view
 end
 
 """

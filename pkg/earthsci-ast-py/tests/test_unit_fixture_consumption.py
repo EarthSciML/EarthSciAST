@@ -1,6 +1,6 @@
 """Units fixtures consumption runner (gt-dt0o).
 
-The three ``units_*.esm`` files in ``tests/valid/`` carry inline ``tests``
+The ``units_*.esm`` files in ``tests/valid/`` carry inline ``tests``
 blocks (id / parameter_overrides / initial_conditions / time_span /
 assertions) added in gt-p3v. Schema parse coverage is asserted in
 ``test_unit_validation.py``'s Cross-binding suite. This file closes the
@@ -31,10 +31,16 @@ from earthsci_ast.classification import observed_definitions
 
 
 FIXTURES_DIR = VALID_DIR
+# Only the fixtures that CARRY an inline ``tests`` block belong here;
+# units_ifelse_undeterminable_branch.esm and
+# units_comparisons_and_connectives.esm declare units alone and are wired into
+# the cross-binding validate suite in test_unit_validation.py instead.
 FIXTURES = [
     "units_conversions.esm",
     "units_dimensional_analysis.esm",
     "units_propagation.esm",
+    "units_negated_literal_neutral.esm",
+    "units_sum_undeterminable_operands.esm",
 ]
 
 
@@ -93,6 +99,10 @@ def _evaluate(expr: Any, bindings: Mapping[str, float]) -> float:
             return math.tan(args[0])
         if op == "abs":
             return abs(args[0])
+        if op == "min":
+            return min(args)
+        if op == "max":
+            return max(args)
         raise ValueError(f"unsupported op: {op!r}")
     raise TypeError(f"unsupported expression node: {type(expr).__name__}")
 

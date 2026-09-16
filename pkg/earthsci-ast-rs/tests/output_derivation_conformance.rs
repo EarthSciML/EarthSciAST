@@ -154,3 +154,25 @@ fn the_record_axis_comes_from_the_document() {
     assert_eq!(plan.grids[0].time_dim, "t");
     assert_eq!(plan.grids[0].vars[0].dims, vec!["t".to_string()]);
 }
+
+/// A request that designates no single variable is REFUSED with its registered
+/// code, never resolved to an arbitrary candidate (CONFORMANCE_SPEC §5.17.4).
+#[test]
+fn every_corpus_refusal_is_refused_with_its_code() {
+    let manifest = load_json("manifest.json");
+    let refusals = manifest["refusals"].as_array().expect("refusals array");
+    assert!(!refusals.is_empty(), "refusals must not be empty");
+
+    for case in refusals {
+        let id = case["id"].as_str().expect("case id");
+        let doc: EsmFile = load_string(&read_text(case["fixture"].as_str().expect("fixture")))
+            .unwrap_or_else(|e| panic!("{id}: fixture loads: {e}"));
+        let slots = strings(&case["slot_names"]);
+        let observed = strings(&case["observed"]);
+
+        let Err(err) = derive_output_plan(&doc, &slots, &observed) else {
+            panic!("{id}: the request must be refused");
+        };
+        assert_eq!(err.code(), case["raises"].as_str(), "{id}: {err}");
+    }
+}

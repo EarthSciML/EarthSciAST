@@ -81,6 +81,7 @@ import {
 import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
 import { EsmMachineryError } from './lower-expression-templates.js'
 import { mergedTemplateRegistry } from './flatten-template-registry.js'
+import { resolveRhsTimeDerivatives } from './flatten-tendency.js'
 
 /** Options for {@link flatten}. Only needed when the file uses `coupling_import`. */
 export type FlattenOptions = CouplingImportOptions
@@ -2967,6 +2968,12 @@ export function flatten(file: EsmFile, options: FlattenOptions = {}): FlattenedS
 
   // 4b. Pointwise spatial lift (esm-spec §10.5) over the expanded couplings.
   applyPointwiseLift(flat, couplingEntries)
+
+  // 4c. esm-libraries-spec §4.7.5 step 3a: resolve every right-hand-side
+  //     structural `D` to the tendency the system defines (esm-spec §4.2). After
+  //     the coupling rules and the lift, so a merged state yields its WHOLE
+  //     tendency.
+  resolveRhsTimeDerivatives(flat)
 
   // 5. Domain pass-through.
   if (file.domain !== undefined) flat.domain = file.domain as Domain

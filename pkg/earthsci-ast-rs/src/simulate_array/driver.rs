@@ -533,17 +533,19 @@ impl ArrayCompiled {
         // the original un-segmented run — byte-identical to the pre-segmentation
         // driver (one `run_one_segment` over the whole span with `opts` verbatim).
         if boundaries.is_empty() || opts.saveat.is_none() {
-            let (time, state, stats, retcode) = self.run_one_segment(
-                t0,
-                t_end,
-                &ic_vec,
-                &param_vec,
-                &setup.static_obs,
-                &setup.cadence.segment_static_rules,
-                &setup.cadence.continuous_rules,
-                opts,
-                tape.as_ref(),
-            )?;
+            let (time, state, stats, retcode) = self
+                .run_one_segment(
+                    t0,
+                    t_end,
+                    &ic_vec,
+                    &param_vec,
+                    &setup.static_obs,
+                    &setup.cadence.segment_static_rules,
+                    &setup.cadence.continuous_rules,
+                    opts,
+                    tape.as_ref(),
+                )
+                .map_err(Self::const_oob_first)?;
             return self.assemble_solution(
                 time,
                 state,
@@ -870,17 +872,19 @@ impl ArrayCompiled {
                 progress: seg_progress,
                 ..opts.clone()
             };
-            let (seg_time, seg_state, seg_stats, seg_retcode) = self.run_one_segment(
-                a,
-                b,
-                &u0,
-                param_vec,
-                &setup.static_obs,
-                &setup.cadence.segment_static_rules,
-                &setup.cadence.continuous_rules,
-                &seg_opts,
-                tape,
-            )?;
+            let (seg_time, seg_state, seg_stats, seg_retcode) = self
+                .run_one_segment(
+                    a,
+                    b,
+                    &u0,
+                    param_vec,
+                    &setup.static_obs,
+                    &setup.cadence.segment_static_rules,
+                    &setup.cadence.continuous_rules,
+                    &seg_opts,
+                    tape,
+                )
+                .map_err(Self::const_oob_first)?;
             stats += seg_stats;
             // A segment that stopped early ends the whole run: the state at its
             // right endpoint never materialised, so there is nothing to seed the
@@ -948,6 +952,20 @@ impl ArrayCompiled {
             retcode,
             metadata,
         })
+    }
+
+    /// A solve that fails after the RHS latched an out-of-range const-array gather
+    /// failed BECAUSE of it: the gather substituted `NaN`, and the integrator's
+    /// step-size or error-test failure is the symptom. Report the latched
+    /// `E_TREEWALK_CONSTARRAY_OOB` instead, as `assemble_solution` does on success.
+    #[cfg(feature = "solve")]
+    fn const_oob_first(err: SimulateError) -> SimulateError {
+        match crate::simulate_array::take_const_array_oob() {
+            Some(details) => {
+                crate::compile_error::CompileError::InterpreterBuildError { details }.into()
+            }
+            None => err,
+        }
     }
 
     /// Integrate ONE segment `[t0, t_end]` from initial state `u0`, reading the
@@ -1504,29 +1522,34 @@ impl ArrayCompiled {
         }
     }
 
-    /// The observed-rule names `requested` (bare or `Model.`-qualified) names.
+    /// The observed-rule names `requested` names.
     ///
-    /// The same both-ways match [`crate::derive_output_plan`] applies to an
-    /// output request, so a name that selects a variable there selects the rule
-    /// that produces it here: exact, or equal after dropping the dotted prefix
-    /// from either side. A name matching nothing is not an error — the output
-    /// plan diagnoses it with [`crate::OutputError::UnknownObserved`], which can
-    /// also see the state slots and so tells the caller the whole truth.
+    /// The rule [`crate::derive_output_plan`] applies to an output request
+    /// (CONFORMANCE_SPEC §5.17.4), over the observed rules: the exact name, else
+    /// the ONE rule whose last dotted segment equals the request's. A name that
+    /// matches nothing, or whose last segment several rules share, selects
+    /// nothing and is not an error here — the output plan diagnoses it with
+    /// [`crate::OutputError::UnknownObserved`] or
+    /// [`crate::OutputError::AmbiguousRequest`], and it also sees the state
+    /// slots, so it tells the caller the whole truth.
     #[cfg(feature = "solve")]
     fn resolve_requested_observeds(&self, requested: &[String]) -> HashSet<String> {
         if requested.is_empty() {
             return HashSet::new();
         }
-        let bare = |n: &str| n.rsplit('.').next().unwrap_or(n).to_string();
-        self.observed_rules
+        let vars: Vec<&str> = self
+            .observed_rules
             .iter()
-            .map(observed_rule_var)
-            .filter(|var| {
-                requested.iter().any(|r| {
-                    r == *var || bare(r) == **var || *r == bare(var) || bare(r) == bare(var)
-                })
-            })
-            .cloned()
+            .map(|r| observed_rule_var(r).as_str())
+            .collect();
+        requested
+            .iter()
+            .filter_map(
+                |r| match crate::data_output::match_output_request(r, &vars) {
+                    crate::data_output::RequestMatch::Named(var) => Some(var.to_string()),
+                    _ => None,
+                },
+            )
             .collect()
     }
 

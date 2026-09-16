@@ -214,10 +214,116 @@ describe('Unit parsing and dimensional analysis', () => {
         expect(result.diagnostics.filter((d) => d.code === 'dimensional_mismatch')).toEqual([])
       })
 
-      it('makes an all-literal expression dimensionless', () => {
-        const bindings = createUnitBindings({})
-        expect(dimsOf(checkDimensions({ op: '+', args: [1, 2] }, bindings))).toEqual({})
-        expect(dimsOf(checkDimensions({ op: '-', args: [1] }, bindings))).toEqual({})
+      // esm-spec §4.8.3, §4.8.4: a sum with no determinable operand is
+      // indeterminate, never dimensionless — for an integer as well as a float
+      // literal, in min/max as in +/-, and under a unary `+`.
+      it('leaves a sum with no determinable operand indeterminate', () => {
+        const bindings = createUnitBindings({ x: 'm' })
+        for (const lits of [
+          [1, 2],
+          [1.5, 2.5],
+        ]) {
+          for (const op of ['+', '-', 'min', 'max']) {
+            expect(checkDimensions({ op, args: lits }, bindings).dimensions).toBeNull()
+          }
+        }
+        expect(checkDimensions({ op: '+', args: [2] }, bindings).dimensions).toBeNull()
+        expect(checkDimensions({ op: '+', args: [2.5] }, bindings).dimensions).toBeNull()
+        expect(
+          checkDimensions({ op: '*', args: ['x', { op: '+', args: [1, 2] }] }, bindings).dimensions,
+        ).toBeNull()
+      })
+
+      it('gives a unary + its operand unit, so x + +(2) is a length', () => {
+        const bindings = createUnitBindings({ x: 'm' })
+        expect(dimsOf(checkDimensions({ op: '+', args: ['x'] }, bindings))).toEqual({ m: 1 })
+        const result = checkDimensions({ op: '+', args: ['x', { op: '+', args: [2] }] }, bindings)
+        expect(result.diagnostics.filter((d) => d.code === 'dimensional_mismatch')).toEqual([])
+        expect(dimsOf(result)).toEqual({ m: 1 })
+      })
+
+      it('gives a partly indeterminate sum the unit of its known operands', () => {
+        const bindings = createUnitBindings({ x: 'm', y: 'm' })
+        const halfY = { op: '*', args: [0.5, 'y'] }
+        for (const op of ['+', '-', 'min', 'max']) {
+          expect(dimsOf(checkDimensions({ op, args: ['x', halfY] }, bindings))).toEqual({ m: 1 })
+        }
+      })
+
+      // esm-spec §4.8.3: a boolean connective's operands carry no unit
+      // requirement of their own, and an `ifelse` condition need not be
+      // dimensionless. Both used to be flagged here and nowhere else, so
+      // tests/valid/units_comparisons_and_connectives.esm carried four
+      // TypeScript-only findings the other four bindings did not raise.
+      it('places no unit requirement on a connective operand or an ifelse condition', () => {
+        const bindings = createUnitBindings({ x: 'm', y: 'm', z: 'kg' })
+        for (const expr of [
+          { op: 'and', args: ['x', 'z'] },
+          { op: 'or', args: ['x', 'z'] },
+          { op: 'not', args: ['x'] },
+          { op: 'ifelse', args: ['x', 'y', 'y'] },
+        ]) {
+          expect(checkDimensions(expr, bindings).diagnostics).toEqual([])
+        }
+      })
+
+      // ... but each operand is still walked, so a mismatch INSIDE one is
+      // reported (esm-spec §4.8.3).
+      it('reports a comparison mismatch nested under a connective or a condition', () => {
+        const bindings = createUnitBindings({ x: 'm', y: 'm', z: 'kg', c: '1' })
+        const mismatch = { op: '>', args: ['x', 'z'] }
+        const ok = { op: '>', args: ['c', 0] }
+        for (const expr of [
+          { op: 'not', args: [mismatch] },
+          { op: 'and', args: [mismatch, ok] },
+          { op: 'or', args: [ok, mismatch] },
+          { op: 'ifelse', args: [mismatch, 'x', 'y'] },
+        ]) {
+          expect(
+            checkDimensions(expr, bindings).diagnostics.filter(
+              (d) => d.code === 'dimensional_mismatch',
+            ).length,
+          ).toBeGreaterThan(0)
+        }
+      })
+
+      // esm-spec §4.8.3: a unary negation of a literal counts as a literal, so
+      // `T + -(273.15)` is Kelvin exactly as `T + -273.15` is — at any depth of
+      // negation, for an integer as well as a float, and in `min`/`max`.
+      describe('negated literals', () => {
+        const neg = (e: Expression): Expression => ({ op: '-', args: [e] })
+        const mismatches = (r: ReturnType<typeof checkDimensions>) =>
+          r.diagnostics.filter((d) => d.code === 'dimensional_mismatch')
+
+        for (const [label, lit] of [
+          ['float', 273.15],
+          ['integer', 273],
+          ['nested', neg(273.15)],
+        ] as const) {
+          it(`is neutral in +, - and min (${label})`, () => {
+            const bindings = createUnitBindings({ T: 'K' })
+            for (const op of ['+', '-', 'min']) {
+              const result = checkDimensions({ op, args: ['T', neg(lit)] }, bindings)
+              expect(mismatches(result)).toEqual([])
+              expect(dimsOf(result)).toEqual({ K: 1 })
+            }
+          })
+        }
+
+        it('is otherwise as indeterminate as a bare literal', () => {
+          const bindings = createUnitBindings({ x: 'm' })
+          expect(checkDimensions(neg(1), bindings).dimensions).toBeNull()
+          expect(
+            checkDimensions({ op: '+', args: [neg(1), neg(2)] }, bindings).dimensions,
+          ).toBeNull()
+          expect(checkDimensions({ op: '*', args: [neg(2), 'x'] }, bindings).dimensions).toBeNull()
+        })
+
+        it('still checks a negated declared quantity', () => {
+          const bindings = createUnitBindings({ x: 'm', y: 'kg' })
+          const result = checkDimensions({ op: '+', args: ['x', neg('y')] }, bindings)
+          expect(mismatches(result)).toHaveLength(1)
+        })
       })
 
       it('makes a product involving an un-annotated constant indeterminate', () => {
@@ -793,7 +899,7 @@ describe('Unit parsing and dimensional analysis', () => {
   })
 
   describe('Cross-binding units fixtures (gt-gtf)', () => {
-    // The three units_*.esm files in tests/valid/ are shared across
+    // The units_*.esm files in tests/valid/ are shared across
     // Julia/Python/Rust/TypeScript/Go and exist specifically to drive
     // cross-binding agreement on units handling.
     //
@@ -802,7 +908,14 @@ describe('Unit parsing and dimensional analysis', () => {
     // that used to stand here (which no implementation could ever fail):
     // dimensional analysis must find NO provable inconsistency in any of them,
     // and `validate()` must accept them.
-    const fixtures = ['units_conversions.esm', 'units_propagation.esm']
+    const fixtures = [
+      'units_conversions.esm',
+      'units_propagation.esm',
+      'units_negated_literal_neutral.esm',
+      'units_sum_undeterminable_operands.esm',
+      'units_ifelse_undeterminable_branch.esm',
+      'units_comparisons_and_connectives.esm',
+    ]
 
     // CORPUS CONTRADICTION — units_dimensional_analysis.esm is deliberately NOT
     // in the list above, and this is not a gap in the checker.

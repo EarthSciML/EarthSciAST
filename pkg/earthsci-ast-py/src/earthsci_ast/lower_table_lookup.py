@@ -41,8 +41,9 @@ from __future__ import annotations
 
 import copy
 import math
+from collections import OrderedDict
 from dataclasses import replace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .error_handling import ErrorCode
 from .errors import EarthSciAstError
@@ -58,7 +59,10 @@ from .esm_types import (
 )
 from .expr_walk import any_child, map_children
 
-__all__ = ["TableLookupError", "lower_table_lookups"]
+if TYPE_CHECKING:
+    from .flatten import FlattenedEquation, FlattenedSystem, FlattenedVariable
+
+__all__ = ["TableLookupError", "lower_flattened_table_lookups", "lower_table_lookups"]
 
 #: The op this pass consumes.
 _TABLE_LOOKUP = "table_lookup"
@@ -129,6 +133,100 @@ def lower_table_lookups(file: EsmFile) -> EsmFile:
         return file
     events = [rebuilt_events.get(id(e), e) for e in file.events] if rebuilt_events else file.events
     return replace(file, models=models, reaction_systems=systems, events=events)
+
+
+def lower_flattened_table_lookups(flat: FlattenedSystem) -> FlattenedSystem:
+    """The :func:`lower_table_lookups` pass for an already-flattened system.
+
+    :func:`earthsci_ast.problem.esm_problem` accepts a ``FlattenedSystem`` as
+    well as a document, and ``flatten`` carries ``function_tables`` through
+    precisely so that carrier stays runnable (the Julia binding lowers the same
+    carrier). Pure, like the document pass: ``flat`` comes back as the very same
+    object when it declares no tables or nothing lowered.
+
+    The §6.3.1 subset maps (``algebraic_variables``, ``brownian_parameters``,
+    ``discrete_parameters``) hold the SAME variable objects as the maps they
+    classify, so a variable whose update was rewritten is re-linked into them by
+    name; a subset still holding the pre-lowering object would make the
+    flattened system disagree with itself about that variable.
+    """
+    tables = flat.function_tables or {}
+    if not tables:
+        return flat
+
+    equations = _lower_flattened_equations(flat.equations, tables)
+    # A flattened system has no aggregated event view to re-point.
+    continuous = _lower_continuous_events(flat.continuous_events, tables, {})
+    discrete = _lower_discrete_events(flat.discrete_events, tables, {})
+    field_ics = [(name, _lower_expr(rhs, tables)) for name, rhs in flat.field_ics]
+    if all(new is old for (_, new), (_, old) in zip(field_ics, flat.field_ics)):
+        field_ics = flat.field_ics
+    states = _lower_variable_updates(flat.state_variables, tables)
+    params = _lower_variable_updates(flat.parameters, tables)
+    observed = _lower_variable_updates(flat.observed_variables, tables)
+
+    if (
+        equations is flat.equations
+        and continuous is flat.continuous_events
+        and discrete is flat.discrete_events
+        and field_ics is flat.field_ics
+        and states is flat.state_variables
+        and params is flat.parameters
+        and observed is flat.observed_variables
+    ):
+        return flat
+
+    def relink(
+        subset: OrderedDict[str, FlattenedVariable], parent: OrderedDict[str, FlattenedVariable]
+    ) -> OrderedDict[str, FlattenedVariable]:
+        return OrderedDict((k, parent.get(k, v)) for k, v in subset.items())
+
+    return replace(
+        flat,
+        equations=equations,
+        continuous_events=continuous,
+        discrete_events=discrete,
+        field_ics=field_ics,
+        state_variables=states,
+        parameters=params,
+        observed_variables=observed,
+        algebraic_variables=relink(flat.algebraic_variables, states),
+        brownian_parameters=relink(flat.brownian_parameters, params),
+        discrete_parameters=relink(flat.discrete_parameters, params),
+        # The memoized shape inference is a function of the equations.
+        _infer_shapes_cache=None,
+    )
+
+
+def _lower_flattened_equations(
+    eqs: list[FlattenedEquation], tables: dict[str, FunctionTable]
+) -> list[FlattenedEquation]:
+    out: list[FlattenedEquation] = []
+    changed = False
+    for eq in eqs:
+        lhs = _lower_expr(eq.lhs, tables)
+        rhs = _lower_expr(eq.rhs, tables)
+        if lhs is eq.lhs and rhs is eq.rhs:
+            out.append(eq)
+        else:
+            # Blank display strings are re-rendered from the lowered trees.
+            out.append(replace(eq, lhs=lhs, rhs=rhs, lhs_str="", rhs_str=""))
+            changed = True
+    return out if changed else eqs
+
+
+def _lower_variable_updates(
+    variables: OrderedDict[str, FlattenedVariable], tables: dict[str, FunctionTable]
+) -> OrderedDict[str, FlattenedVariable]:
+    out = variables
+    for name, var in variables.items():
+        update = _lower_update(var.update, tables)
+        if update is var.update:
+            continue
+        if out is variables:
+            out = OrderedDict(variables)
+        out[name] = replace(var, update=update)
+    return out
 
 
 # ---------------------------------------------------------------------------

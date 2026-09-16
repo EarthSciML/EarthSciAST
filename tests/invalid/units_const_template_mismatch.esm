@@ -1,0 +1,61 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "UnitsConstTemplateMismatch",
+    "description": "Invalid: the to_ms template's body carries a unit-bearing const, so a call has the unit m/s through its expansion (esm-spec §4.8.5 item 5). speed_kg is declared kg, a provable mismatch.",
+    "authors": [
+      "Chris Tessum with Claude"
+    ],
+    "created": "2026-09-14T00:00:00Z"
+  },
+  "models": {
+    "BadUnitsModel": {
+      "expression_templates": {
+        "to_ms": {
+          "params": [
+            "x"
+          ],
+          "body": {
+            "op": "*",
+            "args": [
+              "x",
+              {
+                "op": "const",
+                "args": [],
+                "value": 0.44704,
+                "units": "m*h/(mi*s)"
+              }
+            ]
+          },
+          "description": "Convert a speed in mi/h to m/s. The constant's declared units carry the conversion, so every call is dimensionally checkable."
+        }
+      },
+      "variables": {
+        "speed_mph": {
+          "type": "parameter",
+          "units": "mi/h",
+          "default": 30.0,
+          "description": "Link average speed in miles per hour"
+        },
+        "speed_kg": {
+          "type": "unknown",
+          "units": "kg",
+          "description": "Invalid: declared kg, defined by a template call whose expansion is m/s"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "speed_kg",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "to_ms",
+            "bindings": {
+              "x": "speed_mph"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

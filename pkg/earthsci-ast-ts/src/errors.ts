@@ -131,6 +131,11 @@ export const ERROR_CODES = {
   //   reported here. Distinct from `circular_dependency`, which is a cycle among
   //   MODELS reached through scoped references.
   OBSERVED_CYCLE: 'observed_cycle',
+  // `ambiguous_output_name` — an output name that matches no variable exactly
+  //   and whose last dotted segment is shared by more than one variable
+  //   (CONFORMANCE_SPEC §5.17.4). This binding has no output derivation; the
+  //   entry exists because the code vocabulary is uniform across bindings.
+  AMBIGUOUS_OUTPUT_NAME: 'ambiguous_output_name',
   // `recurrence_not_wellfounded` — a causal self-read (esm-spec §4.3.1.1) that
   //   is not strictly earlier along exactly ONE of its aggregate's output axes:
   //   a read provably at the same cell or later on its axis (`k`, `k+c`), an
@@ -158,6 +163,19 @@ export const ERROR_CODES = {
   //   WINS, not the order cells are EVALUATED in, and a region's value
   //   expression is evaluated once for the whole region.
   RECURRENCE_UNSUPPORTED_FORM: 'recurrence_unsupported_form',
+  // `indexed_definition_unsupported_form` — a bare-index observed definition
+  //   `index(V, k…) ~ rhs` outside the runnable form of esm-spec §6.3.1 (the RHS
+  //   is not a `faq` whose `output_idx` names the subscripts in order). Raised
+  //   by the simulating bindings when a model is built; this binding does not
+  //   simulate and never raises it. It is registered because the §9.6.6 code
+  //   table is cross-language uniform.
+  INDEXED_DEFINITION_UNSUPPORTED_FORM: 'indexed_definition_unsupported_form',
+  // `unsupported_construct` — a continuous or discrete event, or an implicit
+  //   equation (an expression LHS), reached an evaluator that cannot run it
+  //   (esm-spec §9.6.6).
+  //   This binding does not simulate, so it never raises it; the entry keeps
+  //   the §9.6.6 vocabulary uniform across the five registries.
+  UNSUPPORTED_CONSTRUCT: 'unsupported_construct',
   EQUATION_COUNT_MISMATCH: 'equation_count_mismatch',
   // `event_affects_parameter` — an event `affects` LHS names a PARAMETER
   //   (esm-spec §5.4). From 1.0.0 events affect UNKNOWNS ONLY: a parameter that
@@ -213,6 +231,10 @@ export const ERROR_CODES = {
   //   unreachable and every reader silently receives the implicit symbol
   //   instead — the simulation clock in place of the declared quantity.
   RESERVED_VARIABLE_NAME: 'reserved_variable_name',
+  // Inline array data as the `default` of a variable that declares no `shape`
+  //   (esm-spec §6.3). Inline array data is a SHAPED variable's value, so with
+  //   no shape there is nothing for the array to fill.
+  ARRAY_DEFAULT_WITHOUT_SHAPE: 'array_default_without_shape',
   UNDEFINED_PARAMETER: 'undefined_parameter',
   UNDEFINED_SPECIES: 'undefined_species',
   UNDEFINED_SYSTEM: 'undefined_system',
@@ -254,6 +276,7 @@ export const ERROR_CODES = {
   // ---- solver hints: §2.2 document-scoped solver block (solver.ts;
   //      EsmMachineryError code) ----
   SOLVER_VERSION_TOO_OLD: 'solver_version_too_old',
+  CONST_UNITS_VERSION_TOO_OLD: 'const_units_version_too_old',
 
   // ---- templates: §9.6 expression-template lowering + §9.7 template-library
   //      imports (lower-expression-templates.ts, template-imports.ts;
@@ -293,6 +316,7 @@ export const ERROR_CODES = {
   TEMPLATE_IMPORT_VERSION_TOO_OLD: 'template_import_version_too_old',
   TEMPLATE_INJECT_TARGET_NOT_COMPONENT: 'template_inject_target_not_component',
   TEMPLATE_INJECT_TARGET_UNKNOWN: 'template_inject_target_unknown',
+  TEMPLATE_LIBRARY_ILLEGAL_PAYLOAD: 'template_library_illegal_payload',
 
   // ---- templates: geometry / makearray structural folds (also emitted from
   //      lower-expression-templates.ts during template lowering) ----

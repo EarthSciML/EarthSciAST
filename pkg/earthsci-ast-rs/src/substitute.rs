@@ -64,7 +64,9 @@ fn map_exprs_in_affect(
     }
 }
 
-fn map_exprs_in_discrete_event(
+/// `pub(crate)`, like [`map_exprs_in_continuous_event`], because the §9.5.3
+/// `table_lookup` lowering rewrites a flattened system's events too.
+pub(crate) fn map_exprs_in_discrete_event(
     event: &DiscreteEvent,
     m: &mut dyn FnMut(&Expr) -> Expr,
 ) -> DiscreteEvent {
@@ -82,7 +84,7 @@ fn map_exprs_in_discrete_event(
     }
 }
 
-fn map_exprs_in_continuous_event(
+pub(crate) fn map_exprs_in_continuous_event(
     event: &ContinuousEvent,
     m: &mut dyn FnMut(&Expr) -> Expr,
 ) -> ContinuousEvent {

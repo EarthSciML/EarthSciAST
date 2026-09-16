@@ -2217,6 +2217,49 @@ def _check_reserved_declaration_names(data: dict[str, Any], errors: list[str]) -
             scan(rs["parameters"], f"/reaction_systems/{rname}/parameters", owner, "parameter")
 
 
+def _check_array_default_without_shape(data: dict[str, Any], errors: list[str]) -> None:
+    """``array_default_without_shape``: inline array data as the ``default`` of a
+    variable that declares no ``shape`` (esm-spec §6.3).
+
+    Inline array data is a SHAPED variable's value: its nesting is matched
+    against the declared ``shape``. With no shape (omitted, null or empty) there
+    is nothing for the array to fill and no scalar reading of it, so the
+    document is malformed. Rejected here, at the declaration, rather than left
+    to a runtime that would have to drop the parameter or fabricate a value.
+    Inline subsystems are models, so they are walked too.
+    """
+
+    def scan_model(m: Any, pointer: str, owner: str) -> None:
+        if not isinstance(m, dict):
+            return
+        variables = m.get("variables")
+        if isinstance(variables, dict):
+            for name in sorted(variables, key=str):
+                var = variables[name]
+                if not isinstance(var, dict) or not isinstance(var.get("default"), list):
+                    continue
+                if var.get("shape"):
+                    continue
+                errors.append(
+                    (
+                        f"{pointer}/variables/{name}/default",
+                        f"{owner} variable '{name}' has inline array data as its default "
+                        "but declares no shape; inline array data is a shaped variable's "
+                        "value (esm-spec §6.3)",
+                        {"variable": str(name), "variable_type": str(var.get("type"))},
+                    )
+                )
+        subsystems = m.get("subsystems")
+        if isinstance(subsystems, dict):
+            for sname in sorted(subsystems, key=str):
+                scan_model(subsystems[sname], f"{pointer}/subsystems/{sname}", f"Model '{sname}'")
+
+    models = data.get("models")
+    if isinstance(models, dict):
+        for mname in sorted(models, key=str):
+            scan_model(models[mname], f"/models/{mname}", f"Model '{mname}'")
+
+
 def _check_event_affects_parameter(data: dict[str, Any], errors: list[str]) -> None:
     """``event_affects_parameter``: an event ``affects`` LHS naming a PARAMETER.
 
@@ -2757,6 +2800,61 @@ _DECLARED_UNIT_SITES = (
     ("reaction_systems", "species"),
     ("reaction_systems", "parameters"),
 )
+
+
+def _check_const_unit_strings(data: dict[str, Any], errors: list) -> None:
+    """Flag a declared ``const`` unit string that does not resolve (esm-spec
+    §4.8.5 item 2), at the containing expression field
+    (``/models/<M>/equations/<i>/lhs`` or ``/rhs``).
+
+    This runs before template references are expanded, so a call is read
+    through the body of the template it names (§4.8.5 item 5): a ``const`` in
+    that body belongs to every equation that calls it, as it does once the call
+    is expanded."""
+    try:
+        from .units import unresolvable_const_units
+    except ImportError:
+        return
+    for mname, model in (data.get("models") or {}).items():
+        registry = model.get("expression_templates") or {}
+        for i, eq in enumerate(model.get("equations") or []):
+            if not isinstance(eq, dict):
+                continue
+            for field in ("lhs", "rhs"):
+                side = [eq.get(field), *_called_template_bodies(eq.get(field), registry)]
+                for units in unresolvable_const_units(side):
+                    errors.append(
+                        (
+                            f"/models/{mname}/equations/{i}/{field}",
+                            f"Unit string '{units}' is not a recognised unit",
+                            {"units": units},
+                        )
+                    )
+
+
+def _called_template_bodies(expr: Any, registry: dict[str, Any]) -> list[Any]:
+    """The body of every template ``expr`` calls through
+    ``apply_expression_template``, directly or from inside another called body,
+    each once."""
+    bodies: list[Any] = []
+    seen: set[str] = set()
+    stack = [expr]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, list):
+            stack.extend(node)
+            continue
+        if not isinstance(node, dict):
+            continue
+        name = node.get("name")
+        if node.get("op") == "apply_expression_template" and isinstance(name, str):
+            template = registry.get(name)
+            if name not in seen and isinstance(template, dict):
+                seen.add(name)
+                bodies.append(template.get("body"))
+                stack.append(template.get("body"))
+        stack.extend(node.values())
+    return bodies
 
 
 def _check_unparseable_units(data: dict[str, Any], errors: list) -> None:
@@ -3358,6 +3456,12 @@ def _validate_structural(data: dict[str, Any], file_path=None) -> None:
         "reserved_variable_name",
         lambda sub: _check_reserved_declaration_names(data, sub),
     )
+    # Inline array data is a shaped variable's value (esm-spec §6.3); on a
+    # variable with no `shape` it has nothing to fill.
+    collect(
+        "array_default_without_shape",
+        lambda sub: _check_array_default_without_shape(data, sub),
+    )
     collect("system_kind_mismatch", lambda sub: _check_system_kind(data, sub))
     collect("invalid_metadata_format", lambda sub: _check_metadata_formats(data, sub))
     collect("invalid_temporal_resolution", lambda sub: _check_temporal_resolution(data, sub))
@@ -3367,6 +3471,7 @@ def _validate_structural(data: dict[str, Any], file_path=None) -> None:
     # findings with different codes (esm-spec §4.8.4) — the first tells the author
     # to fix a spelling, the second to fix the physics.
     collect("unit_parse_error", lambda sub: _check_unparseable_units(data, sub))
+    collect("unit_parse_error", lambda sub: _check_const_unit_strings(data, sub))
     collect("unit_inconsistency", lambda sub: _check_unit_consistency(data, tables, sub))
     collect("unit_inconsistency", lambda sub: _check_default_units_consistency(data, sub))
     collect("unit_inconsistency", lambda sub: _check_conversion_factor_consistency(data, sub))

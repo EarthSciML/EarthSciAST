@@ -833,6 +833,22 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
     # them is unreachable: the implicit symbol shadows it, not the other way
     # round. Issue #200 — a fuel time-lag constant declared as `t` validated
     # clean, then silently became the simulation clock (`log(t) = -inf` at t=0).
+    # esm-spec §6.3 — inline array data is only a SHAPED variable's value. On a
+    # variable with no `shape` there is nothing for the array to fill.
+    @testset "array_default_without_shape (§6.3)" begin
+        fixture_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid",
+                                "array_default_without_shape.esm")
+        if _require_fixture(fixture_path)
+            result = EarthSciAST.validate(EarthSciAST.load_path(fixture_path))
+            @test !result.is_valid
+            found = sort([(e.path, e.details["variable_type"]) for e in result.structural_errors
+                          if e.error_type == "array_default_without_shape"])
+            # The shaped control `w` carries the same data legally and is not reported.
+            @test found == [("/models/Decay/subsystems/Inner/variables/x/default", "unknown"),
+                            ("/models/Decay/variables/k/default", "parameter")]
+        end
+    end
+
     @testset "reserved_variable_name (§4.9.1.1)" begin
         _reserved(result) = filter(e -> e.error_type == "reserved_variable_name",
                                    result.structural_errors)

@@ -20,13 +20,12 @@
 #   * `override_keys` — a caller's `initial_conditions` key naming the dead
 #     spelling addresses the survivor instead of being dropped so the state runs
 #     from its declared default.
-#   * `output_selection` — a name-keyed READ of a finished run. This binding is
-#     EXCLUDED from that surface and asserts its own exclusion below: the result
-#     is a SciML `ODESolution` indexed through SciMLBase's own `SymbolCache`, so
-#     the package fills the name list (`_symbol_cache`) but does not own the
-#     lookup. What it DOES own — the problem-side `observed_field(prob, name)`
-#     — resolves through `EsmProblem.merged_renames`, and that is pinned here
-#     directly.
+#   * `output_selection` — a name-keyed READ of a finished run. The result is a
+#     SciML `ODESolution`, whose SymbolicIndexingInterface system wraps the name
+#     cache (`_MergedRenameIndex`), so the deleted spelling reads the survivor's
+#     row while `variable_symbols` still lists only the surviving names. The
+#     SciMLBase entry points a caller reads a solution through are exercised on
+#     the same wrapped solution.
 #
 # Like `operator_compose_merge` the category carries no golden: what it pins is
 # REACH, asserted as structure.
@@ -37,6 +36,7 @@ using Test
 using EarthSciAST
 using JSON3
 using OrdinaryDiffEqTsit5   # the inline-test surface needs an ODE algorithm
+import SciMLBase           # solve / remake, and the SymbolicIndexingInterface it carries
 
 include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
@@ -71,10 +71,7 @@ _mrr_flatten(case) = flatten(load_path(joinpath(_MRR_DIR, String(case.path))))
         end
         @test "julia" in _MRR_MANIFEST.surfaces.flatten.bindings
         @test "julia" in _MRR_MANIFEST.surfaces.override_keys.bindings
-        # The result-object READ is out of scope HERE, and the manifest must say
-        # WHY — an exclusion with no reason is indistinguishable from a gap.
-        @test !("julia" in _MRR_MANIFEST.surfaces.output_selection.bindings)
-        @test !isempty(_MRR_MANIFEST.surfaces.output_selection.scope_excluded.julia)
+        @test "julia" in _MRR_MANIFEST.surfaces.output_selection.bindings
         @test _MRR_MANIFEST.merged_variable_renames_field.julia ==
               "FlattenMetadata.merged_variable_renames"
     end
@@ -157,6 +154,50 @@ _mrr_flatten(case) = flatten(load_path(joinpath(_MRR_DIR, String(case.path))))
             end
         end
     end
+    for case in _MRR_OUTPUT
+        @testset "$(case.id)" begin
+            # A name-keyed READ of the finished run by the deleted spelling lands
+            # on the survivor's row, and the reported variable NAMES still carry
+            # only the surviving spelling: resolving a read must not invent a
+            # name the flattened system does not declare.
+            SII = SciMLBase.SymbolicIndexingInterface
+            flat = _mrr_flatten(case)
+            prob = EarthSciAST.esm_problem(flat, (0.0, 1.0))
+            sol = SciMLBase.solve(prob, Tsit5(); saveat = 0.25)
+            dead = Symbol(String(case.read_by_name))
+            live = Symbol(String(case.same_row_as))
+            @test !isempty(sol[live])
+            @test SII.is_variable(sol, dead)
+            @test sol[dead] == sol[live]
+            names = String[String(n) for n in SII.variable_symbols(sol)]
+            @test String(live) in names
+            for gone in case.absent_from_row_names
+                @test !(String(gone) in names)
+            end
+
+            # The SciMLBase entry points a caller reads a solution through.
+            @test sol[[dead, live]] == sol[[live, live]]          # several names at once
+            @test sol[dead, 2] == sol[live, 2]
+            @test SII.getsym(sol, dead)(sol) == sol[live]
+            @test sol(0.5; idxs = dead) == sol(0.5; idxs = live)  # interpolated
+            @test sol([0.1, 0.2]; idxs = [dead]).u == sol([0.1, 0.2]; idxs = [live]).u
+            # The plot recipe's data path: it classifies each name by its
+            # timeseries, then reads the solution at a dense vector of times.
+            @test SII.get_all_timeseries_indexes(sol, dead) ==
+                  SII.get_all_timeseries_indexes(sol, live)
+            to_arrays(sym) = SciMLBase.diffeq_to_arrays(
+                sol, false, true, 50, nothing,
+                SciMLBase.interpret_vars([sym], sol), :identity, nothing)
+            @test first(to_arrays(dead)) == first(to_arrays(live))
+
+            # `remake` rebuilds the index from the remade problem and keeps it.
+            prob2 = SciMLBase.remake(prob; u0 = Dict(String(live) => 12.0))
+            sol2 = SciMLBase.solve(prob2, Tsit5(); saveat = 0.25)
+            @test sol2[dead][1] == 12.0
+            @test sol2[dead] == sol2[live]
+        end
+    end
+
     for case in _MRR_EVENTS
         @testset "$(case.id)" begin
             # Neither an event nor an `update` rule is an equation, and both

@@ -255,6 +255,50 @@ export function validateReservedModelNames(
 }
 
 /**
+ * `array_default_without_shape`: inline array data as the `default` of a
+ * variable that declares no `shape` (spec §6.3), recursing into every INLINE
+ * subsystem.
+ *
+ * Inline array data is a SHAPED variable's value — its nesting is matched
+ * against the declared shape — so with no shape (omitted, null or empty) there
+ * is nothing for the array to fill and no scalar reading of it.
+ */
+export function validateArrayDefaultsHaveShape(
+  model: Model,
+  modelPath: string,
+  owner: string,
+): StructuralError[] {
+  const errors: StructuralError[] = []
+  const variables = model.variables ?? {}
+  for (const name of Object.keys(variables).sort()) {
+    const variable = variables[name]
+    if (!variable || !Array.isArray(variable.default)) continue
+    if (Array.isArray(variable.shape) && variable.shape.length > 0) continue
+    errors.push({
+      path: `${modelPath}/variables/${name}/default`,
+      code: ERROR_CODES.ARRAY_DEFAULT_WITHOUT_SHAPE,
+      message:
+        `${owner} variable '${name}' has inline array data as its default but declares ` +
+        "no shape; inline array data is a shaped variable's value (esm-spec §6.3)",
+      details: { variable: name, variable_type: String(variable.type) },
+    })
+  }
+  const subsystems = model.subsystems ?? {}
+  for (const name of Object.keys(subsystems).sort()) {
+    const subsystem = subsystems[name]
+    if (!subsystem || !isInlineModel(subsystem)) continue
+    errors.push(
+      ...validateArrayDefaultsHaveShape(
+        subsystem,
+        `${modelPath}/subsystems/${name}`,
+        `Model '${name}'`,
+      ),
+    )
+  }
+  return errors
+}
+
+/**
  * Check reference integrity for a model — across EVERY expression-bearing field,
  * not just `equations`.
  *
