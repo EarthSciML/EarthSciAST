@@ -42,6 +42,34 @@ fn document(c_units: &str, rhs: Value) -> Value {
     })
 }
 
+/// A one-reaction system whose rate is `k + c`: the rate constant is `1/s` and
+/// `c` is dimensionless, so the rate's own operands are provably incompatible.
+/// `validate` routes only the STOICHIOMETRIC rate check to a structural error,
+/// so this inconsistency reaches no error list — the report is the only place
+/// it can surface.
+fn reaction_document(rate: Value) -> Value {
+    json!({
+        "esm": "1.0.0",
+        "metadata": { "name": "r", "description": "reaction rate report probe" },
+        "reaction_systems": { "R": {
+            "species": {
+                "A": { "units": "mol/mol", "default": 1.0 },
+                "B": { "units": "mol/mol", "default": 1.0 }
+            },
+            "parameters": {
+                "k": { "units": "1/s", "default": 1.0 },
+                "c": { "units": "mol/mol", "default": 1.0 }
+            },
+            "reactions": [ {
+                "id": "R1",
+                "substrates": [ { "species": "A", "stoichiometry": 1 } ],
+                "products": [ { "species": "B", "stoichiometry": 1 } ],
+                "rate": rate
+            } ]
+        } }
+    })
+}
+
 /// Write `doc` to a per-test file and run `esm units [--check] <file>`.
 fn esm_units(name: &str, doc: &Value, check: bool) -> (bool, String) {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("cli_units_command");
@@ -108,8 +136,9 @@ fn an_equation_with_a_literal_factor_is_reported_not_checked_naming_the_literal(
         line.contains("NOT CHECKED") && line.contains("0.44704"),
         "equation 3 multiplies by a bare literal; it must say it was not checked and why: {line}"
     );
-    // A `const` node has no dimensional rule, so equations 1 and 2 are not
-    // checked either, and the report must say so rather than calling them fine.
+    // A `const` node that declares no `units` is indeterminate, so equations 1
+    // and 2 are not checked either, and the report must say so rather than
+    // calling them fine.
     let line = equation_line(&stdout, 1);
     assert!(
         line.contains("NOT CHECKED") && line.contains("const"),
@@ -136,5 +165,46 @@ fn check_flag_passes_a_consistent_document_and_counts_unchecked_equations() {
     assert!(
         stdout.contains("2 not checked"),
         "--check must say how many equations it could not check:\n{stdout}"
+    );
+}
+
+#[test]
+fn a_provably_inconsistent_reaction_rate_is_reported_as_a_mismatch() {
+    let doc = reaction_document(json!({ "op": "+", "args": ["k", "c"] }));
+    let (_, stdout) = esm_units("reaction_rate_mismatch", &doc, false);
+    let line = stdout
+        .lines()
+        .map(str::trim)
+        .find(|l| l.starts_with("Reaction 1 rate:"))
+        .unwrap_or_else(|| panic!("no reaction rate line in:\n{stdout}"));
+    assert!(
+        line.contains("MISMATCH"),
+        "the analyser proved `1/s + dimensionless` inconsistent, so the rate was \
+         checked and failed — it must not be reported as unchecked: {line}"
+    );
+}
+
+#[test]
+fn check_flag_fails_on_a_provably_inconsistent_reaction_rate() {
+    let doc = reaction_document(json!({ "op": "+", "args": ["k", "c"] }));
+    let (ok, stdout) = esm_units("check_reaction_rate", &doc, true);
+    assert!(
+        !stdout.contains("All units are dimensionally consistent"),
+        "--check called a document with a provably inconsistent rate consistent:\n{stdout}"
+    );
+    assert!(
+        !ok,
+        "--check exited 0 on a provably inconsistent reaction rate:\n{stdout}"
+    );
+}
+
+#[test]
+fn check_flag_passes_a_consistent_reaction_system() {
+    let doc = reaction_document(json!("k"));
+    let (ok, stdout) = esm_units("check_reaction_ok", &doc, true);
+    assert!(ok, "--check failed a consistent reaction system:\n{stdout}");
+    assert!(
+        stdout.contains("Reaction rates: 1 consistent"),
+        "--check must report what it made of the reaction rates:\n{stdout}"
     );
 }

@@ -13,10 +13,10 @@ use earthsci_ast::extension::analysis::{
     find_longest_dependency_chain, find_strongly_connected_components,
 };
 use earthsci_ast::{
-    EquationDimensionVerdict, ExpressionGraphOptions, StructuralErrorCode, Unit, build_unit_env,
-    component_exists, component_graph, equation_dimension_verdict, expression_graph,
-    expression_graph_with_options, parse_unit, stoichiometric_matrix, to_json, to_json_compact,
-    validate, validate_text,
+    EquationDimensionVerdict, ExpressionGraphOptions, StructuralErrorCode, Unit, UnitError,
+    build_unit_env, component_exists, component_graph, equation_dimension_verdict,
+    expression_graph, expression_graph_with_options, parse_unit, stoichiometric_matrix, to_json,
+    to_json_compact, validate, validate_text,
 };
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
@@ -555,46 +555,80 @@ fn analyze_reaction_system_units(
                 rs.species.len()
             );
 
-            // The stoichiometric rate check lives in `validate`; its findings are
-            // keyed by the reaction's pointer.
-            let env: HashMap<String, Unit> = rs
-                .species
-                .iter()
-                .map(|(name, s)| (name, &s.units))
-                .chain(rs.parameters.iter().map(|(name, p)| (name, &p.units)))
-                .filter_map(|(name, units)| {
-                    let unit = parse_unit(units.as_deref()?).ok()?;
-                    Some((name.clone(), unit))
-                })
-                .collect();
-            for (i, reaction) in rs.reactions.iter().enumerate() {
-                let path = format!("/reaction_systems/{rs_id}/reactions/{i}");
-                let mismatches: Vec<&str> = validation
-                    .structural_errors
-                    .iter()
-                    .filter(|e| {
-                        e.path == path && matches!(e.code, StructuralErrorCode::UnitInconsistency)
-                    })
-                    .map(|e| e.message.as_str())
-                    .collect();
-                if !mismatches.is_empty() {
-                    println!(
-                        "  Reaction {} rate: MISMATCH — {}",
-                        i + 1,
-                        mismatches.join("; ")
-                    );
-                    continue;
-                }
-                match Unit::propagate(&reaction.rate, &env) {
-                    Ok(_) => println!(
+            for (i, verdict) in reaction_rate_verdicts(rs_id, rs, validation) {
+                match verdict {
+                    RateVerdict::Consistent => println!(
                         "  Reaction {} rate: no stoichiometric mismatch found",
                         i + 1
                     ),
-                    Err(e) => println!("  Reaction {} rate: NOT CHECKED — {e}", i + 1),
+                    RateVerdict::Mismatch(message) => {
+                        println!("  Reaction {} rate: MISMATCH — {message}", i + 1);
+                    }
+                    RateVerdict::NotChecked(reason) => {
+                        println!("  Reaction {} rate: NOT CHECKED — {reason}", i + 1);
+                    }
                 }
             }
         }
     }
+}
+
+/// The dimensional analyser's verdict on one reaction's rate expression.
+enum RateVerdict {
+    /// The rate's dimension resolved and no stoichiometric mismatch was found.
+    Consistent,
+    /// A provable mismatch: either the stoichiometric one `validate` reports, or
+    /// an inconsistency between the rate expression's own operands.
+    Mismatch(String),
+    /// The rate's dimension could not be determined, so nothing was compared.
+    NotChecked(String),
+}
+
+/// Judge every reaction's rate in `rs`, paired with its 0-based index.
+///
+/// The stoichiometric rate check lives in `validate`; its findings are keyed by
+/// the reaction's JSON Pointer, so they are read back out of `validation`
+/// rather than recomputed. A rate whose own operands are provably incompatible
+/// is a MISMATCH too — the analyser did reach a verdict — and only an
+/// undeterminable dimension is "not checked".
+fn reaction_rate_verdicts(
+    rs_id: &str,
+    rs: &earthsci_ast::ReactionSystem,
+    validation: &earthsci_ast::ValidationResult,
+) -> Vec<(usize, RateVerdict)> {
+    let env: HashMap<String, Unit> = rs
+        .species
+        .iter()
+        .map(|(name, s)| (name, &s.units))
+        .chain(rs.parameters.iter().map(|(name, p)| (name, &p.units)))
+        .filter_map(|(name, units)| {
+            let unit = parse_unit(units.as_deref()?).ok()?;
+            Some((name.clone(), unit))
+        })
+        .collect();
+    rs.reactions
+        .iter()
+        .enumerate()
+        .map(|(i, reaction)| {
+            let path = format!("/reaction_systems/{rs_id}/reactions/{i}");
+            let mismatches: Vec<&str> = validation
+                .structural_errors
+                .iter()
+                .filter(|e| {
+                    e.path == path && matches!(e.code, StructuralErrorCode::UnitInconsistency)
+                })
+                .map(|e| e.message.as_str())
+                .collect();
+            if !mismatches.is_empty() {
+                return (i, RateVerdict::Mismatch(mismatches.join("; ")));
+            }
+            match Unit::propagate(&reaction.rate, &env) {
+                Ok(_) => (i, RateVerdict::Consistent),
+                Err(UnitError::DimensionMismatch(message)) => (i, RateVerdict::Mismatch(message)),
+                Err(e) => (i, RateVerdict::NotChecked(e.to_string())),
+            }
+        })
+        .collect()
 }
 
 fn analyze_expression_optimization(esm_file: &earthsci_ast::EsmFile) {
@@ -2957,18 +2991,10 @@ fn run_units(file: PathBuf, check: bool) -> Result<(), Box<dyn std::error::Error
             })
             .collect();
 
-        if !unit_errors.is_empty() {
-            println!("Unit errors:");
-            for error in &unit_errors {
-                println!("  ✗ {}: {}", error.path, error.message);
-            }
-        }
-        if !validation_result.unit_warnings.is_empty() {
-            println!("Unit warnings:");
-            for warning in &validation_result.unit_warnings {
-                println!("  ⚠ {}", warning.message);
-            }
-        }
+        let mut error_lines: Vec<String> = unit_errors
+            .iter()
+            .map(|e| format!("{}: {}", e.path, e.message))
+            .collect();
 
         let (mut consistent, mut mismatched, mut not_checked) = (0, 0, 0);
         for model in esm_file.models.iter().flat_map(|m| m.values()) {
@@ -2980,14 +3006,57 @@ fn run_units(file: PathBuf, check: bool) -> Result<(), Box<dyn std::error::Error
                 }
             }
         }
+
+        // Reaction rates are judged here too. `validate` routes only the
+        // STOICHIOMETRIC rate check to a structural error, so a rate whose own
+        // operands are provably incompatible reaches no error list — and
+        // reporting it in the reaction report while `--check` calls the document
+        // consistent would be the same wrong-way-round confidence #303 is about.
+        let (mut rates_ok, mut rates_bad, mut rates_unchecked) = (0, 0, 0);
+        for (rs_id, rs) in esm_file.reaction_systems.iter().flat_map(|m| m.iter()) {
+            for (i, verdict) in reaction_rate_verdicts(rs_id, rs, &validation_result) {
+                match verdict {
+                    RateVerdict::Consistent => rates_ok += 1,
+                    RateVerdict::Mismatch(message) => {
+                        rates_bad += 1;
+                        let line = format!("/reaction_systems/{rs_id}/reactions/{i}: {message}");
+                        if !error_lines.contains(&line) {
+                            error_lines.push(line);
+                        }
+                    }
+                    RateVerdict::NotChecked(_) => rates_unchecked += 1,
+                }
+            }
+        }
+
+        if !error_lines.is_empty() {
+            println!("Unit errors:");
+            for line in &error_lines {
+                println!("  ✗ {line}");
+            }
+        }
+        if !validation_result.unit_warnings.is_empty() {
+            println!("Unit warnings:");
+            for warning in &validation_result.unit_warnings {
+                println!("  ⚠ {}", warning.message);
+            }
+        }
+
         println!(
             "Equations: {consistent} consistent, {mismatched} mismatched, {not_checked} not checked"
         );
+        if rates_ok + rates_bad + rates_unchecked > 0 {
+            println!(
+                "Reaction rates: {rates_ok} consistent, {rates_bad} mismatched, {rates_unchecked} not checked"
+            );
+        }
 
-        if !unit_errors.is_empty() {
+        // The exit status follows the verdicts this command just printed, not
+        // only `validate`'s error list, so the two can never disagree.
+        if !error_lines.is_empty() || mismatched > 0 || rates_bad > 0 {
             return Err(fail_silent());
         }
-        if not_checked == 0 {
+        if not_checked == 0 && rates_unchecked == 0 {
             println!("✓ All units are dimensionally consistent");
         } else {
             println!(

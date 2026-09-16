@@ -1562,8 +1562,8 @@ pub enum EquationDimensionVerdict {
 ///
 /// A `Consistent` verdict is only returned when the comparison actually ran, so
 /// an equation skipped because of an indeterminate operand — a bare literal in a
-/// product, a `const` node, a variable with no declared units — is never
-/// reported as fine.
+/// product, a `const` node that declares no `units`, a variable with no declared
+/// units — is never reported as fine.
 pub fn equation_dimension_verdict(
     eq: &Equation,
     env: &HashMap<String, Unit>,
