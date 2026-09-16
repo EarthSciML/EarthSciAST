@@ -3,6 +3,7 @@ package esm
 import (
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -370,6 +371,29 @@ func TestRecurrenceRejectedShapes(t *testing.T) {
 			wantOneRecurrenceError(t, recurrenceFindings(t, recurrenceTestFile(4, tc.rhs)),
 				tc.wantCode, rhsPath)
 		})
+	}
+}
+
+// TestRecurrenceDataLagNamesTheContraction pins the guidance the not-affine
+// refusal carries. `index(s, k - index(lag, k))` reads its lag from DATA:
+// `lag[k]` is a value, not a symbol with a range, so the index is not affine in
+// `k` and the refusal is correct. It is also the expression an author porting a
+// data-chained model writes, so the message has to name the contraction that
+// does work.
+func TestRecurrenceDataLagNamesTheContraction(t *testing.T) {
+	lagRead := ExprNode{Op: opIndex, Args: []any{"lag", "k"}}
+	file := recurrenceTestFile(4, stepsAggregate(guarded(
+		selfRead(ExprNode{Op: "-", Args: []any{"k", lagRead}}))))
+	got := recurrenceFindings(t, file)
+	wantOneRecurrenceError(t, got, codeRecurrenceNotWellfounded, "/models/M/equations/0/rhs")
+	for _, want := range []string{
+		"not affine in its frame symbol",
+		"If the offset is read from data",
+		"index(s, k - a)",
+	} {
+		if !strings.Contains(got[0].Message, want) {
+			t.Errorf("message lacks %q: %s", want, got[0].Message)
+		}
 	}
 }
 

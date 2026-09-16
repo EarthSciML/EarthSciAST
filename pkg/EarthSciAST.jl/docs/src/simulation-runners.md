@@ -123,23 +123,29 @@ function registry) op set per `esm-spec` §4 / §9.2:
     author, not an evaluator bug**. The built-in `datetime.*` / `interp.*` set
     honors this contract.
 
-Array-typed ops (`faq`, `makearray`, `broadcast`, `reshape`,
-`transpose`, `concat`, `index`, `bc`) and PDE ops (`grad`, `div`,
-`laplacian`) raise `E_TREEWALK_UNSUPPORTED_OP` on encounter — they must be
-discretized and scalarized **before** `build_evaluator`. The `D` op is only
+Array-typed ops outside a position that consumes them (`faq`, `makearray`,
+`reshape`, `transpose`, `concat`) and the value-invention ops (`skolem`,
+`rank`, `distinct`, `argmin`, `argmax`) are refused while the evaluator is
+built with `unevaluable_operator`; PDE ops (`grad`, `div`, `laplacian`) are
+refused with `unlowered_operator` (esm-spec §9.6.6). Either way they must be
+discretized, scalarized or materialized **before** `build_evaluator`. The `D` op is only
 permitted in equation LHS (the time-derivative marker).
 
 ### Errors
 
 [`TreeWalkError`](@ref) is raised when the walker encounters an
-unsupported construct. Codes are stable (`E_TREEWALK_*`):
+unsupported construct. Codes are stable (`E_TREEWALK_*`, plus the two
+cross-binding operator codes):
 
 | Code | Cause |
 |---|---|
-| `E_TREEWALK_UNSUPPORTED_OP` | Op cannot be evaluated by the scalar walker (typically a PDE / array op that should have been rewritten by `discretize`). |
+| `unevaluable_operator` | An evaluable-core op the walker has no rule for (an array or value-invention op an earlier stage should have eliminated). Cross-binding code, raised at build (esm-spec §9.6.6). |
+| `unlowered_operator` | A rewrite-target op (`grad`, a spatial or right-hand-side `D`, a user op) that no rewrite rule lowered. Cross-binding code (esm-spec §9.6.6). |
+| `E_TREEWALK_UNSUPPORTED_OP` | An internal pipeline defect: the removed `call` op, or an `index` that reached compilation unresolved. |
 | `E_TREEWALK_UNSUPPORTED_SHAPE` | A variable still has `shape` set — the model is not yet scalarized. |
 | `E_TREEWALK_UNSUPPORTED_BROWNIAN` | Brownian variables are not supported by the deterministic ODE walker. |
-| `E_TREEWALK_UNSUPPORTED_EQUATION` | Equation LHS is neither `D(state, wrt=t)` nor an observed-variable assignment (algebraic constraints fall outside the ODE walker). |
+| `unsupported_construct` | The model declares a continuous event, a discrete event, or an implicit equation (an expression LHS such as `s - f(s) ~ 0`). The walker runs none of them; use the ModelingToolkit runner, which does (esm-spec §9.6.6). |
+| `E_TREEWALK_UNSUPPORTED_EQUATION` | Any other equation LHS that is neither `D(state, wrt=t)` nor an observed-variable assignment. |
 | `E_TREEWALK_UNBOUND_VARIABLE` | Free variable is neither a state, parameter, nor `t`. |
 | `E_TREEWALK_DUPLICATE_DERIVATIVE` | More than one equation defines `D(state, wrt=t)` for the same state. |
 | `E_TREEWALK_OBSERVED_CYCLE` | Observed variables form a substitution cycle. |

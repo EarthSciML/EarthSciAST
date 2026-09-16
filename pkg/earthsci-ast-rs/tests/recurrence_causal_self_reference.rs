@@ -338,6 +338,49 @@ fn non_affine_self_index_is_rejected() {
     );
 }
 
+/// `index(s, k - index(lag, k))` reads its lag from DATA: `lag[k]` is a value,
+/// not a symbol with a range, so the index is not affine in `k` and the refusal
+/// is correct. It is also the expression an author porting a data-chained model
+/// writes, so both refusals — the compile path's and the validator's — have to
+/// name the contraction that does work.
+const DATA_LAG_GUIDANCE: [&str; 2] = ["If the offset is read from data", "index(s, k - a)"];
+
+fn data_valued_lag_read() -> Value {
+    json!({ "op": "index", "args": ["s", {
+        "op": "-", "args": ["k", { "op": "index", "args": ["lag", "k"] }]
+    }] })
+}
+
+#[test]
+fn data_valued_lag_compile_refusal_names_the_contraction() {
+    let msg = probe_message(data_valued_lag_read());
+    assert!(
+        msg.contains("recurrence_not_wellfounded"),
+        "expected `recurrence_not_wellfounded`, got: {msg}"
+    );
+    for want in DATA_LAG_GUIDANCE {
+        assert!(msg.contains(want), "message lacks {want:?}: {msg}");
+    }
+}
+
+#[test]
+fn data_valued_lag_validation_refusal_names_the_contraction() {
+    let file = load_string(&doc_with_body(data_valued_lag_read())).expect("probe parses");
+    let refusals: Vec<_> = earthsci_ast::validate(&file)
+        .structural_errors
+        .into_iter()
+        .filter(|e| e.code.to_string() == "recurrence_not_wellfounded")
+        .collect();
+    assert_eq!(refusals.len(), 1, "{refusals:?}");
+    for want in DATA_LAG_GUIDANCE {
+        assert!(
+            refusals[0].message.contains(want),
+            "message lacks {want:?}: {}",
+            refusals[0].message
+        );
+    }
+}
+
 #[test]
 fn constant_self_index_is_rejected() {
     assert_probe_rejected_with(

@@ -83,7 +83,9 @@ Unitful = "1.28.0"
 julia = "1.10"
 # Test-only deps for the EarthSciIO-extension pushdown tests (test/provider_selection_test.jl).
 Blosc = "0.7"
-EarthSciIO = "0.1"
+# 0.1.4 is the first release that rechecks a warm file:// cache entry against
+# the file it came from (EarthSciML/EarthSciAST#293); older ones serve stale data.
+EarthSciIO = "0.1.4"
 JSON = "1"
 SHA = "0.7, 1"
 ZipFile = "0.10"

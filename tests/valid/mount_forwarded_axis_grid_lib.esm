@@ -1,0 +1,19 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "mount_forwarded_axis_grid_lib",
+    "description": "A column grid template library (esm-spec §9.7.1): its one axis `lev` is sized by its own metaparameter NLEV (default 64), and a component that imports it forwards its own NLEV through the import's `bindings`. tests/valid/mount_forwarded_axis_column.esm imports it at NLEV = 59, so the axis reaches that component's registry as 59, not 64. The model-less file is a first-class standalone document: the top-level `expression_templates` registry satisfies the schema on its own.",
+    "authors": ["EarthSciAST"],
+    "created": "2026-09-15T00:00:00Z",
+    "tags": ["template-library", "index_sets", "metaparameter", "mount"]
+  },
+  "metaparameters": {
+    "NLEV": { "type": "integer", "default": 64, "description": "column levels" }
+  },
+  "index_sets": {
+    "lev": { "kind": "interval", "size": "NLEV" }
+  },
+  "expression_templates": {
+    "n_lev": { "params": [], "body": "NLEV" }
+  }
+}

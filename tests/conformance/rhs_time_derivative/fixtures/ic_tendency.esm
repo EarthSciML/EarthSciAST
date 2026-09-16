@@ -1,0 +1,36 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "IcTendencyResolution",
+    "description": "esm-spec §4.2 / esm-libraries-spec §4.7.5 step 3a: a right-hand-side structural D inside an `ic` equation's right-hand side is resolved like any other. `ic(y) ~ D(x, t)` seeds y with x's tendency, so the flattened field_ics entry is `-k*x`, not a standing D node.",
+    "authors": ["EarthSciAST conformance"],
+    "created": "2026-09-14T00:00:00Z",
+    "tags": ["conformance", "esm-spec-4.2", "esm-spec-11.4", "tendency", "ic"]
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "x": { "type": "unknown", "units": "1", "default": 2.0, "description": "Exponentially decaying state" },
+        "y": { "type": "unknown", "units": "1/s", "default": 1.0, "description": "State whose initial value is x's tendency" },
+        "k": { "type": "parameter", "units": "1/s", "default": 3.0, "description": "Decay rate of x" },
+        "q": { "type": "parameter", "units": "1/s^2", "default": 3.0, "description": "Constant tendency of y" }
+      },
+      "equations": [
+        {
+          "lhs": { "op": "D", "args": ["x"], "wrt": "t" },
+          "rhs": { "op": "*", "args": [{ "op": "-", "args": ["k"] }, "x"] }
+        },
+        {
+          "lhs": { "op": "D", "args": ["y"], "wrt": "t" },
+          "rhs": "q"
+        },
+        {
+          "_comment": "The ic right-hand side names x's tendency. Resolution rewrites it to -k*x before the ic equation is classified out into field_ics.",
+          "lhs": { "op": "ic", "args": ["y"] },
+          "rhs": { "op": "D", "args": ["x"], "wrt": "t" }
+        }
+      ]
+    }
+  },
+  "domain": { "temporal": {} }
+}
