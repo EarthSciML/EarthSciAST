@@ -824,12 +824,26 @@ function _fold_elementwise_array_observeds(equations::Vector{Equation}, model::M
         return var !== nothing && !_is_array_shape(var.shape)
     end
     targets = Dict{String,ASTExpr}()
-    for (name, rhs) in defs
-        if is_array_obs(name) &&
-           ((rhs isa OpExpr && rhs.op in _WS4_FOLDABLE_ELEMENTWISE_OPS) ||
-            is_scalar_rhs(rhs))
-            targets[name] = rhs
+    # Selection runs to a FIXED POINT, because an observed that merely ALIASES
+    # another target (`chain = lit`, `lit = 1.5`) has to fold with it: the
+    # substitution below rewrites every surviving reader, so folding only the
+    # referent would leave the alias behind as a shaped observed carrying the
+    # referent's body — exactly the form this fold exists to remove, and the one
+    # the evaluator rejects as `E_TREEWALK_UNSUPPORTED_SHAPE`. An alias of a
+    # NON-target (`a = col`, a const-array producer) is untouched and stays with
+    # the bare-alias handler.
+    while true
+        grew = false
+        for (name, rhs) in defs
+            (haskey(targets, name) || !is_array_obs(name)) && continue
+            if (rhs isa OpExpr && rhs.op in _WS4_FOLDABLE_ELEMENTWISE_OPS) ||
+               is_scalar_rhs(rhs) ||
+               (rhs isa VarExpr && haskey(targets, rhs.name))
+                targets[name] = rhs
+                grew = true
+            end
         end
+        grew || break
     end
     isempty(targets) && return (equations, Set{String}())
 
