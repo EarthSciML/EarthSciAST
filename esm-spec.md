@@ -387,7 +387,7 @@ Example: `{"op": "D", "args": ["O3"], "wrt": "t"}` represents ∂O₃/∂t.
 **A right-hand-side structural `D` is a total time derivative, resolved by substitution
 (normative).** A `D` with `wrt:"t"` (or no `wrt`) appearing in a right-hand side denotes the
 **total derivative with respect to `t`** of its operand. It is **resolved during flattening**
-(the flattening algorithm of `esm-libraries-spec.md` §4.7.5) — the resolved expression replaces
+(`esm-libraries-spec.md` §4.7.5 step 3a, which fixes where in the flattening order it runs) — the resolved expression replaces
 the `D` node in the canonical flattened form — so no evaluator ever meets one, and every
 consumer of the flattened system answers alike without knowing the rule. Resolution is defined
 by structural recursion, and by nothing else:

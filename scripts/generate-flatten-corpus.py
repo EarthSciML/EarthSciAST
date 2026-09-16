@@ -281,6 +281,29 @@ CASES: list[tuple[str, str, str]] = [
         "autocatalytic_reaction",
         "simulation/autocatalytic_reaction.esm",
     ),
+    # --- right-hand-side structural `D` resolution (esm-spec §4.2) -----------
+    # esm-libraries-spec §4.7.5 step 3a. The first document carries the
+    # own-state, chained, and scoped-into-a-mechanism shapes; the second reads an
+    # `operator_compose`-MERGED tendency through a right-hand-side `D`, which is
+    # the case that pins the step's position after the coupling rules: resolving
+    # before them yields only the mechanism's term.
+    (
+        "rhs_time_derivative",
+        "tendency_resolution",
+        "conformance/rhs_time_derivative/fixtures/tendency_resolution.esm",
+    ),
+    (
+        "rhs_time_derivative",
+        "merged_tendency",
+        "conformance/rhs_time_derivative/fixtures/merged_tendency.esm",
+    ),
+    # A right-hand-side `D` inside an `ic` equation is resolved too: the step
+    # runs before `ic` equations are classified out into `field_ics`.
+    (
+        "rhs_time_derivative",
+        "ic_tendency",
+        "conformance/rhs_time_derivative/fixtures/ic_tendency.esm",
+    ),
     # A reaction system's OWN events. `ReactionSystem` carries the same
     # `continuous_events` / `discrete_events` blocks `Model` does, and Julia's
     # and Rust's flatten used to drop them: the flattened system came out with
