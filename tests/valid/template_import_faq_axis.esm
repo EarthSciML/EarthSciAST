@@ -1,0 +1,103 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "template_import_faq_axis",
+    "description": "Column model whose `faq` ranges name an index set it declares ONLY through a template import: `lev` comes from template_import_faq_axis_lib.esm via expression_template_imports and merges into this document's registry at load (esm-spec 9.7.5), so `{from: lev}` is in scope. Pins that the reference pass, run over the LOADED document (API_SPEC 5.9), resolves an imported axis in a faq range rather than calling it undeclared. Found while writing the PR #357 fixtures."
+  },
+  "models": {
+    "Column": {
+      "expression_template_imports": [
+        {
+          "ref": "./template_import_faq_axis_lib.esm"
+        }
+      ],
+      "variables": {
+        "q": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0,
+          "shape": [
+            "lev"
+          ]
+        },
+        "total": {
+          "type": "unknown",
+          "units": "1"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "k"
+            ],
+            "ranges": {
+              "k": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "q",
+                    "k"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "k"
+            ],
+            "ranges": {
+              "k": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "-",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "q",
+                    "k"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "total",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [],
+            "ranges": {
+              "k": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                "q",
+                "k"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

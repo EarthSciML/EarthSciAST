@@ -77,6 +77,10 @@ include("testutils.jl")
             "esm-spec §9.7: `expression_template_imports` is consumed at load; the call site expands",
         "tests/valid/template_import_lib.esm" =>
             "esm-spec §9.7.6: metaparameter folding sizes `index_sets.cells`",
+        "tests/valid/template_import_faq_axis.esm" =>
+            "esm-spec §9.7.5: `expression_template_imports` is consumed at load; the imported `lev` merges into the registry",
+        "tests/valid/template_import_faq_axis_lib.esm" =>
+            "esm-spec §9.7.6: metaparameter folding sizes `index_sets.lev`",
         "tests/valid/template_import_rename_lib.esm" =>
             "esm-spec §9.7.6: metaparameter folding sizes `index_sets.edges`",
         # §9.7.6 metaparameter folding.
@@ -89,6 +93,8 @@ include("testutils.jl")
             "esm-spec §9.3: `enum` op nodes are lowered to `const` integers at load",
         "tests/valid/enums_zero_and_negative.esm" =>
             "esm-spec §9.3: `enum` op nodes are lowered to `const` integers at load",
+        "tests/valid/enums_symbol_template_binding.esm" =>
+            "esm-spec §9.6.4 rule 3, §9.3: the enum-bearing template call expands and lowers to `const` at load",
         # §4.7 subsystem `{ref}` resolution.
         "tests/valid/lib_calendar_subsystem_inclusion.esm" =>
             "esm-spec §4.7: a `{ref}` subsystem is resolved and inlined at load",

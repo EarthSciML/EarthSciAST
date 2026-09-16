@@ -46,6 +46,7 @@ import {
 } from './model-checks.js'
 import { validateBroadcastFns, validateArrayBroadcastShapes } from './array-checks.js'
 import { validateObservedCycles } from './observed-checks.js'
+import { validateInlineTests } from './inline-test-checks.js'
 import { validateRecurrenceEquations } from '../recurrence.js'
 import {
   validateReactionConsistency,
@@ -356,6 +357,10 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
 
   // Validate temporal resolution in data sources
   errors.push(...validateTemporalResolution(esmFile))
+
+  // esm-spec §6.6.2, §6.6.3, §6.6.5: an inline test's assertion targets, override
+  // keys and assertion ranks.
+  errors.push(...validateInlineTests(esmFile))
 
   return errors
 }

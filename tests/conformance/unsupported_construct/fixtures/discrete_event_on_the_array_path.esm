@@ -1,0 +1,132 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "DiscreteEventOnTheArrayPath",
+    "description": "A periodic discrete event doubles the unknown `s` once per unit of time, and `s_seen` broadcasts it over an index set so the document takes the ARRAY evaluator. The event should leave s(3.5) = 8. No binding's array evaluator runs discrete events: they used to drop the event and report s = 1. Every such evaluator MUST refuse the document with `unsupported_construct` naming the construct and the evaluator (issue #264).",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "conformance",
+      "unsupported_construct",
+      "events"
+    ]
+  },
+  "index_sets": {
+    "step_rows": {
+      "kind": "interval",
+      "size": 2
+    }
+  },
+  "models": {
+    "DiscreteEventOnTheArrayPath": {
+      "tolerance": {
+        "rel": 1e-12
+      },
+      "variables": {
+        "s": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Doubles at each event; 1 at t = 0."
+        },
+        "s_seen": {
+          "type": "unknown",
+          "shape": [
+            "step_rows"
+          ],
+          "units": "1",
+          "description": "`s` broadcast over an axis, so the document takes the array evaluator."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "s"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "s"
+            ]
+          },
+          "rhs": 1.0
+        },
+        {
+          "lhs": "s_seen",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "k"
+            ],
+            "ranges": {
+              "k": {
+                "from": "step_rows"
+              }
+            },
+            "expr": "s"
+          }
+        }
+      ],
+      "discrete_events": [
+        {
+          "name": "double",
+          "trigger": {
+            "type": "periodic",
+            "interval": 1.0
+          },
+          "affects": [
+            {
+              "lhs": "s",
+              "rhs": {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "s"
+                    ]
+                  },
+                  2.0
+                ]
+              }
+            }
+          ],
+          "description": "s := 2*Pre(s), once per unit of time."
+        }
+      ],
+      "tests": [
+        {
+          "id": "a_periodic_event_folds_an_unknown",
+          "description": "Intended behaviour: three firings by t = 3.5, so s = 8 and s_seen = 8. An evaluator that cannot run the event must refuse rather than report 1.",
+          "time_span": {
+            "start": 0.0,
+            "end": 3.5
+          },
+          "assertions": [
+            {
+              "variable": "s_seen",
+              "time": 3.5,
+              "expected": 8.0,
+              "coords": {
+                "step_rows": 1
+              }
+            },
+            {
+              "variable": "s",
+              "time": 3.5,
+              "expected": 8.0
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

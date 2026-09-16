@@ -349,6 +349,16 @@ impl<'a> ModelCtx<'a> {
             // property of the equation, not of one side.)
             for (field, expr) in [("lhs", &equation.lhs), ("rhs", &equation.rhs)] {
                 self.check_refs(expr, &format!("{eq_path}/{field}"), eq_idx, errors);
+                // A declared `const` unit string that does not resolve is a
+                // defect at the containing expression field (esm-spec §4.8.5).
+                for units in crate::units::unresolvable_const_units(expr) {
+                    errors.push(StructuralError {
+                        path: format!("{eq_path}/{field}"),
+                        code: StructuralErrorCode::UnitParseError,
+                        message: format!("Unit string '{units}' is not a recognised unit"),
+                        details: serde_json::json!({ "units": units }),
+                    });
+                }
             }
 
             // Validate dimensional consistency of the equation via expression-level
@@ -1093,6 +1103,21 @@ struct StructuralAffine {
     konst: Option<(i64, i64)>,
 }
 
+/// Guidance appended to the not-affine refusal of a causal self-read. The case
+/// it names is the one authors reach for: a lag read from DATA
+/// (`k - index(lag, k)`), where `lag[k]` is a value rather than a symbol with a
+/// range. Shared by the validator and the compile path so the two refusals say
+/// the same thing.
+pub(crate) fn data_lag_guidance(var: &str, sym: &str) -> String {
+    format!(
+        "If the offset is read from data (`{sym} - index(lag, {sym})`), it has no direct \
+         spelling; contract it instead: either order the axis so the predecessor is the \
+         preceding position and the lag is the constant 1, or range a contracted index `a` \
+         over the lag's bounds and select the matching term with \
+         `ifelse(index(lag, {sym}) == a, <term reading index({var}, {sym} - a)>, 0)`."
+    )
+}
+
 fn structural_affine_in_sym(
     e: &crate::Expr,
     sym: &str,
@@ -1431,7 +1456,9 @@ fn check_recurrence_equation(
                         "index {d} of a causal self-read of '{var}' is not affine in its frame \
                          symbol '{sym}'. A self-read names a position RELATIVE to the cell being \
                          written (`{sym} - 1`, `{sym} - a`, `{sym} - a - 2`), which is what makes \
-                         the recurrence axis and its direction decidable (esm-spec §4.3.1.1)."
+                         the recurrence axis and its direction decidable (esm-spec §4.3.1.1). \
+                         {}",
+                        data_lag_guidance(var, sym)
                     ),
                     None,
                 );

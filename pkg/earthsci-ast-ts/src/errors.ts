@@ -158,6 +158,12 @@ export const ERROR_CODES = {
   //   WINS, not the order cells are EVALUATED in, and a region's value
   //   expression is evaluated once for the whole region.
   RECURRENCE_UNSUPPORTED_FORM: 'recurrence_unsupported_form',
+  // `unsupported_construct` — a continuous or discrete event, or an implicit
+  //   equation (an expression LHS), reached an evaluator that cannot run it
+  //   (esm-spec §9.6.6).
+  //   This binding does not simulate, so it never raises it; the entry keeps
+  //   the §9.6.6 vocabulary uniform across the five registries.
+  UNSUPPORTED_CONSTRUCT: 'unsupported_construct',
   EQUATION_COUNT_MISMATCH: 'equation_count_mismatch',
   // `event_affects_parameter` — an event `affects` LHS names a PARAMETER
   //   (esm-spec §5.4). From 1.0.0 events affect UNKNOWNS ONLY: a parameter that
@@ -217,6 +223,15 @@ export const ERROR_CODES = {
   UNDEFINED_SPECIES: 'undefined_species',
   UNDEFINED_SYSTEM: 'undefined_system',
   UNDEFINED_VARIABLE: 'undefined_variable',
+  // `unknown_override_key` — an inline test's `initial_conditions` or
+  //   `parameter_overrides` key that matches no declared name under the esm-spec
+  //   §6.6.2 override-key rules. Static, so a typo'd key is named at validation
+  //   rather than only when a runtime builds the test.
+  UNKNOWN_OVERRIDE_KEY: 'unknown_override_key',
+  // `assertion_rank_mismatch` — an assertion whose form does not match the
+  //   declared rank of the variable it names (esm-spec §6.6.5): pointwise on a
+  //   shaped variable, or `coords` / `reduce` on a scalar one.
+  ASSERTION_RANK_MISMATCH: 'assertion_rank_mismatch',
   UNIT_ERROR: 'unit_error',
   // A PROVABLE dimensional inconsistency (metres plus kilograms, log of a
   // dimensional quantity, an equation whose sides cannot agree).
@@ -245,6 +260,7 @@ export const ERROR_CODES = {
   // ---- solver hints: §2.2 document-scoped solver block (solver.ts;
   //      EsmMachineryError code) ----
   SOLVER_VERSION_TOO_OLD: 'solver_version_too_old',
+  CONST_UNITS_VERSION_TOO_OLD: 'const_units_version_too_old',
 
   // ---- templates: §9.6 expression-template lowering + §9.7 template-library
   //      imports (lower-expression-templates.ts, template-imports.ts;
@@ -321,8 +337,8 @@ export const ERROR_CODES = {
   // ---- enums: §9.3 load-time enum lowering (lower-enums.ts;
   //      EnumLoweringError codes) ----
   ENUM_OP_MALFORMED: 'enum_op_malformed',
-  ENUM_NOT_DECLARED: 'enum_not_declared',
-  ENUM_MEMBER_NOT_FOUND: 'enum_member_not_found',
+  UNKNOWN_ENUM: 'unknown_enum',
+  UNKNOWN_ENUM_SYMBOL: 'unknown_enum_symbol',
 
   // ---- function tables: §9.5.3 `table_lookup` lowering (lower-table-lookups.ts;
   //      TableLookupLoweringError codes, named by esm-spec §9.5.5) ----
@@ -345,6 +361,28 @@ export const ERROR_CODES = {
   UNKNOWN_CLOSED_FUNCTION: 'unknown_closed_function',
   CLOSED_FUNCTION_ARITY: 'closed_function_arity',
   CLOSED_FUNCTION_OVERFLOW: 'closed_function_overflow',
+  INTERP_AXIS_LENGTH_MISMATCH: 'interp_axis_length_mismatch',
+  INTERP_AXIS_NOT_CONST: 'interp_axis_not_const',
+  INTERP_AXIS_TOO_SHORT: 'interp_axis_too_short',
+  INTERP_NAN_IN_AXIS: 'interp_nan_in_axis',
+  INTERP_NON_MONOTONIC_AXIS: 'interp_non_monotonic_axis',
+  INTERP_TABLE_NOT_CONST: 'interp_table_not_const',
+  SEARCHSORTED_NAN_IN_TABLE: 'searchsorted_nan_in_table',
+  SEARCHSORTED_NON_MONOTONIC: 'searchsorted_non_monotonic',
+  // ---- evaluation: the tree-walking evaluator (codegen.ts; raised as
+  //      UnloweredOperatorError / EvaluatorError). `unlowered_operator` is the
+  //      esm-spec §9.6.6 code; the rest are this runner's evaluator codes. ----
+  CONST_NOT_SCALAR: 'const_not_scalar',
+  ENUM_NOT_LOWERED: 'enum_not_lowered',
+  FN_MISSING_NAME: 'fn_missing_name',
+  INVALID_EXPRESSION: 'invalid_expression',
+  UNBOUND_VARIABLE: 'unbound_variable',
+  UNLOWERED_OPERATOR: 'unlowered_operator',
+  UNSUPPORTED_OPERATOR: 'unsupported_operator',
+  // ---- flatten: FlattenError and its subclasses (flatten.ts) ----
+  CONFLICTING_DERIVATIVE: 'conflicting_derivative',
+  DIMENSION_PROMOTION: 'dimension_promotion',
+  FLATTEN_ERROR: 'flatten_error',
 
   // ---- evaluator: an evaluable-core op with no scalar rule (codegen.ts;
   //      UnevaluableOperatorError, esm-spec §9.6.6) ----

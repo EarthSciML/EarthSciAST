@@ -85,9 +85,14 @@ TRANSFORMING_FIXTURES: dict[str, str] = {
     "advection_reaction_loaded_ic_bc.esm": _EAGER_TEMPLATE_EXPANSION,
     "derivative_trailing_boundary_operands.esm": _EAGER_TEMPLATE_EXPANSION,
     "expression_templates_arrhenius.esm": _EAGER_TEMPLATE_EXPANSION,
+    "units_const_declared.esm": _EAGER_TEMPLATE_EXPANSION,
     "template_import_minimal.esm": (
         "`expression_template_imports` is consumed at load and the imported "
         "bodies are expanded into their call sites (esm-spec §9.7.6)"
+    ),
+    "template_import_faq_axis.esm": (
+        "`expression_template_imports` is consumed at load and the imported "
+        "`lev` axis merges into the document's `index_sets` (esm-spec §9.7.5)"
     ),
     "data_sources_ingest_and_select.esm": _METAPARAMETER_FOLDING,
     "makearray_empty_region_min_extent.esm": _METAPARAMETER_FOLDING,
@@ -98,6 +103,10 @@ TRANSFORMING_FIXTURES: dict[str, str] = {
     "enums_zero_and_negative.esm": (
         "`enum` nodes are lowered to `const` against the document's top-level "
         "`enums` block at load (esm-spec §9.3)"
+    ),
+    "enums_symbol_template_binding.esm": (
+        "the template call spelling the enum symbol is expanded (esm-spec §9.6.4 "
+        "rule 3) and its `enum` node lowered to `const` at load (esm-spec §9.3)"
     ),
     "lib_calendar_subsystem_inclusion.esm": _SUBSYSTEM_REF_RESOLUTION,
     "lib_solar_subsystem_inclusion.esm": _SUBSYSTEM_REF_RESOLUTION,
@@ -498,7 +507,7 @@ def test_an_attrs_key_binds_a_match_rule_param_to_the_matched_literal() -> None:
 
 def test_a_node_carrying_an_annotation_has_no_canonical_form() -> None:
     """``tests/conformance/canonical/README.md``: a node carrying any field
-    outside ``{op, args, wrt, dim, fn, name, value}`` must make
+    outside ``{op, args, wrt, dim, fn, name, value, units}`` must make
     ``canonical_json`` raise ``E_CANONICAL_UNSUPPORTED_FIELD``, and it names
     ``expect_cadence`` explicitly. The requirement was unreachable while
     ``ExprNode`` dropped both annotations at parse — the emitter never saw one.

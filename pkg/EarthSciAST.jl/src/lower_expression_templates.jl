@@ -92,6 +92,9 @@ them), so keep this tuple in sync with the raise sites: add the code to
 `ERROR_CODES` and list it here when introducing it.
 """
 const _KNOWN_DIAGNOSTIC_CODES = (
+    # esm-spec §4.8.5 item 6: declared `units` on an expression node need
+    # esm >= 1.2.0 (units.jl `reject_const_units_pre_v12`).
+    ERROR_CODES.CONST_UNITS_VERSION_TOO_OLD,
     # esm-spec §8.2.1 data-source location resolution (data_source_urls.jl).
     ERROR_CODES.DATA_SOURCE_URL_UNRESOLVED,
     # esm-spec §9.6 expression templates + §9.6.4 post-expansion validators

@@ -11,13 +11,17 @@ tokens, ETag/TTL/checksum revalidation, advisory multi-process locking,
 async CDS request-poll-download). Those live *behind* the injected base
 ``opener``/``fetcher`` — e.g. the ``earthsciio`` (esio) http+file transport
 and local-disk store registries. What this module adds is the seam wiring
-plus two things a pure-offline run needs:
+plus three things a run needs:
 
 * **content addressing** — ``sha256(resolved_url)`` so a cache populated by
   the data-engineering acquisition step is readable here without a network;
 * **offline mode** — a cache-only mode where a miss raises :class:`CacheMiss`
   (an ``OSError``) so the existing :func:`mirror.open_with_fallback` mirror
-  failover treats it like any other unreachable URL and tries the next one.
+  failover treats it like any other unreachable URL and tries the next one;
+* **a ``file://`` recheck** — the key is the URL, so a local file replaced in
+  place keeps its key. Online, a warm ``file://`` entry is compared with the
+  file it was copied from before it is served (see
+  :func:`_file_source_is_current`), the same rule EarthSciIO's cache applies.
 
 Wiring is additive: ``opener=None`` / ``fetcher=None`` on the loaders is
 unchanged. Callers opt in by passing ``opener=cached_opener(...)`` (grid /
@@ -28,7 +32,9 @@ from __future__ import annotations
 
 import hashlib
 import os
+import stat
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Callable, Union
 from urllib.parse import urlsplit
@@ -44,7 +50,23 @@ OFFLINE_ENV = "EARTHSCI_OFFLINE"
 #: ``EARTHSCIDATADIR`` is provided.
 DEFAULT_CACHE_DIRNAME = "earthsci-cache"
 
+#: Environment variable that switches off the ``file://`` source recheck when
+#: set to an explicit denial and the ``revalidate_file=`` argument is ``None``.
+#: The same name and spelling EarthSciIO's cache honours.
+REVALIDATE_FILE_ENV = "EARTHSCI_REVALIDATE_FILE"
+
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
+#: The only values that switch the recheck off. It defaults to ON, so this is
+#: not ``not _TRUTHY``: a typo in the knob leaves the protection in place.
+_FALSEY = frozenset({"0", "false", "no", "off"})
+
+#: Git's racy-timestamp rule. A filesystem records mtime only to its
+#: granularity: 1 s on Lustre, ext3, HFS+ and many NFS servers, 2 s on FAT. A
+#: same-size write in the same tick as an earlier hash keeps the same
+#: ``(size, mtime)``, so a verdict taken within one tick of either mtime cannot
+#: vouch for later bytes. Any later write sharing a 2 s FAT bucket lands before
+#: ``mtime + 2 s``, so 2 s with an inclusive comparison covers it.
+_RACY_MARGIN_NS = 2_000_000_000
 
 PathLike = Union[str, "os.PathLike[str]"]
 
@@ -83,6 +105,99 @@ def _offline_enabled(offline: bool | None) -> bool:
     if offline is not None:
         return offline
     return os.environ.get(OFFLINE_ENV, "").strip().lower() in _TRUTHY
+
+
+def _revalidate_file_enabled(revalidate_file: bool | None) -> bool:
+    if revalidate_file is not None:
+        return revalidate_file
+    raw = os.environ.get(REVALIDATE_FILE_ENV)
+    return raw is None or raw.strip().lower() not in _FALSEY
+
+
+def _local_source_path(url: str) -> Path | None:
+    """The local path a ``file://`` URL names, or ``None`` for any other scheme.
+
+    No percent-decoding: :func:`earthsci_ast._data_source_urls.resolve_source_url`
+    splices the resolved path verbatim after ``file://``.
+    """
+    split = urlsplit(url)
+    if split.scheme.lower() != "file" or not split.path:
+        return None
+    return Path(split.path)
+
+
+def _sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _file_source_is_current(url: str, cached: Path, memo: dict) -> bool:
+    """Whether a warm entry may be served, judged against its ``file://`` source.
+
+    The cache is keyed by the URL, so a local file replaced in place keeps its
+    key and, unchecked, every later read is served the bytes of the file that
+    used to be there — a suite then passes against a corpus that is gone
+    (EarthSciML/EarthSciAST#293). This compares the SOURCE with the cached copy:
+
+    * not a ``file://`` URL → ``True`` (remote entries are not rechecked here);
+    * nothing at the path (including a file deleted between the ``stat`` and
+      the hash), or not a regular file → ``False``: re-fetch, and the fetcher
+      reports the absence;
+    * the path cannot be examined or read for any other reason (no permission,
+      a path component that is not a directory, an I/O error) → ``True``:
+      abstain rather than claim a change that was not observed;
+    * a different length → ``False``, without hashing;
+    * a different sha256 → ``False``. Length alone waves through every
+      equal-length edit (a float re-encode, a corrected value);
+    * otherwise ``True``.
+
+    Only a missing file (``ENOENT``) counts as gone, as in all three EarthSciIO
+    tracks.
+
+    ``memo`` remembers the ``(size, mtime)`` of both files at the last verdict
+    of "current", so a run hashes each source once rather than on every read.
+    A verdict taken while either mtime was within ``_RACY_MARGIN_NS`` of the
+    moment of hashing is never reused (git's "racy timestamp" rule): the next
+    check hashes again, and only one that sees both mtimes safely in the past
+    is trusted on later reads.
+    """
+    source = _local_source_path(url)
+    if source is None:
+        return True
+    try:
+        src_st = source.stat()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    if not stat.S_ISREG(src_st.st_mode):
+        return False
+    try:
+        cached_st = cached.stat()
+        if src_st.st_size != cached_st.st_size:
+            return False
+        fingerprint = (src_st.st_size, src_st.st_mtime_ns, cached_st.st_mtime_ns)
+        remembered = memo.get(os.fspath(cached))
+        if (
+            remembered is not None
+            and remembered[0] == fingerprint
+            and max(src_st.st_mtime_ns, cached_st.st_mtime_ns) < remembered[1] - _RACY_MARGIN_NS
+        ):
+            return True
+        hashed_at = time.time_ns()
+        if _sha256_file(source) != _sha256_file(cached):
+            return False
+    except FileNotFoundError:
+        # Either file vanished after its ``stat``: re-fetch rather than serve a
+        # copy whose source is gone (or a cache entry that is no longer there).
+        return False
+    except OSError:
+        return True
+    memo[os.fspath(cached)] = (fingerprint, hashed_at)
+    return True
 
 
 def _url_suffix(url: str) -> str:
@@ -161,6 +276,7 @@ def cached_opener(
     fetcher: Callable[[str], bytes] | None = None,
     data_dir: PathLike | None = None,
     offline: bool | None = None,
+    revalidate_file: bool | None = None,
 ) -> Callable[[str], Any]:
     """Wrap a dataset ``opener`` with the EARTHSCIDATADIR content-addressed cache.
 
@@ -168,7 +284,8 @@ def cached_opener(
     static loaders expect, so it drops straight into their ``opener=`` seam:
 
     * **hit** — open the local cache file with ``opener`` (default:
-      ``xarray.open_dataset``);
+      ``xarray.open_dataset``). Online, a ``file://`` entry is a hit only while
+      the file it was copied from is unchanged; otherwise it is re-fetched;
     * **miss + offline** — raise :class:`CacheMiss` (mirror failover proceeds);
     * **miss + online** — download bytes with ``fetcher`` (default: the points
       HTTP fetcher, or inject the esio transport), cache them atomically, then
@@ -184,12 +301,19 @@ def cached_opener(
         Cache root override; defaults to ``EARTHSCIDATADIR`` then a temp dir.
     offline:
         Force cache-only. ``None`` (default) consults ``EARTHSCI_OFFLINE``.
+    revalidate_file:
+        Recheck a warm ``file://`` entry against its source before serving it.
+        ``None`` (default) consults ``EARTHSCI_REVALIDATE_FILE``, which leaves
+        the recheck on unless set to ``0``/``false``/``no``/``off``. Offline
+        reads are never rechecked.
     """
     off = _offline_enabled(offline)
+    recheck = not off and _revalidate_file_enabled(revalidate_file)
+    memo: dict = {}
 
     def _open(url: str) -> Any:
         path = cache_path_for_url(url, data_dir=data_dir)
-        if not path.exists():
+        if not path.exists() or (recheck and not _file_source_is_current(url, path, memo)):
             if off:
                 raise CacheMiss(url, path)
             download = fetcher if fetcher is not None else _default_bytes_fetcher()
@@ -208,19 +332,23 @@ def cached_fetcher(
     fetcher: Callable[[str], bytes] | None = None,
     data_dir: PathLike | None = None,
     offline: bool | None = None,
+    revalidate_file: bool | None = None,
 ) -> Callable[[str], bytes]:
     """Wrap a bytes ``fetcher`` (points seam) with the same content-addressed cache.
 
     Returns a ``(url) -> bytes`` callable for the points loader's ``fetcher=``
     seam: a cache hit reads the local bytes; an online miss downloads with the
     base ``fetcher`` (default HTTP), caches atomically, and returns the bytes;
-    an offline miss raises :class:`CacheMiss`.
+    an offline miss raises :class:`CacheMiss`. ``revalidate_file`` is as for
+    :func:`cached_opener`.
     """
     off = _offline_enabled(offline)
+    recheck = not off and _revalidate_file_enabled(revalidate_file)
+    memo: dict = {}
 
     def _fetch(url: str) -> bytes:
         path = cache_path_for_url(url, data_dir=data_dir)
-        if path.exists():
+        if path.exists() and not (recheck and not _file_source_is_current(url, path, memo)):
             return path.read_bytes()
         if off:
             raise CacheMiss(url, path)

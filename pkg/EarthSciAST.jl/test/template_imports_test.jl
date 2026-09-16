@@ -258,6 +258,58 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         @test code == "template_constraint_unknown_index_set"
     end
 
+    @testset "import_library_enum: a library's enum ops resolve in the library's block (§9.3)" begin
+        @test _expand_raw(conf("import_library_enum", "fixture.esm")) ==
+              _golden(conf("import_library_enum", "expanded.esm"))
+        @test _expand_raw(conf("import_library_enum", "fixture_importer_redeclares.esm")) ==
+              _golden(conf("import_library_enum", "expanded_importer_redeclares.esm"))
+        # The importer's same-name enum (g_per_hp_hr = 7) does not reach the
+        # library body, which keeps the library's 1; the importer's own enum ops,
+        # including one bound into the template's parameter, resolve against 7.
+        # Once lowered, the library body carries no load-eliminated op, so its
+        # reference is not target-bearing and survives load (esm-spec §9.6.4
+        # rule 1); the values are checked on its expansion (rule 2).
+        f = EarthSciAST.load_path(
+            conf("import_library_enum", "fixture_importer_redeclares.esm"))
+        EarthSciAST._expand_refs!(f)
+        doc = _normj(serialize_esm_file(f))
+        library_body = _defrhs(doc, "Consumer", "isPerHorsepowerHour")
+        @test library_body["op"] == "=="
+        @test library_body["args"][2]["op"] == "const"
+        @test library_body["args"][2]["value"] == 1
+        @test _defrhs(doc, "Consumer", "importerCode")["value"] == 7
+        caller_bound = _defrhs(doc, "Consumer", "callerBoundCode")
+        @test caller_bound["args"][1]["value"] == 7
+        @test caller_bound["args"][2]["value"] == 1
+        # The library's own call binds `g_per_gallon`, so it keeps the library's
+        # 2; a symbol the importer binds, directly or through a forwarded
+        # parameter, takes the importer's 9.
+        @test _defrhs(doc, "Consumer", "gallonCode")["value"] == 2
+        @test _defrhs(doc, "Consumer", "importerBoundCode")["value"] == 9
+        @test _defrhs(doc, "Consumer", "forwardedCode")["value"] == 9
+        # An importer declaring no enums still loads the library's own call.
+        f = EarthSciAST.load_path(conf("import_library_enum", "fixture.esm"))
+        EarthSciAST._expand_refs!(f)
+        doc = _normj(serialize_esm_file(f))
+        @test _defrhs(doc, "Consumer", "gallonCode")["value"] == 2
+    end
+
+    @testset "import_library_enum_undeclared: unknown_enum reported against the library (§9.3)" begin
+        for fixture in ("fixture.esm", "fixture_importer_declares.esm")
+            err = try
+                EarthSciAST.load_path(conf("import_library_enum_undeclared", fixture))
+                nothing
+            catch e
+                e
+            end
+            @test err isa ExpressionTemplateError
+            err isa ExpressionTemplateError || continue
+            @test err.code == "unknown_enum"
+            @test occursin("lib.esm", err.message)
+            @test occursin("plus_horsepower_code", err.message)
+        end
+    end
+
     @testset "import_rebind_keyed_factors: MPAS-style free-name rebinding (§9.7.7)" begin
         @test _expand_raw(conf("import_rebind_keyed_factors", "fixture.esm")) ==
               _golden(conf("import_rebind_keyed_factors", "expanded.esm"))
@@ -347,6 +399,70 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # slots, not `args` — scalar attribute NAMES, never expressions.
         @test rargs[4]["attrs"]["limiter"] == "max"
         @test rargs[4]["args"] == Any["c", 3]
+    end
+
+    @testset "metaparam_structural_field_collision: loop symbols, references, enums, units, text, map keys (§9.7.6)" begin
+        # Four metaparameters are spelled like structural values: `row_id` (a
+        # join key column, free text), `m` (a unit symbol), `edge` (a placement
+        # tag, a comment, citation text), `ode` (an enum). Each also sits in an
+        # expression position, where it closes; so does `a`, a dense range bound
+        # beside the loop symbol `p` (a metaparameter spelled like a loop symbol
+        # is `metaparameter_name_conflict`).
+        @test _expand_raw(conf("metaparam_structural_field_collision", "fixture.esm")) ==
+              _golden(conf("metaparam_structural_field_collision", "expanded.esm"))
+
+        d = _expand_raw(conf("metaparam_structural_field_collision", "fixture.esm"))
+        m = d["models"]["M"]
+        @test m["system_kind"] == "ode"
+        @test m["reference"] == Dict("citation" => "edge", "doi" => "edge",
+                                     "url" => "edge", "notes" => "row_id")
+        @test m["variables"]["u"]["default_units"] == "m"
+        @test m["variables"]["u"]["location"] == "edge"
+        deq = only(filter(eq -> !(eq["lhs"] isa AbstractString), m["equations"]))
+        @test deq["_comment"] == "edge"
+        @test deq["rhs"]["args"] == Any["c", 3]
+
+        # A join clause's key columns and the loop symbols they are read at are
+        # names; substituting them makes the document schema-invalid.
+        r = _defrhs(d, "M", "r")
+        @test r["output_idx"] == Any["p"]
+        @test r["join"][1]["on"] == Any[Any["row_id", "row_id"]]
+        @test r["join"][1]["syms"] == Any["p", "b"]
+        @test r["expr"]["args"] == Any[22, 5]
+        k = _defrhs(d, "M", "k")
+        @test k["arg"] == "p"
+        @test k["ranges"]["p"] == Any[1, 11]
+        @test k["expr"]["args"] == Any["c", 7]
+
+        # A map key is a declared name, not a field: variables named `source` and
+        # `type` still have their guesses substituted.
+        @test m["guesses"]["source"]["args"] == Any[5, 2]
+        @test m["guesses"]["type"]["args"] == Any[5, 3]
+        @test _defrhs(d, "M", "source")["args"] == Any["c", 22]
+        @test _defrhs(d, "M", "type")["args"] == Any["c", 7]
+    end
+
+    @testset "import_rename_name_keyed_map_entries: rename never dispatches on a map entry name (§9.7.7)" begin
+        # A `ranges` entry spelled `dim` still has its `from` follow the prefix,
+        # and apply-node `bindings` entries spelled `units` / `dim` are
+        # variable-reference positions, so their free names are rebindable
+        # (esm-spec §9.7.6 map-key rule).
+        d = _expand_raw(conf("import_rename_name_keyed_map_entries", "fixture.esm"))
+        @test d == _golden(conf("import_rename_name_keyed_map_entries", "expanded.esm"))
+        total = _defrhs(d, "M", "total")
+        @test total["ranges"] == Dict("dim" => Dict("from" => "L.cells"))
+        @test total["expr"]["args"][2] == Dict("op" => "*", "args" => Any["kk", "kk2"])
+    end
+
+    @testset "metaparameter substitution tables match the shared classification (§9.7.6)" begin
+        # The key sets are derived from a classification of every string-capable
+        # schema property (scripts/check-metaparameter-substitution-fields.py);
+        # all five bindings compare against the same file.
+        cls = JSON3.read(read(joinpath(repo_root, "tests", "metaparameter_substitution",
+                                       "field_classification.json"), String))
+        @test EarthSciAST._META_SUBST_SKIP_KEYS == Set{String}(String.(cls["skip_keys"]))
+        @test EarthSciAST._NAME_KEYED_MAP_KEYS ==
+              Set{String}(String.(cls["name_keyed_map_keys"]))
     end
 
     @testset "loader-API bindings (§9.7.6 site 4) and defaults (site 5)" begin

@@ -5517,6 +5517,43 @@ answer skips **visibly** with its reason printed). Any mismatch beyond tolerance
 any required-binding refusal, and any required-binding `unavailable` exits
 non-zero.
 
+### 5.39 Unsupported Constructs Are Refused, Not Dropped (normative)
+
+**Decision pinned.** A continuous event (`continuous_events`), a discrete event
+(`discrete_events`) and an implicit equation (an LHS that is an expression rather
+than an unknown, a time derivative of one, or `ic` of one) are three constructs
+none of the three executing bindings' simulators runs: not Julia's tree-walk
+evaluator, not Python's SymPy or NumPy pathways, not Rust's scalar interpreter
+or array runtime. Each of those evaluators MUST refuse a document carrying any
+of them at BUILD with the esm-spec §9.6.6 diagnostic `unsupported_construct`,
+and the message MUST name the construct and the evaluator. Before issues #264
+and #356 most of them built the model without the construct: the event never
+fired, the residual was never solved, and an inline test reported a number the
+document does not describe.
+
+**Shape.** Golden-free. Twelve refusal cases: one per construct per evaluator
+path (scalar and array); an event of each kind owned by an inline SUBSYSTEM on
+each path; a continuous event on a coupled two-model array document, which takes
+Rust's flattened route; and an implicit equation spelled as a time derivative of
+an expression (`D(a + b) ~ 3`), which credits no state and so is implicit, not a
+derivative. The subsystem cases pin that the refusal does not depend on where
+the event is declared: a binding whose `flatten` does not lift a subsystem's
+events must look for them in the document, or it runs the model without the
+event. One CONTROL: the array discrete-event document with its event removed,
+which MUST still run and pass. The control is the non-vacuity anchor: a binding
+that refused every array document would otherwise satisfy the refusal cases.
+
+The manifest and fixtures live in `tests/conformance/unsupported_construct/`.
+Adapters: `pkg/EarthSciAST.jl/test/unsupported_construct_conformance_test.jl`;
+`pkg/earthsci-ast-py/tests/test_unsupported_construct_conformance.py`;
+`pkg/earthsci-ast-rs/tests/unsupported_construct_conformance.rs`. Go and
+TypeScript do not simulate; they only register the code.
+
+**Out of scope.** Julia's ModelingToolkit export runs both kinds of event and
+hands implicit equations to `mtkcompile`, so it never raises the code. Running
+any of the three constructs on an array evaluator is future work in every
+binding.
+
 
 ## 6. CI Integration
 
@@ -5590,6 +5627,8 @@ ever emitted it, and the code had zero real coverage.
 | `observed_cycle` | Structural | A dependency cycle among a model's OBSERVED unknowns (esm-spec §4.9.6): each observed on the cycle is defined by an equation whose RHS names the next, so no evaluation order satisfies every definition. Decidable from the equations alone — hard error in `validate`, in EVERY binding, executing or not. Pointer: `/models/<M>` (a cycle belongs to no single equation). `details.cycle` is the path in traversal order with the entry node repeated to close it — a PATH, so it is ordered semantically, not by §7.1.0. The self-edge of a §4.3.1.1 recurrence CANDIDATE is dropped (§5.19.5); every other self-reference (`x ~ x + 1`, `s ~ s + 1`) is a cycle of length one and IS reported. Fixture: `tests/invalid/observed_cycle_array_elementwise.esm`. |
 | `recurrence_not_wellfounded` | Structural | A causal self-read (esm-spec §4.3.1.1) that is not strictly earlier along exactly one axis: a read provably at the same cell or later on its axis, an index argument that is not affine in its frame symbol with coefficient 1, an offset on more than one axis, self-reads disagreeing on the axis, a bare read of the variable in its own RHS, or a recurrence axis that is ragged / derived / strided. Hard error in EVERY binding, executing or not (§5.19.5) — the pre-1.0 behaviour was a plausible wrong number. Pointer: the containing expression field (`…/equations/i/rhs`). |
 | `recurrence_unsupported_form` | Structural | A self-read the runtime cannot restrict to one cell: reached through a `makearray` region value or a `reshape`/`transpose`/`concat` operand, or in an equation whose RHS is not a `faq` over the variable's frame or whose output ranges are not statically resolvable (esm-spec §4.3.1.1). Distinct from `recurrence_not_wellfounded`: the READ is causal, the CARRIER cannot sequence it. |
+| `unknown_override_key` | Structural | An inline test's `initial_conditions` or `parameter_overrides` key that matches no declared name under esm-spec §6.6.2 rules 1-3. Names are qualified by component and inline subsystem, and a trailing element suffix (`u[1]`) is removed from the key first. Pointer: the key, e.g. `/models/M/tests/0/parameter_overrides/rx`. Only the unknown case is a validation error; ambiguous and colliding keys stay runtime diagnostics (§5.15). A document with an unresolved `{ref}` mount skips the check. Fixtures: `tests/invalid/unknown_override_key_*.esm`. |
+| `assertion_rank_mismatch` | Structural | An assertion whose form does not match the declared rank of the variable it names (esm-spec §6.6.5): pointwise on a variable declared with a non-empty `shape` (unless the target is an element name such as `u[1]`), or `coords` / `reduce` on a variable declared without one. Checked for targets the asserting component declares by a bare name. Pointer: the assertion, e.g. `/models/M/tests/0/assertions/0`. Fixtures: `tests/invalid/assertion_rank_mismatch_*.esm`. |
 | `reserved_variable_name` | Structural | A declaration spelled with a globally-scoped name — the document's independent variable (`domain.independent_variable`, default `"t"`) or the §6.4 `_var` placeholder (esm-spec §4.9.1.1). Both are in scope in every model and resolve BY NAME, so the declaration is unreachable and every reader silently gets the implicit symbol instead. Covers all three declaration maps: `models[M].variables` (recursing into every INLINE subsystem, at any depth), `reaction_systems[S].species`, `reaction_systems[S].parameters`. Pointer: the offending key, e.g. `/models/M/variables/t`, `/models/M/subsystems/S/variables/t`. Hard error in EVERY binding — the pre-fix behaviour was a validated document whose equations silently read the simulation clock. The reserved set FOLLOWS the document, exactly as `reserved_index_symbol` does; a binding that hard-codes the literal `"t"` fails `tests/valid/independent_variable_renamed.esm`. |
 
 #### 7.1.0 List-valued diagnostic details are sorted

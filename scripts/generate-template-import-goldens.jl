@@ -15,7 +15,11 @@
 #   tests/conformance/expression_templates/import_rename_integral_axis/expanded.esm
 #   tests/conformance/expression_templates/import_rebind_keyed_factors/expanded.esm
 #   tests/conformance/expression_templates/import_rename_diamond/expanded.esm
+#   tests/conformance/expression_templates/import_rename_name_keyed_map_entries/expanded.esm
 #   tests/conformance/expression_templates/metaparam_axis_name_collision/expanded.esm
+#   tests/conformance/expression_templates/metaparam_structural_field_collision/expanded.esm
+#   tests/conformance/expression_templates/import_library_enum/expanded.esm
+#   tests/conformance/expression_templates/import_library_enum/expanded_importer_redeclares.esm
 #   tests/invalid/template_imports/body_chain_too_deep.esm   (33-template chain, generated)
 #
 # The import fixtures are expanded through the raw §9.7 pipeline
@@ -97,7 +101,11 @@ for (dir, fixture, golden) in [
     ("import_where_rename_two_instances", "fixture.esm", "expanded.esm"),
     ("import_rebind_keyed_factors", "fixture.esm", "expanded.esm"),
     ("import_rename_diamond", "fixture.esm", "expanded.esm"),
+    ("import_rename_name_keyed_map_entries", "fixture.esm", "expanded.esm"),
     ("metaparam_axis_name_collision", "fixture.esm", "expanded.esm"),
+    ("metaparam_structural_field_collision", "fixture.esm", "expanded.esm"),
+    ("import_library_enum", "fixture.esm", "expanded.esm"),
+    ("import_library_enum", "fixture_importer_redeclares.esm", "expanded_importer_redeclares.esm"),
 ]
     _write_golden(joinpath(CONF, dir, golden),
                   _expand_raw(joinpath(CONF, dir, fixture)))
