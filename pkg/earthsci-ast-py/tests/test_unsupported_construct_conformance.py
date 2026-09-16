@@ -1,12 +1,14 @@
-"""Cross-language conformance for the two constructs no Python evaluator runs:
-a discrete event and an implicit equation (EarthSciML/EarthSciAST#264).
+"""Cross-language conformance for the three constructs no Python evaluator runs:
+a continuous event, a discrete event and an implicit equation
+(EarthSciML/EarthSciAST#264, #356).
 
 Drives the shared manifest at ``tests/conformance/unsupported_construct/``.
-Both constructs used to validate and then vanish: the event never fired and the
-residual equation was never applied (the array interpreter only warned), so an
-inline test reported the initial value as its answer. Every refusal case must
-now fail with ``unsupported_construct`` naming the construct and the evaluator;
-the control must still run.
+All three used to validate and then vanish: the event never fired (a continuous
+event on the scalar pathway only stopped the integration at its first crossing)
+and the residual equation was never applied (the array interpreter only warned),
+so an inline test reported a number the document does not describe. Every
+refusal case must now fail with ``unsupported_construct`` naming the construct
+and the evaluator; the control must still run.
 """
 
 from __future__ import annotations

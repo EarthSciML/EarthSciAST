@@ -1,0 +1,183 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "StiffChemistryDepletionReset",
+    "description": "Stiff two-species exchange with a continuous event that resets A when it is nearly depleted. Split out of julia_mtk_integration.esm so that document's other components do not share a document with a continuous event: evaluators that do not run continuous events refuse the whole document (esm-spec \u00a79.6.6 unsupported_construct).",
+    "authors": [
+      "ESM Test Suite"
+    ],
+    "created": "2026-02-14T00:00:00Z",
+    "tags": [
+      "julia",
+      "mtk",
+      "simulation",
+      "stiff",
+      "events",
+      "continuous"
+    ]
+  },
+  "models": {
+    "StiffChemistry": {
+      "reference": {
+        "notes": "Stiff chemical system to test MTK solver selection and event handling"
+      },
+      "variables": {
+        "A": {
+          "type": "unknown",
+          "units": "mol/mol",
+          "default": 1e-06,
+          "description": "Fast-reacting species A"
+        },
+        "B": {
+          "type": "unknown",
+          "units": "mol/mol",
+          "default": 0.0,
+          "description": "Product species B"
+        },
+        "k_fast": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 1000.0,
+          "description": "Fast reaction rate"
+        },
+        "k_slow": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.1,
+          "description": "Slow reaction rate"
+        },
+        "total_species": {
+          "type": "unknown",
+          "units": "mol/mol",
+          "description": "Total mass (conserved)"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "A"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "+",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "-",
+                    "args": [
+                      "k_fast"
+                    ]
+                  },
+                  "A"
+                ]
+              },
+              {
+                "op": "*",
+                "args": [
+                  "k_slow",
+                  "B"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "B"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "+",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "k_fast",
+                  "A"
+                ]
+              },
+              {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "-",
+                    "args": [
+                      "k_slow"
+                    ]
+                  },
+                  "B"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "A"
+            ]
+          },
+          "rhs": 1e-06
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "B"
+            ]
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": "total_species",
+          "rhs": {
+            "op": "+",
+            "args": [
+              "A",
+              "B"
+            ]
+          }
+        }
+      ],
+      "continuous_events": [
+        {
+          "name": "reset_when_depleted",
+          "conditions": [
+            {
+              "op": "-",
+              "args": [
+                "A",
+                1e-12
+              ]
+            }
+          ],
+          "affects": [
+            {
+              "lhs": "A",
+              "rhs": 1e-08
+            }
+          ],
+          "description": "Reset A concentration when nearly depleted"
+        }
+      ]
+    }
+  },
+  "domain": {
+    "independent_variable": "t",
+    "temporal": {
+      "start": "2024-01-01T00:00:00Z",
+      "end": "2024-01-01T01:00:00Z",
+      "reference_time": "2024-01-01T00:00:00Z"
+    },
+    "element_type": "Float64"
+  }
+}

@@ -1,0 +1,120 @@
+{
+ "esm": "1.1.0",
+ "metadata": {
+  "name": "ContinuousEventInASubsystemOnTheScalarPath",
+  "description": "The continuous threshold-reset model, event included, mounted as the inline subsystem `Inner` of a trivial parent. An event owned by a subsystem is the one that can vanish before any build-time check sees it: Python's and Rust's flatten do not lift a subsystem's events into the flattened system, so an evaluator that checks only the flattened event lists runs the model without it. Every evaluator MUST refuse it with `unsupported_construct` exactly as it refuses a top-level continuous event (issue #356).",
+  "authors": [
+   "EarthSciML Authors and Contributors"
+  ],
+  "tags": [
+   "conformance",
+   "unsupported_construct",
+   "events"
+  ]
+ },
+ "models": {
+  "ContinuousEventInASubsystemOnTheScalarPath": {
+   "tolerance": {
+    "rel": 1e-12
+   },
+   "variables": {
+    "z": {
+     "type": "unknown",
+     "units": "1",
+     "description": "A trivial parent state, so the parent is a model in its own right."
+    }
+   },
+   "equations": [
+    {
+     "lhs": {
+      "op": "D",
+      "args": [
+       "z"
+      ],
+      "wrt": "t"
+     },
+     "rhs": 0.0
+    },
+    {
+     "lhs": {
+      "op": "ic",
+      "args": [
+       "z"
+      ]
+     },
+     "rhs": 0.0
+    }
+   ],
+   "subsystems": {
+    "Inner": {
+     "variables": {
+      "x": {
+       "type": "unknown",
+       "units": "1",
+       "description": "Climbs at rate 1 from 0; reset to 0 when it reaches 1."
+      }
+     },
+     "equations": [
+      {
+       "lhs": {
+        "op": "D",
+        "args": [
+         "x"
+        ],
+        "wrt": "t"
+       },
+       "rhs": 1.0
+      },
+      {
+       "lhs": {
+        "op": "ic",
+        "args": [
+         "x"
+        ]
+       },
+       "rhs": 0.0
+      }
+     ],
+     "continuous_events": [
+      {
+       "name": "reset",
+       "conditions": [
+        {
+         "op": "-",
+         "args": [
+          "x",
+          1.0
+         ]
+        }
+       ],
+       "affects": [
+        {
+         "lhs": "x",
+         "rhs": 0.0
+        }
+       ],
+       "description": "x := 0 whenever x crosses 1."
+      }
+     ]
+    }
+   },
+   "tests": [
+    {
+     "id": "a_threshold_reset_makes_a_sawtooth",
+     "description": "Intended behaviour: Inner.x resets at t = 1 and t = 2, so Inner.x(2.5) = 0.5. Without the event it is 2.5.",
+     "time_span": {
+      "start": 0.0,
+      "end": 2.5
+     },
+     "assertions": [
+      {
+       "variable": "Inner.x",
+       "time": 2.5,
+       "expected": 0.5
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

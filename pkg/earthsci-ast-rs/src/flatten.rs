@@ -2509,14 +2509,35 @@ fn build_reaction_block(
         })
         .collect();
 
+    // A reaction system's events are carried on the same footing as a model's:
+    // the schema gives `ReactionSystem` the same `continuous_events` /
+    // `discrete_events` blocks, and Python, Go and TypeScript all lift them.
+    // Dropping them here made `reject_unsupported_features` blind to an event a
+    // reaction system owns, so the compiled system ran the document without it
+    // (issues #264, #356).
+    let continuous_events = rs
+        .continuous_events
+        .clone()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|e| namespace_continuous_event(e, system_name, &HashSet::new(), &locals))
+        .collect();
+    let discrete_events = rs
+        .discrete_events
+        .clone()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|e| namespace_discrete_event(e, system_name, &HashSet::new(), &locals))
+        .collect();
+
     Ok(SystemBlock {
         name: system_name.to_string(),
         state_vars,
         parameters,
         observed_vars: IndexMap::new(),
         equations,
-        continuous_events: Vec::new(),
-        discrete_events: Vec::new(),
+        continuous_events,
+        discrete_events,
     })
 }
 

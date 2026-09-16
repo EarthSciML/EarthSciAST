@@ -338,10 +338,10 @@ RECURRENCE_UNSUPPORTED_FORM = "recurrence_unsupported_form"
 # every pathway, before anything is built.
 # ===========================================================================
 
-#: A discrete event or an implicit equation (an equation whose LHS is an
-#: expression rather than an unknown, ``D(unknown)`` or ``ic(unknown)``) reached
-#: an evaluator that cannot run it. Refused rather than skipped: a run without
-#: the construct reports the initial value as its answer.
+#: A continuous event, a discrete event or an implicit equation (an equation
+#: whose LHS is an expression rather than an unknown, ``D(unknown)`` or
+#: ``ic(unknown)``) reached an evaluator that cannot run it. Refused rather than
+#: skipped: a run without the construct reports a wrong answer.
 UNSUPPORTED_CONSTRUCT = "unsupported_construct"
 
 

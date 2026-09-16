@@ -4354,6 +4354,148 @@
       "lifted_shapes": {}
     },
     {
+      "id": "reaction_system_continuous_event",
+      "tier": "reaction_system",
+      "fixture": "conformance/unsupported_construct/fixtures/continuous_event_on_a_reaction_system.esm",
+      "system_kind": "ode",
+      "independent_variables": [
+        "t"
+      ],
+      "state_variables": [
+        {
+          "name": "ContinuousEventOnAReactionSystem.A",
+          "role": "species",
+          "units": "1",
+          "default": 0.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "ContinuousEventOnAReactionSystem"
+        }
+      ],
+      "parameters": [
+        {
+          "name": "ContinuousEventOnAReactionSystem.k",
+          "role": "parameter",
+          "units": "1/s",
+          "default": 1.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "ContinuousEventOnAReactionSystem"
+        }
+      ],
+      "observed_variables": [],
+      "algebraic_variables": [],
+      "brownian_parameters": [],
+      "discrete_parameters": [],
+      "equation_count": 1,
+      "equations": [
+        {
+          "lhs": "D(ContinuousEventOnAReactionSystem.A)/Dt",
+          "rhs": "ContinuousEventOnAReactionSystem.k",
+          "source_system": "ContinuousEventOnAReactionSystem"
+        }
+      ],
+      "continuous_events": [
+        {
+          "name": "reset",
+          "conditions": [
+            "ContinuousEventOnAReactionSystem.A - 1"
+          ],
+          "affects": [
+            "ContinuousEventOnAReactionSystem.A = 0"
+          ]
+        }
+      ],
+      "discrete_events": [],
+      "domain": null,
+      "metadata": {
+        "source_systems": [
+          "ContinuousEventOnAReactionSystem"
+        ],
+        "coupling_rules": [],
+        "operator_applies": [],
+        "callbacks": []
+      },
+      "index_sets": [],
+      "function_tables": [],
+      "template_registry": [],
+      "field_ics": [],
+      "loader_fields": [],
+      "lifted_shapes": {}
+    },
+    {
+      "id": "reaction_system_discrete_event",
+      "tier": "reaction_system",
+      "fixture": "conformance/unsupported_construct/fixtures/discrete_event_on_a_reaction_system.esm",
+      "system_kind": "ode",
+      "independent_variables": [
+        "t"
+      ],
+      "state_variables": [
+        {
+          "name": "DiscreteEventOnAReactionSystem.A",
+          "role": "species",
+          "units": "1",
+          "default": 1.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "DiscreteEventOnAReactionSystem"
+        }
+      ],
+      "parameters": [
+        {
+          "name": "DiscreteEventOnAReactionSystem.k",
+          "role": "parameter",
+          "units": "1/s",
+          "default": 0.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "DiscreteEventOnAReactionSystem"
+        }
+      ],
+      "observed_variables": [],
+      "algebraic_variables": [],
+      "brownian_parameters": [],
+      "discrete_parameters": [],
+      "equation_count": 1,
+      "equations": [
+        {
+          "lhs": "D(DiscreteEventOnAReactionSystem.A)/Dt",
+          "rhs": "DiscreteEventOnAReactionSystem.k",
+          "source_system": "DiscreteEventOnAReactionSystem"
+        }
+      ],
+      "continuous_events": [],
+      "discrete_events": [
+        {
+          "name": "double",
+          "conditions": [],
+          "affects": [
+            "DiscreteEventOnAReactionSystem.A = Pre(DiscreteEventOnAReactionSystem.A) * 2"
+          ]
+        }
+      ],
+      "domain": null,
+      "metadata": {
+        "source_systems": [
+          "DiscreteEventOnAReactionSystem"
+        ],
+        "coupling_rules": [],
+        "operator_applies": [],
+        "callbacks": []
+      },
+      "index_sets": [],
+      "function_tables": [],
+      "template_registry": [],
+      "field_ics": [],
+      "loader_fields": [],
+      "lifted_shapes": {}
+    },
+    {
       "id": "advection_reaction_loaded_ic_bc",
       "tier": "field_ics",
       "fixture": "valid/advection_reaction_loaded_ic_bc.esm",
