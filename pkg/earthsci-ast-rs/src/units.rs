@@ -1533,6 +1533,87 @@ pub fn check_expression_dimensions(
     findings
 }
 
+/// The dimensional analyser's verdict on one equation, in the form a report
+/// prints: checked and consistent, provably inconsistent, or not checked.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EquationDimensionVerdict {
+    /// Both sides resolved and agree. Carries the propagated dimension, spelled
+    /// over the canonical axes (`length*time^-1`).
+    Consistent(String),
+    /// A provable mismatch. Carries every error finding's message.
+    Mismatch(Vec<String>),
+    /// A side's dimension could not be determined, so the comparison was
+    /// skipped (esm-spec §4.8.4). Carries the side and the operand to blame.
+    NotChecked(String),
+}
+
+/// Classify one equation the way [`check_equation_dimensions`] judges it, and
+/// say WHY when it could not be judged.
+///
+/// A `Consistent` verdict is only returned when the comparison actually ran, so
+/// an equation skipped because of an indeterminate operand — a bare literal in a
+/// product, a `const` node that declares no `units`, a variable with no declared
+/// units — is never reported as fine.
+pub fn equation_dimension_verdict(
+    eq: &Equation,
+    env: &HashMap<String, Unit>,
+) -> EquationDimensionVerdict {
+    let errors: Vec<String> = check_equation_dimensions(eq, env)
+        .into_iter()
+        .filter(UnitFinding::is_error)
+        .map(|f| f.message)
+        .collect();
+    if !errors.is_empty() {
+        return EquationDimensionVerdict::Mismatch(errors);
+    }
+    let rhs = propagate_dim(&eq.rhs, env, &mut Vec::new());
+    // `D(x)` against an undeclared time is judged by the time-ratio rule, which
+    // needs the state's dimension rather than the derivative's.
+    let (lhs_label, lhs_expr) = match derivative_of_undeclared_time(&eq.lhs, env) {
+        Some(state) => ("differentiated state", state),
+        None => ("left-hand side", &eq.lhs),
+    };
+    let lhs = propagate_dim(lhs_expr, env, &mut Vec::new());
+    match (lhs.known(), rhs.known()) {
+        (Some(_), Some(r)) => EquationDimensionVerdict::Consistent(describe(r)),
+        (None, _) => EquationDimensionVerdict::NotChecked(format!(
+            "{lhs_label}: {}",
+            indeterminate_operand(lhs_expr, env)
+        )),
+        (_, None) => EquationDimensionVerdict::NotChecked(format!(
+            "right-hand side: {}",
+            indeterminate_operand(&eq.rhs, env)
+        )),
+    }
+}
+
+/// Name the innermost operand that makes `expr`'s dimension indeterminate.
+/// Called only on an expression whose dimension did not resolve.
+fn indeterminate_operand(expr: &Expr, env: &HashMap<String, Unit>) -> String {
+    match expr {
+        Expr::Number(n) => format!("operand `{n}` has an indeterminate dimension"),
+        Expr::Integer(n) => format!("operand `{n}` has an indeterminate dimension"),
+        Expr::Variable(name) => format!("variable `{name}` has no declared units"),
+        Expr::Operator(op) => {
+            // A bare literal is the least informative operand to blame — it is
+            // indeterminate everywhere — so a NAMED operand that is equally
+            // indeterminate is reported in preference to it.
+            let mut literal: Option<String> = None;
+            for arg in &op.args {
+                if propagate_dim(arg, env, &mut Vec::new()).known().is_some() {
+                    continue;
+                }
+                if matches!(arg, Expr::Number(_) | Expr::Integer(_)) {
+                    literal.get_or_insert_with(|| indeterminate_operand(arg, env));
+                    continue;
+                }
+                return indeterminate_operand(arg, env);
+            }
+            literal.unwrap_or_else(|| format!("`{}` node has no determinable dimension", op.op))
+        }
+    }
+}
+
 /// Every declared `const` unit string in `expr` that does not resolve against
 /// the registry (esm-spec §4.8.5 item 2), in walk order.
 pub fn unresolvable_const_units(expr: &Expr) -> Vec<String> {
