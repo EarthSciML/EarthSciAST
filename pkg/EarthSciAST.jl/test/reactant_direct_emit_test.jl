@@ -573,36 +573,52 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
         withenv("ESM_DIRECT_EMIT_READ" => "always") do
             @test EXT_DE._de_gather_is_cheaper(2, 10_000)
             @test !EXT_DE._de_gather_is_cheaper(1, 216)
-            @test EXT_DE._de_gather_base_fits(4, false, 10_000_000)
+            @test EXT_DE._de_gather_base_fits(4, false, 10_000_000, typemax(Int))
         end
 
         # THE BASE BUDGET, the other half of the decision and the one that
         # decided ReSEACT's transport half. Wanting the gather is not enough:
         # a cross-producer gather also needs the producers concatenated, and
         # that concatenate is what the budget bounds.
-        withenv("ESM_DIRECT_EMIT_READ" => nothing,
-                "ESM_DIRECT_GATHER_BASE_MAX" => nothing) do
+        let small = EXT_DE._de_gather_base_max(3744),      # a 288-cell model
+            conus = EXT_DE._de_gather_base_max(85_176)     # a continental one
+            # THE BUDGET IS RELATIVE TO THE EXTENDED STATE, with the old
+            # absolute value as a floor. A small model keeps the headroom it
+            # had; a large one gets a budget its own whole state fits inside,
+            # which is what an absolute constant could not do.
+            @test small == 1 << 16
+            @test conus == 4 * 85_176
+            @test conus > 1 << 16
             # One producer, no structural zero: `_de_concat` of a single piece
             # IS that piece, so there is no copy to charge and no size at which
             # to decline.
-            @test EXT_DE._de_gather_base_fits(1, false, 476_928)
+            @test EXT_DE._de_gather_base_fits(1, false, 476_928, small)
             # The shape that matters: ReSEACT's stencil reads 432 positions out
             # of the 3744-slot extended state beside a 2304-slot buffer. The
             # per-read rule this replaced compared 6048 against `max(8*432,
             # 4096)` and declined; the copy is 6048 elements, paid once for all
             # 240 reads that share the producer set.
-            @test EXT_DE._de_gather_base_fits(2, false, 3744 + 2304)
+            @test EXT_DE._de_gather_base_fits(2, false, 3744 + 2304, small)
             # A base whose copy is larger than the budget still declines.
-            @test !EXT_DE._de_gather_base_fits(2, false, (1 << 16) + 1)
-            @test EXT_DE._de_gather_base_fits(2, false, 1 << 16)
+            @test !EXT_DE._de_gather_base_fits(2, false, (1 << 16) + 1, small)
+            @test EXT_DE._de_gather_base_fits(2, false, 1 << 16, small)
             # And a structural zero makes even a single producer a concatenate.
-            @test !EXT_DE._de_gather_base_fits(1, true, 476_928)
+            @test !EXT_DE._de_gather_base_fits(1, true, 476_928, small)
+            # THE CLAUSE THAT REFUSED EVERY CROSS-PRODUCER READ AT SCALE. A
+            # continental extended state is 85,176 slots, larger than the
+            # absolute 65,536 this replaces, so a base spanning it — the output
+            # assembly's, which spans every producer there is — was declined by
+            # construction at every grid past that size. On the model's own
+            # budget it is not.
+            @test !EXT_DE._de_gather_base_fits(2, false, 85_176, 1 << 16)
+            @test EXT_DE._de_gather_base_fits(2, false, 85_176, conus)
+            @test EXT_DE._de_gather_base_fits(40, true, 85_176 + 1, conus)
         end
         # The override reproduces the per-read rule's effect on this model, and
         # is how the negative control in reseact.esm's COMPILE_COST.md was run.
         withenv("ESM_DIRECT_GATHER_BASE_MAX" => "4096") do
-            @test !EXT_DE._de_gather_base_fits(2, false, 3744 + 2304)
-            @test EXT_DE._de_gather_base_fits(1, false, 476_928)
+            @test !EXT_DE._de_gather_base_fits(2, false, 3744 + 2304, 4096)
+            @test EXT_DE._de_gather_base_fits(1, false, 476_928, 4096)
         end
 
         # And the two read forms are the SAME PROGRAM numerically. A 3-axis

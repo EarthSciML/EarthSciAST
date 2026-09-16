@@ -430,7 +430,7 @@ end
 # zeros (a gather may read one position many times, so every zero lane points
 # at that single element). Returns the base, the offset of each producer inside
 # it, and the position of the zero — or `nothing` when the concatenate the base
-# needs would copy more than `_DE_GATHER_BASE_MAX` elements.
+# needs would copy more elements than the emission's base budget allows.
 #
 # WHAT THE BASE COSTS IS THE COPY, AND ONLY ONCE. The base is cached on the
 # emission context keyed by the producer set, so its concatenate is emitted once
@@ -451,25 +451,41 @@ end
 # the measurement lever: 4096 reproduces the shape the per-read rule produced on
 # this model, which is the negative control the numbers above were measured
 # against.
-const _DE_GATHER_BASE_MAX = 1 << 16
+#
+# THE BUDGET IS RELATIVE TO THE MODEL, and an absolute one is a grid cap wearing
+# a different name. What the base costs is one concatenate and one linear copy
+# of the producers, and the producers of a read that spans the whole extended
+# state ARE the extended state — so a fixed element count is a size of GRID past
+# which every cross-producer read is refused by construction, whatever the
+# program would have saved. The output assembly is the first casualty, because
+# it spans every producer there is. The budget is therefore a multiple of the
+# extended state, with the old absolute value kept as a FLOOR so a small model
+# still gets the headroom it had.
+const _DE_GATHER_BASE_FLOOR = 1 << 16
+const _DE_GATHER_BASE_FACTOR = 4
 
-function _de_gather_base_max()
+# Pure, so the budget can be pinned by a test at sizes no fixture reaches.
+_de_gather_base_max(n_ue::Int) =
+    max(_DE_GATHER_BASE_FLOOR, _DE_GATHER_BASE_FACTOR * n_ue)
+
+function _de_gather_base_budget(ctx::_DECtx)
     _de_read_mode() == "always" && return typemax(Int)
+    dflt = _de_gather_base_max(length(ctx.ue.m))
     v = get(ENV, "ESM_DIRECT_GATHER_BASE_MAX", "")
-    return isempty(v) ? _DE_GATHER_BASE_MAX :
-           something(tryparse(Int, v), _DE_GATHER_BASE_MAX)
+    return isempty(v) ? dflt : something(tryparse(Int, v), dflt)
 end
 
 # Pure, so the decision can be pinned by a test at sizes no fixture reaches.
-_de_gather_base_fits(nprods::Int, needzero::Bool, tot::Int) =
-    ((nprods == 1 && !needzero) ? 0 : tot) <= _de_gather_base_max()
+_de_gather_base_fits(nprods::Int, needzero::Bool, tot::Int, budget::Int) =
+    ((nprods == 1 && !needzero) ? 0 : tot) <= budget
 
 function _de_gather_base(ctx::_DECtx, prods::Vector{_DEVal}, needzero::Bool)
     key = (_MLIR.IR.Value[q.v for q in prods], needzero)
     hit = get(ctx.gather_bases, key, nothing)
     hit === nothing || return hit
     tot = sum(q.len for q in prods) + (needzero ? 1 : 0)
-    _de_gather_base_fits(length(prods), needzero, tot) || return nothing
+    _de_gather_base_fits(length(prods), needzero, tot,
+                         _de_gather_base_budget(ctx)) || return nothing
     offs = Int[]
     acc = 0
     for q in prods
