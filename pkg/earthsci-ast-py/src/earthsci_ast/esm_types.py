@@ -138,6 +138,10 @@ class ExprNode:
     # array thereof. Used to thread const-array tables through the AST without
     # premature numeric collapse (notably as `xs` for `interp.searchsorted`).
     value: Any | None = field(default=None, metadata={"kind": "scalar"})
+    # const (esm 1.2.0): the declared unit ``value`` is in. A unit-bearing
+    # constant has that dimension and exact scale in dimensional analysis
+    # (esm-spec §4.8.5); legal on no other op.
+    units: str | None = field(default=None, metadata={"kind": "scalar"})
     # table_lookup (esm-spec §9.5, v0.4.0): the function_tables entry id this
     # node references. ``args`` MUST be empty for a table_lookup node — the
     # per-axis input expressions live in ``table_axes``.
@@ -217,6 +221,7 @@ _EXPR_WIRE_ORDER: tuple[str, ...] = (
     "name",
     "label",
     "value",
+    "units",
     "table",
     "table_axes",
     "output",
@@ -797,9 +802,10 @@ class ContinuousEvent:
     affect_neg: list[AffectEquation] | None = (
         None  # Added: affects for negative-going zero crossings
     )
-    root_find: Literal["left", "right", "all"] | None = (
-        "left"  # Added: root-finding direction with default
-    )
+    # Which side of the root the event lands on (esm-spec §5.2); ``None`` when
+    # the document does not say, which means "left". Kept as authored so an
+    # explicit "left" survives load -> save.
+    root_find: Literal["left", "right"] | None = None
     reinitialize: bool = False  # Added: whether to reinitialize after event
     priority: int = 0
     description: str | None = None  # Added: optional description

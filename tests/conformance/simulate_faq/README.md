@@ -108,6 +108,6 @@ Julia supports contraction for the **LHS-faq form**
   Symbolics `ArrayOp`.
 
 Julia does NOT support the **embedded form** (`D(z) = faq(...)` where `z` is a
-scalar state): `tree_walk.jl:631` throws `E_TREEWALK_UNSUPPORTED_OP`. The embedded
+scalar state): the tree-walk build refuses it with `unevaluable_operator`. The embedded
 form is tracked in bead `ess-n0w`. Fixture 20 (which exercises the embedded form) is
 listed with `executing_bindings: ["python", "rust"]` and Julia in `skip_bindings`.

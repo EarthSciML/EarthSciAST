@@ -29,7 +29,7 @@ which output field the fixture carries:
 
 ## Fail-closed canonicalization
 
-`canonical_json` emits ONLY the fields `{op, args, wrt, dim, fn, name, value}`
+`canonical_json` emits ONLY the fields `{op, args, wrt, dim, fn, name, value, units}`
 (it also tolerates `{arg, bindings}`). Any node carrying any *other* set field
 — e.g. `int_var`, `lower`, `upper`, `expr`, `output_idx`, `ranges`, `reduce`,
 `semiring`, `join`, `filter`, `regions`, `values`, `shape`, `perm`, `axis`,

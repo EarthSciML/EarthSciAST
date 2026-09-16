@@ -111,7 +111,7 @@ fn run_model_test(fixture: &str, model_name: &str, file: &EsmFile, model: &Model
         alg: Alg::Bdf,
         abstol: Some(1e-10),
         reltol: Some(1e-8),
-        maxiters: 100_000,
+        maxiters: Some(100_000),
         saveat: Some(times),
         ..Default::default()
     };
@@ -230,7 +230,7 @@ fn polygon_intersection_area_planar_fixture_area_is_one() {
         alg: Alg::Bdf,
         abstol: Some(1e-10),
         reltol: Some(1e-8),
-        maxiters: 100_000,
+        maxiters: Some(100_000),
         saveat: Some(vec![0.0, 1.0]),
         ..Default::default()
     };
@@ -296,7 +296,7 @@ fn planar_ode_fixture_is_runnable_and_exposes_area() {
         alg: Alg::Bdf,
         abstol: Some(1e-10),
         reltol: Some(1e-8),
-        maxiters: 100_000,
+        maxiters: Some(100_000),
         saveat: Some(vec![0.0, 2.0]),
         ..Default::default()
     };

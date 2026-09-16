@@ -496,18 +496,18 @@ func evalLazyOp(node ExprNode, bindings map[string]float64) (float64, error) {
 	}
 	switch node.Op {
 	case "ifelse":
-		cond, err := Evaluate(node.Args[0], bindings)
+		cond, err := evaluateExpr(node.Args[0], bindings)
 		if err != nil {
 			return 0, err
 		}
 		if cond != 0 {
-			return Evaluate(node.Args[1], bindings)
+			return evaluateExpr(node.Args[1], bindings)
 		}
-		return Evaluate(node.Args[2], bindings)
+		return evaluateExpr(node.Args[2], bindings)
 
 	case "and":
 		for _, arg := range node.Args {
-			v, err := Evaluate(arg, bindings)
+			v, err := evaluateExpr(arg, bindings)
 			if err != nil {
 				return 0, err
 			}
@@ -519,7 +519,7 @@ func evalLazyOp(node ExprNode, bindings map[string]float64) (float64, error) {
 
 	case "or":
 		for _, arg := range node.Args {
-			v, err := Evaluate(arg, bindings)
+			v, err := evaluateExpr(arg, bindings)
 			if err != nil {
 				return 0, err
 			}
@@ -533,13 +533,15 @@ func evalLazyOp(node ExprNode, bindings map[string]float64) (float64, error) {
 }
 
 // closedNonScalarOps are evaluable-core ops (esm-spec §4.2) that carry real
-// semantics but no SCALAR evaluator in this binding — the array/query tier.
-// They are distinguished from the OPEN rewrite-target tier so that reaching one
-// reports "no scalar evaluator" rather than the (wrong) `unlowered_operator`,
-// which would tell an author to write a rewrite rule for an op that needs none.
+// semantics but no SCALAR evaluator in this binding — the array/query and
+// value-invention tier. They are distinguished from the OPEN rewrite-target tier
+// so that reaching one reports `unevaluable_operator` rather than the (wrong)
+// `unlowered_operator`, which would tell an author to write a rewrite rule for an
+// op that needs none (esm-spec §9.6.6).
 var closedNonScalarOps = map[string]struct{}{
 	"faq": {}, "makearray": {}, "index": {}, "broadcast": {}, "reshape": {},
-	"transpose": {}, "concat": {}, "skolem": {}, "rank": {}, "argmin": {}, "argmax": {},
+	"transpose": {}, "concat": {}, "skolem": {}, "rank": {}, "distinct": {},
+	"argmin": {}, "argmax": {},
 	"intersect_polygon": {}, "polygon_intersection_area": {}, "table_lookup": {},
 	"apply_expression_template": {}, "ic": {},
 }
@@ -576,7 +578,60 @@ func tryConstantFolding(node ExprNode) (Expression, bool) {
 // literal predicate such as `and(true, false)` is evaluable. A typed-nil
 // *ExprNode is reported as an error rather than dereferenced (no audit ID; found
 // while fixing G3).
+//
+// The whole expression is walked BEFORE any of it is evaluated (esm-spec
+// §9.6.6): an operator this evaluator cannot evaluate is refused up front with
+// `unlowered_operator` or `unevaluable_operator`, including one sitting in an
+// `ifelse` branch that evaluation would not have taken.
 func Evaluate(expr Expression, bindings map[string]float64) (float64, error) {
+	if err := checkEvaluable(expr); err != nil {
+		return 0, err
+	}
+	return evaluateExpr(expr, bindings)
+}
+
+// checkEvaluable returns the diagnostic for the first operator (pre-order) in
+// expr that this scalar evaluator cannot evaluate, or nil. An op outside the
+// §4.2 evaluable core reports `unlowered_operator`; a core op with no rule here
+// reports `unevaluable_operator`. It evaluates nothing.
+func checkEvaluable(expr Expression) error {
+	node, ok := asExprNode(expr)
+	if !ok {
+		return nil
+	}
+	switch node.Op {
+	case "const":
+		// A literal: whether its value is scalar is checked when it is evaluated.
+		return nil
+	case "D":
+		return unloweredDerivativeError(node)
+	case "enum":
+		return enumNotLoweredError()
+	case "fn":
+		// Operands only: a closed function is identified by `name`, not `op`.
+		for _, arg := range node.Args {
+			if err := checkEvaluable(arg); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	_, lazy := lazyOps[node.Op]
+	_, arith := arithOpTable[node.Op]
+	if !lazy && !arith {
+		return unevaluableOpError(node)
+	}
+	for _, arg := range node.Args {
+		if err := checkEvaluable(arg); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// evaluateExpr is Evaluate without the up-front walk, for recursion inside an
+// expression Evaluate has already walked.
+func evaluateExpr(expr Expression, bindings map[string]float64) (float64, error) {
 	switch e := expr.(type) {
 	case float64:
 		return e, nil
@@ -614,26 +669,14 @@ func evaluateExprNode(node ExprNode, bindings map[string]float64) (float64, erro
 	case "enum":
 		// `enum` MUST have been lowered to `const` at load time
 		// (esm-spec §9.3). Reaching it here is a bug in the loader.
-		return 0, fmt.Errorf("enum op encountered at evaluation time — should have been lowered at load (esm-spec §9.3)")
+		return 0, enumNotLoweredError()
 	case "fn":
 		return evaluateFnNode(node, bindings)
 	case "D":
-		// esm-spec §4.2 / §9.6.8 (open-op-namespace RFC, Change B): `D` is an
-		// evaluable-core op only in its STRUCTURAL equation-LHS role. A `D`
-		// reaching the evaluator — a spatial `D`, or any `D` in an RHS / observed
-		// / rate position — is an unlowered rewrite-target: a discretization rule
-		// must lower it to a stencil before evaluation. The gate fires here,
-		// before evaluation, with the uniform `unlowered_operator` code.
-		wrtDesc := ""
-		if node.Wrt != nil {
-			wrtDesc = fmt.Sprintf(" (wrt=%s)", *node.Wrt)
-		}
-		return 0, &EvaluationError{
-			Code: CodeUnloweredOperator,
-			Message: fmt.Sprintf("unlowered derivative operator 'D'%s reached evaluation: a spatial or "+
-				"right-hand-side `D` must be lowered to a stencil by a rewrite rule before evaluation "+
-				"(esm-spec §4.2 / §9.6.8).", wrtDesc),
-		}
+		// esm-spec §4.2 / §9.6.8: `D` is evaluable-core only in its STRUCTURAL
+		// equation-LHS role. One reaching the evaluator is an unlowered
+		// rewrite target (checkEvaluable refuses it before evaluation).
+		return 0, unloweredDerivativeError(node)
 	}
 
 	// Short-circuiting core ops are dispatched BEFORE the eager argument loop:
@@ -654,7 +697,7 @@ func evaluateExprNode(node ExprNode, bindings map[string]float64) (float64, erro
 	// diverge on op set / arity).
 	args := make([]float64, len(node.Args))
 	for i, arg := range node.Args {
-		val, err := Evaluate(arg, bindings)
+		val, err := evaluateExpr(arg, bindings)
 		if err != nil {
 			return 0, err
 		}
@@ -666,11 +709,37 @@ func evaluateExprNode(node ExprNode, bindings map[string]float64) (float64, erro
 	return op.apply(args)
 }
 
+// enumNotLoweredError reports an `enum` node reaching evaluation: an
+// evaluable-core op whose only rule is its load-time lowering to `const`
+// (esm-spec §9.3).
+func enumNotLoweredError() error {
+	return &EvaluationError{
+		Code: CodeUnevaluableOperator,
+		Message: "operator 'enum' is an evaluable-core op with no evaluation rule: it must be " +
+			"lowered to `const` at load (esm-spec §9.3 / §9.6.6).",
+	}
+}
+
+// unloweredDerivativeError reports a `D` outside its structural equation-LHS
+// role: a spatial or right-hand-side derivative no discretization rule lowered.
+func unloweredDerivativeError(node ExprNode) error {
+	wrtDesc := ""
+	if node.Wrt != nil {
+		wrtDesc = fmt.Sprintf(" (wrt=%s)", *node.Wrt)
+	}
+	return &EvaluationError{
+		Code: CodeUnloweredOperator,
+		Message: fmt.Sprintf("unlowered derivative operator 'D'%s reached evaluation: a spatial or "+
+			"right-hand-side `D` must be lowered to a stencil by a rewrite rule before evaluation "+
+			"(esm-spec §4.2 / §9.6.8).", wrtDesc),
+	}
+}
+
 // unevaluableOpError classifies an op that the scalar evaluator cannot reduce
 // (esm-spec §4.2's two tiers):
 //
-//   - a CLOSED-core array/query op (aggregate, makearray, index, …) has real
-//     semantics but no scalar evaluator in this binding;
+//   - a CLOSED-core array/query op (faq, makearray, index, …) has real
+//     semantics but no scalar evaluator in this binding (`unevaluable_operator`);
 //   - ANY other identifier is OPEN-tier — a rewrite target (the spatial-calculus
 //     sugar grad/div/laplacian, the `integral` sugar, a user op such as
 //     `godunov_hamiltonian`) that a rewrite rule was supposed to eliminate
@@ -681,9 +750,11 @@ func evaluateExprNode(node ExprNode, bindings map[string]float64) (float64, erro
 func unevaluableOpError(node ExprNode) error {
 	if _, closed := closedNonScalarOps[node.Op]; closed {
 		return &EvaluationError{
-			Code: CodeUnsupportedOperator,
-			Message: fmt.Sprintf("operator '%s' is an evaluable-core array/query op with no scalar "+
-				"evaluator: it cannot be reduced to a single number (esm-spec §4.2).", node.Op),
+			Code: CodeUnevaluableOperator,
+			Message: fmt.Sprintf("operator '%s' is an evaluable-core op with no evaluation rule in the "+
+				"scalar evaluator: an earlier pipeline stage (value invention, or a load-time lowering "+
+				"pass) must eliminate it, or the document belongs to a runtime that evaluates it "+
+				"(esm-spec §4.2 / §9.6.6).", node.Op),
 		}
 	}
 	return &EvaluationError{
@@ -824,7 +895,7 @@ func evaluateFnArg(arg any, bindings map[string]float64) (any, error) {
 		}
 	}
 	// Scalar path.
-	return Evaluate(arg, bindings)
+	return evaluateExpr(arg, bindings)
 }
 
 // constNodeValue returns the typed payload of a `const`-op node. Numeric

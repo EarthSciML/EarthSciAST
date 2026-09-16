@@ -1,0 +1,11 @@
+{
+  "esm": "1.1.0",
+  "metadata": { "name": "metaparameter_loop_symbol_conflict_mount", "description": "Mounts metaparameter_loop_symbol_conflict.esm as a subsystem and closes its metaparameter i at the mount edge (`bindings`: {\"i\": 2}). The mounted component resolves in its own scope, where metaparameter i collides with its own faq loop symbol i, so the collision is refused there and the edge binding does not bypass it (metaparameter_name_conflict, esm-spec 9.7.6)" },
+  "models": {
+    "Root": {
+      "subsystems": { "C": { "ref": "./metaparameter_loop_symbol_conflict.esm", "bindings": { "i": 2 } } },
+      "variables": { "z": { "type": "unknown", "units": "1", "default": 0.0 } },
+      "equations": [ { "lhs": { "op": "D", "args": ["z"], "wrt": "t" }, "rhs": 0.0 } ]
+    }
+  }
+}

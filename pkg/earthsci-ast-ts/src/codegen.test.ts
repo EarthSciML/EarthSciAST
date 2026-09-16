@@ -3,7 +3,12 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { compileExpression, evaluateExpression, UnloweredOperatorError } from './codegen.js'
+import {
+  compileExpression,
+  evaluateExpression,
+  UnevaluableOperatorError,
+  UnloweredOperatorError,
+} from './codegen.js'
 import type { Expr } from './types.js'
 
 describe('compileExpression / evaluateExpression — TS scalar runner', () => {
@@ -162,17 +167,18 @@ describe('compileExpression / evaluateExpression — TS scalar runner', () => {
       expect(String(err)).toContain('godunov_hamiltonian')
     })
 
-    it('throws `Unsupported operator` for a registered but non-scalar op (Pre)', () => {
+    it('throws `unevaluable_operator` for a registered but non-scalar op (Pre)', () => {
       // `Pre` IS in the op-registry (evaluable-core, structural) but carries no
-      // scalar evaluator, so it passes the rewrite-target gate and is reported
-      // as unsupported here — distinct from the unlowered_operator open-tier gate.
+      // scalar evaluator, so it is reported as `unevaluable_operator` (esm-spec
+      // §9.6.6) — distinct from the unlowered_operator open-tier gate.
       const expr: any = { op: 'Pre', args: ['x'] }
-      expect(() => evaluateExpression(expr, bindings)).toThrow('Unsupported operator: Pre')
+      expect(() => evaluateExpression(expr, bindings)).toThrow(UnevaluableOperatorError)
+      expect(() => evaluateExpression(expr, bindings)).toThrow("operator 'Pre'")
     })
 
     it('rejects unlowered enum nodes', () => {
       const expr: any = { op: 'enum', value: 'foo' }
-      expect(() => evaluateExpression(expr, bindings)).toThrow(/enum op encountered/)
+      expect(() => evaluateExpression(expr, bindings)).toThrow(UnevaluableOperatorError)
     })
 
     it('rejects array-valued const nodes in scalar position', () => {

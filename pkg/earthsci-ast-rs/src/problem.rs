@@ -1248,6 +1248,17 @@ pub fn esm_problem<'a>(
     if let Some(f) = owned_file.as_mut() {
         crate::lower_table_lookup::lower_table_lookups(f).map_err(SimulateError::Compile)?;
     }
+    // A caller-flattened system has no document, but `flatten` carries
+    // `function_tables` so that this carrier can be lowered too. The lowered
+    // system is a copy the build owns; the caller's keeps the authored form.
+    let lowered_flat;
+    if let Some(flat) = flat_only
+        && let Some(lowered) = crate::lower_table_lookup::lowered_flattened_copy(flat)
+            .map_err(SimulateError::Compile)?
+    {
+        lowered_flat = lowered;
+        flat_only = Some(&lowered_flat);
+    }
 
     // ---- (2) The deterministic build pipeline. ----------------------------
     // `mut` on wasm32 only in the sense that the pipeline that writes these is

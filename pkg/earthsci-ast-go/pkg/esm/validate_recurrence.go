@@ -351,8 +351,13 @@ func checkRecurrenceReads(varName string, frameSyms []string, frameEnv map[strin
 					message: fmt.Sprintf("index %d of a causal self-read of '%s' is not affine in "+
 						"its frame symbol '%s'. A self-read names a position RELATIVE to the cell "+
 						"being written (`%s - 1`, `%s - a`, `%s - a - 2`), which is what makes the "+
-						"recurrence axis and its direction decidable (esm-spec §4.3.1.1).",
-						d, varName, sym, sym, sym, sym),
+						"recurrence axis and its direction decidable (esm-spec §4.3.1.1). "+
+						"If the offset is read from data (`%s - index(lag, %s)`), it has no direct "+
+						"spelling; contract it instead: either order the axis so the predecessor is "+
+						"the preceding position and the lag is the constant 1, or range a contracted "+
+						"index `a` over the lag's bounds and select the matching term with "+
+						"`ifelse(index(lag, %s) == a, <term reading index(%s, %s - a)>, 0)`.",
+						d, varName, sym, sym, sym, sym, sym, sym, sym, varName, sym),
 				}
 			}
 			// The MANDATORY half of the proof: coefficient exactly 1. Without it

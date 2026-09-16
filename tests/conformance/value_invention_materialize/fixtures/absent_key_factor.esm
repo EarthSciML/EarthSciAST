@@ -1,0 +1,145 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "ValueInventionAbsentKeyFactor",
+    "description": "Issue #266 refusal half. The same derived axis as composite_key_axis.esm, but the key column `engTechID` is a shaped PARAMETER with no data: nothing in the document, no loader, and no caller supplies it, so the `distinct` producer cannot be materialized at build time. A contraction over the derived axis MUST be refused with `derived_index_set_unmaterialized` naming the index set; it MUST NOT read 0, which is what an empty derived set would silently contract to.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ]
+  },
+  "index_sets": {
+    "rows": {
+      "kind": "interval",
+      "size": 4
+    },
+    "composite_keys": {
+      "kind": "derived",
+      "from_faq": "key_set"
+    }
+  },
+  "models": {
+    "CompositeKeyAxis": {
+      "variables": {
+        "polProcessID": {
+          "type": "unknown",
+          "shape": [
+            "rows"
+          ]
+        },
+        "engTechID": {
+          "type": "parameter",
+          "shape": [
+            "rows"
+          ]
+        },
+        "keyExists": {
+          "type": "unknown",
+          "shape": [
+            "composite_keys"
+          ]
+        },
+        "distinctKeyCount": {
+          "type": "unknown"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "polProcessID",
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": [
+              101,
+              201,
+              101,
+              101
+            ]
+          }
+        },
+        {
+          "_comment": "Three distinct pairs: (101,121) twice, (201,121), (101,122).",
+          "lhs": {
+            "op": "index",
+            "args": [
+              "keyExists",
+              "e"
+            ]
+          },
+          "rhs": {
+            "op": "faq",
+            "id": "key_set",
+            "args": [],
+            "semiring": "bool_and_or",
+            "distinct": true,
+            "output_idx": [
+              "e"
+            ],
+            "ranges": {
+              "n": {
+                "from": "rows"
+              }
+            },
+            "key": {
+              "op": "skolem",
+              "label": "pol_process_eng_tech",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "polProcessID",
+                    "n"
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "engTechID",
+                    "n"
+                  ]
+                }
+              ]
+            },
+            "filter": {
+              "op": "true",
+              "args": []
+            },
+            "expr": {
+              "op": "true",
+              "args": []
+            }
+          }
+        },
+        {
+          "lhs": "distinctKeyCount",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [],
+            "ranges": {
+              "e": {
+                "from": "composite_keys"
+              }
+            },
+            "expr": 1.0
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "derived_axis_has_three_members",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "assertions": [
+            {
+              "variable": "distinctKeyCount",
+              "time": 0.0,
+              "expected": 3.0
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

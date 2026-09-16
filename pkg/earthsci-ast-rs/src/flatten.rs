@@ -733,15 +733,21 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
     // Phase 5b: pointwise spatial lift (esm-spec §10.5).
     maybe_apply_pointwise_lift(file, &mut parts, &loaded_producers)?;
 
-    // Phase 5b′: resolve a right-hand-side STRUCTURAL time derivative to the
-    // tendency this system defines for it (esm-spec §4.2). Runs after the lift
-    // so it sees the equations the lift produced, after reaction lowering
-    // (phase 1) so a mechanism's mass-action tendency is available to a sibling
-    // model's scoped `D(Chem.O3, t)`, and after coupling (phase 4) so a state
-    // merged by `operator_compose` yields its WHOLE tendency rather than the
-    // first contributing term.
+    // Phase 5b′ (esm-libraries-spec §4.7.5 step 3a): resolve a right-hand-side
+    // STRUCTURAL time derivative to the tendency this system defines for it
+    // (esm-spec §4.2). Runs after the lift so it sees the equations the lift
+    // produced, after reaction lowering (phase 1) so a mechanism's mass-action
+    // tendency is available to a sibling model's scoped `D(Chem.O3, t)`, and
+    // after coupling (phase 4) so a state merged by `operator_compose` yields
+    // its WHOLE tendency rather than the first contributing term.
     let time_invariant: HashSet<String> = parts.parameters.keys().cloned().collect();
     resolve_rhs_time_derivatives(&mut parts.equations, &time_invariant);
+
+    // Phase 5b″: classify the `ic` equations OUT of `equations` into
+    // `field_ics` (esm-libraries-spec §4.7.5 step 4). After 5b′, so an
+    // `ic(y) ~ D(x, t)` reaches `field_ics` as `x`'s resolved tendency (step
+    // 3a), and before 5c, so classification never sees an `ic` equation.
+    extract_field_ics(&mut parts);
 
     // Phase 5c: the §6.3.1 SUBSET maps, re-derived over the FINISHED system so
     // they see the equations coupling and the pointwise lift actually produced
@@ -1630,7 +1636,8 @@ fn detect_conflicts(file: &EsmFile, per_system: &[SystemBlock]) -> Result<(), Fl
 
 /// The [`FlattenedSystem`]-shaped accumulation produced by phase 5
 /// ([`assemble_output`]) and refined by the post-collection passes
-/// ([`apply_variable_map_removals`], [`maybe_apply_pointwise_lift`]).
+/// ([`apply_variable_map_removals`], [`maybe_apply_pointwise_lift`],
+/// [`resolve_rhs_time_derivatives`], [`extract_field_ics`]).
 struct AssembledParts {
     state_variables: IndexMap<String, ModelVariable>,
     parameters: IndexMap<String, ModelVariable>,
@@ -1645,10 +1652,8 @@ struct AssembledParts {
 /// Phase 5 of [`flatten`]: merge the per-system blocks (in block order) into
 /// the final variable maps, equation list, and event lists.
 ///
-/// Scoped-reference / array `ic` equations (esm-spec §11.4.1) are classified
-/// out of the ordinary equation list here — the downstream simulator folds
-/// them into `u0` from the data-Provider seam rather than treating them as
-/// state ODEs. Collected as `(target_state, rhs)`.
+/// `ic` equations stay in `equations` here; [`extract_field_ics`] classifies
+/// them out after the right-hand-side `D` resolution has run over them.
 fn assemble_output(per_system: Vec<SystemBlock>) -> AssembledParts {
     let mut parts = AssembledParts {
         state_variables: IndexMap::new(),
@@ -1671,17 +1676,27 @@ fn assemble_output(per_system: Vec<SystemBlock>) -> AssembledParts {
         for (name, var) in block.observed_vars {
             parts.observed_variables.insert(name, var);
         }
-        for eq in block.equations {
-            if let Some(target) = extract_ic_target(&eq.lhs) {
-                parts.field_ics.push((target, eq.rhs));
-            } else {
-                parts.equations.push(eq);
-            }
-        }
+        parts.equations.extend(block.equations);
         parts.continuous_events.extend(block.continuous_events);
         parts.discrete_events.extend(block.discrete_events);
     }
     parts
+}
+
+/// Phase 5b″ of [`flatten`]: classify scoped-reference / array `ic` equations
+/// (esm-spec §11.4.1) out of the ordinary equation list into `field_ics`, as
+/// `(target_state, rhs)` — the downstream simulator folds them into `u0` from
+/// the data-Provider seam rather than treating them as state ODEs.
+fn extract_field_ics(parts: &mut AssembledParts) {
+    let mut kept = Vec::with_capacity(parts.equations.len());
+    for eq in std::mem::take(&mut parts.equations) {
+        if let Some(target) = extract_ic_target(&eq.lhs) {
+            parts.field_ics.push((target, eq.rhs));
+        } else {
+            kept.push(eq);
+        }
+    }
+    parts.equations = kept;
 }
 
 /// Phase 5a of [`flatten`]: apply post-collection `variable_map` parameter
@@ -2492,14 +2507,35 @@ fn build_reaction_block(
         })
         .collect();
 
+    // A reaction system's events are carried on the same footing as a model's:
+    // the schema gives `ReactionSystem` the same `continuous_events` /
+    // `discrete_events` blocks, and Python, Go and TypeScript all lift them.
+    // Dropping them here made `reject_unsupported_features` blind to an event a
+    // reaction system owns, so the compiled system ran the document without it
+    // (issues #264, #356).
+    let continuous_events = rs
+        .continuous_events
+        .clone()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|e| namespace_continuous_event(e, system_name, &HashSet::new(), &locals))
+        .collect();
+    let discrete_events = rs
+        .discrete_events
+        .clone()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|e| namespace_discrete_event(e, system_name, &HashSet::new(), &locals))
+        .collect();
+
     Ok(SystemBlock {
         name: system_name.to_string(),
         state_vars,
         parameters,
         observed_vars: IndexMap::new(),
         equations,
-        continuous_events: Vec::new(),
-        discrete_events: Vec::new(),
+        continuous_events,
+        discrete_events,
     })
 }
 

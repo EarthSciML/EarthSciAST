@@ -1,0 +1,145 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "UnitsIfelseUndeterminableBranch",
+    "description": "Pins esm-spec §4.8.3 for ifelse: an undeterminable branch is skipped and the result is the unit of the determinable branch, whichever branch that is; with no determinable branch the result is undeterminable, not dimensionless.",
+    "authors": [
+      "Chris Tessum with Claude"
+    ],
+    "created": "2026-09-15T00:00:00Z",
+    "tags": [
+      "units",
+      "dimensional_analysis",
+      "literals"
+    ]
+  },
+  "models": {
+    "IfelseUnitRules": {
+      "reference": {
+        "notes": "Every result is declared in m and every declaration matches: a determinable branch gives m, and a pair of literal branches is undeterminable and unchecked. tests/invalid/units_ifelse_undeterminable_branch_mismatch.esm pins the other half: a partly undeterminable ifelse is NOT skipped."
+      },
+      "variables": {
+        "x": {
+          "type": "parameter",
+          "units": "m",
+          "default": 2.0,
+          "description": "A length"
+        },
+        "y": {
+          "type": "parameter",
+          "units": "m",
+          "default": 3.0,
+          "description": "Another length"
+        },
+        "c": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.0,
+          "description": "A dimensionless switch"
+        },
+        "known_then_undeterminable": {
+          "type": "unknown",
+          "units": "m",
+          "description": "ifelse(c > 0, x, 0.5*y): has x's unit"
+        },
+        "undeterminable_then_known": {
+          "type": "unknown",
+          "units": "m",
+          "description": "ifelse(c > 0, 0.5*y, x): has x's unit"
+        },
+        "literal_then_known": {
+          "type": "unknown",
+          "units": "m",
+          "description": "ifelse(c > 0, 2, x): the literal branch adopts x's unit"
+        },
+        "literal_branches": {
+          "type": "unknown",
+          "units": "m",
+          "description": "ifelse(c > 0, 1, 2): no determinable branch, so undeterminable and unchecked"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "known_then_undeterminable",
+          "rhs": {
+            "op": "ifelse",
+            "args": [
+              {
+                "op": ">",
+                "args": [
+                  "c",
+                  0
+                ]
+              },
+              "x",
+              {
+                "op": "*",
+                "args": [
+                  0.5,
+                  "y"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "undeterminable_then_known",
+          "rhs": {
+            "op": "ifelse",
+            "args": [
+              {
+                "op": ">",
+                "args": [
+                  "c",
+                  0
+                ]
+              },
+              {
+                "op": "*",
+                "args": [
+                  0.5,
+                  "y"
+                ]
+              },
+              "x"
+            ]
+          }
+        },
+        {
+          "lhs": "literal_then_known",
+          "rhs": {
+            "op": "ifelse",
+            "args": [
+              {
+                "op": ">",
+                "args": [
+                  "c",
+                  0
+                ]
+              },
+              2,
+              "x"
+            ]
+          }
+        },
+        {
+          "lhs": "literal_branches",
+          "rhs": {
+            "op": "ifelse",
+            "args": [
+              {
+                "op": ">",
+                "args": [
+                  "c",
+                  0
+                ]
+              },
+              1,
+              2
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

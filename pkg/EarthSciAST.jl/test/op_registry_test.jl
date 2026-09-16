@@ -285,7 +285,10 @@ end
             OpExpr("+", EarthSciAST.ASTExpr[VarExpr("a"), VarExpr("b")];
                    NamedTuple{(kw[1],)}((kw[2],))...))
     end
-    @test ESM._EMISSIBLE_FIELDS == (:op, :args, :wrt, :dim, :fn, :name, :value)
+    # `units` joins the closed emissible set at esm 1.2.0: a `const` node's
+    # declared unit is meaning-bearing, so canonical JSON carries it and two
+    # nodes differing only in it do not canonicalize alike (esm-spec §4.8.5).
+    @test ESM._EMISSIBLE_FIELDS == (:op, :args, :wrt, :dim, :fn, :name, :value, :units)
     # `arg`/`bindings` were historically tolerated-and-ignored (absent from the
     # non-emissible literal): a node carrying them still canonicalizes.
     @test ESM._CANONICAL_IGNORED_FIELDS == (:arg, :bindings)

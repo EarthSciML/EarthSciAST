@@ -600,7 +600,10 @@ fn observed_defs(model: &Model) -> HashMap<String, Expr> {
 ///
 /// A parameter with array data is not a 0-D parameter's default, so it is not
 /// in this scope at all. It reaches the evaluator's fail-closed path instead of
-/// a plausible zero. (Its mirror image — a SCALAR default on a SHAPED parameter,
+/// a plausible zero. Such a document is rejected at load as
+/// `array_default_without_shape` (esm-spec §6.3); this filter stays as the
+/// backstop for routes that build without structural validation, which
+/// `esm_problem` does. (Its mirror image — a SCALAR default on a SHAPED parameter,
 /// which must broadcast rather than be dropped — is issue #219.)
 fn scalar_params(model: &Model, overrides: &HashMap<String, f64>) -> (Vec<f64>, Vec<String>) {
     let mut names: Vec<String> = model

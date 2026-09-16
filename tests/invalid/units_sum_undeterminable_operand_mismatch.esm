@@ -1,0 +1,52 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "UnitsSumUndeterminableOperandMismatch",
+    "description": "Invalid: declares a mass equal to x [m] + 0.5 * y [m]. The product 0.5 * y is undeterminable, but an undeterminable operand of + is skipped and the sum has the unit of its determinable operand, m (esm-spec §4.8.3), so the declaration is a provable mismatch.",
+    "authors": [
+      "Chris Tessum with Claude"
+    ],
+    "created": "2026-09-15T00:00:00Z"
+  },
+  "models": {
+    "BadUnitsModel": {
+      "variables": {
+        "x": {
+          "type": "parameter",
+          "units": "m",
+          "default": 2.0,
+          "description": "A length"
+        },
+        "y": {
+          "type": "parameter",
+          "units": "m",
+          "default": 3.0,
+          "description": "Another length"
+        },
+        "total_mass": {
+          "type": "unknown",
+          "units": "kg",
+          "description": "Invalid: declared in kg but defined as a length"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "total_mass",
+          "rhs": {
+            "op": "+",
+            "args": [
+              "x",
+              {
+                "op": "*",
+                "args": [
+                  0.5,
+                  "y"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "esm": "1.1.0",
+  "metadata": { "name": "metaparameter_loop_symbol_conflict_import", "description": "Imports a library whose metaparameter i collides with its template's loop symbol i, closing i at the edge: the edge instantiation would rewrite the loop symbol, so the collision is refused (metaparameter_name_conflict, esm-spec 9.7.6)" },
+  "models": {
+    "M": {
+      "expression_template_imports": [ { "ref": "./metaparameter_loop_symbol_conflict_lib.esm", "bindings": { "i": 2 } } ],
+      "variables": { "x": { "type": "unknown", "units": "1", "default": 0.0 } },
+      "equations": [ { "lhs": { "op": "D", "args": ["x"], "wrt": "t" }, "rhs": { "op": "-", "args": ["x"] } } ]
+    }
+  }
+}
