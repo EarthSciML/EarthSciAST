@@ -183,10 +183,11 @@ end
 # an `index(conn, i)` subscript that is the identity at every corner but swaps
 # one interior cell has `Δ = 0` at every corner and a different slot inside.
 @testset "same-shape state gather is not licensed by corner agreement" begin
-    function check(model, ics, ca, cells)
+    function check(model, ics, ca, cells; pa = Dict{String,Any}())
         ev(envs...) = withenv(envs...) do
             f, u0, p, _t, vm, _d = ESM_CS._build_evaluator_impl(model;
-                initial_conditions = ics, const_arrays = ca)
+                initial_conditions = ics, const_arrays = ca,
+                param_arrays = Dict(k => copy(v) for (k, v) in pa))
             du = fill(NaN, length(u0)); f(du, u0, p, 0.0)
             (du = du, vm = vm)
         end
@@ -253,4 +254,12 @@ end
                         _ao1(_idx("w", _op("-", _op("*", _i(3), _v("i")), _i(40))),
                              "i", 1, N))])
     check(ma, ics1, Dict{String,Any}(), ["u[13]", "u[14]", "u[20]", "u[26]", "u[27]"])
+
+    # The LIVE-FORCING (pgather) lane derives its flat buffer index the same
+    # way the const lane derives its linear index, so the same connectivity
+    # swap sent it to the wrong buffer element.
+    mp = ESM_CS.Model(cvars, [ESM_CS.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
+                          _ao1(_idx("forcing", _idx("conn", _v("i"))), "i", 1, N))])
+    check(mp, icsc, Dict("conn" => Float64.(perm)), ["u[$i0]"];
+          pa = Dict("forcing" => cvals))
 end

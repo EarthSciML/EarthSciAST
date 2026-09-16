@@ -983,15 +983,20 @@ end
 # pre-A2 whole-equation per-cell fallback for the differential oracle). A live
 # forcing lane otherwise lowers to `_AccForcingBox` over the aliased buffer
 # (never folded to a literal, so it stays refresh-live).
+# `structural` is `_affine_idx_expr` over every one of the lane's subscripts.
+# Every corner-derived conclusion below (ghost fold, uniform Δ, affine const /
+# forcing index) is a PROOF only when it holds; otherwise the conclusion is
+# re-checked at every cell of the box. It is a property of the EXPRESSION, not of
+# a cell or a box, so the box processor passes the per-branch classification
+# `_lane_nonaffine_args!` already memoizes; the default derives it for a direct
+# caller.
 function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
                            oln_rep, base, strides, D, var_map, const_arrays,
-                           flat_cache, box)
+                           flat_cache, box,
+                           structural::Bool =
+                               all(a -> _affine_idx_expr(a, idx_names), rec.idx_args))
     env = Dict{String,Int}()
     ev(loop) = _eval_recipe(rec, _set_env!(env, idx_names, loop), var_map, const_arrays)
-    # Every corner-derived conclusion below (ghost fold, uniform Δ, affine
-    # const / forcing index) is a PROOF only when the subscripts are affine in
-    # the loop indices; otherwise it is re-checked at every cell of the box.
-    structural = all(a -> _affine_idx_expr(a, idx_names), rec.idx_args)
     if rec.kind == LANE_STATE
         slot_rep = ev(rep)
         if slot_rep == 0                              # ghost → literal 0.0
@@ -1122,12 +1127,12 @@ function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
         # boundary-fold transition already forces a box cut (`_const_fold_key!`),
         # so two corners pin the affine map exactly. A subscript that is NOT
         # (a gather through connectivity data) has no such construction, so the
-        # derived map is checked at every cell of the box instead. Invariance then follows
-        # STRUCTURALLY: an all-zero stride vector means the index — hence the
-        # value — does not move over the box, and only then is the literal fold
-        # legal. That test cannot be fooled by adversarial data, and it costs the
-        # same O(2^D) corner evals as before: no per-cell work is added on the
-        # fast path.
+        # derived map is checked at every cell of the box instead. Invariance
+        # then follows STRUCTURALLY: an all-zero stride vector means the index —
+        # hence the value — does not move over the box, and only then is the
+        # literal fold legal. That test cannot be fooled by adversarial data,
+        # and for an affine subscript it costs the same O(2^D) corner evals as
+        # before: no per-cell work is added on the fast path.
         val_rep = ev(rep)
         lenv = Dict{String,Int}()
         clin(loop) = _recipe_const_lin(rec, _set_env!(lenv, idx_names, loop), const_arrays)
@@ -1267,11 +1272,17 @@ function _process_affine_box!(kernels, spine_cache, flat_cache, box, idx_names,
     end
     oln_rep = _box_oln(base, strides, rep, D)
 
+    # Per-lane structural affinity of the subscripts, memoized per branch key
+    # (`_lane_nonaffine_args!`): what licenses a corner check as a proof rather
+    # than a sample, so `_derive_lane_repl` re-verifies at every cell only where
+    # it must. Classified once per branch, not once per box.
+    nonaff = _lane_nonaffine_args!(sig, bkey, recipes, ctx_proto.idxset)
     lane_repl = Vector{_LaneRepl}(undef, length(recipes))
     for k in eachindex(recipes)
         lane_repl[k] = @_bench :lane_repl _derive_lane_repl(recipes[k], idx_names, rep, corners, thin,
                                          oln_rep, base, strides, D, var_map,
-                                         const_arrays, flat_cache, box)
+                                         const_arrays, flat_cache, box,
+                                         !any(nonaff[k]))
     end
 
     spine, acc, cse, subs = @_bench_hot :spine_lower get!(spine_cache, string(bkey, '#', _lane_repl_key(lane_repl))) do
