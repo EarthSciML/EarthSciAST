@@ -1,6 +1,6 @@
 //! Units fixtures consumption runner (gt-dt0o).
 //!
-//! The three `units_*.esm` files in `tests/valid/` carry inline `tests`
+//! The `units_*.esm` files in `tests/valid/` carry inline `tests`
 //! blocks (id / parameter_overrides / initial_conditions / time_span /
 //! assertions) added in gt-p3v. Schema parse coverage is asserted in
 //! `units_fixtures.rs`'s parse suite. This file closes the
@@ -30,6 +30,10 @@ const UNITS_FIXTURES: &[(&str, &str)] = &[
     (
         "units_propagation.esm",
         include_str!("../../../tests/valid/units_propagation.esm"),
+    ),
+    (
+        "units_negated_literal_neutral.esm",
+        include_str!("../../../tests/valid/units_negated_literal_neutral.esm"),
     ),
 ];
 

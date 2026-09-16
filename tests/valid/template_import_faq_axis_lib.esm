@@ -1,0 +1,26 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "template_import_faq_axis_lib",
+    "description": "Grid library for template_import_faq_axis.esm (esm-spec 9.7.1): declares the vertical axis `lev`, sized by the metaparameter NLEV (default 4). A consuming model gets `lev` only through this import, so the axis is absent from the consumer's own bytes until load merges it (9.7.5)."
+  },
+  "metaparameters": {
+    "NLEV": {
+      "type": "integer",
+      "default": 4,
+      "description": "vertical level count"
+    }
+  },
+  "index_sets": {
+    "lev": {
+      "kind": "interval",
+      "size": "NLEV"
+    }
+  },
+  "expression_templates": {
+    "nlev": {
+      "params": [],
+      "body": "NLEV"
+    }
+  }
+}

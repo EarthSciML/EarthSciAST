@@ -90,6 +90,10 @@ TRANSFORMING_FIXTURES: dict[str, str] = {
         "`expression_template_imports` is consumed at load and the imported "
         "bodies are expanded into their call sites (esm-spec §9.7.6)"
     ),
+    "template_import_faq_axis.esm": (
+        "`expression_template_imports` is consumed at load and the imported "
+        "`lev` axis merges into the document's `index_sets` (esm-spec §9.7.5)"
+    ),
     "data_sources_ingest_and_select.esm": _METAPARAMETER_FOLDING,
     "makearray_empty_region_min_extent.esm": _METAPARAMETER_FOLDING,
     "enums_categorical_lookup.esm": (

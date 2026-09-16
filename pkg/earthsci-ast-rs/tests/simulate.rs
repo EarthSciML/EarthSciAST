@@ -774,8 +774,8 @@ fn test_error_continuous_events_rejected() {
     let err = Compiled::from_flattened(&flat).unwrap_err();
     let msg = err.to_string();
     assert!(
-        msg.contains("continuous_events"),
-        "expected continuous_events in error, got: {msg}"
+        msg.starts_with("unsupported_construct: continuous event 'zero_crossing'"),
+        "expected the unsupported_construct refusal, got: {msg}"
     );
 }
 

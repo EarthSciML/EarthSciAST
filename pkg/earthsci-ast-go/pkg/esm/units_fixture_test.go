@@ -2,7 +2,7 @@ package esm
 
 // Units fixtures consumption runner (gt-dt0o).
 //
-// The three units_*.esm files in tests/valid/ carry inline `tests` blocks
+// The units_*.esm files in tests/valid/ carry inline `tests` blocks
 // (id / parameter_overrides / initial_conditions / time_span / assertions)
 // added in gt-p3v. Schema parse coverage is asserted in
 // units_fixtures_test.go (TestUnitsFixturesCrossBinding). This file closes

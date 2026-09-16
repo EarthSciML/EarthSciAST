@@ -1,11 +1,13 @@
-//! Cross-language conformance for the two constructs neither Rust evaluator
-//! runs: a discrete event and an implicit equation (issue #264).
+//! Cross-language conformance for the three constructs neither Rust evaluator
+//! runs: a continuous event, a discrete event and an implicit equation (issues
+//! #264, #356).
 //!
 //! Drives the shared manifest at `tests/conformance/unsupported_construct/`.
-//! Both constructs used to validate and then vanish on the array evaluator's
+//! All three used to validate and then vanish on the array evaluator's
 //! single-model route — the event never fired and the residual was never
-//! solved, so an inline test reported the initial value — while the scalar
-//! interpreter refused the event under a different wording and ignored an
+//! solved, so an inline test reported a number the document does not describe —
+//! while the scalar interpreter and the coupled route refused both kinds of
+//! event under a different wording, and the scalar interpreter ignored an
 //! implicit equation whenever its unknown had another defining equation. Every
 //! refusal case must now fail with `unsupported_construct` naming the construct
 //! and the evaluator; the control must still run.

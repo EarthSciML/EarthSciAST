@@ -3539,5 +3539,17 @@
     ],
     "is_valid": false,
     "notes": "esm-spec \u00a74.8.3 with \u00a74.8.5: a `const` WITHOUT `units` is undeterminable, exactly like a bare literal, so it is skipped by the sum rule and the sum carries m from x. The companion tests/valid/units_const_declared.esm covers the unit-bearing const. This case is the cross-binding divergence recorded when declared const units landed: Julia used to report the sum as unknown and accept the file."
+  },
+  "root_find_all_removed.esm": {
+    "schema_errors": [
+      {
+        "path": "/models/Ball/continuous_events/0/root_find",
+        "message": "must be equal to one of the allowed values",
+        "keyword": "enum"
+      }
+    ],
+    "structural_errors": [],
+    "is_valid": false,
+    "notes": "`root_find` accepts only \"left\" (default) and \"right\", DiffEq's two rootfind sides; \"all\" was removed from the schema without a version bump because it never had an effect."
   }
 }

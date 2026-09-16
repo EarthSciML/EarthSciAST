@@ -29,6 +29,7 @@ import {
   E_REF_UNRESOLVED_JOIN_FACTOR,
   E_REF_CYCLE,
 } from './reference-resolution.js'
+import { loadPath } from './parse.js'
 import { fixturesDir } from './test-helpers.js'
 import type { Model } from './types.js'
 
@@ -331,14 +332,18 @@ describe('reference resolution over the shared corpus', () => {
     let withEdges = 0
     for (const f of files) {
       const rel = f.slice(validDir.length + 1)
-      let raw: Record<string, unknown>
+      // The pass runs on the LOADED document (API_SPEC.md §5.9): template
+      // imports and `{ref}` mounts have merged their index sets into the
+      // registry, so a range over an imported axis resolves.
+      let doc: ReturnType<typeof loadPath>
       try {
-        raw = JSON.parse(readFileSync(f, 'utf-8')) as Record<string, unknown>
-      } catch {
+        doc = loadPath(f)
+      } catch (e) {
+        failures.push(`${rel}: load: ${(e as Error).message}`)
         continue
       }
       try {
-        for (const g of resolveReferences(raw).values()) {
+        for (const g of resolveReferences(doc).values()) {
           if (g.edges.length > 0) withEdges += 1
           g.topologicalOrder()
         }

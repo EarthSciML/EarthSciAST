@@ -158,8 +158,9 @@ export const ERROR_CODES = {
   //   WINS, not the order cells are EVALUATED in, and a region's value
   //   expression is evaluated once for the whole region.
   RECURRENCE_UNSUPPORTED_FORM: 'recurrence_unsupported_form',
-  // `unsupported_construct` — a discrete event or an implicit equation (an
-  //   expression LHS) reached an evaluator that cannot run it (esm-spec §9.6.6).
+  // `unsupported_construct` — a continuous or discrete event, or an implicit
+  //   equation (an expression LHS), reached an evaluator that cannot run it
+  //   (esm-spec §9.6.6).
   //   This binding does not simulate, so it never raises it; the entry keeps
   //   the §9.6.6 vocabulary uniform across the five registries.
   UNSUPPORTED_CONSTRUCT: 'unsupported_construct',

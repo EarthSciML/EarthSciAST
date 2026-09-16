@@ -802,15 +802,17 @@ def _declares_resolvable_shape(flat: FlattenedSystem) -> bool:
 
 
 def _refuse_unsupported_constructs(flat: FlattenedSystem, file: EsmFile | None) -> None:
-    """esm-spec §9.6.6 ``unsupported_construct`` — refuse a discrete event or an
-    implicit equation before any pathway is built.
+    """esm-spec §9.6.6 ``unsupported_construct`` — refuse an event (continuous or
+    discrete) or an implicit equation before any pathway is built.
 
-    Neither the SymPy scalar pathway nor the NumPy array interpreter runs a
-    discrete event, and neither solves an equation whose LHS is an expression.
-    Both used to build anyway: the event never fired, the residual was never
-    applied, and the run reported the initial value (issue #264). The evaluator
-    named in the message is the one the document's array-ness selects; a
-    discrete event is refused on every route, including the data-refresh ones.
+    Neither the SymPy scalar pathway nor the NumPy array interpreter runs an
+    event, and neither solves an equation whose LHS is an expression. Both used
+    to build anyway and report a number the document does not describe (issues
+    #264 and #356). The SymPy pathway's continuous-event root functions only
+    stop the integration at the first crossing; no affect is ever applied. The
+    evaluator named in the message is the one the document's array-ness
+    selects; an event is refused on every route, including the data-refresh
+    ones.
     """
     evaluator = (
         "Python array interpreter"
@@ -820,18 +822,23 @@ def _refuse_unsupported_constructs(flat: FlattenedSystem, file: EsmFile | None) 
     )
     # `flatten` lifts only the TOP-LEVEL components' events, so an event owned by
     # an inline subsystem is not in `flat` at all; look for it in the document.
-    event = (
-        flat.discrete_events[0]
-        if flat.discrete_events
-        else _first_subsystem_discrete_event(file)
-        if file is not None
-        else None
+    found = next(
+        (
+            (construct, events[0])
+            for construct, events in (
+                ("continuous event", flat.continuous_events),
+                ("discrete event", flat.discrete_events),
+            )
+            if events
+        ),
+        None,
     )
-    if event is not None:
+    if found is None and file is not None:
+        found = _first_subsystem_event(file)
+    if found is not None:
+        construct, event = found
         name = getattr(event, "name", None)
-        raise UnsupportedConstructError(
-            "discrete event", f"'{name}'" if name else "(unnamed)", evaluator
-        )
+        raise UnsupportedConstructError(construct, f"'{name}'" if name else "(unnamed)", evaluator)
     for eq in flat.equations:
         if is_implicit_lhs(eq.lhs):
             raise UnsupportedConstructError(
@@ -841,15 +848,20 @@ def _refuse_unsupported_constructs(flat: FlattenedSystem, file: EsmFile | None) 
             )
 
 
-def _first_subsystem_discrete_event(file: EsmFile) -> Any:
-    """The first discrete event an inline subsystem declares, at any depth under
-    any model or reaction system of ``file``; ``None`` when there is none."""
+def _first_subsystem_event(file: EsmFile) -> tuple[str, Any] | None:
+    """The first event an inline subsystem declares, at any depth under any model
+    or reaction system of ``file``, a continuous one before a discrete one, as
+    ``(construct, event)``; ``None`` when there is none."""
 
-    def in_subsystems(component: Any) -> Any:
+    def in_subsystems(component: Any) -> tuple[str, Any] | None:
         for sub in (getattr(component, "subsystems", None) or {}).values():
-            events = getattr(sub, "discrete_events", None)
-            if events:
-                return events[0]
+            for construct, attr in (
+                ("continuous event", "continuous_events"),
+                ("discrete event", "discrete_events"),
+            ):
+                events = getattr(sub, attr, None)
+                if events:
+                    return construct, events[0]
             found = in_subsystems(sub)
             if found is not None:
                 return found
