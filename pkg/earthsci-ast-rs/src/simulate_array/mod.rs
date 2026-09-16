@@ -925,6 +925,10 @@ fn empty_declared_names() -> &'static HashSet<String> {
     EMPTY.get_or_init(HashSet::new)
 }
 
+/// The name `E_TREEWALK_CONSTARRAY_OOB` reports for a `const` literal written
+/// inline as an `index` base, which has no variable name of its own.
+pub(crate) const INLINE_CONST_NAME: &str = "inline const";
+
 /// Which arrays in an evaluation are CONST-ARRAY factors, and each one's
 /// declared per-dimension out-of-range boundary policy
 /// (CONFORMANCE_SPEC §5.5.5 / ess-gj4).
@@ -934,10 +938,6 @@ fn empty_declared_names() -> &'static HashSet<String> {
 /// per-dimension policy tuple) and of [`crate::value_invention`]'s
 /// `const_array_boundaries` input — the two engines must agree byte-for-byte on
 /// a resolved gather, so they resolve it by the same table.
-/// The name `E_TREEWALK_CONSTARRAY_OOB` reports for a `const` literal written
-/// inline as an `index` base, which has no variable name of its own.
-pub(crate) const INLINE_CONST_NAME: &str = "inline const";
-
 #[derive(Debug, Clone, Default)]
 pub struct ConstArrayScope {
     /// Names that are const-array factors.

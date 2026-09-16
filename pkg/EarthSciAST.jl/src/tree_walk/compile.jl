@@ -263,7 +263,6 @@ end
 struct _ConstGatherArray
     flat::Vector{Float64}   # column-major flattening of the source array (== vec(A))
     strides::Vector{Int}    # column-major strides: strides[d] = prod(size(A)[1:d-1])
-    len::Int                # length(flat)
     dims::Vector{Int}       # size(A): each subscript is checked against its own axis
     boundary::Vector{Symbol}  # per-axis policy (`_const_dim_boundary`) for an out-of-range subscript
     name::String            # the array's registry name, for `E_TREEWALK_CONSTARRAY_OOB`
@@ -302,7 +301,7 @@ function _const_gather_node(A::AbstractArray, subscript_nodes::Vector{_Node};
     end
     boundary = Symbol[_const_dim_boundary(A, d) for d in eachindex(sz)]
     return _mknode(kind=_NK_CONST_GATHER,
-                   payload=_ConstGatherArray(flat, strides, length(flat), collect(Int, sz),
+                   payload=_ConstGatherArray(flat, strides, collect(Int, sz),
                                              boundary, String(name)),
                    children=subscript_nodes)
 end

@@ -3112,12 +3112,14 @@ def _simulate_with_numpy(
         out_vars: list[str] = list(elem_names)
         if ordered_observed and y_out.size:
             try:
+                const_array_names = _const_array_observed_names(ordered_observed)
                 varying = _time_varying_observeds(ordered_observed, set(state_names))
                 if not varying:
                     # All observeds are constant along the trajectory: evaluate
                     # once and broadcast, instead of re-clipping at every one of
                     # the (dense) output nodes.
                     ctx = EvalContext(
+                        const_array_names=const_array_names,
                         state_layout=state_layout,
                         state_shapes=shapes,
                         param_values=param_values,
@@ -3154,6 +3156,7 @@ def _simulate_with_numpy(
                     obs_is_scalar: dict[str, bool] = {name: True for name, _ in varying_observed}
                     for j in range(t_out.size):
                         ctx = EvalContext(
+                            const_array_names=const_array_names,
                             state_layout=state_layout,
                             state_shapes=shapes,
                             param_values=param_values,
