@@ -583,13 +583,14 @@ using Unitful
     end
 
     @testset "Cross-binding units fixtures (gt-gtf)" begin
-        # Wire the three canonical units fixtures into the Julia binding so
+        # Wire the canonical units fixtures into the Julia binding so
         # that every binding agrees on what these files mean. These fixtures
         # are deliberately shared across Julia/Python/Rust/TypeScript/Go.
         units_fixtures = [
             "units_conversions.esm",
             "units_dimensional_analysis.esm",
             "units_propagation.esm",
+            "units_negated_literal_neutral.esm",
         ]
         fixtures_root = joinpath(@__DIR__, "..", "..", "..", "tests", "valid")
 

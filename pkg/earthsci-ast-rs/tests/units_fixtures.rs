@@ -1,6 +1,6 @@
 //! Cross-binding units fixtures (gt-gtf)
 //!
-//! The three units_*.esm files in tests/valid/ are shared across
+//! The units_*.esm files in tests/valid/ are shared across
 //! Julia/Python/Rust/TypeScript/Go and exist specifically to drive
 //! cross-binding agreement on units handling.
 //!
