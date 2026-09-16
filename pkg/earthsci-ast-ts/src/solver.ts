@@ -52,6 +52,43 @@ export function rejectSolverPreV11(view: unknown): void {
 }
 
 /**
+ * Reject declared `units` on any expression node in a document declaring
+ * `esm` < 1.2.0 (esm-spec §4.8.5 item 6), naming the first offending node.
+ * Runs on the raw JSON before schema validation, like {@link rejectSolverPreV11}.
+ */
+export function rejectConstUnitsPreV12(view: unknown): void {
+  if (!isObject(view)) return
+  const esm = view.esm
+  if (typeof esm !== 'string') return
+  const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(esm)
+  if (!m) return
+  const major = Number(m[1])
+  const minor = Number(m[2])
+  if (major > 1 || (major === 1 && minor >= 2)) return
+  const find = (node: unknown, at: string): string | null => {
+    if (Array.isArray(node)) {
+      for (let i = 0; i < node.length; i++) {
+        const hit = find(node[i], `${at}/${i}`)
+        if (hit !== null) return hit
+      }
+    } else if (isObject(node)) {
+      if ('op' in node && 'units' in node) return at
+      for (const key of Object.keys(node)) {
+        const hit = find(node[key], `${at}/${key}`)
+        if (hit !== null) return hit
+      }
+    }
+    return null
+  }
+  const path = find(view, '')
+  if (path === null) return
+  throw new EsmMachineryError(
+    ERROR_CODES.CONST_UNITS_VERSION_TOO_OLD,
+    `declared \`units\` on an expression node require esm >= 1.2.0; file declares ${esm}. Offending path: ${path}`,
+  )
+}
+
+/**
  * Resolve integration tolerances most-specific first (esm-spec §2.2.2):
  *
  * 1. An explicit argument at the call site — wins outright.

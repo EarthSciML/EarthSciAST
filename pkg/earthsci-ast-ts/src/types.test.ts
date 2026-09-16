@@ -8,7 +8,7 @@ describe('ESM Format Types', () => {
     // top-level `solver` block (§2.2) takes the format to 1.1.0. The embedded
     // schema `$id` (and therefore SCHEMA_VERSION) tracks it. The npm package
     // version is a different number and lives in LIBRARY_VERSION.
-    expect(SCHEMA_VERSION).toBe('1.1.0')
+    expect(SCHEMA_VERSION).toBe('1.2.0')
   })
 
   it('should handle Expr type correctly', () => {

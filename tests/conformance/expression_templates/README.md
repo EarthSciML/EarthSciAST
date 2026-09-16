@@ -295,6 +295,36 @@ everything recorded at `ESM_COMPLIANCE_VALIDATION_MATRIX.md` EXPR-09-E-008 — G
 alone substituted `dim`, the other four alone substituted `op` / `id` /
 `expect_cadence`, and all five substituted the registry fields.
 
+### `import_library_enum/` (expanded.esm, expanded_importer_redeclares.esm)
+
+Enums across a template import (esm-spec §9.3, §9.7.5). `lib.esm` declares
+`activity_unit` and names `activity_unit.g_per_hp_hr` inside its template body.
+An `enum` op resolves against the block of the file that wrote it, so the op is
+lowered at the import edge against the LIBRARY's block, and the goldens carry it
+as `{op: const, value: 1}`. `lib.esm` also has `activity_code`, whose `enum` op
+spells the symbol with its parameter; `gallon_code`, the library's own call to it
+binding `g_per_gallon`; and `code_via`, which forwards its own parameter into
+that call. The library's own call is expanded and lowered at the edge, so the
+goldens carry `gallonCode` as `{op: const, value: 2}`.
+
+`fixture.esm` declares no `enums` and still loads, `gallonCode` included.
+`fixture_importer_redeclares.esm` declares `activity_unit` itself with
+`g_per_hp_hr = 7` and `g_per_gallon = 9`: the library's template still computes
+with 1 and the library's own call with 2, while every symbol the importer
+spells stays an `enum` op in the golden and lowers against the importer's block
+at typed load: a bare `enum` op (7), one bound into the template's `unit_code`
+parameter (7), a symbol bound into `activity_code` (9), and one bound through
+`code_via`'s forwarded parameter (9). Each binding's suite pins those typed
+values beside the golden.
+
+### `import_library_enum_undeclared/` (error.json, `unknown_enum`, load)
+
+The library's body names `activity_unit`, which the library does not declare.
+Rejected at the import edge with `unknown_enum`, and the message names the
+library file and the template (`plus_horsepower_code`). `fixture.esm` declares
+the enum nowhere; `fixture_importer_declares.esm` declares it in the importer,
+which does not rescue the library.
+
 ## Flatten-time registry merge (esm-spec §9.6.4 rule 7 / §10.7)
 
 Every fixture here is consumed through the shared `flatten_template_registries`

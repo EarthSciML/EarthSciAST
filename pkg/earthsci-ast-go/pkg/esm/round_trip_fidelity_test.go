@@ -151,6 +151,7 @@ var transformingFixtures = map[string]string{
 	"advection_reaction_loaded_ic_bc.esm":       "eager expression-template expansion",
 	"derivative_trailing_boundary_operands.esm": "eager expression-template expansion",
 	"expression_templates_arrhenius.esm":        "eager expression-template expansion",
+	"units_const_declared.esm":                  "eager expression-template expansion",
 	"template_import_minimal.esm":               "template-library import + eager expansion",
 	"template_import_faq_axis.esm":              "template-library import consumed + the imported axis merged and folded",
 
@@ -178,10 +179,24 @@ var transformingFixtures = map[string]string{
 	"mount_chain_outer.esm":         "two-level top-level `models.<k>` {ref} resolution",
 	"mount_chain_via_subsystem.esm": "subsystem ref resolution of an assembly, whose own top-level {ref} resolves through",
 
+	// The top-level `models.<k>` mount form of the §4.7 index-set merge, and
+	// the grid-library axis sized by a forwarded metaparameter mounted at both
+	// forms at once (issue #236). Every edge is consumed at load and every
+	// symbolic `size` is folded.
+	"toplevel_ref_index_set_merge.esm":                "top-level `models.<k>` {ref} resolution + index_sets merge",
+	"toplevel_ref_metaparameter_axis.esm":             "top-level `models.<k>` {ref} resolution + the leaf's metaparameter axis folded at the edge",
+	"toplevel_ref_metaparameter_axis_lib.esm":         "metaparameter folding (NLEV -> integer)",
+	"mount_forwarded_axis_grid_lib.esm":               "metaparameter folding (NLEV -> integer)",
+	"mount_forwarded_axis_column.esm":                 "template-library import consumed + the imported axis merged and folded",
+	"mount_forwarded_axis_nested.esm":                 "subsystem ref resolution + index_sets merge",
+	"mount_forwarded_axis_nested_4.esm":               "subsystem ref resolution under edge bindings + index_sets merge",
+	"mount_forwarded_axis_toplevel_beside_nested.esm": "top-level `models.<k>` {ref} resolution beside a nested subsystem ref + index_sets merge",
+
 	// Enum lowering (esm-spec §9.3): `enum` op nodes are resolved to `const`
 	// integers at load time.
-	"enums_categorical_lookup.esm": "enum lowering to const",
-	"enums_zero_and_negative.esm":  "enum lowering to const",
+	"enums_categorical_lookup.esm":      "enum lowering to const",
+	"enums_zero_and_negative.esm":       "enum lowering to const",
+	"enums_symbol_template_binding.esm": "enum lowering to const, after expanding the template that spells the symbol",
 
 	// The v0.5.0 inline multi-series shorthand: an array-form `plots[].y` is
 	// normalized at load into a canonical single `y` plus a `series` list

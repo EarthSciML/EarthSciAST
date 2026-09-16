@@ -85,6 +85,7 @@ TRANSFORMING_FIXTURES: dict[str, str] = {
     "advection_reaction_loaded_ic_bc.esm": _EAGER_TEMPLATE_EXPANSION,
     "derivative_trailing_boundary_operands.esm": _EAGER_TEMPLATE_EXPANSION,
     "expression_templates_arrhenius.esm": _EAGER_TEMPLATE_EXPANSION,
+    "units_const_declared.esm": _EAGER_TEMPLATE_EXPANSION,
     "template_import_minimal.esm": (
         "`expression_template_imports` is consumed at load and the imported "
         "bodies are expanded into their call sites (esm-spec §9.7.6)"
@@ -102,6 +103,10 @@ TRANSFORMING_FIXTURES: dict[str, str] = {
     "enums_zero_and_negative.esm": (
         "`enum` nodes are lowered to `const` against the document's top-level "
         "`enums` block at load (esm-spec §9.3)"
+    ),
+    "enums_symbol_template_binding.esm": (
+        "the template call spelling the enum symbol is expanded (esm-spec §9.6.4 "
+        "rule 3) and its `enum` node lowered to `const` at load (esm-spec §9.3)"
     ),
     "lib_calendar_subsystem_inclusion.esm": _SUBSYSTEM_REF_RESOLUTION,
     "lib_solar_subsystem_inclusion.esm": _SUBSYSTEM_REF_RESOLUTION,
@@ -138,6 +143,36 @@ TRANSFORMING_FIXTURES: dict[str, str] = {
         "attachment point; which point mounted a file does not change what it is, "
         "so its own top-level edge is consumed at load just the same "
         "(esm-spec 4.7 'Two mount forms, one mechanism')"
+    ),
+    "toplevel_ref_index_set_merge.esm": (
+        "the top-level `models.<k>` twin of subsystem_index_set_merge.esm: the "
+        "referenced component is spliced in under its mount key and its "
+        "top-level `index_sets` merge into the importing document's registry "
+        "(esm-spec 4.7 'Two mount forms, one mechanism')"
+    ),
+    "toplevel_ref_metaparameter_axis.esm": (
+        "a top-level `models.<k>` mount consumed at load, whose leaf axis sized "
+        "by the leaf's own metaparameter merges folded (esm-spec 4.7, 9.7.6)"
+    ),
+    "toplevel_ref_metaparameter_axis_lib.esm": _METAPARAMETER_FOLDING,
+    "mount_forwarded_axis_column.esm": (
+        "`expression_template_imports` is consumed at load and the imported "
+        "library's axis, sized by the forwarded metaparameter, merges folded "
+        "into this document's registry (esm-spec 9.7.5, 9.7.6)"
+    ),
+    "mount_forwarded_axis_nested.esm": (
+        _SUBSYSTEM_REF_RESOLUTION + ", plus the referenced file's axis merging into the importing "
+        "document's registry"
+    ),
+    "mount_forwarded_axis_nested_4.esm": (
+        _SUBSYSTEM_REF_RESOLUTION
+        + ", with the edge's `bindings` consumed at the edge and the referenced "
+        "file's axis merging at the bound size"
+    ),
+    "mount_forwarded_axis_toplevel_beside_nested.esm": (
+        "a top-level `models.<k>` mount beside a nested `subsystems.<k>` mount "
+        "of the same component: both edges are consumed at load and the two "
+        "contributions of the axis merge into one registry entry (esm-spec 4.7)"
     ),
     "events_discrete_periodic.esm": _EMPTY_EVENT_ARRAY,
     "events_discrete_preset_times.esm": _EMPTY_EVENT_ARRAY,
@@ -472,7 +507,7 @@ def test_an_attrs_key_binds_a_match_rule_param_to_the_matched_literal() -> None:
 
 def test_a_node_carrying_an_annotation_has_no_canonical_form() -> None:
     """``tests/conformance/canonical/README.md``: a node carrying any field
-    outside ``{op, args, wrt, dim, fn, name, value}`` must make
+    outside ``{op, args, wrt, dim, fn, name, value, units}`` must make
     ``canonical_json`` raise ``E_CANONICAL_UNSUPPORTED_FIELD``, and it names
     ``expect_cadence`` explicitly. The requirement was unreachable while
     ``ExprNode`` dropped both annotations at parse — the emitter never saw one.
