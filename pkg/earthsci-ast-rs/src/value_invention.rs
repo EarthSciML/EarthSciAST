@@ -1910,8 +1910,9 @@ pub fn materialize_value_invention(
             .map_err(|e| ValueInventionError(format!("cadence classify failed: {e}")))?;
         if cls == Cadence::Continuous {
             return err(format!(
-                "value-invention producer {node_id:?} classifies CONTINUOUS — it may not run per \
-                 step (RFC §5.7 guard 2); its inputs must be CONST/DISCRETE"
+                "relational_node_in_continuous: value-invention producer {node_id:?} classifies \
+                 CONTINUOUS — it may not run per step (RFC §5.7 guard 2); its inputs must be \
+                 CONST/DISCRETE"
             ));
         }
         let mem = vi_materialize_producer(&ctx, node)?;

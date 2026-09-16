@@ -14,7 +14,7 @@ import os
 import tempfile
 
 import pytest
-from conftest import FIXTURES_ROOT, VALID_DIR
+from conftest import INVALID_DIR, VALID_DIR
 
 from earthsci_ast import flatten, load_path
 from earthsci_ast.parse import (
@@ -23,12 +23,11 @@ from earthsci_ast.parse import (
     resolve_model_refs,
 )
 
-# Shared cross-binding fixtures for the §4.7 top-level mount form (Julia and
-# Rust drive the same two files). They live under `tests/fixtures/` rather than
-# `tests/valid/` + `tests/invalid/` because TypeScript and Go do not implement
-# the top-level mount form at all, so the corpus sweep would score them a false
-# pass on one half and a hard failure on the other.
-_TOPLEVEL_REF_DIR = FIXTURES_ROOT / "fixtures" / "toplevel_ref_index_sets"
+# Shared cross-binding fixtures for the §4.7 top-level mount form. All five
+# bindings mount a top-level `{ref}`, so these sit in the shared valid and
+# invalid sets that every binding's corpus sweep runs; the tests below pin the
+# resolved values, which the sweep does not check.
+_TOPLEVEL_REF_INVALID_DIR = INVALID_DIR / "template_imports"
 
 
 def _write(path: str, payload: dict) -> None:
@@ -317,7 +316,7 @@ def test_toplevel_ref_mount_merges_leaf_index_sets():
     deep-equal (idempotent) and `vertices` — declared only by the leaf, yet the
     axis the assembling document's own `Host.diag` is shaped over — is brought in.
     """
-    doc = load_path(str(_TOPLEVEL_REF_DIR / "toplevel_ref_index_set_merge.esm"))
+    doc = load_path(str(VALID_DIR / "toplevel_ref_index_set_merge.esm"))
     assert doc.index_sets["cells"]["size"] == 5
     assert doc.index_sets["vertices"]["size"] == 4
 
@@ -330,7 +329,7 @@ def test_toplevel_ref_mount_index_set_collision_is_an_error():
     """A non-deep-equal collision at a top-level mount is `subsystem_index_set_conflict`
     — the same diagnostic the subsystems-edge form raises, not last-writer-wins."""
     with pytest.raises(Exception) as excinfo:
-        load_path(str(_TOPLEVEL_REF_DIR / "toplevel_ref_index_set_conflict.esm"))
+        load_path(str(_TOPLEVEL_REF_INVALID_DIR / "toplevel_ref_index_set_conflict.esm"))
     assert "subsystem_index_set_conflict" in str(excinfo.value)
 
 
@@ -339,12 +338,9 @@ def test_toplevel_ref_mount_folds_a_metaparameter_sized_leaf_axis():
     mount form too, so a leaf axis sized by the leaf's own metaparameter merges
     as a concrete integer.
 
-    Rust and Julia now agree: each runs the same §4.7 edge pipeline at the
-    top-level form (`ref_loading.rs::inline_toplevel_model_refs`,
-    `resolve.jl::_inline_toplevel_model_refs!`), so the axis merges folded in
-    all three. This fixture is 3-of-3; pinned here so a regression in any of
-    them shows up as disagreement rather than as a silent behaviour change
-    (`ESM_COMPLIANCE_VALIDATION_MATRIX.md` BEHAV-04-D-003).
+    The other four bindings agree: each runs the same §4.7 edge pipeline at the
+    top-level form as at a `subsystems.<k>` edge, so the axis merges folded in
+    all five (`ESM_COMPLIANCE_VALIDATION_MATRIX.md` BEHAV-04-D-003).
     """
-    doc = load_path(str(_TOPLEVEL_REF_DIR / "toplevel_ref_metaparameter_axis.esm"))
+    doc = load_path(str(VALID_DIR / "toplevel_ref_metaparameter_axis.esm"))
     assert doc.index_sets["lev"]["size"] == 4

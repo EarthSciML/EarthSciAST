@@ -1,0 +1,156 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "ContinuousEventOnACoupledArrayDocument",
+    "description": "The array threshold-reset model next to a second, trivial model. A multi-model document takes a different build route than a single model in some bindings (Rust flattens it first), so the refusal is pinned on that route too (issue #356).",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "conformance",
+      "unsupported_construct",
+      "events"
+    ]
+  },
+  "index_sets": {
+    "step_rows": {
+      "kind": "interval",
+      "size": 2
+    }
+  },
+  "models": {
+    "ContinuousEventOnACoupledArrayDocument": {
+      "tolerance": {
+        "abs": 1e-06
+      },
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Climbs at rate 1 from 0; reset to 0 when it reaches 1."
+        },
+        "x_seen": {
+          "type": "unknown",
+          "shape": [
+            "step_rows"
+          ],
+          "units": "1",
+          "description": "`x` broadcast over an axis, so the document takes the array evaluator."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 1.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "x"
+            ]
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": "x_seen",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "k"
+            ],
+            "ranges": {
+              "k": {
+                "from": "step_rows"
+              }
+            },
+            "expr": "x"
+          }
+        }
+      ],
+      "continuous_events": [
+        {
+          "name": "reset",
+          "conditions": [
+            {
+              "op": "-",
+              "args": [
+                "x",
+                1.0
+              ]
+            }
+          ],
+          "affects": [
+            {
+              "lhs": "x",
+              "rhs": 0.0
+            }
+          ],
+          "description": "x := 0 whenever x crosses 1."
+        }
+      ],
+      "tests": [
+        {
+          "id": "a_threshold_reset_makes_a_sawtooth",
+          "description": "Intended behaviour: x resets at t = 1 and t = 2, so x(2.5) = 0.5. Without the event x(2.5) = 2.5. An evaluator that cannot run the event must refuse rather than report 2.5.",
+          "time_span": {
+            "start": 0.0,
+            "end": 2.5
+          },
+          "assertions": [
+            {
+              "variable": "x_seen",
+              "time": 2.5,
+              "expected": 0.5,
+              "coords": {
+                "step_rows": 1
+              }
+            },
+            {
+              "variable": "x",
+              "time": 2.5,
+              "expected": 0.5
+            }
+          ]
+        }
+      ]
+    },
+    "Bystander": {
+      "variables": {
+        "y": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Constant; present only to make the document multi-model."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "y"
+            ]
+          },
+          "rhs": 1.0
+        }
+      ]
+    }
+  }
+}

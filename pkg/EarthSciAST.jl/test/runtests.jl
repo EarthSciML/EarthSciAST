@@ -62,6 +62,8 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("display_conformance_test.jl")
     include("expression_parse_conformance_test.jl")  # infix-text parser ≡ TS oracle
     include("units_test.jl")
+    include("unit_exact_scale_test.jl")
+    include("const_units_test.jl")
     include("graph_test.jl")
     include("graph_conformance_test.jl")  # component/expression graphs ≡ TS oracle
 
@@ -81,6 +83,9 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("mtk_metadata_test.jl")
     include("simulate_e2e_test.jl")
     include("tests_blocks_execution_test.jl")
+    # The ModelingToolkit export honours a continuous event's `affect_neg` and
+    # `root_find` (esm-spec §5.2, issue #356).
+    include("mtk_continuous_event_options_test.jl")
     include("run_esm_tests_test.jl")
     include("container_in_document_test.jl")
     include("units_fixture_consumption_test.jl")
@@ -103,6 +108,10 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     # by-name endpoints of every coupling entry that has not run yet and onto a
     # runner's override keys (issue #230).
     include("merged_rename_reach_conformance_test.jl")
+    # A continuous or discrete event, or an implicit equation, is refused by the
+    # tree-walk evaluator with `unsupported_construct`, never run without it
+    # (issues #264, #356).
+    include("unsupported_construct_conformance_test.jl")
     include("pointwise_lift_axis_names_test.jl")  # §10.5 lift axes by NAME, not by extent
     include("coupling_imports_test.jl")
     include("flattened_to_esm_test.jl")
@@ -267,6 +276,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("tree_walk_binning_alias_test.jl")
     include("op_registry_test.jl")
     include("tree_walk_op_table_test.jl")
+    include("unevaluable_operator_test.jl")         # §9.6.6 core op with no rule, refused at build
     include("op_capability_audit_test.jl")          # cross-tier op/fn-payload capability drift
     include("tree_walk_audit_fixes_test.jl")
 
@@ -275,6 +285,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("reference_graph_test.jl")
     include("cadence_test.jl")
     include("value_invention_frontdoor_test.jl")
+    include("value_invention_materialize_conformance_test.jl")  # issue #266: distinct over a derived axis counts its members
 
     # ---- Cross-binding conformance harness adapters (tests/conformance/*) ----
     include("faq_conformance_test.jl")
@@ -310,6 +321,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("pde_inline_scalar_slot_collision_test.jl")
     include("pde_inline_dead_observed_test.jl")  # #176: an observed no live equation consumes
     include("mounted_component_tests_test.jl")   # #198: a mount does not carry the leaf's tests
+    include("mount_enums_test.jl")               # #260: a mounted file's enum ops resolve in its own block
     include("scoped_assertion_variable_test.jl")  # #263: an assertion may name a scoped reference
     include("conformance_pde_inline_observed_rank2_test.jl")
     include("conformance_pde_inline_dead_observed_test.jl")
@@ -320,6 +332,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("conformance_pde_inline_ic_param_override_test.jl")
     include("conformance_pde_inline_array_overrides_test.jl")
     include("conformance_assertion_nonfinite_test.jl")  # §6.6.3 non-finite actuals
+    include("conformance_const_array_gather_bounds_test.jl")  # §5.5.5 out-of-range const-array gather
     include("assertion_tolerance_symmetry_test.jl")     # §6.6.3 symmetric relative bound
     include("conformance_assertion_tolerance_test.jl")  # §6.6.3 pass predicate (data-only)
     include("conformance_tolerance_resolution_test.jl")  # §6.6.4 per-field tolerance merge
@@ -328,11 +341,13 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("conformance_override_key_diagnostics_test.jl")
     include("conformance_pde_inline_reference_dimension_names_test.jl")  # §6.6.5 reference dimension names
     include("rhs_time_derivative_resolution_test.jl")   # §4.2 right-hand-side D: Julia resolves; its exclusion
+    include("unlowered_operator_walk_test.jl")          # §9.6.3 c.6: unlowered op in a tree the build discards
     include("closed_functions_test.jl")
     include("closed_functions_autodiff_test.jl")
     include("datetime_arithmetic_test.jl")
     include("datetime_typed_core_test.jl")     # registry-declared typed cores (ess-dtcore)
     include("closed_functions_mtk_test.jl")
+    include("const_array_index_mtk_test.jl")    # #286: a bare const array as an index base
     include("function_tables_test.jl")
     include("function_tables_lowering_test.jl")
     # …and the same lowering on the path that EVALUATES a document (#188):

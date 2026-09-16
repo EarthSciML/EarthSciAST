@@ -116,21 +116,23 @@ def _single_model_subset(file, model_name: str):
     corrupts results for multi-component fixtures.
     """
     models = file.models or {}
-    return dataclasses.replace(
-        file,
-        models={model_name: models[model_name]},
-        reaction_systems={},
-        coupling=[],
-    )
+    return _isolated(file, models[model_name], models={model_name: models[model_name]})
 
 
 def _single_rs_subset(file, rs_name: str):
     rsys = file.reaction_systems or {}
+    return _isolated(file, rsys[rs_name], reaction_systems={rs_name: rsys[rs_name]})
+
+
+def _isolated(file, component, **components):
+    """``file`` with only ``component``. ``EsmFile.events`` aggregates EVERY
+    component's events and is what ``flatten`` reads, so it is narrowed to the
+    kept component's own; otherwise a sibling's event rides into the subset."""
     return dataclasses.replace(
         file,
-        models={},
-        reaction_systems={rs_name: rsys[rs_name]},
+        **{"models": {}, "reaction_systems": {}, **components},
         coupling=[],
+        events=[*component.discrete_events, *component.continuous_events],
     )
 
 

@@ -754,6 +754,19 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 		// registries are resolved away here.
 		expandDocument(view)
 
+		// esm-spec §9.3: the referenced document's `enum` ops resolve against
+		// ITS OWN `enums` block, here, while that block is still at hand. The
+		// mounting document's block is a different one and `enums` do not merge
+		// across a mount, so an importer declaring an enum of the same name
+		// cannot change what the leaf computes. The leaf's own nested mounts
+		// were lowered at their own edges above.
+		if err := lowerMountedDocumentEnums(view); err != nil {
+			if le, ok := err.(*EnumLoweringError); ok {
+				return newETErr(le.Code, fmt.Sprintf("%s ref %q: %s — an `enum` op in a mounted file resolves against that file's own `enums` block (esm-spec §9.3)", form.noun, ref, le.Message))
+			}
+			return err
+		}
+
 		// esm-spec §4.7 "Mount-edge index-set renaming", pipeline step 2. The
 		// referenced document has now resolved in its OWN scope — its imports,
 		// this edge's `bindings` and injection, its metaparameter close and

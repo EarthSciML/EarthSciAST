@@ -12,15 +12,24 @@ import { loadString } from './parse.js'
 import { validateText } from './validate.js'
 import { readFixture } from './test-helpers.js'
 import type { Expression, EsmFile } from './types.js'
+import { ExactScale } from './unit-conversion.js'
+
+/** A parsed unit's dimensions, scale and offset — its exact scale is pinned in unit-exact-scale.test.ts. */
+const shape = (u: { dims: unknown; scale: number; offset?: number } | null) =>
+  u === null
+    ? null
+    : u.offset === undefined
+      ? { dims: u.dims, scale: u.scale }
+      : { dims: u.dims, scale: u.scale, offset: u.offset }
 
 describe('Unit parsing and dimensional analysis', () => {
   describe('parseUnit', () => {
     it('should handle dimensionless units', () => {
-      expect(parseUnit('dimensionless')).toEqual({ dims: {}, scale: 1 })
-      expect(parseUnit('')).toEqual({ dims: {}, scale: 1 })
-      expect(parseUnit('mol/mol')).toEqual({ dims: {}, scale: 1 })
-      expect(parseUnit('ppb')).toEqual({ dims: {}, scale: 1e-9 })
-      expect(parseUnit('ppm')).toEqual({ dims: {}, scale: 1e-6 })
+      expect(shape(parseUnit('dimensionless'))).toEqual({ dims: {}, scale: 1 })
+      expect(shape(parseUnit(''))).toEqual({ dims: {}, scale: 1 })
+      expect(shape(parseUnit('mol/mol'))).toEqual({ dims: {}, scale: 1 })
+      expect(shape(parseUnit('ppb'))).toEqual({ dims: {}, scale: 1e-9 })
+      expect(shape(parseUnit('ppm'))).toEqual({ dims: {}, scale: 1e-6 })
     })
 
     // esm-spec §4.8.1 registers `degree` and `degrees` as long-form aliases of
@@ -30,26 +39,26 @@ describe('Unit parsing and dimensional analysis', () => {
     // `units: "degree"` was a hard error here and valid everywhere else.
     it('resolves both long-form spellings of the degree as the angle', () => {
       const deg = { dims: { rad: 1 }, scale: Math.PI / 180 }
-      expect(parseUnit('deg')).toEqual(deg)
-      expect(parseUnit('degree')).toEqual(deg)
-      expect(parseUnit('degrees')).toEqual(deg)
-      expect(tryParseUnit('degree')).toEqual(deg)
+      expect(shape(parseUnit('deg'))).toEqual(deg)
+      expect(shape(parseUnit('degree'))).toEqual(deg)
+      expect(shape(parseUnit('degrees'))).toEqual(deg)
+      expect(shape(tryParseUnit('degree'))).toEqual(deg)
     })
 
     it('should parse basic units', () => {
-      expect(parseUnit('K')).toEqual({ dims: { K: 1 }, scale: 1 })
-      expect(parseUnit('m')).toEqual({ dims: { m: 1 }, scale: 1 })
-      expect(parseUnit('s')).toEqual({ dims: { s: 1 }, scale: 1 })
-      expect(parseUnit('mol')).toEqual({ dims: { mol: 1 }, scale: 1 })
+      expect(shape(parseUnit('K'))).toEqual({ dims: { K: 1 }, scale: 1 })
+      expect(shape(parseUnit('m'))).toEqual({ dims: { m: 1 }, scale: 1 })
+      expect(shape(parseUnit('s'))).toEqual({ dims: { s: 1 }, scale: 1 })
+      expect(shape(parseUnit('mol'))).toEqual({ dims: { mol: 1 }, scale: 1 })
       // A count of discrete things has no physical dimension.
-      expect(parseUnit('molec')).toEqual({ dims: {}, scale: 1 })
+      expect(shape(parseUnit('molec'))).toEqual({ dims: {}, scale: 1 })
     })
 
     it('should parse compound units', () => {
-      expect(parseUnit('m/s')).toEqual({ dims: { m: 1, s: -1 }, scale: 1 })
-      expect(parseUnit('mol/mol/s')).toEqual({ dims: { s: -1 }, scale: 1 })
-      expect(parseUnit('1/s')).toEqual({ dims: { s: -1 }, scale: 1 })
-      expect(parseUnit('s/m')).toEqual({ dims: { s: 1, m: -1 }, scale: 1 })
+      expect(shape(parseUnit('m/s'))).toEqual({ dims: { m: 1, s: -1 }, scale: 1 })
+      expect(shape(parseUnit('mol/mol/s'))).toEqual({ dims: { s: -1 }, scale: 1 })
+      expect(shape(parseUnit('1/s'))).toEqual({ dims: { s: -1 }, scale: 1 })
+      expect(shape(parseUnit('s/m'))).toEqual({ dims: { s: 1, m: -1 }, scale: 1 })
     })
 
     it('should decompose derived and prefixed units to SI base', () => {
@@ -78,8 +87,8 @@ describe('Unit parsing and dimensional analysis', () => {
     })
 
     it('should handle real-world ESM unit strings', () => {
-      expect(parseUnit('mol/mol')).toEqual({ dims: {}, scale: 1 })
-      expect(parseUnit('mol/mol/s')).toEqual({ dims: { s: -1 }, scale: 1 })
+      expect(shape(parseUnit('mol/mol'))).toEqual({ dims: {}, scale: 1 })
+      expect(shape(parseUnit('mol/mol/s'))).toEqual({ dims: { s: -1 }, scale: 1 })
     })
 
     // ESM-specific units standard (docs/units-standard.md): every binding
@@ -87,13 +96,13 @@ describe('Unit parsing and dimensional analysis', () => {
     // documents agree on dimension semantics.
     describe('ESM-specific units standard', () => {
       it('mole-fraction family is dimensionless with correct scale factors', () => {
-        expect(parseUnit('mol/mol')).toEqual({ dims: {}, scale: 1 })
-        expect(parseUnit('ppm')).toEqual({ dims: {}, scale: 1e-6 })
-        expect(parseUnit('ppmv')).toEqual({ dims: {}, scale: 1e-6 })
-        expect(parseUnit('ppb')).toEqual({ dims: {}, scale: 1e-9 })
-        expect(parseUnit('ppbv')).toEqual({ dims: {}, scale: 1e-9 })
-        expect(parseUnit('ppt')).toEqual({ dims: {}, scale: 1e-12 })
-        expect(parseUnit('pptv')).toEqual({ dims: {}, scale: 1e-12 })
+        expect(shape(parseUnit('mol/mol'))).toEqual({ dims: {}, scale: 1 })
+        expect(shape(parseUnit('ppm'))).toEqual({ dims: {}, scale: 1e-6 })
+        expect(shape(parseUnit('ppmv'))).toEqual({ dims: {}, scale: 1e-6 })
+        expect(shape(parseUnit('ppb'))).toEqual({ dims: {}, scale: 1e-9 })
+        expect(shape(parseUnit('ppbv'))).toEqual({ dims: {}, scale: 1e-9 })
+        expect(shape(parseUnit('ppt'))).toEqual({ dims: {}, scale: 1e-12 })
+        expect(shape(parseUnit('pptv'))).toEqual({ dims: {}, scale: 1e-12 })
       })
 
       it('molec is a dimensionless count atom usable in composites', () => {
@@ -112,7 +121,7 @@ describe('Unit parsing and dimensional analysis', () => {
         // `vehicles/km^2`, `units/L`). An unresolvable unit string is a hard
         // error, so omitting them would falsely reject those files.
         for (const count of ['individuals', 'vehicles', 'units', 'count']) {
-          expect(parseUnit(count)).toEqual({ dims: {}, scale: 1 })
+          expect(shape(parseUnit(count))).toEqual({ dims: {}, scale: 1 })
         }
         expect(parseUnit('individuals/km^2').dims).toEqual({ m: -2 })
       })
@@ -133,16 +142,16 @@ describe('Unit parsing and dimensional analysis', () => {
     // error. Go has since added them.
     describe('electromagnetic units', () => {
       it('parses V, T, F and Ohm as their SI-base decompositions', () => {
-        expect(parseUnit('V')).toEqual({ dims: { kg: 1, m: 2, s: -3, A: -1 }, scale: 1 })
-        expect(parseUnit('T')).toEqual({ dims: { kg: 1, s: -2, A: -1 }, scale: 1 })
-        expect(parseUnit('F')).toEqual({ dims: { kg: -1, m: -2, s: 4, A: 2 }, scale: 1 })
-        expect(parseUnit('Ohm')).toEqual({ dims: { kg: 1, m: 2, s: -3, A: -2 }, scale: 1 })
+        expect(shape(parseUnit('V'))).toEqual({ dims: { kg: 1, m: 2, s: -3, A: -1 }, scale: 1 })
+        expect(shape(parseUnit('T'))).toEqual({ dims: { kg: 1, s: -2, A: -1 }, scale: 1 })
+        expect(shape(parseUnit('F'))).toEqual({ dims: { kg: -1, m: -2, s: 4, A: 2 }, scale: 1 })
+        expect(shape(parseUnit('Ohm'))).toEqual({ dims: { kg: 1, m: 2, s: -3, A: -2 }, scale: 1 })
         expect(parseUnit('V/m').dims).toEqual({ kg: 1, m: 1, s: -3, A: -1 })
         expect(parseUnit('F/m').dims).toEqual({ kg: -1, m: -3, s: 4, A: 2 })
       })
 
       it('C is the COULOMB, so charge times field is a force', () => {
-        expect(parseUnit('C')).toEqual({ dims: { A: 1, s: 1 }, scale: 1 })
+        expect(shape(parseUnit('C'))).toEqual({ dims: { A: 1, s: 1 }, scale: 1 })
         // q[C] * E[V/m] must be a newton. With `C` bound to Celsius it came out
         // as kg*m*K/(s^3*A) — a temperature dimension smuggled into every
         // electromagnetic expression.
@@ -205,10 +214,116 @@ describe('Unit parsing and dimensional analysis', () => {
         expect(result.diagnostics.filter((d) => d.code === 'dimensional_mismatch')).toEqual([])
       })
 
-      it('makes an all-literal expression dimensionless', () => {
-        const bindings = createUnitBindings({})
-        expect(dimsOf(checkDimensions({ op: '+', args: [1, 2] }, bindings))).toEqual({})
-        expect(dimsOf(checkDimensions({ op: '-', args: [1] }, bindings))).toEqual({})
+      // esm-spec §4.8.3, §4.8.4: a sum with no determinable operand is
+      // indeterminate, never dimensionless — for an integer as well as a float
+      // literal, in min/max as in +/-, and under a unary `+`.
+      it('leaves a sum with no determinable operand indeterminate', () => {
+        const bindings = createUnitBindings({ x: 'm' })
+        for (const lits of [
+          [1, 2],
+          [1.5, 2.5],
+        ]) {
+          for (const op of ['+', '-', 'min', 'max']) {
+            expect(checkDimensions({ op, args: lits }, bindings).dimensions).toBeNull()
+          }
+        }
+        expect(checkDimensions({ op: '+', args: [2] }, bindings).dimensions).toBeNull()
+        expect(checkDimensions({ op: '+', args: [2.5] }, bindings).dimensions).toBeNull()
+        expect(
+          checkDimensions({ op: '*', args: ['x', { op: '+', args: [1, 2] }] }, bindings).dimensions,
+        ).toBeNull()
+      })
+
+      it('gives a unary + its operand unit, so x + +(2) is a length', () => {
+        const bindings = createUnitBindings({ x: 'm' })
+        expect(dimsOf(checkDimensions({ op: '+', args: ['x'] }, bindings))).toEqual({ m: 1 })
+        const result = checkDimensions({ op: '+', args: ['x', { op: '+', args: [2] }] }, bindings)
+        expect(result.diagnostics.filter((d) => d.code === 'dimensional_mismatch')).toEqual([])
+        expect(dimsOf(result)).toEqual({ m: 1 })
+      })
+
+      it('gives a partly indeterminate sum the unit of its known operands', () => {
+        const bindings = createUnitBindings({ x: 'm', y: 'm' })
+        const halfY = { op: '*', args: [0.5, 'y'] }
+        for (const op of ['+', '-', 'min', 'max']) {
+          expect(dimsOf(checkDimensions({ op, args: ['x', halfY] }, bindings))).toEqual({ m: 1 })
+        }
+      })
+
+      // esm-spec §4.8.3: a boolean connective's operands carry no unit
+      // requirement of their own, and an `ifelse` condition need not be
+      // dimensionless. Both used to be flagged here and nowhere else, so
+      // tests/valid/units_comparisons_and_connectives.esm carried four
+      // TypeScript-only findings the other four bindings did not raise.
+      it('places no unit requirement on a connective operand or an ifelse condition', () => {
+        const bindings = createUnitBindings({ x: 'm', y: 'm', z: 'kg' })
+        for (const expr of [
+          { op: 'and', args: ['x', 'z'] },
+          { op: 'or', args: ['x', 'z'] },
+          { op: 'not', args: ['x'] },
+          { op: 'ifelse', args: ['x', 'y', 'y'] },
+        ]) {
+          expect(checkDimensions(expr, bindings).diagnostics).toEqual([])
+        }
+      })
+
+      // ... but each operand is still walked, so a mismatch INSIDE one is
+      // reported (esm-spec §4.8.3).
+      it('reports a comparison mismatch nested under a connective or a condition', () => {
+        const bindings = createUnitBindings({ x: 'm', y: 'm', z: 'kg', c: '1' })
+        const mismatch = { op: '>', args: ['x', 'z'] }
+        const ok = { op: '>', args: ['c', 0] }
+        for (const expr of [
+          { op: 'not', args: [mismatch] },
+          { op: 'and', args: [mismatch, ok] },
+          { op: 'or', args: [ok, mismatch] },
+          { op: 'ifelse', args: [mismatch, 'x', 'y'] },
+        ]) {
+          expect(
+            checkDimensions(expr, bindings).diagnostics.filter(
+              (d) => d.code === 'dimensional_mismatch',
+            ).length,
+          ).toBeGreaterThan(0)
+        }
+      })
+
+      // esm-spec §4.8.3: a unary negation of a literal counts as a literal, so
+      // `T + -(273.15)` is Kelvin exactly as `T + -273.15` is — at any depth of
+      // negation, for an integer as well as a float, and in `min`/`max`.
+      describe('negated literals', () => {
+        const neg = (e: Expression): Expression => ({ op: '-', args: [e] })
+        const mismatches = (r: ReturnType<typeof checkDimensions>) =>
+          r.diagnostics.filter((d) => d.code === 'dimensional_mismatch')
+
+        for (const [label, lit] of [
+          ['float', 273.15],
+          ['integer', 273],
+          ['nested', neg(273.15)],
+        ] as const) {
+          it(`is neutral in +, - and min (${label})`, () => {
+            const bindings = createUnitBindings({ T: 'K' })
+            for (const op of ['+', '-', 'min']) {
+              const result = checkDimensions({ op, args: ['T', neg(lit)] }, bindings)
+              expect(mismatches(result)).toEqual([])
+              expect(dimsOf(result)).toEqual({ K: 1 })
+            }
+          })
+        }
+
+        it('is otherwise as indeterminate as a bare literal', () => {
+          const bindings = createUnitBindings({ x: 'm' })
+          expect(checkDimensions(neg(1), bindings).dimensions).toBeNull()
+          expect(
+            checkDimensions({ op: '+', args: [neg(1), neg(2)] }, bindings).dimensions,
+          ).toBeNull()
+          expect(checkDimensions({ op: '*', args: [neg(2), 'x'] }, bindings).dimensions).toBeNull()
+        })
+
+        it('still checks a negated declared quantity', () => {
+          const bindings = createUnitBindings({ x: 'm', y: 'kg' })
+          const result = checkDimensions({ op: '+', args: ['x', neg('y')] }, bindings)
+          expect(mismatches(result)).toHaveLength(1)
+        })
       })
 
       it('makes a product involving an un-annotated constant indeterminate', () => {
@@ -240,14 +355,16 @@ describe('Unit parsing and dimensional analysis', () => {
       expect(badAddResult.diagnostics[0].code).toBe('dimensional_mismatch')
     })
 
-    it('should treat cm and m as compatible in addition', () => {
+    it('should treat cm and m as the same dimension at different scales in addition', () => {
       // Previously impossible: `cm + m` would warn because cm was a base
       // dimension distinct from m. With the shared representation, both
       // decompose to { m: 1 } and the operation is accepted.
       const bindings = createUnitBindings({ a: 'cm', b: 'm' })
       const expr: Expression = { op: '+', args: ['a', 'b'] }
       const result = checkDimensions(expr, bindings)
-      expect(result.warnings).toEqual([])
+      // Both are lengths, but the numbers being added are in different units
+      // (esm-spec §4.8.3), so the operands must agree in scale too.
+      expect(result.diagnostics.map((d) => d.code)).toEqual(['dimensional_mismatch'])
       expect(dimsOf(result)).toEqual({ m: 1 })
     })
 
@@ -744,8 +861,8 @@ describe('Unit parsing and dimensional analysis', () => {
 
   describe('Edge cases and error handling', () => {
     it('should handle empty or null unit strings gracefully', () => {
-      expect(parseUnit('')).toEqual({ dims: {}, scale: 1 })
-      expect(parseUnit('   ')).toEqual({ dims: {}, scale: 1 })
+      expect(shape(parseUnit(''))).toEqual({ dims: {}, scale: 1 })
+      expect(shape(parseUnit('   '))).toEqual({ dims: {}, scale: 1 })
     })
 
     it('should REJECT an unknown unit token rather than silently pass it', () => {
@@ -760,7 +877,7 @@ describe('Unit parsing and dimensional analysis', () => {
 
     it('should report an unknown operator as indeterminate, not dimensionless', () => {
       const bindings = new Map<string, ParsedUnit>()
-      bindings.set('x', { dims: { m: 1 }, scale: 1 })
+      bindings.set('x', { dims: { m: 1 }, scale: 1, exact: ExactScale.one() })
 
       const unknownOpExpr: Expression = { op: 'unknown_op' as any, args: ['x'] }
       const result = checkDimensions(unknownOpExpr, bindings)
@@ -782,7 +899,7 @@ describe('Unit parsing and dimensional analysis', () => {
   })
 
   describe('Cross-binding units fixtures (gt-gtf)', () => {
-    // The three units_*.esm files in tests/valid/ are shared across
+    // The units_*.esm files in tests/valid/ are shared across
     // Julia/Python/Rust/TypeScript/Go and exist specifically to drive
     // cross-binding agreement on units handling.
     //
@@ -791,7 +908,14 @@ describe('Unit parsing and dimensional analysis', () => {
     // that used to stand here (which no implementation could ever fail):
     // dimensional analysis must find NO provable inconsistency in any of them,
     // and `validate()` must accept them.
-    const fixtures = ['units_conversions.esm', 'units_propagation.esm']
+    const fixtures = [
+      'units_conversions.esm',
+      'units_propagation.esm',
+      'units_negated_literal_neutral.esm',
+      'units_sum_undeterminable_operands.esm',
+      'units_ifelse_undeterminable_branch.esm',
+      'units_comparisons_and_connectives.esm',
+    ]
 
     // CORPUS CONTRADICTION — units_dimensional_analysis.esm is deliberately NOT
     // in the list above, and this is not a gap in the checker.

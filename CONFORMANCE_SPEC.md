@@ -874,6 +874,13 @@ the factor's declared `dims`). The closed set of per-dimension policies and thei
 | `clamp` | `clamp(i, 1, N)` = edge-extend | The correct finite policy for a metric / geometry factor at a non-periodic boundary (e.g. a latitude pole). **NOT** the zero-ghost convention, which is physically wrong for a metric. |
 | `error` *(default)* | throw / raise `E_TREEWALK_CONSTARRAY_OOB` | Any factor **without** a declared policy. Genuine out-of-bounds bugs in connectivity / stencil-weight factors stay caught. |
 
+**Which gathers are const-array gathers.** The `index` base is a const array when
+it is a `const` node written inline, or a variable whose defining equation is a
+`const` node (esm-spec §4.3.3). An inline literal has no declared policy, so it
+takes the `error` default. Each index `e_d` is checked against its own dimension
+size `N_d`. A check on the flattened offset alone is not conforming: it lets an
+overflow on one axis read another element.
+
 In-range gathers are unaffected. The zero-ghost convention (`u[OOB] → 0`) remains
 the state-**variable** gather's boundary default and is **never** applied to a
 const-array gather. All evaluating bindings (Julia, Rust, Python) MUST agree
@@ -4926,17 +4933,15 @@ observeds written with the bare `index(V, sym)` LHS.
 
 #### 5.34.3 What this category deliberately does not pin
 
-- **The cadence of an indexed-LHS observed** — issue #272. This is the
-  consequence §6.3.1 names: `algebraic_unknowns` seeds the CONTINUOUS partition
-  (§5.7.2) while an observed's cadence resolves through its defining RHS, so a
-  state-free arrayed observed mis-credited as algebraic stops folding at bind.
-  It is not pinned cross-binding because the **cadence oracle itself** —
-  `scripts/run-cadence-conformance.py` and Julia's mirror in `src/cadence.jl` —
-  carries the same strict bare-LHS gate, and seven existing fixtures under
-  `tests/valid/cadence/` already have `index` / `aggregate` LHSs whose goldens
-  were minted against that behaviour. The consequence is pinned **per-binding**
-  in the meantime (Go and TypeScript both assert `cadence(w) == const` for a
-  state-free arrayed observed), which is what made #272 visible.
+- **The cadence of an indexed-LHS observed.** This is the consequence §6.3.1
+  names: `algebraic_unknowns` seeds the CONTINUOUS partition (§5.7.2) while an
+  observed's cadence resolves through its defining RHS, so a state-free arrayed
+  observed mis-credited as algebraic stops folding at bind. It is pinned
+  cross-binding by the cadence category instead (§5.7), on
+  `tests/valid/cadence/arrayed_observed_seeds.esm`, which the reference oracle
+  and the Julia, Rust and Python partition passes all run. Go and TypeScript,
+  which have no cadence adapter, assert `cadence(w) == const` for a state-free
+  arrayed observed in their own tests.
 
 ### 5.35 Merged-Away Rename Reach (normative)
 
@@ -5121,26 +5126,13 @@ Julia-minted golden. A binding can pass §5.34 and fail this one: Julia's
 `aggregate` shell), and its tree-walk **build** still refused the document
 outright.
 
-**Scope: the `aggregate`-shelled spelling only.** This section pins
+**Scope: both arrayed spellings.** §5.36.1 gates the shelled spelling
 `aggregate{k…}(index(V, k…)) ~ …`, whose `ranges` bind the frame symbols.
-§6.3.1's *other* arrayed spelling — a **bare** `index(V, i)` LHS with no shell,
-the form the spec's own worked example writes (`rg_src_bin[a] ~ …`) — is
-classified correctly by all five bindings (§5.34's `wb`) and **run by none**: a
-bare `index` LHS carries no binder for `i`, so the frame would have to be
-inferred from the declared `shape`, which is a normative decision this section
-does not make. Issue #291 carries it.
-
-What this section DOES require in the meantime is that a binding which cannot
-run the spelling **refuses** it — reporting **no actual** and **naming the
-offending variable** — rather than answering from a solver slot nothing wrote. A
-binding that returns `0.0` from a never-written slot grades a wrong document
-**green**: an assertion whose expected value happens to be `0.0` passes on a
-number that was never computed. Julia refuses with
-`E_TREEWALK_UNSUPPORTED_SHAPE`; Python refuses with `Unresolved symbol`, having
-hit the wall at a later phase. The two codes are **not** required to match while
-neither binding runs the spelling — what is required is that neither invents a
-value. Python answered `0.0` here until PR #290's §4.7.5 dual membership stopped
-resolving an arrayed observed as a bare state slot.
+§6.3.1's other arrayed spelling — a **bare** `index(V, k…)` LHS with no shell,
+the form the spec's own worked example writes (`rg_src_bin[a] ~ …`) — binds none
+of its subscripts. esm-spec §6.3.1 runs it only when a right-hand `faq` supplies
+the range, and requires every other bare-index definition to be refused.
+§5.36.2 gates both halves (issue #291).
 
 esm-spec §6.3.1 admits **two** LHS spellings for the equation that DEFINES an
 unknown, and states the criterion semantically: the defining form is read
@@ -5250,6 +5242,82 @@ absent and a false `distinct` alike.
 
 **TypeScript**, **Go** — rewrite-only ports with no simulator; no rows apply.
 
+
+#### 5.36.2 The bare-index spelling: runs when the RHS binds the range, refused otherwise
+
+A bare `index(V, k…) ~ rhs` runs exactly when the gather names `V` directly
+(not through a further `index`), every subscript is a plain symbol, `rhs` is a
+`faq` whose `output_idx` names those symbols in the same order, and the subscript
+count equals `V`'s rank if `V` declares a `shape`. It then means `V ~ rhs`
+(esm-spec §6.3.1). Any other bare-index definition of an observed MUST
+be **refused** with `indexed_definition_unsupported_form` (esm-spec §9.6.6):
+every assertion reports **no actual** and is not passed, and the message carries
+the code and **names the offending variable**. A best-effort answer is not
+allowed, because each wrong answer here is plausible: filling the array from a
+scalar RHS, or writing `V[k+1]`'s shifted window as though it were the whole
+array, produces a number that looks like a result. Value-invention outputs are
+materialized by their own engine and are outside this rule.
+
+**Gate.** The category holds three more fixtures, driven by the same three
+per-binding runners:
+
+* `fixtures/observed_bare_index_lhs.esm`, with the Julia-minted golden
+  `golden/observed_bare_index_lhs.json` — the runnable form, on §5.36.1's
+  numbers: `wb` is STATE-FREE, `wbs` is STATE-DEPENDENT, and `wn` declares NO
+  `shape`, so its right-hand `faq` is the only thing that sizes it. `wn` is read
+  through the shaped state `z` it drives (`D(z) = wn`) rather than asserted
+  directly, because an inline assertion needs a declared axis to address and
+  Rust reports an unshaped array observed as having no cells.
+* `fixtures/refuse_scalar_rhs.esm` — `w_scalar[k] ~ 5.0`.
+* `fixtures/refuse_offset_subscript.esm` — `w_offset[k+1] ~ faq{k}(2*k)`.
+* `fixtures/refuse_nested_index.esm` — `index(index(w_nested, j), k) ~ faq{k}(2*k)`,
+  whose base name is `w_nested` but which addresses a cell of a cell. Until the
+  head check, Rust and Python RAN it (both answering as though the right-hand
+  `faq` were the whole of `w_nested`) while Julia refused it with
+  `E_TREEWALK_UNSUPPORTED_SHAPE` — a divergence window in the same class this
+  section closes.
+
+The three refusal fixtures are listed under the manifest's `refusals` key, with
+the required `diagnostic` and the variable the message must name. All assert
+`5.0`, which an inventing binding could plausibly produce, so only the outcome
+separates a refusal from a wrong number.
+
+Measured before this section: **Julia** refused all three fixtures, the runnable
+one included, with `E_TREEWALK_UNSUPPORTED_SHAPE`; **Python** refused all three
+with `Unresolved symbol`; **Rust** ran the runnable fixture correctly, answered
+`6` for `w_offset[3]` (the right-hand array written unshifted), and failed inside
+the integrator ("Exceeded maximum number of error test failures") on the scalar
+right side. After it, all three run `observed_bare_index_lhs` 12 / 12 and refuse
+both refusal fixtures with the code.
+
+Where each binding does it — never in the flattened `equations`, which the
+shared flatten corpus compares across all five bindings and where
+`edge_enumeration_area_eff` records a bare-index LHS as authored:
+
+* **Julia** — `_rewrite_bare_index_observed_lhs`, called from
+  `_normalize_indexed_observed_lhs` (tree_walk/build_helpers.jl) at build;
+* **Python** — `simulation_array._bare_index_definition_rhs`, as the array build
+  splits the flattened equations into observed definitions and drivers;
+* **Rust** — `check_bare_index_definition` (simulate_array/compile.rs), where the
+  observed rules are built.
+
+Each matches a subscript spelled as authored (`k`) or as flatten namespaces a
+free symbol (`M.k`), since a `faq` binder is not namespaced.
+
+Structural validation does not agree on the offset fixture: Rust's validator
+reports the `k` in `w_offset[k+1]` as an undeclared variable, while Python's
+loads the document. The runners do not validate, so the gate is unaffected. The
+disagreement is recorded here and not settled.
+
+Neither is EXTENT agreement, which this section's rank check does not reach and
+which is **not specific to the bare-index spelling**. With `V` declared over
+`lev` (size 4) and its defining `faq` ranging over a different index set of size
+2, the three bindings answer three ways — Julia fills `V` from its declared
+shape and answers as though the range were `lev`, Rust answers `0` for the cells
+the `faq` did not produce, and Python raises an uncoded index-out-of-bounds. The
+SHELLED spelling of §5.36.1 does the same three things on `main` today, so this
+is a standing gap in arrayed-observed extent checking rather than a property of
+either gate, and it is recorded rather than settled here.
 
 ### 5.37 The §6.6.3 Assertion Predicate Itself (normative)
 
@@ -5517,6 +5585,85 @@ answer skips **visibly** with its reason printed). Any mismatch beyond tolerance
 any required-binding refusal, and any required-binding `unavailable` exits
 non-zero.
 
+### 5.39 Unsupported Constructs Are Refused, Not Dropped (normative)
+
+**Decision pinned.** A continuous event (`continuous_events`), a discrete event
+(`discrete_events`) and an implicit equation (an LHS that is an expression rather
+than an unknown, a time derivative of one, or `ic` of one) are three constructs
+none of the three executing bindings' simulators runs: not Julia's tree-walk
+evaluator, not Python's SymPy or NumPy pathways, not Rust's scalar interpreter
+or array runtime. Each of those evaluators MUST refuse a document carrying any
+of them at BUILD with the esm-spec §9.6.6 diagnostic `unsupported_construct`,
+and the message MUST name the construct and the evaluator. Before issues #264
+and #356 most of them built the model without the construct: the event never
+fired, the residual was never solved, and an inline test reported a number the
+document does not describe.
+
+**Shape.** Golden-free. Twelve refusal cases: one per construct per evaluator
+path (scalar and array); an event of each kind owned by an inline SUBSYSTEM on
+each path; a continuous event on a coupled two-model array document, which takes
+Rust's flattened route; and an implicit equation spelled as a time derivative of
+an expression (`D(a + b) ~ 3`), which credits no state and so is implicit, not a
+derivative. The subsystem cases pin that the refusal does not depend on where
+the event is declared: a binding whose `flatten` does not lift a subsystem's
+events must look for them in the document, or it runs the model without the
+event. One CONTROL: the array discrete-event document with its event removed,
+which MUST still run and pass. The control is the non-vacuity anchor: a binding
+that refused every array document would otherwise satisfy the refusal cases.
+
+The manifest and fixtures live in `tests/conformance/unsupported_construct/`.
+Adapters: `pkg/EarthSciAST.jl/test/unsupported_construct_conformance_test.jl`;
+`pkg/earthsci-ast-py/tests/test_unsupported_construct_conformance.py`;
+`pkg/earthsci-ast-rs/tests/unsupported_construct_conformance.rs`. Go and
+TypeScript do not simulate; they only register the code.
+
+**Out of scope.** Julia's ModelingToolkit export runs both kinds of event and
+hands implicit equations to `mtkcompile`, so it never raises the code. Running
+any of the three constructs on an array evaluator is future work in every
+binding.
+
+### 5.40 An Out-of-Range Const-Array Gather Fails, on Every Axis and in Both Spellings (normative)
+
+§5.5.5 makes `E_TREEWALK_CONSTARRAY_OOB` the default for a const-array gather
+out of range, and esm-spec §4.3.3 says which bases are const arrays: a `const`
+literal written inline, or a variable whose defining equation is one. This
+category pins both halves across the evaluating bindings, through each binding's
+own inline-test runner.
+
+#### 5.40.1 Fixture
+
+`tests/conformance/const_array_gather_bounds/` carries twelve one-assertion
+documents, six per spelling: a 5-element table read in range, at index 0, and one
+past the end; and a 3×2 table read in range, past the end of the first axis only
+(`(4, 1)`), and past the end of the second axis only (`(1, 3)`). Each document
+holds one assertion because the fault aborts the whole build or solve. The
+manifest gives each case an `outcome`: `pass` with the `expected` value, or
+`error` with the `error_code` the result's message must contain. An error case's
+assertion expects `-1`, which no read of either table produces, so a binding that
+returns a number cannot pass it by accident.
+
+The two single-axis cases are the per-axis check. `(4, 1)` has a column-major
+flattened offset inside the table, and `(1, 3)` has a row-major one, so a binding
+that checks only the flattened offset reads a neighbouring element on at least one
+of them, whichever layout it uses.
+
+#### 5.40.2 Gate
+
+Per-binding runners drive every fixture: **Julia** —
+`pkg/EarthSciAST.jl/test/conformance_const_array_gather_bounds_test.jl`; **Python** —
+`pkg/earthsci-ast-py/tests/test_const_array_gather_bounds_conformance.py`; **Rust** —
+`pkg/earthsci-ast-rs/tests/const_array_gather_bounds_conformance.rs`.
+`bindings_required` is `["julia", "python", "rust"]`. Go and TypeScript have no
+evaluator for `index` and are `scope_excluded`; each asserts its own exclusion and
+loads every fixture in `const_array_gather_bounds_scope_test.go` and
+`const-array-gather-bounds-scope.test.ts`.
+
+**What this category does not cover.** A document cannot declare a boundary
+policy, so `periodic` and `clamp` stay pinned by the per-binding unit tests of
+§5.5.5. Each binding's run-time gather paths (Julia's compile-once `_NK_CONST_GATHER`
+arm, Rust's vectorized and taped lowering, Python's generated code) are pinned by
+per-binding unit tests, because which path a document takes is an internal choice.
+
 
 ## 6. CI Integration
 
@@ -5590,7 +5737,10 @@ ever emitted it, and the code had zero real coverage.
 | `observed_cycle` | Structural | A dependency cycle among a model's OBSERVED unknowns (esm-spec §4.9.6): each observed on the cycle is defined by an equation whose RHS names the next, so no evaluation order satisfies every definition. Decidable from the equations alone — hard error in `validate`, in EVERY binding, executing or not. Pointer: `/models/<M>` (a cycle belongs to no single equation). `details.cycle` is the path in traversal order with the entry node repeated to close it — a PATH, so it is ordered semantically, not by §7.1.0. The self-edge of a §4.3.1.1 recurrence CANDIDATE is dropped (§5.19.5); every other self-reference (`x ~ x + 1`, `s ~ s + 1`) is a cycle of length one and IS reported. Fixture: `tests/invalid/observed_cycle_array_elementwise.esm`. |
 | `recurrence_not_wellfounded` | Structural | A causal self-read (esm-spec §4.3.1.1) that is not strictly earlier along exactly one axis: a read provably at the same cell or later on its axis, an index argument that is not affine in its frame symbol with coefficient 1, an offset on more than one axis, self-reads disagreeing on the axis, a bare read of the variable in its own RHS, or a recurrence axis that is ragged / derived / strided. Hard error in EVERY binding, executing or not (§5.19.5) — the pre-1.0 behaviour was a plausible wrong number. Pointer: the containing expression field (`…/equations/i/rhs`). |
 | `recurrence_unsupported_form` | Structural | A self-read the runtime cannot restrict to one cell: reached through a `makearray` region value or a `reshape`/`transpose`/`concat` operand, or in an equation whose RHS is not a `faq` over the variable's frame or whose output ranges are not statically resolvable (esm-spec §4.3.1.1). Distinct from `recurrence_not_wellfounded`: the READ is causal, the CARRIER cannot sequence it. |
+| `unknown_override_key` | Structural | An inline test's `initial_conditions` or `parameter_overrides` key that matches no declared name under esm-spec §6.6.2 rules 1-3. Names are qualified by component and inline subsystem, and a trailing element suffix (`u[1]`) is removed from the key first. Pointer: the key, e.g. `/models/M/tests/0/parameter_overrides/rx`. Only the unknown case is a validation error; ambiguous and colliding keys stay runtime diagnostics (§5.15). A document with an unresolved `{ref}` mount skips the check. Fixtures: `tests/invalid/unknown_override_key_*.esm`. |
+| `assertion_rank_mismatch` | Structural | An assertion whose form does not match the declared rank of the variable it names (esm-spec §6.6.5): pointwise on a variable declared with a non-empty `shape` (unless the target is an element name such as `u[1]`), or `coords` / `reduce` on a variable declared without one. Checked for targets the asserting component declares by a bare name. Pointer: the assertion, e.g. `/models/M/tests/0/assertions/0`. Fixtures: `tests/invalid/assertion_rank_mismatch_*.esm`. |
 | `reserved_variable_name` | Structural | A declaration spelled with a globally-scoped name — the document's independent variable (`domain.independent_variable`, default `"t"`) or the §6.4 `_var` placeholder (esm-spec §4.9.1.1). Both are in scope in every model and resolve BY NAME, so the declaration is unreachable and every reader silently gets the implicit symbol instead. Covers all three declaration maps: `models[M].variables` (recursing into every INLINE subsystem, at any depth), `reaction_systems[S].species`, `reaction_systems[S].parameters`. Pointer: the offending key, e.g. `/models/M/variables/t`, `/models/M/subsystems/S/variables/t`. Hard error in EVERY binding — the pre-fix behaviour was a validated document whose equations silently read the simulation clock. The reserved set FOLLOWS the document, exactly as `reserved_index_symbol` does; a binding that hard-codes the literal `"t"` fails `tests/valid/independent_variable_renamed.esm`. |
+| `array_default_without_shape` | Structural | Inline array data as the `default` of a variable that declares no `shape` — omitted, `null` or empty (esm-spec §6.3). Inline array data is a shaped variable's value, so with no shape there is nothing for it to fill and no scalar reading of it. Covers both declared types and the `variables` of every INLINE subsystem, at any depth. Pointer: the offending `default`, e.g. `/models/M/variables/k/default`, `/models/M/subsystems/S/variables/x/default`. Hard error in every binding, and a structural check rather than a schema constraint because whether an array is legal depends on the sibling `shape` field. Fixture: `tests/invalid/array_default_without_shape.esm`. |
 
 #### 7.1.0 List-valued diagnostic details are sorted
 
