@@ -138,7 +138,7 @@ mutable struct _DECtx
     # (index width, positions) -> the index constant on its own. They are not
     # the same interning; `_de_gather_op` says why.
     gathers::Dict{Tuple{_MLIR.IR.Value,Vector{Int}},_DEVal}
-    idxconsts::Dict{Vector{Int},_MLIR.IR.Value}
+    idxconsts::Dict{Tuple{Int,Vector{Int}},_MLIR.IR.Value}
     stats::Dict{Symbol,Int}
     # Which SECTION of the emission is running: materialization level `li` while
     # the fills are emitted, `nlev + 1` from the CSE prelude onwards. The read
@@ -167,7 +167,7 @@ function _DECtx(n_states::Int, n_total::Int, p, t::_DEVal, uval::_DEVal,
                   Dict{Tuple{_MLIR.IR.Value,Int,Int,Int},_DEVal}(),
                   Dict{Vector{_MLIR.IR.Value},_DEVal}(),
                   Dict{Tuple{_MLIR.IR.Value,Vector{Int}},_DEVal}(),
-                  Dict{Vector{Int},_MLIR.IR.Value}(),
+                  Dict{Tuple{Int,Vector{Int}},_MLIR.IR.Value}(),
                   Dict{Symbol,Int}(), Int32(0), :none)
 end
 
@@ -204,6 +204,7 @@ _de_loc() = _MLIR.IR.Location()
 _de_ty(L::Int) = _MLIR.IR.TensorType(Int64[L], _MLIR.IR.Type(Float64))
 _de_ty_i1(L::Int) = _MLIR.IR.TensorType(Int64[L], _MLIR.IR.Type(Bool))
 _de_ty_i64(dims::Vector{Int}) = _MLIR.IR.TensorType(Int64.(dims), _MLIR.IR.Type(Int64))
+_de_ty_i32(dims::Vector{Int}) = _MLIR.IR.TensorType(Int64.(dims), _MLIR.IR.Type(Int32))
 _de_tally!(ctx::_DECtx, k::Symbol) = (ctx.stats[k] = get(ctx.stats, k, 0) + 1; nothing)
 
 # READ ATTRIBUTION. Every emitted `slice` / `gather` / `concatenate` is tallied
@@ -324,28 +325,55 @@ function _de_concat(ctx::_DECtx, pieces::Vector{_DEVal})::_DEVal
 end
 
 # THE INDEX VECTOR IS WHAT THE GATHER FORM COSTS, and it is paid in the data
-# the module ships rather than in its operation count.
+# the module ships rather than in its operation count. Two things bound it.
 #
-# SO IT IS INTERNED, and by CONTENTS rather than by use. The gather itself is
-# interned the way the slice and concatenate forms already are — same value,
-# same positions, same SSA result — but that alone leaves the index vector
-# emitted again for every gather that is not itself a repeat, and on a slot map
-# most of them are not: a write retires the map's canonical base, so the next
-# read of the SAME slots is a different gather over a different value at exactly
-# the same indices, and the map is written between almost every pair of reads.
-# The index vector is a property of the READ and of nothing else, so it is
-# interned on its own, and a module carries one copy of each distinct one.
-function _de_idxconst(ctx::_DECtx, positions::Vector{Int})
-    hit = get(ctx.idxconsts, positions, nothing)
+# INTERNING, and by CONTENTS rather than by use. The gather itself is interned
+# the way the slice and concatenate forms already are — same value, same
+# positions, same SSA result — but that alone leaves the index vector emitted
+# again for every gather that is not itself a repeat, and on a slot map most of
+# them are not: a write retires the map's canonical base, so the next read of
+# the SAME slots is a different gather over a different value at exactly the
+# same indices, and the map is written between almost every pair of reads. The
+# index vector is a property of the READ and of nothing else, so it is interned
+# on its own, and a module carries one copy of each distinct one.
+#
+# THE ELEMENT TYPE. `stablehlo.gather` takes start indices of any integer type,
+# and a 32-bit index addresses a base far longer than a slot map that fits in
+# memory, so the vector is emitted as `i32` whenever every position into the
+# base is representable in one and as `i64` otherwise. The width changes no
+# number the program computes. `ESM_DIRECT_GATHER_INDEX_BITS` pins it, as the
+# negative control and as the escape if a backend is found that wants the wide
+# form.
+const _DE_GATHER_INDEX_BITS = 32
+
+function _de_gather_index_bits()
+    v = get(ENV, "ESM_DIRECT_GATHER_INDEX_BITS", "")
+    isempty(v) && return _DE_GATHER_INDEX_BITS
+    w = tryparse(Int, v)
+    (w == 32 || w == 64) || _de_refuse("an index width of `$v`",
+        "ESM_DIRECT_GATHER_INDEX_BITS is `$v`. A gather's start indices are " *
+        "emitted as 32- or 64-bit integers and as nothing else; unset the " *
+        "variable for the default.")
+    return w
+end
+
+# Pure, so the width can be pinned by a test at base lengths no fixture reaches.
+_de_index_bits(baselen::Int, want::Int) =
+    (want == 32 && baselen <= typemax(Int32)) ? 32 : 64
+
+function _de_idxconst(ctx::_DECtx, positions::Vector{Int}, bits::Int)
+    key = (bits, positions)
+    hit = get(ctx.idxconsts, key, nothing)
     hit === nothing || return hit
     L = length(positions)
+    attr = bits == 32 ?
+        _MLIR.IR.DenseElementsAttribute(reshape(Int32.(positions) .- Int32(1), L, 1)) :
+        _MLIR.IR.DenseElementsAttribute(reshape(Int64.(positions) .- Int64(1), L, 1))
     _de_tally!(ctx, :gather_index)
-    op = _hlo.constant(; output=_de_ty_i64([L, 1]),
-                       value=_MLIR.IR.DenseElementsAttribute(
-                           reshape(Int64.(positions) .- Int64(1), L, 1)),
-                       location=_de_loc())
+    op = _hlo.constant(; output=(bits == 32 ? _de_ty_i32([L, 1]) : _de_ty_i64([L, 1])),
+                       value=attr, location=_de_loc())
     v = _de_res(op)
-    ctx.idxconsts[copy(positions)] = v
+    ctx.idxconsts[(bits, copy(positions))] = v
     return v
 end
 
@@ -358,7 +386,8 @@ function _de_gather_op(ctx::_DECtx, src::_DEVal, positions::Vector{Int})::_DEVal
     _de_tally!(ctx, :gather)
     _de_site!(ctx, :gather, :x)
     L = length(positions)
-    idx = _de_idxconst(ctx, positions)
+    idx = _de_idxconst(ctx, positions,
+                       _de_index_bits(src.len, _de_gather_index_bits()))
     dn = _MLIR.API.stablehloGatherDimensionNumbersGet(
         _MLIR.IR.current_context(),
         0, Int64[],          # offset_dims

@@ -219,13 +219,13 @@ function _de_census(modstr::AbstractString)
 end
 
 # Every gather index constant in a printed module, as its literal contents.
-# `stablehlo.constant dense<…> : tensor<Lx1xi64>` — rank 2 with a trailing 1 is
+# `stablehlo.constant dense<…> : tensor<Lx1xi32>` — rank 2 with a trailing 1 is
 # the gather's start-index shape and nothing else emits it.
 function _de_index_constants(modstr::AbstractString)
     out = String[]
     for ln in eachsplit(modstr, '\n')
         occursin("stablehlo.constant", ln) || continue
-        occursin(r"tensor<\d+x1xi64>", ln) || continue
+        occursin(r"tensor<\d+x1xi(?:32|64)>", ln) || continue
         i = findfirst("dense<", ln)
         j = findlast("> :", ln)
         (i === nothing || j === nothing) && continue
@@ -774,30 +774,79 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
 
         # `always` is the shape that spends index data: every read with more
         # than one run becomes a gather, so the module is all index vector.
-        mod, tally = withenv("ESM_DIRECT_EMIT_READ" => "always") do
-            d = EXT_DE.direct_rhs(fo)
-            m = repr(RX_DE.@code_hlo optimize = false d(ur, pr, tr))
-            xla = RX_DE.@compile sync = true d(ur, pr, tr)
-            @test isapprox(Array(xla(ur, pr, tr)), ref; rtol = 1e-12, atol = 0.0)
-            (m, copy(d.stats))
+        mods = Dict{String,String}()
+        tallies = Dict{String,Dict{Symbol,Int}}()
+        for bits in ("32", "64")
+            withenv("ESM_DIRECT_EMIT_READ" => "always",
+                    "ESM_DIRECT_GATHER_INDEX_BITS" => bits) do
+                d = EXT_DE.direct_rhs(fo)
+                mods[bits] = repr(RX_DE.@code_hlo optimize = false d(ur, pr, tr))
+                tallies[bits] = copy(d.stats)
+                xla = RX_DE.@compile sync = true d(ur, pr, tr)
+                @test isapprox(Array(xla(ur, pr, tr)), ref; rtol = 1e-12, atol = 0.0)
+            end
         end
-        idx = _de_index_constants(mod)
-        println("  index vectors: ", length(idx), " constants, ",
-                length(Set(idx)), " distinct; tally ",
-                get(tally, :gather_index, 0), " of ",
-                get(tally, :gather, 0), " gathers")
-        @test !isempty(idx)
+        idx32 = _de_index_constants(mods["32"])
+        idx64 = _de_index_constants(mods["64"])
+        println("  index vectors: ", length(idx32), " constants, ",
+                length(Set(idx32)), " distinct; tally ",
+                get(tallies["32"], :gather_index, 0), " of ",
+                get(tallies["32"], :gather, 0), " gathers")
+        @test !isempty(idx32)
         # ONE CONSTANT PER DISTINCT VECTOR, which is the whole of the lever:
         # no two index constants in the module carry the same contents, and
         # the emitter's own count of them is the module's.
-        @test length(Set(idx)) == length(idx)
-        @test length(idx) == get(tally, :gather_index, 0)
-        @test get(tally, :gather_index, 0) <= get(tally, :gather, 0)
+        @test length(Set(idx32)) == length(idx32)
+        @test length(idx32) == get(tallies["32"], :gather_index, 0)
+        @test get(tallies["32"], :gather_index, 0) <=
+              get(tallies["32"], :gather, 0)
         # And the gather itself is interned the way the slice and concatenate
         # forms are, so a read that recurs over the same value costs one.
-        @test get(tally, :gather, 0) >= 1
+        @test get(tallies["32"], :gather, 0) >= 1
+
+        # THE ELEMENT TYPE IS NOT A SHAPE DECISION. Narrowing the index halves
+        # the data and changes nothing else: the same gathers, the same index
+        # vectors, the same numbers.
+        @test tallies["32"] == tallies["64"]
+        # The vectors themselves are printed in the element type's own spelling,
+        # so it is their COUNT and their distinctness that carry across.
+        @test length(idx64) == length(idx32)
+        @test length(Set(idx64)) == length(idx64)
+        @test occursin("x1xi32>", mods["32"])
+        @test !occursin("x1xi64>", mods["32"])
+        @test occursin("x1xi64>", mods["64"])
+        @test !occursin("x1xi32>", mods["64"])
     end
 
+    @testset "the gather's index width" begin
+        # THE DECISION is pure arithmetic and needs no MLIR context.
+        withenv("ESM_DIRECT_GATHER_INDEX_BITS" => nothing) do
+            @test EXT_DE._de_gather_index_bits() == 32
+        end
+        withenv("ESM_DIRECT_GATHER_INDEX_BITS" => "64") do
+            @test EXT_DE._de_gather_index_bits() == 64
+        end
+        withenv("ESM_DIRECT_GATHER_INDEX_BITS" => "32") do
+            @test EXT_DE._de_gather_index_bits() == 32
+        end
+        # A width the gather has no form for is a refusal, not a fallback.
+        withenv("ESM_DIRECT_GATHER_INDEX_BITS" => "16") do
+            @test_throws ESM_DE.DirectEmitError EXT_DE._de_gather_index_bits()
+        end
+        withenv("ESM_DIRECT_GATHER_INDEX_BITS" => "wide") do
+            @test_throws ESM_DE.DirectEmitError EXT_DE._de_gather_index_bits()
+        end
+        # THE ONE THING THAT FORCES THE WIDE FORM is a base a 32-bit index
+        # cannot address. Nothing a slot map that fits in memory reaches — the
+        # boundary is pinned here because no fixture can reach it.
+        @test EXT_DE._de_index_bits(6_552, 32) == 32
+        @test EXT_DE._de_index_bits(85_176, 32) == 32
+        @test EXT_DE._de_index_bits(Int(typemax(Int32)), 32) == 32
+        @test EXT_DE._de_index_bits(Int(typemax(Int32)) + 1, 32) == 64
+        # And the override is honoured at every length.
+        @test EXT_DE._de_index_bits(6_552, 64) == 64
+        @test EXT_DE._de_index_bits(Int(typemax(Int32)) + 1, 64) == 64
+    end
 
     @testset "the lane-batched scalar surface: one whole-lane read per group" begin
         doc, ics, NI, NJ, M = _de_halo()
