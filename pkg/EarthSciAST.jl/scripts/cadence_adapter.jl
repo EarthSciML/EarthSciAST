@@ -53,6 +53,17 @@ are checked and counted), but it is NOT an output-buffer materialization point:
 its value folds into whatever reads it, which is exactly what the leaf seed
 expresses. Treating it as an output would report a materialization frontier —
 and a non-empty per-event handler — for a model whose golden has neither.
+
+The gate here is the STRICT bare-variable LHS, deliberately NARROWER than
+`Cadence._observed_definitions`, which reads a definition through its LHS's
+base name at any rank (esm-spec §6.3.1). The two answer different questions:
+the seed rule asks "which unknown does this equation define" (every rank), while
+this asks "which definition is INLINED into its readers rather than written to a
+buffer" (only the scalar `y ~ …` form). An ARRAYED definition — `y[i] ~ …` or
+`faq{i}(y[i]) ~ …` — materializes into a buffer its consumers index, so it keeps
+its output-buffer materialization point. Python's `inlined_unknowns` gate in
+`cadence.py` draws the same line. Widening this gate to match the seed rule would
+drop those buffers from the frontier and disagree with the golden.
 """
 function definition_nodes(model)
     variables = get(model, "variables", Dict{String,Any}())

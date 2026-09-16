@@ -107,7 +107,7 @@ strict INLINING set rather than off the classification.
 
 ## What this category deliberately does NOT pin
 
-### The cadence of an indexed-LHS observed — **issue #272**
+### The cadence of an indexed-LHS observed
 
 This is the consequence §6.3.1 names in as many words: `algebraic_unknowns` seeds
 the CONTINUOUS cadence partition, whereas an observed's cadence resolves through
@@ -116,17 +116,14 @@ build-time work (const-backed geometry and regridding arrays) onto the
 per-timestep hot path". `wf` in this fixture is state-free and must fold at bind
 (`const`); while it was mis-credited as algebraic it seeded `continuous`.
 
-It is not pinned here because the **cadence conformance oracle itself** —
-`scripts/run-cadence-conformance.py` and Julia's mirror in
-`pkg/EarthSciAST.jl/src/cadence.jl` — carries the same strict bare-LHS gate, and
-seven existing fixtures under `tests/valid/cadence/` already have `index` /
-`aggregate` LHSs whose goldens were minted against that behaviour. Correcting the
-oracle means re-deriving those goldens, which is its own piece of work: **#272**.
-
-The consequence is pinned **per-binding** in the meantime — Go's
+It is pinned by the **cadence** category rather than here, on
+`tests/valid/cadence/arrayed_observed_seeds.esm` (the same `faq`-shelled and
+bare-index spellings), which the reference oracle
+(`scripts/run-cadence-conformance.py`) and the Julia, Rust and Python partition
+passes all run. Go and TypeScript have no cadence adapter; Go's
 `TestObservedUnknownsSeeThroughIndexedLHSSpellings` and TypeScript's
-`'folds a state-free arrayed observed at bind'` both assert
-`cadence(w) == const` — which is what made #272 visible in the first place.
+`'folds a state-free arrayed observed at bind'` assert `cadence(w) == const` in
+their own suites.
 
 ## Contract for a binding runner
 

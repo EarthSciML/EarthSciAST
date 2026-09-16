@@ -27,16 +27,24 @@
 
 """
     OutputError(msg)
+    OutputError(msg, code)
 
 Thrown by the streaming-output surface: an unimplemented Sink protocol method, a
-malformed snapshot, or a call to [`build_output_callback`](@ref) before the
-`DiffEqCallbacks` / `SciMLBase` extension is loaded. The output-side mirror of
+malformed snapshot, an output request that designates no single variable, or a
+call to [`build_output_callback`](@ref) before the `DiffEqCallbacks` /
+`SciMLBase` extension is loaded. The output-side mirror of
 [`RefreshError`](@ref).
+
+`code` is the registered diagnostic code (an [`ERROR_CODES`](@ref) value) for
+the failures that carry one, and `""` otherwise.
 """
 struct OutputError <: EarthSciASTError
     msg::String
+    code::String
 end
-Base.showerror(io::IO, e::OutputError) = print(io, "OutputError: ", e.msg)
+OutputError(msg::AbstractString) = OutputError(String(msg), "")
+Base.showerror(io::IO, e::OutputError) =
+    print(io, "OutputError: ", isempty(e.code) ? "" : "[$(e.code)] ", e.msg)
 
 # --------------------------------------------------------------------------- #
 # AbstractSink — an optional supertype for concrete sinks. Sinks need NOT subtype
@@ -845,9 +853,14 @@ Derive the whole output plan for a run (RFC §7–§9) — the Julia mirror of
 * `var_map` — the flat state-element name → flat index map.
 * `observed` — the caller-named observed/derived fields to write alongside the
   state (RFC decision 8): output is the state PLUS these, not every observed
-  field. Names may be bare or `Model.`-qualified. A requested name with no slot in
-  the flat state is an [`OutputError`](@ref) — silently dropping a requested
-  output is worse than refusing.
+  field. A name selects the variable it names exactly; failing that, the ONE
+  variable whose last dotted segment equals the name's (so `flux` selects
+  `Box.flux`). A name whose last segment several variables share is refused with
+  code `ambiguous_output_name`, and a name with no slot in the flat state is
+  refused too — silently dropping or silently choosing a requested output is
+  worse than refusing. A name an `operator_compose` merge deleted is NOT resolved
+  here: the caller resolves it through `merged_variable_renames` first
+  (CONFORMANCE_SPEC §5.17.4).
 """
 function derive_output_plan(doc::AbstractDict, var_map::AbstractDict;
                             observed = String[])
@@ -858,35 +871,44 @@ function derive_output_plan(var_map::AbstractDict, meta::OutputMeta;
                             observed = String[])
     gridding = derive_output_gridding(var_map, meta)
 
-    wanted = Dict{String,Bool}(String(n) => false for n in observed)
-    kept = VarGridding[]
-    for g in gridding
-        requested = _match_requested!(wanted, g.base)
-        is_observed = _meta_lookup(meta.var_types, g.base) == "observed"
-        (!is_observed || requested) && push!(kept, g)
-    end
-    for (name, seen) in wanted
-        seen || throw(OutputError(
-            "requested observed output '$name' has no slot in the flat state; the " *
-            "runner must evaluate and append it before the plan is derived"))
-    end
+    requested = _resolve_output_requests(observed, String[g.base for g in gridding])
+    kept = VarGridding[g for g in gridding
+                       if _meta_lookup(meta.var_types, g.base) != "observed" ||
+                          g.base in requested]
 
     return OutputPlan(GridPlan[_build_grid_plan(grp, meta)
                                for grp in group_gridding_by_grid(kept)])
 end
 
-# Mark every request key naming `base` (bare or `Model.`-qualified); report a hit.
-function _match_requested!(wanted::Dict{String,Bool}, base::AbstractString)
-    bare = String(last(split(base, '.')))
-    hit = false
-    for name in keys(wanted)
-        nbare = String(last(split(name, '.')))
-        if name == base || name == bare || nbare == base || nbare == bare
-            wanted[name] = true
-            hit = true
+_last_segment(name::AbstractString) = String(last(split(name, '.')))
+
+# The variable bases the `observed` request names (CONFORMANCE_SPEC §5.17.4):
+# the exact base, else the ONE base sharing the request's last dotted segment.
+# Mirrors `match_output_request` in `earthsci-ast-rs/src/data_output.rs`.
+function _resolve_output_requests(observed, bases::Vector{String})
+    selected = Set{String}()
+    for req in observed
+        name = String(req)
+        if name in bases
+            push!(selected, name)
+            continue
+        end
+        tail = _last_segment(name)
+        hits = sort!(unique!([b for b in bases if _last_segment(b) == tail]))
+        if length(hits) == 1
+            push!(selected, only(hits))
+        elseif isempty(hits)
+            throw(OutputError(
+                "requested observed output '$name' has no slot in the flat state; the " *
+                "runner must evaluate and append it before the plan is derived"))
+        else
+            throw(OutputError(
+                "requested output '$name' names no variable exactly, and its last " *
+                "segment '$tail' is shared by $(join(hits, ", ")); name one of them " *
+                "in full", ERROR_CODES.AMBIGUOUS_OUTPUT_NAME))
         end
     end
-    return hit
+    return selected
 end
 
 function _build_grid_plan(group::Vector{VarGridding}, meta::OutputMeta)
