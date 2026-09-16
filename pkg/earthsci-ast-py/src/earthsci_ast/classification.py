@@ -303,6 +303,29 @@ def _derivative_targets(lhs: Any) -> set[str]:
     return set()
 
 
+def is_implicit_lhs(lhs: Any) -> bool:
+    """True for an equation LHS that constrains its operands only implicitly
+    (``H*H*SO4 ~ Ksp``, ``s - f(s) ~ 0``, ``D(a + b) ~ 3``): not an unknown (bare,
+    indexed, or an ``faq`` over an ``index``), not a time derivative crediting a
+    base variable, and not ``ic``. A time derivative of an EXPRESSION credits no
+    variable and is counted. A spatial derivative is not: it is a rewrite target,
+    which the ``unlowered_operator`` gate reports instead."""
+    if _base_name(lhs) is not None or _derivative_targets(lhs):
+        return False
+    op = _op(lhs)
+    if op == "ic" or op in SPATIAL_DERIVATIVE_OPS or _is_spatial_d(lhs):
+        return False
+    if op == "faq":
+        inner = _slot(lhs, "expr", "expr")
+        if inner is not None and (_is_spatial_d(inner) or _base_name(inner) is not None):
+            return False
+    return True
+
+
+def _is_spatial_d(expr: Any) -> bool:
+    return _op(expr) == "D" and not _is_time_derivative(expr)
+
+
 def _lhs(equation: Any) -> Any:
     return _field(equation, "lhs")
 

@@ -3,7 +3,8 @@ target/
 # Secondary target dir for RUSTFLAGS=-C target-cpu=native A/B builds
 # (step 4b ceiling measurements) — never commit build artifacts.
 target-native/
-Cargo.lock
+# Cargo.lock is committed: this crate ships the `esm` binary (see the note in
+# the repository .gitignore).
 **/*.rs.bk
 
 # IDE

@@ -1,0 +1,157 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "UnitsComparisonsAndConnectives",
+    "description": "Pins esm-spec §4.8.3 for comparisons and and/or/not: a comparison skips undeterminable operands and is dimensionless whatever its operands are; a connective is dimensionless and places no requirement on its operands' own units.",
+    "authors": [
+      "Chris Tessum with Claude"
+    ],
+    "created": "2026-09-15T00:00:00Z",
+    "tags": [
+      "units",
+      "dimensional_analysis"
+    ]
+  },
+  "models": {
+    "ComparisonUnitRules": {
+      "reference": {
+        "notes": "Every declaration matches. The invalid counterparts are tests/invalid/units_comparison_mismatch_in_ifelse_condition.esm, units_comparison_mismatch_under_and.esm, units_comparison_mismatch_under_not.esm and units_comparison_result_declared_length.esm."
+      },
+      "variables": {
+        "x": {
+          "type": "parameter",
+          "units": "m",
+          "default": 2.0,
+          "description": "A length"
+        },
+        "y": {
+          "type": "parameter",
+          "units": "m",
+          "default": 3.0,
+          "description": "Another length"
+        },
+        "z": {
+          "type": "parameter",
+          "units": "kg",
+          "default": 4.0,
+          "description": "A mass"
+        },
+        "c": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.0,
+          "description": "A dimensionless switch"
+        },
+        "dimensional_operands": {
+          "type": "unknown",
+          "units": "1",
+          "description": "and(x, z): a connective places no requirement on its operands' units"
+        },
+        "same_unit_comparison": {
+          "type": "unknown",
+          "units": "1",
+          "description": "x > y: both operands in m"
+        },
+        "undeterminable_operand_comparison": {
+          "type": "unknown",
+          "units": "1",
+          "description": "x > 0.5*y: the undeterminable operand is skipped"
+        },
+        "literal_comparison": {
+          "type": "unknown",
+          "units": "1",
+          "description": "1 > 2: dimensionless although no operand is determinable"
+        },
+        "negated_comparison": {
+          "type": "unknown",
+          "units": "1",
+          "description": "not(x >= y): dimensionless"
+        },
+        "comparison_as_factor": {
+          "type": "unknown",
+          "units": "m",
+          "description": "x * (c > 0): the comparison contributes no dimension"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "dimensional_operands",
+          "rhs": {
+            "op": "and",
+            "args": [
+              "x",
+              "z"
+            ]
+          }
+        },
+        {
+          "lhs": "same_unit_comparison",
+          "rhs": {
+            "op": ">",
+            "args": [
+              "x",
+              "y"
+            ]
+          }
+        },
+        {
+          "lhs": "undeterminable_operand_comparison",
+          "rhs": {
+            "op": ">",
+            "args": [
+              "x",
+              {
+                "op": "*",
+                "args": [
+                  0.5,
+                  "y"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "literal_comparison",
+          "rhs": {
+            "op": ">",
+            "args": [
+              1,
+              2
+            ]
+          }
+        },
+        {
+          "lhs": "negated_comparison",
+          "rhs": {
+            "op": "not",
+            "args": [
+              {
+                "op": ">=",
+                "args": [
+                  "x",
+                  "y"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "comparison_as_factor",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "x",
+              {
+                "op": ">",
+                "args": [
+                  "c",
+                  0
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

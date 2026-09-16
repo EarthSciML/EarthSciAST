@@ -1,0 +1,95 @@
+{
+  "esm": "1.1.0",
+  "index_sets": {
+    "L.cells": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "metadata": {
+    "description": "Import-edge renaming (esm-spec 9.7.7) through map entries named like structural keys. A map key is a declared name, not a field (9.7.6), so the rename walk never dispatches on it. The library's faq loop symbol is spelled `dim`, so its `ranges` entry `dim: {from: cells}` still follows the prefix to L.cells. An apply-node `bindings` entry is spelled `units` and another `dim`, so their values are variable references: the free names k and k2 are found by the rebind check, and they are rebound to kk and kk2.",
+    "name": "import_rename_name_keyed_map_entries"
+  },
+  "models": {
+    "M": {
+      "equations": [
+        {
+          "lhs": {
+            "args": [
+              "x"
+            ],
+            "op": "D",
+            "wrt": "t"
+          },
+          "rhs": {
+            "args": [
+              "x"
+            ],
+            "op": "-"
+          }
+        },
+        {
+          "lhs": "total",
+          "rhs": {
+            "args": [],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    "u",
+                    "dim"
+                  ],
+                  "op": "index"
+                },
+                {
+                  "args": [
+                    "kk",
+                    "kk2"
+                  ],
+                  "op": "*"
+                }
+              ],
+              "op": "*"
+            },
+            "op": "faq",
+            "output_idx": [],
+            "ranges": {
+              "dim": {
+                "from": "L.cells"
+              }
+            }
+          }
+        }
+      ],
+      "variables": {
+        "kk": {
+          "default": 2.5,
+          "type": "parameter",
+          "units": "1"
+        },
+        "kk2": {
+          "default": 3.5,
+          "type": "parameter",
+          "units": "1"
+        },
+        "total": {
+          "type": "unknown",
+          "units": "1"
+        },
+        "u": {
+          "default": 1.5,
+          "shape": [
+            "L.cells"
+          ],
+          "type": "parameter",
+          "units": "1"
+        },
+        "x": {
+          "default": 0.5,
+          "type": "unknown",
+          "units": "1"
+        }
+      }
+    }
+  }
+}

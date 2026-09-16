@@ -125,6 +125,9 @@ diagnostic_code_registry! {
     APPLY_EXPRESSION_TEMPLATE_VERSION_TOO_OLD = "apply_expression_template_version_too_old";
     /// A rewrite rule whose repeated application does not reach a fixed point.
     REWRITE_RULE_NONTERMINATING = "rewrite_rule_nonterminating";
+    /// A rewrite-target op (§4.2) reached evaluation or compilation without
+    /// being lowered (esm-spec §9.6.6); refused through `OpError::Unlowered`.
+    UNLOWERED_OPERATOR = "unlowered_operator";
     /// Template body expansion exceeded the depth budget (a runaway, but not
     /// provably self-recursive, expansion).
     TEMPLATE_BODY_EXPANSION_TOO_DEEP = "template_body_expansion_too_deep";
@@ -188,6 +191,9 @@ diagnostic_code_registry! {
     /// A top-level `solver` block in a document declaring `esm` < 1.1.0
     /// (esm-spec §2.2.4, §2.2.5).
     SOLVER_VERSION_TOO_OLD = "solver_version_too_old";
+    /// Declared `units` on an expression node in a document declaring `esm` <
+    /// 1.2.0 (esm-spec §4.8.5).
+    CONST_UNITS_VERSION_TOO_OLD = "const_units_version_too_old";
     /// An `inject` whose target names a data LOADER rather than a component.
     TEMPLATE_INJECT_TARGET_IS_LOADER = "template_inject_target_is_loader";
     /// An `inject` whose target resolves to something that is not a component.
@@ -324,6 +330,10 @@ diagnostic_code_registry! {
 
     /// A `ranges[*]`/expression reference to an undeclared array index set.
     ARRAY_SHAPE_MISMATCH = "array_shape_mismatch";
+    /// Inline ARRAY data as the `default` of a variable that declares no
+    /// `shape` (esm-spec §6.3). Inline array data is a shaped variable's value,
+    /// so with no shape there is nothing for the array to fill.
+    ARRAY_DEFAULT_WITHOUT_SHAPE = "array_default_without_shape";
     /// An equation graph that depends on itself.
     CIRCULAR_DEPENDENCY = "circular_dependency";
     /// A parameter `update` naming no declared data source.
@@ -334,6 +344,9 @@ diagnostic_code_registry! {
     /// into a source's location at all — or a resolved path carrying a `?`
     /// or `#`. The message names the offending data source and template.
     DATA_SOURCE_URL_UNRESOLVED = "data_source_url_unresolved";
+    /// An expression ranges over a `kind: "derived"` index set whose producer
+    /// could not be materialized at build (esm-spec §9.6.6).
+    DERIVED_INDEX_SET_UNMATERIALIZED = "derived_index_set_unmaterialized";
     /// A domain axis whose units disagree with the coordinate's.
     DOMAIN_UNIT_MISMATCH = "domain_unit_mismatch";
     /// A model whose equation count cannot match its unknown count.
@@ -374,6 +387,9 @@ diagnostic_code_registry! {
     RECURRENCE_NOT_WELLFOUNDED = "recurrence_not_wellfounded";
     /// A causal self-read the runtime cannot restrict to one cell.
     RECURRENCE_UNSUPPORTED_FORM = "recurrence_unsupported_form";
+    /// A continuous or discrete event, or an implicit equation, reached an
+    /// evaluator that cannot run it (esm-spec §9.6.6).
+    UNSUPPORTED_CONSTRUCT = "unsupported_construct";
     /// A relational node in a continuous (ODE-position) expression.
     RELATIONAL_NODE_IN_CONTINUOUS = "relational_node_in_continuous";
     /// A `faq` binder (a `ranges` key or an `output_idx` entry) spelled
@@ -389,6 +405,10 @@ diagnostic_code_registry! {
     /// the declaration maps, so the declaration is unreachable and every reader
     /// silently receives the implicit symbol instead (§4.9.1.1).
     RESERVED_VARIABLE_NAME = "reserved_variable_name";
+    /// An inline test's override key that matches no declared name (esm-spec §6.6.2).
+    UNKNOWN_OVERRIDE_KEY = "unknown_override_key";
+    /// An assertion whose form does not match its target's declared rank (esm-spec §6.6.5).
+    ASSERTION_RANK_MISMATCH = "assertion_rank_mismatch";
     /// A provable dimensional inconsistency, promoted from a unit finding.
     UNIT_INCONSISTENCY = "unit_inconsistency";
     /// A declared unit string that denotes no real unit, promoted from a
@@ -406,6 +426,10 @@ diagnostic_code_registry! {
     UNDEFINED_SYSTEM = "undefined_system";
     /// A reference to a variable the component does not declare.
     UNDEFINED_VARIABLE = "undefined_variable";
+    /// An evaluable-core op (esm-spec §4.2) with no evaluation rule in the
+    /// evaluator a model was built for (esm-spec §9.6.6). Carried by
+    /// `CompileError::UnevaluableOperatorError`.
+    UNEVALUABLE_OPERATOR = "unevaluable_operator";
     /// A scoped reference (`A.b`) that resolves to nothing.
     UNRESOLVED_SCOPED_REF = "unresolved_scoped_ref";
 
@@ -515,11 +539,14 @@ mod error_code_tests {
             "apply_expression_template_recursive_body",
             "apply_expression_template_unknown_template",
             "apply_expression_template_version_too_old",
+            "array_default_without_shape",
             "array_shape_mismatch",
+            "assertion_rank_mismatch",
             "circular_dependency",
             "closed_function_arg_type",
             "closed_function_arity",
             "closed_function_overflow",
+            "const_units_version_too_old",
             "coupling_edge_unknown_role",
             "coupling_import_bind_not_a_component",
             "coupling_import_not_library",
@@ -531,6 +558,7 @@ mod error_code_tests {
             "coupling_role_unused",
             "data_source_undefined",
             "data_source_url_unresolved",
+            "derived_index_set_unmaterialized",
             "dimensional_mismatch",
             "domain_unit_mismatch",
             "enum_invalid_args",
@@ -605,16 +633,62 @@ mod error_code_tests {
             "undefined_species",
             "undefined_system",
             "undefined_variable",
+            "unevaluable_operator",
             "unit_inconsistency",
             "unit_parse_error",
             "unknown_closed_function",
             "unknown_enum",
             "unknown_enum_symbol",
+            "unknown_override_key",
+            "unlowered_operator",
             "unparseable_unit",
             "unresolved_scoped_ref",
             "unresolved_subsystem_ref",
+            "unsupported_construct",
         ];
         assert_eq!(error_code_names(), expected);
+    }
+
+    /// The code column of the esm-spec §9.6.6 table. That table is
+    /// "cross-language uniform", so every binding's registry must carry it.
+    fn spec_diagnostic_codes() -> Vec<String> {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../esm-spec.md");
+        let spec = std::fs::read_to_string(path).expect("read esm-spec.md");
+        let section = spec
+            .split("\n#### ")
+            .find(|part| part.starts_with("9.6.6 "))
+            .expect("esm-spec.md has no §9.6.6 heading");
+        section
+            .lines()
+            .filter_map(|line| {
+                let rest = line.strip_prefix("| `")?;
+                let code = &rest[..rest.find("` |")?];
+                code.chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+                    .then(|| code.to_string())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn every_spec_diagnostic_code_is_registered() {
+        let codes = spec_diagnostic_codes();
+        // Guard the extraction: a heading or table-layout change that matched
+        // nothing would pass the membership check vacuously.
+        assert!(
+            codes.len() >= 30,
+            "extracted only {} codes from the §9.6.6 table",
+            codes.len()
+        );
+        let registered = error_code_names();
+        let missing: Vec<&String> = codes
+            .iter()
+            .filter(|c| !registered.contains(&c.as_str()))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "§9.6.6 codes missing from ERROR_CODES: {missing:?}"
+        );
     }
 
     /// The structural-validation codes render off the registry, so the

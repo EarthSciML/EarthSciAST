@@ -77,7 +77,8 @@ pub struct ContinuousEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub affect_neg: Option<Vec<AffectEquation>>,
 
-    /// Root finding direction
+    /// Which side of the root the event lands on (esm-spec §5.2); absent means
+    /// [`RootFindDirection::Left`]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub root_find: Option<RootFindDirection>,
 
@@ -96,14 +97,14 @@ pub struct ContinuousEvent {
 // lives ON the parameter it writes as a `ParameterUpdate` carrying a
 // [`FunctionalUpdate`] (`update.handler`), and events affect unknowns only.
 
-/// Root finding direction for continuous events
+/// Which side of a continuous event's root the event lands on (esm-spec §5.2).
+/// Maps to DiffEq's `rootfind` option. It does not select a crossing direction:
+/// that is what `affects` / `affect_neg` do.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RootFindDirection {
-    /// Detect positive-going zero crossings
+    /// The last point before the root (DiffEq `LeftRootFind`); the default.
     Left,
-    /// Detect negative-going zero crossings
+    /// The first point after the root (DiffEq `RightRootFind`).
     Right,
-    /// Detect all zero crossings
-    All,
 }

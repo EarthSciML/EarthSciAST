@@ -188,6 +188,11 @@ in full and this is the corpus's pin for the rule.)
   −1 renders as `-1 * rate` in the oracle and `-rate` (or an infix `a - b`) in
   Julia. Semantically identical, textually different; a `to_ascii`-level
   difference in how the lowering builds the term, not a flatten difference.
+  `tendency_resolution` and `merged_tendency` are reaction-lowering cases too:
+  the right-hand-side `D` resolution (§4.7.5 step 3a) copies the lowered
+  `Chem.A` tendency into `M.dAdt`, so the same rendering shows up twice per
+  document. The resolution itself is pinned by
+  `rhs_time_derivative_resolution_test.jl`.
 * `equations` on `advection_reaction_loaded_ic_bc` — three separate differences,
   none of them about the field set: (i) the oracle NAMESPACES an aggregate's loop
   variables (`Advection.i`) and index-set references, which esm-spec v0.8.0 makes
@@ -264,6 +269,8 @@ const _FC_DIVERGENCES = Dict{String,Vector{String}}(
     "metadata_inheritance_coupled" => ["equations"],
     "bare_reference_resolution" => ["discrete_events"],
     "operator_compose_translate" => ["equations", "independent_variables"],
+    "tendency_resolution" => ["equations"],
+    "merged_tendency" => ["equations"],
 )
 
 # There is no `_FC_REFUSED_CASES` any more. `advanced_coupling` was its only

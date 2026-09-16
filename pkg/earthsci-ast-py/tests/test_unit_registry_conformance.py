@@ -13,7 +13,13 @@ from pathlib import Path
 
 import pytest
 
-from earthsci_ast.units import PINT_AVAILABLE, UnparseableUnitError, parse_unit, ureg
+from earthsci_ast.units import (
+    PINT_AVAILABLE,
+    UnparseableUnitError,
+    exact_scale_of,
+    parse_unit,
+    ureg,
+)
 
 _GOLDEN = (
     Path(__file__).resolve().parents[3]
@@ -37,6 +43,11 @@ def test_accepted_string_resolves_with_the_pinned_dimension_and_scale(entry):
     if entry["scale_to_canonical"] is not None:
         factor = float(ureg.Quantity(1.0, got).to(canon).magnitude)
         assert factor == pytest.approx(entry["scale_to_canonical"], rel=1e-12)
+    # The EXACT scale is compared as a string, with no tolerance, and for the
+    # affine units too: it is what a scale agreement is decided on (esm-spec
+    # §4.8.1), so it is what the five registries must share.
+    exact = (exact_scale_of(got) / exact_scale_of(canon)).ratio_string()
+    assert exact == entry["scale_exact"], entry.get("why", "")
 
 
 @pytest.mark.parametrize("entry", _G["reject"], ids=lambda e: e["units"])

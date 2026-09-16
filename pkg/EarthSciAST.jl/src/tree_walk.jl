@@ -43,6 +43,7 @@
 include("tree_walk/errors.jl")           # §1   TreeWalkError + E_TREEWALK_* codes
 include("tree_walk/geometry_setup.jl")   # §2   build-time geometry materialization
 include("tree_walk/build_helpers.jl")    #      sentinels, boundary policy, folds
+include("tree_walk/unlowered_gate.jl")   #      §9.6.3 c.6 pre-build rewrite-target walk
 include("tree_walk/scan.jl")             #      prefix-scan detection + `_ScanFold`
 include("tree_walk/build.jl")            # §2b  build pipeline, `build_evaluator`
 include("tree_walk/compile.jl")          # §3-4 `_Node` IR, scalar CSE, scalar walker

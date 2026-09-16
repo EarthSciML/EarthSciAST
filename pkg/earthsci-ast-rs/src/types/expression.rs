@@ -643,6 +643,12 @@ pub struct ExpressionNode {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<serde_json::Value>,
 
+    /// For the `const` op (esm 1.2.0): the declared unit `value` is in. A
+    /// unit-bearing constant has that dimension and exact scale in dimensional
+    /// analysis (esm-spec §4.8.5); legal on no other op.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub units: Option<String>,
+
     /// For the `table_lookup` op (esm-spec §9.5, v0.4.0): the
     /// `function_tables` entry id this node references. ``args`` MUST be
     /// empty for a `table_lookup` node — the per-axis input expressions live

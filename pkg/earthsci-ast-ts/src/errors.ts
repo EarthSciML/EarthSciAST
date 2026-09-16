@@ -91,6 +91,11 @@ export const ERROR_CODES = {
   //   reads a declared STATE variable, so the cadence partition would class the
   //   node CONTINUOUS — forbidden on the hot path (CONFORMANCE_SPEC §5.7 guard 2).
   RELATIONAL_NODE_IN_CONTINUOUS: 'relational_node_in_continuous',
+  // `derived_index_set_unmaterialized` — an expression ranges over a
+  //   `kind: "derived"` index set whose producer could not be materialized at
+  //   build (esm-spec §9.6.6). Registered for the cross-binding vocabulary; this
+  //   binding has no simulator, so nothing here raises it.
+  DERIVED_INDEX_SET_UNMATERIALIZED: 'derived_index_set_unmaterialized',
   // `undefined_index_set` — a `faq` `ranges` entry `{ from: NAME }`
   //   naming an index set absent from the document `index_sets` registry
   //   (RFC semiring-faq-unified-ir §5.2; no implicit interval is inferred).
@@ -160,6 +165,12 @@ export const ERROR_CODES = {
   //   simulate and never raises it. It is registered because the §9.6.6 code
   //   table is cross-language uniform.
   INDEXED_DEFINITION_UNSUPPORTED_FORM: 'indexed_definition_unsupported_form',
+  // `unsupported_construct` — a continuous or discrete event, or an implicit
+  //   equation (an expression LHS), reached an evaluator that cannot run it
+  //   (esm-spec §9.6.6).
+  //   This binding does not simulate, so it never raises it; the entry keeps
+  //   the §9.6.6 vocabulary uniform across the five registries.
+  UNSUPPORTED_CONSTRUCT: 'unsupported_construct',
   EQUATION_COUNT_MISMATCH: 'equation_count_mismatch',
   // `event_affects_parameter` — an event `affects` LHS names a PARAMETER
   //   (esm-spec §5.4). From 1.0.0 events affect UNKNOWNS ONLY: a parameter that
@@ -215,10 +226,23 @@ export const ERROR_CODES = {
   //   unreachable and every reader silently receives the implicit symbol
   //   instead — the simulation clock in place of the declared quantity.
   RESERVED_VARIABLE_NAME: 'reserved_variable_name',
+  // Inline array data as the `default` of a variable that declares no `shape`
+  //   (esm-spec §6.3). Inline array data is a SHAPED variable's value, so with
+  //   no shape there is nothing for the array to fill.
+  ARRAY_DEFAULT_WITHOUT_SHAPE: 'array_default_without_shape',
   UNDEFINED_PARAMETER: 'undefined_parameter',
   UNDEFINED_SPECIES: 'undefined_species',
   UNDEFINED_SYSTEM: 'undefined_system',
   UNDEFINED_VARIABLE: 'undefined_variable',
+  // `unknown_override_key` — an inline test's `initial_conditions` or
+  //   `parameter_overrides` key that matches no declared name under the esm-spec
+  //   §6.6.2 override-key rules. Static, so a typo'd key is named at validation
+  //   rather than only when a runtime builds the test.
+  UNKNOWN_OVERRIDE_KEY: 'unknown_override_key',
+  // `assertion_rank_mismatch` — an assertion whose form does not match the
+  //   declared rank of the variable it names (esm-spec §6.6.5): pointwise on a
+  //   shaped variable, or `coords` / `reduce` on a scalar one.
+  ASSERTION_RANK_MISMATCH: 'assertion_rank_mismatch',
   UNIT_ERROR: 'unit_error',
   // A PROVABLE dimensional inconsistency (metres plus kilograms, log of a
   // dimensional quantity, an equation whose sides cannot agree).
@@ -247,6 +271,7 @@ export const ERROR_CODES = {
   // ---- solver hints: §2.2 document-scoped solver block (solver.ts;
   //      EsmMachineryError code) ----
   SOLVER_VERSION_TOO_OLD: 'solver_version_too_old',
+  CONST_UNITS_VERSION_TOO_OLD: 'const_units_version_too_old',
 
   // ---- templates: §9.6 expression-template lowering + §9.7 template-library
   //      imports (lower-expression-templates.ts, template-imports.ts;
@@ -323,8 +348,8 @@ export const ERROR_CODES = {
   // ---- enums: §9.3 load-time enum lowering (lower-enums.ts;
   //      EnumLoweringError codes) ----
   ENUM_OP_MALFORMED: 'enum_op_malformed',
-  ENUM_NOT_DECLARED: 'enum_not_declared',
-  ENUM_MEMBER_NOT_FOUND: 'enum_member_not_found',
+  UNKNOWN_ENUM: 'unknown_enum',
+  UNKNOWN_ENUM_SYMBOL: 'unknown_enum_symbol',
 
   // ---- function tables: §9.5.3 `table_lookup` lowering (lower-table-lookups.ts;
   //      TableLookupLoweringError codes, named by esm-spec §9.5.5) ----
@@ -347,6 +372,32 @@ export const ERROR_CODES = {
   UNKNOWN_CLOSED_FUNCTION: 'unknown_closed_function',
   CLOSED_FUNCTION_ARITY: 'closed_function_arity',
   CLOSED_FUNCTION_OVERFLOW: 'closed_function_overflow',
+  INTERP_AXIS_LENGTH_MISMATCH: 'interp_axis_length_mismatch',
+  INTERP_AXIS_NOT_CONST: 'interp_axis_not_const',
+  INTERP_AXIS_TOO_SHORT: 'interp_axis_too_short',
+  INTERP_NAN_IN_AXIS: 'interp_nan_in_axis',
+  INTERP_NON_MONOTONIC_AXIS: 'interp_non_monotonic_axis',
+  INTERP_TABLE_NOT_CONST: 'interp_table_not_const',
+  SEARCHSORTED_NAN_IN_TABLE: 'searchsorted_nan_in_table',
+  SEARCHSORTED_NON_MONOTONIC: 'searchsorted_non_monotonic',
+  // ---- evaluation: the tree-walking evaluator (codegen.ts; raised as
+  //      UnloweredOperatorError / EvaluatorError). `unlowered_operator` is the
+  //      esm-spec §9.6.6 code; the rest are this runner's evaluator codes. ----
+  CONST_NOT_SCALAR: 'const_not_scalar',
+  ENUM_NOT_LOWERED: 'enum_not_lowered',
+  FN_MISSING_NAME: 'fn_missing_name',
+  INVALID_EXPRESSION: 'invalid_expression',
+  UNBOUND_VARIABLE: 'unbound_variable',
+  UNLOWERED_OPERATOR: 'unlowered_operator',
+  UNSUPPORTED_OPERATOR: 'unsupported_operator',
+  // ---- flatten: FlattenError and its subclasses (flatten.ts) ----
+  CONFLICTING_DERIVATIVE: 'conflicting_derivative',
+  DIMENSION_PROMOTION: 'dimension_promotion',
+  FLATTEN_ERROR: 'flatten_error',
+
+  // ---- evaluator: an evaluable-core op with no scalar rule (codegen.ts;
+  //      UnevaluableOperatorError, esm-spec §9.6.6) ----
+  UNEVALUABLE_OPERATOR: 'unevaluable_operator',
 } as const
 
 /** A diagnostic code string from {@link ERROR_CODES}. */
