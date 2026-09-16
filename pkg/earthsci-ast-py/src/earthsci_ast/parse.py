@@ -1810,6 +1810,23 @@ def _load_ref_data(
     ref_data = lower_expression_templates(ref_data)
     ref_data = expand_document(ref_data)
 
+    # esm-spec §9.3: the referenced document's `enum` ops resolve against ITS
+    # OWN `enums` block, here, while that block is still at hand. The mounting
+    # document's block is a different one and `enums` do not merge across a
+    # mount, so an importer declaring an enum of the same name cannot change
+    # what the leaf computes. The leaf's own nested mounts resolve after this
+    # returns, each lowered at its own edge.
+    from .registered_functions import EnumLoweringError, lower_mounted_document_enums
+
+    try:
+        ref_data = lower_mounted_document_enums(ref_data)
+    except EnumLoweringError as e:
+        raise ExpressionTemplateError(
+            e.code,
+            f"{kind} ref '{ref_str}': {e.message} — an `enum` op in a mounted file "
+            "resolves against that file's own `enums` block (esm-spec §9.3)",
+        ) from e
+
     # esm-spec §4.7 "Mount-edge index-set renaming", pipeline step 2. The
     # referenced document has now resolved in its OWN scope — its imports, this
     # edge's `bindings` and injection, its metaparameter close and fold, the

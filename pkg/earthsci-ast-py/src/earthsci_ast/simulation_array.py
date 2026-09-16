@@ -19,8 +19,10 @@ from typing import Any, Callable
 
 import numpy as np
 
+from .classification import is_implicit_lhs
 from .esm_types import EsmFile, Expr, ExprNode, is_aggregate_op
 from .expr_walk import iter_children, map_children
+from .expression import UnsupportedConstructError
 from .flatten import (
     FlattenedEquation,
     FlattenedSystem,
@@ -584,6 +586,15 @@ def _apply_equation_to_dy(
     # and must not warn.
     if isinstance(lhs, ExprNode) and lhs.op == "ic":
         return
+    # An IMPLICIT equation is refused at `esm_problem`'s front door; this is the
+    # same refusal for a hand-built FlattenedSystem that reaches the RHS
+    # directly, where warning and carrying on would report the initial value.
+    if is_implicit_lhs(lhs):
+        raise UnsupportedConstructError(
+            "implicit equation",
+            f"with LHS {eq.lhs!r}",
+            "Python array interpreter",
+        )
     warnings.warn(
         f"solve: unrecognized algebraic equation with LHS {eq.lhs!r} was not "
         f"applied to the ODE RHS; any state it constrains stays frozen at its "

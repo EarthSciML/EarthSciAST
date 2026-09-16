@@ -1778,6 +1778,14 @@
       }
     },
     {
+      "name": "code_unsupported_construct",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeUnsupportedConstruct"
+      }
+    },
+    {
       "name": "code_validation_failed",
       "kind": "constant",
       "tier": "extension",

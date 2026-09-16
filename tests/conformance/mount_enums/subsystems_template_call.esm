@@ -1,0 +1,43 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "MountEnumsSubsystemsTemplateCall",
+    "description": "The same leaf mounted at a `subsystems.<k>` `{ref}` edge under a model that declares probe.Symbol = 7 and reads it. The leaf reads its own 2.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ]
+  },
+  "enums": {
+    "probe": {
+      "Symbol": 7
+    }
+  },
+  "models": {
+    "Probe": {
+      "subsystems": {
+        "Leaf": {
+          "ref": "./leaf_template_call.esm"
+        }
+      },
+      "variables": {
+        "own": {
+          "type": "unknown",
+          "units": "1",
+          "description": "The value THIS file's `enums` block gives probe.Symbol."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "own",
+          "rhs": {
+            "op": "enum",
+            "args": [
+              "probe",
+              "Symbol"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}
