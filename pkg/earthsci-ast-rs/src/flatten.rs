@@ -735,12 +735,11 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
 
     // Phase 5b′ (esm-libraries-spec §4.7.5 step 3a): resolve a right-hand-side
     // STRUCTURAL time derivative to the tendency this system defines for it
-    // (esm-spec §4.2). Runs after the lift
-    // so it sees the equations the lift produced, after reaction lowering
-    // (phase 1) so a mechanism's mass-action tendency is available to a sibling
-    // model's scoped `D(Chem.O3, t)`, and after coupling (phase 4) so a state
-    // merged by `operator_compose` yields its WHOLE tendency rather than the
-    // first contributing term.
+    // (esm-spec §4.2). Runs after the lift so it sees the equations the lift
+    // produced, after reaction lowering (phase 1) so a mechanism's mass-action
+    // tendency is available to a sibling model's scoped `D(Chem.O3, t)`, and
+    // after coupling (phase 4) so a state merged by `operator_compose` yields
+    // its WHOLE tendency rather than the first contributing term.
     let time_invariant: HashSet<String> = parts.parameters.keys().cloned().collect();
     resolve_rhs_time_derivatives(&mut parts.equations, &time_invariant);
 

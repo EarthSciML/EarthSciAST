@@ -1142,8 +1142,8 @@ All libraries (including Core tier) must implement the flattening algorithm. Fla
    It runs **before** step 4 derives anything from the equations (`independent_variables`, the
    §6.3.1 subsets), so those derivations see the resolved form. The cross-binding gate is
    `tests/conformance/flatten/cases.json` (the `tendency_resolution`, `merged_tendency` and
-   `ic_tendency` cases)
-   and, for bindings with an inline-test runner, `tests/conformance/rhs_time_derivative/`.
+   `ic_tendency` cases) and, for bindings with an inline-test runner,
+   `tests/conformance/rhs_time_derivative/`.
 
 4. **Collect the flattened system.** The result is a single flat system containing:
    - **All equations** from all component systems, with coupling modifications applied, using dot-namespaced variable names.
