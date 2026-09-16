@@ -686,7 +686,18 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
                   Symbol("concat@kernel.x"))
             @test get(tallies["base64"], k, 0) == get(tallies["gather"], k, 0)
         end
-        @test get(tallies["gather"], Symbol("gather@assemble.x"), 0) == 1
+        # THE OUTPUT ASSEMBLY EMITS NOTHING once the map has a canonical base.
+        # The assembly reads slots 1..n of `du`, and the canonical base IS the
+        # map in slot order, so the read is the base: no slice, no gather, no
+        # index constant, and the one concatenate is charged to the base rather
+        # than to the assembly. Refusing the base (the 64-element budget) is
+        # what puts the assembly back on a slice per run.
+        for k in (Symbol("slice1@assemble.runs"), Symbol("sliceN@assemble.runs"),
+                  Symbol("gather@assemble.x"), Symbol("concat@assemble.x"))
+            @test get(tallies["gather"], k, 0) == 0
+        end
+        @test get(tallies["gather"], :canon_base, 0) >= 1
+        @test get(tallies["base64"], :canon_base, 0) == 0
         @test get(tallies["base64"], Symbol("gather@assemble.x"), 0) == 0
         @test get(tallies["base64"], Symbol("slice1@assemble.runs"), 0) > 0
         # THE PIECE CAP: past it a read is one gather however its runs look, so

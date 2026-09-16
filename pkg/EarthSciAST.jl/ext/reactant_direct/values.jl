@@ -49,8 +49,14 @@ const _DESlot = Union{Nothing,Tuple{_DEVal,Int}}
 struct _DEMap
     m::Vector{_DESlot}
     writer::Vector{Int32}
+    # THE CANONICAL BASE (`_de_canon_base`): this whole map as ONE value in SLOT
+    # ORDER, so slot `s` is element `s` of it. Emitted lazily by the first read
+    # that wants it and dropped by the next write, because a base taken before a
+    # write describes the map as it was.
+    base::Base.RefValue{Union{Nothing,_DEVal}}
 end
-_DEMap(n::Int) = _DEMap(Vector{_DESlot}(nothing, n), zeros(Int32, n))
+_DEMap(n::Int) = _DEMap(Vector{_DESlot}(nothing, n), zeros(Int32, n),
+                        Base.RefValue{Union{Nothing,_DEVal}}(nothing))
 
 function _de_mark!(M::_DEMap, slots, section::Int32)
     w = M.writer
@@ -128,6 +134,9 @@ mutable struct _DECtx
     # value always dominates a later use and the reuse needs no scope check.
     slices::Dict{Tuple{_MLIR.IR.Value,Int,Int,Int},_DEVal}
     concats::Dict{Vector{_MLIR.IR.Value},_DEVal}
+    # (producer concatenation, slot layout) -> the reordering gather that turns
+    # the one into the other. See `_de_canon_base`.
+    canons::Dict{Tuple{_MLIR.IR.Value,Vector{Int}},_DEVal}
     stats::Dict{Symbol,Int}
     # Which SECTION of the emission is running: materialization level `li` while
     # the fills are emitted, `nlev + 1` from the CSE prelude onwards. The read
@@ -155,6 +164,7 @@ function _DECtx(n_states::Int, n_total::Int, p, t::_DEVal, uval::_DEVal,
                        Tuple{_DEVal,Vector{Int},Int}}(),
                   Dict{Tuple{_MLIR.IR.Value,Int,Int,Int},_DEVal}(),
                   Dict{Vector{_MLIR.IR.Value},_DEVal}(),
+                  Dict{Tuple{_MLIR.IR.Value,Vector{Int}},_DEVal}(),
                   Dict{Symbol,Int}(), Int32(0), :none)
 end
 
@@ -531,9 +541,10 @@ function _de_runs_as_gather(ctx::_DECtx, srcs::Vector{_DESlot},
     return _de_gather_op(ctx, base, pos)
 end
 
-function _de_emit_runs(ctx::_DECtx, srcs::Vector{_DESlot})::_DEVal
+# The decomposition on its own — pure, and shared by every caller that has to
+# know how many pieces a read costs BEFORE deciding what to emit for it.
+function _de_run_decompose(srcs::Vector{_DESlot})
     n = length(srcs)
-    n == 0 && _de_refuse("an empty read", "a read of zero positions reached the emitter.")
     # (src, lo, hi, stride); `src === nothing` ⇒ a zero run, `hi` its width.
     runs = Tuple{_DESlotSrc,Int,Int,Int}[]
     nzero = 0
@@ -569,7 +580,13 @@ function _de_emit_runs(ctx::_DECtx, srcs::Vector{_DESlot})::_DEVal
         push!(runs, (sv, p0, (srcs[j]::Tuple{_DEVal,Int})[2], stride))
         i = j + 1
     end
-    if _de_gather_is_cheaper(length(runs), n)
+    return runs, nzero
+end
+
+function _de_emit_decomposed(ctx::_DECtx, srcs::Vector{_DESlot},
+                             runs::Vector{Tuple{_DESlotSrc,Int,Int,Int}},
+                             nzero::Int)::_DEVal
+    if _de_gather_is_cheaper(length(runs), length(srcs))
         g = _de_runs_as_gather(ctx, srcs, runs, nzero > 0)
         g === nothing || return g
     end
@@ -578,9 +595,121 @@ function _de_emit_runs(ctx::_DECtx, srcs::Vector{_DESlot})::_DEVal
     return _de_concat(ctx, pieces)
 end
 
+function _de_emit_runs(ctx::_DECtx, srcs::Vector{_DESlot})::_DEVal
+    isempty(srcs) &&
+        _de_refuse("an empty read", "a read of zero positions reached the emitter.")
+    runs, nzero = _de_run_decompose(srcs)
+    return _de_emit_decomposed(ctx, srcs, runs, nzero)
+end
+
 # One value, many positions (a forcing buffer read, a CSR body read).
 _de_take(ctx::_DECtx, src::_DEVal, positions::Vector{Int})::_DEVal =
     _de_emit_runs(ctx, _DESlot[(src, q) for q in positions])
+
+# ---- the canonical base: one value per slot map, in slot order ---------------
+#
+# `_de_gather_base` builds a base per PRODUCER SET. That is the right unit for a
+# forcing buffer, whose reads all come out of one value, and the wrong one for
+# the slot map: a stencil's reads draw from dozens of overlapping producer sets,
+# so the map's contents are concatenated again for each of them, and no two of
+# those copies address a slot the same way.
+#
+# The canonical base is the MAP ITSELF: its distinct producers concatenated in
+# first-slot order, then put into slot order — element `s` is slot `s`. Reading
+# the map is then reading ONE value at PLAIN SLOT INDICES, and that buys three
+# things at once. The concatenate is emitted once per map per write epoch rather
+# than once per producer set. A read whose slots are affine in slot space is an
+# ordinary `stablehlo.slice` of it, carrying no index constant at all — which is
+# what keeps the index-data volume of the gather form bounded. And
+# `_de_assemble`, which reads slots `1..n`, IS the base: no op, no index data.
+#
+# WHEN IT IS WORTH BUILDING. The base is one concatenate, plus one gather when
+# the producers do not already lie in slot order — cheap against a read that
+# shatters into hundreds of pieces, not cheap against one that decomposes into
+# eight. So it is built only for a read that would otherwise cost more than the
+# piece cap in ops, which is the same line `_de_gather_is_cheaper` draws.
+#
+# BUILDING IT NEVER CALLS `_de_src`. An unwritten slot is the structural zero
+# every read form already carries; whether reading one is an ORDERING VIOLATION
+# is a property of the READ, and the read has already asked that question by the
+# time it asks for a base.
+function _de_canon_worth(npieces::Int)
+    mode = _de_read_mode()
+    mode == "runs" && return false
+    mode == "always" && return npieces > 1
+    return npieces > _de_gather_max_pieces()
+end
+
+function _de_canon_base(ctx::_DECtx, M::_DEMap)::Union{Nothing,_DEVal}
+    hit = M.base[]
+    hit === nothing || return hit
+    n = length(M.m)
+    n == 0 && return nothing
+    prods = _DEVal[]
+    at = Dict{_MLIR.IR.Value,Int}()
+    needzero = false
+    for e in M.m
+        if e === nothing
+            needzero = true
+        else
+            sv = (e::Tuple{_DEVal,Int})[1]
+            haskey(at, sv.v) || (push!(prods, sv); at[sv.v] = length(prods))
+        end
+    end
+    isempty(prods) && return nothing
+    tot = sum(q.len for q in prods) + (needzero ? 1 : 0)
+    _de_gather_base_fits(length(prods), needzero, tot,
+                         _de_gather_base_budget(ctx)) || return nothing
+    offs = Vector{Int}(undef, length(prods))
+    acc = 0
+    for k in eachindex(prods)
+        offs[k] = acc
+        acc += prods[k].len
+    end
+    zpos = needzero ? acc + 1 : 0
+    pos = Vector{Int}(undef, n)
+    inorder = true
+    @inbounds for i in 1:n
+        e = M.m[i]
+        if e === nothing
+            pos[i] = zpos
+        else
+            sv, q = e::Tuple{_DEVal,Int}
+            pos[i] = offs[at[sv.v]] + q
+        end
+        pos[i] == i || (inorder = false)
+    end
+    pieces = copy(prods)
+    needzero && push!(pieces, _de_const(ctx, 0.0))
+    prev = ctx.site
+    _de_at!(ctx, :canon)
+    out = try
+        base = _de_concat(ctx, pieces)
+        if inorder
+            # The concatenation IS in slot order; the only op left is the trim
+            # when the producers run past the map's last slot.
+            base.len == n ? base : _de_slice(ctx, base, 1, n; why=:canon)
+        else
+            # MEMOIZED ON THE LAYOUT, not just cached on the map. A write drops
+            # the map's base, and a section that interleaves writes with reads
+            # therefore asks for a new one after each; when the write did not
+            # move any slot the base covers, the layout is the one already
+            # emitted and re-emitting it would cost another whole index vector.
+            key = (base.v, pos)
+            hit2 = get(ctx.canons, key, nothing)
+            if hit2 === nothing
+                hit2 = _de_gather_op(ctx, base, pos)
+                ctx.canons[key] = hit2
+            end
+            hit2
+        end
+    finally
+        _de_at!(ctx, prev)
+    end
+    _de_tally!(ctx, :canon_base)
+    M.base[] = out
+    return out
+end
 
 # ---- slot-map reads and writes -----------------------------------------------
 #
@@ -619,11 +748,24 @@ _de_read(ctx::_DECtx, M::_DEMap, s::Int, why::Symbol=:read1)::_DEVal =
     (e = _de_src(ctx, M, s); e === nothing ? _de_const(ctx, 0.0) :
                              _de_slice(ctx, e[1], e[2], e[2]; why=why))
 
-_de_gather(ctx::_DECtx, M::_DEMap, slots::Vector{Int})::_DEVal =
-    _de_emit_runs(ctx, _DESlot[_de_src(ctx, M, s) for s in slots])
+function _de_gather(ctx::_DECtx, M::_DEMap, slots::Vector{Int})::_DEVal
+    isempty(slots) &&
+        _de_refuse("an empty read", "a read of zero positions reached the emitter.")
+    srcs = _DESlot[_de_src(ctx, M, s) for s in slots]
+    runs, nzero = _de_run_decompose(srcs)
+    if _de_canon_worth(length(runs))
+        cb = _de_canon_base(ctx, M)
+        # On a base in slot order the SAME read decomposes over plain slot
+        # indices, so it re-enters the cost model one level down: affine slots
+        # become one slice with no index constant, shattered ones one gather.
+        cb === nothing || return _de_emit_runs(ctx, _DESlot[(cb, s) for s in slots])
+    end
+    return _de_emit_decomposed(ctx, srcs, runs, nzero)
+end
 
 function _de_write!(ctx::_DECtx, M::_DEMap, slots::Vector{Int}, val::_DEVal)
     m = M.m
+    M.base[] = nothing
     if val.len == 1
         for s in slots
             m[s] = (val, 1)
@@ -660,8 +802,19 @@ end
 # slices plus a concatenate when it does not, structural zeros folded into
 # either. An unwritten slot is a `nothing` entry, which is exactly the
 # structural zero the read form already knows how to carry.
-_de_assemble(ctx::_DECtx, M::_DEMap, n::Int)::_DEVal =
-    _de_emit_runs(ctx, _DESlot[@inbounds M.m[i] for i in 1:n])
+function _de_assemble(ctx::_DECtx, M::_DEMap, n::Int)::_DEVal
+    srcs = _DESlot[@inbounds M.m[i] for i in 1:n]
+    runs, nzero = _de_run_decompose(srcs)
+    if _de_canon_worth(length(runs))
+        cb = _de_canon_base(ctx, M)
+        if cb !== nothing
+            # Slots `1..n` of a base in slot order: the base, or a prefix of it.
+            cb.len == n && return cb
+            cb.len > n && return _de_slice(ctx, cb, 1, n; why=:assemble)
+        end
+    end
+    return _de_emit_decomposed(ctx, srcs, runs, nzero)
+end
 
 # ---- live forcing buffers as program INPUTS ----------------------------------
 #
