@@ -16,9 +16,11 @@ import (
 // units; the fixtures intentionally exercise the union. The test asserts:
 //   - every fixture loads via the public Load API,
 //   - every fixture has at least one model,
-//   - ValidateFile runs to completion on every fixture (warnings are
-//     logged but not asserted, because per-binding registry coverage
-//     differs and is the audit signal these fixtures exist to surface).
+//   - Validate ACCEPTS every fixture: these live in tests/valid, so that is
+//     the sharp contract and it is worth asserting,
+//   - warnings are logged but not asserted, because per-binding registry
+//     coverage differs and is the audit signal these fixtures exist to
+//     surface.
 func TestUnitsFixturesCrossBinding(t *testing.T) {
 	repoRoot, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
 	if err != nil {
@@ -48,6 +50,12 @@ func TestUnitsFixturesCrossBinding(t *testing.T) {
 				t.Fatalf("%s: expected at least one model", name)
 			}
 			result := Validate(file)
+			if !result.IsValid {
+				for _, e := range result.StructuralErrors {
+					t.Errorf("%s: [%s] %s: %s", name, e.Code, e.Path, e.Message)
+				}
+				t.Fatalf("%s: expected a tests/valid fixture to validate", name)
+			}
 			t.Logf("%s: %d unit warnings (cross-binding registry coverage signal)",
 				name, len(result.UnitWarnings))
 			for _, w := range result.UnitWarnings {
