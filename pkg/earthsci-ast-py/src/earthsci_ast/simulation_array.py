@@ -1469,8 +1469,14 @@ def _binning_coord_arrays(
             skip_unresolved=True,
         )
     # Array observeds land in `derived_rings`, scalars in `observed_values`; both
-    # are valid const-array factors for the front-door's `_vi_eval`.
-    return {**ctx.derived_rings, **ctx.observed_values}
+    # are valid const-array factors for the front-door's `_vi_eval`. A SHAPED
+    # observed whose value came out scalar is registered in BOTH (esm-spec
+    # §4.3.4: the scalar fills the declared shape, and the scalar itself stays
+    # for the output row), so `derived_rings` is merged LAST — a factor this
+    # map feeds is gathered per cell, and every other reader of an observed
+    # (`_resolve_symbol`, `_gather_operator_factor`, `observed_field`) resolves
+    # `derived_rings` first too.
+    return {**ctx.observed_values, **ctx.derived_rings}
 
 
 def _frontdoor_join_keys_and_extents(
