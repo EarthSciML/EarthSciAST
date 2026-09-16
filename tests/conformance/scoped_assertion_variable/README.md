@@ -30,11 +30,23 @@ then made against the component that owns the name, not the asserting one.
 | `fixtures/top_level_mount.esm` | `Host` beside a top-level `models` `{ref}` of the leaf. Asserts `w = 3·Leaf.u` (the control: the scoped name as an operand), then `Leaf.u`, `Leaf.v`, `Leaf.key` at a `coords` cell, and `Leaf.key` reduced by `max`. |
 | `fixtures/nested_mount.esm` | The same `Host` and assertions, with the leaf as `Host`'s own `subsystems` mount. |
 | `fixtures/shadowed_mount.esm` | Both readings exist: a top-level `Leaf` (the leaf document) and an inline subsystem `Leaf` of `Host` whose `u` is held at 2 and whose `key` is `[1, 2, 3]`. Every expectation is the subsystem's value, as `w = 3·Leaf.u` is. |
+| `fixtures/deep_mount.esm` | THREE levels: `Host` mounts `Mid`, which mounts the leaf. The owner path runs two mounts below the root, so a runner that strips only one level of it off the spelling the build keyed the row by cannot address the leaf. |
+| `fixtures/shadowed_dynamic_field.esm` | Both readings exist again, and only the WRONG one's `key` is a build-time constant: the top-level leaf's is `[7, 9, 4]`, the subsystem's is `s·k = [5, 10, 15]` and depends on state. A runner that answers a scoped name from whatever materialized field is spelled closest reports 9 and 7 for a name the subsystem owns. |
 
 Before the fix the `coords` and `reduce` assertions errored with
 `variable 'Leaf.key' is not declared in model 'Host'` in both mount forms, and in
 `shadowed_mount.esm` the pointwise `Leaf.u` silently read the top-level leaf
 (`exp(−1)`) instead of the subsystem (`2`).
+
+Resolving the owner is only half the rule: the row, the cells and the
+materialized field must then be matched under a spelling that owner can hold.
+A build keys a coupled document's elements by the whole component path
+(`Host.Leaf.key`); a document with a single top-level component is built from
+that component alone, so a mounted one carries only the path below the root
+(`Mid.Leaf.key`). The bare-name and unique-suffix fallbacks that serve an
+UNSCOPED assertion name the asserting component's own element and must not be
+reached for a scoped one — `shadowed_dynamic_field.esm` is the document where
+each of them answers with a different component's column.
 
 `nested_mount.esm` also gates a Rust routing gap the scoped name exposed: `Host`
 declares no derivative and no shaped variable of its own — both live in the

@@ -57,3 +57,26 @@ def test_a_subsystem_shadows_a_top_level_component_of_the_same_name():
     subsystem when it has one; an assertion must read the same component."""
     results = _run("shadowed_mount.esm")
     assert _actuals(results) == pytest.approx([6.0, 2.0, 1.0, 3.0], rel=1e-4)
+
+
+def test_a_leaf_two_mounts_down_is_assertable_by_scoped_name():
+    """THREE levels: the owner path runs two mounts below the root, which a
+    runner that strips only one level of it cannot address."""
+    results = _run("deep_mount.esm")
+    assert [r.variable for r in results] == [
+        "w",
+        "Mid.Leaf.u",
+        "Mid.Leaf.v",
+        "Mid.Leaf.key",
+        "Mid.Leaf.key",
+    ]
+    e = math.exp(-1)
+    assert _actuals(results) == pytest.approx([3 * e, e, 2 * e, 7.0, 9.0], rel=1e-4)
+
+
+def test_a_scoped_field_is_never_read_from_another_component():
+    """Only the WRONG component's field is a build product, so a runner that
+    answers a scoped name from the closest materialized field reports the
+    top-level leaf's ``[7, 9, 4]`` where the subsystem owns ``[5, 10, 15]``."""
+    results = _run("shadowed_dynamic_field.esm")
+    assert _actuals(results) == pytest.approx([15.0, 15.0, 5.0], rel=1e-4)

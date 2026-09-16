@@ -753,7 +753,7 @@ fn observed_field(
         }
         exts.push(usize::try_from(iset.size?).ok()?);
     }
-    let arr = build_field(insp, model_name, variable)?;
+    let arr = build_field(insp, file, model_name, variable)?;
     if arr.ndim() != exts.len()
         || arr
             .shape()
@@ -788,22 +788,95 @@ fn observed_field(
     Some((field, cells))
 }
 
+/// The spellings under which a build may key the elements of the component at
+/// `owner`. A COUPLED document is flattened across its components, so every
+/// element carries the whole component path (`Host.Leaf.key`); a document with a
+/// single top-level component is built from that component alone, so its
+/// elements are keyed model-locally and a mounted one carries only the path
+/// BELOW the root (`Mid.Leaf.key`). The mount-relative spelling is offered ONLY
+/// for that single-component shape: in a coupled document its head is a SIBLING
+/// top-level component's name, and reading a row under it would answer an
+/// assertion with a different component's value.
+fn owner_spellings(file: &EsmFile, owner: &str) -> Vec<String> {
+    let mut out = vec![owner.to_string()];
+    let tops = file.models.as_ref().map_or(0, |m| m.len())
+        + file.reaction_systems.as_ref().map_or(0, |r| r.len());
+    if tops == 1
+        && let Some((_, below_root)) = owner.split_once('.')
+    {
+        out.push(below_root.to_string());
+    }
+    out
+}
+
 /// The field the build materialized for `variable` of the component at
-/// `model_name`, under whichever spelling the build keyed it by: flattening a
-/// multi-component document qualifies it with the whole component path
-/// (`Host.Leaf.key`), a single-model build keeps its own names bare (`key`) and
-/// mounts a subsystem's under the path below the model (`Leaf.key`).
+/// `model_name`, under whichever spelling the build keyed it by
+/// ([`owner_spellings`]). The BARE name is a fourth candidate only for an
+/// UNSCOPED component: a single-model build keeps that model's own names bare,
+/// while for a mounted component a bare hit belongs to the root, not to it.
 fn build_field<'a>(
     insp: &'a BuildInspection,
+    file: &EsmFile,
     model_name: &str,
     variable: &str,
 ) -> Option<&'a ndarray::ArrayD<f64>> {
-    let qualified = format!("{model_name}.{variable}");
-    let below_root = qualified.split_once('.').map(|(_, rest)| rest);
-    insp.setup_arrays
-        .get(&qualified)
-        .or_else(|| below_root.and_then(|k| insp.setup_arrays.get(k)))
-        .or_else(|| insp.setup_arrays.get(variable))
+    for m in owner_spellings(file, model_name) {
+        if let Some(arr) = insp.setup_arrays.get(&format!("{m}.{variable}")) {
+            return Some(arr);
+        }
+    }
+    if model_name.contains('.') {
+        return None;
+    }
+    insp.setup_arrays.get(variable)
+}
+
+/// The trajectory row of the SCALAR `variable` of the component at `owner`,
+/// matched only under a spelling that component can own ([`owner_spellings`]),
+/// then through a merge rename. Used for a SCOPED assertion, where
+/// [`scalar_slot`]'s bare-name fallbacks would reach a row belonging to another
+/// component entirely.
+fn scoped_scalar_slot(
+    element_names: &[String],
+    spellings: &[String],
+    variable: &str,
+    renames: &HashMap<String, String>,
+) -> Option<usize> {
+    for m in spellings {
+        let qualified = format!("{m}.{variable}");
+        if let Some(row) = element_names.iter().position(|n| *n == qualified) {
+            return Some(row);
+        }
+    }
+    let survivor = renames.get(&format!("{}.{variable}", spellings[0]))?;
+    element_names.iter().position(|n| n == survivor)
+}
+
+/// The cells of the ARRAY `variable` of the component at `owner`, matched only
+/// under a spelling that component can own. The scoped twin of
+/// [`state_cells`], whose bare-suffix fallback would splice another component's
+/// cells into the field.
+fn scoped_state_cells(
+    element_names: &[String],
+    spellings: &[String],
+    variable: &str,
+) -> Vec<(Vec<i64>, usize)> {
+    for m in spellings {
+        let qualified = format!("{m}.{variable}");
+        let mut out: Vec<(Vec<i64>, usize)> = element_names
+            .iter()
+            .enumerate()
+            .filter_map(|(row, name)| {
+                let (stem, cell) = parse_cell_name(name)?;
+                (stem == qualified).then_some((cell, row))
+            })
+            .collect();
+        if !out.is_empty() {
+            out.sort_by(|a, b| a.0.cmp(&b.0));
+            return out;
+        }
+    }
+    Vec::new()
 }
 
 /// A §6.6.3 POINTWISE assertion's value when the variable has no trajectory
@@ -835,7 +908,7 @@ fn scalar_observed(
     if !crate::classification::Classification::of(&model).is_observed(variable) {
         return None;
     }
-    let arr = build_field(insp, model_name, variable)?;
+    let arr = build_field(insp, file, model_name, variable)?;
     // A 0-D field is stored rank-0 or as a single cell; anything else is not
     // this variable's field and is not guessed at.
     if arr.len() != 1 {
@@ -1118,17 +1191,33 @@ fn eval_assertion(
     // A scoped `variable` reads the component it names (schema
     // `Assertion.variable`); every lookup below runs against that owner.
     let (owner, variable) = resolve_asserted_name(file, model_name, &assertion.variable);
+    // A scoped name is read ONLY under a spelling the component it names can
+    // own; the bare-name fallbacks that serve an unscoped assertion would reach
+    // a same-named row of another component (`tests/conformance/
+    // scoped_assertion_variable/fixtures/shadowed_dynamic_field.esm`).
+    let scoped = owner != model_name;
+    let spellings = owner_spellings(file, &owner);
     let model_name = owner.as_str();
     if assertion.coords.is_some() && assertion.reduce.is_some() {
         return Err("`coords` and `reduce` are mutually exclusive".to_string());
     }
     if assertion.coords.is_none() && assertion.reduce.is_none() {
-        if let Some(slot) = scalar_slot(
-            &sol.state_variable_names,
-            variable,
-            model_name,
-            &sol.metadata.merged_variable_renames,
-        ) {
+        let slot = if scoped {
+            scoped_scalar_slot(
+                &sol.state_variable_names,
+                &spellings,
+                variable,
+                &sol.metadata.merged_variable_renames,
+            )
+        } else {
+            scalar_slot(
+                &sol.state_variable_names,
+                variable,
+                model_name,
+                &sol.metadata.merged_variable_renames,
+            )
+        };
+        if let Some(slot) = slot {
             return Ok(sol.state[slot][ti]);
         }
         // No trajectory row: a STATE-FREE SCALAR OBSERVED, read from the
@@ -1155,7 +1244,11 @@ fn eval_assertion(
         }
         None => None,
     };
-    let cells = state_cells(&sol.state_variable_names, variable, model_name);
+    let cells = if scoped {
+        scoped_state_cells(&sol.state_variable_names, &spellings, variable)
+    } else {
+        state_cells(&sol.state_variable_names, variable, model_name)
+    };
     let (field, cell_tuples): (Vec<f64>, Vec<Vec<i64>>) = if !cells.is_empty() {
         (
             cells.iter().map(|(_, row)| sol.state[*row][ti]).collect(),
@@ -1318,11 +1411,6 @@ fn assertion_observed_requests(
     let mut out: Vec<String> = Vec::new();
     for a in &t.assertions {
         let (owner, local) = resolve_asserted_name(file, model_name, &a.variable);
-        // A FIELD on another component is not requested: it is read through
-        // `state_cells` / `observed_field` from what the build materialized.
-        if owner != model_name && (a.coords.is_some() || a.reduce.is_some()) {
-            continue;
-        }
         let scoped = if owner == model_name {
             None
         } else {
@@ -1353,7 +1441,18 @@ fn assertion_observed_requests(
             // read through `state_cells` / `observed_field` as before.
             continue;
         }
-        for spelling in [a.variable.clone(), format!("{owner}.{local}")] {
+        // A SCOPED name is requested only under a spelling its owner can hold
+        // ([`owner_spellings`]); the raw `a.variable` is relative to the
+        // asserting component and names nothing the build knows.
+        let spellings: Vec<String> = if owner == model_name {
+            vec![a.variable.clone(), format!("{model_name}.{}", a.variable)]
+        } else {
+            owner_spellings(file, &owner)
+                .into_iter()
+                .map(|m| format!("{m}.{local}"))
+                .collect()
+        };
+        for spelling in spellings {
             if !out.contains(&spelling) {
                 out.push(spelling);
             }

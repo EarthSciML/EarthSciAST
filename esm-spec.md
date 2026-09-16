@@ -2651,7 +2651,7 @@ Each assertion is a per-(variable, time) check against a scalar expected value:
 
 | Field | Required | Description |
 |---|---|---|
-| `variable` | ✓ | Variable or species name. Local names (e.g., `"O3"`) or scoped references (e.g., `"inner.X"`) are both allowed. A scoped reference resolves by the rule the component's own equations use: a dotted name whose head is a subsystem key of the asserting component is relative to it (`inner.X` there is `<component>.inner.X`), and any other dotted name is document-absolute (§4.6). The assertion then reads the component that owns the name — its trajectory row, its field, and the declared shape a `coords` map is checked against. |
+| `variable` | ✓ | Variable or species name. Local names (e.g., `"O3"`) or scoped references (e.g., `"inner.X"`) are both allowed. A scoped reference resolves by the rule the component's own equations use: a dotted name whose head is a subsystem key of the asserting component is relative to it (`inner.X` there is `<component>.inner.X`), and any other dotted name is document-absolute (§4.6). The assertion then reads the component that owns the name — its trajectory row, its field, and the declared shape a `coords` map is checked against — and never another component's, even when only that other component's same-named field was materialized. |
 | `time` | ✓ | Simulation time at which to evaluate the assertion; must lie in `[time_span.start, time_span.end]`. |
 | `expected` | ✓ | Expected scalar value (compared within `tolerance`). |
 | `tolerance` | | Per-assertion tolerance override. |

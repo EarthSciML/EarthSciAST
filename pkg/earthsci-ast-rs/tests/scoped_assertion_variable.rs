@@ -79,3 +79,36 @@ fn a_subsystem_shadows_a_top_level_component_of_the_same_name() {
     let results = run("shadowed_mount.esm");
     assert_actuals(&results, &[6.0, 2.0, 1.0, 3.0]);
 }
+
+/// THREE levels: the owner path runs two mounts below the root, which a runner
+/// that strips only one level of it off the spelling the build keyed the row by
+/// cannot address.
+#[test]
+fn a_leaf_two_mounts_down_is_assertable_by_scoped_name() {
+    let e = (-1.0f64).exp();
+    let results = run("deep_mount.esm");
+    assert_eq!(
+        results
+            .iter()
+            .map(|r| r.variable.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "w",
+            "Mid.Leaf.u",
+            "Mid.Leaf.v",
+            "Mid.Leaf.key",
+            "Mid.Leaf.key"
+        ],
+        "{results:?}"
+    );
+    assert_actuals(&results, &[3.0 * e, e, 2.0 * e, 7.0, 9.0]);
+}
+
+/// Only the WRONG component's field is a build product, so a runner that
+/// answers a scoped name from the closest materialized field reports the
+/// top-level leaf's `[7, 9, 4]` where the subsystem owns `[5, 10, 15]`.
+#[test]
+fn a_scoped_field_is_never_read_from_another_component() {
+    let results = run("shadowed_dynamic_field.esm");
+    assert_actuals(&results, &[15.0, 15.0, 5.0]);
+}
