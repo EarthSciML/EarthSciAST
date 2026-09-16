@@ -8,6 +8,15 @@ flag-off build is byte-for-byte the pre-spike emitter). Code: `oop.jl` (the
 `test/tree_walk_oop_ssa_test.jl` (host, bit-identity + engagement + AD),
 `test/reactant_oop_ssa_test.jl` (traced census; opt-in via `ESM_TEST_REACTANT=1`).
 
+**Which tree every figure below was measured on.** Unless a line says
+otherwise, every number in this note — the fixture coverage map, the census
+delta, and all of the ReSEACT producer, edge, descriptor and timing figures —
+was measured on `perf/ssa-read-redirect-arms` / `perf/ssa-scatter-skip-gate`.
+Both forked from `main` at `3aa046d65` and contain neither #273 nor #278. Only
+the gate's INPUTS have been re-taken on `main`, at `becb423a6`; see
+"Re-measured on `main`" below for what moved and what it does not change. The
+CONUS TIMINGS have NOT been re-taken on any later tree.
+
 ## What it attacks
 
 The register-file tax measured on ReSEACT at 288 cells: the compiled `:oop`
@@ -201,6 +210,8 @@ fold.
 
 ## ReSEACT at CONUS: 1.36x on the adjoint step+VJP mix, chemistry exact
 
+Fork-point tree (`3aa046d65`), NOT re-taken on `main` — on `main` this build
+has 20 transport producers, not the 17 these timings priced.
 Measured 2026-09-09 at 4x5 CONUS (13x7x72, 6 552 cells), two driver builds in
 ONE process, arms interleaved, every pair run in BOTH arm orders — reproducing
 to three digits, so the order is not what is being measured.
@@ -257,7 +268,8 @@ and at what element volume, how many of those take the whole value with no op
 at all, the residual-read reasons, and both verdicts (`skippable`, `skip`).
 
 **PRODUCER BLOCK SIZE — the obvious guess — is refuted by that table.** At
-6x6x8:
+6x6x8, on the fork-point tree (`main` gives 20 producers and 18 skippable on
+transport, chemistry unchanged; see "Re-measured on `main`" below):
 
 | | transport (part 1) | chemistry (part 2) |
 |---|---|---|
@@ -299,7 +311,8 @@ emitted. The redirect tables are untouched, so `n_skippable_scatters` (a
 read-graph fact) is identical in every arm and only `n_skipped_scatters` moves;
 `n_gate_declined` is the difference. On ReSEACT the default gate leaves
 chemistry exactly as the arms had it (59 of 59, `ue` dead) and takes transport
-to 0 of 17 — the redirects without the skip.
+to 0 of 17 — the redirects without the skip. (0 of 17 on the fork-point tree;
+0 of 20 on `main`. The gate's verdict is the same on both.)
 
 ### Re-measured on `main` (issue #296)
 
@@ -333,25 +346,39 @@ dense gather and a sub-kernel read. The same build at 13x7x16 gives the same 20
 / 18, the same two survivors and the same 968 / 1 156 sub-kernel descriptors, so
 the verdict does not move with the grid between those sizes.
 
-Two cautions follow:
+**What did NOT move the counts: #278.** `main` with #278's two switches off
+(`ESS_STATE_BOX_DISABLE=1 ESS_LANE_AFFINE_KEY_DISABLE=1`) gives the same
+20 / 18 and changes only the top-level edges (189 / 197), and
+`ESS_ARRAY_CONTRACTION_DISABLE=1` changes nothing. What DID move them is
+UNVERIFIED: #273 was also missing from the fork point and is a candidate, but
+this was not bisected, so no cause is claimed here.
 
-* The move is **not** mostly #278's gather reclassification. `main` with #278's
-  switches off (`ESS_STATE_BOX_DISABLE=1 ESS_LANE_AFFINE_KEY_DISABLE=1`) gives
-  the same 20 / 18 and changes only the top-level edges (189 / 197), and
-  `ESS_ARRAY_CONTRACTION_DISABLE=1` changes nothing. Which other change between
-  the fork point and `main` accounts for it (#273 is a candidate) was not
-  bisected.
-* The CONUS timings in this section priced the 17-producer build. The transport
-  program the gate emits is still "redirects without the skip", but it now
-  carries roughly twice the top-level redirects, and the open item below says
-  the redirects themselves are what costs the transport primal. Those transport
-  figures have not been re-taken on `main`. The gate is also now two producers
-  from flipping: a change that clears the sub-kernel, scan and dense blockers
-  above turns every transport skip back on, which is the regime #283 measured
-  as slower, so re-time transport before landing one.
+Two cautions, both load-bearing:
+
+1. **The CONUS timings elsewhere in this note priced the 17-producer build and
+   have NOT been re-taken.** That is the "ReSEACT at CONUS" section, the "gate
+   wins on BOTH sides" table and the loop table. The transport program the
+   default gate emits is still "redirects without the skip", but it now carries
+   roughly twice the top-level redirects, and "The criterion NOT met" below says
+   the redirects themselves are what costs the transport primal. Do not read
+   0.738 / 0.836 / 1.26x as current figures.
+2. **The gate is now TWO producers from flipping.** A change that clears the
+   sub-kernel, scan and dense blockers above takes transport to all-skippable
+   and turns every transport skip back ON — the regime #283 measured as slower,
+   under a flag ReSEACT's production adjoint driver sets (`ESS_OOP_SSA=1`).
+   Re-time transport BEFORE landing any such change.
+
+These counts are themselves a snapshot at `becb423a6`, and `main` has moved
+since. #324 in particular tightened when a corner-derived affine-lane
+conclusion is a proof (`stencil_affine.jl`), which is part of what determines
+the descriptor population the SSA plan resolves, so the tally can move again
+without the verdict moving. Re-run `tools/diag/p12_ssa_blockers.jl` before
+relying on the exact numbers.
 
 ### Measured: the gate wins on BOTH sides
 
+Fork-point tree (`3aa046d65`), NOT re-taken on `main`; the producer counts in
+this subsection are that tree's 17, not `main`'s 20.
 4x5 CONUS (13x7x72, 6 552 cells), three arms in ONE process, interleaved, both
 arm orders (`tools/diag/p14_ssa_gate.jl` in the consuming repo). `noskip` is
 what the default gate emits on transport (0 of 17) and `ungated` is #283
@@ -389,6 +416,8 @@ per-producer bounds ship released.
 
 ### The loop, counting replay
 
+Derived from the fork-point-tree timings above, so it carries their provenance:
+NOT re-taken on `main`.
 Per accepted step the adjoint runs the primal TWICE — the forward `T.step` and
 the backward `T.replay` — and the VJP once, so a primal regression is paid
 twice against one VJP win. Against the measured 2x2.5 48 h decomposition
