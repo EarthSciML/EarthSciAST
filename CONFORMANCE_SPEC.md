@@ -4933,17 +4933,15 @@ observeds written with the bare `index(V, sym)` LHS.
 
 #### 5.34.3 What this category deliberately does not pin
 
-- **The cadence of an indexed-LHS observed** — issue #272. This is the
-  consequence §6.3.1 names: `algebraic_unknowns` seeds the CONTINUOUS partition
-  (§5.7.2) while an observed's cadence resolves through its defining RHS, so a
-  state-free arrayed observed mis-credited as algebraic stops folding at bind.
-  It is not pinned cross-binding because the **cadence oracle itself** —
-  `scripts/run-cadence-conformance.py` and Julia's mirror in `src/cadence.jl` —
-  carries the same strict bare-LHS gate, and seven existing fixtures under
-  `tests/valid/cadence/` already have `index` / `aggregate` LHSs whose goldens
-  were minted against that behaviour. The consequence is pinned **per-binding**
-  in the meantime (Go and TypeScript both assert `cadence(w) == const` for a
-  state-free arrayed observed), which is what made #272 visible.
+- **The cadence of an indexed-LHS observed.** This is the consequence §6.3.1
+  names: `algebraic_unknowns` seeds the CONTINUOUS partition (§5.7.2) while an
+  observed's cadence resolves through its defining RHS, so a state-free arrayed
+  observed mis-credited as algebraic stops folding at bind. It is pinned
+  cross-binding by the cadence category instead (§5.7), on
+  `tests/valid/cadence/arrayed_observed_seeds.esm`, which the reference oracle
+  and the Julia, Rust and Python partition passes all run. Go and TypeScript,
+  which have no cadence adapter, assert `cadence(w) == const` for a state-free
+  arrayed observed in their own tests.
 
 ### 5.35 Merged-Away Rename Reach (normative)
 
