@@ -1,0 +1,44 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "UnitsSumUnitlessConstOperandMismatch",
+    "description": "Invalid: declares a mass equal to x [m] + const(1), where the const declares no units. A const without units is undeterminable, like a bare literal, so it is skipped and the sum has the unit of its determinable operand, m (esm-spec §4.8.3); the kg declaration is then a provable mismatch.",
+    "authors": [
+      "Chris Tessum with Claude"
+    ],
+    "created": "2026-09-15T00:00:00Z"
+  },
+  "models": {
+    "BadUnitsModel": {
+      "variables": {
+        "x": {
+          "type": "parameter",
+          "units": "m",
+          "default": 2.0,
+          "description": "A length"
+        },
+        "total_mass": {
+          "type": "unknown",
+          "units": "kg",
+          "description": "Invalid: declared in kg but defined as a length"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "total_mass",
+          "rhs": {
+            "op": "+",
+            "args": [
+              "x",
+              {
+                "op": "const",
+                "args": [],
+                "value": 1
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}
