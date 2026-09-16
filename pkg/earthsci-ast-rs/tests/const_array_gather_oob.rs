@@ -92,6 +92,98 @@ fn a_state_or_observed_gather_keeps_the_zero_ghost_convention() {
     assert_eq!(eval_with(ConstArrayScope::empty(), 5).unwrap(), 0.0);
 }
 
+/// A `const` literal written inline as the `index` base is a const array in its
+/// own right (esm-spec §4.3.3): it needs no registry entry, and out of range on
+/// any axis it fails closed instead of reading the zero ghost.
+#[test]
+fn an_inline_const_literal_out_of_range_is_an_error_not_a_zero_ghost() {
+    let extents: HashMap<String, i64> = HashMap::new();
+    let inline = |args: Value| -> Result<f64, String> {
+        let e: Expr = serde_json::from_value(json!({"op": "index", "args": args})).unwrap();
+        eval_expression_with_extents(&e, &HashMap::new(), &[], &[], 0.0, &extents)
+            .map(|v| match v {
+                EvalValue::Scalar(s) => s,
+                EvalValue::Array(_) => f64::NAN,
+            })
+            .map_err(|e| e.to_string())
+    };
+    let t1 = json!({"op": "const", "args": [], "value": [10.0, 20.0, 30.0, 40.0]});
+    let t2 = json!({"op": "const", "args": [], "value": [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]});
+    assert_eq!(inline(json!([t1, 4])).unwrap(), 40.0);
+    assert_eq!(inline(json!([t2, 3, 2])).unwrap(), 6.0);
+    for args in [
+        json!([t1, 0]),
+        json!([t1, 5]),
+        json!([t2, 4, 1]),
+        json!([t2, 1, 3]),
+    ] {
+        let e = inline(args.clone()).expect_err("inline const OOB must fail closed");
+        assert!(
+            e.contains("E_TREEWALK_CONSTARRAY_OOB"),
+            "{args}: wrong diagnostic: {e}"
+        );
+    }
+}
+
+/// The same inline literal gathered over a whole axis of an array right-hand side,
+/// `D(u[i]) = C[i + 1]`, which the vectorized and taped paths lower rather than
+/// the per-cell interpreter. The last cell reads past the end of `C`.
+#[test]
+fn an_inline_const_gather_over_a_whole_axis_fails_closed() {
+    use earthsci_ast::{Alg, SolveOptions, load_string, run_inline_tests_with_base_dir};
+    let gather = |offset: i64| {
+        json!({
+            "esm": "1.1.0",
+            "metadata": {"name": "inline_const_array_oob"},
+            "index_sets": {"k": {"kind": "interval", "size": 4}},
+            "models": {"Gather": {
+                "variables": {"u": {"type": "unknown", "shape": ["k"], "default": 0.0}},
+                "equations": [{
+                    "lhs": {"op": "faq", "output_idx": ["i"], "ranges": {"i": {"from": "k"}},
+                            "args": [],
+                            "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "i"]}],
+                                     "wrt": "t"}},
+                    "rhs": {"op": "faq", "output_idx": ["i"], "ranges": {"i": {"from": "k"}},
+                            "args": [],
+                            "expr": {"op": "index", "args": [
+                                {"op": "const", "args": [], "value": M.to_vec()},
+                                {"op": "+", "args": ["i", offset]}
+                            ]}}
+                }],
+                "tests": [{"id": "gather", "time_span": {"start": 0.0, "end": 1.0},
+                           "assertions": [{"variable": "u", "time": 1.0, "reduce": "max",
+                                           "expected": 40.0}]}]
+            }}
+        })
+        .to_string()
+    };
+    let opts = SolveOptions {
+        alg: Alg::Erk,
+        ..Default::default()
+    };
+    let run = |offset: i64| {
+        let file = load_string(&gather(offset)).expect("document loads");
+        let results = run_inline_tests_with_base_dir(&file, Some("Gather"), &opts, None);
+        assert_eq!(results.len(), 1);
+        results.into_iter().next().unwrap()
+    };
+    // In range (`C[i]`): the whole-axis read is unchanged.
+    let ok = run(0);
+    assert!(
+        ok.passed,
+        "in-range whole-axis gather must pass: {}",
+        ok.message
+    );
+    // Past the end on the last cell (`C[i + 1]`).
+    let r = run(1);
+    assert!(
+        !r.passed && r.message.contains("E_TREEWALK_CONSTARRAY_OOB"),
+        "an inline const gather past the end must fail closed; got actual {:?}: {}",
+        r.actual,
+        r.message
+    );
+}
+
 /// The measured symptom: an off-the-end FLAT gather over a whole axis, driven
 /// through the `prepare` front door where the caller's `const_arrays` are the
 /// const-array registry. It used to materialise `[0.0, 0.0, 0.0, 0.0]`.
