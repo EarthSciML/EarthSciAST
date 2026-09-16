@@ -309,6 +309,7 @@ fn load_ref_document(
         ));
     }
 
+    let ref_str: &str = &expand_env_refs(ref_str);
     let canonical = base.join(ref_str).canonicalize().map_err(|e| {
         err(
             noun.code,
@@ -1765,4 +1766,35 @@ mod tests {
         assert!(inner_resolved.get("ref").is_none());
         assert_eq!(serde_json::to_value(&typed).unwrap(), raw);
     }
+}
+
+/// Expand `${VAR}` tokens in a `ref` from the loader's environment
+/// (esm-spec §4.7, an OPTIONAL capability this binding now implements).
+///
+/// Only the braced form is expanded, never bare `$VAR`. An **unset** variable
+/// is left literal, so the ref fails with the ordinary unresolved diagnostic
+/// rather than misresolving to a path built from an empty string — the spec
+/// requires exactly that, "so the ref fails to resolve with the ordinary
+/// unresolved diagnostic ... rather than misresolving".
+pub(crate) fn expand_env_refs(ref_str: &str) -> std::borrow::Cow<'_, str> {
+    if !ref_str.contains("${") {
+        return std::borrow::Cow::Borrowed(ref_str);
+    }
+    let mut out = String::with_capacity(ref_str.len());
+    let mut rest = ref_str;
+    while let Some(start) = rest.find("${") {
+        let Some(end) = rest[start + 2..].find('}') else {
+            break;
+        };
+        let name = &rest[start + 2..start + 2 + end];
+        out.push_str(&rest[..start]);
+        match std::env::var(name) {
+            Ok(value) => out.push_str(&value),
+            // Unset: keep the token verbatim.
+            Err(_) => out.push_str(&rest[start..start + 3 + end]),
+        }
+        rest = &rest[start + 3 + end..];
+    }
+    out.push_str(rest);
+    std::borrow::Cow::Owned(out)
 }

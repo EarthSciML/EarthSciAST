@@ -1936,7 +1936,7 @@ fn lexical_normalize(p: &Path) -> PathBuf {
 }
 
 fn canonical_ref(ref_str: &str, base_dir: &Path) -> String {
-    lexical_normalize(&base_dir.join(ref_str))
+    lexical_normalize(&base_dir.join(crate::ref_loading::expand_env_refs(ref_str).as_ref()))
         .to_string_lossy()
         .into_owned()
 }
@@ -1955,7 +1955,7 @@ fn load_import_raw(
             ),
         ));
     }
-    let path = lexical_normalize(&base_dir.join(ref_str));
+    let path = lexical_normalize(&base_dir.join(crate::ref_loading::expand_env_refs(ref_str).as_ref()));
     let content = std::fs::read_to_string(&path).map_err(|e| {
         err(
             codes::TEMPLATE_IMPORT_UNRESOLVED,
@@ -2515,7 +2515,7 @@ fn visit_mount_ref(
     if ref_str.starts_with("http://") || ref_str.starts_with("https://") {
         return;
     }
-    let path = lexical_normalize(&base_path.join(ref_str));
+    let path = lexical_normalize(&base_path.join(crate::ref_loading::expand_env_refs(ref_str).as_ref()));
     if !seen.insert(path.to_string_lossy().into_owned()) {
         return;
     }
