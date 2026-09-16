@@ -424,7 +424,7 @@ export const schema: AnySchemaObject = {
                   },
                   "of": {
                     "type": "array",
-                    "description": "Parent index name(s) for a ragged / dependent inner set: the members enumerated depend on these outer indices (e.g. { \"from\": \"edges_of_cell\", \"of\": [\"i\"] } iterates the edges of cell i).",
+                    "description": "Parent index name(s) for a ragged / dependent inner set: the enumeration depends on these outer indices (e.g. { \"from\": \"edges_of_cell\", \"of\": [\"i\"] } iterates the POSITIONS k in 1…offsets[i] of cell i's edges, and the body gathers each edge as index(values, i, k); esm-spec §4.3.1 \"Ragged ranges\").",
                     "items": {
                       "type": "string"
                     }
@@ -4112,7 +4112,7 @@ export const schema: AnySchemaObject = {
       "properties": {
         "kind": {
           "type": "string",
-          "description": "Which of the four index-set forms this entry is. \"interval\": a dense [1..size] grid axis. \"categorical\": an explicit enumeration of members. \"derived\": a data-derived set materialized from an index-set-producing node (a `distinct` `faq`, or an `intersect_polygon` ring leaf whose clipped ring has a data-dependent vertex count, §8.1). \"ragged\": a per-parent (dependent) inner set backed by CSR offsets/values factors.",
+          "description": "Which of the four index-set forms this entry is. \"interval\": a dense [1..size] grid axis. \"categorical\": an explicit enumeration of members. \"derived\": a data-derived set materialized from an index-set-producing node (a `distinct` `faq`, or an `intersect_polygon` ring leaf whose clipped ring has a data-dependent vertex count, §8.1). \"ragged\": a per-parent (dependent) inner set backed by an `offsets` per-parent length factor and a padded `values` member factor; a `faq` range over it binds the POSITION k in 1…offsets[parent] (esm-spec §4.3.1 \"Ragged ranges\").",
           "enum": [
             "interval",
             "categorical",
@@ -4145,11 +4145,11 @@ export const schema: AnySchemaObject = {
         },
         "offsets": {
           "type": "string",
-          "description": "ragged: name of the keyed factor giving |set(i)| for each parent tuple — the per-parent length / CSR offsets (e.g. MPAS nEdgesOnCell). Required when kind is \"ragged\"."
+          "description": "ragged: name of the keyed factor giving |set(i)| for each parent tuple — the per-parent LENGTH, not a cumulative offset (e.g. MPAS nEdgesOnCell). A `faq` range {\"from\": <this set>, \"of\": [\"i\"]} binds the POSITION k in 1…offsets[i] (esm-spec §4.3.1 \"Ragged ranges\"). Required when kind is \"ragged\"."
         },
         "values": {
           "type": "string",
-          "description": "ragged: name of the keyed factor giving the member at (i, k) for k in 1…|set(i)| — the flattened CSR member array (e.g. edgesOnCell). Required when kind is \"ragged\"."
+          "description": "ragged: name of the keyed factor giving the member at (i, k) for k in 1…|set(i)| — a PADDED [parent, max length] array whose row i holds parent i's members in positions 1…offsets[i] (e.g. MPAS edgesOnCell); entries past offsets[i] are padding and are never read. Because a range over the set binds the position k, a `faq` body reads a member by gathering it explicitly, index(values, i, k); a body that never reads this array is `ragged_values_not_gathered`. The one exception is a value-invention `faq` (distinct / skolem / rank / argmin / argmax), whose ragged range binds the member values[i, k] itself (esm-spec §4.3.1 \"Ragged ranges\"). Required when kind is \"ragged\"."
         }
       },
       "allOf": [

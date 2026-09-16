@@ -2235,6 +2235,17 @@
     "is_valid": false,
     "notes": "Resolver-level invalid (bead ess-my4.1.6; RFC semiring-faq-unified-ir \u00a75.2). The faq `ranges` entry references { \"from\": \"ghost_cells\" }, a name absent from the model `index_sets` registry (which declares only \"cells\"). The document is SCHEMA-VALID, so schema-only bindings (TypeScript, Go) accept it (is_valid: true) \u2014 their invalid-fixture loops read `resolver_only` and assert schema acceptance instead of rejection. The evaluating bindings reject the undeclared name: Julia build_evaluator -> TreeWalkError E_TREEWALK_UNDECLARED_INDEX_SET; Rust resolve_aggregate_ranges -> CompileError::InterpreterBuildError; Python build_reference_graph -> ReferenceResolutionError E_REF_UNDECLARED_INDEX_SET. NEGATIVE CONTROL for issue #185: this fixture DECLARES a registry (`cells`), so the `from` name is resolved against it at validate() and the rejection stands. A document that declares NO `index_sets` at all is instead a \u00a79.7.10 / \u00a76.6.6 discretization-agnostic leaf whose sets arrive by injection, and `undefined_index_set` is deferred for it (CONFORMANCE_SPEC \u00a75.6.4; positive control tests/conformance/expression_templates/inject_agnostic_faq/fixture.esm)."
   },
+  "ragged_values_not_gathered.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/RaggedValuesNotGathered/equations/3/rhs",
+        "code": "ragged_values_not_gathered"
+      }
+    ],
+    "is_valid": false,
+    "notes": "Structural invalid (issue #259; esm-spec \u00a74.3.1 \"Ragged ranges\"; CONFORMANCE_SPEC \u00a75.6.4). The `faq` ranges `j` over the ragged index set `members_of_parent`, but its body `index(flatValue, j)` never reads the set's `values` array `parentMember`. A ragged range symbol binds the POSITION k in 1..offsets[parent], not a member, so the body reads positions 1..offsets[i] of the flat payload (10, 30, 60) where the author meant each parent's own members (10, 50, 150). SCHEMA-VALID, and it evaluated without complaint before this code existed. Decidable from the single document, so every binding's validate() rejects it with `ragged_values_not_gathered` at the containing field. Positive control: tests/valid/faq/ragged_member_gather.esm (padded [parent, max length] `values`, explicit `index(parentMember, i, j)` gather)."
+  },
   "continuous_relational_node.esm": {
     "schema_errors": [],
     "structural_errors": [

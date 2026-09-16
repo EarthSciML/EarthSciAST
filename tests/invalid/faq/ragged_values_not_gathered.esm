@@ -1,0 +1,50 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "RaggedValuesNotGathered",
+    "description": "INVALID: a `faq` ranges over a `kind: \"ragged\"` index set but its body never reads that set's `values` array (issue #259). A ragged range symbol binds the POSITION k in 1..offsets[parent], not a member (esm-spec §4.3.1, CONFORMANCE_SPEC §5.6.4), so `index(flatValue, j)` reads positions 1..offsets[i] of the flat payload: 10, 30, 60 where the author meant parent i's own members 10, 50, 150. The fix is an explicit gather, `index(flatValue, index(parentMember, i, j))` over a padded [parent, max length] `values` array; tests/valid/faq/ragged_member_gather.esm is that spelling. Rejected by validate() with `ragged_values_not_gathered`.",
+    "authors": ["EarthSciML Authors and Contributors"],
+    "tags": ["faq", "index-sets", "ragged", "invalid"]
+  },
+  "index_sets": {
+    "parent_rows": { "kind": "interval", "size": 3 },
+    "flat_member_rows": { "kind": "interval", "size": 6 },
+    "members_of_parent": { "kind": "ragged", "of": ["parent_rows"], "offsets": "parentMemberCount", "values": "parentMember" }
+  },
+  "models": {
+    "RaggedValuesNotGathered": {
+      "variables": {
+        "parentMemberCount": {
+          "type": "unknown", "shape": ["parent_rows"], "units": "1",
+          "description": "Per-parent member count: one, two and three."
+        },
+        "parentMember": {
+          "type": "unknown", "shape": ["flat_member_rows"], "units": "1",
+          "description": "The member array, laid out flat. Never read by the faq body, which is the defect."
+        },
+        "flatValue": {
+          "type": "unknown", "shape": ["flat_member_rows"], "units": "1",
+          "description": "A payload over the flat member axis."
+        },
+        "perParentTotal": {
+          "type": "unknown", "shape": ["parent_rows"], "units": "1",
+          "description": "Meant to be the sum of each parent's own members' payloads."
+        }
+      },
+      "equations": [
+        { "lhs": "parentMemberCount", "rhs": { "op": "const", "args": [], "value": [1, 2, 3] } },
+        { "lhs": "parentMember", "rhs": { "op": "const", "args": [], "value": [1, 2, 3, 4, 5, 6] } },
+        { "lhs": "flatValue", "rhs": { "op": "const", "args": [], "value": [10, 20, 30, 40, 50, 60] } },
+        {
+          "lhs": "perParentTotal",
+          "rhs": {
+            "op": "faq", "args": [], "semiring": "sum_product", "output_idx": ["i"],
+            "ranges": { "i": { "from": "parent_rows" },
+                        "j": { "from": "members_of_parent", "of": ["i"] } },
+            "expr": { "op": "index", "args": ["flatValue", "j"] }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1137,6 +1137,96 @@ export function validateAggregateIndexSets(
 }
 
 /**
+ * Body ops that make a `faq` a value-invention node. Over such a node a ragged
+ * range binds the MEMBER `values[parent, k]` itself (esm-spec §4.3.1 "Ragged
+ * ranges"), so its `values` gather is implicit rather than authored.
+ */
+const VALUE_INVENTION_BODY_OPS: ReadonlySet<string> = new Set([
+  'skolem',
+  'rank',
+  'distinct',
+  'argmin',
+  'argmax',
+])
+
+/** A value-invention `faq`: `distinct: true`, a `skolem` key, or a skolem / rank / distinct / arg-witness body. */
+function isValueInventionFaq(agg: ExpressionNode): boolean {
+  if (agg.distinct === true) return true
+  if (isExprNode(agg.key) && agg.key.op === 'skolem') return true
+  return isExprNode(agg.expr) && VALUE_INVENTION_BODY_OPS.has(agg.expr.op)
+}
+
+/**
+ * Whether `expr` holds a surviving `apply_expression_template` reference
+ * (esm-spec §9.6.4), whose body a static walk of this document cannot see.
+ */
+function containsTemplateReference(expr: unknown): boolean {
+  if (!isExprNode(expr)) return false
+  if (expr.op === 'apply_expression_template') return true
+  let found = false
+  forEachChild(expr, (child) => {
+    if (!found && containsTemplateReference(child)) found = true
+  })
+  return found
+}
+
+/**
+ * Check `ragged_values_not_gathered` (esm-spec §4.3.1 "Ragged ranges", issue
+ * #259): a `faq` range over a declared `kind: "ragged"` index set binds the
+ * POSITION k in 1..offsets[parent], never a member, so a body (`expr` /
+ * `filter`) that never reads the set's `values` array reads positions where the
+ * author meant members. One finding per such range.
+ *
+ * Not decided for a value-invention node, which binds the member itself, nor
+ * for a body that still holds a template reference, which may do the gather out
+ * of sight. A set the document does not declare is left to the build, as
+ * `validateAggregateIndexSets` does.
+ */
+export function validateRaggedValuesGathered(
+  model: Model,
+  modelPath: string,
+  esmFile: EsmFile,
+): StructuralError[] {
+  const errors: StructuralError[] = []
+  const registry = (esmFile.index_sets || {}) as Record<
+    string,
+    { kind?: string; offsets?: string; values?: string }
+  >
+  if (Object.keys(registry).length === 0) return errors
+  forEachExpressionScope(model, modelPath, (scope) => {
+    for (const site of scope) {
+      for (const agg of collectAggregates(site.expr)) {
+        if (!agg.ranges || isValueInventionFaq(agg)) continue
+        const body = [agg.expr, agg.filter].filter((part) => part !== undefined)
+        if (body.some(containsTemplateReference)) continue
+        const refs = new Set<string>()
+        for (const part of body) {
+          for (const ref of extractVariableReferences(part as Expression)) refs.add(ref)
+        }
+        const ranges = agg.ranges as Record<string, unknown>
+        for (const sym of Object.keys(ranges).sort()) {
+          const setName = rangeIndexSetName(ranges[sym])
+          if (setName === undefined) continue
+          const entry = registry[setName]
+          if (!entry || entry.kind !== 'ragged' || typeof entry.values !== 'string') continue
+          const values = entry.values
+          if ([...refs].some((ref) => ref === values || ref.endsWith(`.${values}`))) continue
+          const of = (ranges[sym] as { of?: unknown }).of
+          const parent = Array.isArray(of) && of.length > 0 ? of.join(', ') : '<parent>'
+          errors.push({
+            path: site.path,
+            code: ERROR_CODES.RAGGED_VALUES_NOT_GATHERED,
+            message: `faq range "${sym}" iterates ragged index set "${setName}", so it binds the POSITION k in 1..${entry.offsets ?? 'offsets'}[${parent}], not a member; the body never reads the set's \`values\` array "${values}". Gather the member explicitly: index(${values}, ${parent}, ${sym})`,
+            details: { range: sym, index_set: setName, values },
+          })
+        }
+      }
+    }
+  })
+  return errors
+}
+
+/**
  * Semirings under which `distinct: true` is a RELATIONAL / value-invention
  * aggregate (set semantics, index-set-producing). Only `bool_and_or` — the
  * relational specialization (RFC §5.1) — qualifies today; the check is written

@@ -1418,6 +1418,14 @@
       }
     },
     {
+      "name": "code_ragged_values_not_gathered",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeRaggedValuesNotGathered"
+      }
+    },
+    {
       "name": "code_ref_cycle",
       "kind": "constant",
       "tier": "extension",

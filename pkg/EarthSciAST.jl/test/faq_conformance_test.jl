@@ -272,3 +272,36 @@ end
         end
     end
 end
+
+# Issue #259 (esm-spec §4.3.1 "Ragged ranges"): a range over a `kind: "ragged"`
+# index set binds the POSITION k in 1..offsets[parent], and the body gathers the
+# member through `values`. The positive control evaluates that spelling; the
+# invalid fixture omits the gather and is rejected at validate() with the code
+# and pointer the SHARED pin names.
+@testset "ragged ranges bind positions (issue #259)" begin
+    @testset "ragged_member_gather (padded values, explicit gather)" begin
+        du, vmap = _eval_aggregate_fixture(
+            "ragged_member_gather.esm", "RaggedMemberGather",
+            ["perParentTotal[1]", "perParentTotal[2]", "perParentTotal[3]"])
+        @test du[vmap["perParentTotal[1]"]] ≈ 10.0
+        @test du[vmap["perParentTotal[2]"]] ≈ 50.0
+        @test du[vmap["perParentTotal[3]"]] ≈ 150.0
+        @test EarthSciAST.validate_path(joinpath(_AGG_REPO_ROOT, "tests", "valid", "faq",
+                                                 "ragged_member_gather.esm")).is_valid
+    end
+
+    @testset "ragged_values_not_gathered (shared pin)" begin
+        name = "ragged_values_not_gathered.esm"
+        pins = JSON3.read(read(joinpath(_AGG_REPO_ROOT, "tests", "invalid",
+                                        "expected_errors.json"), String))
+        pin = pins[Symbol(name)]
+        want = Set((String(e["code"]), String(e["path"])) for e in pin["structural_errors"])
+        @test !isempty(want)
+        r = EarthSciAST.validate_path(joinpath(_AGG_REPO_ROOT, "tests", "invalid", "faq", name))
+        @test r.is_valid == false
+        got = Set((e.error_type, e.path) for e in r.structural_errors)
+        @test issubset(want, got)
+        msgs = [e.message for e in r.structural_errors if e.error_type == "ragged_values_not_gathered"]
+        @test any(m -> occursin("index(parentMember, i, j)", m), msgs)
+    end
+end
