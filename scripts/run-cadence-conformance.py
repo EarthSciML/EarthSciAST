@@ -128,10 +128,11 @@ def _lhs_unwrap(node: Any) -> Any:
     """Strip the array-addressing shells from an LHS: an `faq` addresses its
     `expr`, an `index` its first argument."""
     while isinstance(node, dict):
+        args = node.get("args")
         if node.get("op") == "faq" and node.get("expr") is not None:
             node = node["expr"]
-        elif node.get("op") == "index" and node.get("args"):
-            node = node["args"][0]
+        elif node.get("op") == "index" and isinstance(args, list) and args:
+            node = args[0]
         else:
             break
     return node
@@ -145,8 +146,12 @@ def _lhs_role(lhs: Any) -> tuple:
     head = _lhs_unwrap(lhs)
     if isinstance(head, str):
         return ("definition", head)
-    if isinstance(head, dict) and head.get("op") == "D" and head.get("wrt", "t") == "t":
-        base = _lhs_unwrap((head.get("args") or [None])[0])
+    # An ABSENT `wrt` means `t` (esm-spec §4.2), and so does an explicit null —
+    # which is how Julia's `_raw_lhs_role` and Rust's `lhs_form` both read it, so
+    # the three agree on every spelling, not only the schema-valid ones.
+    if isinstance(head, dict) and head.get("op") == "D" and head.get("wrt") in (None, "t"):
+        args = head.get("args")
+        base = _lhs_unwrap(args[0]) if isinstance(args, list) and args else None
         if isinstance(base, str):
             return ("derivative", base)
     return (None, None)
