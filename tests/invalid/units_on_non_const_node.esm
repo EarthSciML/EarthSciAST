@@ -1,0 +1,41 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "UnitsOnNonConstNode",
+    "description": "Invalid: `units` is declared on a `*` node. It is legal only on a `const` node (esm-spec §4.8.5 item 1), so the schema rejects it.",
+    "authors": [
+      "Chris Tessum with Claude"
+    ],
+    "created": "2026-09-14T00:00:00Z"
+  },
+  "models": {
+    "BadUnitsModel": {
+      "variables": {
+        "speed_mph": {
+          "type": "parameter",
+          "units": "mi/h",
+          "default": 30.0,
+          "description": "Link average speed in miles per hour"
+        },
+        "speed_ms": {
+          "type": "unknown",
+          "units": "m/s",
+          "description": "Defined by a product that wrongly carries units"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "speed_ms",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "speed_mph",
+              0.44704
+            ],
+            "units": "m/s"
+          }
+        }
+      ]
+    }
+  }
+}

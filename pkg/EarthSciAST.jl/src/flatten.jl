@@ -1103,6 +1103,7 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
             rs_templates = file.component_templates === nothing ? nothing :
                 get(file.component_templates, "reaction_systems.$(name)", nothing)
             _collect_reaction_system!(states, params, equations,
+                                      continuous_events, discrete_events,
                                       rsys, name; templates=rs_templates)
             _attribute_equations!(eq_owners, equations, name)
         end
@@ -1246,11 +1247,12 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
                                               template_registry),
                            lifted_shapes=lifted_shapes)
 
-    # Step 3c: Resolve a right-hand-side STRUCTURAL time derivative of an ODE
-    # unknown to the tendency this system defines for it (esm-spec §4.2). Runs
-    # after the lift so it sees the equations the lift produced, and after Step
-    # 1+2 so a reaction network's mass-action tendency (§7.4) is available to a
-    # sibling model's scoped `D(Chem.O3, t)`.
+    # Step 3c (esm-libraries-spec §4.7.5 step 3a): Resolve a right-hand-side
+    # STRUCTURAL time derivative of an ODE unknown to the tendency this system
+    # defines for it (esm-spec §4.2). Runs after the lift so it sees the
+    # equations the lift produced, and after Step 1+2 so a reaction network's
+    # mass-action tendency (§7.4) is available to a sibling model's scoped
+    # `D(Chem.O3, t)`.
     _resolve_rhs_time_derivatives!(equations, Set{String}(keys(params)))
 
     # Step 4: Compute independent variables.

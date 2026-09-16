@@ -586,7 +586,12 @@ function checkRecurrenceEquation(
           `index ${d} of a causal self-read of '${varName}' is not affine in its frame symbol ` +
             `'${sym}'. A self-read names a position RELATIVE to the cell being written ` +
             `(\`${sym} - 1\`, \`${sym} - a\`, \`${sym} - a - 2\`), which is what makes the ` +
-            'recurrence axis and its direction decidable (esm-spec §4.3.1.1).',
+            'recurrence axis and its direction decidable (esm-spec §4.3.1.1). ' +
+            `If the offset is read from data (\`${sym} - index(lag, ${sym})\`), it has no direct ` +
+            'spelling; contract it instead: either order the axis so the predecessor is the ' +
+            'preceding position and the lag is the constant 1, or range a contracted index `a` ' +
+            "over the lag's bounds and select the matching term with " +
+            `\`ifelse(index(lag, ${sym}) == a, <term reading index(${varName}, ${sym} - a)>, 0)\`.`,
         )
       }
       // The COEFFICIENT is the half that must be provable: without it the read

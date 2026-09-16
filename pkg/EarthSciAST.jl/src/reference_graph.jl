@@ -274,7 +274,10 @@ _get(::Any, ::AbstractString) = nothing
 _haskey(d::AbstractDict, k::AbstractString) = haskey(d, k) || haskey(d, Symbol(k))
 _haskey(::Any, ::AbstractString) = false
 
-_str_keys(d::AbstractDict) = String[string(k) for k in keys(d)]
+# Sorted, so the walk visits object keys in one order whatever the Dict type: a
+# plain `Dict` hashes `rhs` before `lhs`, which made Julia report a different
+# first unresolved reference than the other bindings. Go sorts the same way.
+_str_keys(d::AbstractDict) = sort!(String[string(k) for k in keys(d)])
 
 _as_dict(x) = x isa AbstractDict ? x : nothing
 _as_vec(x) = x isa AbstractVector ? x : nothing

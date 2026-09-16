@@ -580,6 +580,58 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
             end
         end
 
+        # A reaction system's inline tests, constraint equations and events are the
+        # same sites as a model's: an undefined name in one is `undefined_variable`
+        # at the carrying field's pointer (tests/invalid/expected_errors.json).
+        for (fixture, pointer) in (
+                ("undefined_variable_in_reaction_system_assertion_reference.esm",
+                 "/reaction_systems/TestReactions/tests/0/assertions/0/reference"),
+                ("undefined_variable_in_reaction_system_constraint_equation.esm",
+                 "/reaction_systems/TestReactions/constraint_equations/0/rhs"),
+                ("undefined_variable_in_reaction_system_continuous_event_condition.esm",
+                 "/reaction_systems/TestReactions/continuous_events/0/conditions/0"),
+                ("undefined_variable_in_reaction_system_discrete_event_trigger.esm",
+                 "/reaction_systems/TestReactions/discrete_events/0/trigger/expression"))
+            @testset "Invalid fixture $fixture is rejected" begin
+                fixture_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid", fixture)
+                if _require_fixture(fixture_path)
+                    result = EarthSciAST.validate(EarthSciAST.load_path(fixture_path))
+                    @test !result.is_valid
+                    @test any(e -> e.error_type == "undefined_variable" && e.path == pointer,
+                              result.structural_errors)
+                end
+            end
+        end
+
+        # esm-spec §6.6.2, §6.6.3, §6.6.5: an inline test's assertion target,
+        # override keys and assertion rank are checked at validation. Each fixture
+        # reports exactly its pinned finding; the spellings fixture validates clean.
+        pins = JSON3.read(read(joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid",
+                                        "expected_errors.json"), String))
+        for fixture in ("undefined_variable_in_assertion_variable.esm",
+                        "unknown_override_key_parameter_overrides.esm",
+                        "unknown_override_key_initial_conditions.esm",
+                        "unknown_override_key_reaction_system.esm",
+                        "assertion_rank_mismatch_pointwise_on_shaped.esm",
+                        "assertion_rank_mismatch_reduce_on_scalar.esm")
+            @testset "Inline-test static check: $fixture" begin
+                fixture_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid", fixture)
+                if _require_fixture(fixture_path)
+                    result = EarthSciAST.validate(EarthSciAST.load_path(fixture_path))
+                    expected = [(String(e.code), String(e.path)) for e in pins[fixture].structural_errors]
+                    @test [(e.error_type, e.path) for e in result.structural_errors] == expected
+                end
+            end
+        end
+        @testset "Inline-test static check: every accepted spelling validates clean" begin
+            fixture_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid",
+                                    "inline_test_static_check_spellings.esm")
+            if _require_fixture(fixture_path)
+                result = EarthSciAST.validate(EarthSciAST.load_path(fixture_path))
+                @test isempty(result.structural_errors)
+            end
+        end
+
         # No false positive: an aggregate whose body references a bound loop
         # index (`i`, introduced by `ranges`) and a declared variable must NOT
         # flag the bound index. Built via the typed API so it is schema-free.
@@ -781,6 +833,22 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
     # them is unreachable: the implicit symbol shadows it, not the other way
     # round. Issue #200 — a fuel time-lag constant declared as `t` validated
     # clean, then silently became the simulation clock (`log(t) = -inf` at t=0).
+    # esm-spec §6.3 — inline array data is only a SHAPED variable's value. On a
+    # variable with no `shape` there is nothing for the array to fill.
+    @testset "array_default_without_shape (§6.3)" begin
+        fixture_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid",
+                                "array_default_without_shape.esm")
+        if _require_fixture(fixture_path)
+            result = EarthSciAST.validate(EarthSciAST.load_path(fixture_path))
+            @test !result.is_valid
+            found = sort([(e.path, e.details["variable_type"]) for e in result.structural_errors
+                          if e.error_type == "array_default_without_shape"])
+            # The shaped control `w` carries the same data legally and is not reported.
+            @test found == [("/models/Decay/subsystems/Inner/variables/x/default", "unknown"),
+                            ("/models/Decay/variables/k/default", "parameter")]
+        end
+    end
+
     @testset "reserved_variable_name (§4.9.1.1)" begin
         _reserved(result) = filter(e -> e.error_type == "reserved_variable_name",
                                    result.structural_errors)

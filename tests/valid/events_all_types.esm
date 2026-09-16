@@ -381,7 +381,7 @@
               }
             }
           ],
-          "root_find": "all"
+          "root_find": "left"
         },
         {
           "name": "complex_condition",

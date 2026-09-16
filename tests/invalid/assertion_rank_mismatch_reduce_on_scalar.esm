@@ -1,0 +1,69 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "AssertionRankMismatchReduceOnScalar",
+    "description": "Invalid: an assertion with `reduce: \"mean\"` on `y`, which is declared without a `shape` (esm-spec §6.6.5). A scalar variable has no spatial field to reduce. Expected error: assertion_rank_mismatch @ /models/TestModel/tests/0/assertions/0.",
+    "authors": [
+      "EarthSciML"
+    ],
+    "created": "2026-09-15T00:00:00Z"
+  },
+  "models": {
+    "TestModel": {
+      "variables": {
+        "y": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0,
+          "description": "State."
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 1.0,
+          "description": "Declared parameter."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "y"
+            ]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "t0",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "assertions": [
+            {
+              "variable": "y",
+              "time": 1.0,
+              "expected": 0.3679,
+              "reduce": "mean"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

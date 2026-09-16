@@ -1,0 +1,36 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "MountEnumsAssemblyNamesLeafEnum",
+    "description": "INVALID: this document's own `enum` op names probe, which only the mounted leaf declares. Enums do not merge across a mount, so the op has no block to resolve in: unknown_enum.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ]
+  },
+  "models": {
+    "One": {
+      "ref": "./leaf_one.esm"
+    },
+    "Probe": {
+      "variables": {
+        "own": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Names an enum this file does not declare."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "own",
+          "rhs": {
+            "op": "enum",
+            "args": [
+              "probe",
+              "Symbol"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}
