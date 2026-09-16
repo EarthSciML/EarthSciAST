@@ -339,6 +339,11 @@ const (
 	// shaped variable, or `coords` / `reduce` on a scalar one
 	// (tests/invalid/assertion_rank_mismatch_*.esm).
 	ErrorAssertionRankMismatch = "assertion_rank_mismatch"
+	// ErrorArrayDefaultWithoutShape is inline array data as the `default` of a
+	// variable that declares no `shape` (esm-spec §6.3). Inline array data is a
+	// SHAPED variable's value, so with no shape there is nothing for the array
+	// to fill (tests/invalid/array_default_without_shape.esm).
+	ErrorArrayDefaultWithoutShape = "array_default_without_shape"
 )
 
 // --- Diagnostic codes: structural validation, peers of the Error* block

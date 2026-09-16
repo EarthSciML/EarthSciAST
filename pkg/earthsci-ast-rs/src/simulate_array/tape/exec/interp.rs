@@ -28,6 +28,8 @@ pub(super) fn run_range(
         slab,
         slot_off,
         obs,
+        parked,
+        export_sites,
         pending,
         plan_full,
         fregs,
@@ -41,6 +43,16 @@ pub(super) fn run_range(
     let slab_ptr = slab.as_mut_ptr();
     let slot_off: &[usize] = slot_off;
     pending.clear();
+    // Withdraw every export this range is about to publish again, so a read
+    // that runs before its `Export` finds no entry and the resolver faults
+    // naming it (CONFORMANCE_SPEC §5.23.1(2)). Exports of sections this call
+    // does not re-run stay published.
+    for &(pc, e) in export_sites.iter() {
+        let e = e as usize;
+        if range.contains(&pc) && parked[e].is_none() {
+            parked[e] = obs.remove_entry(&prog.exports[e].0);
+        }
+    }
 
     let mut pc = range.start;
     while pc < range.end {
@@ -348,8 +360,13 @@ pub(super) fn run_range(
                     pc += 1;
                     continue;
                 }
-                let name = &prog.exports[*export as usize].0;
-                let a = obs.get_mut(name).expect("export array preallocated");
+                let e = *export as usize;
+                if let Some((name, arr)) = parked[e].take() {
+                    obs.insert(name, arr);
+                }
+                let a = obs
+                    .get_mut(&prog.exports[e].0)
+                    .expect("export array published");
                 let desc = &prog.slots[*slot as usize];
                 let off = slot_off[*slot as usize];
                 if desc.scalar {

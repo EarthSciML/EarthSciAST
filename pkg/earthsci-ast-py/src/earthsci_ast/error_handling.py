@@ -110,6 +110,10 @@ class ErrorCode(Enum):
     # the variable it names -- pointwise on a shaped variable, or `coords` /
     # `reduce` on a scalar one.
     ASSERTION_RANK_MISMATCH = "assertion_rank_mismatch"
+    # Inline array data as the `default` of a variable that declares no `shape`
+    # (esm-spec §6.3). Inline array data is a SHAPED variable's value, so with no
+    # shape there is nothing for the array to fill.
+    ARRAY_DEFAULT_WITHOUT_SHAPE = "array_default_without_shape"
     MISSING_REQUIRED_FIELD = "missing_required_field"
     UNIT_MISMATCH = "unit_mismatch"
     # Codes emitted by earthsci_ast.validation (previously ad-hoc string
