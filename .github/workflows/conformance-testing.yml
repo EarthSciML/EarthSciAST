@@ -159,9 +159,10 @@ jobs:
       # Every feature EXCEPT `xla`, spelled out -- the same list the
       # `rust-tests` stable/beta legs test with. On the default feature set,
       # clippy never compiled the feature-gated code: `esio_provider` (behind
-      # `esio`), the `performance` module and the SIMD paths (behind
-      # `parallel`/`simd`/`zero_copy`/`custom_alloc`), the `wasm` bindings, the
-      # conformance adapter binaries, and `benches/benchmarks.rs` (a
+      # `esio`), the gated items inside `performance` and its SIMD paths
+      # (behind `parallel`/`simd`/`zero_copy`/`custom_alloc`), the `wasm`
+      # bindings and their feature-gated tests, the conformance adapter
+      # binaries, and `benches/benchmarks.rs` (a
       # `required-features = ["benchmarks"]` target, so `--all-targets` alone
       # skips it). Those were compiled by `rust-tests` but never linted (#242).
       #
