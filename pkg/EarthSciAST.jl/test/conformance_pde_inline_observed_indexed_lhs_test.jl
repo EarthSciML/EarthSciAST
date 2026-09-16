@@ -80,3 +80,28 @@ const _OIL_MANIFEST = joinpath(_OIL_CAT_DIR, "manifest.json")
         end
     end
 end
+
+# CONFORMANCE_SPEC §5.36.2: a bare-index definition outside the runnable form —
+# the RHS is not a `faq` whose `output_idx` names the LHS subscripts in order —
+# is REFUSED. Every assertion reports no actual and is not passed, and the
+# message carries the code and names the offending variable.
+@testset "Conformance: pde_inline_observed_indexed_lhs refusals (§5.36.2)" begin
+    manifest = JSON3.read(read(_OIL_MANIFEST, String))
+    @test haskey(manifest, :refusals)
+    @test !isempty(manifest.refusals)
+    for ref in manifest.refusals
+        @testset "$(ref.id)" begin
+            results = run_inline_tests(joinpath(_OIL_CAT_DIR, String(ref.path));
+                                       model_name=String(ref.model),
+                                       alg=OrdinaryDiffEqTsit5.Tsit5(),
+                                       reltol=1e-12, abstol=1e-14)
+            @test length(results) == Int(ref.assertion_count)
+            for r in results
+                @test !r.passed
+                @test r.actual === nothing
+                @test occursin(String(ref.diagnostic), r.message)
+                @test occursin(String(ref.names_variable), r.message)
+            end
+        end
+    end
+end

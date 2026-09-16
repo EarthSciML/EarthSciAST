@@ -388,6 +388,24 @@ describe('an UNPROVABLE lag is admitted, not rejected', () => {
     expect(finding.message).toContain('not affine in its frame symbol')
   })
 
+  it('names the spellings that work when the lag is read from DATA', () => {
+    // `index(s, k - index(lag, k))`: `lag[k]` is a value, not a symbol with a
+    // range, so the index is not affine in `k` and the refusal is correct. It is
+    // also the expression an author porting a data-chained model writes, so the
+    // message has to point at the contraction that does work.
+    const doc = recurrenceDoc(
+      selfIndex({ op: '-', args: ['k', { op: 'index', args: ['lag', 'k'] }] }),
+    ) as unknown as { models: { M: { variables: Record<string, unknown> } } }
+    doc.models.M.variables.lag = { type: 'parameter', units: '1', shape: ['steps'], default: 1 }
+    const result = validate(doc as unknown as EsmFile)
+    const refusals = result.structural_errors.filter((e) => e.code === 'recurrence_not_wellfounded')
+    expect(refusals, findings(result).join('\n')).toHaveLength(1)
+    expect(refusals[0].path).toBe(RHS_PATH)
+    expect(refusals[0].message).toContain('not affine in its frame symbol')
+    expect(refusals[0].message).toContain('If the offset is read from data')
+    expect(refusals[0].message).toContain('index(s, k - a)')
+  })
+
   it('bounds a symbol over a CATEGORICAL index set by its member count', () => {
     // The evaluator resolves a categorical set to the dense 1..len(members)
     // range before it builds a rule, so a validator that did not would prove

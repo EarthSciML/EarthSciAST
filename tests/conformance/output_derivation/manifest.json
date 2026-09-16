@@ -19,7 +19,8 @@
     "flat_indices": "0-BASED flat-state indices in ROW-MAJOR (C-order) cell order within `shape` — the layout a Zarr writer consumes, with the column-major->row-major transposition already applied. Julia's `VarGridding` stores 1-based indices in enumeration order plus a `cart` map; `row_major_flat_indices` converts, so both bindings compare on one representation.",
     "var_dims": "the ON-DISK dimension list: the record axis FIRST, then the variable's spatial axes. A scalar's dims are therefore exactly [time_dim].",
     "grid_order": "first-seen spatial-dim-signature order; the signature is the SORTED SET of a variable's dim names, so axis order does not fragment a grid and every scalar (empty signature) lands in ONE shared 0-D grid.",
-    "var_order": "sorted by base name within a grid (the derivation sorts groups by base name so a derived schema is reproducible)."
+    "var_order": "sorted by base name within a grid (the derivation sorts groups by base name so a derived schema is reproducible).",
+    "request_names": "an `observed` request selects the variable it names EXACTLY; failing that, the ONE variable whose last dotted segment equals the request's; a last segment several variables share is refused with `ambiguous_output_name` and an unmatched request is refused as unknown (CONFORMANCE_SPEC §5.17.4). A merged-away name is resolved by the CALLER, not by the derivation."
   },
   "cases": [
     {
@@ -66,6 +67,33 @@
       "observed": [],
       "tags": ["multi-grid", "scalar", "gridded", "named-record-axis"],
       "notes": "Scalar AND gridded in one document over two spatial signatures => exactly THREE grids. With a synthetic singleton axis per scalar it would be five, which is what makes this the fixture a shape-signature grouping bug shows up in. The record axis is `t`, so a binding that assumes the name `time` fails here."
+    },
+    {
+      "id": "shared_tail_exact",
+      "fixture": "fixtures/shared_tail.esm",
+      "golden": "golden/shared_tail_exact.json",
+      "slot_names": ["Chem.NO2", "Chem.O3", "Sink.SO2", "Sink.O3"],
+      "observed": ["Chem.O3"],
+      "tags": ["scalar", "request-names", "exact-match"],
+      "notes": "Two components each declare an observed `O3`. The request names `Chem.O3` exactly, so only `Chem.O3` is written and `Sink.O3` is dropped. A rule that compares last segments without counting candidates also selects `Sink.O3` here, writing a variable nobody asked for."
+    }
+  ],
+  "refusals": [
+    {
+      "id": "shared_tail_bare",
+      "fixture": "fixtures/shared_tail.esm",
+      "slot_names": ["Chem.NO2", "Chem.O3", "Sink.SO2", "Sink.O3"],
+      "observed": ["O3"],
+      "raises": "ambiguous_output_name",
+      "notes": "A bare `O3` names no variable exactly and its last segment designates two, so it is refused rather than selecting both or an arbitrary one."
+    },
+    {
+      "id": "shared_tail_other_component",
+      "fixture": "fixtures/shared_tail.esm",
+      "slot_names": ["Chem.NO2", "Chem.O3", "Sink.SO2", "Sink.O3"],
+      "observed": ["Emis.O3"],
+      "raises": "ambiguous_output_name",
+      "notes": "A qualified request naming a component that is neither one falls through to the last-segment rule, which designates two variables, so it is refused."
     }
   ]
 }

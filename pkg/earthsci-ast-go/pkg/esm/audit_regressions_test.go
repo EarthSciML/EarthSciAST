@@ -1290,7 +1290,7 @@ func TestCheckerB_B_VarPlaceholderLegalInCoupledModel(t *testing.T) {
 	        "conditions":[{"op":"-","args":["u",0.001]}],
 	        "affects":[{"lhs":"_var","rhs":0.001}],
 	        "affect_neg":[{"lhs":"_var","rhs":0.0}],
-	        "root_find":"all"}]}},
+	        "root_find":"left"}]}},
 	  "coupling":[{"type":"operator_compose","systems":["Chem","Transport"]}]}`
 	result := validateSrc(t, src)
 	if hasCode(result, ErrorEventVarUndeclared) {

@@ -112,7 +112,7 @@
               }
             }
           ],
-          "root_find": "all",
+          "root_find": "left",
           "description": "Ball collision with ground - velocity reversal with energy loss"
         }
       ]
@@ -282,7 +282,7 @@
               }
             }
           ],
-          "root_find": "all",
+          "root_find": "left",
           "description": "Different position adjustments depending on velocity direction change"
         }
       ]
@@ -460,7 +460,7 @@
               }
             }
           ],
-          "root_find": "all",
+          "root_find": "left",
           "description": "Apply different interventions based on whether population is increasing or decreasing past threshold"
         }
       ]

@@ -44,6 +44,10 @@ const ERROR_CODES = (
     # ── Structural validation (validate.jl; the `error_type` of a
     #    `StructuralError`, pinned by tests/invalid/expected_errors.json) ────
     ARRAY_SHAPE_MISMATCH = "array_shape_mismatch",
+    # esm-spec §6.6.5: an assertion whose form does not match the declared rank of
+    # the variable it names -- pointwise on a shaped variable, or `coords` /
+    # `reduce` on a scalar one.
+    ASSERTION_RANK_MISMATCH = "assertion_rank_mismatch",
     CIRCULAR_DEPENDENCY = "circular_dependency",
     CONFLICTING_DERIVATIVE = "conflicting_derivative",
     DATA_SOURCE_UNDEFINED = "data_source_undefined",
@@ -79,14 +83,23 @@ const ERROR_CODES = (
     # 1..offsets[parent], not a member, so the body reads positions — a
     # plausible wrong number rather than a failure.
     RAGGED_VALUES_NOT_GATHERED = "ragged_values_not_gathered",
+    # An output name -- an `observed` request handed to `derive_output_plan` --
+    # that matches no variable exactly and whose last dotted segment is shared
+    # by more than one variable (CONFORMANCE_SPEC §5.17.4). A last-segment match
+    # is accepted only when it designates exactly one variable, so a request
+    # cannot silently select a variable it did not name.
+    AMBIGUOUS_OUTPUT_NAME = "ambiguous_output_name",
     # Causal self-reference (esm-spec §4.3.1.1, CONFORMANCE_SPEC §5.19.5).
-
     # A VALIDATION category, so both codes are owed by every binding whether or
     # not it evaluates array numerics: the pre-1.0 behaviour of an ill-founded
     # self-read was a plausible wrong number, and a binding that only declined
     # to run it would leave the defect undiagnosed.
     RECURRENCE_NOT_WELLFOUNDED = "recurrence_not_wellfounded",
     RECURRENCE_UNSUPPORTED_FORM = "recurrence_unsupported_form",
+    # A bare-index observed definition (`index(V, k…) ~ rhs`, esm-spec §6.3.1)
+    # outside the one runnable form, refused when the model is built for
+    # simulation (CONFORMANCE_SPEC §5.36.2).
+    INDEXED_DEFINITION_UNSUPPORTED_FORM = "indexed_definition_unsupported_form",
     RELATIONAL_NODE_IN_CONTINUOUS = "relational_node_in_continuous",
     # A DECLARATION — a `variables` key, a reaction species, or a reaction
     # parameter — spelled with a globally-scoped name: the document's
@@ -97,6 +110,10 @@ const ERROR_CODES = (
     # silently receives the implicit symbol — the simulation clock in place of
     # the declared quantity.
     RESERVED_VARIABLE_NAME = "reserved_variable_name",
+    # Inline array data as the `default` of a variable that declares no `shape`
+    # (esm-spec §6.3). Inline array data is a SHAPED variable's value, so with no
+    # shape there is nothing for the array to fill.
+    ARRAY_DEFAULT_WITHOUT_SHAPE = "array_default_without_shape",
     SYSTEM_KIND_MISMATCH = "system_kind_mismatch",
     UNDEFINED_INDEX_SET = "undefined_index_set",
     UNDEFINED_OPERATOR = "undefined_operator",
@@ -104,6 +121,9 @@ const ERROR_CODES = (
     UNDEFINED_SPECIES = "undefined_species",
     UNDEFINED_SYSTEM = "undefined_system",
     UNDEFINED_VARIABLE = "undefined_variable",
+    # esm-spec §6.6.2: an inline test's `initial_conditions` / `parameter_overrides`
+    # key that matches no declared name under the override-key rules.
+    UNKNOWN_OVERRIDE_KEY = "unknown_override_key",
     UNRESOLVED_SCOPED_REF = "unresolved_scoped_ref",
 
     # ── Units (units.jl §4.8.4). Both are HARD errors: `UNIT_INCONSISTENCY`
@@ -160,6 +180,9 @@ const ERROR_CODES = (
 
     # ── Document-scoped solver hints (esm-spec §2.2; solver.jl). ─────────
     SOLVER_VERSION_TOO_OLD = "solver_version_too_old",
+
+    # ── Declared units on a const node (esm-spec §4.8.5; units.jl). ──────
+    CONST_UNITS_VERSION_TOO_OLD = "const_units_version_too_old",
 
     # ── Template-library imports + load-time metaparameters (esm-spec §9.7;
     #    template_imports.jl). ──────────────────────────────────────────────
@@ -276,6 +299,21 @@ const ERROR_CODES = (
     #    surfaces when a rewrite-target operator (an RHS-position `D`, or
     #    `grad`/`div`/`laplacian`) reaches evaluation unlowered. ────────────
     UNLOWERED_OPERATOR = "unlowered_operator",
+    # ── Its complement (esm-spec §9.6.6): an op that IS in the §4.2 evaluable
+    #    core but that the tree-walk evaluator has no rule for (an array/query or
+    #    value-invention op outside the position that consumes it, an unlowered
+    #    `enum`). Refused when the evaluator is BUILT, never at evaluation. ────
+    UNEVALUABLE_OPERATOR = "unevaluable_operator",
+    # A surviving expression ranges over a `kind: "derived"` index set whose
+    # producer could not be materialized at build (esm-spec §9.6.6). Refused
+    # rather than contracted as an empty range, which would read as 0.
+    DERIVED_INDEX_SET_UNMATERIALIZED = "derived_index_set_unmaterialized",
+    # ── Evaluator refusal (tree_walk/; esm-spec §9.6.6). A continuous event, a
+    #    discrete event or an implicit equation reached the tree-walk evaluator,
+    #    which runs none of them. Refused at build rather than skipped, because a
+    #    run without the construct reports a wrong answer. The ModelingToolkit
+    #    export runs all three and never raises it. ───────────────────────────
+    UNSUPPORTED_CONSTRUCT = "unsupported_construct",
 )
 
 """

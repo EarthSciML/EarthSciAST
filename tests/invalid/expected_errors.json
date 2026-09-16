@@ -2399,6 +2399,22 @@
     "resolver_error_code": "subsystem_index_set_conflict",
     "notes": "Resolver-level invalid (esm-spec \u00a74.7 'Index-set merge'). The document is SCHEMA-VALID \u2014 a subsystem ref and top-level index_sets are both legal schema \u2014 so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. The document's own index_sets.cells (interval, size 7) collides with the mounted subsystem file's cells (interval, size 5) from ../../valid/subsystem_mesh_lib.esm: a referenced subsystem file's top-level index_sets merge into the importing document's registry (deep-equal idempotent, mirroring \u00a79.7.5), so the size disagreement is a load-time error instead of the importer's declaration silently winning."
   },
+  "toplevel_ref_index_set_conflict.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": true,
+    "resolver_only": true,
+    "resolver_error_code": "subsystem_index_set_conflict",
+    "notes": "Resolver-level invalid (esm-spec \u00a74.7 'Index-set merge', 'Two mount forms, one mechanism'). The top-level `models.<k>` twin of subsystem_index_set_conflict.esm. The document is SCHEMA-VALID, so a binding that only checks the schema accepts it (is_valid: true); the invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code`. Lives under tests/invalid/template_imports/. The document's own index_sets.cells (interval, size 7) collides with cells (interval, size 5) from ../../valid/subsystem_mesh_lib.esm, mounted through a top-level models.M {ref} instead of a subsystems entry. A binding that merges a mounted leaf's axes at one attachment point but not the other passes one fixture of the pair and fails the other."
+  },
+  "mount_forwarded_axis_size_conflict.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": true,
+    "resolver_only": true,
+    "resolver_error_code": "subsystem_index_set_conflict",
+    "notes": "Resolver-level invalid (esm-spec \u00a74.7 'Index-set merge'). The size-disagreement companion of tests/valid/mount_forwarded_axis_toplevel_beside_nested.esm (issue #236). The document is SCHEMA-VALID, so a binding that only checks the schema accepts it (is_valid: true); the invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code`. Lives under tests/invalid/template_imports/. The same grid-library axis `lev`, sized by a forwarded metaparameter NLEV, arrives through a top-level `models.A` mount closed at 59 and through a nested `subsystems.col` mount bound to NLEV = 4. Both contributions are concrete and disagree, so the merge refuses with subsystem_index_set_conflict. It is not template_import_index_set_conflict, which is what a binding that merges the top-level contribution unfolded reports."
+  },
   "mount_rename_unknown_index_set.esm": {
     "schema_errors": [],
     "structural_errors": [],
@@ -2454,6 +2470,38 @@
     "resolver_only": true,
     "resolver_error_code": "metaparameter_name_conflict",
     "notes": "Resolver-level invalid (esm-spec \u00a79.7, RFC template-library-imports). The document is SCHEMA-VALID \u2014 the \u00a79.7 constructs are legal schema \u2014 so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. Metaparameter x collides with the model state variable x; a metaparameter name must not collide with any visible variable/parameter/species/index-set name \u2014 there is no shadowing (esm-spec \u00a79.7.6)."
+  },
+  "metaparameter_loop_symbol_conflict.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": true,
+    "resolver_only": true,
+    "resolver_error_code": "metaparameter_name_conflict",
+    "notes": "Resolver-level invalid (esm-spec \u00a79.7, RFC template-library-imports). The document is SCHEMA-VALID \u2014 the \u00a79.7 constructs are legal schema \u2014 so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. Metaparameter i collides with the faq loop symbol i (a `ranges` key). Inside the faq body the bare string \"i\" is both the loop symbol and a spelling of the metaparameter, so no field-based skip rule can tell them apart; without the check the body closes to {\"op\": \"index\", \"args\": [\"u\", 11]}, a constant index outside the 3-cell axis. A metaparameter name must not collide with a loop symbol (a `ranges` key or `output_idx` entry of any Expression node, the esm-spec \u00a74.9.1.1 binder definition) (esm-spec \u00a79.7.6)."
+  },
+  "metaparameter_loop_symbol_conflict_import.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": true,
+    "resolver_only": true,
+    "resolver_error_code": "metaparameter_name_conflict",
+    "notes": "Resolver-level invalid (esm-spec \u00a79.7, RFC template-library-imports). The document is SCHEMA-VALID \u2014 the \u00a79.7 constructs are legal schema \u2014 so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. Imports metaparameter_loop_symbol_conflict_lib.esm and closes its metaparameter i at the edge (`bindings`: {\"i\": 2}). The library's template body binds loop symbol i, which the edge instantiation would rewrite to 2; the collision is refused in the imported library's own scope, so closing the name at the edge does not bypass the check (esm-spec \u00a79.7.6)."
+  },
+  "metaparameter_loop_symbol_conflict_lib.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": true,
+    "resolver_only": true,
+    "resolver_error_code": "metaparameter_name_conflict",
+    "notes": "Resolver-level invalid (esm-spec \u00a79.7, RFC template-library-imports). The document is SCHEMA-VALID \u2014 the \u00a79.7 constructs are legal schema \u2014 so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. A template library whose metaparameter i collides with the loop symbol i of its own template body. Refused on a standalone load and when imported (see metaparameter_loop_symbol_conflict_import.esm) (esm-spec \u00a79.7.6)."
+  },
+  "metaparameter_loop_symbol_conflict_mount.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": true,
+    "resolver_only": true,
+    "resolver_error_code": "metaparameter_name_conflict",
+    "notes": "Resolver-level invalid (esm-spec \u00a79.7, RFC template-library-imports). The document is SCHEMA-VALID \u2014 the \u00a79.7 constructs are legal schema \u2014 so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. Mounts metaparameter_loop_symbol_conflict.esm as a subsystem and closes its metaparameter i at the mount edge (`bindings`: {\"i\": 2}). A mounted component resolves as a complete document in its own scope, where its metaparameter i collides with its own faq loop symbol i; the edge binding does not bypass the check (esm-spec \u00a79.7.6)."
   },
   "rename_unknown_name.esm": {
     "schema_errors": [],
@@ -2574,6 +2622,20 @@
     ],
     "is_valid": false
   },
+  "undefined_variable_in_reaction_system_continuous_event_condition.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/reaction_systems/TestReactions/continuous_events/0/conditions/0",
+        "code": "undefined_variable",
+        "message": "Variable \"undefined_xyz\" referenced in continuous event condition but not declared",
+        "details": {
+          "variable": "undefined_xyz"
+        }
+      }
+    ],
+    "is_valid": false
+  },
   "undefined_variable_in_discrete_event_trigger.esm": {
     "schema_errors": [],
     "structural_errors": [
@@ -2607,6 +2669,141 @@
     "structural_errors": [
       {
         "path": "/models/TestModel/tests/0/assertions/0/reference",
+        "code": "undefined_variable",
+        "message": "Variable \"undefined_xyz\" referenced in assertion reference expression but not declared",
+        "details": {
+          "variable": "undefined_xyz"
+        }
+      }
+    ],
+    "is_valid": false
+  },
+  "undefined_variable_in_reaction_system_constraint_equation.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/reaction_systems/TestReactions/constraint_equations/0/rhs",
+        "code": "undefined_variable",
+        "message": "Variable 'undefined_xyz' referenced in equation is not declared",
+        "details": {
+          "variable": "undefined_xyz",
+          "equation_index": 0,
+          "expected_in": "variables"
+        }
+      }
+    ],
+    "is_valid": false
+  },
+  "undefined_variable_in_reaction_system_discrete_event_trigger.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/reaction_systems/TestReactions/discrete_events/0/trigger/expression",
+        "code": "undefined_variable",
+        "message": "Variable \"undefined_xyz\" referenced in discrete event trigger expression but not declared",
+        "details": {
+          "variable": "undefined_xyz"
+        }
+      }
+    ],
+    "is_valid": false
+  },
+  "undefined_variable_in_assertion_variable.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/TestModel/tests/0/assertions/0/variable",
+        "code": "undefined_variable",
+        "message": "Variable \"undefined_xyz\" referenced in assertion variable but not declared",
+        "details": {
+          "variable": "undefined_xyz"
+        }
+      }
+    ],
+    "is_valid": false
+  },
+  "unknown_override_key_parameter_overrides.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/TestModel/tests/0/parameter_overrides/kx",
+        "code": "unknown_override_key",
+        "message": "Override key \"kx\" in parameter_overrides matches no declared name",
+        "details": {
+          "key": "kx",
+          "field": "parameter_overrides"
+        }
+      }
+    ],
+    "is_valid": false
+  },
+  "unknown_override_key_initial_conditions.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/TestModel/tests/0/initial_conditions/yy",
+        "code": "unknown_override_key",
+        "message": "Override key \"yy\" in initial_conditions matches no declared name",
+        "details": {
+          "key": "yy",
+          "field": "initial_conditions"
+        }
+      }
+    ],
+    "is_valid": false
+  },
+  "unknown_override_key_reaction_system.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/reaction_systems/TestReactions/tests/0/parameter_overrides/kx",
+        "code": "unknown_override_key",
+        "message": "Override key \"kx\" in parameter_overrides matches no declared name",
+        "details": {
+          "key": "kx",
+          "field": "parameter_overrides"
+        }
+      }
+    ],
+    "is_valid": false
+  },
+  "assertion_rank_mismatch_pointwise_on_shaped.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/TestModel/tests/0/assertions/0",
+        "code": "assertion_rank_mismatch",
+        "message": "Assertion on shaped variable \"u\" selects no scalar (give coords, reduce, or an element name)",
+        "details": {
+          "variable": "u",
+          "shape": [
+            "x"
+          ]
+        }
+      }
+    ],
+    "is_valid": false
+  },
+  "assertion_rank_mismatch_reduce_on_scalar.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/TestModel/tests/0/assertions/0",
+        "code": "assertion_rank_mismatch",
+        "message": "Assertion on scalar variable \"y\" carries coords or reduce",
+        "details": {
+          "variable": "y",
+          "shape": []
+        }
+      }
+    ],
+    "is_valid": false
+  },
+  "undefined_variable_in_reaction_system_assertion_reference.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/reaction_systems/TestReactions/tests/0/assertions/0/reference",
         "code": "undefined_variable",
         "message": "Variable \"undefined_xyz\" referenced in assertion reference expression but not declared",
         "details": {
@@ -3111,5 +3308,284 @@
     "parse_error": true,
     "is_valid": false,
     "notes": "Rejected at LOAD, at the wire boundary, BY NAME \u2014 not by JSON Schema and not by a structural check, so there is no (keyword, path) or (code, path) tuple to pin. Uses the `parse_error` category, whose contract is exactly 'must be rejected at load'; the category is slightly broader than its 'not even JSON' docstring, because `arrayop` IS well-formed JSON and a well-formed `op` identifier \u2014 that is the whole point. Without a by-name rejection esm-spec \u00a74.2 would admit it as an OPEN rewrite-target op and the document would load silently, failing much later as `unlowered_operator`, or never. See CONFORMANCE_SPEC \u00a77 `removed_op` and docs/content/rfcs/faq-node-rename.md \u00a75.4."
+  },
+  "units_scale_mismatch_equation.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/variables/speed_ms",
+        "code": "unit_inconsistency",
+        "message": "Declared units of m/s do not match the expression's units of mi/h",
+        "details": {
+          "variable": "speed_ms",
+          "declared_units": "m/s",
+          "expression_units": "mi/h"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "A scale disagreement (esm-spec \u00a74.8.3): every operand dimension agrees and the exact scales do not. Pinned at the observed variable's declaration, as tests/invalid/units_inconsistent_addition.esm pins its dimension mismatch."
+  },
+  "units_scale_mismatch_addition.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/variables/total_length",
+        "code": "unit_inconsistency",
+        "message": "Cannot add quantities with different units: 'm' + 'km'",
+        "details": {
+          "operation": "addition",
+          "left_units": "m",
+          "right_units": "km",
+          "variable": "total_length"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "A scale disagreement (esm-spec \u00a74.8.3): every operand dimension agrees and the exact scales do not. Pinned at the observed variable's declaration, as tests/invalid/units_inconsistent_addition.esm pins its dimension mismatch."
+  },
+  "units_const_declared_mismatch.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/variables/speed_ms",
+        "code": "unit_inconsistency",
+        "message": "Declared units of m/s do not match the expression's units of mi/h",
+        "details": {
+          "variable": "speed_ms",
+          "declared_units": "m/s"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "A unit-bearing const takes part in scale agreement (esm-spec \u00a74.8.5): mi/h times a constant declared `1` is mi/h, not m/s. Pinned at the observed variable, as tests/invalid/units_scale_mismatch_equation.esm is."
+  },
+  "units_const_template_mismatch.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/variables/speed_kg",
+        "code": "unit_inconsistency",
+        "message": "Declared units of kg do not match the expression's units of m/s",
+        "details": {
+          "variable": "speed_kg",
+          "declared_units": "kg"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "A template call has the unit of its expansion (esm-spec \u00a74.8.5 item 5); the to_ms body's const declares m*h/(mi*s), so the call is m/s against the declared kg."
+  },
+  "units_const_unparseable.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/equations/0/rhs",
+        "code": "unit_parse_error",
+        "message": "Unit string 'mph' is not a recognised unit",
+        "details": {
+          "units": "mph"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "A const's declared units resolve like a variable's (esm-spec \u00a74.8.5 item 2); a string that does not resolve is unit_parse_error at the containing expression field."
+  },
+  "units_on_non_const_node.esm": {
+    "schema_errors": [
+      {
+        "path": "/models/BadUnitsModel/equations/0/rhs/op",
+        "message": "must be equal to constant",
+        "keyword": "const"
+      }
+    ],
+    "structural_errors": [],
+    "is_valid": false,
+    "notes": "`units` is legal only on a const node (esm-spec \u00a74.8.5 item 1): the ExpressionNode schema requires op to be `const` when units is present."
+  },
+  "const_units_version_too_old.esm": {
+    "resolver_only": true,
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "notes": "Rejected at load with `const_units_version_too_old` (esm-spec \u00a74.8.5 item 6): declared units on a const node arrive at esm 1.2.0 and this document declares 1.1.0. Gated before schema validation so the author sees the version hint rather than a generic unknown-property error."
+  },
+  "units_const_additive_mismatch.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/variables/length_sum",
+        "code": "unit_inconsistency",
+        "message": "Cannot add quantities with different units: 'm' + 'kg'",
+        "details": {
+          "variable": "length_sum",
+          "declared_units": "m"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "A unit-bearing const is not a neutral literal in an additive position (esm-spec \u00a74.8.3, \u00a74.8.5): m + const(1, kg) is a provable mismatch. Pinned at the observed variable, as units_const_declared_mismatch.esm is."
+  },
+  "units_const_negated_additive_mismatch.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/variables/length_sum",
+        "code": "unit_inconsistency",
+        "message": "Cannot add quantities with different units: 'm' + 'kg'",
+        "details": {
+          "variable": "length_sum",
+          "declared_units": "m"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "A unary minus carries its operand's unit, so -(const(1, kg)) is kg and not a neutral literal (esm-spec \u00a74.8.3, \u00a74.8.5)."
+  },
+  "units_const_template_unparseable.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/equations/0/rhs",
+        "code": "unit_parse_error",
+        "message": "Unit string 'mph' is not a recognised unit",
+        "details": {
+          "units": "mph"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "A template call has the unit of its expansion (esm-spec \u00a74.8.5 item 5), so an unresolvable declared unit on a const in the called body is unit_parse_error at the calling equation's expression field (\u00a74.8.5 item 2)."
+  },
+  "units_sum_undeterminable_operand_mismatch.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/variables/total_mass",
+        "code": "unit_inconsistency",
+        "message": "Declared units of kg do not match the expression's units of m",
+        "details": {
+          "variable": "total_mass",
+          "declared_units": "kg",
+          "expression_units": "m"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.3: an undeterminable operand of + (here 0.5 * y, a product with a literal factor) is skipped, and the sum has the unit of its determinable operand, m. It is not undeterminable as a whole, so the kg declaration is a provable mismatch. Pinned at the observed variable's declaration, as tests/invalid/units_scale_mismatch_equation.esm pins its mismatch."
+  },
+  "units_ifelse_undeterminable_branch_mismatch.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/variables/total_mass",
+        "code": "unit_inconsistency",
+        "message": "Declared units of kg do not match the expression's units of m",
+        "details": {
+          "variable": "total_mass",
+          "declared_units": "kg",
+          "expression_units": "m"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.3: an undeterminable branch of ifelse (here 0.5 * y, a product with a literal factor) is skipped, and the ifelse has the unit of its determinable branch, m, exactly as a partly undeterminable sum does (tests/invalid/units_sum_undeterminable_operand_mismatch.esm). The condition c > 0 does not enter the unit. Pinned at the observed variable's declaration."
+  },
+  "units_comparison_mismatch_in_ifelse_condition.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/variables/selected",
+        "code": "unit_inconsistency",
+        "message": "Cannot compare quantities with different units: 'm' > 'kg'"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.3 comparison and connective rules. The condition of an ifelse compares a length with a mass. The condition's own unit does not enter the result, but it is still checked (esm-spec \u00a74.8.3), so the mismatch inside it is an error."
+  },
+  "units_comparison_mismatch_under_and.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/variables/selected",
+        "code": "unit_inconsistency",
+        "message": "Cannot compare quantities with different units: 'm' > 'kg'"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.3 comparison and connective rules. An ifelse condition is an and whose first operand compares a length with a mass. A boolean connective places no requirement on its operands' units, but a mismatch inside an operand is still reported (esm-spec \u00a74.8.3)."
+  },
+  "units_comparison_mismatch_under_not.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/variables/flag",
+        "code": "unit_inconsistency",
+        "message": "Cannot compare quantities with different units: 'm' > 'kg'"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.3 comparison and connective rules. A dimensionless flag is not(x > z), which compares a length with a mass. The not is dimensionless, but the mismatch inside its operand is still reported (esm-spec \u00a74.8.3)."
+  },
+  "units_comparison_result_declared_length.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/variables/flag",
+        "code": "unit_inconsistency",
+        "message": "Declared units of m do not match the expression's units of dimensionless"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.3 comparison and connective rules. Declares a length equal to the comparison x > 0. A comparison is a dimensionless boolean whatever its operands are (esm-spec \u00a74.8.3), so the m declaration is a provable mismatch."
+  },
+  "units_sum_unitless_const_operand_mismatch.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/variables/total_mass",
+        "code": "unit_inconsistency",
+        "message": "Declared units of kg do not match the expression's units of m"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.3 with \u00a74.8.5: a `const` WITHOUT `units` is undeterminable, exactly like a bare literal, so it is skipped by the sum rule and the sum carries m from x. The companion tests/valid/units_const_declared.esm covers the unit-bearing const. This case is the cross-binding divergence recorded when declared const units landed: Julia used to report the sum as unknown and accept the file."
+  },
+  "root_find_all_removed.esm": {
+    "schema_errors": [
+      {
+        "path": "/models/Ball/continuous_events/0/root_find",
+        "message": "must be equal to one of the allowed values",
+        "keyword": "enum"
+      }
+    ],
+    "structural_errors": [],
+    "is_valid": false,
+    "notes": "`root_find` accepts only \"left\" (default) and \"right\", DiffEq's two rootfind sides; \"all\" was removed from the schema without a version bump because it never had an effect."
+  },
+  "array_default_without_shape.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/Decay/subsystems/Inner/variables/x/default",
+        "code": "array_default_without_shape",
+        "message": "Model 'Inner' variable 'x' has inline array data as its default but declares no shape; inline array data is a shaped variable's value (esm-spec \u00a76.3)",
+        "details": {
+          "variable": "x",
+          "variable_type": "unknown"
+        }
+      },
+      {
+        "path": "/models/Decay/variables/k/default",
+        "code": "array_default_without_shape",
+        "message": "Model 'Decay' variable 'k' has inline array data as its default but declares no shape; inline array data is a shaped variable's value (esm-spec \u00a76.3)",
+        "details": {
+          "variable": "k",
+          "variable_type": "parameter"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a76.3: inline array data is a SHAPED variable's value, so on a variable with no `shape` (omitted, null or empty) it has nothing to fill. The schema cannot say this (whether an array is legal depends on a sibling field), so it is a structural check in every binding, pinned at the offending `default`. Before the rejection the Rust build pipeline bound such a parameter to a fabricated 0.0 (fixed in #255 by dropping it from scope, which also dropped an explicit scalar override); the load-time error names the declaration instead. The shaped parameter `w` carries the same data and must NOT be reported."
   }
 }

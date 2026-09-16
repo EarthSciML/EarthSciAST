@@ -11,6 +11,7 @@ import sympy as sp
 
 from . import op_registry
 from .classification import ode_states
+from .error_handling import UNSUPPORTED_CONSTRUCT
 from .errors import EarthSciAstError
 from .esm_types import Expr, ExprNode, Model
 from .expr_walk import iter_children, map_children
@@ -218,6 +219,29 @@ class SimulationError(EarthSciAstError):
     """
 
     pass
+
+
+class UnsupportedConstructError(SimulationError):
+    """A continuous event, a discrete event or an implicit equation reached an
+    evaluator that cannot run it (esm-spec §9.6.6 ``unsupported_construct``).
+
+    Neither the SymPy scalar pathway nor the NumPy array interpreter has event
+    handling or an algebraic solve, and skipping the construct would report a
+    wrong answer, so the build is refused instead.
+    """
+
+    #: Stable cross-binding diagnostic code (esm-spec §9.6.6).
+    code = UNSUPPORTED_CONSTRUCT
+
+    def __init__(self, construct: str, detail: str, evaluator: str) -> None:
+        self.construct = construct
+        self.detail = detail
+        self.evaluator = evaluator
+        super().__init__(
+            f"{UNSUPPORTED_CONSTRUCT}: {construct} {detail} is not supported by the "
+            f"{evaluator}; refusing the build rather than running the model without "
+            f"it (esm-spec §9.6.6)"
+        )
 
 
 class InvalidModelError(EarthSciAstError, ValueError):

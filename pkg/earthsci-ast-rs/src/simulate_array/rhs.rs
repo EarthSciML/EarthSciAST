@@ -533,7 +533,11 @@ pub(super) fn materialize_observeds_pass(
         // `precision_infer::MARKER_OP` and re-arms.
         let _rule_precision = precision_of_rule(rule);
         match rule {
-            AlgebraicRule::Scalar { var, body } => {
+            AlgebraicRule::Scalar {
+                var,
+                body,
+                declared_shape,
+            } => {
                 if vec_trace_on() {
                     let _ = take_bail_log();
                 }
@@ -554,9 +558,10 @@ pub(super) fn materialize_observeds_pass(
                 // its keep on the standalone `eval_expression_with_extents`
                 // entry point instead. See `EvalCtx::derived_extents`.
                 let mut ctx = env.ctx(&*dst);
-                let arr = match eval(body, &mut ctx) {
-                    Value::Array(a) => *a,
-                    Value::Scalar(s) => ArrayD::from_elem(IxDyn(&[]), s),
+                let arr = match (eval(body, &mut ctx), declared_shape) {
+                    (Value::Array(a), _) => *a,
+                    (Value::Scalar(s), Some(shape)) => ArrayD::from_elem(IxDyn(shape), s),
+                    (Value::Scalar(s), None) => ArrayD::from_elem(IxDyn(&[]), s),
                 };
                 // `ESS_VEC_DEBUG`: a scalar-shaped observed rule whose body is an
                 // `faq` is materialized by `eval_faq`, which tries the

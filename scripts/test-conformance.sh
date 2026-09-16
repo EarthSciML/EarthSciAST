@@ -172,6 +172,15 @@ build_corpus_manifest() {
     return 1
 }
 
+# Every string-capable property in esm-schema.json must be classified for
+# esm-spec §9.7.6 metaparameter substitution, so a field the schema gains is a
+# red run rather than a field substitution silently rewrites. Each binding's
+# own test suite checks its skip table against the same classification file.
+check_metaparameter_substitution_fields() {
+    log "Checking the metaparameter-substitution field classification..."
+    python3 "$SCRIPT_DIR/check-metaparameter-substitution-fields.py"
+}
+
 # Every binding in this repo is REQUIRED. A missing toolchain is a broken
 # environment, not a smaller test run.
 #
@@ -880,20 +889,17 @@ run_property_corpus() {
     # is REFERENCE-COMPARING rather than cross-binding-agreeing: five bindings
     # that dropped the same expression field used to agree perfectly and pass.
     #
-    # `--fail-on-source-mismatch` is NOT passed yet, for a specific reason
-    # rather than a shrug. Two corpus fixtures (expr_019, expr_020) spell a
-    # `makearray` `values` entry `0.0`; all five bindings emit `0`, which is the
-    # canonical-number rule (CONFORMANCE_SPEC.md §5.5.3.1 rule 1: an integral,
-    # i64-representable value is written as an integer literal). The BINDINGS
-    # are right and the CORPUS is stale — it predates that ruling. Closing it
-    # means regenerating tests/property_corpus/expressions, after which this
-    # flag should be added and the gate becomes total. Until then the runner
-    # PRINTS every source mismatch unconditionally, so the finding shows up in
-    # every run instead of waiting on the flag.
+    # `--fail-on-source-mismatch` makes that comparison a gate: the bindings
+    # agreeing with each other but not with the authored fixture fails too. A
+    # corpus fixture must already be in canonical form, so a fixture that spells
+    # a number non-canonically (`0.0` where CONFORMANCE_SPEC.md §5.5.3.1 rule 1
+    # requires the integer literal `0`) is a corpus defect, and fixing it means
+    # correcting the fixture, not relaxing this flag.
     python3 "$SCRIPT_DIR/run-property-corpus-conformance.py" \
         --corpus "$corpus" \
         --output "$OUTPUT_DIR/property_corpus_report.json" \
         --fail-on-divergence \
+        --fail-on-source-mismatch \
         --require-all-bindings
 }
 
@@ -984,6 +990,9 @@ main() {
         error "Corpus manifest could not be built — nothing to test"
         exit 1
     fi
+
+    run_stage "metaparameter-substitution field classification" \
+        check_metaparameter_substitution_fields
 
     declare -a successful_languages=()
     declare -a failed_languages=()

@@ -1,0 +1,106 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "UnitsScaleConversion",
+    "description": "Positive control for scale agreement (esm-spec §4.8.3). Each conversion is carried by a quantity whose declared units hold it, so the declared scales cancel EXACTLY: mi/h times m*h/(mi*s) is m/s, and km times m/km is m. The temperature line pins that an affine offset is NOT checked: degC and K agree in dimension and scale, and the 273.15 is not verified. Companions: tests/invalid/units_scale_mismatch_equation.esm and units_scale_mismatch_addition.esm, the same equations without their conversions.",
+    "authors": [
+      "Chris Tessum with Claude"
+    ],
+    "created": "2026-09-14T00:00:00Z"
+  },
+  "models": {
+    "UnitsScaleConversion": {
+      "variables": {
+        "speed_mph": {
+          "type": "parameter",
+          "units": "mi/h",
+          "default": 30.0,
+          "description": "Link average speed in miles per hour"
+        },
+        "ms_per_mph": {
+          "type": "parameter",
+          "units": "m*h/(mi*s)",
+          "default": 0.44704,
+          "description": "Speed conversion factor. Its declared units make the equation's scales cancel exactly; its numeric value is not checked."
+        },
+        "speed_ms": {
+          "type": "unknown",
+          "units": "m/s",
+          "description": "Link average speed in metres per second"
+        },
+        "length": {
+          "type": "parameter",
+          "units": "m",
+          "default": 5.0,
+          "description": "Length in metres"
+        },
+        "length_km": {
+          "type": "parameter",
+          "units": "km",
+          "default": 2.0,
+          "description": "Length in kilometres"
+        },
+        "m_per_km": {
+          "type": "parameter",
+          "units": "m/km",
+          "default": 1000.0,
+          "description": "Metres per kilometre"
+        },
+        "total_length": {
+          "type": "unknown",
+          "units": "m",
+          "description": "Metres plus kilometres converted to metres"
+        },
+        "T_kelvin": {
+          "type": "parameter",
+          "units": "K",
+          "default": 293.15,
+          "description": "Temperature in kelvin"
+        },
+        "T_celsius": {
+          "type": "unknown",
+          "units": "degC",
+          "description": "Temperature in degrees Celsius. Accepted because degC and K share dimension and scale; the affine offset is not checked."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "speed_ms",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "speed_mph",
+              "ms_per_mph"
+            ]
+          }
+        },
+        {
+          "lhs": "total_length",
+          "rhs": {
+            "op": "+",
+            "args": [
+              "length",
+              {
+                "op": "*",
+                "args": [
+                  "length_km",
+                  "m_per_km"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "T_celsius",
+          "rhs": {
+            "op": "-",
+            "args": [
+              "T_kelvin",
+              273.15
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

@@ -38,6 +38,29 @@ class UnknownParameterError(EarthSciAstError, ValueError):
     """
 
 
+class AmbiguousOutputNameError(EarthSciAstError, KeyError):
+    """Raised when a name read from a result matches no variable exactly and its
+    last dotted segment is shared by more than one variable (CONFORMANCE_SPEC
+    §5.17.4) -- ``sol["O3"]`` when both ``Chem.O3`` and ``Sink.O3`` exist.
+
+    A last-segment match is accepted only when it designates exactly one
+    variable; choosing one of several, or returning all of them, would hand back
+    a variable the caller did not name. Subclasses ``KeyError`` so ``name in
+    sol`` and ``sol.get(name)`` keep their not-found behaviour.
+    """
+
+    def __init__(self, name: str, candidates: list[str]) -> None:
+        from .error_handling import AMBIGUOUS_OUTPUT_NAME
+
+        self.code = AMBIGUOUS_OUTPUT_NAME
+        self.name = name
+        self.candidates = list(candidates)
+        super().__init__(
+            f"{name!r} names no variable exactly, and its last segment is shared by "
+            f"{', '.join(self.candidates)}; name one of them in full"
+        )
+
+
 class AmbiguousParameterError(UnknownParameterError):
     """Raised when a ``parameter_overrides`` key is a DOTTED SUFFIX of two or
     more of the flattened system's parameters (esm-spec §6.6.2 rule 4) — a

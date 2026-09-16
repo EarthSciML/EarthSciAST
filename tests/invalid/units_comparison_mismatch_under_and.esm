@@ -1,0 +1,77 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "UnitsComparisonMismatchUnderAnd",
+    "description": "Invalid: an ifelse condition is an and whose first operand compares a length with a mass. A boolean connective places no requirement on its operands' units, but a mismatch inside an operand is still reported (esm-spec §4.8.3).",
+    "authors": [
+      "Chris Tessum with Claude"
+    ],
+    "created": "2026-09-15T00:00:00Z"
+  },
+  "models": {
+    "BadUnitsModel": {
+      "variables": {
+        "x": {
+          "type": "parameter",
+          "units": "m",
+          "default": 2.0,
+          "description": "A length"
+        },
+        "y": {
+          "type": "parameter",
+          "units": "m",
+          "default": 3.0,
+          "description": "Another length"
+        },
+        "z": {
+          "type": "parameter",
+          "units": "kg",
+          "default": 4.0,
+          "description": "A mass"
+        },
+        "c": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.0,
+          "description": "A dimensionless switch"
+        },
+        "selected": {
+          "type": "unknown",
+          "units": "m",
+          "description": "Invalid: selected by and(x > z, c > 0)"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "selected",
+          "rhs": {
+            "op": "ifelse",
+            "args": [
+              {
+                "op": "and",
+                "args": [
+                  {
+                    "op": ">",
+                    "args": [
+                      "x",
+                      "z"
+                    ]
+                  },
+                  {
+                    "op": ">",
+                    "args": [
+                      "c",
+                      0
+                    ]
+                  }
+                ]
+              },
+              "x",
+              "y"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

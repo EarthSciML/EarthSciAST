@@ -404,11 +404,109 @@ fn test_undefined_variable_contexts() {
             "undefined_variable_in_nested_expr",
             include_str!("../../../tests/invalid/undefined_variable_in_nested_expr.esm"),
         ),
+        (
+            "undefined_variable_in_reaction_system_continuous_event_condition",
+            include_str!(
+                "../../../tests/invalid/undefined_variable_in_reaction_system_continuous_event_condition.esm"
+            ),
+        ),
+        (
+            "undefined_variable_in_reaction_system_assertion_reference",
+            include_str!(
+                "../../../tests/invalid/undefined_variable_in_reaction_system_assertion_reference.esm"
+            ),
+        ),
+        (
+            "undefined_variable_in_reaction_system_constraint_equation",
+            include_str!(
+                "../../../tests/invalid/undefined_variable_in_reaction_system_constraint_equation.esm"
+            ),
+        ),
+        (
+            "undefined_variable_in_reaction_system_discrete_event_trigger",
+            include_str!(
+                "../../../tests/invalid/undefined_variable_in_reaction_system_discrete_event_trigger.esm"
+            ),
+        ),
     ];
 
     for (name, fixture) in fixtures {
         assert_fixture_structurally_rejected(name, fixture, StructuralErrorCode::UndefinedVariable);
     }
+}
+
+/// esm-spec §6.6.2, §6.6.3, §6.6.5: an inline test's assertion target, override
+/// keys and assertion rank are checked at validation, each fixture reporting its
+/// pinned code at its pinned pointer (tests/invalid/expected_errors.json).
+#[test]
+fn test_inline_test_static_checks() {
+    let cases = [
+        (
+            "undefined_variable_in_assertion_variable",
+            include_str!("../../../tests/invalid/undefined_variable_in_assertion_variable.esm"),
+            "undefined_variable",
+            "/models/TestModel/tests/0/assertions/0/variable",
+        ),
+        (
+            "unknown_override_key_parameter_overrides",
+            include_str!("../../../tests/invalid/unknown_override_key_parameter_overrides.esm"),
+            "unknown_override_key",
+            "/models/TestModel/tests/0/parameter_overrides/kx",
+        ),
+        (
+            "unknown_override_key_initial_conditions",
+            include_str!("../../../tests/invalid/unknown_override_key_initial_conditions.esm"),
+            "unknown_override_key",
+            "/models/TestModel/tests/0/initial_conditions/yy",
+        ),
+        (
+            "unknown_override_key_reaction_system",
+            include_str!("../../../tests/invalid/unknown_override_key_reaction_system.esm"),
+            "unknown_override_key",
+            "/reaction_systems/TestReactions/tests/0/parameter_overrides/kx",
+        ),
+        (
+            "assertion_rank_mismatch_pointwise_on_shaped",
+            include_str!("../../../tests/invalid/assertion_rank_mismatch_pointwise_on_shaped.esm"),
+            "assertion_rank_mismatch",
+            "/models/TestModel/tests/0/assertions/0",
+        ),
+        (
+            "assertion_rank_mismatch_reduce_on_scalar",
+            include_str!("../../../tests/invalid/assertion_rank_mismatch_reduce_on_scalar.esm"),
+            "assertion_rank_mismatch",
+            "/models/TestModel/tests/0/assertions/0",
+        ),
+    ];
+    for (name, fixture, code, path) in cases {
+        let esm_file = load_string(fixture)
+            .unwrap_or_else(|e| panic!("{name} must load, but load_string failed: {e}"));
+        let found: Vec<(String, String)> = validate(&esm_file)
+            .structural_errors
+            .iter()
+            .map(|e| (e.code.to_string(), e.path.clone()))
+            .collect();
+        assert_eq!(
+            found,
+            vec![(code.to_string(), path.to_string())],
+            "{name} must report exactly its pinned finding"
+        );
+    }
+}
+
+/// Every spelling the inline-test static checks must accept validates clean.
+#[test]
+fn test_inline_test_static_check_spellings_are_accepted() {
+    let esm_file = load_string(include_str!(
+        "../../../tests/valid/inline_test_static_check_spellings.esm"
+    ))
+    .expect("the spellings fixture must load");
+    let found: Vec<(String, String)> = validate(&esm_file)
+        .structural_errors
+        .iter()
+        .map(|e| (e.code.to_string(), e.path.clone()))
+        .collect();
+    assert!(found.is_empty(), "unexpected findings: {found:?}");
 }
 
 /// Test undefined system reference
@@ -1468,4 +1566,51 @@ fn a_subsystem_declaration_is_covered() {
         )]
     );
     assert!(!validate(&load_string(fixture).unwrap()).is_valid);
+}
+
+// ---------------------------------------------------------------------------
+// esm-spec §6.3 — inline array data is only a SHAPED variable's value.
+//
+// On a variable with no `shape` there is nothing for the array to fill and no
+// scalar reading of it. The build pipeline used to bind such a parameter to a
+// fabricated 0.0 and now keeps it out of scope; `array_default_without_shape`
+// rejects the declaration at load instead.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn an_array_default_on_an_unshaped_variable_is_rejected() {
+    let fixture = include_str!("../../../tests/invalid/array_default_without_shape.esm");
+    let result =
+        validate(&load_string(fixture).expect("fixture must load: the rule is a TYPED check"));
+    let mut found: Vec<(String, String)> = result
+        .structural_errors
+        .iter()
+        .filter(|e| matches!(e.code, StructuralErrorCode::ArrayDefaultWithoutShape))
+        .map(|e| {
+            (
+                e.path.clone(),
+                e.details["variable_type"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string(),
+            )
+        })
+        .collect();
+    found.sort();
+    // The top-level parameter and the subsystem's unknown, and NOT the shaped
+    // control `w`, which carries the same data legally.
+    assert_eq!(
+        found,
+        vec![
+            (
+                "/models/Decay/subsystems/Inner/variables/x/default".to_string(),
+                "unknown".to_string()
+            ),
+            (
+                "/models/Decay/variables/k/default".to_string(),
+                "parameter".to_string()
+            ),
+        ]
+    );
+    assert!(!result.is_valid);
 }
