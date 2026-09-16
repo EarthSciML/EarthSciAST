@@ -4444,6 +4444,7 @@ Bindings MUST emit the following stable diagnostic codes (cross-language uniform
 | `template_import_unresolved` | An import `ref` failed to load or parse (reports path/URL and cause) (§9.7.2). |
 | `template_import_not_library` | Import target is not a pure template-library file (§9.7.1). |
 | `subsystem_ref_is_template_library` | A §4.7 subsystem `ref` targets a template-library file. |
+| `template_library_illegal_payload` | A document carries top-level `expression_templates` beside `models`, `reaction_systems`, `data_sources`, `coupling`, or `domain` (§9.7.1). Rewrite rules are component-local (§9.6.3 constraint 4), so the block would be visible to no component; loading MUST fail rather than leave the templates silently inert. The message MUST name the offending keys. The import-edge form of the same purity rule is `template_import_not_library`. |
 | `template_inject_target_unknown` | A `CouplingEntry.expression_template_imports` key (§9.7.10) names no system referenced by that entry. |
 | `template_inject_target_not_component` | A coupling-entry injection key (§9.7.10) resolves to something that is neither a model nor a reaction system. |
 | `subsystem_index_set_conflict` | A §4.7 ref mount's merged top-level `index_sets` name collides with a non-deep-equal definition in the importing document's registry — at **either** mount form, a `subsystems.<k>` ref or a top-level `models.<k>` ref (§4.7 "Two mount forms, one mechanism" / "Index-set merge"; the subsystem-edge mirror of `template_import_index_set_conflict`). The message MUST name both contributors, both definitions, and the `index_set_rename` remedy. |
@@ -4634,7 +4635,7 @@ This section makes `expression_templates` shareable across files and components,
 
 #### 9.7.1 Template-library files
 
-A **template-library file** is a valid ESM document (`esm`, `metadata`) whose payload is top-level `expression_templates` (required, non-empty), plus optionally top-level `index_sets`, `metaparameters` (§9.7.6), and `expression_template_imports` (libraries may layer on other libraries). It MUST NOT declare `models`, `reaction_systems`, `data_sources`, `coupling`, or `domain`. Purity keeps the two reference mechanisms disjoint: a §4.7 subsystem file is never importable as a library (`template_import_not_library`), and a library file is never includable as a subsystem (`subsystem_ref_is_template_library`). This file kind is also the one that selects the **generic** load mode of §9.6.4 rule 5: a library loaded as the root with no loader-API metaparameter bindings (an empty binding set and an absent one being the same signal — §9.6.4 rule 5) keeps its metaparameters open and its structural integer sites symbolic, and round-trips to itself; loaded through an import edge, or with a non-empty binding set, it instantiates and folds like any other document.
+A **template-library file** is a valid ESM document (`esm`, `metadata`) whose payload is top-level `expression_templates` (required, non-empty), plus optionally top-level `index_sets`, `metaparameters` (§9.7.6), and `expression_template_imports` (libraries may layer on other libraries). It MUST NOT declare `models`, `reaction_systems`, `data_sources`, `coupling`, or `domain`; a document that carries top-level `expression_templates` beside any of these is rejected at load with `template_library_illegal_payload` — the block would be visible to no component (§9.6.3 constraint 4), so it is refused rather than silently ignored. Purity keeps the two reference mechanisms disjoint: a §4.7 subsystem file is never importable as a library (`template_import_not_library`), and a library file is never includable as a subsystem (`subsystem_ref_is_template_library`). This file kind is also the one that selects the **generic** load mode of §9.6.4 rule 5: a library loaded as the root with no loader-API metaparameter bindings (an empty binding set and an absent one being the same signal — §9.6.4 rule 5) keeps its metaparameters open and its structural integer sites symbolic, and round-trips to itself; loaded through an import edge, or with a non-empty binding set, it instantiates and folds like any other document.
 
 #### 9.7.2 The `expression_template_imports` field
 
@@ -4728,7 +4729,7 @@ The conformance fixture `tests/conformance/expression_templates/import_smoke/` i
 
 #### 9.7.9 Diagnostics
 
-The §9.7 diagnostic codes are listed in the §9.6.6 table (`template_import_*` — including the §9.7.7 `template_import_rename_*` / `template_import_rebind_*` codes — `template_body_expansion_too_deep`, `metaparameter_*`, `subsystem_ref_is_template_library`).
+The §9.7 diagnostic codes are listed in the §9.6.6 table (`template_import_*` — including the §9.7.7 `template_import_rename_*` / `template_import_rebind_*` codes — `template_body_expansion_too_deep`, `metaparameter_*`, `subsystem_ref_is_template_library`, `template_library_illegal_payload`).
 
 #### 9.7.10 Scope-directed template injection
 

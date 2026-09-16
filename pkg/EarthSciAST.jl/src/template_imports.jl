@@ -105,6 +105,28 @@ systems / loaders / coupling / domain) is checked separately at import edges.
 _is_template_library_doc(raw) =
     _is_object(raw) && _raw_haskey(raw, "expression_templates")
 
+"""
+    _reject_impure_template_library(raw_data)
+
+A document carrying top-level `expression_templates` is a template-library file
+(esm-spec §9.7.1), which MUST NOT declare `models`, `reaction_systems`,
+`data_sources`, `coupling`, or `domain`. Rewrite rules are component-local
+(§9.6.3 constraint 4), so beside a component the block is visible to nothing:
+the document is rejected with `template_library_illegal_payload` rather than
+loaded with the templates silently inert. An import target is held to the same
+rule at the edge, as `template_import_not_library`.
+"""
+function _reject_impure_template_library(raw_data)
+    _is_template_library_doc(raw_data) || return
+    present = [k for k in _LIBRARY_FORBIDDEN_KEYS if _raw_haskey(raw_data, k)]
+    isempty(present) && return
+    throw(ExpressionTemplateError(
+        ERROR_CODES.TEMPLATE_LIBRARY_ILLEGAL_PAYLOAD,
+        "top-level `expression_templates` makes this document a template-library file, which MUST NOT declare " *
+        join(("`$k`" for k in present), ", ") *
+        " (esm-spec §9.7.1); templates declared there are visible to no component. Declare them in the component's own `expression_templates` block (§9.6.1), or move them to a template-library file and import it with `expression_template_imports` (§9.7.2)"))
+end
+
 # ---------------------------------------------------------------------------
 # Metaparameters (esm-spec §9.7.6)
 # ---------------------------------------------------------------------------

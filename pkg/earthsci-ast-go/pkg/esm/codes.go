@@ -58,6 +58,11 @@ const (
 	// COUPLING library (§10.9). The two library kinds are imported through
 	// different blocks and are not interchangeable.
 	CodeTemplateImportIsCouplingLibrary = "template_import_is_coupling_library"
+	// CodeTemplateLibraryIllegalPayload: a document carries top-level
+	// `expression_templates` beside `models` / `reaction_systems` /
+	// `data_sources` / `coupling` / `domain`, which a template-library file
+	// never declares (esm-spec §9.7.1).
+	CodeTemplateLibraryIllegalPayload = "template_library_illegal_payload"
 	// CodeTemplateImportRenameInvalid: an import's `rename` / `rebind` entry is
 	// malformed — not an object, or an entry whose key or value is not a
 	// non-empty string.

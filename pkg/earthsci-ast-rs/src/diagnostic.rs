@@ -200,6 +200,9 @@ diagnostic_code_registry! {
     TEMPLATE_INJECT_TARGET_NOT_COMPONENT = "template_inject_target_not_component";
     /// An `inject` whose target names nothing in the importing document.
     TEMPLATE_INJECT_TARGET_UNKNOWN = "template_inject_target_unknown";
+    /// A document carrying top-level `expression_templates` beside a component
+    /// payload, which a template-library file never declares (esm-spec §9.7.1).
+    TEMPLATE_LIBRARY_ILLEGAL_PAYLOAD = "template_library_illegal_payload";
 
     // ---- coupling libraries: §9.7 coupling-library imports
     //      (`coupling_imports.rs`) ----
@@ -632,6 +635,7 @@ mod error_code_tests {
             "template_inject_target_is_loader",
             "template_inject_target_not_component",
             "template_inject_target_unknown",
+            "template_library_illegal_payload",
             "toplevel_model_ref_unresolved",
             "undefined_index_set",
             "undefined_operator",

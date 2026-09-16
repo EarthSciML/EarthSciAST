@@ -1230,7 +1230,7 @@ func TestTemplateImports_InvalidFixtures(t *testing.T) {
 	// declares >= 1.0.0 > 0.8.0 — so the gate is permanently satisfied. The
 	// gate function itself is still live and unit-tested directly.
 	for _, code := range []string{
-		"template_import_not_library",
+		"template_import_not_library", "template_library_illegal_payload",
 		"subsystem_ref_is_template_library", "template_import_cycle",
 		"template_import_name_conflict", "template_import_unknown_name",
 		"template_import_index_set_conflict",
@@ -1596,6 +1596,26 @@ func TestTemplateImports_VersionGateFlagsEveryConstruct(t *testing.T) {
       "expression_templates": {"t": {"params": [], "body": 1}}}`)
 	if err := RejectTemplateImportsPreV08(ok); err != nil {
 		t.Errorf("0.8.0 file must pass the gate, got: %v", err)
+	}
+}
+
+// A top-level `expression_templates` block makes the document a
+// template-library file, which declares none of these keys (esm-spec §9.7.1).
+// Rules are component-local (§9.6.3 constraint 4), so beside a component the
+// block would be visible to nothing; loading refuses it instead.
+func TestTemplateImports_RootTemplatesBesideComponentPayloadRejected(t *testing.T) {
+	head := `{"esm": "1.0.0", "metadata": {"name": "impure"}, "expression_templates": {"double": {"params": ["a"], "body": {"op": "*", "args": [2, "a"]}}}, `
+	for _, tc := range []struct{ key, snippet string }{
+		{"models", `"models": {"M": {"variables": {"x": {"type": "unknown", "default": 1.0}}, "equations": []}}`},
+		{"reaction_systems", `"reaction_systems": {"R": {"species": {}, "reactions": []}}`},
+		{"data_sources", `"data_sources": {}`},
+		{"coupling", `"coupling": []`},
+		{"domain", `"domain": {"temporal": {}}`},
+	} {
+		_, err := LoadString(head + tc.snippet + "}")
+		if code := tiErrCode(t, err); code != "template_library_illegal_payload" {
+			t.Errorf("%s: code = %s; want template_library_illegal_payload", tc.key, code)
+		}
 	}
 }
 

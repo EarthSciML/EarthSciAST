@@ -184,6 +184,7 @@ const ERROR_CODES = (
     TEMPLATE_IMPORT_UNRESOLVED = "template_import_unresolved",
     TEMPLATE_IMPORT_NOT_LIBRARY = "template_import_not_library",
     TEMPLATE_IMPORT_IS_COUPLING_LIBRARY = "template_import_is_coupling_library",
+    TEMPLATE_LIBRARY_ILLEGAL_PAYLOAD = "template_library_illegal_payload",
     TEMPLATE_IMPORT_CYCLE = "template_import_cycle",
     TEMPLATE_IMPORT_NAME_CONFLICT = "template_import_name_conflict",
     TEMPLATE_IMPORT_UNKNOWN_NAME = "template_import_unknown_name",

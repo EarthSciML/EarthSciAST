@@ -316,6 +316,7 @@ export const ERROR_CODES = {
   TEMPLATE_IMPORT_VERSION_TOO_OLD: 'template_import_version_too_old',
   TEMPLATE_INJECT_TARGET_NOT_COMPONENT: 'template_inject_target_not_component',
   TEMPLATE_INJECT_TARGET_UNKNOWN: 'template_inject_target_unknown',
+  TEMPLATE_LIBRARY_ILLEGAL_PAYLOAD: 'template_library_illegal_payload',
 
   // ---- templates: geometry / makearray structural folds (also emitted from
   //      lower-expression-templates.ts during template lowering) ----
