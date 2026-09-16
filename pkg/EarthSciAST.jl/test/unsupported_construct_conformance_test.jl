@@ -12,6 +12,11 @@
 # refusal case must now fail with `unsupported_construct` naming the construct and
 # the evaluator; the control must still run. The ModelingToolkit export runs all
 # three constructs and is not covered.
+#
+# `flatten` also used to drop a REACTION SYSTEM's events outright, so the refusal
+# never fired for a reaction-system document and both the tree-walk evaluator and
+# the ModelingToolkit export ran it without its event; the two
+# `..._on_a_reaction_system` cases pin that.
 
 using Test
 using EarthSciAST
@@ -37,11 +42,16 @@ const _UC_EVALUATOR = "Julia tree-walk evaluator"
         @testset "$(case.id)" begin
             if case.expect == "refuse"
                 construct = String(case.construct)
-                # The build itself refuses, with the registered code. A
-                # multi-model document has no single model to select, so it is
-                # built the way `esm_problem` builds it: flattened first.
+                # The build itself refuses, with the registered code. Only a
+                # single-model document has a model to select; anything else —
+                # several models, or a reaction system, whose events reach the
+                # evaluator only through `flatten` — is built the way
+                # `esm_problem` builds it: flattened first.
                 doc = EarthSciAST.load_path(path)
-                target = length(doc.models) > 1 ? EarthSciAST.flatten(doc) : doc
+                n_models = doc.models === nothing ? 0 : length(doc.models)
+                n_rs = doc.reaction_systems === nothing ? 0 :
+                       length(doc.reaction_systems)
+                target = (n_models == 1 && n_rs == 0) ? doc : EarthSciAST.flatten(doc)
                 err = try
                     build_evaluator(target)
                     nothing
