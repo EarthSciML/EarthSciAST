@@ -136,6 +136,11 @@ class Solution:
         flattened names (``"O3"`` finds ``"Chem.O3"``), and finally against an
         array state's element spellings (``"u"`` finds the rows ``u[1]``,
         ``u[2]``, ... stacked in element order).
+
+        A trailing segment several variables share designates none of them and
+        raises :class:`~earthsci_ast.errors.AmbiguousOutputNameError`
+        (CONFORMANCE_SPEC §5.17.4). It subclasses ``KeyError``, so ``name in
+        sol`` and ``sol.get(name)`` keep their not-found behaviour.
         """
         if isinstance(key, (int, np.integer)):
             return np.asarray(self.y[int(key)])
