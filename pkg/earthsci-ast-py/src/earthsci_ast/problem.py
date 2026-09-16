@@ -66,7 +66,7 @@ from .flatten import (
     _has_array_op,
     flatten,
 )
-from .lower_table_lookup import lower_table_lookups
+from .lower_table_lookup import lower_flattened_table_lookups, lower_table_lookups
 from .numpy_interpreter import (
     _EVALUABLE_CORE_OPS,
     UnevaluableOperatorError,
@@ -568,7 +568,13 @@ def esm_problem(
     if file is not None:
         file = lower_table_lookups(file)
 
-    flat = input if isinstance(input, FlattenedSystem) else flatten(file)
+    # A caller-flattened system has no document, but `flatten` carries
+    # `function_tables` so that this carrier can be lowered too.
+    flat = (
+        lower_flattened_table_lookups(input)
+        if isinstance(input, FlattenedSystem)
+        else flatten(file)
+    )
 
     # esm-spec §4.7.6.12: an ODE backend MUST reject a system with a surviving
     # spatial dimension. A spatial independent variable means an unlowered
