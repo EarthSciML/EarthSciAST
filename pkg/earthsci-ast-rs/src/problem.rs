@@ -1871,7 +1871,7 @@ fn append_requested_observeds(prob: &EsmProblem, sol: &mut Solution, requested: 
     for (asked, values) in rows {
         // The returned key is the spelling that was ASKED FOR; it is the row
         // name because it is also what the caller will name in the output
-        // request, and the plan's both-ways match binds the two either way.
+        // request, where the plan matches it exactly.
         if sol.state_variable_names.contains(&asked) {
             continue;
         }
