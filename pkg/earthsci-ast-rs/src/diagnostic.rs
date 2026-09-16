@@ -330,6 +330,10 @@ diagnostic_code_registry! {
 
     /// A `ranges[*]`/expression reference to an undeclared array index set.
     ARRAY_SHAPE_MISMATCH = "array_shape_mismatch";
+    /// Inline ARRAY data as the `default` of a variable that declares no
+    /// `shape` (esm-spec §6.3). Inline array data is a shaped variable's value,
+    /// so with no shape there is nothing for the array to fill.
+    ARRAY_DEFAULT_WITHOUT_SHAPE = "array_default_without_shape";
     /// An equation graph that depends on itself.
     CIRCULAR_DEPENDENCY = "circular_dependency";
     /// A parameter `update` naming no declared data source.
@@ -379,8 +383,8 @@ diagnostic_code_registry! {
     RECURRENCE_NOT_WELLFOUNDED = "recurrence_not_wellfounded";
     /// A causal self-read the runtime cannot restrict to one cell.
     RECURRENCE_UNSUPPORTED_FORM = "recurrence_unsupported_form";
-    /// A discrete event or an implicit equation reached an evaluator that
-    /// cannot run it (esm-spec §9.6.6).
+    /// A continuous or discrete event, or an implicit equation, reached an
+    /// evaluator that cannot run it (esm-spec §9.6.6).
     UNSUPPORTED_CONSTRUCT = "unsupported_construct";
     /// A relational node in a continuous (ODE-position) expression.
     RELATIONAL_NODE_IN_CONTINUOUS = "relational_node_in_continuous";
@@ -531,6 +535,7 @@ mod error_code_tests {
             "apply_expression_template_recursive_body",
             "apply_expression_template_unknown_template",
             "apply_expression_template_version_too_old",
+            "array_default_without_shape",
             "array_shape_mismatch",
             "assertion_rank_mismatch",
             "circular_dependency",

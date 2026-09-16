@@ -329,8 +329,8 @@ function computeDimensions(
   // its inconsistency between DECLARED quantities (`length + mass`, `ln(mass)`,
   // `m^kg`), never via a literal. Literals still behave correctly where their
   // meaning IS determined: additively they are neutral and adopt their
-  // sibling's dimension (`T - 273.15` → K), an all-literal expression is
-  // dimensionless (`1 + 2`, `-1`), and an exponent is read by VALUE (`x^2`).
+  // sibling's dimension (`T - 273.15` → K), and an exponent is read by VALUE
+  // (`x^2`). A sum of nothing but literals (`1 + 2`) stays indeterminate.
   if (typeof expr === 'number' || isNumericLiteral(expr)) {
     return unknown()
   }
@@ -362,22 +362,20 @@ function computeDimensions(
     case '+':
     case '-': {
       // Compare only the operands we actually know; an unknown operand is
-      // skipped rather than defaulted. The result is the first known dimension
-      // (or unknown if none is).
+      // skipped rather than defaulted. The result is the first known dimension,
+      // or unknown if none is (esm-spec §4.8.3, §4.8.4): `x + 0.5 * y` has the
+      // unit of `x`, while `1 + 2` is indeterminate, not dimensionless. A unary
+      // `+` or `-` therefore carries its operand's unit unchanged.
       //
       // A BARE NUMERIC LITERAL in additive position is dimensionally NEUTRAL,
-      // not dimensionless: it adopts the dimension of what it is added to. This
-      // is how physical models are actually written — `T - 273.15`, `1 - phi`,
-      // `biomass + 0.5` — where the literal silently carries the sibling's
-      // unit. Treating it as dimensionless instead reported a mismatch on every
-      // such line in the valid corpus. It costs no real coverage: a genuine
-      // inconsistency (`length + mass`) is between two DECLARED quantities, and
-      // is still caught.
+      // not dimensionless: being indeterminate, it is skipped and adopts the
+      // dimension of what it is added to. This is how physical models are
+      // actually written — `T - 273.15`, `1 - phi`, `biomass + 0.5` — where the
+      // literal silently carries the sibling's unit. It costs no real coverage:
+      // a genuine inconsistency (`length + mass`) is between two DECLARED
+      // quantities, and is still caught.
       let first: ParsedUnit | null = null
-      let sawNonLiteral = false
       for (let i = 0; i < argDims.length; i++) {
-        if (literalValue(args[i]) !== null) continue
-        sawNonLiteral = true
         const other = get(i)
         if (other === null) continue
         if (first === null) {
@@ -396,8 +394,6 @@ function computeDimensions(
           )
         }
       }
-      // Every operand was a literal (`1 + 2`, or a unary `-1`) ⇒ dimensionless.
-      if (!sawNonLiteral) return finish(dimensionless())
       return finish(first)
     }
 
@@ -631,12 +627,9 @@ function computeDimensions(
       }
       // `max(x, 0)` / `min(rate, 1e-6)` clamp against a bare literal that
       // carries the operand's implicit unit — literals are neutral here for the
-      // same reason they are in `+`/`-`.
+      // same reason they are in `+`/`-`, and `min(1, 2)` is indeterminate.
       let ref: ParsedUnit | null = null
-      let sawNonLiteral = false
       for (let i = 0; i < argDims.length; i++) {
-        if (literalValue(args[i]) !== null) continue
-        sawNonLiteral = true
         const other = get(i)
         if (other === null) continue
         if (ref === null) {
@@ -655,7 +648,6 @@ function computeDimensions(
           )
         }
       }
-      if (!sawNonLiteral) return finish(dimensionless())
       return finish(ref)
     }
 
@@ -665,13 +657,9 @@ function computeDimensions(
         warn(arity, ERROR_CODES.ANALYSIS)
         return unknown()
       }
-      const cond = get(0)
-      if (cond !== null && !isDimensionless(cond)) {
-        warn(
-          `ifelse() condition must be dimensionless, got ${formatDims(cond.dims)}`,
-          ERROR_CODES.ANALYSIS,
-        )
-      }
+      // The condition is not part of the result unit and need not be
+      // dimensionless (esm-spec §4.8.3). It is still walked above, so a finding
+      // inside it — `ifelse(x [m] > z [kg], a, b)` — is still reported.
       const a = get(1)
       const b = get(2)
       if (a !== null && b !== null && !dimsEqual(a.dims, b.dims)) {
@@ -718,15 +706,10 @@ function computeDimensions(
     case 'and':
     case 'or':
     case 'not':
-      for (let i = 0; i < argDims.length; i++) {
-        const arg = get(i)
-        if (arg !== null && !isDimensionless(arg)) {
-          warn(
-            `${op} requires dimensionless arguments, got ${formatDims(arg.dims)}`,
-            ERROR_CODES.ANALYSIS,
-          )
-        }
-      }
+      // The result is a dimensionless boolean. The operands carry no unit
+      // requirement of their own — `and(x [m], z [kg])` is not an error
+      // (esm-spec §4.8.3) — but they are walked above, so a mismatch inside one
+      // (`not(x [m] > z [kg])`) is still reported.
       return finish(dimensionless())
 
     case 'Pre':

@@ -71,7 +71,7 @@ fn run(file: &EsmFile, test: &ModelTest) -> Solution {
         alg: Alg::Bdf,
         abstol: Some(1e-12),
         reltol: Some(1e-10),
-        maxiters: 1_000_000,
+        maxiters: Some(1_000_000),
         saveat: Some(times),
         ..Default::default()
     };
@@ -153,7 +153,7 @@ fn wildfire_regrid_trajectory_and_constant_states() {
         alg: Alg::Bdf,
         abstol: Some(1e-12),
         reltol: Some(1e-10),
-        maxiters: 1_000_000,
+        maxiters: Some(1_000_000),
         saveat: Some(vec![0.0, 3600.0]),
         ..Default::default()
     };

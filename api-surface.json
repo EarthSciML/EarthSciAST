@@ -93,17 +93,17 @@
     }
   },
   "counts": {
-    "symbols": 906,
+    "symbols": 909,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
       "julia": 302,
       "typescript": 239,
       "python": 250,
-      "rust": 339,
-      "go": 431
+      "rust": 341,
+      "go": 432
     },
     "by_tier": {
-      "extension": 633,
+      "extension": 636,
       "stable": 273
     }
   },
@@ -2955,6 +2955,22 @@
       }
     },
     {
+      "name": "equation_dimension_verdict",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "equation_dimension_verdict"
+      }
+    },
+    {
+      "name": "equation_dimension_verdict",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "EquationDimensionVerdict"
+      }
+    },
+    {
       "name": "equation_unit_findings",
       "kind": "function",
       "tier": "extension",
@@ -3000,6 +3016,14 @@
       "tier": "extension",
       "bindings": {
         "julia": "ERROR"
+      }
+    },
+    {
+      "name": "error_array_default_without_shape",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "ErrorArrayDefaultWithoutShape"
       }
     },
     {

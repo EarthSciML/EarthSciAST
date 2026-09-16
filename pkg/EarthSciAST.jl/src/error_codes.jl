@@ -94,6 +94,10 @@ const ERROR_CODES = (
     # silently receives the implicit symbol — the simulation clock in place of
     # the declared quantity.
     RESERVED_VARIABLE_NAME = "reserved_variable_name",
+    # Inline array data as the `default` of a variable that declares no `shape`
+    # (esm-spec §6.3). Inline array data is a SHAPED variable's value, so with no
+    # shape there is nothing for the array to fill.
+    ARRAY_DEFAULT_WITHOUT_SHAPE = "array_default_without_shape",
     SYSTEM_KIND_MISMATCH = "system_kind_mismatch",
     UNDEFINED_INDEX_SET = "undefined_index_set",
     UNDEFINED_OPERATOR = "undefined_operator",
@@ -288,11 +292,11 @@ const ERROR_CODES = (
     # producer could not be materialized at build (esm-spec §9.6.6). Refused
     # rather than contracted as an empty range, which would read as 0.
     DERIVED_INDEX_SET_UNMATERIALIZED = "derived_index_set_unmaterialized",
-    # ── Evaluator refusal (tree_walk/; esm-spec §9.6.6). A discrete event or an
-    #    implicit equation reached the tree-walk evaluator, which runs neither.
-    #    Refused at build rather than skipped, because a run without the
-    #    construct reports the initial value as its answer. The ModelingToolkit
-    #    export runs both and never raises it. ─────────────────────────────────
+    # ── Evaluator refusal (tree_walk/; esm-spec §9.6.6). A continuous event, a
+    #    discrete event or an implicit equation reached the tree-walk evaluator,
+    #    which runs none of them. Refused at build rather than skipped, because a
+    #    run without the construct reports a wrong answer. The ModelingToolkit
+    #    export runs all three and never raises it. ───────────────────────────
     UNSUPPORTED_CONSTRUCT = "unsupported_construct",
 )
 

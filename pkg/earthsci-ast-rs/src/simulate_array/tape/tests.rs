@@ -1477,7 +1477,7 @@ fn export_demotion_skips_unread_publishes() {
     };
 
     // Demoted (production default for a no-fallback model outside check
-    // mode): the export target array stays at its zero prealloc.
+    // mode): the export is never published into the observed map.
     let mut ctx = super::exec::TapeCtx::new(
         std::rc::Rc::new(prog),
         std::rc::Rc::new(compiled.observed_rules.clone()),
@@ -1488,10 +1488,8 @@ fn export_demotion_skips_unread_publishes() {
     let mut dy = vec![0.0f64; 1];
     run_call(&mut ctx, &mut dy);
     assert_eq!(dy[0].to_bits(), (-3.0f64).to_bits());
-    let s = ctx.exec.obs.get("s").expect("export array preallocated");
-    assert_eq!(
-        s[ndarray::IxDyn(&[])].to_bits(),
-        0.0f64.to_bits(),
+    assert!(
+        !ctx.exec.obs.contains_key("s"),
         "demoted export must not publish"
     );
 
@@ -1507,6 +1505,161 @@ fn export_demotion_skips_unread_publishes() {
         3.0f64.to_bits(),
         "active export must publish the slot value"
     );
+}
+
+/// The fail-closed layer behind the export-ordering gate (CONFORMANCE_SPEC
+/// §5.23.1(2), §5.19.4). `compute_exports` places a taped observed's `Export`
+/// before the `Fallback` that reads it; this test builds the program a route
+/// that missed that gate would produce — the `Export` moved to just after its
+/// reader — and requires the read to FAULT naming the observed rather than
+/// resolve to a number: not a ghost `0.0` on the first call, and not the
+/// previous call's published value on a later one. Both executors must reach
+/// the same verdict (§5.23.1(3)).
+#[test]
+fn unpublished_export_read_by_a_fallback_fails_closed() {
+    let n = 3;
+    let doc = json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_unpublished_export"},
+        "index_sets": {"c": {"kind": "interval", "size": n}},
+        "models": {"M": {
+            "variables": {
+                "psi": {"type": "unknown", "shape": ["c"]},
+                "s": {"type": "unknown", "shape": ["c"]},
+                "k": {"type": "unknown", "shape": ["c"]}
+            },
+            "equations": [
+                // Taped, and exported because the fallback below reads it.
+                {"lhs": "s", "rhs": {"op": "+", "args": [1.0, "psi"]}},
+                // A causal recurrence: never taped (§5.19.2), so a Fallback.
+                {"lhs": "k", "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                    "ranges": {"i": [1, n]},
+                    "expr": {"op": "ifelse", "args": [
+                        {"op": "<=", "args": ["i", 1]},
+                        idx("s", json!("i")),
+                        {"op": "+", "args": [
+                            idx("s", json!("i")),
+                            {"op": "*", "args": [
+                                0.5, idx("k", json!({"op": "-", "args": ["i", 1]}))]}
+                        ]}
+                    ]}}},
+                {"lhs": {"op": "ic", "args": ["psi"]}, "rhs": 0.0},
+                {"lhs": {"op": "D", "args": ["psi"], "wrt": "t"},
+                 "rhs": {"op": "neg", "args": ["k"]}}
+            ]
+        }}
+    });
+    let compiled = compile(doc);
+    let nstates = compiled.state_variable_names().len();
+    let params = HashMap::new();
+    let param_vec = compiled.debug_resolve_params(&params);
+    let state = seeded_state(nstates, 7, -1.0, 1.0);
+
+    // Positions of the `Export` publishing `s` and of the `Fallback` reading it.
+    let locate = |prog: &TapeProgram| {
+        let e = prog
+            .exports
+            .iter()
+            .position(|(n, _)| n == "s")
+            .expect("fixture must export `s`") as u32;
+        let export_pc = prog
+            .instrs
+            .iter()
+            .position(|i| matches!(i, Instr::Export { export, .. } if *export == e))
+            .expect("an Export for `s`");
+        let fallback_pc = prog
+            .instrs
+            .iter()
+            .position(|i| matches!(i, Instr::Fallback { .. }))
+            .expect("the recurrence is a Fallback");
+        (export_pc, fallback_pc)
+    };
+    let fast_call = |prog: TapeProgram, dy: &mut [f64], calls: usize| -> Vec<Option<String>> {
+        let mut ctx = super::exec::TapeCtx::new(
+            std::rc::Rc::new(prog),
+            std::rc::Rc::new(compiled.observed_rules.clone()),
+        );
+        (0..calls)
+            .map(|_| {
+                let _ = super::super::take_const_array_oob();
+                let mut stats = RhsStats::default();
+                let call = super::super::RhsCall {
+                    rhs_rules: &compiled.rhs_rules,
+                    observed_rules: &compiled.observed_rules,
+                    var_shapes: &compiled.var_shapes,
+                    param_names: &compiled.param_names,
+                    state: &state,
+                    params: &param_vec,
+                    forcing: &compiled.forcing,
+                    t: 0.0,
+                    declared: &compiled.declared_names,
+                };
+                dy.fill(0.0);
+                super::exec::run_tape_call(
+                    &mut ctx,
+                    &call,
+                    &super::super::ArrMap::default(),
+                    &compiled.const_scope,
+                    dy,
+                    &mut stats,
+                );
+                super::super::take_const_array_oob()
+            })
+            .collect()
+    };
+
+    // Control: the gate's ordering runs clean on both executors, and they agree.
+    let (good, report) = compiled.build_tape(&HashSet::new());
+    assert_eq!(report.fallbacks.len(), 1, "{:?}", report.fallbacks);
+    let (export_pc, fallback_pc) = locate(&good);
+    assert!(
+        export_pc < fallback_pc,
+        "the gate publishes `s` before its reader"
+    );
+    let cont = good.section_range(Cadence::Continuous);
+    assert!(cont.contains(&export_pc) && cont.contains(&fallback_pc));
+    assert!(
+        good.instrs[export_pc..fallback_pc]
+            .iter()
+            .all(|i| !matches!(i, Instr::JmpIfZero { .. })),
+        "moving the Export must not cross a branch region"
+    );
+    let _ = super::super::take_const_array_oob();
+    let mut dy_ref = vec![0.0f64; nstates];
+    run_reference(&good, &compiled, &state, &param_vec, 0.0, &mut dy_ref);
+    assert_eq!(super::super::take_const_array_oob(), None);
+    let mut dy_fast = vec![0.0f64; nstates];
+    for fault in fast_call(good, &mut dy_fast, 2) {
+        assert_eq!(fault, None);
+    }
+    for (k, (a, b)) in dy_fast.iter().zip(dy_ref.iter()).enumerate() {
+        assert_eq!(a.to_bits(), b.to_bits(), "dy[{k}]: {a:?} vs {b:?}");
+    }
+
+    // The route that missed the gate: `Export` moved to just after its reader.
+    let (mut bad, _) = compiled.build_tape(&HashSet::new());
+    let instr = bad.instrs.remove(export_pc);
+    let prov = bad.provenance.remove(export_pc);
+    bad.instrs.insert(fallback_pc, instr);
+    bad.provenance.insert(fallback_pc, prov);
+    let (moved_export, moved_fallback) = locate(&bad);
+    assert!(moved_fallback < moved_export);
+
+    let names_s = |fault: &Option<String>| {
+        fault
+            .as_deref()
+            .is_some_and(|m| m.contains("E_TREEWALK_UNRESOLVED_ORDER") && m.contains("'s'"))
+    };
+    let _ = super::super::take_const_array_oob();
+    let mut dy = vec![0.0f64; nstates];
+    run_reference(&bad, &compiled, &state, &param_vec, 0.0, &mut dy);
+    let ref_fault = super::super::take_const_array_oob();
+    assert!(names_s(&ref_fault), "reference executor: {ref_fault:?}");
+    // Two calls on one warm executor: the first read would meet the zero
+    // prealloc, the second the value the first call published.
+    for (call, fault) in fast_call(bad, &mut dy, 2).iter().enumerate() {
+        assert!(names_s(fault), "fast executor call {call}: {fault:?}");
+    }
 }
 
 /// Step 4b superop composition: arith three-op chains must merge into `Bin3`

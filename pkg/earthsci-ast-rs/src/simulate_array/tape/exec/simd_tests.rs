@@ -340,14 +340,15 @@ fn drive(with_nan: bool) {
         outbufs
     };
 
+    // Every wider clone this host can run is compared bit-for-bit against the
+    // generic executor. Non-x86 targets build only the generic path, so there
+    // the test checks just that it runs.
     let reference = run_level(0);
-    let mut levels_checked = 0;
     #[cfg(target_arch = "x86_64")]
     {
         if std::arch::is_x86_feature_detected!("avx2") {
             let got = run_level(1);
             assert_bits_eq(&reference, &got, "avx2", with_nan);
-            levels_checked += 1;
         }
         if std::arch::is_x86_feature_detected!("avx512f")
             && std::arch::is_x86_feature_detected!("avx512vl")
@@ -356,12 +357,10 @@ fn drive(with_nan: bool) {
         {
             let got = run_level(2);
             assert_bits_eq(&reference, &got, "avx512", with_nan);
-            levels_checked += 1;
         }
     }
-    // On non-x86 hosts there is nothing to compare against — the test
-    // degenerates to "the generic path runs" (levels_checked = 0).
-    let _ = levels_checked;
+    #[cfg(not(target_arch = "x86_64"))]
+    let _ = reference;
 }
 
 /// Strict byte equality: NaN-free adversarial inputs (±inf, ±0,
@@ -380,6 +379,7 @@ fn simd_clone_bit_identity_nan_inputs() {
     drive(true);
 }
 
+#[cfg(target_arch = "x86_64")]
 fn assert_bits_eq(want: &[Vec<f64>], got: &[Vec<f64>], label: &str, nan_class: bool) {
     for (op, (w, g)) in want.iter().zip(got.iter()).enumerate() {
         for (k, (a, b)) in w.iter().zip(g.iter()).enumerate() {

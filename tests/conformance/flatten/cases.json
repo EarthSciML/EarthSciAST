@@ -3959,6 +3959,543 @@
       "lifted_shapes": {}
     },
     {
+      "id": "tendency_resolution",
+      "tier": "rhs_time_derivative",
+      "fixture": "conformance/rhs_time_derivative/fixtures/tendency_resolution.esm",
+      "system_kind": "ode",
+      "independent_variables": [
+        "t"
+      ],
+      "state_variables": [
+        {
+          "name": "M.x",
+          "role": "state",
+          "units": "kg",
+          "default": 2.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "M"
+        },
+        {
+          "name": "M.b",
+          "role": "state",
+          "units": "kg",
+          "default": 0.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "M"
+        },
+        {
+          "name": "M.l",
+          "role": "state",
+          "units": "m^2",
+          "default": 1.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "M"
+        },
+        {
+          "name": "Chem.A",
+          "role": "species",
+          "units": "mol/mol",
+          "default": 4.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Chem"
+        },
+        {
+          "name": "Chem.B",
+          "role": "species",
+          "units": "mol/mol",
+          "default": 0.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Chem"
+        }
+      ],
+      "parameters": [
+        {
+          "name": "M.kx",
+          "role": "parameter",
+          "units": "1/s",
+          "default": 3.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "M"
+        },
+        {
+          "name": "M.growth",
+          "role": "parameter",
+          "units": "kg/s",
+          "default": 5.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "M"
+        },
+        {
+          "name": "M.sla",
+          "role": "parameter",
+          "units": "m^2/kg",
+          "default": 2.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "M"
+        },
+        {
+          "name": "Chem.k",
+          "role": "parameter",
+          "units": "1/s",
+          "default": 0.5,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Chem"
+        }
+      ],
+      "observed_variables": [
+        {
+          "name": "M.dxdt",
+          "role": "observed",
+          "units": "kg/s",
+          "default": null,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "M"
+        },
+        {
+          "name": "M.dAdt",
+          "role": "observed",
+          "units": "mol/mol/s",
+          "default": null,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "M"
+        }
+      ],
+      "algebraic_variables": [],
+      "brownian_parameters": [],
+      "discrete_parameters": [],
+      "equation_count": 7,
+      "equations": [
+        {
+          "lhs": "D(M.x)/Dt",
+          "rhs": "(-M.kx) * M.x",
+          "source_system": "M"
+        },
+        {
+          "lhs": "M.dxdt",
+          "rhs": "(-M.kx) * M.x",
+          "source_system": "M"
+        },
+        {
+          "lhs": "D(M.b)/Dt",
+          "rhs": "M.growth",
+          "source_system": "M"
+        },
+        {
+          "lhs": "D(M.l)/Dt",
+          "rhs": "M.sla * M.growth",
+          "source_system": "M"
+        },
+        {
+          "lhs": "M.dAdt",
+          "rhs": "-1 * Chem.k * Chem.A",
+          "source_system": "M"
+        },
+        {
+          "lhs": "D(Chem.A)/Dt",
+          "rhs": "-1 * Chem.k * Chem.A",
+          "source_system": "Chem"
+        },
+        {
+          "lhs": "D(Chem.B)/Dt",
+          "rhs": "Chem.k * Chem.A",
+          "source_system": "Chem"
+        }
+      ],
+      "continuous_events": [],
+      "discrete_events": [],
+      "domain": {
+        "independent_variable": null,
+        "element_type": null,
+        "array_type": null
+      },
+      "metadata": {
+        "source_systems": [
+          "M",
+          "Chem"
+        ],
+        "coupling_rules": [],
+        "operator_applies": [],
+        "callbacks": []
+      },
+      "index_sets": [],
+      "function_tables": [],
+      "template_registry": [],
+      "field_ics": [],
+      "loader_fields": [],
+      "lifted_shapes": {}
+    },
+    {
+      "id": "merged_tendency",
+      "tier": "rhs_time_derivative",
+      "fixture": "conformance/rhs_time_derivative/fixtures/merged_tendency.esm",
+      "system_kind": "ode",
+      "independent_variables": [
+        "t"
+      ],
+      "state_variables": [
+        {
+          "name": "Chem.A",
+          "role": "species",
+          "units": "mol/mol",
+          "default": 4.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Chem"
+        },
+        {
+          "name": "Chem.B",
+          "role": "species",
+          "units": "mol/mol",
+          "default": 0.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Chem"
+        }
+      ],
+      "parameters": [
+        {
+          "name": "Sink.kd",
+          "role": "parameter",
+          "units": "1/s",
+          "default": 0.25,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Sink"
+        },
+        {
+          "name": "Chem.k",
+          "role": "parameter",
+          "units": "1/s",
+          "default": 0.5,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Chem"
+        }
+      ],
+      "observed_variables": [
+        {
+          "name": "M.dAdt",
+          "role": "observed",
+          "units": "mol/mol/s",
+          "default": null,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "M"
+        }
+      ],
+      "algebraic_variables": [],
+      "brownian_parameters": [],
+      "discrete_parameters": [],
+      "equation_count": 3,
+      "equations": [
+        {
+          "lhs": "M.dAdt",
+          "rhs": "-1 * Chem.k * Chem.A + (-Sink.kd) * Chem.A",
+          "source_system": "M"
+        },
+        {
+          "lhs": "D(Chem.A)/Dt",
+          "rhs": "-1 * Chem.k * Chem.A + (-Sink.kd) * Chem.A",
+          "source_system": "Chem"
+        },
+        {
+          "lhs": "D(Chem.B)/Dt",
+          "rhs": "Chem.k * Chem.A + (-Sink.kd) * Chem.B",
+          "source_system": "Chem"
+        }
+      ],
+      "continuous_events": [],
+      "discrete_events": [],
+      "domain": {
+        "independent_variable": null,
+        "element_type": null,
+        "array_type": null
+      },
+      "metadata": {
+        "source_systems": [
+          "Sink",
+          "M",
+          "Chem"
+        ],
+        "coupling_rules": [
+          "operator_compose(Chem + Sink)"
+        ],
+        "operator_applies": [],
+        "callbacks": []
+      },
+      "index_sets": [],
+      "function_tables": [],
+      "template_registry": [],
+      "field_ics": [],
+      "loader_fields": [],
+      "lifted_shapes": {}
+    },
+    {
+      "id": "ic_tendency",
+      "tier": "rhs_time_derivative",
+      "fixture": "conformance/rhs_time_derivative/fixtures/ic_tendency.esm",
+      "system_kind": "ode",
+      "independent_variables": [
+        "t"
+      ],
+      "state_variables": [
+        {
+          "name": "M.x",
+          "role": "state",
+          "units": "1",
+          "default": 2.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "M"
+        },
+        {
+          "name": "M.y",
+          "role": "state",
+          "units": "1/s",
+          "default": 1.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "M"
+        }
+      ],
+      "parameters": [
+        {
+          "name": "M.k",
+          "role": "parameter",
+          "units": "1/s",
+          "default": 3.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "M"
+        },
+        {
+          "name": "M.q",
+          "role": "parameter",
+          "units": "1/s^2",
+          "default": 3.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "M"
+        }
+      ],
+      "observed_variables": [],
+      "algebraic_variables": [],
+      "brownian_parameters": [],
+      "discrete_parameters": [],
+      "equation_count": 2,
+      "equations": [
+        {
+          "lhs": "D(M.x)/Dt",
+          "rhs": "(-M.k) * M.x",
+          "source_system": "M"
+        },
+        {
+          "lhs": "D(M.y)/Dt",
+          "rhs": "M.q",
+          "source_system": "M"
+        }
+      ],
+      "continuous_events": [],
+      "discrete_events": [],
+      "domain": {
+        "independent_variable": null,
+        "element_type": null,
+        "array_type": null
+      },
+      "metadata": {
+        "source_systems": [
+          "M"
+        ],
+        "coupling_rules": [],
+        "operator_applies": [],
+        "callbacks": []
+      },
+      "index_sets": [],
+      "function_tables": [],
+      "template_registry": [],
+      "field_ics": [
+        {
+          "state": "M.y",
+          "expr": "(-M.k) * M.x"
+        }
+      ],
+      "loader_fields": [],
+      "lifted_shapes": {}
+    },
+    {
+      "id": "reaction_system_continuous_event",
+      "tier": "reaction_system",
+      "fixture": "conformance/unsupported_construct/fixtures/continuous_event_on_a_reaction_system.esm",
+      "system_kind": "ode",
+      "independent_variables": [
+        "t"
+      ],
+      "state_variables": [
+        {
+          "name": "ContinuousEventOnAReactionSystem.A",
+          "role": "species",
+          "units": "1",
+          "default": 0.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "ContinuousEventOnAReactionSystem"
+        }
+      ],
+      "parameters": [
+        {
+          "name": "ContinuousEventOnAReactionSystem.k",
+          "role": "parameter",
+          "units": "1/s",
+          "default": 1.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "ContinuousEventOnAReactionSystem"
+        }
+      ],
+      "observed_variables": [],
+      "algebraic_variables": [],
+      "brownian_parameters": [],
+      "discrete_parameters": [],
+      "equation_count": 1,
+      "equations": [
+        {
+          "lhs": "D(ContinuousEventOnAReactionSystem.A)/Dt",
+          "rhs": "ContinuousEventOnAReactionSystem.k",
+          "source_system": "ContinuousEventOnAReactionSystem"
+        }
+      ],
+      "continuous_events": [
+        {
+          "name": "reset",
+          "conditions": [
+            "ContinuousEventOnAReactionSystem.A - 1"
+          ],
+          "affects": [
+            "ContinuousEventOnAReactionSystem.A = 0"
+          ]
+        }
+      ],
+      "discrete_events": [],
+      "domain": null,
+      "metadata": {
+        "source_systems": [
+          "ContinuousEventOnAReactionSystem"
+        ],
+        "coupling_rules": [],
+        "operator_applies": [],
+        "callbacks": []
+      },
+      "index_sets": [],
+      "function_tables": [],
+      "template_registry": [],
+      "field_ics": [],
+      "loader_fields": [],
+      "lifted_shapes": {}
+    },
+    {
+      "id": "reaction_system_discrete_event",
+      "tier": "reaction_system",
+      "fixture": "conformance/unsupported_construct/fixtures/discrete_event_on_a_reaction_system.esm",
+      "system_kind": "ode",
+      "independent_variables": [
+        "t"
+      ],
+      "state_variables": [
+        {
+          "name": "DiscreteEventOnAReactionSystem.A",
+          "role": "species",
+          "units": "1",
+          "default": 1.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "DiscreteEventOnAReactionSystem"
+        }
+      ],
+      "parameters": [
+        {
+          "name": "DiscreteEventOnAReactionSystem.k",
+          "role": "parameter",
+          "units": "1/s",
+          "default": 0.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "DiscreteEventOnAReactionSystem"
+        }
+      ],
+      "observed_variables": [],
+      "algebraic_variables": [],
+      "brownian_parameters": [],
+      "discrete_parameters": [],
+      "equation_count": 1,
+      "equations": [
+        {
+          "lhs": "D(DiscreteEventOnAReactionSystem.A)/Dt",
+          "rhs": "DiscreteEventOnAReactionSystem.k",
+          "source_system": "DiscreteEventOnAReactionSystem"
+        }
+      ],
+      "continuous_events": [],
+      "discrete_events": [
+        {
+          "name": "double",
+          "conditions": [],
+          "affects": [
+            "DiscreteEventOnAReactionSystem.A = Pre(DiscreteEventOnAReactionSystem.A) * 2"
+          ]
+        }
+      ],
+      "domain": null,
+      "metadata": {
+        "source_systems": [
+          "DiscreteEventOnAReactionSystem"
+        ],
+        "coupling_rules": [],
+        "operator_applies": [],
+        "callbacks": []
+      },
+      "index_sets": [],
+      "function_tables": [],
+      "template_registry": [],
+      "field_ics": [],
+      "loader_fields": [],
+      "lifted_shapes": {}
+    },
+    {
       "id": "advection_reaction_loaded_ic_bc",
       "tier": "field_ics",
       "fixture": "valid/advection_reaction_loaded_ic_bc.esm",

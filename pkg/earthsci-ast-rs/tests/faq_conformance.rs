@@ -74,7 +74,7 @@ fn run_model_test(
         alg: Alg::Bdf,
         abstol: Some(1e-10),
         reltol: Some(1e-8),
-        maxiters: 100_000,
+        maxiters: Some(100_000),
         saveat: Some(sorted_times.clone()),
         ..Default::default()
     };

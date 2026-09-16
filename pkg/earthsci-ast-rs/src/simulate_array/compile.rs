@@ -466,13 +466,11 @@ impl ArrayCompiled {
                 independent_variables: flat.independent_variables.clone(),
             });
         }
-        if !flat.continuous_events.is_empty() {
-            return Err(CompileError::UnsupportedFeatureError {
-                feature: "continuous_events".to_string(),
-                message: "array-op path does not support continuous (root-finding) events. \
-                          Track the future Rust events bead for support."
-                    .to_string(),
-            });
+        if let Some(event) = flat.continuous_events.first() {
+            return Err(crate::compile_error::continuous_event_refusal(
+                crate::compile_error::ARRAY_EVALUATOR,
+                event.name.as_deref(),
+            ));
         }
         if let Some(event) = flat.discrete_events.first() {
             return Err(crate::compile_error::discrete_event_refusal(
@@ -618,13 +616,14 @@ impl ArrayCompiled {
         // scope (RFC §5.4; the Julia `_factor_scope` mirror). Both are no-ops —
         // and the registry copy is byte-identical — for models without
         // subsystems / ragged sets.
-        // A discrete event is refused before anything is built. This is the
-        // SINGLE-MODEL route's check: `from_flattened` checks the flattened
-        // event list itself, because the synthetic model it hands down carries
-        // no events. Subsystems are searched too, since mounting keeps only
-        // their variables and equations.
-        if let Some(name) = crate::compile_error::first_discrete_event(&model_owned) {
-            return Err(crate::compile_error::discrete_event_refusal(
+        // An event, continuous or discrete, is refused before anything is
+        // built. This is the SINGLE-MODEL route's check: `from_flattened` checks
+        // the flattened event lists itself, because the synthetic model it hands
+        // down carries no events. Subsystems are searched too, since mounting
+        // keeps only their variables and equations.
+        if let Some((construct, name)) = crate::compile_error::first_event(&model_owned) {
+            return Err(crate::compile_error::event_refusal(
+                construct,
                 crate::compile_error::ARRAY_EVALUATOR,
                 name.as_deref(),
             ));

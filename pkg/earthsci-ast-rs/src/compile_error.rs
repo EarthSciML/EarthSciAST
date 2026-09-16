@@ -15,21 +15,22 @@ use thiserror::Error;
 /// Errors raised when building a compiled model from a flattened system.
 #[derive(Error, Debug)]
 pub enum CompileError {
-    /// A model construct this evaluator cannot run: a discrete event, or an
-    /// implicit equation (an equation whose LHS is an expression rather than an
-    /// unknown, `D(unknown)` or `ic(unknown)`). esm-spec §9.6.6
+    /// A model construct this evaluator cannot run: a continuous or discrete
+    /// event, or an implicit equation (an equation whose LHS is an expression
+    /// rather than an unknown, `D(unknown)` or `ic(unknown)`). esm-spec §9.6.6
     /// `unsupported_construct`.
     ///
     /// Refused at build rather than skipped: a model run without its event, or
-    /// without its residual solved, reports the initial value as its answer,
-    /// and nothing in that answer says a construct was dropped.
+    /// without its residual solved, reports a wrong answer, and nothing in that
+    /// answer says a construct was dropped.
     #[error(
         "{code}: {construct} {detail} is not supported by the {evaluator}; \
          refusing the build rather than running the model without it (esm-spec §9.6.6)",
         code = crate::diagnostic::codes::UNSUPPORTED_CONSTRUCT
     )]
     UnsupportedConstruct {
-        /// Which construct: [`DISCRETE_EVENT`] or [`IMPLICIT_EQUATION`].
+        /// Which construct: [`CONTINUOUS_EVENT`], [`DISCRETE_EVENT`] or
+        /// [`IMPLICIT_EQUATION`].
         construct: &'static str,
         /// Which evaluator refused it, e.g. `"Rust array evaluator"`.
         evaluator: &'static str,
@@ -38,10 +39,10 @@ pub enum CompileError {
     },
 
     /// The flattened system contains a feature the v1 simulator does not support
-    /// (e.g. continuous events).
+    /// (e.g. a join over data-derived columns).
     #[error("Unsupported feature '{feature}': {message}")]
     UnsupportedFeatureError {
-        /// Feature name (e.g. `"continuous_events"`).
+        /// Feature name (e.g. `"value-equality join over data-derived columns"`).
         feature: String,
         /// Why this is rejected and what to do about it.
         message: String,
@@ -336,6 +337,9 @@ impl CompileError {
     }
 }
 
+/// [`CompileError::UnsupportedConstruct`]'s `construct` for a
+/// `continuous_events` entry.
+pub const CONTINUOUS_EVENT: &str = "continuous event";
 /// [`CompileError::UnsupportedConstruct`]'s `construct` for a `discrete_events`
 /// entry.
 pub const DISCRETE_EVENT: &str = "discrete event";
@@ -347,68 +351,93 @@ pub const SCALAR_EVALUATOR: &str = "Rust scalar ODE interpreter";
 /// The array runtime (`crate::simulate_array`), as a refusal names it.
 pub const ARRAY_EVALUATOR: &str = "Rust array evaluator";
 
-/// The refusal of a discrete event by `evaluator`, naming the event.
-pub fn discrete_event_refusal(evaluator: &'static str, name: Option<&str>) -> CompileError {
+/// The refusal of an event by `evaluator`: `construct` is [`CONTINUOUS_EVENT`]
+/// or [`DISCRETE_EVENT`], and the message names the event.
+pub fn event_refusal(
+    construct: &'static str,
+    evaluator: &'static str,
+    name: Option<&str>,
+) -> CompileError {
     CompileError::UnsupportedConstruct {
-        construct: DISCRETE_EVENT,
+        construct,
         evaluator,
         detail: name.map_or_else(|| "(unnamed)".to_string(), |n| format!("'{n}'")),
     }
 }
 
-/// The name of the first discrete event `model` or any of its inline subsystems
-/// declares (`Some(None)` for an unnamed one). The subsystems are searched in
-/// their raw JSON: mounting keeps only their variables and equations, and
-/// `flatten` does not lift a subsystem's events into the flattened system, so
-/// no check on the flattened event list can see one.
-pub(crate) fn first_discrete_event(model: &crate::types::Model) -> Option<Option<String>> {
+/// The refusal of a continuous event by `evaluator`, naming the event.
+pub fn continuous_event_refusal(evaluator: &'static str, name: Option<&str>) -> CompileError {
+    event_refusal(CONTINUOUS_EVENT, evaluator, name)
+}
+
+/// The refusal of a discrete event by `evaluator`, naming the event.
+pub fn discrete_event_refusal(evaluator: &'static str, name: Option<&str>) -> CompileError {
+    event_refusal(DISCRETE_EVENT, evaluator, name)
+}
+
+/// The first event `model` or any of its inline subsystems declares, a
+/// continuous one before a discrete one: its construct ([`CONTINUOUS_EVENT`] or
+/// [`DISCRETE_EVENT`]) and its name (`None` for an unnamed one). The subsystems
+/// are searched in their raw JSON: mounting keeps only their variables and
+/// equations, and `flatten` does not lift a subsystem's events into the
+/// flattened system, so no check on the flattened event lists can see one.
+pub(crate) fn first_event(model: &crate::types::Model) -> Option<(&'static str, Option<String>)> {
+    if let Some(event) = model.continuous_events.as_ref().and_then(|e| e.first()) {
+        return Some((CONTINUOUS_EVENT, event.name.clone()));
+    }
     if let Some(event) = model.discrete_events.as_ref().and_then(|e| e.first()) {
-        return Some(event.name.clone());
+        return Some((DISCRETE_EVENT, event.name.clone()));
     }
     model
         .subsystems
         .as_ref()
-        .and_then(|subs| subs.values().find_map(first_discrete_event_in_json))
+        .and_then(|subs| subs.values().find_map(first_event_in_json))
 }
 
-/// [`first_discrete_event`] over every model and reaction system in `file`,
-/// subsystems included.
-pub(crate) fn first_discrete_event_in_file(file: &crate::types::EsmFile) -> Option<Option<String>> {
+/// [`first_event`] over every model and reaction system in `file`, subsystems
+/// included.
+pub(crate) fn first_event_in_file(
+    file: &crate::types::EsmFile,
+) -> Option<(&'static str, Option<String>)> {
     let in_models = file
         .models
         .as_ref()
-        .and_then(|models| models.values().find_map(first_discrete_event));
+        .and_then(|models| models.values().find_map(first_event));
     in_models.or_else(|| {
         file.reaction_systems.as_ref().and_then(|systems| {
             systems.values().find_map(|rs| {
+                if let Some(event) = rs.continuous_events.as_ref().and_then(|e| e.first()) {
+                    return Some((CONTINUOUS_EVENT, event.name.clone()));
+                }
                 if let Some(event) = rs.discrete_events.as_ref().and_then(|e| e.first()) {
-                    return Some(event.name.clone());
+                    return Some((DISCRETE_EVENT, event.name.clone()));
                 }
                 rs.subsystems
                     .as_ref()
-                    .and_then(|subs| subs.values().find_map(first_discrete_event_in_json))
+                    .and_then(|subs| subs.values().find_map(first_event_in_json))
             })
         })
     })
 }
 
-fn first_discrete_event_in_json(value: &serde_json::Value) -> Option<Option<String>> {
-    if let Some(event) = value
-        .get("discrete_events")
-        .and_then(|v| v.as_array())
-        .and_then(|events| events.first())
-    {
-        return Some(
-            event
-                .get("name")
-                .and_then(|n| n.as_str())
-                .map(str::to_string),
-        );
+fn first_event_in_json(value: &serde_json::Value) -> Option<(&'static str, Option<String>)> {
+    for (key, construct) in [
+        ("continuous_events", CONTINUOUS_EVENT),
+        ("discrete_events", DISCRETE_EVENT),
+    ] {
+        if let Some(event) = value
+            .get(key)
+            .and_then(|v| v.as_array())
+            .and_then(|events| events.first())
+        {
+            let name = event.get("name").and_then(|n| n.as_str());
+            return Some((construct, name.map(str::to_string)));
+        }
     }
     value
         .get("subsystems")
         .and_then(|s| s.as_object())
-        .and_then(|subs| subs.values().find_map(first_discrete_event_in_json))
+        .and_then(|subs| subs.values().find_map(first_event_in_json))
 }
 
 /// The first equation that constrains its operands only implicitly, including a

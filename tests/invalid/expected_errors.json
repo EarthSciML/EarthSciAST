@@ -3445,5 +3445,136 @@
     ],
     "is_valid": false,
     "notes": "A template call has the unit of its expansion (esm-spec \u00a74.8.5 item 5), so an unresolvable declared unit on a const in the called body is unit_parse_error at the calling equation's expression field (\u00a74.8.5 item 2)."
+  },
+  "units_sum_undeterminable_operand_mismatch.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/variables/total_mass",
+        "code": "unit_inconsistency",
+        "message": "Declared units of kg do not match the expression's units of m",
+        "details": {
+          "variable": "total_mass",
+          "declared_units": "kg",
+          "expression_units": "m"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.3: an undeterminable operand of + (here 0.5 * y, a product with a literal factor) is skipped, and the sum has the unit of its determinable operand, m. It is not undeterminable as a whole, so the kg declaration is a provable mismatch. Pinned at the observed variable's declaration, as tests/invalid/units_scale_mismatch_equation.esm pins its mismatch."
+  },
+  "units_ifelse_undeterminable_branch_mismatch.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/variables/total_mass",
+        "code": "unit_inconsistency",
+        "message": "Declared units of kg do not match the expression's units of m",
+        "details": {
+          "variable": "total_mass",
+          "declared_units": "kg",
+          "expression_units": "m"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.3: an undeterminable branch of ifelse (here 0.5 * y, a product with a literal factor) is skipped, and the ifelse has the unit of its determinable branch, m, exactly as a partly undeterminable sum does (tests/invalid/units_sum_undeterminable_operand_mismatch.esm). The condition c > 0 does not enter the unit. Pinned at the observed variable's declaration."
+  },
+  "units_comparison_mismatch_in_ifelse_condition.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/variables/selected",
+        "code": "unit_inconsistency",
+        "message": "Cannot compare quantities with different units: 'm' > 'kg'"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.3 comparison and connective rules. The condition of an ifelse compares a length with a mass. The condition's own unit does not enter the result, but it is still checked (esm-spec \u00a74.8.3), so the mismatch inside it is an error."
+  },
+  "units_comparison_mismatch_under_and.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/variables/selected",
+        "code": "unit_inconsistency",
+        "message": "Cannot compare quantities with different units: 'm' > 'kg'"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.3 comparison and connective rules. An ifelse condition is an and whose first operand compares a length with a mass. A boolean connective places no requirement on its operands' units, but a mismatch inside an operand is still reported (esm-spec \u00a74.8.3)."
+  },
+  "units_comparison_mismatch_under_not.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/variables/flag",
+        "code": "unit_inconsistency",
+        "message": "Cannot compare quantities with different units: 'm' > 'kg'"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.3 comparison and connective rules. A dimensionless flag is not(x > z), which compares a length with a mass. The not is dimensionless, but the mismatch inside its operand is still reported (esm-spec \u00a74.8.3)."
+  },
+  "units_comparison_result_declared_length.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/variables/flag",
+        "code": "unit_inconsistency",
+        "message": "Declared units of m do not match the expression's units of dimensionless"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.3 comparison and connective rules. Declares a length equal to the comparison x > 0. A comparison is a dimensionless boolean whatever its operands are (esm-spec \u00a74.8.3), so the m declaration is a provable mismatch."
+  },
+  "units_sum_unitless_const_operand_mismatch.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/variables/total_mass",
+        "code": "unit_inconsistency",
+        "message": "Declared units of kg do not match the expression's units of m"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.3 with \u00a74.8.5: a `const` WITHOUT `units` is undeterminable, exactly like a bare literal, so it is skipped by the sum rule and the sum carries m from x. The companion tests/valid/units_const_declared.esm covers the unit-bearing const. This case is the cross-binding divergence recorded when declared const units landed: Julia used to report the sum as unknown and accept the file."
+  },
+  "root_find_all_removed.esm": {
+    "schema_errors": [
+      {
+        "path": "/models/Ball/continuous_events/0/root_find",
+        "message": "must be equal to one of the allowed values",
+        "keyword": "enum"
+      }
+    ],
+    "structural_errors": [],
+    "is_valid": false,
+    "notes": "`root_find` accepts only \"left\" (default) and \"right\", DiffEq's two rootfind sides; \"all\" was removed from the schema without a version bump because it never had an effect."
+  },
+  "array_default_without_shape.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/Decay/subsystems/Inner/variables/x/default",
+        "code": "array_default_without_shape",
+        "message": "Model 'Inner' variable 'x' has inline array data as its default but declares no shape; inline array data is a shaped variable's value (esm-spec \u00a76.3)",
+        "details": {
+          "variable": "x",
+          "variable_type": "unknown"
+        }
+      },
+      {
+        "path": "/models/Decay/variables/k/default",
+        "code": "array_default_without_shape",
+        "message": "Model 'Decay' variable 'k' has inline array data as its default but declares no shape; inline array data is a shaped variable's value (esm-spec \u00a76.3)",
+        "details": {
+          "variable": "k",
+          "variable_type": "parameter"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a76.3: inline array data is a SHAPED variable's value, so on a variable with no `shape` (omitted, null or empty) it has nothing to fill. The schema cannot say this (whether an array is legal depends on a sibling field), so it is a structural check in every binding, pinned at the offending `default`. Before the rejection the Rust build pipeline bound such a parameter to a fabricated 0.0 (fixed in #255 by dropping it from scope, which also dropped an explicit scalar override); the load-time error names the declaration instead. The shaped parameter `w` carries the same data and must NOT be reported."
   }
 }

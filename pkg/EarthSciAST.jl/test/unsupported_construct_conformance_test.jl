@@ -1,15 +1,22 @@
-# Cross-language conformance for the two constructs the tree-walk evaluator does
-# not run: a discrete event and an implicit equation (EarthSciML/EarthSciAST#264).
+# Cross-language conformance for the three constructs the tree-walk evaluator does
+# not run: a continuous event, a discrete event and an implicit equation
+# (EarthSciML/EarthSciAST#264, #356).
 #
 # Drives the shared manifest at `tests/conformance/unsupported_construct/`. The
 # tree-walk evaluator serves both `simulate` and `run_inline_tests`, on scalar and
-# array documents alike. It used to drop a discrete event without a word, so an
-# inline test reported the initial value (and, for an array observed of the
-# event's unknown, "array state ... has no cells in var_map"); it refused an
-# implicit equation, but as the Julia-local `E_TREEWALK_UNSUPPORTED_EQUATION`
-# naming only the LHS's Julia type. Every refusal case must now fail with
-# `unsupported_construct` naming the construct and the evaluator; the control must
-# still run. The ModelingToolkit export runs both constructs and is not covered.
+# array documents alike. It used to drop both kinds of event without a word, so an
+# inline test reported the model's value as if no event existed (and, for an
+# array observed of a discrete event's unknown, "array state ... has no cells in
+# var_map"); it refused an implicit equation, but as the Julia-local
+# `E_TREEWALK_UNSUPPORTED_EQUATION` naming only the LHS's Julia type. Every
+# refusal case must now fail with `unsupported_construct` naming the construct and
+# the evaluator; the control must still run. The ModelingToolkit export runs all
+# three constructs and is not covered.
+#
+# `flatten` also used to drop a REACTION SYSTEM's events outright, so the refusal
+# never fired for a reaction-system document and both the tree-walk evaluator and
+# the ModelingToolkit export ran it without its event; the two
+# `..._on_a_reaction_system` cases pin that.
 
 using Test
 using EarthSciAST
@@ -35,9 +42,18 @@ const _UC_EVALUATOR = "Julia tree-walk evaluator"
         @testset "$(case.id)" begin
             if case.expect == "refuse"
                 construct = String(case.construct)
-                # The build itself refuses, with the registered code.
+                # The build itself refuses, with the registered code. Only a
+                # single-model document has a model to select; anything else —
+                # several models, or a reaction system, whose events reach the
+                # evaluator only through `flatten` — is built the way
+                # `esm_problem` builds it: flattened first.
+                doc = EarthSciAST.load_path(path)
+                n_models = doc.models === nothing ? 0 : length(doc.models)
+                n_rs = doc.reaction_systems === nothing ? 0 :
+                       length(doc.reaction_systems)
+                target = (n_models == 1 && n_rs == 0) ? doc : EarthSciAST.flatten(doc)
                 err = try
-                    build_evaluator(EarthSciAST.load_path(path))
+                    build_evaluator(target)
                     nothing
                 catch e
                     e

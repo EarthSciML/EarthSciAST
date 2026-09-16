@@ -43,6 +43,7 @@ import {
   validateRelationalNodesInContinuous,
   validateReservedDeclarationNames,
   validateReservedModelNames,
+  validateArrayDefaultsHaveShape,
 } from './model-checks.js'
 import { validateBroadcastFns, validateArrayBroadcastShapes } from './array-checks.js'
 import { validateObservedCycles } from './observed-checks.js'
@@ -197,6 +198,9 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
       // Recurses into inline subsystems: a subsystem is a model, and a MOUNTED
       // subsystem is the shape #200 was reported in.
       errors.push(...validateReservedModelNames(model, modelPath, `Model '${modelName}'`, esmFile))
+      // esm-spec §6.3: inline array data is a shaped variable's value, so on a
+      // variable with no `shape` it has nothing to fill.
+      errors.push(...validateArrayDefaultsHaveShape(model, modelPath, `Model '${modelName}'`))
 
       // (F-6) Static `faq` semantics decidable from this document alone:
       // a value-equality join key of a non-comparable type, an index-set range

@@ -83,6 +83,9 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("mtk_metadata_test.jl")
     include("simulate_e2e_test.jl")
     include("tests_blocks_execution_test.jl")
+    # The ModelingToolkit export honours a continuous event's `affect_neg` and
+    # `root_find` (esm-spec §5.2, issue #356).
+    include("mtk_continuous_event_options_test.jl")
     include("run_esm_tests_test.jl")
     include("container_in_document_test.jl")
     include("units_fixture_consumption_test.jl")
@@ -105,8 +108,9 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     # by-name endpoints of every coupling entry that has not run yet and onto a
     # runner's override keys (issue #230).
     include("merged_rename_reach_conformance_test.jl")
-    # A discrete event or an implicit equation is refused by the tree-walk
-    # evaluator with `unsupported_construct`, never run without it (issue #264).
+    # A continuous or discrete event, or an implicit equation, is refused by the
+    # tree-walk evaluator with `unsupported_construct`, never run without it
+    # (issues #264, #356).
     include("unsupported_construct_conformance_test.jl")
     include("pointwise_lift_axis_names_test.jl")  # §10.5 lift axes by NAME, not by extent
     include("coupling_imports_test.jl")
@@ -340,6 +344,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("datetime_arithmetic_test.jl")
     include("datetime_typed_core_test.jl")     # registry-declared typed cores (ess-dtcore)
     include("closed_functions_mtk_test.jl")
+    include("const_array_index_mtk_test.jl")    # #286: a bare const array as an index base
     include("function_tables_test.jl")
     include("function_tables_lowering_test.jl")
     # …and the same lowering on the path that EVALUATES a document (#188):

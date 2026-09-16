@@ -110,6 +110,10 @@ class ErrorCode(Enum):
     # the variable it names -- pointwise on a shaped variable, or `coords` /
     # `reduce` on a scalar one.
     ASSERTION_RANK_MISMATCH = "assertion_rank_mismatch"
+    # Inline array data as the `default` of a variable that declares no `shape`
+    # (esm-spec §6.3). Inline array data is a SHAPED variable's value, so with no
+    # shape there is nothing for the array to fill.
+    ARRAY_DEFAULT_WITHOUT_SHAPE = "array_default_without_shape"
     MISSING_REQUIRED_FIELD = "missing_required_field"
     UNIT_MISMATCH = "unit_mismatch"
     # Codes emitted by earthsci_ast.validation (previously ad-hoc string
@@ -338,10 +342,10 @@ RECURRENCE_UNSUPPORTED_FORM = "recurrence_unsupported_form"
 # every pathway, before anything is built.
 # ===========================================================================
 
-#: A discrete event or an implicit equation (an equation whose LHS is an
-#: expression rather than an unknown, ``D(unknown)`` or ``ic(unknown)``) reached
-#: an evaluator that cannot run it. Refused rather than skipped: a run without
-#: the construct reports the initial value as its answer.
+#: A continuous event, a discrete event or an implicit equation (an equation
+#: whose LHS is an expression rather than an unknown, ``D(unknown)`` or
+#: ``ic(unknown)``) reached an evaluator that cannot run it. Refused rather than
+#: skipped: a run without the construct reports a wrong answer.
 UNSUPPORTED_CONSTRUCT = "unsupported_construct"
 
 

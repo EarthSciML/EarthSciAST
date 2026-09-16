@@ -5519,27 +5519,29 @@ non-zero.
 
 ### 5.39 Unsupported Constructs Are Refused, Not Dropped (normative)
 
-**Decision pinned.** A discrete event (`discrete_events`) and an implicit
-equation (an LHS that is an expression rather than an unknown, a time derivative
-of one, or `ic` of one) are two constructs none of the three executing bindings'
-simulators runs: not Julia's tree-walk evaluator, not Python's SymPy or NumPy
-pathways, not Rust's scalar interpreter or array runtime. Each of those
-evaluators MUST refuse a document carrying either construct at BUILD with the
-esm-spec §9.6.6 diagnostic `unsupported_construct`, and the message MUST name
-the construct and the evaluator. Before issue #264 they built the model without
-the construct: the event never fired, the residual was never solved, and an
-inline test reported the initial value as its answer.
+**Decision pinned.** A continuous event (`continuous_events`), a discrete event
+(`discrete_events`) and an implicit equation (an LHS that is an expression rather
+than an unknown, a time derivative of one, or `ic` of one) are three constructs
+none of the three executing bindings' simulators runs: not Julia's tree-walk
+evaluator, not Python's SymPy or NumPy pathways, not Rust's scalar interpreter
+or array runtime. Each of those evaluators MUST refuse a document carrying any
+of them at BUILD with the esm-spec §9.6.6 diagnostic `unsupported_construct`,
+and the message MUST name the construct and the evaluator. Before issues #264
+and #356 most of them built the model without the construct: the event never
+fired, the residual was never solved, and an inline test reported a number the
+document does not describe.
 
-**Shape.** Golden-free. Seven refusal cases: one per construct per evaluator
-path (scalar and array), a discrete event owned by an inline SUBSYSTEM on each
-path, and an implicit equation spelled as a time derivative of an expression
-(`D(a + b) ~ 3`), which credits no state and so is implicit, not a derivative. The subsystem cases pin that the refusal does not depend on where the event
-is declared: a binding whose `flatten` does not lift a subsystem's events must
-look for them in the document, or it runs the model without the event. One
-CONTROL: the array discrete-event document with its event removed, which MUST
-still run and pass. The control is the non-vacuity
-anchor: a binding that refused every array document would otherwise satisfy the
-refusal cases.
+**Shape.** Golden-free. Twelve refusal cases: one per construct per evaluator
+path (scalar and array); an event of each kind owned by an inline SUBSYSTEM on
+each path; a continuous event on a coupled two-model array document, which takes
+Rust's flattened route; and an implicit equation spelled as a time derivative of
+an expression (`D(a + b) ~ 3`), which credits no state and so is implicit, not a
+derivative. The subsystem cases pin that the refusal does not depend on where
+the event is declared: a binding whose `flatten` does not lift a subsystem's
+events must look for them in the document, or it runs the model without the
+event. One CONTROL: the array discrete-event document with its event removed,
+which MUST still run and pass. The control is the non-vacuity anchor: a binding
+that refused every array document would otherwise satisfy the refusal cases.
 
 The manifest and fixtures live in `tests/conformance/unsupported_construct/`.
 Adapters: `pkg/EarthSciAST.jl/test/unsupported_construct_conformance_test.jl`;
@@ -5547,9 +5549,10 @@ Adapters: `pkg/EarthSciAST.jl/test/unsupported_construct_conformance_test.jl`;
 `pkg/earthsci-ast-rs/tests/unsupported_construct_conformance.rs`. Go and
 TypeScript do not simulate; they only register the code.
 
-**Out of scope.** Julia's ModelingToolkit export runs discrete events and hands
-implicit equations to `mtkcompile`, so it never raises the code. Running either
-construct on an array evaluator is future work in every binding.
+**Out of scope.** Julia's ModelingToolkit export runs both kinds of event and
+hands implicit equations to `mtkcompile`, so it never raises the code. Running
+any of the three constructs on an array evaluator is future work in every
+binding.
 
 
 ## 6. CI Integration
@@ -5627,6 +5630,7 @@ ever emitted it, and the code had zero real coverage.
 | `unknown_override_key` | Structural | An inline test's `initial_conditions` or `parameter_overrides` key that matches no declared name under esm-spec §6.6.2 rules 1-3. Names are qualified by component and inline subsystem, and a trailing element suffix (`u[1]`) is removed from the key first. Pointer: the key, e.g. `/models/M/tests/0/parameter_overrides/rx`. Only the unknown case is a validation error; ambiguous and colliding keys stay runtime diagnostics (§5.15). A document with an unresolved `{ref}` mount skips the check. Fixtures: `tests/invalid/unknown_override_key_*.esm`. |
 | `assertion_rank_mismatch` | Structural | An assertion whose form does not match the declared rank of the variable it names (esm-spec §6.6.5): pointwise on a variable declared with a non-empty `shape` (unless the target is an element name such as `u[1]`), or `coords` / `reduce` on a variable declared without one. Checked for targets the asserting component declares by a bare name. Pointer: the assertion, e.g. `/models/M/tests/0/assertions/0`. Fixtures: `tests/invalid/assertion_rank_mismatch_*.esm`. |
 | `reserved_variable_name` | Structural | A declaration spelled with a globally-scoped name — the document's independent variable (`domain.independent_variable`, default `"t"`) or the §6.4 `_var` placeholder (esm-spec §4.9.1.1). Both are in scope in every model and resolve BY NAME, so the declaration is unreachable and every reader silently gets the implicit symbol instead. Covers all three declaration maps: `models[M].variables` (recursing into every INLINE subsystem, at any depth), `reaction_systems[S].species`, `reaction_systems[S].parameters`. Pointer: the offending key, e.g. `/models/M/variables/t`, `/models/M/subsystems/S/variables/t`. Hard error in EVERY binding — the pre-fix behaviour was a validated document whose equations silently read the simulation clock. The reserved set FOLLOWS the document, exactly as `reserved_index_symbol` does; a binding that hard-codes the literal `"t"` fails `tests/valid/independent_variable_renamed.esm`. |
+| `array_default_without_shape` | Structural | Inline array data as the `default` of a variable that declares no `shape` — omitted, `null` or empty (esm-spec §6.3). Inline array data is a shaped variable's value, so with no shape there is nothing for it to fill and no scalar reading of it. Covers both declared types and the `variables` of every INLINE subsystem, at any depth. Pointer: the offending `default`, e.g. `/models/M/variables/k/default`, `/models/M/subsystems/S/variables/x/default`. Hard error in every binding, and a structural check rather than a schema constraint because whether an array is legal depends on the sibling `shape` field. Fixture: `tests/invalid/array_default_without_shape.esm`. |
 
 #### 7.1.0 List-valued diagnostic details are sorted
 

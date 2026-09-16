@@ -158,8 +158,9 @@ export const ERROR_CODES = {
   //   WINS, not the order cells are EVALUATED in, and a region's value
   //   expression is evaluated once for the whole region.
   RECURRENCE_UNSUPPORTED_FORM: 'recurrence_unsupported_form',
-  // `unsupported_construct` — a discrete event or an implicit equation (an
-  //   expression LHS) reached an evaluator that cannot run it (esm-spec §9.6.6).
+  // `unsupported_construct` — a continuous or discrete event, or an implicit
+  //   equation (an expression LHS), reached an evaluator that cannot run it
+  //   (esm-spec §9.6.6).
   //   This binding does not simulate, so it never raises it; the entry keeps
   //   the §9.6.6 vocabulary uniform across the five registries.
   UNSUPPORTED_CONSTRUCT: 'unsupported_construct',
@@ -218,6 +219,10 @@ export const ERROR_CODES = {
   //   unreachable and every reader silently receives the implicit symbol
   //   instead — the simulation clock in place of the declared quantity.
   RESERVED_VARIABLE_NAME: 'reserved_variable_name',
+  // Inline array data as the `default` of a variable that declares no `shape`
+  //   (esm-spec §6.3). Inline array data is a SHAPED variable's value, so with
+  //   no shape there is nothing for the array to fill.
+  ARRAY_DEFAULT_WITHOUT_SHAPE: 'array_default_without_shape',
   UNDEFINED_PARAMETER: 'undefined_parameter',
   UNDEFINED_SPECIES: 'undefined_species',
   UNDEFINED_SYSTEM: 'undefined_system',

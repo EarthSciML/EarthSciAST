@@ -339,6 +339,11 @@ const (
 	// shaped variable, or `coords` / `reduce` on a scalar one
 	// (tests/invalid/assertion_rank_mismatch_*.esm).
 	ErrorAssertionRankMismatch = "assertion_rank_mismatch"
+	// ErrorArrayDefaultWithoutShape is inline array data as the `default` of a
+	// variable that declares no `shape` (esm-spec §6.3). Inline array data is a
+	// SHAPED variable's value, so with no shape there is nothing for the array
+	// to fill (tests/invalid/array_default_without_shape.esm).
+	ErrorArrayDefaultWithoutShape = "array_default_without_shape"
 )
 
 // --- Diagnostic codes: structural validation, peers of the Error* block
@@ -477,8 +482,8 @@ const (
 	// build (esm-spec §9.6.6). Registered for the cross-binding vocabulary;
 	// this binding has no simulator, so nothing here raises it.
 	CodeDerivedIndexSetUnmaterialized = "derived_index_set_unmaterialized"
-	// CodeUnsupportedConstruct: a discrete event or an implicit equation reached
-	// an evaluator that cannot run it (esm-spec §9.6.6). Go does not simulate,
+	// CodeUnsupportedConstruct: a continuous or discrete event, or an implicit
+	// equation, reached an evaluator that cannot run it (esm-spec §9.6.6). Go does not simulate,
 	// so it never raises this; the constant keeps the §9.6.6 vocabulary uniform.
 	CodeUnsupportedConstruct = "unsupported_construct"
 )
