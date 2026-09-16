@@ -109,6 +109,20 @@ function _index_set_extents(flat::FlattenedSystem)
     return extents
 end
 
+# `name => [1:n₁, …]` for every variable whose defining equation is a `const`
+# array (`tbl ~ {"op": "const", "value": [...]}`).
+function _const_observed_shapes(equations)
+    shapes = Dict{String,Vector{UnitRange{Int}}}()
+    for eq in equations
+        (eq.lhs isa VarExpr && eq.rhs isa OpExpr) || continue
+        rhs = eq.rhs::OpExpr
+        (rhs.op == "const" && rhs.value isa AbstractVector) || continue
+        dims = size(EarthSciAST._const_op_to_array(rhs.value))
+        shapes[(eq.lhs::VarExpr).name] = UnitRange{Int}[1:n for n in dims]
+    end
+    return shapes
+end
+
 # Resolve a variable's DECLARED `shape` (an ordered list of index-set names,
 # esm-spec §4.7) against the index-set extents. This is the shape of last
 # resort: `infer_array_shapes` and the LHS-arrayop shapes both win over it,
@@ -178,6 +192,10 @@ function _build_var_dict(flat::FlattenedSystem)
     inferred_shapes = infer_array_shapes(flat.equations)
     lhs_shapes = _lhs_arrayop_shapes(flat.equations, extents)
     merge!(inferred_shapes, lhs_shapes)  # LHS definition takes precedence
+    # An observed defined by a `const` array is exactly that array's size; the
+    # reads of it that `infer_array_shapes` sees (`index(tbl, 4)`) say nothing
+    # about its extent.
+    merge!(inferred_shapes, _const_observed_shapes(flat.equations))
 
     var_dict = Dict{String,Any}()
     states = Vector{Num}()
@@ -357,6 +375,13 @@ function _condition_to_root_equation(cond::ASTExpr, var_dict, t_sym, dim_dict)
     return _esm_to_symbolic(cond, var_dict, t_sym, dim_dict) ~ 0
 end
 
+# esm-spec §5.2: `root_find` names which side of the root the event lands on,
+# mapped to DiffEq's `rootfind` option; absent means `"left"`.
+function _rootfind_option(root_find::Union{Nothing,AbstractString})
+    root_find == "right" && return ModelingToolkit.SciMLBase.RightRootFind
+    return ModelingToolkit.SciMLBase.LeftRootFind
+end
+
 function _build_continuous_events(flat::FlattenedSystem, var_dict, t_sym, dim_dict,
                                   state_syms)
     cbs = Any[]
@@ -365,21 +390,26 @@ function _build_continuous_events(flat::FlattenedSystem, var_dict, t_sym, dim_di
             _condition_to_root_equation(c, var_dict, t_sym, dim_dict)
             for c in ev.conditions
         ]
-        affects = filter(!isnothing,
-                         [_affect_to_eq(a, var_dict, t_sym, dim_dict, state_syms)
-                          for a in ev.affects])
+        to_eqs(list) = filter(!isnothing,
+                              [_affect_to_eq(a, var_dict, t_sym, dim_dict, state_syms)
+                               for a in list])
+        affects = to_eqs(ev.affects)
+        # esm-spec §5.2: `affect_neg` fires on NEGATIVE-going crossings, and "if
+        # `null` or absent, `affects` is used for both directions". The absent
+        # case is what makes the bouncing ball bounce: it crosses `height ~ 0` on
+        # the negative edge (falling), so an event that fired only on the
+        # positive edge would never trigger.
+        affect_neg = ev.affect_neg === nothing ? affects : to_eqs(ev.affect_neg)
         # NOTE: parenthesized guard — the bare `a || b && continue` form
         # parses as `a || (b && continue)`, letting an event with EMPTY
         # conditions fall through to `conds[1]` (BoundsError).
-        (isempty(conds) || isempty(affects)) && continue
-        # `conditions` is a Vector{Equation}; `affect` a Vector{Equation} that
-        # MTK wraps into a SymbolicAffect. `affect_neg` is deliberately left at
-        # its MTK default — which is `affect` — because esm-spec §5.2 says the
-        # same thing: "If `null` or absent, `affects` is used for both
-        # directions." That default is what makes the bouncing ball bounce: it
-        # crosses `height ~ 0` on the NEGATIVE edge (falling), so an event that
-        # fired only on the positive edge would never trigger.
-        push!(cbs, ModelingToolkit.SymbolicContinuousCallback(conds, affects))
+        (isempty(conds) || (isempty(affects) && isempty(affect_neg))) && continue
+        # `conditions` is a Vector{Equation}; each affect a Vector{Equation} that
+        # MTK wraps into a SymbolicAffect, or `nothing` for no affect on that edge.
+        push!(cbs, ModelingToolkit.SymbolicContinuousCallback(
+            conds, isempty(affects) ? nothing : affects;
+            affect_neg = isempty(affect_neg) ? nothing : affect_neg,
+            rootfind = _rootfind_option(ev.root_find)))
     end
     return cbs
 end

@@ -8,6 +8,15 @@ flag-off build is byte-for-byte the pre-spike emitter). Code: `oop.jl` (the
 `test/tree_walk_oop_ssa_test.jl` (host, bit-identity + engagement + AD),
 `test/reactant_oop_ssa_test.jl` (traced census; opt-in via `ESM_TEST_REACTANT=1`).
 
+**Which tree every figure below was measured on.** Unless a line says
+otherwise, every number in this note — the fixture coverage map, the census
+delta, and all of the ReSEACT producer, edge, descriptor and timing figures —
+was measured on `perf/ssa-read-redirect-arms` / `perf/ssa-scatter-skip-gate`.
+Both forked from `main` at `3aa046d65` and contain neither #273 nor #278. Only
+the gate's INPUTS have been re-taken on `main`, at `becb423a6`; see
+"Re-measured on `main`" below for what moved and what it does not change. The
+CONUS TIMINGS have NOT been re-taken on any later tree.
+
 ## What it attacks
 
 The register-file tax measured on ReSEACT at 288 cells: the compiled `:oop`
@@ -112,7 +121,9 @@ CONUS; the buffers exceed L3), so the emission-level census is the measure.
 The spike listed its remaining tier-3 fallbacks "in expected ReSEACT impact
 order" and put ghost-masked table gathers first. `oop_ssa_stats` now carries a
 per-reason blocker tally (which read surface still reads each surviving
-producer's block), and on the ReSEACT transport RHS at 6x6x8 it says:
+producer's block), and on the ReSEACT transport RHS at 6x6x8 it says (measured
+on a tree forked at `3aa046d65`, before #278 and #273; the counts on current
+`main` are in "Re-measured on `main`" below):
 
 | | spike | + this extension |
 |---|---|---|
@@ -170,7 +181,9 @@ fold.
    nothing unless EVERY tracked producer can go, and 15 of 17 is not 17 of 17 —
    the scan and sub-kernel blockers below survive it. So closing #4 alone
    changes no emitted program at the default; it would only pay as the LAST of
-   the transport blockers to fall. Do not re-attempt it on its own.
+   the transport blockers to fall. Do not re-attempt it on its own. (On
+   current `main` the transport build reports `blockers.scalar = 0` with no
+   scalar redirect at all; see "Re-measured on `main`" below.)
 5. ~~**Fragmented gathers**~~ (`nseg > min(64, max(8, L÷4))`) — CLOSED by tier
    2b: past the slice threshold a single-producer mapping gathers the producer's
    VALUE instead of the buffer. `frag` went 5 blocked producers → 0. A
@@ -197,6 +210,8 @@ fold.
 
 ## ReSEACT at CONUS: 1.36x on the adjoint step+VJP mix, chemistry exact
 
+Fork-point tree (`3aa046d65`), NOT re-taken on `main` — on `main` this build
+has 20 transport producers, not the 17 these timings priced.
 Measured 2026-09-09 at 4x5 CONUS (13x7x72, 6 552 cells), two driver builds in
 ONE process, arms interleaved, every pair run in BOTH arm orders — reproducing
 to three digits, so the order is not what is being measured.
@@ -253,7 +268,8 @@ and at what element volume, how many of those take the whole value with no op
 at all, the residual-read reasons, and both verdicts (`skippable`, `skip`).
 
 **PRODUCER BLOCK SIZE — the obvious guess — is refuted by that table.** At
-6x6x8:
+6x6x8, on the fork-point tree (`main` gives 20 producers and 18 skippable on
+transport, chemistry unchanged; see "Re-measured on `main`" below):
 
 | | transport (part 1) | chemistry (part 2) |
 |---|---|---|
@@ -295,10 +311,74 @@ emitted. The redirect tables are untouched, so `n_skippable_scatters` (a
 read-graph fact) is identical in every arm and only `n_skipped_scatters` moves;
 `n_gate_declined` is the difference. On ReSEACT the default gate leaves
 chemistry exactly as the arms had it (59 of 59, `ue` dead) and takes transport
-to 0 of 17 — the redirects without the skip.
+to 0 of 17 — the redirects without the skip. (0 of 17 on the fork-point tree;
+0 of 20 on `main`. The gate's verdict is the same on both.)
+
+### Re-measured on `main` (issue #296)
+
+Every count above was taken on a tree forked at `3aa046d65`, before #273 (the
+contraction tier's order) and #278 (the state-gather classification) landed,
+and the gate's verdict is a function of exactly those counts
+(`n_skippable == n_producers`). Re-taken with
+`tools/diag/p12_ssa_blockers.jl` at 6x6x8 on `main` at `becb423a6`, with the
+same ReSEACT model and the `faq`-tag fixes to the split. The same harness on the
+fork-point tree reproduces the tables above exactly (17 / 13, 97 / 100,
+731 / 885, the same blocker tally), so the differences are the emitter's:
+
+| transport (part 1) | fork point | `main` |
+|---|---|---|
+| producers | 17 | 20 |
+| statically skippable | 13 | 18 |
+| scatters skipped by the default gate | 0 | **0** |
+| top-level edges redirected | 97 / 100 | 203 / 211 |
+| sub-kernel descriptors redirected | 731 / 885 | 968 / 1 156 |
+| `n_ghost_edges` | 0 | 0 |
+| blocked producers, by reason | sub 2, scalar 2, scan 1 | sub 2, scan 1, dense 1 |
+| … blocked SOLELY by that reason | scalar 2, sub 1 | sub 1 |
+
+Chemistry (part 2) is unchanged: 59 producers, 59 skipped, 563 / 563 edges.
+
+**The gate's verdict did not flip.** Transport is still short of all-skippable,
+so the default gate still declines every transport skip and still takes every
+chemistry one. The two surviving producers are a 2 304-element level-1 fill
+held by a sub-kernel read, and a 288-element level-5 fill held by a scan fold, a
+dense gather and a sub-kernel read. The same build at 13x7x16 gives the same 20
+/ 18, the same two survivors and the same 968 / 1 156 sub-kernel descriptors, so
+the verdict does not move with the grid between those sizes.
+
+**What did NOT move the counts: #278.** `main` with #278's two switches off
+(`ESS_STATE_BOX_DISABLE=1 ESS_LANE_AFFINE_KEY_DISABLE=1`) gives the same
+20 / 18 and changes only the top-level edges (189 / 197), and
+`ESS_ARRAY_CONTRACTION_DISABLE=1` changes nothing. What DID move them is
+UNVERIFIED: #273 was also missing from the fork point and is a candidate, but
+this was not bisected, so no cause is claimed here.
+
+Two cautions, both load-bearing:
+
+1. **The CONUS timings elsewhere in this note priced the 17-producer build and
+   have NOT been re-taken.** That is the "ReSEACT at CONUS" section, the "gate
+   wins on BOTH sides" table and the loop table. The transport program the
+   default gate emits is still "redirects without the skip", but it now carries
+   roughly twice the top-level redirects, and "The criterion NOT met" below says
+   the redirects themselves are what costs the transport primal. Do not read
+   0.738 / 0.836 / 1.26x as current figures.
+2. **The gate is now TWO producers from flipping.** A change that clears the
+   sub-kernel, scan and dense blockers above takes transport to all-skippable
+   and turns every transport skip back ON — the regime #283 measured as slower,
+   under a flag ReSEACT's production adjoint driver sets (`ESS_OOP_SSA=1`).
+   Re-time transport BEFORE landing any such change.
+
+These counts are themselves a snapshot at `becb423a6`, and `main` has moved
+since. #324 in particular tightened when a corner-derived affine-lane
+conclusion is a proof (`stencil_affine.jl`), which is part of what determines
+the descriptor population the SSA plan resolves, so the tally can move again
+without the verdict moving. Re-run `tools/diag/p12_ssa_blockers.jl` before
+relying on the exact numbers.
 
 ### Measured: the gate wins on BOTH sides
 
+Fork-point tree (`3aa046d65`), NOT re-taken on `main`; the producer counts in
+this subsection are that tree's 17, not `main`'s 20.
 4x5 CONUS (13x7x72, 6 552 cells), three arms in ONE process, interleaved, both
 arm orders (`tools/diag/p14_ssa_gate.jl` in the consuming repo). `noskip` is
 what the default gate emits on transport (0 of 17) and `ungated` is #283
@@ -336,6 +416,8 @@ per-producer bounds ship released.
 
 ### The loop, counting replay
 
+Derived from the fork-point-tree timings above, so it carries their provenance:
+NOT re-taken on `main`.
 Per accepted step the adjoint runs the primal TWICE — the forward `T.step` and
 the backward `T.replay` — and the VJP once, so a primal regression is paid
 twice against one VJP win. Against the measured 2x2.5 48 h decomposition

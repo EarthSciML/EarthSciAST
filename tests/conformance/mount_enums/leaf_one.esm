@@ -1,0 +1,38 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "MountEnumsLeafOne",
+    "description": "A leaf whose own `enums` block says probe.Symbol = 1, read back by an `enum` op. Mounted, it must still read 1 (esm-spec §9.3).",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ]
+  },
+  "enums": {
+    "probe": {
+      "Symbol": 1
+    }
+  },
+  "models": {
+    "LeafOne": {
+      "variables": {
+        "value": {
+          "type": "unknown",
+          "units": "1",
+          "description": "The value this file's own `enums` block gives probe.Symbol."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "value",
+          "rhs": {
+            "op": "enum",
+            "args": [
+              "probe",
+              "Symbol"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

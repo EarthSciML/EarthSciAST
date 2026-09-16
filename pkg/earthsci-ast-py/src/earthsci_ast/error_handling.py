@@ -102,6 +102,18 @@ class ErrorCode(Enum):
     # Both resolve BY NAME ahead of the declaration maps, so the declaration is
     # unreachable and its readers silently get the implicit symbol instead.
     RESERVED_VARIABLE_NAME = "reserved_variable_name"
+    # esm-spec §6.6.2: an inline test's `initial_conditions` / `parameter_overrides`
+    # key that matches no declared name under the override-key rules. Static, so a
+    # typo'd key is named at validation rather than only when a runtime builds it.
+    UNKNOWN_OVERRIDE_KEY = "unknown_override_key"
+    # esm-spec §6.6.5: an assertion whose form does not match the declared rank of
+    # the variable it names -- pointwise on a shaped variable, or `coords` /
+    # `reduce` on a scalar one.
+    ASSERTION_RANK_MISMATCH = "assertion_rank_mismatch"
+    # Inline array data as the `default` of a variable that declares no `shape`
+    # (esm-spec §6.3). Inline array data is a SHAPED variable's value, so with no
+    # shape there is nothing for the array to fill.
+    ARRAY_DEFAULT_WITHOUT_SHAPE = "array_default_without_shape"
     MISSING_REQUIRED_FIELD = "missing_required_field"
     UNIT_MISMATCH = "unit_mismatch"
     # Codes emitted by earthsci_ast.validation (previously ad-hoc string
@@ -146,6 +158,10 @@ class ErrorCode(Enum):
     # a declared error semantics is a wrong answer with nothing in the result to
     # say so.
     TABLE_OUT_OF_BOUNDS_UNSUPPORTED = "table_out_of_bounds_unsupported"
+    # §9.6.6: an expression ranges over a `kind: "derived"` index set whose
+    # producer could not be materialized at build. Refused rather than contracted
+    # as an empty range, which would read as a plausible 0.
+    DERIVED_INDEX_SET_UNMATERIALIZED = "derived_index_set_unmaterialized"
 
 
 # ===========================================================================
@@ -202,6 +218,10 @@ DATA_SOURCE_URL_UNRESOLVED = "data_source_url_unresolved"
 # ===========================================================================
 
 SOLVER_VERSION_TOO_OLD = "solver_version_too_old"
+
+# Declared `units` on an expression node in a document declaring esm < 1.2.0
+# (esm-spec §4.8.5), raised as ``ConstUnitsError`` from ``units.py``.
+CONST_UNITS_VERSION_TOO_OLD = "const_units_version_too_old"
 
 # ===========================================================================
 # Template-library import / metaparameter codes (esm-spec §9.7), raised as
@@ -317,6 +337,19 @@ RECURRENCE_UNSUPPORTED_FORM = "recurrence_unsupported_form"
 
 
 # ===========================================================================
+# Evaluator refusal (esm-spec §9.6.6), raised as
+# ``earthsci_ast.expression.UnsupportedConstructError`` by ``esm_problem`` for
+# every pathway, before anything is built.
+# ===========================================================================
+
+#: A continuous event, a discrete event or an implicit equation (an equation
+#: whose LHS is an expression rather than an unknown, ``D(unknown)`` or
+#: ``ic(unknown)``) reached an evaluator that cannot run it. Refused rather than
+#: skipped: a run without the construct reports a wrong answer.
+UNSUPPORTED_CONSTRUCT = "unsupported_construct"
+
+
+# ===========================================================================
 # Observed dependency cycle (esm-spec §4.9.6), reported by the structural
 # validator at `/models/<M>`.
 #
@@ -332,6 +365,76 @@ RECURRENCE_UNSUPPORTED_FORM = "recurrence_unsupported_form"
 #: in `validate` with the names on the cycle. The §4.3.1.1 recurrence SELF-EDGE
 #: is not one of these edges (see `RECURRENCE_NOT_WELLFOUNDED` above).
 OBSERVED_CYCLE = "observed_cycle"
+
+
+# ===========================================================================
+# Codes raised outside the families above, collected here so `ERROR_CODES`
+# (which is built from this module's globals) carries every code the package
+# raises. Each value is the string its raise site already emitted.
+# ===========================================================================
+
+#: A subsystem `ref` that does not resolve to a file (esm-spec §4.7).
+UNRESOLVED_SUBSYSTEM_REF = "unresolved_subsystem_ref"
+#: A subsystem `ref` whose file carries MORE THAN ONE top-level system. The mount
+#: names exactly one component, so there is no rule for choosing among them.
+AMBIGUOUS_SUBSYSTEM_REF = "ambiguous_subsystem_ref"
+#: A §4.7 ref mount's merged `index_sets` name collides with a non-deep-equal
+#: definition in the importing document's registry (esm-spec §9.6.6).
+SUBSYSTEM_INDEX_SET_CONFLICT = "subsystem_index_set_conflict"
+
+#: A rewrite-target op reached evaluation without being lowered (esm-spec
+#: §9.6.6).
+UNLOWERED_OPERATOR = "unlowered_operator"
+
+#: `couple` / `operator_compose` flatten-time refusals (esm-spec §10.3,
+#: esm-libraries-spec §4.7.1-§4.7.2), raised from :mod:`earthsci_ast.flatten`.
+COUPLE_MULTIPLICATIVE_NO_TENDENCY = "couple_multiplicative_no_tendency"
+OPERATOR_COMPOSE_NO_MERGE = "operator_compose_no_merge"
+OPERATOR_COMPOSE_REQUIRE_MATCH_UNMATCHED = "operator_compose_require_match_unmatched"
+OPERATOR_COMPOSE_AMBIGUOUS_BARE_NAME = "operator_compose_ambiguous_bare_name"
+
+#: The projection-pushdown rewrite met a join it does not recognise
+#: (:mod:`earthsci_ast.pushdown_rewrite`).
+PUSHDOWN_JOIN_UNRECOGNISED = "pushdown_join_unrecognised"
+
+#: Structural-validation finding codes (:mod:`earthsci_ast.structural_checks`,
+#: :mod:`earthsci_ast.validation`).
+OPERATOR_ARITY = "operator_arity"
+#: A `broadcast` node's `fn` is absent, not a scalar operator, or applied at an
+#: arity that operator does not admit (esm-spec §4.3.4 / §9.6.6).
+INVALID_BROADCAST_FN = "invalid_broadcast_fn"
+ARRAY_SHAPE_MISMATCH = "array_shape_mismatch"
+AGGREGATE_SEMANTICS = "aggregate_semantics"
+#: The collect-level label of the inline-test pass (esm-spec §6.6.2-§6.6.5). Each
+#: finding normally carries its own code (`undefined_variable`,
+#: `unknown_override_key`, `assertion_rank_mismatch`); this is the fallback.
+INLINE_TEST_SEMANTICS = "inline_test_semantics"
+CIRCULAR_DEPENDENCY = "circular_dependency"
+INVALID_METADATA_FORMAT = "invalid_metadata_format"
+INVALID_TEMPORAL_RESOLUTION = "invalid_temporal_resolution"
+UNCOVERED_STATE_VARIABLE = "uncovered_state_variable"
+REACTION_CONSISTENCY = "reaction_consistency"
+MISSING_REGISTERED_FUNCTION = "missing_registered_function"
+RELATIONAL_NODE_IN_CONTINUOUS = "relational_node_in_continuous"
+UNDEFINED_INDEX_SET = "undefined_index_set"
+JOIN_KEY_INVALID_TYPE = "join_key_invalid_type"
+JOIN_SYMS_UNKNOWN_SYMBOL = "join_syms_unknown_symbol"
+JOIN_SIDE_AMBIGUOUS = "join_side_ambiguous"
+#: A unit-analysis finding that is neither a dimensional mismatch nor an
+#: unparseable unit.
+ANALYSIS = "analysis"
+
+
+# ===========================================================================
+# Evaluable-core op with no evaluation rule (esm-spec §9.6.6), raised as
+# ``earthsci_ast.numpy_interpreter.UnevaluableOperatorError``.
+# ===========================================================================
+
+#: An op that IS in the §4.2 evaluable core reached an evaluator with no rule for
+#: it (a value-invention or load-time-lowered op an earlier stage should have
+#: eliminated). The complement of ``unlowered_operator``; refused before
+#: evaluation, naming the op.
+UNEVALUABLE_OPERATOR = "unevaluable_operator"
 
 
 # ===========================================================================

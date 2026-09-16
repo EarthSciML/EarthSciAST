@@ -202,6 +202,7 @@ impl Compiled {
 
     /// Convenience: flatten the model first, then build.
     pub fn from_model(model: &Model) -> Result<Self, CompileError> {
+        refuse_subsystem_event(crate::compile_error::first_event(model))?;
         let flat = flatten_model(model)?;
         Self::from_flattened(&flat)
     }
@@ -221,6 +222,7 @@ impl Compiled {
         // for every document that declares none.
         let annotated = crate::precision_infer::annotated(file)?;
         let file = annotated.as_ref().unwrap_or(file);
+        refuse_subsystem_event(crate::compile_error::first_event_in_file(file))?;
         let flat = flatten(file)?;
         Self::from_flattened(&flat)
     }
@@ -858,5 +860,21 @@ impl std::ops::AddAssign for SolveStats {
         self.n_jacobian_calls += rhs.n_jacobian_calls;
         self.n_accepted_steps += rhs.n_accepted_steps;
         self.n_rejected_steps += rhs.n_rejected_steps;
+    }
+}
+
+/// `flatten` lifts only the top-level components' events, so an event an inline
+/// subsystem owns never reaches [`Compiled::from_flattened`]'s check; the entries
+/// that still hold the unflattened model refuse it here instead.
+fn refuse_subsystem_event(
+    found: Option<(&'static str, Option<String>)>,
+) -> Result<(), CompileError> {
+    match found {
+        Some((construct, name)) => Err(crate::compile_error::event_refusal(
+            construct,
+            crate::compile_error::SCALAR_EVALUATOR,
+            name.as_deref(),
+        )),
+        None => Ok(()),
     }
 }

@@ -1318,21 +1318,29 @@ def _model_template_registry(data: dict[str, Any], model: dict[str, Any]) -> dic
     return registry
 
 
-def _scalar_field_param_map(registry: dict[str, Any]) -> dict[str, frozenset[str]]:
-    """For each template in ``registry``, the param names consumed in a
-    scalar-FIELD substitution site (esm-spec §9.6.1) of its body — today the
-    ``manifold`` field of the geometry ops — directly or forwarded through a
-    nested ``apply_expression_template``.
+def _literal_param_map(registry: dict[str, Any]) -> dict[str, frozenset[str]]:
+    """For each template in ``registry``, the param names its body consumes
+    ONLY as a literal, never in a variable-reference position, directly or
+    forwarded through a nested ``apply_expression_template``. Two literal
+    positions exist:
 
-    A call-site binding VALUE for such a param is field VOCABULARY (the closed
-    manifold set, CONFORMANCE_SPEC §5.8.4), never an expression reference: the
-    schema deliberately admits any string in the ``manifold`` position so a
-    template body can carry a parameter name there, and admissibility of the
-    bound literal is enforced on the EXPANDED form (§9.6.4,
-    ``geometry_manifold_invalid``) — not by the raw-stage reference checker.
-    Julia and Rust validate references after expansion, where the literal sits
-    in the node's ``manifold`` field; this map is how the raw-stage walk reaches
-    the same verdict."""
+    * a scalar-FIELD substitution site (esm-spec §9.6.1) — today the
+      ``manifold`` field of the geometry ops, whose bound value is field
+      vocabulary (the closed manifold set, CONFORMANCE_SPEC §5.8.4). The schema
+      admits any string there so a body can carry a parameter name, and
+      admissibility is enforced on the expanded form (§9.6.4,
+      ``geometry_manifold_invalid``);
+    * an argument of an ``enum`` op (esm-spec §4.5, §9.3). Substitution is
+      position-blind (§9.6.3 constraint 5), so a string bound to such a param
+      lands as an enum name or symbol, which the load-time lowering checks
+      (``unknown_enum`` / ``unknown_enum_symbol``).
+
+    A call-site STRING binding for such a param is therefore not an expression
+    reference. A document is valid iff its expansion is (§9.6.9), and the other
+    bindings validate references after expansion, where the literal sits in the
+    ``manifold`` field or the ``enum`` op; this map is how the raw-stage walk
+    reaches the same verdict. A param a body ALSO uses in a reference position
+    is left out: its bound string is a reference there, and must be declared."""
     resolved: dict[str, frozenset[str]] = {}
 
     def params_of(name: str, stack: tuple[str, ...]) -> frozenset[str]:
@@ -1344,7 +1352,8 @@ def _scalar_field_param_map(registry: dict[str, Any]) -> dict[str, frozenset[str
         if not isinstance(tpl, dict):
             return frozenset()
         params = {p for p in tpl.get("params") or [] if isinstance(p, str)}
-        found: set[str] = set()
+        literal: set[str] = set()
+        referenced: set[str] = set()
         stack = stack + (name,)
         nodes: list[Any] = [tpl.get("body")]
         while nodes:
@@ -1356,7 +1365,12 @@ def _scalar_field_param_map(registry: dict[str, Any]) -> dict[str, frozenset[str
                 continue
             mf = node.get("manifold")
             if isinstance(mf, str) and mf in params:
-                found.add(mf)
+                literal.add(mf)
+            if node.get("op") == "enum":
+                for a in node.get("args") or []:
+                    if isinstance(a, str) and a in params:
+                        literal.add(a)
+                continue
             inner_name = node.get("name")
             bindings = node.get("bindings")
             if (
@@ -1364,28 +1378,31 @@ def _scalar_field_param_map(registry: dict[str, Any]) -> dict[str, frozenset[str
                 and isinstance(inner_name, str)
                 and isinstance(bindings, dict)
             ):
-                inner_sf = params_of(inner_name, stack)
+                inner_literal = params_of(inner_name, stack)
                 for k, v in bindings.items():
-                    if k in inner_sf and isinstance(v, str) and v in params:
-                        found.add(v)
+                    if isinstance(v, str) and v in params:
+                        (literal if k in inner_literal else referenced).add(v)
+            for field_name, child in iter_child_values(node):
+                if field_name != "bindings" and isinstance(child, str) and child in params:
+                    referenced.add(child)
             nodes.extend(node.values())
-        resolved[name] = frozenset(found)
+        resolved[name] = frozenset(literal - referenced)
         return resolved[name]
 
     return {name: params_of(name, ()) for name in registry}
 
 
-def _strip_scalar_field_bindings(expr: Any, sf_map: dict[str, frozenset[str]]) -> Any:
+def _strip_literal_bindings(expr: Any, literal_map: dict[str, frozenset[str]]) -> Any:
     """Non-mutating copy of ``expr`` with every ``apply_expression_template``
-    node's STRING bindings for scalar-field params (see
-    :func:`_scalar_field_param_map`) removed, so the reference walker does not
-    read field vocabulary (``manifold: "planar"``) as a variable reference.
-    Expression-valued bindings are kept — their references are real."""
+    node's STRING bindings for literal-only params (see
+    :func:`_literal_param_map`) removed, so the reference walker does not read
+    field vocabulary (``manifold: "planar"``) or an enum symbol as a variable
+    reference. Expression-valued bindings are kept — their references are real."""
     if isinstance(expr, list):
-        return [_strip_scalar_field_bindings(x, sf_map) for x in expr]
+        return [_strip_literal_bindings(x, literal_map) for x in expr]
     if not isinstance(expr, dict):
         return expr
-    out = {k: _strip_scalar_field_bindings(v, sf_map) for k, v in expr.items()}
+    out = {k: _strip_literal_bindings(v, literal_map) for k, v in expr.items()}
     name = out.get("name")
     bindings = out.get("bindings")
     if (
@@ -1393,7 +1410,7 @@ def _strip_scalar_field_bindings(expr: Any, sf_map: dict[str, frozenset[str]]) -
         and isinstance(name, str)
         and isinstance(bindings, dict)
     ):
-        sf = sf_map.get(name, frozenset())
+        sf = literal_map.get(name, frozenset())
         if sf:
             out["bindings"] = {
                 k: v for k, v in bindings.items() if not (k in sf and isinstance(v, str))
@@ -1430,17 +1447,18 @@ def _check_variable_references(
     references (esm-spec §5).
     """
     global_symbols = tables["global_symbols"]
-    for mname, m in data.get("models", {}).items():
+    for m, sites in _component_reference_sites(data):
         subsystems = m.get("subsystems") or {}
-        # Scalar-field template params (§9.6.1): a call-site STRING binding for
-        # one is field vocabulary (`manifold: "planar"`), not a reference —
-        # strip those bindings before the reference walk (never mutating the
-        # document). See :func:`_scalar_field_param_map`.
-        sf_map = _scalar_field_param_map(_model_template_registry(data, m))
-        for location, expr, check_bare, phrase, extra in _model_expression_sites(m, mname):
+        # Literal-only template params (§9.6.1 scalar fields, §9.3 `enum` args):
+        # a call-site STRING binding for one is field vocabulary
+        # (`manifold: "planar"`) or an enum symbol, not a reference — strip
+        # those bindings before the reference walk (never mutating the
+        # document). See :func:`_literal_param_map`.
+        literal_map = _literal_param_map(_model_template_registry(data, m))
+        for location, expr, check_bare, phrase, extra in sites:
             bound_symbols = _expression_bound_symbols(expr)
-            if sf_map:
-                expr = _strip_scalar_field_bindings(expr, sf_map)
+            if literal_map:
+                expr = _strip_literal_bindings(expr, literal_map)
             for ref in _walk_expression_strings(expr):
                 # `_var` is the reserved operator placeholder (spec §6.4): in an
                 # operator-style model it is substituted with each matching state
@@ -1500,6 +1518,160 @@ def _check_variable_references(
                                 _pointer(location),
                                 f'Variable "{ref}" referenced in {phrase} but not declared',
                                 {"variable": ref},
+                            )
+                        )
+
+
+_ELEMENT_SUFFIX = re.compile(r"^(.*?)\[[^\]]*\]$")
+
+
+def _strip_element_suffix(name: str) -> tuple[str, bool]:
+    """``u[1]`` -> ``("u", True)``; a name without an element suffix is unchanged."""
+    m = _ELEMENT_SUFFIX.match(name)
+    return (m.group(1), True) if m else (name, False)
+
+
+def _pointer_token(key: str) -> str:
+    """Escape one JSON Pointer reference token (RFC 6901)."""
+    return key.replace("~", "~0").replace("/", "~1")
+
+
+def _test_target_declarations(component: dict[str, Any], section: str) -> dict[str, Any]:
+    """The names an inline test's assertion may target by a bare name, mapped to
+    the declared ``shape`` (``None`` when absent): a model's ``variables``, or a
+    reaction system's ``species`` (which carry no shape) and ``parameters``."""
+    if section == "models":
+        return {
+            n: (v.get("shape") if isinstance(v, dict) else None)
+            for n, v in (component.get("variables") or {}).items()
+        }
+    out: dict[str, Any] = {n: None for n in (component.get("species") or {})}
+    for n, v in (component.get("parameters") or {}).items():
+        out[n] = v.get("shape") if isinstance(v, dict) else None
+    return out
+
+
+def _declared_override_names(data: dict[str, Any]) -> tuple[set, set, bool]:
+    """The document's declared names qualified as a flatten qualifies them
+    (``<component>.<name>``, ``<component>.<subsystem>.<name>`` at any depth),
+    the component and subsystem names rule 2 of esm-spec §6.6.2 validates a
+    key's leading segments against, and whether every mount is resolved."""
+    names: set = set()
+    namespaces: set = set()
+    complete = True
+
+    def walk(prefix: str, component: Any, section: str) -> None:
+        nonlocal complete
+        if not isinstance(component, dict) or "ref" in component:
+            complete = False
+            return
+        namespaces.add(prefix.rsplit(".", 1)[-1])
+        for name in _test_target_declarations(component, section):
+            names.add(f"{prefix}.{name}")
+        for sub_name, sub in (component.get("subsystems") or {}).items():
+            walk(f"{prefix}.{sub_name}", sub, section)
+
+    for section in ("models", "reaction_systems"):
+        for cname, component in (data.get(section) or {}).items():
+            walk(cname, component, section)
+    return names, namespaces, complete
+
+
+def _override_key_matches(key: str, names: set, namespaces: set) -> bool:
+    """Whether ``key`` reaches a declared name under esm-spec §6.6.2 rules 1-3:
+    an exact hit; a dotted suffix of the key that is a name, every dropped
+    leading segment naming a component or subsystem; or the key a dotted suffix
+    of some name. Ambiguity is a runtime diagnostic, so one match suffices."""
+    if key in names:
+        return True
+    parts = key.split(".")
+    for i in range(1, len(parts)):
+        if ".".join(parts[i:]) in names and all(p in namespaces for p in parts[:i]):
+            return True
+    tail = "." + key
+    return any(n.endswith(tail) for n in names)
+
+
+def _check_inline_tests(data: dict[str, Any], errors: list) -> None:
+    """Static checks on every inline test (esm-spec §6.6):
+
+    * an assertion ``variable`` that is a bare name (element suffix removed) the
+      component does not declare is ``undefined_variable`` (§6.6.3); a dotted
+      target is resolved by the runtime;
+    * an ``initial_conditions`` / ``parameter_overrides`` key that matches no
+      declared name is ``unknown_override_key`` (§6.6.2); skipped when the
+      document holds an unresolved mount a key could name into;
+    * an assertion whose form does not match the declared rank of its target is
+      ``assertion_rank_mismatch`` (§6.6.5).
+    """
+    names, namespaces, complete = _declared_override_names(data)
+    for section in ("models", "reaction_systems"):
+        for cname, component in (data.get(section) or {}).items():
+            if not isinstance(component, dict) or "ref" in component:
+                continue
+            declared = _test_target_declarations(component, section)
+            for ti, test in enumerate(component.get("tests") or []):
+                if not isinstance(test, dict):
+                    continue
+                base = f"/{section}/{cname}/tests/{ti}"
+                if complete:
+                    for field in ("initial_conditions", "parameter_overrides"):
+                        for key in test.get(field) or {}:
+                            bare_key, _ = _strip_element_suffix(key)
+                            if not _override_key_matches(bare_key, names, namespaces):
+                                errors.append(
+                                    (
+                                        "unknown_override_key",
+                                        f"{base}/{field}/{_pointer_token(key)}",
+                                        f'Override key "{key}" in {field} matches no declared name',
+                                        {"key": key, "field": field},
+                                    )
+                                )
+                for ai, assertion in enumerate(test.get("assertions") or []):
+                    if not isinstance(assertion, dict):
+                        continue
+                    target = assertion.get("variable")
+                    if not isinstance(target, str):
+                        continue
+                    bare, is_element = _strip_element_suffix(target)
+                    if "." in bare:
+                        continue
+                    pointer = f"{base}/assertions/{ai}"
+                    if bare not in declared:
+                        errors.append(
+                            (
+                                "undefined_variable",
+                                f"{pointer}/variable",
+                                f'Variable "{bare}" referenced in assertion variable '
+                                f"but not declared",
+                                {"variable": bare},
+                            )
+                        )
+                        continue
+                    if is_element:
+                        continue
+                    shape = declared[bare]
+                    shape = list(shape) if isinstance(shape, list) else []
+                    selects = (
+                        assertion.get("coords") is not None or assertion.get("reduce") is not None
+                    )
+                    if shape and not selects:
+                        errors.append(
+                            (
+                                "assertion_rank_mismatch",
+                                pointer,
+                                f'Assertion on shaped variable "{bare}" selects no scalar '
+                                f"(give coords, reduce, or an element name)",
+                                {"variable": bare, "shape": shape},
+                            )
+                        )
+                    elif not shape and selects:
+                        errors.append(
+                            (
+                                "assertion_rank_mismatch",
+                                pointer,
+                                f'Assertion on scalar variable "{bare}" carries coords or reduce',
+                                {"variable": bare, "shape": []},
                             )
                         )
 
@@ -1627,12 +1799,20 @@ def _model_expression_sites(m: dict[str, Any], mname: str):
                     {},
                 )
 
-    for i, ev in enumerate(m.get("continuous_events", []) or []):
+    yield from _event_expression_sites(m, f"models/{mname}")
+    yield from _test_reference_sites(m, f"models/{mname}")
+
+
+def _event_expression_sites(component: dict[str, Any], location: str):
+    """A component's continuous- and discrete-event expressions, in the
+    :func:`_model_expression_sites` tuple shape. An event is the same site on a
+    reaction system as on a model, so both component kinds share this."""
+    for i, ev in enumerate(component.get("continuous_events", []) or []):
         if not isinstance(ev, dict):
             continue
         for j, cond in enumerate(ev.get("conditions", []) or []):
             yield (
-                f"models/{mname}/continuous_events[{i}]/conditions[{j}]",
+                f"{location}/continuous_events[{i}]/conditions[{j}]",
                 cond,
                 True,
                 "continuous event condition",
@@ -1642,20 +1822,20 @@ def _model_expression_sites(m: dict[str, Any], mname: str):
             for j, aff in enumerate(ev.get(key, []) or []):
                 if isinstance(aff, dict) and "rhs" in aff:
                     yield (
-                        f"models/{mname}/continuous_events[{i}]/{key}[{j}]/rhs",
+                        f"{location}/continuous_events[{i}]/{key}[{j}]/rhs",
                         aff["rhs"],
                         True,
                         "continuous event affect RHS",
                         {},
                     )
 
-    for i, ev in enumerate(m.get("discrete_events", []) or []):
+    for i, ev in enumerate(component.get("discrete_events", []) or []):
         if not isinstance(ev, dict):
             continue
         trigger = ev.get("trigger")
         if isinstance(trigger, dict) and trigger.get("expression") is not None:
             yield (
-                f"models/{mname}/discrete_events[{i}]/trigger/expression",
+                f"{location}/discrete_events[{i}]/trigger/expression",
                 trigger["expression"],
                 True,
                 "discrete event trigger expression",
@@ -1664,25 +1844,64 @@ def _model_expression_sites(m: dict[str, Any], mname: str):
         for j, aff in enumerate(ev.get("affects", []) or []):
             if isinstance(aff, dict) and "rhs" in aff:
                 yield (
-                    f"models/{mname}/discrete_events[{i}]/affects[{j}]/rhs",
+                    f"{location}/discrete_events[{i}]/affects[{j}]/rhs",
                     aff["rhs"],
                     True,
                     "discrete event affect RHS",
                     {},
                 )
 
-    for i, t in enumerate(m.get("tests", []) or []):
+
+def _reaction_system_expression_sites(rs: dict[str, Any], rsname: str):
+    """A reaction system's reference sites outside its reaction rates: its
+    constraint equations, events and inline-test references. Each is the same
+    site as on a model and reports ``undefined_variable`` as the model's does;
+    a reaction ``rate`` keeps ``undefined_parameter`` (:func:`_check_reaction_systems`)."""
+    location = f"reaction_systems/{rsname}"
+    for i, eq in enumerate(rs.get("constraint_equations", []) or []):
+        if not isinstance(eq, dict):
+            continue
+        for side in ("lhs", "rhs"):
+            if side in eq:
+                yield (
+                    f"{location}/constraint_equations[{i}]/{side}",
+                    eq[side],
+                    True,
+                    None,
+                    {"equation_index": i, "expected_in": "variables"},
+                )
+    yield from _event_expression_sites(rs, location)
+    yield from _test_reference_sites(rs, location)
+
+
+def _test_reference_sites(component: dict[str, Any], location: str):
+    """An inline test's assertion ``reference`` expressions (§6.6), in the
+    :func:`_model_expression_sites` tuple shape. A test is the same site on a
+    reaction system as on a model, so both component kinds share this."""
+    for i, t in enumerate(component.get("tests", []) or []):
         if not isinstance(t, dict):
             continue
         for j, a in enumerate(t.get("assertions", []) or []):
             if isinstance(a, dict) and a.get("reference") is not None:
                 yield (
-                    f"models/{mname}/tests[{i}]/assertions[{j}]/reference",
+                    f"{location}/tests[{i}]/assertions[{j}]/reference",
                     a["reference"],
                     True,
                     "assertion reference expression",
                     {},
                 )
+
+
+def _component_reference_sites(data: dict[str, Any]):
+    """Yield ``(component, sites)`` for every component whose expressions the
+    reference-integrity check walks: each model's full site list, and each
+    reaction system's sites outside its reaction rates."""
+    for mname, m in (data.get("models") or {}).items():
+        if isinstance(m, dict):
+            yield m, _model_expression_sites(m, mname)
+    for rsname, rs in (data.get("reaction_systems") or {}).items():
+        if isinstance(rs, dict):
+            yield rs, _reaction_system_expression_sites(rs, rsname)
 
 
 def _pointer(location: str) -> str:
@@ -1996,6 +2215,49 @@ def _check_reserved_declaration_names(data: dict[str, Any], errors: list[str]) -
             scan(rs["species"], f"/reaction_systems/{rname}/species", owner, "species")
         if isinstance(rs.get("parameters"), dict):
             scan(rs["parameters"], f"/reaction_systems/{rname}/parameters", owner, "parameter")
+
+
+def _check_array_default_without_shape(data: dict[str, Any], errors: list[str]) -> None:
+    """``array_default_without_shape``: inline array data as the ``default`` of a
+    variable that declares no ``shape`` (esm-spec §6.3).
+
+    Inline array data is a SHAPED variable's value: its nesting is matched
+    against the declared ``shape``. With no shape (omitted, null or empty) there
+    is nothing for the array to fill and no scalar reading of it, so the
+    document is malformed. Rejected here, at the declaration, rather than left
+    to a runtime that would have to drop the parameter or fabricate a value.
+    Inline subsystems are models, so they are walked too.
+    """
+
+    def scan_model(m: Any, pointer: str, owner: str) -> None:
+        if not isinstance(m, dict):
+            return
+        variables = m.get("variables")
+        if isinstance(variables, dict):
+            for name in sorted(variables, key=str):
+                var = variables[name]
+                if not isinstance(var, dict) or not isinstance(var.get("default"), list):
+                    continue
+                if var.get("shape"):
+                    continue
+                errors.append(
+                    (
+                        f"{pointer}/variables/{name}/default",
+                        f"{owner} variable '{name}' has inline array data as its default "
+                        "but declares no shape; inline array data is a shaped variable's "
+                        "value (esm-spec §6.3)",
+                        {"variable": str(name), "variable_type": str(var.get("type"))},
+                    )
+                )
+        subsystems = m.get("subsystems")
+        if isinstance(subsystems, dict):
+            for sname in sorted(subsystems, key=str):
+                scan_model(subsystems[sname], f"{pointer}/subsystems/{sname}", f"Model '{sname}'")
+
+    models = data.get("models")
+    if isinstance(models, dict):
+        for mname in sorted(models, key=str):
+            scan_model(models[mname], f"/models/{mname}", f"Model '{mname}'")
 
 
 def _check_event_affects_parameter(data: dict[str, Any], errors: list[str]) -> None:
@@ -2384,9 +2646,18 @@ def _check_conversion_factor_consistency(data: dict[str, Any], errors: list[str]
             except _pint_unverifiable_errors():
                 # unparseable unit: cannot verify, skip.
                 continue
-            factor = linear_factor(n_src, n_lhs)
-            if factor is None or factor == 0:
+            if linear_factor(n_src, n_lhs) is None:
+                continue  # affine or unconvertible
+            # Identical exact scales imply no conversion, so the coefficient is free;
+            # otherwise the expected factor is formed EXACTLY and rounded once, so the
+            # tolerance below only absorbs the literal's spelling (esm-spec §4.8.1).
+            from .units import unit_exact_scale
+
+            src_scale = unit_exact_scale(n_src)
+            lhs_scale = unit_exact_scale(n_lhs)
+            if src_scale == lhs_scale:
                 continue
+            factor = float(src_scale / lhs_scale)
             if abs(numeric - factor) <= 1e-9 * max(abs(factor), 1.0):
                 continue  # matches within tolerance
             errors.append(
@@ -2529,6 +2800,61 @@ _DECLARED_UNIT_SITES = (
     ("reaction_systems", "species"),
     ("reaction_systems", "parameters"),
 )
+
+
+def _check_const_unit_strings(data: dict[str, Any], errors: list) -> None:
+    """Flag a declared ``const`` unit string that does not resolve (esm-spec
+    §4.8.5 item 2), at the containing expression field
+    (``/models/<M>/equations/<i>/lhs`` or ``/rhs``).
+
+    This runs before template references are expanded, so a call is read
+    through the body of the template it names (§4.8.5 item 5): a ``const`` in
+    that body belongs to every equation that calls it, as it does once the call
+    is expanded."""
+    try:
+        from .units import unresolvable_const_units
+    except ImportError:
+        return
+    for mname, model in (data.get("models") or {}).items():
+        registry = model.get("expression_templates") or {}
+        for i, eq in enumerate(model.get("equations") or []):
+            if not isinstance(eq, dict):
+                continue
+            for field in ("lhs", "rhs"):
+                side = [eq.get(field), *_called_template_bodies(eq.get(field), registry)]
+                for units in unresolvable_const_units(side):
+                    errors.append(
+                        (
+                            f"/models/{mname}/equations/{i}/{field}",
+                            f"Unit string '{units}' is not a recognised unit",
+                            {"units": units},
+                        )
+                    )
+
+
+def _called_template_bodies(expr: Any, registry: dict[str, Any]) -> list[Any]:
+    """The body of every template ``expr`` calls through
+    ``apply_expression_template``, directly or from inside another called body,
+    each once."""
+    bodies: list[Any] = []
+    seen: set[str] = set()
+    stack = [expr]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, list):
+            stack.extend(node)
+            continue
+        if not isinstance(node, dict):
+            continue
+        name = node.get("name")
+        if node.get("op") == "apply_expression_template" and isinstance(name, str):
+            template = registry.get(name)
+            if name not in seen and isinstance(template, dict):
+                seen.add(name)
+                bodies.append(template.get("body"))
+                stack.append(template.get("body"))
+        stack.extend(node.values())
+    return bodies
 
 
 def _check_unparseable_units(data: dict[str, Any], errors: list) -> None:
@@ -3085,6 +3411,9 @@ def _validate_structural(data: dict[str, Any], file_path=None) -> None:
     # `undefined_variable` and Python was the only binding spelling it otherwise
     # — a cross-language conformance gap, not a cosmetic one.
     collect("undefined_variable", lambda sub: _check_variable_references(data, tables, sub))
+    # An inline test's assertion target, override keys and assertion rank (esm-spec
+    # §6.6.2, §6.6.3, §6.6.5). Each finding carries its own code via a 4-tuple.
+    collect("inline_test_semantics", lambda sub: _check_inline_tests(data, sub))
     # Three statically-decidable aggregate defects (join_key_invalid_type,
     # relational_node_in_continuous, undefined_index_set). Each finding carries
     # its own explicit code via a 4-tuple, so the collect-level code is only a
@@ -3127,6 +3456,12 @@ def _validate_structural(data: dict[str, Any], file_path=None) -> None:
         "reserved_variable_name",
         lambda sub: _check_reserved_declaration_names(data, sub),
     )
+    # Inline array data is a shaped variable's value (esm-spec §6.3); on a
+    # variable with no `shape` it has nothing to fill.
+    collect(
+        "array_default_without_shape",
+        lambda sub: _check_array_default_without_shape(data, sub),
+    )
     collect("system_kind_mismatch", lambda sub: _check_system_kind(data, sub))
     collect("invalid_metadata_format", lambda sub: _check_metadata_formats(data, sub))
     collect("invalid_temporal_resolution", lambda sub: _check_temporal_resolution(data, sub))
@@ -3136,6 +3471,7 @@ def _validate_structural(data: dict[str, Any], file_path=None) -> None:
     # findings with different codes (esm-spec §4.8.4) — the first tells the author
     # to fix a spelling, the second to fix the physics.
     collect("unit_parse_error", lambda sub: _check_unparseable_units(data, sub))
+    collect("unit_parse_error", lambda sub: _check_const_unit_strings(data, sub))
     collect("unit_inconsistency", lambda sub: _check_unit_consistency(data, tables, sub))
     collect("unit_inconsistency", lambda sub: _check_default_units_consistency(data, sub))
     collect("unit_inconsistency", lambda sub: _check_conversion_factor_consistency(data, sub))

@@ -40,10 +40,10 @@ import numpy as np
 from . import broad_phase, op_registry, recurrence
 from .cadence import Partition
 from .cadence import partition as _partition_model
-from .error_handling import RECURRENCE_NOT_WELLFOUNDED
+from .error_handling import RECURRENCE_NOT_WELLFOUNDED, UNEVALUABLE_OPERATOR
 from .errors import EarthSciAstError
 from .esm_types import ARRAY_OPS, Expr, ExprNode
-from .expr_walk import any_child
+from .expr_walk import any_child, iter_children
 from .index_ranges import expand_range as _expand_range
 from .registered_functions import (
     INTERP_CONST_ARG_POSITIONS as _INTERP_CONST_ARG_POSITIONS,
@@ -191,6 +191,11 @@ class EvalContext:
     # cell of the fold (CONFORMANCE_SPEC §5.19.3a). Empty ⇒ no variable declares
     # its own precision, which is every document that does not say otherwise.
     element_types: dict[str, str] = field(default_factory=dict)
+    # Names of the observeds defined by a ``const`` array (esm-spec §4.3.3). An
+    # ``index`` on one of them, or on a ``const`` literal written inline, is a
+    # const-array gather: an out-of-range index raises
+    # ``E_TREEWALK_CONSTARRAY_OOB`` (CONFORMANCE_SPEC §5.5.5).
+    const_array_names: frozenset[str] = field(default_factory=frozenset)
 
 
 def ragged_factor_scope(
@@ -250,6 +255,12 @@ class ComplexValueError(EarthSciAstError):
     """
 
 
+class ConstArrayOutOfRangeError(NumpyInterpreterError):
+    """``E_TREEWALK_CONSTARRAY_OOB``: a const-array gather read outside an axis
+    (CONFORMANCE_SPEC §5.5.5). A fault in the document, never an observed that is
+    merely not evaluable yet, so a tolerant build pass must not skip it."""
+
+
 class UnreachableSpatialOperatorError(NumpyInterpreterError):
     """Raised when an unlowered rewrite-target operator reaches the simulator's
     RHS evaluator — a spatial/right-hand-side ``D``, one of the open-tier sugar
@@ -280,6 +291,40 @@ class UnreachableSpatialOperatorError(NumpyInterpreterError):
             f"must be rewritten by a discretization rule before evaluation "
             f"(esm-spec §4.2 / §9.6.8). Pipeline contract violated."
         )
+
+
+class UnevaluableOperatorError(NumpyInterpreterError):
+    """An op that IS in the esm-spec §4.2 evaluable core, but that this
+    interpreter has no evaluation rule for, reached it (esm-spec §9.6.6).
+
+    The complement of :class:`UnreachableSpatialOperatorError`, which is for an
+    op OUTSIDE the core that no rewrite rule lowered: this op needs an earlier
+    pipeline stage (value invention, or a load-time lowering pass), not a
+    rewrite rule. A subclass of :class:`NumpyInterpreterError`, so an existing
+    ``except NumpyInterpreterError`` still catches it.
+    """
+
+    #: Stable cross-binding diagnostic code (esm-spec §9.6.6).
+    code = UNEVALUABLE_OPERATOR
+
+    def __init__(self, op: str, remedy: str | None = None) -> None:
+        self.op = op
+        if remedy is None:
+            remedy = (
+                "an earlier pipeline stage (value invention, or a load-time lowering "
+                "pass) must eliminate it, or the document belongs to a runtime that "
+                "evaluates it"
+            )
+        super().__init__(
+            f"unevaluable_operator: operator '{op}' is an evaluable-core op with no "
+            f"evaluation rule in the NumPy interpreter: {remedy} (esm-spec §4.2 / §9.6.6)."
+        )
+
+
+def _enum_not_lowered() -> UnevaluableOperatorError:
+    return UnevaluableOperatorError(
+        "enum", "`lower_enums(file)` must lower it to `const` during load (esm-spec §9.3)"
+    )
 
 
 def _as_array(x: Any) -> np.ndarray:
@@ -420,6 +465,26 @@ _CMP_UFUNCS: dict[str, Callable] = {
 #: privileged and none can be forgotten.
 _EVALUABLE_CORE_OPS: frozenset[str] = op_registry.by_tier("core")
 
+#: The evaluable-core ops :func:`eval_expr` has NO rule for (esm-spec §9.6.6
+#: ``unevaluable_operator``): value-invention producers materialized at build,
+#: the load-time-lowered forms, and the structural ``Pre``/``=``/``ic``/``join``.
+#: Pinned against the dispatch by tests/test_unevaluable_operator.py.
+_NO_RULE_OPS: frozenset[str] = frozenset(
+    {
+        "=",
+        "Pre",
+        "apply_expression_template",
+        "argmax",
+        "argmin",
+        "distinct",
+        "enum",
+        "ic",
+        "join",
+        "rank",
+        "table_lookup",
+    }
+)
+
 
 # Closed semiring registry (RFC semiring-faq-unified-ir §5.1). Each entry fixes
 # the (⊕, ⊗) operator pair AND both identity elements: ``zero`` (0̄) is the value
@@ -555,7 +620,8 @@ def _resolve_range_spec(spec: Any, ctx: EvalContext) -> Any:
         ring = ctx.derived_rings.get(faq)
         if ring is None:
             raise NumpyInterpreterError(
-                f"derived index set {name!r} (from_faq {faq!r}) is not materialized; "
+                f"derived_index_set_unmaterialized: derived index set {name!r} "
+                f"(from_faq {faq!r}) is not materialized; "
                 f"its producing node has not been evaluated. Materialized rings: "
                 f"{sorted(ctx.derived_rings)}, value-invention extents: "
                 f"{sorted(ctx.derived_extents)} (RFC §5.5 / §8.1)"
@@ -935,10 +1001,7 @@ def eval_expr(expr: Expr, ctx: EvalContext) -> float | np.ndarray:
                 evaluated_args.append(eval_expr(a, ctx))
         return _eval_fn_lifted(expr.name, evaluated_args, const_arg_positions)
     if op == "enum":
-        raise NumpyInterpreterError(
-            "`enum` op encountered at evaluate time — `lower_enums(file)` should "
-            "have run during load (esm-spec §9.3)"
-        )
+        raise _enum_not_lowered()
 
     # --- scalar arithmetic / elementwise ---
     if op == "+":
@@ -1072,7 +1135,29 @@ def eval_expr(expr: Expr, ctx: EvalContext) -> float | np.ndarray:
     if op not in _EVALUABLE_CORE_OPS:
         raise UnreachableSpatialOperatorError(op)
 
-    raise NumpyInterpreterError(f"Unsupported op in NumPy interpreter: {op!r}")
+    raise UnevaluableOperatorError(op)
+
+
+def refuse_unevaluable_operators(expr: Expr) -> None:
+    """Raise on the first operator (pre-order) in ``expr`` that :func:`eval_expr`
+    cannot evaluate, WITHOUT evaluating anything (esm-spec §9.6.6: the check
+    precedes evaluation, so an op in an untaken ``ifelse`` branch is refused too).
+
+    An op outside the §4.2 evaluable core, or any ``D``, raises
+    :class:`UnreachableSpatialOperatorError` (``unlowered_operator``); a core op
+    in :data:`_NO_RULE_OPS` raises :class:`UnevaluableOperatorError`.
+    """
+    if not isinstance(expr, ExprNode):
+        return
+    op = expr.op
+    if op == "D" or op not in _EVALUABLE_CORE_OPS:
+        raise UnreachableSpatialOperatorError(op)
+    if op == "enum":
+        raise _enum_not_lowered()
+    if op in _NO_RULE_OPS:
+        raise UnevaluableOperatorError(op)
+    for child in iter_children(expr):
+        refuse_unevaluable_operators(child)
 
 
 #: Ops the expression compiler lowers to closures. Everything else (aggregate,
@@ -1173,6 +1258,7 @@ def _build_compiled_node(expr: ExprNode) -> Callable[[EvalContext], Any]:
         # and so cannot know which context will run it; the test is therefore
         # per call, and is one ``is None`` for every document with no recurrence.
         arr_name = args[0] if isinstance(args[0], str) else None
+        base = args[0]
         if not idx_c:
             return lambda ctx: _gather_index(arr_c(ctx), [])
 
@@ -1180,7 +1266,7 @@ def _build_compiled_node(expr: ExprNode) -> Callable[[EvalContext], Any]:
             idxs = [c(ctx) for c in idx_c]
             if ctx.recur is not None and arr_name == ctx.recur.name:
                 return ctx.recur.read(idxs)
-            return _gather_index(arr_c(ctx), idxs)
+            return _gather_index(arr_c(ctx), idxs, _const_gather_name(base, ctx))
 
         return f_index
 
@@ -1427,18 +1513,61 @@ def _eval_polygon_intersection_area(expr: ExprNode, ctx: EvalContext) -> float:
     return float(polygon_area_via_faq(ring, manifold))
 
 
+#: The name ``E_TREEWALK_CONSTARRAY_OOB`` reports for a ``const`` literal written
+#: inline as an ``index`` base, which has no variable name of its own.
+_INLINE_CONST_NAME = "inline const"
+
+
+def _const_gather_name(base: Any, ctx: EvalContext) -> str | None:
+    """The const array an ``index`` over ``base`` reads, or ``None`` when it is not a
+    const-array gather (esm-spec §4.3.3): a ``const`` literal written inline, or a
+    name ``ctx.const_array_names`` lists."""
+    if isinstance(base, ExprNode):
+        return _INLINE_CONST_NAME if base.op == "const" else None
+    if isinstance(base, str) and base in ctx.const_array_names:
+        return base
+    return None
+
+
+def _check_const_gather_bounds(
+    arr_val: np.ndarray, idxs: Sequence[float | np.ndarray], name: str
+) -> None:
+    """Raise ``E_TREEWALK_CONSTARRAY_OOB`` when a 1-based subscript of a const-array
+    gather lies outside its own axis (CONFORMANCE_SPEC §5.5.5). NumPy would otherwise
+    wrap an index of 0 or below to the far end of the axis, and report one past the
+    end as a bare ``IndexError``."""
+    for d, i in enumerate(idxs[: arr_val.ndim]):
+        n = arr_val.shape[d]
+        z = np.rint(np.asarray(i, dtype=float))
+        if z.size == 0:
+            continue
+        lo, hi = z.min(), z.max()
+        if lo < 1 or hi > n:
+            bad = int(lo if lo < 1 else hi)
+            raise ConstArrayOutOfRangeError(
+                f"E_TREEWALK_CONSTARRAY_OOB: const array '{name}' index {bad} "
+                f"out of range 1..{n} in dim {d + 1}"
+            )
+
+
 def _gather_index(
-    arr_val: float | np.ndarray, idxs: list[float | np.ndarray]
+    arr_val: float | np.ndarray,
+    idxs: list[float | np.ndarray],
+    const_name: str | None = None,
 ) -> float | np.ndarray:
     """The gather at the core of an ``index`` node: ``arr_val`` already evaluated
     to a value and ``idxs`` to its (1-based) subscripts. Factored out of
     :func:`_eval_index` so the compiled ``index`` closure (:func:`_compile_expr`)
-    performs the byte-identical gather and the two paths can never drift."""
+    performs the byte-identical gather and the two paths can never drift.
+    ``const_name`` names the const array when this is a const-array gather
+    (:func:`_const_gather_name`), whose subscripts are bounds-checked per axis."""
     if not isinstance(arr_val, np.ndarray):
         # Scalar passed through: if no indices, return it; otherwise that's an error.
         if not idxs:
             return float(arr_val)
         raise NumpyInterpreterError("index applied to scalar value")
+    if const_name is not None:
+        _check_const_gather_bounds(arr_val, idxs, const_name)
     # Vectorized gather: at least one subscript is an ndarray (the stencil fast
     # path binds index symbols to ranges). Convert 1-based -> 0-based and gather
     # with the *same* NumPy indexing semantics as the scalar branch below
@@ -1492,7 +1621,7 @@ def _eval_index(expr: ExprNode, ctx: EvalContext) -> float | np.ndarray:
         return ctx.recur.read([eval_expr(a, ctx) for a in expr.args[1:]])
     arr_val = eval_expr(expr.args[0], ctx)
     idxs = [eval_expr(a, ctx) for a in expr.args[1:]]
-    return _gather_index(arr_val, idxs)
+    return _gather_index(arr_val, idxs, _const_gather_name(expr.args[0], ctx))
 
 
 def _decompose_body_as_scaled_product(
@@ -4102,8 +4231,11 @@ def evaluate(expr: Expr, bindings: dict[str, float]) -> float:
     special key ``"t"`` supplies the simulation time (defaults to ``0.0``
     if absent). Returns the scalar result as a Python ``float``.
     Raises :class:`NumpyInterpreterError` if any variable in ``expr`` is
-    not in ``bindings``.
+    not in ``bindings``. The whole expression is walked first
+    (:func:`refuse_unevaluable_operators`), so an operator this interpreter
+    cannot evaluate is refused before any of it is evaluated.
     """
+    refuse_unevaluable_operators(expr)
     t = float(bindings.get("t", 0.0))
     param_values = {k: float(v) for k, v in bindings.items() if k != "t"}
     ctx = EvalContext(

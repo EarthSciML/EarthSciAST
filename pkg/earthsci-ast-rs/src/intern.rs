@@ -282,6 +282,7 @@ fn node_eq(a: &ExpressionNode, b: &ExpressionNode) -> bool {
         name,
         label,
         value,
+        units,
         table,
         axes,
         output,
@@ -300,6 +301,7 @@ fn node_eq(a: &ExpressionNode, b: &ExpressionNode) -> bool {
     op == &b.op
         && child_vec_eq(args, &b.args)
         && wrt == &b.wrt
+        && units == &b.units
         && dim == &b.dim
         && int_var == &b.int_var
         && opt_child_eq(lower, &b.lower)
@@ -364,6 +366,7 @@ fn node_hash<H: Hasher>(n: &ExpressionNode, h: &mut H) {
         name,
         label,
         value: _,
+        units,
         table,
         axes,
         output: _,
@@ -382,6 +385,7 @@ fn node_hash<H: Hasher>(n: &ExpressionNode, h: &mut H) {
         child_hash(a, h);
     }
     wrt.hash(h);
+    units.hash(h);
     dim.hash(h);
     int_var.hash(h);
     opt_child_hash(lower, h);

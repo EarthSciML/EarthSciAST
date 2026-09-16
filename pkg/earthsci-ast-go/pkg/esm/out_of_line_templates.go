@@ -106,14 +106,20 @@ func opInT(op string) bool {
 // templates — that transitive step is templateTargetBearing. Mirrors the Julia
 // `_direct_T_op`.
 func directTOp(node any) bool {
-	return directTOpSeen(node, map[uintptr]struct{}{})
+	return directOp(node, opInT)
 }
 
-func directTOpSeen(node any, seen map[uintptr]struct{}) bool {
+// directOp reports whether node contains, anywhere within it, an object whose
+// `op` satisfies pred. directTOp is directOp with the tier-T predicate.
+func directOp(node any, pred func(string) bool) bool {
+	return directOpSeen(node, pred, map[uintptr]struct{}{})
+}
+
+func directOpSeen(node any, pred func(string) bool, seen map[uintptr]struct{}) bool {
 	switch n := node.(type) {
 	case []any:
 		for _, c := range n {
-			if directTOpSeen(c, seen) {
+			if directOpSeen(c, pred, seen) {
 				return true
 			}
 		}
@@ -123,11 +129,11 @@ func directTOpSeen(node any, seen map[uintptr]struct{}) bool {
 			return false
 		}
 		seen[key] = struct{}{}
-		if op, ok := n["op"].(string); ok && opInT(op) {
+		if op, ok := n["op"].(string); ok && pred(op) {
 			return true
 		}
 		for _, v := range n {
-			if directTOpSeen(v, seen) {
+			if directOpSeen(v, pred, seen) {
 				return true
 			}
 		}
@@ -141,6 +147,15 @@ func directTOpSeen(node any, seen map[uintptr]struct{}) bool {
 // bindings), OR it references — transitively through the §9.7.3-checked acyclic
 // DAG — a target-bearing template. Mirrors the Julia `_template_target_bearing`.
 func templateTargetBearing(named map[string]any) map[string]bool {
+	return templateOpBearing(named, opInT)
+}
+
+// templateOpBearing computes, for every template in `named`, whether it can
+// produce an object whose `op` satisfies pred: its body contains one anywhere
+// (including inside nested references' bindings), or it references,
+// transitively through the acyclic body-reference DAG, a template that can.
+// templateTargetBearing is templateOpBearing with the tier-T predicate.
+func templateOpBearing(named map[string]any, pred func(string) bool) map[string]bool {
 	tb := map[string]bool{}
 	inprogress := map[string]bool{}
 	var visit func(name string) bool
@@ -160,7 +175,7 @@ func templateTargetBearing(named map[string]any) map[string]bool {
 		decl, _ := declRaw.(map[string]any)
 		inprogress[name] = true
 		body := decl["body"]
-		res := body != nil && directTOp(body)
+		res := body != nil && directOp(body, pred)
 		if !res {
 			var refs []string
 			collectApplyNames(&refs, body)
@@ -230,16 +245,21 @@ type expandMemoEntry struct {
 // separate pre-pass). Sharing is preserved via a pointer-identity memo. Mirrors
 // the Julia `_expand_eager`.
 func expandEager(node any, named map[string]any, targetBearing map[string]bool, scope string) (any, error) {
-	out, _, err := expandEagerShared(node, named, targetBearing, scope, expandMemo{})
+	out, _, err := expandRefsShared(node, named, scope, expandMemo{},
+		func(n map[string]any) bool { return refIsEager(n, targetBearing) })
 	return out, err
 }
 
-func expandEagerShared(node any, named map[string]any, targetBearing map[string]bool, scope string, memo expandMemo) (any, bool, error) {
+// expandRefsShared is the reference-expansion walk behind expandEager: it
+// expands, innermost-first, every `apply_expression_template` node for which
+// expand holds (asked after the node's bindings are expanded) and returns every
+// other reference intact. The Julia counterpart is `_expand_refs_walk`.
+func expandRefsShared(node any, named map[string]any, scope string, memo expandMemo, expand func(map[string]any) bool) (any, bool, error) {
 	switch n := node.(type) {
 	case []any:
 		var out []any
 		for i, c := range n {
-			nc, ch, err := expandEagerShared(c, named, targetBearing, scope, memo)
+			nc, ch, err := expandRefsShared(c, named, scope, memo, expand)
 			if err != nil {
 				return nil, false, err
 			}
@@ -267,7 +287,7 @@ func expandEagerShared(node any, named map[string]any, targetBearing map[string]
 			if b, ok := n["bindings"].(map[string]any); ok {
 				var nb map[string]any
 				for _, bk := range sortedKeys(b) {
-					nbv, ch, err := expandEagerShared(b[bk], named, targetBearing, scope, memo)
+					nbv, ch, err := expandRefsShared(b[bk], named, scope, memo, expand)
 					if err != nil {
 						return nil, false, err
 					}
@@ -283,12 +303,12 @@ func expandEagerShared(node any, named map[string]any, targetBearing map[string]
 					newnode["bindings"] = nb
 				}
 			}
-			if refIsEager(newnode, targetBearing) {
+			if expand(newnode) {
 				body, err := expandApply(newnode, named, scope)
 				if err != nil {
 					return nil, false, err
 				}
-				res, _, err := expandEagerShared(body, named, targetBearing, scope, memo)
+				res, _, err := expandRefsShared(body, named, scope, memo, expand)
 				if err != nil {
 					return nil, false, err
 				}
@@ -300,7 +320,7 @@ func expandEagerShared(node any, named map[string]any, targetBearing map[string]
 		}
 		var out map[string]any
 		for _, k := range sortedKeys(n) {
-			nv, ch, err := expandEagerShared(n[k], named, targetBearing, scope, memo)
+			nv, ch, err := expandRefsShared(n[k], named, scope, memo, expand)
 			if err != nil {
 				return nil, false, err
 			}

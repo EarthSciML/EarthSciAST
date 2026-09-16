@@ -1,0 +1,26 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "mount_forwarded_axis_nested",
+    "description": "A wrapper component that mounts tests/valid/mount_forwarded_axis_column.esm as a NESTED `subsystems.<k>` entry with no edge `bindings`, so the column closes at its own NLEV default and `lev` reaches this document's registry through the nested mount as 59. It loads standalone with `lev` = 59. tests/valid/mount_forwarded_axis_toplevel_beside_nested.esm mounts it beside a top-level mount of the same column.",
+    "authors": ["EarthSciAST"],
+    "created": "2026-09-15T00:00:00Z",
+    "tags": ["subsystem", "index_sets", "metaparameter", "mount"]
+  },
+  "models": {
+    "Wrap": {
+      "subsystems": {
+        "col": { "ref": "./mount_forwarded_axis_column.esm" }
+      },
+      "variables": {
+        "q": { "type": "unknown", "units": "1", "default": 1.0, "description": "wrapper scalar state" }
+      },
+      "equations": [
+        {
+          "lhs": { "op": "D", "args": ["q"], "wrt": "t" },
+          "rhs": { "op": "*", "args": [-0.5, "q"] }
+        }
+      ]
+    }
+  }
+}

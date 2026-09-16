@@ -1,0 +1,72 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "UndefinedVariableInReactionSystemDiscreteEventTrigger",
+    "description": "Invalid: an undefined name inside a REACTION SYSTEM discrete event's trigger expression. An event is the same site on a reaction system as on a model, so it carries the same code as undefined_variable_in_discrete_event_trigger.esm. `A`, `B` and `k` are declared; the ONLY defect is the undefined name `undefined_xyz`. Expected error: undefined_variable @ /reaction_systems/TestReactions/discrete_events/0/trigger/expression.",
+    "authors": [
+      "EarthSciML"
+    ],
+    "created": "2026-09-15T00:00:00Z"
+  },
+  "reaction_systems": {
+    "TestReactions": {
+      "species": {
+        "A": {
+          "units": "mol/L",
+          "default": 1.0,
+          "description": "Reactant."
+        },
+        "B": {
+          "units": "mol/L",
+          "default": 0.0,
+          "description": "Product."
+        }
+      },
+      "parameters": {
+        "k": {
+          "units": "1/s",
+          "default": 0.1,
+          "description": "First-order rate constant."
+        }
+      },
+      "reactions": [
+        {
+          "id": "R1",
+          "substrates": [
+            {
+              "species": "A",
+              "stoichiometry": 1
+            }
+          ],
+          "products": [
+            {
+              "species": "B",
+              "stoichiometry": 1
+            }
+          ],
+          "rate": "k"
+        }
+      ],
+      "discrete_events": [
+        {
+          "trigger": {
+            "type": "condition",
+            "expression": {
+              "op": ">",
+              "args": [
+                "undefined_xyz",
+                1.0
+              ]
+            }
+          },
+          "affects": [
+            {
+              "lhs": "A",
+              "rhs": 1.0
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

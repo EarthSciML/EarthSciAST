@@ -24,7 +24,8 @@ import (
 // fullyPopulatedExprNode below, which is what forces a newly-added field to be
 // classified (see TestExprRefChildrenCoverTheKeystone).
 var exprNodeNonExpressionFields = map[string]bool{
-	"op": true, "wrt": true, "dim": true, "fn": true, "var": true,
+	"units": true, // a const's declared unit string (esm-spec §4.8.5)
+	"op":    true, "wrt": true, "dim": true, "fn": true, "var": true,
 	"name": true, "table": true, "manifold": true, "reduce": true,
 	"semiring": true, "distinct": true, "label": true, "arg": true,
 	"id": true, "expect_cadence": true,
@@ -421,9 +422,9 @@ func loadErrHasCode(err error, code string) bool {
 // that reference integrity never entered: `constraint_equations` and the event
 // blocks. A reaction system was reference-checked through `reaction.rate` and
 // nowhere else, so an undeclared species in a constraint equation or an event
-// was accepted silently. An undeclared bare name in a reaction system is an
-// `undefined_parameter` (the code the shared corpus pins for this component
-// kind).
+// was accepted silently. An undeclared bare name at either site is an
+// `undefined_variable`, as it is at the same site in a model; only a reaction
+// `rate` reports `undefined_parameter`.
 func TestReactionSystemReferenceSites(t *testing.T) {
 	const tmpl = `{
 	  "esm": "0.1.0",
@@ -485,12 +486,12 @@ func TestReactionSystemReferenceSites(t *testing.T) {
 			}
 			found := false
 			for _, e := range res.StructuralErrors {
-				if e.Code == ErrorUndefinedParameter && strings.HasPrefix(e.Path, tc.path) {
+				if e.Code == ErrorUndefinedVariable && strings.HasPrefix(e.Path, tc.path) {
 					found = true
 				}
 			}
 			if !found {
-				t.Errorf("want %s at %s; got %v", ErrorUndefinedParameter, tc.path, res.StructuralErrors)
+				t.Errorf("want %s at %s; got %v", ErrorUndefinedVariable, tc.path, res.StructuralErrors)
 			}
 		})
 	}

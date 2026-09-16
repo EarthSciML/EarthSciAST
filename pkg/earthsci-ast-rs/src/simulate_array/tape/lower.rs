@@ -897,8 +897,7 @@ impl<'m> TapeBuilder<'m> {
         }
         // See the same guard in `eval_vec_index`: a const-array gather may not
         // use the ghost-0 fill (§5.5.5).
-        let const_base =
-            matches!(&node.args[0], Expr::Variable(v) if self.const_arrays.is_const(v));
+        let const_base = self.const_arrays.is_const_base(&node.args[0]);
         let arg0 = self.lower_expr(&node.args[0], bx)?;
         let n = node.args.len() - 1;
         let Some((src_shape, src_origin)) = self.lv_box(&arg0) else {
@@ -1574,7 +1573,7 @@ impl<'m> TapeBuilder<'m> {
         let Some((base, idx_args)) = node.args.split_first() else {
             return Ok(LV::Lit(f64::NAN));
         };
-        let const_base = matches!(base, Expr::Variable(v) if self.const_arrays.is_const(v));
+        let const_base = self.const_arrays.is_const_base(base);
         let basev = self.lower_wholesale(base)?;
         let Some((shape, origin)) = self.lv_box(&basev) else {
             // Scalar base: identity with 0 index args, NaN otherwise.

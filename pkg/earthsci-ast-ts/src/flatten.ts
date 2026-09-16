@@ -81,6 +81,7 @@ import {
 import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
 import { EsmMachineryError } from './lower-expression-templates.js'
 import { mergedTemplateRegistry } from './flatten-template-registry.js'
+import { resolveRhsTimeDerivatives } from './flatten-tendency.js'
 
 /** Options for {@link flatten}. Only needed when the file uses `coupling_import`. */
 export type FlattenOptions = CouplingImportOptions
@@ -95,7 +96,7 @@ export type FlattenOptions = CouplingImportOptions
  * parity.
  */
 export class FlattenError extends EsmDiagnosticError {
-  constructor(message: string, code = 'flatten_error') {
+  constructor(message: string, code: string = ERROR_CODES.FLATTEN_ERROR) {
     super(code, message)
     this.name = 'FlattenError'
   }
@@ -108,7 +109,7 @@ export class FlattenError extends EsmDiagnosticError {
  */
 export class ConflictingDerivativeError extends FlattenError {
   constructor(message: string) {
-    super(message, 'conflicting_derivative')
+    super(message, ERROR_CODES.CONFLICTING_DERIVATIVE)
     this.name = 'ConflictingDerivativeError'
   }
 }
@@ -201,7 +202,7 @@ export class OperatorComposeAmbiguousBareNameError extends FlattenError {
  */
 export class DomainUnitMismatchError extends FlattenError {
   constructor(message: string) {
-    super(message, 'domain_unit_mismatch')
+    super(message, ERROR_CODES.DOMAIN_UNIT_MISMATCH)
     this.name = 'DomainUnitMismatchError'
   }
 }
@@ -213,7 +214,7 @@ export class DomainUnitMismatchError extends FlattenError {
  */
 export class DimensionPromotionError extends FlattenError {
   constructor(message: string) {
-    super(message, 'dimension_promotion')
+    super(message, ERROR_CODES.DIMENSION_PROMOTION)
     this.name = 'DimensionPromotionError'
   }
 }
@@ -2404,7 +2405,7 @@ function checkVariableMapEndpoints(
           'to no variable, parameter or observed in the flattened system (esm-spec §4.6, ' +
           '§10.4). A scoped reference walks EVERY dot-separated segment, so a subsystem ' +
           "endpoint is spelled '<Model>.<Subsystem>.<name>'.",
-        'unresolved_scoped_ref',
+        ERROR_CODES.UNRESOLVED_SCOPED_REF,
       )
     }
   }
@@ -2967,6 +2968,12 @@ export function flatten(file: EsmFile, options: FlattenOptions = {}): FlattenedS
 
   // 4b. Pointwise spatial lift (esm-spec §10.5) over the expanded couplings.
   applyPointwiseLift(flat, couplingEntries)
+
+  // 4c. esm-libraries-spec §4.7.5 step 3a: resolve every right-hand-side
+  //     structural `D` to the tendency the system defines (esm-spec §4.2). After
+  //     the coupling rules and the lift, so a merged state yields its WHOLE
+  //     tendency.
+  resolveRhsTimeDerivatives(flat)
 
   // 5. Domain pass-through.
   if (file.domain !== undefined) flat.domain = file.domain as Domain
