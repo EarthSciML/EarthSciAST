@@ -77,8 +77,8 @@
         },
         "ws_is_multiplication": {
           "type": "unknown",
-          "units": "1/s",
-          "description": "k_ws, unchanged. Passes only if the space between `ppb^-1` and `s^-1` was read as a multiplication (and `ppb` as dimensionless)."
+          "units": "1/(ppb*s)",
+          "description": "k_ws, declared `1/(ppb*s)`. Passes only if the space between `ppb^-1` and `s^-1` was read as a multiplication."
         },
         "heat_flux": {
           "type": "parameter",
@@ -134,8 +134,8 @@
         },
         "percent_is_dimensionless": {
           "type": "unknown",
-          "units": "1/s",
-          "description": "trend, unchanged. `%/h` = s⁻¹ — a percent is a pure number."
+          "units": "percent/hour",
+          "description": "trend, declared `percent/hour`. `%/h` and `percent/hour` are the same unit, dimension s⁻¹ at scale 1/360000 — passes only if the long forms `percent` and `hour` resolve to `%` and `h`."
         },
         "n_air": {
           "type": "parameter",
@@ -145,8 +145,8 @@
         },
         "n_air_is_a_number_density": {
           "type": "unknown",
-          "units": "1/m^3",
-          "description": "n_air, unchanged. DISCRIMINATOR: passes only if `molec` carries NO dimension. A binding that types `molec` as an amount of substance gets mol·m⁻³ and fails."
+          "units": "1/cm^3",
+          "description": "n_air, declared `1/cm^3`. DISCRIMINATOR: passes only if `molec` carries NO dimension and no scale. A binding that types `molec` as an amount of substance gets mol·cm⁻³ and fails."
         },
         "k_bimol": {
           "type": "parameter",
@@ -167,8 +167,8 @@
         },
         "dose_is_a_number_density": {
           "type": "unknown",
-          "units": "1/m^3",
-          "description": "dose, unchanged. DISCRIMINATOR: passes only if the count noun `units` carries NO dimension. A binding that delegates its registry to a general-purpose units library and lets it resolve `units` as MICRO-NIT — a luminance — gets cd·m⁻⁵ and fails. This is not hypothetical; it shipped."
+          "units": "1/L",
+          "description": "dose, declared `1/L`. DISCRIMINATOR: passes only if the count noun `units` carries NO dimension and no scale. A binding that delegates its registry to a general-purpose units library and lets it resolve `units` as MICRO-NIT — a luminance — gets cd·L⁻¹ and fails. This is not hypothetical; it shipped."
         },
         "charge": {
           "type": "parameter",
@@ -212,8 +212,8 @@
         },
         "pco2_is_a_pressure": {
           "type": "unknown",
-          "units": "Pa",
-          "description": "pco2, unchanged."
+          "units": "atm*ppm",
+          "description": "pco2, declared `atm*ppm`, which is exactly `uatm`: passes only if `uatm` is a pressure of scale 10\u207b\u2076 atm."
         },
         "depth": {
           "type": "parameter",
@@ -241,8 +241,8 @@
         },
         "long_forms_resolve": {
           "type": "unknown",
-          "units": "m/s",
-          "description": "depth / tau. `meters` / `hour` = m·s⁻¹ — passes only if both long-form aliases resolve to their base entries."
+          "units": "m/h",
+          "description": "depth / tau. `meters` / `hour` = m/h — passes only if both long-form aliases resolve to their base entries."
         },
         "ozone_column": {
           "type": "parameter",
@@ -252,8 +252,8 @@
         },
         "ozone_column_is_a_column_density": {
           "type": "unknown",
-          "units": "1/m^2",
-          "description": "ozone_column, unchanged. Passes only if `DU` is an areal number density, not a dimensionless scalar."
+          "units": "Dobson",
+          "description": "ozone_column, declared `Dobson`. Passes only if `Dobson` and `DU` are the same entry; the dimension (m\u207b\u00b2) and exact scale (2.6867e20) of `DU` are pinned by tests/conformance/unit_registry."
         },
         "dy_north": {
           "type": "parameter",

@@ -1026,3 +1026,27 @@ func TestReservedDeclarationNameCoversSubsystems(t *testing.T) {
 		"want reserved_variable_name @ /models/Column/subsystems/Fuel/variables/t, got %+v",
 		result.StructuralErrors)
 }
+
+// TestArrayDefaultWithoutShapeIsRejected pins esm-spec §6.3: inline array data
+// is only a SHAPED variable's value, so on a variable with no `shape` it has
+// nothing to fill and the declaration is a hard `array_default_without_shape`
+// error at the offending `default`. The fixture covers a top-level parameter
+// and an unknown inside an inline subsystem, plus a shaped control that carries
+// the same data legally.
+func TestArrayDefaultWithoutShapeIsRejected(t *testing.T) {
+	esmFile, err := LoadPath("../../../../tests/invalid/array_default_without_shape.esm")
+	assert.NoError(t, err)
+
+	result := ValidateStructuralWithCodes(esmFile)
+
+	found := map[string]any{}
+	for _, se := range result.StructuralErrors {
+		if se.Code == ErrorArrayDefaultWithoutShape {
+			found[se.Path] = se.Details["variable_type"]
+		}
+	}
+	assert.Equal(t, map[string]any{
+		"/models/Decay/variables/k/default":                  "parameter",
+		"/models/Decay/subsystems/Inner/variables/x/default": "unknown",
+	}, found, "got %+v", result.StructuralErrors)
+}

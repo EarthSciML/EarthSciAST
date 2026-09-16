@@ -139,7 +139,7 @@ where
             if next_idx >= t_eval.len() {
                 break;
             }
-            if step_count >= opts.maxiters {
+            if opts.maxiters.is_some_and(|cap| step_count >= cap) {
                 retcode = ReturnCode::MaxIters;
                 break;
             }
@@ -196,7 +196,7 @@ where
         // Native step grid: record the initial point, then every step.
         push_state(&mut times, &mut state_rows, t0, &initial_state);
         loop {
-            if step_count >= opts.maxiters {
+            if opts.maxiters.is_some_and(|cap| step_count >= cap) {
                 retcode = ReturnCode::MaxIters;
                 break;
             }
@@ -222,6 +222,20 @@ where
     }
 
     Ok((times, state_rows, retcode))
+}
+
+/// The coupled array route builds from the flattened system, and `flatten` lifts
+/// only the top-level components' events, so an event an inline subsystem owns
+/// is refused here, while the document still holds it.
+fn refuse_coupled_subsystem_event(file: &EsmFile) -> Result<(), CompileError> {
+    match crate::compile_error::first_event_in_file(file) {
+        Some((construct, name)) => Err(crate::compile_error::event_refusal(
+            construct,
+            crate::compile_error::ARRAY_EVALUATOR,
+            name.as_deref(),
+        )),
+        None => Ok(()),
+    }
 }
 
 /// Whether `file` must route to the array/spatial runtime
@@ -257,6 +271,7 @@ pub(crate) fn build_array_compiled(
     let file = annotated.as_ref().unwrap_or(file);
     let model_count = file.models.as_ref().map_or(0, |m| m.len());
     if model_count > 1 {
+        refuse_coupled_subsystem_event(file)?;
         let flat = flatten(file).map_err(CompileError::from)?;
         Ok(crate::simulate_array::ArrayCompiled::from_flattened(&flat)?)
     } else {
@@ -309,6 +324,7 @@ pub fn compile_array(file: EsmFile) -> Result<crate::simulate_array::ArrayCompil
     };
     let model_count = file.models.as_ref().map_or(0, |m| m.len());
     if model_count > 1 {
+        refuse_coupled_subsystem_event(&file)?;
         let flat = flatten(&file).map_err(CompileError::from)?;
         drop(file);
         Ok(crate::simulate_array::ArrayCompiled::from_flattened(&flat)?)

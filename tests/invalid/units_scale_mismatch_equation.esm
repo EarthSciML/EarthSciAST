@@ -1,0 +1,34 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "UnitsScaleMismatchEquation",
+    "description": "Invalid: an observed variable declared in m/s is defined directly as a quantity in mi/h. The two sides agree in DIMENSION and not in SCALE (esm-spec §4.8.3, agreement means dimension and scale), so the number assigned to speed_ms is in the wrong unit by a factor of 0.44704.",
+    "authors": [
+      "Chris Tessum with Claude"
+    ],
+    "created": "2026-09-14T00:00:00Z"
+  },
+  "models": {
+    "BadUnitsModel": {
+      "variables": {
+        "speed_mph": {
+          "type": "parameter",
+          "units": "mi/h",
+          "default": 30.0,
+          "description": "Link average speed in miles per hour"
+        },
+        "speed_ms": {
+          "type": "unknown",
+          "units": "m/s",
+          "description": "Invalid: declared in m/s but defined as the mi/h number with no conversion"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "speed_ms",
+          "rhs": "speed_mph"
+        }
+      ]
+    }
+  }
+}

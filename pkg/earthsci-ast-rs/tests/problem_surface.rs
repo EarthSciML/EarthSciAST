@@ -45,6 +45,30 @@ const DECAY: &str = r#"
     }
     "#;
 
+/// `D(x)/Dt = v`, `D(v)/Dt = -x`: an undamped oscillator, whose accurate
+/// integration over many periods needs many steps however large they grow.
+const OSCILLATOR: &str = r#"
+    {
+      "esm": "1.0.0",
+      "metadata": { "name": "problem_surface_oscillator" },
+      "models": {
+        "M": {
+          "variables": {
+            "x": { "type": "unknown", "default": 1.0 },
+            "v": { "type": "unknown", "default": 0.0 }
+          },
+          "equations": [
+            { "lhs": { "op": "D", "args": ["x"], "wrt": "t" }, "rhs": "v" },
+            {
+              "lhs": { "op": "D", "args": ["v"], "wrt": "t" },
+              "rhs": { "op": "-", "args": ["x"] }
+            }
+          ]
+        }
+      }
+    }
+    "#;
+
 /// A document with no differential equations at all: nothing to integrate.
 const STATIC_DOC: &str = r#"
     {
@@ -245,7 +269,7 @@ fn maxiters_is_a_retcode_not_an_error() {
     let sol = solve(
         &prob,
         &SolveOptions {
-            maxiters: 3,
+            maxiters: Some(3),
             ..Default::default()
         },
     )
@@ -256,6 +280,47 @@ fn maxiters_is_a_retcode_not_an_error() {
     assert!(t_last < 20.0, "a capped run cannot have reached t_end");
     // The trajectory is real, not a stub.
     assert!(sol.final_value("M.y").unwrap() > 0.0);
+}
+
+/// With `maxiters` left at its default nothing caps the step count. Before,
+/// this binding stopped every integration at 10_000 accepted steps — a hundred
+/// times below OrdinaryDiffEqCore's adaptive default — so a run long enough to
+/// need more came back `MaxIters` although no caller asked for a cap.
+#[test]
+fn default_maxiters_does_not_cap_the_step_count() {
+    let file = load_string(OSCILLATOR).expect("load");
+    let t_end = 400.0;
+    let prob = esm_problem(
+        &file,
+        (0.0, t_end),
+        ProblemOptions {
+            compile: Compile::Always,
+            ..Default::default()
+        },
+    )
+    .expect("build");
+    let opts = SolveOptions {
+        alg: Alg::Erk,
+        abstol: Some(1e-12),
+        reltol: Some(1e-10),
+        ..Default::default()
+    };
+    assert_eq!(opts.maxiters, None, "the default is uncapped");
+    let sol = solve(&prob, &opts).expect("solve");
+    assert_eq!(sol.retcode, ReturnCode::Success);
+    let t_last = *sol.time.last().expect("trajectory");
+    assert!(
+        (t_last - t_end).abs() < 1e-9,
+        "must reach t_end, stopped at {t_last}"
+    );
+    // With no `saveat` the solution records every accepted step, so the grid
+    // length is the step count plus the initial point.
+    assert!(
+        sol.time.len() > 10_001,
+        "this run must need more than the old 10_000-step budget to test \
+         anything; it took {} steps",
+        sol.time.len() - 1
+    );
 }
 
 /// A run that covers the interval says `Success`, and says it without the

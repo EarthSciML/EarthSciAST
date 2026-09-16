@@ -93,6 +93,21 @@ _recur_findings(file) = [e for e in ESM_R.validate_recurrence_semantics(file)]
         @test errs[1].details["variable"] == "s"
     end
 
+    @testset "a data-valued lag's refusal names the contraction that works" begin
+        # `index(s, k - index(lag, k))` reads its lag from DATA: `lag[k]` is a
+        # value, not a symbol with a range, so the index is not affine in `k`
+        # and the refusal is correct. It is also the expression an author
+        # porting a data-chained model writes, so the message has to name the
+        # contraction that does work.
+        read = _idx("s", _op("-", _v("k"), _idx("lag", _v("k"))))
+        errs = _recur_findings(_recur_file(_recur_agg(_recur_guarded(read))))
+        @test length(errs) == 1
+        @test errs[1].error_type == "recurrence_not_wellfounded"
+        @test errs[1].path == "/models/M/equations/0/rhs"
+        @test occursin("If the offset is read from data", errs[1].message)
+        @test occursin("index(s, k - a)", errs[1].message)
+    end
+
     @testset "a bare read alongside an index read is recurrence_not_wellfounded" begin
         # `s + 2 * s[k-1]`: the bare `s` names the whole array, which does not
         # exist at any point during the sweep that fills it.

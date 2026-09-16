@@ -127,7 +127,7 @@ var datetimeFieldAccessors = map[string]func(time.Time) int{
 // Returns *ClosedFunctionError on contract violations.
 func EvaluateClosedFunction(name string, args []any) (any, error) {
 	if !IsClosedFunction(name) {
-		return nil, newClosedFunctionError("unknown_closed_function",
+		return nil, newClosedFunctionError(CodeUnknownClosedFunction,
 			fmt.Sprintf("`fn` name %q is not in the v0.3.0 closed function registry "+
 				"(esm-spec §9.2). Adding a primitive requires a spec rev.", name))
 	}
@@ -153,7 +153,7 @@ func EvaluateClosedFunction(name string, args []any) (any, error) {
 		}
 		f, ok := toFloat64(args[0])
 		if !ok {
-			return nil, newClosedFunctionError("closed_function_arity",
+			return nil, newClosedFunctionError(CodeClosedFunctionArity,
 				fmt.Sprintf("%s: argument must be numeric, got %T", name, args[0]))
 		}
 		return datetimeJulianDay(f), nil
@@ -175,7 +175,7 @@ func EvaluateClosedFunction(name string, args []any) (any, error) {
 		}
 		x, ok := toFloat64(args[0])
 		if !ok {
-			return nil, newClosedFunctionError("closed_function_arity",
+			return nil, newClosedFunctionError(CodeClosedFunctionArity,
 				fmt.Sprintf("%s: first argument (x) must be numeric, got %T", name, args[0]))
 		}
 		xs, err := toFloat64Array(name, "xs", args[1])
@@ -197,7 +197,7 @@ func EvaluateClosedFunction(name string, args []any) (any, error) {
 		}
 		x, ok := toFloat64(args[2])
 		if !ok {
-			return nil, newClosedFunctionError("closed_function_arity",
+			return nil, newClosedFunctionError(CodeClosedFunctionArity,
 				fmt.Sprintf("%s: third argument (x) must be numeric, got %T", name, args[2]))
 		}
 		return interpLinear(table, axis, x)
@@ -219,18 +219,18 @@ func EvaluateClosedFunction(name string, args []any) (any, error) {
 		}
 		x, ok := toFloat64(args[3])
 		if !ok {
-			return nil, newClosedFunctionError("closed_function_arity",
+			return nil, newClosedFunctionError(CodeClosedFunctionArity,
 				fmt.Sprintf("%s: fourth argument (x) must be numeric, got %T", name, args[3]))
 		}
 		y, ok := toFloat64(args[4])
 		if !ok {
-			return nil, newClosedFunctionError("closed_function_arity",
+			return nil, newClosedFunctionError(CodeClosedFunctionArity,
 				fmt.Sprintf("%s: fifth argument (y) must be numeric, got %T", name, args[4]))
 		}
 		return interpBilinear(table, axisX, axisY, x, y)
 	}
 	// Unreachable — IsClosedFunction guarded above.
-	return nil, newClosedFunctionError("unknown_closed_function",
+	return nil, newClosedFunctionError(CodeUnknownClosedFunction,
 		fmt.Sprintf("internal: `fn` name %q is in the registry but has no dispatch arm", name))
 }
 
@@ -238,7 +238,7 @@ func EvaluateClosedFunction(name string, args []any) (any, error) {
 // argument count differs from `n`.
 func expectArity(name string, args []any, n int) error {
 	if len(args) != n {
-		return newClosedFunctionError("closed_function_arity",
+		return newClosedFunctionError(CodeClosedFunctionArity,
 			fmt.Sprintf("%s expects %d argument(s), got %d", name, n, len(args)))
 	}
 	return nil
@@ -249,7 +249,7 @@ func expectArity(name string, args []any, n int) error {
 // `t_utc` could overflow.
 func checkInt32(name string, v int64) (int32, error) {
 	if v < math.MinInt32 || v > math.MaxInt32 {
-		return 0, newClosedFunctionError("closed_function_overflow",
+		return 0, newClosedFunctionError(CodeClosedFunctionOverflow,
 			fmt.Sprintf("%s: result %d overflows Int32", name, v))
 	}
 	return int32(v), nil
@@ -263,7 +263,7 @@ func checkInt32(name string, v int64) (int32, error) {
 func toUnixDateTime(v any) (time.Time, error) {
 	f, ok := toFloat64(v)
 	if !ok {
-		return time.Time{}, newClosedFunctionError("closed_function_arity",
+		return time.Time{}, newClosedFunctionError(CodeClosedFunctionArity,
 			fmt.Sprintf("argument must be numeric, got %T", v))
 	}
 	// Split into integer seconds and fractional nanoseconds. Use
@@ -324,11 +324,11 @@ func interpSearchsorted(name string, x float64, xs []float64) (int32, error) {
 	// Validate monotonicity + NaN-in-table once per call.
 	for i := 0; i < n; i++ {
 		if math.IsNaN(xs[i]) {
-			return 0, newClosedFunctionError("searchsorted_nan_in_table",
+			return 0, newClosedFunctionError(CodeSearchsortedNaNInTable,
 				fmt.Sprintf("%s: xs[%d] is NaN; NaN entries in xs are forbidden", name, i+1))
 		}
 		if i > 0 && xs[i] < xs[i-1] {
-			return 0, newClosedFunctionError("searchsorted_non_monotonic",
+			return 0, newClosedFunctionError(CodeSearchsortedNonMonotonic,
 				fmt.Sprintf("%s: xs is not non-decreasing (xs[%d]=%g < xs[%d]=%g)",
 					name, i+1, xs[i], i, xs[i-1]))
 		}
@@ -371,14 +371,14 @@ func toFloat64Array(name, role string, v any) ([]float64, error) {
 		for i, e := range xs {
 			f, ok := toFloat64(e)
 			if !ok {
-				return nil, newClosedFunctionError("closed_function_arity",
+				return nil, newClosedFunctionError(CodeClosedFunctionArity,
 					fmt.Sprintf("%s: %s[%d] is not numeric (%T)", name, role, i+1, e))
 			}
 			out[i] = f
 		}
 		return out, nil
 	default:
-		return nil, newClosedFunctionError("closed_function_arity",
+		return nil, newClosedFunctionError(CodeClosedFunctionArity,
 			fmt.Sprintf("%s: %s argument must be an array, got %T", name, role, v))
 	}
 }
@@ -407,7 +407,7 @@ func toInterpMatrix(name, role string, v any) ([][]float64, error) {
 		}
 		return out, nil
 	default:
-		return nil, newClosedFunctionError("closed_function_arity",
+		return nil, newClosedFunctionError(CodeClosedFunctionArity,
 			fmt.Sprintf("%s: %s argument must be a 2-D array, got %T", name, role, v))
 	}
 }
@@ -420,19 +420,19 @@ func toInterpMatrix(name, role string, v any) ([][]float64, error) {
 // input.
 func validateInterpAxis(fnName, axisName string, axis []float64) error {
 	if len(axis) < 2 {
-		return newClosedFunctionError("interp_axis_too_short",
+		return newClosedFunctionError(CodeInterpAxisTooShort,
 			fmt.Sprintf("%s: %s has %d entries; need ≥ 2 to form an interval to blend across",
 				fnName, axisName, len(axis)))
 	}
 	for i, v := range axis {
 		if math.IsNaN(v) {
-			return newClosedFunctionError("interp_nan_in_axis",
+			return newClosedFunctionError(CodeInterpNaNInAxis,
 				fmt.Sprintf("%s: %s[%d] is NaN; axes MUST NOT contain NaN", fnName, axisName, i+1))
 		}
 	}
 	for i := 1; i < len(axis); i++ {
 		if axis[i] <= axis[i-1] {
-			return newClosedFunctionError("interp_non_monotonic_axis",
+			return newClosedFunctionError(CodeInterpNonMonotonicAxis,
 				fmt.Sprintf("%s: %s is not strictly increasing (%s[%d]=%g ≤ %s[%d]=%g)",
 					fnName, axisName, axisName, i+1, axis[i], axisName, i, axis[i-1]))
 		}
@@ -451,12 +451,12 @@ func interpLinear(table, axis []float64, x float64) (float64, error) {
 	// both could apply; checking the axis first satisfies that ordering
 	// when N=1 with a matching table length.
 	if len(axis) < 2 {
-		return 0, newClosedFunctionError("interp_axis_too_short",
+		return 0, newClosedFunctionError(CodeInterpAxisTooShort,
 			fmt.Sprintf("%s: axis has %d entries; need ≥ 2 to form an interval to blend across",
 				fnName, len(axis)))
 	}
 	if len(table) != len(axis) {
-		return 0, newClosedFunctionError("interp_axis_length_mismatch",
+		return 0, newClosedFunctionError(CodeInterpAxisLengthMismatch,
 			fmt.Sprintf("%s: len(table)=%d != len(axis)=%d", fnName, len(table), len(axis)))
 	}
 	if err := validateInterpAxis(fnName, "axis", axis); err != nil {
@@ -505,21 +505,21 @@ func interpLinear(table, axis []float64, x float64) (float64, error) {
 func interpBilinear(table [][]float64, axisX, axisY []float64, x, y float64) (float64, error) {
 	const fnName = "interp.bilinear"
 	if len(axisX) < 2 {
-		return 0, newClosedFunctionError("interp_axis_too_short",
+		return 0, newClosedFunctionError(CodeInterpAxisTooShort,
 			fmt.Sprintf("%s: axis_x has %d entries; need ≥ 2", fnName, len(axisX)))
 	}
 	if len(axisY) < 2 {
-		return 0, newClosedFunctionError("interp_axis_too_short",
+		return 0, newClosedFunctionError(CodeInterpAxisTooShort,
 			fmt.Sprintf("%s: axis_y has %d entries; need ≥ 2", fnName, len(axisY)))
 	}
 	if len(table) != len(axisX) {
-		return 0, newClosedFunctionError("interp_axis_length_mismatch",
+		return 0, newClosedFunctionError(CodeInterpAxisLengthMismatch,
 			fmt.Sprintf("%s: outer len(table)=%d != len(axis_x)=%d",
 				fnName, len(table), len(axisX)))
 	}
 	for i, row := range table {
 		if len(row) != len(axisY) {
-			return 0, newClosedFunctionError("interp_axis_length_mismatch",
+			return 0, newClosedFunctionError(CodeInterpAxisLengthMismatch,
 				fmt.Sprintf("%s: len(table[%d])=%d != len(axis_y)=%d",
 					fnName, i+1, len(row), len(axisY)))
 		}

@@ -1,0 +1,70 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "ImplicitEquationOnTheScalarPath",
+    "description": "A scalar unknown defined only by the residual `2*s - 4 = 0`. No binding's scalar evaluator solves an implicit equation: Python used to return the initial condition, and Rust refused it only by accident, because `s` had no other defining equation. Each such evaluator MUST refuse it with `unsupported_construct` (issue #264).",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "conformance",
+      "unsupported_construct",
+      "equations"
+    ]
+  },
+  "models": {
+    "ImplicitEquationOnTheScalarPath": {
+      "variables": {
+        "s": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Defined by a residual, not an assignment."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "s"
+            ]
+          },
+          "rhs": 1.0
+        },
+        {
+          "lhs": {
+            "op": "-",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "s",
+                  2.0
+                ]
+              },
+              4.0
+            ]
+          },
+          "rhs": 0.0
+        }
+      ],
+      "tests": [
+        {
+          "id": "an_implicit_scalar_equation_is_solved",
+          "description": "Intended behaviour: 2*s - 4 = 0, so s = 2.",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "assertions": [
+            {
+              "variable": "s",
+              "time": 1.0,
+              "expected": 2.0
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

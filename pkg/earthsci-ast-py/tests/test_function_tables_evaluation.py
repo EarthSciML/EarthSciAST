@@ -201,7 +201,6 @@ EVERY_POSITION = {
                             "variable": "x",
                             "time": 1.0,
                             "expected": 1.0,
-                            "reduce": "L2_error",
                             "reference": LOOKUP,
                         }
                     ],

@@ -1,6 +1,6 @@
 //! Units fixtures consumption runner (gt-dt0o).
 //!
-//! The three `units_*.esm` files in `tests/valid/` carry inline `tests`
+//! The `units_*.esm` files in `tests/valid/` carry inline `tests`
 //! blocks (id / parameter_overrides / initial_conditions / time_span /
 //! assertions) added in gt-p3v. Schema parse coverage is asserted in
 //! `units_fixtures.rs`'s parse suite. This file closes the
@@ -18,6 +18,10 @@ use earthsci_ast::{
 };
 use std::collections::HashMap;
 
+// Only the fixtures that CARRY an inline `tests` block belong here;
+// `units_ifelse_undeterminable_branch.esm` and
+// `units_comparisons_and_connectives.esm` declare units alone and are wired
+// into `units_fixtures.rs` instead.
 const UNITS_FIXTURES: &[(&str, &str)] = &[
     (
         "units_conversions.esm",
@@ -30,6 +34,14 @@ const UNITS_FIXTURES: &[(&str, &str)] = &[
     (
         "units_propagation.esm",
         include_str!("../../../tests/valid/units_propagation.esm"),
+    ),
+    (
+        "units_negated_literal_neutral.esm",
+        include_str!("../../../tests/valid/units_negated_literal_neutral.esm"),
+    ),
+    (
+        "units_sum_undeterminable_operands.esm",
+        include_str!("../../../tests/valid/units_sum_undeterminable_operands.esm"),
     ),
 ];
 
