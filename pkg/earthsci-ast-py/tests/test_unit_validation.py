@@ -520,7 +520,7 @@ class TestIntegratedUnitValidation:
                 assert param_quantity is not None
 
 
-# Cross-binding units fixtures (gt-gtf): the three units_*.esm files in
+# Cross-binding units fixtures (gt-gtf): the units_*.esm files in
 # tests/valid/ are shared across Julia/Python/Rust/TypeScript/Go and exist
 # specifically to drive cross-binding agreement on units handling. Wire them
 # into the Python suite by loading each fixture through the public API and
@@ -531,6 +531,7 @@ UNITS_FIXTURE_NAMES = [
     "units_conversions.esm",
     "units_dimensional_analysis.esm",
     "units_propagation.esm",
+    "units_negated_literal_neutral.esm",
 ]
 
 
