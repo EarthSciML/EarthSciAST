@@ -1281,8 +1281,9 @@ func propagateDimension(expr Expression, env map[string]Unit) (*Unit, error) {
 		// inconsistency is stated between DECLARED quantities (`length + mass`,
 		// `ln(mass)`, `m^kg`). Literals still behave correctly where their
 		// meaning IS determined: additively they are neutral and adopt their
-		// sibling's dimension (`T - 273.15` → K), an all-literal expression is
-		// dimensionless (`1 + 2`), and an exponent is read by VALUE (`x^2`).
+		// sibling's dimension (`T - 273.15` → K), and an exponent is read by
+		// VALUE (`x^2`). A sum of nothing but literals (`1 + 2`) stays
+		// indeterminate.
 		return nil, nil
 	case string:
 		if u, ok := env[e]; ok {
@@ -1305,24 +1306,21 @@ func propagateDimension(expr Expression, env map[string]Unit) (*Unit, error) {
 func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 	switch node.Op {
 	case "+", "-":
-		// Unary minus: propagate its single operand.
-		if node.Op == "-" && len(node.Args) == 1 {
-			return propagateDimension(node.Args[0], env)
-		}
-		// A bare literal in ADDITIVE position is dimensionally NEUTRAL, not
-		// dimensionless: it adopts the dimension of what it is added to. That is
-		// how models are actually written — `T - 273.15`, `1 - phi`,
+		// Every operand whose dimension is known must agree, and the result is
+		// that unit; an indeterminate operand is skipped, never compared
+		// (esm-spec §4.8.3). So `x + 0.5*y` has the unit of x, a unary `+` or
+		// `-` carries its operand's unit, and with no known operand at all
+		// (`1 + 2`, `+(2)`) the result is indeterminate, never dimensionless
+		// (§4.8.4).
+		//
+		// A bare literal in ADDITIVE position is therefore dimensionally
+		// NEUTRAL: it adopts the dimension of what it is added to. That is how
+		// models are actually written — `T - 273.15`, `1 - phi`,
 		// `biomass + 0.5` — with the literal silently carrying its sibling's
-		// unit. Literal operands are therefore skipped, not compared. It costs no
-		// coverage: a genuine inconsistency (`length + mass`) is between two
-		// DECLARED quantities and is still caught.
+		// unit. It costs no coverage: a genuine inconsistency (`length + mass`)
+		// is between two DECLARED quantities and is still caught.
 		var first *Unit
-		sawNonLiteral := false
 		for i, arg := range node.Args {
-			if _, isLiteral := toFloat64(arg); isLiteral {
-				continue
-			}
-			sawNonLiteral = true
 			u, err := propagateDimension(arg, env)
 			if err != nil {
 				return nil, err
@@ -1342,10 +1340,6 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 				return nil, mismatchErrf("scale mismatch in %q: arg 0 has %s at scale %s, arg %d at scale %s",
 					node.Op, first.Dim, first.Exact, i, u.Exact)
 			}
-		}
-		if !sawNonLiteral {
-			// An all-literal sum ("1 + 2") is a pure number.
-			return &Unit{Scale: 1}, nil
 		}
 		return first, nil
 
@@ -1556,6 +1550,83 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 		r := varDim.Divide(wrtUnit)
 		return &r, nil
 
+	case ">", "<", ">=", "<=", "==", "!=":
+		// A comparison's known operands must share dimension and scale; an
+		// indeterminate operand is skipped, as in `+` (`x > 0` compares nothing
+		// that can disagree). The result is a dimensionless boolean whatever the
+		// operands are, including when none is known (esm-spec §4.8.3).
+		var first *Unit
+		for i, arg := range node.Args {
+			u, err := propagateDimension(arg, env)
+			if err != nil {
+				return nil, err
+			}
+			if u == nil {
+				continue
+			}
+			if first == nil {
+				first = u
+				continue
+			}
+			if !first.Dim.Equal(u.Dim) {
+				return nil, mismatchErrf("dimensional mismatch in %q: arg 0 has %s, arg %d has %s",
+					node.Op, first.Dim, i, u.Dim)
+			}
+			if !first.Exact.Equal(u.Exact) {
+				return nil, mismatchErrf("scale mismatch in %q: arg 0 has %s at scale %s, arg %d at scale %s",
+					node.Op, first.Dim, first.Exact, i, u.Exact)
+			}
+		}
+		return &Unit{Scale: 1}, nil
+
+	case "and", "or", "not":
+		// A boolean connective's result is a dimensionless boolean. Its operands
+		// carry no unit requirement of their own, but they are walked so a
+		// mismatch inside one (`not(x [m] > z [kg])`) is reported (esm-spec
+		// §4.8.3).
+		for _, arg := range node.Args {
+			if _, err := propagateDimension(arg, env); err != nil {
+				return nil, err
+			}
+		}
+		return &Unit{Scale: 1}, nil
+
+	case "ifelse":
+		// ifelse(cond, a, b): the two branches follow the `+` rule (esm-spec
+		// §4.8.3). Known branches must share dimension and scale, an
+		// indeterminate branch is skipped (`ifelse(c > 0, x, 0.5*y)` has the unit
+		// of x, whichever branch is the known one), and with no known branch the
+		// result is indeterminate. The condition is walked so a mismatch inside it
+		// is reported, but its own unit neither enters the result nor has to be
+		// dimensionless.
+		if len(node.Args) != 3 {
+			return nil, analysisErrf("'ifelse' requires 3 arguments, got %d", len(node.Args))
+		}
+		if _, err := propagateDimension(node.Args[0], env); err != nil {
+			return nil, err
+		}
+		var first *Unit
+		for _, arg := range node.Args[1:] {
+			u, err := propagateDimension(arg, env)
+			if err != nil {
+				return nil, err
+			}
+			if u == nil {
+				continue
+			}
+			if first == nil {
+				first = u
+				continue
+			}
+			if !first.Dim.Equal(u.Dim) {
+				return nil, mismatchErrf("ifelse branches must share a dimension: %s vs %s", first.Dim, u.Dim)
+			}
+			if !first.Exact.Equal(u.Exact) {
+				return nil, mismatchErrf("ifelse branches must share a scale: %s at scale %s vs scale %s",
+					first.Dim, first.Exact, u.Exact)
+			}
+		}
+		return first, nil
 	case "const":
 		// A `const` that DECLARES its units has that unit (esm-spec §4.8.5);
 		// without `units` it is undeterminable, like a bare literal. An

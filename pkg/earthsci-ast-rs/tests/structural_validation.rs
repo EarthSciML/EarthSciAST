@@ -1538,3 +1538,50 @@ fn a_subsystem_declaration_is_covered() {
     );
     assert!(!validate(&load_string(fixture).unwrap()).is_valid);
 }
+
+// ---------------------------------------------------------------------------
+// esm-spec §6.3 — inline array data is only a SHAPED variable's value.
+//
+// On a variable with no `shape` there is nothing for the array to fill and no
+// scalar reading of it. The build pipeline used to bind such a parameter to a
+// fabricated 0.0 and now keeps it out of scope; `array_default_without_shape`
+// rejects the declaration at load instead.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn an_array_default_on_an_unshaped_variable_is_rejected() {
+    let fixture = include_str!("../../../tests/invalid/array_default_without_shape.esm");
+    let result =
+        validate(&load_string(fixture).expect("fixture must load: the rule is a TYPED check"));
+    let mut found: Vec<(String, String)> = result
+        .structural_errors
+        .iter()
+        .filter(|e| matches!(e.code, StructuralErrorCode::ArrayDefaultWithoutShape))
+        .map(|e| {
+            (
+                e.path.clone(),
+                e.details["variable_type"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string(),
+            )
+        })
+        .collect();
+    found.sort();
+    // The top-level parameter and the subsystem's unknown, and NOT the shaped
+    // control `w`, which carries the same data legally.
+    assert_eq!(
+        found,
+        vec![
+            (
+                "/models/Decay/subsystems/Inner/variables/x/default".to_string(),
+                "unknown".to_string()
+            ),
+            (
+                "/models/Decay/variables/k/default".to_string(),
+                "parameter".to_string()
+            ),
+        ]
+    );
+    assert!(!result.is_valid);
+}

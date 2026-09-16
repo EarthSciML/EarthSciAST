@@ -94,6 +94,10 @@ const ERROR_CODES = (
     # silently receives the implicit symbol — the simulation clock in place of
     # the declared quantity.
     RESERVED_VARIABLE_NAME = "reserved_variable_name",
+    # Inline array data as the `default` of a variable that declares no `shape`
+    # (esm-spec §6.3). Inline array data is a SHAPED variable's value, so with no
+    # shape there is nothing for the array to fill.
+    ARRAY_DEFAULT_WITHOUT_SHAPE = "array_default_without_shape",
     SYSTEM_KIND_MISMATCH = "system_kind_mismatch",
     UNDEFINED_INDEX_SET = "undefined_index_set",
     UNDEFINED_OPERATOR = "undefined_operator",

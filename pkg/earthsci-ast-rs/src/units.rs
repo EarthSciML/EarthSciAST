@@ -823,7 +823,14 @@ fn propagate_operator_dim(
             propagate_matching_dim(op, env, findings);
             Dim::Known(Unit::dimensionless())
         }
-        "and" | "or" | "not" => Dim::Known(Unit::dimensionless()),
+        "and" | "or" | "not" => {
+            // A boolean connective's result is a dimensionless boolean. Its
+            // operands carry no unit requirement of their own, but they are
+            // walked so a mismatch inside one (`not(x [m] > z [kg])`) is
+            // reported (esm-spec §4.8.3).
+            propagate_args(op, env, findings);
+            Dim::Known(Unit::dimensionless())
+        }
         // Array operators: propagate the element dimension. Shape and
         // indexing are orthogonal to dimension (see gt-t5c / gt-vt3 — shapes
         // are a separate concern from unit checking).
@@ -852,34 +859,23 @@ fn propagate_operator_dim(
     }
 }
 
-/// True for a bare numeric literal, which is dimensionally NEUTRAL in an
-/// additive position rather than dimensionless. See [`propagate_dim`].
-fn is_literal(expr: &Expr) -> bool {
-    matches!(expr, Expr::Number(_) | Expr::Integer(_))
-}
-
 /// Report a provable mismatch among the operands that DID resolve, and return
 /// the shared dimension. Used by `+`/`-`, `min`/`max`, comparisons and `atan2`.
 ///
 /// Two operands are only ever compared when BOTH dimensions were determined —
 /// an undeterminable operand is skipped, never assumed dimensionless, so it can
-/// neither hide nor manufacture a mismatch.
-///
-/// Bare numeric literals are skipped entirely: they adopt the dimension of what
-/// they are combined with (`T - 273.15` is a temperature). If EVERY operand is
-/// a bare literal (`1 + 2`), the result is dimensionless.
+/// neither hide nor manufacture a mismatch (esm-spec §4.8.3). A numeric literal
+/// is undeterminable, so it adopts the dimension of what it is combined with
+/// (`T - 273.15` is a temperature), and `x + 0.5 * y` has the dimension of `x`.
+/// If NO operand resolves (`1 + 2`), the result is undeterminable, never
+/// dimensionless (§4.8.4).
 fn propagate_matching_dim(
     op: &ExpressionNode,
     env: &HashMap<String, Unit>,
     findings: &mut Vec<UnitFinding>,
 ) -> Dim {
     let mut first: Option<Unit> = None;
-    let mut saw_non_literal = false;
     for arg in &op.args {
-        if is_literal(arg) {
-            continue;
-        }
-        saw_non_literal = true;
         let dim = propagate_dim(arg, env, findings);
         let Some(unit) = dim.known() else {
             continue;
@@ -905,9 +901,6 @@ fn propagate_matching_dim(
             _ => {}
         }
     }
-    if !saw_non_literal {
-        return Dim::Known(Unit::dimensionless());
-    }
     match first {
         Some(unit) => Dim::Known(unit),
         None => Dim::Unknown,
@@ -915,19 +908,13 @@ fn propagate_matching_dim(
 }
 
 /// `+` / `-`: every operand must share dimensions; the result carries them.
-/// A unary minus propagates its single argument unchanged.
+/// A unary `+` or `-` carries its single operand's dimension unchanged, so
+/// `+(2)` is as undeterminable as `2`.
 fn propagate_additive_dim(
     op: &ExpressionNode,
     env: &HashMap<String, Unit>,
     findings: &mut Vec<UnitFinding>,
 ) -> Dim {
-    if op.args.is_empty() {
-        return Dim::Known(Unit::dimensionless());
-    }
-    // Unary minus: propagate the single argument.
-    if op.op == "-" && op.args.len() == 1 {
-        return propagate_dim(&op.args[0], env, findings);
-    }
     propagate_matching_dim(op, env, findings)
 }
 
@@ -1196,7 +1183,10 @@ fn propagate_sqrt_dim(
     }
 }
 
-/// `ifelse`: the two branches must share dimensions; the result carries them.
+/// `ifelse`: the two branches follow the `+` rule (esm-spec §4.8.3). When both
+/// are determinable they must share dimension and scale; when only one is, the
+/// result is its unit (`ifelse(c, x, 0.5 * y)` has the unit of `x`); when
+/// neither is (`ifelse(c, 1, 2)`), the result is undeterminable.
 fn propagate_ifelse_dim(
     op: &ExpressionNode,
     env: &HashMap<String, Unit>,
@@ -1229,8 +1219,8 @@ fn propagate_ifelse_dim(
             )));
             Dim::Unknown
         }
-        (Some(a), Some(_)) => Dim::Known(a.clone()),
-        _ => Dim::Unknown,
+        (Some(a), _) | (None, Some(a)) => Dim::Known(a.clone()),
+        (None, None) => Dim::Unknown,
     }
 }
 
@@ -1605,20 +1595,21 @@ fn indeterminate_operand(expr: &Expr, env: &HashMap<String, Unit>) -> String {
         Expr::Integer(n) => format!("operand `{n}` has an indeterminate dimension"),
         Expr::Variable(name) => format!("variable `{name}` has no declared units"),
         Expr::Operator(op) => {
-            // Where a literal is dimension-neutral it is never the cause.
-            let literal_is_neutral = matches!(
-                op.op.as_str(),
-                "+" | "-" | "min" | "max" | "atan2" | ">" | "<" | ">=" | "<=" | "==" | "!="
-            );
+            // A bare literal is the least informative operand to blame — it is
+            // indeterminate everywhere — so a NAMED operand that is equally
+            // indeterminate is reported in preference to it.
+            let mut literal: Option<String> = None;
             for arg in &op.args {
-                if literal_is_neutral && is_literal(arg) {
+                if propagate_dim(arg, env, &mut Vec::new()).known().is_some() {
                     continue;
                 }
-                if propagate_dim(arg, env, &mut Vec::new()).known().is_none() {
-                    return indeterminate_operand(arg, env);
+                if matches!(arg, Expr::Number(_) | Expr::Integer(_)) {
+                    literal.get_or_insert_with(|| indeterminate_operand(arg, env));
+                    continue;
                 }
+                return indeterminate_operand(arg, env);
             }
-            format!("`{}` node has no determinable dimension", op.op)
+            literal.unwrap_or_else(|| format!("`{}` node has no determinable dimension", op.op))
         }
     }
 }
@@ -3405,13 +3396,110 @@ mod tests {
         );
         assert!(check_expression_dimensions(&expr, None, &env).is_empty());
 
-        // And an all-literal expression is dimensionless.
-        let expr = op("+", vec![Expr::Number(1.0), Expr::Number(2.0)]);
-        assert!(
-            Unit::propagate(&expr, &HashMap::new())
-                .unwrap()
-                .is_dimensionless()
+        // But a sum with NO determinable operand is undeterminable, never
+        // dimensionless (esm-spec §4.8.3, §4.8.4): for an integer as well as a
+        // float literal, in `min`/`max` as in `+`/`-`, and under a unary `+`.
+        let literal_pairs = [
+            vec![Expr::Number(1.0), Expr::Number(2.0)],
+            vec![Expr::Integer(1), Expr::Integer(2)],
+        ];
+        for args in literal_pairs {
+            for name in ["+", "-", "min", "max"] {
+                assert!(
+                    matches!(
+                        Unit::propagate(&op(name, args.clone()), &HashMap::new()),
+                        Err(UnitError::UnknownUnit(_))
+                    ),
+                    "{name} over literals must be undeterminable"
+                );
+            }
+        }
+        for lit in [Expr::Integer(2), Expr::Number(2.5)] {
+            assert!(matches!(
+                Unit::propagate(&op("+", vec![lit]), &HashMap::new()),
+                Err(UnitError::UnknownUnit(_))
+            ));
+        }
+    }
+
+    /// A sum whose operands are partly undeterminable has the unit of the
+    /// determinable ones (esm-spec §4.8.3), and a unary `+` carries its
+    /// operand's unit.
+    #[test]
+    fn propagate_sum_with_undeterminable_operand_takes_known_unit() {
+        let env = env_of(&[("x", "m"), ("y", "m")]);
+        let half_y = op("*", vec![Expr::Number(0.5), Expr::Variable("y".into())]);
+        for name in ["+", "-", "min", "max"] {
+            let expr = op(name, vec![Expr::Variable("x".into()), half_y.clone()]);
+            let u = Unit::propagate(&expr, &env).unwrap();
+            assert_eq!(
+                u.dimensions.get(&Dimension::Length),
+                Some(&Rational::int(1)),
+                "{name}"
+            );
+        }
+        let plus_x = op("+", vec![Expr::Variable("x".into())]);
+        let u = Unit::propagate(&plus_x, &env).unwrap();
+        assert_eq!(
+            u.dimensions.get(&Dimension::Length),
+            Some(&Rational::int(1))
         );
+    }
+
+    /// `ifelse` takes the unit of its determinable branch, whichever branch that
+    /// is, and with no determinable branch it is undeterminable (esm-spec
+    /// §4.8.3).
+    #[test]
+    fn ifelse_takes_the_unit_of_its_determinable_branch() {
+        let env = env_of(&[("x", "m"), ("y", "m"), ("c", "1")]);
+        let cond = op(">", vec![Expr::Variable("c".into()), Expr::Integer(0)]);
+        let x = Expr::Variable("x".into());
+        let half_y = op("*", vec![Expr::Number(0.5), Expr::Variable("y".into())]);
+        let branch_pairs = [
+            (x.clone(), half_y.clone()),
+            (half_y.clone(), x.clone()),
+            (Expr::Integer(2), x.clone()),
+        ];
+        for (then_branch, else_branch) in branch_pairs {
+            let expr = op("ifelse", vec![cond.clone(), then_branch, else_branch]);
+            let u = Unit::propagate(&expr, &env).unwrap();
+            assert_eq!(
+                u.dimensions.get(&Dimension::Length),
+                Some(&Rational::int(1))
+            );
+        }
+        let literal_branches = op("ifelse", vec![cond, Expr::Integer(1), Expr::Number(2.0)]);
+        assert!(matches!(
+            Unit::propagate(&literal_branches, &env),
+            Err(UnitError::UnknownUnit(_))
+        ));
+    }
+
+    /// A boolean connective places no requirement on its operands' units, but a
+    /// mismatch inside an operand is still reported (esm-spec §4.8.3).
+    #[test]
+    fn connectives_report_a_mismatch_inside_their_operands() {
+        let env = env_of(&[("x", "m"), ("z", "kg"), ("c", "1")]);
+        let mismatch = op(
+            ">",
+            vec![Expr::Variable("x".into()), Expr::Variable("z".into())],
+        );
+        let ok = op(">", vec![Expr::Variable("c".into()), Expr::Integer(0)]);
+        for expr in [
+            op("not", vec![mismatch.clone()]),
+            op("and", vec![mismatch.clone(), ok.clone()]),
+            op("or", vec![ok.clone(), mismatch.clone()]),
+        ] {
+            assert!(
+                !check_expression_dimensions(&expr, None, &env).is_empty(),
+                "{expr:?}"
+            );
+        }
+        let dimensional_operands = op(
+            "and",
+            vec![Expr::Variable("x".into()), Expr::Variable("z".into())],
+        );
+        assert!(check_expression_dimensions(&dimensional_operands, None, &env).is_empty());
     }
 
     /// An exponent is read BY VALUE, so `L^2` still yields an area even though

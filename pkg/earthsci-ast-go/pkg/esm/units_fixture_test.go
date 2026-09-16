@@ -265,11 +265,16 @@ func TestUnitsFixturesInlineTestsExecution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve repo root: %v", err)
 	}
+	// Only the fixtures that CARRY an inline `tests` block belong here;
+	// units_ifelse_undeterminable_branch.esm and
+	// units_comparisons_and_connectives.esm declare units alone and are wired
+	// into TestUnitsFixturesCrossBinding instead.
 	fixtures := []string{
 		"units_conversions.esm",
 		"units_dimensional_analysis.esm",
 		"units_propagation.esm",
 		"units_negated_literal_neutral.esm",
+		"units_sum_undeterminable_operands.esm",
 	}
 	totalTests := 0
 	for _, name := range fixtures {

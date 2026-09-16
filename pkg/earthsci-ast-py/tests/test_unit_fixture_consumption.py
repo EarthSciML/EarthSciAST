@@ -31,11 +31,16 @@ from earthsci_ast.classification import observed_definitions
 
 
 FIXTURES_DIR = VALID_DIR
+# Only the fixtures that CARRY an inline ``tests`` block belong here;
+# units_ifelse_undeterminable_branch.esm and
+# units_comparisons_and_connectives.esm declare units alone and are wired into
+# the cross-binding validate suite in test_unit_validation.py instead.
 FIXTURES = [
     "units_conversions.esm",
     "units_dimensional_analysis.esm",
     "units_propagation.esm",
     "units_negated_literal_neutral.esm",
+    "units_sum_undeterminable_operands.esm",
 ]
 
 
