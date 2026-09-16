@@ -41,12 +41,27 @@ pub fn file_has_array_ops(file: &EsmFile) -> bool {
     let Some(models) = &file.models else {
         return false;
     };
-    for model in models.values() {
-        if model_has_array_ops(model) {
-            return true;
-        }
+    models
+        .values()
+        .any(|model| model_tree_any(model, &model_has_array_ops))
+}
+
+/// Whether `pred` holds for `model` or for any component mounted beneath it
+/// through `subsystems` (esm-spec §4.6). A mounted component's equations and
+/// variables are part of the model [`mount_subsystems`] builds, so a routing
+/// question about the model is a question about its whole mount tree: a
+/// document whose only array or derivative lives in a subsystem is otherwise
+/// routed as if it had none. An entry [`parse_subsystem_model`] cannot read
+/// contributes nothing here; the build reports it.
+pub(crate) fn model_tree_any(model: &Model, pred: &dyn Fn(&Model) -> bool) -> bool {
+    if pred(model) {
+        return true;
     }
-    false
+    model.subsystems.as_ref().is_some_and(|subs| {
+        subs.iter().any(|(name, value)| {
+            parse_subsystem_model(name, value).is_ok_and(|(sub, _)| model_tree_any(&sub, pred))
+        })
+    })
 }
 
 /// Return true if the file has spatial structure: any model with array-shaped
@@ -60,16 +75,15 @@ pub fn file_has_spatial_model(file: &EsmFile) -> bool {
     let Some(models) = &file.models else {
         return false;
     };
-    for model in models.values() {
-        for var in model.variables.values() {
-            if let Some(shape) = &var.shape {
-                if !shape.is_empty() {
-                    return true;
-                }
-            }
-        }
-    }
-    false
+    let has_shaped_variable = |model: &Model| {
+        model
+            .variables
+            .values()
+            .any(|var| var.shape.as_ref().is_some_and(|shape| !shape.is_empty()))
+    };
+    models
+        .values()
+        .any(|model| model_tree_any(model, &has_shaped_variable))
 }
 
 pub(super) fn model_has_array_ops(model: &Model) -> bool {
@@ -155,7 +169,7 @@ pub(super) fn check_no_spatial_ops(expr: &Expr) -> Result<(), CompileError> {
 /// `grids/mpas/mesh/level0.esm`); a bare `{ "variables": …, "equations": … }`
 /// fragment is also accepted. An unresolved `{ "ref": … }` — a document built
 /// programmatically without the loader — is a hard error, never a silent drop.
-pub(super) fn parse_subsystem_model(
+pub(crate) fn parse_subsystem_model(
     sub_name: &str,
     value: &serde_json::Value,
 ) -> Result<(Model, HashMap<String, IndexSet>), CompileError> {

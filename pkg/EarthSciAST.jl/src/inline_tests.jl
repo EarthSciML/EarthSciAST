@@ -701,6 +701,98 @@ end
 #
 # Cells are enumerated from the declared shape's interval index sets. Returns
 # `(field, cells)` or `nothing` when the variable is not such an observed.
+# The component a dotted component PATH names, or `nothing` (esm-spec §4.6): the
+# first segment is a top-level `models` / `reaction_systems` key and each later
+# one a key of its parent's `subsystems`. An unresolved `SubsystemRef` is not a
+# component and ends the walk. Identical to the Python `_component_at` and the
+# Rust `component_at`.
+function _component_at(file::EsmFile, path::AbstractString)
+    segs = split(String(path), '.')
+    head = String(segs[1])
+    comp = file.models === nothing ? nothing : get(file.models, head, nothing)
+    if comp === nothing && file.reaction_systems !== nothing
+        comp = get(file.reaction_systems, head, nothing)
+    end
+    for seg in segs[2:end]
+        (comp isa Model || comp isa ReactionSystem) || return nothing
+        comp = get(comp.subsystems, String(seg), nothing)
+    end
+    return (comp isa Model || comp isa ReactionSystem) ? comp : nothing
+end
+
+# Split an assertion's `variable` into `(owner component path, local name)`.
+#
+# The schema documents `Assertion.variable` as a local name OR a scoped
+# reference, and it resolves by the rule `namespace_expr` already applies to the
+# same string in the same component's equations: a dotted name whose HEAD is a
+# subsystem key of the asserting component is relative to it (`Leaf.u` in
+# `Host` with a `Leaf` subsystem is `Host.Leaf.u`); any other dotted name is
+# document-absolute (§4.6). Every per-component lookup then runs against the
+# owner, so a mounted leaf's state, observed and declared shape are read from
+# the leaf.
+#
+# A bare name, or a dotted one that walks to no component, is returned
+# unchanged against `mname`, and the caller reports it exactly as before.
+# Identical to the Python `_resolve_asserted_name` and the Rust
+# `resolve_asserted_name`.
+function _resolve_asserted_name(file::EsmFile, mname::AbstractString,
+                                variable::AbstractString)
+    m = String(mname)
+    v = String(variable)
+    cut = findlast('.', v)
+    cut === nothing && return (m, v)
+    prefix = v[1:prevind(v, cut)]
+    loc = v[nextind(v, cut):end]
+    head = String(split(prefix, '.')[1])
+    asserting = _component_at(file, m)
+    owner = (asserting !== nothing && haskey(asserting.subsystems, head)) ?
+        m * "." * prefix : prefix
+    _component_at(file, owner) === nothing && return (m, v)
+    return (owner, loc)
+end
+
+# The flat slot of the SCALAR `variable` of the component at `owner`, matched
+# only under the name that component owns, then through a merge rename. The
+# scoped twin of `_scalar_slot`, whose bare-name passes would return a
+# same-named row belonging to ANOTHER component. Identical to the Python
+# `_scoped_scalar_slot` and the Rust `scoped_scalar_slot`.
+function _scoped_scalar_slot(var_map::AbstractDict, owner::AbstractString,
+                             variable::AbstractString,
+                             renames::AbstractDict=Dict{String,String}())::Int
+    qualified = String(owner) * "." * String(variable)
+    for (name, slot) in var_map
+        String(name) == qualified && return Int(slot)
+    end
+    if !isempty(renames)
+        survivor = get(renames, qualified, nothing)
+        if survivor !== nothing
+            for (name, slot) in var_map
+                String(name) == survivor && return Int(slot)
+            end
+        end
+    end
+    return 0
+end
+
+# The cells of the ARRAY `variable` of the component at `owner`, matched only
+# under the name that component owns. The scoped twin of `_state_cells`, whose
+# bare-suffix fallback would splice another component's cells into the field.
+# Identical to the Python `_scoped_state_cells` and the Rust
+# `scoped_state_cells`.
+function _scoped_state_cells(var_map::AbstractDict, owner::AbstractString,
+                             variable::AbstractString)
+    qualified = String(owner) * "." * String(variable)
+    out = Tuple{Vector{Int},Int}[]
+    for (name, slot) in var_map
+        parsed = _parse_cell_key(String(name))
+        parsed === nothing && continue
+        stem, cell = parsed
+        stem == qualified && push!(out, (cell, Int(slot)))
+    end
+    sort!(out; by=first)
+    return out
+end
+
 function _observed_field(insp::BuildInspection, file::EsmFile,
                          mname::AbstractString, variable::AbstractString;
                          state_arrays::AbstractDict=Dict{String,Any}(),
@@ -708,8 +800,8 @@ function _observed_field(insp::BuildInspection, file::EsmFile,
     # `models === nothing` for a document that is reaction systems only, whose
     # components declare SPECIES rather than variables and so have no observed
     # to find here; the assertion falls through to the scalar-slot path.
-    model = file.models === nothing ? nothing : get(file.models, String(mname), nothing)
-    model === nothing && return nothing
+    model = _component_at(file, mname)
+    model isa Model || return nothing
     v = get(model.variables, String(variable), nothing)
     (v !== nothing && String(variable) in observed_unknowns(model)) || return nothing
     # A SHAPELESS observed is rank 0, not unreadable: `E_NOx = Σ_r annual[r]·…`
@@ -723,13 +815,17 @@ function _observed_field(insp::BuildInspection, file::EsmFile,
     qualified = String(mname) * "." * String(variable)
     # The fully-substituted form: self-contained, always evaluable, and the only
     # form a build without `observed_defs` publishes. This stays the FALLBACK.
-    inlined = get(insp.observed_exprs, qualified,
-                  get(insp.observed_exprs, String(variable), nothing))
+    # The BARE spelling names the ASSERTING component's own observed; under a
+    # SCOPED name (a dotted owner path) a hit under it belongs to a different
+    # component, and answering with it is the silent wrong answer this
+    # resolution exists to remove.
+    bare = occursin('.', String(mname)) ? nothing : String(variable)
+    _bare_get(d) = bare === nothing ? nothing : get(d, bare, nothing)
+    inlined = get(insp.observed_exprs, qualified, _bare_get(insp.observed_exprs))
     # The UN-inlined form: cheap when its producers can be materialized (they
     # are then evaluated once instead of per output cell), but it references
     # them BY NAME — so it is only usable if every one of them resolves.
-    raw = get(insp.observed_defs, qualified,
-              get(insp.observed_defs, String(variable), nothing))
+    raw = get(insp.observed_defs, qualified, _bare_get(insp.observed_defs))
     expr = inlined === nothing ? raw : inlined
     # `vec` flattens the comprehension to a `Vector{Vector{Int}}` for ANY rank:
     # over a rank≥2 `CartesianIndices` the comprehension yields a `Matrix`
@@ -863,8 +959,8 @@ function _materialized_obs_scope(insp::BuildInspection, file::EsmFile,
                                  params::AbstractDict;
                                  base::AbstractDict=insp.const_arrays)
     isempty(insp.observed_defs) && return base
-    model = get(file.models, String(mname), nothing)
-    model === nothing && return base
+    model = _component_at(file, mname)
+    model isa Model || return base
 
     # TWO published forms of an observed's body, and this needs BOTH.
     #
@@ -1135,14 +1231,14 @@ end
 # ill-formed on a 0-D variable per esm-spec §6.6.5.
 function _variable_shape(file::EsmFile, mname::AbstractString,
                          variable::AbstractString)::Vector{String}
-    model = file.models === nothing ? nothing : get(file.models, String(mname), nothing)
+    component = _component_at(file, mname)
+    model = component isa Model ? component : nothing
     if model === nothing
         # A reaction system declares SPECIES, and a species is 0-D. The answer
         # is therefore the coords-specific rejection, not "model not found":
         # the component exists, and what is ill-formed is asking a scalar for
         # a grid cell.
-        file.reaction_systems !== nothing &&
-            haskey(file.reaction_systems, String(mname)) &&
+        component isa ReactionSystem &&
             throw(InlineTestError(
                 "`coords` requires a spatially-shaped variable; '$(variable)' is scalar"))
         throw(InlineTestError("model '$(mname)' not found"))
@@ -1307,9 +1403,17 @@ function _evaluate_assertion(a, sim, var_map::AbstractDict,
     abs(sim.t[ti] - a.time) <= _SAVED_TIME_RTOL * max(1.0, abs(a.time)) ||
         throw(InlineTestError("no saved state at t=$(a.time) (nearest $(sim.t[ti]))"))
     state = sim.u[ti]
+    # A scoped `variable` reads the component it names (schema
+    # `Assertion.variable`); every lookup below runs against that owner.
+    owner, loc = _resolve_asserted_name(eval_file, mname, String(a.variable))
+    # A scoped name is read ONLY under the name its owner holds; the bare-name
+    # fallbacks that serve an unscoped assertion would reach a same-named row
+    # of another component.
+    scoped = owner != String(mname)
 
     if a.coords === nothing && a.reduce === nothing
-        slot = _scalar_slot(var_map, a.variable, String(mname), renames)
+        slot = scoped ? _scoped_scalar_slot(var_map, owner, loc, renames) :
+               _scalar_slot(var_map, loc, owner, renames)
         slot == 0 || return state[slot]
         # Not an ODE state — so an OBSERVED, a variable the document defines by
         # an algebraic equation rather than a time derivative. esm-spec §6.6
@@ -1329,7 +1433,7 @@ function _evaluate_assertion(a, sim, var_map::AbstractDict,
         # below — this is a second entry to it, not a second evaluator.
         state_arrays, state_scalars = _state_scope(var_map, state)
         state_scalars["t"] = Float64(sim.t[ti])
-        obs = _observed_field(insp, eval_file, String(mname), String(a.variable);
+        obs = _observed_field(insp, eval_file, owner, loc;
                               state_arrays=state_arrays, state_scalars=state_scalars)
         obs === nothing &&
             throw(InlineTestError("scalar state '$(a.variable)' not found"))
@@ -1352,11 +1456,12 @@ function _evaluate_assertion(a, sim, var_map::AbstractDict,
     # message.
     coords_target = nothing
     if a.coords !== nothing
-        shape = _variable_shape(eval_file, String(mname), String(a.variable))
+        shape = _variable_shape(eval_file, owner, loc)
         coords_target = _coords_cell(a.coords, shape, eval_file.index_sets)
     end
 
-    cells = _state_cells(var_map, a.variable, String(mname))
+    cells = scoped ? _scoped_state_cells(var_map, owner, loc) :
+            _state_cells(var_map, loc, owner)
     local field::Vector{Float64}, cell_tuples::Vector{Vector{Int}}
     if !isempty(cells)
         field = Float64[state[slot] for (_, slot) in cells]
@@ -1369,7 +1474,7 @@ function _evaluate_assertion(a, sim, var_map::AbstractDict,
         # is unaffected.
         state_arrays, state_scalars = _state_scope(var_map, state)
         state_scalars["t"] = Float64(sim.t[ti])
-        obs = _observed_field(insp, eval_file, String(mname), String(a.variable);
+        obs = _observed_field(insp, eval_file, owner, loc;
                               state_arrays=state_arrays, state_scalars=state_scalars)
         obs === nothing && throw(InlineTestError(
             "array state '$(a.variable)' has no cells in var_map"))
@@ -1392,7 +1497,7 @@ function _evaluate_assertion(a, sim, var_map::AbstractDict,
             # dimension names are in scope too, bound per cell
             # (`bind_dimension_names`).
             dims = try
-                _variable_shape(eval_file, String(mname), String(a.variable))
+                _variable_shape(eval_file, owner, loc)
             catch err
                 err isa InlineTestError ? String[] : rethrow()
             end
