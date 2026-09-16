@@ -5667,7 +5667,7 @@ arm, Rust's vectorized and taped lowering, Python's generated code) are pinned b
 per-binding unit tests, because which path a document takes is an internal choice.
 
 
-### 5.39 A Scalar Right-Hand Side on a Shaped Observed (normative)
+### 5.41 A Scalar Right-Hand Side on a Shaped Observed (normative)
 
 esm-spec §4.3.4 replicates an operand along every result axis it does not
 declare, and a scalar declares none. The same holds when the whole right-hand
@@ -5694,17 +5694,21 @@ Each executing binding lost the declared shape in its own place (issue #262):
   `E_TREEWALK_UNSUPPORTED_SHAPE`: its elementwise array-observed fold admitted
   only an operator right-hand side from an allowlist that did not include
   `ifelse`, so a scalar right-hand side and any shaped `ifelse` observed were
-  rejected. The fold now admits both.
+  rejected. The fold now admits both, and selects its targets to a fixed point
+  so that an observed which only ALIASES a folded one folds with it rather than
+  being left behind carrying the referent's body.
 
-#### 5.39.1 Gate
+#### 5.41.1 Gate
 
 `tests/conformance/shaped_observed_scalar_broadcast/` holds the shared fixture
 and the Julia-minted golden. The fixture writes the scalar as a literal, as a
 parameter, and as a constant-predicate `ifelse` (`folded`, asserted pointwise and
 under `min`/`max`, so a partially filled field fails); `kept` is the same
 `ifelse` with the array branch taken, as a control; `state_folded` takes a
-state-dependent scalar branch; and `u` integrates `literal + state_folded`, so
-the broadcast is also read by the dynamics. The scalar branches are non-zero, so
+state-dependent scalar branch; `chain` ALIASES `literal`, so a binding that
+fills only the observed written as a scalar and not the one that merely names
+it is caught; and `u` integrates `literal + state_folded`, so the broadcast is
+also read by the dynamics. The scalar branches are non-zero, so
 a zero-filled field cannot pass, and `u`'s right-hand side is constant, so every
 golden is integrator-independent.
 
