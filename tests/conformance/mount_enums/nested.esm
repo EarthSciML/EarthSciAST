@@ -1,0 +1,15 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "MountEnumsNested",
+    "description": "Mounts mid.esm by a top-level `models` `{ref}`. mid.esm reads its own 5; the leaf it mounts reads its own 2. Each edge resolves the enum ops of the file below it.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ]
+  },
+  "models": {
+    "Mid": {
+      "ref": "./mid.esm"
+    }
+  }
+}

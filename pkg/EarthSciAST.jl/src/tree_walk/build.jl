@@ -1614,9 +1614,17 @@ function _split_observed_and_derivatives(equations::Vector{Equation},
                                         eq.lhs.name in geom_inline_vars ||
                                         eq.lhs.name in array_inline_vars)
             observed_exprs[eq.lhs.name] = eq.rhs
+        elseif first(_lhs_role(eq.lhs)) === :implicit &&
+               !_is_spatial_derivative(_lhs_unwrap(eq.lhs))
+            # An implicit equation constrains its operands without defining any
+            # of them; this evaluator has no algebraic solve (esm-spec §9.6.6).
+            throw(TreeWalkError(ERROR_CODES.UNSUPPORTED_CONSTRUCT,
+                                "implicit equation `$(to_ascii(eq))` is not " *
+                                "supported by the Julia tree-walk evaluator; refusing " *
+                                "the build rather than running the model without it"))
         else
-            # Algebraic constraint / unsupported equation form.
-            # The tree-walk path is ODE-only; see bead's "Not in scope".
+            # Any other unsupported equation form (a spatial derivative LHS, a
+            # bare LHS naming no observed).
             throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_EQUATION",
                                 _equation_tag(eq)))
         end
@@ -3354,6 +3362,16 @@ function _build_evaluator_impl_inner(model::Model;
                          # against the model's own subsystems and name prefixes
                          # alone.
                          _model_name::Union{Nothing,AbstractString}=nothing)
+    # A discrete event is refused before anything is built (esm-spec §9.6.6):
+    # this evaluator has no event handling, so a model built without its events
+    # would report the initial value as its answer. This check covers a model
+    # handed to `build_evaluator` directly. A FLATTENED system reaches this entry
+    # through `flattened_to_esm`, which does not carry events, so `simulate` (and
+    # with it `run_inline_tests`) and `build_evaluator(::FlattenedSystem)` refuse
+    # it earlier, while the events are still in hand. The ModelingToolkit export
+    # runs discrete events and does not come through here.
+    ev = _first_discrete_event(model)
+    ev === nothing || throw(_discrete_event_refusal(ev))
     # Runtime contraction-loop var registry (ess-runtime-contraction) is a
     # build-scoped resolve→compile side channel; clear any stale entries from a
     # prior build so it never accumulates across builds. Loop-var names are
@@ -3387,6 +3405,10 @@ function _build_evaluator_impl_inner(model::Model;
             "expression_templates registry reached the build; construct via " *
             "an EsmFile/document front-door (esm-spec §9.6.4 Option B)"))
     end
+    # ---- §9.6.3 constraint 6: walk every equation for an unlowered op ----
+    # BEFORE any pass that drops a tree (the elementwise fold, dead-observed
+    # elimination), so an op in a tree the build would discard is still refused.
+    _reject_unlowered_operators(model)
     # ---- `broadcast` lowering (esm-spec §4.3.4; see `_lower_broadcast_model`) ----
     # Rewrite every `broadcast(fn=F, …)` node to its plain scalar-op spelling
     # `F(…)` BEFORE any other pass sees it, so `broadcast` has exactly the
@@ -5085,6 +5107,12 @@ function build_evaluator(esm::AbstractDict;
         end
     end
 
+    # ---- §9.6.3 constraint 6 at the FRONT-DOOR pre-passes ----
+    # The binning-coordinate derivation and value invention below evaluate
+    # observed bodies before `_build_evaluator_impl` is reached, so the
+    # rewrite-target walk runs here too, ahead of them.
+    model === nothing || _reject_unlowered_operators(model)
+
     # ---- Caller-key canonicalization (esm-spec §6.6) ----
     # Rewrite the caller's LOCAL-named `parameter_overrides` onto this
     # document's (flattening-qualified) parameter names once, at the front
@@ -5244,6 +5272,10 @@ function build_evaluator(flat::FlattenedSystem; kwargs...)
     # SINGLE evaluator-side expansion point. `ESS_TEMPLATE_REF_DISABLE=1`
     # (Expand at load) is the one differential escape hatch (RFC §12 gate 3).
     # A no-op for a reference-free system.
+    #
+    # `flattened_to_esm` does not carry discrete events, so they are refused
+    # HERE, while the flattened system still holds them (esm-spec §9.6.6).
+    _refuse_flat_discrete_events(flat)
     return build_evaluator(flattened_to_esm(flat); kwargs...)
 end
 

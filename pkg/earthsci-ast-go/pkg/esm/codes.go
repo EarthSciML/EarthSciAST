@@ -173,6 +173,14 @@ const (
 	CodeCouplingRoleUnused = "coupling_role_unused"
 )
 
+// --- Diagnostic codes: §4.8.5 declared units on a `const` node (raised via
+// newETErr from units.go). ---
+const (
+	// CodeConstUnitsVersionTooOld: a document declaring esm < 1.2.0 carries
+	// `units` on an expression node.
+	CodeConstUnitsVersionTooOld = "const_units_version_too_old"
+)
+
 // --- Diagnostic codes: §10.3 / esm-libraries-spec §4.7.2 `couple` connector
 // semantics (raised from flatten.go's applyCouple). ---
 const (
@@ -469,6 +477,10 @@ const (
 	// build (esm-spec §9.6.6). Registered for the cross-binding vocabulary;
 	// this binding has no simulator, so nothing here raises it.
 	CodeDerivedIndexSetUnmaterialized = "derived_index_set_unmaterialized"
+	// CodeUnsupportedConstruct: a discrete event or an implicit equation reached
+	// an evaluator that cannot run it (esm-spec §9.6.6). Go does not simulate,
+	// so it never raises this; the constant keeps the §9.6.6 vocabulary uniform.
+	CodeUnsupportedConstruct = "unsupported_construct"
 )
 
 // --- Spec enum literal: ModelVariable.Type (esm-spec §6.3). esm 1.0.0 declares

@@ -183,6 +183,66 @@ pub(crate) fn lower_enum_ops_for_file(
     })
 }
 
+/// Lower, in place, the `enum` ops of `document`, a document mounted at a
+/// §4.7 edge, against its own `enums` block (esm-spec §9.3).
+///
+/// Called once the document has resolved in its own scope and before its
+/// component is spliced into the mounting document, whose block is a different
+/// one. `enums` do not merge across a mount, so this is the only block those
+/// ops can name.
+///
+/// A template declaration's body is lowered with that template's `params` left
+/// open, as at the import edge ([`lower_enum_ops_for_file`]): an op spelled
+/// with a parameter resolves at the call site. Everything else is lowered with
+/// no open names.
+pub(crate) fn lower_mounted_document_enums(document: &mut Value) -> Result<(), EnumLoweringError> {
+    let mut source = Map::new();
+    if let Some(enums) = document.get("enums") {
+        source.insert("enums".to_string(), enums.clone());
+    }
+    lower_mounted_enum_ops(&Value::Object(source), document)
+}
+
+fn lower_mounted_enum_ops(source: &Value, node: &mut Value) -> Result<(), EnumLoweringError> {
+    let no_open_names = std::collections::HashSet::new();
+    if node.get("op").and_then(|w| w.as_str()) == Some(ENUM_OP) {
+        return lower_enum_ops_for_file(source, node, &no_open_names);
+    }
+    match node {
+        Value::Array(items) => {
+            for item in items {
+                lower_mounted_enum_ops(source, item)?;
+            }
+        }
+        Value::Object(obj) => {
+            for (key, child) in obj.iter_mut() {
+                if key == "expression_templates"
+                    && let Value::Object(templates) = child
+                {
+                    for decl in templates.values_mut() {
+                        let params: std::collections::HashSet<String> = decl
+                            .get("params")
+                            .and_then(|p| p.as_array())
+                            .map(|ps| {
+                                ps.iter()
+                                    .filter_map(|p| p.as_str().map(str::to_string))
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        if let Some(body) = decl.get_mut("body") {
+                            lower_enum_ops_for_file(source, body, &params)?;
+                        }
+                    }
+                } else {
+                    lower_mounted_enum_ops(source, child)?;
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 /// Record the path of every `enum`-op node under `view`, in pre-order. The
 /// walk also descends into a matched node's own fields (they hold only the
 /// two name strings in a well-formed node, so nothing further matches there).

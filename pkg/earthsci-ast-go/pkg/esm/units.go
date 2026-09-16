@@ -1555,6 +1555,20 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 		r := varDim.Divide(wrtUnit)
 		return &r, nil
 
+	case "const":
+		// A `const` that DECLARES its units has that unit (esm-spec §4.8.5);
+		// without `units` it is undeterminable, like a bare literal. An
+		// unresolvable string is reported at the containing expression field, not
+		// here.
+		if node.Units == nil {
+			return nil, nil
+		}
+		u, err := ParseUnit(*node.Units)
+		if err != nil {
+			return nil, nil
+		}
+		return &u, nil
+
 	case "min", "max":
 		// Return dimension of first operand; require others to match.
 		var first *Unit
@@ -1587,6 +1601,28 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 	// returns nothing. Their dimension is undeterminable until a discretization
 	// rewrite lowers them (esm-spec §4.2 / §9.6.8).
 	return nil, nil
+}
+
+// rejectConstUnitsPreV12 rejects declared `units` on any expression node in a
+// document declaring esm < 1.2.0 (esm-spec §4.8.5 item 6), naming the first
+// offending node. It runs on the raw JSON before schema validation, like
+// RejectSolverPreV11.
+func rejectConstUnitsPreV12(view map[string]any) error {
+	if view == nil || !esmVersionBelow(view, 1, 2) {
+		return nil
+	}
+	esmRaw, _ := view["esm"].(string)
+	return walkJSONTree(view, "", func(path string, obj map[string]any) error {
+		_, hasOp := obj["op"]
+		_, hasUnits := obj["units"]
+		if hasOp && hasUnits {
+			return newETErr(
+				CodeConstUnitsVersionTooOld,
+				fmt.Sprintf("declared `units` on an expression node require esm >= 1.2.0; file declares %s (offending path: %s)", esmRaw, path),
+			)
+		}
+		return nil
+	})
 }
 
 // BuildUnitEnv converts a map of name→unit-string into a map of name→Unit.

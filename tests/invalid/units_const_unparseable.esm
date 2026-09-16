@@ -1,0 +1,45 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "UnitsConstUnparseable",
+    "description": "Invalid: a const declares units `mph`, which is not a registry symbol (esm-spec §4.8.1: the fused spelling is not a name; the unit is `mi/h`). Reported as unit_parse_error at the containing expression field (esm-spec §4.8.5 item 2).",
+    "authors": [
+      "Chris Tessum with Claude"
+    ],
+    "created": "2026-09-14T00:00:00Z"
+  },
+  "models": {
+    "BadUnitsModel": {
+      "variables": {
+        "speed_mph": {
+          "type": "parameter",
+          "units": "mi/h",
+          "default": 30.0,
+          "description": "Link average speed in miles per hour"
+        },
+        "speed_ms": {
+          "type": "unknown",
+          "units": "m/s",
+          "description": "Defined through a constant whose declared units do not resolve"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "speed_ms",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "speed_mph",
+              {
+                "op": "const",
+                "args": [],
+                "value": 0.44704,
+                "units": "mph"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

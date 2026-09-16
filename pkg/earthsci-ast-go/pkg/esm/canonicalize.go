@@ -465,7 +465,7 @@ func CanonicalJSON(expr Expression) ([]byte, error) {
 
 // validateEmissibleFields walks a canonicalized tree and returns
 // ErrCanonicalUnsupportedField if any ExprNode carries a SET field outside the
-// closed emissible set {op, args, wrt, dim, fn, name, value}. `arg` and
+// closed emissible set {op, args, wrt, dim, fn, name, value, units}. `arg` and
 // `bindings` are TOLERATED (present, ignored, never emitted), matching the
 // Julia reference (canonicalize.jl _CANONICAL_IGNORED_FIELDS). Recurses through
 // `args` only — the sole emissible slot that can carry child ExprNodes — exactly
@@ -497,6 +497,7 @@ func validateEmissibleFields(a any) error {
 // cross-binding format change, never a Go-local edit.
 var canonicalEmissibleFields = map[string]struct{}{
 	"op": {}, "args": {}, "wrt": {}, "dim": {}, "fn": {}, "name": {}, "value": {},
+	"units": {},
 }
 
 // canonicalIgnoredFields are fields that MAY be present on a node reaching the
@@ -669,7 +670,7 @@ func emitCanonicalObject(keys []string, get func(string) any) (string, error) {
 
 // emitExprNodeJSON renders an ExprNode's canonical JSON object, emitting ONLY
 // the CLOSED emissible field set the cross-binding canonical encoding pins:
-// op, args, wrt, dim, fn, name, value (RFC §5.4.6). `op` and `args` are always
+// op, args, wrt, dim, fn, name, value, units (RFC §5.4.6). `op` and `args` are always
 // present (`args` as `[]` when empty); wrt/dim/fn/name emit when their *string
 // is non-nil; value emits when non-nil. Keys are emitted in sorted byte order
 // to match json.Marshal.
@@ -711,6 +712,10 @@ func emitExprNodeJSON(n ExprNode) (string, error) {
 	appendStr("dim", n.Dim)
 	appendStr("fn", n.Fn)
 	appendStr("name", n.Name)
+	// units: a `const` node's declared unit (esm-spec §4.8.5) is
+	// meaning-bearing, so two nodes differing only in it must not
+	// canonicalize alike.
+	appendStr("units", n.Units)
 
 	// value: the `const`-op literal payload (§4.2 / §9.3).
 	if n.Value != nil {

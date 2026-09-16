@@ -284,6 +284,7 @@
     ],
     "unit": [
       "Coordinate.units",
+      "ExpressionNode.units",
       "FunctionTableAxis.units",
       "ModelVariable.default_units",
       "ModelVariable.units",

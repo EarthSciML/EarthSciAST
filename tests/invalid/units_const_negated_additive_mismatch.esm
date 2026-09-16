@@ -1,0 +1,50 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "UnitsConstNegatedAdditiveMismatch",
+    "description": "Invalid: a unary minus carries its operand's unit, so the negation of a const declared in kilograms is kg, not a neutral literal (esm-spec §4.8.3, §4.8.5), and cannot be added to a length in metres.",
+    "authors": [
+      "Chris Tessum with Claude"
+    ],
+    "created": "2026-09-15T00:00:00Z"
+  },
+  "models": {
+    "BadUnitsModel": {
+      "variables": {
+        "length_m": {
+          "type": "parameter",
+          "units": "m",
+          "default": 2.0,
+          "description": "A length in metres"
+        },
+        "length_sum": {
+          "type": "unknown",
+          "units": "m",
+          "description": "Invalid: a length plus a const declared in kilograms"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "length_sum",
+          "rhs": {
+            "op": "+",
+            "args": [
+              "length_m",
+              {
+                "op": "-",
+                "args": [
+                  {
+                    "op": "const",
+                    "args": [],
+                    "value": 1.0,
+                    "units": "kg"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}
