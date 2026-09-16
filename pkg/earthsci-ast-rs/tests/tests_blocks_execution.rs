@@ -196,7 +196,7 @@ fn execute_component(
             alg: solver,
             abstol: Some(1e-15),
             reltol: Some(1e-10),
-            maxiters: 1_000_000,
+            maxiters: Some(1_000_000),
             saveat: Some(sample_times.clone()),
             ..Default::default()
         };

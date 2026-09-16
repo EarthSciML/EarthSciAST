@@ -45,18 +45,22 @@ fn an_array_default_on_a_scalar_parameter_is_not_a_zero() {
             ..Default::default()
         },
     );
-    let Ok(prob) = built else {
-        // A named build failure is a perfectly good outcome: the point is that
-        // the document does not come back with a fabricated answer.
-        return;
-    };
-    let y: Vec<f64> = match observed_field(&prob, "y") {
-        Ok(a) => a.iter().copied().collect(),
-        // No readable field is also fail-closed.
-        Err(_) => return,
+    // The build pipeline does not run structural validation, which rejects
+    // this document outright as `array_default_without_shape` (esm-spec §6.3).
+    // What is pinned here is the pipeline's own backstop for a route that skips
+    // that gate: `k` stays out of the scalar scope, so the read of it fails
+    // closed NAMING `k`. Every other outcome fails the test — a successful build
+    // (the fabricated 0.0 this guards against, whatever `y` came out as) and a
+    // build that fails for some unrelated reason alike.
+    let err = match built {
+        Ok(prob) => {
+            let y = observed_field(&prob, "y").map(|a| a.iter().copied().collect::<Vec<f64>>());
+            panic!("the build must fail closed on `k`, but it built and y = {y:?}");
+        }
+        Err(e) => format!("{e:?}"),
     };
     assert!(
-        !y.contains(&0.0),
-        "`k` has no scalar default, so nothing may bind it to 0.0 — got y = {y:?}"
+        err.contains("E_TREEWALK_UNBOUND_NAME") && err.contains("'k'"),
+        "expected the fail-closed read of `k`, got: {err}"
     );
 }

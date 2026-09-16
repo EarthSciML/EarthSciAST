@@ -124,24 +124,61 @@ def _source_without_temporal(var: dict, model: dict) -> bool:
     return isinstance(source, dict) and "temporal" not in source
 
 
+def _lhs_unwrap(node: Any) -> Any:
+    """Strip the array-addressing shells from an LHS: an `faq` addresses its
+    `expr`, an `index` its first argument."""
+    while isinstance(node, dict):
+        args = node.get("args")
+        if node.get("op") == "faq" and node.get("expr") is not None:
+            node = node["expr"]
+        elif node.get("op") == "index" and isinstance(args, list) and args:
+            node = args[0]
+        else:
+            break
+    return node
+
+
+def _lhs_role(lhs: Any) -> tuple:
+    """The role an equation's LHS plays in esm-spec §6.3.1's classification:
+    `("definition", y)` for `y`, `index(y, …)` or `faq{…}(index(y, …))`;
+    `("derivative", u)` for a time `D` of `u` under the same shells; otherwise
+    `(None, None)`."""
+    head = _lhs_unwrap(lhs)
+    if isinstance(head, str):
+        return ("definition", head)
+    # An ABSENT `wrt` means `t` (esm-spec §4.2), and so does an explicit null —
+    # which is how Julia's `_raw_lhs_role` and Rust's `lhs_form` both read it, so
+    # the three agree on every spelling, not only the schema-valid ones.
+    if isinstance(head, dict) and head.get("op") == "D" and head.get("wrt") in (None, "t"):
+        args = head.get("args")
+        base = _lhs_unwrap(args[0]) if isinstance(args, list) and args else None
+        if isinstance(base, str):
+            return ("derivative", base)
+    return (None, None)
+
+
 def _observed_definitions(model: dict) -> dict:
     """Map each observed unknown to its defining equation RHS.
 
-    An observed unknown is one an equation defines with a BARE-VARIABLE LHS
-    (esm-spec §6.3.1). Before esm 1.0.0 this lived in `variables[v].expression`;
-    the cadence pass must now read it from the model's `equations`, which is the
-    one place the pass has to follow the format change.
+    An observed unknown is one an equation defines, read through the LHS's BASE
+    NAME at any rank (esm-spec §6.3.1): `y ~ …`, `y[i] ~ …` and
+    `faq{k}(y[k]) ~ …` all define `y`, while a `D` under the same shells is a
+    tendency and defines nothing. The strict bare-variable form is the narrower
+    INLINING set, which "does not narrow the partition"; seeding from it would
+    seed a state-free arrayed observed CONTINUOUS and stop it folding at bind.
+    First definition wins.
     """
     cache = model.get("_observed_defs")
     if cache is not None:
         return cache
     variables = model.get("variables", {}) or {}
     unknowns = {n for n, v in variables.items() if v.get("type") == "unknown"}
+    roles = [(_lhs_role(eq.get("lhs")), eq) for eq in model.get("equations", []) or []]
+    states = {name for (role, name), _ in roles if role == "derivative"}
     defs = {}
-    for eq in model.get("equations", []) or []:
-        lhs = eq.get("lhs")
-        if isinstance(lhs, str) and lhs in unknowns and lhs not in defs:
-            defs[lhs] = eq.get("rhs")
+    for (role, name), eq in roles:
+        if role == "definition" and name in unknowns and name not in states and name not in defs:
+            defs[name] = eq.get("rhs")
     model["_observed_defs"] = defs
     return defs
 

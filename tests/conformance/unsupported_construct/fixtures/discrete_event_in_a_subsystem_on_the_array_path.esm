@@ -1,0 +1,188 @@
+{
+ "esm": "1.1.0",
+ "metadata": {
+  "name": "DiscreteEventInASubsystemOnTheArrayPath",
+  "description": "The array discrete-event document with its model, event included, mounted as the inline subsystem `Inner` of a parent that declares its own array (`z_seen`), so the document takes the array path in every binding. An event owned by a subsystem is the one that can vanish before any build-time check sees it: Python's and Rust's flatten do not lift a subsystem's events into the flattened system, so an evaluator that checks only the flattened event list runs the model without it. Every evaluator MUST refuse it with `unsupported_construct` exactly as it refuses a top-level event.",
+  "authors": [
+   "EarthSciML Authors and Contributors"
+  ],
+  "tags": [
+   "conformance",
+   "unsupported_construct",
+   "events"
+  ]
+ },
+ "index_sets": {
+  "step_rows": {
+   "kind": "interval",
+   "size": 2
+  }
+ },
+ "models": {
+  "DiscreteEventInASubsystemOnTheArrayPath": {
+   "tolerance": {
+    "rel": 1e-12
+   },
+   "variables": {
+    "z": {
+     "type": "unknown",
+     "units": "1",
+     "description": "A trivial parent state, so the parent is a model in its own right."
+    },
+    "z_seen": {
+     "type": "unknown",
+     "shape": [
+      "step_rows"
+     ],
+     "units": "1",
+     "description": "`z` broadcast over an axis, so the PARENT is array-shaped and every binding routes the document to its array evaluator."
+    }
+   },
+   "equations": [
+    {
+     "lhs": {
+      "op": "D",
+      "args": [
+       "z"
+      ],
+      "wrt": "t"
+     },
+     "rhs": 0.0
+    },
+    {
+     "lhs": {
+      "op": "ic",
+      "args": [
+       "z"
+      ]
+     },
+     "rhs": 0.0
+    },
+    {
+     "lhs": "z_seen",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "k"
+      ],
+      "ranges": {
+       "k": {
+        "from": "step_rows"
+       }
+      },
+      "expr": "z"
+     }
+    }
+   ],
+   "subsystems": {
+    "Inner": {
+     "variables": {
+      "s": {
+       "type": "unknown",
+       "units": "1",
+       "description": "Doubles at each event; 1 at t = 0."
+      },
+      "s_seen": {
+       "type": "unknown",
+       "shape": [
+        "step_rows"
+       ],
+       "units": "1",
+       "description": "`s` broadcast over an axis, so the document takes the array evaluator."
+      }
+     },
+     "equations": [
+      {
+       "lhs": {
+        "op": "D",
+        "args": [
+         "s"
+        ],
+        "wrt": "t"
+       },
+       "rhs": 0.0
+      },
+      {
+       "lhs": {
+        "op": "ic",
+        "args": [
+         "s"
+        ]
+       },
+       "rhs": 1.0
+      },
+      {
+       "lhs": "s_seen",
+       "rhs": {
+        "op": "faq",
+        "args": [],
+        "output_idx": [
+         "k"
+        ],
+        "ranges": {
+         "k": {
+          "from": "step_rows"
+         }
+        },
+        "expr": "s"
+       }
+      }
+     ],
+     "discrete_events": [
+      {
+       "name": "double",
+       "trigger": {
+        "type": "periodic",
+        "interval": 1.0
+       },
+       "affects": [
+        {
+         "lhs": "s",
+         "rhs": {
+          "op": "*",
+          "args": [
+           {
+            "op": "Pre",
+            "args": [
+             "s"
+            ]
+           },
+           2.0
+          ]
+         }
+        }
+       ],
+       "description": "s := 2*Pre(s), once per unit of time."
+      }
+     ]
+    }
+   },
+   "tests": [
+    {
+     "id": "a_periodic_event_folds_an_unknown",
+     "description": "Intended behaviour: three firings by t = 3.5, so s = 8 and s_seen = 8. An evaluator that cannot run the event must refuse rather than report 1.",
+     "time_span": {
+      "start": 0.0,
+      "end": 3.5
+     },
+     "assertions": [
+      {
+       "variable": "Inner.s_seen",
+       "time": 3.5,
+       "expected": 8.0,
+       "coords": {
+        "step_rows": 1
+       }
+      },
+      {
+       "variable": "Inner.s",
+       "time": 3.5,
+       "expected": 8.0
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

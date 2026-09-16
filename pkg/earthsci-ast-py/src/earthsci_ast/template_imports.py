@@ -301,6 +301,60 @@ _REGISTRY_KEYS = frozenset(
     }
 )
 
+#: Loop symbols, references, ids, enums, units and free text: not expression
+#: positions, but not protected by the rename walk either, so opaque to
+#: metaparameter substitution ONLY. ``of`` and ``on`` keep their dedicated
+#: rename-walk branches. Mirrors the ``:opaque`` kind of ``_STRUCTURAL_FIELDS``
+#: in the Julia reference.
+_OPAQUE_KEYS = frozenset(
+    {
+        # Loop symbols and bound index names of a `faq` node.
+        # `metaparameter_name_conflict` refuses a metaparameter spelled like a
+        # loop symbol, so a metaparameter reaches these fields only as an `on`
+        # data-column name; they are names wherever they appear, so they are
+        # skipped rather than left to that check.
+        "on",
+        "syms",
+        "arg",
+        "output_idx",
+        "of",
+        # A `table_lookup` output name.
+        "output",
+        "handler_id",
+        # References to files, components, data sources, data columns and the
+        # import-edge rename vocabulary.
+        "ref",
+        "model",
+        "reaction_system",
+        "prefix",
+        "rename",
+        "rebind",
+        "index_set_rename",
+        "source",
+        "file_variable",
+        "path",
+        # Closed enums.
+        "direction",
+        "hook",
+        "root_find",
+        "system_kind",
+        "element_type",
+        "scale",
+        "format",
+        "unmapped",
+        # Units (unit symbols such as `m`, `s`, `K` are valid identifiers) and
+        # free text.
+        "default_units",
+        "label",
+        "location",
+        "notes",
+        "citation",
+        "doi",
+        "url",
+        "_comment",
+    }
+)
+
 #: Keys whose VALUES are never expression positions: metaparameter names are
 #: substituted as bare variable-reference strings, so structural string fields
 #: must not be rewritten. Template ``params`` shadowing is handled separately
@@ -309,14 +363,46 @@ _REGISTRY_KEYS = frozenset(
 #: All five bindings MUST hold the SAME set here — a divergence is silent until
 #: a document happens to name a metaparameter after a structural field's value
 #: (``tests/conformance/expression_templates/metaparam_axis_name_collision``).
+#: The classification it is derived from lives in
+#: ``tests/metaparameter_substitution/field_classification.json``, and the test
+#: suite fails when this set or :data:`_NAME_KEYED_MAP_KEYS` disagrees with it.
 #:
 #: Every structural kind but ``bound`` and ``positional`` is in: an expression
 #: position is the ONLY thing substitution may rewrite, and ``bound`` is the one
-#: structural-table entry that IS one. This makes the set coincide with
-#: :data:`_RENAME_PROTECTED_KEYS` below; both stay derived from the kind sets
-#: separately because they answer different questions and a future kind may
-#: split them.
-_META_SUBST_SKIP_KEYS = _PROTECTED_KEYS | _AXIS_KEYS | _NODE_HEADER_KEYS | _REGISTRY_KEYS
+#: structural-table entry that IS one. :data:`_OPAQUE_KEYS` is in this set but
+#: not in :data:`_RENAME_PROTECTED_KEYS`, so the two are derived separately.
+_META_SUBST_SKIP_KEYS = (
+    _PROTECTED_KEYS | _AXIS_KEYS | _NODE_HEADER_KEYS | _REGISTRY_KEYS | _OPAQUE_KEYS
+)
+
+#: Keys whose value is a map keyed by AUTHOR-CHOSEN names (variables, species,
+#: loop symbols, template params, …). A map key is a declared name, not a
+#: field, so it is never looked up in :data:`_META_SUBST_SKIP_KEYS`: a variable
+#: named ``source`` or a template param named ``label`` still has its value
+#: substituted. A key in both sets (``where``, ``rename``, …) is skipped whole.
+_NAME_KEYED_MAP_KEYS = frozenset(
+    {
+        "variables",
+        "species",
+        "parameters",
+        "guesses",
+        "subsystems",
+        "expression_templates",
+        "ranges",
+        "axes",
+        "bindings",
+        "config",
+        "coords",
+        "initial_conditions",
+        "parameter_overrides",
+        "pinned_coords",
+        "map",
+        "rename",
+        "rebind",
+        "index_set_rename",
+        "where",
+    }
+)
 
 
 def _substitute_metaparams(x: Any, values: dict[str, int]) -> Any:
@@ -332,9 +418,21 @@ def _substitute_metaparams(x: Any, values: dict[str, int]) -> Any:
     # verbatim rather than recursed. Every bare string elsewhere folds to its
     # closed integer value.
     def _item(_node: dict, key: str, value: Any, recurse) -> Any:
-        return copy.deepcopy(value) if key in _META_SUBST_SKIP_KEYS else recurse(value)
+        return _substitute_metaparams_field(key, value, values, recurse)
 
     return _rewrite_json(x, on_str=lambda s: values.get(s, s), on_value=_item, share=False)
+
+
+def _substitute_metaparams_field(key: str, value: Any, values: dict[str, int], recurse=None) -> Any:
+    """:func:`_substitute_metaparams` applied to the value of the object field
+    ``key``, for a caller that iterates an object's fields itself: the field is
+    skipped, walked as a name-keyed map, or walked, exactly as inside the
+    recursive walk."""
+    if key in _META_SUBST_SKIP_KEYS:
+        return copy.deepcopy(value)
+    if key in _NAME_KEYED_MAP_KEYS and _is_object(value):
+        return {name: _substitute_metaparams(entry, values) for name, entry in value.items()}
+    return recurse(value) if recurse is not None else _substitute_metaparams(value, values)
 
 
 def _substitute_metaparams_decl(decl: Any, values: dict[str, int]) -> Any:
@@ -830,11 +928,11 @@ _RENAME_AXIS_KEYS = _AXIS_KEYS
 _RENAME_BOUND_KEYS = ("lower", "upper")
 
 #: Object keys whose values are never variable-reference positions for the
-#: rename walk: the metaparameter skip set plus the remaining scalar structural
-#: ExpressionNode fields (the op-parameterizing closed-registry ids and literal
-#: enums). ``from``, ``wrt``/``dim``, apply-``name``, and ``of`` are handled
-#: positionally in the walk.
-_RENAME_PROTECTED_KEYS = _META_SUBST_SKIP_KEYS | _REGISTRY_KEYS
+#: rename walk: the protected, axis, node-header and op-parameterizing registry
+#: kinds (``_RENAME_PROTECTED_KEYS`` in the Julia reference). ``from``,
+#: ``wrt``/``dim``, apply-``name``, and ``of`` are handled positionally in the
+#: walk.
+_RENAME_PROTECTED_KEYS = _PROTECTED_KEYS | _AXIS_KEYS | _NODE_HEADER_KEYS | _REGISTRY_KEYS
 
 #: Object keys whose values a variable-reference collector must NOT descend
 #: into: ``from`` / ``wrt`` / ``dim`` name index sets, ``of`` names bound index
@@ -934,6 +1032,14 @@ def _rename_walk(
             # data-column name keeps the varmap fold it had before this rule
             # existed.
             return _rename_join_on(value, isetmap, lambda e: varmap.get(e, e))
+        if ks in _NAME_KEYED_MAP_KEYS and _is_object(value):
+            # A map keyed by author-chosen names (a `ranges` loop symbol, an
+            # apply-node `bindings` param): an entry name is a declared name, not
+            # a field, so it is never dispatched on (esm-spec §9.7.6 map-key
+            # rule). A `ranges` entry named `dim` still has its `from` renamed.
+            return {
+                name: _rename_walk(entry, varmap, isetmap, tplmap) for name, entry in value.items()
+            }
         if ks == "of" or ks in _RENAME_PROTECTED_KEYS:
             return copy.deepcopy(value)
         return recurse(value)
@@ -1120,13 +1226,16 @@ def apply_mount_index_set_rename(doc: Any, rename_raw: Any, where: str) -> None:
 
 
 def _collect_bound_syms(out: set, x: Any) -> set:
-    """Bound index symbols of a declaration: aggregate ``output_idx`` entries and
-    ``ranges`` keys (at any nesting depth). Rebinding one would desynchronize the
-    ranges KEYS from their ``expr`` occurrences, so it is rejected outright."""
+    """Bound index symbols (loop symbols) of a subtree: the ``output_idx`` entries
+    and ``ranges`` keys of every Expression node, at any nesting depth — the
+    binder definition of the ``reserved_index_symbol`` rule (esm-spec §4.9.1.1),
+    which is not limited to ``faq`` (``argmin`` / ``argmax`` bind the same way).
+    Rebinding one would desynchronize the ranges KEYS from their ``expr``
+    occurrences, so it is rejected outright; a metaparameter spelled like one is
+    ``metaparameter_name_conflict``."""
 
     def _visit(node: dict[str, Any], _path: str) -> None:
-        op = node.get("op")
-        if op is not None and str(op) == "faq":
+        if node.get("op") is not None:
             oi = node.get("output_idx")
             if _is_array(oi):
                 for e in oi:
@@ -1144,13 +1253,29 @@ def _collect_bound_syms(out: set, x: Any) -> set:
 def _collect_ref_names(out: set, x: Any, shadowed: set) -> set:
     """Every bare string in a variable-reference position of a declaration (the
     positions ``varmap`` would rewrite), minus the per-template ``params`` shadow
-    set. Used for the rebind occurs-check and the freshness (collision) guard."""
+    set. Used for the rebind occurs-check and the freshness (collision) guard.
+    Prunes exactly what :func:`_rename_walk` does not rewrite through ``varmap``,
+    including its name-keyed map rule: an entry name is never tested against
+    the skip set."""
 
-    def _add(name: str) -> None:
-        if name not in shadowed:
-            out.add(name)
+    def rec(node: Any) -> None:
+        if isinstance(node, str):
+            if node not in shadowed:
+                out.add(node)
+        elif _is_array(node):
+            for child in node:
+                rec(child)
+        elif _is_object(node):
+            for key, value in node.items():
+                if key in _REF_NAME_SKIP_KEYS:
+                    continue
+                if key in _NAME_KEYED_MAP_KEYS and _is_object(value):
+                    for entry in value.values():
+                        rec(entry)
+                else:
+                    rec(value)
 
-    _walk_json(x, on_str=_add, skip_keys=_REF_NAME_SKIP_KEYS)
+    rec(x)
     return out
 
 
@@ -1506,6 +1631,8 @@ def _process_library(raw: Any, base_dir: str, stack: list[str], origin: str) -> 
 
     _validate_templates(own, origin)
     for n, d in own.items():
+        _lower_library_template_enums(raw, n, d, origin)
+    for n, d in own.items():
         _merge_named(scope.templates, n, d, TEMPLATE_IMPORT_NAME_CONFLICT, "template", origin)
 
     isets = raw.get("index_sets")
@@ -1526,7 +1653,76 @@ def _process_library(raw: Any, base_dir: str, stack: list[str], origin: str) -> 
     # §9.7.3 body composition in the library's own scope (decl objects are
     # mutated in place, so scope.templates sees the closed bodies).
     _compose_template_bodies(scope.templates, origin)
+    _expand_library_enum_calls(raw, scope.templates, list(own), origin)
+    # In the library's own scope, before an importing edge's ``bindings``
+    # instantiate the templates and consume the names it closes.
+    _reject_metaparameter_loop_symbols(scope.metaparams, origin, scope.templates)
     return scope
+
+
+def _expand_library_enum_calls(
+    library: Any, named: dict[str, Any], own_names: list[str], origin: str
+) -> None:
+    """Resolve the ``enum`` symbols a template library binds in its OWN calls
+    (esm-spec §9.3). After :func:`_lower_library_template_enums`, the only
+    ``enum`` ops left in the library's scope are spelled with a template
+    parameter. A call to a template that can still produce one binds that
+    parameter here, in the library, so each of the library's own template bodies
+    has those calls expanded (the eager expansion esm-spec §9.6.4 rule 3 requires
+    at load anyway) and the result lowered against the library's block. An op the
+    expansion leaves spelled with the calling template's own parameter stays open
+    for the importer's binding. Runs after :func:`_compose_template_bodies`, so
+    the reference DAG is acyclic; every new body is computed before any is
+    replaced."""
+    from .lower_expression_templates import _expand, _template_bearing
+
+    bearing = _template_bearing(named, lambda op: op == "enum")
+
+    def calls_bearing(node: dict) -> bool:
+        name = node.get("name")
+        return isinstance(name, str) and bearing.get(name, False)
+
+    bodies: dict[str, Any] = {}
+    for n in own_names:
+        decl = named.get(n)
+        if not _is_object(decl) or "body" not in decl:
+            continue
+        if not any(bearing.get(r, False) for r in _collect_apply_names([], decl["body"])):
+            continue
+        expanded = _expand(decl["body"], named, origin, calls_bearing)
+        bodies[n] = _lower_library_template_body(library, n, decl, expanded, origin)
+    for n, body in bodies.items():
+        named[n] = {**named[n], "body": body}
+
+
+def _lower_library_template_enums(library: Any, name: str, decl: Any, origin: str) -> None:
+    """Lower the ``enum`` ops in one of a template library's OWN template bodies
+    against the library's ``enums`` block (esm-spec §9.3), before the template
+    reaches an importer whose block is a different one. An op spelled with one
+    of the template's ``params`` stays open and resolves at the call site."""
+    if not _is_object(decl) or "body" not in decl:
+        return
+    decl["body"] = _lower_library_template_body(library, name, decl, decl["body"], origin)
+
+
+def _lower_library_template_body(library: Any, name: str, decl: Any, body: Any, origin: str) -> Any:
+    """``body``, a body of the library's template ``name`` (``decl``), with its
+    ``enum`` ops lowered against the library's ``enums`` block. An op spelled
+    with one of ``decl``'s ``params`` stays open."""
+    params = decl.get("params")
+    open_names = (
+        frozenset(p for p in params if isinstance(p, str)) if _is_array(params) else frozenset()
+    )
+    from .registered_functions import EnumLoweringError, lower_enum_ops_for_file
+
+    try:
+        return lower_enum_ops_for_file(library, body, open_names)
+    except EnumLoweringError as e:
+        raise ExpressionTemplateError(
+            e.code,
+            f"{origin}: template '{name}': {e.message} — an `enum` op in a template "
+            "library resolves against that library's own `enums` block (esm-spec §9.3)",
+        ) from e
 
 
 # ---------------------------------------------------------------------------
@@ -1710,11 +1906,34 @@ def _close_document_metaparameters(
     return values
 
 
+def _reject_metaparameter_loop_symbols(names: Any, origin: str, *trees: Any) -> None:
+    """§9.7.6: a metaparameter name MUST NOT spell a loop symbol (a ``ranges``
+    key or ``output_idx`` entry of an Expression node) anywhere in ``trees``
+    (``metaparameter_name_conflict``). Substitution rewrites every bare string
+    that spells a bound metaparameter, and inside the node that binds it a loop
+    symbol is exactly such a string, so no field rule can tell the two apart."""
+    if not names:
+        return
+    bound: set[str] = set()
+    for t in trees:
+        _collect_bound_syms(bound, t)
+    for name in names:
+        if name in bound:
+            raise ExpressionTemplateError(
+                METAPARAMETER_NAME_CONFLICT,
+                f"{origin}: metaparameter '{name}' collides with a loop symbol "
+                "(a `ranges` key or `output_idx` entry) (esm-spec §9.7.6)",
+            )
+
+
 def _reject_metaparameter_shadowing(
-    root: dict[str, Any], doc_meta: dict[str, Any], doc_isets: dict[str, Any]
+    root: dict[str, Any],
+    top_templates: dict[str, Any],
+    doc_meta: dict[str, Any],
+    doc_isets: dict[str, Any],
 ) -> None:
     """§9.7.6 name-collision check: a document metaparameter MUST NOT shadow a
-    visible index-set / variable / species / parameter name
+    visible index-set / variable / species / parameter name or a loop symbol
     (``metaparameter_name_conflict``)."""
     if doc_meta:
         visible = set(doc_isets.keys())
@@ -1737,6 +1956,9 @@ def _reject_metaparameter_shadowing(
                     "variable/parameter/species/index-set name "
                     "(esm-spec §9.7.6)",
                 )
+        # Components carry their imported templates by now; ``top_templates``
+        # is a root library's effective top-level sequence, imports included.
+        _reject_metaparameter_loop_symbols(doc_meta, "document", root, top_templates)
 
 
 def _substitute_closed_metaparameters(
@@ -1763,7 +1985,7 @@ def _substitute_closed_metaparameters(
                         for tn in list(tpl.keys()):
                             tpl[tn] = _substitute_metaparams_decl(tpl[tn], values)
                     else:
-                        comp[k] = _substitute_metaparams(comp[k], values)
+                        comp[k] = _substitute_metaparams_field(k, comp[k], values)
         for tn in list(top_templates.keys()):
             top_templates[tn] = _substitute_metaparams_decl(top_templates[tn], values)
         doc_isets = {n: _substitute_metaparams(d, values) for n, d in doc_isets.items()}
@@ -2159,7 +2381,7 @@ def resolve_template_machinery(
     is_library, top_templates = _resolve_root_library(root, base_dir, stack, doc_meta, doc_isets)
     _resolve_component_imports(root, base_dir, stack, doc_meta, doc_isets)
     values = _close_document_metaparameters(doc_meta, api_raw, mounted)
-    _reject_metaparameter_shadowing(root, doc_meta, doc_isets)
+    _reject_metaparameter_shadowing(root, top_templates, doc_meta, doc_isets)
     # Expression-position substitution folds THIS document's own closed
     # metaparameters and nothing else. An `expression_template_imports[k].bindings`
     # entry closes the metaparameters of the IMPORTED document (esm-spec §9.7.6

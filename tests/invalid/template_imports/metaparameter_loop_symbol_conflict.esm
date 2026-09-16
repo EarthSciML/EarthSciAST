@@ -1,0 +1,17 @@
+{
+  "esm": "1.1.0",
+  "metadata": { "name": "metaparameter_loop_symbol_conflict", "description": "Metaparameter i collides with the faq loop symbol i: substitution cannot tell the loop symbol in the body from the metaparameter, so the name is refused (metaparameter_name_conflict, esm-spec 9.7.6)" },
+  "metaparameters": { "i": { "type": "integer", "default": 11 } },
+  "index_sets": { "cells": { "kind": "interval", "size": 3 } },
+  "models": {
+    "M": {
+      "variables": {
+        "u": { "type": "parameter", "units": "1", "default": 1.0, "shape": ["cells"] },
+        "total": { "type": "unknown", "units": "1" }
+      },
+      "equations": [
+        { "lhs": "total", "rhs": { "op": "faq", "args": [], "output_idx": [], "ranges": { "i": { "from": "cells" } }, "expr": { "op": "index", "args": ["u", "i"] } } }
+      ]
+    }
+  }
+}

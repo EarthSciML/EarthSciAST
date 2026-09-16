@@ -792,9 +792,9 @@ end
         @test doc["esm"] == E.SCHEMA_VERSION
         # The literal is the point: it pins that the reconstituted document is
         # stamped with the format version this binding implements, and it is
-        # expected to be updated by hand on each format bump. 1.0.0 -> 1.1.0
-        # with the top-level `solver` block (esm-spec §2.2).
-        @test E.SCHEMA_VERSION == "1.1.0"
+        # expected to be updated by hand on each format bump. 1.1.0 -> 1.2.0
+        # with declared `units` on a `const` node (esm-spec §4.8.5).
+        @test E.SCHEMA_VERSION == "1.2.0"
     end
 
     @testset "Flatten valid fixtures smoke test" begin

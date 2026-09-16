@@ -1172,14 +1172,14 @@ def _normalized_indexed_definition(eq: Equation, model: Model, states: set[str])
     an ODE state and whose declared ``shape`` has the frame's rank. Anything else
     returns None and the equation is passed through untouched.
 
-    Only the ``aggregate`` shell is rewritten, never the bare ``index(V, i)``
-    spelling §6.3.1's worked example uses. This is a rewrite of the flattened
-    ``equations`` list that no other binding performs, and the shared flatten
-    corpus compares that list's rendering across all five;
-    ``edge_enumeration_area_eff`` already pins a bare-index definition LHS, so
-    widening the rewrite to it would move Python's answer alone. Nothing needs
-    it to: which BUCKET a definition lands in is read from the §6.3.1
-    classification in :func:`_collect_model`, which sees through both spellings.
+    Only the ``aggregate`` shell is rewritten here. The bare ``index(V, i)``
+    spelling §6.3.1's worked example uses is run after flattening instead, by
+    :func:`earthsci_ast.simulation_array._bare_index_definition_rhs`: this is a
+    rewrite of the flattened ``equations`` list that no other binding performs,
+    and the shared flatten corpus compares that list's rendering across all
+    five, where ``edge_enumeration_area_eff`` pins a bare-index definition LHS.
+    Which BUCKET a definition lands in is read from the §6.3.1 classification in
+    :func:`_collect_model`, which sees through both spellings.
     """
     lhs = eq.lhs
     if not (isinstance(lhs, ExprNode) and is_aggregate_op(lhs.op)):
@@ -3081,11 +3081,12 @@ def flatten(esm_file: EsmFile, base_path: str = ".", load_ref=None) -> Flattened
     # Step 4b: pointwise spatial lift (esm-spec §10.5) over the expanded couplings.
     _apply_pointwise_lift(flat, coupling_entries)
 
-    # Step 4c: resolve a right-hand-side STRUCTURAL time derivative of an ODE
-    # unknown to the tendency this system defines for it. Runs after the lift so
-    # it sees the equations the lift produced, and after component collection so
-    # a reaction network's mass-action tendency (§7.4) is available to a sibling
-    # model's scoped `D(Chem.O3, t)`.
+    # Step 4c (esm-libraries-spec §4.7.5 step 3a): resolve a right-hand-side
+    # STRUCTURAL time derivative of an ODE unknown to the tendency this system
+    # defines for it. Runs after the lift so it sees the equations the lift
+    # produced, and after component collection so a reaction network's
+    # mass-action tendency (§7.4) is available to a sibling model's scoped
+    # `D(Chem.O3, t)`.
     _resolve_rhs_time_derivatives(flat)
 
     # Step 5: domain pass-through.

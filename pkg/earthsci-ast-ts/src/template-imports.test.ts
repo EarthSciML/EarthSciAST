@@ -21,6 +21,8 @@ import {
   lowerExpressionTemplates,
 } from './lower-expression-templates.js'
 import {
+  META_SUBST_SKIP_KEYS,
+  NAME_KEYED_MAP_KEYS,
   appendComponentImports,
   rejectTemplateImportsPreV08,
   resolveTemplateMachinery,
@@ -259,6 +261,75 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
     expect(rArgs[3].args).toEqual(['c', 3])
   })
 
+  it('metaparam_structural_field_collision: loop symbols, references, enums, units, text and map keys (§9.7.6)', () => {
+    // Four metaparameters are spelled like structural values — `row_id` (a join
+    // key column, free text), `m` (a unit symbol), `edge` (a placement tag, a
+    // comment, citation text), `ode` (an enum) — and each also sits in an
+    // expression position, where it closes; so does `a`, a dense range bound
+    // beside the loop symbol `p` (a metaparameter spelled like a loop symbol is
+    // `metaparameter_name_conflict`).
+    const d = expandRaw(conf('metaparam_structural_field_collision', 'fixture.esm')) as any
+    expect(canonEqs(d)).toEqual(
+      canonEqs(golden(conf('metaparam_structural_field_collision', 'expanded.esm'))),
+    )
+    const m = d.models.M
+    expect(m.system_kind).toBe('ode')
+    expect(m.reference).toEqual({ citation: 'edge', doi: 'edge', url: 'edge', notes: 'row_id' })
+    expect(m.variables.u.default_units).toBe('m')
+    expect(m.variables.u.location).toBe('edge')
+    const deqs = m.equations.filter((eq: any) => typeof eq.lhs !== 'string')
+    expect(deqs).toHaveLength(1)
+    expect(deqs[0]._comment).toBe('edge')
+    expect(deqs[0].rhs.args).toEqual(['c', 3])
+
+    // A join clause's key columns and the loop symbols they are read at are
+    // names; substituting them makes the document schema-invalid.
+    const r = definingRhs(m, 'r')
+    expect(r.output_idx).toEqual(['p'])
+    expect(r.join).toEqual([{ on: [['row_id', 'row_id']], syms: ['p', 'b'] }])
+    expect(r.expr.args).toEqual([22, 5])
+    const k = definingRhs(m, 'k')
+    expect(k.arg).toBe('p')
+    expect(k.ranges.p).toEqual([1, 11])
+    expect(k.expr.args).toEqual(['c', 7])
+
+    // A map key is a declared name, not a field: variables named `source` and
+    // `type` still have their guesses substituted.
+    expect(m.guesses).toEqual({
+      source: { op: '*', args: [5, 2] },
+      type: { op: '*', args: [5, 3] },
+    })
+    expect(definingRhs(m, 'source').args).toEqual(['c', 22])
+    expect(definingRhs(m, 'type').args).toEqual(['c', 7])
+  })
+
+  it('metaparameter substitution tables match the shared classification (§9.7.6)', () => {
+    // The key sets are derived from a classification of every string-capable
+    // schema property (scripts/check-metaparameter-substitution-fields.py); all
+    // five bindings compare against the same file.
+    const cls = JSON.parse(
+      fs.readFileSync(
+        fixturesDir('metaparameter_substitution', 'field_classification.json'),
+        'utf8',
+      ),
+    )
+    expect([...META_SUBST_SKIP_KEYS].sort()).toEqual([...cls.skip_keys].sort())
+    expect([...NAME_KEYED_MAP_KEYS].sort()).toEqual([...cls.name_keyed_map_keys].sort())
+  })
+
+  it('import_rename_name_keyed_map_entries: rename never dispatches on a map entry name (§9.7.7)', () => {
+    // A `ranges` entry spelled `dim` still has its `from` follow the prefix, and
+    // apply-node `bindings` entries spelled `units` / `dim` are variable-reference
+    // positions, so their free names are rebindable (esm-spec §9.7.6 map-key rule).
+    const d = expandRaw(conf('import_rename_name_keyed_map_entries', 'fixture.esm')) as any
+    expect(canonEqs(d)).toEqual(
+      canonEqs(golden(conf('import_rename_name_keyed_map_entries', 'expanded.esm'))),
+    )
+    const total = definingRhs(d.models.M, 'total')
+    expect(total.ranges).toEqual({ dim: { from: 'L.cells' } })
+    expect(total.expr.args[1]).toEqual({ op: '*', args: ['kk', 'kk2'] })
+  })
+
   it('import_where_rename_unknown_index_set: bad where set after rename rejected', () => {
     // A where shape naming a set the library never declares survives the rename
     // as spelled and is rejected at rule registration (esm-spec §9.6.6).
@@ -266,6 +337,51 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
       errCode(() => loadPath(conf('import_where_rename_unknown_index_set', 'fixture.esm'))),
     ).toBe('template_constraint_unknown_index_set')
   })
+
+  it("import_library_enum: a library's enum ops resolve against the library's own block (§9.3)", () => {
+    expect(canonEqs(expandRaw(conf('import_library_enum', 'fixture.esm')))).toEqual(
+      canonEqs(golden(conf('import_library_enum', 'expanded.esm'))),
+    )
+    expect(
+      canonEqs(expandRaw(conf('import_library_enum', 'fixture_importer_redeclares.esm'))),
+    ).toEqual(canonEqs(golden(conf('import_library_enum', 'expanded_importer_redeclares.esm'))))
+    // The importer's same-name enum (g_per_hp_hr = 7) does not reach the library
+    // body, which keeps the library's 1; the importer's own enum ops, including
+    // one bound into the template's parameter, resolve against the importer's.
+    const m = (loadPath(conf('import_library_enum', 'fixture_importer_redeclares.esm')) as any)
+      .models.Consumer
+    const libraryBody = definingRhs(m, 'isPerHorsepowerHour')
+    expect(libraryBody.op).toBe('==')
+    expect(libraryBody.args[1]).toMatchObject({ op: 'const', value: 1 })
+    expect(definingRhs(m, 'importerCode')).toMatchObject({ op: 'const', value: 7 })
+    const callerBound = definingRhs(m, 'callerBoundCode')
+    expect(callerBound.args[0]).toMatchObject({ op: 'const', value: 7 })
+    expect(callerBound.args[1]).toMatchObject({ op: 'const', value: 1 })
+    // The library's own call binds `g_per_gallon`, so it keeps the library's 2; a
+    // symbol the importer binds, directly or through a forwarded parameter, takes 9.
+    expect(definingRhs(m, 'gallonCode')).toMatchObject({ op: 'const', value: 2 })
+    expect(definingRhs(m, 'importerBoundCode')).toMatchObject({ op: 'const', value: 9 })
+    expect(definingRhs(m, 'forwardedCode')).toMatchObject({ op: 'const', value: 9 })
+    // An importer declaring no enums still loads the library's own call.
+    const noEnums = (loadPath(conf('import_library_enum', 'fixture.esm')) as any).models.Consumer
+    expect(definingRhs(noEnums, 'gallonCode')).toMatchObject({ op: 'const', value: 2 })
+  })
+
+  it.each(['fixture.esm', 'fixture_importer_declares.esm'])(
+    'import_library_enum_undeclared/%s: unknown_enum reported against the library (§9.3)',
+    (fixture) => {
+      let caught: unknown
+      try {
+        loadPath(conf('import_library_enum_undeclared', fixture))
+      } catch (e) {
+        caught = e
+      }
+      expect((caught as { code?: string } | undefined)?.code).toBe('unknown_enum')
+      const message = String((caught as Error | undefined)?.message)
+      expect(message).toContain('lib.esm')
+      expect(message).toContain('plus_horsepower_code')
+    },
+  )
 
   it('import_rebind_keyed_factors: free-name rebind rewrites body + registry factors (§9.7.7)', () => {
     // rebind row_count/row_cols/row_w -> meshA_* transitively through the ragged

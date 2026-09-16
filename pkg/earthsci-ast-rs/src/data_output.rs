@@ -89,7 +89,7 @@
 //! schema-valid document can carry one and the typed Rust binding models
 //! `units` and `description` only.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
@@ -205,6 +205,17 @@ pub enum OutputError {
     )]
     UnknownObserved { name: String },
 
+    /// A requested output names no variable exactly, and its last dotted
+    /// segment is shared by more than one variable, so it designates none of
+    /// them (CONFORMANCE_SPEC §5.17.4). Code `ambiguous_output_name`.
+    #[error(
+        "requested output '{name}' names no variable exactly, and its last segment is shared by {candidates:?}; name one of them in full"
+    )]
+    AmbiguousRequest {
+        name: String,
+        candidates: Vec<String>,
+    },
+
     /// A scatter/gather call was handed a buffer of the wrong length.
     #[error("variable '{base}': {what} buffer holds {got} element(s), need {want}")]
     BufferLength {
@@ -213,6 +224,18 @@ pub enum OutputError {
         got: usize,
         want: usize,
     },
+}
+
+impl OutputError {
+    /// The registered diagnostic code (a value of [`crate::ERROR_CODES`]) for
+    /// the variants that carry one.
+    #[must_use]
+    pub fn code(&self) -> Option<&'static str> {
+        match self {
+            Self::AmbiguousRequest { .. } => Some(crate::diagnostic::codes::AMBIGUOUS_OUTPUT_NAME),
+            _ => None,
+        }
+    }
 }
 
 // --------------------------------------------------------------------------
@@ -979,11 +1002,16 @@ impl OutputPlan {
 ///   including any observed rows the runner appended.
 /// * `observed` — the caller-named observed/derived fields to write alongside
 ///   the state (RFC decision 8). Output is state PLUS these, not every observed
-///   field. Names may be bare or `Model.`-qualified.
+///   field. A name selects the variable it names exactly; failing that, the
+///   ONE variable whose last dotted segment equals the name's (so `flux`
+///   selects `Box.flux`). A name an `operator_compose` merge deleted is NOT
+///   resolved here: the caller resolves it through `merged_variable_renames`
+///   first (CONFORMANCE_SPEC §5.17.4).
 ///
 /// # Errors
 /// [`OutputError::UnknownObserved`] when a requested observed field has no slot
-/// in `slot_names`; otherwise see [`derive_output_gridding`],
+/// in `slot_names`; [`OutputError::AmbiguousRequest`] when a request names no
+/// variable exactly and its last segment is shared; otherwise see [`derive_output_gridding`],
 /// [`apply_output_meta`] and [`plan_dimension_coordinates`].
 pub fn derive_output_plan(
     doc: &EsmFile,
@@ -994,22 +1022,31 @@ pub fn derive_output_plan(
     let gridding = derive_output_gridding_with_meta(slot_names, &meta)?;
 
     // RFC decision 8: state is always written; an observed field only when the
-    // caller named it. A requested name that produced no slots is an error —
-    // silently dropping a requested output is the failure mode this refuses.
-    let mut wanted: HashMap<&str, bool> = observed.iter().map(|n| (n.as_str(), false)).collect();
-    let mut kept: Vec<VarGridding> = Vec::new();
-    for g in gridding {
-        let requested = match_requested(&mut wanted, &g.base);
-        let is_observed = meta.is_observed(&g.base);
-        if !is_observed || requested {
-            kept.push(g);
+    // caller named it. A requested name that designates no single variable is an
+    // error — silently dropping, or silently choosing, a requested output is the
+    // failure mode this refuses.
+    let bases: Vec<&str> = gridding.iter().map(|g| g.base.as_str()).collect();
+    let mut requested: HashSet<String> = HashSet::new();
+    for name in observed {
+        match match_output_request(name, &bases) {
+            RequestMatch::Named(base) => {
+                requested.insert(base.to_string());
+            }
+            RequestMatch::Ambiguous(candidates) => {
+                return Err(OutputError::AmbiguousRequest {
+                    name: name.clone(),
+                    candidates: candidates.into_iter().map(str::to_string).collect(),
+                });
+            }
+            RequestMatch::Missing => {
+                return Err(OutputError::UnknownObserved { name: name.clone() });
+            }
         }
     }
-    if let Some((name, _)) = wanted.iter().find(|(_, seen)| !**seen) {
-        return Err(OutputError::UnknownObserved {
-            name: (*name).to_string(),
-        });
-    }
+    let kept: Vec<VarGridding> = gridding
+        .into_iter()
+        .filter(|g| !meta.is_observed(&g.base) || requested.contains(&g.base))
+        .collect();
 
     let mut grids = Vec::new();
     for group in group_gridding_by_grid(kept) {
@@ -1018,19 +1055,38 @@ pub fn derive_output_plan(
     Ok(OutputPlan { grids })
 }
 
-/// Mark every request key that names `base` (bare or `Model.`-qualified) and
-/// report whether any did.
-fn match_requested(wanted: &mut HashMap<&str, bool>, base: &str) -> bool {
-    let bare = base.rsplit('.').next().unwrap_or(base);
-    let mut hit = false;
-    for (name, seen) in wanted.iter_mut() {
-        let name_bare = name.rsplit('.').next().unwrap_or(name);
-        if *name == base || *name == bare || name_bare == base || name_bare == bare {
-            *seen = true;
-            hit = true;
-        }
+/// What an output request designates among `candidates`.
+pub(crate) enum RequestMatch<'a> {
+    /// The one candidate the request names.
+    Named(&'a str),
+    /// No candidate is named exactly, and these (sorted) share the request's
+    /// last dotted segment.
+    Ambiguous(Vec<&'a str>),
+    /// Nothing matches.
+    Missing,
+}
+
+/// The output-request rule of CONFORMANCE_SPEC §5.17.4: the candidate the
+/// request names exactly; failing that, the ONE candidate whose last dotted
+/// segment equals the request's. Mirrors Julia's `_resolve_output_requests`.
+pub(crate) fn match_output_request<'a>(request: &str, candidates: &[&'a str]) -> RequestMatch<'a> {
+    if let Some(exact) = candidates.iter().find(|c| **c == request) {
+        return RequestMatch::Named(exact);
     }
-    hit
+    let last_segment = |n: &str| n.rsplit('.').next().unwrap_or(n).to_string();
+    let tail = last_segment(request);
+    let mut hits: Vec<&'a str> = candidates
+        .iter()
+        .copied()
+        .filter(|c| last_segment(c) == tail)
+        .collect();
+    hits.sort_unstable();
+    hits.dedup();
+    match hits.len() {
+        0 => RequestMatch::Missing,
+        1 => RequestMatch::Named(hits[0]),
+        _ => RequestMatch::Ambiguous(hits),
+    }
 }
 
 fn build_grid_plan(group: Vec<VarGridding>, meta: &OutputMeta) -> Result<GridPlan, OutputError> {

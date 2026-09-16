@@ -1,0 +1,16 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "library_without_enums",
+    "description": "Template library whose body names an enum it never declares. Invalid when imported: the `enum` op resolves against this file's own (absent) `enums` block, esm-spec §9.3."
+  },
+  "expression_templates": {
+    "plus_horsepower_code": {
+      "params": ["x"],
+      "body": {
+        "op": "+",
+        "args": ["x", { "op": "enum", "args": ["activity_unit", "g_per_hp_hr"] }]
+      }
+    }
+  }
+}

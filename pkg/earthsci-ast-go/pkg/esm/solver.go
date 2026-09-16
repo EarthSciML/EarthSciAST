@@ -58,7 +58,7 @@ func RejectSolverPreV11(view map[string]any) error {
 	}
 	esmRaw, _ := view["esm"].(string)
 	return newETErr(
-		"solver_version_too_old",
+		CodeSolverVersionTooOld,
 		fmt.Sprintf("the top-level `solver` block requires esm >= 1.1.0; file declares %s (offending path: /solver)", esmRaw),
 	)
 }

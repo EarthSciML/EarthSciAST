@@ -171,7 +171,7 @@ fn base_opts() -> SolveOptions {
         alg: Alg::Bdf,
         abstol: Some(1e-10),
         reltol: Some(1e-8),
-        maxiters: 1_000_000,
+        maxiters: Some(1_000_000),
         saveat: None,
         ..Default::default()
     }

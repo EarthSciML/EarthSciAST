@@ -163,8 +163,8 @@ func TestReferenceGraphRejectsUndeclaredIndexSet(t *testing.T) {
 // referenceCorpusRejections records the schema-valid fixtures that the
 // reference pass nevertheless refuses, and why.
 //
-// It is EMPTY, and the sweep below asserts that: every one of the 93 fixtures
-// under tests/valid resolves. The map is kept so a regression that starts
+// It is EMPTY, and the sweep below asserts that: every fixture under
+// tests/valid resolves. The map is kept so a regression that starts
 // rejecting a valid fixture surfaces as an exact-partition failure rather than
 // as a weaker "never errors" assertion.
 //
@@ -210,24 +210,22 @@ func TestReferenceGraphOverValidCorpus(t *testing.T) {
 	}
 
 	seenRejections := map[string]bool{}
+	withEdges := 0
 	for _, path := range fixtures {
 		path := path
 		rel, _ := filepath.Rel(validDir, path)
 		rel = filepath.ToSlash(rel)
 		t.Run(rel, func(t *testing.T) {
-			raw, err := os.ReadFile(path)
+			// The pass runs on the LOADED document (API_SPEC.md §5.9): template
+			// imports and `{ref}` mounts have merged their index sets into the
+			// registry, so a range over an imported axis resolves.
+			file, err := LoadPath(path)
 			if err != nil {
-				t.Fatalf("read: %v", err)
-			}
-			var doc map[string]any
-			if err := json.Unmarshal(raw, &doc); err != nil {
-				// A handful of fixtures are deliberately not standalone JSON
-				// documents; the reference pass has nothing to say about them.
-				t.Skipf("not a JSON object: %v", err)
+				t.Fatalf("load: %v", err)
 			}
 
 			wantCode, wantRejected := referenceCorpusRejections[rel]
-			graphs, err := ResolveReferences(doc)
+			graphs, err := ResolveReferencesInFile(file)
 			if wantRejected {
 				seenRejections[rel] = true
 				if err == nil {
@@ -247,6 +245,9 @@ func TestReferenceGraphOverValidCorpus(t *testing.T) {
 				t.Fatalf("ResolveReferences rejected a schema-valid fixture: %v", err)
 			}
 			for name, g := range graphs {
+				if len(g.Edges) > 0 {
+					withEdges++
+				}
 				order, err := g.TopologicalOrder()
 				if err != nil {
 					t.Fatalf("model %q: TopologicalOrder: %v", name, err)
@@ -263,6 +264,11 @@ func TestReferenceGraphOverValidCorpus(t *testing.T) {
 		if !seenRejections[rel] {
 			t.Errorf("pinned rejection %q was never exercised; the fixture may have moved or been removed", rel)
 		}
+	}
+
+	// The corpus really does exercise the pass — this guards a vacuous pass.
+	if withEdges <= 10 {
+		t.Errorf("only %d graphs carry an edge; the sweep is not exercising the pass", withEdges)
 	}
 }
 

@@ -245,6 +245,11 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
         |e: crate::diagnostic::DiagnosticError| EsmError::SchemaValidation(e.to_string()),
     )?;
 
+    // Declared `units` on a `const` node arrive at esm 1.2.0 (esm-spec §4.8.5).
+    crate::units::reject_const_units_pre_v12(&json_value).map_err(
+        |e: crate::diagnostic::DiagnosticError| EsmError::SchemaValidation(e.to_string()),
+    )?;
+
     // Validate against schema
     validate_schema(&json_value)?;
 

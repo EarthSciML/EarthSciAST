@@ -38,10 +38,212 @@ export interface CanonicalDims {
   rad?: number
 }
 
+/** A rational exponent in lowest terms, with a positive denominator. */
+interface Ratio {
+  n: number
+  d: number
+}
+
+function gcdInt(a: number, b: number): number {
+  let x = Math.abs(a)
+  let y = Math.abs(b)
+  while (y !== 0) {
+    ;[x, y] = [y, x % y]
+  }
+  return x
+}
+
+function makeRatio(n: number, d = 1): Ratio {
+  if (d === 0) throw new RangeError('zero denominator in a unit exponent')
+  const sign = d < 0 ? -1 : 1
+  const g = gcdInt(n, d) || 1
+  return { n: (sign * n) / g, d: Math.abs(d) / g }
+}
+
+/**
+ * The exact rational a floating-point unit exponent denotes. Unit exponents are
+ * small rationals (`2`, `-1`, `0.5`, `-1/3`), so the smallest denominator that
+ * reproduces the value is the exponent that was written.
+ */
+function ratioFromNumber(x: number): Ratio {
+  for (let d = 1; d <= 1000; d++) {
+    const n = Math.round(x * d)
+    if (Math.abs(n - x * d) < 1e-9) return makeRatio(n, d)
+  }
+  throw new RangeError(`unit exponent ${x} is not a small rational`)
+}
+
+/**
+ * The EXACT scale of a unit relative to SI (esm-spec §4.8.1 "Scales are EXACT"):
+ * a product of prime powers and a power of π, each with a rational exponent, so
+ * `mi` is 2^4 * 3^2 * 5^-3 * 11 * 127. Multiplying units adds exponents,
+ * dividing subtracts them and a rational power multiplies them, so a composite
+ * unit's scale never rounds. Every scale AGREEMENT (`m + km`, `m/s = mi/h`) is
+ * decided with {@link ExactScale.equals}; the floating-point `scale` is kept for
+ * numeric conversion only.
+ */
+export class ExactScale {
+  private constructor(
+    private readonly primes: ReadonlyMap<number, Ratio>,
+    private readonly piExp: Ratio,
+  ) {}
+
+  private static readonly ONE = new ExactScale(new Map(), { n: 0, d: 1 })
+
+  /** Exactly 1. */
+  static one(): ExactScale {
+    return ExactScale.ONE
+  }
+
+  /** A positive safe integer. */
+  static integer(value: number): ExactScale {
+    if (!Number.isSafeInteger(value) || value <= 0) {
+      throw new RangeError(`a unit scale must be a positive safe integer, got ${value}`)
+    }
+    const primes = new Map<number, Ratio>()
+    let rest = value
+    for (let p = 2; p * p <= rest; p += p === 2 ? 1 : 2) {
+      while (rest % p === 0) {
+        const e = primes.get(p) ?? { n: 0, d: 1 }
+        primes.set(p, makeRatio(e.n + 1, 1))
+        rest /= p
+      }
+    }
+    if (rest > 1) {
+      const e = primes.get(rest) ?? { n: 0, d: 1 }
+      primes.set(rest, makeRatio(e.n + 1, 1))
+    }
+    return new ExactScale(primes, { n: 0, d: 1 })
+  }
+
+  /** `num/den` for positive safe integers. */
+  static ratio(num: number, den: number): ExactScale {
+    return ExactScale.integer(num).divide(ExactScale.integer(den))
+  }
+
+  /** `10^k`. */
+  static pow10(k: number): ExactScale {
+    const primes = new Map<number, Ratio>([
+      [2, makeRatio(k)],
+      [5, makeRatio(k)],
+    ])
+    return new ExactScale(primes, { n: 0, d: 1 }).normalized()
+  }
+
+  /** π. */
+  static pi(): ExactScale {
+    return new ExactScale(new Map(), { n: 1, d: 1 })
+  }
+
+  /**
+   * The exact value of a positive decimal literal as the registry writes it
+   * (`"0.3048"`, `"133.322387415"`, `"2.6867e20"`), read from its TEXT.
+   */
+  static decimal(literal: string): ExactScale {
+    const m = /^(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/.exec(literal)
+    if (!m) throw new RangeError(`not a registry decimal: ${literal}`)
+    const frac = m[2] ?? ''
+    const mantissa = Number((m[1] + frac).replace(/^0+(?=\d)/, ''))
+    const exp = Number(m[3] ?? '0') - frac.length
+    return ExactScale.integer(mantissa).multiply(ExactScale.pow10(exp))
+  }
+
+  private normalized(): ExactScale {
+    const primes = new Map<number, Ratio>()
+    for (const [p, e] of this.primes) if (e.n !== 0) primes.set(p, e)
+    return new ExactScale(primes, this.piExp)
+  }
+
+  private combine(other: ExactScale, sign: 1 | -1): ExactScale {
+    const primes = new Map(this.primes)
+    for (const [p, e] of other.primes) {
+      const a = primes.get(p) ?? { n: 0, d: 1 }
+      primes.set(p, makeRatio(a.n * e.d + sign * e.n * a.d, a.d * e.d))
+    }
+    const pi = makeRatio(
+      this.piExp.n * other.piExp.d + sign * other.piExp.n * this.piExp.d,
+      this.piExp.d * other.piExp.d,
+    )
+    return new ExactScale(primes, pi).normalized()
+  }
+
+  /** The scale of a product of units. */
+  multiply(other: ExactScale): ExactScale {
+    return this.combine(other, 1)
+  }
+
+  /** The scale of a quotient of units. */
+  divide(other: ExactScale): ExactScale {
+    return this.combine(other, -1)
+  }
+
+  /** The scale of a unit raised to a (rational) power. */
+  power(exponent: number): ExactScale {
+    const r = ratioFromNumber(exponent)
+    const primes = new Map<number, Ratio>()
+    for (const [p, e] of this.primes) primes.set(p, makeRatio(e.n * r.n, e.d * r.d))
+    return new ExactScale(primes, makeRatio(this.piExp.n * r.n, this.piExp.d * r.d)).normalized()
+  }
+
+  /** Whether two scales are the same number. */
+  equals(other: ExactScale): boolean {
+    if (this.piExp.n * other.piExp.d !== other.piExp.n * this.piExp.d) return false
+    if (this.primes.size !== other.primes.size) return false
+    for (const [p, e] of this.primes) {
+      const f = other.primes.get(p)
+      if (!f || e.n !== f.n || e.d !== f.d) return false
+    }
+    return true
+  }
+
+  /** Whether this is exactly 1. */
+  isOne(): boolean {
+    return this.primes.size === 0 && this.piExp.n === 0
+  }
+
+  /** The nearest double, for diagnostics and numeric conversion — never for comparison. */
+  toNumber(): number {
+    let value = Math.pow(Math.PI, this.piExp.n / this.piExp.d)
+    for (const p of [...this.primes.keys()].sort((a, b) => a - b)) {
+      const e = this.primes.get(p) as Ratio
+      value *= Math.pow(p, e.n / e.d)
+    }
+    return value
+  }
+
+  /**
+   * `p/q`, `p/q*pi` or `p/q*pi^k` in lowest terms (`/q` omitted when it is 1),
+   * the spelling tests/conformance/unit_registry pins; `null` when an exponent is
+   * not whole (`sqrt(km)`).
+   */
+  ratioString(): string | null {
+    let num = 1n
+    let den = 1n
+    for (const p of [...this.primes.keys()].sort((a, b) => a - b)) {
+      const e = this.primes.get(p) as Ratio
+      if (e.d !== 1) return null
+      const pow = BigInt(p) ** BigInt(Math.abs(e.n))
+      if (e.n > 0) num *= pow
+      else den *= pow
+    }
+    if (this.piExp.d !== 1) return null
+    let text = den === 1n ? `${num}` : `${num}/${den}`
+    if (this.piExp.n === 1) text += '*pi'
+    else if (this.piExp.n !== 0) text += `*pi^${this.piExp.n}`
+    return text
+  }
+
+  toString(): string {
+    return this.ratioString() ?? String(this.toNumber())
+  }
+}
+
 export interface ParsedUnit {
   dims: CanonicalDims
   scale: number
   offset?: number
+  /** The scale every agreement is decided on (esm-spec §4.8.1). */
+  exact: ExactScale
 }
 
 export class UnitConversionError extends EsmDiagnosticError {
@@ -233,7 +435,8 @@ const UNIT_TABLE: Record<string, UnitSpec> = {
   // column has no honest declaration, because a unit string carries no numeric
   // scale factor, so `25.4 mmHg` cannot be spelled either.
   inHg: { dims: { kg: 1, m: -1, s: -2 }, scale: 3386.388640341 },
-  psi: { dims: { kg: 1, m: -1, s: -2 }, scale: 6894.757293168 },
+  // lbf/in^2 = pound * standard gravity / inch^2, every factor exact (esm-spec §4.8.1).
+  psi: { dims: { kg: 1, m: -1, s: -2 }, scale: (LB_IN_KG * 9.80665) / (0.0254 * 0.0254) },
 
   // ---- Energy / power ----
   erg: { dims: { kg: 1, m: 2, s: -2 }, scale: 1e-7 },
@@ -344,6 +547,101 @@ const UNIT_TABLE: Record<string, UnitSpec> = {
   MHz: { dims: { s: -1 }, scale: 1e6 },
 }
 
+const FOOT_EXACT = ExactScale.decimal('0.3048')
+const POUND_EXACT = ExactScale.decimal('0.45359237')
+const GRAVITY_EXACT = ExactScale.decimal('9.80665')
+
+/**
+ * The exact scale of every {@link UNIT_TABLE} entry whose scale is not 1. An
+ * entry missing here parses as exactly 1, which is why
+ * `unit-exact-scale.test.ts` checks every table entry against its float scale.
+ */
+const EXACT_SCALES: Record<string, ExactScale> = {
+  g: ExactScale.pow10(-3),
+  mg: ExactScale.pow10(-6),
+  ug: ExactScale.pow10(-9),
+  lb: POUND_EXACT,
+  short_ton: ExactScale.integer(2000).multiply(POUND_EXACT),
+  tonne: ExactScale.pow10(3),
+  dm: ExactScale.pow10(-1),
+  cm: ExactScale.pow10(-2),
+  mm: ExactScale.pow10(-3),
+  um: ExactScale.pow10(-6),
+  nm: ExactScale.pow10(-9),
+  km: ExactScale.pow10(3),
+  ft: FOOT_EXACT,
+  mi: ExactScale.integer(5280).multiply(FOOT_EXACT),
+  ms: ExactScale.pow10(-3),
+  us: ExactScale.pow10(-6),
+  ns: ExactScale.pow10(-9),
+  min: ExactScale.integer(60),
+  minute: ExactScale.integer(60),
+  h: ExactScale.integer(3600),
+  hr: ExactScale.integer(3600),
+  hour: ExactScale.integer(3600),
+  day: ExactScale.integer(86400),
+  yr: ExactScale.integer(31557600),
+  year: ExactScale.integer(31557600),
+  L: ExactScale.pow10(-3),
+  l: ExactScale.pow10(-3),
+  liter: ExactScale.pow10(-3),
+  mL: ExactScale.pow10(-6),
+  gal: ExactScale.decimal('0.003785411784'),
+  kmol: ExactScale.pow10(3),
+  mmol: ExactScale.pow10(-3),
+  umol: ExactScale.pow10(-6),
+  nmol: ExactScale.pow10(-9),
+  M: ExactScale.pow10(3),
+  kJ: ExactScale.pow10(3),
+  cal: ExactScale.decimal('4.184'),
+  kcal: ExactScale.integer(4184),
+  kW: ExactScale.pow10(3),
+  MW: ExactScale.pow10(6),
+  hp: ExactScale.integer(550).multiply(FOOT_EXACT).multiply(POUND_EXACT).multiply(GRAVITY_EXACT),
+  atm: ExactScale.integer(101325),
+  bar: ExactScale.pow10(5),
+  hPa: ExactScale.pow10(2),
+  kPa: ExactScale.pow10(3),
+  mbar: ExactScale.pow10(2),
+  Torr: ExactScale.ratio(101325, 760),
+  mmHg: ExactScale.decimal('133.322387415'),
+  inHg: ExactScale.decimal('3386.388640341'),
+  psi: POUND_EXACT.multiply(GRAVITY_EXACT).divide(ExactScale.decimal('0.0254').power(2)),
+  erg: ExactScale.pow10(-7),
+  BTU: ExactScale.decimal('1055.05585262'),
+  Wh: ExactScale.integer(3600),
+  kWh: ExactScale.integer(3600000),
+  degF: ExactScale.ratio(5, 9),
+  deg: ExactScale.pi().divide(ExactScale.integer(180)),
+  degree: ExactScale.pi().divide(ExactScale.integer(180)),
+  degrees: ExactScale.pi().divide(ExactScale.integer(180)),
+  ppm: ExactScale.pow10(-6),
+  ppmv: ExactScale.pow10(-6),
+  ppb: ExactScale.pow10(-9),
+  ppbv: ExactScale.pow10(-9),
+  ppt: ExactScale.pow10(-12),
+  pptv: ExactScale.pow10(-12),
+  Dobson: ExactScale.decimal('2.6867e20'),
+  DU: ExactScale.decimal('2.6867e20'),
+  uatm: ExactScale.decimal('0.101325'),
+  '%': ExactScale.pow10(-2),
+  percent: ExactScale.pow10(-2),
+  kHz: ExactScale.pow10(3),
+  MHz: ExactScale.pow10(6),
+}
+
+/**
+ * Every table entry as `[symbol, float scale, exact scale]`, for the test that
+ * pins the two against each other.
+ */
+export function unitTableScales(): Array<[string, number, ExactScale]> {
+  return Object.entries(UNIT_TABLE).map(([name, spec]) => [
+    name,
+    spec.scale,
+    EXACT_SCALES[name] ?? ExactScale.one(),
+  ])
+}
+
 /**
  * Superscript digits, indexed by the ASCII digit they denote. NOT a contiguous
  * Unicode range: `¹`, `²` and `³` are Latin-1 (U+00B9/B2/B3) while `⁰` and
@@ -437,7 +735,7 @@ function normalizeUnitString(s: string): string {
 export function parseUnitForConversion(unitStr: string): ParsedUnit {
   const trimmed = (unitStr ?? '').trim()
   if (trimmed === '' || trimmed === 'dimensionless' || trimmed === '1') {
-    return { dims: {}, scale: 1 }
+    return { dims: {}, scale: 1, exact: ExactScale.one() }
   }
 
   const parser = new UnitParser(normalizeUnitString(trimmed))
@@ -471,7 +769,7 @@ function pruneZeroDims(dims: CanonicalDims): void {
  * which is the sole form `convertUnits` applies it to.
  */
 function intervalOf(u: ParsedUnit): ParsedUnit {
-  return { dims: u.dims, scale: u.scale }
+  return { dims: u.dims, scale: u.scale, exact: u.exact }
 }
 
 function multiplyParsed(a: ParsedUnit, b: ParsedUnit): ParsedUnit {
@@ -480,7 +778,11 @@ function multiplyParsed(a: ParsedUnit, b: ParsedUnit): ParsedUnit {
     const key = dim as keyof CanonicalDims
     dims[key] = (dims[key] ?? 0) + (power as number)
   }
-  return { dims, scale: intervalOf(a).scale * intervalOf(b).scale }
+  return {
+    dims,
+    scale: intervalOf(a).scale * intervalOf(b).scale,
+    exact: a.exact.multiply(b.exact),
+  }
 }
 
 function divideParsed(a: ParsedUnit, b: ParsedUnit): ParsedUnit {
@@ -489,7 +791,7 @@ function divideParsed(a: ParsedUnit, b: ParsedUnit): ParsedUnit {
     const key = dim as keyof CanonicalDims
     dims[key] = (dims[key] ?? 0) - (power as number)
   }
-  return { dims, scale: intervalOf(a).scale / intervalOf(b).scale }
+  return { dims, scale: intervalOf(a).scale / intervalOf(b).scale, exact: a.exact.divide(b.exact) }
 }
 
 function powerParsed(u: ParsedUnit, exp: number): ParsedUnit {
@@ -498,7 +800,7 @@ function powerParsed(u: ParsedUnit, exp: number): ParsedUnit {
   for (const [dim, power] of Object.entries(u.dims)) {
     dims[dim as keyof CanonicalDims] = (power as number) * exp
   }
-  return { dims, scale: Math.pow(intervalOf(u).scale, exp) }
+  return { dims, scale: Math.pow(intervalOf(u).scale, exp), exact: u.exact.power(exp) }
 }
 
 const isIdentStart = (c: string): boolean => /[A-Za-z_%]/.test(c)
@@ -622,7 +924,7 @@ class UnitParser {
           `Cannot parse unit "${this.src}": a number other than 1 is a scaling factor, not a unit (esm-spec 4.8.2); a rational exponent is spelled ^(p/q)`,
         )
       }
-      return { dims: {}, scale: 1 }
+      return { dims: {}, scale: 1, exact: ExactScale.one() }
     }
 
     if (!isIdentStart(c)) {
@@ -640,7 +942,11 @@ class UnitParser {
     if (!spec) {
       throw new UnitConversionError(`Unknown unit "${name}"`)
     }
-    const parsed: ParsedUnit = { dims: { ...spec.dims }, scale: spec.scale }
+    const parsed: ParsedUnit = {
+      dims: { ...spec.dims },
+      scale: spec.scale,
+      exact: EXACT_SCALES[name] ?? ExactScale.one(),
+    }
     if (spec.offset !== undefined && spec.offset !== 0) parsed.offset = spec.offset
     return parsed
   }

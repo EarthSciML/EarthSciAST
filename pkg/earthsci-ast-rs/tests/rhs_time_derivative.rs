@@ -399,9 +399,7 @@ fn a_cyclic_tendency_terminates_and_is_refused() {
 /// expressions over the states and parameters, with no `D` left standing and
 /// nothing for the `unlowered_operator` gate to refuse. The end-to-end numeric
 /// check — that the two sides agree at `-0.45` — lives in the Python binding
-/// (`test_the_linearity_fixture_runs_and_both_sides_agree`), because the
-/// document also declares `continuous_events`, which this crate's v1 scalar
-/// route refuses for reasons unrelated to this rule.
+/// (`test_the_linearity_fixture_runs_and_both_sides_agree`).
 #[test]
 fn the_shipped_linearity_fixture_resolves_both_sides() {
     let path = common::repo_fixture("validation/mathematical_correctness.esm");

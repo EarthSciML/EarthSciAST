@@ -202,10 +202,18 @@ end
 #                 walk; the kind is kept distinct from `:node` because the two
 #                 answer different questions about a node (what it IS vs how
 #                 its op is parameterized).
+#   :opaque     — a loop symbol, reference, id, enum, unit or free text that is
+#                 not an expression position but that the rename walk does not
+#                 protect: opaque to metaparameter substitution ONLY. (`of` and
+#                 `on` also keep their dedicated rename-walk branches.)
 #   :positional — no derived-set membership; handled by a dedicated branch in
 #                 `_rename_walk` / `_collect_ref_names!`: `from` ({from:
-#                 <indexSet>} references map through `isetmap`) and `of`
-#                 (aggregate bound-index lists are copied verbatim).
+#                 <indexSet>} references map through `isetmap`).
+#
+# The classification of every string-capable schema property, and the key set
+# derived from it, lives in
+# `tests/metaparameter_substitution/field_classification.json`; the test suite
+# fails when `_META_SUBST_SKIP_KEYS` or `_NAME_KEYED_MAP_KEYS` disagree with it.
 const _STRUCTURAL_FIELDS = (
     "metadata"                    => :protected,
     "params"                      => :protected,
@@ -252,8 +260,52 @@ const _STRUCTURAL_FIELDS = (
     "attrs"                       => :registry,
     "members"                     => :registry,
     "from_faq"                    => :registry,
+    # Loop symbols and bound index names of a `faq` node (join key columns and
+    # the symbols they are read at, the arg-witness symbol, the output index
+    # signature, a dependent range's parent indices). `metaparameter_name_conflict`
+    # refuses a metaparameter spelled like a loop symbol, so a metaparameter
+    # reaches these fields only as an `on` data-column name; they are names
+    # wherever they appear, so they are skipped rather than left to that check.
+    "on"                          => :opaque,
+    "syms"                        => :opaque,
+    "arg"                         => :opaque,
+    "output_idx"                  => :opaque,
+    "of"                          => :opaque,
+    # A `table_lookup` output name.
+    "output"                      => :opaque,
+    "handler_id"                  => :opaque,
+    # References to files, components, data sources, data columns and the
+    # import-edge rename vocabulary.
+    "ref"                         => :opaque,
+    "model"                       => :opaque,
+    "reaction_system"             => :opaque,
+    "prefix"                      => :opaque,
+    "rename"                      => :opaque,
+    "rebind"                      => :opaque,
+    "index_set_rename"            => :opaque,
+    "source"                      => :opaque,
+    "file_variable"               => :opaque,
+    "path"                        => :opaque,
+    # Closed enums.
+    "direction"                   => :opaque,
+    "hook"                        => :opaque,
+    "root_find"                   => :opaque,
+    "system_kind"                 => :opaque,
+    "element_type"                => :opaque,
+    "scale"                       => :opaque,
+    "format"                      => :opaque,
+    "unmapped"                    => :opaque,
+    # Units (unit symbols such as `m`, `s`, `K` are valid identifiers) and
+    # free text.
+    "default_units"               => :opaque,
+    "label"                       => :opaque,
+    "location"                    => :opaque,
+    "notes"                       => :opaque,
+    "citation"                    => :opaque,
+    "doi"                         => :opaque,
+    "url"                         => :opaque,
+    "_comment"                    => :opaque,
     "from"                        => :positional,
-    "of"                          => :positional,
 )
 
 # Keys whose VALUES are never expression positions: metaparameter names are
@@ -267,12 +319,24 @@ const _STRUCTURAL_FIELDS = (
 #
 # Every structural kind but `:bound` and `:positional` is in: an expression
 # position is the ONLY thing substitution may rewrite, and `:bound` is the one
-# structural-table entry that IS one. This makes the set coincide with
-# `_RENAME_PROTECTED_KEYS` below; both stay derived from the table separately
-# because they answer different questions and a future kind may split them.
+# structural-table entry that IS one. `:opaque` is in this set but not in
+# `_RENAME_PROTECTED_KEYS` below, so the two sets are derived separately.
 const _META_SUBST_SKIP_KEYS = Set{String}(
     k for (k, kind) in _STRUCTURAL_FIELDS
-    if kind === :protected || kind === :axis || kind === :node || kind === :registry)
+    if kind === :protected || kind === :axis || kind === :node ||
+       kind === :registry || kind === :opaque)
+
+# Keys whose value is a map keyed by AUTHOR-CHOSEN names (variables, species,
+# loop symbols, template params, …). A map key is a declared name, not a field,
+# so it is never looked up in `_META_SUBST_SKIP_KEYS`: a variable named `source`
+# or a template param named `label` still has its value substituted. A key in
+# both sets (`where`, `rename`, …) is skipped whole.
+const _NAME_KEYED_MAP_KEYS = Set{String}([
+    "variables", "species", "parameters", "guesses", "subsystems",
+    "expression_templates", "ranges", "axes", "bindings", "config", "coords",
+    "initial_conditions", "parameter_overrides", "pinned_coords", "map",
+    "rename", "rebind", "index_set_rename", "where",
+])
 
 # Scalar Expression-node fields whose string value names an AXIS / index set
 # (rewritten by the index-set rename map, param-shadowed like §9.6.1).
@@ -300,17 +364,41 @@ const _RENAME_PROTECTED_KEYS = Set{String}(
 Substitute closed metaparameter names — appearing as bare strings, the
 variable-reference surface syntax — with their integer values, everywhere
 except the `_META_SUBST_SKIP_KEYS` structural fields (esm-spec §9.7.6:
-expression-position substitution; no folding here).
+expression-position substitution; no folding here). The entries of a
+`_NAME_KEYED_MAP_KEYS` map are walked without a skip lookup on their names.
 """
 function _substitute_metaparams(x, values::AbstractDict{String})
     return _map_json(x) do key, n
-        key !== nothing && key in _META_SUBST_SKIP_KEYS && return _to_ordered(n)
+        if key !== nothing
+            key in _META_SUBST_SKIP_KEYS && return _to_ordered(n)
+            key in _NAME_KEYED_MAP_KEYS && _is_object(n) &&
+                return _substitute_metaparams_map(n, values)
+        end
         if n isa AbstractString
             s = string(n)
             haskey(values, s) && return values[s]
         end
         return _JSON_DESCEND
     end
+end
+
+function _substitute_metaparams_map(n, values::AbstractDict{String})
+    return OrderedDict{String,Any}(
+        string(k) => _substitute_metaparams(v, values) for (k, v) in pairs(n))
+end
+
+"""
+    _substitute_metaparams_field(key, v, values)
+
+[`_substitute_metaparams`](@ref) applied to the value `v` of the object field
+`key`, for a caller that iterates an object's fields itself: the field is
+skipped, walked as a name-keyed map, or walked, exactly as it would be inside
+the recursive walk.
+"""
+function _substitute_metaparams_field(key::AbstractString, v, values::AbstractDict{String})
+    key in _META_SUBST_SKIP_KEYS && return _to_ordered(v)
+    key in _NAME_KEYED_MAP_KEYS && _is_object(v) && return _substitute_metaparams_map(v, values)
+    return _substitute_metaparams(v, values)
 end
 
 """
@@ -805,6 +893,15 @@ function _rename_walk(x, varmap::AbstractDict{String,String},
                 # or a data-column name keeps the varmap fold it had before this
                 # rule existed.
                 out[ks] = _rename_join_on(v, isetmap, e -> get(varmap, e, e))
+            elseif ks in _NAME_KEYED_MAP_KEYS && _is_object(v)
+                # A map keyed by author-chosen names (a `ranges` loop symbol, an
+                # apply-node `bindings` param): an entry name is a declared name,
+                # not a field, so it is never dispatched on (esm-spec §9.7.6
+                # map-key rule). A `ranges` entry named `dim` still has its
+                # `from` renamed.
+                out[ks] = OrderedDict{String,Any}(
+                    string(name) => _rename_walk(entry, varmap, isetmap, tplmap)
+                    for (name, entry) in pairs(v))
             elseif ks == "of" || ks in _RENAME_PROTECTED_KEYS
                 out[ks] = _to_ordered(v)
             else
@@ -868,15 +965,17 @@ function _rename_decl(decl, varmap::AbstractDict{String,String},
     return _rename_walk(decl, v2, i2, tplmap)
 end
 
-# Bound index symbols of a declaration: aggregate `output_idx` entries and
-# `ranges` keys (at any nesting depth). Rebinding one would desynchronize the
-# ranges KEYS (object keys, unreachable by value substitution) from their
-# `expr` occurrences, so it is rejected outright.
+# Bound index symbols (loop symbols) of a subtree: the `output_idx` entries and
+# `ranges` keys of every Expression node, at any nesting depth — the binder
+# definition of the `reserved_index_symbol` rule (esm-spec §4.9.1.1), which is
+# not limited to `faq` (`argmin` / `argmax` bind the same way). Rebinding one
+# would desynchronize the ranges KEYS (object keys, unreachable by value
+# substitution) from their `expr` occurrences, so it is rejected outright; a
+# metaparameter spelled like one is `metaparameter_name_conflict`.
 function _collect_bound_syms!(out::Set{String}, x)
     _walk_json(x) do _, n
         _is_object(n) || return true
-        op = _raw_get(n, "op")
-        (op !== nothing && string(op) == "faq") || return true
+        _raw_get(n, "op") === nothing && return true
         oi = _raw_get(n, "output_idx")
         if oi !== nothing && _is_array(oi)
             for e in oi
@@ -903,6 +1002,13 @@ function _collect_ref_names!(out::Set{String}, x, shadowed::Set{String})
         # variable-reference positions (see `_STRUCTURAL_FIELDS`).
         if key !== nothing && (key == "from" || key in _RENAME_AXIS_KEYS ||
                                key == "of" || key in _RENAME_PROTECTED_KEYS)
+            return false
+        end
+        # `_rename_walk`'s name-keyed map rule: an entry name is never pruned.
+        if key !== nothing && key in _NAME_KEYED_MAP_KEYS && _is_object(n)
+            for (_, entry) in pairs(n)
+                _collect_ref_names!(out, entry, shadowed)
+            end
             return false
         end
         if n isa AbstractString
@@ -1414,7 +1520,14 @@ function _process_library(raw, dir::String, stack::Vector{String},
         end
     end
 
-    _merge_own_templates!(scope.templates, raw, origin)
+    own = _collect_own_templates(raw, origin)
+    for (n, d) in own
+        own[n] = _lower_library_template_enums(raw, n, d, origin)
+    end
+    for (n, d) in own
+        _merge_named!(scope.templates, n, d, ERROR_CODES.TEMPLATE_IMPORT_NAME_CONFLICT,
+                      "template", origin)
+    end
 
     isets = _raw_get(raw, "index_sets")
     if isets !== nothing && _is_object(isets)
@@ -1431,7 +1544,74 @@ function _process_library(raw, dir::String, stack::Vector{String},
 
     # §9.7.3 body-reference DAG validation in the library's own scope.
     _compose_template_bodies!(scope.templates, origin)
+    _expand_library_enum_calls!(scope.templates, raw, collect(String, keys(own)), origin)
+    # In the library's own scope, before an importing edge's `bindings`
+    # instantiate the templates and consume the names it closes.
+    _check_metaparam_loop_symbols(keys(scope.metaparams), origin, scope.templates)
     return scope
+end
+
+# Resolve the `enum` symbols a template library binds in its OWN calls
+# (esm-spec §9.3). After `_lower_library_template_enums`, the only `enum` ops
+# left in the library's scope are spelled with a template parameter. A call to a
+# template that can still produce one binds that parameter here, in the library,
+# so each of the library's own template bodies has those calls expanded (the
+# eager expansion esm-spec §9.6.4 rule 3 requires at load anyway) and the result
+# lowered against the library's block. An op the expansion leaves spelled with
+# the calling template's own parameter stays open for the importer's binding.
+# Runs after `_compose_template_bodies!`, so the reference DAG is acyclic; every
+# new body is computed before any is replaced.
+function _expand_library_enum_calls!(named, library, own_names::Vector{String},
+                                     origin::String)
+    bearing = _transitive_op_flags(named, op -> op == "enum")
+    calls_bearing = node -> begin
+        nm = _raw_get(node, "name")
+        nm isa AbstractString && get(bearing, String(nm), false)
+    end
+    bodies = OrderedDict{String,Any}()
+    for n in own_names
+        decl = get(named, n, nothing)
+        (decl !== nothing && _is_object(decl) && _raw_haskey(decl, "body")) || continue
+        body = _raw_get(decl, "body")
+        any(r -> get(bearing, r, false), _collect_apply_names!(String[], body)) || continue
+        expanded = _expand_refs_walk(body, named, origin, calls_bearing, IdDict{Any,Any}())
+        bodies[n] = _lower_library_template_body(library, n, decl, expanded, origin)
+    end
+    for (n, body) in bodies
+        decl = OrderedDict{String,Any}(string(k) => v for (k, v) in pairs(named[n]))
+        decl["body"] = body
+        named[n] = decl
+    end
+    return named
+end
+
+# Lower the `enum` ops in one of a template library's OWN template bodies
+# against the library's `enums` block (esm-spec §9.3), before the template
+# reaches an importer whose block is a different one. An op spelled with one of
+# the template's `params` stays open and resolves at the call site.
+function _lower_library_template_enums(library, name::String, decl, origin::String)
+    (_is_object(decl) && _raw_haskey(decl, "body")) || return decl
+    decl["body"] = _lower_library_template_body(library, name, decl,
+                                                _raw_get(decl, "body"), origin)
+    return decl
+end
+
+# `body`, a body of the library's template `name` (`decl`), with its `enum` ops
+# lowered against the library's `enums` block. An op spelled with one of
+# `decl`'s `params` stays open.
+function _lower_library_template_body(library, name::String, decl, body, origin::String)
+    params_raw = _raw_get(decl, "params")
+    params = Set{String}(String(p) for p in
+        (params_raw !== nothing && _is_array(params_raw) ? params_raw : Any[])
+        if p isa AbstractString)
+    try
+        return _lower_enum_ops_for_file(library, body, params)
+    catch e
+        e isa EnumLoweringError || rethrow()
+        throw(ExpressionTemplateError(e.code,
+            "$origin: template '$name': $(e.message) — an `enum` op in a template " *
+            "library resolves against that library's own `enums` block (esm-spec §9.3)"))
+    end
 end
 
 # ---------------------------------------------------------------------------
@@ -1559,8 +1739,29 @@ function _close_document_metaparams(doc_meta::OrderedDict{String,Any},
     return values
 end
 
+# §9.7.6: a metaparameter name must not spell a loop symbol (a `ranges` key or
+# `output_idx` entry of an Expression node) anywhere in `trees`. Substitution
+# rewrites every bare string that spells a bound metaparameter, and inside the
+# node that binds it a loop symbol is exactly such a string, so no field rule
+# can tell the two apart.
+function _check_metaparam_loop_symbols(names, origin::String, trees...)
+    isempty(names) && return
+    bound = Set{String}()
+    for t in trees
+        _collect_bound_syms!(bound, t)
+    end
+    for name in names
+        string(name) in bound && throw(ExpressionTemplateError(
+            ERROR_CODES.METAPARAMETER_NAME_CONFLICT,
+            "$origin: metaparameter '$name' collides with a loop symbol " *
+            "(a `ranges` key or `output_idx` entry) (esm-spec §9.7.6)"))
+    end
+    return
+end
+
 # --- phase 4: §9.7.6 name-collision check — no shadowing of visible names ---
 function _check_metaparam_name_conflicts(root::OrderedDict{String,Any},
+                                         top_templates::OrderedDict{String,Any},
                                          doc_meta::OrderedDict{String,Any},
                                          doc_isets::OrderedDict{String,Any})
     isempty(doc_meta) && return
@@ -1585,6 +1786,9 @@ function _check_metaparam_name_conflicts(root::OrderedDict{String,Any},
             "metaparameter '$name' collides with a visible " *
             "variable/parameter/species/index-set name (esm-spec §9.7.6)"))
     end
+    # Components carry their imported templates by now; `top_templates` is a
+    # root library's effective top-level sequence, imports included.
+    _check_metaparam_loop_symbols(keys(doc_meta), "document", root, top_templates)
     return
 end
 
@@ -1609,7 +1813,7 @@ function _substitute_closed_metaparams!(root::OrderedDict{String,Any},
                         tpl[tn] = _substitute_metaparams_decl(td, values)
                     end
                 else
-                    comp[k] = _substitute_metaparams(comp[k], values)
+                    comp[k] = _substitute_metaparams_field(k, comp[k], values)
                 end
             end
         end
@@ -2042,7 +2246,7 @@ function resolve_template_machinery(raw_data, base_path::AbstractString;
     _resolve_component_imports!(root, base_dir, stack, doc_isets, doc_meta;
                                 load_ref=loader)
     values = _close_document_metaparams(doc_meta, metaparameters, mounted)
-    _check_metaparam_name_conflicts(root, doc_meta, doc_isets)
+    _check_metaparam_name_conflicts(root, top_templates, doc_meta, doc_isets)
     doc_isets = _substitute_closed_metaparams!(root, top_templates, doc_isets, values)
     # `mounted_leaf` says a MOUNTING document's registry will receive these
     # index sets and close them (§4.7 "Index-set merge"), so an axis this scope

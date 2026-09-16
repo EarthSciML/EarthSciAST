@@ -1,0 +1,87 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "named_1d_past_end",
+    "description": "an observed `tbl` defined by a `const` array, read one past the end. A binding that applies the state gather's zero ghost reads 0.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ]
+  },
+  "index_sets": {
+    "a0": {
+      "kind": "interval",
+      "size": 5
+    }
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "g": {
+          "type": "unknown"
+        },
+        "flux": {
+          "type": "unknown",
+          "default": 0.0
+        },
+        "tbl": {
+          "type": "unknown",
+          "shape": [
+            "a0"
+          ]
+        }
+      },
+      "equations": [
+        {
+          "lhs": "tbl",
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": [
+              10.0,
+              20.0,
+              30.0,
+              40.0,
+              50.0
+            ]
+          }
+        },
+        {
+          "lhs": "g",
+          "rhs": {
+            "op": "index",
+            "args": [
+              "tbl",
+              6
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "flux"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        }
+      ],
+      "tests": [
+        {
+          "id": "gather",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "assertions": [
+            {
+              "variable": "g",
+              "time": 0.0,
+              "expected": -1.0
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

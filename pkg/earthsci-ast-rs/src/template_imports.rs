@@ -123,6 +123,84 @@ const REGISTRY_KEYS: [&str; 9] = [
     "reduce", "semiring", "manifold", "fn", "table", "side", "attrs", "members", "from_faq",
 ];
 
+/// Loop symbols, references, ids, enums, units and free text: not expression
+/// positions, but not protected by the rename walk either, so opaque to
+/// metaparameter substitution ONLY. `of` and `on` keep their dedicated
+/// rename-walk branches. Mirrors the `:opaque` kind of `_STRUCTURAL_FIELDS` in
+/// the Julia reference.
+const OPAQUE_KEYS: [&str; 33] = [
+    // Loop symbols and bound index names of a `faq` node. `metaparameter_name_conflict`
+    // refuses a metaparameter spelled like a loop symbol, so a metaparameter reaches
+    // these fields only as an `on` data-column name; they are names wherever they
+    // appear, so they are skipped rather than left to that check.
+    "on",
+    "syms",
+    "arg",
+    "output_idx",
+    "of",
+    // A `table_lookup` output name.
+    "output",
+    "handler_id",
+    // References to files, components, data sources, data columns and the
+    // import-edge rename vocabulary.
+    "ref",
+    "model",
+    "reaction_system",
+    "prefix",
+    "rename",
+    "rebind",
+    "index_set_rename",
+    "source",
+    "file_variable",
+    "path",
+    // Closed enums.
+    "direction",
+    "hook",
+    "root_find",
+    "system_kind",
+    "element_type",
+    "scale",
+    "format",
+    "unmapped",
+    // Units (unit symbols such as `m`, `s`, `K` are valid identifiers) and free
+    // text.
+    "default_units",
+    "label",
+    "location",
+    "notes",
+    "citation",
+    "doi",
+    "url",
+    "_comment",
+];
+
+/// Keys whose value is a map keyed by AUTHOR-CHOSEN names (variables, species,
+/// loop symbols, template params, …). A map key is a declared name, not a field,
+/// so it is never tested with [`is_meta_subst_skipped`]: a variable named
+/// `source` or a template param named `label` still has its value substituted.
+/// A key that is also skipped (`where`, `rename`, …) is skipped whole.
+const NAME_KEYED_MAP_KEYS: [&str; 19] = [
+    "variables",
+    "species",
+    "parameters",
+    "guesses",
+    "subsystems",
+    "expression_templates",
+    "ranges",
+    "axes",
+    "bindings",
+    "config",
+    "coords",
+    "initial_conditions",
+    "parameter_overrides",
+    "pinned_coords",
+    "map",
+    "rename",
+    "rebind",
+    "index_set_rename",
+    "where",
+];
+
 /// `integral` bound fields (esm-spec §4.2). Unlike `var` these are full
 /// Expression positions — a numeric literal, a parameter reference, an AST
 /// subtree — so they stay variable-reference positions for `varmap`; only a
@@ -141,21 +219,28 @@ const RENAME_BOUND_KEYS: [&str; 2] = ["lower", "upper"];
 ///
 /// Every structural kind but `bound` and `positional` is in: an expression
 /// position is the ONLY thing substitution may rewrite, and `bound` is the one
-/// structural-table entry that IS one. This makes the predicate coincide with
-/// [`is_rename_protected`]; both stay separate because they answer different
-/// questions and a future kind may split them.
+/// structural-table entry that IS one. [`OPAQUE_KEYS`] is in this predicate but
+/// not in [`is_rename_protected`], so the two are derived separately.
+///
+/// The classification this set is derived from lives in
+/// `tests/metaparameter_substitution/field_classification.json`; a unit test
+/// fails when this predicate or [`NAME_KEYED_MAP_KEYS`] disagrees with it.
 fn is_meta_subst_skipped(k: &str) -> bool {
     PROTECTED_KEYS.contains(&k)
         || RENAME_AXIS_KEYS.contains(&k)
         || NODE_HEADER_KEYS.contains(&k)
         || REGISTRY_KEYS.contains(&k)
+        || OPAQUE_KEYS.contains(&k)
 }
 
 /// True when object key `k` is a structural scalar field the §9.7.7 rename walk
 /// must never rewrite (`_RENAME_PROTECTED_KEYS` in the Julia reference: the
-/// metaparameter skip set ∪ [`REGISTRY_KEYS`]).
+/// protected, axis, node-header and registry kinds).
 fn is_rename_protected(k: &str) -> bool {
-    is_meta_subst_skipped(k) || REGISTRY_KEYS.contains(&k)
+    PROTECTED_KEYS.contains(&k)
+        || RENAME_AXIS_KEYS.contains(&k)
+        || NODE_HEADER_KEYS.contains(&k)
+        || REGISTRY_KEYS.contains(&k)
 }
 
 use crate::diagnostic::{codes, err};
@@ -327,7 +412,9 @@ fn collect_metaparam_decls(
 /// importer's still-open names) spliced in for a deferred fold at the
 /// importer's close (esm-spec §9.7.6 binding value flow, site 1).
 /// Hand-rolled rather than `crate::json_visit`: descent is key-dependent
-/// (the [`is_meta_subst_skipped`] entries are copied verbatim, not walked).
+/// (the [`is_meta_subst_skipped`] entries are copied verbatim, not walked, and
+/// the entries of a [`NAME_KEYED_MAP_KEYS`] map are walked without a skip test
+/// on their names).
 fn substitute_metaparams(x: &Value, values: &BTreeMap<String, Value>) -> Value {
     match x {
         Value::String(s) => match values.get(s) {
@@ -342,15 +429,29 @@ fn substitute_metaparams(x: &Value, values: &BTreeMap<String, Value>) -> Value {
         Value::Object(obj) => {
             let mut out = Map::new();
             for (k, v) in obj {
-                if is_meta_subst_skipped(k.as_str()) {
-                    out.insert(k.clone(), v.clone());
-                } else {
-                    out.insert(k.clone(), substitute_metaparams(v, values));
-                }
+                out.insert(k.clone(), substitute_metaparams_field(k, v, values));
             }
             Value::Object(out)
         }
         _ => x.clone(),
+    }
+}
+
+/// [`substitute_metaparams`] applied to the value `v` of the object field `k`,
+/// for a caller that iterates an object's fields itself: the field is skipped,
+/// walked as a name-keyed map, or walked, exactly as inside the recursive walk.
+fn substitute_metaparams_field(k: &str, v: &Value, values: &BTreeMap<String, Value>) -> Value {
+    if is_meta_subst_skipped(k) {
+        return v.clone();
+    }
+    match v {
+        Value::Object(entries) if NAME_KEYED_MAP_KEYS.contains(&k) => Value::Object(
+            entries
+                .iter()
+                .map(|(name, entry)| (name.clone(), substitute_metaparams(entry, values)))
+                .collect(),
+        ),
+        _ => substitute_metaparams(v, values),
     }
 }
 
@@ -904,6 +1005,22 @@ fn rename_walk(
                             varmap.get(s).cloned().unwrap_or_else(|| s.to_string())
                         }),
                     );
+                } else if let Some(entries) = v
+                    .as_object()
+                    .filter(|_| NAME_KEYED_MAP_KEYS.contains(&k.as_str()))
+                {
+                    // A map keyed by author-chosen names (a `ranges` loop
+                    // symbol, an apply-node `bindings` param): an entry name is
+                    // a declared name, not a field, so it is never dispatched on
+                    // (esm-spec §9.7.6 map-key rule). A `ranges` entry named
+                    // `dim` still has its `from` renamed.
+                    let walked = entries
+                        .iter()
+                        .map(|(name, entry)| {
+                            (name.clone(), rename_walk(entry, varmap, isetmap, tplmap))
+                        })
+                        .collect();
+                    out.insert(k.clone(), Value::Object(walked));
                 } else if k == "of" || is_rename_protected(k) {
                     out.insert(k.clone(), v.clone());
                 } else {
@@ -1240,14 +1357,17 @@ pub(crate) fn apply_mount_index_set_rename(
     Ok(())
 }
 
-/// Bound index symbols of a declaration: aggregate `output_idx` entries and
-/// `ranges` keys (at any nesting depth). Rebinding one would desynchronize the
-/// ranges KEYS from their `expr` occurrences, so it is rejected. Mirrors the
-/// Julia `_collect_bound_syms!`.
+/// Bound index symbols (loop symbols) of a subtree: the `output_idx` entries and
+/// `ranges` keys of every Expression node, at any nesting depth — the binder
+/// definition of the `reserved_index_symbol` rule (esm-spec §4.9.1.1), which is
+/// not limited to `faq` (`argmin` / `argmax` bind the same way). Rebinding one
+/// would desynchronize the ranges KEYS from their `expr` occurrences, so it is
+/// rejected; a metaparameter spelled like one is `metaparameter_name_conflict`.
+/// Mirrors the Julia `_collect_bound_syms!`.
 fn collect_bound_syms(x: &Value, out: &mut std::collections::HashSet<String>) {
     crate::json_visit::visit_values(x, &mut |_path, v| {
         let Some(obj) = v.as_object() else { return };
-        if obj.get("op").and_then(|w| w.as_str()) != Some("faq") {
+        if !obj.contains_key("op") {
             return;
         }
         if let Some(oi) = obj.get("output_idx").and_then(|w| w.as_array()) {
@@ -1296,7 +1416,16 @@ fn collect_ref_names(
                 {
                     continue;
                 }
-                collect_ref_names(v, shadowed, out);
+                // `rename_walk`'s name-keyed map rule: an entry name is never
+                // pruned.
+                match v.as_object() {
+                    Some(entries) if NAME_KEYED_MAP_KEYS.contains(&k.as_str()) => {
+                        for entry in entries.values() {
+                            collect_ref_names(entry, shadowed, out);
+                        }
+                    }
+                    _ => collect_ref_names(v, shadowed, out),
+                }
             }
         }
         _ => {}
@@ -2113,6 +2242,9 @@ fn process_library(
         }
     }
     validate_templates(&own, origin)?;
+    for (n, d) in own.iter_mut() {
+        lower_library_template_enums(raw, n, d, origin)?;
+    }
     for (n, d) in own {
         merge_named(
             &mut scope.templates,
@@ -2151,7 +2283,84 @@ fn process_library(
     // §9.7.3 body-reference validation in the library's own scope, before any
     // downstream `only` filtering can hide a referenced template.
     validate_template_body_references(&scope.templates, origin)?;
+    let own_names: Vec<String> = raw
+        .get("expression_templates")
+        .and_then(|v| v.as_object())
+        .map(|t| t.keys().cloned().collect())
+        .unwrap_or_default();
+    expand_library_enum_calls(raw, &mut scope.templates, &own_names, origin)?;
+    // In the library's own scope, before an importing edge's `bindings`
+    // instantiate the templates and consume the names it closes.
+    check_metaparam_loop_symbols(scope.metaparams.keys(), origin, &[&scope.templates])?;
     Ok(scope)
+}
+
+/// Resolve the `enum` symbols a template library binds in its OWN calls
+/// (esm-spec §9.3). After [`lower_library_template_enums`], the only `enum` ops
+/// left in the library's scope are spelled with a template parameter. A call to
+/// a template that can still produce one binds that parameter here, in the
+/// library, so each of the library's own template bodies has those calls
+/// expanded (the eager expansion esm-spec §9.6.4 rule 3 requires at load anyway)
+/// and the result lowered against the library's block. An op the expansion
+/// leaves spelled with the calling template's own parameter stays open for the
+/// importer's binding. Runs after the body-reference DAG check, so expansion
+/// terminates; every new body is computed before any is replaced.
+fn expand_library_enum_calls(
+    library: &Value,
+    templates: &mut Map<String, Value>,
+    own_names: &[String],
+    origin: &str,
+) -> Result<(), ExpressionTemplateError> {
+    let expanded =
+        crate::lower_expression_templates::expand_enum_bearing_calls(templates, own_names, origin)?;
+    let mut decls = Vec::with_capacity(expanded.len());
+    for (name, body) in expanded {
+        let Some(decl) = templates.get(&name) else {
+            continue;
+        };
+        let mut decl = decl.clone();
+        decl["body"] = body;
+        lower_library_template_enums(library, &name, &mut decl, origin)?;
+        decls.push((name, decl));
+    }
+    for (name, decl) in decls {
+        templates.insert(name, decl);
+    }
+    Ok(())
+}
+
+/// Lower the `enum` ops in one of a template library's OWN template bodies
+/// against the library's `enums` block (esm-spec §9.3), before the template
+/// reaches an importer whose block is a different one. An op spelled with one
+/// of the template's `params` stays open and resolves at the call site.
+fn lower_library_template_enums(
+    library: &Value,
+    name: &str,
+    decl: &mut Value,
+    origin: &str,
+) -> Result<(), ExpressionTemplateError> {
+    let params: HashSet<String> = decl
+        .get("params")
+        .and_then(|p| p.as_array())
+        .map(|ps| {
+            ps.iter()
+                .filter_map(|p| p.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    let Some(body) = decl.get_mut("body") else {
+        return Ok(());
+    };
+    crate::lower_enums::lower_enum_ops_for_file(library, body, &params).map_err(|e| {
+        err(
+            e.code,
+            format!(
+                "{origin}: template '{name}': {} — an `enum` op in a template library \
+                 resolves against that library's own `enums` block (esm-spec §9.3)",
+                e.message
+            ),
+        )
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -2573,7 +2782,7 @@ pub(crate) fn resolve_template_machinery_scoped(
     let values = close_document_metaparams(&doc_meta, metaparameters, mount_declared)?;
 
     // --- §9.7.6 name-collision check: no shadowing of visible names ---
-    check_metaparam_collisions(&root, &doc_meta, &doc_isets)?;
+    check_metaparam_collisions(&root, &top_templates, &doc_meta, &doc_isets)?;
 
     // --- expression-position substitution of the closed values ---
     //
@@ -2857,11 +3066,47 @@ fn close_document_metaparams(
     Ok(values)
 }
 
+/// The §9.7.6 name-collision check for loop symbols: a metaparameter name must
+/// not spell a `ranges` key or `output_idx` entry of an Expression node anywhere
+/// in `trees` (`metaparameter_name_conflict`). Substitution rewrites every bare
+/// string that spells a bound metaparameter, and inside the node that binds it a
+/// loop symbol is exactly such a string, so no field rule can tell the two apart.
+fn check_metaparam_loop_symbols<'a>(
+    names: impl IntoIterator<Item = &'a String>,
+    origin: &str,
+    trees: &[&Map<String, Value>],
+) -> Result<(), ExpressionTemplateError> {
+    let mut names = names.into_iter().peekable();
+    if names.peek().is_none() {
+        return Ok(());
+    }
+    let mut bound = std::collections::HashSet::new();
+    for tree in trees {
+        for v in tree.values() {
+            collect_bound_syms(v, &mut bound);
+        }
+    }
+    for name in names {
+        if bound.contains(name) {
+            return Err(err(
+                codes::METAPARAMETER_NAME_CONFLICT,
+                format!(
+                    "{origin}: metaparameter '{name}' collides with a loop symbol \
+                     (a `ranges` key or `output_idx` entry) (esm-spec §9.7.6)"
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Phase 4 of [`resolve_template_machinery`]: the §9.7.6 name-collision
 /// check — a declared metaparameter must not shadow any visible variable /
-/// parameter / species / index-set name (`metaparameter_name_conflict`).
+/// parameter / species / index-set name, nor any loop symbol
+/// (`metaparameter_name_conflict`).
 fn check_metaparam_collisions(
     root: &Map<String, Value>,
+    top_templates: &Map<String, Value>,
     doc_meta: &Map<String, Value>,
     doc_isets: &Map<String, Value>,
 ) -> Result<(), ExpressionTemplateError> {
@@ -2894,7 +3139,9 @@ fn check_metaparam_collisions(
             ));
         }
     }
-    Ok(())
+    // Components carry their imported templates by now; `top_templates` is a
+    // root library's effective top-level sequence, imports included.
+    check_metaparam_loop_symbols(doc_meta.keys(), "document", &[root, top_templates])
 }
 
 /// Phase 5 of [`resolve_template_machinery`]: expression-position
@@ -2940,7 +3187,7 @@ fn substitute_closed_metaparams(
                         }
                     }
                 } else if let Some(v) = comp.get(&k) {
-                    let nv = substitute_metaparams(v, values);
+                    let nv = substitute_metaparams_field(&k, v, values);
                     comp.insert(k, nv);
                 }
             }
@@ -3480,6 +3727,52 @@ mod tests {
                 .and_then(|_| eval_meta_expr(&expr, &e, "t").map(|_| ()))
                 .unwrap_err();
             assert_eq!(got.code, code, "expr {expr}");
+        }
+    }
+
+    /// The skip set and the name-keyed map set are derived from a classification
+    /// of every string-capable schema property
+    /// (`scripts/check-metaparameter-substitution-fields.py`); all five bindings
+    /// compare against the same file.
+    #[test]
+    fn metaparameter_substitution_tables_match_shared_classification() {
+        use std::collections::BTreeSet;
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/metaparameter_substitution/field_classification.json");
+        let cls: Value = serde_json::from_str(
+            &std::fs::read_to_string(&path).expect("read the classification file"),
+        )
+        .expect("parse the classification file");
+        let listed = |key: &str| -> BTreeSet<String> {
+            cls[key]
+                .as_array()
+                .unwrap_or_else(|| panic!("{key} is not an array"))
+                .iter()
+                .map(|v| v.as_str().expect("key names are strings").to_string())
+                .collect()
+        };
+        let skipped: BTreeSet<String> = PROTECTED_KEYS
+            .iter()
+            .chain(RENAME_AXIS_KEYS.iter())
+            .chain(NODE_HEADER_KEYS.iter())
+            .chain(REGISTRY_KEYS.iter())
+            .chain(OPAQUE_KEYS.iter())
+            .map(|k| k.to_string())
+            .collect();
+        assert_eq!(skipped, listed("skip_keys"));
+        for k in &skipped {
+            assert!(is_meta_subst_skipped(k), "{k:?} is not skipped");
+        }
+        let maps: BTreeSet<String> = NAME_KEYED_MAP_KEYS.iter().map(|k| k.to_string()).collect();
+        assert_eq!(maps, listed("name_keyed_map_keys"));
+        // The substitution-only kind must not leak into the rename walk's
+        // protected set: that set is derived from the kinds, not from the skip
+        // predicate.
+        for k in OPAQUE_KEYS {
+            assert!(
+                !is_rename_protected(k),
+                "{k:?} leaked into is_rename_protected"
+            );
         }
     }
 }
