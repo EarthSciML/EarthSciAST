@@ -358,7 +358,16 @@ pub struct RhsStats {
 #[derive(Debug, Clone)]
 enum AlgebraicRule {
     /// `var := body` — pure scalar algebraic.
-    Scalar { var: String, body: Rc<Expr> },
+    ///
+    /// `declared_shape` is the defined variable's declared extents, when it
+    /// declares a shape that resolves to static sizes. A body that evaluates
+    /// to a scalar is broadcast over it (esm-spec §4.3.4), so the variable
+    /// keeps its declared rank however the value came out.
+    Scalar {
+        var: String,
+        body: Rc<Expr>,
+        declared_shape: Option<Vec<usize>>,
+    },
     /// `var[i...] := body` — array algebraic defined via a faq over
     /// the full shape of `var`.
     ArrayLoop {

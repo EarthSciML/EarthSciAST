@@ -337,6 +337,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("conformance_tolerance_resolution_test.jl")  # §6.6.4 per-field tolerance merge
     include("conformance_scalar_ic_test.jl")
     include("conformance_shaped_parameter_broadcast_test.jl")  # §6.3 scalar-on-a-shaped-parameter broadcast
+    include("conformance_shaped_observed_scalar_broadcast_test.jl")  # §4.3.4 scalar right-hand side on a shaped observed (#262)
     include("conformance_override_key_diagnostics_test.jl")
     include("conformance_pde_inline_reference_dimension_names_test.jl")  # §6.6.5 reference dimension names
     include("rhs_time_derivative_resolution_test.jl")   # §4.2 right-hand-side D: Julia resolves; its exclusion

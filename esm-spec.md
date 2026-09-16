@@ -1147,6 +1147,8 @@ Broadcasts do not fuse: a nested expression of broadcasts decomposes into primit
 
 An expression mixing the two regimes aligns each operand under its own: a named operand is placed by name, an anonymous one positionally.
 
+**A scalar declares no index sets**, so it is a subset of every result's and replicates along all of them. That holds for a whole right-hand side too: an equation defining a shaped variable whose right-hand side is a scalar — a literal, a scalar parameter, or an expression that evaluates to a scalar, such as an `ifelse` whose predicate is constant and whose taken branch is scalar — gives that value to every element of the variable's declared shape. A binding MUST NOT let the value's rank replace the declared shape: the variable still has every one of its elements, to readers and to test assertions alike.
+
 These rules apply only where element correspondence is what the expression *means* — that is, under the elementwise operators. Every other op consumes its operands whole under its own contract: `faq` and `makearray` name their axes, `index` gathers, the shape ops of Section 4.3.5 restructure, and the relational and geometry ops (Section 4.2) may return a result of an entirely unrelated shape.
 
 #### 4.3.5 `reshape`, `transpose`, `concat`

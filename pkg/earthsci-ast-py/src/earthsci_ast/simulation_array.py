@@ -837,8 +837,17 @@ def _materialize_observeds(
         val = _require_real(val, f"observed '{name}'")
         if isinstance(val, np.ndarray) and val.ndim > 0:
             ctx.derived_rings[name] = val
+            ctx.observed_values.pop(name, None)
         else:
             ctx.observed_values[name] = float(val)
+            # A scalar value on a SHAPED observed replicates along every axis of
+            # its declared shape (esm-spec §4.3.4) — whether the body was a
+            # scalar as written or evaluated to one (an `ifelse` whose predicate
+            # is a constant takes its scalar branch). Readers that gather cells
+            # find the full field; the scalar stays for the output row.
+            target_shape = ctx.state_shapes.get(name)
+            if target_shape:
+                ctx.derived_rings[name] = np.full(target_shape, float(val))
 
 
 def _const_array_observed_names(ordered_observed: list[tuple[str, Expr]]) -> frozenset[str]:
@@ -1460,8 +1469,14 @@ def _binning_coord_arrays(
             skip_unresolved=True,
         )
     # Array observeds land in `derived_rings`, scalars in `observed_values`; both
-    # are valid const-array factors for the front-door's `_vi_eval`.
-    return {**ctx.derived_rings, **ctx.observed_values}
+    # are valid const-array factors for the front-door's `_vi_eval`. A SHAPED
+    # observed whose value came out scalar is registered in BOTH (esm-spec
+    # §4.3.4: the scalar fills the declared shape, and the scalar itself stays
+    # for the output row), so `derived_rings` is merged LAST — a factor this
+    # map feeds is gathered per cell, and every other reader of an observed
+    # (`_resolve_symbol`, `_gather_operator_factor`, `observed_field`) resolves
+    # `derived_rings` first too.
+    return {**ctx.observed_values, **ctx.derived_rings}
 
 
 def _frontdoor_join_keys_and_extents(
