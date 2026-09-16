@@ -13,9 +13,10 @@ use earthsci_ast::extension::analysis::{
     find_longest_dependency_chain, find_strongly_connected_components,
 };
 use earthsci_ast::{
-    ExpressionGraphOptions, component_exists, component_graph, expression_graph,
-    expression_graph_with_options, stoichiometric_matrix, to_json, to_json_compact, validate,
-    validate_text,
+    EquationDimensionVerdict, ExpressionGraphOptions, StructuralErrorCode, Unit, UnitError,
+    build_unit_env, component_exists, component_graph, equation_dimension_verdict,
+    expression_graph, expression_graph_with_options, parse_unit, stoichiometric_matrix, to_json,
+    to_json_compact, validate, validate_text,
 };
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
@@ -482,16 +483,57 @@ fn analyze_model_units(esm_file: &earthsci_ast::EsmFile) {
                 model.variables.len()
             );
 
-            // Check for dimensional consistency in equations
-            for (i, _equation) in model.equations.iter().enumerate() {
-                println!("  Equation {}: dimensional analysis needed", i + 1);
-                // Note: Full dimensional analysis would require evaluating expression units
+            for (i, equation, verdict) in model_equation_verdicts(model) {
+                let label = match equation_lhs_label(&equation.lhs) {
+                    Some(lhs) => format!("Equation {} ({lhs})", i + 1),
+                    None => format!("Equation {}", i + 1),
+                };
+                match verdict {
+                    EquationDimensionVerdict::Consistent(dim) => {
+                        println!("  {label}: consistent [{dim}]");
+                    }
+                    EquationDimensionVerdict::Mismatch(messages) => {
+                        println!("  {label}: MISMATCH — {}", messages.join("; "));
+                    }
+                    EquationDimensionVerdict::NotChecked(reason) => {
+                        println!("  {label}: NOT CHECKED — {reason}");
+                    }
+                }
             }
         }
     }
 }
 
-fn analyze_reaction_system_units(esm_file: &earthsci_ast::EsmFile) {
+/// The dimensional analyser's verdict on each of `model`'s equations, judged
+/// against the same unit environment `validate` uses.
+fn model_equation_verdicts(
+    model: &earthsci_ast::Model,
+) -> Vec<(usize, &earthsci_ast::Equation, EquationDimensionVerdict)> {
+    let (env, _) = build_unit_env(&model.variables);
+    model
+        .equations
+        .iter()
+        .enumerate()
+        .map(|(i, eq)| (i, eq, equation_dimension_verdict(eq, &env)))
+        .collect()
+}
+
+/// A short name for an equation's left-hand side: `x` or `D(x)`.
+fn equation_lhs_label(lhs: &earthsci_ast::Expr) -> Option<String> {
+    match lhs {
+        earthsci_ast::Expr::Variable(name) => Some(name.clone()),
+        earthsci_ast::Expr::Operator(op) if op.op == "D" => match op.args.first() {
+            Some(earthsci_ast::Expr::Variable(name)) => Some(format!("D({name})")),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn analyze_reaction_system_units(
+    esm_file: &earthsci_ast::EsmFile,
+    validation: &earthsci_ast::ValidationResult,
+) {
     if let Some(ref reaction_systems) = esm_file.reaction_systems {
         for (rs_id, rs) in reaction_systems {
             println!("Reaction System: {rs_id}");
@@ -513,13 +555,80 @@ fn analyze_reaction_system_units(esm_file: &earthsci_ast::EsmFile) {
                 rs.species.len()
             );
 
-            // Check rate expression units
-            for (i, _reaction) in rs.reactions.iter().enumerate() {
-                println!("  Reaction {} rate: dimensional analysis needed", i + 1);
-                // Rate expressions should have units consistent with d[species]/dt
+            for (i, verdict) in reaction_rate_verdicts(rs_id, rs, validation) {
+                match verdict {
+                    RateVerdict::Consistent => println!(
+                        "  Reaction {} rate: no stoichiometric mismatch found",
+                        i + 1
+                    ),
+                    RateVerdict::Mismatch(message) => {
+                        println!("  Reaction {} rate: MISMATCH — {message}", i + 1);
+                    }
+                    RateVerdict::NotChecked(reason) => {
+                        println!("  Reaction {} rate: NOT CHECKED — {reason}", i + 1);
+                    }
+                }
             }
         }
     }
+}
+
+/// The dimensional analyser's verdict on one reaction's rate expression.
+enum RateVerdict {
+    /// The rate's dimension resolved and no stoichiometric mismatch was found.
+    Consistent,
+    /// A provable mismatch: either the stoichiometric one `validate` reports, or
+    /// an inconsistency between the rate expression's own operands.
+    Mismatch(String),
+    /// The rate's dimension could not be determined, so nothing was compared.
+    NotChecked(String),
+}
+
+/// Judge every reaction's rate in `rs`, paired with its 0-based index.
+///
+/// The stoichiometric rate check lives in `validate`; its findings are keyed by
+/// the reaction's JSON Pointer, so they are read back out of `validation`
+/// rather than recomputed. A rate whose own operands are provably incompatible
+/// is a MISMATCH too — the analyser did reach a verdict — and only an
+/// undeterminable dimension is "not checked".
+fn reaction_rate_verdicts(
+    rs_id: &str,
+    rs: &earthsci_ast::ReactionSystem,
+    validation: &earthsci_ast::ValidationResult,
+) -> Vec<(usize, RateVerdict)> {
+    let env: HashMap<String, Unit> = rs
+        .species
+        .iter()
+        .map(|(name, s)| (name, &s.units))
+        .chain(rs.parameters.iter().map(|(name, p)| (name, &p.units)))
+        .filter_map(|(name, units)| {
+            let unit = parse_unit(units.as_deref()?).ok()?;
+            Some((name.clone(), unit))
+        })
+        .collect();
+    rs.reactions
+        .iter()
+        .enumerate()
+        .map(|(i, reaction)| {
+            let path = format!("/reaction_systems/{rs_id}/reactions/{i}");
+            let mismatches: Vec<&str> = validation
+                .structural_errors
+                .iter()
+                .filter(|e| {
+                    e.path == path && matches!(e.code, StructuralErrorCode::UnitInconsistency)
+                })
+                .map(|e| e.message.as_str())
+                .collect();
+            if !mismatches.is_empty() {
+                return (i, RateVerdict::Mismatch(mismatches.join("; ")));
+            }
+            match Unit::propagate(&reaction.rate, &env) {
+                Ok(_) => (i, RateVerdict::Consistent),
+                Err(UnitError::DimensionMismatch(message)) => (i, RateVerdict::Mismatch(message)),
+                Err(e) => (i, RateVerdict::NotChecked(e.to_string())),
+            }
+        })
+        .collect()
 }
 
 fn analyze_expression_optimization(esm_file: &earthsci_ast::EsmFile) {
@@ -2868,23 +2977,99 @@ fn run_units(file: PathBuf, check: bool) -> Result<(), Box<dyn std::error::Error
 
     if check {
         println!("\n=== DIMENSIONAL CONSISTENCY CHECK ===");
-        // Use existing validation for unit checking
+        // A provable mismatch or an unresolvable unit string is a structural
+        // error, not a warning (esm-spec §4.8.4).
         let validation_result = validate(&esm_file);
+        let unit_errors: Vec<_> = validation_result
+            .structural_errors
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e.code,
+                    StructuralErrorCode::UnitInconsistency | StructuralErrorCode::UnitParseError
+                )
+            })
+            .collect();
 
+        let mut error_lines: Vec<String> = unit_errors
+            .iter()
+            .map(|e| format!("{}: {}", e.path, e.message))
+            .collect();
+
+        let (mut consistent, mut mismatched, mut not_checked) = (0, 0, 0);
+        for model in esm_file.models.iter().flat_map(|m| m.values()) {
+            for (_, _, verdict) in model_equation_verdicts(model) {
+                match verdict {
+                    EquationDimensionVerdict::Consistent(_) => consistent += 1,
+                    EquationDimensionVerdict::Mismatch(_) => mismatched += 1,
+                    EquationDimensionVerdict::NotChecked(_) => not_checked += 1,
+                }
+            }
+        }
+
+        // Reaction rates are judged here too. `validate` routes only the
+        // STOICHIOMETRIC rate check to a structural error, so a rate whose own
+        // operands are provably incompatible reaches no error list — and
+        // reporting it in the reaction report while `--check` calls the document
+        // consistent would be the same wrong-way-round confidence #303 is about.
+        let (mut rates_ok, mut rates_bad, mut rates_unchecked) = (0, 0, 0);
+        for (rs_id, rs) in esm_file.reaction_systems.iter().flat_map(|m| m.iter()) {
+            for (i, verdict) in reaction_rate_verdicts(rs_id, rs, &validation_result) {
+                match verdict {
+                    RateVerdict::Consistent => rates_ok += 1,
+                    RateVerdict::Mismatch(message) => {
+                        rates_bad += 1;
+                        let line = format!("/reaction_systems/{rs_id}/reactions/{i}: {message}");
+                        if !error_lines.contains(&line) {
+                            error_lines.push(line);
+                        }
+                    }
+                    RateVerdict::NotChecked(_) => rates_unchecked += 1,
+                }
+            }
+        }
+
+        if !error_lines.is_empty() {
+            println!("Unit errors:");
+            for line in &error_lines {
+                println!("  ✗ {line}");
+            }
+        }
         if !validation_result.unit_warnings.is_empty() {
             println!("Unit warnings:");
             for warning in &validation_result.unit_warnings {
                 println!("  ⚠ {}", warning.message);
             }
-        } else {
+        }
+
+        println!(
+            "Equations: {consistent} consistent, {mismatched} mismatched, {not_checked} not checked"
+        );
+        if rates_ok + rates_bad + rates_unchecked > 0 {
+            println!(
+                "Reaction rates: {rates_ok} consistent, {rates_bad} mismatched, {rates_unchecked} not checked"
+            );
+        }
+
+        // The exit status follows the verdicts this command just printed, not
+        // only `validate`'s error list, so the two can never disagree.
+        if !error_lines.is_empty() || mismatched > 0 || rates_bad > 0 {
+            return Err(fail_silent());
+        }
+        if not_checked == 0 && rates_unchecked == 0 {
             println!("✓ All units are dimensionally consistent");
+        } else {
+            println!(
+                "✓ No dimensional mismatch found; run without --check to see why equations were not checked"
+            );
         }
     } else {
         println!("\n=== COMPREHENSIVE UNIT ANALYSIS ===");
 
         // Analyze units in all components
+        let validation_result = validate(&esm_file);
         analyze_model_units(&esm_file);
-        analyze_reaction_system_units(&esm_file);
+        analyze_reaction_system_units(&esm_file, &validation_result);
 
         // Unit system summary
         println!("\n=== UNIT SYSTEM SUMMARY ===");

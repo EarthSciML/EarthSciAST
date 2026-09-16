@@ -60,7 +60,7 @@ fn reservoir_reactant_held_fixed() {
         alg: Alg::Bdf,
         abstol: Some(1e-14),
         reltol: Some(1e-10),
-        maxiters: 1_000_000,
+        maxiters: Some(1_000_000),
         saveat: Some(sample_times.clone()),
         ..Default::default()
     };

@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/big"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode"
@@ -248,22 +250,231 @@ func dimFactor(symbol string, e Rat) string {
 	}
 }
 
+// ExactScale is the EXACT scale of a unit relative to SI (esm-spec §4.8.1
+// "Scales are EXACT"): a product of prime powers and a power of pi, each with a
+// rational exponent, so mi is 2^4 * 3^2 * 5^-3 * 11 * 127. Multiplying units
+// adds exponents, dividing subtracts them and a rational power multiplies them,
+// so a composite unit's scale never rounds. The zero value is exactly 1. Every
+// scale AGREEMENT (m + km, m/s = mi/h) is decided with Equal; the float Scale
+// on Unit is kept for numeric conversion only.
+type ExactScale struct {
+	primes map[uint64]Rat
+	pi     Rat
+}
+
+// exactInteger is the exact scale of a positive whole number.
+func exactInteger(n uint64) ExactScale {
+	if n == 0 {
+		panic("a unit scale must be positive")
+	}
+	e := ExactScale{}
+	rest := n
+	for p := uint64(2); p*p <= rest; {
+		for rest%p == 0 {
+			e = e.bump(p, ratInt(1))
+			rest /= p
+		}
+		if p == 2 {
+			p = 3
+		} else {
+			p += 2
+		}
+	}
+	if rest > 1 {
+		e = e.bump(rest, ratInt(1))
+	}
+	return e
+}
+
+// exactRatio is num/den for positive whole numbers.
+func exactRatio(num, den uint64) ExactScale {
+	return exactInteger(num).Div(exactInteger(den))
+}
+
+// exactPow10 is 10^k.
+func exactPow10(k int) ExactScale {
+	return ExactScale{}.bump(2, ratInt(k)).bump(5, ratInt(k))
+}
+
+// exactPi is pi.
+func exactPi() ExactScale {
+	return ExactScale{pi: ratInt(1)}
+}
+
+// exactDecimal is the exact value of a positive decimal literal as the registry
+// writes it ("0.3048", "133.322387415", "2.6867e20"). It panics on anything
+// else: the registry is a fixed table, so a typo in it is a bug to fail on.
+func exactDecimal(lit string) ExactScale {
+	mantissa, exp := lit, 0
+	if i := strings.IndexAny(lit, "eE"); i >= 0 {
+		mantissa = lit[:i]
+		v, err := strconv.Atoi(lit[i+1:])
+		if err != nil {
+			panic(fmt.Sprintf("registry decimal %q: %v", lit, err))
+		}
+		exp = v
+	}
+	intPart, fracPart := mantissa, ""
+	if i := strings.IndexByte(mantissa, '.'); i >= 0 {
+		intPart, fracPart = mantissa[:i], mantissa[i+1:]
+	}
+	n, err := strconv.ParseUint(strings.TrimLeft(intPart+fracPart, "0"), 10, 64)
+	if err != nil {
+		panic(fmt.Sprintf("registry decimal %q: %v", lit, err))
+	}
+	return exactInteger(n).Mul(exactPow10(exp - len(fracPart)))
+}
+
+// bump returns e with the exponent of prime p increased by by. It never mutates
+// e's map, which may be shared with the unit it was copied from.
+func (e ExactScale) bump(p uint64, by Rat) ExactScale {
+	out := ExactScale{primes: make(map[uint64]Rat, len(e.primes)+1), pi: e.pi}
+	for k, v := range e.primes {
+		out.primes[k] = v
+	}
+	next := out.primes[p].fix().Add(by).fix()
+	if next.IsZero() {
+		delete(out.primes, p)
+	} else {
+		out.primes[p] = next
+	}
+	return out
+}
+
+// Mul is the exact scale of a product of units.
+func (e ExactScale) Mul(o ExactScale) ExactScale {
+	out := e
+	for p, v := range o.primes {
+		out = out.bump(p, v)
+	}
+	out.pi = out.pi.fix().Add(o.pi.fix()).fix()
+	return out
+}
+
+// Div is the exact scale of a quotient of units.
+func (e ExactScale) Div(o ExactScale) ExactScale {
+	out := e
+	for p, v := range o.primes {
+		out = out.bump(p, v.fix().Neg())
+	}
+	out.pi = out.pi.fix().Sub(o.pi.fix()).fix()
+	return out
+}
+
+// Pow is the exact scale of a unit raised to a rational power.
+func (e ExactScale) Pow(r Rat) ExactScale {
+	out := ExactScale{pi: e.pi.fix().Mul(r.fix()).fix()}
+	for p, v := range e.primes {
+		out = out.bump(p, v.fix().Mul(r.fix()))
+	}
+	return out
+}
+
+// Equal reports whether two exact scales are the same number.
+func (e ExactScale) Equal(o ExactScale) bool {
+	if !e.pi.fix().Equal(o.pi.fix()) || len(e.primes) != len(o.primes) {
+		return false
+	}
+	for p, v := range e.primes {
+		w, ok := o.primes[p]
+		if !ok || !v.fix().Equal(w.fix()) {
+			return false
+		}
+	}
+	return true
+}
+
+// IsOne reports whether the scale is exactly 1.
+func (e ExactScale) IsOne() bool {
+	return len(e.primes) == 0 && e.pi.fix().IsZero()
+}
+
+// Float is the nearest float64, for diagnostics and numeric conversion. Two
+// scales are never compared through it.
+func (e ExactScale) Float() float64 {
+	v := math.Pow(math.Pi, e.pi.fix().Float())
+	for _, p := range sortedPrimes(e.primes) {
+		v *= math.Pow(float64(p), e.primes[p].fix().Float())
+	}
+	return v
+}
+
+// RatioString renders the scale as "p/q", "p/q*pi" or "p/q*pi^k" in lowest
+// terms ("/q" omitted when it is 1) -- the spelling
+// tests/conformance/unit_registry pins. ok is false when an exponent is not
+// whole (sqrt(km)).
+func (e ExactScale) RatioString() (string, bool) {
+	num, den := big.NewInt(1), big.NewInt(1)
+	for _, p := range sortedPrimes(e.primes) {
+		v := e.primes[p].fix()
+		if v.Den != 1 {
+			return "", false
+		}
+		n := int64(v.Num)
+		if n < 0 {
+			n = -n
+		}
+		pow := new(big.Int).Exp(new(big.Int).SetUint64(p), big.NewInt(n), nil)
+		if v.Num > 0 {
+			num.Mul(num, pow)
+		} else {
+			den.Mul(den, pow)
+		}
+	}
+	pi := e.pi.fix()
+	if pi.Den != 1 {
+		return "", false
+	}
+	out := num.String()
+	if den.Cmp(big.NewInt(1)) != 0 {
+		out += "/" + den.String()
+	}
+	switch pi.Num {
+	case 0:
+	case 1:
+		out += "*pi"
+	default:
+		out += fmt.Sprintf("*pi^%d", pi.Num)
+	}
+	return out, true
+}
+
+// String renders the scale for a diagnostic.
+func (e ExactScale) String() string {
+	if s, ok := e.RatioString(); ok {
+		return s
+	}
+	return strconv.FormatFloat(e.Float(), 'g', -1, 64)
+}
+
+func sortedPrimes(m map[uint64]Rat) []uint64 {
+	keys := make([]uint64, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	return keys
+}
+
 // Unit is a named physical unit with a dimension vector and a scale factor
 // relative to the canonical SI combination represented by Dim.
 type Unit struct {
 	Dim    Dimension
 	Scale  float64
 	Symbol string
+	// Exact is the scale every agreement is decided on (esm-spec §4.8.1). Its
+	// zero value is exactly 1, so a unit literal with Scale 1 needs no Exact.
+	Exact ExactScale
 }
 
 // Multiply returns the product of two units (dimensions add, scales multiply).
 func (u Unit) Multiply(other Unit) Unit {
-	return Unit{Dim: u.Dim.Multiply(other.Dim), Scale: u.Scale * other.Scale}
+	return Unit{Dim: u.Dim.Multiply(other.Dim), Scale: u.Scale * other.Scale, Exact: u.Exact.Mul(other.Exact)}
 }
 
 // Divide returns the quotient of two units.
 func (u Unit) Divide(other Unit) Unit {
-	return Unit{Dim: u.Dim.Divide(other.Dim), Scale: u.Scale / other.Scale}
+	return Unit{Dim: u.Dim.Divide(other.Dim), Scale: u.Scale / other.Scale, Exact: u.Exact.Div(other.Exact)}
 }
 
 // Power raises a unit to an integer power.
@@ -273,7 +484,7 @@ func (u Unit) Power(n int) Unit {
 
 // PowerRat raises a unit to a RATIONAL power (`s^(-1/2)`, `sqrt(m^3)`).
 func (u Unit) PowerRat(e Rat) Unit {
-	return Unit{Dim: u.Dim.PowerRat(e), Scale: math.Pow(u.Scale, e.Float())}
+	return Unit{Dim: u.Dim.PowerRat(e), Scale: math.Pow(u.Scale, e.Float()), Exact: u.Exact.Pow(e)}
 }
 
 // baseUnit constructs a single-dimension unit with an explicit scale.
@@ -308,15 +519,15 @@ func buildUnitRegistry() map[string]Unit {
 	// so that such a reorder fails loudly there.
 	//
 	// Mass (gram, because kg is the SI base but g/mg/ug are common).
-	r["g"] = Unit{Dim: r["kg"].Dim, Scale: 1e-3}
-	r["mg"] = Unit{Dim: r["kg"].Dim, Scale: 1e-6}
-	r["ug"] = Unit{Dim: r["kg"].Dim, Scale: 1e-9}
+	r["g"] = Unit{Dim: r["kg"].Dim, Scale: 1e-3, Exact: exactPow10(-3)}
+	r["mg"] = Unit{Dim: r["kg"].Dim, Scale: 1e-6, Exact: exactPow10(-6)}
+	r["ug"] = Unit{Dim: r["kg"].Dim, Scale: 1e-9, Exact: exactPow10(-9)}
 	// The international avoirdupois pound, exact by definition since 1959:
 	// 1 lb = 0.45359237 kg -- and exactly short_ton/2000, so the table held the
 	// DERIVED unit and not the one it is defined in. US emission rates are
 	// tabulated in it: MOVES's NONROAD brake-specific fuel consumption is
 	// lb/(hp*h) and its gasoline density constant CMFGAS is 6.237 lb/gal.
-	r["lb"] = Unit{Dim: r["kg"].Dim, Scale: 0.45359237}
+	r["lb"] = Unit{Dim: r["kg"].Dim, Scale: 0.45359237, Exact: exactDecimal("0.45359237")}
 	// The two tons, both spelled UNAMBIGUOUSLY and neither spelled "ton". A bare
 	// "ton" is three different masses (short 907.18474 kg, metric 1000 kg, long
 	// 1016.0469088 kg), and a table whose job is to make a declared unit mean
@@ -326,16 +537,16 @@ func buildUnitRegistry() map[string]Unit {
 	// 907184740000 ug/short-ton emission-conversion constant.
 	// The pound is READ BACK OUT of the table rather than retyped as 907.18474,
 	// so this entry cannot drift away from the one that defines it.
-	r["short_ton"] = Unit{Dim: r["kg"].Dim, Scale: 2000 * r["lb"].Scale}
-	r["tonne"] = Unit{Dim: r["kg"].Dim, Scale: 1e3}
+	r["short_ton"] = Unit{Dim: r["kg"].Dim, Scale: 2000 * r["lb"].Scale, Exact: exactInteger(2000).Mul(r["lb"].Exact)}
+	r["tonne"] = Unit{Dim: r["kg"].Dim, Scale: 1e3, Exact: exactPow10(3)}
 
 	// Length scales.
-	r["dm"] = Unit{Dim: r["m"].Dim, Scale: 1e-1}
-	r["cm"] = Unit{Dim: r["m"].Dim, Scale: 1e-2}
-	r["mm"] = Unit{Dim: r["m"].Dim, Scale: 1e-3}
-	r["um"] = Unit{Dim: r["m"].Dim, Scale: 1e-6}
-	r["nm"] = Unit{Dim: r["m"].Dim, Scale: 1e-9}
-	r["km"] = Unit{Dim: r["m"].Dim, Scale: 1e3}
+	r["dm"] = Unit{Dim: r["m"].Dim, Scale: 1e-1, Exact: exactPow10(-1)}
+	r["cm"] = Unit{Dim: r["m"].Dim, Scale: 1e-2, Exact: exactPow10(-2)}
+	r["mm"] = Unit{Dim: r["m"].Dim, Scale: 1e-3, Exact: exactPow10(-3)}
+	r["um"] = Unit{Dim: r["m"].Dim, Scale: 1e-6, Exact: exactPow10(-6)}
+	r["nm"] = Unit{Dim: r["m"].Dim, Scale: 1e-9, Exact: exactPow10(-9)}
+	r["km"] = Unit{Dim: r["m"].Dim, Scale: 1e3, Exact: exactPow10(3)}
 	// The international foot, exact by definition since 1959: 1 ft = 0.3048 m.
 	// Emission inventories are written in it -- the EPA FF10 point-source format
 	// stores STKHGT and STKDIAM in feet -- and a format for air-quality models
@@ -343,7 +554,7 @@ func buildUnitRegistry() map[string]Unit {
 	// column to be declared in a unit it is not stored in. It has no long-form
 	// alias: "foot"/"feet" are pinned as REJECTS by
 	// tests/conformance/unit_registry, so the imperial family is symbol-only.
-	r["ft"] = Unit{Dim: r["m"].Dim, Scale: 0.3048}
+	r["ft"] = Unit{Dim: r["m"].Dim, Scale: 0.3048, Exact: exactDecimal("0.3048")}
 	// The international mile, exact by definition since the same 1959
 	// agreement: 1 mi = 5280 ft = 1609.344 m. The US onroad transportation
 	// inventory is written in it end to end -- EPA MOVES stores
@@ -353,34 +564,34 @@ func buildUnitRegistry() map[string]Unit {
 	// composes; "mph" is deliberately not a name, and neither are "in" and
 	// "yd", which no corpus column uses. The foot is READ BACK OUT of the table
 	// rather than retyped as 1609.344, as short_ton reads the pound.
-	r["mi"] = Unit{Dim: r["m"].Dim, Scale: 5280 * r["ft"].Scale}
+	r["mi"] = Unit{Dim: r["m"].Dim, Scale: 5280 * r["ft"].Scale, Exact: exactInteger(5280).Mul(r["ft"].Exact)}
 
 	// Time scales.
-	r["ms"] = Unit{Dim: r["s"].Dim, Scale: 1e-3}
-	r["us"] = Unit{Dim: r["s"].Dim, Scale: 1e-6}
-	r["ns"] = Unit{Dim: r["s"].Dim, Scale: 1e-9}
-	r["min"] = Unit{Dim: r["s"].Dim, Scale: 60}
-	r["h"] = Unit{Dim: r["s"].Dim, Scale: 3600}
-	r["hr"] = Unit{Dim: r["s"].Dim, Scale: 3600}
+	r["ms"] = Unit{Dim: r["s"].Dim, Scale: 1e-3, Exact: exactPow10(-3)}
+	r["us"] = Unit{Dim: r["s"].Dim, Scale: 1e-6, Exact: exactPow10(-6)}
+	r["ns"] = Unit{Dim: r["s"].Dim, Scale: 1e-9, Exact: exactPow10(-9)}
+	r["min"] = Unit{Dim: r["s"].Dim, Scale: 60, Exact: exactInteger(60)}
+	r["h"] = Unit{Dim: r["s"].Dim, Scale: 3600, Exact: exactInteger(3600)}
+	r["hr"] = Unit{Dim: r["s"].Dim, Scale: 3600, Exact: exactInteger(3600)}
 	r["hour"] = r["h"]
 	// The day is spelled "day". The one-letter "d" is DELIBERATELY NOT a unit
 	// (§4.8.1): it reads as a deci- prefix or as a differential, and a binding
 	// that accepts it diverges permissively from the spec registry.
-	r["day"] = Unit{Dim: r["s"].Dim, Scale: 86400}
-	r["yr"] = Unit{Dim: r["s"].Dim, Scale: 365.25 * 86400}
+	r["day"] = Unit{Dim: r["s"].Dim, Scale: 86400, Exact: exactInteger(86400)}
+	r["yr"] = Unit{Dim: r["s"].Dim, Scale: 365.25 * 86400, Exact: exactInteger(31557600)}
 	r["year"] = r["yr"]
 
 	// Volume (derived length^3 shortcut).
-	liter := Unit{Dim: r["m"].Dim.Power(3), Scale: 1e-3}
+	liter := Unit{Dim: r["m"].Dim.Power(3), Scale: 1e-3, Exact: exactPow10(-3)}
 	r["L"] = liter
 	r["l"] = liter
-	r["mL"] = Unit{Dim: liter.Dim, Scale: 1e-6}
+	r["mL"] = Unit{Dim: liter.Dim, Scale: 1e-6, Exact: exactPow10(-6)}
 	// The US liquid gallon, exact by definition: 231 in^3 = 3.785411784 L
 	// (NIST SP 811 App. B) -- NOT the imperial gallon, which is 20% larger and
 	// which a dimension-only check cannot tell apart from it. US fuel data is
 	// per gallon: MOVES stores fueltype.fuelDensity in g/gal, its refuelling
 	// spill rate in g/gal, and its dioxin and metal emission rates in g/gal.
-	r["gal"] = Unit{Dim: liter.Dim, Scale: 3.785411784e-3}
+	r["gal"] = Unit{Dim: liter.Dim, Scale: 3.785411784e-3, Exact: exactDecimal("0.003785411784")}
 
 	// Length, long form. The corpus spells metres out ("meters/second" in a
 	// description-driven fixture); both spellings are the same unit.
@@ -399,36 +610,42 @@ func buildUnitRegistry() map[string]Unit {
 	r["N"] = r["kg"].Multiply(r["m"]).Divide(r["s"].Power(2))
 	r["Pa"] = r["N"].Divide(r["m"].Power(2))
 	r["J"] = r["N"].Multiply(r["m"])
-	r["kJ"] = Unit{Dim: r["J"].Dim, Scale: 1000}
-	r["cal"] = Unit{Dim: r["J"].Dim, Scale: 4.184}
-	r["kcal"] = Unit{Dim: r["J"].Dim, Scale: 4184}
+	r["kJ"] = Unit{Dim: r["J"].Dim, Scale: 1000, Exact: exactPow10(3)}
+	r["cal"] = Unit{Dim: r["J"].Dim, Scale: 4.184, Exact: exactDecimal("4.184")}
+	r["kcal"] = Unit{Dim: r["J"].Dim, Scale: 4184, Exact: exactInteger(4184)}
 	r["W"] = r["J"].Divide(r["s"])
 
 	// Pressure (non-SI but ubiquitous in atmospheric science).
-	r["atm"] = Unit{Dim: r["Pa"].Dim, Scale: 101325}
+	r["atm"] = Unit{Dim: r["Pa"].Dim, Scale: 101325, Exact: exactInteger(101325)}
 	// Micro-atmosphere: the standard unit of seawater/air CO2 partial pressure
 	// (pCO2) throughout the ocean-carbon corpus.
-	r["uatm"] = Unit{Dim: r["Pa"].Dim, Scale: 101325e-6}
-	r["bar"] = Unit{Dim: r["Pa"].Dim, Scale: 1e5}
-	r["hPa"] = Unit{Dim: r["Pa"].Dim, Scale: 100}
-	r["kPa"] = Unit{Dim: r["Pa"].Dim, Scale: 1000}
-	r["mbar"] = Unit{Dim: r["Pa"].Dim, Scale: 100}
-	r["Torr"] = Unit{Dim: r["Pa"].Dim, Scale: 101325.0 / 760.0}
-	r["mmHg"] = Unit{Dim: r["Pa"].Dim, Scale: 133.322387415}
+	r["uatm"] = Unit{Dim: r["Pa"].Dim, Scale: 101325e-6, Exact: exactDecimal("0.101325")}
+	r["bar"] = Unit{Dim: r["Pa"].Dim, Scale: 1e5, Exact: exactPow10(5)}
+	r["hPa"] = Unit{Dim: r["Pa"].Dim, Scale: 100, Exact: exactPow10(2)}
+	r["kPa"] = Unit{Dim: r["Pa"].Dim, Scale: 1000, Exact: exactPow10(3)}
+	r["mbar"] = Unit{Dim: r["Pa"].Dim, Scale: 100, Exact: exactPow10(2)}
+	r["Torr"] = Unit{Dim: r["Pa"].Dim, Scale: 101325.0 / 760.0, Exact: exactRatio(101325, 760)}
+	r["mmHg"] = Unit{Dim: r["Pa"].Dim, Scale: 133.322387415, Exact: exactDecimal("133.322387415")}
 	// Inch of mercury -- exactly 25.4 mmHg, the conventional value (NIST
 	// SP 811). US barometric datasets store pressure in inHg; without this
 	// entry such a column has no honest declaration, because a unit string
 	// carries no numeric scale factor, so "25.4 mmHg" cannot be spelled either.
-	r["inHg"] = Unit{Dim: r["Pa"].Dim, Scale: 3386.388640341}
-	r["psi"] = Unit{Dim: r["Pa"].Dim, Scale: 6894.757293168}
+	r["inHg"] = Unit{Dim: r["Pa"].Dim, Scale: 3386.388640341, Exact: exactDecimal("3386.388640341")}
+	// psi is lbf/in^2 = pound * standard gravity / inch^2, every factor exact
+	// (esm-spec §4.8.1).
+	r["psi"] = Unit{
+		Dim:   r["Pa"].Dim,
+		Scale: r["lb"].Scale * 9.80665 / (0.0254 * 0.0254),
+		Exact: r["lb"].Exact.Mul(exactDecimal("9.80665")).Div(exactDecimal("0.0254").Pow(ratInt(2))),
+	}
 
 	// Energy / power (non-coherent multiples).
-	r["erg"] = Unit{Dim: r["J"].Dim, Scale: 1e-7}
-	r["BTU"] = Unit{Dim: r["J"].Dim, Scale: 1055.05585262}
-	r["Wh"] = Unit{Dim: r["J"].Dim, Scale: 3600}
-	r["kWh"] = Unit{Dim: r["J"].Dim, Scale: 3.6e6}
-	r["kW"] = Unit{Dim: r["W"].Dim, Scale: 1000}
-	r["MW"] = Unit{Dim: r["W"].Dim, Scale: 1e6}
+	r["erg"] = Unit{Dim: r["J"].Dim, Scale: 1e-7, Exact: exactPow10(-7)}
+	r["BTU"] = Unit{Dim: r["J"].Dim, Scale: 1055.05585262, Exact: exactDecimal("1055.05585262")}
+	r["Wh"] = Unit{Dim: r["J"].Dim, Scale: 3600, Exact: exactInteger(3600)}
+	r["kWh"] = Unit{Dim: r["J"].Dim, Scale: 3.6e6, Exact: exactInteger(3600000)}
+	r["kW"] = Unit{Dim: r["W"].Dim, Scale: 1000, Exact: exactPow10(3)}
+	r["MW"] = Unit{Dim: r["W"].Dim, Scale: 1e6, Exact: exactPow10(6)}
 	// Mechanical (imperial) horsepower -- 550 ft*lbf/s = 745.6998715822702 W
 	// (NIST SP 811 App. B gives 7.456 999 E+02 W). The foot and the pound are
 	// READ BACK OUT of the table rather than retyped as literals here, so this
@@ -437,7 +654,7 @@ func buildUnitRegistry() map[string]Unit {
 	// Engine ratings are the axis MOVES's NONROAD model bins on:
 	// nrsourceusetype.hpAvg is horsepower and every nremissionrate row is
 	// g/(hp*h).
-	r["hp"] = Unit{Dim: r["W"].Dim, Scale: 550 * r["ft"].Scale * r["lb"].Scale * 9.80665}
+	r["hp"] = Unit{Dim: r["W"].Dim, Scale: 550 * r["ft"].Scale * r["lb"].Scale * 9.80665, Exact: exactInteger(550).Mul(r["ft"].Exact).Mul(r["lb"].Exact).Mul(exactDecimal("9.80665"))}
 
 	// Electromagnetic derived units.
 	//
@@ -456,7 +673,7 @@ func buildUnitRegistry() map[string]Unit {
 
 	// Temperature. degF is an INTERVAL of 5/9 K; like degC, the affine offset is
 	// deliberately not modeled (dimensional analysis only cares about the scale).
-	r["degF"] = Unit{Dim: r["K"].Dim, Scale: 5.0 / 9.0}
+	r["degF"] = Unit{Dim: r["K"].Dim, Scale: 5.0 / 9.0, Exact: exactRatio(5, 9)}
 
 	// Plane angle. "degrees" is the long-form alias the corpus uses for lon/lat
 	// coordinates and terrain aspect.
@@ -469,7 +686,7 @@ func buildUnitRegistry() map[string]Unit {
 	// third binding with the same hole. It survived cross-binding testing because
 	// the conformance fixture pins only the plural, on a bare parameter with no
 	// expression to discriminate its dimension.
-	r["deg"] = Unit{Dim: r["rad"].Dim, Scale: math.Pi / 180}
+	r["deg"] = Unit{Dim: r["rad"].Dim, Scale: math.Pi / 180, Exact: exactPi().Div(exactInteger(180))}
 	r["degrees"] = r["deg"]
 	// `degree` (SINGULAR) is a §4.8.1 long-form alias and Go alone was missing it,
 	// so `units: "degree"` was a hard error in this binding and legal in the other
@@ -487,10 +704,10 @@ func buildUnitRegistry() map[string]Unit {
 
 	// Amount of substance, scaled ("μmol/(m^2*s)" — photosynthesis flux — is in
 	// the valid corpus; μ normalizes to u, see normalizeUnitString).
-	r["kmol"] = Unit{Dim: r["mol"].Dim, Scale: 1e3}
-	r["mmol"] = Unit{Dim: r["mol"].Dim, Scale: 1e-3}
-	r["umol"] = Unit{Dim: r["mol"].Dim, Scale: 1e-6}
-	r["nmol"] = Unit{Dim: r["mol"].Dim, Scale: 1e-9}
+	r["kmol"] = Unit{Dim: r["mol"].Dim, Scale: 1e3, Exact: exactPow10(3)}
+	r["mmol"] = Unit{Dim: r["mol"].Dim, Scale: 1e-3, Exact: exactPow10(-3)}
+	r["umol"] = Unit{Dim: r["mol"].Dim, Scale: 1e-6, Exact: exactPow10(-6)}
+	r["nmol"] = Unit{Dim: r["mol"].Dim, Scale: 1e-9, Exact: exactPow10(-9)}
 
 	// Concentration-ish.
 	r["M"] = r["mol"].Divide(liter) // molarity
@@ -499,9 +716,9 @@ func buildUnitRegistry() map[string]Unit {
 	// mol/mol, ppm, ppb, ppt are dimensionless mixing ratios; the scale is the
 	// multiplier relative to 1 (mol/mol). The "v" (by-volume) spellings are the
 	// same quantity.
-	r["ppm"] = Unit{Dim: Dimensionless, Scale: 1e-6}
-	r["ppb"] = Unit{Dim: Dimensionless, Scale: 1e-9}
-	r["ppt"] = Unit{Dim: Dimensionless, Scale: 1e-12}
+	r["ppm"] = Unit{Dim: Dimensionless, Scale: 1e-6, Exact: exactPow10(-6)}
+	r["ppb"] = Unit{Dim: Dimensionless, Scale: 1e-9, Exact: exactPow10(-9)}
+	r["ppt"] = Unit{Dim: Dimensionless, Scale: 1e-12, Exact: exactPow10(-12)}
 	r["ppmv"] = r["ppm"]
 	r["ppbv"] = r["ppb"]
 	r["pptv"] = r["ppt"]
@@ -524,7 +741,7 @@ func buildUnitRegistry() map[string]Unit {
 	// "%" is a real unit token in the corpus (cloud fraction, relative humidity,
 	// soil moisture). It is not an identifier byte, so parseAtom recognises it as
 	// a symbol of its own; "percent" is the spelled-out alias.
-	r["%"] = Unit{Dim: Dimensionless, Scale: 0.01}
+	r["%"] = Unit{Dim: Dimensionless, Scale: 0.01, Exact: exactPow10(-2)}
 	r["percent"] = r["%"]
 	// Practical salinity: dimensionless by definition (PSS-78 is a conductivity
 	// ratio), scale 1 — the ocean corpus declares salinity in "psu".
@@ -537,7 +754,7 @@ func buildUnitRegistry() map[string]Unit {
 	// and Go's conversion tolerance is 1e-9 relative, so the two bindings
 	// disagreed — by 5e-3 relative — on the SAME file, one accepting a declared
 	// factor the other rejected. The exact value is the cross-binding contract.
-	r["Dobson"] = Unit{Dim: r["m"].Dim.Power(-2), Scale: 2.6867e20} // 2.6867e16 * (1/cm^2 → 1/m^2 ×1e4)
+	r["Dobson"] = Unit{Dim: r["m"].Dim.Power(-2), Scale: 2.6867e20, Exact: exactDecimal("2.6867e20")} // 2.6867e16 * (1/cm^2 → 1/m^2 ×1e4)
 	r["DU"] = r["Dobson"]
 
 	return r
@@ -1018,7 +1235,8 @@ func findingCode(err error) string {
 // PropagateDimension walks an Expression AST and returns the resulting Unit.
 // It mirrors the Julia reference implementation (get_expression_dimensions):
 //
-//   - numeric literals → dimensionless
+//   - numeric literals → indeterminate (nil, nil), except where their meaning is
+//     determined: neutral in "+"/"-", and read by value as an exponent
 //   - variable names → looked up in env; unknown variables return nil, nil
 //     (dimensional analysis is best-effort when unit annotations are missing)
 //   - "+", "-" require all operands to share a dimension
@@ -1063,8 +1281,9 @@ func propagateDimension(expr Expression, env map[string]Unit) (*Unit, error) {
 		// inconsistency is stated between DECLARED quantities (`length + mass`,
 		// `ln(mass)`, `m^kg`). Literals still behave correctly where their
 		// meaning IS determined: additively they are neutral and adopt their
-		// sibling's dimension (`T - 273.15` → K), an all-literal expression is
-		// dimensionless (`1 + 2`), and an exponent is read by VALUE (`x^2`).
+		// sibling's dimension (`T - 273.15` → K), and an exponent is read by
+		// VALUE (`x^2`). A sum of nothing but literals (`1 + 2`) stays
+		// indeterminate.
 		return nil, nil
 	case string:
 		if u, ok := env[e]; ok {
@@ -1087,24 +1306,21 @@ func propagateDimension(expr Expression, env map[string]Unit) (*Unit, error) {
 func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 	switch node.Op {
 	case "+", "-":
-		// Unary minus: propagate its single operand.
-		if node.Op == "-" && len(node.Args) == 1 {
-			return propagateDimension(node.Args[0], env)
-		}
-		// A bare literal in ADDITIVE position is dimensionally NEUTRAL, not
-		// dimensionless: it adopts the dimension of what it is added to. That is
-		// how models are actually written — `T - 273.15`, `1 - phi`,
+		// Every operand whose dimension is known must agree, and the result is
+		// that unit; an indeterminate operand is skipped, never compared
+		// (esm-spec §4.8.3). So `x + 0.5*y` has the unit of x, a unary `+` or
+		// `-` carries its operand's unit, and with no known operand at all
+		// (`1 + 2`, `+(2)`) the result is indeterminate, never dimensionless
+		// (§4.8.4).
+		//
+		// A bare literal in ADDITIVE position is therefore dimensionally
+		// NEUTRAL: it adopts the dimension of what it is added to. That is how
+		// models are actually written — `T - 273.15`, `1 - phi`,
 		// `biomass + 0.5` — with the literal silently carrying its sibling's
-		// unit. Literal operands are therefore skipped, not compared. It costs no
-		// coverage: a genuine inconsistency (`length + mass`) is between two
-		// DECLARED quantities and is still caught.
+		// unit. It costs no coverage: a genuine inconsistency (`length + mass`)
+		// is between two DECLARED quantities and is still caught.
 		var first *Unit
-		sawNonLiteral := false
 		for i, arg := range node.Args {
-			if _, isLiteral := toFloat64(arg); isLiteral {
-				continue
-			}
-			sawNonLiteral = true
 			u, err := propagateDimension(arg, env)
 			if err != nil {
 				return nil, err
@@ -1120,10 +1336,10 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 				return nil, mismatchErrf("dimensional mismatch in %q: arg 0 has %s, arg %d has %s",
 					node.Op, first.Dim, i, u.Dim)
 			}
-		}
-		if !sawNonLiteral {
-			// An all-literal sum ("1 + 2") is a pure number.
-			return &Unit{Scale: 1}, nil
+			if !first.Exact.Equal(u.Exact) {
+				return nil, mismatchErrf("scale mismatch in %q: arg 0 has %s at scale %s, arg %d at scale %s",
+					node.Op, first.Dim, first.Exact, i, u.Exact)
+			}
 		}
 		return first, nil
 
@@ -1218,7 +1434,7 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 		// defined: sqrt(m^2/s^2) is m/s (the ordinary spelling of a wave speed or
 		// an RMS) and sqrt(m^3) is m^(3/2). The old "non-square dimension"
 		// rejection was an artifact of the integer exponent vector.
-		return &Unit{Dim: base.Dim.PowerRat(newRat(1, 2)), Scale: math.Sqrt(base.Scale)}, nil
+		return &Unit{Dim: base.Dim.PowerRat(newRat(1, 2)), Scale: math.Sqrt(base.Scale), Exact: base.Exact.Pow(newRat(1, 2))}, nil
 
 	case "sin", "cos", "tan":
 		// CIRCULAR functions take an ANGLE. With `rad` carried as a base axis, the
@@ -1270,6 +1486,9 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 		}
 		if x != nil && y != nil && !x.Dim.Equal(y.Dim) {
 			return nil, mismatchErrf("atan2 arguments must share a dimension: %s vs %s", y.Dim, x.Dim)
+		}
+		if x != nil && y != nil && !x.Exact.Equal(y.Exact) {
+			return nil, mismatchErrf("atan2 arguments must share a scale: %s vs %s", y.Exact, x.Exact)
 		}
 		return &Unit{Dim: radDim(), Scale: 1}, nil
 
@@ -1331,6 +1550,97 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 		r := varDim.Divide(wrtUnit)
 		return &r, nil
 
+	case ">", "<", ">=", "<=", "==", "!=":
+		// A comparison's known operands must share dimension and scale; an
+		// indeterminate operand is skipped, as in `+` (`x > 0` compares nothing
+		// that can disagree). The result is a dimensionless boolean whatever the
+		// operands are, including when none is known (esm-spec §4.8.3).
+		var first *Unit
+		for i, arg := range node.Args {
+			u, err := propagateDimension(arg, env)
+			if err != nil {
+				return nil, err
+			}
+			if u == nil {
+				continue
+			}
+			if first == nil {
+				first = u
+				continue
+			}
+			if !first.Dim.Equal(u.Dim) {
+				return nil, mismatchErrf("dimensional mismatch in %q: arg 0 has %s, arg %d has %s",
+					node.Op, first.Dim, i, u.Dim)
+			}
+			if !first.Exact.Equal(u.Exact) {
+				return nil, mismatchErrf("scale mismatch in %q: arg 0 has %s at scale %s, arg %d at scale %s",
+					node.Op, first.Dim, first.Exact, i, u.Exact)
+			}
+		}
+		return &Unit{Scale: 1}, nil
+
+	case "and", "or", "not":
+		// A boolean connective's result is a dimensionless boolean. Its operands
+		// carry no unit requirement of their own, but they are walked so a
+		// mismatch inside one (`not(x [m] > z [kg])`) is reported (esm-spec
+		// §4.8.3).
+		for _, arg := range node.Args {
+			if _, err := propagateDimension(arg, env); err != nil {
+				return nil, err
+			}
+		}
+		return &Unit{Scale: 1}, nil
+
+	case "ifelse":
+		// ifelse(cond, a, b): the two branches follow the `+` rule (esm-spec
+		// §4.8.3). Known branches must share dimension and scale, an
+		// indeterminate branch is skipped (`ifelse(c > 0, x, 0.5*y)` has the unit
+		// of x, whichever branch is the known one), and with no known branch the
+		// result is indeterminate. The condition is walked so a mismatch inside it
+		// is reported, but its own unit neither enters the result nor has to be
+		// dimensionless.
+		if len(node.Args) != 3 {
+			return nil, analysisErrf("'ifelse' requires 3 arguments, got %d", len(node.Args))
+		}
+		if _, err := propagateDimension(node.Args[0], env); err != nil {
+			return nil, err
+		}
+		var first *Unit
+		for _, arg := range node.Args[1:] {
+			u, err := propagateDimension(arg, env)
+			if err != nil {
+				return nil, err
+			}
+			if u == nil {
+				continue
+			}
+			if first == nil {
+				first = u
+				continue
+			}
+			if !first.Dim.Equal(u.Dim) {
+				return nil, mismatchErrf("ifelse branches must share a dimension: %s vs %s", first.Dim, u.Dim)
+			}
+			if !first.Exact.Equal(u.Exact) {
+				return nil, mismatchErrf("ifelse branches must share a scale: %s at scale %s vs scale %s",
+					first.Dim, first.Exact, u.Exact)
+			}
+		}
+		return first, nil
+	case "const":
+		// A `const` that DECLARES its units has that unit (esm-spec §4.8.5);
+		// without `units` it is undeterminable, like a bare literal. An
+		// unresolvable string is reported at the containing expression field, not
+		// here.
+		if node.Units == nil {
+			return nil, nil
+		}
+		u, err := ParseUnit(*node.Units)
+		if err != nil {
+			return nil, nil
+		}
+		return &u, nil
+
 	case "min", "max":
 		// Return dimension of first operand; require others to match.
 		var first *Unit
@@ -1350,6 +1660,10 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 				return nil, mismatchErrf("dimensional mismatch in %q: arg 0 has %s, arg %d has %s",
 					node.Op, first.Dim, i, u.Dim)
 			}
+			if !first.Exact.Equal(u.Exact) {
+				return nil, mismatchErrf("scale mismatch in %q: arg 0 has %s at scale %s, arg %d at scale %s",
+					node.Op, first.Dim, first.Exact, i, u.Exact)
+			}
 		}
 		return first, nil
 	}
@@ -1359,6 +1673,28 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 	// returns nothing. Their dimension is undeterminable until a discretization
 	// rewrite lowers them (esm-spec §4.2 / §9.6.8).
 	return nil, nil
+}
+
+// rejectConstUnitsPreV12 rejects declared `units` on any expression node in a
+// document declaring esm < 1.2.0 (esm-spec §4.8.5 item 6), naming the first
+// offending node. It runs on the raw JSON before schema validation, like
+// RejectSolverPreV11.
+func rejectConstUnitsPreV12(view map[string]any) error {
+	if view == nil || !esmVersionBelow(view, 1, 2) {
+		return nil
+	}
+	esmRaw, _ := view["esm"].(string)
+	return walkJSONTree(view, "", func(path string, obj map[string]any) error {
+		_, hasOp := obj["op"]
+		_, hasUnits := obj["units"]
+		if hasOp && hasUnits {
+			return newETErr(
+				CodeConstUnitsVersionTooOld,
+				fmt.Sprintf("declared `units` on an expression node require esm >= 1.2.0; file declares %s (offending path: %s)", esmRaw, path),
+			)
+		}
+		return nil
+	})
 }
 
 // BuildUnitEnv converts a map of name→unit-string into a map of name→Unit.
@@ -1591,6 +1927,16 @@ func validateObservedVariableUnits(model *Model, env map[string]Unit, basePath s
 				LHSUnits: declared.Dim.String(),
 				RHSUnits: got.Dim.String(),
 			})
+		} else if !declared.Exact.Equal(got.Exact) {
+			// Same dimension, different scale (esm-spec §4.8.3): the number the
+			// expression produces is not in the unit the variable declares.
+			result.UnitWarnings = append(result.UnitWarnings, UnitWarning{
+				Path:     path,
+				Code:     UnitFindingDimensionalMismatch,
+				Message:  fmt.Sprintf("observed variable %q is declared at scale %s but its expression has scale %s", name, declared.Exact, got.Exact),
+				LHSUnits: declared.Dim.String(),
+				RHSUnits: got.Dim.String(),
+			})
 		}
 	}
 }
@@ -1665,6 +2011,15 @@ func ValidateEquationDimensions(eq *Equation, env map[string]Unit, path string) 
 			Path:     path,
 			Code:     UnitFindingDimensionalMismatch,
 			Message:  fmt.Sprintf("LHS dimension %s does not match RHS dimension %s", lhs.Dim, rhs.Dim),
+			LHSUnits: lhs.Dim.String(),
+			RHSUnits: rhs.Dim.String(),
+		}
+	}
+	if !lhs.Exact.Equal(rhs.Exact) {
+		return &UnitWarning{
+			Path:     path,
+			Code:     UnitFindingDimensionalMismatch,
+			Message:  fmt.Sprintf("LHS scale %s does not match RHS scale %s (dimension %s)", lhs.Exact, rhs.Exact, lhs.Dim),
 			LHSUnits: lhs.Dim.String(),
 			RHSUnits: rhs.Dim.String(),
 		}
@@ -1852,10 +2207,13 @@ func checkConversionFactorConsistency(modelName string, model *Model, result *St
 		if isAffineTempUnit(srcUnits) || isAffineTempUnit(lhsUnits) {
 			continue
 		}
-		if lhsU.Scale == 0 {
+		// Identical scales imply no conversion, so the coefficient is free; decided
+		// exactly (esm-spec §4.8.1). The expected factor is formed exactly and
+		// rounded once, so the tolerance below only absorbs the literal's spelling.
+		if srcU.Exact.Equal(lhsU.Exact) {
 			continue
 		}
-		factor := srcU.Scale / lhsU.Scale
+		factor := srcU.Exact.Div(lhsU.Exact).Float()
 		if factor == 0 {
 			continue
 		}

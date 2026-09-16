@@ -237,6 +237,28 @@ const ENV0 = Dict{String,Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
         @test bitsame(fast, ref)
     end
 
+    # A const read out of range on a non-final axis. Its column-major offset
+    # still lands inside `B`, so the compiled gather read a neighbouring cell
+    # (B[x+1, 1] at x = 5 returned B[1, 2]) while the per-cell reference raised.
+    @testset "out of range on one axis raises on both paths" begin
+        for body in (_ix(_v("B"), _op("+", _v("x"), 1), 1),
+                     _ix(_v("B"), _op("-", _v("x"), 1), 2))
+            rhs = EA.expression_from_json(_map(["x"], ["x" => "X"], body))
+            for disable in ("", "1")
+                err = try
+                    withenv("ESS_SETUP_MAP_COMPILE_ONCE_DISABLE" => disable) do
+                        EA._materialize_setup_general_map(rhs, copy(ENV0), nothing, IDX,
+                                                          Dict{String,Function}())
+                    end
+                    nothing
+                catch e
+                    e
+                end
+                @test err isa EA.TreeWalkError && err.code == "E_TREEWALK_CONSTARRAY_OOB"
+            end
+        end
+    end
+
 end
 
 end # module

@@ -130,6 +130,46 @@ var registryKeys = []string{
 	"members", "from_faq",
 }
 
+// opaqueKeys: loop symbols, references, ids, enums, units and free text — not
+// expression positions, but not protected by the rename walk either, so opaque
+// to metaparameter substitution ONLY. `of` and `on` keep their dedicated
+// rename-walk branches. Mirrors the `:opaque` kind of `_STRUCTURAL_FIELDS` in
+// the Julia reference.
+var opaqueKeys = []string{
+	// Loop symbols and bound index names of a `faq` node.
+	// `metaparameter_name_conflict` refuses a metaparameter spelled like a loop
+	// symbol, so a metaparameter reaches these fields only as an `on` data-column
+	// name; they are names wherever they appear, so they are skipped rather than
+	// left to that check.
+	"on", "syms", "arg", "output_idx", "of",
+	// A `table_lookup` output name.
+	"output",
+	"handler_id",
+	// References to files, components, data sources, data columns and the
+	// import-edge rename vocabulary.
+	"ref", "model", "reaction_system", "prefix", "rename", "rebind",
+	"index_set_rename", "source", "file_variable", "path",
+	// Closed enums.
+	"direction", "hook", "root_find", "system_kind", "element_type", "scale",
+	"format", "unmapped",
+	// Units (unit symbols such as `m`, `s`, `K` are valid identifiers) and
+	// free text.
+	"default_units", "label", "location", "notes", "citation", "doi", "url",
+	"_comment",
+}
+
+// nameKeyedMapKeys: keys whose value is a map keyed by AUTHOR-CHOSEN names
+// (variables, species, loop symbols, template params, …). A map key is a
+// declared name, not a field, so it is never looked up in metaSubstSkipKeys: a
+// variable named `source` or a template param named `label` still has its value
+// substituted. A key in both sets (`where`, `rename`, …) is skipped whole.
+var nameKeyedMapKeys = keySet([]string{
+	"variables", "species", "parameters", "guesses", "subsystems",
+	"expression_templates", "ranges", "axes", "bindings", "config", "coords",
+	"initial_conditions", "parameter_overrides", "pinned_coords", "map",
+	"rename", "rebind", "index_set_rename", "where",
+})
+
 // boundKeys: `integral` bound fields (esm-spec §4.2). Unlike `var` these are
 // full Expression positions — a numeric literal, a parameter reference, an AST
 // subtree — so they stay variable-reference positions for `varmap`; only a bare
@@ -157,13 +197,16 @@ func keySet(groups ...[]string) map[string]struct{} {
 // document happens to name a metaparameter after a structural field's value
 // (tests/conformance/expression_templates/metaparam_axis_name_collision).
 //
-// Every structural kind but boundKeys and the positional `from`/`of` is in: an
+// The classification it is derived from lives in
+// tests/metaparameter_substitution/field_classification.json, and the test
+// suite fails when this set or nameKeyedMapKeys disagrees with it.
+//
+// Every structural kind but boundKeys and the positional `from` is in: an
 // expression position is the ONLY thing substitution may rewrite, and boundKeys
-// is the one structural-table entry that IS one. This makes the set coincide
-// with renameProtectedKeys in template_rename.go; both stay derived from the
-// kind slices separately because they answer different questions and a future
-// kind may split them.
-var metaSubstSkipKeys = keySet(protectedKeys, axisKeys, nodeHeaderKeys, registryKeys)
+// is the one structural-table entry that IS one. opaqueKeys is in this set but
+// not in renameProtectedKeys (template_rename.go), so the two are derived
+// separately.
+var metaSubstSkipKeys = keySet(protectedKeys, axisKeys, nodeHeaderKeys, registryKeys, opaqueKeys)
 
 // substituteMetaparams substitutes bound metaparameter names — appearing as
 // bare strings, the variable-reference surface syntax — with their bound
@@ -190,15 +233,31 @@ func substituteMetaparams(x any, values map[string]any) any {
 	case map[string]any:
 		out := make(map[string]any, len(v))
 		for k, c := range v {
-			if _, skip := metaSubstSkipKeys[k]; skip {
-				out[k] = deepCopyJSON(c)
-			} else {
-				out[k] = substituteMetaparams(c, values)
-			}
+			out[k] = substituteMetaparamsField(k, c, values)
 		}
 		return out
 	}
 	return x
+}
+
+// substituteMetaparamsField applies substituteMetaparams to the value c of the
+// object field k, for a caller that iterates an object's fields itself: the
+// field is skipped, walked as a name-keyed map (its entries are walked without a
+// skip lookup on their names), or walked, exactly as inside the recursive walk.
+func substituteMetaparamsField(k string, c any, values map[string]any) any {
+	if _, skip := metaSubstSkipKeys[k]; skip {
+		return deepCopyJSON(c)
+	}
+	if _, isMap := nameKeyedMapKeys[k]; isMap {
+		if entries, ok := c.(map[string]any); ok {
+			out := make(map[string]any, len(entries))
+			for name, entry := range entries {
+				out[name] = substituteMetaparams(entry, values)
+			}
+			return out
+		}
+	}
+	return substituteMetaparams(c, values)
 }
 
 // substituteMetaparamsDecl applies metaparameter substitution over one

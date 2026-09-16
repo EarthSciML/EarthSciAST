@@ -533,17 +533,19 @@ impl ArrayCompiled {
         // the original un-segmented run — byte-identical to the pre-segmentation
         // driver (one `run_one_segment` over the whole span with `opts` verbatim).
         if boundaries.is_empty() || opts.saveat.is_none() {
-            let (time, state, stats, retcode) = self.run_one_segment(
-                t0,
-                t_end,
-                &ic_vec,
-                &param_vec,
-                &setup.static_obs,
-                &setup.cadence.segment_static_rules,
-                &setup.cadence.continuous_rules,
-                opts,
-                tape.as_ref(),
-            )?;
+            let (time, state, stats, retcode) = self
+                .run_one_segment(
+                    t0,
+                    t_end,
+                    &ic_vec,
+                    &param_vec,
+                    &setup.static_obs,
+                    &setup.cadence.segment_static_rules,
+                    &setup.cadence.continuous_rules,
+                    opts,
+                    tape.as_ref(),
+                )
+                .map_err(Self::const_oob_first)?;
             return self.assemble_solution(
                 time,
                 state,
@@ -870,17 +872,19 @@ impl ArrayCompiled {
                 progress: seg_progress,
                 ..opts.clone()
             };
-            let (seg_time, seg_state, seg_stats, seg_retcode) = self.run_one_segment(
-                a,
-                b,
-                &u0,
-                param_vec,
-                &setup.static_obs,
-                &setup.cadence.segment_static_rules,
-                &setup.cadence.continuous_rules,
-                &seg_opts,
-                tape,
-            )?;
+            let (seg_time, seg_state, seg_stats, seg_retcode) = self
+                .run_one_segment(
+                    a,
+                    b,
+                    &u0,
+                    param_vec,
+                    &setup.static_obs,
+                    &setup.cadence.segment_static_rules,
+                    &setup.cadence.continuous_rules,
+                    &seg_opts,
+                    tape,
+                )
+                .map_err(Self::const_oob_first)?;
             stats += seg_stats;
             // A segment that stopped early ends the whole run: the state at its
             // right endpoint never materialised, so there is nothing to seed the
@@ -948,6 +952,20 @@ impl ArrayCompiled {
             retcode,
             metadata,
         })
+    }
+
+    /// A solve that fails after the RHS latched an out-of-range const-array gather
+    /// failed BECAUSE of it: the gather substituted `NaN`, and the integrator's
+    /// step-size or error-test failure is the symptom. Report the latched
+    /// `E_TREEWALK_CONSTARRAY_OOB` instead, as `assemble_solution` does on success.
+    #[cfg(feature = "solve")]
+    fn const_oob_first(err: SimulateError) -> SimulateError {
+        match crate::simulate_array::take_const_array_oob() {
+            Some(details) => {
+                crate::compile_error::CompileError::InterpreterBuildError { details }.into()
+            }
+            None => err,
+        }
     }
 
     /// Integrate ONE segment `[t0, t_end]` from initial state `u0`, reading the

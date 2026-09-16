@@ -62,7 +62,7 @@ fn main() -> Result<(), String> {
         alg: solver,
         abstol: Some(1e-8),
         reltol: Some(1e-6),
-        maxiters: 10_000_000,
+        maxiters: Some(10_000_000),
         saveat: Some(
             (0..samples.max(2))
                 .map(|s| tspan.1 * s as f64 / (samples.max(2) - 1) as f64)

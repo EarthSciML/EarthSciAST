@@ -604,9 +604,10 @@ const _AFFINE_MAX_DELTA_SEGS = 16
 # uniform segment. Mid-domain makearray REGION boundaries — which need not lie near
 # an end — are harvested structurally up front (`_region_cut_candidates`) and
 # probed explicitly, so they are never missed. Anything neither scan nor candidate
-# reaches is still caught by per-box corner verification (→ fallback), exactly as
-# the old full sweep's misses were: correctness never depends on cut completeness,
-# only speed.
+# reaches is still caught by per-box verification in `_derive_lane_repl` (→ an
+# exact table): at the corners for a structurally affine subscript, at every cell
+# otherwise. Correctness depends on that verification being exact, never on cut
+# completeness, which only buys speed.
 #
 # `okey` is the verified output affine map; the first scan of each dim keys state
 # lanes by their Δ (wrap boxes), falling back to the base key when the Δ-keyed
@@ -982,9 +983,18 @@ end
 # pre-A2 whole-equation per-cell fallback for the differential oracle). A live
 # forcing lane otherwise lowers to `_AccForcingBox` over the aliased buffer
 # (never folded to a literal, so it stays refresh-live).
+# `structural` is `_affine_idx_expr` over every one of the lane's subscripts.
+# Every corner-derived conclusion below (ghost fold, uniform Δ, affine const /
+# forcing index) is a PROOF only when it holds; otherwise the conclusion is
+# re-checked at every cell of the box. It is a property of the EXPRESSION, not of
+# a cell or a box, so the box processor passes the per-branch classification
+# `_lane_nonaffine_args!` already memoizes; the default derives it for a direct
+# caller.
 function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
                            oln_rep, base, strides, D, var_map, const_arrays,
-                           flat_cache, box)
+                           flat_cache, box,
+                           structural::Bool =
+                               all(a -> _affine_idx_expr(a, idx_names), rec.idx_args))
     env = Dict{String,Int}()
     ev(loop) = _eval_recipe(rec, _set_env!(env, idx_names, loop), var_map, const_arrays)
     if rec.kind == LANE_STATE
@@ -995,6 +1005,10 @@ function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
                     return _materialize_state_tbl(rec, idx_names, box, D,
                                                   var_map, const_arrays)
             end
+            _ghost_box(rec, idx_names, corners, structural, box, D, ev,
+                       const_arrays) ||
+                return _materialize_state_tbl(rec, idx_names, box, D,
+                                              var_map, const_arrays)
             return _LitRepl(0.0)
         end
         Δ = slot_rep - oln_rep
@@ -1006,7 +1020,10 @@ function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
                 break
             end
         end
-        uniform && return _AccRepl(_AccStateAffine(Δ))
+        uniform && (structural || _holds_on_box(box, D) do l
+            sc = ev(l)
+            sc != 0 && sc - _box_oln(base, strides, l, D) == Δ
+        end) && return _AccRepl(_AccStateAffine(Δ))
         # Not at a constant offset from the output slot. Before paying for a
         # dense per-box table, try the lane's OWN affine map (see the LANE-AFFINE
         # STATE BOX note above): finite-difference the slot across a unit step in
@@ -1029,8 +1046,7 @@ function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
         # index affinity holds "BY CONSTRUCTION within a box", not by corner
         # agreement.) The motivating shapes — a lower-rank geometry column, a
         # staggered face field, a 2-D surface field — all pass this guard.
-        if !_state_box_disabled() &&
-           all(a -> _affine_idx_expr(a, idx_names), rec.idx_args)
+        if !_state_box_disabled() && structural
             blk = _state_slot_block(rec)
             if blk !== nothing
                 lo0, hi0 = blk
@@ -1106,15 +1122,17 @@ function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
         #
         # The corner checks that REMAIN below are a different kind of test and
         # stay: they verify the resolved LINEAR INDEX (`_recipe_const_lin`) is
-        # affine in the loop index, which it is BY CONSTRUCTION within a box —
-        # subscripts are affine expressions of the loop names and every
+        # affine in the loop index, which it is BY CONSTRUCTION within a box when
+        # the subscripts are affine expressions of the loop names — every
         # boundary-fold transition already forces a box cut (`_const_fold_key!`),
-        # so two corners pin the affine map exactly. Invariance then follows
-        # STRUCTURALLY: an all-zero stride vector means the index — hence the
-        # value — does not move over the box, and only then is the literal fold
-        # legal. That test cannot be fooled by adversarial data, and it costs the
-        # same O(2^D) corner evals as before: no per-cell work is added on the
-        # fast path.
+        # so two corners pin the affine map exactly. A subscript that is NOT
+        # (a gather through connectivity data) has no such construction, so the
+        # derived map is checked at every cell of the box instead. Invariance
+        # then follows STRUCTURALLY: an all-zero stride vector means the index —
+        # hence the value — does not move over the box, and only then is the
+        # literal fold legal. That test cannot be fooled by adversarial data,
+        # and for an affine subscript it costs the same O(2^D) corner evals as
+        # before: no per-cell work is added on the fast path.
         val_rep = ev(rep)
         lenv = Dict{String,Int}()
         clin(loop) = _recipe_const_lin(rec, _set_env!(lenv, idx_names, loop), const_arrays)
@@ -1132,6 +1150,10 @@ function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
                 return _materialize_const_box(rec, idx_names, box, D,
                                               var_map, const_arrays)
         end
+        structural || _holds_on_box(box, D) do l
+            (off + sum((l[d]-1)*s[d] for d in 1:D)) == clin(l)
+        end || return _materialize_const_box(rec, idx_names, box, D,
+                                             var_map, const_arrays)
         # Index verified affine over the box; a zero stride in every dim means it
         # is the SAME element for every cell (thin dims contribute nothing — the
         # box is one cell wide there), so the read is genuinely loop-invariant
@@ -1170,8 +1192,54 @@ function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
                                                 var_map, const_arrays)
             end
         end
+        if !structural && !_holds_on_box(box, D) do l
+                (off + sum((l[d]-1)*s[d] for d in 1:D)) == ev(l)
+            end
+            _obsref_disabled() &&
+                throw(_StencilFallback("pgather index non-affine in box"))
+            return _materialize_pgather_tbl(rec, idx_names, box, D,
+                                            var_map, const_arrays)
+        end
         return _AccRepl(_AccForcingBox(pg.flat, s[1], s[2], s[3], off))
     end
+end
+
+# Does `pred(loop)` hold at EVERY cell of the box? The exact counterpart of a
+# corner check, for a lane whose subscripts are not structurally affine
+# (`_affine_idx_expr`): such a subscript can be arbitrary data (an
+# `index(conn, i)` gather), so agreement at the 2^D corners and at `rep + e_d`
+# says nothing about the interior. O(box cells) at build time; the lowered
+# descriptor, and so the kernel's per-call cost, is unchanged.
+function _holds_on_box(pred, box, D)
+    for loop in Iterators.product((box[d] for d in 1:D)...)
+        pred(loop) || return false
+    end
+    return true
+end
+
+# Is EVERY cell of the box a ghost read (some subscript outside the variable's
+# bounds), given that every corner is? Not implied: a ghost corner can be out of
+# range on either side, so an affine subscript like `3i - 40` is a ghost at both
+# ends of `1:40` and in range between them. An affine subscript takes its
+# extremes at the corners, so the box is all-ghost when ONE subscript is below
+# its lower bound at every corner, or above its upper bound at every corner.
+# Otherwise (and always for a non-affine subscript) every cell is checked.
+function _ghost_box(rec::_LaneRecipe, idx_names, corners, structural, box, D,
+                    ev, const_arrays)
+    if structural
+        env = Dict{String,Int}()
+        for d in eachindex(rec.idx_args)
+            below = above = true
+            for cn in corners
+                v = _eval_const_int(rec.idx_args[d], _set_env!(env, idx_names, cn),
+                                    const_arrays)
+                below &= v < rec.lo[d]
+                above &= v > rec.hi[d]
+            end
+            (below || above) && return true
+        end
+    end
+    return _holds_on_box(l -> ev(l) == 0, box, D)
 end
 
 # All 2^D corners of a box, as loop tuples.
@@ -1204,11 +1272,17 @@ function _process_affine_box!(kernels, spine_cache, flat_cache, box, idx_names,
     end
     oln_rep = _box_oln(base, strides, rep, D)
 
+    # Per-lane structural affinity of the subscripts, memoized per branch key
+    # (`_lane_nonaffine_args!`): what licenses a corner check as a proof rather
+    # than a sample, so `_derive_lane_repl` re-verifies at every cell only where
+    # it must. Classified once per branch, not once per box.
+    nonaff = _lane_nonaffine_args!(sig, bkey, recipes, ctx_proto.idxset)
     lane_repl = Vector{_LaneRepl}(undef, length(recipes))
     for k in eachindex(recipes)
         lane_repl[k] = @_bench :lane_repl _derive_lane_repl(recipes[k], idx_names, rep, corners, thin,
                                          oln_rep, base, strides, D, var_map,
-                                         const_arrays, flat_cache, box)
+                                         const_arrays, flat_cache, box,
+                                         !any(nonaff[k]))
     end
 
     spine, acc, cse, subs = @_bench_hot :spine_lower get!(spine_cache, string(bkey, '#', _lane_repl_key(lane_repl))) do

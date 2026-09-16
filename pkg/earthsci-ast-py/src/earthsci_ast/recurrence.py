@@ -596,7 +596,13 @@ def analyze_recurrence(
                     f"RELATIVE to the cell being written (`{sym} - 1`, `{sym} - a`, "
                     f"`{sym} - a - 2`), which is what makes the recurrence axis and its "
                     f"direction decidable; a bare constant, `2*{sym}`, or another axis's "
-                    f"symbol is rejected rather than guessed at (esm-spec §4.3.1.1)."
+                    f"symbol is rejected rather than guessed at (esm-spec §4.3.1.1). "
+                    f"If the offset is read from data (`{sym} - index(lag, {sym})`), it has no "
+                    f"direct spelling; contract it instead: either order the axis so the "
+                    f"predecessor is the preceding position and the lag is the constant 1, or "
+                    f"range a contracted index `a` over the lag's bounds and select the matching "
+                    f"term with `ifelse(index(lag, {sym}) == a, "
+                    f"<term reading index({var}, {sym} - a)>, 0)`."
                 )
             if lagged is not None:
                 raise _not_wellfounded(

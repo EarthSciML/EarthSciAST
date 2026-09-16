@@ -208,6 +208,59 @@ applies identically to … references" §10.7 mandates — and is threaded uncha
 into subsystems, whose templates merged into their owner's registry at load.
 `nothing` (the common case: no collision) skips the rewrite entirely.
 """
+# Namespace a component's events into the flatten accumulators. Shared by
+# `_collect_model!` and `_collect_reaction_system!` so a model and a reaction
+# system carry their events into the flattened system by the SAME rule — a
+# reaction system's events used to be dropped here, and an evaluator that never
+# saw them ran the document without them (issues #264, #356).
+#
+# `ns` namespaces an expression in the component's scope. An affect LHS is a
+# NAME, not an expression, so it does not travel through `ns` and needs the
+# placeholder carve-out spelled out here. esm-spec §6.4: `_var` is not a
+# variable of this component (or of any component) — it stands for whichever
+# state `operator_compose` expands it to — so it must survive namespacing
+# untouched, exactly as `namespace_expr` already leaves it alone inside the
+# CONDITION (it is in no component's `local_names`). Prefixing only the affect
+# half produced `Transport._var = 1e-3` beside a condition still reading
+# `_var`: one placeholder spelled two ways in one event, which is the
+# partial-rename fingerprint this fixture family was cleaned up to remove.
+function _collect_events!(continuous_events::Vector{ContinuousEvent},
+                          discrete_events::Vector{DiscreteEvent},
+                          component_continuous::Vector{ContinuousEvent},
+                          component_discrete::Vector{DiscreteEvent},
+                          prefix::String, ns)
+    ns_affects(affects) = AffectEquation[
+        AffectEquation(is_placeholder(a.lhs) || occursin('.', a.lhs) ? a.lhs :
+                       "$(prefix).$(a.lhs)",
+                       ns(a.rhs))
+        for a in affects
+    ]
+    for ev in component_continuous
+        push!(continuous_events,
+              ContinuousEvent(ASTExpr[ns(c) for c in ev.conditions],
+                              ns_affects(ev.affects);
+                              affect_neg=ev.affect_neg === nothing ? nothing :
+                                  ns_affects(ev.affect_neg),
+                              root_find=ev.root_find,
+                              reinitialize=ev.reinitialize,
+                              description=ev.description,
+                              name=ev.name))
+    end
+
+    for ev in component_discrete
+        new_trigger = if ev.trigger isa ConditionTrigger
+            ConditionTrigger(ns(ev.trigger.expression))
+        else
+            ev.trigger
+        end
+        push!(discrete_events,
+              DiscreteEvent(new_trigger, ns_affects(ev.affects);
+                            reinitialize=ev.reinitialize,
+                            description=ev.description, name=ev.name))
+    end
+    return nothing
+end
+
 function _collect_model!(states::OrderedDict{String, ModelVariable},
                          params::OrderedDict{String, ModelVariable},
                          observeds::OrderedDict{String, ModelVariable},
@@ -275,51 +328,8 @@ function _collect_model!(states::OrderedDict{String, ModelVariable},
     # left to synthesize from a variable-level `expression`, which no longer
     # exists (esm-spec §6.3).
 
-    # An affect LHS is a NAME, not an expression, so it does not travel through
-    # `_ns` and needs the placeholder carve-out spelled out here. esm-spec §6.4:
-    # `_var` is not a variable of this component (or of any component) — it
-    # stands for whichever state `operator_compose` expands it to — so it must
-    # survive namespacing untouched, exactly as `namespace_expr` already leaves
-    # it alone inside the CONDITION (it is in no component's `local_names`).
-    # Prefixing only the affect half produced `Transport._var = 1e-3` beside a
-    # condition still reading `_var`: one placeholder spelled two ways in one
-    # event, which is the partial-rename fingerprint this fixture family was
-    # cleaned up to remove.
-    _ns_affects(affects) = AffectEquation[
-        AffectEquation(is_placeholder(a.lhs) || startswith(a.lhs, prefix * ".") ||
-                       occursin('.', a.lhs) ? a.lhs : "$(prefix).$(a.lhs)",
-                       _ns(a.rhs))
-        for a in affects
-    ]
-    for ev in model.continuous_events
-        new_conds = ASTExpr[_ns(c) for c in ev.conditions]
-        push!(continuous_events,
-              ContinuousEvent(new_conds, _ns_affects(ev.affects);
-                              affect_neg=ev.affect_neg === nothing ? nothing :
-                                  _ns_affects(ev.affect_neg),
-                              root_find=ev.root_find,
-                              reinitialize=ev.reinitialize,
-                              description=ev.description,
-                              name=ev.name))
-    end
-
-    for ev in model.discrete_events
-        new_affects = AffectEquation[
-            AffectEquation(
-                is_placeholder(a.lhs) || occursin('.', a.lhs) ? a.lhs :
-                    "$(prefix).$(a.lhs)",
-                _ns(a.rhs))
-            for a in ev.affects
-        ]
-        new_trigger = if ev.trigger isa ConditionTrigger
-            ConditionTrigger(_ns(ev.trigger.expression))
-        else
-            ev.trigger
-        end
-        push!(discrete_events,
-              DiscreteEvent(new_trigger, new_affects; reinitialize=ev.reinitialize,
-                            description=ev.description, name=ev.name))
-    end
+    _collect_events!(continuous_events, discrete_events,
+                     model.continuous_events, model.discrete_events, prefix, _ns)
 
     for (sub_name, sub_model) in model.subsystems
         # esm 1.0.0: a data source is a document-scoped registry entry, not a
@@ -353,6 +363,8 @@ permanently-zero derivative — a zero row in the chemistry Jacobian block.
 function _collect_reaction_system!(states::OrderedDict{String, ModelVariable},
                                    params::OrderedDict{String, ModelVariable},
                                    equations::Vector{Equation},
+                                   continuous_events::Vector{ContinuousEvent},
+                                   discrete_events::Vector{DiscreteEvent},
                                    rsys::ReactionSystem, prefix::String;
                                    templates=nothing)
     local_names = Set{String}()
@@ -411,8 +423,20 @@ function _collect_reaction_system!(states::OrderedDict{String, ModelVariable},
         push!(equations, Equation(lhs, rhs; _comment=eq._comment))
     end
 
+    # A reaction system's events are collected on the same footing as a model's
+    # (esm-spec §6.4 permits both, and the schema gives `ReactionSystem` the same
+    # `continuous_events` / `discrete_events` blocks). Rate-law template
+    # references are expanded eagerly at collect, and an event expression is a
+    # component-scoped expression exactly like a rate, so it takes the same
+    # expansion before namespacing.
+    _ns_event(e) = namespace_expr(templates === nothing ? e :
+                                  _expand_expr_refs(e, templates), prefix, local_names)
+    _collect_events!(continuous_events, discrete_events,
+                     rsys.continuous_events, rsys.discrete_events, prefix, _ns_event)
+
     for (sub_name, sub_rsys) in rsys.subsystems
         _collect_reaction_system!(states, params, equations,
+                                  continuous_events, discrete_events,
                                   sub_rsys, "$(prefix).$(sub_name)"; templates=templates)
     end
 end

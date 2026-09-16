@@ -147,3 +147,84 @@ const ESM_IOL = EarthSciAST
         end
     end
 end
+
+# Issue #291 — the BARE-INDEX spelling `index(w, k) ~ rhs`, with no shell on the
+# LHS (esm-spec §6.3.1, CONFORMANCE_SPEC §5.36.2). The LHS binds nothing, so it
+# runs exactly when the RHS is a `faq` whose `output_idx` names its subscripts in
+# order, and normalizes to `w ~ rhs`; every other bare-index definition of an
+# observed is refused with `indexed_definition_unsupported_form`. Before this,
+# every one of them — the runnable form included — threw
+# `E_TREEWALK_UNSUPPORTED_SHAPE: w`.
+@testset "bare-index LHS for an array-shaped observed (#291)" begin
+
+    N = 4
+    isets = Dict("lev" => ESM_IOL.IndexSet("interval"; size = N))
+    _bi_agg(body) = ESM_IOL.OpExpr("faq", ESM_IOL.ASTExpr[];
+                                   output_idx = Any["k"],
+                                   ranges = Dict{String,Any}("k" => ESM_IOL.IndexSetRef("lev")),
+                                   expr_body = body)
+    _bi_vars() = Dict(
+        "u" => ESM_IOL.ModelVariable(ESM_IOL.UnknownVariable; shape = ["lev"]),
+        "w" => ESM_IOL.ModelVariable(ESM_IOL.UnknownVariable; shape = ["lev"]),
+    )
+    _bi_body() = _op("*", _n(2.0), _idx("u", _v("k")))
+    _bi_deriv() = ESM_IOL.Equation(_bi_agg(_Didx("u", _v("k"))),
+                                   _bi_agg(_idx("w", _v("k"))))
+    ics = Dict("u[$j]" => Float64(j) for j in 1:N)
+    _bi_build(eq) = ESM_IOL._build_evaluator_impl(
+        ESM_IOL.Model(_bi_vars(), [eq, _bi_deriv()]);
+        index_sets = isets, initial_conditions = ics)
+    _bi_du(built, u) = (du = similar(u); built[1](du, u, built[3], 0.0); du)
+
+    @testset "the runnable form builds and agrees with the bare spelling" begin
+        bare = _bi_build(ESM_IOL.Equation(_v("w"), _bi_agg(_bi_body())))
+        bidx = _bi_build(ESM_IOL.Equation(_idx("w", _v("k")), _bi_agg(_bi_body())))
+        @test bidx[2] == bare[2]
+        @test bidx[5] == bare[5]
+        for probe in (bare[2], fill(1.0, N))
+            @test _bi_du(bidx, probe) == _bi_du(bare, probe)
+            @test _bi_du(bidx, probe) == 2.0 .* probe
+        end
+    end
+
+    @testset "it normalizes to exactly the bare spelling" begin
+        m = ESM_IOL.Model(_bi_vars(),
+                          [ESM_IOL.Equation(_idx("w", _v("k")), _bi_agg(_bi_body())),
+                           _bi_deriv()])
+        out = ESM_IOL._normalize_indexed_observed_lhs(m.equations, m)
+        @test (out[1].lhs::ESM_IOL.VarExpr).name == "w"
+        @test out[1].rhs === m.equations[1].rhs
+        @test out[2] === m.equations[2]
+    end
+
+    @testset "every other bare-index definition is refused with the code" begin
+        for eq in (
+                # a right-hand side with no `faq` binds no range
+                ESM_IOL.Equation(_idx("w", _v("k")), _n(5.0)),
+                # an offset subscript writes a shifted window
+                ESM_IOL.Equation(_idx("w", _op("+", _v("k"), _i(1))), _bi_agg(_bi_body())),
+                # a subscript the right-hand `faq` does not bind
+                ESM_IOL.Equation(_idx("w", _v("j")), _bi_agg(_bi_body())),
+                # a NESTED gather addresses a cell of a cell, not the whole array
+                ESM_IOL.Equation(_op("index", _idx("w", _v("j")), _v("k")),
+                                 _bi_agg(_bi_body())))
+            err = try
+                _bi_build(eq)
+                nothing
+            catch e
+                e
+            end
+            @test err !== nothing
+            msg = err === nothing ? "" : sprint(showerror, err)
+            @test occursin("indexed_definition_unsupported_form", msg)
+            @test occursin("'w'", msg)
+        end
+    end
+
+    @testset "a value-invention output is left exactly as authored" begin
+        m = ESM_IOL.Model(_bi_vars(),
+                          [ESM_IOL.Equation(_idx("w", _v("k")), _n(5.0)), _bi_deriv()])
+        @test ESM_IOL._normalize_indexed_observed_lhs(m.equations, m;
+                                                      vi_vars = Set(["w"])) === m.equations
+    end
+end

@@ -11,19 +11,23 @@ Covers the four acceptance criteria of the node-addressing bead (RFC
 
 from __future__ import annotations
 
-import pytest
+import json
 
+import pytest
+from conftest import FIXTURES_ROOT, load_fixture
+
+from earthsci_ast import load_path, to_json
 from earthsci_ast.reference_resolution import (
-    EdgeKind,
-    ReferenceResolutionError,
-    VertexKind,
-    build_reference_graph,
-    resolve_references,
     E_REF_CYCLE,
     E_REF_DUPLICATE_NODE_ID,
     E_REF_UNDECLARED_INDEX_SET,
     E_REF_UNKNOWN_FAQ_NODE,
     E_REF_UNRESOLVED_JOIN_FACTOR,
+    EdgeKind,
+    ReferenceResolutionError,
+    VertexKind,
+    build_reference_graph,
+    resolve_references,
 )
 
 
@@ -474,3 +478,49 @@ def test_model_nested_index_sets_merge_over_the_document_registry():
     with pytest.raises(ReferenceResolutionError) as exc:
         resolve_references(doc)
     assert exc.value.code == E_REF_UNKNOWN_FAQ_NODE
+
+
+def test_every_shared_valid_fixture_resolves():
+    """The corpus-wide sweep: EVERY fixture under ``tests/valid`` resolves.
+
+    The Python counterpart of the TypeScript, Go, Julia and Rust sweeps
+    (``tests/CORPUS_DEFECTS.md``). The pass runs on the LOADED document
+    (API_SPEC.md §5.9): template imports and ``{ref}`` mounts have merged their
+    index sets into the registry, so a range over an imported axis resolves.
+    """
+    valid_dir = FIXTURES_ROOT / "valid"
+    files = sorted(valid_dir.rglob("*.esm"))
+    assert len(files) > 50
+    failures = []
+    with_edges = 0
+    for path in files:
+        rel = path.relative_to(valid_dir).as_posix()
+        try:
+            doc = json.loads(to_json(load_path(str(path))))
+        except Exception as exc:  # noqa: BLE001 - every failure is listed
+            failures.append(f"{rel}: load: {type(exc).__name__}: {exc}")
+            continue
+        try:
+            for graph in resolve_references(doc).values():
+                if graph.edges:
+                    with_edges += 1
+                graph.topological_order()
+        except ReferenceResolutionError as exc:
+            failures.append(f"{rel}: {exc.code}: {exc}")
+    assert failures == []
+    # The corpus really does exercise the pass — this guards a vacuous pass.
+    assert with_edges > 10
+
+
+def test_imported_axis_in_faq_range_resolves_only_after_load():
+    """A ``faq`` range over an axis the model gets only through a template import.
+
+    ``lev`` is declared by the imported library, so the raw file's own registry
+    lacks it; after load it is merged in (esm-spec §9.7.5) and resolves.
+    """
+    path = FIXTURES_ROOT / "valid" / "template_import_faq_axis.esm"
+    with pytest.raises(ReferenceResolutionError) as exc:
+        resolve_references(load_fixture(path))
+    assert exc.value.code == E_REF_UNDECLARED_INDEX_SET
+    graph = resolve_references(json.loads(to_json(load_path(str(path)))))["Column"]
+    assert {e.target for e in graph.edges_of_kind(EdgeKind.RANGE_FROM)} == {"index_set:lev"}
