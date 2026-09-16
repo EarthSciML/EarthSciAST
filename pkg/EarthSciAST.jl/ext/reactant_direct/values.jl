@@ -404,9 +404,9 @@ const _DESlotSrc = Union{Nothing,_DEVal}
 # fixed by how a read walks its axis — a column read runs the model's level
 # count and nothing else — so a stencil whose runs are longer than the
 # break-even keeps the slice path at every grid size, while the NUMBER of runs
-# it decomposes into is proportional to cells. One read then costs one op per
-# cell-ish piece, and a module's slice population grows without bound even
-# though nothing about the model changed.
+# it decomposes into is proportional to cells. One read then costs an operation
+# for every run the grid gives it, and a module's slice population grows without
+# bound even though nothing about the model changed.
 #
 # So the test is two-sided. `_DE_GATHER_MAX_PIECES` is an ABSOLUTE CAP on what a
 # single read may cost in ops: past it the read gathers whatever its runs look

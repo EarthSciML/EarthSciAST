@@ -568,6 +568,31 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
             @test EXT_DE._de_gather_is_cheaper(5, 10_000)
             @test !EXT_DE._de_gather_is_cheaper(4, 10_000)
         end
+
+        # WHETHER THE MAP'S CANONICAL BASE IS WORTH BUILDING is the same line,
+        # and it is drawn on the piece count alone: the base costs one
+        # concatenate and at most one reordering gather, which is cheap against
+        # a read that shatters past the cap and not against one that decomposes
+        # into eight. `runs` never builds one, so it stays the exact negative
+        # control; `always` builds one for anything with more than a single run.
+        withenv("ESM_DIRECT_EMIT_READ" => "gather",
+                "ESM_DIRECT_GATHER_MAX_PIECES" => nothing) do
+            @test EXT_DE._de_canon_worth(65)
+            @test !EXT_DE._de_canon_worth(64)
+            @test !EXT_DE._de_canon_worth(8)
+        end
+        withenv("ESM_DIRECT_EMIT_READ" => "runs") do
+            @test !EXT_DE._de_canon_worth(10_000)
+        end
+        withenv("ESM_DIRECT_EMIT_READ" => "always") do
+            @test EXT_DE._de_canon_worth(2)
+            @test !EXT_DE._de_canon_worth(1)
+        end
+        withenv("ESM_DIRECT_EMIT_READ" => "gather",
+                "ESM_DIRECT_GATHER_MAX_PIECES" => "2") do
+            @test EXT_DE._de_canon_worth(3)
+            @test !EXT_DE._de_canon_worth(2)
+        end
         # `always` is the measurement lever: gather anything with more than one
         # run, and no budget on the base.
         withenv("ESM_DIRECT_EMIT_READ" => "always") do
