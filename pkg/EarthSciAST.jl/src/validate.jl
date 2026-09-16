@@ -1423,7 +1423,6 @@ function _check_ragged_values_gathered!(errors::Vector{StructuralError}, file::E
 end
 
 # The two static `join` SIDE checks of CONFORMANCE_SPEC §5.5.8, decidable from
-
 # this ONE document — the node's `ranges`, the declared variable shapes and the
 # clause itself are all here, so no evaluation, no runtime data and no other file
 # are needed. Both are stated about the DOCUMENT rather than about where any one

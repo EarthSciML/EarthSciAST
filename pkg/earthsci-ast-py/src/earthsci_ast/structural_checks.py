@@ -584,7 +584,6 @@ def _check_aggregate_semantics(data: dict[str, Any], errors: list) -> None:
                     )
 
                 # --- join_key_invalid_type: a value-equality join key column
-
                 # drawn from a categorical set with a float/null member.
                 if isinstance(ranges, dict):
                     for col in _join_key_columns(agg):
