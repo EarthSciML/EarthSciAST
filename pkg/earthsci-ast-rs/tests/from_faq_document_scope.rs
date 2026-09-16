@@ -166,6 +166,7 @@ fn every_shared_valid_fixture_resolves() {
     assert!(files.len() > 50, "corpus too small: {}", files.len());
 
     let mut failures = Vec::new();
+    let mut with_edges = 0usize;
     for path in &files {
         // The pass runs on the LOADED document (API_SPEC.md §5.9): template
         // imports and `{ref}` mounts have merged their index sets into the
@@ -178,9 +179,14 @@ fn every_shared_valid_fixture_resolves() {
             }
         };
         let doc = serde_json::to_value(&file).expect("render loaded fixture");
-        if let Err(e) = resolve_references(&doc) {
-            failures.push(format!("{}: {e}", path.display()));
+        match resolve_references(&doc) {
+            Ok(graphs) => {
+                with_edges += graphs.values().filter(|g| !g.edges.is_empty()).count();
+            }
+            Err(e) => failures.push(format!("{}: {e}", path.display())),
         }
     }
     assert!(failures.is_empty(), "unresolved fixtures: {failures:#?}");
+    // The corpus really does exercise the pass — this guards a vacuous pass.
+    assert!(with_edges > 10, "only {with_edges} graphs carry an edge");
 }

@@ -163,8 +163,8 @@ func TestReferenceGraphRejectsUndeclaredIndexSet(t *testing.T) {
 // referenceCorpusRejections records the schema-valid fixtures that the
 // reference pass nevertheless refuses, and why.
 //
-// It is EMPTY, and the sweep below asserts that: every one of the 93 fixtures
-// under tests/valid resolves. The map is kept so a regression that starts
+// It is EMPTY, and the sweep below asserts that: every fixture under
+// tests/valid resolves. The map is kept so a regression that starts
 // rejecting a valid fixture surfaces as an exact-partition failure rather than
 // as a weaker "never errors" assertion.
 //
@@ -210,6 +210,7 @@ func TestReferenceGraphOverValidCorpus(t *testing.T) {
 	}
 
 	seenRejections := map[string]bool{}
+	withEdges := 0
 	for _, path := range fixtures {
 		path := path
 		rel, _ := filepath.Rel(validDir, path)
@@ -244,6 +245,9 @@ func TestReferenceGraphOverValidCorpus(t *testing.T) {
 				t.Fatalf("ResolveReferences rejected a schema-valid fixture: %v", err)
 			}
 			for name, g := range graphs {
+				if len(g.Edges) > 0 {
+					withEdges++
+				}
 				order, err := g.TopologicalOrder()
 				if err != nil {
 					t.Fatalf("model %q: TopologicalOrder: %v", name, err)
@@ -260,6 +264,11 @@ func TestReferenceGraphOverValidCorpus(t *testing.T) {
 		if !seenRejections[rel] {
 			t.Errorf("pinned rejection %q was never exercised; the fixture may have moved or been removed", rel)
 		}
+	}
+
+	// The corpus really does exercise the pass — this guards a vacuous pass.
+	if withEdges <= 10 {
+		t.Errorf("only %d graphs carry an edge; the sweep is not exercising the pass", withEdges)
 	}
 }
 

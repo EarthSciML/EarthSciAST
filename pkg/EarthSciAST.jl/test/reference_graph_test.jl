@@ -490,6 +490,7 @@ eqn(lhs, rhs) = Dict{String,Any}("lhs" => lhs, "rhs" => rhs)
         sort!(files)
         @test length(files) > 50
         failures = String[]
+        with_edges = 0
         for f in files
             try
                 # The pass runs on the LOADED document (API_SPEC.md §5.9):
@@ -497,13 +498,17 @@ eqn(lhs, rhs) = Dict{String,Any}("lhs" => lhs, "rhs" => rhs)
                 # sets into the registry, so a range over an imported axis
                 # resolves.
                 doc = JSON3.read(ESS.to_json(ESS.load_path(f)), Dict{String,Any})
-                resolve_references(doc)
+                for (_, g) in resolve_references(doc)
+                    isempty(g.edges) || (with_edges += 1)
+                end
             catch e
                 push!(failures, string(relpath(f, validdir), ": ",
                                        e isa ESS.ReferenceResolutionError ? e.code : string(typeof(e))))
             end
         end
         @test failures == String[]
+        # The corpus really does exercise the pass — this guards a vacuous pass.
+        @test with_edges > 10
     end
 
 end
