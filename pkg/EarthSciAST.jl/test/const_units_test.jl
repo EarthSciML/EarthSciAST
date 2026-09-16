@@ -7,6 +7,8 @@ using Test
 using EarthSciAST
 using Unitful
 
+include("testutils.jl")
+
 @testset "declared units on a const node (esm-spec §4.8.5)" begin
     konst(units) = EarthSciAST.OpExpr("const", EarthSciAST.ASTExpr[]; value = 0.44704, units = units)
     units = Dict("speed_mph" => "mi/h")
