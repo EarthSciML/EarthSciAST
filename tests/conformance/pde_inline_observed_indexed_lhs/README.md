@@ -137,10 +137,11 @@ whose `ranges` bind `k`. §6.3.1's worked example writes the other one, a bare
 | `fixtures/observed_bare_index_lhs.esm` | The runnable form, on the shelled fixture's numbers: `wb` state-free, `wbs` state-dependent, and `wn` with no declared `shape`, read through the state `z` it drives. Golden minted by Julia's `run_inline_tests`. |
 | `fixtures/refuse_scalar_rhs.esm` | `w_scalar[k] ~ 5.0`: no `faq` on the right, so nothing binds the range. |
 | `fixtures/refuse_offset_subscript.esm` | `w_offset[k+1] ~ faq{k}(2*k)`: a shifted window, not the whole array. |
+| `fixtures/refuse_nested_index.esm` | `index(index(w_nested, j), k) ~ faq{k}(2*k)`: its base name is `w_nested`, but it addresses a cell of a cell rather than the whole array. |
 
-The two refusal fixtures sit under the manifest's `refusals` key. A runner must
+The three refusal fixtures sit under the manifest's `refusals` key. A runner must
 see every assertion unpassed, with no actual, and a message carrying
-`indexed_definition_unsupported_form` and the variable's name. Both assert
+`indexed_definition_unsupported_form` and the variable's name. All assert
 `5.0` because an inventing binding could plausibly produce it.
 
 **Why `wn` is not asserted directly.** An inline assertion addresses a

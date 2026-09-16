@@ -2394,6 +2394,11 @@ fn build_observed_rules(
 /// rank — would be lowered as if its RHS were the whole array, which writes the
 /// wrong cells for an offset and cannot integrate for a scalar, so it is refused.
 ///
+/// The gather must also be the DIRECT one, `index(V, k…)`: the base name is read
+/// through nested `index` / `broadcast` wrappers, but `index(index(V, j), k)`
+/// addresses a cell of a cell, not the whole of `V`, so it is refused rather
+/// than lowered as though its RHS were all of `V`.
+///
 /// Flatten namespaces a free subscript (`k` becomes `Model.k`) but not a `faq`
 /// binder, so a subscript matches its binder in either spelling.
 fn check_bare_index_definition(
@@ -2402,6 +2407,7 @@ fn check_bare_index_definition(
     rhs: &Expr,
     array_axes: &HashMap<String, Vec<String>>,
 ) -> Result<(), CompileError> {
+    let head_is_the_variable = matches!(lhs.args.first(), Some(Expr::Variable(_)));
     let subs = lhs.args.get(1..).unwrap_or_default();
     let prefix = name.rfind('.').map_or("", |p| &name[..=p]);
     let names_binder = |sub: &Expr, binder: &String| match sub {
@@ -2423,7 +2429,7 @@ fn check_bare_index_definition(
         Some(axes) => axes.len() == subs.len(),
         None => true,
     };
-    if binds_subscripts && rank_agrees {
+    if head_is_the_variable && binds_subscripts && rank_agrees {
         return Ok(());
     }
     Err(CompileError::InterpreterBuildError {

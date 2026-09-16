@@ -204,7 +204,10 @@ end
                 # an offset subscript writes a shifted window
                 ESM_IOL.Equation(_idx("w", _op("+", _v("k"), _i(1))), _bi_agg(_bi_body())),
                 # a subscript the right-hand `faq` does not bind
-                ESM_IOL.Equation(_idx("w", _v("j")), _bi_agg(_bi_body())))
+                ESM_IOL.Equation(_idx("w", _v("j")), _bi_agg(_bi_body())),
+                # a NESTED gather addresses a cell of a cell, not the whole array
+                ESM_IOL.Equation(_op("index", _idx("w", _v("j")), _v("k")),
+                                 _bi_agg(_bi_body())))
             err = try
                 _bi_build(eq)
                 nothing

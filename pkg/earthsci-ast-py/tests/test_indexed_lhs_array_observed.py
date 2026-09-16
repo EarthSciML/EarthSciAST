@@ -413,6 +413,14 @@ def test_the_bare_index_lhs_stays_as_authored_in_the_flattened_equations(tmp_pat
             "unbound_subscript",
             {"lhs": _idx("w", "j"), "rhs": _agg({"op": "*", "args": [2.0, _idx("u")]})},
         ),
+        # A NESTED gather addresses a cell of a cell, not the whole array.
+        (
+            "nested_index",
+            {
+                "lhs": {"op": "index", "args": [_idx("w", "j"), "k"]},
+                "rhs": _agg({"op": "*", "args": [2.0, _idx("u")]}),
+            },
+        ),
     ],
 )
 def test_a_bare_index_lhs_outside_the_runnable_form_is_refused(tmp_path, name, equation):

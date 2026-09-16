@@ -312,6 +312,16 @@
       "diagnostic": "indexed_definition_unsupported_form",
       "names_variable": "w_offset",
       "note": "A bare-index definition with a NON-IDENTITY subscript (`w_offset[k+1] ~ faq{k}(2*k)`): it writes a shifted window, not the whole array. Before §5.36.2, Rust answered 6 for w_offset[3], the unshifted right side."
+    },
+    {
+      "id": "refuse_nested_index",
+      "path": "fixtures/refuse_nested_index.esm",
+      "model": "M",
+      "test_id": "refuse_nested_index",
+      "assertion_count": 2,
+      "diagnostic": "indexed_definition_unsupported_form",
+      "names_variable": "w_nested",
+      "note": "A bare-index definition whose gather is NESTED (`index(index(w_nested, j), k) ~ faq{k}(2*k)`): its base name is `w_nested`, but it addresses a cell of a cell rather than the whole array. Before §5.36.2's head check, Rust and Python both RAN it while Julia refused it with an unrelated shape error."
     }
   ]
 }

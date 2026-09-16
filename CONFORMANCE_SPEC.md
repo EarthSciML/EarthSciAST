@@ -5240,10 +5240,11 @@ absent and a false `distinct` alike.
 
 #### 5.36.2 The bare-index spelling: runs when the RHS binds the range, refused otherwise
 
-A bare `index(V, k…) ~ rhs` runs exactly when every subscript is a plain symbol,
-`rhs` is a `faq` whose `output_idx` names those symbols in the same order, and
-the subscript count equals `V`'s rank if `V` declares a `shape`. It then means
-`V ~ rhs` (esm-spec §6.3.1). Any other bare-index definition of an observed MUST
+A bare `index(V, k…) ~ rhs` runs exactly when the gather names `V` directly
+(not through a further `index`), every subscript is a plain symbol, `rhs` is a
+`faq` whose `output_idx` names those symbols in the same order, and the subscript
+count equals `V`'s rank if `V` declares a `shape`. It then means `V ~ rhs`
+(esm-spec §6.3.1). Any other bare-index definition of an observed MUST
 be **refused** with `indexed_definition_unsupported_form` (esm-spec §9.6.6):
 every assertion reports **no actual** and is not passed, and the message carries
 the code and **names the offending variable**. A best-effort answer is not
@@ -5264,9 +5265,15 @@ per-binding runners:
   Rust reports an unshaped array observed as having no cells.
 * `fixtures/refuse_scalar_rhs.esm` — `w_scalar[k] ~ 5.0`.
 * `fixtures/refuse_offset_subscript.esm` — `w_offset[k+1] ~ faq{k}(2*k)`.
+* `fixtures/refuse_nested_index.esm` — `index(index(w_nested, j), k) ~ faq{k}(2*k)`,
+  whose base name is `w_nested` but which addresses a cell of a cell. Until the
+  head check, Rust and Python RAN it (both answering as though the right-hand
+  `faq` were the whole of `w_nested`) while Julia refused it with
+  `E_TREEWALK_UNSUPPORTED_SHAPE` — a divergence window in the same class this
+  section closes.
 
-The two refusal fixtures are listed under the manifest's `refusals` key, with
-the required `diagnostic` and the variable the message must name. Both assert
+The three refusal fixtures are listed under the manifest's `refusals` key, with
+the required `diagnostic` and the variable the message must name. All assert
 `5.0`, which an inventing binding could plausibly produce, so only the outcome
 separates a refusal from a wrong number.
 
@@ -5296,6 +5303,16 @@ Structural validation does not agree on the offset fixture: Rust's validator
 reports the `k` in `w_offset[k+1]` as an undeclared variable, while Python's
 loads the document. The runners do not validate, so the gate is unaffected. The
 disagreement is recorded here and not settled.
+
+Neither is EXTENT agreement, which this section's rank check does not reach and
+which is **not specific to the bare-index spelling**. With `V` declared over
+`lev` (size 4) and its defining `faq` ranging over a different index set of size
+2, the three bindings answer three ways — Julia fills `V` from its declared
+shape and answers as though the range were `lev`, Rust answers `0` for the cells
+the `faq` did not produce, and Python raises an uncoded index-out-of-bounds. The
+SHELLED spelling of §5.36.1 does the same three things on `main` today, so this
+is a standing gap in arrayed-observed extent checking rather than a property of
+either gate, and it is recorded rather than settled here.
 
 ### 5.37 The §6.6.3 Assertion Predicate Itself (normative)
 

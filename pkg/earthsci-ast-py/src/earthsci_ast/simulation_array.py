@@ -2267,6 +2267,10 @@ def _bare_index_definition_rhs(name: str, lhs: ExprNode, rhs: Expr, flat: Flatte
     disagrees with ``V``'s declared rank — is refused with
     ``indexed_definition_unsupported_form`` rather than filled from a guessed range.
 
+    The gather must also be the DIRECT one, ``index(V, k…)``: the base name is read
+    through nested ``index`` wrappers, but ``index(index(V, j), k)`` addresses a cell
+    of a cell rather than the whole of ``V``, so it is refused too.
+
     Flatten namespaces a free LHS subscript (``k`` becomes ``Model.k``) but not a
     ``faq`` binder, so a subscript matches its binder in either spelling.
 
@@ -2280,6 +2284,7 @@ def _bare_index_definition_rhs(name: str, lhs: ExprNode, rhs: Expr, flat: Flatte
     declared = var.shape if var is not None else None
     if (
         subs
+        and isinstance(lhs.args[0], str)
         and frame is not None
         and len(frame) == len(subs)
         and all(

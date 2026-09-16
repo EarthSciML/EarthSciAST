@@ -527,24 +527,38 @@ function _rewrite_indexed_observed_lhs(eq::Equation, model::Model,
     return Equation(VarExpr(name), rhs; _comment=eq._comment)
 end
 
+# The variable a bare-index LHS writes, read through nested `index` wrappers the
+# way Python's `_vi_lhs_base` and Rust's `base_variable` read it, so all three
+# bindings agree on WHICH definition a nested gather is (and refuse it alike).
+function _bare_index_head_name(e)
+    e isa VarExpr && return (e::VarExpr).name
+    if e isa OpExpr && (e::OpExpr).op == "index" && !isempty((e::OpExpr).args)
+        return _bare_index_head_name((e::OpExpr).args[1])
+    end
+    return nothing
+end
+
 # One bare-index equation of `_normalize_indexed_observed_lhs`: `V ~ rhs` when it
 # is the runnable form, `nothing` when `V` is not an observed this pass owns (an
 # ODE state, an algebraic unknown, a value-invention output), and a refusal
-# otherwise. Flatten namespaces a free LHS subscript (`k` becomes `Model.k`) but
-# not a `faq` binder, so a subscript matches its binder in either spelling.
+# otherwise. The gather must be the DIRECT one, `index(V, k…)`: `index(index(V,
+# j), k)` addresses a cell of a cell, not the whole of `V`. Flatten namespaces a
+# free LHS subscript (`k` becomes `Model.k`) but not a `faq` binder, so a
+# subscript matches its binder in either spelling.
 function _rewrite_bare_index_observed_lhs(eq::Equation, model::Model,
                                           observed_here::Set{String}, vi_vars)
     gather = eq.lhs::OpExpr
     isempty(gather.args) && return nothing
     head = gather.args[1]
-    head isa VarExpr || return nothing
-    name = (head::VarExpr).name
+    name = _bare_index_head_name(head)
+    name === nothing && return nothing
     (name in observed_here && !(name in vi_vars)) || return nothing
     subs = view(gather.args, 2:length(gather.args))
     prefix = (dot = findlast('.', name)) === nothing ? "" : name[1:dot]
     rhs = eq.rhs
     frame = rhs isa OpExpr && (rhs::OpExpr).op == "faq" ? (rhs::OpExpr).output_idx : nothing
-    binds = frame !== nothing && !isempty(subs) && length(frame) == length(subs) &&
+    binds = head isa VarExpr &&
+        frame !== nothing && !isempty(subs) && length(frame) == length(subs) &&
         all(zip(subs, frame)) do (s, b)
             s isa VarExpr && b isa AbstractString &&
                 ((s::VarExpr).name == b || (s::VarExpr).name == prefix * b)
