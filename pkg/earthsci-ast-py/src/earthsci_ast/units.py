@@ -808,6 +808,81 @@ def exact_scale_of(unit) -> ExactScale:
     return scale
 
 
+class ConstUnitsError(Exception):
+    """Raised for declared ``units`` on an expression node a document's ``esm``
+    version does not admit. Carries the stable diagnostic ``code`` (esm-spec
+    §4.8.5) alongside the message, like ``SolverBlockError``."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+def reject_const_units_pre_v12(view: Any) -> None:
+    """Reject declared ``units`` on any expression node in a document declaring
+    ``esm`` < 1.2.0 (esm-spec §4.8.5 item 6), naming the first offending node.
+    Runs on the raw JSON before schema validation, like the ``solver`` gate."""
+    if not isinstance(view, dict):
+        return
+    esm = view.get("esm")
+    if not isinstance(esm, str):
+        return
+    m = re.match(r"^(\d+)\.(\d+)\.(\d+)$", esm)
+    if not m or (int(m.group(1)), int(m.group(2))) >= (1, 2):
+        return
+
+    def find(value: Any, at: str) -> str | None:
+        if isinstance(value, dict):
+            if "op" in value and "units" in value:
+                return at
+            for key, child in value.items():
+                hit = find(child, f"{at}/{key}")
+                if hit is not None:
+                    return hit
+        elif isinstance(value, list):
+            for i, child in enumerate(value):
+                hit = find(child, f"{at}/{i}")
+                if hit is not None:
+                    return hit
+        return None
+
+    path = find(view, "")
+    if path is not None:
+        from .error_handling import CONST_UNITS_VERSION_TOO_OLD
+
+        raise ConstUnitsError(
+            CONST_UNITS_VERSION_TOO_OLD,
+            f"declared `units` on an expression node require esm >= 1.2.0; file declares "
+            f"{esm}. Offending path: {path}",
+        )
+
+
+def unresolvable_const_units(expr: Any) -> list[str]:
+    """Every declared ``const`` unit string in ``expr`` (a raw JSON expression
+    or an ``ExprNode``) that does not resolve (esm-spec §4.8.5 item 2)."""
+    out: list[str] = []
+
+    def walk(node: Any) -> None:
+        if isinstance(node, ExprNode):
+            node = {"op": node.op, "units": node.units, "args": node.args}
+        if isinstance(node, dict):
+            units = node.get("units")
+            if node.get("op") == "const" and isinstance(units, str):
+                try:
+                    parse_unit(units)
+                except UnparseableUnitError:
+                    out.append(units)
+            for child in node.values():
+                walk(child)
+        elif isinstance(node, list):
+            for child in node:
+                walk(child)
+
+    walk(expr)
+    return out
+
+
 def unit_exact_scale(unit: str | None) -> ExactScale:
     """The exact scale of a declared unit string.
 
@@ -1415,6 +1490,19 @@ class UnitValidator:
 
         Raises :class:`DimensionalMismatchError` on a provable inconsistency.
         """
+        if node.op == "const":
+            # A `const` that DECLARES its units has that unit (esm-spec §4.8.5);
+            # without `units` it is undeterminable, like a bare literal. An
+            # unresolvable string is reported at the containing expression field,
+            # not here.
+            if node.units is None:
+                return None
+            try:
+                unit = parse_unit(node.units)
+            except UnparseableUnitError:
+                return None
+            return _Typed(unit.dimensionality, exact_scale_of(unit))
+
         if not node.args:
             return None
 

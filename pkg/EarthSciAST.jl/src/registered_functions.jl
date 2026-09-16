@@ -1194,6 +1194,115 @@ Base.showerror(io::IO, e::EnumLoweringError) =
     print(io, "EnumLoweringError(", e.code, "): ", e.message)
 
 """
+    _lower_enum_ops_for_file(document, target, open_names) -> target′
+
+Return raw-JSON `target` with its `enum` ops lowered against the `enums` block
+of `document`, the file that wrote `target`. `target` is not modified.
+
+An `enum` op is file-local (esm-spec §9.3): it resolves against the block of the
+file it is written in. [`lower_enums!`](@ref) runs once over the root document,
+so a tree that crosses a file boundary before that pass (a template-library body
+reaching an importer, §9.7.5) is lowered here, at the edge, while its own file's
+block is still at hand.
+
+An op with an argument spelled by a name in `open_names` is left in place: a
+template parameter substitutes position-blind (§9.6.3 constraint 5), so the call
+site decides what it spells and the op resolves there. An op whose arguments are
+not two strings is left for [`lower_enums!`](@ref), which owns the malformed-op
+diagnostic. Raises [`EnumLoweringError`](@ref).
+"""
+function _lower_enum_ops_for_file(document, target,
+                                  open_names::AbstractSet{String}=Set{String}())
+    enums = _is_object(document) ? _raw_get(document, "enums") : nothing
+    return _lower_raw_enum_ops(target, enums, open_names)
+end
+
+function _lower_raw_enum_ops(node, enums, open_names::AbstractSet{String})
+    if _is_array(node)
+        return Any[_lower_raw_enum_ops(v, enums, open_names) for v in node]
+    elseif _is_object(node)
+        if _raw_get(node, "op") == "enum"
+            args = _raw_get(node, "args")
+            (args !== nothing && _is_array(args) && length(args) == 2 &&
+             all(a -> a isa AbstractString, args) &&
+             !any(a -> String(a) in open_names, args)) || return node
+            enum_name, symbol = String(args[1]), String(args[2])
+            mapping = enums !== nothing && _is_object(enums) ?
+                _raw_get(enums, enum_name) : nothing
+            mapping === nothing && throw(EnumLoweringError(ERROR_CODES.UNKNOWN_ENUM,
+                "enum `$(enum_name)` is not declared in the file's `enums` block"))
+            (_is_object(mapping) && _raw_haskey(mapping, symbol)) ||
+                throw(EnumLoweringError(ERROR_CODES.UNKNOWN_ENUM_SYMBOL,
+                    "symbol `$(symbol)` is not declared under enum `$(enum_name)`"))
+            return OrderedDict{String,Any}("op" => "const", "args" => Any[],
+                                           "value" => Int(_raw_get(mapping, symbol)))
+        end
+        out = OrderedDict{String,Any}()
+        for (k, v) in pairs(node)
+            out[string(k)] = _lower_raw_enum_ops(v, enums, open_names)
+        end
+        return out
+    end
+    return node
+end
+
+"""
+    _lower_mounted_document_enums(document, target=document) -> target′
+
+Return raw-JSON `target`, taken from a document mounted at a §4.7 edge, with its
+`enum` ops lowered against `document`'s own `enums` block (esm-spec §9.3).
+`target` is not modified.
+
+Called once the mounted document has resolved in its own scope and before its
+component is spliced into the mounting document, whose block is a different one.
+`enums` do not merge across a mount, so this is the only block those ops can
+name.
+
+A template declaration's body is lowered with that template's `params` left
+open, as at the import edge ([`_lower_enum_ops_for_file`](@ref)): an op spelled
+with a parameter resolves at the call site. Everything else is lowered with no
+open names. Raises [`EnumLoweringError`](@ref).
+"""
+function _lower_mounted_document_enums(document, target=document)
+    enums = _is_object(document) ? _raw_get(document, "enums") : nothing
+    return _lower_mounted_enum_ops(target, enums)
+end
+
+function _lower_mounted_enum_ops(node, enums)
+    if _is_array(node)
+        return Any[_lower_mounted_enum_ops(v, enums) for v in node]
+    elseif _is_object(node)
+        _raw_get(node, "op") == "enum" && return _lower_raw_enum_ops(node, enums, Set{String}())
+        out = OrderedDict{String,Any}()
+        for (k, v) in pairs(node)
+            key = string(k)
+            out[key] = key == "expression_templates" && _is_object(v) ?
+                _lower_template_body_enums(v, enums) : _lower_mounted_enum_ops(v, enums)
+        end
+        return out
+    end
+    return node
+end
+
+function _lower_template_body_enums(templates, enums)
+    out = OrderedDict{String,Any}()
+    for (name, decl) in pairs(templates)
+        if _is_object(decl) && _raw_haskey(decl, "body")
+            params_raw = _raw_get(decl, "params")
+            params = Set{String}(String(p) for p in
+                (params_raw !== nothing && _is_array(params_raw) ? params_raw : Any[])
+                if p isa AbstractString)
+            lowered = OrderedDict{String,Any}(string(k) => v for (k, v) in pairs(decl))
+            lowered["body"] = _lower_raw_enum_ops(_raw_get(decl, "body"), enums, params)
+            out[string(name)] = lowered
+        else
+            out[string(name)] = decl
+        end
+    end
+    return out
+end
+
+"""
     lower_enums(file::EsmFile) -> EsmFile
 
 The PURE form: return a DEEP COPY of `file` with every `enum` op replaced by

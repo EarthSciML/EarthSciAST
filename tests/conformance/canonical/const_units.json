@@ -1,0 +1,7 @@
+{
+  "id": "const_units",
+  "description": "A `const` node's declared `units` (esm-spec §4.8.5) is a MEANING-BEARING field, so canonical JSON carries it: 0.44704 m*h/(mi*s) and a bare 0.44704 are different quantities and MUST NOT canonicalize alike. `units` joins the emissible set {op, args, wrt, dim, fn, name, value}; it arrived at esm 1.2.0 and was briefly non-emissible in Julia, whose derived fail-closed partition put it outside the set and raised E_CANONICAL_UNSUPPORTED_FIELD for every unit-bearing const.",
+  "input": {"op": "*", "args": [{"op": "const", "args": [], "value": 0.44704, "units": "m*h/(mi*s)"}, "x"]},
+  "expected": "{\"args\":[\"x\",{\"args\":[],\"op\":\"const\",\"units\":\"m*h/(mi*s)\",\"value\":0.44704}],\"op\":\"*\"}",
+  "tags": ["supported", "const", "units", "ordering"]
+}

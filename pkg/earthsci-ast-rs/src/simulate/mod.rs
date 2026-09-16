@@ -9,8 +9,10 @@
 //!
 //! - **ODE only.** [`FlattenedSystem::independent_variables`] must equal `["t"]`.
 //!   Hybrid PDE / spatial systems return [`CompileError::UnsupportedDimensionalityError`].
-//! - **No event handling.** Models with non-empty `continuous_events` /
-//!   `discrete_events` return [`CompileError::UnsupportedFeatureError`].
+//! - **No event handling.** Models with non-empty `discrete_events` return
+//!   [`CompileError::UnsupportedConstruct`] (esm-spec §9.6.6
+//!   `unsupported_construct`); non-empty `continuous_events` return
+//!   [`CompileError::UnsupportedFeatureError`].
 //! - **Both targets.** diffsol's Faer backend is pure Rust and cross-compiles to
 //!   wasm32 (spike S1), so this module is compiled for the browser too. The one
 //!   native-only seam is the dispatch into [`crate::simulate_array`] for

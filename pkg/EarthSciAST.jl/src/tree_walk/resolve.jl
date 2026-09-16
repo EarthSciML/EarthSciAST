@@ -65,21 +65,21 @@ function _resolve_one_index_set_ref(ref::IndexSetRef, index_sets::AbstractDict,
         append!(idx_args, ASTExpr[VarExpr(p) for p in ref.of])
         return Any[1, OpExpr("index", idx_args)]
     elseif is.kind == "derived"
-        # M4 (RFC §8.1): a derived index set names its producing FAQ node via
-        # `from_faq`. The intersect_polygon clip ring is materialized at setup time
-        # (`_materialize_geometry_rings`); its distinct-vertex count is the resolved
-        # dense extent `[1, n]`, so the polygon_area FAQ unrolls over the ring like
-        # any other aggregate. The general §5.5 distinct/skolem materialization for
-        # non-geometry derived sets remains out of the tree-walk scope (M1).
+        # A derived index set names its producing FAQ node via `from_faq`. Both
+        # producers are materialized at setup: an intersect_polygon clip ring
+        # (`_materialize_geometry_rings`, RFC §8.1) and a skolem/distinct
+        # value-invention producer (`materialize_value_invention`, §5.5). Either
+        # way its cardinality is the dense extent `[1, n]`. A set with no extent
+        # is refused rather than contracted as empty: an empty range would fold
+        # to the additive identity and read as a plausible 0 (esm-spec §9.6.6).
         faq = is.from_faq
         faq === nothing && throw(TreeWalkError("E_TREEWALK_DERIVED_NO_FAQ",
             "derived index set '$(ref.from)' requires a `from_faq` naming its " *
             "producing node (§5.5)"))
-        haskey(derived_extents, faq) || throw(TreeWalkError("E_TREEWALK_DERIVED_INDEX_SET",
-            "derived index set '$(ref.from)' (from_faq '$faq') is not materialized; its " *
-            "producing intersect_polygon node has not been evaluated at setup (RFC §8.1). " *
-            "Materialized: $(sort(collect(keys(derived_extents)))). The general §5.5 " *
-            "distinct/skolem materialization is out of the tree-walk scope (M1)."))
+        haskey(derived_extents, faq) || throw(TreeWalkError("derived_index_set_unmaterialized",
+            "derived index set '$(ref.from)' (from_faq '$faq') is not materialized: no " *
+            "geometry or value-invention producer supplied its extent at setup. " *
+            "Materialized: $(sort(collect(keys(derived_extents))))."))
         return Any[1, derived_extents[faq]]
     end
     throw(TreeWalkError("E_TREEWALK_UNKNOWN_INDEX_SET_KIND",

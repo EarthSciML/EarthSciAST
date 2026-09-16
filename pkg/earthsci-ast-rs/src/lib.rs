@@ -91,6 +91,7 @@ pub mod extension;
 pub(crate) mod flatten;
 pub(crate) mod geometry;
 pub(crate) mod graph;
+pub(crate) mod inline_test_checks;
 pub mod intern;
 pub(crate) mod join;
 pub(crate) mod json_visit;
@@ -390,7 +391,7 @@ pub const LIBRARY_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// version in `esm-schema.json`'s `$id` / esm-spec.md; the
 /// `schema_version_matches_bundled_schema` test enforces it, and
 /// `parse::library_version()` (major-compat gating) derives from it.
-pub const SCHEMA_VERSION: &str = "1.1.0";
+pub const SCHEMA_VERSION: &str = "1.2.0";
 
 #[cfg(test)]
 mod version_tests {

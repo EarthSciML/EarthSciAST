@@ -1,0 +1,105 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "ArrayPathControl",
+    "description": "CONTROL: the discrete-event document with its event removed. It takes the same array evaluator and MUST still run, so a refusal of the other fixtures is attributable to the construct and not to the document's shape.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "conformance",
+      "unsupported_construct",
+      "control"
+    ]
+  },
+  "index_sets": {
+    "step_rows": {
+      "kind": "interval",
+      "size": 2
+    }
+  },
+  "models": {
+    "ArrayPathControl": {
+      "tolerance": {
+        "rel": 1e-12
+      },
+      "variables": {
+        "s": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Doubles at each event; 1 at t = 0."
+        },
+        "s_seen": {
+          "type": "unknown",
+          "shape": [
+            "step_rows"
+          ],
+          "units": "1",
+          "description": "`s` broadcast over an axis, so the document takes the array evaluator."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "s"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "s"
+            ]
+          },
+          "rhs": 1.0
+        },
+        {
+          "lhs": "s_seen",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "k"
+            ],
+            "ranges": {
+              "k": {
+                "from": "step_rows"
+              }
+            },
+            "expr": "s"
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "the_array_path_still_runs",
+          "description": "Without the event, s stays at its initial value and s_seen reads it.",
+          "time_span": {
+            "start": 0.0,
+            "end": 3.5
+          },
+          "assertions": [
+            {
+              "variable": "s_seen",
+              "time": 3.5,
+              "expected": 1.0,
+              "coords": {
+                "step_rows": 1
+              }
+            },
+            {
+              "variable": "s",
+              "time": 3.5,
+              "expected": 1.0
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

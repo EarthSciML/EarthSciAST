@@ -321,8 +321,8 @@ fn derived_contraction_axis_is_sized_by_the_invented_set() {
 /// The evaluation-context channel itself: an expression already resolved to a
 /// dynamic `DerivedDyn` bound — which is what a contracted derived axis looks
 /// like when its ranges were resolved WITHOUT the engine's results in hand —
-/// gets a real extent from `eval_expression_with_extents`, and folds to the
-/// additive identity without it.
+/// gets a real extent from `eval_expression_with_extents`, and is refused
+/// without it: an empty contraction would read as a plausible 0 (issue #266).
 #[test]
 fn eval_context_extents_size_an_already_resolved_derived_bound() {
     let (_, index_sets) = isrm_model();
@@ -354,9 +354,12 @@ fn eval_context_extents_size_an_already_resolved_derived_bound() {
         "the invented extent must open the contraction over all 4 members, got {with:?}"
     );
 
-    let without = eval_expression(&expr, &e, &[], &[], 0.0).expect("evaluates without extents");
+    let without = eval_expression(&expr, &e, &[], &[], 0.0)
+        .expect_err("with no producer materialized the contraction must be refused, not 0");
+    let message = without.to_string();
     assert!(
-        matches!(without, Value::Scalar(s) if s == 0.0),
-        "with no producer materialized the contraction is empty and folds to 0̄, got {without:?}"
+        message.contains("derived_index_set_unmaterialized")
+            && message.contains("emis_src_cells_faq"),
+        "the refusal must carry the code and name the producer, got: {message}"
     );
 }

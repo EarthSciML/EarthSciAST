@@ -311,6 +311,9 @@ func LoadString(jsonStr string, opts ...LoadOption) (*ESMFile, error) {
 			if err := RejectSolverPreV11(preCheck); err != nil {
 				return nil, err
 			}
+			if err := rejectConstUnitsPreV12(preCheck); err != nil {
+				return nil, err
+			}
 		}
 	}
 
