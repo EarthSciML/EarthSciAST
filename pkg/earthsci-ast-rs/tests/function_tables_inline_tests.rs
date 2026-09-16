@@ -89,6 +89,66 @@ fn an_error_out_of_bounds_table_is_refused_by_name() {
     );
 }
 
+/// `esm_problem` takes a caller-flattened system as well as a document, and
+/// `flatten` carries `function_tables` precisely so that carrier stays
+/// runnable. Both carriers must lower, and agree: `linear/` integrates the
+/// constant tendency `table_lookup(sigma_O3_298, lambda_idx = 4.5)`, the
+/// midpoint of the 8.70e-18 and 7.90e-18 knots, so `k_O3(1)` is that value.
+#[cfg(feature = "solve")]
+#[test]
+fn both_problem_carriers_lower_a_table_lookup() {
+    use earthsci_ast::{ProblemInput, esm_problem, flatten, solve};
+
+    let expected = 8.70e-18 + 0.5 * (7.90e-18 - 8.70e-18);
+    let file = load_path(common::repo_fixture(
+        "conformance/function_tables/linear/fixture.esm",
+    ))
+    .expect("fixture loads");
+    let flat = flatten(&file).expect("fixture flattens");
+
+    for (label, input) in [
+        ("File", ProblemInput::File(&file)),
+        ("Flattened", ProblemInput::Flattened(&flat)),
+    ] {
+        let prob = esm_problem(input, (0.0, 1.0), Default::default())
+            .unwrap_or_else(|e| panic!("[{label}] esm_problem: {e}"));
+        let sol = solve(&prob, &SolveOptions::default())
+            .unwrap_or_else(|e| panic!("[{label}] solve: {e}"));
+        let got = sol
+            .final_value("M.k_O3")
+            .unwrap_or_else(|| panic!("[{label}] no M.k_O3 in {:?}", sol.state_variable_names));
+        assert!(
+            ((got - expected) / expected).abs() < 1e-9,
+            "[{label}] k_O3(1) = {got:e}, expected {expected:e}"
+        );
+    }
+
+    // Lowering the flattened carrier works on a copy: the caller's system
+    // still holds the authored node.
+    let rhs = serde_json::to_value(&flat.equations[0].rhs).expect("serialize");
+    assert_eq!(
+        rhs["op"], "table_lookup",
+        "caller's system untouched: {rhs}"
+    );
+}
+
+/// The §9.5.3a refusal reaches the flattened carrier too, rather than that
+/// carrier skipping the pass and building an unevaluable tree.
+#[test]
+fn an_error_out_of_bounds_table_is_refused_on_the_flattened_carrier() {
+    let path = common::repo_fixture("conformance/function_tables/out_of_bounds_error/fixture.esm");
+    let file = load_path(&path).expect("fixture loads");
+    let flat = earthsci_ast::flatten(&file).expect("fixture flattens");
+
+    let err = earthsci_ast::esm_problem(&flat, (0.0, 1.0), Default::default())
+        .expect_err("must not build");
+    let text = err.to_string();
+    assert!(
+        text.contains("table_out_of_bounds_unsupported"),
+        "expected the §9.5.3a refusal by name, got: {text}"
+    );
+}
+
 /// Lowering is a transformation on the way into an evaluation: the loaded
 /// document — the one `emit` serializes — still carries the authored
 /// `table_lookup` node and its `function_tables` block (esm-spec §9.5.4).

@@ -2351,6 +2351,33 @@ observed. A binding that needs the strict `y ~ f(…)` form — for inlining
 specifically — recovers it as a **narrower** set alongside `observed_unknowns`
 (Python spells it `inlined_unknowns`); it does not narrow the partition.
 
+**Running a bare-index definition.** Classification credits every indexed LHS;
+*running* one also needs its index range. The shelled spelling
+`faq{k…}(index(V, k…)) ~ rhs` carries that range in its `ranges`. A bare
+`index(V, k…) ~ rhs` binds none of its subscripts, so a binding that simulates
+it takes the range from the right-hand side, and runs the definition exactly
+when all three hold:
+
+1. the left side is the DIRECT gather `index(V, k…)` — `V` is named there, not
+   reached through a further `index`;
+2. every subscript is a plain symbol;
+3. `rhs` is a `faq` whose `output_idx` names those symbols, in the same order;
+4. if `V` declares a `shape`, the number of subscripts equals its rank.
+
+That `rhs` already denotes the whole array, so the equation means `V ~ rhs`.
+`V` need not declare a `shape`: the `faq` sizes it.
+
+Every other bare-index definition of an observed MUST be refused with
+`indexed_definition_unsupported_form`, naming `V`, rather than run. That covers
+a right-hand side with no `faq` (`w[k] ~ 5.0`), an offset or other non-identity
+subscript (`y[i+1] ~ …`), subscripts the `faq` does not bind in order, a nested
+gather (`index(index(V, j), k)`, which addresses a cell of a cell), and a rank
+disagreement. In each of those nothing binds the range, and filling the array
+from the declared shape, or writing a shifted window, would be a guess this
+rule does not make. Value-invention outputs (a `skolem`, `distinct` or `rank`
+producer, or an arg-witness reducer) are materialized by their own engine and
+are outside this rule. CONFORMANCE_SPEC.md §5.36.2 gates both halves.
+
 **Parameters.** These four sets **partition** the parameters:
 
 | Function | Returns |
@@ -4410,6 +4437,7 @@ Bindings MUST emit the following stable diagnostic codes (cross-language uniform
 | `unlowered_operator` | A rewrite-target op (§4.2) reached evaluation/compilation without being lowered — no rule eliminated it. Fires before evaluation, not necessarily at load (loading is permissive). One uniform code superseding the former per-language spatial-op errors (`E_TREEWALK_UNREACHABLE_SPATIAL_OP` / `UnreachableSpatialOperatorError` / `UnsupportedDimensionalityError`). |
 | `unevaluable_operator` | An op that IS in the evaluable-core set (§4.2) reached an evaluator that has no evaluation rule for it. The complement of `unlowered_operator`, and the two are distinguished by which side of §4.2 the op falls on: `unlowered_operator` means the op is OUTSIDE evaluable-core and no rewrite rule eliminated it (the document is under-lowered), whereas `unevaluable_operator` means the op is INSIDE evaluable-core but *this* evaluator cannot produce a value for it — because an earlier pipeline stage (value invention, or a lowering pass) should have eliminated it, or because the document was built for a different runtime (a binding may legitimately offer more than one evaluator, e.g. a scalar ODE interpreter alongside a whole-array one, with different rule sets). The check MUST precede evaluation: the evaluator walks the whole expression (or, where it has a build step, every expression it builds) and refuses up front, so no part of an expression carrying such an op is evaluated — an op in the untaken branch of an `ifelse` is refused too. Raising only when evaluation happens to reach the node does not satisfy this. The diagnostic MUST name the offending op, and the evaluator MUST NOT evaluate the op to a sentinel value (NaN, zero, or any other number): a sentinel is indistinguishable from a legitimate numerical result and would propagate into the solution. Binding-local spellings of this condition (`E_TREEWALK_UNSUPPORTED_OP`, `unsupported_operator`, an uncoded interpreter error) are superseded by this code; the shared fixture is `tests/conformance/unevaluable_operator/`. |
 | `unsupported_construct` | A model construct reached an evaluator that cannot run it: a **continuous event** (`continuous_events`), a **discrete event** (`discrete_events`), or an **implicit equation** — one whose LHS is an expression rather than an unknown (bare or indexed), a time derivative of one, or `ic` of one, and so constrains its operands without defining any of them. Fires at BUILD, before evaluation, and MUST name the construct and the evaluator. It is reported rather than skipped: an evaluator that runs the model without the event, or without solving the residual, reports an answer the document does not describe. An evaluator that does run the construct (e.g. a ModelingToolkit export) never raises it. |
+| `indexed_definition_unsupported_form` | A bare-index definition of an observed, `index(V, k…) ~ rhs`, is not the runnable form of §6.3.1: `rhs` is not a `faq` whose `output_idx` names the subscripts in order, a subscript is not a plain symbol, the gather is nested rather than naming `V` directly, or the subscript count disagrees with `V`'s declared rank. Raised when the model is built for simulation, naming `V`; running it would fill the array from a range nothing binds. |
 | `template_import_version_too_old` | File declares `esm` < 0.8.0 but carries `expression_template_imports`, top-level `expression_templates`, or `metaparameters` (§9.6.5). |
 | `template_import_unresolved` | An import `ref` failed to load or parse (reports path/URL and cause) (§9.7.2). |
 | `template_import_not_library` | Import target is not a pure template-library file (§9.7.1). |
