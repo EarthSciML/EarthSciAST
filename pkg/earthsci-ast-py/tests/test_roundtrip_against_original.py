@@ -85,6 +85,7 @@ TRANSFORMING_FIXTURES: dict[str, str] = {
     "advection_reaction_loaded_ic_bc.esm": _EAGER_TEMPLATE_EXPANSION,
     "derivative_trailing_boundary_operands.esm": _EAGER_TEMPLATE_EXPANSION,
     "expression_templates_arrhenius.esm": _EAGER_TEMPLATE_EXPANSION,
+    "units_const_declared.esm": _EAGER_TEMPLATE_EXPANSION,
     "template_import_minimal.esm": (
         "`expression_template_imports` is consumed at load and the imported "
         "bodies are expanded into their call sites (esm-spec §9.7.6)"
@@ -502,7 +503,7 @@ def test_an_attrs_key_binds_a_match_rule_param_to_the_matched_literal() -> None:
 
 def test_a_node_carrying_an_annotation_has_no_canonical_form() -> None:
     """``tests/conformance/canonical/README.md``: a node carrying any field
-    outside ``{op, args, wrt, dim, fn, name, value}`` must make
+    outside ``{op, args, wrt, dim, fn, name, value, units}`` must make
     ``canonical_json`` raise ``E_CANONICAL_UNSUPPORTED_FIELD``, and it names
     ``expect_cadence`` explicitly. The requirement was unreachable while
     ``ExprNode`` dropped both annotations at parse — the emitter never saw one.
