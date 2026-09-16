@@ -20,6 +20,7 @@ from typing import Any, Callable
 import numpy as np
 
 from .classification import is_implicit_lhs
+from .error_handling import INDEXED_DEFINITION_UNSUPPORTED_FORM
 from .esm_types import EsmFile, Expr, ExprNode, is_aggregate_op
 from .expr_walk import iter_children, map_children
 from .expression import UnsupportedConstructError
@@ -2270,6 +2271,52 @@ def _align_named_operands(
     return aligned_equations, aligned_observed
 
 
+def _bare_index_definition_rhs(name: str, lhs: ExprNode, rhs: Expr, flat: FlattenedSystem) -> Expr:
+    """The whole-array body of a bare-index observed definition, or a refusal.
+
+    esm-spec §6.3.1 lets an equation define the arrayed observed ``V`` through a
+    bare ``index(V, k…)`` LHS. That LHS binds none of its subscripts, so the index
+    range has to come from the RHS: the definition runs exactly when the RHS is a
+    ``faq`` whose ``output_idx`` names the LHS subscripts, in order (CONFORMANCE_SPEC
+    §5.36.2). That RHS is already the whole array, so it is the body. Every other
+    spelling — a scalar RHS, an offset or permuted subscript, a subscript count that
+    disagrees with ``V``'s declared rank — is refused with
+    ``indexed_definition_unsupported_form`` rather than filled from a guessed range.
+
+    The gather must also be the DIRECT one, ``index(V, k…)``: the base name is read
+    through nested ``index`` wrappers, but ``index(index(V, j), k)`` addresses a cell
+    of a cell rather than the whole of ``V``, so it is refused too.
+
+    Flatten namespaces a free LHS subscript (``k`` becomes ``Model.k``) but not a
+    ``faq`` binder, so a subscript matches its binder in either spelling.
+
+    This runs on the flattened system rather than inside flatten, so the flattened
+    ``equations`` list the shared corpus compares keeps the LHS as authored.
+    """
+    subs = list(lhs.args[1:])
+    frame = rhs.output_idx if isinstance(rhs, ExprNode) and is_aggregate_op(rhs.op) else None
+    prefix = name.rsplit(".", 1)[0] + "." if "." in name else ""
+    var = flat.observed_variables.get(name)
+    declared = var.shape if var is not None else None
+    if (
+        subs
+        and isinstance(lhs.args[0], str)
+        and frame is not None
+        and len(frame) == len(subs)
+        and all(
+            isinstance(s, str) and isinstance(f, str) and s in (f, prefix + f)
+            for s, f in zip(subs, frame)
+        )
+        and (not declared or len(declared) == len(subs))
+    ):
+        return rhs
+    raise SimulationError(
+        f"{INDEXED_DEFINITION_UNSUPPORTED_FORM}: '{name}' is defined by a bare-index "
+        f"LHS that is not runnable; the RHS must be a faq whose output_idx names the "
+        f"LHS subscripts in order (esm-spec §6.3.1)"
+    )
+
+
 def _build_numpy_rhs(
     flat: FlattenedSystem,
     parameters: dict[str, float],
@@ -2405,6 +2452,13 @@ def _build_numpy_rhs(
             continue
         if isinstance(eq.lhs, str) and eq.lhs in observed_names:
             observed_eqs.append((eq.lhs, eq.rhs))
+        elif (
+            isinstance(eq.lhs, ExprNode)
+            and eq.lhs.op == "index"
+            and _base is not None
+            and _base in observed_names
+        ):
+            observed_eqs.append((_base, _bare_index_definition_rhs(_base, eq.lhs, eq.rhs, flat)))
         else:
             driver_equations.append(eq)
     ordered_observed = _order_observed_equations(observed_eqs, observed_names)

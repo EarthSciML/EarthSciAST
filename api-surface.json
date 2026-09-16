@@ -93,17 +93,17 @@
     }
   },
   "counts": {
-    "symbols": 912,
+    "symbols": 913,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
       "julia": 305,
       "typescript": 239,
       "python": 250,
       "rust": 341,
-      "go": 432
+      "go": 433
     },
     "by_tier": {
-      "extension": 639,
+      "extension": 640,
       "stable": 273
     }
   },
@@ -1231,6 +1231,14 @@
       "tier": "extension",
       "bindings": {
         "go": "CodeGeometryManifoldInvalid"
+      }
+    },
+    {
+      "name": "code_indexed_definition_unsupported_form",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeIndexedDefinitionUnsupportedForm"
       }
     },
     {

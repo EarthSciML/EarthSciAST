@@ -359,6 +359,10 @@ diagnostic_code_registry! {
     FACTOR_WITH_EXPRESSION_TRANSFORM = "factor_with_expression_transform";
     /// An `ic` block inside a reaction system (§4.7).
     IC_IN_REACTION_SYSTEM = "ic_in_reaction_system";
+    /// A bare-index observed definition (`index(V, k…) ~ rhs`, esm-spec §6.3.1)
+    /// outside the runnable form: the RHS is not a `faq` whose `output_idx`
+    /// names the subscripts in order. Refused when the model is built.
+    INDEXED_DEFINITION_UNSUPPORTED_FORM = "indexed_definition_unsupported_form";
     /// A `broadcast` node whose `fn` names no scalar operator.
     INVALID_BROADCAST_FN = "invalid_broadcast_fn";
     /// A `join.on` key of a type the join cannot compare.
@@ -565,6 +569,7 @@ mod error_code_tests {
             "factor_with_expression_transform",
             "geometry_manifold_invalid",
             "ic_in_reaction_system",
+            "indexed_definition_unsupported_form",
             "interp_axis_length_mismatch",
             "interp_axis_too_short",
             "interp_nan_in_axis",

@@ -158,6 +158,13 @@ export const ERROR_CODES = {
   //   WINS, not the order cells are EVALUATED in, and a region's value
   //   expression is evaluated once for the whole region.
   RECURRENCE_UNSUPPORTED_FORM: 'recurrence_unsupported_form',
+  // `indexed_definition_unsupported_form` — a bare-index observed definition
+  //   `index(V, k…) ~ rhs` outside the runnable form of esm-spec §6.3.1 (the RHS
+  //   is not a `faq` whose `output_idx` names the subscripts in order). Raised
+  //   by the simulating bindings when a model is built; this binding does not
+  //   simulate and never raises it. It is registered because the §9.6.6 code
+  //   table is cross-language uniform.
+  INDEXED_DEFINITION_UNSUPPORTED_FORM: 'indexed_definition_unsupported_form',
   // `unsupported_construct` — a continuous or discrete event, or an implicit
   //   equation (an expression LHS), reached an evaluator that cannot run it
   //   (esm-spec §9.6.6).

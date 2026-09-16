@@ -178,12 +178,12 @@ DiscreteMaterializer() =
 #     hard-errors as the pipeline-violation guard requires. No-op for a model
 #     without a whole-array D.
 # Returns `(equations, folded_array_obs)`.
-function _prepare_model_equations(model::Model)
+function _prepare_model_equations(model::Model; vi_vars=Set{String}())
     # esm 1.0.0: an observed unknown's defining right-hand side IS an equation
     # (esm-spec §6.3), so there is no variable-level `expression` left to
     # synthesize an equation from — the list is already complete.
     equations = model.equations
-    equations = _normalize_indexed_observed_lhs(equations, model)
+    equations = _normalize_indexed_observed_lhs(equations, model; vi_vars=vi_vars)
     equations, folded_array_obs = _fold_elementwise_array_observeds(equations, model)
     let var_shapes = Dict{String,Vector{String}}()
         for (n, v) in model.variables
@@ -2385,7 +2385,7 @@ function _build_lower_and_classify(model::Model;
     # ---- Observed synthesis + equation pre-lowering ----
     # (see `_prepare_model_equations`: expression-defined observed synthesis,
     # WS4 elementwise array-observed fold, whole-array derivative lift)
-    equations, folded_array_obs = _prepare_model_equations(model)
+    equations, folded_array_obs = _prepare_model_equations(model; vi_vars=vi_vars)
 
     # ---- Geometry variable discovery ----
     # (see `_discover_geometry_vars`: direct clip rings, build-once setup vars,
