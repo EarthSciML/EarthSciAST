@@ -1,0 +1,243 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "UnitsSumUndeterminableOperands",
+    "description": "Pins esm-spec §4.8.3/§4.8.4 for + - min max: an undeterminable operand is skipped and the result is the unit of the determinable operands; a sum with no determinable operand (1 + 2, +(2)) is undeterminable, not dimensionless; a unary + carries its operand's unit, as a unary - does.",
+    "authors": [
+      "Chris Tessum with Claude"
+    ],
+    "created": "2026-09-15T00:00:00Z",
+    "tags": [
+      "units",
+      "dimensional_analysis",
+      "literals"
+    ]
+  },
+  "models": {
+    "SumUnitRules": {
+      "reference": {
+        "notes": "Every observed variable is declared in m. A binding that typed an all-literal sum, an all-literal max or a unary + of a literal as dimensionless would report m against dimensionless and reject this file; x_plus_unary_plus_literal would be rejected inside the sum as m + dimensionless. tests/invalid/units_sum_undeterminable_operand_mismatch.esm pins the other half: a partly undeterminable sum is NOT skipped."
+      },
+      "variables": {
+        "x": {
+          "type": "parameter",
+          "units": "m",
+          "default": 2.0,
+          "description": "A length"
+        },
+        "y": {
+          "type": "parameter",
+          "units": "m",
+          "default": 3.0,
+          "description": "Another length"
+        },
+        "integer_literal_sum": {
+          "type": "unknown",
+          "units": "m",
+          "description": "1 + 2: no determinable operand, so undeterminable and unchecked"
+        },
+        "float_literal_max": {
+          "type": "unknown",
+          "units": "m",
+          "description": "max(1.5, 2.5): no determinable operand, so undeterminable and unchecked"
+        },
+        "negated_literal_sum": {
+          "type": "unknown",
+          "units": "m",
+          "description": "-(1) + -(2.5): no determinable operand, so undeterminable and unchecked"
+        },
+        "unary_plus_literal": {
+          "type": "unknown",
+          "units": "m",
+          "description": "+(2): carries the literal's undeterminable unit"
+        },
+        "unary_plus_variable": {
+          "type": "unknown",
+          "units": "m",
+          "description": "+(x): carries x's unit"
+        },
+        "x_plus_unary_plus_literal": {
+          "type": "unknown",
+          "units": "m",
+          "description": "x + +(2): the unary + of a literal is neutral like the literal"
+        },
+        "partly_undeterminable_sum": {
+          "type": "unknown",
+          "units": "m",
+          "description": "x + 0.5*y: has x's unit, which matches the declaration"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "integer_literal_sum",
+          "rhs": {
+            "op": "+",
+            "args": [
+              1,
+              2
+            ]
+          }
+        },
+        {
+          "lhs": "float_literal_max",
+          "rhs": {
+            "op": "max",
+            "args": [
+              1.5,
+              2.5
+            ]
+          }
+        },
+        {
+          "lhs": "negated_literal_sum",
+          "rhs": {
+            "op": "+",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  1
+                ]
+              },
+              {
+                "op": "-",
+                "args": [
+                  2.5
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "unary_plus_literal",
+          "rhs": {
+            "op": "+",
+            "args": [
+              2
+            ]
+          }
+        },
+        {
+          "lhs": "unary_plus_variable",
+          "rhs": {
+            "op": "+",
+            "args": [
+              "x"
+            ]
+          }
+        },
+        {
+          "lhs": "x_plus_unary_plus_literal",
+          "rhs": {
+            "op": "+",
+            "args": [
+              "x",
+              {
+                "op": "+",
+                "args": [
+                  2
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "partly_undeterminable_sum",
+          "rhs": {
+            "op": "+",
+            "args": [
+              "x",
+              {
+                "op": "*",
+                "args": [
+                  0.5,
+                  "y"
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "tolerance": {
+        "rel": 0.0,
+        "abs": 1e-09
+      },
+      "tests": [
+        {
+          "id": "defaults",
+          "description": "x = 2 m, y = 3 m.",
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
+          "assertions": [
+            {
+              "variable": "integer_literal_sum",
+              "time": 0.0,
+              "expected": 3.0
+            },
+            {
+              "variable": "float_literal_max",
+              "time": 0.0,
+              "expected": 2.5
+            },
+            {
+              "variable": "negated_literal_sum",
+              "time": 0.0,
+              "expected": -3.5
+            },
+            {
+              "variable": "unary_plus_literal",
+              "time": 0.0,
+              "expected": 2.0
+            },
+            {
+              "variable": "unary_plus_variable",
+              "time": 0.0,
+              "expected": 2.0
+            },
+            {
+              "variable": "x_plus_unary_plus_literal",
+              "time": 0.0,
+              "expected": 4.0
+            },
+            {
+              "variable": "partly_undeterminable_sum",
+              "time": 0.0,
+              "expected": 3.5
+            }
+          ]
+        },
+        {
+          "id": "overrides",
+          "description": "x = 10 m, y = 4 m.",
+          "parameter_overrides": {
+            "x": 10.0,
+            "y": 4.0
+          },
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
+          "assertions": [
+            {
+              "variable": "unary_plus_variable",
+              "time": 0.0,
+              "expected": 10.0
+            },
+            {
+              "variable": "x_plus_unary_plus_literal",
+              "time": 0.0,
+              "expected": 12.0
+            },
+            {
+              "variable": "partly_undeterminable_sum",
+              "time": 0.0,
+              "expected": 12.0
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

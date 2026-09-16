@@ -50,7 +50,7 @@
 # (op_registry.jl, flag `:geo_eval`) minus the structurally-compiled ops.
 # Compile-time membership gating preserves the interpreter's failure mode: an
 # op outside this set throws E_TREEWALK_GEOMETRY_SETUP (not the runtime
-# ladder's E_TREEWALK_UNSUPPORTED_OP).
+# ladder's unevaluable_operator).
 const _GEO_STRUCTURAL_OPS = Set{String}([
     "index", "intersect_polygon", "polygon_intersection_area", "skolem",
     "true", "false", "faq",
@@ -472,5 +472,5 @@ function _eval_geo_op(n::_Node, u, p, t, ::Type{T})::Float64 where {T}
     elseif op === :geo_agg
         return _geo_eval_agg(n.payload::_GeoAggSpec, u, p, t, T)
     end
-    throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_OP", String(op)))
+    throw(_unevaluable_operator(op, "the setup-geometry ladder has no arm for it"))
 end

@@ -64,7 +64,7 @@ class UnsupportedFieldError(CanonicalizeError):
                 if field is None
                 else (
                     f"node carries field '{field}' outside the canonical JSON node "
-                    "encoding (op/args/wrt/dim/fn/name/value); emitting it would be "
+                    "encoding (op/args/wrt/dim/fn/name/value/units); emitting it would be "
                     "lossy and non-portable (RFC §5.4.6)"
                 )
             )
@@ -314,7 +314,16 @@ def _emit_json(e: Expr) -> str:
 # encoding: exactly the set every binding serializes and the cross-language
 # canonical fixtures pin (see `canonical_json`). CLOSED — extending it is a
 # cross-binding format change, never a Python-local edit.
-_EMISSIBLE_FIELDS: tuple[str, ...] = ("op", "args", "wrt", "dim", "fn", "name", "value")
+_EMISSIBLE_FIELDS: tuple[str, ...] = (
+    "op",
+    "args",
+    "wrt",
+    "dim",
+    "fn",
+    "name",
+    "value",
+    "units",
+)
 
 # ExprNode fields TOLERATED-AND-IGNORED by the canonical emitter: a node
 # carrying them still canonicalizes, emitting the pinned fields only. Kept for
@@ -370,7 +379,7 @@ def _assert_emissible(e: Expr) -> None:
 
 
 def _emit_node_json(n: ExprNode) -> str:
-    # Emit ONLY the closed emissible field set (op/args/wrt/dim/fn/name/value) —
+    # Emit ONLY the closed emissible field set (op/args/wrt/dim/fn/name/value/units) —
     # the set every binding serializes and the cross-language canonical fixtures
     # pin. Nodes carrying any other set field have already been rejected by
     # `_assert_emissible` (via `canonical_json`); `fn` also carries the
@@ -391,6 +400,10 @@ def _emit_node_json(n: ExprNode) -> str:
         entries.append(("name", _json_string(n.name)))
     if n.value is not None:
         entries.append(("value", _emit_value_json(n.value)))
+    if getattr(n, "units", None) is not None:
+        # A `const` node's declared unit (esm-spec §4.8.5) is meaning-bearing:
+        # two nodes differing only in `units` are different quantities.
+        entries.append(("units", _json_string(n.units)))
     entries.sort(key=lambda kv: kv[0])
     body = ",".join(f"{_json_string(k)}:{v}" for k, v in entries)
     return "{" + body + "}"

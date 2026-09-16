@@ -19,6 +19,43 @@ function _equation_tag(eq::Equation)
     return string(typeof(eq.lhs))
 end
 
+# The construct an event refusal names (esm-spec §9.6.6).
+_event_construct(::ContinuousEvent) = "continuous event"
+_event_construct(::DiscreteEvent) = "discrete event"
+
+# The tree-walk evaluator's refusal of an event (esm-spec §9.6.6), one message
+# for every entry that can still see the events: `build_evaluator` on a model or
+# on a flattened system, and `simulate` / `run_inline_tests`. The event is named
+# `'name'`, or `(unnamed)`.
+_event_refusal(ev::Union{ContinuousEvent,DiscreteEvent}) = TreeWalkError(
+    ERROR_CODES.UNSUPPORTED_CONSTRUCT,
+    "$(_event_construct(ev)) $(ev.name === nothing ? "(unnamed)" : "'$(ev.name)'") " *
+    "is not supported by the Julia tree-walk evaluator; " *
+    "refusing the build rather than running the model without it")
+
+# Throw the refusal when a flattened system carries an event, continuous or
+# discrete. Called before `flattened_to_esm`, which does not carry events into
+# the run document, so the model-level check at the build entry would never see
+# them.
+function _refuse_flat_events(flat::FlattenedSystem)
+    isempty(flat.continuous_events) || throw(_event_refusal(flat.continuous_events[1]))
+    isempty(flat.discrete_events) || throw(_event_refusal(flat.discrete_events[1]))
+    return nothing
+end
+
+# The first event `model` or any of its subsystems declares, a continuous one
+# before a discrete one; `nothing` when there is none.
+function _first_event(model::Model)::Union{Nothing,ContinuousEvent,DiscreteEvent}
+    isempty(model.continuous_events) || return model.continuous_events[1]
+    isempty(model.discrete_events) || return model.discrete_events[1]
+    for sub in values(model.subsystems)
+        sub isa Model || continue
+        found = _first_event(sub)
+        found === nothing || return found
+    end
+    return nothing
+end
+
 # Variable substitution that preserves every OpExpr field — the
 # package-level `substitute` only carries `wrt`/`dim` and drops
 # `handler_id`, `fn`, etc., which would corrupt `call`/`broadcast`

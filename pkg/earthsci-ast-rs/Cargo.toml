@@ -160,7 +160,7 @@ criterion = { version = "0.5", optional = true }
 #     earthsciio = { path = "../../../EarthSciIO/rust" }
 # Optional so the default build neither links EarthSciIO nor inherits its
 # netcdf/hdf5 C build requirements.
-earthsciio = { version = "0.1.2", optional = true }
+earthsciio = { version = "0.1.4", optional = true }
 time = { version = "0.3", optional = true }
 # OPT-IN XLA compiled backend (feature `xla`, src/simulate_array/tape/xla_emit.rs
 # + src/xla_runtime.rs). Emits the tape IR as an XLA computation through

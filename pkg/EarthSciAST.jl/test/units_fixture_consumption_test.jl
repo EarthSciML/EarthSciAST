@@ -1,6 +1,6 @@
 # Units fixtures consumption runner (gt-dt0o).
 #
-# The three units_*.esm files in tests/valid/ carry inline `tests` blocks
+# The units_*.esm files in tests/valid/ carry inline `tests` blocks
 # (id / parameter_overrides / initial_conditions / time_span / assertions)
 # added in gt-p3v. Schema parse coverage is already asserted elsewhere
 # (units_test.jl's Cross-binding units fixtures suite). This file closes
@@ -96,9 +96,15 @@ end
 
 @testset "Units fixtures inline tests execution (gt-dt0o)" begin
     fixtures_root = joinpath(@__DIR__, "..", "..", "..", "tests", "valid")
+    # Only the fixtures that CARRY an inline `tests` block belong here;
+    # units_ifelse_undeterminable_branch.esm and
+    # units_comparisons_and_connectives.esm declare units alone and are wired
+    # into the cross-binding validate suite in units_test.jl instead.
     fixtures = ["units_conversions.esm",
                 "units_dimensional_analysis.esm",
-                "units_propagation.esm"]
+                "units_propagation.esm",
+                "units_negated_literal_neutral.esm",
+                "units_sum_undeterminable_operands.esm"]
 
     any_tests_across_fixtures = false
     for fname in fixtures

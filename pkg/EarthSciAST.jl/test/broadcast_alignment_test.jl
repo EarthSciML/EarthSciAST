@@ -328,7 +328,7 @@ end
     @test got2["dp[3,2,1]"] ≈ (3 + 20 + 100) * 20
 end
 
-@testset "reshape / transpose / concat still reach the unsupported-op gate" begin
+@testset "reshape / transpose / concat are refused with unevaluable_operator" begin
     vars = Dict("u" => ESS.ModelVariable(ESS.UnknownVariable))
     ics = Dict("u" => 1.0)
     for node in [_op("reshape", _v("u"); shape=Any[1, 1]),
@@ -337,7 +337,7 @@ end
         m = ESS.Model(vars, [ESS.Equation(_D("u"), node)])
         err = _bc_err(() -> E.build_evaluator(m; initial_conditions=ics))
         @test err isa E.TreeWalkError
-        @test err.code == "E_TREEWALK_UNSUPPORTED_OP"
+        @test err.code == "unevaluable_operator"
     end
     # …while a typed `broadcast` node with a legal `fn` now LOWERS and runs.
     m = ESS.Model(vars, [ESS.Equation(_D("u"), _op("broadcast", _v("u"); fn="-"))])

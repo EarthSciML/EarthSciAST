@@ -39,7 +39,8 @@ clean and its assertion would pass for the wrong reason.
 | `version_1_0_0_baseline.esm` | 1.0.0 | Load successfully | Exact version match |
 | `version_1_0_5_patch_upgrade.esm` | 1.0.5 | Load successfully | Newer patch — fully compatible |
 | `version_1_0_100_large_patch.esm` | 1.0.100 | Load successfully | Three-digit patch, not a minor bump |
-| `version_1_1_0_minor_upgrade.esm` | 1.1.0 | Load with warning | Newer minor — forward compatible |
+| `version_1_1_0_minor_upgrade.esm` | 1.1.0 | Load | Earlier minor since the esm 1.2.0 bump — additive, no warning |
+| `version_1_2_0_const_units.esm` | 1.2.0 | Load | Exact version match; uses declared units on a `const` node (esm-spec §4.8.5) |
 | `version_1_10_0_double_digit.esm` | 1.10.0 | Load with warning | Double-digit minor; newer than 1.2.0 |
 | `version_1_2_0_with_unknown_fields.esm` | 1.2.0 | **Schema error** | Newer minor carrying two unmodelled top-level blocks — see the OPEN note |
 

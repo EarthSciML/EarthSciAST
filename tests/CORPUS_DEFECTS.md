@@ -13,15 +13,17 @@ five bindings. Defect 3 is **fixed** and, unlike the other two, was a bug in the
 five bindings rather than in the corpus — it had TWO instances, the second of
 which defect 2 was hiding, and one change repaired both.
 
-Reproduce (measured **93 fixtures, 93 resolve, 0 raise**; before the defect-3
-fix it was 93 / 91 / 2, both remaining raises being defect 3 with the same error
-code):
+Reproduce (measured **93 fixtures, 93 resolve, 0 raise** when this file was
+closed; before the defect-3 fix it was 93 / 91 / 2, both remaining raises being
+defect 3 with the same error code). The sweep resolves each fixture's LOADED
+document (API_SPEC.md §5.9), so an index set a model receives through a template
+import or a `{ref}` mount is in the registry:
 
 ```bash
 PYTHONPATH=pkg/earthsci-ast-py/src python3 - <<'PY'
 import json, glob, earthsci_ast as e
 for f in sorted(glob.glob("tests/valid/**/*.esm", recursive=True)):
-    try: e.resolve_references(json.load(open(f)))
+    try: e.resolve_references(json.loads(e.to_json(e.load_path(f))))
     except Exception as ex: print(f, type(ex).__name__, ex)
 PY
 ```

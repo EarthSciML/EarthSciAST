@@ -60,9 +60,10 @@ class TestVersionCompatibility:
         corpus keeps each file stamped with the version it is named for
         (compatibility_matrix.json), so the exact-match role moves between
         files as the library advances rather than a file being restamped.
-        It was version_1_0_0_baseline.esm until esm 1.1.0.
+        It was version_1_0_0_baseline.esm until esm 1.1.0, and
+        version_1_1_0_minor_upgrade.esm until esm 1.2.0.
         """
-        fixture = load_fixture("version_1_1_0_minor_upgrade.esm")
+        fixture = load_fixture("version_1_2_0_const_units.esm")
         assert fixture["esm"] == _EXPECTED_VERSION
 
         with no_version_warning():

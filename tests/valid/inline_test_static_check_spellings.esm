@@ -1,0 +1,241 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "InlineTestStaticCheckSpellings",
+    "description": "Valid: every spelling the inline-test static checks (esm-spec §6.6.2, §6.6.3, §6.6.5) MUST accept. Override keys: the fully qualified `P.sub.g`, the subsystem-relative `sub.g`, the bare `g`, the qualified `P.k`, an element name `u[1]`, and a reaction system's bare and qualified parameter. Assertion targets: an element name pointwise, and a shaped field with `reduce` and with `coords`. Each test is independent. The document is a validation fixture; its expected values are not meant to be run.",
+    "authors": [
+      "EarthSciML"
+    ],
+    "created": "2026-09-15T00:00:00Z"
+  },
+  "index_sets": {
+    "x": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "P": {
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0,
+          "shape": [
+            "x"
+          ],
+          "description": "Field over x."
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 1.0,
+          "description": "Decay rate."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "-",
+                  "args": [
+                    "k"
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "i"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "subsystems": {
+        "sub": {
+          "variables": {
+            "g": {
+              "type": "parameter",
+              "units": "1",
+              "default": 1.0,
+              "description": "A mounted subsystem's parameter."
+            }
+          },
+          "equations": []
+        }
+      },
+      "tests": [
+        {
+          "id": "qualified_subsystem_key",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "P.sub.g": 2.0
+          },
+          "assertions": [
+            {
+              "variable": "u[1]",
+              "time": 1.0,
+              "expected": 0.3679
+            }
+          ]
+        },
+        {
+          "id": "subsystem_relative_key",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "sub.g": 2.0
+          },
+          "assertions": [
+            {
+              "variable": "u",
+              "time": 1.0,
+              "expected": 0.3679,
+              "reduce": "mean"
+            }
+          ]
+        },
+        {
+          "id": "bare_and_qualified_keys",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "g": 2.0,
+            "P.k": 1.0
+          },
+          "initial_conditions": {
+            "u[1]": 1.0,
+            "u[2]": 1.0,
+            "u[3]": 1.0
+          },
+          "assertions": [
+            {
+              "variable": "u",
+              "time": 1.0,
+              "expected": 0.3679,
+              "coords": {
+                "x": 2
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "reaction_systems": {
+    "Chem": {
+      "species": {
+        "A": {
+          "units": "mol/L",
+          "default": 1.0,
+          "description": "Reactant."
+        },
+        "B": {
+          "units": "mol/L",
+          "default": 0.0,
+          "description": "Product."
+        }
+      },
+      "parameters": {
+        "kr": {
+          "units": "1/s",
+          "default": 0.1,
+          "description": "First-order rate constant."
+        }
+      },
+      "reactions": [
+        {
+          "id": "R1",
+          "substrates": [
+            {
+              "species": "A",
+              "stoichiometry": 1
+            }
+          ],
+          "products": [
+            {
+              "species": "B",
+              "stoichiometry": 1
+            }
+          ],
+          "rate": "kr"
+        }
+      ],
+      "tests": [
+        {
+          "id": "bare_and_qualified_keys",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "Chem.kr": 0.1
+          },
+          "initial_conditions": {
+            "A": 1.0
+          },
+          "assertions": [
+            {
+              "variable": "A",
+              "time": 1.0,
+              "expected": 0.9048
+            },
+            {
+              "variable": "kr",
+              "time": 1.0,
+              "expected": 0.1
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

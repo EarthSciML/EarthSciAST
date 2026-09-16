@@ -1,0 +1,17 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "mount_forwarded_axis_toplevel_beside_nested",
+    "description": "The issue #236 assembly (esm-spec §4.7 'Two mount forms, one mechanism' and 'Index-set merge'). `models.A` mounts tests/valid/mount_forwarded_axis_column.esm at TOP LEVEL, and `models.W` mounts tests/valid/mount_forwarded_axis_nested.esm, which carries the SAME column as a NESTED `subsystems.col`. So `lev` arrives twice, once through each mount form. Both times it is imported from a grid library and sized by the forwarded metaparameter NLEV, and both times it closes at 59. The two contributions are deep-equal once each mounted document has been resolved in its own scope, so they MUST merge idempotently: post-load, `index_sets.lev.size` == 59. A binding that merges the top-level contribution before folding it compares `size: \"NLEV\"` against `size: 59` and wrongly refuses the document. The document's own NLEV = 59 is a site-5 default of this document only: it binds neither mount edge. The companion at different sizes is tests/invalid/template_imports/mount_forwarded_axis_size_conflict.esm.",
+    "authors": ["EarthSciAST"],
+    "created": "2026-09-15T00:00:00Z",
+    "tags": ["subsystem", "index_sets", "metaparameter", "merge", "mount", "toplevel-ref", "issue-236"]
+  },
+  "metaparameters": {
+    "NLEV": { "type": "integer", "default": 59, "description": "assembly column levels" }
+  },
+  "models": {
+    "A": { "ref": "./mount_forwarded_axis_column.esm" },
+    "W": { "ref": "./mount_forwarded_axis_nested.esm" }
+  }
+}

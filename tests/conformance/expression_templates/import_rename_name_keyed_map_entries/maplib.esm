@@ -1,0 +1,33 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "maplib",
+    "description": "Library for the import_rename_name_keyed_map_entries fixture: a faq template whose loop symbol is spelled `dim`, composing a template whose params are spelled `units` and `dim`. Both spellings are also keys the rename walk dispatches on, but here they are map-entry names (a `ranges` key and an apply-node `bindings` key), not fields."
+  },
+  "index_sets": {
+    "cells": { "kind": "interval", "size": 3 }
+  },
+  "expression_templates": {
+    "scaled": {
+      "params": ["units", "dim"],
+      "body": { "op": "*", "args": ["units", "dim"] }
+    },
+    "total_of": {
+      "params": ["g"],
+      "match": { "op": "total_of", "args": ["g"] },
+      "body": {
+        "op": "faq",
+        "args": [],
+        "output_idx": [],
+        "ranges": { "dim": { "from": "cells" } },
+        "expr": {
+          "op": "*",
+          "args": [
+            { "op": "index", "args": ["g", "dim"] },
+            { "op": "apply_expression_template", "args": [], "name": "scaled", "bindings": { "units": "k", "dim": "k2" } }
+          ]
+        }
+      }
+    }
+  }
+}
