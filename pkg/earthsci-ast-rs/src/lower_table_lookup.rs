@@ -707,6 +707,79 @@ mod tests {
         lower_table_lookups(&mut file).expect("clamp is implemented");
     }
 
+    /// Every position a [`FlattenedSystem`] can hold an expression in is
+    /// lowered, not just the equations: both event lists, the deferred
+    /// `field_ics`, and each variable's `update` — in the §6.3.1 subset maps
+    /// too, which hold their own copies of the variables they classify.
+    ///
+    /// The serialized system is the whole-system probe: a `table_lookup`
+    /// surviving ANYWHERE the flattened form carries survives into its JSON.
+    #[test]
+    fn the_flattened_pass_reaches_every_expression_position() {
+        let file = load_string(FIXTURE).expect("loads");
+        let mut flat = crate::flatten::flatten(&file).expect("flattens");
+        let lookup = serde_json::json!(
+            {"op": "table_lookup", "table": "t_prof", "axes": {"p": "M.p"}, "args": []});
+        let affects = serde_json::json!([{"lhs": "M.y", "rhs": lookup}]);
+        let variable = |update: serde_json::Value| -> crate::types::ModelVariable {
+            serde_json::from_value(
+                serde_json::json!({"type": "parameter", "default": 0.0, "update": update}),
+            )
+            .expect("variable")
+        };
+
+        flat.continuous_events = vec![
+            serde_json::from_value(serde_json::json!({
+                "conditions": [lookup],
+                "affects": affects,
+                "affect_neg": affects,
+            }))
+            .expect("continuous event"),
+        ];
+        flat.discrete_events = vec![
+            serde_json::from_value(serde_json::json!({
+                "trigger": {"type": "condition", "expression": lookup},
+                "affects": affects,
+            }))
+            .expect("discrete event"),
+        ];
+        flat.field_ics = vec![(
+            "M.y".to_string(),
+            serde_json::from_value(lookup.clone()).expect("initial-field expression"),
+        )];
+        let scheduled = variable(
+            serde_json::json!({"kind": "schedule", "interval": 1.0, "expression": lookup}),
+        );
+        let conditional = variable(
+            serde_json::json!({"kind": "condition", "when": lookup, "expression": lookup}),
+        );
+        for (map, var) in [
+            (&mut flat.state_variables, &scheduled),
+            (&mut flat.parameters, &scheduled),
+            (&mut flat.observed_variables, &scheduled),
+            (&mut flat.algebraic_variables, &conditional),
+            (&mut flat.brownian_parameters, &conditional),
+            (&mut flat.discrete_parameters, &conditional),
+        ] {
+            map.insert("M.u".to_string(), var.clone());
+        }
+
+        let lowered = lowered_flattened_copy(&flat)
+            .expect("lowers")
+            .expect("the system declares tables");
+        let json = serde_json::to_string(&lowered).expect("serializes");
+        assert!(
+            !json.contains(TABLE_LOOKUP),
+            "a table_lookup survived: {json}"
+        );
+        // Pure: the caller's system keeps every authored node.
+        let authored = serde_json::to_string(&flat).expect("serializes");
+        assert!(
+            authored.contains(TABLE_LOOKUP),
+            "the caller's system was rewritten"
+        );
+    }
+
     #[test]
     fn a_document_with_no_tables_is_left_alone() {
         let source = r#"{

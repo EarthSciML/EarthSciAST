@@ -145,6 +145,90 @@ def test_out_of_bounds_error_is_refused_on_the_flattened_carrier():
     assert excinfo.value.code == ErrorCode.TABLE_OUT_OF_BOUNDS_UNSUPPORTED.value
 
 
+def test_the_flattened_pass_reaches_every_expression_position():
+    """Every position a `FlattenedSystem` can hold an expression in is lowered,
+    not just the equations: both event lists, the deferred `field_ics`, and each
+    variable's `update` — the §6.3.1 subset maps included, which re-link by name
+    to the maps they classify (the shape Julia's
+    `lower_table_lookups(::FlattenedSystem)` has).
+
+    `repr` is the whole-system probe: a dataclass repr recurses into every
+    field, so a `table_lookup` surviving ANYWHERE — including in an equation's
+    re-rendered display string — shows up in it."""
+    import copy
+    from collections import OrderedDict
+    from dataclasses import replace
+
+    from earthsci_ast.esm_types import (
+        AffectEquation,
+        ContinuousEvent,
+        DataSourceBinding,
+        DiscreteEvent,
+        DiscreteEventTrigger,
+        ParameterUpdate,
+    )
+    from earthsci_ast.flatten import FlattenedVariable
+    from earthsci_ast.lower_table_lookup import lower_flattened_table_lookups
+
+    flat = flatten(load_path(FIXTURES_ROOT / "linear" / "fixture.esm"))
+    authored = flat.equations[0].rhs
+    assert isinstance(authored, ExprNode) and authored.op == "table_lookup"
+
+    def tl():
+        return copy.deepcopy(authored)
+
+    scheduled = FlattenedVariable(
+        name="M.s",
+        type="parameter",
+        update=ParameterUpdate(kind="schedule", interval=1.0, expression=tl()),
+    )
+    conditional = FlattenedVariable(
+        name="M.c",
+        type="parameter",
+        update=ParameterUpdate(
+            kind="condition",
+            when=tl(),
+            expression=tl(),
+            from_source=DataSourceBinding(file_variable="v", unit_conversion=tl()),
+        ),
+    )
+    planted = replace(
+        flat,
+        continuous_events=[
+            ContinuousEvent(
+                name="c",
+                conditions=[tl()],
+                affects=[AffectEquation(lhs="M.k_O3", rhs=tl())],
+                affect_neg=[AffectEquation(lhs="M.k_O3", rhs=tl())],
+            )
+        ],
+        discrete_events=[
+            DiscreteEvent(
+                name="d",
+                trigger=DiscreteEventTrigger(type="condition", value=tl()),
+                affects=[AffectEquation(lhs="M.k_O3", rhs=tl())],
+            )
+        ],
+        field_ics=[("M.k_O3", tl())],
+        state_variables=OrderedDict([*flat.state_variables.items(), ("M.s", scheduled)]),
+        parameters=OrderedDict([*flat.parameters.items(), ("M.c", conditional)]),
+        observed_variables=OrderedDict([("M.o", scheduled)]),
+        algebraic_variables=OrderedDict([("M.s", scheduled)]),
+        brownian_parameters=OrderedDict([("M.c", conditional)]),
+        discrete_parameters=OrderedDict([("M.c", conditional)]),
+    )
+
+    lowered = lower_flattened_table_lookups(planted)
+    assert "table_lookup" not in repr(lowered)
+    # Pure: the caller's system keeps every authored node.
+    assert "table_lookup" in repr(planted)
+    # The subsets carry the SAME lowered object as the map they classify, so the
+    # flattened system cannot disagree with itself about a variable.
+    assert lowered.algebraic_variables["M.s"] is lowered.state_variables["M.s"]
+    assert lowered.brownian_parameters["M.c"] is lowered.parameters["M.c"]
+    assert lowered.discrete_parameters["M.c"] is lowered.parameters["M.c"]
+
+
 # ---------------------------------------------------------------------------
 # Coverage: every expression position the evaluator reaches.
 # ---------------------------------------------------------------------------
