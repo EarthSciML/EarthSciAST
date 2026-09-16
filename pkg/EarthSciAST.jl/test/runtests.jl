@@ -321,6 +321,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("pde_inline_scalar_slot_collision_test.jl")
     include("pde_inline_dead_observed_test.jl")  # #176: an observed no live equation consumes
     include("mounted_component_tests_test.jl")   # #198: a mount does not carry the leaf's tests
+    include("mount_enums_test.jl")               # #260: a mounted file's enum ops resolve in its own block
     include("conformance_pde_inline_observed_rank2_test.jl")
     include("conformance_pde_inline_dead_observed_test.jl")
     include("conformance_elementwise_observed_gather_test.jl")
@@ -338,6 +339,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("conformance_override_key_diagnostics_test.jl")
     include("conformance_pde_inline_reference_dimension_names_test.jl")  # §6.6.5 reference dimension names
     include("rhs_time_derivative_resolution_test.jl")   # §4.2 right-hand-side D: Julia resolves; its exclusion
+    include("unlowered_operator_walk_test.jl")          # §9.6.3 c.6: unlowered op in a tree the build discards
     include("closed_functions_test.jl")
     include("closed_functions_autodiff_test.jl")
     include("datetime_arithmetic_test.jl")

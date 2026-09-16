@@ -257,7 +257,7 @@ fn canon_op(node: &ExpressionNode) -> Result<Expr, CanonicalizeError> {
     // `args` was descended, so such a NaN escaped the guard.
     //
     // Sidecar fields are NOT part of the emitted canonical JSON (see
-    // `emit_node_json`, which emits only op/args/wrt/dim/fn/name/value — the
+    // `emit_node_json`, which emits only op/args/wrt/dim/fn/name/value/units — the
     // closed cross-binding field set the TS/Python/Julia siblings pin), so
     // normalizing the sidecar sub-trees here only strengthens the finiteness
     // guard and normalizes the returned tree. A node that still carries a

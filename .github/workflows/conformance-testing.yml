@@ -156,30 +156,30 @@ jobs:
         working-directory: pkg/earthsci-ast-rs
         run: cargo fmt --all -- --check
 
-      # Default features only, deliberately. `--all-features` (what this step
-      # used to say) did not COMPILE for a long time -- and because the clippy
-      # step sat behind the rustfmt gate (#217, fixed by the conditions on
-      # these steps), it did not actually run in CI for 40+ runs, so the rot
-      # went unseen. There were two blockers: `esio` against an earthsciio 0.1
-      # with no `DataSource`/`SourceTemporal`, and ~14 `performance` call sites
-      # passing `ExpressionNode` where `Expr::Operator` wanted
-      # `Arc<ExpressionNode>`.
+      # Every feature EXCEPT `xla`, spelled out -- the same list the
+      # `rust-tests` stable/beta legs test with. On the default feature set,
+      # clippy never compiled the feature-gated code: `esio_provider` (behind
+      # `esio`), the gated items inside `performance` and its SIMD paths
+      # (behind `parallel`/`simd`/`zero_copy`/`custom_alloc`), the `wasm`
+      # bindings and their feature-gated tests, the conformance adapter
+      # binaries, and `benches/benchmarks.rs` (a
+      # `required-features = ["benchmarks"]` target, so `--all-targets` alone
+      # skips it). Those were compiled by `rust-tests` but never linted (#242).
       #
-      # BOTH are now fixed -- `cargo check --all-features` builds clean, which
-      # is what the `rust-tests` matrix and the bench-check step below rely on.
-      # Widening this back out is therefore possible but is NOT a free change:
-      # `esio_provider` and `performance` have never once been linted, so it
-      # would surface a fresh backlog under `-D warnings`. Do it as its own
-      # change, with the findings triaged, rather than as a drive-by.
-      #
-      # Note also that `--all-targets` on the default feature set does NOT
-      # cover `benches/benchmarks.rs`: that target is `required-features =
-      # ["benchmarks"]`, which is off by default. The bench target's COMPILE is
-      # checked in `rust-tests` instead (#218).
+      # `--all-features` has no "except" form, hence the list. `xla` is left
+      # out because its build script needs a separately fetched
+      # `xla_extension` release (`XLA_EXTENSION_DIR`) plus libclang, neither of
+      # which this job installs; that feature is built and tested in
+      # `xla-backends.yml`. `esio` raises the effective MSRV to 1.91 (earthsciio
+      # -> zarrs), which is fine here because the lint toolchain is pinned to
+      # RUST_LINT_VERSION.
       - name: cargo clippy
         if: ${{ !cancelled() }}
         working-directory: pkg/earthsci-ast-rs
-        run: cargo clippy --all-targets -- -D warnings
+        run: |
+          cargo clippy --all-targets --features \
+            conformance-adapters,wasm,parallel,simd,zero_copy,custom_alloc,benchmarks,performance,esio \
+            -- -D warnings
 
       # --- TypeScript ---------------------------------------------------
       - name: Install TypeScript dependencies
