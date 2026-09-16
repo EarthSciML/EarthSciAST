@@ -70,6 +70,13 @@
             "actual": 3.0,
             "assertion_idx": 10,
             "variable": "whole"
+        },
+        {
+            "test_id": "scalar_rhs_broadcasts",
+            "reduce": null,
+            "actual": 1.5,
+            "assertion_idx": 11,
+            "variable": "chain"
         }
     ],
     "reference_binding": "julia"

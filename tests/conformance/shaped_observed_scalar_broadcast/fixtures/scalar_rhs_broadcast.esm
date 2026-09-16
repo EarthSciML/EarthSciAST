@@ -2,7 +2,7 @@
   "esm": "1.0.0",
   "metadata": {
     "name": "ShapedObservedScalarBroadcast",
-    "description": "An observed declared over an index set whose right-hand side is a SCALAR \u2014 written as one, or evaluating to one because an `ifelse` predicate is constant \u2014 replicates that value into every cell of its declared shape (esm-spec \u00a74.3.4). Issue #262.",
+    "description": "An observed declared over an index set whose right-hand side is a SCALAR — written as one, or evaluating to one because an `ifelse` predicate is constant — replicates that value into every cell of its declared shape (esm-spec §4.3.4). Issue #262.",
     "authors": [
       "EarthSciML Authors and Contributors"
     ]
@@ -65,6 +65,14 @@
           ],
           "units": "1",
           "description": "A shaped observed whose RHS is a scalar parameter."
+        },
+        "chain": {
+          "type": "unknown",
+          "shape": [
+            "row_ax"
+          ],
+          "units": "1",
+          "description": "A shaped observed that ALIASES another shaped observed whose RHS is a scalar: the chained case."
         },
         "folded": {
           "type": "unknown",
@@ -130,6 +138,10 @@
         {
           "lhs": "from_param",
           "rhs": "level"
+        },
+        {
+          "lhs": "chain",
+          "rhs": "literal"
         },
         {
           "lhs": "folded",
@@ -290,6 +302,14 @@
               "variable": "whole",
               "time": 1.0,
               "expected": 3.0,
+              "coords": {
+                "row_ax": 2
+              }
+            },
+            {
+              "variable": "chain",
+              "time": 1.0,
+              "expected": 1.5,
               "coords": {
                 "row_ax": 2
               }
