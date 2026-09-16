@@ -3445,5 +3445,17 @@
     ],
     "is_valid": false,
     "notes": "A template call has the unit of its expansion (esm-spec \u00a74.8.5 item 5), so an unresolvable declared unit on a const in the called body is unit_parse_error at the calling equation's expression field (\u00a74.8.5 item 2)."
+  },
+  "root_find_all_removed.esm": {
+    "schema_errors": [
+      {
+        "path": "/models/Ball/continuous_events/0/root_find",
+        "message": "must be equal to one of the allowed values",
+        "keyword": "enum"
+      }
+    ],
+    "structural_errors": [],
+    "is_valid": false,
+    "notes": "`root_find` accepts only \"left\" (default) and \"right\", DiffEq's two rootfind sides; \"all\" was removed from the schema without a version bump because it never had an effect."
   }
 }

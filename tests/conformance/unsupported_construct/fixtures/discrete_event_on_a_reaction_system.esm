@@ -1,0 +1,95 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "DiscreteEventOnAReactionSystem",
+    "description": "A discrete event owned by a REACTION SYSTEM rather than a model. `A` is held constant (the source reaction runs at rate 0) and a periodic event doubles it once per unit of time, so A(3.5) = 8. `ReactionSystem` carries the same `discrete_events` block as `Model` (esm-schema.json), but Julia's and Rust's flatten used to drop a reaction system's events on the floor: the refusal never fired, and both bindings ran the document as if the event did not exist and reported 1. Every evaluator that cannot run the event MUST refuse with `unsupported_construct` naming the construct and the evaluator (issues #264, #356). Julia's ModelingToolkit export runs discrete events and is not covered by this category.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "conformance",
+      "unsupported_construct",
+      "events",
+      "reaction_systems"
+    ]
+  },
+  "reaction_systems": {
+    "DiscreteEventOnAReactionSystem": {
+      "tolerance": {
+        "abs": 1e-06
+      },
+      "species": {
+        "A": {
+          "units": "1",
+          "default": 1.0,
+          "description": "Doubles at each event; 1 at t = 0."
+        }
+      },
+      "parameters": {
+        "k": {
+          "units": "1/s",
+          "default": 0.0,
+          "description": "Zero, so A only ever changes at an event."
+        }
+      },
+      "reactions": [
+        {
+          "id": "R1",
+          "name": "produce_A",
+          "substrates": null,
+          "products": [
+            {
+              "species": "A",
+              "stoichiometry": 1
+            }
+          ],
+          "rate": "k"
+        }
+      ],
+      "discrete_events": [
+        {
+          "name": "double",
+          "trigger": {
+            "type": "periodic",
+            "interval": 1.0
+          },
+          "affects": [
+            {
+              "lhs": "A",
+              "rhs": {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "A"
+                    ]
+                  },
+                  2.0
+                ]
+              }
+            }
+          ],
+          "description": "A := 2*Pre(A), once per unit of time."
+        }
+      ],
+      "tests": [
+        {
+          "id": "a_periodic_event_folds_a_species",
+          "description": "Intended behaviour: A(3.5) = 8. Without the event A(3.5) = 1. An evaluator that cannot run the event must refuse rather than report 1.",
+          "time_span": {
+            "start": 0.0,
+            "end": 3.5
+          },
+          "assertions": [
+            {
+              "variable": "A",
+              "time": 3.5,
+              "expected": 8.0
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

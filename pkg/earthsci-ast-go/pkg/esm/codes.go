@@ -477,8 +477,8 @@ const (
 	// build (esm-spec §9.6.6). Registered for the cross-binding vocabulary;
 	// this binding has no simulator, so nothing here raises it.
 	CodeDerivedIndexSetUnmaterialized = "derived_index_set_unmaterialized"
-	// CodeUnsupportedConstruct: a discrete event or an implicit equation reached
-	// an evaluator that cannot run it (esm-spec §9.6.6). Go does not simulate,
+	// CodeUnsupportedConstruct: a continuous or discrete event, or an implicit
+	// equation, reached an evaluator that cannot run it (esm-spec §9.6.6). Go does not simulate,
 	// so it never raises this; the constant keeps the §9.6.6 vocabulary uniform.
 	CodeUnsupportedConstruct = "unsupported_construct"
 )
