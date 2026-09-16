@@ -5,8 +5,8 @@ Port-parity counterpart of the Julia reference test
 ``semiring-faq-unified-ir`` §6.1 (cadence-partition) / §5.5 (determinism) /
 §7.3 (edge enumeration); ``CONFORMANCE_SPEC.md`` §5.5 / §5.7.
 
-The front-door replaces the ``numpy_interpreter`` "derived index set … is not
-materialized" raise (the analog of Julia's ``E_TREEWALK_DERIVED_INDEX_SET``): a
+The front-door sizes what the ``numpy_interpreter`` resolver would otherwise refuse
+with ``derived_index_set_unmaterialized`` (as the Julia resolver does): a
 ``kind:"derived"`` index set whose ``from_faq`` names a value-invention aggregate
 (skolem/distinct/rank) is materialized ONCE at setup through the relational
 engine and its cardinality handed to the index-set resolver as the dense extent
@@ -188,7 +188,9 @@ def test_resolver_still_raises_without_materialization() -> None:
     an empty set)."""
     mj = _load_model("tests/valid/faq/edge_enumeration_area_eff.esm", "EdgeEnumerationAreaEff")
     ctx = _empty_ctx(index_sets=mj["index_sets"], derived_extents={})
-    with pytest.raises(NumpyInterpreterError, match="not materialized"):
+    with pytest.raises(
+        NumpyInterpreterError, match=r"^derived_index_set_unmaterialized: .*not materialized"
+    ):
         _resolve_range_spec({"from": "edges"}, ctx)
 
 

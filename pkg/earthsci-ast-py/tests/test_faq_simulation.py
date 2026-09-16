@@ -21,12 +21,24 @@ import numpy as np
 import pytest
 from conftest import FIXTURES_ROOT
 
+from earthsci_ast.expression import UnsupportedConstructError
 from earthsci_ast.parse import load_path
 from earthsci_ast.problem import ReturnCode, esm_problem, solve
 from earthsci_ast.inline_tests import TEST_ABSTOL, TEST_RELTOL, _check_assertion
 
 
 _FIXTURES_DIR = FIXTURES_ROOT / "fixtures" / "faq"
+
+# Fixtures the NumPy array interpreter must REFUSE rather than run, with the
+# esm-spec §9.6.6 ``unsupported_construct`` construct each one carries (issue
+# #264). ``06_rearranged_algebraic`` defines ``v`` only through a rearranged
+# residual, ``-1 - 0.5*sin(u[i]) + v[i] ~ v[i] - v[i]``. This interpreter has no
+# algebraic solve, so it used to drop that equation and grade the fixture's
+# initial-value smoke assertion as a pass. The fixture's real check is the
+# ModelingToolkit export, which eliminates ``v``.
+_REFUSED: dict[str, str] = {
+    "06_rearranged_algebraic.esm": "implicit equation",
+}
 
 
 def _collect_fixtures() -> List[Path]:
@@ -97,6 +109,14 @@ def test_faq_fixture_conformance(fixture_path: Path) -> None:
         raw = json.load(fh)
 
     esm_file = load_path(fixture_path)
+
+    construct = _REFUSED.get(fixture_path.name)
+    if construct is not None:
+        with pytest.raises(UnsupportedConstructError) as info:
+            esm_problem(esm_file, (0.0, 1.0))
+        assert info.value.code == "unsupported_construct"
+        assert info.value.construct == construct
+        return
 
     # Walk models — inline ``tests`` lives at the model level in the raw JSON
     # (the Model dataclass doesn't carry tests yet, so we read them from the

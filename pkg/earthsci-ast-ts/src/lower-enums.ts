@@ -16,16 +16,16 @@
  * enum):
  *   - `enum_op_malformed` — an `enum` op whose args are not
  *     `[enum_name, member_name]` (two strings).
- *   - `enum_not_declared` — reference to an enum name not present in the file's
- *     top-level `enums` block.
- *   - `enum_member_not_found` — reference to an unknown member of a declared
- *     enum.
+ *   - `unknown_enum` — reference to an enum name not present in the file's
+ *     top-level `enums` block (esm-spec §4.5).
+ *   - `unknown_enum_symbol` — reference to an unknown member of a declared
+ *     enum (esm-spec §4.5).
  */
 
 import type { EsmFile } from './types.js'
 import { isNumericLiteral } from './numeric-literal.js'
 import { EXPRESSION_CHILD_KEYS } from './expression.js'
-import { EsmDiagnosticError } from './errors.js'
+import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
 
 /** Shared source of truth for "which op fields carry child expressions". */
 const EXPRESSION_CHILD_KEY_SET: ReadonlySet<string> = new Set(EXPRESSION_CHILD_KEYS)
@@ -39,6 +39,28 @@ export class EnumLoweringError extends EsmDiagnosticError {
 }
 
 type EnumsMap = { [k: string]: { [k: string]: number } }
+
+/** The `const` node `enums[enumName][memberName]` lowers to. */
+function lowerEnumReference(
+  enumName: string,
+  memberName: string,
+  enums: EnumsMap,
+): Record<string, unknown> {
+  const decl = Object.prototype.hasOwnProperty.call(enums, enumName) ? enums[enumName] : undefined
+  if (!decl) {
+    throw new EnumLoweringError(
+      ERROR_CODES.UNKNOWN_ENUM,
+      `enum '${enumName}' is referenced by an 'enum' op but not declared in the file's top-level 'enums' block`,
+    )
+  }
+  if (!Object.prototype.hasOwnProperty.call(decl, memberName)) {
+    throw new EnumLoweringError(
+      ERROR_CODES.UNKNOWN_ENUM_SYMBOL,
+      `enum '${enumName}' has no member '${memberName}'`,
+    )
+  }
+  return { op: 'const', args: [], value: decl[memberName] }
+}
 
 /**
  * `memo` is an identity-keyed cache (one per `lowerEnums` run): template
@@ -83,25 +105,11 @@ function lowerExprUncached(expr: object, enums: EnumsMap, memo: Map<object, unkn
         typeof args[1] !== 'string'
       ) {
         throw new EnumLoweringError(
-          'enum_op_malformed',
+          ERROR_CODES.ENUM_OP_MALFORMED,
           `enum op requires args = [enum_name, member_name] (two strings); got ${JSON.stringify(args)}`,
         )
       }
-      const [enumName, memberName] = args as [string, string]
-      const decl = enums[enumName]
-      if (!decl) {
-        throw new EnumLoweringError(
-          'enum_not_declared',
-          `enum '${enumName}' is referenced by an 'enum' op but not declared in the file's top-level 'enums' block`,
-        )
-      }
-      if (!Object.prototype.hasOwnProperty.call(decl, memberName)) {
-        throw new EnumLoweringError(
-          'enum_member_not_found',
-          `enum '${enumName}' has no member '${memberName}'`,
-        )
-      }
-      return { op: 'const', args: [], value: decl[memberName] }
+      return lowerEnumReference(args[0], args[1], enums)
     }
     // Generic op: recurse into every expression-bearing child field. Descent
     // uses `EXPRESSION_CHILD_KEYS` — the SAME single source of truth the shared
@@ -149,4 +157,101 @@ export function lowerEnums(file: EsmFile): EsmFile {
     return lowerExpr(file, {} as EnumsMap, new Map()) as EsmFile
   }
   return lowerExpr(file, enums, new Map()) as EsmFile
+}
+
+/**
+ * Return raw-JSON `target` with its `enum` ops lowered against the `enums`
+ * block of `document`, the file that wrote `target`. `target` is not modified.
+ *
+ * An `enum` op is file-local (esm-spec §9.3): it resolves against the block of
+ * the file it is written in. {@link lowerEnums} runs once over the root
+ * document, so a tree that crosses a file boundary before that pass (a
+ * template-library body reaching an importer, §9.7.5) is lowered here, at the
+ * edge, while its own file's block is still at hand.
+ *
+ * An op with an argument spelled by a name in `openNames` is left in place: a
+ * template parameter substitutes position-blind (§9.6.3 constraint 5), so the
+ * call site decides what it spells and the op resolves there. An op whose
+ * arguments are not two strings is left for {@link lowerEnums}, which owns the
+ * malformed-op diagnostic.
+ */
+export function lowerEnumOpsForFile(
+  document: unknown,
+  target: unknown,
+  openNames: ReadonlySet<string> = new Set(),
+): unknown {
+  const block =
+    document !== null && typeof document === 'object'
+      ? (document as { enums?: unknown }).enums
+      : undefined
+  const enums = (block !== null && typeof block === 'object' ? block : {}) as EnumsMap
+  const walk = (node: unknown): unknown => {
+    if (Array.isArray(node)) return node.map(walk)
+    if (node === null || typeof node !== 'object' || isNumericLiteral(node)) return node
+    const obj = node as Record<string, unknown>
+    if (obj.op === 'enum') {
+      const args = obj.args
+      if (
+        !Array.isArray(args) ||
+        args.length !== 2 ||
+        typeof args[0] !== 'string' ||
+        typeof args[1] !== 'string' ||
+        openNames.has(args[0]) ||
+        openNames.has(args[1])
+      ) {
+        return node
+      }
+      return lowerEnumReference(args[0], args[1], enums)
+    }
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(obj)) out[k] = walk(v)
+    return out
+  }
+  return walk(target)
+}
+
+/**
+ * Return raw `document`, mounted at a §4.7 edge, with its `enum` ops lowered
+ * against its own `enums` block (esm-spec §9.3). `document` is not modified.
+ *
+ * Called once the document has resolved in its own scope and before its
+ * component is spliced into the mounting document, whose block is a different
+ * one. `enums` do not merge across a mount, so this is the only block those ops
+ * can name.
+ *
+ * A template declaration's body is lowered with that template's `params` left
+ * open, as at the import edge: an op spelled with a parameter resolves at the
+ * call site. Everything else is lowered with no open names.
+ */
+export function lowerMountedDocumentEnums<T>(document: T): T {
+  const lowerTemplates = (templates: Record<string, unknown>): Record<string, unknown> => {
+    const out: Record<string, unknown> = {}
+    for (const [name, decl] of Object.entries(templates)) {
+      if (decl !== null && typeof decl === 'object' && 'body' in decl) {
+        const d = decl as { body: unknown; params?: unknown }
+        const params = Array.isArray(d.params)
+          ? d.params.filter((p): p is string => typeof p === 'string')
+          : []
+        out[name] = { ...d, body: lowerEnumOpsForFile(document, d.body, new Set(params)) }
+      } else {
+        out[name] = decl
+      }
+    }
+    return out
+  }
+  const walk = (node: unknown): unknown => {
+    if (Array.isArray(node)) return node.map(walk)
+    if (node === null || typeof node !== 'object' || isNumericLiteral(node)) return node
+    const obj = node as Record<string, unknown>
+    if (obj.op === 'enum') return lowerEnumOpsForFile(document, obj)
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(obj)) {
+      out[k] =
+        k === 'expression_templates' && v !== null && typeof v === 'object' && !Array.isArray(v)
+          ? lowerTemplates(v as Record<string, unknown>)
+          : walk(v)
+    }
+    return out
+  }
+  return walk(document) as T
 }

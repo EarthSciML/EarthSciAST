@@ -389,6 +389,23 @@ def test_malformed_self_read_is_rejected_with_its_code(probe: str) -> None:
     assert expected_code in _load_codes(_probe_document(body, tests=False))
 
 
+def test_data_valued_lag_refusal_names_the_contraction() -> None:
+    """``index(s, k - index(lag, k))`` reads its lag from DATA: ``lag[k]`` is a
+    value, not a symbol with a range, so the index is not an offset of ``k`` and
+    the refusal is correct. It is also the expression an author porting a
+    data-chained model writes, so the message has to name the contraction that
+    does work."""
+    lag_read = {"op": "index", "args": ["lag", "k"]}
+    body = {"op": "index", "args": ["s", {"op": "-", "args": ["k", lag_read]}]}
+    with pytest.raises(SchemaValidationError) as excinfo:
+        load_string(_probe_document(body, tests=False))
+    findings = getattr(excinfo.value, "findings", [])
+    messages = [msg for code, msg in findings if code == RECURRENCE_NOT_WELLFOUNDED]
+    assert len(messages) == 1, findings
+    assert "If the offset is read from data" in messages[0]
+    assert "index(s, k - a)" in messages[0]
+
+
 def test_self_read_offset_on_two_axes_is_rejected() -> None:
     """``m[i,j]`` reading ``m[i-1, j-1]`` has no single axis to fold along — the
     sweep would have to advance both at once."""

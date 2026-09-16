@@ -50,12 +50,40 @@ EarthSciAST._solve_problem(prob::EsmProblem, alg; kwargs...) =
 # vector: the flattened state ordering is an implementation detail that coupling
 # can change. `SymbolCache` is the SymbolicIndexingInterface "system" the
 # `ODEFunction` carries, so `sol[Symbol("Chem.A")]`, `variable_symbols(sol)` and
-# `getsym` all work on the real `ODESolution` with no wrapper type of ours.
+# `getsym` all work on the real `ODESolution`.
 #
 # Names are the `var_map` keys verbatim, including the element encoding of an
 # array state (`Symbol("M.psi[3,4]")`), so the SII spelling and the `var_map`
 # spelling never diverge. Built once per problem and memoized on it.
+#
+# A problem whose flatten recorded `merged_variable_renames` gets the cache
+# wrapped in `_MergedRenameIndex`, so a name an `operator_compose` merge DELETED
+# still reads the survivor's row (CONFORMANCE_SPEC §5.35, `output_selection`).
 # --------------------------------------------------------------------------- #
+
+# Forwards every SymbolicIndexingInterface query to the `SymbolCache` through
+# `symbolic_container` and overrides only the lookups a name read goes through:
+# `is_variable`, `variable_index`, and `get_all_timeseries_indexes` (which a
+# read at a vector of times, such as a plot recipe's, classifies names with).
+# The exact name wins; a merged-away spelling is consulted only for a name the
+# cache does not carry. `variable_symbols` is NOT overridden, so the deleted
+# spelling is never listed as a variable of the system: resolving a read must
+# not invent a name the flattened system does not declare.
+struct _MergedRenameIndex{C}
+    cache::C
+    renames::Dict{Symbol,Symbol}
+end
+SII.symbolic_container(s::_MergedRenameIndex) = s.cache
+_resolve_merged(s::_MergedRenameIndex, sym) =
+    (sym isa Symbol && !SII.is_variable(s.cache, sym)) ? get(s.renames, sym, sym) : sym
+_resolve_merged(s::_MergedRenameIndex, sym::AbstractArray) = map(x -> _resolve_merged(s, x), sym)
+SII.is_variable(s::_MergedRenameIndex, sym) =
+    SII.is_variable(s.cache, _resolve_merged(s, sym))
+SII.variable_index(s::_MergedRenameIndex, sym) =
+    SII.variable_index(s.cache, _resolve_merged(s, sym))
+SII.get_all_timeseries_indexes(s::_MergedRenameIndex, sym) =
+    SII.get_all_timeseries_indexes(s.cache, _resolve_merged(s, sym))
+
 function _symbol_cache(prob::EsmProblem)
     cached = prob.symcache[]
     cached === nothing || return cached
@@ -78,8 +106,11 @@ function _symbol_cache(prob::EsmProblem)
     ok || (psyms = Symbol[Symbol(k) for k in sort!(collect(keys(pm)))])
     iv = Symbol(prob.output_meta.time_dim)
     sc = SII.SymbolCache(vars, psyms, iv)
-    prob.symcache[] = sc
-    return sc
+    sys = isempty(prob.merged_renames) ? sc :
+          _MergedRenameIndex(sc, Dict{Symbol,Symbol}(Symbol(k) => Symbol(v)
+                                                     for (k, v) in prob.merged_renames))
+    prob.symcache[] = sys
+    return sys
 end
 
 _ode_problem(prob::EsmProblem, tspan) = SciMLBase.ODEProblem(

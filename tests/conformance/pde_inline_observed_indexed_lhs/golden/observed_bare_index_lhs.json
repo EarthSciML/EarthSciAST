@@ -1,0 +1,90 @@
+{
+    "fixture": "observed_bare_index_lhs",
+    "assertions": [
+        {
+            "test_id": "observed_bare_index_lhs",
+            "reduce": null,
+            "actual": 6,
+            "assertion_idx": 1,
+            "variable": "wb"
+        },
+        {
+            "test_id": "observed_bare_index_lhs",
+            "reduce": "max",
+            "actual": 8,
+            "assertion_idx": 2,
+            "variable": "wb"
+        },
+        {
+            "test_id": "observed_bare_index_lhs",
+            "reduce": "mean",
+            "actual": 5,
+            "assertion_idx": 3,
+            "variable": "wb"
+        },
+        {
+            "test_id": "observed_bare_index_lhs",
+            "reduce": null,
+            "actual": 11.999999999999996,
+            "assertion_idx": 4,
+            "variable": "wbs"
+        },
+        {
+            "test_id": "observed_bare_index_lhs",
+            "reduce": "max",
+            "actual": 23.999999999999993,
+            "assertion_idx": 5,
+            "variable": "wbs"
+        },
+        {
+            "test_id": "observed_bare_index_lhs",
+            "reduce": null,
+            "actual": 8.99999999999998,
+            "assertion_idx": 6,
+            "variable": "wbs"
+        },
+        {
+            "test_id": "observed_bare_index_lhs",
+            "reduce": null,
+            "actual": 11.999999999999996,
+            "assertion_idx": 7,
+            "variable": "z"
+        },
+        {
+            "test_id": "observed_bare_index_lhs",
+            "reduce": "mean",
+            "actual": 9.999999999999996,
+            "assertion_idx": 8,
+            "variable": "z"
+        },
+        {
+            "test_id": "observed_bare_index_lhs",
+            "reduce": null,
+            "actual": 1.9999999999999996,
+            "assertion_idx": 9,
+            "variable": "u"
+        },
+        {
+            "test_id": "observed_bare_index_lhs",
+            "reduce": "mean",
+            "actual": 4.999999999999998,
+            "assertion_idx": 10,
+            "variable": "u"
+        },
+        {
+            "test_id": "observed_bare_index_lhs",
+            "reduce": null,
+            "actual": 11.99999999999998,
+            "assertion_idx": 11,
+            "variable": "v"
+        },
+        {
+            "test_id": "observed_bare_index_lhs",
+            "reduce": "mean",
+            "actual": 7.499999999999989,
+            "assertion_idx": 12,
+            "variable": "v"
+        }
+    ],
+    "reference_binding": "julia"
+}

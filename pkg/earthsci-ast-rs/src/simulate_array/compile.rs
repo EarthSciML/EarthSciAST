@@ -5,9 +5,7 @@
 //! lowering helpers.
 
 use super::*;
-use crate::faq::{
-    effective_reduce_kind, is_faq_op, resolve_aggregate_ranges, validate_oplus_spellings,
-};
+use crate::faq::{effective_reduce_kind, is_faq_op, validate_oplus_spellings};
 use crate::flatten::FlattenedSystem;
 use crate::op_registry::{OpError, is_builtin_function_name};
 use crate::simulate::{CompileError, SimulateError};
@@ -43,12 +41,27 @@ pub fn file_has_array_ops(file: &EsmFile) -> bool {
     let Some(models) = &file.models else {
         return false;
     };
-    for model in models.values() {
-        if model_has_array_ops(model) {
-            return true;
-        }
+    models
+        .values()
+        .any(|model| model_tree_any(model, &model_has_array_ops))
+}
+
+/// Whether `pred` holds for `model` or for any component mounted beneath it
+/// through `subsystems` (esm-spec §4.6). A mounted component's equations and
+/// variables are part of the model [`mount_subsystems`] builds, so a routing
+/// question about the model is a question about its whole mount tree: a
+/// document whose only array or derivative lives in a subsystem is otherwise
+/// routed as if it had none. An entry [`parse_subsystem_model`] cannot read
+/// contributes nothing here; the build reports it.
+pub(crate) fn model_tree_any(model: &Model, pred: &dyn Fn(&Model) -> bool) -> bool {
+    if pred(model) {
+        return true;
     }
-    false
+    model.subsystems.as_ref().is_some_and(|subs| {
+        subs.iter().any(|(name, value)| {
+            parse_subsystem_model(name, value).is_ok_and(|(sub, _)| model_tree_any(&sub, pred))
+        })
+    })
 }
 
 /// Return true if the file has spatial structure: any model with array-shaped
@@ -62,16 +75,15 @@ pub fn file_has_spatial_model(file: &EsmFile) -> bool {
     let Some(models) = &file.models else {
         return false;
     };
-    for model in models.values() {
-        for var in model.variables.values() {
-            if let Some(shape) = &var.shape {
-                if !shape.is_empty() {
-                    return true;
-                }
-            }
-        }
-    }
-    false
+    let has_shaped_variable = |model: &Model| {
+        model
+            .variables
+            .values()
+            .any(|var| var.shape.as_ref().is_some_and(|shape| !shape.is_empty()))
+    };
+    models
+        .values()
+        .any(|model| model_tree_any(model, &has_shaped_variable))
 }
 
 pub(super) fn model_has_array_ops(model: &Model) -> bool {
@@ -157,7 +169,7 @@ pub(super) fn check_no_spatial_ops(expr: &Expr) -> Result<(), CompileError> {
 /// `grids/mpas/mesh/level0.esm`); a bare `{ "variables": …, "equations": … }`
 /// fragment is also accepted. An unresolved `{ "ref": … }` — a document built
 /// programmatically without the loader — is a hard error, never a silent drop.
-pub(super) fn parse_subsystem_model(
+pub(crate) fn parse_subsystem_model(
     sub_name: &str,
     value: &serde_json::Value,
 ) -> Result<(Model, HashMap<String, IndexSet>), CompileError> {
@@ -468,21 +480,17 @@ impl ArrayCompiled {
                 independent_variables: flat.independent_variables.clone(),
             });
         }
-        if !flat.continuous_events.is_empty() {
-            return Err(CompileError::UnsupportedFeatureError {
-                feature: "continuous_events".to_string(),
-                message: "array-op path does not support continuous (root-finding) events. \
-                          Track the future Rust events bead for support."
-                    .to_string(),
-            });
+        if let Some(event) = flat.continuous_events.first() {
+            return Err(crate::compile_error::continuous_event_refusal(
+                crate::compile_error::ARRAY_EVALUATOR,
+                event.name.as_deref(),
+            ));
         }
-        if !flat.discrete_events.is_empty() {
-            return Err(CompileError::UnsupportedFeatureError {
-                feature: "discrete_events".to_string(),
-                message: "array-op path does not support discrete events. \
-                          Track the future Rust events bead for support."
-                    .to_string(),
-            });
+        if let Some(event) = flat.discrete_events.first() {
+            return Err(crate::compile_error::discrete_event_refusal(
+                crate::compile_error::ARRAY_EVALUATOR,
+                event.name.as_deref(),
+            ));
         }
 
         // Re-merge the typed variable maps into one registry. The maps are
@@ -526,6 +534,14 @@ impl ArrayCompiled {
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
         let mut compiled = Self::from_model(&model, &index_sets)?;
+        // `flatten` routed every `ic` equation out of `flat.equations`, so the
+        // synthetic model's stage-(0) walk never saw an initial-condition
+        // right-hand side. Walk them here, before anything evaluates one
+        // (esm-spec §9.6.3 constraint 6), so an unlowered op in an initial
+        // condition is refused at build exactly as it is in an equation.
+        for (_, rhs) in &flat.field_ics {
+            check_evaluable(rhs)?;
+        }
         // Carry the classified scoped-reference `ic` equations through so `u0` is
         // folded from the provider-served loaded initial fields at build time.
         compiled.field_ics = flat.field_ics.clone();
@@ -614,6 +630,18 @@ impl ArrayCompiled {
         // scope (RFC §5.4; the Julia `_factor_scope` mirror). Both are no-ops —
         // and the registry copy is byte-identical — for models without
         // subsystems / ragged sets.
+        // An event, continuous or discrete, is refused before anything is
+        // built. This is the SINGLE-MODEL route's check: `from_flattened` checks
+        // the flattened event lists itself, because the synthetic model it hands
+        // down carries no events. Subsystems are searched too, since mounting
+        // keeps only their variables and equations.
+        if let Some((construct, name)) = crate::compile_error::first_event(&model_owned) {
+            return Err(crate::compile_error::event_refusal(
+                construct,
+                crate::compile_error::ARRAY_EVALUATOR,
+                name.as_deref(),
+            ));
+        }
         let mut index_sets_owned = index_sets.clone();
         mount_subsystems(&mut model_owned, &mut index_sets_owned)?;
         // esm-spec §4.2, the two halves of the right-hand-side `D` rule, applied
@@ -673,16 +701,24 @@ impl ArrayCompiled {
         // [`CompileError::UnevaluableOperatorError`]. Runs BEFORE
         // [`strip_value_invention`] so a bin-skolem `join` feeding an argmin is still
         // intact when the buffer is computed. A NO-OP (byte-identical) for every
-        // model without an arg-witness op — the conservative-regrid skolem/distinct
-        // path is left entirely to `strip_value_invention` below.
+        // model without an arg-witness op; `skolem`/`distinct` producers are
+        // handled by the two passes below.
         materialize_vi_outputs_to_data(&mut model_owned, &mut index_sets_owned, vi_arrays)?;
+        // Build-time value invention for every non-geometry derived index set
+        // (`skolem`/`distinct`/`rank`, RFC §6.1): the producer's member count sizes
+        // a range over the set. Runs before `strip_value_invention` drops the
+        // producer. A producer that cannot run is recorded rather than raised, and
+        // is refused below only if a surviving expression ranges over its set.
+        let derived = materialize_derived_extents(&model_owned, &index_sets_owned, vi_arrays);
         let index_sets = &index_sets_owned;
         // Drop value-invention (relational) scaffolding — skolem-id bin maps and
         // membership sets over `kind: "derived"` index sets — plus the broad-phase
-        // `join.on` gates keyed on them, BEFORE join/range resolution. The dense
-        // runtime evaluates the geometric narrow phase densely; the elided gate is
-        // numerically inert there (see `strip_value_invention`). A no-op unless a
-        // `skolem` op or a derived-set-shaped variable is present.
+        // `join.on` gates keyed on them, BEFORE join/range resolution. The extents
+        // counted above are all that survive of such a set: its members and
+        // skolem maps are not materialized, and the elided gate is numerically
+        // inert only where a dense narrow phase follows (see
+        // `strip_value_invention`). A no-op unless a `skolem` op or a
+        // derived-set-shaped variable is present.
         strip_value_invention(&mut model_owned, index_sets)?;
         // The model's CONST-ARRAY registry (CONFORMANCE_SPEC §5.5.5): the
         // `const`-literal factor variables — Fornberg weights, mesh
@@ -710,7 +746,14 @@ impl ArrayCompiled {
         // Then rewrite every `{ "from": <index set> }` range reference (§5.2)
         // into a concrete `[lo, hi]` interval before shape inference / rule
         // building, so every downstream consumer sees only dense intervals.
-        resolve_aggregate_ranges(&mut model_owned, index_sets)?;
+        crate::faq::resolve_aggregate_ranges_with_extents(
+            &mut model_owned,
+            index_sets,
+            &derived.extents,
+        )?;
+        // A range over a non-geometry derived set that value invention did not
+        // size would contract as empty and read 0 (esm-spec §9.6.6): refuse it.
+        refuse_unmaterialized_derived_ranges(&model_owned, index_sets, &derived)?;
         // Reject any aggregate whose ⊕ is spelled outside the schema's closed
         // `reduce` / `semiring` enums. The gate lives here, at the one funnel
         // every array-runtime build passes through, because the seams that
@@ -735,6 +778,16 @@ impl ArrayCompiled {
             // (0) Reject spatial differential operators anywhere in the model's
             // equations or observed-variable expressions (esm-i7b).
             reject_unlowered_spatial_ops(model)?;
+
+            // (0a) Reject an implicit equation: this runtime has no algebraic
+            // solve, and every stage below would skip the equation, leaving the
+            // unknown at its initial value.
+            if let Some(eq) = crate::compile_error::first_implicit_equation(&model.equations) {
+                return Err(crate::compile_error::implicit_equation_refusal(
+                    crate::compile_error::ARRAY_EVALUATOR,
+                    eq,
+                ));
+            }
 
             // (0b) Reject a reference to a variable bound in NONE of the model's
             // binding categories — the array-path analogue of the scalar
@@ -866,10 +919,11 @@ impl ArrayCompiled {
 /// that was reported: any of the nine now raises `unevaluable_operator` naming
 /// itself.
 ///
-/// Ordering matters and is already right: `materialize_vi_outputs_to_data` and
-/// `strip_value_invention` run BEFORE the staged build, so a legitimate
-/// relational producer has become `const` data by the time this sees the model
-/// — what remains is genuinely unevaluable.
+/// Ordering matters and is already right: `materialize_vi_outputs_to_data`,
+/// `materialize_derived_extents` and `strip_value_invention` run BEFORE the
+/// staged build, so by the time this sees the model an arg-witness output has
+/// become `const` data and a skolem or derived-set producer has been dropped —
+/// what remains is genuinely unevaluable.
 fn reject_unlowered_spatial_ops(model: &Model) -> Result<(), CompileError> {
     for eq in &model.equations {
         check_evaluable_side(&eq.lhs)?;
@@ -2140,13 +2194,14 @@ pub(super) fn lower_recurrence(
                              which axis the recurrence folds along, and in which direction, is \
                              decidable. An index that does not carry '{}' with coefficient 1 \
                              (a bare constant, `2*{}`, another axis's symbol) is rejected \
-                             rather than guessed at (esm-spec §4.3.1.1).",
+                             rather than guessed at (esm-spec §4.3.1.1). {}",
                             idx_names[d],
                             idx_names[d],
                             idx_names[d],
                             idx_names[d],
                             idx_names[d],
-                            idx_names[d]
+                            idx_names[d],
+                            crate::structural::data_lag_guidance(var, &idx_names[d])
                         ),
                     ));
                 }
@@ -2282,6 +2337,14 @@ fn build_observed_rules(
         let Some(eq) = def_eq.get(name.as_str()) else {
             continue;
         };
+        // A bare-index LHS (`index(V, k…) ~ rhs`, esm-spec §6.3.1) binds none of
+        // its subscripts, so it runs only in the form whose range the RHS
+        // supplies; see [`check_bare_index_definition`].
+        if let Expr::Operator(lhs) = &eq.lhs
+            && lhs.op == "index"
+        {
+            check_bare_index_definition(name, lhs, &eq.rhs, &array_axes)?;
+        }
         // A CAUSAL SELF-REFERENCE (esm-spec §4.3.1.1) is recognized before
         // either ordinary lowering, because both of them would compile the
         // self-read as a gather on a variable that is not bound anywhere — the
@@ -2360,6 +2423,64 @@ fn build_observed_rules(
     dependency_order_observed(observed_rules)
 }
 
+/// Refuse a bare-index observed definition that is not the runnable form.
+///
+/// `index(V, k…) ~ rhs` binds none of `k…`, so the range has to come from the
+/// right-hand side: the definition runs exactly when `rhs` is a `faq` whose
+/// `output_idx` names the subscripts, in order (esm-spec §6.3.1,
+/// CONFORMANCE_SPEC §5.36.2). That RHS is already the whole array, which is what
+/// the wholesale lowering evaluates. Any other spelling — a scalar RHS, an offset
+/// or permuted subscript, a subscript count that disagrees with `V`'s declared
+/// rank — would be lowered as if its RHS were the whole array, which writes the
+/// wrong cells for an offset and cannot integrate for a scalar, so it is refused.
+///
+/// The gather must also be the DIRECT one, `index(V, k…)`: the base name is read
+/// through nested `index` / `broadcast` wrappers, but `index(index(V, j), k)`
+/// addresses a cell of a cell, not the whole of `V`, so it is refused rather
+/// than lowered as though its RHS were all of `V`.
+///
+/// Flatten namespaces a free subscript (`k` becomes `Model.k`) but not a `faq`
+/// binder, so a subscript matches its binder in either spelling.
+fn check_bare_index_definition(
+    name: &str,
+    lhs: &ExpressionNode,
+    rhs: &Expr,
+    array_axes: &HashMap<String, Vec<String>>,
+) -> Result<(), CompileError> {
+    let head_is_the_variable = matches!(lhs.args.first(), Some(Expr::Variable(_)));
+    let subs = lhs.args.get(1..).unwrap_or_default();
+    let prefix = name.rfind('.').map_or("", |p| &name[..=p]);
+    let names_binder = |sub: &Expr, binder: &String| match sub {
+        Expr::Variable(v) => v == binder || v.strip_prefix(prefix) == Some(binder.as_str()),
+        _ => false,
+    };
+    let binds_subscripts = match rhs {
+        Expr::Operator(node) if is_faq_op(&node.op) => match node.output_idx.as_deref() {
+            Some(frame) => {
+                !subs.is_empty()
+                    && frame.len() == subs.len()
+                    && subs.iter().zip(frame).all(|(s, b)| names_binder(s, b))
+            }
+            None => false,
+        },
+        _ => false,
+    };
+    let rank_agrees = match array_axes.get(name) {
+        Some(axes) => axes.len() == subs.len(),
+        None => true,
+    };
+    if head_is_the_variable && binds_subscripts && rank_agrees {
+        return Ok(());
+    }
+    Err(CompileError::InterpreterBuildError {
+        details: format!(
+            "indexed_definition_unsupported_form: '{name}' is defined by a bare-index LHS that \
+             is not runnable; the RHS must be a `faq` whose `output_idx` names the LHS \
+             subscripts in order (esm-spec §6.3.1)"
+        ),
+    })
+}
+
 /// Wrap one algebraic body — a declared observed's `expression`, or the RHS of
 /// a bare-`Variable`-LHS equation — in the rule form that evaluates it
 /// correctly.
@@ -2384,9 +2505,13 @@ fn lower_algebraic_body(
     array_axes: &HashMap<String, Vec<String>>,
     index_sets: &HashMap<String, IndexSet>,
 ) -> Result<AlgebraicRule, CompileError> {
+    let declared_shape = array_axes
+        .get(name)
+        .and_then(|axes| resolve_declared_shape(axes, index_sets));
     let scalar_rule = |body: Expr| AlgebraicRule::Scalar {
         var: name.to_string(),
         body: Rc::new(body),
+        declared_shape: declared_shape.clone(),
     };
     let Some(target_axes) = array_axes.get(name) else {
         return Ok(scalar_rule(body));
@@ -3048,15 +3173,15 @@ pub(super) fn strip_vi_joins(expr: &mut Expr, vi_cols: &HashSet<String>) {
 /// The dense Rust array runtime evaluates FAQ aggregates and the fused geometry
 /// leaf, but does NOT materialize value-invention buffers — skolem-id maps
 /// (`skolem`/`rank`) or a membership set over a `kind: "derived"` (FAQ-produced)
-/// index set. A variable that is one of these, and the `join.on` gate keyed on
+/// index set. [`materialize_derived_extents`] has already counted each such
+/// set's members, so a range over it is sized; its per-element values are not
+/// available. A variable that is one of these, and the `join.on` gate keyed on
 /// it, are relational scaffolding around a densely-evaluable narrow phase. For a
 /// conservative regrid the narrow phase is `polygon_intersection_area`, which is
 /// zero on exactly the pairs the bin-skolem gate would prune, so the dense
-/// contraction is numerically identical (see [`strip_vi_joins`]). This keeps the
-/// coupled regrid runnable without porting the build-time relational engine,
-/// while leaving genuine (loop-symbol) joins and non-VI models byte-identical:
-/// the pass is a no-op unless a `skolem` op or a derived-set-shaped variable is
-/// present.
+/// contraction is numerically identical (see [`strip_vi_joins`]). Genuine
+/// (loop-symbol) joins and non-VI models stay byte-identical: the pass is a
+/// no-op unless a `skolem` op or a derived-set-shaped variable is present.
 pub(super) fn strip_value_invention(
     model: &mut Model,
     index_sets: &HashMap<String, IndexSet>,
@@ -3377,6 +3502,151 @@ pub fn run_value_invention<S: std::hash::BuildHasher>(
     })
 }
 
+/// The build-time extents of a model's non-geometry derived index sets, and why
+/// value invention failed when it did.
+pub(super) struct DerivedMaterialization {
+    /// `from_faq` producer id → member count, as [`run_value_invention`] reports.
+    pub(super) extents: HashMap<String, i64>,
+    /// Ids of the geometry ring producers, whose sets the runtime sizes itself.
+    geometry_ids: HashSet<String>,
+    /// The engine's error, if it could not run.
+    failure: Option<String>,
+}
+
+/// Run value invention when the model has a derived index set whose producer is
+/// not a geometry ring. A model without one pays only the scan.
+fn materialize_derived_extents(
+    model: &Model,
+    index_sets: &HashMap<String, IndexSet>,
+    caller_arrays: Option<&HashMap<String, ArrayD<f64>>>,
+) -> DerivedMaterialization {
+    let mut geometry_ids = HashSet::new();
+    for eq in &model.equations {
+        collect_geometry_producer_ids(&eq.rhs, &mut geometry_ids);
+    }
+    for var in model.variables.values() {
+        var.for_each_expression(&mut |expr| collect_geometry_producer_ids(expr, &mut geometry_ids));
+    }
+    let mut out = DerivedMaterialization {
+        extents: HashMap::new(),
+        geometry_ids,
+        failure: None,
+    };
+    let needs_value_invention = index_sets.values().any(|is| {
+        is.kind == "derived"
+            && is
+                .from_faq
+                .as_deref()
+                .is_some_and(|f| !out.geometry_ids.contains(f))
+    });
+    if needs_value_invention {
+        match run_value_invention(model, index_sets, caller_arrays) {
+            Ok(result) => out.extents = result.extents,
+            Err(e) => out.failure = Some(e.to_string()),
+        }
+    }
+    out
+}
+
+/// The `from_faq` of the first range in `expr` over a derived set that neither
+/// `extents` sizes nor a geometry producer in `geometry_ids` materializes.
+pub(super) fn first_unmaterialized_derived_range(
+    expr: &Expr,
+    extents: &HashMap<String, i64>,
+    geometry_ids: &HashSet<String>,
+) -> Option<String> {
+    let Expr::Operator(node) = expr else {
+        return None;
+    };
+    if let Some(ranges) = &node.ranges {
+        let mut unmaterialized: Vec<&str> = ranges
+            .values()
+            .filter_map(|spec| spec.derived())
+            .filter(|f| !extents.contains_key(*f) && !geometry_ids.contains(*f))
+            .collect();
+        unmaterialized.sort_unstable();
+        if let Some(f) = unmaterialized.first() {
+            return Some((*f).to_string());
+        }
+    }
+    let mut found = None;
+    node.any_child(&mut |child| {
+        found = first_unmaterialized_derived_range(child, extents, geometry_ids);
+        found.is_some()
+    });
+    found
+}
+
+/// The refusal for a range over the derived set produced by `from_faq`. A
+/// producer refused by the cadence guard keeps that guard's code.
+pub(super) fn unmaterialized_derived_error(
+    from_faq: &str,
+    index_sets: &HashMap<String, IndexSet>,
+    failure: Option<&str>,
+) -> CompileError {
+    let mut names: Vec<&str> = index_sets
+        .iter()
+        .filter(|(_, is)| is.from_faq.as_deref() == Some(from_faq))
+        .map(|(name, _)| name.as_str())
+        .collect();
+    names.sort_unstable();
+    // The standalone evaluator entry has no index-set registry to name the set from.
+    let subject = match names.first() {
+        Some(set) => format!("derived index set '{set}' (from_faq '{from_faq}')"),
+        None => format!("the derived index set produced by '{from_faq}'"),
+    };
+    match failure {
+        Some(reason)
+            if reason.contains(crate::diagnostic::codes::RELATIONAL_NODE_IN_CONTINUOUS) =>
+        {
+            CompileError::ValueInventionRefused {
+                code: crate::diagnostic::codes::RELATIONAL_NODE_IN_CONTINUOUS,
+                reason: format!("{subject}: {reason}"),
+            }
+        }
+        _ => CompileError::ValueInventionRefused {
+            code: crate::diagnostic::codes::DERIVED_INDEX_SET_UNMATERIALIZED,
+            reason: format!(
+                "{subject} is not materialized: {}",
+                failure.unwrap_or("no geometry or value-invention producer supplied its extent")
+            ),
+        },
+    }
+}
+
+fn refuse_unmaterialized_derived_ranges(
+    model: &Model,
+    index_sets: &HashMap<String, IndexSet>,
+    derived: &DerivedMaterialization,
+) -> Result<(), CompileError> {
+    let mut found: Option<String> = None;
+    let mut visit = |expr: &Expr| {
+        if found.is_none() {
+            found =
+                first_unmaterialized_derived_range(expr, &derived.extents, &derived.geometry_ids);
+        }
+    };
+    for eq in &model.equations {
+        visit(&eq.lhs);
+        visit(&eq.rhs);
+    }
+    for eq in model.initialization_equations.iter().flatten() {
+        visit(&eq.lhs);
+        visit(&eq.rhs);
+    }
+    for var in model.variables.values() {
+        var.for_each_expression(&mut |expr| visit(expr));
+    }
+    match found {
+        Some(from_faq) => Err(unmaterialized_derived_error(
+            &from_faq,
+            index_sets,
+            derived.failure.as_deref(),
+        )),
+        None => Ok(()),
+    }
+}
+
 /// Wire the value-invention front door into the array run path: run the
 /// byte-conformant [`materialize_value_invention`] engine over the raw-JSON model
 /// and rewrite each materialized relational OUTPUT to constant data
@@ -3384,9 +3654,10 @@ pub fn run_value_invention<S: std::hash::BuildHasher>(
 /// simulate end-to-end. Derived index sets named by a materialized producer are
 /// densified to intervals via [`rewrite_derived_index_sets`] (the same handoff
 /// [`apply_value_invention`] performs). A NO-OP — and byte-identical — for any
-/// model without an arg-witness op (gated by [`model_contains_arg_witness`]), so
-/// the conservative-regrid skolem/distinct path handled by
-/// [`strip_value_invention`] is untouched.
+/// model without an arg-witness op (gated by [`model_contains_arg_witness`]). A
+/// `skolem`/`distinct` producer in such a model is sized by
+/// [`materialize_derived_extents`] and then dropped by
+/// [`strip_value_invention`].
 ///
 /// `caller_arrays` is the caller-supplied factor-array channel (see
 /// [`vi_factor_arrays`]): loader-fed envelope/connectivity factors that are not
