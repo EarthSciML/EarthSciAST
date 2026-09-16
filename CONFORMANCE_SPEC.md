@@ -2862,6 +2862,37 @@ a golden diff. Each runner *renders* the production `derive_output_plan` result
 into the golden's shape and compares; neither re-derives anything in the adapter,
 so a derivation bug cannot hide behind the test.
 
+#### 5.17.4 Request names
+
+An `observed` request names a variable of the plan, and a binding resolves it in
+this order:
+
+1. **Exact.** The request equals a variable's base name: that variable, and no
+   other, whatever the other variables are called.
+2. **Unique last segment.** Otherwise, the request's last dotted segment equals
+   the last dotted segment of EXACTLY ONE variable: that variable. This is what
+   lets a caller write `flux` for `Box.flux`.
+3. **Refused.** A last segment that more than one variable shares is refused with
+   `ambiguous_output_name`, naming the candidates, and a request that matches no
+   variable is refused as unknown. Neither is resolved to an arbitrary candidate,
+   and neither is silently dropped.
+
+A rule that compares last segments without counting candidates selects `Sink.O3`
+as well as `Chem.O3` for a request naming `Chem.O3`, and writes a variable nobody
+asked for. The `shared_tail_exact` case pins rule 1 against that. The manifest's
+`refusals` pin rule 3 for a bare request (`O3`) and for a qualified request that
+names neither component (`Emis.O3`), and each runner asserts the refusal's
+registered code. The code is registered in all five bindings, although only Julia
+and Rust derive an output plan.
+
+**A merged-away name is the caller's to resolve.** `derive_output_plan` does not
+take the flattened system's `merged_variable_renames` map and does not consult
+it. A caller holding a name an `operator_compose` merge deleted (§5.35) resolves
+it through that map BEFORE calling; every in-repo caller does, namely Rust's `esm
+simulate --format grid` and `SolveOptions::output_observed`. A merged-away name
+passed straight through is an ordinary request: it matches nothing exactly, so it
+is refused unless its last segment designates exactly one variable.
+
 ### 5.18 Working Precision — `domain.element_type` (normative)
 
 `domain.element_type` (esm-spec §11.3) declares the precision a document is
@@ -5074,6 +5105,8 @@ indistinguishable from a gap.
 | `events_and_updates` | all five | — same reason: an event and an `update` rule are part of the flattened form, and rewriting them needs no simulator. |
 | `template_registry` | all five | — the REFUSAL. Every binding carries the merged registry on its flattened form, so every binding can and must check it. |
 | `inline_tests` | Julia, Python, Rust | **Go**, **TypeScript**: no simulator, so no inline-test runner to resolve a name for. |
+| `override_keys` | Julia, Python, Rust | **Go**, **TypeScript**: no simulator, so no override-key surface. The same split §5.15 (`override_key_diagnostics`) records. |
+| `output_selection` | Julia, Python, Rust | **Go**, **TypeScript**: no simulator, so no result object to read by name. Julia's result is a SciML `ODESolution`; the SymbolicIndexingInterface system it carries wraps the name cache, so the exact name wins, a merged-away spelling reads the survivor's row, and `variable_symbols` still lists only the surviving names. |
 
 **The `join` half of item 7 is implemented in every binding but is not pinned by
 a fixture of its own, and the reason is worth recording rather than hiding.** The
@@ -5088,25 +5121,14 @@ factors are in practice parameters or coordinates. The realistic form of this
 hazard is the `variable_map` one the guard was written for. A binding could
 therefore drop the `operator_compose` half of the join rename and stay green
 here; that is a known gap in the pinning, not in the implementation.
-| `override_keys` | Julia, Python, Rust | **Go**, **TypeScript**: no simulator, so no override-key surface. The same split §5.15 (`override_key_diagnostics`) records. |
-| `output_selection` | Python, Rust | **Go**, **TypeScript**: no simulator, so no result object to read by name. **Julia**: its result is a SciML `ODESolution` indexed through SciMLBase's own `SymbolCache` — the package fills that name list but does not own the lookup, so resolving there needs a custom SymbolicIndexingInterface system type. The problem-side lookup Julia DOES own, `observed_field(prob, name)`, resolves through `EsmProblem.merged_renames`, and the category pins that the problem carries the map. |
 
-**One surface is deliberately left uncovered, in every binding.** The exported
-`derive_output_plan` takes the request list and the slot names and nothing else,
-in both Julia and Rust. Resolving a merged-away request INSIDE it would need a
-new parameter on a function §5.17 (`output_derivation`) pins as a cross-binding
-surface, so every in-repo caller resolves at the CALL SITE instead — Rust's `esm
-simulate --format grid`, and `SolveOptions::output_observed` before the solve.
-An EXTERNAL caller handing a merged-away name straight to `derive_output_plan`
-is therefore still on its own. (Julia's `_match_requested!` happens to tolerate
-the common case anyway, because it matches bare tails both ways; that is an
-accident of its matching rule, not resolution, and it does not cover a
-`translate` that renames across differing local names.)
-
-That gap and Julia's `output_selection` exclusion share ONE cause — the last two
-name-keyed reads sit behind a public surface that cannot change without a
-cross-binding decision — and are tracked together in
-**EarthSciML/EarthSciAST#271**.
+**`derive_output_plan` leaves merged-away names to the caller, by contract.** The
+exported output-plan function takes the request list and the slot names and
+nothing else, in both Julia and Rust, and does not consult the rename map. A
+caller holding a merged-away name resolves it through `merged_variable_renames`
+first (§5.17.4); every in-repo caller does, namely Rust's `esm simulate --format
+grid` and `SolveOptions::output_observed` before the solve. The manifest records
+this under `output_selection.caller_resolves`.
 
 **A merged-away name is never a parameter.** `operator_compose` deletes only a
 DEPENDENT VARIABLE — a state or an observed — so a `parameter_overrides` key can

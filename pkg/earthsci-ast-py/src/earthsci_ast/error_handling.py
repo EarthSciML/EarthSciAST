@@ -382,6 +382,18 @@ OBSERVED_CYCLE = "observed_cycle"
 
 
 # ===========================================================================
+# Output names (CONFORMANCE_SPEC §5.17.4).
+# ===========================================================================
+
+#: A name read from a result that matches no variable exactly and whose last
+#: dotted segment is shared by more than one variable. A last-segment match is
+#: accepted only when it designates exactly one variable, so a read cannot
+#: silently return a variable it did not name. Raised by
+#: :class:`~earthsci_ast.simulation_common.AmbiguousOutputNameError`.
+AMBIGUOUS_OUTPUT_NAME = "ambiguous_output_name"
+
+
+# ===========================================================================
 # Codes raised outside the families above, collected here so `ERROR_CODES`
 # (which is built from this module's globals) carries every code the package
 # raises. Each value is the string its raise site already emitted.
