@@ -40,10 +40,10 @@ import numpy as np
 from . import broad_phase, op_registry, recurrence
 from .cadence import Partition
 from .cadence import partition as _partition_model
-from .error_handling import RECURRENCE_NOT_WELLFOUNDED
+from .error_handling import RECURRENCE_NOT_WELLFOUNDED, UNEVALUABLE_OPERATOR
 from .errors import EarthSciAstError
 from .esm_types import ARRAY_OPS, Expr, ExprNode
-from .expr_walk import any_child
+from .expr_walk import any_child, iter_children
 from .index_ranges import expand_range as _expand_range
 from .registered_functions import (
     INTERP_CONST_ARG_POSITIONS as _INTERP_CONST_ARG_POSITIONS,
@@ -293,6 +293,40 @@ class UnreachableSpatialOperatorError(NumpyInterpreterError):
         )
 
 
+class UnevaluableOperatorError(NumpyInterpreterError):
+    """An op that IS in the esm-spec §4.2 evaluable core, but that this
+    interpreter has no evaluation rule for, reached it (esm-spec §9.6.6).
+
+    The complement of :class:`UnreachableSpatialOperatorError`, which is for an
+    op OUTSIDE the core that no rewrite rule lowered: this op needs an earlier
+    pipeline stage (value invention, or a load-time lowering pass), not a
+    rewrite rule. A subclass of :class:`NumpyInterpreterError`, so an existing
+    ``except NumpyInterpreterError`` still catches it.
+    """
+
+    #: Stable cross-binding diagnostic code (esm-spec §9.6.6).
+    code = UNEVALUABLE_OPERATOR
+
+    def __init__(self, op: str, remedy: str | None = None) -> None:
+        self.op = op
+        if remedy is None:
+            remedy = (
+                "an earlier pipeline stage (value invention, or a load-time lowering "
+                "pass) must eliminate it, or the document belongs to a runtime that "
+                "evaluates it"
+            )
+        super().__init__(
+            f"unevaluable_operator: operator '{op}' is an evaluable-core op with no "
+            f"evaluation rule in the NumPy interpreter: {remedy} (esm-spec §4.2 / §9.6.6)."
+        )
+
+
+def _enum_not_lowered() -> UnevaluableOperatorError:
+    return UnevaluableOperatorError(
+        "enum", "`lower_enums(file)` must lower it to `const` during load (esm-spec §9.3)"
+    )
+
+
 def _as_array(x: Any) -> np.ndarray:
     if isinstance(x, np.ndarray):
         return x
@@ -431,6 +465,26 @@ _CMP_UFUNCS: dict[str, Callable] = {
 #: privileged and none can be forgotten.
 _EVALUABLE_CORE_OPS: frozenset[str] = op_registry.by_tier("core")
 
+#: The evaluable-core ops :func:`eval_expr` has NO rule for (esm-spec §9.6.6
+#: ``unevaluable_operator``): value-invention producers materialized at build,
+#: the load-time-lowered forms, and the structural ``Pre``/``=``/``ic``/``join``.
+#: Pinned against the dispatch by tests/test_unevaluable_operator.py.
+_NO_RULE_OPS: frozenset[str] = frozenset(
+    {
+        "=",
+        "Pre",
+        "apply_expression_template",
+        "argmax",
+        "argmin",
+        "distinct",
+        "enum",
+        "ic",
+        "join",
+        "rank",
+        "table_lookup",
+    }
+)
+
 
 # Closed semiring registry (RFC semiring-faq-unified-ir §5.1). Each entry fixes
 # the (⊕, ⊗) operator pair AND both identity elements: ``zero`` (0̄) is the value
@@ -566,7 +620,8 @@ def _resolve_range_spec(spec: Any, ctx: EvalContext) -> Any:
         ring = ctx.derived_rings.get(faq)
         if ring is None:
             raise NumpyInterpreterError(
-                f"derived index set {name!r} (from_faq {faq!r}) is not materialized; "
+                f"derived_index_set_unmaterialized: derived index set {name!r} "
+                f"(from_faq {faq!r}) is not materialized; "
                 f"its producing node has not been evaluated. Materialized rings: "
                 f"{sorted(ctx.derived_rings)}, value-invention extents: "
                 f"{sorted(ctx.derived_extents)} (RFC §5.5 / §8.1)"
@@ -946,10 +1001,7 @@ def eval_expr(expr: Expr, ctx: EvalContext) -> float | np.ndarray:
                 evaluated_args.append(eval_expr(a, ctx))
         return _eval_fn_lifted(expr.name, evaluated_args, const_arg_positions)
     if op == "enum":
-        raise NumpyInterpreterError(
-            "`enum` op encountered at evaluate time — `lower_enums(file)` should "
-            "have run during load (esm-spec §9.3)"
-        )
+        raise _enum_not_lowered()
 
     # --- scalar arithmetic / elementwise ---
     if op == "+":
@@ -1083,7 +1135,29 @@ def eval_expr(expr: Expr, ctx: EvalContext) -> float | np.ndarray:
     if op not in _EVALUABLE_CORE_OPS:
         raise UnreachableSpatialOperatorError(op)
 
-    raise NumpyInterpreterError(f"Unsupported op in NumPy interpreter: {op!r}")
+    raise UnevaluableOperatorError(op)
+
+
+def refuse_unevaluable_operators(expr: Expr) -> None:
+    """Raise on the first operator (pre-order) in ``expr`` that :func:`eval_expr`
+    cannot evaluate, WITHOUT evaluating anything (esm-spec §9.6.6: the check
+    precedes evaluation, so an op in an untaken ``ifelse`` branch is refused too).
+
+    An op outside the §4.2 evaluable core, or any ``D``, raises
+    :class:`UnreachableSpatialOperatorError` (``unlowered_operator``); a core op
+    in :data:`_NO_RULE_OPS` raises :class:`UnevaluableOperatorError`.
+    """
+    if not isinstance(expr, ExprNode):
+        return
+    op = expr.op
+    if op == "D" or op not in _EVALUABLE_CORE_OPS:
+        raise UnreachableSpatialOperatorError(op)
+    if op == "enum":
+        raise _enum_not_lowered()
+    if op in _NO_RULE_OPS:
+        raise UnevaluableOperatorError(op)
+    for child in iter_children(expr):
+        refuse_unevaluable_operators(child)
 
 
 #: Ops the expression compiler lowers to closures. Everything else (aggregate,
@@ -4157,8 +4231,11 @@ def evaluate(expr: Expr, bindings: dict[str, float]) -> float:
     special key ``"t"`` supplies the simulation time (defaults to ``0.0``
     if absent). Returns the scalar result as a Python ``float``.
     Raises :class:`NumpyInterpreterError` if any variable in ``expr`` is
-    not in ``bindings``.
+    not in ``bindings``. The whole expression is walked first
+    (:func:`refuse_unevaluable_operators`), so an operator this interpreter
+    cannot evaluate is refused before any of it is evaluated.
     """
+    refuse_unevaluable_operators(expr)
     t = float(bindings.get("t", 0.0))
     param_values = {k: float(v) for k, v in bindings.items() if k != "t"}
     ctx = EvalContext(

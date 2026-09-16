@@ -51,7 +51,7 @@
           "conditions": [{ "op": "-", "args": ["A", 0.05] }],
           "affects": [{ "lhs": "B", "rhs": { "op": "Pre", "args": ["B"] } }],
           "affect_neg": [{ "lhs": "B", "rhs": { "op": "*", "args": [{ "op": "Pre", "args": ["B"] }, 0.5] } }],
-          "root_find": "all",
+          "root_find": "left",
           "reinitialize": true,
           "description": "Different affects on the two crossing directions."
         }

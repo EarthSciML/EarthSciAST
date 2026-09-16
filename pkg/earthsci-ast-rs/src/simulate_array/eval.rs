@@ -30,10 +30,13 @@ pub(super) type RangeVec = SmallVec<[(i64, i64); 4]>;
 ///    `polygon_area` shoelace can read the wrap edge as an ordinary
 ///    `index(ring, v+1, …)`), so the number of distinct vertices is `rows − 1`.
 ///
-/// A producer materialized by NEITHER — an unevaluated clip, or an empty
-/// (disjoint) one — yields `0`: an empty contraction reducing to the additive
-/// identity 0̄, matching the evaluator's ghost-read convention. That leniency is
-/// specific to a *contraction* bound, where an empty range is a well-defined
+/// A geometry producer materialized by neither — an unevaluated clip, or an
+/// empty (disjoint) one — yields `0`: an empty contraction reducing to the
+/// additive identity 0̄, matching the evaluator's ghost-read convention. A
+/// non-geometry producer with no extent never reaches here: the build and the
+/// standalone entry both refuse it as `derived_index_set_unmaterialized`, since
+/// its empty range would read as a plausible 0 (esm-spec §9.6.6). The leniency
+/// is specific to a *contraction* bound, where an empty range is a well-defined
 /// answer. A derived range that has to size an OUTPUT axis never reaches here:
 /// it is resolved far earlier, and much more strictly, by
 /// `crate::faq::resolve_index_set_ref`, which errors rather than invent a
@@ -2301,6 +2304,20 @@ pub(crate) fn eval_expression_with_extents_and_consts_shared(
     const_arrays: &ConstArrayScope,
 ) -> Result<Value, CompileError> {
     check_evaluable(expr)?;
+    // A fresh evaluation can only register the geometry rings `expr` itself
+    // produces, so a derived range over any other unsized producer is refused
+    // rather than contracted as empty.
+    let mut geometry_ids = std::collections::HashSet::new();
+    super::compile::collect_geometry_producer_ids(expr, &mut geometry_ids);
+    if let Some(from_faq) =
+        super::compile::first_unmaterialized_derived_range(expr, derived_extents, &geometry_ids)
+    {
+        return Err(super::compile::unmaterialized_derived_error(
+            &from_faq,
+            &HashMap::new(),
+            None,
+        ));
+    }
     let empty: ArrMap = ArrMap::default();
     let derived_rings: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
     // Standalone expression evaluation (FAQ rings, area integrands) carries no

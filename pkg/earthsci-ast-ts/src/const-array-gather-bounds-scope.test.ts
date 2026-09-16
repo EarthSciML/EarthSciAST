@@ -1,6 +1,6 @@
 /**
  * TypeScript's read of the SHARED `const_array_gather_bounds` conformance
- * manifest (CONFORMANCE_SPEC §5.39,
+ * manifest (CONFORMANCE_SPEC §5.40,
  * tests/conformance/const_array_gather_bounds/manifest.json).
  *
  * TypeScript cannot run that category: `index` has no scalar evaluator here and

@@ -1,0 +1,89 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "ContinuousEventOnAReactionSystem",
+    "description": "A continuous event owned by a REACTION SYSTEM rather than a model. The source reaction `∅ → A` with rate `k = 1` makes `A` climb at rate 1 from 0, and the event resets it to 0 each time it crosses 1, so A(2.5) = 0.5. The document has no array variable, so it takes the SCALAR evaluator. `ReactionSystem` carries the same `continuous_events` block as `Model` (esm-schema.json), but Julia's and Rust's flatten used to drop a reaction system's events on the floor: the refusal never fired, and both bindings ran the document as if the event did not exist and reported 2.5. Every evaluator that cannot run the event MUST refuse with `unsupported_construct` naming the construct and the evaluator (issue #356). Julia's ModelingToolkit export runs continuous events and is not covered by this category.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "conformance",
+      "unsupported_construct",
+      "events",
+      "reaction_systems"
+    ]
+  },
+  "reaction_systems": {
+    "ContinuousEventOnAReactionSystem": {
+      "tolerance": {
+        "abs": 1e-06
+      },
+      "species": {
+        "A": {
+          "units": "1",
+          "default": 0.0,
+          "description": "Climbs at rate 1 from 0; reset to 0 when it reaches 1."
+        }
+      },
+      "parameters": {
+        "k": {
+          "units": "1/s",
+          "default": 1.0,
+          "description": "Zeroth-order production rate of A."
+        }
+      },
+      "reactions": [
+        {
+          "id": "R1",
+          "name": "produce_A",
+          "substrates": null,
+          "products": [
+            {
+              "species": "A",
+              "stoichiometry": 1
+            }
+          ],
+          "rate": "k"
+        }
+      ],
+      "continuous_events": [
+        {
+          "name": "reset",
+          "conditions": [
+            {
+              "op": "-",
+              "args": [
+                "A",
+                1.0
+              ]
+            }
+          ],
+          "affects": [
+            {
+              "lhs": "A",
+              "rhs": 0.0
+            }
+          ],
+          "description": "A := 0 whenever A crosses 1."
+        }
+      ],
+      "tests": [
+        {
+          "id": "a_threshold_reset_makes_a_sawtooth",
+          "description": "Intended behaviour: A resets at t = 1 and t = 2, so A(2.5) = 0.5. Without the event A(2.5) = 2.5. An evaluator that cannot run the event must refuse rather than report 2.5.",
+          "time_span": {
+            "start": 0.0,
+            "end": 2.5
+          },
+          "assertions": [
+            {
+              "variable": "A",
+              "time": 2.5,
+              "expected": 0.5
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

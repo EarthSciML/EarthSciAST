@@ -189,10 +189,20 @@ pub(crate) struct TapeExec {
     /// Per-slot flat offset into the slab (`usize::MAX` for never-defined
     /// slots, which no reachable instruction references).
     slot_off: Vec<usize>,
-    /// Runtime observed map: export target arrays are PREALLOCATED here (an
-    /// `Export` is a bounds-checked memcpy into an existing entry, no
-    /// allocation); fallback observed rules insert their own outputs.
+    /// Runtime observed map: holds an export only while it is PUBLISHED (its
+    /// `Export` has run in the current execution of its section); fallback
+    /// observed rules insert their own outputs.
     pub(crate) obs: ArrMap,
+    /// Export target arrays, preallocated and indexed like `prog.exports`:
+    /// `Some` while the export is unpublished, `None` while its entry lives in
+    /// `obs`. An `Export` moves the entry into `obs` and memcpys into it, and
+    /// `run_range` moves it back out before re-running its section, so a read
+    /// that precedes the publish finds no entry and FAULTS (CONFORMANCE_SPEC
+    /// §5.23.1(2), §5.19.4) instead of reading the zero prealloc or the
+    /// previous call's value. Moving an entry never allocates.
+    parked: Vec<Option<(String, ArrayD<f64>)>>,
+    /// `(pc, export)` for every `Export` instruction, in program order.
+    export_sites: Vec<(usize, u32)>,
     /// Pending `(resume_pc, skip)` records for taken `JmpIfZero` branches
     /// (the reference executor's discipline). Capacity preallocated.
     pending: Vec<(u32, u32)>,
@@ -243,16 +253,29 @@ impl TapeExec {
                 }
             })
             .collect();
-        let mut obs: ArrMap = ArrMap::default();
-        for (name, slot) in &prog.exports {
-            let desc = &prog.slots[*slot as usize];
-            let shape: Vec<usize> = if desc.scalar {
-                Vec::new()
-            } else {
-                desc.shape.to_vec()
-            };
-            obs.insert(name.clone(), ArrayD::<f64>::zeros(IxDyn(&shape)));
-        }
+        let obs: ArrMap = ArrMap::with_capacity_and_hasher(prog.exports.len(), Default::default());
+        let parked = prog
+            .exports
+            .iter()
+            .map(|(name, slot)| {
+                let desc = &prog.slots[*slot as usize];
+                let shape: Vec<usize> = if desc.scalar {
+                    Vec::new()
+                } else {
+                    desc.shape.to_vec()
+                };
+                Some((name.clone(), ArrayD::<f64>::zeros(IxDyn(&shape))))
+            })
+            .collect();
+        let export_sites = prog
+            .instrs
+            .iter()
+            .enumerate()
+            .filter_map(|(pc, i)| match i {
+                Instr::Export { export, .. } => Some((pc, *export)),
+                _ => None,
+            })
+            .collect();
         let n_fallback = prog
             .rules
             .iter()
@@ -293,6 +316,8 @@ impl TapeExec {
             slab,
             slot_off,
             obs,
+            parked,
+            export_sites,
             pending: Vec::with_capacity(16),
             state_rm: vec![0.0f64; n_state],
             plan_full,

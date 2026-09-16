@@ -279,7 +279,7 @@ end
 # the same predicate `validate()` reports as `invalid_broadcast_fn`), so a bogus
 # `fn` is a BUILD error even for a caller that never ran `validate()`.
 # `reshape`/`transpose`/`concat` are NOT lowered — they are genuine shape ops
-# with no scalar-operator spelling, and keep their `E_TREEWALK_UNSUPPORTED_OP`
+# with no scalar-operator spelling, and keep their `unevaluable_operator`
 # rejection in `_compile_op`.
 #
 # DAG-SAFE, WITHOUT TAXING THE COMMON CASE (ESS-0hh).

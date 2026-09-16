@@ -1,5 +1,5 @@
 """Cross-language conformance: an out-of-range const-array gather
-(esm-spec §4.3.3, CONFORMANCE_SPEC §5.5.5 and §5.39).
+(esm-spec §4.3.3, CONFORMANCE_SPEC §5.5.5 and §5.40).
 
 The shared fixtures live under ``tests/conformance/const_array_gather_bounds/``
 (repo root); the Julia runner (``conformance_const_array_gather_bounds_test.jl``)

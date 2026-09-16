@@ -544,7 +544,7 @@ function _oop_op(op::Symbol, c::AbstractVector, ::Type{T}) where {T}
         _expect_arity_n(op, c, 1)
         return c[1]
     else
-        throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_OP", String(op)))
+        throw(_unevaluable_operator(op, "the out-of-place ladder has no arm for it"))
     end
 end
 

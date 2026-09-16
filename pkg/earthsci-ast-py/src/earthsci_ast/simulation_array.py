@@ -19,8 +19,10 @@ from typing import Any, Callable
 
 import numpy as np
 
+from .classification import is_implicit_lhs
 from .esm_types import EsmFile, Expr, ExprNode, is_aggregate_op
 from .expr_walk import iter_children, map_children
+from .expression import UnsupportedConstructError
 from .flatten import (
     FlattenedEquation,
     FlattenedSystem,
@@ -64,6 +66,7 @@ from .simulation_common import (
 from .sympy_bridge import SimulationError
 from .value_invention import (
     ValueInventionError,
+    _vi_detect,
     _vi_lhs_base,
     materialize_value_invention,
 )
@@ -584,6 +587,15 @@ def _apply_equation_to_dy(
     # and must not warn.
     if isinstance(lhs, ExprNode) and lhs.op == "ic":
         return
+    # An IMPLICIT equation is refused at `esm_problem`'s front door; this is the
+    # same refusal for a hand-built FlattenedSystem that reaches the RHS
+    # directly, where warning and carrying on would report the initial value.
+    if is_implicit_lhs(lhs):
+        raise UnsupportedConstructError(
+            "implicit equation",
+            f"with LHS {eq.lhs!r}",
+            "Python array interpreter",
+        )
     warnings.warn(
         f"solve: unrecognized algebraic equation with LHS {eq.lhs!r} was not "
         f"applied to the ODE RHS; any state it constrains stays frozen at its "
@@ -1524,6 +1536,17 @@ def _frontdoor_join_keys_and_extents(
     }
     for k, v in (loader_arrays or {}).items():
         const_arrays[str(k)] = np.asarray(v)
+    # An unknown defined by an array `const` equation is build-time data exactly as
+    # a supplied const array is, so a value-invention key column may read it
+    # (esm-spec §4.2). A supplied array of the same name wins.
+    for name, rhs in ordered_observed:
+        if (
+            isinstance(rhs, ExprNode)
+            and rhs.op == "const"
+            and isinstance(rhs.value, (list, tuple))
+            and str(name) not in const_arrays
+        ):
+            const_arrays[str(name)] = np.asarray(rhs.value, dtype=float)
     # Surface each namespaced const array under its BARE tail too (unique
     # shallowest-suffix rule, the const-registry mirror of `_vi_scope_get`):
     # the front-door's overlap-envelope lookup (`broad_phase.envelope_vectors`)
@@ -1562,10 +1585,23 @@ def _frontdoor_join_keys_and_extents(
         )
         buffers, idx_sets = _buffers(res)
         return buffers, idx_sets, dict(res.extents), dict(res.members)
-    except ValueInventionError:
-        # Producer materialisation needed a factor absent pre-hoist: still surface
-        # the bins (maps-only never touches producers); extents degrade to {} —
-        # fail-closed, matching the retired _value_invention_extents.
+    except ValueInventionError as exc:
+        # A producer a derived index set names could not run, so that set has no
+        # members. Degrading its extent to {} would let a contraction over it fold
+        # to 0, so it is refused here with the engine's reason (esm-spec §9.6.6).
+        producer_ids = {str(node.get("id")) for _, node in _vi_detect(model_json).producers}
+        for set_name, iset in sorted(flat.index_sets.items()):
+            if (
+                isinstance(iset, dict)
+                and iset.get("kind") == "derived"
+                and str(iset.get("from_faq")) in producer_ids
+            ):
+                raise ValueInventionError(
+                    f"derived_index_set_unmaterialized: derived index set {set_name!r} "
+                    f"(from_faq {iset.get('from_faq')!r}) cannot be materialized: {exc}"
+                ) from exc
+        # Otherwise the failure is in a map or chain buffer no derived set depends
+        # on: still surface the bins (maps-only never touches producers).
         res = materialize_value_invention(
             model_json, const_arrays, param_values, index_sets=flat.index_sets, maps_only=True
         )
@@ -3028,7 +3064,10 @@ def _simulate_with_numpy(
                 _fill_build_inspection(
                     inspect, flat, build, float(tspan[0]), loader_arrays=loader_arrays
                 )
-        if build.total_size == 0 and not build.has_value_invention_states:
+        if build.total_size == 0:
+            # A system whose only states were value-invention producers (dropped
+            # from the ODE at setup) is stateless in the same sense, so its
+            # observed graph is answered the same way.
             if build.ordered_observed:
                 # A CALCULATOR-shaped array document: no ODE state, but a real
                 # observed graph — the shape a recurrence definition naturally

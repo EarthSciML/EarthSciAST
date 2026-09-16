@@ -46,7 +46,7 @@ export const E_CANONICAL_UNSUPPORTED_FIELD = 'E_CANONICAL_UNSUPPORTED_FIELD'
  * cross-language canonical fixtures pin. CLOSED — extending it is a cross-binding
  * format change, never a TS-local edit.
  */
-const EMISSIBLE_FIELDS = ['op', 'args', 'wrt', 'dim', 'fn', 'name', 'value'] as const
+const EMISSIBLE_FIELDS = ['op', 'args', 'wrt', 'dim', 'fn', 'name', 'value', 'units'] as const
 
 /**
  * Fields TOLERATED-AND-IGNORED by the canonical emitter: a node carrying them
@@ -170,7 +170,7 @@ function assertEmissible(e: Expr | unknown): void {
     throw new CanonicalizeError(
       E_CANONICAL_UNSUPPORTED_FIELD,
       `op '${e.op}' carries field(s) [${offending.join(', ')}] outside the canonical ` +
-        `JSON node encoding (op/args/wrt/dim/fn/name/value); emitting them would be ` +
+        `JSON node encoding (op/args/wrt/dim/fn/name/value/units); emitting them would be ` +
         `lossy and non-portable (RFC §5.4.6)`,
     )
   }

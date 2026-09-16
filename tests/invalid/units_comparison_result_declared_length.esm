@@ -1,0 +1,58 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "UnitsComparisonResultDeclaredLength",
+    "description": "Invalid: declares a length equal to the comparison x > 0. A comparison is a dimensionless boolean whatever its operands are (esm-spec §4.8.3), so the m declaration is a provable mismatch.",
+    "authors": [
+      "Chris Tessum with Claude"
+    ],
+    "created": "2026-09-15T00:00:00Z"
+  },
+  "models": {
+    "BadUnitsModel": {
+      "variables": {
+        "x": {
+          "type": "parameter",
+          "units": "m",
+          "default": 2.0,
+          "description": "A length"
+        },
+        "y": {
+          "type": "parameter",
+          "units": "m",
+          "default": 3.0,
+          "description": "Another length"
+        },
+        "z": {
+          "type": "parameter",
+          "units": "kg",
+          "default": 4.0,
+          "description": "A mass"
+        },
+        "c": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.0,
+          "description": "A dimensionless switch"
+        },
+        "flag": {
+          "type": "unknown",
+          "units": "m",
+          "description": "Invalid: declared in m but defined as a boolean"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "flag",
+          "rhs": {
+            "op": ">",
+            "args": [
+              "x",
+              0
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

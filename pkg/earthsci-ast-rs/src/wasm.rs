@@ -279,7 +279,8 @@ pub fn simulate_inputs(json_str: &str) -> Result<JsValue, JsValue> {
 ///   model's `default`s).
 /// - `opts_str`: JSON object, all fields optional —
 ///   `{ "alg": "bdf"|"sdirk"|"erk", "abstol": f64, "reltol": f64,
-///      "maxiters": u32, "outputPoints": u32 }`. `outputPoints` samples the
+///      "maxiters": u32, "outputPoints": u32 }`. `maxiters` caps accepted
+///   integrator steps and leaves the run uncapped when omitted. `outputPoints` samples the
 ///   solution at that many evenly spaced times in `[t0, t_end]` (nice for
 ///   plotting); omit it to get the solver's natural step grid. The names are
 ///   the canonical SciML ones (`API_SPEC.md` §4); the pre-harmonization
@@ -412,7 +413,7 @@ fn parse_solve_options(
         .or_else(|| opts_json.get("maxSteps"))
         .and_then(|v| v.as_u64())
     {
-        opts.maxiters = v as usize;
+        opts.maxiters = Some(v as usize);
     }
     if let Some(n) = opts_json.get("outputPoints").and_then(|v| v.as_u64()) {
         opts.sample_evenly(t0, t_end, n as usize);

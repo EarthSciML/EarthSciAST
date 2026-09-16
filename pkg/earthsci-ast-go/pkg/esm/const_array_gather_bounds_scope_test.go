@@ -8,7 +8,7 @@ import (
 )
 
 // const_array_gather_bounds_scope_test.go is Go's read of the SHARED
-// `const_array_gather_bounds` conformance manifest (CONFORMANCE_SPEC §5.39,
+// `const_array_gather_bounds` conformance manifest (CONFORMANCE_SPEC §5.40,
 // tests/conformance/const_array_gather_bounds/manifest.json).
 //
 // Go cannot run that category: `index` has no scalar evaluator here and there is
