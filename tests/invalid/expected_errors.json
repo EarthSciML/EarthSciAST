@@ -3457,5 +3457,30 @@
     "structural_errors": [],
     "is_valid": false,
     "notes": "`root_find` accepts only \"left\" (default) and \"right\", DiffEq's two rootfind sides; \"all\" was removed from the schema without a version bump because it never had an effect."
+  },
+  "array_default_without_shape.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/Decay/subsystems/Inner/variables/x/default",
+        "code": "array_default_without_shape",
+        "message": "Model 'Inner' variable 'x' has inline array data as its default but declares no shape; inline array data is a shaped variable's value (esm-spec \u00a76.3)",
+        "details": {
+          "variable": "x",
+          "variable_type": "unknown"
+        }
+      },
+      {
+        "path": "/models/Decay/variables/k/default",
+        "code": "array_default_without_shape",
+        "message": "Model 'Decay' variable 'k' has inline array data as its default but declares no shape; inline array data is a shaped variable's value (esm-spec \u00a76.3)",
+        "details": {
+          "variable": "k",
+          "variable_type": "parameter"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a76.3: inline array data is a SHAPED variable's value, so on a variable with no `shape` (omitted, null or empty) it has nothing to fill. The schema cannot say this (whether an array is legal depends on a sibling field), so it is a structural check in every binding, pinned at the offending `default`. Before the rejection the Rust build pipeline bound such a parameter to a fabricated 0.0 (fixed in #255 by dropping it from scope, which also dropped an explicit scalar override); the load-time error names the declaration instead. The shaped parameter `w` carries the same data and must NOT be reported."
   }
 }

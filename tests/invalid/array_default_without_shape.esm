@@ -1,0 +1,72 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "ArrayDefaultWithoutShape",
+    "description": "Inline array data as the `default` of a variable that declares no `shape`. Inline array data is a SHAPED variable's value (esm-spec §6.3): its nesting is matched against the declared shape, so with no shape there is nothing for the array to fill and no scalar reading of it. Both declared types are covered — a parameter at the top level and an unknown inside an INLINE subsystem, so a binding that checks only parameters or only top-level models is caught. `w` is the control: the same array data on a shaped parameter is valid.",
+    "authors": [
+      "EarthSciML Test Suite"
+    ],
+    "created": "2026-09-14T00:00:00Z",
+    "tags": [
+      "validation",
+      "inline-array-data",
+      "shape",
+      "subsystems"
+    ]
+  },
+  "index_sets": {
+    "c": {
+      "kind": "interval",
+      "size": 2
+    }
+  },
+  "models": {
+    "Decay": {
+      "variables": {
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": [2.0, 3.0],
+          "description": "Decay rate. MALFORMED: array data with no shape to fill."
+        },
+        "w": {
+          "type": "parameter",
+          "units": "1",
+          "shape": ["c"],
+          "default": [1.0, 2.0],
+          "description": "Control: the same inline array data on a shaped parameter is valid."
+        },
+        "y": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0,
+          "description": "Decaying quantity"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {"op": "D", "args": ["y"], "wrt": "t"},
+          "rhs": {"op": "*", "args": [{"op": "neg", "args": ["k"]}, "y"]}
+        }
+      ],
+      "subsystems": {
+        "Inner": {
+          "variables": {
+            "x": {
+              "type": "unknown",
+              "units": "1",
+              "default": [0.5, 0.25],
+              "description": "Relaxing quantity. MALFORMED: array initial value with no shape to fill."
+            }
+          },
+          "equations": [
+            {
+              "lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+              "rhs": {"op": "neg", "args": ["x"]}
+            }
+          ]
+        }
+      }
+    }
+  }
+}
