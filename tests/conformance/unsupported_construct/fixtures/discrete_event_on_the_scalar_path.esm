@@ -1,0 +1,94 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "DiscreteEventOnTheScalarPath",
+    "description": "The same periodic discrete event on a document with no array variable, so it takes the SCALAR evaluator. Neither the Rust nor the Python scalar evaluator runs discrete events, and Julia's tree-walk evaluator serves both paths, so each of them MUST refuse it with `unsupported_construct` (issue #264). Julia's ModelingToolkit export runs discrete events and is not covered by this category.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "conformance",
+      "unsupported_construct",
+      "events"
+    ]
+  },
+  "models": {
+    "DiscreteEventOnTheScalarPath": {
+      "tolerance": {
+        "rel": 1e-12
+      },
+      "variables": {
+        "s": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Doubles at each event; 1 at t = 0."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "s"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "s"
+            ]
+          },
+          "rhs": 1.0
+        }
+      ],
+      "discrete_events": [
+        {
+          "name": "double",
+          "trigger": {
+            "type": "periodic",
+            "interval": 1.0
+          },
+          "affects": [
+            {
+              "lhs": "s",
+              "rhs": {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "s"
+                    ]
+                  },
+                  2.0
+                ]
+              }
+            }
+          ],
+          "description": "s := 2*Pre(s), once per unit of time."
+        }
+      ],
+      "tests": [
+        {
+          "id": "a_periodic_event_folds_an_unknown",
+          "description": "Intended behaviour: s(3.5) = 8.",
+          "time_span": {
+            "start": 0.0,
+            "end": 3.5
+          },
+          "assertions": [
+            {
+              "variable": "s",
+              "time": 3.5,
+              "expected": 8.0
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

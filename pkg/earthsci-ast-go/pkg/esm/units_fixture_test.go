@@ -2,7 +2,7 @@ package esm
 
 // Units fixtures consumption runner (gt-dt0o).
 //
-// The three units_*.esm files in tests/valid/ carry inline `tests` blocks
+// The units_*.esm files in tests/valid/ carry inline `tests` blocks
 // (id / parameter_overrides / initial_conditions / time_span / assertions)
 // added in gt-p3v. Schema parse coverage is asserted in
 // units_fixtures_test.go (TestUnitsFixturesCrossBinding). This file closes
@@ -25,6 +25,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -142,6 +143,10 @@ func evalFixtureExpr(expr any, bindings map[string]float64) (float64, bool) {
 			return math.Tan(args[0]), true
 		case "abs":
 			return math.Abs(args[0]), true
+		case "min":
+			return slices.Min(args), true
+		case "max":
+			return slices.Max(args), true
 		default:
 			panic(fmt.Sprintf("unsupported op: %q", opRaw))
 		}
@@ -264,6 +269,7 @@ func TestUnitsFixturesInlineTestsExecution(t *testing.T) {
 		"units_conversions.esm",
 		"units_dimensional_analysis.esm",
 		"units_propagation.esm",
+		"units_negated_literal_neutral.esm",
 	}
 	totalTests := 0
 	for _, name := range fixtures {

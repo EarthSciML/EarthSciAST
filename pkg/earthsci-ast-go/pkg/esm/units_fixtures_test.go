@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// TestUnitsFixturesCrossBinding wires the three canonical units fixtures
+// TestUnitsFixturesCrossBinding wires the canonical units fixtures
 // (tests/valid/units_*.esm) into the Go test suite as part of gt-gtf.
 // These fixtures are shared across Julia/Python/Rust/TypeScript/Go and
 // exist specifically to drive cross-binding agreement on units handling.
@@ -28,6 +28,7 @@ func TestUnitsFixturesCrossBinding(t *testing.T) {
 		"units_conversions.esm",
 		"units_dimensional_analysis.esm",
 		"units_propagation.esm",
+		"units_negated_literal_neutral.esm",
 	}
 	for _, name := range fixtures {
 		t.Run(name, func(t *testing.T) {

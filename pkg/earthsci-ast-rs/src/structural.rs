@@ -349,6 +349,16 @@ impl<'a> ModelCtx<'a> {
             // property of the equation, not of one side.)
             for (field, expr) in [("lhs", &equation.lhs), ("rhs", &equation.rhs)] {
                 self.check_refs(expr, &format!("{eq_path}/{field}"), eq_idx, errors);
+                // A declared `const` unit string that does not resolve is a
+                // defect at the containing expression field (esm-spec §4.8.5).
+                for units in crate::units::unresolvable_const_units(expr) {
+                    errors.push(StructuralError {
+                        path: format!("{eq_path}/{field}"),
+                        code: StructuralErrorCode::UnitParseError,
+                        message: format!("Unit string '{units}' is not a recognised unit"),
+                        details: serde_json::json!({ "units": units }),
+                    });
+                }
             }
 
             // Validate dimensional consistency of the equation via expression-level
@@ -582,12 +592,17 @@ fn check_linear_conversion_factor(
     if !src_scale.is_finite() || !dst_scale.is_finite() || dst_scale == 0.0 {
         return;
     }
-    // Identical units ⇒ no conversion is implied ⇒ the coefficient is free.
-    if (src_scale - dst_scale).abs() <= 1e-9 * src_scale.abs().max(dst_scale.abs()) {
+    // Identical scales ⇒ no conversion is implied ⇒ the coefficient is free.
+    // Decided exactly (esm-spec §4.8.1): a tolerance here would let the order a
+    // binding folded its scale arithmetic in decide whether a coefficient is
+    // checked at all.
+    if src.exact_scale() == declared.exact_scale() {
         return;
     }
 
-    let expected = src_scale / dst_scale;
+    // The expected factor is formed EXACTLY and rounded once; the tolerance
+    // below only absorbs the literal's own decimal spelling.
+    let expected = src.exact_scale().divide(declared.exact_scale()).to_f64();
     if (factor - expected).abs() <= 1e-6 * expected.abs() {
         return;
     }
@@ -1088,6 +1103,21 @@ struct StructuralAffine {
     konst: Option<(i64, i64)>,
 }
 
+/// Guidance appended to the not-affine refusal of a causal self-read. The case
+/// it names is the one authors reach for: a lag read from DATA
+/// (`k - index(lag, k)`), where `lag[k]` is a value rather than a symbol with a
+/// range. Shared by the validator and the compile path so the two refusals say
+/// the same thing.
+pub(crate) fn data_lag_guidance(var: &str, sym: &str) -> String {
+    format!(
+        "If the offset is read from data (`{sym} - index(lag, {sym})`), it has no direct \
+         spelling; contract it instead: either order the axis so the predecessor is the \
+         preceding position and the lag is the constant 1, or range a contracted index `a` \
+         over the lag's bounds and select the matching term with \
+         `ifelse(index(lag, {sym}) == a, <term reading index({var}, {sym} - a)>, 0)`."
+    )
+}
+
 fn structural_affine_in_sym(
     e: &crate::Expr,
     sym: &str,
@@ -1426,7 +1456,9 @@ fn check_recurrence_equation(
                         "index {d} of a causal self-read of '{var}' is not affine in its frame \
                          symbol '{sym}'. A self-read names a position RELATIVE to the cell being \
                          written (`{sym} - 1`, `{sym} - a`, `{sym} - a - 2`), which is what makes \
-                         the recurrence axis and its direction decidable (esm-spec §4.3.1.1)."
+                         the recurrence axis and its direction decidable (esm-spec §4.3.1.1). \
+                         {}",
+                        data_lag_guidance(var, sym)
                     ),
                     None,
                 );
@@ -2449,6 +2481,19 @@ pub(crate) fn validate_reaction_system(
         );
     }
 
+    // The names a reaction system's constraint equations, events and inline-test
+    // references resolve against: its species and parameters plus the implicit
+    // symbols (§4.9.1), widened to the document scope when the system is coupled,
+    // as `ModelCtx::new` scopes a model.
+    let mut rs_scope: HashSet<String> = defined_species
+        .union(&defined_parameters)
+        .cloned()
+        .collect();
+    rs_scope.extend(implicitly_declared_symbols(esm_file));
+    if coupled_system_names(esm_file).contains(rs_name) {
+        rs_scope.extend(document_declared_names(esm_file));
+    }
+
     // v0.8.0 §11.4.1: an `ic`-op equation MUST NOT appear inside a reaction
     // system's `constraint_equations`. A reaction system has no `equations`
     // field and hosts no ICs — a species' initial value is its scalar
@@ -2477,23 +2522,18 @@ pub(crate) fn validate_reaction_system(
             }
 
             // Reference integrity applies to a constraint equation too — it is an
-            // expression over the system's species and parameters, and nothing
-            // checked it, so an undefined name inside one was a silent FALSE
-            // NEGATIVE (the same blind spot as `initialization_equations`).
-            let mut scope: HashSet<String> = defined_species
-                .union(&defined_parameters)
-                .cloned()
-                .collect();
-            // The independent variable and `_var` are in scope here too (§4.9.1).
-            scope.extend(implicitly_declared_symbols(esm_file));
+            // expression over the system's species and parameters — reported at
+            // the side that carries the defect, as a model equation is.
             let ce_path = format!("{rs_path}/constraint_equations/{ce_idx}");
-            for expr in [&eq.lhs, &eq.rhs] {
+            for (side, expr) in [("lhs", &eq.lhs), ("rhs", &eq.rhs)] {
+                let mut ref_scope = rs_scope.clone();
+                collect_bound_symbols(expr, &mut ref_scope);
                 validate_expression_references_with_systems(
                     expr,
-                    &scope,
+                    &ref_scope,
                     system_refs,
                     &HashSet::new(),
-                    &ce_path,
+                    &format!("{ce_path}/{side}"),
                     ce_idx,
                     errors,
                 );
@@ -2501,10 +2541,42 @@ pub(crate) fn validate_reaction_system(
         }
     }
 
+    // A reaction system's events are the same sites as a model's. A reaction
+    // system has no `variables` map, so there is no parameter for an affect to
+    // write and `event_affects_parameter` cannot arise here.
+    let no_variables = indexmap::IndexMap::new();
+    for (event_idx, event) in rs.discrete_events.iter().flatten().enumerate() {
+        validate_discrete_event(event, event_idx, &rs_path, &rs_scope, &no_variables, errors);
+    }
+    for (event_idx, event) in rs.continuous_events.iter().flatten().enumerate() {
+        validate_continuous_event(event, event_idx, &rs_path, &rs_scope, &no_variables, errors);
+    }
+
+    // An inline test's assertion `reference` (§6.6) is the same site on a
+    // reaction system as on a model.
+    for (t_idx, test) in rs.tests.iter().flatten().enumerate() {
+        for (a_idx, assertion) in test.assertions.iter().enumerate() {
+            let Some(crate::types::AssertionReference::Expression(reference)) =
+                &assertion.reference
+            else {
+                continue;
+            };
+            let mut ref_scope = rs_scope.clone();
+            collect_bound_symbols(reference, &mut ref_scope);
+            validate_expression_references_with_systems(
+                reference,
+                &ref_scope,
+                system_refs,
+                &HashSet::new(),
+                &format!("{rs_path}/tests/{t_idx}/assertions/{a_idx}/reference"),
+                0,
+                errors,
+            );
+        }
+    }
+
     // Stoichiometric rate-dimension check (spec §7.4).
     validate_reaction_rate_units(rs_name, rs, errors);
-
-    // Note: Event validation would go here when ReactionSystem types support events
 }
 
 /// Enforce the mass-action dimensional constraint from spec §7.4: rate

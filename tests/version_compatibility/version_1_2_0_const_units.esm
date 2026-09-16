@@ -1,0 +1,49 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "Version_1_2_0_ConstUnits",
+    "description": "Exact version match for a 1.2.0 library. Uses the construct 1.2.0 adds, declared units on a const node (esm-spec §4.8.5), so it is also a document an earlier-minor library could not read without a version warning.",
+    "authors": [
+      "ESM Format Team"
+    ],
+    "created": "2026-09-14T00:00:00Z",
+    "tags": [
+      "test",
+      "compatibility"
+    ]
+  },
+  "models": {
+    "SpeedConversion": {
+      "variables": {
+        "speed_mph": {
+          "type": "parameter",
+          "units": "mi/h",
+          "default": 30.0,
+          "description": "Link average speed in miles per hour"
+        },
+        "speed_ms": {
+          "type": "unknown",
+          "units": "m/s",
+          "description": "Link average speed in metres per second"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "speed_ms",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "speed_mph",
+              {
+                "op": "const",
+                "args": [],
+                "value": 0.44704,
+                "units": "m*h/(mi*s)"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

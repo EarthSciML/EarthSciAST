@@ -451,6 +451,10 @@ function validate_structural(file::EsmFile)::Vector{StructuralError}
     # 2. Validate reference integrity
     append!(errors, validate_reference_integrity(file))
 
+    # 2b. An inline test's assertion targets, override keys and assertion ranks
+    # (esm-spec §6.6.2, §6.6.3, §6.6.5).
+    append!(errors, _validate_inline_tests(file))
+
     # 3. Validate reaction system consistency
     if file.reaction_systems !== nothing
         for (rs_name, rs) in file.reaction_systems
@@ -543,7 +547,8 @@ function validate_structural(file::EsmFile)::Vector{StructuralError}
             # was missing entirely until the 2026-07-14 audit (finding J1), which
             # is why `validate()` accepted every dimensionally-inconsistent
             # fixture in the shared corpus.
-            append!(errors, validate_model_unit_consistency(model, "/models/$model_name"))
+            append!(errors, validate_model_unit_consistency(
+                _units_view(file, model_name, model), "/models/$model_name"))
         end
     end
 
@@ -1650,6 +1655,19 @@ function _check_broadcast_axes!(errors::Vector{StructuralError}, expr::ASTExpr,
     return errors
 end
 
+# The model the units engine judges: its surviving `apply_expression_template`
+# references expanded against the component's registry, so a call has the unit
+# of its expansion (esm-spec §4.8.5 item 5, §9.6.4 rule 2). The expansion is made
+# on a copy; the rest of `validate` keeps the reference-preserving model.
+function _units_view(file::EsmFile, model_name::AbstractString, model::Model)
+    file.component_templates === nothing && return model
+    reg = get(file.component_templates, "models.$model_name", nothing)
+    reg === nothing && return model
+    view = deepcopy(model)
+    _expand_model_refs!(view, reg)
+    return view
+end
+
 """
     validate_model_unit_consistency(model::Model, path::String) -> Vector{StructuralError}
 
@@ -2011,6 +2029,44 @@ function validate_reference_integrity(file::EsmFile)::Vector{StructuralError}
         end
     end
 
+    # A reaction system's constraint equations, events and inline tests are the
+    # same sites as a model's, and report `undefined_variable` as the model's do
+    # (only a reaction `rate` keeps `undefined_parameter`). Each is checked against
+    # the system's species and parameters plus the document's implicit names,
+    # widened to the document scope when the system is coupled, exactly as
+    # `validate_model_references` scopes a model.
+    if file.reaction_systems !== nothing
+        coupled = _coupled_system_names(file)
+        for (rs_name, rs) in file.reaction_systems
+            isempty(rs.tests) && isempty(rs.constraint_equations) &&
+                isempty(rs.discrete_events) && isempty(rs.continuous_events) && continue
+            is_coupled = rs_name ∈ coupled
+            scope = is_coupled ? _document_declared_names(file) :
+                Set{String}(vcat([sp.name for sp in rs.species], [p.name for p in rs.parameters]))
+            is_coupled && push!(scope, _OPERATOR_PLACEHOLDER_VAR)
+            union!(scope, keys(file.index_sets))
+            push!(scope, _indep_var(file))
+            union!(scope, _coordinate_names(file))
+            union!(scope, _callback_injected_names(file))
+            rs_path = "/reaction_systems/$rs_name"
+            for (i, eq) in enumerate(rs.constraint_equations)
+                append!(errors, validate_expression_references(
+                    file, eq.lhs, "$rs_path/constraint_equations/$(i-1)/lhs"; scope=scope))
+                append!(errors, validate_expression_references(
+                    file, eq.rhs, "$rs_path/constraint_equations/$(i-1)/rhs"; scope=scope))
+            end
+            for (i, event) in enumerate(rs.discrete_events)
+                append!(errors, validate_event_references(
+                    file, event, "$rs_path/discrete_events/$(i-1)"; scope=scope))
+            end
+            for (i, event) in enumerate(rs.continuous_events)
+                append!(errors, validate_event_references(
+                    file, event, "$rs_path/continuous_events/$(i-1)"; scope=scope))
+            end
+            append!(errors, _validate_test_references(file, rs.tests, rs_path, scope))
+        end
+    end
+
     # Validate coupling references
     for (i, coupling_entry) in enumerate(file.coupling)
         append!(errors, validate_coupling_references(file, coupling_entry, "/coupling/$(i-1)"))
@@ -2206,11 +2262,27 @@ function _callback_injected_names(file::EsmFile)::Set{String}
     return names
 end
 
+# The assertion `reference` expressions of a component's inline tests (§6.6).
+function _validate_test_references(file::EsmFile, tests, path::String,
+                                   scope::Set{String})::Vector{StructuralError}
+    errors = StructuralError[]
+    for (i, t) in enumerate(tests)
+        for (j, a) in enumerate(t.assertions)
+            ref = a.reference
+            ref === nothing && continue
+            append!(errors, validate_expression_references(
+                file, ref, "$path/tests/$(i-1)/assertions/$(j-1)/reference"; scope=scope))
+        end
+    end
+    return errors
+end
+
 """
     validate_model_references(file::EsmFile, model::Model, path::String) -> Vector{StructuralError}
 
 Validate variable references within a model.
 """
+
 function validate_model_references(file::EsmFile, model::Model, path::String;
                                    model_name::AbstractString="",
                                    is_coupled::Bool=false)::Vector{StructuralError}
@@ -2319,14 +2391,7 @@ function validate_model_references(file::EsmFile, model::Model, path::String;
     end
 
     # 4. Inline `tests` blocks: an assertion may carry a `reference` expression.
-    for (i, t) in enumerate(model.tests)
-        for (j, a) in enumerate(t.assertions)
-            ref = a.reference
-            ref === nothing && continue
-            append!(errors, validate_expression_references(
-                file, ref, "$path/tests/$(i-1)/assertions/$(j-1)/reference"; scope=scope))
-        end
-    end
+    append!(errors, _validate_test_references(file, model.tests, path, scope))
 
     # Validate discrete event references. `scope` is threaded now — without it
     # the descent happened but the bare-variable check was a no-op.
@@ -3379,7 +3444,12 @@ function _linear_conversion_factor(from_units::String, to_units::String)::Union{
         q0 = Unitful.ustrip(Unitful.uconvert(to_unit, 0.0 * from_unit))
         q1 = Unitful.ustrip(Unitful.uconvert(to_unit, 1.0 * from_unit))
         abs(q0) > 1e-12 && return nothing  # affine
-        return Float64(q1)
+        # Identical exact scales imply no conversion, so the coefficient is free;
+        # otherwise the expected factor is formed EXACTLY and rounded once, so the
+        # caller's tolerance only absorbs the literal's spelling (esm-spec §4.8.1).
+        from_exact, to_exact = _exact_scale(from_unit), _exact_scale(to_unit)
+        from_exact == to_exact && return nothing
+        return Float64(from_exact / to_exact)
     catch
         return nothing
     end

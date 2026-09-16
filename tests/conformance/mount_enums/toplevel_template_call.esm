@@ -1,0 +1,41 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "MountEnumsTopLevelTemplateCall",
+    "description": "Mounts leaf_template_call.esm by a top-level `models` `{ref}` and declares probe.Symbol = 7. The leaf's own call binds its template's parameter, so the leaf reads its own 2; this document's own op reads 7.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ]
+  },
+  "enums": {
+    "probe": {
+      "Symbol": 7
+    }
+  },
+  "models": {
+    "Leaf": {
+      "ref": "./leaf_template_call.esm"
+    },
+    "Probe": {
+      "variables": {
+        "own": {
+          "type": "unknown",
+          "units": "1",
+          "description": "The value THIS file's `enums` block gives probe.Symbol."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "own",
+          "rhs": {
+            "op": "enum",
+            "args": [
+              "probe",
+              "Symbol"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

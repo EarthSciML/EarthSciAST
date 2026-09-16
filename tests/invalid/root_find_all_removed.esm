@@ -1,0 +1,29 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "RootFindAllRemoved",
+    "description": "A continuous event whose root_find is \"all\". That value was removed from the schema: DiffEq's rootfind option has only a left and a right side of the root, and \"all\" never did anything. The document MUST fail schema validation with an enum error at the field.",
+    "authors": ["EarthSciML Authors and Contributors"],
+    "tags": ["invalid", "events", "schema"]
+  },
+  "models": {
+    "Ball": {
+      "variables": {
+        "h": {"type": "unknown", "units": "m", "default": 1.0, "description": "Height."},
+        "v": {"type": "unknown", "units": "m/s", "default": 0.0, "description": "Velocity."}
+      },
+      "equations": [
+        {"lhs": {"op": "D", "args": ["h"], "wrt": "t"}, "rhs": "v"},
+        {"lhs": {"op": "D", "args": ["v"], "wrt": "t"}, "rhs": -9.81}
+      ],
+      "continuous_events": [
+        {
+          "name": "ground",
+          "conditions": ["h"],
+          "affects": [{"lhs": "v", "rhs": {"op": "*", "args": [-0.8, {"op": "Pre", "args": ["v"]}]}}],
+          "root_find": "all"
+        }
+      ]
+    }
+  }
+}

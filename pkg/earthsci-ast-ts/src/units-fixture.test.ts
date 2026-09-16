@@ -1,7 +1,7 @@
 /**
  * Units fixtures consumption runner (gt-dt0o).
  *
- * The three `units_*.esm` files in `tests/valid/` carry inline `tests`
+ * The `units_*.esm` files in `tests/valid/` carry inline `tests`
  * blocks (id / parameter_overrides / initial_conditions / time_span /
  * assertions) added in gt-p3v. Schema parse coverage is asserted in
  * `units.test.ts`'s Cross-binding units fixtures suite. This file closes
@@ -26,6 +26,7 @@ const FIXTURES = [
   'units_conversions.esm',
   'units_dimensional_analysis.esm',
   'units_propagation.esm',
+  'units_negated_literal_neutral.esm',
 ]
 
 type AnyTol = AssertionTolerance | undefined
