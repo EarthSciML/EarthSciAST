@@ -659,6 +659,9 @@ using Unitful
             "units_dimensional_analysis.esm",
             "units_propagation.esm",
             "units_negated_literal_neutral.esm",
+            "units_sum_undeterminable_operands.esm",
+            "units_ifelse_undeterminable_branch.esm",
+            "units_comparisons_and_connectives.esm",
         ]
         fixtures_root = joinpath(@__DIR__, "..", "..", "..", "tests", "valid")
 

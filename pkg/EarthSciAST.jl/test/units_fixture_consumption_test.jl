@@ -96,6 +96,10 @@ end
 
 @testset "Units fixtures inline tests execution (gt-dt0o)" begin
     fixtures_root = joinpath(@__DIR__, "..", "..", "..", "tests", "valid")
+    # Only the fixtures that CARRY an inline `tests` block belong here;
+    # units_ifelse_undeterminable_branch.esm and
+    # units_comparisons_and_connectives.esm declare units alone and are wired
+    # into the cross-binding validate suite in units_test.jl instead.
     fixtures = ["units_conversions.esm",
                 "units_dimensional_analysis.esm",
                 "units_propagation.esm",

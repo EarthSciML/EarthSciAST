@@ -657,13 +657,9 @@ function computeDimensions(
         warn(arity, ERROR_CODES.ANALYSIS)
         return unknown()
       }
-      const cond = get(0)
-      if (cond !== null && !isDimensionless(cond)) {
-        warn(
-          `ifelse() condition must be dimensionless, got ${formatDims(cond.dims)}`,
-          ERROR_CODES.ANALYSIS,
-        )
-      }
+      // The condition is not part of the result unit and need not be
+      // dimensionless (esm-spec §4.8.3). It is still walked above, so a finding
+      // inside it — `ifelse(x [m] > z [kg], a, b)` — is still reported.
       const a = get(1)
       const b = get(2)
       if (a !== null && b !== null && !dimsEqual(a.dims, b.dims)) {
@@ -710,15 +706,10 @@ function computeDimensions(
     case 'and':
     case 'or':
     case 'not':
-      for (let i = 0; i < argDims.length; i++) {
-        const arg = get(i)
-        if (arg !== null && !isDimensionless(arg)) {
-          warn(
-            `${op} requires dimensionless arguments, got ${formatDims(arg.dims)}`,
-            ERROR_CODES.ANALYSIS,
-          )
-        }
-      }
+      // The result is a dimensionless boolean. The operands carry no unit
+      // requirement of their own — `and(x [m], z [kg])` is not an error
+      // (esm-spec §4.8.3) — but they are walked above, so a mismatch inside one
+      // (`not(x [m] > z [kg])`) is still reported.
       return finish(dimensionless())
 
     case 'Pre':

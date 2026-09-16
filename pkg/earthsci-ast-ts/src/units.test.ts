@@ -250,6 +250,43 @@ describe('Unit parsing and dimensional analysis', () => {
         }
       })
 
+      // esm-spec §4.8.3: a boolean connective's operands carry no unit
+      // requirement of their own, and an `ifelse` condition need not be
+      // dimensionless. Both used to be flagged here and nowhere else, so
+      // tests/valid/units_comparisons_and_connectives.esm carried four
+      // TypeScript-only findings the other four bindings did not raise.
+      it('places no unit requirement on a connective operand or an ifelse condition', () => {
+        const bindings = createUnitBindings({ x: 'm', y: 'm', z: 'kg' })
+        for (const expr of [
+          { op: 'and', args: ['x', 'z'] },
+          { op: 'or', args: ['x', 'z'] },
+          { op: 'not', args: ['x'] },
+          { op: 'ifelse', args: ['x', 'y', 'y'] },
+        ]) {
+          expect(checkDimensions(expr, bindings).diagnostics).toEqual([])
+        }
+      })
+
+      // ... but each operand is still walked, so a mismatch INSIDE one is
+      // reported (esm-spec §4.8.3).
+      it('reports a comparison mismatch nested under a connective or a condition', () => {
+        const bindings = createUnitBindings({ x: 'm', y: 'm', z: 'kg', c: '1' })
+        const mismatch = { op: '>', args: ['x', 'z'] }
+        const ok = { op: '>', args: ['c', 0] }
+        for (const expr of [
+          { op: 'not', args: [mismatch] },
+          { op: 'and', args: [mismatch, ok] },
+          { op: 'or', args: [ok, mismatch] },
+          { op: 'ifelse', args: [mismatch, 'x', 'y'] },
+        ]) {
+          expect(
+            checkDimensions(expr, bindings).diagnostics.filter(
+              (d) => d.code === 'dimensional_mismatch',
+            ).length,
+          ).toBeGreaterThan(0)
+        }
+      })
+
       // esm-spec §4.8.3: a unary negation of a literal counts as a literal, so
       // `T + -(273.15)` is Kelvin exactly as `T + -273.15` is — at any depth of
       // negation, for an integer as well as a float, and in `min`/`max`.
@@ -862,7 +899,7 @@ describe('Unit parsing and dimensional analysis', () => {
   })
 
   describe('Cross-binding units fixtures (gt-gtf)', () => {
-    // The three units_*.esm files in tests/valid/ are shared across
+    // The units_*.esm files in tests/valid/ are shared across
     // Julia/Python/Rust/TypeScript/Go and exist specifically to drive
     // cross-binding agreement on units handling.
     //
@@ -875,6 +912,9 @@ describe('Unit parsing and dimensional analysis', () => {
       'units_conversions.esm',
       'units_propagation.esm',
       'units_negated_literal_neutral.esm',
+      'units_sum_undeterminable_operands.esm',
+      'units_ifelse_undeterminable_branch.esm',
+      'units_comparisons_and_connectives.esm',
     ]
 
     // CORPUS CONTRADICTION — units_dimensional_analysis.esm is deliberately NOT

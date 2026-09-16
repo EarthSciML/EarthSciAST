@@ -18,6 +18,10 @@ use earthsci_ast::{
 };
 use std::collections::HashMap;
 
+// Only the fixtures that CARRY an inline `tests` block belong here;
+// `units_ifelse_undeterminable_branch.esm` and
+// `units_comparisons_and_connectives.esm` declare units alone and are wired
+// into `units_fixtures.rs` instead.
 const UNITS_FIXTURES: &[(&str, &str)] = &[
     (
         "units_conversions.esm",
@@ -34,6 +38,10 @@ const UNITS_FIXTURES: &[(&str, &str)] = &[
     (
         "units_negated_literal_neutral.esm",
         include_str!("../../../tests/valid/units_negated_literal_neutral.esm"),
+    ),
+    (
+        "units_sum_undeterminable_operands.esm",
+        include_str!("../../../tests/valid/units_sum_undeterminable_operands.esm"),
     ),
 ];
 

@@ -30,6 +30,8 @@ func TestUnitsFixturesCrossBinding(t *testing.T) {
 		"units_propagation.esm",
 		"units_negated_literal_neutral.esm",
 		"units_sum_undeterminable_operands.esm",
+		"units_ifelse_undeterminable_branch.esm",
+		"units_comparisons_and_connectives.esm",
 	}
 	for _, name := range fixtures {
 		t.Run(name, func(t *testing.T) {

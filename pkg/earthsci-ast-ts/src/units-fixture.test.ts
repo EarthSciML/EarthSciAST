@@ -22,6 +22,10 @@ import { observedDefinitions, odeStates } from './classification.js'
 import { readFixture } from './test-helpers.js'
 import type { EsmFile, Expr, Model, ModelVariable, Test, Assertion } from './types.js'
 
+// Only the fixtures that CARRY an inline `tests` block belong here;
+// units_ifelse_undeterminable_branch.esm and
+// units_comparisons_and_connectives.esm declare units alone and are wired into
+// units.test.ts's cross-binding validate suite instead.
 const FIXTURES = [
   'units_conversions.esm',
   'units_dimensional_analysis.esm',
