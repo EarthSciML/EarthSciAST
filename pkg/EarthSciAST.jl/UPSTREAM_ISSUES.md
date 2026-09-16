@@ -326,6 +326,47 @@ Both are properties of our emitter, not of the pass, which is why this is
 recorded here rather than treated as a blocker. See reseact.esm's
 COMPILE_COST.md for the measurement the numbers above come from.
 
+### XLA:CPU's own `HloCSE` is quadratic in the same population, one layer down
+
+**What happens.** The entry above is Enzyme-JAX's MLIR-level `cse_slice`. XLA
+has its own, and it fails the same way on the same input: `xla::HloCSE`
+deduplicates by comparing instructions pairwise through
+`HloInstruction::IdenticalInternal`, and it runs inside an `HloPassFix`, i.e.
+to a fixed point.
+
+Where we met it is the CONTINENTAL grid. ReSEACT's transport right-hand side at
+13x7x72 (6,552 cells, 85,176 states) reached XLA carrying **97,385
+`stablehlo.slice` in 105,474 operations** — a 221 MB module text — and the
+four-stage step built from it four times over. `@compile reactant_ssp_step`
+printed XLA's own "Very slow compile?" alarm and did not finish. A `perf`
+profile taken live on it:
+
+| share | frame |
+| ---: | --- |
+| 99.32% | `HloPassPipeline::RunPassesInternal` → … → `HloCSE::RunOnComputation` |
+| 23.85% (self) | `HloInstruction::IdenticalInternal` |
+
+The run then died in the object-file layer rather than in the pass:
+`contiguous_section_memory_manager.cc: allocateMappedMemory failed`, then
+`LLVM ERROR: Unable to allocate section memory!`, 6 h 27 m in, on a node with
+160 GB requested and the cgroup not exhausted — the CPU backend's section
+allocator reserves a contiguous region per compiled object and a module this
+size does not fit one.
+
+**Why it is worth reporting.** Same shape of remark as `cse_slice`: a hash of
+the (opcode, operands, shape, literal attributes) tuple deduplicates in one pass
+what the pairwise comparison does in n². And the section-memory failure is a
+hard abort with no diagnostic that names the module, on a configuration that
+would otherwise only have been slow.
+
+**Our workaround is the same one, and it is now the emitter's.** Do not hand it
+the population: a read past a piece cap is one gather, the base a gather reads
+from is budgeted against the model rather than an absolute element count, and
+each slot map is concatenated ONCE into a canonical base every read addresses by
+slot (`ext/reactant_direct/values.jl`). The transport right-hand side at the
+same grid is then flat in the grid rather than proportional to it. See
+reseact.esm's COMPILE_COST.md for the measurement.
+
 ## Not filed
 
 Recorded so nobody re-walks them.

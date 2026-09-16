@@ -388,15 +388,40 @@ const _DESlotSrc = Union{Nothing,_DEVal}
 # than one run and lifts the base budget, which bounds from above what the read
 # form can buy and tells a measurement whether a threshold or the base budget is
 # the clause doing the declining.
+#
+# THE AVERAGE-RUN TEST IS NOT ENOUGH ON ITS OWN, because it prices a property of
+# the STENCIL against a cost that grows with the GRID. Average run length is
+# fixed by how a read walks its axis — a column read runs the model's level
+# count and nothing else — so a stencil whose runs are longer than the
+# break-even keeps the slice path at every grid size, while the NUMBER of runs
+# it decomposes into is proportional to cells. One read then costs one op per
+# cell-ish piece, and a module's slice population grows without bound even
+# though nothing about the model changed.
+#
+# So the test is two-sided. `_DE_GATHER_MAX_PIECES` is an ABSOLUTE CAP on what a
+# single read may cost in ops: past it the read gathers whatever its runs look
+# like, and no read costs more than the cap. Below the cap the average-run test
+# decides as before, which is what keeps a short affine read on the slice path
+# where it carries no index data at all. `ESM_DIRECT_GATHER_MAX_PIECES`
+# overrides the cap; setting it to a huge value restores the average-run test
+# alone, as the negative control.
 const _DE_GATHER_MIN_PIECES = 8
 const _DE_RUN_WORTH = 4
+const _DE_GATHER_MAX_PIECES = 64
 
 _de_read_mode() = get(ENV, "ESM_DIRECT_EMIT_READ", "gather")
+
+function _de_gather_max_pieces()
+    v = get(ENV, "ESM_DIRECT_GATHER_MAX_PIECES", "")
+    return isempty(v) ? _DE_GATHER_MAX_PIECES :
+           something(tryparse(Int, v), _DE_GATHER_MAX_PIECES)
+end
 
 function _de_gather_is_cheaper(npieces::Int, n::Int)
     mode = _de_read_mode()
     mode == "runs" && return false
     mode == "always" && return npieces > 1
+    npieces > _de_gather_max_pieces() && return true
     return npieces >= _DE_GATHER_MIN_PIECES && npieces * _DE_RUN_WORTH > n
 end
 

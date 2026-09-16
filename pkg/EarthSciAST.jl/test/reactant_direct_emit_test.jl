@@ -543,6 +543,30 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
             # Long affine runs stay on slices, which is what the slice path is for.
             @test !EXT_DE._de_gather_is_cheaper(6, 216)      # avg 36
             @test !EXT_DE._de_gather_is_cheaper(7, 20)       # below the piece floor
+            # THE PIECE CAP. Average run length is a property of the STENCIL and
+            # does not move with the grid; the number of pieces is proportional
+            # to cells. A read whose runs are LONGER than the break-even — a
+            # column walk over a sixteen-level model, say — therefore keeps
+            # failing the average-run test at every grid size while its piece
+            # count grows without bound. Past the cap the read gathers whatever
+            # its runs look like, so no read costs more than the cap in ops.
+            @test EXT_DE._de_gather_is_cheaper(65, 65 * 7)   # avg 7, over the cap
+            @test !EXT_DE._de_gather_is_cheaper(64, 64 * 7)  # avg 7, at the cap
+            @test EXT_DE._de_gather_is_cheaper(936, 6552)    # a whole-grid column read
+            @test EXT_DE._de_gather_is_cheaper(100, 100_000) # avg 1000, still capped
+        end
+        # The cap is overridable, and lifting it leaves the average-run test
+        # alone — the negative control for the clause.
+        withenv("ESM_DIRECT_EMIT_READ" => "gather",
+                "ESM_DIRECT_GATHER_MAX_PIECES" => string(typemax(Int))) do
+            @test !EXT_DE._de_gather_is_cheaper(936, 6552)
+            @test !EXT_DE._de_gather_is_cheaper(100, 100_000)
+            @test EXT_DE._de_gather_is_cheaper(400, 1104)    # the average-run test
+        end
+        withenv("ESM_DIRECT_EMIT_READ" => "gather",
+                "ESM_DIRECT_GATHER_MAX_PIECES" => "4") do
+            @test EXT_DE._de_gather_is_cheaper(5, 10_000)
+            @test !EXT_DE._de_gather_is_cheaper(4, 10_000)
         end
         # `always` is the measurement lever: gather anything with more than one
         # run, and no budget on the base.
@@ -613,6 +637,18 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
             @test isapprox(Array(xla(ur, pr, tr)), ref; rtol = 1e-12, atol = 0.0)
             tallies["base64"] = copy(d.stats)
         end
+        # AND THE PIECE CAP, emitted rather than asserted in arithmetic. The
+        # fixture's reads decompose into two or three pieces, which is under
+        # both the default cap and the piece floor, so the cap is exercised by
+        # setting it below them: every read past it becomes one gather, and the
+        # numbers do not move.
+        withenv("ESM_DIRECT_EMIT_READ" => "gather",
+                "ESM_DIRECT_GATHER_MAX_PIECES" => "2") do
+            d = EXT_DE.direct_rhs(fo)
+            xla = RX_DE.@compile sync = true d(ur, pr, tr)
+            @test isapprox(Array(xla(ur, pr, tr)), ref; rtol = 1e-12, atol = 0.0)
+            tallies["cap2"] = copy(d.stats)
+        end
         for (k, v) in sort!(collect(tallies); by = first)
             println("  read-form tally ", rpad(k, 7), " ", v)
         end
@@ -637,6 +673,10 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
         @test get(tallies["gather"], Symbol("gather@assemble.x"), 0) == 1
         @test get(tallies["base64"], Symbol("gather@assemble.x"), 0) == 0
         @test get(tallies["base64"], Symbol("slice1@assemble.runs"), 0) > 0
+        # THE PIECE CAP: past it a read is one gather however its runs look, so
+        # dropping the cap below the fixture's reads trades its slices for them.
+        @test get(tallies["cap2"], :slice, 0) < get(tallies["gather"], :slice, 0)
+        @test get(tallies["cap2"], :gather, 0) > get(tallies["gather"], :gather, 0)
         # `always` gathers everything with more than one run, so it is the floor
         # on slices and the ceiling on gathers.
         @test get(tallies["always"], :slice, 0) <= get(tallies["gather"], :slice, 0)
