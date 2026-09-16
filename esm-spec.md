@@ -1147,6 +1147,8 @@ Broadcasts do not fuse: a nested expression of broadcasts decomposes into primit
 
 An expression mixing the two regimes aligns each operand under its own: a named operand is placed by name, an anonymous one positionally.
 
+**A scalar declares no index sets**, so it is a subset of every result's and replicates along all of them. That holds for a whole right-hand side too: an equation defining a shaped variable whose right-hand side is a scalar — a literal, a scalar parameter, or an expression that evaluates to a scalar, such as an `ifelse` whose predicate is constant and whose taken branch is scalar — gives that value to every element of the variable's declared shape. A binding MUST NOT let the value's rank replace the declared shape: the variable still has every one of its elements, to readers and to test assertions alike.
+
 These rules apply only where element correspondence is what the expression *means* — that is, under the elementwise operators. Every other op consumes its operands whole under its own contract: `faq` and `makearray` name their axes, `index` gathers, the shape ops of Section 4.3.5 restructure, and the relational and geometry ops (Section 4.2) may return a result of an entirely unrelated shape.
 
 #### 4.3.5 `reshape`, `transpose`, `concat`
@@ -2651,7 +2653,7 @@ Each assertion is a per-(variable, time) check against a scalar expected value:
 
 | Field | Required | Description |
 |---|---|---|
-| `variable` | ✓ | Variable or species name. Local names (e.g., `"O3"`) or scoped references into subsystems (e.g., `"inner.X"`) are both allowed. |
+| `variable` | ✓ | Variable or species name. Local names (e.g., `"O3"`) or scoped references (e.g., `"inner.X"`) are both allowed. A scoped reference resolves by the rule the component's own equations use: a dotted name whose head is a subsystem key of the asserting component is relative to it (`inner.X` there is `<component>.inner.X`), and any other dotted name is document-absolute (§4.6). The assertion then reads the component that owns the name — its trajectory row, its field, and the declared shape a `coords` map is checked against — and never another component's, even when only that other component's same-named field was materialized. |
 | `time` | ✓ | Simulation time at which to evaluate the assertion; must lie in `[time_span.start, time_span.end]`. |
 | `expected` | ✓ | Expected scalar value (compared within `tolerance`). |
 | `tolerance` | | Per-assertion tolerance override. |

@@ -543,6 +543,99 @@ def _param_scope_with_aliases(params: dict[str, float] | None) -> dict[str, floa
     return out
 
 
+def _component_at(file: EsmFile, path: str) -> Any | None:
+    """The component a dotted component PATH names, or ``None``.
+
+    esm-spec §4.6: the first segment is a top-level ``models`` /
+    ``reaction_systems`` key and each later one a key of its parent's
+    ``subsystems``. A mount still spelled ``{"ref": ...}`` (never resolved) is
+    not a component and ends the walk. Identical to the Julia
+    ``_component_at`` and the Rust ``model_at``."""
+    head, *rest = str(path).split(".")
+    comp = (file.models or {}).get(head)
+    if comp is None:
+        comp = (file.reaction_systems or {}).get(head)
+    for seg in rest:
+        if comp is None:
+            return None
+        comp = (getattr(comp, "subsystems", None) or {}).get(seg)
+    return None if isinstance(comp, dict) else comp
+
+
+def _resolve_asserted_name(file: EsmFile, mname: str, variable: str) -> tuple[str, str]:
+    """Split an assertion's ``variable`` into ``(owner component path, local
+    name)``.
+
+    The schema documents ``Assertion.variable`` as a local name OR a scoped
+    reference, and it resolves by the rule the equation binder already applies
+    to the same string in the same component (flatten's namespacing): a dotted
+    name whose HEAD is a subsystem key of the asserting component is relative to
+    it (``Leaf.u`` in ``Host`` with a ``Leaf`` subsystem is ``Host.Leaf.u``);
+    any other dotted name is document-absolute (§4.6). Every per-component
+    lookup then runs against the owner, so a mounted leaf's state, observed and
+    declared shape are read from the leaf.
+
+    A bare name, or a dotted one that walks to no component, is returned
+    unchanged against ``mname`` -- the caller then reports it exactly as
+    before. Identical to the Julia and Rust ``resolve_asserted_name``."""
+    variable = str(variable)
+    if "." not in variable:
+        return str(mname), variable
+    prefix, local = variable.rsplit(".", 1)
+    head = prefix.split(".", 1)[0]
+    asserting = _component_at(file, str(mname))
+    if head in (getattr(asserting, "subsystems", None) or {}):
+        owner = f"{mname}.{prefix}"
+    else:
+        owner = prefix
+    if _component_at(file, owner) is None:
+        return str(mname), variable
+    return owner, local
+
+
+def _scoped_scalar_slot(
+    var_map: dict[str, int],
+    owner: str,
+    variable: str,
+    renames: dict[str, str],
+) -> int | None:
+    """The flat slot of the SCALAR ``variable`` of the component at ``owner``,
+    matched only under the name that component owns, then through a merge
+    rename. The scoped twin of :func:`_scalar_slot`, whose bare-name passes
+    would return a same-named row belonging to ANOTHER component. Identical to
+    the Rust ``scoped_scalar_slot``."""
+    qualified = f"{owner}.{variable}"
+    for name, slot in var_map.items():
+        if str(name) == qualified:
+            return int(slot)
+    survivor = renames.get(qualified) if renames else None
+    if survivor is not None:
+        for name, slot in var_map.items():
+            if str(name) == survivor:
+                return int(slot)
+    return None
+
+
+def _scoped_state_cells(
+    var_map: dict[str, int],
+    owner: str,
+    variable: str,
+) -> list[tuple[list[int], int]]:
+    """The cells of the ARRAY ``variable`` of the component at ``owner``,
+    matched only under the name that component owns. The scoped twin of
+    :func:`state_cells`, whose bare-suffix fallback would splice another
+    component's cells into the field. Identical to the Rust
+    ``scoped_state_cells``."""
+    qualified = f"{owner}.{variable}"
+    out: list[tuple[list[int], int]] = []
+    for name, slot in var_map.items():
+        m = _CELL_NAME_RE.match(str(name))
+        if m is not None and m.group(1) == qualified:
+            out.append(([int(x) for x in m.group(2).split(",")], int(slot)))
+    out.sort(key=lambda p: p[0])
+    return out
+
+
 def _declares_observed(file: EsmFile, model: str, variable: str) -> bool:
     """Does ``model`` itself declare ``variable`` as an OBSERVED of its own?
 
@@ -561,8 +654,8 @@ def _declares_observed(file: EsmFile, model: str, variable: str) -> bool:
     (``observed_unknowns(model)``). OBSERVED is derived from the equations
     (esm-spec §6.3.1), not declared, so both halves are required: a declared
     name that no equation defines as an observed is not one."""
-    model_obj = (file.models or {}).get(str(model))
-    if model_obj is None:
+    model_obj = _component_at(file, str(model))
+    if model_obj is None or not hasattr(model_obj, "variables"):
         return False
     if str(variable) not in (model_obj.variables or {}):
         return False
@@ -587,10 +680,20 @@ def _inspection_field(
     surfaces its standard missing-variable error)."""
     if insp is None:
         return None
-    for key in (f"{model}.{variable}", variable):
-        arr = insp.setup_arrays.get(key)
-        if arr is not None:
-            return np.asarray(arr, dtype=float)
+    arr = insp.setup_arrays.get(f"{model}.{variable}")
+    if arr is not None:
+        return np.asarray(arr, dtype=float)
+    # The bare name and the unique-suffix match are spellings of the ASSERTING
+    # component's own field. For a SCOPED name they are not: the only field
+    # that answers it is the one keyed by the owner's whole path, and a hit
+    # under either looser spelling belongs to a different component (it is how
+    # `Leaf.key` asserted in `Host`, whose own subsystem `Leaf` the build did
+    # not materialize, silently read a top-level `Leaf`'s column).
+    if "." in str(model):
+        return None
+    arr = insp.setup_arrays.get(variable)
+    if arr is not None:
+        return np.asarray(arr, dtype=float)
     hits = [k for k in insp.setup_arrays if k.endswith("." + variable)]
     if len(hits) == 1:
         return np.asarray(insp.setup_arrays[hits[0]], dtype=float)
@@ -624,7 +727,13 @@ def _observed_sample(
     build = getattr(prob, "build", None)
     if build is None:
         return None
-    for name in (f"{model}.{variable}", str(variable)):
+    spellings = [f"{model}.{variable}"]
+    # A bare spelling names the ASSERTING component's own observed; under a
+    # scoped name it would answer with another component's (see
+    # :func:`_inspection_field`).
+    if "." not in str(model):
+        spellings.append(str(variable))
+    for name in spellings:
         value = observed_at_state(build, prob.flat, name, float(t), state)
         if value is None:
             continue
@@ -721,9 +830,10 @@ def _variable_shape(file: EsmFile, mname: str, variable: str) -> list[str]:
     names). Raises when the variable is missing or scalar — a ``coords``
     assertion is ill-formed on a 0-D variable per esm-spec §6.6.5. Identical
     to the Julia reference's ``_variable_shape``."""
-    model = (file.models or {}).get(str(mname))
+    component = _component_at(file, str(mname))
+    model = component if hasattr(component, "variables") else None
     if model is None:
-        if str(mname) in (file.reaction_systems or {}):
+        if component is not None:
             # A reaction system declares SPECIES, and a species is 0-D. So the
             # answer is the coords-specific rejection, not "model not found":
             # the component exists, and what is ill-formed is asking a scalar
@@ -1186,12 +1296,23 @@ def _evaluate_assertion(
     actual: float | None = None
     msg = ""
     try:
+        # A scoped `variable` reads the component it names (schema
+        # `Assertion.variable`); every lookup below runs against that owner.
+        owner, local = _resolve_asserted_name(eval_file, str(mname), str(a.variable))
+        # A scoped name is read ONLY under the name its owner holds; the
+        # bare-name fallbacks that serve an unscoped assertion would reach a
+        # same-named row of another component.
+        scoped = owner != str(mname)
         ti = times.index(float(a.time))
         state = sim.states[ti]
         if a.coords is not None and a.reduce is not None:
             raise RuntimeError("`coords` and `reduce` are mutually exclusive")
         if a.coords is None and a.reduce is None:
-            slot = _scalar_slot(sim.var_map, a.variable, str(mname), _sim_merged_renames(sim))
+            slot = (
+                _scoped_scalar_slot(sim.var_map, owner, local, _sim_merged_renames(sim))
+                if scoped
+                else _scalar_slot(sim.var_map, local, owner, _sim_merged_renames(sim))
+            )
             if slot is None:
                 raise RuntimeError(f"scalar state '{a.variable}' not found")
             actual = float(state[slot])
@@ -1202,9 +1323,13 @@ def _evaluate_assertion(
             # message (identical to the Julia reference).
             coords_target: list[int] | None = None
             if a.coords is not None:
-                shape = _variable_shape(eval_file, str(mname), str(a.variable))
+                shape = _variable_shape(eval_file, owner, local)
                 coords_target = _coords_cell(a.coords, shape, eval_file.index_sets)
-            cells = state_cells(sim.var_map, a.variable, str(mname))
+            cells = (
+                _scoped_state_cells(sim.var_map, owner, local)
+                if scoped
+                else state_cells(sim.var_map, local, owner)
+            )
             if cells:
                 cell_tuples = [c for c, _ in cells]
                 field = [float(state[slot]) for _, slot in cells]
@@ -1231,10 +1356,10 @@ def _evaluate_assertion(
                 # the one that declares the observed (§5.27.1);
                 # otherwise a sibling's field answers silently.
                 obs = None
-                if _declares_observed(eval_file, str(mname), a.variable):
-                    obs = _inspection_field(insp, str(mname), a.variable)
+                if _declares_observed(eval_file, owner, local):
+                    obs = _inspection_field(insp, owner, local)
                     if obs is None:
-                        obs = _observed_sample(sim, str(mname), a.variable, state, times[ti])
+                        obs = _observed_sample(sim, owner, local, state, times[ti])
                 if obs is None:
                     raise RuntimeError(
                         f"array state '{a.variable}' has no cells "
@@ -1268,7 +1393,7 @@ def _evaluate_assertion(
                         # dimension names are in scope too, bound per
                         # cell (`bind_dimension_names`).
                         try:
-                            dims = _variable_shape(eval_file, str(mname), str(a.variable))
+                            dims = _variable_shape(eval_file, owner, local)
                         except RuntimeError:
                             dims = []
                         scope = _param_scope_with_aliases(insp.params)

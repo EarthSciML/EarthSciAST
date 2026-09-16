@@ -5687,6 +5687,61 @@ arm, Rust's vectorized and taped lowering, Python's generated code) are pinned b
 per-binding unit tests, because which path a document takes is an internal choice.
 
 
+### 5.41 A Scalar Right-Hand Side on a Shaped Observed (normative)
+
+esm-spec §4.3.4 replicates an operand along every result axis it does not
+declare, and a scalar declares none. The same holds when the whole right-hand
+side of an observed with a declared `shape` is a scalar: a literal
+(`literal ~ 1.5`), a scalar parameter (`from_param ~ level`), or an expression
+that EVALUATES to a scalar, such as an `ifelse` whose predicate is constant and
+whose taken branch is scalar. The observed has every element of its declared
+shape, each carrying that value, to test assertions and to the equations that
+read it. The value's rank MUST NOT replace the declared shape.
+
+Each executing binding lost the declared shape in its own place (issue #262):
+
+- **Rust** stored the wholesale observed rule's scalar result as a 0-d array.
+  An assertion found no field of the declared rank and reported
+  `array state '<name>' has no cells in var_map`; a derivative reading the
+  observed gathered from a scalar, and the solve failed at `t = 0` with
+  `Exceeded maximum number of nonlinear solver failures`. The rule now carries
+  the variable's declared extents, and the interpreter and the tape both fill
+  them with a scalar result.
+- **Python** stored any 0-d observed value as a scalar observed, so an assertion
+  on `literal` or `from_param` reported the same missing-cells error. A shaped
+  `ifelse` already came out as an array there.
+- **Julia** refused every such document at build with
+  `E_TREEWALK_UNSUPPORTED_SHAPE`: its elementwise array-observed fold admitted
+  only an operator right-hand side from an allowlist that did not include
+  `ifelse`, so a scalar right-hand side and any shaped `ifelse` observed were
+  rejected. The fold now admits both, and selects its targets to a fixed point
+  so that an observed which only ALIASES a folded one folds with it rather than
+  being left behind carrying the referent's body.
+
+#### 5.41.1 Gate
+
+`tests/conformance/shaped_observed_scalar_broadcast/` holds the shared fixture
+and the Julia-minted golden. The fixture writes the scalar as a literal, as a
+parameter, and as a constant-predicate `ifelse` (`folded`, asserted pointwise and
+under `min`/`max`, so a partially filled field fails); `kept` is the same
+`ifelse` with the array branch taken, as a control; `state_folded` takes a
+state-dependent scalar branch; `chain` ALIASES `literal`, so a binding that
+fills only the observed written as a scalar and not the one that merely names
+it is caught; and `u` integrates `literal + state_folded`, so the broadcast is
+also read by the dynamics. The scalar branches are non-zero, so
+a zero-filled field cannot pass, and `u`'s right-hand side is constant, so every
+golden is integrator-independent.
+
+Per-binding runners gate every assertion against BOTH the golden actual and the
+fixture's own declared `expected`: **Julia** —
+`pkg/EarthSciAST.jl/test/conformance_shaped_observed_scalar_broadcast_test.jl`;
+**Python** —
+`pkg/earthsci-ast-py/tests/test_shaped_observed_scalar_broadcast_conformance.py`;
+**Rust** — `pkg/earthsci-ast-rs/tests/shaped_observed_scalar_broadcast_conformance.rs`.
+`bindings_required` is `["julia", "python", "rust"]`; Go and TypeScript are
+rewrite-only ports with no simulator and no inline-test runner, and are
+`scope_excluded` in the manifest.
+
 ## 6. CI Integration
 
 ### 6.1 GitHub Actions Workflow

@@ -82,6 +82,7 @@ pub use compile::{file_has_array_ops, file_has_spatial_model, run_value_inventio
 // two routes cannot disagree about which names a document declares.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use compile::check_free_variables;
+pub(crate) use compile::{model_tree_any, parse_subsystem_model};
 pub(crate) use eval::eval_observed_recurrence;
 pub use eval::{
     eval_expression, eval_expression_with_extents, eval_expression_with_extents_and_consts,
@@ -358,7 +359,16 @@ pub struct RhsStats {
 #[derive(Debug, Clone)]
 enum AlgebraicRule {
     /// `var := body` — pure scalar algebraic.
-    Scalar { var: String, body: Rc<Expr> },
+    ///
+    /// `declared_shape` is the defined variable's declared extents, when it
+    /// declares a shape that resolves to static sizes. A body that evaluates
+    /// to a scalar is broadcast over it (esm-spec §4.3.4), so the variable
+    /// keeps its declared rank however the value came out.
+    Scalar {
+        var: String,
+        body: Rc<Expr>,
+        declared_shape: Option<Vec<usize>>,
+    },
     /// `var[i...] := body` — array algebraic defined via a faq over
     /// the full shape of `var`.
     ArrayLoop {

@@ -775,8 +775,9 @@ end
 # ---- Elementwise array-observed fold (WS4: readable PDE-leaf decomposition) ----
 # Fold every ARRAY-shaped observed whose (already-discretization-lowered) defining
 # equation RHS is an ELEMENTWISE expression — top-level op in
-# `_WS4_FOLDABLE_ELEMENTWISE_OPS` — into the equations that read it, in dependency
-# order, returning `(rewritten_equations, folded_names)`.
+# `_WS4_FOLDABLE_ELEMENTWISE_OPS`, or a scalar that replicates over the declared
+# shape — into the equations that read it, in dependency order, returning
+# `(rewritten_equations, folded_names)`.
 #
 # This lets a library PDE leaf be authored with readable intermediate array fields
 # (a level-set's `grad_safe = grad_mag + ε`, `U_n = (u·∇ψ)/grad_safe`,
@@ -811,12 +812,38 @@ function _fold_elementwise_array_observeds(equations::Vector{Equation}, model::M
             defs[lhs.name] = eq.rhs
         end
     end
+    # A SCALAR right-hand side — a number, or a reference to an unshaped declared
+    # variable — is the zero-operand case of the same elementwise rule: it
+    # replicates along every axis of the observed's declared shape (esm-spec
+    # §4.3.4), so it folds exactly as `rhs + 0` would. A reference to a SHAPED
+    # variable is a bare alias and stays with its own handler.
+    function is_scalar_rhs(rhs)
+        (rhs isa NumExpr || rhs isa IntExpr) && return true
+        rhs isa VarExpr || return false
+        var = get(model.variables, rhs.name, nothing)
+        return var !== nothing && !_is_array_shape(var.shape)
+    end
     targets = Dict{String,ASTExpr}()
-    for (name, rhs) in defs
-        if is_array_obs(name) && rhs isa OpExpr &&
-           rhs.op in _WS4_FOLDABLE_ELEMENTWISE_OPS
-            targets[name] = rhs
+    # Selection runs to a FIXED POINT, because an observed that merely ALIASES
+    # another target (`chain = lit`, `lit = 1.5`) has to fold with it: the
+    # substitution below rewrites every surviving reader, so folding only the
+    # referent would leave the alias behind as a shaped observed carrying the
+    # referent's body — exactly the form this fold exists to remove, and the one
+    # the evaluator rejects as `E_TREEWALK_UNSUPPORTED_SHAPE`. An alias of a
+    # NON-target (`a = col`, a const-array producer) is untouched and stays with
+    # the bare-alias handler.
+    while true
+        grew = false
+        for (name, rhs) in defs
+            (haskey(targets, name) || !is_array_obs(name)) && continue
+            if (rhs isa OpExpr && rhs.op in _WS4_FOLDABLE_ELEMENTWISE_OPS) ||
+               is_scalar_rhs(rhs) ||
+               (rhs isa VarExpr && haskey(targets, rhs.name))
+                targets[name] = rhs
+                grew = true
+            end
         end
+        grew || break
     end
     isempty(targets) && return (equations, Set{String}())
 

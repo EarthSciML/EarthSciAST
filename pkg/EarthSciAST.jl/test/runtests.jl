@@ -322,6 +322,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("pde_inline_dead_observed_test.jl")  # #176: an observed no live equation consumes
     include("mounted_component_tests_test.jl")   # #198: a mount does not carry the leaf's tests
     include("mount_enums_test.jl")               # #260: a mounted file's enum ops resolve in its own block
+    include("scoped_assertion_variable_test.jl")  # #263: an assertion may name a scoped reference
     include("conformance_pde_inline_observed_rank2_test.jl")
     include("conformance_pde_inline_dead_observed_test.jl")
     include("conformance_elementwise_observed_gather_test.jl")
@@ -337,6 +338,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("conformance_tolerance_resolution_test.jl")  # §6.6.4 per-field tolerance merge
     include("conformance_scalar_ic_test.jl")
     include("conformance_shaped_parameter_broadcast_test.jl")  # §6.3 scalar-on-a-shaped-parameter broadcast
+    include("conformance_shaped_observed_scalar_broadcast_test.jl")  # §4.3.4 scalar right-hand side on a shaped observed (#262)
     include("conformance_override_key_diagnostics_test.jl")
     include("conformance_pde_inline_reference_dimension_names_test.jl")  # §6.6.5 reference dimension names
     include("rhs_time_derivative_resolution_test.jl")   # §4.2 right-hand-side D: Julia resolves; its exclusion

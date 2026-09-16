@@ -2151,10 +2151,17 @@ impl<'m> TapeBuilder<'m> {
                     .map(|(_, hi)| (*hi).max(0) as usize)
                     .collect(),
             ),
-            // `materialize_observeds_pass` stores `eval(body)` verbatim (a
-            // scalar becomes a 0-d array), so the rule's shape IS the
-            // wholesale value's shape.
-            AlgebraicRule::Scalar { body, .. } => self.wholesale_shape(body),
+            // `materialize_observeds_pass` stores `eval(body)` verbatim, except
+            // that a scalar on a variable with a declared shape fills that
+            // shape; an undeclared scalar stays a 0-d array.
+            AlgebraicRule::Scalar {
+                body,
+                declared_shape,
+                ..
+            } => match (self.wholesale_shape(body), declared_shape) {
+                (Some(s), Some(d)) if s.is_empty() => Some(d.iter().copied().collect()),
+                (s, _) => s,
+            },
         }
     }
 
@@ -2404,13 +2411,24 @@ impl<'m> TapeBuilder<'m> {
                 // Origin is all-1 by the guard, so no re-origin copy needed.
                 Ok(ObsVal::Taped(v))
             }
-            AlgebraicRule::Scalar { body, .. } => {
+            AlgebraicRule::Scalar {
+                body,
+                declared_shape,
+                ..
+            } => {
                 // The whole-body `eval` mirror: covers scalar algebra, whole-
                 // array elementwise algebra, top-level aggregates (incl. the
                 // prefix-scan sweep) and makearrays. Readers see materialized
-                // arrays at origin 1s.
+                // arrays at origin 1s. A scalar on a shaped variable fills its
+                // declared box, as the interpreter does.
                 let v = self.lower_wholesale(body)?;
-                let v = self.reorigin_to_one(v);
+                let v = match declared_shape {
+                    Some(shape) if self.lv_box(&v).is_none() => {
+                        let origin = DimI::from_elem(1, shape.len());
+                        self.emit_fill(&v, shape, &origin, Cadence::Const)
+                    }
+                    _ => self.reorigin_to_one(v),
+                };
                 Ok(ObsVal::Taped(v))
             }
         }
