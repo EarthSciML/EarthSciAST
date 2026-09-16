@@ -218,6 +218,22 @@ function _de_census(modstr::AbstractString)
     return c
 end
 
+# Every gather index constant in a printed module, as its literal contents.
+# `stablehlo.constant dense<…> : tensor<Lx1xi64>` — rank 2 with a trailing 1 is
+# the gather's start-index shape and nothing else emits it.
+function _de_index_constants(modstr::AbstractString)
+    out = String[]
+    for ln in eachsplit(modstr, '\n')
+        occursin("stablehlo.constant", ln) || continue
+        occursin(r"tensor<\d+x1xi64>", ln) || continue
+        i = findfirst("dense<", ln)
+        j = findlast("> :", ln)
+        (i === nothing || j === nothing) && continue
+        push!(out, ln[(last(i) + 1):(first(j) - 1)])
+    end
+    return out
+end
+
 function _de_print_census(label, c)
     println("  op census — ", label, " (", sum(values(c)), " ops):")
     for k in sort!(collect(keys(c)))
@@ -734,6 +750,54 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
         @test get(tallies["always"], :slice, 0) <= get(tallies["gather"], :slice, 0)
         @test get(tallies["always"], :gather, 0) >= get(tallies["gather"], :gather, 0)
     end
+
+    @testset "the gather's index vector: one constant per distinct vector" begin
+        # WHAT A GATHER COSTS BESIDES ITS OPERATION is the index vector, and
+        # that is data rather than ops: it does not show up in an op census and
+        # it is what a module of gathers ships. The index vector is a property
+        # of the READ ALONE — the slot map is written between reads, and a write
+        # retires the canonical base those reads address, so the same slots come
+        # back as a different gather over a different value at exactly the same
+        # indices — so it is interned on its CONTENTS, separately from the
+        # gather, and a module carries one copy of each distinct one.
+        fix = joinpath(TESTUTILS_REPO_ROOT, "tests", "bench",
+                       "transport_3axis_7cubed_fullrank.esm")
+        @test isfile(fix)
+        flat = ESM_DE.flatten(ESM_DE.load_path(fix))
+        fo, u0, p, _, _ = build_evaluator(flat; form = :oop)
+        fi!, _, _, _, _ = build_evaluator(flat)
+        n = length(u0)
+        u1 = Float64[sin(0.1 * i) + 1.5 for i in 1:n]
+        ref = _de_ip(fi!, u1, p, 0.4)
+        pr = _de_dev(p)
+        ur = RX_DE.ConcreteRArray(copy(u1)); tr = RX_DE.ConcreteRNumber(0.4)
+
+        # `always` is the shape that spends index data: every read with more
+        # than one run becomes a gather, so the module is all index vector.
+        mod, tally = withenv("ESM_DIRECT_EMIT_READ" => "always") do
+            d = EXT_DE.direct_rhs(fo)
+            m = repr(RX_DE.@code_hlo optimize = false d(ur, pr, tr))
+            xla = RX_DE.@compile sync = true d(ur, pr, tr)
+            @test isapprox(Array(xla(ur, pr, tr)), ref; rtol = 1e-12, atol = 0.0)
+            (m, copy(d.stats))
+        end
+        idx = _de_index_constants(mod)
+        println("  index vectors: ", length(idx), " constants, ",
+                length(Set(idx)), " distinct; tally ",
+                get(tally, :gather_index, 0), " of ",
+                get(tally, :gather, 0), " gathers")
+        @test !isempty(idx)
+        # ONE CONSTANT PER DISTINCT VECTOR, which is the whole of the lever:
+        # no two index constants in the module carry the same contents, and
+        # the emitter's own count of them is the module's.
+        @test length(Set(idx)) == length(idx)
+        @test length(idx) == get(tally, :gather_index, 0)
+        @test get(tally, :gather_index, 0) <= get(tally, :gather, 0)
+        # And the gather itself is interned the way the slice and concatenate
+        # forms are, so a read that recurs over the same value costs one.
+        @test get(tally, :gather, 0) >= 1
+    end
+
 
     @testset "the lane-batched scalar surface: one whole-lane read per group" begin
         doc, ics, NI, NJ, M = _de_halo()

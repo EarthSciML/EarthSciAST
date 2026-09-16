@@ -134,9 +134,11 @@ mutable struct _DECtx
     # value always dominates a later use and the reuse needs no scope check.
     slices::Dict{Tuple{_MLIR.IR.Value,Int,Int,Int},_DEVal}
     concats::Dict{Vector{_MLIR.IR.Value},_DEVal}
-    # (producer concatenation, slot layout) -> the reordering gather that turns
-    # the one into the other. See `_de_canon_base`.
-    canons::Dict{Tuple{_MLIR.IR.Value,Vector{Int}},_DEVal}
+    # The two gather tables: (value read, positions into it) -> the gather, and
+    # (index width, positions) -> the index constant on its own. They are not
+    # the same interning; `_de_gather_op` says why.
+    gathers::Dict{Tuple{_MLIR.IR.Value,Vector{Int}},_DEVal}
+    idxconsts::Dict{Vector{Int},_MLIR.IR.Value}
     stats::Dict{Symbol,Int}
     # Which SECTION of the emission is running: materialization level `li` while
     # the fills are emitted, `nlev + 1` from the CSE prelude onwards. The read
@@ -165,6 +167,7 @@ function _DECtx(n_states::Int, n_total::Int, p, t::_DEVal, uval::_DEVal,
                   Dict{Tuple{_MLIR.IR.Value,Int,Int,Int},_DEVal}(),
                   Dict{Vector{_MLIR.IR.Value},_DEVal}(),
                   Dict{Tuple{_MLIR.IR.Value,Vector{Int}},_DEVal}(),
+                  Dict{Vector{Int},_MLIR.IR.Value}(),
                   Dict{Symbol,Int}(), Int32(0), :none)
 end
 
@@ -320,15 +323,42 @@ function _de_concat(ctx::_DECtx, pieces::Vector{_DEVal})::_DEVal
     return out
 end
 
+# THE INDEX VECTOR IS WHAT THE GATHER FORM COSTS, and it is paid in the data
+# the module ships rather than in its operation count.
+#
+# SO IT IS INTERNED, and by CONTENTS rather than by use. The gather itself is
+# interned the way the slice and concatenate forms already are — same value,
+# same positions, same SSA result — but that alone leaves the index vector
+# emitted again for every gather that is not itself a repeat, and on a slot map
+# most of them are not: a write retires the map's canonical base, so the next
+# read of the SAME slots is a different gather over a different value at exactly
+# the same indices, and the map is written between almost every pair of reads.
+# The index vector is a property of the READ and of nothing else, so it is
+# interned on its own, and a module carries one copy of each distinct one.
+function _de_idxconst(ctx::_DECtx, positions::Vector{Int})
+    hit = get(ctx.idxconsts, positions, nothing)
+    hit === nothing || return hit
+    L = length(positions)
+    _de_tally!(ctx, :gather_index)
+    op = _hlo.constant(; output=_de_ty_i64([L, 1]),
+                       value=_MLIR.IR.DenseElementsAttribute(
+                           reshape(Int64.(positions) .- Int64(1), L, 1)),
+                       location=_de_loc())
+    v = _de_res(op)
+    ctx.idxconsts[copy(positions)] = v
+    return v
+end
+
 # A true `stablehlo.gather` of `src` at 1-based `positions` — the form a read
 # takes when its index vector shatters into more runs than slices are worth.
 function _de_gather_op(ctx::_DECtx, src::_DEVal, positions::Vector{Int})::_DEVal
+    key = (src.v, positions)
+    hit = get(ctx.gathers, key, nothing)
+    hit === nothing || return hit
     _de_tally!(ctx, :gather)
     _de_site!(ctx, :gather, :x)
     L = length(positions)
-    idx = reshape(Int64.(positions) .- 1, L, 1)
-    idxop = _hlo.constant(; output=_de_ty_i64([L, 1]),
-                          value=_MLIR.IR.DenseElementsAttribute(idx), location=_de_loc())
+    idx = _de_idxconst(ctx, positions)
     dn = _MLIR.API.stablehloGatherDimensionNumbersGet(
         _MLIR.IR.current_context(),
         0, Int64[],          # offset_dims
@@ -337,10 +367,12 @@ function _de_gather_op(ctx::_DECtx, src::_DEVal, positions::Vector{Int})::_DEVal
         0, Int64[],          # start_indices_batching_dims
         1, Int64[0],         # start_index_map
         1)                   # index_vector_dim
-    op = _hlo.gather(src.v, _de_res(idxop); result=_de_ty(L), dimension_numbers=dn,
+    op = _hlo.gather(src.v, idx; result=_de_ty(L), dimension_numbers=dn,
                      slice_sizes=_MLIR.IR.DenseArrayAttribute(Int64[1]),
                      indices_are_sorted=false, location=_de_loc())
-    return _DEVal(_de_res(op), L)
+    out = _DEVal(_de_res(op), L)
+    ctx.gathers[(src.v, copy(positions))] = out
+    return out
 end
 
 # ---- reads: slices plus one concatenate, or one gather -----------------------
@@ -690,18 +722,13 @@ function _de_canon_base(ctx::_DECtx, M::_DEMap)::Union{Nothing,_DEVal}
             # when the producers run past the map's last slot.
             base.len == n ? base : _de_slice(ctx, base, 1, n; why=:canon)
         else
-            # MEMOIZED ON THE LAYOUT, not just cached on the map. A write drops
-            # the map's base, and a section that interleaves writes with reads
-            # therefore asks for a new one after each; when the write did not
-            # move any slot the base covers, the layout is the one already
-            # emitted and re-emitting it would cost another whole index vector.
-            key = (base.v, pos)
-            hit2 = get(ctx.canons, key, nothing)
-            if hit2 === nothing
-                hit2 = _de_gather_op(ctx, base, pos)
-                ctx.canons[key] = hit2
-            end
-            hit2
+            # MEMOIZED ON THE LAYOUT, not just cached on the map. A write
+            # drops the map's base, and a section that interleaves writes with
+            # reads therefore asks for a new one after each; when the write did
+            # not move any slot the base covers, the layout is the one already
+            # emitted. That pair — the concatenation and the layout — is the
+            # key `_de_gather_op` interns on, so asking it again is free.
+            _de_gather_op(ctx, base, pos)
         end
     finally
         _de_at!(ctx, prev)
