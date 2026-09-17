@@ -1175,9 +1175,7 @@ fn propagate_transcendental_dim(
         } else if u.is_pure_number() {
             // Nothing to say.
         } else if u.is_dimensionless() {
-            findings.push(UnitFinding::error(scaled_dimensionless_message(
-                &op.op, u,
-            )));
+            findings.push(UnitFinding::error(scaled_dimensionless_message(&op.op, u)));
         } else {
             findings.push(UnitFinding::error(format!(
                 "Argument to '{}' must be dimensionless{}, got {}",
@@ -3099,8 +3097,8 @@ mod tests {
         // The strict transcendentals and the inverse circular functions refuse a
         // dimensionless-but-SCALED argument, and the message names the repair.
         for name in [
-            "log", "ln", "log10", "exp", "sinh", "cosh", "tanh", "asinh", "acosh", "atanh",
-            "asin", "acos", "atan",
+            "log", "ln", "log10", "exp", "sinh", "cosh", "tanh", "asinh", "acosh", "atanh", "asin",
+            "acos", "atan",
         ] {
             let found = errors(&op(name, vec![Expr::Variable("c".into())]));
             assert_eq!(found.len(), 1, "{name}(c [ppm]) must be refused");
@@ -3197,7 +3195,8 @@ mod tests {
                 op("cos", vec![Expr::Variable("lat".into())]),
             ],
         );
-        let rewritten = normalize_angle_arguments(&nested, &env).expect("the `deg` cos is rewritten");
+        let rewritten =
+            normalize_angle_arguments(&nested, &env).expect("the `deg` cos is rewritten");
         let Expr::Operator(sum) = &rewritten else {
             panic!("expected the sum back")
         };

@@ -116,8 +116,7 @@ fn a_scaled_dimensionless_transcendental_argument_is_refused() {
 /// argument that is CONVERTED rather than refused.
 #[test]
 fn the_named_repair_and_a_degree_argument_are_accepted() {
-    let file =
-        common::load_repo_fixture("valid/units_transcendental_scaled_argument_repair.esm");
+    let file = common::load_repo_fixture("valid/units_transcendental_scaled_argument_repair.esm");
     let result = validate(&file);
     assert!(
         result.is_valid,

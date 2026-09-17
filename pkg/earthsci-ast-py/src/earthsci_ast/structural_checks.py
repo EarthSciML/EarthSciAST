@@ -3160,7 +3160,9 @@ def _walk_expression_for_dimensionless_arg_checks(
             # An ANGLE is admitted at ANY scale: `deg` -> `rad` is exact and has
             # no second reading, and the flatten pass converts it before
             # anything evaluates it (`flatten._normalize_angle_arguments`).
-            scaled = None if _is_angle_unit(arg_units) else _scaled_dimensionless_refusal(op, arg_units)
+            scaled = (
+                None if _is_angle_unit(arg_units) else _scaled_dimensionless_refusal(op, arg_units)
+            )
             if (
                 arg_units is not None
                 and not _is_dimensionless_unit(arg_units)
