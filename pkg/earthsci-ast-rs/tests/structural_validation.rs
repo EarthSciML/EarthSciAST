@@ -382,8 +382,12 @@ fn test_coupling_library_refs_resolve_against_roles_not_systems() {
 fn test_coupling_library_corpus_validates_standalone() {
     let corpus =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/coupling_libraries");
-    let good = std::fs::read_to_string(corpus.join("rothermel_fuel.esm")).unwrap();
-    load_string(&good).expect("a well-formed corpus library must load standalone");
+    // `full_surface_lib.esm` exercises every §10.10.2 occurrence site, so it is
+    // what proves the shared walk raises no FALSE positive off `variable_map`.
+    for name in ["rothermel_fuel.esm", "full_surface_lib.esm"] {
+        let good = std::fs::read_to_string(corpus.join(name)).unwrap();
+        load_string(&good).unwrap_or_else(|e| panic!("{name} must load standalone: {e}"));
+    }
 
     let bad = std::fs::read_to_string(corpus.join("lib_unknown_role_edge.esm")).unwrap();
     let err = load_string(&bad)

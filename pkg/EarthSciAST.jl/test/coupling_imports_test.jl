@@ -366,8 +366,12 @@ end
 # document.
 @testset "coupling-library corpus validates standalone (§10.9)" begin
     corpus = joinpath(TESTUTILS_REPO_ROOT, "tests", "coupling_libraries")
-    good = EarthSciAST.validate(load_string(read(joinpath(corpus, "rothermel_fuel.esm"), String)))
-    @test isempty(good.structural_errors)
+    # `full_surface_lib.esm` exercises every §10.10.2 occurrence site, so it is
+    # what proves the shared walk raises no FALSE positive off `variable_map`.
+    for name in ("rothermel_fuel.esm", "full_surface_lib.esm")
+        good = EarthSciAST.validate(load_string(read(joinpath(corpus, name), String)))
+        @test isempty(good.structural_errors)
+    end
 
     bad = EarthSciAST.validate(load_string(read(joinpath(corpus, "lib_unknown_role_edge.esm"), String)))
     @test length(bad.structural_errors) == 1
