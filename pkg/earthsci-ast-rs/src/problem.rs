@@ -1560,6 +1560,45 @@ fn wants_build_pipeline(opts: &ProblemOptions) -> bool {
         || !opts.const_arrays.is_empty()
 }
 
+/// The state-free observeds of a problem with **nothing to integrate**,
+/// evaluated at simulation time `t` — flattened name and value, in the
+/// document's own observed order.
+///
+/// This is the same primitive [`static_observed_fields`] runs, exposed at the
+/// one axis that function fixes. `esm simulate` reads it ONCE, at `tspan.0`,
+/// and reports `t = 0`, because a single evaluation is all that command
+/// promises. The §6.6 inline-test runner cannot stop there: esm-spec §6.6.3
+/// defines an assertion's `time` as "Simulation time at which to evaluate the
+/// assertion", and a document with no differential equations is still a
+/// FUNCTION OF `t` — a solar-geometry component's declination, hour angle and
+/// zenith cosine are exactly that. So the runner reads this once per asserted
+/// time (issue #406).
+///
+/// `None` when the problem HAS a state vector: there is something to
+/// integrate, and the trajectory — not this — is the answer.
+pub(crate) fn static_observeds_at(
+    prob: &EsmProblem,
+    t: f64,
+) -> Option<Result<Vec<(String, f64)>, SimulateError>> {
+    // Re-arm the document's working precision (`domain.element_type`,
+    // esm-spec §11.3), exactly as `solve` does; a no-op for a Float64 document.
+    let _precision_guard = prob.precision.enter();
+    match &*prob.backend {
+        // A compiled scalar right-hand side with an EMPTY state vector. That is
+        // what `Compile::Always` produces for an algebraic-only document, and
+        // handing it to diffsol is what issue #406 reports as "Exceeded maximum
+        // number of nonlinear solver failures (51) at time = 0".
+        Backend::Scalar(c) if c.state_variable_names().is_empty() => {
+            Some(c.evaluate_static_observeds(&prob.p, t))
+        }
+        // `Backend::Static` carries no compiled graph to evaluate here, and the
+        // array backend materializes its state-free fields at BUILD time, where
+        // they are constants rather than functions of `t`. Both are answered
+        // from the build's fields as before.
+        _ => None,
+    }
+}
+
 /// Evaluate a state-free system's observed graph at `t0`.
 ///
 /// The build-time half of [`observed_field`] for a document with no

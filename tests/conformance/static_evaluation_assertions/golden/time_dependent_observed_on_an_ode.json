@@ -1,0 +1,61 @@
+{
+    "fixture": "time_dependent_observed_on_an_ode",
+    "assertions": [
+        {
+            "test_id": "an_observed_of_t_reads_the_asserted_time",
+            "assertion_idx": 1,
+            "variable": "x",
+            "actual": 0.0
+        },
+        {
+            "test_id": "an_observed_of_t_reads_the_asserted_time",
+            "assertion_idx": 2,
+            "variable": "drive",
+            "actual": 0.0
+        },
+        {
+            "test_id": "an_observed_of_t_reads_the_asserted_time",
+            "assertion_idx": 3,
+            "variable": "gap",
+            "actual": 0.0
+        },
+        {
+            "test_id": "an_observed_of_t_reads_the_asserted_time",
+            "assertion_idx": 4,
+            "variable": "x",
+            "actual": 5.999999999999998
+        },
+        {
+            "test_id": "an_observed_of_t_reads_the_asserted_time",
+            "assertion_idx": 5,
+            "variable": "drive",
+            "actual": 6.0
+        },
+        {
+            "test_id": "an_observed_of_t_reads_the_asserted_time",
+            "assertion_idx": 6,
+            "variable": "gap",
+            "actual": -1.7763568394002505e-15
+        },
+        {
+            "test_id": "the_same_observed_at_a_longer_span",
+            "assertion_idx": 1,
+            "variable": "x",
+            "actual": 14.999999999999996
+        },
+        {
+            "test_id": "the_same_observed_at_a_longer_span",
+            "assertion_idx": 2,
+            "variable": "drive",
+            "actual": 15.0
+        },
+        {
+            "test_id": "the_same_observed_at_a_longer_span",
+            "assertion_idx": 3,
+            "variable": "gap",
+            "actual": -3.552713678800501e-15
+        }
+    ],
+    "reference_binding": "julia",
+    "_comment": "Minted by the Julia reference binding's `run_inline_tests` (Tsit5, reltol=1e-12, abstol=1e-14) over fixtures/time_dependent_observed_on_an_ode.esm. `drive` is a closed-form evaluation at the assertion time and carries no integration error; `x` is the integrated state and may land within an ulp or two of the exact ramp, which is why the `gap` readings are ~1e-15 rather than exactly zero. All sit orders inside the manifest's 1e-11 assertion_atol. Every assertion is at a span ENDPOINT, because Python samples a solver-chosen dense grid rather than an exact saveat list and an interior time is therefore a property of the integrator's steps rather than of this contract."
+}

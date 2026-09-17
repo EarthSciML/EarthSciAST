@@ -1,0 +1,166 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "AlgebraicTimeDependence",
+    "description": "A document with NO differential equations whose observeds are functions of `t`: the diurnal solar-geometry shape (a phase angle and its sine) reduced to two parameters. esm-spec §6.6.3 defines an assertion's `time` as the simulation time at which to EVALUATE the assertion, so every asserted time must be evaluated on its own terms even though there is nothing to integrate and the run is a single static evaluation rather than a trajectory (issue #406). `system_kind` is DECLARED here as the derivation already derives it (§6.3.1): it is a checked declaration, never a selector, and the document must answer identically with and without it.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "conformance",
+      "static_evaluation_assertions",
+      "inline-test"
+    ],
+    "license": "MIT"
+  },
+  "models": {
+    "Diurnal": {
+      "system_kind": "nonlinear",
+      "variables": {
+        "omega": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.25,
+          "description": "Angular rate."
+        },
+        "amp": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2.0,
+          "description": "Amplitude."
+        },
+        "phase": {
+          "type": "unknown",
+          "units": "1",
+          "description": "omega*t — linear in the asserted time."
+        },
+        "wave": {
+          "type": "unknown",
+          "units": "1",
+          "description": "amp*sin(omega*t) — NONLINEAR in the asserted time, so a runner that evaluates at the wrong time cannot land on the right answer by scaling."
+        },
+        "level": {
+          "type": "unknown",
+          "units": "1",
+          "description": "A time-INVARIANT observed: the control that says this fixture does not merely require t to be nonzero."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "phase",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "omega",
+              "t"
+            ]
+          }
+        },
+        {
+          "lhs": "wave",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "amp",
+              {
+                "op": "sin",
+                "args": [
+                  {
+                    "op": "*",
+                    "args": [
+                      "omega",
+                      "t"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "level",
+          "rhs": "amp"
+        }
+      ],
+      "tests": [
+        {
+          "id": "evaluated_at_each_asserted_time",
+          "description": "Each assertion is evaluated at its own `time`, not at the start of the span.",
+          "time_span": {
+            "start": 0.0,
+            "end": 8.0
+          },
+          "tolerance": {
+            "rel": 1e-09,
+            "abs": 1e-11
+          },
+          "assertions": [
+            {
+              "variable": "phase",
+              "time": 0.0,
+              "expected": 0.0
+            },
+            {
+              "variable": "phase",
+              "time": 4.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "wave",
+              "time": 0.0,
+              "expected": 0.0
+            },
+            {
+              "variable": "wave",
+              "time": 4.0,
+              "expected": 1.682941969615793
+            },
+            {
+              "variable": "wave",
+              "time": 8.0,
+              "expected": 1.8185948536513634
+            },
+            {
+              "variable": "level",
+              "time": 6.0,
+              "expected": 2.0
+            }
+          ]
+        },
+        {
+          "id": "parameter_overrides_reach_the_static_evaluation",
+          "description": "A test's `parameter_overrides` bind before the single evaluation, at every asserted time.",
+          "time_span": {
+            "start": 0.0,
+            "end": 8.0
+          },
+          "parameter_overrides": {
+            "omega": 0.5,
+            "amp": 3.0
+          },
+          "tolerance": {
+            "rel": 1e-09,
+            "abs": 1e-11
+          },
+          "assertions": [
+            {
+              "variable": "phase",
+              "time": 4.0,
+              "expected": 2.0
+            },
+            {
+              "variable": "wave",
+              "time": 4.0,
+              "expected": 2.727892280477045
+            },
+            {
+              "variable": "level",
+              "time": 4.0,
+              "expected": 3.0
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

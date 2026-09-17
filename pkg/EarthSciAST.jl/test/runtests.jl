@@ -336,6 +336,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("conformance_assertion_tolerance_test.jl")  # §6.6.3 pass predicate (data-only)
     include("conformance_tolerance_resolution_test.jl")  # §6.6.4 per-field tolerance merge
     include("conformance_scalar_ic_test.jl")
+    include("conformance_static_evaluation_assertions_test.jl")  # §6.6.3 an assertion's `time` is when it is EVALUATED (#406)
     include("conformance_shaped_parameter_broadcast_test.jl")  # §6.3 scalar-on-a-shaped-parameter broadcast
     include("conformance_shaped_observed_scalar_broadcast_test.jl")  # §4.3.4 scalar right-hand side on a shaped observed (#262)
     include("conformance_override_key_diagnostics_test.jl")

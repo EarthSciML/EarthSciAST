@@ -1515,6 +1515,79 @@ fn build_only_solution(times: Vec<f64>) -> Solution {
     }
 }
 
+/// The §6.6 answer for a document with **nothing to integrate**: its observed
+/// graph evaluated once per asserted time, laid out as a trajectory so the
+/// ordinary assertion machinery reads it unchanged.
+///
+/// This is the path `esm simulate` already takes — a document with no
+/// differential equations is EVALUATED rather than solved (`✓ Static
+/// evaluation complete: N field(s)`) — reached here through the primitive that
+/// command's own static path runs, [`crate::problem::static_observeds_at`].
+/// Before issue #406 the runner had no such branch: it handed the compiled,
+/// STATE-FREE right-hand side to diffsol, which reported "Exceeded maximum
+/// number of nonlinear solver failures (51) at time = 0" for a document that
+/// `simulate` evaluates perfectly well. A model that simulates could not be
+/// tested, and the diagnostic named the nonlinear solver rather than the real
+/// condition.
+///
+/// **Why one evaluation PER TIME rather than one at `t = 0`.** esm-spec §6.6.3
+/// defines an assertion's `time` as "Simulation time at which to evaluate the
+/// assertion; must lie in `[time_span.start, time_span.end]`" — it constrains
+/// the value, it does not restrict it to the span's start, and it says
+/// *evaluate*, not *integrate to*. An algebraic document is still a function of
+/// `t`; the diurnal solar-geometry component that found this bug is nothing
+/// else. Evaluating the whole span's assertions at `t = 0` would answer a
+/// question the author did not ask, and Python's runner — which has never had
+/// this defect — already answers `a*t` at `t = 5` with `10`, so refusing the
+/// assertion instead would put two bindings on different answers for one
+/// document, which §6.6 does not admit.
+///
+/// `None` when the problem has a state vector: then it integrates, and
+/// [`solve`] produces the answer.
+fn static_trajectory(prob: &EsmProblem, times: &[f64]) -> Option<Result<Solution, String>> {
+    // Whether this path applies is a property of the BACKEND, which does not
+    // vary with `t`, so the first call decides it for the whole run. Once it
+    // has said yes, a later failure is an evaluation failure and is REPORTED:
+    // falling back to `solve` there would hand the same state-free right-hand
+    // side to the integrator and report a nonlinear-solver failure instead,
+    // which is the substitution this function exists to remove.
+    let mut columns = Vec::with_capacity(times.len());
+    let first = crate::problem::static_observeds_at(prob, *times.first()?)?;
+    match first {
+        Ok(v) => columns.push(v),
+        Err(e) => return Some(Err(format!("simulate failed: {e}"))),
+    }
+    for &t in &times[1..] {
+        match crate::problem::static_observeds_at(prob, t) {
+            Some(Ok(v)) => columns.push(v),
+            Some(Err(e)) => return Some(Err(format!("simulate failed: {e}"))),
+            // The backend cannot change between two calls on one problem.
+            None => return Some(Err(format!("static evaluation at t={t} is unavailable"))),
+        }
+    }
+
+    let state_variable_names: Vec<String> = columns[0].iter().map(|(n, _)| n.clone()).collect();
+    let mut state: Vec<Vec<f64>> =
+        vec![Vec::with_capacity(times.len()); state_variable_names.len()];
+    for column in columns {
+        for (row, (_, v)) in column.into_iter().enumerate() {
+            state[row].push(v);
+        }
+    }
+    Some(Ok(Solution {
+        time: times.to_vec(),
+        state,
+        state_variable_names,
+        retcode: crate::simulate::ReturnCode::Success,
+        // The same `alg` the CLI's own static evaluation reports, so the two
+        // spellings of this path are one word in a result.
+        metadata: crate::simulate::SolutionMetadata {
+            alg: "static".to_string(),
+            ..Default::default()
+        },
+    }))
+}
+
 /// Everything ONE inline test's BUILD depends on, within one
 /// [`run_model_tests`] call.
 ///
@@ -2090,14 +2163,26 @@ fn run_component_tests(
                 // left behind rather than what a rebuild would have produced.
                 // A no-op on the first use of a build.
                 prob.reset_inspection();
-                match solve(prob, &run_opts) {
-                    Ok(sol) => Ok(sol),
-                    // A document with no ODEs never integrates; its answers are
-                    // the build's, evaluated at the asserted times.
-                    Err(crate::simulate::SimulateError::NotDynamic { .. }) => Ok(
-                        build_only_solution(run_opts.saveat.clone().unwrap_or_default()),
-                    ),
-                    Err(e) => Err(format!("simulate failed: {e}")),
+                let saveat = run_opts.saveat.clone().unwrap_or_default();
+                // A document with NOTHING TO INTEGRATE is evaluated, not
+                // solved — the path `esm simulate` has always taken and this
+                // runner did not (issue #406). Checked BEFORE `solve`, because
+                // the runner builds with `Compile::Always` (so that a construct
+                // no evaluator supports is still refused at build time, in the
+                // `unsupported_construct` vocabulary §9.6.6 asks for) and a
+                // forced right-hand side over an empty state vector reaches the
+                // integrator rather than reporting `NotDynamic`.
+                match static_trajectory(prob, &saveat) {
+                    Some(result) => result,
+                    None => match solve(prob, &run_opts) {
+                        Ok(sol) => Ok(sol),
+                        // A document with no ODEs never integrates; its answers
+                        // are the build's, evaluated at the asserted times.
+                        Err(crate::simulate::SimulateError::NotDynamic { .. }) => {
+                            Ok(build_only_solution(saveat))
+                        }
+                        Err(e) => Err(format!("simulate failed: {e}")),
+                    },
                 }
                 .inspect(|_sol| {
                     insp = prob.take_inspection();

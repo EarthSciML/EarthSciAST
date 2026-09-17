@@ -675,10 +675,22 @@ end
 # parameter-dependent coordinate expression / observed / reference resolves
 # (esm-spec §6.6.5). Binding them widens only what NAMES resolve, never how a
 # value is computed — determinism and byte-identical output are preserved.
+#
+# `t` is the SIMULATION TIME the expression is evaluated at. `_compile` maps the
+# name `t` to the evaluator's dedicated time slot rather than to a parameter
+# read, so a time-dependent body reads this argument and nothing else: passing
+# the time as an entry of `params` does not reach it. It defaults to `0.0` —
+# every build-time caller (grid geometry, a field `ic`, a setup buffer) is by
+# definition at the start of the span — and only an assertion, which carries a
+# `time` of its own (esm-spec §6.6.3), passes anything else. Before this
+# argument existed the slot was the literal `0.0` at every call site, so a
+# `t`-dependent observed asserted at any other time read ZERO and reported a
+# plausible-looking wrong number (issue #406).
 function _eval_cellwise(expr::EarthSciAST.ASTExpr, cell::Vector{Int};
                         const_arrays::AbstractDict=_EMPTY_CONST_ARRAYS,
                         registered_functions::AbstractDict=Dict{String,Function}(),
-                        params::AbstractDict=_EMPTY_PARAMS)::Float64
+                        params::AbstractDict=_EMPTY_PARAMS,
+                        t::Float64=0.0)::Float64
     cellwise = _index_at_cell(expr, cell)
     resolved = _resolve_indices(cellwise,
                                 Dict{String,Tuple{Vector{Int},Vector{Int}}}(),
@@ -686,13 +698,13 @@ function _eval_cellwise(expr::EarthSciAST.ASTExpr, cell::Vector{Int};
     reg = Dict{String,Any}(String(k) => v for (k, v) in registered_functions)
     if isempty(params)
         node = _compile(resolved, Dict{String,Int}(), Set{Symbol}(), reg)
-        return _eval_node(node, Float64[], NamedTuple(), 0.0)
+        return _eval_node(node, Float64[], NamedTuple(), t)
     end
     psyms = Symbol[Symbol(k) for k in keys(params)]
     pvals = Float64[Float64(params[k]) for k in keys(params)]
     node = _compile(resolved, Dict{String,Int}(), Set{Symbol}(psyms), reg)
     p_nt = NamedTuple{Tuple(psyms)}(Tuple(pvals))
-    return _eval_node(node, Float64[], p_nt, 0.0)
+    return _eval_node(node, Float64[], p_nt, t)
 end
 
 const _NO_STATE_U = Float64[]
@@ -813,9 +825,14 @@ end
 # stack-allocated, no heap), the fixed scalar-param count `NP`, and the output rank
 # `NI`. Calling it at a cell rebinds only the `NI` output-index params; the `NP`
 # scalar params are captured once in `base`.
+# `t` is the simulation time the compiled body is evaluated at; see
+# `_eval_cellwise` for why it cannot travel as a parameter. It is fixed per
+# evaluator (one assertion reads one time), stays `Float64` so the struct is
+# still isbits, and is `0.0` for every build-time caller.
 struct _CellEval{syms,NP,NI}
     node::_Node
     base::NTuple{NP,Float64}
+    t::Float64
 end
 
 # The output indices of one cell as an `NTuple{NI,Float64}`. `Val(NI)` makes
@@ -827,7 +844,7 @@ end
 @inline function (ce::_CellEval{syms,NP,NI})(cell::AbstractVector{<:Integer}) where {syms,NP,NI}
     vals = (ce.base..., _idx_tuple(cell, Val(NI))...)   # isbits tuple → stack
     p_nt = NamedTuple{syms}(vals)                        # type-stable (syms is a type param)
-    return _eval_node(ce.node, _NO_STATE_U, p_nt, 0.0)
+    return _eval_node(ce.node, _NO_STATE_U, p_nt, ce.t)
 end
 
 # ENGAGEMENT DIAGNOSTICS (wall2). Permanent module-level counters that record how
@@ -848,9 +865,11 @@ function _cellwise_compile_once(expr::EarthSciAST.ASTExpr, nidx::Int,
                                 const_arrays::AbstractDict,
                                 registered_functions::AbstractDict,
                                 params::AbstractDict;
-                                bind_syms::Union{Nothing,Vector{String}}=nothing)
+                                bind_syms::Union{Nothing,Vector{String}}=nothing,
+                                t::Float64=0.0)
     ce = _cellwise_compile_once_impl(expr, nidx, const_arrays,
-                                     registered_functions, params; bind_syms=bind_syms)
+                                     registered_functions, params;
+                                     bind_syms=bind_syms, t=t)
     if ce === nothing
         _CELLWISE_FASTPATH_MISS[] += 1
     else
@@ -867,7 +886,8 @@ function _cellwise_compile_once_impl(expr::EarthSciAST.ASTExpr, nidx::Int,
                                 const_arrays::AbstractDict,
                                 registered_functions::AbstractDict,
                                 params::AbstractDict;
-                                bind_syms::Union{Nothing,Vector{String}}=nothing)
+                                bind_syms::Union{Nothing,Vector{String}}=nothing,
+                                t::Float64=0.0)
     nidx >= 1 || return nothing
     # Reserved output-index parameter names (never authored by a user), one per
     # output dimension. Guard against the (impossible-in-practice) name collision.
@@ -898,7 +918,7 @@ function _cellwise_compile_once_impl(expr::EarthSciAST.ASTExpr, nidx::Int,
         return nothing   # anything unsupported → per-cell fallback
     end
     base = ntuple(i -> Float64(params[pkeys[i]]), length(pkeys))
-    return _CellEval{Tuple(psyms),length(pkeys),nidx}(node, base)
+    return _CellEval{Tuple(psyms),length(pkeys),nidx}(node, base, t)
 end
 
 # Function barrier: evaluate `ce` at every cell. `ce` arrives concretely typed
