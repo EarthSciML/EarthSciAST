@@ -1,0 +1,49 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "UnitsDiscriminatorTranscendentalScaledArgument",
+    "description": "Invalid: a strict transcendental's argument MUST be dimensionless AT SCALE 1 (esm-spec §4.8.3, issue #409). `ppm` is dimensionless at 1e-6, so `log(co2)` satisfies every DIMENSION-only test and was accepted by all five bindings, evaluating the natural log of the ppm NUMBER with no diagnostic. The two readings -- the log of the ppm number and the log of the mole fraction -- differ by ln(1e-6) = 13.8155..., and nothing in the document says which was meant, so the checker refuses and names the repair rather than picking one. This is the NEGATIVE half of the discriminator whose positive half is tests/valid/units_transcendental_scaled_argument_repair.esm, which writes the same quantity as `log(co2 / one_ppm)` and IS accepted: a valid fixture alone cannot prove the checker checks anything. A binding carrying the bug ACCEPTS this file. Everything but the one observed variable is dimensionally clean.",
+    "authors": [
+      "EarthSciML"
+    ],
+    "created": "2026-09-17T00:00:00Z"
+  },
+  "models": {
+    "BadUnitsModel": {
+      "variables": {
+        "y": {
+          "type": "unknown",
+          "units": "1",
+          "description": "State. Dimensionally clean; not part of the defect."
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 1.0,
+          "description": "Decay rate. Dimensionally clean; not part of the defect."
+        },
+        "co2": {
+          "type": "parameter",
+          "units": "ppm",
+          "default": 429.96,
+          "description": "A mixing ratio -- DIMENSIONLESS, but at scale 1e-6, not at scale 1."
+        },
+        "bad_log": {
+          "type": "unknown",
+          "units": "1",
+          "description": "THE ONLY DEFECT: the argument of `log` is dimensionless at a scale other than 1, so which of the two readings was meant is unstated."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {"op": "D", "args": ["y"], "wrt": "t"},
+          "rhs": {"op": "*", "args": [{"op": "-", "args": ["k"]}, "y"]}
+        },
+        {
+          "lhs": "bad_log",
+          "rhs": {"op": "log", "args": ["co2"]}
+        }
+      ]
+    }
+  }
+}
