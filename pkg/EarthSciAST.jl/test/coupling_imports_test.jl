@@ -294,3 +294,29 @@ end
         @test flatten(load_document(doc; base_path=corpus)) isa EarthSciAST.FlattenedSystem
     end
 end
+
+# A structurally complete `bind` that points a role at a component lacking a
+# referenced variable is reported by `validate` on the SOURCE document, not only
+# at flatten, and the finding is re-pointed at the import entry and names the
+# import, role and component (esm-spec §10.10.3).
+@testset "validate reports a mis-bound coupling_import on the source document (§10.10.3)" begin
+    corpus = joinpath(TESTUTILS_REPO_ROOT, "tests", "coupling_libraries")
+    path = joinpath(corpus, "import_misbind_downstream.esm")
+    result = EarthSciAST.validate(load_path(path))
+    attributed = [e for e in result.structural_errors
+                  if e.error_type == "unresolved_scoped_ref" &&
+                     haskey(e.details, "coupling_import")]
+    @test !isempty(attributed)
+    found = first(attributed)
+    @test found.path == "/coupling/0"
+    @test found.details["bound_component"] == "RothermelNoW0"
+    @test found.details["role"] == "Spread"
+    @test endswith(found.details["reference"], ".w0")
+    @test !result.is_valid
+
+    # A document with no recorded base does no file I/O, so it reports nothing
+    # about the import rather than resolving the ref against the working dir.
+    no_base = EarthSciAST.validate(load_string(read(path, String)))
+    @test isempty([e for e in no_base.structural_errors
+                   if haskey(e.details, "coupling_import")])
+end

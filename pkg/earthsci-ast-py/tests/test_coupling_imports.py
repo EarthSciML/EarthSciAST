@@ -521,3 +521,32 @@ def test_in_memory_document_keeps_the_callers_base(monkeypatch, tmp_path):
     # An explicit base of its own -> it wins, with no base_path at all.
     assert flatten(load_string(text, base_path=_CORPUS)) is not None
     assert flatten(load_document(doc, base_path=_CORPUS)) is not None
+
+
+def test_validate_reports_a_mis_bound_import_on_the_source_document():
+    """A structurally complete ``bind`` that points a role at a component lacking
+    a referenced variable is reported by ``validate`` on the SOURCE document, not
+    only at flatten, and the finding is re-pointed at the import entry and names
+    the import, role and component (esm-spec §10.10.3)."""
+    from earthsci_ast import validate
+
+    esm = load_path(os.path.join(_CORPUS, "import_misbind_downstream.esm"))
+    result = validate(esm)
+    attributed = [
+        e
+        for e in result.structural_errors
+        if e.code == "unresolved_scoped_ref" and "coupling_import" in (e.details or {})
+    ]
+    assert attributed, f"no import-attributed finding in {result.structural_errors}"
+    (found,) = attributed
+    assert found.path == "/coupling/0"
+    assert found.details["bound_component"] == "RothermelNoW0"
+    assert found.details["role"] == "Spread"
+    assert found.details["reference"].endswith(".w0")
+    assert not result.is_valid
+
+    # A document with no recorded base does no file I/O, so it reports nothing
+    # about the import rather than resolving the ref against the working dir.
+    text = open(os.path.join(_CORPUS, "import_misbind_downstream.esm")).read()
+    no_base = validate(load_string(text))
+    assert not [e for e in no_base.structural_errors if "coupling_import" in (e.details or {})]
