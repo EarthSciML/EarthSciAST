@@ -1763,7 +1763,7 @@ def angle_normalization_factor(unit) -> float | None:
     return None if scale.is_one() else float(scale)
 
 
-def normalize_angle_arguments(expr: Expr, env: dict[str, Any]) -> Expr:
+def normalize_angle_arguments(expr: Expr, env: dict[str, Any], _validator=None) -> Expr:
     """Rewrite every ``sin``/``cos``/``tan`` whose argument is an angle at a
     scale other than 1 so the argument reaches the evaluator in RADIANS.
 
@@ -1781,15 +1781,21 @@ def normalize_angle_arguments(expr: Expr, env: dict[str, Any]) -> Expr:
     if not isinstance(expr, ExprNode):
         return expr
 
+    # ONE validator for the whole walk. It is a pure function of `env` — which
+    # does not change during the walk — so rebuilding it per node would rebuild
+    # the pint registry per trig call.
+    validator = _validator
+    if validator is None:
+        validator = UnitValidator()
+        validator.known_units = env
+
     # Children first, so a nested `sin(theta [deg])` inside another argument is
     # converted too.
-    node = map_children(expr, lambda child: normalize_angle_arguments(child, env))
+    node = map_children(expr, lambda child: normalize_angle_arguments(child, env, validator))
 
     if node.op not in _CIRCULAR_FUNCS or len(node.args) != 1:
         return node
 
-    validator = UnitValidator()
-    validator.known_units = env
     try:
         typed = validator._type(node.args[0])
     except (DimensionalMismatchError, UnparseableUnitError):
