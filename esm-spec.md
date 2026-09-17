@@ -5126,6 +5126,17 @@ the same per-binding capability rules as a template import; a `ref` that fails t
 `coupling_import_unresolved`, and a `ref` that targets a document without top-level `coupling_roles`
 is `coupling_import_not_library`.
 
+**Which directory a relative `ref` is relative to.** §4.7 resolves a relative path "relative to the
+directory of the referencing file", and the referencing file is the importing document — not the
+process working directory, and not whatever directory flatten happens to be handed. A document the
+loader read from a known location (a path load, or a string/in-memory load the caller gave a base
+for) therefore resolves its imports against THAT location, whatever base the flatten call passes.
+A document with no location of its own — built in memory, or parsed from text with no base — has no
+referencing directory, and only then does the base supplied at flatten apply; with neither, the ref
+is relative to the working directory. The authored `ref` is never rewritten by this: §10.10.3
+requires the entry to round-trip verbatim, so the resolution base is loader state kept beside the
+document, never a wire field.
+
 #### 10.10.1 Binding — total and checked by name
 
 For a `coupling_import` referencing a library that declares roles `R₁ … Rₙ`, binding is a **total,

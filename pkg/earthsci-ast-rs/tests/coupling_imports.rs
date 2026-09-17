@@ -422,3 +422,123 @@ fn unresolved_when_the_ref_is_a_remote_url_under_the_default_loader() {
         "coupling_import_unresolved"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Ref resolution base (esm-spec §10.10 -> §4.7)
+// ---------------------------------------------------------------------------
+
+/// The conformance corpus directory, from this crate's manifest.
+fn coupling_corpus(name: &str) -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/coupling_libraries")
+        .join(name)
+}
+
+/// A relative `coupling_import` `ref` names a file relative to the IMPORTING
+/// document (§4.7 "Resolved relative to the directory of the referencing file"),
+/// so `flatten` with default options must find `./rothermel_fuel.esm` next to
+/// `assembly_import.esm` even though the test process runs in this crate's
+/// directory, where no such file exists. Before the fix the import resolved
+/// against the working directory and flatten failed with
+/// `coupling_import_unresolved`.
+#[test]
+fn a_relative_import_resolves_against_the_importing_document_not_the_working_directory() {
+    let import = earthsci_ast::load_path(coupling_corpus("assembly_import.esm"))
+        .expect("assembly_import.esm loads");
+    let inline = earthsci_ast::load_path(coupling_corpus("assembly_inline.esm"))
+        .expect("assembly_inline.esm loads");
+    assert!(
+        !std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("rothermel_fuel.esm")
+            .exists(),
+        "the test is only meaningful if the library is NOT beside the working directory"
+    );
+    let imported = flatten(&import).expect("import flattens with default options");
+    let expected = flatten(&inline).expect("inline flattens");
+    assert_eq!(
+        serde_json::to_value(&imported).unwrap(),
+        serde_json::to_value(&expected).unwrap()
+    );
+}
+
+/// The document's own base wins over an unrelated option, and the authored `ref`
+/// round-trips verbatim (esm-spec §10.10.3): the base is recorded beside the
+/// document, never written into the entry.
+#[test]
+fn a_loaded_documents_base_wins_and_its_ref_round_trips_verbatim() {
+    let file = earthsci_ast::load_path(coupling_corpus("assembly_import.esm"))
+        .expect("assembly_import.esm loads");
+    flatten_with_options(
+        &file,
+        &CouplingImportOptions {
+            base_path: "does/not/exist".to_string(),
+            load_ref: None,
+        },
+    )
+    .expect("the document's base wins over the option");
+    let refs: Vec<&str> = file
+        .coupling
+        .as_ref()
+        .expect("coupling present")
+        .iter()
+        .filter_map(|e| match e {
+            CouplingEntry::CouplingImport { reference, .. } => Some(reference.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(refs, vec!["./rothermel_fuel.esm"]);
+    let json = earthsci_ast::to_json(&file).expect("serializes");
+    assert!(
+        json.contains("\"./rothermel_fuel.esm\""),
+        "authored ref lost on emit"
+    );
+    assert!(
+        !json.contains("coupling_import_base"),
+        "loader-only base leaked into the document"
+    );
+}
+
+/// A document with no location of its own — built in memory, or parsed from a
+/// string with no base — leaves [`CouplingImportOptions::base_path`] in charge,
+/// and one given an explicit base at load anchors on it with no option at all.
+/// All five bindings agree on this, so a caller's base is never silently
+/// replaced by the working directory.
+#[test]
+fn an_in_memory_document_keeps_the_callers_base() {
+    let corpus = coupling_corpus("assembly_import.esm");
+    let dir = corpus
+        .parent()
+        .expect("corpus directory")
+        .to_string_lossy()
+        .into_owned();
+    let text = std::fs::read_to_string(&corpus).expect("assembly_import.esm reads");
+    let value: serde_json::Value = serde_json::from_str(&text).expect("parses");
+
+    // No base of its own -> the option resolves the import.
+    for file in [
+        earthsci_ast::load_string(&text).expect("load_string"),
+        earthsci_ast::load_document(&value).expect("load_document"),
+    ] {
+        flatten_with_options(
+            &file,
+            &CouplingImportOptions {
+                base_path: dir.clone(),
+                load_ref: None,
+            },
+        )
+        .expect("the caller's base_path resolves the import");
+    }
+
+    // An explicit base of its own -> it wins, with no option at all.
+    let opts = earthsci_ast::LoadOptions {
+        base_path: Some(std::path::PathBuf::from(&dir)),
+        ..Default::default()
+    };
+    for file in [
+        earthsci_ast::load_string_with_options(&text, &opts).expect("load_string_with_options"),
+        earthsci_ast::load_document_with_options(&value, &opts)
+            .expect("load_document_with_options"),
+    ] {
+        flatten(&file).expect("the explicit load base resolves the import");
+    }
+}

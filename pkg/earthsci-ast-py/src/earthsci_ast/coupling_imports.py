@@ -447,6 +447,10 @@ def expand_coupling_imports(
         return coupling
 
     resolver = load_ref if load_ref is not None else _default_load_ref
+    # A document loaded from a known location resolves its relative imports
+    # against that location (esm-spec §10.10 -> §4.7); ``base_path`` is the base
+    # for a document that carries none (built in memory, or loaded without one).
+    doc_base = getattr(esm_file, "coupling_import_base", None)
     out: list[Any] = []
     for entry in coupling:
         if not isinstance(entry, CouplingImport):
@@ -455,7 +459,7 @@ def expand_coupling_imports(
         ref = entry.ref if isinstance(entry.ref, str) else ""
         bind: dict[str, str] = {k: v for k, v in (entry.bind or {}).items() if isinstance(v, str)}
         try:
-            lib = resolver(ref, base_path)
+            lib = resolver(ref, doc_base or base_path)
         except ExpressionTemplateError:
             raise
         except Exception as e:  # noqa: BLE001 — reported with the stable code

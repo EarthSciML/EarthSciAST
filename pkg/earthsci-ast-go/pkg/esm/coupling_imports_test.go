@@ -5,10 +5,13 @@ package esm
 // §10.11 diagnostics (all 11 codes).
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -369,5 +372,137 @@ func TestTemplateImport_IsCouplingLibrary(t *testing.T) {
 	_, err := LoadPath(p)
 	if code := couplingErrCode(t, err); code != "template_import_is_coupling_library" {
 		t.Errorf("code = %s; want template_import_is_coupling_library", code)
+	}
+}
+
+// A relative `coupling_import` `ref` names a file relative to the importing
+// document (esm-spec §10.10 -> §4.7), so Flatten with default options must find
+// ./rothermel_fuel.esm beside assembly_import.esm although `go test` runs in this
+// package directory, which holds no such file. Before the fix the import resolved
+// against the working directory and failed with coupling_import_unresolved.
+func TestCouplingImportRefResolvesAgainstImportingDocument(t *testing.T) {
+	corpus := filepath.Join("..", "..", "..", "..", "tests", "coupling_libraries")
+	imp, err := LoadPath(filepath.Join(corpus, "assembly_import.esm"))
+	if err != nil {
+		t.Fatalf("load assembly_import.esm: %v", err)
+	}
+	inl, err := LoadPath(filepath.Join(corpus, "assembly_inline.esm"))
+	if err != nil {
+		t.Fatalf("load assembly_inline.esm: %v", err)
+	}
+	imported, err := Flatten(imp)
+	if err != nil {
+		t.Fatalf("flatten import with default options: %v", err)
+	}
+	inline, err := Flatten(inl)
+	if err != nil {
+		t.Fatalf("flatten inline: %v", err)
+	}
+	if !reflect.DeepEqual(imported, inline) {
+		t.Errorf("import-expanded flatten != inline flatten")
+	}
+}
+
+// The document's own base wins over an explicit option, and the authored `ref`
+// round-trips verbatim (esm-spec §10.10.3): the base is recorded beside the
+// entry, never written into it.
+func TestCouplingImportBaseWinsAndRefRoundTripsVerbatim(t *testing.T) {
+	corpus := filepath.Join("..", "..", "..", "..", "tests", "coupling_libraries")
+	imp, err := LoadPath(filepath.Join(corpus, "assembly_import.esm"))
+	if err != nil {
+		t.Fatalf("load assembly_import.esm: %v", err)
+	}
+	if _, err := FlattenWithOptions(imp, CouplingImportOptions{BasePath: filepath.Join("does", "not", "exist")}); err != nil {
+		t.Fatalf("flatten with an unrelated BasePath option: %v", err)
+	}
+	var ref string
+	for _, e := range imp.Coupling {
+		if c, ok := e.(CouplingImport); ok {
+			ref = c.Ref
+		}
+	}
+	if ref != "./rothermel_fuel.esm" {
+		t.Errorf("loaded ref = %q, want the authored ./rothermel_fuel.esm", ref)
+	}
+	out, err := ToJSON(imp)
+	if err != nil {
+		t.Fatalf("ToJSON: %v", err)
+	}
+	if !strings.Contains(out, `"ref": "./rothermel_fuel.esm"`) {
+		t.Errorf("emitted document lost the authored ref")
+	}
+}
+
+// A document loaded by BARE FILENAME from its own directory has "." as its base,
+// which is a real location and must anchor the import just as any other does:
+// the "." default of loadOptions.basePath is what means "no base", not the value
+// itself. Without basePathSet the option below won, so this document resolved
+// its import somewhere else than the four other bindings did.
+func TestCouplingImportBareFilenameLoadKeepsItsOwnDirectory(t *testing.T) {
+	corpus, err := filepath.Abs(filepath.Join("..", "..", "..", "..", "tests", "coupling_libraries"))
+	if err != nil {
+		t.Fatalf("abs: %v", err)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(corpus); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() {
+		if err := os.Chdir(cwd); err != nil {
+			t.Fatalf("chdir back: %v", err)
+		}
+	}()
+	f, err := LoadPath("assembly_import.esm")
+	if err != nil {
+		t.Fatalf("load assembly_import.esm: %v", err)
+	}
+	if _, err := FlattenWithOptions(f, CouplingImportOptions{BasePath: filepath.Join("does", "not", "exist")}); err != nil {
+		t.Errorf("the document's own directory must win over the option: %v", err)
+	}
+}
+
+// A document the caller gave no base for — built in memory, or parsed from text
+// — has no location of its own, so Flatten's BasePath stays in charge. All five
+// bindings agree on this, so a caller's base is never silently replaced.
+func TestCouplingImportInMemoryDocumentKeepsTheCallersBase(t *testing.T) {
+	corpus, err := filepath.Abs(filepath.Join("..", "..", "..", "..", "tests", "coupling_libraries"))
+	if err != nil {
+		t.Fatalf("abs: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(corpus, "assembly_import.esm"))
+	if err != nil {
+		t.Fatalf("read assembly_import.esm: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	for name, load := range map[string]func() (*ESMFile, error){
+		"LoadString":   func() (*ESMFile, error) { return LoadString(string(raw)) },
+		"LoadDocument": func() (*ESMFile, error) { return LoadDocument(doc) },
+	} {
+		f, err := load()
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if _, err := FlattenWithOptions(f, CouplingImportOptions{BasePath: corpus}); err != nil {
+			t.Errorf("%s: the caller's BasePath must resolve the import: %v", name, err)
+		}
+	}
+	// An explicit base at load anchors the document with no BasePath at all.
+	for name, load := range map[string]func() (*ESMFile, error){
+		"LoadString":   func() (*ESMFile, error) { return LoadString(string(raw), WithBasePath(corpus)) },
+		"LoadDocument": func() (*ESMFile, error) { return LoadDocument(doc, WithBasePath(corpus)) },
+	} {
+		f, err := load()
+		if err != nil {
+			t.Fatalf("%s with a base: %v", name, err)
+		}
+		if _, err := Flatten(f); err != nil {
+			t.Errorf("%s: the explicit load base must resolve the import: %v", name, err)
+		}
 	}
 }

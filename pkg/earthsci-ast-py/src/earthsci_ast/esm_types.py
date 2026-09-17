@@ -1338,6 +1338,17 @@ class EsmFile:
     # field of the flattened representation, and a registry cannot be merged
     # from a document that has already thrown its inputs away.
     component_templates: dict[str, Any] = field(default_factory=dict)
+    # The directory a relative ``coupling_import`` ``ref`` resolves against
+    # (esm-spec §10.10 -> §4.7: "relative to the directory of the referencing
+    # file"). ``coupling_import`` expands at ``flatten``, which never learns where
+    # the document came from, so the loader records the base here and
+    # ``expand_coupling_imports`` prefers it over its own ``base_path``. Recorded
+    # only from a base the caller really gave (``load_path`` always has one);
+    # ``None`` for a document built in memory, whose base is the caller's.
+    # Loader-only, like ``component_templates``: never serialized, and excluded
+    # from comparison so two loads of the same document from different
+    # directories stay equal.
+    coupling_import_base: str | None = field(default=None, repr=False, compare=False)
 
     @property
     def esm(self) -> str:
