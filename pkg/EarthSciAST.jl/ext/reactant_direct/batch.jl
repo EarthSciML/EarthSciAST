@@ -24,8 +24,8 @@
 # WHAT IT BUYS, AND WHY IT IS THE SHAPE THAT MATTERS. The single-position slice
 # is the op the post-differentiation `enzyme-hlo-opt` pass is quadratic in: its
 # `cse_slice` pattern compares slices pairwise, Enzyme's reverse of a slice is a
-# pad-and-add, and the adjoint of ReSEACT's transport half carried tens of
-# thousands of them. Every other lever against that population (the read cost
+# pad-and-add, and the adjoint of a stencil transport half carries one for
+# every cell of every neighbour read. Every other lever against that population (the read cost
 # model, the gather base budget, emitter-side CSE, pass exclusion) works on
 # reads the emitter had already decided to SHATTER; this one removes the
 # shattering, because a group's varying state leaf is a lane VECTOR and a lane
