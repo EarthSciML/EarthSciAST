@@ -506,3 +506,58 @@ func TestCouplingImportInMemoryDocumentKeepsTheCallersBase(t *testing.T) {
 		}
 	}
 }
+
+// A structurally complete `bind` that points a role at a component lacking a
+// referenced variable is reported by Validate on the SOURCE document, not only
+// at flatten, and the finding is re-pointed at the import entry and names the
+// import, role and component (esm-spec §10.10.3).
+func TestValidateReportsAMisBoundImportOnTheSourceDocument(t *testing.T) {
+	corpus, err := filepath.Abs(filepath.Join("..", "..", "..", "..", "tests", "coupling_libraries"))
+	if err != nil {
+		t.Fatalf("abs: %v", err)
+	}
+	file, err := LoadPath(filepath.Join(corpus, "import_misbind_downstream.esm"))
+	if err != nil {
+		t.Fatalf("load import_misbind_downstream.esm: %v", err)
+	}
+	result := Validate(file)
+	var found *StructuralError
+	for i := range result.StructuralErrors {
+		e := &result.StructuralErrors[i]
+		if e.Code == ErrorUnresolvedScopedRef && e.Details["coupling_import"] != nil {
+			found = e
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("no import-attributed unresolved_scoped_ref in %+v", result.StructuralErrors)
+	}
+	if found.Path != "/coupling/0" {
+		t.Errorf("path = %q, want /coupling/0", found.Path)
+	}
+	if got := found.Details["bound_component"]; got != "RothermelNoW0" {
+		t.Errorf("bound_component = %v, want RothermelNoW0", got)
+	}
+	if got := found.Details["role"]; got != "Spread" {
+		t.Errorf("role = %v, want Spread", got)
+	}
+	if result.IsValid {
+		t.Error("a mis-bound import must make the document invalid")
+	}
+
+	// A document with no recorded base does no file I/O, so it reports nothing
+	// about the import rather than resolving the ref against the working dir.
+	raw, err := os.ReadFile(filepath.Join(corpus, "import_misbind_downstream.esm"))
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	noBase, err := LoadString(string(raw))
+	if err != nil {
+		t.Fatalf("LoadString: %v", err)
+	}
+	for _, e := range Validate(noBase).StructuralErrors {
+		if e.Details["coupling_import"] != nil {
+			t.Errorf("a document with no base must not expand its imports: %+v", e)
+		}
+	}
+}

@@ -5226,7 +5226,13 @@ Two consequences of expanding inside flatten are normative:
   over the same expanded edge, that a hand-authored edge to a nonexistent variable produces. Whether
   that validation is folded into the flatten pass or run as a separate coupled-system check over the
   flattened form is a binding-implementation choice; the requirement is only that it sees the
-  expanded edges.
+  expanded edges. An implementation that also reports the mis-bind from `validate` on the **source**
+  document MUST report it at the pointer of the `coupling_import` entry (`/coupling/<i>`) rather than
+  at a pointer inside an expanded edge, because the import round-trips verbatim and the expanded edge
+  is not an entry of the document's own `coupling` array. Such a check reads the library from disk,
+  so it runs only for a document whose location the loader recorded (§4.7); a document with no
+  location of its own leaves the mis-bind to flatten rather than resolving the `ref` against the
+  process working directory.
 - **A library-edge transform's templates expand at flatten** against the bound `to` owner's
   registry (§10.4 carve-out), to an already-lowered form.
 
@@ -5236,6 +5242,16 @@ targets collide on one parameter) is neither created nor specially diagnosed by 
 handled exactly as two inline edges doing the same, and the flattening algorithm is commutative
 (libraries-spec §4.7), so no order-dependent outcome is asserted. Authors should route each role to
 its own target rather than share one.
+
+**Making an import required.** A coupling-target parameter that a library edge is meant to fill SHOULD
+be declared **without a `default`**. `default` is optional (§6.3), and a parameter with neither a
+default nor a supplied value is an error when a problem is built from the document (a run-time
+`parameter_overrides` value, §6.6.2, or an API parameter still satisfies it). So if the
+`coupling_import` that fills it is omitted — or its `bind` points the role elsewhere — the omission
+fails loudly at build instead of silently running with a placeholder value. A target that does
+carry a `default` is, by that declaration, optional: omitting its import is not an error. `validate`
+cannot reject an uncoupled default-less parameter on its own, because the value may legitimately
+arrive at run time.
 
 ### 10.11 Coupling-import diagnostics
 

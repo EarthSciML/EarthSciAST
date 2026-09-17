@@ -235,6 +235,35 @@ describe('coupling-library conformance (esm-spec §10.9–§10.11)', () => {
     const misbind = result.structural_errors.find((e) => e.code === 'unresolved_scoped_ref')
     expect(misbind).toBeDefined()
     expect(JSON.stringify(misbind?.details)).toContain('w0')
+
+    // validate() on the SOURCE document now reports it too (esm-spec §10.10.3):
+    // the import is expanded against the loader's recorded base and the finding
+    // is re-pointed at the import entry. The base a `loadPath` recorded is
+    // enough — no `basePath` option — or `validate(loadPath(p))` would resolve
+    // the ref against the working directory instead of the document's own.
+    for (const source of [validate(loadPath(p)), validate(loadPath(p), { basePath: dir })]) {
+      expect(
+        source.structural_errors.some(
+          (e) =>
+            e.code === 'unresolved_scoped_ref' && (e.details as any)?.coupling_import !== undefined,
+        ),
+      ).toBe(true)
+    }
+    const source = validate(loadPath(p), { basePath: dir })
+    const attributed = source.structural_errors.find(
+      (e) =>
+        e.code === 'unresolved_scoped_ref' && (e.details as any)?.coupling_import !== undefined,
+    )
+    expect(attributed).toBeDefined()
+    expect(attributed?.path).toBe('/coupling/0')
+    expect((attributed?.details as any)?.bound_component).toBe('RothermelNoW0')
+    expect((attributed?.details as any)?.role).toBe('Spread')
+    // Without a basePath validate() does no file I/O, so it cannot open the
+    // library and reports nothing about the import.
+    const noBase = validate(readJson(p))
+    expect(
+      noBase.structural_errors.some((e) => (e.details as any)?.coupling_import !== undefined),
+    ).toBe(false)
   })
 
   // --- Cross-kind rejection ----------------------------------------------
