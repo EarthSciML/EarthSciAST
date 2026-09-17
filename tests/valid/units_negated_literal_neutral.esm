@@ -1,0 +1,169 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "UnitsNegatedLiteralNeutral",
+    "description": "Pins esm-spec §4.8.3: a unary negation of a numeric literal counts as a literal, so it is neutral in an additive position and adopts its siblings' unit exactly as a negative number literal does.",
+    "authors": [
+      "Chris Tessum with Claude"
+    ],
+    "created": "2026-09-15T00:00:00Z",
+    "tags": [
+      "units",
+      "dimensional_analysis",
+      "literals"
+    ]
+  },
+  "models": {
+    "NegatedLiteralOffsets": {
+      "reference": {
+        "notes": "Each equation writes its offset as {\"op\": \"-\", \"args\": [literal]} rather than as a negative number literal. A binding that typed the negated literal as dimensionless would report K against dimensionless (or m against dimensionless) and reject this file."
+      },
+      "variables": {
+        "T_kelvin": {
+          "type": "parameter",
+          "units": "K",
+          "default": 298.15,
+          "description": "Temperature in Kelvin"
+        },
+        "T_celsius": {
+          "type": "unknown",
+          "units": "degC",
+          "description": "Temperature in Celsius, offset by a negated float literal"
+        },
+        "T_celsius_nested": {
+          "type": "unknown",
+          "units": "degC",
+          "description": "Temperature in Celsius less 0.15, offset by a doubly negated integer literal under subtraction"
+        },
+        "depth": {
+          "type": "parameter",
+          "units": "m",
+          "default": 2.0,
+          "description": "Depth"
+        },
+        "depth_capped": {
+          "type": "unknown",
+          "units": "m",
+          "description": "Depth capped by a doubly negated literal in min"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "T_celsius",
+          "rhs": {
+            "op": "+",
+            "args": [
+              "T_kelvin",
+              {
+                "op": "-",
+                "args": [
+                  273.15
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "T_celsius_nested",
+          "rhs": {
+            "op": "-",
+            "args": [
+              "T_kelvin",
+              {
+                "op": "-",
+                "args": [
+                  {
+                    "op": "-",
+                    "args": [
+                      273
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "depth_capped",
+          "rhs": {
+            "op": "min",
+            "args": [
+              "depth",
+              {
+                "op": "-",
+                "args": [
+                  {
+                    "op": "-",
+                    "args": [
+                      10.0
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "tolerance": {
+        "rel": 0.0,
+        "abs": 1e-09
+      },
+      "tests": [
+        {
+          "id": "room_temperature",
+          "description": "298.15 K is 25 degC; the nested integer offset gives 25.15; depth 2 m is under the 10 m cap.",
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
+          "assertions": [
+            {
+              "variable": "T_celsius",
+              "time": 0.0,
+              "expected": 25.0
+            },
+            {
+              "variable": "T_celsius_nested",
+              "time": 0.0,
+              "expected": 25.15
+            },
+            {
+              "variable": "depth_capped",
+              "time": 0.0,
+              "expected": 2.0
+            }
+          ]
+        },
+        {
+          "id": "freezing_point_and_cap",
+          "description": "273.15 K is 0 degC; depth 12 m is capped at 10 m.",
+          "parameter_overrides": {
+            "T_kelvin": 273.15,
+            "depth": 12.0
+          },
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
+          "assertions": [
+            {
+              "variable": "T_celsius",
+              "time": 0.0,
+              "expected": 0.0
+            },
+            {
+              "variable": "T_celsius_nested",
+              "time": 0.0,
+              "expected": 0.15
+            },
+            {
+              "variable": "depth_capped",
+              "time": 0.0,
+              "expected": 10.0
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

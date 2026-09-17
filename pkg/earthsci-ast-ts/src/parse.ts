@@ -21,6 +21,7 @@ import {
   checkDataSourceExtents,
   collectMountDeclaredMetaparameters,
   documentDeclaresAnExtent,
+  rejectImpureTemplateLibrary,
   rejectTemplateImportsPreV08,
   resolveTemplateMachinery,
 } from './template-imports.js'
@@ -481,6 +482,9 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
   // expression_templates, metaparameters) are rejected when the file
   // declares esm < 0.8.0 (esm-spec §9.6.5).
   rejectTemplateImportsPreV08(validationView)
+  // Top-level `expression_templates` beside a component payload is a
+  // template-library payload no component can see (esm-spec §9.7.1).
+  rejectImpureTemplateLibrary(validationView)
 
   // Step 2d: the top-level `solver` block is rejected when the file declares
   // esm < 1.1.0 (esm-spec §2.2.4). Before schema validation for the same reason
@@ -665,6 +669,20 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
     writable: true,
     configurable: true,
   })
+
+  // esm-spec §10.10 / §4.7: a relative `coupling_import` `ref` names a file
+  // relative to THIS document, not to the working directory `flatten` runs in.
+  // `flatten` never learns where the document came from, so the base is kept
+  // as a sidecar — the refs stay as authored, because the entry must round-trip
+  // verbatim (§10.10.3). Only an explicit base is recorded.
+  if (options?.basePath !== undefined) {
+    Object.defineProperty(loweredData, 'couplingImportBase', {
+      value: options.basePath,
+      enumerable: false,
+      writable: true,
+      configurable: true,
+    })
+  }
 
   // Step 5: Dimensional analysis — emit warnings but never fail the load.
   // Mirrors the Julia @warn behavior so TS callers get the same signal

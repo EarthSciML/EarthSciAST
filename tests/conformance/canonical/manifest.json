@@ -13,6 +13,7 @@
     {"id": "filter_unsupported",          "path": "filter_unsupported.json",          "tags": ["fail_closed", "filter"]},
     {"id": "integral_bounds_unsupported", "path": "integral_bounds_unsupported.json", "tags": ["fail_closed", "integral", "lower", "upper"]},
     {"id": "geometry_unsupported",        "path": "geometry_unsupported.json",        "tags": ["fail_closed", "geometry", "manifold", "distinct"]},
-    {"id": "bc_fn_supported",             "path": "bc_fn_supported.json",             "tags": ["supported", "bc", "fn", "dim"]}
+    {"id": "bc_fn_supported",             "path": "bc_fn_supported.json",             "tags": ["supported", "bc", "fn", "dim"]},
+    {"id": "const_units",                 "path": "const_units.json",                 "tags": ["supported", "const", "units"]}
   ]
 }

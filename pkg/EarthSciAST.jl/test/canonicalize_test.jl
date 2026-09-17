@@ -199,7 +199,7 @@ const ESM_Expr = EarthSciAST.ASTExpr
                     args = ESM_Expr[wire_to_expr(a) for a in node[:args]]
                     ex = OpExpr(String(node[:op]), args)
                     # Carry the emissible scalar sidecar fields (wrt/dim/fn/
-                    # name/value) so a positive fixture exercising an emissible
+                    # name/value/units) so a positive fixture exercising an emissible
                     # sidecar (e.g. `bc` with fn/dim) round-trips. Non-emissible
                     # fields stay absent here; fail-closed fixtures use the
                     # expression_from_json path above instead.
@@ -208,6 +208,7 @@ const ESM_Expr = EarthSciAST.ASTExpr
                     haskey(node, :fn) && (ex.fn = String(node[:fn]))
                     haskey(node, :name) && (ex.name = String(node[:name]))
                     haskey(node, :value) && (ex.value = node[:value])
+                    haskey(node, :units) && (ex.units = String(node[:units]))
                     return ex
                 end
             end

@@ -47,24 +47,10 @@ fn esm_with_model(model_name: &str, model: Model) -> EsmFile {
     let mut models = indexmap::IndexMap::new();
     models.insert(model_name.to_string(), model);
     EsmFile {
-        component_templates: None,
-        coordinates: None,
-        solver: None,
-        expression_templates: None,
-        metaparameters: None,
-        coupling_roles: None,
-        domain: None,
-        index_sets: None,
         esm: "0.1.0".to_string(),
         metadata: empty_metadata(),
         models: Some(models),
-        reaction_systems: None,
-        data_sources: None,
-        operators: None,
-        enums: None,
-
-        coupling: None,
-        function_tables: None,
+        ..Default::default()
     }
 }
 
@@ -195,7 +181,7 @@ fn test_exponential_decay_matches_analytical() {
         alg: Alg::Bdf,
         abstol: Some(1e-10),
         reltol: Some(1e-8),
-        maxiters: 10_000,
+        maxiters: Some(10_000),
         saveat: Some(vec![0.0, 1.0, 10.0, 100.0]),
         ..Default::default()
     };
@@ -279,7 +265,7 @@ fn test_reversible_reaction_reaches_steady_state() {
         alg: Alg::Bdf,
         abstol: Some(1e-10),
         reltol: Some(1e-8),
-        maxiters: 10_000,
+        maxiters: Some(10_000),
         saveat: Some(vec![10.0, 50.0]),
         ..Default::default()
     };
@@ -363,7 +349,7 @@ fn test_autocatalytic_conserves_mass() {
         alg: Alg::Bdf,
         abstol: Some(1e-10),
         reltol: Some(1e-8),
-        maxiters: 10_000,
+        maxiters: Some(10_000),
         saveat: Some((0..=20).map(|i| i as f64 * 0.5).collect()),
         ..Default::default()
     };
@@ -483,7 +469,7 @@ fn test_robertson_stiff_problem() {
         alg: Alg::Bdf,
         abstol: Some(1e-10),
         reltol: Some(1e-8),
-        maxiters: 100_000,
+        maxiters: Some(100_000),
         saveat: Some(vec![0.4, 4.0, 40.0, 400.0, 4000.0]),
         ..Default::default()
     };
@@ -602,7 +588,7 @@ fn test_round_trip_simple_ode_fixture() {
         alg: Alg::Bdf,
         abstol: Some(1e-10),
         reltol: Some(1e-8),
-        maxiters: 10_000,
+        maxiters: Some(10_000),
         saveat: Some(vec![0.0, 1.0, 10.0, 100.0]),
         ..Default::default()
     };
@@ -668,7 +654,7 @@ fn test_round_trip_stiff_vdp_fixture() {
         alg: Alg::Bdf,
         abstol: Some(1e-8),
         reltol: Some(1e-6),
-        maxiters: 100_000,
+        maxiters: Some(100_000),
         saveat: None,
         ..Default::default()
     };
@@ -714,7 +700,7 @@ fn test_compiled_reuse_for_parameter_sweep() {
         alg: Alg::Bdf,
         abstol: Some(1e-10),
         reltol: Some(1e-8),
-        maxiters: 10_000,
+        maxiters: Some(10_000),
         saveat: Some(vec![1.0]),
         ..Default::default()
     };
@@ -774,8 +760,8 @@ fn test_error_continuous_events_rejected() {
     let err = Compiled::from_flattened(&flat).unwrap_err();
     let msg = err.to_string();
     assert!(
-        msg.contains("continuous_events"),
-        "expected continuous_events in error, got: {msg}"
+        msg.starts_with("unsupported_construct: continuous event 'zero_crossing'"),
+        "expected the unsupported_construct refusal, got: {msg}"
     );
 }
 

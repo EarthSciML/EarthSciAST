@@ -2642,7 +2642,8 @@ func renameJoinNamesIn(expr Expression, renames map[string]string) Expression {
 //  2. Expand `coupling_import` entries, then apply the coupling rules into the
 //     per-component equation sets.
 //  3. Assemble one flat system, collect and namespace events, run the pointwise
-//     spatial lift, pass the domain through and derive the independent variables.
+//     spatial lift, resolve every right-hand-side structural `D` (§4.7.5 step
+//     3a), pass the domain through and derive the independent variables.
 //  4. Derive the canonical step-4 fields: the §6.3.1 subsets, the deferred `ic`
 //     equations, and the merged expression-template registry.
 func Flatten(file *ESMFile) (*FlattenedSystem, error) {
@@ -2689,6 +2690,10 @@ func FlattenWithOptions(file *ESMFile, opts CouplingImportOptions) (*FlattenedSy
 	if err := applyPointwiseLift(flat, coupling); err != nil {
 		return nil, err
 	}
+	// esm-libraries-spec §4.7.5 step 3a: resolve every right-hand-side structural
+	// `D` to the tendency the system defines (esm-spec §4.2). After the coupling
+	// rules and the lift, so a merged state yields its WHOLE tendency.
+	resolveRHSTimeDerivatives(flat)
 	if file.Domain != nil {
 		flat.Domain = file.Domain
 	}

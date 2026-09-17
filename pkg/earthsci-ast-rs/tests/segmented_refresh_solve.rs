@@ -499,7 +499,7 @@ fn base_opts() -> SolveOptions {
         alg: Alg::Bdf,
         abstol: Some(1e-10),
         reltol: Some(1e-8),
-        maxiters: 100_000,
+        maxiters: Some(100_000),
         saveat: None, // segmented_solve pins each segment's output node
         ..Default::default()
     }

@@ -387,7 +387,7 @@ Example: `{"op": "D", "args": ["O3"], "wrt": "t"}` represents ∂O₃/∂t.
 **A right-hand-side structural `D` is a total time derivative, resolved by substitution
 (normative).** A `D` with `wrt:"t"` (or no `wrt`) appearing in a right-hand side denotes the
 **total derivative with respect to `t`** of its operand. It is **resolved during flattening**
-(the flattening algorithm of `esm-libraries-spec.md` §4.7.5) — the resolved expression replaces
+(`esm-libraries-spec.md` §4.7.5 step 3a, which fixes where in the flattening order it runs) — the resolved expression replaces
 the `D` node in the canonical flattened form — so no evaluator ever meets one, and every
 consumer of the flattened system answers alike without knowing the rule. Resolution is defined
 by structural recursion, and by nothing else:
@@ -679,6 +679,10 @@ result[O] = reduce over C of expr
 ```
 
 evaluated with each index taking every value in its inferred (or declared) range.
+
+**Ragged ranges (normative).** A `ranges` entry MAY instead reference a declared index set, `{"from": <name>}` or `{"from": <name>, "of": [<parent symbols>]}` (RFC semiring-faq-unified-ir §5.2). When the named set is `kind: "ragged"`, its `offsets` factor gives the per-parent LENGTH `offsets[i]` — not a cumulative offset — and its `values` factor is a PADDED `[parent, max length]` array whose row `i` holds parent `i`'s members in positions `1..offsets[i]`; entries past `offsets[i]` are padding and are never read. The range symbol `k` of `{"from": <ragged set>, "of": ["i"]}` binds the **position** `k ∈ 1..offsets[i]`, never a member. A body that needs the member gathers it explicitly — `index(values, i, k)`, e.g. `index(dvEdge, index(edgesOnCell, i, k))` for MPAS. A `faq` whose range iterates a ragged set but whose body (`expr` and `filter`) never reads that set's `values` array — by its name, or by a scoped reference ending in it — MUST be rejected by `validate()` with `ragged_values_not_gathered` (§9.6.6): such a body reads positions where members were meant, which yields a plausible wrong number rather than a failure. The rule is not decided for a body that still holds an `apply_expression_template` reference (§9.6.4), whose expansion may perform the gather, nor for a set the document does not declare itself (a §9.7.10 agnostic leaf, whose registry arrives by injection).
+
+**The one exception is value invention.** In a value-invention `faq` — `distinct: true`, a `skolem` `key`, or a `skolem` / `rank` / `distinct` / `argmin` / `argmax` body (RFC semiring-faq-unified-ir §5.5) — a range over a ragged set binds the member `values[i, k]` itself, so a symbol over `face_vertices` binds the vertex ids of its parent face. No gather is authored there and `ragged_values_not_gathered` does not apply. Positive control: `tests/valid/faq/ragged_member_gather.esm`; rejection: `tests/invalid/faq/ragged_values_not_gathered.esm`.
 
 **Example — matrix multiply `C = A · B`:**
 
@@ -1111,6 +1115,8 @@ Non-affine index expressions are legal; it is the author's responsibility to ens
 
 A stencil gather of a **const array** (a pre-computed factor: Fornberg weights, mesh connectivity, or a per-cell metric / geometry array) at an out-of-range index resolves per a declared **per-dimension boundary policy** — `periodic` (wrap, `mod1`), `clamp` (edge-extend), or the `error` default (raise `E_TREEWALK_CONSTARRAY_OOB`). This mirrors the grid periodicity honored by a state-variable gather and is normative across bindings; see `CONFORMANCE_SPEC.md` §5.5.5.
 
+The `index` base is a const array when it is **either** a `const` node written inline (`index({"op": "const", "value": [...]}, k)`) **or** a variable whose defining equation is a `const` node. The two spellings are the same data and gather identically: an inline literal has no declared boundary policy, so an out-of-range index on it raises `E_TREEWALK_CONSTARRAY_OOB` and never reads the zero ghost. Any other array-valued base — a state, an observed computed from other quantities, a `reshape` or `broadcast` result — is not a const array. Each index is checked against **its own** dimension, so `index(A, 4, 1)` on a 3×2 array is out of range even though a flattened offset for it would fall inside the array.
+
 #### 4.3.4 `broadcast`
 
 `broadcast` applies a scalar operator element-wise to one or more broadcast-compatible arrays. The operator is named in the `fn` field; the operands are in `args`.
@@ -1144,6 +1150,8 @@ Broadcasts do not fuse: a nested expression of broadcasts decomposes into primit
 2. **Anonymous operands align positionally.** An operand with no declared index sets — the result of a `reshape`, `transpose`, `concat`, or `makearray`, a `const` literal array, or a variable whose shape was never declared — names no axes, so there is nothing to align by. Such operands broadcast **positionally**, left-aligned, with the lower-rank operand padded on the **trailing** axes with singletons (the `SymbolicUtils.jl` / Julia convention, not the NumPy one): a `(3,)` operand against a `(1,3)` operand pads to `(3,1)` and the pair broadcasts to `(3,3)`, so `broadcast(+, a, reshape(b,[1,3]))[i,j] = a[i] + b[j]`. Two operands whose extents disagree on an axis where neither is 1 are incompatible.
 
 An expression mixing the two regimes aligns each operand under its own: a named operand is placed by name, an anonymous one positionally.
+
+**A scalar declares no index sets**, so it is a subset of every result's and replicates along all of them. That holds for a whole right-hand side too: an equation defining a shaped variable whose right-hand side is a scalar — a literal, a scalar parameter, or an expression that evaluates to a scalar, such as an `ifelse` whose predicate is constant and whose taken branch is scalar — gives that value to every element of the variable's declared shape. A binding MUST NOT let the value's rank replace the declared shape: the variable still has every one of its elements, to readers and to test assertions alike.
 
 These rules apply only where element correspondence is what the expression *means* — that is, under the elementwise operators. Every other op consumes its operands whole under its own contract: `faq` and `makearray` name their axes, `index` gathers, the shape ops of Section 4.3.5 restructure, and the relational and geometry ops (Section 4.2) may return a result of an entirely unrelated shape.
 
@@ -1477,13 +1485,14 @@ atom     := '1' | symbol | '(' unit ')'
 
 | Op | Rule |
 |---|---|
-| `+` `-` (n-ary) | All operands MUST share a dimension **and a scale**; the result is that unit. `x [m] + y [km]` is an ERROR — both are lengths, but the numbers being added are in different units. A bare numeric literal is neutral in this position and adopts its siblings' dimension and scale. |
+| `+` `-` (n-ary) | All operands MUST share a dimension **and a scale**; the result is that unit. `x [m] + y [km]` is an ERROR — both are lengths, but the numbers being added are in different units. Only operands whose unit is determinable are compared. **An UNDETERMINABLE operand (§4.8.4) is skipped, and the result is the unit of the determinable ones:** `x [m] + 0.5 * y [m]` has unit `m` although `0.5 * y` is undeterminable, so equating it with a quantity in `kg` is an ERROR. A bare numeric literal is undeterminable, so it is neutral in this position and adopts its siblings' dimension and scale. **A unary `+` or `-` carries its operand's unit unchanged:** `+(x)` has the unit of `x`, and a negated literal (`{"op": "-", "args": [273.15]}`, negated any number of times) is as neutral as the literal, so `T_k + -(273.15)` adopts the unit of `T_k` exactly as `T_k + -273.15` does. **If NO operand is determinable, the result is UNDETERMINABLE (§4.8.4), not dimensionless:** `1 + 2`, `-(1) + -(2)` and `+(2)` all have an undeterminable unit, so `L [m] = 1 + 2` is accepted with its check skipped. |
 | `*` `/` | Dimensions multiply / divide, and so do scales. |
 | `^` | The exponent MUST be dimensionless. With a **literal integer or rational** exponent the base dimension and scale are raised to it (`L^2` with `L` in `km` is `km^2`). With a **symbolic** exponent the result is UNDETERMINABLE (§4.8.4) — not dimensionless. |
 | `sqrt` | **HALVES** every exponent of the operand's dimension and scale — `sqrt(x)` with `x` in `m^2/s^2` is `m/s`. `sqrt` is NOT a transcendental and MUST NOT be given the dimensionless-argument rule; a checker that lists it with `log`/`exp` rejects the ordinary spelling of a wave speed or an RMS. |
 | `D` (`wrt: t`) | `d(X)/dt` has dimension `[X]/[t]` and scale `scale(X)/scale(t)`. |
-| `min` `max` `abs` `ifelse` `Pre` | PRESERVE the operand unit (all value operands must agree in dimension and scale); they are not dimensionless. |
-| comparisons, `and` `or` `not` | Operands must be mutually commensurate — same dimension and same scale; the result is dimensionless (a boolean). |
+| `min` `max` `abs` `ifelse` `Pre` | PRESERVE the operand unit (all value operands must agree in dimension and scale); they are not dimensionless. `min` and `max` treat undeterminable operands exactly as `+` `-` do: `min(x [m], 0.5 * y [m])` has unit `m`, and `min(1, 2)` is undeterminable. `ifelse(cond, a, b)` applies the same rule to its two branches: when both are determinable they must agree, when only one is the result is its unit (`ifelse(c > 0, x [m], 0.5 * y [m])` has unit `m`, whichever branch is the determinable one), and when neither is (`ifelse(c > 0, 1, 2)`) the result is undeterminable. The condition is not part of the result unit and need not be dimensionless, but it is still checked: `ifelse(x [m] > z [kg], a, b)` is an ERROR. |
+| comparisons `>` `<` `>=` `<=` `==` `!=` | The operands whose unit is determinable MUST share a dimension and a scale, and an undeterminable operand is skipped exactly as in `+` `-`: `x [m] > z [kg]` is an ERROR, while `x [m] > 0` and `x [m] > 0.5 * y [m]` have nothing that can disagree. The result is dimensionless (a boolean) whatever the operands are, including when none of them is determinable (`1 > 2`). |
+| `and` `or` `not` | The result is dimensionless (a boolean). The operands carry no unit requirement of their own — `and(x [m], z [kg])` is not an error — but each operand is checked for the findings inside it, so `not(x [m] > z [kg])` and `and(x [m] > z [kg], c > 0)` are ERRORS. |
 | **Circular trig** — `sin` `cos` `tan` | The argument MUST be an **angle** (`rad`, or `deg`, which carries the `rad` dimension) **or dimensionless**. The result is dimensionless. |
 | **Inverse circular trig** — `asin` `acos` `atan` | The argument MUST be **dimensionless**. The result is an **angle** (`rad`). |
 | `atan2` (2-ary) | The two operands MUST be **COMMENSURATE with each other** — same dimension and same scale, but ANY dimension, not necessarily dimensionless. The result is an **angle** (`rad`). `atan2` is the ONE inverse-trig op that does not take a dimensionless argument: it takes a *ratio not yet formed*, so `atan2(dy_m, dx_m)` is the ordinary spelling of a bearing and MUST be admitted. A checker that gives `atan2` the `asin`/`acos`/`atan` dimensionless-argument rule rejects it. `atan2(dy_m, dx_s)` remains an ERROR — the operands are not commensurate. |
@@ -1504,7 +1513,7 @@ Three outcomes, and only three. The distinction that matters is between *"the fi
 |---|---|---|---|
 | **Provable dimensional mismatch** | **hard error** (`is_valid: false`) | `unit_dimension_mismatch` (emitted as `unit_inconsistency` by the structural layer) | Every operand dimension is known and the §4.8.3 rule is violated: adding metres to kilograms, adding metres to kilometres or equating `m/s` with `mi/h` (a scale disagreement), a derivative whose two sides cannot be reconciled by any time unit, a transcendental with a dimensional argument, an unknown whose declared units disagree with its defining equation, a reaction rate that does not match its stoichiometric order (§7.4). |
 | **Unresolvable unit string** | **hard error** (`is_valid: false`) | `unit_parse_error` | The declared string does not parse under §4.8.2, or names a symbol absent from the §4.8.1 registry — `"not_a_unit"`, `"1/time"` (`time` is a DIMENSION name, not a unit), `"m/s2"`. This is a defect in the file, not a limit of the checker. |
-| **Undeterminable dimension** | **warning**; report `unknown` and SKIP the enclosing check | — | The checker genuinely cannot compute a dimension: a **symbolic exponent** (`k * x^alpha` — a fitted reaction order is ordinary chemistry), an **op with no dimensional rule**, or an operand naming an **undeclared or out-of-scope** variable. |
+| **Undeterminable dimension** | **warning**; report `unknown` and SKIP the enclosing check | — | The checker genuinely cannot compute a dimension: a **symbolic exponent** (`k * x^alpha` — a fitted reaction order is ordinary chemistry), an **op with no dimensional rule**, an operand naming an **undeclared or out-of-scope** variable, a **bare numeric literal** or a product with one as a factor (`0.5 * y`), a **`+` `-` `min` `max` none of whose operands is determinable** (`1 + 2`, `+(2)`), or an **`ifelse` neither of whose branches is** (`ifelse(c > 0, 1, 2)`, §4.8.3). A sum or `ifelse` with at least one determinable operand or branch is NOT undeterminable: it has that operand's unit (§4.8.3). |
 
 Two consequences follow, and both have been violated in this repository:
 
@@ -1793,7 +1802,7 @@ Continuous events fire when a **condition expression crosses zero**. The runtime
 | `conditions` | ✓ | Array of expressions. Event fires when any expression crosses zero. |
 | `affects` | ✓ | Array of `{lhs, rhs}` affect equations. Empty array `[]` for pure detection (no state change). |
 | `affect_neg` | | Separate affects for negative-going zero crossings. If `null` or absent, `affects` is used for both directions. |
-| `root_find` | | Root-finding direction: `"left"` (default), `"right"`, or `"all"`. Maps to DiffEq `rootfind` option. |
+| `root_find` | | Which side of the root the event lands on: `"left"` (default) or `"right"`, mapped to DiffEq's `rootfind` option (`LeftRootFind` / `RightRootFind`). |
 | `reinitialize` | | Boolean. Whether to reinitialize the system after the event (default: `false`). |
 | `description` | | Human-readable description |
 
@@ -2266,6 +2275,14 @@ convention `from_file` reference data follows (§6.6.5 convention 3). A
 **scalar** on a shaped variable keeps its broadcast meaning — the one value
 applies to every element — so nothing about existing documents changes.
 
+Inline array data is **only** a shaped variable's value. On a variable that
+declares no `shape` — omitted, `null`, or empty — there is nothing for the array
+to fill and no scalar reading of it, so such a `default` MUST be rejected at load
+with the structural diagnostic `array_default_without_shape`, reported at the
+offending `default`. The rule covers both declared types and the variables of
+every inline subsystem. A binding MUST NOT resolve it by dropping the variable
+from scope or by substituting a number.
+
 A shaped variable's value is **build-time constant data** — the whole union, the
 broadcast scalar included: it is fixed at load, so a binding MAY bind it through
 whatever channel it already uses for constant arrays rather than through its
@@ -2339,6 +2356,33 @@ arrayed observed materializes into a buffer its consumers index. Both are
 observed. A binding that needs the strict `y ~ f(…)` form — for inlining
 specifically — recovers it as a **narrower** set alongside `observed_unknowns`
 (Python spells it `inlined_unknowns`); it does not narrow the partition.
+
+**Running a bare-index definition.** Classification credits every indexed LHS;
+*running* one also needs its index range. The shelled spelling
+`faq{k…}(index(V, k…)) ~ rhs` carries that range in its `ranges`. A bare
+`index(V, k…) ~ rhs` binds none of its subscripts, so a binding that simulates
+it takes the range from the right-hand side, and runs the definition exactly
+when all three hold:
+
+1. the left side is the DIRECT gather `index(V, k…)` — `V` is named there, not
+   reached through a further `index`;
+2. every subscript is a plain symbol;
+3. `rhs` is a `faq` whose `output_idx` names those symbols, in the same order;
+4. if `V` declares a `shape`, the number of subscripts equals its rank.
+
+That `rhs` already denotes the whole array, so the equation means `V ~ rhs`.
+`V` need not declare a `shape`: the `faq` sizes it.
+
+Every other bare-index definition of an observed MUST be refused with
+`indexed_definition_unsupported_form`, naming `V`, rather than run. That covers
+a right-hand side with no `faq` (`w[k] ~ 5.0`), an offset or other non-identity
+subscript (`y[i+1] ~ …`), subscripts the `faq` does not bind in order, a nested
+gather (`index(index(V, j), k)`, which addresses a cell of a cell), and a rank
+disagreement. In each of those nothing binds the range, and filling the array
+from the declared shape, or writing a shifted window, would be a guess this
+rule does not make. Value-invention outputs (a `skolem`, `distinct` or `rank`
+producer, or an arg-witness reducer) are materialized by their own engine and
+are outside this rule. CONFORMANCE_SPEC.md §5.36.2 gates both halves.
 
 **Parameters.** These four sets **partition** the parameters:
 
@@ -2613,7 +2657,7 @@ Each assertion is a per-(variable, time) check against a scalar expected value:
 
 | Field | Required | Description |
 |---|---|---|
-| `variable` | ✓ | Variable or species name. Local names (e.g., `"O3"`) or scoped references into subsystems (e.g., `"inner.X"`) are both allowed. |
+| `variable` | ✓ | Variable or species name. Local names (e.g., `"O3"`) or scoped references (e.g., `"inner.X"`) are both allowed. A scoped reference resolves by the rule the component's own equations use: a dotted name whose head is a subsystem key of the asserting component is relative to it (`inner.X` there is `<component>.inner.X`), and any other dotted name is document-absolute (§4.6). The assertion then reads the component that owns the name — its trajectory row, its field, and the declared shape a `coords` map is checked against — and never another component's, even when only that other component's same-named field was materialized. |
 | `time` | ✓ | Simulation time at which to evaluate the assertion; must lie in `[time_span.start, time_span.end]`. |
 | `expected` | ✓ | Expected scalar value (compared within `tolerance`). |
 | `tolerance` | | Per-assertion tolerance override. |
@@ -4398,11 +4442,13 @@ Bindings MUST emit the following stable diagnostic codes (cross-language uniform
 | `derived_index_set_unmaterialized` | An expression ranges over a `kind: "derived"` index set whose producer could not be materialized at build — a `distinct` producer whose key column is not a constant factor (§4.2), or a producer no stage evaluated. Raised when the model is built for evaluation, naming the index set and its `from_faq` producer. The evaluator MUST NOT contract the range as empty: an empty range folds to the semiring's additive identity, and a `0` indistinguishable from a real count is exactly the silent wrong answer this code exists to prevent. An `intersect_polygon` clip that evaluates to an empty (disjoint) ring is materialized, not this condition. |
 | `unlowered_operator` | A rewrite-target op (§4.2) reached evaluation/compilation without being lowered — no rule eliminated it. Fires before evaluation, not necessarily at load (loading is permissive). One uniform code superseding the former per-language spatial-op errors (`E_TREEWALK_UNREACHABLE_SPATIAL_OP` / `UnreachableSpatialOperatorError` / `UnsupportedDimensionalityError`). |
 | `unevaluable_operator` | An op that IS in the evaluable-core set (§4.2) reached an evaluator that has no evaluation rule for it. The complement of `unlowered_operator`, and the two are distinguished by which side of §4.2 the op falls on: `unlowered_operator` means the op is OUTSIDE evaluable-core and no rewrite rule eliminated it (the document is under-lowered), whereas `unevaluable_operator` means the op is INSIDE evaluable-core but *this* evaluator cannot produce a value for it — because an earlier pipeline stage (value invention, or a lowering pass) should have eliminated it, or because the document was built for a different runtime (a binding may legitimately offer more than one evaluator, e.g. a scalar ODE interpreter alongside a whole-array one, with different rule sets). The check MUST precede evaluation: the evaluator walks the whole expression (or, where it has a build step, every expression it builds) and refuses up front, so no part of an expression carrying such an op is evaluated — an op in the untaken branch of an `ifelse` is refused too. Raising only when evaluation happens to reach the node does not satisfy this. The diagnostic MUST name the offending op, and the evaluator MUST NOT evaluate the op to a sentinel value (NaN, zero, or any other number): a sentinel is indistinguishable from a legitimate numerical result and would propagate into the solution. Binding-local spellings of this condition (`E_TREEWALK_UNSUPPORTED_OP`, `unsupported_operator`, an uncoded interpreter error) are superseded by this code; the shared fixture is `tests/conformance/unevaluable_operator/`. |
-| `unsupported_construct` | A model construct reached an evaluator that cannot run it: a **discrete event** (`discrete_events`), or an **implicit equation** — one whose LHS is an expression rather than an unknown (bare or indexed), a time derivative of one, or `ic` of one, and so constrains its operands without defining any of them. Fires at BUILD, before evaluation, and MUST name the construct and the evaluator. It is reported rather than skipped: an evaluator that runs the model without the event, or without solving the residual, reports the initial value as its answer. An evaluator that does run the construct (e.g. a ModelingToolkit export) never raises it. |
+| `unsupported_construct` | A model construct reached an evaluator that cannot run it: a **continuous event** (`continuous_events`), a **discrete event** (`discrete_events`), or an **implicit equation** — one whose LHS is an expression rather than an unknown (bare or indexed), a time derivative of one, or `ic` of one, and so constrains its operands without defining any of them. Fires at BUILD, before evaluation, and MUST name the construct and the evaluator. It is reported rather than skipped: an evaluator that runs the model without the event, or without solving the residual, reports an answer the document does not describe. An evaluator that does run the construct (e.g. a ModelingToolkit export) never raises it. |
+| `indexed_definition_unsupported_form` | A bare-index definition of an observed, `index(V, k…) ~ rhs`, is not the runnable form of §6.3.1: `rhs` is not a `faq` whose `output_idx` names the subscripts in order, a subscript is not a plain symbol, the gather is nested rather than naming `V` directly, or the subscript count disagrees with `V`'s declared rank. Raised when the model is built for simulation, naming `V`; running it would fill the array from a range nothing binds. |
 | `template_import_version_too_old` | File declares `esm` < 0.8.0 but carries `expression_template_imports`, top-level `expression_templates`, or `metaparameters` (§9.6.5). |
 | `template_import_unresolved` | An import `ref` failed to load or parse (reports path/URL and cause) (§9.7.2). |
 | `template_import_not_library` | Import target is not a pure template-library file (§9.7.1). |
 | `subsystem_ref_is_template_library` | A §4.7 subsystem `ref` targets a template-library file. |
+| `template_library_illegal_payload` | A document carries top-level `expression_templates` beside `models`, `reaction_systems`, `data_sources`, `coupling`, or `domain` (§9.7.1). Rewrite rules are component-local (§9.6.3 constraint 4), so the block would be visible to no component; loading MUST fail rather than leave the templates silently inert. The message MUST name the offending keys. The import-edge form of the same purity rule is `template_import_not_library`. |
 | `template_inject_target_unknown` | A `CouplingEntry.expression_template_imports` key (§9.7.10) names no system referenced by that entry. |
 | `template_inject_target_not_component` | A coupling-entry injection key (§9.7.10) resolves to something that is neither a model nor a reaction system. |
 | `subsystem_index_set_conflict` | A §4.7 ref mount's merged top-level `index_sets` name collides with a non-deep-equal definition in the importing document's registry — at **either** mount form, a `subsystems.<k>` ref or a top-level `models.<k>` ref (§4.7 "Two mount forms, one mechanism" / "Index-set merge"; the subsystem-edge mirror of `template_import_index_set_conflict`). The message MUST name both contributors, both definitions, and the `index_set_rename` remedy. |
@@ -4423,6 +4469,7 @@ Bindings MUST emit the following stable diagnostic codes (cross-language uniform
 | `metaparameter_name_conflict` | A metaparameter name collides with a visible variable/parameter/species/index-set name, or with a loop symbol (§9.7.6). |
 | `makearray_region_inverted` | A `makearray` region bound pair on the expanded, metaparameter-folded form has `stop < start − 1` (§4.3.2). The empty spelling `stop == start − 1` is legal and contributes no elements; anything further inverted is rejected — typically a §9.6.8 interior region instantiated below the scheme’s minimum extent. Bounds still carrying open metaparameter expressions — a library body on a §9.6.4-rule-5 generic load — are not checked until they fold at a binding site (§4.3.2). |
 | `invalid_broadcast_fn` | A `broadcast` node's `fn` is absent, does not name a scalar operator, or is applied to an argument count that operator's §4.2 arity does not admit (§4.3.4). The value analogue of `unknown_closed_function`: `broadcast` is the one op whose OPERATOR is carried as data, so no `op`-keyed check reaches it, and an unchecked `fn` is discarded silently rather than failing. Loading MUST fail. |
+| `ragged_values_not_gathered` | A `faq` that is not a value-invention node ranges over a `kind: "ragged"` index set, but its body (`expr` / `filter`) never reads that set's `values` array (§4.3.1 "Ragged ranges"). The range binds the position `k ∈ 1..offsets[parent]`, not a member, so the body reads positions where members were meant. Reported by `validate()` in every binding at the containing expression field. Not decided for a body holding an `apply_expression_template` reference, nor for a set the document does not declare. |
 | `geometry_manifold_invalid` | A geometry-kernel node's `manifold` is not an admissible literal (`planar`/`spherical`/`geodesic`) on the expanded-equivalent form — the enforcement for the scalar-field substitution sites of §9.6.1 (the schema admits arbitrary strings there so template bodies may carry parameter names). Discharged per-instantiation, memoized (§9.6.9); the diagnostic reports (call-site path, template name, intra-body path). |
 | `template_constraint_unknown_index_set` | A `where` `shape` constraint (§9.6.1) names an index set the consuming document's merged `index_sets` registry (§9.7.5) does not declare. Raised at rule registration in the consuming component — a loud typo failure, mirroring `template_import_unknown_name`. A constrained rule that merely never fires is NOT an error. |
 
@@ -4593,7 +4640,7 @@ This section makes `expression_templates` shareable across files and components,
 
 #### 9.7.1 Template-library files
 
-A **template-library file** is a valid ESM document (`esm`, `metadata`) whose payload is top-level `expression_templates` (required, non-empty), plus optionally top-level `index_sets`, `metaparameters` (§9.7.6), and `expression_template_imports` (libraries may layer on other libraries). It MUST NOT declare `models`, `reaction_systems`, `data_sources`, `coupling`, or `domain`. Purity keeps the two reference mechanisms disjoint: a §4.7 subsystem file is never importable as a library (`template_import_not_library`), and a library file is never includable as a subsystem (`subsystem_ref_is_template_library`). This file kind is also the one that selects the **generic** load mode of §9.6.4 rule 5: a library loaded as the root with no loader-API metaparameter bindings (an empty binding set and an absent one being the same signal — §9.6.4 rule 5) keeps its metaparameters open and its structural integer sites symbolic, and round-trips to itself; loaded through an import edge, or with a non-empty binding set, it instantiates and folds like any other document.
+A **template-library file** is a valid ESM document (`esm`, `metadata`) whose payload is top-level `expression_templates` (required, non-empty), plus optionally top-level `index_sets`, `metaparameters` (§9.7.6), and `expression_template_imports` (libraries may layer on other libraries). It MUST NOT declare `models`, `reaction_systems`, `data_sources`, `coupling`, or `domain`; a document that carries top-level `expression_templates` beside any of these is rejected at load with `template_library_illegal_payload` — the block would be visible to no component (§9.6.3 constraint 4), so it is refused rather than silently ignored. Purity keeps the two reference mechanisms disjoint: a §4.7 subsystem file is never importable as a library (`template_import_not_library`), and a library file is never includable as a subsystem (`subsystem_ref_is_template_library`). This file kind is also the one that selects the **generic** load mode of §9.6.4 rule 5: a library loaded as the root with no loader-API metaparameter bindings (an empty binding set and an absent one being the same signal — §9.6.4 rule 5) keeps its metaparameters open and its structural integer sites symbolic, and round-trips to itself; loaded through an import edge, or with a non-empty binding set, it instantiates and folds like any other document.
 
 #### 9.7.2 The `expression_template_imports` field
 
@@ -4687,7 +4734,7 @@ The conformance fixture `tests/conformance/expression_templates/import_smoke/` i
 
 #### 9.7.9 Diagnostics
 
-The §9.7 diagnostic codes are listed in the §9.6.6 table (`template_import_*` — including the §9.7.7 `template_import_rename_*` / `template_import_rebind_*` codes — `template_body_expansion_too_deep`, `metaparameter_*`, `subsystem_ref_is_template_library`).
+The §9.7 diagnostic codes are listed in the §9.6.6 table (`template_import_*` — including the §9.7.7 `template_import_rename_*` / `template_import_rebind_*` codes — `template_body_expansion_too_deep`, `metaparameter_*`, `subsystem_ref_is_template_library`, `template_library_illegal_payload`).
 
 #### 9.7.10 Scope-directed template injection
 
@@ -5079,6 +5126,17 @@ the same per-binding capability rules as a template import; a `ref` that fails t
 `coupling_import_unresolved`, and a `ref` that targets a document without top-level `coupling_roles`
 is `coupling_import_not_library`.
 
+**Which directory a relative `ref` is relative to.** §4.7 resolves a relative path "relative to the
+directory of the referencing file", and the referencing file is the importing document — not the
+process working directory, and not whatever directory flatten happens to be handed. A document the
+loader read from a known location (a path load, or a string/in-memory load the caller gave a base
+for) therefore resolves its imports against THAT location, whatever base the flatten call passes.
+A document with no location of its own — built in memory, or parsed from text with no base — has no
+referencing directory, and only then does the base supplied at flatten apply; with neither, the ref
+is relative to the working directory. The authored `ref` is never rewritten by this: §10.10.3
+requires the entry to round-trip verbatim, so the resolution base is loader state kept beside the
+document, never a wire field.
+
 #### 10.10.1 Binding — total and checked by name
 
 For a `coupling_import` referencing a library that declares roles `R₁ … Rₙ`, binding is a **total,
@@ -5168,7 +5226,13 @@ Two consequences of expanding inside flatten are normative:
   over the same expanded edge, that a hand-authored edge to a nonexistent variable produces. Whether
   that validation is folded into the flatten pass or run as a separate coupled-system check over the
   flattened form is a binding-implementation choice; the requirement is only that it sees the
-  expanded edges.
+  expanded edges. An implementation that also reports the mis-bind from `validate` on the **source**
+  document MUST report it at the pointer of the `coupling_import` entry (`/coupling/<i>`) rather than
+  at a pointer inside an expanded edge, because the import round-trips verbatim and the expanded edge
+  is not an entry of the document's own `coupling` array. Such a check reads the library from disk,
+  so it runs only for a document whose location the loader recorded (§4.7); a document with no
+  location of its own leaves the mis-bind to flatten rather than resolving the `ref` against the
+  process working directory.
 - **A library-edge transform's templates expand at flatten** against the bound `to` owner's
   registry (§10.4 carve-out), to an already-lowered form.
 
@@ -5178,6 +5242,16 @@ targets collide on one parameter) is neither created nor specially diagnosed by 
 handled exactly as two inline edges doing the same, and the flattening algorithm is commutative
 (libraries-spec §4.7), so no order-dependent outcome is asserted. Authors should route each role to
 its own target rather than share one.
+
+**Making an import required.** A coupling-target parameter that a library edge is meant to fill SHOULD
+be declared **without a `default`**. `default` is optional (§6.3), and a parameter with neither a
+default nor a supplied value is an error when a problem is built from the document (a run-time
+`parameter_overrides` value, §6.6.2, or an API parameter still satisfies it). So if the
+`coupling_import` that fills it is omitted — or its `bind` points the role elsewhere — the omission
+fails loudly at build instead of silently running with a placeholder value. A target that does
+carry a `default` is, by that declaration, optional: omitting its import is not an error. `validate`
+cannot reject an uncoupled default-less parameter on its own, because the value may legitimately
+arrive at run time.
 
 ### 10.11 Coupling-import diagnostics
 

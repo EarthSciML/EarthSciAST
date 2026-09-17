@@ -89,24 +89,10 @@ fn model_only_subset(file: &EsmFile, model_key: &str) -> EsmFile {
         models.insert(model_key.to_string(), m.clone());
     }
     EsmFile {
-        component_templates: None,
-        coordinates: None,
-        solver: None,
-        expression_templates: None,
-        metaparameters: None,
-        coupling_roles: None,
-        domain: None,
-        index_sets: None,
         esm: file.esm.clone(),
         metadata: empty_metadata(),
         models: Some(models),
-        reaction_systems: None,
-        data_sources: None,
-        operators: None,
-        enums: None,
-
-        coupling: None,
-        function_tables: None,
+        ..Default::default()
     }
 }
 
@@ -118,24 +104,10 @@ fn reaction_system_only_subset(file: &EsmFile, rs_key: &str) -> EsmFile {
         rs.insert(rs_key.to_string(), r.clone());
     }
     EsmFile {
-        component_templates: None,
-        coordinates: None,
-        solver: None,
-        expression_templates: None,
-        metaparameters: None,
-        coupling_roles: None,
-        domain: None,
-        index_sets: None,
         esm: file.esm.clone(),
         metadata: empty_metadata(),
-        models: None,
         reaction_systems: Some(rs),
-        data_sources: None,
-        operators: None,
-        enums: None,
-
-        coupling: None,
-        function_tables: None,
+        ..Default::default()
     }
 }
 
@@ -196,7 +168,7 @@ fn execute_component(
             alg: solver,
             abstol: Some(1e-15),
             reltol: Some(1e-10),
-            maxiters: 1_000_000,
+            maxiters: Some(1_000_000),
             saveat: Some(sample_times.clone()),
             ..Default::default()
         };

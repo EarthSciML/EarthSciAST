@@ -284,6 +284,10 @@ fn test_mathematical_correctness_round_trip() {
             "mathematical_correctness",
             include_str!("../../../tests/validation/mathematical_correctness.esm"),
         ),
+        (
+            "elastic_collision",
+            include_str!("../../../tests/validation/elastic_collision.esm"),
+        ),
     ];
 
     for (name, fixture) in fixtures {

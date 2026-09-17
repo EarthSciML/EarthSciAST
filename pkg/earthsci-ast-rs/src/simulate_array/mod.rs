@@ -82,6 +82,7 @@ pub use compile::{file_has_array_ops, file_has_spatial_model, run_value_inventio
 // two routes cannot disagree about which names a document declares.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use compile::check_free_variables;
+pub(crate) use compile::{model_tree_any, parse_subsystem_model};
 pub(crate) use eval::eval_observed_recurrence;
 pub use eval::{
     eval_expression, eval_expression_with_extents, eval_expression_with_extents_and_consts,
@@ -358,7 +359,16 @@ pub struct RhsStats {
 #[derive(Debug, Clone)]
 enum AlgebraicRule {
     /// `var := body` — pure scalar algebraic.
-    Scalar { var: String, body: Rc<Expr> },
+    ///
+    /// `declared_shape` is the defined variable's declared extents, when it
+    /// declares a shape that resolves to static sizes. A body that evaluates
+    /// to a scalar is broadcast over it (esm-spec §4.3.4), so the variable
+    /// keeps its declared rank however the value came out.
+    Scalar {
+        var: String,
+        body: Rc<Expr>,
+        declared_shape: Option<Vec<usize>>,
+    },
     /// `var[i...] := body` — array algebraic defined via a faq over
     /// the full shape of `var`.
     ArrayLoop {
@@ -925,6 +935,10 @@ fn empty_declared_names() -> &'static HashSet<String> {
     EMPTY.get_or_init(HashSet::new)
 }
 
+/// The name `E_TREEWALK_CONSTARRAY_OOB` reports for a `const` literal written
+/// inline as an `index` base, which has no variable name of its own.
+pub(crate) const INLINE_CONST_NAME: &str = "inline const";
+
 /// Which arrays in an evaluation are CONST-ARRAY factors, and each one's
 /// declared per-dimension out-of-range boundary policy
 /// (CONFORMANCE_SPEC §5.5.5 / ess-gj4).
@@ -977,6 +991,21 @@ impl ConstArrayScope {
     /// Is `name` a const-array factor here?
     pub fn is_const(&self, name: &str) -> bool {
         self.names.contains(name)
+    }
+
+    /// Is `base` a `const` literal written inline as an `index` base? It is a
+    /// const array in its own right (esm-spec §4.3.3), with no declared policy.
+    pub fn is_inline_const(base: &Expr) -> bool {
+        matches!(base, Expr::Operator(n) if n.op == "const")
+    }
+
+    /// Is an `index` over `base` a const-array gather: a named factor in this
+    /// scope, or a `const` literal written inline?
+    pub fn is_const_base(&self, base: &Expr) -> bool {
+        match base {
+            Expr::Variable(v) => self.is_const(v),
+            other => Self::is_inline_const(other),
+        }
     }
 
     /// `name`'s declared policy for dimension `d`, defaulting to

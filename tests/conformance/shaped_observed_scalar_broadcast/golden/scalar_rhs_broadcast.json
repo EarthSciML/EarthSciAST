@@ -1,0 +1,83 @@
+{
+    "fixture": "scalar_rhs_broadcast",
+    "assertions": [
+        {
+            "test_id": "scalar_rhs_broadcasts",
+            "reduce": null,
+            "actual": 1.5,
+            "assertion_idx": 1,
+            "variable": "literal"
+        },
+        {
+            "test_id": "scalar_rhs_broadcasts",
+            "reduce": null,
+            "actual": 1.5,
+            "assertion_idx": 2,
+            "variable": "literal"
+        },
+        {
+            "test_id": "scalar_rhs_broadcasts",
+            "reduce": null,
+            "actual": 2.5,
+            "assertion_idx": 3,
+            "variable": "from_param"
+        },
+        {
+            "test_id": "scalar_rhs_broadcasts",
+            "reduce": null,
+            "actual": -4.0,
+            "assertion_idx": 4,
+            "variable": "folded"
+        },
+        {
+            "test_id": "scalar_rhs_broadcasts",
+            "reduce": "min",
+            "actual": -4.0,
+            "assertion_idx": 5,
+            "variable": "folded"
+        },
+        {
+            "test_id": "scalar_rhs_broadcasts",
+            "reduce": "max",
+            "actual": -4.0,
+            "assertion_idx": 6,
+            "variable": "folded"
+        },
+        {
+            "test_id": "scalar_rhs_broadcasts",
+            "reduce": null,
+            "actual": 30.0,
+            "assertion_idx": 7,
+            "variable": "kept"
+        },
+        {
+            "test_id": "scalar_rhs_broadcasts",
+            "reduce": null,
+            "actual": 2.0,
+            "assertion_idx": 8,
+            "variable": "state_folded"
+        },
+        {
+            "test_id": "scalar_rhs_broadcasts",
+            "reduce": null,
+            "actual": 4.499999999999998,
+            "assertion_idx": 9,
+            "variable": "u"
+        },
+        {
+            "test_id": "scalar_rhs_broadcasts",
+            "reduce": null,
+            "actual": 3.0,
+            "assertion_idx": 10,
+            "variable": "whole"
+        },
+        {
+            "test_id": "scalar_rhs_broadcasts",
+            "reduce": null,
+            "actual": 1.5,
+            "assertion_idx": 11,
+            "variable": "chain"
+        }
+    ],
+    "reference_binding": "julia"
+}

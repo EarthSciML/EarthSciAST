@@ -311,6 +311,34 @@ pub fn is_template_library_doc(raw: &Value) -> bool {
         .is_some_and(|o| o.contains_key("expression_templates"))
 }
 
+/// A document carrying top-level `expression_templates` is a template-library
+/// file (esm-spec §9.7.1), which MUST NOT declare `models`, `reaction_systems`,
+/// `data_sources`, `coupling`, or `domain`. Rewrite rules are component-local
+/// (§9.6.3 constraint 4), so beside a component the block is visible to
+/// nothing: the document is rejected with `template_library_illegal_payload`
+/// rather than loaded with the templates silently inert. An import target is
+/// held to the same rule at the edge, as `template_import_not_library`.
+pub(crate) fn reject_impure_template_library(view: &Value) -> Result<(), ExpressionTemplateError> {
+    if !is_template_library_doc(view) {
+        return Ok(());
+    }
+    let present: Vec<String> = LIBRARY_FORBIDDEN_KEYS
+        .iter()
+        .filter(|k| view.get(**k).is_some())
+        .map(|k| format!("`{k}`"))
+        .collect();
+    if present.is_empty() {
+        return Ok(());
+    }
+    Err(err(
+        codes::TEMPLATE_LIBRARY_ILLEGAL_PAYLOAD,
+        format!(
+            "top-level `expression_templates` makes this document a template-library file, which MUST NOT declare {} (esm-spec §9.7.1); templates declared there are visible to no component. Declare them in the component's own `expression_templates` block (§9.6.1), or move them to a template-library file and import it with `expression_template_imports` (§9.7.2)",
+            present.join(", ")
+        ),
+    ))
+}
+
 // ---------------------------------------------------------------------------
 // Metaparameters (esm-spec §9.7.6)
 // ---------------------------------------------------------------------------

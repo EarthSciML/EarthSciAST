@@ -105,3 +105,24 @@ def test_indexed_lhs_array_observed_runs(fixture: dict) -> None:
         assert r.variable == decl["variable"]
         assert r.reduce == decl.get("reduce")
         assert float(r.expected) == pytest.approx(float(decl["expected"]), rel=1e-12)
+
+
+@pytest.mark.parametrize("refusal", _manifest()["refusals"], ids=lambda f: f["id"])
+def test_bare_index_definition_outside_the_runnable_form_is_refused(refusal: dict) -> None:
+    """CONFORMANCE_SPEC §5.36.2: a bare-index definition whose RHS is not a
+    ``faq`` naming the LHS subscripts in order is REFUSED — no actual, not
+    passed, and the message carries the code and names the variable."""
+    integ = _manifest()["integrators"]["python"]
+    results = run_inline_tests(
+        str(_ROOT / refusal["path"]),
+        model_name=refusal["model"],
+        method=integ["method"],
+        rtol=float(integ["rtol"]),
+        atol=float(integ["atol"]),
+    )
+    assert len(results) == refusal["assertion_count"]
+    for r in results:
+        assert not r.passed
+        assert r.actual is None, f"{refusal['id']}: a refusal has no actual, got {r.actual}"
+        assert refusal["diagnostic"] in (r.message or ""), r.message
+        assert refusal["names_variable"] in (r.message or ""), r.message

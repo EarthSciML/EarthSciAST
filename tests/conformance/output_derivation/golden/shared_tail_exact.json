@@ -1,0 +1,38 @@
+{
+  "schema": "earthsciast/output-derivation-plan/v1",
+  "case": "shared_tail_exact",
+  "description": "Two components each declare an observed `O3`. The request names `Chem.O3` exactly, so `Chem.O3` is written and `Sink.O3` is dropped: an exact match wins, and a last segment shared by two variables selects neither of the others. The two states are written as always, and all four scalars share ONE 0-D grid.",
+  "grids": [
+    {
+      "dims": [],
+      "time_dim": "time",
+      "coords": [],
+      "vars": [
+        {
+          "name": "Chem.NO2",
+          "dims": ["time"],
+          "dtype": "float64",
+          "attrs": { "units": "ppb", "description": "Chem nitrogen dioxide." },
+          "shape": [],
+          "flat_indices": [0]
+        },
+        {
+          "name": "Chem.O3",
+          "dims": ["time"],
+          "dtype": "float64",
+          "attrs": { "units": "ppb", "description": "Chem ozone, derived." },
+          "shape": [],
+          "flat_indices": [1]
+        },
+        {
+          "name": "Sink.SO2",
+          "dims": ["time"],
+          "dtype": "float64",
+          "attrs": { "units": "ppb", "description": "Sink sulfur dioxide." },
+          "shape": [],
+          "flat_indices": [2]
+        }
+      ]
+    }
+  ]
+}

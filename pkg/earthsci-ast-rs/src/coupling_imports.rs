@@ -564,6 +564,14 @@ pub fn expand_coupling_imports(
     if !has_coupling_import(file) {
         return Ok(Some(coupling.clone()));
     }
+    // A document loaded from a known location resolves its relative imports
+    // against that location (esm-spec §10.10 -> §4.7); the option is the base
+    // for a document that carries none (built in memory, or loaded from a
+    // string with no base).
+    let base = file
+        .coupling_import_base
+        .as_deref()
+        .unwrap_or(&options.base_path);
     let mut out: Vec<CouplingEntry> = Vec::new();
     for entry in coupling {
         let CouplingEntry::CouplingImport {
@@ -575,8 +583,8 @@ pub fn expand_coupling_imports(
         };
         let bind = bind.clone().unwrap_or_default();
         let lib = match &options.load_ref {
-            Some(f) => f(reference, &options.base_path)?,
-            None => default_load_ref(reference, &options.base_path)?,
+            Some(f) => f(reference, base)?,
+            None => default_load_ref(reference, base)?,
         };
         for expanded_edge in expand_one(&lib, reference, &bind, file)? {
             out.push(expanded_edge);

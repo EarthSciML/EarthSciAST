@@ -159,24 +159,11 @@ fn test_analysis_features_integration() {
     reaction_systems.insert("simple_rs".to_string(), rs);
 
     let esm_file = EsmFile {
-        component_templates: None,
-        coordinates: None,
-        solver: None,
-        expression_templates: None,
-        metaparameters: None,
-        coupling_roles: None,
-        domain: None,
-        index_sets: None,
         esm: "0.1.0".to_string(),
         metadata,
         models: Some(models),
         reaction_systems: Some(reaction_systems),
-        data_sources: None,
-        operators: None,
-        enums: None,
-
-        coupling: None,
-        function_tables: None,
+        ..Default::default()
     };
 
     // Test component graph

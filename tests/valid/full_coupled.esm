@@ -332,7 +332,7 @@
               }
             }
           ],
-          "root_find": "all"
+          "root_find": "left"
         }
       ],
       "discrete_events": []

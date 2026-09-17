@@ -655,6 +655,12 @@ Julia are schema-driven and carry no typed `coupletype`.
   at a component lacking a referenced variable flattens to `unresolved_scoped_ref` naming the
   missing `Component.var` — the same failure as the equivalent inline edge (proving no bespoke
   contract is needed).
+- **Required targets need no new syntax:** a coupling target declared without a `default` makes an
+  omitted import an error when the problem is built, while a target with a `default` stays optional
+  (esm-spec §10.10.3, "Making an import required"). Validation additionally resolves every
+  `coupling_import`'s expanded edges in all five bindings, so a mis-bind is reported by `validate` on
+  the source document — at the import entry's pointer, naming the import, the role, the bound
+  component and the missing variable — as well as at flatten.
 - **Equivalence:** an assembly using a `coupling_import` and an otherwise-identical assembly with
   the edges inlined flatten to the **same** coupled system (byte-identical post-flatten, *including*
   the flattened metadata's "coupling rules applied" list, which records the expanded edges in both

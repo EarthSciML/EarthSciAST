@@ -153,6 +153,7 @@ function ModelingToolkit.System(flat::FlattenedSystem;
 
     var_dict, t_sym, dim_dict, states, parameters, observed, _ =
         _build_var_dict(flat)
+    _register_const_array_observeds!(dim_dict, flat)
 
     ic_values, dyn_equations = _split_ic_equations(flat, var_dict, t_sym, dim_dict)
     _apply_ic_defaults!(var_dict, states, ic_values)
@@ -166,7 +167,7 @@ function ModelingToolkit.System(flat::FlattenedSystem;
     for eq in dyn_equations
         lhs = _esm_to_symbolic(eq.lhs, var_dict, t_sym, dim_dict)
         rhs = _esm_to_symbolic(eq.rhs, var_dict, t_sym, dim_dict)
-        push!(eqs, lhs ~ rhs)
+        _push_lowered_equation!(eqs, lhs, rhs)
     end
 
     # Observed variables need to appear in the unknowns (dvs) list so that
@@ -249,6 +250,7 @@ function ModelingToolkit.PDESystem(flat::FlattenedSystem;
 
     var_dict, t_sym, dim_dict, states, parameters, observed, spatial_syms =
         _build_var_dict(flat)
+    _register_const_array_observeds!(dim_dict, flat)
 
     # ------------------------------------------------------------
     # Detect slice-derived surface source pattern
@@ -276,7 +278,7 @@ function ModelingToolkit.PDESystem(flat::FlattenedSystem;
         end
         lhs = _esm_to_symbolic(eq.lhs, var_dict, t_sym, dim_dict)
         rhs = _esm_to_symbolic(eq.rhs, var_dict, t_sym, dim_dict)
-        push!(eqs, lhs ~ rhs)
+        _push_lowered_equation!(eqs, lhs, rhs)
     end
 
     # Boundary conditions: the slice-derived flux BCs, plus one initial-

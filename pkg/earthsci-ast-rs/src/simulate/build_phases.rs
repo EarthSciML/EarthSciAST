@@ -34,13 +34,11 @@ pub(super) fn reject_unsupported_features(flat: &FlattenedSystem) -> Result<(), 
             independent_variables: flat.independent_variables.clone(),
         });
     }
-    if !flat.continuous_events.is_empty() {
-        return Err(CompileError::UnsupportedFeatureError {
-            feature: "continuous_events".to_string(),
-            message: "v1 does not support continuous (root-finding) events. \
-                      Track the future Rust events bead for support."
-                .to_string(),
-        });
+    if let Some(event) = flat.continuous_events.first() {
+        return Err(crate::compile_error::continuous_event_refusal(
+            crate::compile_error::SCALAR_EVALUATOR,
+            event.name.as_deref(),
+        ));
     }
     if let Some(event) = flat.discrete_events.first() {
         return Err(crate::compile_error::discrete_event_refusal(

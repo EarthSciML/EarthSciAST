@@ -40,9 +40,11 @@ import {
   validateAggregateJoinKeys,
   validateAggregateJoinSides,
   validateAggregateIndexSets,
+  validateRaggedValuesGathered,
   validateRelationalNodesInContinuous,
   validateReservedDeclarationNames,
   validateReservedModelNames,
+  validateArrayDefaultsHaveShape,
 } from './model-checks.js'
 import { validateBroadcastFns, validateArrayBroadcastShapes } from './array-checks.js'
 import { validateObservedCycles } from './observed-checks.js'
@@ -197,6 +199,9 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
       // Recurses into inline subsystems: a subsystem is a model, and a MOUNTED
       // subsystem is the shape #200 was reported in.
       errors.push(...validateReservedModelNames(model, modelPath, `Model '${modelName}'`, esmFile))
+      // esm-spec §6.3: inline array data is a shaped variable's value, so on a
+      // variable with no `shape` it has nothing to fill.
+      errors.push(...validateArrayDefaultsHaveShape(model, modelPath, `Model '${modelName}'`))
 
       // (F-6) Static `faq` semantics decidable from this document alone:
       // a value-equality join key of a non-comparable type, an index-set range
@@ -205,6 +210,7 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
       errors.push(...validateAggregateJoinKeys(model, modelPath, esmFile))
       errors.push(...validateAggregateJoinSides(model, modelPath, esmFile))
       errors.push(...validateAggregateIndexSets(model, modelPath, esmFile))
+      errors.push(...validateRaggedValuesGathered(model, modelPath, esmFile))
       errors.push(...validateRelationalNodesInContinuous(model, modelPath))
 
       // esm-spec §4.3.4. Two rules about ARRAY-LEVEL expressions, both static:
@@ -259,6 +265,7 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
           errors.push(...validateAggregateJoinKeys(subsystem, subsystemPath, esmFile))
           errors.push(...validateAggregateJoinSides(subsystem, subsystemPath, esmFile))
           errors.push(...validateAggregateIndexSets(subsystem, subsystemPath, esmFile))
+          errors.push(...validateRaggedValuesGathered(subsystem, subsystemPath, esmFile))
           errors.push(...validateRelationalNodesInContinuous(subsystem, subsystemPath))
           errors.push(...validateBroadcastFns(subsystem, subsystemPath))
           errors.push(...validateArrayBroadcastShapes(subsystem, subsystemPath))
@@ -531,6 +538,23 @@ function validateAny(data: string | object, options: ValidateOptions = {}): Vali
           basePath: options.basePath,
           onUnitWarning: (warning) => unit_warnings.push(warning),
         })
+
+        // `loadDocument` re-derives the document from its ENUMERABLE fields, and
+        // the coupling-import base a loader recorded is a non-enumerable sidecar
+        // (esm-spec §10.10 -> §4.7), so it does not survive that round trip.
+        // Carry it across when the caller passed no `basePath` of its own, or
+        // `validate(loadPath(p))` would resolve the document's relative imports
+        // against the working directory — the defect the sidecar exists to
+        // prevent — and silently check nothing.
+        const carriedBase = (parsedData as EsmFile).couplingImportBase
+        if (esmFile.couplingImportBase === undefined && carriedBase !== undefined) {
+          Object.defineProperty(esmFile, 'couplingImportBase', {
+            value: carriedBase,
+            enumerable: false,
+            writable: true,
+            configurable: true,
+          })
+        }
 
         // With a `basePath`, open and inline the `{ref}` mounts before checking
         // anything: an unresolved stub declares no variables, so validating

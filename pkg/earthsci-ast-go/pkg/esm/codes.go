@@ -58,6 +58,11 @@ const (
 	// COUPLING library (§10.9). The two library kinds are imported through
 	// different blocks and are not interchangeable.
 	CodeTemplateImportIsCouplingLibrary = "template_import_is_coupling_library"
+	// CodeTemplateLibraryIllegalPayload: a document carries top-level
+	// `expression_templates` beside `models` / `reaction_systems` /
+	// `data_sources` / `coupling` / `domain`, which a template-library file
+	// never declares (esm-spec §9.7.1).
+	CodeTemplateLibraryIllegalPayload = "template_library_illegal_payload"
 	// CodeTemplateImportRenameInvalid: an import's `rename` / `rebind` entry is
 	// malformed — not an object, or an entry whose key or value is not a
 	// non-empty string.
@@ -122,6 +127,11 @@ const (
 	// than resolved: rewriting it would silently diverge from the
 	// expand-at-load image of the same document.
 	CodeTemplateBodyReferencesCouplingRewrittenVariable = "template_body_references_coupling_rewritten_variable"
+	// CodeAmbiguousOutputName: an output name that matches no variable exactly
+	// and whose last dotted segment is shared by more than one variable
+	// (CONFORMANCE_SPEC §5.17.4). This binding has no output derivation; the
+	// constant exists because the code vocabulary is uniform across bindings.
+	CodeAmbiguousOutputName = "ambiguous_output_name"
 	// CodeMakearrayRegionInverted: a `makearray` region's stop precedes its
 	// start, so the region denotes no cells (esm-spec §4.3.5).
 	CodeMakearrayRegionInverted = "makearray_region_inverted"
@@ -277,6 +287,17 @@ const (
 	CodeMountFormUnsupported = "mount_form_unsupported"
 )
 
+// --- Diagnostic codes: running an arrayed definition (esm-spec §6.3.1). ---
+const (
+	// CodeIndexedDefinitionUnsupportedForm: a bare-index observed definition
+	// `index(V, k…) ~ rhs` outside the runnable form (the RHS is not a `faq`
+	// whose `output_idx` names the subscripts in order), refused when a
+	// simulating binding builds the model. Go does not simulate, so it never
+	// raises this; the constant exists because the code table is
+	// cross-language uniform.
+	CodeIndexedDefinitionUnsupportedForm = "indexed_definition_unsupported_form"
+)
+
 // --- Diagnostic codes: structural validation, per ESM Libraries Spec Section
 // 3.4. Moved here verbatim from validate.go, where this block used to be
 // declared; the names and values are unchanged and are pinned by
@@ -339,6 +360,11 @@ const (
 	// shaped variable, or `coords` / `reduce` on a scalar one
 	// (tests/invalid/assertion_rank_mismatch_*.esm).
 	ErrorAssertionRankMismatch = "assertion_rank_mismatch"
+	// ErrorArrayDefaultWithoutShape is inline array data as the `default` of a
+	// variable that declares no `shape` (esm-spec §6.3). Inline array data is a
+	// SHAPED variable's value, so with no shape there is nothing for the array
+	// to fill (tests/invalid/array_default_without_shape.esm).
+	ErrorArrayDefaultWithoutShape = "array_default_without_shape"
 )
 
 // --- Diagnostic codes: structural validation, peers of the Error* block
@@ -477,8 +503,8 @@ const (
 	// build (esm-spec §9.6.6). Registered for the cross-binding vocabulary;
 	// this binding has no simulator, so nothing here raises it.
 	CodeDerivedIndexSetUnmaterialized = "derived_index_set_unmaterialized"
-	// CodeUnsupportedConstruct: a discrete event or an implicit equation reached
-	// an evaluator that cannot run it (esm-spec §9.6.6). Go does not simulate,
+	// CodeUnsupportedConstruct: a continuous or discrete event, or an implicit
+	// equation, reached an evaluator that cannot run it (esm-spec §9.6.6). Go does not simulate,
 	// so it never raises this; the constant keeps the §9.6.6 vocabulary uniform.
 	CodeUnsupportedConstruct = "unsupported_construct"
 )

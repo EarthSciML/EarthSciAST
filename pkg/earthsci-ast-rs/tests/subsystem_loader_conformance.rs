@@ -165,7 +165,7 @@ fn subsystem_loader_trajectory_matches_golden() {
         alg: Alg::Bdf,
         abstol: Some(1e-12),
         reltol: Some(1e-10),
-        maxiters: 1_000_000,
+        maxiters: Some(1_000_000),
         saveat: Some(want_times),
         ..Default::default()
     };

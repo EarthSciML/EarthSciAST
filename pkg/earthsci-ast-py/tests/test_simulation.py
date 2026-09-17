@@ -236,28 +236,25 @@ class TestSimpleReactionSystems:
         assert result.retcode is ReturnCode.Success, f"solve() did not succeed: {result.message}"
         assert list(result.vars) == []
 
-    def test_simulation_with_events(self):
-        """Test simulation with continuous events."""
-        # Simple decay system
+    def test_continuous_events_are_refused(self):
+        """Neither pathway runs a continuous event, so the build refuses it with
+        ``unsupported_construct`` rather than running the model without it
+        (esm-spec §9.6.6, issue #356)."""
+        from earthsci_ast.expression import UnsupportedConstructError
+
         species_A = Species(name="A")
-
         reaction = Reaction(name="decay", reactants={"A": 1.0}, products={}, rate_constant=0.1)
-
-        # Event: stop when A drops below 0.5
-        event_condition = ExprNode(op="-", args=["A", 0.5])  # A - 0.5
         event = ContinuousEvent(
             name="threshold",
-            conditions=[event_condition],  # Changed to array
+            conditions=[ExprNode(op="-", args=["A", 0.5])],
             affects=[],
         )
-
         file = _reaction_file("Ev", [species_A], [reaction], events=[event])
 
-        # Simulate with event
-        result = solve(esm_problem(file, (0, 20), u0={"A": 1.0}))
-
-        # Check that simulation stopped early due to event
-        assert (result.retcode is ReturnCode.Success) or "event" in result.message.lower()
+        with pytest.raises(UnsupportedConstructError) as info:
+            esm_problem(file, (0, 20), u0={"A": 1.0})
+        assert info.value.construct == "continuous event"
+        assert info.value.evaluator == "Python scalar interpreter"
 
 
 class TestSimulationErrors:

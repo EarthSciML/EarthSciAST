@@ -549,7 +549,7 @@ def _parse_continuous_event(event_data: dict[str, Any]) -> ContinuousEvent:
     if "affect_neg" in event_data:
         affect_neg = [_parse_affect(affect) for affect in event_data["affect_neg"]]
 
-    root_find = event_data.get("root_find", "left")
+    root_find = event_data.get("root_find")
     reinitialize = event_data.get("reinitialize", False)
     description = event_data.get("description")
 
@@ -2523,7 +2523,11 @@ def load_path(
     resolved_base = base_path if base_path is not None else str(file_path.parent.resolve())
     with open(file_path) as f:
         data = json.load(f)
-    return _load_data(data, resolved_base, metaparameters, file_path)
+    esm_file = _load_data(data, resolved_base, metaparameters, file_path)
+    # esm-spec §10.10 / §4.7: relative `coupling_import` refs resolve against this
+    # file's directory, which `flatten` would otherwise never learn.
+    esm_file.coupling_import_base = resolved_base
+    return esm_file
 
 
 def load_string(
@@ -2538,9 +2542,13 @@ def load_string(
         json_text: The document as a JSON string.
     """
     data = json.loads(json_text)
-    return _load_data(
+    esm_file = _load_data(
         data, base_path if base_path is not None else os.getcwd(), metaparameters, None
     )
+    # esm-spec §10.10 / §4.7: an explicit base anchors relative `coupling_import`
+    # refs; without one `flatten`'s own base applies.
+    esm_file.coupling_import_base = base_path
+    return esm_file
 
 
 def load_document(
@@ -2560,12 +2568,16 @@ def load_document(
     # shallow copy, but ``prepare_document_ops`` rewrites ``op`` values on
     # NESTED nodes, which a shallow copy still shares with the caller. Rust, Go
     # and Julia all hand the pipeline their own copy; this makes the five agree.
-    return _load_data(
+    esm_file = _load_data(
         copy.deepcopy(document),
         base_path if base_path is not None else os.getcwd(),
         metaparameters,
         None,
     )
+    # esm-spec §10.10 / §4.7: an explicit base anchors relative `coupling_import`
+    # refs; without one `flatten`'s own base applies.
+    esm_file.coupling_import_base = base_path
+    return esm_file
 
 
 load_path.__doc__ = (load_path.__doc__ or "") + _LOAD_ARGS_DOC
@@ -2641,6 +2653,7 @@ def _load_data(
         check_data_source_extents,
         collect_mount_declared_metaparameters,
         document_declares_an_extent,
+        reject_impure_template_library,
         reject_template_imports_pre_v08,
         resolve_template_machinery,
     )
@@ -2651,6 +2664,9 @@ def _load_data(
     # expression_templates, metaparameters) are rejected when the file
     # declares esm < 0.8.0 (esm-spec §9.6.5).
     reject_template_imports_pre_v08(data)
+    # Top-level `expression_templates` beside a component payload is a
+    # template-library payload no component can see (esm-spec §9.7.1).
+    reject_impure_template_library(data)
 
     # The top-level `solver` block arrives at esm 1.1.0; a file declaring an
     # earlier version that carries one is rejected (esm-spec §2.2.4).

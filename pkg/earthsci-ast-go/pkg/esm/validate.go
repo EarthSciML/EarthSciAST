@@ -467,6 +467,7 @@ func collectStructuralErrors(file *ESMFile) []StructuralError {
 		s.validateReactionSystem(systemName, &system)
 	}
 	s.validateCouplingReferences()
+	s.validateImportedCouplingEdges()
 	s.validateSubsystemRefs()
 	s.validateCircularReferences()
 	s.validateDataSourceReferences()
@@ -873,6 +874,9 @@ func (s *structuralScan) validateModel(modelName string, model *Model) {
 	// and a MOUNTED subsystem is exactly the shape issue #200 was reported in.
 	// Subsystems are held untyped, so the walk is over raw JSON.
 	validateReservedSubsystemNames(s, model.Subsystems, basePath+"/subsystems")
+	// esm-spec §6.3: inline array data is a shaped variable's value, so on a
+	// variable with no `shape` it has nothing to fill.
+	validateArrayDefaultsHaveShape(s, model, basePath, fmt.Sprintf("Model '%s'", modelName))
 
 	for i, event := range model.DiscreteEvents {
 		event := event
@@ -1731,6 +1735,75 @@ func validateReservedSubsystemNames(s *structuralScan, subsystems map[string]any
 	}
 }
 
+// validateArrayDefaultsHaveShape emits `array_default_without_shape` for every
+// variable of a model whose `default` is inline array data but which declares
+// no `shape` (esm-spec §6.3), then walks the model's inline subsystems.
+//
+// Inline array data is a SHAPED variable's value: its nesting is matched against
+// the declared shape, so with no shape (omitted, null or empty) there is nothing
+// for the array to fill and no scalar reading of it. decode.go keeps any array
+// `default` as nested []any, which is what this looks for.
+func validateArrayDefaultsHaveShape(s *structuralScan, model *Model, basePath, owner string) {
+	for _, name := range sortedKeys(model.Variables) {
+		v := model.Variables[name]
+		if _, isArray := v.Default.([]any); !isArray {
+			continue
+		}
+		if v.Shape != nil && len(*v.Shape) > 0 {
+			continue
+		}
+		s.addArrayDefaultWithoutShape(basePath, owner, name, fmt.Sprint(v.Type))
+	}
+	validateArrayDefaultSubsystems(s, model.Subsystems, basePath+"/subsystems")
+}
+
+// validateArrayDefaultSubsystems applies validateArrayDefaultsHaveShape to every
+// INLINE subsystem, recursively. Subsystems are held as raw decoded JSON (an
+// entry may be an unresolved `{"ref": …}`, which has no `variables`).
+func validateArrayDefaultSubsystems(s *structuralScan, subsystems map[string]any, basePath string) {
+	for _, name := range sortedKeys(subsystems) {
+		sub, ok := subsystems[name].(map[string]any)
+		if !ok {
+			continue
+		}
+		subPath := fmt.Sprintf("%s/%s", basePath, name)
+		if vars, ok := sub["variables"].(map[string]any); ok {
+			for _, vname := range sortedKeys(vars) {
+				v, ok := vars[vname].(map[string]any)
+				if !ok {
+					continue
+				}
+				if _, isArray := v["default"].([]any); !isArray {
+					continue
+				}
+				if shape, ok := v["shape"].([]any); ok && len(shape) > 0 {
+					continue
+				}
+				varType, _ := v["type"].(string)
+				s.addArrayDefaultWithoutShape(subPath, fmt.Sprintf("Model '%s'", name), vname, varType)
+			}
+		}
+		if nested, ok := sub["subsystems"].(map[string]any); ok {
+			validateArrayDefaultSubsystems(s, nested, subPath+"/subsystems")
+		}
+	}
+}
+
+// addArrayDefaultWithoutShape records one `array_default_without_shape` finding,
+// pointing at the offending `default` field.
+func (s *structuralScan) addArrayDefaultWithoutShape(modelPath, owner, name, varType string) {
+	s.addErr(StructuralError{
+		Path: fmt.Sprintf("%s/variables/%s/default", modelPath, name),
+		Code: ErrorArrayDefaultWithoutShape,
+		Message: fmt.Sprintf("%s variable '%s' has inline array data as its default but declares "+
+			"no shape; inline array data is a shaped variable's value (esm-spec §6.3)", owner, name),
+		Details: map[string]any{
+			"variable":      name,
+			"variable_type": varType,
+		},
+	})
+}
+
 // countDerivatives returns, per variable, how many time derivatives of it an
 // expression carries. It walks EVERY expression-bearing field (the shared
 // field-preserving walk), so it finds the `D` an array-form equation hides in an
@@ -2007,6 +2080,98 @@ func (s *structuralScan) validateCouplingReferences() {
 			}
 		}
 	}
+}
+
+// validateImportedCouplingEdges validates the edges each `coupling_import`
+// expands to (esm-spec §10.10.3).
+//
+// validateCouplingReferences walks the SOURCE `coupling` slice, where an import
+// is still `{type, ref, bind}` and its edges do not exist, so a mis-bind — a
+// structurally complete `bind` that points a role at a component lacking a
+// variable the library references — used to pass Validate and surface only at
+// flatten. Here each import is expanded on its own, against the base the loader
+// recorded on the document, and its edges go through the same scoped-reference
+// check as a hand-authored edge. A finding is re-pointed at the import entry and
+// names the library, the role and the bound component. An import that cannot be
+// expanded at all (a missing library, an unbound role, ...) is left to flatten,
+// which owns those §10.11 diagnostics.
+func (s *structuralScan) validateImportedCouplingEdges() {
+	// Expanding reads the library from disk; without the base the loader
+	// recorded on the document, the ref would resolve against the working
+	// directory, so a document with no known location is left to flatten.
+	if s.file == nil || s.file.couplingImportBase == "" {
+		return
+	}
+	allSystems := couplableSystemNames(s.file)
+	for i, entry := range s.file.Coupling {
+		imp, ok := entry.(CouplingImport)
+		if !ok {
+			continue
+		}
+		single := *s.file
+		single.Coupling = []CouplingEntry{entry}
+		edges, err := expandCouplingImports(&single, CouplingImportOptions{})
+		if err != nil || len(edges) == 0 {
+			continue
+		}
+		sub := &structuralScan{file: s.file, indep: s.indep, coupled: s.coupled, coords: s.coords}
+		for _, edge := range edges {
+			vm, ok := edge.(VariableMapCoupling)
+			if !ok {
+				continue
+			}
+			sub.validateCouplingEndpoint(vm.From, allSystems, "", "from", i)
+			sub.validateCouplingEndpoint(vm.To, allSystems, "", "to", i)
+		}
+		for _, se := range sub.errors {
+			if se.Code != ErrorUnresolvedScopedRef {
+				continue
+			}
+			ref, _ := se.Details["scoped_ref"].(string)
+			component, role := boundComponentFor(imp.Bind, ref)
+			se.Path = fmt.Sprintf("/coupling/%d", i)
+			se.Message = fmt.Sprintf("coupling_import '%s' binds role '%s' to '%s', which does not provide '%s' referenced by the library: %s",
+				imp.Ref, role, component, ref, se.Message)
+			details := map[string]any{}
+			for k, v := range se.Details {
+				details[k] = v
+			}
+			details["reference"] = ref
+			details["coupling_import"] = imp.Ref
+			details["role"] = role
+			details["bound_component"] = component
+			se.Details = details
+			s.addErr(se)
+		}
+	}
+}
+
+// boundComponentFor names the component a `bind` points a role at for `ref`, and
+// the role(s) that point there, joined by ", " when one component carries more
+// than one. A bind value may be a dotted subsystem path (`Parent.Child`,
+// esm-spec §10.10.1), so the LONGEST bound component that prefixes the reference
+// wins; a reference no bind covers falls back to its own head segment.
+func boundComponentFor(bind map[string]string, ref string) (string, string) {
+	component := ""
+	for _, bound := range bind {
+		if ref != bound && !strings.HasPrefix(ref, bound+".") {
+			continue
+		}
+		if len(bound) > len(component) {
+			component = bound
+		}
+	}
+	if component == "" {
+		component, _, _ = strings.Cut(ref, ".")
+	}
+	roles := make([]string, 0, len(bind))
+	for role, bound := range bind {
+		if bound == component {
+			roles = append(roles, role)
+		}
+	}
+	sort.Strings(roles)
+	return component, strings.Join(roles, ", ")
 }
 
 // validateCouplingEventAffectsUnknown reports `event_affects_parameter` for a

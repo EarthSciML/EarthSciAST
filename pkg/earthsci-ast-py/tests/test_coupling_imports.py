@@ -9,7 +9,13 @@ import json
 import os
 
 
-from earthsci_ast import flatten, is_coupling_library_doc, load_document, load_path
+from earthsci_ast import (
+    flatten,
+    is_coupling_library_doc,
+    load_document,
+    load_path,
+    load_string,
+)
 from earthsci_ast.coupling_imports import (
     _rewrite_entry_in_place,
     _rewrite_scoped_ref,
@@ -462,3 +468,85 @@ def test_template_import_of_coupling_library_is_rejected(tmp_path):
     }
     path = _write(str(tmp_path), "assembly.esm", assembly)
     assert _err_code(lambda: load_path(path)) == "template_import_is_coupling_library"
+
+
+# ---------------------------------------------------------------------------
+# ref resolution base (esm-spec §10.10 -> §4.7)
+# ---------------------------------------------------------------------------
+
+_CORPUS = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "tests", "coupling_libraries"
+)
+
+
+def test_relative_import_resolves_against_importing_document(monkeypatch, tmp_path):
+    """A relative ``coupling_import`` ``ref`` names a file relative to the
+    importing document (§4.7), so ``flatten`` with its default ``base_path``
+    must find ``./rothermel_fuel.esm`` beside ``assembly_import.esm`` even from a
+    working directory that holds no such file. Before the fix the import resolved
+    against the working directory and raised ``coupling_import_unresolved``."""
+    monkeypatch.chdir(tmp_path)
+    assert not os.path.exists("rothermel_fuel.esm")
+    imported = flatten(load_path(os.path.join(_CORPUS, "assembly_import.esm")))
+    inline = flatten(load_path(os.path.join(_CORPUS, "assembly_inline.esm")))
+    assert imported == inline
+
+
+def test_loaded_base_wins_and_ref_round_trips_verbatim():
+    """The document's own base wins over an unrelated ``base_path``, and the
+    authored ``ref`` round-trips verbatim (§10.10.3): the base is recorded beside
+    the document, never written into the entry."""
+    from earthsci_ast import to_json
+
+    esm = load_path(os.path.join(_CORPUS, "assembly_import.esm"))
+    flatten(esm, base_path=os.path.join("does", "not", "exist"))
+    (imp,) = [c for c in esm.coupling if isinstance(c, CouplingImport)]
+    assert imp.ref == "./rothermel_fuel.esm"
+    assert '"./rothermel_fuel.esm"' in to_json(esm)
+    assert "coupling_import_base" not in to_json(esm)
+
+
+def test_in_memory_document_keeps_the_callers_base(monkeypatch, tmp_path):
+    """A document with no location of its own — built in memory, or parsed from
+    text with no base — leaves ``flatten``'s ``base_path`` in charge, and one
+    given an explicit base anchors on it. All five bindings agree on this, so a
+    caller's base is never silently replaced by the working directory."""
+    text = open(os.path.join(_CORPUS, "assembly_import.esm")).read()
+    doc = json.loads(text)
+    monkeypatch.chdir(tmp_path)
+    assert not os.path.exists("rothermel_fuel.esm")
+    # No base of its own -> the caller's base_path resolves the import.
+    assert flatten(load_string(text), base_path=_CORPUS) is not None
+    assert flatten(load_document(doc), base_path=_CORPUS) is not None
+    # An explicit base of its own -> it wins, with no base_path at all.
+    assert flatten(load_string(text, base_path=_CORPUS)) is not None
+    assert flatten(load_document(doc, base_path=_CORPUS)) is not None
+
+
+def test_validate_reports_a_mis_bound_import_on_the_source_document():
+    """A structurally complete ``bind`` that points a role at a component lacking
+    a referenced variable is reported by ``validate`` on the SOURCE document, not
+    only at flatten, and the finding is re-pointed at the import entry and names
+    the import, role and component (esm-spec §10.10.3)."""
+    from earthsci_ast import validate
+
+    esm = load_path(os.path.join(_CORPUS, "import_misbind_downstream.esm"))
+    result = validate(esm)
+    attributed = [
+        e
+        for e in result.structural_errors
+        if e.code == "unresolved_scoped_ref" and "coupling_import" in (e.details or {})
+    ]
+    assert attributed, f"no import-attributed finding in {result.structural_errors}"
+    (found,) = attributed
+    assert found.path == "/coupling/0"
+    assert found.details["bound_component"] == "RothermelNoW0"
+    assert found.details["role"] == "Spread"
+    assert found.details["reference"].endswith(".w0")
+    assert not result.is_valid
+
+    # A document with no recorded base does no file I/O, so it reports nothing
+    # about the import rather than resolving the ref against the working dir.
+    text = open(os.path.join(_CORPUS, "import_misbind_downstream.esm")).read()
+    no_base = validate(load_string(text))
+    assert not [e for e in no_base.structural_errors if "coupling_import" in (e.details or {})]

@@ -169,7 +169,7 @@ export type ExpressionNode = ExpressionNode1 & {
            */
           from: string;
           /**
-           * Parent index name(s) for a ragged / dependent inner set: the members enumerated depend on these outer indices (e.g. { "from": "edges_of_cell", "of": ["i"] } iterates the edges of cell i).
+           * Parent index name(s) for a ragged / dependent inner set: the enumeration depends on these outer indices (e.g. { "from": "edges_of_cell", "of": ["i"] } iterates the POSITIONS k in 1…offsets[i] of cell i's edges, and the body gathers each edge as index(values, i, k); esm-spec §4.3.1 "Ragged ranges").
            */
           of?: string[];
         };
@@ -614,7 +614,7 @@ export type CouplingEvent = CouplingEvent1 & {
    */
   affects: AffectEquation[];
   affect_neg?: null | AffectEquation[];
-  root_find?: "left" | "right" | "all";
+  root_find?: "left" | "right";
   reinitialize?: boolean;
   /**
    * Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (template_inject_target_unknown otherwise); a key resolving to neither a model nor a reaction system is template_inject_target_not_component -- which from 1.0.0 is also how a key naming a `data_sources` entry is reported, since a data source is not a component and the separate template_inject_target_is_loader code is retired. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.
@@ -634,7 +634,7 @@ export type CouplingEvent1 = {
  */
 export type IndexSet = IndexSet1 & {
   /**
-   * Which of the four index-set forms this entry is. "interval": a dense [1..size] grid axis. "categorical": an explicit enumeration of members. "derived": a data-derived set materialized from an index-set-producing node (a `distinct` `faq`, or an `intersect_polygon` ring leaf whose clipped ring has a data-dependent vertex count, §8.1). "ragged": a per-parent (dependent) inner set backed by CSR offsets/values factors.
+   * Which of the four index-set forms this entry is. "interval": a dense [1..size] grid axis. "categorical": an explicit enumeration of members. "derived": a data-derived set materialized from an index-set-producing node (a `distinct` `faq`, or an `intersect_polygon` ring leaf whose clipped ring has a data-dependent vertex count, §8.1). "ragged": a per-parent (dependent) inner set backed by an `offsets` per-parent length factor and a padded `values` member factor; a `faq` range over it binds the POSITION k in 1…offsets[parent] (esm-spec §4.3.1 "Ragged ranges").
    */
   kind: "interval" | "categorical" | "derived" | "ragged";
   /**
@@ -667,11 +667,11 @@ export type IndexSet = IndexSet1 & {
    */
   of?: string[];
   /**
-   * ragged: name of the keyed factor giving |set(i)| for each parent tuple — the per-parent length / CSR offsets (e.g. MPAS nEdgesOnCell). Required when kind is "ragged".
+   * ragged: name of the keyed factor giving |set(i)| for each parent tuple — the per-parent LENGTH, not a cumulative offset (e.g. MPAS nEdgesOnCell). A `faq` range {"from": <this set>, "of": ["i"]} binds the POSITION k in 1…offsets[i] (esm-spec §4.3.1 "Ragged ranges"). Required when kind is "ragged".
    */
   offsets?: string;
   /**
-   * ragged: name of the keyed factor giving the member at (i, k) for k in 1…|set(i)| — the flattened CSR member array (e.g. edgesOnCell). Required when kind is "ragged".
+   * ragged: name of the keyed factor giving the member at (i, k) for k in 1…|set(i)| — a PADDED [parent, max length] array whose row i holds parent i's members in positions 1…offsets[i] (e.g. MPAS edgesOnCell); entries past offsets[i] are padding and are never read. Because a range over the set binds the position k, a `faq` body reads a member by gathering it explicitly, index(values, i, k); a body that never reads this array is `ragged_values_not_gathered`. The one exception is a value-invention `faq` (distinct / skolem / rank / argmin / argmax), whose ragged range binds the member values[i, k] itself (esm-spec §4.3.1 "Ragged ranges"). Required when kind is "ragged".
    */
   values?: string;
 };
@@ -972,7 +972,7 @@ export interface ContinuousEvent {
   /**
    * Root-finding direction.
    */
-  root_find?: "left" | "right" | "all";
+  root_find?: "left" | "right";
   /**
    * Whether to reinitialize the system after the event.
    */

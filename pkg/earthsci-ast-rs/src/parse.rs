@@ -234,6 +234,11 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     crate::template_imports::reject_template_imports_pre_v08(&json_value)
         .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
 
+    // Top-level `expression_templates` beside a component payload is a
+    // template-library payload no component can see (esm-spec §9.7.1).
+    crate::template_imports::reject_impure_template_library(&json_value)
+        .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
+
     // The top-level `solver` block arrives at esm 1.1.0; a file declaring an
     // earlier version that carries one is rejected (esm-spec §2.2.4).
     crate::solver::reject_solver_pre_v11(&json_value).map_err(
@@ -337,6 +342,13 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     esm_file.component_templates = component_templates;
     // esm-spec §2.2: an EMPTY `solver` block normalizes to absence at load.
     esm_file.solver = crate::solver::normalize_empty(esm_file.solver.take());
+    // esm-spec §10.10 / §4.7: relative `coupling_import` refs resolve against
+    // THIS document's directory, which flatten would otherwise never learn. Only
+    // an explicit base is recorded; a string load without one leaves flatten's
+    // own `base_path` in charge.
+    if options.base_path.is_some() {
+        esm_file.coupling_import_base = Some(base.to_string_lossy().into_owned());
+    }
 
     Ok(esm_file)
 }
