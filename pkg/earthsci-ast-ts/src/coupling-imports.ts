@@ -18,7 +18,7 @@
 import type { EsmFile, CouplingEntry, CouplingImport, Expression } from './types.js'
 import { numericValue } from './numeric-literal.js'
 import { deepClone, isObject } from './object-utils.js'
-import { isRemoteRef, joinPath } from './path-utils.js'
+import { expandRefEnv, isRemoteRef, joinPath } from './path-utils.js'
 import { ERROR_CODES } from './errors.js'
 import { EsmMachineryError } from './lower-expression-templates.js'
 import { prepareDocumentOps } from './parse.js'
@@ -551,7 +551,12 @@ export function expandCouplingImports(
     // diagnostic so no pinned load-error code/message is disturbed; a malformed
     // `ref` ('') or dropped non-string bind surfaces as the existing
     // downstream `coupling_import_unresolved` / role-binding diagnostics.
-    const ref = typeof imp.ref === 'string' ? imp.ref : ''
+    // esm-spec §10.10: a `coupling_import` ref "resolves by the §4.7 reference
+    // formats (relative path, absolute path, URL, `${VAR}`)". Expand ONCE here,
+    // where the ref leaves the document — ahead of `loadRef`, so the default
+    // loader's remote classification and path join, and any caller-supplied
+    // `loadRef` hook, all see the same expanded string the diagnostics name.
+    const ref = expandRefEnv(typeof imp.ref === 'string' ? imp.ref : '')
     const bind: Record<string, string> = {}
     if (isObject(imp.bind)) {
       for (const [k, v] of Object.entries(imp.bind)) if (typeof v === 'string') bind[k] = v

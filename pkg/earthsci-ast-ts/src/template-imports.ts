@@ -47,7 +47,7 @@ import {
 import { EnumLoweringError, lowerEnumOpsForFile } from './lower-enums.js'
 import { isNumericLiteral } from './numeric-literal.js'
 import { deepClone, isObject } from './object-utils.js'
-import { isRemoteRef, normalizeRef, readFileSyncNode } from './path-utils.js'
+import { expandRefEnv, isRemoteRef, normalizeRef, readFileSyncNode } from './path-utils.js'
 import { ERROR_CODES } from './errors.js'
 import { prepareDocumentOps } from './parse.js'
 
@@ -1526,7 +1526,11 @@ function resolveImportEntry(
       `${origin}: expression_template_imports entry requires a non-empty string \`ref\``,
     )
   }
-  const ref = refRaw
+  // esm-spec §4.7 `${VAR}` expansion, ONCE, where the ref leaves the document —
+  // ahead of the cycle key below and ahead of `loadImportRaw`'s remote
+  // classification and path join, so the key and the file actually read are
+  // derived from the same string.
+  const ref = expandRefEnv(refRaw)
   const canonical = normalizeRef(ref, baseDir)
   if (stack.includes(canonical)) {
     const cyc = [...stack.slice(stack.indexOf(canonical)), canonical]
@@ -1889,8 +1893,14 @@ export function collectMountDeclaredMetaparameters(
 
   const visitRef = (refValue: unknown): void => {
     if (!isObject(refValue)) return
-    const ref = refValue.ref
-    if (typeof ref !== 'string' || isRemoteRef(ref)) return
+    const authoredRef = refValue.ref
+    if (typeof authoredRef !== 'string') return
+    // esm-spec §4.7: expand BEFORE the remote classification and the anchoring
+    // join, so a `${VAR}` that supplies an `http(s)://` prefix is skipped as the
+    // remote ref it expands to (and an unset one stays literal and simply fails
+    // the read below, which this widening walk ignores by design).
+    const ref = expandRefEnv(authoredRef)
+    if (isRemoteRef(ref)) return
     const path = normalizeRef(ref, basePath)
     if (seen.has(path)) return
     seen.add(path)
