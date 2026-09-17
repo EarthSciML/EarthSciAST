@@ -124,12 +124,6 @@ func Validate(file *ESMFile) *ValidationResult {
 		return result
 	}
 
-	// A LIBRARY document (expression-template library per esm-spec §9.7, or a
-	// coupling-role library per §10.9) declares no components, so every
-	// component-oriented structural check has nothing to say and the
-	// assembly-document invariant inside ValidateStruct would reject it
-	// outright. Its well-formedness was already settled by the schema's root
-	// `anyOf` at load.
 	// A COUPLING library keeps ONE check. esm-spec §10.9 does not simply suspend
 	// reference resolution for it: it REPLACES it, requiring the top-level
 	// segment at every §10.10.2 occurrence site to name a declared role
@@ -144,6 +138,12 @@ func Validate(file *ESMFile) *ValidationResult {
 		result.IsValid = countStructuralErrorLevel(result.StructuralErrors) == 0
 		return result
 	}
+	// A LIBRARY document (expression-template library per esm-spec §9.7, or a
+	// coupling-role library per §10.9) declares no components, so every
+	// component-oriented structural check has nothing to say and the
+	// assembly-document invariant inside ValidateStruct would reject it
+	// outright. Its well-formedness was already settled by the schema's root
+	// `anyOf` at load.
 	if isLibraryDocument(file) {
 		return result
 	}
