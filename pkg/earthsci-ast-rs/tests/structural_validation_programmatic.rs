@@ -56,14 +56,6 @@ fn test_undefined_variable_in_model() {
     models.insert("test".to_string(), model);
 
     let esm_file = EsmFile {
-        component_templates: None,
-        coordinates: None,
-        solver: None,
-        expression_templates: None,
-        metaparameters: None,
-        coupling_roles: None,
-        domain: None,
-        index_sets: None,
         esm: "0.1.0".to_string(),
         metadata: Metadata {
             name: Some("Test".to_string()),
@@ -80,13 +72,7 @@ fn test_undefined_variable_in_model() {
             x_esd: None,
         },
         models: Some(models),
-        reaction_systems: None,
-        data_sources: None,
-        operators: None,
-        enums: None,
-
-        coupling: None,
-        function_tables: None,
+        ..Default::default()
     };
 
     let validation_result = validate(&esm_file);
@@ -171,14 +157,6 @@ fn test_equation_count_mismatch() {
     models.insert("test".to_string(), model);
 
     let esm_file = EsmFile {
-        component_templates: None,
-        coordinates: None,
-        solver: None,
-        expression_templates: None,
-        metaparameters: None,
-        coupling_roles: None,
-        domain: None,
-        index_sets: None,
         esm: "0.1.0".to_string(),
         metadata: Metadata {
             name: Some("Test".to_string()),
@@ -195,13 +173,7 @@ fn test_equation_count_mismatch() {
             x_esd: None,
         },
         models: Some(models),
-        reaction_systems: None,
-        data_sources: None,
-        operators: None,
-        enums: None,
-
-        coupling: None,
-        function_tables: None,
+        ..Default::default()
     };
 
     let validation_result = validate(&esm_file);
@@ -272,14 +244,6 @@ fn test_undefined_species_in_reaction() {
     reaction_systems.insert("test".to_string(), rs);
 
     let esm_file = EsmFile {
-        component_templates: None,
-        coordinates: None,
-        solver: None,
-        expression_templates: None,
-        metaparameters: None,
-        coupling_roles: None,
-        domain: None,
-        index_sets: None,
         esm: "0.1.0".to_string(),
         metadata: Metadata {
             name: Some("Test".to_string()),
@@ -295,14 +259,8 @@ fn test_undefined_species_in_reaction() {
             discretized_from: None,
             x_esd: None,
         },
-        models: None,
         reaction_systems: Some(reaction_systems),
-        data_sources: None,
-        operators: None,
-        enums: None,
-
-        coupling: None,
-        function_tables: None,
+        ..Default::default()
     };
 
     let validation_result = validate(&esm_file);
@@ -393,14 +351,6 @@ fn test_valid_file_passes() {
     models.insert("valid".to_string(), model);
 
     let esm_file = EsmFile {
-        component_templates: None,
-        coordinates: None,
-        solver: None,
-        expression_templates: None,
-        metaparameters: None,
-        coupling_roles: None,
-        domain: None,
-        index_sets: None,
         esm: "0.1.0".to_string(),
         metadata: Metadata {
             name: Some("Valid File".to_string()),
@@ -417,13 +367,7 @@ fn test_valid_file_passes() {
             x_esd: None,
         },
         models: Some(models),
-        reaction_systems: None,
-        data_sources: None,
-        operators: None,
-        enums: None,
-
-        coupling: None,
-        function_tables: None,
+        ..Default::default()
     };
 
     let validation_result = validate(&esm_file);

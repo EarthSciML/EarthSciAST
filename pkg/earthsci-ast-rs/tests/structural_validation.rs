@@ -325,6 +325,80 @@ fn test_unresolved_scoped_reference() {
     );
 }
 
+/// A coupling-library file's coupling edges name ROLES, not systems (esm-spec
+/// §10.9), and the library holds no models by definition. The system-based check
+/// therefore rejected every well-formed library — including EarthSciModels' own
+/// `fastjx_superfast.esm` and `wildlandfire_behavior.esm` — so `load_string` must
+/// accept one whose refs all name a declared role, and must still reject a role
+/// that was never declared, at every §10.10.2 occurrence site rather than only
+/// on a `variable_map` endpoint.
+#[test]
+fn test_coupling_library_refs_resolve_against_roles_not_systems() {
+    let lib = r#"{
+      "esm": "1.1.0",
+      "metadata": {"name": "RoleScopedLib"},
+      "coupling_roles": {
+        "Source": {"description": "provides x"},
+        "Sink": {"description": "consumes x"}
+      },
+      "coupling": [
+        {"type": "variable_map", "from": "Source.x", "to": "Sink.x",
+         "transform": "param_to_var"},
+        {"type": "operator_compose", "systems": ["Source", "Sink"],
+         "translate": {"Source.x": "Sink.x"}, "require_match": false}
+      ]
+    }"#;
+    load_string(lib).expect("a coupling library with role-scoped refs must load");
+
+    // A `variable_map` endpoint.
+    let typo = lib.replace("\"to\": \"Sink.x\"", "\"to\": \"Snik.x\"");
+    let err = load_string(&typo)
+        .expect_err("a ref naming an undeclared role must be rejected")
+        .to_string();
+    for needle in ["coupling[0]", "'Snik'", "not a declared role"] {
+        assert!(err.contains(needle), "error must name {needle}, got: {err}");
+    }
+
+    // A site the endpoint-only check could not see: `operator_compose.systems`.
+    let typo2 = lib.replace(
+        r#""systems": ["Source", "Sink"]"#,
+        r#""systems": ["Ghost", "Sink"]"#,
+    );
+    let err2 = load_string(&typo2)
+        .expect_err("an undeclared role in `systems` must be rejected too")
+        .to_string();
+    for needle in ["coupling[1]", "'Ghost'", "not a declared role"] {
+        assert!(
+            err2.contains(needle),
+            "error must name {needle}, got: {err2}"
+        );
+    }
+}
+
+/// The shared corpus pins the standalone verdict too, not just an in-memory
+/// document: `tests/coupling_libraries/rothermel_fuel.esm` must load and
+/// `lib_unknown_role_edge.esm` must be rejected naming its undeclared role.
+#[test]
+fn test_coupling_library_corpus_validates_standalone() {
+    let corpus =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/coupling_libraries");
+    // `full_surface_lib.esm` exercises every §10.10.2 occurrence site, so it is
+    // what proves the shared walk raises no FALSE positive off `variable_map`.
+    for name in ["rothermel_fuel.esm", "full_surface_lib.esm"] {
+        let good = std::fs::read_to_string(corpus.join(name)).unwrap();
+        load_string(&good).unwrap_or_else(|e| panic!("{name} must load standalone: {e}"));
+    }
+
+    let bad = std::fs::read_to_string(corpus.join("lib_unknown_role_edge.esm")).unwrap();
+    let err = load_string(&bad)
+        .expect_err("lib_unknown_role_edge.esm must be rejected standalone")
+        .to_string();
+    assert!(
+        err.contains("'Ghost'"),
+        "error must name the role, got: {err}"
+    );
+}
+
 /// Test event variable undeclared errors.
 ///
 /// This binding rejects undeclared event variables at LOAD time (the

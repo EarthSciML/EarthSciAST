@@ -105,14 +105,6 @@ fn test_structural_validation() {
     models.insert("test".to_string(), model);
 
     let esm_file = EsmFile {
-        component_templates: None,
-        coordinates: None,
-        solver: None,
-        expression_templates: None,
-        metaparameters: None,
-        coupling_roles: None,
-        domain: None,
-        index_sets: None,
         esm: "0.1.0".to_string(),
         metadata: Metadata {
             name: Some("Test".to_string()),
@@ -129,13 +121,7 @@ fn test_structural_validation() {
             x_esd: None,
         },
         models: Some(models),
-        reaction_systems: None,
-        data_sources: None,
-        operators: None,
-        enums: None,
-
-        coupling: None,
-        function_tables: None,
+        ..Default::default()
     };
 
     let validation_result = validate(&esm_file);
@@ -280,24 +266,10 @@ fn test_component_graph() {
     models.insert("test_model".to_string(), model);
 
     let esm_file = EsmFile {
-        component_templates: None,
-        coordinates: None,
-        solver: None,
-        expression_templates: None,
-        metaparameters: None,
-        coupling_roles: None,
-        domain: None,
-        index_sets: None,
         esm: "0.1.0".to_string(),
         metadata,
         models: Some(models),
-        reaction_systems: None,
-        data_sources: None,
-        operators: None,
-        enums: None,
-
-        coupling: None,
-        function_tables: None,
+        ..Default::default()
     };
 
     let graph = component_graph(&esm_file);

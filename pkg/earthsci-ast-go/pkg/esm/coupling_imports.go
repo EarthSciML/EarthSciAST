@@ -499,7 +499,13 @@ func expandCouplingImports(file *ESMFile, opts CouplingImportOptions) ([]Couplin
 	if loadRef == nil {
 		loadRef = defaultLoadCouplingRef
 	}
-	basePath := opts.BasePath
+	// A document loaded from a known location resolves its relative imports
+	// against that location (esm-spec §10.10 -> §4.7); the option is the base for
+	// a document that carries none (built in memory, or loaded without a base).
+	basePath := file.couplingImportBase
+	if basePath == "" {
+		basePath = opts.BasePath
+	}
 	if basePath == "" {
 		basePath = "."
 	}

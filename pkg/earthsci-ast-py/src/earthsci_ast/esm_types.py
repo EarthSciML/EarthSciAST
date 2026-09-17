@@ -1323,6 +1323,13 @@ class EsmFile:
     # fails the schema's top-level `anyOf`. The file was legal on disk and
     # illegal the moment it was loaded and re-emitted.
     expression_templates: dict[str, Any] = field(default_factory=dict)
+    # Top-level DECLARATION of a coupling-library file's formal role parameters
+    # (esm-spec §10.9), and the SOLE positive identifier of that file kind. Held
+    # verbatim for the same reason `expression_templates` is: a library carries
+    # no component, so dropping the block emits a document with none of the
+    # top-level payload keys, which the schema's root `anyOf` rejects — the file
+    # is legal on disk and illegal the moment it is loaded and re-emitted.
+    coupling_roles: dict[str, Any] = field(default_factory=dict)
     metaparameters: dict[str, Any] = field(default_factory=dict)
     # The PER-COMPONENT expression-template registries as they stood after the
     # Option-B load (esm-spec §9.6.4 rule 5) and BEFORE `expand_document` folded
@@ -1338,6 +1345,17 @@ class EsmFile:
     # field of the flattened representation, and a registry cannot be merged
     # from a document that has already thrown its inputs away.
     component_templates: dict[str, Any] = field(default_factory=dict)
+    # The directory a relative ``coupling_import`` ``ref`` resolves against
+    # (esm-spec §10.10 -> §4.7: "relative to the directory of the referencing
+    # file"). ``coupling_import`` expands at ``flatten``, which never learns where
+    # the document came from, so the loader records the base here and
+    # ``expand_coupling_imports`` prefers it over its own ``base_path``. Recorded
+    # only from a base the caller really gave (``load_path`` always has one);
+    # ``None`` for a document built in memory, whose base is the caller's.
+    # Loader-only, like ``component_templates``: never serialized, and excluded
+    # from comparison so two loads of the same document from different
+    # directories stay equal.
+    coupling_import_base: str | None = field(default=None, repr=False, compare=False)
 
     @property
     def esm(self) -> str:

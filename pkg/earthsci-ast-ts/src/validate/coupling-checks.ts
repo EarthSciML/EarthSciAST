@@ -15,6 +15,8 @@ import type {
   CouplingVariableMap,
   SubsystemRef,
   ParameterUpdate,
+  CouplingEntry,
+  CouplingImport,
 } from '../types.js'
 import type { StructuralError } from './types.js'
 import {
@@ -24,6 +26,7 @@ import {
   splitScopedRef,
 } from './expr-utils.js'
 import { isExpressionLike } from '../traverse.js'
+import { collectRoleSegments, expandCouplingImports } from '../coupling-imports.js'
 
 /**
  * Flag any `{ref}` (unresolved SubsystemRef) entries in one component's
@@ -120,12 +123,45 @@ function systemPathExists(ref: string, esmFile: EsmFile): boolean {
 }
 
 /**
+ * Resolve a coupling library's role-scoped refs against its declared
+ * `coupling_roles`. esm-spec §10.9 suspends ordinary §4.6 system resolution for a
+ * library validated on its own and requires the top-level segment at every
+ * §10.10.2 occurrence site to name a declared role instead. Sharing
+ * {@link collectRoleSegments} with the import-time check is what keeps the two
+ * sites naming the same set of sites.
+ */
+function validateCouplingRoleRefs(esmFile: EsmFile): StructuralError[] {
+  const errors: StructuralError[] = []
+  const roles = new Set(Object.keys(esmFile.coupling_roles || {}))
+  const entries = esmFile.coupling || []
+  for (let i = 0; i < entries.length; i++) {
+    const unknown = [...collectRoleSegments(entries[i])].filter((seg) => !roles.has(seg)).sort()
+    for (const role of unknown) {
+      errors.push({
+        path: `/coupling/${i}`,
+        code: ERROR_CODES.COUPLING_EDGE_UNKNOWN_ROLE,
+        message: `edge references "${role}", which is not a declared role (esm-spec §10.9: a coupling library's refs name a role in \`coupling_roles\`)`,
+        details: { role, expected_in: 'coupling_roles' },
+      })
+    }
+  }
+  return errors
+}
+
+/**
  * Check coupling entries reference integrity
  */
 export function validateCouplingIntegrity(esmFile: EsmFile): StructuralError[] {
   const errors: StructuralError[] = []
 
   if (!esmFile.coupling) return errors
+
+  // In a coupling-library file (esm-spec §10.9) every endpoint prefix names a
+  // declared ROLE, not a system, and the library holds no models by definition —
+  // resolving them against the model/reaction-system key set would reject every
+  // well-formed library. `coupling_roles` is the sole positive identifier of the
+  // kind.
+  if (esmFile.coupling_roles) return validateCouplingRoleRefs(esmFile)
 
   // Collect all available systems
   // Data sources are deliberately absent: a source cannot be a coupling
@@ -242,7 +278,87 @@ export function validateCouplingIntegrity(esmFile: EsmFile): StructuralError[] {
     }
   }
 
+  errors.push(...validateImportedCouplingEdges(esmFile))
   return errors
+}
+
+/**
+ * The component a `bind` points a role at for `reference`, and the role(s) that
+ * point there. A bind value may be a dotted subsystem path (`Parent.Child`,
+ * esm-spec §10.10.1), so the LONGEST bound component that prefixes the
+ * reference wins; a reference no bind covers falls back to its own head segment.
+ */
+function boundComponentFor(
+  bind: Record<string, string> | undefined,
+  reference: string,
+): { component: string; role: string } {
+  let component = ''
+  for (const bound of Object.values(bind ?? {})) {
+    if (reference !== bound && !reference.startsWith(`${bound}.`)) continue
+    if (bound.length > component.length) component = bound
+  }
+  if (component === '') component = reference.split('.')[0] ?? reference
+  const role = Object.entries(bind ?? {})
+    .filter(([, bound]) => bound === component)
+    .map(([r]) => r)
+    .sort()
+    .join(', ')
+  return { component, role }
+}
+
+/**
+ * Validate the edges each `coupling_import` expands to (esm-spec §10.10.3).
+ *
+ * The loop above walks the SOURCE `coupling` array, where an import is still
+ * `{ type, ref, bind }` and its edges do not exist, so a mis-bind — a
+ * structurally complete `bind` that points a role at a component lacking a
+ * variable the library references — passed `validate` and surfaced only at
+ * flatten. Each import is expanded on its own, against the base the loader
+ * recorded for the document, and its edges go through the same checks as a
+ * hand-authored edge; a finding is re-pointed at the import entry and names the
+ * library, the role and the bound component. An import that cannot be expanded
+ * at all is left to flatten, which owns those §10.11 diagnostics.
+ */
+function validateImportedCouplingEdges(esmFile: EsmFile): StructuralError[] {
+  const findings: StructuralError[] = []
+  // Expanding an import reads its library from disk; without the base the
+  // loader recorded on the document, the ref would resolve against the working
+  // directory, so a document with no known location is left to flatten.
+  const base = esmFile.couplingImportBase
+  if (base === undefined) return findings
+  const coupling = esmFile.coupling ?? []
+  for (let i = 0; i < coupling.length; i++) {
+    const entry = coupling[i]
+    if (entry.type !== 'coupling_import') continue
+    const imp = entry as CouplingImport
+    const single = { ...esmFile, coupling: [entry] } as EsmFile
+    Object.defineProperty(single, 'couplingImportBase', {
+      value: base,
+      enumerable: false,
+      writable: true,
+      configurable: true,
+    })
+    let edges: CouplingEntry[] | undefined
+    try {
+      edges = expandCouplingImports(single)
+    } catch {
+      continue
+    }
+    if (!edges || edges.length === 0) continue
+    for (const e of validateCouplingIntegrity({ ...esmFile, coupling: edges } as EsmFile)) {
+      if (e.code !== ERROR_CODES.UNRESOLVED_SCOPED_REF) continue
+      const details = (e.details ?? {}) as Record<string, unknown>
+      const reference = typeof details.reference === 'string' ? details.reference : ''
+      const { component, role } = boundComponentFor(imp.bind, reference)
+      findings.push({
+        ...e,
+        path: `/coupling/${i}`,
+        message: `coupling_import '${imp.ref}' binds role '${role}' to '${component}', which does not provide '${reference}' referenced by the library: ${e.message}`,
+        details: { ...details, coupling_import: imp.ref, role, bound_component: component },
+      })
+    }
+  }
+  return findings
 }
 
 /**

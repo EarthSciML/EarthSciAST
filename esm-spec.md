@@ -1299,7 +1299,7 @@ A subsystem may be a child **model** or a child **reaction system**. A `data_sou
 | Absolute path | `"/models/atmosphere.esm"` | Used as-is |
 | HTTP/HTTPS URL | `"https://example.com/models/atmosphere.esm"` | Fetched from the network |
 
-A ref MAY contain `${VAR}` tokens (e.g. `"${ESD_ROOT}/grids/cartesian_uniform_1d/stencils/upwind1_D_interior.esm"`), expanded from the loader's environment **before** the resolution above — the mechanism for referencing a sibling library repository checked out at a deployment-chosen path. Expansion is an **OPTIONAL** capability, on the same footing as URL refs: only the braced `${VAR}` form is expanded (not bare `$VAR`); an **unset** variable is left literal, so the ref fails to resolve with the ordinary unresolved diagnostic (`template_import_unresolved` / the subsystem-ref error) rather than misresolving; and a binding without the capability treats `${VAR}` as a literal path segment, i.e. the same clean unresolved failure. Expansion applies equally to subsystem refs and template-import refs (§9.7.2). Current bindings: **Julia** and **Python** expand `${VAR}` in both mechanisms; **TypeScript**, **Rust**, and **Go** do not yet (a `${VAR}` ref fails as unresolved there). Because expansion feeds resolution, an expanded relative ref anchors against the referencing file's directory and an expanded absolute/URL ref is used as-is. A `data_sources` entry's `source.url_template` reuses this section's *path* resolution rule but **not** its `${VAR}` capability: §8.2.1 makes relative resolution REQUIRED of every binding and refuses `${VAR}` outright, because an optional capability there would decide where a document's data comes from differently in different bindings.
+A ref MAY contain `${VAR}` tokens (e.g. `"${ESD_ROOT}/grids/cartesian_uniform_1d/stencils/upwind1_D_interior.esm"`), expanded from the loader's environment **before** the resolution above — the mechanism for referencing a sibling library repository checked out at a deployment-chosen path. Expansion is an **OPTIONAL** capability, on the same footing as URL refs: only the braced `${VAR}` form is expanded (not bare `$VAR`); an **unset** variable is left literal, so the ref fails to resolve with the ordinary unresolved diagnostic (`template_import_unresolved` / `coupling_import_unresolved` / the subsystem-ref error) rather than misresolving; and a binding without the capability treats `${VAR}` as a literal path segment, i.e. the same clean unresolved failure. The variable name is a C-identifier (`[A-Za-z_][A-Za-z0-9_]*`); a `${...}` whose contents are not one is an ordinary path segment, like a bare `$VAR`. Expansion applies equally to subsystem refs, template-import refs (§9.7.2) and coupling-import refs (§10.10). Current bindings: **Julia**, **Python**, **Rust**, **TypeScript** and **Go** all expand `${VAR}` in all three mechanisms. Because expansion feeds resolution, an expanded relative ref anchors against the referencing file's directory and an expanded absolute/URL ref is used as-is. A `data_sources` entry's `source.url_template` reuses this section's *path* resolution rule but **not** its `${VAR}` capability: §8.2.1 makes relative resolution REQUIRED of every binding and refuses `${VAR}` outright, because an optional capability there would decide where a document's data comes from differently in different bindings.
 
 **URL (remote) references are an OPTIONAL binding capability.** Fetching `http(s)` refs is not required for conformance. A binding without remote support MUST reject a URL ref **cleanly** with the existing unresolved diagnostics — `template_import_unresolved` for a template import (§9.7.2), the subsystem-ref resolution error here — never by silently skipping or misresolving it. A binding that does support URLs MUST treat a URL-loaded document as the base for that document's own relative refs: they resolve by URL joining against the document's URL directory (RFC 3986 relative resolution over the forms above), and cycle detection treats URL identity **canonically** (dot segments removed, relative spellings joined against the base before comparison). Current bindings: **Julia** supports URL refs for both subsystem refs and template imports, including URL-base joining of nested relative refs and canonical-URL cycle detection; **TypeScript** fetches remote subsystem refs (with a remote base for recursive resolution) but rejects remote template-library imports with `template_import_unresolved`; **Rust** rejects remote refs in both mechanisms; **Python** and **Go** fetch both, but do not yet URL-base join relative refs inside a URL-loaded document (such refs fail as unresolved).
 
@@ -5126,6 +5126,17 @@ the same per-binding capability rules as a template import; a `ref` that fails t
 `coupling_import_unresolved`, and a `ref` that targets a document without top-level `coupling_roles`
 is `coupling_import_not_library`.
 
+**Which directory a relative `ref` is relative to.** §4.7 resolves a relative path "relative to the
+directory of the referencing file", and the referencing file is the importing document — not the
+process working directory, and not whatever directory flatten happens to be handed. A document the
+loader read from a known location (a path load, or a string/in-memory load the caller gave a base
+for) therefore resolves its imports against THAT location, whatever base the flatten call passes.
+A document with no location of its own — built in memory, or parsed from text with no base — has no
+referencing directory, and only then does the base supplied at flatten apply; with neither, the ref
+is relative to the working directory. The authored `ref` is never rewritten by this: §10.10.3
+requires the entry to round-trip verbatim, so the resolution base is loader state kept beside the
+document, never a wire field.
+
 #### 10.10.1 Binding — total and checked by name
 
 For a `coupling_import` referencing a library that declares roles `R₁ … Rₙ`, binding is a **total,
@@ -5215,7 +5226,13 @@ Two consequences of expanding inside flatten are normative:
   over the same expanded edge, that a hand-authored edge to a nonexistent variable produces. Whether
   that validation is folded into the flatten pass or run as a separate coupled-system check over the
   flattened form is a binding-implementation choice; the requirement is only that it sees the
-  expanded edges.
+  expanded edges. An implementation that also reports the mis-bind from `validate` on the **source**
+  document MUST report it at the pointer of the `coupling_import` entry (`/coupling/<i>`) rather than
+  at a pointer inside an expanded edge, because the import round-trips verbatim and the expanded edge
+  is not an entry of the document's own `coupling` array. Such a check reads the library from disk,
+  so it runs only for a document whose location the loader recorded (§4.7); a document with no
+  location of its own leaves the mis-bind to flatten rather than resolving the `ref` against the
+  process working directory.
 - **A library-edge transform's templates expand at flatten** against the bound `to` owner's
   registry (§10.4 carve-out), to an already-lowered form.
 
@@ -5225,6 +5242,16 @@ targets collide on one parameter) is neither created nor specially diagnosed by 
 handled exactly as two inline edges doing the same, and the flattening algorithm is commutative
 (libraries-spec §4.7), so no order-dependent outcome is asserted. Authors should route each role to
 its own target rather than share one.
+
+**Making an import required.** A coupling-target parameter that a library edge is meant to fill SHOULD
+be declared **without a `default`**. `default` is optional (§6.3), and a parameter with neither a
+default nor a supplied value is an error when a problem is built from the document (a run-time
+`parameter_overrides` value, §6.6.2, or an API parameter still satisfies it). So if the
+`coupling_import` that fills it is omitted — or its `bind` points the role elsewhere — the omission
+fails loudly at build instead of silently running with a placeholder value. A target that does
+carry a `default` is, by that declaration, optional: omitting its import is not an error. `validate`
+cannot reject an uncoupled default-less parameter on its own, because the value may legitimately
+arrive at run time.
 
 ### 10.11 Coupling-import diagnostics
 

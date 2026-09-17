@@ -431,6 +431,9 @@ pub fn validate(esm_file: &EsmFile) -> ValidationResult {
             &mut structural_errors,
         );
     }
+    // esm-spec §10.10.3: a mis-bound `coupling_import` is a bad edge, and the
+    // coupled-system reference check MUST see the expanded edges.
+    crate::coupling::validate_imported_coupling(esm_file, &system_refs, &mut structural_errors);
 
     let is_valid = schema_errors.is_empty() && structural_errors.is_empty();
 

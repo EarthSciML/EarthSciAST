@@ -342,6 +342,13 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     esm_file.component_templates = component_templates;
     // esm-spec §2.2: an EMPTY `solver` block normalizes to absence at load.
     esm_file.solver = crate::solver::normalize_empty(esm_file.solver.take());
+    // esm-spec §10.10 / §4.7: relative `coupling_import` refs resolve against
+    // THIS document's directory, which flatten would otherwise never learn. Only
+    // an explicit base is recorded; a string load without one leaves flatten's
+    // own `base_path` in charge.
+    if options.base_path.is_some() {
+        esm_file.coupling_import_base = Some(base.to_string_lossy().into_owned());
+    }
 
     Ok(esm_file)
 }
@@ -1063,6 +1070,42 @@ fn coupled_system_names_raw(obj: &serde_json::Map<String, Value>) -> HashSet<Str
     coupled
 }
 
+/// In a coupling-library file (esm-spec §10.9) a coupling edge's system-naming
+/// segments name declared ROLES, not systems: the library holds no models, so
+/// resolving them against a symbol table would reject every well-formed library.
+/// §10.9 suspends that resolution and requires the top-level segment at every
+/// §10.10.2 occurrence site to name a declared role instead
+/// (`coupling_edge_unknown_role`), which is the same check `coupling_imports`
+/// runs when the library is imported — the shared `collect_role_segments` walk
+/// is what keeps the two sites from drifting apart.
+fn check_coupling_role_references(
+    obj: &serde_json::Map<String, Value>,
+    coupling: &[Value],
+    errors: &mut Vec<String>,
+) {
+    let roles: std::collections::HashSet<&str> = obj
+        .get("coupling_roles")
+        .and_then(|v| v.as_object())
+        .map(|o| o.keys().map(String::as_str).collect())
+        .unwrap_or_default();
+    for (i, c) in coupling.iter().enumerate() {
+        if !c.is_object() {
+            continue;
+        }
+        let mut unknown: Vec<String> = crate::coupling_imports::collect_role_segments(c)
+            .into_iter()
+            .filter(|seg| !roles.contains(seg.as_str()))
+            .collect();
+        unknown.sort();
+        for seg in unknown {
+            errors.push(format!(
+                "coupling[{i}]: edge references '{seg}', which is not a declared role \
+                 (esm-spec §10.9: a coupling library's refs name a role in `coupling_roles`)"
+            ));
+        }
+    }
+}
+
 /// `coupling[].from` and `coupling[].to` must point to variables declared
 /// somewhere in the file. We only enforce `from`, matching Python's lenient
 /// handling of `to` (variable_map can introduce target vars).
@@ -1070,6 +1113,12 @@ fn check_coupling_references(obj: &serde_json::Map<String, Value>, errors: &mut 
     let Some(coupling) = obj.get("coupling").and_then(|v| v.as_array()) else {
         return;
     };
+    // A coupling library's refs are role-scoped, not system-scoped (esm-spec
+    // §10.9); `coupling_roles` is the sole positive identifier of the kind.
+    if crate::coupling_imports::is_coupling_library_obj(obj) {
+        check_coupling_role_references(obj, coupling, errors);
+        return;
+    }
     let tables = build_symbol_tables(obj);
 
     for (i, c) in coupling.iter().enumerate() {

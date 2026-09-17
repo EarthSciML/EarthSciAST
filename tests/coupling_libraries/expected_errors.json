@@ -36,7 +36,7 @@
     "lib_declares_models.esm": { "code": "coupling_library_illegal_payload", "driver": "flatten", "site": "library" },
     "lib_has_callback.esm": { "code": "coupling_library_illegal_payload", "driver": "flatten", "site": "library" },
     "lib_edge_template_imports.esm": { "code": "coupling_library_illegal_payload", "driver": "flatten", "site": "library" },
-    "lib_unknown_role_edge.esm": { "code": "coupling_edge_unknown_role", "driver": "flatten", "site": "library" },
+    "lib_unknown_role_edge.esm": { "code": "coupling_edge_unknown_role", "driver": "flatten+validate", "site": "library", "note": "Also reported by validate() on the LIBRARY document itself. esm-spec \u00a710.9 does not merely suspend \u00a74.6 system resolution for a library validated standalone, it REPLACES it: the top-level segment at every \u00a710.10.2 occurrence site must name a declared role. Four bindings used to resolve those prefixes against a symbol table of models and so rejected every WELL-FORMED library; Go skipped library validation entirely and so accepted this one." },
     "lib_unused_role.esm": { "code": "coupling_role_unused", "driver": "flatten", "site": "library" },
     "lib_nested_import.esm": { "code": "coupling_library_nested_import", "driver": "flatten", "site": "library" },
 
@@ -49,7 +49,7 @@
       "code": "unresolved_scoped_ref",
       "driver": "flatten+validate",
       "site": "flatten",
-      "note": "Binding is structurally complete, so expandCouplingImports SUCCEEDS; the mis-bind (Spread -> RothermelNoW0, which lacks `w0`) surfaces on the expanded edge as the existing unresolved_scoped_ref (esm-spec §4.1/§7) — 'a bad binding is just a bad edge, caught where all bad edges are.' This entry used to carry a KNOWN GAP: no binding's `flatten()` re-ran scoped-ref resolution on expanded edges (the check lived in validate(), which iterates the UN-expanded coupling), so flatten SUCCEEDED and the test had to drive the diagnostic through validate() on the expanded coupling. The `variable_map` endpoint preflight (issue #198 item 1) closes it — an endpoint resolving to nothing is refused at flatten in every binding, which is the `site` this entry always named."
+      "note": "Binding is structurally complete, so expandCouplingImports SUCCEEDS; the mis-bind (Spread -> RothermelNoW0, which lacks `w0`) surfaces on the expanded edge as the existing unresolved_scoped_ref (esm-spec §4.1/§7) — 'a bad binding is just a bad edge, caught where all bad edges are.' This entry used to carry a KNOWN GAP: no binding's `flatten()` re-ran scoped-ref resolution on expanded edges (the check lived in validate(), which iterates the UN-expanded coupling), so flatten SUCCEEDED and the test had to drive the diagnostic through validate() on the expanded coupling. The `variable_map` endpoint preflight (issue #198 item 1) closes it — an endpoint resolving to nothing is refused at flatten in every binding, which is the `site` this entry always named. Validation now also reports it on the SOURCE document in all five bindings: validate() expands each coupling_import against the base the loader recorded and runs the same scoped-reference checks over the expanded edges, re-pointing the finding at the import entry with `coupling_import`, `role` and `bound_component` in its details (esm-spec §10.10.3)."
     },
 
     "subsystem_ref_to_library.esm": { "code": "subsystem_ref_is_coupling_library", "driver": "resolveSubsystemRefs", "site": "cross-kind" },

@@ -2176,6 +2176,87 @@ function validate_reference_integrity(file::EsmFile)::Vector{StructuralError}
         append!(errors, validate_coupling_references(file, coupling_entry, "/coupling/$(i-1)"))
     end
 
+    # esm-spec §10.10.3: a mis-bound `coupling_import` is a bad edge, and the
+    # scoped-reference check MUST see the expanded edges.
+    append!(errors, _validate_imported_coupling_edges(file))
+
+    return errors
+end
+
+# The component a `bind` points a role at for `ref`, and the role(s) that point
+# there. A bind value may be a dotted subsystem path (`Parent.Child`, §10.10.1),
+# so the LONGEST bound component that prefixes the reference wins; a reference
+# no bind covers falls back to its own head segment.
+function _bound_component_for(bind::AbstractDict, ref::AbstractString)
+    best = ""
+    for v in values(bind)
+        (ref == v || startswith(ref, v * ".")) || continue
+        length(v) > length(best) && (best = v)
+    end
+    isempty(best) && (best = String(first(split(ref, '.'))))
+    roles = sort!([String(k) for (k, v) in pairs(bind) if v == best])
+    return best, join(roles, ", ")
+end
+
+"""
+Validate the edges each `coupling_import` expands to (esm-spec §10.10.3).
+
+`validate_coupling_references` walks the SOURCE `coupling` vector, where an
+import is still `{type, ref, bind}` and its edges do not exist, so a mis-bind — a
+structurally complete `bind` that points a role at a component lacking a variable
+the library references — used to pass `validate` and surface only at flatten.
+Each import is expanded here on its own, against the base the loader recorded for
+the document, and its edges go through the same qualified-reference check a
+hand-authored edge does. A finding is re-pointed at the import entry and names the
+library, the role and the bound component. An import that cannot be expanded at
+all (a missing library, an unbound role, ...) is left to flatten, which owns those
+§10.11 diagnostics.
+"""
+function _validate_imported_coupling_edges(file::EsmFile)::Vector{StructuralError}
+    errors = StructuralError[]
+    # Expanding reads the library from disk; without the base the loader recorded
+    # for the document, the ref would resolve against the working directory, so a
+    # document with no known location is left to flatten.
+    base = get(_COUPLING_IMPORT_BASE, file.coupling, nothing)
+    base === nothing && return errors
+    for (i, entry) in enumerate(file.coupling)
+        entry isa CouplingImport || continue
+        local edges
+        try
+            edges = _expand_one(_default_coupling_load_ref(entry.ref, base),
+                                entry.ref, entry.bind, file)
+        catch
+            continue
+        end
+        for edge in edges
+            edge isa CouplingVariableMap || continue
+            for (side, ref) in (("from", edge.from), ("to", edge.to))
+                occursin('.', ref) || continue
+                cause = try
+                    resolve_qualified_reference(file, ref)
+                    nothing
+                catch e
+                    isa(e, QualifiedReferenceError) ? e.message : rethrow()
+                end
+                cause === nothing && continue
+                component, roles = _bound_component_for(entry.bind, ref)
+                push!(errors, StructuralError(
+                    "/coupling/$(i-1)",
+                    "coupling_import '$(entry.ref)' binds role '$roles' to '$component', " *
+                    "which does not provide '$ref' referenced by the library: " *
+                    "cannot resolve '$side' reference '$ref': $cause",
+                    ERROR_CODES.UNRESOLVED_SCOPED_REF,
+                    Dict{String,Any}(
+                        "reference" => ref,
+                        "coupling_type" => "variable_map",
+                        "direction" => side,
+                        "coupling_import" => entry.ref,
+                        "role" => roles,
+                        "bound_component" => component,
+                    )))
+            end
+        end
+    end
     return errors
 end
 
@@ -2798,6 +2879,31 @@ function _check_connector_expressions(file::EsmFile, entry::CouplingCouple,
 end
 
 """
+    _check_coupling_role_references(file, coupling_entry, path) -> Vector{StructuralError}
+
+Resolve a coupling library's role-scoped refs against its declared
+`coupling_roles`. esm-spec §10.9 suspends ordinary §4.6 system resolution for a
+library validated on its own and requires the top-level segment at every
+§10.10.2 occurrence site to name a declared role instead. The site walk is shared
+with the import-time check in `coupling_imports.jl`, so the two cannot drift.
+"""
+function _check_coupling_role_references(file::EsmFile, coupling_entry::CouplingEntry, path::String)::Vector{StructuralError}
+    errors = StructuralError[]
+    roles = file.coupling_roles === nothing ? Dict{String,Any}() : file.coupling_roles
+    segments = _collect_role_segments(serialize_coupling_entry(coupling_entry))
+    for role in sort!(collect(Iterators.filter(s -> !haskey(roles, s), segments)))
+        push!(errors, StructuralError(
+            path,
+            "edge references '$role', which is not a declared role " *
+            "(esm-spec §10.9: a coupling library's refs name a role in `coupling_roles`)",
+            ERROR_CODES.COUPLING_EDGE_UNKNOWN_ROLE,
+            Dict{String,Any}("role" => role, "expected_in" => "coupling_roles")
+        ))
+    end
+    return errors
+end
+
+"""
     validate_coupling_references(file::EsmFile, coupling_entry::CouplingEntry, path::String) -> Vector{StructuralError}
 
 Validate coupling references based on the specific coupling type.
@@ -2805,6 +2911,15 @@ Checks that systems, operators, and variable references can be resolved.
 """
 function validate_coupling_references(file::EsmFile, coupling_entry::CouplingEntry, path::String)::Vector{StructuralError}
     errors = StructuralError[]
+
+    # In a coupling-library file (esm-spec §10.9) an edge's system-naming
+    # segments name declared ROLES, not systems, and the library holds no models
+    # by definition — resolving them against the file's systems would reject
+    # every well-formed library. `coupling_roles` is the sole positive
+    # identifier of the kind.
+    if file.coupling_roles !== nothing
+        return _check_coupling_role_references(file, coupling_entry, path)
+    end
 
     if isa(coupling_entry, CouplingOperatorCompose)
         # Validate that all referenced systems exist. The defect is carried by

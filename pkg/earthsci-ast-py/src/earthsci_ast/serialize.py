@@ -1146,6 +1146,8 @@ def _serialize_esm_file(esm_file: EsmFile) -> dict[str, Any]:
         result["metaparameters"] = esm_file.metaparameters
     if getattr(esm_file, "expression_templates", None):
         result["expression_templates"] = esm_file.expression_templates
+    if getattr(esm_file, "coupling_roles", None):
+        result["coupling_roles"] = esm_file.coupling_roles
 
     # Serialize the document-scoped data-source ingest registry (esm-spec §8)
     if esm_file.data_sources:

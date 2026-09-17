@@ -20,6 +20,48 @@ export function isRemoteRef(ref: string): boolean {
 }
 
 /**
+ * A `${VAR}` environment token inside a §4.7 ref, with the variable name as
+ * capture group 1. Only the BRACED form with a C-identifier name matches: a
+ * bare `$VAR`, a non-identifier name (`${2X}`, `${A-B}`) and an unclosed `${`
+ * are not tokens at all and pass through as literal ref text.
+ */
+const ENV_REF_RE = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g
+
+/**
+ * Expand `${VAR}` tokens in a §4.7 ref from the process environment — the
+ * OPTIONAL loader capability esm-spec §4.7 lists alongside URL refs, and the
+ * form §10.10 names for a `coupling_import` ref ("relative path, absolute path,
+ * URL, `${VAR}`").
+ *
+ * Three rules, matched byte-for-byte against the Julia and Python bindings:
+ *
+ * 1. Only the braced `${VAR}` form with a C-identifier name is a token. Bare
+ *    `$VAR` is ordinary ref text and is never expanded.
+ * 2. A SET variable is replaced by its value; an UNSET one is left LITERAL.
+ *    Leaving it literal is what makes the failure honest: the ref then fails
+ *    with the ordinary unresolved diagnostic (`template_import_unresolved` /
+ *    `coupling_import_unresolved` / `unresolved_subsystem_ref`) naming the
+ *    `${VAR}` text the author wrote, rather than misresolving against an empty
+ *    string and reporting a path nobody spelled.
+ * 3. Expansion happens BEFORE any remote/absolute classification and before
+ *    anchoring — expand, THEN decide whether the ref is `http(s)://`, then join
+ *    a relative ref against the referencing file's directory. A variable may
+ *    therefore supply a scheme, an absolute prefix, or a path fragment.
+ *
+ * The environment is read defensively, the way {@link readFileSyncNode} reads
+ * `globalThis.process`, because this package is expected to parse in a browser.
+ * Where there is no environment to read, EVERY token is simply unset and so
+ * left literal — which is exactly the clean-unresolved behaviour §4.7 already
+ * blesses for a binding without the capability.
+ */
+export function expandRefEnv(ref: string): string {
+  const env = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process
+    ?.env
+  if (env === undefined) return ref
+  return ref.replace(ENV_REF_RE, (token, name: string) => env[name] ?? token)
+}
+
+/**
  * Join two POSIX-style paths. An absolute `ref` (leading `/`) wins outright;
  * otherwise `ref` is appended to `baseDir` with exactly one separator.
  *

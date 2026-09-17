@@ -34,24 +34,9 @@ fn empty_metadata() -> Metadata {
 
 fn empty_file() -> EsmFile {
     EsmFile {
-        component_templates: None,
-        coordinates: None,
-        solver: None,
-        expression_templates: None,
-        metaparameters: None,
-        coupling_roles: None,
-        domain: None,
-        index_sets: None,
         esm: "0.1.0".to_string(),
         metadata: empty_metadata(),
-        models: None,
-        reaction_systems: None,
-        data_sources: None,
-        operators: None,
-        enums: None,
-
-        coupling: None,
-        function_tables: None,
+        ..Default::default()
     }
 }
 

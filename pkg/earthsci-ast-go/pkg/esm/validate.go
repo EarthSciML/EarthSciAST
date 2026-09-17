@@ -124,6 +124,20 @@ func Validate(file *ESMFile) *ValidationResult {
 		return result
 	}
 
+	// A COUPLING library keeps ONE check. esm-spec §10.9 does not simply suspend
+	// reference resolution for it: it REPLACES it, requiring the top-level
+	// segment at every §10.10.2 occurrence site to name a declared role
+	// (`coupling_edge_unknown_role`). Skipping that outright accepted a typo'd
+	// role here that the other four bindings reject, and that the import-time
+	// check in coupling_imports.go rejects the moment an assembly binds the very
+	// same library. Gated on `coupling_roles` alone, which §10.9 makes the sole
+	// positive identifier of the file kind, so the five bindings run the check
+	// on the same condition.
+	if len(file.CouplingRoles) != 0 {
+		result.StructuralErrors = validateCouplingRoleRefs(file)
+		result.IsValid = countStructuralErrorLevel(result.StructuralErrors) == 0
+		return result
+	}
 	// A LIBRARY document (expression-template library per esm-spec §9.7, or a
 	// coupling-role library per §10.9) declares no components, so every
 	// component-oriented structural check has nothing to say and the
@@ -214,6 +228,51 @@ func isLibraryDocument(file *ESMFile) bool {
 		return false
 	}
 	return rawIsPresent(file.ExpressionTemplates) || len(file.CouplingRoles) != 0
+}
+
+// validateCouplingRoleRefs resolves a coupling library's role-scoped refs
+// against its declared `coupling_roles` (esm-spec §10.9). An expression-template
+// library has no coupling block and yields nothing.
+//
+// The occurrence-site walk is collectRoleSegments, shared with the import-time
+// check in coupling_imports.go, so standalone validation and import expansion
+// cannot disagree about which segments are role names. It wants the RAW edge
+// that walk is written against, and a typed CouplingEntry round-trips to one
+// through its own json tags.
+func validateCouplingRoleRefs(file *ESMFile) []StructuralError {
+	errors := []StructuralError{}
+	if len(file.CouplingRoles) == 0 {
+		return errors
+	}
+	for i, entry := range file.Coupling {
+		raw, err := json.Marshal(entry)
+		if err != nil {
+			continue
+		}
+		var edge map[string]any
+		if err := json.Unmarshal(raw, &edge); err != nil {
+			continue
+		}
+		unknown := []string{}
+		for seg := range collectRoleSegments(edge) {
+			if _, ok := file.CouplingRoles[seg]; !ok {
+				unknown = append(unknown, seg)
+			}
+		}
+		sort.Strings(unknown)
+		for _, role := range unknown {
+			errors = append(errors, StructuralError{
+				Path: fmt.Sprintf("/coupling/%d", i),
+				Code: CodeCouplingEdgeUnknownRole,
+				Message: fmt.Sprintf(
+					"edge references '%s', which is not a declared role "+
+						"(esm-spec §10.9: a coupling library's refs name a role in `coupling_roles`)",
+					role),
+				Details: map[string]any{"role": role, "expected_in": "coupling_roles"},
+			})
+		}
+	}
+	return errors
 }
 
 // StructuralValidationResult holds the code-bearing structural validation
@@ -467,6 +526,7 @@ func collectStructuralErrors(file *ESMFile) []StructuralError {
 		s.validateReactionSystem(systemName, &system)
 	}
 	s.validateCouplingReferences()
+	s.validateImportedCouplingEdges()
 	s.validateSubsystemRefs()
 	s.validateCircularReferences()
 	s.validateDataSourceReferences()
@@ -2079,6 +2139,98 @@ func (s *structuralScan) validateCouplingReferences() {
 			}
 		}
 	}
+}
+
+// validateImportedCouplingEdges validates the edges each `coupling_import`
+// expands to (esm-spec §10.10.3).
+//
+// validateCouplingReferences walks the SOURCE `coupling` slice, where an import
+// is still `{type, ref, bind}` and its edges do not exist, so a mis-bind — a
+// structurally complete `bind` that points a role at a component lacking a
+// variable the library references — used to pass Validate and surface only at
+// flatten. Here each import is expanded on its own, against the base the loader
+// recorded on the document, and its edges go through the same scoped-reference
+// check as a hand-authored edge. A finding is re-pointed at the import entry and
+// names the library, the role and the bound component. An import that cannot be
+// expanded at all (a missing library, an unbound role, ...) is left to flatten,
+// which owns those §10.11 diagnostics.
+func (s *structuralScan) validateImportedCouplingEdges() {
+	// Expanding reads the library from disk; without the base the loader
+	// recorded on the document, the ref would resolve against the working
+	// directory, so a document with no known location is left to flatten.
+	if s.file == nil || s.file.couplingImportBase == "" {
+		return
+	}
+	allSystems := couplableSystemNames(s.file)
+	for i, entry := range s.file.Coupling {
+		imp, ok := entry.(CouplingImport)
+		if !ok {
+			continue
+		}
+		single := *s.file
+		single.Coupling = []CouplingEntry{entry}
+		edges, err := expandCouplingImports(&single, CouplingImportOptions{})
+		if err != nil || len(edges) == 0 {
+			continue
+		}
+		sub := &structuralScan{file: s.file, indep: s.indep, coupled: s.coupled, coords: s.coords}
+		for _, edge := range edges {
+			vm, ok := edge.(VariableMapCoupling)
+			if !ok {
+				continue
+			}
+			sub.validateCouplingEndpoint(vm.From, allSystems, "", "from", i)
+			sub.validateCouplingEndpoint(vm.To, allSystems, "", "to", i)
+		}
+		for _, se := range sub.errors {
+			if se.Code != ErrorUnresolvedScopedRef {
+				continue
+			}
+			ref, _ := se.Details["scoped_ref"].(string)
+			component, role := boundComponentFor(imp.Bind, ref)
+			se.Path = fmt.Sprintf("/coupling/%d", i)
+			se.Message = fmt.Sprintf("coupling_import '%s' binds role '%s' to '%s', which does not provide '%s' referenced by the library: %s",
+				imp.Ref, role, component, ref, se.Message)
+			details := map[string]any{}
+			for k, v := range se.Details {
+				details[k] = v
+			}
+			details["reference"] = ref
+			details["coupling_import"] = imp.Ref
+			details["role"] = role
+			details["bound_component"] = component
+			se.Details = details
+			s.addErr(se)
+		}
+	}
+}
+
+// boundComponentFor names the component a `bind` points a role at for `ref`, and
+// the role(s) that point there, joined by ", " when one component carries more
+// than one. A bind value may be a dotted subsystem path (`Parent.Child`,
+// esm-spec §10.10.1), so the LONGEST bound component that prefixes the reference
+// wins; a reference no bind covers falls back to its own head segment.
+func boundComponentFor(bind map[string]string, ref string) (string, string) {
+	component := ""
+	for _, bound := range bind {
+		if ref != bound && !strings.HasPrefix(ref, bound+".") {
+			continue
+		}
+		if len(bound) > len(component) {
+			component = bound
+		}
+	}
+	if component == "" {
+		component, _, _ = strings.Cut(ref, ".")
+	}
+	roles := make([]string, 0, len(bind))
+	for role, bound := range bind {
+		if bound == component {
+			roles = append(roles, role)
+		}
+	}
+	sort.Strings(roles)
+	return component, strings.Join(roles, ", ")
 }
 
 // validateCouplingEventAffectsUnknown reports `event_affects_parameter` for a

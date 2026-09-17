@@ -252,3 +252,175 @@ _sc(e) = EarthSciAST.serialize_coupling_entry(e)
         @test back.bind == entry.bind
     end
 end
+
+# A relative `coupling_import` `ref` names a file relative to the importing
+# document (esm-spec §10.10 -> §4.7), so `flatten` with its default `base_path`
+# must find ./rothermel_fuel.esm beside assembly_import.esm from a working
+# directory that holds no such file. Before the fix the import resolved against
+# the working directory and threw `coupling_import_unresolved`.
+@testset "coupling_import ref resolves against the importing document (§10.10 -> §4.7)" begin
+    corpus = joinpath(TESTUTILS_REPO_ROOT, "tests", "coupling_libraries")
+    cd(mktempdir()) do
+        @test !isfile("rothermel_fuel.esm")
+        imported = flatten(load_path(joinpath(corpus, "assembly_import.esm")))
+        inline = flatten(load_path(joinpath(corpus, "assembly_inline.esm")))
+        se(f) = [EarthSciAST.serialize_equation(e) for e in f.equations]
+        @test se(imported) == se(inline)
+        @test sort(collect(keys(imported.parameters))) == sort(collect(keys(inline.parameters)))
+    end
+    # The document's own base wins over an unrelated keyword, and the authored
+    # `ref` round-trips verbatim (§10.10.3).
+    file = load_path(joinpath(corpus, "assembly_import.esm"))
+    @test flatten(file; base_path=joinpath("does", "not", "exist")) isa EarthSciAST.FlattenedSystem
+    @test only(e for e in file.coupling if e isa CouplingImport).ref == "./rothermel_fuel.esm"
+    @test occursin("\"./rothermel_fuel.esm\"", EarthSciAST.to_json(file))
+end
+
+# A document with no location of its own — built in memory, or parsed from text
+# with no `base_path` — leaves `flatten`'s `base_path` in charge, and one given an
+# explicit base anchors on it. All five bindings agree on this, so a caller's
+# base is never silently replaced by the working directory.
+@testset "an in-memory coupling_import document keeps the caller's base (§10.10 -> §4.7)" begin
+    corpus = joinpath(TESTUTILS_REPO_ROOT, "tests", "coupling_libraries")
+    text = read(joinpath(corpus, "assembly_import.esm"), String)
+    doc = EarthSciAST._to_ordered(JSON3.read(text))
+    cd(mktempdir()) do
+        @test !isfile("rothermel_fuel.esm")
+        # No base of its own -> the caller's `base_path` resolves the import.
+        @test flatten(load_string(text); base_path=corpus) isa EarthSciAST.FlattenedSystem
+        @test flatten(load_document(doc); base_path=corpus) isa EarthSciAST.FlattenedSystem
+        # An explicit base of its own -> it wins, with no `base_path` at all.
+        @test flatten(load_string(text; base_path=corpus)) isa EarthSciAST.FlattenedSystem
+        @test flatten(load_document(doc; base_path=corpus)) isa EarthSciAST.FlattenedSystem
+    end
+end
+
+# A structurally complete `bind` that points a role at a component lacking a
+# referenced variable is reported by `validate` on the SOURCE document, not only
+# at flatten, and the finding is re-pointed at the import entry and names the
+# import, role and component (esm-spec §10.10.3).
+@testset "validate reports a mis-bound coupling_import on the source document (§10.10.3)" begin
+    corpus = joinpath(TESTUTILS_REPO_ROOT, "tests", "coupling_libraries")
+    path = joinpath(corpus, "import_misbind_downstream.esm")
+    result = EarthSciAST.validate(load_path(path))
+    attributed = [e for e in result.structural_errors
+                  if e.error_type == "unresolved_scoped_ref" &&
+                     haskey(e.details, "coupling_import")]
+    @test !isempty(attributed)
+    found = first(attributed)
+    @test found.path == "/coupling/0"
+    @test found.details["bound_component"] == "RothermelNoW0"
+    @test found.details["role"] == "Spread"
+    @test endswith(found.details["reference"], ".w0")
+    @test !result.is_valid
+
+    # A document with no recorded base does no file I/O, so it reports nothing
+    # about the import rather than resolving the ref against the working dir.
+    no_base = EarthSciAST.validate(load_string(read(path, String)))
+    @test isempty([e for e in no_base.structural_errors
+                   if haskey(e.details, "coupling_import")])
+end
+
+@testset "coupling-library refs resolve against roles, not systems" begin
+    # A library's edges name ROLES, and it declares no models by definition
+    # (esm-spec §10.9), so resolving them against the file's systems rejected
+    # every well-formed library — including EarthSciModels' own
+    # fastjx_superfast.esm and wildlandfire_behavior.esm. §10.9 replaces that
+    # resolution with a check against `coupling_roles` at every §10.10.2
+    # occurrence site, reported as `coupling_edge_unknown_role`.
+    lib = """
+    {
+      "esm": "1.1.0",
+      "metadata": {"name": "RoleScopedLib"},
+      "coupling_roles": {
+        "Source": {"description": "provides x"},
+        "Sink": {"description": "consumes x"}
+      },
+      "coupling": [
+        {"type": "variable_map", "from": "Source.x", "to": "Sink.x",
+         "transform": "param_to_var"},
+        {"type": "operator_compose", "systems": ["Source", "Sink"],
+         "translate": {"Source.x": "Sink.x"}, "require_match": false}
+      ]
+    }"""
+    ok = EarthSciAST.validate(load_string(lib))
+    @test isempty(ok.structural_errors)
+
+    typo = replace(lib, "\"Sink.x\"," => "\"Snik.x\",")
+    bad = EarthSciAST.validate(load_string(typo))
+    @test length(bad.structural_errors) == 1
+    @test bad.structural_errors[1].path == "/coupling/0"
+    @test bad.structural_errors[1].error_type == EarthSciAST.ERROR_CODES.COUPLING_EDGE_UNKNOWN_ROLE
+    @test occursin("'Snik'", bad.structural_errors[1].message)
+
+    # A site an endpoint-only check cannot see: `operator_compose.systems[]`.
+    sys = replace(lib, "[\"Source\", \"Sink\"]" => "[\"Ghost\", \"Sink\"]")
+    bad2 = EarthSciAST.validate(load_string(sys))
+    @test length(bad2.structural_errors) == 1
+    @test bad2.structural_errors[1].path == "/coupling/1"
+    @test bad2.structural_errors[1].error_type == EarthSciAST.ERROR_CODES.COUPLING_EDGE_UNKNOWN_ROLE
+    @test occursin("'Ghost'", bad2.structural_errors[1].message)
+end
+
+# The shared corpus pins the standalone verdict too, not just an in-memory
+# document.
+@testset "coupling-library corpus validates standalone (§10.9)" begin
+    corpus = joinpath(TESTUTILS_REPO_ROOT, "tests", "coupling_libraries")
+    # `full_surface_lib.esm` exercises every §10.10.2 occurrence site, so it is
+    # what proves the shared walk raises no FALSE positive off `variable_map`.
+    for name in ("rothermel_fuel.esm", "full_surface_lib.esm")
+        good = EarthSciAST.validate(load_string(read(joinpath(corpus, name), String)))
+        @test isempty(good.structural_errors)
+    end
+
+    bad = EarthSciAST.validate(load_string(read(joinpath(corpus, "lib_unknown_role_edge.esm"), String)))
+    @test length(bad.structural_errors) == 1
+    @test bad.structural_errors[1].error_type == EarthSciAST.ERROR_CODES.COUPLING_EDGE_UNKNOWN_ROLE
+    @test occursin("'Ghost'", bad.structural_errors[1].message)
+end
+
+# esm-spec §10.10: a `coupling_import` ref "resolves by the §4.7 reference
+# formats (relative path, absolute path, URL, `${VAR}`), with the same
+# per-binding capability rules as a template import" — so the §4.7 env-var
+# expansion reaches this ref too, on the same three rules: only the braced form
+# with a C-identifier name expands, an unset variable is left literal so the ref
+# fails with the ordinary `coupling_import_unresolved`, and an expanded relative
+# ref still anchors at the importing document's directory.
+@testset "coupling_import ref expands \${VAR} (§10.10 -> §4.7)" begin
+    corpus = joinpath(TESTUTILS_REPO_ROOT, "tests", "coupling_libraries")
+    text = read(joinpath(corpus, "assembly_import.esm"), String)
+    var = "ESM_JL_ENVREF_COUPLING_LIB_DIR"
+    mktempdir() do dir
+        doc = replace(text, "\"./rothermel_fuel.esm\"" => "\"\${$(var)}/rothermel_fuel.esm\"")
+        path = joinpath(dir, "assembly.esm")
+        write(path, doc)
+
+        # Unset: the token stays literal and the ref fails unresolved, naming it.
+        haskey(ENV, var) && delete!(ENV, var)
+        e = try
+            flatten(load_path(path))
+            nothing
+        catch err
+            err
+        end
+        @test e isa EarthSciAST.ExpressionTemplateError
+        @test e.code == EarthSciAST.ERROR_CODES.COUPLING_IMPORT_UNRESOLVED
+        @test occursin("\${$(var)}", sprint(showerror, e))
+
+        # A bare `$VAR` is never expanded, even with the variable set.
+        ENV[var] = corpus
+        try
+            bare = replace(text, "\"./rothermel_fuel.esm\"" => "\"\$$(var)/rothermel_fuel.esm\"")
+            barepath = joinpath(dir, "assembly_bare.esm")
+            write(barepath, bare)
+            @test_throws EarthSciAST.ExpressionTemplateError flatten(load_path(barepath))
+
+            # Set: the library resolves and the import expands to the inline edges.
+            se(f) = [EarthSciAST.serialize_equation(e) for e in f.equations]
+            inline = flatten(load_path(joinpath(corpus, "assembly_inline.esm")))
+            @test se(flatten(load_path(path))) == se(inline)
+        finally
+            delete!(ENV, var)
+        end
+    end
+end

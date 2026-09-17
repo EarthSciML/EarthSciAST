@@ -68,8 +68,14 @@ fn is_object(v: &Value) -> bool {
 /// `coupling_roles`, esm-spec §10.9). Presence of that key is the sole positive
 /// identifier of the file kind; purity is checked separately at the import edge.
 pub fn is_coupling_library_doc(raw: &Value) -> bool {
-    raw.as_object()
-        .is_some_and(|o| o.contains_key("coupling_roles"))
+    raw.as_object().is_some_and(is_coupling_library_obj)
+}
+
+/// [`is_coupling_library_doc`] for a document that has already been destructured
+/// into its top-level map, so callers holding one need not clone it into a
+/// [`Value`] to ask.
+pub fn is_coupling_library_obj(obj: &serde_json::Map<String, Value>) -> bool {
+    obj.contains_key("coupling_roles")
 }
 
 /// True when `file` carries at least one `coupling_import` entry in its
@@ -261,7 +267,7 @@ fn rewrite_string_array(obj: &mut Value, key: &str, f: &dyn Fn(&str) -> String) 
 /// ref fields (systems[], from/to, translate keys, event var lists) always name
 /// a role; Expression strings name a role only when they are scoped references
 /// (contain a dot) — bare Expression operands like `"t"` are incidental.
-fn collect_role_segments(edge: &Value) -> HashSet<String> {
+pub(crate) fn collect_role_segments(edge: &Value) -> HashSet<String> {
     use std::cell::RefCell;
     let seen: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
     let mut clone = edge.clone();
@@ -284,6 +290,12 @@ fn collect_role_segments(edge: &Value) -> HashSet<String> {
 // ---------------------------------------------------------------------------
 
 fn default_load_ref(ref_str: &str, base_path: &str) -> Result<Value, DiagnosticError> {
+    // esm-spec §10.10: a `coupling_import` ref "resolves by the §4.7 reference
+    // formats (relative path, absolute path, URL, `${VAR}`), with the same
+    // per-binding capability rules as a template import" — so `${VAR}` expands
+    // here too, before the remote classification.
+    let expanded = crate::ref_loading::expand_env_refs(ref_str);
+    let ref_str: &str = &expanded;
     if ref_str.starts_with("http://") || ref_str.starts_with("https://") {
         return Err(err(
             codes::COUPLING_IMPORT_UNRESOLVED,
@@ -564,6 +576,14 @@ pub fn expand_coupling_imports(
     if !has_coupling_import(file) {
         return Ok(Some(coupling.clone()));
     }
+    // A document loaded from a known location resolves its relative imports
+    // against that location (esm-spec §10.10 -> §4.7); the option is the base
+    // for a document that carries none (built in memory, or loaded from a
+    // string with no base).
+    let base = file
+        .coupling_import_base
+        .as_deref()
+        .unwrap_or(&options.base_path);
     let mut out: Vec<CouplingEntry> = Vec::new();
     for entry in coupling {
         let CouplingEntry::CouplingImport {
@@ -575,8 +595,8 @@ pub fn expand_coupling_imports(
         };
         let bind = bind.clone().unwrap_or_default();
         let lib = match &options.load_ref {
-            Some(f) => f(reference, &options.base_path)?,
-            None => default_load_ref(reference, &options.base_path)?,
+            Some(f) => f(reference, base)?,
+            None => default_load_ref(reference, base)?,
         };
         for expanded_edge in expand_one(&lib, reference, &bind, file)? {
             out.push(expanded_edge);

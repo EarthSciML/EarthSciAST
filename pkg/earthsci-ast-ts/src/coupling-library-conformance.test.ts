@@ -13,7 +13,7 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { loadString, validateSchema } from './parse.js'
+import { loadDocument, loadPath as loadEsmPath, loadString, validateSchema } from './parse.js'
 import { toJson } from './serialize.js'
 import { flatten } from './flatten.js'
 import { expandCouplingImports } from './coupling-imports.js'
@@ -77,6 +77,35 @@ describe('coupling-library conformance (esm-spec §10.9–§10.11)', () => {
     // recorded in a side table — so the anchor is its absence.
     expect(Object.keys(imported.parameters)).not.toContain('RothermelFireSpread.w0')
     expect(imported.metadata.couplingRules).toHaveLength(5)
+  })
+
+  // --- Ref resolution base: the importing document, not the cwd (§10.10 -> §4.7)
+
+  it('a relative coupling_import ref resolves against the importing document, not the working directory', () => {
+    // vitest runs in this package directory, which holds no rothermel_fuel.esm;
+    // before the fix the import resolved there unless the caller passed basePath.
+    expect(fs.existsSync(path.join(process.cwd(), 'rothermel_fuel.esm'))).toBe(false)
+    const imported = flatten(loadEsmPath(cl('assembly_import.esm')))
+    const inline = flatten(loadEsmPath(cl('assembly_inline.esm')))
+    expect(imported).toEqual(inline)
+    // The document's own base wins over an unrelated option, and the authored
+    // ref round-trips verbatim (§10.10.3).
+    const loaded = loadEsmPath(cl('assembly_import.esm'))
+    expect(() => flatten(loaded, { basePath: path.join('does', 'not', 'exist') })).not.toThrow()
+    expect(toJson(loaded)).toContain('"ref": "./rothermel_fuel.esm"')
+  })
+
+  it("a document with no base of its own keeps the caller's flatten base", () => {
+    // Built in memory, or parsed from text with no basePath: the document has no
+    // location, so CouplingImportOptions.basePath stays in charge. All five
+    // bindings agree on this, so a caller's base is never silently replaced.
+    const text = readText(cl('assembly_import.esm'))
+    const doc = readJson(cl('assembly_import.esm'))
+    expect(() => flatten(loadString(text), { basePath: dir })).not.toThrow()
+    expect(() => flatten(loadDocument(doc), { basePath: dir })).not.toThrow()
+    // An explicit base of its own wins, with no option at all.
+    expect(() => flatten(loadString(text, { basePath: dir }))).not.toThrow()
+    expect(() => flatten(loadDocument(doc, { basePath: dir }))).not.toThrow()
   })
 
   // --- Multiple instantiation: two binds -> two independent edge sets -----
@@ -168,6 +197,19 @@ describe('coupling-library conformance (esm-spec §10.9–§10.11)', () => {
     expect(errCode(() => flatten(harness, { basePath: dir }))).toBe(code)
   })
 
+  // esm-spec §10.9 REPLACES §4.6 system resolution for a library validated on
+  // its own rather than dropping it, so the role check reaches the library
+  // document directly and not only the assembly that imports it.
+  it('a well-formed library validates clean standalone (§10.9)', () => {
+    expect(validate(loadPath(cl('rothermel_fuel.esm'))).structural_errors).toEqual([])
+  })
+
+  it('validate() on the library reports the unknown role itself (§10.9)', () => {
+    const errors = validate(loadPath(cl('lib_unknown_role_edge.esm'))).structural_errors
+    expect(errors.map((e) => e.code)).toEqual(['coupling_edge_unknown_role'])
+    expect(errors[0].message).toContain('"Ghost"')
+  })
+
   // --- Invalid imports (defect in the assembly bind; driven via flatten) --
 
   const importCases: Array<[string, string]> = [
@@ -206,6 +248,35 @@ describe('coupling-library conformance (esm-spec §10.9–§10.11)', () => {
     const misbind = result.structural_errors.find((e) => e.code === 'unresolved_scoped_ref')
     expect(misbind).toBeDefined()
     expect(JSON.stringify(misbind?.details)).toContain('w0')
+
+    // validate() on the SOURCE document now reports it too (esm-spec §10.10.3):
+    // the import is expanded against the loader's recorded base and the finding
+    // is re-pointed at the import entry. The base a `loadPath` recorded is
+    // enough — no `basePath` option — or `validate(loadPath(p))` would resolve
+    // the ref against the working directory instead of the document's own.
+    for (const source of [validate(loadPath(p)), validate(loadPath(p), { basePath: dir })]) {
+      expect(
+        source.structural_errors.some(
+          (e) =>
+            e.code === 'unresolved_scoped_ref' && (e.details as any)?.coupling_import !== undefined,
+        ),
+      ).toBe(true)
+    }
+    const source = validate(loadPath(p), { basePath: dir })
+    const attributed = source.structural_errors.find(
+      (e) =>
+        e.code === 'unresolved_scoped_ref' && (e.details as any)?.coupling_import !== undefined,
+    )
+    expect(attributed).toBeDefined()
+    expect(attributed?.path).toBe('/coupling/0')
+    expect((attributed?.details as any)?.bound_component).toBe('RothermelNoW0')
+    expect((attributed?.details as any)?.role).toBe('Spread')
+    // Without a basePath validate() does no file I/O, so it cannot open the
+    // library and reports nothing about the import.
+    const noBase = validate(readJson(p))
+    expect(
+      noBase.structural_errors.some((e) => (e.details as any)?.coupling_import !== undefined),
+    ).toBe(false)
   })
 
   // --- Cross-kind rejection ----------------------------------------------

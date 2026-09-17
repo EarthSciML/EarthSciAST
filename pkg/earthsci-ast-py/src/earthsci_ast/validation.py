@@ -258,6 +258,11 @@ def validate(esm_file: EsmFile, *, base_path: str | None = None) -> ValidationRe
         # expression computes (esm-spec §4.8.4) — a HARD error, not a warning.
         _validate_observed_dimensions(esm_file, structural_errors)
 
+        # 4c. The edges each `coupling_import` expands to (esm-spec §10.10.3) —
+        # a mis-bound import is a bad edge, and the scoped-reference check MUST
+        # see the expanded edges, not the opaque import entry.
+        _validate_imported_coupling_edges(esm_file, structural_errors)
+
         # 5. Unit validation (warnings only)
         _validate_units(esm_file, unit_warnings)
 
@@ -426,12 +431,16 @@ def _validate_content_presence(esm_file: EsmFile, structural_errors: list[Valida
     that survives load (§9.6.4 rule 5), so it is checked directly; without it a
     library validated standalone looked like an empty document and was rejected
     (`template_import_lib.esm`, `template_import_rename_lib.esm` — both pinned
-    VALID).
+    VALID). A COUPLING-LIBRARY file (§10.9) is the same shape — roles + wiring,
+    no components, `coupling_roles` the sole positive identifier of the kind —
+    and is admitted on the same grounds.
     """
     has_models = bool(esm_file.models)
     has_reaction_systems = bool(esm_file.reaction_systems)
     has_data_sources = bool(esm_file.data_sources)
-    is_library = bool(getattr(esm_file, "expression_templates", None))
+    is_library = bool(getattr(esm_file, "expression_templates", None)) or bool(
+        getattr(esm_file, "coupling_roles", None)
+    )
 
     if not has_models and not has_reaction_systems and not has_data_sources and not is_library:
         structural_errors.append(
@@ -1333,6 +1342,91 @@ def _validate_coupling_units(esm_file: EsmFile, structural_errors: list[Validati
                     },
                 )
             )
+
+
+def _validate_imported_coupling_edges(
+    esm_file: EsmFile, structural_errors: list[ValidationError]
+) -> None:
+    """Validate the edges each ``coupling_import`` expands to (esm-spec §10.10.3).
+
+    The load-time coupling walk
+    (:func:`earthsci_ast.structural_checks._check_coupling_references`) sees the
+    SOURCE ``coupling`` list, where an import is still ``{type, ref, bind}`` and
+    its edges do not exist, so a mis-bind — a structurally complete ``bind`` that
+    points a role at a component lacking a variable the library references —
+    passed validation and surfaced only at flatten. Each import is expanded here
+    on its own, against the base the loader recorded on the document, and its
+    edges go through the same scoped-reference resolver a hand-authored edge
+    does. A finding is re-pointed at the import entry and names the library, the
+    role and the bound component. An import that cannot be expanded at all (a
+    missing library, an unbound role, ...) is left to flatten, which owns those
+    §10.11 diagnostics.
+
+    BOTH endpoints are checked. The raw-dict walk is deliberately lenient about
+    ``to``; a library edge's ``to`` is not, because every other binding resolves
+    it at ``validate`` and this module's own flatten preflight
+    (:func:`earthsci_ast.flatten._check_variable_map_endpoints`) refuses a dead
+    one. Mirroring a flatten rule into the coded channel is what
+    :func:`_validate_coupling_units` already does.
+    """
+    import copy
+    import json as _json
+
+    from .coupling_imports import expand_coupling_imports
+    from .esm_types import CouplingImport, VariableMapCoupling
+    from .serialize import to_json
+    from .structural_checks import _build_symbol_tables, _resolve_scoped_ref
+
+    # Expanding reads the library from disk; without the base the loader recorded
+    # on the document, the ref would resolve against the working directory, so a
+    # document with no known location is left to flatten.
+    if not getattr(esm_file, "coupling_import_base", None):
+        return
+    imports = [
+        (i, e) for i, e in enumerate(esm_file.coupling or []) if isinstance(e, CouplingImport)
+    ]
+    if not imports:
+        return
+    tables = _build_symbol_tables(_json.loads(to_json(esm_file)))
+    for i, entry in imports:
+        single = copy.copy(esm_file)
+        single.coupling = [entry]
+        try:
+            edges = expand_coupling_imports(single)
+        except Exception:  # noqa: BLE001 — flatten owns the §10.11 diagnostics
+            continue
+        bind = {k: v for k, v in (entry.bind or {}).items() if isinstance(v, str)}
+        for edge in edges:
+            if not isinstance(edge, VariableMapCoupling):
+                continue
+            for side, ref in (("from", edge.from_var), ("to", edge.to_var)):
+                if not isinstance(ref, str) or "." not in ref:
+                    continue
+                system, var, status = _resolve_scoped_ref(ref, tables)
+                if status not in ("no_system", "no_var"):
+                    continue
+                roles = ", ".join(sorted(r for r, bound in bind.items() if bound == system))
+                structural_errors.append(
+                    ValidationError(
+                        path=f"/coupling/{i}",
+                        message=(
+                            f"coupling_import {entry.ref!r} binds role {roles!r} to "
+                            f"{system!r}, which does not provide {ref!r} referenced by the "
+                            f"library: scoped reference {ref!r} cannot be resolved"
+                        ),
+                        code=ErrorCode.UNRESOLVED_SCOPED_REF.value,
+                        details={
+                            "reference": ref,
+                            "system": system,
+                            "variable": var,
+                            "coupling_type": "variable_map",
+                            "direction": side,
+                            "coupling_import": entry.ref,
+                            "role": roles,
+                            "bound_component": system,
+                        },
+                    )
+                )
 
 
 def _validate_units(esm_file: EsmFile, unit_warnings: list[UnitWarning]) -> None:

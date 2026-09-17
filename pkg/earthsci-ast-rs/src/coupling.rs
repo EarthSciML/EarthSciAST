@@ -288,6 +288,105 @@ pub(crate) fn validate_coupling(
     }
 }
 
+/// The component a `bind` points a role at for `reference`, and the role(s) that
+/// point there. A bind value may be a dotted subsystem path (`Parent.Child`,
+/// esm-spec §10.10.1), so the LONGEST bound component that prefixes the
+/// reference wins; a reference no bind covers falls back to its own head segment.
+fn bound_component_for(
+    bind: Option<&HashMap<String, String>>,
+    reference: &str,
+) -> (String, String) {
+    let mut component = String::new();
+    for bound in bind.into_iter().flatten().map(|(_, v)| v) {
+        let covers = reference == bound || reference.starts_with(&format!("{bound}."));
+        if covers && bound.len() > component.len() {
+            component = bound.clone();
+        }
+    }
+    if component.is_empty() {
+        component = reference.split('.').next().unwrap_or(reference).to_string();
+    }
+    let mut roles: Vec<&str> = bind
+        .into_iter()
+        .flatten()
+        .filter(|(_, bound)| **bound == component)
+        .map(|(role, _)| role.as_str())
+        .collect();
+    roles.sort_unstable();
+    let role = roles.join(", ");
+    (component, role)
+}
+
+/// Validate the edges each `coupling_import` expands to (esm-spec §10.10.3).
+///
+/// [`validate_coupling`] walks the SOURCE `coupling` array, where an import is
+/// still `{ type, ref, bind }` and its edges do not exist, so a mis-bind — a
+/// structurally complete `bind` that points a role at a component lacking a
+/// variable the library references — used to pass `validate` and surface only
+/// at flatten. Here each import is expanded on its own (against the base the
+/// loader recorded for it) and its edges go through the same scoped-reference
+/// checks as a hand-authored edge. A finding is re-pointed at the import entry
+/// and names the library, the role, the bound component and the missing
+/// variable. An import that cannot be expanded at all (a missing library, an
+/// unbound role, ...) is left to flatten, which owns those §10.11 diagnostics.
+pub(crate) fn validate_imported_coupling(
+    esm_file: &EsmFile,
+    system_refs: &HashMap<String, SystemInfo>,
+    errors: &mut Vec<StructuralError>,
+) {
+    let Some(coupling) = esm_file.coupling.as_ref() else {
+        return;
+    };
+    // Expanding reads the library from disk; without the base the loader
+    // recorded on the document, the ref would resolve against the working
+    // directory, so a document with no known location is left to flatten.
+    if esm_file.coupling_import_base.is_none() {
+        return;
+    }
+    for (idx, entry) in coupling.iter().enumerate() {
+        let crate::CouplingEntry::CouplingImport {
+            reference, bind, ..
+        } = entry
+        else {
+            continue;
+        };
+        let mut single = esm_file.clone();
+        single.coupling = Some(vec![entry.clone()]);
+        let Ok(Some(edges)) = crate::coupling_imports::expand_coupling_imports(
+            &single,
+            &crate::coupling_imports::CouplingImportOptions::default(),
+        ) else {
+            continue;
+        };
+        let mut found = Vec::new();
+        validate_coupling(&edges, system_refs, esm_file, &mut found);
+        for mut e in found {
+            if !matches!(e.code, StructuralErrorCode::UnresolvedScopedRef) {
+                continue;
+            }
+            let scoped = e
+                .details
+                .get("reference")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let (component, role) = bound_component_for(bind.as_ref(), &scoped);
+            e.message = format!(
+                "coupling_import '{reference}' binds role '{role}' to '{component}', which does \
+                 not provide '{scoped}' referenced by the library: {}",
+                e.message
+            );
+            if let Some(obj) = e.details.as_object_mut() {
+                obj.insert("coupling_import".to_string(), serde_json::json!(reference));
+                obj.insert("role".to_string(), serde_json::json!(role));
+                obj.insert("bound_component".to_string(), serde_json::json!(component));
+            }
+            e.path = format!("/coupling/{idx}");
+            errors.push(e);
+        }
+    }
+}
+
 /// Validate a `couple` / `operator_compose` entry: the first two systems must
 /// exist, and exactly 2 systems are required. `label` is the human-readable
 /// coupling name in the arity error; `coupling_type` is the snake-case tag
