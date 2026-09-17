@@ -124,14 +124,13 @@ mutable struct _DECtx
     # so a read set that recurs (and on a stencil they all do) pays for it once.
     gather_bases::Dict{Tuple{Vector{_MLIR.IR.Value},Bool},Tuple{_DEVal,Vector{Int},Int}}
     # EMITTER-SIDE CSE OF READS. Two reads of the same span of the same value
-    # are the same SSA value, and on a stencil that happens constantly: measured
-    # on ReSEACT's transport half at 288 cells, the reverse-mode program was
-    # emitted with 58,620 `stablehlo.slice` of which only 14,476 were DISTINCT —
-    # one span appearing a hundred times. The pipeline does find them
+    # are the same SSA value, and on a stencil that happens constantly: a
+    # neighbour span is read once per consumer, and a reverse-mode program
+    # multiplies every one of those by the tape. The pipeline does find them
     # (`cse_slice`), by comparing operations pairwise, which is quadratic in a
-    # population three quarters of which the emitter knows to be redundant
-    # before it writes it. Emission is one straight-line block, so an earlier
-    # value always dominates a later use and the reuse needs no scope check.
+    # population the emitter knows to be redundant before it writes it.
+    # Emission is one straight-line block, so an earlier value always dominates
+    # a later use and the reuse needs no scope check.
     slices::Dict{Tuple{_MLIR.IR.Value,Int,Int,Int},_DEVal}
     concats::Dict{Vector{_MLIR.IR.Value},_DEVal}
     # The two gather tables: (value read, positions into it) -> the gather, and
@@ -213,14 +212,11 @@ _de_tally!(ctx::_DECtx, k::Symbol) = (ctx.stats[k] = get(ctx.stats, k, 0) + 1; n
 # does not say whether they are a stencil's reads, a kernel's invariant scalars
 # or the output assembly, and those need different fixes.
 #
-# THIS IS NOT DECORATION. The single-position slice was the op the
-# post-differentiation `enzyme-hlo-opt` run is quadratic in, four levers had
-# been spent against it, and the fifth was aimed at the scalar spine on the
-# reasoning that a per-cell walk must be where one-element reads come from.
-# Measured on ReSEACT's transport half at 288 cells, the scalar spine emitted
-# NONE: 1,728 of the 2,869 slices in one right-hand side were `_de_assemble`'s,
-# a surface that had its own run-walk and never reached the read cost model.
-# Naming the site is what turned a plausible answer into the right one.
+# THIS IS NOT DECORATION. The single-position slice is the op the
+# post-differentiation `enzyme-hlo-opt` run is quadratic in, and the surface
+# that emits most of them on a stencil model is not the one a reader expects
+# (the per-cell scalar spine) but the output assembly. An attribution that
+# names the site is what separates a plausible answer from the right one.
 #
 # `_de_at!` names the site; `_de_site!` charges an emitted op to it.
 _de_at!(ctx::_DECtx, s::Symbol) = (ctx.site = s; nothing)
@@ -442,14 +438,14 @@ const _DESlotSrc = Union{Nothing,_DEVal}
 # multiplied by the tape. See reseact.esm's COMPILE_COST.md for the
 # measurement.
 #
-# BOTH SIDES OF THE TRADE WERE MEASURED, on ReSEACT's two halves at 288 cells,
-# and the gather wins both, which is why it is the default. The transport half's
-# optimized module goes from 18,060 ops to 6,510, its per-call median from
-# 3.3 ms to 1.9 ms, and the reverse-mode program the adjoint compiles becomes
-# tractable at all. The chemistry half, whose reads are not shattered, emits ONE
-# gather and is unchanged in every figure. `ESM_DIRECT_EMIT_READ=runs` restores
-# the previous shape exactly, as the negative control and as the escape if a
-# model is ever found where the concatenated base is the wrong trade.
+# BOTH SIDES OF THE TRADE HAVE BEEN MEASURED on a stencil transport half and on
+# a chemistry half, and the gather wins or ties on both, which is why it is the
+# default: the stencil half's optimized module and its per-call cost both fall
+# and its reverse-mode program becomes tractable at all, while a half whose
+# reads are not shattered emits one gather either way and does not move.
+# `ESM_DIRECT_EMIT_READ=runs` restores the slice-per-run shape exactly, as the
+# negative control and as the escape if a model is ever found where the
+# concatenated base is the wrong trade.
 #
 # Neither setting changes a NUMBER: a gather of the same positions from the same
 # values is bit-identical to slices-plus-concatenate of them.
@@ -510,18 +506,15 @@ end
 # piece. The budget is therefore an absolute bound on the copy, charged only
 # when a copy happens.
 #
-# CHARGING IT TO ONE READ IS WHAT THE FIRST VERSION DID, and on ReSEACT's
-# transport half at 288 cells that declined the stencil's own base. 640 reads
-# there share 37 distinct producer sets, and 240 of them read 432 positions in
-# 168 to 312 runs out of TWO producers — the 3744-slot extended state beside a
-# 2304-slot buffer, 6048 elements — which `max(8n, 4096)` refused at 4096.
-# Three quarters of the slices the emitter still handed to Enzyme, 43,368 of
-# 58,620, came from those 240 reads; see reseact.esm's COMPILE_COST.md for what
-# they cost the reverse-mode compile.
+# CHARGING IT TO ONE READ IS THE TRAP. A budget scaled to the size of the read
+# that asks for the base declines the stencil's own base, because the read that
+# needs it most is a short one out of two large producers — the extended state
+# beside a forcing buffer — and those producers are what the copy is, not the
+# read. A budget that big shatters exactly the reads whose slices the
+# reverse-mode program then multiplies by the tape.
 # `ESM_DIRECT_GATHER_BASE_MAX` overrides the budget, and is the other half of
-# the measurement lever: 4096 reproduces the shape the per-read rule produced on
-# this model, which is the negative control the numbers above were measured
-# against.
+# the measurement lever: a small value reproduces the shape the per-read rule
+# produced, which is the negative control.
 #
 # THE BUDGET IS RELATIVE TO THE MODEL, and an absolute one is a grid cap wearing
 # a different name. What the base costs is one concatenate and one linear copy
@@ -841,23 +834,21 @@ end
 # Assemble a slot map into one rank-1 value: a READ of the whole map, at
 # positions `1:n`, through the one read form every other surface uses.
 #
-# THIS USED TO BE ITS OWN RUN-WALK, and that is where most of the emitter's
-# single-position slices came from. The output slot map of a stencil model is
-# INTERLEAVED — a kernel's result value holds its own cells, and the next slot
-# in ascending order usually belongs to a different value or to a different
-# position inside the same one — so the "runs of consecutive positions in the
-# same producer" a local walk can find are mostly runs of ONE, and each of those
-# costs a `stablehlo.slice` of a single element. Measured on ReSEACT's transport
-# half at 288 cells: 2,160 pieces over 3,744 slots, of which 1,728 were single
-# positions — 60% of every slice the emitter wrote, and the largest block of the
-# population the post-differentiation `cse_slice` pattern is quadratic in.
+# THE OUTPUT IS A READ LIKE ANY OTHER, and it has to go through the same cost
+# model. The output slot map of a stencil model is INTERLEAVED — a kernel's
+# result value holds its own cells, and the next slot in ascending order
+# usually belongs to a different value or to a different position inside the
+# same one — so the "runs of consecutive positions in the same producer" a
+# local walk finds here are mostly runs of ONE, and each of those would cost a
+# `stablehlo.slice` of a single element. On a stencil model that is the largest
+# block of the slice population the post-differentiation `cse_slice` pattern is
+# quadratic in.
 #
-# There was never a reason for the output to decide this differently from every
-# other read: `_de_emit_runs` decomposes the same positions into the same runs
-# and then applies the COST MODEL to them — one gather when the map shatters,
-# slices plus a concatenate when it does not, structural zeros folded into
-# either. An unwritten slot is a `nothing` entry, which is exactly the
-# structural zero the read form already knows how to carry.
+# `_de_emit_runs` decomposes the same positions into the same runs and then
+# applies the COST MODEL to them — one gather when the map shatters, slices
+# plus a concatenate when it does not, structural zeros folded into either. An
+# unwritten slot is a `nothing` entry, which is exactly the structural zero the
+# read form already knows how to carry.
 function _de_assemble(ctx::_DECtx, M::_DEMap, n::Int)::_DEVal
     srcs = _DESlot[@inbounds M.m[i] for i in 1:n]
     runs, nzero = _de_run_decompose(srcs)
