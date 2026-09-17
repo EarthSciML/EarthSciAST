@@ -10,7 +10,6 @@
 #     asserted via build time being ~flat in M while the unroll grows linearly;
 #   * the loop preserves the zero-allocation `f!` hot path and differentiates
 #     (ForwardDiff) — the loop counter is an integer constant of the value type;
-#   * a `:oop` Float64 run stays bit-identical to `f!` (the oop oracle);
 #   * the const-array-gather-in-loop path (a loop var as a runtime subscript);
 #   * the conservative GATE: a reduction whose body indexes STATE at a
 #     loop-var-dependent slot (no static per-k node) FALLS BACK to unrolling and
@@ -69,10 +68,10 @@ _cl_doc_weighted(W::Vector{Float64}) = Dict{String,Any}(
     )),
 )
 
-_cl_build(doc; loop::Bool, form=:inplace) =
+_cl_build(doc; loop::Bool) =
     withenv("ESS_CONTRACTION_LOOP" => (loop ? "1" : "0"),
             "ESS_CONTRACTION_LOOP_MIN" => "8") do
-        build_evaluator(doc; initial_conditions = Dict("x" => 2.0, "s" => 0.0), form=form)
+        build_evaluator(doc; initial_conditions = Dict("x" => 2.0, "s" => 0.0))
     end
 
 _cl_du_s(doc; loop::Bool) = begin
@@ -104,14 +103,6 @@ end
         du = similar(u0)
         f!(du, u0, p, 0.0)                       # warm up
         @test (@allocated f!(du, u0, p, 0.0)) == 0
-    end
-
-    @testset ":oop is bit-identical to f! (loop)" begin
-        M = 50
-        du_iip = _cl_du_s(_cl_doc(M); loop=true)
-        fo, u0o, po, _, vmo = _cl_build(_cl_doc(M); loop=true, form=:oop)
-        duo = fo(u0o, po, 0.0)
-        @test duo[vmo["s"]] == du_iip
     end
 
     @testset "AD (ForwardDiff) differentiates through the loop" begin
@@ -202,9 +193,9 @@ end
 
 _cl_ics2d_w() = Dict("out[1,1]"=>0.0,"out[1,2]"=>0.0,"out[2,1]"=>0.0,"out[2,2]"=>0.0)
 _cl_ics2d_a() = merge(_cl_ics2d_w(), Dict("x[1,1]"=>1.0,"x[1,2]"=>2.0,"x[2,1]"=>3.0,"x[2,2]"=>4.0))
-_cl_build2d(doc, ics; loop::Bool, form=:inplace) =
+_cl_build2d(doc, ics; loop::Bool) =
     withenv("ESS_CONTRACTION_LOOP"=>(loop ? "1" : "0"),"ESS_CONTRACTION_LOOP_MIN"=>"8") do
-        build_evaluator(doc; initial_conditions=ics, form=form)
+        build_evaluator(doc; initial_conditions=ics)
     end
 _cl_du2d(doc, ics; loop::Bool) = begin
     f!,u0,p,_,vm = _cl_build2d(doc, ics; loop=loop)
@@ -240,13 +231,6 @@ end
         f!, u0, p, _, vm = _cl_build2d(_cl_doc2d_arith(30), _cl_ics2d_a(); loop=true)
         du = similar(u0); f!(du, u0, p, 0.0)
         @test (@allocated f!(du, u0, p, 0.0)) == 0
-    end
-
-    @testset "einsum :oop == :iip (loop)" begin
-        du_iip, vmi = _cl_du2d(_cl_doc2d_arith(20), _cl_ics2d_a(); loop=true)
-        fo, u0o, po, _, vmo = _cl_build2d(_cl_doc2d_arith(20), _cl_ics2d_a(); loop=true, form=:oop)
-        duo = fo(u0o, po, 0.0)
-        @test all(duo[vmo["out[$i,$j]"]] == du_iip[vmi["out[$i,$j]"]] for i in 1:2, j in 1:2)
     end
 
     @testset "einsum build size is ~flat in M (loop) vs ~M² (unroll)" begin
@@ -337,9 +321,9 @@ function _cl_halo_ics(NQ)
     for a in 1:NQ, b in 1:NQ; d["q[$a,$b]"] = _cl_qval(a, b); end
     d
 end
-function _cl_halo_du(doc, ics; loop::Bool, form=:inplace)
+function _cl_halo_du(doc, ics; loop::Bool)
     withenv("ESS_CONTRACTION_LOOP"=>(loop ? "1" : "0"),"ESS_CONTRACTION_LOOP_MIN"=>"8") do
-        f!,u0,p,_,vm = build_evaluator(doc; initial_conditions=ics, form=form)
+        f!,u0,p,_,vm = build_evaluator(doc; initial_conditions=ics)
         (f!,u0,p,vm)
     end
 end
@@ -365,16 +349,13 @@ end
         end
     end
 
-    @testset "state-source loop: zero-alloc, :oop == :iip, AD through the gather" begin
+    @testset "state-source loop: zero-alloc, and AD through the gather" begin
         doc, NI, NJ, NQ, M = _cl_halo(8)
         ics = _cl_halo_ics(NQ)
         fl,u0,p,vml = _cl_halo_du(doc, ics; loop=true)
         dl = similar(u0); fl(dl,u0,p,0.0)
         fl(dl,u0,p,0.0)
         @test (@allocated fl(dl,u0,p,0.0)) == 0
-        fo,u0o,po,vmo = _cl_halo_du(doc, ics; loop=true, form=:oop)
-        duo = fo(u0o,po,0.0)
-        @test all(duo[vmo["out[$i,$j]"]] == dl[vml["out[$i,$j]"]] for i in 1:NI, j in 1:NJ)
         # out[1,1] = Σ_{k,l} W(1,1,k,l)·q[k,l], so ∂/∂q[a,b] = W(1,1,a,b) for a,b∈1..M.
         g(u) = (d = similar(u, eltype(u)); fl(d,u,p,0.0); d[vml["out[1,1]"]])
         J = ForwardDiff.gradient(g, u0)

@@ -132,9 +132,10 @@ symbol is *reachable and documented*, and a warning that it is not portable.
 - **Julia's build/inspection seam** — `build_evaluator`, `BuildInspection`,
   `evaluate_expr`, `expanded_model`, `expand_flattened_refs`, `param_map`,
   `parameter_classes`, `remake_parameters`.
-- **Julia's forcing-buffer surface** (out-of-place RHS explicit buffers, perf
-  plan B2) — `rhs_with_buffers`, `forcing_buffers`, `forcing_buffer_index`,
-  `sync_forcing!`, `oop_intern_stats`, `oop_intern_stats_reset!`.
+- **Julia's forcing-buffer surface** (the live forcing buffers of an
+  out-of-place build, and the hook that mirrors a host refresh into a compiled
+  program's argument arrays) — `forcing_buffers`, `forcing_buffer_index`,
+  `sync_forcing!`.
 - **Rust's `intern` / `performance` / `simulate_array` internals** —
   `CompactExpr`, `PerformanceError`, `ParallelEvaluator`, `ModelAllocator`,
   `Compiled`, `ResolvedExpr`, `interpret`, `compile_array`,

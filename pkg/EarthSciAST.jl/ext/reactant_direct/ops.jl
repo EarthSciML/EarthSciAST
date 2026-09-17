@@ -50,6 +50,21 @@ const _DE_UNARY = Dict{Symbol,Any}(
     :expm1 => _hlo.exponential_minus_one, :log1p => _hlo.log_plus_one,
     :floor => _hlo.floor, :ceil => _hlo.ceil, :sign => _hlo.sign, :cbrt => _hlo.cbrt,
 )
+# `log10` is the one registry op with neither a StableHLO nor a CHLO opcode.
+# `log(x) / ln(10)` is what the Rust lane emits for it (`UnCode::Log10`,
+# simulate_array/tape/xla_emit.rs), with the SAME constant — `log(10.0)` and
+# Rust's `f64::consts::LN_10` are the same Float64 — so the two compiled
+# backends compute it identically and can share a conformance fixture. It is
+# NOT Julia's `log10`, which is correctly rounded and can differ from the
+# quotient in the last bit; that difference lives inside the `transcendental`
+# tolerance class (rtol 1e-12), which is the class every fixture using it
+# carries. Emitted as a divide rather than a multiply by `log10(ℯ)` because a
+# division rounds once where the reciprocal rounds twice.
+function _de_log10(ctx::_DECtx, a::_DEVal)::_DEVal
+    return _de_bin(ctx, _hlo.divide, _de_un(ctx, _hlo.log, a),
+                   _de_const(ctx, log(10.0)))
+end
+
 # The transcendentals StableHLO itself does not carry. CHLO is the
 # decomposition dialect the StableHLO pipeline already expands for `Ops.asin`
 # and friends, so these lower to the same programs Reactant's own builders
@@ -104,7 +119,7 @@ function _de_reduce_terms(ctx::_DECtx, op::Symbol, zbar::Float64,
 end
 
 # The SEEDLESS left fold an n-ary operator node takes: `((c1 ⊕ c2) ⊕ c3)…`,
-# the interpreter's `_oop_op` association order, and never a reduce — an
+# the interpreter's association order (`_eval_node_op`), and never a reduce — an
 # operator node has no 0̄ to seed a monoid with, and seeding `+` with `0.0`
 # would turn a sum of `-0.0`s into `0.0`.
 function _de_chain(ctx::_DECtx, f::F, c::Vector{_DEVal})::_DEVal where {F}
@@ -133,8 +148,9 @@ end
 
 # ---- the op ladder -----------------------------------------------------------
 #
-# Left-folds n-ary `+`/`*` exactly as the interpreter's `_oop_op` does, so every
-# intermediate has broadcast's shape and the interpreter's association order.
+# Left-folds n-ary `+`/`*` in the interpreter's association order
+# (`_eval_node_op`), so every intermediate has broadcast's shape and the same
+# grouping.
 #
 # TWO PLACES THIS IS NOT BIT-IDENTICAL TO THE INTERPRETER, both accepted inside
 # the `compiled_rhs` tolerance classes and both recorded here rather than in a
@@ -150,8 +166,9 @@ end
 #     agree to within an ulp or two on ordinary arguments, which is inside
 #     `transcendental` (rtol 1e-12), not inside `algebraic`. A literal INTEGER
 #     exponent is the common case and both lower it by repeated multiplication.
-function _de_op(ctx::_DECtx, nd::_E._Node, c::Vector{_DEVal})::_DEVal
-    op = nd.op
+_de_op(ctx::_DECtx, nd::_E._Node, c::Vector{_DEVal})::_DEVal = _de_op(ctx, nd.op, c)
+
+function _de_op(ctx::_DECtx, op::Symbol, c::Vector{_DEVal})::_DEVal
     n = length(c)
     if op === :+
         return _de_chain(ctx, _hlo.add, c)
@@ -179,6 +196,10 @@ function _de_op(ctx::_DECtx, nd::_E._Node, c::Vector{_DEVal})::_DEVal
     elseif op === :atan && n == 2
         # The registry spells the two-argument form both ways.
         return _de_bin(ctx, _hlo.atan2, c[1], c[2])
+    elseif op === :log10
+        n == 1 || _de_refuse("unary `log10` with $n arguments",
+                             "`log10` takes exactly one argument.")
+        return _de_log10(ctx, c[1])
     elseif haskey(_DE_UNARY, op)
         n == 1 || _de_refuse("unary `$op` with $n arguments",
                              "`$op` takes exactly one argument.")
@@ -221,10 +242,20 @@ function _de_op(ctx::_DECtx, nd::_E._Node, c::Vector{_DEVal})::_DEVal
     elseif op === :Pre
         return c[1]
     end
+    # NOT `unevaluable_operator` (esm-spec §9.6.6), deliberately. That code is
+    # for an op in the §4.2 EVALUABLE CORE that the tree-walk evaluator has no
+    # rule for, and `_compile_op` (src/tree_walk/compile.jl) refuses one while
+    # the evaluator is BUILT — so no such op can reach here: the emitter only
+    # ever walks a `_CompiledIR` that already passed that gate. What this tail
+    # catches is the other thing: an op the interpreter CAN evaluate but that
+    # this StableHLO ladder has not been taught. That is a backend-coverage gap,
+    # not a document-level refusal, so it reports the emitter's own
+    # `DirectEmitError` (`E_DIRECT_EMIT_UNSUPPORTED`) with the rule breadcrumb.
     _de_refuse("the operator `$op`",
         "it is not in the direct-emission op ladder. Add it to `_de_op` " *
         "(ext/reactant_direct/ops.jl) with the StableHLO op that matches the " *
-        "interpreter's `_oop_op` arm, or lower it away before the backend.")
+        "interpreter's arm for it (`_eval_node_op`), or lower it away before " *
+        "the backend.")
 end
 
 # ---- host const-fold ---------------------------------------------------------
@@ -237,9 +268,9 @@ end
 # to `range` host multiply-adds and, after interning, a handful of constants.
 #
 # It is also strictly MORE faithful than emitting the ops would be: the value is
-# computed in Float64 by the same `_oop_op` the interpreter calls, so a folded
-# subtree agrees with the interpreter bit for bit, where `stablehlo.power` and
-# friends would not.
+# computed in Float64 by `_scalar_op`, whose arm order is pinned against
+# `_eval_node_op` by test/scalar_ops_test.jl, so a folded subtree agrees with the
+# interpreter bit for bit, where `stablehlo.power` and friends would not.
 #
 # `_de_static` is memoized per node (structural, so a loop body asked once per
 # `k` pays the walk once); `_de_hostval` is re-evaluated per `k`, because a
@@ -279,7 +310,7 @@ function _de_static_uncached(ctx::_DECtx, nd::_E._Node)::Bool
         (haskey(_DE_UNARY, nd.op) || haskey(_DE_COMPARE, nd.op) ||
          haskey(_DE_UNARY_CHLO, nd.op) ||
          nd.op in (:+, :*, :-, :neg, :/, :^, :pow, :max, :min, :ifelse, :not,
-                   :and, :or, :pi, :π, :e, :Pre, :atan, :atan2)) || return false
+                   :and, :or, :pi, :π, :e, :Pre, :atan, :atan2, :log10)) || return false
         return all(ch -> _de_static(ctx, ch), nd.children)
     end
     return false
@@ -319,10 +350,11 @@ function _de_hostval(ctx::_DECtx, nd::_E._Node)::Float64
         end
         return s
     end
-    # `_NK_OP`: the interpreter's own ladder, at Float64, so a folded subtree is
-    # bit-identical to what `f!` computes for it.
+    # `_NK_OP`: the shared ladder, at Float64. Its arms are pinned against the
+    # interpreter's (`_eval_node_op`) by test/scalar_ops_test.jl, so a folded
+    # subtree is bit-identical to what `f!` computes for it.
     c = Any[_de_hostval(ctx, ch) for ch in nd.children]
-    return Float64(_E._oop_op(nd.op, c, Float64))
+    return Float64(_E._scalar_op(nd.op, c, Float64))
 end
 
 # Fold if we can; `nothing` if the subtree is not host data.
@@ -335,5 +367,4 @@ end
 
 # Host integer evaluation of a gather subscript (loop counters + literals),
 # reusing the emitter's own resolver — no state can appear in a subscript.
-_de_index_int(nd::_E._Node) =
-    _E._oop_index_int(nd, nothing, nothing, 0.0, Float64[], _E._OOP_NO_FORCING)
+_de_index_int(nd::_E._Node) = _E._index_int(nd)

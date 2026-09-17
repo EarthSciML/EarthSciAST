@@ -1,8 +1,17 @@
 # Upstream issues we are waiting on
 
 Six issues filed 2026-08-24 against Reactant.jl and Enzyme-JAX, all found while
-compiling the ReSEACT atmospheric chemistry model through the Reactant backend
-(`ext/EarthSciASTReactantExt.jl` + `src/tree_walk/oop.jl`).
+compiling the ReSEACT atmospheric chemistry model through the Reactant backend.
+
+> **What has changed here since.** These were measured against the TRACED
+> emitter — the tree walk run with `TracedRNumber` in place of `Float64` — which
+> has been retired in favour of direct StableHLO emission from the compiled IR
+> (`ext/reactant_direct/`, `direct_rhs`). The direct emitter constructs
+> `stablehlo.*` operations itself rather than going through Julia's broadcast
+> tracing, so #3215 and #3216 no longer describe a cost this repository pays:
+> the notes below are the record of why they were filed, not a statement about
+> the backend as it stands. #2938, #3217, #3218 and #2939 are about the compile
+> pipeline and autodiff, and are unaffected by which emitter feeds them.
 
 Every candidate was re-verified against current versions before filing rather
 than filed from the older write-ups. That mattered — two of the most serious
@@ -59,26 +68,22 @@ agree. Two pieces of planned work emit exactly this shape and are gated on it:
 
 ### #3215 — scalar constants not memoized
 
-**Today:** `src/tree_walk/oop.jl`'s emission value-numbering seam (`ess-oop-gvn`)
-exists partly to work around this. Two uses of the same scalar get different SSA
-values, so structural CSE above them cannot see `k .* x` and `k .* x` as the same
-expression — the sharing has to be recovered by our own memo instead.
-
-**Unblocks:** simplifying or retiring part of the GVN seam, and smaller modules
-before XLA runs. On a chemistry RHS the duplicated scalars account for thousands
-of ops. Note this is a **trace-time and module-size** win, not an execution win —
-XLA's CSE already collapses the duplicates before they execute.
+**Superseded here.** The traced emitter's value-numbering seam (`ess-oop-gvn`)
+existed partly to work around this: two uses of the same scalar got different SSA
+values, so structural CSE above them could not see `k .* x` and `k .* x` as the
+same expression, and the sharing had to be recovered by our own memo. The direct
+emitter interns constants in its own emission context and never calls
+`Ops.constant(::Number)`, so the defect no longer reaches a module this
+repository emits. Filed because it is real upstream, and because any consumer
+that does trace Julia code pays it.
 
 ### #3216 — broadcast scaffolding
 
-**Today:** one elementwise `a .+ b` on two identically-shaped operands emits
-eleven `stablehlo` ops (5 transpose, 4 broadcast_in_dim, 1 constant, 1 add).
-
-**Unblocks:** the same thing as #3215 and by the same mechanism — Julia trace
-time, peak MLIR module size, and sharing that structural CSE can no longer find.
-Again **not** an execution win; XLA eliminates the redundancy. These two together
-are the reason the emitted module is much larger than the arithmetic requires,
-which is what makes trace and compile expensive at CONUS scale.
+**Superseded here.** One elementwise `a .+ b` on two identically-shaped operands
+traces to eleven `stablehlo` ops (5 transpose, 4 broadcast_in_dim, 1 constant, 1
+add). The direct emitter builds the one `stablehlo.add` itself, so the
+scaffolding is not in the module it hands XLA. Filed for the same reason as
+#3215: the defect is upstream and real for anyone tracing Julia code.
 
 ### #3217 — batched forward mode
 
@@ -148,8 +153,10 @@ measured in the ReSEACT adjoint workstream are **not** caused by any of these:
 - The ROS23 step is **bandwidth-bound**. It performs ~1,005 M element-ops of
   which only 4.1% is physics arithmetic; ~72% is traffic on >=500k-element
   buffers, dominated by whole-buffer `concatenate` rewrites of the flat extended
-  observed buffer. That is an emitter-shape problem in *our* code
-  (`_oop_prefix_copy` / `_oop_fill_levels`), not an upstream bug.
+  observed buffer. That was an emitter-shape problem in *our* code, not an
+  upstream bug: the traced emitter composed the extended state as one flat
+  buffer. The direct emitter has no such buffer — a materialized observed's fill
+  result is a slot map — which is the structural answer to it.
 - **Build cost** was ~90% geometry setup, addressed by the compile-once and
   rank-specialisation fixes in `src/tree_walk/geometry_setup.jl`.
 - **Compile cost** is sublinear in grid and driven by constant bytes, of which
@@ -159,6 +166,64 @@ measured in the ReSEACT adjoint workstream are **not** caused by any of these:
 time. Neither changes execution time. Only #3217 changes an architectural option.
 
 ## Worth reporting, not yet filed
+
+### `x / c` is rewritten to `x * fl(1/c)` on f64, and `floor` can then read one short
+
+**What happens.** The StableHLO pipeline's algebraic simplifier turns a division
+by a floating-point constant into a multiplication by its reciprocal, on `f64`,
+with no fast-math flag asked for. The optimized module for `floor.(x ./ 3600000.0)`
+is, in full:
+
+```mlir
+%cst = stablehlo.constant dense<2.7777777777777776E-7> : tensor<5xf64>
+%0 = stablehlo.multiply %arg0, %cst : tensor<5xf64>
+%1 = stablehlo.floor %0 : tensor<5xf64>
+```
+
+A reciprocal is a second rounding. `fl(1/3600000)` is below the true reciprocal,
+so `3600000.0 * fl(1/3600000)` is `0.9999999999999999` and the `floor` of it is
+`0` where the host's `floor(3600000.0 / 3600000.0)` is `1`. Measured on Reactant
+0.2.285 / CPU (PJRT), Julia 1.12.6:
+
+```julia
+using Reactant
+f(x) = floor.(x ./ 3600000.0)
+x = Reactant.ConcreteRArray([3600000.0, 7200000.0, 25200000.0, 21600000.0, 46800000.0])
+Array((Reactant.@compile sync=true f(x))(x))   # [0.0, 1.0, 6.0, 6.0, 13.0]
+floor.(Array(x) ./ 3600000.0)                  # [1.0, 2.0, 7.0, 6.0, 13.0]
+```
+
+The same thing happens for `c = 146097`. It is not every constant — `86400000`,
+`60000`, `1000`, `365`, `153` are all exact — which is what makes it hard to
+notice: most operands give the right answer and the ones on an exact multiple of
+`c` do not.
+
+**Why it is worth reporting.** `floor(a / b)` on exact integers is the standard
+spelling of floored integer division in a float-only IR, and it is EXACT under a
+correctly rounded divide (IEEE 754 §5.4), which is what makes the idiom safe to
+write. The rewrite silently withdraws that guarantee, and the failures land
+exactly on the round numbers a test is most likely to use and a model is most
+likely to care about — midnight, the top of the hour, the start of a 400-year
+era. A simplifier that only applied the rewrite when `1/c` is exactly
+representable (a power of two) would keep the optimization where it is free and
+drop it where it is not.
+
+**Where it bit us.** The closed `datetime.*` calendar
+(`src/registered_functions.jl`) decomposes `t_utc` with `floor(a/b)`, and both
+unsafe constants are divisors in it: `3600000` ms per hour and `146097` days per
+400-year era. Compiled through either backend, `datetime.hour` returned the
+previous hour at exactly the top of every hour. The host path was never wrong,
+so nothing in the interpreter's exhaustive `Dates` oracle
+(`test/datetime_arithmetic_test.jl`) could see it.
+
+**Our workaround.** `_cdiv` recovers the floor from the remainder rather than
+trusting the quotient: `r = a - q*b` is exact for exact-integer operands, and two
+selects repair any quotient that is within one unit of the truth. Branch-free,
+value-identical on the host, and independent of which constants a given
+simplifier decides are safe. See the note above `_cdiv` in
+`src/registered_functions.jl`, and the tier-level reading in
+`tests/conformance/compiled_rhs/README.md` (§"Readings taken", item 8), which is
+where the next binding to lower a calendar will look.
 
 ### `call_llvm_generator` recurses once per level of a recursive traced callee
 
@@ -209,6 +274,98 @@ instead of letting the nesting run to the guard, and a note in the
 `@skip_rewrite_func` docstring that a recursive traced callee is the case it
 exists for. Either would have turned several days of bisection into one error
 message.
+
+### `enzyme-hlo-opt`'s `cse_slice` is quadratic in the slice count
+
+**What happens.** `enzyme-hlo-opt` runs a greedy rewrite driver, and one of its
+patterns, `cse_slice`, deduplicates `stablehlo.slice` operations by comparing
+them PAIRWISE through `mlir::OperationEquivalence::isEquivalentTo`. On a module
+carrying a few thousand slices that is invisible. On one carrying tens of
+thousands it is the whole compile, and it grows with the square.
+
+Where it shows up for us is the run of `enzyme-hlo-opt` over the module
+`enzyme` has just DIFFERENTIATED, because reverse mode multiplies the slice
+population: the reverse of a slice is a pad-and-add, so a primal with ~10,000
+slices differentiates into ~24,000 to ~28,000 slices plus ~9,000 pads. Measured
+on a four-stage SSPRK43 transport step at 288 cells, Reactant 0.2.285 / CPU:
+
+| | primal, before `enzyme` | adjoint, after `enzyme` |
+| --- | ---: | ---: |
+| `stablehlo.slice` | 9,932 | 27,610 |
+| `stablehlo.pad` | — | 9,583 |
+| `enzyme-hlo-opt` wall | 4.5 s | > 37 min, never finished |
+
+`perf record -F 199 -g`, 150 s, 29,727 samples, taken live on the second run:
+
+| share | symbol |
+| ---: | --- |
+| 19.8% | `mlir::OperationEquivalence::isEquivalentTo` (two frames) |
+| 6.9% | `mlir::enzyme::failIfDynamicShape` (the `CheckedOpRewritePattern` guard) |
+| 2.2% | `StaticSlice::get` |
+| 2.0% | `CSE<stablehlo::SliceOp>::matchAndRewriteImpl` |
+
+with the remainder in the generic accessors those frames call
+(`DenseArrayAttrImpl<long>`, `RankedTensorType::getShape`, `hasStaticShape`).
+
+**Why it is worth reporting.** The pass is not doing anything wrong — it is
+doing an O(n²) amount of the right thing, on a population that a hash of the
+(operand, start, limit, stride) tuple would deduplicate in one pass. The same
+module reached through a different emitter, carrying 2,712 slices instead,
+compiles its reverse in 115 s end to end.
+
+**Why excluding it is not the answer.** `cse_slice` is also what keeps the other
+slice patterns — `slice_elementwise` in particular, which CREATES two slices per
+rewrite — from multiplying an un-deduplicated set. Excluding both
+(`excluded_passes = slice_elementwise,cse_slice`) was OOM-killed thirteen
+minutes in. There is no pass exclusion that wins here.
+
+**Our workaround.** Emit fewer slices: memoize the emitter's own reads so a span
+is emitted once, and emit a congruent per-cell scalar surface ONCE over its lane
+axis (one gather) rather than once per cell (one one-element slice per cell).
+Both are properties of our emitter, not of the pass, which is why this is
+recorded here rather than treated as a blocker. See reseact.esm's
+COMPILE_COST.md for the measurement the numbers above come from.
+
+### XLA:CPU's own `HloCSE` is quadratic in the same population, one layer down
+
+**What happens.** The entry above is Enzyme-JAX's MLIR-level `cse_slice`. XLA
+has its own, and it fails the same way on the same input: `xla::HloCSE`
+deduplicates by comparing instructions pairwise through
+`HloInstruction::IdenticalInternal`, and it runs inside an `HloPassFix`, i.e.
+to a fixed point.
+
+Where we met it is the CONTINENTAL grid. ReSEACT's transport right-hand side at
+13x7x72 (6,552 cells, 85,176 states) reached XLA carrying **97,385
+`stablehlo.slice` in 105,474 operations** — a 221 MB module text — and the
+four-stage step built from it four times over. `@compile reactant_ssp_step`
+printed XLA's own "Very slow compile?" alarm and did not finish. A `perf`
+profile taken live on it:
+
+| share | frame |
+| ---: | --- |
+| 99.32% | `HloPassPipeline::RunPassesInternal` → … → `HloCSE::RunOnComputation` |
+| 23.85% (self) | `HloInstruction::IdenticalInternal` |
+
+The run then died in the object-file layer rather than in the pass:
+`contiguous_section_memory_manager.cc: allocateMappedMemory failed`, then
+`LLVM ERROR: Unable to allocate section memory!`, 6 h 27 m in, on a node with
+160 GB requested and the cgroup not exhausted — the CPU backend's section
+allocator reserves a contiguous region per compiled object and a module this
+size does not fit one.
+
+**Why it is worth reporting.** Same shape of remark as `cse_slice`: a hash of
+the (opcode, operands, shape, literal attributes) tuple deduplicates in one pass
+what the pairwise comparison does in n². And the section-memory failure is a
+hard abort with no diagnostic that names the module, on a configuration that
+would otherwise only have been slow.
+
+**Our workaround is the same one, and it is now the emitter's.** Do not hand it
+the population: a read past a piece cap is one gather, the base a gather reads
+from is budgeted against the model rather than an absolute element count, and
+each slot map is concatenated ONCE into a canonical base every read addresses by
+slot (`ext/reactant_direct/values.jl`). The transport right-hand side at the
+same grid is then flat in the grid rather than proportional to it. See
+reseact.esm's COMPILE_COST.md for the measurement.
 
 ## Not filed
 

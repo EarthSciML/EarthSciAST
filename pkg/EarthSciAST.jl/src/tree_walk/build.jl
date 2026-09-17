@@ -369,9 +369,8 @@ end
 #     whose defining aggregate's own output ranges are not the dense `1…n` the
 #     buffer layout addresses;
 #   * every array observed at all with `ESS_ARRAY_OBS_INLINE=1`, which restores
-#     the pre-change build exactly. (The `:oop` emitter used to be excluded here
-#     too; it now materializes on the same terms as `:inplace` — see the
-#     `mat_array_vars` note in `_build_lower_and_classify`.)
+#     the pre-change build exactly. Both build forms materialize on the same
+#     terms — see the `mat_array_vars` note in `_build_lower_and_classify`.
 #
 # GHOST CELLS. A materialized observed is a first-class array field of its
 # declared shape, so a gather OUTSIDE that shape reads the ghost literal 0.0 —
@@ -2463,15 +2462,12 @@ function _build_lower_and_classify(model::Model;
     # observed.
     #
     # BOTH EMITTERS. This was `:inplace`-only, on the reasoning that the `:oop`
-    # emitter builds its own `du` and had no buffer to fill. That made inlining
-    # MANDATORY under `:oop`, and inlining is superlinear: a reader spliced with
-    # a reduction body pays the whole body per output cell. On a real chemistry
-    # model that is the difference between a build that fits in memory and one
-    # that exhausts the host, so the traced build was not merely slower, it was
-    # impossible. `_make_rhs_oop` now fills the same
-    # observed block through the `_oop_du_zeros`/`_oop_store` seam that already
-    # exists for exactly this reason (a backend may implement the writes
-    # functionally on an immutable traced value).
+    # out-of-place build had no buffer to fill. That made inlining MANDATORY
+    # there, and inlining is superlinear: a reader spliced with a reduction body
+    # pays the whole body per output cell. On a real chemistry model that is the
+    # difference between a build that fits in memory and one that exhausts the
+    # host, so a compiled build was not merely slower, it was impossible. Both
+    # forms now carry the same materialized-observed fill levels.
     mat_array_vars = _collect_materialized_array_obs(model, equations,
                                                      array_inline_vars, discrete_vars)
 
@@ -2966,19 +2962,23 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # class-merged section is exactly the ordering `_make_rhs` gives the state
     # equations. Dropping them would leave the buffer holding the per-cell TERMS
     # instead of their running accumulation — a silent wrong answer, so the
-    # plumbing is not optional even while the list is empty.
+    # plumbing is not optional.
     #
-    # It IS empty today, and deliberately so: `_detect_prefix_scan` fires only on
-    # an equation whose RHS is a top-level `faq`, and a fill's RHS is the
-    # GATHER `index(<def>, i…)` (see `_materialized_fill_equation` for why that
-    # spelling, and what handing it the bare aggregate would reach). An observed
-    # whose own body is a prefix reduction therefore keeps the triangular path —
-    # exactly as it did when it was inlined into a reader with the scan buried in
-    # that reader's body: for `S[i] = Σ_{j<=i} u[j]`, `n_scan_folds == 0` under
-    # both the factored and the inlining build. What the scan path does keep,
-    # unchanged, is the shape it was written for — a STATE equation that is
-    # itself a prefix reduction — including in a model that also materializes
-    # observeds, where the two mechanisms compose bit-for-bit.
+    # The list is NOT empty in general, and it is `_unwrap_identity_gather` that
+    # fills it. A fill's RHS is the GATHER `index(<def>, i…)`
+    # (`_materialized_fill_equation`), which hides the aggregate from
+    # `_compile_faq_equation!` — but when the producer underneath actually
+    # CONTRACTS, the wrapper is lifted, `_detect_prefix_scan` sees the aggregate
+    # and a materialized observed defined by a prefix reduction lands here as a
+    # per-level `_ScanFold`. ReSEACT's diagnosed vertical air-mass flux
+    # (`Mz[ke] = -Σ_{k < ke} …` over the level NODES contracting the level
+    # centres) is exactly that shape, and it arrives as one fold on the level
+    # that materializes `Mz`. Note the consequence a consumer of `mat_levels`
+    # has to handle: a STAGGERED fold's last output node is left uncovered by the
+    # term kernels on purpose (see `_scan_term_iters`), so the fold reads a slot
+    # of the observed's buffer that nothing in the fill wrote — zero out of a
+    # freshly allocated extended vector, whatever the in-place buffer held
+    # before — and folds it into an accumulator it then discards.
     # `mat_levels` carries the `:inplace` shape
     # `(scalars, _KernelSection, scans, array_contractions)` that
     # `_fill_obs_levels!` consumes; `mat_levels_oop` carries the same fills as
@@ -3045,8 +3045,8 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # Collapse per-cell-fragmented same-structure kernels into lane-batched
     # class kernels — value-exact (bit-identical output on every runner), and on a
     # class-fragmented model an order-of-magnitude reduction in kernel count. For
-    # the `:oop` emitter it is the difference between an XLA trace that finishes
-    # and one that does not. MUST run here, before the xcse
+    # a compiled backend it is the difference between a program that compiles and
+    # one that does not. MUST run here, before the xcse
     # gate below: xcse rewrites kernel invariant-tier defs into SCALAR-cache
     # reads (`_NK_CACHED` payloads that are no kernel's scratch), which the
     # merge signature/clone does not model — merge first, then xcse runs over
@@ -3077,8 +3077,8 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # A lane-invariant fn/interp subtree appearing in several array kernels'
     # invariant tiers (and possibly in scalar equations too) collapses to ONE
     # shared scalar prelude slot; each kernel's inv def becomes a bare cache
-    # read. `:inplace` only — the `:oop` emitter fills its own per-call prelude
-    # vector, never the `_CSECache` the kernel-side reads consult. Runs BEFORE
+    # read. `:inplace` only — a compiled backend emits the prelude itself and
+    # never consults the `_CSECache` the kernel-side reads do. Runs BEFORE
     # the percell append (the ESS_STENCIL_DISABLE reference trees stay exactly
     # the `_compile` output) and BEFORE the cadence split (a hoisted
     # parameter-only def still joins the const tier). ESS_XCSE_DISABLE=1
@@ -3116,10 +3116,11 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # ---- Default tspan ----
     tspan_default = _pick_tspan(tspan, model)
 
-    # ---- Closure ----
-    # Two emitters over the SAME compiled IR (tree_walk/oop.jl explains why both
-    # exist): `:inplace` is the zero-alloc Float64 production RHS; `:oop` is the
-    # eltype-generic `f(u, p, t) → du` that ForwardDiff/Enzyme can differentiate.
+    # ---- The RHS slot ----
+    # Two products of the SAME compiled IR (tree_walk/oop.jl explains why both
+    # exist): `:inplace` is the zero-alloc, eltype-generic Float64 evaluator
+    # `f!(du, u, p, t)`; `:oop` is the compiled IR itself, for a compiled
+    # backend to lower. `:oop` does not evaluate on the host.
     f! = if form === :inplace
         # The factored array-observed fills wrap the state RHS: `f!` copies `u`
         # into the extended value vector, fills every observed buffer in
@@ -3135,8 +3136,8 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
             _ObsExtVec(n_total), n_states, Tuple(mat_levels))
     elseif form === :oop
         # `pgather` (raw `param_arrays` buffers + discrete-cadence caches) rides
-        # along so the OOP RHS can expose its live forcing buffers as ARGUMENTS
-        # (`_OopRHS` / `rhs_with_buffers`, B2) — the traceable binding.
+        # along so the out-of-place build can expose its live forcing buffers as
+        # ARGUMENTS (`_OopRHS`) — the binding a compiled backend needs.
         @_bench :make_rhs_oop _make_rhs_oop(rhs_list, scalar_prelude, acc_kernels, n_states, pgather,
                       scan_folds, Tuple(mat_levels_oop), n_total,
                       array_contractions)
@@ -3341,11 +3342,10 @@ function _build_evaluator_impl_inner(model::Model;
                          # `parameter_classes(prep)` needs no sixth return value
                          # — the same reasoning as `param_map`.
                          _param_classes::Union{Nothing,AbstractDict}=nothing,
-                         # Which RHS to emit from the compiled IR (tree_walk/oop.jl):
-                         # `:inplace` → the zero-alloc Float64 `f!(du, u, p, t)`;
-                         # `:oop` → the eltype-generic `f(u, p, t) → du` that
-                         # ForwardDiff/Enzyme can differentiate. Same IR, same
-                         # evaluation order, so a Float64 `:oop` run is bit-identical.
+                         # What to return in the RHS slot (tree_walk/oop.jl):
+                         # `:inplace` → the zero-alloc, eltype-generic evaluator
+                         # `f!(du, u, p, t)`; `:oop` → the compiled IR a compiled
+                         # backend lowers, which does not evaluate on the host.
                          form::Symbol=:inplace,
                          # Surviving `apply_expression_template` registry for the
                          # selected model (esm-spec §9.6.4 Option B; name → raw
@@ -3758,8 +3758,8 @@ end
 #   axis would need a term at the last node, which does not exist.
 #
 #   The last output node is then left UNCOVERED by the term build and untouched
-#   by the term kernels. That is safe by inspection of `_scan_lanes!` /
-#   `_scan_lanes_oop` (scan.jl): the strict fold WRITES `du[s] = acc` at every
+#   by the term kernels. That is safe by inspection of `_scan_lanes!`
+#   (scan.jl): the strict fold WRITES `du[s] = acc` at every
 #   cell and only reads the slot into a `term` it accumulates into an `acc` that
 #   the loop then discards — so whatever the slot held on entry (0̄ from `du`
 #   zeroing, or a stale observed-buffer value) cannot reach an output. The fold
@@ -4627,25 +4627,22 @@ including `const_arrays`, `param_arrays`, `const_array_boundaries`,
   the model has no tests, the null default `(0.0, 1.0)` is returned.
 * `registered_functions::Dict{String,<:Function}` — handlers for
   `call` ops, keyed by `handler_id`.
-* `form::Symbol` — which RHS to emit (`:inplace`, the default, or `:oop`).
-  `:inplace` gives the `f!(du, u, p, t)` above: zero-allocation at Float64
-  AND eltype-generic, so it both solves and differentiates (ForwardDiff
-  over the state or over the parameters; a stiff solve gets an exact AD
-  Jacobian for free). It is the right answer for almost everything.
-  `:oop` gives an out-of-place `f(u, p, t) → du`. Reach for it only to
-  TRACE — it is what XLA/Reactant and device backends can consume, because
-  it captures no host scratch buffers and contains no per-lane scalar
-  loops. It is not faster and not more differentiable than `f!`; it
-  allocates one temporary per AST node. Both come from the same compiled
-  IR in the same evaluation order, so a Float64 `:oop` call is
-  bit-identical to `f!` — which is why the in-place tests use it as their
-  oracle. SciML dispatches `ODEProblem` on RHS arity, so either drops into
-  `ODEProblem(f, u0, tspan, p)` unchanged. The `:oop` RHS additionally
-  carries an explicit-buffers form for tracing backends — its live forcing
-  buffers (`param_arrays` + discrete caches) exposed as ARGUMENTS via
-  [`rhs_with_buffers`](@ref) / [`forcing_buffers`](@ref) /
-  [`forcing_buffer_index`](@ref), so `@compile` receives them as real XLA
-  inputs and an in-place refresh stays visible to the compiled program.
+* `form::Symbol` — what to return in the RHS slot (`:inplace`, the
+  default, or `:oop`). `:inplace` gives the `f!(du, u, p, t)` above:
+  zero-allocation at Float64 AND eltype-generic, so it both solves and
+  differentiates (ForwardDiff over the state or over the parameters; a
+  stiff solve gets an exact AD Jacobian for free). It is the evaluator.
+  `:oop` gives the OUT-OF-PLACE BUILD PRODUCT instead — the compiled
+  intermediate representation itself, wrapped so that its arity (three
+  arguments) reads as out-of-place, plus the live forcing buffers this
+  build bound. It does not evaluate on the host: it is what a COMPILED
+  backend lowers into a program of its own. `direct_rhs`
+  (`EarthSciASTReactantExt`) is the one in tree; see
+  `docs/src/compiled-backend-devices.md`. Its live forcing buffers
+  (`param_arrays` + discrete caches) are exposed as ARGUMENTS via
+  [`forcing_buffers`](@ref) / [`forcing_buffer_index`](@ref), so a compiled
+  program receives them as real inputs and an in-place refresh
+  ([`sync_forcing!`](@ref)) stays visible to it.
 """
 function build_evaluator(model::Model; kwargs...)
     f!, u0, p, tspan_default, var_map, _diag = _build_evaluator_impl(model; kwargs...)

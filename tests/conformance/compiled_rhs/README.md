@@ -41,7 +41,10 @@ tests/conformance/compiled_rhs/
 
 Every fixture already lives in the corpus and is referenced by its path relative
 to the repository's `tests/` directory. `fixtures/` in the layout above is for
-fixtures authored for this tier alone; phase 1 authors none.
+fixtures authored for this tier alone; phase 1 authored none, and phase 2 adds
+exactly one — `datetime_log10`, below, which exists because no corpus fixture
+exercises the closed calendar and no corpus fixture reachable by this tier
+exercises `log10`.
 
 | Fixture | Path (under `tests/`) | Model | Class | State | Probes | Anchored | What it holds |
 |---|---|---|---|---|---|---|---|
@@ -64,9 +67,37 @@ fixtures authored for this tier alone; phase 1 authors none.
 | `mount_rename_atm_column` | `valid/mount_rename_atm_column.esm` | `AtmColumn` | `algebraic` | 59 | 4 | 4 | a 59-layer column — the tier's widest state, and its shape-generality probe |
 | `mount_rename_soil_column` | `valid/mount_rename_soil_column.esm` | `SoilColumn` | `algebraic` | 4 | 4 | 4 | the 4-layer twin of the same column family |
 | `units_registry_grammar` | `valid/units_registry_grammar.esm` | `UnitsRegistryGrammar` | `algebraic` | 1 | 4 | 4 | one first-order decay under a model whose observed set is a units-parsing discriminator |
+| `datetime_log10` | `conformance/compiled_rhs/fixtures/datetime_log10.esm` | `DatetimeLog10` | `transcendental` | 11 | 8 | 8 | the nine `datetime.*` closed calendar functions, one equation each, plus `hour(t + tz_offset) + longitude/15` and `k_log * log10(lg)` — the tier's only fixture authored for it, and the only one with hand-chosen probe times |
 
-All 19 fixtures carry an `analytic_rhs` anchor on **every** probe, so the
+All 20 fixtures carry an `analytic_rhs` anchor on **every** probe, so the
 self-test gates the whole tier against references computed outside every binding.
+
+### `datetime_log10`, and why its probe times are not the generator's
+
+Its RHS is a CALENDAR, and the generator's 0.37 / 1.0 / 2.5 all land inside the
+first three seconds of 1970-01-01: every one of them would read the same date,
+the same hour and the same leap-year answer, so a binding that decomposed `t`
+wrongly everywhere except there would pass. The eight times it probes instead
+are the places a calendar goes wrong — the boundaries, in both directions from
+the epoch:
+
+| Probe | `t` | What it can catch |
+|---|---:|---|
+| `default` | `0.0` | the epoch itself, which is a day AND a year boundary at once |
+| `pre_epoch_second` | `-1.0` | a NEGATIVE time: floored division, so 1969-12-31T23:59:59 and not "day 0, −1000 ms" |
+| `pre_epoch_fraction` | `-0.5` | a negative time with a sub-second part — truncation toward zero, on the side of the epoch where truncation and flooring disagree |
+| `pre_epoch_leap_1968` | `-58039200.0` | a leap day BEFORE the epoch (1968-02-29), where a year-of-era decomposition that assumed a non-negative day number breaks |
+| `leap_day_2020` | `1582979696.0` | 2020-02-29T12:34:56 — a leap day with every field non-trivial |
+| `year_end_2023` | `1704067199.5` | a year boundary half a second short of it, so a binding that decomposes SECONDS rather than whole milliseconds rolls the year over early |
+| `day_boundary_below` | `86399.75` | `t` just below a day boundary |
+| `day_boundary` | `86400.0` | `t` exactly on one |
+
+`datetime.julian_day` is the one continuous member of the family (`d/dt =
+1/86400` almost everywhere) and is the only element of this fixture that cannot
+be exact in every binding; the eight integer fields are, and `transcendental`'s
+1e-12 is slack on them. The class is carried for `julian_day` — one rounded
+divide onto a ~2.4e6 day number — and for `log10`, which no XLA-class backend
+has an opcode for and every one of them synthesizes as `log(x)/ln(10)`.
 
 ### Excluded, by name and reason
 
@@ -125,6 +156,13 @@ only be a second chance to get the operator wrong.
 from one `random.Random(20260913)` stream, drawn in manifest order — fixture
 order, then probe order, then element order (the evaluator's order) — so the
 whole table regenerates identically.
+
+A fixture entry may carry `probe_times`, which replaces those three `t` values
+(and their probe ids) with its own — `datetime_log10` is the only one that does,
+and the table above says why. It changes the TIMES only: the states still come
+off the same seeded stream, drawn in the same order, so the manifest regenerates
+byte-for-byte either way and adding such a fixture at the END of the generator's
+table leaves every earlier fixture's probes untouched.
 
 | Knob | Value |
 |---|---|
@@ -195,7 +233,38 @@ needs them:
    `reduction` class's SCALED floor is what the case was written for — here
    `1e-14 * 200 = 2e-12`. The genuinely elementwise fixtures (`pde_inline_*`, the
    two mounted columns, `units_registry_grammar`) keep `algebraic` and its 1e-13.
-8. **`float32` carries no fixture in phase 1**, because the precision fixtures
+8. **A compiled backend's `divide` is not the interpreter's divide, and
+   `datetime_log10` is where that first mattered.** XLA's algebraic simplifier
+   rewrites `x / c` for a floating-point constant `c` into `x * fl(1/c)` — the
+   optimized module for `floor(x / 3600000.0)` is literally
+   `multiply(x, 2.7777777777777776e-7)` then `floor`. That is a second rounding,
+   and for `c = 3600000` (milliseconds per hour) and `c = 146097` (days per
+   400-year era) the reciprocal is low, so `x` at an exact multiple comes back
+   as `k - 1e-16` and `floor` reads it one short. Both of those constants are
+   divisors in the closed calendar, so a binding that writes the decomposition
+   as `floor(a/b)` in floating point gets the RIGHT answer at most times of day
+   and the WRONG one exactly on an hour boundary — which is why this fixture's
+   `default`, `day_boundary` and `pre_epoch_leap_1968` probes all sit on one.
+   Julia's emitter recovers the floor from the remainder (`r = a - q*b`, two
+   selects, exact for exact-integer operands) rather than trusting the quotient;
+   a binding doing the decomposition in INTEGER arithmetic is immune and needs
+   nothing. This is not a tolerance question — an hour that is one out is an
+   error of 1.0 — so no class covers it and none should.
+
+   Rust's tape lowering hit the SAME defect independently and now recovers its
+   quotients the same way. Its divisors are different, because it decomposes
+   whole seconds rather than milliseconds: `x * fl(1/86400)`, `fl(1/3600)` and
+   `fl(1/60)` all round back to the exact integer, so the hour boundary is
+   safe there, and `146097` is the one divisor that is not. That constant is
+   the era, so the dates it moves are March 1 of 0400, 0800 and 1600 — none of
+   which is a probe in this manifest, and none of which any fixture here
+   should be contorted into reaching. **The lesson is that this tier's probes
+   cannot be the only guard.** Which exact multiples round low is a property of
+   each binding's own constants, so the check belongs in each binding's unit
+   tests, at ITS divisors' boundaries, with the tier as the cross-binding
+   backstop it already is.
+
+9. **`float32` carries no fixture in phase 1**, because the precision fixtures
    that would use it are excluded by §5.38.4. `--self-test` therefore gates every
    class's floor arithmetic directly, on a synthetic probe, rather than leaving
    the one piece of arithmetic this file spells out unchecked until a fixture

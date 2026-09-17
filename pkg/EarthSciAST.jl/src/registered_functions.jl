@@ -366,7 +366,7 @@ end
 #      it cannot record "construct a Julia object".
 #   3. `Dates.month` walks a cumulative-length table and `isleapyear` branches
 #      on `y % 4 / % 100 / % 400`. A trace cannot TAKE a branch whose
-#      condition is a traced value — the same wall `_oop_index_int` (oop.jl)
+#      condition is a traced value — the same wall `_index_int` (scalar_ops.jl)
 #      exists to keep subscript arithmetic away from.
 #
 # So the calendar is re-derived here as ARITHMETIC. Nothing about it is
@@ -375,10 +375,10 @@ end
 # branch and no table — the exact inverse of the Fliegel–van Flandern formula
 # `_datetime_julian_day` already runs in the forward direction below. Every
 # step is `+ - * /`, `floor`, a comparison and a `select`, all of which the
-# `:oop` runners already lower (`ifelse` is a VALUE-level select — both arms
+# compiled backends already lower (`ifelse` is a VALUE-level select — both arms
 # are computed and the condition picks one — not control flow, which is
-# precisely why `interp.searchsorted` traces today; see `_oop_interp_
-# searchsorted`).
+# precisely why `interp.searchsorted` lowers today; see
+# `_interp_searchsorted_lanes`, src/tree_walk/interp_lanes.jl).
 #
 # THIS IS THE ONLY IMPLEMENTATION. It replaces the `Dates` path for EVERY
 # value type rather than sitting beside it as a traced-only twin, because two
@@ -415,10 +415,36 @@ end
 # `q·2⁻⁵³ < 1/b` — that is, whenever `q·b = a` stays under `2⁵³`, which is the
 # SAME condition as `a` being an exact integer in the first place. No separate
 # magnitude bound to track: if the inputs are exact, the quotient is right.
-@inline _cdiv(a, b) = floor(a / b)
+#
+# THAT ARGUMENT ASSUMES A CORRECTLY ROUNDED DIVIDE, AND A COMPILED BACKEND IS
+# NOT OBLIGED TO GIVE ONE. XLA's algebraic simplifier rewrites `x / c` for a
+# constant `c` into `x * (1/c)`, and a reciprocal is a second rounding: for
+# `c = 3600000` (milliseconds per hour) `fl(1/c)` is just under the true
+# reciprocal, so at exactly one hour the product is 0.9999999999999999 and
+# `floor` reads the hour as 0. `c = 146097` (days per 400-year era) is the
+# calendar's other unsafe divisor. Nothing about the calendar is wrong there —
+# the DIVIDE is, by one unit in the last place — and the host path was never
+# affected, which is exactly what makes it the kind of bug a compiled lane
+# ships with: it fires only when the quotient is an exact integer, so most
+# times of day are right and the hour boundary is not.
+#
+# So the floor is RECOVERED from the remainder instead of trusted. `r = a - q*b`
+# is EXACT whenever `a` and `q*b` are exact integers below `2⁵³`, which the
+# precondition already guarantees, and the true floor is the unique `q` with
+# `0 ≤ r < b`. Two selects therefore repair any quotient that is within one
+# unit of the truth — which every divide of any kind is, correctly rounded or
+# not — and on a host, where `q` was already right, both selects are no-ops and
+# the value is bit-identical to what `floor(a / b)` returned before. Branch-free,
+# so it lowers to the same kind of program it did as a bare divide.
+@inline function _cdiv(a, b)
+    q = floor(a / b)
+    r = a - q * b
+    return ifelse(r < 0, q - oftype(q, 1),
+                  ifelse(r >= b, q + oftype(q, 1), q))
+end
 
-# Truncation toward zero, spelled with the two primitives the traced backends
-# already lower. `Base.trunc` would do on the host but is a third op to demand
+# Truncation toward zero, spelled with the two primitives a compiled backend
+# already lowers. `Base.trunc` would do on the host but is a third op to demand
 # of a backend for no gain, and `floor` + a select is exactly the pair the rest
 # of this section is built from.
 @inline _ctrunc(x) = ifelse(x < 0, -floor(-x), floor(x))
@@ -621,28 +647,50 @@ end
 # (the TOTALITY CONTRACT above) and EXACTLY the boxed registry's `Float64`
 # composition — including the `_cal_i32` Int32 range check, whose throw is
 # part of the pinned semantics for absurd inputs.
+#
+# `kernel` is that composition's ELTYPE-GENERIC heart: the branch-free
+# arithmetic itself, without `core`'s `Float64` pin and without `_cal_i32`'s
+# Int32 range check. On a `Float64` argument it computes the same number `core`
+# does (the pin and the check narrow a value, they do not change one), and on a
+# value type that has no `Float64` and no `Int32` — a traced number, a tensor
+# lane — it is the only one of the two that has an answer at all. It is what a
+# COMPILING backend lowers: `ext/reactant_direct/interp.jl` asks for the row's
+# kernel by `id` and emits the ops the branch-free calendar is written from,
+# rather than re-deriving the calendar in a second dialect. Two implementations
+# of one calendar is two calendars (see the section header above), so there is
+# exactly one, and every tier reaches it.
 const _FN_TYPED_SCALAR_CORES = (
-    (fname = "datetime.year", arity = 1,
+    (fname = "datetime.year", arity = 1, kernel = _cal_year,
      core = t -> Float64(_cal_i32("datetime.year", _cal_year(t)))),
-    (fname = "datetime.month", arity = 1,
+    (fname = "datetime.month", arity = 1, kernel = _cal_month,
      core = t -> Float64(_cal_i32("datetime.month", _cal_month(t)))),
-    (fname = "datetime.day", arity = 1,
+    (fname = "datetime.day", arity = 1, kernel = _cal_day,
      core = t -> Float64(_cal_i32("datetime.day", _cal_day(t)))),
-    (fname = "datetime.hour", arity = 1,
+    (fname = "datetime.hour", arity = 1, kernel = _cal_hour,
      core = t -> Float64(_cal_i32("datetime.hour", _cal_hour(t)))),
-    (fname = "datetime.minute", arity = 1,
+    (fname = "datetime.minute", arity = 1, kernel = _cal_minute,
      core = t -> Float64(_cal_i32("datetime.minute", _cal_minute(t)))),
-    (fname = "datetime.second", arity = 1,
+    (fname = "datetime.second", arity = 1, kernel = _cal_second,
      core = t -> Float64(_cal_i32("datetime.second", _cal_second(t)))),
-    (fname = "datetime.day_of_year", arity = 1,
+    (fname = "datetime.day_of_year", arity = 1, kernel = _cal_day_of_year,
      core = t -> Float64(_cal_i32("datetime.day_of_year", _cal_day_of_year(t)))),
-    (fname = "datetime.is_leap_year", arity = 1,
+    (fname = "datetime.is_leap_year", arity = 1, kernel = _cal_is_leap_year,
      core = t -> Float64(_cal_i32("datetime.is_leap_year", _cal_is_leap_year(t)))),
     # Already `Float64`-valued — the boxed arm's `convert(T, ::Float64)` was
     # the identity, so the core is the raw kernel.
-    (fname = "datetime.julian_day", arity = 1,
+    (fname = "datetime.julian_day", arity = 1, kernel = _datetime_julian_day,
      core = _datetime_julian_day),
 )
+
+# The eltype-generic kernel of row `id`, for a backend that must lower the
+# function rather than call it. BUILD/EMISSION TIME ONLY: indexing the
+# heterogeneous const tuple at a runtime `id` is type-unstable, which is
+# irrelevant once per emitted node and unacceptable in `_fn_typed_core_call`'s
+# per-value ladder — hence the two different shapes over the one table.
+function _fn_typed_core_kernel(id::Int)
+    (1 <= id <= length(_FN_TYPED_SCALAR_CORES)) || _fn_typed_core_id_oob(id)
+    return _FN_TYPED_SCALAR_CORES[id].kernel
+end
 
 # The typed-core declaration for `fname`, or `nothing` when the function keeps
 # the boxed path (`interp.searchsorted` DELIBERATELY has no row — its typed
@@ -1031,9 +1079,10 @@ end
 #     `_interp_*_core` kernel on `specs[lane]`'s own table/axis, so per-lane
 #     results are bit-identical to the unmerged kernels by construction.
 #   * `*_cols` is the knot-major transpose (`col[k][lane] == specs[lane].…[k]`)
-#     the :oop lane evaluator broadcasts over: `_oop_interp_*_lanes` runs the
-#     IDENTICAL locate/select/blend op sequence with each scalar knot replaced
-#     by its length-L lane column, so lane `l` sees exactly its own knots.
+#     the lane evaluators broadcast over: `_interp_*_lanes`
+#     (src/tree_walk/interp_lanes.jl) runs the IDENTICAL locate/select/blend op
+#     sequence with each scalar knot replaced by its length-L lane column, so
+#     lane `l` sees exactly its own knots.
 #   * `s1..off` mirror the `_AccStateTblBox` box lane addressing
 #     (lane = off + (midx₁-1)s1 + (midx₂-1)s2 + (midx₃-1)s3; the merge mints
 #     `(1,0,0,1)` with `_outs_cells`, i.e. lane == the merged cell ordinal).

@@ -186,31 +186,27 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("lane_table_intern_test.jl")             # content-equal lane tables `===` at build (ESS_LANE_INTERN_DISABLE oracle)
     include("direct_class_emission_test.jl")         # per-cell scalarizer emits class kernels directly (ESS_DIRECT_CLASS_EMIT_DISABLE oracle)
     include("cross_eq_class_emission_test.jl")       # cross-equation + affine-box classes emitted directly; repair pass zero-merge (ESS_CROSS_EQ_CLASS_EMIT_DISABLE oracle)
-    include("tree_walk_oop_test.jl")
-    include("oop_merge_test.jl")                     # :oop kernel-CLASS merge ≡ unmerged
-    include("tree_walk_oop_ssa_test.jl")             # ess-oop-ssa: producer-value references ≡ flat-buffer gathers (ESS_OOP_SSA)
+    include("scalar_ops_test.jl")                    # the shared op ladder + gather-subscript resolver
+    include("scalar_batch_test.jl")                  # lane-batched grouping of the per-cell scalar surface (ess-oop-batch)
+    include("interp_lanes_test.jl")                  # branch-free `interp.*` lane evaluators ≡ the scalar cores
+    include("oop_merge_test.jl")                     # kernel-CLASS merge ≡ unmerged (both build forms)
     include("tree_walk_iip_generic_test.jl")
     include("parameter_gradient_test.jl")            # ∂(RHS)/∂p, both emitters (traced arm opt-in)
     include("parameter_vector_abi_test.jl")          # `p::AbstractVector`/ComponentVector ≡ NamedTuple, bit for bit
     include("parameter_classes_test.jl")             # numeric/structural/const-folded/forcing partition + the narrowed solve-time refusal
-    # XLA tracing of the out-of-place RHS (ext/EarthSciASTReactantExt.jl). OPT-IN:
-    # Reactant bundles an XLA runtime; it is in the test target so `Pkg.test()`
-    # resolves it, but it is only LOADED when ESM_TEST_REACTANT=1 — the default
-    # suite must keep running (and passing) without it. See the header of
-    # test/reactant_oop_test.jl.
+    # The Reactant/XLA backend (ext/EarthSciASTReactantExt.jl). OPT-IN: Reactant
+    # bundles an XLA runtime; it is in the test target so `Pkg.test()` resolves
+    # it, but it is only LOADED when ESM_TEST_REACTANT=1 — the default suite must
+    # keep running (and passing) without it. See the header of
+    # test/reactant_direct_emit_test.jl.
     if get(ENV, "ESM_TEST_REACTANT", "0") == "1"
-        include("reactant_oop_test.jl")
         include("reactant_lane_dedup_test.jl")       # merged lane tables ≢ grid size
         include("reactant_locate_test.jl")           # count-locate ≢ a reduction, and bit-exact
-        include("reactant_scan_test.jl")             # traced prefix scan ≢ grid size
-        include("reactant_oop_intern_test.jl")       # one emitted read per (SSA value, window)
-        include("reactant_oop_ssa_test.jl")          # ess-oop-ssa: skipped scatters/redirects visible in the raw module
-        include("reactant_oop_gvn_test.jl")          # one emitted OP per (opcode, operand values)
         include("reactant_direct_emit_test.jl")      # the COMPILED backend: StableHLO built directly from the _Node IR
         include("reactant_direct_sharding_test.jl") # multi-device: needs ESM_TEST_REACTANT_GPU=1 too, else self-skips
     else
-        @info "skipping reactant_oop_test.jl (set ESM_TEST_REACTANT=1, with Reactant " *
-              "in the environment, to run the XLA tracing tests)"
+        @info "skipping the reactant_*_test.jl files (set ESM_TEST_REACTANT=1, " *
+              "with Reactant in the environment, to run the compiled backend)"
     end
     include("tree_walk_allocation_test.jl")
     include("tree_walk_param_gather_test.jl")
@@ -267,8 +263,11 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("contraction_loop_test.jl")             # runtime contraction loop (ess-runtime-contraction)
     include("contraction_tier_order_test.jl")       # loop-vs-affine tier ORDER (ess-runtime-contraction × ess-affine)
     include("array_contraction_test.jl")            # whole-array contraction loop nest (ess-array-contraction)
-    include("oop_scalar_batch_test.jl")             # :oop lane-batched scalar entries (ess-oop-batch)
     include("tree_walk_tcadence_test.jl")           # B3 time-cadence tier (t-memoized slots)
+    # The untiered kill switch (ESS_UNTIERED): an in-place build that skips no
+    # prelude slot, which is what the tiering tests above use as their
+    # differential oracle.
+    include("tree_walk_untiered_test.jl")
     include("tree_walk_xcse_test.jl")
     include("tree_walk_const_array_boundary_test.jl")
     include("tree_walk_semiring_test.jl")

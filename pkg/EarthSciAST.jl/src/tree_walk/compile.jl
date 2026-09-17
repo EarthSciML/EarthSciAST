@@ -754,7 +754,7 @@ end
 # This is deliberately not "refuse to recurse into guarded arms", which would lose
 # legitimate sharing within an arm and between an arm and an unconditional one.
 #
-# Guard laziness holds only on the SCALAR walkers (`_eval_node`, `_oop_eval`). The
+# Guard laziness holds only on the SCALAR walker (`_eval_node`). The
 # access-kernel `_eval_acc` is EAGER for `ifelse`/`and`/`or` BY CONSTRUCTION — it
 # broadcasts over lanes, and per-lane laziness would need masked evaluation — so a
 # guarded-domain expression inside a `faq` is NOT protected by its guard, with
@@ -1377,10 +1377,7 @@ end
 # Every argument's TYPE determines the answer, so inference constant-folds this to
 # a `Type{…}` at each `f!` specialization — which is what makes `_cse_buf` a
 # static dispatch and keeps the Float64 path byte-for-byte what it was.
-#
-# (oop.jl's `_oop_value_type` is this same function under the emitter-local
-# name — `const _oop_value_type = _rhs_value_type` — so the two emitters agree
-# on the value type by construction.)
+
 @inline _promote_val_types(::Tuple{}) = Bool   # identity for `promote_type`
 @inline _promote_val_types(x::Tuple) =
     promote_type(typeof(x[1]), _promote_val_types(Base.tail(x)))
@@ -1402,13 +1399,11 @@ end
 
 # ---- The parameter read seam ------------------------------------------------
 #
-# A CONTAINER SEAM, in the same sense (and for the same reason) as oop.jl's
-# `_oop_read_state`: the one place the walkers turn "parameter named `sym`" into a
-# value, kept as named one-liners so a different `p` container — or a tracing
-# backend that cannot scalar-index — adds a METHOD instead of forking five
-# walkers. Every `_NK_PARAM` arm in the package goes through it: `_eval_node`
-# (compile.jl), `_eval_acc` (access_kernel.jl), the codegen tier
-# (codegen_kernel.jl), and the three out-of-place walks (oop.jl).
+# A CONTAINER SEAM: the one place the walkers turn "parameter named `sym`" into
+# a value, kept as named one-liners so a different `p` container adds a METHOD
+# instead of forking every walker. Every `_NK_PARAM` arm in the package goes
+# through it: `_eval_node` (compile.jl), `_eval_acc` (access_kernel.jl) and the
+# codegen tier (codegen_kernel.jl).
 #
 # TWO COORDINATES, ONE NODE. A `_NK_PARAM` node carries BOTH the parameter's
 # `sym` and its `idx` — its position in the build's already-sorted `param_names`
@@ -1421,9 +1416,8 @@ end
 # right answer: loud, not a silently wrong parameter.)
 #
 # THE NAMEDTUPLE METHOD IS `getfield`, UNCHANGED — the production Float64 path
-# must stay instruction-for-instruction what it was (tree_walk_oop_test.jl pins
-# `:oop` against `f!` BIT FOR BIT), and an `@inline` one-liner around the same
-# `getfield` compiles to the same code.
+# must stay instruction-for-instruction what it was, and an `@inline` one-liner
+# around the same `getfield` compiles to the same code.
 @inline _read_param(p::NamedTuple, sym::Symbol, ::Int) = getfield(p, sym)
 
 # The vector container. `getfield(::ComponentVector, ::Symbol)` THROWS (a
@@ -1446,8 +1440,8 @@ end
 # catches it by name; a vector `p` has only its length), and a `BoundsError` is
 # loud where an out-of-range read is a silently wrong parameter value. The check is
 # a predictable compare-and-branch on the Float64 path and off the NamedTuple path
-# entirely. ext/EarthSciASTReactantExt.jl adds the traced method, since XLA rejects
-# a scalar index of a traced array outside `@allowscalar`.
+# entirely. (A compiled backend reads parameters out of the container itself and
+# never reaches this method — see `_de_param`, ext/reactant_direct/emit.jl.)
 @inline _read_param_data(d::AbstractVector, idx::Int) = d[idx]
 
 # ---- Float32 state guard ----------------------------------------------------

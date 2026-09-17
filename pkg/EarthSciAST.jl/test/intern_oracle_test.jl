@@ -8,7 +8,7 @@
 # `_TemplateCtx.sites` / variant keys the interning pre-audit re-keys), the
 # affine-stencil fixtures (2-D Laplacian, makearray regions, const-coefficient
 # diffusion), an observed-chain model (the `_resolve_observed` splice path),
-# and the per-cell reference (ESS_STENCIL_DISABLE=1) and :oop emitters.
+# and the per-cell reference (ESS_STENCIL_DISABLE=1).
 # Also pins the interner's own merge/no-merge semantics (bit-egal literals,
 # Int-vs-Float `const` values, `wrt`/field discrimination, DAG idempotence).
 
@@ -27,32 +27,28 @@ _probe_states(n) = (
 )
 
 # Build `model` under `env` and return (du probes, u0, p, var_map).
-function _intern_probe_model(model; env=(), form::Symbol=:inplace,
+function _intern_probe_model(model; env=(),
                              ics=Dict{String,Float64}(), const_arrays=Dict())
     withenv(env...) do
         f, u0, p, _, vmap = ESM.build_evaluator(model; initial_conditions=ics,
-                                                form=form, const_arrays=const_arrays)
+                                                const_arrays=const_arrays)
         dus = Vector{Float64}[]
         for (ti, u) in zip((0.0, 0.7, 3.25), _probe_states(length(u0)))
-            if form === :oop
-                push!(dus, Vector{Float64}(f(u, p, ti)))
-            else
-                du = similar(u0)
-                f(du, u, p, ti)
-                push!(dus, copy(du))
-            end
+            du = similar(u0)
+            f(du, u, p, ti)
+            push!(dus, copy(du))
         end
         (dus, u0, p, vmap)
     end
 end
 
 # The on/off differential for one model: interning default vs disabled.
-function _intern_oracle(model; form=:inplace, ics=Dict{String,Float64}(),
+function _intern_oracle(model; ics=Dict{String,Float64}(),
                         const_arrays=Dict())
     on = _intern_probe_model(model; env=(("ESS_INTERN_DISABLE" => nothing),),
-                             form=form, ics=ics, const_arrays=const_arrays)
+                             ics=ics, const_arrays=const_arrays)
     off = _intern_probe_model(model; env=(("ESS_INTERN_DISABLE" => "1"),),
-                              form=form, ics=ics, const_arrays=const_arrays)
+                              ics=ics, const_arrays=const_arrays)
     @test on[4] == off[4]                    # identical state map
     @test on[2] == off[2]                    # identical u0 (bitwise: Float64 ==)
     @test on[3] === off[3] || isequal(on[3], off[3])   # identical params
@@ -255,16 +251,6 @@ end
         for k in eachindex(on[1])
             @test on[1][k] == off[1][k]
             @test sum(abs, on[1][k]) > 0
-        end
-        # :oop emitter, both ways
-        oop_on = withenv("ESS_INTERN_DISABLE" => nothing) do
-            flat = ESM.flatten(ESM.load_path(FIX))
-            f, u0, p, _, _ = ESM.build_evaluator(flat; form=:oop)
-            [Vector{Float64}(f(u, p, ti))
-             for (ti, u) in zip((0.0, 0.7, 3.25), _probe_states(length(u0)))]
-        end
-        for k in eachindex(on[1])
-            @test oop_on[k] == off[1][k]
         end
     end
 end

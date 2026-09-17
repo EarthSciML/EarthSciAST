@@ -18,6 +18,7 @@
 # path (a copied buffer would fail), matching stencil_affine_pgather_test.jl.
 using Test
 using EarthSciAST
+using ForwardDiff
 include("testutils.jl")
 const ESM = EarthSciAST
 
@@ -178,23 +179,20 @@ end
 
     @testset "Dual eltype through the table lane" begin
         # The generic (eltype-T) access evaluator arm must read the table the
-        # same way; drive the same in-place f! at a Dual-like Complex eltype?
-        # No — the suite's convention is ForwardDiff via the oop/tests; here a
-        # plain second eltype smoke: Float64 path already covered, so assert
-        # the :oop emitter agrees bit-for-bit (it lowers the same descriptor).
+        # same way a Float64 walk does, so differentiating through the clamped
+        # table lane must reproduce the per-cell reference's Jacobian exactly.
         N = 12
         buf = Float64[0.5 + 0.2k for k in 1:N]
         ics = Dict("u[$k]" => 0.1k for k in 1:N)
         model = _pgt_clamped_model(N)
-        f!, u0, p, _t, _vm, _d = withenv("ESS_OBSREF_DISABLE" => nothing) do
+        build(env) = withenv(env => (env === "ESS_OBSREF_DISABLE" ? nothing : "1")) do
             ESM._build_evaluator_impl(model; initial_conditions=ics,
                                       param_arrays=Dict("forcing" => buf))
         end
-        fo, u0o, po, _to, _vmo, _do = withenv("ESS_OBSREF_DISABLE" => nothing) do
-            ESM._build_evaluator_impl(model; initial_conditions=ics,
-                                      param_arrays=Dict("forcing" => buf), form=:oop)
-        end
-        du = zero(u0); f!(du, u0, p, 0.0)
-        @test Vector{Float64}(fo(u0o, po, 0.0)) == du
+        f!, u0, p, _t, _vm, _d = build("ESS_OBSREF_DISABLE")
+        fr!, _, _, _, _, _ = build("ESS_STENCIL_DISABLE")
+        jac(g) = ForwardDiff.jacobian(
+            uu -> (d = similar(uu, eltype(uu)); fill!(d, 0); g(d, uu, p, 0.0); d), u0)
+        @test jac(f!) == jac(fr!)
     end
 end

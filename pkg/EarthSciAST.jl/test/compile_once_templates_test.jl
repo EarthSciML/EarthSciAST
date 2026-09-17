@@ -22,21 +22,6 @@ using EarthSciAST: load_path, flatten, build_evaluator, coerce_esm_file, TreeWal
 
 include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalone)
 
-# A state wrapper that THROWS on scalar reads but serves whole-array gathers — the
-# access profile of a traced array (Reactant rejects `u[i]`, accepts `u[slots]`).
-# Used to prove, on host, that the vectorized `:oop` acc form (template sub-kernels
-# included) touches the state only through whole-array ops. Defined at module scope
-# (a `struct` cannot live inside a `@testset`).
-if !isdefined(@__MODULE__, :_TemplGatherOnly)
-    struct _TemplGatherOnly <: AbstractVector{Float64}
-        v::Vector{Float64}
-    end
-    Base.size(g::_TemplGatherOnly) = size(g.v)
-    Base.getindex(::_TemplGatherOnly, ::Int) = error("scalar state read — XLA rejects it")
-    Base.getindex(g::_TemplGatherOnly, I::AbstractVector{<:Integer}) = g.v[I]
-    Base.similar(g::_TemplGatherOnly, ::Type{T}, dims::Dims) where {T} = similar(g.v, T, dims)
-end
-
 @testset "compile-once template tier" begin
     bench(parts...) = joinpath(TESTUTILS_REPO_ROOT, "tests", "bench", parts...)
 
@@ -50,25 +35,21 @@ end
     # Build under an env overlay and return (du values at the probes, u0, counters).
     # The env overlay wraps LOAD as well as the build, so ESS_TEMPLATE_REF_DISABLE
     # (the load-time Option-A hatch) takes effect where it lives.
-    function build_and_probe(fix::AbstractString; env=(), form::Symbol=:inplace)
+    function build_and_probe(fix::AbstractString; env=())
         withenv(env...) do
             flat = flatten(load_path(fix))
             _BENCH_ON[] = true
             _bench_reset!()
-            f, u0, p, _, _ = build_evaluator(flat; form=form)
+            f, u0, p, _, _ = build_evaluator(flat)
             counters = (branches=_BENCH_BRANCH_TEMPLATES[],
                         variants=_BENCH_BODY_VARIANTS[],
                         compiles=_BENCH_COMPILE_CALLS[])
             _BENCH_ON[] = false
             dus = Vector{Float64}[]
             for (ti, u) in zip((0.0, 0.7, 3.25), probe_states(length(u0)))
-                if form === :oop
-                    push!(dus, Vector{Float64}(f(u, p, ti)))
-                else
-                    du = similar(u0)
-                    f(du, u, p, ti)
-                    push!(dus, copy(du))
-                end
+                du = similar(u0)
+                f(du, u, p, ti)
+                push!(dus, copy(du))
             end
             (dus, u0, counters)
         end
@@ -80,17 +61,15 @@ end
         fast, u0, cfast = build_and_probe(FIX)
         atload, _, catload = build_and_probe(FIX; env=(("ESS_TEMPLATE_REF_DISABLE" => "1"),))
         percell, _, _ = build_and_probe(FIX; env=(("ESS_STENCIL_DISABLE" => "1"),))
-        oop, _, _ = build_and_probe(FIX; form=:oop)
 
         @test length(u0) == 343
         for k in 1:3
             # The default (compile-once) path vs the ESS_TEMPLATE_REF_DISABLE=1
             # Expand-at-load fused build (the ONE differential hatch, RFC §12
-            # gate 3), the per-cell reference, and the out-of-place emitter:
-            # all EXACTLY equal (Float64 ==, no tolerance).
+            # gate 3) and the per-cell reference: all EXACTLY equal (Float64 ==,
+            # no tolerance).
             @test fast[k] == atload[k]
             @test fast[k] == percell[k]
-            @test fast[k] == oop[k]
             @test sum(abs, fast[k]) > 0     # and not trivially zero
         end
 
@@ -101,31 +80,24 @@ end
         @test cfast.compiles < catload.compiles ÷ 4
     end
 
-    @testset "gate: template sub-kernels vectorize for :oop (traceable)" begin
+    @testset "gate: template sub-kernels take the vectorized acc form" begin
         # gordian subcall-vectorize: a template-body sub-kernel (`K.subs` /
-        # `_NK_SUBCALL`) used to force the per-cell oop FALLBACK (`_oop_run_acc_kernel`),
-        # which scalar-indexes the state and so cannot be traced. It now evaluates
-        # each variant as its OWN whole-array op over the parent lanes and splices
-        # the lane-aligned result into the parent operand stream. Pin structurally:
-        # this fixture DOES carry sub-kernels, EVERY acc plan is vectorizable (no
-        # fallback), and the whole array phase evaluates WITHOUT scalar-indexing the
-        # state — the property a tracer (Reactant/XLA) actually rejects.
+        # `_NK_SUBCALL`) used to force the per-cell FALLBACK, which addresses the
+        # state one element at a time and so cannot be compiled. It now plans each
+        # variant as its OWN whole-array op over the parent lanes, splicing the
+        # lane-aligned result into the parent operand stream. Pin structurally:
+        # this fixture DOES carry sub-kernels and EVERY acc plan is vectorizable,
+        # which is the property a compiled backend needs — the emitter refuses a
+        # per-cell fallback kernel outright.
         FIX = bench("transport_3axis_7cubed_fullrank.esm")
         flat = flatten(load_path(FIX))
         fo, u0, p, _, _ = build_evaluator(flat; form=:oop)
-        # `fo` is the `_OopRHS` wrapper (B2); the walk closure — and its captured
-        # lane plans — is the explicit-buffers form behind `rhs_with_buffers`.
-        oplans = getfield(rhs_with_buffers(fo), :acc_plans)
+        # `fo` is the `_OopRHS` wrapper; the compiled IR — and its lane plans —
+        # is its `rhs` field.
+        oplans = getfield(getfield(fo, :rhs), :acc_plans)
         @test !isempty(oplans)
         @test any(P -> !isempty(P.subs), oplans)     # the tier actually fired here
         @test all(P -> P.vectorizable, oplans)       # …and none forced the fallback
-
-        # `form = :oop` must evaluate through a gather-only state (defined at module
-        # scope above) and land bit-identically on the plain result.
-        u = probe_states(length(u0))[2]
-        want = fo(u, p, 0.7)
-        @test fo(_TemplGatherOnly(u), p, 0.7) == want   # whole-array only, bit-identical
-        @test sum(abs, want) > 0
     end
 
     @testset "reduced-rank fixture: per-cell fallback stays bit-identical" begin

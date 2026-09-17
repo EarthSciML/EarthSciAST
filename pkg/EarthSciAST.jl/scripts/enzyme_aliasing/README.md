@@ -1,8 +1,16 @@
 # `Enzyme.API.strictAliasing!(false)` — what it costs, and what it would take to stop needing it
 
-Investigation of the claim in the header of `src/tree_walk/oop.jl` (lines ~55-72) that
-CPU reverse-mode AD over the `:oop` RHS requires the process-global
-`Enzyme.API.strictAliasing!(false)`, and that the durable fix is a payload-free IR.
+> **The out-of-place tree walk this was measured on has since been retired.**
+> `build_evaluator(model; form = :oop)` now returns the compiled intermediate
+> representation for a compiled backend to lower, with no host evaluator behind
+> it, so `repro_oop.jl` and `relaxed_min.jl` are gone. What survives unchanged
+> is the finding itself — the wart belongs to the shared `_Node` IR, not to any
+> one emitter — and `repro_iip.jl`, which reproduces it on the in-place `f!`.
+> The measurements below are kept as the record of how that was established.
+
+Investigation of the claim that CPU reverse-mode AD over this package's tree walk
+requires the process-global `Enzyme.API.strictAliasing!(false)`, and that the
+durable fix is a payload-free IR.
 
 Measured 2026-08-12 against **Enzyme v0.13.199** (`Enzyme_jll` v0.0.290), Julia 1.12,
 `EarthSciAST` at `origin/main` (`43bbf986`). (0.13.199 is what a fresh resolve picks
@@ -16,7 +24,6 @@ the flag is a process-global consumed at Enzyme *compile* time and Enzyme caches
 compiled adjoints, so toggling it mid-process does not give a clean answer.
 
 ```
-julia --project=<env> repro_oop.jl      strict|relaxed
 julia --project=<env> repro_iip.jl      strict|relaxed [nocodegen]
 julia --project=<env> micro_variants.jl any|anyunused|barrier|inactive|union|concrete [relaxed]
 ```
@@ -254,10 +261,10 @@ argument for each, not blanket.
 
 ### Size estimate for the cheap option
 
-~10-20 `EnzymeRules.inactive` declarations plus arm extraction across the three
-walkers (`_oop_eval` / `_oop_eval_batch` in `oop.jl`, `_eval_node` in `compile.jl`,
-`_eval_acc` in `access_kernel.jl`), **plus** a restructure of `_oop_fn`/`_eval_closed_fn`
-to drop the `Vector{Any}`. Call it 2-4 days. It does not remove the flag on its own
+~10-20 `EnzymeRules.inactive` declarations plus arm extraction across the two
+walkers that remain (`_eval_node` in `compile.jl`, `_eval_acc` in
+`access_kernel.jl`), **plus** a restructure of `_eval_closed_fn` to drop the
+`Vector{Any}`. Call it 2-4 days. It does not remove the flag on its own
 unless blocker 3 is also solved, and it adds a permanent, invisible correctness
 obligation (every `inactive` is an unchecked assertion). **Recommendation: do not do
 this** unless CPU reverse mode becomes load-bearing. It buys removing a wart at the
@@ -283,9 +290,7 @@ lowering that exists to the tiers it does not yet cover". Those are:
 
 - **The scalar tier of `f!`**: the CSE prelude (three cadence tiers) and `rhs_list`,
   both still walked by the `_eval_node` interpreter. This is what the 0-D model hits.
-- **The `:oop` emitter entirely**: `_oop_eval`, `_oop_eval_batch`, the oop acc walkers.
-  `oop.jl` (2,678 lines) + `oop_merge.jl` (1,077) are interpreters end to end.
-- **The boxed closed-function path**, in both, which no lowering fixes by itself —
+- **The boxed closed-function path**, which no lowering fixes by itself —
   it needs a typed calling convention (a tuple, or a per-name generated dispatch)
   rather than `Vector{Any}` + `String`.
 

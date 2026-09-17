@@ -23,9 +23,8 @@
 #      against BOTH oracles (direct-off = assemble-then-merge, merge-off =
 #      fully split) and the forced per-cell scalar reference
 #      (ESS_STENCIL_DISABLE=1), across interp lane classes
-#      (linear/bilinear/searchsorted), a guarded (ifelse) class, both
-#      emitters (:inplace and :oop), codegen on AND off, and under
-#      ForwardDiff Duals (Jacobian bit-compare).
+#      (linear/bilinear/searchsorted), a guarded (ifelse) class, codegen on
+#      AND off, and under ForwardDiff Duals (Jacobian bit-compare).
 #   4. DIRECT DOES BETTER (documented improvement) — a class whose interp
 #      query chain is loop-INVARIANT keeps a REAL invariant tier under direct
 #      emission (CSE runs after the merge, so only the lane-varying `:fn` node
@@ -119,14 +118,14 @@ _dce_probe(n, k) = Float64[1.0 + 0.9 * sin(1.3i + 0.7k) for i in 1:n]
 # split: no repair pass AND the emitter stands down). `stencil=false` →
 # ESS_STENCIL_DISABLE=1 (per-cell scalar reference, no kernels at all).
 function _dce_build(model, ics; direct::Bool=true, merge::Bool=true,
-                    codegen::Bool=true, stencil::Bool=true, form::Symbol=:inplace)
+                    codegen::Bool=true, stencil::Bool=true)
     withenv("ESS_DIRECT_CLASS_EMIT_DISABLE" => (direct ? nothing : "1"),
             "ESS_KERNEL_CLASS_MERGE_DISABLE" => (merge ? nothing : "1"),
             "ESS_CODEGEN_DISABLE" => (codegen ? nothing : "1"),
             "ESS_STENCIL_DISABLE" => (stencil ? nothing : "1")) do
         ESM._reset_cascade_tally!()
         f, u0, p, _t, vm, diag = ESM._build_evaluator_impl(model;
-            initial_conditions=ics, form=form)
+            initial_conditions=ics)
         (f=f, u0=u0, p=p, vm=vm, diag=diag, tally=copy(ESM._CASCADE_TALLY))
     end
 end
@@ -269,18 +268,6 @@ _dce_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
             @test _dce_bitsame(dud, _dce_du(rref.f, u, rref.p, t))
         end
 
-        # :oop emitter, same three-way identity (+ ≡ the in-place values).
-        odef = _dce_build(model, ics; form=:oop)
-        ooff = _dce_build(model, ics; direct=false, form=:oop)
-        ospl = _dce_build(model, ics; merge=false, form=:oop)
-        for k in 1:3, t in (0.0, 0.7)
-            u = k == 1 ? copy(odef.u0) : _dce_probe(N, k)
-            duo = odef.f(u, odef.p, t)
-            @test _dce_bitsame(duo, ooff.f(u, ooff.p, t))
-            @test _dce_bitsame(duo, ospl.f(u, ospl.p, t))
-            @test _dce_bitsame(duo, _dce_du(rdef.f, u, rdef.p, t))
-        end
-
         # ForwardDiff Duals: values AND partials bit-identical through the
         # direct class kernel, both emitters.
         Jd = ForwardDiff.jacobian((du, u) -> rdef.f(du, u, rdef.p, 0.4),
@@ -291,8 +278,6 @@ _dce_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
                                   zero(rspl.u0), rspl.u0)
         @test _dce_bitsame(Jd, Jo)
         @test _dce_bitsame(Jd, Js)
-        Joop = ForwardDiff.jacobian(u -> odef.f(u, odef.p, 0.4), odef.u0)
-        @test _dce_bitsame(Jd, Joop)
     end
 
     @testset "direct emission KEEPS the invariant tier the repair pass folds" begin

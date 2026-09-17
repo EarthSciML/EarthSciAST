@@ -30,6 +30,9 @@
 # reuses) exactly the same pure function of that `t`. Kill switch:
 # `ESS_TCADENCE_DISABLE=1` at build time demotes every time slot to DYNAMIC,
 # restoring the refill-every-call behavior bit-for-bit.
+# The wider switch `ESS_UNTIERED=1` demotes EVERY slot — const tier included —
+# so the whole prelude is refilled on every call; that build is the untiered
+# differential oracle the bit-identity tests compare against (see `_untiered`).
 #
 # Lane-invariant kernel subtrees are prelude defs too (the `_AccCSE` invariant tier) — so the tier pays off on the ARRAY path as
 # well, not just on scalar equations.
@@ -141,6 +144,26 @@ end
 
 _tcadence_disabled() = get(ENV, "ESS_TCADENCE_DISABLE", "") == "1"
 
+# ---- The untiered kill switch: `ESS_UNTIERED=1` -------------------------------
+#
+# WHAT IT IS FOR: an in-place build that is, by construction, the UNTIERED
+# evaluator — the differential oracle. Read at BUILD time like the switch above,
+# it classifies every prelude slot DYNAMIC, so `f!` refills the WHOLE prelude on
+# every call in ascending slot order and takes neither the const-cadence nor the
+# time-cadence skip. Its numbers are therefore the numbers of a prelude with no
+# memoization anywhere, and a test that needs that reference ("the tiered `f!`
+# must agree bit-for-bit with an evaluator that never skips") can build one
+# without leaving the in-place emitter.
+#
+# `ESS_TCADENCE_DISABLE=1` is the narrower switch — it demotes the TIME slots
+# only and leaves the const tier skipping — so it is not by itself an untiered
+# build. This one subsumes it.
+#
+# As with the time-tier switch, the recorded `tier[]` entries keep their computed
+# values: classification is a property of the prelude, so demotion happens at the
+# routing step only and every slot still lands in ascending order.
+_untiered() = get(ENV, "ESS_UNTIERED", "") == "1"
+
 # Partition the FINAL prelude (post `_share_kernel_invariants!`) into its three cadence
 # tiers. Returns three ASCENDING slot-index vectors — the order `f!` must evaluate
 # them in — which together are a permutation of `1:length(prelude)`.
@@ -151,9 +174,13 @@ _tcadence_disabled() = get(ENV, "ESS_TCADENCE_DISABLE", "") == "1"
 # entries keep their computed values so downstream classification is unchanged —
 # a consumer of a demoted slot is itself TIME-or-worse and lands in the dynamic
 # vector too, preserving ascending evaluation order among them.
+#
+# With `ESS_UNTIERED=1` BOTH other vectors come back empty and `dyn_slots` is
+# `1:length(prelude)` — the untiered oracle build described at `_untiered` above.
 function _classify_const_slots(prelude::AbstractVector{_Node}, cache::_CSECache)
     n = length(prelude)
     tdisabled = _tcadence_disabled()
+    untiered = _untiered()
     tier = Vector{Int8}(undef, n)
     const_slots = Int[]
     time_slots = Int[]
@@ -161,7 +188,9 @@ function _classify_const_slots(prelude::AbstractVector{_Node}, cache::_CSECache)
     for s in 1:n
         tr = _def_tier(prelude[s], tier, s, cache)
         @inbounds tier[s] = tr
-        if tr === _TIER_CONST
+        if untiered
+            push!(dyn_slots, s)      # ESS_UNTIERED=1: no slot may be skipped
+        elseif tr === _TIER_CONST
             push!(const_slots, s)
         elseif tr === _TIER_TIME && !tdisabled
             push!(time_slots, s)

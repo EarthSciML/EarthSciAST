@@ -1,4 +1,4 @@
-# Lane dedup in the traced interp seams (ext/EarthSciASTReactantExt.jl).
+# Lane dedup in the traced interp seams (ext/reactant_interp.jl).
 #
 # THE DEFECT THIS PINS. The kernel-class merge tables one spec PER LANE, and a
 # lane is (cell × member). Merging an N-member group over a grid therefore
@@ -23,7 +23,7 @@
 # what stop a dedup from silently mixing lanes up.
 #
 # The trailing testsets extend layer 3 to the lane-table-intern change's traced
-# side: the clamp-bound collapse (`_oop_lane_bound`) must land as SCALAR
+# side: the clamp-bound collapse (`_lane_bound`) must land as SCALAR
 # constants (lane-wide splat columns under the ESS_LANE_INTERN_DISABLE=1
 # oracle), and the module must hold ONE table payload per distinct CONTENT —
 # under both env settings, and through `build_evaluator(form=:oop)` itself.
@@ -69,6 +69,17 @@ _ld_npayload(hlo::String, w::Int) =
 _ld_has_col(hlo, v::String, w) = occursin("dense<$v> : tensor<$(w)xf64>", hlo)
 _ld_has_scalar(hlo, v::String) = occursin("dense<$v> : tensor<f64>", hlo)
 
+# The ORACLE for every traced comparison below: each lane's own member spec run
+# through the branchy scalar core, which is the call the UNMERGED kernel would
+# have made for that lane. Not the host branch-free evaluator — that is the same
+# lowering the trace executes, so comparing against it would only say the tracer
+# agrees with itself. (The host lowering is pinned against these same cores in
+# test/interp_lanes_test.jl, without Reactant.)
+_ld_core_ref(h, xs, ys) = [ESM._interp_bilinear_core(
+        h.specs[l].table, h.specs[l].axis_x, h.specs[l].axis_y,
+        xs isa AbstractVector ? xs[l] : xs,
+        ys isa AbstractVector ? ys[l] : ys) for l in eachindex(h.specs)]
+
 @testset "traced interp lane dedup (grid-independent constants)" begin
 
     @testset "_rx_lane_groups keys lanes bitwise" begin
@@ -105,21 +116,21 @@ _ld_has_scalar(hlo, v::String) = occursin("dense<$v> : tensor<f64>", hlo)
         @test length(RXE._rx_lane_groups(nn)[1]) == 1
     end
 
-    @testset "traced lanes ≡ the per-lane host oracle" begin
+    @testset "traced lanes ≡ each lane's own scalar core" begin
         h = _lane_spec(4, 5)                   # 4 bands × 5 cells = 20 lanes
         L = length(h.specs)
         # Queries spanning in-range, both clamps, and every knot.
         xs = Float64[-0.4 + 0.13k for k in 0:(L - 1)]
         ys = Float64[2.4 - 0.11k for k in 0:(L - 1)]
 
-        ref = ESM._oop_interp_bilinear_lanes(h, xs, ys, Float64)   # host, per-spec
-        f = (x, y) -> ESM._oop_interp_bilinear_lanes(h, x, y, RX.TracedRNumber{Float64})
+        ref = _ld_core_ref(h, xs, ys)                 # each lane's own core
+        f = (x, y) -> ESM._interp_bilinear_lanes(h, x, y)
         xr, yr = RX.ConcreteRArray(xs), RX.ConcreteRArray(ys)
         got = Array((RX.@compile sync = true f(xr, yr))(xr, yr))
 
         @test length(got) == L
         # The corners are GATHERED (exact); only the blend can be reassociated,
-        # so a few ULP is the honest tolerance — cf. reactant_oop_test.jl.
+        # so a few ULP is the honest tolerance.
         @test all(isapprox(a, b; rtol = 1e-14) for (a, b) in zip(got, ref))
         # ...and the lanes are not permuted: each band's block must differ.
         @test length(unique(round.(got; digits = 9))) > 1
@@ -133,7 +144,7 @@ _ld_has_scalar(hlo, v::String) = occursin("dense<$v> : tensor<f64>", hlo)
         # Asserted as membership rather than as "the largest constant". The
         # clamp bounds `ax[1]` / `ax[Nx]` used to survive as lane COLUMNS (4
         # L-wide constants per bilinear — 3.8 MB at 13×7×72, against the
-        # table's former 1.32 GB); `_oop_lane_bound` (oop.jl, part of the
+        # table's former 1.32 GB); `_lane_bound` (interp_lanes.jl, part of the
         # lane-table interning change) now collapses an all-equal boundary
         # column to its one scalar HOST-SIDE, so those constants no longer
         # reach the trace at all in this fixture (every lane shares `_AX`).
@@ -148,7 +159,7 @@ _ld_has_scalar(hlo, v::String) = occursin("dense<$v> : tensor<f64>", hlo)
             L = length(h.specs)
             xs = Float64[-0.4 + 0.13(k % 17) for k in 0:(L - 1)]
             ys = Float64[2.4 - 0.11(k % 13) for k in 0:(L - 1)]
-            f = (x, y) -> ESM._oop_interp_bilinear_lanes(h, x, y, RX.TracedRNumber{Float64})
+            f = (x, y) -> ESM._interp_bilinear_lanes(h, x, y)
             xr, yr = RX.ConcreteRArray(xs), RX.ConcreteRArray(ys)
             (L, _f64_widths(repr(RX.@code_hlo optimize = false f(xr, yr))))
         end
@@ -167,31 +178,30 @@ _ld_has_scalar(hlo, v::String) = occursin("dense<$v> : tensor<f64>", hlo)
         # unwraps L. Same tables on every lane is exactly the collapsible case.
         h = _lane_spec(1, 6)                   # 1 band × 6 cells: all knots equal
         L = length(h.specs)
-        f = (x) -> ESM._oop_interp_bilinear_lanes(h, x, RX.ConcreteRNumber(1.25),
-                                                  RX.TracedRNumber{Float64})
+        f = (x) -> ESM._interp_bilinear_lanes(h, x, RX.ConcreteRNumber(1.25))
         xs = Float64[0.2k for k in 0:(L - 1)]
         xr = RX.ConcreteRArray(xs)
         got = Array((RX.@compile sync = true f(xr))(xr))
         @test length(got) == L
-        ref = ESM._oop_interp_bilinear_lanes(h, xs, fill(1.25, L), Float64)
+        ref = _ld_core_ref(h, xs, 1.25)
         @test all(isapprox(a, b; rtol = 1e-14) for (a, b) in zip(got, ref))
     end
 
     # ---- the lane-table-intern change's TRACED-SIDE claims, measured in HLO.
     #
     # Two claims landed host-side (tree_walk/acc_merge.jl `_lane_intern`,
-    # tree_walk/oop.jl `_oop_lane_bound`, both under ESS_LANE_INTERN_DISABLE=1)
+    # tree_walk/interp_lanes.jl `_lane_bound`, both under ESS_LANE_INTERN_DISABLE=1)
     # with their Reactant-side effect asserted only by argument. Pinned here on
     # the emitted module text (`@code_hlo optimize = false` — pre-canonicalize,
     # so every constant is still visible where the trace put it):
     #
-    #   * CLAMP/EDGE BOUNDS. `_oop_lane_bound` collapses an all-bitwise-equal
+    #   * CLAMP/EDGE BOUNDS. `_lane_bound` collapses an all-bitwise-equal
     #     boundary column to its one scalar HOST-side, so the trace embeds a
     #     `tensor<f64>` and never sees the column; under the kill switch the
     #     column reaches the broadcast and is embedded as a lane-wide
     #     `tensor<Lxf64>` splat — the O(lanes) constant the collapse retires
     #     (4 per bilinear; measured 3.6 MB → 32 B per 13×7×72 call site).
-    #     `_oop_lane_bound` reads the env var PER CALL, i.e. at TRACE time, so
+    #     `_lane_bound` reads the env var PER CALL, i.e. at TRACE time, so
     #     the oracle toggles around the trace, not around spec construction.
     #
     #   * TABLE CONSTANTS DO **NOT** REVERT under the kill switch — and must
@@ -216,8 +226,7 @@ _ld_has_scalar(hlo, v::String) = occursin("dense<$v> : tensor<f64>", hlo)
         L = length(h.specs)                    # 21 lanes, D = 3 tables, 1 axis
         xs = Float64[4.0 + 0.2k for k in 0:(L - 1)]   # spans both clamps
         ys = Float64[8.0 - 0.2k for k in 0:(L - 1)]
-        f = (x, y) -> ESM._oop_interp_bilinear_lanes(h, x, y,
-                                                     RX.TracedRNumber{Float64})
+        f = (x, y) -> ESM._interp_bilinear_lanes(h, x, y)
         xr, yr = RX.ConcreteRArray(xs), RX.ConcreteRArray(ys)
         son = repr(RX.@code_hlo optimize = false f(xr, yr))
         soff = withenv("ESS_LANE_INTERN_DISABLE" => "1") do
@@ -242,8 +251,8 @@ _ld_has_scalar(hlo, v::String) = occursin("dense<$v> : tensor<f64>", hlo)
         # The shared axis dedups to D = 1: one 3-wide payload serves 21 lanes.
         @test _ld_npayload(son, 3) == 1
 
-        # Both programs still compute the per-lane host oracle's numbers.
-        ref = ESM._oop_interp_bilinear_lanes(h, xs, ys, Float64)
+        # Both programs still compute each lane's own core's numbers.
+        ref = _ld_core_ref(h, xs, ys)
         gon = Array((RX.@compile sync = true f(xr, yr))(xr, yr))
         goff = withenv("ESS_LANE_INTERN_DISABLE" => "1") do
             Array((RX.@compile sync = true f(xr, yr))(xr, yr))
@@ -252,9 +261,10 @@ _ld_has_scalar(hlo, v::String) = occursin("dense<$v> : tensor<f64>", hlo)
         @test all(isapprox(a, b; rtol = 1e-14) for (a, b) in zip(goff, ref))
     end
 
-    # The same claims through the FRONT DOOR: `build_evaluator(doc; form=:oop)`
-    # — so the build-time intern pool, the kernel-class merge, and the ext's
-    # seams are all in the traced pipeline, not just a hand-built lane spec.
+    # The same claims through the FRONT DOOR: a model built by
+    # `build_evaluator(doc; form=:oop)` and emitted by the compiled backend — so
+    # the build-time intern pool, the kernel-class merge and the knot-addressing
+    # seams are all in the pipeline, not just a hand-built lane spec.
     # Four members over one axis: u/v/w carry two distinct table CONTENTS in
     # three spellings (Float64, Int — the coercion twin AST interning cannot
     # unify — and a distinct copy), so they merge into ONE class whose flat
@@ -296,12 +306,15 @@ _ld_has_scalar(hlo, v::String) = occursin("dense<$v> : tensor<f64>", hlo)
                     eq("z", Dict{String,Any}("op" => "*",
                         "args" => Any[2.0, bil("z", ta_f)]))])))
 
+        RXE = Base.get_extension(EarthSciAST, :EarthSciASTReactantExt)
         fo, _, p, _, _ = ESM.build_evaluator(doc; form = :oop)
         fi, _, _, _, _ = ESM.build_evaluator(doc)
         Lm = 3N                                # the merged u/v/w class's lanes
         u = Float64[4.2 + 0.23(k % 17) for k in 1:(4N)]
         ur, tr = RX.ConcreteRArray(u), RX.ConcreteRNumber(0.0)
-        s = repr(RX.@code_hlo optimize = false fo(ur, p, tr))
+        d = RXE.direct_rhs(fo)
+        pr = RXE.direct_params(d, p)
+        s = repr(RX.@code_hlo optimize = false d(ur, pr, tr))
 
         @test _ld_npayload(s, 18) == 1        # merged class: 9·D, D = 2 contents
         @test _ld_npayload(s, 9) == 1         # z's class: content A once more
@@ -312,9 +325,10 @@ _ld_has_scalar(hlo, v::String) = occursin("dense<$v> : tensor<f64>", hlo)
 
         # Oracle build+trace: bound columns return on the merged class (z's
         # scalar-spec form has none to lose); the table inventory is unmoved.
-        s_off, fo_off = withenv("ESS_LANE_INTERN_DISABLE" => "1") do
+        s_off, d_off = withenv("ESS_LANE_INTERN_DISABLE" => "1") do
             g, _, _, _, _ = ESM.build_evaluator(doc; form = :oop)
-            repr(RX.@code_hlo optimize = false g(ur, p, tr)), g
+            dg = RXE.direct_rhs(g)
+            repr(RX.@code_hlo optimize = false dg(ur, pr, tr)), dg
         end
         @test _ld_has_col(s_off, "7.250000e+00", Lm)
         @test _ld_has_col(s_off, "5.000000e+00", Lm)
@@ -323,10 +337,10 @@ _ld_has_scalar(hlo, v::String) = occursin("dense<$v> : tensor<f64>", hlo)
         # Numbers: the compiled module agrees with the trusted in-place f!,
         # interned and oracle alike (XLA reassociates — tolerance, not ==).
         du = zero(u); fi(du, u, p, 0.0)
-        got = Array((RX.@compile sync = true fo(ur, p, tr))(ur, p, tr))
+        got = Array((RX.@compile sync = true d(ur, pr, tr))(ur, pr, tr))
         @test all(isapprox(a, b; rtol = 1e-12, atol = 1e-13) for (a, b) in zip(got, du))
         got_off = withenv("ESS_LANE_INTERN_DISABLE" => "1") do
-            Array((RX.@compile sync = true fo_off(ur, p, tr))(ur, p, tr))
+            Array((RX.@compile sync = true d_off(ur, pr, tr))(ur, pr, tr))
         end
         @test all(isapprox(a, b; rtol = 1e-12, atol = 1e-13) for (a, b) in zip(got_off, du))
     end

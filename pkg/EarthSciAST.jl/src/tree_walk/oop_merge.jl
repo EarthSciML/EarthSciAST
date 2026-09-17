@@ -44,15 +44,15 @@
 # recompute, the B4 xcse pass still sees it, and the `n_acc_inv_slots` build
 # diagnostic stays truthful. When any inv recipe varies across members
 # (all-or-nothing, per class) the whole tier folds into the cell tier as
-# before — same values, lane-vectorized. Evaluation is stock
-# `_build_oop_acc_plan` + `_oop_run_acc_vec` (`:oop`) or the
-# codegen / scalar runners (`:inplace`) — per-lane semantics
-# (fold order, ghost select, interp) stay EarthSciAST's.
+# before — same values, lane-vectorized. Evaluation is the codegen / scalar
+# runners (`:inplace`) or whatever a compiled backend emits from
+# `_build_oop_acc_plan`'s plan (`:oop`) — per-lane semantics (fold order, ghost
+# select, interp) stay EarthSciAST's.
 #
 # BIT-IDENTITY BY CONSTRUCTION. A leaf equal across the group stays scalar;
 # a varying one is transposed into a table indexed by lane ordinal; the op
 # sequence applied per lane is byte-identical to the unmerged kernel's.
-# `_oop_scatter` is ASSIGNMENT, and the pass merges only when every kernel
+# A kernel's write is ASSIGNMENT, and the pass merges only when every kernel
 # out-slot is globally unique, so concatenating groups cannot reorder any
 # read-after-write. Closed-function payloads ride from the class
 # representative and are guarded by `_check_fn_group_specs` (content-equal

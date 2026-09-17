@@ -2270,3 +2270,230 @@ fn ab_elementwise_observed_gather_fixture() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Closed functions: the esm-spec §9.2 `datetime.*` family.
+// ---------------------------------------------------------------------------
+
+/// The probe times the datetime tests sweep: the epoch, both sides of a day
+/// boundary, a fractional second on each side of the epoch, a leap day, the
+/// last second of a leap day, two year boundaries, a leap century (2000), two
+/// non-leap centuries (1900 backwards, 2100 forwards) and a deeply negative
+/// time (0001-01-01, several eras before the epoch), and four 400-year era
+/// boundaries, where a reciprocal-rewritten divide floors the era one short.
+const DATETIME_TIMES: &[f64] = &[
+    0.0,
+    -1.0,
+    -0.5,
+    86_399.999,
+    86_400.0,
+    946_684_800.0,     // 2000-01-01T00:00:00Z
+    951_782_400.0,     // 2000-02-29T00:00:00Z (leap day)
+    951_868_799.0,     // 2000-02-29T23:59:59Z
+    1_709_164_800.0,   // 2024-02-29T00:00:00Z
+    1_735_689_599.0,   // 2024-12-31T23:59:59Z
+    1_735_689_600.0,   // 2025-01-01T00:00:00Z
+    -2_208_988_800.0,  // 1900-01-01T00:00:00Z (non-leap century)
+    -2_203_891_201.0,  // 1900-02-28T23:59:59Z
+    4_102_444_800.0,   // 2100-01-01T00:00:00Z (non-leap century)
+    -62_135_596_800.0, // 0001-01-01T00:00:00Z
+    1_500_000_000.25,
+    -1_500_000_000.25,
+    // The start of a 400-year Gregorian era (March 1 of 0400, 0800, 1600 —
+    // `z = day + 719468` an exact multiple of 146097). `fl(1/146097)` is below
+    // the true reciprocal, so a backend that answers `z / 146097` with
+    // `z * fl(1/146097)` floors the era one short and the whole date moves by
+    // a day; these three are the multiples at which that product actually
+    // rounds low.
+    -49_539_254_400.0, // 0400-03-01T00:00:00Z (era boundary)
+    -36_916_473_600.0, // 0800-03-01T00:00:00Z (era boundary)
+    -11_670_912_000.0, // 1600-03-01T00:00:00Z (era boundary)
+    951_868_800.0,     // 2000-03-01T00:00:00Z (era boundary, product exact)
+];
+
+/// The nine calendar entries of the closed-function registry, in the order the
+/// fixture below declares its tendencies.
+const DATETIME_NAMES: &[&str] = &[
+    "datetime.year",
+    "datetime.month",
+    "datetime.day",
+    "datetime.hour",
+    "datetime.minute",
+    "datetime.second",
+    "datetime.day_of_year",
+    "datetime.julian_day",
+    "datetime.is_leap_year",
+];
+
+/// One 0-d tendency per `datetime.*` entry, all reading the solver time, plus
+/// one ARRAY tendency that multiplies a calendar field into a coordinate ramp
+/// (so the scalar result is exercised as a broadcast operand of an array box,
+/// not only as a 0-d rule).
+fn datetime_doc() -> serde_json::Value {
+    let n = 3i64;
+    let mut vars = serde_json::Map::new();
+    let mut eqs: Vec<serde_json::Value> = Vec::new();
+    for (k, name) in DATETIME_NAMES.iter().enumerate() {
+        let var = format!("f{k}");
+        vars.insert(var.clone(), json!({"type": "unknown"}));
+        eqs.push(json!({
+            "lhs": {"op": "D", "args": [var], "wrt": "t"},
+            "rhs": {"op": "fn", "name": name, "args": ["t"]}
+        }));
+    }
+    vars.insert("u".to_string(), json!({"type": "unknown", "shape": ["i"]}));
+    eqs.push(d_eq(
+        "u",
+        n,
+        agg(
+            n,
+            json!({"op": "*", "args": [
+                "i",
+                {"op": "fn", "name": "datetime.hour", "args": ["t"]}
+            ]}),
+        ),
+    ));
+    json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_datetime"},
+        "models": {"M": {"variables": vars, "equations": eqs}}
+    })
+}
+
+/// Build the tape for `doc`, assert nothing fell back, and assert BITWISE
+/// equality of `dy` against the production interpreter — whose `fn` arm is the
+/// per-cell closed-function registry, i.e. the reference the lowering has to
+/// reproduce — at every probe time, on the reference executor (fused and
+/// unfused programs) and on the Step 3b fast executor.
+fn datetime_ab_check(doc: serde_json::Value, times: &[f64]) {
+    let compiled = compile(doc);
+    let (prog, report) = compiled.build_tape_opts(&HashSet::new(), Some(default_cfg()));
+    assert!(
+        report.fallbacks.is_empty(),
+        "the datetime family must lower with no fallback, else the tape path is \
+         untested: {:?}",
+        report.fallbacks
+    );
+    let (prog_uf, _) = compiled.build_tape_opts(&HashSet::new(), None);
+    let n = compiled.state_variable_names().len();
+    let params = HashMap::new();
+    let param_vec = compiled.debug_resolve_params(&params);
+    let mut scratch = compiled.debug_new_scratch_taped();
+    let state = vec![0.0f64; n];
+    for &t in times {
+        let (dy_ref, _) = compiled.debug_eval_rhs(&state, t, &params, false);
+        for (label, p) in [("fused", &prog), ("unfused", &prog_uf)] {
+            let mut dy = vec![0.0f64; n];
+            run_reference(p, &compiled, &state, &param_vec, t, &mut dy);
+            assert_bits_eq(&dy, &dy_ref, &format!("t={t} tape-ref {label}"));
+        }
+        assert_fast_matches(
+            &compiled,
+            &mut scratch,
+            &param_vec,
+            &state,
+            t,
+            &dy_ref,
+            &format!("t={t} fast"),
+        );
+    }
+}
+
+/// Every `datetime.*` entry, taped, bit-identical to the closed-function
+/// registry the per-cell oracle calls — including the integer fields, which
+/// the spec pins to zero ulp drift, and `julian_day`, which the lowering
+/// happens to reproduce exactly (its single divide is IEEE-754 pinned) rather
+/// than merely inside the spec's 1 ulp.
+#[test]
+fn ab_datetime_family() {
+    datetime_ab_check(datetime_doc(), DATETIME_TIMES);
+}
+
+/// The oracle's `eval_fn` answers a NaN argument with the calendar fields of
+/// the epoch, because its float-to-integer casts saturate, and with NaN for
+/// `julian_day`, whose fractional term keeps the NaN. The tape has to do the
+/// same, or a NaN state during a rejected solver step would be the one input
+/// on which the two paths disagree.
+#[test]
+fn ab_datetime_nan_argument() {
+    // `x / x` with x = 0 is the NaN the per-cell registry sees.
+    let nan = json!({"op": "/", "args": ["x", "x"]});
+    let mut vars = serde_json::Map::new();
+    vars.insert("x".to_string(), json!({"type": "unknown"}));
+    let mut eqs = vec![json!({"lhs": {"op": "D", "args": ["x"], "wrt": "t"}, "rhs": 0.0})];
+    for (k, name) in DATETIME_NAMES.iter().enumerate() {
+        let var = format!("f{k}");
+        vars.insert(var.clone(), json!({"type": "unknown"}));
+        eqs.push(json!({
+            "lhs": {"op": "D", "args": [var], "wrt": "t"},
+            "rhs": {"op": "fn", "name": name, "args": [nan]}
+        }));
+    }
+    let doc = json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_datetime_nan"},
+        "models": {"M": {"variables": vars, "equations": eqs}}
+    });
+    datetime_ab_check(doc, &[0.0, 1.0]);
+}
+
+/// A `datetime.*` call on a compile-time-known time folds all the way to one
+/// literal: the whole decomposition is constant, so the tape must not carry a
+/// single instruction for it.
+#[test]
+fn datetime_on_a_literal_time_folds_at_build_time() {
+    let doc = json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_datetime_const"},
+        "models": {"M": {
+            "variables": {"x": {"type": "unknown"}},
+            "equations": [
+                {"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+                 "rhs": {"op": "fn", "name": "datetime.year", "args": [946684800.0]}}
+            ]
+        }}
+    });
+    let compiled = compile(doc);
+    let (prog, report) = compiled.build_tape(&HashSet::new());
+    assert!(report.fallbacks.is_empty(), "{:?}", report.fallbacks);
+    for op in ["Bin", "Un", "Select"] {
+        assert_eq!(
+            opcount(&prog, op),
+            0,
+            "a constant `datetime.year` left a `{op}` instruction behind:\n{report}"
+        );
+    }
+    let params = HashMap::new();
+    let param_vec = compiled.debug_resolve_params(&params);
+    let mut dy = vec![0.0f64; 1];
+    run_reference(&prog, &compiled, &[0.0], &param_vec, 0.0, &mut dy);
+    assert_eq!(dy[0], 2000.0, "datetime.year(946684800) is 2000");
+}
+
+/// What the tape still refuses in the closed-function registry: the `interp.*`
+/// entries, which read a table rather than decomposing a scalar. They must
+/// become a NAMED fallback (so the rule runs in the oracle and the compiled
+/// lane refuses it by name), never a silent wrong answer.
+#[test]
+fn interp_closed_functions_still_fall_back_by_name() {
+    let doc = json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_interp_fallback"},
+        "models": {"M": {
+            "variables": {"x": {"type": "unknown"}},
+            "equations": [
+                {"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+                 "rhs": {"op": "fn", "name": "interp.searchsorted", "args": [
+                     "t", {"op": "const", "args": [], "value": [0.0, 1.0, 2.0]}]}}
+            ]
+        }}
+    });
+    let compiled = compile(doc);
+    let (_prog, report) = compiled.build_tape(&HashSet::new());
+    assert_eq!(report.fallbacks.len(), 1, "{:?}", report.fallbacks);
+    assert!(
+        report.fallbacks[0].1.contains("interp.searchsorted"),
+        "the fallback reason must name the function: {:?}",
+        report.fallbacks
+    );
+}
