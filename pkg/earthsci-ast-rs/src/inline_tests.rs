@@ -325,7 +325,7 @@ fn mentions_free(expr: &Expr, name: &str) -> bool {
 /// the clash scope the WHOLE build-time scope, in two halves:
 ///
 /// * `scope` — the scalar parameter scope (flattened names plus their
-///   unambiguous bare aliases, [`param_scope_with_aliases`]); and
+///   unambiguous dotted-suffix aliases, [`param_scope_with_aliases`]); and
 /// * `arrays` — the build-time ARRAY names ([`array_scope_names`] over a
 ///   [`BuildInspection`](crate::simulate_array::BuildInspection)'s
 ///   `setup_arrays`), likewise with bare aliases.
@@ -657,26 +657,67 @@ fn time_index(times: &[f64], t: f64) -> Result<usize, String> {
     }
 }
 
-/// Build-time scalar-parameter scope for §6.6.5 cellwise references, with bare
-/// aliases. [`BuildInspection::params`] is keyed by the FLATTENED parameter
-/// name (`"M.k"`) — matching a resolved observed expression, which flattening
-/// qualifies. A test author's analytic `reference`, though, names the parameter
-/// BARE (`"k"`). So we expose BOTH: the flattened key verbatim, plus an
-/// unambiguous bare alias (the final dotted segment). On a bare-name collision
-/// across subsystems the flattened key stays authoritative and the ambiguous
-/// alias is dropped (the qualified reference still resolves). Mirrors the Julia
-/// / Python `param_scope_with_aliases`.
-fn param_scope_with_aliases(params: &HashMap<String, f64>) -> HashMap<String, f64> {
+/// Build-time scalar-parameter scope for §6.6.5 cellwise references, as the
+/// component that OWNS the test writes names.
+///
+/// [`BuildInspection::params`] is keyed by the FLATTENED parameter name
+/// (`"M.k"`, `"M.sub.g"`) — matching a resolved observed expression, which
+/// flattening qualifies. A test author's analytic `reference`, though, spells a
+/// name the way the owning component's own EQUATIONS spell it: BARE (`"k"`) for
+/// the component's own parameter, and by the MOUNT NAME (`"sub.g"`) for one
+/// reached through a subsystem mount. So the scope binds, in decreasing
+/// precedence:
+///
+/// 1. the flattened key VERBATIM;
+/// 2. every key under `owner.`, stripped of that prefix — the owning
+///    component's own namespace, which is what its equations resolve against.
+///    `owner` is the component the test belongs to (a scoped assertion's target
+///    component, per [`resolve_asserted_name`]), so `M.sub.g` is `sub.g` here
+///    even in a document where five OTHER components each mount a `sub` of
+///    their own. This is the same re-attachment [`scope_to_component`] performs
+///    on an override key, and it is what issue #408 was missing: `wrf.g`
+///    resolved in every equation of a coupling and in `parameter_overrides`,
+///    but not in a `reference`, where only `<Model>.wrf.g` worked — a spelling
+///    a mount edge does NOT rewrite, so it pins a component to being mounted
+///    under its own model name;
+/// 3. every GLOBALLY unambiguous dotted suffix (`"M.sub.g"` → `"sub.g"`,
+///    `"g"`), the alias set esm-spec §6.6.2 rule 3 gives an override key. This
+///    is what lets a test name a parameter the owner does not own, and it
+///    subsumes the bare-tail alias this function bound before.
+///
+/// A suffix carried by two or more flattened names is AMBIGUOUS and binds
+/// nothing at step 3 — the flattened key stays authoritative and such a
+/// reference must qualify further (step 2 still reaches the owner's own, which
+/// is unambiguous by construction: flattened keys are unique, so their
+/// owner-relative remainders are too). A name that is neither is UNBOUND, which
+/// is what keeps a typo (`sub.gg`) an error rather than a silent zero.
+///
+/// The suffix enumeration is the override resolver's own
+/// [`dotted_suffixes`](crate::simulate::override_keys::dotted_suffixes), shared
+/// rather than re-derived so the two positions cannot drift apart again.
+/// Mirrors the Julia / Python `param_scope_with_aliases`.
+fn param_scope_with_aliases(params: &HashMap<String, f64>, owner: &str) -> HashMap<String, f64> {
+    use crate::simulate::override_keys::dotted_suffixes;
     let mut out: HashMap<String, f64> = params.clone();
+    // (2) The owner's own namespace, as its equations spell it.
+    let prefix = format!("{owner}.");
+    for (k, v) in params {
+        if let Some(rest) = k.strip_prefix(prefix.as_str()) {
+            out.entry(rest.to_string()).or_insert(*v);
+        }
+    }
+    // (3) Globally unambiguous dotted suffixes.
     let mut counts: HashMap<&str, usize> = HashMap::new();
     for k in params.keys() {
-        let bare = k.rsplit('.').next().unwrap_or(k.as_str());
-        *counts.entry(bare).or_insert(0) += 1;
+        for suffix in dotted_suffixes(k) {
+            *counts.entry(suffix).or_insert(0) += 1;
+        }
     }
     for (k, v) in params {
-        let bare = k.rsplit('.').next().unwrap_or(k.as_str());
-        if bare != k.as_str() && counts.get(bare) == Some(&1) && !out.contains_key(bare) {
-            out.insert(bare.to_string(), *v);
+        for suffix in dotted_suffixes(k) {
+            if counts.get(suffix) == Some(&1) && !out.contains_key(suffix) {
+                out.insert(suffix.to_string(), *v);
+            }
         }
     }
     out
@@ -1292,7 +1333,7 @@ fn eval_assertion(
             // analytic reference; state is not. `insp.params` carries the
             // build's resolved scalar params. The field's dimension names are
             // in scope too, bound per cell (`bind_dimension_names`).
-            let scope = param_scope_with_aliases(&insp.params);
+            let scope = param_scope_with_aliases(&insp.params, model_name);
             // The ARRAY half of the §6.6.5 clash scope: the three bindings must
             // reject the same documents, and Julia's cellwise evaluator reads
             // build arrays by name, so an array named after a shape index set
@@ -2704,6 +2745,62 @@ mod tests {
         assert!(field_reduce("L2_error", &actual, None).is_err()); // reference required
         assert!(field_reduce("L2_error", &actual, Some(&[0.0, 0.0, 0.0])).is_err()); // zero norm
         assert!(field_reduce("wat", &actual, None).is_err()); // unknown kind
+    }
+
+    /// The §6.6.5 build-time scalar scope reads a flattened parameter the way
+    /// the OWNING component's equations spell it: under the owner-relative
+    /// remainder of the flattened key, and under every globally unambiguous
+    /// dotted suffix of it (issue #408). `P.sub.g` is therefore readable as
+    /// `P.sub.g`, `sub.g` and `g`; before the fix the middle one — the spelling
+    /// the model's own EQUATIONS use, and the only one a mount edge rewrites —
+    /// was the one that was missing.
+    #[test]
+    fn param_scope_aliases_every_unambiguous_dotted_suffix() {
+        let params: HashMap<String, f64> =
+            [("P.sub.g".to_string(), 2.0), ("P.k".to_string(), 1.0)].into();
+        let scope = param_scope_with_aliases(&params, "P");
+        for (name, want) in [
+            ("P.sub.g", 2.0),
+            ("sub.g", 2.0),
+            ("g", 2.0),
+            ("P.k", 1.0),
+            ("k", 1.0),
+        ] {
+            assert_eq!(scope.get(name), Some(&want), "{name} must be in scope");
+        }
+        assert_eq!(scope.len(), 5, "no name beyond those five: {scope:?}");
+
+        // Two mounts of one subsystem, and the test belongs to NEITHER: the
+        // suffixes `sub.g` / `g` are carried by both, so neither binds and a
+        // reference meaning one of them must qualify. An ambiguous alias
+        // silently picking a side is the failure this guards.
+        let ambiguous: HashMap<String, f64> =
+            [("A.sub.g".to_string(), 1.0), ("B.sub.g".to_string(), 2.0)].into();
+        let scope = param_scope_with_aliases(&ambiguous, "C");
+        assert_eq!(scope.len(), 2, "only the flattened names: {scope:?}");
+        assert!(!scope.contains_key("sub.g"));
+        assert!(!scope.contains_key("g"));
+
+        // …but the OWNER's own `sub.g` is never ambiguous, however many
+        // siblings mount a `sub` of their own. This is the coupling-document
+        // shape of issue #408, where the globally-ambiguous suffix rule alone
+        // still left `wrf.g` unbound.
+        let owned = param_scope_with_aliases(&ambiguous, "A");
+        assert_eq!(owned.get("sub.g"), Some(&1.0));
+        assert_eq!(param_scope_with_aliases(&ambiguous, "B").get("sub.g"), Some(&2.0));
+
+        // A real flattened name is never shadowed by another name's alias.
+        let shadowing: HashMap<String, f64> =
+            [("A.sub.g".to_string(), 1.0), ("sub.g".to_string(), 7.0)].into();
+        assert_eq!(
+            param_scope_with_aliases(&shadowing, "A").get("sub.g"),
+            Some(&7.0)
+        );
+
+        // A name that is neither the owner's own nor a globally unambiguous
+        // suffix is bound by nothing: the typo `sub.gg` stays unbound, which is
+        // what keeps it an ERROR downstream rather than a silent value.
+        assert!(!param_scope_with_aliases(&params, "P").contains_key("sub.gg"));
     }
 
     /// Pinned cross-binding convention: `integral` is the uniform-cell
