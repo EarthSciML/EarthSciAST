@@ -1535,6 +1535,32 @@ fn infer_state_shapes(
 ) -> Result<HashMap<String, Vec<usize>>, CompileError> {
     let mut shape_map = infer_shapes(state_vars, &model.equations)?;
 
+    // (2a) A declared shape naming an index set the registry does not hold, on a
+    // state no equation indexes, has no extent from either source. Laying it out
+    // as one scalar slot would integrate a field the document says is arrayed, so
+    // refuse it as Julia's tree-walk does (`E_TREEWALK_UNDECLARED_INDEX_SET`). A
+    // name the registry holds but cannot size yet (an unmaterialized derived set)
+    // is not this case, and neither is a state its equations index.
+    for name in state_vars {
+        let Some(decl) = model.variables.get(*name).and_then(|v| v.shape.as_ref()) else {
+            continue;
+        };
+        let undeclared: Vec<&str> = decl
+            .iter()
+            .filter(|axis| !index_sets.contains_key(axis.as_str()))
+            .map(String::as_str)
+            .collect();
+        if undeclared.is_empty() || shape_map.get(*name).is_some_and(|s| !s.is_empty()) {
+            continue;
+        }
+        return Err(CompileError::build_err(format!(
+            "state '{name}' declares shape {decl:?}, but index set(s) {undeclared:?} are not \
+             declared in the document `index_sets` registry and no equation indexes the state, \
+             so it has no extent; declare them, or inject the grid that does (esm-spec §6.3, \
+             §9.7.10: a name still unresolved after injection is an error at the build)"
+        )));
+    }
+
     // (2b) Declared shapes are authoritative wherever they resolve.
     for name in state_vars {
         if let Some(decl) = model.variables.get(*name).and_then(|v| v.shape.as_ref()) {
