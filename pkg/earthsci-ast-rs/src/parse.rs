@@ -1075,10 +1075,9 @@ fn coupled_system_names_raw(obj: &serde_json::Map<String, Value>) -> HashSet<Str
 /// resolving them against a symbol table would reject every well-formed library.
 /// §10.9 suspends that resolution and requires the top-level segment at every
 /// §10.10.2 occurrence site to name a declared role instead
-/// (`coupling_edge_unknown_role`), which is the same check
-/// [`crate::coupling_imports`] runs when the library is imported — the shared
-/// [`collect_role_segments`](crate::coupling_imports::collect_role_segments)
-/// walk is what keeps the two sites from drifting apart.
+/// (`coupling_edge_unknown_role`), which is the same check `coupling_imports`
+/// runs when the library is imported — the shared `collect_role_segments` walk
+/// is what keeps the two sites from drifting apart.
 fn check_coupling_role_references(
     obj: &serde_json::Map<String, Value>,
     coupling: &[Value],
