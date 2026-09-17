@@ -1521,7 +1521,7 @@ pub(super) fn eval_vec_index<'a>(
     // below therefore bails to the per-cell oracle when the base is one — an
     // IN-RANGE const-array gather (the overwhelmingly common stencil-weight /
     // geometry-table read) keeps the exact vectorized path it had.
-    let const_base = matches!(&node.args[0], Expr::Variable(v) if ctx.const_arrays.is_const(v));
+    let const_base = ctx.const_arrays.is_const_base(&node.args[0]);
     let arg0 = eval_vec(&node.args[0], bx, ctx, pool, ops)?;
     let n = node.args.len() - 1;
     // `index(scalar)` with a single arg is the identity; a scalar is otherwise

@@ -83,14 +83,25 @@ end
     # A frozen array read at a computed offset: the subscripts resolve, the
     # column-major stride arithmetic picks the element, and the VALUE is itself
     # an index (a connectivity table is the live case).
-    cg = ESM._ConstGatherArray(Float64[11, 12, 13, 21, 22, 23], [1, 3], 6)
+    cg = ESM._ConstGatherArray(Float64[11, 12, 13, 21, 22, 23], [1, 3], [3, 2],
+                               [:error, :error], "table")
     gat(i, j) = ESM._mknode(kind = ESM._NK_CONST_GATHER, payload = cg,
                             children = ESM._Node[lit(Float64(i)), lit(Float64(j))])
     @test ESM._index_int(gat(1, 1)) == 11
     @test ESM._index_int(gat(3, 2)) == 23
     @test ESM._index_int(op(:+, gat(2, 1), lit(1.0))) == 13
-    # Out of range is a BoundsError, not a silent wrong element.
-    @test_throws BoundsError ESM._index_int(gat(4, 2))
+    # Each subscript answers to its OWN axis: an overflow on a non-final axis
+    # stays inside the flattened buffer, so a check on the linearized offset
+    # alone would read the neighbouring column instead of refusing.
+    for oob in (gat(4, 1), gat(4, 2), gat(1, 3))
+        err = try
+            ESM._index_int(oob); nothing
+        catch e
+            e
+        end
+        @test err isa ESM.TreeWalkError
+        @test err.code == "E_TREEWALK_CONSTARRAY_OOB"
+    end
 
     # A subscript computed from the STATE is the one thing that cannot resolve:
     # a backend would need the value to pick a slot, so this refuses by name

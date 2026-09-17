@@ -58,6 +58,11 @@ const (
 	// COUPLING library (§10.9). The two library kinds are imported through
 	// different blocks and are not interchangeable.
 	CodeTemplateImportIsCouplingLibrary = "template_import_is_coupling_library"
+	// CodeTemplateLibraryIllegalPayload: a document carries top-level
+	// `expression_templates` beside `models` / `reaction_systems` /
+	// `data_sources` / `coupling` / `domain`, which a template-library file
+	// never declares (esm-spec §9.7.1).
+	CodeTemplateLibraryIllegalPayload = "template_library_illegal_payload"
 	// CodeTemplateImportRenameInvalid: an import's `rename` / `rebind` entry is
 	// malformed — not an object, or an entry whose key or value is not a
 	// non-empty string.
@@ -122,6 +127,11 @@ const (
 	// than resolved: rewriting it would silently diverge from the
 	// expand-at-load image of the same document.
 	CodeTemplateBodyReferencesCouplingRewrittenVariable = "template_body_references_coupling_rewritten_variable"
+	// CodeAmbiguousOutputName: an output name that matches no variable exactly
+	// and whose last dotted segment is shared by more than one variable
+	// (CONFORMANCE_SPEC §5.17.4). This binding has no output derivation; the
+	// constant exists because the code vocabulary is uniform across bindings.
+	CodeAmbiguousOutputName = "ambiguous_output_name"
 	// CodeMakearrayRegionInverted: a `makearray` region's stop precedes its
 	// start, so the region denotes no cells (esm-spec §4.3.5).
 	CodeMakearrayRegionInverted = "makearray_region_inverted"
@@ -275,6 +285,17 @@ const (
 	// §4.7 "Two mount forms, one mechanism"). Refused at load, pointing at the
 	// entry, rather than decoded as an empty reaction system.
 	CodeMountFormUnsupported = "mount_form_unsupported"
+)
+
+// --- Diagnostic codes: running an arrayed definition (esm-spec §6.3.1). ---
+const (
+	// CodeIndexedDefinitionUnsupportedForm: a bare-index observed definition
+	// `index(V, k…) ~ rhs` outside the runnable form (the RHS is not a `faq`
+	// whose `output_idx` names the subscripts in order), refused when a
+	// simulating binding builds the model. Go does not simulate, so it never
+	// raises this; the constant exists because the code table is
+	// cross-language uniform.
+	CodeIndexedDefinitionUnsupportedForm = "indexed_definition_unsupported_form"
 )
 
 // --- Diagnostic codes: structural validation, per ESM Libraries Spec Section

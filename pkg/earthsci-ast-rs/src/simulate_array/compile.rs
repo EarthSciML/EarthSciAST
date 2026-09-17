@@ -41,12 +41,27 @@ pub fn file_has_array_ops(file: &EsmFile) -> bool {
     let Some(models) = &file.models else {
         return false;
     };
-    for model in models.values() {
-        if model_has_array_ops(model) {
-            return true;
-        }
+    models
+        .values()
+        .any(|model| model_tree_any(model, &model_has_array_ops))
+}
+
+/// Whether `pred` holds for `model` or for any component mounted beneath it
+/// through `subsystems` (esm-spec §4.6). A mounted component's equations and
+/// variables are part of the model [`mount_subsystems`] builds, so a routing
+/// question about the model is a question about its whole mount tree: a
+/// document whose only array or derivative lives in a subsystem is otherwise
+/// routed as if it had none. An entry [`parse_subsystem_model`] cannot read
+/// contributes nothing here; the build reports it.
+pub(crate) fn model_tree_any(model: &Model, pred: &dyn Fn(&Model) -> bool) -> bool {
+    if pred(model) {
+        return true;
     }
-    false
+    model.subsystems.as_ref().is_some_and(|subs| {
+        subs.iter().any(|(name, value)| {
+            parse_subsystem_model(name, value).is_ok_and(|(sub, _)| model_tree_any(&sub, pred))
+        })
+    })
 }
 
 /// Return true if the file has spatial structure: any model with array-shaped
@@ -60,16 +75,15 @@ pub fn file_has_spatial_model(file: &EsmFile) -> bool {
     let Some(models) = &file.models else {
         return false;
     };
-    for model in models.values() {
-        for var in model.variables.values() {
-            if let Some(shape) = &var.shape {
-                if !shape.is_empty() {
-                    return true;
-                }
-            }
-        }
-    }
-    false
+    let has_shaped_variable = |model: &Model| {
+        model
+            .variables
+            .values()
+            .any(|var| var.shape.as_ref().is_some_and(|shape| !shape.is_empty()))
+    };
+    models
+        .values()
+        .any(|model| model_tree_any(model, &has_shaped_variable))
 }
 
 pub(super) fn model_has_array_ops(model: &Model) -> bool {
@@ -155,7 +169,7 @@ pub(super) fn check_no_spatial_ops(expr: &Expr) -> Result<(), CompileError> {
 /// `grids/mpas/mesh/level0.esm`); a bare `{ "variables": …, "equations": … }`
 /// fragment is also accepted. An unresolved `{ "ref": … }` — a document built
 /// programmatically without the loader — is a hard error, never a silent drop.
-pub(super) fn parse_subsystem_model(
+pub(crate) fn parse_subsystem_model(
     sub_name: &str,
     value: &serde_json::Value,
 ) -> Result<(Model, HashMap<String, IndexSet>), CompileError> {
@@ -2297,6 +2311,14 @@ fn build_observed_rules(
         let Some(eq) = def_eq.get(name.as_str()) else {
             continue;
         };
+        // A bare-index LHS (`index(V, k…) ~ rhs`, esm-spec §6.3.1) binds none of
+        // its subscripts, so it runs only in the form whose range the RHS
+        // supplies; see [`check_bare_index_definition`].
+        if let Expr::Operator(lhs) = &eq.lhs
+            && lhs.op == "index"
+        {
+            check_bare_index_definition(name, lhs, &eq.rhs, &array_axes)?;
+        }
         // A CAUSAL SELF-REFERENCE (esm-spec §4.3.1.1) is recognized before
         // either ordinary lowering, because both of them would compile the
         // self-read as a gather on a variable that is not bound anywhere — the
@@ -2375,6 +2397,64 @@ fn build_observed_rules(
     dependency_order_observed(observed_rules)
 }
 
+/// Refuse a bare-index observed definition that is not the runnable form.
+///
+/// `index(V, k…) ~ rhs` binds none of `k…`, so the range has to come from the
+/// right-hand side: the definition runs exactly when `rhs` is a `faq` whose
+/// `output_idx` names the subscripts, in order (esm-spec §6.3.1,
+/// CONFORMANCE_SPEC §5.36.2). That RHS is already the whole array, which is what
+/// the wholesale lowering evaluates. Any other spelling — a scalar RHS, an offset
+/// or permuted subscript, a subscript count that disagrees with `V`'s declared
+/// rank — would be lowered as if its RHS were the whole array, which writes the
+/// wrong cells for an offset and cannot integrate for a scalar, so it is refused.
+///
+/// The gather must also be the DIRECT one, `index(V, k…)`: the base name is read
+/// through nested `index` / `broadcast` wrappers, but `index(index(V, j), k)`
+/// addresses a cell of a cell, not the whole of `V`, so it is refused rather
+/// than lowered as though its RHS were all of `V`.
+///
+/// Flatten namespaces a free subscript (`k` becomes `Model.k`) but not a `faq`
+/// binder, so a subscript matches its binder in either spelling.
+fn check_bare_index_definition(
+    name: &str,
+    lhs: &ExpressionNode,
+    rhs: &Expr,
+    array_axes: &HashMap<String, Vec<String>>,
+) -> Result<(), CompileError> {
+    let head_is_the_variable = matches!(lhs.args.first(), Some(Expr::Variable(_)));
+    let subs = lhs.args.get(1..).unwrap_or_default();
+    let prefix = name.rfind('.').map_or("", |p| &name[..=p]);
+    let names_binder = |sub: &Expr, binder: &String| match sub {
+        Expr::Variable(v) => v == binder || v.strip_prefix(prefix) == Some(binder.as_str()),
+        _ => false,
+    };
+    let binds_subscripts = match rhs {
+        Expr::Operator(node) if is_faq_op(&node.op) => match node.output_idx.as_deref() {
+            Some(frame) => {
+                !subs.is_empty()
+                    && frame.len() == subs.len()
+                    && subs.iter().zip(frame).all(|(s, b)| names_binder(s, b))
+            }
+            None => false,
+        },
+        _ => false,
+    };
+    let rank_agrees = match array_axes.get(name) {
+        Some(axes) => axes.len() == subs.len(),
+        None => true,
+    };
+    if head_is_the_variable && binds_subscripts && rank_agrees {
+        return Ok(());
+    }
+    Err(CompileError::InterpreterBuildError {
+        details: format!(
+            "indexed_definition_unsupported_form: '{name}' is defined by a bare-index LHS that \
+             is not runnable; the RHS must be a `faq` whose `output_idx` names the LHS \
+             subscripts in order (esm-spec §6.3.1)"
+        ),
+    })
+}
+
 /// Wrap one algebraic body — a declared observed's `expression`, or the RHS of
 /// a bare-`Variable`-LHS equation — in the rule form that evaluates it
 /// correctly.
@@ -2399,9 +2479,13 @@ fn lower_algebraic_body(
     array_axes: &HashMap<String, Vec<String>>,
     index_sets: &HashMap<String, IndexSet>,
 ) -> Result<AlgebraicRule, CompileError> {
+    let declared_shape = array_axes
+        .get(name)
+        .and_then(|axes| resolve_declared_shape(axes, index_sets));
     let scalar_rule = |body: Expr| AlgebraicRule::Scalar {
         var: name.to_string(),
         body: Rc::new(body),
+        declared_shape: declared_shape.clone(),
     };
     let Some(target_axes) = array_axes.get(name) else {
         return Ok(scalar_rule(body));

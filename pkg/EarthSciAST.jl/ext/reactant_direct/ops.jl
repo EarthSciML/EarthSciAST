@@ -328,12 +328,9 @@ function _de_hostval(ctx::_DECtx, nd::_E._Node)::Float64
         cg = nd.payload::_E._ConstGatherArray
         off = 1
         for d in eachindex(nd.children)
-            off += (_de_index_int(nd.children[d]) - 1) * cg.strides[d]
+            sub = _E._const_gather_sub(cg, d, _de_index_int(nd.children[d]))
+            off += (sub - 1) * cg.strides[d]
         end
-        (1 <= off <= cg.len) ||
-            _de_refuse("a const gather out of range",
-                "the folded offset $off is outside the frozen array " *
-                "(length $(cg.len)).")
         return Float64(cg.flat[off])
     elseif k === _E._NK_CONTRACTION
         s = nd.literal

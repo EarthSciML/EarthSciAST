@@ -233,6 +233,7 @@ TEMPLATE_IMPORT_VERSION_TOO_OLD = "template_import_version_too_old"
 TEMPLATE_IMPORT_UNRESOLVED = "template_import_unresolved"
 TEMPLATE_IMPORT_NOT_LIBRARY = "template_import_not_library"
 SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY = "subsystem_ref_is_template_library"
+TEMPLATE_LIBRARY_ILLEGAL_PAYLOAD = "template_library_illegal_payload"
 TEMPLATE_IMPORT_CYCLE = "template_import_cycle"
 TEMPLATE_IMPORT_NAME_CONFLICT = "template_import_name_conflict"
 TEMPLATE_IMPORT_UNKNOWN_NAME = "template_import_unknown_name"
@@ -337,6 +338,20 @@ RECURRENCE_UNSUPPORTED_FORM = "recurrence_unsupported_form"
 
 
 # ===========================================================================
+# Ragged range without a member gather (esm-spec §4.3.1 "Ragged ranges";
+# CONFORMANCE_SPEC.md §5.6.4), reported by the structural validator at the
+# containing expression field.
+# ===========================================================================
+
+#: A ``faq`` that is not a value-invention node ranges over a ``kind: "ragged"``
+#: index set, but its body never reads that set's ``values`` array. The range
+#: symbol binds the POSITION k in 1..offsets[parent], not a member, so without an
+#: ``index(values, parent, k)`` gather the body reads positions -- a plausible
+#: wrong number rather than a failure.
+RAGGED_VALUES_NOT_GATHERED = "ragged_values_not_gathered"
+
+
+# ===========================================================================
 # Evaluator refusal (esm-spec §9.6.6), raised as
 # ``earthsci_ast.expression.UnsupportedConstructError`` by ``esm_problem`` for
 # every pathway, before anything is built.
@@ -347,6 +362,20 @@ RECURRENCE_UNSUPPORTED_FORM = "recurrence_unsupported_form"
 #: ``ic(unknown)``) reached an evaluator that cannot run it. Refused rather than
 #: skipped: a run without the construct reports a wrong answer.
 UNSUPPORTED_CONSTRUCT = "unsupported_construct"
+
+
+# ===========================================================================
+# Running an arrayed definition written with a bare-index LHS (esm-spec §6.3.1,
+# CONFORMANCE_SPEC §5.36.2), reported when a model is built for simulation.
+# ===========================================================================
+
+#: A bare-index LHS ``index(V, k…) ~ rhs`` defining an observed that is not the
+#: runnable form: the subscripts are not plain symbols, or the RHS is not a
+#: ``faq`` whose ``output_idx`` names exactly those symbols in order (a scalar
+#: RHS, an offset such as ``V[k+1]``, a permutation), or their count disagrees
+#: with ``V``'s declared rank. Refused rather than run, because no range binds
+#: the subscripts and filling the array from anything else would be a guess.
+INDEXED_DEFINITION_UNSUPPORTED_FORM = "indexed_definition_unsupported_form"
 
 
 # ===========================================================================
@@ -365,6 +394,18 @@ UNSUPPORTED_CONSTRUCT = "unsupported_construct"
 #: in `validate` with the names on the cycle. The §4.3.1.1 recurrence SELF-EDGE
 #: is not one of these edges (see `RECURRENCE_NOT_WELLFOUNDED` above).
 OBSERVED_CYCLE = "observed_cycle"
+
+
+# ===========================================================================
+# Output names (CONFORMANCE_SPEC §5.17.4).
+# ===========================================================================
+
+#: A name read from a result that matches no variable exactly and whose last
+#: dotted segment is shared by more than one variable. A last-segment match is
+#: accepted only when it designates exactly one variable, so a read cannot
+#: silently return a variable it did not name. Raised by
+#: :class:`~earthsci_ast.simulation_common.AmbiguousOutputNameError`.
+AMBIGUOUS_OUTPUT_NAME = "ambiguous_output_name"
 
 
 # ===========================================================================

@@ -135,6 +135,7 @@ const MaxRewritePasses = 64
 //   - template_import_version_too_old
 //   - template_import_unresolved
 //   - template_import_not_library
+//   - template_library_illegal_payload
 //   - subsystem_ref_is_template_library
 //   - template_import_cycle
 //   - template_import_name_conflict

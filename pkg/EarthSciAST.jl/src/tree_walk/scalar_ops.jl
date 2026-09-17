@@ -198,12 +198,15 @@ function _index_int(n::_Node)::Int
     elseif k === _NK_LITERAL
         return round(Int, n.literal)
     elseif k === _NK_CONST_GATHER
+        # Each subscript is resolved on its OWN axis (`_const_gather_sub`,
+        # compile.jl): checking only the linearized offset lets an overflow on a
+        # non-final axis land inside the array and read a neighbouring element.
         cg = n.payload::_ConstGatherArray
         off = 1
         @inbounds for d in eachindex(n.children)
-            off += (_index_int(n.children[d]) - 1) * cg.strides[d]
+            sub = _const_gather_sub(cg, d, _index_int(n.children[d]))
+            off += (sub - 1) * cg.strides[d]
         end
-        (1 <= off <= cg.len) || throw(BoundsError(cg.flat, off))
         return round(Int, @inbounds cg.flat[off])
     elseif k === _NK_OP
         op = n.op

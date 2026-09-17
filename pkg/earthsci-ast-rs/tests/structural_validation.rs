@@ -1344,6 +1344,35 @@ fn test_f6_undefined_index_set() {
     );
 }
 
+/// Issue #259 (esm-spec §4.3.1 "Ragged ranges"): a range over a `kind: "ragged"`
+/// index set binds the POSITION k in 1..offsets[parent], so a body that never
+/// reads the set's `values` array reads positions where the author meant
+/// members — 10, 30, 60 instead of 10, 50, 150 — and used to validate clean.
+#[test]
+fn test_ragged_values_not_gathered() {
+    assert_structural(
+        include_str!("../../../tests/invalid/faq/ragged_values_not_gathered.esm"),
+        StructuralErrorCode::RaggedValuesNotGathered,
+        "/models/RaggedValuesNotGathered/equations/3/rhs",
+    );
+}
+
+/// The positive control: the same sum spelled with the explicit
+/// `index(parentMember, i, j)` gather over a padded `values` array is clean.
+#[test]
+fn test_ragged_member_gather_is_valid() {
+    let esm_file = load_string(include_str!(
+        "../../../tests/valid/faq/ragged_member_gather.esm"
+    ))
+    .expect("fixture must load");
+    let result = validate(&esm_file);
+    assert!(
+        result.structural_errors.is_empty(),
+        "unexpected structural errors: {:?}",
+        result.structural_errors
+    );
+}
+
 /// A §9.7.10 / §6.6.6 discretization-agnostic PDE leaf declares NO `index_sets`
 /// of its own: its registry arrives from the grid library a composing document,
 /// a subsystem-ref edge or an inline test injects into this component's scope.

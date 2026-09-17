@@ -1,0 +1,70 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "RaggedMemberGather",
+    "description": "Positive control for issue #259: a per-parent sum over a `kind: \"ragged\"` index set, spelled the way the format defines it (esm-spec §4.3.1, CONFORMANCE_SPEC §5.6.4). The range symbol `j` binds the POSITION k in 1..offsets[i]; `values` (`parentMember`) is a padded [parent, max length] array; and the body gathers the member explicitly with index(parentMember, i, j). Parent 1 holds member 1 (payload 10), parent 2 members 2 and 3 (20 + 30 = 50), parent 3 members 4, 5 and 6 (40+50+60 = 150). The padding entries (0) lie past each parent's offsets and are never read. State `perParentTotal[i]` accumulates that constant rate from zero, so it equals 10, 50, 150 at t=1; a body that indexed the payload by the position alone would give 10, 30, 60. Contrast tests/invalid/faq/ragged_values_not_gathered.esm, which omits the gather and is rejected with `ragged_values_not_gathered`.",
+    "authors": ["EarthSciML Authors and Contributors"],
+    "tags": ["faq", "index-sets", "ragged", "conformance"]
+  },
+  "index_sets": {
+    "parent_rows": { "kind": "interval", "size": 3 },
+    "max_members": { "kind": "interval", "size": 3 },
+    "flat_member_rows": { "kind": "interval", "size": 6 },
+    "members_of_parent": { "kind": "ragged", "of": ["parent_rows"], "offsets": "parentMemberCount", "values": "parentMember" }
+  },
+  "models": {
+    "RaggedMemberGather": {
+      "tolerance": { "rel": 1e-06, "abs": 1e-09 },
+      "variables": {
+        "parentMemberCount": {
+          "type": "unknown", "shape": ["parent_rows"], "units": "1",
+          "description": "offsets: per-parent member count (one, two, three)."
+        },
+        "parentMember": {
+          "type": "unknown", "shape": ["parent_rows", "max_members"], "units": "1",
+          "description": "values: row i holds parent i's members in positions 1..offsets[i]; the rest is padding."
+        },
+        "flatValue": {
+          "type": "unknown", "shape": ["flat_member_rows"], "units": "1",
+          "description": "A payload over the member axis, distinct per member so a mis-enumeration cannot coincide with the right answer."
+        },
+        "perParentTotal": {
+          "type": "unknown", "shape": ["parent_rows"], "units": "1",
+          "description": "Accumulates the sum of each parent's own members' payloads at a constant rate."
+        }
+      },
+      "equations": [
+        { "lhs": "parentMemberCount", "rhs": { "op": "const", "args": [], "value": [1, 2, 3] } },
+        { "lhs": "parentMember", "rhs": { "op": "const", "args": [], "value": [[1, 0, 0], [2, 3, 0], [4, 5, 6]] } },
+        { "lhs": "flatValue", "rhs": { "op": "const", "args": [], "value": [10, 20, 30, 40, 50, 60] } },
+        {
+          "_comment": "D(perParentTotal[i])/dt = sum over k in 1..parentMemberCount[i] of flatValue[parentMember[i, k]].",
+          "lhs": {
+            "op": "faq", "args": [], "output_idx": ["i"],
+            "ranges": { "i": { "from": "parent_rows" } },
+            "expr": { "op": "D", "args": [{ "op": "index", "args": ["perParentTotal", "i"] }], "wrt": "t" }
+          },
+          "rhs": {
+            "op": "faq", "args": [], "semiring": "sum_product", "output_idx": ["i"],
+            "ranges": { "i": { "from": "parent_rows" },
+                        "j": { "from": "members_of_parent", "of": ["i"] } },
+            "expr": { "op": "index", "args": ["flatValue", { "op": "index", "args": ["parentMember", "i", "j"] }] }
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "ragged_range_binds_positions_and_the_body_gathers_members",
+          "description": "Constant rate from zero: per-parent totals over each parent's own members are 10, 50, 150 at t=1.",
+          "initial_conditions": { "perParentTotal[1]": 0.0, "perParentTotal[2]": 0.0, "perParentTotal[3]": 0.0 },
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "assertions": [
+            { "variable": "perParentTotal[1]", "time": 1.0, "expected": 10.0 },
+            { "variable": "perParentTotal[2]", "time": 1.0, "expected": 50.0 },
+            { "variable": "perParentTotal[3]", "time": 1.0, "expected": 150.0 }
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -2128,6 +2128,54 @@ fn check_join_sides(
     }
 }
 
+/// Body ops that make a `faq` a value-invention node. Over such a node a ragged
+/// range binds the MEMBER `values[parent, k]` itself (esm-spec §4.3.1 "Ragged
+/// ranges"), so its `values` gather is implicit rather than authored.
+const VALUE_INVENTION_BODY_OPS: [&str; 5] = ["skolem", "rank", "distinct", "argmin", "argmax"];
+
+/// Whether `node` is a value-invention `faq`: `distinct: true`, a `skolem`
+/// key, or a skolem / rank / distinct / arg-witness body.
+fn is_value_invention_faq(node: &crate::types::ExpressionNode) -> bool {
+    if node.distinct == Some(true) {
+        return true;
+    }
+    if matches!(node.key.as_deref(), Some(crate::Expr::Operator(key)) if key.op == "skolem") {
+        return true;
+    }
+    matches!(
+        node.expr.as_deref(),
+        Some(crate::Expr::Operator(body)) if VALUE_INVENTION_BODY_OPS.contains(&body.op.as_str())
+    )
+}
+
+/// Whether `expr` holds a surviving `apply_expression_template` reference
+/// (esm-spec §9.6.4), whose body a static walk of this document cannot see.
+fn contains_template_reference(expr: &crate::Expr) -> bool {
+    let crate::Expr::Operator(node) = expr else {
+        return false;
+    };
+    if node.op == "apply_expression_template" {
+        return true;
+    }
+    let mut found = false;
+    node.for_each_child(&mut |child| found = found || contains_template_reference(child));
+    found
+}
+
+/// Collect every variable-reference name in `expr`, scoped (dotted) names
+/// included.
+fn collect_variable_refs(expr: &crate::Expr, out: &mut HashSet<String>) {
+    match expr {
+        crate::Expr::Variable(name) => {
+            out.insert(name.clone());
+        }
+        crate::Expr::Operator(node) => {
+            node.for_each_child(&mut |child| collect_variable_refs(child, out));
+        }
+        crate::Expr::Number(_) | crate::Expr::Integer(_) => {}
+    }
+}
+
 /// Apply the three static aggregate checks to a single `faq` node.
 fn check_aggregate_node(
     node: &crate::types::ExpressionNode,
@@ -2222,6 +2270,66 @@ fn check_aggregate_node(
                     }),
                 });
                 break 'cols;
+            }
+        }
+    }
+
+    // (d) ragged_values_not_gathered (esm-spec §4.3.1 "Ragged ranges", issue
+    // #259): a range over a `kind: "ragged"` index set binds the POSITION k in
+    // 1..offsets[parent], never a member, so a body (`expr` / `filter`) that
+    // never reads the set's `values` array reads positions where the author
+    // meant members. Not decided for a value-invention node, which binds the
+    // member itself, nor for a body still holding a template reference, which
+    // may do the gather out of sight.
+    if let (Some(ranges), Some(sets)) = (&node.ranges, index_sets)
+        && !is_value_invention_faq(node)
+    {
+        let body: Vec<&crate::Expr> = [node.expr.as_deref(), node.filter.as_deref()]
+            .into_iter()
+            .flatten()
+            .collect();
+        if !body.iter().any(|part| contains_template_reference(part)) {
+            let mut refs = HashSet::new();
+            for part in &body {
+                collect_variable_refs(part, &mut refs);
+            }
+            let mut syms: Vec<&String> = ranges.keys().collect();
+            syms.sort();
+            for sym in syms {
+                let crate::types::RangeSpec::IndexSetRef { from, of } = &ranges[sym] else {
+                    continue;
+                };
+                let Some(iset) = sets.get(from) else {
+                    continue;
+                };
+                if iset.kind != "ragged" {
+                    continue;
+                }
+                let Some(values) = iset.values.as_deref() else {
+                    continue;
+                };
+                let scoped = format!(".{values}");
+                if refs.iter().any(|r| r == values || r.ends_with(&scoped)) {
+                    continue;
+                }
+                let parent = of
+                    .as_ref()
+                    .filter(|p| !p.is_empty())
+                    .map(|p| p.join(", "))
+                    .unwrap_or_else(|| "<parent>".to_string());
+                let offsets = iset.offsets.as_deref().unwrap_or("offsets");
+                errors.push(StructuralError {
+                    path: field_path.to_string(),
+                    code: StructuralErrorCode::RaggedValuesNotGathered,
+                    message: format!(
+                        "faq range '{sym}' iterates ragged index set '{from}', so it binds the POSITION k in 1..{offsets}[{parent}], not a member; the body never reads the set's `values` array '{values}'. Gather the member explicitly: index({values}, {parent}, {sym})"
+                    ),
+                    details: serde_json::json!({
+                        "range": sym,
+                        "index_set": from,
+                        "values": values,
+                    }),
+                });
             }
         }
     }

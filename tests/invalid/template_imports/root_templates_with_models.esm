@@ -1,0 +1,30 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "RootTemplatesWithModels",
+    "description": "Top-level expression_templates next to models: a template-library payload in a component file (esm-spec §9.7.1). The top-level templates would be visible to no component.",
+    "authors": ["EarthSciML"],
+    "created": "2026-09-15T00:00:00Z"
+  },
+  "expression_templates": {
+    "double": {
+      "params": ["a"],
+      "body": {"op": "*", "args": [2.0, "a"]}
+    }
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "x": {"type": "unknown", "units": "kg", "default": 1.0},
+        "k": {"type": "parameter", "units": "1/s", "default": 1.0}
+      },
+      "equations": [
+        {
+          "lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+          "rhs": {"op": "*", "args": [{"op": "-", "args": ["k"]}, "x"]}
+        }
+      ]
+    }
+  },
+  "domain": {"temporal": {}}
+}

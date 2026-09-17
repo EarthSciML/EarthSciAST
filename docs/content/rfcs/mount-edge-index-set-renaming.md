@@ -336,7 +336,7 @@ component mounted twice" case is unblocked by this RFC only for leaves that assi
 
 ### 4.7 Ragged index sets and keyed factors
 
-A `kind: "ragged"` index set names its CSR factors (`offsets`, `values`) by **bare variable
+A `kind: "ragged"` index set names its keyed factors (`offsets`, `values`) by **bare variable
 name**, resolved out of a component. Two mounts of one mesh family therefore still collide on
 those factor names even under an axis rename — the §9.7.7 `rebind` mechanism exists for
 exactly this at import edges and has no mount-edge counterpart here. Deliberate: the reported

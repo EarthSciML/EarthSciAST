@@ -100,6 +100,12 @@ export const ERROR_CODES = {
   //   naming an index set absent from the document `index_sets` registry
   //   (RFC semiring-faq-unified-ir §5.2; no implicit interval is inferred).
   UNDEFINED_INDEX_SET: 'undefined_index_set',
+  // `ragged_values_not_gathered` — a `faq` that is not a value-invention node
+  //   ranges over a `kind: "ragged"` index set, but its body never reads that
+  //   set's `values` array. The range binds the POSITION k in 1..offsets[parent],
+  //   not a member, so the body reads positions where the author meant members
+  //   (esm-spec §4.3.1 "Ragged ranges").
+  RAGGED_VALUES_NOT_GATHERED: 'ragged_values_not_gathered',
   // `invalid_broadcast_fn` — a `broadcast` node's `fn` is absent, does not name
   //   a SCALAR operator, or is applied to an argument count that operator's
   //   §4.2 arity does not admit (esm-spec §4.3.4 / §9.6.6). The value analogue
@@ -131,6 +137,11 @@ export const ERROR_CODES = {
   //   reported here. Distinct from `circular_dependency`, which is a cycle among
   //   MODELS reached through scoped references.
   OBSERVED_CYCLE: 'observed_cycle',
+  // `ambiguous_output_name` — an output name that matches no variable exactly
+  //   and whose last dotted segment is shared by more than one variable
+  //   (CONFORMANCE_SPEC §5.17.4). This binding has no output derivation; the
+  //   entry exists because the code vocabulary is uniform across bindings.
+  AMBIGUOUS_OUTPUT_NAME: 'ambiguous_output_name',
   // `recurrence_not_wellfounded` — a causal self-read (esm-spec §4.3.1.1) that
   //   is not strictly earlier along exactly ONE of its aggregate's output axes:
   //   a read provably at the same cell or later on its axis (`k`, `k+c`), an
@@ -158,6 +169,13 @@ export const ERROR_CODES = {
   //   WINS, not the order cells are EVALUATED in, and a region's value
   //   expression is evaluated once for the whole region.
   RECURRENCE_UNSUPPORTED_FORM: 'recurrence_unsupported_form',
+  // `indexed_definition_unsupported_form` — a bare-index observed definition
+  //   `index(V, k…) ~ rhs` outside the runnable form of esm-spec §6.3.1 (the RHS
+  //   is not a `faq` whose `output_idx` names the subscripts in order). Raised
+  //   by the simulating bindings when a model is built; this binding does not
+  //   simulate and never raises it. It is registered because the §9.6.6 code
+  //   table is cross-language uniform.
+  INDEXED_DEFINITION_UNSUPPORTED_FORM: 'indexed_definition_unsupported_form',
   // `unsupported_construct` — a continuous or discrete event, or an implicit
   //   equation (an expression LHS), reached an evaluator that cannot run it
   //   (esm-spec §9.6.6).
@@ -304,6 +322,7 @@ export const ERROR_CODES = {
   TEMPLATE_IMPORT_VERSION_TOO_OLD: 'template_import_version_too_old',
   TEMPLATE_INJECT_TARGET_NOT_COMPONENT: 'template_inject_target_not_component',
   TEMPLATE_INJECT_TARGET_UNKNOWN: 'template_inject_target_unknown',
+  TEMPLATE_LIBRARY_ILLEGAL_PAYLOAD: 'template_library_illegal_payload',
 
   // ---- templates: geometry / makearray structural folds (also emitted from
   //      lower-expression-templates.ts during template lowering) ----

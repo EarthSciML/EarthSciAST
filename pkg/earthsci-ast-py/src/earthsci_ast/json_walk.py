@@ -52,7 +52,8 @@ class ExpressionTemplateError(EarthSciAstError):
     :mod:`earthsci_ast.parse`):
 
     ``template_import_version_too_old``, ``template_import_unresolved``,
-    ``template_import_not_library``, ``subsystem_ref_is_template_library``,
+    ``template_import_not_library``, ``template_library_illegal_payload``,
+    ``subsystem_ref_is_template_library``,
     ``template_import_cycle``, ``template_import_name_conflict``,
     ``template_import_unknown_name``, ``template_import_index_set_conflict``,
     ``template_body_expansion_too_deep``, ``metaparameter_unbound``,

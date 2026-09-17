@@ -1,0 +1,285 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "ArrayedObservedSeeds",
+    "description": "CONFORMANCE_SPEC §5.7.2 with esm-spec §6.3.1: an ARRAYED observed seeds from its defining equation's RHS exactly as a scalar one does. The classification reads a definition through the LHS's BASE NAME at any rank, so `wf` (the `faq{i}(wf[i]) ~ …` shell) and `wb` (the bare-index `wb[i] ~ …` of §6.3.1's worked example) are observed, and both are STATE-FREE: they must seed CONST and fold at bind. A binding that recognises an observed only by a bare-variable LHS - the narrower INLINING set, which does not narrow the partition - seeds them CONTINUOUS, and the two annotated reads in `u`'s tendency disagree with their `expect_cadence`. `ws` is the state-dependent control (CONTINUOUS either way), and `u`, whose LHS is a `D` under the same `faq` shell, must stay an ODE state rather than being credited as an observed.",
+    "authors": [
+      "EarthSciAST"
+    ],
+    "created": "2026-09-14T00:00:00Z",
+    "tags": [
+      "cadence",
+      "observed",
+      "leaf-seed",
+      "arrayed"
+    ]
+  },
+  "index_sets": {
+    "cells": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "models": {
+    "ArrayedObservedSeeds": {
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "cells"
+          ],
+          "description": "ODE state - CONTINUOUS. Its LHS is `faq{i}(D(u[i]))`: a tendency under the array shell, not a definition."
+        },
+        "dx": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2.0,
+          "description": "Plain constant parameter - CONST."
+        },
+        "kr": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.5,
+          "description": "Plain constant rate parameter - CONST."
+        },
+        "wf": {
+          "type": "unknown",
+          "units": "1/s",
+          "shape": [
+            "cells"
+          ],
+          "description": "ARRAYED observed, `faq`-shelled indexed LHS, STATE-FREE: seeds CONST."
+        },
+        "wb": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "cells"
+          ],
+          "description": "ARRAYED observed, bare-index LHS, STATE-FREE: seeds CONST."
+        },
+        "ws": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "cells"
+          ],
+          "description": "ARRAYED observed, `faq`-shelled indexed LHS, reading the state: seeds CONTINUOUS."
+        }
+      },
+      "equations": [
+        {
+          "_comment": "wf[i] ~ kr * dx - faq-shelled indexed LHS, state-free.",
+          "lhs": {
+            "op": "faq",
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "cells"
+              }
+            },
+            "args": [],
+            "expr": {
+              "op": "index",
+              "args": [
+                "wf",
+                "i"
+              ]
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "expect_cadence": "const",
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "cells"
+              }
+            },
+            "args": [
+              "kr",
+              "dx"
+            ],
+            "expr": {
+              "op": "*",
+              "args": [
+                "kr",
+                "dx"
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "wb[i] ~ dx * dx - bare-index LHS, state-free.",
+          "lhs": {
+            "op": "index",
+            "args": [
+              "wb",
+              "i"
+            ]
+          },
+          "rhs": {
+            "op": "faq",
+            "expect_cadence": "const",
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "cells"
+              }
+            },
+            "args": [
+              "dx"
+            ],
+            "expr": {
+              "op": "*",
+              "args": [
+                "dx",
+                "dx"
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "ws[i] ~ u[i] * dx - faq-shelled indexed LHS, state-dependent.",
+          "lhs": {
+            "op": "faq",
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "cells"
+              }
+            },
+            "args": [],
+            "expr": {
+              "op": "index",
+              "args": [
+                "ws",
+                "i"
+              ]
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "expect_cadence": "continuous",
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "cells"
+              }
+            },
+            "args": [
+              "u",
+              "dx"
+            ],
+            "expr": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "i"
+                  ]
+                },
+                "dx"
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "D(u[i])/dt = wf[i] * (ws[i] - wb[i]). The two state-free arrayed observeds are read here, each annotated CONST.",
+          "lhs": {
+            "op": "faq",
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "cells"
+              }
+            },
+            "args": [
+              "u"
+            ],
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "expect_cadence": "continuous",
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "cells"
+              }
+            },
+            "args": [
+              "u",
+              "wf",
+              "ws",
+              "wb"
+            ],
+            "expr": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "index",
+                  "expect_cadence": "const",
+                  "args": [
+                    "wf",
+                    "i"
+                  ]
+                },
+                {
+                  "op": "-",
+                  "args": [
+                    {
+                      "op": "index",
+                      "expect_cadence": "continuous",
+                      "args": [
+                        "ws",
+                        "i"
+                      ]
+                    },
+                    {
+                      "op": "index",
+                      "expect_cadence": "const",
+                      "args": [
+                        "wb",
+                        "i"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}
