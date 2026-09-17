@@ -233,6 +233,7 @@ TEMPLATE_IMPORT_VERSION_TOO_OLD = "template_import_version_too_old"
 TEMPLATE_IMPORT_UNRESOLVED = "template_import_unresolved"
 TEMPLATE_IMPORT_NOT_LIBRARY = "template_import_not_library"
 SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY = "subsystem_ref_is_template_library"
+TEMPLATE_LIBRARY_ILLEGAL_PAYLOAD = "template_library_illegal_payload"
 TEMPLATE_IMPORT_CYCLE = "template_import_cycle"
 TEMPLATE_IMPORT_NAME_CONFLICT = "template_import_name_conflict"
 TEMPLATE_IMPORT_UNKNOWN_NAME = "template_import_unknown_name"
@@ -334,6 +335,20 @@ RECURRENCE_NOT_WELLFOUNDED = "recurrence_not_wellfounded"
 #: through a `makearray` region value or a whole-operand op -- or an RHS that is
 #: not a `faq` over the variable's frame.
 RECURRENCE_UNSUPPORTED_FORM = "recurrence_unsupported_form"
+
+
+# ===========================================================================
+# Ragged range without a member gather (esm-spec §4.3.1 "Ragged ranges";
+# CONFORMANCE_SPEC.md §5.6.4), reported by the structural validator at the
+# containing expression field.
+# ===========================================================================
+
+#: A ``faq`` that is not a value-invention node ranges over a ``kind: "ragged"``
+#: index set, but its body never reads that set's ``values`` array. The range
+#: symbol binds the POSITION k in 1..offsets[parent], not a member, so without an
+#: ``index(values, parent, k)`` gather the body reads positions -- a plausible
+#: wrong number rather than a failure.
+RAGGED_VALUES_NOT_GATHERED = "ragged_values_not_gathered"
 
 
 # ===========================================================================

@@ -93,17 +93,17 @@
     }
   },
   "counts": {
-    "symbols": 914,
+    "symbols": 915,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
       "julia": 305,
       "typescript": 239,
       "python": 250,
       "rust": 341,
-      "go": 434
+      "go": 435
     },
     "by_tier": {
-      "extension": 641,
+      "extension": 642,
       "stable": 273
     }
   },
@@ -1418,6 +1418,14 @@
       }
     },
     {
+      "name": "code_ragged_values_not_gathered",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeRaggedValuesNotGathered"
+      }
+    },
+    {
       "name": "code_ref_cycle",
       "kind": "constant",
       "tier": "extension",
@@ -1727,6 +1735,14 @@
       "tier": "extension",
       "bindings": {
         "go": "CodeTemplateInjectTargetUnknown"
+      }
+    },
+    {
+      "name": "code_template_library_illegal_payload",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTemplateLibraryIllegalPayload"
       }
     },
     {
