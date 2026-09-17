@@ -584,15 +584,30 @@ impl Unit {
         self.dimensions.is_empty()
     }
 
-    /// True when this unit is dimensionless OR a pure plane angle.
+    /// True when this unit is dimensionless **at scale 1** — a PURE NUMBER.
     ///
-    /// `rad` is a full dimension axis here (matching the Go reference), but a
-    /// trigonometric function legitimately takes an ANGLE — `sin(theta)` with
-    /// `theta` in radians must not be reported as a dimensional error.
-    pub fn is_dimensionless_or_angle(&self) -> bool {
-        self.dimensions
-            .keys()
-            .all(|d| matches!(d, Dimension::Angle))
+    /// This is what esm-spec §4.8.3's "the argument MUST be dimensionless"
+    /// means for a strict transcendental (issue #409): `ppm` and `percent` are
+    /// dimensionless too, and `log(x [ppm])` has two defensible readings —
+    /// the log of the ppm NUMBER, or the log of the mole fraction — that differ
+    /// by `ln(1e-6) = 13.8155…`. Dimension alone cannot tell them apart, so the
+    /// checker refuses rather than picking one.
+    pub fn is_pure_number(&self) -> bool {
+        self.dimensions.is_empty() && self.exact.is_one()
+    }
+
+    /// True when this unit is a plane angle to the FIRST power (`rad`, `deg`,
+    /// `mrad`) — the shape a circular trig function's argument may carry.
+    ///
+    /// The exponent matters because the argument is CONVERTED to radians
+    /// (issue #409): `rad^2` is not an angle any conversion turns into one, and
+    /// accepting it would multiply by `scale` where `scale^2` was meant.
+    pub fn is_plane_angle(&self) -> bool {
+        self.dimensions.len() == 1
+            && self
+                .dimensions
+                .get(&Dimension::Angle)
+                .is_some_and(|p| *p == Rational::int(1))
     }
 
     /// Multiply two units
@@ -1102,9 +1117,11 @@ fn derivative_time_mismatch(state: &Unit, rhs: &Unit) -> Option<String> {
 /// `sqrt` is NOT in this family — it halves its argument's dimensions (see
 /// [`propagate_sqrt_dim`]).
 ///
-/// The TRIGONOMETRIC members additionally accept a plane ANGLE: `rad` is a real
-/// dimension axis here, so `sin(theta)` with `theta` in radians is correct, not
-/// an error. `exp`/`log`/`log10`/`ln` still demand strict dimensionlessness.
+/// The TRIGONOMETRIC members additionally accept a plane ANGLE at ANY scale:
+/// `rad` is a real dimension axis here, so `sin(theta)` with `theta` in radians
+/// — or in `deg` — is correct, not an error, and the flatten path converts the
+/// scaled spelling to radians before anything evaluates it. Everything else
+/// demands a PURE NUMBER: dimensionless AND at scale 1 (issue #409).
 fn propagate_transcendental_dim(
     op: &ExpressionNode,
     env: &HashMap<String, Unit>,
@@ -1142,12 +1159,26 @@ fn propagate_transcendental_dim(
 
     let arg = propagate_dim(&op.args[0], env, findings);
     if let Some(u) = arg.known() {
-        let acceptable = if angle_ok {
-            u.is_dimensionless_or_angle()
+        // Three outcomes, and the middle one is the point of issue #409.
+        //
+        // * A PURE NUMBER (dimensionless at scale 1) is always admissible.
+        // * An ANGLE is admissible to `sin`/`cos`/`tan` WHATEVER its scale,
+        //   because `deg` → `rad` is exact and has no second reading: the
+        //   evaluation path converts it (`normalize_angle_arguments`).
+        // * Dimensionless at a scale OTHER than 1 (`ppm`, `percent`) is
+        //   REFUSED. It passes any dimension-only test, which is how
+        //   `log(x [ppm])` evaluated `log` of the ppm number with no
+        //   diagnostic; the two readings differ by `ln(1e-6)` and nothing in
+        //   the document says which was meant.
+        if angle_ok && u.is_plane_angle() {
+            // Converted, not refused.
+        } else if u.is_pure_number() {
+            // Nothing to say.
+        } else if u.is_dimensionless() {
+            findings.push(UnitFinding::error(scaled_dimensionless_message(
+                &op.op, u,
+            )));
         } else {
-            u.is_dimensionless()
-        };
-        if !acceptable {
             findings.push(UnitFinding::error(format!(
                 "Argument to '{}' must be dimensionless{}, got {}",
                 op.op,
@@ -1159,10 +1190,139 @@ fn propagate_transcendental_dim(
     Dim::Known(result)
 }
 
+/// The factor that brings a quantity in `unit` to RADIANS, when `unit` is a
+/// plane angle at a scale other than 1 (esm-spec §4.8.3, issue #409).
+///
+/// `None` for anything else — a pure number, a `rad`, a dimensional unit — so a
+/// document that declares no scaled angle is rewritten not at all.
+#[must_use]
+pub fn angle_normalization_factor(unit: &Unit) -> Option<f64> {
+    (unit.is_plane_angle() && !unit.exact.is_one()).then(|| unit.scale)
+}
+
+/// Rewrite every `sin`/`cos`/`tan` whose argument is an angle at a scale other
+/// than 1 so the argument reaches the evaluator in RADIANS.
+///
+/// esm-spec §4.8.3 names angles as *the* exception to the dimensionless-argument
+/// rule, and `deg` is a registry unit at scale π/180 — so `sin(theta)` with
+/// `theta` in `deg` is a CONFORMING document, and before this it evaluated
+/// `sin(90)` = 0.894 where 1 was meant, with no diagnostic (issue #409). The
+/// conversion is exact and has no second reading, which is why this half
+/// converts where the `ppm` half refuses.
+///
+/// Returns `None` when nothing changed, so the common case allocates nothing.
+/// The rewrite runs on the EVALUATION path only (the flatten funnel); the
+/// checker still sees the authored spelling, and so still reports the argument's
+/// declared unit rather than a literal-poisoned `unknown`.
+#[must_use]
+pub fn normalize_angle_arguments(expr: &Expr, env: &HashMap<String, Unit>) -> Option<Expr> {
+    let Expr::Operator(node) = expr else {
+        return None;
+    };
+
+    // Rewrite the children first, so a nested `sin(deg)` inside another
+    // argument is converted too.
+    let mut args: Vec<Expr> = node.args.clone();
+    let mut changed = false;
+    for a in &mut args {
+        if let Some(rewritten) = normalize_angle_arguments(a, env) {
+            *a = rewritten;
+            changed = true;
+        }
+    }
+    let sidecars: [(&Option<Box<Expr>>, usize); 3] =
+        [(&node.lower, 0), (&node.upper, 1), (&node.expr, 2)];
+    let mut new_sidecars: [Option<Box<Expr>>; 3] = [None, None, None];
+    for (slot, idx) in sidecars {
+        if let Some(inner) = slot
+            && let Some(rewritten) = normalize_angle_arguments(inner, env)
+        {
+            new_sidecars[idx] = Some(Box::new(rewritten));
+            changed = true;
+        }
+    }
+
+    // Then this node: a circular trig whose (possibly rewritten) argument is a
+    // scaled angle gets the factor folded in.
+    if matches!(node.op.as_str(), "sin" | "cos" | "tan") && args.len() == 1 {
+        let mut findings = Vec::new();
+        if let Some(unit) = propagate_dim(&args[0], env, &mut findings).known()
+            && let Some(factor) = angle_normalization_factor(unit)
+        {
+            let mut scaled = ExpressionNode::default();
+            scaled.op = "*".to_string();
+            scaled.args = vec![args[0].clone(), Expr::Number(factor)];
+            args[0] = Expr::operator(scaled);
+            changed = true;
+        }
+    }
+
+    if !changed {
+        return None;
+    }
+    let mut out = (**node).clone();
+    out.args = args;
+    for (idx, slot) in new_sidecars.into_iter().enumerate() {
+        if let Some(v) = slot {
+            match idx {
+                0 => out.lower = Some(v),
+                1 => out.upper = Some(v),
+                _ => out.expr = Some(v),
+            }
+        }
+    }
+    Some(Expr::operator(out))
+}
+
 /// The radian — the unit of the `Angle` axis, returned by the inverse circular
 /// functions.
 fn radian() -> Unit {
     Unit::base(Dimension::Angle, 1, 1.0)
+}
+
+/// The registry spellings of the dimensionless-but-scaled units, most common
+/// first, used to NAME a scale in a diagnostic (`… (ppm); divide by 1 ppm …`).
+///
+/// A fixed, ordered table rather than a reverse sweep of the registry: the
+/// registry is a `HashMap`, so a sweep would pick `ppmv` or `ppm` depending on
+/// iteration order and the five bindings would print different messages for the
+/// same document. The same table, in the same order, is in every binding.
+const SCALED_DIMENSIONLESS_SPELLINGS: &[(&str, i32)] =
+    &[("percent", -2), ("ppm", -6), ("ppb", -9), ("ppt", -12)];
+
+/// The canonical registry spelling of a dimensionless unit at `exact`, when one
+/// exists (`1/100` → `percent`, `1e-6` → `ppm`).
+#[must_use]
+pub fn scaled_dimensionless_spelling(exact: &ExactScale) -> Option<&'static str> {
+    SCALED_DIMENSIONLESS_SPELLINGS
+        .iter()
+        .find(|(_, k)| ExactScale::power_of_ten(*k) == *exact)
+        .map(|(name, _)| *name)
+}
+
+/// The §4.8.3 refusal for a dimensionless-but-SCALED argument to an op that
+/// requires a pure number (esm-spec §9.6.6 `unit_transcendental_scaled_argument`).
+///
+/// It names the REPAIR, not only the refusal: the author states the reading by
+/// dividing by a quantity carrying the scale, which costs one node and records
+/// the decision in the document. Normalizing silently instead would change the
+/// numbers of every document that already passes a `percent` or a `ppm` into
+/// `exp`/`log`.
+fn scaled_dimensionless_message(op: &str, unit: &Unit) -> String {
+    match scaled_dimensionless_spelling(&unit.exact) {
+        Some(name) => format!(
+            "Argument to '{op}' must be dimensionless at scale 1, but is \
+             dimensionless at scale {} ({name}); divide by 1 {name}, or by the \
+             scale you mean, to state which reading is intended",
+            unit.exact
+        ),
+        None => format!(
+            "Argument to '{op}' must be dimensionless at scale 1, but is \
+             dimensionless at scale {}; divide by a quantity carrying that \
+             scale to state which reading is intended",
+            unit.exact
+        ),
+    }
 }
 
 /// Square root HALVES its argument's dimensions — it is not a transcendental
@@ -2907,6 +3067,152 @@ mod tests {
                 .iter()
                 .any(UnitFinding::is_error),
             "exp requires strict dimensionlessness"
+        );
+    }
+
+    /// esm-spec §4.8.3 / issue #409: "dimensionless" means dimensionless AT
+    /// SCALE 1 for every op whose argument the table requires to be
+    /// dimensionless, and an ANGLE is admitted to a circular function at ANY
+    /// scale because the evaluation path converts it.
+    ///
+    /// Before this, `ppm` and `percent` satisfied every dimension-only test, so
+    /// `log(c [ppm])` was accepted and evaluated the log of the ppm NUMBER with
+    /// no diagnostic — and the two readings differ by `ln(1e-6)`.
+    #[test]
+    fn test_transcendental_argument_must_be_at_scale_one() {
+        let env = env_of(&[
+            ("c", "ppm"),
+            ("p", "percent"),
+            ("n", "1"),
+            ("theta", "rad"),
+            ("lat", "deg"),
+            ("solid", "sr"),
+        ]);
+        let errors = |e: &Expr| {
+            check_expression_dimensions(e, None, &env)
+                .iter()
+                .filter(|f| f.is_error())
+                .map(|f| f.message.clone())
+                .collect::<Vec<_>>()
+        };
+
+        // The strict transcendentals and the inverse circular functions refuse a
+        // dimensionless-but-SCALED argument, and the message names the repair.
+        for name in [
+            "log", "ln", "log10", "exp", "sinh", "cosh", "tanh", "asinh", "acosh", "atanh",
+            "asin", "acos", "atan",
+        ] {
+            let found = errors(&op(name, vec![Expr::Variable("c".into())]));
+            assert_eq!(found.len(), 1, "{name}(c [ppm]) must be refused");
+            assert!(
+                found[0].contains("dimensionless at scale 1")
+                    && found[0].contains("(ppm)")
+                    && found[0].contains("divide by 1 ppm"),
+                "{name}: the diagnostic must name the repair, got {}",
+                found[0]
+            );
+            assert!(
+                errors(&op(name, vec![Expr::Variable("n".into())])).is_empty(),
+                "{name}(n [1]) is a pure number and stays accepted"
+            );
+        }
+        assert!(
+            errors(&op("exp", vec![Expr::Variable("p".into())]))[0].contains("divide by 1 percent"),
+            "the percent spelling is named too"
+        );
+
+        // A circular function CONVERTS an angle rather than refusing it, at any
+        // scale — but a dimensionless-but-scaled argument is refused there too.
+        for name in ["sin", "cos", "tan"] {
+            assert!(
+                errors(&op(name, vec![Expr::Variable("lat".into())])).is_empty(),
+                "{name}(lat [deg]) is a conforming document"
+            );
+            assert!(
+                errors(&op(name, vec![Expr::Variable("theta".into())])).is_empty(),
+                "{name}(theta [rad]) is a conforming document"
+            );
+            assert_eq!(
+                errors(&op(name, vec![Expr::Variable("p".into())])).len(),
+                1,
+                "{name}(p [percent]) leaves the reading unstated"
+            );
+            // `sr` is rad^2. No conversion turns a solid angle into a plane one,
+            // so accepting it would multiply by `scale` where `scale^2` was meant.
+            assert_eq!(
+                errors(&op(name, vec![Expr::Variable("solid".into())])).len(),
+                1,
+                "{name}(solid [sr]) is not a plane angle"
+            );
+        }
+    }
+
+    /// The repair the diagnostic names — dividing by a quantity whose DECLARED
+    /// units carry the scale — reaches scale 1 exactly and is accepted.
+    #[test]
+    fn test_scaled_dimensionless_repair_is_accepted() {
+        let env = env_of(&[("c", "ppm"), ("one_ppm", "ppm")]);
+        let quotient = op(
+            "/",
+            vec![Expr::Variable("c".into()), Expr::Variable("one_ppm".into())],
+        );
+        assert!(
+            !check_expression_dimensions(&op("log", vec![quotient]), None, &env)
+                .iter()
+                .any(UnitFinding::is_error),
+            "log(c / one_ppm) states the reading and must be accepted"
+        );
+    }
+
+    /// The angle-normalization factor is `None` for everything a rewrite must
+    /// leave alone, so a document declaring no scaled angle is not walked.
+    #[test]
+    fn test_angle_normalization_factor() {
+        assert!(angle_normalization_factor(&parse_unit("rad").unwrap()).is_none());
+        assert!(angle_normalization_factor(&parse_unit("1").unwrap()).is_none());
+        assert!(angle_normalization_factor(&parse_unit("ppm").unwrap()).is_none());
+        assert!(angle_normalization_factor(&parse_unit("m").unwrap()).is_none());
+        assert!(angle_normalization_factor(&parse_unit("sr").unwrap()).is_none());
+        let deg = angle_normalization_factor(&parse_unit("deg").unwrap()).unwrap();
+        assert_eq!(deg, std::f64::consts::PI / 180.0);
+        // 90 deg is exactly a quarter turn under this factor.
+        assert_eq!((90.0 * deg).sin(), 1.0);
+    }
+
+    /// The rewrite folds the factor into the ARGUMENT, leaves `rad` alone, and
+    /// reaches a `sin` nested inside another argument.
+    #[test]
+    fn test_normalize_angle_arguments_rewrite() {
+        let env = env_of(&[("lat", "deg"), ("theta", "rad")]);
+        let untouched = op("sin", vec![Expr::Variable("theta".into())]);
+        assert!(
+            normalize_angle_arguments(&untouched, &env).is_none(),
+            "a `rad` argument is at scale 1 and must not be rewritten"
+        );
+
+        let nested = op(
+            "+",
+            vec![
+                Expr::Number(1.0),
+                op("cos", vec![Expr::Variable("lat".into())]),
+            ],
+        );
+        let rewritten = normalize_angle_arguments(&nested, &env).expect("the `deg` cos is rewritten");
+        let Expr::Operator(sum) = &rewritten else {
+            panic!("expected the sum back")
+        };
+        let Expr::Operator(cos) = &sum.args[1] else {
+            panic!("expected the cos back")
+        };
+        let Expr::Operator(product) = &cos.args[0] else {
+            panic!("expected the argument to be a product")
+        };
+        assert_eq!(product.op, "*");
+        assert_eq!(product.args[0], Expr::Variable("lat".into()));
+        assert_eq!(
+            product.args[1],
+            Expr::Number(std::f64::consts::PI / 180.0),
+            "the factor is the declared scale, applied ONCE"
         );
     }
 
