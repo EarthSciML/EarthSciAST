@@ -2136,6 +2136,7 @@ func (s *structuralScan) validateImportedCouplingEdges() {
 			for k, v := range se.Details {
 				details[k] = v
 			}
+			details["reference"] = ref
 			details["coupling_import"] = imp.Ref
 			details["role"] = role
 			details["bound_component"] = component
