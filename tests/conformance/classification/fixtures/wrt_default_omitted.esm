@@ -1,0 +1,84 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "ClassificationWrtDefaultOmitted",
+    "description": "esm-spec §4.2: on a `D` node an ABSENT `wrt` MEANS `t`. Each of the four models is one equation, and they form two pairs — SCALAR state and state SHAPED over `lev` — differing only in whether `\"wrt\": \"t\"` is spelled or omitted. Both members of a pair MUST classify identically: the derivative target is an `ode_state` and the model is an `ode`. `SpatialControl` is the complement and is what stops an over-broad fix: its `wrt` names the axis `lev`, so it is a SPATIAL derivative, its target is NOT an ode_state (nothing defines `c`, which makes it algebraic), and the model is a `pde`. A binding that reads `wrt` as a three-way question — present-and-`t`, present-and-spatial, ABSENT — rather than the two-way one §4.2 defines gets the omitted pair wrong; a binding that answers the absent case by treating every `D` as structural gets `SpatialControl` wrong. This fixture is here because the defect was real in three of the five bindings at once (EarthSciAST#407): Rust applied the default when classifying but not in its scalar interpreter, Julia applied it in `classification.jl` but not in the tree-walk runner, and Python refused the document at PARSE with `Operator 'D' requires 'wrt' field to be specified` — so it could not even reach a classification answer.",
+    "authors": [
+      "EarthSciAST"
+    ],
+    "created": "2026-09-17T00:00:00Z",
+    "tags": [
+      "classification",
+      "wrt-default",
+      "esm-spec-4.2"
+    ]
+  },
+  "index_sets": {
+    "lev": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "models": {
+    "ScalarWrtOmitted": {
+      "variables": {
+        "z": { "type": "unknown", "units": "1", "default": 1.0 },
+        "k": { "type": "parameter", "units": "1/s", "default": 0.5 }
+      },
+      "equations": [
+        {
+          "lhs": { "op": "D", "args": ["z"] },
+          "rhs": { "op": "*", "args": [{ "op": "-", "args": ["k"] }, "z"] }
+        }
+      ]
+    },
+    "ScalarWrtExplicit": {
+      "variables": {
+        "z": { "type": "unknown", "units": "1", "default": 1.0 },
+        "k": { "type": "parameter", "units": "1/s", "default": 0.5 }
+      },
+      "equations": [
+        {
+          "lhs": { "op": "D", "args": ["z"], "wrt": "t" },
+          "rhs": { "op": "*", "args": [{ "op": "-", "args": ["k"] }, "z"] }
+        }
+      ]
+    },
+    "ShapedWrtOmitted": {
+      "variables": {
+        "x": { "type": "unknown", "units": "1", "shape": ["lev"], "default": 1.0 },
+        "k": { "type": "parameter", "units": "1/s", "default": 0.5 }
+      },
+      "equations": [
+        {
+          "lhs": { "op": "D", "args": ["x"] },
+          "rhs": { "op": "*", "args": [{ "op": "-", "args": ["k"] }, "x"] }
+        }
+      ]
+    },
+    "ShapedWrtExplicit": {
+      "variables": {
+        "x": { "type": "unknown", "units": "1", "shape": ["lev"], "default": 1.0 },
+        "k": { "type": "parameter", "units": "1/s", "default": 0.5 }
+      },
+      "equations": [
+        {
+          "lhs": { "op": "D", "args": ["x"], "wrt": "t" },
+          "rhs": { "op": "*", "args": [{ "op": "-", "args": ["k"] }, "x"] }
+        }
+      ]
+    },
+    "SpatialControl": {
+      "variables": {
+        "c": { "type": "unknown", "units": "1", "shape": ["lev"], "default": 1.0 },
+        "kappa": { "type": "parameter", "units": "1/s", "default": 0.5 }
+      },
+      "equations": [
+        {
+          "lhs": { "op": "D", "args": ["c"], "wrt": "lev" },
+          "rhs": { "op": "*", "args": ["kappa", "c"] }
+        }
+      ]
+    }
+  }
+}

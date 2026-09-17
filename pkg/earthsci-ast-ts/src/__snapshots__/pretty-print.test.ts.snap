@@ -5473,6 +5473,31 @@ exports[`Rendering output lock (all display fixtures) > renders structural_ops.j
     "mathml": "<mrow><mi>rank</mi><mo>(</mo><mi>S</mi><mo>)</mo></mrow>",
     "unicode": "rank(S)",
   },
+  {
+    "ascii": "D(x)/Dt",
+    "input": {
+      "args": [
+        "x",
+      ],
+      "op": "D",
+      "wrt": "t",
+    },
+    "latex": "\\frac{\\partial x}{\\partial t}",
+    "mathml": "<mfrac><mrow><mo>&#x2202;</mo><mi>x</mi></mrow><mrow><mo>&#x2202;</mo><mi>t</mi></mrow></mfrac>",
+    "unicode": "∂x/∂t",
+  },
+  {
+    "ascii": "D(x)/Dt",
+    "input": {
+      "args": [
+        "x",
+      ],
+      "op": "D",
+    },
+    "latex": "\\frac{\\partial x}{\\partial t}",
+    "mathml": "<mfrac><mrow><mo>&#x2202;</mo><mi>x</mi></mrow><mrow><mo>&#x2202;</mo><mi>t</mi></mrow></mfrac>",
+    "unicode": "∂x/∂t",
+  },
 ]
 `;
 

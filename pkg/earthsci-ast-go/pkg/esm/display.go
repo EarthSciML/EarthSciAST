@@ -957,8 +957,12 @@ func formatExprNode(node ExprNode, format string) string {
 		}
 
 	case "D":
-		if len(args) == 1 && node.Wrt != nil {
-			w := *node.Wrt
+		// An ABSENT Wrt MEANS "t" (esm-spec §4.2), so it renders exactly as the
+		// explicit spelling does. Requiring a non-nil Wrt here printed "D(x)"
+		// for a node Julia, Python and TypeScript all print as "∂x/∂t"
+		// (EarthSciAST#407).
+		if len(args) == 1 {
+			w := derivativeWrt(node)
 			switch {
 			case uni:
 				return "∂" + dOperand(args[0], format) + "/∂" + w

@@ -154,14 +154,17 @@ def test_expression_with_metadata():
 
 def test_operator_field_requirements():
     """Test that operators enforce required field requirements."""
-    # Test that D operator requires wrt field
-    expr_data_d_no_wrt = {
-        "op": "D",
-        "args": ["x"],
-        # Missing wrt field
-    }
-    with pytest.raises(ValueError, match="Operator 'D' requires 'wrt' field to be specified"):
-        _parse_expression(expr_data_d_no_wrt)
+    # `D` carries NO per-op field mandate either: esm-spec §4.2 makes `wrt`
+    # OPTIONAL and says an ABSENT `wrt` MEANS `t`, so the short spelling is a
+    # legal node and parses cleanly. This used to raise
+    # `Operator 'D' requires 'wrt' field to be specified` — refusing a document
+    # the schema accepts and the other four bindings load (issue #407). `wrt`
+    # stays `None` on the parsed node: the default belongs at the consumer, and
+    # materializing it here would make the canonical encoding differ from every
+    # other binding's. See tests/test_wrt_default_omitted.py.
+    expr_d_no_wrt = _parse_expression({"op": "D", "args": ["x"]})
+    assert expr_d_no_wrt.op == "D"
+    assert expr_d_no_wrt.wrt is None
 
     # `grad` is an ordinary open-tier rewrite-target op with NO per-op field
     # mandate: `dim` is an OPTIONAL axis-naming scalar field (esm-spec §4.2 /

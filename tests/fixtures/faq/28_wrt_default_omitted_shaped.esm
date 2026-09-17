@@ -1,0 +1,236 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "WrtDefaultOmittedShaped",
+    "description": "esm-spec §4.2: on a `D` node an ABSENT `wrt` MEANS `t` — the SHAPED half of the pair whose scalar half is `tests/simulation/wrt_default_omitted.esm` (EarthSciAST#407). The two models differ only in whether the equation spells `\"wrt\": \"t\"` or omits it; each integrates four identical cells decaying as exp(-0.5 t) and observes the column sum through a `faq`, so both assert the same closed-form values and a binding that reads the two spellings differently cannot build one of them. It lives here rather than in `tests/simulation/` because that corpus's generic runner drives the scalar backend, which has no `faq` evaluator; the asymmetry this pins is shape-dependent, so the shaped spelling has to be executed somewhere the array pathway runs.",
+    "authors": [
+      "EarthSciAST contributors"
+    ],
+    "created": "2026-09-17T00:00:00Z",
+    "tags": [
+      "regression",
+      "esm-spec-4.2",
+      "wrt-default"
+    ]
+  },
+  "index_sets": {
+    "lev": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "models": {
+    "ShapedWrtOmitted": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "mol",
+          "shape": [
+            "lev"
+          ],
+          "default": 1.0,
+          "description": "State shaped over `lev`, tendency written with `wrt` omitted"
+        },
+        "total": {
+          "type": "unknown",
+          "units": "mol",
+          "description": "Column sum of x, observed"
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.5,
+          "description": "Decay rate"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ]
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "x"
+            ]
+          }
+        },
+        {
+          "lhs": "total",
+          "rhs": {
+            "op": "faq",
+            "args": [
+              "x"
+            ],
+            "output_idx": [],
+            "ranges": {
+              "i": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                "x",
+                "i"
+              ]
+            },
+            "reduce": "+"
+          }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "x"
+            ]
+          },
+          "rhs": 1.0
+        }
+      ],
+      "tolerance": {
+        "rel": 1e-06,
+        "abs": 1e-10
+      },
+      "tests": [
+        {
+          "id": "shaped_wrt_omitted",
+          "description": "Four identical cells each decaying as exp(-0.5 t), so the column sum is 4 exp(-0.5 t). Sampled at t = 0 and t = 2.",
+          "time_span": {
+            "start": 0.0,
+            "end": 2.0
+          },
+          "assertions": [
+            {
+              "variable": "total",
+              "time": 0.0,
+              "expected": 4.0
+            },
+            {
+              "variable": "total",
+              "time": 2.0,
+              "expected": 1.4715177646857693
+            }
+          ]
+        }
+      ]
+    },
+    "ShapedWrtExplicit": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "mol",
+          "shape": [
+            "lev"
+          ],
+          "default": 1.0,
+          "description": "State shaped over `lev`, tendency spells `wrt` explicitly"
+        },
+        "total": {
+          "type": "unknown",
+          "units": "mol",
+          "description": "Column sum of x, observed"
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.5,
+          "description": "Decay rate"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "x"
+            ]
+          }
+        },
+        {
+          "lhs": "total",
+          "rhs": {
+            "op": "faq",
+            "args": [
+              "x"
+            ],
+            "output_idx": [],
+            "ranges": {
+              "i": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                "x",
+                "i"
+              ]
+            },
+            "reduce": "+"
+          }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "x"
+            ]
+          },
+          "rhs": 1.0
+        }
+      ],
+      "tolerance": {
+        "rel": 1e-06,
+        "abs": 1e-10
+      },
+      "tests": [
+        {
+          "id": "shaped_wrt_explicit",
+          "description": "The control for `shaped_wrt_omitted`: the same shaped decay with `\"wrt\": \"t\"` written out. Both must produce the same trajectory.",
+          "time_span": {
+            "start": 0.0,
+            "end": 2.0
+          },
+          "assertions": [
+            {
+              "variable": "total",
+              "time": 0.0,
+              "expected": 4.0
+            },
+            {
+              "variable": "total",
+              "time": 2.0,
+              "expected": 1.4715177646857693
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "domain": {
+    "temporal": {}
+  }
+}

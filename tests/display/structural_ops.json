@@ -552,6 +552,31 @@
         "unicode": "rank(S)",
         "latex": "\\mathrm{rank}(S)",
         "ascii": "rank(S)"
+      },
+      {
+        "name": "D with an explicit wrt",
+        "input": {
+          "op": "D",
+          "args": [
+            "x"
+          ],
+          "wrt": "t"
+        },
+        "unicode": "∂x/∂t",
+        "latex": "\\frac{\\partial x}{\\partial t}",
+        "ascii": "D(x)/Dt"
+      },
+      {
+        "name": "D with wrt OMITTED renders identically (esm-spec 4.2: absent wrt means t)",
+        "input": {
+          "op": "D",
+          "args": [
+            "x"
+          ]
+        },
+        "unicode": "∂x/∂t",
+        "latex": "\\frac{\\partial x}{\\partial t}",
+        "ascii": "D(x)/Dt"
       }
     ]
   }

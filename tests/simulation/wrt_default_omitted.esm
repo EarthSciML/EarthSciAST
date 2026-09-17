@@ -1,0 +1,168 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "WrtDefaultOmittedScalar",
+    "description": "esm-spec §4.2: on a `D` node an ABSENT `wrt` MEANS `t`. The two models below differ only in whether the equation spells `\"wrt\": \"t\"` or omits it, and both integrate the same exponential decay from the same initial condition, so their inline tests assert the same closed-form values. A binding that applies the default on one path and drops it on another does not fail with a wrong number, it fails to build a system at all: EarthSciAST#407 had the Rust SCALAR interpreter match `wrt == Some(\"t\")` while the array path classified its LHS through the shared classification API, so the shaped spelling simulated and the scalar one was refused at interpreter build with `State variable 'z' has no D(z, t) = ... equation`. Julia's tree-walk runner dropped the default on both shapes (`E_TREEWALK_UNSUPPORTED_EQUATION`) and Python refused the document at parse (`Operator 'D' requires 'wrt' field to be specified`). Pairing the two spellings is the point: a fixture carrying only the short form would go red on any binding that cannot load it, but would not pin that the two spellings mean the SAME thing. The SHAPED half of the pair lives in `tests/fixtures/faq/28_wrt_default_omitted_shaped.esm`, because this corpus's generic runner drives the SCALAR backend, which has no `faq` evaluator.",
+    "authors": [
+      "EarthSciAST contributors"
+    ],
+    "created": "2026-09-17T00:00:00Z",
+    "tags": [
+      "regression",
+      "esm-spec-4.2",
+      "wrt-default"
+    ]
+  },
+  "models": {
+    "ScalarWrtOmitted": {
+      "variables": {
+        "z": {
+          "type": "unknown",
+          "units": "mol",
+          "default": 1.0,
+          "description": "Scalar state whose tendency is written with `wrt` omitted"
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.5,
+          "description": "Decay rate"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "z"
+            ]
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "z"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "z"
+            ]
+          },
+          "rhs": 1.0
+        }
+      ],
+      "tolerance": {
+        "rel": 1e-06,
+        "abs": 1e-10
+      },
+      "tests": [
+        {
+          "id": "scalar_wrt_omitted",
+          "description": "z(t) = exp(-0.5 t) for the short spelling `{\"op\": \"D\", \"args\": [\"z\"]}`. Sampled at t = 0 and t = 2, where the closed form is exp(-1).",
+          "time_span": {
+            "start": 0.0,
+            "end": 2.0
+          },
+          "assertions": [
+            {
+              "variable": "z",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "z",
+              "time": 2.0,
+              "expected": 0.36787944117144233
+            }
+          ]
+        }
+      ]
+    },
+    "ScalarWrtExplicit": {
+      "variables": {
+        "z": {
+          "type": "unknown",
+          "units": "mol",
+          "default": 1.0,
+          "description": "Scalar state whose tendency spells `wrt` explicitly"
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.5,
+          "description": "Decay rate"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "z"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "z"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "z"
+            ]
+          },
+          "rhs": 1.0
+        }
+      ],
+      "tolerance": {
+        "rel": 1e-06,
+        "abs": 1e-10
+      },
+      "tests": [
+        {
+          "id": "scalar_wrt_explicit",
+          "description": "The control for `scalar_wrt_omitted`: the same decay with `\"wrt\": \"t\"` written out. Both must produce the same trajectory.",
+          "time_span": {
+            "start": 0.0,
+            "end": 2.0
+          },
+          "assertions": [
+            {
+              "variable": "z",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "z",
+              "time": 2.0,
+              "expected": 0.36787944117144233
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "domain": {
+    "temporal": {}
+  }
+}
