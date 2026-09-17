@@ -290,6 +290,12 @@ fn collect_role_segments(edge: &Value) -> HashSet<String> {
 // ---------------------------------------------------------------------------
 
 fn default_load_ref(ref_str: &str, base_path: &str) -> Result<Value, DiagnosticError> {
+    // esm-spec §10.10: a `coupling_import` ref "resolves by the §4.7 reference
+    // formats (relative path, absolute path, URL, `${VAR}`), with the same
+    // per-binding capability rules as a template import" — so `${VAR}` expands
+    // here too, before the remote classification.
+    let expanded = crate::ref_loading::expand_env_refs(ref_str);
+    let ref_str: &str = &expanded;
     if ref_str.starts_with("http://") || ref_str.starts_with("https://") {
         return Err(err(
             codes::COUPLING_IMPORT_UNRESOLVED,

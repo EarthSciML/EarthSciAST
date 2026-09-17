@@ -348,3 +348,49 @@ end
     @test bad.structural_errors[1].path == "/coupling/0/to"
     @test occursin("undeclared role 'Snik'", bad.structural_errors[1].message)
 end
+
+# esm-spec §10.10: a `coupling_import` ref "resolves by the §4.7 reference
+# formats (relative path, absolute path, URL, `${VAR}`), with the same
+# per-binding capability rules as a template import" — so the §4.7 env-var
+# expansion reaches this ref too, on the same three rules: only the braced form
+# with a C-identifier name expands, an unset variable is left literal so the ref
+# fails with the ordinary `coupling_import_unresolved`, and an expanded relative
+# ref still anchors at the importing document's directory.
+@testset "coupling_import ref expands \${VAR} (§10.10 -> §4.7)" begin
+    corpus = joinpath(TESTUTILS_REPO_ROOT, "tests", "coupling_libraries")
+    text = read(joinpath(corpus, "assembly_import.esm"), String)
+    var = "ESM_JL_ENVREF_COUPLING_LIB_DIR"
+    mktempdir() do dir
+        doc = replace(text, "\"./rothermel_fuel.esm\"" => "\"\${$(var)}/rothermel_fuel.esm\"")
+        path = joinpath(dir, "assembly.esm")
+        write(path, doc)
+
+        # Unset: the token stays literal and the ref fails unresolved, naming it.
+        haskey(ENV, var) && delete!(ENV, var)
+        e = try
+            flatten(load_path(path))
+            nothing
+        catch err
+            err
+        end
+        @test e isa EarthSciAST.ExpressionTemplateError
+        @test e.code == EarthSciAST.ERROR_CODES.COUPLING_IMPORT_UNRESOLVED
+        @test occursin("\${$(var)}", sprint(showerror, e))
+
+        # A bare `$VAR` is never expanded, even with the variable set.
+        ENV[var] = corpus
+        try
+            bare = replace(text, "\"./rothermel_fuel.esm\"" => "\"\$$(var)/rothermel_fuel.esm\"")
+            barepath = joinpath(dir, "assembly_bare.esm")
+            write(barepath, bare)
+            @test_throws EarthSciAST.ExpressionTemplateError flatten(load_path(barepath))
+
+            # Set: the library resolves and the import expands to the inline edges.
+            se(f) = [EarthSciAST.serialize_equation(e) for e in f.equations]
+            inline = flatten(load_path(joinpath(corpus, "assembly_inline.esm")))
+            @test se(flatten(load_path(path))) == se(inline)
+        finally
+            delete!(ENV, var)
+        end
+    end
+end

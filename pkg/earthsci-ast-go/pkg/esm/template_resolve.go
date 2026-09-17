@@ -165,9 +165,22 @@ func instantiateScope(scope *templateScope, values map[string]any, ctx string) e
 
 // canonicalImportRef returns the canonical (absolute) form of a local import
 // ref used as the cycle-detection identity (esm-spec §4.7 path-scoped cycles):
-// a relative ref is joined onto baseDir and made absolute. A remote (http/https)
-// ref is its own canonical form, returned unchanged.
+// `${VAR}` tokens are expanded (expandRefEnv), then a relative ref is joined
+// onto baseDir and made absolute. A remote (http/https) ref is its own
+// canonical form, returned unchanged.
+//
+// Expanding HERE is what keeps the identity of `${LIB_ROOT}/grid.esm` and of
+// the plain path it expands to one and the same key, so a document reached
+// under both spellings is visited once and a cycle through an expanded ref is
+// still detected.
 func canonicalImportRef(ref, baseDir string) string {
+	return canonicalRefPath(expandRefEnv(ref), baseDir)
+}
+
+// canonicalRefPath is canonicalImportRef for a ref whose `${VAR}` tokens are
+// ALREADY expanded — the form loadRefBytes needs, which expands once on entry
+// and must not expand a second time over a value that itself reads `${…}`.
+func canonicalRefPath(ref, baseDir string) string {
 	if isRemoteRef(ref) {
 		return ref
 	}

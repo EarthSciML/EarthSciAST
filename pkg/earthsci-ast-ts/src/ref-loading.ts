@@ -43,6 +43,7 @@ import { isCouplingLibraryDoc } from './coupling-imports.js'
 import { EnumLoweringError, lowerMountedDocumentEnums } from './lower-enums.js'
 import {
   canonicalizePath,
+  expandRefEnv,
   isRemoteRef,
   joinPath,
   normalizeRef,
@@ -353,12 +354,17 @@ async function prefetchRefs(
   const walk = async (subsystems: unknown, currentBase: string): Promise<void> => {
     if (typeof subsystems !== 'object' || subsystems === null) return
     for (const sub of Object.values(subsystems as Record<string, unknown>)) {
-      const ref = (sub as RefEdge | null)?.ref
-      if (typeof ref !== 'string') {
+      const authoredRef = (sub as RefEdge | null)?.ref
+      if (typeof authoredRef !== 'string') {
         walkComponent(sub, currentBase)
         await walkNested(sub, currentBase)
         continue
       }
+      // esm-spec §4.7 `${VAR}` expansion, ONCE, where the ref leaves the
+      // document — ahead of the `isRemoteRef` classification below and ahead of
+      // the cache key. The sync core expands at its own read of `sub.ref` with
+      // the identical helper, so the key it looks up is the key stored here.
+      const ref = expandRefEnv(authoredRef)
       const key = normalizeRef(ref, currentBase)
       if (seen.has(key)) continue
       seen.add(key)
@@ -935,7 +941,10 @@ function walkSubsystemRefs(
   // one (esm-spec §4.7 "Which environment a contribution folds against").
   for (const [subName, subsystem] of Object.entries(subsystems)) {
     const sub = subsystem as RefEdge
-    const ref = sub.ref
+    // esm-spec §4.7 `${VAR}` expansion, once, where the ref leaves the document:
+    // `resolveRefEdge` derives the cycle key, the remote/local classification
+    // and the read from this one string, so they cannot disagree.
+    const ref = typeof sub.ref === 'string' ? expandRefEnv(sub.ref) : sub.ref
     const subPointer = `${pointer}/subsystems/${subName}`
     if (ref) {
       resolveRefEdge(
@@ -1035,7 +1044,7 @@ function inlineTopLevelModelRef(
   rootEnv: Readonly<Record<string, number>>,
   refChain: readonly string[] = [],
 ): void {
-  const ref = edge.ref as string
+  const ref = expandRefEnv(edge.ref as string) // esm-spec §4.7 `${VAR}` expansion
   resolveRefEdge(
     edge,
     ref,

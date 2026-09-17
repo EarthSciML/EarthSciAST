@@ -1611,7 +1611,13 @@ def _absolutize_injected_imports(
     library resolve from the assembler regardless of where the leaf lives;
     absolute refs bypass the per-component ``base_dir`` in ``_load_import_raw``.
     URLs and already-absolute refs pass through unchanged, and every other field
-    on the entry (``bindings`` / ``only`` / ``as``) is preserved."""
+    on the entry (``bindings`` / ``only`` / ``as``) is preserved.
+
+    A ``${VAR}`` token is expanded (esm-spec §4.7) BEFORE the absolute-vs-relative
+    test and written back expanded, as the Julia reference does in
+    ``_absolutize_nested_refs!``. Classifying first would anchor an expanded
+    ABSOLUTE ref at ``mount_base`` as though it were relative — the
+    ``${ESD_ROOT}/…`` sibling-library form is exactly that case."""
     if not injected_imports:
         return []
     out: list[Any] = []
@@ -1619,13 +1625,11 @@ def _absolutize_injected_imports(
         e = copy.deepcopy(entry)
         if isinstance(e, dict):
             ref = e.get("ref")
-            if (
-                isinstance(ref, str)
-                and ref
-                and not ref.startswith(("http://", "https://"))
-                and not os.path.isabs(ref)
-            ):
-                e["ref"] = os.path.abspath(os.path.join(mount_base, ref))
+            if isinstance(ref, str) and ref:
+                ref = expand_ref_env(ref)
+                if not ref.startswith(("http://", "https://")) and not os.path.isabs(ref):
+                    ref = os.path.abspath(os.path.join(mount_base, ref))
+                e["ref"] = ref
         out.append(e)
     return out
 
