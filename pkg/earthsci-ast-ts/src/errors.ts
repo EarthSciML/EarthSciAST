@@ -100,6 +100,12 @@ export const ERROR_CODES = {
   //   naming an index set absent from the document `index_sets` registry
   //   (RFC semiring-faq-unified-ir §5.2; no implicit interval is inferred).
   UNDEFINED_INDEX_SET: 'undefined_index_set',
+  // `ragged_values_not_gathered` — a `faq` that is not a value-invention node
+  //   ranges over a `kind: "ragged"` index set, but its body never reads that
+  //   set's `values` array. The range binds the POSITION k in 1..offsets[parent],
+  //   not a member, so the body reads positions where the author meant members
+  //   (esm-spec §4.3.1 "Ragged ranges").
+  RAGGED_VALUES_NOT_GATHERED: 'ragged_values_not_gathered',
   // `invalid_broadcast_fn` — a `broadcast` node's `fn` is absent, does not name
   //   a SCALAR operator, or is applied to an argument count that operator's
   //   §4.2 arity does not admit (esm-spec §4.3.4 / §9.6.6). The value analogue

@@ -53,6 +53,12 @@ const (
 	// guard 2 (no relational engine on the hot path) forbids it. RFC §6.1,
 	// CONFORMANCE_SPEC §5.7.6 guard 2.
 	CodeRelationalNodeInContinuous = "relational_node_in_continuous"
+	// CodeRaggedValuesNotGathered: a `faq` that is not a value-invention node
+	// ranges over a `kind: "ragged"` index set, but its body never reads that
+	// set's `values` array. The range binds the POSITION k in 1..offsets[parent],
+	// not a member, so the body reads positions where the author meant members
+	// (esm-spec §4.3.1 "Ragged ranges").
+	CodeRaggedValuesNotGathered = "ragged_values_not_gathered"
 	// CodeUndefinedIndexSet: an aggregate `ranges` entry `{from: NAME}` names an
 	// index set that is not a key of the document `index_sets` registry. No
 	// implicit interval is inferred for an undeclared name (RFC §5.2).
@@ -102,6 +108,7 @@ func (s *structuralScan) validateModelStaticAggregateChecks(modelName string, mo
 			s.checkAggregateJoinKeys(node, fieldPath, modelName, seen)
 			s.checkAggregateJoinSides(node, varShapes, fieldPath, modelName, seen)
 			s.checkAggregateUndefinedIndexSet(node, fieldPath, modelName, seen)
+			s.checkAggregateRaggedValuesGathered(node, fieldPath, modelName, seen)
 			s.checkAggregateRelationalInContinuous(node, stateVars, fieldPath, modelName, seen)
 		})
 	}
@@ -150,6 +157,120 @@ func (s *structuralScan) checkAggregateUndefinedIndexSet(node ExprNode, fieldPat
 			Details: map[string]any{
 				"index_set": name,
 				"range":     rangeKey,
+				"model":     modelName,
+			},
+		})
+	}
+}
+
+// valueInventionBodyOps are the body ops that make a `faq` a value-invention
+// node. Over such a node a ragged range binds the MEMBER values[parent, k]
+// itself (esm-spec §4.3.1 "Ragged ranges"), so its `values` gather is implicit
+// rather than authored.
+var valueInventionBodyOps = map[string]bool{
+	"skolem": true, "rank": true, "distinct": true, "argmin": true, "argmax": true,
+}
+
+// isValueInventionFAQ reports whether node is a value-invention `faq`:
+// `distinct: true`, a `skolem` key, or a skolem / rank / distinct / arg-witness
+// body.
+func isValueInventionFAQ(node ExprNode) bool {
+	if node.Distinct != nil && *node.Distinct {
+		return true
+	}
+	if key, ok := asExprNode(node.Key); ok && key.Op == "skolem" {
+		return true
+	}
+	body, ok := asExprNode(node.Expr)
+	return ok && valueInventionBodyOps[body.Op]
+}
+
+// containsTemplateReference reports whether expr holds a surviving
+// `apply_expression_template` reference (esm-spec §9.6.4), whose body a static
+// walk of this document cannot see.
+func containsTemplateReference(expr Expression) bool {
+	found := false
+	walkOperatorNodes(expr, func(n ExprNode) {
+		if n.Op == "apply_expression_template" {
+			found = true
+		}
+	})
+	return found
+}
+
+// checkAggregateRaggedValuesGathered reports ragged_values_not_gathered for
+// every range of a `faq` that iterates a declared `kind: "ragged"` index set
+// whose `values` array the body (`expr` / `filter`) never reads (esm-spec
+// §4.3.1 "Ragged ranges", issue #259). Such a range binds the POSITION k in
+// 1..offsets[parent], never a member, so the body reads positions where the
+// author meant members.
+//
+// Not decided for a value-invention node, which binds the member itself, nor
+// for a body that still holds a template reference, which may do the gather out
+// of sight. A set the document does not declare is left to the build, as
+// checkAggregateUndefinedIndexSet does.
+func (s *structuralScan) checkAggregateRaggedValuesGathered(node ExprNode, fieldPath, modelName string, seen map[string]bool) {
+	if s.file == nil || len(s.file.IndexSets) == 0 || len(node.Ranges) == 0 || isValueInventionFAQ(node) {
+		return
+	}
+	if containsTemplateReference(node.Expr) || containsTemplateReference(node.Filter) {
+		return
+	}
+	refs := make(map[string]bool)
+	collectStringLeaves(node.Expr, refs)
+	collectStringLeaves(node.Filter, refs)
+	for _, rangeKey := range sortedKeys(node.Ranges) {
+		name := rangeFromName(node.Ranges[rangeKey])
+		if name == "" {
+			continue
+		}
+		iset, declared := s.file.IndexSets[name]
+		if !declared || iset.Kind != "ragged" || iset.Values == nil {
+			continue
+		}
+		values := *iset.Values
+		gathered := false
+		for ref := range refs {
+			if ref == values || strings.HasSuffix(ref, "."+values) {
+				gathered = true
+				break
+			}
+		}
+		if gathered {
+			continue
+		}
+		dedup := "ragged_values_not_gathered|" + fieldPath + "|" + rangeKey
+		if seen[dedup] {
+			continue
+		}
+		seen[dedup] = true
+		parents := []string{}
+		if m, ok := node.Ranges[rangeKey].(map[string]any); ok {
+			if of, ok := m["of"].([]any); ok {
+				for _, p := range of {
+					if ps, ok := p.(string); ok {
+						parents = append(parents, ps)
+					}
+				}
+			}
+		}
+		parent := strings.Join(parents, ", ")
+		if parent == "" {
+			parent = "<parent>"
+		}
+		offsets := "offsets"
+		if iset.Offsets != nil {
+			offsets = *iset.Offsets
+		}
+		s.addErr(StructuralError{
+			Path: fieldPath,
+			Code: CodeRaggedValuesNotGathered,
+			Message: fmt.Sprintf("faq range '%s' iterates ragged index set '%s', so it binds the POSITION k in 1..%s[%s], not a member; the body never reads the set's `values` array '%s'. Gather the member explicitly: index(%s, %s, %s)",
+				rangeKey, name, offsets, parent, values, values, parent, rangeKey),
+			Details: map[string]any{
+				"range":     rangeKey,
+				"index_set": name,
+				"values":    values,
 				"model":     modelName,
 			},
 		})

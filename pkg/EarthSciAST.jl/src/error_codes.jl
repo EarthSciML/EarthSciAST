@@ -77,6 +77,12 @@ const ERROR_CODES = (
     # surprise at build time; the self-edge of a §4.3.1.1 recurrence CANDIDATE
     # is an ordering WITHIN one variable and is not one of these edges.
     OBSERVED_CYCLE = "observed_cycle",
+    # esm-spec §4.3.1 "Ragged ranges" (issue #259): a non-value-invention `faq`
+    # ranges over a `kind: "ragged"` index set but its body never reads that
+    # set's `values` array. The range symbol binds the POSITION k in
+    # 1..offsets[parent], not a member, so the body reads positions — a
+    # plausible wrong number rather than a failure.
+    RAGGED_VALUES_NOT_GATHERED = "ragged_values_not_gathered",
     # An output name -- an `observed` request handed to `derive_output_plan` --
     # that matches no variable exactly and whose last dotted segment is shared
     # by more than one variable (CONFORMANCE_SPEC §5.17.4). A last-segment match

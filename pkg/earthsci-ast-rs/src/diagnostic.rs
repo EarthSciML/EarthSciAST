@@ -390,6 +390,11 @@ diagnostic_code_registry! {
     AMBIGUOUS_OUTPUT_NAME = "ambiguous_output_name";
     /// An `operator` whose declared variable the model does not have.
     OPERATOR_VARIABLE_MISSING = "operator_variable_missing";
+    /// A non-value-invention `faq` ranges over a `kind: "ragged"` index set
+    /// but its body never reads that set's `values` array (esm-spec §4.3.1
+    /// "Ragged ranges"): the range binds the POSITION k in 1..offsets[parent],
+    /// so the body reads positions where the author meant members.
+    RAGGED_VALUES_NOT_GATHERED = "ragged_values_not_gathered";
     /// A causal self-read (esm-spec §4.3.1.1) that is not strictly earlier
     /// along exactly one axis.
     RECURRENCE_NOT_WELLFOUNDED = "recurrence_not_wellfounded";
@@ -596,6 +601,7 @@ mod error_code_tests {
             "null_reaction",
             "observed_cycle",
             "operator_variable_missing",
+            "ragged_values_not_gathered",
             "recurrence_not_wellfounded",
             "recurrence_unsupported_form",
             "relational_node_in_continuous",
