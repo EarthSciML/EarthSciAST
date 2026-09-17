@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { flatten } from './flatten.js'
 import { expandCouplingImports, isCouplingLibraryDoc } from './coupling-imports.js'
+import { validateText } from './index.js'
 import { errCode as errCodeShared } from './test-helpers.js'
 import type { EsmFile } from './types.js'
 
@@ -324,5 +325,37 @@ describe('role collection + rewrite parity across edge types (esm-spec §10.10.2
     expect(errCode(() => expandCouplingImports(file, { loadRef: () => badCoupleLib }))).toBe(
       'coupling_edge_unknown_role',
     )
+  })
+})
+
+describe('coupling-library refs resolve against roles, not systems', () => {
+  // A library's from/to prefixes name ROLES, and it holds no models by
+  // definition (esm-spec §10.9), so resolving them against the model key set
+  // rejected every well-formed library — including EarthSciModels' own
+  // fastjx_superfast.esm and wildlandfire_behavior.esm.
+  const lib = {
+    esm: '1.1.0',
+    metadata: { name: 'RoleScopedLib' },
+    coupling_roles: {
+      Source: { description: 'provides x' },
+      Sink: { description: 'consumes x' },
+    },
+    coupling: [
+      { type: 'variable_map', from: 'Source.x', to: 'Sink.x', transform: 'param_to_var' },
+    ],
+  }
+
+  it('accepts a library whose refs all name a declared role', () => {
+    const result = validateText(JSON.stringify(lib))
+    expect(result.structural_errors).toEqual([])
+  })
+
+  it('rejects a ref naming an undeclared role', () => {
+    const typo = JSON.parse(JSON.stringify(lib))
+    typo.coupling[0].to = 'Snik.x'
+    const errors = validateText(JSON.stringify(typo)).structural_errors
+    expect(errors).toHaveLength(1)
+    expect(errors[0].path).toBe('/coupling/0/to')
+    expect(errors[0].message).toContain("undeclared role \"Snik\"")
   })
 })

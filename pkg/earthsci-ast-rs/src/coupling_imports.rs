@@ -68,8 +68,14 @@ fn is_object(v: &Value) -> bool {
 /// `coupling_roles`, esm-spec §10.9). Presence of that key is the sole positive
 /// identifier of the file kind; purity is checked separately at the import edge.
 pub fn is_coupling_library_doc(raw: &Value) -> bool {
-    raw.as_object()
-        .is_some_and(|o| o.contains_key("coupling_roles"))
+    raw.as_object().is_some_and(is_coupling_library_obj)
+}
+
+/// [`is_coupling_library_doc`] for a document that has already been destructured
+/// into its top-level map, so callers holding one need not clone it into a
+/// [`Value`] to ask.
+pub fn is_coupling_library_obj(obj: &serde_json::Map<String, Value>) -> bool {
+    obj.contains_key("coupling_roles")
 }
 
 /// True when `file` carries at least one `coupling_import` entry in its

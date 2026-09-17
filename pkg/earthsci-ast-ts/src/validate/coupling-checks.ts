@@ -123,12 +123,46 @@ function systemPathExists(ref: string, esmFile: EsmFile): boolean {
 }
 
 /**
+ * Resolve a coupling library's role-scoped `from`/`to` refs against its declared
+ * `coupling_roles`. This keeps the typo check the system-based path exists for,
+ * on the only vocabulary a library has.
+ */
+function validateCouplingRoleRefs(esmFile: EsmFile): StructuralError[] {
+  const errors: StructuralError[] = []
+  const roles = new Set(Object.keys(esmFile.coupling_roles || {}))
+  for (let i = 0; i < (esmFile.coupling || []).length; i++) {
+    const entry = esmFile.coupling![i] as { from?: unknown; to?: unknown }
+    for (const field of ['from', 'to'] as const) {
+      const ref = entry[field]
+      if (typeof ref !== 'string' || !ref.includes('.')) continue
+      const [role] = splitScopedRef(ref)
+      if (!roles.has(role)) {
+        errors.push({
+          path: `/coupling/${i}/${field}`,
+          code: ERROR_CODES.UNDEFINED_SYSTEM,
+          message: `reference "${ref}" to undeclared role "${role}" (a coupling library's refs must name a role in \`coupling_roles\`)`,
+          details: { reference: ref, role, expected_in: 'coupling_roles' },
+        })
+      }
+    }
+  }
+  return errors
+}
+
+/**
  * Check coupling entries reference integrity
  */
 export function validateCouplingIntegrity(esmFile: EsmFile): StructuralError[] {
   const errors: StructuralError[] = []
 
   if (!esmFile.coupling) return errors
+
+  // In a coupling-library file (esm-spec §10.9) every endpoint prefix names a
+  // declared ROLE, not a system, and the library holds no models by definition —
+  // resolving them against the model/reaction-system key set would reject every
+  // well-formed library. `coupling_roles` is the sole positive identifier of the
+  // kind.
+  if (esmFile.coupling_roles) return validateCouplingRoleRefs(esmFile)
 
   // Collect all available systems
   // Data sources are deliberately absent: a source cannot be a coupling

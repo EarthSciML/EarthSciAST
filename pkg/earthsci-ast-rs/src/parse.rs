@@ -1070,6 +1070,40 @@ fn coupled_system_names_raw(obj: &serde_json::Map<String, Value>) -> HashSet<Str
     coupled
 }
 
+/// In a coupling-library file (esm-spec §10.9) the `coupling[].from`/`.to`
+/// prefixes name declared ROLES, not systems: the library holds no models, so
+/// resolving them against a symbol table would reject every well-formed library.
+/// Check them against `coupling_roles` instead, which still catches the typo the
+/// system check was there to catch.
+fn check_coupling_role_references(
+    obj: &serde_json::Map<String, Value>,
+    coupling: &[Value],
+    errors: &mut Vec<String>,
+) {
+    let roles: std::collections::HashSet<&str> = obj
+        .get("coupling_roles")
+        .and_then(|v| v.as_object())
+        .map(|o| o.keys().map(String::as_str).collect())
+        .unwrap_or_default();
+    for (i, c) in coupling.iter().enumerate() {
+        let Some(cobj) = c.as_object() else { continue };
+        for key in ["from", "to"] {
+            let Some(r) = cobj.get(key).and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let Some((role, _)) = r.split_once('.') else {
+                continue;
+            };
+            if !roles.contains(role) {
+                errors.push(format!(
+                    "coupling[{i}]/{key}: reference '{r}' to undeclared role '{role}' \
+                     (a coupling library's refs must name a role in `coupling_roles`)"
+                ));
+            }
+        }
+    }
+}
+
 /// `coupling[].from` and `coupling[].to` must point to variables declared
 /// somewhere in the file. We only enforce `from`, matching Python's lenient
 /// handling of `to` (variable_map can introduce target vars).
@@ -1077,6 +1111,12 @@ fn check_coupling_references(obj: &serde_json::Map<String, Value>, errors: &mut 
     let Some(coupling) = obj.get("coupling").and_then(|v| v.as_array()) else {
         return;
     };
+    // A coupling library's refs are role-scoped, not system-scoped (esm-spec
+    // §10.9); `coupling_roles` is the sole positive identifier of the kind.
+    if crate::coupling_imports::is_coupling_library_obj(obj) {
+        check_coupling_role_references(obj, coupling, errors);
+        return;
+    }
     let tables = build_symbol_tables(obj);
 
     for (i, c) in coupling.iter().enumerate() {

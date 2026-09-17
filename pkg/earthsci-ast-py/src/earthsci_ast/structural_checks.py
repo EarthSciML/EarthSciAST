@@ -2079,11 +2079,43 @@ def _check_coupling_systems(
                 )
 
 
+def _check_coupling_role_references(data: dict[str, Any], errors: list[str]) -> None:
+    """Resolve a coupling library's role-scoped refs against its declared roles.
+
+    This keeps the typo check the system-based path exists for, on the only
+    vocabulary a library has. Unlike that path we also check 'to': a library
+    cannot introduce a target outside its roles.
+    """
+    roles = data.get("coupling_roles") or {}
+    for i, c in enumerate(data.get("coupling", [])):
+        if not isinstance(c, dict):
+            continue
+        for key in ("from", "to"):
+            ref = c.get(key)
+            if not isinstance(ref, str) or "." not in ref:
+                continue
+            role = ref.split(".", 1)[0]
+            if role not in roles:
+                errors.append(
+                    f"coupling[{i}]/{key}: reference '{ref}' to undeclared role "
+                    f"'{role}' (a coupling library's refs must name a role in "
+                    f"`coupling_roles`)"
+                )
+
+
 def _check_coupling_references(
     data: dict[str, Any], tables: dict[str, Any], errors: list[str]
 ) -> None:
     """Check that coupling 'from' references resolve to valid scoped refs.
     'to' is intentionally lenient since variable_map can introduce new target vars."""
+    # In a coupling-library file (esm-spec §10.9) the from/to prefixes name
+    # declared ROLES, not systems, and the library holds no models by
+    # definition — resolving them against the symbol tables would reject every
+    # well-formed library. `coupling_roles` is the sole positive identifier of
+    # the kind.
+    if "coupling_roles" in data:
+        _check_coupling_role_references(data, errors)
+        return
     for i, c in enumerate(data.get("coupling", [])):
         ref = c.get("from")
         if not isinstance(ref, str) or "." not in ref:

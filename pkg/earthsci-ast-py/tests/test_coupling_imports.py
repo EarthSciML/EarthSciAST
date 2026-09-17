@@ -550,3 +550,41 @@ def test_validate_reports_a_mis_bound_import_on_the_source_document():
     text = open(os.path.join(_CORPUS, "import_misbind_downstream.esm")).read()
     no_base = validate(load_string(text))
     assert not [e for e in no_base.structural_errors if "coupling_import" in (e.details or {})]
+
+
+def test_coupling_library_refs_resolve_against_roles_not_systems():
+    """A coupling library's from/to prefixes name ROLES, not systems.
+
+    The library holds no models by definition (esm-spec §10.9), so resolving its
+    refs against the symbol tables rejected every well-formed library — including
+    EarthSciModels' own fastjx_superfast.esm and wildlandfire_behavior.esm. A
+    ref naming an undeclared role must still be rejected.
+    """
+    lib = {
+        "esm": "1.1.0",
+        "metadata": {"name": "RoleScopedLib"},
+        "coupling_roles": {
+            "Source": {"description": "provides x"},
+            "Sink": {"description": "consumes x"},
+        },
+        "coupling": [
+            {
+                "type": "variable_map",
+                "from": "Source.x",
+                "to": "Sink.x",
+                "transform": "param_to_var",
+            }
+        ],
+    }
+    assert load_string(json.dumps(lib)) is not None
+
+    typo = json.loads(json.dumps(lib))
+    typo["coupling"][0]["to"] = "Snik.x"
+    try:
+        load_string(json.dumps(typo))
+    except Exception as exc:  # noqa: BLE001 - the binding's own error type
+        message = str(exc)
+    else:
+        raise AssertionError("a ref naming an undeclared role must be rejected")
+    assert "coupling[0]/to" in message
+    assert "undeclared role 'Snik'" in message

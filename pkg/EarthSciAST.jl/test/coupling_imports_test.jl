@@ -320,3 +320,31 @@ end
     @test isempty([e for e in no_base.structural_errors
                    if haskey(e.details, "coupling_import")])
 end
+
+@testset "coupling-library refs resolve against roles, not systems" begin
+    # A library's from/to prefixes name ROLES, and it declares no models by
+    # definition (esm-spec §10.9), so resolving them against the file's systems
+    # rejected every well-formed library — including EarthSciModels' own
+    # fastjx_superfast.esm and wildlandfire_behavior.esm.
+    lib = """
+    {
+      "esm": "1.1.0",
+      "metadata": {"name": "RoleScopedLib"},
+      "coupling_roles": {
+        "Source": {"description": "provides x"},
+        "Sink": {"description": "consumes x"}
+      },
+      "coupling": [
+        {"type": "variable_map", "from": "Source.x", "to": "Sink.x",
+         "transform": "param_to_var"}
+      ]
+    }"""
+    ok = EarthSciAST.validate(load_string(lib))
+    @test isempty(ok.structural_errors)
+
+    typo = replace(lib, "\"Sink.x\"" => "\"Snik.x\"")
+    bad = EarthSciAST.validate(load_string(typo))
+    @test length(bad.structural_errors) == 1
+    @test bad.structural_errors[1].path == "/coupling/0/to"
+    @test occursin("undeclared role 'Snik'", bad.structural_errors[1].message)
+end

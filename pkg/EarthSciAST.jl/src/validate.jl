@@ -2879,6 +2879,34 @@ function _check_connector_expressions(file::EsmFile, entry::CouplingCouple,
 end
 
 """
+    _check_coupling_role_references(file, coupling_entry, path) -> Vector{StructuralError}
+
+Resolve a coupling library's role-scoped `from`/`to` refs against its declared
+`coupling_roles`. This keeps the typo check the system-based path exists for, on
+the only vocabulary a library has. Unlike that path it also checks `to`: a
+library cannot introduce a target outside its roles.
+"""
+function _check_coupling_role_references(file::EsmFile, coupling_entry::CouplingEntry, path::String)::Vector{StructuralError}
+    errors = StructuralError[]
+    isa(coupling_entry, CouplingVariableMap) || return errors
+    roles = file.coupling_roles === nothing ? Dict{String,Any}() : file.coupling_roles
+    for (field, ref) in (("from", coupling_entry.from), ("to", coupling_entry.to))
+        (ref isa AbstractString && occursin('.', ref)) || continue
+        role = String(first(split(ref, '.')))
+        if !haskey(roles, role)
+            push!(errors, StructuralError(
+                "$path/$field",
+                "reference '$ref' to undeclared role '$role' (a coupling library's refs must name a role in `coupling_roles`)",
+                ERROR_CODES.UNDEFINED_SYSTEM,
+                Dict{String,Any}("reference" => ref, "role" => role,
+                                 "expected_in" => "coupling_roles")
+            ))
+        end
+    end
+    return errors
+end
+
+"""
     validate_coupling_references(file::EsmFile, coupling_entry::CouplingEntry, path::String) -> Vector{StructuralError}
 
 Validate coupling references based on the specific coupling type.
@@ -2886,6 +2914,14 @@ Checks that systems, operators, and variable references can be resolved.
 """
 function validate_coupling_references(file::EsmFile, coupling_entry::CouplingEntry, path::String)::Vector{StructuralError}
     errors = StructuralError[]
+
+    # In a coupling-library file (esm-spec §10.9) every endpoint prefix names a
+    # declared ROLE, not a system, and the library holds no models by definition
+    # — resolving them against the file's systems would reject every well-formed
+    # library. `coupling_roles` is the sole positive identifier of the kind.
+    if file.coupling_roles !== nothing
+        return _check_coupling_role_references(file, coupling_entry, path)
+    end
 
     if isa(coupling_entry, CouplingOperatorCompose)
         # Validate that all referenced systems exist. The defect is carried by
