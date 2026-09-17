@@ -52,6 +52,14 @@ pub(crate) fn validate_model(
             errors,
         );
     }
+    // esm-spec §6.3: inline array data is a shaped variable's value, so on a
+    // variable with no `shape` it has nothing to fill.
+    check_array_defaults_have_shape(
+        model,
+        &format!("/models/{model_name}"),
+        &format!("Model '{model_name}'"),
+        errors,
+    );
 
     ctx.check_equation_balance(errors);
     let unit_env = ctx.check_unit_declarations(errors);
@@ -349,6 +357,16 @@ impl<'a> ModelCtx<'a> {
             // property of the equation, not of one side.)
             for (field, expr) in [("lhs", &equation.lhs), ("rhs", &equation.rhs)] {
                 self.check_refs(expr, &format!("{eq_path}/{field}"), eq_idx, errors);
+                // A declared `const` unit string that does not resolve is a
+                // defect at the containing expression field (esm-spec §4.8.5).
+                for units in crate::units::unresolvable_const_units(expr) {
+                    errors.push(StructuralError {
+                        path: format!("{eq_path}/{field}"),
+                        code: StructuralErrorCode::UnitParseError,
+                        message: format!("Unit string '{units}' is not a recognised unit"),
+                        details: serde_json::json!({ "units": units }),
+                    });
+                }
             }
 
             // Validate dimensional consistency of the equation via expression-level
@@ -933,6 +951,109 @@ fn check_reserved_subsystem_names<'a, I>(
     }
 }
 
+/// One `array_default_without_shape` finding, at the offending `default` field.
+fn array_default_without_shape(
+    model_path: &str,
+    owner: &str,
+    name: &str,
+    var_type: &str,
+) -> StructuralError {
+    StructuralError {
+        path: format!("{model_path}/variables/{name}/default"),
+        code: StructuralErrorCode::ArrayDefaultWithoutShape,
+        message: format!(
+            "{owner} variable '{name}' has inline array data as its default but declares no \
+             shape; inline array data is a shaped variable's value (esm-spec §6.3)"
+        ),
+        details: serde_json::json!({ "variable": name, "variable_type": var_type }),
+    }
+}
+
+/// `array_default_without_shape` for every variable of `model`, and of its
+/// inline subsystems, whose `default` is inline ARRAY data but which declares
+/// no `shape` (esm-spec §6.3).
+///
+/// Inline array data is a SHAPED variable's value, so with no shape (omitted,
+/// null or empty) there is nothing for it to fill. `prepare::scalar_params`
+/// still keeps such a parameter out of the build's scalar scope, so a route
+/// that skips validation reads it fail-closed rather than as a fabricated
+/// number; this is the load-time rejection that names the declaration.
+fn check_array_defaults_have_shape(
+    model: &crate::Model,
+    model_path: &str,
+    owner: &str,
+    errors: &mut Vec<StructuralError>,
+) {
+    let mut names: Vec<&String> = model.variables.keys().collect();
+    names.sort();
+    for name in names {
+        let var = &model.variables[name];
+        let is_array = matches!(var.default, Some(crate::types::InlineValue::Array(_)));
+        let shaped = var.shape.as_ref().is_some_and(|s| !s.is_empty());
+        if is_array && !shaped {
+            let var_type = serde_json::to_value(var.var_type)
+                .ok()
+                .and_then(|v| v.as_str().map(str::to_string))
+                .unwrap_or_default();
+            errors.push(array_default_without_shape(
+                model_path, owner, name, &var_type,
+            ));
+        }
+    }
+    if let Some(subsystems) = &model.subsystems {
+        check_subsystem_array_defaults(
+            subsystems.iter(),
+            &format!("{model_path}/subsystems"),
+            errors,
+        );
+    }
+}
+
+/// [`check_array_defaults_have_shape`] over every INLINE subsystem, recursively.
+/// `Model::subsystems` is untyped (an entry may be an unresolved `{"ref": …}`,
+/// which has no `variables`), so the walk is over raw JSON.
+fn check_subsystem_array_defaults<'a, I>(
+    subsystems: I,
+    base_path: &str,
+    errors: &mut Vec<StructuralError>,
+) where
+    I: IntoIterator<Item = (&'a String, &'a serde_json::Value)>,
+{
+    let mut entries: Vec<(&String, &serde_json::Value)> = subsystems.into_iter().collect();
+    entries.sort_by(|a, b| a.0.cmp(b.0));
+    for (name, value) in entries {
+        let sub_path = format!("{base_path}/{name}");
+        if let Some(vars) = value.get("variables").and_then(|v| v.as_object()) {
+            let mut keys: Vec<&String> = vars.keys().collect();
+            keys.sort();
+            for key in keys {
+                let var = &vars[key.as_str()];
+                let is_array = var.get("default").is_some_and(|d| d.is_array());
+                let shaped = var
+                    .get("shape")
+                    .and_then(|s| s.as_array())
+                    .is_some_and(|s| !s.is_empty());
+                if is_array && !shaped {
+                    let var_type = var.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                    errors.push(array_default_without_shape(
+                        &sub_path,
+                        &format!("Model '{name}'"),
+                        key,
+                        var_type,
+                    ));
+                }
+            }
+        }
+        if let Some(nested) = value.get("subsystems").and_then(|v| v.as_object()) {
+            check_subsystem_array_defaults(
+                nested.iter(),
+                &format!("{sub_path}/subsystems"),
+                errors,
+            );
+        }
+    }
+}
+
 /// True when this LHS marks an initial condition (`{"op": "ic", ...}`).
 fn is_ic_equation(lhs: &crate::Expr) -> bool {
     matches!(lhs, crate::Expr::Operator(op) if op.op == "ic")
@@ -1091,6 +1212,21 @@ fn validator_symbol_bounds(
 struct StructuralAffine {
     coef: i64,
     konst: Option<(i64, i64)>,
+}
+
+/// Guidance appended to the not-affine refusal of a causal self-read. The case
+/// it names is the one authors reach for: a lag read from DATA
+/// (`k - index(lag, k)`), where `lag[k]` is a value rather than a symbol with a
+/// range. Shared by the validator and the compile path so the two refusals say
+/// the same thing.
+pub(crate) fn data_lag_guidance(var: &str, sym: &str) -> String {
+    format!(
+        "If the offset is read from data (`{sym} - index(lag, {sym})`), it has no direct \
+         spelling; contract it instead: either order the axis so the predecessor is the \
+         preceding position and the lag is the constant 1, or range a contracted index `a` \
+         over the lag's bounds and select the matching term with \
+         `ifelse(index(lag, {sym}) == a, <term reading index({var}, {sym} - a)>, 0)`."
+    )
 }
 
 fn structural_affine_in_sym(
@@ -1431,7 +1567,9 @@ fn check_recurrence_equation(
                         "index {d} of a causal self-read of '{var}' is not affine in its frame \
                          symbol '{sym}'. A self-read names a position RELATIVE to the cell being \
                          written (`{sym} - 1`, `{sym} - a`, `{sym} - a - 2`), which is what makes \
-                         the recurrence axis and its direction decidable (esm-spec §4.3.1.1)."
+                         the recurrence axis and its direction decidable (esm-spec §4.3.1.1). \
+                         {}",
+                        data_lag_guidance(var, sym)
                     ),
                     None,
                 );
@@ -1990,6 +2128,54 @@ fn check_join_sides(
     }
 }
 
+/// Body ops that make a `faq` a value-invention node. Over such a node a ragged
+/// range binds the MEMBER `values[parent, k]` itself (esm-spec §4.3.1 "Ragged
+/// ranges"), so its `values` gather is implicit rather than authored.
+const VALUE_INVENTION_BODY_OPS: [&str; 5] = ["skolem", "rank", "distinct", "argmin", "argmax"];
+
+/// Whether `node` is a value-invention `faq`: `distinct: true`, a `skolem`
+/// key, or a skolem / rank / distinct / arg-witness body.
+fn is_value_invention_faq(node: &crate::types::ExpressionNode) -> bool {
+    if node.distinct == Some(true) {
+        return true;
+    }
+    if matches!(node.key.as_deref(), Some(crate::Expr::Operator(key)) if key.op == "skolem") {
+        return true;
+    }
+    matches!(
+        node.expr.as_deref(),
+        Some(crate::Expr::Operator(body)) if VALUE_INVENTION_BODY_OPS.contains(&body.op.as_str())
+    )
+}
+
+/// Whether `expr` holds a surviving `apply_expression_template` reference
+/// (esm-spec §9.6.4), whose body a static walk of this document cannot see.
+fn contains_template_reference(expr: &crate::Expr) -> bool {
+    let crate::Expr::Operator(node) = expr else {
+        return false;
+    };
+    if node.op == "apply_expression_template" {
+        return true;
+    }
+    let mut found = false;
+    node.for_each_child(&mut |child| found = found || contains_template_reference(child));
+    found
+}
+
+/// Collect every variable-reference name in `expr`, scoped (dotted) names
+/// included.
+fn collect_variable_refs(expr: &crate::Expr, out: &mut HashSet<String>) {
+    match expr {
+        crate::Expr::Variable(name) => {
+            out.insert(name.clone());
+        }
+        crate::Expr::Operator(node) => {
+            node.for_each_child(&mut |child| collect_variable_refs(child, out));
+        }
+        crate::Expr::Number(_) | crate::Expr::Integer(_) => {}
+    }
+}
+
 /// Apply the three static aggregate checks to a single `faq` node.
 fn check_aggregate_node(
     node: &crate::types::ExpressionNode,
@@ -2084,6 +2270,66 @@ fn check_aggregate_node(
                     }),
                 });
                 break 'cols;
+            }
+        }
+    }
+
+    // (d) ragged_values_not_gathered (esm-spec §4.3.1 "Ragged ranges", issue
+    // #259): a range over a `kind: "ragged"` index set binds the POSITION k in
+    // 1..offsets[parent], never a member, so a body (`expr` / `filter`) that
+    // never reads the set's `values` array reads positions where the author
+    // meant members. Not decided for a value-invention node, which binds the
+    // member itself, nor for a body still holding a template reference, which
+    // may do the gather out of sight.
+    if let (Some(ranges), Some(sets)) = (&node.ranges, index_sets)
+        && !is_value_invention_faq(node)
+    {
+        let body: Vec<&crate::Expr> = [node.expr.as_deref(), node.filter.as_deref()]
+            .into_iter()
+            .flatten()
+            .collect();
+        if !body.iter().any(|part| contains_template_reference(part)) {
+            let mut refs = HashSet::new();
+            for part in &body {
+                collect_variable_refs(part, &mut refs);
+            }
+            let mut syms: Vec<&String> = ranges.keys().collect();
+            syms.sort();
+            for sym in syms {
+                let crate::types::RangeSpec::IndexSetRef { from, of } = &ranges[sym] else {
+                    continue;
+                };
+                let Some(iset) = sets.get(from) else {
+                    continue;
+                };
+                if iset.kind != "ragged" {
+                    continue;
+                }
+                let Some(values) = iset.values.as_deref() else {
+                    continue;
+                };
+                let scoped = format!(".{values}");
+                if refs.iter().any(|r| r == values || r.ends_with(&scoped)) {
+                    continue;
+                }
+                let parent = of
+                    .as_ref()
+                    .filter(|p| !p.is_empty())
+                    .map(|p| p.join(", "))
+                    .unwrap_or_else(|| "<parent>".to_string());
+                let offsets = iset.offsets.as_deref().unwrap_or("offsets");
+                errors.push(StructuralError {
+                    path: field_path.to_string(),
+                    code: StructuralErrorCode::RaggedValuesNotGathered,
+                    message: format!(
+                        "faq range '{sym}' iterates ragged index set '{from}', so it binds the POSITION k in 1..{offsets}[{parent}], not a member; the body never reads the set's `values` array '{values}'. Gather the member explicitly: index({values}, {parent}, {sym})"
+                    ),
+                    details: serde_json::json!({
+                        "range": sym,
+                        "index_set": from,
+                        "values": values,
+                    }),
+                });
             }
         }
     }

@@ -7,6 +7,7 @@ focusing on verification of error codes, cross-references, and semantic consiste
 
 import pytest
 import json
+from pathlib import Path
 from conftest import CORPUS_UNIT_DEFECTS, FIXTURES_ROOT
 
 from earthsci_ast import load_path, load_string
@@ -899,6 +900,34 @@ class TestUnitFindingCodesAreDistinct:
         codes = [e.code for e in result.structural_errors]
         assert "unit_inconsistency" in codes, codes
         assert "unit_parse_error" not in codes, codes
+
+
+class TestArrayDefaultWithoutShape:
+    """esm-spec §6.3 — inline array data is only a SHAPED variable's value.
+
+    On a variable with no ``shape`` there is nothing for the array to fill, so
+    ``array_default_without_shape`` rejects the declaration at load.
+    """
+
+    def test_unshaped_parameter_and_subsystem_unknown_are_rejected(self):
+        fixture = (
+            Path(__file__).resolve().parents[3]
+            / "tests"
+            / "invalid"
+            / "array_default_without_shape.esm"
+        )
+        result = validate_text(fixture.read_text())
+        assert not result.is_valid
+        found = sorted(
+            (e.path, e.details["variable_type"])
+            for e in result.structural_errors
+            if e.code == "array_default_without_shape"
+        )
+        # The shaped control `w` carries the same data legally and is not reported.
+        assert found == [
+            ("/models/Decay/subsystems/Inner/variables/x/default", "unknown"),
+            ("/models/Decay/variables/k/default", "parameter"),
+        ]
 
 
 class TestReservedDeclarationNames:

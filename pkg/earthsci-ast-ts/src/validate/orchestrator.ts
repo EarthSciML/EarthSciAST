@@ -40,9 +40,11 @@ import {
   validateAggregateJoinKeys,
   validateAggregateJoinSides,
   validateAggregateIndexSets,
+  validateRaggedValuesGathered,
   validateRelationalNodesInContinuous,
   validateReservedDeclarationNames,
   validateReservedModelNames,
+  validateArrayDefaultsHaveShape,
 } from './model-checks.js'
 import { validateBroadcastFns, validateArrayBroadcastShapes } from './array-checks.js'
 import { validateObservedCycles } from './observed-checks.js'
@@ -197,6 +199,9 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
       // Recurses into inline subsystems: a subsystem is a model, and a MOUNTED
       // subsystem is the shape #200 was reported in.
       errors.push(...validateReservedModelNames(model, modelPath, `Model '${modelName}'`, esmFile))
+      // esm-spec §6.3: inline array data is a shaped variable's value, so on a
+      // variable with no `shape` it has nothing to fill.
+      errors.push(...validateArrayDefaultsHaveShape(model, modelPath, `Model '${modelName}'`))
 
       // (F-6) Static `faq` semantics decidable from this document alone:
       // a value-equality join key of a non-comparable type, an index-set range
@@ -205,6 +210,7 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
       errors.push(...validateAggregateJoinKeys(model, modelPath, esmFile))
       errors.push(...validateAggregateJoinSides(model, modelPath, esmFile))
       errors.push(...validateAggregateIndexSets(model, modelPath, esmFile))
+      errors.push(...validateRaggedValuesGathered(model, modelPath, esmFile))
       errors.push(...validateRelationalNodesInContinuous(model, modelPath))
 
       // esm-spec §4.3.4. Two rules about ARRAY-LEVEL expressions, both static:
@@ -259,6 +265,7 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
           errors.push(...validateAggregateJoinKeys(subsystem, subsystemPath, esmFile))
           errors.push(...validateAggregateJoinSides(subsystem, subsystemPath, esmFile))
           errors.push(...validateAggregateIndexSets(subsystem, subsystemPath, esmFile))
+          errors.push(...validateRaggedValuesGathered(subsystem, subsystemPath, esmFile))
           errors.push(...validateRelationalNodesInContinuous(subsystem, subsystemPath))
           errors.push(...validateBroadcastFns(subsystem, subsystemPath))
           errors.push(...validateArrayBroadcastShapes(subsystem, subsystemPath))

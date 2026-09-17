@@ -705,19 +705,24 @@ survives composition, which is the spelling composition produces anyway.
 
 ### 5.9 Reference resolution
 
-`build_reference_graph(model, model_name="") -> ReferenceGraph` and
-`resolve_references(document) -> {str: ReferenceGraph}`, raising
-`ReferenceResolutionError`. Julia, Python and Rust only — TypeScript and Go do
-not implement the semiring-FAQ node addressing of RFC §6.1.
+`build_reference_graph(model, model_name="", index_sets=<none>) -> ReferenceGraph`
+and `resolve_references(document) -> {str: ReferenceGraph}`, raising
+`ReferenceResolutionError`. All five bindings export both (TypeScript
+`buildReferenceGraph` / `resolveReferences`, Go `BuildReferenceGraph` /
+`ResolveReferences`). `resolve_references` takes a **loaded** document — the
+output of `load_path` / `load_string` / `load_document`, or its JSON view — whose
+`expression_template_imports` and `{ref}` mounts are already resolved, because an
+imported file's `index_sets` reach the registry only at load (esm-spec §9.7.5) and
+a raw file whose `faq` ranges name an imported axis would otherwise report it as
+`E_REF_UNDECLARED_INDEX_SET`.
 
-> **⚠ A behavioural, not cosmetic, split.** Python's `build_reference_graph`
-> takes a third `index_sets` argument; Rust puts the same capability in a
-> separate `build_reference_graph_with_index_sets`; **Julia has no way to pass a
-> document-scoped registry at all** and reads the pre-0.8.0 model-nested
-> `model["index_sets"]` instead. For a v0.8.0 document whose `index_sets` sits
-> beside `models`, Julia and Python resolve differently. Rust also names the
-> error `ReferenceError` where Julia and Python name it
-> `ReferenceResolutionError`.
+> **The split §8 items 10 and 17 closed.** All five bindings now take the
+> document-scoped registry as an optional third argument to
+> `build_reference_graph`, and all five name the error
+> `ReferenceResolutionError`. Rust keeps
+> `build_reference_graph_with_index_sets` and `ReferenceError` as deprecated
+> aliases for one minor; they are the old spellings of the same function and
+> the same type, not a second capability.
 
 ### 5.10 Reactions
 

@@ -9,7 +9,13 @@ import json
 import os
 
 
-from earthsci_ast import flatten, is_coupling_library_doc, load_document, load_path
+from earthsci_ast import (
+    flatten,
+    is_coupling_library_doc,
+    load_document,
+    load_path,
+    load_string,
+)
 from earthsci_ast.coupling_imports import (
     _rewrite_entry_in_place,
     _rewrite_scoped_ref,
@@ -489,7 +495,7 @@ def test_relative_import_resolves_against_importing_document(monkeypatch, tmp_pa
 def test_loaded_base_wins_and_ref_round_trips_verbatim():
     """The document's own base wins over an unrelated ``base_path``, and the
     authored ``ref`` round-trips verbatim (§10.10.3): the base is recorded beside
-    the entry, never written into it."""
+    the document, never written into the entry."""
     from earthsci_ast import to_json
 
     esm = load_path(os.path.join(_CORPUS, "assembly_import.esm"))
@@ -497,4 +503,21 @@ def test_loaded_base_wins_and_ref_round_trips_verbatim():
     (imp,) = [c for c in esm.coupling if isinstance(c, CouplingImport)]
     assert imp.ref == "./rothermel_fuel.esm"
     assert '"./rothermel_fuel.esm"' in to_json(esm)
-    assert "base_dir" not in to_json(esm)
+    assert "coupling_import_base" not in to_json(esm)
+
+
+def test_in_memory_document_keeps_the_callers_base(monkeypatch, tmp_path):
+    """A document with no location of its own — built in memory, or parsed from
+    text with no base — leaves ``flatten``'s ``base_path`` in charge, and one
+    given an explicit base anchors on it. All five bindings agree on this, so a
+    caller's base is never silently replaced by the working directory."""
+    text = open(os.path.join(_CORPUS, "assembly_import.esm")).read()
+    doc = json.loads(text)
+    monkeypatch.chdir(tmp_path)
+    assert not os.path.exists("rothermel_fuel.esm")
+    # No base of its own -> the caller's base_path resolves the import.
+    assert flatten(load_string(text), base_path=_CORPUS) is not None
+    assert flatten(load_document(doc), base_path=_CORPUS) is not None
+    # An explicit base of its own -> it wins, with no base_path at all.
+    assert flatten(load_string(text, base_path=_CORPUS)) is not None
+    assert flatten(load_document(doc, base_path=_CORPUS)) is not None

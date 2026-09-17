@@ -823,13 +823,28 @@ fn propagate_operator_dim(
             propagate_matching_dim(op, env, findings);
             Dim::Known(Unit::dimensionless())
         }
-        "and" | "or" | "not" => Dim::Known(Unit::dimensionless()),
+        "and" | "or" | "not" => {
+            // A boolean connective's result is a dimensionless boolean. Its
+            // operands carry no unit requirement of their own, but they are
+            // walked so a mismatch inside one (`not(x [m] > z [kg])`) is
+            // reported (esm-spec §4.8.3).
+            propagate_args(op, env, findings);
+            Dim::Known(Unit::dimensionless())
+        }
         // Array operators: propagate the element dimension. Shape and
         // indexing are orthogonal to dimension (see gt-t5c / gt-vt3 — shapes
         // are a separate concern from unit checking).
         "faq" | "makearray" | "index" | "reshape" | "transpose" | "concat" | "broadcast" => {
             propagate_array_dim(op, env, findings)
         }
+        // A `const` that DECLARES its units has that unit (esm-spec §4.8.5);
+        // without `units` it is undeterminable, like a bare literal. An
+        // unresolvable string is reported at the containing expression field by
+        // `structural.rs` (see [`unresolvable_const_units`]), not here.
+        "const" => match op.units.as_deref().map(parse_unit) {
+            Some(Ok(unit)) => Dim::Known(unit),
+            _ => Dim::Unknown,
+        },
         // No dimensional rule for this operator — an unregistered user op, or a
         // rewrite-target sugar op (`grad`/`div`/`laplacian`/`fn`/`table_lookup`/
         // `godunov_hamiltonian`/…) whose dimension is UNDETERMINABLE until a
@@ -844,34 +859,23 @@ fn propagate_operator_dim(
     }
 }
 
-/// True for a bare numeric literal, which is dimensionally NEUTRAL in an
-/// additive position rather than dimensionless. See [`propagate_dim`].
-fn is_literal(expr: &Expr) -> bool {
-    matches!(expr, Expr::Number(_) | Expr::Integer(_))
-}
-
 /// Report a provable mismatch among the operands that DID resolve, and return
 /// the shared dimension. Used by `+`/`-`, `min`/`max`, comparisons and `atan2`.
 ///
 /// Two operands are only ever compared when BOTH dimensions were determined —
 /// an undeterminable operand is skipped, never assumed dimensionless, so it can
-/// neither hide nor manufacture a mismatch.
-///
-/// Bare numeric literals are skipped entirely: they adopt the dimension of what
-/// they are combined with (`T - 273.15` is a temperature). If EVERY operand is
-/// a literal (`1 + 2`, unary `-1`), the result is dimensionless.
+/// neither hide nor manufacture a mismatch (esm-spec §4.8.3). A numeric literal
+/// is undeterminable, so it adopts the dimension of what it is combined with
+/// (`T - 273.15` is a temperature), and `x + 0.5 * y` has the dimension of `x`.
+/// If NO operand resolves (`1 + 2`), the result is undeterminable, never
+/// dimensionless (§4.8.4).
 fn propagate_matching_dim(
     op: &ExpressionNode,
     env: &HashMap<String, Unit>,
     findings: &mut Vec<UnitFinding>,
 ) -> Dim {
     let mut first: Option<Unit> = None;
-    let mut saw_non_literal = false;
     for arg in &op.args {
-        if is_literal(arg) {
-            continue;
-        }
-        saw_non_literal = true;
         let dim = propagate_dim(arg, env, findings);
         let Some(unit) = dim.known() else {
             continue;
@@ -897,9 +901,6 @@ fn propagate_matching_dim(
             _ => {}
         }
     }
-    if !saw_non_literal {
-        return Dim::Known(Unit::dimensionless());
-    }
     match first {
         Some(unit) => Dim::Known(unit),
         None => Dim::Unknown,
@@ -907,19 +908,13 @@ fn propagate_matching_dim(
 }
 
 /// `+` / `-`: every operand must share dimensions; the result carries them.
-/// A unary minus propagates its single argument unchanged.
+/// A unary `+` or `-` carries its single operand's dimension unchanged, so
+/// `+(2)` is as undeterminable as `2`.
 fn propagate_additive_dim(
     op: &ExpressionNode,
     env: &HashMap<String, Unit>,
     findings: &mut Vec<UnitFinding>,
 ) -> Dim {
-    if op.args.is_empty() {
-        return Dim::Known(Unit::dimensionless());
-    }
-    // Unary minus: propagate the single argument.
-    if op.op == "-" && op.args.len() == 1 {
-        return propagate_dim(&op.args[0], env, findings);
-    }
     propagate_matching_dim(op, env, findings)
 }
 
@@ -1188,7 +1183,10 @@ fn propagate_sqrt_dim(
     }
 }
 
-/// `ifelse`: the two branches must share dimensions; the result carries them.
+/// `ifelse`: the two branches follow the `+` rule (esm-spec §4.8.3). When both
+/// are determinable they must share dimension and scale; when only one is, the
+/// result is its unit (`ifelse(c, x, 0.5 * y)` has the unit of `x`); when
+/// neither is (`ifelse(c, 1, 2)`), the result is undeterminable.
 fn propagate_ifelse_dim(
     op: &ExpressionNode,
     env: &HashMap<String, Unit>,
@@ -1221,8 +1219,8 @@ fn propagate_ifelse_dim(
             )));
             Dim::Unknown
         }
-        (Some(a), Some(_)) => Dim::Known(a.clone()),
-        _ => Dim::Unknown,
+        (Some(a), _) | (None, Some(a)) => Dim::Known(a.clone()),
+        (None, None) => Dim::Unknown,
     }
 }
 
@@ -1533,6 +1531,148 @@ pub fn check_expression_dimensions(
         )));
     }
     findings
+}
+
+/// The dimensional analyser's verdict on one equation, in the form a report
+/// prints: checked and consistent, provably inconsistent, or not checked.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EquationDimensionVerdict {
+    /// Both sides resolved and agree. Carries the propagated dimension, spelled
+    /// over the canonical axes (`length*time^-1`).
+    Consistent(String),
+    /// A provable mismatch. Carries every error finding's message.
+    Mismatch(Vec<String>),
+    /// A side's dimension could not be determined, so the comparison was
+    /// skipped (esm-spec §4.8.4). Carries the side and the operand to blame.
+    NotChecked(String),
+}
+
+/// Classify one equation the way [`check_equation_dimensions`] judges it, and
+/// say WHY when it could not be judged.
+///
+/// A `Consistent` verdict is only returned when the comparison actually ran, so
+/// an equation skipped because of an indeterminate operand — a bare literal in a
+/// product, a `const` node that declares no `units`, a variable with no declared
+/// units — is never reported as fine.
+pub fn equation_dimension_verdict(
+    eq: &Equation,
+    env: &HashMap<String, Unit>,
+) -> EquationDimensionVerdict {
+    let errors: Vec<String> = check_equation_dimensions(eq, env)
+        .into_iter()
+        .filter(UnitFinding::is_error)
+        .map(|f| f.message)
+        .collect();
+    if !errors.is_empty() {
+        return EquationDimensionVerdict::Mismatch(errors);
+    }
+    let rhs = propagate_dim(&eq.rhs, env, &mut Vec::new());
+    // `D(x)` against an undeclared time is judged by the time-ratio rule, which
+    // needs the state's dimension rather than the derivative's.
+    let (lhs_label, lhs_expr) = match derivative_of_undeclared_time(&eq.lhs, env) {
+        Some(state) => ("differentiated state", state),
+        None => ("left-hand side", &eq.lhs),
+    };
+    let lhs = propagate_dim(lhs_expr, env, &mut Vec::new());
+    match (lhs.known(), rhs.known()) {
+        (Some(_), Some(r)) => EquationDimensionVerdict::Consistent(describe(r)),
+        (None, _) => EquationDimensionVerdict::NotChecked(format!(
+            "{lhs_label}: {}",
+            indeterminate_operand(lhs_expr, env)
+        )),
+        (_, None) => EquationDimensionVerdict::NotChecked(format!(
+            "right-hand side: {}",
+            indeterminate_operand(&eq.rhs, env)
+        )),
+    }
+}
+
+/// Name the innermost operand that makes `expr`'s dimension indeterminate.
+/// Called only on an expression whose dimension did not resolve.
+fn indeterminate_operand(expr: &Expr, env: &HashMap<String, Unit>) -> String {
+    match expr {
+        Expr::Number(n) => format!("operand `{n}` has an indeterminate dimension"),
+        Expr::Integer(n) => format!("operand `{n}` has an indeterminate dimension"),
+        Expr::Variable(name) => format!("variable `{name}` has no declared units"),
+        Expr::Operator(op) => {
+            // A bare literal is the least informative operand to blame — it is
+            // indeterminate everywhere — so a NAMED operand that is equally
+            // indeterminate is reported in preference to it.
+            let mut literal: Option<String> = None;
+            for arg in &op.args {
+                if propagate_dim(arg, env, &mut Vec::new()).known().is_some() {
+                    continue;
+                }
+                if matches!(arg, Expr::Number(_) | Expr::Integer(_)) {
+                    literal.get_or_insert_with(|| indeterminate_operand(arg, env));
+                    continue;
+                }
+                return indeterminate_operand(arg, env);
+            }
+            literal.unwrap_or_else(|| format!("`{}` node has no determinable dimension", op.op))
+        }
+    }
+}
+
+/// Every declared `const` unit string in `expr` that does not resolve against
+/// the registry (esm-spec §4.8.5 item 2), in walk order.
+pub fn unresolvable_const_units(expr: &Expr) -> Vec<String> {
+    fn walk(expr: &Expr, out: &mut Vec<String>) {
+        if let Expr::Operator(node) = expr {
+            if node.op == "const"
+                && let Some(units) = &node.units
+                && parse_unit(units).is_err()
+            {
+                out.push(units.clone());
+            }
+            node.for_each_child(&mut |child| walk(child, out));
+        }
+    }
+    let mut out = Vec::new();
+    walk(expr, &mut out);
+    out
+}
+
+/// Reject declared `units` on any expression node in a document declaring
+/// `esm` < 1.2.0 (esm-spec §4.8.5 item 6), naming the first offending node.
+/// Runs on the raw JSON before schema validation, like the `solver` gate.
+pub fn reject_const_units_pre_v12(
+    view: &serde_json::Value,
+) -> Result<(), crate::diagnostic::DiagnosticError> {
+    fn find(value: &serde_json::Value, at: &str) -> Option<String> {
+        match value {
+            serde_json::Value::Object(obj) => {
+                if obj.contains_key("op") && obj.contains_key("units") {
+                    return Some(at.to_string());
+                }
+                obj.iter().find_map(|(k, v)| find(v, &format!("{at}/{k}")))
+            }
+            serde_json::Value::Array(items) => items
+                .iter()
+                .enumerate()
+                .find_map(|(i, v)| find(v, &format!("{at}/{i}"))),
+            _ => None,
+        }
+    }
+    let Some(esm) = view.get("esm").and_then(|v| v.as_str()) else {
+        return Ok(());
+    };
+    let Some((major, minor, _)) = crate::diagnostic::parse_semver(esm) else {
+        return Ok(());
+    };
+    if (major, minor) >= (1, 2) {
+        return Ok(());
+    }
+    match find(view, "") {
+        None => Ok(()),
+        Some(path) => Err(crate::diagnostic::err(
+            crate::diagnostic::codes::CONST_UNITS_VERSION_TOO_OLD,
+            format!(
+                "declared `units` on an expression node require esm >= 1.2.0; file declares \
+                 {esm}. Offending path: {path}"
+            ),
+        )),
+    }
 }
 
 /// Parse a unit string into a Unit struct
@@ -2905,6 +3045,76 @@ mod tests {
         );
     }
 
+    /// A `const` that declares its units has that unit, a `const` without units
+    /// stays undeterminable, and an unresolvable declared unit is listed for the
+    /// structural layer (esm-spec §4.8.5).
+    #[test]
+    fn a_const_with_declared_units_has_that_unit() {
+        let konst = |units: Option<&str>| {
+            Expr::Operator(std::sync::Arc::new(ExpressionNode {
+                op: "const".into(),
+                value: Some(serde_json::json!(0.44704)),
+                units: units.map(str::to_string),
+                ..ExpressionNode::default()
+            }))
+        };
+        let env = env_of(&[
+            ("speed_mph", "mi/h"),
+            ("speed_ms", "m/s"),
+            ("speed_kg", "kg"),
+        ]);
+        let rhs = |units| op("*", vec![Expr::Variable("speed_mph".into()), konst(units)]);
+        let eq = |lhs: &str, units| Equation {
+            comment: None,
+            lhs: Expr::Variable(lhs.into()),
+            rhs: rhs(units),
+        };
+        assert!(
+            !check_equation_dimensions(&eq("speed_ms", Some("m*h/(mi*s)")), &env)
+                .iter()
+                .any(UnitFinding::is_error),
+            "mi/h times a const declared m*h/(mi*s) is exactly m/s"
+        );
+        assert!(
+            check_equation_dimensions(&eq("speed_kg", Some("m*h/(mi*s)")), &env)
+                .iter()
+                .any(UnitFinding::is_error),
+            "declared kg against m/s is a provable mismatch"
+        );
+        assert!(
+            !check_equation_dimensions(&eq("speed_kg", None), &env)
+                .iter()
+                .any(UnitFinding::is_error),
+            "a const without units is undeterminable, so nothing is checked"
+        );
+        assert_eq!(
+            unresolvable_const_units(&rhs(Some("mph"))),
+            vec!["mph".to_string()]
+        );
+        assert!(unresolvable_const_units(&rhs(Some("m*h/(mi*s)"))).is_empty());
+    }
+
+    #[test]
+    fn const_units_are_gated_at_esm_1_2_0() {
+        let doc = |esm: &str| {
+            serde_json::json!({
+                "esm": esm,
+                "models": {"M": {"equations": [{"lhs": "x", "rhs":
+                    {"op": "const", "args": [], "value": 1.0, "units": "m"}}]}}
+            })
+        };
+        let err = reject_const_units_pre_v12(&doc("1.1.0")).expect_err("1.1.0 must be rejected");
+        assert!(
+            err.to_string().contains("const_units_version_too_old"),
+            "{err}"
+        );
+        assert!(
+            err.to_string().contains("/models/M/equations/0/rhs"),
+            "{err}"
+        );
+        assert!(reject_const_units_pre_v12(&doc("1.2.0")).is_ok());
+    }
+
     #[test]
     fn scaled_powers_and_roots_stay_exact() {
         assert_eq!(
@@ -3186,13 +3396,110 @@ mod tests {
         );
         assert!(check_expression_dimensions(&expr, None, &env).is_empty());
 
-        // And an all-literal expression is dimensionless.
-        let expr = op("+", vec![Expr::Number(1.0), Expr::Number(2.0)]);
-        assert!(
-            Unit::propagate(&expr, &HashMap::new())
-                .unwrap()
-                .is_dimensionless()
+        // But a sum with NO determinable operand is undeterminable, never
+        // dimensionless (esm-spec §4.8.3, §4.8.4): for an integer as well as a
+        // float literal, in `min`/`max` as in `+`/`-`, and under a unary `+`.
+        let literal_pairs = [
+            vec![Expr::Number(1.0), Expr::Number(2.0)],
+            vec![Expr::Integer(1), Expr::Integer(2)],
+        ];
+        for args in literal_pairs {
+            for name in ["+", "-", "min", "max"] {
+                assert!(
+                    matches!(
+                        Unit::propagate(&op(name, args.clone()), &HashMap::new()),
+                        Err(UnitError::UnknownUnit(_))
+                    ),
+                    "{name} over literals must be undeterminable"
+                );
+            }
+        }
+        for lit in [Expr::Integer(2), Expr::Number(2.5)] {
+            assert!(matches!(
+                Unit::propagate(&op("+", vec![lit]), &HashMap::new()),
+                Err(UnitError::UnknownUnit(_))
+            ));
+        }
+    }
+
+    /// A sum whose operands are partly undeterminable has the unit of the
+    /// determinable ones (esm-spec §4.8.3), and a unary `+` carries its
+    /// operand's unit.
+    #[test]
+    fn propagate_sum_with_undeterminable_operand_takes_known_unit() {
+        let env = env_of(&[("x", "m"), ("y", "m")]);
+        let half_y = op("*", vec![Expr::Number(0.5), Expr::Variable("y".into())]);
+        for name in ["+", "-", "min", "max"] {
+            let expr = op(name, vec![Expr::Variable("x".into()), half_y.clone()]);
+            let u = Unit::propagate(&expr, &env).unwrap();
+            assert_eq!(
+                u.dimensions.get(&Dimension::Length),
+                Some(&Rational::int(1)),
+                "{name}"
+            );
+        }
+        let plus_x = op("+", vec![Expr::Variable("x".into())]);
+        let u = Unit::propagate(&plus_x, &env).unwrap();
+        assert_eq!(
+            u.dimensions.get(&Dimension::Length),
+            Some(&Rational::int(1))
         );
+    }
+
+    /// `ifelse` takes the unit of its determinable branch, whichever branch that
+    /// is, and with no determinable branch it is undeterminable (esm-spec
+    /// §4.8.3).
+    #[test]
+    fn ifelse_takes_the_unit_of_its_determinable_branch() {
+        let env = env_of(&[("x", "m"), ("y", "m"), ("c", "1")]);
+        let cond = op(">", vec![Expr::Variable("c".into()), Expr::Integer(0)]);
+        let x = Expr::Variable("x".into());
+        let half_y = op("*", vec![Expr::Number(0.5), Expr::Variable("y".into())]);
+        let branch_pairs = [
+            (x.clone(), half_y.clone()),
+            (half_y.clone(), x.clone()),
+            (Expr::Integer(2), x.clone()),
+        ];
+        for (then_branch, else_branch) in branch_pairs {
+            let expr = op("ifelse", vec![cond.clone(), then_branch, else_branch]);
+            let u = Unit::propagate(&expr, &env).unwrap();
+            assert_eq!(
+                u.dimensions.get(&Dimension::Length),
+                Some(&Rational::int(1))
+            );
+        }
+        let literal_branches = op("ifelse", vec![cond, Expr::Integer(1), Expr::Number(2.0)]);
+        assert!(matches!(
+            Unit::propagate(&literal_branches, &env),
+            Err(UnitError::UnknownUnit(_))
+        ));
+    }
+
+    /// A boolean connective places no requirement on its operands' units, but a
+    /// mismatch inside an operand is still reported (esm-spec §4.8.3).
+    #[test]
+    fn connectives_report_a_mismatch_inside_their_operands() {
+        let env = env_of(&[("x", "m"), ("z", "kg"), ("c", "1")]);
+        let mismatch = op(
+            ">",
+            vec![Expr::Variable("x".into()), Expr::Variable("z".into())],
+        );
+        let ok = op(">", vec![Expr::Variable("c".into()), Expr::Integer(0)]);
+        for expr in [
+            op("not", vec![mismatch.clone()]),
+            op("and", vec![mismatch.clone(), ok.clone()]),
+            op("or", vec![ok.clone(), mismatch.clone()]),
+        ] {
+            assert!(
+                !check_expression_dimensions(&expr, None, &env).is_empty(),
+                "{expr:?}"
+            );
+        }
+        let dimensional_operands = op(
+            "and",
+            vec![Expr::Variable("x".into()), Expr::Variable("z".into())],
+        );
+        assert!(check_expression_dimensions(&dimensional_operands, None, &env).is_empty());
     }
 
     /// An exponent is read BY VALUE, so `L^2` still yields an area even though

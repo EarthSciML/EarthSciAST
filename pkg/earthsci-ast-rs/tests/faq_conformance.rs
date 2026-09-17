@@ -74,7 +74,7 @@ fn run_model_test(
         alg: Alg::Bdf,
         abstol: Some(1e-10),
         reltol: Some(1e-8),
-        maxiters: 100_000,
+        maxiters: Some(100_000),
         saveat: Some(sorted_times.clone()),
         ..Default::default()
     };
@@ -284,4 +284,15 @@ fn join_on_self_join_syms_transposes_the_sides() {
 #[test]
 fn area_eff_edge_faq() {
     run_named("area_eff_edge_faq.esm");
+}
+
+/// esm-spec §4.3.1 "Ragged ranges" (issue #259). A range over a `kind: "ragged"`
+/// index set binds the POSITION k in 1..offsets[parent], and the body gathers
+/// the member itself out of a padded `[parent, max length]` `values` array. The
+/// per-parent totals are 10, 50, 150 over each parent's OWN members; a body that
+/// indexed the payload by the position alone would give 10, 30, 60, which is
+/// what `tests/invalid/faq/ragged_values_not_gathered.esm` now rejects.
+#[test]
+fn ragged_member_gather() {
+    run_named("ragged_member_gather.esm");
 }

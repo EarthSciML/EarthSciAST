@@ -549,7 +549,7 @@ def _parse_continuous_event(event_data: dict[str, Any]) -> ContinuousEvent:
     if "affect_neg" in event_data:
         affect_neg = [_parse_affect(affect) for affect in event_data["affect_neg"]]
 
-    root_find = event_data.get("root_find", "left")
+    root_find = event_data.get("root_find")
     reinitialize = event_data.get("reinitialize", False)
     description = event_data.get("description")
 
@@ -1810,6 +1810,23 @@ def _load_ref_data(
     ref_data = lower_expression_templates(ref_data)
     ref_data = expand_document(ref_data)
 
+    # esm-spec §9.3: the referenced document's `enum` ops resolve against ITS
+    # OWN `enums` block, here, while that block is still at hand. The mounting
+    # document's block is a different one and `enums` do not merge across a
+    # mount, so an importer declaring an enum of the same name cannot change
+    # what the leaf computes. The leaf's own nested mounts resolve after this
+    # returns, each lowered at its own edge.
+    from .registered_functions import EnumLoweringError, lower_mounted_document_enums
+
+    try:
+        ref_data = lower_mounted_document_enums(ref_data)
+    except EnumLoweringError as e:
+        raise ExpressionTemplateError(
+            e.code,
+            f"{kind} ref '{ref_str}': {e.message} — an `enum` op in a mounted file "
+            "resolves against that file's own `enums` block (esm-spec §9.3)",
+        ) from e
+
     # esm-spec §4.7 "Mount-edge index-set renaming", pipeline step 2. The
     # referenced document has now resolved in its OWN scope — its imports, this
     # edge's `bindings` and injection, its metaparameter close and fold, the
@@ -2437,7 +2454,6 @@ from .structural_checks import (  # noqa: E402
     _validate_structural,  # used by load(); re-exported for compatibility
 )
 
-
 _LOAD_ARGS_DOC = """
     Args:
         metaparameters: Optional name → integer bindings closing the ROOT
@@ -2510,9 +2526,7 @@ def load_path(
     esm_file = _load_data(data, resolved_base, metaparameters, file_path)
     # esm-spec §10.10 / §4.7: relative `coupling_import` refs resolve against this
     # file's directory, which `flatten` would otherwise never learn.
-    from .coupling_imports import record_coupling_import_base
-
-    record_coupling_import_base(esm_file, resolved_base)
+    esm_file.coupling_import_base = resolved_base
     return esm_file
 
 
@@ -2531,12 +2545,9 @@ def load_string(
     esm_file = _load_data(
         data, base_path if base_path is not None else os.getcwd(), metaparameters, None
     )
-    if base_path is not None:
-        # esm-spec §10.10 / §4.7: an explicit base anchors relative
-        # `coupling_import` refs; without one `flatten`'s own base applies.
-        from .coupling_imports import record_coupling_import_base
-
-        record_coupling_import_base(esm_file, base_path)
+    # esm-spec §10.10 / §4.7: an explicit base anchors relative `coupling_import`
+    # refs; without one `flatten`'s own base applies.
+    esm_file.coupling_import_base = base_path
     return esm_file
 
 
@@ -2557,12 +2568,16 @@ def load_document(
     # shallow copy, but ``prepare_document_ops`` rewrites ``op`` values on
     # NESTED nodes, which a shallow copy still shares with the caller. Rust, Go
     # and Julia all hand the pipeline their own copy; this makes the five agree.
-    return _load_data(
+    esm_file = _load_data(
         copy.deepcopy(document),
         base_path if base_path is not None else os.getcwd(),
         metaparameters,
         None,
     )
+    # esm-spec §10.10 / §4.7: an explicit base anchors relative `coupling_import`
+    # refs; without one `flatten`'s own base applies.
+    esm_file.coupling_import_base = base_path
+    return esm_file
 
 
 load_path.__doc__ = (load_path.__doc__ or "") + _LOAD_ARGS_DOC
@@ -2626,22 +2641,21 @@ def _load_data(
     # when the file declares esm < 0.4.0 (RFC §5.4 spec-version gate).
     # Surfaced before schema validation so the user sees the version hint
     # instead of a generic schema error.
+    from ._data_source_urls import resolve_data_source_urls
     from .lower_expression_templates import (
         expand_document,
         lower_expression_templates,
         reject_expression_templates_pre_v04,
     )
-    from ._data_source_urls import resolve_data_source_urls
     from .solver import reject_solver_pre_v11
     from .template_imports import (
         apply_scope_injections,
-        reject_template_imports_pre_v08,
-        resolve_template_machinery,
-    )
-    from .template_imports import (
         check_data_source_extents,
         collect_mount_declared_metaparameters,
         document_declares_an_extent,
+        reject_impure_template_library,
+        reject_template_imports_pre_v08,
+        resolve_template_machinery,
     )
 
     reject_expression_templates_pre_v04(data)
@@ -2650,10 +2664,18 @@ def _load_data(
     # expression_templates, metaparameters) are rejected when the file
     # declares esm < 0.8.0 (esm-spec §9.6.5).
     reject_template_imports_pre_v08(data)
+    # Top-level `expression_templates` beside a component payload is a
+    # template-library payload no component can see (esm-spec §9.7.1).
+    reject_impure_template_library(data)
 
     # The top-level `solver` block arrives at esm 1.1.0; a file declaring an
     # earlier version that carries one is rejected (esm-spec §2.2.4).
     reject_solver_pre_v11(data)
+
+    # Declared `units` on a `const` node arrive at esm 1.2.0 (esm-spec §4.8.5).
+    from .units import reject_const_units_pre_v12
+
+    reject_const_units_pre_v12(data)
 
     # esm-spec §8.2.1: resolve every `data_sources[*].source` location against
     # this document's own directory, BEFORE schema validation and before typed

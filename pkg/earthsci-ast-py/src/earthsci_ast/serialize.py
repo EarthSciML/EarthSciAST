@@ -360,7 +360,7 @@ def _serialize_continuous_event(event: ContinuousEvent) -> dict[str, Any]:
 
     if event.affect_neg is not None:
         result["affect_neg"] = [_serialize_affect_equation(affect) for affect in event.affect_neg]
-    if event.root_find and event.root_find != "left":  # Only include if not default
+    if event.root_find is not None:
         result["root_find"] = event.root_find
     if event.reinitialize:  # Only include if True (not default False)
         result["reinitialize"] = event.reinitialize

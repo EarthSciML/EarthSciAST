@@ -275,3 +275,22 @@ end
     @test only(e for e in file.coupling if e isa CouplingImport).ref == "./rothermel_fuel.esm"
     @test occursin("\"./rothermel_fuel.esm\"", EarthSciAST.to_json(file))
 end
+
+# A document with no location of its own — built in memory, or parsed from text
+# with no `base_path` — leaves `flatten`'s `base_path` in charge, and one given an
+# explicit base anchors on it. All five bindings agree on this, so a caller's
+# base is never silently replaced by the working directory.
+@testset "an in-memory coupling_import document keeps the caller's base (§10.10 -> §4.7)" begin
+    corpus = joinpath(TESTUTILS_REPO_ROOT, "tests", "coupling_libraries")
+    text = read(joinpath(corpus, "assembly_import.esm"), String)
+    doc = EarthSciAST._to_ordered(JSON3.read(text))
+    cd(mktempdir()) do
+        @test !isfile("rothermel_fuel.esm")
+        # No base of its own -> the caller's `base_path` resolves the import.
+        @test flatten(load_string(text); base_path=corpus) isa EarthSciAST.FlattenedSystem
+        @test flatten(load_document(doc); base_path=corpus) isa EarthSciAST.FlattenedSystem
+        # An explicit base of its own -> it wins, with no `base_path` at all.
+        @test flatten(load_string(text; base_path=corpus)) isa EarthSciAST.FlattenedSystem
+        @test flatten(load_document(doc; base_path=corpus)) isa EarthSciAST.FlattenedSystem
+    end
+end

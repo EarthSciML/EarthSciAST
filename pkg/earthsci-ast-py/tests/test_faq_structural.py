@@ -99,3 +99,30 @@ def test_undeclared_range_still_rejected_when_the_document_declares_a_registry()
 
     assert not result.is_valid
     assert "undefined_index_set" in {e.code for e in result.structural_errors}
+
+
+def test_ragged_range_without_a_values_gather_is_rejected() -> None:
+    """Issue #259: a range over a ``kind: "ragged"`` index set binds the POSITION
+    k in 1..offsets[parent], not a member (esm-spec §4.3.1). A body that never
+    reads the set's ``values`` array therefore reads positions -- 10, 30, 60 where
+    the author meant 10, 50, 150 -- and validated clean. It is now
+    ``ragged_values_not_gathered``, with a message that shows the gather."""
+    fixture = INVALID_DIR / "faq" / "ragged_values_not_gathered.esm"
+
+    result = validate_text(fixture.read_text())
+
+    assert not result.is_valid
+    found = [e for e in result.structural_errors if e.code == "ragged_values_not_gathered"]
+    assert [e.path for e in found] == ["/models/RaggedValuesNotGathered/equations/3/rhs"]
+    assert "index(parentMember, i, j)" in found[0].message
+
+
+def test_ragged_range_with_the_values_gather_is_valid() -> None:
+    """The positive control: the same sum with ``index(parentMember, i, j)``
+    gathered in the body is the defined spelling and validates clean."""
+    fixture = VALID_DIR / "faq" / "ragged_member_gather.esm"
+
+    result = validate_text(fixture.read_text())
+
+    assert [e.code for e in result.structural_errors] == []
+    assert result.is_valid

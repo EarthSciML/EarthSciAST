@@ -136,6 +136,24 @@ pub struct EsmFile {
     /// `EsmFile.component_templates`.
     #[serde(default, skip)]
     pub component_templates: Option<IndexMap<String, serde_json::Value>>,
+
+    /// The directory a relative `coupling_import` `reference` resolves against
+    /// (esm-spec §10.10 -> §4.7: "Resolved relative to the directory of the
+    /// referencing file").
+    ///
+    /// `coupling_import` expands at FLATTEN (§10.10), which never learns where
+    /// the document came from, so a relative ref would otherwise resolve against
+    /// the process working directory. The loader records the base here and
+    /// [`crate::expand_coupling_imports`] prefers it over
+    /// [`crate::CouplingImportOptions::base_path`], which stays the base for a
+    /// document that has no location of its own (built in memory, or loaded
+    /// from a string with no base). The `reference` itself is never rewritten:
+    /// the entry round-trips verbatim (§10.10.3).
+    ///
+    /// NOT a wire field, for the same reason `component_templates` is not:
+    /// `#[serde(skip)]` keeps it out of both directions.
+    #[serde(default, skip)]
+    pub coupling_import_base: Option<String>,
 }
 
 /// The empty document: every optional section absent, `esm` set to
@@ -163,6 +181,7 @@ impl Default for EsmFile {
             domain: None,
             function_tables: None,
             component_templates: None,
+            coupling_import_base: None,
         }
     }
 }

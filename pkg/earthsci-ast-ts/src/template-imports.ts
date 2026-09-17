@@ -187,6 +187,25 @@ export function isTemplateLibraryDoc(raw: unknown): boolean {
   return isObject(raw) && 'expression_templates' in raw
 }
 
+/**
+ * A document carrying top-level `expression_templates` is a template-library
+ * file (esm-spec §9.7.1), which MUST NOT declare `models`, `reaction_systems`,
+ * `data_sources`, `coupling`, or `domain`. Rewrite rules are component-local
+ * (§9.6.3 constraint 4), so beside a component the block is visible to
+ * nothing: the document is rejected with `template_library_illegal_payload`
+ * rather than loaded with the templates silently inert. An import target is
+ * held to the same rule at the edge, as `template_import_not_library`.
+ */
+export function rejectImpureTemplateLibrary(view: unknown): void {
+  if (!isObject(view) || !isTemplateLibraryDoc(view)) return
+  const present = LIBRARY_FORBIDDEN_KEYS.filter((k) => k in view)
+  if (present.length === 0) return
+  throw new EsmMachineryError(
+    ERROR_CODES.TEMPLATE_LIBRARY_ILLEGAL_PAYLOAD,
+    `top-level \`expression_templates\` makes this document a template-library file, which MUST NOT declare ${present.map((k) => `\`${k}\``).join(', ')} (esm-spec §9.7.1); templates declared there are visible to no component. Declare them in the component's own \`expression_templates\` block (§9.6.1), or move them to a template-library file and import it with \`expression_template_imports\` (§9.7.2)`,
+  )
+}
+
 // ---------------------------------------------------------------------------
 // Metaparameters (esm-spec §9.7.6)
 // ---------------------------------------------------------------------------

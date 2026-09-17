@@ -595,7 +595,7 @@ pub enum CouplingEntry {
         /// Separate affects for negative-going zero crossings
         #[serde(skip_serializing_if = "Option::is_none")]
         affect_neg: Option<Vec<AffectEquation>>,
-        /// Root finding direction
+        /// Which side of the root the event lands on (esm-spec §5.2)
         #[serde(skip_serializing_if = "Option::is_none")]
         root_find: Option<RootFindDirection>,
         /// Whether to reinitialize the system after the event
@@ -623,13 +623,6 @@ pub enum CouplingEntry {
         /// Optional description
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
-        /// The directory a relative `reference` resolves against (esm-spec
-        /// §10.10 -> §4.7: "relative to the directory of the referencing file"),
-        /// recorded at load from an explicit base and preferred over
-        /// [`crate::CouplingImportOptions::base_path`]. Never serialized: the
-        /// entry round-trips verbatim (§10.10.3).
-        #[serde(skip)]
-        base_dir: Option<String>,
     },
 }
 

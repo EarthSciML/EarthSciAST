@@ -77,6 +77,18 @@ const ERROR_CODES = (
     # surprise at build time; the self-edge of a §4.3.1.1 recurrence CANDIDATE
     # is an ordering WITHIN one variable and is not one of these edges.
     OBSERVED_CYCLE = "observed_cycle",
+    # esm-spec §4.3.1 "Ragged ranges" (issue #259): a non-value-invention `faq`
+    # ranges over a `kind: "ragged"` index set but its body never reads that
+    # set's `values` array. The range symbol binds the POSITION k in
+    # 1..offsets[parent], not a member, so the body reads positions — a
+    # plausible wrong number rather than a failure.
+    RAGGED_VALUES_NOT_GATHERED = "ragged_values_not_gathered",
+    # An output name -- an `observed` request handed to `derive_output_plan` --
+    # that matches no variable exactly and whose last dotted segment is shared
+    # by more than one variable (CONFORMANCE_SPEC §5.17.4). A last-segment match
+    # is accepted only when it designates exactly one variable, so a request
+    # cannot silently select a variable it did not name.
+    AMBIGUOUS_OUTPUT_NAME = "ambiguous_output_name",
     # Causal self-reference (esm-spec §4.3.1.1, CONFORMANCE_SPEC §5.19.5).
     # A VALIDATION category, so both codes are owed by every binding whether or
     # not it evaluates array numerics: the pre-1.0 behaviour of an ill-founded
@@ -84,6 +96,10 @@ const ERROR_CODES = (
     # to run it would leave the defect undiagnosed.
     RECURRENCE_NOT_WELLFOUNDED = "recurrence_not_wellfounded",
     RECURRENCE_UNSUPPORTED_FORM = "recurrence_unsupported_form",
+    # A bare-index observed definition (`index(V, k…) ~ rhs`, esm-spec §6.3.1)
+    # outside the one runnable form, refused when the model is built for
+    # simulation (CONFORMANCE_SPEC §5.36.2).
+    INDEXED_DEFINITION_UNSUPPORTED_FORM = "indexed_definition_unsupported_form",
     RELATIONAL_NODE_IN_CONTINUOUS = "relational_node_in_continuous",
     # A DECLARATION — a `variables` key, a reaction species, or a reaction
     # parameter — spelled with a globally-scoped name: the document's
@@ -94,6 +110,10 @@ const ERROR_CODES = (
     # silently receives the implicit symbol — the simulation clock in place of
     # the declared quantity.
     RESERVED_VARIABLE_NAME = "reserved_variable_name",
+    # Inline array data as the `default` of a variable that declares no `shape`
+    # (esm-spec §6.3). Inline array data is a SHAPED variable's value, so with no
+    # shape there is nothing for the array to fill.
+    ARRAY_DEFAULT_WITHOUT_SHAPE = "array_default_without_shape",
     SYSTEM_KIND_MISMATCH = "system_kind_mismatch",
     UNDEFINED_INDEX_SET = "undefined_index_set",
     UNDEFINED_OPERATOR = "undefined_operator",
@@ -161,12 +181,16 @@ const ERROR_CODES = (
     # ── Document-scoped solver hints (esm-spec §2.2; solver.jl). ─────────
     SOLVER_VERSION_TOO_OLD = "solver_version_too_old",
 
+    # ── Declared units on a const node (esm-spec §4.8.5; units.jl). ──────
+    CONST_UNITS_VERSION_TOO_OLD = "const_units_version_too_old",
+
     # ── Template-library imports + load-time metaparameters (esm-spec §9.7;
     #    template_imports.jl). ──────────────────────────────────────────────
     TEMPLATE_IMPORT_VERSION_TOO_OLD = "template_import_version_too_old",
     TEMPLATE_IMPORT_UNRESOLVED = "template_import_unresolved",
     TEMPLATE_IMPORT_NOT_LIBRARY = "template_import_not_library",
     TEMPLATE_IMPORT_IS_COUPLING_LIBRARY = "template_import_is_coupling_library",
+    TEMPLATE_LIBRARY_ILLEGAL_PAYLOAD = "template_library_illegal_payload",
     TEMPLATE_IMPORT_CYCLE = "template_import_cycle",
     TEMPLATE_IMPORT_NAME_CONFLICT = "template_import_name_conflict",
     TEMPLATE_IMPORT_UNKNOWN_NAME = "template_import_unknown_name",
@@ -285,6 +309,12 @@ const ERROR_CODES = (
     # producer could not be materialized at build (esm-spec §9.6.6). Refused
     # rather than contracted as an empty range, which would read as 0.
     DERIVED_INDEX_SET_UNMATERIALIZED = "derived_index_set_unmaterialized",
+    # ── Evaluator refusal (tree_walk/; esm-spec §9.6.6). A continuous event, a
+    #    discrete event or an implicit equation reached the tree-walk evaluator,
+    #    which runs none of them. Refused at build rather than skipped, because a
+    #    run without the construct reports a wrong answer. The ModelingToolkit
+    #    export runs all three and never raises it. ───────────────────────────
+    UNSUPPORTED_CONSTRUCT = "unsupported_construct",
 )
 
 """

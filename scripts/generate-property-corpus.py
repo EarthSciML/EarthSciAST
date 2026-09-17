@@ -9,9 +9,12 @@ corpus and the runner (``run-property-corpus-conformance.py``) compares
 the outputs to surface cross-binding divergence.
 
 The corpus lives at ``tests/property_corpus/expressions/expr_NNN.json``.
-It is regenerated deterministically (hypothesis ``derandomize=True``) so
-rerunning this script yields the same fixtures unless the strategy itself
-changes.
+Generation is derandomized (hypothesis ``derandomize=True``), but the examples
+drawn still depend on the installed hypothesis version as well as on the
+strategy, so a rerun is not guaranteed to reproduce the committed corpus. The
+fixtures are the conformance oracle (every binding must round-trip each one
+byte-for-byte, and the fixture itself is compared), so correct an individual
+fixture by hand rather than regenerating the whole corpus to fix one file.
 """
 
 from __future__ import annotations

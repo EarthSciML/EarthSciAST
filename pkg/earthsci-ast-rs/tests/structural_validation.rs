@@ -1344,6 +1344,35 @@ fn test_f6_undefined_index_set() {
     );
 }
 
+/// Issue #259 (esm-spec §4.3.1 "Ragged ranges"): a range over a `kind: "ragged"`
+/// index set binds the POSITION k in 1..offsets[parent], so a body that never
+/// reads the set's `values` array reads positions where the author meant
+/// members — 10, 30, 60 instead of 10, 50, 150 — and used to validate clean.
+#[test]
+fn test_ragged_values_not_gathered() {
+    assert_structural(
+        include_str!("../../../tests/invalid/faq/ragged_values_not_gathered.esm"),
+        StructuralErrorCode::RaggedValuesNotGathered,
+        "/models/RaggedValuesNotGathered/equations/3/rhs",
+    );
+}
+
+/// The positive control: the same sum spelled with the explicit
+/// `index(parentMember, i, j)` gather over a padded `values` array is clean.
+#[test]
+fn test_ragged_member_gather_is_valid() {
+    let esm_file = load_string(include_str!(
+        "../../../tests/valid/faq/ragged_member_gather.esm"
+    ))
+    .expect("fixture must load");
+    let result = validate(&esm_file);
+    assert!(
+        result.structural_errors.is_empty(),
+        "unexpected structural errors: {:?}",
+        result.structural_errors
+    );
+}
+
 /// A §9.7.10 / §6.6.6 discretization-agnostic PDE leaf declares NO `index_sets`
 /// of its own: its registry arrives from the grid library a composing document,
 /// a subsystem-ref edge or an inline test injects into this component's scope.
@@ -1537,4 +1566,51 @@ fn a_subsystem_declaration_is_covered() {
         )]
     );
     assert!(!validate(&load_string(fixture).unwrap()).is_valid);
+}
+
+// ---------------------------------------------------------------------------
+// esm-spec §6.3 — inline array data is only a SHAPED variable's value.
+//
+// On a variable with no `shape` there is nothing for the array to fill and no
+// scalar reading of it. The build pipeline used to bind such a parameter to a
+// fabricated 0.0 and now keeps it out of scope; `array_default_without_shape`
+// rejects the declaration at load instead.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn an_array_default_on_an_unshaped_variable_is_rejected() {
+    let fixture = include_str!("../../../tests/invalid/array_default_without_shape.esm");
+    let result =
+        validate(&load_string(fixture).expect("fixture must load: the rule is a TYPED check"));
+    let mut found: Vec<(String, String)> = result
+        .structural_errors
+        .iter()
+        .filter(|e| matches!(e.code, StructuralErrorCode::ArrayDefaultWithoutShape))
+        .map(|e| {
+            (
+                e.path.clone(),
+                e.details["variable_type"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string(),
+            )
+        })
+        .collect();
+    found.sort();
+    // The top-level parameter and the subsystem's unknown, and NOT the shaped
+    // control `w`, which carries the same data legally.
+    assert_eq!(
+        found,
+        vec![
+            (
+                "/models/Decay/subsystems/Inner/variables/x/default".to_string(),
+                "unknown".to_string()
+            ),
+            (
+                "/models/Decay/variables/k/default".to_string(),
+                "parameter".to_string()
+            ),
+        ]
+    );
+    assert!(!result.is_valid);
 }

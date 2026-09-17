@@ -151,7 +151,7 @@ struct Snap {
     t: f64,
     t_end: f64,
     step: usize,
-    maxiters: usize,
+    maxiters: Option<usize>,
     n_u: usize,
 }
 
@@ -188,7 +188,7 @@ fn opts(progress: Option<ProgressFn>, saveat: Option<Vec<f64>>) -> SolveOptions 
         alg: Alg::Bdf,
         abstol: Some(1e-10),
         reltol: Some(1e-8),
-        maxiters: 100_000,
+        maxiters: Some(100_000),
         saveat,
         progress,
         ..Default::default()
@@ -236,7 +236,7 @@ fn assert_well_formed(log: &[Snap], t0: f64, t_end: f64) {
     );
     assert_eq!(last.fraction(), 1.0, "the bar must land on 100%");
     assert!(log.iter().all(|p| p.t0 == t0 && p.t_end == t_end));
-    assert!(log.iter().all(|p| p.maxiters == 100_000));
+    assert!(log.iter().all(|p| p.maxiters == Some(100_000)));
     // Every report carries the integrator's live state vector, which is what
     // lets a EsmProblem-level callback write output or checkpoint rather than only
     // draw a bar.
@@ -458,7 +458,7 @@ fn fraction_is_clamped_and_never_nan() {
         t,
         t_end,
         step: 0,
-        maxiters: 0,
+        maxiters: None,
         u: &u,
     };
     assert_eq!(p(0.0, 5.0, 10.0).fraction(), 0.5);

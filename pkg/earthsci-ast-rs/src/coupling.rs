@@ -308,22 +308,19 @@ pub(crate) fn validate_imported_coupling(
     let Some(coupling) = esm_file.coupling.as_ref() else {
         return;
     };
+    // Expanding reads the library from disk; without the base the loader
+    // recorded on the document, the ref would resolve against the working
+    // directory, so a document with no known location is left to flatten.
+    if esm_file.coupling_import_base.is_none() {
+        return;
+    }
     for (idx, entry) in coupling.iter().enumerate() {
         let crate::CouplingEntry::CouplingImport {
-            reference,
-            bind,
-            base_dir,
-            ..
+            reference, bind, ..
         } = entry
         else {
             continue;
         };
-        // Expanding reads the library from disk; without a base the loader
-        // recorded, the ref would resolve against the working directory, so an
-        // import whose document has no known location is left to flatten.
-        if base_dir.is_none() {
-            continue;
-        }
         let mut single = esm_file.clone();
         single.coupling = Some(vec![entry.clone()]);
         let Ok(Some(edges)) = crate::coupling_imports::expand_coupling_imports(

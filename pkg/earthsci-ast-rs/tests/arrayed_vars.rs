@@ -83,3 +83,36 @@ fn vertex_located_roundtrip() {
         assert_eq!(phi.location.as_deref(), Some("vertex"));
     }
 }
+
+// A state shaped over index sets the document never declares, and indexed by no
+// equation, has no extent (issue #249). The build must refuse it, as Julia's
+// tree-walk does, instead of integrating one scalar slot per state.
+fn build(rel: &str) -> Result<EsmProblem, String> {
+    let path = format!("../../tests/{rel}");
+    esm_problem(
+        ProblemInput::Path(std::path::Path::new(&path)),
+        (0.0, 1.0),
+        ProblemOptions::default(),
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[test]
+fn undeclared_shape_axis_is_refused_at_build() {
+    for name in ["two_d_faces.esm", "vertex_located.esm"] {
+        let err = build(&format!("fixtures/arrayed_vars/{name}"))
+            .err()
+            .unwrap_or_else(|| panic!("{name}: an unsized shaped state must not build"));
+        assert!(
+            err.contains("not declared in the document `index_sets` registry"),
+            "{name}: {err}"
+        );
+    }
+}
+
+#[test]
+fn undeclared_shape_axis_with_indexed_equations_still_builds() {
+    // Sized by its equations' literal ranges; builds in Julia too.
+    build("conformance/pde_simulation/fixtures/diffusion_1d_periodic_n4.esm")
+        .expect("an indexed state with an undeclared axis still builds");
+}

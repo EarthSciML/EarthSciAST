@@ -138,6 +138,10 @@ class ExprNode:
     # array thereof. Used to thread const-array tables through the AST without
     # premature numeric collapse (notably as `xs` for `interp.searchsorted`).
     value: Any | None = field(default=None, metadata={"kind": "scalar"})
+    # const (esm 1.2.0): the declared unit ``value`` is in. A unit-bearing
+    # constant has that dimension and exact scale in dimensional analysis
+    # (esm-spec §4.8.5); legal on no other op.
+    units: str | None = field(default=None, metadata={"kind": "scalar"})
     # table_lookup (esm-spec §9.5, v0.4.0): the function_tables entry id this
     # node references. ``args`` MUST be empty for a table_lookup node — the
     # per-axis input expressions live in ``table_axes``.
@@ -217,6 +221,7 @@ _EXPR_WIRE_ORDER: tuple[str, ...] = (
     "name",
     "label",
     "value",
+    "units",
     "table",
     "table_axes",
     "output",
@@ -797,9 +802,10 @@ class ContinuousEvent:
     affect_neg: list[AffectEquation] | None = (
         None  # Added: affects for negative-going zero crossings
     )
-    root_find: Literal["left", "right", "all"] | None = (
-        "left"  # Added: root-finding direction with default
-    )
+    # Which side of the root the event lands on (esm-spec §5.2); ``None`` when
+    # the document does not say, which means "left". Kept as authored so an
+    # explicit "left" survives load -> save.
+    root_find: Literal["left", "right"] | None = None
     reinitialize: bool = False  # Added: whether to reinitialize after event
     priority: int = 0
     description: str | None = None  # Added: optional description
@@ -1103,12 +1109,6 @@ class CouplingImport(BaseCouplingEntry):
     coupling_type: CouplingType = field(default=CouplingType.COUPLING_IMPORT, init=False)
     ref: str | None = None
     bind: dict[str, str] = field(default_factory=dict)
-    # The directory relative ``ref``s resolve against (esm-spec §10.10 -> §4.7:
-    # "relative to the directory of the referencing file"), recorded at load from
-    # an explicit base and preferred over ``flatten``'s ``base_path``. Not part of
-    # the entry: excluded from comparison and never serialized, so the entry
-    # round-trips verbatim (§10.10.3).
-    base_dir: str | None = field(default=None, repr=False, compare=False)
 
 
 # Discriminated union of all coupling entry types
@@ -1338,6 +1338,17 @@ class EsmFile:
     # field of the flattened representation, and a registry cannot be merged
     # from a document that has already thrown its inputs away.
     component_templates: dict[str, Any] = field(default_factory=dict)
+    # The directory a relative ``coupling_import`` ``ref`` resolves against
+    # (esm-spec §10.10 -> §4.7: "relative to the directory of the referencing
+    # file"). ``coupling_import`` expands at ``flatten``, which never learns where
+    # the document came from, so the loader records the base here and
+    # ``expand_coupling_imports`` prefers it over its own ``base_path``. Recorded
+    # only from a base the caller really gave (``load_path`` always has one);
+    # ``None`` for a document built in memory, whose base is the caller's.
+    # Loader-only, like ``component_templates``: never serialized, and excluded
+    # from comparison so two loads of the same document from different
+    # directories stay equal.
+    coupling_import_base: str | None = field(default=None, repr=False, compare=False)
 
     @property
     def esm(self) -> str:

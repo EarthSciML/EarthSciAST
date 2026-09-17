@@ -74,13 +74,16 @@ function load_path(path::AbstractString;
 end
 
 """
-    load_document(doc::AbstractDict; base_path=pwd(), metaparameters=Dict{String,Int}()) -> EsmFile
+    load_document(doc::AbstractDict; base_path=nothing, metaparameters=Dict{String,Int}()) -> EsmFile
 
 Parse an ESM document held in memory as a native Julia dict — the same
 document a `.esm` file holds, just already parsed. Runs the identical pipeline
 [`load_path`](@ref) runs (top-level `{ref}` inlining, schema validation,
 expression-template lowering, coercion, subsystem-ref resolution); `base_path`
-anchors the relative refs a file input anchors at its own directory.
+anchors the relative refs a file input anchors at its own directory, and
+defaults to `pwd()` for that. Left at `nothing` the document has no location of
+its own, so a relative `coupling_import` ref resolves against `flatten`'s own
+`base_path` instead (esm-spec §10.10 -> §4.7).
 
 Distinct from [`coerce_esm_file`](@ref), which only coerces: it does not
 validate, and it leaves a `{ref}` subsystem as an unresolved `SubsystemRef`
@@ -88,12 +91,13 @@ that [`flatten`](@ref) then SKIPS — so a dict must come through here, not
 through `coerce_esm_file`, before it is flattened and run.
 """
 function load_document(doc::AbstractDict;
-              base_path::AbstractString=pwd(),
+              base_path::Union{Nothing,AbstractString}=nothing,
               metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}())::EsmFile
     # Wire boundary for the in-memory path: normalize the caller's dict (which
     # may be symbol-keyed, or nest JSON3 values) into the one post-wire carrier.
-    return _load_document(_to_ordered(doc), String(base_path);
-                          metaparameters=metaparameters)
+    return _load_document(_to_ordered(doc), String(something(base_path, pwd()));
+                          metaparameters=metaparameters,
+                          record_import_base=base_path !== nothing)
 end
 
 """
@@ -110,7 +114,8 @@ apart — the only difference between them is which `base_path` anchors the refs
 function _load_document(raw_data, base_path::String;
                         metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}(),
                         injected_imports::AbstractVector=Any[],
-                        native_subsystem_refs::Bool=true)::EsmFile
+                        native_subsystem_refs::Bool=true,
+                        record_import_base::Bool=true)::EsmFile
     # esm-spec §9.7.6 site 4, widened past "the root document's" (§4.7): the
     # metaparameter names every document this one MOUNTS declares. Computed on
     # the AUTHORED tree — the inliner just below CONSUMES the top-level mount
@@ -224,8 +229,11 @@ function _load_document(raw_data, base_path::String;
     resolve_subsystem_refs!(file, base_path; loader_metaparameters=metaparameters,
                             root_env=root_env, model_envs=model_envs)
     # esm-spec §10.10 / §4.7: relative `coupling_import` refs resolve against this
-    # document's directory, which `flatten` would otherwise never learn.
-    _record_coupling_import_base!(file, base_path)
+    # document's directory, which `flatten` would otherwise never learn. Only a
+    # base the caller really gave is recorded (`load_path` always has one); a
+    # document with no location of its own leaves `flatten`'s `base_path` in
+    # charge, as it does in the other four bindings.
+    record_import_base && _record_coupling_import_base!(file, base_path)
     return file
 end
 
@@ -266,8 +274,8 @@ function _merge_staged_index_sets!(registry::AbstractDict{String,IndexSet},
 end
 
 """
-    load_string(json::AbstractString; base_path=pwd(), metaparameters=Dict{String,Int}()) -> EsmFile
-    load_string(io::IO; base_path=pwd(), metaparameters=Dict{String,Int}()) -> EsmFile
+    load_string(json::AbstractString; base_path=nothing, metaparameters=Dict{String,Int}()) -> EsmFile
+    load_string(io::IO; base_path=nothing, metaparameters=Dict{String,Int}()) -> EsmFile
 
 Parse an ESM document from JSON TEXT — held as a `String`, or streamed from an
 `IO` the method reads to a string first (the `::IO` method is a sanctioned
@@ -281,19 +289,23 @@ validation, template lowering, coercion, and nested subsystem-ref resolution.
 unresolved `SubsystemRef`s, which `flatten` silently SKIPS: the same document
 loaded from a stream flattened to a strictly smaller system, with no error.)
 `base_path` anchors relative `expression_template_imports` refs and nested
-`{ref}`s (esm-spec §9.7.2, §4.7); `metaparameters` binds the document's open
-metaparameters at the loader API (esm-spec §9.7.6).
+`{ref}`s (esm-spec §9.7.2, §4.7), defaulting to `pwd()` for that; left at
+`nothing` the document has no location of its own, so a relative
+`coupling_import` ref resolves against `flatten`'s own `base_path` instead
+(§10.10 -> §4.7). `metaparameters` binds the document's open metaparameters at
+the loader API (esm-spec §9.7.6).
 """
-function load_string(json::AbstractString; base_path::AbstractString=pwd(),
+function load_string(json::AbstractString; base_path::Union{Nothing,AbstractString}=nothing,
                      metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}(),
                      injected_imports::AbstractVector=Any[])::EsmFile
     raw_data = _read_json_document(json)
-    return _load_document(raw_data, String(base_path);
+    return _load_document(raw_data, String(something(base_path, pwd()));
                           metaparameters=metaparameters,
-                          injected_imports=injected_imports)
+                          injected_imports=injected_imports,
+                          record_import_base=base_path !== nothing)
 end
 
-function load_string(io::IO; base_path::AbstractString=pwd(),
+function load_string(io::IO; base_path::Union{Nothing,AbstractString}=nothing,
                      metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}(),
                      injected_imports::AbstractVector=Any[])::EsmFile
     return load_string(read(io, String); base_path=base_path,
@@ -388,8 +400,13 @@ function _load_parsed(raw_data; base_path::AbstractString=pwd(),
     # expression_templates, metaparameters) are rejected when the file
     # declares esm < 0.8.0 (esm-spec §9.6.5).
     reject_template_imports_pre_v08(raw_data)
+    # Top-level `expression_templates` beside a component payload is a
+    # template-library payload no component can see (esm-spec §9.7.1).
+    _reject_impure_template_library(raw_data)
     # The top-level `solver` block arrives at esm 1.1.0 (esm-spec §2.2.4).
     reject_solver_pre_v11(raw_data)
+    # Declared `units` on a `const` node arrive at esm 1.2.0 (esm-spec §4.8.5).
+    reject_const_units_pre_v12(raw_data)
 
     # Validate schema
     schema_errors = validate_schema(raw_data)
@@ -623,7 +640,8 @@ _with_declarations(file::EsmFile, templates, metaparams;
 # requires a `Model` with `variables`, so the reference is inlined at the
 # raw-JSON level — before schema validation, expression-template lowering, and
 # coercion — and the blocks the model's AST references by name
-# (`function_tables`, `enums`, `data_sources`) are merged in from the component.
+# (`function_tables`, `data_sources`) are merged in from the component; `enums` stay
+# file-local and are lowered at the edge (esm-spec §9.3).
 # Nested subsystem `{ref}`s inside the component are rewritten to absolute paths
 # so the later `resolve_subsystem_refs!` pass (anchored at the *parent* dir)
 # still finds them. Resolution recurses (a component may itself reference another
@@ -792,7 +810,7 @@ end
     _inline_toplevel_model_refs(raw_data, base_path; metaparameters) -> Union{Nothing,Dict{String,Any}}
 
 Return a native ESM dict with every top-level model `{ref}` stub replaced by the
-referenced component's model (and its `index_sets` / `function_tables` / `enums`
+referenced component's model (and its `index_sets` / `function_tables`
 / `data_sources` merged in), or `nothing` when `raw_data` has no such stub.
 The stub path copies the document (`_to_ordered`, order-preserving) so the
 in-place worker never mutates the caller's tree; the reaction-system inliner
@@ -852,6 +870,19 @@ run this same code on the native dictionary instead of a second copy of it on
 the typed tree (the duplication `_inline_toplevel_model_refs!`'s own docstring
 refuses).
 """
+# Lower `target`'s `enum` ops against the `enums` block of `document`, the file
+# mounted at this §4.7 edge (esm-spec §9.3), naming the edge in the diagnostic.
+function _lower_mounted_enums_at_edge(document, target, mount_noun::AbstractString)
+    try
+        return _lower_mounted_document_enums(document, target)
+    catch e
+        e isa EnumLoweringError || rethrow()
+        throw(ExpressionTemplateError(e.code,
+            "$(mount_noun): $(e.message) — an `enum` op in a mounted file resolves " *
+            "against that file's own `enums` block (esm-spec §9.3)"))
+    end
+end
+
 function _resolve_mount_edge_core(entry::AbstractDict, ref::String, refpath::String,
                                   base_path::String, visited::Set{String};
                                   mount_noun::String,
@@ -968,8 +999,11 @@ function _resolve_mount_edge_core(entry::AbstractDict, ref::String, refpath::Str
     # §9.6.3 rewrite fixpoint, so the spliced component carries the
     # fully-expanded Option-A image and the assembling document's
     # lowering never resolves the leaf's template names against its own
-    # registry. A leaf with no machinery has nothing to resolve and flows
-    # on untouched (`resolve_template_machinery` returns `nothing`).
+    # registry. A leaf with no machinery has nothing to resolve
+    # (`resolve_template_machinery` returns `nothing`), but its component-local
+    # templates still expand here: its own calls bind their parameters, so an
+    # `enum` op a parameter spells resolves against the leaf's block below, not
+    # the mounting document's (esm-spec §9.3).
     # `mounted_leaf=true`: this IS a §4.7 mount edge, so an index-set
     # `size` the leaf cannot close stays SYMBOLIC — it merges into the
     # mounting document's registry and closes there (§9.7.6 site 5).
@@ -983,9 +1017,14 @@ function _resolve_mount_edge_core(entry::AbstractDict, ref::String, refpath::Str
     resolved = resolve_template_machinery(comp, compdir; metaparameters=bindings,
                                           mount_declared=leaf_mount_declared,
                                           mounted_leaf=true)
-    if resolved !== nothing
-        comp = expand_document(lower_expression_templates(resolved))
-    end
+    comp = expand_document(lower_expression_templates(resolved === nothing ? comp : resolved))
+
+    # esm-spec §9.3: the leaf's `enum` ops resolve against ITS OWN `enums` block,
+    # here, while that block is still at hand. The mounting document's block is a
+    # different one and `enums` do not merge across a mount, so an importer
+    # declaring an enum of the same name cannot change what the leaf computes.
+    # The leaf's own nested mounts were lowered at their own edges above.
+    comp = _lower_mounted_enums_at_edge(comp, comp, mount_noun)
 
     # The leaf has now CLOSED, so what its own nested mounts staged can land:
     # each contribution folded against the leaf's closed environment — esm-spec
@@ -1176,7 +1215,7 @@ forbids the two attachment points from differing:
 The leaf's own nested top-level model-refs then resolve in the leaf's directory,
 sharing this walk's path-scoped cycle set, so the merge composes transitively.
 On top of the shared pipeline this form additionally merges the leaf's
-`function_tables` / `data_sources` / `enums` up (parent wins on a key clash) and
+`function_tables` / `data_sources` up (parent wins on a key clash) and
 drops the leaf's inline `tests` (esm-spec §6.6: they do not cross a mount edge).
 
 `parent_meta` is the MOUNTING document's closed metaparameter environment (its
@@ -1273,8 +1312,10 @@ function _inline_toplevel_model_refs!(native::AbstractDict{String,Any}, base_pat
             # `subsystem_index_set_conflict`.
             _merge_native_index_sets!(native, comp, ref; staged=staged, staged_refs=staged_refs)
             # Merge the by-name blocks the model's AST references; the parent wins
-            # on a key clash (its own definitions take precedence).
-            for blk in ("function_tables", "data_sources", "enums")
+            # on a key clash (its own definitions take precedence). `enums` is not
+            # one of them: it is file-local (esm-spec §9.3), and the leaf's `enum`
+            # ops were already lowered against it at the edge.
+            for blk in ("function_tables", "data_sources")
                 src = get(comp, blk, nothing)
                 (src isa AbstractDict && !isempty(src)) || continue
                 dst = get!(() -> Dict{String,Any}(), native, blk)
@@ -1295,7 +1336,7 @@ end
 
 Return a native ESM dict with every top-level reaction_system `{ref}` stub
 replaced by the referenced component's reaction system (and its
-`function_tables` / `enums` / `data_sources` merged in), or `nothing` when
+`function_tables` / `data_sources` merged in), or `nothing` when
 `raw_data` has no such stub. The reaction-system analogue of
 [`_inline_toplevel_model_refs`](@ref) (schema §4.7: a `reaction_systems` entry is
 `oneOf [ReactionSystem, {ref}]`), so an assembly may mount an external
@@ -1323,7 +1364,7 @@ In-place native-dict worker for [`_inline_toplevel_reaction_system_refs`](@ref).
 Mirrors [`_inline_toplevel_model_refs!`](@ref): loads each stub's referenced file,
 splices in its single top-level reaction system (or the one named by a
 `"reaction_system"` selector), and merges the `function_tables` / `data_sources`
-/ `enums` blocks the reaction system's AST references (parent wins on a clash).
+blocks the reaction system's AST references (parent wins on a clash).
 Cycle detection is PATH-scoped, so the same single-reaction-system file may be
 mounted under several assembly keys.
 """
@@ -1388,6 +1429,12 @@ function _inline_toplevel_reaction_system_refs!(native::AbstractDict{String,Any}
             # esm-spec §6.6: inline tests do not cross a mount edge — the
             # reaction-system twin of the rule in `_inline_toplevel_model_refs!`.
             crsys isa AbstractDict && delete!(crsys, "tests")
+            # esm-spec §9.3: the reaction system's `enum` ops resolve against its
+            # OWN file's `enums` block, which does not merge into this document.
+            # Its §9.7 resolution is deferred to the root, so a template body keeps
+            # the ops its `params` spell for the call site.
+            crsys = _lower_mounted_enums_at_edge(comp, crsys,
+                                                 "top-level reaction system ref '$(ref)'")
             _absolutize_nested_refs!(crsys, compdir)
             rsystems[name] = crsys
             # esm-spec §9.7.10 form A at a TOP-LEVEL reaction-system-ref edge:
@@ -1402,7 +1449,8 @@ function _inline_toplevel_reaction_system_refs!(native::AbstractDict{String,Any}
             end
             # Merge the by-name blocks the reaction system's AST references; the
             # parent wins on a key clash (its own definitions take precedence).
-            for blk in ("function_tables", "data_sources", "enums")
+            # Not `enums`: it is file-local (esm-spec §9.3), lowered above.
+            for blk in ("function_tables", "data_sources")
                 src = get(comp, blk, nothing)
                 (src isa AbstractDict && !isempty(src)) || continue
                 dst = get!(() -> Dict{String,Any}(), native, blk)
@@ -2073,6 +2121,8 @@ function _load_remote_ref(url::String, visited::Set{String}=Set{String}();
     reject_template_imports_pre_v08(raw_data)
     # The top-level `solver` block arrives at esm 1.1.0 (esm-spec §2.2.4).
     reject_solver_pre_v11(raw_data)
+    # Declared `units` on a `const` node arrive at esm 1.2.0 (esm-spec §4.8.5).
+    reject_const_units_pre_v12(raw_data)
 
     # A §4.7 subsystem ref MUST NOT target a template- or coupling-library
     # file (esm-spec §9.7.1, §10.9). No location suffix for a remote ref: the

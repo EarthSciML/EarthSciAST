@@ -98,24 +98,11 @@ fn test_component_graph_generation() {
     reaction_systems.insert("rs1".to_string(), rs);
 
     let esm_file = EsmFile {
-        component_templates: None,
-        coordinates: None,
-        solver: None,
-        expression_templates: None,
-        metaparameters: None,
-        coupling_roles: None,
-        domain: None,
-        index_sets: None,
         esm: "0.1.0".to_string(),
         metadata,
         models: Some(models),
         reaction_systems: Some(reaction_systems),
-        data_sources: None,
-        operators: None,
-        enums: None,
-
-        coupling: None,
-        function_tables: None,
+        ..Default::default()
     };
 
     // Generate component graph
@@ -183,24 +170,10 @@ fn test_component_graph_exports() {
     models.insert("simple".to_string(), model);
 
     let esm_file = EsmFile {
-        component_templates: None,
-        coordinates: None,
-        solver: None,
-        expression_templates: None,
-        metaparameters: None,
-        coupling_roles: None,
-        domain: None,
-        index_sets: None,
         esm: "0.1.0".to_string(),
         metadata,
         models: Some(models),
-        reaction_systems: None,
-        data_sources: None,
-        operators: None,
-        enums: None,
-
-        coupling: None,
-        function_tables: None,
+        ..Default::default()
     };
 
     let comp_graph = component_graph(&esm_file);
@@ -455,24 +428,10 @@ fn test_component_existence() {
     models.insert("test_model".to_string(), model);
 
     let esm_file = EsmFile {
-        component_templates: None,
-        coordinates: None,
-        solver: None,
-        expression_templates: None,
-        metaparameters: None,
-        coupling_roles: None,
-        domain: None,
-        index_sets: None,
         esm: "0.1.0".to_string(),
         metadata,
         models: Some(models),
-        reaction_systems: None,
-        data_sources: None,
-        operators: None,
-        enums: None,
-
-        coupling: None,
-        function_tables: None,
+        ..Default::default()
     };
 
     // Test component existence

@@ -55,21 +55,19 @@ from typing import Any, Callable
 import numpy as np
 
 from . import op_registry
+from .classification import is_implicit_lhs
 from .esm_types import EsmFile, ExprNode
 from .expr_walk import iter_children
-
-# `DEFAULT_ABSTOL` / `DEFAULT_RELTOL` are a pure RE-EXPORT here (see the note
-# under `DEFAULT_ALG`): nothing in this module names them any more, because no
-# entry point may default to a concrete tolerance — that would occupy level 1 of
-# the §2.2.2 chain and the document could never win. Hence the `noqa`.
-from .solver import DEFAULT_ABSTOL, DEFAULT_RELTOL, resolve_tolerances  # noqa: F401
+from .expression import UnsupportedConstructError
 from .flatten import (
     FlattenedSystem,
     UnsupportedDimensionalityError,
+    _expr_to_string,
     _has_array_op,
     flatten,
+    infer_variable_shapes,
 )
-from .lower_table_lookup import lower_table_lookups
+from .lower_table_lookup import lower_flattened_table_lookups, lower_table_lookups
 from .numpy_interpreter import (
     _EVALUABLE_CORE_OPS,
     UnevaluableOperatorError,
@@ -82,6 +80,7 @@ from .pushdown_rewrite import (
     _pushdown_provider_gates,
     desugar_pushdown,
 )
+from .reference_resolution import E_REF_UNDECLARED_INDEX_SET
 from .simulation_array import (
     BuildInspection,
     _build_numpy_rhs,
@@ -115,6 +114,12 @@ from .simulation_scalar import (
     _ScalarRhsBuild,
     _simulate_scalar,
 )
+
+# `DEFAULT_ABSTOL` / `DEFAULT_RELTOL` are a pure RE-EXPORT here (see the note
+# under `DEFAULT_ALG`): nothing in this module names them any more, because no
+# entry point may default to a concrete tolerance — that would occupy level 1 of
+# the §2.2.2 chain and the document could never win. Hence the `noqa`.
+from .solver import DEFAULT_ABSTOL, DEFAULT_RELTOL, resolve_tolerances  # noqa: F401
 from .sympy_bridge import SimulationError
 from .template_imports import resolve_template_machinery
 
@@ -565,7 +570,13 @@ def esm_problem(
     if file is not None:
         file = lower_table_lookups(file)
 
-    flat = input if isinstance(input, FlattenedSystem) else flatten(file)
+    # A caller-flattened system has no document, but `flatten` carries
+    # `function_tables` so that this carrier can be lowered too.
+    flat = (
+        lower_flattened_table_lookups(input)
+        if isinstance(input, FlattenedSystem)
+        else flatten(file)
+    )
 
     # esm-spec §4.7.6.12: an ODE backend MUST reject a system with a surviving
     # spatial dimension. A spatial independent variable means an unlowered
@@ -588,6 +599,14 @@ def esm_problem(
     # simulation, its expression trees are WALKED". A whole-tree walk, not a
     # reachability check.
     _assert_no_unlowered_operator(flat)
+
+    # esm-spec §9.6.6 `unsupported_construct`: neither evaluator runs a discrete
+    # event or solves an implicit equation, so refuse both here, for every route,
+    # rather than build a model that silently runs without them.
+    _refuse_unsupported_constructs(flat, file)
+
+    # A declared shape over an undeclared index set, on a state nothing sizes.
+    _assert_shaped_states_have_extent(flat)
 
     # esm-spec §6.6.2 "Unrecognized override keys": a `p` key that names no
     # single parameter is an ERROR, raised at the one front door every pathway
@@ -791,6 +810,122 @@ def _declares_resolvable_shape(flat: FlattenedSystem) -> bool:
             if resolved:
                 return True
     return False
+
+
+def _assert_shaped_states_have_extent(flat: FlattenedSystem) -> None:
+    """Refuse a shaped state that names an undeclared index set and has no extent.
+
+    esm-spec §6.3 makes a variable's ``shape`` a list of keys in the
+    ``index_sets`` registry. A state whose declared shape names a set the
+    registry does not hold, and which no equation indexes, has no extent from
+    either source: the declaration cannot size it and usage inference gives it
+    none. Building it anyway lays a field the document says is arrayed out as a
+    single scalar slot. §9.7.10 allows such a name only until a grid is
+    injected, and "a name still unresolved after injection remains an error at
+    the build", so the build refuses it with the same code the ``ranges``
+    ``from`` resolver uses. Julia's tree-walk refuses these states
+    (``E_TREEWALK_UNDECLARED_INDEX_SET``) and Rust's array build does too.
+
+    Two cases are deliberately left alone. A name the registry holds but cannot
+    size yet (a ``derived`` set value invention materializes) is a declared set,
+    not an undeclared one. A state its equations index over literal ranges gets
+    its extent from them, which is how Julia builds it as well.
+    """
+    registry = flat.index_sets or {}
+    inferred: dict[str, tuple[int, ...]] | None = None
+    for name, var in flat.state_variables.items():
+        declared = getattr(var, "shape", None)
+        if not declared:
+            continue
+        undeclared = [axis for axis in declared if axis not in registry]
+        if not undeclared:
+            continue
+        if inferred is None:
+            inferred = infer_variable_shapes(flat)
+            inferred.update(flat.lifted_shapes or {})
+        if inferred.get(name):
+            continue
+        raise SimulationError(
+            f"{E_REF_UNDECLARED_INDEX_SET}: state {name!r} declares shape "
+            f"{list(declared)}, but index set(s) {undeclared} are not declared in "
+            f"the document `index_sets` registry and no equation indexes the "
+            f"state, so it has no extent; declare them, or inject the grid that "
+            f"does (esm-spec §6.3, §9.7.10: a name still unresolved after "
+            f"injection is an error at the build)"
+        )
+
+
+def _refuse_unsupported_constructs(flat: FlattenedSystem, file: EsmFile | None) -> None:
+    """esm-spec §9.6.6 ``unsupported_construct`` — refuse an event (continuous or
+    discrete) or an implicit equation before any pathway is built.
+
+    Neither the SymPy scalar pathway nor the NumPy array interpreter runs an
+    event, and neither solves an equation whose LHS is an expression. Both used
+    to build anyway and report a number the document does not describe (issues
+    #264 and #356). The SymPy pathway's continuous-event root functions only
+    stop the integration at the first crossing; no affect is ever applied. The
+    evaluator named in the message is the one the document's array-ness
+    selects; an event is refused on every route, including the data-refresh
+    ones.
+    """
+    evaluator = (
+        "Python array interpreter"
+        if _declares_resolvable_shape(flat)
+        or any(_has_array_op(eq.lhs) or _has_array_op(eq.rhs) for eq in flat.equations)
+        else "Python scalar interpreter"
+    )
+    # `flatten` lifts only the TOP-LEVEL components' events, so an event owned by
+    # an inline subsystem is not in `flat` at all; look for it in the document.
+    found = next(
+        (
+            (construct, events[0])
+            for construct, events in (
+                ("continuous event", flat.continuous_events),
+                ("discrete event", flat.discrete_events),
+            )
+            if events
+        ),
+        None,
+    )
+    if found is None and file is not None:
+        found = _first_subsystem_event(file)
+    if found is not None:
+        construct, event = found
+        name = getattr(event, "name", None)
+        raise UnsupportedConstructError(construct, f"'{name}'" if name else "(unnamed)", evaluator)
+    for eq in flat.equations:
+        if is_implicit_lhs(eq.lhs):
+            raise UnsupportedConstructError(
+                "implicit equation",
+                f"`{_expr_to_string(eq.lhs)} ~ {_expr_to_string(eq.rhs)}`",
+                evaluator,
+            )
+
+
+def _first_subsystem_event(file: EsmFile) -> tuple[str, Any] | None:
+    """The first event an inline subsystem declares, at any depth under any model
+    or reaction system of ``file``, a continuous one before a discrete one, as
+    ``(construct, event)``; ``None`` when there is none."""
+
+    def in_subsystems(component: Any) -> tuple[str, Any] | None:
+        for sub in (getattr(component, "subsystems", None) or {}).values():
+            for construct, attr in (
+                ("continuous event", "continuous_events"),
+                ("discrete event", "discrete_events"),
+            ):
+                events = getattr(sub, attr, None)
+                if events:
+                    return construct, events[0]
+            found = in_subsystems(sub)
+            if found is not None:
+                return found
+        return None
+
+    for component in [*file.models.values(), *file.reaction_systems.values()]:
+        found = in_subsystems(component)
+        if found is not None:
+            return found
+    return None
 
 
 def _assert_no_unlowered_operator(flat: FlattenedSystem) -> None:

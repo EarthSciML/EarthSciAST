@@ -191,12 +191,18 @@ diagnostic_code_registry! {
     /// A top-level `solver` block in a document declaring `esm` < 1.1.0
     /// (esm-spec §2.2.4, §2.2.5).
     SOLVER_VERSION_TOO_OLD = "solver_version_too_old";
+    /// Declared `units` on an expression node in a document declaring `esm` <
+    /// 1.2.0 (esm-spec §4.8.5).
+    CONST_UNITS_VERSION_TOO_OLD = "const_units_version_too_old";
     /// An `inject` whose target names a data LOADER rather than a component.
     TEMPLATE_INJECT_TARGET_IS_LOADER = "template_inject_target_is_loader";
     /// An `inject` whose target resolves to something that is not a component.
     TEMPLATE_INJECT_TARGET_NOT_COMPONENT = "template_inject_target_not_component";
     /// An `inject` whose target names nothing in the importing document.
     TEMPLATE_INJECT_TARGET_UNKNOWN = "template_inject_target_unknown";
+    /// A document carrying top-level `expression_templates` beside a component
+    /// payload, which a template-library file never declares (esm-spec §9.7.1).
+    TEMPLATE_LIBRARY_ILLEGAL_PAYLOAD = "template_library_illegal_payload";
 
     // ---- coupling libraries: §9.7 coupling-library imports
     //      (`coupling_imports.rs`) ----
@@ -327,6 +333,10 @@ diagnostic_code_registry! {
 
     /// A `ranges[*]`/expression reference to an undeclared array index set.
     ARRAY_SHAPE_MISMATCH = "array_shape_mismatch";
+    /// Inline ARRAY data as the `default` of a variable that declares no
+    /// `shape` (esm-spec §6.3). Inline array data is a shaped variable's value,
+    /// so with no shape there is nothing for the array to fill.
+    ARRAY_DEFAULT_WITHOUT_SHAPE = "array_default_without_shape";
     /// An equation graph that depends on itself.
     CIRCULAR_DEPENDENCY = "circular_dependency";
     /// A parameter `update` naming no declared data source.
@@ -352,6 +362,10 @@ diagnostic_code_registry! {
     FACTOR_WITH_EXPRESSION_TRANSFORM = "factor_with_expression_transform";
     /// An `ic` block inside a reaction system (§4.7).
     IC_IN_REACTION_SYSTEM = "ic_in_reaction_system";
+    /// A bare-index observed definition (`index(V, k…) ~ rhs`, esm-spec §6.3.1)
+    /// outside the runnable form: the RHS is not a `faq` whose `output_idx`
+    /// names the subscripts in order. Refused when the model is built.
+    INDEXED_DEFINITION_UNSUPPORTED_FORM = "indexed_definition_unsupported_form";
     /// A `broadcast` node whose `fn` names no scalar operator.
     INVALID_BROADCAST_FN = "invalid_broadcast_fn";
     /// A `join.on` key of a type the join cannot compare.
@@ -369,13 +383,26 @@ diagnostic_code_registry! {
     /// no evaluation order satisfies both definitions. The self-edge of a
     /// §4.3.1.1 recurrence CANDIDATE is not such an edge and is dropped.
     OBSERVED_CYCLE = "observed_cycle";
+    /// An output name that matches no variable exactly and whose last dotted
+    /// segment is shared by more than one variable: `derive_output_plan`'s
+    /// `observed` request (CONFORMANCE_SPEC §5.17.4). A last-segment match is
+    /// accepted only when it designates exactly one variable.
+    AMBIGUOUS_OUTPUT_NAME = "ambiguous_output_name";
     /// An `operator` whose declared variable the model does not have.
     OPERATOR_VARIABLE_MISSING = "operator_variable_missing";
+    /// A non-value-invention `faq` ranges over a `kind: "ragged"` index set
+    /// but its body never reads that set's `values` array (esm-spec §4.3.1
+    /// "Ragged ranges"): the range binds the POSITION k in 1..offsets[parent],
+    /// so the body reads positions where the author meant members.
+    RAGGED_VALUES_NOT_GATHERED = "ragged_values_not_gathered";
     /// A causal self-read (esm-spec §4.3.1.1) that is not strictly earlier
     /// along exactly one axis.
     RECURRENCE_NOT_WELLFOUNDED = "recurrence_not_wellfounded";
     /// A causal self-read the runtime cannot restrict to one cell.
     RECURRENCE_UNSUPPORTED_FORM = "recurrence_unsupported_form";
+    /// A continuous or discrete event, or an implicit equation, reached an
+    /// evaluator that cannot run it (esm-spec §9.6.6).
+    UNSUPPORTED_CONSTRUCT = "unsupported_construct";
     /// A relational node in a continuous (ODE-position) expression.
     RELATIONAL_NODE_IN_CONTINUOUS = "relational_node_in_continuous";
     /// A `faq` binder (a `ranges` key or an `output_idx` entry) spelled
@@ -518,6 +545,7 @@ mod error_code_tests {
     #[test]
     fn the_diagnostic_vocabulary_is_pinned() {
         let expected: Vec<&str> = vec![
+            "ambiguous_output_name",
             "ambiguous_subsystem_ref",
             "analysis",
             "apply_expression_template_bindings_mismatch",
@@ -525,12 +553,14 @@ mod error_code_tests {
             "apply_expression_template_recursive_body",
             "apply_expression_template_unknown_template",
             "apply_expression_template_version_too_old",
+            "array_default_without_shape",
             "array_shape_mismatch",
             "assertion_rank_mismatch",
             "circular_dependency",
             "closed_function_arg_type",
             "closed_function_arity",
             "closed_function_overflow",
+            "const_units_version_too_old",
             "coupling_edge_unknown_role",
             "coupling_import_bind_not_a_component",
             "coupling_import_not_library",
@@ -553,6 +583,7 @@ mod error_code_tests {
             "factor_with_expression_transform",
             "geometry_manifold_invalid",
             "ic_in_reaction_system",
+            "indexed_definition_unsupported_form",
             "interp_axis_length_mismatch",
             "interp_axis_too_short",
             "interp_nan_in_axis",
@@ -570,6 +601,7 @@ mod error_code_tests {
             "null_reaction",
             "observed_cycle",
             "operator_variable_missing",
+            "ragged_values_not_gathered",
             "recurrence_not_wellfounded",
             "recurrence_unsupported_form",
             "relational_node_in_continuous",
@@ -609,6 +641,7 @@ mod error_code_tests {
             "template_inject_target_is_loader",
             "template_inject_target_not_component",
             "template_inject_target_unknown",
+            "template_library_illegal_payload",
             "toplevel_model_ref_unresolved",
             "undefined_index_set",
             "undefined_operator",
@@ -627,6 +660,7 @@ mod error_code_tests {
             "unparseable_unit",
             "unresolved_scoped_ref",
             "unresolved_subsystem_ref",
+            "unsupported_construct",
         ];
         assert_eq!(error_code_names(), expected);
     }

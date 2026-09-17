@@ -463,7 +463,7 @@ fn a_relative_import_resolves_against_the_importing_document_not_the_working_dir
 
 /// The document's own base wins over an unrelated option, and the authored `ref`
 /// round-trips verbatim (esm-spec §10.10.3): the base is recorded beside the
-/// entry, never written into it.
+/// document, never written into the entry.
 #[test]
 fn a_loaded_documents_base_wins_and_its_ref_round_trips_verbatim() {
     let file = earthsci_ast::load_path(coupling_corpus("assembly_import.esm"))
@@ -493,7 +493,7 @@ fn a_loaded_documents_base_wins_and_its_ref_round_trips_verbatim() {
         "authored ref lost on emit"
     );
     assert!(
-        !json.contains("base_dir"),
+        !json.contains("coupling_import_base"),
         "loader-only base leaked into the document"
     );
 }
@@ -589,4 +589,49 @@ fn a_default_less_coupling_target_makes_an_omitted_import_an_error() {
         2.0,
     )]))
     .expect("a run-time value satisfies the default-less target");
+}
+
+/// A document with no location of its own — built in memory, or parsed from a
+/// string with no base — leaves [`CouplingImportOptions::base_path`] in charge,
+/// and one given an explicit base at load anchors on it with no option at all.
+/// All five bindings agree on this, so a caller's base is never silently
+/// replaced by the working directory.
+#[test]
+fn an_in_memory_document_keeps_the_callers_base() {
+    let corpus = coupling_corpus("assembly_import.esm");
+    let dir = corpus
+        .parent()
+        .expect("corpus directory")
+        .to_string_lossy()
+        .into_owned();
+    let text = std::fs::read_to_string(&corpus).expect("assembly_import.esm reads");
+    let value: serde_json::Value = serde_json::from_str(&text).expect("parses");
+
+    // No base of its own -> the option resolves the import.
+    for file in [
+        earthsci_ast::load_string(&text).expect("load_string"),
+        earthsci_ast::load_document(&value).expect("load_document"),
+    ] {
+        flatten_with_options(
+            &file,
+            &CouplingImportOptions {
+                base_path: dir.clone(),
+                load_ref: None,
+            },
+        )
+        .expect("the caller's base_path resolves the import");
+    }
+
+    // An explicit base of its own -> it wins, with no option at all.
+    let opts = earthsci_ast::LoadOptions {
+        base_path: Some(std::path::PathBuf::from(&dir)),
+        ..Default::default()
+    };
+    for file in [
+        earthsci_ast::load_string_with_options(&text, &opts).expect("load_string_with_options"),
+        earthsci_ast::load_document_with_options(&value, &opts)
+            .expect("load_document_with_options"),
+    ] {
+        flatten(&file).expect("the explicit load base resolves the import");
+    }
 }

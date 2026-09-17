@@ -53,6 +53,7 @@ from .error_handling import (
     TEMPLATE_IMPORT_VERSION_TOO_OLD,
     TEMPLATE_INJECT_TARGET_NOT_COMPONENT,
     TEMPLATE_INJECT_TARGET_UNKNOWN,
+    TEMPLATE_LIBRARY_ILLEGAL_PAYLOAD,
 )
 
 # Shared leaf primitives (also used by lower_expression_templates). Importing
@@ -159,6 +160,33 @@ def _is_template_library_doc(raw: Any) -> bool:
     systems / loaders / coupling / domain) is checked separately at import
     edges."""
     return _is_object(raw) and "expression_templates" in raw
+
+
+def reject_impure_template_library(view: Any) -> None:
+    """Reject top-level ``expression_templates`` beside a component payload.
+
+    A document carrying top-level ``expression_templates`` is a template-library
+    file (esm-spec §9.7.1), which MUST NOT declare ``models``,
+    ``reaction_systems``, ``data_sources``, ``coupling``, or ``domain``. Rewrite
+    rules are component-local (§9.6.3 constraint 4), so beside a component the
+    block is visible to nothing: the document is rejected with
+    ``template_library_illegal_payload`` rather than loaded with the templates
+    silently inert. An import target is held to the same rule at the edge, as
+    ``template_import_not_library``.
+    """
+    if not _is_template_library_doc(view):
+        return
+    present = [k for k in _LIBRARY_FORBIDDEN_KEYS if k in view]
+    if not present:
+        return
+    raise ExpressionTemplateError(
+        TEMPLATE_LIBRARY_ILLEGAL_PAYLOAD,
+        "top-level `expression_templates` makes this document a template-library file, which MUST NOT declare "
+        + ", ".join(f"`{k}`" for k in present)
+        + " (esm-spec §9.7.1); templates declared there are visible to no"
+        " component. Declare them in the component's own `expression_template"
+        "s` block (§9.6.1), or move them to a template-library file and import it with `expression_template_imports` (§9.7.2)",
+    )
 
 
 # ---------------------------------------------------------------------------

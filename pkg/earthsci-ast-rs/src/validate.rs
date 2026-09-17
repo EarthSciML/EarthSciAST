@@ -185,6 +185,9 @@ pub enum StructuralErrorCode {
     JoinSideAmbiguous,
     /// A `join.syms` entry that is not a range symbol of the node.
     JoinSymsUnknownSymbol,
+    /// A `faq` whose range iterates a `kind: "ragged"` index set but whose body
+    /// never reads that set's `values` array (esm-spec §4.3.1 "Ragged ranges").
+    RaggedValuesNotGathered,
     /// A value-invention `faq` (`distinct: true`) whose `key`/`expr` reads
     /// a model STATE variable, so the cadence partition classes it CONTINUOUS —
     /// relational work is forbidden on the per-step hot path (RFC
@@ -264,6 +267,15 @@ pub enum StructuralErrorCode {
     /// An assertion whose form does not match the declared rank of the variable
     /// it names (esm-spec §6.6.5).
     AssertionRankMismatch,
+    /// Inline ARRAY data as the `default` of a variable that declares no
+    /// `shape` — omitted, null or empty (esm-spec §6.3).
+    ///
+    /// Inline array data is a SHAPED variable's value: its nesting is matched
+    /// against the declared shape, so with no shape there is nothing for it to
+    /// fill and no scalar reading of it. Rejected at the declaration so the
+    /// document fails to load instead of reaching a runtime that would have to
+    /// drop the variable from scope or fabricate a value for it.
+    ArrayDefaultWithoutShape,
 }
 
 use crate::diagnostic::codes;
@@ -296,6 +308,7 @@ impl std::fmt::Display for StructuralErrorCode {
             Self::JoinSideAmbiguous => codes::JOIN_SIDE_AMBIGUOUS,
             Self::JoinSymsUnknownSymbol => codes::JOIN_SYMS_UNKNOWN_SYMBOL,
             Self::RelationalNodeInContinuous => codes::RELATIONAL_NODE_IN_CONTINUOUS,
+            Self::RaggedValuesNotGathered => codes::RAGGED_VALUES_NOT_GATHERED,
             Self::RecurrenceNotWellfounded => codes::RECURRENCE_NOT_WELLFOUNDED,
             Self::RecurrenceUnsupportedForm => codes::RECURRENCE_UNSUPPORTED_FORM,
             Self::UndefinedIndexSet => codes::UNDEFINED_INDEX_SET,
@@ -305,6 +318,7 @@ impl std::fmt::Display for StructuralErrorCode {
             Self::ReservedVariableName => codes::RESERVED_VARIABLE_NAME,
             Self::UnknownOverrideKey => codes::UNKNOWN_OVERRIDE_KEY,
             Self::AssertionRankMismatch => codes::ASSERTION_RANK_MISMATCH,
+            Self::ArrayDefaultWithoutShape => codes::ARRAY_DEFAULT_WITHOUT_SHAPE,
         };
         write!(f, "{s}")
     }

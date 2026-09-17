@@ -13,7 +13,7 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { loadPath as loadEsmPath, loadString, validateSchema } from './parse.js'
+import { loadDocument, loadPath as loadEsmPath, loadString, validateSchema } from './parse.js'
 import { toJson } from './serialize.js'
 import { flatten } from './flatten.js'
 import { expandCouplingImports } from './coupling-imports.js'
@@ -93,6 +93,19 @@ describe('coupling-library conformance (esm-spec §10.9–§10.11)', () => {
     const loaded = loadEsmPath(cl('assembly_import.esm'))
     expect(() => flatten(loaded, { basePath: path.join('does', 'not', 'exist') })).not.toThrow()
     expect(toJson(loaded)).toContain('"ref": "./rothermel_fuel.esm"')
+  })
+
+  it("a document with no base of its own keeps the caller's flatten base", () => {
+    // Built in memory, or parsed from text with no basePath: the document has no
+    // location, so CouplingImportOptions.basePath stays in charge. All five
+    // bindings agree on this, so a caller's base is never silently replaced.
+    const text = readText(cl('assembly_import.esm'))
+    const doc = readJson(cl('assembly_import.esm'))
+    expect(() => flatten(loadString(text), { basePath: dir })).not.toThrow()
+    expect(() => flatten(loadDocument(doc), { basePath: dir })).not.toThrow()
+    // An explicit base of its own wins, with no option at all.
+    expect(() => flatten(loadString(text, { basePath: dir }))).not.toThrow()
+    expect(() => flatten(loadDocument(doc, { basePath: dir }))).not.toThrow()
   })
 
   // --- Multiple instantiation: two binds -> two independent edge sets -----
