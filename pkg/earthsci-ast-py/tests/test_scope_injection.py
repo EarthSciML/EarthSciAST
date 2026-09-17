@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 
 from conftest import CONFORMANCE_DIR
 
@@ -150,3 +151,33 @@ def test_form_c_ephemeral_builds_lower_independently():
     assert e2.index_sets["lon"]["size"] == 144
     # The persisted file is untouched by the ephemeral builds.
     assert f.models["Advection"].equations[0].rhs.args[1].op == "D"
+
+
+def test_form_a_injected_import_ref_expands_env_var(tmp_path, monkeypatch):
+    """esm-spec §4.7: a ``${VAR}`` in a form-A injected import expands, and it
+    expands BEFORE the ref is anchored at the assembler's directory — so a
+    variable holding an ABSOLUTE path is used as-is rather than joined onto it.
+    """
+    var = "ESM_PY_ENVREF_INJECTED_LIB_DIR"
+    conf = _conf("inject_subsystem_ref")
+    shutil.copy(os.path.join(conf, "leaf.esm"), tmp_path / "leaf.esm")
+    fixture = open(os.path.join(conf, "fixture.esm")).read()
+    doc = tmp_path / "fixture.esm"
+    doc.write_text(
+        fixture.replace(
+            '"./central_D_lon_zero_grad_bc.esm"',
+            f'"${{{var}}}/central_D_lon_zero_grad_bc.esm"',
+        )
+    )
+
+    # Unset: the token stays literal, so the injected import fails to resolve.
+    monkeypatch.delenv(var, raising=False)
+    assert _err_code(lambda: load_path(str(doc))) == "template_import_unresolved"
+
+    # Negative control: the injected import is load-bearing.
+    monkeypatch.setenv(var, str(tmp_path))
+    assert _err_code(lambda: load_path(str(doc))) == "template_import_unresolved"
+
+    monkeypatch.setenv(var, conf)
+    f = load_path(str(doc))
+    assert f.index_sets["lon"]["size"] == 288

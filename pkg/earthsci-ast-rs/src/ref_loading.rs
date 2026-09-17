@@ -23,6 +23,7 @@
 
 use crate::diagnostic::{DiagnosticError, codes, err};
 use serde_json::{Map, Value};
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -298,6 +299,11 @@ fn load_ref_document(
     visited: &mut HashSet<PathBuf>,
     noun: &RefNoun,
 ) -> Result<(PathBuf, Value), DiagnosticError> {
+    // esm-spec §4.7: `${VAR}` expands from the environment BEFORE the ref is
+    // classified, so a variable holding a URL is recognised as the remote ref
+    // it expands to rather than joined onto `base` as a path segment.
+    let expanded = expand_env_refs(ref_str);
+    let ref_str: &str = &expanded;
     if ref_str.starts_with("http://") || ref_str.starts_with("https://") {
         return Err(err(
             noun.code,
@@ -309,7 +315,6 @@ fn load_ref_document(
         ));
     }
 
-    let ref_str: &str = &expand_env_refs(ref_str);
     let canonical = base.join(ref_str).canonicalize().map_err(|e| {
         err(
             noun.code,
@@ -991,10 +996,15 @@ fn absolutize_nested_refs(value: &mut Value, base_dir: &Path) {
     match value {
         Value::Object(map) => {
             if let Some(Value::String(r)) = map.get("ref") {
+                // esm-spec §4.7: expand `${VAR}` BEFORE deciding whether the ref
+                // is absolute, as the Julia reference does — classifying first
+                // would anchor an expanded ABSOLUTE ref at `base_dir` as though
+                // it were relative.
+                let r = expand_env_refs(r).into_owned();
                 let is_abs =
                     r.starts_with('/') || r.starts_with("http://") || r.starts_with("https://");
                 if !is_abs {
-                    let joined = base_dir.join(r.as_str());
+                    let joined = base_dir.join(&r);
                     let abs = joined
                         .canonicalize()
                         .map(|p| p.to_string_lossy().into_owned())
@@ -1405,6 +1415,58 @@ fn extract_single_system(value: Value, source: &Path) -> Result<Value, Diagnosti
     }
 }
 
+/// Expand `${VAR}` tokens in a `ref` from the loader's environment
+/// (esm-spec §4.7) — the mechanism a document uses to reach a sibling library
+/// repository checked out at a deployment-chosen path.
+///
+/// Three rules, matching the Julia reference and the Python binding, which both
+/// spell them as the regex `\$\{([A-Za-z_][A-Za-z0-9_]*)\}`:
+///
+/// * only the BRACED form with a C-identifier name expands — never a bare
+///   `$VAR`, never a non-identifier name, never an unclosed `${`;
+/// * an UNSET variable is left verbatim, so the ref fails with the ordinary
+///   unresolved diagnostic naming the `${VAR}` text rather than misresolving
+///   against a path built from an empty string;
+/// * callers expand BEFORE classifying the ref as remote / absolute / relative,
+///   because §4.7 resolves the EXPANDED string: an expanded relative ref
+///   anchors against the referencing file's directory and an expanded
+///   absolute-or-URL ref is used as-is.
+pub(crate) fn expand_env_refs(ref_str: &str) -> Cow<'_, str> {
+    if !ref_str.contains("${") {
+        return Cow::Borrowed(ref_str);
+    }
+    let mut out = String::with_capacity(ref_str.len());
+    let mut rest = ref_str;
+    while let Some(start) = rest.find("${") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 2..];
+        match after.find('}') {
+            Some(end) if is_env_var_name(&after[..end]) => {
+                match std::env::var(&after[..end]) {
+                    Ok(value) => out.push_str(&value),
+                    // Unset: keep the whole token, so the ref fails unresolved.
+                    Err(_) => out.push_str(&rest[start..start + 3 + end]),
+                }
+                rest = &after[end + 1..];
+            }
+            // Not a `${IDENT}` token, so `${` is an ordinary path character.
+            _ => {
+                out.push_str("${");
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    Cow::Owned(out)
+}
+
+/// A C-identifier — the only variable-name shape §4.7's `${VAR}` token admits.
+fn is_env_var_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1766,35 +1828,4 @@ mod tests {
         assert!(inner_resolved.get("ref").is_none());
         assert_eq!(serde_json::to_value(&typed).unwrap(), raw);
     }
-}
-
-/// Expand `${VAR}` tokens in a `ref` from the loader's environment
-/// (esm-spec §4.7, an OPTIONAL capability this binding now implements).
-///
-/// Only the braced form is expanded, never bare `$VAR`. An **unset** variable
-/// is left literal, so the ref fails with the ordinary unresolved diagnostic
-/// rather than misresolving to a path built from an empty string — the spec
-/// requires exactly that, "so the ref fails to resolve with the ordinary
-/// unresolved diagnostic ... rather than misresolving".
-pub(crate) fn expand_env_refs(ref_str: &str) -> std::borrow::Cow<'_, str> {
-    if !ref_str.contains("${") {
-        return std::borrow::Cow::Borrowed(ref_str);
-    }
-    let mut out = String::with_capacity(ref_str.len());
-    let mut rest = ref_str;
-    while let Some(start) = rest.find("${") {
-        let Some(end) = rest[start + 2..].find('}') else {
-            break;
-        };
-        let name = &rest[start + 2..start + 2 + end];
-        out.push_str(&rest[..start]);
-        match std::env::var(name) {
-            Ok(value) => out.push_str(&value),
-            // Unset: keep the token verbatim.
-            Err(_) => out.push_str(&rest[start..start + 3 + end]),
-        }
-        rest = &rest[start + 3 + end..];
-    }
-    out.push_str(rest);
-    std::borrow::Cow::Owned(out)
 }

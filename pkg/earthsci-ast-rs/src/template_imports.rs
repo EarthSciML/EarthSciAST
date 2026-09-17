@@ -1964,7 +1964,10 @@ fn lexical_normalize(p: &Path) -> PathBuf {
 }
 
 fn canonical_ref(ref_str: &str, base_dir: &Path) -> String {
-    lexical_normalize(&base_dir.join(crate::ref_loading::expand_env_refs(ref_str).as_ref()))
+    // esm-spec §4.7: the cycle/cache key is built from the EXPANDED ref, so it
+    // names the same file `load_import_raw` actually reads.
+    let expanded = crate::ref_loading::expand_env_refs(ref_str);
+    lexical_normalize(&base_dir.join(expanded.as_ref()))
         .to_string_lossy()
         .into_owned()
 }
@@ -1974,6 +1977,11 @@ fn load_import_raw(
     base_dir: &Path,
     origin: &str,
 ) -> Result<(Value, PathBuf), ExpressionTemplateError> {
+    // esm-spec §4.7: expand before classifying, so a variable holding a URL is
+    // rejected as the remote ref it expands to rather than joined onto
+    // `base_dir` as a path segment.
+    let expanded = crate::ref_loading::expand_env_refs(ref_str);
+    let ref_str: &str = &expanded;
     if ref_str.starts_with("http://") || ref_str.starts_with("https://") {
         return Err(err(
             codes::TEMPLATE_IMPORT_UNRESOLVED,
@@ -1983,7 +1991,7 @@ fn load_import_raw(
             ),
         ));
     }
-    let path = lexical_normalize(&base_dir.join(crate::ref_loading::expand_env_refs(ref_str).as_ref()));
+    let path = lexical_normalize(&base_dir.join(ref_str));
     let content = std::fs::read_to_string(&path).map_err(|e| {
         err(
             codes::TEMPLATE_IMPORT_UNRESOLVED,
@@ -2538,12 +2546,15 @@ fn visit_mount_ref(
     let Some(ref_str) = entry.get("ref").and_then(|v| v.as_str()) else {
         return;
     };
+    // esm-spec §4.7 `${VAR}` expansion, before the remote classification below.
+    let expanded = crate::ref_loading::expand_env_refs(ref_str);
+    let ref_str: &str = &expanded;
     // Remote refs are not fetched by this crate (the subsystem-ref loader
     // rejects them outright); contributing nothing is the right widening.
     if ref_str.starts_with("http://") || ref_str.starts_with("https://") {
         return;
     }
-    let path = lexical_normalize(&base_path.join(crate::ref_loading::expand_env_refs(ref_str).as_ref()));
+    let path = lexical_normalize(&base_path.join(ref_str));
     if !seen.insert(path.to_string_lossy().into_owned()) {
         return;
     }
