@@ -854,6 +854,7 @@ def _assert_shaped_states_have_extent(flat: FlattenedSystem) -> None:
             f"injection is an error at the build)"
         )
 
+
 def _refuse_unsupported_constructs(flat: FlattenedSystem, file: EsmFile | None) -> None:
     """esm-spec §9.6.6 ``unsupported_construct`` — refuse an event (continuous or
     discrete) or an implicit equation before any pathway is built.
