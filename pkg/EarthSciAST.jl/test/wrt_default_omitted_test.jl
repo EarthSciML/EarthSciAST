@@ -25,8 +25,13 @@ include("testutils.jl")
 # conformance manifest instead.
 const _WRT_SCALAR = joinpath(TESTUTILS_REPO_ROOT, "tests", "simulation",
                              "wrt_default_omitted.esm")
-const _WRT_SHAPED = joinpath(TESTUTILS_REPO_ROOT, "tests", "fixtures", "faq",
-                             "28_wrt_default_omitted_shaped.esm")
+# The shaped pair is two FILES, not two models of one file: every runner binds
+# the per-cell initial conditions by bare name, which is ambiguous when two
+# models in one document both declare `x`.
+const _WRT_SHAPED_OMITTED = joinpath(TESTUTILS_REPO_ROOT, "tests", "fixtures", "faq",
+                                     "28_wrt_default_omitted_shaped.esm")
+const _WRT_SHAPED_EXPLICIT = joinpath(TESTUTILS_REPO_ROOT, "tests", "fixtures", "faq",
+                                      "29_wrt_default_explicit_shaped.esm")
 
 # Every assertion of one model as (variable, time, actual), demanding PASS.
 function _wrt_run(fixture::AbstractString, model::AbstractString)
@@ -42,10 +47,10 @@ end
 
 # The two spellings must agree sample for sample, not merely both land close
 # enough to the closed form.
-function _wrt_agree(fixture::AbstractString, omitted::AbstractString,
-                    explicit::AbstractString)
-    a = _wrt_run(fixture, omitted)
-    b = _wrt_run(fixture, explicit)
+function _wrt_agree(fa::AbstractString, omitted::AbstractString,
+                    explicit::AbstractString; fb::AbstractString=fa)
+    a = _wrt_run(fa, omitted)
+    b = _wrt_run(fb, explicit)
     @test length(a) == length(b)
     for ((va, ta, xa), (vb, tb, xb)) in zip(a, b)
         @test (va, ta) == (vb, tb)
@@ -74,7 +79,8 @@ end
     end
 
     @testset "shaped state" begin
-        _wrt_agree(_WRT_SHAPED, "ShapedWrtOmitted", "ShapedWrtExplicit")
+        _wrt_agree(_WRT_SHAPED_OMITTED, "ShapedWrtOmitted", "ShapedWrtExplicit";
+                   fb=_WRT_SHAPED_EXPLICIT)
     end
 
     @testset "display applies the same default" begin

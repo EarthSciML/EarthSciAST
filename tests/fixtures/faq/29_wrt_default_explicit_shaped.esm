@@ -1,8 +1,8 @@
 {
   "esm": "1.1.0",
   "metadata": {
-    "name": "WrtDefaultOmittedShaped",
-    "description": "esm-spec §4.2: on a `D` node an ABSENT `wrt` MEANS `t` — the SHAPED half of the EarthSciAST#407 regression, whose SCALAR half is `tests/simulation/wrt_default_omitted.esm`. Four cells decay as exp(-0.5 t) under a whole-array `D(x)` written WITHOUT `wrt`, and the column sum is observed through a sum-`faq`. Its control twin, `29_wrt_default_explicit_shaped.esm`, is byte-identical apart from carrying `\"wrt\": \"t\"` and must produce the same trajectory; a binding that reads the two spellings differently does not get a wrong number, it cannot build one of them at all. The two live in separate files rather than as two models of one document because each runner binds the per-cell initial conditions `x[1]`..`x[4]` by bare name, which is ambiguous when two models in one document both declare `x`. They live HERE rather than in `tests/simulation/` because that corpus's generic runner drives the scalar backend, which has no `faq` evaluator — and the shaped spelling has to be executed somewhere the array pathway runs, since in Rust the array path applied the §4.2 default and the scalar path did not.",
+    "name": "WrtDefaultExplicitShaped",
+    "description": "The control twin of `28_wrt_default_omitted_shaped.esm` (EarthSciAST#407): the same shaped four-cell decay with a sum-`faq` observed, differing only in that this one spells `\"wrt\": \"t\"` on the `D` while 28 omits it. esm-spec §4.2 makes the two mean the same thing, so the two files must integrate to the same trajectory. Pairing them is the point: a fixture carrying only the short form would go red on a binding that cannot build it, but would not pin that the two spellings AGREE.",
     "authors": [
       "EarthSciAST contributors"
     ],
@@ -20,7 +20,7 @@
     }
   },
   "models": {
-    "ShapedWrtOmitted": {
+    "ShapedWrtExplicit": {
       "variables": {
         "x": {
           "type": "unknown",
@@ -28,7 +28,7 @@
           "shape": [
             "lev"
           ],
-          "description": "State shaped over `lev`, tendency written with `wrt` omitted"
+          "description": "State shaped over `lev`, tendency spells `wrt` explicitly"
         },
         "total": {
           "type": "unknown",
@@ -48,7 +48,8 @@
             "op": "D",
             "args": [
               "x"
-            ]
+            ],
+            "wrt": "t"
           },
           "rhs": {
             "op": "*",
@@ -93,8 +94,8 @@
       },
       "tests": [
         {
-          "id": "shaped_wrt_omitted",
-          "description": "Four identical cells each decaying as exp(-0.5 t), so the column sum is 4 exp(-0.5 t). Sampled at t = 0 and t = 2.",
+          "id": "shaped_wrt_explicit",
+          "description": "The control for `shaped_wrt_omitted`: the same shaped decay with `\"wrt\": \"t\"` written out. Both must produce the same trajectory.",
           "time_span": {
             "start": 0.0,
             "end": 2.0

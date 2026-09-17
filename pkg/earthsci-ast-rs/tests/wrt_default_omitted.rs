@@ -17,12 +17,16 @@
 //! that is correct per §4.2.
 //!
 //! Both shapes are exercised, each against its explicitly-spelled twin, so the
-//! asymmetry cannot come back in either direction. The numbers live in two
-//! shared fixtures, split by which backend can execute them:
-//! `tests/simulation/wrt_default_omitted.esm` holds the scalar pair, and
-//! `tests/fixtures/faq/28_wrt_default_omitted_shaped.esm` (registered in the
-//! `simulate_faq` conformance manifest) holds the shaped pair, whose sum-`faq`
-//! observed the scalar backend has no evaluator for.
+//! asymmetry cannot come back in either direction. The numbers live in shared
+//! fixtures, split by which backend can execute them:
+//! `tests/simulation/wrt_default_omitted.esm` holds the scalar pair as two
+//! models, and `tests/fixtures/faq/28_wrt_default_omitted_shaped.esm` +
+//! `29_wrt_default_explicit_shaped.esm` (both registered in the `simulate_faq`
+//! conformance manifest) hold the shaped pair. The shaped pair is two FILES
+//! because each runner binds the per-cell initial conditions by bare name, so
+//! two models both declaring `x` in one document is ambiguous; and it is out of
+//! `tests/simulation/` because its sum-`faq` observed has no evaluator in the
+//! scalar backend that corpus's generic runner drives.
 
 #![cfg(not(target_arch = "wasm32"))]
 
@@ -65,8 +69,13 @@ fn run_model(fixture: &str, model: &str) -> Vec<(String, f64, f64)> {
 /// The two spellings must agree sample for sample, not merely both land close
 /// enough to the closed form.
 fn assert_spellings_agree(fixture: &str, omitted: &str, explicit: &str) {
-    let a = run_model(fixture, omitted);
-    let b = run_model(fixture, explicit);
+    assert_spellings_agree_across_files((fixture, omitted), (fixture, explicit));
+}
+
+/// The same comparison when the two spellings live in separate documents.
+fn assert_spellings_agree_across_files((fa, omitted): (&str, &str), (fb, explicit): (&str, &str)) {
+    let a = run_model(fa, omitted);
+    let b = run_model(fb, explicit);
     assert_eq!(
         a.len(),
         b.len(),
@@ -92,10 +101,15 @@ fn a_scalar_state_integrates_with_wrt_omitted_exactly_as_with_it() {
 
 #[test]
 fn a_shaped_state_integrates_with_wrt_omitted_exactly_as_with_it() {
-    assert_spellings_agree(
-        "fixtures/faq/28_wrt_default_omitted_shaped.esm",
-        "ShapedWrtOmitted",
-        "ShapedWrtExplicit",
+    assert_spellings_agree_across_files(
+        (
+            "fixtures/faq/28_wrt_default_omitted_shaped.esm",
+            "ShapedWrtOmitted",
+        ),
+        (
+            "fixtures/faq/29_wrt_default_explicit_shaped.esm",
+            "ShapedWrtExplicit",
+        ),
     );
 }
 

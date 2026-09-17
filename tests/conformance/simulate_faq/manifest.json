@@ -110,7 +110,18 @@
         "typescript": "TypeScript binding has no faq numeric executor; round-trip only.",
         "go": "Go binding has no faq numeric executor; round-trip only."
       },
-      "notes": "esm-spec §4.2's `wrt` DEFAULT on a SHAPED state: an absent `wrt` on `D` MEANS `t`. `ShapedWrtOmitted` and `ShapedWrtExplicit` are the same four-cell exponential decay observed through a sum-`faq`, differing only in whether the equation spells `\"wrt\": \"t\"`, so both must integrate to 4*exp(-0.5 t) — and a binding that reads the two spellings differently does not get a wrong number, it cannot build one of them at all. The SCALAR half of the pair is tests/simulation/wrt_default_omitted.esm, kept separate because THAT corpus's generic runner drives the scalar backend, which has no `faq` evaluator. Both shapes have to be executed, each somewhere its own backend runs, because the defect this pins (issue #407) was SHAPE-DEPENDENT in Rust: the array path classified its LHS through the shared classification API and applied the default, while the scalar interpreter matched `wrt == Some(\"t\")` and did not — so the shaped spelling simulated and the scalar one was refused at interpreter build with a diagnostic naming a missing equation. Julia missed the default on both shapes and Python refused the document at parse."
+      "notes": "esm-spec §4.2's `wrt` DEFAULT on a SHAPED state: an absent `wrt` on `D` MEANS `t`. A whole-array `D(x)` with no `wrt` over four cells decaying as exp(-0.5 t), observed through a sum-`faq`, so the column sum is 4*exp(-0.5 t). Its control twin is fixture 29, identical but spelling `wrt: t`; the two must integrate to the same trajectory, and a binding that reads the spellings differently does not get a wrong number, it cannot build one of them at all. They are two FILES rather than two models of one document because each runner binds the per-cell initial conditions `x[1]`..`x[4]` by bare name, which is ambiguous when two models in one document both declare `x`. The SCALAR half of the regression is tests/simulation/wrt_default_omitted.esm, kept separate because THAT corpus's generic runner drives the scalar backend, which has no `faq` evaluator. Both shapes have to be executed, each somewhere its own backend runs, because the defect this pins (issue #407) was SHAPE-DEPENDENT in Rust: the array path classified its LHS through the shared classification API and applied the default, while the scalar interpreter matched `wrt == Some(\"t\")` and did not — so the shaped spelling simulated and the scalar one was refused at interpreter build with a diagnostic naming a missing equation. Julia missed the default on both shapes and Python refused the document at parse."
+    },
+    {
+      "id": "fixtures/faq/29_wrt_default_explicit_shaped",
+      "path": "fixtures/faq/29_wrt_default_explicit_shaped.esm",
+      "tags": ["faq", "reduce-plus", "wrt-default", "esm-spec-4.2", "regression"],
+      "executing_bindings": ["python", "rust", "julia"],
+      "skip_bindings": {
+        "typescript": "TypeScript binding has no faq numeric executor; round-trip only.",
+        "go": "Go binding has no faq numeric executor; round-trip only."
+      },
+      "notes": "The CONTROL twin of fixture 28 (issue #407): the same shaped four-cell decay with a sum-`faq` observed, differing only in that this one spells `wrt: t` on the `D` while 28 omits it. esm-spec §4.2 makes the two mean the same thing, so the two fixtures must produce the same trajectory. It earns its place by being the thing 28 is compared AGAINST: a corpus carrying only the short form would go red on a binding that cannot build it, but would not pin that the two spellings AGREE, which is the actual content of §4.2's default."
     }
   ]
 }

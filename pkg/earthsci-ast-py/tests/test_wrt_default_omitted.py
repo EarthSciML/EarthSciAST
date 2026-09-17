@@ -39,12 +39,12 @@ from earthsci_ast.parse import _parse_expression, load_path
 # ``faq`` evaluator; the shaped pair is registered in the ``simulate_faq``
 # conformance manifest instead.
 SCALAR_FIXTURE = REPO_ROOT / "tests" / "simulation" / "wrt_default_omitted.esm"
-SHAPED_FIXTURE = (
-    REPO_ROOT / "tests" / "fixtures" / "faq" / "28_wrt_default_omitted_shaped.esm"
-)
-CLASSIFICATION_FIXTURE = (
-    CONFORMANCE_DIR / "classification" / "fixtures" / "wrt_default_omitted.esm"
-)
+# The shaped pair is two FILES, not two models of one file: every runner binds
+# the per-cell initial conditions by bare name, which is ambiguous when two
+# models in one document both declare ``x``.
+SHAPED_OMITTED = REPO_ROOT / "tests" / "fixtures" / "faq" / "28_wrt_default_omitted_shaped.esm"
+SHAPED_EXPLICIT = REPO_ROOT / "tests" / "fixtures" / "faq" / "29_wrt_default_explicit_shaped.esm"
+CLASSIFICATION_FIXTURE = CONFORMANCE_DIR / "classification" / "fixtures" / "wrt_default_omitted.esm"
 
 
 def test_a_d_node_without_wrt_parses() -> None:
@@ -94,15 +94,15 @@ def _run(fixture, model: str) -> list[tuple[str, float, float]]:
 
 
 @pytest.mark.parametrize(
-    ("fixture", "omitted", "explicit"),
+    ("fa", "omitted", "fb", "explicit"),
     [
-        (SCALAR_FIXTURE, "ScalarWrtOmitted", "ScalarWrtExplicit"),
-        (SHAPED_FIXTURE, "ShapedWrtOmitted", "ShapedWrtExplicit"),
+        (SCALAR_FIXTURE, "ScalarWrtOmitted", SCALAR_FIXTURE, "ScalarWrtExplicit"),
+        (SHAPED_OMITTED, "ShapedWrtOmitted", SHAPED_EXPLICIT, "ShapedWrtExplicit"),
     ],
 )
-def test_both_spellings_integrate_identically(fixture, omitted: str, explicit: str) -> None:
-    a = _run(fixture, omitted)
-    b = _run(fixture, explicit)
+def test_both_spellings_integrate_identically(fa, omitted: str, fb, explicit: str) -> None:
+    a = _run(fa, omitted)
+    b = _run(fb, explicit)
     assert len(a) == len(b)
     for (va, ta, xa), (vb, tb, xb) in zip(a, b):
         assert (va, ta) == (vb, tb), "the paired assertions are not aligned"
