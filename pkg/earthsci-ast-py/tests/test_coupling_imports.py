@@ -550,3 +550,88 @@ def test_validate_reports_a_mis_bound_import_on_the_source_document():
     text = open(os.path.join(_CORPUS, "import_misbind_downstream.esm")).read()
     no_base = validate(load_string(text))
     assert not [e for e in no_base.structural_errors if "coupling_import" in (e.details or {})]
+
+
+def test_coupling_library_refs_resolve_against_roles_not_systems():
+    """A coupling library's edges name ROLES, not systems.
+
+    The library holds no models by definition (esm-spec §10.9), so resolving its
+    refs against the symbol tables rejected every well-formed library — including
+    EarthSciModels' own fastjx_superfast.esm and wildlandfire_behavior.esm. §10.9
+    replaces that resolution with a check against `coupling_roles` at every
+    §10.10.2 occurrence site, so an undeclared role is still rejected and
+    `validate()` reports it as `coupling_edge_unknown_role`.
+    """
+    from earthsci_ast import validate
+
+    lib = {
+        "esm": "1.1.0",
+        "metadata": {"name": "RoleScopedLib"},
+        "coupling_roles": {
+            "Source": {"description": "provides x"},
+            "Sink": {"description": "consumes x"},
+        },
+        "coupling": [
+            {
+                "type": "variable_map",
+                "from": "Source.x",
+                "to": "Sink.x",
+                "transform": "param_to_var",
+            },
+            {
+                "type": "operator_compose",
+                "systems": ["Source", "Sink"],
+                "translate": {"Source.x": "Sink.x"},
+                "require_match": False,
+            },
+        ],
+    }
+    # A well-formed library must load AND validate clean: the content-presence
+    # check admits it on the same grounds as a template library.
+    assert validate(load_string(json.dumps(lib))).structural_errors == []
+
+    def _reject(mutate) -> str:
+        bad = json.loads(json.dumps(lib))
+        mutate(bad)
+        try:
+            load_string(json.dumps(bad))
+        except Exception as exc:  # noqa: BLE001 - the binding's own error type
+            return str(exc)
+        raise AssertionError("a ref naming an undeclared role must be rejected")
+
+    def _set_to(d):
+        d["coupling"][0]["to"] = "Snik.x"
+
+    message = _reject(_set_to)
+    assert "coupling[0]" in message
+    assert "'Snik'" in message
+
+    # A site an endpoint-only check cannot see: `operator_compose.systems[]`.
+    def _set_systems(d):
+        d["coupling"][1]["systems"] = ["Ghost", "Sink"]
+
+    message = _reject(_set_systems)
+    assert "coupling[1]" in message
+    assert "'Ghost'" in message
+
+
+def test_coupling_library_corpus_validates_standalone():
+    """The shared corpus pins the standalone verdict, not just an in-memory doc.
+
+    esm-spec §10.9 REPLACES §4.6 system resolution for a library validated on its
+    own rather than dropping it, so `rothermel_fuel.esm` must be clean and
+    `lib_unknown_role_edge.esm` must name its undeclared role.
+    """
+    from earthsci_ast import validate
+
+    good = open(os.path.join(_CORPUS, "rothermel_fuel.esm")).read()
+    assert validate(load_string(good)).structural_errors == []
+
+    bad = open(os.path.join(_CORPUS, "lib_unknown_role_edge.esm")).read()
+    try:
+        load_string(bad)
+    except Exception as exc:  # noqa: BLE001 - the binding's own error type
+        assert "'Ghost'" in str(exc)
+        assert "not a declared role" in str(exc)
+    else:
+        raise AssertionError("lib_unknown_role_edge.esm must be rejected standalone")

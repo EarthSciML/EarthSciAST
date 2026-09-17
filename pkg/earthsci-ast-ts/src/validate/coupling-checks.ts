@@ -26,7 +26,7 @@ import {
   splitScopedRef,
 } from './expr-utils.js'
 import { isExpressionLike } from '../traverse.js'
-import { expandCouplingImports } from '../coupling-imports.js'
+import { collectRoleSegments, expandCouplingImports } from '../coupling-imports.js'
 
 /**
  * Flag any `{ref}` (unresolved SubsystemRef) entries in one component's
@@ -123,12 +123,45 @@ function systemPathExists(ref: string, esmFile: EsmFile): boolean {
 }
 
 /**
+ * Resolve a coupling library's role-scoped refs against its declared
+ * `coupling_roles`. esm-spec §10.9 suspends ordinary §4.6 system resolution for a
+ * library validated on its own and requires the top-level segment at every
+ * §10.10.2 occurrence site to name a declared role instead. Sharing
+ * {@link collectRoleSegments} with the import-time check is what keeps the two
+ * sites naming the same set of sites.
+ */
+function validateCouplingRoleRefs(esmFile: EsmFile): StructuralError[] {
+  const errors: StructuralError[] = []
+  const roles = new Set(Object.keys(esmFile.coupling_roles || {}))
+  const entries = esmFile.coupling || []
+  for (let i = 0; i < entries.length; i++) {
+    const unknown = [...collectRoleSegments(entries[i])].filter((seg) => !roles.has(seg)).sort()
+    for (const role of unknown) {
+      errors.push({
+        path: `/coupling/${i}`,
+        code: ERROR_CODES.COUPLING_EDGE_UNKNOWN_ROLE,
+        message: `edge references "${role}", which is not a declared role (esm-spec §10.9: a coupling library's refs name a role in \`coupling_roles\`)`,
+        details: { role, expected_in: 'coupling_roles' },
+      })
+    }
+  }
+  return errors
+}
+
+/**
  * Check coupling entries reference integrity
  */
 export function validateCouplingIntegrity(esmFile: EsmFile): StructuralError[] {
   const errors: StructuralError[] = []
 
   if (!esmFile.coupling) return errors
+
+  // In a coupling-library file (esm-spec §10.9) every endpoint prefix names a
+  // declared ROLE, not a system, and the library holds no models by definition —
+  // resolving them against the model/reaction-system key set would reject every
+  // well-formed library. `coupling_roles` is the sole positive identifier of the
+  // kind.
+  if (esmFile.coupling_roles) return validateCouplingRoleRefs(esmFile)
 
   // Collect all available systems
   // Data sources are deliberately absent: a source cannot be a coupling

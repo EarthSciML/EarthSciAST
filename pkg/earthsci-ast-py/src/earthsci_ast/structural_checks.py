@@ -52,7 +52,7 @@ from .classification import (
     ode_states,
     system_kind,
 )
-from .error_handling import OBSERVED_CYCLE, RAGGED_VALUES_NOT_GATHERED
+from .error_handling import COUPLING_EDGE_UNKNOWN_ROLE, OBSERVED_CYCLE, RAGGED_VALUES_NOT_GATHERED
 from .json_walk import iter_child_values, walk_dict_exprs
 
 # StructuralValidationError is built lazily (and cached) so that its base class,
@@ -2008,6 +2008,11 @@ def _check_coupling_expressions(
     Bare names are left alone: a coupling expression may legitimately name the
     edge's own operands, which are not document symbols.
     """
+    # A coupling LIBRARY names roles, not systems, at every §10.10.2 occurrence
+    # site, and holds no systems to resolve against (esm-spec §10.9); its refs
+    # are checked by _check_coupling_role_references instead.
+    if "coupling_roles" in data:
+        return
 
     def check(expr, pointer: str, what: str) -> None:
         bound = _expression_bound_symbols(expr)
@@ -2056,6 +2061,11 @@ def _check_coupling_systems(
     system that exists nowhere and the document still validated
     (``tests/invalid/undefined_system.esm``).
     """
+    # A coupling LIBRARY names roles, not systems, at every §10.10.2 occurrence
+    # site, and holds no systems to resolve against (esm-spec §10.9); its refs
+    # are checked by _check_coupling_role_references instead.
+    if "coupling_roles" in data:
+        return
     all_systems = tables["all_systems"]
     for i, c in enumerate(data.get("coupling", []) or []):
         if not isinstance(c, dict):
@@ -2079,11 +2089,47 @@ def _check_coupling_systems(
                 )
 
 
+def _check_coupling_role_references(data: dict[str, Any], errors: list) -> None:
+    """Resolve a coupling library's role-scoped refs against its declared roles.
+
+    esm-spec §10.9 suspends ordinary §4.6 system resolution for a library
+    validated on its own and requires the top-level segment at every §10.10.2
+    occurrence site to name a declared role instead. The site walk is shared with
+    the import-time check in :mod:`earthsci_ast.coupling_imports`, so the two
+    cannot drift apart.
+    """
+    from .coupling_imports import _collect_role_segments
+
+    roles = data.get("coupling_roles") or {}
+    for i, c in enumerate(data.get("coupling", [])):
+        if not isinstance(c, dict):
+            continue
+        for role in sorted(seg for seg in _collect_role_segments(c) if seg not in roles):
+            errors.append(
+                (
+                    COUPLING_EDGE_UNKNOWN_ROLE,
+                    f"/coupling/{i}",
+                    f"coupling[{i}]: edge references '{role}', which is not a declared "
+                    f"role (esm-spec §10.9: a coupling library's refs name a role in "
+                    f"`coupling_roles`)",
+                    {"role": role, "expected_in": "coupling_roles"},
+                )
+            )
+
+
 def _check_coupling_references(
     data: dict[str, Any], tables: dict[str, Any], errors: list[str]
 ) -> None:
     """Check that coupling 'from' references resolve to valid scoped refs.
     'to' is intentionally lenient since variable_map can introduce new target vars."""
+    # In a coupling-library file (esm-spec §10.9) the from/to prefixes name
+    # declared ROLES, not systems, and the library holds no models by
+    # definition — resolving them against the symbol tables would reject every
+    # well-formed library. `coupling_roles` is the sole positive identifier of
+    # the kind.
+    if "coupling_roles" in data:
+        _check_coupling_role_references(data, errors)
+        return
     for i, c in enumerate(data.get("coupling", [])):
         ref = c.get("from")
         if not isinstance(ref, str) or "." not in ref:

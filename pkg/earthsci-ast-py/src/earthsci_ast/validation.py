@@ -431,12 +431,16 @@ def _validate_content_presence(esm_file: EsmFile, structural_errors: list[Valida
     that survives load (§9.6.4 rule 5), so it is checked directly; without it a
     library validated standalone looked like an empty document and was rejected
     (`template_import_lib.esm`, `template_import_rename_lib.esm` — both pinned
-    VALID).
+    VALID). A COUPLING-LIBRARY file (§10.9) is the same shape — roles + wiring,
+    no components, `coupling_roles` the sole positive identifier of the kind —
+    and is admitted on the same grounds.
     """
     has_models = bool(esm_file.models)
     has_reaction_systems = bool(esm_file.reaction_systems)
     has_data_sources = bool(esm_file.data_sources)
-    is_library = bool(getattr(esm_file, "expression_templates", None))
+    is_library = bool(getattr(esm_file, "expression_templates", None)) or bool(
+        getattr(esm_file, "coupling_roles", None)
+    )
 
     if not has_models and not has_reaction_systems and not has_data_sources and not is_library:
         structural_errors.append(

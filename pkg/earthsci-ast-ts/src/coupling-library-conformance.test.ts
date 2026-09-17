@@ -197,6 +197,19 @@ describe('coupling-library conformance (esm-spec §10.9–§10.11)', () => {
     expect(errCode(() => flatten(harness, { basePath: dir }))).toBe(code)
   })
 
+  // esm-spec §10.9 REPLACES §4.6 system resolution for a library validated on
+  // its own rather than dropping it, so the role check reaches the library
+  // document directly and not only the assembly that imports it.
+  it('a well-formed library validates clean standalone (§10.9)', () => {
+    expect(validate(loadPath(cl('rothermel_fuel.esm'))).structural_errors).toEqual([])
+  })
+
+  it('validate() on the library reports the unknown role itself (§10.9)', () => {
+    const errors = validate(loadPath(cl('lib_unknown_role_edge.esm'))).structural_errors
+    expect(errors.map((e) => e.code)).toEqual(['coupling_edge_unknown_role'])
+    expect(errors[0].message).toContain('"Ghost"')
+  })
+
   // --- Invalid imports (defect in the assembly bind; driven via flatten) --
 
   const importCases: Array<[string, string]> = [
