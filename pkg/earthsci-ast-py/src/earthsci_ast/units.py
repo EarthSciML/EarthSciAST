@@ -12,12 +12,13 @@ from __future__ import annotations
 
 import math
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from fractions import Fraction
 from typing import Any, NamedTuple
 
 from .classification import observed_definitions
 from .esm_types import EsmFile, Expr, ExprNode, Model, ReactionSystem
+from .expr_walk import map_children
 
 # ---------------------------------------------------------------------------
 # The shared ESM unit contract (esm-spec §4.8 / docs/content/units-standard.md).
@@ -955,9 +956,64 @@ _DIMENSIONLESS_ARG_FUNCS = frozenset(
 #     live false rejection of the shipped stdlib.
 # ---------------------------------------------------------------------------
 
+#: The registry spellings of the dimensionless-but-SCALED units, most common
+#: first, used to NAME a scale in a diagnostic (`... (ppm); divide by 1 ppm ...`).
+#:
+#: A fixed, ORDERED table rather than a reverse sweep of the registry: the
+#: registry is a dict keyed by pint's resolved name, so a sweep would pick
+#: `ppmv` or `ppm` depending on insertion order and the five bindings would
+#: print different messages for the same document. The same table, in the same
+#: order, is in every binding.
+_SCALED_DIMENSIONLESS_SPELLINGS: tuple[tuple[str, int], ...] = (
+    ("percent", -2),
+    ("ppm", -6),
+    ("ppb", -9),
+    ("ppt", -12),
+)
+
+
+def scaled_dimensionless_spelling(scale: ExactScale) -> str | None:
+    """The canonical registry spelling of a dimensionless unit at ``scale``
+    (``1/100`` -> ``percent``, ``1e-6`` -> ``ppm``), or ``None``."""
+    for name, k in _SCALED_DIMENSIONLESS_SPELLINGS:
+        if ExactScale.pow10(k) == scale:
+            return name
+    return None
+
+
+def scaled_dimensionless_message(op: str, scale: ExactScale) -> str:
+    """The esm-spec §4.8.3 refusal for a dimensionless-but-SCALED argument to an
+    op that requires a PURE NUMBER (issue #409).
+
+    It names the REPAIR, not only the refusal: the author states the reading by
+    dividing by a quantity carrying the scale, which costs one node and records
+    the decision in the document. Normalizing silently instead would change the
+    numbers of every document that already passes a ``percent`` or a ``ppm``
+    into ``exp``/``log``. The same sentence is in every binding.
+    """
+    shown = scale.ratio_string() or float(scale)
+    name = scaled_dimensionless_spelling(scale)
+    if name is not None:
+        return (
+            f"Argument to '{op}' must be dimensionless at scale 1, but is "
+            f"dimensionless at scale {shown} ({name}); divide by 1 {name}, or by "
+            f"the scale you mean, to state which reading is intended"
+        )
+    return (
+        f"Argument to '{op}' must be dimensionless at scale 1, but is "
+        f"dimensionless at scale {shown}; divide by a quantity carrying that "
+        f"scale to state which reading is intended"
+    )
+
+
 #: Circular functions: argument is an ANGLE or dimensionless; result is a
 #: dimensionless ratio.
 _CIRCULAR_FUNCS = frozenset({"sin", "cos", "tan"})
+
+#: The dimensionality of a PLANE angle (`rad**1`). `sr` is `rad**2` and is NOT
+#: this: no conversion turns a solid angle into a plane one, and multiplying by
+#: `scale` where `scale**2` was meant would be silently wrong.
+_ANGLE_DIMENSIONALITY = unit_dimensionality("rad")
 
 #: Inverse circular functions: argument is a dimensionless ratio; result is an
 #: ANGLE (`rad`). `atan2` is handled separately (it is binary).
@@ -1424,22 +1480,52 @@ class UnitValidator:
         """The `[angle]` dimension at scale 1 -- the unit `rad`."""
         return _Typed(self.ureg.parse_units("rad").dimensionality, ExactScale.one())
 
-    def _require_angle_or_dimensionless(self, typed: _Typed | None, op: str) -> None:
-        """Raise if ``typed`` is known and is neither an angle nor dimensionless.
+    def _require_angle_or_pure_number(self, typed: _Typed | None, op: str) -> None:
+        """Raise unless ``typed`` is unknown, a plane ANGLE at any scale, or a
+        PURE NUMBER (dimensionless at scale 1).
 
-        A circular function's argument is an ANGLE; a dimensionless argument is
-        also admitted (a phase written as a pure number). Anything else —
-        ``sin(kg)`` — is a provable inconsistency.
+        Three outcomes, and the middle one is the point of issue #409:
+
+        * An ANGLE is admitted WHATEVER its scale, because ``deg`` -> ``rad`` is
+          exact and has no second reading; :func:`normalize_angle_arguments`
+          converts it on the evaluation path before anything computes with it.
+        * A PURE NUMBER is admitted (a phase written in turns).
+        * Dimensionless at a scale OTHER than 1 (``percent``) is REFUSED, for
+          the same reason ``log(x [ppm])`` is: nothing says which reading of the
+          number was meant.
+
+        Anything else — ``sin(kg)`` — is a provable inconsistency, as is
+        ``sin(x [sr])``: ``sr`` is ``rad**2``, which no conversion turns into an
+        angle.
         """
         if typed is None:
             return
         if self._dimensions_compatible(typed.dim, self._angle.dim):
             return
         if self._dimensions_compatible(typed.dim, self._dimensionless.dim):
-            return
+            if typed.scale.is_one():
+                return
+            raise DimensionalMismatchError(scaled_dimensionless_message(op, typed.scale))
         raise DimensionalMismatchError(
             f"{op} argument must be an angle or dimensionless, got {typed.dim}"
         )
+
+    def _require_pure_number(self, typed: _Typed | None, op: str, what: str) -> None:
+        """Raise if ``typed`` is known and is not dimensionless AT SCALE 1.
+
+        This is what esm-spec §4.8.3's "the argument MUST be dimensionless"
+        means for a strict transcendental (issue #409): ``ppm`` and ``percent``
+        are dimensionless too, and ``log(x [ppm])`` has two defensible readings
+        — the log of the ppm NUMBER, or the log of the mole fraction — that
+        differ by ``ln(1e-6) = 13.8155...``. Dimension alone cannot tell them
+        apart, so the checker refuses rather than picking one.
+        """
+        if typed is None:
+            return
+        if not self._dimensions_compatible(typed.dim, self._dimensionless.dim):
+            raise DimensionalMismatchError(f"{op} {what} must be dimensionless, got {typed.dim}")
+        if not typed.scale.is_one():
+            raise DimensionalMismatchError(scaled_dimensionless_message(op, typed.scale))
 
     def _agree(self, operands: list[_Typed | None], op: str) -> _Typed | None:
         """Require every KNOWN operand to have the same dimension AND exact scale
@@ -1526,18 +1612,19 @@ class UnitValidator:
             return self._dimensionless
 
         if op in _DIMENSIONLESS_ARG_FUNCS:
-            self._require_dimensionless(args[0], op, "argument")
+            self._require_pure_number(args[0], op, "argument")
             return self._dimensionless
 
         if op in _CIRCULAR_FUNCS:
-            # sin/cos/tan take an ANGLE or a dimensionless number, and return a
-            # dimensionless ratio. `sin(kg)` is still an error.
-            self._require_angle_or_dimensionless(args[0], op)
+            # sin/cos/tan take an ANGLE (at any scale) or a PURE NUMBER, and
+            # return a dimensionless ratio. `sin(kg)` is still an error.
+            self._require_angle_or_pure_number(args[0], op)
             return self._dimensionless
 
         if op in _INVERSE_CIRCULAR_FUNCS:
-            # asin/acos/atan take a dimensionless ratio and RETURN AN ANGLE.
-            self._require_dimensionless(args[0], op, "argument")
+            # asin/acos/atan take a dimensionless RATIO — a pure number, not a
+            # `percent` whose reading is unstated — and RETURN AN ANGLE.
+            self._require_pure_number(args[0], op, "argument")
             return self._angle
 
         if op == "atan2":
@@ -1659,6 +1746,74 @@ class UnitValidator:
 
         result.is_valid = len(result.errors) == 0
         return result
+
+
+def angle_normalization_factor(unit) -> float | None:
+    """The factor that brings a quantity in ``unit`` to RADIANS, when ``unit`` is
+    a plane angle at a scale other than 1 (esm-spec §4.8.3, issue #409).
+
+    ``None`` for anything else — a pure number, a ``rad``, a dimensional unit —
+    so a document that declares no scaled angle is rewritten not at all.
+    """
+    if unit is None:
+        return None
+    if unit.dimensionality != _ANGLE_DIMENSIONALITY:
+        return None
+    scale = exact_scale_of(unit)
+    return None if scale.is_one() else float(scale)
+
+
+def normalize_angle_arguments(expr: Expr, env: dict[str, Any]) -> Expr:
+    """Rewrite every ``sin``/``cos``/``tan`` whose argument is an angle at a
+    scale other than 1 so the argument reaches the evaluator in RADIANS.
+
+    esm-spec §4.8.3 names angles as *the* exception to the dimensionless-argument
+    rule, and ``deg`` is a registry unit at scale pi/180 — so ``sin(theta)`` with
+    ``theta`` in ``deg`` is a CONFORMING document, and before this it evaluated
+    ``sin(90)`` = 0.894 where 1 was meant, with no diagnostic (issue #409). The
+    conversion is exact and has no second reading, which is why this half
+    converts where the ``ppm`` half refuses.
+
+    The rewrite runs on the EVALUATION path only (the flatten funnel); the
+    checker still sees the authored spelling, and so still reports the
+    argument's declared unit rather than a literal-poisoned ``unknown``.
+    """
+    if not isinstance(expr, ExprNode):
+        return expr
+
+    # Children first, so a nested `sin(theta [deg])` inside another argument is
+    # converted too.
+    node = map_children(expr, lambda child: normalize_angle_arguments(child, env))
+
+    if node.op not in _CIRCULAR_FUNCS or len(node.args) != 1:
+        return node
+
+    validator = UnitValidator()
+    validator.known_units = env
+    try:
+        typed = validator._type(node.args[0])
+    except (DimensionalMismatchError, UnparseableUnitError):
+        return node
+    if typed is None or typed.dim != _ANGLE_DIMENSIONALITY or typed.scale.is_one():
+        return node
+    scaled = ExprNode(op="*", args=[node.args[0], float(typed.scale)])
+    return replace(node, args=[scaled])
+
+
+def flattened_unit_env(variables) -> dict[str, Any]:
+    """``name -> parsed pint unit`` for every flattened variable that declares a
+    RESOLVABLE unit. An unresolvable one is omitted, so it types as unknown and
+    is skipped rather than manufacturing a verdict."""
+    env: dict[str, Any] = {}
+    for name, var in variables.items():
+        declared = getattr(var, "units", None)
+        if not declared:
+            continue
+        try:
+            env[name] = parse_unit(declared)
+        except UnparseableUnitError:
+            continue
+    return env
 
 
 def validate_units(target: EsmFile | Model | ReactionSystem) -> UnitValidationResult:

@@ -2709,7 +2709,128 @@ func FlattenWithOptions(file *ESMFile, opts CouplingImportOptions) (*FlattenedSy
 	if err := checkRegistryCouplingRewrites(flat.TemplateRegistry, flat.Metadata.CouplingRewrittenNames); err != nil {
 		return nil, err
 	}
+	// Bring a scaled ANGLE argument of sin/cos/tan to radians (esm-spec §4.8.3,
+	// issue #409). See normalizeAngleArguments.
+	normalizeFlattenedAngleArguments(flat)
 	return flat, nil
+}
+
+// normalizeFlattenedAngleArguments folds the declared angle scale into every
+// circular-trig argument, so an evaluator receives RADIANS (esm-spec §4.8.3
+// "Angles are the ONE exception").
+//
+// `deg` is a registry unit at scale π/180, so `sin(theta [deg])` is a
+// CONFORMING document — and before this every binding handed the stored number
+// straight to `sin`, returning sin(90) = 0.894 where 1 was meant, with no
+// diagnostic (issue #409). The conversion is exact and has exactly one reading,
+// which is why this half converts where the dimensionless-but-scaled half
+// refuses.
+//
+// Why here. Flatten is the single funnel every evaluator draws from, so one
+// phase here converts for all of them and they cannot diverge. It is NOT on the
+// validation path (Validate never flattens), so the checker keeps seeing the
+// authored spelling: a rewrite visible to the checker would turn
+// `sin(theta [deg])` into `sin(theta * 0.01745…)`, whose bare literal makes the
+// product UNDETERMINABLE (§4.8.4) and silently disables the very check this
+// change strengthens.
+//
+// The Go binding runs no evaluator, but the flattened form is a CROSS-BINDING
+// artefact pinned by tests/conformance/flatten, so it performs the same rewrite
+// at the same place in the pipeline as the four bindings that do.
+func normalizeFlattenedAngleArguments(flat *FlattenedSystem) {
+	raw := map[string]string{}
+	for _, group := range [][]FlattenedVariable{flat.StateVariables, flat.Parameters, flat.ObservedVariables} {
+		for _, v := range group {
+			if v.Units != nil {
+				if _, seen := raw[v.Name]; !seen {
+					raw[v.Name] = *v.Units
+				}
+			}
+		}
+	}
+	env, _ := BuildUnitEnv(raw)
+	// A document that declares no angle at a scale other than 1 cannot be
+	// rewritten, so decide that from the DECLARATIONS and walk nothing.
+	scaled := false
+	for _, u := range env {
+		if _, ok := angleNormalizationFactor(u); ok {
+			scaled = true
+			break
+		}
+	}
+	if !scaled {
+		return
+	}
+
+	rewrite := func(e Expression) Expression { return normalizeAngleArguments(e, env) }
+	for i := range flat.Equations {
+		flat.Equations[i].RHS = rewrite(flat.Equations[i].RHS)
+	}
+	for i := range flat.FieldICs {
+		flat.FieldICs[i].Expr = rewrite(flat.FieldICs[i].Expr)
+	}
+	// Events are rewritten too, although this binding runs no evaluator: the
+	// Julia binding exports the flattened form to ModelingToolkit, which does
+	// run events, so leaving a `sin(theta [deg])` in an event condition
+	// unconverted would put the defect back in the one place a binding still
+	// evaluates it — and would make the five flattened forms disagree.
+	for i := range flat.ContinuousEvents {
+		ev := &flat.ContinuousEvents[i]
+		for j := range ev.Conditions {
+			ev.Conditions[j] = rewrite(ev.Conditions[j])
+		}
+		for j := range ev.Affects {
+			ev.Affects[j].RHS = rewrite(ev.Affects[j].RHS)
+		}
+		for j := range ev.AffectNeg {
+			ev.AffectNeg[j].RHS = rewrite(ev.AffectNeg[j].RHS)
+		}
+	}
+	for i := range flat.DiscreteEvents {
+		ev := &flat.DiscreteEvents[i]
+		if ev.Trigger.Type == "condition" && ev.Trigger.Expression != nil {
+			ev.Trigger.Expression = rewrite(ev.Trigger.Expression)
+		}
+		for j := range ev.Affects {
+			ev.Affects[j].RHS = rewrite(ev.Affects[j].RHS)
+		}
+	}
+}
+
+// normalizeAngleArguments rewrites every sin/cos/tan in `expr` whose argument is
+// an angle at a scale other than 1 so the argument is in RADIANS. Returns the
+// expression unchanged when nothing applies.
+func normalizeAngleArguments(expr Expression, env map[string]Unit) Expression {
+	node, ok := asExprNode(expr)
+	if !ok {
+		return expr
+	}
+	// Children first, so a nested sin(theta [deg]) inside another argument is
+	// converted too.
+	out, err := mapExprChildren(node, func(child Expression) (Expression, error) {
+		return normalizeAngleArguments(child, env), nil
+	})
+	if err != nil {
+		return expr
+	}
+	switch out.Op {
+	case "sin", "cos", "tan":
+	default:
+		return out
+	}
+	if len(out.Args) != 1 {
+		return out
+	}
+	arg, err := propagateDimension(out.Args[0], env)
+	if err != nil || arg == nil {
+		return out
+	}
+	factor, ok := angleNormalizationFactor(*arg)
+	if !ok {
+		return out
+	}
+	out.Args = []any{ExprNode{Op: "*", Args: []any{out.Args[0], factor}}}
+	return out
 }
 
 // collectComponents collects every component system into a per-system bag,

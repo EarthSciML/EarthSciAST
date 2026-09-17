@@ -1296,6 +1296,13 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
     # step 4, normative). Last, so every pass above saw the list it always did.
     field_ics = _extract_field_ics!(equations)
 
+    # Step 8: bring a scaled ANGLE argument of `sin`/`cos`/`tan` to radians
+    # (esm-spec §4.8.3, issue #409). See `_normalize_angle_arguments`.
+    equations, field_ics, continuous_events, discrete_events =
+        _normalize_angle_arguments(states, params, observeds,
+                                   equations, field_ics,
+                                   continuous_events, discrete_events)
+
     return FlattenedSystem(
         ivs, states, params, observeds,
         equations, continuous_events, discrete_events,
@@ -1303,6 +1310,87 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
         algebraic_variables, brownian, discrete_params,
         field_ics, loader_fields, lifted_shapes,
     )
+end
+
+"""
+Fold the declared angle scale into every circular-trig argument, so the
+evaluator receives RADIANS (esm-spec §4.8.3 "Angles are the ONE exception").
+
+`deg` is a registry unit at scale π/180, so `sin(theta [deg])` is a CONFORMING
+document — and before this every binding handed the stored number straight to
+`sin`, returning `sin(90)` = 0.894 where 1 was meant, with no diagnostic (issue
+#409). The conversion is exact and has exactly one reading, which is why this
+half converts where the dimensionless-but-scaled half refuses.
+
+**Why here.** `flatten` is the single funnel every consumer draws from — the
+ModelingToolkit export and the tree-walk evaluator both build on a
+`FlattenedSystem` — so one phase here converts for all of them, and they cannot
+diverge. It is NOT on the validation path (`validate` never flattens), so the
+checker keeps seeing the authored spelling: a rewrite visible to the checker
+would turn `sin(theta [deg])` into `sin(theta * 0.01745…)`, whose bare literal
+makes the product UNDETERMINABLE (§4.8.4) and silently disables the very check
+this change strengthens.
+
+The same phase, at the same place in the pipeline, is in every binding.
+"""
+function _normalize_angle_arguments(states, params, observeds,
+                                    equations, field_ics,
+                                    continuous_events, discrete_events)
+    var_units = Dict{String, String}()
+    for table in (states, params, observeds), (name, var) in table
+        haskey(var_units, name) && continue
+        var.units !== nothing && !isempty(var.units) &&
+            parse_units(var.units) !== nothing && (var_units[name] = var.units)
+    end
+    # A document that declares no angle at a scale other than 1 cannot be
+    # rewritten, so decide that from the DECLARATIONS and walk nothing.
+    any(angle_normalization_factor(parse_units(u)) !== nothing
+        for u in values(var_units)) || return (equations, field_ics,
+                                               continuous_events, discrete_events)
+
+    rewrite(e) = _normalize_angle_expr(e, var_units)
+    equations = Equation[Equation(eq.lhs, rewrite(eq.rhs); _comment=eq._comment)
+                         for eq in equations]
+    field_ics = Pair{String, ASTExpr}[name => rewrite(expr) for (name, expr) in field_ics]
+    # Events are rewritten too: this binding exports the flattened form to
+    # ModelingToolkit, which DOES run events, so leaving a `sin(theta [deg])` in
+    # an event condition unconverted would put the defect back in the one place
+    # a binding still evaluates it.
+    affect(a) = AffectEquation(a.lhs, rewrite(a.rhs))
+    continuous_events = ContinuousEvent[
+        ContinuousEvent(ASTExpr[rewrite(c) for c in ev.conditions],
+                        AffectEquation[affect(a) for a in ev.affects];
+                        affect_neg = ev.affect_neg === nothing ? nothing :
+                            AffectEquation[affect(a) for a in ev.affect_neg],
+                        root_find = ev.root_find, reinitialize = ev.reinitialize,
+                        description = ev.description, name = ev.name)
+        for ev in continuous_events]
+    discrete_events = DiscreteEvent[
+        DiscreteEvent(ev.trigger isa ConditionTrigger ?
+                          ConditionTrigger(rewrite(ev.trigger.expression)) : ev.trigger,
+                      AffectEquation[affect(a) for a in ev.affects];
+                      reinitialize = ev.reinitialize, description = ev.description,
+                      name = ev.name)
+        for ev in discrete_events]
+    return (equations, field_ics, continuous_events, discrete_events)
+end
+
+# Rewrite every `sin`/`cos`/`tan` in `expr` whose argument is an angle at a scale
+# other than 1 so the argument is in RADIANS. Returns `expr` unchanged (and
+# `===`-identical) when nothing applies.
+function _normalize_angle_expr(expr::ASTExpr, var_units::AbstractDict)::ASTExpr
+    expr isa OpExpr || return expr
+    # Children first, so a nested `sin(theta [deg])` inside another argument is
+    # converted too.
+    out = map_children(e -> _normalize_angle_expr(e, var_units), expr)
+    out isa OpExpr || return out
+    (out.op in ("sin", "cos", "tan") && length(out.args) == 1) || return out
+    arg_unit = _expr_dimensions!(String[], out.args[1], var_units)
+    arg_unit === nothing && return out
+    factor = angle_normalization_factor(arg_unit)
+    factor === nothing && return out
+    scaled = OpExpr("*", ASTExpr[out.args[1], NumExpr(factor)])
+    return reconstruct(out; args = ASTExpr[scaled])
 end
 
 """

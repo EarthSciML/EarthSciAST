@@ -812,6 +812,87 @@ end
 
 _same_unit(a, b) = dimension(a) == dimension(b) && _exact_scale(a) == _exact_scale(b)
 
+# The Unitful unit NAMES that denote a PLANE angle. Unitful models `rad` as
+# `NoDims` (esm-spec §4.8.1 makes it an axis, and the other four bindings carry
+# it as one), so this binding cannot tell an angle from a pure number by
+# DIMENSION and must read the unit's own symbol. `:Steradian` is deliberately
+# absent: `sr` is `rad^2`, and the circular argument is now CONVERTED to radians
+# (issue #409) — multiplying by `scale` where `scale^2` was meant would be
+# silently wrong.
+const _PLANE_ANGLE_UNIT_NAMES = (:Radian, :Degree)
+
+# Is `u` a plane angle to the FIRST power (`rad`, `deg`)?
+function _is_plane_angle(u)::Bool
+    dimension(u) == dimension(Unitful.NoUnits) || return false
+    comps = typeof(Unitful.FreeUnits(u)).parameters[1]
+    length(comps) == 1 || return false
+    c = comps[1]
+    return Unitful.name(c) in _PLANE_ANGLE_UNIT_NAMES && c.power == 1
+end
+
+# Is `u` dimensionless **at scale 1** — a PURE NUMBER?
+#
+# This is what esm-spec §4.8.3's "the argument MUST be dimensionless" means for
+# a strict transcendental (issue #409): `ppm` and `percent` are dimensionless
+# too, and `log(x [ppm])` has two defensible readings — the log of the ppm
+# NUMBER, or the log of the mole fraction — that differ by `ln(1e-6) =
+# 13.8155…`. Dimension alone cannot tell them apart, so the checker refuses
+# rather than picking one.
+_is_pure_number(u)::Bool =
+    dimension(u) == dimension(Unitful.NoUnits) && isone(_exact_scale(u))
+
+# The registry spellings of the dimensionless-but-SCALED units, most common
+# first, used to NAME a scale in a diagnostic (`… (ppm); divide by 1 ppm …`).
+#
+# A fixed, ORDERED table rather than a reverse sweep of the registry: the
+# registry is a `Dict`, so a sweep would pick `ppmv` or `ppm` depending on
+# iteration order and the five bindings would print different messages for the
+# same document. The same table, in the same order, is in every binding.
+const _SCALED_DIMENSIONLESS_SPELLINGS = (("percent", -2), ("ppm", -6),
+                                         ("ppb", -9), ("ppt", -12))
+
+# The canonical registry spelling of a dimensionless unit at `scale`, or
+# `nothing` (`1/100` ⇒ "percent", `1e-6` ⇒ "ppm").
+function _scaled_dimensionless_spelling(scale::ExactScale)
+    for (name, k) in _SCALED_DIMENSIONLESS_SPELLINGS
+        _exact_pow10(k) == scale && return name
+    end
+    return nothing
+end
+
+# The §4.8.3 refusal for a dimensionless-but-SCALED argument to an op that
+# requires a pure number.
+#
+# It names the REPAIR, not only the refusal: the author states the reading by
+# dividing by a quantity carrying the scale, which costs one node and records
+# the decision in the document. Normalizing silently instead would change the
+# numbers of every document that already passes a `percent` or a `ppm` into
+# `exp`/`log`. The same sentence is in every binding.
+function _scaled_dimensionless_message(op::AbstractString, scale::ExactScale)
+    shown = something(exact_ratio_string(scale), string(Float64(scale)))
+    name = _scaled_dimensionless_spelling(scale)
+    name === nothing && return "Argument to '$(op)' must be dimensionless at scale 1, " *
+        "but is dimensionless at scale $(shown); divide by a quantity carrying that " *
+        "scale to state which reading is intended"
+    return "Argument to '$(op)' must be dimensionless at scale 1, but is dimensionless " *
+        "at scale $(shown) ($(name)); divide by 1 $(name), or by the scale you mean, " *
+        "to state which reading is intended"
+end
+
+"""
+    angle_normalization_factor(u) -> Union{Float64, Nothing}
+
+The factor that brings a quantity in `u` to RADIANS, when `u` is a plane angle
+at a scale other than 1 (esm-spec §4.8.3, issue #409).
+
+`nothing` for anything else — a pure number, a `rad`, a dimensional unit — so a
+document that declares no scaled angle is rewritten not at all.
+"""
+function angle_normalization_factor(u)
+    (_is_plane_angle(u) && !isone(_exact_scale(u))) || return nothing
+    return Float64(_exact_scale(u))
+end
+
 # Same-dimensions core shared by "+"/"-", "min"/"max", comparisons and `atan2`
 # (esm-spec §4.8.3): every operand whose unit can be determined must agree with
 # the others, and the result is that unit. `describe(first_dim, dim)` renders
@@ -972,6 +1053,13 @@ function _dimensionless_arg_rule(expr, var_units, findings)
                         "got units '$(_ustr(arg_dim))' (function '$(expr.op)')")
         return nothing
     end
+    # "Dimensionless" means dimensionless AT SCALE 1 (issue #409): `ppm` and
+    # `percent` pass every dimension-only test, and the two readings of
+    # `log(x [ppm])` differ by `ln(1e-6)`.
+    if arg_dim !== nothing && !_is_pure_number(arg_dim)
+        push!(findings, _scaled_dimensionless_message(expr.op, _exact_scale(arg_dim)))
+        return nothing
+    end
 
     return Unitful.NoUnits
 end
@@ -995,6 +1083,15 @@ function _circular_arg_rule(expr, var_units, findings)
         push!(findings, "Circular function argument must be an angle or " *
                         "dimensionless, got units '$(_ustr(arg_dim))' " *
                         "(function '$(expr.op)')")
+        return nothing
+    end
+    # An ANGLE is admitted WHATEVER its scale, because `deg` → `rad` is exact and
+    # has no second reading: `_normalize_angle_arguments!` converts it on the
+    # flatten path before anything evaluates it. Dimensionless at a scale OTHER
+    # than 1 (`percent`) is REFUSED, for the same reason `log(x [ppm])` is
+    # (issue #409).
+    if arg_dim !== nothing && !_is_plane_angle(arg_dim) && !_is_pure_number(arg_dim)
+        push!(findings, _scaled_dimensionless_message(expr.op, _exact_scale(arg_dim)))
         return nothing
     end
     return Unitful.NoUnits
@@ -1023,6 +1120,12 @@ function _inverse_circular_rule(expr, var_units, findings)
         push!(findings, "Inverse circular function argument must be " *
                         "dimensionless, got units '$(_ustr(arg_dim))' " *
                         "(function '$(expr.op)')")
+        return nothing
+    end
+    # A dimensionless RATIO is a PURE NUMBER, not a `percent` whose reading is
+    # unstated (issue #409).
+    if arg_dim !== nothing && !_is_pure_number(arg_dim)
+        push!(findings, _scaled_dimensionless_message(expr.op, _exact_scale(arg_dim)))
         return nothing
     end
     return u"rad"
