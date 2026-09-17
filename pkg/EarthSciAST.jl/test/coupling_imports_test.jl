@@ -322,10 +322,12 @@ end
 end
 
 @testset "coupling-library refs resolve against roles, not systems" begin
-    # A library's from/to prefixes name ROLES, and it declares no models by
-    # definition (esm-spec §10.9), so resolving them against the file's systems
-    # rejected every well-formed library — including EarthSciModels' own
-    # fastjx_superfast.esm and wildlandfire_behavior.esm.
+    # A library's edges name ROLES, and it declares no models by definition
+    # (esm-spec §10.9), so resolving them against the file's systems rejected
+    # every well-formed library — including EarthSciModels' own
+    # fastjx_superfast.esm and wildlandfire_behavior.esm. §10.9 replaces that
+    # resolution with a check against `coupling_roles` at every §10.10.2
+    # occurrence site, reported as `coupling_edge_unknown_role`.
     lib = """
     {
       "esm": "1.1.0",
@@ -336,17 +338,41 @@ end
       },
       "coupling": [
         {"type": "variable_map", "from": "Source.x", "to": "Sink.x",
-         "transform": "param_to_var"}
+         "transform": "param_to_var"},
+        {"type": "operator_compose", "systems": ["Source", "Sink"],
+         "translate": {"Source.x": "Sink.x"}, "require_match": false}
       ]
     }"""
     ok = EarthSciAST.validate(load_string(lib))
     @test isempty(ok.structural_errors)
 
-    typo = replace(lib, "\"Sink.x\"" => "\"Snik.x\"")
+    typo = replace(lib, "\"Sink.x\"," => "\"Snik.x\",")
     bad = EarthSciAST.validate(load_string(typo))
     @test length(bad.structural_errors) == 1
-    @test bad.structural_errors[1].path == "/coupling/0/to"
-    @test occursin("undeclared role 'Snik'", bad.structural_errors[1].message)
+    @test bad.structural_errors[1].path == "/coupling/0"
+    @test bad.structural_errors[1].code == EarthSciAST.ERROR_CODES.COUPLING_EDGE_UNKNOWN_ROLE
+    @test occursin("'Snik'", bad.structural_errors[1].message)
+
+    # A site an endpoint-only check cannot see: `operator_compose.systems[]`.
+    sys = replace(lib, "[\"Source\", \"Sink\"]" => "[\"Ghost\", \"Sink\"]")
+    bad2 = EarthSciAST.validate(load_string(sys))
+    @test length(bad2.structural_errors) == 1
+    @test bad2.structural_errors[1].path == "/coupling/1"
+    @test bad2.structural_errors[1].code == EarthSciAST.ERROR_CODES.COUPLING_EDGE_UNKNOWN_ROLE
+    @test occursin("'Ghost'", bad2.structural_errors[1].message)
+end
+
+# The shared corpus pins the standalone verdict too, not just an in-memory
+# document.
+@testset "coupling-library corpus validates standalone (§10.9)" begin
+    corpus = joinpath(TESTUTILS_REPO_ROOT, "tests", "coupling_libraries")
+    good = EarthSciAST.validate(load_string(read(joinpath(corpus, "rothermel_fuel.esm"), String)))
+    @test isempty(good.structural_errors)
+
+    bad = EarthSciAST.validate(load_string(read(joinpath(corpus, "lib_unknown_role_edge.esm"), String)))
+    @test length(bad.structural_errors) == 1
+    @test bad.structural_errors[1].code == EarthSciAST.ERROR_CODES.COUPLING_EDGE_UNKNOWN_ROLE
+    @test occursin("'Ghost'", bad.structural_errors[1].message)
 end
 
 # esm-spec §10.10: a `coupling_import` ref "resolves by the §4.7 reference

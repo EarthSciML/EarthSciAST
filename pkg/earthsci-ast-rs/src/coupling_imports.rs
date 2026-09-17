@@ -267,7 +267,7 @@ fn rewrite_string_array(obj: &mut Value, key: &str, f: &dyn Fn(&str) -> String) 
 /// ref fields (systems[], from/to, translate keys, event var lists) always name
 /// a role; Expression strings name a role only when they are scoped references
 /// (contain a dot) — bare Expression operands like `"t"` are incidental.
-fn collect_role_segments(edge: &Value) -> HashSet<String> {
+pub(crate) fn collect_role_segments(edge: &Value) -> HashSet<String> {
     use std::cell::RefCell;
     let seen: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
     let mut clone = edge.clone();

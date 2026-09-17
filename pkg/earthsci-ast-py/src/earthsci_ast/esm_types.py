@@ -1323,6 +1323,13 @@ class EsmFile:
     # fails the schema's top-level `anyOf`. The file was legal on disk and
     # illegal the moment it was loaded and re-emitted.
     expression_templates: dict[str, Any] = field(default_factory=dict)
+    # Top-level DECLARATION of a coupling-library file's formal role parameters
+    # (esm-spec §10.9), and the SOLE positive identifier of that file kind. Held
+    # verbatim for the same reason `expression_templates` is: a library carries
+    # no component, so dropping the block emits a document with none of the
+    # top-level payload keys, which the schema's root `anyOf` rejects — the file
+    # is legal on disk and illegal the moment it is loaded and re-emitted.
+    coupling_roles: dict[str, Any] = field(default_factory=dict)
     metaparameters: dict[str, Any] = field(default_factory=dict)
     # The PER-COMPONENT expression-template registries as they stood after the
     # Option-B load (esm-spec §9.6.4 rule 5) and BEFORE `expand_document` folded

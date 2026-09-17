@@ -36,7 +36,7 @@
     "lib_declares_models.esm": { "code": "coupling_library_illegal_payload", "driver": "flatten", "site": "library" },
     "lib_has_callback.esm": { "code": "coupling_library_illegal_payload", "driver": "flatten", "site": "library" },
     "lib_edge_template_imports.esm": { "code": "coupling_library_illegal_payload", "driver": "flatten", "site": "library" },
-    "lib_unknown_role_edge.esm": { "code": "coupling_edge_unknown_role", "driver": "flatten", "site": "library" },
+    "lib_unknown_role_edge.esm": { "code": "coupling_edge_unknown_role", "driver": "flatten+validate", "site": "library", "note": "Also reported by validate() on the LIBRARY document itself. esm-spec \u00a710.9 does not merely suspend \u00a74.6 system resolution for a library validated standalone, it REPLACES it: the top-level segment at every \u00a710.10.2 occurrence site must name a declared role. Four bindings used to resolve those prefixes against a symbol table of models and so rejected every WELL-FORMED library; Go skipped library validation entirely and so accepted this one." },
     "lib_unused_role.esm": { "code": "coupling_role_unused", "driver": "flatten", "site": "library" },
     "lib_nested_import.esm": { "code": "coupling_library_nested_import", "driver": "flatten", "site": "library" },
 

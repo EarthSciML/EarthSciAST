@@ -2753,6 +2753,10 @@ def _load_data(
     # Both §9.7 resolution and template lowering consume them, so they must be
     # captured HERE, on the raw document, while they are still visible.
     _raw_expression_templates = copy.deepcopy(data.get("expression_templates") or {})
+    # esm-spec §10.9 `coupling_roles`, captured on the same grounds and written
+    # back verbatim: presence of the key is the sole positive identifier of the
+    # coupling-library file kind, so dropping it makes a library unrepresentable.
+    _raw_coupling_roles = copy.deepcopy(data.get("coupling_roles") or {})
     _raw_metaparameters = copy.deepcopy(data.get("metaparameters") or {})
 
     # A PURE TEMPLATE LIBRARY — templates and no component — is generic: its
@@ -2854,6 +2858,7 @@ def _load_data(
     esm_file = _parse_esm_data(data)
 
     esm_file.expression_templates = _raw_expression_templates
+    esm_file.coupling_roles = _raw_coupling_roles
     esm_file.metaparameters = _raw_metaparameters
     esm_file.component_templates = _raw_component_templates
     if _raw_index_sets is not None:

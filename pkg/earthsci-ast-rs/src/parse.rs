@@ -1070,11 +1070,15 @@ fn coupled_system_names_raw(obj: &serde_json::Map<String, Value>) -> HashSet<Str
     coupled
 }
 
-/// In a coupling-library file (esm-spec §10.9) the `coupling[].from`/`.to`
-/// prefixes name declared ROLES, not systems: the library holds no models, so
+/// In a coupling-library file (esm-spec §10.9) a coupling edge's system-naming
+/// segments name declared ROLES, not systems: the library holds no models, so
 /// resolving them against a symbol table would reject every well-formed library.
-/// Check them against `coupling_roles` instead, which still catches the typo the
-/// system check was there to catch.
+/// §10.9 suspends that resolution and requires the top-level segment at every
+/// §10.10.2 occurrence site to name a declared role instead
+/// (`coupling_edge_unknown_role`), which is the same check
+/// [`crate::coupling_imports`] runs when the library is imported — the shared
+/// [`collect_role_segments`](crate::coupling_imports::collect_role_segments)
+/// walk is what keeps the two sites from drifting apart.
 fn check_coupling_role_references(
     obj: &serde_json::Map<String, Value>,
     coupling: &[Value],
@@ -1086,20 +1090,19 @@ fn check_coupling_role_references(
         .map(|o| o.keys().map(String::as_str).collect())
         .unwrap_or_default();
     for (i, c) in coupling.iter().enumerate() {
-        let Some(cobj) = c.as_object() else { continue };
-        for key in ["from", "to"] {
-            let Some(r) = cobj.get(key).and_then(|v| v.as_str()) else {
-                continue;
-            };
-            let Some((role, _)) = r.split_once('.') else {
-                continue;
-            };
-            if !roles.contains(role) {
-                errors.push(format!(
-                    "coupling[{i}]/{key}: reference '{r}' to undeclared role '{role}' \
-                     (a coupling library's refs must name a role in `coupling_roles`)"
-                ));
-            }
+        if !c.is_object() {
+            continue;
+        }
+        let mut unknown: Vec<String> = crate::coupling_imports::collect_role_segments(c)
+            .into_iter()
+            .filter(|seg| !roles.contains(seg.as_str()))
+            .collect();
+        unknown.sort();
+        for seg in unknown {
+            errors.push(format!(
+                "coupling[{i}]: edge references '{seg}', which is not a declared role \
+                 (esm-spec §10.9: a coupling library's refs name a role in `coupling_roles`)"
+            ));
         }
     }
 }

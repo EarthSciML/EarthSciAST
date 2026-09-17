@@ -561,3 +561,81 @@ func TestValidateReportsAMisBoundImportOnTheSourceDocument(t *testing.T) {
 		}
 	}
 }
+
+// A coupling library's edges name ROLES, not systems (esm-spec §10.9). Go never
+// resolved them against a symbol table, so it never rejected a well-formed
+// library — but §10.9 REPLACES that resolution rather than dropping it, and Go's
+// library short-circuit used to drop it, silently accepting a typo'd role that
+// the other four bindings reject. The same typo is rejected by the import-time
+// check the moment an assembly binds the library, so the two sites now agree.
+func TestValidateCouplingLibraryRoleRefs(t *testing.T) {
+	lib := `{
+      "esm": "1.1.0",
+      "metadata": {"name": "RoleScopedLib"},
+      "coupling_roles": {
+        "Source": {"description": "provides x"},
+        "Sink": {"description": "consumes x"}
+      },
+      "coupling": [
+        {"type": "variable_map", "from": "Source.x", "to": "Sink.x",
+         "transform": "param_to_var"},
+        {"type": "operator_compose", "systems": ["Source", "Sink"],
+         "translate": {"Source.x": "Sink.x"}, "require_match": false}
+      ]
+    }`
+
+	if r := ValidateText(lib); !r.IsValid || len(r.StructuralErrors) != 0 {
+		t.Fatalf("a well-formed coupling library must validate clean, got %+v", r.StructuralErrors)
+	}
+
+	for _, tc := range []struct {
+		name, doc, path, role string
+	}{
+		{"variable_map endpoint", strings.Replace(lib, `"to": "Sink.x"`, `"to": "Snik.x"`, 1), "/coupling/0", "Snik"},
+		// A site an endpoint-only check cannot see.
+		{"operator_compose systems", strings.Replace(lib, `["Source", "Sink"]`, `["Ghost", "Sink"]`, 1), "/coupling/1", "Ghost"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := ValidateText(tc.doc)
+			if r.IsValid || len(r.StructuralErrors) != 1 {
+				t.Fatalf("an undeclared role must be rejected, got valid=%v errors=%+v", r.IsValid, r.StructuralErrors)
+			}
+			e := r.StructuralErrors[0]
+			if e.Code != CodeCouplingEdgeUnknownRole {
+				t.Errorf("code = %q, want %q", e.Code, CodeCouplingEdgeUnknownRole)
+			}
+			if e.Path != tc.path {
+				t.Errorf("path = %q, want %q", e.Path, tc.path)
+			}
+			if !strings.Contains(e.Message, "'"+tc.role+"'") {
+				t.Errorf("message must name %q, got %q", tc.role, e.Message)
+			}
+		})
+	}
+}
+
+// The shared corpus pins the standalone verdict too, not just an in-memory
+// document: tests/coupling_libraries/rothermel_fuel.esm must validate clean and
+// lib_unknown_role_edge.esm must name its undeclared role.
+func TestValidateCouplingLibraryCorpusStandalone(t *testing.T) {
+	corpus := filepath.Join("..", "..", "..", "..", "tests", "coupling_libraries")
+	good, err := os.ReadFile(filepath.Join(corpus, "rothermel_fuel.esm"))
+	if err != nil {
+		t.Fatalf("read rothermel_fuel.esm: %v", err)
+	}
+	if r := ValidateText(string(good)); !r.IsValid || len(r.StructuralErrors) != 0 {
+		t.Fatalf("a well-formed corpus library must validate clean, got %+v", r.StructuralErrors)
+	}
+
+	bad, err := os.ReadFile(filepath.Join(corpus, "lib_unknown_role_edge.esm"))
+	if err != nil {
+		t.Fatalf("read lib_unknown_role_edge.esm: %v", err)
+	}
+	r := ValidateText(string(bad))
+	if r.IsValid || len(r.StructuralErrors) != 1 {
+		t.Fatalf("lib_unknown_role_edge.esm must be rejected standalone, got valid=%v errors=%+v", r.IsValid, r.StructuralErrors)
+	}
+	if e := r.StructuralErrors[0]; e.Code != CodeCouplingEdgeUnknownRole || !strings.Contains(e.Message, "'Ghost'") {
+		t.Errorf("want %s naming 'Ghost', got %s / %s", CodeCouplingEdgeUnknownRole, e.Code, e.Message)
+	}
+}

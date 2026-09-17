@@ -289,7 +289,7 @@ function forEachEntryRef(
  * (contain a dot) — bare Expression operands like `"t"` are incidental.
  * Purely READS the edge (no clone, no mutation) via {@link forEachEntryRef}.
  */
-function collectRoleSegments(edge: unknown): Set<string> {
+export function collectRoleSegments(edge: unknown): Set<string> {
   const seen = new Set<string>()
   if (!isObject(edge)) return seen
   forEachEntryRef(

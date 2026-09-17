@@ -131,6 +131,15 @@ func Validate(file *ESMFile) *ValidationResult {
 	// outright. Its well-formedness was already settled by the schema's root
 	// `anyOf` at load.
 	if isLibraryDocument(file) {
+		// One check survives the short-circuit. esm-spec §10.9 does not simply
+		// suspend reference resolution for a COUPLING library: it REPLACES it,
+		// requiring the top-level segment at every §10.10.2 occurrence site to
+		// name a declared role (`coupling_edge_unknown_role`). Skipping that
+		// outright would accept a typo'd role here that the other four bindings
+		// reject, and that the import-time check in coupling_imports.go rejects
+		// the moment an assembly binds the very same library.
+		result.StructuralErrors = validateCouplingRoleRefs(file)
+		result.IsValid = countStructuralErrorLevel(result.StructuralErrors) == 0
 		return result
 	}
 
@@ -214,6 +223,51 @@ func isLibraryDocument(file *ESMFile) bool {
 		return false
 	}
 	return rawIsPresent(file.ExpressionTemplates) || len(file.CouplingRoles) != 0
+}
+
+// validateCouplingRoleRefs resolves a coupling library's role-scoped refs
+// against its declared `coupling_roles` (esm-spec §10.9). An expression-template
+// library has no coupling block and yields nothing.
+//
+// The occurrence-site walk is collectRoleSegments, shared with the import-time
+// check in coupling_imports.go, so standalone validation and import expansion
+// cannot disagree about which segments are role names. It wants the RAW edge
+// that walk is written against, and a typed CouplingEntry round-trips to one
+// through its own json tags.
+func validateCouplingRoleRefs(file *ESMFile) []StructuralError {
+	errors := []StructuralError{}
+	if len(file.CouplingRoles) == 0 {
+		return errors
+	}
+	for i, entry := range file.Coupling {
+		raw, err := json.Marshal(entry)
+		if err != nil {
+			continue
+		}
+		var edge map[string]any
+		if err := json.Unmarshal(raw, &edge); err != nil {
+			continue
+		}
+		unknown := []string{}
+		for seg := range collectRoleSegments(edge) {
+			if _, ok := file.CouplingRoles[seg]; !ok {
+				unknown = append(unknown, seg)
+			}
+		}
+		sort.Strings(unknown)
+		for _, role := range unknown {
+			errors = append(errors, StructuralError{
+				Path: fmt.Sprintf("/coupling/%d", i),
+				Code: CodeCouplingEdgeUnknownRole,
+				Message: fmt.Sprintf(
+					"edge references '%s', which is not a declared role "+
+						"(esm-spec §10.9: a coupling library's refs name a role in `coupling_roles`)",
+					role),
+				Details: map[string]any{"role": role, "expected_in": "coupling_roles"},
+			})
+		}
+	}
+	return errors
 }
 
 // StructuralValidationResult holds the code-bearing structural validation

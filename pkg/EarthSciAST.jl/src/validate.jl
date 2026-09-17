@@ -2881,27 +2881,24 @@ end
 """
     _check_coupling_role_references(file, coupling_entry, path) -> Vector{StructuralError}
 
-Resolve a coupling library's role-scoped `from`/`to` refs against its declared
-`coupling_roles`. This keeps the typo check the system-based path exists for, on
-the only vocabulary a library has. Unlike that path it also checks `to`: a
-library cannot introduce a target outside its roles.
+Resolve a coupling library's role-scoped refs against its declared
+`coupling_roles`. esm-spec §10.9 suspends ordinary §4.6 system resolution for a
+library validated on its own and requires the top-level segment at every
+§10.10.2 occurrence site to name a declared role instead. The site walk is shared
+with the import-time check in `coupling_imports.jl`, so the two cannot drift.
 """
 function _check_coupling_role_references(file::EsmFile, coupling_entry::CouplingEntry, path::String)::Vector{StructuralError}
     errors = StructuralError[]
-    isa(coupling_entry, CouplingVariableMap) || return errors
     roles = file.coupling_roles === nothing ? Dict{String,Any}() : file.coupling_roles
-    for (field, ref) in (("from", coupling_entry.from), ("to", coupling_entry.to))
-        (ref isa AbstractString && occursin('.', ref)) || continue
-        role = String(first(split(ref, '.')))
-        if !haskey(roles, role)
-            push!(errors, StructuralError(
-                "$path/$field",
-                "reference '$ref' to undeclared role '$role' (a coupling library's refs must name a role in `coupling_roles`)",
-                ERROR_CODES.UNDEFINED_SYSTEM,
-                Dict{String,Any}("reference" => ref, "role" => role,
-                                 "expected_in" => "coupling_roles")
-            ))
-        end
+    segments = _collect_role_segments(serialize_coupling_entry(coupling_entry))
+    for role in sort!(collect(Iterators.filter(s -> !haskey(roles, s), segments)))
+        push!(errors, StructuralError(
+            path,
+            "edge references '$role', which is not a declared role " *
+            "(esm-spec §10.9: a coupling library's refs name a role in `coupling_roles`)",
+            ERROR_CODES.COUPLING_EDGE_UNKNOWN_ROLE,
+            Dict{String,Any}("role" => role, "expected_in" => "coupling_roles")
+        ))
     end
     return errors
 end
@@ -2915,10 +2912,11 @@ Checks that systems, operators, and variable references can be resolved.
 function validate_coupling_references(file::EsmFile, coupling_entry::CouplingEntry, path::String)::Vector{StructuralError}
     errors = StructuralError[]
 
-    # In a coupling-library file (esm-spec §10.9) every endpoint prefix names a
-    # declared ROLE, not a system, and the library holds no models by definition
-    # — resolving them against the file's systems would reject every well-formed
-    # library. `coupling_roles` is the sole positive identifier of the kind.
+    # In a coupling-library file (esm-spec §10.9) an edge's system-naming
+    # segments name declared ROLES, not systems, and the library holds no models
+    # by definition — resolving them against the file's systems would reject
+    # every well-formed library. `coupling_roles` is the sole positive
+    # identifier of the kind.
     if file.coupling_roles !== nothing
         return _check_coupling_role_references(file, coupling_entry, path)
     end
