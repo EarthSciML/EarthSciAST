@@ -288,6 +288,35 @@ pub(crate) fn validate_coupling(
     }
 }
 
+/// The component a `bind` points a role at for `reference`, and the role(s) that
+/// point there. A bind value may be a dotted subsystem path (`Parent.Child`,
+/// esm-spec §10.10.1), so the LONGEST bound component that prefixes the
+/// reference wins; a reference no bind covers falls back to its own head segment.
+fn bound_component_for(
+    bind: Option<&HashMap<String, String>>,
+    reference: &str,
+) -> (String, String) {
+    let mut component = String::new();
+    for bound in bind.into_iter().flatten().map(|(_, v)| v) {
+        let covers = reference == bound || reference.starts_with(&format!("{bound}."));
+        if covers && bound.len() > component.len() {
+            component = bound.clone();
+        }
+    }
+    if component.is_empty() {
+        component = reference.split('.').next().unwrap_or(reference).to_string();
+    }
+    let mut roles: Vec<&str> = bind
+        .into_iter()
+        .flatten()
+        .filter(|(_, bound)| **bound == component)
+        .map(|(role, _)| role.as_str())
+        .collect();
+    roles.sort_unstable();
+    let role = roles.join(", ");
+    (component, role)
+}
+
 /// Validate the edges each `coupling_import` expands to (esm-spec §10.10.3).
 ///
 /// [`validate_coupling`] walks the SOURCE `coupling` array, where an import is
@@ -341,17 +370,7 @@ pub(crate) fn validate_imported_coupling(
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            let component = scoped
-                .rsplit_once('.')
-                .map(|(c, _)| c.to_string())
-                .unwrap_or_else(|| scoped.clone());
-            let roles: Vec<&str> = bind
-                .iter()
-                .flatten()
-                .filter(|(_, bound)| **bound == component)
-                .map(|(role, _)| role.as_str())
-                .collect();
-            let role = roles.join(", ");
+            let (component, role) = bound_component_for(bind.as_ref(), &scoped);
             e.message = format!(
                 "coupling_import '{reference}' binds role '{role}' to '{component}', which does \
                  not provide '{scoped}' referenced by the library: {}",

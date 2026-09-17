@@ -5226,7 +5226,13 @@ Two consequences of expanding inside flatten are normative:
   over the same expanded edge, that a hand-authored edge to a nonexistent variable produces. Whether
   that validation is folded into the flatten pass or run as a separate coupled-system check over the
   flattened form is a binding-implementation choice; the requirement is only that it sees the
-  expanded edges.
+  expanded edges. An implementation that also reports the mis-bind from `validate` on the **source**
+  document MUST report it at the pointer of the `coupling_import` entry (`/coupling/<i>`) rather than
+  at a pointer inside an expanded edge, because the import round-trips verbatim and the expanded edge
+  is not an entry of the document's own `coupling` array. Such a check reads the library from disk,
+  so it runs only for a document whose location the loader recorded (§4.7); a document with no
+  location of its own leaves the mis-bind to flatten rather than resolving the `ref` against the
+  process working directory.
 - **A library-edge transform's templates expand at flatten** against the bound `to` owner's
   registry (§10.4 carve-out), to an already-lowered form.
 

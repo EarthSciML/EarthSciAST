@@ -539,6 +539,23 @@ function validateAny(data: string | object, options: ValidateOptions = {}): Vali
           onUnitWarning: (warning) => unit_warnings.push(warning),
         })
 
+        // `loadDocument` re-derives the document from its ENUMERABLE fields, and
+        // the coupling-import base a loader recorded is a non-enumerable sidecar
+        // (esm-spec §10.10 -> §4.7), so it does not survive that round trip.
+        // Carry it across when the caller passed no `basePath` of its own, or
+        // `validate(loadPath(p))` would resolve the document's relative imports
+        // against the working directory — the defect the sidecar exists to
+        // prevent — and silently check nothing.
+        const carriedBase = (parsedData as EsmFile).couplingImportBase
+        if (esmFile.couplingImportBase === undefined && carriedBase !== undefined) {
+          Object.defineProperty(esmFile, 'couplingImportBase', {
+            value: carriedBase,
+            enumerable: false,
+            writable: true,
+            configurable: true,
+          })
+        }
+
         // With a `basePath`, open and inline the `{ref}` mounts before checking
         // anything: an unresolved stub declares no variables, so validating
         // around one reports phantom `unresolved_scoped_ref`s for names the
