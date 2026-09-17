@@ -2762,7 +2762,10 @@ func normalizeFlattenedAngleArguments(flat *FlattenedSystem) {
 		return
 	}
 
-	rewrite := func(e Expression) Expression { return normalizeAngleArguments(e, env) }
+	rewrite := func(e Expression) Expression {
+		out, _ := normalizeAngleArguments(e, env)
+		return out
+	}
 	for i := range flat.Equations {
 		flat.Equations[i].RHS = rewrite(flat.Equations[i].RHS)
 	}
@@ -2798,39 +2801,52 @@ func normalizeFlattenedAngleArguments(flat *FlattenedSystem) {
 }
 
 // normalizeAngleArguments rewrites every sin/cos/tan in `expr` whose argument is
-// an angle at a scale other than 1 so the argument is in RADIANS. Returns the
-// expression unchanged when nothing applies.
-func normalizeAngleArguments(expr Expression, env map[string]Unit) Expression {
+// an angle at a scale other than 1 so the argument is in RADIANS. `changed`
+// reports whether anything was rewritten.
+//
+// IDENTITY-PRESERVING: when nothing in a subtree is rewritten the ORIGINAL
+// Expression is returned, not a rebuild. That matters twice over here. The
+// walked tree holds raw decoded JSON as well as normalized nodes, so rebuilding
+// unconditionally would silently retype every `map[string]any` operand as an
+// `ExprNode` and change what a round-trip emits; and template expansion leaves
+// structurally SHARED sub-expressions, which an unconditional rebuild would
+// rematerialize as a tree.
+func normalizeAngleArguments(expr Expression, env map[string]Unit) (Expression, bool) {
 	node, ok := asExprNode(expr)
 	if !ok {
-		return expr
+		return expr, false
 	}
 	// Children first, so a nested sin(theta [deg]) inside another argument is
 	// converted too.
+	childChanged := false
 	out, err := mapExprChildren(node, func(child Expression) (Expression, error) {
-		return normalizeAngleArguments(child, env), nil
+		rewritten, did := normalizeAngleArguments(child, env)
+		childChanged = childChanged || did
+		return rewritten, nil
 	})
 	if err != nil {
-		return expr
+		return expr, false
 	}
 	switch out.Op {
 	case "sin", "cos", "tan":
 	default:
-		return out
+		if !childChanged {
+			return expr, false
+		}
+		return out, true
 	}
-	if len(out.Args) != 1 {
-		return out
+	if len(out.Args) == 1 {
+		if arg, err := propagateDimension(out.Args[0], env); err == nil && arg != nil {
+			if factor, ok := angleNormalizationFactor(*arg); ok {
+				out.Args = []any{ExprNode{Op: "*", Args: []any{out.Args[0], factor}}}
+				return out, true
+			}
+		}
 	}
-	arg, err := propagateDimension(out.Args[0], env)
-	if err != nil || arg == nil {
-		return out
+	if !childChanged {
+		return expr, false
 	}
-	factor, ok := angleNormalizationFactor(*arg)
-	if !ok {
-		return out
-	}
-	out.Args = []any{ExprNode{Op: "*", Args: []any{out.Args[0], factor}}}
-	return out
+	return out, true
 }
 
 // collectComponents collects every component system into a per-system bag,

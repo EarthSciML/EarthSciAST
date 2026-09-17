@@ -1790,8 +1790,21 @@ def normalize_angle_arguments(expr: Expr, env: dict[str, Any], _validator=None) 
         validator.known_units = env
 
     # Children first, so a nested `sin(theta [deg])` inside another argument is
-    # converted too.
-    node = map_children(expr, lambda child: normalize_angle_arguments(child, env, validator))
+    # converted too. IDENTITY-PRESERVING: ``map_children`` always rebuilds, and
+    # template expansion leaves structurally SHARED sub-expressions, so a
+    # subtree in which nothing changed is returned as the SAME object rather
+    # than rematerialized as a tree.
+    changed = False
+
+    def rewrite_child(child: Expr) -> Expr:
+        nonlocal changed
+        out = normalize_angle_arguments(child, env, validator)
+        if out is not child:
+            changed = True
+        return out
+
+    mapped = map_children(expr, rewrite_child)
+    node = mapped if changed else expr
 
     if node.op not in _CIRCULAR_FUNCS or len(node.args) != 1:
         return node

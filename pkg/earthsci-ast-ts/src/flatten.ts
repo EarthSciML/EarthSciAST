@@ -3068,20 +3068,33 @@ function normalizeFlattenedAngleArguments(flat: FlattenedSystem): void {
 
 /**
  * Rewrite every `sin`/`cos`/`tan` in `expr` whose argument is an angle at a
- * scale other than 1 so the argument is in RADIANS. Returns `expr` unchanged
- * when nothing applies.
+ * scale other than 1 so the argument is in RADIANS.
+ *
+ * IDENTITY-PRESERVING: a subtree in which nothing is rewritten is returned as
+ * the SAME object, not a rebuild. `mapChildren` always spreads into a fresh
+ * node, and template expansion leaves structurally SHARED sub-expressions, so
+ * rebuilding unconditionally would rematerialize a shared DAG as a tree.
  */
 function normalizeAngleArguments(expr: Expression, env: Map<string, ParsedUnit>): Expression {
   if (typeof expr !== 'object' || expr === null || Array.isArray(expr)) return expr
   const node = expr as ExpressionNode
   // Children first, so a nested `sin(theta [deg])` inside another argument is
   // converted too.
-  const out = mapChildren(node, (child) => normalizeAngleArguments(child as Expression, env))
-  if (out.op !== 'sin' && out.op !== 'cos' && out.op !== 'tan') return out
-  if (out.args === undefined || out.args.length !== 1) return out
-  const arg = checkDimensions(out.args[0] as Expression, env).dimensions
-  if (arg === null) return out
-  const factor = angleNormalizationFactor(arg)
-  if (factor === null) return out
-  return { ...out, args: [{ op: '*', args: [out.args[0], factor] } as ExpressionNode] }
+  let childChanged = false
+  const mapped = mapChildren(node, (child) => {
+    const rewritten = normalizeAngleArguments(child as Expression, env)
+    if (rewritten !== child) childChanged = true
+    return rewritten
+  })
+  const out = childChanged ? mapped : node
+  if (out.op === 'sin' || out.op === 'cos' || out.op === 'tan') {
+    if (out.args !== undefined && out.args.length === 1) {
+      const arg = checkDimensions(out.args[0] as Expression, env).dimensions
+      const factor = arg === null ? null : angleNormalizationFactor(arg)
+      if (factor !== null) {
+        return { ...out, args: [{ op: '*', args: [out.args[0], factor] } as ExpressionNode] }
+      }
+    }
+  }
+  return out
 }
