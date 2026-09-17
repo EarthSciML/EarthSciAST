@@ -283,28 +283,6 @@ fn collect_role_segments(edge: &Value) -> HashSet<String> {
 // Ref loading (synchronous, mirrors the §9.7 template resolver)
 // ---------------------------------------------------------------------------
 
-/// Record `base_dir` on every `coupling_import` entry of a loaded file.
-///
-/// esm-spec §10.10 resolves a `coupling_import` `ref` "by the §4.7 reference
-/// formats", and §4.7 resolves a relative path "relative to the directory of
-/// the referencing file". The expansion runs at flatten, which does not know
-/// where the document came from, so without this a relative import resolved
-/// against the process working directory. The base is kept beside the entry —
-/// `ref` stays as authored, because the entry must round-trip verbatim
-/// (§10.10.3) — and [`expand_coupling_imports`] prefers it over
-/// [`CouplingImportOptions::base_path`].
-pub(crate) fn record_coupling_import_base(file: &mut EsmFile, base_dir: &std::path::Path) {
-    let Some(coupling) = file.coupling.as_mut() else {
-        return;
-    };
-    let base = base_dir.to_string_lossy().into_owned();
-    for entry in coupling.iter_mut() {
-        if let CouplingEntry::CouplingImport { base_dir, .. } = entry {
-            *base_dir = Some(base.clone());
-        }
-    }
-}
-
 fn default_load_ref(ref_str: &str, base_path: &str) -> Result<Value, DiagnosticError> {
     if ref_str.starts_with("http://") || ref_str.starts_with("https://") {
         return Err(err(
@@ -586,24 +564,24 @@ pub fn expand_coupling_imports(
     if !has_coupling_import(file) {
         return Ok(Some(coupling.clone()));
     }
+    // A document loaded from a known location resolves its relative imports
+    // against that location (esm-spec §10.10 -> §4.7); the option is the base
+    // for a document that carries none (built in memory, or loaded from a
+    // string with no base).
+    let base = file
+        .coupling_import_base
+        .as_deref()
+        .unwrap_or(&options.base_path);
     let mut out: Vec<CouplingEntry> = Vec::new();
     for entry in coupling {
         let CouplingEntry::CouplingImport {
-            reference,
-            bind,
-            base_dir,
-            ..
+            reference, bind, ..
         } = entry
         else {
             out.push(entry.clone());
             continue;
         };
         let bind = bind.clone().unwrap_or_default();
-        // A document loaded from a known location resolves its relative imports
-        // against that location (esm-spec §10.10 -> §4.7); the option is the
-        // base for a document that carries none (built in memory, or loaded
-        // without a base).
-        let base = base_dir.as_deref().unwrap_or(&options.base_path);
         let lib = match &options.load_ref {
             Some(f) => f(reference, base)?,
             None => default_load_ref(reference, base)?,

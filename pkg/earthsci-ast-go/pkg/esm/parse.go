@@ -20,7 +20,13 @@ var embeddedSchema []byte
 type LoadOption func(*loadOptions)
 
 type loadOptions struct {
-	basePath       string
+	basePath string
+	// basePathSet records that the caller really gave a base, which the "."
+	// default of basePath cannot express: LoadPath of a bare filename derives
+	// "." as the file's own directory, and that IS a location, while a bare
+	// LoadString has none. Only a real location anchors a relative
+	// `coupling_import` ref (see ESMFile.couplingImportBase).
+	basePathSet    bool
 	metaparameters map[string]int64
 	// authoredMountDeclared is the esm-spec §8.9.4 mount-declared metaparameter
 	// set, collected — and checked — from the AUTHORED bytes by a caller that
@@ -66,7 +72,7 @@ func WithMetaparameters(m map[string]int64) LoadOption {
 // §9.7.2) for LoadString / LoadDocument input. LoadPath derives it from the
 // file's directory automatically; an explicit WithBasePath overrides that.
 func WithBasePath(dir string) LoadOption {
-	return func(o *loadOptions) { o.basePath = dir }
+	return func(o *loadOptions) { o.basePath, o.basePathSet = dir, true }
 }
 
 func applyLoadOptions(opts []LoadOption) loadOptions {
@@ -435,8 +441,9 @@ func LoadString(jsonStr string, opts ...LoadOption) (*ESMFile, error) {
 	// relative to THIS document, not to the working directory Flatten runs in.
 	// Flatten never learns where the document came from, so the base is recorded
 	// here — the refs themselves stay as authored, because the entry must
-	// round-trip verbatim (§10.10.3). The "." default is not a real base.
-	if o.basePath != "" && o.basePath != "." {
+	// round-trip verbatim (§10.10.3). A document the caller gave no base for —
+	// a bare LoadString / LoadDocument — keeps Flatten's own base instead.
+	if o.basePathSet && o.basePath != "" {
 		esmFile.couplingImportBase = o.basePath
 	}
 

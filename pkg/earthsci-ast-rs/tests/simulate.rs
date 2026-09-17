@@ -47,24 +47,10 @@ fn esm_with_model(model_name: &str, model: Model) -> EsmFile {
     let mut models = indexmap::IndexMap::new();
     models.insert(model_name.to_string(), model);
     EsmFile {
-        component_templates: None,
-        coordinates: None,
-        solver: None,
-        expression_templates: None,
-        metaparameters: None,
-        coupling_roles: None,
-        domain: None,
-        index_sets: None,
         esm: "0.1.0".to_string(),
         metadata: empty_metadata(),
         models: Some(models),
-        reaction_systems: None,
-        data_sources: None,
-        operators: None,
-        enums: None,
-
-        coupling: None,
-        function_tables: None,
+        ..Default::default()
     }
 }
 

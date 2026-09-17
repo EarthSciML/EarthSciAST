@@ -74,13 +74,16 @@ function load_path(path::AbstractString;
 end
 
 """
-    load_document(doc::AbstractDict; base_path=pwd(), metaparameters=Dict{String,Int}()) -> EsmFile
+    load_document(doc::AbstractDict; base_path=nothing, metaparameters=Dict{String,Int}()) -> EsmFile
 
 Parse an ESM document held in memory as a native Julia dict — the same
 document a `.esm` file holds, just already parsed. Runs the identical pipeline
 [`load_path`](@ref) runs (top-level `{ref}` inlining, schema validation,
 expression-template lowering, coercion, subsystem-ref resolution); `base_path`
-anchors the relative refs a file input anchors at its own directory.
+anchors the relative refs a file input anchors at its own directory, and
+defaults to `pwd()` for that. Left at `nothing` the document has no location of
+its own, so a relative `coupling_import` ref resolves against `flatten`'s own
+`base_path` instead (esm-spec §10.10 -> §4.7).
 
 Distinct from [`coerce_esm_file`](@ref), which only coerces: it does not
 validate, and it leaves a `{ref}` subsystem as an unresolved `SubsystemRef`
@@ -88,12 +91,13 @@ that [`flatten`](@ref) then SKIPS — so a dict must come through here, not
 through `coerce_esm_file`, before it is flattened and run.
 """
 function load_document(doc::AbstractDict;
-              base_path::AbstractString=pwd(),
+              base_path::Union{Nothing,AbstractString}=nothing,
               metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}())::EsmFile
     # Wire boundary for the in-memory path: normalize the caller's dict (which
     # may be symbol-keyed, or nest JSON3 values) into the one post-wire carrier.
-    return _load_document(_to_ordered(doc), String(base_path);
-                          metaparameters=metaparameters)
+    return _load_document(_to_ordered(doc), String(something(base_path, pwd()));
+                          metaparameters=metaparameters,
+                          record_import_base=base_path !== nothing)
 end
 
 """
@@ -110,7 +114,8 @@ apart — the only difference between them is which `base_path` anchors the refs
 function _load_document(raw_data, base_path::String;
                         metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}(),
                         injected_imports::AbstractVector=Any[],
-                        native_subsystem_refs::Bool=true)::EsmFile
+                        native_subsystem_refs::Bool=true,
+                        record_import_base::Bool=true)::EsmFile
     # esm-spec §9.7.6 site 4, widened past "the root document's" (§4.7): the
     # metaparameter names every document this one MOUNTS declares. Computed on
     # the AUTHORED tree — the inliner just below CONSUMES the top-level mount
@@ -224,8 +229,11 @@ function _load_document(raw_data, base_path::String;
     resolve_subsystem_refs!(file, base_path; loader_metaparameters=metaparameters,
                             root_env=root_env, model_envs=model_envs)
     # esm-spec §10.10 / §4.7: relative `coupling_import` refs resolve against this
-    # document's directory, which `flatten` would otherwise never learn.
-    _record_coupling_import_base!(file, base_path)
+    # document's directory, which `flatten` would otherwise never learn. Only a
+    # base the caller really gave is recorded (`load_path` always has one); a
+    # document with no location of its own leaves `flatten`'s `base_path` in
+    # charge, as it does in the other four bindings.
+    record_import_base && _record_coupling_import_base!(file, base_path)
     return file
 end
 
@@ -266,8 +274,8 @@ function _merge_staged_index_sets!(registry::AbstractDict{String,IndexSet},
 end
 
 """
-    load_string(json::AbstractString; base_path=pwd(), metaparameters=Dict{String,Int}()) -> EsmFile
-    load_string(io::IO; base_path=pwd(), metaparameters=Dict{String,Int}()) -> EsmFile
+    load_string(json::AbstractString; base_path=nothing, metaparameters=Dict{String,Int}()) -> EsmFile
+    load_string(io::IO; base_path=nothing, metaparameters=Dict{String,Int}()) -> EsmFile
 
 Parse an ESM document from JSON TEXT — held as a `String`, or streamed from an
 `IO` the method reads to a string first (the `::IO` method is a sanctioned
@@ -281,19 +289,23 @@ validation, template lowering, coercion, and nested subsystem-ref resolution.
 unresolved `SubsystemRef`s, which `flatten` silently SKIPS: the same document
 loaded from a stream flattened to a strictly smaller system, with no error.)
 `base_path` anchors relative `expression_template_imports` refs and nested
-`{ref}`s (esm-spec §9.7.2, §4.7); `metaparameters` binds the document's open
-metaparameters at the loader API (esm-spec §9.7.6).
+`{ref}`s (esm-spec §9.7.2, §4.7), defaulting to `pwd()` for that; left at
+`nothing` the document has no location of its own, so a relative
+`coupling_import` ref resolves against `flatten`'s own `base_path` instead
+(§10.10 -> §4.7). `metaparameters` binds the document's open metaparameters at
+the loader API (esm-spec §9.7.6).
 """
-function load_string(json::AbstractString; base_path::AbstractString=pwd(),
+function load_string(json::AbstractString; base_path::Union{Nothing,AbstractString}=nothing,
                      metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}(),
                      injected_imports::AbstractVector=Any[])::EsmFile
     raw_data = _read_json_document(json)
-    return _load_document(raw_data, String(base_path);
+    return _load_document(raw_data, String(something(base_path, pwd()));
                           metaparameters=metaparameters,
-                          injected_imports=injected_imports)
+                          injected_imports=injected_imports,
+                          record_import_base=base_path !== nothing)
 end
 
-function load_string(io::IO; base_path::AbstractString=pwd(),
+function load_string(io::IO; base_path::Union{Nothing,AbstractString}=nothing,
                      metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}(),
                      injected_imports::AbstractVector=Any[])::EsmFile
     return load_string(read(io, String); base_path=base_path,

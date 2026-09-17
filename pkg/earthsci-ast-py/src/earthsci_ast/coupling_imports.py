@@ -250,25 +250,6 @@ def _collect_role_segments(edge: Any) -> set[str]:
 # ---------------------------------------------------------------------------
 
 
-def record_coupling_import_base(esm_file: Any, base_dir: str) -> None:
-    """Record ``base_dir`` on every ``coupling_import`` entry of a loaded file.
-
-    esm-spec §10.10 resolves a ``coupling_import`` ``ref`` "by the §4.7 reference
-    formats", and §4.7 resolves a relative path "relative to the directory of the
-    referencing file". The expansion runs at :func:`flatten`, which does not know
-    where the document came from, so without this a relative import resolved
-    against the process working directory. The base is kept beside the entry —
-    ``ref`` stays as authored, because the entry must round-trip verbatim
-    (§10.10.3) — and :func:`expand_coupling_imports` prefers it over its
-    ``base_path`` argument.
-    """
-    from .esm_types import CouplingImport
-
-    for entry in getattr(esm_file, "coupling", None) or []:
-        if isinstance(entry, CouplingImport):
-            entry.base_dir = base_dir
-
-
 def _default_load_ref(ref: str, base_path: str) -> Any:
     """Resolve a ``coupling_import`` ``ref`` to a parsed document via the shared
     §4.7 loader (:func:`json_walk.load_ref_raw`) — the same ``${VAR}`` expansion
@@ -466,6 +447,10 @@ def expand_coupling_imports(
         return coupling
 
     resolver = load_ref if load_ref is not None else _default_load_ref
+    # A document loaded from a known location resolves its relative imports
+    # against that location (esm-spec §10.10 -> §4.7); ``base_path`` is the base
+    # for a document that carries none (built in memory, or loaded without one).
+    doc_base = getattr(esm_file, "coupling_import_base", None)
     out: list[Any] = []
     for entry in coupling:
         if not isinstance(entry, CouplingImport):
@@ -474,7 +459,7 @@ def expand_coupling_imports(
         ref = entry.ref if isinstance(entry.ref, str) else ""
         bind: dict[str, str] = {k: v for k, v in (entry.bind or {}).items() if isinstance(v, str)}
         try:
-            lib = resolver(ref, getattr(entry, "base_dir", None) or base_path)
+            lib = resolver(ref, doc_base or base_path)
         except ExpressionTemplateError:
             raise
         except Exception as e:  # noqa: BLE001 — reported with the stable code

@@ -347,7 +347,7 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     // an explicit base is recorded; a string load without one leaves flatten's
     // own `base_path` in charge.
     if options.base_path.is_some() {
-        crate::coupling_imports::record_coupling_import_base(&mut esm_file, &base);
+        esm_file.coupling_import_base = Some(base.to_string_lossy().into_owned());
     }
 
     Ok(esm_file)
