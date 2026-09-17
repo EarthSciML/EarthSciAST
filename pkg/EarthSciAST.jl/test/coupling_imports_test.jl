@@ -350,7 +350,7 @@ end
     bad = EarthSciAST.validate(load_string(typo))
     @test length(bad.structural_errors) == 1
     @test bad.structural_errors[1].path == "/coupling/0"
-    @test bad.structural_errors[1].code == EarthSciAST.ERROR_CODES.COUPLING_EDGE_UNKNOWN_ROLE
+    @test bad.structural_errors[1].error_type == EarthSciAST.ERROR_CODES.COUPLING_EDGE_UNKNOWN_ROLE
     @test occursin("'Snik'", bad.structural_errors[1].message)
 
     # A site an endpoint-only check cannot see: `operator_compose.systems[]`.
@@ -358,7 +358,7 @@ end
     bad2 = EarthSciAST.validate(load_string(sys))
     @test length(bad2.structural_errors) == 1
     @test bad2.structural_errors[1].path == "/coupling/1"
-    @test bad2.structural_errors[1].code == EarthSciAST.ERROR_CODES.COUPLING_EDGE_UNKNOWN_ROLE
+    @test bad2.structural_errors[1].error_type == EarthSciAST.ERROR_CODES.COUPLING_EDGE_UNKNOWN_ROLE
     @test occursin("'Ghost'", bad2.structural_errors[1].message)
 end
 
@@ -371,7 +371,7 @@ end
 
     bad = EarthSciAST.validate(load_string(read(joinpath(corpus, "lib_unknown_role_edge.esm"), String)))
     @test length(bad.structural_errors) == 1
-    @test bad.structural_errors[1].code == EarthSciAST.ERROR_CODES.COUPLING_EDGE_UNKNOWN_ROLE
+    @test bad.structural_errors[1].error_type == EarthSciAST.ERROR_CODES.COUPLING_EDGE_UNKNOWN_ROLE
     @test occursin("'Ghost'", bad.structural_errors[1].message)
 end
 

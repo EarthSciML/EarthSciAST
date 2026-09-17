@@ -380,7 +380,8 @@ fn test_coupling_library_refs_resolve_against_roles_not_systems() {
 /// `lib_unknown_role_edge.esm` must be rejected naming its undeclared role.
 #[test]
 fn test_coupling_library_corpus_validates_standalone() {
-    let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/coupling_libraries");
+    let corpus =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/coupling_libraries");
     let good = std::fs::read_to_string(corpus.join("rothermel_fuel.esm")).unwrap();
     load_string(&good).expect("a well-formed corpus library must load standalone");
 
@@ -388,7 +389,10 @@ fn test_coupling_library_corpus_validates_standalone() {
     let err = load_string(&bad)
         .expect_err("lib_unknown_role_edge.esm must be rejected standalone")
         .to_string();
-    assert!(err.contains("'Ghost'"), "error must name the role, got: {err}");
+    assert!(
+        err.contains("'Ghost'"),
+        "error must name the role, got: {err}"
+    );
 }
 
 /// Test event variable undeclared errors.

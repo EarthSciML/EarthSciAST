@@ -130,16 +130,21 @@ func Validate(file *ESMFile) *ValidationResult {
 	// assembly-document invariant inside ValidateStruct would reject it
 	// outright. Its well-formedness was already settled by the schema's root
 	// `anyOf` at load.
-	if isLibraryDocument(file) {
-		// One check survives the short-circuit. esm-spec §10.9 does not simply
-		// suspend reference resolution for a COUPLING library: it REPLACES it,
-		// requiring the top-level segment at every §10.10.2 occurrence site to
-		// name a declared role (`coupling_edge_unknown_role`). Skipping that
-		// outright would accept a typo'd role here that the other four bindings
-		// reject, and that the import-time check in coupling_imports.go rejects
-		// the moment an assembly binds the very same library.
+	// A COUPLING library keeps ONE check. esm-spec §10.9 does not simply suspend
+	// reference resolution for it: it REPLACES it, requiring the top-level
+	// segment at every §10.10.2 occurrence site to name a declared role
+	// (`coupling_edge_unknown_role`). Skipping that outright accepted a typo'd
+	// role here that the other four bindings reject, and that the import-time
+	// check in coupling_imports.go rejects the moment an assembly binds the very
+	// same library. Gated on `coupling_roles` alone, which §10.9 makes the sole
+	// positive identifier of the file kind, so the five bindings run the check
+	// on the same condition.
+	if len(file.CouplingRoles) != 0 {
 		result.StructuralErrors = validateCouplingRoleRefs(file)
 		result.IsValid = countStructuralErrorLevel(result.StructuralErrors) == 0
+		return result
+	}
+	if isLibraryDocument(file) {
 		return result
 	}
 
