@@ -556,28 +556,41 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
             # replaced asked `400 > 1104 ÷ 2` and said no.
             @test EXT_DE._de_gather_is_cheaper(400, 1104)
             @test EXT_DE._de_gather_is_cheaper(8, 24)
-            # Long affine runs stay on slices, which is what the slice path is for.
-            @test !EXT_DE._de_gather_is_cheaper(6, 216)      # avg 36
-            @test !EXT_DE._de_gather_is_cheaper(7, 20)       # below the piece floor
-            # THE PIECE CAP. Average run length is a property of the STENCIL and
-            # does not move with the grid; the number of pieces is proportional
-            # to cells. A read whose runs are LONGER than the break-even — a
-            # column walk over a sixteen-level model, say — therefore keeps
-            # failing the average-run test at every grid size while its piece
-            # count grows without bound. Past the cap the read gathers whatever
-            # its runs look like, so no read costs more than the cap in ops.
-            @test EXT_DE._de_gather_is_cheaper(65, 65 * 7)   # avg 7, over the cap
-            @test !EXT_DE._de_gather_is_cheaper(64, 64 * 7)  # avg 7, at the cap
+            # THE PIECE CAP, AND IT IS THE PIECE FLOOR. Average run length is a
+            # property of the STENCIL and does not move with the grid; the
+            # number of pieces is proportional to cells. A read whose runs are
+            # LONGER than the break-even — a column walk over a sixteen-level
+            # model, say — therefore keeps failing the average-run test at every
+            # grid size while its piece count grows without bound. And a slice
+            # costs more than the average-run test can see: its REVERSE is a
+            # pad-and-add that becomes more slices, and the passes that
+            # deduplicate slices are quadratic in how many there are, while a
+            # gather's reverse is one scatter.
+            @test EXT_DE._de_gather_is_cheaper(9, 9 * 7)     # avg 7, over the cap
+            @test !EXT_DE._de_gather_is_cheaper(8, 8 * 7)    # avg 7, AT the cap
+            @test !EXT_DE._de_gather_is_cheaper(1, 216)      # one affine run
+            @test !EXT_DE._de_gather_is_cheaper(6, 216)      # avg 36, under the cap
             @test EXT_DE._de_gather_is_cheaper(936, 6552)    # a whole-grid column read
             @test EXT_DE._de_gather_is_cheaper(100, 100_000) # avg 1000, still capped
+            # The cap and the floor are ONE number, so the average-run test is
+            # consulted at exactly that many pieces and nowhere else.
+            @test EXT_DE._de_gather_is_cheaper(8, 24)        # avg 3, at the cap
+            @test !EXT_DE._de_gather_is_cheaper(7, 21)       # avg 3, under the floor
         end
         # The cap is overridable, and lifting it leaves the average-run test
-        # alone — the negative control for the clause.
+        # alone — the negative control for the clause, and the shape the cap of
+        # 64 this replaces produced.
         withenv("ESM_DIRECT_EMIT_READ" => "gather",
                 "ESM_DIRECT_GATHER_MAX_PIECES" => string(typemax(Int))) do
             @test !EXT_DE._de_gather_is_cheaper(936, 6552)
             @test !EXT_DE._de_gather_is_cheaper(100, 100_000)
             @test EXT_DE._de_gather_is_cheaper(400, 1104)    # the average-run test
+        end
+        withenv("ESM_DIRECT_EMIT_READ" => "gather",
+                "ESM_DIRECT_GATHER_MAX_PIECES" => "64") do
+            @test EXT_DE._de_gather_is_cheaper(65, 65 * 7)
+            @test !EXT_DE._de_gather_is_cheaper(64, 64 * 7)
+            @test !EXT_DE._de_gather_is_cheaper(9, 9 * 7)
         end
         withenv("ESM_DIRECT_EMIT_READ" => "gather",
                 "ESM_DIRECT_GATHER_MAX_PIECES" => "4") do
@@ -588,11 +601,17 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
         # WHETHER THE MAP'S CANONICAL BASE IS WORTH BUILDING is the same line,
         # and it is drawn on the piece count alone: the base costs one
         # concatenate and at most one reordering gather, which is cheap against
-        # a read that shatters past the cap and not against one that decomposes
-        # into eight. `runs` never builds one, so it stays the exact negative
+        # a read that shatters past the cap and not against one that is a single
+        # affine run. `runs` never builds one, so it stays the exact negative
         # control; `always` builds one for anything with more than a single run.
         withenv("ESM_DIRECT_EMIT_READ" => "gather",
                 "ESM_DIRECT_GATHER_MAX_PIECES" => nothing) do
+            @test EXT_DE._de_canon_worth(9)
+            @test !EXT_DE._de_canon_worth(8)
+            @test !EXT_DE._de_canon_worth(3)
+        end
+        withenv("ESM_DIRECT_EMIT_READ" => "gather",
+                "ESM_DIRECT_GATHER_MAX_PIECES" => "64") do
             @test EXT_DE._de_canon_worth(65)
             @test !EXT_DE._de_canon_worth(64)
             @test !EXT_DE._de_canon_worth(8)
@@ -677,11 +696,13 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
         pr = _de_dev(p)
         ur = RX_DE.ConcreteRArray(copy(u1)); tr = RX_DE.ConcreteRNumber(0.4)
         tallies = Dict{String,Dict{Symbol,Int}}()
+        outs = Dict{String,Vector{Float64}}()
         for mode in ("runs", "gather", "always")
             withenv("ESM_DIRECT_EMIT_READ" => mode) do
                 d = EXT_DE.direct_rhs(fo)
                 xla = RX_DE.@compile sync = true d(ur, pr, tr)
-                @test isapprox(Array(xla(ur, pr, tr)), ref; rtol = 1e-12, atol = 0.0)
+                outs[mode] = Array(xla(ur, pr, tr))
+                @test isapprox(outs[mode], ref; rtol = 1e-12, atol = 0.0)
                 tallies[mode] = copy(d.stats)
             end
         end
@@ -695,16 +716,21 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
             tallies["base64"] = copy(d.stats)
         end
         # AND THE PIECE CAP, emitted rather than asserted in arithmetic. The
-        # fixture's reads decompose into two or three pieces, which is under
-        # both the default cap and the piece floor, so the cap is exercised by
-        # setting it below them: every read past it becomes one gather, and the
-        # numbers do not move.
-        withenv("ESM_DIRECT_EMIT_READ" => "gather",
-                "ESM_DIRECT_GATHER_MAX_PIECES" => "2") do
-            d = EXT_DE.direct_rhs(fo)
-            xla = RX_DE.@compile sync = true d(ur, pr, tr)
-            @test isapprox(Array(xla(ur, pr, tr)), ref; rtol = 1e-12, atol = 0.0)
-            tallies["cap2"] = copy(d.stats)
+        # fixture's reads decompose into two or three pieces, under both the
+        # shipped cap and the piece floor, so this fixture does not reach the
+        # cap and `cap64` — the PREVIOUS EMISSION FORM, the cap this replaces —
+        # has to emit it identically. The cap is then exercised by setting it
+        # BELOW the fixture's reads: every read past it becomes one gather, and
+        # the numbers do not move.
+        for (nm, cap) in (("cap64", "64"), ("cap2", "2"))
+            withenv("ESM_DIRECT_EMIT_READ" => "gather",
+                    "ESM_DIRECT_GATHER_MAX_PIECES" => cap) do
+                d = EXT_DE.direct_rhs(fo)
+                xla = RX_DE.@compile sync = true d(ur, pr, tr)
+                outs[nm] = Array(xla(ur, pr, tr))
+                @test isapprox(outs[nm], ref; rtol = 1e-12, atol = 0.0)
+                tallies[nm] = copy(d.stats)
+            end
         end
         for (k, v) in sort!(collect(tallies); by = first)
             println("  read-form tally ", rpad(k, 7), " ", v)
@@ -732,19 +758,30 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
         # map in slot order, so the read is the base: no slice, no gather, no
         # index constant, and the one concatenate is charged to the base rather
         # than to the assembly. Refusing the base (the 64-element budget) is
-        # what puts the assembly back on a slice per run.
+        # what puts the assembly back on a slice per run: the ASSEMBLY's base
+        # spans every producer there is and a 64-element copy does not hold it,
+        # so that arm builds strictly fewer canonical bases and emits the
+        # assembly as slices.
         for k in (Symbol("slice1@assemble.runs"), Symbol("sliceN@assemble.runs"),
                   Symbol("gather@assemble.x"), Symbol("concat@assemble.x"))
             @test get(tallies["gather"], k, 0) == 0
         end
         @test get(tallies["gather"], :canon_base, 0) >= 1
-        @test get(tallies["base64"], :canon_base, 0) == 0
+        @test get(tallies["base64"], :canon_base, 0) <
+              get(tallies["gather"], :canon_base, 0)
         @test get(tallies["base64"], Symbol("gather@assemble.x"), 0) == 0
         @test get(tallies["base64"], Symbol("slice1@assemble.runs"), 0) > 0
-        # THE PIECE CAP: past it a read is one gather however its runs look, so
-        # dropping the cap below the fixture's reads trades its slices for them.
+        # THE PIECE CAP: past it a read is one gather however its runs look. The
+        # fixture sits under the shipped cap, so the cap this replaces emits it
+        # op for op; dropping the cap below the fixture's reads trades its
+        # slices for gathers; and all three are the same program numerically.
+        @test get(tallies["gather"], :slice, 0) == get(tallies["cap64"], :slice, 0)
+        @test get(tallies["gather"], :gather, 0) == get(tallies["cap64"], :gather, 0)
         @test get(tallies["cap2"], :slice, 0) < get(tallies["gather"], :slice, 0)
         @test get(tallies["cap2"], :gather, 0) > get(tallies["gather"], :gather, 0)
+        @test isapprox(outs["gather"], outs["cap64"]; rtol = 1e-12, atol = 0.0)
+        @test isapprox(outs["gather"], outs["cap2"]; rtol = 1e-12, atol = 0.0)
+        @test isapprox(outs["gather"], outs["runs"]; rtol = 1e-12, atol = 0.0)
         # `always` gathers everything with more than one run, so it is the floor
         # on slices and the ceiling on gathers.
         @test get(tallies["always"], :slice, 0) <= get(tallies["gather"], :slice, 0)
