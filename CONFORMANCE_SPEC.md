@@ -5814,6 +5814,8 @@ the reference binding.
   read ZERO at every asserted time. That one is the quiet-wrong-answer half:
   the assertion reports a number, and the number is wrong.
 - **Python** was correct on both counts.
+- Rust's repair covers a SCALAR observed only; a state-free document with a
+  shaped one is still red there (§5.42.7).
 - **Go** and **TypeScript** cannot be affected. Neither ships an integrator
   (`pkg/earthsci-ast-ts/src/solver.ts` says so outright; the Go `Solver` type
   carries the §2.2 block and nothing that runs it) nor an inline-test runner —
@@ -5887,7 +5889,26 @@ reference should be evaluated at the asserted time or rejected as an unbound
 name (§6.6.5 admits the field's dimension names and the model's parameters,
 and does not name `t`) is not settled here.
 
-#### 5.42.7 Gate
+#### 5.42.7 Known gap: a state-free document with a SHAPED observed, in Rust
+
+The first consequence above is met in Rust only for a document whose observeds
+are SCALAR. `static_observeds_at` serves the scalar backend — a compiled
+right-hand side over an empty state vector — and returns `None` for everything
+else, so a state-free document with an ARRAY-valued observed takes the array
+runtime under `Compile::Always` and still reaches the solver. Verified on a
+three-cell `g[i] = a·t·i` with no differential equations: Python and Julia
+both answer `20` at `t = 5` and `0` at `t = 0`; Rust reports `Exceeded maximum
+number of nonlinear solver failures (51) at time = 0` at BOTH times. The same
+document with the time dependence removed (`g[i] = a·i`) fails in Rust
+identically, so this is not about the clock — it is the whole state-free array
+shape. `esm simulate` handles both, because it uses `Compile::Auto`.
+
+This predates issue #406's fix (the array path is untouched by it) and Rust
+fails loudly rather than answering wrongly, so it is recorded here rather than
+closed. `bindings_required` still lists rust because the category's fixtures are
+scalar; a shaped fixture would be red in Rust today.
+
+#### 5.42.8 Gate
 
 `tests/conformance/static_evaluation_assertions/` holds the shared fixtures and
 the Julia-minted goldens. Per-binding runners gate every assertion actual
