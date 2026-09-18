@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from fractions import Fraction
 from typing import Any, NamedTuple
 
+from . import op_registry
 from .classification import observed_definitions
 from .esm_types import EsmFile, Expr, ExprNode, Model, ReactionSystem
 
@@ -1606,8 +1607,17 @@ class UnitValidator:
             # d(f)/d(wrt) has the unit of f divided by that of wrt. `wrt` is a
             # sidecar field, not an arg, and is often an undeclared time symbol —
             # in which case the dimension is indeterminate. Never assume seconds.
-            wrt = getattr(node, "wrt", None)
-            if args[0] is None or not wrt or wrt not in self.known_units:
+            #
+            # An ABSENT `wrt` MEANS `t` (esm-spec §4.2), exactly as the four
+            # other bindings read it here (`rs units::propagate_calculus_dim`,
+            # `jl units.jl`, `go derivativeWrt`, `ts node.wrt || 't'`). Treating
+            # the absent case as "no axis at all" instead made the derivative's
+            # dimension UNKNOWN whenever the axis was declared, so a document
+            # whose `D(h) + w` adds a length-per-time to a mass was reported as
+            # a dimensional mismatch by Go, Julia, Rust and TypeScript and
+            # silently accepted by Python (EarthSciAST#407).
+            wrt = getattr(node, "wrt", None) or op_registry.STRUCTURAL_DERIVATIVE_WRT
+            if args[0] is None or wrt not in self.known_units:
                 return None
             wrt_unit = self.known_units[wrt]
             return _Typed(

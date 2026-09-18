@@ -119,3 +119,54 @@ def test_the_sympy_bridge_applies_the_same_default() -> None:
     explicit = to_sympy(_parse_expression({"op": "D", "args": ["z"], "wrt": "t"}))
     assert isinstance(omitted, sp.Derivative)
     assert omitted == explicit
+
+
+def test_unit_propagation_applies_the_same_default() -> None:
+    """``D(h)`` divides by the unit of ``t`` exactly as ``D(h, wrt=t)`` does.
+
+    The dimensional rule in ``units.py`` short-circuited on a falsy ``wrt``
+    (``not wrt``) BEFORE any default could be applied, so the derivative's
+    dimension came out UNKNOWN whenever the axis was declared. That is not a
+    lost diagnostic in Python alone: Rust, Julia, Go and TypeScript all read an
+    absent ``wrt`` as ``t`` here, so the document below — which adds a
+    length-per-time to a mass — is a dimensional mismatch in four bindings and
+    was silently clean in the fifth.
+
+    The axis has to be DECLARED for the rule to fire at all (an undeclared
+    ``t`` leaves the derivative indeterminate in every binding, deliberately),
+    which is why this model renames its independent variable and declares ``t``
+    as an ordinary parameter — the same shape as
+    ``tests/valid/independent_variable_renamed.esm``.
+    """
+    from earthsci_ast.esm_types import Equation, Model, ModelVariable
+    from earthsci_ast.units import UnitValidator
+
+    def _model(wrt: str | None) -> Model:
+        d: dict = {"op": "D", "args": ["h"]}
+        if wrt is not None:
+            d["wrt"] = wrt
+        return Model(
+            name="UnitsWrtDefault",
+            variables={
+                "t": ModelVariable(type="parameter", units="s", default=1.0),
+                "h": ModelVariable(type="unknown", units="m", default=0.0),
+                "w": ModelVariable(type="parameter", units="kg", default=2.0),
+                "q": ModelVariable(type="unknown", units="m/s"),
+            },
+            equations=[
+                Equation(lhs=_parse_expression(d), rhs=1.0),
+                Equation(
+                    lhs="q",
+                    rhs=_parse_expression({"op": "+", "args": [d, "w"]}),
+                ),
+            ],
+        )
+
+    omitted = UnitValidator().validate_model(_model(None))
+    explicit = UnitValidator().validate_model(_model("t"))
+    assert not explicit.is_valid, "the explicit spelling has always been caught"
+    assert not omitted.is_valid, (
+        "an absent `wrt` MEANS `t` (esm-spec §4.2), so the same mismatch must be "
+        "reported for the short spelling"
+    )
+    assert omitted.errors == explicit.errors
