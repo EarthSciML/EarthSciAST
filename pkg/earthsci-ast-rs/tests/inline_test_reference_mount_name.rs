@@ -51,7 +51,7 @@ fn fixture_json() -> serde_json::Value {
 fn reference_resolves_a_mounted_parameter_by_its_mount_name() {
     let file = common::load_repo_fixture(FIXTURE);
     let results = run_inline_tests(&file, Some("P"), &opts());
-    assert_eq!(results.len(), 3, "three assertions in the fixture");
+    assert_eq!(results.len(), 4, "four assertions in the fixture");
     for r in &results {
         assert!(
             r.passed,
@@ -68,6 +68,19 @@ fn reference_resolves_a_mounted_parameter_by_its_mount_name() {
         "the two spellings must name one constant"
     );
     assert_eq!(mount_relative, 0.5, "|1 - 2| / 2 over three uniform cells");
+    // Assertion 3 is SCOPED (`variable: "R.v"`), so the owner of the assertion
+    // — and of its reference scope — is `R`, not the component whose `tests`
+    // block holds it. The same `sub.g` spelling therefore names R's 7, giving
+    // |1 - 7| = 6; resolving it in P's namespace instead would give |1 - 2| = 1.
+    // Every other per-component lookup a scoped assertion makes (shape, state,
+    // observed) already reads the owner, and this pins the reference to the
+    // same component. Before issue #408 the spelling was unbound here outright,
+    // so this number is a NEW behaviour, not a preserved one.
+    assert_eq!(
+        results[3].actual.expect("scoped actual"),
+        6.0,
+        "a scoped assertion's reference resolves in the component its `variable` names"
+    );
 }
 
 /// The negative control. Widening the reference scope to the unambiguous dotted

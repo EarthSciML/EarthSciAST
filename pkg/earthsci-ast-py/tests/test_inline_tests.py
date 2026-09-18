@@ -580,12 +580,21 @@ def test_subsystem_parameter_reference_resolves_by_the_mount_name():
     fixture = FIXTURES_ROOT / "valid" / "inline_test_reference_mount_name.esm"
     assert fixture.is_file()
     results = run_inline_tests(str(fixture), model_name="P", method="LSODA", rtol=1e-12, atol=1e-14)
-    assert len(results) == 3
+    assert len(results) == 4
     for r in results:
         assert r.passed, f"test {r.test_id}[{r.assertion_idx}]: {r.message}"
     # The mount-relative and model-qualified spellings name ONE constant, so the
     # L2 assertions they drive must agree to the bit.
     assert results[0].actual == results[2].actual
+    # The fourth assertion is SCOPED (``variable: "R.v"``), so the owner of the
+    # assertion — and of its reference scope — is ``R``, not the component whose
+    # ``tests`` block holds it. The same ``sub.g`` spelling therefore names R's
+    # 7, giving |1 - 7| = 6; resolving it in P's namespace would give |1 - 2|
+    # = 1. Every other per-component lookup a scoped assertion makes (shape,
+    # state, observed) already reads the owner, and this pins the reference to
+    # the same component. Before issue #408 the spelling was unbound here
+    # outright, so this is a NEW behaviour rather than a preserved one.
+    assert results[3].actual == 6.0
 
 
 def test_reference_typo_near_a_mounted_parameter_is_still_unbound():
@@ -637,6 +646,16 @@ def test_param_scope_aliases_every_unambiguous_dotted_suffix():
     # A name that is neither the owner's own nor a globally unambiguous suffix
     # is bound by nothing, which is what keeps a typo an error downstream.
     assert "sub.gg" not in _param_scope_with_aliases({"P.sub.g": 2.0}, "P")
+    # The owner-relative rule reaches a BARE tail too, and that widens the
+    # §6.6.5 clash scope: `x` is the tail of two flattened names, so the old
+    # globally-unambiguous-tail rule bound it for NOBODY, whereas the owner's
+    # own `x` is unambiguous and is now in scope. A reference that mentions a
+    # dimension named `x` free therefore now collides with it
+    # (``bind_dimension_names``) where before it was silently wrapped.
+    tails = {"P.x": 1.0, "R.x": 2.0}
+    assert _param_scope_with_aliases(tails, "P")["x"] == 1.0
+    assert _param_scope_with_aliases(tails, "R")["x"] == 2.0
+    assert "x" not in _param_scope_with_aliases(tails, "Q")
 
 
 def _array_observed_doc() -> dict:

@@ -514,7 +514,7 @@ const _PIT_MOUNT_FIXTURE = joinpath(@__DIR__, "..", "..", "..", "tests", "valid"
     results = run_inline_tests(_PIT_MOUNT_FIXTURE; model_name="P",
                             alg=OrdinaryDiffEqTsit5.Tsit5(),
                             reltol=1e-12, abstol=1e-14)
-    @test length(results) == 3
+    @test length(results) == 4
     for r in results
         @test r.passed
         r.passed || @info "assertion failed" r.test_id r.assertion_idx r.message
@@ -523,6 +523,15 @@ const _PIT_MOUNT_FIXTURE = joinpath(@__DIR__, "..", "..", "..", "tests", "valid"
     # constant `P.sub.g`. One parameter, one number.
     @test results[1].actual == results[3].actual
     @test results[1].actual == 0.5   # |1 - 2| / 2 over three uniform cells
+    # Assertion 4 is SCOPED (`variable: "R.v"`), so the OWNER of the assertion —
+    # and of its reference scope — is `R`, not the component whose `tests` block
+    # holds it. The same `sub.g` spelling therefore names R's 7, giving
+    # |1 - 7| = 6; resolving it in P's namespace would give |1 - 2| = 1. Every
+    # other per-component lookup a scoped assertion makes (shape, state,
+    # observed) already reads the owner, and this pins the reference to the same
+    # component. Before issue #408 the spelling was unbound here outright, so
+    # this is a NEW behaviour rather than a preserved one.
+    @test results[4].actual == 6.0
 end
 
 @testset "a typo near a mounted parameter stays unbound (#408)" begin
@@ -569,6 +578,16 @@ end
     # A name that is neither the owner's own nor a globally unambiguous suffix
     # is bound by nothing, which is what keeps a typo an error downstream.
     @test !haskey(_PIT_ESS._param_scope_with_aliases(Dict("P.sub.g" => 2.0), "P"), "sub.gg")
+    # The owner-relative rule reaches a BARE tail too, and that widens the
+    # §6.6.5 clash scope: `x` is the tail of two flattened names, so the old
+    # globally-unambiguous-tail rule bound it for NOBODY, whereas the owner's
+    # own `x` is unambiguous and is now in scope. A reference that mentions a
+    # dimension named `x` free therefore now collides with it
+    # (`bind_dimension_names`) where before it was silently wrapped.
+    tails = Dict("P.x" => 1.0, "R.x" => 2.0)
+    @test _PIT_ESS._param_scope_with_aliases(tails, "P")["x"] == 1.0
+    @test _PIT_ESS._param_scope_with_aliases(tails, "R")["x"] == 2.0
+    @test !haskey(_PIT_ESS._param_scope_with_aliases(tails, "Q"), "x")
 end
 
 # ---------------------------------------------------------------------------

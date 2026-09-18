@@ -2,7 +2,7 @@
   "esm": "1.1.0",
   "metadata": {
     "name": "InlineTestReferenceMountName",
-    "description": "Valid: a §6.6.5 assertion `reference` naming a MOUNTED SUBSYSTEM's parameter by the mount-relative spelling its own equations use. `P` mounts the subsystem `sub`, whose parameter `g` the model's RHS reads as `sub.g`; the build flattens it to `P.sub.g`. The sibling model `R` mounts a `sub` of its own, so the bare suffixes `sub.g` and `g` are carried by TWO flattened names and are globally AMBIGUOUS — exactly the shape of a coupling document, where every mounted component carries its own copy of a shared constants subsystem. What makes `sub.g` unambiguous inside `P`'s test is the component that owns the test: `P.sub.g` is the one key under `P.`, so `sub.g` is `P`'s own, which is what `P`'s equations already resolve it to. `u` is 1 in every cell and never moves before t = 0, so the relative L2 error against the constant field `sub.g` = 2 is |1 - 2| / 2 = 1/2 exactly, and the uniform norm against `1.5 * sub.g` = 3 is 2 exactly — both in build-time arithmetic, with no solver in the loop. Test 1 spells the reference `sub.g` (the spelling that survives being mounted under another key); test 2 spells the same constant `P.sub.g` and must agree. Before issue #408 only the model-qualified spelling resolved: the assertion scope bound the flattened name plus its bare tail and nothing else, so `sub.g` raised an unbound-name error in the one position where the model's own equations resolve it.",
+    "description": "Valid: a §6.6.5 assertion `reference` naming a MOUNTED SUBSYSTEM's parameter by the mount-relative spelling its own equations use. `P` mounts the subsystem `sub`, whose parameter `g` the model's RHS reads as `sub.g`; the build flattens it to `P.sub.g`. The sibling model `R` mounts a `sub` of its own, so the bare suffixes `sub.g` and `g` are carried by TWO flattened names and are globally AMBIGUOUS — exactly the shape of a coupling document, where every mounted component carries its own copy of a shared constants subsystem. What makes `sub.g` unambiguous inside `P`'s test is the component that owns the test: `P.sub.g` is the one key under `P.`, so `sub.g` is `P`'s own, which is what `P`'s equations already resolve it to. `u` is 1 in every cell and never moves before t = 0, so the relative L2 error against the constant field `sub.g` = 2 is |1 - 2| / 2 = 1/2 exactly, and the uniform norm against `1.5 * sub.g` = 3 is 2 exactly — both in build-time arithmetic, with no solver in the loop. Test 1 spells the reference `sub.g` (the spelling that survives being mounted under another key); test 2 spells the same constant `P.sub.g` and must agree. Before issue #408 only the model-qualified spelling resolved: the assertion scope bound the flattened name plus its bare tail and nothing else, so `sub.g` raised an unbound-name error in the one position where the model's own equations resolve it. Test 3 is a SCOPED assertion (`variable: \"R.v\"`): its owner is `R`, so the same `sub.g` spelling there names R's 7 rather than P's 2 — the owner of an assertion is the component its `variable` names, and the reference resolves in that component's namespace.",
     "authors": [
       "EarthSciML"
     ],
@@ -163,6 +163,26 @@
               "reference": "P.sub.g"
             }
           ]
+        },
+        {
+          "id": "scoped_reference_resolves_in_the_asserted_components_namespace",
+          "description": "A SCOPED assertion: the asserted `variable` is `R.v`, so the OWNER of the assertion is `R` and the `reference` spelling `sub.g` is R's constant 7, not P's 2 — every other per-component lookup (shape, state, observed) already reads the owner, and the analytic solution a reference states is the solution of the variable it is compared against. The uniform norm of the constant field 1 against 7 is 6 exactly; had the reference resolved in P's namespace instead it would be |1 - 2| = 1, so this number is what pins WHICH component a scoped assertion's reference resolves in.",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "assertions": [
+            {
+              "variable": "R.v",
+              "time": 0.0,
+              "expected": 6.0,
+              "tolerance": {
+                "rel": 1e-09
+              },
+              "reduce": "Linf_error",
+              "reference": "sub.g"
+            }
+          ]
         }
       ]
     },
@@ -173,6 +193,15 @@
           "units": "1",
           "default": 1.0,
           "description": "Constant scalar."
+        },
+        "v": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0,
+          "shape": [
+            "x"
+          ],
+          "description": "Field over x, uniformly 1 and never moving — the target of `P`'s SCOPED assertion below."
         }
       },
       "subsystems": {
@@ -198,6 +227,46 @@
             "wrt": "t"
           },
           "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "v",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": 0.0
+          }
         }
       ]
     }

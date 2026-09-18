@@ -2804,6 +2804,18 @@ mod tests {
         // suffix is bound by nothing: the typo `sub.gg` stays unbound, which is
         // what keeps it an ERROR downstream rather than a silent value.
         assert!(!param_scope_with_aliases(&params, "P").contains_key("sub.gg"));
+
+        // The owner-relative rule reaches a BARE tail too, and that widens the
+        // §6.6.5 clash scope: `x` is the tail of two flattened names, so the
+        // old globally-unambiguous-tail rule bound it for NOBODY, whereas the
+        // owner's own `x` is unambiguous and is now in scope. A reference that
+        // mentions a dimension named `x` free therefore now collides with it
+        // (`bind_dimension_names`) where before it was silently wrapped.
+        let tails: HashMap<String, f64> =
+            [("P.x".to_string(), 1.0), ("R.x".to_string(), 2.0)].into();
+        assert_eq!(param_scope_with_aliases(&tails, "P").get("x"), Some(&1.0));
+        assert_eq!(param_scope_with_aliases(&tails, "R").get("x"), Some(&2.0));
+        assert!(!param_scope_with_aliases(&tails, "Q").contains_key("x"));
     }
 
     /// Pinned cross-binding convention: `integral` is the uniform-cell
