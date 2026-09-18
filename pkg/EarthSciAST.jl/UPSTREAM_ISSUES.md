@@ -313,6 +313,25 @@ doing an O(n²) amount of the right thing, on a population that a hash of the
 module reached through a different emitter, carrying 2,712 slices instead,
 compiles its reverse in 115 s end to end.
 
+**And it is the whole compile at a continental grid, where the population is an
+emitter DECISION rather than an accident.** The same four-stage step at 6,552
+cells, timed pass by pass on one module: the differentiation is 145.7 s and the
+`enzyme-hlo-opt` over its output 312.5 s, against 5.6 s for everything before
+them and 9.8 s for everything after — 96% of a 477 s pipeline in two stages, of
+which the quadratic one is two thirds. The scaling is visible across three
+grids on one model: 1,297 / 1,837 / 8,126 slices entering the differentiation
+give 5.3 / 17.7 / 312.5 s, i.e. 17.7x the time for 4.42x the population against
+19.6x for the square.
+
+What makes the population a decision is the asymmetry of the two read forms
+under reverse mode. On that CONUS module, 567 `stablehlo.gather` produce 548
+`stablehlo.scatter` and nothing else, while 8,126 `stablehlo.slice` produce
+20,470 slices plus 8,137 pads, which this pass then turns into 22,777 slices.
+An emitter that prices a slice against a gather on the PRIMAL module — one
+operation against one index constant — is therefore pricing the wrong module,
+because downstream the slice is charged at the square of the population it
+joins and the index constant is linear.
+
 **Why excluding it is not the answer.** `cse_slice` is also what keeps the other
 slice patterns — `slice_elementwise` in particular, which CREATES two slices per
 rewrite — from multiplying an un-deduplicated set. Excluding both
@@ -320,9 +339,14 @@ rewrite — from multiplying an un-deduplicated set. Excluding both
 minutes in. There is no pass exclusion that wins here.
 
 **Our workaround.** Emit fewer slices: memoize the emitter's own reads so a span
-is emitted once, and emit a congruent per-cell scalar surface ONCE over its lane
-axis (one gather) rather than once per cell (one one-element slice per cell).
-Both are properties of our emitter, not of the pass, which is why this is
+is emitted once, emit a congruent per-cell scalar surface ONCE over its lane
+axis (one gather) rather than once per cell (one one-element slice per cell),
+and cap what a single read may cost in slices at the width below which the
+emitter will not gather at all (`_DE_GATHER_MAX_PIECES`, `ext/reactant_direct/
+values.jl`). The cap cannot go to zero: a gather is an indexed copy at runtime
+where a slice is a contiguous one, so the trade reverses at execution time and
+the cap has to be chosen against both.
+All three are properties of our emitter, not of the pass, which is why this is
 recorded here rather than treated as a blocker. See reseact.esm's
 COMPILE_COST.md for the measurement the numbers above come from.
 

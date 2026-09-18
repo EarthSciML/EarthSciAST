@@ -468,13 +468,46 @@ const _DESlotSrc = Union{Nothing,_DEVal}
 # So the test is two-sided. `_DE_GATHER_MAX_PIECES` is an ABSOLUTE CAP on what a
 # single read may cost in ops: past it the read gathers whatever its runs look
 # like, and no read costs more than the cap. Below the cap the average-run test
-# decides as before, which is what keeps a short affine read on the slice path
-# where it carries no index data at all. `ESM_DIRECT_GATHER_MAX_PIECES`
-# overrides the cap; setting it to a huge value restores the average-run test
-# alone, as the negative control.
+# decides as before. `ESM_DIRECT_GATHER_MAX_PIECES` overrides the cap; setting
+# it to a large value restores the average-run test alone, as the negative
+# control.
+#
+# AND THE CAP IS SMALL, BECAUSE THE PRICE OF A SLICE IS NOT WHAT THE PRIMAL PAYS
+# FOR IT. Everything above prices one emitted operation against one emitted
+# index constant, on the module as the emitter writes it. That is the wrong
+# module. The program this emitter exists to make tractable is the REVERSE one,
+# and the two read forms are not alike there:
+#
+#   * the reverse of a `stablehlo.slice` is a pad-and-add, which the first
+#     `enzyme-hlo-opt` over the differentiated module rewrites back into MORE
+#     slices and concatenates than the primal had;
+#   * the reverse of a `stablehlo.gather` is ONE `stablehlo.scatter`, and a
+#     scatter joins no slice population at all.
+#
+# That matters because the two deduplication passes downstream — Enzyme-JAX's
+# `cse_slice` and, one layer down, XLA's own `HloCSE` — compare slices PAIRWISE
+# and are quadratic in how many there are (UPSTREAM_ISSUES.md has both). So an
+# operation the primal cost model prices as cheap is charged, downstream, at the
+# SQUARE of the population it joins, while the index constant it avoided is
+# linear and, since the index vectors are interned on their contents, mostly
+# shared.
+#
+# AND IT IS NOT SMALLER THAN EIGHT, BECAUSE THE PROGRAM ALSO HAS TO RUN. A
+# gather is an INDEXED copy and a slice is a CONTIGUOUS one, so the trade runs
+# the other way at execution time: past a certain width the slice path is what
+# the vector units want, and replacing it costs device time on every call for
+# ever. Driving the cap below the piece floor gathers reads of three to eight
+# long runs — the ones the slice path exists for — and that is measurably the
+# wrong side of the trade on a chemistry half, whose reads are not shattered and
+# which pays for the change without getting the compile back (reseact.esm
+# COMPILE_COST.md section 8 has both halves of it, and the rejected arm).
+#
+# So the cap is the piece floor: fewer than `_DE_GATHER_MIN_PIECES` runs and the
+# read is short enough to keep its slices, more and it gathers, and at exactly
+# the floor the average-run test decides. One number, two sides.
 const _DE_GATHER_MIN_PIECES = 8
 const _DE_RUN_WORTH = 4
-const _DE_GATHER_MAX_PIECES = 64
+const _DE_GATHER_MAX_PIECES = _DE_GATHER_MIN_PIECES
 
 _de_read_mode() = get(ENV, "ESM_DIRECT_EMIT_READ", "gather")
 
