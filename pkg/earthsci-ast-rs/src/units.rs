@@ -1195,7 +1195,7 @@ fn propagate_transcendental_dim(
 /// document that declares no scaled angle is rewritten not at all.
 #[must_use]
 pub fn angle_normalization_factor(unit: &Unit) -> Option<f64> {
-    (unit.is_plane_angle() && !unit.exact.is_one()).then(|| unit.scale)
+    (unit.is_plane_angle() && !unit.exact.is_one()).then_some(unit.scale)
 }
 
 /// Rewrite every `sin`/`cos`/`tan` whose argument is an angle at a scale other
@@ -1247,9 +1247,11 @@ pub fn normalize_angle_arguments(expr: &Expr, env: &HashMap<String, Unit>) -> Op
         if let Some(unit) = propagate_dim(&args[0], env, &mut findings).known()
             && let Some(factor) = angle_normalization_factor(unit)
         {
-            let mut scaled = ExpressionNode::default();
-            scaled.op = "*".to_string();
-            scaled.args = vec![args[0].clone(), Expr::Number(factor)];
+            let scaled = ExpressionNode {
+                op: "*".to_string(),
+                args: vec![args[0].clone(), Expr::Number(factor)],
+                ..Default::default()
+            };
             args[0] = Expr::operator(scaled);
             changed = true;
         }
