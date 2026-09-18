@@ -1,11 +1,16 @@
 [
   {
-    "description": "Time derivative with wrt field",
+    "description": "Time derivative; `wrt` is OPTIONAL and an absent `wrt` MEANS `t` (esm-spec §4.2)",
     "operator": "D",
-    "required_fields": ["wrt"],
+    "required_fields": [],
     "examples": [
       {
         "input": {"op": "D", "args": ["O3"], "wrt": "t"},
+        "meaning": "∂O₃/∂t",
+        "latex": "\\frac{\\partial O_3}{\\partial t}"
+      },
+      {
+        "input": {"op": "D", "args": ["O3"]},
         "meaning": "∂O₃/∂t",
         "latex": "\\frac{\\partial O_3}{\\partial t}"
       },
