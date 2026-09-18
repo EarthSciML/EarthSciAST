@@ -306,9 +306,17 @@ func TestApplyDAEContract_ObservedDefinitionSubstituted(t *testing.T) {
 	}
 }
 
-// TestApplyDAEContract_DomainIndepVar verifies that a model whose
-// domain declares a non-default independent variable ("time") has its
-// D(x, wrt="time") equation classified as differential.
+// TestApplyDAEContract_DomainIndepVar pins what a `wrt` naming the DECLARED
+// independent variable means when that name is not `t`.
+//
+// It used to assert that `D(x, wrt: "time")` in a document declaring
+// `independent_variable: "time"` is DIFFERENTIAL — the esm-spec §5.4 reading.
+// §4.2 fixes the derivative axis to the LITERAL `t` and is normative
+// (CONFORMANCE_SPEC §5.42), so such a `D` is a SPATIAL derivative: the model
+// is a `pde`, `x` is not an ODE state, and the DAE contract — which applies
+// only to `ode` models — does not run on it at all. The DAE layer used to
+// disagree with this binding's own classifier here (EarthSciAST#407); it no
+// longer can, because both read the axis through derivativeIsTemporal.
 func TestApplyDAEContract_DomainIndepVar(t *testing.T) {
 	iv := "time"
 	m := Model{
@@ -325,11 +333,22 @@ func TestApplyDAEContract_DomainIndepVar(t *testing.T) {
 		Models:   map[string]Model{"M": m},
 		Domain:   &Domain{IndependentVariable: &iv},
 	}
+	got := file.Models["M"]
+	if k := SystemKind(&got); k != SystemKindPDE {
+		t.Errorf("SystemKind = %q, want %q: a `wrt` other than the literal `t` is spatial", k, SystemKindPDE)
+	}
+	if states := ODEStates(&got); len(states) != 0 {
+		t.Errorf("ODEStates = %v, want none: a spatial derivative names no ODE state", states)
+	}
+
+	// The contract skips a non-`ode` model, so it neither factors nor refuses
+	// anything — the agreement with the classifier is structural, not a
+	// coincidence of this document.
 	info, err := ApplyDAEContract(file)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if info.SystemClass != "ode" {
-		t.Errorf("SystemClass = %q, want \"ode\"", info.SystemClass)
+	if info.AlgebraicEquationCount != 0 || info.PerModel["M"] != 0 {
+		t.Errorf("a `pde` model is outside the DAE contract, got %+v", info)
 	}
 }

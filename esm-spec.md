@@ -384,6 +384,23 @@ Every `op` string belongs to one of **two tiers**:
 
 Example: `{"op": "D", "args": ["O3"], "wrt": "t"}` represents ∂O₃/∂t.
 
+**The derivative axis is a LITERAL name (normative).** `wrt` is matched against the literal
+string `"t"`, and an absent `wrt` MEANS the literal `"t"`. It is **not** resolved against
+`domain.independent_variable`: a document that renames its independent variable does not
+thereby retarget every `D` that spells `wrt:"t"`, and a `wrt` that names the renamed
+independent variable is a **spatial** `wrt` like any other. Every consumer reads the axis this
+way — classification (§6.3.1), the dimensional rule (§4.8), display, flattening, and any
+differential-algebraic analysis a binding performs.
+
+The rule is a literal one because the two readings are not interchangeable once the name is
+freed. §11.3 lets a document rename its independent variable precisely so that `t` becomes an
+ordinary declarable name — `tests/valid/independent_variable_renamed.esm` renames it to `s` and
+then declares `t` as air temperature, the ordinary ERA5 short name. Resolving `wrt:"t"` against
+the independent variable in that document would silently reinterpret ∂x/∂t as a derivative with
+respect to `s`, and would make ∂x/∂(air temperature) unwritable. A binding that wants the
+derivative along a renamed independent variable spells that name in `wrt`, which makes it a
+spatial-tier `D` and therefore a rewrite target (§9.6.8) — the format has no third tier.
+
 **A right-hand-side structural `D` is a total time derivative, resolved by substitution
 (normative).** A `D` with `wrt:"t"` (or no `wrt`) appearing in a right-hand side denotes the
 **total derivative with respect to `t`** of its operand. It is **resolved during flattening**
@@ -1557,7 +1574,7 @@ Three classes of symbol are in scope in a model's expressions **without appearin
 | Symbol | Where it comes from | Pinned by |
 |---|---|---|
 | **The independent variable** — `domain.independent_variable`, default `"t"` | §11.3. Every time-dependent model may write `t` in an equation, a condition, or an event affect; an analytic forcing `A*sin(omega*t)` is the ordinary spelling. Its dimension is the time dimension (`s`). | `tests/valid/cadence/pure_pointwise.esm` |
-| **Spatial coordinate names** | §11.4. A coordinate expression's free symbols name spatial coordinates: `x`, `y`, `z`, `lon`, `lat`, `lev`. A checker resolves as a coordinate any free symbol that is (i) a key of `index_sets`, (ii) the value of a `dim` field on **any** Expression node, or a spatial `wrt` (a `wrt` naming an axis other than the independent variable) on a `D` node, anywhere in the document — these are axis-naming scalar fields, resolved **structurally by field, without regard to the enclosing `op`** (a `dim` on a user rewrite-target op names a coordinate exactly as a `dim` on `grad` does), or (iii) a free symbol in the RHS of an `ic` equation — which §11.4 *defines* to be a coordinate expression. Its dimension is the coordinate's; where undeclared, treat it as `unknown` (§4.8.4), never as an error. | `tests/valid/initial_conditions/expression_ignition_front_1d.esm`, `tests/spatial/*.esm` |
+| **Spatial coordinate names** | §11.4. A coordinate expression's free symbols name spatial coordinates: `x`, `y`, `z`, `lon`, `lat`, `lev`. A checker resolves as a coordinate any free symbol that is (i) a key of `index_sets`, (ii) the value of a `dim` field on **any** Expression node, or a spatial `wrt` (a `wrt` naming an axis other than the literal `t` — §4.2, the axis is a literal name and is not resolved against `domain.independent_variable`) on a `D` node, anywhere in the document — these are axis-naming scalar fields, resolved **structurally by field, without regard to the enclosing `op`** (a `dim` on a user rewrite-target op names a coordinate exactly as a `dim` on `grad` does), or (iii) a free symbol in the RHS of an `ic` equation — which §11.4 *defines* to be a coordinate expression. Its dimension is the coordinate's; where undeclared, treat it as `unknown` (§4.8.4), never as an error. | `tests/valid/initial_conditions/expression_ignition_front_1d.esm`, `tests/spatial/*.esm` |
 | **`_var`** | §6.4. The operator-model placeholder, substituted with each matching **ODE state** of the target system at `operator_compose` time — the set `ode_states` returns (§6.3.1), never the observed or algebraic unknowns. It is legal **wherever an ODE state is legal** — including an equation LHS/RHS, a continuous-event `affects` / `affect_neg` LHS, and a parameter update handler's `read_vars`. A checker MUST NOT emit `event_var_undeclared` for `_var` in a model that is operator-composed or that is a coupling target. | `tests/valid/full_coupled.esm` |
 
 ##### 4.9.1.1 A DECLARATION MUST NOT spell one of them (`reserved_variable_name`)

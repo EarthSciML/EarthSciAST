@@ -53,3 +53,74 @@ func TestWrtDefaultOmittedClassifies(t *testing.T) {
 		assert.Equal(t, tc.systemKind, SystemKind(&m), "system_kind of %s", tc.model)
 	}
 }
+
+// TestDerivativeAxisIsTheLiteralT pins the ruling on the esm-spec §4.2 versus
+// §5.4 ambiguity: the derivative axis is the LITERAL name `t`, not whatever
+// `domain.independent_variable` happens to name.
+//
+// Before this, Go read the axis two different ways in one binding. `classify.go`
+// compared against the literal `t` (every caller passes DefaultIndepVar), while
+// `dae.go` and `validate.go` resolved it against `domain.independent_variable`.
+// On a document declaring `independent_variable: "s"` the binding therefore
+// contradicted itself about one node — the exact shape of EarthSciAST#407, one
+// layer down. The assertions below fail on the old reading:
+//
+//   - `Renamed` writes `D(y, wrt: t)` in a document whose independent variable
+//     is `s`. SystemKind called it an `ode`; ApplyDAEContract called the same
+//     equation algebraic, could not factor a `D(...)` LHS, and raised
+//     E_NONTRIVIAL_DAE.
+//   - `Spatial` writes `D(y, wrt: s)`. The old reading made that the temporal
+//     derivative and `y` an ODE state; under §4.2 it is a SPATIAL derivative,
+//     the model is a `pde`, and the DAE contract does not apply to it at all.
+//
+// Renaming the independent variable is not hypothetical: in
+// tests/valid/independent_variable_renamed.esm it is renamed to `s` precisely
+// so that `t` is FREE for its ordinary meteorological meaning, air temperature.
+// Resolving `wrt: t` against the independent variable in such a document
+// silently retargets the author's derivative onto a different quantity.
+func TestDerivativeAxisIsTheLiteralT(t *testing.T) {
+	build := func(wrt *string) *ESMFile {
+		lhs := ExprNode{Op: "D", Args: []any{"y"}}
+		lhs.Wrt = wrt
+		return &ESMFile{
+			ESM:      "1.0.0",
+			Metadata: Metadata{Name: "Renamed"},
+			Domain:   &Domain{IndependentVariable: strPtr("s")},
+			Models: map[string]Model{
+				"M": {
+					Variables: map[string]ModelVariable{
+						"y": {Type: "unknown", Units: strPtr("1")},
+					},
+					Equations: []Equation{{LHS: lhs, RHS: int64(0)}},
+				},
+			},
+		}
+	}
+
+	// `wrt: t` and no `wrt` are both the structural time derivative, whatever
+	// the domain declares — and the DAE contract now agrees with SystemKind.
+	for _, spelling := range []*string{strPtr("t"), nil} {
+		f := build(spelling)
+		m := f.Models["M"]
+		assert.Equal(t, "ode", SystemKind(&m))
+		assert.Equal(t, []string{"y"}, ODEStates(&m))
+
+		info, err := ApplyDAEContract(build(spelling))
+		require.NoError(t, err, "the literal `t` is the structural axis whatever the domain declares")
+		assert.Equal(t, "ode", info.SystemClass)
+		assert.Equal(t, 0, info.AlgebraicEquationCount)
+	}
+
+	// A `wrt` naming the DECLARED independent variable is SPATIAL under §4.2 —
+	// the complement that stops the fix being "every `D` is differential".
+	f := build(strPtr("s"))
+	m := f.Models["M"]
+	assert.Equal(t, "pde", SystemKind(&m))
+	assert.Empty(t, ODEStates(&m))
+	// The DAE contract applies only to `ode` models, so it skips this one
+	// rather than reporting a residual algebraic equation — the two layers
+	// reaching the same conclusion by construction.
+	info, err := ApplyDAEContract(build(strPtr("s")))
+	require.NoError(t, err)
+	assert.Equal(t, 0, info.AlgebraicEquationCount)
+}
