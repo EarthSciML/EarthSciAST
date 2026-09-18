@@ -1420,6 +1420,13 @@ function _evaluate_assertion(a, sim, var_map::AbstractDict,
                              mname::AbstractString,
                              resolved_base::AbstractString,
                              renames::AbstractDict=Dict{String,String}())::Float64
+    # A solve whose `saveat` lies entirely outside the span saves NOTHING, and
+    # `argmin` over the empty trajectory raised `ArgumentError: reducing over an
+    # empty collection is not allowed` — an internal Julia message where the
+    # other bindings report a §6.6.3 refusal. Same vocabulary as the Rust
+    # runner's `time_index`.
+    isempty(sim.t) &&
+        throw(InlineTestError("no saved state at t=$(a.time) (empty trajectory)"))
     ti = argmin(abs.(sim.t .- a.time))
     abs(sim.t[ti] - a.time) <= _SAVED_TIME_RTOL * max(1.0, abs(a.time)) ||
         throw(InlineTestError("no saved state at t=$(a.time) (nearest $(sim.t[ti]))"))
@@ -1626,6 +1633,34 @@ end
 _static_solution(times::Vector{Float64}) =
     _StaticSolution(times, [Float64[] for _ in times], :Success)
 
+# The times a document with NOTHING TO INTEGRATE is evaluated at: the asserted
+# times inside the declared span, plus the span's own endpoints.
+#
+# esm-spec §6.6.3 constrains an assertion's `time` to `[time_span.start,
+# time_span.end]`. An INTEGRATED document enforces that incidentally — the
+# trajectory stops at the span's end, so an assertion past it is refused by the
+# saved-time lookup in `_evaluate_assertion` — and Python's runner, which
+# samples a dense grid over the span, refuses the same assertion on a STATIC
+# document too. A static evaluation has no boundary of its own: evaluating the
+# observed graph at whatever number the assertion names would answer `t = 100`
+# on a span of `[0, 1]` and report a PASS, which is issue #406's
+# plausible-wrong-number outcome reached one road further on, and which would
+# put this binding on a different verdict from Python for one document.
+#
+# The endpoints are kept whatever the assertions say, so that the refusal names
+# the span ("nearest 1.0") instead of reducing over an empty collection, and so
+# that a test whose asserted times are ALL out of span — or which has no
+# assertions at all — still produces a well-formed evaluation.
+function _static_evaluation_times(times::AbstractVector{<:Real},
+                                  tstart::Real, tstop::Real)::Vector{Float64}
+    lo, hi = minmax(Float64(tstart), Float64(tstop))
+    out = Float64[lo, hi]
+    for x in times
+        lo <= x <= hi && push!(out, Float64(x))
+    end
+    return sort!(unique!(out))
+end
+
 # Qualify a test's override keys with the component that OWNS the test.
 #
 # esm-spec §6.6.2 keys `parameter_overrides` / `initial_conditions` by LOCAL
@@ -1719,7 +1754,13 @@ function _engine_setup(e::SimulateTestEngine, t)
         # angle and zenith cosine, all algebraic in `t` — and
         # `_evaluate_assertion` binds `t` to each sampled time before reading
         # the observed graph, so every asserted time answers on its own terms.
-        sim = isempty(prob.u0) ? _static_solution(times) :
+        # The grid is restricted to the declared span, because the same clause
+        # says the time "must lie in `[time_span.start, time_span.end]`" and a
+        # static evaluation is the one path with no boundary of its own
+        # (`_static_evaluation_times`).
+        sim = isempty(prob.u0) ?
+              _static_solution(_static_evaluation_times(times, t.time_span.start,
+                                                        t.time_span.stop)) :
               _solve_problem(prob, e.alg; reltol=e.reltol, abstol=e.abstol,
                              saveat=times)
     catch err

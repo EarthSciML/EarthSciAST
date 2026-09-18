@@ -159,3 +159,51 @@ def test_declaring_system_kind_nonlinear_changes_nothing() -> None:
     report = validate_text(doc('"system_kind": "ode",'))
     codes = [e.code for e in report.structural_errors]
     assert "system_kind_mismatch" in codes, codes
+
+
+def test_an_assertion_outside_the_declared_span_is_refused() -> None:
+    """esm-spec §6.6.3 constrains an assertion's ``time`` to
+    ``[time_span.start, time_span.end]``.
+
+    Python enforces it incidentally, by sampling the trajectory over the span
+    and refusing a time that is not on it — on a document with nothing to
+    integrate as much as on one that integrates. This is the cross-binding
+    anchor for that refusal: Julia and Rust evaluate a static document's
+    observed graph directly, which has no boundary of its own, so both restrict
+    the evaluation grid to the span rather than answering ``t = 100`` on a span
+    of ``[0, 1]`` and reporting a pass.
+    """
+    from earthsci_ast.parse import load_string
+
+    doc = """
+    {
+      "esm": "1.1.0",
+      "metadata": {"name": "TimeProbe", "description": "algebraic-only", "license": "MIT"},
+      "models": {"TimeProbe": {
+        "variables": {
+          "a": {"type": "parameter", "units": "1/s", "default": 2.0},
+          "y": {"type": "unknown", "units": "1"}
+        },
+        "equations": [{"lhs": "y", "rhs": {"op": "*", "args": ["a", "t"]}}],
+        "tests": [
+          {"id": "past_end", "time_span": {"start": 0, "end": 1},
+           "assertions": [{"variable": "y", "time": 100.0, "expected": 200.0}]},
+          {"id": "before_start", "time_span": {"start": 0, "end": 1},
+           "assertions": [{"variable": "y", "time": -5.0, "expected": -10.0}]},
+          {"id": "at_the_end", "time_span": {"start": 0, "end": 1},
+           "assertions": [{"variable": "y", "time": 1.0, "expected": 2.0,
+                           "tolerance": {"abs": 1e-12}}]}
+        ]
+      }}
+    }
+    """
+    by_test = {r.test_id: r for r in run_inline_tests(load_string(doc))}
+    assert len(by_test) == 3
+    for test_id in ("past_end", "before_start"):
+        r = by_test[test_id]
+        assert not r.passed, f"{test_id} must not pass: actual={r.actual}"
+        assert "no saved state" in r.message, r.message
+    # The span's own endpoint is inside it and still answers.
+    at_end = by_test["at_the_end"]
+    assert at_end.passed, at_end.message
+    assert at_end.actual == pytest.approx(2.0, abs=1e-12)

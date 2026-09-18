@@ -199,3 +199,60 @@ fn declaring_system_kind_nonlinear_changes_nothing() {
     assert!(bare.0, "the undeclared document must pass");
     assert_eq!(bare, declared, "the declaration must not change the answer");
 }
+
+/// esm-spec §6.6.3 constrains an assertion's `time` to `[time_span.start,
+/// time_span.end]`.
+///
+/// The integrating path enforces that incidentally — the trajectory stops at
+/// the span's end — and Python's runner, which samples a dense grid over the
+/// span, refuses the same assertion on a STATIC document. The static evaluation
+/// added for issue #406 has no boundary of its own: before the grid was
+/// restricted to the span, `y = a*t` on a span of `[0, 1]` answered `t = 100`
+/// with `200` and reported a PASS, and `t = -5` with `-10`. Both now report
+/// `no saved state at t=… (nearest …)`, the same refusal and the same wording
+/// as the integrating path and as Python.
+#[test]
+fn a_static_assertion_outside_the_declared_span_is_refused() {
+    let doc = r#"{
+      "esm": "1.1.0",
+      "metadata": {"name": "TimeProbe", "description": "algebraic-only", "license": "MIT"},
+      "models": {"TimeProbe": {
+        "variables": {
+          "a": {"type": "parameter", "units": "1/s", "default": 2.0},
+          "y": {"type": "unknown", "units": "1"}
+        },
+        "equations": [{"lhs": "y", "rhs": {"op": "*", "args": ["a", "t"]}}],
+        "tests": [
+          {"id": "past_end", "time_span": {"start": 0, "end": 1},
+           "assertions": [{"variable": "y", "time": 100.0, "expected": 200.0}]},
+          {"id": "before_start", "time_span": {"start": 0, "end": 1},
+           "assertions": [{"variable": "y", "time": -5.0, "expected": -10.0}]},
+          {"id": "at_the_end", "time_span": {"start": 0, "end": 1},
+           "assertions": [{"variable": "y", "time": 1.0, "expected": 2.0,
+                           "tolerance": {"abs": 1e-12}}]}
+        ]
+      }}
+    }"#;
+    let file = load_string(doc).expect("document loads");
+    let results = run_inline_tests_with_base_dir(&file, None, &SolveOptions::default(), None);
+    assert_eq!(results.len(), 3);
+    for id in ["past_end", "before_start"] {
+        let r = results
+            .iter()
+            .find(|r| r.test_id == id)
+            .unwrap_or_else(|| panic!("missing {id}"));
+        assert!(!r.passed, "{id} must not pass: actual {:?}", r.actual);
+        assert!(
+            r.message.contains("no saved state"),
+            "{id}: {}",
+            r.message
+        );
+    }
+    // The span's own endpoint is inside it and still answers.
+    let at_end = results
+        .iter()
+        .find(|r| r.test_id == "at_the_end")
+        .expect("missing at_the_end");
+    assert!(at_end.passed, "at_the_end: {}", at_end.message);
+    assert!((at_end.actual.expect("actual") - 2.0).abs() <= 1e-12);
+}

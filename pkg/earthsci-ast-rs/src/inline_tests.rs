@@ -1515,6 +1515,41 @@ fn build_only_solution(times: Vec<f64>) -> Solution {
     }
 }
 
+/// The times a document with **nothing to integrate** is evaluated at: the
+/// asserted times that lie inside the declared span, plus the span's own
+/// endpoints.
+///
+/// esm-spec §6.6.3 constrains an assertion's `time` to
+/// `[time_span.start, time_span.end]`. An INTEGRATED document enforces that
+/// incidentally — the trajectory stops at the span's end, so an assertion past
+/// it reports `no saved state at t=… (nearest …)` — and Python's runner, which
+/// samples a dense grid over the span, reports the same for a static document.
+/// A static evaluation has no such boundary of its own: evaluating the observed
+/// graph at whatever number the assertion names would answer `t = 100` on a
+/// span of `[0, 1]` and report a PASS, which is the plausible-wrong-number
+/// outcome issue #406 is about reached one road further on, and it would put
+/// this binding on a different verdict from Python for one document.
+///
+/// The span's endpoints are kept whatever the assertions say, for two reasons:
+/// the refusal then names the span (`nearest 1`) instead of an empty
+/// trajectory, and a test whose assertions are ALL out of span — or which has
+/// no assertions at all — still produces a well-formed evaluation rather than
+/// falling through to the integrator this function exists to keep a state-free
+/// document away from.
+fn static_evaluation_times(saveat: &[f64], start: f64, end: f64) -> Vec<f64> {
+    let (lo, hi) = if start <= end { (start, end) } else { (end, start) };
+    let mut out: Vec<f64> = saveat
+        .iter()
+        .copied()
+        .filter(|t| *t >= lo && *t <= hi)
+        .collect();
+    out.push(lo);
+    out.push(hi);
+    out.sort_by(f64::total_cmp);
+    out.dedup();
+    out
+}
+
 /// The §6.6 answer for a document with **nothing to integrate**: its observed
 /// graph evaluated once per asserted time, laid out as a trajectory so the
 /// ordinary assertion machinery reads it unchanged.
@@ -2172,7 +2207,16 @@ fn run_component_tests(
                 // `unsupported_construct` vocabulary §9.6.6 asks for) and a
                 // forced right-hand side over an empty state vector reaches the
                 // integrator rather than reporting `NotDynamic`.
-                match static_trajectory(prob, &saveat) {
+                // Restricted to the declared span (esm-spec §6.6.3): a static
+                // evaluation would otherwise answer an assertion at a time the
+                // document never covers, which no integrating path admits and
+                // Python's runner refuses.
+                let static_times = static_evaluation_times(
+                    &saveat,
+                    t.time_span.start,
+                    t.time_span.end,
+                );
+                match static_trajectory(prob, &static_times) {
                     Some(result) => result,
                     None => match solve(prob, &run_opts) {
                         Ok(sol) => Ok(sol),

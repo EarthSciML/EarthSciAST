@@ -5781,6 +5781,15 @@ one or both wrong (issue #406):
    document that integrates as much as on one that does not. The trajectory is
    sampled at the assertion's time; the observed graph evaluated beside it must
    be too, or a model and its own closed form disagree.
+3. **An asserted time outside the declared span is refused**, on a static
+   document as much as on one that integrates. The same clause that says
+   *evaluate* also says the time "must lie in `[time_span.start,
+   time_span.end]`". An integrating run enforces that incidentally — nothing is
+   saved past the span's end — but a static evaluation has no boundary of its
+   own and would answer `t = 100` on a span of `[0, 1]` and report a pass. Each
+   binding therefore restricts the static evaluation grid to the span (keeping
+   its endpoints, so the refusal can name one), and the assertion is refused
+   with `no saved state at t=… (nearest …)`.
 
 Neither is a new rule. Python has implemented both since before this category
 existed, which is what fixes the intended answer; Julia mints the goldens as
@@ -5851,7 +5860,34 @@ algebraic model declaring `"ode"`) — and the runtime path is chosen by the
 derivation, which is a function of the equations alone. The Rust runner pins the
 byte-identical outcome with and without the declaration.
 
-#### 5.42.5 Gate
+#### 5.42.5 The span is the boundary of the static evaluation
+
+`algebraic_time_dependence.esm` asserts only inside its span, so the third
+consequence above is pinned by a per-binding regression rather than by a shared
+fixture: the same `y = a·t` document on a span of `[0, 1]`, asserted at
+`t = 100`, at `t = -5` and at `t = 1`. The first two must report `no saved
+state`, the third must answer `2`. Python has always behaved this way, because
+it samples the trajectory over the span and matches an assertion against that
+grid; Julia and Rust evaluate the observed graph directly, so each filters its
+evaluation grid to the span. Without the filter both answered the out-of-span
+assertions and reported a PASS, which is this category's own failure mode
+reached one road further on.
+
+#### 5.42.6 Known gap: `t` inside a §6.6.5 `reference`
+
+An analytic `reference` is evaluated by each binding's BUILD-TIME cellwise
+evaluator (`evaluate_cellwise`), which takes the parameter scope and the field's
+dimension names and has no simulation time. A `reference` that mentions `t`
+therefore reads `t = 0` in **all three** executing bindings — verified: Julia,
+Python and Rust all answer `Linf_error` against `reference: 1.0*t` at `t = 2`
+with `2`, not `0`. This is uniform, so it is not a divergence, and it is
+untouched by issue #406; it is recorded here because it is the same
+quiet-wrong-answer shape on the other side of the comparison. Whether such a
+reference should be evaluated at the asserted time or rejected as an unbound
+name (§6.6.5 admits the field's dimension names and the model's parameters,
+and does not name `t`) is not settled here.
+
+#### 5.42.7 Gate
 
 `tests/conformance/static_evaluation_assertions/` holds the shared fixtures and
 the Julia-minted goldens. Per-binding runners gate every assertion actual

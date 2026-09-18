@@ -127,3 +127,65 @@ end
                                         params=merge(params,
                                                      Dict("t" => 5.0))) == [0.0]
 end
+
+# esm-spec §6.6.3 constrains an assertion's `time` to `[time_span.start,
+# time_span.end]`.
+#
+# The integrating path enforces that incidentally — the solver saves nothing
+# past the span's end — and Python's runner, which samples a dense grid over the
+# span, refuses the same assertion on a STATIC document. The static evaluation
+# added for issue #406 has no boundary of its own: before the grid was
+# restricted to the span, `y = a*t` on a span of `[0, 1]` answered `t = 100`
+# with `200.0` and reported a PASS, and `t = -5` with `-10.0`. Both now report
+# `no saved state at t=… (nearest …)`, the same refusal the integrating path
+# gives and the same one Rust and Python give.
+@testset "A static assertion outside the declared span is refused (#406)" begin
+    doc = """
+    {
+      "esm": "1.1.0",
+      "metadata": {"name": "TimeProbe", "description": "algebraic-only", "license": "MIT"},
+      "models": {"TimeProbe": {
+        "variables": {
+          "a": {"type": "parameter", "units": "1/s", "default": 2.0},
+          "y": {"type": "unknown", "units": "1"}
+        },
+        "equations": [{"lhs": "y", "rhs": {"op": "*", "args": ["a", "t"]}}],
+        "tests": [
+          {"id": "past_end", "time_span": {"start": 0, "end": 1},
+           "assertions": [{"variable": "y", "time": 100.0, "expected": 200.0}]},
+          {"id": "before_start", "time_span": {"start": 0, "end": 1},
+           "assertions": [{"variable": "y", "time": -5.0, "expected": -10.0}]},
+          {"id": "at_the_end", "time_span": {"start": 0, "end": 1},
+           "assertions": [{"variable": "y", "time": 1.0, "expected": 2.0,
+                           "tolerance": {"abs": 1e-12}}]}
+        ]
+      }}
+    }
+    """
+    results = run_inline_tests(EarthSciAST.load_string(doc);
+                               alg=OrdinaryDiffEqTsit5.Tsit5())
+    by_test = Dict(r.test_id => r for r in results)
+    @test length(by_test) == 3
+    for id in ("past_end", "before_start")
+        r = by_test[id]
+        @test !r.passed
+        @test occursin("no saved state", r.message)
+    end
+    # The span's own endpoint is inside it and still answers.
+    @test by_test["at_the_end"].passed
+    @test isapprox(by_test["at_the_end"].actual, 2.0; atol=1e-12)
+end
+
+# The evaluation grid itself, stated directly: the span's endpoints are always
+# present (so the refusal above can name one, and so a test whose asserted times
+# are all out of span still evaluates), the in-span asserted times are kept, and
+# the out-of-span ones are dropped.
+@testset "_static_evaluation_times restricts the grid to the span (#406)" begin
+    @test EarthSciAST._static_evaluation_times([0.0, 4.0, 8.0], 0.0, 8.0) ==
+          [0.0, 4.0, 8.0]
+    @test EarthSciAST._static_evaluation_times([100.0, -5.0, 0.5], 0.0, 1.0) ==
+          [0.0, 0.5, 1.0]
+    @test EarthSciAST._static_evaluation_times(Float64[], 0.0, 1.0) == [0.0, 1.0]
+    # A span written backwards still yields an ordered grid.
+    @test EarthSciAST._static_evaluation_times([0.5], 1.0, 0.0) == [0.0, 0.5, 1.0]
+end
