@@ -28,7 +28,7 @@ import pytest
 
 from earthsci_ast.esm_types import ExprNode
 from earthsci_ast.flatten import flatten
-from earthsci_ast.parse import load_path
+from earthsci_ast.parse import load_document, load_path
 from earthsci_ast.units import (
     DimensionalMismatchError,
     UnitValidator,
@@ -167,6 +167,55 @@ def test_the_shared_repair_fixture_is_accepted() -> None:
         str(FIXTURES_ROOT / "valid/units_transcendental_scaled_argument_repair.esm")
     )
     assert result.is_valid, [e.message for e in result.structural_errors]
+
+
+def test_the_declared_unit_governs_a_hand_written_degree_conversion() -> None:
+    """A DISCLOSED behaviour change: a document that converts degrees to radians
+    by hand with a factor declared ``units: "1"`` is converted AGAIN.
+
+    The fold reads the argument's DECLARED unit, and ``deg * [1]`` is still
+    ``deg`` — so ``sin(lat * d2r)`` with ``lat`` in ``deg`` and ``d2r``
+    dimensionless at scale 1 now evaluates ``sin(lat * pi/180 * pi/180)`` where
+    it used to evaluate the right number. The document was mis-declaring
+    itself: a real degrees-to-radians factor has unit ``rad/deg``, and with
+    that declaration the product is ``rad`` at scale 1 and nothing is folded,
+    which is the repair. ``tests/conformance/pushdown/fixtures/isrm.esm``
+    escapes only because its ``lcc_d2r`` is declared with NO units at all,
+    which makes the product undeterminable (esm-spec §4.8.4).
+
+    Pinned so the behaviour is deliberate and visible rather than discovered.
+    """
+    variables = {
+        "lat": {"type": "parameter", "units": "deg", "default": 45.0},
+        "untyped": {"type": "parameter", "default": math.pi / 180.0},
+        "dimensionless": {"type": "parameter", "units": "1", "default": math.pi / 180.0},
+        "declared": {"type": "parameter", "units": "rad/deg", "default": 1.0},
+        "a": {"type": "unknown", "units": "1"},
+        "b": {"type": "unknown", "units": "1"},
+        "c": {"type": "unknown", "units": "1"},
+    }
+    equations = [
+        {"lhs": lhs, "rhs": {"op": "sin", "args": [{"op": "*", "args": ["lat", factor]}]}}
+        for lhs, factor in (("a", "untyped"), ("b", "dimensionless"), ("c", "declared"))
+    ]
+    doc = {
+        "esm": "1.0.0",
+        "metadata": {"name": "HandWrittenDegreeConversion"},
+        "models": {"M": {"variables": variables, "equations": equations}},
+    }
+    flat = flatten(load_document(doc))
+    folded = {}
+    for equation in flat.equations:
+        arg = equation.rhs.args[0]
+        folded[equation.lhs] = (
+            isinstance(arg, ExprNode)
+            and arg.op == "*"
+            and any(a == pytest.approx(math.pi / 180.0) for a in arg.args if isinstance(a, float))
+            and isinstance(arg.args[0], ExprNode)
+        )
+    assert folded["M.a"] is False, "an UNDECLARED factor leaves the product undeterminable"
+    assert folded["M.b"] is True, "a factor declared `1` leaves the product `deg`, so it is folded"
+    assert folded["M.c"] is False, "the `rad/deg` repair reaches `rad` at scale 1 — nothing to fold"
 
 
 def test_the_fixture_paths_exist() -> None:
