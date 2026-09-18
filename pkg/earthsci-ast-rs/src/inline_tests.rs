@@ -1537,7 +1537,11 @@ fn build_only_solution(times: Vec<f64>) -> Solution {
 /// falling through to the integrator this function exists to keep a state-free
 /// document away from.
 fn static_evaluation_times(saveat: &[f64], start: f64, end: f64) -> Vec<f64> {
-    let (lo, hi) = if start <= end { (start, end) } else { (end, start) };
+    let (lo, hi) = if start <= end {
+        (start, end)
+    } else {
+        (end, start)
+    };
     let mut out: Vec<f64> = saveat
         .iter()
         .copied()
@@ -2211,11 +2215,8 @@ fn run_component_tests(
                 // evaluation would otherwise answer an assertion at a time the
                 // document never covers, which no integrating path admits and
                 // Python's runner refuses.
-                let static_times = static_evaluation_times(
-                    &saveat,
-                    t.time_span.start,
-                    t.time_span.end,
-                );
+                let static_times =
+                    static_evaluation_times(&saveat, t.time_span.start, t.time_span.end);
                 match static_trajectory(prob, &static_times) {
                     Some(result) => result,
                     None => match solve(prob, &run_opts) {

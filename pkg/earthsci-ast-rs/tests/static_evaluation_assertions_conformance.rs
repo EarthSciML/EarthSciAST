@@ -242,11 +242,7 @@ fn a_static_assertion_outside_the_declared_span_is_refused() {
             .find(|r| r.test_id == id)
             .unwrap_or_else(|| panic!("missing {id}"));
         assert!(!r.passed, "{id} must not pass: actual {:?}", r.actual);
-        assert!(
-            r.message.contains("no saved state"),
-            "{id}: {}",
-            r.message
-        );
+        assert!(r.message.contains("no saved state"), "{id}: {}", r.message);
     }
     // The span's own endpoint is inside it and still answers.
     let at_end = results
