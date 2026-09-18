@@ -3217,6 +3217,24 @@ mod tests {
         );
     }
 
+    /// The fold is IDEMPOTENT. It has to be: the array runtime runs the same
+    /// rewrite on a `FlattenedSystem` that `flatten` already folded
+    /// (`simulate_array::compile::normalize_model_angle_arguments`), and a
+    /// second application would evaluate `sin(90 · 0.01745²)` with no error.
+    /// What makes it idempotent is the rewrite's own output: the product
+    /// carries a BARE LITERAL, so its unit is undeterminable (§4.8.4) and
+    /// `angle_normalization_factor` is never reached a second time.
+    #[test]
+    fn test_normalize_angle_arguments_is_idempotent() {
+        let env = env_of(&[("lat", "deg")]);
+        let once = normalize_angle_arguments(&op("sin", vec![Expr::Variable("lat".into())]), &env)
+            .expect("the `deg` argument is folded on the first pass");
+        assert!(
+            normalize_angle_arguments(&once, &env).is_none(),
+            "a second pass must find nothing to rewrite, got {once:?}"
+        );
+    }
+
     /// The derivative rule leaves the TIME exponent free and requires only that
     /// the non-time dimensions reconcile — so `x` in metres with an RHS in
     /// `m/s^2` is accepted (some time unit reconciles it), while `m` against

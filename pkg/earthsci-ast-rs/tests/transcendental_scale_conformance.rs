@@ -20,7 +20,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::{Expr, flatten, validate};
+use earthsci_ast::{Expr, SolveOptions, flatten, load_string, run_inline_tests, validate};
 
 mod common;
 
@@ -127,4 +127,68 @@ fn the_named_repair_and_a_degree_argument_are_accepted() {
             .map(|e| &e.message)
             .collect::<Vec<_>>()
     );
+}
+
+/// The ARRAY route converts too.
+///
+/// A single-model array/PDE document does not reach the array runtime through
+/// `flatten`: `ArrayCompiled::from_file` takes the authored `Model` directly
+/// (`simulate::driver::build_array_compiled` flattens only when the file
+/// carries MORE than one model), so `flatten`'s angle phase never ran for it —
+/// and every consumer of that route (the per-cell oracle, the vectorized
+/// overlay, the tape, the XLA emitter) evaluated `sin(90 radians)` = 0.894
+/// where the SCALAR route of this same binding, and the other four bindings,
+/// returned 1. The same document answering two numbers is the thing this file
+/// exists to prevent, so the raw-model compile mirrors the flatten phase
+/// (`simulate_array::compile::normalize_model_angle_arguments`).
+///
+/// The document is inline rather than a `tests/simulation/` fixture because the
+/// defect is specific to the one binding that has a non-flattening compile
+/// route: the other four flatten unconditionally.
+#[test]
+fn the_array_route_converts_a_degree_argument_and_leaves_radians_alone() {
+    // A shaped state is what routes this to the array runtime; one model is
+    // what makes that route skip `flatten`. Each state integrates a constant
+    // over [0, 1], so its value at t = 1 IS that constant, in every cell.
+    let doc = r#"{
+      "esm": "1.1.0",
+      "metadata": {"name": "AngleUnitsDegreesArray"},
+      "index_sets": {"cells": {"kind": "interval", "size": 2}},
+      "models": {"AngleUnitsArray": {
+        "variables": {
+          "theta_deg": {"type": "parameter", "units": "deg", "default": 90.0},
+          "theta_rad": {"type": "parameter", "units": "rad", "default": 1.5707963267948966},
+          "sin_deg": {"type": "unknown", "shape": ["cells"], "units": "1", "default": 0.0},
+          "sin_rad": {"type": "unknown", "shape": ["cells"], "units": "1", "default": 0.0}
+        },
+        "equations": [
+          {"lhs": {"op": "D", "args": ["sin_deg"], "wrt": "t"},
+           "rhs": {"op": "sin", "args": ["theta_deg"]}},
+          {"lhs": {"op": "D", "args": ["sin_rad"], "wrt": "t"},
+           "rhs": {"op": "sin", "args": ["theta_rad"]}}
+        ],
+        "tolerance": {"rel": 1e-6, "abs": 1e-9},
+        "tests": [{
+          "id": "the_array_route_converts_degrees",
+          "time_span": {"start": 0.0, "end": 1.0},
+          "assertions": [
+            {"variable": "sin_deg", "time": 1.0, "reduce": "max", "expected": 1.0},
+            {"variable": "sin_rad", "time": 1.0, "reduce": "max", "expected": 1.0}
+          ]
+        }]
+      }},
+      "domain": {"temporal": {}}
+    }"#;
+    let file = load_string(doc).expect("the inline array document loads");
+    let results = run_inline_tests(&file, None, &SolveOptions::default());
+    assert_eq!(results.len(), 2, "both assertions ran");
+    for r in &results {
+        assert!(
+            r.passed,
+            "{}: expected {}, got {:?} ({}) — before this was mirrored onto the \
+             raw-model compile the `deg` row read 0.8939966636005579, which is \
+             sin(90 RADIANS)",
+            r.variable, r.expected, r.actual, r.message
+        );
+    }
 }

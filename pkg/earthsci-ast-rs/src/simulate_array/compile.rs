@@ -356,6 +356,32 @@ pub(super) fn apply_ragged_factor_scope(
     Ok(())
 }
 
+/// Fold a declared angle's scale into every `sin`/`cos`/`tan` argument of
+/// `model`, so the argument reaches the evaluator in RADIANS (esm-spec §4.8.3,
+/// issue #409).
+///
+/// The array runtime's SINGLE-MODEL route deliberately never flattens
+/// (`ArrayCompiled::from_file`), so `flatten`'s phase 5g
+/// (`crate::flatten::normalize_angle_arguments`) never runs for it. This is that
+/// phase, against the authored model's own declarations, so the two array routes
+/// and the scalar route answer one document with one number.
+fn normalize_model_angle_arguments(model: &mut Model) {
+    let (env, _) = crate::units::build_unit_env(&model.variables);
+    // A document that declares no angle at a scale other than 1 cannot be
+    // rewritten, so decide that from the DECLARATIONS and walk nothing.
+    if !env
+        .values()
+        .any(|u| crate::units::angle_normalization_factor(u).is_some())
+    {
+        return;
+    }
+    for eq in &mut model.equations {
+        if let Some(next) = crate::units::normalize_angle_arguments(&eq.rhs, &env) {
+            eq.rhs = next;
+        }
+    }
+}
+
 // ============================================================================
 // Compile path: model → ArrayCompiled.
 // ============================================================================
@@ -667,6 +693,19 @@ impl ArrayCompiled {
                 op: "D".to_string(),
             });
         }
+        // esm-spec §4.8.3 "Angles are the ONE exception", applied here for the
+        // same reason as the `D` rule above: this SINGLE-MODEL route never
+        // flattens, so it does not get `flatten`'s phase 5g either — and this
+        // route is what every array/PDE document with one model compiles
+        // through (the array oracle, the vectorized overlay, the tape and the
+        // XLA emitter all read the `ArrayCompiled` it builds). Without this
+        // mirror, `sin(theta)` with `theta` declared `deg` evaluated
+        // `sin(90 radians)` = 0.894 here while the scalar and coupled routes,
+        // and the other four bindings, returned 1 — the same document
+        // answering two different numbers. Runs after mounting so a
+        // subsystem's declarations are in scope, and the rewrite is a no-op on
+        // a document declaring no angle at a scale other than 1.
+        normalize_model_angle_arguments(&mut model_owned);
         // Lower every SHAPED parameter whose value the document supplies —
         // inline array data, or one scalar broadcast over the grid (esm-spec
         // §6.3 / §6.6.2) — into the `const`-observed channel this runtime

@@ -1512,7 +1512,7 @@ What is NOT checked: the numeric VALUE of any literal or constant (`speed_mph * 
 **A dimensionless argument means scale 1.** `ppm` is dimensionless at `1e-6` and `percent` at `1/100`, so both satisfy a dimension-only test — which is how `log(x)` with `x` in `ppm` was accepted and evaluated as the natural log of the ppm NUMBER, with no diagnostic. The two readings, the log of the ppm number and the log of the mole fraction, differ by `ln(1e-6) = 13.8155…`, and both are perfectly plausible: EPA MOVES computes `x^p` as `exp(p·log x)` on a sulfur level stored in ppm, because MariaDB has no `pow`. Nothing in the document says which was meant, so a conforming checker **REFUSES** rather than picking one, and the diagnostic MUST name the **repair**, not only the refusal:
 
 ```
-argument to 'log' must be dimensionless at scale 1, but is dimensionless at scale 1/1000000 (ppm);
+Argument to 'log' must be dimensionless at scale 1, but is dimensionless at scale 1/1000000 (ppm);
 divide by 1 ppm, or by the scale you mean, to state which reading is intended
 ```
 
