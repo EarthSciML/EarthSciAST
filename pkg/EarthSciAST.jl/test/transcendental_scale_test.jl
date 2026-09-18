@@ -74,6 +74,67 @@ end
         end
     end
 
+    # esm-spec §4.8.3: the ANGLE AXIS, which Unitful does not have.
+    #
+    # `rad` is one of the eight axes (§4.8.1) and `sr` is that axis SQUARED, so
+    # in the four bindings that carry a dimension vector NONE of the arguments
+    # below is dimensionless and all of them are refused. Unitful models every
+    # angle as `NoDims`, so this binding used to accept them — the one place
+    # where it, alone of the five, said VALID where the other four said INVALID.
+    # `EarthSciAST._is_angle_bearing` reads the unit's symbol to stand in for
+    # the missing axis. Delete that call from any of the three rules and the
+    # matching case here goes red.
+    @testset "an angle-bearing unit is not dimensionless" begin
+        # A circular function admits a PLANE angle at any scale and CONVERTS it,
+        # so `rad`/`deg` stay accepted above. Everything else on the axis is a
+        # dimensional mismatch: no conversion turns a solid angle into a plane
+        # one, and multiplying by `scale` where `scale^2` was meant is silently
+        # wrong.
+        for op in ("sin", "cos", "tan")
+            for bad in ("sr", "rad^2", "rad*deg")
+                found = _arg_findings(op, bad)
+                @test length(found) == 1
+                @test occursin("Circular function argument must be an angle or " *
+                               "dimensionless", found[1])
+            end
+        end
+        # A strict transcendental takes a PURE NUMBER. An angle is not one —
+        # `log(x [rad])` is a dimensional mismatch, not a scale question.
+        for op in ("ln", "log", "log10", "exp", "sinh", "cosh", "tanh")
+            for bad in ("rad", "deg", "sr", "rad^2")
+                found = _arg_findings(op, bad)
+                @test length(found) == 1
+                @test occursin("argument must be dimensionless", found[1])
+            end
+        end
+        # An inverse circular function RETURNS an angle; it does not take one.
+        for op in ("asin", "acos", "atan")
+            for bad in ("rad", "deg", "sr", "rad^2")
+                found = _arg_findings(op, bad)
+                @test length(found) == 1
+                @test occursin("Inverse circular function argument must be " *
+                               "dimensionless", found[1])
+            end
+        end
+        # The predicate must not catch a unit that only LOOKS dimensionless:
+        # a pure number and the mixing ratios are not on the angle axis.
+        @test !EarthSciAST._is_angle_bearing(EarthSciAST.parse_units("1"))
+        @test !EarthSciAST._is_angle_bearing(EarthSciAST.parse_units("ppm"))
+        @test !EarthSciAST._is_angle_bearing(EarthSciAST.parse_units("m"))
+        # Every angle spelling the §4.8.1 registry defines and this binding
+        # parses. (`mrad` is deliberately absent: Julia's registry carries no
+        # prefixed-radian entry at all, which is a separate registry question
+        # and not something this rule can see.)
+        for spelling in ("rad", "deg", "degree", "degrees", "sr", "rad^2", "rad*deg")
+            @test EarthSciAST._is_angle_bearing(EarthSciAST.parse_units(spelling))
+        end
+        # ...and `sr` still PARSES and stays commensurate with itself, because a
+        # spherical-mesh cell area declares it (esm-spec §4.8.1). Refusing it as
+        # a trig argument must not make the declaration unusable.
+        @test EarthSciAST.parse_units("sr") !== nothing
+        @test isempty(_arg_findings("abs", "sr"))
+    end
+
     @testset "the angle normalization factor" begin
         for spelling in ("rad", "1", "ppm", "m")
             @test EarthSciAST.angle_normalization_factor(

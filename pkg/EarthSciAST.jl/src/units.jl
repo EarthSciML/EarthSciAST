@@ -830,6 +830,34 @@ function _is_plane_angle(u)::Bool
     return Unitful.name(c) in _PLANE_ANGLE_UNIT_NAMES && c.power == 1
 end
 
+# The Unitful unit NAMES that carry the esm ANGLE axis (esm-spec §4.8.1): the
+# two plane angles above, plus the steradian, which IS that axis squared.
+const _ANGLE_AXIS_UNIT_NAMES = (_PLANE_ANGLE_UNIT_NAMES..., :Steradian)
+
+# Does `u` carry the ANGLE axis at all?
+#
+# Unitful models every one of these as `NoDims`, so `dimension(u)` cannot see
+# the axis esm-spec §4.8.1 gives `rad` — which is why this binding, alone of the
+# five, accepted `sin(x [sr])`, `log(x [rad])` and `asin(x [rad])` where Rust,
+# Go, Python and TypeScript all refuse them: there `rad` is a real dimension
+# vector entry, so none of those arguments is dimensionless. Reading the unit's
+# SYMBOL is how `_is_plane_angle` already recognises `rad`/`deg`; this is the
+# same read widened to the whole family, so the axis is visible everywhere
+# §4.8.3 asks whether an argument is dimensionless.
+#
+# A registry sweep, not a single case: the three names below are every angle
+# entry the §4.8.1 registry defines (`rad` with its SI prefixes, `deg` /
+# `degree` / `degrees`, and `sr`) — there is no arcminute, gradian or turn to
+# miss — and the predicate is written over the whole component list, so a
+# COMPOUND angle (`rad^2`, `rad*deg`) is caught as well as a bare one.
+function _is_angle_bearing(u)::Bool
+    dimension(u) == dimension(Unitful.NoUnits) || return false
+    for c in typeof(Unitful.FreeUnits(u)).parameters[1]
+        Unitful.name(c) in _ANGLE_AXIS_UNIT_NAMES && return true
+    end
+    return false
+end
+
 # Is `u` dimensionless **at scale 1** — a PURE NUMBER?
 #
 # This is what esm-spec §4.8.3's "the argument MUST be dimensionless" means for
@@ -1048,7 +1076,12 @@ function _dimensionless_arg_rule(expr, var_units, findings)
     end
 
     arg_dim = _expr_dimensions!(findings, expr.args[1], var_units)
-    if arg_dim !== nothing && dimension(arg_dim) != dimension(Unitful.NoUnits)
+    # `_is_angle_bearing` is what stands in for the ANGLE AXIS the other four
+    # bindings carry in the dimension vector: `rad` is an axis (esm-spec
+    # §4.8.1), so `log(x [rad])` is a dimensional mismatch there and must be one
+    # here. Unitful calls it `NoDims`, so the dimension test alone cannot see it.
+    if arg_dim !== nothing && (dimension(arg_dim) != dimension(Unitful.NoUnits) ||
+                               _is_angle_bearing(arg_dim))
         push!(findings, "$(_op_family(expr.op)) argument must be dimensionless, " *
                         "got units '$(_ustr(arg_dim))' (function '$(expr.op)')")
         return nothing
@@ -1078,8 +1111,15 @@ function _circular_arg_rule(expr, var_units, findings)
         return nothing
     end
     arg_dim = _expr_dimensions!(findings, expr.args[1], var_units)
-    if arg_dim !== nothing && dimension(arg_dim) != dimension(Unitful.NoUnits) &&
-       dimension(arg_dim) != dimension(u"rad")
+    # A PLANE angle is admitted at any scale and converted; every OTHER unit
+    # carrying the angle axis is a dimensional mismatch, exactly as in the four
+    # bindings that hold `rad` in the dimension vector. `sr` is `rad^2` and no
+    # conversion turns a solid angle into a plane one (esm-spec §4.8.3), and
+    # multiplying by `scale` where `scale^2` was meant would be silently wrong.
+    if arg_dim !== nothing &&
+       ((dimension(arg_dim) != dimension(Unitful.NoUnits) &&
+         dimension(arg_dim) != dimension(u"rad")) ||
+        (_is_angle_bearing(arg_dim) && !_is_plane_angle(arg_dim)))
         push!(findings, "Circular function argument must be an angle or " *
                         "dimensionless, got units '$(_ustr(arg_dim))' " *
                         "(function '$(expr.op)')")
@@ -1116,7 +1156,11 @@ function _inverse_circular_rule(expr, var_units, findings)
         return nothing
     end
     arg_dim = _expr_dimensions!(findings, expr.args[1], var_units)
-    if arg_dim !== nothing && dimension(arg_dim) != dimension(Unitful.NoUnits)
+    # An ANGLE is not a dimensionless ratio: `asin` RETURNS an angle, it does
+    # not take one. See `_is_angle_bearing` — the other four refuse this on the
+    # dimension vector alone.
+    if arg_dim !== nothing && (dimension(arg_dim) != dimension(Unitful.NoUnits) ||
+                               _is_angle_bearing(arg_dim))
         push!(findings, "Inverse circular function argument must be " *
                         "dimensionless, got units '$(_ustr(arg_dim))' " *
                         "(function '$(expr.op)')")
