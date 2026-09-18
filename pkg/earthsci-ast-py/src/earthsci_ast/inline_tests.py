@@ -518,9 +518,7 @@ def state_cells(
     return out
 
 
-def _param_scope_with_aliases(
-    params: dict[str, float] | None, owner: str = ""
-) -> dict[str, float]:
+def _param_scope_with_aliases(params: dict[str, float] | None, owner: str = "") -> dict[str, float]:
     """Build-time scalar-parameter scope for §6.6.5 cellwise references, as the
     component that OWNS the test writes names.
 

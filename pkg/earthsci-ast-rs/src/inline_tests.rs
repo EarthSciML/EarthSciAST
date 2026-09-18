@@ -2787,7 +2787,10 @@ mod tests {
         // still left `wrf.g` unbound.
         let owned = param_scope_with_aliases(&ambiguous, "A");
         assert_eq!(owned.get("sub.g"), Some(&1.0));
-        assert_eq!(param_scope_with_aliases(&ambiguous, "B").get("sub.g"), Some(&2.0));
+        assert_eq!(
+            param_scope_with_aliases(&ambiguous, "B").get("sub.g"),
+            Some(&2.0)
+        );
 
         // A real flattened name is never shadowed by another name's alias.
         let shadowing: HashMap<String, f64> =

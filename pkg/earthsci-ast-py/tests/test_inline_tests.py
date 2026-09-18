@@ -597,9 +597,7 @@ def test_reference_typo_near_a_mounted_parameter_is_still_unbound():
     assertion ERRORS rather than quietly reducing against a zero field. Same for
     a bogus qualifier (``nope.g``) and a bare misspelling (``gg``).
     """
-    raw = json.loads(
-        (FIXTURES_ROOT / "valid" / "inline_test_reference_mount_name.esm").read_text()
-    )
+    raw = json.loads((FIXTURES_ROOT / "valid" / "inline_test_reference_mount_name.esm").read_text())
     for typo in ("sub.gg", "nope.g", "gg"):
         doc = json.loads(json.dumps(raw))
         test = doc["models"]["P"]["tests"][0]
