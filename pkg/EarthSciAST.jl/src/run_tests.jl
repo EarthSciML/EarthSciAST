@@ -1046,10 +1046,11 @@ testcase `time` attribute is the sum of its assertions' `duration_s` — each
 assertion carries an even share of its test's wall time, so the sum is the
 test's duration (no N-fold overcount).
 
-`file`, when given, relabels every result's source file before grouping —
-used by [`run_inline_tests`](@ref) callers, whose results carry no per-assertion
-source file (`r.file == ""`), to label the whole batch in the testcase
-classnames.
+`file`, when given, relabels every result's source file before grouping. A
+[`run_inline_tests`](@ref) run over documents loaded from PATHS fills `r.file`
+itself, so a corpus batch needs nothing here; pass `file` when the documents
+were handed over as in-memory `EsmFile`s (whose rows have no path to carry) and
+one label fits the whole batch.
 """
 function write_junit_xml(results::Vector{AssertionResult}, path::AbstractString;
                          file::Union{Nothing,AbstractString}=nothing)

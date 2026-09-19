@@ -17,6 +17,7 @@ from conftest import FIXTURES_ROOT
 from earthsci_ast.esm_types import ExprNode, Tolerance
 from earthsci_ast.parse import load_string
 from earthsci_ast.inline_tests import (
+    DEFAULT_METHOD,
     InlineTestOptions,
     _check_assertion,
     _resolve_tolerance,
@@ -362,6 +363,123 @@ def test_run_inline_tests_decay_field():
     assert by_idx[3].passed and abs(by_idx[3].actual) < 1e-9
     assert all(r.reduce in ("L2_error", "mean") for r in results)
     assert all(r.model == "M" and r.test_id == "decay" for r in results)
+
+
+# ---------------------------------------------------------------------------
+# The solve saves the times the assertions ask for
+# ---------------------------------------------------------------------------
+
+
+def _scalar_decay_doc(times: list[float]) -> dict:
+    """``dx/dt = -x``, ``x(0) = 1`` over a 0..10 span, asserted at each of
+    ``times`` against the closed form ``x(t) = e^{-t}``."""
+    return {
+        "esm": "1.0.0",
+        "metadata": {"name": "scalar_decay"},
+        "models": {
+            "M": {
+                "variables": {"x": {"type": "unknown", "units": "1", "default": 1.0}},
+                "equations": [
+                    {
+                        "lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+                        "rhs": {"op": "*", "args": [-1, "x"]},
+                    }
+                ],
+                "tests": [
+                    {
+                        "id": "decays",
+                        "time_span": {"start": 0.0, "end": 10.0},
+                        "tolerance": {"rel": 1e-6},
+                        "assertions": [
+                            {"variable": "x", "time": t, "expected": math.exp(-t)}
+                            for t in times
+                        ],
+                    }
+                ],
+            }
+        },
+        "domain": {"temporal": {}},
+    }
+
+
+def test_assertion_times_inside_the_span_are_sampled():
+    """An assertion at a time strictly INSIDE its test's span is answered.
+
+    ``simulate_states`` asks the solve for exactly the times the assertions
+    name. It used not to — the grid was whatever the integrator's own
+    step/dense-output schedule produced — and then the match check rejected
+    every interior time with ``no saved state at t=...``. Only the span
+    ENDPOINTS were reliably on that grid, which is why the omission survived
+    the §6.6.5 PDE runner this frame grew out of: those fixtures assert at the
+    endpoints. A §6.6 corpus does not.
+
+    Sabotage check: drop ``saveat=`` from the ``solve`` call in
+    ``simulate_states`` and the three interior rows here error.
+    """
+    # 1/3 and pi are chosen because they do NOT land on the default output
+    # grid: `saveat=None` keeps a uniform grid over the span, so a "round"
+    # interior time like 3.5 sits on it by luck and would pass either way.
+    times = [0.0, 1.0 / 3.0, math.pi, 10.0]
+    results = run_inline_tests(load_string(json.dumps(_scalar_decay_doc(times))))
+    assert len(results) == 4, results
+    assert all(r.passed for r in results), [r.message for r in results if not r.passed]
+    # The endpoints were never the problem; the off-grid interior times are.
+    interior = [r for r in results if r.time not in (0.0, 10.0)]
+    assert [r.time for r in interior] == [1.0 / 3.0, math.pi]
+    assert all(r.actual == pytest.approx(math.exp(-r.time), rel=1e-6) for r in interior)
+
+
+def test_a_stateless_document_answers_at_the_asserted_time():
+    """An algebraic-only document is sampled AT the assertion times.
+
+    With no state to integrate there is nothing to interpolate either — the
+    observed bodies are functions of ``t`` and can be evaluated anywhere — but
+    that pathway sampled a fixed 1001-node grid over the span and ignored
+    ``saveat``, so an assertion at a time between two of those nodes was
+    reported as ``no saved state at t=...``. 60 s of a 3600 s span is exactly
+    such a time (the grid steps by 3.6 s).
+
+    Sabotage check: drop the ``saveat_times`` call from the stateless branch of
+    ``_simulate_scalar`` and this errors.
+    """
+    doc = {
+        "esm": "1.0.0",
+        "metadata": {"name": "algebraic_ramp"},
+        "models": {
+            "M": {
+                "variables": {
+                    "y": {"type": "unknown", "units": "1"},
+                    "a": {"type": "parameter", "units": "1/s", "default": 2.0},
+                },
+                "equations": [{"lhs": "y", "rhs": {"op": "*", "args": ["a", "t"]}}],
+                "tests": [
+                    {
+                        "id": "ramps",
+                        "time_span": {"start": 0.0, "end": 3600.0},
+                        "tolerance": {"rel": 1e-9},
+                        "assertions": [
+                            {"variable": "y", "time": 60.0, "expected": 120.0},
+                            {"variable": "y", "time": 600.0, "expected": 1200.0},
+                        ],
+                    }
+                ],
+            }
+        },
+        "domain": {"temporal": {}},
+    }
+    results = run_inline_tests(load_string(json.dumps(doc)))
+    assert len(results) == 2, results
+    assert all(r.passed for r in results), [r.message for r in results if not r.passed]
+
+
+def test_default_method_is_the_librarys_own_default_alg():
+    """An inline-test run and a bare ``solve()`` integrate an opinionless
+    document with the SAME algorithm. They diverged — ``RK45`` here against
+    ``LSODA`` there — which made a stiff document's inline tests cost orders of
+    magnitude more wall time than the same document solved directly."""
+    from earthsci_ast.problem import DEFAULT_ALG
+
+    assert DEFAULT_METHOD == DEFAULT_ALG
 
 
 def _free_x_cos() -> dict:

@@ -2023,8 +2023,14 @@ runner produces — both runners are the SAME frame (`_run_test_frame!` in
 run_tests.jl) with different execution engines plugged in, so tolerance
 resolution, the pass predicate, per-test wall-time accounting, and JUnit
 emission ([`write_junit_xml`](@ref), with `file=...` labeling the batch)
-cannot drift apart. `alg` is REQUIRED (e.g. `Tsit5()` with
-OrdinaryDiffEqTsit5 loaded) — the solve runs in the SciMLBase extension.
+cannot drift apart. `alg` names the ODE algorithm (e.g. `Tsit5()` with
+OrdinaryDiffEqTsit5 loaded) — the solve runs in the SciMLBase extension. It may
+be left `nothing`, and then each document gets the algorithm
+[`_pick_solver`](@ref) picks for it: the stiff `Rosenbrock23` when the document
+declares `solver.stiffness: "high"` (esm-spec §2.2), else the non-stiff
+`Tsit5`. That is what lets ONE corpus-wide call run a stiff document and a
+non-stiff one — a caller who passes an `alg` is naming it for every document in
+the batch, which a stiff member of that batch cannot survive.
 `reltol`/`abstol` default to `nothing`, and that is load bearing rather than
 merely tidy: it is what keeps the DOCUMENT's own opinion expressible. Each
 resolves per esm-spec §2.2.2, most-specific first — an `options_for` override,
@@ -2091,6 +2097,18 @@ function _run_document_tests!(results, file::EsmFile, document, o;
     file = lower_table_lookups(file)
     d_model_name = _opt_or(o, :model_name, model_name)
     d_alg        = _opt_or(o, :alg, alg)
+    if d_alg === nothing
+        # esm-spec §2.2.3: nobody named an algorithm, so the DOCUMENT's own
+        # stiffness declaration chooses one — through the same `_pick_solver`
+        # the MTK runner uses, so the two Julia runners answer a stiff document
+        # with the same integrator instead of one of them hitting `MaxIters`.
+        # (Python's `_method_for` has always done this; this binding required
+        # an `alg` from the caller, and a corpus gate can only pass ONE for
+        # every document, which makes a stiff one unrunnable there.)
+        d_alg, _ = _pick_solver(document isa AbstractString ? String(document) : "";
+                                stiffness=(file.solver === nothing ? nothing :
+                                           file.solver.stiffness))
+    end
     # esm-spec §2.2.2, most-specific first: an `options_for` override, then the
     # keyword, then THIS DOCUMENT's `solver` block, then the runner defaults
     # (which `_test_integration_tolerances` supplies as its own fallback). A
@@ -2104,10 +2122,17 @@ function _run_document_tests!(results, file::EsmFile, document, o;
     seed_u0      = _opt_dict(o, :initial_conditions)
     resolved_base = d_base_dir !== nothing ? String(d_base_dir) :
         (document isa AbstractString ? dirname(abspath(String(document))) : pwd())
+    # The row's `file` is the document it came from, so a BATCH's results say
+    # which document each row is about — the same field the MTK runner fills,
+    # and the only thing that made a corpus run's rows tellable apart. It was
+    # `""` while this entry ran one document at a time; a load failure has
+    # always named its path (`_load_failure_result`), so the empty string also
+    # made the failures of a document inconsistent with each other.
+    source = document isa AbstractString ? String(document) : ""
     for (mname, kind, component) in _test_components(file, d_model_name)
         engine = SimulateTestEngine(file, document, mname, resolved_base,
                                     d_alg, d_reltol, d_abstol, seed_p, seed_u0)
-        _run_test_frame!(results, engine, "", kind, mname,
+        _run_test_frame!(results, engine, source, kind, mname,
                          component.tolerance, component.tests)
     end
     return results

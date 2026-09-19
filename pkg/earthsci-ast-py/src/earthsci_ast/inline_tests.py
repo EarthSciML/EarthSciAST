@@ -79,7 +79,7 @@ from .expr_walk import iter_children
 from .flatten import flatten
 from .lower_table_lookup import lower_table_lookups
 from .parse import load_path, load_string
-from .problem import esm_problem, solve
+from .problem import DEFAULT_ALG, esm_problem, solve
 from .simulation import BuildInspection, _eval_buildtime_field, observed_at_state
 from .simulation_common import ReturnCode, dotted_suffixes
 
@@ -110,7 +110,23 @@ TEST_RELTOL = 1e-10
 TEST_ABSTOL = 1e-14
 
 #: The integrator used when neither the caller nor the document says otherwise.
-DEFAULT_METHOD = "RK45"
+#:
+#: It is the LIBRARY's own default (:data:`~earthsci_ast.problem.DEFAULT_ALG`),
+#: not a second opinion held by the runner. A caller who has expressed no
+#: preference and a document that declares no stiffness must get the same
+#: integrator from `solve()` and from an inline-test run, or the run is
+#: asserting something about this module rather than about the model.
+#:
+#: The two DID diverge: this was ``"RK45"`` while ``solve()`` defaulted to
+#: ``"LSODA"``, and the gap is not cosmetic on a stiff document. The
+#: stratospheric Chapman mechanism (EarthSciModels
+#: components/gaschem/stratospheric/chapman.esm, a 3-equation ODE) integrates
+#: its 24-hour span in 0.01 s under LSODA and 74 s under RK45 at the
+#: :data:`TEST_RELTOL` this module runs at — a corpus gate over a few hundred
+#: chemistry documents cannot pay that, and the explicit method buys nothing
+#: for it: LSODA switches to a stiff method by itself, which is the whole
+#: reason it is the library default.
+DEFAULT_METHOD = DEFAULT_ALG
 
 #: The integrator chosen for a document declaring ``solver.stiffness: "high"``
 #: (esm-spec §2.2). BDF is scipy's implicit multistep method; LSODA — which is
@@ -1160,7 +1176,17 @@ def simulate_states(
     # Note this is the INTEGRATION tolerance. The tolerance each assertion is
     # COMPARED at is resolved separately (§6.6.4) and is untouched here.
     eff_rtol, eff_atol = _integration_tolerances(file, rtol, atol)
-    result = solve(prob, alg=_method_for(method, file), reltol=eff_rtol, abstol=eff_atol)
+    # `saveat` is the times the CALLER needs, so it is what the solve is asked
+    # to save. Without it the output grid is whatever the integrator's own
+    # step/dense-output schedule produced, and the match check below then
+    # rejects every assertion whose time is not on that grid — which is any
+    # assertion strictly inside its test's span, since only the endpoints are
+    # guaranteed. (The §6.6.5 PDE runner this frame grew out of asserted at the
+    # span endpoints only, so the omission was invisible until it became the
+    # general §6.6 runner.) The check stays: it now guards against a solver
+    # that could not honour a requested time rather than against the grid.
+    result = solve(prob, alg=_method_for(method, file), reltol=eff_rtol,
+                   abstol=eff_atol, saveat=[float(t) for t in saveat])
     if result.retcode is not ReturnCode.Success:
         raise RuntimeError(f"solve returned {result.retcode.value}: {result.message}")
     var_map = {str(name): i for i, name in enumerate(result.vars)}

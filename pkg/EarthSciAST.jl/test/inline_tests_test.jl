@@ -840,3 +840,49 @@ _pit_free_x_cos() = Dict{String,Any}(
     @test EarthSciAST.bind_dimension_names(lev_bound, lev_dims, empty_params,
                                            lev_arrays) === lev_bound
 end
+
+# ---------------------------------------------------------------------------
+# A corpus run: no `alg` from the caller, and rows that say which document
+# ---------------------------------------------------------------------------
+
+@testset "run_inline_tests picks each document's own solver when given no alg" begin
+    # A corpus gate calls this entry ONCE for documents it did not write, so it
+    # cannot name an `alg` that suits all of them: a stiff member of the batch
+    # only integrates under a stiff solver. Left unnamed, each document gets
+    # what `_pick_solver` picks for it from its own `solver.stiffness`
+    # (esm-spec §2.2) — the same resolution the MTK runner does, and the same
+    # one the Python binding's `_method_for` has always done.
+    doc = _pit_decay_doc(Any[_pit_coords_assert(["x" => 3];
+                                                expected=cos(pi * 2.5 / _PIT_N))])
+    results = run_inline_tests(_pit_load(doc); model_name="M")
+    @test !isempty(results)
+    @test all(r -> r.status == EarthSciAST.PASS, results)
+
+    # The picks themselves: a document declaring `high` gets the stiff solver,
+    # one declaring nothing gets the non-stiff default.
+    @test EarthSciAST._pick_solver(""; stiffness="high")[2] === :rosenbrock23
+    @test EarthSciAST._pick_solver("")[2] === :tsit5
+end
+
+@testset "a batch's rows name the document they came from" begin
+    # Results from a multi-document run were indistinguishable: every row
+    # carried `file == ""`, so a corpus sweep could report a failure without
+    # saying which file failed — while a LOAD failure named its path, making
+    # the two halves of one run inconsistent with each other.
+    mktempdir() do dir
+        path = joinpath(dir, "decay.esm")
+        write(path, JSON3.write(_pit_decay_doc(Any[
+            _pit_coords_assert(["x" => 3]; expected=cos(pi * 2.5 / _PIT_N))])))
+        results = run_inline_tests([path]; model_name="M")
+        @test !isempty(results)
+        @test all(r -> r.file == path, results)
+
+        # An unreadable document in the same batch still contributes its own
+        # named row rather than ending the run.
+        bad = joinpath(dir, "broken.esm")
+        write(bad, "{not json")
+        mixed = run_inline_tests([path, bad]; model_name="M")
+        @test any(r -> r.file == bad && r.status == EarthSciAST.ERROR, mixed)
+        @test any(r -> r.file == path && r.status == EarthSciAST.PASS, mixed)
+    end
+end
