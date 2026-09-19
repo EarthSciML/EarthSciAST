@@ -365,6 +365,67 @@ pub fn set_join_gate_enabled(on: bool) -> bool {
     prev
 }
 
+/// How many candidate PAIRS the join-gate index caches may keep resident
+/// (`ESS_GATE_CACHE_PAIRS`, default [`DEFAULT_GATE_CACHE_PAIRS`]), across both
+/// the spatial-overlap cache and the value-equality one.
+///
+/// A gate index is memoized so that a node resolved once per evaluation is not
+/// rebuilt per cell. Retaining every index a run ever built is a different
+/// thing, and it made peak memory track the sum of every match set rather than
+/// the largest one (issue #418). The budget bounds that; the cache evicts
+/// least-recently-used, and evicts BEFORE it builds the replacement.
+///
+/// Denominated in pairs rather than entries because entries differ by orders of
+/// magnitude: a six-cell regrid geometry and a fifty-million-pair star join are
+/// both one entry.
+///
+/// Like [`join_gate_enabled`], this can only change a document's COST. A gate
+/// is a pure optimisation — the driver may decline one outright and the lowered
+/// `filter` then computes the same answer over the full product — and a rebuilt
+/// index is the same pure function of the same key columns.
+///
+/// Thread-local (seeded from the environment once) rather than a process-wide
+/// `OnceLock`, so one test process can measure both arms.
+pub fn gate_cache_pair_budget() -> usize {
+    GATE_CACHE_PAIRS.with(|c| match c.get() {
+        Some(v) => v,
+        None => {
+            let v = gate_cache_budget_env();
+            c.set(Some(v));
+            v
+        }
+    })
+}
+
+/// The default resident-pair budget: about 64 MB of
+/// [`OverlapIndex`] per cache, comfortably above every gate in the corpus and
+/// far below the multi-gigabyte match sets a relational port resolves.
+pub const DEFAULT_GATE_CACHE_PAIRS: usize = 4_000_000;
+
+fn gate_cache_budget_env() -> usize {
+    static N: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *N.get_or_init(|| {
+        std::env::var("ESS_GATE_CACHE_PAIRS")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .unwrap_or(DEFAULT_GATE_CACHE_PAIRS)
+    })
+}
+
+thread_local! {
+    static GATE_CACHE_PAIRS: Cell<Option<usize>> = const { Cell::new(None) };
+}
+
+/// Set the resident-pair budget for THIS thread, returning the previous
+/// setting so a caller can restore it. `0` retains nothing beyond the indices
+/// a live gate is holding, which is the arm a differential test runs to show
+/// that eviction changes cost and not answers.
+pub fn set_gate_cache_pair_budget(pairs: usize) -> usize {
+    let prev = gate_cache_pair_budget();
+    GATE_CACHE_PAIRS.with(|c| c.set(Some(pairs)));
+    prev
+}
+
 /// Is per-node join-gate COST REPORTING on (`ESS_JOIN_GATE_STATS=1`)?
 ///
 /// The leaf-visit counter [`overlap_enum_visits`] is the only direct evidence

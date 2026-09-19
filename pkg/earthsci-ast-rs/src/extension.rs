@@ -87,8 +87,10 @@ pub mod analysis {
 /// driver kill-switch the differential tests flip.
 pub mod broad_phase {
     pub use crate::broad_phase::{
-        OverlapIndex, broad_phase_candidates, broad_phase_candidates_bruteforce, envelope_vectors,
-        join_gate_enabled, overlap_enum_visits, reset_overlap_enum_visits, set_join_gate_enabled,
+        DEFAULT_GATE_CACHE_PAIRS, OverlapIndex, broad_phase_candidates,
+        broad_phase_candidates_bruteforce, envelope_vectors, gate_cache_pair_budget,
+        join_gate_enabled, overlap_enum_visits, reset_overlap_enum_visits,
+        set_gate_cache_pair_budget, set_join_gate_enabled,
     };
 }
 

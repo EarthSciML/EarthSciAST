@@ -2660,6 +2660,155 @@ pub(super) fn gate_placement(
     }
 }
 
+// --------------------------------------------------------------------------- //
+// The gate-index caches and their resident-size budget (issue #418)
+// --------------------------------------------------------------------------- //
+
+/// What a cached gate entry COSTS, and whether evicting it would free anything.
+///
+/// Implemented for both caches' value types so one [`GateCache`] serves the
+/// spatial overlap gate and the value-equality `on` gate alike.
+trait Retained {
+    /// Candidate pairs this entry holds — the unit the budget is denominated
+    /// in. Entries differ by orders of magnitude (a 6-cell regrid geometry
+    /// against a 50-million-pair star join), so a cap counted in ENTRIES would
+    /// bound the wrong thing.
+    fn retained_pairs(&self) -> usize;
+
+    /// Is a live [`JoinGate`] still holding this index? Evicting it then frees
+    /// nothing — the strong reference keeps the allocation alive — and only
+    /// costs a rebuild the next time the node is evaluated.
+    fn in_use(&self) -> bool;
+}
+
+impl Retained for Option<Rc<crate::broad_phase::OverlapIndex>> {
+    fn retained_pairs(&self) -> usize {
+        self.as_ref().map_or(0, |ix| ix.len())
+    }
+    fn in_use(&self) -> bool {
+        self.as_ref().is_some_and(|ix| Rc::strong_count(ix) > 1)
+    }
+}
+
+impl Retained for Option<EqGateEntry> {
+    fn retained_pairs(&self) -> usize {
+        self.as_ref().map_or(0, |(ix, _, _)| ix.len())
+    }
+    fn in_use(&self) -> bool {
+        self.as_ref()
+            .is_some_and(|(ix, _, _)| Rc::strong_count(ix) > 1)
+    }
+}
+
+/// One cached gate index, with what the budget needs to know about it.
+struct CacheEntry<V> {
+    value: V,
+    pairs: usize,
+    /// The LRU clock reading at its last hit (or at its insertion).
+    used: u64,
+}
+
+/// A gate-index cache bounded by the PAIRS it retains.
+///
+/// # Why there is a bound at all
+///
+/// A gate index is built once per node and consulted once per output cell, so
+/// memoizing it across evaluations is what keeps a per-cell walk from
+/// rebuilding an R*-tree or re-probing a million keys — see the note on
+/// [`resolve_join_gates`]. Retaining it FOREVER is a different claim, and a
+/// wrong one: an unbounded cache made peak memory track the sum of every match
+/// set a build ever resolved. On issue #418's MOVES port that was three
+/// successive 4.2 GB indices, each live for ~21 seconds of a multi-minute run
+/// and resident for the rest of it, against 0.31 GiB of declared arrays.
+///
+/// # Why it can only change COST
+///
+/// A gate is a pure optimisation in both directions: [`resolve_join_gates`] is
+/// free to decline one entirely (the lowered `filter` then computes the same
+/// answer over the full product), and rebuilding one from the same inputs
+/// yields the same match set, since it is a pure function of the key columns.
+/// So an eviction — like a `ESS_JOIN_GATE_DISABLE=1` run — can make a document
+/// slower and can never make it answer differently.
+///
+/// # The policy
+///
+/// Least-recently-used, evicted BEFORE the replacement is built rather than
+/// after, so the outgoing index's memory is already back when the incoming
+/// one's is allocated: that is what turns "sum of every index" into "the
+/// largest one". An entry a live [`JoinGate`] still holds is skipped, since
+/// dropping the cache's reference to it would free nothing.
+///
+/// The failure mode is thrash: a node that alternates between two indices which
+/// do not BOTH fit will rebuild each in turn. Two gates on ONE aggregate cannot
+/// trigger it (both are resolved, and so both `in_use`, before either is
+/// consulted), and a steady-state repeated node never evicts at all, because
+/// eviction runs only on a miss. [`gate_cache_pair_budget`] is the escape
+/// hatch if a document finds a shape that does.
+struct GateCache<K, V> {
+    entries: HashMap<K, CacheEntry<V>>,
+    clock: u64,
+    pairs: usize,
+}
+
+/// Cap on the number of ENTRIES, independent of the pair budget: a build that
+/// resolves thousands of tiny distinct gates would otherwise accumulate their
+/// keys (an overlap key carries the envelope factor NAMES) without ever
+/// approaching the budget.
+const GATE_CACHE_MAX_ENTRIES: usize = 512;
+
+impl<K: std::hash::Hash + Eq + Clone, V: Clone + Retained> GateCache<K, V> {
+    fn new() -> Self {
+        GateCache {
+            entries: HashMap::new(),
+            clock: 0,
+            pairs: 0,
+        }
+    }
+
+    /// Probe, marking a hit as most-recently-used.
+    fn get(&mut self, key: &K) -> Option<V> {
+        self.clock += 1;
+        let clock = self.clock;
+        let e = self.entries.get_mut(key)?;
+        e.used = clock;
+        Some(e.value.clone())
+    }
+
+    /// Drop least-recently-used entries until the cache is within budget.
+    ///
+    /// Called on a MISS, before the replacement is built. `entries` is small
+    /// (bounded by [`GATE_CACHE_MAX_ENTRIES`], and in practice a handful), so
+    /// scanning it for the minimum beats carrying an intrusive order list.
+    fn evict_to_budget(&mut self, budget: usize) {
+        while self.pairs > budget || self.entries.len() >= GATE_CACHE_MAX_ENTRIES {
+            let victim = self
+                .entries
+                .iter()
+                .filter(|(_, e)| !e.value.in_use())
+                .min_by_key(|(_, e)| e.used)
+                .map(|(k, _)| k.clone());
+            let Some(victim) = victim else { return }; // every entry is live
+            if let Some(e) = self.entries.remove(&victim) {
+                self.pairs -= e.pairs;
+            }
+        }
+    }
+
+    fn insert(&mut self, key: K, value: V) {
+        self.clock += 1;
+        let pairs = value.retained_pairs();
+        let prev = self.entries.insert(
+            key,
+            CacheEntry {
+                value,
+                pairs,
+                used: self.clock,
+            },
+        );
+        self.pairs = self.pairs - prev.map_or(0, |e| e.pairs) + pairs;
+    }
+}
+
 /// The cache key of a resolved gate: the envelope factor NAMES, the `eps`, and
 /// the two envelope side lengths.
 ///
@@ -2671,8 +2820,9 @@ pub(super) fn gate_placement(
 type GateKey = (Vec<String>, Vec<String>, u64, usize, usize);
 
 thread_local! {
-    static GATE_CACHE: RefCell<HashMap<GateKey, Option<Rc<crate::broad_phase::OverlapIndex>>>> =
-        RefCell::new(HashMap::new());
+    /// The spatial-overlap gate cache, bounded by [`gate_cache_pair_budget`].
+    static GATE_CACHE: RefCell<GateCache<GateKey, Option<Rc<crate::broad_phase::OverlapIndex>>>> =
+        RefCell::new(GateCache::new());
 }
 
 /// The dense length of an envelope factor, WITHOUT cloning it (the cache is
@@ -2776,10 +2926,16 @@ pub(super) fn resolve_join_gates(join: &[JoinClause], ctx: &EvalCtx) -> Vec<Join
             nsrc,
             ntgt,
         );
-        let cached = GATE_CACHE.with(|c| c.borrow().get(&key).cloned());
+        let cached = GATE_CACHE.with(|c| c.borrow_mut().get(&key));
         let index = match cached {
             Some(hit) => hit,
             None => {
+                // Release the least-recently-used index BEFORE building this
+                // one, so the two are never resident at once (issue #418).
+                GATE_CACHE.with(|c| {
+                    c.borrow_mut()
+                        .evict_to_budget(crate::broad_phase::gate_cache_pair_budget())
+                });
                 let built = build_overlap_index(&ov.src_env, &ov.tgt_env, eps, ctx).map(Rc::new);
                 GATE_CACHE.with(|c| c.borrow_mut().insert(key, built.clone()));
                 built
@@ -2852,8 +3008,9 @@ type EqGateKey = (u64, SmallVec<[usize; 2]>, u64);
 type EqGateEntry = (Rc<crate::broad_phase::OverlapIndex>, usize, usize);
 
 thread_local! {
-    static EQ_GATE_CACHE: RefCell<HashMap<EqGateKey, Option<EqGateEntry>>> =
-        RefCell::new(HashMap::new());
+    /// The value-equality gate cache, bounded by [`gate_cache_pair_budget`].
+    static EQ_GATE_CACHE: RefCell<GateCache<EqGateKey, Option<EqGateEntry>>> =
+        RefCell::new(GateCache::new());
 }
 
 /// Run `f` on the named 1-D array WITHOUT cloning it. `lookup_variable` returns
@@ -2980,9 +3137,16 @@ fn resolve_equality_index(g: &crate::join::OnGate, ctx: &EvalCtx) -> Option<EqGa
         }
     }
     let key: EqGateKey = (g.id, lens, fp);
-    if let Some(hit) = EQ_GATE_CACHE.with(|c| c.borrow().get(&key).cloned()) {
+    if let Some(hit) = EQ_GATE_CACHE.with(|c| c.borrow_mut().get(&key)) {
         return hit;
     }
+    // Release the least-recently-used match set BEFORE building this one, so a
+    // build that resolves several large gates in turn peaks at the LARGEST of
+    // them rather than at their sum (issue #418).
+    EQ_GATE_CACHE.with(|c| {
+        c.borrow_mut()
+            .evict_to_budget(crate::broad_phase::gate_cache_pair_budget())
+    });
     let built = build_equality_index(g, ctx).map(|(ix, nl, nr)| (Rc::new(ix), nl, nr));
     EQ_GATE_CACHE.with(|c| c.borrow_mut().insert(key, built.clone()));
     built
@@ -5193,5 +5357,83 @@ mod unbound_name_fault_tests {
             msg.contains("E_TREEWALK_UNBOUND_NAME") && msg.contains("undeclaredFloor"),
             "a name nothing declares is still the §5.23 fault: {msg}"
         );
+    }
+}
+
+#[cfg(test)]
+mod gate_cache_budget_tests {
+    use super::*;
+
+    /// A gate index of `n` pairs — `n` is all the budget looks at.
+    fn ix(n: i64) -> Option<Rc<crate::broad_phase::OverlapIndex>> {
+        Some(Rc::new(crate::broad_phase::OverlapIndex::from_owned_pairs(
+            (1..=n).map(|i| (i, i)).collect(),
+        )))
+    }
+
+    type Cache = GateCache<u32, Option<Rc<crate::broad_phase::OverlapIndex>>>;
+
+    #[test]
+    fn eviction_drops_the_least_recently_used_index_first() {
+        let mut c: Cache = GateCache::new();
+        c.insert(1, ix(100));
+        c.insert(2, ix(100));
+        assert_eq!(c.pairs, 200);
+        // Touch 1, making 2 the least recently used.
+        assert!(c.get(&1).is_some());
+        c.evict_to_budget(150);
+        assert!(c.get(&2).is_none(), "the LRU entry survived");
+        assert!(c.get(&1).is_some(), "the MRU entry was evicted");
+        assert_eq!(c.pairs, 100);
+    }
+
+    #[test]
+    fn eviction_continues_until_the_cache_is_within_budget() {
+        let mut c: Cache = GateCache::new();
+        for k in 0..5 {
+            c.insert(k, ix(100));
+        }
+        assert_eq!(c.pairs, 500);
+        c.evict_to_budget(250);
+        assert!(c.pairs <= 250);
+        // The two most recent survive; the three oldest are gone.
+        assert!(c.get(&3).is_some() && c.get(&4).is_some());
+        assert!(c.get(&0).is_none() && c.get(&1).is_none() && c.get(&2).is_none());
+    }
+
+    #[test]
+    fn an_index_a_live_gate_still_holds_is_never_evicted() {
+        let mut c: Cache = GateCache::new();
+        let held = ix(100);
+        c.insert(1, held.clone());
+        c.evict_to_budget(0);
+        assert!(
+            c.get(&1).is_some(),
+            "evicting an index a live gate holds frees nothing and costs a rebuild"
+        );
+        drop(held);
+        c.evict_to_budget(0);
+        assert!(c.get(&1).is_none(), "the last reference went and it stayed");
+    }
+
+    /// A gate that declined (`None`) retains nothing, so it never provokes an
+    /// eviction — but it is still remembered, which is the point of caching it.
+    #[test]
+    fn a_declined_gate_costs_no_budget() {
+        let mut c: Cache = GateCache::new();
+        c.insert(1, ix(100));
+        c.insert(2, None);
+        assert_eq!(c.pairs, 100);
+        c.evict_to_budget(100);
+        assert!(c.get(&1).is_some());
+        assert!(matches!(c.get(&2), Some(None)));
+    }
+
+    #[test]
+    fn re_inserting_a_key_replaces_its_contribution_rather_than_adding_to_it() {
+        let mut c: Cache = GateCache::new();
+        c.insert(1, ix(100));
+        c.insert(1, ix(10));
+        assert_eq!(c.pairs, 10);
     }
 }
