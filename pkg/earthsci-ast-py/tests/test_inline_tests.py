@@ -15,7 +15,6 @@ import pytest
 from conftest import FIXTURES_ROOT
 
 from earthsci_ast.esm_types import ExprNode, Tolerance
-from earthsci_ast.parse import load_string
 from earthsci_ast.inline_tests import (
     DEFAULT_METHOD,
     InlineTestOptions,
@@ -26,6 +25,7 @@ from earthsci_ast.inline_tests import (
     run_inline_tests,
     state_cells,
 )
+from earthsci_ast.parse import load_string
 from earthsci_ast.serialize import _serialize_esm_file
 
 N = 8
@@ -391,8 +391,7 @@ def _scalar_decay_doc(times: list[float]) -> dict:
                         "time_span": {"start": 0.0, "end": 10.0},
                         "tolerance": {"rel": 1e-6},
                         "assertions": [
-                            {"variable": "x", "time": t, "expected": math.exp(-t)}
-                            for t in times
+                            {"variable": "x", "time": t, "expected": math.exp(-t)} for t in times
                         ],
                     }
                 ],
@@ -470,6 +469,34 @@ def test_a_stateless_document_answers_at_the_asserted_time():
     results = run_inline_tests(load_string(json.dumps(doc)))
     assert len(results) == 2, results
     assert all(r.passed for r in results), [r.message for r in results if not r.passed]
+
+
+def test_one_assertion_on_a_span_that_does_not_start_at_zero():
+    """A test whose assertions sit at ONE instant still gets that instant.
+
+    ``saveat`` is overloaded (API_SPEC §4): a sequence of one positive number
+    is an output STEP from ``tspan[0]``, not a time. ``simulate_states`` builds
+    its ``saveat`` from ``sorted({a.time for ...})``, so a single-assertion
+    test — the common shape — reduces to exactly that, and the step grid
+    contains the requested time only by luck (it does whenever the span starts
+    at 0, which every other test here does). On a 100..200 span, ``[150.0]``
+    became the grid ``[100.0]``.
+
+    Sabotage check: drop ``float(tspan[0])`` from the ``requested`` set in
+    ``simulate_states`` and this errors with ``no saved state at t=150.0``.
+    """
+    doc = _scalar_decay_doc([150.0])
+    span = doc["models"]["M"]["tests"][0]["time_span"]
+    span["start"], span["end"] = 100.0, 200.0
+    # `x(0) = 1` is imposed at the span start, so the closed form is measured
+    # from there.
+    doc["models"]["M"]["tests"][0]["assertions"][0]["expected"] = math.exp(-50.0)
+    doc["models"]["M"]["tests"][0]["tolerance"] = {"rel": 1e-6, "abs": 1e-12}
+
+    results = run_inline_tests(load_string(json.dumps(doc)))
+    assert len(results) == 1, results
+    assert "no saved state" not in results[0].message, results[0].message
+    assert results[0].passed, results[0].message
 
 
 def test_default_method_is_the_librarys_own_default_alg():

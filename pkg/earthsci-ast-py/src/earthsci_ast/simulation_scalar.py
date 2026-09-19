@@ -30,8 +30,8 @@ from .flatten import (
 )
 from .simulation_array import (
     _densify_solution,
-    resolve_scalar_ic,
     _saveat_times,
+    resolve_scalar_ic,
     scalar_ic_equations,
 )
 from .simulation_common import (

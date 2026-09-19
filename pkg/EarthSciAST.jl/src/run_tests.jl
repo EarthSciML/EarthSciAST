@@ -439,9 +439,12 @@ function _pick_solver(file::AbstractString="";
     tsit = _try_require(_TSIT5_PKGID)
     tsit !== nothing && return (tsit.Tsit5(), :tsit5)
     rb !== nothing && return (rb.Rosenbrock23(), :rosenbrock23)
+    # Named for neither entry point: `run_inline_tests` reaches here too now
+    # that it picks a solver for a caller who named none.
     throw(ArgumentError(
-        "run_esm_tests requires an OrdinaryDiffEq solver to be loaded " *
-        "(`using OrdinaryDiffEqTsit5` or `using OrdinaryDiffEqRosenbrock`)."))
+        "running a document's tests requires an OrdinaryDiffEq solver to be " *
+        "loaded (`using OrdinaryDiffEqTsit5` or `using OrdinaryDiffEqRosenbrock`), " *
+        "or an explicit `alg`."))
 end
 
 # ---------------------------------------------------------------------------

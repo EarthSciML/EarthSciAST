@@ -1185,8 +1185,23 @@ def simulate_states(
     # span endpoints only, so the omission was invisible until it became the
     # general §6.6 runner.) The check stays: it now guards against a solver
     # that could not honour a requested time rather than against the grid.
-    result = solve(prob, alg=_method_for(method, file), reltol=eff_rtol,
-                   abstol=eff_atol, saveat=[float(t) for t in saveat])
+    # The span START goes in alongside them, and is not cosmetic: ``saveat``
+    # is overloaded (API_SPEC §4) — a sequence of ONE positive number is read
+    # as an output STEP measured from ``tspan[0]``, not as a time. A test whose
+    # assertions all sit at one instant (the common case) reduces to exactly
+    # that, so ``[150.0]`` on a 100..200 span became the grid ``[100.0]`` and
+    # the requested time was gone. Adding ``tspan[0]`` makes the sequence
+    # unambiguous whenever the two differ, and when they do not the step grid
+    # starts at ``tspan[0]`` and contains it anyway. The extra node is dropped
+    # here: the rows returned below are the caller's ``saveat``, not this.
+    requested = sorted({float(tspan[0]), *(float(t) for t in saveat)})
+    result = solve(
+        prob,
+        alg=_method_for(method, file),
+        reltol=eff_rtol,
+        abstol=eff_atol,
+        saveat=requested,
+    )
     if result.retcode is not ReturnCode.Success:
         raise RuntimeError(f"solve returned {result.retcode.value}: {result.message}")
     var_map = {str(name): i for i, name in enumerate(result.vars)}
