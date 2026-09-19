@@ -236,6 +236,78 @@ func radDim() Dimension {
 // argument the circular functions accept alongside a pure number.
 func isAngleDim(d Dimension) bool { return d.Equal(radDim()) }
 
+// scaledDimensionlessSpellings are the registry spellings of the
+// dimensionless-but-SCALED units, most common first, used to NAME a scale in a
+// diagnostic ("... (ppm); divide by 1 ppm ...").
+//
+// A fixed, ORDERED table rather than a reverse sweep of the registry: the
+// registry is a map, so a sweep would pick "ppmv" or "ppm" depending on
+// iteration order and the five bindings would print different messages for the
+// same document. The same table, in the same order, is in every binding.
+var scaledDimensionlessSpellings = []struct {
+	name string
+	pow  int
+}{
+	{"percent", -2},
+	{"ppm", -6},
+	{"ppb", -9},
+	{"ppt", -12},
+}
+
+// scaledDimensionlessSpelling is the canonical registry spelling of a
+// dimensionless unit at `e` (1/100 -> "percent", 1e-6 -> "ppm"), or "".
+func scaledDimensionlessSpelling(e ExactScale) string {
+	for _, entry := range scaledDimensionlessSpellings {
+		if exactPow10(entry.pow).Equal(e) {
+			return entry.name
+		}
+	}
+	return ""
+}
+
+// isPureNumber reports whether a unit is dimensionless AT SCALE 1 — a PURE
+// NUMBER.
+//
+// This is what esm-spec §4.8.3's "the argument MUST be dimensionless" means for
+// a strict transcendental (issue #409): `ppm` and `percent` are dimensionless
+// too, and `log(x [ppm])` has two defensible readings — the log of the ppm
+// NUMBER, or the log of the mole fraction — that differ by ln(1e-6) =
+// 13.8155…. Dimension alone cannot tell them apart, so the checker refuses
+// rather than picking one.
+func isPureNumber(u *Unit) bool { return u.Dim.IsDimensionless() && u.Exact.IsOne() }
+
+// scaledDimensionlessErr is the §4.8.3 refusal for a dimensionless-but-SCALED
+// argument to an op that requires a pure number.
+//
+// It names the REPAIR, not only the refusal: the author states the reading by
+// dividing by a quantity carrying the scale, which costs one node and records
+// the decision in the document. Normalizing silently instead would change the
+// numbers of every document that already passes a `percent` or a `ppm` into
+// `exp`/`log`. The same sentence is in every binding.
+func scaledDimensionlessErr(op string, u *Unit) error {
+	shown := u.Exact.String()
+	if name := scaledDimensionlessSpelling(u.Exact); name != "" {
+		return mismatchErrf("Argument to '%s' must be dimensionless at scale 1, but is "+
+			"dimensionless at scale %s (%s); divide by 1 %s, or by the scale you mean, "+
+			"to state which reading is intended", op, shown, name, name)
+	}
+	return mismatchErrf("Argument to '%s' must be dimensionless at scale 1, but is "+
+		"dimensionless at scale %s; divide by a quantity carrying that scale to state "+
+		"which reading is intended", op, shown)
+}
+
+// angleNormalizationFactor is the factor that brings a quantity in `u` to
+// RADIANS, when `u` is a plane angle at a scale other than 1 (esm-spec §4.8.3,
+// issue #409). `ok` is false for anything else — a pure number, a `rad`, a
+// dimensional unit — so a document that declares no scaled angle is rewritten
+// not at all.
+func angleNormalizationFactor(u Unit) (float64, bool) {
+	if !isAngleDim(u.Dim) || u.Exact.IsOne() {
+		return 0, false
+	}
+	return u.Scale, true
+}
+
 // dimFactor renders one base-unit factor with a POSITIVE exponent: "m",
 // "m^2", "m^(1/2)".
 func dimFactor(symbol string, e Rat) string {
@@ -1448,8 +1520,21 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 		if err != nil {
 			return nil, err
 		}
-		if arg != nil && !arg.Dim.IsDimensionless() && !isAngleDim(arg.Dim) {
-			return nil, mismatchErrf("argument of '%s' must be an angle or dimensionless, got %s", node.Op, arg.Dim)
+		// Three outcomes, and the middle one is the point of issue #409. An ANGLE
+		// is admissible WHATEVER its scale, because `deg` -> `rad` is exact and has
+		// no second reading: the flatten pass converts it before anything evaluates
+		// it. A PURE NUMBER is admissible. Dimensionless at a scale OTHER than 1
+		// (`percent`) is REFUSED, for the same reason `log(x [ppm])` is.
+		if arg != nil {
+			switch {
+			case isAngleDim(arg.Dim):
+				// Converted, not refused.
+			case isPureNumber(arg):
+			case arg.Dim.IsDimensionless():
+				return nil, scaledDimensionlessErr(node.Op, arg)
+			default:
+				return nil, mismatchErrf("argument of '%s' must be an angle or dimensionless, got %s", node.Op, arg.Dim)
+			}
 		}
 		return &Unit{Scale: 1}, nil
 
@@ -1467,6 +1552,11 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 		}
 		if arg != nil && !arg.Dim.IsDimensionless() {
 			return nil, mismatchErrf("argument of '%s' must be dimensionless, got %s", node.Op, arg.Dim)
+		}
+		// A dimensionless RATIO is a PURE NUMBER, not a `percent` whose reading is
+		// unstated (issue #409).
+		if arg != nil && !isPureNumber(arg) {
+			return nil, scaledDimensionlessErr(node.Op, arg)
 		}
 		return &Unit{Dim: radDim(), Scale: 1}, nil
 
@@ -1505,6 +1595,12 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 		}
 		if arg != nil && !arg.Dim.IsDimensionless() {
 			return nil, mismatchErrf("argument of '%s' must be dimensionless, got %s", node.Op, arg.Dim)
+		}
+		// "Dimensionless" means dimensionless AT SCALE 1 (issue #409): `ppm` and
+		// `percent` pass every dimension-only test, and the two readings of
+		// `log(x [ppm])` differ by ln(1e-6).
+		if arg != nil && !isPureNumber(arg) {
+			return nil, scaledDimensionlessErr(node.Op, arg)
 		}
 		return &Unit{Scale: 1}, nil
 

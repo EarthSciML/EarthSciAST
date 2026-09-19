@@ -1,0 +1,117 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "AngleUnitsDegrees",
+    "description": "The shared numeric pin for esm-spec §4.8.3 'Angles are the ONE exception' (issue #409): a circular-trig argument declared in `deg` is CONVERTED to radians before it is evaluated. `deg` is a registry unit at scale pi/180, so `sin(theta)` with `theta` in `deg` is a CONFORMING document -- and every binding used to hand the stored number straight to `sin`, so `sin(90 [deg])` returned 0.8939966636005579, which is sin(90 RADIANS), with no diagnostic. Each state below integrates a constant trig value over one second from zero, so its value at t=1 IS that trig value: sin(90 deg) = 1, cos(180 deg) = -1, tan(45 deg) = 1. The `rad` row is the control: it was always right and must stay right, which is what distinguishes 'the scale is applied' from 'the scale is applied twice'.",
+    "authors": [
+      "Chris Tessum with Claude"
+    ],
+    "created": "2026-09-17T00:00:00Z",
+    "tags": [
+      "units",
+      "angle",
+      "conformance"
+    ]
+  },
+  "models": {
+    "AngleUnits": {
+      "variables": {
+        "theta_deg": {
+          "type": "parameter",
+          "units": "deg",
+          "default": 90.0,
+          "description": "A quarter turn, declared in degrees. sin of it is exactly 1."
+        },
+        "half_turn_deg": {
+          "type": "parameter",
+          "units": "deg",
+          "default": 180.0,
+          "description": "A half turn, declared in degrees. cos of it is exactly -1."
+        },
+        "eighth_turn_deg": {
+          "type": "parameter",
+          "units": "deg",
+          "default": 45.0,
+          "description": "An eighth turn, declared in degrees. tan of it is 1."
+        },
+        "theta_rad": {
+          "type": "parameter",
+          "units": "rad",
+          "default": 1.5707963267948966,
+          "description": "THE CONTROL: the same quarter turn declared in radians, at scale 1. It was never converted and must not start being converted now."
+        },
+        "sin_deg": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0,
+          "description": "Integral of sin(theta_deg) from t=0; equals sin(90 deg) at t=1."
+        },
+        "cos_deg": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0,
+          "description": "Integral of cos(half_turn_deg) from t=0; equals cos(180 deg) at t=1."
+        },
+        "tan_deg": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0,
+          "description": "Integral of tan(eighth_turn_deg) from t=0; equals tan(45 deg) at t=1."
+        },
+        "sin_rad": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0,
+          "description": "Integral of sin(theta_rad) from t=0; equals sin(pi/2 rad) at t=1."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {"op": "D", "args": ["sin_deg"], "wrt": "t"},
+          "rhs": {"op": "sin", "args": ["theta_deg"]}
+        },
+        {"lhs": {"op": "ic", "args": ["sin_deg"]}, "rhs": 0.0},
+        {
+          "lhs": {"op": "D", "args": ["cos_deg"], "wrt": "t"},
+          "rhs": {"op": "cos", "args": ["half_turn_deg"]}
+        },
+        {"lhs": {"op": "ic", "args": ["cos_deg"]}, "rhs": 0.0},
+        {
+          "lhs": {"op": "D", "args": ["tan_deg"], "wrt": "t"},
+          "rhs": {"op": "tan", "args": ["eighth_turn_deg"]}
+        },
+        {"lhs": {"op": "ic", "args": ["tan_deg"]}, "rhs": 0.0},
+        {
+          "lhs": {"op": "D", "args": ["sin_rad"], "wrt": "t"},
+          "rhs": {"op": "sin", "args": ["theta_rad"]}
+        },
+        {"lhs": {"op": "ic", "args": ["sin_rad"]}, "rhs": 0.0}
+      ],
+      "tolerance": {
+        "rel": 1e-06,
+        "abs": 1e-09
+      },
+      "tests": [
+        {
+          "id": "degrees_are_converted_to_radians",
+          "description": "Each state integrates a constant over [0, 1], so its value at t=1 is that constant. Before issue #409 was fixed, sin_deg was 0.8939966636005579 (sin of 90 RADIANS), cos_deg was -0.5984600690578581 and tan_deg was 1.6197751905438615.",
+          "time_span": {"start": 0.0, "end": 1.0},
+          "assertions": [
+            {"variable": "sin_deg", "time": 1.0, "expected": 1.0},
+            {"variable": "cos_deg", "time": 1.0, "expected": -1.0},
+            {"variable": "tan_deg", "time": 1.0, "expected": 1.0}
+          ]
+        },
+        {
+          "id": "radians_are_left_alone",
+          "description": "THE CONTROL. `rad` is at scale 1, so the conversion factor is 1 and nothing is rewritten. A binding that multiplies by pi/180 unconditionally reports 0.02741213359204429 here.",
+          "time_span": {"start": 0.0, "end": 1.0},
+          "assertions": [
+            {"variable": "sin_rad", "time": 1.0, "expected": 1.0}
+          ]
+        }
+      ]
+    }
+  },
+  "domain": {"temporal": {}}
+}

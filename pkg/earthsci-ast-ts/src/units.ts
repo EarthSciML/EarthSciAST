@@ -522,11 +522,21 @@ function computeDimensions(
       // `sin(kg)` is still a provable mismatch.
       for (let i = 0; i < argDims.length; i++) {
         const arg = get(i)
-        if (arg !== null && !isDimensionless(arg) && !isAngle(arg)) {
-          warn(
-            `${op}() requires a dimensionless or angle argument, got ${formatDims(arg.dims)}`,
-            ERROR_CODES.DIMENSIONAL_MISMATCH,
-          )
+        // Three outcomes, and the middle one is the point of issue #409. An
+        // ANGLE is admitted WHATEVER its scale, because `deg` -> `rad` is exact
+        // and has no second reading: the flatten pass converts it before
+        // anything evaluates it. A PURE NUMBER is admitted. Dimensionless at a
+        // scale OTHER than 1 (`percent`) is REFUSED, for the same reason
+        // `log(x [ppm])` is — nothing says which reading was meant.
+        if (arg !== null && !isAngle(arg)) {
+          if (!isDimensionless(arg)) {
+            warn(
+              `${op}() requires a dimensionless or angle argument, got ${formatDims(arg.dims)}`,
+              ERROR_CODES.DIMENSIONAL_MISMATCH,
+            )
+          } else if (!arg.exact.isOne()) {
+            warn(scaledDimensionlessMessage(op, arg.exact), ERROR_CODES.DIMENSIONAL_MISMATCH)
+          }
         }
       }
       return finish(dimensionless())
@@ -545,6 +555,9 @@ function computeDimensions(
             `${op}() requires dimensionless argument, got ${formatDims(arg.dims)}`,
             ERROR_CODES.DIMENSIONAL_MISMATCH,
           )
+        } else if (arg !== null && !isPureNumber(arg)) {
+          // "Dimensionless" means dimensionless AT SCALE 1 (issue #409).
+          warn(scaledDimensionlessMessage(op, arg.exact), ERROR_CODES.DIMENSIONAL_MISMATCH)
         }
       }
       return finish(angle())
@@ -572,6 +585,9 @@ function computeDimensions(
             `${op}() requires dimensionless argument, got ${formatDims(arg.dims)}`,
             ERROR_CODES.DIMENSIONAL_MISMATCH,
           )
+        } else if (arg !== null && !isPureNumber(arg)) {
+          // "Dimensionless" means dimensionless AT SCALE 1 (issue #409).
+          warn(scaledDimensionlessMessage(op, arg.exact), ERROR_CODES.DIMENSIONAL_MISMATCH)
         }
       }
       return finish(dimensionless())
@@ -1324,11 +1340,91 @@ export function isDimensionless(unit: ParsedUnit): boolean {
  */
 function isAngle(unit: ParsedUnit): boolean {
   const { rad, ...rest } = unit.dims
-  if (!rad) return false
+  // The exponent must be exactly 1. `sr` is `rad^2` and is NOT a plane angle:
+  // the argument is now CONVERTED to radians (issue #409), and no conversion
+  // turns a solid angle into a plane one — multiplying by `scale` where
+  // `scale^2` was meant would be silently wrong.
+  if (rad !== 1) return false
   for (const v of Object.values(rest)) {
     if (v != null && v !== 0) return false
   }
   return true
+}
+
+/**
+ * Is this a PURE NUMBER — dimensionless AND at exact scale 1?
+ *
+ * This is what esm-spec §4.8.3's "the argument MUST be dimensionless" means for
+ * a strict transcendental (issue #409): `ppm` and `percent` are dimensionless
+ * too, and `log(x [ppm])` has two defensible readings — the log of the ppm
+ * NUMBER, or the log of the mole fraction — that differ by `ln(1e-6) =
+ * 13.8155…`. Dimension alone cannot tell them apart, so the checker refuses
+ * rather than picking one.
+ */
+function isPureNumber(unit: ParsedUnit): boolean {
+  return isDimensionless(unit) && unit.exact.isOne()
+}
+
+/**
+ * The registry spellings of the dimensionless-but-SCALED units, most common
+ * first, used to NAME a scale in a diagnostic (`… (ppm); divide by 1 ppm …`).
+ *
+ * A fixed, ORDERED table rather than a reverse sweep of the registry: the
+ * registry is a record, so a sweep would pick `ppmv` or `ppm` depending on key
+ * order and the five bindings would print different messages for the same
+ * document. The same table, in the same order, is in every binding.
+ */
+const SCALED_DIMENSIONLESS_SPELLINGS: ReadonlyArray<readonly [string, number]> = [
+  ['percent', -2],
+  ['ppm', -6],
+  ['ppb', -9],
+  ['ppt', -12],
+]
+
+/** The canonical registry spelling of a dimensionless unit at `exact`, or null. */
+function scaledDimensionlessSpelling(exact: ExactScale): string | null {
+  for (const [name, k] of SCALED_DIMENSIONLESS_SPELLINGS) {
+    if (ExactScale.pow10(k).equals(exact)) return name
+  }
+  return null
+}
+
+/**
+ * The §4.8.3 refusal for a dimensionless-but-SCALED argument to an op that
+ * requires a pure number.
+ *
+ * It names the REPAIR, not only the refusal: the author states the reading by
+ * dividing by a quantity carrying the scale, which costs one node and records
+ * the decision in the document. Normalizing silently instead would change the
+ * numbers of every document that already passes a `percent` or a `ppm` into
+ * `exp`/`log`. The same sentence is in every binding.
+ */
+export function scaledDimensionlessMessage(op: string, exact: ExactScale): string {
+  const name = scaledDimensionlessSpelling(exact)
+  if (name !== null) {
+    return (
+      `Argument to '${op}' must be dimensionless at scale 1, but is dimensionless ` +
+      `at scale ${exact} (${name}); divide by 1 ${name}, or by the scale you mean, ` +
+      `to state which reading is intended`
+    )
+  }
+  return (
+    `Argument to '${op}' must be dimensionless at scale 1, but is dimensionless ` +
+    `at scale ${exact}; divide by a quantity carrying that scale to state which ` +
+    `reading is intended`
+  )
+}
+
+/**
+ * The factor that brings a quantity in `unit` to RADIANS, when `unit` is a plane
+ * angle at a scale other than 1 (esm-spec §4.8.3, issue #409).
+ *
+ * `null` for anything else — a pure number, a `rad`, a dimensional unit — so a
+ * document that declares no scaled angle is rewritten not at all.
+ */
+export function angleNormalizationFactor(unit: ParsedUnit): number | null {
+  if (!isAngle(unit) || unit.exact.isOne()) return null
+  return unit.scale
 }
 
 /**

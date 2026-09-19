@@ -1,0 +1,76 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "UnitsTranscendentalScaledArgumentRepair",
+    "description": "Positive control for esm-spec §4.8.3's scale-1 rule on a strict transcendental's argument (issue #409). `log(co2)` with `co2` in `ppm` is REFUSED -- dimensionless at 1e-6 leaves the reading unstated (tests/invalid/units_discriminator_transcendental_scaled_argument.esm pins that). The repair the diagnostic names is written here: dividing by a quantity whose DECLARED units carry the scale makes the argument dimensionless at scale 1 exactly, so the document states which reading it means and costs one node to do it. The `percent` line is the same repair for `exp`. `sin(latitude)` with `latitude` in `deg` is the CONTRAST: an angle is admitted at any scale, because `deg` -> `rad` is exact and has no second reading, and the flatten pass converts it (tests/simulation/angle_units_degrees.esm pins the number).",
+    "authors": [
+      "Chris Tessum with Claude"
+    ],
+    "created": "2026-09-17T00:00:00Z"
+  },
+  "models": {
+    "TranscendentalScaledArgumentRepair": {
+      "variables": {
+        "co2": {
+          "type": "parameter",
+          "units": "ppm",
+          "default": 429.96,
+          "description": "CO2 mixing ratio in parts per million."
+        },
+        "one_ppm": {
+          "type": "parameter",
+          "units": "ppm",
+          "default": 1.0,
+          "description": "The unit the reading is stated against. Its declared units carry the scale, so the quotient is dimensionless at scale 1; its numeric value is not checked (§4.8.3)."
+        },
+        "log_co2": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Natural log of the CO2 mixing ratio AS A PPM NUMBER -- the reading the document now states."
+        },
+        "rh": {
+          "type": "parameter",
+          "units": "percent",
+          "default": 30.0,
+          "description": "Relative humidity as a percentage."
+        },
+        "one_percent": {
+          "type": "parameter",
+          "units": "percent",
+          "default": 1.0,
+          "description": "The unit the reading is stated against."
+        },
+        "exp_rh": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Exponential of the relative humidity AS A PERCENTAGE NUMBER."
+        },
+        "latitude": {
+          "type": "parameter",
+          "units": "deg",
+          "default": 40.0,
+          "description": "A latitude in degrees. An ANGLE at a scale other than 1, which a circular function takes as authored."
+        },
+        "sin_lat": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Sine of the latitude. Accepted with the argument in `deg`: the conversion to radians is exact and is applied at evaluation."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "log_co2",
+          "rhs": {"op": "log", "args": [{"op": "/", "args": ["co2", "one_ppm"]}]}
+        },
+        {
+          "lhs": "exp_rh",
+          "rhs": {"op": "exp", "args": [{"op": "/", "args": ["rh", "one_percent"]}]}
+        },
+        {
+          "lhs": "sin_lat",
+          "rhs": {"op": "sin", "args": ["latitude"]}
+        }
+      ]
+    }
+  }
+}

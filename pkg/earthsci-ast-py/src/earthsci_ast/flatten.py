@@ -3117,7 +3117,74 @@ def flatten(esm_file: EsmFile, base_path: str = ".", load_ref=None) -> Flattened
     # resolved. See `_check_registry_coupling_rewrites`.
     _check_registry_coupling_rewrites(flat.template_registry, metadata.coupling_rewritten_names)
 
+    # Step 8: bring a scaled ANGLE argument of `sin`/`cos`/`tan` to radians
+    # (esm-spec §4.8.3, issue #409). See `_normalize_angle_arguments`.
+    _normalize_angle_arguments(flat)
+
     return flat
+
+
+def _normalize_angle_arguments(flat: FlattenedSystem) -> None:
+    """Fold the declared angle scale into every circular-trig argument, so the
+    evaluator receives RADIANS (esm-spec §4.8.3 "Angles are the ONE exception").
+
+    ``deg`` is a registry unit at scale pi/180, so ``sin(theta [deg])`` is a
+    CONFORMING document — and before this it handed the stored number straight
+    to ``sin``, returning ``sin(90)`` = 0.894 where 1 was meant, with no
+    diagnostic (issue #409). The conversion is exact and has exactly one
+    reading, which is why this half converts where the dimensionless-but-scaled
+    half refuses.
+
+    **Why here.** ``flatten`` is the single funnel every evaluator draws from —
+    the scalar interpreter, the NumPy interpreter and the array simulator all
+    consume a :class:`FlattenedSystem` — so one phase here converts for all of
+    them, and they cannot diverge. It is NOT on the validation path
+    (``validate_units`` never flattens), so the checker keeps seeing the
+    authored spelling: a rewrite visible to the checker would turn
+    ``sin(theta [deg])`` into ``sin(theta * 0.01745...)``, whose bare literal
+    makes the product UNDETERMINABLE (§4.8.4) and silently disables the very
+    check this change strengthens.
+
+    The same phase, at the same place in the pipeline, is in every binding.
+    """
+    from .units import angle_normalization_factor, flattened_unit_env, normalize_angle_arguments
+
+    env = flattened_unit_env(
+        {
+            **flat.state_variables,
+            **flat.parameters,
+            **flat.observed_variables,
+        }
+    )
+    # A document that declares no angle at a scale other than 1 cannot be
+    # rewritten, so decide that from the DECLARATIONS and walk nothing.
+    if not any(angle_normalization_factor(unit) is not None for unit in env.values()):
+        return
+
+    def rewrite(expr):
+        return normalize_angle_arguments(expr, env)
+
+    for equation in flat.equations:
+        equation.rhs = rewrite(equation.rhs)
+    flat.field_ics = [(name, rewrite(expr)) for name, expr in flat.field_ics]
+    # Events are rewritten too, although no evaluator in THIS binding runs one
+    # (`unsupported_construct`, esm-spec §9.6.6). The flattened form is a
+    # cross-binding artefact — the Julia binding exports it to
+    # ModelingToolkit, which does run events — so leaving a `sin(theta [deg])`
+    # in an event condition unconverted would put the defect back in the one
+    # place a binding still evaluates it, and would make the five flattened
+    # forms disagree.
+    for event in flat.continuous_events:
+        event.conditions = [rewrite(c) for c in event.conditions]
+        for affect in event.affects:
+            affect.rhs = rewrite(affect.rhs)
+        for affect in event.affect_neg or []:
+            affect.rhs = rewrite(affect.rhs)
+    for discrete in flat.discrete_events:
+        if discrete.trigger.type == "condition":
+            discrete.trigger.value = rewrite(discrete.trigger.value)
+        for affect in discrete.affects:
+            affect.rhs = rewrite(affect.rhs)
 
 
 # Keys of an expression node whose STRING value names something other than a
