@@ -81,7 +81,7 @@ from .lower_table_lookup import lower_table_lookups
 from .parse import load_path, load_string
 from .problem import esm_problem, solve
 from .simulation import BuildInspection, _eval_buildtime_field, observed_at_state
-from .simulation_common import ReturnCode
+from .simulation_common import ReturnCode, dotted_suffixes
 
 # esm-spec §6.6.4: the default tolerance when neither the assertion, its test,
 # nor the model declares one (same constant as the Julia run_tests reference).
@@ -518,28 +518,64 @@ def state_cells(
     return out
 
 
-def _param_scope_with_aliases(params: dict[str, float] | None) -> dict[str, float]:
-    """Build-time scalar-parameter scope for §6.6.5 cellwise references, with
-    bare aliases. :attr:`BuildInspection.params` is keyed by the FLATTENED
-    parameter name (``"M.k"``) — matching a resolved observed expression, which
-    flattening qualifies. A test author's analytic ``reference``, though, names
-    the parameter BARE (``"k"``). So we expose BOTH: the flattened key verbatim,
-    plus an unambiguous bare alias (the final dotted segment). On a bare-name
-    collision across subsystems the flattened key stays authoritative and the
-    ambiguous alias is dropped (the qualified reference still resolves).
-    Mirrors the Julia ``_param_scope_with_aliases``."""
+def _param_scope_with_aliases(params: dict[str, float] | None, owner: str = "") -> dict[str, float]:
+    """Build-time scalar-parameter scope for §6.6.5 cellwise references, as the
+    component that OWNS the test writes names.
+
+    :attr:`BuildInspection.params` is keyed by the FLATTENED parameter name
+    (``"M.k"``, ``"M.sub.g"``) — matching a resolved observed expression, which
+    flattening qualifies. A test author's analytic ``reference``, though, spells
+    a name the way the owning component's own EQUATIONS spell it: BARE (``"k"``)
+    for the component's own parameter, and by the MOUNT NAME (``"sub.g"``) for
+    one reached through a subsystem mount. So the scope binds, in decreasing
+    precedence:
+
+    1. the flattened key VERBATIM;
+    2. every key under ``owner.``, stripped of that prefix — the owning
+       component's own namespace, which is what its equations resolve against.
+       ``M.sub.g`` is ``sub.g`` here even in a document where five OTHER
+       components each mount a ``sub`` of their own. This is the same
+       re-attachment :func:`_scope_to_component` performs on an override key,
+       and it is what issue #408 was missing: ``wrf.g`` resolved in every
+       equation of a coupling and in ``parameter_overrides``, but not in a
+       ``reference``, where only ``<Model>.wrf.g`` worked — a spelling a mount
+       edge does NOT rewrite, so it pins a component to being mounted under its
+       own model name;
+    3. every GLOBALLY unambiguous dotted suffix (``"M.sub.g"`` → ``"sub.g"``,
+       ``"g"``), the alias set esm-spec §6.6.2 rule 3 gives an override key.
+       This is what lets a test name a parameter the owner does not own, and it
+       subsumes the bare-tail alias this function bound before.
+
+    A suffix carried by two or more flattened names is AMBIGUOUS and binds
+    nothing at step 3 — the flattened key stays authoritative and such a
+    reference must qualify further (step 2 still reaches the owner's own, which
+    is unambiguous by construction: flattened keys are unique, so their
+    owner-relative remainders are too). A name that is neither is UNBOUND, which
+    is what keeps a typo (``sub.gg``) an error rather than a silent zero.
+
+    The suffix enumeration is the override resolver's own
+    :func:`~earthsci_ast.simulation_common.dotted_suffixes`, shared rather than
+    re-derived so the two positions cannot drift apart again. Mirrors the Julia
+    ``_param_scope_with_aliases``."""
     if not params:
         return {}
     out: dict[str, float] = {str(k): float(v) for k, v in params.items()}
+    # (2) The owner's own namespace, as its equations spell it.
+    prefix = f"{owner}." if owner else None
+    if prefix:
+        for k, v in params.items():
+            s = str(k)
+            if s.startswith(prefix):
+                out.setdefault(s[len(prefix) :], float(v))
+    # (3) Globally unambiguous dotted suffixes.
     counts: dict[str, int] = {}
     for k in params:
-        bare = str(k).rsplit(".", 1)[-1]
-        counts[bare] = counts.get(bare, 0) + 1
+        for suffix in dotted_suffixes(str(k)):
+            counts[suffix] = counts.get(suffix, 0) + 1
     for k, v in params.items():
-        s = str(k)
-        bare = s.rsplit(".", 1)[-1]
-        if bare != s and counts[bare] == 1 and bare not in out:
-            out[bare] = float(v)
+        for suffix in dotted_suffixes(str(k)):
+            if counts[suffix] == 1 and suffix not in out:
+                out[suffix] = float(v)
     return out
 
 
@@ -1396,7 +1432,7 @@ def _evaluate_assertion(
                             dims = _variable_shape(eval_file, owner, local)
                         except RuntimeError:
                             dims = []
-                        scope = _param_scope_with_aliases(insp.params)
+                        scope = _param_scope_with_aliases(insp.params, owner)
                         # The ARRAY half of the §6.6.5 clash scope: the three
                         # bindings must reject the same documents, and Julia's
                         # cellwise evaluator reads build arrays by name, so an

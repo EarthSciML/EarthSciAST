@@ -37,7 +37,11 @@ pub(crate) enum OverrideKeyError {
 /// `A.sub.g` yields `sub.g` then `g`, and a bare `g` yields nothing. These are
 /// the spellings rule 3 admits for the name (esm-spec §6.6.2) — the trailing
 /// segment is merely the shortest of them.
-fn dotted_suffixes(name: &str) -> impl Iterator<Item = &str> {
+///
+/// Shared with [`crate::inline_tests`], whose §6.6.5 build-time scope aliases a
+/// flattened parameter under this same set: an override key and a `reference`
+/// that name one parameter must resolve it the same way (issue #408).
+pub(crate) fn dotted_suffixes(name: &str) -> impl Iterator<Item = &str> {
     let mut rest = name;
     std::iter::from_fn(move || {
         let (_, tail) = rest.split_once('.')?;

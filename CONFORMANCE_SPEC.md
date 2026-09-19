@@ -4511,13 +4511,21 @@ unaffected, as is a gather that rebinds it as its own loop symbol.
 §6.6.5 names them, and a binding assembles both before calling
 `bind_dimension_names`:
 
-1. the resolved SCALAR PARAMETERS — `BuildInspection.params`, flattened names
-   plus their unambiguous bare aliases (`param_scope_with_aliases`); and
+1. the resolved SCALAR PARAMETERS — `BuildInspection.params`, flattened names,
+   plus the OWNER-RELATIVE spelling of each (the flattened name with the
+   asserting component's path stripped), plus every globally unambiguous
+   DOTTED-SUFFIX alias (`param_scope_with_aliases`, which takes the owner as
+   its second argument). `M.sub.g` is in scope as `M.sub.g`, `sub.g` and `g` —
+   the alias set esm-spec §6.6.2 rule 3 already gives an override key, plus the
+   owner-relative one, which keeps `sub.g` unambiguous in a coupling where
+   every mounted component carries a `sub` of its own (issue #408); and
 2. the build-time ARRAY names — a materialized state-free array observed, an
    inline `const` array, a shaped parameter's inline column, a provider- or
    loader-injected input field — likewise with their unambiguous bare aliases
-   (`array_scope_names` in Rust, `_array_scope_names` in Julia and Python, which
-   apply the SAME alias rule so an ambiguous bare tail is in neither half).
+   (`array_scope_names` in Rust, `_array_scope_names` in Julia and Python; the
+   array half's own evaluators bind arrays under their flattened names, so the
+   bare tail is the only alias it has to account for, and an ambiguous tail is
+   in neither half).
 
 The array half is what keeps the three on one rule, and checking only the
 parameter half was a live divergence (issue #226). Julia hands its cellwise
