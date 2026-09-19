@@ -431,4 +431,15 @@ fn the_budget_setter_reports_the_previous_setting() {
         first,
         "the restore did not take"
     );
+
+    // What an untouched thread starts at is the DEFAULT only when nothing in
+    // the environment has said otherwise. `ESS_GATE_CACHE_PAIRS` is the knob
+    // this feature ships, so a developer or a CI job exercising it must not
+    // fail the suite that documents it.
+    if std::env::var_os("ESS_GATE_CACHE_PAIRS").is_none() {
+        assert_eq!(
+            first, DEFAULT_GATE_CACHE_PAIRS,
+            "with the environment silent, an untouched thread starts at the default"
+        );
+    }
 }

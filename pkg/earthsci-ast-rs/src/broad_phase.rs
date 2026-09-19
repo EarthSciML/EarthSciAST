@@ -38,6 +38,7 @@ use std::collections::HashMap;
 
 use ndarray::ArrayD;
 use rstar::{AABB, RTree, RTreeObject};
+use rustc_hash::FxHashMap;
 
 /// A feature envelope `(xmin, ymin, xmax, ymax)`.
 pub type Envelope = [f64; 4];
@@ -400,6 +401,11 @@ pub fn set_join_gate_enabled(on: bool) -> bool {
 /// (`ESS_GATE_CACHE_PAIRS`, default [`DEFAULT_GATE_CACHE_PAIRS`]), across both
 /// the spatial-overlap cache and the value-equality one.
 ///
+/// Counted in PAIR-EQUIVALENTS of [`GATE_PAIR_BYTES`], not in rows of the match
+/// set: an index also owns its run table and, once a `Side::Tgt` walk has
+/// touched it, its `tgt` adjacency, and a budget that ignored those would bound
+/// a number rather than the memory. See [`OverlapIndex::resident_pairs`].
+///
 /// A gate index is memoized so that a node resolved once per evaluation is not
 /// rebuilt per cell. Retaining every index a run ever built is a different
 /// thing, and it made peak memory track the sum of every match set rather than
@@ -430,9 +436,14 @@ pub fn gate_cache_pair_budget() -> usize {
     })
 }
 
-/// The default resident-pair budget: about 64 MB of
-/// [`OverlapIndex`] per cache, comfortably above every gate in the corpus and
-/// far below the multi-gigabyte match sets a relational port resolves.
+/// What ONE candidate pair costs in an [`OverlapIndex`]'s two columns, and so
+/// the unit the gate-cache budget is denominated in. Everything else an index
+/// owns is priced against it by [`OverlapIndex::resident_pairs`].
+pub const GATE_PAIR_BYTES: usize = 2 * size_of::<i64>();
+
+/// The default resident-pair budget: 64 MB of [`OverlapIndex`] per cache,
+/// comfortably above every gate in the corpus and far below the multi-gigabyte
+/// match sets a relational port resolves.
 pub const DEFAULT_GATE_CACHE_PAIRS: usize = 4_000_000;
 
 fn gate_cache_budget_env() -> usize {
@@ -556,9 +567,8 @@ pub struct OverlapIndex {
     by_tgt: OnceLock<Csr>,
 }
 
-/// Direct-addressed run boundaries for the `src` column: `starts[k]` is the
-/// number of pairs whose left position is below `lo + k`, so position `p`'s
-/// pairs are `starts[p - lo] .. starts[p - lo + 1]`.
+/// Run boundaries for the `src` column: which slice of the two columns holds
+/// the pairs of a given left position.
 ///
 /// Why this exists rather than a binary search over `src`: finding the run is
 /// the whole of [`OverlapIndex::contains`], which the "both gated symbols
@@ -566,17 +576,36 @@ pub struct OverlapIndex {
 /// a 3000×3000 output over a 30,000-pair gate — nine million membership tests —
 /// a `partition_point` over `src` is ~15 dependent L2 loads each and measured
 /// 38% slower end to end than the hash set this representation removed, where
-/// the table brings it back to two loads and the change is in the noise.
+/// a lookup in constant time brings it back to a couple of loads and the change
+/// is in the noise.
 ///
-/// Cost is 4 B per POSITION IN THE SPAN, not per pair, which for a join whose
-/// point is that positions carry many pairs is the cheap direction to pay in.
-/// A span too sparse to be worth a dense table (`lo` and `hi` far apart with
-/// few positions between) declines it and leaves `contains` on the binary
-/// search; correctness is identical either way.
+/// Both variants are that constant-time lookup; they differ only in which is
+/// cheaper to STORE, and the choice is made per index from the shape of its
+/// `src` column. Both are bounded at about what the pairs themselves cost —
+/// the dense one by its span factor, the hashed one by the distinct-position
+/// count — so the accelerator never dominates what it accelerates.
 #[derive(Debug, Clone)]
-struct SrcRuns {
-    lo: i64,
-    starts: Vec<u32>,
+enum SrcRuns {
+    /// Direct-addressed by position: `starts[k]` is the number of pairs whose
+    /// left position is below `lo + k`, so position `p`'s pairs are
+    /// `starts[p - lo] .. starts[p - lo + 1]`.
+    ///
+    /// 4 B per POSITION IN THE SPAN, not per pair, which for a join whose point
+    /// is that positions carry many pairs is the cheap direction to pay in.
+    Dense { lo: i64, starts: Vec<u32> },
+    /// Hashed by position, for a span too sparse to address directly — `lo`
+    /// and `hi` far apart with few positions between, which is the normal shape
+    /// of a SELECTIVE gate over a wide fact table (ten million pairs scattered
+    /// over fifty million positions declines the dense table).
+    ///
+    /// The alternative for that shape is the binary search this type exists to
+    /// avoid, and a selective gate over a wide table is precisely where the
+    /// membership test runs most often. So it is stored instead as one entry
+    /// per DISTINCT left position: ~17 B each, bounded by the PAIR count rather
+    /// than by the span, which is about what [`SrcRuns::Dense`] is already
+    /// allowed to spend and strictly less than the set this representation
+    /// removed — that one held an entry per PAIR.
+    Sparse(FxHashMap<i64, (u32, u32)>),
 }
 
 /// A compressed adjacency list: `keys` ascending and duplicate-free, and the
@@ -604,39 +633,92 @@ impl SrcRuns {
     /// costs less than the pairs do.
     const MAX_SPAN_FACTOR: usize = 4;
 
-    /// The table for an ascending `src` column, or `None` when the span is too
-    /// sparse (or too large to address with `u32`) to be worth densifying.
+    /// Run boundaries for an ascending `src` column, dense where the span
+    /// admits it and hashed where it does not.
+    ///
+    /// `None` only when there is nothing to index, or when the pair count
+    /// exceeds what a `u32` boundary can address — four billion pairs, which
+    /// is 64 GB of columns before this table is considered at all. That case
+    /// alone leaves [`OverlapIndex::src_run`] on its binary search.
     fn build(src: &[i64]) -> Option<SrcRuns> {
         let (&lo, &hi) = (src.first()?, src.last()?);
-        let span = hi.checked_sub(lo)?.checked_add(1)? as usize;
-        if span > Self::MAX_SPAN_FACTOR * src.len() + 1024 || src.len() > u32::MAX as usize {
+        if src.len() > u32::MAX as usize {
             return None;
         }
-        let mut starts = vec![0u32; span + 1];
-        for &p in src {
-            starts[(p - lo) as usize + 1] += 1;
+        let span = hi
+            .checked_sub(lo)
+            .and_then(|d| d.checked_add(1))
+            .and_then(|s| usize::try_from(s).ok());
+        match span {
+            Some(span) if span <= Self::MAX_SPAN_FACTOR * src.len() + 1024 => {
+                let mut starts = vec![0u32; span + 1];
+                for &p in src {
+                    starts[(p - lo) as usize + 1] += 1;
+                }
+                for k in 0..span {
+                    starts[k + 1] += starts[k];
+                }
+                Some(SrcRuns::Dense { lo, starts })
+            }
+            // One entry per distinct position, found by walking the runs the
+            // ascending column already lays out contiguously.
+            _ => {
+                let mut runs: FxHashMap<i64, (u32, u32)> = FxHashMap::default();
+                let mut i = 0usize;
+                while i < src.len() {
+                    let p = src[i];
+                    let mut j = i + 1;
+                    while j < src.len() && src[j] == p {
+                        j += 1;
+                    }
+                    runs.insert(p, (i as u32, j as u32));
+                    i = j;
+                }
+                runs.shrink_to_fit();
+                Some(SrcRuns::Sparse(runs))
+            }
         }
-        for k in 0..span {
-            starts[k + 1] += starts[k];
-        }
-        Some(SrcRuns { lo, starts })
     }
 
-    /// The half-open pair range of left position `pos`; empty outside the span.
+    /// The half-open pair range of left position `pos`; empty when it has none.
     #[inline]
     fn run(&self, pos: i64) -> (usize, usize) {
-        let Some(k) = pos.checked_sub(self.lo) else {
-            return (0, 0);
-        };
-        if k < 0 || k as usize + 1 >= self.starts.len() {
-            return (0, 0);
+        match self {
+            SrcRuns::Dense { lo, starts } => {
+                let Some(k) = pos.checked_sub(*lo) else {
+                    return (0, 0);
+                };
+                if k < 0 || k as usize + 1 >= starts.len() {
+                    return (0, 0);
+                }
+                let k = k as usize;
+                (starts[k] as usize, starts[k + 1] as usize)
+            }
+            SrcRuns::Sparse(runs) => runs
+                .get(&pos)
+                .map_or((0, 0), |&(a, b)| (a as usize, b as usize)),
         }
-        let k = k as usize;
-        (self.starts[k] as usize, self.starts[k + 1] as usize)
+    }
+
+    /// Bytes this table holds resident. The hashed variant's entry is its key
+    /// and value plus hashbrown's one control byte, counted over the ALLOCATED
+    /// capacity rather than the live entry count.
+    fn resident_bytes(&self) -> usize {
+        match self {
+            SrcRuns::Dense { starts, .. } => starts.capacity() * size_of::<u32>(),
+            SrcRuns::Sparse(runs) => runs.capacity() * (size_of::<(i64, (u32, u32))>() + 1),
+        }
     }
 }
 
 impl Csr {
+    /// Bytes this adjacency holds resident.
+    fn resident_bytes(&self) -> usize {
+        self.keys.capacity() * size_of::<i64>()
+            + self.offsets.capacity() * size_of::<usize>()
+            + self.partners.capacity() * size_of::<i64>()
+    }
+
     /// The ascending partners of `key`, empty when it has none.
     #[inline]
     fn partners_of(&self, key: i64) -> &[i64] {
@@ -700,7 +782,9 @@ impl OverlapIndex {
 
     /// The half-open index range of the pairs whose LEFT position is `pos` —
     /// a contiguous run, because the columns ascend by `(src, tgt)`. Read off
-    /// [`SrcRuns`] in O(1) when there is one, and otherwise binary-searched.
+    /// [`SrcRuns`] in O(1), which every index has one of but for the empty one
+    /// and the one with more pairs than a `u32` can address; those alone take
+    /// the binary search.
     #[inline]
     fn src_run(&self, pos: i64) -> (usize, usize) {
         if let Some(r) = &self.src_runs {
@@ -726,6 +810,30 @@ impl OverlapIndex {
     /// Number of candidate pairs.
     pub fn len(&self) -> usize {
         self.src.len()
+    }
+
+    /// Everything this index holds resident, in PAIR-EQUIVALENTS: bytes over
+    /// [`GATE_PAIR_BYTES`], what one pair costs in the two columns.
+    ///
+    /// [`Self::len`] is the wrong denominator for a memory budget, because the
+    /// columns are not all an index owns. A [`SrcRuns::Dense`] table is up to a
+    /// further 16 B/pair (its span may reach `4 * pairs + 1024`), and once any
+    /// `Side::Tgt` walk touches the index its lazily built adjacency adds
+    /// 8 B/pair plus 16 B per distinct right position. An index priced at
+    /// `len()` can therefore be ~2.5x the size the budget believes it to be,
+    /// which for a knob whose whole purpose is bounding memory is the one error
+    /// that matters.
+    ///
+    /// Read afresh on every cache probe rather than cached, precisely because
+    /// the `tgt` adjacency appears LATER than the insert that priced it.
+    pub fn resident_pairs(&self) -> usize {
+        self.resident_bytes().div_ceil(GATE_PAIR_BYTES)
+    }
+
+    fn resident_bytes(&self) -> usize {
+        (self.src.capacity() + self.tgt.capacity()) * size_of::<i64>()
+            + self.src_runs.as_ref().map_or(0, SrcRuns::resident_bytes)
+            + self.by_tgt.get().map_or(0, Csr::resident_bytes)
     }
 
     /// Is the candidate set empty?
@@ -1181,19 +1289,30 @@ mod tests {
         assert_eq!(ix.pairs().count(), 0);
     }
 
-    /// A span too sparse for a dense run table declines it and falls back to
-    /// the binary search — which must answer identically, since the table is a
-    /// lookup accelerator and nothing else.
+    /// A span too sparse for a dense run table is HASHED instead, and must
+    /// answer identically: the table is a lookup accelerator and nothing else.
+    ///
+    /// The representation matters because of WHERE this shape occurs. A
+    /// selective gate over a wide fact table — few pairs scattered over many
+    /// positions — is the one that declines densification, and it is also the
+    /// one whose membership test runs most often, since the "both gated symbols
+    /// bound" arm of `overlap_drive_plan` takes it once per output cell.
+    /// Leaving it on a binary search would put the 38% this representation was
+    /// measured to save straight back on exactly that document.
     #[test]
-    fn a_sparse_left_column_falls_back_and_answers_the_same() {
+    fn a_sparse_left_column_is_hashed_and_answers_the_same() {
         let sparse: Vec<(i64, i64)> = vec![(1, 2), (1, 5), (10_000_000, 3), (10_000_000, 5)];
         let ix = OverlapIndex::from_pairs(&sparse);
         assert!(
-            ix.src_runs.is_none(),
-            "a 10-million-wide span over 4 pairs should not be densified"
+            matches!(ix.src_runs, Some(SrcRuns::Sparse(_))),
+            "a 10-million-wide span over 4 pairs must not be densified, and must not \
+             be left without a constant-time run lookup either"
         );
         let dense = OverlapIndex::from_pairs(&[(1, 2), (1, 5), (3, 3), (3, 5)]);
-        assert!(dense.src_runs.is_some(), "a tight span should be densified");
+        assert!(
+            matches!(dense.src_runs, Some(SrcRuns::Dense { .. })),
+            "a tight span should be densified"
+        );
 
         for (ix, hit, miss) in [(&ix, 10_000_000i64, 4_999_999i64), (&dense, 3i64, 2i64)] {
             assert!(ix.contains(1, 2) && ix.contains(hit, 5));
@@ -1203,6 +1322,30 @@ mod tests {
             assert_eq!(ix.partners(Side::Src, hit), &[3, 5]);
             assert!(ix.partners(Side::Src, miss).is_empty());
             assert_eq!(ix.partners(Side::Tgt, 5), &[1, hit]);
+        }
+    }
+
+    /// What the hashed table costs is a function of the PAIRS, not of the span
+    /// it declined to address — which is the whole reason it can be afforded
+    /// where the dense one cannot. One entry per distinct left position, so it
+    /// is also strictly smaller than the per-PAIR set this representation
+    /// removed.
+    #[test]
+    fn a_hashed_run_table_costs_by_the_pairs_not_by_the_span() {
+        const N: i64 = 1000;
+        // 1000 pairs over a span of a billion: densifying would be 4 GB.
+        let pairs: Vec<(i64, i64)> = (0..N).map(|i| (i * 1_000_000, i)).collect();
+        let ix = OverlapIndex::from_owned_pairs(pairs);
+        assert!(matches!(ix.src_runs, Some(SrcRuns::Sparse(_))));
+        assert!(
+            ix.resident_pairs() <= 4 * N as usize,
+            "a sparse index must stay within a small constant of its PAIR count, \
+             not of its span; it costs {} pair-equivalents for {N} pairs",
+            ix.resident_pairs()
+        );
+        for i in 0..N {
+            assert!(ix.contains(i * 1_000_000, i));
+            assert!(!ix.contains(i * 1_000_000 + 1, i));
         }
     }
 }

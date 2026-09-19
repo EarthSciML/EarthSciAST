@@ -2673,6 +2673,10 @@ trait Retained {
     /// in. Entries differ by orders of magnitude (a 6-cell regrid geometry
     /// against a 50-million-pair star join), so a cap counted in ENTRIES would
     /// bound the wrong thing.
+    ///
+    /// PAIR-EQUIVALENTS, from [`crate::broad_phase::OverlapIndex::resident_pairs`]:
+    /// the run table and the lazily built `tgt` adjacency are memory the cache
+    /// holds, so they are memory the budget counts.
     fn retained_pairs(&self) -> usize;
 
     /// Is a live [`JoinGate`] still holding this index? Evicting it then frees
@@ -2683,7 +2687,7 @@ trait Retained {
 
 impl Retained for Option<Rc<crate::broad_phase::OverlapIndex>> {
     fn retained_pairs(&self) -> usize {
-        self.as_ref().map_or(0, |ix| ix.len())
+        self.as_ref().map_or(0, |ix| ix.resident_pairs())
     }
     fn in_use(&self) -> bool {
         self.as_ref().is_some_and(|ix| Rc::strong_count(ix) > 1)
@@ -2692,7 +2696,7 @@ impl Retained for Option<Rc<crate::broad_phase::OverlapIndex>> {
 
 impl Retained for Option<EqGateEntry> {
     fn retained_pairs(&self) -> usize {
-        self.as_ref().map_or(0, |(ix, _, _)| ix.len())
+        self.as_ref().map_or(0, |(ix, _, _)| ix.resident_pairs())
     }
     fn in_use(&self) -> bool {
         self.as_ref()
@@ -2798,8 +2802,26 @@ impl<K: std::hash::Hash + Eq + Clone, V: Clone + Retained> GateCache<K, V> {
     /// [`crate::broad_phase::set_gate_cache_pair_budget`] says it means. Within
     /// budget the loop condition is false on entry and the probe is unchanged.
     fn get_within_budget(&mut self, key: &K, budget: usize) -> Option<V> {
+        self.reprice();
         self.evict_to(budget, GATE_CACHE_MAX_ENTRIES);
         self.get(key)
+    }
+
+    /// Re-read what each entry costs.
+    ///
+    /// An index GROWS after it is inserted: its `tgt` adjacency is built on
+    /// the first `Side::Tgt` walk, which is 8 B/pair the price at insert could
+    /// not have known about. Repricing at the probe is what keeps that memory
+    /// inside the budget rather than permanently invisible to it, and it is
+    /// arithmetic over a handful of `Vec` lengths — the same scan
+    /// [`GateCache::evict_to`] was about to make anyway.
+    fn reprice(&mut self) {
+        let mut total = 0;
+        for e in self.entries.values_mut() {
+            e.pairs = e.value.retained_pairs();
+            total += e.pairs;
+        }
+        self.pairs = total;
     }
 
     /// Drop least-recently-used entries until the cache holds at most `budget`
@@ -5397,38 +5419,59 @@ mod unbound_name_fault_tests {
 mod gate_cache_budget_tests {
     use super::*;
 
-    /// A gate index of `n` pairs — `n` is all the budget looks at.
+    /// A gate index of `n` pairs.
     fn ix(n: i64) -> Option<Rc<crate::broad_phase::OverlapIndex>> {
         Some(Rc::new(crate::broad_phase::OverlapIndex::from_owned_pairs(
             (1..=n).map(|i| (i, i)).collect(),
         )))
     }
 
+    /// What one [`ix`] of `n` pairs costs the budget. Read from the index
+    /// rather than written down, because the price includes the run table and
+    /// anything else the index owns — see
+    /// [`crate::broad_phase::OverlapIndex::resident_pairs`] — and a literal
+    /// here would silently stop matching the moment that changed.
+    fn cost(n: i64) -> usize {
+        ix(n).retained_pairs()
+    }
+
     type Cache = GateCache<u32, Option<Rc<crate::broad_phase::OverlapIndex>>>;
+
+    /// The price is the whole index, not its pair count: the two columns plus
+    /// the dense run table a contiguous 1..=n span earns.
+    #[test]
+    fn an_entry_is_priced_by_what_it_holds_resident_not_by_its_pair_count() {
+        assert!(
+            cost(100) > 100,
+            "pricing an index at len() ignores the run table it also owns"
+        );
+    }
 
     #[test]
     fn eviction_drops_the_least_recently_used_index_first() {
+        let u = cost(100);
         let mut c: Cache = GateCache::new();
         c.insert(1, ix(100));
         c.insert(2, ix(100));
-        assert_eq!(c.pairs, 200);
+        assert_eq!(c.pairs, 2 * u);
         // Touch 1, making 2 the least recently used.
         assert!(c.get(&1).is_some());
-        c.evict_to_budget(150);
+        c.evict_to_budget(u);
         assert!(c.get(&2).is_none(), "the LRU entry survived");
         assert!(c.get(&1).is_some(), "the MRU entry was evicted");
-        assert_eq!(c.pairs, 100);
+        assert_eq!(c.pairs, u);
     }
 
     #[test]
     fn eviction_continues_until_the_cache_is_within_budget() {
+        let u = cost(100);
         let mut c: Cache = GateCache::new();
         for k in 0..5 {
             c.insert(k, ix(100));
         }
-        assert_eq!(c.pairs, 500);
-        c.evict_to_budget(250);
-        assert!(c.pairs <= 250);
+        assert_eq!(c.pairs, 5 * u);
+        c.evict_to_budget(2 * u);
+        assert!(c.pairs <= 2 * u);
         // The two most recent survive; the three oldest are gone.
         assert!(c.get(&3).is_some() && c.get(&4).is_some());
         assert!(c.get(&0).is_none() && c.get(&1).is_none() && c.get(&2).is_none());
@@ -5453,11 +5496,12 @@ mod gate_cache_budget_tests {
     /// eviction — but it is still remembered, which is the point of caching it.
     #[test]
     fn a_declined_gate_costs_no_budget() {
+        let u = cost(100);
         let mut c: Cache = GateCache::new();
         c.insert(1, ix(100));
         c.insert(2, None);
-        assert_eq!(c.pairs, 100);
-        c.evict_to_budget(100);
+        assert_eq!(c.pairs, u);
+        c.evict_to_budget(u);
         assert!(c.get(&1).is_some());
         assert!(matches!(c.get(&2), Some(None)));
     }
@@ -5467,14 +5511,18 @@ mod gate_cache_budget_tests {
     /// rebuilds. This is the time-loop RHS, where the only probes are hits.
     #[test]
     fn a_probe_trims_an_entry_the_budget_no_longer_covers() {
+        let u = cost(100);
         let mut c: Cache = GateCache::new();
         c.insert(1, ix(100));
-        assert_eq!(c.pairs, 100);
+        assert_eq!(c.pairs, u);
         assert!(
-            c.get_within_budget(&1, 100).is_some(),
+            c.get_within_budget(&1, u).is_some(),
             "an entry WITHIN budget must survive its own probe"
         );
-        assert!(c.get_within_budget(&1, 10).is_none(), "the probe kept it");
+        assert!(
+            c.get_within_budget(&1, u - 1).is_none(),
+            "the probe kept it"
+        );
         assert_eq!(c.pairs, 0);
     }
 
@@ -5495,6 +5543,34 @@ mod gate_cache_budget_tests {
         let mut c: Cache = GateCache::new();
         c.insert(1, ix(100));
         c.insert(1, ix(10));
-        assert_eq!(c.pairs, 10);
+        assert_eq!(c.pairs, cost(10));
+    }
+
+    /// An index GROWS when a `Side::Tgt` walk builds its adjacency. The price
+    /// at insert could not have known, so the probe re-reads it — otherwise
+    /// that memory is outside the budget for as long as the entry lives.
+    #[test]
+    fn a_probe_reprices_an_index_that_grew_after_it_was_cached() {
+        let held = ix(100);
+        let mut c: Cache = GateCache::new();
+        c.insert(1, held.clone());
+        let at_insert = c.pairs;
+
+        // Force the lazy `tgt` adjacency.
+        let ix = held.as_ref().expect("an index");
+        assert!(!ix.tgt_adjacency_built());
+        ix.partners(crate::broad_phase::Side::Tgt, 1);
+        assert!(ix.tgt_adjacency_built());
+
+        assert_eq!(
+            c.pairs, at_insert,
+            "nothing has probed the cache, so the price is still the old one"
+        );
+        c.get_within_budget(&1, usize::MAX);
+        assert!(
+            c.pairs > at_insert,
+            "the probe must re-read the price: {} did not grow",
+            c.pairs
+        );
     }
 }
