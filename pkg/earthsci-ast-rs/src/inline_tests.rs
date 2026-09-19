@@ -2410,17 +2410,19 @@ fn run_component_tests(
                     static_evaluation_times(&saveat, t.time_span.start, t.time_span.end);
                 match static_trajectory(prob, &static_times) {
                     Some(result) => result,
-                    // Nothing to integrate, and not even a graph to evaluate:
-                    // the document could not be flattened or compiled into a
-                    // state-free observed graph. `solve` must not be called
-                    // here — under `Compile::Always` it hands a right-hand
+                    // Nothing to integrate, and no compiled observed graph
+                    // to evaluate: the ARRAY runtime, which is what a SHAPED
+                    // state-free document takes under `Compile::Always`.
+                    // `solve` must not be called here — it hands a right-hand
                     // side over an empty state vector to the integrator and
                     // reports "Exceeded maximum number of nonlinear solver
                     // failures (51) at time = 0", the diagnostic issue #406
-                    // was filed about. Answer from what the BUILD materialized
-                    // instead — except where that would substitute the value
-                    // at `tspan.0` for a quantity that moves, which is refused
-                    // by name rather than answered.
+                    // was filed about, on a document `esm simulate` evaluates
+                    // without complaint. Answer from the fields the BUILD
+                    // materialized instead (`with_build_pipeline_if_needed`
+                    // asked for that build) — except where that would
+                    // substitute the value at `tspan.0` for a quantity that
+                    // moves, which is refused by name rather than answered.
                     None if crate::problem::has_nothing_to_integrate(prob) => {
                         match unevaluable_time_dependent_assertion(run_file, model_name, t) {
                             Some(message) => Err(message),
