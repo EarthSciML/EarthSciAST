@@ -5978,15 +5978,27 @@ and not the clock. `esm simulate` handled both all along, through
 `Compile::Auto`'s `Backend::Static` selection.
 
 Rust now answers such a document the way `esm simulate` does: from the fields a
-BUILD materializes. When the problem it built has nothing to integrate and no
-scalar observed graph to evaluate, the runner builds it once more with the
-build pipeline on and reads `observed_field` out of the result. The retry is
-conditioned on the BUILT problem rather than on the document's shape — asking
-for the pipeline on the strength of the shape alone broke two builds that were
-working — and a retry that fails changes nothing, because it is an attempt to
-answer more and never a new way to fail. `Compile::Always` is kept throughout,
-so a construct no evaluator supports is still refused at build time in the
-§9.6.6 vocabulary.
+BUILD materializes. When the problem it built has nothing to integrate, and
+`solve` has refused it, the runner builds it once more with the build pipeline
+on and reads `observed_field` out of the result. A retry that fails changes
+nothing — `solve`'s own diagnostic stands — because it is an attempt to answer
+more and never a new way to fail. `Compile::Always` is kept throughout, so a
+construct no evaluator supports is still refused at build time in the §9.6.6
+vocabulary.
+
+**The retry is a LAST RESORT, not a preference** (issue #432). It was first
+written to fire ahead of `solve`, on the strength of the built problem alone,
+and to hand its fields back in place of whatever the ordinary path would have
+produced. That is a silent substitution: the build materializes its fields once,
+at `tspan.0`, through a different evaluator from the one the array runtime runs,
+so three documents the runtime had been answering correctly began reporting a
+`min` reduction's identity element (`+inf`) for a search that found a level, a
+tendency wrong in its sixth digit, and — because every test paid for a second
+whole-document build — a 22-second suite that no longer finished in 900. A
+runner reaches for a second opinion when it has NO answer; it does not prefer
+one to an answer it already has. The condition is therefore `solve` having
+failed on a problem with nothing to integrate, which is exactly the dead end
+issue #406 described and nothing wider.
 
 The build materializes those fields ONCE, at `tspan.0`. That single value is
 the answer at every asserted time for an observed that is not a function of
@@ -6007,7 +6019,31 @@ need none of this, because both re-evaluate the observed body per cell at the
 sampled time; the remaining gap between them and Rust is that one refusal, and
 it names itself.
 
-#### 5.43.8 Gate
+#### 5.43.8 A SCALAR observed read from inside an aggregate
+
+The fields a build materializes are only an answer if they are right, and one
+class of them was not. Rust's build pipeline evaluates a document's observeds in
+dependency order, feeding each result back into the namespace the next one is
+evaluated against. A SCALAR observed was fed back as a rank-1, one-cell array,
+which the evaluator reads as a one-cell FIELD rather than as a scalar — so any
+`faq` body that read one collapsed its term to `NaN`. The visible outcome
+depended on the reducer and hid the cause in both directions: a `+` reduction
+answered `NaN`, and a `min` reduction answered `+inf`, because IEEE-754 `min`
+drops a NaN operand and the accumulator came back at the identity it started
+from. An unreduced identity is indistinguishable from a reduction over zero
+iterations, so a search over 44 levels reported the same number an empty range
+would (issue #432, symptom 1).
+
+This was never a divergence — Julia and Python re-evaluate an observed's body
+per cell and never round-trip a scalar through an array namespace — and it
+predates the static-evaluation work: `esm simulate` reported it too, on the same
+documents, before PR #412 gave the inline-test runner the same seam. Rust now
+keeps a scalar observed at rank zero in the evaluation namespace and publishes it
+as the one-element vector `observed_field` has always returned. Pinned by
+`tests/valid/faq/min_reduction_static_shaped_document.esm`, whose `min` search
+must answer the level it found and whose `+` companion must answer a count.
+
+#### 5.43.9 Gate
 
 `tests/conformance/static_evaluation_assertions/` holds the shared fixtures and
 the Julia-minted goldens. Per-binding runners gate every assertion actual
