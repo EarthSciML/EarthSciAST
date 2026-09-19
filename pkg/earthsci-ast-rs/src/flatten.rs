@@ -787,7 +787,7 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
     let template_registry = merged_template_registry(file);
     check_registry_coupling_rewrites(&template_registry, &coupling_rewritten_names)?;
 
-    Ok(FlattenedSystem {
+    let mut flat = FlattenedSystem {
         independent_variables,
         state_variables,
         parameters,
@@ -821,7 +821,91 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
             merged_variable_renames,
             coupling_rewritten_names,
         },
-    })
+    };
+
+    // Phase 5g: bring a scaled ANGLE argument of `sin`/`cos`/`tan` to radians
+    // (esm-spec §4.8.3, issue #409). See [`normalize_angle_arguments`].
+    normalize_angle_arguments(&mut flat);
+
+    Ok(flat)
+}
+
+/// Fold the declared angle scale into every circular-trig argument, so the
+/// evaluator receives RADIANS (esm-spec §4.8.3 "Angles are the ONE exception").
+///
+/// `deg` is a registry unit at scale π/180, so `sin(theta [deg])` is a
+/// CONFORMING document — and before this it handed the stored number straight to
+/// `sin`, returning `sin(90) = 0.894` where 1 was meant, with no diagnostic
+/// (issue #409). The conversion is exact and has exactly one reading, which is
+/// why this half converts where the dimensionless-but-scaled half refuses.
+///
+/// **Why here.** `flatten` is the single funnel every evaluator in this crate
+/// draws from — the scalar interpreter, the array oracle, the vectorized
+/// overlay, the tape and the XLA emitter all consume a [`FlattenedSystem`] — so
+/// one phase here converts for all of them, and they cannot diverge. It is NOT
+/// on the validation path (`validate` never flattens), so the checker keeps
+/// seeing the authored spelling: a rewrite visible to the checker would turn
+/// `sin(theta [deg])` into `sin(theta * 0.01745…)`, whose bare literal makes the
+/// product UNDETERMINABLE (§4.8.4) and silently disables the very check this
+/// change strengthens.
+fn normalize_angle_arguments(flat: &mut FlattenedSystem) {
+    let mut vars: IndexMap<String, ModelVariable> = IndexMap::new();
+    for m in [
+        &flat.state_variables,
+        &flat.parameters,
+        &flat.observed_variables,
+    ] {
+        for (k, v) in m {
+            vars.entry(k.clone()).or_insert_with(|| v.clone());
+        }
+    }
+    // A document that declares no angle at a scale other than 1 cannot be
+    // rewritten, so decide that from the DECLARATIONS and walk nothing.
+    let (env, _) = crate::units::build_unit_env(&vars);
+    if !env
+        .values()
+        .any(|u| crate::units::angle_normalization_factor(u).is_some())
+    {
+        return;
+    }
+
+    let rewrite = |e: &mut Expr| {
+        if let Some(next) = crate::units::normalize_angle_arguments(e, &env) {
+            *e = next;
+        }
+    };
+    for eq in &mut flat.equations {
+        rewrite(&mut eq.rhs);
+    }
+    for (_, e) in &mut flat.field_ics {
+        rewrite(e);
+    }
+    // Events are rewritten too, although no evaluator in THIS crate runs one
+    // (`unsupported_construct`, esm-spec §9.6.6). The flattened form is a
+    // cross-binding artefact — the Julia binding exports it to
+    // ModelingToolkit, which does run events — so leaving a `sin(theta [deg])`
+    // in an event condition unconverted would put the defect back in the one
+    // place a binding still evaluates it, and would make the five flattened
+    // forms disagree.
+    for ev in &mut flat.continuous_events {
+        for c in &mut ev.conditions {
+            rewrite(c);
+        }
+        for a in &mut ev.affects {
+            rewrite(&mut a.rhs);
+        }
+        for a in ev.affect_neg.iter_mut().flatten() {
+            rewrite(&mut a.rhs);
+        }
+    }
+    for ev in &mut flat.discrete_events {
+        if let DiscreteEventTrigger::Condition { expression } = &mut ev.trigger {
+            rewrite(expression);
+        }
+        for a in ev.affects.iter_mut().flatten() {
+            rewrite(&mut a.rhs);
+        }
+    }
 }
 
 /// Keys of an expression node whose STRING value names something other than a
@@ -2878,6 +2962,11 @@ fn reject_spatial_operators(expr: &Expr) -> Result<(), FlattenError> {
 
 /// Extract the dependent variable name from an `LHS = D(X, t)` pattern.
 /// Returns `None` for any other LHS shape.
+///
+/// "Time derivative" is decided by [`crate::op_registry::is_rewrite_target_derivative`]
+/// so that esm-spec §4.2's default applies: an ABSENT `wrt` MEANS `t`. Testing
+/// `wrt != Some("t")` instead made a `D(X)` LHS invisible to the conflicting-
+/// derivative check and to the pointwise lift (EarthSciAST#407).
 fn extract_ddt_dependent(lhs: &Expr) -> Option<String> {
     let Expr::Operator(node) = lhs else {
         return None;
@@ -2885,7 +2974,7 @@ fn extract_ddt_dependent(lhs: &Expr) -> Option<String> {
     if node.op != "D" {
         return None;
     }
-    if node.wrt.as_deref() != Some("t") {
+    if crate::op_registry::is_rewrite_target_derivative(node) {
         return None;
     }
     if node.args.len() != 1 {

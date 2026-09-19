@@ -563,6 +563,101 @@ def test_subsystem_parameter_override_in_every_spelling():
         assert r.passed, f"test {r.test_id}: {r.message}"
 
 
+def test_subsystem_parameter_reference_resolves_by_the_mount_name():
+    """esm-spec §6.6.5 build-time scope, issue #408: an assertion ``reference``
+    must read a mounted subsystem's parameter under the spelling the model's own
+    EQUATIONS use — the mount-relative ``sub.g`` — not only the model-qualified
+    ``P.sub.g``.
+
+    Two scopes in one document disagreeing is what the issue reported: the
+    reference scope aliased the flattened ``P.sub.g`` to its bare tail ``g`` and
+    to nothing in between, so ``sub.g`` raised ``Unresolved symbol`` in the one
+    position where every equation of the same document resolves it. The
+    model-qualified form is not rewritten at a mount edge, so requiring it pins
+    a component to being mounted under its own model name — the opposite of what
+    the mount-relative spelling exists for.
+    """
+    fixture = FIXTURES_ROOT / "valid" / "inline_test_reference_mount_name.esm"
+    assert fixture.is_file()
+    results = run_inline_tests(str(fixture), model_name="P", method="LSODA", rtol=1e-12, atol=1e-14)
+    assert len(results) == 4
+    for r in results:
+        assert r.passed, f"test {r.test_id}[{r.assertion_idx}]: {r.message}"
+    # The mount-relative and model-qualified spellings name ONE constant, so the
+    # L2 assertions they drive must agree to the bit.
+    assert results[0].actual == results[2].actual
+    # The fourth assertion is SCOPED (``variable: "R.v"``), so the owner of the
+    # assertion — and of its reference scope — is ``R``, not the component whose
+    # ``tests`` block holds it. The same ``sub.g`` spelling therefore names R's
+    # 7, giving |1 - 7| = 6; resolving it in P's namespace would give |1 - 2|
+    # = 1. Every other per-component lookup a scoped assertion makes (shape,
+    # state, observed) already reads the owner, and this pins the reference to
+    # the same component. Before issue #408 the spelling was unbound here
+    # outright, so this is a NEW behaviour rather than a preserved one.
+    assert results[3].actual == 6.0
+
+
+def test_reference_typo_near_a_mounted_parameter_is_still_unbound():
+    """The negative control for the test above: widening the reference scope to
+    the unambiguous dotted SUFFIXES of a flattened name must not weaken it into
+    accepting anything that merely looks qualified.
+
+    ``sub.gg`` is a suffix of no flattened name, so it stays unbound and the
+    assertion ERRORS rather than quietly reducing against a zero field. Same for
+    a bogus qualifier (``nope.g``) and a bare misspelling (``gg``).
+    """
+    raw = json.loads((FIXTURES_ROOT / "valid" / "inline_test_reference_mount_name.esm").read_text())
+    for typo in ("sub.gg", "nope.g", "gg"):
+        doc = json.loads(json.dumps(raw))
+        test = doc["models"]["P"]["tests"][0]
+        test["assertions"] = test["assertions"][:1]
+        test["assertions"][0]["reference"] = typo
+        doc["models"]["P"]["tests"] = [test]
+        results = run_inline_tests(
+            load_string(json.dumps(doc)), model_name="P", method="LSODA", rtol=1e-12, atol=1e-14
+        )
+        assert len(results) == 1
+        assert not results[0].passed, f"{typo!r} must not resolve"
+        assert typo in (results[0].message or ""), results[0].message
+
+
+def test_param_scope_aliases_every_unambiguous_dotted_suffix():
+    """The scope rule itself: a flattened name is readable under the OWNING
+    component's relative spelling of it, and under every dotted suffix that
+    exactly one flattened name carries (esm-spec §6.6.2 rule 3, reused by
+    §6.6.5). An ambiguous suffix binds nothing and the flattened spelling stays
+    authoritative."""
+    from earthsci_ast.inline_tests import _param_scope_with_aliases
+
+    scope = _param_scope_with_aliases({"P.sub.g": 2.0, "P.k": 1.0}, "P")
+    assert scope == {"P.sub.g": 2.0, "sub.g": 2.0, "g": 2.0, "P.k": 1.0, "k": 1.0}
+    # Two mounts of the same subsystem, and the test belongs to NEITHER:
+    # `sub.g` and `g` are carried by both, so neither is bound and a reference
+    # that means one of them must qualify.
+    ambiguous = {"A.sub.g": 1.0, "B.sub.g": 2.0}
+    assert _param_scope_with_aliases(ambiguous, "C") == ambiguous
+    # …but the OWNER's own `sub.g` is never ambiguous, however many siblings
+    # mount a `sub` of their own. This is the coupling-document shape of issue
+    # #408, which the globally-unambiguous suffix rule alone does not reach.
+    assert _param_scope_with_aliases(ambiguous, "A")["sub.g"] == 1.0
+    assert _param_scope_with_aliases(ambiguous, "B")["sub.g"] == 2.0
+    # A real flattened name is never shadowed by an alias of another one.
+    assert _param_scope_with_aliases({"A.sub.g": 1.0, "sub.g": 7.0}, "A")["sub.g"] == 7.0
+    # A name that is neither the owner's own nor a globally unambiguous suffix
+    # is bound by nothing, which is what keeps a typo an error downstream.
+    assert "sub.gg" not in _param_scope_with_aliases({"P.sub.g": 2.0}, "P")
+    # The owner-relative rule reaches a BARE tail too, and that widens the
+    # §6.6.5 clash scope: `x` is the tail of two flattened names, so the old
+    # globally-unambiguous-tail rule bound it for NOBODY, whereas the owner's
+    # own `x` is unambiguous and is now in scope. A reference that mentions a
+    # dimension named `x` free therefore now collides with it
+    # (``bind_dimension_names``) where before it was silently wrapped.
+    tails = {"P.x": 1.0, "R.x": 2.0}
+    assert _param_scope_with_aliases(tails, "P")["x"] == 1.0
+    assert _param_scope_with_aliases(tails, "R")["x"] == 2.0
+    assert "x" not in _param_scope_with_aliases(tails, "Q")
+
+
 def _array_observed_doc() -> dict:
     """Both kinds of array OBSERVED on one document: ``g`` is STATE-FREE (a
     pure index expression the build materializes once), ``h = u + 1`` is

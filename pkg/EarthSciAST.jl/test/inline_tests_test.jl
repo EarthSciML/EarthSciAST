@@ -490,6 +490,107 @@ end
 end
 
 # ---------------------------------------------------------------------------
+# Issue #408 — a §6.6.5 assertion `reference` must read a MOUNTED SUBSYSTEM's
+# parameter under the mount-relative spelling its own EQUATIONS use.
+#
+# The defect: inside one model, `sub.g` resolved in every equation but not in a
+# test assertion's `reference`, where it raised an unbound-variable error. Only
+# the model-qualified `P.sub.g` worked there, because the reference scope
+# aliased the flattened `P.sub.g` to its bare tail `g` and to nothing in
+# between. Two scopes in one document disagreed about what `sub.g` means, with
+# the assertion's the narrower and nothing saying so.
+#
+# The mount-relative spelling is the one that must work: it is what a component
+# writes, and the only spelling a mount edge rewrites. The model-qualified form
+# is NOT rewritten, so a component whose test references `P.sub.g` stops
+# resolving the moment it is mounted under any key but `P`.
+# ---------------------------------------------------------------------------
+
+const _PIT_MOUNT_FIXTURE = joinpath(@__DIR__, "..", "..", "..", "tests", "valid",
+                                    "inline_test_reference_mount_name.esm")
+
+@testset "shared fixture — tests/valid/inline_test_reference_mount_name.esm" begin
+    @test isfile(_PIT_MOUNT_FIXTURE)
+    results = run_inline_tests(_PIT_MOUNT_FIXTURE; model_name="P",
+                            alg=OrdinaryDiffEqTsit5.Tsit5(),
+                            reltol=1e-12, abstol=1e-14)
+    @test length(results) == 4
+    for r in results
+        @test r.passed
+        r.passed || @info "assertion failed" r.test_id r.assertion_idx r.message
+    end
+    # Assertion 1 spells the constant `sub.g`, assertion 3 spells the same
+    # constant `P.sub.g`. One parameter, one number.
+    @test results[1].actual == results[3].actual
+    @test results[1].actual == 0.5   # |1 - 2| / 2 over three uniform cells
+    # Assertion 4 is SCOPED (`variable: "R.v"`), so the OWNER of the assertion —
+    # and of its reference scope — is `R`, not the component whose `tests` block
+    # holds it. The same `sub.g` spelling therefore names R's 7, giving
+    # |1 - 7| = 6; resolving it in P's namespace would give |1 - 2| = 1. Every
+    # other per-component lookup a scoped assertion makes (shape, state,
+    # observed) already reads the owner, and this pins the reference to the same
+    # component. Before issue #408 the spelling was unbound here outright, so
+    # this is a NEW behaviour rather than a preserved one.
+    @test results[4].actual == 6.0
+end
+
+@testset "a typo near a mounted parameter stays unbound (#408)" begin
+    # The negative control: widening the reference scope to the unambiguous
+    # dotted SUFFIXES of a flattened name must not weaken it into binding
+    # anything that merely looks qualified. A name that is a suffix of no
+    # flattened name stays UNBOUND, so a typo errors rather than quietly
+    # reducing against a zero field.
+    raw = JSON3.read(read(_PIT_MOUNT_FIXTURE, String), Dict{String,Any})
+    for typo in ("sub.gg", "nope.g", "gg")
+        doc = JSON3.read(JSON3.write(raw), Dict{String,Any})
+        test1 = doc["models"]["P"]["tests"][1]
+        test1["assertions"] = [test1["assertions"][1]]
+        test1["assertions"][1]["reference"] = typo
+        doc["models"]["P"]["tests"] = [test1]
+        results = run_inline_tests(_pit_load(doc); model_name="P",
+                                alg=OrdinaryDiffEqTsit5.Tsit5(),
+                                reltol=1e-12, abstol=1e-14)
+        @test length(results) == 1
+        @test !results[1].passed
+        @test occursin(typo, something(results[1].message, ""))
+    end
+end
+
+@testset "param scope aliases every unambiguous dotted suffix (#408)" begin
+    # The scope rule itself: the OWNING component's relative spelling, plus
+    # every globally unambiguous dotted suffix (esm-spec §6.6.2 rule 3, reused
+    # by §6.6.5).
+    @test _PIT_ESS._param_scope_with_aliases(Dict("P.sub.g" => 2.0, "P.k" => 1.0), "P") ==
+          Dict("P.sub.g" => 2.0, "sub.g" => 2.0, "g" => 2.0, "P.k" => 1.0, "k" => 1.0)
+    # Two mounts of one subsystem, and the test belongs to NEITHER: `sub.g` and
+    # `g` are carried by BOTH, so neither binds and a reference meaning one of
+    # them must qualify.
+    ambiguous = Dict("A.sub.g" => 1.0, "B.sub.g" => 2.0)
+    @test _PIT_ESS._param_scope_with_aliases(ambiguous, "C") == ambiguous
+    # …but the OWNER's own `sub.g` is never ambiguous, however many siblings
+    # mount a `sub` of their own. This is the coupling-document shape of issue
+    # #408, which the globally-unambiguous suffix rule alone does not reach.
+    @test _PIT_ESS._param_scope_with_aliases(ambiguous, "A")["sub.g"] == 1.0
+    @test _PIT_ESS._param_scope_with_aliases(ambiguous, "B")["sub.g"] == 2.0
+    # A real flattened name is never shadowed by another name's alias.
+    @test _PIT_ESS._param_scope_with_aliases(Dict("A.sub.g" => 1.0, "sub.g" => 7.0),
+                                             "A")["sub.g"] == 7.0
+    # A name that is neither the owner's own nor a globally unambiguous suffix
+    # is bound by nothing, which is what keeps a typo an error downstream.
+    @test !haskey(_PIT_ESS._param_scope_with_aliases(Dict("P.sub.g" => 2.0), "P"), "sub.gg")
+    # The owner-relative rule reaches a BARE tail too, and that widens the
+    # §6.6.5 clash scope: `x` is the tail of two flattened names, so the old
+    # globally-unambiguous-tail rule bound it for NOBODY, whereas the owner's
+    # own `x` is unambiguous and is now in scope. A reference that mentions a
+    # dimension named `x` free therefore now collides with it
+    # (`bind_dimension_names`) where before it was silently wrapped.
+    tails = Dict("P.x" => 1.0, "R.x" => 2.0)
+    @test _PIT_ESS._param_scope_with_aliases(tails, "P")["x"] == 1.0
+    @test _PIT_ESS._param_scope_with_aliases(tails, "R")["x"] == 2.0
+    @test !haskey(_PIT_ESS._param_scope_with_aliases(tails, "Q"), "x")
+end
+
+# ---------------------------------------------------------------------------
 # Issue #194 — reaction-system coverage and the per-document options hook
 # ---------------------------------------------------------------------------
 

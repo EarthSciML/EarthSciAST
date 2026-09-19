@@ -65,7 +65,7 @@ mod driver;
 mod errors;
 mod interpret;
 mod lhs;
-mod override_keys;
+pub(crate) mod override_keys;
 mod resolve;
 
 pub use api::*;

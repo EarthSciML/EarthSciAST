@@ -1484,7 +1484,7 @@ func (s *structuralScan) validateContinuousEvent(event *ContinuousEvent, allVars
 // validateEquationUnknownBalance emits `equation_count_mismatch` when a model's
 // equation count does not match its unknown count (esm-spec §4.9.4).
 func (s *structuralScan) validateEquationUnknownBalance(modelName string, model *Model, basePath string) {
-	bal, balanced := computeEquationBalance(model, s.indep)
+	bal, balanced := computeEquationBalance(model)
 	if balanced {
 		return
 	}
@@ -1558,7 +1558,7 @@ type EquationBalance struct {
 //
 // A coupled model is skipped by the CALLER (validateModel): its unknowns may be
 // driven by equations another system contributes.
-func computeEquationBalance(model *Model, indep string) (EquationBalance, bool) {
+func computeEquationBalance(model *Model) (EquationBalance, bool) {
 	var bal EquationBalance
 	if len(model.Subsystems) > 0 {
 		return bal, true
@@ -1588,7 +1588,7 @@ func computeEquationBalance(model *Model, indep string) (EquationBalance, bool) 
 		if node, ok := asExprNode(eq.LHS); !ok || node.Op != OpIC {
 			bal.Equations++
 		}
-		for _, target := range equationCreditTargets(eq, indep) {
+		for _, target := range equationCreditTargets(eq) {
 			// A SCOPED target (`D(Chemistry.O3, t)`) drives a variable owned by
 			// ANOTHER system and says nothing about this model's balance.
 			if strings.Contains(target, ".") {
@@ -1618,8 +1618,8 @@ func computeEquationBalance(model *Model, indep string) (EquationBalance, bool) 
 // equationCreditTargets returns the local variable names an equation's LHS
 // credits, in any of the three §4.9.4 LHS forms. An EXPRESSION LHS credits none,
 // which is correct: it constrains its unknowns implicitly.
-func equationCreditTargets(eq Equation, indep string) []string {
-	if derivatives := countDerivatives(eq.LHS, indep); len(derivatives) > 0 {
+func equationCreditTargets(eq Equation) []string {
+	if derivatives := countDerivatives(eq.LHS); len(derivatives) > 0 {
 		out := make([]string, 0, len(derivatives))
 		for name := range derivatives {
 			out = append(out, name)
@@ -1869,11 +1869,13 @@ func (s *structuralScan) addArrayDefaultWithoutShape(modelPath, owner, name, var
 // aggregate's `expr`, not just a `D` at the root of `args`. Mirrors TS
 // countDerivatives (validate/expr-utils.ts).
 //
-// Only derivatives with respect to the document's independent variable count; a
-// SPATIAL `D` (wrt a coordinate) is a rewrite target, not an ODE. A `D` with no
-// explicit `wrt` is treated as differential in the independent variable, the
-// same convention isDifferentialEquation uses.
-func countDerivatives(expr Expression, indep string) map[string]int {
+// Only STRUCTURAL time derivatives count; a SPATIAL `D` (a `wrt` naming a
+// coordinate) is a rewrite target, not an ODE. The axis is the literal `t`
+// (esm-spec §4.2), read through the shared derivativeIsTemporal so this check,
+// the classifier and the DAE contract cannot answer it differently — this site
+// used to resolve it against `domain.independent_variable` instead
+// (EarthSciAST#407).
+func countDerivatives(expr Expression) map[string]int {
 	derivatives := map[string]int{}
 
 	var walk func(Expression)
@@ -1882,8 +1884,7 @@ func countDerivatives(expr Expression, indep string) map[string]int {
 		if !ok {
 			return
 		}
-		if node.Op == OpDerivative && len(node.Args) > 0 &&
-			(node.Wrt == nil || *node.Wrt == indep) {
+		if len(node.Args) > 0 && derivativeIsTemporal(node) {
 			if target := extractVariableFromLHS(node.Args[0]); target != "" {
 				derivatives[target]++
 			}

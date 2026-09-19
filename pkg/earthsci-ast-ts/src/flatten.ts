@@ -67,6 +67,12 @@ import type { Distribution, ParameterUpdateSpec } from './types.js'
 import { numericValue } from './numeric-literal.js'
 import { expandCouplingImports, type CouplingImportOptions } from './coupling-imports.js'
 import { mapChildren } from './expression.js'
+import {
+  angleNormalizationFactor,
+  checkDimensions,
+  tryParseUnit,
+  type ParsedUnit,
+} from './units.js'
 import { substitute } from './substitute.js'
 import {
   algebraicUnknowns,
@@ -2990,5 +2996,105 @@ export function flatten(file: EsmFile, options: FlattenOptions = {}): FlattenedS
   // resolved. See `checkRegistryCouplingRewrites`.
   checkRegistryCouplingRewrites(flat.templateRegistry, metadata.couplingRewrittenNames)
 
+  // 8. Bring a scaled ANGLE argument of `sin`/`cos`/`tan` to radians
+  //    (esm-spec §4.8.3, issue #409). See `normalizeFlattenedAngleArguments`.
+  normalizeFlattenedAngleArguments(flat)
+
   return flat
+}
+
+/**
+ * Fold the declared angle scale into every circular-trig argument, so an
+ * evaluator receives RADIANS (esm-spec §4.8.3 "Angles are the ONE exception").
+ *
+ * `deg` is a registry unit at scale π/180, so `sin(theta [deg])` is a
+ * CONFORMING document — and before this every binding handed the stored number
+ * straight to `sin`, returning `sin(90)` = 0.894 where 1 was meant, with no
+ * diagnostic (issue #409). The conversion is exact and has exactly one reading,
+ * which is why this half converts where the dimensionless-but-scaled half
+ * refuses.
+ *
+ * **Why here.** `flatten` is the single funnel every evaluator draws from, so
+ * one phase here converts for all of them and they cannot diverge. It is NOT on
+ * the validation path (`validate` never flattens), so the checker keeps seeing
+ * the authored spelling: a rewrite visible to the checker would turn
+ * `sin(theta [deg])` into `sin(theta * 0.01745…)`, whose bare literal makes the
+ * product UNDETERMINABLE (§4.8.4) and silently disables the very check this
+ * change strengthens.
+ *
+ * The TypeScript binding runs no evaluator, but the flattened form is a
+ * CROSS-BINDING artefact pinned by `tests/conformance/flatten`, so it performs
+ * the same rewrite at the same place in the pipeline as the bindings that do.
+ */
+function normalizeFlattenedAngleArguments(flat: FlattenedSystem): void {
+  const env = new Map<string, ParsedUnit>()
+  for (const group of [flat.stateVariables, flat.parameters, flat.observedVariables]) {
+    for (const [name, v] of Object.entries(group)) {
+      if (env.has(name) || v.units === undefined || v.units === '') continue
+      const parsed = tryParseUnit(v.units)
+      if (parsed !== null) env.set(name, parsed)
+    }
+  }
+  // A document that declares no angle at a scale other than 1 cannot be
+  // rewritten, so decide that from the DECLARATIONS and walk nothing.
+  let scaled = false
+  for (const unit of env.values()) {
+    if (angleNormalizationFactor(unit) !== null) {
+      scaled = true
+      break
+    }
+  }
+  if (!scaled) return
+
+  const rewrite = (expr: Expression): Expression => normalizeAngleArguments(expr, env)
+
+  for (const eq of flat.equations) eq.rhs = rewrite(eq.rhs)
+  for (const ic of flat.fieldIcs) ic.expr = rewrite(ic.expr)
+  // Events are rewritten too, although this binding runs no evaluator: the
+  // Julia binding exports the flattened form to ModelingToolkit, which does run
+  // events, so leaving a `sin(theta [deg])` in an event condition unconverted
+  // would put the defect back in the one place a binding still evaluates it —
+  // and would make the five flattened forms disagree.
+  for (const ev of flat.continuousEvents) {
+    ev.conditions = ev.conditions.map(rewrite) as typeof ev.conditions
+    for (const a of ev.affects) a.rhs = rewrite(a.rhs)
+    for (const a of ev.affect_neg ?? []) a.rhs = rewrite(a.rhs)
+  }
+  for (const ev of flat.discreteEvents) {
+    if (ev.trigger.type === 'condition') ev.trigger.expression = rewrite(ev.trigger.expression)
+    for (const a of ev.affects) a.rhs = rewrite(a.rhs)
+  }
+}
+
+/**
+ * Rewrite every `sin`/`cos`/`tan` in `expr` whose argument is an angle at a
+ * scale other than 1 so the argument is in RADIANS.
+ *
+ * IDENTITY-PRESERVING: a subtree in which nothing is rewritten is returned as
+ * the SAME object, not a rebuild. `mapChildren` always spreads into a fresh
+ * node, and template expansion leaves structurally SHARED sub-expressions, so
+ * rebuilding unconditionally would rematerialize a shared DAG as a tree.
+ */
+function normalizeAngleArguments(expr: Expression, env: Map<string, ParsedUnit>): Expression {
+  if (typeof expr !== 'object' || expr === null || Array.isArray(expr)) return expr
+  const node = expr as ExpressionNode
+  // Children first, so a nested `sin(theta [deg])` inside another argument is
+  // converted too.
+  let childChanged = false
+  const mapped = mapChildren(node, (child) => {
+    const rewritten = normalizeAngleArguments(child as Expression, env)
+    if (rewritten !== child) childChanged = true
+    return rewritten
+  })
+  const out = childChanged ? mapped : node
+  if (out.op === 'sin' || out.op === 'cos' || out.op === 'tan') {
+    if (out.args !== undefined && out.args.length === 1) {
+      const arg = checkDimensions(out.args[0] as Expression, env).dimensions
+      const factor = arg === null ? null : angleNormalizationFactor(arg)
+      if (factor !== null) {
+        return { ...out, args: [{ op: '*', args: [out.args[0], factor] } as ExpressionNode] }
+      }
+    }
+  }
+  return out
 }

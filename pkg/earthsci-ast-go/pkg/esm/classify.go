@@ -231,10 +231,9 @@ func EffectiveSystemKind(model *Model) string {
 
 // odeStateSet is the raw membership set behind ODEStates / IsODEState.
 func odeStateSet(model *Model) map[string]bool {
-	indep := DefaultIndepVar
 	states := map[string]bool{}
 	for _, eq := range model.Equations {
-		for name := range derivativeTargets(eq.LHS, indep) {
+		for name := range derivativeTargets(eq.LHS) {
 			if v, ok := model.Variables[name]; ok && v.Type == VarTypeUnknown {
 				states[name] = true
 			}
@@ -317,25 +316,26 @@ func definedVariableName(lhs Expression) string {
 }
 
 // derivativeTargets collects the base variable names differentiated with respect
-// to indep anywhere inside an equation LHS.
+// to the STRUCTURAL time axis (esm-spec §4.2's literal `t`) anywhere inside an
+// equation LHS.
 //
 // A `D` node's argument may be the bare name, an `index(u, i…)` gather, or any
 // other wrapper; the base name is the first free symbol reachable through it. An
 // `faq` whose `expr` is a derivative is the whole-array spelling of the
 // same thing and credits the same variable, which is why the walk descends
 // `expr` as well as `args`.
-func derivativeTargets(expr Expression, indep string) map[string]bool {
+func derivativeTargets(expr Expression) map[string]bool {
 	out := map[string]bool{}
-	collectDerivativeTargets(expr, indep, out)
+	collectDerivativeTargets(expr, out)
 	return out
 }
 
-func collectDerivativeTargets(expr Expression, indep string, out map[string]bool) {
+func collectDerivativeTargets(expr Expression, out map[string]bool) {
 	node, ok := asExprNode(expr)
 	if !ok {
 		return
 	}
-	if node.Op == OpDerivative && derivativeIsTemporal(node, indep) {
+	if derivativeIsTemporal(node) {
 		for _, a := range node.Args {
 			for _, n := range leafNames(a) {
 				out[n] = true
@@ -344,19 +344,28 @@ func collectDerivativeTargets(expr Expression, indep string, out map[string]bool
 		return
 	}
 	for _, child := range exprRefChildren(node) {
-		collectDerivativeTargets(child.Child, indep, out)
+		collectDerivativeTargets(child.Child, out)
 	}
 }
 
-// derivativeIsTemporal reports whether a `D` node differentiates with respect to
-// the independent variable. `wrt` absent means the temporal derivative (the
-// spec's default); an explicit `wrt` naming a spatial dimension is a rewrite
-// target, not a time derivative, and must NOT make its operand an ODE state.
-func derivativeIsTemporal(node ExprNode, indep string) bool {
-	if node.Wrt == nil {
-		return true
-	}
-	return *node.Wrt == indep
+// derivativeIsTemporal reports whether a `D` node is the STRUCTURAL time
+// derivative: `wrt` absent (esm-spec §4.2's default, which MEANS the literal
+// `t`) or `wrt` naming the literal `t`. An explicit `wrt` naming anything else
+// is a SPATIAL rewrite target, not a time derivative, and must NOT make its
+// operand an ODE state.
+//
+// The axis is read through isRewriteTargetDerivative — the one accessor that
+// applies the §4.2 default — so that the three layers that ask this question
+// (classification here, the DAE contract in dae.go, the equation-balance check
+// in validate.go) cannot answer it differently. They did: this function has
+// always compared against the literal `t`, because every caller passes
+// DefaultIndepVar, while dae.go and validate.go resolved the axis against
+// `domain.independent_variable`. On a document declaring
+// `independent_variable: "s"` that made SystemKind report `ode` for a model
+// ApplyDAEContract simultaneously refused with E_NONTRIVIAL_DAE
+// (EarthSciAST#407).
+func derivativeIsTemporal(node ExprNode) bool {
+	return node.Op == OpDerivative && !isRewriteTargetDerivative(node)
 }
 
 // leafNames returns the free symbol names reachable inside an expression: the
@@ -383,7 +392,7 @@ func leafNames(expr Expression) []string {
 // equation at all" is what makes a system `nonlinear`.
 func hasTimeDerivative(model *Model) bool {
 	for _, eq := range model.Equations {
-		if len(derivativeTargets(eq.LHS, DefaultIndepVar)) > 0 {
+		if len(derivativeTargets(eq.LHS)) > 0 {
 			return true
 		}
 	}

@@ -63,6 +63,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("expression_parse_conformance_test.jl")  # infix-text parser ≡ TS oracle
     include("units_test.jl")
     include("unit_exact_scale_test.jl")
+    include("transcendental_scale_test.jl")
     include("const_units_test.jl")
     include("graph_test.jl")
     include("graph_conformance_test.jl")  # component/expression graphs ≡ TS oracle
@@ -83,6 +84,9 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("mtk_metadata_test.jl")
     include("simulate_e2e_test.jl")
     include("tests_blocks_execution_test.jl")
+    # esm-spec §4.2's `wrt` default — an absent `wrt` on `D` MEANS `t` — on the
+    # tree-walk runner exactly as in `classification.jl` (issue #407).
+    include("wrt_default_omitted_test.jl")
     # The ModelingToolkit export honours a continuous event's `affect_neg` and
     # `root_find` (esm-spec §5.2, issue #356).
     include("mtk_continuous_event_options_test.jl")

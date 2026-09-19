@@ -451,27 +451,65 @@ function _state_cells(var_map::AbstractDict, variable::AbstractString,
     return out
 end
 
-# Build-time scalar-parameter scope for §6.6.5 cellwise references, with bare
-# aliases. `BuildInspection.params` is keyed by the FLATTENED parameter name
-# (e.g. "M.k") — matching a resolved observed expression, which flattening
-# qualifies. A test author's analytic `reference`, however, names the parameter
-# BARE ("k"). So we expose BOTH: the flattened key verbatim, plus an
-# unambiguous bare alias (the final dotted segment). On a bare-name collision
-# across subsystems the flattened key stays authoritative and the ambiguous
-# alias is dropped (the qualified reference still resolves).
-function _param_scope_with_aliases(params::AbstractDict)::Dict{String,Float64}
-    bare_name(s) = String(split(s, '.')[end])   # final dotted segment; s itself when undotted
+# Build-time scalar-parameter scope for §6.6.5 cellwise references, as the
+# component that OWNS the test writes names.
+#
+# `BuildInspection.params` is keyed by the FLATTENED parameter name (e.g. "M.k",
+# "M.sub.g") — matching a resolved observed expression, which flattening
+# qualifies. A test author's analytic `reference`, however, spells a name the way
+# the owning component's own EQUATIONS spell it: BARE ("k") for the component's
+# own parameter, and by the MOUNT NAME ("sub.g") for one reached through a
+# subsystem mount. So the scope binds, in decreasing precedence:
+#
+#  1. the flattened key VERBATIM;
+#  2. every key under `owner.`, stripped of that prefix — the owning component's
+#     own namespace, which is what its equations resolve against. "M.sub.g" is
+#     "sub.g" here even in a document where five OTHER components each mount a
+#     `sub` of their own. This is the same re-attachment `_scope_to_component`
+#     performs on an override key, and it is what issue #408 was missing:
+#     `wrf.g` resolved in every equation of a coupling and in
+#     `parameter_overrides`, but not in a `reference`, where only
+#     `<Model>.wrf.g` worked — a spelling a mount edge does NOT rewrite, so it
+#     pins a component to being mounted under its own model name;
+#  3. every GLOBALLY unambiguous dotted suffix ("M.sub.g" -> "sub.g", "g"), the
+#     alias set esm-spec §6.6.2 rule 3 gives an override key. This is what lets
+#     a test name a parameter the owner does not own, and it subsumes the
+#     bare-tail alias this function bound before.
+#
+# A suffix carried by two or more flattened names is AMBIGUOUS and binds nothing
+# at step 3 — the flattened key stays authoritative and such a reference must
+# qualify further (step 2 still reaches the owner's own, which is unambiguous by
+# construction: flattened keys are unique, so their owner-relative remainders are
+# too). A name that is neither is UNBOUND, which is what keeps a typo ("sub.gg")
+# an error rather than a silent zero.
+#
+# The suffix enumeration is the override resolver's own `_dotted_suffixes`
+# (src/tree_walk/build.jl), shared rather than re-derived so the two positions
+# cannot drift apart again.
+function _param_scope_with_aliases(params::AbstractDict,
+                                   owner::AbstractString="")::Dict{String,Float64}
     out = Dict{String,Float64}(String(k) => Float64(v) for (k, v) in params)
+    # (2) The owner's own namespace, as its equations spell it.
+    if !isempty(owner)
+        prefix = String(owner) * "."
+        for (k, v) in params
+            s = String(k)
+            startswith(s, prefix) || continue
+            rest = s[(ncodeunits(prefix) + 1):end]
+            haskey(out, rest) || (out[rest] = Float64(v))
+        end
+    end
+    # (3) Globally unambiguous dotted suffixes.
     counts = Dict{String,Int}()
     for k in keys(params)
-        bare = bare_name(String(k))
-        counts[bare] = get(counts, bare, 0) + 1
+        for suffix in _dotted_suffixes(String(k))
+            counts[suffix] = get(counts, suffix, 0) + 1
+        end
     end
     for (k, v) in params
-        s = String(k)
-        bare = bare_name(s)
-        (bare != s && counts[bare] == 1 && !haskey(out, bare)) &&
-            (out[bare] = Float64(v))
+        for suffix in _dotted_suffixes(String(k))
+            (counts[suffix] == 1 && !haskey(out, suffix)) && (out[suffix] = Float64(v))
+        end
     end
     return out
 end
@@ -876,7 +914,7 @@ function _observed_field(insp::BuildInspection, file::EsmFile,
                                        state_scalars=state_scalars)
     end
     expr === nothing && return nothing
-    params = _param_scope_with_aliases(insp.params)
+    params = _param_scope_with_aliases(insp.params, String(mname))
     # The trajectory sample wins over a same-named build constant: a name that
     # is a STATE is not a constant, and its value at this time is the answer.
     isempty(state_scalars) || (params = merge(params, Dict{String,Float64}(
@@ -1558,7 +1596,7 @@ function _evaluate_assertion(a, sim, var_map::AbstractDict,
             catch err
                 err isa InlineTestError ? String[] : rethrow()
             end
-            scope = _param_scope_with_aliases(insp.params)
+            scope = _param_scope_with_aliases(insp.params, String(owner))
             # The ARRAY half of the §6.6.5 clash scope: `evaluate_cellwise`
             # binds `const_arrays` by name, so an array named after a shape
             # index set is a name the reference could already read and the

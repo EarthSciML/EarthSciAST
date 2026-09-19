@@ -5,6 +5,15 @@ use super::*;
 // ============================================================================
 
 /// If `lhs` is `D(state_var, t)`, return the state variable name.
+///
+/// The axis is read through [`crate::op_registry::is_rewrite_target_derivative`],
+/// which applies esm-spec §4.2's default: an ABSENT `wrt` MEANS `t`. Matching
+/// `Some("t")` here instead dropped that default on the scalar interpreter's
+/// path while the array path — which classifies its LHS through
+/// [`crate::classification::lhs_form`] — kept it, so `{"op":"D","args":["z"]}`
+/// over a SCALAR state built a system with no derivative equation for `z` and
+/// was refused at interpreter build, while the shaped spelling of the same
+/// document simulated (EarthSciAST#407).
 pub(super) fn state_lhs_name(lhs: &Expr) -> Option<String> {
     let Expr::Operator(node) = lhs else {
         return None;
@@ -15,9 +24,12 @@ pub(super) fn state_lhs_name(lhs: &Expr) -> Option<String> {
     if node.args.len() != 1 {
         return None;
     }
-    match (&node.args[0], &node.wrt) {
-        (Expr::Variable(name), Some(wrt)) if wrt == "t" => Some(name.clone()),
-        // Also accept `D(x, t)` encoded as a 2-arg form (some pipelines do this).
+    if crate::op_registry::is_rewrite_target_derivative(node) {
+        // A SPATIAL `D` on an LHS is a rewrite target, not a state's tendency.
+        return None;
+    }
+    match &node.args[0] {
+        Expr::Variable(name) => Some(name.clone()),
         _ => None,
     }
 }

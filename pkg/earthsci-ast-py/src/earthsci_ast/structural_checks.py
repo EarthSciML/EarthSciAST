@@ -2591,6 +2591,31 @@ def _is_angle_unit(unit: str | None) -> bool:
         return False
 
 
+def _scaled_dimensionless_refusal(op: str, unit: str | None) -> str | None:
+    """The esm-spec §4.8.3 refusal when ``unit`` is dimensionless at a scale
+    OTHER than 1 — ``ppm``, ``percent`` (issue #409), or ``None``.
+
+    `ppm` is dimensionless at 1e-6 and `percent` at 1/100, so both satisfy every
+    dimension-only test — which is how ``log(x [ppm])`` was accepted and
+    evaluated as the log of the ppm NUMBER, with no diagnostic. The two readings
+    differ by ``ln(1e-6) = 13.8155...`` and nothing in the document says which
+    was meant, so the checker refuses and NAMES THE REPAIR rather than picking
+    one. Normalizing silently instead would change the numbers of every
+    existing document that passes a `percent` or a `ppm` into `exp`/`log`.
+    """
+    if unit is None or not _is_dimensionless_unit(unit):
+        return None
+    from .units import scaled_dimensionless_message, unit_exact_scale
+
+    try:
+        scale = unit_exact_scale(_normalize_unit(unit))
+    except _pint_unverifiable_errors():
+        return None
+    if scale.is_one():
+        return None
+    return scaled_dimensionless_message(op, scale)
+
+
 def _walk_expression_for_exponent_checks(
     expr: Any,
     var_units: dict[str, str],
@@ -3096,12 +3121,27 @@ def _walk_expression_for_dimensionless_arg_checks(
         arg = args[0]
         if isinstance(arg, str):
             arg_units = var_units.get(arg)
+            operation, subject = _DIMENSIONLESS_ARG_FUNCS[op]
+            scaled = _scaled_dimensionless_refusal(op, arg_units)
             if arg_units is not None and not _is_dimensionless_unit(arg_units):
-                operation, subject = _DIMENSIONLESS_ARG_FUNCS[op]
                 errors.append(
                     (
                         report_path,
                         f"{subject} argument must be dimensionless, got units '{arg_units}'",
+                        {
+                            "operation": operation,
+                            "function": op,
+                            "argument_units": arg_units,
+                            **({"variable": variable} if variable else {}),
+                        },
+                    )
+                )
+            elif scaled is not None:
+                # Dimensionless, but not at scale 1 (esm-spec §4.8.3, #409).
+                errors.append(
+                    (
+                        report_path,
+                        scaled,
                         {
                             "operation": operation,
                             "function": op,
@@ -3116,17 +3156,36 @@ def _walk_expression_for_dimensionless_arg_checks(
         arg = args[0]
         if isinstance(arg, str):
             arg_units = var_units.get(arg)
+            operation, subject = _CIRCULAR_ARG_FUNCS[op]
+            # An ANGLE is admitted at ANY scale: `deg` -> `rad` is exact and has
+            # no second reading, and the flatten pass converts it before
+            # anything evaluates it (`flatten._normalize_angle_arguments`).
+            scaled = (
+                None if _is_angle_unit(arg_units) else _scaled_dimensionless_refusal(op, arg_units)
+            )
             if (
                 arg_units is not None
                 and not _is_dimensionless_unit(arg_units)
                 and not _is_angle_unit(arg_units)
             ):
-                operation, subject = _CIRCULAR_ARG_FUNCS[op]
                 errors.append(
                     (
                         report_path,
                         f"{subject} argument must be an angle or dimensionless, "
                         f"got units '{arg_units}'",
+                        {
+                            "operation": operation,
+                            "function": op,
+                            "argument_units": arg_units,
+                            **({"variable": variable} if variable else {}),
+                        },
+                    )
+                )
+            elif scaled is not None:
+                errors.append(
+                    (
+                        report_path,
+                        scaled,
                         {
                             "operation": operation,
                             "function": op,

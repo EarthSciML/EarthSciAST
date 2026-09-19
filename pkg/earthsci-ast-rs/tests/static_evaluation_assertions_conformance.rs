@@ -254,7 +254,7 @@ fn a_static_assertion_outside_the_declared_span_is_refused() {
 }
 
 /// The `shape`d half of "a document with nothing to integrate still honours
-/// `time`" (§5.42.7).
+/// `time`" (§5.43.7).
 ///
 /// A SHAPED state-free document takes the ARRAY runtime under
 /// `Compile::Always`, which carries no scalar observed graph, so the static
@@ -372,7 +372,7 @@ fn a_shaped_state_free_observed_of_t_is_refused_by_name() {
 /// esm-spec §6.6.5 names what an analytic `reference` may read — the asserted
 /// field's dimension names, free, and the model's parameters — and `t` is
 /// neither. Refused at the document level, with the sentence the three
-/// bindings share (CONFORMANCE_SPEC §5.42.6).
+/// bindings share (CONFORMANCE_SPEC §5.43.6).
 ///
 /// Before the refusal this document reported `actual = 2` against
 /// `expected = 0`: the field is `t`, and a reference read at `t = 0` is off by

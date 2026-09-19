@@ -4511,13 +4511,21 @@ unaffected, as is a gather that rebinds it as its own loop symbol.
 §6.6.5 names them, and a binding assembles both before calling
 `bind_dimension_names`:
 
-1. the resolved SCALAR PARAMETERS — `BuildInspection.params`, flattened names
-   plus their unambiguous bare aliases (`param_scope_with_aliases`); and
+1. the resolved SCALAR PARAMETERS — `BuildInspection.params`, flattened names,
+   plus the OWNER-RELATIVE spelling of each (the flattened name with the
+   asserting component's path stripped), plus every globally unambiguous
+   DOTTED-SUFFIX alias (`param_scope_with_aliases`, which takes the owner as
+   its second argument). `M.sub.g` is in scope as `M.sub.g`, `sub.g` and `g` —
+   the alias set esm-spec §6.6.2 rule 3 already gives an override key, plus the
+   owner-relative one, which keeps `sub.g` unambiguous in a coupling where
+   every mounted component carries a `sub` of its own (issue #408); and
 2. the build-time ARRAY names — a materialized state-free array observed, an
    inline `const` array, a shaped parameter's inline column, a provider- or
    loader-injected input field — likewise with their unambiguous bare aliases
-   (`array_scope_names` in Rust, `_array_scope_names` in Julia and Python, which
-   apply the SAME alias rule so an ambiguous bare tail is in neither half).
+   (`array_scope_names` in Rust, `_array_scope_names` in Julia and Python; the
+   array half's own evaluators bind arrays under their flattened names, so the
+   bare tail is the only alias it has to account for, and an ambiguous tail is
+   in neither half).
 
 The array half is what keeps the three on one rule, and checking only the
 parameter half was a live divergence (issue #226). Julia hands its cellwise
@@ -5760,7 +5768,53 @@ fixture's own declared `expected`: **Julia** —
 rewrite-only ports with no simulator and no inline-test runner, and are
 `scope_excluded` in the manifest.
 
-### 5.42 An Assertion's `time` Is When It Is Evaluated (normative)
+### 5.42 The Derivative Axis Is the Literal `t`, in Every Layer (normative)
+
+esm-spec §4.2 fixes the derivative axis to the **literal** name `t`: a `D` whose
+`wrt` is `"t"`, or absent, is the structural time derivative, and a `D` whose
+`wrt` names anything else — **including the name a document gives
+`domain.independent_variable`** — is a spatial rewrite target. The axis is never
+resolved against `domain.independent_variable`.
+
+The rule is stated here because it is the kind a binding applies unevenly. It is
+asked in at least four places — classification (§6.3.1 system-kind derivation and
+ODE-state membership), the dimensional rule (esm-spec §4.8), the equation-balance
+check (esm-spec §4.9.4), and any differential-algebraic analysis a binding
+performs — and each of those is written by a different pass at a different time.
+A binding MUST answer it the same way in all of them, and SHOULD do so by routing
+every such site through one accessor rather than re-deriving the default.
+
+Two bindings did not. Rust's and Go's differential-algebraic layers resolved the
+axis against `domain.independent_variable` while their classifiers compared
+against the literal `t`. The two answers diverge exactly when a document renames
+its independent variable, and the consequence is a binding contradicting itself:
+on a document declaring `independent_variable: "time"` whose tendencies spell
+`wrt: "t"` — the shape of `tests/conformance/output_derivation/fixtures/`
+`{gridded,scalar_0d,shared_tail}.esm` — the classifier reported `ode` for a model
+the differential-algebraic contract simultaneously refused with
+`E_NONTRIVIAL_DAE`.
+
+**Why literal and not "the independent variable".** §11.3 lets a document rename
+its independent variable precisely so that `t` becomes an ordinary declarable
+name. `tests/valid/independent_variable_renamed.esm` renames it to `s` and then
+declares `t` as air temperature. Reading `wrt: "t"` as "the independent variable"
+in that document silently retargets the author's derivative onto `s` and leaves
+∂x/∂(air temperature) unwritable. A model that genuinely differentiates along a
+renamed independent variable spells that name, which makes the node spatial-tier
+and therefore a rewrite target (§9.6.8) — the format has no third tier.
+
+**Pins.** Rust —
+`pkg/earthsci-ast-rs/src/dae.rs::tests::the_derivative_axis_is_the_literal_t_not_the_independent_variable`;
+**Go** — `pkg/earthsci-ast-go/pkg/esm/wrt_default_omitted_test.go::TestDerivativeAxisIsTheLiteralT`.
+Each drives one document declaring a non-`t` independent variable through both
+that binding's classifier and its differential-algebraic layer and requires the
+two to agree, in all three spellings: `wrt` absent, `wrt: "t"`, and `wrt` naming
+the declared independent variable. Julia, Python and TypeScript have no
+differential-algebraic layer; their classifiers already read the literal `t` and
+are pinned by
+`tests/conformance/classification/fixtures/wrt_default_omitted.esm`.
+
+### 5.43 An Assertion's `time` Is When It Is Evaluated (normative)
 
 esm-spec §6.6.3 defines an assertion's `time` as "Simulation time at which to
 **evaluate** the assertion; must lie in `[time_span.start, time_span.end]`". It
@@ -5795,7 +5849,7 @@ Neither is a new rule. Python has implemented both since before this category
 existed, which is what fixes the intended answer; Julia mints the goldens as
 the reference binding.
 
-#### 5.42.1 What each binding did
+#### 5.43.1 What each binding did
 
 - **Rust** built the inline test with `Compile::Always`, which skips the
   `Backend::Static` selection `Compile::Auto` performs and hands a compiled
@@ -5816,7 +5870,7 @@ the reference binding.
 - **Python** was correct on both counts.
 - Rust's repair covers a SCALAR observed through the backend's own compiled
   graph and a SHAPED one by rebuilding that graph from the document, which is
-  the same pair `esm simulate` uses (§5.42.7).
+  the same pair `esm simulate` uses (§5.43.7).
 - **Go** and **TypeScript** cannot be affected. Neither ships an integrator
   (`pkg/earthsci-ast-ts/src/solver.ts` says so outright; the Go `Solver` type
   carries the §2.2 block and nothing that runs it) nor an inline-test runner —
@@ -5824,7 +5878,7 @@ the reference binding.
   path that could read an assertion's `time`. They are `scope_excluded` in the
   manifest, and patching them for this would be unreachable code.
 
-#### 5.42.2 What is compared
+#### 5.43.2 What is compared
 
 Each in-scope binding runs the fixtures' inline tests through its official
 inline-test runner (`run_inline_tests`) with the pinned integrator and compares
@@ -5835,7 +5889,7 @@ every assertion's ACTUAL against the Julia-minted golden, keyed by
 |------|------|------|
 | Assertion actual (vs golden) | 1e-9 | 1e-11 |
 
-#### 5.42.3 Non-vacuity
+#### 5.43.3 Non-vacuity
 
 `algebraic_time_dependence.esm` asserts `wave = amp·sin(omega·t)`, which is
 **nonlinear** in `t`, so a binding evaluating at the wrong time cannot be
@@ -5850,7 +5904,7 @@ difference `gap` at two times: it is zero only when both halves are read at
 ONE time, so reading the observed at the start of the span is caught by a
 wrong number rather than by an error.
 
-#### 5.42.4 `system_kind` is not the selector
+#### 5.43.4 `system_kind` is not the selector
 
 Issue #406 also reported that adding `"system_kind": "nonlinear"` to the failing
 document changed nothing. That is correct behaviour, not a second defect.
@@ -5863,7 +5917,7 @@ algebraic model declaring `"ode"`) — and the runtime path is chosen by the
 derivation, which is a function of the equations alone. The Rust runner pins the
 byte-identical outcome with and without the declaration.
 
-#### 5.42.5 The span is the boundary of the static evaluation
+#### 5.43.5 The span is the boundary of the static evaluation
 
 `algebraic_time_dependence.esm` asserts only inside its span, so the third
 consequence above is pinned by a per-binding regression rather than by a shared
@@ -5876,7 +5930,7 @@ evaluation grid to the span. Without the filter both answered the out-of-span
 assertions and reported a PASS, which is this category's own failure mode
 reached one road further on.
 
-#### 5.42.6 `t` inside a §6.6.5 `reference` is REFUSED (normative)
+#### 5.43.6 `t` inside a §6.6.5 `reference` is REFUSED (normative)
 
 An analytic `reference` is evaluated by each binding's BUILD-TIME cellwise
 evaluator (`evaluate_cellwise`), which takes the model's parameters and the
@@ -5907,7 +5961,7 @@ that wrote a time-dependent reference used to report a number and now fails.
 That is intended — the number it reported was the expression at the start of
 the span, whatever time was asserted.
 
-#### 5.42.7 A state-free document with a SHAPED observed
+#### 5.43.7 A state-free document with a SHAPED observed
 
 The first consequence above holds for a document whose observeds are shaped, not
 only for one whose observeds are scalar, and the two are not the same code path
@@ -5953,7 +6007,7 @@ need none of this, because both re-evaluate the observed body per cell at the
 sampled time; the remaining gap between them and Rust is that one refusal, and
 it names itself.
 
-#### 5.42.8 Gate
+#### 5.43.8 Gate
 
 `tests/conformance/static_evaluation_assertions/` holds the shared fixtures and
 the Julia-minted goldens. Per-binding runners gate every assertion actual

@@ -87,8 +87,6 @@ func ApplyDAEContract(file *ESMFile) (DAEInfo, error) {
 		return info, nil
 	}
 
-	indep := fileIndepVar(file)
-
 	names := make([]string, 0, len(file.Models))
 	for name := range file.Models {
 		names = append(names, name)
@@ -103,7 +101,7 @@ func ApplyDAEContract(file *ESMFile) (DAEInfo, error) {
 			info.PerModelFactored[mname] = 0
 			continue
 		}
-		factored, err := factorTrivialDAE(&m, indep)
+		factored, err := factorTrivialDAE(&m)
 		if err != nil {
 			return info, err
 		}
@@ -127,7 +125,7 @@ func ApplyDAEContract(file *ESMFile) (DAEInfo, error) {
 		arrayShaped := arrayShapedUnknowns(&m)
 		residual := 0
 		for i, eq := range m.Equations {
-			if isDifferentialEquation(eq, indep) {
+			if isDifferentialEquation(eq) {
 				continue
 			}
 			if isWellFoundedRecurrence(eq, file, arrayShaped) {
@@ -183,14 +181,14 @@ func ApplyDAEContract(file *ESMFile) (DAEInfo, error) {
 // substitution has no failure mode of its own, so the error is unreachable in
 // practice, but swallowing it with `_ =` would have hidden exactly the class of
 // corruption above, so the error path is kept real.
-func factorTrivialDAE(model *Model, indep string) (int, error) {
+func factorTrivialDAE(model *Model) (int, error) {
 	factored := 0
 	for {
 		idx := -1
 		var lhsName string
 		var rhsExpr Expression
 		for i, eq := range model.Equations {
-			if isDifferentialEquation(eq, indep) {
+			if isDifferentialEquation(eq) {
 				continue
 			}
 			name, ok := eq.LHS.(string)
@@ -232,10 +230,18 @@ func factorTrivialDAE(model *Model, indep string) (int, error) {
 	}
 }
 
-// isDifferentialEquation reports whether eq's LHS is D(<var>, wrt=indep).
-// An LHS of D without an explicit wrt is treated as the model's
-// independent variable (matches the Julia reference semantics).
-func isDifferentialEquation(eq Equation, indep string) bool {
+// isDifferentialEquation reports whether eq's LHS is the STRUCTURAL time
+// derivative — a `D` whose `wrt` is the literal `t` or absent (esm-spec §4.2:
+// an absent `wrt` MEANS `t`).
+//
+// It shares derivativeIsTemporal with classify.go rather than re-deriving the
+// axis, because it used to resolve `wrt` against `domain.independent_variable`
+// while the classifier compared against the literal `t`. On a document
+// declaring `independent_variable: "s"` the two disagreed about the same node:
+// SystemKind called the model an `ode` and ApplyDAEContract refused it with
+// E_NONTRIVIAL_DAE. §4.2 is normative (CONFORMANCE_SPEC §5.42), so this layer
+// moved to the literal reading (EarthSciAST#407).
+func isDifferentialEquation(eq Equation) bool {
 	var node ExprNode
 	switch lhs := eq.LHS.(type) {
 	case ExprNode:
@@ -248,13 +254,7 @@ func isDifferentialEquation(eq Equation, indep string) bool {
 	default:
 		return false
 	}
-	if node.Op != OpDerivative {
-		return false
-	}
-	if node.Wrt == nil {
-		return true
-	}
-	return *node.Wrt == indep
+	return derivativeIsTemporal(node)
 }
 
 // isDAETargetSystem reports whether the DAE contract applies to model.

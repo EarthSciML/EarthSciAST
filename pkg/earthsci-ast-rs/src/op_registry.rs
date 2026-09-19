@@ -515,6 +515,27 @@ pub fn check_broadcast_fn(node: &ExpressionNode) -> Result<(), OpError> {
     Ok(())
 }
 
+/// The `wrt` value that marks the STRUCTURAL time derivative. A `D` node
+/// carrying this `wrt` — or carrying no `wrt` at all, which esm-spec §4.2
+/// defines to MEAN this — is the structural tier, not a rewrite target.
+pub const STRUCTURAL_DERIVATIVE_WRT: &str = "t";
+
+/// The axis a `D` node differentiates along, with esm-spec §4.2's default
+/// applied: **an absent `wrt` MEANS `t`**.
+///
+/// Every consumer of a `D` node reads its axis through this one function. The
+/// default is a property of the FORMAT, not of any one pipeline, and spelling
+/// it out per call site is what let it be applied on some paths and dropped on
+/// others: `simulate::lhs::state_lhs_name` matched `Some("t")` and therefore
+/// did not recognize `D(z)` as the derivative of `z` at all, so a document that
+/// is correct per §4.2 built a system whose state had no derivative equation
+/// and was refused at interpreter build with a diagnostic naming the missing
+/// equation rather than the unapplied default (EarthSciAST#407).
+#[must_use]
+pub fn derivative_wrt(node: &ExpressionNode) -> &str {
+    node.wrt.as_deref().unwrap_or(STRUCTURAL_DERIVATIVE_WRT)
+}
+
 /// Is this node a **rewrite-target** `D` — a derivative whose `wrt` names a
 /// SPATIAL axis rather than the time variable (esm-spec §4.2 / §9.6.8)?
 ///
@@ -530,7 +551,7 @@ pub fn check_broadcast_fn(node: &ExpressionNode) -> Result<(), OpError> {
 /// dimensional checker (`crate::units`) read it rather than re-deriving it.
 #[must_use]
 pub fn is_rewrite_target_derivative(node: &ExpressionNode) -> bool {
-    node.op == "D" && node.wrt.as_deref().is_some_and(|w| w != "t")
+    node.op == "D" && derivative_wrt(node) != STRUCTURAL_DERIVATIVE_WRT
 }
 
 /// Classify one operator node: `Ok(())` if it is an evaluable-core op with a

@@ -496,9 +496,12 @@ def _expr_to_sympy(
             ]
             if len(sympy_args) != 1:
                 raise SimulationError(f"D requires exactly 1 argument, got {len(sympy_args)}")
-            if not expr.wrt:
-                raise SimulationError("D operator requires a `wrt` field")
-            wrt_symbol = _expr_to_sympy(expr.wrt, symbol_map, fn_callable_map, structural_ops)
+            # An ABSENT `wrt` MEANS `t` (esm-spec §4.2), so the short spelling
+            # differentiates with respect to time exactly as the explicit one
+            # does; refusing it here made a legal node unrepresentable
+            # (EarthSciAST#407).
+            wrt = expr.wrt or op_registry.STRUCTURAL_DERIVATIVE_WRT
+            wrt_symbol = _expr_to_sympy(wrt, symbol_map, fn_callable_map, structural_ops)
             return sp.Derivative(sympy_args[0], wrt_symbol)
 
         # Every OTHER non-evaluable-core op is an ordinary open-tier

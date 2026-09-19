@@ -2967,6 +2967,18 @@
     ],
     "is_valid": false
   },
+  "units_discriminator_transcendental_scaled_argument.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/variables/bad_log",
+        "code": "unit_inconsistency",
+        "message": "Argument to 'log' must be dimensionless at scale 1, but is dimensionless at scale 1/1000000 (ppm); divide by 1 ppm, or by the scale you mean, to state which reading is intended"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.3 'A dimensionless argument means scale 1' (issue #409). `ppm` is dimensionless at 1e-6, so `log(co2)` satisfies every DIMENSION-only test and all five bindings used to accept it, evaluating the natural log of the ppm NUMBER with no diagnostic. The two readings -- the log of the ppm number and the log of the mole fraction -- differ by ln(1e-6) = 13.8155..., so the checker refuses and NAMES THE REPAIR rather than picking one. Rust and Python additionally report the equivalent finding at the defining equation (/models/BadUnitsModel/equations/1); the pin above is the declaration site every binding reports, matching the sibling units_discriminator_* fixtures. The positive half of the discriminator is tests/valid/units_transcendental_scaled_argument_repair.esm."
+  },
   "units_discriminator_atan2_commensurate.esm": {
     "schema_errors": [],
     "structural_errors": [
