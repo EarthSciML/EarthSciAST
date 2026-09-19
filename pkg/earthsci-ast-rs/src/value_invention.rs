@@ -1244,7 +1244,7 @@ where
     // DETERMINISTIC (pos_l, pos_r)-ascending drive order (member set is
     // canonicalised downstream, but a sorted drive keeps any order-sensitive
     // reduction stable).
-    let pairs = index.sorted_pairs().to_vec();
+    let pairs: Vec<(i64, i64)> = index.pairs().collect();
     // The remaining ungated symbols, in the topological order the full product
     // visits them, minus the two driven symbols.
     let rest: Vec<String> = syms
