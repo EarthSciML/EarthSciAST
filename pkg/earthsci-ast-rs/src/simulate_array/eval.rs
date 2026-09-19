@@ -2738,12 +2738,19 @@ struct CacheEntry<V> {
 /// largest one". An entry a live [`JoinGate`] still holds is skipped, since
 /// dropping the cache's reference to it would free nothing.
 ///
+/// Because that eviction runs before the build, it cannot account for what the
+/// build returns, and the insert that follows routinely leaves the cache over
+/// budget. So the budget is enforced at the PROBE as well — see
+/// [`GateCache::get_within_budget`] — which is what bounds a run whose gates
+/// only ever hit.
+///
 /// The failure mode is thrash: a node that alternates between two indices which
-/// do not BOTH fit will rebuild each in turn. Two gates on ONE aggregate cannot
-/// trigger it (both are resolved, and so both `in_use`, before either is
-/// consulted), and a steady-state repeated node never evicts at all, because
-/// eviction runs only on a miss. [`gate_cache_pair_budget`] is the escape
-/// hatch if a document finds a shape that does.
+/// do not BOTH fit will rebuild each in turn, as will a single index larger
+/// than the whole budget. Two gates on ONE aggregate cannot trigger the former
+/// (both are resolved, and so both `in_use`, before either is consulted), and a
+/// steady-state repeated node whose index FITS never evicts at all.
+/// [`gate_cache_pair_budget`] is the escape hatch if a document finds a shape
+/// that does.
 struct GateCache<K, V> {
     entries: HashMap<K, CacheEntry<V>>,
     clock: u64,
@@ -2774,13 +2781,35 @@ impl<K: std::hash::Hash + Eq + Clone, V: Clone + Retained> GateCache<K, V> {
         Some(e.value.clone())
     }
 
-    /// Drop least-recently-used entries until the cache is within budget.
+    /// Probe, having FIRST dropped whatever the budget no longer covers.
     ///
-    /// Called on a MISS, before the replacement is built. `entries` is small
-    /// (bounded by [`GATE_CACHE_MAX_ENTRIES`], and in practice a handful), so
-    /// scanning it for the minimum beats carrying an intrusive order list.
-    fn evict_to_budget(&mut self, budget: usize) {
-        while self.pairs > budget || self.entries.len() >= GATE_CACHE_MAX_ENTRIES {
+    /// The trim comes before the probe, and that ordering is the guarantee.
+    /// Eviction on a miss runs before the replacement is built, so it cannot
+    /// account for what that build returns: the cache is routinely left over
+    /// budget by its own last insert. A hit marks its entry most-recently-used
+    /// and would then protect it indefinitely — which is the STEADY STATE of
+    /// the very shape the budget exists for, one gate in an RHS evaluated every
+    /// step of a time loop, where the index is inserted once and never probed
+    /// as a miss again. Trimming only on a miss would leave that run resident
+    /// at whatever its first build cost, whatever the budget said.
+    ///
+    /// So an index no live [`JoinGate`] holds is dropped here and rebuilt on
+    /// the next miss, which is what makes `0` mean what
+    /// [`crate::broad_phase::set_gate_cache_pair_budget`] says it means. Within
+    /// budget the loop condition is false on entry and the probe is unchanged.
+    fn get_within_budget(&mut self, key: &K, budget: usize) -> Option<V> {
+        self.evict_to(budget, GATE_CACHE_MAX_ENTRIES);
+        self.get(key)
+    }
+
+    /// Drop least-recently-used entries until the cache holds at most `budget`
+    /// pairs in at most `max_entries` entries.
+    ///
+    /// `entries` is small (bounded by [`GATE_CACHE_MAX_ENTRIES`], and in
+    /// practice a handful), so scanning it for the minimum beats carrying an
+    /// intrusive order list.
+    fn evict_to(&mut self, budget: usize, max_entries: usize) {
+        while self.pairs > budget || self.entries.len() > max_entries {
             let victim = self
                 .entries
                 .iter()
@@ -2792,6 +2821,12 @@ impl<K: std::hash::Hash + Eq + Clone, V: Clone + Retained> GateCache<K, V> {
                 self.pairs -= e.pairs;
             }
         }
+    }
+
+    /// Evict on a MISS, before the replacement is built: to the pair budget,
+    /// and to one BELOW the entry cap so the incoming entry has a slot.
+    fn evict_to_budget(&mut self, budget: usize) {
+        self.evict_to(budget, GATE_CACHE_MAX_ENTRIES.saturating_sub(1));
     }
 
     fn insert(&mut self, key: K, value: V) {
@@ -2926,16 +2961,15 @@ pub(super) fn resolve_join_gates(join: &[JoinClause], ctx: &EvalCtx) -> Vec<Join
             nsrc,
             ntgt,
         );
-        let cached = GATE_CACHE.with(|c| c.borrow_mut().get(&key));
+        let budget = crate::broad_phase::gate_cache_pair_budget();
+        let cached = GATE_CACHE.with(|c| c.borrow_mut().get_within_budget(&key, budget));
         let index = match cached {
             Some(hit) => hit,
             None => {
                 // Release the least-recently-used index BEFORE building this
                 // one, so the two are never resident at once (issue #418).
-                GATE_CACHE.with(|c| {
-                    c.borrow_mut()
-                        .evict_to_budget(crate::broad_phase::gate_cache_pair_budget())
-                });
+                GATE_CACHE.with(|c| c.borrow_mut().evict_to_budget(budget));
+                crate::broad_phase::bump_gate_index_builds();
                 let built = build_overlap_index(&ov.src_env, &ov.tgt_env, eps, ctx).map(Rc::new);
                 GATE_CACHE.with(|c| c.borrow_mut().insert(key, built.clone()));
                 built
@@ -3137,16 +3171,15 @@ fn resolve_equality_index(g: &crate::join::OnGate, ctx: &EvalCtx) -> Option<EqGa
         }
     }
     let key: EqGateKey = (g.id, lens, fp);
-    if let Some(hit) = EQ_GATE_CACHE.with(|c| c.borrow_mut().get(&key)) {
+    let budget = crate::broad_phase::gate_cache_pair_budget();
+    if let Some(hit) = EQ_GATE_CACHE.with(|c| c.borrow_mut().get_within_budget(&key, budget)) {
         return hit;
     }
     // Release the least-recently-used match set BEFORE building this one, so a
     // build that resolves several large gates in turn peaks at the LARGEST of
     // them rather than at their sum (issue #418).
-    EQ_GATE_CACHE.with(|c| {
-        c.borrow_mut()
-            .evict_to_budget(crate::broad_phase::gate_cache_pair_budget())
-    });
+    EQ_GATE_CACHE.with(|c| c.borrow_mut().evict_to_budget(budget));
+    crate::broad_phase::bump_gate_index_builds();
     let built = build_equality_index(g, ctx).map(|(ix, nl, nr)| (Rc::new(ix), nl, nr));
     EQ_GATE_CACHE.with(|c| c.borrow_mut().insert(key, built.clone()));
     built
@@ -5427,6 +5460,34 @@ mod gate_cache_budget_tests {
         c.evict_to_budget(100);
         assert!(c.get(&1).is_some());
         assert!(matches!(c.get(&2), Some(None)));
+    }
+
+    /// A cache left over budget by its own last insert must not be kept there
+    /// by hits alone: the entry is dropped at the next probe, and the caller
+    /// rebuilds. This is the time-loop RHS, where the only probes are hits.
+    #[test]
+    fn a_probe_trims_an_entry_the_budget_no_longer_covers() {
+        let mut c: Cache = GateCache::new();
+        c.insert(1, ix(100));
+        assert_eq!(c.pairs, 100);
+        assert!(
+            c.get_within_budget(&1, 100).is_some(),
+            "an entry WITHIN budget must survive its own probe"
+        );
+        assert!(c.get_within_budget(&1, 10).is_none(), "the probe kept it");
+        assert_eq!(c.pairs, 0);
+    }
+
+    /// The trim skips what a live gate holds, exactly as an eviction on a miss
+    /// does — dropping the cache's reference would free nothing.
+    #[test]
+    fn a_probe_keeps_an_index_a_live_gate_still_holds() {
+        let mut c: Cache = GateCache::new();
+        let held = ix(100);
+        c.insert(1, held.clone());
+        assert!(c.get_within_budget(&1, 0).is_some());
+        drop(held);
+        assert!(c.get_within_budget(&1, 0).is_none());
     }
 
     #[test]

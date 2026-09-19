@@ -318,6 +318,37 @@ pub fn reset_overlap_enum_visits() {
     ENUM_VISITS.with(|c| c.set(0));
 }
 
+thread_local! {
+    /// Instrumentation: number of join-gate indices this thread BUILT rather
+    /// than served from cache — a broad-phase envelope set or an `on` match
+    /// set, counted on the cache-miss path whether or not the build then
+    /// declines.
+    ///
+    /// The leaf-visit counter above says what a gate DROVE; this one says what
+    /// the memoization cost, and it is the only direct evidence that a repeated
+    /// evaluation reuses an index instead of rebuilding it. That distinction is
+    /// invisible in a document's answers — a rebuilt index is the same pure
+    /// function of the same key columns — so without it a test of the cache
+    /// budget cannot tell a hit from a miss.
+    static GATE_INDEX_BUILDS: Cell<u64> = const { Cell::new(0) };
+}
+
+/// Count one join-gate index build on this thread.
+#[inline]
+pub(crate) fn bump_gate_index_builds() {
+    GATE_INDEX_BUILDS.with(|c| c.set(c.get().wrapping_add(1)));
+}
+
+/// This thread's join-gate index BUILD count (see [`reset_gate_index_builds`]).
+pub fn gate_index_builds() -> u64 {
+    GATE_INDEX_BUILDS.with(Cell::get)
+}
+
+/// Zero this thread's join-gate index build counter.
+pub fn reset_gate_index_builds() {
+    GATE_INDEX_BUILDS.with(|c| c.set(0));
+}
+
 /// Kill-switch for the whole join-gate DRIVER (`ESS_JOIN_GATE_DISABLE=1`, or
 /// [`set_join_gate_enabled`] within a thread).
 ///
@@ -373,7 +404,9 @@ pub fn set_join_gate_enabled(on: bool) -> bool {
 /// rebuilt per cell. Retaining every index a run ever built is a different
 /// thing, and it made peak memory track the sum of every match set rather than
 /// the largest one (issue #418). The budget bounds that; the cache evicts
-/// least-recently-used, and evicts BEFORE it builds the replacement.
+/// least-recently-used, evicts BEFORE it builds the replacement, and trims to
+/// the budget at every PROBE — so a gate that only ever HITS, the steady state
+/// of an RHS in a time loop, is bounded too.
 ///
 /// Denominated in pairs rather than entries because entries differ by orders of
 /// magnitude: a six-cell regrid geometry and a fifty-million-pair star join are
@@ -418,8 +451,9 @@ thread_local! {
 
 /// Set the resident-pair budget for THIS thread, returning the previous
 /// setting so a caller can restore it. `0` retains nothing beyond the indices
-/// a live gate is holding, which is the arm a differential test runs to show
-/// that eviction changes cost and not answers.
+/// a live gate is holding — every evaluation rebuilds — which is the arm a
+/// differential test runs to show that eviction changes cost and not answers.
+/// [`gate_index_builds`] is how that test reads the cost it changed.
 pub fn set_gate_cache_pair_budget(pairs: usize) -> usize {
     let prev = gate_cache_pair_budget();
     GATE_CACHE_PAIRS.with(|c| c.set(Some(pairs)));

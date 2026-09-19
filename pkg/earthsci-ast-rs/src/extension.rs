@@ -89,8 +89,8 @@ pub mod broad_phase {
     pub use crate::broad_phase::{
         DEFAULT_GATE_CACHE_PAIRS, OverlapIndex, broad_phase_candidates,
         broad_phase_candidates_bruteforce, envelope_vectors, gate_cache_pair_budget,
-        join_gate_enabled, overlap_enum_visits, reset_overlap_enum_visits,
-        set_gate_cache_pair_budget, set_join_gate_enabled,
+        gate_index_builds, join_gate_enabled, overlap_enum_visits, reset_gate_index_builds,
+        reset_overlap_enum_visits, set_gate_cache_pair_budget, set_join_gate_enabled,
     };
 }
 

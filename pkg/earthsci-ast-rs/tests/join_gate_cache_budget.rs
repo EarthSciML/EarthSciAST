@@ -1,5 +1,5 @@
 //! The join-gate index caches have a RESIDENT-PAIR BUDGET (issue #418), so an
-//! index can now be evicted and rebuilt within one run. This pins the two
+//! index can now be evicted and rebuilt within one run. This pins the three
 //! properties that makes acceptable.
 //!
 //! 1. **It cannot change an answer.** A gate is a pure optimisation: the driver
@@ -14,6 +14,17 @@
 //!    the same on both arms: an evicted index is rebuilt, not silently
 //!    declined, and a declined gate would fall back to the full product and
 //!    show up here as a different count.
+//! 3. **It must actually BOUND memory, not merely evict on a miss.** The
+//!    memoization's whole point is a gate that hits — an RHS evaluated every
+//!    step of a time loop — and a hit is exactly where an eviction policy
+//!    driven off misses would never run. So the second test below builds ONE
+//!    problem and integrates it, which is the only shape in which the same
+//!    gate key is probed twice, and reads `gate_index_builds` to tell a
+//!    retained index from a rebuilt one.
+//!
+//! Why the counter and not the clock: a rebuild is invisible in a document's
+//! answers by construction (see property 1), so nothing else here can
+//! distinguish a cache that works from one that never hits.
 //!
 //! Why a whole file for a cache policy: the memoization is load-bearing (a gate
 //! is resolved once per node and consulted once per output cell), so a change
@@ -24,10 +35,10 @@
 use std::collections::HashMap;
 
 use earthsci_ast::extension::broad_phase::{
-    DEFAULT_GATE_CACHE_PAIRS, overlap_enum_visits, reset_overlap_enum_visits,
-    set_gate_cache_pair_budget,
+    DEFAULT_GATE_CACHE_PAIRS, gate_index_builds, overlap_enum_visits, reset_gate_index_builds,
+    reset_overlap_enum_visits, set_gate_cache_pair_budget,
 };
-use earthsci_ast::{ProblemOptions, esm_problem, observed_field};
+use earthsci_ast::{Alg, ProblemOptions, SolveOptions, esm_problem, observed_field, solve};
 use ndarray::{ArrayD, IxDyn};
 use serde_json::{Value, json};
 
@@ -38,6 +49,13 @@ fn arr1(v: &[f64]) -> ArrayD<f64> {
 fn ix(f: &str, i: &str) -> Value {
     json!({"op": "index", "args": [f, i]})
 }
+
+/// Leaf visits ONE gate-driven evaluation of the fixture's aggregate costs:
+/// the match set is the whole of what the driven unroll enters. Pinned as a
+/// constant because the dynamic test divides by it — `visits == PER_EVAL *
+/// builds` is how "every evaluation rebuilt" is stated exactly rather than as
+/// "more than once".
+const PER_EVAL_VISITS: u64 = 120;
 
 /// `L` rows carry a join key and an activity, `R` rows a key and a rate; the
 /// single observed is `E[l] = Σ_{r : lkey[l] == rkey[r]} activity[l]·rate[r]`,
@@ -81,6 +99,13 @@ impl Tables {
             .collect()
     }
 
+    /// The dynamic fixture's per-row decay constant, `Σ_{r : match} decay[r]`.
+    /// Scaled down from `rate` so `exp` over `[0, 1]` stays in a range a `f64`
+    /// comparison against the analytic answer can mean something.
+    fn decay(&self) -> Vec<f64> {
+        self.rate.iter().map(|r| -r / 1.0e4).collect()
+    }
+
     fn const_arrays(&self) -> HashMap<String, ArrayD<f64>> {
         [
             ("lkey".to_string(), arr1(&self.lkey)),
@@ -92,9 +117,38 @@ impl Tables {
         .collect()
     }
 
-    /// `gated` selects the arm: the `join.on` gate under test, or the
-    /// hand-written equality `filter` it lowers to (the differential baseline,
-    /// which touches no cache at all).
+    fn index_sets(&self) -> Value {
+        json!({
+            "lrows": {"kind": "interval", "size": self.lkey.len()},
+            "rrows": {"kind": "interval", "size": self.rkey.len()}
+        })
+    }
+
+    /// The gated `faq`, or the hand-written equality `filter` it lowers to (the
+    /// differential baseline, which touches no cache at all).
+    fn node(expr: Value, gated: bool) -> Value {
+        let mut node = json!({
+            "op": "faq",
+            "reduce": "+",
+            "output_idx": ["l"],
+            "ranges": {"l": {"from": "lrows"}, "r": {"from": "rrows"}},
+            "expr": expr
+        });
+        let obj = node.as_object_mut().unwrap();
+        if gated {
+            obj.insert("join".into(), json!([{"on": [["lkey", "rkey"]]}]));
+        } else {
+            obj.insert(
+                "filter".into(),
+                json!({"op": "==", "args": [ix("lkey", "l"), ix("rkey", "r")]}),
+            );
+        }
+        node
+    }
+
+    /// STATIC: one observed `E`, materialized at build. Its gate is resolved
+    /// once per prepare, so this document can pin ANSWERS but never a cache
+    /// hit — see [`Tables::dynamic_doc`].
     fn doc(&self, gated: bool) -> Value {
         let mut vars = serde_json::Map::new();
         for (name, set) in [
@@ -107,93 +161,175 @@ impl Tables {
         }
         vars.insert("E".into(), json!({"type": "unknown", "shape": ["lrows"]}));
 
-        let mut node = json!({
-            "op": "faq",
-            "reduce": "+",
-            "output_idx": ["l"],
-            "ranges": {"l": {"from": "lrows"}, "r": {"from": "rrows"}},
-            "args": ["lkey", "rkey", "activity", "rate"],
-            "expr": {"op": "*", "args": [ix("activity", "l"), ix("rate", "r")]}
-        });
-        let obj = node.as_object_mut().unwrap();
-        if gated {
-            obj.insert("join".into(), json!([{"on": [["lkey", "rkey"]]}]));
-        } else {
-            obj.insert(
-                "filter".into(),
-                json!({"op": "==", "args": [ix("lkey", "l"), ix("rkey", "r")]}),
-            );
-        }
+        let mut node = Tables::node(
+            json!({"op": "*", "args": [ix("activity", "l"), ix("rate", "r")]}),
+            gated,
+        );
+        node.as_object_mut()
+            .unwrap()
+            .insert("args".into(), json!(["lkey", "rkey", "activity", "rate"]));
 
         json!({
             "esm": "1.1.0",
             "metadata": {"name": "join_gate_cache_budget"},
-            "index_sets": {
-                "lrows": {"kind": "interval", "size": self.lkey.len()},
-                "rrows": {"kind": "interval", "size": self.rkey.len()}
-            },
+            "index_sets": self.index_sets(),
             "models": {"J": {
                 "variables": Value::Object(vars),
                 "equations": [{"lhs": "E", "rhs": node}]
             }}
         })
     }
+
+    /// DYNAMIC: `d(E)/dt = Σ_{r : lkey[l] == rkey[r]} E[l]·decay[r]` from
+    /// `E[l](0) = 1`, so `E[l](1) = exp(Σ_{r : match} decay[r])`.
+    ///
+    /// The aggregate depends on the STATE, so it is evaluated once per RHS call
+    /// rather than folded at build; its gate's key columns (`lkey`, `rkey`) are
+    /// parameters, so every one of those evaluations probes the SAME cache key.
+    /// That is what makes this document — and not the static one — a test of
+    /// the cache.
+    fn dynamic_doc(&self, gated: bool) -> Value {
+        // Literal `default`s rather than `const_arrays`: a build-time constant
+        // array feeds the static evaluation, but the parameters an INTEGRATION
+        // reads have to be values the document carries.
+        let mut vars = serde_json::Map::new();
+        vars.insert(
+            "lkey".into(),
+            json!({"type": "parameter", "shape": ["lrows"], "default": self.lkey}),
+        );
+        vars.insert(
+            "rkey".into(),
+            json!({"type": "parameter", "shape": ["rrows"], "default": self.rkey}),
+        );
+        vars.insert(
+            "decay".into(),
+            json!({"type": "parameter", "shape": ["rrows"], "default": self.decay()}),
+        );
+        vars.insert(
+            "E".into(),
+            json!({"type": "unknown", "shape": ["lrows"], "default": 1.0}),
+        );
+
+        let mut node = Tables::node(
+            json!({"op": "*", "args": [ix("E", "l"), ix("decay", "r")]}),
+            gated,
+        );
+        node.as_object_mut()
+            .unwrap()
+            .insert("args".into(), json!(["lkey", "rkey", "decay", "E"]));
+
+        json!({
+            "esm": "1.1.0",
+            "metadata": {"name": "join_gate_cache_budget_dynamic"},
+            "index_sets": self.index_sets(),
+            "models": {"J": {
+                "variables": Value::Object(vars),
+                "equations": [{
+                    "lhs": {"op": "D", "args": ["E"], "wrt": "t"},
+                    "rhs": node
+                }]
+            }}
+        })
+    }
 }
 
-/// Materialize `E`, returning `(values, gate-driven leaf visits)`.
-fn run(t: &Tables, gated: bool) -> (Vec<f64>, u64) {
+/// What one run cost the caches: leaf visits the gate DROVE, and indices it
+/// BUILT rather than reused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Cost {
+    visits: u64,
+    builds: u64,
+}
+
+fn options(const_arrays: HashMap<String, ArrayD<f64>>) -> ProblemOptions {
+    ProblemOptions {
+        model_name: Some("J".into()),
+        const_arrays,
+        build_providers: Vec::new(),
+        ..Default::default()
+    }
+}
+
+/// Materialize the static `E`, returning `(values, cost)`.
+fn run(t: &Tables, gated: bool) -> (Vec<f64>, Cost) {
     let doc = t.doc(gated);
     reset_overlap_enum_visits();
-    let prep = esm_problem(
-        &doc,
-        (0.0, 0.0),
-        ProblemOptions {
-            model_name: Some("J".into()),
-            const_arrays: t.const_arrays(),
-            build_providers: Vec::new(),
+    reset_gate_index_builds();
+    let prep = esm_problem(&doc, (0.0, 0.0), options(t.const_arrays())).expect("prepare");
+    let cost = Cost {
+        visits: overlap_enum_visits(),
+        builds: gate_index_builds(),
+    };
+    let field = observed_field(&prep, "E").expect("E materialized");
+    (field.iter().copied().collect(), cost)
+}
+
+/// Integrate the dynamic document to `t = 1` under one budget, returning the
+/// final state and what the run cost the caches.
+///
+/// ONE `esm_problem`, then a solve: the gate is a single `OnGate` with a single
+/// id for the whole integration, which is what lets its cache key repeat. A
+/// fresh prepare per evaluation would allocate a new gate id (`join::
+/// next_gate_id`) and so a new key, and every probe would miss whatever the
+/// budget said.
+fn integrate(t: &Tables, gated: bool, budget: usize) -> (Vec<f64>, Cost) {
+    let doc = t.dynamic_doc(gated);
+    let prep = esm_problem(&doc, (0.0, 1.0), options(HashMap::new())).expect("prepare");
+    let prev = set_gate_cache_pair_budget(budget);
+    reset_overlap_enum_visits();
+    reset_gate_index_builds();
+    let sol = solve(
+        &prep,
+        &SolveOptions {
+            alg: Alg::Bdf,
+            abstol: Some(1e-12),
+            reltol: Some(1e-10),
+            saveat: Some(vec![0.0, 1.0]),
             ..Default::default()
         },
     )
-    .expect("prepare");
-    let visits = overlap_enum_visits();
-    let field = observed_field(&prep, "E").expect("E materialized");
-    (field.iter().copied().collect(), visits)
-}
-
-/// Evaluate the gated document REPEATEDLY under one budget. Repetition is the
-/// point: the first evaluation always builds the index, so only a second one
-/// can tell a retained index from a rebuilt one.
-fn run_repeatedly(t: &Tables, budget: usize, times: usize) -> (Vec<f64>, u64) {
-    let prev = set_gate_cache_pair_budget(budget);
-    let mut last = (Vec::new(), 0);
-    for _ in 0..times {
-        last = run(t, true);
-    }
+    .expect("integrate");
+    let cost = Cost {
+        visits: overlap_enum_visits(),
+        builds: gate_index_builds(),
+    };
     set_gate_cache_pair_budget(prev);
-    last
+    let final_state = sol
+        .state
+        .iter()
+        .map(|row| *row.last().expect("a saved step"))
+        .collect();
+    (final_state, cost)
 }
 
 #[test]
 fn a_zero_budget_rebuilds_the_index_and_answers_identically() {
     let t = Tables::fixture();
     let oracle = t.oracle();
-    let (filtered, filter_visits) = run(&t, false);
+    let (filtered, filter_cost) = run(&t, false);
     assert_eq!(
-        filter_visits, 0,
+        filter_cost.visits, 0,
         "the un-gated arm must not run the gate-driven unroll"
     );
+    assert_eq!(
+        filter_cost.builds, 0,
+        "the un-gated arm must not touch the gate caches at all"
+    );
 
-    let (retained, retained_visits) = run_repeatedly(&t, DEFAULT_GATE_CACHE_PAIRS, 3);
-    let (evicted, evicted_visits) = run_repeatedly(&t, 0, 3);
+    let prev = set_gate_cache_pair_budget(DEFAULT_GATE_CACHE_PAIRS);
+    let (retained, retained_cost) = run(&t, true);
+    set_gate_cache_pair_budget(0);
+    let (evicted, evicted_cost) = run(&t, true);
+    set_gate_cache_pair_budget(prev);
 
     assert_eq!(
-        retained_visits, evicted_visits,
+        retained_cost.visits, PER_EVAL_VISITS,
+        "one gated evaluation visits the whole match set and nothing else"
+    );
+    assert_eq!(
+        retained_cost.visits, evicted_cost.visits,
         "an evicted index must be REBUILT, not declined: a declined gate walks \
          the full product and would not bump the driven-unroll counter the same way"
-    );
-    assert!(
-        evicted_visits > 0,
-        "the gate stopped driving altogether under a zero budget"
     );
 
     assert_eq!(evicted.len(), t.lkey.len());
@@ -220,13 +356,79 @@ fn a_zero_budget_rebuilds_the_index_and_answers_identically() {
     }
 }
 
+/// The property the static test above cannot reach: across the MANY
+/// evaluations of one integration, the default budget builds the index ONCE and
+/// a zero budget builds it every time — and the two answer identically.
+#[test]
+fn a_retained_index_is_built_once_and_a_zero_budget_rebuilds_every_evaluation() {
+    let t = Tables::fixture();
+    let (retained, retained_cost) = integrate(&t, true, DEFAULT_GATE_CACHE_PAIRS);
+    let (evicted, evicted_cost) = integrate(&t, true, 0);
+
+    assert!(
+        retained_cost.visits > PER_EVAL_VISITS,
+        "the integration must evaluate the gated aggregate more than once, or \
+         this test says nothing about a cache HIT (visits: {})",
+        retained_cost.visits
+    );
+    assert_eq!(
+        retained_cost.builds, 1,
+        "the default budget must build the index once and serve every later \
+         evaluation from cache"
+    );
+    assert_eq!(
+        evicted_cost.builds * PER_EVAL_VISITS,
+        evicted_cost.visits,
+        "a zero budget must rebuild on EVERY evaluation: an index no live gate \
+         holds cannot be kept resident by hits alone (issue #418)"
+    );
+    assert_eq!(
+        retained_cost.visits, evicted_cost.visits,
+        "the evicted arm drove the same work: it rebuilt the index, it did not \
+         decline the gate"
+    );
+
+    // Same document, same solver, same numbers — the cache can only change cost.
+    let (filtered, _) = integrate(&t, false, DEFAULT_GATE_CACHE_PAIRS);
+    assert_eq!(retained.len(), t.lkey.len());
+    for l in 0..retained.len() {
+        assert_eq!(
+            evicted[l].to_bits(),
+            retained[l].to_bits(),
+            "E[{l}](1) differs between a retained index ({}) and a rebuilt one ({})",
+            retained[l],
+            evicted[l]
+        );
+        assert_eq!(
+            evicted[l].to_bits(),
+            filtered[l].to_bits(),
+            "E[{l}](1) differs from the hand-written filter the gate lowers to"
+        );
+    }
+
+    // …and they are the right numbers: `E[l](1) = exp(Σ_{r : match} decay[r])`.
+    let decay = t.decay();
+    for (l, &got) in retained.iter().enumerate() {
+        let want: f64 = (0..t.rkey.len())
+            .filter(|&r| t.lkey[l] == t.rkey[r])
+            .map(|r| decay[r])
+            .sum::<f64>()
+            .exp();
+        assert!(
+            (got - want).abs() < 1e-9,
+            "E[{l}](1) = {got} but the analytic answer is {want}"
+        );
+    }
+}
+
 #[test]
 fn the_budget_setter_reports_the_previous_setting() {
     let first = set_gate_cache_pair_budget(1234);
-    assert_eq!(
-        first, DEFAULT_GATE_CACHE_PAIRS,
-        "an untouched thread starts at the default budget"
-    );
     let second = set_gate_cache_pair_budget(first);
     assert_eq!(second, 1234, "the setter did not report what it replaced");
+    assert_eq!(
+        set_gate_cache_pair_budget(first),
+        first,
+        "the restore did not take"
+    );
 }
