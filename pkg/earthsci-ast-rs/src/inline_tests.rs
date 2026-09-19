@@ -2427,6 +2427,16 @@ fn run_component_tests(
                     .iter()
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect();
+                // Whether the build has ANYTHING to answer from. A document
+                // with nothing to integrate is served from these fields below
+                // — but only when they exist. `solve` is what raises an
+                // evaluator FAULT (`E_TREEWALK_RECUR_UNAVAILABLE` for an
+                // unguarded recurrence self-read, `tests/
+                // recurrence_causal_self_reference.rs`), and skipping it on a
+                // document the build could not materialize replaced that fault
+                // with "has no cells in var_map" — a worse diagnostic for a
+                // document that is genuinely broken.
+                let build_has_fields = !fields.is_empty();
                 // Re-arm the state a FRESHLY BUILT problem is in. Construction
                 // leaves `inspection` empty, `solve` fills it only on the array
                 // backend, and `take_inspection` DRAINS it — so without this a
@@ -2464,7 +2474,11 @@ fn run_component_tests(
                     // asked for that build) — except where that would
                     // substitute the value at `tspan.0` for a quantity that
                     // moves, which is refused by name rather than answered.
-                    None if crate::problem::has_nothing_to_integrate(prob) => {
+                    //
+                    // Only when the build HAS fields. With none there is
+                    // nothing to answer from, and `solve` is the one thing
+                    // that still raises the document's own evaluator fault.
+                    None if crate::problem::has_nothing_to_integrate(prob) && build_has_fields => {
                         match unevaluable_time_dependent_assertion(run_file, model_name, t) {
                             Some(message) => Err(message),
                             None => Ok(build_only_solution(saveat)),
