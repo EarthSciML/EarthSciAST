@@ -1,0 +1,190 @@
+{
+    "category": "static_evaluation_assertions",
+    "version": "1.0",
+    "description": "Cross-binding conformance for esm-spec §6.6.3's definition of an assertion's `time` — 'Simulation time at which to evaluate the assertion; must lie in [time_span.start, time_span.end]' — on documents whose asserted quantity is an explicit function of `t`. `algebraic_time_dependence.esm` declares NO differential equations at all: §6.3.1 derives `system_kind: \"nonlinear\"` for it, there is nothing to integrate, and the run is the single static evaluation `esm simulate` already performs — yet each assertion must still be evaluated at ITS OWN time, because §6.6.3 says evaluate, not integrate to. `time_dependent_observed_on_an_ode.esm` re-runs the same contract on a document that does integrate, pairing a `t`-dependent observed with the state it is the closed form of so that `gap = x - drive` is zero only when both halves are read at one time. Both fixtures were red somewhere before issue #406: Rust handed the algebraic document's compiled, STATE-FREE right-hand side to diffsol, which reported 'Exceeded maximum number of nonlinear solver failures (51) at time = 0' at every assertion past the start of the span; Julia handed the same document's zero-length state vector to OrdinaryDiffEq, whose dense interpolant threw `BoundsError: attempt to access 0-element Vector{Float64} at index [1]`, and — on BOTH fixtures — its build-time cellwise evaluator bound the time slot to the literal 0.0, so every `t`-dependent observed read zero and reported a plausible wrong number rather than an error. Python was correct on both from the start and is the cross-check that fixes the intended answer; Julia remains the reference binding that mints the goldens.",
+    "reference_binding": "julia",
+    "bindings_required": [
+        "julia",
+        "python",
+        "rust"
+    ],
+    "scope_excluded": {
+        "go": "rewrite-only port; ships no integrator and no inline-test runner, so there is no execution path that could read an assertion's `time` (see pkg/earthsci-ast-go/pkg/esm/solver.go, which carries the §2.2 solver BLOCK and nothing that runs it)",
+        "typescript": "rewrite-only port; `src/solver.ts` states outright that 'TypeScript ships no integrator', and `validate/inline-test-checks.ts` validates inline tests without running them"
+    },
+    "integrators": {
+        "julia": {
+            "algorithm": "Tsit5",
+            "reltol": 1e-12,
+            "abstol": 1e-14
+        },
+        "python": {
+            "method": "RK45",
+            "rtol": 1e-12,
+            "atol": 1e-14
+        },
+        "rust": {
+            "solver": "Erk",
+            "reltol": 1e-12,
+            "abstol": 1e-14
+        }
+    },
+    "tolerances": {
+        "assertion_rtol": 1e-09,
+        "assertion_atol": 1e-11
+    },
+    "fixtures": [
+        {
+            "id": "algebraic_time_dependence",
+            "path": "fixtures/algebraic_time_dependence.esm",
+            "model": "Diurnal",
+            "tags": [
+                "inline-test",
+                "esm-spec-6.6.3",
+                "esm-spec-6.3.1",
+                "static-evaluation",
+                "nonlinear",
+                "time-dependent-observed",
+                "parameter-overrides"
+            ],
+            "shape": {},
+            "assertions": [
+                {
+                    "test_id": "evaluated_at_each_asserted_time",
+                    "assertion_idx": 1,
+                    "variable": "phase",
+                    "expected": 0.0,
+                    "note": "the span's start: the one time a runner that ignores `time` also gets right"
+                },
+                {
+                    "test_id": "evaluated_at_each_asserted_time",
+                    "assertion_idx": 2,
+                    "variable": "phase",
+                    "expected": 1.0,
+                    "note": "omega*t at t=4 with omega=0.25"
+                },
+                {
+                    "test_id": "evaluated_at_each_asserted_time",
+                    "assertion_idx": 3,
+                    "variable": "wave",
+                    "expected": 0.0
+                },
+                {
+                    "test_id": "evaluated_at_each_asserted_time",
+                    "assertion_idx": 4,
+                    "variable": "wave",
+                    "expected": 1.682941969615793,
+                    "note": "2*sin(1): NONLINEAR in t, so a wrong evaluation time cannot be rescaled into the right answer"
+                },
+                {
+                    "test_id": "evaluated_at_each_asserted_time",
+                    "assertion_idx": 5,
+                    "variable": "wave",
+                    "expected": 1.8185948536513634,
+                    "note": "2*sin(2), the span's end"
+                },
+                {
+                    "test_id": "evaluated_at_each_asserted_time",
+                    "assertion_idx": 6,
+                    "variable": "level",
+                    "expected": 2.0,
+                    "note": "time-INVARIANT control: the fixture does not merely require a nonzero reading"
+                },
+                {
+                    "test_id": "parameter_overrides_reach_the_static_evaluation",
+                    "assertion_idx": 1,
+                    "variable": "phase",
+                    "expected": 2.0,
+                    "note": "overrides bind before the single evaluation"
+                },
+                {
+                    "test_id": "parameter_overrides_reach_the_static_evaluation",
+                    "assertion_idx": 2,
+                    "variable": "wave",
+                    "expected": 2.727892280477045,
+                    "note": "3*sin(2) under {omega: 0.5, amp: 3.0}"
+                },
+                {
+                    "test_id": "parameter_overrides_reach_the_static_evaluation",
+                    "assertion_idx": 3,
+                    "variable": "level",
+                    "expected": 3.0
+                }
+            ],
+            "golden": "golden/algebraic_time_dependence.json"
+        },
+        {
+            "id": "time_dependent_observed_on_an_ode",
+            "path": "fixtures/time_dependent_observed_on_an_ode.esm",
+            "model": "Ramp",
+            "tags": [
+                "inline-test",
+                "esm-spec-6.6.3",
+                "time-dependent-observed",
+                "ode"
+            ],
+            "shape": {},
+            "assertions": [
+                {
+                    "test_id": "an_observed_of_t_reads_the_asserted_time",
+                    "assertion_idx": 1,
+                    "variable": "x",
+                    "expected": 0.0
+                },
+                {
+                    "test_id": "an_observed_of_t_reads_the_asserted_time",
+                    "assertion_idx": 2,
+                    "variable": "drive",
+                    "expected": 0.0
+                },
+                {
+                    "test_id": "an_observed_of_t_reads_the_asserted_time",
+                    "assertion_idx": 3,
+                    "variable": "gap",
+                    "expected": 0.0
+                },
+                {
+                    "test_id": "an_observed_of_t_reads_the_asserted_time",
+                    "assertion_idx": 4,
+                    "variable": "x",
+                    "expected": 6.0,
+                    "note": "the integrated state at the span's end"
+                },
+                {
+                    "test_id": "an_observed_of_t_reads_the_asserted_time",
+                    "assertion_idx": 5,
+                    "variable": "drive",
+                    "expected": 6.0,
+                    "note": "the same quantity in closed form, read as an observed"
+                },
+                {
+                    "test_id": "an_observed_of_t_reads_the_asserted_time",
+                    "assertion_idx": 6,
+                    "variable": "gap",
+                    "expected": 0.0,
+                    "note": "x - drive: zero only if both are read at ONE time"
+                },
+                {
+                    "test_id": "the_same_observed_at_a_longer_span",
+                    "assertion_idx": 1,
+                    "variable": "x",
+                    "expected": 15.0
+                },
+                {
+                    "test_id": "the_same_observed_at_a_longer_span",
+                    "assertion_idx": 2,
+                    "variable": "drive",
+                    "expected": 15.0,
+                    "note": "the observed MOVES with the span end, which reading t=0 cannot do"
+                },
+                {
+                    "test_id": "the_same_observed_at_a_longer_span",
+                    "assertion_idx": 3,
+                    "variable": "gap",
+                    "expected": 0.0
+                }
+            ],
+            "golden": "golden/time_dependent_observed_on_an_ode.json"
+        }
+    ]
+}

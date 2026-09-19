@@ -223,7 +223,8 @@ function _evaluate_cellwise_blas(expr::ASTExpr,
                                  cells::AbstractVector{<:AbstractVector{<:Integer}},
                                  const_arrays::AbstractDict,
                                  registered_functions::AbstractDict,
-                                 params::AbstractDict)
+                                 params::AbstractDict,
+                                 t::Float64=0.0)
     nidx = length(first(cells))
     (nidx >= 1 && all(c -> length(c) == nidx, cells)) || return nothing
 
@@ -300,7 +301,7 @@ function _evaluate_cellwise_blas(expr::ASTExpr,
     aug = Dict{String,Any}(String(k) => v for (k, v) in const_arrays)
     aug[concname] = conc
     ce = _cellwise_compile_once(expr2, nidx, aug, registered_functions, params;
-                                bind_syms=out_syms)
+                                bind_syms=out_syms, t=t)
     ce === nothing && return nothing
     return _eval_cells(ce, cells)
 end
@@ -322,12 +323,21 @@ pass their resolved values as `params` (name → value, e.g. a build's
 is what lets a parameter-backed rank≥2 observed / analytic reference be
 asserted directly (esm-spec §6.6.5) instead of erroring with
 `E_TREEWALK_UNBOUND_VARIABLE`.
+
+TIME is its own argument, `t`, and NOT a `params` entry: the compiler maps the
+name `t` to the evaluator's time slot rather than to a parameter read, so a
+`params` entry spelled `"t"` never reaches a time-dependent body. It defaults
+to `0.0`, which is the right value for every build-time caller; a §6.6
+assertion passes its own `time` (esm-spec §6.6.3), which is what makes an
+observed that is a function of `t` — a solar declination, an hour angle — read
+correctly away from the start of the span.
 """
 function evaluate_cellwise(expr::ASTExpr, cells::AbstractVector{<:AbstractVector{<:Integer}};
                            const_arrays::AbstractDict=Dict{String,Any}(),
                            registered_functions::AbstractDict=Dict{String,Function}(),
                            params::AbstractDict=Dict{String,Float64}(),
-                           blas_accel::Bool=false)::Vector{Float64}
+                           blas_accel::Bool=false,
+                           t::Float64=0.0)::Vector{Float64}
     isempty(cells) && return Float64[]
     # OPT-IN BLAS accelerator (wall2 Phase D): when `blas_accel=true` and the
     # observed is (or elementwise-wraps) the linear sum-product mat-vec
@@ -340,7 +350,7 @@ function evaluate_cellwise(expr::ASTExpr, cells::AbstractVector{<:AbstractVector
     # `blas_accel=false` (default) skips it entirely ⇒ behaviour is unchanged.
     if blas_accel
         blas = _evaluate_cellwise_blas(expr, cells, const_arrays,
-                                       registered_functions, params)
+                                       registered_functions, params, t)
         blas === nothing || return blas
     end
     # Compile-once fast path (wall2 Phase C — THE Wall #2 fix): resolve+compile the
@@ -350,13 +360,14 @@ function evaluate_cellwise(expr::ASTExpr, cells::AbstractVector{<:AbstractVector
     # fallback below, output byte-identical) on any unsupported construct.
     nidx = length(first(cells))
     if nidx >= 1 && all(c -> length(c) == nidx, cells)
-        ce = _cellwise_compile_once(expr, nidx, const_arrays, registered_functions, params)
+        ce = _cellwise_compile_once(expr, nidx, const_arrays, registered_functions,
+                                    params; t=t)
         ce === nothing || return _eval_cells(ce, cells)
     end
     return Float64[_eval_cellwise(expr, collect(Int, c);
                                   const_arrays=const_arrays,
                                   registered_functions=registered_functions,
-                                  params=params)
+                                  params=params, t=t)
                    for c in cells]
 end
 
@@ -908,6 +919,13 @@ function _observed_field(insp::BuildInspection, file::EsmFile,
     # is a STATE is not a constant, and its value at this time is the answer.
     isempty(state_scalars) || (params = merge(params, Dict{String,Float64}(
         String(k) => Float64(v) for (k, v) in state_scalars)))
+    # TIME travels on its own argument, not in `params`: the compiler maps the
+    # name `t` to the evaluator's time slot and never reads a parameter called
+    # `t`, so an observed that is a function of `t` — `y = a·t`, a solar
+    # declination — read ZERO at every asserted time until this was threaded
+    # through (issue #406). The callsites seed `state_scalars["t"]` with the
+    # sampled time; `0.0` is the build-time default for every other caller.
+    tval = Float64(get(state_scalars, "t", 0.0))
     const_scope = isempty(state_arrays) ? insp.const_arrays :
         merge(Dict{String,Any}(String(k) => v for (k, v) in insp.const_arrays),
               Dict{String,Any}(String(k) => v for (k, v) in state_arrays))
@@ -935,16 +953,18 @@ function _observed_field(insp::BuildInspection, file::EsmFile,
     if raw !== nothing
         try
             ca = _materialized_obs_scope(insp, file, mname, String(variable), params;
-                                         base=const_scope)
+                                         base=const_scope, t=tval)
             if ca !== const_scope                # something actually materialized
-                return (evaluate_cellwise(raw, cells; const_arrays=ca, params=params),
+                return (evaluate_cellwise(raw, cells; const_arrays=ca, params=params,
+                                          t=tval),
                         cells)
             end
         catch
             # fall through to the inlined form below
         end
     end
-    field = evaluate_cellwise(expr, cells; const_arrays=const_scope, params=params)
+    field = evaluate_cellwise(expr, cells; const_arrays=const_scope, params=params,
+                              t=tval)
     return (field, cells)
 end
 
@@ -995,7 +1015,8 @@ independent keep the previous behaviour and cost.
 function _materialized_obs_scope(insp::BuildInspection, file::EsmFile,
                                  mname::AbstractString, target::AbstractString,
                                  params::AbstractDict;
-                                 base::AbstractDict=insp.const_arrays)
+                                 base::AbstractDict=insp.const_arrays,
+                                 t::Float64=0.0)
     isempty(insp.observed_defs) && return base
     model = _component_at(file, mname)
     model isa Model || return base
@@ -1097,7 +1118,7 @@ function _materialized_obs_scope(insp::BuildInspection, file::EsmFile,
         for cand in (raw_def(n), res_def(n))
             cand === nothing && continue
             vals = try
-                evaluate_cellwise(cand, cells; const_arrays=ca, params=params)
+                evaluate_cellwise(cand, cells; const_arrays=ca, params=params, t=t)
             catch
                 nothing
             end
@@ -1207,6 +1228,24 @@ function _array_scope_names(regs...)::Set{String}
     return out
 end
 
+# The independent (time) variable, as an expression spells it.
+const _TIME_VARIABLE = "t"
+
+# The refusal for a §6.6.5 analytic `reference` that mentions `t`.
+#
+# esm-spec §6.6.5 says what a reference may read: the asserted field's DIMENSION
+# NAMES, free, plus the model's PARAMETERS. The independent variable is neither.
+# It is not rejected by the evaluator either, because a reference is evaluated by
+# the BUILD-TIME cellwise evaluator, whose time slot is `0.0` — so a reference of
+# `t` used to answer with the expression at the start of the span and report a
+# plausible wrong number, in all three executing bindings at once. Refusing names
+# the mistake instead.
+#
+# The text is BYTE-IDENTICAL in Rust (`REFERENCE_MENTIONS_TIME`) and Python
+# (`REFERENCE_MENTIONS_TIME`); the three bindings must reject the same document
+# with the same sentence.
+const _REFERENCE_MENTIONS_TIME = "inline `reference` mentions `t`, which esm-spec §6.6.5 does not admit: a reference's free variables are the field's dimension names, and its other names are the model's parameters. A reference is evaluated at build time, where the independent variable has no value, so `t` would silently read 0 rather than the asserted time."
+
 """
     bind_dimension_names(expr, dims, scope=Dict{String,Float64}(),
                          arrays=Set{String}()) -> ASTExpr
@@ -1246,6 +1285,17 @@ checking only the parameter half would rebind it to the cell index in silence.
 function bind_dimension_names(expr::ASTExpr, dims::AbstractVector{<:AbstractString},
                               scope::AbstractDict=Dict{String,Float64}(),
                               arrays=Set{String}())::ASTExpr
+    # esm-spec §6.6.5 names what a reference may read, and `t` is not on the
+    # list. Reaching the evaluator with it is not an error there — the
+    # build-time evaluator has a time slot and it holds `0.0` — so before this
+    # check every binding answered a `t`-dependent reference with its value at
+    # the start of the span and reported a plausible wrong number. A reference
+    # whose FIELD is shaped over an index set actually named `t` is a different
+    # statement: there `t` IS a dimension name, §6.6.5 admits it, and it binds
+    # to the cell index below. Checked BEFORE the `isempty(dims)` exit, so a
+    # reference on an unshaped target is refused too.
+    (_TIME_VARIABLE in dims || !_mentions_free(expr, _TIME_VARIABLE)) ||
+        throw(InlineTestError(_REFERENCE_MENTIONS_TIME))
     isempty(dims) && return expr
     mentioned = String[String(d) for d in dims if _mentions_free(expr, String(d))]
     isempty(mentioned) && return expr
@@ -1437,6 +1487,13 @@ function _evaluate_assertion(a, sim, var_map::AbstractDict,
                              mname::AbstractString,
                              resolved_base::AbstractString,
                              renames::AbstractDict=Dict{String,String}())::Float64
+    # A solve whose `saveat` lies entirely outside the span saves NOTHING, and
+    # `argmin` over the empty trajectory raised `ArgumentError: reducing over an
+    # empty collection is not allowed` — an internal Julia message where the
+    # other bindings report a §6.6.3 refusal. Same vocabulary as the Rust
+    # runner's `time_index`.
+    isempty(sim.t) &&
+        throw(InlineTestError("no saved state at t=$(a.time) (empty trajectory)"))
     ti = argmin(abs.(sim.t .- a.time))
     abs(sim.t[ti] - a.time) <= _SAVED_TIME_RTOL * max(1.0, abs(a.time)) ||
         throw(InlineTestError("no saved state at t=$(a.time) (nearest $(sim.t[ti]))"))
@@ -1620,6 +1677,57 @@ struct _SimulateHandle
     merged_renames::Dict{String,String}
 end
 
+# The §6.6 stand-in for a solution when the document has NOTHING TO INTEGRATE:
+# the asserted times, an empty state vector at each, and a successful retcode.
+#
+# A document whose equations are all algebraic declares no state, and handing
+# its zero-length `u0` to an ODE integrator is not a degenerate solve that
+# returns the initial state — OrdinaryDiffEq's dense interpolant reads element
+# one of the state and throws `BoundsError: attempt to access 0-element
+# Vector{Float64} at index [1]` as soon as a saved time is not the span's start
+# (issue #406). Such a document's answers are its OBSERVED graph, which
+# `_evaluate_assertion` already evaluates out of the `BuildInspection` with `t`
+# bound to the sampled time, so the runner needs nothing from a solver here
+# except the time grid — which is exactly what this carries. Duck-typed on `.t`
+# / `.u` / `.retcode`, the three members `_evaluate_assertion` and
+# `_engine_setup` read, so this file stays solver-free.
+struct _StaticSolution
+    t::Vector{Float64}
+    u::Vector{Vector{Float64}}
+    retcode::Symbol
+end
+
+_static_solution(times::Vector{Float64}) =
+    _StaticSolution(times, [Float64[] for _ in times], :Success)
+
+# The times a document with NOTHING TO INTEGRATE is evaluated at: the asserted
+# times inside the declared span, plus the span's own endpoints.
+#
+# esm-spec §6.6.3 constrains an assertion's `time` to `[time_span.start,
+# time_span.end]`. An INTEGRATED document enforces that incidentally — the
+# trajectory stops at the span's end, so an assertion past it is refused by the
+# saved-time lookup in `_evaluate_assertion` — and Python's runner, which
+# samples a dense grid over the span, refuses the same assertion on a STATIC
+# document too. A static evaluation has no boundary of its own: evaluating the
+# observed graph at whatever number the assertion names would answer `t = 100`
+# on a span of `[0, 1]` and report a PASS, which is issue #406's
+# plausible-wrong-number outcome reached one road further on, and which would
+# put this binding on a different verdict from Python for one document.
+#
+# The endpoints are kept whatever the assertions say, so that the refusal names
+# the span ("nearest 1.0") instead of reducing over an empty collection, and so
+# that a test whose asserted times are ALL out of span — or which has no
+# assertions at all — still produces a well-formed evaluation.
+function _static_evaluation_times(times::AbstractVector{<:Real},
+                                  tstart::Real, tstop::Real)::Vector{Float64}
+    lo, hi = minmax(Float64(tstart), Float64(tstop))
+    out = Float64[lo, hi]
+    for x in times
+        lo <= x <= hi && push!(out, Float64(x))
+    end
+    return sort!(unique!(out))
+end
+
 # Qualify a test's override keys with the component that OWNS the test.
 #
 # esm-spec §6.6.2 keys `parameter_overrides` / `initial_conditions` by LOCAL
@@ -1701,7 +1809,26 @@ function _engine_setup(e::SimulateTestEngine, t)
                                _seeded_overrides(e.seed_u0, t.initial_conditions),
                                e.mname, target),
                            inspect=insp)
-        sim = _solve_problem(prob, e.alg; reltol=e.reltol, abstol=e.abstol,
+        # A document with NOTHING TO INTEGRATE is EVALUATED, not solved — the
+        # same route `simulate` takes for it, and the one this runner did not
+        # take until issue #406.
+        #
+        # esm-spec §6.6.3 defines an assertion's `time` as "Simulation time at
+        # which to evaluate the assertion; must lie in `[time_span.start,
+        # time_span.end]`": it constrains the value and says *evaluate*, not
+        # *integrate to*. An algebraic document is still a function of `t` — the
+        # diurnal solar-geometry component that found this is declination, hour
+        # angle and zenith cosine, all algebraic in `t` — and
+        # `_evaluate_assertion` binds `t` to each sampled time before reading
+        # the observed graph, so every asserted time answers on its own terms.
+        # The grid is restricted to the declared span, because the same clause
+        # says the time "must lie in `[time_span.start, time_span.end]`" and a
+        # static evaluation is the one path with no boundary of its own
+        # (`_static_evaluation_times`).
+        sim = isempty(prob.u0) ?
+              _static_solution(_static_evaluation_times(times, t.time_span.start,
+                                                        t.time_span.stop)) :
+              _solve_problem(prob, e.alg; reltol=e.reltol, abstol=e.abstol,
                              saveat=times)
     catch err
         return "simulation failed: $(sprint(showerror, err))"

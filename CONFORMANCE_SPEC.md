@@ -5814,6 +5814,211 @@ differential-algebraic layer; their classifiers already read the literal `t` and
 are pinned by
 `tests/conformance/classification/fixtures/wrt_default_omitted.esm`.
 
+### 5.43 An Assertion's `time` Is When It Is Evaluated (normative)
+
+esm-spec §6.6.3 defines an assertion's `time` as "Simulation time at which to
+**evaluate** the assertion; must lie in `[time_span.start, time_span.end]`". It
+constrains the value and it says *evaluate*, not *integrate to*. Two
+consequences are pinned here, because two of the three executing bindings got
+one or both wrong (issue #406):
+
+1. **A document with nothing to integrate still honours `time`.** §6.3.1
+   derives `system_kind: "nonlinear"` for a model with no time-derivative
+   equation at all. Such a document is EVALUATED once rather than integrated —
+   which is what `esm simulate` has always done for it — but "once" fixes the
+   *number of solves*, not the *time*. An algebraic document is still a
+   function of `t`: a diurnal solar-geometry component is a declination, an
+   hour angle and a zenith cosine, every one of them algebraic in `t` and none
+   of them constant. A runner that reports the whole span's assertions at
+   `t = 0` answers a question the author did not ask.
+2. **An observed that is a function of `t` reads the asserted time**, on a
+   document that integrates as much as on one that does not. The trajectory is
+   sampled at the assertion's time; the observed graph evaluated beside it must
+   be too, or a model and its own closed form disagree.
+3. **An asserted time outside the declared span is refused**, on a static
+   document as much as on one that integrates. The same clause that says
+   *evaluate* also says the time "must lie in `[time_span.start,
+   time_span.end]`". An integrating run enforces that incidentally — nothing is
+   saved past the span's end — but a static evaluation has no boundary of its
+   own and would answer `t = 100` on a span of `[0, 1]` and report a pass. Each
+   binding therefore restricts the static evaluation grid to the span (keeping
+   its endpoints, so the refusal can name one), and the assertion is refused
+   with `no saved state at t=… (nearest …)`.
+
+Neither is a new rule. Python has implemented both since before this category
+existed, which is what fixes the intended answer; Julia mints the goldens as
+the reference binding.
+
+#### 5.43.1 What each binding did
+
+- **Rust** built the inline test with `Compile::Always`, which skips the
+  `Backend::Static` selection `Compile::Auto` performs and hands a compiled
+  right-hand side over an EMPTY state vector to diffsol. Every assertion past
+  the span's start failed with `Exceeded maximum number of nonlinear solver
+  failures (51) at time = 0` — a diagnostic naming the nonlinear solver rather
+  than the real condition, on a document `esm simulate` evaluates without
+  complaint. An assertion AT the start passed, because the integrator never has
+  to step for it, which is how the defect survived a corpus whose static
+  documents almost all assert at `time: 0`.
+- **Julia** handed the same zero-length state vector to OrdinaryDiffEq, whose
+  dense interpolant threw `BoundsError: attempt to access 0-element
+  Vector{Float64} at index [1]`. Separately — and on documents that integrate
+  perfectly well — its build-time cellwise evaluator bound the evaluator's time
+  slot to the literal `0.0` at every call site, so a `t`-dependent observed
+  read ZERO at every asserted time. That one is the quiet-wrong-answer half:
+  the assertion reports a number, and the number is wrong.
+- **Python** was correct on both counts.
+- Rust's repair covers a SCALAR observed through the backend's own compiled
+  graph and a SHAPED one by rebuilding that graph from the document, which is
+  the same pair `esm simulate` uses (§5.43.7).
+- **Go** and **TypeScript** cannot be affected. Neither ships an integrator
+  (`pkg/earthsci-ast-ts/src/solver.ts` says so outright; the Go `Solver` type
+  carries the §2.2 block and nothing that runs it) nor an inline-test runner —
+  both validate `tests` without executing them — so neither has an execution
+  path that could read an assertion's `time`. They are `scope_excluded` in the
+  manifest, and patching them for this would be unreachable code.
+
+#### 5.43.2 What is compared
+
+Each in-scope binding runs the fixtures' inline tests through its official
+inline-test runner (`run_inline_tests`) with the pinned integrator and compares
+every assertion's ACTUAL against the Julia-minted golden, keyed by
+`(test_id, assertion_idx)`.
+
+| Band | rtol | atol |
+|------|------|------|
+| Assertion actual (vs golden) | 1e-9 | 1e-11 |
+
+#### 5.43.3 Non-vacuity
+
+`algebraic_time_dependence.esm` asserts `wave = amp·sin(omega·t)`, which is
+**nonlinear** in `t`, so a binding evaluating at the wrong time cannot be
+rescaled onto the right answer; `phase = omega·t` is asserted at the span's
+start as well, the one time a runner that ignores `time` also gets right; and
+`level = amp` is a time-INVARIANT control, so the category does not merely
+demand a non-zero reading. A second test drives the same three through
+`parameter_overrides`, pinning that overrides bind before the single
+evaluation. `time_dependent_observed_on_an_ode.esm` pairs the observed
+`drive = rate·t` with the state `x` that integrates `rate`, and asserts their
+difference `gap` at two times: it is zero only when both halves are read at
+ONE time, so reading the observed at the start of the span is caught by a
+wrong number rather than by an error.
+
+#### 5.43.4 `system_kind` is not the selector
+
+Issue #406 also reported that adding `"system_kind": "nonlinear"` to the failing
+document changed nothing. That is correct behaviour, not a second defect.
+esm-spec §6.3.1 makes the field a **declaration of something the equations
+already determine**: "A binding uses the derivation when the field is absent,
+and reports `system_kind_mismatch` when a present field contradicts it." The
+field is therefore validated, never dispatched on — a contradicting declaration
+is rejected (Python's `structural_checks` reports `system_kind_mismatch` on an
+algebraic model declaring `"ode"`) — and the runtime path is chosen by the
+derivation, which is a function of the equations alone. The Rust runner pins the
+byte-identical outcome with and without the declaration.
+
+#### 5.43.5 The span is the boundary of the static evaluation
+
+`algebraic_time_dependence.esm` asserts only inside its span, so the third
+consequence above is pinned by a per-binding regression rather than by a shared
+fixture: the same `y = a·t` document on a span of `[0, 1]`, asserted at
+`t = 100`, at `t = -5` and at `t = 1`. The first two must report `no saved
+state`, the third must answer `2`. Python has always behaved this way, because
+it samples the trajectory over the span and matches an assertion against that
+grid; Julia and Rust evaluate the observed graph directly, so each filters its
+evaluation grid to the span. Without the filter both answered the out-of-span
+assertions and reported a PASS, which is this category's own failure mode
+reached one road further on.
+
+#### 5.43.6 `t` inside a §6.6.5 `reference` is REFUSED (normative)
+
+An analytic `reference` is evaluated by each binding's BUILD-TIME cellwise
+evaluator (`evaluate_cellwise`), which takes the model's parameters and the
+asserted field's dimension names and has no simulation time. esm-spec §6.6.5
+names exactly those two, and `t` is neither — but the evaluator's time slot
+holds `0.0` rather than erroring, so a reference that mentions `t` used to read
+zero and report a plausible wrong number in **all three** executing bindings at
+once. Measured before the change: Julia, Python and Rust all answered
+`Linf_error` against `reference: 1.0*t` at `t = 2` with `2`, not `0`. It was
+uniform, so it was never a divergence — it was the same quiet-wrong-answer
+shape as issue #406, on the other side of the comparison.
+
+**All three bindings now reject it**, with one sentence, byte-identical
+(`REFERENCE_MENTIONS_TIME` in Rust and Python, `_REFERENCE_MENTIONS_TIME` in
+Julia):
+
+> inline `reference` mentions `t`, which esm-spec §6.6.5 does not admit: a
+> reference's free variables are the field's dimension names, and its other
+> names are the model's parameters. A reference is evaluated at build time,
+> where the independent variable has no value, so `t` would silently read 0
+> rather than the asserted time.
+
+The check is FREE mention: a `faq` that rebinds `t` as its own loop symbol is
+untouched, and so is a field whose declared `shape` names an index set called
+`t` — there `t` IS a dimension name, §6.6.5 admits it, and it binds to the
+cell's 1-based position like any other. This is a behaviour change: a document
+that wrote a time-dependent reference used to report a number and now fails.
+That is intended — the number it reported was the expression at the start of
+the span, whatever time was asserted.
+
+#### 5.43.7 A state-free document with a SHAPED observed
+
+The first consequence above holds for a document whose observeds are shaped, not
+only for one whose observeds are scalar, and the two are not the same code path
+in every binding. Under `Compile::Always` — which the Rust inline-test runner
+uses so that a construct no evaluator supports is still refused at build time —
+a SHAPED state-free document takes the ARRAY runtime, which carries no scalar
+observed graph, so the backend-level static evaluation does not serve it. Before
+this was closed, Rust reported `Exceeded maximum number of nonlinear solver
+failures (51) at time = 0` on a three-cell `g[i] = a·t·i` with no differential
+equations, at every asserted time, where Python and Julia both answered `20` at
+`t = 5` and `0` at `t = 0`; the same document with the time dependence removed
+(`g[i] = a·i`) failed identically, so it was the whole state-free array shape
+and not the clock. `esm simulate` handled both all along, through
+`Compile::Auto`'s `Backend::Static` selection.
+
+Rust now answers such a document the way `esm simulate` does: from the fields a
+BUILD materializes. When the problem it built has nothing to integrate and no
+scalar observed graph to evaluate, the runner builds it once more with the
+build pipeline on and reads `observed_field` out of the result. The retry is
+conditioned on the BUILT problem rather than on the document's shape — asking
+for the pipeline on the strength of the shape alone broke two builds that were
+working — and a retry that fails changes nothing, because it is an attempt to
+answer more and never a new way to fail. `Compile::Always` is kept throughout,
+so a construct no evaluator supports is still refused at build time in the
+§9.6.6 vocabulary.
+
+The build materializes those fields ONCE, at `tspan.0`. That single value is
+the answer at every asserted time for an observed that is not a function of
+`t`, and only at the start of the span for one that is. An assertion on a
+`t`-dependent observed at any other time is therefore REFUSED **by name**:
+
+> 'g' is a function of `t`, and this document has nothing to integrate: its
+> fields were materialized once, at t = 0, so this test's assertion on it at
+> t = 5 cannot be answered. Assert it at t = 0, or give the model a
+> differential equation so the observed is carried along a trajectory
+> (esm-spec §6.6.3; issue #406)
+
+The refusal is the TEST's, not the assertion's — a test that mixes an
+out-of-reach assertion with an in-reach one is refused whole — and it is what
+keeps this case from becoming the outcome issue #406 is about: a field read at
+the start of the span, reported as the answer somewhere else. Julia and Python
+need none of this, because both re-evaluate the observed body per cell at the
+sampled time; the remaining gap between them and Rust is that one refusal, and
+it names itself.
+
+#### 5.43.8 Gate
+
+`tests/conformance/static_evaluation_assertions/` holds the shared fixtures and
+the Julia-minted goldens. Per-binding runners gate every assertion actual
+against them: **Julia** —
+`pkg/EarthSciAST.jl/test/conformance_static_evaluation_assertions_test.jl`;
+**Python** —
+`pkg/earthsci-ast-py/tests/test_static_evaluation_assertions_conformance.py`;
+**Rust** —
+`pkg/earthsci-ast-rs/tests/static_evaluation_assertions_conformance.rs`.
+`bindings_required` is `["julia", "python", "rust"]`.
+
 ## 6. CI Integration
 
 ### 6.1 GitHub Actions Workflow

@@ -1,0 +1,151 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "TimeDependentObservedOnAnOde",
+    "description": "The same contract on a document that DOES integrate: an observed that is an explicit function of `t` must be read at the assertion's own time, alongside the state the integrator carried there. `gap = x - drive` is identically zero for every t only if both halves are read at the SAME time, so a runner that evaluates the observed at the start of the span is caught by a wrong number rather than by an error. Julia read every such observed as zero before issue #406, because its build-time cellwise evaluator bound the time slot to the literal 0.0 at every call site.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "conformance",
+      "static_evaluation_assertions",
+      "inline-test"
+    ],
+    "license": "MIT"
+  },
+  "models": {
+    "Ramp": {
+      "variables": {
+        "rate": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 3.0,
+          "description": "Constant ramp rate."
+        },
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0,
+          "description": "State: D(x)/dt = rate, so x(t) = rate*t."
+        },
+        "drive": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Observed: rate*t — the closed form of x."
+        },
+        "gap": {
+          "type": "unknown",
+          "units": "1",
+          "description": "x - drive: zero at every t, and only if both are read at the same t."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": "rate"
+        },
+        {
+          "lhs": "drive",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "rate",
+              "t"
+            ]
+          }
+        },
+        {
+          "lhs": "gap",
+          "rhs": {
+            "op": "-",
+            "args": [
+              "x",
+              "drive"
+            ]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "an_observed_of_t_reads_the_asserted_time",
+          "description": "The observed tracks the state it is the closed form of. Assertions sit at the span's endpoints, which every binding's trajectory output is guaranteed to carry (Python samples a solver-chosen dense grid rather than an exact saveat list, so an interior time is a property of the integrator's steps and not of this contract).",
+          "time_span": {
+            "start": 0.0,
+            "end": 2.0
+          },
+          "tolerance": {
+            "rel": 1e-08,
+            "abs": 1e-09
+          },
+          "assertions": [
+            {
+              "variable": "x",
+              "time": 0.0,
+              "expected": 0.0
+            },
+            {
+              "variable": "drive",
+              "time": 0.0,
+              "expected": 0.0
+            },
+            {
+              "variable": "gap",
+              "time": 0.0,
+              "expected": 0.0
+            },
+            {
+              "variable": "x",
+              "time": 2.0,
+              "expected": 6.0
+            },
+            {
+              "variable": "drive",
+              "time": 2.0,
+              "expected": 6.0
+            },
+            {
+              "variable": "gap",
+              "time": 2.0,
+              "expected": 0.0
+            }
+          ]
+        },
+        {
+          "id": "the_same_observed_at_a_longer_span",
+          "description": "A second span end: the observed must move with it, which a runner that reads the start of the span cannot do.",
+          "time_span": {
+            "start": 0.0,
+            "end": 5.0
+          },
+          "tolerance": {
+            "rel": 1e-08,
+            "abs": 1e-09
+          },
+          "assertions": [
+            {
+              "variable": "x",
+              "time": 5.0,
+              "expected": 15.0
+            },
+            {
+              "variable": "drive",
+              "time": 5.0,
+              "expected": 15.0
+            },
+            {
+              "variable": "gap",
+              "time": 5.0,
+              "expected": 0.0
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -365,6 +365,31 @@ def _array_scope_names(*registries: Mapping[str, Any] | Iterable[str] | None) ->
     return out
 
 
+#: The independent (time) variable, as an expression spells it.
+TIME_VARIABLE = "t"
+
+#: The refusal for a §6.6.5 analytic ``reference`` that mentions ``t``.
+#:
+#: esm-spec §6.6.5 says what a reference may read: the asserted field's
+#: DIMENSION NAMES, free, plus the model's PARAMETERS. The independent variable
+#: is neither. It is not rejected by the evaluator either, because a reference
+#: is evaluated by the BUILD-TIME cellwise evaluator, whose time slot is
+#: ``0.0`` — so a reference of ``t`` used to answer with the expression at the
+#: start of the span and report a plausible wrong number, in all three
+#: executing bindings at once. Refusing names the mistake instead.
+#:
+#: The text is BYTE-IDENTICAL in Rust (``REFERENCE_MENTIONS_TIME``) and Julia
+#: (``_REFERENCE_MENTIONS_TIME``); the three bindings must reject the same
+#: document with the same sentence.
+REFERENCE_MENTIONS_TIME = (
+    "inline `reference` mentions `t`, which esm-spec §6.6.5 does not admit: a "
+    "reference's free variables are the field's dimension names, and its other "
+    "names are the model's parameters. A reference is evaluated at build time, "
+    "where the independent variable has no value, so `t` would silently read 0 "
+    "rather than the asserted time."
+)
+
+
 def bind_dimension_names(
     expr: Expr,
     dims: Sequence[str],
@@ -402,8 +427,21 @@ def bind_dimension_names(
     cellwise evaluator the build's ``const_arrays``, so an array named after a
     shape index set is a name a reference could already read there, and a guard
     that checked only the parameter half would let Julia rebind it to the cell
-    index in silence while Python and Rust merely wrapped (issue #226)."""
+    index in silence while Python and Rust merely wrapped (issue #226).
+
+    The INDEPENDENT VARIABLE is rejected here for the same reason and in the
+    same words as in Julia and Rust — see :data:`REFERENCE_MENTIONS_TIME`."""
     dims = [str(d) for d in dims]
+    # esm-spec §6.6.5 names what a reference may read, and ``t`` is not on the
+    # list. Reaching the evaluator with it is not an error there — the
+    # build-time evaluator has a time slot and it holds ``0.0`` — so before
+    # this check every binding answered a ``t``-dependent reference with its
+    # value at the start of the span and reported a plausible wrong number. A
+    # reference whose FIELD is shaped over an index set actually named ``t``
+    # is a different statement: there ``t`` IS a dimension name, §6.6.5 admits
+    # it, and it binds to the cell index below.
+    if TIME_VARIABLE not in dims and _mentions_free(expr, TIME_VARIABLE):
+        raise RuntimeError(REFERENCE_MENTIONS_TIME)
     mentioned = [d for d in dims if _mentions_free(expr, d)]
     if not mentioned:
         return expr

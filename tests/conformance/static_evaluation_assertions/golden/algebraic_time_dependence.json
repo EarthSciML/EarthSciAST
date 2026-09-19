@@ -1,0 +1,61 @@
+{
+    "fixture": "algebraic_time_dependence",
+    "assertions": [
+        {
+            "test_id": "evaluated_at_each_asserted_time",
+            "assertion_idx": 1,
+            "variable": "phase",
+            "actual": 0.0
+        },
+        {
+            "test_id": "evaluated_at_each_asserted_time",
+            "assertion_idx": 2,
+            "variable": "phase",
+            "actual": 1.0
+        },
+        {
+            "test_id": "evaluated_at_each_asserted_time",
+            "assertion_idx": 3,
+            "variable": "wave",
+            "actual": 0.0
+        },
+        {
+            "test_id": "evaluated_at_each_asserted_time",
+            "assertion_idx": 4,
+            "variable": "wave",
+            "actual": 1.682941969615793
+        },
+        {
+            "test_id": "evaluated_at_each_asserted_time",
+            "assertion_idx": 5,
+            "variable": "wave",
+            "actual": 1.8185948536513634
+        },
+        {
+            "test_id": "evaluated_at_each_asserted_time",
+            "assertion_idx": 6,
+            "variable": "level",
+            "actual": 2.0
+        },
+        {
+            "test_id": "parameter_overrides_reach_the_static_evaluation",
+            "assertion_idx": 1,
+            "variable": "phase",
+            "actual": 2.0
+        },
+        {
+            "test_id": "parameter_overrides_reach_the_static_evaluation",
+            "assertion_idx": 2,
+            "variable": "wave",
+            "actual": 2.727892280477045
+        },
+        {
+            "test_id": "parameter_overrides_reach_the_static_evaluation",
+            "assertion_idx": 3,
+            "variable": "level",
+            "actual": 3.0
+        }
+    ],
+    "reference_binding": "julia",
+    "_comment": "Minted by the Julia reference binding's `run_inline_tests` (Tsit5, reltol=1e-12, abstol=1e-14) over fixtures/algebraic_time_dependence.esm. The document declares no differential equations, so no integrator runs at all: every actual is one evaluation of the observed graph at that assertion's own `time` (esm-spec 6.6.3), and all nine are exact doubles."
+}
