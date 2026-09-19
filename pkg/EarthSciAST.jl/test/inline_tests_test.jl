@@ -864,6 +864,24 @@ end
     @test EarthSciAST._pick_solver("")[2] === :tsit5
 end
 
+@testset "a document with no tests asks for nothing at all" begin
+    # The solver pick happens per DOCUMENT, and it can throw — `_pick_solver`
+    # finds its solvers through `Base.loaded_modules`, so with no OrdinaryDiffEq
+    # package loaded and no `alg` named there is nothing to pick. A document
+    # with no tests must therefore not reach it: most of a corpus declares no
+    # tests, and a document with nothing to integrate has no business demanding
+    # an integrator. What is observable here (a session that HAS the solvers
+    # loaded) is the early return itself — no rows, no error.
+    doc = _pit_decay_doc(Any[])
+    delete!(doc["models"]["M"], "tests")
+    @test isempty(run_inline_tests(_pit_load(doc); model_name="M"))
+    # …and naming a model that does not exist in the document is the same
+    # nothing-to-do case rather than an error.
+    @test isempty(run_inline_tests(_pit_load(_pit_decay_doc(Any[
+        _pit_coords_assert(["x" => 3]; expected=cos(pi * 2.5 / _PIT_N))]));
+        model_name="NoSuchModel"))
+end
+
 @testset "a batch's rows name the document they came from" begin
     # Results from a multi-document run were indistinguishable: every row
     # carried `file == ""`, so a corpus sweep could report a failure without

@@ -19,6 +19,8 @@ from earthsci_ast.inline_tests import (
     DEFAULT_METHOD,
     InlineTestOptions,
     _check_assertion,
+    _method_for,
+    _requested_output_times,
     _resolve_tolerance,
     evaluate_cellwise,
     field_reduce,
@@ -438,7 +440,7 @@ def test_a_stateless_document_answers_at_the_asserted_time():
     reported as ``no saved state at t=...``. 60 s of a 3600 s span is exactly
     such a time (the grid steps by 3.6 s).
 
-    Sabotage check: drop the ``saveat_times`` call from the stateless branch of
+    Sabotage check: drop the ``_saveat_times`` call from the stateless branch of
     ``_simulate_scalar`` and this errors.
     """
     doc = {
@@ -499,6 +501,63 @@ def test_one_assertion_on_a_span_that_does_not_start_at_zero():
     assert results[0].passed, results[0].message
 
 
+def test_requested_output_times_are_never_read_as_an_output_step():
+    """The times handed to ``solve`` are TIMES, never an output step.
+
+    ``saveat`` is overloaded (API_SPEC §4) and a one-element sequence of a
+    positive number is a STEP measured from ``tspan[0]``. Both span ends are in
+    the requested set, so the sequence is at least two values wide whenever the
+    span has any width and that reading is unreachable. Without them a single
+    assertion at ``t = 1e-3`` of a 86400 s span would ask for a 1 ms output
+    step — 86 million nodes for one number — and a single assertion at
+    ``t = 150`` of a 100..200 span would ask for a 100 s step, whose grid does
+    not contain 150 at all.
+
+    Sabotage check: drop the span ends from ``_requested_output_times`` and
+    both cases here collapse to one element.
+    """
+    assert _requested_output_times((100.0, 200.0), [150.0]) == [100.0, 150.0, 200.0]
+    assert _requested_output_times((1e-3, 86400.0), [1e-3]) == [1e-3, 86400.0]
+    # An assertion ON a span end is not a second node, and the times come back
+    # sorted however they went in.
+    assert _requested_output_times((0.0, 10.0), [10.0, 0.0, 2.0]) == [0.0, 2.0, 10.0]
+    # A zero-width span is the one case that stays a single value — harmless,
+    # because the step reading of ``[t0]`` is the grid ``[t0]``.
+    assert _requested_output_times((5.0, 5.0), [5.0]) == [5.0]
+
+
+def test_a_batchs_rows_name_the_document_they_came_from(tmp_path):
+    """Results from a multi-document run are attributable one by one.
+
+    ``run_inline_tests`` takes a directory or an iterable and concatenates the
+    rows, so without ``AssertionResult.file`` a corpus sweep could report a
+    failure without saying which document failed — while a LOAD failure named
+    its path all along, which made the two halves of one run inconsistent with
+    each other. This is the same row-level attribution the Julia binding's
+    ``AssertionResult.file`` carries.
+
+    Sabotage check: stop passing ``source`` to ``_result`` and the per-assertion
+    rows come back with an empty ``file``.
+    """
+    good = tmp_path / "decay.esm"
+    good.write_text(json.dumps(_scalar_decay_doc([0.0, 5.0])))
+    bad = tmp_path / "broken.esm"
+    bad.write_text("{not json")
+
+    results = run_inline_tests([str(good)])
+    assert results and all(r.file == str(good) for r in results)
+
+    # An unreadable document in the same batch still contributes its own named
+    # row rather than ending the run.
+    mixed = run_inline_tests([str(good), str(bad)])
+    assert any(r.file == str(bad) and not r.passed for r in mixed)
+    assert any(r.file == str(good) and r.passed for r in mixed)
+
+    # A document handed over in memory has no path to carry.
+    in_memory = run_inline_tests(load_string(json.dumps(_scalar_decay_doc([0.0]))))
+    assert in_memory and all(r.file == "" for r in in_memory)
+
+
 def test_default_method_is_the_librarys_own_default_alg():
     """An inline-test run and a bare ``solve()`` integrate an opinionless
     document with the SAME algorithm. They diverged — ``RK45`` here against
@@ -507,6 +566,10 @@ def test_default_method_is_the_librarys_own_default_alg():
     from earthsci_ast.problem import DEFAULT_ALG
 
     assert DEFAULT_METHOD == DEFAULT_ALG
+    # Not just the constant: the resolution a document with no `solver` block
+    # and a caller with no opinion actually goes through (§2.2).
+    opinionless = load_string(json.dumps(_scalar_decay_doc([1.0])))
+    assert _method_for(None, opinionless) == DEFAULT_ALG
 
 
 def _free_x_cos() -> dict:
