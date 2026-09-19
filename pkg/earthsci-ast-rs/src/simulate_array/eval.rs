@@ -2944,23 +2944,21 @@ pub(super) fn resolve_join_gates(join: &[JoinClause], ctx: &EvalCtx) -> Vec<Join
         return Vec::new();
     }
     let mut gates: Vec<JoinGate> = Vec::new();
+    // An upper bound on how many DISTINCT positions each gated symbol can still
+    // take, given the gates resolved so far: a gate with `m` pairs leaves at
+    // most `m` positions alive on either side. Seeded implicitly from the side
+    // lengths, and read by the planner below to price what a further gate on
+    // those symbols could possibly prune.
+    let mut reach: HashMap<String, usize> = HashMap::new();
+
+    // --- spatial overlap clauses ------------------------------------------
+    // Resolved first and unconditionally. Their candidate set is a broad-phase
+    // envelope superset whose size is bounded by the geometry, not by a key's
+    // cardinality, so the pricing below has nothing to save on them -- and
+    // resolving them first is what lets an overlap gate narrow `reach` for the
+    // equality clauses that share a symbol with it.
     for (clause_ix, clause) in join.iter().enumerate() {
         let Some(ov) = &clause.overlap else {
-            // Not an overlap clause — try the value-equality gate the build-time
-            // resolution attached (§5.5.8). Same three-field product; only the
-            // pair-set construction differs.
-            if let Some(g) = &clause.on_gate
-                && let Some((index, n_src, n_tgt)) = resolve_equality_index(g, ctx)
-            {
-                gates.push(JoinGate {
-                    sym_src: g.sym_l.clone(),
-                    sym_tgt: g.sym_r.clone(),
-                    index,
-                    n_src,
-                    n_tgt,
-                    clause_ix,
-                });
-            }
             continue;
         };
         let (Some(sym_src), Some(sym_tgt)) = (&ov.sym_src, &ov.sym_tgt) else {
@@ -2998,6 +2996,8 @@ pub(super) fn resolve_join_gates(join: &[JoinClause], ctx: &EvalCtx) -> Vec<Join
             }
         };
         if let Some(index) = index {
+            narrow_reach(&mut reach, sym_src, index.len());
+            narrow_reach(&mut reach, sym_tgt, index.len());
             gates.push(JoinGate {
                 sym_src: sym_src.clone(),
                 sym_tgt: sym_tgt.clone(),
@@ -3008,12 +3008,265 @@ pub(super) fn resolve_join_gates(join: &[JoinClause], ctx: &EvalCtx) -> Vec<Join
             });
         }
     }
+
+    // --- value-equality clauses, PRICED BEFORE THEY ARE BUILT --------------
+    // An `on` gate's match count is a property of the DATA, not of the ranges:
+    // a six-valued key against a 1.4-million-row table matches 167 million
+    // pairs. `equijoin_match_count` reads that in O(|L| + |R|) without writing
+    // a pair, so the planner can know what a gate would cost before paying.
+    let mut priced: Vec<EqCandidate<'_>> = Vec::new();
+    // The keyed sides of the CHEAPEST candidate priced so far, and its slot in
+    // `priced`. Only one set is held.
+    //
+    // Pricing has to read both sides to count the matches, and the gate that
+    // gets built needs the same keys again — so keeping them is worth a whole
+    // `side_keys` pass over a multi-million-row column (issue #418's remaining
+    // per-fact-row term). Keeping EVERY candidate's, though, makes a node's
+    // peak the SUM of its clauses' key columns where it used to be the largest
+    // single one, and a `Key` is 32 B per row before a composite adds a `Vec`
+    // per row. So exactly one is retained, and it is the cheapest: `priced` is
+    // resolved in ascending `matches`, so that candidate sorts first, is the
+    // one a decline can never reach while `gates` is empty, and is therefore
+    // the one most likely to be built. Every other candidate re-reads its
+    // sides only if it survives the decline test — which is still no worse
+    // than before the planner existed, when every built gate read them twice.
+    let mut cheapest: Option<(usize, EqSides)> = None;
+    let budget = crate::broad_phase::gate_cache_pair_budget();
+    for (clause_ix, clause) in join.iter().enumerate() {
+        if clause.overlap.is_some() {
+            continue;
+        }
+        let Some(g) = &clause.on_gate else {
+            continue;
+        };
+        if g.cols_l.len() != g.cols_r.len() || g.cols_l.is_empty() {
+            continue;
+        }
+        let Some(key) = equality_cache_key(g, ctx) else {
+            continue;
+        };
+        // Already resident: it costs nothing to take, so it is never declined.
+        // Probed through the BUDGET (issue #418), so an entry the budget no
+        // longer covers is dropped here rather than protected by the hit.
+        if let Some(hit) = EQ_GATE_CACHE.with(|c| c.borrow_mut().get_within_budget(&key, budget)) {
+            if let Some((index, n_l, n_r)) = hit {
+                priced.push(EqCandidate {
+                    g,
+                    clause_ix,
+                    matches: index.len(),
+                    n_l,
+                    n_r,
+                    key,
+                    ready: Some((index, n_l, n_r)),
+                    sides: None,
+                });
+            }
+            continue;
+        }
+        // A price already taken this run, for a gate the planner declined or
+        // whose index has since been evicted.
+        if let Some(&(n_l, n_r, matches)) = EQ_PRICE_CACHE
+            .with(|c| c.borrow().get(&key).copied())
+            .as_ref()
+        {
+            priced.push(EqCandidate {
+                g,
+                clause_ix,
+                matches,
+                n_l,
+                n_r,
+                key,
+                ready: None,
+                sides: None,
+            });
+            continue;
+        }
+        let Some(sides) = equality_sides(g, ctx) else {
+            // The columns cannot be read as exact-equality keys here. Memoize
+            // the decline, as the pre-planner path did, so it is not retried.
+            EQ_GATE_CACHE.with(|c| c.borrow_mut().insert(key, None));
+            continue;
+        };
+        let matches = crate::relational::equijoin_match_count(&sides.1, &sides.3);
+        let (n_l, n_r) = (sides.0.len(), sides.2.len());
+        remember_price(key.clone(), (n_l, n_r, matches));
+        // Strictly cheaper only, so a tie keeps the lower `clause_ix` — the
+        // same candidate `sort_by_key((matches, clause_ix))` will put first.
+        if cheapest
+            .as_ref()
+            .is_none_or(|&(i, _)| matches < priced[i].matches)
+        {
+            cheapest = Some((priced.len(), sides));
+        }
+        priced.push(EqCandidate {
+            g,
+            clause_ix,
+            matches,
+            n_l,
+            n_r,
+            key,
+            ready: None,
+            sides: None,
+        });
+    }
+    if let Some((slot, sides)) = cheapest {
+        priced[slot].sides = Some(sides);
+    }
+
+    // CHEAPEST FIRST. A gate's value is the space it prunes, so the one that
+    // prunes most must be resolved before the ones whose value depends on how
+    // much is left to prune. `clause_ix` breaks ties, so the order is a pure
+    // function of the document and the data.
+    priced.sort_by_key(|c| (c.matches, c.clause_ix));
+
+    let ratio = crate::broad_phase::gate_plan_ratio();
+    let floor = crate::broad_phase::gate_plan_floor();
+    for c in priced {
+        let space = (reach_of(&reach, &c.g.sym_l, c.n_l) as u128)
+            .saturating_mul(reach_of(&reach, &c.g.sym_r, c.n_r) as u128);
+        let (index, n_src, n_tgt) = match c.ready {
+            Some(entry) => entry,
+            None => {
+                // UNECONOMIC: it would materialise more pairs than the tuples
+                // it could prune. The equality is still applied -- `crate::join`
+                // lowered it into this node's `filter` -- so this costs a wider
+                // walk and never an answer.
+                // NEVER the only gate. Priced cheapest-first, so the first
+                // one through here is the most selective the node has; leaving
+                // it out would drop the walk to the full product, which is the
+                // one way this planner could make a document dramatically
+                // slower. A gate is declined only when another already drives.
+                if !gates.is_empty()
+                    && c.matches >= floor
+                    && (c.matches as u128) > space.saturating_mul(ratio)
+                {
+                    crate::broad_phase::bump_gate_plan_declines();
+                    if crate::broad_phase::join_gate_stats_enabled() {
+                        eprintln!(
+                            "[join-gate] declined clause {} on ({}, {}): {} pairs \
+                             against a {} reachable, {}x over",
+                            c.clause_ix,
+                            c.g.sym_l,
+                            c.g.sym_r,
+                            c.matches,
+                            space,
+                            (c.matches as u128) / space.max(1),
+                        );
+                    }
+                    continue;
+                }
+                let Some((pos_l, keys_l, pos_r, keys_r)) = c.sides else {
+                    // Priced on an earlier evaluation and since evicted; the
+                    // keys have to be read again to rebuild it.
+                    let Some(sides) = equality_sides(c.g, ctx) else {
+                        continue;
+                    };
+                    push_equality_gate(&mut gates, &mut reach, c.g, c.clause_ix, c.key, sides);
+                    continue;
+                };
+                push_equality_gate(
+                    &mut gates,
+                    &mut reach,
+                    c.g,
+                    c.clause_ix,
+                    c.key,
+                    (pos_l, keys_l, pos_r, keys_r),
+                );
+                continue;
+            }
+        };
+        narrow_reach(&mut reach, &c.g.sym_l, index.len());
+        narrow_reach(&mut reach, &c.g.sym_r, index.len());
+        gates.push(JoinGate {
+            sym_src: c.g.sym_l.clone(),
+            sym_tgt: c.g.sym_r.clone(),
+            index,
+            n_src,
+            n_tgt,
+            clause_ix: c.clause_ix,
+        });
+    }
+
     // MOST SELECTIVE FIRST (§5.24). `sort_by` is stable, and the comparator
     // already falls back to `clause_ix`, so the order is a pure function of the
-    // document and the data — never of `join`'s iteration order or of how many
+    // document and the data -- never of `join`'s iteration order or of how many
     // gates happened to tie.
     gates.sort_by(JoinGate::selectivity_cmp);
     gates
+}
+
+/// Both sides of an `on` gate as the planner carries them: `(positions, keys)`
+/// per side, left then right.
+type EqSides = (
+    Vec<i64>,
+    Vec<crate::relational::Key>,
+    Vec<i64>,
+    Vec<crate::relational::Key>,
+);
+
+/// One `on` clause the planner is weighing: what it would cost, what it spans,
+/// and either the index it already has or the keyed sides it would build from.
+struct EqCandidate<'a> {
+    g: &'a crate::join::OnGate,
+    clause_ix: usize,
+    /// How many pairs the gate would hold -- its cost, in the same unit as the
+    /// cache budget.
+    matches: usize,
+    n_l: usize,
+    n_r: usize,
+    key: EqGateKey,
+    /// Set when the index is already resident, which makes the gate free.
+    ready: Option<EqGateEntry>,
+    /// Set on the ONE cheapest candidate, whose sides pricing kept so that its
+    /// build need not read them again.
+    sides: Option<EqSides>,
+}
+
+/// Build one equality gate from its already-keyed sides, cache it, and record
+/// what it narrows.
+fn push_equality_gate(
+    gates: &mut Vec<JoinGate>,
+    reach: &mut HashMap<String, usize>,
+    g: &crate::join::OnGate,
+    clause_ix: usize,
+    key: EqGateKey,
+    sides: EqSides,
+) {
+    // Release the least-recently-used match set BEFORE building this one, so a
+    // build that resolves several large gates in turn peaks at the LARGEST of
+    // them rather than at their sum (issue #418).
+    EQ_GATE_CACHE.with(|c| {
+        c.borrow_mut()
+            .evict_to_budget(crate::broad_phase::gate_cache_pair_budget())
+    });
+    crate::broad_phase::bump_gate_index_builds();
+    let (ix, n_src, n_tgt) = index_from_sides(sides);
+    let entry: EqGateEntry = (Rc::new(ix), n_src, n_tgt);
+    EQ_GATE_CACHE.with(|c| c.borrow_mut().insert(key, Some(entry.clone())));
+    narrow_reach(reach, &g.sym_l, entry.0.len());
+    narrow_reach(reach, &g.sym_r, entry.0.len());
+    gates.push(JoinGate {
+        sym_src: g.sym_l.clone(),
+        sym_tgt: g.sym_r.clone(),
+        index: entry.0,
+        n_src,
+        n_tgt,
+        clause_ix,
+    });
+}
+
+/// How many distinct positions `sym` can still take, given the gates already
+/// resolved. `full` is its side length, which is the answer when nothing has
+/// narrowed it.
+fn reach_of(reach: &HashMap<String, usize>, sym: &str, full: usize) -> usize {
+    reach.get(sym).map_or(full, |r| (*r).min(full))
+}
+
+/// Record that a gate with `pairs` pairs leaves at most that many positions
+/// alive on `sym`.
+fn narrow_reach(reach: &mut HashMap<String, usize>, sym: &str, pairs: usize) {
+    let slot = reach.entry(sym.to_string()).or_insert(usize::MAX);
+    *slot = (*slot).min(pairs);
 }
 
 fn build_overlap_index(
@@ -3067,6 +3320,39 @@ thread_local! {
     /// The value-equality gate cache, bounded by [`gate_cache_pair_budget`].
     static EQ_GATE_CACHE: RefCell<GateCache<EqGateKey, Option<EqGateEntry>>> =
         RefCell::new(GateCache::new());
+}
+
+thread_local! {
+    /// What each `on` gate WOULD cost, so a gate the planner declines is priced
+    /// once per run rather than once per evaluation.
+    ///
+    /// Three `usize`s per entry — the price tag, not the thing priced — but it
+    /// is CAPPED all the same, because the key it is filed under is the index
+    /// cache's: `(id, lens, fingerprint)`. The fingerprint is there precisely
+    /// because a key column's contents can change between evaluations, and
+    /// when one does this map would otherwise gain an entry per gate per
+    /// evaluation for the life of the thread, beside a cache that is bounded
+    /// both by resident pairs and by [`GATE_CACHE_MAX_ENTRIES`].
+    static EQ_PRICE_CACHE: RefCell<HashMap<EqGateKey, (usize, usize, usize)>> =
+        RefCell::new(HashMap::new());
+}
+
+/// File one gate's price, dropping every earlier one when the map reaches the
+/// index cache's entry cap.
+///
+/// Wholesale rather than least-recently-used: a price is a pure function of
+/// the key it is filed under, so losing one costs a single `O(|L| + |R|)`
+/// re-count and never a wrong decision — and the cap is only ever reached by a
+/// document whose key columns keep changing, which is the case where the old
+/// prices are stale anyway.
+fn remember_price(key: EqGateKey, price: (usize, usize, usize)) {
+    EQ_PRICE_CACHE.with(|c| {
+        let mut m = c.borrow_mut();
+        if m.len() >= GATE_CACHE_MAX_ENTRIES {
+            m.clear();
+        }
+        m.insert(key, price);
+    });
 }
 
 /// Run `f` on the named 1-D array WITHOUT cloning it. `lookup_variable` returns
@@ -3167,20 +3453,14 @@ fn side_keys(
     Some((positions, keys))
 }
 
-/// Resolve a value-equality `on` gate into its candidate pair index, building
-/// (or reusing) the match set with [`crate::relational::equijoin`].
+/// The cache key of one `on` gate in this context: its build-time id, plus the
+/// length and a content fingerprint of each DATA key column.
 ///
-/// Built ONCE per node (memoized across evaluations), never per tuple — the
-/// whole point: probing `|L|+|R|` keys and materialising `|matches|` pairs
-/// replaces the `O(|L|·|R|)` product the predicate form walked. `None` declines
-/// the gate, and the lowered `filter` predicate then produces the same answer
-/// over the full product.
-fn resolve_equality_index(g: &crate::join::OnGate, ctx: &EvalCtx) -> Option<EqGateEntry> {
+/// Split out of the old `resolve_equality_index` so the planner can probe the
+/// cache -- and so decide whether a gate is free -- without reading a single
+/// key.
+fn equality_cache_key(g: &crate::join::OnGate, ctx: &EvalCtx) -> Option<EqGateKey> {
     use crate::join::KeyColumn;
-    if g.cols_l.len() != g.cols_r.len() || g.cols_l.is_empty() {
-        return None;
-    }
-    // Cache probe: lengths + fingerprints of the DATA columns only.
     let mut lens: SmallVec<[usize; 2]> = SmallVec::new();
     let mut fp: u64 = 0xcbf2_9ce4_8422_2325;
     for c in g.cols_l.iter().chain(g.cols_r.iter()) {
@@ -3192,49 +3472,47 @@ fn resolve_equality_index(g: &crate::join::OnGate, ctx: &EvalCtx) -> Option<EqGa
             lens.push(n);
         }
     }
-    let key: EqGateKey = (g.id, lens, fp);
-    let budget = crate::broad_phase::gate_cache_pair_budget();
-    if let Some(hit) = EQ_GATE_CACHE.with(|c| c.borrow_mut().get_within_budget(&key, budget)) {
-        return hit;
-    }
-    // Release the least-recently-used match set BEFORE building this one, so a
-    // build that resolves several large gates in turn peaks at the LARGEST of
-    // them rather than at their sum (issue #418).
-    EQ_GATE_CACHE.with(|c| c.borrow_mut().evict_to_budget(budget));
-    crate::broad_phase::bump_gate_index_builds();
-    let built = build_equality_index(g, ctx).map(|(ix, nl, nr)| (Rc::new(ix), nl, nr));
-    EQ_GATE_CACHE.with(|c| c.borrow_mut().insert(key, built.clone()));
-    built
+    Some((g.id, lens, fp))
 }
 
-/// The match set plus the two SIDE LENGTHS — `|L|` and `|R|`, the positions each
-/// key column is defined at. The lengths are the denominator of the §5.24
-/// selectivity estimate, and they fall out of the same `side_keys` pass that
-/// builds the keys, so they cost nothing to carry.
-fn build_equality_index(
-    g: &crate::join::OnGate,
-    ctx: &EvalCtx,
-) -> Option<(crate::broad_phase::OverlapIndex, usize, usize)> {
+/// Both sides of an `on` gate, as `(positions, keys)` per side.
+///
+/// `None` declines the gate, and the lowered `filter` predicate then produces
+/// the same answer over the full product.
+fn equality_sides(g: &crate::join::OnGate, ctx: &EvalCtx) -> Option<EqSides> {
     let (pos_l, keys_l) = side_keys(&g.cols_l, ctx)?;
     let (pos_r, keys_r) = side_keys(&g.cols_r, ctx)?;
+    Some((pos_l, keys_l, pos_r, keys_r))
+}
+
+/// The match set plus the two SIDE LENGTHS -- `|L|` and `|R|`, the positions
+/// each key column is defined at. The lengths are the denominator of the §5.24
+/// selectivity estimate, and they fall out of the same `side_keys` pass that
+/// built the keys, so they cost nothing to carry.
+///
+/// Takes the keyed sides rather than reading them, because the planner has
+/// already read them to price this gate and reading a multi-million-row key
+/// column twice is the term issue #418 left standing.
+fn index_from_sides(sides: EqSides) -> (crate::broad_phase::OverlapIndex, usize, usize) {
+    let (pos_l, keys_l, pos_r, keys_r) = sides;
     let (n_l, n_r) = (pos_l.len(), pos_r.len());
     // Canonical-key-ordered matches (§5.5 rule 5) mapped back onto the two
     // symbols' own values. `OverlapIndex` then re-sorts them position-ascending,
     // which is what makes the driven walk an order-preserving subsequence of the
     // full product; both orders are pure functions of the input.
     //
-    // Handed over by VALUE (issue #418). This vector is the whole match set —
-    // millions of pairs on a star join — and nothing here reads it again, so
+    // Handed over by VALUE (issue #418). This vector is the whole match set --
+    // millions of pairs on a star join -- and nothing here reads it again, so
     // `from_owned_pairs` sorts it in place instead of copying it a third time.
     let pairs: Vec<(i64, i64)> = crate::relational::equijoin(&keys_l, &keys_r)
         .into_iter()
         .map(|(i, j)| (pos_l[i], pos_r[j]))
         .collect();
-    Some((
+    (
         crate::broad_phase::OverlapIndex::from_owned_pairs(pairs),
         n_l,
         n_r,
-    ))
+    )
 }
 
 /// One contracted dimension's enumeration source: its own ascending interval,
@@ -5572,5 +5850,358 @@ mod gate_cache_budget_tests {
             "the probe must re-read the price: {} did not grow",
             c.pairs
         );
+    }
+}
+
+/// A join gate is PRICED before it is built, and one that cannot pay for
+/// itself is declined (issue #418 follow-up).
+///
+/// [`resolve_join_gates`] used to build an index for every clause and only then
+/// consult §5.24's selectivity estimate to pick a driver. A clause whose key is
+/// low-cardinality matches enormously — six distinct fuel types against a
+/// 1.4-million-row table is 167 million pairs — so a sibling clause that has
+/// already cut that table to seven rows does not save the memory: the pairs are
+/// materialised first and the selectivity is consulted second.
+///
+/// Now [`crate::relational::equijoin_match_count`] reads what a gate WOULD cost
+/// in `O(|L| + |R|)` without writing a pair, gates are resolved cheapest-first,
+/// and one that would materialise more pairs than the tuples it could prune is
+/// declined.
+///
+/// These run INSIDE the crate rather than from `tests/`, so the planner's
+/// knobs and counters stay `pub(crate)`: an integration test would have to be
+/// handed `set_gate_plan` and `gate_plan_declines` across the API boundary,
+/// and instrumentation is not an API. The documents still go through the
+/// public `esm_problem` / `observed_field` pathway, which is the part that had
+/// to be exercised end to end.
+///
+/// Three properties:
+///
+/// 1. **Declining cannot change an answer.** `crate::join` ALSO lowers every
+///    `on` clause into the node's `filter`, so the equality is applied either
+///    way. A run that declines must be bit-identical to one that declines
+///    nothing, to the hand-written `filter` both lower to, and to a plain-Rust
+///    oracle.
+/// 2. **The decision rule is the documented one.** The fixture's redundant
+///    gate costs exactly 125× the space it could prune, so a ratio of 124
+///    declines it and 125 keeps it. That pins `reach` as well as the
+///    comparison: were the sibling's narrowing not recorded, the reachable
+///    space would be 500× larger and neither ratio would decline anything.
+/// 3. **Never the only gate**, whatever the ratio — and the gate that survives
+///    is really built, which the build counter says and a decline count of
+///    zero does not.
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod gate_plan_tests {
+    use crate::broad_phase::{
+        gate_index_builds, gate_plan_declines, reset_gate_index_builds, reset_gate_plan_declines,
+        set_gate_plan,
+    };
+    use crate::{ProblemOptions, esm_problem, observed_field};
+    use ndarray::{ArrayD, IxDyn};
+    use serde_json::{Value, json};
+    use std::collections::HashMap;
+
+    fn arr1(v: &[f64]) -> ArrayD<f64> {
+        ArrayD::from_shape_vec(IxDyn(&[v.len()]), v.to_vec()).unwrap()
+    }
+
+    fn ix(f: &str, i: &str) -> Value {
+        json!({"op": "index", "args": [f, i]})
+    }
+
+    const FUELS: usize = 4;
+    const BINS: usize = 40;
+    const FACTS: usize = 4_000;
+    const COUNTIES: usize = 500;
+
+    /// The reachable space the fuel clause is weighed against once the county
+    /// clause has resolved: `BINS` bins times the `FACTS / COUNTIES` fact rows
+    /// the selected county leaves alive.
+    const REACHABLE: usize = BINS * (FACTS / COUNTIES);
+    /// What the fuel clause costs: every bin of a fuel against every fact of
+    /// the same fuel.
+    const FUEL_MATCHES: usize = FUELS * (BINS / FUELS) * (FACTS / FUELS);
+    /// 125 — the overshoot ratio the planner computes for the fuel clause, so
+    /// one below declines it and exactly this keeps it.
+    const OVERSHOOT: u128 = (FUEL_MATCHES / REACHABLE) as u128;
+
+    /// `bin` rows carry a fuel; `fact` rows carry a fuel AND a county, and the
+    /// run selects ONE county. The aggregate sums a fact's weight into every
+    /// bin of the same fuel, within the selected county.
+    ///
+    /// The two clauses are wildly different gates over the same data. The fuel
+    /// one matches `BINS/FUELS · FACTS` = 40,000 pairs; the county one matches
+    /// `FACTS/COUNTIES` = 8. Once the county clause has cut the fact table to
+    /// 8 rows, the fuel clause can prune at most `BINS · 8` = 320 tuples, and
+    /// it costs 40,000 pairs to say so — 125× over.
+    struct Tables {
+        bfuel: Vec<f64>,
+        ffuel: Vec<f64>,
+        fcounty: Vec<f64>,
+        ncounty: Vec<f64>,
+        weight: Vec<f64>,
+    }
+
+    impl Tables {
+        fn fixture() -> Tables {
+            Tables {
+                bfuel: (0..BINS).map(|i| (i % FUELS) as f64).collect(),
+                ffuel: (0..FACTS).map(|j| (j % FUELS) as f64).collect(),
+                fcounty: (0..FACTS).map(|j| (j % COUNTIES) as f64).collect(),
+                ncounty: vec![7.0],
+                weight: (1..=FACTS).map(|j| j as f64).collect(),
+            }
+        }
+
+        /// Folded in ascending `f`, the association the contraction odometer
+        /// uses, so the oracle is bit-comparable and not merely close.
+        fn oracle(&self) -> Vec<f64> {
+            (0..BINS)
+                .map(|b| {
+                    let mut acc = 0.0f64;
+                    for f in 0..FACTS {
+                        if self.bfuel[b] == self.ffuel[f] && self.fcounty[f] == self.ncounty[0] {
+                            acc += self.weight[f];
+                        }
+                    }
+                    acc
+                })
+                .collect()
+        }
+
+        fn const_arrays(&self) -> HashMap<String, ArrayD<f64>> {
+            [
+                ("bfuel".to_string(), arr1(&self.bfuel)),
+                ("ffuel".to_string(), arr1(&self.ffuel)),
+                ("fcounty".to_string(), arr1(&self.fcounty)),
+                ("ncounty".to_string(), arr1(&self.ncounty)),
+                ("weight".to_string(), arr1(&self.weight)),
+            ]
+            .into_iter()
+            .collect()
+        }
+
+        /// `gated` selects the arm: the two `join.on` clauses under test, or
+        /// the hand-written conjunction they lower to — the differential
+        /// baseline, which resolves no gate at all.
+        fn doc(&self, gated: bool) -> Value {
+            let mut vars = serde_json::Map::new();
+            for (name, set) in [
+                ("bfuel", "brows"),
+                ("ffuel", "frows"),
+                ("fcounty", "frows"),
+                ("weight", "frows"),
+                ("ncounty", "nrows"),
+            ] {
+                vars.insert(name.into(), json!({"type": "parameter", "shape": [set]}));
+            }
+            vars.insert("E".into(), json!({"type": "unknown", "shape": ["brows"]}));
+
+            let mut node = json!({
+                "op": "faq",
+                "reduce": "+",
+                "output_idx": ["b"],
+                "ranges": {
+                    "b": {"from": "brows"},
+                    "f": {"from": "frows"},
+                    "n": {"from": "nrows"}
+                },
+                "args": ["bfuel", "ffuel", "fcounty", "ncounty", "weight"],
+                "expr": ix("weight", "f")
+            });
+            let obj = node.as_object_mut().unwrap();
+            if gated {
+                obj.insert(
+                    "join".into(),
+                    json!([
+                        {"on": [["bfuel", "ffuel"]]},
+                        {"on": [["fcounty", "ncounty"]]}
+                    ]),
+                );
+            } else {
+                obj.insert(
+                    "filter".into(),
+                    json!({"op": "and", "args": [
+                        {"op": "==", "args": [ix("bfuel", "b"), ix("ffuel", "f")]},
+                        {"op": "==", "args": [ix("fcounty", "f"), ix("ncounty", "n")]}
+                    ]}),
+                );
+            }
+
+            json!({
+                "esm": "1.1.0",
+                "metadata": {"name": "join_gate_plan"},
+                "index_sets": {
+                    "brows": {"kind": "interval", "size": BINS},
+                    "frows": {"kind": "interval", "size": FACTS},
+                    "nrows": {"kind": "interval", "size": 1}
+                },
+                "models": {"J": {
+                    "variables": Value::Object(vars),
+                    "equations": [{"lhs": "E", "rhs": node}]
+                }}
+            })
+        }
+    }
+
+    fn prepare(doc: &Value, t: &Tables) -> crate::EsmProblem {
+        esm_problem(
+            doc,
+            (0.0, 0.0),
+            ProblemOptions {
+                model_name: Some("J".into()),
+                const_arrays: t.const_arrays(),
+                build_providers: Vec::new(),
+                ..Default::default()
+            },
+        )
+        .expect("prepare")
+    }
+
+    /// Materialize `E`, returning `(values, gates declined, indices built)`.
+    fn run(t: &Tables, gated: bool) -> (Vec<f64>, u64, u64) {
+        let doc = t.doc(gated);
+        reset_gate_plan_declines();
+        reset_gate_index_builds();
+        let prep = prepare(&doc, t);
+        let (declines, builds) = (gate_plan_declines(), gate_index_builds());
+        let field = observed_field(&prep, "E").expect("E materialized");
+        (field.iter().copied().collect(), declines, builds)
+    }
+
+    /// Run the gated document under one planner setting, restoring it after.
+    fn run_planned(t: &Tables, ratio: u128, floor: usize) -> (Vec<f64>, u64, u64) {
+        let (pr, pf) = set_gate_plan(ratio, floor);
+        let out = run(t, true);
+        set_gate_plan(pr, pf);
+        out
+    }
+
+    #[test]
+    fn a_declined_gate_changes_no_answer() {
+        let t = Tables::fixture();
+        let oracle = t.oracle();
+        assert!(
+            oracle.iter().any(|v| *v > 0.0),
+            "the fixture must actually match something"
+        );
+
+        let (filtered, filter_declines, _) = run(&t, false);
+        assert_eq!(
+            filter_declines, 0,
+            "the un-gated arm resolves no gate, so it can decline none"
+        );
+
+        // Floor 0 and ratio 0: decline any gate a sibling has already made
+        // redundant. The fuel clause is 40,000 pairs against 320 reachable.
+        let (planned, planned_declines, _) = run_planned(&t, 0, 0);
+        // A floor above the fuel clause's match count puts it out of the
+        // planner's reach, so every gate is built — the pre-planner behaviour.
+        let (unplanned, unplanned_declines, _) = run_planned(&t, u128::MAX, usize::MAX);
+
+        assert_eq!(
+            planned_declines, 1,
+            "the redundant fuel gate should be declined, and only it"
+        );
+        assert_eq!(
+            unplanned_declines, 0,
+            "a floor out of reach must decline nothing"
+        );
+
+        assert_eq!(
+            planned, unplanned,
+            "declining a gate changed an answer; it may only change cost"
+        );
+        assert_eq!(
+            planned, filtered,
+            "the planned arm and the hand-written filter must agree bit for bit"
+        );
+        assert_eq!(
+            planned, oracle,
+            "neither arm reproduces the plain-Rust oracle"
+        );
+    }
+
+    #[test]
+    fn the_ratio_is_weighed_against_what_a_sibling_gate_left_reachable() {
+        // The arithmetic itself, not just its endpoints. The fuel clause costs
+        // `OVERSHOOT` times the space the county clause left reachable, so the
+        // comparison `matches > ratio · reachable` must flip between
+        // `OVERSHOOT - 1` and `OVERSHOOT` and nowhere else.
+        //
+        // This is also the only assertion on `reach`: the fuel clause's own
+        // sides are 40 × 4,000 = 160,000, so if the county gate's narrowing
+        // were NOT recorded the overshoot would be well under 1 and no ratio
+        // in this range could decline anything.
+        assert_eq!(OVERSHOOT, 125, "the fixture's overshoot moved");
+        let t = Tables::fixture();
+        let oracle = t.oracle();
+
+        let (just_under, declined, _) = run_planned(&t, OVERSHOOT - 1, 1);
+        let (exactly, kept, _) = run_planned(&t, OVERSHOOT, 1);
+        assert_eq!(
+            declined, 1,
+            "a ratio just under the overshoot must decline the redundant gate"
+        );
+        assert_eq!(
+            kept, 0,
+            "a ratio at the overshoot must keep it: the test is `>`, not `>=`"
+        );
+
+        // And the floor is the other term: the same uneconomic ratio declines
+        // nothing once the gate is too small to be worth the risk.
+        let (floored, floored_declines, _) = run_planned(&t, OVERSHOOT - 1, FUEL_MATCHES + 1);
+        assert_eq!(
+            floored_declines, 0,
+            "a gate below the floor must be kept however uneconomic it looks"
+        );
+
+        assert_eq!(just_under, oracle, "the declining arm lost the answer");
+        assert_eq!(exactly, oracle, "the keeping arm lost the answer");
+        assert_eq!(floored, oracle, "the floored arm lost the answer");
+    }
+
+    #[test]
+    fn a_gate_with_no_cheaper_sibling_is_kept() {
+        // One clause alone: nothing has narrowed its symbols, so `space` is
+        // the full side product and the gate is always worth building. This is
+        // the guard that the planner cannot leave a walk ungated by accident.
+        let t = Tables::fixture();
+        let mut doc = t.doc(true);
+        doc["models"]["J"]["equations"][0]["rhs"]["join"] = json!([{"on": [["bfuel", "ffuel"]]}]);
+        doc["models"]["J"]["equations"][0]["rhs"]["ranges"]
+            .as_object_mut()
+            .unwrap()
+            .remove("n");
+
+        let (pr, pf) = set_gate_plan(0, 0);
+        reset_gate_plan_declines();
+        reset_gate_index_builds();
+        let prep = prepare(&doc, &t);
+        let (declines, builds) = (gate_plan_declines(), gate_index_builds());
+        set_gate_plan(pr, pf);
+
+        assert_eq!(
+            declines, 0,
+            "the only gate in a node must never be declined, whatever the ratio"
+        );
+        // A decline count of zero is also what a gate that was never resolved
+        // at all reports, so the build counter is what actually says the walk
+        // is gated.
+        assert!(
+            builds >= 1,
+            "no index was built: the node is ungated, not kept"
+        );
+        let field = observed_field(&prep, "E").expect("E materialized");
+        let got: Vec<f64> = field.iter().copied().collect();
+        let want: Vec<f64> = (0..BINS)
+            .map(|b| {
+                (0..FACTS)
+                    .filter(|&f| t.bfuel[b] == t.ffuel[f])
+                    .map(|f| t.weight[f])
+                    .sum()
+            })
+            .collect();
+        assert_eq!(got, want);
     }
 }
