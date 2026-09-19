@@ -189,6 +189,27 @@ cargo clippy --all-targets --features \
 - `esio`: the EarthSciIO data-provider bridge
 - `xla`: the compiled right-hand-side backend (see below)
 
+## Join-gate tuning (`ESS_*` environment variables)
+
+An aggregate carrying a `join` clause (`CONFORMANCE_SPEC.md` §5.5.6 / §5.5.8)
+drives its contraction from a candidate pair index instead of walking the full
+product. Five variables tune that, read once per thread on first use. **They
+change cost, never an answer** — every `on` clause is also lowered into the
+node's `filter`, so switching any of this off widens the walk and the filter
+still decides. That is what the differential tests assert, arm against arm.
+
+| variable | default | effect |
+|---|---|---|
+| `ESS_JOIN_GATE_DISABLE` | unset | `1` turns the driver off entirely: every gated aggregate walks the untouched full product. The "before" arm of the gate benchmarks. |
+| `ESS_JOIN_GATE_STATS` | unset | `1` reports each node's gates, and each gate the planner declined, on stderr. |
+| `ESS_GATE_CACHE_PAIRS` | `4000000` | Resident-pair budget for each gate-index cache, counted in pair-equivalents of 16 B — roughly 64 MB per cache. `0` retains nothing beyond what a live gate holds, so every evaluation rebuilds. |
+| `ESS_GATE_PLAN_RATIO` | `4` | How far a gate may overshoot the pair-space it could narrow before the planner declines to build it. A gate is weighed only against what SIBLING gates left reachable, so one whose symbols nothing else touches is never declined. |
+| `ESS_GATE_PLAN_FLOOR` | `1000000` | A gate matching fewer pairs than this is never declined, whatever the ratio says. The reachable-space estimate is an upper bound, and being wrong about a small gate costs more than it saves. |
+
+Everything else spelled `ESS_*` in this crate (the tape, vectorizer and CSE
+switches) is an undocumented escape hatch for bisecting a suspected codegen
+bug, not a supported knob.
+
 ## Compiled right-hand side (`xla` feature)
 
 `simulate_array::tape` compiles a model's observed + RHS rules into a flat
