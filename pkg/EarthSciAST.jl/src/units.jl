@@ -818,7 +818,9 @@ _same_unit(a, b) = dimension(a) == dimension(b) && _exact_scale(a) == _exact_sca
 # DIMENSION and must read the unit's own symbol. `:Steradian` is deliberately
 # absent: `sr` is `rad^2`, and the circular argument is now CONVERTED to radians
 # (issue #409) — multiplying by `scale` where `scale^2` was meant would be
-# silently wrong.
+# silently wrong. `sr` is NOT thereby admitted as a pure number either; see
+# `_ANGLE_AXIS_UNIT_NAMES` / `_is_angle_bearing` below, which is the same symbol
+# read widened to the whole axis.
 const _PLANE_ANGLE_UNIT_NAMES = (:Radian, :Degree)
 
 # Is `u` a plane angle to the FIRST power (`rad`, `deg`)?

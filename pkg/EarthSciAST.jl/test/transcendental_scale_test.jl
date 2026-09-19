@@ -18,13 +18,17 @@
 # Everything asserted here is asserted off SHARED fixtures, so the same facts are
 # checked by the other four bindings.
 #
-# THE ONE BINDING DIFFERENCE, on purpose. Unitful models `rad` as `NoDims`, so
-# this binding cannot tell an angle from a pure number by DIMENSION and reads the
-# unit's own symbol instead (`EarthSciAST._is_plane_angle`). The consequence is
-# `sr`: the other four carry `rad` as an axis and see `rad^2`, which no
-# conversion turns into a plane angle, so they REFUSE `sin(x [sr])`; here `sr` is
-# `NoDims` at scale 1 and is accepted as a pure number. That divergence predates
-# #409 and is not changed by it.
+# NO BINDING DIFFERENCE. Unitful models every angle as `NoDims`, so this binding
+# cannot tell an angle from a pure number by DIMENSION and reads the unit's own
+# symbol instead (`EarthSciAST._is_plane_angle` for the two plane angles,
+# `EarthSciAST._is_angle_bearing` for the whole axis). Reading only the plane
+# angles left `sr`, `rad^2` and a bare `rad` under a strict transcendental
+# looking dimensionless, so this binding ACCEPTED `sin(x [sr])`, `log(x [rad])`
+# and `asin(x [rad])` where the other four -- which carry `rad` as a real axis
+# and see `rad^2` -- refuse all three. That was the one place where one binding
+# said VALID and the other four said INVALID, and it is closed here; the
+# `an angle-bearing unit is not dimensionless` testset below is what holds it
+# closed.
 
 using Test
 using EarthSciAST
