@@ -287,7 +287,7 @@ fn ring_envelopes(rings: &ArrayD<f64>) -> Result<Vec<Envelope>, String> {
 // =========================================================================== //
 
 use std::cell::Cell;
-use std::collections::HashSet;
+use std::sync::OnceLock;
 
 thread_local! {
     /// Instrumentation: number of leaf bindings an OVERLAP-GATED dense
@@ -410,25 +410,159 @@ pub enum Side {
 /// Positions are **1-based**, matching the enumeration bindings (an index-set
 /// range resolves to `[1, N]`, and `vi_range_values` binds position `p` to `p`).
 ///
-/// The derived views are built ONCE with the index. A gate is resolved once per
-/// node but consulted once per output cell, so rebuilding an adjacency per cell
-/// would reinstate exactly the `O(N_tgt·N_src)` cost the driver removes.
+/// # What it costs, and why that is the shape it is (issue #418)
+///
+/// A gate index is RESIDENT for as long as its cache entry is, and a star-join
+/// aggregate's match set is orders of magnitude larger than either the arrays
+/// the document declares or the answer it produces — a 105,449-row fact table
+/// joined 1:many against a 1,000-row output relation is millions of candidate
+/// pairs. The three derived views above are therefore stored as ONE pair
+/// sequence plus at most one lazily-built adjacency, never as four independent
+/// copies of the pair set:
+///
+///   * The pairs live as two PARALLEL COLUMNS (`src`, `tgt`), ascending by
+///     `(src, tgt)` and duplicate-free — 16 B/pair, the irreducible content.
+///   * The `src` adjacency is FREE. Pairs sharing a left position are a
+///     CONTIGUOUS RUN of `src`, so that position's ascending partners are the
+///     matching subslice of `tgt` — the `&[i64]` [`Self::partners`] hands back
+///     with nothing stored for it.
+///   * Membership is a lookup of that run followed by one binary search inside
+///     it, not a probe into a `HashSet` of the pairs. A hash set is another
+///     ~16 B/pair of payload plus its load-factor slack; [`SrcRuns`], which
+///     finds the run in O(1), is 4 B per POSITION — for the star joins this is
+///     about, orders of magnitude less, since a position carries many pairs.
+///   * The `tgt` adjacency is the one direction that is NOT a subslice of
+///     anything (pairs sharing a right position are scattered through the
+///     `(src, tgt)` order), so it is materialised as a compressed [`Csr`] — and
+///     LAZILY, on the first `Side::Tgt` query. Which direction a walk uses is
+///     fixed by the aggregate's binding order, so the overwhelmingly common
+///     case builds one direction and pays nothing for the other. It cannot be
+///     chosen statically instead: an index is memoized across nodes, and a
+///     later node may drive the other way.
+///
+/// Measured on issue #418's `join-aggregate-scaling.esm`, that is ~16 B/pair
+/// resident where the four-copy form was ~80.
+///
+/// The derived views are built at most ONCE per index, never per cell. A gate
+/// is resolved once per node but consulted once per output cell, so rebuilding
+/// an adjacency per cell would reinstate exactly the `O(N_tgt·N_src)` cost the
+/// driver removes.
 #[derive(Debug, Clone, Default)]
 pub struct OverlapIndex {
-    pairs: HashSet<(i64, i64)>,
-    sorted: Vec<(i64, i64)>,
-    adj_src: HashMap<i64, Vec<i64>>,
-    adj_tgt: HashMap<i64, Vec<i64>>,
+    /// Left positions, ascending by `(src, tgt)` with `tgt` and duplicate-free.
+    src: Vec<i64>,
+    /// Right positions, parallel to `src`.
+    tgt: Vec<i64>,
+    /// O(1) run lookup into `src`, when its position span admits one.
+    src_runs: Option<SrcRuns>,
+    /// The `tgt`⇒`src` adjacency, built on first use. [`std::sync::OnceLock`]
+    /// rather than a `Cell` so the index keeps its auto traits: it is public
+    /// API, and `Send`/`Sync` are not ours to withdraw.
+    by_tgt: OnceLock<Csr>,
+}
+
+/// Direct-addressed run boundaries for the `src` column: `starts[k]` is the
+/// number of pairs whose left position is below `lo + k`, so position `p`'s
+/// pairs are `starts[p - lo] .. starts[p - lo + 1]`.
+///
+/// Why this exists rather than a binary search over `src`: finding the run is
+/// the whole of [`OverlapIndex::contains`], which the "both gated symbols
+/// already bound" arm of [`overlap_drive_plan`] takes ONCE PER OUTPUT CELL. On
+/// a 3000×3000 output over a 30,000-pair gate — nine million membership tests —
+/// a `partition_point` over `src` is ~15 dependent L2 loads each and measured
+/// 38% slower end to end than the hash set this representation removed, where
+/// the table brings it back to two loads and the change is in the noise.
+///
+/// Cost is 4 B per POSITION IN THE SPAN, not per pair, which for a join whose
+/// point is that positions carry many pairs is the cheap direction to pay in.
+/// A span too sparse to be worth a dense table (`lo` and `hi` far apart with
+/// few positions between) declines it and leaves `contains` on the binary
+/// search; correctness is identical either way.
+#[derive(Debug, Clone)]
+struct SrcRuns {
+    lo: i64,
+    starts: Vec<u32>,
+}
+
+/// A compressed adjacency list: `keys` ascending and duplicate-free, and the
+/// partners of `keys[k]` are `partners[offsets[k]..offsets[k + 1]]`, themselves
+/// ascending.
+///
+/// The `HashMap<i64, Vec<i64>>` this replaces cost a 24-byte `Vec` header, the
+/// map's own bucket slack and a separate heap allocation PER DISTINCT KEY, plus
+/// push-doubling slack on every one of those little vectors. Over a dense
+/// position space that is a CSR list in disguise; written as one, it is
+/// 8 B/pair with the keys' 12 B/key on top and one allocation for the lot.
+#[derive(Debug, Clone)]
+struct Csr {
+    keys: Vec<i64>,
+    offsets: Vec<usize>,
+    partners: Vec<i64>,
 }
 
 const NO_PARTNERS: &[i64] = &[];
+
+impl SrcRuns {
+    /// How many times larger than the pair count a position span may be before
+    /// a dense run table stops being worth its memory. Generous, because the
+    /// table is 4 B where a pair is 16: a span four times the pair count still
+    /// costs less than the pairs do.
+    const MAX_SPAN_FACTOR: usize = 4;
+
+    /// The table for an ascending `src` column, or `None` when the span is too
+    /// sparse (or too large to address with `u32`) to be worth densifying.
+    fn build(src: &[i64]) -> Option<SrcRuns> {
+        let (&lo, &hi) = (src.first()?, src.last()?);
+        let span = hi.checked_sub(lo)?.checked_add(1)? as usize;
+        if span > Self::MAX_SPAN_FACTOR * src.len() + 1024 || src.len() > u32::MAX as usize {
+            return None;
+        }
+        let mut starts = vec![0u32; span + 1];
+        for &p in src {
+            starts[(p - lo) as usize + 1] += 1;
+        }
+        for k in 0..span {
+            starts[k + 1] += starts[k];
+        }
+        Some(SrcRuns { lo, starts })
+    }
+
+    /// The half-open pair range of left position `pos`; empty outside the span.
+    #[inline]
+    fn run(&self, pos: i64) -> (usize, usize) {
+        let Some(k) = pos.checked_sub(self.lo) else {
+            return (0, 0);
+        };
+        if k < 0 || k as usize + 1 >= self.starts.len() {
+            return (0, 0);
+        }
+        let k = k as usize;
+        (self.starts[k] as usize, self.starts[k + 1] as usize)
+    }
+}
+
+impl Csr {
+    /// The ascending partners of `key`, empty when it has none.
+    #[inline]
+    fn partners_of(&self, key: i64) -> &[i64] {
+        match self.keys.binary_search(&key) {
+            Ok(k) => &self.partners[self.offsets[k]..self.offsets[k + 1]],
+            Err(_) => NO_PARTNERS,
+        }
+    }
+}
 
 impl OverlapIndex {
     /// Build the index from 0-based broad-phase pairs (as
     /// [`broad_phase_candidates`] returns them), shifting to the 1-based range
     /// positions the enumeration bindings use.
     pub fn from_zero_based(pairs: &[(usize, usize)]) -> Self {
-        Self::from_positions(pairs.iter().map(|&(q, c)| (q as i64 + 1, c as i64 + 1)))
+        Self::from_owned_pairs(
+            pairs
+                .iter()
+                .map(|&(q, c)| (q as i64 + 1, c as i64 + 1))
+                .collect(),
+        )
     }
 
     /// Build the index from pairs that are ALREADY range positions — the
@@ -441,58 +575,126 @@ impl OverlapIndex {
     /// The two constructors produce the identical structure; only the position
     /// convention of the input differs.
     pub fn from_pairs(pairs: &[(i64, i64)]) -> Self {
-        Self::from_positions(pairs.iter().copied())
+        Self::from_owned_pairs(pairs.to_vec())
     }
 
-    fn from_positions(pairs: impl Iterator<Item = (i64, i64)>) -> Self {
-        let mut sorted: Vec<(i64, i64)> = pairs.collect();
-        sorted.sort_unstable();
-        sorted.dedup();
-        let mut adj_src: HashMap<i64, Vec<i64>> = HashMap::new();
-        let mut adj_tgt: HashMap<i64, Vec<i64>> = HashMap::new();
-        for &(l, r) in &sorted {
-            adj_src.entry(l).or_default().push(r);
-            adj_tgt.entry(r).or_default().push(l);
+    /// [`Self::from_pairs`] taking OWNERSHIP of the match set.
+    ///
+    /// The caller has just materialised one `(i64, i64)` per pair and has no
+    /// further use for it; sorting that vector in place and moving its contents
+    /// into the two columns is one 16 B/pair copy where `from_pairs(&v)` is two
+    /// (the caller's, plus this one), which on a multi-million-pair join is the
+    /// difference between a transient that fits and one that does not.
+    pub fn from_owned_pairs(mut pairs: Vec<(i64, i64)>) -> Self {
+        pairs.sort_unstable();
+        pairs.dedup();
+        let mut src = Vec::with_capacity(pairs.len());
+        let mut tgt = Vec::with_capacity(pairs.len());
+        for (l, r) in pairs {
+            src.push(l);
+            tgt.push(r);
         }
-        // `sorted` ascends by `(l, r)`, so every `adj_src` list is already
-        // ascending; `adj_tgt` collects in `l` order, which is ascending too.
+        let src_runs = SrcRuns::build(&src);
         OverlapIndex {
-            pairs: sorted.iter().copied().collect(),
-            sorted,
-            adj_src,
-            adj_tgt,
+            src,
+            tgt,
+            src_runs,
+            by_tgt: OnceLock::new(),
         }
+    }
+
+    /// The half-open index range of the pairs whose LEFT position is `pos` —
+    /// a contiguous run, because the columns ascend by `(src, tgt)`. Read off
+    /// [`SrcRuns`] in O(1) when there is one, and otherwise binary-searched.
+    #[inline]
+    fn src_run(&self, pos: i64) -> (usize, usize) {
+        if let Some(r) = &self.src_runs {
+            return r.run(pos);
+        }
+        let start = self.src.partition_point(|&p| p < pos);
+        let end = self.src[start..].partition_point(|&p| p == pos) + start;
+        (start, end)
     }
 
     /// Is `(pos_src, pos_tgt)` a candidate pair?
+    ///
+    /// `pos_src`'s run, then a binary search for `pos_tgt` within that run's
+    /// ascending partners — in place of a hash probe against a set that
+    /// duplicated the pairs. See [`SrcRuns`] for what makes the first step O(1)
+    /// and why it has to be.
     #[inline]
     pub fn contains(&self, src: i64, tgt: i64) -> bool {
-        self.pairs.contains(&(src, tgt))
+        let (a, b) = self.src_run(src);
+        self.tgt[a..b].binary_search(&tgt).is_ok()
     }
 
     /// Number of candidate pairs.
     pub fn len(&self) -> usize {
-        self.sorted.len()
+        self.src.len()
     }
 
     /// Is the candidate set empty?
     pub fn is_empty(&self) -> bool {
-        self.sorted.is_empty()
+        self.src.is_empty()
     }
 
     /// The candidate pairs ascending by `(pos_src, pos_tgt)`.
-    pub fn sorted_pairs(&self) -> &[(i64, i64)] {
-        &self.sorted
+    ///
+    /// An iterator rather than a `&[(i64, i64)]`: the pairs are stored as two
+    /// columns, and rebuilding an interleaved copy to hand out a slice would
+    /// reinstate the 16 B/pair this representation exists to avoid. Both
+    /// callers walk it once.
+    pub fn pairs(&self) -> impl ExactSizeIterator<Item = (i64, i64)> + '_ {
+        self.src.iter().copied().zip(self.tgt.iter().copied())
+    }
+
+    /// Build the `tgt`⇒`src` adjacency. Called at most once per index, from
+    /// [`Self::partners`]'s `Side::Tgt` arm.
+    fn build_by_tgt(&self) -> Csr {
+        let mut keys = self.tgt.clone();
+        keys.sort_unstable();
+        keys.dedup();
+        keys.shrink_to_fit(); // the dedup left the full 8 B/pair allocation
+        let mut offsets = vec![0usize; keys.len() + 1];
+        for &r in &self.tgt {
+            // `binary_search` cannot fail: every `tgt` value is one of `keys`.
+            if let Ok(k) = keys.binary_search(&r) {
+                offsets[k + 1] += 1;
+            }
+        }
+        for k in 0..keys.len() {
+            offsets[k + 1] += offsets[k];
+        }
+        let mut partners = vec![0i64; self.tgt.len()];
+        let mut fill = offsets.clone();
+        // Walking the columns in `(src, tgt)` order fills each key's slot run
+        // in ascending `src` order, which is the ordering `partners` promises.
+        for (l, r) in self.pairs() {
+            if let Ok(k) = keys.binary_search(&r) {
+                partners[fill[k]] = l;
+                fill[k] += 1;
+            }
+        }
+        Csr {
+            keys,
+            offsets,
+            partners,
+        }
     }
 
     /// The SORTED partner positions of `pos` on the side opposite `side`
     /// (`side` names the side `pos` itself lives on). Empty when it has none.
     pub fn partners(&self, side: Side, pos: i64) -> &[i64] {
-        let adj = match side {
-            Side::Src => &self.adj_src,
-            Side::Tgt => &self.adj_tgt,
-        };
-        adj.get(&pos).map(Vec::as_slice).unwrap_or(NO_PARTNERS)
+        match side {
+            Side::Src => {
+                let (a, b) = self.src_run(pos);
+                &self.tgt[a..b]
+            }
+            Side::Tgt => self
+                .by_tgt
+                .get_or_init(|| self.build_by_tgt())
+                .partners_of(pos),
+        }
     }
 
     /// [`Self::partners`] restricted to the inclusive range `[lo, hi]`, still
@@ -500,6 +702,14 @@ impl OverlapIndex {
     /// its own range. No copy (see [`restrict_to_range`]).
     pub fn partners_in(&self, side: Side, pos: i64, lo: i64, hi: i64) -> &[i64] {
         restrict_to_range(self.partners(side, pos), lo, hi)
+    }
+
+    /// Has the lazy `tgt` adjacency been built? Test-only: the claim that a
+    /// `Side::Src` walk pays nothing for the other direction is a property of
+    /// this flag, not of a memory measurement.
+    #[cfg(test)]
+    pub(crate) fn tgt_adjacency_built(&self) -> bool {
+        self.by_tgt.get().is_some()
     }
 }
 
@@ -544,7 +754,10 @@ pub enum DrivePlan<'a> {
 /// restriction is a CONTIGUOUS subslice — found by binary search, no copy.
 fn restrict_to_range(parts: &[i64], lo: i64, hi: i64) -> &[i64] {
     let start = parts.partition_point(|&p| p < lo);
-    let end = parts.partition_point(|&p| p <= hi);
+    // `.max(start)` is what makes an EMPTY range (`hi < lo`) admit nothing
+    // rather than panic on an inverted slice: the two partition points cross
+    // when every value falls in the gap between `hi` and `lo`.
+    let end = parts.partition_point(|&p| p <= hi).max(start);
     &parts[start..end]
 }
 
@@ -593,6 +806,7 @@ pub fn overlap_drive_plan(
 mod tests {
     use super::*;
     use ndarray::IxDyn;
+    use std::collections::BTreeMap;
 
     fn arr(shape: &[usize], data: Vec<f64>) -> ArrayD<f64> {
         ArrayD::from_shape_vec(IxDyn(shape), data).expect("shape matches data")
@@ -717,5 +931,183 @@ mod tests {
         let arrays = ca(vec![("rings", rings)]);
         let envs = envelope_vectors(&names(&["rings"]), &arrays).unwrap();
         assert_eq!(envs, vec![[0.0, 0.0, 2.0, 1.0], [3.0, 2.0, 5.0, 4.0]]);
+    }
+
+    // ── OverlapIndex: the derived views (issue #418) ────────────────────────
+
+    /// A deterministic pair multiset with duplicates, out of order, with left
+    /// positions carrying many partners and gaps carrying none.
+    fn stress_pairs() -> Vec<(i64, i64)> {
+        let mut state: u64 = 0x2545_F491_4F6C_DD1D;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        (0..4000)
+            .map(|_| {
+                // Left positions are EVEN only, so every odd one is a miss.
+                (2 * ((next() % 48) as i64 + 1), (next() % 53) as i64 + 1)
+            })
+            .collect()
+    }
+
+    /// The four-copy structure [`OverlapIndex`] replaced, kept as the oracle:
+    /// a membership set and one `HashMap<i64, Vec<i64>>` per direction.
+    #[allow(clippy::type_complexity)]
+    fn naive(
+        pairs: &[(i64, i64)],
+    ) -> (
+        std::collections::HashSet<(i64, i64)>,
+        BTreeMap<i64, Vec<i64>>,
+        BTreeMap<i64, Vec<i64>>,
+    ) {
+        let set: std::collections::HashSet<(i64, i64)> = pairs.iter().copied().collect();
+        let mut by_src: BTreeMap<i64, Vec<i64>> = BTreeMap::new();
+        let mut by_tgt: BTreeMap<i64, Vec<i64>> = BTreeMap::new();
+        let mut sorted: Vec<(i64, i64)> = set.iter().copied().collect();
+        sorted.sort_unstable();
+        for (l, r) in sorted {
+            by_src.entry(l).or_default().push(r);
+            by_tgt.entry(r).or_default().push(l);
+        }
+        (set, by_src, by_tgt)
+    }
+
+    #[test]
+    fn overlap_index_views_match_the_naive_pair_set() {
+        let raw = stress_pairs();
+        let (set, by_src, by_tgt) = naive(&raw);
+        let ix = OverlapIndex::from_pairs(&raw);
+
+        // The pair sequence is the deduped set, ascending.
+        let mut want: Vec<(i64, i64)> = set.iter().copied().collect();
+        want.sort_unstable();
+        assert_eq!(ix.pairs().collect::<Vec<_>>(), want);
+        assert_eq!(ix.len(), want.len());
+        assert!(!ix.is_empty());
+
+        // Membership, over hits AND misses (odd left positions are all misses).
+        for l in 0..=100 {
+            for r in 0..=60 {
+                assert_eq!(
+                    ix.contains(l, r),
+                    set.contains(&(l, r)),
+                    "membership disagrees at ({l}, {r})"
+                );
+            }
+        }
+
+        // Both adjacencies, including positions with no partners at all.
+        const NONE: &[i64] = &[];
+        for l in 0..=100 {
+            assert_eq!(
+                ix.partners(Side::Src, l),
+                by_src.get(&l).map(Vec::as_slice).unwrap_or(NONE),
+                "src partners disagree at {l}"
+            );
+        }
+        for r in 0..=60 {
+            assert_eq!(
+                ix.partners(Side::Tgt, r),
+                by_tgt.get(&r).map(Vec::as_slice).unwrap_or(NONE),
+                "tgt partners disagree at {r}"
+            );
+        }
+    }
+
+    #[test]
+    fn partners_in_is_the_contiguous_restriction_of_partners() {
+        let ix = OverlapIndex::from_pairs(&stress_pairs());
+        for pos in [2i64, 4, 50, 96] {
+            for side in [Side::Src, Side::Tgt] {
+                let all = ix.partners(side, pos);
+                for (lo, hi) in [(0i64, 100i64), (10, 20), (30, 30), (40, 5)] {
+                    let want: Vec<i64> = all
+                        .iter()
+                        .copied()
+                        .filter(|&v| v >= lo && v <= hi)
+                        .collect();
+                    assert_eq!(ix.partners_in(side, pos, lo, hi), want.as_slice());
+                }
+            }
+        }
+    }
+
+    /// The `src` adjacency is a subslice of the pair columns and the `tgt` one
+    /// is not, so a walk that only ever binds the `src` side must not pay for
+    /// the direction it never reads — the point of building it lazily.
+    #[test]
+    fn a_src_side_walk_never_builds_the_tgt_adjacency() {
+        let ix = OverlapIndex::from_pairs(&stress_pairs());
+        assert!(!ix.tgt_adjacency_built(), "built eagerly at construction");
+        for l in 0..=100 {
+            let _ = ix.partners(Side::Src, l);
+            let _ = ix.partners_in(Side::Src, l, 1, 20);
+            let _ = ix.contains(l, 3);
+        }
+        let _ = ix.pairs().count();
+        assert!(
+            !ix.tgt_adjacency_built(),
+            "a src-only walk paid for the tgt direction"
+        );
+        let _ = ix.partners(Side::Tgt, 3);
+        assert!(ix.tgt_adjacency_built());
+    }
+
+    #[test]
+    fn the_three_constructors_agree() {
+        let raw = stress_pairs();
+        let from_ref = OverlapIndex::from_pairs(&raw);
+        let owned = OverlapIndex::from_owned_pairs(raw.clone());
+        assert_eq!(
+            from_ref.pairs().collect::<Vec<_>>(),
+            owned.pairs().collect::<Vec<_>>()
+        );
+        // `from_zero_based` shifts 0-based envelope offsets to 1-based positions.
+        let zb: Vec<(usize, usize)> = vec![(0, 0), (2, 1), (0, 3)];
+        assert_eq!(
+            OverlapIndex::from_zero_based(&zb)
+                .pairs()
+                .collect::<Vec<_>>(),
+            vec![(1, 1), (1, 4), (3, 2)]
+        );
+    }
+
+    #[test]
+    fn an_empty_index_has_no_partners_and_admits_nothing() {
+        let ix = OverlapIndex::from_pairs(&[]);
+        assert!(ix.is_empty());
+        assert_eq!(ix.len(), 0);
+        assert!(!ix.contains(1, 1));
+        assert!(ix.partners(Side::Src, 1).is_empty());
+        assert!(ix.partners(Side::Tgt, 1).is_empty());
+        assert_eq!(ix.pairs().count(), 0);
+    }
+
+    /// A span too sparse for a dense run table declines it and falls back to
+    /// the binary search — which must answer identically, since the table is a
+    /// lookup accelerator and nothing else.
+    #[test]
+    fn a_sparse_left_column_falls_back_and_answers_the_same() {
+        let sparse: Vec<(i64, i64)> = vec![(1, 2), (1, 5), (10_000_000, 3), (10_000_000, 5)];
+        let ix = OverlapIndex::from_pairs(&sparse);
+        assert!(
+            ix.src_runs.is_none(),
+            "a 10-million-wide span over 4 pairs should not be densified"
+        );
+        let dense = OverlapIndex::from_pairs(&[(1, 2), (1, 5), (3, 3), (3, 5)]);
+        assert!(dense.src_runs.is_some(), "a tight span should be densified");
+
+        for (ix, hit, miss) in [(&ix, 10_000_000i64, 4_999_999i64), (&dense, 3i64, 2i64)] {
+            assert!(ix.contains(1, 2) && ix.contains(hit, 5));
+            assert!(!ix.contains(1, 3) && !ix.contains(miss, 5));
+            assert!(!ix.contains(0, 2) && !ix.contains(i64::MAX, 2));
+            assert_eq!(ix.partners(Side::Src, 1), &[2, 5]);
+            assert_eq!(ix.partners(Side::Src, hit), &[3, 5]);
+            assert!(ix.partners(Side::Src, miss).is_empty());
+            assert_eq!(ix.partners(Side::Tgt, 5), &[1, hit]);
+        }
     }
 }

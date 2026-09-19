@@ -3003,12 +3003,16 @@ fn build_equality_index(
     // symbols' own values. `OverlapIndex` then re-sorts them position-ascending,
     // which is what makes the driven walk an order-preserving subsequence of the
     // full product; both orders are pure functions of the input.
+    //
+    // Handed over by VALUE (issue #418). This vector is the whole match set —
+    // millions of pairs on a star join — and nothing here reads it again, so
+    // `from_owned_pairs` sorts it in place instead of copying it a third time.
     let pairs: Vec<(i64, i64)> = crate::relational::equijoin(&keys_l, &keys_r)
         .into_iter()
         .map(|(i, j)| (pos_l[i], pos_r[j]))
         .collect();
     Some((
-        crate::broad_phase::OverlapIndex::from_pairs(&pairs),
+        crate::broad_phase::OverlapIndex::from_owned_pairs(pairs),
         n_l,
         n_r,
     ))
@@ -3227,9 +3231,8 @@ pub(super) fn reduce_contraction_gated(
         let (lo1, hi1) = ranges[1];
         let mut tuples: Vec<(i64, i64)> = gate
             .index
-            .sorted_pairs()
-            .iter()
-            .map(|&(l, r)| if src_is_slow { (l, r) } else { (r, l) })
+            .pairs()
+            .map(|(l, r)| if src_is_slow { (l, r) } else { (r, l) })
             .filter(|&(a, b)| a >= lo0 && a <= hi0 && b >= lo1 && b <= hi1)
             .collect();
         if !src_is_slow {
