@@ -15,16 +15,19 @@ import pytest
 from conftest import FIXTURES_ROOT
 
 from earthsci_ast.esm_types import ExprNode, Tolerance
-from earthsci_ast.parse import load_string
 from earthsci_ast.inline_tests import (
+    DEFAULT_METHOD,
     InlineTestOptions,
     _check_assertion,
+    _method_for,
+    _requested_output_times,
     _resolve_tolerance,
     evaluate_cellwise,
     field_reduce,
     run_inline_tests,
     state_cells,
 )
+from earthsci_ast.parse import load_string
 from earthsci_ast.serialize import _serialize_esm_file
 
 N = 8
@@ -362,6 +365,211 @@ def test_run_inline_tests_decay_field():
     assert by_idx[3].passed and abs(by_idx[3].actual) < 1e-9
     assert all(r.reduce in ("L2_error", "mean") for r in results)
     assert all(r.model == "M" and r.test_id == "decay" for r in results)
+
+
+# ---------------------------------------------------------------------------
+# The solve saves the times the assertions ask for
+# ---------------------------------------------------------------------------
+
+
+def _scalar_decay_doc(times: list[float]) -> dict:
+    """``dx/dt = -x``, ``x(0) = 1`` over a 0..10 span, asserted at each of
+    ``times`` against the closed form ``x(t) = e^{-t}``."""
+    return {
+        "esm": "1.0.0",
+        "metadata": {"name": "scalar_decay"},
+        "models": {
+            "M": {
+                "variables": {"x": {"type": "unknown", "units": "1", "default": 1.0}},
+                "equations": [
+                    {
+                        "lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+                        "rhs": {"op": "*", "args": [-1, "x"]},
+                    }
+                ],
+                "tests": [
+                    {
+                        "id": "decays",
+                        "time_span": {"start": 0.0, "end": 10.0},
+                        "tolerance": {"rel": 1e-6},
+                        "assertions": [
+                            {"variable": "x", "time": t, "expected": math.exp(-t)} for t in times
+                        ],
+                    }
+                ],
+            }
+        },
+        "domain": {"temporal": {}},
+    }
+
+
+def test_assertion_times_inside_the_span_are_sampled():
+    """An assertion at a time strictly INSIDE its test's span is answered.
+
+    ``simulate_states`` asks the solve for exactly the times the assertions
+    name. It used not to — the grid was whatever the integrator's own
+    step/dense-output schedule produced — and then the match check rejected
+    every interior time with ``no saved state at t=...``. Only the span
+    ENDPOINTS were reliably on that grid, which is why the omission survived
+    the §6.6.5 PDE runner this frame grew out of: those fixtures assert at the
+    endpoints. A §6.6 corpus does not.
+
+    Sabotage check: drop ``saveat=`` from the ``solve`` call in
+    ``simulate_states`` and the three interior rows here error.
+    """
+    # 1/3 and pi are chosen because they do NOT land on the default output
+    # grid: `saveat=None` keeps a uniform grid over the span, so a "round"
+    # interior time like 3.5 sits on it by luck and would pass either way.
+    times = [0.0, 1.0 / 3.0, math.pi, 10.0]
+    results = run_inline_tests(load_string(json.dumps(_scalar_decay_doc(times))))
+    assert len(results) == 4, results
+    assert all(r.passed for r in results), [r.message for r in results if not r.passed]
+    # The endpoints were never the problem; the off-grid interior times are.
+    interior = [r for r in results if r.time not in (0.0, 10.0)]
+    assert [r.time for r in interior] == [1.0 / 3.0, math.pi]
+    assert all(r.actual == pytest.approx(math.exp(-r.time), rel=1e-6) for r in interior)
+
+
+def test_a_stateless_document_answers_at_the_asserted_time():
+    """An algebraic-only document is sampled AT the assertion times.
+
+    With no state to integrate there is nothing to interpolate either — the
+    observed bodies are functions of ``t`` and can be evaluated anywhere — but
+    that pathway sampled a fixed 1001-node grid over the span and ignored
+    ``saveat``, so an assertion at a time between two of those nodes was
+    reported as ``no saved state at t=...``. 60 s of a 3600 s span is exactly
+    such a time (the grid steps by 3.6 s).
+
+    Sabotage check: drop the ``_saveat_times`` call from the stateless branch of
+    ``_simulate_scalar`` and this errors.
+    """
+    doc = {
+        "esm": "1.0.0",
+        "metadata": {"name": "algebraic_ramp"},
+        "models": {
+            "M": {
+                "variables": {
+                    "y": {"type": "unknown", "units": "1"},
+                    "a": {"type": "parameter", "units": "1/s", "default": 2.0},
+                },
+                "equations": [{"lhs": "y", "rhs": {"op": "*", "args": ["a", "t"]}}],
+                "tests": [
+                    {
+                        "id": "ramps",
+                        "time_span": {"start": 0.0, "end": 3600.0},
+                        "tolerance": {"rel": 1e-9},
+                        "assertions": [
+                            {"variable": "y", "time": 60.0, "expected": 120.0},
+                            {"variable": "y", "time": 600.0, "expected": 1200.0},
+                        ],
+                    }
+                ],
+            }
+        },
+        "domain": {"temporal": {}},
+    }
+    results = run_inline_tests(load_string(json.dumps(doc)))
+    assert len(results) == 2, results
+    assert all(r.passed for r in results), [r.message for r in results if not r.passed]
+
+
+def test_one_assertion_on_a_span_that_does_not_start_at_zero():
+    """A test whose assertions sit at ONE instant still gets that instant.
+
+    ``saveat`` is overloaded (API_SPEC §4): a sequence of one positive number
+    is an output STEP from ``tspan[0]``, not a time. ``simulate_states`` builds
+    its ``saveat`` from ``sorted({a.time for ...})``, so a single-assertion
+    test — the common shape — reduces to exactly that, and the step grid
+    contains the requested time only by luck (it does whenever the span starts
+    at 0, which every other test here does). On a 100..200 span, ``[150.0]``
+    became the grid ``[100.0]``.
+
+    Sabotage check: drop ``float(tspan[0])`` from the ``requested`` set in
+    ``simulate_states`` and this errors with ``no saved state at t=150.0``.
+    """
+    doc = _scalar_decay_doc([150.0])
+    span = doc["models"]["M"]["tests"][0]["time_span"]
+    span["start"], span["end"] = 100.0, 200.0
+    # `x(0) = 1` is imposed at the span start, so the closed form is measured
+    # from there.
+    doc["models"]["M"]["tests"][0]["assertions"][0]["expected"] = math.exp(-50.0)
+    doc["models"]["M"]["tests"][0]["tolerance"] = {"rel": 1e-6, "abs": 1e-12}
+
+    results = run_inline_tests(load_string(json.dumps(doc)))
+    assert len(results) == 1, results
+    assert "no saved state" not in results[0].message, results[0].message
+    assert results[0].passed, results[0].message
+
+
+def test_requested_output_times_are_never_read_as_an_output_step():
+    """The times handed to ``solve`` are TIMES, never an output step.
+
+    ``saveat`` is overloaded (API_SPEC §4) and a one-element sequence of a
+    positive number is a STEP measured from ``tspan[0]``. Both span ends are in
+    the requested set, so the sequence is at least two values wide whenever the
+    span has any width and that reading is unreachable. Without them a single
+    assertion at ``t = 1e-3`` of a 86400 s span would ask for a 1 ms output
+    step — 86 million nodes for one number — and a single assertion at
+    ``t = 150`` of a 100..200 span would ask for a 100 s step, whose grid does
+    not contain 150 at all.
+
+    Sabotage check: drop the span ends from ``_requested_output_times`` and
+    both cases here collapse to one element.
+    """
+    assert _requested_output_times((100.0, 200.0), [150.0]) == [100.0, 150.0, 200.0]
+    assert _requested_output_times((1e-3, 86400.0), [1e-3]) == [1e-3, 86400.0]
+    # An assertion ON a span end is not a second node, and the times come back
+    # sorted however they went in.
+    assert _requested_output_times((0.0, 10.0), [10.0, 0.0, 2.0]) == [0.0, 2.0, 10.0]
+    # A zero-width span is the one case that stays a single value — harmless,
+    # because the step reading of ``[t0]`` is the grid ``[t0]``.
+    assert _requested_output_times((5.0, 5.0), [5.0]) == [5.0]
+
+
+def test_a_batchs_rows_name_the_document_they_came_from(tmp_path):
+    """Results from a multi-document run are attributable one by one.
+
+    ``run_inline_tests`` takes a directory or an iterable and concatenates the
+    rows, so without ``AssertionResult.file`` a corpus sweep could report a
+    failure without saying which document failed — while a LOAD failure named
+    its path all along, which made the two halves of one run inconsistent with
+    each other. This is the same row-level attribution the Julia binding's
+    ``AssertionResult.file`` carries.
+
+    Sabotage check: stop passing ``source`` to ``_result`` and the per-assertion
+    rows come back with an empty ``file``.
+    """
+    good = tmp_path / "decay.esm"
+    good.write_text(json.dumps(_scalar_decay_doc([0.0, 5.0])))
+    bad = tmp_path / "broken.esm"
+    bad.write_text("{not json")
+
+    results = run_inline_tests([str(good)])
+    assert results and all(r.file == str(good) for r in results)
+
+    # An unreadable document in the same batch still contributes its own named
+    # row rather than ending the run.
+    mixed = run_inline_tests([str(good), str(bad)])
+    assert any(r.file == str(bad) and not r.passed for r in mixed)
+    assert any(r.file == str(good) and r.passed for r in mixed)
+
+    # A document handed over in memory has no path to carry.
+    in_memory = run_inline_tests(load_string(json.dumps(_scalar_decay_doc([0.0]))))
+    assert in_memory and all(r.file == "" for r in in_memory)
+
+
+def test_default_method_is_the_librarys_own_default_alg():
+    """An inline-test run and a bare ``solve()`` integrate an opinionless
+    document with the SAME algorithm. They diverged — ``RK45`` here against
+    ``LSODA`` there — which made a stiff document's inline tests cost orders of
+    magnitude more wall time than the same document solved directly."""
+    from earthsci_ast.problem import DEFAULT_ALG
+
+    assert DEFAULT_METHOD == DEFAULT_ALG
+    # Not just the constant: the resolution a document with no `solver` block
+    # and a caller with no opinion actually goes through (§2.2).
+    opinionless = load_string(json.dumps(_scalar_decay_doc([1.0])))
+    assert _method_for(None, opinionless) == DEFAULT_ALG
 
 
 def _free_x_cos() -> dict:

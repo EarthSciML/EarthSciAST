@@ -28,7 +28,12 @@ from .flatten import (
     FlattenedSystem,
     UnsupportedDimensionalityError,
 )
-from .simulation_array import _densify_solution, resolve_scalar_ic, scalar_ic_equations
+from .simulation_array import (
+    _densify_solution,
+    _saveat_times,
+    resolve_scalar_ic,
+    scalar_ic_equations,
+)
 from .simulation_common import (
     ReturnCode,
     Solution,
@@ -370,9 +375,16 @@ def _simulate_scalar(
         # synthetic uniform grid over tspan.
         if not state_names:
             t0_, t1_ = float(tspan[0]), float(tspan[1])
-            # 1001-node sampling grid for this stateless path (unrelated to
-            # the dense-output budget ``DENSE_OUTPUT_MIN_POINTS``).
-            t_out = np.linspace(t0_, t1_, 1001)
+            # `saveat` is honoured HERE too. An algebraic body can be evaluated
+            # at any time at all, so a caller naming its output times is the
+            # cheapest possible request — and answering it from a fixed grid
+            # instead meant an inline test asserting an algebraic quantity at,
+            # say, t=60 s of a 3600 s span was told "no saved state at t=60.0".
+            t_out = _saveat_times(saveat, t0_, t1_)
+            if t_out is None or t_out.size == 0:
+                # 1001-node sampling grid for this stateless path (unrelated to
+                # the dense-output budget ``DENSE_OUTPUT_MIN_POINTS``).
+                t_out = np.linspace(t0_, t1_, 1001)
             if observed_names and observed_vector_func is not None:
                 obs_vals = observed_vector_func(t_out, *param_values)
                 y_out = _observed_rows(obs_vals, t_out.size, observed_names)

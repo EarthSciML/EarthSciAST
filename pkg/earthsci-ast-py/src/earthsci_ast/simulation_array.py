@@ -86,6 +86,28 @@ def _linear_pos(shape: tuple[int, ...], one_based: list[int]) -> int:
     return lin
 
 
+def _saveat_times(saveat: Any, t0: float, t1: float) -> np.ndarray | None:
+    """The output grid ``saveat`` names (API_SPEC §4), or ``None`` when the
+    caller named none.
+
+    ``saveat`` is either the times themselves or a scalar output STEP measured
+    from ``t0``; either way the result is clipped to ``[t0, t1]``, sorted and
+    de-duplicated. One definition, because every pathway that can honour
+    ``saveat`` has to honour the SAME thing — the stateless branch of
+    :func:`~earthsci_ast.simulation_scalar._simulate_scalar` quietly did not,
+    and an inline test asserting an algebraic quantity at a time off its
+    1001-node sampling grid was reported as "no saved state at t=...".
+    """
+    if saveat is None:
+        return None
+    arr = np.atleast_1d(np.asarray(saveat, dtype=float))
+    if arr.size == 1 and float(arr[0]) > 0.0:
+        step = float(arr[0])
+        n_steps = int(np.floor((t1 - t0) / step + 1e-9))
+        arr = t0 + step * np.arange(n_steps + 1, dtype=float)
+    return np.unique(arr[(arr >= t0) & (arr <= t1)])
+
+
 def _densify_solution(
     sol: Any,
     tspan: tuple[float, float],
@@ -106,16 +128,10 @@ def _densify_solution(
         return sol.t, sol.y
     t0, t1 = float(tspan[0]), float(tspan[1])
     if saveat is not None:
-        # ``saveat`` (API_SPEC §4) names the output times explicitly: either the
-        # times themselves, or a scalar output STEP measured from ``tspan[0]``.
-        # The caller asked for these nodes, so the dense-grid heuristic below is
-        # bypassed entirely rather than unioned with them.
-        arr = np.atleast_1d(np.asarray(saveat, dtype=float))
-        if arr.size == 1 and float(arr[0]) > 0.0:
-            step = float(arr[0])
-            n_steps = int(np.floor((t1 - t0) / step + 1e-9))
-            arr = t0 + step * np.arange(n_steps + 1, dtype=float)
-        arr = np.unique(arr[(arr >= t0) & (arr <= t1)])
+        # ``saveat`` names the output times: the caller asked for these nodes,
+        # so the dense-grid heuristic below is bypassed entirely rather than
+        # unioned with them.
+        arr = _saveat_times(saveat, t0, t1)
         if arr.size == 0:
             return np.asarray([], dtype=float), np.empty((sol.y.shape[0], 0), dtype=float)
         return arr, sol.sol(arr)
