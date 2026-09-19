@@ -25,7 +25,7 @@ from pathlib import Path
 
 import pytest
 
-from earthsci_ast.inline_tests import run_inline_tests
+from earthsci_ast.inline_tests import bind_dimension_names, run_inline_tests
 
 _ROOT = (
     Path(__file__).resolve().parents[3] / "tests" / "conformance" / "static_evaluation_assertions"
@@ -207,3 +207,71 @@ def test_an_assertion_outside_the_declared_span_is_refused() -> None:
     at_end = by_test["at_the_end"]
     assert at_end.passed, at_end.message
     assert at_end.actual == pytest.approx(2.0, abs=1e-12)
+
+
+def test_a_reference_that_mentions_t_is_refused() -> None:
+    """esm-spec §6.6.5 names what an analytic ``reference`` may read — the
+    asserted field's dimension names, FREE, and the model's parameters — and
+    ``t`` is neither.
+
+    The build-time cellwise evaluator has a time slot holding ``0.0``, so a
+    reference of ``t`` did not fail there: it answered with the expression at
+    the start of the span and reported a plausible wrong number, in Python,
+    Julia and Rust alike. Before the refusal this document reported
+    ``actual = 2.0`` against ``expected = 0.0``.
+    """
+    from earthsci_ast.inline_tests import REFERENCE_MENTIONS_TIME
+    from earthsci_ast.parse import load_string
+
+    doc = """
+    {
+      "esm": "1.1.0",
+      "metadata": {"name": "RefT", "description": "a reference that mentions t", "license": "MIT"},
+      "index_sets": {"x": {"kind": "interval", "size": 2}},
+      "models": {"RefT": {
+        "variables": {"u": {"type": "unknown", "units": "1", "shape": ["x"]}},
+        "equations": [
+          {"lhs": {"op": "ic", "args": ["u"]},
+           "rhs": {"op": "faq", "args": [], "output_idx": ["i"], "ranges": {"i": {"from": "x"}}, "expr": 0.0}},
+          {"lhs": {"op": "faq", "args": [], "output_idx": ["i"], "ranges": {"i": [1, 2]},
+                   "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "i"]}], "wrt": "t"}},
+           "rhs": {"op": "faq", "args": [], "output_idx": ["i"], "ranges": {"i": [1, 2]}, "expr": 1.0}}
+        ],
+        "tests": [{"id": "reference_mentions_t", "time_span": {"start": 0.0, "end": 2.0},
+          "assertions": [{"variable": "u", "time": 2.0, "reduce": "Linf_error",
+                          "reference": {"op": "*", "args": [1.0, "t"]}, "expected": 0.0,
+                          "tolerance": {"abs": 1e-9}}]}]
+      }}
+    }
+    """
+    results = run_inline_tests(load_string(doc))
+    assert len(results) == 1
+    r = results[0]
+    assert not r.passed, f"actual={r.actual}"
+    assert r.actual is None
+    # The sentence is BYTE-IDENTICAL in Rust and Julia; the three bindings must
+    # reject the same document the same way.
+    assert REFERENCE_MENTIONS_TIME in r.message
+    assert REFERENCE_MENTIONS_TIME == (
+        "inline `reference` mentions `t`, which esm-spec §6.6.5 does not admit: a reference's free variables are the field's dimension names, and its other names are the model's parameters. A reference is evaluated at build time, where the independent variable has no value, so `t` would silently read 0 rather than the asserted time."
+    )
+
+
+def test_bind_dimension_names_refuses_a_free_t() -> None:
+    """The rule at the one function that carries it: a FREE ``t`` is refused,
+    a ``t`` that IS a dimension name of the asserted field is admitted and
+    binds to the cell index like any other, and a binder's own loop symbol is
+    not a free mention."""
+    from earthsci_ast.expression import ExprNode
+
+    tref = "t"
+    with pytest.raises(RuntimeError, match="does not admit"):
+        bind_dimension_names(tref, ["x"])
+    # Refused on an UNSHAPED target too — the check runs before the dims exit.
+    with pytest.raises(RuntimeError, match="does not admit"):
+        bind_dimension_names(tref, [])
+    # A field shaped over an index set NAMED `t`.
+    assert bind_dimension_names(tref, ["t"]) is not tref
+    # A binder's own loop symbol is not a free mention.
+    bound = ExprNode(op="faq", args=[], output_idx=["t"], ranges={"t": {"from": "x"}}, expr="t")
+    assert bind_dimension_names(bound, ["x"]) is bound

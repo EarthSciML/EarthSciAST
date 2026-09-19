@@ -5814,8 +5814,9 @@ the reference binding.
   read ZERO at every asserted time. That one is the quiet-wrong-answer half:
   the assertion reports a number, and the number is wrong.
 - **Python** was correct on both counts.
-- Rust's repair covers a SCALAR observed only; a state-free document with a
-  shaped one is still red there (§5.42.7).
+- Rust's repair covers a SCALAR observed through the backend's own compiled
+  graph and a SHAPED one by rebuilding that graph from the document, which is
+  the same pair `esm simulate` uses (§5.42.7).
 - **Go** and **TypeScript** cannot be affected. Neither ships an integrator
   (`pkg/earthsci-ast-ts/src/solver.ts` says so outright; the Go `Solver` type
   carries the §2.2 block and nothing that runs it) nor an inline-test runner —
@@ -5875,38 +5876,82 @@ evaluation grid to the span. Without the filter both answered the out-of-span
 assertions and reported a PASS, which is this category's own failure mode
 reached one road further on.
 
-#### 5.42.6 Known gap: `t` inside a §6.6.5 `reference`
+#### 5.42.6 `t` inside a §6.6.5 `reference` is REFUSED (normative)
 
 An analytic `reference` is evaluated by each binding's BUILD-TIME cellwise
-evaluator (`evaluate_cellwise`), which takes the parameter scope and the field's
-dimension names and has no simulation time. A `reference` that mentions `t`
-therefore reads `t = 0` in **all three** executing bindings — verified: Julia,
-Python and Rust all answer `Linf_error` against `reference: 1.0*t` at `t = 2`
-with `2`, not `0`. This is uniform, so it is not a divergence, and it is
-untouched by issue #406; it is recorded here because it is the same
-quiet-wrong-answer shape on the other side of the comparison. Whether such a
-reference should be evaluated at the asserted time or rejected as an unbound
-name (§6.6.5 admits the field's dimension names and the model's parameters,
-and does not name `t`) is not settled here.
+evaluator (`evaluate_cellwise`), which takes the model's parameters and the
+asserted field's dimension names and has no simulation time. esm-spec §6.6.5
+names exactly those two, and `t` is neither — but the evaluator's time slot
+holds `0.0` rather than erroring, so a reference that mentions `t` used to read
+zero and report a plausible wrong number in **all three** executing bindings at
+once. Measured before the change: Julia, Python and Rust all answered
+`Linf_error` against `reference: 1.0*t` at `t = 2` with `2`, not `0`. It was
+uniform, so it was never a divergence — it was the same quiet-wrong-answer
+shape as issue #406, on the other side of the comparison.
 
-#### 5.42.7 Known gap: a state-free document with a SHAPED observed, in Rust
+**All three bindings now reject it**, with one sentence, byte-identical
+(`REFERENCE_MENTIONS_TIME` in Rust and Python, `_REFERENCE_MENTIONS_TIME` in
+Julia):
 
-The first consequence above is met in Rust only for a document whose observeds
-are SCALAR. `static_observeds_at` serves the scalar backend — a compiled
-right-hand side over an empty state vector — and returns `None` for everything
-else, so a state-free document with an ARRAY-valued observed takes the array
-runtime under `Compile::Always` and still reaches the solver. Verified on a
-three-cell `g[i] = a·t·i` with no differential equations: Python and Julia
-both answer `20` at `t = 5` and `0` at `t = 0`; Rust reports `Exceeded maximum
-number of nonlinear solver failures (51) at time = 0` at BOTH times. The same
-document with the time dependence removed (`g[i] = a·i`) fails in Rust
-identically, so this is not about the clock — it is the whole state-free array
-shape. `esm simulate` handles both, because it uses `Compile::Auto`.
+> inline `reference` mentions `t`, which esm-spec §6.6.5 does not admit: a
+> reference's free variables are the field's dimension names, and its other
+> names are the model's parameters. A reference is evaluated at build time,
+> where the independent variable has no value, so `t` would silently read 0
+> rather than the asserted time.
 
-This predates issue #406's fix (the array path is untouched by it) and Rust
-fails loudly rather than answering wrongly, so it is recorded here rather than
-closed. `bindings_required` still lists rust because the category's fixtures are
-scalar; a shaped fixture would be red in Rust today.
+The check is FREE mention: a `faq` that rebinds `t` as its own loop symbol is
+untouched, and so is a field whose declared `shape` names an index set called
+`t` — there `t` IS a dimension name, §6.6.5 admits it, and it binds to the
+cell's 1-based position like any other. This is a behaviour change: a document
+that wrote a time-dependent reference used to report a number and now fails.
+That is intended — the number it reported was the expression at the start of
+the span, whatever time was asserted.
+
+#### 5.42.7 A state-free document with a SHAPED observed
+
+The first consequence above holds for a document whose observeds are shaped, not
+only for one whose observeds are scalar, and the two are not the same code path
+in every binding. Under `Compile::Always` — which the Rust inline-test runner
+uses so that a construct no evaluator supports is still refused at build time —
+a SHAPED state-free document takes the ARRAY runtime, which carries no scalar
+observed graph, so the backend-level static evaluation does not serve it. Before
+this was closed, Rust reported `Exceeded maximum number of nonlinear solver
+failures (51) at time = 0` on a three-cell `g[i] = a·t·i` with no differential
+equations, at every asserted time, where Python and Julia both answered `20` at
+`t = 5` and `0` at `t = 0`; the same document with the time dependence removed
+(`g[i] = a·i`) failed identically, so it was the whole state-free array shape
+and not the clock. `esm simulate` handled both all along, through
+`Compile::Auto`'s `Backend::Static` selection.
+
+Rust now answers such a document the way `esm simulate` does: from the fields a
+BUILD materializes. When the problem it built has nothing to integrate and no
+scalar observed graph to evaluate, the runner builds it once more with the
+build pipeline on and reads `observed_field` out of the result. The retry is
+conditioned on the BUILT problem rather than on the document's shape — asking
+for the pipeline on the strength of the shape alone broke two builds that were
+working — and a retry that fails changes nothing, because it is an attempt to
+answer more and never a new way to fail. `Compile::Always` is kept throughout,
+so a construct no evaluator supports is still refused at build time in the
+§9.6.6 vocabulary.
+
+The build materializes those fields ONCE, at `tspan.0`. That single value is
+the answer at every asserted time for an observed that is not a function of
+`t`, and only at the start of the span for one that is. An assertion on a
+`t`-dependent observed at any other time is therefore REFUSED **by name**:
+
+> 'g' is a function of `t`, and this document has nothing to integrate: its
+> fields were materialized once, at t = 0, so this test's assertion on it at
+> t = 5 cannot be answered. Assert it at t = 0, or give the model a
+> differential equation so the observed is carried along a trajectory
+> (esm-spec §6.6.3; issue #406)
+
+The refusal is the TEST's, not the assertion's — a test that mixes an
+out-of-reach assertion with an in-reach one is refused whole — and it is what
+keeps this case from becoming the outcome issue #406 is about: a field read at
+the start of the span, reported as the answer somewhere else. Julia and Python
+need none of this, because both re-evaluate the observed body per cell at the
+sampled time; the remaining gap between them and Rust is that one refusal, and
+it names itself.
 
 #### 5.42.8 Gate
 

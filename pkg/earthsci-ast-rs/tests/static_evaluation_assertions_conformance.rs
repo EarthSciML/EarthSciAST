@@ -252,3 +252,169 @@ fn a_static_assertion_outside_the_declared_span_is_refused() {
     assert!(at_end.passed, "at_the_end: {}", at_end.message);
     assert!((at_end.actual.expect("actual") - 2.0).abs() <= 1e-12);
 }
+
+/// The `shape`d half of "a document with nothing to integrate still honours
+/// `time`" (§5.42.7).
+///
+/// A SHAPED state-free document takes the ARRAY runtime under
+/// `Compile::Always`, which carries no scalar observed graph, so the static
+/// evaluation `static_trajectory` performs cannot serve it. Before the runner
+/// asked for the build that materializes its fields, `solve` handed a
+/// right-hand side over an empty state vector to the integrator and reported
+/// `Exceeded maximum number of nonlinear solver failures (51) at time = 0` —
+/// issue #406's own diagnostic — at EVERY asserted time, including `t = 0`,
+/// and whether or not the observed was a function of `t`. Python and Julia
+/// both answer `4` here.
+#[test]
+fn a_state_free_shaped_observed_is_answered_at_every_asserted_time() {
+    let doc = r#"{
+      "esm": "1.1.0",
+      "metadata": {"name": "ShapedStatic", "description": "state-free, shaped, time-invariant", "license": "MIT"},
+      "index_sets": {"x": {"kind": "interval", "size": 3}},
+      "models": {"ShapedStatic": {
+        "variables": {
+          "a": {"type": "parameter", "units": "1", "default": 2.0},
+          "g": {"type": "unknown", "units": "1", "shape": ["x"]}
+        },
+        "equations": [
+          {"lhs": "g",
+           "rhs": {"op": "faq", "args": [], "output_idx": ["i"], "ranges": {"i": {"from": "x"}},
+                   "expr": {"op": "*", "args": ["a", "i"]}}}
+        ],
+        "tests": [{"id": "shaped", "time_span": {"start": 0.0, "end": 10.0},
+          "tolerance": {"rel": 1e-9, "abs": 1e-11},
+          "assertions": [
+            {"variable": "g", "time": 5.0, "coords": {"x": 2}, "expected": 4.0},
+            {"variable": "g", "time": 0.0, "coords": {"x": 2}, "expected": 4.0}
+          ]}]
+      }}
+    }"#;
+    let file = load_string(doc).expect("document loads");
+    let results = run_inline_tests_with_base_dir(&file, None, &SolveOptions::default(), None);
+    assert_eq!(results.len(), 2);
+    for r in &results {
+        assert!(
+            r.passed,
+            "g[2] = a*2 = 4 at t={}: {} (actual {:?})",
+            r.time, r.message, r.actual
+        );
+    }
+}
+
+/// The other half: the build materialized those fields ONCE, at `tspan.0`, so
+/// a SHAPED state-free observed that is a function of `t` has no value at any
+/// other asserted time — and this binding has no way to produce one, because
+/// the array runtime carries no scalar observed graph to re-evaluate.
+///
+/// Answering anyway would report the value at the start of the span for a
+/// question asked elsewhere, which is the outcome issue #406 is about, so it is
+/// refused BY NAME. The refusal is the test's, not the assertion's, so a test
+/// mixing an out-of-reach assertion with an in-reach one is refused whole; a
+/// test that asserts only at `tspan.0` answers.
+#[test]
+fn a_shaped_state_free_observed_of_t_is_refused_by_name() {
+    let doc = r#"{
+      "esm": "1.1.0",
+      "metadata": {"name": "ShapedOfT", "description": "state-free, shaped, a function of t", "license": "MIT"},
+      "index_sets": {"x": {"kind": "interval", "size": 3}},
+      "models": {"ShapedOfT": {
+        "variables": {
+          "a": {"type": "parameter", "units": "1", "default": 2.0},
+          "g": {"type": "unknown", "units": "1", "shape": ["x"]}
+        },
+        "equations": [
+          {"lhs": "g",
+           "rhs": {"op": "faq", "args": [], "output_idx": ["i"], "ranges": {"i": {"from": "x"}},
+                   "expr": {"op": "*", "args": ["a", {"op": "*", "args": ["t", "i"]}]}}}
+        ],
+        "tests": [
+          {"id": "away_from_the_start", "time_span": {"start": 0.0, "end": 10.0},
+           "tolerance": {"rel": 1e-9, "abs": 1e-11},
+           "assertions": [{"variable": "g", "time": 5.0, "coords": {"x": 2}, "expected": 20.0}]},
+          {"id": "at_the_start", "time_span": {"start": 0.0, "end": 10.0},
+           "tolerance": {"rel": 1e-9, "abs": 1e-11},
+           "assertions": [{"variable": "g", "time": 0.0, "coords": {"x": 2}, "expected": 0.0}]}
+        ]
+      }}
+    }"#;
+    let file = load_string(doc).expect("document loads");
+    let results = run_inline_tests_with_base_dir(&file, None, &SolveOptions::default(), None);
+    assert_eq!(results.len(), 2);
+    let away = results
+        .iter()
+        .find(|r| r.test_id == "away_from_the_start")
+        .expect("missing away_from_the_start");
+    assert!(!away.passed, "must not answer: actual {:?}", away.actual);
+    assert!(
+        away.message.contains("'g' is a function of `t`"),
+        "{}",
+        away.message
+    );
+    assert!(
+        away.message.contains("nothing to integrate"),
+        "{}",
+        away.message
+    );
+    // Not the nonlinear-solver message issue #406 was filed about.
+    assert!(
+        !away.message.contains("nonlinear solver failures"),
+        "{}",
+        away.message
+    );
+    // The span's start IS the time the fields were materialized at.
+    let at_start = results
+        .iter()
+        .find(|r| r.test_id == "at_the_start")
+        .expect("missing at_the_start");
+    assert!(at_start.passed, "{}", at_start.message);
+}
+
+/// esm-spec §6.6.5 names what an analytic `reference` may read — the asserted
+/// field's dimension names, free, and the model's parameters — and `t` is
+/// neither. Refused at the document level, with the sentence the three
+/// bindings share (CONFORMANCE_SPEC §5.42.6).
+///
+/// Before the refusal this document reported `actual = 2` against
+/// `expected = 0`: the field is `t`, and a reference read at `t = 0` is off by
+/// the whole asserted time. Julia and Python reported the same wrong number.
+#[test]
+fn a_reference_that_mentions_t_is_refused() {
+    let doc = r#"{
+      "esm": "1.1.0",
+      "metadata": {"name": "RefT", "description": "a reference that mentions t", "license": "MIT"},
+      "index_sets": {"x": {"kind": "interval", "size": 2}},
+      "models": {"RefT": {
+        "variables": {"u": {"type": "unknown", "units": "1", "shape": ["x"]}},
+        "equations": [
+          {"lhs": {"op": "ic", "args": ["u"]},
+           "rhs": {"op": "faq", "args": [], "output_idx": ["i"], "ranges": {"i": {"from": "x"}}, "expr": 0.0}},
+          {"lhs": {"op": "faq", "args": [], "output_idx": ["i"], "ranges": {"i": [1, 2]},
+                   "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "i"]}], "wrt": "t"}},
+           "rhs": {"op": "faq", "args": [], "output_idx": ["i"], "ranges": {"i": [1, 2]}, "expr": 1.0}}
+        ],
+        "tests": [{"id": "reference_mentions_t", "time_span": {"start": 0.0, "end": 2.0},
+          "assertions": [{"variable": "u", "time": 2.0, "reduce": "Linf_error",
+                          "reference": {"op": "*", "args": [1.0, "t"]}, "expected": 0.0,
+                          "tolerance": {"abs": 1e-9}}]}]
+      }}
+    }"#;
+    let file = load_string(doc).expect("document loads");
+    let results = run_inline_tests_with_base_dir(&file, None, &SolveOptions::default(), None);
+    assert_eq!(results.len(), 1);
+    let r = &results[0];
+    assert!(!r.passed, "actual {:?}", r.actual);
+    assert!(r.actual.is_none());
+    // BYTE-IDENTICAL in Julia (`_REFERENCE_MENTIONS_TIME`) and Python
+    // (`REFERENCE_MENTIONS_TIME`).
+    assert!(
+        r.message.contains(
+            "inline `reference` mentions `t`, which esm-spec §6.6.5 does not admit: a \
+             reference's free variables are the field's dimension names, and its other \
+             names are the model's parameters. A reference is evaluated at build time, \
+             where the independent variable has no value, so `t` would silently read 0 \
+             rather than the asserted time."
+        ),
+        "{}",
+        r.message
+    );
+}

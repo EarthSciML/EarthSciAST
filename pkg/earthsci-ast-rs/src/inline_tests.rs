@@ -303,6 +303,24 @@ fn mentions_free(expr: &Expr, name: &str) -> bool {
     }
 }
 
+/// The independent (time) variable, as an expression spells it.
+const TIME_VARIABLE: &str = "t";
+
+/// The refusal for a §6.6.5 analytic `reference` that mentions `t`.
+///
+/// esm-spec §6.6.5 says what a reference may read: the asserted field's
+/// DIMENSION NAMES, free, plus the model's PARAMETERS. The independent variable
+/// is neither. It is not rejected by the evaluator either, because a reference
+/// is evaluated by the BUILD-TIME cellwise evaluator, whose time slot is
+/// `0.0` — so a reference of `t` used to answer with the expression at the
+/// start of the span and report a plausible wrong number, in all three
+/// executing bindings at once. Refusing names the mistake instead.
+///
+/// The text is BYTE-IDENTICAL in Julia (`_REFERENCE_MENTIONS_TIME`) and Python
+/// (`REFERENCE_MENTIONS_TIME`); the three bindings must reject the same
+/// document with the same sentence.
+pub(crate) const REFERENCE_MENTIONS_TIME: &str = "inline `reference` mentions `t`, which esm-spec §6.6.5 does not admit: a reference's free variables are the field's dimension names, and its other names are the model's parameters. A reference is evaluated at build time, where the independent variable has no value, so `t` would silently read 0 rather than the asserted time.";
+
 /// esm-spec §6.6.5: an inline `reference`'s free variables are the domain
 /// DIMENSION NAMES. For a field shaped over index sets those are the asserted
 /// variable's `shape` entries, each bound at every grid point to the 1-based
@@ -335,12 +353,26 @@ fn mentions_free(expr: &Expr, name: &str) -> bool {
 /// shape index set is a name a reference could already read there, and a guard
 /// that checked only the parameter half would let Julia rebind it to the cell
 /// index in silence while Python and Rust merely wrapped (issue #226).
+///
+/// The INDEPENDENT VARIABLE is rejected here for the same reason and in the
+/// same words as in Julia and Python — see [`REFERENCE_MENTIONS_TIME`].
 pub fn bind_dimension_names(
     expr: &Expr,
     dims: &[String],
     scope: &HashMap<String, f64>,
     arrays: &HashSet<String>,
 ) -> Result<Expr, String> {
+    // esm-spec §6.6.5 names what a reference may read, and `t` is not on the
+    // list. Reaching the evaluator with it is not an error there — the
+    // build-time evaluator has a time slot and it holds `0.0` — so before this
+    // check every binding answered a `t`-dependent reference with its value at
+    // the start of the span and reported a plausible wrong number. A reference
+    // whose FIELD is shaped over an index set actually named `t` is a
+    // different statement: there `t` IS a dimension name, §6.6.5 admits it,
+    // and it binds to the cell index below.
+    if !dims.iter().any(|d| d == TIME_VARIABLE) && mentions_free(expr, TIME_VARIABLE) {
+        return Err(REFERENCE_MENTIONS_TIME.to_string());
+    }
     let mentioned: Vec<&String> = dims.iter().filter(|d| mentions_free(expr, d)).collect();
     if mentioned.is_empty() {
         return Ok(expr.clone());
@@ -1515,6 +1547,97 @@ fn build_only_solution(times: Vec<f64>) -> Solution {
     }
 }
 
+/// The observeds of `model` whose value is a function of `t` — DIRECTLY,
+/// because the defining body mentions the independent variable free, or
+/// TRANSITIVELY, because it reads one that does.
+///
+/// Used by [`unevaluable_time_dependent_assertion`] to tell a field the build
+/// materialized once, at `tspan.0`, and which is therefore the answer at every
+/// time, apart from one whose value moves and whose build-time materialization
+/// is only the answer at the start of the span.
+///
+/// Only `y ~ f(…)` definitions are walked ([`crate::classification::LhsForm`]
+/// calls that shape `Bare`): an ODE state is not read from a build field at
+/// all, and an implicit constraint defines no single name.
+fn time_dependent_observeds(model: &Model) -> std::collections::BTreeSet<String> {
+    let bodies: Vec<(String, &Expr)> = model
+        .equations
+        .iter()
+        .filter_map(|eq| match crate::classification::lhs_form(&eq.lhs) {
+            crate::classification::LhsForm::Bare(name) => Some((name, &eq.rhs)),
+            _ => None,
+        })
+        .collect();
+    let mut dependent: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    // Fixpoint over the read-graph. Each pass adds at least one name or stops,
+    // so it runs at most `bodies.len() + 1` times.
+    loop {
+        let before = dependent.len();
+        for (name, body) in &bodies {
+            if dependent.contains(name) {
+                continue;
+            }
+            if mentions_free(body, TIME_VARIABLE)
+                || dependent.iter().any(|d| mentions_free(body, d))
+            {
+                dependent.insert(name.clone());
+            }
+        }
+        if dependent.len() == before {
+            return dependent;
+        }
+    }
+}
+
+/// The refusal for an assertion this runner cannot answer on a document with
+/// **nothing to integrate** whose observeds the array runtime materialized at
+/// BUILD time — `None` when every assertion of `t` is answerable.
+///
+/// The build evaluates a state-free field once, at `tspan.0`. For a field that
+/// is not a function of `t` that single value IS the answer at every asserted
+/// time, and [`build_only_solution`] serves it. For one that IS a function of
+/// `t`, it is the answer only at the start of the span.
+///
+/// The ordinary answer for a state-free document is
+/// [`crate::problem::static_observed_graph`], which evaluates the observed
+/// graph at each asserted time and needs none of this. This guard covers what
+/// is left: a document with nothing to integrate that could not be flattened
+/// or compiled into such a graph — a data-ingesting one, whose content IS its
+/// build-time fields. Answering a `t`-dependent assertion out of those fields
+/// would report the value at `tspan.0` for a question asked at another time,
+/// which is exactly the outcome issue #406 is about, so it is refused by name
+/// instead.
+fn unevaluable_time_dependent_assertion(
+    file: &EsmFile,
+    model_name: &str,
+    t: &crate::types::ModelTest,
+) -> Option<String> {
+    let t0 = t.time_span.start;
+    let mut per_owner: HashMap<String, std::collections::BTreeSet<String>> = HashMap::new();
+    for a in &t.assertions {
+        if (a.time - t0).abs() <= 1e-9 * f64::max(1.0, t0.abs()) {
+            continue;
+        }
+        let (owner, variable) = resolve_asserted_name(file, model_name, &a.variable);
+        let dependent = per_owner.entry(owner.clone()).or_insert_with(|| {
+            model_at(file, &owner)
+                .map(|m| time_dependent_observeds(&m))
+                .unwrap_or_default()
+        });
+        if dependent.contains(variable) {
+            return Some(format!(
+                "'{}' is a function of `t`, and this document has nothing to integrate: \
+                 its fields were materialized once, at t = {t0}, so this test's assertion \
+                 on it at t = {} cannot be answered. Assert it at t = {t0}, or give the \
+                 model a differential equation so the observed is carried along a \
+                 trajectory (esm-spec §6.6.3; issue #406)",
+                a.variable, a.time
+            ));
+        }
+    }
+    None
+}
+
 /// The times a document with **nothing to integrate** is evaluated at: the
 /// asserted times that lie inside the declared span, plus the span's own
 /// endpoints.
@@ -1561,13 +1684,19 @@ fn static_evaluation_times(saveat: &[f64], start: f64, end: f64) -> Vec<f64> {
 /// This is the path `esm simulate` already takes — a document with no
 /// differential equations is EVALUATED rather than solved (`✓ Static
 /// evaluation complete: N field(s)`) — reached here through the primitive that
-/// command's own static path runs, [`crate::problem::static_observeds_at`].
+/// command's own static path runs,
+/// [`crate::problem::evaluate_static_observeds_at`].
 /// Before issue #406 the runner had no such branch: it handed the compiled,
 /// STATE-FREE right-hand side to diffsol, which reported "Exceeded maximum
 /// number of nonlinear solver failures (51) at time = 0" for a document that
 /// `simulate` evaluates perfectly well. A model that simulates could not be
 /// tested, and the diagnostic named the nonlinear solver rather than the real
 /// condition.
+///
+/// A SHAPED state-free document takes the array runtime under
+/// `Compile::Always` and carries no scalar observed graph on its backend;
+/// [`crate::problem::static_observed_graph`] hands back the one compiled at
+/// construction for it, exactly the graph `simulate` evaluates.
 ///
 /// **Why one evaluation PER TIME rather than one at `t = 0`.** esm-spec §6.6.3
 /// defines an assertion's `time` as "Simulation time at which to evaluate the
@@ -1584,24 +1713,21 @@ fn static_evaluation_times(saveat: &[f64], start: f64, end: f64) -> Vec<f64> {
 /// `None` when the problem has a state vector: then it integrates, and
 /// [`solve`] produces the answer.
 fn static_trajectory(prob: &EsmProblem, times: &[f64]) -> Option<Result<Solution, String>> {
-    // Whether this path applies is a property of the BACKEND, which does not
-    // vary with `t`, so the first call decides it for the whole run. Once it
-    // has said yes, a later failure is an evaluation failure and is REPORTED:
-    // falling back to `solve` there would hand the same state-free right-hand
-    // side to the integrator and report a nonlinear-solver failure instead,
-    // which is the substitution this function exists to remove.
-    let mut columns = Vec::with_capacity(times.len());
-    let first = crate::problem::static_observeds_at(prob, *times.first()?)?;
-    match first {
-        Ok(v) => columns.push(v),
-        Err(e) => return Some(Err(format!("simulate failed: {e}"))),
+    // Whether this path applies is a property of the DOCUMENT, not of `t`, so
+    // the graph is resolved once and evaluated per time. Once it has resolved,
+    // a later failure is an evaluation failure and is REPORTED: falling back to
+    // `solve` there would hand a state-free right-hand side to the integrator
+    // and report a nonlinear-solver failure instead, which is the substitution
+    // this function exists to remove.
+    let graph = crate::problem::static_observed_graph(prob)?;
+    if times.is_empty() {
+        return None;
     }
-    for &t in &times[1..] {
-        match crate::problem::static_observeds_at(prob, t) {
-            Some(Ok(v)) => columns.push(v),
-            Some(Err(e)) => return Some(Err(format!("simulate failed: {e}"))),
-            // The backend cannot change between two calls on one problem.
-            None => return Some(Err(format!("static evaluation at t={t} is unavailable"))),
+    let mut columns = Vec::with_capacity(times.len());
+    for &t in times {
+        match crate::problem::evaluate_static_observeds_at(prob, &graph, t) {
+            Ok(v) => columns.push(v),
+            Err(e) => return Some(Err(format!("simulate failed: {e}"))),
         }
     }
 
@@ -2030,6 +2156,13 @@ fn build_for_test(
             built: Built::BuildFailed(format!("simulate failed: {e}")),
         };
     }
+    // Kept so the build can be RETRIED with the build pipeline
+    // ([`with_build_pipeline_if_needed`]); two small maps, against a build
+    // either of them feeds. Only when there are no data-source providers —
+    // that branch asks for the pipeline itself, just below.
+    let retry_bindings = build_providers
+        .is_none()
+        .then(|| (scalar_params.clone(), u0.clone()));
     let mut popts = ProblemOptions {
         p: scalar_params,
         u0,
@@ -2064,8 +2197,14 @@ fn build_for_test(
             }
         }
     }
-    let built = match esm_problem(run_file, (t.time_span.start, t.time_span.end), popts) {
-        Ok(p) => Built::Problem(Box::new(p)),
+    let tspan = (t.time_span.start, t.time_span.end);
+    let built = match esm_problem(run_file, tspan, popts) {
+        Ok(p) => Built::Problem(Box::new(with_build_pipeline_if_needed(
+            run_file,
+            tspan,
+            retry_bindings,
+            p,
+        ))),
         Err(e) => Built::BuildFailed(format!("simulate failed: {e}")),
     };
     BuiltModel {
@@ -2074,6 +2213,58 @@ fn build_for_test(
         index_sets,
         built,
     }
+}
+
+/// Build `run_file` again, asking for the BUILD PIPELINE, when the problem
+/// already built has **nothing to integrate** and no scalar observed graph to
+/// evaluate — the ARRAY runtime, which is what a SHAPED state-free document
+/// takes under `Compile::Always`.
+///
+/// Such a document's answers are the fields a build materializes, which is how
+/// `esm simulate` answers it (`ProblemOptions::build_pipeline`) and what
+/// `observed_field` reads. Without the build, nothing had them: `solve` handed
+/// a right-hand side over an empty state vector to the integrator and reported
+/// `Exceeded maximum number of nonlinear solver failures (51) at time = 0` —
+/// issue #406's own diagnostic — at every asserted time, and whether or not the
+/// observed was a function of `t`, where Python and Julia both answer.
+///
+/// RETRIED rather than requested upfront, because the condition is a property
+/// of the BUILT problem and not of the document. An algebraic SCALAR document
+/// is already answered from its compiled observed graph at each asserted time
+/// ([`static_trajectory`]), and asking for the pipeline on the strength of the
+/// document's shape alone turned two working builds into failures
+/// (`run_inline_tests_scalar_observed_tracks_parameter_overrides` and
+/// `self_qualified_subsystem_reference_and_override_spellings`). Only a
+/// document that has actually reached the dead end pays for a second build.
+///
+/// `Compile::Always` is kept: the compile is what still refuses a construct no
+/// evaluator supports, in the `unsupported_construct` vocabulary esm-spec
+/// §9.6.6 asks for. A rebuild that FAILS changes nothing — the first problem
+/// stands and the assertion reports exactly what it reported before — because
+/// this is an attempt to answer more, never a new way to fail.
+fn with_build_pipeline_if_needed(
+    run_file: &EsmFile,
+    tspan: (f64, f64),
+    bindings: Option<(HashMap<String, f64>, HashMap<String, f64>)>,
+    built: EsmProblem,
+) -> EsmProblem {
+    let Some((p, u0)) = bindings else {
+        return built;
+    };
+    if !crate::problem::has_nothing_to_integrate(&built)
+        || crate::problem::static_observed_graph(&built).is_some()
+    {
+        return built;
+    }
+    let popts = ProblemOptions {
+        p,
+        u0,
+        inspect: true,
+        compile: crate::problem::Compile::Always,
+        build_pipeline: true,
+        ..Default::default()
+    };
+    esm_problem(run_file, tspan, popts).unwrap_or(built)
 }
 
 /// Run every inline test of one COMPONENT, appending per-assertion results.
@@ -2219,6 +2410,23 @@ fn run_component_tests(
                     static_evaluation_times(&saveat, t.time_span.start, t.time_span.end);
                 match static_trajectory(prob, &static_times) {
                     Some(result) => result,
+                    // Nothing to integrate, and not even a graph to evaluate:
+                    // the document could not be flattened or compiled into a
+                    // state-free observed graph. `solve` must not be called
+                    // here — under `Compile::Always` it hands a right-hand
+                    // side over an empty state vector to the integrator and
+                    // reports "Exceeded maximum number of nonlinear solver
+                    // failures (51) at time = 0", the diagnostic issue #406
+                    // was filed about. Answer from what the BUILD materialized
+                    // instead — except where that would substitute the value
+                    // at `tspan.0` for a quantity that moves, which is refused
+                    // by name rather than answered.
+                    None if crate::problem::has_nothing_to_integrate(prob) => {
+                        match unevaluable_time_dependent_assertion(run_file, model_name, t) {
+                            Some(message) => Err(message),
+                            None => Ok(build_only_solution(saveat)),
+                        }
+                    }
                     None => match solve(prob, &run_opts) {
                         Ok(sol) => Ok(sol),
                         // A document with no ODEs never integrates; its answers
@@ -3452,6 +3660,54 @@ mod tests {
         for r in &results {
             assert!(r.passed, "assertion #{}: {}", r.assertion_idx, r.message);
         }
+    }
+
+    /// esm-spec §6.6.5 names what an analytic `reference` may read — the
+    /// asserted field's DIMENSION NAMES, free, and the model's PARAMETERS —
+    /// and `t` is neither.
+    ///
+    /// The build-time evaluator does not reject it: its time slot holds `0.0`,
+    /// so a reference of `t` used to answer with the expression at the start of
+    /// the span and report a plausible wrong number, in Rust, Julia and Python
+    /// alike. FREE mention is the test, so a binder's own loop symbol is
+    /// untouched, and so is a field whose declared `shape` names an index set
+    /// called `t` — there `t` IS a dimension name.
+    #[test]
+    fn bind_dimension_names_rejects_a_free_time_variable() {
+        let parse = |v: serde_json::Value| -> Expr { serde_json::from_value(v).unwrap() };
+        let no_params: HashMap<String, f64> = HashMap::new();
+        let no_arrays: HashSet<String> = HashSet::new();
+        let free_t = parse(json!({"op": "*", "args": [1.0, "t"]}));
+        let dims = vec!["x".to_string()];
+        let err = bind_dimension_names(&free_t, &dims, &no_params, &no_arrays)
+            .expect_err("`t` is not admissible in a reference");
+        assert_eq!(err, REFERENCE_MENTIONS_TIME);
+        assert!(err.contains("mentions `t`"), "{err}");
+        assert!(err.contains("§6.6.5"), "{err}");
+        // Refused on an UNSHAPED target too — the check runs before the
+        // no-dimensions exit, so a reference of `t` is never evaluated.
+        assert_eq!(
+            bind_dimension_names(&free_t, &[], &no_params, &no_arrays)
+                .expect_err("still not admissible"),
+            REFERENCE_MENTIONS_TIME
+        );
+        // A field shaped over an index set NAMED `t`: §6.6.5 admits it as a
+        // dimension name, so it WRAPS rather than refusing.
+        let t_dims = vec!["t".to_string()];
+        let Expr::Operator(node) = bind_dimension_names(&free_t, &t_dims, &no_params, &no_arrays)
+            .expect("`t` is this field's dimension name")
+        else {
+            panic!("expected a faq wrapper");
+        };
+        assert_eq!(node.op, "faq");
+        // A binder's own loop symbol is not a free mention.
+        let bound = parse(json!({"op": "faq", "args": [], "output_idx": ["t"],
+                                 "ranges": {"t": {"from": "x"}},
+                                 "expr": {"op": "*", "args": [1.0, "t"]}}));
+        assert_eq!(
+            bind_dimension_names(&bound, &dims, &no_params, &no_arrays).expect("rebound"),
+            bound
+        );
     }
 
     #[test]

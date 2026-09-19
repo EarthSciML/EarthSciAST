@@ -1575,27 +1575,74 @@ fn wants_build_pipeline(opts: &ProblemOptions) -> bool {
 /// time (issue #406).
 ///
 /// `None` when the problem HAS a state vector: there is something to
-/// integrate, and the trajectory — not this — is the answer.
-pub(crate) fn static_observeds_at(
-    prob: &EsmProblem,
-    t: f64,
-) -> Option<Result<Vec<(String, f64)>, SimulateError>> {
-    // Re-arm the document's working precision (`domain.element_type`,
-    // esm-spec §11.3), exactly as `solve` does; a no-op for a Float64 document.
-    let _precision_guard = prob.precision.enter();
+/// integrate, and the trajectory — not this — is the answer, and `None` again
+/// when the backend carries no scalar observed graph at all.
+///
+/// The second case is the ARRAY runtime, which a SHAPED state-free document
+/// takes under `Compile::Always`. Rebuilding a scalar graph for it here is not
+/// an option: the scalar interpreter refuses an unexpanded `faq` with
+/// `UnevaluableOperatorError { op: "faq" }`, and expanding one is the array
+/// runtime's own job. Such a document is answered from the fields its BUILD
+/// materialized instead — see the `has_nothing_to_integrate` arm of the
+/// inline-test runner, which is why that runner asks the build pipeline for
+/// them.
+pub(crate) fn static_observed_graph(prob: &EsmProblem) -> Option<Rc<Compiled>> {
     match &*prob.backend {
         // A compiled scalar right-hand side with an EMPTY state vector. That is
-        // what `Compile::Always` produces for an algebraic-only document, and
-        // handing it to diffsol is what issue #406 reports as "Exceeded maximum
-        // number of nonlinear solver failures (51) at time = 0".
-        Backend::Scalar(c) if c.state_variable_names().is_empty() => {
-            Some(c.evaluate_static_observeds(&prob.p, t))
-        }
-        // `Backend::Static` carries no compiled graph to evaluate here, and the
-        // array backend materializes its state-free fields at BUILD time, where
-        // they are constants rather than functions of `t`. Both are answered
-        // from the build's fields as before.
+        // what `Compile::Always` produces for an algebraic-only SCALAR
+        // document, and handing it to diffsol is what issue #406 reports as
+        // "Exceeded maximum number of nonlinear solver failures (51) at
+        // time = 0".
+        Backend::Scalar(c) if c.state_variable_names().is_empty() => Some(Rc::clone(c)),
+        // A scalar backend WITH state integrates; the trajectory is the answer.
+        Backend::Scalar(_) => None,
+        // `Backend::Static` and the array runtime carry no compiled scalar
+        // graph to evaluate here.
         _ => None,
+    }
+}
+
+/// One evaluation of [`static_observed_graph`]'s result at simulation time `t`,
+/// against the problem's resolved parameters — flattened name and value, in the
+/// document's own observed order.
+///
+/// `esm simulate` reads the same primitive ONCE, at `tspan.0`, and reports
+/// `t = 0`, because a single evaluation is all that command promises. The §6.6
+/// inline-test runner cannot stop there: esm-spec §6.6.3 defines an assertion's
+/// `time` as "Simulation time at which to evaluate the assertion", and a
+/// document with no differential equations is still a FUNCTION OF `t` — a
+/// solar-geometry component's declination, hour angle and zenith cosine are
+/// exactly that. So the runner reads this once per asserted time (issue #406).
+pub(crate) fn evaluate_static_observeds_at(
+    prob: &EsmProblem,
+    graph: &Compiled,
+    t: f64,
+) -> Result<Vec<(String, f64)>, SimulateError> {
+    let _precision_guard = prob.precision.enter();
+    graph.evaluate_static_observeds(&prob.p, t)
+}
+
+/// Whether this problem has **nothing to integrate**: no backend at all, or a
+/// backend that declares no differential equation (esm-spec §6.3.1 derives
+/// `system_kind: "nonlinear"` for such a document).
+///
+/// This is the derivation `Compile::Auto` consults to pick [`Backend::Static`],
+/// asked of a problem the inline-test runner deliberately built with
+/// `Compile::Always` — which still compiles, and therefore still refuses, a
+/// construct no evaluator supports, but which also hands a right-hand side over
+/// an empty state vector to the solver. The runner asks this BEFORE solving, so
+/// a document with nothing to integrate is answered from what was evaluated or
+/// built rather than reported as a nonlinear-solver failure (issue #406).
+///
+/// [`static_observeds_at`] serves the scalar backend and only the scalar
+/// backend; this predicate is what lets the runner tell "nothing to integrate,
+/// and no compiled graph to evaluate here" (the array runtime) apart from
+/// "something to integrate".
+pub(crate) fn has_nothing_to_integrate(prob: &EsmProblem) -> bool {
+    match &*prob.backend {
+        Backend::Static(_) => true,
+        Backend::Scalar(c) => !c.has_differential_equations(),
+        Backend::Array(c) => !c.has_differential_equations(),
     }
 }
 

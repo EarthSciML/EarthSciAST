@@ -1190,6 +1190,24 @@ function _array_scope_names(regs...)::Set{String}
     return out
 end
 
+# The independent (time) variable, as an expression spells it.
+const _TIME_VARIABLE = "t"
+
+# The refusal for a §6.6.5 analytic `reference` that mentions `t`.
+#
+# esm-spec §6.6.5 says what a reference may read: the asserted field's DIMENSION
+# NAMES, free, plus the model's PARAMETERS. The independent variable is neither.
+# It is not rejected by the evaluator either, because a reference is evaluated by
+# the BUILD-TIME cellwise evaluator, whose time slot is `0.0` — so a reference of
+# `t` used to answer with the expression at the start of the span and report a
+# plausible wrong number, in all three executing bindings at once. Refusing names
+# the mistake instead.
+#
+# The text is BYTE-IDENTICAL in Rust (`REFERENCE_MENTIONS_TIME`) and Python
+# (`REFERENCE_MENTIONS_TIME`); the three bindings must reject the same document
+# with the same sentence.
+const _REFERENCE_MENTIONS_TIME = "inline `reference` mentions `t`, which esm-spec §6.6.5 does not admit: a reference's free variables are the field's dimension names, and its other names are the model's parameters. A reference is evaluated at build time, where the independent variable has no value, so `t` would silently read 0 rather than the asserted time."
+
 """
     bind_dimension_names(expr, dims, scope=Dict{String,Float64}(),
                          arrays=Set{String}()) -> ASTExpr
@@ -1229,6 +1247,17 @@ checking only the parameter half would rebind it to the cell index in silence.
 function bind_dimension_names(expr::ASTExpr, dims::AbstractVector{<:AbstractString},
                               scope::AbstractDict=Dict{String,Float64}(),
                               arrays=Set{String}())::ASTExpr
+    # esm-spec §6.6.5 names what a reference may read, and `t` is not on the
+    # list. Reaching the evaluator with it is not an error there — the
+    # build-time evaluator has a time slot and it holds `0.0` — so before this
+    # check every binding answered a `t`-dependent reference with its value at
+    # the start of the span and reported a plausible wrong number. A reference
+    # whose FIELD is shaped over an index set actually named `t` is a different
+    # statement: there `t` IS a dimension name, §6.6.5 admits it, and it binds
+    # to the cell index below. Checked BEFORE the `isempty(dims)` exit, so a
+    # reference on an unshaped target is refused too.
+    (_TIME_VARIABLE in dims || !_mentions_free(expr, _TIME_VARIABLE)) ||
+        throw(InlineTestError(_REFERENCE_MENTIONS_TIME))
     isempty(dims) && return expr
     mentioned = String[String(d) for d in dims if _mentions_free(expr, String(d))]
     isempty(mentioned) && return expr
