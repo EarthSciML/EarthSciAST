@@ -751,8 +751,6 @@ fn producer_seed_closure(
     needed
 }
 
-/// Evaluate one observed through the full evaluator; returns the dense field.
-#[allow(clippy::too_many_arguments)]
 /// The rank a build-time field takes when its body evaluates to a plain
 /// number, decided by the DECLARATION rather than by the value (issue #431).
 ///
@@ -796,6 +794,7 @@ impl DeclaredRank {
     }
 }
 
+/// Evaluate one observed through the full evaluator; returns the dense field.
 #[allow(clippy::too_many_arguments)]
 fn eval_observed(
     name: &str,
