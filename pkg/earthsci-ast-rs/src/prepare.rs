@@ -753,6 +753,50 @@ fn producer_seed_closure(
 
 /// Evaluate one observed through the full evaluator; returns the dense field.
 #[allow(clippy::too_many_arguments)]
+/// The rank a build-time field takes when its body evaluates to a plain
+/// number, decided by the DECLARATION rather than by the value (issue #431).
+///
+/// An unshaped `unknown`/`observed` is a 0-D quantity, and a build-time field
+/// is the only place its rank is chosen. Materializing it as `[1]` — which is
+/// what every scalar body did — handed a rank-1 array to every later reader of
+/// the name. Those readers are rank-sensitive: `simulate_array`'s
+/// `lookup_variable` returns a `Value::Scalar` for a 0-D entry and a
+/// `Value::Array` for anything else, so a bare `base` inside a `faq` body
+/// resolved to an ARRAY where the body wanted a number, and `base + k`
+/// collapsed to the evaluator's NaN sentinel — silently, since a rank-1 field
+/// of one element still reports the right number when it is OBSERVED directly.
+///
+/// [`DeclaredRank::Unknown`] is the pre-existing `[1]`, kept for a name the
+/// model does not declare as a variable (a build-time coordinate invented by
+/// the relational layer, say) so nothing outside the defect's reach moves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeclaredRank {
+    /// The model declares this name with no `shape`: it is 0-D.
+    Scalar,
+    /// Not a declared model variable, or declared with a `shape`.
+    Unknown,
+}
+
+impl DeclaredRank {
+    /// The shape a scalar body materializes into under this rank.
+    fn scalar_shape(self) -> &'static [usize] {
+        match self {
+            DeclaredRank::Scalar => &[],
+            DeclaredRank::Unknown => &[1],
+        }
+    }
+
+    /// Read the rank off the model: declared, and with no (or an empty)
+    /// `shape`, is the 0-D case.
+    fn of(model: &Model, name: &str) -> Self {
+        match model.variables.get(name) {
+            Some(v) if v.shape.as_ref().is_none_or(|s| s.is_empty()) => DeclaredRank::Scalar,
+            _ => DeclaredRank::Unknown,
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn eval_observed(
     name: &str,
     def: &Expr,
@@ -762,6 +806,7 @@ fn eval_observed(
     index_sets: &HashMap<String, IndexSet>,
     extents: &HashMap<String, i64>,
     const_arrays: &ConstArrayScope,
+    rank: DeclaredRank,
 ) -> Result<ArrayD<f64>, PrepareError> {
     // The observed is evaluated at the element type of the variable it defines
     // (esm-spec §11.3.1) — the document's unless that variable declared its
@@ -814,7 +859,7 @@ fn eval_observed(
     .map_err(|e| err(format!("evaluate {name}: {e}")))?;
     Ok(match val {
         EvalValue::Array(a) => *a,
-        EvalValue::Scalar(s) => ArrayD::from_elem(IxDyn(&[1]), s),
+        EvalValue::Scalar(s) => ArrayD::from_elem(IxDyn(rank.scalar_shape()), s),
     })
 }
 
@@ -1701,6 +1746,7 @@ impl<'o> BuildState<'o> {
                 &self.index_sets,
                 &no_extents,
                 &self.const_scope,
+                DeclaredRank::of(&self.model, name),
             ) {
                 Ok(a) => {
                     self.log(&format!(
@@ -1909,6 +1955,7 @@ impl<'o> BuildState<'o> {
                 &self.index_sets,
                 &self.extents,
                 &self.const_scope,
+                DeclaredRank::of(&self.model, name),
             )?;
             self.log(&format!(
                 "  [prepare] {name:<24} shape={:?}  {:>7.1} s",
