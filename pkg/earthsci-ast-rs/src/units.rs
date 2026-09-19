@@ -1042,7 +1042,7 @@ fn propagate_calculus_dim(
     if op.op == "ic" {
         return arg;
     }
-    let wrt = op.wrt.as_deref().unwrap_or("t");
+    let wrt = crate::op_registry::derivative_wrt(op);
     // The independent variable's unit is only known if it was DECLARED. We do
     // not assume an undeclared `t` means seconds: that would give `D(x)/dt` a
     // dimension of `[x]/second`, and every dimensionless toy model
@@ -1070,7 +1070,7 @@ fn derivative_of_undeclared_time<'a>(
     if op.op != "D" || op.args.len() != 1 {
         return None;
     }
-    let wrt = op.wrt.as_deref().unwrap_or("t");
+    let wrt = crate::op_registry::derivative_wrt(op);
     (!env.contains_key(wrt)).then(|| &op.args[0])
 }
 

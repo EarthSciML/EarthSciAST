@@ -5768,6 +5768,52 @@ fixture's own declared `expected`: **Julia** —
 rewrite-only ports with no simulator and no inline-test runner, and are
 `scope_excluded` in the manifest.
 
+### 5.42 The Derivative Axis Is the Literal `t`, in Every Layer (normative)
+
+esm-spec §4.2 fixes the derivative axis to the **literal** name `t`: a `D` whose
+`wrt` is `"t"`, or absent, is the structural time derivative, and a `D` whose
+`wrt` names anything else — **including the name a document gives
+`domain.independent_variable`** — is a spatial rewrite target. The axis is never
+resolved against `domain.independent_variable`.
+
+The rule is stated here because it is the kind a binding applies unevenly. It is
+asked in at least four places — classification (§6.3.1 system-kind derivation and
+ODE-state membership), the dimensional rule (esm-spec §4.8), the equation-balance
+check (esm-spec §4.9.4), and any differential-algebraic analysis a binding
+performs — and each of those is written by a different pass at a different time.
+A binding MUST answer it the same way in all of them, and SHOULD do so by routing
+every such site through one accessor rather than re-deriving the default.
+
+Two bindings did not. Rust's and Go's differential-algebraic layers resolved the
+axis against `domain.independent_variable` while their classifiers compared
+against the literal `t`. The two answers diverge exactly when a document renames
+its independent variable, and the consequence is a binding contradicting itself:
+on a document declaring `independent_variable: "time"` whose tendencies spell
+`wrt: "t"` — the shape of `tests/conformance/output_derivation/fixtures/`
+`{gridded,scalar_0d,shared_tail}.esm` — the classifier reported `ode` for a model
+the differential-algebraic contract simultaneously refused with
+`E_NONTRIVIAL_DAE`.
+
+**Why literal and not "the independent variable".** §11.3 lets a document rename
+its independent variable precisely so that `t` becomes an ordinary declarable
+name. `tests/valid/independent_variable_renamed.esm` renames it to `s` and then
+declares `t` as air temperature. Reading `wrt: "t"` as "the independent variable"
+in that document silently retargets the author's derivative onto `s` and leaves
+∂x/∂(air temperature) unwritable. A model that genuinely differentiates along a
+renamed independent variable spells that name, which makes the node spatial-tier
+and therefore a rewrite target (§9.6.8) — the format has no third tier.
+
+**Pins.** Rust —
+`pkg/earthsci-ast-rs/src/dae.rs::tests::the_derivative_axis_is_the_literal_t_not_the_independent_variable`;
+**Go** — `pkg/earthsci-ast-go/pkg/esm/wrt_default_omitted_test.go::TestDerivativeAxisIsTheLiteralT`.
+Each drives one document declaring a non-`t` independent variable through both
+that binding's classifier and its differential-algebraic layer and requires the
+two to agree, in all three spellings: `wrt` absent, `wrt: "t"`, and `wrt` naming
+the declared independent variable. Julia, Python and TypeScript have no
+differential-algebraic layer; their classifiers already read the literal `t` and
+are pinned by
+`tests/conformance/classification/fixtures/wrt_default_omitted.esm`.
+
 ## 6. CI Integration
 
 ### 6.1 GitHub Actions Workflow

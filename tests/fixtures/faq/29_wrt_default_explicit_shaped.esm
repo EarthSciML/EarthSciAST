@@ -1,0 +1,128 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "WrtDefaultExplicitShaped",
+    "description": "The control twin of `28_wrt_default_omitted_shaped.esm` (EarthSciAST#407): the same shaped four-cell decay with a sum-`faq` observed, differing only in that this one spells `\"wrt\": \"t\"` on the `D` while 28 omits it. esm-spec §4.2 makes the two mean the same thing, so the two files must integrate to the same trajectory. Pairing them is the point: a fixture carrying only the short form would go red on a binding that cannot build it, but would not pin that the two spellings AGREE.",
+    "authors": [
+      "EarthSciAST contributors"
+    ],
+    "created": "2026-09-17T00:00:00Z",
+    "tags": [
+      "regression",
+      "esm-spec-4.2",
+      "wrt-default"
+    ]
+  },
+  "index_sets": {
+    "lev": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "models": {
+    "ShapedWrtExplicit": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "mol",
+          "shape": [
+            "lev"
+          ],
+          "description": "State shaped over `lev`, tendency spells `wrt` explicitly"
+        },
+        "total": {
+          "type": "unknown",
+          "units": "mol",
+          "description": "Column sum of x, observed"
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.5,
+          "description": "Decay rate"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "x"
+            ]
+          }
+        },
+        {
+          "lhs": "total",
+          "rhs": {
+            "op": "faq",
+            "args": [
+              "x"
+            ],
+            "output_idx": [],
+            "ranges": {
+              "i": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                "x",
+                "i"
+              ]
+            },
+            "reduce": "+"
+          }
+        }
+      ],
+      "tolerance": {
+        "rel": 1e-06,
+        "abs": 1e-10
+      },
+      "tests": [
+        {
+          "id": "shaped_wrt_explicit",
+          "description": "The control for `shaped_wrt_omitted`: the same shaped decay with `\"wrt\": \"t\"` written out. Both must produce the same trajectory.",
+          "time_span": {
+            "start": 0.0,
+            "end": 2.0
+          },
+          "assertions": [
+            {
+              "variable": "total",
+              "time": 0.0,
+              "expected": 4.0
+            },
+            {
+              "variable": "total",
+              "time": 2.0,
+              "expected": 1.4715177646857693
+            }
+          ],
+          "initial_conditions": {
+            "x[1]": 1.0,
+            "x[2]": 1.0,
+            "x[3]": 1.0,
+            "x[4]": 1.0
+          }
+        }
+      ]
+    }
+  },
+  "domain": {
+    "temporal": {}
+  }
+}

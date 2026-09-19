@@ -2878,6 +2878,11 @@ fn reject_spatial_operators(expr: &Expr) -> Result<(), FlattenError> {
 
 /// Extract the dependent variable name from an `LHS = D(X, t)` pattern.
 /// Returns `None` for any other LHS shape.
+///
+/// "Time derivative" is decided by [`crate::op_registry::is_rewrite_target_derivative`]
+/// so that esm-spec §4.2's default applies: an ABSENT `wrt` MEANS `t`. Testing
+/// `wrt != Some("t")` instead made a `D(X)` LHS invisible to the conflicting-
+/// derivative check and to the pointwise lift (EarthSciAST#407).
 fn extract_ddt_dependent(lhs: &Expr) -> Option<String> {
     let Expr::Operator(node) = lhs else {
         return None;
@@ -2885,7 +2890,7 @@ fn extract_ddt_dependent(lhs: &Expr) -> Option<String> {
     if node.op != "D" {
         return None;
     }
-    if node.wrt.as_deref() != Some("t") {
+    if crate::op_registry::is_rewrite_target_derivative(node) {
         return None;
     }
     if node.args.len() != 1 {

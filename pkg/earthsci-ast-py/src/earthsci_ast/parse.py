@@ -307,14 +307,21 @@ def _parse_expression(
                 else:  # ``values`` — optional
                     kwargs[name] = [rec(v) for v in expr_data[wire]] if wire in expr_data else None
 
-        # Validate operator-specific field requirements. `D` genuinely requires
-        # `wrt` (its structural differentiation variable). The open-tier sugar
-        # ops carry NO per-op field mandate: `dim` is an OPTIONAL axis-naming
+        # Validate operator-specific field requirements. `D` carries NO per-op
+        # field mandate: esm-spec §4.2 makes `wrt` OPTIONAL and says an ABSENT
+        # `wrt` MEANS ``"t"``, so ``{"op": "D", "args": ["z"]}`` is the
+        # structural time derivative in its short spelling and is a legal node.
+        # Rejecting it here refused a document the schema accepts and the other
+        # four bindings load (EarthSciAST#407). The default belongs where the
+        # node is CONSUMED (``op_registry.STRUCTURAL_DERIVATIVE_WRT``) — and
+        # ``wrt`` is deliberately left ``None`` on the parsed node so the
+        # canonical encoding round-trips the document as written rather than
+        # materializing a field the author did not spell.
+        #
+        # The open-tier sugar ops are the same: `dim` is an OPTIONAL axis-naming
         # scalar field (like `wrt`), so `grad`/`div`/`laplacian` are NOT forced to
         # supply one — they are ordinary rewrite-target ops with no privilege, and
         # the schema mandates no `dim` per op (esm-spec §4.2 / §4.9.1).
-        if op == "D" and kwargs["wrt"] is None:
-            raise ParseError("Operator 'D' requires 'wrt' field to be specified")
         # Geometry-kernel manifold (RFC §8.1, esm-spec.md §8.6.1). Both geometry
         # leaves — the array-valued `intersect_polygon` clip and the fused scalar
         # `polygon_intersection_area` — are strictly binary with a REQUIRED

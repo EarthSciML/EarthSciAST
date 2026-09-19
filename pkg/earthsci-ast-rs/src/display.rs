@@ -1219,7 +1219,16 @@ fn format_operator(node: &ExpressionNode, fmt: Fmt, parent_prec: i32) -> String 
         "D" => {
             // Derivative operator; the operand is parenthesized when it is an
             // operator node (`∂(x + y)/∂t`, never `∂x + y/∂t`).
-            if let (Some(wrt_var), [arg]) = (wrt, args) {
+            //
+            // An ABSENT `wrt` means `t` (esm-spec §4.2), so it renders exactly
+            // as the explicit spelling does. Requiring `Some(_)` here printed
+            // `D(x)` for a node Julia, Python and TypeScript all print as
+            // `∂x/∂t` (EarthSciAST#407).
+            let wrt_default = wrt
+                .as_deref()
+                .unwrap_or(crate::op_registry::STRUCTURAL_DERIVATIVE_WRT);
+            if let [arg] = args {
+                let wrt_var = wrt_default;
                 match fmt {
                     Fmt::Unicode => format!(
                         "∂{}/∂{}",
@@ -2631,7 +2640,19 @@ mod tests {
             r"\frac{\partial (a + b)}{\partial t}",
             "D(a + b)/Dt",
         );
-        chk(opn("D", vec![a()]), "D(a)", "D(a)", "D(a)");
+        // A `D` with NO `wrt` is the structural time derivative in its short
+        // spelling (esm-spec §4.2: an absent `wrt` MEANS `t`), so it renders
+        // exactly as `dop("t", …)` above does. This row used to expect the bare
+        // call form `D(a)` — what Rust and Go printed while Julia, Python and
+        // TypeScript printed `∂a/∂t` (issue #407).
+        chk(
+            opn("D", vec![a()]),
+            "∂a/∂t",
+            r"\frac{\partial a}{\partial t}",
+            "D(a)/Dt",
+        );
+        // Arity, not a missing `wrt`, is what falls back to the call form.
+        chk(opn("D", vec![a(), b()]), "D(a, b)", "D(a, b)", "D(a, b)");
         // comparisons: infix symbol AND the call-form symbol (they diverge)
         chk(opn(">", vec![a(), b()]), "a > b", "a > b", "a > b");
         chk(opn(">=", vec![a(), b()]), "a ≥ b", r"a \geq b", "a >= b");

@@ -554,9 +554,15 @@ def _expr_to_string(expr: Expr) -> str:
         op = expr.op
         args = [_expr_to_string(a) for a in expr.args]
 
-        if op == "D" and expr.wrt:
+        if op == "D":
+            # An ABSENT `wrt` MEANS `t` (esm-spec §4.2), so the short spelling
+            # prints as the explicit one does. Gating on `expr.wrt` being truthy
+            # instead rendered `D(x)`, which made the SAME tendency written the
+            # two ways compare unequal in the duplicate-LHS check that uses
+            # this rendering (EarthSciAST#407).
             inner = args[0] if args else ""
-            return f"D({inner}, {expr.wrt})"
+            wrt = expr.wrt or TIME_VAR
+            return f"D({inner}, {wrt})"
 
         # An op carrying a `dim` axis field (the open-tier differential sugar
         # grad/div/laplacian/curl, or any custom rewrite-target op with a `dim`)

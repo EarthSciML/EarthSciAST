@@ -1,0 +1,127 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "WrtDefaultOmittedShaped",
+    "description": "esm-spec §4.2: on a `D` node an ABSENT `wrt` MEANS `t` — the SHAPED half of the EarthSciAST#407 regression, whose SCALAR half is `tests/simulation/wrt_default_omitted.esm`. Four cells decay as exp(-0.5 t) under a whole-array `D(x)` written WITHOUT `wrt`, and the column sum is observed through a sum-`faq`. Its control twin, `29_wrt_default_explicit_shaped.esm`, is byte-identical apart from carrying `\"wrt\": \"t\"` and must produce the same trajectory; a binding that reads the two spellings differently does not get a wrong number, it cannot build one of them at all. The two live in separate files rather than as two models of one document because each runner binds the per-cell initial conditions `x[1]`..`x[4]` by bare name, which is ambiguous when two models in one document both declare `x`. They live HERE rather than in `tests/simulation/` because that corpus's generic runner drives the scalar backend, which has no `faq` evaluator — and the shaped spelling has to be executed somewhere the array pathway runs, since in Rust the array path applied the §4.2 default and the scalar path did not.",
+    "authors": [
+      "EarthSciAST contributors"
+    ],
+    "created": "2026-09-17T00:00:00Z",
+    "tags": [
+      "regression",
+      "esm-spec-4.2",
+      "wrt-default"
+    ]
+  },
+  "index_sets": {
+    "lev": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "models": {
+    "ShapedWrtOmitted": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "mol",
+          "shape": [
+            "lev"
+          ],
+          "description": "State shaped over `lev`, tendency written with `wrt` omitted"
+        },
+        "total": {
+          "type": "unknown",
+          "units": "mol",
+          "description": "Column sum of x, observed"
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.5,
+          "description": "Decay rate"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ]
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "x"
+            ]
+          }
+        },
+        {
+          "lhs": "total",
+          "rhs": {
+            "op": "faq",
+            "args": [
+              "x"
+            ],
+            "output_idx": [],
+            "ranges": {
+              "i": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                "x",
+                "i"
+              ]
+            },
+            "reduce": "+"
+          }
+        }
+      ],
+      "tolerance": {
+        "rel": 1e-06,
+        "abs": 1e-10
+      },
+      "tests": [
+        {
+          "id": "shaped_wrt_omitted",
+          "description": "Four identical cells each decaying as exp(-0.5 t), so the column sum is 4 exp(-0.5 t). Sampled at t = 0 and t = 2.",
+          "time_span": {
+            "start": 0.0,
+            "end": 2.0
+          },
+          "assertions": [
+            {
+              "variable": "total",
+              "time": 0.0,
+              "expected": 4.0
+            },
+            {
+              "variable": "total",
+              "time": 2.0,
+              "expected": 1.4715177646857693
+            }
+          ],
+          "initial_conditions": {
+            "x[1]": 1.0,
+            "x[2]": 1.0,
+            "x[3]": 1.0,
+            "x[4]": 1.0
+          }
+        }
+      ]
+    }
+  },
+  "domain": {
+    "temporal": {}
+  }
+}

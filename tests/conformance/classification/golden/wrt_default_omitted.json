@@ -1,0 +1,59 @@
+{
+  "models": {
+    "ScalarWrtOmitted": {
+      "ode_states": ["z"],
+      "observed_unknowns": [],
+      "algebraic_unknowns": [],
+      "brownian_parameters": [],
+      "discrete_parameters": [],
+      "sampled_parameters": [],
+      "constant_parameters": ["k"],
+      "system_kind": "ode",
+      "declared_system_kind": null
+    },
+    "ScalarWrtExplicit": {
+      "ode_states": ["z"],
+      "observed_unknowns": [],
+      "algebraic_unknowns": [],
+      "brownian_parameters": [],
+      "discrete_parameters": [],
+      "sampled_parameters": [],
+      "constant_parameters": ["k"],
+      "system_kind": "ode",
+      "declared_system_kind": null
+    },
+    "ShapedWrtOmitted": {
+      "ode_states": ["x"],
+      "observed_unknowns": [],
+      "algebraic_unknowns": [],
+      "brownian_parameters": [],
+      "discrete_parameters": [],
+      "sampled_parameters": [],
+      "constant_parameters": ["k"],
+      "system_kind": "ode",
+      "declared_system_kind": null
+    },
+    "ShapedWrtExplicit": {
+      "ode_states": ["x"],
+      "observed_unknowns": [],
+      "algebraic_unknowns": [],
+      "brownian_parameters": [],
+      "discrete_parameters": [],
+      "sampled_parameters": [],
+      "constant_parameters": ["k"],
+      "system_kind": "ode",
+      "declared_system_kind": null
+    },
+    "SpatialControl": {
+      "ode_states": [],
+      "observed_unknowns": [],
+      "algebraic_unknowns": ["c"],
+      "brownian_parameters": [],
+      "discrete_parameters": [],
+      "sampled_parameters": [],
+      "constant_parameters": ["kappa"],
+      "system_kind": "pde",
+      "declared_system_kind": null
+    }
+  }
+}

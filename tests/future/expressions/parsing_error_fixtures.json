@@ -138,16 +138,6 @@
         "error_message": "Unknown operator 'nonexistent_operator'"
       },
       {
-        "description": "Derivative missing 'wrt' field",
-        "input": {
-          "op": "D",
-          "args": ["concentration"]
-        },
-        "expected_error": "StructuralError",
-        "error_code": "missing_required_field",
-        "error_message": "Derivative operator 'D' requires 'wrt' field"
-      },
-      {
         "description": "Gradient missing 'dim' field",
         "input": {
           "op": "grad",
@@ -338,34 +328,6 @@
             "path": "/args/1"
           }
         ]
-      },
-      {
-        "description": "Missing required field in nested derivative",
-        "input": {
-          "op": "+",
-          "args": [
-            "base_rate",
-            {
-              "op": "*",
-              "args": [
-                "amplitude",
-                {
-                  "op": "D",
-                  "args": [
-                    {
-                      "op": "sin",
-                      "args": [{"op": "*", "args": ["ω", "t"]}]
-                    }
-                  ]
-                }
-              ]
-            }
-          ]
-        },
-        "expected_error": "StructuralError",
-        "error_code": "missing_required_field",
-        "error_message": "Derivative operator 'D' requires 'wrt' field",
-        "error_path": "/args/1/args/1"
       }
     ]
   },

@@ -1309,7 +1309,7 @@ function _discover_array_cells(
 end
 
 function _scan_lhs_cells!(cells, lhs::ASTExpr, array_var_names::Set{String})
-    if lhs isa OpExpr && lhs.op == "D" && lhs.wrt == "t" &&
+    if _is_time_derivative(lhs) &&
            length(lhs.args) == 1 && lhs.args[1] isa OpExpr &&
            lhs.args[1].op == "index"
         # D(index(var, k...))
@@ -1334,7 +1334,7 @@ function _scan_lhs_cells!(cells, lhs::ASTExpr, array_var_names::Set{String})
         # aggregate(expr=D(index(var, idx_exprs...)), output_idx=[...], ranges={...})
         lhs_body = lhs.expr_body
         lhs_body === nothing && return
-        lhs_body isa OpExpr && lhs_body.op == "D" && lhs_body.wrt == "t" &&
+        _is_time_derivative(lhs_body) &&
             length(lhs_body.args) == 1 && lhs_body.args[1] isa OpExpr &&
             lhs_body.args[1].op == "index" || return
         inner = lhs_body.args[1]
@@ -1365,15 +1365,23 @@ function _scan_lhs_cells!(cells, lhs::ASTExpr, array_var_names::Set{String})
     end
 end
 
+# Every LHS predicate below reads "is this a time derivative?" through
+# `_is_time_derivative`, which applies esm-spec §4.2's default: an ABSENT `wrt`
+# MEANS `t`. Spelling the test `lhs.wrt == "t"` dropped that default on this
+# pathway while `classification.jl` kept it, so the tree-walk runner refused
+# `{"op": "D", "args": ["z"]}` with `E_TREEWALK_UNSUPPORTED_EQUATION` for a
+# document `ode_states` had already reported `z` as a state of
+# (EarthSciAST#407).
+
 # Identify D(scalar_var) — the classic scalar ODE LHS.
 function _is_scalar_D_lhs(lhs)
-    return isa(lhs, OpExpr) && lhs.op == "D" && lhs.wrt == "t" &&
+    return _is_time_derivative(lhs) &&
            length(lhs.args) == 1 && isa(lhs.args[1], VarExpr)
 end
 
 # Identify D(index(var, k...)) — indexed scalar derivative.
 function _is_indexed_D_lhs(lhs)
-    return isa(lhs, OpExpr) && lhs.op == "D" && lhs.wrt == "t" &&
+    return _is_time_derivative(lhs) &&
            length(lhs.args) == 1 &&
            isa(lhs.args[1], OpExpr) && lhs.args[1].op == "index"
 end
@@ -1383,7 +1391,7 @@ function _is_faq_D_lhs(lhs)
     lhs isa OpExpr && _is_faq_op(lhs.op) || return false
     body = lhs.expr_body
     body === nothing && return false
-    return body isa OpExpr && body.op == "D" && body.wrt == "t" &&
+    return _is_time_derivative(body) &&
            length(body.args) == 1 &&
            body.args[1] isa OpExpr && body.args[1].op == "index"
 end

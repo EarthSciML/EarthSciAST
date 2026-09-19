@@ -68,6 +68,12 @@
       "fixture": "fixtures/system_kind_pde.esm",
       "golden": "golden/system_kind_pde.json",
       "pins": "The `pde` branch, which system_kind_variants.esm does not reach at all -- before this fixture, one of the four system_kind values was unpinned across all five bindings. Four models share ONE document-level `domain`, so a binding deriving `pde` from the presence of a domain block gets three of the four wrong. `Transient` uses a spatial `D`; `SugarOps` uses `laplacian` instead, catching a binding that recognizes only the `D` spelling; `SteadyState` has no time derivative and catches a binding testing `nonlinear` before `pde`; `StochasticSpatial` carries both a wiener parameter and a spatial derivative and must come out `sde`."
+    },
+    {
+      "id": "wrt_default_omitted",
+      "fixture": "fixtures/wrt_default_omitted.esm",
+      "golden": "golden/wrt_default_omitted.json",
+      "pins": "esm-spec 4.2's `wrt` DEFAULT: on a `D` node an absent `wrt` MEANS `t`. Two pairs -- a SCALAR state and a state SHAPED over `lev` -- differ only in whether `wrt: t` is spelled or omitted, and both members of a pair must classify identically (target is an ode_state, model is an `ode`). `SpatialControl` is the complement that stops an over-broad fix: its `wrt` names an axis, so it is spatial, `c` is not an ode_state, and the model is a `pde`. `wrt` is a TWO-way question (is it spatial?), not a three-way one (present-and-t / present-and-spatial / absent); every binding that treated absence as its own case dropped the default on some path while keeping it on another. Before this fixture the two spellings were pinned nowhere, and three of the five bindings disagreed with each other and with themselves: Rust classified the short form correctly but refused to simulate a SCALAR one, Julia classified it correctly but refused it in the tree-walk runner, and Python rejected the document at PARSE."
     }
   ]
 }

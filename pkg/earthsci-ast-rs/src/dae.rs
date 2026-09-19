@@ -42,7 +42,7 @@ use std::collections::HashMap;
 
 use crate::expression::contains;
 use crate::substitute::substitute;
-use crate::types::{DaeInfo, Domain, Equation, EsmFile, Expr, Model};
+use crate::types::{DaeInfo, Equation, EsmFile, Expr, Model};
 
 /// Error returned by [`apply_dae_contract`] / [`discretize`] when the
 /// RFC §12 DAE binding contract cannot be satisfied.
@@ -95,10 +95,11 @@ pub fn default_dae_support() -> bool {
 ///
 /// Behavior (rust strategy):
 ///
-/// 1. Classify every equation as `differential` (LHS is `D(x, wrt=<indep>)`
-///    where `<indep>` is the enclosing model's domain's
-///    `independent_variable`, default `"t"`) or `algebraic` (everything
-///    else — authored observed equations, explicit constraints, etc).
+/// 1. Classify every equation as `differential` (LHS is the STRUCTURAL time
+///    derivative — a `D` whose `wrt` is the literal `"t"` or absent, esm-spec
+///    §4.2) or `algebraic` (everything else — authored observed equations,
+///    explicit constraints, a SPATIAL `D`, etc). The axis is NOT resolved
+///    against `domain.independent_variable`; see [`is_differential`].
 /// 2. If no algebraic equations exist, stamp
 ///    `metadata.system_class = "ode"` and `metadata.dae_info` and return.
 /// 3. If `dae_support` is `false`, return `E_NO_DAE_SUPPORT` naming the
@@ -117,14 +118,12 @@ pub fn default_dae_support() -> bool {
 /// The input `esm` is mutated: factored algebraic equations are removed
 /// and their substitutions applied to the remaining equations.
 pub fn apply_dae_contract(esm: &mut EsmFile, dae_support: bool) -> Result<DaeInfo, DaeError> {
-    let indep = document_indep(esm);
-
     let mut pre_factor_count = 0usize;
     let mut first_path: Option<String> = None;
     if let Some(models) = esm.models.as_ref() {
         for (mname, model) in models.iter() {
             for (i, eq) in model.equations.iter().enumerate() {
-                if is_algebraic(eq, &indep) {
+                if is_algebraic(eq) {
                     pre_factor_count += 1;
                     if first_path.is_none() {
                         first_path = Some(format!("models.{mname}.equations[{i}]"));
@@ -169,7 +168,7 @@ pub fn apply_dae_contract(esm: &mut EsmFile, dae_support: bool) -> Result<DaeInf
         let mnames: Vec<String> = models.keys().cloned().collect();
         for mname in mnames {
             let model = models.get_mut(&mname).expect("model key just listed");
-            let (factored, residual) = factor_model(model, &indep);
+            let (factored, residual) = factor_model(model);
             factored_total += factored;
             for idx in &residual {
                 residual_paths.push(format!("models.{mname}.equations[{idx}]"));
@@ -227,37 +226,40 @@ pub fn discretize(esm: &EsmFile, options: DiscretizeOptions) -> Result<EsmFile, 
 
 // ----- helpers --------------------------------------------------------------
 
-/// The document's single shared independent (time) variable (v0.8.0). Every
-/// component shares the one `domain`; absent a domain the convention default is
-/// `"t"`.
-fn document_indep(esm: &EsmFile) -> String {
-    esm.domain
-        .as_ref()
-        .map(domain_indep)
-        .unwrap_or_else(|| "t".into())
-}
-
-fn domain_indep(d: &Domain) -> String {
-    d.independent_variable.clone().unwrap_or_else(|| "t".into())
-}
-
-fn is_differential(eq: &Equation, indep: &str) -> bool {
+/// Is this equation differential — an LHS that is the STRUCTURAL time
+/// derivative?
+///
+/// The axis is read through [`crate::op_registry::is_rewrite_target_derivative`],
+/// the one accessor that applies esm-spec §4.2: the structural derivative is a
+/// `D` whose `wrt` is the LITERAL `t` or absent, and a `D` whose `wrt` names
+/// anything else is a SPATIAL rewrite target.
+///
+/// It used to compare `wrt` against `domain.independent_variable` instead, and
+/// read an absent `wrt` as that variable. §4.2 fixes the axis to the literal
+/// `t`, while other wording in the spec spoke of "the independent variable" —
+/// and for a document that renames its independent variable the two readings
+/// disagree. The literal reading is the normative one (esm-spec §4.2,
+/// CONFORMANCE_SPEC §5.42) and is what every binding's CLASSIFICATION already
+/// does, so this layer had to move: on a document declaring
+/// `independent_variable: "s"`,
+/// `apply_dae_contract` called `D(y, wrt: t)` algebraic and raised
+/// `E_NONTRIVIAL_DAE` for a model `system_kind` reported as an `ode` — the
+/// binding disagreeing with itself about one node. The renaming is not
+/// hypothetical: in `tests/valid/independent_variable_renamed.esm` the freed
+/// `t` is air temperature, an ordinary declared parameter, so resolving `wrt:
+/// t` against the independent variable silently retargets an author's
+/// derivative onto a different quantity (EarthSciAST#407).
+fn is_differential(eq: &Equation) -> bool {
     match &eq.lhs {
-        Expr::Operator(node) if node.op == "D" => {
-            match node.wrt.as_deref() {
-                // Explicit wrt matches the model's independent variable.
-                Some(w) => w == indep,
-                // Unspecified wrt: treat as differential (defaults to indep
-                // per §5.4 conventions).
-                None => true,
-            }
+        Expr::Operator(node) => {
+            node.op == "D" && !crate::op_registry::is_rewrite_target_derivative(node)
         }
         _ => false,
     }
 }
 
-fn is_algebraic(eq: &Equation, indep: &str) -> bool {
-    !is_differential(eq, indep)
+fn is_algebraic(eq: &Equation) -> bool {
+    !is_differential(eq)
 }
 
 fn per_model_zero(esm: &EsmFile) -> HashMap<String, usize> {
@@ -282,7 +284,7 @@ fn stamp_metadata(esm: &mut EsmFile, system_class: &str, info: &DaeInfo) {
 /// equations that could not be factored. On success, `residual_indices`
 /// is empty and the factored algebraic equations have been removed from
 /// `model.equations`.
-fn factor_model(model: &mut Model, indep: &str) -> (usize, Vec<usize>) {
+fn factor_model(model: &mut Model) -> (usize, Vec<usize>) {
     // Track original indices so residual paths reference the caller's view.
     // Each entry: (original_index, is_algebraic, equation).
     let originals: Vec<(usize, bool, Equation)> = model
@@ -290,7 +292,7 @@ fn factor_model(model: &mut Model, indep: &str) -> (usize, Vec<usize>) {
         .drain(..)
         .enumerate()
         .map(|(i, eq)| {
-            let alg = is_algebraic(&eq, indep);
+            let alg = is_algebraic(&eq);
             (i, alg, eq)
         })
         .collect();
@@ -367,7 +369,7 @@ fn factor_model(model: &mut Model, indep: &str) -> (usize, Vec<usize>) {
 mod tests {
     use super::*;
     use crate::test_support::{test_file, var as typed_var};
-    use crate::types::{ExpressionNode, ModelVariable, VariableType};
+    use crate::types::{Domain, ExpressionNode, ModelVariable, VariableType};
     use indexmap::IndexMap;
 
     fn var(name: &str) -> Expr {
@@ -661,28 +663,76 @@ mod tests {
         assert_eq!(out.metadata.system_class.as_deref(), Some("ode"));
     }
 
+    /// The derivative axis is the LITERAL `t` (esm-spec §4.2), not whatever
+    /// `domain.independent_variable` names.
+    ///
+    /// This test used to assert the opposite — that in a document declaring
+    /// `independent_variable: "s"`, `D(x, wrt: t)` is ALGEBRAIC — which made
+    /// this layer contradict `crate::classification`, whose
+    /// `is_time_derivative` compares against the literal `t` in every one of
+    /// the five bindings. The same document therefore came out an `ode` from
+    /// `system_kind` and a non-trivial DAE from `apply_dae_contract`: one
+    /// binding, two answers, for one node. §4.2 is normative over the spec's
+    /// looser "the independent variable" wording (CONFORMANCE_SPEC §5.42), so
+    /// the DAE layer moved.
+    ///
+    /// Renaming the independent variable is exactly when the two readings
+    /// diverge, and it is not hypothetical:
+    /// `tests/valid/independent_variable_renamed.esm` renames it to `s`
+    /// precisely so that `t` is FREE for its ordinary meteorological meaning
+    /// (air temperature). Resolving `wrt: t` against the independent variable
+    /// in such a document silently retargets the author's derivative.
     #[test]
-    fn custom_independent_variable_is_respected() {
-        // Domain with independent_variable = "s". D(x, wrt=s) is
-        // differential; D(x, wrt=t) is algebraic under this indep.
-        let mut m = empty_model();
-        m.variables.insert("x".into(), state_var());
-        m.equations.push(Equation {
-            comment: None,
-            lhs: op_wrt("D", vec![var("x")], "t"),
-            rhs: Expr::Integer(0),
-        });
-        let mut esm = minimal_esm("M", m);
-        esm.domain = Some(Domain {
-            independent_variable: Some("s".into()),
-            temporal: None,
-            element_type: None,
-            array_type: None,
-        });
+    fn the_derivative_axis_is_the_literal_t_not_the_independent_variable() {
+        // `D(x, wrt: t)` in a document whose independent variable is `s`.
+        let with_wrt = |wrt: Option<&str>| {
+            let mut m = empty_model();
+            m.variables.insert("x".into(), state_var());
+            m.equations.push(Equation {
+                comment: None,
+                lhs: match wrt {
+                    Some(w) => op_wrt("D", vec![var("x")], w),
+                    None => op("D", vec![var("x")]),
+                },
+                rhs: Expr::Integer(0),
+            });
+            let mut esm = minimal_esm("M", m);
+            esm.domain = Some(Domain {
+                independent_variable: Some("s".into()),
+                temporal: None,
+                element_type: None,
+                array_type: None,
+            });
+            esm
+        };
 
-        // With non-bare LHS (D(...)) the equation cannot be factored;
-        // since wrt=t doesn't match indep=s it is algebraic.
-        let err = apply_dae_contract(&mut esm, true).expect_err("non-trivial");
+        // `wrt: t` and no `wrt` are both the structural time derivative, so
+        // the system is a pure ODE with nothing left to factor.
+        for spelling in [Some("t"), None] {
+            let mut esm = with_wrt(spelling);
+            let info = apply_dae_contract(&mut esm, true)
+                .expect("the literal `t` is the structural axis whatever the domain declares");
+            assert_eq!(info.algebraic_equation_count, 0, "{spelling:?}");
+            assert_eq!(
+                esm.metadata.system_class.as_deref(),
+                Some("ode"),
+                "{spelling:?}"
+            );
+            // And the classifier, which never consulted the domain, agrees.
+            let m = &esm.models.as_ref().unwrap()["M"];
+            assert_eq!(crate::ode_states(m), vec!["x".to_string()], "{spelling:?}");
+        }
+
+        // A `wrt` naming the DECLARED independent variable is a SPATIAL
+        // derivative under §4.2 — the complement that stops the fix being
+        // "every `D` is differential". Its LHS is not a bare variable, so it
+        // cannot be factored and the contract refuses it.
+        let mut esm = with_wrt(Some("s"));
+        let err = apply_dae_contract(&mut esm, true).expect_err("a spatial `D` is not a tendency");
         assert_eq!(err.code, "E_NONTRIVIAL_DAE");
+        // The classifier says the same: `x` is not an ODE state here.
+        let esm2 = with_wrt(Some("s"));
+        let m = &esm2.models.as_ref().unwrap()["M"];
+        assert!(crate::ode_states(m).is_empty());
     }
 }
