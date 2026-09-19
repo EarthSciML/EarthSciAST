@@ -231,6 +231,17 @@ pub struct AssertionResult {
     pub passed: bool,
     /// Diff or error text for non-passing results (empty when passed).
     pub message: String,
+    /// The document this row is about: the path it was loaded from, or `""`
+    /// for a document handed to the runner as an already-loaded [`EsmFile`],
+    /// which has no path to carry.
+    ///
+    /// [`run_inline_tests_paths`] walks a directory or a list of documents and
+    /// CONCATENATES their rows, so without this a corpus run could report a
+    /// failure without saying which document failed — while a LOAD failure
+    /// named its path all along (in `model`), making the two halves of one run
+    /// inconsistent with each other. The Julia and Python bindings carry the
+    /// same field under the same name.
+    pub file: String,
 }
 
 /// Evaluate an array-valued expression (elementwise ops over array-producing
@@ -1543,6 +1554,7 @@ fn assertion_observed_requests(
 /// however the test failed.
 fn push_test_error(
     results: &mut Vec<AssertionResult>,
+    source: &str,
     model_name: &str,
     t: &crate::types::ModelTest,
     tolerance: Option<&Tolerance>,
@@ -1563,6 +1575,7 @@ fn push_test_error(
             atol,
             passed: false,
             message: message.to_string(),
+            file: source.to_string(),
         });
     }
 }
@@ -2341,6 +2354,7 @@ fn with_build_pipeline_if_needed(
 #[allow(clippy::too_many_arguments)]
 fn run_component_tests(
     file: &EsmFile,
+    source: &str,
     model_name: &str,
     tests: &[crate::types::ModelTest],
     tolerance: Option<&Tolerance>,
@@ -2377,7 +2391,7 @@ fn run_component_tests(
         let run_index_sets: &HashMap<String, IndexSet> =
             cached.index_sets.as_ref().unwrap_or(index_sets);
         if let Built::TestError(msg) = &cached.built {
-            push_test_error(results, model_name, t, tolerance, msg);
+            push_test_error(results, source, model_name, t, tolerance, msg);
             continue;
         }
 
@@ -2558,6 +2572,7 @@ fn run_component_tests(
                 atol,
                 passed,
                 message,
+                file: source.to_string(),
             });
         }
     }
@@ -2666,6 +2681,7 @@ pub fn run_inline_tests_filtered(
 ) -> Vec<AssertionResult> {
     run_inline_tests_seeded(
         file,
+        None,
         model_name,
         opts,
         base_dir,
@@ -2690,6 +2706,7 @@ pub fn run_inline_tests_filtered(
 #[allow(clippy::too_many_arguments)]
 fn run_inline_tests_seeded(
     file: &EsmFile,
+    source: Option<&Path>,
     model_name: Option<&str>,
     opts: &SolveOptions,
     base_dir: Option<&Path>,
@@ -2698,6 +2715,12 @@ fn run_inline_tests_seeded(
     seeds: &InlineTestSeeds,
 ) -> Vec<AssertionResult> {
     let mut results = Vec::new();
+
+    // Every row of this document's run names the document, so a BATCH's rows
+    // can be told apart (`AssertionResult::file`). A document handed over
+    // already parsed has no path, and its rows carry the empty string — the
+    // same convention as the Julia and Python bindings.
+    let source: String = source.map(|p| p.display().to_string()).unwrap_or_default();
 
     // Lower `table_lookup` ONCE for the whole run (esm-spec §9.5.3).
     // `esm_problem` lowers its own copy, which covers everything it compiles —
@@ -2747,6 +2770,7 @@ fn run_inline_tests_seeded(
         }
         run_component_tests(
             file,
+            &source,
             name,
             tests,
             tolerance,
@@ -2845,6 +2869,12 @@ fn esm_files_under(dir: &Path) -> Vec<PathBuf> {
 /// SILENTLY either — a document that vanishes from the result list is
 /// indistinguishable from one that passed. So the failure becomes a row, the
 /// way every other failure in this runner becomes a row.
+///
+/// The path goes in `file`, where every other row of the run now carries its
+/// document too. It ALSO stays in `model`, where it has been since this row
+/// existed: that predates the `file` field and is what a caller reading these
+/// rows today looks at — including this crate's own `esm test` summary. The
+/// Python binding keeps both for the same reason.
 fn load_failure_result(path: &Path, message: String) -> AssertionResult {
     AssertionResult {
         model: path.display().to_string(),
@@ -2859,6 +2889,7 @@ fn load_failure_result(path: &Path, message: String) -> AssertionResult {
         atol: 0.0,
         passed: false,
         message: format!("load failed: {message}"),
+        file: path.display().to_string(),
     }
 }
 
@@ -2917,6 +2948,7 @@ pub fn run_inline_tests_paths(
         };
         results.extend(run_inline_tests_seeded(
             &file,
+            Some(&path),
             opts.model_name.as_deref(),
             &opts.solve,
             base_dir.as_deref(),
@@ -4740,5 +4772,67 @@ mod tests {
             .find(|r| r.test_id == "ramp")
             .expect("the good document still ran");
         assert!(good.passed, "{}", good.message);
+    }
+
+    /// Mirrors the Julia testset "a batch's rows name the document they came
+    /// from". Results from a multi-document run were indistinguishable: every
+    /// row carried the same `model` / `test_id` and nothing naming the
+    /// document, so a corpus sweep could report a failure without saying which
+    /// file failed — while a LOAD failure named its path, making the two halves
+    /// of one run inconsistent with each other.
+    #[test]
+    fn run_inline_tests_paths_rows_name_the_document_they_came_from() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_doc(dir.path(), "a.esm", &ramp_doc(3.0, Some(json!({"T": 3.0}))));
+        write_doc(dir.path(), "b.esm", &ramp_doc(7.0, Some(json!({"T": 7.0}))));
+        let opts = |_p: &Path| InlineTestOptions {
+            solve: tight_opts(),
+            ..Default::default()
+        };
+
+        let results = run_inline_tests_paths(&[dir.path()], &opts);
+        assert_eq!(results.len(), 2, "{results:?}");
+        assert!(results.iter().all(|r| r.passed), "{results:?}");
+        // Two rows that are otherwise identical — same component, same test id,
+        // same assertion index — are told apart by their document alone.
+        assert_eq!(results[0].model, results[1].model);
+        assert_eq!(results[0].test_id, results[1].test_id);
+        let a = &results[0];
+        let b = &results[1];
+        assert_eq!(Path::new(&a.file), dir.path().join("a.esm"));
+        assert_eq!(Path::new(&b.file), dir.path().join("b.esm"));
+        assert!((a.actual.expect("a actual") - 3.0).abs() <= 1e-9 * 3.0);
+        assert!((b.actual.expect("b actual") - 7.0).abs() <= 1e-9 * 7.0);
+
+        // An unreadable document in the same batch still contributes its own
+        // named row rather than ending the run — and names itself in `file`,
+        // the field every other row of the batch now uses, as well as in
+        // `model`, where it always has.
+        std::fs::write(dir.path().join("broken.esm"), "{ not json").expect("bad fixture");
+        let mixed = run_inline_tests_paths(&[dir.path()], &opts);
+        let load_row = mixed
+            .iter()
+            .find(|r| r.test_id == "<load>")
+            .expect("a <load> row for the unreadable document");
+        assert_eq!(Path::new(&load_row.file), dir.path().join("broken.esm"));
+        assert_eq!(load_row.model, load_row.file);
+        assert!(!load_row.passed);
+        assert!(
+            mixed
+                .iter()
+                .any(|r| Path::new(&r.file) == dir.path().join("a.esm") && r.passed),
+            "{mixed:?}"
+        );
+    }
+
+    /// A document handed over ALREADY PARSED has no path, so its rows carry the
+    /// empty string rather than inventing one — the same convention as the
+    /// Julia and Python bindings.
+    #[test]
+    fn an_already_loaded_document_leaves_the_row_file_empty() {
+        let file = load_string(&decay_doc().to_string()).expect("decay doc loads");
+        let results = run_inline_tests(&file, None, &tight_opts());
+        assert!(!results.is_empty());
+        assert!(results.iter().all(|r| r.file.is_empty()), "{results:?}");
     }
 }
