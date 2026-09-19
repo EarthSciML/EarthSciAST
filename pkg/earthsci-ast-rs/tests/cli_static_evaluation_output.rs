@@ -162,7 +162,11 @@ fn a_relational_document_writes_its_computed_values() {
             "in {values:?}"
         );
     }
-    assert_eq!(values["Rel.total[1]"], TOTAL, "in {values:?}");
+    // `total` is declared with no `shape`, so it is a rank-0 field and the flat
+    // writer names it BARE — `Rel.total`, not `Rel.total[1]` (issue #431: a
+    // build-time field's rank is its declaration's, and the rest of the writer
+    // has always named a 0-D quantity without a subscript).
+    assert_eq!(values["Rel.total"], TOTAL, "in {values:?}");
 }
 
 #[test]
@@ -214,7 +218,8 @@ fn a_csv_request_that_is_not_one_row_set_is_refused_with_the_shapes_named() {
         out.to_str().expect("utf-8"),
     ]);
     assert!(!ok, "mismatched shapes must not exit 0:\n{text}");
-    assert!(text.contains("[3]") && text.contains("[1]"), "in:\n{text}");
+    // `[]` is the scalar's shape: unshaped in the declaration, rank-0 as a field.
+    assert!(text.contains("[3]") && text.contains("[]"), "in:\n{text}");
     assert!(text.contains("total"), "must name the offender:\n{text}");
     assert!(!out.exists(), "nothing may be written on refusal");
 }
