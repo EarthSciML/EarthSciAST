@@ -30,7 +30,7 @@ import pytest
 from conftest import INVALID_DIR, VALID_DIR
 
 from earthsci_ast.parse import load_path
-from earthsci_ast.inline_tests import _check_assertion
+from earthsci_ast.inline_tests import _check_assertion, run_inline_tests
 from earthsci_ast.reference_resolution import (
     E_REF_UNDECLARED_INDEX_SET,
     ReferenceResolutionError,
@@ -111,10 +111,41 @@ def test_at_least_four_worked_examples() -> None:
     )
 
 
+def _samples_a_field(raw: dict) -> bool:
+    """Whether any assertion in the document reads a FIELD rather than a state.
+
+    esm-spec §6.6.5 gives an assertion two ways to do that: ``coords``, which
+    point-samples one cell, and ``reduce``, which collapses the whole field to
+    a norm. Neither is a row of a ``solve`` trajectory — a shaped observed has
+    no ODE slot, so it is not in ``Solution.vars`` at all — and the local
+    ``solve``/``_lookup_element`` harness below can only read a named scalar
+    row. Such a document is therefore checked through the binding's own §6.6
+    runner, which materializes the field and samples it.
+    """
+    for model_raw in (raw.get("models") or {}).values():
+        for test in model_raw.get("tests") or []:
+            for assertion in test.get("assertions") or []:
+                if assertion.get("coords") is not None or assertion.get("reduce") is not None:
+                    return True
+    return False
+
+
 @pytest.mark.parametrize("fixture_path", _collect_fixtures(), ids=lambda p: p.name)
 def test_aggregate_fixture_conformance(fixture_path: Path) -> None:
     """Run every inline test in an aggregate worked-example fixture."""
     raw = json.loads(fixture_path.read_text())
+
+    if _samples_a_field(raw):
+        rows = run_inline_tests(fixture_path)
+        assert rows, f"{fixture_path.name}: no assertions were checked"
+        failed = [r for r in rows if not r.passed]
+        assert not failed, "\n".join(
+            f"{fixture_path.name}::{r.model}::{r.test_id} assertion {r.variable}@t={r.time} "
+            f"expected={r.expected} actual={r.actual} tol(rel={r.rtol}, abs={r.atol}) {r.message}"
+            for r in failed
+        )
+        return
+
     esm_file = load_path(fixture_path)
 
     any_assertions = False

@@ -70,6 +70,7 @@
 //! is exactly the misunderstanding the rename exists to remove).
 
 use std::borrow::Cow;
+use std::cell::OnceCell;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -1889,6 +1890,17 @@ enum Built {
     BuildFailed(String),
 }
 
+/// The `(p, u0)` a test's problem was built from: the scalar parameter
+/// overrides and the scalar initial conditions, on the canonical SciML
+/// channels. Kept so a build can be redone from exactly the same bindings
+/// ([`build_pipeline_fields`]).
+type RetryBindings = (HashMap<String, f64>, HashMap<String, f64>);
+
+/// The fields one build MATERIALIZED, in the order they were produced: the
+/// `(name, array)` pairs `observed_field` reads back
+/// ([`build_pipeline_fields`]).
+type BuiltFields = Vec<(String, ndarray::ArrayD<f64>)>;
+
 /// The memoised build of one model's tests: the key it was built for, the
 /// ephemeral document (if the key called for one), its index sets, and the
 /// result.
@@ -1899,6 +1911,41 @@ struct BuiltModel {
     ephemeral: Option<EsmFile>,
     index_sets: Option<HashMap<String, IndexSet>>,
     built: Built,
+    /// The `(p, u0)` this problem was built from, kept so the build can be
+    /// REDONE with the build pipeline on if — and only if — nothing else can
+    /// answer the test ([`build_pipeline_fields`]).
+    ///
+    /// `None` when the document ingests `data_sources`: that build asks for
+    /// the pipeline itself, so there is nothing to retry.
+    retry_bindings: Option<RetryBindings>,
+    /// What that retry produced, computed at most ONCE per [`BuildKey`]
+    /// ([`BuiltModel::retry_fields`]).
+    retry_fields: OnceCell<Option<BuiltFields>>,
+}
+
+impl BuiltModel {
+    /// The fields a build with the pipeline on materializes for the tests that
+    /// share this [`BuildKey`] — the LAST-RESORT answer
+    /// ([`build_pipeline_fields`]) — computed on first demand and then reused.
+    ///
+    /// A whole second document build per test is what the reuse is for: the
+    /// retry sits inside the per-test loop, so a document with N tests that
+    /// all reach the dead end would otherwise pay N builds where one answers
+    /// all N. Reuse is sound because every input to the retry is fixed by the
+    /// key: `tspan` and the `(p, u0)` bindings are what the key IS
+    /// ([`BuildKey`]), and `run_file` is this `BuiltModel`'s own `ephemeral`.
+    ///
+    /// A retry that FAILS caches its failure, as `None`. That is not a cached
+    /// success: the caller finds no fields and reports the diagnostic `solve`
+    /// gave THIS test, which is the property issue #432's fix rests on. Nor is
+    /// it retried — a build that fails for the key fails for every test
+    /// sharing it, and a second whole-document build is too expensive to spend
+    /// on learning that again.
+    fn retry_fields(&self, run_file: &EsmFile, tspan: (f64, f64)) -> Option<&BuiltFields> {
+        self.retry_fields
+            .get_or_init(|| build_pipeline_fields(run_file, tspan, self.retry_bindings.as_ref()))
+            .as_ref()
+    }
 }
 
 /// Partition an override map into `(scalars, document-channel values)` — the
@@ -2154,6 +2201,8 @@ fn build_for_test(
                     built: Built::TestError(format!(
                         "per-test discretization injection failed: {e}"
                     )),
+                    retry_bindings: None,
+                    retry_fields: OnceCell::new(),
                 };
             }
         }
@@ -2194,6 +2243,8 @@ fn build_for_test(
                 ephemeral: None,
                 index_sets: None,
                 built: Built::BuildFailed(format!("simulate failed: {e}")),
+                retry_bindings: None,
+                retry_fields: OnceCell::new(),
             };
         }
         ephemeral = Some(owned);
@@ -2208,12 +2259,14 @@ fn build_for_test(
             ephemeral,
             index_sets,
             built: Built::BuildFailed(format!("simulate failed: {e}")),
+            retry_bindings: None,
+            retry_fields: OnceCell::new(),
         };
     }
-    // Kept so the build can be RETRIED with the build pipeline
-    // ([`with_build_pipeline_if_needed`]); two small maps, against a build
-    // either of them feeds. Only when there are no data-source providers —
-    // that branch asks for the pipeline itself, just below.
+    // Kept so the build can be REDONE with the build pipeline
+    // ([`build_pipeline_fields`]); two small maps, against a build either of
+    // them feeds. Only when there are no data-source providers — that branch
+    // asks for the pipeline itself, just below.
     let retry_bindings = build_providers
         .is_none()
         .then(|| (scalar_params.clone(), u0.clone()));
@@ -2247,18 +2300,15 @@ fn build_for_test(
                     ephemeral,
                     index_sets,
                     built: Built::TestError(e),
+                    retry_bindings: None,
+                    retry_fields: OnceCell::new(),
                 };
             }
         }
     }
     let tspan = (t.time_span.start, t.time_span.end);
     let built = match esm_problem(run_file, tspan, popts) {
-        Ok(p) => Built::Problem(Box::new(with_build_pipeline_if_needed(
-            run_file,
-            tspan,
-            retry_bindings,
-            p,
-        ))),
+        Ok(p) => Built::Problem(Box::new(p)),
         Err(e) => Built::BuildFailed(format!("simulate failed: {e}")),
     };
     BuiltModel {
@@ -2266,59 +2316,73 @@ fn build_for_test(
         ephemeral,
         index_sets,
         built,
+        retry_bindings,
+        retry_fields: OnceCell::new(),
     }
 }
 
-/// Build `run_file` again, asking for the BUILD PIPELINE, when the problem
-/// already built has **nothing to integrate** and no scalar observed graph to
-/// evaluate — the ARRAY runtime, which is what a SHAPED state-free document
-/// takes under `Compile::Always`.
+// Whole-document builds `build_pipeline_fields` has started on this thread.
+// What it exists to pin is that the last-resort retry is paid once per
+// `BuildKey` and not once per test (`BuiltModel::retry_fields`).
+//
+// Per THREAD, not per process: the test harness gives each test its own
+// thread, so a test reads only its own builds however many run beside it.
+#[cfg(test)]
+thread_local! {
+    static BUILD_PIPELINE_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Build `run_file` ONE MORE TIME with the BUILD PIPELINE on, and hand back
+/// the fields it materialized — the LAST RESORT for a test nothing else could
+/// answer.
 ///
-/// Such a document's answers are the fields a build materializes, which is how
-/// `esm simulate` answers it (`ProblemOptions::build_pipeline`) and what
-/// `observed_field` reads. Without the build, nothing had them: `solve` handed
-/// a right-hand side over an empty state vector to the integrator and reported
-/// `Exceeded maximum number of nonlinear solver failures (51) at time = 0` —
-/// issue #406's own diagnostic — at every asserted time, and whether or not the
-/// observed was a function of `t`, where Python and Julia both answer.
+/// A SHAPED state-free document takes the ARRAY runtime under
+/// `Compile::Always` and carries no scalar observed graph, so
+/// [`static_trajectory`] cannot serve it; when `solve` then refuses it too —
+/// `Exceeded maximum number of nonlinear solver failures (51) at time = 0`,
+/// issue #406's own diagnostic, on a document `esm simulate` evaluates without
+/// complaint — the fields a build materializes are the only answer left, and
+/// they are the ones `esm simulate` reports (`ProblemOptions::build_pipeline`,
+/// read back through `observed_field`).
 ///
-/// RETRIED rather than requested upfront, because the condition is a property
-/// of the BUILT problem and not of the document. An algebraic SCALAR document
-/// is already answered from its compiled observed graph at each asserted time
-/// ([`static_trajectory`]), and asking for the pipeline on the strength of the
-/// document's shape alone turned two working builds into failures
-/// (`run_inline_tests_scalar_observed_tracks_parameter_overrides` and
-/// `self_qualified_subsystem_reference_and_override_spellings`). Only a
-/// document that has actually reached the dead end pays for a second build.
+/// **Called only after the ordinary paths have failed** (issue #432). These
+/// fields are not interchangeable with what `solve` returns: a build
+/// materializes them ONCE, at `tspan.0`, through a different evaluator from
+/// the one `solve` runs, so handing them back in preference to an answer the
+/// array runtime already produced substitutes a value that is right only for a
+/// quantity which does not move — silently, since nothing in the result says
+/// where it came from — and charges every test a second whole-document build
+/// besides. Answering from these fields is what a runner does when it has
+/// nothing else, never in preference to an answer it already has.
 ///
 /// `Compile::Always` is kept: the compile is what still refuses a construct no
 /// evaluator supports, in the `unsupported_construct` vocabulary esm-spec
-/// §9.6.6 asks for. A rebuild that FAILS changes nothing — the first problem
-/// stands and the assertion reports exactly what it reported before — because
+/// §9.6.6 asks for. A rebuild that fails, or that materializes nothing, hands
+/// back `None` and the caller reports the solve failure it already had —
 /// this is an attempt to answer more, never a new way to fail.
-fn with_build_pipeline_if_needed(
+fn build_pipeline_fields(
     run_file: &EsmFile,
     tspan: (f64, f64),
-    bindings: Option<(HashMap<String, f64>, HashMap<String, f64>)>,
-    built: EsmProblem,
-) -> EsmProblem {
-    let Some((p, u0)) = bindings else {
-        return built;
-    };
-    if !crate::problem::has_nothing_to_integrate(&built)
-        || crate::problem::static_observed_graph(&built).is_some()
-    {
-        return built;
-    }
+    bindings: Option<&RetryBindings>,
+) -> Option<BuiltFields> {
+    let (p, u0) = bindings?;
     let popts = ProblemOptions {
-        p,
-        u0,
+        p: p.clone(),
+        u0: u0.clone(),
         inspect: true,
         compile: crate::problem::Compile::Always,
         build_pipeline: true,
         ..Default::default()
     };
-    esm_problem(run_file, tspan, popts).unwrap_or(built)
+    #[cfg(test)]
+    BUILD_PIPELINE_BUILDS.with(|n| n.set(n.get() + 1));
+    let prob = esm_problem(run_file, tspan, popts).ok()?;
+    let fields: BuiltFields = prob
+        .observed_fields()
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    (!fields.is_empty()).then_some(fields)
 }
 
 /// Run every inline test of one COMPONENT, appending per-assertion results.
@@ -2436,21 +2500,11 @@ fn run_component_tests(
                 // reads back for a §6.6.5 array assertion. Taken BEFORE the
                 // solve so a state-free document — whose `solve` is a legitimate
                 // `NotDynamic` — still answers its assertions.
-                let fields: Vec<(String, ndarray::ArrayD<f64>)> = prob
+                let mut fields: BuiltFields = prob
                     .observed_fields()
                     .iter()
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect();
-                // Whether the build has ANYTHING to answer from. A document
-                // with nothing to integrate is served from these fields below
-                // — but only when they exist. `solve` is what raises an
-                // evaluator FAULT (`E_TREEWALK_RECUR_UNAVAILABLE` for an
-                // unguarded recurrence self-read, `tests/
-                // recurrence_causal_self_reference.rs`), and skipping it on a
-                // document the build could not materialize replaced that fault
-                // with "has no cells in var_map" — a worse diagnostic for a
-                // document that is genuinely broken.
-                let build_has_fields = !fields.is_empty();
                 // Re-arm the state a FRESHLY BUILT problem is in. Construction
                 // leaves `inspection` empty, `solve` fills it only on the array
                 // backend, and `take_inspection` DRAINS it — so without this a
@@ -2475,35 +2529,69 @@ fn run_component_tests(
                     static_evaluation_times(&saveat, t.time_span.start, t.time_span.end);
                 match static_trajectory(prob, &static_times) {
                     Some(result) => result,
-                    // Nothing to integrate, and no compiled observed graph
-                    // to evaluate: the ARRAY runtime, which is what a SHAPED
-                    // state-free document takes under `Compile::Always`.
-                    // `solve` must not be called here — it hands a right-hand
-                    // side over an empty state vector to the integrator and
-                    // reports "Exceeded maximum number of nonlinear solver
-                    // failures (51) at time = 0", the diagnostic issue #406
-                    // was filed about, on a document `esm simulate` evaluates
-                    // without complaint. Answer from the fields the BUILD
-                    // materialized instead (`with_build_pipeline_if_needed`
-                    // asked for that build) — except where that would
-                    // substitute the value at `tspan.0` for a quantity that
-                    // moves, which is refused by name rather than answered.
-                    //
-                    // Only when the build HAS fields. With none there is
-                    // nothing to answer from, and `solve` is the one thing
-                    // that still raises the document's own evaluator fault.
-                    None if crate::problem::has_nothing_to_integrate(prob) && build_has_fields => {
-                        match unevaluable_time_dependent_assertion(run_file, model_name, t) {
-                            Some(message) => Err(message),
-                            None => Ok(build_only_solution(saveat)),
-                        }
-                    }
                     None => match solve(prob, &run_opts) {
                         Ok(sol) => Ok(sol),
                         // A document with no ODEs never integrates; its answers
                         // are the build's, evaluated at the asserted times.
                         Err(crate::simulate::SimulateError::NotDynamic { .. }) => {
-                            Ok(build_only_solution(saveat))
+                            Ok(build_only_solution(saveat.clone()))
+                        }
+                        // Nothing to integrate, and no compiled observed graph
+                        // to evaluate: the ARRAY runtime, which is what a
+                        // SHAPED state-free document takes under
+                        // `Compile::Always`. What `solve` just reported is
+                        // "Exceeded maximum number of nonlinear solver failures
+                        // (51) at time = 0" — it handed a right-hand side over
+                        // an empty state vector to the integrator — which is
+                        // the diagnostic issue #406 was filed about, on a
+                        // document `esm simulate` evaluates without complaint.
+                        // Answer from the fields a BUILD materializes instead,
+                        // except where that would substitute the value at
+                        // `tspan.0` for a quantity that moves, which is refused
+                        // by name rather than answered.
+                        //
+                        // LAST RESORT, and only here (issue #432): a retry is
+                        // what a runner does when it has NO answer, never in
+                        // preference to one it already has. Ahead of `solve`
+                        // this arm substitutes a second build's fields for the
+                        // array runtime's answers — a `min` reduction reads
+                        // back its identity element, a tendency moves — and
+                        // charges every test a whole extra build for the
+                        // substitution.
+                        Err(e) if crate::problem::has_nothing_to_integrate(prob) => {
+                            // Whatever the refused solve latched is not an
+                            // answer; the fields below are. Without this reset
+                            // a half-filled `setup_arrays` would shadow them,
+                            // because the merge below is `or_insert`.
+                            prob.reset_inspection();
+                            // The fields this build already carries (a
+                            // data-ingesting document), else the ones a build
+                            // with the pipeline on can materialize. At most
+                            // ONE such build per `BuildKey`, however many of
+                            // its tests reach here
+                            // (`BuiltModel::retry_fields`).
+                            if fields.is_empty()
+                                && let Some(f) = cached
+                                    .retry_fields(run_file, (t.time_span.start, t.time_span.end))
+                            {
+                                fields = f.clone();
+                            }
+                            // With no fields there is nothing to answer from,
+                            // and `solve`'s own diagnostic is the honest one:
+                            // it is what raises an evaluator FAULT
+                            // (`E_TREEWALK_RECUR_UNAVAILABLE` for an unguarded
+                            // recurrence self-read, `tests/
+                            // recurrence_causal_self_reference.rs`) for a
+                            // document that is genuinely broken.
+                            if fields.is_empty() {
+                                Err(format!("simulate failed: {e}"))
+                            } else {
+                                match unevaluable_time_dependent_assertion(run_file, model_name, t)
+                                {
+                                    Some(message) => Err(message),
+                                    None => Ok(build_only_solution(saveat)),
+                                }
+                            }
                         }
                         Err(e) => Err(format!("simulate failed: {e}")),
                     },
@@ -4834,5 +4922,84 @@ mod tests {
         let results = run_inline_tests(&file, None, &tight_opts());
         assert!(!results.is_empty());
         assert!(results.iter().all(|r| r.file.is_empty()), "{results:?}");
+    }
+
+    /// The LAST-RESORT retry is paid ONCE PER [`BuildKey`], not once per test.
+    ///
+    /// A SHAPED state-free document reaches the dead end this branch answers:
+    /// `static_trajectory` cannot serve it (the array runtime carries no
+    /// scalar observed graph), `solve` refuses it, and the only answer left is
+    /// a second whole-document build with the pipeline on. That retry lives
+    /// inside the per-test loop, so without the memo on `BuiltModel` a
+    /// document with N such tests would pay N whole-document builds for one
+    /// set of fields that answers all N.
+    ///
+    /// The three tests below share a `BuildKey` — no imports, one span, no
+    /// overrides — and the fourth differs only in its span, which the key
+    /// covers. Two builds, not four, and not one: a key that changed must
+    /// still rebuild, because the fields are materialized at `tspan.0`.
+    #[test]
+    fn the_last_resort_retry_is_built_once_per_build_key() {
+        let test = |id: &str, end: f64| {
+            json!({
+                "id": id,
+                "time_span": {"start": 0.0, "end": end},
+                "tolerance": {"rel": 1e-9, "abs": 1e-11},
+                "assertions": [
+                    {"variable": "g", "time": 0.0, "coords": {"x": 2},
+                     "expected": 4.0},
+                    // Away from `tspan.0`, so the solve this document cannot
+                    // survive is actually attempted: over an empty state
+                    // vector a span the integrator never has to step across
+                    // succeeds trivially, and the dead end is never reached.
+                    {"variable": "g", "time": end / 2.0, "coords": {"x": 2},
+                     "expected": 4.0},
+                ],
+            })
+        };
+        let doc = json!({
+            "esm": "1.1.0",
+            "metadata": {"name": "ShapedStatic", "license": "MIT",
+                         "description": "state-free, shaped, time-invariant"},
+            "index_sets": {"x": {"kind": "interval", "size": 3}},
+            "models": {"ShapedStatic": {
+                "variables": {
+                    "a": {"type": "parameter", "units": "1", "default": 2.0},
+                    "g": {"type": "unknown", "units": "1", "shape": ["x"]},
+                },
+                "equations": [
+                    {"lhs": "g",
+                     "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                             "ranges": {"i": {"from": "x"}},
+                             "expr": {"op": "*", "args": ["a", "i"]}}},
+                ],
+                "tests": [
+                    test("one", 10.0),
+                    test("two", 10.0),
+                    test("three", 10.0),
+                    test("another_span", 20.0),
+                ],
+            }},
+        });
+        let file = load_string(&doc.to_string()).expect("document loads");
+        let before = BUILD_PIPELINE_BUILDS.with(std::cell::Cell::get);
+        let results = run_inline_tests(&file, None, &SolveOptions::default());
+        let builds = BUILD_PIPELINE_BUILDS.with(std::cell::Cell::get) - before;
+        // Non-vacuity: every test must actually have reached the dead end and
+        // been answered from the retry's fields. A document answered some
+        // other way would report zero builds and pass the count trivially.
+        assert_eq!(results.len(), 8, "{results:?}");
+        for r in &results {
+            assert!(
+                r.passed,
+                "{}: {} (actual {:?})",
+                r.test_id, r.message, r.actual
+            );
+        }
+        assert_eq!(
+            builds, 2,
+            "four tests over two `BuildKey`s must pay two whole-document \
+             builds: one per key, reused by the tests sharing it"
+        );
     }
 }
