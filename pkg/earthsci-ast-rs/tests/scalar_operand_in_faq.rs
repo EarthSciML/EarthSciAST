@@ -12,8 +12,8 @@
 //! one-element field still reports the right number when it is read directly,
 //! so the scalar looked correct and every aggregate over it was NaN.
 //!
-//! Two properties are pinned, and both are measured against arithmetic done
-//! here in plain Rust rather than against recorded numbers:
+//! Three properties are pinned. The first two are measured against arithmetic
+//! done here in plain Rust rather than against recorded numbers:
 //!
 //! 1. **A scalar is readable inside a `faq`, however it is spelled.** The same
 //!    document is built four ways — the scalar produced by a fully contracted
@@ -28,6 +28,12 @@
 //!    one element even though its value is a single number. Those two are the
 //!    same number and different shapes, which is exactly the distinction the
 //!    defect erased.
+//! 3. **A subscript on the rank-0 field is REFUSED by name.** Rank 0 is the
+//!    right rank, and it makes `index(base, 1)` a subscript on something with
+//!    no axes. That spelling resolved while the field was `[1]`, so the fix
+//!    moves it — and it must move to a named fault, not to the evaluator's
+//!    NaN sentinel, which every `max`/`ifelse`/comparison downstream launders
+//!    into a plausible number.
 
 #![cfg(not(target_arch = "wasm32"))]
 
@@ -104,6 +110,18 @@ fn unshaped_const(value: f64) -> (Value, Option<Value>) {
     )
 }
 
+/// `base` declared over a 1-long axis but DEFINED by a plain number. The
+/// declaration keeps the axis, so the field is `[1]` — the one case the
+/// non-scalar arm of the rank decision actually decides, and the one where
+/// `[1]` is also the declared extent.
+fn shaped_const(value: f64) -> (Value, Option<Value>) {
+    (
+        json!({"type": "unknown", "units": "1", "shape": ["one"],
+               "description": "A scalar body on a 1-long axis."}),
+        Some(json!({"lhs": "base", "rhs": {"op": "const", "args": [], "value": value}})),
+    )
+}
+
 /// `base` declared over a 1-long axis: a rank-1 field of one element, read
 /// through a subscript. This spelling was never broken.
 fn axis_of_one() -> (Value, Option<Value>) {
@@ -134,6 +152,22 @@ fn field(doc: &Value, name: &str) -> Vec<f64> {
         .unwrap_or_else(|e| panic!("esm_problem: {e}"));
     let a = observed_field(&prob, name).unwrap_or_else(|e| panic!("observed_field({name}): {e}"));
     a.iter().copied().collect()
+}
+
+/// Build `doc` and read one field back, keeping whichever error came first.
+/// Construction and the read are two chances to refuse, and a fail-closed
+/// diagnostic may surface at either.
+fn build_error(doc: &Value, name: &str) -> String {
+    match esm_problem(ProblemInput::Json(doc), (0.0, 0.0), opts()) {
+        Err(e) => e.to_string(),
+        Ok(prob) => match observed_field(&prob, name) {
+            Err(e) => e.to_string(),
+            Ok(a) => panic!(
+                "expected a refusal, got {name} = {:?}",
+                a.iter().collect::<Vec<_>>()
+            ),
+        },
+    }
 }
 
 /// The rank a field comes back with.
@@ -167,7 +201,15 @@ fn every_spelling_of_a_scalar_reads_inside_a_faq() {
         ),
         (
             "a const scalar, read by bare name",
-            document(const_decl, const_eq, json!("base")),
+            document(const_decl.clone(), const_eq.clone(), json!("base")),
+        ),
+        (
+            "a const scalar, read as index(base) with no subscript",
+            document(
+                const_decl,
+                const_eq,
+                json!({"op": "index", "args": ["base"]}),
+            ),
         ),
         (
             "a 1-long axis, read as index(base, 1)",
@@ -230,4 +272,62 @@ fn a_fields_rank_is_its_declarations_not_its_values() {
 
     // And a shaped variable is untouched by the rank decision.
     assert_eq!(field_shape(&unshaped, "s"), vec![N]);
+
+    // The other arm: a DECLARED SHAPE keeps its axis even when the body is a
+    // plain number, which is the only thing the non-scalar arm decides. A
+    // 1-long axis is the case where `[1]` is also the declared extent, so this
+    // pins the arm without pinning the broadcast gap (issue #219) alongside it.
+    let (const_axis_decl, const_axis_eq) = shaped_const(7.0);
+    let shaped_const_doc = document(
+        const_axis_decl,
+        const_axis_eq,
+        json!({"op": "index", "args": ["base", 1]}),
+    );
+    assert_eq!(
+        field_shape(&shaped_const_doc, "base"),
+        vec![1],
+        "a scalar body under a declared 1-long axis keeps that axis"
+    );
+    assert_eq!(field(&shaped_const_doc, "base"), vec![7.0]);
+}
+
+/// A SUBSCRIPT on an unshaped scalar is refused by name, not answered with a
+/// number.
+///
+/// Making an unshaped variable rank-0 makes `index(base, 1)` — which resolved
+/// while the field was rank-1 `[1]` — a subscript on a value with no axes.
+/// The evaluator returned a bare NaN for that, so the document that used to
+/// print a number printed `NaN` instead, and `esm validate` still accepted it.
+/// A NaN is the worst outcome available here: `max(x, 0)`, `ifelse` and every
+/// comparison launder one into a plausible number, so the wrong answer travels
+/// with nothing attached saying it is wrong. The fault is latched on the same
+/// channel as the other fail-closed gathers and names the offending base.
+#[test]
+fn a_subscript_on_an_unshaped_scalar_is_a_named_fault() {
+    let (const_decl, const_eq) = unshaped_const(3.0);
+    let subscripted = document(
+        const_decl,
+        const_eq,
+        json!({"op": "index", "args": ["base", 1]}),
+    );
+    let msg = build_error(&subscripted, "s");
+    assert!(
+        msg.contains("E_TREEWALK_INDEX_ON_SCALAR"),
+        "the refusal must carry the code, so a reader can look it up: {msg}"
+    );
+    assert!(
+        msg.contains("base"),
+        "the refusal must name what was subscripted: {msg}"
+    );
+    // The identity spelling is NOT this condition: `index(base)` with no
+    // subscript still reads the scalar. Without this, a check that refused
+    // every `index` on a 0-D value would pass the assertions above and break
+    // the spelling issue #431 exists to support.
+    let (const_decl, const_eq) = unshaped_const(3.0);
+    let identity = document(
+        const_decl,
+        const_eq,
+        json!({"op": "index", "args": ["base"]}),
+    );
+    assert_eq!(field(&identity, "s"), vec![4.0, 5.0, 6.0, 7.0]);
 }
