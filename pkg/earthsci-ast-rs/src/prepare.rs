@@ -754,43 +754,68 @@ fn producer_seed_closure(
 /// The rank a build-time field takes when its body evaluates to a plain
 /// number, decided by the DECLARATION rather than by the value (issue #431).
 ///
-/// An unshaped `unknown`/`observed` is a 0-D quantity, and a build-time field
-/// is the only place its rank is chosen. Materializing it as `[1]` — which is
-/// what every scalar body did — handed a rank-1 array to every later reader of
-/// the name. Those readers are rank-sensitive: `simulate_array`'s
+/// An unshaped `unknown`/`observed` is a 0-D quantity, and materializing its
+/// value is the only place its rank is chosen. Materializing it as `[1]` —
+/// which is what every scalar body did — handed a rank-1 array to every later
+/// reader of the name. Those readers are rank-sensitive: `simulate_array`'s
 /// `lookup_variable` returns a `Value::Scalar` for a 0-D entry and a
 /// `Value::Array` for anything else, so a bare `base` inside a `faq` body
-/// resolved to an ARRAY where the body wanted a number, and `base + k`
-/// collapsed to the evaluator's NaN sentinel — silently, since a rank-1 field
-/// of one element still reports the right number when it is OBSERVED directly.
+/// resolved to an ARRAY where the body wanted a number. `base + k` then
+/// broadcast to a one-element ARRAY, which is not what a `faq` writes into an
+/// output cell: the cell takes `eval(body).as_scalar().unwrap_or(NAN)`, and
+/// `as_scalar` answers only for rank 0. So the cell got the evaluator's NaN
+/// sentinel — silently, since a rank-1 field of one element still reports the
+/// right number when it is OBSERVED directly.
 ///
-/// [`DeclaredRank::Unknown`] is the pre-existing `[1]`, kept for a name the
-/// model does not declare as a variable (a build-time coordinate invented by
-/// the relational layer, say) so nothing outside the defect's reach moves.
+/// [`DeclaredRank::Unknown`] keeps `[1]`. The case it actually decides is a
+/// variable declared WITH a shape whose body still evaluates to a plain
+/// number; that ought to broadcast to the declared extents (issue #219's
+/// family) and is deliberately left where it was. Its other arm — a name the
+/// declaration table does not hold at all — is unreachable from every call
+/// site. The two here walk `self.order`, which is the key set of
+/// `observed_defs`, and `classification::observed_definitions` admits only
+/// names the model declares as `unknown` variables;
+/// `problem::static_observed_fields` looks names up in the very map
+/// (`FlattenedSystem::observed_variables`) whose keys those names came from.
+/// That arm is a conservative default, not a decision this makes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DeclaredRank {
+pub(crate) enum DeclaredRank {
     /// The model declares this name with no `shape`: it is 0-D.
     Scalar,
-    /// Not a declared model variable, or declared with a `shape`.
+    /// Declared WITH a `shape` — or, unreachably from either caller, a name
+    /// no declaration table holds.
     Unknown,
 }
 
 impl DeclaredRank {
     /// The shape a scalar body materializes into under this rank.
-    fn scalar_shape(self) -> &'static [usize] {
+    pub(crate) fn scalar_shape(self) -> &'static [usize] {
         match self {
             DeclaredRank::Scalar => &[],
             DeclaredRank::Unknown => &[1],
         }
     }
 
-    /// Read the rank off the model: declared, and with no (or an empty)
+    /// Read the rank off a DECLARATION: present, and with no (or an empty)
     /// `shape`, is the 0-D case.
-    fn of(model: &Model, name: &str) -> Self {
-        match model.variables.get(name) {
+    ///
+    /// Takes the declaration rather than a model so the rule has ONE
+    /// implementation across the two places that materialize a scalar body:
+    /// this pipeline, which looks the name up in [`Model::variables`], and
+    /// `problem::static_observed_fields`, which has only a flattened system
+    /// and looks it up in `FlattenedSystem::observed_variables`. Two copies
+    /// would let the same document come back rank-0 down one path and rank-1
+    /// down the other.
+    pub(crate) fn of_declaration(decl: Option<&crate::types::ModelVariable>) -> Self {
+        match decl {
             Some(v) if v.shape.as_ref().is_none_or(|s| s.is_empty()) => DeclaredRank::Scalar,
             _ => DeclaredRank::Unknown,
         }
+    }
+
+    /// Read the rank off the model.
+    fn of(model: &Model, name: &str) -> Self {
+        Self::of_declaration(model.variables.get(name))
     }
 }
 
