@@ -40,6 +40,7 @@ use std::rc::Rc;
 use ndarray::ArrayD;
 use serde_json::Value as JsonValue;
 
+use crate::classification::DeclaredRank;
 use crate::flatten::FlattenedSystem;
 use crate::precision::{self, Precision};
 #[cfg_attr(not(feature = "solve"), allow(unused_imports))]
@@ -1658,7 +1659,7 @@ pub(crate) fn has_nothing_to_integrate(prob: &EsmProblem) -> bool {
 /// `BuildInspection.observed_exprs` and Python's `static_observed_values`.
 ///
 /// **The rank comes from the DECLARATION**, through the same
-/// [`crate::prepare::DeclaredRank`] the build pipeline uses (API_SPEC
+/// [`crate::classification::DeclaredRank`] the build pipeline uses (API_SPEC
 /// `observed_trajectories`: "A field is the shape the document declares").
 /// This path and the pipeline serve the SAME documents — this one runs exactly
 /// when the pipeline produced no fields — so deciding the rank differently
@@ -1707,8 +1708,7 @@ fn static_observed_fields(
         .into_iter()
         .map(|(name, v)| {
             let shape =
-                crate::prepare::DeclaredRank::of_declaration(flat.observed_variables.get(&name))
-                    .scalar_shape();
+                DeclaredRank::of_declaration(flat.observed_variables.get(&name)).scalar_shape();
             let arr = ArrayD::from_shape_vec(ndarray::IxDyn(shape), vec![v])
                 .expect("`scalar_shape` is `[]` or `[1]`, and both hold exactly one element");
             (name, arr)
