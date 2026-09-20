@@ -6044,6 +6044,22 @@ as the one-element vector `observed_field` has always returned. Pinned by
 `tests/valid/faq/min_reduction_static_shaped_document.esm`, whose `min` search
 must answer the level it found and whose `+` companion must answer a count.
 
+That fixture is a `tests/valid/` corpus document, so every binding parses,
+validates and round-trips it — but only a binding that RUNS it checks the two
+numbers the defect got wrong, and parsing a document that answers `inf` is
+indistinguishable from parsing one that answers `3`. It is therefore listed in
+this category's manifest as `min_reduction_static_shaped_document`, referenced
+in place at `../../valid/faq/…` rather than copied under `fixtures/` so that
+the corpus document and the gated one cannot drift apart (the same in-place
+reference `pde_simulation_pipeline` uses for its two `tests/valid/`
+documents). The entry brings the third executing binding onto the fixture:
+before it, Rust gated these values in
+`static_evaluation_assertions_conformance.rs` and Python through the
+`tests/valid/faq/*.esm` sweep in `test_faq_conformance.py`, and no Julia test
+read the fixture at all — `faq_conformance_test.jl` is a hardcoded roster with
+no directory sweep. All seven actuals are finite by construction, which is the
+whole of what issue #432 was about.
+
 #### 5.43.9 Gate
 
 `tests/conformance/static_evaluation_assertions/` holds the shared fixtures and
@@ -6054,7 +6070,10 @@ against them: **Julia** —
 `pkg/earthsci-ast-py/tests/test_static_evaluation_assertions_conformance.py`;
 **Rust** —
 `pkg/earthsci-ast-rs/tests/static_evaluation_assertions_conformance.rs`.
-`bindings_required` is `["julia", "python", "rust"]`.
+`bindings_required` is `["julia", "python", "rust"]`. Go and TypeScript are
+`scope_excluded`: neither ships an integrator or an inline-test runner, so
+neither has an execution path that could read an assertion's `time` or evaluate
+a reduction, and adding a fixture to this manifest obligates only the three.
 
 ## 6. CI Integration
 
