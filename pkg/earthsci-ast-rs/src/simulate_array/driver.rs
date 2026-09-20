@@ -989,6 +989,21 @@ impl ArrayCompiled {
         // its fallback indices resolve against. `None` ⇒ legacy interpreter.
         tape: Option<&(Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>)>,
     ) -> Result<(Vec<f64>, Vec<Vec<f64>>, SolveStats, ReturnCode), SimulateError> {
+        // A segment that never advances is answered from its own initial state,
+        // before any closure, scratch buffer or diffsol problem is built
+        // (issue #438). Building the solver is not free: an implicit method
+        // materializes a dense Jacobian on construction, and the Jacobian below
+        // is matrix-free finite differences, so that costs `2·n_states + 1`
+        // full right-hand-side evaluations — each one materializing every
+        // varying observed, recurrence sweeps included — for a trajectory that
+        // is the untouched initial state. [`crate::simulate::run_solver`] keeps
+        // the same check as a backstop and produces the identical trajectory,
+        // so this is a cost-only shortcut.
+        if let Some((time, state, retcode)) =
+            crate::simulate::driver::nonadvancing_trajectory(t0, t_end, u0, opts)
+        {
+            return Ok((time, state, SolveStats::default(), retcode));
+        }
         let n_states = self.n_states;
         let rhs_rules = self.rhs_rules.clone();
         let var_shapes = self.var_shapes.clone();

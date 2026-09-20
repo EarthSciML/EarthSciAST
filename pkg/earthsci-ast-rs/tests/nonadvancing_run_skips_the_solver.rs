@@ -1,0 +1,260 @@
+//! Issue #438: a run that never advances must not build a solver.
+//!
+//! The document under test is the issue's minimal reproducer — a §4.3.1.1
+//! causal self-reference (`rad[g,l]` reading `rad[g,l-1]`, the shape every
+//! two-stream radiative sweep has) over a column `x` — in two arms that differ
+//! in ONE equation:
+//!
+//! * `x` is an algebraic observed, so the document has no ODE state at all;
+//! * `x` is a FROZEN ODE state (`D(x) = 0`, `ic(x) =` the same `faq`), so the
+//!   document has one state per level and the recurrence sits downstream of it.
+//!
+//! The two compute the same number, bit for bit. What differed was the cost:
+//! the state arm was quadratic in the column length where the observed arm was
+//! linear, and quadratic by a factor of 300 at 412 levels.
+//!
+//! The cause is not in the recurrence, which sweeps once either way. It is that
+//! BOTH arms are asked for an EMPTY time span (esm-spec §6.6.2's
+//! instantaneous-derivative shape, `{start: 0, end: 0}`) — and the state arm
+//! nonetheless built a diffsol solver for it. An implicit method materializes a
+//! dense Jacobian on construction, this crate's Jacobian is matrix-free finite
+//! differences, and so diffsol paid one closure call per state column with each
+//! call evaluating the whole right-hand side twice: `2·n_states + 1` full RHS
+//! evaluations, every observed re-materialized in each, to produce a trajectory
+//! that is the untouched initial state. With the state count and the
+//! per-evaluation cost both growing with the column, that is the quadratic.
+//!
+//! These tests pin the shape of the cost, not only the answer.
+
+#![cfg(not(target_arch = "wasm32"))]
+
+use earthsci_ast::{Compile, ProblemOptions, SolveOptions, esm_problem, load_string, solve};
+use std::time::Instant;
+
+/// The issue's reproducer at `nl` levels and `ng` independent columns.
+///
+/// `state_leaf` picks the arm: `false` writes `x` as an algebraic observed,
+/// `true` writes the identical values as a frozen ODE state. Nothing else
+/// differs, so any difference in cost between the two belongs to the state.
+fn doc(nl: usize, ng: usize, state_leaf: bool) -> String {
+    // `x` — one equation, or the two that make the same column a state.
+    let x_equations = if state_leaf {
+        r#"{"lhs": {"op": "D", "args": ["x"], "wrt": "t"}, "rhs": 0.0},
+           {"lhs": {"op": "ic", "args": ["x"]}, "rhs": {"op": "faq", "output_idx": ["k"], "args": [],
+             "ranges": {"k": {"from": "lev"}},
+             "expr": {"op": "+", "args": [200.0, {"op": "/", "args": ["k", 100.0]}]}}},"#
+    } else {
+        r#"{"lhs": "x", "rhs": {"op": "faq", "output_idx": ["k"], "args": [],
+             "ranges": {"k": {"from": "lev"}},
+             "expr": {"op": "+", "args": [200.0, {"op": "/", "args": ["k", 100.0]}]}}},"#
+    };
+    format!(
+        r#"{{
+ "esm": "1.1.0",
+ "metadata": {{"name": "StateLeaf", "license": "MIT",
+  "description": "Self-referential faq recurrence over a column that is either an observed or a state."}},
+ "metaparameters": {{
+  "NL": {{"type": "integer", "default": {nl}, "description": "Recurrence length."}},
+  "NG": {{"type": "integer", "default": {ng}, "description": "Independent columns (g-points)."}}
+ }},
+ "index_sets": {{
+  "lev": {{"kind": "interval", "size": "NL"}},
+  "gpt": {{"kind": "interval", "size": "NG"}}
+ }},
+ "models": {{
+  "M": {{
+   "variables": {{
+    "x":     {{"type": "unknown", "units": "1", "shape": ["lev"], "description": "The column the recurrence depends on."}},
+    "tau":   {{"type": "unknown", "units": "1", "shape": ["gpt", "lev"], "description": "Per-column optical depth built from x."}},
+    "rad":   {{"type": "unknown", "units": "1", "shape": ["gpt", "lev"], "description": "The sweep: rad[g,l] depends on rad[g,l-1]."}},
+    "out":   {{"type": "unknown", "units": "1", "shape": ["lev"], "description": "Sum of the sweep over g."}},
+    "total": {{"type": "unknown", "units": "1", "description": "The single asserted number."}}
+   }},
+   "equations": [
+    {x_equations}
+    {{"lhs": "tau", "rhs": {{"op": "faq", "output_idx": ["g", "l"], "args": [], "ranges": {{"g": {{"from": "gpt"}}, "l": {{"from": "lev"}}}},
+      "expr": {{"op": "*", "args": [{{"op": "/", "args": [{{"op": "index", "args": ["x", "l"]}}, 20000.0]}},
+                                   {{"op": "+", "args": [1.0, {{"op": "/", "args": ["g", 1000.0]}}]}}]}}}}}},
+    {{"lhs": "rad", "rhs": {{"op": "faq", "output_idx": ["g", "l"], "args": [], "ranges": {{"g": {{"from": "gpt"}}, "l": {{"from": "lev"}}}},
+      "expr": {{"op": "ifelse", "args": [
+        {{"op": "==", "args": ["l", 1]}},
+        1.0,
+        {{"op": "+", "args": [
+          {{"op": "*", "args": [{{"op": "index", "args": ["rad", "g", {{"op": "-", "args": ["l", 1]}}]}},
+                               {{"op": "exp", "args": [{{"op": "*", "args": [-1.0, {{"op": "index", "args": ["tau", "g", "l"]}}]}}]}}]}},
+          {{"op": "index", "args": ["tau", "g", "l"]}}]}}]}}}}}},
+    {{"lhs": "out", "rhs": {{"op": "faq", "output_idx": ["l"], "args": [], "ranges": {{"l": {{"from": "lev"}}, "g": {{"from": "gpt"}}}},
+      "reduce": "+", "expr": {{"op": "index", "args": ["rad", "g", "l"]}}}}}},
+    {{"lhs": "total", "rhs": {{"op": "faq", "output_idx": [], "args": [], "ranges": {{"l": {{"from": "lev"}}}},
+      "reduce": "+", "expr": {{"op": "index", "args": ["out", "l"]}}}}}}
+   ]
+  }}
+ }}
+}}"#
+    )
+}
+
+/// Solve one arm over the EMPTY span `[0, 0]`, asking for `total`.
+fn run_empty_span(json: &str) -> earthsci_ast::Solution {
+    run_span(json, (0.0, 0.0), None)
+}
+
+/// Solve one arm over `tspan`, asking for `total` at `saveat` (the runner's own
+/// grid when `None`).
+fn run_span(json: &str, tspan: (f64, f64), saveat: Option<Vec<f64>>) -> earthsci_ast::Solution {
+    let file = load_string(json).expect("the reproducer loads");
+    let prob = esm_problem(
+        &file,
+        tspan,
+        ProblemOptions {
+            compile: Compile::Always,
+            ..Default::default()
+        },
+    )
+    .expect("the reproducer builds");
+    let opts = SolveOptions {
+        output_observed: vec!["total".to_string()],
+        saveat,
+        ..Default::default()
+    };
+    solve(&prob, &opts).expect("the reproducer solves")
+}
+
+/// The one value the document computes, read off whichever row carries it (a
+/// single-model document may or may not qualify the name).
+fn total(sol: &earthsci_ast::Solution) -> f64 {
+    let i = sol
+        .state_variable_names
+        .iter()
+        .position(|n| n == "total" || n.ends_with(".total"))
+        .unwrap_or_else(|| panic!("no `total` row; rows are {:?}", sol.state_variable_names));
+    *sol.state[i].last().expect("the row has a value")
+}
+
+/// Semantics first: skipping the solver must not move the answer. Both arms
+/// produce the issue's number, and produce it BIT-IDENTICALLY to each other —
+/// the recurrence is evaluated by the same sweep whether or not its leaf is a
+/// state, and an empty span integrates nothing in either arm.
+#[test]
+fn both_arms_agree_bit_for_bit_on_an_empty_span() {
+    let observed = total(&run_empty_span(&doc(103, 140, false)));
+    let state = total(&run_empty_span(&doc(103, 140, true)));
+    assert_eq!(
+        observed.to_bits(),
+        state.to_bits(),
+        "the observed arm gave {observed:?} and the state arm {state:?}"
+    );
+    assert_eq!(
+        observed, 14450.338994229463,
+        "the reproducer's documented value moved"
+    );
+}
+
+/// The mechanism, asserted directly and machine-independently: over an empty
+/// span the state arm must reach diffsol not at all, so the solver's own
+/// right-hand-side and Jacobian counters stay at zero however many states the
+/// document has. Before the fix this document reported a Jacobian build and the
+/// RHS evaluations that constructing one costs.
+#[test]
+fn an_empty_span_evaluates_no_right_hand_side_at_all() {
+    let sol = run_empty_span(&doc(103, 140, true));
+    assert!(
+        sol.retcode.is_success(),
+        "an empty span is a successful run, got {:?}",
+        sol.retcode
+    );
+    assert_eq!(
+        (sol.metadata.n_rhs_calls, sol.metadata.n_jacobian_calls),
+        (0, 0),
+        "an empty span built a solver: {} RHS and {} Jacobian evaluations",
+        sol.metadata.n_rhs_calls,
+        sol.metadata.n_jacobian_calls
+    );
+    // Same document, same span, no states: the baseline the state arm has to
+    // match. It never built a solver either, and that is the whole point.
+    let free = run_empty_span(&doc(103, 140, false));
+    assert_eq!(
+        (free.metadata.n_rhs_calls, free.metadata.n_jacobian_calls),
+        (0, 0)
+    );
+}
+
+/// The complexity, pinned the way `cumulative_prefix_scan.rs` pins the prefix
+/// scan's: counting evaluations is not observable from outside, so assert that
+/// multiplying the column length by 8 does not multiply the work by anything
+/// like 64. A wall-clock ceiling is deliberately loose — it must fail only on a
+/// genuine return to the per-state Jacobian, never on a contended machine.
+///
+/// The document build is OUTSIDE the timer, so what is timed is the solve: the
+/// recurrence sweep, whose cost is `NG · NL`, plus whatever the run does around
+/// it. Linear in `NL` is ~8x; the `2·n_states + 1` Jacobian arm is ~64x.
+#[test]
+fn state_leaf_recurrence_stays_linear_in_the_column_length() {
+    const NG: usize = 40;
+
+    let timed = |nl: usize| -> f64 {
+        let json = doc(nl, NG, true);
+        let _ = run_empty_span(&json); // warm caches, then best of three
+        (0..3)
+            .map(|_| {
+                let t0 = Instant::now();
+                let _ = run_empty_span(&json);
+                t0.elapsed().as_secs_f64()
+            })
+            .fold(f64::INFINITY, f64::min)
+    };
+
+    let small = timed(100);
+    let large = timed(800);
+    let ratio = large / small.max(1e-9);
+    assert!(
+        ratio < 24.0,
+        "the state-leaf recurrence looks quadratic: NL=100 took {small:.6}s, \
+         NL=800 took {large:.6}s (ratio {ratio:.1}x for an 8x increase in NL). \
+         A single sweep should be near 8x; a Jacobian built one column per \
+         state would be near 64x."
+    );
+}
+
+/// The second shape the same check covers: a NON-empty span whose whole output
+/// grid sits at `t0`. That is what an inline test asks for when the document
+/// declares `{start: 0, end: 1}` and every assertion is at the initial instant
+/// — the runner's `saveat` is then `[0.0]` — and the solver loop already
+/// answered it by draining that grid point from the initial state and breaking
+/// before its first step. It never had to be built to do that.
+#[test]
+fn an_output_grid_that_never_leaves_the_start_builds_no_solver_either() {
+    let sol = run_span(&doc(103, 140, true), (0.0, 1.0), Some(vec![0.0]));
+    assert_eq!(sol.time, vec![0.0], "the grid the caller asked for");
+    assert_eq!(
+        (sol.metadata.n_rhs_calls, sol.metadata.n_jacobian_calls),
+        (0, 0),
+        "a grid that asks for nothing past t0 built a solver: {} RHS and {} \
+         Jacobian evaluations",
+        sol.metadata.n_rhs_calls,
+        sol.metadata.n_jacobian_calls
+    );
+    assert_eq!(
+        total(&sol),
+        14450.338994229463,
+        "the answer at t0 is the answer at t0 whatever the span says"
+    );
+}
+
+/// The complementary guard: a span the run really does have to cross must
+/// still be integrated. The same document over `[0, 1]` with no grid steps,
+/// evaluates its right-hand side, and returns more than the initial point —
+/// so the check above can only be reached by a run that never advances.
+#[test]
+fn a_span_that_must_be_crossed_is_still_integrated() {
+    let sol = run_span(&doc(8, 4, true), (0.0, 1.0), None);
+    assert!(
+        sol.time.len() > 1 && sol.time.last() == Some(&1.0),
+        "the run must reach t = 1, got {:?}",
+        sol.time
+    );
+    assert!(
+        sol.metadata.n_rhs_calls > 0,
+        "an integrated span must evaluate the right-hand side"
+    );
+}

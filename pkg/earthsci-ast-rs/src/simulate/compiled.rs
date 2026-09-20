@@ -598,6 +598,19 @@ impl Compiled {
         ic_vec: &[f64],
         opts: &SolveOptions,
     ) -> IntegrateResult {
+        // A run that never advances is answered from the initial state, before
+        // any of the machinery below exists (issue #438). Building the solver
+        // is not free: an implicit method materializes a dense Jacobian on
+        // construction, and this crate's Jacobian is matrix-free finite
+        // differences, so that costs `2·n_states + 1` full right-hand-side
+        // evaluations — for a trajectory that is the untouched initial state.
+        // [`run_solver`] keeps the same check as a backstop, and produces the
+        // identical trajectory, so this is a cost-only shortcut.
+        if let Some((time, state, retcode)) =
+            crate::simulate::driver::nonadvancing_trajectory(t0, t_end, ic_vec, opts)
+        {
+            return Ok((time, state, SolveStats::default(), retcode));
+        }
         let n_states = self.state_names.len();
         let rhs_closure = self.make_rhs_closure();
         let jac_closure = self.make_jac_closure();

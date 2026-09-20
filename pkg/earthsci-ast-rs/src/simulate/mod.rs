@@ -61,7 +61,7 @@ use diffsol::{
 mod api;
 mod build_phases;
 mod compiled;
-mod driver;
+pub(crate) mod driver;
 mod errors;
 mod interpret;
 mod lhs;
