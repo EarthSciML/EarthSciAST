@@ -1,0 +1,49 @@
+{
+    "fixture": "min_reduction_static_shaped_document",
+    "assertions": [
+        {
+            "test_id": "a_level_qualifies",
+            "assertion_idx": 1,
+            "variable": "kstar",
+            "actual": 3.0
+        },
+        {
+            "test_id": "a_level_qualifies",
+            "assertion_idx": 2,
+            "variable": "n_above",
+            "actual": 2.0
+        },
+        {
+            "test_id": "a_level_qualifies",
+            "assertion_idx": 3,
+            "variable": "above",
+            "actual": 1.0
+        },
+        {
+            "test_id": "a_level_qualifies",
+            "assertion_idx": 4,
+            "variable": "above",
+            "actual": 0.0
+        },
+        {
+            "test_id": "a_level_qualifies",
+            "assertion_idx": 5,
+            "variable": "hgt",
+            "actual": 20.0
+        },
+        {
+            "test_id": "no_level_qualifies",
+            "assertion_idx": 1,
+            "variable": "kstar",
+            "actual": 5.0
+        },
+        {
+            "test_id": "no_level_qualifies",
+            "assertion_idx": 2,
+            "variable": "n_above",
+            "actual": 0.0
+        }
+    ],
+    "reference_binding": "julia",
+    "_comment": "Minted by the Julia reference binding's `run_inline_tests` (Tsit5, reltol=1e-12, abstol=1e-14) over ../../valid/faq/min_reduction_static_shaped_document.esm — the issue #432 fixture, referenced in place in `tests/valid/` rather than copied into this category. The document declares no differential equations and its observeds are shaped, so no integrator runs: every actual is one evaluation of the observed graph at that assertion's own `time` (esm-spec 6.6.3), point-sampled per its `coords` where it has any (6.6.5). All seven are small exact doubles, and all seven are FINITE by construction — an `inf` for `kstar` or a NaN for `n_above` is the reduction's identity element or a NaN term leaking out, not a computed number."
+}
