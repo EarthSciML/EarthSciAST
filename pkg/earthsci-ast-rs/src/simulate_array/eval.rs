@@ -1570,11 +1570,12 @@ thread_local! {
 ///
 /// Named for the first fault that used this channel
 /// (`E_TREEWALK_CONSTARRAY_OOB`); it now also carries
-/// `E_TREEWALK_RECUR_UNAVAILABLE` (CONFORMANCE_SPEC §5.19.4) and
-/// `E_TREEWALK_UNBOUND_NAME` / `E_TREEWALK_UNRESOLVED_ORDER` (§5.23). All of
-/// them are "fail closed, do not silently substitute a number" faults with the
-/// same drain sites, so they share one latch rather than adding a second one
-/// that a future drain site could forget.
+/// `E_TREEWALK_RECUR_UNAVAILABLE` (CONFORMANCE_SPEC §5.19.4),
+/// `E_TREEWALK_UNBOUND_NAME` / `E_TREEWALK_UNRESOLVED_ORDER` (§5.23) and
+/// `E_TREEWALK_INDEX_ON_SCALAR` (§7.1). All of them are "fail closed, do not
+/// silently substitute a number" faults with the same drain sites, so they
+/// share one latch rather than adding a second one that a future drain site
+/// could forget.
 pub fn take_const_array_oob() -> Option<String> {
     CONST_OOB.with(|c| c.borrow_mut().take())
 }
@@ -1604,6 +1605,31 @@ fn latch_recur_unavailable(name: &str, raw: &[i64]) {
          self-read is fail-closed, never the §5.5.5 zero ghost and never a NaN a `max(x, 0)` \
          could launder). Guard the base case inside the body, e.g. \
          `ifelse(k <= 1, <base>, <recurrence>)`."
+    ));
+}
+
+/// Latch a subscript applied to a value that has NO axes (esm-spec §4.3.4: a
+/// scalar declares no index sets).
+///
+/// `index(x)` with no subscript is the identity and never reaches here; this is
+/// `index(x, i, …)` where `x` turned out to be 0-D, so the subscripts name
+/// nothing there is to name. The alternative is the NaN this used to return,
+/// and a NaN is laundered by any `max(x, 0)`, `ifelse` or comparison the body
+/// goes on to apply — the document then reports a number that was never
+/// computed.
+fn latch_index_on_scalar(base: &Expr, subscripts: usize) {
+    let what = match base {
+        Expr::Variable(name) => format!("'{name}'"),
+        Expr::Operator(node) => format!("the `{}` result", node.op),
+        Expr::Integer(_) | Expr::Number(_) => "a numeric literal".to_string(),
+    };
+    latch_gather_fault(format!(
+        "E_TREEWALK_INDEX_ON_SCALAR: {what} has no axes, so the {subscripts} subscript(s) \
+         applied to it name nothing (esm-spec §4.3.4; CONFORMANCE_SPEC.md §7.1). Fail-closed: \
+         never the §5.5.5 zero ghost, which is the boundary convention for a gather that HAS \
+         an axis to fall outside of, and never a bare NaN. Read an unshaped quantity by its \
+         bare name or as `index(<name>)` with no subscript, or give it a `shape` if it was \
+         meant to have axes."
     ));
 }
 
@@ -1790,8 +1816,16 @@ pub(super) fn eval_index(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     let array_val = eval(&node.args[0], ctx);
     let arr = match array_val {
         Value::Array(a) => a,
+        // `index(x)` with no subscript is the identity: the gather spelling for
+        // reading a 0-D quantity.
         Value::Scalar(s) if node.args.len() == 1 => return Value::Scalar(s),
-        Value::Scalar(_) => return Value::Scalar(f64::NAN),
+        // Subscripts on a 0-D value. This fails closed rather than answering a
+        // number no cell holds; Python's interpreter refuses the same shape
+        // ("index applied to scalar value").
+        Value::Scalar(_) => {
+            latch_index_on_scalar(&node.args[0], node.args.len() - 1);
+            return Value::Scalar(f64::NAN);
+        }
     };
     // Out-of-bounds accesses return 0.0 — homogeneous Dirichlet ghost-cell
     // semantics: a discretized PDE's stencil can reference u[i-1] when i=1

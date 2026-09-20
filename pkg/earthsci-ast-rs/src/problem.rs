@@ -40,6 +40,7 @@ use std::rc::Rc;
 use ndarray::ArrayD;
 use serde_json::Value as JsonValue;
 
+use crate::classification::DeclaredRank;
 use crate::flatten::FlattenedSystem;
 use crate::precision::{self, Precision};
 #[cfg_attr(not(feature = "solve"), allow(unused_imports))]
@@ -1657,6 +1658,14 @@ pub(crate) fn has_nothing_to_integrate(prob: &EsmProblem) -> bool {
 /// Keys are FLATTENED names (`Sites.North.u`), matching Julia's
 /// `BuildInspection.observed_exprs` and Python's `static_observed_values`.
 ///
+/// **The rank comes from the DECLARATION**, through the same
+/// [`crate::classification::DeclaredRank`] the build pipeline uses (API_SPEC
+/// `observed_trajectories`: "A field is the shape the document declares").
+/// This path and the pipeline serve the SAME documents — this one runs exactly
+/// when the pipeline produced no fields — so deciding the rank differently
+/// here would give one document two spellings, `Rel.total` or `Rel.total[1]`,
+/// picked by a backend choice the author cannot see.
+///
 /// **Tolerant by construction.** A system the scalar interpreter cannot lower
 /// — an array op, a `v1`-unsupported feature, a parameter with no default —
 /// yields NO fields rather than failing the build. Construction was not asked
@@ -1698,10 +1707,11 @@ fn static_observed_fields(
     values
         .into_iter()
         .map(|(name, v)| {
-            (
-                name,
-                ArrayD::from_shape_vec(ndarray::IxDyn(&[1]), vec![v]).unwrap(),
-            )
+            let shape =
+                DeclaredRank::of_declaration(flat.observed_variables.get(&name)).scalar_shape();
+            let arr = ArrayD::from_shape_vec(ndarray::IxDyn(shape), vec![v])
+                .expect("`scalar_shape` is `[]` or `[1]`, and both hold exactly one element");
+            (name, arr)
         })
         .collect()
 }

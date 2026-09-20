@@ -166,6 +166,62 @@ fn a_bare_name_is_refused_on_a_multi_component_document() {
     assert!(observed_field(&prob, "nope").is_err());
 }
 
+/// **A field is the shape the document declares** (API_SPEC,
+/// `observed_trajectories`), whichever path materialized it.
+///
+/// `static_observed_fields` runs exactly when the build pipeline produced no
+/// fields, so the two serve the SAME documents. While this path materialized
+/// every value at `[1]` and the pipeline read the declaration, one unshaped
+/// observed had two spellings — `Rel.total` or `Rel.total[1]` in the flat
+/// writer, `[]` or `[1]` from `observed_field` — chosen by which backend
+/// construction happened to pick. An author cannot see that choice, so the
+/// divergence showed up as an output schema that changed for no reason
+/// visible in the document.
+#[test]
+fn an_unshaped_observed_is_rank_zero_down_either_path() {
+    // Pure scalar algebra with no state: the shape both paths can build.
+    let doc = serde_json::json!({
+        "esm": "1.2.0",
+        "metadata": {"name": "ScalarOnly", "description": "One unshaped observed."},
+        "models": {"ScalarOnly": {
+            "variables": {
+                "a": {"type": "parameter", "units": "1", "default": 3.0,
+                      "description": "A scalar parameter."},
+                "total": {"type": "unknown", "units": "1",
+                          "description": "Unshaped, so rank-0."}
+            },
+            "equations": [{"lhs": "total", "rhs": {"op": "*", "args": ["a", 2.0]}}]
+        }}
+    });
+
+    let with_pipeline = ProblemOptions {
+        build_pipeline: true,
+        ..ProblemOptions::default()
+    };
+    let mut shapes = Vec::new();
+    for (label, o) in [("default", opts()), ("build_pipeline", with_pipeline)] {
+        let prob = esm_problem(ProblemInput::Json(&doc), (0.0, 1.0), o)
+            .unwrap_or_else(|e| panic!("[{label}] esm_problem: {e}"));
+        let a = observed_field(&prob, "ScalarOnly.total")
+            .unwrap_or_else(|e| panic!("[{label}] observed_field: {e}"));
+        assert_eq!(
+            a.iter().copied().collect::<Vec<_>>(),
+            vec![6.0],
+            "[{label}]"
+        );
+        shapes.push((label, a.shape().to_vec()));
+    }
+    assert_eq!(
+        shapes[0].1, shapes[1].1,
+        "the two build paths must agree on the rank: {shapes:?}"
+    );
+    assert_eq!(
+        shapes[0].1,
+        Vec::<usize>::new(),
+        "and the rank they agree on is the DECLARATION's: {shapes:?}"
+    );
+}
+
 /// `qualify` must be idempotent. When the caller names the model explicitly,
 /// construction carries that name AND the static evaluation's keys are already
 /// flattened under it — qualifying a second time would produce
