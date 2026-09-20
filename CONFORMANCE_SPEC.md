@@ -5979,12 +5979,13 @@ and not the clock. `esm simulate` handled both all along, through
 
 Rust now answers such a document the way `esm simulate` does: from the fields a
 BUILD materializes. When the problem it built has nothing to integrate, and
-`solve` has refused it, the runner builds it once more with the build pipeline
-on and reads `observed_field` out of the result. A retry that fails changes
-nothing — `solve`'s own diagnostic stands — because it is an attempt to answer
-more and never a new way to fail. `Compile::Always` is kept throughout, so a
-construct no evaluator supports is still refused at build time in the §9.6.6
-vocabulary.
+`solve` has refused it, the runner reads `observed_field` off the build it
+already has — and only if that build carried NO fields, which a document
+ingesting `data_sources` does not, does it build the document once more with
+the build pipeline on. A retry that fails changes nothing — `solve`'s own
+diagnostic stands — because it is an attempt to answer more and never a new
+way to fail. `Compile::Always` is kept throughout, so a construct no
+evaluator supports is still refused at build time in the §9.6.6 vocabulary.
 
 **The retry is a LAST RESORT, not a preference** (issue #432). It was first
 written to fire ahead of `solve`, on the strength of the built problem alone,
@@ -5992,13 +5993,13 @@ and to hand its fields back in place of whatever the ordinary path would have
 produced. That is a silent substitution: the build materializes its fields once,
 at `tspan.0`, through a different evaluator from the one the array runtime runs,
 so three documents the runtime had been answering correctly began reporting a
-`min` reduction's identity element (`+inf`) for a search that found a level, a
-tendency wrong in its sixth digit, and — because every test paid for a second
-whole-document build — a 22-second suite that no longer finished in 900. A
-runner reaches for a second opinion when it has NO answer; it does not prefer
-one to an answer it already has. The condition is therefore `solve` having
-failed on a problem with nothing to integrate, which is exactly the dead end
-issue #406 described and nothing wider.
+`min` reduction's identity element (`+inf`) for a search that found a level and
+a tendency wrong in its sixth digit — and every test in the suite paid for a
+second whole-document build besides, which is what stopped the suite
+finishing. A runner reaches for a second opinion when it has NO answer; it does
+not prefer one to an answer it already has. The condition is therefore `solve`
+having failed on a problem with nothing to integrate, which is exactly the dead
+end issue #406 described and nothing wider.
 
 The build materializes those fields ONCE, at `tspan.0`. That single value is
 the answer at every asserted time for an observed that is not a function of
