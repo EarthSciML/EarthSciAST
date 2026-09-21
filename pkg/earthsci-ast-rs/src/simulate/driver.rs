@@ -4,6 +4,28 @@ use super::*;
 // Solver loop and array/spatial routing
 // ============================================================================
 
+/// Refuse a time span whose start or end is not a finite number.
+///
+/// `NaN` and both infinities are refused together, and refused at the backend
+/// entry points — ahead of the branch between [`nonadvancing_trajectory`] and
+/// the solver — so the two cannot disagree about what such a span means.
+///
+/// Neither is a span this format can express (see
+/// [`SimulateError::InvalidTimeSpan`]), and neither names an integration:
+/// against `NaN` every ordering test is false, which is indistinguishable from
+/// a span that cannot advance, and an infinite end is a stop time the solver
+/// loop can never reach.
+#[cfg(feature = "solve")]
+pub(crate) fn reject_nonfinite_span(t0: f64, t_end: f64) -> Result<(), SimulateError> {
+    if t0.is_finite() && t_end.is_finite() {
+        return Ok(());
+    }
+    Err(SimulateError::InvalidTimeSpan {
+        start: t0,
+        end: t_end,
+    })
+}
+
 /// The answer to a run that provably never takes a solver step, or `None` when
 /// the solver really does have to advance.
 ///

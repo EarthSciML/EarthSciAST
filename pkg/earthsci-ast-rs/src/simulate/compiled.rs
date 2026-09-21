@@ -273,6 +273,10 @@ impl Compiled {
         // (`crate::precision`); a no-op for a Float64 model.
         let _precision_guard = self.precision.enter();
         let (t0, t_end) = tspan;
+        // Validated here, at the entry point, so the non-advancing shortcut and
+        // the solver path below it are never handed a span they would read
+        // differently.
+        reject_nonfinite_span(t0, t_end)?;
 
         let param_vec = self.build_param_vec(params)?;
         let mut ic_vec = self.build_initial_state(initial_conditions, &param_vec, t0)?;

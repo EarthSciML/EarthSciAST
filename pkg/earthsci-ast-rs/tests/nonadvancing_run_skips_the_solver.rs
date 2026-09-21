@@ -28,7 +28,8 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use earthsci_ast::{
-    Compile, EsmProblem, Flow, ProblemOptions, SolveOptions, esm_problem, load_string, solve,
+    Compile, EsmProblem, Flow, ProblemOptions, SimulateError, SolveOptions, esm_problem,
+    load_string, solve,
 };
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -324,4 +325,74 @@ fn a_run_that_never_advances_still_makes_its_step_zero_report() {
         (1, 1),
         "expected exactly one report, made at step 0 and `t0`"
     );
+}
+
+/// A scalar document — no arrays, no index sets — so it compiles to the OTHER
+/// backend. The span check has to hold on both, and nothing else in this file
+/// reaches the scalar one.
+fn scalar_doc() -> String {
+    r#"{
+ "esm": "1.1.0",
+ "metadata": {"name": "Decay", "license": "MIT",
+  "description": "One scalar state, so this document compiles to the scalar backend."},
+ "models": {
+  "M": {
+   "variables": {
+    "y": {"type": "unknown", "units": "1", "description": "The single state."}
+   },
+   "equations": [
+    {"lhs": {"op": "D", "args": ["y"], "wrt": "t"}, "rhs": {"op": "*", "args": [-1.0, "y"]}},
+    {"lhs": {"op": "ic", "args": ["y"]}, "rhs": 1.0}
+   ]
+  }
+ }
+}"#
+    .to_string()
+}
+
+/// The boundary of the shortcut on the other side: a span that is not a span at
+/// all. `NaN` makes every ordering test false, which would fall through to the
+/// non-advancing answer and hand back the initial state as a trajectory; an
+/// infinite end is a stop time no solver loop reaches. Both are refused, on both
+/// backends, ahead of the branch — while the two spans that ARE answered from
+/// the initial state, the empty one and the backwards one, keep being answered.
+#[test]
+fn a_non_finite_span_is_refused_while_empty_and_backwards_ones_are_answered() {
+    for (backend, json) in [("array", doc(8, 4, true)), ("scalar", scalar_doc())] {
+        for (start, end) in [
+            (f64::NAN, 1.0),
+            (0.0, f64::NAN),
+            (f64::NEG_INFINITY, 0.0),
+            (0.0, f64::INFINITY),
+        ] {
+            let prob = problem_for(&json, (start, end));
+            match solve(&prob, &solve_opts(None)) {
+                Err(SimulateError::InvalidTimeSpan { start: s, end: e }) => {
+                    assert_eq!(
+                        (s.to_bits(), e.to_bits()),
+                        (start.to_bits(), end.to_bits()),
+                        "{backend} backend: the error must carry the span it refused"
+                    );
+                }
+                other => {
+                    panic!("{backend} backend: span ({start}, {end}) was not refused: {other:?}")
+                }
+            }
+        }
+
+        // The empty span is still answered from the initial state, at `t0`.
+        let empty = run_span(&json, (0.0, 0.0), None);
+        assert!(empty.retcode.is_success(), "{backend} backend");
+        assert_eq!(empty.time, vec![0.0], "{backend} backend");
+
+        // So is a BACKWARDS span, unchanged: an interval the run cannot advance
+        // over, not a malformed one.
+        let backwards = run_span(&json, (1.0, 0.0), None);
+        assert!(backwards.retcode.is_success(), "{backend} backend");
+        assert_eq!(backwards.time, vec![1.0], "{backend} backend");
+        assert_eq!(
+            backwards.state, empty.state,
+            "{backend} backend: both answer from the same untouched initial state"
+        );
+    }
 }

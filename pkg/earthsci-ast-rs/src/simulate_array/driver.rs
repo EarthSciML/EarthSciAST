@@ -496,6 +496,10 @@ impl ArrayCompiled {
         let params_owned = params;
         let ics_owned = initial_conditions;
         let (t0, t_end) = tspan;
+        // Validated here, at the entry point every array solve shares, so the
+        // non-advancing shortcut in `run_one_segment` and the solver path below
+        // it are never handed a span they would read differently.
+        crate::simulate::reject_nonfinite_span(t0, t_end)?;
 
         // Validate the override names and build the positional param vector
         // and the initial state vector `u0` (loaded-field / coordinate
