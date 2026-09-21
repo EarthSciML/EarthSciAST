@@ -361,14 +361,12 @@ function _encode_join_keys(vals_l::Vector{Any}, vals_r::Vector{Any})
     return (Int[code_of[v] for v in vals_l], Int[code_of[v] for v in vals_r])
 end
 
-# `ESS_JOIN_ON_GATE_DISABLE=1` resolves an `on` clause to the equality CODES
-# only, attaching no match index — the pre-§5.5.8 behaviour, where the gate
-# filtered the full product instead of driving it. It is the differential oracle
-# for the driver (mirroring `ESS_GEOM_OVERLAP_GATE_DISABLE`): the admitted leaf
-# set is identical either way, so any difference in the ANSWER is a driver bug,
-# and the visit counts must differ or the gate never fired.
-_join_on_gate_disabled() = !_compiler_plan_now().join_on_gate ||
-    get(ENV, "ESS_JOIN_ON_GATE_DISABLE", "") == "1"
+# Off, an `on` clause resolves to the equality CODES only and attaches no match
+# index, so the gate filters the full product instead of driving it. That is the
+# differential oracle for the driver: the admitted leaf set is identical either
+# way, so any difference in the ANSWER is a driver bug, and the visit counts
+# must differ or the gate never fired.
+_join_on_gate_disabled() = !_compiler_plan_now().join_on_gate
 
 # The DRIVABLE match set of one composite `on` key (CONFORMANCE_SPEC §5.5.8):
 # `{ (pos_l, pos_r) : key_l(pos_l) == key_r(pos_r) }`, built ONCE per node.

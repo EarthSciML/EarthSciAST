@@ -176,7 +176,7 @@ function _sub_preserving(expr::OpExpr, bindings::Dict{String,ASTExpr}, memo::_Su
     # `gk` is CONTRACTED in the first and an OUTPUT index in the second. In a
     # MATERIALIZING build (the default for both emitters since 66b8e9a6) the sum
     # is materialized, so the mean reads a buffer gather and the two binders
-    # never meet. In an INLINING build (`ESS_ARRAY_OBS_INLINE=1`, or an observed
+    # never meet. In an INLINING build (`compiler=:interpreter`, or an observed
     # excluded from materialization) the sum is spliced into the mean's body, and
     # substituting the outer `gk` used to rewrite the inner sum's own loop
     # variable. The inner body then no longer mentions `gk` while `ranges` still

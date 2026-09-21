@@ -17,10 +17,10 @@
 # invariant), a varying one becomes a per-cell table indexed by the cell
 # ordinal — and the evaluators apply the identical scalar op sequence per lane
 # (`_eval_acc_op` mirrors `_eval_node_op`; `_NK_CONTRACTION` keeps its seeded
-# sequential ⊕-fold on every runner). The forced per-cell reference
-# (`ESS_STENCIL_DISABLE=1`) skips the merge entirely — plain compiled scalar
-# nodes on `rhs_list`, evaluated by `_eval_node` — so the differentials
-# compare against a build with no merge machinery at all.
+# sequential ⊕-fold on every runner). The per-cell reference skips the merge
+# entirely — plain compiled scalar nodes on `rhs_list`, evaluated by
+# `_eval_node` — so the differentials compare against a build with no merge
+# machinery at all.
 #
 # LAZY GUARDS. `_eval_acc_op`'s `ifelse`/`and`/`or` arms short-circuit exactly
 # like the scalar walker's, so on the SCALAR reference runner a merged group
@@ -93,15 +93,12 @@ _acc_node_has_lazy(n::_Node) =
 # and the rep-payload + `_check_fn_group_specs` guard byte-for-byte, so those
 # groups decline to exactly today's behavior.
 #
-# KILL SWITCH. `ESS_DIRECT_CLASS_EMIT_DISABLE=1` restores the assemble-then-
-# merge pipeline byte for byte (content-keyed signature, loud spec-mismatch
-# guard) — the differential oracle. The emitter also stands down under the
-# class-merge umbrella switches (`ESS_KERNEL_CLASS_MERGE_DISABLE=1` /
-# `ESS_OOP_MERGE_DISABLE=1`): those mean "no lane-batched class kernels in
-# this build", and a direct-emitted class kernel would violate that contract.
-_direct_class_emit_disabled() =
-    !_compiler_plan_now().direct_class_emit ||
-    get(ENV, "ESS_DIRECT_CLASS_EMIT_DISABLE", "") == "1"
+# Off, the build is the assemble-then-merge pipeline byte for byte
+# (content-keyed signature, loud spec-mismatch guard) — the differential
+# oracle. The emitter also stands down whenever the class merge is off: that
+# means "no lane-batched class kernels in this build", and a direct-emitted
+# class kernel would violate the contract.
+_direct_class_emit_disabled() = !_compiler_plan_now().direct_class_emit
 _direct_class_emit_enabled() =
     !_direct_class_emit_disabled() && !_oop_merge_disabled()
 
@@ -139,15 +136,10 @@ _direct_class_emit_enabled() =
 #      clone instead of writing a parallel box-level emitter keeps the
 #      bit-identity argument exactly the one the repair pass already carries.
 #
-# KILL SWITCH. `ESS_CROSS_EQ_CLASS_EMIT_DISABLE=1` restores the per-equation
-# emitter + repair-only pipeline byte for byte. The stage also stands down
-# whenever per-equation direct emission itself is off — under
-# `ESS_DIRECT_CLASS_EMIT_DISABLE=1` and under the class-merge umbrella
-# switches (`_direct_class_emit_enabled` folds both in), so every existing
-# oracle configuration behaves exactly as before this landed.
-_cross_eq_class_emit_disabled() =
-    !_compiler_plan_now().cross_eq_class_emit ||
-    get(ENV, "ESS_CROSS_EQ_CLASS_EMIT_DISABLE", "") == "1"
+# Off, the build is the per-equation emitter + repair-only pipeline byte for
+# byte. The stage also stands down whenever per-equation direct emission itself
+# is off, or the class merge is (`_direct_class_emit_enabled` folds both in).
+_cross_eq_class_emit_disabled() = !_compiler_plan_now().cross_eq_class_emit
 _cross_eq_class_emit_enabled() =
     !_cross_eq_class_emit_disabled() && _direct_class_emit_enabled()
 
@@ -418,12 +410,10 @@ _fn_spec_content_equal(a::_FnTypedCoreSpec, b::_FnTypedCoreSpec) =
 # `nothing` and `_lane_intern` is the identity — direct constructor use (tests,
 # tooling) sees exactly the pre-interning behavior.
 #
-# Kill switch: `ESS_LANE_INTERN_DISABLE=1` (read at build entry, like
-# `ESS_STENCIL_DISABLE`) keeps the ref `nothing` for the whole build, restoring
-# today's un-interned build byte for byte — the differential oracle
-# (test/lane_table_intern_test.jl).
-_lane_intern_disabled() = !_compiler_plan_now().lane_intern ||
-    get(ENV, "ESS_LANE_INTERN_DISABLE", "") == "1"
+# Off (read at build entry, like the affine stencil tier), the ref stays
+# `nothing` for the whole build, which is the un-interned build byte for byte —
+# the differential oracle (test/lane_table_intern_test.jl).
+_lane_intern_disabled() = !_compiler_plan_now().lane_intern
 
 struct _LaneInternKey
     spec::Any
@@ -652,23 +642,10 @@ function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
                    scan_folds::AbstractVector{_ScanFold}=_ScanFold[],
                    array_contractions::AbstractVector{_ArrayContraction}=
                        _ArrayContraction[])
-    # Build observability: with ESS_OOP_PROBE=1, record how each array kernel would
-    # plan for the vectorized (traceable) `:oop` form — `:oop_vec` when it
-    # vectorizes whole-array, else `:oopdecl_<reason>` — into the cascade tally, so
-    # the corpus's oop-fallback coverage is readable from an ordinary in-place build.
-    # Since the kernel-CLASS merge hoisted into build.jl, `acc_kernels` here is the
-    # POST-merge list, so the tally reflects exactly the kernels a `:oop` build of
-    # the same model would plan — which is the point of the probe.
-    if get(ENV, "ESS_OOP_PROBE", "") == "1"
-        for K in acc_kernels
-            P = _build_oop_acc_plan(K)
-            _tally_cascade!(P.vectorizable ? :oop_vec : Symbol("oopdecl_", _oop_decline_reason(K)))
-        end
-    end
     # B1 codegen tier (codegen_kernel.jl): every kernel the emitter can model is
     # compiled ONCE, here at build time, into a single RuntimeGeneratedFunction
     # (bit-identical, eltype-generic); the rest keep the per-cell scalar
-    # runner. `ESS_CODEGEN_DISABLE=1` yields exactly the interpreter kernel loop.
+    # runner. With the tier off this is exactly the interpreter kernel loop.
     # `shared_cache = cse_cache` (ess-cgfsc): THIS call site may compile
     # shared-prelude (`_CSECache`) reads into the generated kernels, because
     # `f!` below fills every prelude tier into that exact cache — at the same

@@ -6,9 +6,8 @@ module EarthSciASTPolyesterExt
 # codegen tier"): this extension supplies the one Polyester-dependent piece —
 # a static `@batch` over pre-partitioned chunk bodies — and installs it via
 # `EarthSciAST._set_batch_runner!`. Without Polyester loaded, `_BATCH_RUNNER[]`
-# stays null and everything runs the serial path. `ESS_THREADS_DISABLE=1` still
-# forces serial even with Polyester loaded (and `ESS_CG_THREADS_DISABLE=1`
-# forces just the codegen tier serial — today they gate the same tier).
+# stays null and everything runs the serial path. With Polyester loaded, a
+# section whose cell count is under `ESS_THREADS_MIN_CELLS` still runs serial.
 #
 # The partition and output-disjointness checks live in the core package;
 # `chunkbody(c)` runs one static chunk, so `@batch` here only dispatches the

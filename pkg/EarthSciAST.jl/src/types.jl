@@ -2224,8 +2224,8 @@ struct EsmFile
     # component's equations/variables carry the surviving references as typed
     # `apply_expression_template` `OpExpr`s; `serialize_esm_file` re-injects these
     # blocks so `to_json(EsmFile)` emits the reference-preserving form byte-identically
-    # to `emit_document`. `nothing` under `ESS_TEMPLATE_REF_DISABLE=1` (Expand at
-    # load) or for a document with no surviving references.
+    # to `emit_document`. `nothing` for a document with no surviving
+    # references.
     component_templates::Union{OrderedDict{String,Any},Nothing}
 
     # Document-scoped `coordinates` registry (streaming-output-sinks RFC §8.3): each

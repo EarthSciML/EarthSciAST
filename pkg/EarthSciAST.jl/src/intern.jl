@@ -52,14 +52,13 @@
 #      (types.jl field-table note); the intern table is a private
 #      hash-bucket structure instead.
 #
-# KILL SWITCH: `ESS_INTERN_DISABLE=1` restores the pre-interning build
-# byte-for-byte (the intern pass is simply skipped). The differential oracle
-# (test/intern_oracle_test.jl) builds gridded fixtures both ways and asserts
-# bit-identical `du` and identical state maps.
+# Under `compiler=:interpreter` the pass is simply skipped, which is the
+# reference build; the differential oracle (test/intern_oracle_test.jl) builds
+# gridded fixtures under both compilers and asserts bit-identical `du` and
+# identical state maps.
 # ========================================================================
 
-_intern_disabled() = !_compiler_plan_now().intern ||
-    get(ENV, "ESS_INTERN_DISABLE", "") == "1"
+_intern_disabled() = !_compiler_plan_now().intern
 
 # Per-build intern context. `table` is the hash-cons table (structural hash →
 # bucket of canonical nodes, scanned with `_intern_shallow_equal`); `memo`

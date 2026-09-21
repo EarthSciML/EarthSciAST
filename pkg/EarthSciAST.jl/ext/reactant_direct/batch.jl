@@ -38,8 +38,8 @@
 # a literal (the signature pins it, so a group never blends the power rule), and
 # a subtree that is host data in every lane is folded on host by the SAME
 # `_de_hostval` the scalar walk uses — per lane, so the folded constant is the
-# scalar walk's constant. `ESS_OOP_BATCH=0` puts every entry in `rest` and this
-# file then emits nothing at all.
+# scalar walk's constant. With scalar batching off every entry is in `rest` and
+# this file emits nothing at all.
 #
 # ORDER. `rest` first, then the groups, exactly as the grouping's own order
 # runs them. The reorder is sound for the reason stated at the ess-oop-batch

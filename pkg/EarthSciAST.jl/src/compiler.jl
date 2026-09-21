@@ -8,11 +8,13 @@
 # per-build REPORT that says which tier every rule landed on, and the refusal
 # helper the strict `native` compiler raises through.
 #
-# The plan is the single place a tier reads its own on/off state from. The
-# `ESS_*` environment switches still exist and still work — this phase does not
-# retire them — but no code path consults one to decide WHICH COMPILER is
-# running: that answer comes from the plan and only from the plan, so the two
-# can never disagree about the caller's choice.
+# The plan is the ONLY place a tier reads its own on/off state from. No
+# environment variable selects an evaluation strategy: the vocabulary value is
+# the whole answer, so an environment and an argument have nothing to disagree
+# about (esm-libraries-spec §2.5.10). What survives in `ENV` is the tuning
+# thresholds — a node budget, a function-size cap, a threading floor, an
+# admission floor — each of which is a REFUSAL BOUNDARY under `native` rather
+# than a fallback trigger, and two experimental tiers that ship off.
 
 """
     COMPILER_VOCABULARY
@@ -29,13 +31,19 @@ const COMPILER_VOCABULARY = (:interpreter, :native, :xla, :mtk, :sympy)
 # ---------------------------------------------------------------------------
 #
 # Every field is "this tier may run". `native` has them all true; `interpreter`
-# has them all false, which is what the `ESS_UNTIERED=1` + `_DISABLE` family
-# produces today. A field exists here for a tier only when turning it off
+# has them all false. A field exists here for a tier only when turning it off
 # changes which evaluator runs — a tuning threshold (a node budget, a cell
-# floor) is a different thing and stays where it is.
+# floor) is a different thing and stays where it is, and so is MEMOIZATION.
+#
+# MEMOIZATION IS NOT A TIER. The load-time expansion memo
+# (`_expand_expr_refs`) and the reference-preserving template image
+# (`lower_expression_templates`) make the same program out of the same
+# document; what they save is build wall time, not a tree walk per cell. So
+# `interpreter` keeps both: an oracle that re-derives the program it is about
+# to compare against would be a slower way to build the SAME answer, and on the
+# documents it exists to run it is the difference between minutes and hours.
 struct CompilerPlan
     name::Symbol          # the vocabulary value this plan implements
-    explicit::Bool        # did the caller name it, or is this the default?
     strict::Bool          # refuse a rule this compiler cannot express
     # ---- kernel emission ----
     codegen::Bool                 # the RuntimeGeneratedFunction emitter
@@ -67,39 +75,36 @@ struct CompilerPlan
     tcadence::Bool
     # ---- build-once machinery whose OFF state is a reference path ----
     intern::Bool
-    expand_memo::Bool
-    template_ref::Bool            # the compile-once expression-template tier
     setup_map_compile_once::Bool
     geom_sweep_specialize::Bool
     geom_overlap_gate::Bool
 end
 
-# Threading (`ESS_THREADS_DISABLE`, `ESS_CG_THREADS_DISABLE`) is deliberately
-# NOT a plan field. A chunked kernel is value-identical to the serial one by
-# construction — the chunks write disjoint slots — so it is not a choice of
-# evaluator, and its gate is read on every right-hand-side call, where the
-# build's plan is no longer in scope and a task-local lookup would be a
-# per-call cost for an answer that cannot change.
+# Threading is deliberately NOT a plan field. A chunked kernel is
+# value-identical to the serial one by construction — the chunks write disjoint
+# slots — so it is not a choice of evaluator; how many cells are worth a thread
+# dispatch is a tuning threshold (`ESS_THREADS_MIN_CELLS`), read on the
+# right-hand-side call where the build's plan is no longer in scope.
 
-_plan_all(name::Symbol, explicit::Bool, strict::Bool, on::Bool) =
-    CompilerPlan(name, explicit, strict,
+_plan_all(name::Symbol, strict::Bool, on::Bool) =
+    CompilerPlan(name, strict,
                  on, on, on, on, on, on,
                  on, on, on, on, on, on, on, on, on,
                  on, on, on, on, on, on, on,
                  on, on,
-                 on, on, on, on, on, on)
+                 on, on, on, on)
 
 """
-    _compiler_plan(compiler::Symbol; explicit::Bool) -> CompilerPlan
+    _compiler_plan(compiler::Symbol) -> CompilerPlan
 
 Expand a vocabulary value into the tier plan that implements it. Raises for the
 values this binding does not provide, never substituting another one.
 """
-function _compiler_plan(compiler::Symbol; explicit::Bool = true)
+function _compiler_plan(compiler::Symbol)
     if compiler === :native
-        return _plan_all(:native, explicit, true, true)
+        return _plan_all(:native, true, true)
     elseif compiler === :interpreter
-        return _plan_all(:interpreter, explicit, false, false)
+        return _plan_all(:interpreter, false, false)
     elseif compiler === :xla
         throw(SimulateError(
             "compiler=:xla is not reachable from esm_problem yet — the direct " *
@@ -132,10 +137,12 @@ end
 # caller's, with a process-wide default for the entry points that never go
 # through `_with_compiler_plan` (a direct `_compile` call in a test, say).
 # `Base.ScopedValues` would say this more directly but is 1.11+, and this
-# package supports 1.10.
+# package supports 1.10. That default is NON-strict: outside a build there is
+# no `compiler` keyword to have been strict about, and a refusal raised there
+# would name a compiler nobody asked for.
 const _COMPILER_PLAN_KEY = :earthsci_compiler_plan
 const _PLAN_OVERRIDE_KEY = :earthsci_compiler_plan_override
-const _DEFAULT_COMPILER_PLAN = _plan_all(:native, false, false, true)
+const _DEFAULT_COMPILER_PLAN = _plan_all(:native, false, true)
 
 _compiler_plan_now()::CompilerPlan =
     get(task_local_storage(), _COMPILER_PLAN_KEY, _DEFAULT_COMPILER_PLAN)
@@ -143,86 +150,34 @@ _compiler_plan_now()::CompilerPlan =
 _with_compiler_plan(f, plan::CompilerPlan) =
     task_local_storage(f, _COMPILER_PLAN_KEY, plan)
 
-# The oracle kill switches: an `ESS_*` variable whose effect is to select a
-# different evaluation strategy. Under an EXPLICIT `compiler=:native` one of
-# these being set means the build would not be the compiler the caller named,
-# and the two ways of saying it disagree — which is the failure §2.5.10's
-# "oracle selection is an argument, not an environment variable" exists to
-# prevent. The list is the census's "oracle kill switch" and "dual-run verify"
-# rows; tuning thresholds and debug loggers are deliberately absent.
-const _ORACLE_KILL_SWITCHES = (
-    ("ESS_UNTIERED", "1"), ("ESS_TCADENCE_DISABLE", "1"),
-    ("ESS_CODEGEN_DISABLE", "1"), ("ESS_DUAL_CODEGEN_DISABLE", "1"),
-    ("ESS_CODEGEN_BODY_SPLIT_DISABLE", "1"),
-    ("ESS_CG_FOREIGN_SCRATCH_DISABLE", "1"), ("ESS_CG_HELPER_DEDUP_DISABLE", "1"),
-    ("ESS_CG_SUBCALL_FN_DISABLE", "1"),
-    ("ESS_STENCIL_DISABLE", "1"), ("ESS_SUBTREE_TBL_DISABLE", "1"),
-    ("ESS_STATE_BOX_DISABLE", "1"), ("ESS_OBSREF_DISABLE", "1"),
-    ("ESS_LANE_AFFINE_KEY_DISABLE", "1"), ("ESS_XEQ_VARIANT_DISABLE", "1"),
-    ("ESS_JOIN_ON_GATE_DISABLE", "1"), ("ESS_ARRAY_CONTRACTION_DISABLE", "1"),
-    ("ESS_OOP_MERGE_DISABLE", "1"), ("ESS_KERNEL_CLASS_MERGE_DISABLE", "1"),
-    ("ESS_OOP_MERGE_EXPAND_DISABLE", "1"), ("ESS_DIRECT_CLASS_EMIT_DISABLE", "1"),
-    ("ESS_CROSS_EQ_CLASS_EMIT_DISABLE", "1"), ("ESS_LANE_INTERN_DISABLE", "1"),
-    ("ESS_XCSE_DISABLE", "1"), ("ESS_INTERN_DISABLE", "1"),
-    ("ESS_EXPAND_MEMO_DISABLE", "1"), ("ESS_TEMPLATE_REF_DISABLE", "1"),
-    ("ESS_SETUP_MAP_COMPILE_ONCE_DISABLE", "1"),
-    ("ESS_GEOM_SWEEP_SPECIALIZE_DISABLE", "1"),
-    ("ESS_GEOM_OVERLAP_GATE_DISABLE", "1"), ("ESS_ARRAY_OBS_INLINE", "1"),
-    ("ESS_CONTRACTION_LOOP", "0"), ("ESS_OOP_BATCH", "0"),
-    ("ESS_F64_OVERFLOW_CODEGEN", "0"),
-)
-
-_any_oracle_switch_set() =
-    any(((var, val),) -> get(ENV, var, "") == val, _ORACLE_KILL_SWITCHES)
-
-# The plan a `compiler` keyword produces, `nothing` meaning the caller named
-# none. The two differ in exactly one place, and only while the `ESS_*` switches
-# survive: a caller who NAMED `:native` beside one is refused, because the build
-# would not be the compiler they named; a caller who named nothing gets a
-# NON-STRICT native, because a kill switch is a request for the reference path
-# and refusing the rule it just forced would make the switch unusable. Phase 2
-# removes the switches and with them this whole distinction.
-function _plan_for(compiler::Union{Nothing,Symbol})
-    compiler === nothing || return _refuse_if_oracle_switch_set(
-        _compiler_plan(compiler; explicit = true))
-    ov = get(task_local_storage(), _PLAN_OVERRIDE_KEY, nothing)
-    ov === nothing || return ov::CompilerPlan
-    plan = _compiler_plan(:native; explicit = false)
-    _any_oracle_switch_set() || return plan
-    return _nonstrict(plan)
+# The plan a `compiler` keyword produces. The keyword has no "unset" value: a
+# caller who names nothing gets the strict `:native` a caller who names it
+# gets, because a default that was quietly more permissive than the same value
+# spelled out is the second way of saying the same thing that §2.5.10 exists to
+# remove.
+function _plan_for(compiler::Symbol)
+    if compiler === :native
+        ov = get(task_local_storage(), _PLAN_OVERRIDE_KEY, nothing)
+        ov === nothing || return ov::CompilerPlan
+    end
+    return _compiler_plan(compiler)
 end
 
 _nonstrict(plan::CompilerPlan) =
-    CompilerPlan(plan.name, plan.explicit, false,
-        (getfield(plan, f) for f in fieldnames(CompilerPlan)[4:end])...)
+    CompilerPlan(plan.name, false,
+        (getfield(plan, f) for f in fieldnames(CompilerPlan)[3:end])...)
 
 # The differential-test seam for a tier NO public compiler reaches. The
 # whole-array contraction tier is the live case: `native` refuses an equation it
 # accepts (its runner walks the tree per output cell) and `interpreter` turns it
 # off, so the tier's own bit-identity tests have no vocabulary value to build
 # under. This gives them one, and only them — it is unexported, it is not a
-# `compiler` value, and it is read only where the caller named no compiler.
-# A generated form for the tier retires it along with the refusal.
-_nonstrict_native_plan() = _nonstrict(_compiler_plan(:native; explicit = false))
+# `compiler` value, and it is read only where the caller asked for `:native`.
+# The generated form for that tier retires this along with the refusal.
+_nonstrict_native_plan() = _nonstrict(_compiler_plan(:native))
 
 _with_plan_override(f, plan::CompilerPlan) =
     task_local_storage(f, _PLAN_OVERRIDE_KEY, plan)
-
-function _refuse_if_oracle_switch_set(plan::CompilerPlan)
-    (plan.explicit && plan.name === :native) || return plan
-    for (var, val) in _ORACLE_KILL_SWITCHES
-        get(ENV, var, "") == val || continue
-        throw(SimulateError(
-            "compiler=:native was named explicitly, but the environment sets " *
-            "$var=$val, which turns off a tier `native` is defined to use — the " *
-            "build would not be the compiler you asked for. Unset $var, or ask " *
-            "for compiler=:interpreter if what you want is the reference " *
-            "evaluator (esm-libraries-spec §2.5.10: oracle selection is an " *
-            "argument, not an environment variable)",
-            ERROR_CODES.COMPILER_UNAVAILABLE))
-    end
-    return plan
-end
 
 # ---------------------------------------------------------------------------
 # The report: which tier each rule landed on
