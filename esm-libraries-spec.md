@@ -493,17 +493,18 @@ per-binding spelling and the per-binding coverage table; this section states
 what each value MEANS, which is the part a binding must not reinterpret.
 
 - **`native`** — *the universally fast option, with no heavy external
-  dependency; the default for that reason.* The binding's compiled or vectorized
-  tiers, for **every** document, whatever its shape. A binding MUST NOT switch strategy inside
-  `native` on document content: a scalar document and a gridded one are built by
-  the same machinery, so that what ran is a property of the name and not of the
-  input. A rule `native` cannot express is a refusal (below).
+  dependency; the default for that reason.* The binding's compiled or
+  vectorized tiers, for **every** document, whatever its shape. A binding MUST
+  NOT switch strategy inside `native` on document content: a scalar document
+  and a gridded one are built by the same machinery, so that what ran is a
+  property of the name and not of the input. A rule `native` cannot express is
+  a refusal (below).
 - **`interpreter`** — *deliberately simple; the correctness check for the other
   compilers, and nothing else.* The reference evaluator, every fast tier off,
-  complete over the evaluable core. It carries **no performance promise of any kind**,
-  and a binding MUST NOT optimize it into agreement with `native`: its whole
-  value is being a second implementation. It is what the other compilers are
-  checked against, and a caller selects it to check them.
+  complete over the evaluable core. It carries **no performance promise of any
+  kind**, and a binding MUST NOT optimize it into agreement with `native`: its
+  whole value is being a second implementation. It is what the other compilers
+  are checked against, and a caller selects it to check them.
 - **`xla`** — *a specialty compiler, and the kind that needs a heavy external
   dependency.* A program lowered to StableHLO and executed through XLA.
 - **`mtk`** — *a specialty compiler, and the kind that runs only some
