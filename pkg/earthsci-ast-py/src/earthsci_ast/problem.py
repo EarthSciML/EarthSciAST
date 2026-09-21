@@ -84,6 +84,7 @@ from .reference_resolution import E_REF_UNDECLARED_INDEX_SET
 from .simulation_array import (
     BuildInspection,
     _build_numpy_rhs,
+    _differentiated_lhs_target,
     _element_names,
     _fill_build_inspection,
     _NumpyRhsBuild,
@@ -120,7 +121,7 @@ from .simulation_scalar import (
 # entry point may default to a concrete tolerance — that would occupy level 1 of
 # the §2.2.2 chain and the document could never win. Hence the `noqa`.
 from .solver import DEFAULT_ABSTOL, DEFAULT_RELTOL, resolve_tolerances  # noqa: F401
-from .sympy_bridge import SimulationError
+from .sympy_bridge import SimulationError, _unbalanced
 from .template_imports import resolve_template_machinery
 
 __all__ = [
@@ -344,6 +345,12 @@ class EsmProblem:
     build: _NumpyRhsBuild | None = None
     #: The compiled lambdified SymPy right-hand side (scalar pathway), or ``None``.
     scalar_build: _ScalarRhsBuild | None = None
+    #: Why :attr:`scalar_build` is ``None`` on a state-free document, or ``None``.
+    #: Such a document's build product is the interpreter build in :attr:`build`,
+    #: so a SymPy tier that cannot lower one of its bodies does not fail the
+    #: construction — but the reason travels with the problem, so the calls that
+    #: do need that tier raise WITH it rather than rediscovering it.
+    scalar_build_error: Exception | None = None
     #: Merged build-time array registry: caller arrays + eagerly-materialized
     #: const providers + engine-derived pushdown products.
     const_arrays: dict[str, np.ndarray] = field(default_factory=dict)
@@ -608,6 +615,9 @@ def esm_problem(
     # A declared shape over an undeclared index set, on a state nothing sizes.
     _assert_shaped_states_have_extent(flat)
 
+    # One unknown carrying both a derivative equation and a bare-LHS one.
+    _assert_no_doubly_defined_state(flat)
+
     # esm-spec §6.6.2 "Unrecognized override keys": a `p` key that names no
     # single parameter is an ERROR, raised at the one front door every pathway
     # routes through so the three executing bindings agree. Ignoring it silently
@@ -667,6 +677,7 @@ def esm_problem(
     static_cache: dict[str, Any] = {}
     build: _NumpyRhsBuild | None = None
     scalar_build: _ScalarRhsBuild | None = None
+    scalar_build_error: Exception | None = None
     if pathway == "array":
         build = _build_numpy_rhs(
             flat,
@@ -695,15 +706,32 @@ def esm_problem(
         )
         if inspect is not None:
             _fill_build_inspection(inspect, flat, build, t0, loader_arrays=merged)
-        # `solve` still samples the observed bodies over tspan through the SymPy
-        # pathway, so compile that too — but TOLERANTLY. SymPy lowering is
-        # narrower than the interpreter's (no `false`, no IEEE division by a
-        # literal zero), and a body only the interpreter can evaluate must not
-        # make the whole document unbuildable; `solve` reports it instead.
+        # `solve` samples the observed bodies over tspan through the SymPy
+        # pathway, so compile that too — but this document has no ODE right-hand
+        # side for the compile to PRODUCE (`_build_scalar_rhs` answers such a
+        # system with `rhs_function=None`), and the build product it hands back
+        # is the interpreter build above. SymPy lowering is narrower than the
+        # interpreter's — no `false`, no IEEE division by a literal zero, no
+        # boolean-valued body in an arithmetic position — and Julia and Rust
+        # evaluate all three, so refusing the document here would make this
+        # binding alone decline a model the other two run, and would take
+        # `observed_field` (API_SPEC §5.8, stable API for exactly these
+        # state-free documents) with it.
+        #
+        # What the failure must not do is VANISH. It is kept on the problem, and
+        # the calls that really do need the SymPy tier — `solve`, `init` —
+        # surface it with this cause attached instead of meeting it again blind.
         try:
             scalar_build = _build_scalar_rhs(flat, p, u0, cse=cse)
-        except Exception:  # noqa: BLE001 — deferred to solve(), which reports it
+        except Exception as exc:  # noqa: BLE001 — recorded below, raised by solve()
+            if getattr(exc, "code", None) is not None:
+                # A DIAGNOSTIC this binding chose to emit — an unbalanced system,
+                # an unsupported construct, an unlowerable operator. Those are
+                # refusals about the DOCUMENT and are fatal wherever they are
+                # raised; only an accident of SymPy lowering is tolerated here.
+                raise
             scalar_build = None
+            scalar_build_error = exc
     elif pathway == "scalar":
         scalar_build = _build_scalar_rhs(flat, p, u0, cse=cse)
     # The loader- and discrete-provider pathways rebuild the right-hand side at
@@ -719,6 +747,7 @@ def esm_problem(
         pathway=pathway,
         build=build,
         scalar_build=scalar_build,
+        scalar_build_error=scalar_build_error,
         const_arrays=merged,
         providers=dict(providers) if providers else None,
         gated_provider_keys=sorted(gated),
@@ -800,6 +829,20 @@ def _declares_resolvable_shape(flat: FlattenedSystem) -> bool:
     the same reason its state counterpart is, and ``_build_numpy_rhs`` resolves
     an observed's declared shape through this very resolver — so a declaration
     that routes a document here is a declaration the build then honours.
+
+    Why an UNRESOLVABLE shape is safe to route to the scalar engine, closed
+    rather than asserted. There are exactly three sources of extent in this
+    binding, and none of them can give the array build cells this predicate does
+    not see. (1) Declared shape: the array layout calls this same resolver with
+    the same absent ``derived_extents``, so what it cannot resolve here it cannot
+    resolve there either. (2) Usage inference (``infer_variable_shapes``) and
+    (3) the pointwise lift (``lifted_shapes``) both read extents out of ``index``
+    / ``faq`` nodes, and any document carrying one of those takes the array route
+    on the array-op test regardless of what any shape resolves to. What is left —
+    a shaped parameter whose inline array data the scalar tier cannot bind — the
+    scalar tier REFUSES by name rather than binding a stand-in. So the two
+    engines agree on such a document or one of them declines it; neither answers
+    differently.
     """
     for varmap in (flat.state_variables, flat.parameters, flat.observed_variables):
         for var in varmap.values():
@@ -853,6 +896,48 @@ def _assert_shaped_states_have_extent(flat: FlattenedSystem) -> None:
             f"does (esm-spec §6.3, §9.7.10: a name still unresolved after "
             f"injection is an error at the build)"
         )
+
+
+def _assert_no_doubly_defined_state(flat: FlattenedSystem) -> None:
+    """Refuse an unknown that carries BOTH a derivative equation and a bare-LHS one.
+
+    esm-spec §4.9.4 counts unknowns against equations "whichever form the LHS
+    takes", so ``D(x) ~ f`` alongside ``x ~ g`` is two equations binding one
+    unknown: the document is unbalanced, and :func:`earthsci_ast.validate`
+    reports exactly that, ``equation_count_mismatch`` at ``/models/<M>``. The
+    build is the other place the same document arrives. Tie-breaking it — keeping
+    the derivative and dropping the bare equation — integrates a system free of a
+    constraint the file declares and reports the trajectory as the answer, so
+    esm-libraries-spec §2.5.2 puts the conflict here, at construction, named.
+
+    The check is over EQUATION SHAPES, not over the ``state``/``observed``
+    split: the four derivative spellings :func:`_differentiated_lhs_target`
+    recognizes all name the same differentiated unknown, and a bare-string LHS on
+    that name is the competing definition whichever bucket flatten filed it in.
+    """
+    diff_targets: dict[str, Any] = {}
+    bare_targets: dict[str, Any] = {}
+    for eq in flat.equations:
+        target = _differentiated_lhs_target(eq.lhs)
+        if target is not None:
+            diff_targets.setdefault(target, eq)
+        elif isinstance(eq.lhs, str):
+            bare_targets.setdefault(eq.lhs, eq)
+    clash = sorted(set(diff_targets) & set(bare_targets))
+    if not clash:
+        return
+    name = clash[0]
+    diff_eq = diff_targets[name]
+    bare_eq = bare_targets[name]
+    raise _unbalanced(
+        f"unknown {name!r} is defined twice — by "
+        f"`{_expr_to_string(diff_eq.lhs)} ~ {_expr_to_string(diff_eq.rhs)}` and by "
+        f"`{_expr_to_string(bare_eq.lhs)} ~ {_expr_to_string(bare_eq.rhs)}`. "
+        f"esm-spec §4.9.4 counts an equation whichever form its LHS takes, so this "
+        f"system has one more equation than it has unknowns to bind; keeping the "
+        f"derivative and dropping the constraint would run a model the document does "
+        f"not describe. Remove one of the two definitions."
+    )
 
 
 def _refuse_unsupported_constructs(flat: FlattenedSystem, file: EsmFile | None) -> None:
@@ -1335,6 +1420,7 @@ def remake(
         pathway=prob.pathway,
         build=build,
         scalar_build=scalar_build,
+        scalar_build_error=None if scalar_build is not None else prob.scalar_build_error,
         const_arrays=prob.const_arrays,
         providers=prob.providers,
         gated_provider_keys=list(prob.gated_provider_keys),
@@ -1547,11 +1633,18 @@ def _rhs_of(prob: EsmProblem) -> tuple[Callable, np.ndarray, list[str]]:
     if build_s is None:
         # `bare assert` would vanish under -O; this is a real reachable state
         # (a state-free document whose SymPy lowering the interpreter-only body
-        # defeated), so it gets a real error.
-        raise SimulationError(
-            f"init: this EsmProblem has no compiled right-hand side to step "
-            f"(pathway {prob.pathway!r}). Run it with solve()."
+        # defeated), so it gets a real error — carrying the construction-time
+        # cause, which is the thing that actually explains it.
+        cause = prob.scalar_build_error
+        reason = (
+            f"its SymPy compile did not finish ({type(cause).__name__}: {cause})"
+            if cause is not None
+            else "it has no compiled right-hand side"
         )
+        raise SimulationError(
+            f"init: this EsmProblem cannot be stepped (pathway {prob.pathway!r}) "
+            f"because {reason}. Run it with solve()."
+        ) from cause
     if build_s.rhs_function is None:
         raise SimulationError(
             "init: this system has no ODE states to step (it is observed-only); "
