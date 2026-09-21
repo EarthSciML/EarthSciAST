@@ -87,9 +87,7 @@ def test_wildfire_atmosphere_ocean_simulation() -> None:
         tspan = (float(ts["start"]), float(ts["end"]))
         test_tol = test.get("tolerance")
 
-        result = solve(
-            esm_problem(file, tspan, compiler="interpreter"), reltol=1e-10, abstol=1e-12
-        )
+        result = solve(esm_problem(file, tspan, compiler="interpreter"), reltol=1e-10, abstol=1e-12)
         assert result.retcode is ReturnCode.Success, f"solve() did not succeed: {result.message}"
 
         for a in test["assertions"]:
