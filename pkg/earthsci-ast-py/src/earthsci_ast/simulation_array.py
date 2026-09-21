@@ -12,7 +12,6 @@ and join-key buffers, the :class:`BuildInspection` observability sink,
 
 from __future__ import annotations
 
-import warnings
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable
@@ -29,6 +28,7 @@ from .flatten import (
     FlattenedSystem,
     UnsupportedDimensionalityError,
     _expand_range,
+    _expr_to_string,
     _integrated_state_names,
     flatten,
     infer_variable_shapes,
@@ -597,17 +597,18 @@ def _apply_equation_to_dy(
 
     # Case C: an equation left over after elimination whose LHS matched neither a
     # scalar/element state derivative (Case A) nor an aggregate ODE (Case B), so
-    # nothing is written to ``dy``. Every such shape means a state this equation
-    # was meant to constrain silently stays frozen at its initial value — emit a
-    # diagnostic naming it rather than dropping it silently (Python dedups per
-    # distinct message, so this fires once per LHS).
+    # nothing is written to ``dy``. Every such shape leaves the state the equation
+    # was meant to constrain frozen at its initial value while the run reports
+    # that as its trajectory, which esm-spec §9.6.6 makes a refusal rather than a
+    # number. ``_build_numpy_rhs`` refuses these at the build, so the raises below
+    # are the backstop for a hand-built FlattenedSystem that reaches the RHS
+    # directly.
     #
-    # The ``ic`` guard below is now defensive only: flatten classifies ``ic``
-    # equations out of ``equations`` into ``field_ics`` (esm-libraries-spec
-    # §4.7.5 step 4), so none reaches here from a flattened system. It is kept
-    # for a hand-built FlattenedSystem, where an ``ic`` LHS is still an
-    # intentional no-op on the RHS (its value is folded into u0 at build time)
-    # and must not warn.
+    # The ``ic`` guard is defensive only: flatten classifies ``ic`` equations out
+    # of ``equations`` into ``field_ics`` (esm-libraries-spec §4.7.5 step 4), so
+    # none reaches here from a flattened system. It is kept for a hand-built
+    # FlattenedSystem, where an ``ic`` LHS is an intentional no-op on the RHS (its
+    # value is folded into u0 at build time) and must not be refused.
     if isinstance(lhs, ExprNode) and lhs.op == "ic":
         return
     # An IMPLICIT equation is refused at `esm_problem`'s front door; this is the
@@ -619,14 +620,100 @@ def _apply_equation_to_dy(
             f"with LHS {eq.lhs!r}",
             "Python array interpreter",
         )
-    warnings.warn(
-        f"solve: unrecognized algebraic equation with LHS {eq.lhs!r} was not "
-        f"applied to the ODE RHS; any state it constrains stays frozen at its "
-        f"initial value",
-        RuntimeWarning,
-        stacklevel=2,
+    raise UnsupportedConstructError(
+        "algebraic equation",
+        f"`{_expr_to_string(eq.lhs)} ~ {_expr_to_string(eq.rhs)}`, whose left-hand "
+        f"side is neither a state derivative nor a name this build resolved to an "
+        f"observed definition,",
+        "Python array interpreter",
     )
-    return
+
+
+def _differentiated_lhs_target(lhs: Expr) -> str | None:
+    """The unknown a DERIVATIVE left-hand side differentiates, or ``None``.
+
+    The spellings :func:`_apply_equation_to_dy` writes into ``dy``: ``D(x)``,
+    ``D(index(x, i…))``, and either of those as the body of a ``faq``
+    (the array-level form). A bare-string LHS is deliberately not one of them —
+    it DEFINES its name rather than its tendency (esm-spec §6.3.1), which is the
+    distinction :func:`_algebraically_defined_states` turns on.
+    """
+    if not isinstance(lhs, ExprNode):
+        return None
+    if is_aggregate_op(lhs.op) and lhs.expr is not None:
+        return _differentiated_lhs_target(lhs.expr)
+    if lhs.op != "D" or not lhs.args:
+        return None
+    inner = lhs.args[0]
+    if isinstance(inner, str):
+        return inner
+    if isinstance(inner, ExprNode) and inner.op == "index" and inner.args:
+        head = inner.args[0]
+        if isinstance(head, str):
+            return head
+    return None
+
+
+def _algebraically_defined_states(flat: FlattenedSystem, vi_var_names: set[str]) -> set[str]:
+    """States whose ONLY defining equation is a bare-LHS one — the algebraic states.
+
+    esm-spec §6.3.1 makes a bare-variable-LHS equation the definition of its
+    name, so such an unknown is derived rather than integrated whichever bucket
+    ``flatten`` filed it in. The caller moves these to the observed side, where
+    the array pathway already materializes a definition in dependency order and
+    reports it under its own name.
+
+    Value-invention producers are excluded: they are materialized at setup by the
+    relational front door and are not observed definitions. A state that ALSO
+    carries a derivative equation is excluded too — that is the unbalanced
+    document ``problem._assert_no_doubly_defined_state`` refuses, and quietly
+    picking a side here is exactly what that refusal exists to prevent.
+    """
+    differentiated: set[str] = set()
+    bare_defined: set[str] = set()
+    states = flat.state_variables
+    for eq in flat.equations:
+        target = _differentiated_lhs_target(eq.lhs)
+        if target is not None:
+            differentiated.add(target)
+        elif isinstance(eq.lhs, str) and eq.lhs in states:
+            bare_defined.add(eq.lhs)
+    return bare_defined - differentiated - set(vi_var_names)
+
+
+def _assert_driver_equations_are_appliable(
+    equations: list[FlattenedEquation],
+    state_layout: dict[str, slice],
+) -> None:
+    """Refuse a driver equation the per-step RHS would not apply.
+
+    :func:`_apply_equation_to_dy` writes a contribution into ``dy`` only for a
+    derivative LHS naming a laid-out state (or an ``ic``, whose value is folded
+    into ``u0``). Anything else leaves the state it was meant to constrain at its
+    initial value for the whole run, and the integration reports that as the
+    answer. esm-libraries-spec §2.5.2 puts a construct the evaluator cannot run at
+    CONSTRUCTION, so the shapes are checked once here rather than met per step.
+    """
+    for eq in equations:
+        lhs = eq.lhs
+        if isinstance(lhs, ExprNode) and lhs.op == "ic":
+            continue
+        if is_implicit_lhs(lhs):
+            raise UnsupportedConstructError(
+                "implicit equation",
+                f"`{_expr_to_string(lhs)} ~ {_expr_to_string(eq.rhs)}`",
+                "Python array interpreter",
+            )
+        target = _differentiated_lhs_target(lhs)
+        if target is not None and target in state_layout:
+            continue
+        raise UnsupportedConstructError(
+            "algebraic equation",
+            f"`{_expr_to_string(lhs)} ~ {_expr_to_string(eq.rhs)}`, whose left-hand "
+            f"side is neither a derivative of an integrated state nor a definition "
+            f"this build resolved to an observed,",
+            "Python array interpreter",
+        )
 
 
 def _expr_referenced_names(expr: Expr) -> set[str]:
@@ -2413,8 +2500,24 @@ def _build_numpy_rhs(
     # Value-invention states (broad-phase bins / candidate-set membership) are
     # materialized at setup and DROPPED from the ODE (RFC §5.3 / §6.1).
     vi_var_names, bin_specs = _detect_value_invention_states(flat)
-    state_names = [n for n in _integrated_state_names(flat) if n not in vi_var_names]
-    observed_names: set[str] = set(flat.observed_variables.keys())
+    # An unknown filed as a state but DEFINED by a bare-LHS equation (`x ~ body`,
+    # no derivative anywhere) is algebraic, not integrated: esm-spec §6.3.1 makes
+    # the bare-variable-LHS equation the thing that defines an observed. Left in
+    # `state_names` such a name holds an ODE slot nothing writes — the per-step
+    # driver has no case for a bare LHS — so it would sit at its declared default
+    # for the whole run while its defining equation reached nothing (issue #425).
+    # Reclassifying it as an observed is the normalization Julia's tree-walk makes
+    # before it builds (`algebraic_states_to_observeds`): the definition is
+    # materialized in dependency order each step and reported under its own name,
+    # which is also how the SymPy pathway recovers it, so the three bindings
+    # answer alike.
+    alg_state_names = _algebraically_defined_states(flat, vi_var_names)
+    state_names = [
+        n
+        for n in _integrated_state_names(flat)
+        if n not in vi_var_names and n not in alg_state_names
+    ]
+    observed_names: set[str] = set(flat.observed_variables.keys()) | alg_state_names
     # Keep the CALLER's dict identity (when given): the pushdown hooks below
     # merge derived member-factor / gated-fetch arrays into this registry, and
     # `prepare` reads them back through the same object for its inspection fill.
@@ -2518,6 +2621,11 @@ def _build_numpy_rhs(
             )
             for eq in working_equations
         ]
+
+    # Every equation that survives to the per-step driver must actually reach a
+    # slot of ``dy``; one that does not leaves its target frozen and the run
+    # reports the initial value as the trajectory (esm-spec §9.6.6).
+    _assert_driver_equations_are_appliable(working_equations, state_layout)
 
     # Parameter resolution: overrides win over defaults.
     #
