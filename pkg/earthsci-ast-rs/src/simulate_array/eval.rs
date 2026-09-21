@@ -429,7 +429,7 @@ fn eval_op_named(op: &str, node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         // Inline literal (esm-spec §4): a number → scalar; a nested numeric
         // array → a row-major array (e.g. a polygon's `[verts, 2]` lon/lat ring
         // held as a constant observed input feeding an `intersect_polygon` clip).
-        "const" => eval_const(node),
+        "const" => eval_const_memo(node, ctx.const_lits),
 
         // Array ops.
         "index" => eval_index(node, ctx),
@@ -1511,6 +1511,77 @@ mod kernel_equivalence_tests {
             other => panic!("expected an array, got {other:?}"),
         }
     }
+
+    /// The inline-`const` memo must answer with exactly what the walk produces,
+    /// on the first read and on every later one — it is a pure
+    /// evaluation-count change, never a value change.
+    #[test]
+    fn const_literal_memo_matches_the_direct_walk() {
+        let node = ExpressionNode {
+            op: "const".to_string(),
+            value: Some(serde_json::json!([[1.5, -2.5], [3.25, 4.75]])),
+            ..Default::default()
+        };
+        let want = match json_to_value(node.value.as_ref().unwrap()).expect("array const") {
+            Value::Array(a) => *a,
+            other => panic!("expected an array, got {other:?}"),
+        };
+        let memo = ConstLitMemo::default();
+        for _ in 0..3 {
+            let got = memo.get(&node).expect("memoized array");
+            assert_eq!(*got, want);
+        }
+        // And the memo-aware `const` arm agrees with the un-memoized one.
+        match (
+            eval_const_memo(&node, Some(&memo)),
+            eval_const_memo(&node, None),
+        ) {
+            (Value::Array(a), Value::Array(b)) => assert_eq!(*a, *b),
+            other => panic!("expected two arrays, got {other:?}"),
+        }
+    }
+
+    /// The memo is keyed by working precision as well as by node, because a
+    /// `const` literal rounds on ingress (esm-spec §11.3.1): one node has two
+    /// materializations and serving the wrong one would silently widen a
+    /// binary32 document back to binary64.
+    #[test]
+    fn const_literal_memo_is_keyed_by_precision() {
+        let node = ExpressionNode {
+            op: "const".to_string(),
+            value: Some(serde_json::json!([0.1, 0.2])),
+            ..Default::default()
+        };
+        let memo = ConstLitMemo::default();
+        let f64_first = memo.get(&node).expect("binary64 array")[[0]];
+        let f32_seen = {
+            let _g = crate::precision::enter(crate::precision::Precision::Float32);
+            memo.get(&node).expect("binary32 array")[[0]]
+        };
+        let f64_again = memo.get(&node).expect("binary64 array again")[[0]];
+        assert_eq!(f64_first.to_bits(), 0.1_f64.to_bits());
+        assert_eq!(f32_seen.to_bits(), (0.1_f32 as f64).to_bits());
+        assert_eq!(f64_again.to_bits(), f64_first.to_bits());
+    }
+
+    /// A ragged literal has no array materialization; the memo must report that
+    /// as the NaN sentinel the plain walk reports, not cache a partial array.
+    #[test]
+    fn const_literal_memo_keeps_a_ragged_literal_unevaluable() {
+        let node = ExpressionNode {
+            op: "const".to_string(),
+            value: Some(serde_json::json!([[1.0, 2.0], [3.0]])),
+            ..Default::default()
+        };
+        let memo = ConstLitMemo::default();
+        assert!(memo.get(&node).is_none());
+        for m in [Some(&memo), None] {
+            match eval_const_memo(&node, m) {
+                Value::Scalar(s) => assert!(s.is_nan()),
+                other => panic!("expected the NaN sentinel, got {other:?}"),
+            }
+        }
+    }
 }
 
 /// Evaluate a strictly-binary op (`atan2`, the comparisons).
@@ -1802,6 +1873,34 @@ pub(super) fn eval_index(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
             return index_into(arr, &raw, in_bounds, kind);
         }
     }
+    // Inline `const` array literal as the gather target (esm-spec §4.3.3). Read
+    // the one element straight out of the memoized array: the generic path below
+    // re-walks the node's JSON payload and copies the whole table into a `Value`
+    // for every single cell, which on a transcribed lookup table (an RRTM
+    // k-distribution band is ~14k numbers, gathered once per level per g-point)
+    // is the dominant cost of the whole right-hand side. The provenance
+    // (`INLINE_CONST_NAME`), the out-of-range policy and `index_into` itself are
+    // the ones the generic path would have used, so the result is bit-identical.
+    //
+    // Evaluating the subscripts after the literal rather than before is likewise
+    // unobservable: a `const` node reads nothing and latches nothing.
+    if let Expr::Operator(lit) = &node.args[0]
+        && lit.op == "const"
+        && is_inline_const_array(lit)
+        && let Some(arr) = const_lit_array(lit, ctx.const_lits)
+    {
+        let (raw, in_bounds) = eval_index_args(&node.args[1..], ctx);
+        return index_into(
+            &arr,
+            &raw,
+            in_bounds,
+            GatherKind::ConstArray {
+                name: INLINE_CONST_NAME,
+                scope: ctx.const_arrays,
+            },
+        );
+    }
+
     // The gather's PROVENANCE is decided by the operand itself: a named const
     // factor, or a `const` literal written inline (esm-spec §4.3.3). A computed
     // array operand (`index(reshape(...), i)`) is never a const-array gather.
@@ -1859,6 +1958,32 @@ pub(super) fn eval_const(node: &ExpressionNode) -> Value {
         .as_ref()
         .and_then(json_to_value)
         .unwrap_or(Value::Scalar(f64::NAN))
+}
+
+/// [`eval_const`] served from the inline-literal memo when one is in scope.
+///
+/// Only the ARRAY case is memoized: a scalar literal is one `as_f64`, while an
+/// array literal is a recursive JSON walk over (for a transcribed lookup table)
+/// tens of thousands of numbers. The value is identical either way — the memo
+/// stores exactly what [`json_to_value`] produced — so this is a pure
+/// evaluation-count change. See [`EvalCtx::const_lits`].
+pub(super) fn eval_const_memo(node: &ExpressionNode, memo: Option<&ConstLitMemo>) -> Value {
+    // With no memo in scope there is nothing to serve from, and going through
+    // one would only add a copy: fall straight through to the plain walk.
+    if let Some(memo) = memo
+        && is_inline_const_array(node)
+        && let Some(arr) = memo.get(node)
+    {
+        return Value::Array(Box::new((*arr).clone()));
+    }
+    eval_const(node)
+}
+
+/// Whether this `const` node's payload is a (possibly nested) JSON array — the
+/// literals the memo covers. A scalar payload takes the untouched path.
+#[inline]
+pub(super) fn is_inline_const_array(node: &ExpressionNode) -> bool {
+    matches!(node.value.as_ref(), Some(serde_json::Value::Array(_)))
 }
 
 /// Convert an inline JSON literal to a runtime [`Value`]: a number → scalar; a
@@ -2274,6 +2399,7 @@ pub(crate) fn eval_observed_recurrence(
         derived_extents,
         forcing: &forcing,
         cse: None,
+        const_lits: None,
         const_arrays,
         declared: empty_declared_names(),
     };
@@ -2368,6 +2494,7 @@ pub(crate) fn eval_expression_with_extents_and_consts_shared(
         // Standalone one-shot evaluation: no CSE memo (nothing to amortize the
         // structural analysis over), so this path is unchanged.
         cse: None,
+        const_lits: None,
         const_arrays,
         // No compiled model behind this entry point, so it vouches for no name
         // (see [`EvalCtx::declared`]).
@@ -5685,6 +5812,7 @@ mod unbound_name_fault_tests {
             derived_extents: empty_derived_extents(),
             forcing: &forcing,
             cse: None,
+            const_lits: None,
             const_arrays: ConstArrayScope::empty(),
             declared: &declared,
         };

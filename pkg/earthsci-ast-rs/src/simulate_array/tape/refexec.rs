@@ -261,6 +261,7 @@ pub(super) fn run_reference(
                     derived_extents: empty_derived_extents(),
                     forcing: &compiled.forcing,
                     cse: None,
+                    const_lits: None,
                     const_arrays: &compiled.const_scope,
                     declared: &compiled.declared_names,
                 };
