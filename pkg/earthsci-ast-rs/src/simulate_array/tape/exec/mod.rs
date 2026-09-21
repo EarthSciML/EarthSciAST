@@ -417,6 +417,10 @@ struct Env<'a> {
     /// The model's const-array registry (§5.5.5), for the fallback arms that
     /// re-enter the per-cell oracle.
     const_arrays: &'a ConstArrayScope,
+    /// The inline-`const`-literal memo (see `EvalCtx::const_lits`). The fallback
+    /// arms are exactly where a transcribed lookup table is gathered per cell,
+    /// so the tape's oracle re-entry carries it.
+    const_lits: &'a ConstLitMemo,
     /// The model's declared-name set (see `EvalCtx::declared`), likewise for
     /// the fallback arms.
     declared: &'a HashSet<String>,
@@ -436,6 +440,7 @@ impl<'a> Env<'a> {
             derived_extents: empty_derived_extents(),
             forcing: self.forcing,
             cse: None,
+            const_lits: Some(self.const_lits),
             const_arrays: self.const_arrays,
             declared: self.declared,
         }
@@ -467,6 +472,7 @@ pub(in crate::simulate_array) fn run_tape_call(
     call: &RhsCall,
     state_arrays: &ArrMap,
     const_arrays: &ConstArrayScope,
+    const_lits: &ConstLitMemo,
     dy: &mut [f64],
     stats: &mut RhsStats,
 ) {
@@ -530,6 +536,7 @@ pub(in crate::simulate_array) fn run_tape_call(
         params,
         t,
         const_arrays,
+        const_lits,
         declared,
     };
 

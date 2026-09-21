@@ -1471,6 +1471,7 @@ fn export_demotion_skips_unread_publishes() {
             &call,
             &super::super::ArrMap::default(),
             &compiled.const_scope,
+            &super::super::ConstLitMemo::default(),
             dy,
             &mut stats,
         );
@@ -1600,6 +1601,7 @@ fn unpublished_export_read_by_a_fallback_fails_closed() {
                     &call,
                     &super::super::ArrMap::default(),
                     &compiled.const_scope,
+                    &super::super::ConstLitMemo::default(),
                     dy,
                     &mut stats,
                 );

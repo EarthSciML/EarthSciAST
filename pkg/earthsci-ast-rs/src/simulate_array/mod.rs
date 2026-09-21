@@ -105,7 +105,7 @@ use rhs::*;
 use vectorized::*;
 
 use crate::faq::{ReduceKind, empty_derived_extents};
-use crate::types::{Expr, IndexSet, RangeSpec};
+use crate::types::{Expr, ExpressionNode, IndexSet, RangeSpec};
 use crate::value_invention::BoundaryKind;
 use indexmap::IndexMap;
 use ndarray::{ArrayD, IxDyn};
@@ -788,6 +788,8 @@ struct EvalEnv<'a> {
     forcing: &'a RefCell<HashMap<String, ArrayD<f64>>>,
     /// See [`EvalCtx::cse`].
     cse: Option<&'a CseRt>,
+    /// See [`EvalCtx::const_lits`].
+    const_lits: Option<&'a ConstLitMemo>,
     /// See [`EvalCtx::const_arrays`].
     const_arrays: &'a ConstArrayScope,
     /// See [`EvalCtx::declared`].
@@ -809,6 +811,7 @@ impl<'a> EvalEnv<'a> {
             derived_extents: self.derived_extents,
             forcing: self.forcing,
             cse: self.cse,
+            const_lits: self.const_lits,
             const_arrays: self.const_arrays,
             recur: None,
             declared: self.declared,
@@ -875,6 +878,32 @@ struct EvalCtx<'a> {
     /// a structural analysis over; the overlay then behaves exactly as it did
     /// before. See [`cse`] for the scoping rule that makes sharing sound.
     cse: Option<&'a CseRt>,
+    /// Per-model memo for INLINE array-valued `const` literals (esm-spec §4.3.3),
+    /// keyed by the literal node's address and the active working precision.
+    ///
+    /// A `const` node carries its payload as raw JSON, so materializing it is a
+    /// recursive `serde_json::Value` walk plus a fresh `ArrayD` allocation.
+    /// Nothing about that depends on the state, the time or the loop binds, yet
+    /// `index(const([...]), i)` — the shape every transcribed lookup table takes
+    /// (an RRTM k-distribution band is ~14k numbers) — needs the whole walk
+    /// once per cell of the enclosing aggregate without it, which is the
+    /// dominant cost of a right-hand side that gathers such a table.
+    ///
+    /// The memo makes it once per model instead. Entries are `Rc`-shared so a
+    /// hit costs a refcount bump, never a copy, and [`eval_index`] reads the
+    /// element straight out of the shared array rather than cloning it into a
+    /// [`Value::Array`].
+    ///
+    /// `None` on every path that carries no memo to hang the entry on: the
+    /// standalone `eval_expression*` entry points, the recurrence sweep, the
+    /// build-time observed snapshots, the output-node observed pass and the
+    /// test-only reference tape executor. Those walk the payload directly and
+    /// answer exactly the same values; the output-node pass repeats the same
+    /// bodies per node and would benefit from a memo of its own, which it does
+    /// not yet have. The memo itself lives on [`RhsScratch`], whose lifetime is
+    /// the rule set's, and is retargeted on the same key [`CseRt::retarget`]
+    /// uses.
+    const_lits: Option<&'a ConstLitMemo>,
     /// The CONST-ARRAY provenance of this evaluation (CONFORMANCE_SPEC §5.5.5).
     ///
     /// A gather whose target is named here is a **const-array gather** — a
@@ -938,6 +967,84 @@ fn empty_declared_names() -> &'static HashSet<String> {
 /// The name `E_TREEWALK_CONSTARRAY_OOB` reports for a `const` literal written
 /// inline as an `index` base, which has no variable name of its own.
 pub(crate) const INLINE_CONST_NAME: &str = "inline const";
+
+/// Per-model memo for inline array-valued `const` literals — see
+/// [`EvalCtx::const_lits`] for why it exists.
+///
+/// Keyed by `(node address, working precision)`. The address is the payload
+/// address of the `Arc<ExpressionNode>` the rule set holds, so it is stable and
+/// unique for exactly as long as that rule set is alive — the same identity
+/// argument the CSE class table rests on, and [`Self::retarget`] discards the
+/// table on the same key when a scratch is handed a different rule set.
+/// Precision is part of the key because a `const` literal rounds on ingress
+/// (esm-spec §11.3.1), so the binary32 materialization is a different array.
+#[derive(Default)]
+pub(super) struct ConstLitMemo {
+    inner: RefCell<ConstLitInner>,
+}
+
+#[derive(Default)]
+struct ConstLitInner {
+    /// The rule-set key this table was built against (see [`CseRt::retarget`]).
+    key: u64,
+    /// `None` marks a payload with no array materialization — a ragged or
+    /// non-numeric literal. Recorded rather than left absent so a repeat read
+    /// is still a single probe; the caller then falls back to the plain walk,
+    /// which is what produces that literal's NaN sentinel.
+    map: HashMap<(usize, bool), Option<Rc<ArrayD<f64>>>>,
+}
+
+/// Walk an inline `const` node's JSON payload into a shared array. `None` for
+/// any payload [`eval::json_to_value`] does not read as a numeric array — a
+/// scalar, or a ragged/non-numeric one.
+fn walk_const_lit(node: &ExpressionNode) -> Option<Rc<ArrayD<f64>>> {
+    match node.value.as_ref().map(eval::json_to_value) {
+        Some(Some(Value::Array(a))) => Some(Rc::new(*a)),
+        _ => None,
+    }
+}
+
+impl ConstLitMemo {
+    /// Bind this memo to a rule set. A different key discards every entry: the
+    /// addresses it holds belonged to the previous rule set and a new node may
+    /// land on one of them.
+    pub(super) fn retarget(&self, key: u64) {
+        let mut inner = self.inner.borrow_mut();
+        if inner.key != key {
+            inner.key = key;
+            inner.map.clear();
+        }
+    }
+
+    /// The materialized array for the inline `const` literal `node`, computing
+    /// (and remembering) it on the first read. `None` for a scalar or malformed
+    /// payload, which the caller handles exactly as an un-memoized walk would.
+    pub(super) fn get(&self, node: &ExpressionNode) -> Option<Rc<ArrayD<f64>>> {
+        let k = (
+            node as *const ExpressionNode as usize,
+            crate::precision::active().is_f32(),
+        );
+        if let Some(hit) = self.inner.borrow().map.get(&k) {
+            return hit.clone();
+        }
+        let built = walk_const_lit(node);
+        self.inner.borrow_mut().map.insert(k, built.clone());
+        built
+    }
+}
+
+/// The materialized array for an inline `const` literal, through `memo` when
+/// one is in scope and by a direct walk otherwise. The two answers are equal by
+/// construction: the memo stores exactly what the walk produces.
+pub(super) fn const_lit_array(
+    node: &ExpressionNode,
+    memo: Option<&ConstLitMemo>,
+) -> Option<Rc<ArrayD<f64>>> {
+    match memo {
+        Some(m) => m.get(node),
+        None => walk_const_lit(node),
+    }
+}
 
 /// Which arrays in an evaluation are CONST-ARRAY factors, and each one's
 /// declared per-dimension out-of-range boundary policy

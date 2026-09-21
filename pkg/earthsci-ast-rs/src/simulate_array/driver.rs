@@ -690,6 +690,7 @@ impl ArrayCompiled {
             // One-shot materialization: no CSE memo (nothing to amortize the
             // structural analysis over).
             cse: None,
+            const_lits: None,
             const_arrays: &self.const_scope,
             declared: &self.declared_names,
         };
@@ -742,6 +743,7 @@ impl ArrayCompiled {
                         derived_extents: empty_derived_extents(),
                         forcing: &self.forcing,
                         cse: None,
+                        const_lits: None,
                         const_arrays: &self.const_scope,
                         declared: &self.declared_names,
                     },
@@ -1034,6 +1036,7 @@ impl ArrayCompiled {
                         derived_extents: empty_derived_extents(),
                         forcing: &self.forcing,
                         cse: None,
+                        const_lits: None,
                         const_arrays: &self.const_scope,
                         declared: &self.declared_names,
                     },
@@ -1388,6 +1391,7 @@ impl ArrayCompiled {
                         derived_extents: empty_derived_extents(),
                         forcing: &self.forcing,
                         cse: Some(&cse),
+                        const_lits: None,
                         const_arrays: &self.const_scope,
                         declared: &self.declared_names,
                     },
@@ -1502,6 +1506,7 @@ impl ArrayCompiled {
                             derived_extents: empty_derived_extents(),
                             forcing: &self.forcing,
                             cse: Some(&cse),
+                            const_lits: None,
                             const_arrays: &self.const_scope,
                             declared: &self.declared_names,
                         },

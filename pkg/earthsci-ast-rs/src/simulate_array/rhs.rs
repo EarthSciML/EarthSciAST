@@ -39,6 +39,11 @@ pub struct RhsScratch {
     /// lifetime of the (cloned) rule bodies this scratch is evaluated against —
     /// which is exactly the RHS closure that co-owns both.
     cse: CseRt,
+    /// Memo for inline array-valued `const` literals (see
+    /// [`EvalCtx::const_lits`]). Lives here for the same reason `cse` does: it
+    /// is keyed by AST node ADDRESS, so it must share the lifetime of the rule
+    /// bodies it is evaluated against, and it is retargeted on the same key.
+    const_lits: ConstLitMemo,
     /// Names of the hoisted STATE-FREE / `t`-free observeds (ess: static-observed
     /// hoist). Their arrays are seeded into `observed_arrays` ONCE by
     /// [`Self::set_static`] and then RETAINED in place across every RHS eval
@@ -80,6 +85,7 @@ impl RhsScratch {
             observed_arrays: ArrMap::default(),
             pool: Pool::default(),
             cse: CseRt::default(),
+            const_lits: ConstLitMemo::default(),
             static_keys: HashSet::new(),
             tape: None,
             const_arrays: Rc::new(ConstArrayScope::default()),
@@ -761,6 +767,18 @@ pub(super) struct RhsCall<'a> {
     pub(super) declared: &'a HashSet<String>,
 }
 
+/// The identity of the rule set a scratch's address-keyed tables (the CSE class
+/// table, the inline-`const` memo) were built against.
+///
+/// One definition, two consumers: they are invalidated together or one of them
+/// serves an answer for a node the other has already forgotten.
+fn rule_set_key(call: &RhsCall) -> u64 {
+    (call.rhs_rules.as_ptr() as u64)
+        ^ (call.observed_rules.as_ptr() as u64).rotate_left(32)
+        ^ ((call.rhs_rules.len() as u64) << 16)
+        ^ (call.observed_rules.len() as u64)
+}
+
 /// Evaluate one RHS call. Step 3b dispatcher: when the scratch carries a
 /// compiled tape ([`RhsScratch::install_tape`]) and the caller is not asking
 /// for the per-cell oracle, the call runs through the fast tape executor;
@@ -774,6 +792,12 @@ pub(super) fn evaluate_rhs_with_scratch(
     stats: &mut RhsStats,
     scratch: &mut RhsScratch,
 ) {
+    // ess-cse / inline-const memo: both tables are keyed by AST node ADDRESS, so
+    // a scratch handed a DIFFERENT rule set must discard them rather than answer
+    // for a node that no longer exists. `cse` is retargeted inside the legacy
+    // arm; the const-literal memo is read by the tape's fallback arms too, so it
+    // is retargeted here, on the same key, ahead of the dispatch.
+    scratch.const_lits.retarget(rule_set_key(call));
     if force_scalar || scratch.tape.is_none() {
         evaluate_rhs_legacy(call, dy, force_scalar, stats, scratch);
         return;
@@ -806,6 +830,7 @@ pub(super) fn evaluate_rhs_with_scratch(
         call,
         &scratch.state_arrays,
         &const_scope,
+        &scratch.const_lits,
         dy,
         stats,
     );
@@ -872,12 +897,7 @@ fn evaluate_rhs_legacy(
     // ess-cse: bind the CSE class table to THIS rule set. Its keys are AST node
     // addresses, so handing the same scratch a different rule set must discard
     // it rather than reuse stale classification.
-    scratch.cse.retarget(
-        (rhs_rules.as_ptr() as u64)
-            ^ (observed_rules.as_ptr() as u64).rotate_left(32)
-            ^ ((rhs_rules.len() as u64) << 16)
-            ^ (observed_rules.len() as u64),
-    );
+    scratch.cse.retarget(rule_set_key(call));
 
     // ess-lih: a box-pure value may be built from CONST-tier leaves, so the
     // persistent store is only valid while those hold still. `bind_params`
@@ -953,6 +973,7 @@ fn evaluate_rhs_legacy(
             observed_arrays,
             static_keys,
             cse,
+            const_lits,
             ..
         } = &mut *scratch;
         observed_arrays.retain(|k, _| static_keys.contains(k));
@@ -969,6 +990,7 @@ fn evaluate_rhs_legacy(
                 // discretization subtrees live, so this is the memo's main
                 // beneficiary.
                 cse: Some(&*cse),
+                const_lits: Some(&*const_lits),
                 const_arrays,
                 declared,
             },
@@ -993,6 +1015,7 @@ fn evaluate_rhs_legacy(
         derived_extents: empty_derived_extents(),
         forcing,
         cse: Some(&scratch.cse),
+        const_lits: Some(&scratch.const_lits),
         const_arrays,
         declared,
     };
