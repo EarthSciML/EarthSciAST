@@ -875,7 +875,7 @@ def _esm_problem_under(
     # hoist and the static observeds ran inside `_build_numpy_rhs` above, which
     # is where the census found six sevenths of this binding's per-cell landings.
     if build is not None:
-        _exercise_every_evaluation(flat, build, t0)
+        _exercise_every_evaluation(flat, build, t0, loader_arrays=merged)
 
     return EsmProblem(
         flat=flat,
@@ -980,6 +980,7 @@ def _exercise_every_evaluation(
     flat: FlattenedSystem,
     build: _NumpyRhsBuild,
     t0: float,
+    loader_arrays: dict[str, Any] | None = None,
 ) -> None:
     """Run, at construction, the two evaluations the build itself does not.
 
@@ -1006,7 +1007,7 @@ def _exercise_every_evaluation(
     except Exception:  # noqa: BLE001 — a non-refusal failure stays a run failure
         pass
     try:
-        probe_output_time_observeds(flat, build, float(t0))
+        probe_output_time_observeds(flat, build, float(t0), loader_arrays=loader_arrays)
     except CompilerRefusedRuleError:
         raise
     except Exception:  # noqa: BLE001 — see above
@@ -1663,7 +1664,9 @@ def remake(
                 sample_time=prob.sample_time,
                 build_only=True,
             )
-            _exercise_every_evaluation(prob.flat, build, prob.sample_time)
+            _exercise_every_evaluation(
+                prob.flat, build, prob.sample_time, loader_arrays=prob.const_arrays
+            )
         elif rebind and prob.engine == "scalar":
             scalar_build = _build_scalar_rhs(prob.flat, new_p, new_u0, cse=prob.cse)
 

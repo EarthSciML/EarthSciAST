@@ -3181,6 +3181,7 @@ def probe_output_time_observeds(
     flat: FlattenedSystem,
     build: _NumpyRhsBuild,
     t: float,
+    loader_arrays: dict[str, np.ndarray] | None = None,
 ) -> None:
     """Run the OUTPUT-TIME observed pass once, at one node, for its tiers alone.
 
@@ -3220,6 +3221,9 @@ def probe_output_time_observeds(
         t=float(t),
         index_sets=flat.index_sets,
         derived_rings={} if not varying else dict(build.static_derived_rings),
+        # Bound exactly as `_simulate_with_numpy` binds it at an output node, so
+        # the probe measures that pass rather than a differently-seeded twin.
+        input_arrays=loader_arrays if loader_arrays is not None else {},
         derived_extents=build.derived_extents,
         join_key_buffers=build.join_key_buffers,
         join_key_index_sets=build.join_key_index_sets,
@@ -3397,21 +3401,22 @@ def _simulate_with_numpy(
             # A system whose only states were value-invention producers (dropped
             # from the ODE at setup) is stateless in the same sense, so its
             # observed graph is answered the same way.
-            if build.ordered_observed:
-                # A CALCULATOR-shaped array document: no ODE state, but a real
-                # observed graph — the shape a recurrence definition naturally
-                # has (esm-spec §4.3.1.1), and the shape §6.6.5's
-                # observed-assertion form is written against. There is nothing to
-                # integrate, so the run returns the observed graph's values
-                # instead of a trajectory, which is what the scalar engine's
-                # observed-only path has always done for such a document and
-                # what `test_empty_system` pinned as the contract for a
-                # stateless system: a successful result, not a failure.
-                return _simulate_observeds_only(
-                    flat, build, tspan, saveat=saveat, callback=callback
-                )
-            # Neither states nor observeds: the run really has no content.
-            raise SimulationError("Flattened system has no state variables to integrate")
+            # A CALCULATOR-shaped array document: no ODE state, but a real
+            # observed graph — the shape a recurrence definition naturally has
+            # (esm-spec §4.3.1.1), and the shape §6.6.5's observed-assertion
+            # form is written against. There is nothing to integrate, so the run
+            # returns the observed graph's values instead of a trajectory, which
+            # is what the scalar engine's observed-only path has always done.
+            #
+            # An EMPTY document — neither states nor observeds — goes the same
+            # way, and answers with a no-op success carrying no rows. That is
+            # the contract `test_empty_system` pins, and it used to be met by the
+            # scalar engine because such a document routed there; under
+            # `compiler="native"` every document is built by this machinery, so
+            # the answer has to be this machinery's too. Refusing here would make
+            # an empty document's verdict depend on how it was built, which is
+            # exactly what naming a compiler is supposed to stop.
+            return _simulate_observeds_only(flat, build, tspan, saveat=saveat, callback=callback)
         shapes = build.shapes
         state_names = build.state_names
         state_layout = build.state_layout
@@ -3456,6 +3461,17 @@ def _simulate_with_numpy(
                         y=y_out[:, 0],
                         t=float(t_out[0]),
                         index_sets=flat.index_sets,
+                        # The loader/const ARRAY scope, bound here as it is in
+                        # the per-step right-hand side. Without it an observed
+                        # whose body gathers an injected array cannot resolve at
+                        # output time, and the tolerant `except` below then drops
+                        # every observed row for a reason that has nothing to do
+                        # with the observeds — silently, since the recovery is
+                        # cosmetic. It also made this pass reach the per-cell walk
+                        # on a document whose right-hand side does not, which a
+                        # strict `native` reads (correctly, given what it was
+                        # handed) as a refusal.
+                        input_arrays=loader_arrays if loader_arrays is not None else {},
                         derived_extents=build.derived_extents,
                         join_key_buffers=build.join_key_buffers,
                         join_key_index_sets=build.join_key_index_sets,
@@ -3493,6 +3509,8 @@ def _simulate_with_numpy(
                             y=y_out[:, j],
                             t=float(t_out[j]),
                             index_sets=flat.index_sets,
+                            # See the note on the state-free branch above.
+                            input_arrays=loader_arrays if loader_arrays is not None else {},
                             derived_rings=dict(build.static_derived_rings),
                             derived_extents=build.derived_extents,
                             join_key_buffers=build.join_key_buffers,

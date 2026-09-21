@@ -123,12 +123,16 @@ SUBSYSTEM_ALGEBRAIC_UNKNOWN = _doc(
 )
 
 
-def _build(text: str, monkeypatch=None, pathway: str | None = None):
-    if pathway is not None:
-        import earthsci_ast.problem as problem_module
+def _build(text: str, compiler: str | None = None):
+    """Build the document under a NAMED compiler (``API_SPEC.md`` §5.8).
 
-        monkeypatch.setattr(problem_module, "_choose_pathway", lambda *a, **k: pathway)
-    return esm_problem(load_string(text), model_name="M", tspan=(0.0, 1.0))
+    This used to monkeypatch ``_choose_pathway``, the content-based router that
+    no longer exists: which machinery builds a document is now the caller's to
+    name, and naming it is the whole point of the keyword.
+    """
+    return esm_problem(
+        load_string(text), model_name="M", tspan=(0.0, 1.0), compiler=compiler
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -141,9 +145,16 @@ def test_unsolvable_algebraic_constraint_is_refused():
 
     Dropping it leaves `z` at its default for the whole run and reports that as
     the answer, so the build is refused and the equation named.
+
+    This is the SymPy compiler's refusal, and §5.8 keeps it there: `sympy` "
+    "refuses an algebraic constraint it cannot solve rather than dropping the
+    equation". The NumPy compilers have no algebraic solve to fail at and so
+    have never checked this shape — a gap the strict `native` default makes
+    reachable by DEFAULT rather than one it creates, and one that belongs to
+    whoever gives the array engine a constraint check.
     """
     with pytest.raises(UnsupportedConstructError) as excinfo:
-        _build(UNSOLVABLE_CONSTRAINT)
+        _build(UNSOLVABLE_CONSTRAINT, "sympy")
     message = str(excinfo.value)
     assert excinfo.value.code == "unsupported_construct"
     # The equation and the unknown it was to determine are both named.
@@ -157,25 +168,30 @@ def test_second_definition_binding_no_unknown_is_refused():
 
     The document is state-free, which is the branch `esm_problem` tolerates a
     SymPy lowering failure in — a coded REFUSAL must still come through it.
+
+    Named on `sympy` for the reason the unsolvable-constraint test above gives:
+    the count check is the SymPy bridge's, and the array engine does not carry
+    one.
     """
     with pytest.raises(SimulationError) as excinfo:
-        _build(REDUNDANT_SECOND_DEFINITION)
+        _build(REDUNDANT_SECOND_DEFINITION, "sympy")
     message = str(excinfo.value)
     assert "equation_count_mismatch" in message
     assert "M.K" in message
     assert "§4.9.4" in message
 
 
-def test_state_with_both_a_derivative_and_an_algebraic_equation_is_refused(monkeypatch):
-    """Two equations for one unknown, refused on EVERY pathway.
+def test_state_with_both_a_derivative_and_an_algebraic_equation_is_refused():
+    """Two equations for one unknown, refused under EVERY compiler.
 
     Tie-breaking in favour of the derivative runs the model without the
     constraint the file declares; `esm_problem` is the one front door, so the
-    refusal does not depend on which engine the document routes to.
+    refusal does not depend on which compiler the caller names — which is now
+    something the test can state directly instead of forcing a route.
     """
-    for pathway in (None, "scalar", "array"):
+    for compiler in (None, "sympy", "native", "interpreter"):
         with pytest.raises(SimulationError) as excinfo:
-            _build(DOUBLY_DEFINED_STATE, monkeypatch, pathway)
+            _build(DOUBLY_DEFINED_STATE, compiler)
         message = str(excinfo.value)
         assert "equation_count_mismatch" in message
         assert "M.x" in message
@@ -197,16 +213,18 @@ def test_doubly_defined_state_is_invalid_by_the_structural_check_too():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("pathway", ["array", "scalar"])
-def test_subsystem_algebraic_unknown_is_applied_on_both_pathways(monkeypatch, pathway):
+@pytest.mark.parametrize("compiler", ["native", "interpreter", "sympy"])
+def test_subsystem_algebraic_unknown_is_applied_under_every_compiler(compiler):
     """`D(x) ~ sub.w` with `sub.w ~ k*k` integrates 9, not the frozen default.
 
     `sub.w` is an algebraic unknown, so it belongs on the observed side rather
     than in an ODE slot no equation writes; holding a slot would integrate its
-    `-999.0` default. Both engines answer the same document alike.
+    `-999.0` default. Every compiler answers the same document alike, which is
+    the claim the old two-pathway parametrization was making and can now make
+    over the named vocabulary.
     """
-    prob = _build(SUBSYSTEM_ALGEBRAIC_UNKNOWN, monkeypatch, pathway)
-    assert prob.pathway == pathway
+    prob = _build(SUBSYSTEM_ALGEBRAIC_UNKNOWN, compiler)
+    assert prob.compiler == compiler
     sol = solve(prob)
     assert float(np.asarray(sol["M.sub.w"])[-1]) == pytest.approx(9.0)
     assert float(np.asarray(sol["M.x"])[-1]) == pytest.approx(9.0, rel=1e-6)
@@ -223,7 +241,7 @@ def test_array_build_refuses_a_driver_equation_it_cannot_apply(monkeypatch):
 
     monkeypatch.setattr(simulation_array, "_algebraically_defined_states", lambda flat, vi: set())
     with pytest.raises(UnsupportedConstructError) as excinfo:
-        _build(SUBSYSTEM_ALGEBRAIC_UNKNOWN, monkeypatch, "array")
+        _build(SUBSYSTEM_ALGEBRAIC_UNKNOWN, "native")
     message = str(excinfo.value)
     assert excinfo.value.code == "unsupported_construct"
     assert "M.sub.w" in message
@@ -249,15 +267,35 @@ STATE_FREE_OBSERVED_ONLY = _doc(
 
 
 def test_state_free_document_still_builds_and_reads_back_its_observed():
-    """API_SPEC §5.8: `observed_field` on a document with no state variables."""
+    """API_SPEC §5.8: `observed_field` on a document with no state variables.
+
+    Under the strict `native` default there is no SymPy compile at all — a
+    state-free document is built by the same vectorized machinery as every
+    other, and the interpreter build IS the product `observed_field` reads. The
+    SymPy tier is still compiled under `compiler="sympy"`, where `solve` samples
+    the observed bodies over the span through it and the document has no ODE
+    right-hand side for that compile to produce.
+    """
     from earthsci_ast.problem import observed_field
 
     prob = esm_problem(load_string(STATE_FREE_OBSERVED_ONLY), model_name="M", tspan=(0.0, 1.0))
     assert not prob.flat.state_variables
-    assert prob.scalar_build is not None
-    assert prob.scalar_build.rhs_function is None
+    assert prob.compiler == "native"
+    assert prob.scalar_build is None
+    assert prob.build is not None
     assert prob.scalar_build_error is None
     assert float(np.asarray(observed_field(prob, "M.flux"))) == pytest.approx(8.0)
+
+    lam = esm_problem(
+        load_string(STATE_FREE_OBSERVED_ONLY),
+        model_name="M",
+        tspan=(0.0, 1.0),
+        compiler="sympy",
+    )
+    assert lam.scalar_build is not None
+    assert lam.scalar_build.rhs_function is None
+    assert lam.scalar_build_error is None
+    assert float(np.asarray(observed_field(lam, "M.flux"))) == pytest.approx(8.0)
 
 
 def test_state_free_scalar_compile_failure_is_recorded_not_dropped(monkeypatch):
@@ -275,7 +313,12 @@ def test_state_free_scalar_compile_failure_is_recorded_not_dropped(monkeypatch):
         raise TypeError("cannot lower this body")
 
     monkeypatch.setattr(problem_module, "_build_scalar_rhs", boom)
-    prob = esm_problem(load_string(STATE_FREE_OBSERVED_ONLY), model_name="M", tspan=(0.0, 1.0))
+    # The tolerance is the SymPy compiler's own: `native` never reaches that
+    # tier, so the document has to be built on the compiler whose failure this
+    # is about.
+    prob = esm_problem(
+        load_string(STATE_FREE_OBSERVED_ONLY), model_name="M", tspan=(0.0, 1.0), compiler="sympy"
+    )
     assert prob.scalar_build is None
     assert isinstance(prob.scalar_build_error, TypeError)
     # The interpreter build is the product this document asked for, and it works.
@@ -315,7 +358,7 @@ def test_an_untaken_ifelse_branch_the_sympy_tier_cannot_lower_still_builds():
             }
         }
     )
-    prob = esm_problem(load_string(text), model_name="M", tspan=(0.0, 1.0))
+    prob = esm_problem(load_string(text), model_name="M", tspan=(0.0, 1.0), compiler="sympy")
     assert prob.scalar_build is None
     assert prob.scalar_build_error is not None
     assert float(np.asarray(observed_field(prob, "M.flux"))) == pytest.approx(1.0)

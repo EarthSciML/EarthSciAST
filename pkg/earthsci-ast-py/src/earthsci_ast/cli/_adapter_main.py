@@ -25,14 +25,16 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 #: Per-fixture handler: ``(fixture, manifest, manifest_path, compiler) -> record``.
 #: ``manifest`` and ``manifest_path`` carry the run-wide context some adapters
 #: need (integrator pins, manifest-relative fixture paths); ``compiler`` is the
 #: ``--compiler`` value, ``None`` when the runner named none (which means the
 #: strict ``native`` default). An adapter that builds no Problem ignores it.
-FixtureHandler = Callable[[dict[str, Any], dict[str, Any], Path, str | None], dict[str, Any]]
+# `Optional[str]`, not `str | None`: a `Callable[...]` alias is SUBSCRIPTED at
+# import, and `from __future__ import annotations` does not defer that.
+FixtureHandler = Callable[[dict[str, Any], dict[str, Any], Path, Optional[str]], dict[str, Any]]
 
 
 def adapter_main(

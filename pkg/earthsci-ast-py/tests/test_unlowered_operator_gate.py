@@ -170,7 +170,7 @@ def test_a_dead_but_fully_lowered_observed_is_untouched(tmp_path):
 
     prob = esm_problem(path, (0.0, 1.0))
 
-    assert prob.pathway == "scalar"
+    assert prob.compiler == "native"
 
 
 def test_a_structural_time_derivative_under_an_lhs_aggregate_is_still_core(tmp_path):
@@ -180,7 +180,7 @@ def test_a_structural_time_derivative_under_an_lhs_aggregate_is_still_core(tmp_p
 
     prob = esm_problem(path, (0.0, 1.0))
 
-    assert prob.pathway == "array"
+    assert prob.compiler == "native"
 
 
 def test_the_gate_fires_before_any_engine_is_chosen(tmp_path):

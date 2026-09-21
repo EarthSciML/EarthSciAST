@@ -157,9 +157,10 @@ def test_simulate_rejects_cyclic_algebraic_equations():
 
     # The compile happens at CONSTRUCTION (esm-libraries-spec §2.5.2), so a
     # cyclic observed graph is a build error — there is no run to give a return
-    # code to.
+    # code to. Cycle detection is the SymPy bridge's, so the compiler whose
+    # refusal this is gets named: API_SPEC §5.8 keeps it on `sympy`.
     with pytest.raises(SimulationError) as exc:
-        esm_problem(file, (0.0, 1.0), p={}, u0={})
+        esm_problem(file, (0.0, 1.0), p={}, u0={}, compiler="sympy")
     assert "Cyclic observed equations detected" in str(exc.value)
     assert "Cyclic.X" in str(exc.value) and "Cyclic.Y" in str(exc.value)
 
@@ -193,7 +194,13 @@ def test_simulate_same_lhs_dae_alias_eliminates_to_unbound_state():
         models={"Eq": model},
     )
 
-    result = solve(esm_problem(file, (0.0, 1.0), p={"T": 298.0, "H_plus": 1.0e-4}, u0={}))
+    # The same-LHS rewrite into an alias for the unbound state is SymPy's
+    # algebraic elimination, so this asks for that compiler by name.
+    result = solve(
+        esm_problem(
+            file, (0.0, 1.0), p={"T": 298.0, "H_plus": 1.0e-4}, u0={}, compiler="sympy"
+        )
+    )
     assert result.retcode is ReturnCode.Success, f"solve() did not succeed: {result.message}"
 
     k_idx = result.vars.index("Eq.K_w")
