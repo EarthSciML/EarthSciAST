@@ -2198,23 +2198,23 @@ fn build_compiler_report(
     // A per-variable element type is the one condition under which the array
     // runtime installs no tape at all, so under `native` it is a refusal
     // rather than a silent demotion to the overlay-then-oracle pair.
-    if compiler == Compiler::Native {
-        if let Some(var) = crate::precision::first_variable_override() {
-            return Err(SimulateError::Compile(
-                crate::compile_error::CompileError::CompilerRefusedRule {
-                    compiler: compiler.as_str(),
-                    kind: "variable",
-                    rule: qualify(model_name.unwrap_or(""), &var),
-                    tier: "const",
-                    reason: "the variable declares its own `element_type` (esm-spec §11.3.1), \
-                             and the tape resolves its kernels at execution from ONE \
-                             thread-local precision and fuses ACROSS rules, so a subtree in a \
-                             precision its neighbours are not is the one thing it cannot \
-                             express"
-                        .to_string(),
-                },
-            ));
-        }
+    if compiler == Compiler::Native
+        && let Some(var) = crate::precision::first_variable_override()
+    {
+        return Err(SimulateError::Compile(
+            crate::compile_error::CompileError::CompilerRefusedRule {
+                compiler: compiler.as_str(),
+                kind: "variable",
+                rule: qualify(model_name.unwrap_or(""), &var),
+                tier: "const",
+                reason: "the variable declares its own `element_type` (esm-spec §11.3.1), \
+                         and the tape resolves its kernels at execution from ONE \
+                         thread-local precision and fuses ACROSS rules, so a subtree in a \
+                         precision its neighbours are not is the one thing it cannot \
+                         express"
+                    .to_string(),
+            },
+        ));
     }
 
     let (records, tape_report) = compiled.tape_rule_records(discrete_forcing);

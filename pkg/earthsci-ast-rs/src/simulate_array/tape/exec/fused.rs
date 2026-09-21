@@ -834,8 +834,9 @@ pub(super) unsafe fn exec_fused_runs_avx512(
 ///   input at the current element, including the [`GHOST_OFF`] `+0.0` read).
 ///   Operand reads are pure, so `Select` reading only the taken operand is
 ///   value-identical to the chunked executor's load-both blend.
+///
 /// Test-only since the chunked executor became the only production one: its
-/// single caller is the reference executor that checks that executor.
+/// single caller is the reference executor that checks it.
 #[cfg(test)]
 #[inline(always)]
 pub(in crate::simulate_array::tape) fn eval_micro_op(

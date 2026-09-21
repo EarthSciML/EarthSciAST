@@ -696,11 +696,10 @@ pub(super) fn eval_vec<'a>(
         Expr::Variable(name) => eval_vec_variable(name, bx, ctx, pool),
         Expr::Operator(node) => eval_vec_op(node, bx, ctx, pool, ops),
     };
-    let r = match (ctx.cse, cse_class, r) {
+    match (ctx.cse, cse_class, r) {
         (Some(rt), Some(class), Some(v)) => Some(rt.put(class, v, bx)),
         (_, _, r) => r,
-    };
-    r
+    }
 }
 
 pub(super) fn eval_vec_variable<'a>(
