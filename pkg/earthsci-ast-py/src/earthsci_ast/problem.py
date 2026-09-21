@@ -1711,6 +1711,21 @@ def remake(
 _STEPPABLE_ALGS = ("RK45", "RK23", "DOP853", "Radau", "BDF", "LSODA")
 
 
+def _stepped_under_policy(rhs: Callable, policy: CompilerPolicy) -> Callable:
+    """Wrap a right-hand side so each evaluation runs under ``policy``.
+
+    Without this an ``interpreter`` integrator would quietly step on the fast
+    tiers — the one thing the reference must not do — and a ``native`` one would
+    walk per cell in silence if a step reached a node construction did not.
+    """
+
+    def stepped(t: float, y: np.ndarray) -> np.ndarray:
+        with use_policy(policy), phase_scope("rhs"):
+            return rhs(t, y)
+
+    return stepped
+
+
 class Integrator:
     """A stepping integrator over a :class:`EsmProblem` (esm-libraries-spec §2.5.6).
 
@@ -1776,6 +1791,11 @@ class Integrator:
         # value the author SET — is not swallowed.
         abstol, reltol = resolve_tolerances(prob.solver, abstol=abstol, reltol=reltol)
         rhs, y0, names = _rhs_of(prob)
+        # Every step runs under the problem's own compiler. `solve` installs the
+        # policy once around the whole run; a stepping integrator has no such
+        # scope — the caller drives it — so the right-hand side carries it. Two
+        # ContextVar sets per evaluation, against a whole right-hand side.
+        rhs = _stepped_under_policy(rhs, policy_for(prob))
         self.prob = prob
         self.vars: list[str] = names
         #: The effective INTEGRATION tolerances this integrator holds, after the

@@ -217,8 +217,21 @@ class CompilerReport:
 
     def __init__(self) -> None:
         self._entries: list[RuleTier] = []
+        self._seen: set[RuleTier] = set()
 
     def add(self, entry: RuleTier) -> None:
+        """Record a landing, ONCE per distinct (rule, phase, tier, chain).
+
+        A right-hand side is evaluated thousands of times in a solve and the
+        ladder's answer for a given node does not change between them, so a
+        record that appended per call would grow without bound and say nothing
+        the first entry did not. Deduplicating makes the report the cost story
+        §5.8 describes rather than a log — which is also why the counts in
+        :meth:`tiers` are DISTINCT landings, not evaluations.
+        """
+        if entry in self._seen:
+            return
+        self._seen.add(entry)
         self._entries.append(entry)
 
     @property

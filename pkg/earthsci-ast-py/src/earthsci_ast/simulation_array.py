@@ -3177,42 +3177,73 @@ def observed_at_state(
     return _pick(ctx)
 
 
+def _body_has_aggregate(expr: Expr) -> bool:
+    """Does ``expr`` contain an aggregate node anywhere?
+
+    The ``faq`` ladder is the only thing the compiler report records and the only
+    thing a per-cell refusal can come from, so a body with no aggregate has
+    nothing to probe.
+    """
+    if isinstance(expr, ExprNode):
+        if is_aggregate_op(expr.op):
+            return True
+        return any(_body_has_aggregate(child) for child in iter_children(expr))
+    return False
+
+
 def probe_output_time_observeds(
     flat: FlattenedSystem,
     build: _NumpyRhsBuild,
     t: float,
     loader_arrays: dict[str, np.ndarray] | None = None,
 ) -> None:
-    """Run the OUTPUT-TIME observed pass once, at one node, for its tiers alone.
+    """Exercise the OUTPUT-TIME observed pass, for the rules nothing else did.
 
     esm-libraries-spec §2.5.10 puts every evaluation a compiler performs for a
     Problem under the compiler, "not the right-hand side alone: the
     materialization of constants and static observeds at construction, the
     per-segment seed, the right-hand side, and the observeds reported at output
-    times". The first three are exercised by construction already — the hoist
-    runs inside :func:`_build_numpy_rhs`, and ``esm_problem`` evaluates the
-    right-hand side once. This is the fourth: the pass
-    :func:`_simulate_with_numpy` runs at each output node, run once here so that
-    a rule which walks per cell only in THAT pass is a construction error rather
-    than a surprise at the end of a solve.
+    times". The first three happen already — the hoist inside
+    :func:`_build_numpy_rhs`, the per-segment seed IS a build, and
+    ``esm_problem`` evaluates one right-hand side. This is the fourth.
 
-    It evaluates, it does not return: the caller wants the tiers, and the values
-    are recomputed per node during the actual run. Unresolved observeds are
-    skipped exactly as the output-node pass skips them, so this probe cannot
-    turn a document the run tolerates into a build failure — only a refusal the
-    active compiler owes the caller travels out of it.
+    What it must NOT do is evaluate them twice. The pass
+    :func:`_simulate_with_numpy` runs at an output node evaluates the whole
+    observed graph when nothing varies along the trajectory, and only
+    ``varying_observed`` when something does — and those are precisely the sets
+    the hoist and the right-hand side have just evaluated, on the same bodies
+    through the same ladder. Running the pass unconditionally therefore bought
+    no diagnostic and doubled the cost of the const-geometry hoist, which for a
+    conservative-regrid document is most of the build.
+
+    So it probes the difference: an observed whose body holds an aggregate and
+    which no earlier phase attributed a landing to. In every corpus document
+    that set is empty and this costs one pass over the observed list. It is not
+    assumed empty, because a future pass that evaluates something new should be
+    covered by the compiler that ran it rather than silently exempt.
+
+    Unresolved observeds are skipped exactly as the output-node pass skips them,
+    so this cannot turn a document the run tolerates into a build failure — only
+    a refusal the active compiler owes the caller travels out of it.
     """
     ordered = build.ordered_observed
     if not ordered:
         return
-    const_array_names = _const_array_observed_names(ordered)
     varying = _time_varying_observeds(ordered, set(build.state_names))
-    # The two branches mirror `_simulate_with_numpy`'s: with nothing varying it
-    # evaluates the WHOLE graph once in an unseeded context, otherwise only the
-    # varying half on top of the build's static products. Which one runs decides
-    # which rules are evaluated, so the probe has to make the same choice.
+    # Which set the real pass would evaluate at a node: the whole graph when
+    # nothing varies, else the varying half on top of the build's statics.
+    target = ordered if not varying else build.varying_observed
+    policy = _compiler.active_policy()
+    already = set(policy.report.rules()) if policy is not None else set()
+    pending = [
+        (name, rhs)
+        for name, rhs in target
+        if f"observed {name}" not in already and _body_has_aggregate(rhs)
+    ]
+    if not pending:
+        return
     ctx = EvalContext(
-        const_array_names=const_array_names,
+        const_array_names=_const_array_observed_names(ordered),
         state_layout=build.state_layout,
         state_shapes=build.shapes,
         param_values=build.param_values,
@@ -3232,9 +3263,7 @@ def probe_output_time_observeds(
         element_types=build.element_types,
     )
     with _compiler.phase_scope("observed-output"):
-        _materialize_observeds(
-            ordered if not varying else build.varying_observed, ctx, skip_unresolved=True
-        )
+        _materialize_observeds(pending, ctx, skip_unresolved=True)
 
 
 def _simulate_observeds_only(
