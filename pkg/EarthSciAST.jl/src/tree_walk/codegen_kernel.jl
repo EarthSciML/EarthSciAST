@@ -56,7 +56,7 @@
 # when the tape still served Float64 residuals, but still bit-identical.)
 # Debug: ESS_CODEGEN_DEBUG=1 prints per-build emission/decline/latency lines.
 # Budget: ESS_CODEGEN_NODE_BUDGET overrides the emitted-node cap (default
-# 400_000 across all kernels of one build) that bounds Julia compile latency.
+# 64_000_000 across all kernels of one build) that backstops a runaway build.
 #
 # TEMPLATE SUB-KERNELS COMPILE ONCE (ess-cg-subcall-fn, OPT-IN via
 # ESS_CG_SUBCALL_FN=1): a `_NK_SUBCALL` body is emitted into ONE top-level

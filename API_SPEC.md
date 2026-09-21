@@ -511,13 +511,15 @@ this is the surface it implies.
 
 ```
 esm_problem(input, tspan, *, p, u0, providers, model_name,
-            metaparameters, base_path, sample_time) -> Problem
+            metaparameters, base_path, sample_time, compiler) -> Problem
 solve(prob, *, alg, abstol, reltol, saveat, callback, maxiters) -> Solution
 remake(prob, *, p, u0, tspan) -> Problem
 init(prob, *, alg, ...) -> Integrator
 step!(integrator) / solve!(integrator)
 callbacks(prob) -> CallbackSet
 observed_field(prob, name) -> Array
+compiler(prob) -> <vocabulary value>
+compiler_report(prob) -> per-rule tier record
 EnsembleProblem(prob, rewrite) -> EnsembleProblem
 ```
 
@@ -535,8 +537,65 @@ will not.
 build with run, which is why two of the three had already grown a second
 `prepare`-shaped entry point beside it. `prepare` / `PreparedModel` / `Prepared`
 are replaced by Problem construction, which absorbs the same pipeline (rewrite →
-value invention → gated fetch → compile). `build_evaluator` survives as a
-documented extension seam (§7), not stable API.
+value invention → gated fetch → compile). `build_evaluator` is an extension
+seam (§7), not stable API, and is **scheduled for retirement** — see §8 item 23
+for what replaces it and what re-hangs on the Problem.
+
+#### `compiler`: which strategy builds the right-hand side
+
+`compiler` names the strategy a Problem's right-hand side is built with. Each
+binding has several — a tree walk, generated code, a tape, an XLA emitter, a
+lambdified scalar form — and absent this keyword it chooses among them by
+inspecting the document. `compiler` makes the choice the caller's, and makes
+what ran readable off the Problem afterwards.
+
+The vocabulary is **closed**, and it has three kinds of member.
+**`interpreter`** is deliberately simple, and exists as the **correctness check
+for the other compilers** — nothing else. **`native`** is the **universally fast
+option with no heavy external dependencies**: in Julia the
+`RuntimeGeneratedFunctions` codegen the package already carries, in Rust the
+tape, which needs no extra crate, in Python vectorized NumPy, already a base
+dependency. That is why it is the default — it is the one value that is both
+fast and always available. The rest are **specialty compilers**, each special in
+one of two ways: `sympy` and `mtk` work only for some documents, and `xla` needs
+a heavy external dependency to exist at all.
+
+The members transliterate per §2: a Julia `Symbol`, a Python `str`, a variant of
+a Rust `Compiler` enum carried on `ProblemOptions`.
+
+| Value | Role | Promise | Julia | Rust | Python |
+|---|---|---|---|---|---|
+| `native` | Universally fast, no heavy external dependency — hence the default | **The default.** This binding's compiled or vectorized tiers, for **every** document regardless of shape. A rule that would need a per-cell tree walk is a build error naming the rule and the deepest decline reason. No fallback, ever. | `:native` — every kernel lands on the codegen, affine or whole-array tier | `Compiler::Native` — the array runtime's tape for every document, never the scalar interpreter | `"native"` — whole-box vectorized NumPy only |
+| `interpreter` | Deliberately simple; the correctness check for the other compilers | The **reference**, and only the reference: every fast tier off, complete over the evaluable core, **no performance promise of any kind**. A caller picks it to check another compiler, not to run a model. | `:interpreter` — the tree walk with the per-cell runner for every kernel | `Compiler::Interpreter` — the per-cell oracle, no tape and no vectorized overlay | `"interpreter"` — the NumPy interpreter with the scalar `faq` evaluator for every aggregate |
+| `xla` | Specialty: needs a heavy external dependency | StableHLO through XLA. Hard error on anything it cannot lower, which is already its behaviour. | `:xla` — the direct emitter; needs Reactant loaded | `Compiler::Xla` — the emitter over the tape; needs the `xla` feature | `compiler_unavailable` |
+| `mtk` | Specialty: only some documents — the one that runs events and implicit equations | A ModelingToolkit `System`. The one compiler that runs **events and implicit equations** — the constructs §5.39 of `CONFORMANCE_SPEC.md` has the others refuse. | `:mtk`; needs ModelingToolkit loaded | `compiler_unavailable` | `compiler_unavailable` |
+| `sympy` | Specialty: only some documents — scalar ones | A lambdified SymPy **scalar** right-hand side. Refuses array documents and constraints it cannot solve. | `compiler_unavailable` | `compiler_unavailable` | `"sympy"` |
+
+**The default is `native`, and it is strict.** An unspecified `compiler` means
+`native`, and under `native` a rule the compiled tiers cannot express is a
+BUILD error, not a quiet demotion to a slower path. This is the rule
+`CONFORMANCE_SPEC.md` §5.38.3 already applies to the compiled backends,
+generalized: a compiler either runs the whole document or names what it
+refused. The consequence is accepted — documents that build today refuse under
+`native` until the tiers grow — and those refusals are tracked as named
+exclusions by the compiler-agreement tier (§5.44 of `CONFORMANCE_SPEC.md`)
+rather than hidden by a fallback.
+
+**A binding that does not implement a value refuses it.** Never by selecting
+another one: the point of naming a compiler is that the caller knows which ran.
+The three failures are the registry codes of esm-spec §9.6.6 —
+`compiler_unknown` (outside the vocabulary), `compiler_unavailable` (in it, but
+this binding, build or process cannot provide it; the message names what to
+load or build) and `compiler_refused_rule` (the chosen compiler cannot run this
+document; the message names the compiler, the rule — an equation or an
+observed, component-qualified — and the reason).
+
+**Every Problem reports what ran.** `compiler` gives the vocabulary value the
+build actually used, and `compiler_report` gives, per rule, the tier it landed
+on — which is informative even under `native`, where the interesting question
+is affine versus codegen versus whole-array, or taped versus fused. Both names
+and both meanings are stable surface. The report's exact **shape** is
+per-binding for now and is not pinned here.
 
 **Callback composition:** a `callback` argument to `solve` REPLACES the
 Problem's set entirely. To extend rather than replace, read the set back with
@@ -1132,7 +1191,7 @@ allowed to differ.
 
 | Family | Bindings | Why it is a seam |
 |---|---|---|
-| Julia build/inspection | Julia | `build_evaluator` and `BuildInspection` expose the tree-walk evaluator's internals so downstream analysers (EarthSciASTDiff) can differentiate the expanded tree. There is no cross-language analogue to harmonize against. |
+| Julia build/inspection | Julia | `build_evaluator` and `BuildInspection` expose the tree-walk evaluator's internals so downstream analysers (EarthSciASTDiff) can differentiate the expanded tree. There is no cross-language analogue to harmonize against. Both are scheduled to leave the surface — see §8 item 23. |
 | Julia forcing buffers | Julia | The out-of-place RHS argument ABI. Its shape is dictated by the compiled program's argument arrays and will change with the emitter. |
 | Julia MTK/Catalyst export | Julia | `mtk2esm`, `mtk2esm_gaps`, `GapReport` — migration tooling for one host ecosystem. |
 | Rust `intern` / `performance` | Rust | Hash-consing and allocator knobs. Feature-gated (`parallel`, `custom_alloc`) and performance-shaped, not semantics-shaped. |
@@ -1178,6 +1237,9 @@ deprecated alias for one minor, then removed at the next major (§10).
 | 18 | display domain | `to_unicode` / `to_latex` accept containers in TypeScript and Python, throw on them in Julia, and accept expressions only in Rust and Go. | All three renderers accept the full domain in every binding. **TypeScript VERIFIED (phase 6):** `toUnicode` / `toLatex` / `toAscii` (and `toMathML`) all take `Expr | Equation | Model | ReactionSystem | Reaction | EsmFile`. Nothing to change. | Julia, Rust, Go |
 | 19 | Go initialisms | Go has both `OpIC` and `ErrorIcInReactionSystem`; also `ToAscii` and `FmtAscii` against §2.1's `ASCII`. | `ErrorICInReactionSystem`, `ToASCII`, `FmtASCII`. **DONE (phase 6),** plus an audit finding. The three named renames landed. Go then audited all 385 exported names, every method on an exported type, and every exported struct field against §2.1, and found two further violations: `UnitWarning.LhsUnits` and `.RhsUnits`, left open for a ruling. **CLOSED (phase 6b): renamed to `LHSUnits` / `RHSUnits`.** The ruling is that Go's own house style already decided it — `FlattenedEquation.LHSString` / `.RHSString` (`pkg/esm/flatten.go`) spell the same two initialisms uppercase, so these two fields were the outliers, not the precedent. The wire contract is untouched and was VERIFIED so: the `json:"lhs_units"` / `json:"rhs_units"` tags are unchanged, and a `UnitWarning` marshal→unmarshal→marshal round trip is byte-identical before and after the rename. The `"lhs_units"` / `"rhs_units"` keys `promoteUnitFindings` writes into `StructuralError.Details` are likewise unchanged. Struct fields remain non-manifest symbols, so `api-surface.json` does not move. | Go |
 | 20 | `component_graph` alias | TypeScript exports **both** `component_graph` (snake_case, violating §2) and `componentGraph`. | **DONE (phase 6).** `component_graph` is deleted. It was kept only for the (since-deleted) editor package's web components, which had already migrated to `componentGraph`; no caller outside this binding's own tests remained. | TypeScript |
+| 21 | `compiler` | Each binding picks its build strategy by inspecting the document, and a caller can neither ask for one nor read back which ran. Julia's stable entry point always builds the tree walk, so its XLA emitter is unreachable from `esm_problem`; Rust routes on whether the document is arrayed; Python routes on document content between two pathways that disagree numerically. | `esm_problem` gains the keyword `compiler` over §5.8's closed vocabulary (`interpreter` / `native` / `xla` / `mtk` / `sympy`), defaulting to a **strict** `native`, and every Problem exposes `compiler` and `compiler_report`. Julia `compiler::Symbol`, Python `compiler: str \| None`, Rust `ProblemOptions.compiler: Option<Compiler>` over a new `Compiler` enum. Adding an optional keyword is a minor (§10). Flipping the default is a behaviour change and lands together with the conformance tier that measures what it refuses (`CONFORMANCE_SPEC.md` §5.44). | Julia, Python, Rust |
+| 22 | Rust `Compile` | Rust already exports an enum `Compile::{Auto, Always, Never}`, which decides whether a right-hand side is built **at all** — the static-versus-dynamic question — and says nothing about *which* compiler builds it. Beside item 21's `Compiler` the two names differ by one letter and mean different things, which is exactly the confusion §2 exists to prevent — and the collision is worse on the struct than on the type, since item 21 puts a field `compiler` next to the existing field `compile` on the same `ProblemOptions`. | Rename the type to `Rhs::{Auto, Always, Never}` and the field to `rhs` (working proposal), keeping `Compile` as a deprecated type alias for one minor (§10). `Compile` is `extension` tier, so the rename is a minor. Recorded here only; the rename itself is later work. | Rust |
+| 23 | `build_evaluator` | §5.8 kept it as a documented extension seam on two grounds: it is the entry point for a caller who wants the compiled right-hand side without a Problem around it, and it has substantial downstream use. Item 21 answers both — `esm_problem(…; compiler=:xla)` *is* the compiled right-hand side, and the downstream use is one package, which migrates to that call. | `build_evaluator` leaves the public surface once `compiler=:xla` lands and that migration is done, becoming private behind `esm_problem` with a deprecated alias for one minor (§10). What has to survive re-hangs on the Problem: the forcing-buffer seam (`forcing_buffers`, `forcing_buffer_index`, `sync_forcing!`) takes an `EsmProblem`, and `BuildInspection` folds into `compiler_report`. `esm-libraries-spec.md` §2.5.2 carries the same notice. | Julia |
 | G-2 | `supported_migration_targets` | TypeScript and Rust spelled it `get_supported_migration_targets`; Julia, Python and Go spell it `supported_migration_targets`. One capability under two canonical names, so the manifest carried two `stable` entries for it. | **TypeScript DONE (phase 6).** `supportedMigrationTargets()` added at the canonical name over the same table `migrate` / `canMigrate` use; `getSupportedMigrationTargets` stays a deprecated alias for one minor (§10), the same function object. **Rust DONE (phase 6)** as well (`a154aa171`): `supported_migration_targets` is the definition, `get_supported_migration_targets` a `#[deprecated]` delegate. Both spellings fold under the canonical name via `ALIAS_OVERRIDES`, so the manifest carries one entry, not two. | TypeScript, Rust |
 | G-3 | `build_reference_graph` | Exported by Julia, Python, Rust and Go; **absent in TypeScript** — a four-of-five gap in a `stable` symbol that no row above covered. | **DONE (phase 6).** TypeScript gains `buildReferenceGraph`, plus the rest of the module's public surface (`resolveReferences`, `ReferenceGraph`, `ReferenceVertex`, `ReferenceEdge`, `VertexKind`, `EdgeKind`, `ReferenceResolutionError`), so the family is 5/5. See item 17 for the signature and the cross-binding verification. | TypeScript |
 | H-4 | Python layering | Python re-exported the whole `data_sources` loader stack through the top-level `__all__` — 32 spellings, of which 29 were `extension`-tier and Python-only — so `import earthsci_ast` handed you a data-loading toolkit as well as a format library. `xarray` and `netcdf4` sat in the BASE dependency set, which a comment justified as "the IO tier hard-depends on them". | **DONE (phase 6).** The premise was measured FALSE: no module under `earthsci_ast/` imports `xarray` or `netCDF4` at module scope — `xarray` is imported inside `data_sources._xarray._default_xarray_opener`, and `netCDF4` is never imported by this package at all (it is the engine xarray selects). With all three of `xarray` / `netCDF4` / `scipy` blocked by an import hook, `import earthsci_ast` already succeeded and `__all__` was still the full 272, so nothing had to be restructured to make the split possible. The 29 `extension` spellings left `__all__` and now live only on `earthsci_ast.data_sources`; Python's declared surface is **272 -> 243**. The three `stable` spellings in that block — `apply_unit_conversion`, `parse_unit_conversion`, `UnitConversionError` — were **deliberately KEPT** at the top level: Julia defines them in core `src/unit_conversion.jl` (not `EarthSciASTEarthSciIOExt`), TypeScript exports `UnitConversionError` from its index, and §6 carries all three as `stable`, so dropping them would have made Python the sole non-conformant binding and downgraded a stable symbol. The manifest's `stable` count is unchanged at 272 — every symbol removed was `extension`. `xarray` / `netcdf4` moved to a new `data` extra; `scipy` had already moved to `simulate` in an earlier round, per esm-libraries-spec §2.4 / §2.5.9. A missing optional dependency is reported at the point of use, naming the extra. | Python |
