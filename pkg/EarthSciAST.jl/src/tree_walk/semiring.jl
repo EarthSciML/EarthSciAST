@@ -367,7 +367,8 @@ end
 # for the driver (mirroring `ESS_GEOM_OVERLAP_GATE_DISABLE`): the admitted leaf
 # set is identical either way, so any difference in the ANSWER is a driver bug,
 # and the visit counts must differ or the gate never fired.
-_join_on_gate_disabled() = get(ENV, "ESS_JOIN_ON_GATE_DISABLE", "") == "1"
+_join_on_gate_disabled() = !_compiler_plan_now().join_on_gate ||
+    get(ENV, "ESS_JOIN_ON_GATE_DISABLE", "") == "1"
 
 # The DRIVABLE match set of one composite `on` key (CONFORMANCE_SPEC §5.5.8):
 # `{ (pos_l, pos_r) : key_l(pos_l) == key_r(pos_r) }`, built ONCE per node.

@@ -44,10 +44,17 @@ which is the flat state vector `var_map` indexes.
 final_state(sol) = isempty(sol.u) ? Float64[] : Vector{Float64}(sol.u[end])
 
 
+# `code` is the `ERROR_CODES` registry entry when the failure has one — the
+# three `compiler` selection failures of API_SPEC §5.8 do — and `""` when it
+# does not, which is every pre-existing raise site (the one-argument
+# constructor keeps those spelled exactly as they were).
 struct SimulateError <: EarthSciASTError
     msg::String
+    code::String
 end
-Base.showerror(io::IO, e::SimulateError) = print(io, "SimulateError: ", e.msg)
+SimulateError(msg::AbstractString) = SimulateError(String(msg), "")
+Base.showerror(io::IO, e::SimulateError) =
+    print(io, "SimulateError: ", isempty(e.code) ? "" : e.code * ": ", e.msg)
 
 # --------------------------------------------------------------------------- #
 # Default solver tolerances. Shared with the SciMLBase solve extension
@@ -533,8 +540,44 @@ function Base.show(io::IO, prob::EsmProblem)
     isempty(prob.discrete_providers) ||
         print(io, ", ", length(prob.discrete_providers), " discrete forcings")
     prob.callback === nothing || print(io, ", callbacks")
-    print(io, "; tree-walk :inplace)")
+    # What BUILT it and where its rules landed — the two things §5.8 makes
+    # readable off a problem. A fixed "tree-walk :inplace" said neither: every
+    # problem printed it, whichever compiler and whichever tiers ran.
+    rep = compiler_report(prob)
+    print(io, "; compiler :", rep.compiler)
+    hist = tier_histogram(rep)
+    isempty(hist) ||
+        print(io, " [", join(("$(t)=$(n)" for (t, n) in hist), ", "), "]")
+    print(io, ")")
 end
+
+"""
+    compiler(prob::EsmProblem) -> Symbol
+
+The vocabulary value (API_SPEC §5.8) that BUILT this problem — what actually
+ran, not what was asked for, which for a successful build are the same thing
+because a compiler that cannot run a document refuses it rather than
+substituting another.
+"""
+compiler(prob::EsmProblem)::Symbol = compiler_report(prob).compiler
+
+"""
+    compiler_report(prob::EsmProblem) -> CompilerReport
+
+Which tier every rule of this problem landed on, and the declines it collected
+on the way (API_SPEC §5.8). Under [`compiler`](@ref)`(prob) === :native` this is
+the cost story: affine versus generated code versus a whole-array form, and
+which equations were scalarized per output cell at BUILD.
+
+```julia
+prob = esm_problem("model.esm", (0.0, 1.0))
+compiler(prob)                       # :native
+show(stdout, MIME"text/plain"(), compiler_report(prob))
+```
+
+The names and their meanings are stable; the record's shape is per-binding.
+"""
+compiler_report(prob::EsmProblem)::CompilerReport = prob.inspection.compiler_report
 
 
 # Equation count of the prepared (flattened, single-model) run document —
@@ -651,6 +694,46 @@ Stable keyword arguments (API_SPEC §5.8 — the bindings that fix a DOCUMENT):
 * `sample_time::Real = tspan[1]` — the `t` at which providers are sampled for
   the build. A CONST provider is time-invariant by contract; DISCRETE buffers
   seeded here are re-seeded at each run's `t0` anyway.
+* `compiler::Symbol = :native` — which strategy builds the right-hand side, over
+  the closed vocabulary `:interpreter`, `:native`, `:xla`, `:mtk`, `:sympy`
+  (esm-libraries-spec §2.5.10). Read back with [`compiler`](@ref)`(prob)` and
+  [`compiler_report`](@ref)`(prob)`.
+
+  **`:native` (the default) is STRICT.** It is this package's compiled tiers —
+  the affine stencil build, the `RuntimeGeneratedFunctions` emitter and the
+  whole-array forms — for every document whatever its shape, and a rule those
+  tiers cannot express is a BUILD error naming the rule and the deepest decline
+  reason, never a quiet demotion to a slower path. In Julia it refuses exactly
+  three things:
+
+  1. **An access kernel both codegen emissions declined.** Such a kernel runs
+     on `_run_acc_kernel!` — a tree walk once per output cell, on every
+     right-hand-side call. A decline by the PRIMARY emission alone is not a
+     refusal: the overflow emission retries under an unbounded node budget and
+     also serves Float64, so the budget reason cannot recur.
+  2. **An equation the whole-array contraction tier ACCEPTED.** On that tier
+     success is what leaves an interpreter in the right-hand side: its runner
+     evaluates the body once per output cell and no codegen tier ever sees the
+     section. This is compiler backlog, not a property of the document.
+  3. **A construction-time or output-time materialization that resolves and
+     compiles the expression once per cell** — the setup-map per-cell
+     reference, the whole-array setup materializer, the coordinate-expression
+     initial-condition fill and the build-time observed evaluator's per-cell
+     arm. §2.5.10 puts every evaluation a compiler performs for the problem
+     under the same rule, not the right-hand side alone.
+
+  What it does NOT refuse: a per-cell BUILD (an equation scalarized one output
+  cell at a time whose cell entries are then compiled — that costs build time
+  and nothing per step), a `_StencilFallback` on its own (its landing is a
+  per-cell build), and a compile-once setup sweep that evaluates an already
+  compiled node per cell.
+
+  `:interpreter` is the reference and carries no performance promise: every
+  fast tier off, which is what the `ESS_UNTIERED=1` + `_DISABLE` family
+  produces. Pick it to check another compiler, or to run a document `:native`
+  refuses. `:xla`, `:mtk` and `:sympy` raise `compiler_unavailable` from this
+  entry point today, naming what to load or which binding has them; a value
+  outside the vocabulary raises `compiler_unknown`.
 
 Julia extension-seam keywords (§2.5.2 explicitly allows these; NOT stable API):
 `const_arrays`, `param_arrays` (forwarded to [`build_evaluator`](@ref) — the
@@ -704,6 +787,7 @@ function esm_problem(input, tspan;
                      metaparameters::AbstractDict = Dict{String,Int}(),
                      base_path::AbstractString = pwd(),
                      sample_time::Union{Nothing,Real} = nothing,
+                     compiler::Symbol = :native,
                      # ---- Julia extension seam (§2.5.2) ----
                      const_arrays::AbstractDict = Dict{String,Any}(),
                      param_arrays::AbstractDict = Dict{String,Any}(),
@@ -717,6 +801,12 @@ function esm_problem(input, tspan;
                      checkpoint_predicates = (),
                      checkpoint_sinks = nothing,
                      terminate_on_checkpoint::Bool = true)
+    # The compiler is resolved before anything else runs: `compiler_unknown` and
+    # `compiler_unavailable` are answers about the REQUEST, and making the
+    # caller wait through a load and a flatten to hear one would be a worse
+    # diagnostic for no gain. The plan comes back out of `_compiler_plan`; the
+    # build below re-derives it from the same keyword.
+    _compiler_plan(compiler)
     span = (Float64(tspan[1]), Float64(tspan[2]))
     t_sample = sample_time === nothing ? span[1] : Float64(sample_time)
     # ---- extent discovery: a loader that measures its OWN record count ------
@@ -879,6 +969,7 @@ function esm_problem(input, tspan;
     # every override.
     param_classes = Dict{String,Symbol}()
     f!, u0_built, p_built, _tspan, var_map = build_evaluator(doc;
+        compiler = compiler,
         model_name = model_name,
         parameter_overrides = overrides,
         const_arrays = merged_const,

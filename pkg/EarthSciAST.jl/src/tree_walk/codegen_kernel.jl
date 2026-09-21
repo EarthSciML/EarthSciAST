@@ -67,7 +67,8 @@
 # size floor; ESS_CG_STRUCT_DUMP=<dir> dumps cell-body canonical keys.
 # ========================================================================
 
-_codegen_disabled() = get(ENV, "ESS_CODEGEN_DISABLE", "") == "1"
+_codegen_disabled() = !_compiler_plan_now().codegen ||
+    get(ENV, "ESS_CODEGEN_DISABLE", "") == "1"
 _codegen_debug() = get(ENV, "ESS_CODEGEN_DEBUG", "") == "1"
 # CUMULATIVE emitted-node budget across all kernels in one build call — a
 # build-latency backstop, NOT a per-function compile bound (the intra-kernel
@@ -114,7 +115,8 @@ end
 # ESS_CODEGEN_FN_NODE_CAP chunking, which is what bounds LLVM memory).
 # Build tally: `:dual_codegen_kernel` / `:dual_codegen_decline_<reason>` in
 # `_CASCADE_TALLY` — the observability hook for which tier Dual evaluation uses.
-_dual_codegen_disabled() = get(ENV, "ESS_DUAL_CODEGEN_DISABLE", "") == "1"
+_dual_codegen_disabled() = !_compiler_plan_now().dual_codegen ||
+    get(ENV, "ESS_DUAL_CODEGEN_DISABLE", "") == "1"
 _dual_codegen_node_budget() =
     something(tryparse(Int, get(ENV, "ESS_DUAL_CODEGEN_NODE_BUDGET", "")), typemax(Int))
 
@@ -142,7 +144,8 @@ _dual_codegen_node_budget() =
 # within the primary budget — all repo fixtures — nothing changes at all.
 # Build tally: `:f64_overflow_armed` when a section is built with the routing
 # armed (overflow function present + feature on).
-_f64_overflow_codegen_enabled() = get(ENV, "ESS_F64_OVERFLOW_CODEGEN", "1") != "0"
+_f64_overflow_codegen_enabled() = _compiler_plan_now().f64_overflow &&
+    get(ENV, "ESS_F64_OVERFLOW_CODEGEN", "1") != "0"
 
 # ---- Shared-prelude (xcse) cache reads (ess-cgfsc) ---------------------------
 # The cross-kernel fn-CSE pass (xcse.jl, plan B4) rewrites kernel invariant-tier
@@ -171,6 +174,7 @@ _f64_overflow_codegen_enabled() = get(ENV, "ESS_F64_OVERFLOW_CODEGEN", "1") != "
 # carrying at least one shared-prelude read (primary or overflow emission; a
 # kernel that later declines for another reason is not counted).
 _cg_foreign_scratch_disabled() =
+    !_compiler_plan_now().cg_foreign_scratch ||
     get(ENV, "ESS_CG_FOREIGN_SCRATCH_DISABLE", "") == "1"
 
 # Per-kernel decline: the kernel keeps the per-cell interpreter runner.
@@ -253,7 +257,8 @@ _CGCtx(budget::Int, shared_cache::Union{Nothing,_CSECache}=nothing) =
            IdDict{Any,Any}(), Any[],
            Dict{String,Tuple{Symbol,Vector{Symbol}}}(), String[], false)
 
-_cg_helper_dedup_disabled() = get(ENV, "ESS_CG_HELPER_DEDUP_DISABLE", "") == "1"
+_cg_helper_dedup_disabled() = !_compiler_plan_now().cg_helper_dedup ||
+    get(ENV, "ESS_CG_HELPER_DEDUP_DISABLE", "") == "1"
 
 # Sub-kernel / cell-body function tier (ess-cg-subcall-fn): OPT-IN via
 # ESS_CG_SUBCALL_FN=1 (ESS_CG_SUBCALL_FN_DISABLE=1 still force-disables, as
@@ -1119,6 +1124,11 @@ struct _CGBuilt{F,TB}
     f::F
     tabs::TB
     covered::Vector{Bool}
+    # Why each UNCOVERED kernel was declined, parallel to `covered` (`:none`
+    # where `covered[j]`). A strict compiler names the deepest of these when it
+    # refuses a rule, so the reason has to survive the emission that produced
+    # it — the tally counts reasons, it does not say which kernel had which.
+    reasons::Vector{Symbol}
     # Threaded cell axis (see "Threaded cell axis for the codegen tier"):
     # total cells across the covered kernels, and the build-time verdict that
     # every covered out-slot is globally unique (section-chunking is only
@@ -1395,7 +1405,8 @@ end
 # for byte. `ESS_CODEGEN_BODY_SPLIT_DISABLE=1` forces the no-op (the pre-split
 # build; used as the differential oracle and to reproduce the OOM).
 function _cg_bound_body!(ctx::_CGCtx, ex)
-    get(ENV, "ESS_CODEGEN_BODY_SPLIT_DISABLE", "") == "1" && return ex
+    (!_compiler_plan_now().codegen_body_split ||
+     get(ENV, "ESS_CODEGEN_BODY_SPLIT_DISABLE", "") == "1") && return ex
     cap = _codegen_fn_node_cap()
     cap <= 0 && return ex
     _cg_expr_size(ex) <= cap && return ex
@@ -1426,6 +1437,7 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel};
     t0 = time_ns()
     ctx = _CGCtx(budget, shared_cache)
     covered = fill(false, length(acc_kernels))
+    reasons = fill(:none, length(acc_kernels))
     kloops = Tuple{Any,Int}[]         # (loop-nest expr, its emitted-node cost)
     for (j, K) in enumerate(acc_kernels)
         # Snapshot for rollback: a mid-kernel decline must discard its partial
@@ -1468,6 +1480,7 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel};
             resize!(ctx.substruct_log, nstructlog)
             ctx.nodes = nodes0
             ctx.fscratch = fscratch0
+            reasons[j] = err.reason
             _tally_cascade!(Symbol(tally, "_decline_", err.reason))
             _codegen_debug() &&
                 println(stderr, "[ess-codegen/$tally] kernel $j DECLINED: $(err.reason)")
@@ -1585,7 +1598,7 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel};
                 "(outs $(disjoint ? "disjoint" : "SHARED")), ",
                 "build $(round(ms; digits=1)) ms")
     end
-    return _CGBuilt(f, tabpack, covered, ncells, disjoint)
+    return _CGBuilt(f, tabpack, covered, reasons, ncells, disjoint)
 end
 
 # ---- Threaded cell axis for the codegen tier (RFC threaded-eval-tier) -------
@@ -1784,6 +1797,35 @@ end
 # section provably runs after that cache's prelude tiers were filled in the
 # same `f!` call. Every other caller keeps the default `nothing`, which keeps
 # the `:foreign_scratch` decline for shared-prelude reads.
+# A kernel BOTH emissions declined runs on `_run_acc_kernel!` — the `_eval_acc`
+# tree walk, once per output cell, on every right-hand-side call (§0 of the
+# phase-0 census). That is the one thing a compiled compiler promises not to do,
+# so a strict compiler refuses at BUILD, naming the rule the cascade has open
+# and the reason the OVERFLOW emission gave: the primary pass's reasons are not
+# refusals, since the overflow pass compiles what the budget declined.
+function _refuse_interpreted_kernels(kernels::AbstractVector{_AccKernel},
+                                     resid::AbstractVector{Int},
+                                     reasons::AbstractVector{Symbol},
+                                     emission_empty::Bool)
+    (_compiler_is_strict() && !isempty(resid)) || return nothing
+    why = :emission_produced_nothing
+    if !emission_empty
+        for j in resid
+            j <= length(reasons) || continue
+            reasons[j] === :none && continue
+            why = reasons[j]
+            break
+        end
+    end
+    _refuse_rule(_current_rule_label(),
+        "$(length(resid)) of $(length(kernels)) access kernel" *
+        (length(kernels) == 1 ? "" : "s") * " reached the end of both codegen " *
+        "emissions undeclared (deepest reason: $why), so they would run on the " *
+        "per-cell tree-walk kernel runner on every right-hand-side call. Build " *
+        "with compiler=:interpreter to run it, or grow the emitter to cover " *
+        "this construct")
+end
+
 function _make_kernel_section(acc_kernels::AbstractVector{_AccKernel};
                               shared_cache::Union{Nothing,_CSECache}=nothing)
     cg = _codegen_disabled() ? nothing :
@@ -1791,10 +1833,14 @@ function _make_kernel_section(acc_kernels::AbstractVector{_AccKernel};
     if cg === nothing
         kernels = collect(_AccKernel, acc_kernels)
         n_emitted = 0
+        # No primary emission ran, so there is no per-kernel reason to carry.
+        primary_reasons = Symbol[]
     else
         resid = [j for j in eachindex(cg.covered) if !cg.covered[j]]
         kernels = _AccKernel[acc_kernels[j] for j in resid]
         n_emitted = count(cg.covered)
+        # Re-indexed onto `kernels`, which is what every consumer below indexes.
+        primary_reasons = Symbol[cg.reasons[j] for j in resid]
     end
     cgf = cg === nothing ? nothing : cg.f
     cgtabs = cg === nothing ? nothing : cg.tabs
@@ -1808,6 +1854,8 @@ function _make_kernel_section(acc_kernels::AbstractVector{_AccKernel};
          _build_codegen_rhs(kernels; budget=_dual_codegen_node_budget(),
                             tally=:dual_codegen, shared_cache=shared_cache)
     if dg === nothing
+        _refuse_interpreted_kernels(kernels, collect(Int, 1:length(kernels)),
+                                    primary_reasons, isempty(primary_reasons))
         return _KernelSection(cgf, cgtabs, n_emitted, kernels,
                               nothing, nothing, 0, collect(Int, 1:length(kernels)),
                               false, _sec_tcache(cg), _sec_tcache(nothing))
@@ -1819,6 +1867,7 @@ function _make_kernel_section(acc_kernels::AbstractVector{_AccKernel};
     f64cg = _f64_overflow_codegen_enabled()
     f64cg && _tally_cascade!(:f64_overflow_armed)
     dual_resid = Int[j for j in eachindex(dg.covered) if !dg.covered[j]]
+    _refuse_interpreted_kernels(kernels, dual_resid, dg.reasons, false)
     return _KernelSection(cgf, cgtabs, n_emitted, kernels,
                           dg.f, dg.tabs, count(dg.covered), dual_resid, f64cg,
                           _sec_tcache(cg), _sec_tcache(dg))

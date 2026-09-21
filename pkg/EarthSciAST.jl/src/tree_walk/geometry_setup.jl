@@ -551,6 +551,7 @@ end
 # loops, keeping them available as the differential oracle (mirroring
 # `ESS_SETUP_MAP_COMPILE_ONCE_DISABLE` / `ESS_STENCIL_DISABLE`).
 _geom_sweep_specialize_disabled() =
+    !_compiler_plan_now().geom_sweep_specialize ||
     get(ENV, "ESS_GEOM_SWEEP_SPECIALIZE_DISABLE", "") == "1"
 
 # `ESS_GEOM_SWEEP_VERIFY=1` runs BOTH sweeps on every materialization and
@@ -721,6 +722,7 @@ end
 # historic ungated dense sweep. It is the differential oracle for this change
 # (mirroring `ESS_GEOM_SWEEP_SPECIALIZE_DISABLE` / `ESS_STENCIL_DISABLE`).
 _geom_overlap_gate_disabled() =
+    !_compiler_plan_now().geom_overlap_gate ||
     get(ENV, "ESS_GEOM_OVERLAP_GATE_DISABLE", "") == "1"
 
 # `ESS_GEOM_OVERLAP_GATE_VERIFY=1` materializes every overlap-gated array BOTH
@@ -1229,6 +1231,7 @@ end
 # available as the differential oracle (mirroring `ESS_STENCIL_DISABLE` /
 # `ESS_LANE_INTERN_DISABLE`).
 _setup_map_compile_once_disabled() =
+    !_compiler_plan_now().setup_map_compile_once ||
     get(ENV, "ESS_SETUP_MAP_COMPILE_ONCE_DISABLE", "") == "1"
 
 # `ESS_SETUP_MAP_COMPILE_ONCE_VERIFY=1` runs BOTH paths on every engaged MAP and

@@ -74,7 +74,8 @@ const _STENCIL_ELEMENTWISE_OPS = _ops_with(:stencil_elementwise)
 const _LANE_PREFIX = "\0lane\0"
 _lane_name(k::Int) = string(_LANE_PREFIX, k)
 
-_stencil_disabled() = get(ENV, "ESS_STENCIL_DISABLE", "") == "1"
+_stencil_disabled() = !_compiler_plan_now().stencil ||
+    get(ENV, "ESS_STENCIL_DISABLE", "") == "1"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # COMPILE-ONCE TEMPLATE TIER (esm-spec §9.6.4 Option B; RFC
@@ -151,7 +152,8 @@ const _SubCallSite = Tuple{_SubVariant,Int}   # (variant, lane base in enclosing
 # KILL SWITCH: `ESS_XEQ_VARIANT_DISABLE=1` restores the per-equation caches
 # (no store is created; every `_TemplateCtx` gets fresh dicts and every
 # obs-inline a fresh memo — the pre-A3 build exactly).
-_xeq_disabled() = get(ENV, "ESS_XEQ_VARIANT_DISABLE", "") == "1"
+_xeq_disabled() = !_compiler_plan_now().xeq_variant ||
+    get(ENV, "ESS_XEQ_VARIANT_DISABLE", "") == "1"
 
 struct _XEqStore
     variants::Dict{Tuple{UInt64,String,String},_SubVariant}
@@ -459,7 +461,8 @@ end
 # KILL SWITCH: `ESS_SUBTREE_TBL_DISABLE=1` restores the pre-rescue
 # whole-equation decline byte-for-byte — the differential-oracle escape hatch
 # (test/stencil_subtree_tbl_test.jl), mirroring `ESS_OBSREF_DISABLE`.
-_subtree_tbl_disabled() = get(ENV, "ESS_SUBTREE_TBL_DISABLE", "") == "1"
+_subtree_tbl_disabled() = !_compiler_plan_now().subtree_tbl ||
+    get(ENV, "ESS_SUBTREE_TBL_DISABLE", "") == "1"
 
 # One rescued subtree: the expression, the loop-index binding ORDER (sorted —
 # deterministic, and consistent between compile and per-cell rebinding), and

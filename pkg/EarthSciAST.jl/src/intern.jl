@@ -58,7 +58,8 @@
 # bit-identical `du` and identical state maps.
 # ========================================================================
 
-_intern_disabled() = get(ENV, "ESS_INTERN_DISABLE", "") == "1"
+_intern_disabled() = !_compiler_plan_now().intern ||
+    get(ENV, "ESS_INTERN_DISABLE", "") == "1"
 
 # Per-build intern context. `table` is the hash-cons table (structural hash →
 # bucket of canonical nodes, scanned with `_intern_shallow_equal`); `memo`

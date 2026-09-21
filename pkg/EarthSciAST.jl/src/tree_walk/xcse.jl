@@ -95,7 +95,8 @@
 # byte-identical to the pre-B4 engine. Fixture-level differential oracles
 # (test/tree_walk_xcse_test.jl) compare ON vs OFF bit for bit.
 
-_xcse_disabled() = get(ENV, "ESS_XCSE_DISABLE", "") == "1"
+_xcse_disabled() = !_compiler_plan_now().xcse ||
+    get(ENV, "ESS_XCSE_DISABLE", "") == "1"
 
 # ---- The cost gate (plan B4 criterion (c)) ------------------------------------
 # A NEW shared slot is only minted for a def at least as expensive as an

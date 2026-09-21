@@ -588,7 +588,8 @@ references are Expanded at load (the Option-A image) and never reach the build;
 when unset (default), references survive into the typed IR and the build handles
 them. Gate (d)'s differential builds a fixture both ways and compares exactly.
 """
-_template_ref_disabled() = get(ENV, "ESS_TEMPLATE_REF_DISABLE", "") == "1"
+_template_ref_disabled() = !_compiler_plan_now().template_ref ||
+    get(ENV, "ESS_TEMPLATE_REF_DISABLE", "") == "1"
 
 # A deep, plain-`Dict` copy of a top-level declaration block, or `nothing`.
 # Plain `Dict`/`Vector`/scalars only (`_to_native_json`) — the snapshot lives

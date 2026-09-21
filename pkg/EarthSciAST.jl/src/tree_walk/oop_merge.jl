@@ -70,6 +70,7 @@
 # the pass now runs for BOTH emitters, but existing tests and tooling set
 # `ESS_OOP_MERGE_DISABLE`, so that name must keep working forever.
 _oop_merge_disabled() =
+    !_compiler_plan_now().oop_merge ||
     get(ENV, "ESS_OOP_MERGE_DISABLE", "") == "1" ||
     get(ENV, "ESS_KERNEL_CLASS_MERGE_DISABLE", "") == "1"
 
@@ -635,6 +636,7 @@ end
 # ============================================================================
 
 _oop_merge_expand_disabled() =
+    !_compiler_plan_now().oop_merge_expand ||
     get(ENV, "ESS_OOP_MERGE_EXPAND_DISABLE", "") == "1"
 
 _oop_x_statefam(k) = k in (_AK_STATE_AFFINE, _AK_STATE_TBL_BOX, _AK_STATE_FIXED)

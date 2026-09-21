@@ -524,7 +524,8 @@ const _ARRAY_CELL_DEPTH = Ref(0)
 # vast existing small-aggregate test surface (and its CSE / stencil interactions)
 # is byte-for-byte unchanged. `ESS_CONTRACTION_LOOP=0` forces the pure-unroll
 # reference everywhere.
-_contraction_loop_enabled() = get(ENV, "ESS_CONTRACTION_LOOP", "1") != "0"
+_contraction_loop_enabled() = _compiler_plan_now().contraction_loop &&
+    get(ENV, "ESS_CONTRACTION_LOOP", "1") != "0"
 function _contraction_loop_min()
     v = get(ENV, "ESS_CONTRACTION_LOOP_MIN", "")
     n = tryparse(Int, v)
@@ -593,7 +594,8 @@ end
 # narrower switch that drops only this tier and leaves the per-cell loop in play,
 # which is what the differential test uses for its oracle.
 _array_contraction_enabled() =
-    _contraction_loop_enabled() && get(ENV, "ESS_ARRAY_CONTRACTION_DISABLE", "") != "1"
+    _compiler_plan_now().array_contraction && _contraction_loop_enabled() &&
+    get(ENV, "ESS_ARRAY_CONTRACTION_DISABLE", "") != "1"
 function _array_contraction_min()
     v = get(ENV, "ESS_ARRAY_CONTRACTION_MIN", "")
     n = tryparse(Int, v)
@@ -637,7 +639,13 @@ function _try_build_array_contraction(body::ASTExpr, out_names::Vector{String},
         # must never share the concrete RHS-build memo.
         _resolve_indices(subbed, array_var_info, var_map, const_arrays,
                          pgather, nothing, bsyms)
-    catch
+    catch err
+        # errors.jl: the three resource errors are never a tier decline. The
+        # per-cell path this returns to resolves the SAME body once per output
+        # cell, so reading an exhausted heap as "this body will not resolve
+        # symbolically" walks the build into a far larger allocation with the
+        # cause erased.
+        _is_resource_error(err) && rethrow()
         return nothing
     end
     for d in eachindex(fresh)

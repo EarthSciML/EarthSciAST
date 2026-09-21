@@ -238,7 +238,8 @@ _AffineSig() = _AffineSig(Dict{String,_StencilBranch}(), IdDict{OpExpr,Bool}(), 
 # looked for. Ghost membership (a state slot resolving to 0) keeps its own bit,
 # as before. `ESS_LANE_AFFINE_KEY_DISABLE=1` restores the Δ-keyed signature byte
 # for byte.
-_lane_affine_key_disabled() = get(ENV, "ESS_LANE_AFFINE_KEY_DISABLE", "") == "1"
+_lane_affine_key_disabled() = !_compiler_plan_now().lane_affine_key ||
+    get(ENV, "ESS_LANE_AFFINE_KEY_DISABLE", "") == "1"
 
 # Is this subscript expression an AFFINE function of the loop indices — a sum of
 # integer literals and loop-index terms with integer coefficients? Such an
@@ -825,7 +826,8 @@ end
 # size as the variable — never O(#cells) per lane.
 #
 # `ESS_STATE_BOX_DISABLE=1` restores the dense per-box table byte for byte.
-_state_box_disabled() = get(ENV, "ESS_STATE_BOX_DISABLE", "") == "1"
+_state_box_disabled() = !_compiler_plan_now().state_box ||
+    get(ENV, "ESS_STATE_BOX_DISABLE", "") == "1"
 
 # Build-scoped, mirroring `_LANE_INTERN_POOL`: installed in
 # `_build_evaluator_impl`, torn down in its `finally`. `nothing` outside a build
@@ -894,7 +896,8 @@ end
 # (perf-plan A2, prototypes/perf-gap-closure-plan.md): `ESS_OBSREF_DISABLE=1`
 # restores the pre-A2 whole-equation per-cell fallback byte-for-byte — the
 # differential-oracle escape hatch (test/stencil_affine_pgather_tbl_test.jl).
-_obsref_disabled() = get(ENV, "ESS_OBSREF_DISABLE", "") == "1"
+_obsref_disabled() = !_compiler_plan_now().obsref ||
+    get(ENV, "ESS_OBSREF_DISABLE", "") == "1"
 
 # Materialize a NON-AFFINE live-forcing (pgather) lane as a per-box INDEX table
 # into the ALIASED live buffer (perf-plan A2). The forcing chains that observed
