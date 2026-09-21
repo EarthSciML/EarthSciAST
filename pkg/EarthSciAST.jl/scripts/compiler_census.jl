@@ -245,7 +245,11 @@ function run_worker(manifest::String, outpath::String, from::Int, to::Int)
             # is in flight, so a worker killed mid-build can be attributed.
             println(io, _jline(Dict{String,Any}(
                 "marker" => "start", "index" => i, "path" => p,
-                "at" => time())))
+                # WHOLE seconds: a `Float64` epoch prints as `1.7584e9`, and the
+                # driver's `[0-9.]+` timestamp pattern would read that as
+                # `1.7584` — an age of half a century, so it would kill the
+                # worker on its first poll.
+                "at" => floor(Int, time()))))
             flush(io)
             # `invokelatest`: the package was loaded by `_load_esm` AFTER this
             # function's world age, so every call into it needs the current world.

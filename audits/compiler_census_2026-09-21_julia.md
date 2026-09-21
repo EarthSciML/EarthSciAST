@@ -34,21 +34,24 @@ compiled at RHS.
 OVERFLOW ("dual") pass under `_dual_codegen_node_budget()` = `typemax(Int)`
 (codegen_kernel.jl:119). With `ESS_F64_OVERFLOW_CODEGEN` on — the default,
 codegen_kernel.jl:145 — the overflow generated function *also serves Float64 calls*
-(codegen_kernel.jl:1762-1771). So `codegen_decline_budget` on its own means "compiled by
+(codegen_kernel.jl:1744-1770). So `codegen_decline_budget` on its own means "compiled by
 the second emission", not "interpreted".
 
 **(c) `dual_codegen_decline_<reason>` is the real count.** A kernel both emissions decline
 ends up in `_KernelSection.dual_resid` and is run by `_run_acc_kernel!`
-(codegen_kernel.jl:1741 / :1768, access_kernel.jl:675) — the `_eval_acc` tree walk, once
+(codegen_kernel.jl:1740 / :1767, access_kernel.jl:675) — the `_eval_acc` tree walk, once
 per output cell, under every element type. Summed over a build, the
 `dual_codegen_decline_*` tally keys are exactly `length(dual_resid)`, because
 `_build_codegen_rhs` bumps exactly one tally key per kernel (a `_kernel` key on success,
 a `_decline_<reason>` key on failure) and does so *before* the `any(covered) || return
-nothing` early exit.
+nothing` early exit. A build makes kernel sections at two places — the main RHS
+(acc_merge.jl:673) and each observed level (build.jl:3025) — and both feed the same tally,
+which is right: an observed-level kernel the emitter declines walks per cell on every RHS
+call too.
 
 **One more RHS-time tree walk the plan does not name.** The whole-array contraction tier
 (`:array_contraction`) is *not* codegen'd. Its runner is
-`array_contraction.jl:71-80`, and its inner statement is
+`array_contraction.jl:71-79`, and its inner statement is
 
 ```julia
 for c in eachindex(outs)
@@ -64,7 +67,7 @@ reports it as a separate column rather than folding it into the headline.
 
 Two further interpreted surfaces exist at RHS time but are *not* per cell and are
 reported here only so nobody mistakes them for the above: the scalar equation list
-(`acc_merge.jl:744`, one `_eval_node` per scalar state slot per call) and the CSE prelude
+(`acc_merge.jl:743`, one `_eval_node` per scalar state slot per call) and the CSE prelude
 tiers (`acc_merge.jl:708/729/740`). Every document has these; they scale with the number
 of scalar slots, not with a grid. `:scan` is not a third one — `_apply_scan_fold!`
 (scan.jl:108) accumulates over `du` slots and evaluates no tree.
@@ -164,7 +167,7 @@ rather than the document.
 | build.jl:4269-4281 (gate) | the tier is only *offered* the equation when the affine tier already declined, no gates/filter, constant contracted extents, ⊕ ∈ {+, *, max, min}, and ∏\|k…\| ≥ `_array_contraction_min()` | per-cell scalarize when the gate rejects | build-only (an admission rule, not a decline) | n/a |
 | build.jl:4283-4301 (`ac === nothing`) | `_try_compile_array_contraction` could not resolve or lower the symbolic body | per-cell scalarize → access kernels → codegen | capability | no |
 | build.jl:4367 (`catch` → `return nothing`) | `_compile` threw on the symbolic marker body | same | capability | no |
-| **accepted path** (`:array_contraction`, build.jl:4288) | the tier took the equation | `_apply_array_contraction!`, array_contraction.jl:74-79 | — | **yes** — `_eval_node` per output cell, and no codegen tier ever sees it |
+| **accepted path** (`:array_contraction`, build.jl:4288) | the tier took the equation | `_apply_array_contraction!`, array_contraction.jl:71-79 | — | **yes** — `_eval_node` per output cell, and no codegen tier ever sees it |
 
 The last row is the one worth flagging: on this tier, *success* is the case that leaves a
 per-cell tree walk in the RHS. Whether `native` must refuse it is a ruling, not a
