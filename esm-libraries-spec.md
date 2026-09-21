@@ -339,11 +339,11 @@ something a caller has to install, and MUST NOT make `interpreter` fast at the
 cost of sharing machinery with the compilers it checks.
 
 `build_evaluator` (Julia) remains a **tier-2 extension seam**, and is
-**scheduled for retirement**. This section kept it on two grounds — it is the
+**scheduled for retirement**. Two properties argue for keeping it — it is the
 entry point for a caller that wants the compiled right-hand side without a
-Problem around it, and it has substantial downstream use. `compiler` answers
-both: `esm_problem(…; compiler=:xla)` IS the compiled right-hand side, and the
-downstream use migrates to that call. It then becomes private behind
+Problem around it, and it has substantial downstream use — and `compiler`
+answers both: `esm_problem(…; compiler=:xla)` IS the compiled right-hand side,
+and the downstream use migrates to that call. It then becomes private behind
 `esm_problem`, with a deprecated alias for one minor; the forcing-buffer seam
 re-hangs on the Problem and the build-inspection record folds into
 `compiler_report`. `API_SPEC.md` §8 item 23 is the reconciliation row.
@@ -481,11 +481,11 @@ ships.
 
 #### 2.5.10 Choosing the compiler
 
-A simulation-capable binding has always had several ways to build a right-hand
-side — a tree walk, generated code, a tape, a vectorized overlay, an emitter to
-a compiled program, a lambdified scalar form — and has always chosen among them
-by inspecting the document, silently. **`compiler` makes the choice the
-caller's and the outcome readable.**
+A simulation-capable binding has several ways to build a right-hand side — a
+tree walk, generated code, a tape, a vectorized overlay, an emitter to a
+compiled program, a lambdified scalar form — and absent a `compiler` it chooses
+among them by inspecting the document, silently. **`compiler` makes the choice
+the caller's and the outcome readable.**
 
 **The vocabulary is closed**, and the same in every binding:
 `interpreter`, `native`, `xla`, `mtk`, `sympy`. `API_SPEC.md` §5.8 carries the

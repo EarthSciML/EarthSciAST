@@ -22,10 +22,10 @@ value means in Julia and how much of it is reachable today.
 **What is reachable today, and what is not.** `esm_problem` / `solve` build the
 tree-walk evaluator, and that is the only thing they build: there is no keyword
 that reaches the Reactant emitter or ModelingToolkit from the stable entry
-point. Both of those are reached through their own entry points, below. An
-earlier revision of this page called ModelingToolkit the *default* runner; it
-was never the default of the public simulation API, which has always built the
-tree walk.
+point. Both of those are reached through their own entry points, below.
+ModelingToolkit is not the default of the public simulation API and is not
+reachable from it: a document run through `esm_problem` is run by the tree-walk
+build, whatever this page's runner table might suggest at a glance.
 
 Each runner consumes the canonical-form AST emitted by [`discretize`](@ref) and
 walks it generically — none contains per-rule-shape dispatch — and each meets

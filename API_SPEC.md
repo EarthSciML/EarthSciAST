@@ -544,8 +544,8 @@ for what replaces it and what re-hangs on the Problem.
 #### `compiler`: which strategy builds the right-hand side
 
 `compiler` names the strategy a Problem's right-hand side is built with. Each
-binding has always had several — a tree walk, generated code, a tape, an XLA
-emitter, a lambdified scalar form — and has always chosen among them by
+binding has several — a tree walk, generated code, a tape, an XLA emitter, a
+lambdified scalar form — and absent this keyword it chooses among them by
 inspecting the document. `compiler` makes the choice the caller's, and makes
 what ran readable off the Problem afterwards.
 

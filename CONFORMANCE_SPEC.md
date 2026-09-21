@@ -5580,15 +5580,14 @@ The runner then splits on the fixture's `compiled_required` list:
 `compiled_required` is empty for every fixture in phase 1; phase 2 fills it as
 coverage lands, and each name added is a one-way ratchet.
 
-**This rule is not special to the compiled backends.** It reads as though it
-were, because when it was written the compiled emitters were the only build
-strategy a caller could name. With `compiler` (`API_SPEC.md` §5.8) every
-strategy is nameable, and `esm-libraries-spec.md` §2.5.10 states the rule in
-normative voice for all of them: a compiler that cannot run a rule raises
+**This rule is not special to the compiled backends.** The compiled emitters
+are two members of a closed vocabulary a caller names through `compiler`
+(`API_SPEC.md` §5.8), and `esm-libraries-spec.md` §2.5.10 states the rule in
+normative voice for every member: a compiler that cannot run a rule raises
 `compiler_refused_rule` at construction, naming the compiler, the rule and the
 reason, and MUST NOT fall back to a slower path. §5.44 applies the same
 refusal / named-exclusion / required-ratchet split to the whole vocabulary over
-whole trajectories. Nothing in this section changes; it is the special case.
+whole trajectories. This section is the special case of it.
 
 An engine that does not exist in a binding, or whose runtime is not configured on
 the machine, is a third outcome: the adapter emits the whole-output form
