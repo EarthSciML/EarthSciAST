@@ -390,6 +390,9 @@ class EsmProblem:
     model_name: str | None = None
     metaparameters: dict[str, int] = field(default_factory=dict)
     sample_time: float = 0.0
+    #: SymPy's common-subexpression pass, as it was asked for. Meaningful only
+    #: when :attr:`compiler` is ``"sympy"``; carried on every problem so
+    #: :func:`remake` rebuilds with the setting the original build used.
     cse: bool = True
     loader_provider: Any = None
     provider_factory: Any = None
@@ -497,10 +500,13 @@ def esm_problem(
     const_arrays:
         Extra caller-supplied arrays merged into the build registry.
     cse:
-        Share common subexpressions when lambdifying the scalar pathway's rhs /
-        algebraic / observed functions. ``True`` is the production setting;
-        ``False`` bypasses SymPy's CSE pass for diagnostic comparisons. Compiles
-        for each setting are cached separately on the flattened system.
+        Share common subexpressions when lambdifying the rhs / algebraic /
+        observed functions. Applies to ``compiler="sympy"`` and to NO other
+        compiler — it names SymPy's own CSE pass, and the vectorized NumPy
+        compilers have no lambdification to share subexpressions across.
+        ``True`` is the production setting; ``False`` bypasses the pass for
+        diagnostic comparisons. Compiles for each setting are cached separately
+        on the flattened system.
     callback:
         The EsmProblem's :class:`CallbackSet`. A ``callback`` passed to
         :func:`solve` REPLACES this set entirely (§2.5.4).
