@@ -6183,8 +6183,13 @@ The gate:
   skip. The manifest's per-fixture `required` map (binding → the compilers that
   MUST run it) flips it to RED as coverage lands, a one-way ratchet exactly as
   §5.38.3's `compiled_required` is;
-* an **`unavailable`** compiler is reported with its reason and skipped, unless
-  the fixture's `required` map names it, in which case it is RED;
+* an **`unavailable`** compiler is reported with its reason and skipped, but
+  only for a binding the manifest lists in that compiler's `bindings_optional`;
+  an unavailable compiler in a `bindings_required` binding is RED. Availability
+  and refusal are two ledgers — `bindings_required` says a binding must be able
+  to ANSWER for a compiler, `required` says that compiler must be able to run
+  THIS document — and merging them would make a coverage gap indistinguishable
+  from a missing runtime;
 * an **`error`** is RED for any binding and any compiler. Unlike a refusal it
   says nothing about what a compiler can run, so `required` does not excuse it.
 

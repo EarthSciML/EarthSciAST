@@ -61,7 +61,7 @@ from `pde_simulation`, `pde_simulation_pipeline`, the `pde_inline_*` categories,
 `simulate_faq`, `geometry`, `recurrence`, and the `tests/valid` documents that
 carry an inline `tests` block.
 
-| Fixture | Path (under `tests/`) | Model | Source tier | Class | What it holds |
+| Fixture | Path (under `tests/`) | Model | Source tier | Tolerance | What it holds |
 |---|---|---|---|---|---|
 | `diffusion_1d_dirichlet_n4` | `conformance/pde_simulation/fixtures/diffusion_1d_dirichlet_n4.esm` | `Diff1D` | `pde_simulation` | copied | pre-discretized 1-D heat; a rank-1 stencil with an analytic trajectory |
 | `diffusion_2d_dirichlet_n3` | `conformance/pde_simulation/fixtures/diffusion_2d_dirichlet_n3.esm` | `Diff2D` | `pde_simulation` | copied | the rank-2 twin: a neighbour-coupled 5-point stencil |
@@ -134,6 +134,15 @@ Field rules:
 * **`required`** maps a binding to the compilers that MUST run this fixture. It
   is empty for every fixture today. Each name added is a one-way ratchet, the
   same shape `compiled_rhs`'s `compiled_required` has.
+
+**The two ledgers mean different things and must never be merged.** The
+top-level `compilers.<value>.bindings_required` / `bindings_optional` lists
+govern **availability**: whether a binding must be able to ANSWER for that
+compiler at all. A fixture's `required` map governs **refusals**: whether that
+compiler must be able to run THIS document. A compiler can be required to exist
+and still be allowed to refuse a particular fixture, which is the normal state
+of a coverage backlog; the reverse — required on a fixture but not required to
+exist — is a manifest error the runner reports.
 * **`anchor`** names where the independent reference comes from, or `none`. A
   fixture that CAN carry one MUST, because without it the Julia leg is only a
   regression check against its own output.
@@ -282,8 +291,9 @@ adapter.
   the binding, the compiler, the fixture, the rule and the reason, in the report
   and on the console, and green for now — unless this fixture's `required` map
   lists that compiler for that binding, in which case it is RED;
-* an **`unavailable`** compiler is reported with its reason and skipped, unless
-  `required` names it, in which case it is RED;
+* an **`unavailable`** compiler is reported with its reason and skipped, but
+  only for a binding listed in that compiler's `bindings_optional`; an
+  unavailable compiler in a `bindings_required` binding is RED;
 * an **`error`** is RED for any binding and any compiler. Unlike a refusal it
   says nothing about what a compiler can run, so `required` does not excuse it.
 

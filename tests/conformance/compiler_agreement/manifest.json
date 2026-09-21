@@ -11,15 +11,16 @@
         "rust",
         "python"
       ],
-      "note": "Complete over the evaluable core (esm-libraries-spec \u00a72.5.10). A refusal here is always red."
+      "note": "Complete over the evaluable core (esm-libraries-spec \u00a72.5.10), so a refusal here is always red, whatever a fixture's `required` map says."
     },
     "native": {
-      "bindings_required": [
+      "bindings_required": [],
+      "bindings_optional": [
         "julia",
         "rust",
         "python"
       ],
-      "note": "The strict default. A refusal is a named exclusion until this fixture's `required` map lists the binding."
+      "note": "The strict default. Optional only until the strict build lands in all three; it moves to `bindings_required` then. A REFUSAL is governed by each fixture's `required` map, not by this list."
     },
     "xla": {
       "bindings_required": [],
