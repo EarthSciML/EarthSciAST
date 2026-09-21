@@ -3232,8 +3232,9 @@ def _check_registry_coupling_rewrites(registry: dict[str, Any], rewritten: set[s
     This is the ONE site where such a reference is REFUSED rather than resolved
     (CONFORMANCE_SPEC §5.35). The body is authored source: rewriting it would
     silently diverge from the expand-at-load image the same document produces.
-    A template `param` shadows the outer name (esm-spec §9.6.1), so a body that BINDS the name through its params is
-    fine -- which is exactly the fix the message names.
+    A template `param` shadows the outer name (esm-spec §9.6.1), so a body that
+    BINDS the name through its params is fine -- which is exactly the fix the
+    message names.
 
     Mirrors Julia `flatten.jl::_check_registry_coupling_rewrites`.
     """
