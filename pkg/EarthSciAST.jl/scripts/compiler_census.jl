@@ -97,7 +97,7 @@ Build `path` through `M` (the loaded `EarthSciAST` module) and report what the
 cascade did. Never throws: every failure is a record. `ESS_CODEGEN_DEBUG` /
 `ESS_STENCIL_DEBUG` are expected to be `1` in the environment, and this captures
 the stderr they write — including the `@info` the affine fallback logs, which is
-why a fresh `ConsoleLogger` is installed over the same buffer.
+why a fresh `ConsoleLogger` is installed over the same file.
 """
 function _census_one(M, path::AbstractString)
     rec = Dict{String,Any}("path" => String(path))
@@ -151,7 +151,9 @@ function _census_one(M, path::AbstractString)
         err_msg  = first(sprint(showerror, err), 400)
     end
     t_build = time() - t0
-    close(errio) = Dict{String,Int}(String(k) => v for (k, v) in M._CASCADE_TALLY)
+    close(errio)
+
+    tally = Dict{String,Int}(String(k) => v for (k, v) in M._CASCADE_TALLY)
 
     percell_build = sum(get(tally, k, 0) for k in PERCELL_BUILD_KEYS)
     cg_decl  = Dict{String,Int}()
@@ -190,6 +192,20 @@ function _census_one(M, path::AbstractString)
     # THE headline: kernels neither emission covered, i.e. `dual_resid` —
     # `_run_acc_kernel!` walks these per cell on every RHS call.
     rec["n_interp_at_rhs"]      = isempty(dual_decl) ? 0 : sum(values(dual_decl))
+    # The OTHER per-cell tree walk at RHS time, and the one the cascade reaches by
+    # ACCEPTING rather than declining: a whole-array contraction section evaluates
+    # `_eval_node` once per output cell (array_contraction.jl:71-79) and no codegen
+    # tier ever sees it. Counted separately because it is a different unit — these
+    # are equations, `n_interp_at_rhs` counts kernels — and because whether
+    # `native` must refuse it is a ruling, not a measurement.
+    rec["n_array_contraction"]  = get(tally, "array_contraction", 0)
+    # Per-cell at BUILD only: the equation was scalarized per output cell during
+    # construction and the resulting kernels then compiled, so the RHS-call path
+    # carries no tree walk from it. This is the distinction a raw
+    # `:percell_acc` count hides.
+    rec["percell_build_only"]   = (rec["n_interp_at_rhs"] == 0 &&
+                                   rec["n_array_contraction"] == 0) ?
+                                  percell_build : 0
     rec["debug"]                = first(debug, 40)
     rec["status"]               = ok ? "ok" : "build_error"
     return rec

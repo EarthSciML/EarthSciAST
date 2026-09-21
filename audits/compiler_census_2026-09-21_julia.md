@@ -65,12 +65,31 @@ end
 plan's own criterion this tier is a per-cell interpreter at RHS time, so the census
 reports it as a separate column rather than folding it into the headline.
 
-Two further interpreted surfaces exist at RHS time but are *not* per cell and are
-reported here only so nobody mistakes them for the above: the scalar equation list
-(`acc_merge.jl:743`, one `_eval_node` per scalar state slot per call) and the CSE prelude
-tiers (`acc_merge.jl:708/729/740`). Every document has these; they scale with the number
-of scalar slots, not with a grid. `:scan` is not a third one — `_apply_scan_fold!`
-(scan.jl:108) accumulates over `du` slots and evaluates no tree.
+So the census reports **two separate quantities**, and the difference between them is the
+whole point of the exercise:
+
+* **per-cell at BUILD** — `:percell_loop` / `:percell_acc` fired, the equation was
+  scalarized once per output cell during construction, and the kernels that came out of
+  it were then compiled. The right-hand side carries no tree walk from it. This costs
+  build wall time and build memory, nothing per step.
+* **per-cell at RHS** — a kernel both codegen passes declined, or an accepted whole-array
+  contraction. This is what runs on every right-hand-side call, and it is what `native`
+  refuses.
+
+A document can be entirely in the first category and entirely compiled at RHS.
+
+Three interpreted surfaces are deliberately NOT in the second category, listed so nobody
+mistakes them for it:
+
+* the scalar equation list (`acc_merge.jl:743`, one `_eval_node` per scalar state slot per
+  call) and the CSE prelude tiers (`acc_merge.jl:708/729/740`). These are per RHS call but
+  per *slot*, not per cell; every document has them, and they scale with the number of
+  scalar states rather than with a grid.
+* `:scan`. `_apply_scan_fold!` (scan.jl:108) accumulates over `du` slots and evaluates no
+  tree; the scan tier's *terms* go through the ordinary affine and codegen tiers.
+* the whole of `geometry_compile.jl`, whose own header calls it "the COMPILED **setup-time**
+  geometry path" (geometry_compile.jl:5). Its `_eval_node` per cell
+  (geometry_compile.jl:418-420, :470) runs during materialization, not from `f!`.
 
 ---
 
