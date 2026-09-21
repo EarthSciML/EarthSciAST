@@ -17,7 +17,7 @@ value means in Julia and how much of it is reachable today.
 | `:interpreter` | Deliberately simple: the correctness check for the other compilers. Every fast tier off, complete over the evaluable core, no performance promise of any kind. | the same tree walk with the per-cell runner for every kernel | **planned.** The path exists; it is selected by environment switches rather than by argument |
 | `:xla` | Specialty: needs a heavy external dependency. StableHLO emitted directly and compiled through Reactant; a hard error on anything it cannot lower. | the direct emitter in the Reactant extension | **planned.** Reachable today only through [`build_evaluator`](@ref)`(…; form = :oop)`, not from `esm_problem` |
 | `:mtk` | Specialty: only some documents — but it is the one runner that executes **events and implicit equations**. | `ModelingToolkit.System(model)` via the package extension | **planned as a compiler.** The extension is live and supported; it is not yet something `esm_problem` can be asked for |
-| `:sympy` | Python only. | — | `compiler_unavailable` |
+| `:sympy` | Specialty: Python only, and there only for scalar documents. | — | `compiler_unavailable` |
 
 **What is reachable today, and what is not.** `esm_problem` / `solve` build the
 tree-walk evaluator, and that is the only thing they build: there is no keyword
@@ -25,7 +25,7 @@ that reaches the Reactant emitter or ModelingToolkit from the stable entry
 point. Both of those are reached through their own entry points, below.
 ModelingToolkit is not the default of the public simulation API and is not
 reachable from it: a document run through `esm_problem` is run by the tree-walk
-build, whatever this page's runner table might suggest at a glance.
+build.
 
 Each runner consumes the canonical-form AST emitted by [`discretize`](@ref) and
 walks it generically — none contains per-rule-shape dispatch — and each meets
