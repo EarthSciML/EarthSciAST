@@ -1,7 +1,7 @@
 {
   "category": "compiler_agreement",
   "version": "1.0",
-  "description": "Cross-compiler trajectory conformance (CONFORMANCE_SPEC.md \u00a75.44). Every compiler a binding offers must reproduce the Julia `interpreter` trajectory of the same document within the fixture's written band, or refuse it by name. Fixtures are referenced by path from the existing simulation tiers; nothing is authored here. Goldens are NOT minted yet -- phase 2 mints `golden/<id>.json` from the Julia interpreter.",
+  "description": "Cross-compiler trajectory conformance (CONFORMANCE_SPEC.md \u00a75.44). Every compiler a binding offers must reproduce the Julia `interpreter` trajectory of the same document within the fixture's written band, or refuse it by name. Fixtures are referenced by path from the existing simulation tiers; nothing is authored here. `golden/<id>.json` is the Julia interpreter's trajectory for each fixture, minted with `--write-golden --bindings julia --compiler interpreter`.",
   "reference_binding": "julia",
   "reference_compiler": "interpreter",
   "compilers": {
@@ -14,13 +14,14 @@
       "note": "Complete over the evaluable core (esm-libraries-spec \u00a72.5.10), so a refusal here is always red, whatever a fixture's `required` map says."
     },
     "native": {
-      "bindings_required": [],
+      "bindings_required": [
+        "julia"
+      ],
       "bindings_optional": [
-        "julia",
         "rust",
         "python"
       ],
-      "note": "The strict default. Optional only until the strict build lands in all three; it moves to `bindings_required` then. A REFUSAL is governed by each fixture's `required` map, not by this list."
+      "note": "The strict default. Julia's strict build has landed, so julia must ANSWER for `native`; rust and python stay optional until theirs do and cross on the same one-way ratchet. A REFUSAL is governed by each fixture's `required` map, not by this list."
     },
     "xla": {
       "bindings_required": [],

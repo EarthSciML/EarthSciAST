@@ -25,10 +25,13 @@ Design decisions of record (2026-09-21) that this tier implements:
 * Fixtures are **referenced by path** from the tiers that already own them.
   Nothing about a document's physics is decided here.
 
-> **No goldens are minted yet.** `golden/` does not exist in this tree. Phase 2
-> mints `golden/<id>.json` from the Julia `interpreter` and commits them, and
-> only then does any producer stage have something to compare against. Until
-> then the tier's contract is this file and `manifest.json`.
+> **Status.** `golden/` holds all six reference trajectories, minted from the
+> Julia `interpreter` and committed; each one reproduces the analytic anchor its
+> fixture carries. Julia answers for both `interpreter` and `native` with no
+> refusals on any fixture, and is `bindings_required` for each. Rust and Python
+> stay `bindings_optional` for `native` while their adapters are being written;
+> each crosses to `bindings_required` when its strict build lands, on the same
+> one-way ratchet.
 
 ## Shape
 
@@ -273,11 +276,12 @@ binary serves every compiler its binding offers; the adapter passes the value
 straight to `esm_problem` and does not interpret it. An adapter that inspected
 the value and chose a build itself would be reimplementing the thing under test.
 
-Planned paths, so the later phases build to the same places:
+The paths, so every binding's adapter lands in the place the runner already
+looks for it:
 
 | Binding | Adapter |
 |---|---|
-| Julia (reference) | `pkg/EarthSciAST.jl/scripts/compiler_agreement_adapter.jl` |
+| Julia (reference) | `pkg/EarthSciAST.jl/scripts/compiler_agreement_adapter.jl` — on disk; bootstraps `scripts/compiler_agreement_env` |
 | Rust | `pkg/earthsci-ast-rs/src/bin/earthsci-compiler-agreement-adapter-rust.rs`, feature `conformance-adapters` |
 | Python | `pkg/earthsci-ast-py/src/earthsci_ast/cli/compiler_agreement_adapter.py` |
 
@@ -456,9 +460,9 @@ live binding.
 
 A producer stage **declines to start**, with a warning naming exactly what is
 missing, when its binding's adapter is not on disk or when `golden/` holds no
-reference trajectory. Both are the phase-1 state and neither is a silent pass:
-the stage log says `UNAVAILABLE` and why. Once both exist the stage runs for
-real and the gate above decides.
+reference trajectory. Neither is a silent pass: the stage log says `UNAVAILABLE`
+and why. `golden/` is populated, so only a missing adapter can trigger it now,
+and the Julia stages run for real with the gate above deciding.
 
 ## Adding a fixture
 
