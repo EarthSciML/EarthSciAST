@@ -393,31 +393,62 @@ impl Solution {
     /// [`Solution::state`] remains available, but the flattened state ordering
     /// is an implementation detail that coupling can change.
     pub fn get(&self, name: &str) -> Option<&[f64]> {
+        self.index_of(name).map(|i| self.state[i].as_slice())
+    }
+
+    /// The ROW INDEX of the variable named `name`, under the same precedence
+    /// [`Self::get`] applies.
+    ///
+    /// Exposed beside `get` because a caller that wants one value at one time
+    /// needs the index, not the row: `sol.state[i][k]`. Resolving that by hand
+    /// — `position(|n| n == name)` — is an EXACT match, which is how a caller
+    /// ends up depending on whether the build qualified its names.
+    ///
+    /// The precedence, in order:
+    ///
+    /// 1. the exact stored spelling;
+    /// 2. the survivor of an `operator_compose` renaming match that DELETED
+    ///    this name (issue #230) — consulted after the exact match, so the map
+    ///    can never shadow a live row;
+    /// 3. a BARE `name` against the unique qualified row with that tail;
+    /// 4. a QUALIFIED `name` against the unique BARE row with that tail. The
+    ///    mirror of (3), and the arm a caller needs when a document's rows
+    ///    come from the array runtime's single-model build, which names its
+    ///    slots without the model's namespace while the flattened build and
+    ///    the scalar interpreter qualify.
+    ///
+    /// An ambiguous tail resolves to nothing rather than to an arbitrary one
+    /// of the candidates, in both directions.
+    pub fn index_of(&self, name: &str) -> Option<usize> {
         if let Some(i) = self.state_variable_names.iter().position(|n| n == name) {
-            return Some(&self.state[i]);
+            return Some(i);
         }
-        // A name this solution does not carry may be one an `operator_compose`
-        // renaming match DELETED (issue #230): the quantity MOVED to the
-        // survivor's row rather than never existing. Consulted only after the
-        // exact match, so the map can never shadow a live row.
         if let Some(survivor) = self.metadata.merged_variable_renames.get(name)
             && let Some(i) = self.state_variable_names.iter().position(|n| n == survivor)
         {
-            return Some(&self.state[i]);
+            return Some(i);
         }
-        if name.contains('.') {
-            return None;
-        }
+        let tail = name.rsplit('.').next().unwrap_or(name);
+        let dotted = name.contains('.');
         let mut hit = None;
         for (i, n) in self.state_variable_names.iter().enumerate() {
-            if n.rsplit('.').next() == Some(name) && n.contains('.') {
+            // A bare request matches a QUALIFIED row's tail; a qualified one
+            // matches a BARE row outright. Neither ever matches across two
+            // different components, because a qualified row's tail is compared
+            // against the whole request only when the request is bare.
+            let matches = if dotted {
+                !n.contains('.') && n == tail
+            } else {
+                n.contains('.') && n.rsplit('.').next() == Some(name)
+            };
+            if matches {
                 if hit.is_some() {
-                    return None; // ambiguous bare name
+                    return None; // ambiguous tail
                 }
                 hit = Some(i);
             }
         }
-        hit.map(|i| self.state[i].as_slice())
+        hit
     }
 
     /// [`Solution::get`], as a `Result` naming the variable that was not found.

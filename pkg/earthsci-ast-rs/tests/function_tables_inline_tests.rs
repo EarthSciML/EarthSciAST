@@ -26,7 +26,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::{SolveOptions, load_path, run_inline_tests_with_base_dir};
+use earthsci_ast::{SolveOptions, load_path};
 
 mod common;
 
@@ -123,8 +123,19 @@ fn both_problem_carriers_lower_a_table_lookup() {
         ("File", ProblemInput::File(&file)),
         ("Flattened", ProblemInput::Flattened(&flat)),
     ] {
-        let prob = esm_problem(input, (0.0, 1.0), Default::default())
-            .unwrap_or_else(|e| panic!("[{label}] esm_problem: {e}"));
+        let prob = esm_problem(
+            input,
+            (0.0, 1.0),
+            earthsci_ast::ProblemOptions {
+                // `table_lookup` lowers to `interp.linear`, which has no
+                // tape lowering, so `native` refuses both carriers by NAME
+                // (API_SPEC §5.8). What is pinned here is that the two
+                // carriers AGREE.
+                compiler: Some(earthsci_ast::Compiler::Interpreter),
+                ..Default::default()
+            },
+        )
+        .unwrap_or_else(|e| panic!("[{label}] esm_problem: {e}"));
         let sol = solve(&prob, &SolveOptions::default())
             .unwrap_or_else(|e| panic!("[{label}] solve: {e}"));
         let got = sol

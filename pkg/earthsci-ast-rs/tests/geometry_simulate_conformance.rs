@@ -330,7 +330,7 @@ fn planar_ode_fixture_is_runnable_and_exposes_area() {
     .unwrap_or_else(|e| panic!("[{model_name}] planar_ode simulate failed: {e}"));
 
     assert!(
-        sol.state_variable_names.iter().any(|n| n == "area"),
+        sol.index_of("area").is_some(),
         "scalar observed `area` must be exposed in the solution; got vars {:?}",
         sol.state_variable_names
     );

@@ -1242,7 +1242,15 @@ fn array_observed_trajectories(
     names: &[String],
 ) -> Result<Vec<(String, Vec<f64>)>, SimulateError> {
     let declared = compiled.observed_variable_names();
-    let model = prob.model_name.as_deref().unwrap_or("");
+    // The COMPILED model's namespace, not `prob.model_name`: a problem built
+    // from a typed single-model document carries no `model_name` (the caller
+    // named none), while the artifact knows the `models` key it consumed. With
+    // the empty string here, §5.8's rule-2 strip never fires and a caller's
+    // component-qualified spelling resolves to nothing.
+    let model = compiled
+        .namespace()
+        .or(prob.model_name.as_deref())
+        .unwrap_or("");
     let single = components_of(&declared, model) == 1;
     let mut out = Vec::new();
     for name in names {

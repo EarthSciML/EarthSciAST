@@ -10,7 +10,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::{Alg, SolveOptions, load_string, run_inline_tests_with_base_dir};
+use earthsci_ast::{Alg, SolveOptions, load_string};
 use std::fs;
 
 mod common;

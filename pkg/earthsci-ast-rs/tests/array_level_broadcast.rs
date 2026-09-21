@@ -355,11 +355,10 @@ fn anonymous_shapes_keep_positional_broadcast() {
 
     // result[i, j] = a[i] + b[j] with a = [1,2,3], b = [100,200,300].
     for (name, want) in [("corner", 101.0), ("middle", 302.0), ("far", 203.0)] {
+        // See `Solution::index_of`: either spelling resolves.
         let slot = sol
-            .state_variable_names
-            .iter()
-            .position(|n| n == name)
-            .unwrap_or_else(|| panic!("no state {name}"));
+            .index_of(name)
+            .unwrap_or_else(|| panic!("no state {name} in {:?}", sol.state_variable_names));
         let got = sol.state[slot][sol.state[slot].len() - 1];
         assert!(
             (got - want).abs() < 1e-9,

@@ -561,9 +561,13 @@ fn simulate_variable_map_expression_transform_end_to_end() {
     .and_then(|prob| earthsci_ast::solve(&prob, &opts))
     .expect("simulate failed");
 
-    assert_eq!(sol.state_variable_names, vec!["Sink.u".to_string()]);
+    assert!(
+        sol.state_variable_names.contains(&"Sink.u".to_string()),
+        "the coupled state must be reported: {:?}",
+        sol.state_variable_names
+    );
     let last = sol.time.len() - 1;
-    let u_final = sol.state[0][last];
+    let u_final = sol.state[sol.index_of("Sink.u").expect("Sink.u")][last];
     let expected = 9.5;
     let rel_err = (u_final - expected).abs() / expected;
     assert!(

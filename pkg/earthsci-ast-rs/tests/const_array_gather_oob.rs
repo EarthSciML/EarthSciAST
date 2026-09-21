@@ -130,7 +130,7 @@ fn an_inline_const_literal_out_of_range_is_an_error_not_a_zero_ghost() {
 /// the per-cell interpreter. The last cell reads past the end of `C`.
 #[test]
 fn an_inline_const_gather_over_a_whole_axis_fails_closed() {
-    use earthsci_ast::{Alg, SolveOptions, load_string, run_inline_tests_with_base_dir};
+    use earthsci_ast::{Alg, SolveOptions, load_string};
     let gather = |offset: i64| {
         json!({
             "esm": "1.1.0",

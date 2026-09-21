@@ -966,8 +966,13 @@ impl ArrayCompiled {
 /// what remains is genuinely unevaluable.
 fn reject_unlowered_spatial_ops(model: &Model) -> Result<(), CompileError> {
     for eq in &model.equations {
+        // The `ic` exemption is for the LHS and only the LHS (esm-spec
+        // §11.4.1 puts `ic` there). Applying it to the RHS as well let an
+        // `ic`-headed RHS — the one shape that is NOT an initial-condition
+        // statement — walk past the gate and reach the evaluator, where it is
+        // an ordinary unevaluable-core op with no rule.
         check_evaluable_side(&eq.lhs)?;
-        check_evaluable_side(&eq.rhs)?;
+        check_evaluable(&eq.rhs)?;
     }
     for var in model.variables.values() {
         let mut failure = None;
@@ -985,9 +990,9 @@ fn reject_unlowered_spatial_ops(model: &Model) -> Result<(), CompileError> {
     Ok(())
 }
 
-/// [`check_evaluable`] over one side of an equation, with the ONE structural
-/// wrapper the array path consumes rather than evaluates unwrapped first: an
-/// `ic` LHS (esm-spec §11.4). `ic` is evaluable-core and has no `eval_op` arm —
+/// [`check_evaluable`] over the LEFT side of an equation, with the ONE
+/// structural wrapper the array path consumes rather than evaluates unwrapped
+/// first: an `ic` LHS (esm-spec §11.4). `ic` is evaluable-core and has no `eval_op` arm —
 /// correctly, since initial-condition assembly reads the equation and the
 /// evaluator never sees the node — so gating it as an ordinary expression would
 /// reject every document that states an initial condition. Its OPERAND is
@@ -3283,6 +3288,16 @@ pub(super) fn strip_value_invention(
     if vi_vars.is_empty() {
         return Ok(());
     }
+    // Kept for the diagnostic at the end: which op defined each stripped
+    // variable.
+    let stripped_bodies: HashMap<String, Expr> = model
+        .equations
+        .iter()
+        .filter_map(|eq| {
+            let v = equation_defined_var(&eq.lhs)?;
+            vi_vars.contains(&v).then(|| (v, eq.rhs.clone()))
+        })
+        .collect();
     model.variables.retain(|k, _| !vi_vars.contains(k));
     model.equations.retain(|eq| {
         equation_defined_var(&eq.lhs)
@@ -3307,7 +3322,69 @@ pub(super) fn strip_value_invention(
     for var in model.variables.values_mut() {
         var.for_each_expression_mut(&mut |expr| strip_vi_joins(expr, &vi_cols));
     }
+    // A stripped producer that something SURVIVING still reads was never a
+    // legitimate strip: its only definition was an evaluable-core op with no
+    // evaluation rule, and an earlier stage was supposed to have eliminated
+    // it. Report THAT — `unevaluable_operator`, naming the op — rather than
+    // letting the free-variable gate below report the dangling name, which
+    // sends an author looking for a typo in a variable they declared.
+    //
+    // Both outcomes are refusals, so nothing that built before stops building;
+    // only the wording changes, and only for a document that was already dead.
+    for eq in &model.equations {
+        let mut hit: Option<String> = None;
+        let mut find = |expr: &Expr| {
+            if hit.is_none() {
+                hit = first_variable_reference_in(expr, &vi_vars);
+            }
+        };
+        find(&eq.lhs);
+        find(&eq.rhs);
+        if let Some(name) = hit {
+            let op = stripped_producer_op(&name, &stripped_bodies)
+                .unwrap_or_else(|| "skolem".to_string());
+            return Err(CompileError::UnevaluableOperatorError { op });
+        }
+    }
     Ok(())
+}
+
+/// The first name in `expr` that `stripped` contains, if any.
+fn first_variable_reference_in(expr: &Expr, stripped: &HashSet<String>) -> Option<String> {
+    match expr {
+        Expr::Variable(v) if stripped.contains(v) => Some(v.clone()),
+        Expr::Operator(node) => {
+            let mut out = None;
+            node.any_child(&mut |child| {
+                out = first_variable_reference_in(child, stripped);
+                out.is_some()
+            });
+            out
+        }
+        _ => None,
+    }
+}
+
+/// The evaluable-core op at the head of the body that defined the stripped
+/// variable `name`, for the diagnostic above.
+fn stripped_producer_op(name: &str, bodies: &HashMap<String, Expr>) -> Option<String> {
+    fn head(expr: &Expr) -> Option<String> {
+        match expr {
+            Expr::Operator(node) if !crate::simulate_array::is_evaluable_op(&node.op) => {
+                Some(node.op.clone())
+            }
+            Expr::Operator(node) => {
+                let mut out = None;
+                node.any_child(&mut |child| {
+                    out = head(child);
+                    out.is_some()
+                });
+                out
+            }
+            _ => None,
+        }
+    }
+    head(bodies.get(name)?)
 }
 
 // ===========================================================================
@@ -5040,6 +5117,10 @@ mod subsystem_ragged_and_inspection_tests {
                 p: HashMap::new().clone(),
                 u0: HashMap::new().clone(),
                 rhs: crate::problem::Rhs::Always,
+                // As `inspecting_problem`: this document's contraction bound
+                // is RAGGED, which the tape cannot size, so `native` refuses
+                // it by NAME (API_SPEC §5.8).
+                compiler: Some(crate::problem::Compiler::Interpreter),
                 ..Default::default()
             },
         )

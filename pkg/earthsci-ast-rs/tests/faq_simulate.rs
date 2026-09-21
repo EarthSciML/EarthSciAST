@@ -94,10 +94,9 @@ fn sim_value(model_json: &str, var: &str) -> Result<f64, String> {
     )
     .and_then(|prob| earthsci_ast::solve(&prob, &opts))
     .map_err(|e| format!("simulate: {e}"))?;
+    // See `Solution::index_of`: either spelling resolves.
     let slot = sol
-        .state_variable_names
-        .iter()
-        .position(|n| n == var)
+        .index_of(var)
         .ok_or_else(|| {
             format!(
                 "state slot '{var}' not found; known: {:?}",
@@ -542,10 +541,9 @@ fn ragged_index_set_drives_dynamic_reduction_bound() {
     .and_then(|prob| earthsci_ast::solve(&prob, &opts))
     .unwrap_or_else(|e| panic!("simulate ragged: {e}"));
     let at_t1 = |name: &str| -> f64 {
+        // See `Solution::index_of`: either spelling resolves.
         let slot = sol
-            .state_variable_names
-            .iter()
-            .position(|n| n == name)
+            .index_of(name)
             .unwrap_or_else(|| {
                 panic!(
                     "state slot '{name}' not found: {:?}",

@@ -39,6 +39,11 @@ const N_LON: usize = 3;
 const N_LAT: usize = 2;
 /// The fixture's `k` default.
 const K: f64 = 0.001;
+/// The fixture's single model. Every row and every planned variable carries
+/// it: `EsmProblem` presents ONE spelling for a document however it was built
+/// (see `Solution::index_of`), and it is the qualified one the
+/// `output_derivation` goldens already use (`Grid.c`, `Mix.col`).
+const NS: &str = "Grid";
 
 fn doc(path: &str) -> EsmFile {
     load_string(&std::fs::read_to_string(path).unwrap_or_else(|e| panic!("reading {path}: {e}")))
@@ -68,12 +73,13 @@ fn weight(i: usize, j: usize) -> f64 {
     (i + 10 * j) as f64
 }
 
-/// The row of `sol` named exactly `name`.
+/// The row of `sol` named `name`, in either spelling.
 fn row<'s>(sol: &'s earthsci_ast::Solution, name: &str) -> &'s [f64] {
+    // See `Solution::index_of`: the array runtime's single-model build names
+    // its rows bare and the flattened one qualifies, so a fixture written
+    // against either spelling has to resolve against both.
     let i = sol
-        .state_variable_names
-        .iter()
-        .position(|n| n == name)
+        .index_of(name)
         .unwrap_or_else(|| {
             panic!(
                 "no row named '{name}'; rows are {:?}",
@@ -89,7 +95,7 @@ fn an_array_observed_leaves_no_trace_unless_it_is_asked_for() {
     assert!(
         !sol.state_variable_names
             .iter()
-            .any(|n| n.starts_with("flux")),
+            .any(|n| n.ends_with("flux") || n.contains("flux[")),
         "an unrequested array observed must not be materialized: {:?}",
         sol.state_variable_names
     );
@@ -112,12 +118,12 @@ fn a_requested_array_observed_becomes_one_row_per_cell() {
     // One row per cell, in the state's own 1-based column-major cell-key
     // spelling — dim 0 fastest, so lon varies inside lat.
     let want: Vec<String> = (1..=N_LAT)
-        .flat_map(|j| (1..=N_LON).map(move |i| format!("flux[{i},{j}]")))
+        .flat_map(|j| (1..=N_LON).map(move |i| format!("{NS}.flux[{i},{j}]")))
         .collect();
     let got: Vec<String> = sol
         .state_variable_names
         .iter()
-        .filter(|n| n.starts_with("flux["))
+        .filter(|n| n.starts_with(&format!("{NS}.flux[")))
         .cloned()
         .collect();
     assert_eq!(got, want, "array-observed cell keys");
@@ -177,9 +183,13 @@ fn the_plan_grids_a_requested_observed_alongside_the_state() {
     );
 
     let names: Vec<&str> = grid.vars.iter().map(|v| v.name.as_str()).collect();
-    assert_eq!(names, vec!["c", "flux"], "state PLUS the named observed");
+    assert_eq!(
+        names,
+        vec!["Grid.c", "Grid.flux"],
+        "state PLUS the named observed"
+    );
 
-    let flux = plan.var("flux").expect("flux is planned");
+    let flux = plan.var("Grid.flux").expect("flux is planned");
     assert_eq!(flux.dims, vec!["time", "lon", "lat"], "record axis leads");
     assert_eq!(
         flux.attrs.get("units").and_then(|v| v.as_str()),
@@ -314,7 +324,7 @@ fn the_cli_writes_a_gridded_array_observed() {
             .find(|v| v["name"] == name)
             .unwrap_or_else(|| panic!("no var '{name}' in {vars:?}"))
     };
-    let flux = var("flux");
+    let flux = var("Grid.flux");
     assert_eq!(flux["dims"], serde_json::json!(["time", "lon", "lat"]));
     assert_eq!(flux["attrs"]["units"], "kg/s");
     assert_eq!(flux["dtype"], "float64");
@@ -329,7 +339,7 @@ fn the_cli_writes_a_gridded_array_observed() {
             .map(|x| x.as_f64().expect("f64"))
             .collect()
     };
-    let (c_data, f_data) = (nums(&var("c")["data"]), nums(&flux["data"]));
+    let (c_data, f_data) = (nums(&var("Grid.c")["data"]), nums(&flux["data"]));
     let n_cells = N_LON * N_LAT;
     assert_eq!(f_data.len(), n_rec * n_cells);
     for r in 0..n_rec {

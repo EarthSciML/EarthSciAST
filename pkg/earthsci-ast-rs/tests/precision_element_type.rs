@@ -39,7 +39,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use earthsci_ast::precision::{self, Precision};
-use earthsci_ast::{AssertionResult, SolveOptions, load_path, run_inline_tests};
+use earthsci_ast::{AssertionResult, SolveOptions, load_path};
 
 fn fixture(name: &str) -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))

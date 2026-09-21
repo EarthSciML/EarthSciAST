@@ -238,6 +238,23 @@ fn refuse_coupled_subsystem_event(file: &EsmFile) -> Result<(), CompileError> {
     }
 }
 
+/// Whether the document's WHOLE content is one model — the only shape
+/// `ArrayCompiled::from_file` can consume, since it takes that one raw `Model`
+/// and nothing else.
+///
+/// A reaction system beside the model counts as content: its reactions lower
+/// to `D(species, t) = …` during flattening, and a build that skipped them
+/// would drop every species from the compiled system. A system with NO
+/// reactions lowers to nothing, so it is not content.
+fn whole_document_is_one_model(file: &EsmFile) -> bool {
+    let one_model = file.models.as_ref().map_or(0, |m| m.len()) == 1;
+    let has_reactions = file
+        .reaction_systems
+        .as_ref()
+        .is_some_and(|systems| systems.iter().any(|(_, rs)| !rs.reactions.is_empty()));
+    one_model && !has_reactions
+}
+
 /// Whether `file` must route to the array/spatial runtime
 /// ([`crate::simulate_array`]) rather than the scalar ODE interpreter: it has
 /// array-op nodes or spatial model structure. EsmProblem construction
@@ -254,13 +271,21 @@ pub(crate) fn is_array_file(file: &EsmFile) -> bool {
 /// and build from that (ess-14f.8). The single-model path is byte-identical to
 /// the original `from_file` call. Shared by all three public entry points.
 ///
-/// **The flatten arm is `!= 1`, not `> 1`.** A document whose whole content is
-/// a `reaction_systems` block has NO `models` map at all until flattening
-/// lowers each reaction to `D(species, t) = …`, so a `> 1` test sent it to
-/// `from_file`, which refused it with "File has no models to simulate". Every
-/// pure-chemistry document in the wild is that shape (`pollu`, `superfast`,
-/// `geoschem_fullchem`); the 2026-09-21 census counted 25 of them, all of
-/// which build fully taped once they are flattened first.
+/// **The single-model arm is for a document whose WHOLE content is that one
+/// model.** Two other shapes must flatten first, and both used to reach
+/// `from_file`:
+///
+///   * no `models` map at all — a document whose whole content is a
+///     `reaction_systems` block, which has no models until flattening lowers
+///     each reaction to `D(species, t) = …`. `from_file` refused it with "File
+///     has no models to simulate"; every pure-chemistry document in the wild
+///     is that shape (`pollu`, `superfast`, `geoschem_fullchem`), and the
+///     2026-09-21 census counted 25 of them, all fully taped once flattened;
+///   * one model BESIDE a reaction system. `from_file` consumes the single
+///     `Model` and DROPS the reaction system, so the species and their
+///     reactions vanish from the compiled system — silently, because what is
+///     left still builds. A `dAdt = D(Chem.A)` observed then fails as an
+///     unlowered `D` and an assertion on `Chem.A` finds no such state.
 pub(crate) fn build_array_compiled(
     file: &EsmFile,
 ) -> Result<crate::simulate_array::ArrayCompiled, SimulateError> {
@@ -277,8 +302,7 @@ pub(crate) fn build_array_compiled(
     // annotated COPY (`None`, and no copy at all, for every other document).
     let annotated = crate::precision_infer::annotated(file).map_err(SimulateError::Compile)?;
     let file = annotated.as_ref().unwrap_or(file);
-    let model_count = file.models.as_ref().map_or(0, |m| m.len());
-    if model_count != 1 {
+    if !whole_document_is_one_model(file) {
         refuse_coupled_subsystem_event(file)?;
         let flat = flatten(file).map_err(CompileError::from)?;
         Ok(crate::simulate_array::ArrayCompiled::from_flattened(&flat)?)
@@ -330,8 +354,7 @@ pub fn compile_array(file: EsmFile) -> Result<crate::simulate_array::ArrayCompil
         Some(annotated) => annotated,
         None => file,
     };
-    let model_count = file.models.as_ref().map_or(0, |m| m.len());
-    if model_count != 1 {
+    if !whole_document_is_one_model(&file) {
         refuse_coupled_subsystem_event(&file)?;
         let flat = flatten(&file).map_err(CompileError::from)?;
         drop(file);

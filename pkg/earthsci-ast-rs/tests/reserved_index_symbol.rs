@@ -32,7 +32,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::{SolveOptions, load_path, load_string, run_inline_tests_with_base_dir};
+use earthsci_ast::{SolveOptions, load_path, load_string};
 use serde_json::{Value, json};
 
 mod common;

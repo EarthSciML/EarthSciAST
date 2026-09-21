@@ -77,10 +77,11 @@ fn sim_y(model_json: &str, slot: &str) -> Result<f64, String> {
     )
     .and_then(|prob| earthsci_ast::solve(&prob, &opts))
     .map_err(|e| format!("simulate: {e}"))?;
+    // `index_of`, not an exact `position`: the array runtime's single-model
+    // build names its slots bare and the flattened one qualifies, so a fixture
+    // written against either spelling has to resolve against both.
     let idx = sol
-        .state_variable_names
-        .iter()
-        .position(|n| n == slot)
+        .index_of(slot)
         .ok_or_else(|| format!("slot '{slot}' not found in {:?}", sol.state_variable_names))?;
     let tix = sol.time.len() - 1;
     Ok(sol.state[idx][tix])

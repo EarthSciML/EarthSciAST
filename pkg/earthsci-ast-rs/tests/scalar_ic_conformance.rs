@@ -126,10 +126,9 @@ fn scalar_ic_seeding_precedence() {
     };
 
     let at0 = |sol: &earthsci_ast::Solution, name: &str| -> f64 {
+        // See `Solution::index_of`: either spelling resolves.
         let i = sol
-            .state_variable_names
-            .iter()
-            .position(|n| n == name)
+            .index_of(name)
             .unwrap_or_else(|| panic!("no state {name} in {:?}", sol.state_variable_names));
         sol.state[i][0]
     };

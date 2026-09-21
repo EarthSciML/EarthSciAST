@@ -1141,6 +1141,7 @@ impl ArrayCompiled {
             &mut state_variable_names,
             param_vec,
             &setup.static_obs,
+            &setup.cadence.static_names,
             &setup.cadence.varying_rules,
             output_observed,
             tape,
@@ -1519,6 +1520,7 @@ impl ArrayCompiled {
         state_variable_names: &mut Vec<String>,
         param_vec: &[f64],
         static_obs: &ArrMap,
+        static_names: &HashSet<String>,
         varying_rules: &[AlgebraicRule],
         requested: &[String],
         tape: Option<&(Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>)>,
@@ -1540,6 +1542,8 @@ impl ArrayCompiled {
                 state,
                 state_variable_names,
                 param_vec,
+                static_names,
+                varying_rules,
                 requested,
                 tape,
             );
@@ -1794,16 +1798,28 @@ impl ArrayCompiled {
     /// its CONST and SEGMENT sections prime once for the whole sweep rather
     /// than once per node, which is what the pruning was buying back.
     #[cfg(feature = "solve")]
+    #[allow(clippy::too_many_arguments)]
     fn append_observed_trajectories_taped(
         &self,
         time: &[f64],
         state: &mut Vec<Vec<f64>>,
         state_variable_names: &mut Vec<String>,
         param_vec: &[f64],
+        static_names: &HashSet<String>,
+        varying_rules: &[AlgebraicRule],
         requested: &[String],
         tape: &(Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>),
     ) {
         let wanted = self.resolve_requested_observeds(requested);
+        // WHICH observeds become rows is decided exactly as the overlay path
+        // decides it, and deliberately not by what the tape happens to
+        // publish: a `native` build exports every observed so the harvest
+        // cannot miss one, and emitting every one of them would put rows in
+        // the solution that the same document did not carry before. The
+        // candidates are the hoisted static observeds plus the probe cone —
+        // the potentially-scalar rules and their transitive dependencies —
+        // which is what `obs` holds at this point on the overlay path.
+        let emitted = self.output_row_candidates(static_names, varying_rules, &wanted);
         let nt = time.len();
         let mut harvest = TapedObserveds::new(self, tape);
         let mut flat = vec![0.0f64; self.n_states];
@@ -1820,6 +1836,9 @@ impl ArrayCompiled {
                 .iter()
                 .filter_map(|rule| {
                     let name = observed_rule_var(rule);
+                    if !emitted.contains(name) {
+                        return None;
+                    }
                     let arr = obs.get(name)?;
                     if arr.ndim() == 0 {
                         Some(ObservedRows::scalar(name.clone()))
@@ -1879,6 +1898,49 @@ impl ArrayCompiled {
                 state.push(row);
             }
         }
+    }
+
+    /// The observeds that may become solution rows: the hoisted static ones
+    /// plus the output-node probe cone.
+    ///
+    /// The overlay path's candidate set, named. It materializes the statics
+    /// once and then the PROBE CONE — every potentially-scalar observed and
+    /// its transitive dependencies — and an observed outside both is simply
+    /// not in `obs` when the row set is decided, so it becomes no row. The
+    /// taped path publishes every observed (that is what makes its harvest
+    /// complete), so it has to be told the same rule rather than inferring it
+    /// from what happens to be published.
+    #[cfg(feature = "solve")]
+    fn output_row_candidates(
+        &self,
+        static_names: &HashSet<String>,
+        varying_rules: &[AlgebraicRule],
+        wanted: &HashSet<String>,
+    ) -> HashSet<String> {
+        let mut out: HashSet<String> = static_names.clone();
+        let prune = !outobs_prune_disabled()
+            && varying_rules
+                .iter()
+                .all(|r| !expr_blocks_output_pruning(observed_rule_body(r)));
+        let cone: Option<Vec<AlgebraicRule>> = if prune {
+            let unknown: HashSet<String> = self
+                .observed_rules
+                .iter()
+                .filter(|r| {
+                    !observed_rule_is_array_valued(r) || wanted.contains(observed_rule_var(r))
+                })
+                .map(|r| observed_rule_var(r).clone())
+                .collect();
+            dependency_cone(varying_rules, &unknown)
+        } else {
+            None
+        };
+        match cone {
+            Some(rules) => out.extend(rules.iter().map(|r| observed_rule_var(r).clone())),
+            // No cone: the un-pruned behaviour materializes every varying rule.
+            None => out.extend(varying_rules.iter().map(|r| observed_rule_var(r).clone())),
+        }
+        out
     }
 
     /// The observed-rule names `requested` names.

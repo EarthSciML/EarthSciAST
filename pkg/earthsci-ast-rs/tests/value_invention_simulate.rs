@@ -143,16 +143,13 @@ fn argmin_nearest_generator_simulates_end_to_end() {
     let expected = [1.0, 2.0, 2.0, 3.0];
     for (p, want) in expected.iter().enumerate() {
         let slot = format!("u[{}]", p + 1);
-        let idx = sol
-            .state_variable_names
-            .iter()
-            .position(|n| n == &slot)
-            .unwrap_or_else(|| {
-                panic!(
-                    "state slot '{slot}' not found; known: {:?}",
-                    sol.state_variable_names
-                )
-            });
+        // See `Solution::index_of`: either spelling resolves.
+        let idx = sol.index_of(&slot).unwrap_or_else(|| {
+            panic!(
+                "state slot '{slot}' not found; known: {:?}",
+                sol.state_variable_names
+            )
+        });
         let got = sol.state[idx][tix];
         assert!(got.is_finite(), "u[{}] must be non-NaN, got {got}", p + 1);
         assert!(
@@ -595,16 +592,13 @@ fn scvt_centroid_group_faq_simulates_end_to_end() {
     let expected = [0.0, 1.125, 2.0];
     for (g, want) in expected.iter().enumerate() {
         let slot = format!("cu[{}]", g + 1);
-        let idx = sol
-            .state_variable_names
-            .iter()
-            .position(|n| n == &slot)
-            .unwrap_or_else(|| {
-                panic!(
-                    "state slot '{slot}' not found; known: {:?}",
-                    sol.state_variable_names
-                )
-            });
+        // See `Solution::index_of`: either spelling resolves.
+        let idx = sol.index_of(&slot).unwrap_or_else(|| {
+            panic!(
+                "state slot '{slot}' not found; known: {:?}",
+                sol.state_variable_names
+            )
+        });
         let got = sol.state[idx][tix];
         assert!(got.is_finite(), "cu[{}] must be non-NaN, got {got}", g + 1);
         assert!(

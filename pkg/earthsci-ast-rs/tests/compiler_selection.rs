@@ -199,8 +199,9 @@ const AGREEMENT_FIXTURES: &[&str] = &[
     "tests/simulation/autocatalytic_reaction.esm",
     // A gridded document, whose rows are per-cell keys.
     "tests/conformance/output_derivation/fixtures/gridded.esm",
-    // Aggregates over a coordinate registry.
-    "tests/valid/coordinates_registry.esm",
+    // An aggregate over a mounted mesh subsystem, with a CONST-tier rule
+    // beside the continuous one.
+    "tests/valid/subsystem_mesh_lib.esm",
 ];
 
 #[test]

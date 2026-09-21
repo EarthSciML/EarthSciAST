@@ -61,8 +61,7 @@
 use std::collections::HashMap;
 
 use earthsci_ast::{
-    Compiled, EsmFile, Expr, SolveOptions, evaluate, load_path, run_inline_tests,
-    run_inline_tests_with_base_dir, validate,
+    Compiled, EsmFile, Expr, SolveOptions, evaluate, load_path, run_inline_tests, validate,
 };
 use serde_json::json;
 

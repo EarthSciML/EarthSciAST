@@ -298,17 +298,16 @@ fn advection_1d_integrates_end_to_end_via_vectorized_path() {
     // Pull the final state in grid order and check the centre of mass moved
     // downstream — the unambiguous signature of advection. `sol.state` is
     // indexed `[variable_index][time_index]`; there is a single output time.
-    let mut idx_of = HashMap::new();
-    for (j, nm) in sol.state_variable_names.iter().enumerate() {
-        idx_of.insert(nm.clone(), j);
-    }
     let last_tix = sol.time.len() - 1;
     let mut num0 = 0.0;
     let mut den0 = 0.0;
     let mut numf = 0.0;
     let mut denf = 0.0;
     for k in 1..=n {
-        let j = idx_of[&format!("u[{k}]")];
+        // See `Solution::index_of`: either spelling resolves.
+        let j = sol
+            .index_of(&format!("u[{k}]"))
+            .unwrap_or_else(|| panic!("no state u[{k}] in {:?}", sol.state_variable_names));
         let u0 = state0[k - 1];
         let uf = sol.state[j][last_tix];
         assert!(uf.is_finite(), "non-finite u[{k}] = {uf}");

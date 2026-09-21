@@ -330,10 +330,9 @@ fn reports_progress_from_the_array_runtime() {
 
     // Sanity that this really is the array path and it still computes:
     // D(y[1])/dt = 1*1 + 1*2 + 1*3 = 6, from y[1](0) = 0.
+    // See `Solution::index_of`: either spelling resolves.
     let i = sol
-        .state_variable_names
-        .iter()
-        .position(|n| n == "y[1]")
+        .index_of("y[1]")
         .unwrap_or_else(|| panic!("y[1] not in {:?}", sol.state_variable_names));
     assert!((sol.state[i][sol.time.len() - 1] - 6.0).abs() < 1e-6);
 
