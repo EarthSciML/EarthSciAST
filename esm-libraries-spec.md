@@ -526,10 +526,15 @@ other value, on the grounds that the document is small, unshaped, or awkward.
 general. A compiler that cannot run a rule of a document MUST raise
 `compiler_refused_rule` at CONSTRUCTION, naming the compiler, the rule (an
 equation or an observed, component-qualified) and the reason. It MUST NOT run
-that rule on a slower path, a partial lowering, or a host callback. A binding
-whose ladder decides at evaluation time rather than at build time MUST evaluate
-the right-hand side once at construction so that the refusal is a construction
-error, as §2.5.2 requires of every build failure. The reason a silent demotion
+that rule on a slower path, a partial lowering, or a host callback. **The rule
+covers every evaluation the compiler performs for the Problem**, not the
+right-hand side alone: the materialization of constants and static observeds at
+construction, the per-segment seed, the right-hand side, and the observeds
+reported at output times are all under it, because each of those is a place a
+binding evaluates rules and each can walk the tree per cell. A binding whose
+ladder decides at evaluation time rather than at build time MUST exercise every
+such evaluation at construction so that the refusal is a construction error, as
+§2.5.2 requires of every build failure. The reason a silent demotion
 is not an acceptable kindness is that it makes the compiler's name describe
 nothing: a caller who asked for a compiled program and got a tree walk has no
 way to find that out, and the cost difference between the two is orders of
