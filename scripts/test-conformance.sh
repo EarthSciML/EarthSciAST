@@ -868,6 +868,173 @@ run_compiled_rhs_conformance_compiled_rust() {
         env EARTHSCI_COMPILED_RHS_ADAPTER_RUST="cargo run --quiet --manifest-path $RUST_DIR/Cargo.toml --features $features --bin earthsci-compiled-rhs-adapter-rust --"
 }
 
+# === Compiler-agreement conformance (compiler_agreement) ===
+# The gate for `esm_problem`'s `compiler` keyword (API_SPEC §5.8): every compiler a
+# binding offers must reproduce the Julia `interpreter` TRAJECTORY of the same
+# document within the fixture's written band, or refuse it by name. compiled_rhs
+# compares one right-hand side at fixed probe states; this tier compares a whole
+# RUN, across the compilers of ONE binding as well as across bindings. That is the
+# axis nothing else covers: a strict `native` default can be wrong in a way no
+# cross-binding comparison sees, because every binding's `native` could be wrong
+# the same way.
+#
+# Three rulings shape these stages:
+#   * a model a compiler cannot lower is a REFUSAL, recorded as a NAMED EXCLUSION,
+#     never a pass and never a silent skip — and never a fallback to another
+#     compiler. From `interpreter` a refusal is always a failure, because the
+#     interpreter is complete over the evaluable core;
+#   * AVAILABILITY and REFUSAL are two ledgers. `bindings_required` says a binding
+#     must be able to ANSWER for a compiler; a fixture's `required` map says that
+#     compiler must be able to RUN that document. Only `interpreter` is required
+#     today, so every `native` stage is a legal visible skip until the strict build
+#     lands in all three bindings;
+#   * a compiler whose runtime is not configured here reports `unavailable` WITH
+#     ITS REASON and skips. A broken adapter does not: it fails.
+#
+# The adapters are built per binding and each stage declines to start until its
+# own is on disk, saying so. The reference goldens are minted by
+# `--write-golden --bindings julia --compiler interpreter` once the Julia adapter
+# lands; with `golden/` empty there is no reference trajectory to compare against,
+# so every producer stage declines and says that too. Neither is a silent pass:
+# the stage prints a warning naming exactly what is missing.
+#
+# CONFORMANCE_SPEC §5.44.5 also names `xla` (julia, rust), `mtk` (julia) and
+# `sympy` (python) producer stages. Each is one more `_run_compiler_agreement_stage`
+# line and lands with the adapter that can answer for it.
+# Contract: tests/conformance/compiler_agreement/README.md. Normative: CONFORMANCE_SPEC §5.44.
+COMPILER_AGREEMENT_RUNNER="$SCRIPT_DIR/run-compiler-agreement-conformance.py"
+COMPILER_AGREEMENT_GOLDEN_DIR="$TESTS_DIR/conformance/compiler_agreement/golden"
+
+run_compiler_agreement_conformance_self_test() {
+    log "Running compiler-agreement conformance harness self-test..."
+    if python3 "$COMPILER_AGREEMENT_RUNNER" --self-test; then
+        success "Compiler-agreement conformance harness self-test passed"
+        return 0
+    else
+        error "Compiler-agreement conformance harness self-test failed"
+        return 1
+    fi
+}
+
+# Report the refusals and the unavailable compilers a run recorded, so a producer
+# that legitimately skipped or legitimately refused says so in the stage log rather
+# than passing in silence. The named-exclusion list IS the coverage backlog.
+_compiler_agreement_report_ledgers() {
+    local report="$1"
+    [ -f "$report" ] || return 0
+    python3 - "$report" <<'PY' || true
+import json, sys
+try:
+    with open(sys.argv[1]) as f:
+        report = json.load(f)
+except (OSError, ValueError):
+    sys.exit(0)
+for u in report.get("unavailable") or []:
+    print(f"{u['binding']} / {u['compiler']} unavailable: {u['reason']}")
+for r in report.get("refusals") or []:
+    print(f"{r['binding']} / {r['compiler']} refused {r['fixture']}: "
+          f"{r['rule']} — {r['reason']} [{r['verdict']}]")
+PY
+}
+
+# The in-repo adapter each binding is planned to ship (CONFORMANCE_SPEC §5.44.5).
+_compiler_agreement_adapter_path() {
+    case "$1" in
+        julia)  echo "$JULIA_DIR/scripts/compiler_agreement_adapter.jl" ;;
+        rust)   echo "$RUST_DIR/src/bin/earthsci-compiler-agreement-adapter-rust.rs" ;;
+        python) echo "$PYTHON_DIR/src/earthsci_ast/cli/compiler_agreement_adapter.py" ;;
+        *)      echo "" ;;
+    esac
+}
+
+_compiler_agreement_binding_dir() {
+    case "$1" in
+        julia)  echo "$JULIA_DIR" ;;
+        rust)   echo "$RUST_DIR" ;;
+        python) echo "$PYTHON_DIR" ;;
+        *)      echo "" ;;
+    esac
+}
+
+_run_compiler_agreement_stage() {
+    local binding="$1" compiler="$2"
+    local adapter dir
+    adapter="$(_compiler_agreement_adapter_path "$binding")"
+    dir="$(_compiler_agreement_binding_dir "$binding")"
+    if [ -z "$adapter" ] || [ -z "$dir" ]; then
+        error "compiler-agreement: $binding has no adapter mapping in this script"
+        return 1
+    fi
+    # The adapter and the reference goldens are separate deliverables and each is
+    # missing for its own reason, so each says so in its own words. A skip here is
+    # never silent and never reads as a pass.
+    if [ ! -e "$adapter" ]; then
+        warning "compiler-agreement $compiler producer ($binding): UNAVAILABLE — no adapter at ${adapter#"$PROJECT_ROOT"/} yet"
+        return 0
+    fi
+    if [ ! -d "$COMPILER_AGREEMENT_GOLDEN_DIR" ] || [ -z "$(ls -A "$COMPILER_AGREEMENT_GOLDEN_DIR" 2>/dev/null)" ]; then
+        warning "compiler-agreement $compiler producer ($binding): UNAVAILABLE — no reference trajectory committed (mint golden/ with: python3 scripts/run-compiler-agreement-conformance.py --write-golden --bindings julia --compiler interpreter)"
+        return 0
+    fi
+    if ! check_language_availability "$binding" "$dir"; then
+        error "compiler-agreement $compiler producer ($binding): the toolchain is missing — this gate cannot run, so it FAILS (it must never silently pass)"
+        return 1
+    fi
+    local report="$OUTPUT_DIR/compiler_agreement/${binding}_${compiler}_report.json"
+    log "Running compiler-agreement conformance ($binding / $compiler)..."
+    local rc=0
+    case "$binding" in
+        julia)
+            env EARTHSCI_COMPILER_AGREEMENT_ADAPTER_JULIA="julia $adapter" \
+                python3 "$COMPILER_AGREEMENT_RUNNER" \
+                    --bindings "$binding" --compiler "$compiler" --output "$report" || rc=$?
+            ;;
+        rust)
+            # The `xla` compiler needs the prebuilt XLA extension at
+            # $XLA_EXTENSION_DIR (scripts/fetch-xla-extension.sh); without it the
+            # feature-less binary answers `unavailable` and the stage skips visibly.
+            local features="conformance-adapters"
+            if [ -n "${XLA_EXTENSION_DIR:-}" ]; then
+                features="conformance-adapters,xla"
+            fi
+            env EARTHSCI_COMPILER_AGREEMENT_ADAPTER_RUST="cargo run --quiet --manifest-path $RUST_DIR/Cargo.toml --features $features --bin earthsci-compiler-agreement-adapter-rust --" \
+                python3 "$COMPILER_AGREEMENT_RUNNER" \
+                    --bindings "$binding" --compiler "$compiler" --output "$report" || rc=$?
+            ;;
+        python)
+            # PYTHONPATH is pinned to this worktree's package src so the adapter
+            # resolves from this checkout and not from a stray editable install
+            # pointing at another worktree.
+            env EARTHSCI_COMPILER_AGREEMENT_ADAPTER_PYTHON="python3 -m earthsci_ast.cli.compiler_agreement_adapter" \
+                PYTHONPATH="$PYTHON_DIR/src:${PYTHONPATH:-}" \
+                python3 "$COMPILER_AGREEMENT_RUNNER" \
+                    --bindings "$binding" --compiler "$compiler" --output "$report" || rc=$?
+            ;;
+    esac
+    local note
+    note="$(_compiler_agreement_report_ledgers "$report")"
+    if [ -n "$note" ]; then
+        while IFS= read -r line; do
+            [ -n "$line" ] && warning "$line"
+        done <<< "$note"
+    fi
+    return $rc
+}
+
+# `interpreter` is bindings_required in all three: a compiler that cannot answer
+# here is a missing runtime the tier will not tolerate, and a refusal is a defect.
+run_compiler_agreement_interpreter_julia()  { _run_compiler_agreement_stage julia interpreter; }
+run_compiler_agreement_interpreter_rust()   { _run_compiler_agreement_stage rust interpreter; }
+run_compiler_agreement_interpreter_python() { _run_compiler_agreement_stage python interpreter; }
+
+# `native` is the strict default and bindings_optional in all three until the
+# strict build lands everywhere. A REFUSAL here is governed by each fixture's
+# `required` map, not by that list — the named-exclusion list this produces IS the
+# coverage backlog, and this tier is where it is read and burned down.
+run_compiler_agreement_native_julia()  { _run_compiler_agreement_stage julia native; }
+run_compiler_agreement_native_rust()   { _run_compiler_agreement_stage rust native; }
+run_compiler_agreement_native_python() { _run_compiler_agreement_stage python native; }
+
 run_property_corpus() {
     log "Running property-corpus round-trip across bindings..."
     local corpus="$PROJECT_ROOT/tests/property_corpus/expressions"
@@ -1061,6 +1228,14 @@ main() {
     run_stage "compiled-RHS interpreter producer (python)" run_compiled_rhs_conformance_interpreter_python
     run_stage "compiled-RHS compiled producer (julia)" run_compiled_rhs_conformance_compiled_julia
     run_stage "compiled-RHS compiled producer (rust)" run_compiled_rhs_conformance_compiled_rust
+
+    run_stage "compiler-agreement self-test" run_compiler_agreement_conformance_self_test
+    run_stage "compiler-agreement interpreter producer (julia)" run_compiler_agreement_interpreter_julia
+    run_stage "compiler-agreement interpreter producer (rust)" run_compiler_agreement_interpreter_rust
+    run_stage "compiler-agreement interpreter producer (python)" run_compiler_agreement_interpreter_python
+    run_stage "compiler-agreement native producer (julia)" run_compiler_agreement_native_julia
+    run_stage "compiler-agreement native producer (rust)" run_compiler_agreement_native_rust
+    run_stage "compiler-agreement native producer (python)" run_compiler_agreement_native_python
 
     print_timing_summary
 
