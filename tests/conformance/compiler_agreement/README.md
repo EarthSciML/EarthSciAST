@@ -312,9 +312,10 @@ backlog, and this tier is where it is read and burned down.
 ```
 
 Exit codes: 0 every required binding within tolerance (or the self-test passed);
-1 a mismatch, a refusal or an `unavailable` from a `required` binding, or a
-self-test failure; 2 a manifest or configuration error. The report lists every
-refusal and every unavailable compiler by name and reason.
+1 a mismatch, an error, a refusal from a binding a fixture's `required` map
+names, an `unavailable` from a `bindings_required` binding, or a self-test
+failure; 2 a manifest or configuration error. The report lists every refusal and
+every unavailable compiler by name and reason.
 
 Stages in `scripts/test-conformance.sh` are one per binding per compiler, named
 `compiler-agreement <compiler> producer (<binding>)`: `interpreter` and `native`
