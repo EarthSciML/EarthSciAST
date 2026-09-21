@@ -5580,6 +5580,16 @@ The runner then splits on the fixture's `compiled_required` list:
 `compiled_required` is empty for every fixture in phase 1; phase 2 fills it as
 coverage lands, and each name added is a one-way ratchet.
 
+**This rule is not special to the compiled backends.** It reads as though it
+were, because when it was written the compiled emitters were the only build
+strategy a caller could name. With `compiler` (`API_SPEC.md` §5.8) every
+strategy is nameable, and `esm-libraries-spec.md` §2.5.10 states the rule in
+normative voice for all of them: a compiler that cannot run a rule raises
+`compiler_refused_rule` at construction, naming the compiler, the rule and the
+reason, and MUST NOT fall back to a slower path. §5.44 applies the same
+refusal / named-exclusion / required-ratchet split to the whole vocabulary over
+whole trajectories. Nothing in this section changes; it is the special case.
+
 An engine that does not exist in a binding, or whose runtime is not configured on
 the machine, is a third outcome: the adapter emits the whole-output form
 `{"status": "unavailable", "reason": …}`. The runner prints the reason and skips
@@ -6074,6 +6084,152 @@ against them: **Julia** —
 `scope_excluded`: neither ships an integrator or an inline-test runner, so
 neither has an execution path that could read an assertion's `time` or evaluate
 a reduction, and adding a fixture to this manifest obligates only the three.
+
+### 5.44 Compiler Agreement (normative)
+
+§5.38 governs one right-hand side at fixed probe states. This section governs
+the **whole run**: every compiler a binding offers (`API_SPEC.md` §5.8's closed
+vocabulary — `interpreter`, `native`, `xla`, `mtk`, `sympy`) must reproduce the
+**`interpreter` trajectory** of the same document within a written tolerance, or
+say by name that it refuses it. Nothing else in the harness compares two
+compilers of the SAME binding, which is where a strict `native` default can go
+wrong without any cross-binding disagreement to reveal it.
+
+The contract — manifest schema, adapter CLI, outcomes, tolerance rule, stage
+names — is `tests/conformance/compiler_agreement/README.md`. Fixtures, per-
+fixture tolerances and the requirement ledger live in
+`tests/conformance/compiler_agreement/manifest.json`, driven by
+`scripts/run-compiler-agreement-conformance.py`.
+
+Go and TypeScript are **out of scope**: neither has a Problem type, so neither
+has a compiler to name (`API_SPEC.md` §3, capability profiles).
+
+#### 5.44.1 What is compared
+
+A **trajectory**: the state rows at the fixture's `saveat` times, plus the
+observed fields the fixture names, keyed by bare column-major element name with
+the model namespace stripped — the same spelling §5.38.1 and the PDE-simulation
+tier use. Not a right-hand side, and not an emitted program: agreement here is
+numerical, exactly as §5.38.1 requires, and a binding MUST NOT assert anything
+structural about what a compiler produced.
+
+The reference is the **Julia `interpreter` trajectory**, committed as
+`golden/<id>.json`, one file per fixture. It is the same reference §5.38 uses
+and for the same reason: the interpreter lies outside every compiled and
+vectorized path, so a compiled path that agrees with it has been checked against
+something it does not share code with. Where a fixture already carries an
+analytic trajectory anchor in the tier it comes from, that anchor is carried
+along and gated too, so the golden itself is held to something outside every
+binding.
+
+Fixtures are **referenced by path**, not authored here: the existing simulation
+tiers (`pde_simulation`, `pde_simulation_pipeline` — which is where the
+loaded-IC/BC document lives — the `pde_inline_*` categories, `simulate_faq`,
+`geometry`, `recurrence`) and the `tests/valid` documents that carry an inline
+`tests` block are where they live. A tier whose subject is the
+compiler must not also be the place a document's physics is decided.
+
+#### 5.44.2 Tolerance
+
+Every fixture carries a `tolerance` object in the manifest, and it is
+authoritative. It is filled one of two ways, and the manifest entry records
+which:
+
+1. **Copied**, for a fixture the `pde_simulation` tier also carries: that tier's
+   trajectory-versus-golden bounds. They are written per fixture here even
+   though `pde_simulation` carries them tier-wide, so that a later change to
+   either tier cannot silently move the other's gate.
+2. **Derived**, for every other fixture, from §5.38.2's four classes with the
+   integration tolerance added:
+
+   ```
+   rtol = rtol_class + reltol_integration
+   atol = atol_class + abstol_integration
+   |got − want| ≤ atol + rtol · |want|
+   ```
+
+   where `reltol_integration` / `abstol_integration` are the tolerances the
+   fixture's entry tells the adapter to pass to `solve`. For the `reduction`
+   class the class floor is scaled as §5.38.2 defines it —
+   `atol_class = atol_scaled · maxᵢ|wantᵢ|` over the saved row, taken from the
+   reference — and the integration floor is added to that. The addition is the
+   whole difference from §5.38: a trajectory carries the integrator's own error
+   on top of the arithmetic's, and a band that ignored it would fail every
+   binding for a defect none of them has.
+
+A fixture MAY carry a tighter or looser bound only with a written reason in its
+entry, the same rule §5.38.2 sets.
+
+#### 5.44.3 Outcomes and gate
+
+Per fixture per compiler, an adapter answers exactly one of:
+
+| Outcome | Meaning |
+|---|---|
+| `ok` | a trajectory, compared against the golden |
+| `mismatch` | a trajectory outside the band — the runner's verdict, not the adapter's |
+| `refused` | this compiler cannot run this document; carries the `rule` and the `reason`, the shape `compiler_refused_rule` names |
+| `unavailable` | this compiler does not exist in this binding, or its runtime is not configured here; carries the `reason` |
+| `error` | the load, the build or the run threw |
+
+The gate:
+
+* a **mismatch** is RED, for every compiler and every binding;
+* an **`interpreter` refusal** is always RED — the interpreter is complete over
+  the evaluable core by `esm-libraries-spec.md` §2.5.10, so a refusal there is
+  a defect, not coverage;
+* a **refusal from any other compiler** is a **named exclusion** — reported with
+  the binding, the compiler, the fixture, the rule and the reason, in the report
+  and on the console, and green for now. It is never a pass and never a silent
+  skip. The manifest's per-fixture `required` map (binding → the compilers that
+  MUST run it) flips it to RED as coverage lands, a one-way ratchet exactly as
+  §5.38.3's `compiled_required` is;
+* an **`unavailable`** compiler is reported with its reason and skipped, unless
+  the fixture's `required` map names it, in which case it is RED;
+* an **`error`** is RED for any binding and any compiler. Unlike a refusal it
+  says nothing about what a compiler can run, so `required` does not excuse it.
+
+This is §5.38.3's split, generalized from the two compiled backends to every
+member of the vocabulary. The refusal list under a strict `native` default IS
+the coverage backlog, and this tier is where it is read.
+
+#### 5.44.4 Shape
+
+| Comparison | Shape (`tests/conformance/README.md`) |
+|---|---|
+| any compiler vs the golden | **reference-comparing** — the golden is the Julia `interpreter`, which shares no code with the compiled or vectorized tiers it gates |
+| any compiler vs a carried analytic anchor | **reference-comparing** — computed outside every binding |
+| Julia `interpreter` vs the golden | a regression check against its own committed output, which is why a fixture that can carry an anchor must |
+| Rust / Python `interpreter` vs the golden | **cross-binding-agreeing** |
+
+#### 5.44.5 Gate wiring
+
+`scripts/run-compiler-agreement-conformance.py --self-test` is the always-on
+guard and needs no live binding: the committed goldens reproduce every carried
+anchor, and the harness rejects a value moved outside its band, a missing
+element, a missing save time, and a refusal from a `required` binding — while
+reporting an unrequired refusal as a named exclusion.
+
+The producer stages in `scripts/test-conformance.sh` are one per binding per
+compiler, named `compiler-agreement <compiler> producer (<binding>)`:
+`interpreter` and `native` for Julia, Rust and Python; `xla` for Julia and Rust;
+`mtk` for Julia; `sympy` for Python. Adapters are discovered the way §5.38's
+are, through `EARTHSCI_COMPILER_AGREEMENT_ADAPTER_<BINDING>`:
+
+| Binding | Adapter |
+|---|---|
+| Julia (reference) | `pkg/EarthSciAST.jl/scripts/compiler_agreement_adapter.jl` |
+| Rust | `pkg/earthsci-ast-rs/src/bin/earthsci-compiler-agreement-adapter-rust.rs`, feature `conformance-adapters` |
+| Python | `pkg/earthsci-ast-py/src/earthsci_ast/cli/compiler_agreement_adapter.py` |
+
+**Every OTHER conformance stage pins `interpreter` explicitly.** Once the
+default is `native`, a stage that calls `esm_problem` with no compiler changes
+what it runs, and its goldens were minted under the reference path. Those
+stages' adapters therefore pass the compiler they mean rather than inheriting
+the default, and this tier is the only place `native`'s coverage is measured.
+Without that, the whole harness goes red for reasons unrelated to what each
+stage tests.
+
 
 ## 6. CI Integration
 
