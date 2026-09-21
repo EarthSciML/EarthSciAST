@@ -694,10 +694,10 @@ Stable keyword arguments (API_SPEC §5.8 — the bindings that fix a DOCUMENT):
 * `sample_time::Real = tspan[1]` — the `t` at which providers are sampled for
   the build. A CONST provider is time-invariant by contract; DISCRETE buffers
   seeded here are re-seeded at each run's `t0` anyway.
-* `compiler::Symbol = :native` — which strategy builds the right-hand side, over
-  the closed vocabulary `:interpreter`, `:native`, `:xla`, `:mtk`, `:sympy`
-  (esm-libraries-spec §2.5.10). Read back with [`compiler`](@ref)`(prob)` and
-  [`compiler_report`](@ref)`(prob)`.
+* `compiler::Symbol` — which strategy builds the right-hand side, over the
+  closed vocabulary `:interpreter`, `:native`, `:xla`, `:mtk`, `:sympy`
+  (esm-libraries-spec §2.5.10). Unnamed, it is `:native`. Read back with
+  [`compiler`](@ref)`(prob)` and [`compiler_report`](@ref)`(prob)`.
 
   **`:native` (the default) is STRICT.** It is this package's compiled tiers —
   the affine stencil build, the `RuntimeGeneratedFunctions` emitter and the
@@ -734,6 +734,13 @@ Stable keyword arguments (API_SPEC §5.8 — the bindings that fix a DOCUMENT):
   refuses. `:xla`, `:mtk` and `:sympy` raise `compiler_unavailable` from this
   entry point today, naming what to load or which binding has them; a value
   outside the vocabulary raises `compiler_unknown`.
+
+  Naming `:native` EXPLICITLY also asserts that no `ESS_*` oracle kill switch
+  is set: one that is turns off a tier `native` is defined to use, so the build
+  would not be the compiler the caller named, and that is
+  `compiler_unavailable` naming the variable. Leaving the keyword out is the
+  same default and does not assert it, which is what keeps the switches (and
+  the differential tests built on them) working until they retire.
 
 Julia extension-seam keywords (§2.5.2 explicitly allows these; NOT stable API):
 `const_arrays`, `param_arrays` (forwarded to [`build_evaluator`](@ref) — the
@@ -786,8 +793,8 @@ function esm_problem(input, tspan;
                      model_name::Union{Nothing,AbstractString} = nothing,
                      metaparameters::AbstractDict = Dict{String,Int}(),
                      base_path::AbstractString = pwd(),
+                     compiler::Union{Nothing,Symbol} = nothing,
                      sample_time::Union{Nothing,Real} = nothing,
-                     compiler::Symbol = :native,
                      # ---- Julia extension seam (§2.5.2) ----
                      const_arrays::AbstractDict = Dict{String,Any}(),
                      param_arrays::AbstractDict = Dict{String,Any}(),
@@ -806,7 +813,7 @@ function esm_problem(input, tspan;
     # caller wait through a load and a flatten to hear one would be a worse
     # diagnostic for no gain. The plan comes back out of `_compiler_plan`; the
     # build below re-derives it from the same keyword.
-    _compiler_plan(compiler)
+    _plan_for(compiler)
     span = (Float64(tspan[1]), Float64(tspan[2]))
     t_sample = sample_time === nothing ? span[1] : Float64(sample_time)
     # ---- extent discovery: a loader that measures its OWN record count ------
@@ -1112,6 +1119,16 @@ Throws a `SimulateError` when `name` is not a build-time-evaluable observed
 (state-dependent, unsized axis, or not an observed at all).
 """
 function observed_field(prob::EsmProblem, name::AbstractString)
+    # Reading an observed at output time is one of the evaluations
+    # esm-libraries-spec §2.5.10 puts under the compiler's refusal rule, so it
+    # runs under the plan that BUILT the problem rather than under whatever
+    # plan (if any) happens to be in scope on the reader's task.
+    return _with_compiler_plan(_compiler_plan(compiler(prob); explicit = false)) do
+        _observed_field_impl(prob, name)
+    end
+end
+
+function _observed_field_impl(prob::EsmProblem, name::AbstractString)
     insp = prob.inspection
     if prob.run_file[] === nothing
         prob.run_file[] = coerce_esm_file(prob.run_doc)

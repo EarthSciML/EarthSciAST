@@ -365,6 +365,8 @@ function evaluate_cellwise(expr::ASTExpr, cells::AbstractVector{<:AbstractVector
                                     params; t=t)
         ce === nothing || return _eval_cells(ce, cells)
     end
+    _refuse_percell_evaluation("(build-time observed / reference)",
+        "the build-time cellwise evaluator", length(cells))
     return Float64[_eval_cellwise(expr, collect(Int, c);
                                   const_arrays=const_arrays,
                                   registered_functions=registered_functions,
@@ -1657,11 +1659,19 @@ struct SimulateTestEngine
     # none). They sit BENEATH each test's own maps — see `_engine_setup`.
     seed_p::AbstractDict
     seed_u0::AbstractDict
+    # Which compiler builds each test's problem (API_SPEC §5.8). A runner that
+    # could not name one could only ever exercise the default, which is the
+    # single compiler a compiler-agreement fixture has no need to re-check.
+    compiler::Union{Nothing,Symbol}
 end
 
 SimulateTestEngine(file, input, mname, resolved_base, alg, reltol, abstol) =
     SimulateTestEngine(file, input, mname, resolved_base, alg, reltol, abstol,
-                       Dict{String,Any}(), Dict{String,Any}())
+                       Dict{String,Any}(), Dict{String,Any}(), nothing)
+SimulateTestEngine(file, input, mname, resolved_base, alg, reltol, abstol,
+                   seed_p, seed_u0) =
+    SimulateTestEngine(file, input, mname, resolved_base, alg, reltol, abstol,
+                       seed_p, seed_u0, nothing)
 
 # Per-test handle: the successful simulation plus the build-observability sink
 # (assertions on ARRAY OBSERVEDS evaluate their resolved expression from
@@ -1809,6 +1819,7 @@ function _engine_setup(e::SimulateTestEngine, t)
                            u0=_scope_to_component(
                                _seeded_overrides(e.seed_u0, t.initial_conditions),
                                e.mname, target),
+                           compiler=e.compiler,
                            inspect=insp)
         # A document with NOTHING TO INTEGRATE is EVALUATED, not solved — the
         # same route `simulate` takes for it, and the one this runner did not
@@ -1883,6 +1894,10 @@ Base.@kwdef struct InlineTestOptions
     base_dir::Union{Nothing,AbstractString} = nothing
     initial_conditions::Union{Nothing,AbstractDict} = nothing
     parameter_overrides::Union{Nothing,AbstractDict} = nothing
+    # Which compiler builds this document's problems (API_SPEC §5.8); `nothing`
+    # defers to the `run_inline_tests` keyword, which itself defaults to the
+    # strict `:native`.
+    compiler::Union{Nothing,Symbol} = nothing
 end
 
 # The document's TEST-BEARING components, models first and then reaction
@@ -2062,6 +2077,7 @@ function run_inline_tests(inputs; model_name::Union{Nothing,AbstractString}=noth
                           reltol::Union{Float64,Nothing}=nothing,
                           abstol::Union{Float64,Nothing}=nothing,
                           base_dir::Union{Nothing,AbstractString}=nothing,
+                          compiler::Union{Nothing,Symbol}=nothing,
                           options_for=nothing)
     documents = _expand_inputs(inputs)
     batch = !((inputs isa EsmFile) ||
@@ -2084,7 +2100,7 @@ function run_inline_tests(inputs; model_name::Union{Nothing,AbstractString}=noth
         file isa EsmFile || throw(ArgumentError(
             "run_inline_tests expects a path or EsmFile, got $(typeof(document))"))
         _run_document_tests!(results, file, document, o;
-                             model_name, alg, reltol, abstol, base_dir)
+                             model_name, alg, reltol, abstol, base_dir, compiler)
     end
     return results
 end
@@ -2094,7 +2110,7 @@ end
 # references and the §9.7.10 per-test injection. The per-document body of
 # `run_inline_tests`.
 function _run_document_tests!(results, file::EsmFile, document, o;
-                              model_name, alg, reltol, abstol, base_dir)
+                              model_name, alg, reltol, abstol, base_dir, compiler)
     # esm-spec §9.5.3, at the build boundary rather than at load (§9.5.4 wants
     # the authored form to round-trip). `esm_problem` lowers the flattened
     # system it builds, but the file kept HERE is also an evaluated artifact:
@@ -2147,9 +2163,11 @@ function _run_document_tests!(results, file::EsmFile, document, o;
     # always named its path (`_load_failure_result`), so the empty string also
     # made the failures of a document inconsistent with each other.
     source = document isa AbstractString ? String(document) : ""
+    d_compiler = _opt_or(o, :compiler, compiler)
     for (mname, kind, component) in components
         engine = SimulateTestEngine(file, document, mname, resolved_base,
-                                    d_alg, d_reltol, d_abstol, seed_p, seed_u0)
+                                    d_alg, d_reltol, d_abstol, seed_p, seed_u0,
+                                    d_compiler)
         _run_test_frame!(results, engine, source, kind, mname,
                          component.tolerance, component.tests)
     end

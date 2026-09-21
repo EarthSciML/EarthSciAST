@@ -171,8 +171,27 @@ const _ORACLE_KILL_SWITCHES = (
     ("ESS_F64_OVERFLOW_CODEGEN", "0"),
 )
 
+_any_oracle_switch_set() =
+    any(((var, val),) -> get(ENV, var, "") == val, _ORACLE_KILL_SWITCHES)
+
+# The plan a `compiler` keyword produces, `nothing` meaning the caller named
+# none. The two differ in exactly one place, and only while the `ESS_*` switches
+# survive: a caller who NAMED `:native` beside one is refused, because the build
+# would not be the compiler they named; a caller who named nothing gets a
+# NON-STRICT native, because a kill switch is a request for the reference path
+# and refusing the rule it just forced would make the switch unusable. Phase 2
+# removes the switches and with them this whole distinction.
+function _plan_for(compiler::Union{Nothing,Symbol})
+    compiler === nothing || return _refuse_if_oracle_switch_set(
+        _compiler_plan(compiler; explicit = true))
+    plan = _compiler_plan(:native; explicit = false)
+    _any_oracle_switch_set() || return plan
+    return CompilerPlan(plan.name, plan.explicit, false,
+        (getfield(plan, f) for f in fieldnames(CompilerPlan)[4:end])...)
+end
+
 function _refuse_if_oracle_switch_set(plan::CompilerPlan)
-    (plan.explicit && plan.name === :native) || return nothing
+    (plan.explicit && plan.name === :native) || return plan
     for (var, val) in _ORACLE_KILL_SWITCHES
         get(ENV, var, "") == val || continue
         throw(SimulateError(
@@ -184,7 +203,7 @@ function _refuse_if_oracle_switch_set(plan::CompilerPlan)
             "argument, not an environment variable)",
             ERROR_CODES.COMPILER_UNAVAILABLE))
     end
-    return nothing
+    return plan
 end
 
 # ---------------------------------------------------------------------------
@@ -343,12 +362,19 @@ function _record_rule!(rule::AbstractString, kind::Symbol, tier::Symbol;
     rec = _build_record()
     rec === nothing && return nothing
     push!(rec.rules, CompilerRuleRecord(String(rule), kind, tier, declines))
+    # Closing the rule matters as much as filing it: a label left open would be
+    # read by the next refusal several stages later and name the wrong thing.
+    rec.current == String(rule) && (rec.current = ""; empty!(rec.declines))
     return nothing
 end
 
-_current_rule_label() =
+# The rule the cascade currently has open, for a refusal raised deeper than the
+# stage that named it. `fallback` is what a refusal outside any single rule says
+# — the assembled right-hand side belongs to every array equation at once, so
+# there is no one rule to name.
+_current_rule_label(fallback::AbstractString = "(unnamed rule)") =
     (rec = _build_record(); rec === nothing || isempty(rec.current) ?
-     "(unnamed rule)" : rec.current)
+     String(fallback) : rec.current)
 
 function _finish_report(rec::_BuildRecord)
     return CompilerReport(rec.plan.name, copy(rec.rules), copy(rec.tally))
@@ -375,3 +401,29 @@ end
 # demoting it. Every refusal site is guarded by this, so `:interpreter` — which
 # is DEFINED as the slow path — never trips one.
 _compiler_is_strict() = _compiler_plan_now().strict
+
+"""
+    _refuse_percell_evaluation(rule, what, cells) -> nothing or never returns
+
+The refusal for a materialization that RESOLVES AND COMPILES the expression once
+per cell. §2.5.10 puts every evaluation a compiler performs for the problem
+under the refusal rule, not the right-hand side alone: the materialization of
+constants and static observeds at construction, the initial-state seed and the
+observeds reported at output times are each a place a binding walks the tree per
+cell, and each of them makes the compiler's name describe nothing if it is
+allowed to happen quietly.
+
+A compile-once sweep that then evaluates an ALREADY COMPILED node per cell is
+not one of these and never reaches here: what is refused is re-deriving the
+program for every cell.
+"""
+function _refuse_percell_evaluation(rule::AbstractString, what::AbstractString,
+                                    cells::Integer)
+    _compiler_is_strict() || return nothing
+    _refuse_rule(rule,
+        "$what resolves and compiles the expression once per cell, over " *
+        "$cells cell" * (cells == 1 ? "" : "s") * ", because the compile-once " *
+        "form declined it. That is a tree walk per cell at construction time, " *
+        "which esm-libraries-spec §2.5.10 puts under the same rule as the " *
+        "right-hand side. Build with compiler=:interpreter to run it")
+end

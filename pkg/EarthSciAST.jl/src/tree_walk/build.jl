@@ -1495,6 +1495,10 @@ function _fold_field_ics!(eq_ics::Dict{String,Float64}, field_ics, array_cells,
         # per-cell path for both this and the symbolic stencil compiler.
         fast = _stencil_disabled() ? nothing :
                _try_field_ic_fastpath(rhs, param_scope, registered_functions, const_arrays)
+        fast === nothing && _refuse_percell_evaluation("ic($(target))",
+            "the coordinate-expression initial-state seed", length(cells))
+        _record_rule!("ic($(target))", :equation,
+                      fast === nothing ? :setup_percell : :setup_compiled)
         for cell in cells
             idxs = collect(Int, cell)
             eq_ics[_cell_key(target, idxs)] = fast === nothing ?
@@ -3268,9 +3272,7 @@ end
 function _build_evaluator_impl(model::Model;
                                compiler::Union{Nothing,Symbol} = nothing,
                                kwargs...)
-    plan = _compiler_plan(something(compiler, :native);
-                          explicit = compiler !== nothing)
-    _refuse_if_oracle_switch_set(plan)
+    plan = _plan_for(compiler)
     record = _BuildRecord(plan)
     insp = get(kwargs, :inspect, nothing)
     return _with_compiler_plan(plan) do

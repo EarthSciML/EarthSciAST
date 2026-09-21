@@ -1817,7 +1817,7 @@ function _refuse_interpreted_kernels(kernels::AbstractVector{_AccKernel},
             break
         end
     end
-    _refuse_rule(_current_rule_label(),
+    _refuse_rule(_current_rule_label("the assembled right-hand side"),
         "$(length(resid)) of $(length(kernels)) access kernel" *
         (length(kernels) == 1 ? "" : "s") * " reached the end of both codegen " *
         "emissions undeclared (deepest reason: $why), so they would run on the " *
