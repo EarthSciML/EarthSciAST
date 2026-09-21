@@ -1079,6 +1079,7 @@ reading that as a gap.
 | `callback_set` | type | – | – | `CallbackSet` | `CallbackSet` | – |
 | `canonical_index_set_json` | function | – | – | `canonical_index_set_json` | `canonical_index_set_json` | – |
 | `circular_reference_error` | error | – | `CircularReferenceError` | `CircularReferenceError` | – | – |
+| `compiler_report` | type | `CompilerReport` | – | `CompilerReport` | – | – |
 | `coordinate` | type | – | – | – | `Coordinate` | `Coordinate` |
 | `coupling_couple` | type | `CouplingCouple` | – | – | – | `CouplingCouple` |
 | `coupling_role` | type | – | – | – | `CouplingRole` | `CouplingRole` |
