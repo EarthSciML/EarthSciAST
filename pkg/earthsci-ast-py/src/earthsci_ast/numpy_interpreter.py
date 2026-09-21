@@ -30,7 +30,6 @@ Design notes
 from __future__ import annotations
 
 import functools
-import os
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable
@@ -1933,7 +1932,7 @@ def _materialize_makearray_vectorized(
     # shared under parents that name the box differently. A ``None`` entry
     # means that region declined; it stays on the compiled closure.
     region_fns: list | None = None
-    if allow_codegen and not _CODEGEN_DISABLE and not _compiler.every_tier_off():
+    if allow_codegen and not _compiler.every_tier_off():
         key = (tuple(out_syms), tuple(out_shape))
         cache = getattr(ma, "_cg_regions", None)
         if cache is None:
@@ -2040,14 +2039,6 @@ def _materialize_map(
 # a ~32 MB body slab — comfortably inside every conformance runner while still
 # admitting any stencil-scale contraction.
 _CONTRACTION_BOX_CAP = 1 << 22
-# Kill switch (oracle): ESS_NP_CONTRACT_DISABLE=1 routes every plain
-# contraction back to the scalar loop, so the two paths can be diffed bitwise.
-_CONTRACT_DISABLE = os.environ.get("ESS_NP_CONTRACT_DISABLE", "") == "1"
-
-# Kill switch (oracle): ESS_NP_CODEGEN_DISABLE=1 routes every whole-box body
-# back to the compiled-closure tier, so the Tier-1 source codegen
-# (numpy_codegen.compile_box_body) can be diffed bitwise against it.
-_CODEGEN_DISABLE = os.environ.get("ESS_NP_CODEGEN_DISABLE", "") == "1"
 
 
 # A dynamically-keyed codegen cache (a {"from": ...}-ranged node) stops
@@ -2100,7 +2091,7 @@ def _codegen_box_fn(
     home at all; those stay on the closure tier."""
     if node is None:
         return _closure_box_fn(body, "the caller vouches for no cache home for this node")
-    if _CODEGEN_DISABLE or _compiler.every_tier_off():
+    if _compiler.every_tier_off():
         return _closure_box_fn(body, "source codegen is off")
     if not dynamic:
         fn = getattr(node, attr, _MISSING)
@@ -2190,8 +2181,6 @@ def _eval_faq_contraction_broadcast(
     array-bound index symbols, a shape mismatch — or a combined box over
     :data:`_CONTRACTION_BOX_CAP`.
     """
-    if _CONTRACT_DISABLE:
-        return _decline("broadcast", "the whole-box contraction is off (ESS_NP_CONTRACT_DISABLE)")
     if not reduce_syms:
         return _decline("broadcast", "the node does not contract; the pure-map tier handles it")
     red_ranges_exp = _expand_reduce_ranges(resolved, reduce_syms)

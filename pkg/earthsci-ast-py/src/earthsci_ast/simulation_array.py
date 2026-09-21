@@ -12,6 +12,8 @@ and join-key buffers, the :class:`BuildInspection` observability sink,
 
 from __future__ import annotations
 
+import logging as _logging
+import time as _time
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable
@@ -79,6 +81,12 @@ from .value_invention import (
     _vi_lhs_base,
     materialize_value_invention,
 )
+
+#: Build progress goes here, at DEBUG, and nowhere else. With no handler
+#: configured the calls cost an `isEnabledFor` and produce nothing, so a caller
+#: who wants to watch a long const-geometry hoist raises this logger's level
+#: rather than setting something in the environment.
+_log = _logging.getLogger(__name__)
 
 
 def _linear_pos(shape: tuple[int, ...], one_based: list[int]) -> int:
@@ -1039,16 +1047,13 @@ def _materialize_observeds(
     without the recorded reason the visible symptom is the LAST name in the
     chain, far from the defect.
     """
-    # Opt-in build progress: ESS_OBSERVED_PROGRESS=1 logs each observed's
-    # evaluation time to stderr — the const-geometry hoist of a large document
-    # (the isrm.esm E_* joins) can take hours, and an otherwise-silent build
-    # is indistinguishable from a hang. Purely observational.
-    import os as _os
-
-    _progress = bool(_os.environ.get("ESS_OBSERVED_PROGRESS"))
-    if _progress:
-        import sys as _sys
-        import time as _time
+    # Build progress, per observed, at DEBUG on this module's logger — the
+    # const-geometry hoist of a large document (the isrm.esm E_* joins) can take
+    # hours, and an otherwise-silent build is indistinguishable from a hang.
+    # Purely observational: it selects no path and changes no value, which is
+    # why it is a log level a caller raises rather than a switch (§2.5.10 puts
+    # strategy selection under `compiler`, and this is not strategy).
+    _progress = _log.isEnabledFor(_logging.DEBUG)
     for name, rhs in ordered_observed:
         _t0 = _time.perf_counter() if _progress else 0.0
         if skip_unresolved:
@@ -1060,21 +1065,20 @@ def _materialize_observeds(
                 if skip_reasons is not None:
                     skip_reasons[name] = str(exc)
                 if _progress:
-                    print(
-                        f"[ess-observed] {name}: unresolved (skipped) "
-                        f"after {_time.perf_counter() - _t0:.1f}s",
-                        file=_sys.stderr,
-                        flush=True,
+                    _log.debug(
+                        "observed %s: unresolved (skipped) after %.1fs",
+                        name,
+                        _time.perf_counter() - _t0,
                     )
                 continue
         else:
             val = _materialize_one_observed(name, rhs, ctx)
         if _progress:
-            print(
-                f"[ess-observed] {name}: {_time.perf_counter() - _t0:.1f}s "
-                f"shape={getattr(val, 'shape', ())}",
-                file=_sys.stderr,
-                flush=True,
+            _log.debug(
+                "observed %s: %.1fs shape=%s",
+                name,
+                _time.perf_counter() - _t0,
+                getattr(val, "shape", ()),
             )
         # A COMPLEX result (a `^` with a negative base and a fractional exponent
         # on a scalar operand) must not be cast to a real here — see

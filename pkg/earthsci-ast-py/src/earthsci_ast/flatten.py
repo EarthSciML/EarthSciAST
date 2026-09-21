@@ -11,7 +11,6 @@ This module is the Python equivalent of EarthSciAST.jl/src/flatten.jl.
 
 from __future__ import annotations
 
-import os
 import warnings
 from collections import OrderedDict
 from dataclasses import dataclass, field, replace
@@ -3232,9 +3231,8 @@ def _check_registry_coupling_rewrites(registry: dict[str, Any], rewritten: set[s
 
     This is the ONE site where such a reference is REFUSED rather than resolved
     (CONFORMANCE_SPEC §5.35). The body is authored source: rewriting it would
-    silently diverge from the expand-at-load image the same document produces
-    under `ESS_TEMPLATE_REF_DISABLE=1`. A template `param` shadows the outer
-    name (esm-spec §9.6.1), so a body that BINDS the name through its params is
+    silently diverge from the expand-at-load image the same document produces.
+    A template `param` shadows the outer name (esm-spec §9.6.1), so a body that BINDS the name through its params is
     fine -- which is exactly the fix the message names.
 
     Mirrors Julia `flatten.jl::_check_registry_coupling_rewrites`.
@@ -3842,15 +3840,6 @@ def _eval_index_expr(expr: Expr, index_vals: dict[str, int]) -> int | None:
     return None
 
 
-# Kill-switch for the interval-arithmetic shape-inference fast path below —
-# the A/B oracle: with ESS_SHAPE_INTERVAL_DISABLE=1 every aggregate box is
-# enumerated pointwise, which must produce identical shapes.
-# `compiler="interpreter"` turns the same path off, which is what will retire
-# this variable: the oracle is a compiler the caller names, not an environment
-# the process happens to carry (esm-libraries-spec §2.5.10).
-_SHAPE_INTERVAL_DISABLE = os.environ.get("ESS_SHAPE_INTERVAL_DISABLE", "") == "1"
-
-
 def _interval_index_expr(expr: Expr, bounds: dict[str, tuple[int, int]]) -> tuple[int, int] | None:
     """Interval twin of :func:`_eval_index_expr`: evaluate a subscript over
     ``{symbol: (min, max)}`` bounds, returning the inclusive ``(lo, hi)`` hull.
@@ -4063,8 +4052,10 @@ def _collect_index_uses(
                 # single-occurrence subscripts every shipped rule uses (see
                 # _collect_index_uses_interval). Falls through to the
                 # enumeration below only when a subscript repeats a bound
-                # symbol (hull over-covers) or the kill-switch is set.
-                if not _SHAPE_INTERVAL_DISABLE and not _compiler.every_tier_off():
+                # symbol (hull over-covers) or `compiler="interpreter"` has
+                # every fast tier off, which is what makes the pointwise
+                # enumeration the oracle this path is checked against.
+                if not _compiler.every_tier_off():
                     if any(not vl for vl in value_lists):
                         return  # empty box — enumeration visits no points
                     ibounds: dict[str, tuple[int, int]] = {
