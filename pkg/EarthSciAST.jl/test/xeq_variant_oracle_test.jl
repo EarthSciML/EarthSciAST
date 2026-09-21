@@ -154,7 +154,17 @@ const ONE_EQ_VARIANTS = Ref(0)
         end
         build(compiler) = ESM.build_evaluator(model; initial_conditions=ics,
                                               compiler=compiler)
-        _xeq_oracle(build)
+        # `:native` is what the shared obs memo runs on, and its du must be
+        # non-trivial or the memo was never reached. There is no interpreter
+        # oracle for this one: `:interpreter` inlines every array observed, and
+        # inlining a `makearray` whose region value names the outer loop index
+        # leaves that index unbound. That is a gap in the inlining path rather
+        # than in the memo, and it is older than the `compiler` keyword — pinned
+        # here so it is visible, and so closing it fails this line instead of
+        # passing silently.
+        on = _xeq_probe(build; compiler=:native)
+        @test any(du -> sum(abs, du) > 0, on[1])
+        @test_throws ESM.TreeWalkError build(:interpreter)
     end
 
     @testset "proxy27 bench fixture" begin

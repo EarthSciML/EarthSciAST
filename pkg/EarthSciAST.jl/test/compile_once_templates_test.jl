@@ -5,9 +5,9 @@
 # fusing the expanded body into every branch spine. This is THE default path —
 # `flatten` always carries references, and the build boundary is the single
 # evaluator-side expansion point. Gate 3 (§12): the result MUST be
-# bit-identical to the Expand-at-load image; `ESS_TEMPLATE_REF_DISABLE`
-# (expand at load, the Option-A image) is the ONE differential escape hatch,
-# and `ESS_STENCIL_DISABLE` forces the per-cell reference. Drives
+# bit-identical to the Expand-at-load image, which `expand_flattened_refs`
+# returns for a flattened system, and to the per-cell reference, which
+# `compiler=:interpreter` builds. Drives
 # tests/bench/transport_3axis_7cubed_fullrank.esm (the 5×5×5-cross-product
 # fixture the tier collapses to 5+5+5) plus inline mini-fixtures for nested
 # references and the missing-registry guard.
@@ -16,6 +16,7 @@ using Test
 using JSON3
 using EarthSciAST
 using EarthSciAST: load_path, flatten, build_evaluator, coerce_esm_file, TreeWalkError,
+    expand_flattened_refs,
     ExpressionTemplateError,
     _BENCH_ON, _BENCH_BODY_VARIANTS, _BENCH_BRANCH_TEMPLATES, _BENCH_COMPILE_CALLS,
     _bench_reset!
@@ -32,15 +33,17 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
         Float64[1.5 + 0.25 * sin(0.7 * i) * cos(0.05 * i) for i in 1:n],
     )
 
-    # Build under an env overlay and return (du values at the probes, u0, counters).
-    # The env overlay wraps LOAD as well as the build, so ESS_TEMPLATE_REF_DISABLE
-    # (the load-time Option-A hatch) takes effect where it lives.
-    function build_and_probe(fix::AbstractString; env=())
-        withenv(env...) do
+    # Build and return (du values at the probes, u0, counters). `atload`
+    # expands the surviving references before the build sees them, which is the
+    # Option-A image; `compiler` picks the evaluator.
+    function build_and_probe(fix::AbstractString; atload::Bool=false,
+                             compiler::Symbol=:native)
+        let
             flat = flatten(load_path(fix))
+            atload && (flat = expand_flattened_refs(flat))
             _BENCH_ON[] = true
             _bench_reset!()
-            f, u0, p, _, _ = build_evaluator(flat)
+            f, u0, p, _, _ = build_evaluator(flat; compiler=compiler)
             counters = (branches=_BENCH_BRANCH_TEMPLATES[],
                         variants=_BENCH_BODY_VARIANTS[],
                         compiles=_BENCH_COMPILE_CALLS[])
@@ -59,15 +62,14 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
         FIX = bench("transport_3axis_7cubed_fullrank.esm")
 
         fast, u0, cfast = build_and_probe(FIX)
-        atload, _, catload = build_and_probe(FIX; env=(("ESS_TEMPLATE_REF_DISABLE" => "1"),))
-        percell, _, _ = build_and_probe(FIX; env=(("ESS_STENCIL_DISABLE" => "1"),))
+        atload, _, catload = build_and_probe(FIX; atload=true)
+        percell, _, _ = build_and_probe(FIX; compiler=:interpreter)
 
         @test length(u0) == 343
         for k in 1:3
-            # The default (compile-once) path vs the ESS_TEMPLATE_REF_DISABLE=1
-            # Expand-at-load fused build (the ONE differential hatch, RFC §12
-            # gate 3) and the per-cell reference: all EXACTLY equal (Float64 ==,
-            # no tolerance).
+            # The default (compile-once) path vs the Expand-at-load fused build
+            # (RFC §12 gate 3) and the per-cell reference: all EXACTLY equal
+            # (Float64 ==, no tolerance).
             @test fast[k] == atload[k]
             @test fast[k] == percell[k]
             @test sum(abs, fast[k]) > 0     # and not trivially zero
@@ -107,7 +109,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
         # ref-aware attempt → fused retry → symbolic → per-cell, all sound.
         FIX = bench("transport_3axis_7cubed.esm")
         fast, u0, _ = build_and_probe(FIX)
-        atload, _, _ = build_and_probe(FIX; env=(("ESS_TEMPLATE_REF_DISABLE" => "1"),))
+        atload, _, _ = build_and_probe(FIX; atload=true)
         for k in 1:3
             @test fast[k] == atload[k]
             @test sum(abs, fast[k]) > 0
@@ -190,7 +192,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
                 JSON3.write(io, doc)
             end
             fast, u0, cfast = build_and_probe(fix)
-            atload, _, _ = build_and_probe(fix; env=(("ESS_TEMPLATE_REF_DISABLE" => "1"),))
+            atload, _, _ = build_and_probe(fix; atload=true)
             @test length(u0) == 8
             for k in 1:3
                 @test fast[k] == atload[k]
@@ -291,7 +293,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
             # must BOTH succeed and agree bit-for-bit. Before the fix the default
             # build threw E_TREEWALK_UNBOUND_VARIABLE: T.
             refbuild, u0, _ = build_and_probe(fix)
-            atload, _, _ = build_and_probe(fix; env=(("ESS_TEMPLATE_REF_DISABLE" => "1"),))
+            atload, _, _ = build_and_probe(fix; atload=true)
             @test length(u0) == 2                       # Chem.A, Chem.B (0-D)
             for k in 1:3
                 @test refbuild[k] == atload[k]
@@ -356,17 +358,10 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
             @test err.code == "template_body_references_coupling_rewritten_variable"
             @test occursin("scaleT", err.message)   # offending template named
             @test occursin("M.T", err.message)      # rewritten variable named
-            # Under the Expand-at-load hatch the body was spliced BEFORE
-            # coupling, so the same document flattens (and builds) fine —
-            # exactly the divergence the guard exists to catch.
-            withenv("ESS_TEMPLATE_REF_DISABLE" => "1") do
-                flat = flatten(load_path(fix))
-                @test isempty(flat.template_registry)
-                f, u0, p, _, _ = build_evaluator(flat)
-                du = similar(u0)
-                f(du, u0, p, 0.0)
-                @test all(isfinite, du)
-            end
+            # The divergence the guard exists to catch was a body spliced BEFORE
+            # coupling. No load does that any more — references always survive to
+            # the build — so the guard fires on the one image the loader
+            # produces, and there is no second one to compare it against.
         end
     end
 end

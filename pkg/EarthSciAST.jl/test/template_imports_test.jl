@@ -152,11 +152,10 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         @test lib12.index_sets["cells"].size == 12
 
         # esm-spec §9.6.4 Option B: references survive by default; pin the
-        # Option-A expanded image via the `ESS_TEMPLATE_REF_DISABLE=1` hatch.
-        m = withenv("ESS_TEMPLATE_REF_DISABLE" => "1") do
+        # Option-A expanded image with `expanded_file`.
+        m = EarthSciAST.expanded_file(
             EarthSciAST.load_path(joinpath(repo_root, "tests", "valid",
-                                      "template_import_minimal.esm"))
-        end
+                                           "template_import_minimal.esm")))
         @test m.index_sets["cells"].size == 8     # §9.7.5 merge into consumer
         y = observed_definition(m.models["M"], "y")
         @test y isa OpExpr && y.op == "*"

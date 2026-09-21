@@ -375,9 +375,7 @@ end
              {"ref":"$(joinpath(conf, "central_D_lon_zero_grad_bc.esm"))",
               "only":["central_D_lon_zero_grad_bc"],
               "bindings":{"NLON":288,"NLAT":181}}]}}}""")
-        f = withenv("ESS_TEMPLATE_REF_DISABLE" => "1") do
-            EarthSciAST.load_path(host)
-        end
+        f = EarthSciAST.expanded_file(EarthSciAST.load_path(host))
         # The agnostic leaf's `D(c, wrt: lon)` is lowered by the injected rule.
         @test f.models["Runoff"].equations[1].rhs.args[2].op == "makearray"
         # The injected library brought its grid into the importing registry.

@@ -13,9 +13,10 @@
 # asserting:
 #   * every diag counter except the buffer-cell count `n_mat_array_cells` is
 #     IDENTICAL — including the hard-zero `_VecNode`-overlay fields;
-#   * the residual kernel lists (introspected via `kernel_section.kernels`
-#     under ESS_CODEGEN_DISABLE=1, where nothing is emitted and the list is
-#     complete — the oop_merge/xcse idiom) have EQUAL per-kernel structural
+#   * the residual kernel lists (introspected via `kernel_section.kernels` on
+#     a build whose primary emission declined on the node budget, so the
+#     affine tier still built every kernel and none was emitted away — the
+#     oop_merge/xcse idiom) have EQUAL per-kernel structural
 #     signatures: spine (kind, op) preorder, spine/recipe node counts,
 #     descriptor count + kinds, sub-kernel count, bound type. Descriptor
 #     VALUES (a boundary wrap delta embeds N) are deliberately excluded;
@@ -65,17 +66,20 @@ function _gi_model(N)
         ESM.Equation(_D("x"), _op("*", _op("neg", _v("flux")), _v("x")))])
 end
 
-# Build under ESS_CODEGEN_DISABLE=1 so `kernel_section.kernels` holds EVERY
-# kernel (n_emitted == 0, asserted below) — the codegen tier only relocates
-# runners, never changes the kernel IR under it. Tally reset/copy brackets the
-# build, the scan_prefix idiom.
+# Build with the primary emission's node budget at zero — a retained tuning
+# threshold — so `kernel_section.kernels` holds EVERY kernel the affine tier
+# built (n_emitted == 0, asserted below) while the compiler stays `:native`.
+# The codegen tier only relocates runners, never changes the kernel IR under
+# it, so the list is the IR to compare. `:interpreter` would not do: it turns
+# the affine tier off too, and then there are no kernels at all. Tally
+# reset/copy brackets the build, the scan_prefix idiom.
 function _gi_build(N)
     ics = Dict{String,Float64}("x" => 1.0)
     for k in 1:N
         ics["u[$k]"] = sin(0.3k) + 0.1k
         ics["y[$k]"] = 0.0
     end
-    withenv("ESS_CODEGEN_DISABLE" => "1") do
+    withenv("ESS_CODEGEN_NODE_BUDGET" => "0") do
         ESM._reset_cascade_tally!()
         f, u0, p, _t, vm, diag = ESM._build_evaluator_impl(_gi_model(N);
             initial_conditions=ics)

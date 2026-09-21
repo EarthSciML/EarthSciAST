@@ -1927,6 +1927,31 @@ function _expand_refs!(file::EsmFile)::EsmFile
     return file
 end
 
+"""
+    expanded_file(file::EsmFile) -> EsmFile
+
+The Option-A image of `file` (esm-spec §9.6.4): every surviving
+`apply_expression_template` reference expanded into the component expressions,
+and the per-component registries dropped, so `save`/`to_json` emit the fused
+document rather than the reference-preserving one. The third half of the
+public expansion seam — [`expanded_model`](@ref) gives one `Model`,
+[`expand_flattened_refs`](@ref) a `FlattenedSystem`, this the whole document.
+
+`flatten` and `build_evaluator` take the reference-preserving file directly and
+expand at their own boundary, so this is for a consumer that wants the expanded
+DOCUMENT: an emitter, a diff against a fused golden, a reader with no template
+handling of its own. `file` is not modified, and a file with no surviving
+references comes back by identity.
+"""
+function expanded_file(file::EsmFile)::EsmFile
+    file.component_templates === nothing && return file
+    out = _expand_refs!(deepcopy(file))
+    return _with_declarations(out, out.expression_templates, out.metaparameters;
+                              component_templates = nothing, esm = out.esm,
+                              coordinates = out.coordinates)
+end
+
+
 # The `update` rules of one variable, expanded. Returns `nothing` when no rule
 # changed, so every caller can pass the variable through BY IDENTITY rather than
 # reconstructing it. Shared by the load-time walk and the `FlattenedSystem`
