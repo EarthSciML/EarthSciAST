@@ -885,20 +885,24 @@ struct EvalCtx<'a> {
     /// recursive `serde_json::Value` walk plus a fresh `ArrayD` allocation.
     /// Nothing about that depends on the state, the time or the loop binds, yet
     /// `index(const([...]), i)` — the shape every transcribed lookup table takes
-    /// (an RRTM k-distribution band is ~14k numbers) — re-ran the whole walk
-    /// ONCE PER CELL of the enclosing aggregate. On a coupled single-column WRF
-    /// document that was 80% of every right-hand-side evaluation.
+    /// (an RRTM k-distribution band is ~14k numbers) — needs the whole walk
+    /// once per cell of the enclosing aggregate without it, which is the
+    /// dominant cost of a right-hand side that gathers such a table.
     ///
     /// The memo makes it once per model instead. Entries are `Rc`-shared so a
     /// hit costs a refcount bump, never a copy, and [`eval_index`] reads the
     /// element straight out of the shared array rather than cloning it into a
     /// [`Value::Array`].
     ///
-    /// `None` on every entry point that evaluates a one-off expression, where
-    /// there is nothing to amortize and the node addresses are not pinned by a
-    /// live rule set — those paths behave exactly as they did before. The memo
-    /// itself lives on [`RhsScratch`], whose lifetime is the rule set's, and is
-    /// retargeted on the same key [`CseRt::retarget`] uses.
+    /// `None` on every path that carries no memo to hang the entry on: the
+    /// standalone `eval_expression*` entry points, the recurrence sweep, the
+    /// build-time observed snapshots, the output-node observed pass and the
+    /// test-only reference tape executor. Those walk the payload directly and
+    /// answer exactly the same values; the output-node pass repeats the same
+    /// bodies per node and would benefit from a memo of its own, which it does
+    /// not yet have. The memo itself lives on [`RhsScratch`], whose lifetime is
+    /// the rule set's, and is retargeted on the same key [`CseRt::retarget`]
+    /// uses.
     const_lits: Option<&'a ConstLitMemo>,
     /// The CONST-ARRAY provenance of this evaluation (CONFORMANCE_SPEC §5.5.5).
     ///
@@ -983,9 +987,21 @@ pub(super) struct ConstLitMemo {
 struct ConstLitInner {
     /// The rule-set key this table was built against (see [`CseRt::retarget`]).
     key: u64,
-    /// `None` marks a literal that is not a numeric array (a scalar, or a
-    /// malformed/ragged payload): cached too, so a miss is not re-walked.
+    /// `None` marks a payload with no array materialization — a ragged or
+    /// non-numeric literal. Recorded rather than left absent so a repeat read
+    /// is still a single probe; the caller then falls back to the plain walk,
+    /// which is what produces that literal's NaN sentinel.
     map: HashMap<(usize, bool), Option<Rc<ArrayD<f64>>>>,
+}
+
+/// Walk an inline `const` node's JSON payload into a shared array. `None` for
+/// any payload [`eval::json_to_value`] does not read as a numeric array — a
+/// scalar, or a ragged/non-numeric one.
+fn walk_const_lit(node: &ExpressionNode) -> Option<Rc<ArrayD<f64>>> {
+    match node.value.as_ref().map(eval::json_to_value) {
+        Some(Some(Value::Array(a))) => Some(Rc::new(*a)),
+        _ => None,
+    }
 }
 
 impl ConstLitMemo {
@@ -1011,10 +1027,7 @@ impl ConstLitMemo {
         if let Some(hit) = self.inner.borrow().map.get(&k) {
             return hit.clone();
         }
-        let built = match node.value.as_ref().map(eval::json_to_value) {
-            Some(Some(Value::Array(a))) => Some(Rc::new(*a)),
-            _ => None,
-        };
+        let built = walk_const_lit(node);
         self.inner.borrow_mut().map.insert(k, built.clone());
         built
     }
@@ -1029,10 +1042,7 @@ pub(super) fn const_lit_array(
 ) -> Option<Rc<ArrayD<f64>>> {
     match memo {
         Some(m) => m.get(node),
-        None => match node.value.as_ref().map(eval::json_to_value) {
-            Some(Some(Value::Array(a))) => Some(Rc::new(*a)),
-            _ => None,
-        },
+        None => walk_const_lit(node),
     }
 }
 

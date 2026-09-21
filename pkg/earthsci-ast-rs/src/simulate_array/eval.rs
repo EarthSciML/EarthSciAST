@@ -1527,9 +1527,14 @@ mod kernel_equivalence_tests {
             other => panic!("expected an array, got {other:?}"),
         };
         let memo = ConstLitMemo::default();
+        let first = memo.get(&node).expect("memoized array");
+        assert_eq!(*first, want);
         for _ in 0..3 {
             let got = memo.get(&node).expect("memoized array");
             assert_eq!(*got, want);
+            // Same allocation, not an equal one: a later read is served from
+            // the table rather than re-walking the payload.
+            assert!(std::rc::Rc::ptr_eq(&first, &got));
         }
         // And the memo-aware `const` arm agrees with the un-memoized one.
         match (
@@ -1581,6 +1586,39 @@ mod kernel_equivalence_tests {
                 other => panic!("expected the NaN sentinel, got {other:?}"),
             }
         }
+    }
+
+    /// Entries are keyed by node ADDRESS, so a scratch handed a different rule
+    /// set must drop them: a later node can land on an address the previous
+    /// rule set used, and serving that node the old array would put a whole
+    /// different lookup table under a gather. `retarget` to a new key must
+    /// therefore leave nothing behind; re-binding the SAME key must not throw
+    /// the table away on every call.
+    #[test]
+    fn const_literal_memo_is_dropped_when_the_rule_set_changes() {
+        let node = ExpressionNode {
+            op: "const".to_string(),
+            value: Some(serde_json::json!([1.0, 2.0, 3.0])),
+            ..Default::default()
+        };
+        let memo = ConstLitMemo::default();
+        memo.retarget(0x1234);
+        let first = memo.get(&node).expect("memoized array");
+        assert!(std::rc::Rc::ptr_eq(
+            &first,
+            &memo.get(&node).expect("same rule set, same entry")
+        ));
+        // Re-binding the same key keeps the table.
+        memo.retarget(0x1234);
+        assert!(std::rc::Rc::ptr_eq(
+            &first,
+            &memo.get(&node).expect("same key, same entry")
+        ));
+        // A different key drops it: the next read is a fresh materialization.
+        memo.retarget(0x5678);
+        let after = memo.get(&node).expect("rebuilt array");
+        assert!(!std::rc::Rc::ptr_eq(&first, &after));
+        assert_eq!(*after, *first);
     }
 }
 
