@@ -82,12 +82,19 @@ _ac_exact(NS, NR) = [sum(_ac_sr(s, r) * _ac_e0(s) for s in 1:NS) for r in 1:NR]
 # where the oracle tiers are still cheap enough to run against it.
 _ac_env(extra) = merge(Dict("ESS_ARRAY_CONTRACTION_MIN" => "8"), extra)
 
+# Every build here runs under the NON-STRICT native plan. The strict `native`
+# refuses an equation this tier accepts — its runner walks the expression tree
+# once per output cell on every call (API_SPEC §5.8) — and `:interpreter` turns
+# the tier off, so neither vocabulary value can build the subject of this file.
+# The refusal itself is pinned below, not weakened here.
 function _ac_build(doc, ics; env=Dict{String,String}(),
                    const_arrays=Dict{String,Vector{Float64}}())
     withenv((k => v for (k, v) in _ac_env(env))...) do
         _AC_ESS._reset_cascade_tally!()
-        r = build_evaluator(doc; initial_conditions=ics,
+        r = _AC_ESS._with_plan_override(_AC_ESS._nonstrict_native_plan()) do
+            build_evaluator(doc; initial_conditions=ics,
                             const_arrays=const_arrays)
+        end
         (r, copy(_AC_ESS._CASCADE_TALLY))
     end
 end
@@ -105,6 +112,26 @@ _ac_tally(t, k) = get(t, k, 0)
 const _AC_OFF = Dict("ESS_ARRAY_CONTRACTION_DISABLE" => "1")
 
 @testset "whole-array contraction nest (ess-array-contraction)" begin
+
+    # The tier is compiler backlog: the strict default refuses the equation it
+    # would take, naming the rule and the per-output-cell walk. Every other case
+    # in this file builds under the non-strict plan `_ac_build` installs, so
+    # this is the one place the refusal is pinned.
+    @testset "the strict default refuses an equation this tier accepts" begin
+        doc, ics = _ac_doc(16, 16), _ac_ics(16, 16)
+        e = try
+            withenv((k => v for (k, v) in _ac_env(Dict{String,String}()))...) do
+                build_evaluator(doc; initial_conditions=ics)
+            end
+            nothing
+        catch err
+            err
+        end
+        @test e isa _AC_ESS.TreeWalkError
+        @test e.code == _AC_ESS.ERROR_CODES.COMPILER_REFUSED_RULE
+        @test occursin("D(conc)", e.detail)
+        @test occursin("per output cell", e.detail)
+    end
 
     @testset "source-receptor NS=$NS NR=$NR: nest == oracle == exact" for (NS, NR) in
             ((16, 16), (24, 8), (8, 24))
@@ -246,7 +273,10 @@ const _AC_OFF = Dict("ESS_ARRAY_CONTRACTION_DISABLE" => "1")
                 _AC_ESS._bench_reset!()
                 _AC_ESS._BENCH_ON[] = true
                 try
-                    build_evaluator(_ac_doc(NS, NR); initial_conditions=_ac_ics(NS, NR))
+                    _AC_ESS._with_plan_override(_AC_ESS._nonstrict_native_plan()) do
+                        build_evaluator(_ac_doc(NS, NR);
+                                        initial_conditions=_ac_ics(NS, NR))
+                    end
                 finally
                     _AC_ESS._BENCH_ON[] = false
                 end
@@ -300,9 +330,11 @@ const _AC_OFF = Dict("ESS_ARRAY_CONTRACTION_DISABLE" => "1")
         u0v = Dict("u[$i]" => Float64(i % 7) for i in 1:N)
         bld(extra) = withenv((k => v for (k, v) in _ac_env(extra))...) do
             _AC_ESS._reset_cascade_tally!()
-            (_AC_ESS._build_evaluator_impl(_AC_ESS.Model(vars, eqs);
-                index_sets=Dict("x" => _AC_ESS.IndexSet("interval"; size=N)),
-                initial_conditions=u0v),
+            (_AC_ESS._with_plan_override(_AC_ESS._nonstrict_native_plan()) do
+                _AC_ESS._build_evaluator_impl(_AC_ESS.Model(vars, eqs);
+                    index_sets=Dict("x" => _AC_ESS.IndexSet("interval"; size=N)),
+                    initial_conditions=u0v)
+             end,
              copy(_AC_ESS._CASCADE_TALLY))
         end
         run_ip(extra) = begin

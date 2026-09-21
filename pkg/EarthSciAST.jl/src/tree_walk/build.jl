@@ -1495,8 +1495,11 @@ function _fold_field_ics!(eq_ics::Dict{String,Float64}, field_ics, array_cells,
         # per-cell path for both this and the symbolic stencil compiler.
         fast = _stencil_disabled() ? nothing :
                _try_field_ic_fastpath(rhs, param_scope, registered_functions, const_arrays)
-        fast === nothing && _refuse_percell_evaluation("ic($(target))",
-            "the coordinate-expression initial-state seed", length(cells))
+        # A `nothing` here is not by itself a refusal: `_resolve_field_ic`'s
+        # first two steps (a loaded const-array field, a broadcast constant)
+        # cost the same per cell whatever the compiler is. Only its third step
+        # — the coordinate expression — resolves and compiles per cell, and it
+        # raises the refusal itself.
         _record_rule!("ic($(target))", :equation,
                       fast === nothing ? :setup_percell : :setup_compiled)
         for cell in cells
@@ -4236,9 +4239,10 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
     # body, and a `_ScanFold` accumulates over the result after the kernel
     # section. Both passes are O(N); the unrolled guarded fold below is O(N²).
     # Declining leaves `scan_fold === nothing` and changes nothing.
-    # Open this rule's report entry: every tier below either lands it (through
-    # the routing tally) or refuses it, and a refusal several frames deeper
-    # reads the label from here so it can name what it refused.
+    #
+    # Open this rule's report entry first: every tier below either lands it
+    # (through the routing tally) or refuses it, and a refusal raised several
+    # frames deeper reads the label from here so it can name what it refused.
     _open_rule!(_faq_debug_label(lhs_body, idx_names, range_iters), :equation)
     scan_fold = nothing
     affine_kernels = nothing

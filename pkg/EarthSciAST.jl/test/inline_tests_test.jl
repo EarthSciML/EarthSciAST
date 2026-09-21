@@ -72,8 +72,15 @@ end
 
 _pit_load(doc) = _PIT_ESS.load_string(IOBuffer(JSON3.write(doc)))
 
+# `compiler=:interpreter`: the fixture's `ic(u) ~ cos(pi x)` is a
+# coordinate expression, which the seed lowers once per cell — a construction-
+# time tree walk per cell that the strict `native` refuses (API_SPEC §5.8).
+# The subject here is assertion semantics (coords sampling, `reduce`, `time`),
+# not which compiler ran, so the reference evaluator is the right one to
+# measure them under; `compiler_selection_test.jl` pins the refusal itself.
 _pit_run(file; kwargs...) = run_inline_tests(file; model_name="M",
-    alg=OrdinaryDiffEqTsit5.Tsit5(), reltol=1e-12, abstol=1e-14, kwargs...)
+    alg=OrdinaryDiffEqTsit5.Tsit5(), reltol=1e-12, abstol=1e-14,
+    compiler=:interpreter, kwargs...)
 
 _pit_coords_assert(coords; time=0.0, expected=0.0, abs_tol=1e-9, var="u") =
     Dict{String,Any}("variable" => var, "time" => time, "expected" => expected,

@@ -541,8 +541,7 @@ function Base.show(io::IO, prob::EsmProblem)
         print(io, ", ", length(prob.discrete_providers), " discrete forcings")
     prob.callback === nothing || print(io, ", callbacks")
     # What BUILT it and where its rules landed — the two things §5.8 makes
-    # readable off a problem. A fixed "tree-walk :inplace" said neither: every
-    # problem printed it, whichever compiler and whichever tiers ran.
+    # readable off a problem, and the two a caller comparing two problems needs.
     rep = compiler_report(prob)
     print(io, "; compiler :", rep.compiler)
     hist = tier_histogram(rep)

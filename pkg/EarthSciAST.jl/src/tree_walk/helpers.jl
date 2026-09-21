@@ -593,6 +593,13 @@ function _resolve_field_ic(target::AbstractString, rhs::EarthSciAST.ASTExpr,
     # parameters (e.g. a free-name geometry `x0`/`dx`) bind via `params`.
     if rhs isa OpExpr
         try
+            # THE per-cell step: `_eval_cellwise` re-runs `_index_at_cell` →
+            # `_resolve_indices` → `_compile` for this one cell, so seeding a
+            # field costs one whole lowering per cell. Steps (1) and (2) above
+            # do not, which is why the refusal sits here and not at the caller's
+            # loop.
+            _refuse_percell_evaluation("ic($(target))",
+                "the coordinate-expression initial-state seed", 1)
             return _eval_cellwise(rhs, cell; const_arrays=const_arrays,
                                   registered_functions=registered_functions,
                                   params=params)
