@@ -326,6 +326,18 @@ on `solve`. Unspecified, it is `native`, and `native` is strict: a rule that
 compiler cannot express is a construction error by the paragraph above, not a
 quiet demotion to a slower path.
 
+The vocabulary has three kinds of member, and the default follows from the
+roles. **`interpreter`** is deliberately simple and exists as the **correctness
+check for the other compilers**. **`native`** is the **universally fast option
+with no heavy external dependencies** — the codegen a binding already carries,
+its own tape, its own vectorized array library — which is exactly why it is the
+default: it is the one member that is both fast and always available. The
+remaining members are **specialty compilers**, each special in one of two ways:
+`sympy` and `mtk` work only for some documents, and `xla` requires a heavy
+external dependency to exist at all. A binding MUST NOT make `native` depend on
+something a caller has to install, and MUST NOT make `interpreter` fast at the
+cost of sharing machinery with the compilers it checks.
+
 `build_evaluator` (Julia) remains a **tier-2 extension seam**, and is
 **scheduled for retirement**. This section kept it on two grounds — it is the
 entry point for a caller that wants the compiled right-hand side without a
@@ -480,22 +492,27 @@ caller's and the outcome readable.**
 per-binding spelling and the per-binding coverage table; this section states
 what each value MEANS, which is the part a binding must not reinterpret.
 
-- **`native`** — the binding's compiled or vectorized tiers, for **every**
-  document, whatever its shape. A binding MUST NOT switch strategy inside
+- **`native`** — *the universally fast option, with no heavy external
+  dependency; the default for that reason.* The binding's compiled or vectorized
+  tiers, for **every** document, whatever its shape. A binding MUST NOT switch strategy inside
   `native` on document content: a scalar document and a gridded one are built by
   the same machinery, so that what ran is a property of the name and not of the
   input. A rule `native` cannot express is a refusal (below).
-- **`interpreter`** — the reference evaluator, every fast tier off, complete
-  over the evaluable core. It carries **no performance promise of any kind**,
+- **`interpreter`** — *deliberately simple; the correctness check for the other
+  compilers, and nothing else.* The reference evaluator, every fast tier off,
+  complete over the evaluable core. It carries **no performance promise of any kind**,
   and a binding MUST NOT optimize it into agreement with `native`: its whole
   value is being a second implementation. It is what the other compilers are
   checked against, and a caller selects it to check them.
-- **`xla`** — a program lowered to StableHLO and executed through XLA.
-- **`mtk`** — a ModelingToolkit system. It is the one compiler that runs
+- **`xla`** — *a specialty compiler, and the kind that needs a heavy external
+  dependency.* A program lowered to StableHLO and executed through XLA.
+- **`mtk`** — *a specialty compiler, and the kind that runs only some
+  documents.* A ModelingToolkit system. It is the one compiler that runs
   **events and implicit equations**, the constructs §9.6.6's
   `unsupported_construct` has the other compilers refuse; a refusal of one of
   those constructs SHOULD name it.
-- **`sympy`** — a lambdified SymPy **scalar** right-hand side. It refuses array
+- **`sympy`** — *a specialty compiler, and the kind that runs only some
+  documents.* A lambdified SymPy **scalar** right-hand side. It refuses array
   documents, and it refuses an algebraic constraint it cannot solve rather than
   dropping the equation.
 

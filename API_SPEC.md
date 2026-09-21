@@ -549,17 +549,27 @@ emitter, a lambdified scalar form — and has always chosen among them by
 inspecting the document. `compiler` makes the choice the caller's, and makes
 what ran readable off the Problem afterwards.
 
-The vocabulary is **closed**. Its members transliterate per §2: a Julia
-`Symbol`, a Python `str`, a variant of a Rust `Compiler` enum carried on
-`ProblemOptions`.
+The vocabulary is **closed**, and it has three kinds of member.
+**`interpreter`** is deliberately simple, and exists as the **correctness check
+for the other compilers** — nothing else. **`native`** is the **universally fast
+option with no heavy external dependencies**: in Julia the
+`RuntimeGeneratedFunctions` codegen the package already carries, in Rust the
+tape, which needs no extra crate, in Python vectorized NumPy, already a base
+dependency. That is why it is the default — it is the one value that is both
+fast and always available. The rest are **specialty compilers**, each special in
+one of two ways: `sympy` and `mtk` work only for some documents, and `xla` needs
+a heavy external dependency to exist at all.
 
-| Value | Promise | Julia | Rust | Python |
-|---|---|---|---|---|
-| `native` | **The default.** This binding's compiled or vectorized tiers, for **every** document regardless of shape. A rule that would need a per-cell tree walk is a build error naming the rule and the deepest decline reason. No fallback, ever. | `:native` — every kernel lands on the codegen, affine or whole-array tier | `Compiler::Native` — the array runtime's tape for every document, never the scalar interpreter | `"native"` — whole-box vectorized NumPy only |
-| `interpreter` | The **reference**, and only the reference: every fast tier off, complete over the evaluable core, **no performance promise of any kind**. A caller picks it to check another compiler, not to run a model. | `:interpreter` — the tree walk with the per-cell runner for every kernel | `Compiler::Interpreter` — the per-cell oracle, no tape and no vectorized overlay | `"interpreter"` — the NumPy interpreter with the scalar `faq` evaluator for every aggregate |
-| `xla` | StableHLO through XLA. Hard error on anything it cannot lower, which is already its behaviour. | `:xla` — the direct emitter; needs Reactant loaded | `Compiler::Xla` — the emitter over the tape; needs the `xla` feature | `compiler_unavailable` |
-| `mtk` | A ModelingToolkit `System`. The one compiler that runs **events and implicit equations** — the constructs §5.39 of `CONFORMANCE_SPEC.md` has the others refuse. | `:mtk`; needs ModelingToolkit loaded | `compiler_unavailable` | `compiler_unavailable` |
-| `sympy` | A lambdified SymPy **scalar** right-hand side. Refuses array documents and constraints it cannot solve. | `compiler_unavailable` | `compiler_unavailable` | `"sympy"` |
+The members transliterate per §2: a Julia `Symbol`, a Python `str`, a variant of
+a Rust `Compiler` enum carried on `ProblemOptions`.
+
+| Value | Role | Promise | Julia | Rust | Python |
+|---|---|---|---|---|---|
+| `native` | Universally fast, no heavy external dependency — hence the default | **The default.** This binding's compiled or vectorized tiers, for **every** document regardless of shape. A rule that would need a per-cell tree walk is a build error naming the rule and the deepest decline reason. No fallback, ever. | `:native` — every kernel lands on the codegen, affine or whole-array tier | `Compiler::Native` — the array runtime's tape for every document, never the scalar interpreter | `"native"` — whole-box vectorized NumPy only |
+| `interpreter` | Deliberately simple; the correctness check for the other compilers | The **reference**, and only the reference: every fast tier off, complete over the evaluable core, **no performance promise of any kind**. A caller picks it to check another compiler, not to run a model. | `:interpreter` — the tree walk with the per-cell runner for every kernel | `Compiler::Interpreter` — the per-cell oracle, no tape and no vectorized overlay | `"interpreter"` — the NumPy interpreter with the scalar `faq` evaluator for every aggregate |
+| `xla` | Specialty: needs a heavy external dependency | StableHLO through XLA. Hard error on anything it cannot lower, which is already its behaviour. | `:xla` — the direct emitter; needs Reactant loaded | `Compiler::Xla` — the emitter over the tape; needs the `xla` feature | `compiler_unavailable` |
+| `mtk` | Specialty: only some documents — the one that runs events and implicit equations | A ModelingToolkit `System`. The one compiler that runs **events and implicit equations** — the constructs §5.39 of `CONFORMANCE_SPEC.md` has the others refuse. | `:mtk`; needs ModelingToolkit loaded | `compiler_unavailable` | `compiler_unavailable` |
+| `sympy` | Specialty: only some documents — scalar ones | A lambdified SymPy **scalar** right-hand side. Refuses array documents and constraints it cannot solve. | `compiler_unavailable` | `compiler_unavailable` | `"sympy"` |
 
 **The default is `native`, and it is strict.** An unspecified `compiler` means
 `native`, and under `native` a rule the compiled tiers cannot express is a
