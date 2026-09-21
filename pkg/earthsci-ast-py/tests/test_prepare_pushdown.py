@@ -245,7 +245,17 @@ def test_prepare_pushdown_record_gate_end_to_end(oracle):
 
     insp = BuildInspection()
     prep = esm_problem(
-        doc, (0.0, 1.0), providers=providers, const_arrays=ca, inspect=insp, pushdown_rewrite=True
+        doc,
+        (0.0, 1.0),
+        providers=providers,
+        const_arrays=ca,
+        inspect=insp,
+        pushdown_rewrite=True,
+        # The §5.5.6 overlap gate DRIVES enumeration rather than masking a dense
+        # box, so it has no whole-box tier and the strict `native` default
+        # refuses it by design (API_SPEC §5.8). What is under test is the
+        # pushdown record and the gated fetch, so the reference is where it runs.
+        compiler="interpreter",
     )
 
     # ---- the gated mocks were fetched pre-sliced, never wholesale -----------
@@ -320,7 +330,17 @@ def test_prepare_pushdown_single_member_support_set(oracle):
 
     insp = BuildInspection()
     prep = esm_problem(
-        doc, (0.0, 1.0), providers=providers, const_arrays=ca, inspect=insp, pushdown_rewrite=True
+        doc,
+        (0.0, 1.0),
+        providers=providers,
+        const_arrays=ca,
+        inspect=insp,
+        pushdown_rewrite=True,
+        # The §5.5.6 overlap gate DRIVES enumeration rather than masking a dense
+        # box, so it has no whole-box tier and the strict `native` default
+        # refuses it by design (API_SPEC §5.8). What is under test is the
+        # pushdown record and the gated fetch, so the reference is where it runs.
+        compiler="interpreter",
     )
 
     # The single-member feedback vector survived as a 1-element ARRAY.

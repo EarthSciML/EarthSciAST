@@ -4,23 +4,26 @@
 Answers two questions over a corpus of ``.esm`` documents, one JSON line per
 document:
 
-1. **What runs today.** Build each document with :func:`earthsci_ast.esm_problem`
-   defaults and record the pathway ``_choose_pathway`` picked
-   (``discrete_providers`` / ``array`` / ``loaders`` / ``scalar``), the build
-   wall time, and any failure with its exception class and the leading error
-   code of its message.
+1. **What the reference can run.** Build each document with
+   ``compiler="interpreter"`` — every fast tier off, the per-cell ``faq``
+   evaluator for every aggregate — and evaluate its right-hand side once at
+   ``(u0, p, t0)``. This is the widest thing the binding runs, so it is the
+   denominator: a document the reference cannot build is not a refusal, it is a
+   document.
 
-2. **What a NumPy-for-everything default would cost.** Force the array pathway
-   for the SAME document (``_choose_pathway`` monkeypatched to return
-   ``"array"`` — exactly what issue #425 did; no source is edited), build,
-   and evaluate the compiled right-hand side ONCE at ``(u0, p, t0)`` through
-   ``build.rhs_function(t0, build.y0)`` with the aggregate ladder in
-   :mod:`earthsci_ast.numpy_interpreter` instrumented. Every ``faq`` node that
-   lands on ``_eval_faq_scalar`` — the one-Python-tree-walk-per-output-cell
-   evaluator — is counted and keyed, together with the ordered list of tiers
-   that declined ahead of it and the exact source line each decline returned
-   from. Under the planned strict ``native`` compiler a landing on
-   ``_eval_faq_scalar`` is a refusal, so this count is the refusal surface.
+2. **What the strict default refuses.** Build the SAME document with
+   ``compiler="native"`` — whole-box vectorized NumPy for every document — and
+   record whether it refused, with the rule, the phase, the deepest reason and
+   the whole chain of declines the refusal carries. Construction evaluates the
+   const-geometry hoist, the right-hand side once and the output-time observed
+   pass, so a refusal here is the refusal a caller gets.
+
+   The refusal is the binding's own: it comes off the
+   :class:`earthsci_ast.compiler.CompilerRefusedRuleError` a caller would get,
+   with the decline chain the binding's recorder
+   (:class:`earthsci_ast.compiler.CompilerReport`) built. Nothing here forces a
+   strategy or infers a reason, so what the census reports is what a caller
+   sees.
 
 The instrumentation is a pure wrapper installed at run time: the tier functions
 are module globals that :func:`earthsci_ast.numpy_interpreter._eval_faq` looks
@@ -327,92 +330,87 @@ def _fail(exc: BaseException) -> dict[str, Any]:
 
 
 def census_one(path: str, tspan: tuple[float, float] = (0.0, 1.0)) -> dict[str, Any]:
-    """Build one document twice and return its census record."""
+    """Build one document under each of the two compilers and return its record."""
     record: dict[str, Any] = {"path": path}
 
     import earthsci_ast
     from earthsci_ast import esm_problem
     from earthsci_ast import numpy_codegen as npc
     from earthsci_ast import numpy_interpreter as npi
-    from earthsci_ast import problem as problem_mod
+    from earthsci_ast.compiler import CompilerRefusedRuleError
 
     record["binding"] = os.path.dirname(earthsci_ast.__file__)
 
-    # -- pass 1: the default router --------------------------------------
-    # The right-hand side is evaluated here too, not just under the forced
-    # pathway: a document that builds under both but whose RHS only the SymPy
-    # side can evaluate is the gap this census is looking for, and comparing a
-    # build against a build-plus-evaluation would invent one.
+    # -- pass 1: the reference ------------------------------------------------
+    # The right-hand side is evaluated here too, not just under `native`: the
+    # comparison below is between two documents-that-RUN, and comparing a build
+    # against a build-plus-evaluation would invent a difference.
     t0 = time.perf_counter()
     try:
-        prob = esm_problem(path, tspan)
-        record["default"] = {
+        prob = esm_problem(path, tspan, compiler="interpreter")
+        record["interpreter"] = {
             "ok": True,
-            "pathway": prob.pathway,
+            "compiler": prob.compiler,
+            "engine": prob.engine,
             "states": len(prob.flat.state_variables),
             "params": len(prob.flat.parameters),
+            "tiers": prob.compiler_report.tiers(),
+            "rules": len(prob.compiler_report.rules()),
         }
         try:
-            if prob.scalar_build is not None and prob.scalar_build.rhs_function is not None:
-                prob.scalar_build.rhs_function(float(tspan[0]), prob.scalar_build.y0)
-                record["default"]["rhs"] = {"ok": True}
-            elif prob.build is not None:
+            if prob.build is not None:
                 prob.build.rhs_function(float(tspan[0]), prob.build.y0)
-                record["default"]["rhs"] = {"ok": True}
+                record["interpreter"]["rhs"] = {"ok": True}
             else:
-                record["default"]["rhs"] = {"ok": True, "note": "no rhs_function"}
+                record["interpreter"]["rhs"] = {"ok": True, "note": "no rhs_function"}
         except BaseException as exc:  # noqa: BLE001
-            record["default"]["rhs"] = _fail(exc)
+            record["interpreter"]["rhs"] = _fail(exc)
         del prob
     except BaseException as exc:  # noqa: BLE001 - a census records everything
-        record["default"] = _fail(exc)
-    record["default"]["seconds"] = round(time.perf_counter() - t0, 3)
+        record["interpreter"] = _fail(exc)
+    record["interpreter"]["seconds"] = round(time.perf_counter() - t0, 3)
 
-    # -- pass 2: the array pathway, forced -------------------------------
-    # The ladder is installed BEFORE the build. A document's aggregates are
-    # evaluated in two places: the const-geometry hoist and the static-observed
-    # materialization run at BUILD, and the tendency equations run per RHS call.
-    # Strict `native` makes both a build-time refusal, so both are counted.
-    build_ladder = _Ladder()
-    rhs_ladder = _Ladder()
-    active = {"ladder": build_ladder}
+    # -- pass 2: the strict default -------------------------------------------
+    # `esm_problem` itself evaluates the hoist, one right-hand side and the
+    # output-time observed pass under the policy, so a refusal surfaces here
+    # without the census driving anything by hand. The ladder wrappers stay
+    # installed only to count the LANDINGS a `native` build that survived made;
+    # the refusal's own reasons come off the exception.
+    ladder = _Ladder()
+    active = {"ladder": ladder}
     _install(active, npi, npc)
-    original_router = problem_mod._choose_pathway
-    problem_mod._choose_pathway = lambda *a, **k: "array"
     t0 = time.perf_counter()
     try:
         prob = esm_problem(path, tspan)
-        forced: dict[str, Any] = {"ok": True, "pathway": prob.pathway}
-        forced["build_seconds"] = round(time.perf_counter() - t0, 3)
-        forced["build"] = build_ladder.report()
-        active["ladder"] = rhs_ladder
-        build = prob.build
-        if build is None:
-            forced["rhs"] = {
-                "ok": False,
-                "error_class": "NoBuild",
-                "error_code": "",
-                "error": (
-                    f"forced array pathway produced no _NumpyRhsBuild (pathway={prob.pathway!r})"
-                ),
-            }
-        else:
-            t1 = time.perf_counter()
-            try:
-                build.rhs_function(float(tspan[0]), build.y0)
-                forced["rhs"] = {"ok": True}
-            except BaseException as exc:  # noqa: BLE001
-                forced["rhs"] = _fail(exc)
-            forced["rhs"]["seconds"] = round(time.perf_counter() - t1, 3)
-            forced["rhs"].update(rhs_ladder.report())
-        record["forced_array"] = forced
+        native: dict[str, Any] = {
+            "ok": True,
+            "refused": False,
+            "compiler": prob.compiler,
+            "engine": prob.engine,
+            "tiers": prob.compiler_report.tiers(),
+            "rules": len(prob.compiler_report.rules()),
+            "build_seconds": round(time.perf_counter() - t0, 3),
+            "ladder": ladder.report(),
+        }
+        record["native"] = native
         del prob
+    except CompilerRefusedRuleError as exc:
+        record["native"] = {
+            "ok": False,
+            "refused": True,
+            "error_class": type(exc).__name__,
+            "error_code": exc.code,
+            "error": str(exc)[:400],
+            "rule": exc.rule,
+            "phase": exc.phase,
+            "reason": exc.reason,
+            "declines": list(exc.declines),
+            "build_seconds": round(time.perf_counter() - t0, 3),
+        }
     except BaseException as exc:  # noqa: BLE001
-        record["forced_array"] = _fail(exc)
-        record["forced_array"]["build_seconds"] = round(time.perf_counter() - t0, 3)
-        record["forced_array"]["build"] = build_ladder.report()
-    finally:
-        problem_mod._choose_pathway = original_router
+        record["native"] = _fail(exc)
+        record["native"]["refused"] = False
+        record["native"]["build_seconds"] = round(time.perf_counter() - t0, 3)
 
     record["max_rss_kb"] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     return record
@@ -516,78 +514,62 @@ def summarize(paths: list[str]) -> None:
                 if line:
                     rows.append(json.loads(line))
 
-    by_pathway: Counter = Counter()
-    ok_pathway: Counter = Counter()
-    default_fail: Counter = Counter()
-    default_rhs_fail: Counter = Counter()
-    forced_build_fail: Counter = Counter()
-    forced_rhs_fail: Counter = Counter()
-    reasons: Counter = Counter()
+    by_engine: Counter = Counter()
+    ok_engine: Counter = Counter()
+    ref_fail: Counter = Counter()
+    ref_rhs_fail: Counter = Counter()
+    native_fail: Counter = Counter()
+    refusal_reason: Counter = Counter()
+    refusal_phase: Counter = Counter()
+    refusal_chain: Counter = Counter()
+    native_tiers: Counter = Counter()
     worker_bad: Counter = Counter()
-    landings_phase: Counter = Counter()
-    zero_per_cell = with_per_cell = 0
-    builds_default = runs_default = 0
-    regressions: list[tuple[str, str, str]] = []
-    top: list[tuple[int, int, str]] = []
+    builds_ref = runs_ref = 0
+    native_built = native_refused = 0
+    refusals: list[tuple[str, str, str, str]] = []
+    # A document `native` refuses that the reference cannot run either is not a
+    # capability gap this plan created; it is tracked separately so the headline
+    # number is the one a caller would meet.
+    refused_and_runnable = 0
 
     for r in rows:
         if r.get("worker"):
             worker_bad[r["worker"]] += 1
             continue
-        d = r.get("default", {})
-        f = r.get("forced_array", {})
-        d_rhs = d.get("rhs", {}) if d.get("ok") else {}
-        default_runs = bool(d.get("ok")) and bool(d_rhs.get("ok"))
-        if d.get("ok"):
-            builds_default += 1
-            by_pathway[d.get("pathway", "?")] += 1
-            if d_rhs.get("ok"):
-                runs_default += 1
-                ok_pathway[d.get("pathway", "?")] += 1
+        ref = r.get("interpreter", {})
+        nat = r.get("native", {})
+        ref_rhs = ref.get("rhs", {}) if ref.get("ok") else {}
+        ref_runs = bool(ref.get("ok")) and bool(ref_rhs.get("ok"))
+        if ref.get("ok"):
+            builds_ref += 1
+            by_engine[ref.get("engine", "?")] += 1
+            if ref_rhs.get("ok"):
+                runs_ref += 1
+                ok_engine[ref.get("engine", "?")] += 1
             else:
-                default_rhs_fail[
-                    f"{d_rhs.get('error_class')}/{d_rhs.get('error_code') or '-'}"
+                ref_rhs_fail[
+                    f"{ref_rhs.get('error_class')}/{ref_rhs.get('error_code') or '-'}"
                 ] += 1
         else:
-            default_fail[f"{d.get('error_class')}/{d.get('error_code') or '-'}"] += 1
+            ref_fail[f"{ref.get('error_class')}/{ref.get('error_code') or '-'}"] += 1
 
-        bld = f.get("build", {}) if f.get("ok") else {}
-        rhs = f.get("rhs", {}) if f.get("ok") else {}
-        if not f.get("ok"):
-            forced_build_fail[f"{f.get('error_class')}/{f.get('error_code') or '-'}"] += 1
-            if default_runs:
-                regressions.append(
-                    (
-                        r["path"],
-                        d.get("pathway", "?"),
-                        f"BUILD {f.get('error_class')}: {f.get('error', '')[:150]}",
-                    )
-                )
-            continue
-        for node in bld.get("per_cell_nodes", []):
-            reasons[node["reason"]] += 1
-            landings_phase["build"] += 1
-        if not rhs.get("ok"):
-            forced_rhs_fail[f"{rhs.get('error_class')}/{rhs.get('error_code') or '-'}"] += 1
-            if default_runs:
-                regressions.append(
-                    (
-                        r["path"],
-                        d.get("pathway", "?"),
-                        f"RHS {rhs.get('error_class')}: {rhs.get('error', '')[:150]}",
-                    )
-                )
-            continue
-        for node in rhs.get("per_cell_nodes", []):
-            reasons[node["reason"]] += 1
-            landings_phase["rhs"] += 1
-        nodes = rhs.get("faq_nodes_per_cell", 0) + bld.get("faq_nodes_per_cell", 0)
-        cells = rhs.get("per_cell_cells_total", 0) + bld.get("per_cell_cells_total", 0)
-        if nodes:
-            with_per_cell += 1
-            top.append((cells, nodes, r["path"]))
+        if nat.get("refused"):
+            native_refused += 1
+            if ref_runs:
+                refused_and_runnable += 1
+            refusal_reason[nat.get("reason", "?")] += 1
+            refusal_phase[nat.get("phase", "?")] += 1
+            chain = " → ".join(t for t, _ in nat.get("declines") or []) or "(no tier attempted)"
+            refusal_chain[chain] += 1
+            refusals.append(
+                (r["path"], nat.get("rule", "?"), nat.get("phase", "?"), nat.get("reason", "?"))
+            )
+        elif nat.get("ok"):
+            native_built += 1
+            for tier, n in (nat.get("tiers") or {}).items():
+                native_tiers[tier] += n
         else:
-            zero_per_cell += 1
+            native_fail[f"{nat.get('error_class')}/{nat.get('error_code') or '-'}"] += 1
 
     def table(title: str, counter: Counter) -> None:
         print(f"\n## {title}")
@@ -596,25 +578,25 @@ def summarize(paths: list[str]) -> None:
 
     print(f"documents recorded: {len(rows)}")
     table("worker outcomes (no record at all)", worker_bad)
-    table("built under the default router, by pathway", by_pathway)
-    print(f"  total built: {builds_default}")
-    table("built AND right-hand side evaluated, by pathway", ok_pathway)
-    print(f"  total runnable: {runs_default}")
-    table("default-router BUILD failures", default_fail)
-    table("default-router RHS failures", default_rhs_fail)
-    print("\n## forced NumPy array pathway (of the runnable documents above)")
-    print(f"    zero per-cell landings : {zero_per_cell}")
-    print(f"    with per-cell landings : {with_per_cell}")
-    table("forced-array BUILD failures", forced_build_fail)
-    table("forced-array RHS failures", forced_rhs_fail)
-    table("phase the per-cell landings happen in", landings_phase)
-    table("decline reasons (one count per faq node that landed per cell)", reasons)
-    print("\n## top 20 documents by per-cell output cells walked")
-    for cells, nodes, path in sorted(top, reverse=True)[:20]:
-        print(f"  {cells:12d} cells  {nodes:3d} nodes  {path}")
-    print(f"\n## runnable under the default router, NOT under forced NumPy ({len(regressions)})")
-    for path, pathway, err in sorted(regressions):
-        print(f"  [{pathway}] {path}\n      {err}")
+    print("\n# compiler='interpreter' (the reference)")
+    table("built, by segmenting engine", by_engine)
+    print(f"  total built: {builds_ref}")
+    table("built AND right-hand side evaluated, by engine", ok_engine)
+    print(f"  total runnable: {runs_ref}")
+    table("BUILD failures", ref_fail)
+    table("RHS failures", ref_rhs_fail)
+    print("\n# compiler='native' (the strict default)")
+    print(f"    built                       : {native_built}")
+    print(f"    REFUSED (compiler_refused_rule): {native_refused}")
+    print(f"      of which the reference runs : {refused_and_runnable}")
+    table("refusal phase", refusal_phase)
+    table("refusal: deepest reason", refusal_reason)
+    table("refusal: decline chain, fastest tier first", refusal_chain)
+    table("landings by tier, over the documents native BUILT", native_tiers)
+    table("native BUILD failures that are not refusals", native_fail)
+    print(f"\n## every refusal ({len(refusals)})")
+    for path, rule, phase, reason in sorted(refusals):
+        print(f"  {path}\n      [{phase}] {rule}\n      {reason}")
 
 
 def main(argv: list[str] | None = None) -> int:

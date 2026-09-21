@@ -146,6 +146,11 @@ def test_simulate_works_for_pure_ode_model():
 # Compile cache: repeated builds on the same FlattenedSystem reuse the
 # lambdified RHS instead of recompiling. Different parameter overrides hit
 # the cache because parameters are runtime args, not inlined into expressions.
+#
+# The cache is the SYMPY compiler's (`_simulate_compile_cache` holds the
+# lambdified vector functions), so these tests name that compiler. Under the
+# strict `native` default no document reaches the SymPy tier at all, which is
+# what makes naming it necessary rather than merely explicit.
 # ----------------------------------------------------------------------------
 
 
@@ -154,13 +159,13 @@ def test_simulate_caches_compiled_rhs_across_calls():
 
     # First call populates the cache.
     assert getattr(flat, "_simulate_compile_cache", None) is None
-    r1 = solve(esm_problem(flat, (0.0, 1.0), u0={"A": 1.0, "B": 0.0}))
+    r1 = solve(esm_problem(flat, (0.0, 1.0), u0={"A": 1.0, "B": 0.0}, compiler="sympy"))
     assert r1.retcode is ReturnCode.Success
     cache_after_first = flat._simulate_compile_cache
     assert cache_after_first is not None
 
     # Second call must reuse the same compiled functions (identity check).
-    r2 = solve(esm_problem(flat, (0.0, 1.0), u0={"A": 1.0, "B": 0.0}))
+    r2 = solve(esm_problem(flat, (0.0, 1.0), u0={"A": 1.0, "B": 0.0}, compiler="sympy"))
     assert r2.retcode is ReturnCode.Success
     assert flat._simulate_compile_cache is cache_after_first
     assert flat._simulate_compile_cache.rhs_vector_func is cache_after_first.rhs_vector_func
@@ -180,13 +185,13 @@ def test_simulate_cache_survives_parameter_overrides():
     flat = flatten(file)
 
     # Prime the cache with one set of parameters.
-    r1 = solve(esm_problem(flat, (0.0, 1.0), p={"k": 0.5}, u0={"x": 1.0}))
+    r1 = solve(esm_problem(flat, (0.0, 1.0), p={"k": 0.5}, u0={"x": 1.0}, compiler="sympy"))
     compile1 = flat._simulate_compile_cache
     assert (r1.retcode is ReturnCode.Success) and compile1 is not None
 
     # A different parameter override must not invalidate the compiled RHS:
     # parameter values are passed as runtime arguments, not inlined.
-    r2 = solve(esm_problem(flat, (0.0, 1.0), p={"k": 2.0}, u0={"x": 1.0}))
+    r2 = solve(esm_problem(flat, (0.0, 1.0), p={"k": 2.0}, u0={"x": 1.0}, compiler="sympy"))
     assert r2.retcode is ReturnCode.Success
     assert flat._simulate_compile_cache is compile1
 
@@ -234,12 +239,12 @@ def test_simulate_caches_cse_true_and_false_independently():
     """Flipping cse must not invalidate the other compile's cache."""
     flat = flatten(_decay_file())
 
-    solve(esm_problem(flat, (0.0, 1.0), u0={"A": 1.0, "B": 0.0}))
+    solve(esm_problem(flat, (0.0, 1.0), u0={"A": 1.0, "B": 0.0}, compiler="sympy"))
     cse_true_cache = flat._simulate_compile_cache
     assert cse_true_cache is not None
     assert getattr(flat, "_simulate_compile_cache_no_cse", None) is None
 
-    solve(esm_problem(flat, (0.0, 1.0), u0={"A": 1.0, "B": 0.0}, cse=False))
+    solve(esm_problem(flat, (0.0, 1.0), u0={"A": 1.0, "B": 0.0}, cse=False, compiler="sympy"))
     cse_false_cache = flat._simulate_compile_cache_no_cse
     assert cse_false_cache is not None
     # cse=True cache untouched.

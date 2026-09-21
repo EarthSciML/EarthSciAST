@@ -18,7 +18,15 @@ from typing import Any, Callable
 
 import numpy as np
 
+from . import compiler as _compiler
 from .classification import is_implicit_lhs
+from .compiler import (
+    CompilerPolicy,
+    CompilerRefusedRuleError,
+    phase_scope,
+    resolve_compiler,
+    use_policy,
+)
 from .error_handling import INDEXED_DEFINITION_UNSUPPORTED_FORM
 from .esm_types import EsmFile, Expr, ExprNode, is_aggregate_op
 from .expr_walk import iter_children, map_children
@@ -681,6 +689,119 @@ def _algebraically_defined_states(flat: FlattenedSystem, vi_var_names: set[str])
     return bare_defined - differentiated - set(vi_var_names)
 
 
+def whole_definition_target(lhs: Expr) -> str | None:
+    """The unknown a WHOLE-VARIABLE definition defines, or ``None``.
+
+    Two spellings define a whole unknown: a bare-string LHS (``x ~ body``,
+    esm-spec §6.3.1) and a derivative on a bare name (``D(x) ~ body``). Anything
+    else defines a SLICE or nothing: ``index(u, i) ~ …`` and an ``faq``-LHS write
+    a box of cells, and several of those legitimately tile one variable (a
+    stencil interior plus its two boundaries is three equations for one unknown),
+    so they are deliberately not counted. ``ic(…)`` is an initial value rather
+    than a definition, and implicit forms define nothing at all.
+
+    This is the unit both redundancy checks turn on, because a SECOND whole
+    definition of an already-whole-defined unknown is the one shape that cannot
+    be a tiling.
+    """
+    if isinstance(lhs, str):
+        return lhs
+    if not isinstance(lhs, ExprNode):
+        return None
+    if is_aggregate_op(lhs.op):
+        return None
+    if lhs.op == "D" and lhs.args and isinstance(lhs.args[0], str):
+        return lhs.args[0]
+    return None
+
+
+def classify_second_whole_definition(
+    flat: FlattenedSystem, vi_var_names: Iterable[str] = ()
+) -> tuple[str, FlattenedEquation, FlattenedEquation, str, tuple[str, ...]] | None:
+    """The first equation that WHOLE-defines an unknown an earlier one already
+    did, classified by what it actually binds. ``None`` when there is none.
+
+    Two equations defining one unknown are not automatically a fault — esm-spec
+    §4.9.4 counts equations against unknowns, and which fault it is depends on
+    whether the second equation determines something ELSE:
+
+    * ``"unbalanced"`` — every unknown the second equation mentions is already
+      determined, so it binds nothing: one more equation than there are unknowns
+      to bind (``equation_count_mismatch``). Keeping either definition runs a
+      model the document does not describe.
+    * ``"constraint"`` — the second equation mentions an unknown with no
+      defining equation of its own, so it is an implicit ALGEBRAIC CONSTRAINT
+      determining that unknown. A legitimate differential-algebraic system
+      (``K = f(T)`` and ``K = [H+]·[OH-]``, which determines ``[OH-]``), and
+      runnable only by a compiler that can solve it.
+
+    Returns ``(kind, first, second, name, undetermined)``; ``undetermined`` is
+    the unknowns the second equation would have to determine.
+    """
+    seen: dict[str, FlattenedEquation] = {}
+    clash: tuple[FlattenedEquation, FlattenedEquation, str] | None = None
+    defined: set[str] = set()
+    for eq in flat.equations:
+        name = whole_definition_target(eq.lhs)
+        if name is None:
+            continue
+        defined.add(name)
+        if name in seen:
+            if clash is None:
+                clash = (seen[name], eq, name)
+            continue
+        seen[name] = eq
+    if clash is None:
+        return None
+    first, second, name = clash
+    unknowns = (set(flat.state_variables) | set(flat.observed_variables)) - set(vi_var_names)
+    undetermined = tuple(sorted((unknowns - defined) & _expr_referenced_names(second.rhs)))
+    kind = "constraint" if undetermined else "unbalanced"
+    return kind, first, second, name, undetermined
+
+
+def _assert_no_unsolved_algebraic_constraint(
+    flat: FlattenedSystem, vi_var_names: Iterable[str] = ()
+) -> None:
+    """Refuse a differential-algebraic system this interpreter cannot solve.
+
+    A second whole definition of an unknown, whose right-hand side names an
+    unknown nothing else defines, is an algebraic constraint determining that
+    unknown — ``K_w ~ H_plus·OH_minus`` beside ``K_w ~ f(T)`` determines
+    ``OH_minus``. Solving it means inverting the equation, which the SymPy
+    compiler does and the NumPy interpreter cannot: there is no elimination pass
+    here, so the constrained unknown reaches no slot, stays at its declared
+    default, and the run reports that as the answer with
+    :attr:`~earthsci_ast.simulation_common.ReturnCode.Success`.
+
+    That is a WRONG answer rather than a missing one, which esm-spec §9.6.6 makes
+    a named diagnostic rather than a silent outcome. Refused at construction, per
+    esm-libraries-spec §2.5.2.
+
+    The narrowness is the point. Only a SECOND WHOLE definition is examined, so a
+    stencil that tiles one variable over several indexed equations is untouched,
+    and only an unknown that nothing else defines counts, so a constant state —
+    an unknown with no derivative, which is ordinary and common — is untouched.
+    """
+    found = classify_second_whole_definition(flat, vi_var_names)
+    if found is None or found[0] != "constraint":
+        return
+    _kind, _first, second, name, undetermined = found
+    target = undetermined[0]
+    raise UnsupportedConstructError(
+        "algebraic constraint",
+        # The detail reads into the class's own "... is not supported by the
+        # <evaluator>", so it ends on a noun phrase rather than a sentence.
+        f"`{_expr_to_string(second.lhs)} ~ {_expr_to_string(second.rhs)}` is a second "
+        f"definition of {name!r}, so what it actually determines is {target!r} — which "
+        f"has no defining equation of its own. Inverting it for {target!r} needs "
+        f"algebraic elimination; without it {target!r} would stay at its declared "
+        f"default for the whole run and be reported as the answer. Build with "
+        f"compiler='sympy', which solves it. This construct",
+        "Python array interpreter",
+    )
+
+
 def _assert_driver_equations_are_appliable(
     equations: list[FlattenedEquation],
     state_layout: dict[str, slice],
@@ -854,6 +975,20 @@ def _loader_volatile_observeds(
     return volatile
 
 
+def rule_label(eq: FlattenedEquation) -> str:
+    """The name a compiler refusal or a report entry gives one driver equation.
+
+    Component-qualified, because that is what the caller reads the document in:
+    ``equation D(Chem.O3)`` for a derivative, and the equation as written for
+    anything else. Observeds are labelled ``observed <flattened name>`` where
+    they are materialized (:func:`_materialize_one_observed`).
+    """
+    target = _differentiated_lhs_target(eq.lhs)
+    if target is not None:
+        return f"equation D({target})"
+    return f"equation {_expr_to_string(eq.lhs)}"
+
+
 def _materialize_one_observed(name: str, rhs: Expr, ctx: EvalContext) -> Any:
     """Evaluate ONE observed assignment ``name = rhs``.
 
@@ -864,8 +999,9 @@ def _materialize_one_observed(name: str, rhs: Expr, ctx: EvalContext) -> Any:
     ``None`` when the RHS contains no self-read at all, so every existing
     document takes exactly the path below, unchanged.
     """
-    swept = sweep_recurrence(name, rhs, ctx, ctx.element_types.get(name))
-    return eval_expr(rhs, ctx) if swept is None else swept
+    with _compiler.rule_scope(f"observed {name}"):
+        swept = sweep_recurrence(name, rhs, ctx, ctx.element_types.get(name))
+        return eval_expr(rhs, ctx) if swept is None else swept
 
 
 def _materialize_observeds(
@@ -2512,6 +2648,11 @@ def _build_numpy_rhs(
     # which is also how the SymPy pathway recovers it, so the three bindings
     # answer alike.
     alg_state_names = _algebraically_defined_states(flat, vi_var_names)
+    # A second whole definition that determines an otherwise-undefined unknown is
+    # an algebraic constraint, and this interpreter has no elimination pass to
+    # solve one. Checked after the reclassification above, because that is what
+    # settles which unknowns have a definition at all.
+    _assert_no_unsolved_algebraic_constraint(flat, vi_var_names)
     state_names = [
         n
         for n in _integrated_state_names(flat)
@@ -2984,7 +3125,8 @@ def _build_numpy_rhs(
         dy.fill(0.0)
         for eq in working_equations:
             try:
-                _apply_equation_to_dy(eq, ctx, shapes, state_layout, dy)
+                with _compiler.rule_scope(rule_label(eq)):
+                    _apply_equation_to_dy(eq, ctx, shapes, state_layout, dy)
             except NumpyInterpreterError as exc:
                 raise SimulationError(str(exc)) from exc
         np.isfinite(dy, out=_finite_mask)
@@ -3023,6 +3165,8 @@ def evaluate_rhs(
     state: dict[str, float],
     t: float = 0.0,
     parameters: dict[str, float] | None = None,
+    *,
+    compiler: str | None = None,
 ) -> dict[str, float]:
     """Evaluate the discretized method-of-lines RHS f(state, t) of an
     array/PDE model, returning a ``{element_name: derivative}`` map keyed by the
@@ -3032,7 +3176,38 @@ def evaluate_rhs(
     conformance tier (bead ess-fmw) uses to check that Julia, Python, and Rust
     agree on the *discretized RHS* independently of any integrator. ``state``
     supplies the value of every state element (same keying as
-    ``initial_conditions`` in :func:`simulate`)."""
+    ``initial_conditions`` in :func:`simulate`).
+
+    ``compiler`` is the same closed vocabulary ``esm_problem`` takes, and for
+    the same reason: this entry point builds and evaluates a right-hand side, so
+    WHICH machinery does it is the caller's to name. ``None`` means ``native``,
+    which is strict — a rule that would walk per cell is ``compiler_refused_rule``
+    here too. ``sympy`` has no scalar-lambdified form to offer a single-shot RHS
+    probe and is refused."""
+    chosen = resolve_compiler(compiler)
+    if chosen == "sympy":
+        raise CompilerRefusedRuleError(
+            "sympy",
+            "the whole document",
+            "evaluate_rhs answers from the NumPy interpreter's discretized "
+            "right-hand side; the lambdified SymPy form is reached through "
+            "esm_problem(..., compiler='sympy') and solve()",
+            phase="construction",
+        )
+    policy = CompilerPolicy(
+        compiler=chosen, strict=chosen == "native", every_tier_off=chosen == "interpreter"
+    )
+    with use_policy(policy), phase_scope("rhs"):
+        return _evaluate_rhs_under(file_or_flat, state, t, parameters)
+
+
+def _evaluate_rhs_under(
+    file_or_flat: EsmFile | FlattenedSystem,
+    state: dict[str, float],
+    t: float,
+    parameters: dict[str, float] | None,
+) -> dict[str, float]:
+    """:func:`evaluate_rhs`'s body, with the compiler policy already installed."""
     flat = file_or_flat if isinstance(file_or_flat, FlattenedSystem) else flatten(file_or_flat)
     if len(flat.independent_variables) > 1:
         raise UnsupportedDimensionalityError(
@@ -3118,6 +3293,95 @@ def observed_at_state(
     ctx = _ctx()
     _materialize_observeds(build.ordered_observed, ctx, skip_unresolved=True)
     return _pick(ctx)
+
+
+def _body_has_aggregate(expr: Expr) -> bool:
+    """Does ``expr`` contain an aggregate node anywhere?
+
+    The ``faq`` ladder is the only thing the compiler report records and the only
+    thing a per-cell refusal can come from, so a body with no aggregate has
+    nothing to probe.
+    """
+    if isinstance(expr, ExprNode):
+        if is_aggregate_op(expr.op):
+            return True
+        return any(_body_has_aggregate(child) for child in iter_children(expr))
+    return False
+
+
+def probe_output_time_observeds(
+    flat: FlattenedSystem,
+    build: _NumpyRhsBuild,
+    t: float,
+    loader_arrays: dict[str, np.ndarray] | None = None,
+) -> None:
+    """Exercise the OUTPUT-TIME observed pass, for the rules nothing else did.
+
+    esm-libraries-spec §2.5.10 puts every evaluation a compiler performs for a
+    Problem under the compiler, "not the right-hand side alone: the
+    materialization of constants and static observeds at construction, the
+    per-segment seed, the right-hand side, and the observeds reported at output
+    times". The first three happen already — the hoist inside
+    :func:`_build_numpy_rhs`, the per-segment seed IS a build, and
+    ``esm_problem`` evaluates one right-hand side. This is the fourth.
+
+    What it must NOT do is evaluate them twice. The pass
+    :func:`_simulate_with_numpy` runs at an output node evaluates the whole
+    observed graph when nothing varies along the trajectory, and only
+    ``varying_observed`` when something does — and those are precisely the sets
+    the hoist and the right-hand side have just evaluated, on the same bodies
+    through the same ladder. Running the pass unconditionally therefore bought
+    no diagnostic and doubled the cost of the const-geometry hoist, which for a
+    conservative-regrid document is most of the build.
+
+    So it probes the difference: an observed whose body holds an aggregate and
+    which no earlier phase attributed a landing to. In every corpus document
+    that set is empty and this costs one pass over the observed list. It is not
+    assumed empty, because a future pass that evaluates something new should be
+    covered by the compiler that ran it rather than silently exempt.
+
+    Unresolved observeds are skipped exactly as the output-node pass skips them,
+    so this cannot turn a document the run tolerates into a build failure — only
+    a refusal the active compiler owes the caller travels out of it.
+    """
+    ordered = build.ordered_observed
+    if not ordered:
+        return
+    varying = _time_varying_observeds(ordered, set(build.state_names))
+    # Which set the real pass would evaluate at a node: the whole graph when
+    # nothing varies, else the varying half on top of the build's statics.
+    target = ordered if not varying else build.varying_observed
+    policy = _compiler.active_policy()
+    already = set(policy.report.rules()) if policy is not None else set()
+    pending = [
+        (name, rhs)
+        for name, rhs in target
+        if f"observed {name}" not in already and _body_has_aggregate(rhs)
+    ]
+    if not pending:
+        return
+    ctx = EvalContext(
+        const_array_names=_const_array_observed_names(ordered),
+        state_layout=build.state_layout,
+        state_shapes=build.shapes,
+        param_values=build.param_values,
+        observed_values={} if not varying else dict(build.static_observed_values),
+        y=np.asarray(build.y0, dtype=float),
+        t=float(t),
+        index_sets=flat.index_sets,
+        derived_rings={} if not varying else dict(build.static_derived_rings),
+        # Bound exactly as `_simulate_with_numpy` binds it at an output node, so
+        # the probe measures that pass rather than a differently-seeded twin.
+        input_arrays=loader_arrays if loader_arrays is not None else {},
+        derived_extents=build.derived_extents,
+        join_key_buffers=build.join_key_buffers,
+        join_key_index_sets=build.join_key_index_sets,
+        factor_scope=build.factor_scope,
+        var_index_sets=build.var_index_sets,
+        element_types=build.element_types,
+    )
+    with _compiler.phase_scope("observed-output"):
+        _materialize_observeds(pending, ctx, skip_unresolved=True)
 
 
 def _simulate_observeds_only(
@@ -3284,21 +3548,21 @@ def _simulate_with_numpy(
             # A system whose only states were value-invention producers (dropped
             # from the ODE at setup) is stateless in the same sense, so its
             # observed graph is answered the same way.
-            if build.ordered_observed:
-                # A CALCULATOR-shaped array document: no ODE state, but a real
-                # observed graph — the shape a recurrence definition naturally
-                # has (esm-spec §4.3.1.1), and the shape §6.6.5's
-                # observed-assertion form is written against. There is nothing to
-                # integrate, so the run returns the observed graph's values
-                # instead of a trajectory, which is what the scalar engine's
-                # observed-only path has always done for such a document and
-                # what `test_empty_system` pinned as the contract for a
-                # stateless system: a successful result, not a failure.
-                return _simulate_observeds_only(
-                    flat, build, tspan, saveat=saveat, callback=callback
-                )
-            # Neither states nor observeds: the run really has no content.
-            raise SimulationError("Flattened system has no state variables to integrate")
+            # A CALCULATOR-shaped array document: no ODE state, but a real
+            # observed graph — the shape a recurrence definition naturally has
+            # (esm-spec §4.3.1.1), and the shape §6.6.5's observed-assertion
+            # form is written against. There is nothing to integrate, so the run
+            # returns the observed graph's values instead of a trajectory, which
+            # is what the scalar engine's observed-only path has always done.
+            #
+            # An EMPTY document — neither states nor observeds — goes the same
+            # way, and answers with a no-op success carrying no rows. That is
+            # the contract `test_empty_system` pins, and it is the same answer
+            # the `sympy` compiler's observed-only path gives. Refusing here
+            # would make an empty document's verdict depend on which compiler
+            # built it, which is exactly what naming a compiler is supposed to
+            # stop.
+            return _simulate_observeds_only(flat, build, tspan, saveat=saveat, callback=callback)
         shapes = build.shapes
         state_names = build.state_names
         state_layout = build.state_layout
@@ -3343,6 +3607,17 @@ def _simulate_with_numpy(
                         y=y_out[:, 0],
                         t=float(t_out[0]),
                         index_sets=flat.index_sets,
+                        # The loader/const ARRAY scope, bound here as it is in
+                        # the per-step right-hand side. Without it an observed
+                        # whose body gathers an injected array cannot resolve at
+                        # output time, and the tolerant `except` below then drops
+                        # every observed row for a reason that has nothing to do
+                        # with the observeds — silently, since the recovery is
+                        # cosmetic. It also made this pass reach the per-cell walk
+                        # on a document whose right-hand side does not, which a
+                        # strict `native` reads (correctly, given what it was
+                        # handed) as a refusal.
+                        input_arrays=loader_arrays if loader_arrays is not None else {},
                         derived_extents=build.derived_extents,
                         join_key_buffers=build.join_key_buffers,
                         join_key_index_sets=build.join_key_index_sets,
@@ -3380,6 +3655,8 @@ def _simulate_with_numpy(
                             y=y_out[:, j],
                             t=float(t_out[j]),
                             index_sets=flat.index_sets,
+                            # See the note on the state-free branch above.
+                            input_arrays=loader_arrays if loader_arrays is not None else {},
                             derived_rings=dict(build.static_derived_rings),
                             derived_extents=build.derived_extents,
                             join_key_buffers=build.join_key_buffers,

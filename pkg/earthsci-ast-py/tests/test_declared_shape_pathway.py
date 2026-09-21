@@ -1,23 +1,27 @@
 """A DECLARED ``shape`` is what makes a variable an array — not the spelling of
-its defining equation (issue #231).
+its defining equation (issue #231), and no longer what decides which machinery
+builds the document either.
 
-``_choose_pathway`` used to read array-ness out of EQUATION CONTENT alone: a
-``providers`` / ``const_arrays`` injection, a ``loader_fields`` seam, or an
-``index`` / ``faq`` node somewhere in an equation. A
-document whose only array-ness is a declared ``shape`` — a bare whole-array
-``D(theta) ~ 1`` over ``"shape": ["lev"]``, with no array op anywhere — routed
-to the SCALAR (SymPy) pathway, where the shaped state got no cells at all and a
-``coords`` assertion could not find it. Rewriting the identical semantics in the
-``faq`` spelling routed to the array pathway and worked, so the SPELLING,
-not the model, decided the answer.
+The defect these tests were written for: the content-based router read
+array-ness out of EQUATION CONTENT alone, so a document whose only array-ness is a declared
+``shape`` — a bare whole-array ``D(theta) ~ 1`` over ``"shape": ["lev"]``, with
+no array op anywhere — went to the SCALAR (SymPy) pathway, where the shaped
+state got no cells at all and a ``coords`` assertion could not find it. The
+identical semantics in the ``faq`` spelling went to the array pathway and
+worked, so the SPELLING, not the model, decided the answer.
 
-esm-spec §6.3 makes ``shape`` — "the ordered list of index-set names the
-variable is arrayed over" — the authoritative statement of array-ness, and §11
-already treats it as authoritative over usage inference inside the array build
-(``_build_numpy_rhs`` resolves declared shapes against the ``index_sets``
-registry before it lays out the state vector). These tests pin the routing at
-the same authority, including the two cases the arm must NOT change: a shape it
-cannot resolve, and a genuinely scalar document.
+The router is now gone. ``API_SPEC.md`` §5.8 makes the choice of machinery the
+caller's (``compiler=``) and esm-libraries-spec §2.5.10 forbids a binding
+switching strategy inside ``native`` on document content at all, so the defect's
+whole CLASS is closed: every document here builds with the same vectorized NumPy
+machinery, whatever its shape declarations say. These tests keep the two claims
+that outlive the router — a declared ``shape`` gives the variable real CELLS in
+the layout, and the two spellings produce the same number — and add the one the
+new rule brings: a scalar document and a shaped one are built alike.
+
+``_declares_resolvable_shape`` survives as the authority ``compiler="sympy"``
+refuses an array document on, which is the one place array-ness still selects
+anything, so its unit coverage stays.
 
 The coverage is deliberately Python-LOCAL rather than a shared conformance
 fixture: the bare whole-array spelling is not supported by every binding today
@@ -202,16 +206,15 @@ def _write(tmp_path, doc, name):
     return str(path)
 
 
-def test_bare_whole_array_derivative_over_a_declared_shape_routes_to_the_array_pathway(tmp_path):
-    """The issue's reproducer: ``pathway`` was ``"scalar"``, and the shaped
-    state had no cells at all."""
+def test_bare_whole_array_derivative_over_a_declared_shape_lays_out_as_an_array(tmp_path):
+    """The issue's reproducer: the shaped state had no cells at all."""
     path = _write(tmp_path, BARE, "bare.esm.json")
 
     prob = esm_problem(path, (0.0, 1.0))
-    assert prob.pathway == "array"
+    assert prob.compiler == "native"
 
-    # The state really is arrayed now — four cells, one per `lev`, not one
-    # scalar slot. This is what the `coords` assertion needs to exist.
+    # The state really is arrayed — four cells, one per `lev`, not one scalar
+    # slot. This is what the `coords` assertion needs to exist.
     assert prob.build is not None
     layout = prob.build.state_layout["Column.theta"]
     assert layout.stop - layout.start == 4
@@ -230,13 +233,15 @@ def test_the_bare_spelling_passes_its_inline_coords_assertion(tmp_path):
 
 
 def test_the_bare_and_aggregate_spellings_agree(tmp_path):
-    """Identical semantics, two spellings: both route to the array pathway and
-    produce the same number. The spelling must not decide the answer."""
+    """Identical semantics, two spellings: built by the same machinery, and the
+    same number comes out. The spelling must not decide the answer."""
     bare = _write(tmp_path, BARE, "bare.esm.json")
     agg = _write(tmp_path, AGGREGATE, "agg.esm.json")
 
-    assert esm_problem(bare, (0.0, 1.0)).pathway == "array"
-    assert esm_problem(agg, (0.0, 1.0)).pathway == "array"
+    bare_prob = esm_problem(bare, (0.0, 1.0))
+    agg_prob = esm_problem(agg, (0.0, 1.0))
+    assert bare_prob.compiler == agg_prob.compiler == "native"
+    assert bare_prob.engine == agg_prob.engine
 
     (bare_result,) = run_inline_tests(bare)
     (agg_result,) = run_inline_tests(agg)
@@ -246,14 +251,15 @@ def test_the_bare_and_aggregate_spellings_agree(tmp_path):
 
 
 def test_a_shaped_parameter_with_inline_array_data_binds_on_the_bare_spelling(tmp_path):
-    """The related symptom: the scalar pathway refused the §6.3 inline array
-    data with ``carries inline ARRAY data ... which this pathway cannot bind``.
-    Routing on the declared shape puts the document on the pathway that binds
-    it, and each cell integrates its own rate."""
+    """The related symptom: the SymPy tier refused the §6.3 inline array data
+    with ``carries inline ARRAY data ... which this pathway cannot bind``. The
+    vectorized NumPy machinery binds it, and each cell integrates its own
+    rate — and under a strict `native` that machinery is what every document
+    gets, so the symptom has nowhere left to occur."""
     path = _write(tmp_path, BARE_INLINE_ARRAY_PARAM, "inline.esm.json")
 
     prob = esm_problem(path, (0.0, 1.0))
-    assert prob.pathway == "array"
+    assert prob.build is not None
 
     sol = solve(prob)
     assert sol.retcode.name == "Success", sol
@@ -284,16 +290,39 @@ def test_an_unresolvable_declared_shape_is_not_a_routing_signal_and_is_refused(t
         esm_problem(path, (0.0, 1.0))
 
 
-def test_a_document_with_no_shape_anywhere_still_routes_to_the_scalar_pathway(tmp_path):
-    """The lambdified SymPy pathway is still where a scalar-only system goes."""
+def test_a_scalar_document_and_a_shaped_one_are_built_by_the_same_machinery(tmp_path):
+    """The rule that replaced the router (esm-libraries-spec §2.5.10).
+
+    A binding "MUST NOT switch strategy inside ``native`` on document content: a
+    scalar document and a gridded one are built by the same machinery, so that
+    what ran is a property of the name and not of the input". That is the whole
+    defect class this file was opened for, closed at the root rather than at one
+    of its symptoms: there is no longer a content test that could send these two
+    documents to different engines.
+    """
+    plain = esm_problem(_write(tmp_path, PLAIN_SCALAR, "plain.esm.json"), (0.0, 1.0))
+    shaped = esm_problem(_write(tmp_path, BARE, "bare.esm.json"), (0.0, 1.0))
+
+    assert plain.compiler == shaped.compiler == "native"
+    assert plain.engine == shaped.engine == "array"
+    assert plain.build is not None and shaped.build is not None
+    assert plain.scalar_build is None and shaped.scalar_build is None
+
+
+def test_the_lambdified_scalar_form_is_still_reachable_by_name(tmp_path):
+    """`compiler="sympy"` is where the lambdified scalar right-hand side went:
+    still available, now asked for rather than inferred."""
     path = _write(tmp_path, PLAIN_SCALAR, "plain.esm.json")
 
-    assert esm_problem(path, (0.0, 1.0)).pathway == "scalar"
+    prob = esm_problem(path, (0.0, 1.0), compiler="sympy")
+    assert prob.engine == "scalar"
+    assert prob.scalar_build is not None
 
 
 def test_the_shape_arm_reads_states_parameters_and_observeds(tmp_path):
-    """``_declares_resolvable_shape`` is the unit under the routing arm; every
-    §6.3 variable role carries ``shape``, so it consults all three maps."""
+    """``_declares_resolvable_shape`` is the unit that now decides whether
+    ``compiler="sympy"`` refuses a document as arrayed; every §6.3 variable role
+    carries ``shape``, so it consults all three maps."""
     from earthsci_ast.flatten import flatten
     from earthsci_ast.problem import _declares_resolvable_shape
 
@@ -314,11 +343,11 @@ def test_the_shape_arm_reads_states_parameters_and_observeds(tmp_path):
     )
 
 
-def test_an_observed_only_declared_shape_routes_AND_lays_out_as_an_array(tmp_path):
-    """Routing and layout must read the SAME authority.
+def test_an_observed_only_declared_shape_lays_out_as_an_array(tmp_path):
+    """An OBSERVED's declared ``shape`` is authoritative over usage inference.
 
-    ``_declares_resolvable_shape`` sends this document to the array pathway on
-    the strength of an OBSERVED's declared ``shape``, so ``_build_numpy_rhs``
+    ``_declares_resolvable_shape`` reads this document as arrayed on the
+    strength of an OBSERVED's declared ``shape``, so ``_build_numpy_rhs``
     has to honour that same declaration: usage inference sees a whole-array body
     (``flux = c * 2``, no ``index`` anywhere) and would give the observed no
     extent at all, which is the under-report §11 makes the declaration
@@ -328,8 +357,6 @@ def test_an_observed_only_declared_shape_routes_AND_lays_out_as_an_array(tmp_pat
     path = _write(tmp_path, OBSERVED_ONLY_SHAPE, "observed_only.esm.json")
 
     prob = esm_problem(path, (0.0, 1.0))
-    assert prob.pathway == "array"
-
     assert prob.build is not None
     assert prob.build.shapes["Column.flux"] == (4,)
     # The scalar state stays scalar — the declaration is per variable, not a

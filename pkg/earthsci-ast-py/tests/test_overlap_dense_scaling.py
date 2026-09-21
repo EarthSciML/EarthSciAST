@@ -22,6 +22,15 @@ compares EXACTLY (``==``), not approximately — the driven sequence is an
 order-preserving subsequence of the filtered full product, so the ⊕-reduction is
 bit-identical, and that is the property the 1e-12 cross-language tolerance rests
 on.
+
+Every build here names ``compiler="interpreter"``, because a gate-driven
+enumeration IS the per-cell path: the gate decides which tuples exist rather
+than masking a dense box, so there is no whole-box tier for it and the strict
+``native`` default refuses these documents by design (``API_SPEC.md`` §5.8, and
+the census's §2.1 overlap row). Building the whole ``out × reduce`` box and
+masking it is precisely the O(N_c·N_r) work this driver exists to remove, so the
+refusal is a correct statement about the binding, not a gap to paper over here —
+what this file measures is the driver, and the reference is where it runs.
 """
 
 from __future__ import annotations
@@ -180,7 +189,9 @@ def test_mirrored_dense_aggregate_is_gate_driven(geom):
     ca = {f"Mirror.{k}": geom[k] for k in ("X", "Y", "W", "S", "E", "N")}
 
     broad_phase.ENUM_VISITS[0] = 0
-    prep = esm_problem(doc, (0.0, 1.0), const_arrays=ca, model_name="Mirror")
+    prep = esm_problem(
+        doc, (0.0, 1.0), const_arrays=ca, model_name="Mirror", compiler="interpreter"
+    )
     got = observed_field(prep, "P")
     visits = broad_phase.ENUM_VISITS[0]
 
@@ -277,7 +288,13 @@ def test_forward_rewritten_binning_aggregate_is_gate_driven(geom):
     # `prepare` runs the SAME rewrite itself (and aliases the bare authored
     # const-array names onto the flattened spellings while doing it).
     prep = esm_problem(
-        doc, (0.0, 1.0), const_arrays=ca, model_name="Fwd", inspect=insp, pushdown_rewrite=True
+        doc,
+        (0.0, 1.0),
+        const_arrays=ca,
+        model_name="Fwd",
+        inspect=insp,
+        pushdown_rewrite=True,
+        compiler="interpreter",
     )
     field = observed_field(prep, "Emis")
     visits = broad_phase.ENUM_VISITS[0]
@@ -362,7 +379,7 @@ def test_output_position_with_no_candidate_is_the_semiring_identity():
         "Fill.E": np.array([1.0, 2.0]),
         "Fill.N": np.array([1.0, 1.0]),
     }
-    prep = esm_problem(doc, (0.0, 1.0), const_arrays=ca, model_name="Fill")
+    prep = esm_problem(doc, (0.0, 1.0), const_arrays=ca, model_name="Fill", compiler="interpreter")
     got = observed_field(prep, "P")
     assert np.array_equal(got, np.array([7.0, 8.0, 0.0]))
 
@@ -429,7 +446,7 @@ def test_scalar_reduction_drives_from_the_candidate_pairs(geom):
     ca = {f"Pairs.{k}": geom[k] for k in ("X", "Y", "W", "S", "E", "N")}
 
     broad_phase.ENUM_VISITS[0] = 0
-    prep = esm_problem(doc, (0.0, 1.0), const_arrays=ca, model_name="Pairs")
+    prep = esm_problem(doc, (0.0, 1.0), const_arrays=ca, model_name="Pairs", compiler="interpreter")
     got = observed_field(prep, "T")
     visits = broad_phase.ENUM_VISITS[0]
 
@@ -531,7 +548,10 @@ def test_driven_reduction_is_bit_identical_to_the_membership_tested_product(monk
     }
 
     broad_phase.ENUM_VISITS[0] = 0
-    driven = observed_field(esm_problem(doc, (0.0, 1.0), const_arrays=ca, model_name="Ord"), "B")
+    driven = observed_field(
+        esm_problem(doc, (0.0, 1.0), const_arrays=ca, model_name="Ord", compiler="interpreter"),
+        "B",
+    )
     driven_visits = broad_phase.ENUM_VISITS[0]
 
     # Force the planner to decline: the SAME node now walks the full product and
@@ -539,7 +559,10 @@ def test_driven_reduction_is_bit_identical_to_the_membership_tested_product(monk
     real_plan = broad_phase.overlap_drive_plan
     monkeypatch.setattr(broad_phase, "overlap_drive_plan", lambda *a, **k: ("none",))
     broad_phase.ENUM_VISITS[0] = 0
-    undriven = observed_field(esm_problem(doc, (0.0, 1.0), const_arrays=ca, model_name="Ord"), "B")
+    undriven = observed_field(
+        esm_problem(doc, (0.0, 1.0), const_arrays=ca, model_name="Ord", compiler="interpreter"),
+        "B",
+    )
     undriven_visits = broad_phase.ENUM_VISITS[0]
     monkeypatch.setattr(broad_phase, "overlap_drive_plan", real_plan)
 

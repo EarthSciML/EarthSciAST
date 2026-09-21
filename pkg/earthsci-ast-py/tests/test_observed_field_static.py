@@ -4,10 +4,13 @@ A document that declares no differential equations has nothing to integrate,
 but its whole content is its observed graph — and reading that back by name is
 what ``observed_field`` is for. Two properties are pinned here:
 
-1. **It works with no options set, on BOTH pathways.** ``_choose_pathway``
-   routes a state-free document to the scalar engine or the NumPy one depending
-   on content the caller did not choose (an injected ``const_arrays`` is enough
-   to switch it), so the same document must answer the same way either way.
+1. **It works under every compiler that can build the document.** A state-free
+   document used to reach the scalar engine or the NumPy one on content the
+   caller did not choose — an injected ``const_arrays`` was enough to switch it.
+   ``API_SPEC.md`` §5.8 makes that choice the caller's, which turns this file's
+   premise from "whichever engine the router picked" into the better claim it
+   was reaching for: the compilers AGREE. Each parametrized test below names
+   the compiler instead of nudging a router into it.
 
 2. **The name-resolution rule.** A bare name resolves only on a
    SINGLE-component document. On a multi-component one it is refused with the
@@ -40,18 +43,20 @@ def mogi_oracle() -> tuple[float, float]:
     return (1.0 - nu) * dv * r / denom, (1.0 - nu) * dv * d / denom
 
 
-# ``const_arrays`` is the cheapest way to force ``_choose_pathway`` onto the
-# NumPy engine without changing the document; the array is never referenced.
-PATHWAYS = [
-    pytest.param({}, "scalar", id="scalar"),
-    pytest.param({"const_arrays": {"_unused": np.zeros(2)}}, "array", id="array"),
+#: The two compilers that can build a state-free scalar document: the strict
+#: default's vectorized NumPy, and the lambdified SymPy form. They must answer
+#: identically, which is what makes `observed_field` a property of the document.
+COMPILERS = [
+    pytest.param("native", "array", id="native"),
+    pytest.param("sympy", "scalar", id="sympy"),
 ]
 
 
-@pytest.mark.parametrize("kwargs,expected_pathway", PATHWAYS)
-def test_single_component_answers_both_spellings(kwargs, expected_pathway):
-    prob = esm_problem(str(ONE_COMPONENT), (0.0, 1.0), **kwargs)
-    assert prob.pathway == expected_pathway
+@pytest.mark.parametrize("compiler,expected_engine", COMPILERS)
+def test_single_component_answers_both_spellings(compiler, expected_engine):
+    prob = esm_problem(str(ONE_COMPONENT), (0.0, 1.0), compiler=compiler)
+    assert prob.compiler == compiler
+    assert prob.engine == expected_engine
     assert not prob.flat.state_variables
 
     ur, uz = mogi_oracle()
@@ -62,10 +67,10 @@ def test_single_component_answers_both_spellings(kwargs, expected_pathway):
     assert observed_field(prob, "uz") == pytest.approx(uz)
 
 
-@pytest.mark.parametrize("kwargs,expected_pathway", PATHWAYS)
-def test_bare_name_refused_on_a_multi_component_document(kwargs, expected_pathway):
-    prob = esm_problem(str(TWO_COMPONENT), (0.0, 1.0), **kwargs)
-    assert prob.pathway == expected_pathway
+@pytest.mark.parametrize("compiler,expected_engine", COMPILERS)
+def test_bare_name_refused_on_a_multi_component_document(compiler, expected_engine):
+    prob = esm_problem(str(TWO_COMPONENT), (0.0, 1.0), compiler=compiler)
+    assert prob.engine == expected_engine
 
     assert observed_field(prob, "Sites.North.u") == pytest.approx(6.0)
     assert observed_field(prob, "Sites.North.ur") == pytest.approx(3.0)
@@ -101,15 +106,14 @@ def test_parameter_overrides_reach_the_static_fields():
     assert observed_field(prob, "MogiModel.ur") == pytest.approx(2.0 * ur)
 
 
-@pytest.mark.parametrize("kwargs,expected_pathway", PATHWAYS)
-def test_saveat_reads_the_same_on_both_state_free_pathways(kwargs, expected_pathway):
-    """One ``saveat``, one answer, whichever engine a state-free document
-    routes to.
+@pytest.mark.parametrize("compiler,expected_engine", COMPILERS)
+def test_saveat_reads_the_same_under_both_compilers(compiler, expected_engine):
+    """One ``saveat``, one answer, whichever compiler built the document.
 
-    ``_choose_pathway`` sends a document with no state to the scalar engine or
-    to the NumPy one on content the caller did not choose, so the two must read
-    a ``saveat`` identically or the request means different things for reasons
-    the document cannot see. They did not: the array engine's observed-only
+    A state-free document is answered by the NumPy machinery under ``native``
+    and by the lambdified SymPy form under ``sympy``, so the two must read a
+    ``saveat`` identically or the request means different things for reasons the
+    document cannot see. They did not: the array engine's observed-only
     path read the sequence literally, while everything else in this package
     resolves it through ``_saveat_times`` — which reads a ONE-element positive
     sequence as an output STEP measured from the span start (API_SPEC §4) and
@@ -120,8 +124,8 @@ def test_saveat_reads_the_same_on_both_state_free_pathways(kwargs, expected_path
     assertions below fails — the first with the single node ``[2.0]``, the
     second with the out-of-span times ``[-1.0, 3.0, 99.0]`` returned as asked.
     """
-    prob = esm_problem(str(ONE_COMPONENT), (0.0, 6.0), **kwargs)
-    assert prob.pathway == expected_pathway
+    prob = esm_problem(str(ONE_COMPONENT), (0.0, 6.0), compiler=compiler)
+    assert prob.engine == expected_engine
     assert not prob.flat.state_variables
 
     # A one-element positive sequence is an output STEP from ``tspan[0]``.
@@ -140,10 +144,11 @@ def test_saveat_reads_the_same_on_both_state_free_pathways(kwargs, expected_path
     np.testing.assert_allclose(stepped["MogiModel.ur"], [ur] * 4, rtol=1e-12)
 
 
-def test_solve_still_samples_the_observed_graph_on_the_scalar_pathway():
-    """The scalar engine's observed-only path is unchanged by the name rule:
-    it reports Success over a sampled grid, keyed by FLATTENED name."""
-    sol = solve(esm_problem(str(TWO_COMPONENT), (0.0, 1.0)))
+@pytest.mark.parametrize("compiler,expected_engine", COMPILERS)
+def test_solve_still_samples_the_observed_graph(compiler, expected_engine):
+    """The observed-only run is unchanged by the name rule under either
+    compiler: Success over a sampled grid, keyed by FLATTENED name."""
+    sol = solve(esm_problem(str(TWO_COMPONENT), (0.0, 1.0), compiler=compiler))
     assert sol.retcode == ReturnCode.Success
     assert sol.vars == ["Sites.North.u", "Sites.North.ur", "Sites.South.u"]
     assert sol["Sites.South.u"][0] == pytest.approx(35.0)

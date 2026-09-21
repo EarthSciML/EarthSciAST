@@ -38,6 +38,7 @@ from typing import Any, Callable
 import numpy as np
 
 from . import broad_phase, op_registry, recurrence
+from . import compiler as _compiler
 from .cadence import Partition
 from .cadence import partition as _partition_model
 from .error_handling import RECURRENCE_NOT_WELLFOUNDED, UNEVALUABLE_OPERATOR
@@ -1690,7 +1691,7 @@ def _eval_faq_vectorized(
     all_syms: frozenset = frozenset(out_syms) | frozenset(reduce_syms)
     decomp = _decompose_body_as_scaled_product(body, all_syms)
     if decomp is None:
-        return None
+        return _decline("einsum", "the body is not a scaled product of bare-symbol `index` gathers")
     coeff, index_terms = decomp
 
     if not index_terms:
@@ -1709,7 +1710,11 @@ def _eval_faq_vectorized(
     # Assign einsum letter labels (output symbols first, then reduction).
     sym_order: list[str] = list(out_syms) + [s for s in reduce_syms if s not in out_syms]
     if len(sym_order) > _EINSUM_MAX_LABELS:
-        return None
+        return _decline(
+            "einsum",
+            f"{len(sym_order)} distinct index symbols exceeds the einsum alphabet "
+            f"({_EINSUM_MAX_LABELS})",
+        )
     sym_letter: dict[str, str] = {s: chr(ord("a") + i) for i, s in enumerate(sym_order)}
 
     # Build 0-based-sliced arrays for each index term.
@@ -1719,7 +1724,8 @@ def _eval_faq_vectorized(
 
     for var_name, var_syms in index_terms:
         if len(set(var_syms)) != len(var_syms):
-            return None  # Diagonal access — fall back
+            # Diagonal access — fall back.
+            return _decline("einsum", f"{var_name!r} is gathered twice on the same index symbol")
         # Resolution order MIRRORS `_resolve_symbol`: a materialized derived ring
         # or an injected input array wins over state/param, so the fast path and
         # the scalar path can never disagree about which array a name denotes.
@@ -1739,21 +1745,26 @@ def _eval_faq_vectorized(
             arr = _view_state_array(var_name, ctx)
         elif var_name in ctx.param_values:
             if var_syms:
-                return None
+                return _decline("einsum", f"the parameter {var_name!r} is subscripted")
             effective_coeff *= ctx.param_values[var_name]
             continue
         elif var_name in ctx.observed_values:
             if var_syms:
-                return None
+                return _decline("einsum", f"the scalar observed {var_name!r} is subscripted")
             effective_coeff *= ctx.observed_values[var_name]
             continue
         else:
-            return None
+            return _decline(
+                "einsum", f"{var_name!r} resolves to no array, state, parameter or observed"
+            )
         if arr.ndim == 0 and not var_syms:
             effective_coeff *= float(arr)
             continue
         if arr.ndim != len(var_syms):
-            return None
+            return _decline(
+                "einsum",
+                f"{var_name!r} has rank {arr.ndim} but is gathered with {len(var_syms)} subscripts",
+            )
         idx_cols = [np.asarray(sym_0based[s], dtype=int) for s in var_syms]
         arr_slice = arr[idx_cols[0]] if len(idx_cols) == 1 else arr[np.ix_(*idx_cols)]
         sliced.append(np.asarray(arr_slice, dtype=float))
@@ -1765,7 +1776,9 @@ def _eval_faq_vectorized(
             n_red *= len(sym_0based[s])
         if reducer == "+":
             return np.full(out_shape, effective_coeff * n_red, dtype=float)
-        return None
+        return _decline(
+            "einsum", f"every factor folded to a coefficient and ⊕ {reducer!r} is not '+'"
+        )
 
     out_spec = "".join(sym_letter[s] for s in out_syms)
 
@@ -1778,7 +1791,10 @@ def _eval_faq_vectorized(
         # For */max/min: build outer product over all symbols in terms, then reduce.
         # Scalar coefficient must be 1 for non-additive reducers to distribute correctly.
         if effective_coeff != 1.0:
-            return None
+            return _decline(
+                "einsum",
+                f"⊕ is {reducer!r} and the scalar coefficient is not 1, so it would not distribute",
+            )
         all_syms_in_terms: list[str] = []
         for spec in term_specs:
             for c in spec:
@@ -1796,12 +1812,14 @@ def _eval_faq_vectorized(
             return np.asarray(np.max(combined, axis=red_axes), dtype=float)
         if reducer == "min":
             return np.asarray(np.min(combined, axis=red_axes), dtype=float)
-    except (NumpyInterpreterError, IndexError, ValueError, TypeError, KeyError):
+    except (NumpyInterpreterError, IndexError, ValueError, TypeError, KeyError) as exc:
         # Decline (→ None, fall back to the scalar loop) on the same narrow error
         # tuple every sibling fast path catches; an unexpected error propagates.
-        return None
+        return _decline("einsum", f"the einsum contraction raised {type(exc).__name__}: {exc}")
 
-    return None
+    return _decline(
+        "einsum", f"⊕ {reducer!r} is outside the '+', '*', 'max', 'min' this tier folds"
+    )
 
 
 def _bind_broadcast_range(
@@ -1858,6 +1876,36 @@ def _expand_reduce_ranges(resolved: dict[str, Any], reduce_syms: list[str]) -> l
     return [_expand_range(resolved[s]) for s in reduce_syms]
 
 
+def _decline(tier: str, reason: str) -> None:
+    """Record why ``tier`` could not take this aggregate, and decline.
+
+    Always returns ``None`` — the ladder's decline signal — so a tier declines
+    by writing ``return _decline("einsum", "...")``, and the reason reaches
+    :class:`earthsci_ast.compiler.CompilerReport` and, under ``native``, the
+    refusal that names the deepest one. A bare ``return None`` declines just as
+    well and says nothing, which is what would make the chain unreadable. A
+    no-op outside a :func:`earthsci_ast.compiler.use_policy` scope.
+    """
+    policy = _compiler.active_policy()
+    if policy is not None:
+        policy.decline(tier, reason)
+
+
+def _enter_per_cell(tier: str) -> None:
+    """A Python tree walk per output cell is about to start.
+
+    Under ``compiler='native'`` — whole-box vectorized NumPy for EVERY document
+    — it never does: this raises ``compiler_refused_rule`` naming the rule and
+    the deepest decline reason. Under every other compiler it records the
+    landing. Called at the entry of each per-cell evaluator rather than at the
+    ladder's exit, so the refusal precedes the first cell, and so a per-cell
+    evaluator reached by some path the dispatcher does not own is still covered.
+    """
+    policy = _compiler.active_policy()
+    if policy is not None:
+        policy.land_per_cell(tier)
+
+
 def _materialize_makearray_vectorized(
     ma: ExprNode,
     ctx: EvalContext,
@@ -1885,7 +1933,7 @@ def _materialize_makearray_vectorized(
     # shared under parents that name the box differently. A ``None`` entry
     # means that region declined; it stays on the compiled closure.
     region_fns: list | None = None
-    if allow_codegen and not _CODEGEN_DISABLE:
+    if allow_codegen and not _CODEGEN_DISABLE and not _compiler.every_tier_off():
         key = (tuple(out_syms), tuple(out_shape))
         cache = getattr(ma, "_cg_regions", None)
         if cache is None:
@@ -1957,7 +2005,7 @@ def _materialize_map(
     match or the vectorized evaluation does not produce the output shape.
     """
     if not out_syms or not out_shape:
-        return None
+        return _decline("map", "the node has no output symbols, or an empty output box")
     try:
         if (
             isinstance(body, ExprNode)
@@ -1980,8 +2028,11 @@ def _materialize_map(
         if res.shape == tuple(out_shape):
             return res
         return np.broadcast_to(res, tuple(out_shape)).astype(float)
-    except (NumpyInterpreterError, IndexError, ValueError, TypeError):
-        return None
+    except (NumpyInterpreterError, IndexError, ValueError, TypeError) as exc:
+        return _decline(
+            "map",
+            f"the body does not evaluate or broadcast over the box: {type(exc).__name__}: {exc}",
+        )
 
 
 # Combined out × reduce box cell cap for the broadcast contraction path; over
@@ -2047,16 +2098,20 @@ def _codegen_box_fn(
     is simply a cache miss and compiles its own specialization, never a stale
     binding. ``node`` is ``None`` where the caller cannot vouch for a cache
     home at all; those stay on the closure tier."""
-    if node is None or _CODEGEN_DISABLE:
-        return _compile_expr(body)
+    if node is None:
+        return _closure_box_fn(body, "the caller vouches for no cache home for this node")
+    if _CODEGEN_DISABLE or _compiler.every_tier_off():
+        return _closure_box_fn(body, "source codegen is off")
     if not dynamic:
         fn = getattr(node, attr, _MISSING)
         if fn is _MISSING:
             fn = _codegen_build(body, syms, range_lists)
             setattr(node, attr, fn)
-        return fn if fn is not None else _compile_expr(body)
+        return _codegen_or_closure(fn, body)
     if sum(len(r) for r in range_lists) > _CODEGEN_DYN_KEY_CAP:
-        return _compile_expr(body)
+        return _closure_box_fn(
+            body, f"the resolved box has more than {_CODEGEN_DYN_KEY_CAP} total range values"
+        )
     dyn_attr = attr + "_dyn"
     cache = getattr(node, dyn_attr, None)
     if cache is None:
@@ -2066,10 +2121,38 @@ def _codegen_box_fn(
     fn = cache.get(key, _MISSING)
     if fn is _MISSING:
         if len(cache) >= _CODEGEN_DYN_CAP:
-            return _compile_expr(body)
+            return _closure_box_fn(
+                body, f"this dynamic node has already compiled {_CODEGEN_DYN_CAP} box variants"
+            )
         fn = _codegen_build(body, syms, range_lists)
         cache[key] = fn
-    return fn if fn is not None else _compile_expr(body)
+    return _codegen_or_closure(fn, body)
+
+
+def _closure_box_fn(body: Expr, reason: str) -> Callable[[EvalContext], Any]:
+    """The compiled-closure box evaluator, recording why codegen was not used.
+
+    A codegen decline is a COST decline, never a refusal: the closure evaluates
+    the same body over the same whole box and answers identically. It is recorded
+    so the report says whether a rule's box body was specialized source or the
+    generic closure.
+    """
+    _decline("codegen", reason)
+    policy = _compiler.active_policy()
+    if policy is not None:
+        policy.note_codegen(False)
+    return _compile_expr(body)
+
+
+def _codegen_or_closure(fn: Any, body: Expr) -> Callable[[EvalContext], Any]:
+    """``fn`` if the emitter produced one, else the closure. ``None`` here is
+    the emitter's own decline, already cached on the node."""
+    if fn is None:
+        return _closure_box_fn(body, "the emitter declined this body")
+    policy = _compiler.active_policy()
+    if policy is not None:
+        policy.note_codegen(True)
+    return fn
 
 
 def _eval_faq_contraction_broadcast(
@@ -2107,8 +2190,10 @@ def _eval_faq_contraction_broadcast(
     array-bound index symbols, a shape mismatch — or a combined box over
     :data:`_CONTRACTION_BOX_CAP`.
     """
-    if _CONTRACT_DISABLE or not reduce_syms:
-        return None
+    if _CONTRACT_DISABLE:
+        return _decline("broadcast", "the whole-box contraction is off (ESS_NP_CONTRACT_DISABLE)")
+    if not reduce_syms:
+        return _decline("broadcast", "the node does not contract; the pure-map tier handles it")
     red_ranges_exp = _expand_reduce_ranges(resolved, reduce_syms)
     if any(len(r) == 0 for r in red_ranges_exp):
         # Empty contracted range: every cell reduces over nothing — the
@@ -2117,7 +2202,11 @@ def _eval_faq_contraction_broadcast(
     red_shape = tuple(len(r) for r in red_ranges_exp)
     total = int(np.prod(out_shape, dtype=np.int64)) * int(np.prod(red_shape, dtype=np.int64))
     if total > _CONTRACTION_BOX_CAP:
-        return None
+        return _decline(
+            "broadcast",
+            f"the combined out × reduce box is {total} cells, over the "
+            f"{_CONTRACTION_BOX_CAP}-cell materialization cap",
+        )
     ndim = len(out_syms) + len(reduce_syms)
     # Tier-1 codegen over the combined out × reduce box: the axis order below
     # (out symbols first, then the contracted symbols) is the order the baked
@@ -2137,15 +2226,18 @@ def _eval_faq_contraction_broadcast(
         for k, (s, r) in enumerate(zip(reduce_syms, red_ranges_exp)):
             _bind_broadcast_range(ctx, s, np.asarray(r, dtype=float), len(out_syms) + k, ndim)
         box = fn(ctx)
-    except (NumpyInterpreterError, IndexError, ValueError, TypeError, KeyError):
-        return None
+    except (NumpyInterpreterError, IndexError, ValueError, TypeError, KeyError) as exc:
+        return _decline(
+            "broadcast",
+            f"the body rejected array-bound index symbols: {type(exc).__name__}: {exc}",
+        )
     finally:
         ctx.locals = prev
     try:
         box = np.asarray(_require_real(box, "aggregate body"), dtype=float)
         box = np.broadcast_to(box, tuple(out_shape) + red_shape)
-    except (NumpyInterpreterError, ValueError, TypeError):
-        return None
+    except (NumpyInterpreterError, ValueError, TypeError) as exc:
+        return _decline("broadcast", f"the body's result will not broadcast to out × reduce: {exc}")
     acc: np.ndarray | None = None
     lead = (slice(None),) * len(out_shape)
     for red_idx in np.ndindex(*red_shape):  # last symbol fastest — `_cartesian` order
@@ -2251,30 +2343,40 @@ def _eval_faq_batched_leaf(
     control-flow leaves (interp / table lifts) by widening the leaf/kernel switch.
     """
     if reduce_syms or filter_expr is not None:
-        return None
+        return _decline(
+            "batched-leaf", "the node contracts or carries a filter; this tier is a pure map"
+        )
     if reducer != "+":  # sum_product ⊕; other semirings keep the scalar path
-        return None
+        return _decline(
+            "batched-leaf", f"⊕ is {reducer!r}, not the sum_product '+' this kernel computes"
+        )
     body = expr.expr
     if not (isinstance(body, ExprNode) and body.op == "polygon_intersection_area"):
-        return None
+        return _decline("batched-leaf", "the body is not a polygon_intersection_area leaf")
     if getattr(body, "manifold", None) != "planar" or len(body.args) != 2 or len(out_syms) != 2:
-        return None
+        return _decline(
+            "batched-leaf",
+            "the leaf is not a planar two-operand clip over exactly two output indices",
+        )
     ga = _batched_ring_gather(body.args[0], out_syms, ctx)
     gb = _batched_ring_gather(body.args[1], out_syms, ctx)
     if ga is None or gb is None:
-        return None
+        return _decline("batched-leaf", "an operand is not a per-cell `index` ring gather")
     arr_a, sym_a = ga
     arr_b, sym_b = gb
     axis_of = {s: k for k, s in enumerate(out_syms)}
     if sym_a == sym_b or sym_a not in axis_of or sym_b not in axis_of:
-        return None
+        return _decline(
+            "batched-leaf",
+            "both operands gather on one symbol, or a gathered symbol is not a box axis",
+        )
 
     try:
         sym_positions = {s: list(r) for s, r in zip(out_syms, out_ranges_exp)}
         gates = _resolve_join(expr, raw_ranges, sym_positions, ctx)
         mask = _join_admits_mask(gates, out_syms, out_ranges_exp, out_shape)
         if mask is None:
-            return None
+            return _decline("batched-leaf", "the equi-join does not code to a dense box mask")
         out = np.full(out_shape, empty_zero, dtype=float)
         positions = np.nonzero(mask)
         if positions[0].size == 0:
@@ -2284,14 +2386,16 @@ def _eval_faq_batched_leaf(
         base_b = arr_b[np.asarray(out_ranges_exp[ax_b], dtype=np.intp) - 1]
         batch_a = base_a[positions[ax_a]]
         batch_b = base_b[positions[ax_b]]
-    except (NumpyInterpreterError, IndexError, ValueError, TypeError):
-        return None
+    except (NumpyInterpreterError, IndexError, ValueError, TypeError) as exc:
+        return _decline(
+            "batched-leaf", f"the gather/mask construction raised {type(exc).__name__}: {exc}"
+        )
 
     from . import geometry
 
     areas = geometry.intersect_polygon_area_batch(batch_a, batch_b, "planar")
     if areas is None:
-        return None
+        return _decline("batched-leaf", "the batched clip kernel declined this batch shape")
     out[positions] = areas
     return out
 
@@ -2309,6 +2413,41 @@ def _join_has_overlap(expr: ExprNode) -> bool:
 
 
 def _eval_faq(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
+    """Evaluate a faq node, and let no unverified refusal out of it.
+
+    Under a strict ``native`` the ladder refuses the moment a per-cell walk is
+    reached. But a tier also declines when the body simply RAISES — an
+    unresolved symbol, an out-of-range gather, an ``index`` applied to a scalar —
+    and then the refusal blames the compiler for a fault that is not its. The
+    per-cell walk would not have answered either; it would have raised the same
+    error, which is the diagnostic the caller needs.
+
+    So a refusal is a claim that has to be earned: re-run the node once,
+    non-strictly, and let it stand only if the walk SUCCEEDS. If the walk raises,
+    that error is the truth and it propagates instead. The re-run costs one
+    whole-node evaluation, on the refusal path only, for a build that is about to
+    fail either way.
+
+    ``verified`` marks the node that was re-run, so an enclosing aggregate does
+    not evaluate itself again over a refusal an inner one has already settled.
+    """
+    policy = _compiler.active_policy()
+    if policy is None or not policy.strict:
+        return _eval_faq_dispatch(expr, ctx)
+    try:
+        return _eval_faq_dispatch(expr, ctx)
+    except _compiler.CompilerRefusedRuleError as refusal:
+        if refusal.verified:
+            raise
+        refusal.verified = True
+        with _compiler.use_policy(policy.verifying()):
+            # Raises the real error, or returns — in which case the walk works
+            # and the refusal below is a true statement about the compiler.
+            _eval_faq_dispatch(expr, ctx)
+        raise
+
+
+def _eval_faq_dispatch(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
     """Evaluate a faq body over its output index box.
 
     Returns an ndarray whose shape is the cartesian product of the ranges for
@@ -2427,7 +2566,20 @@ def _eval_faq(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
     # including for a nested aggregate INSIDE a recurrence body, which reads the
     # partially built array just as the outer body does. A ragged contraction
     # keeps its own (already per-output-cell, non-reordering) path below.
+    # One aggregate node enters the ladder: the decline chain starts empty, and
+    # whichever tier answers below carries it into the compiler report.
+    policy = _compiler.active_policy()
+    if policy is not None:
+        policy.begin_node()
+
     if ctx.recur is not None and not ragged_reduce:
+        if policy is not None:
+            policy.decline(
+                "dispatcher",
+                "a recurrence sweep: its cells are not independent, so CONFORMANCE_SPEC "
+                "§5.19.2 forbids every reordering, batching and prefix-accumulating path "
+                "— the per-cell walk is the only one whose term order is §4.3.1's",
+            )
         return _eval_faq_scalar(
             expr,
             ctx,
@@ -2440,6 +2592,46 @@ def _eval_faq(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
             reducer,
             empty_zero,
             filter_expr,
+        )
+
+    # `compiler="interpreter"`: every fast tier off. The reference evaluator's
+    # whole value is being a SECOND implementation of the answer the fast tiers
+    # produce (esm-libraries-spec §2.5.10), so it is selected here rather than
+    # being reached by letting each tier decline in turn — a tier that happened
+    # to accept would make the oracle the thing it is checking. The ragged and
+    # join/filter DISPATCH below is semantics, not speed, so it still applies.
+    if policy is not None and policy.every_tier_off:
+        policy.decline("interpreter", "compiler='interpreter': every fast tier is off")
+        if ragged_reduce:
+            if join_clauses or filter_expr is not None:
+                raise NumpyInterpreterError(
+                    "aggregate 'join'/'filter' with a ragged contracted range is not "
+                    "supported; equi-join keys are dense interval / categorical index "
+                    "sets (RFC semiring-faq-unified-ir §5.3)"
+                )
+            return _eval_faq_ragged(
+                expr,
+                ctx,
+                out_syms,
+                out_ranges_exp,
+                out_shape,
+                reduce_syms,
+                resolved,
+                reducer,
+                empty_zero,
+            )
+        return _eval_faq_scalar(
+            expr,
+            ctx,
+            out_syms,
+            out_ranges_exp,
+            out_shape,
+            reduce_syms,
+            resolved,
+            raw_ranges,
+            reducer,
+            empty_zero,
+            filter_expr if (join_clauses or filter_expr is not None) else None,
         )
 
     # Batched vectorized fast path for a fused geometry-leaf pure map — the planar
@@ -2461,6 +2653,8 @@ def _eval_faq(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
             filter_expr,
         )
         if batched is not None:
+            if policy is not None:
+                policy.land("batched-leaf")
             return batched
 
     if join_clauses or filter_expr is not None:
@@ -2486,6 +2680,8 @@ def _eval_faq(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
             empty_zero,
         )
         if scan is not None:
+            if policy is not None:
+                policy.land("prefix-scan")
             return scan
         # Cached constant-geometry OPERATOR path (#3): a join-gated sum_product
         # shaped like the regrid APPLY factors into a reusable weight operator
@@ -2510,6 +2706,8 @@ def _eval_faq(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
             )
         )
         if op is not None:
+            if policy is not None:
+                policy.land("operator-cache")
             return op
         # The whole (out × reduce) box + its filter and/or equi-join mask evaluate
         # in one vectorized pass, collapsing the dense per-(i,j) Python loop of the
@@ -2537,6 +2735,8 @@ def _eval_faq(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
             )
         )
         if vec is not None:
+            if policy is not None:
+                policy.land("gated-reduce")
             return vec
         return _eval_faq_scalar(
             expr,
@@ -2553,6 +2753,13 @@ def _eval_faq(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
         )
 
     if ragged_reduce:
+        if policy is not None:
+            policy.decline(
+                "dispatcher",
+                "a ragged contracted range: the bound depends on the enclosing output "
+                "index through its `offsets` factor, so there is no dense box to build "
+                "and no whole-box tier is attempted",
+            )
         return _eval_faq_ragged(
             expr,
             ctx,
@@ -2583,7 +2790,11 @@ def _eval_faq(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
             expr.expr, ctx, out_syms, reduce_syms, sym_0based, out_shape, reducer
         )
         if fast is not None:
+            if policy is not None:
+                policy.land("einsum")
             return fast
+    elif policy is not None:
+        policy.decline("einsum", f"⊗ is {otimes!r}, not the × this tier factors the body into")
 
     # Tier-1 codegen: a node whose dispatch prep is cached (all ranges dense
     # literals) has a STATIC box and bakes its binding into one generated
@@ -2613,6 +2824,8 @@ def _eval_faq(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
             dynamic=cg_dynamic,
         )
         if unrolled is not None:
+            if policy is not None:
+                policy.land("broadcast")
             return unrolled
 
     # Pure-map (no contraction) vectorized fast path: stencils — affine
@@ -2625,6 +2838,8 @@ def _eval_faq(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
             expr.expr, ctx, out_syms, out_ranges_exp, out_shape, node=expr, dynamic=cg_dynamic
         )
         if mapped is not None:
+            if policy is not None:
+                policy.land("map")
             return mapped
 
     # Scalar fallback: the general scalar evaluator with no join/filter gate — one
@@ -2709,6 +2924,7 @@ def _eval_faq_ragged(
     point — the named, first-class form of the per-parent dynamic bound (RFC
     §5.2). Non-ragged reduce ranges in the same node expand statically.
     """
+    _enter_per_cell("ragged")
     out = np.zeros(out_shape, dtype=float)
     for multi_idx, local_binding in _iter_output_cells(out_syms, out_ranges_exp, out_shape):
         parent_binding = dict(ctx.locals)
@@ -3485,13 +3701,21 @@ def _eval_faq_operator_cached(
     """
     op_cache = ctx.op_cache
     if op_cache is None or not ctx.invariant_names:
-        return None
+        return _decline(
+            "operator-cache", "operator caching is off, or nothing is known loader-invariant"
+        )
     if reducer != "+" or filter_expr is not None or not reduce_syms:
-        return None
+        return _decline(
+            "operator-cache", "⊕ is not '+', or the node carries a filter, or it does not contract"
+        )
 
     all_syms = list(out_syms) + list(reduce_syms)
     if len(all_syms) > _EINSUM_MAX_LABELS:
-        return None
+        return _decline(
+            "operator-cache",
+            f"{len(all_syms)} distinct index symbols exceeds the einsum alphabet "
+            f"({_EINSUM_MAX_LABELS})",
+        )
     all_ranges_exp = list(out_ranges_exp) + _expand_reduce_ranges(resolved, reduce_syms)
     combined_shape = tuple(len(r) for r in all_ranges_exp)
     if 0 in out_shape:
@@ -3499,7 +3723,9 @@ def _eval_faq_operator_cached(
 
     decomp = _decompose_body_as_scaled_product(expr.expr, frozenset(all_syms))
     if decomp is None:
-        return None
+        return _decline(
+            "operator-cache", "the body is not a scaled product of bare-symbol `index` gathers"
+        )
     coeff, index_terms = decomp
 
     sym_0based: dict[str, list[int]] = {
@@ -3523,7 +3749,10 @@ def _eval_faq_operator_cached(
     # geometry reduce (no varying factor) is already materialized once in the
     # const partition, and a purely-varying reduce has no reusable operator.
     if not const_terms or not vary_terms:
-        return None
+        return _decline(
+            "operator-cache",
+            "the factors do not split into an invariant weight and a varying field",
+        )
 
     node_id = id(expr)
     cached = op_cache.get(node_id)
@@ -3537,7 +3766,9 @@ def _eval_faq_operator_cached(
             for var, syms in const_terms:
                 sl = _gather_operator_factor(var, syms, ctx, sym_0based)
                 if sl is None:
-                    return None
+                    return _decline(
+                        "operator-cache", f"the constant factor {var!r} is not a plain array gather"
+                    )
                 const_operands.append(sl)
                 const_specs.append("".join(letters[s] for s in syms))
             operands = list(const_operands)
@@ -3547,14 +3778,18 @@ def _eval_faq_operator_cached(
                 gates = _resolve_join(expr, raw_ranges, sym_positions, ctx)
                 mask = _join_admits_mask(gates, all_syms, all_ranges_exp, combined_shape)
                 if mask is None:
-                    return None
+                    return _decline(
+                        "operator-cache", "the join does not code to a dense combined-box mask"
+                    )
                 operands.append(mask.astype(float))
                 specs.append(combined_spec)
             if not operands:
-                return None
+                return _decline("operator-cache", "the weight operator has no operands")
             w_op = coeff * np.einsum(",".join(specs) + "->" + combined_spec, *operands)
-        except (NumpyInterpreterError, IndexError, ValueError, TypeError, KeyError):
-            return None
+        except (NumpyInterpreterError, IndexError, ValueError, TypeError, KeyError) as exc:
+            return _decline(
+                "operator-cache", f"building the weight operator raised {type(exc).__name__}: {exc}"
+            )
         vary_specs = ["".join(letters[s] for s in syms) for _, syms in vary_terms]
         cached = (np.ascontiguousarray(w_op), combined_spec, out_spec, vary_terms, vary_specs)
         op_cache[node_id] = cached
@@ -3567,13 +3802,17 @@ def _eval_faq_operator_cached(
         for var, syms in vary_terms:
             sl = _gather_operator_factor(var, syms, ctx, sym_0based)
             if sl is None:
-                return None
+                return _decline(
+                    "operator-cache", f"the varying factor {var!r} is not a plain array gather"
+                )
             vary_operands.append(sl)
         einsum_str = combined_spec + "," + ",".join(vary_specs) + "->" + out_spec
         with np.errstate(divide="ignore", invalid="ignore"):
             out = np.einsum(einsum_str, w_op, *vary_operands)
-    except (NumpyInterpreterError, IndexError, ValueError, TypeError, KeyError):
-        return None
+    except (NumpyInterpreterError, IndexError, ValueError, TypeError, KeyError) as exc:
+        return _decline(
+            "operator-cache", f"applying the weight operator raised {type(exc).__name__}: {exc}"
+        )
     return np.asarray(out, dtype=float).reshape(out_shape)
 
 
@@ -3631,15 +3870,21 @@ def _eval_faq_reduce_vectorized(
     the semiring's ⊗ need not be ×.
     """
     ufunc = _REDUCE_UFUNCS.get(reducer)
-    if ufunc is None or not reduce_syms:
-        return None
+    if ufunc is None:
+        return _decline("gated-reduce", f"⊕ {reducer!r} has no numpy ufunc")
+    if not reduce_syms:
+        return _decline(
+            "gated-reduce",
+            "the node has NO contraction, and every gated whole-box tier needs one — "
+            "a join- or filter-gated pure map has no whole-box tier in this binding",
+        )
 
     red_ranges_exp = _expand_reduce_ranges(resolved, reduce_syms)
     all_syms = list(out_syms) + list(reduce_syms)
     all_ranges_exp = list(out_ranges_exp) + red_ranges_exp
     ndim = len(all_syms)
     if ndim == 0:
-        return None
+        return _decline("gated-reduce", "the node has no index symbols at all")
     combined_shape = tuple(list(out_shape) + [len(r) for r in red_ranges_exp])
     if 0 in out_shape:
         # No output cells — nothing to compute; the scalar path returns the same
@@ -3654,15 +3899,19 @@ def _eval_faq_reduce_vectorized(
     join_mask: np.ndarray | None = None
     if getattr(expr, "join", None):
         if raw_ranges is None:
-            return None
+            return _decline("gated-reduce", "a join is present but the caller passed no raw ranges")
         try:
             sym_positions = {s: list(r) for s, r in zip(all_syms, all_ranges_exp)}
             gates = _resolve_join(expr, raw_ranges, sym_positions, ctx)
             join_mask = _join_admits_mask(gates, all_syms, all_ranges_exp, combined_shape)
-        except (NumpyInterpreterError, IndexError, ValueError, TypeError, KeyError):
-            return None
+        except (NumpyInterpreterError, IndexError, ValueError, TypeError, KeyError) as exc:
+            return _decline("gated-reduce", f"join resolution raised {type(exc).__name__}: {exc}")
         if join_mask is None:
-            return None
+            return _decline(
+                "gated-reduce",
+                "a join key is not an axis of the combined box, or the gate carries an "
+                "overlap candidate set",
+            )
 
     try:
         with _bound_index_box(ctx, all_syms, all_ranges_exp):
@@ -3680,8 +3929,12 @@ def _eval_faq_reduce_vectorized(
                     term = np.where(mask.astype(bool), term, empty_zero)
                 if join_mask is not None:
                     term = np.where(join_mask, term, empty_zero)
-    except (NumpyInterpreterError, IndexError, ValueError, TypeError, KeyError):
-        return None
+    except (NumpyInterpreterError, IndexError, ValueError, TypeError, KeyError) as exc:
+        return _decline(
+            "gated-reduce",
+            f"the body or the filter does not evaluate and broadcast over the combined "
+            f"box: {type(exc).__name__}: {exc}",
+        )
 
     red_axes = tuple(range(len(out_syms), ndim))
     with np.errstate(divide="ignore", invalid="ignore"):
@@ -3775,30 +4028,41 @@ def _eval_faq_prefix_scan(
     * no ``join`` / ``distinct`` / ``key``, and a ⊕ with an accumulate ufunc.
     """
     if getattr(expr, "join", None) or getattr(expr, "distinct", None):
-        return None
+        return _decline("prefix-scan", "the node carries a `join` or a `distinct`")
     if getattr(expr, "key", None) is not None:
-        return None
+        return _decline("prefix-scan", "the node carries a `key`")
     ufunc = _REDUCE_UFUNCS.get(reducer)
     if ufunc is None or len(reduce_syms) != 1 or not out_syms or 0 in out_shape:
-        return None
+        return _decline(
+            "prefix-scan",
+            "⊕ has no accumulate ufunc, or the node does not contract exactly one "
+            "index over a non-empty output box",
+        )
 
     matched = _match_forward_prefix_filter(getattr(expr, "filter", None))
     if matched is None:
-        return None
+        return _decline(
+            "prefix-scan",
+            "the filter is not exactly a forward comparison (a reverse scan is not matched)",
+        )
     j_name, i_name, inclusive = matched
     if j_name != reduce_syms[0] or i_name not in out_syms:
-        return None
+        return _decline(
+            "prefix-scan", "the compared symbols are not the contracted index and an output index"
+        )
     scan_axis = out_syms.index(i_name)
 
     # `j = i` must be the newly admitted term at step `i`: same interval.
     try:
         j_range = _expand_range(resolved[j_name])
-    except (NumpyInterpreterError, KeyError, IndexError, ValueError, TypeError):
-        return None
+    except (NumpyInterpreterError, KeyError, IndexError, ValueError, TypeError) as exc:
+        return _decline("prefix-scan", f"the contracted range does not resolve: {exc}")
     if j_range != out_ranges_exp[scan_axis]:
-        return None
+        return _decline("prefix-scan", "the contracted range is not the scanned output range")
     if _expr_mentions(expr.expr, i_name):
-        return None
+        return _decline(
+            "prefix-scan", "the body reads the scanned symbol, so no partial result is reusable"
+        )
 
     # Evaluate the body over [other output axes…, j] — the scanned output axis is
     # absent by construction, since the body cannot reference it.
@@ -3812,8 +4076,12 @@ def _eval_faq_prefix_scan(
             with np.errstate(divide="ignore", invalid="ignore"):
                 terms = np.asarray(_compile_expr(expr.expr)(ctx), dtype=float)
                 terms = np.broadcast_to(terms, box_shape)
-    except (NumpyInterpreterError, IndexError, ValueError, TypeError, KeyError):
-        return None
+    except (NumpyInterpreterError, IndexError, ValueError, TypeError, KeyError) as exc:
+        return _decline(
+            "prefix-scan",
+            f"the body does not evaluate and broadcast over the reduced box: "
+            f"{type(exc).__name__}: {exc}",
+        )
 
     with np.errstate(divide="ignore", invalid="ignore"):
         acc = ufunc.accumulate(np.ascontiguousarray(terms), axis=terms.ndim - 1)
@@ -3865,6 +4133,10 @@ def _eval_faq_scalar(
     # An OVERLAP gate resolves its WHOLE admissible pair set once, so it DRIVES
     # this expansion instead of merely filtering it (§5.5.6 / Wall #1).
     ov = broad_phase.overlap_driver(gates)
+    # Both branches below walk the output box in Python, one cell at a time. The
+    # gate resolution above does not, so the refusal sits here, where the tier
+    # the report names is known and before any cell is visited.
+    _enter_per_cell("scalar-gate-driven" if ov is not None else "scalar")
     if ov is not None:
         return _eval_faq_scalar_gate_driven(
             expr,

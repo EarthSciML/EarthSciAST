@@ -93,18 +93,18 @@
     }
   },
   "counts": {
-    "symbols": 922,
+    "symbols": 928,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
       "julia": 308,
       "typescript": 239,
-      "python": 250,
+      "python": 257,
       "rust": 341,
       "go": 439
     },
     "by_tier": {
-      "extension": 649,
-      "stable": 273
+      "extension": 654,
+      "stable": 274
     }
   },
   "planned": [
@@ -1972,6 +1972,22 @@
       }
     },
     {
+      "name": "compiler",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "python": "Compiler"
+      }
+    },
+    {
+      "name": "compiler_refused_rule_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "python": "CompilerRefusedRuleError"
+      }
+    },
+    {
       "name": "compiler_report",
       "kind": "function",
       "tier": "extension",
@@ -1982,9 +1998,10 @@
     {
       "name": "compiler_report",
       "kind": "type",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
-        "julia": "CompilerReport"
+        "julia": "CompilerReport",
+        "python": "CompilerReport"
       }
     },
     {
@@ -1996,11 +2013,35 @@
       }
     },
     {
+      "name": "compiler_unavailable_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "python": "CompilerUnavailableError"
+      }
+    },
+    {
+      "name": "compiler_unknown_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "python": "CompilerUnknownError"
+      }
+    },
+    {
       "name": "compiler_vocabulary",
       "kind": "constant",
       "tier": "extension",
       "bindings": {
         "julia": "COMPILER_VOCABULARY"
+      }
+    },
+    {
+      "name": "compilers",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "python": "COMPILERS"
       }
     },
     {
@@ -6505,6 +6546,14 @@
       "tier": "extension",
       "bindings": {
         "go": "RuleEngineError"
+      }
+    },
+    {
+      "name": "rule_tier",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "python": "RuleTier"
       }
     },
     {

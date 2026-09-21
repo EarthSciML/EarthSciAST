@@ -53,8 +53,15 @@ def test_build_once_spatial_field_trajectory_matches_golden() -> None:
     golden = _golden()
     esm = load_path(str(_FIXTURE))
     t0, t1 = golden["cadence"]["tspan"]
+    # `interpreter`: the fixture's `Field.area` body gathers a [3, 4, 2] ring
+    # array with one subscript, which the whole-box pure map cannot bind, so the
+    # strict `native` default refuses this document (API_SPEC §5.8). The golden
+    # here is a TRAJECTORY, so it is checked where the document runs.
     result = solve(
-        esm_problem(esm, (float(t0), float(t1))), alg="LSODA", reltol=1e-10, abstol=1e-12
+        esm_problem(esm, (float(t0), float(t1)), compiler="interpreter"),
+        alg="LSODA",
+        reltol=1e-10,
+        abstol=1e-12,
     )
     assert result.retcode is ReturnCode.Success, result.message
 
