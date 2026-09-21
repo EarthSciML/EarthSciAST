@@ -100,7 +100,8 @@ function _cto_build(NI, NJ, NK; env = Dict{String,String}())
              "ESS_CONTRACTION_LOOP_MIN" => get(env, "ESS_CONTRACTION_LOOP_MIN", "8"),
              "ESS_ARRAY_CONTRACTION_MIN" =>
                  get(env, "ESS_ARRAY_CONTRACTION_MIN", "1024"),
-             "ESS_STENCIL_DISABLE" => get(env, "ESS_STENCIL_DISABLE", nothing)]
+             "ESS_STENCIL_DISABLE" => get(env, "ESS_STENCIL_DISABLE", nothing),
+             "ESS_CODEGEN_DISABLE" => get(env, "ESS_CODEGEN_DISABLE", nothing)]
     dp = [ _cto_dpv(i, j, k) for i in 1:NI, j in 1:NJ, k in 1:NK ]
     withenv(pairs...) do
         _CTO_ESS._reset_cascade_tally!()
@@ -108,17 +109,13 @@ function _cto_build(NI, NJ, NK; env = Dict{String,String}())
         _CTO_ESS._BENCH_ON[] = true
         local f, u0, p, vm
         try
-            # Under the NON-STRICT native plan, because one case here routes to
-            # the whole-array contraction nest and the strict default refuses
-            # an equation that tier accepts — its runner walks the tree once per
-            # output cell (API_SPEC §5.8). `array_contraction_test.jl` pins that
-            # refusal; what this file compares is tier ROUTING, which the
-            # refusal would hide rather than measure.
-            f, u0, p, _, vm = _CTO_ESS._with_plan_override(
-                _CTO_ESS._nonstrict_native_plan()) do
-                build_evaluator(doc; initial_conditions = ics,
-                                const_arrays = Dict("dp" => dp))
-            end
+            # The default compiler, which is `native`. One case here routes to
+            # the whole-array contraction nest, which `native` now takes in its
+            # GENERATED form (array_contraction_codegen.jl); the oracle cases
+            # name an `ESS_*` kill switch, which makes the default non-strict on
+            # its own. What this file compares is tier ROUTING.
+            f, u0, p, _, vm = build_evaluator(doc; initial_conditions = ics,
+                                              const_arrays = Dict("dp" => dp))
         finally
             _CTO_ESS._BENCH_ON[] = false
         end
@@ -156,6 +153,7 @@ _cto_outs(du, vm, NI, NJ) = [ du[vm["out[$i,$j]"]] for i in 1:NI, j in 1:NJ ]
         du, vm, tally, _ = _cto_build(NI, NJ, NK)
         @test _cto_get(tally, :percell_loop) == 1
         @test _cto_get(tally, :array_contraction) == 0
+        @test _cto_get(tally, :array_contraction_codegen) == 0
         @test _cto_outs(du, vm, NI, NJ) == _cto_exact(NI, NJ, NK)
     end
 
@@ -169,7 +167,8 @@ _cto_outs(du, vm, NI, NJ) = [ du[vm["out[$i,$j]"]] for i in 1:NI, j in 1:NJ ]
         NI, NJ, NK = 2, 2, 8
         env = Dict("ESS_ARRAY_CONTRACTION_MIN" => "8")
         du, vm, tally, _ = _cto_build(NI, NJ, NK; env = env)
-        @test _cto_get(tally, :array_contraction) == 1
+        @test _cto_get(tally, :array_contraction_codegen) == 1
+        @test _cto_get(tally, :array_contraction) == 0     # never the walked form
         @test _cto_get(tally, :percell_loop) == 0
         @test _cto_get(tally, :percell_acc) == 0
         # Numerics do not move with the tier: the loop's own answer, bit for bit.
@@ -178,6 +177,14 @@ _cto_outs(du, vm, NI, NJ) = [ du[vm["out[$i,$j]"]] for i in 1:NI, j in 1:NJ ]
         A = _cto_outs(du, vm, NI, NJ)
         @test all(A[i] === _cto_outs(du_l, vm_l, NI, NJ)[i] for i in eachindex(A))
         @test A == _cto_exact(NI, NJ, NK)
+        # …and bit for bit against the tier's OWN walker — the same nest, the
+        # same fold order, with the emitter off. This shape reaches the emitter
+        # through a 3-D const gather at two output indices and a state gather at
+        # the contracted one, which the source-receptor shape does not.
+        du_w, vm_w, tally_w, _ = _cto_build(NI, NJ, NK;
+            env = merge(env, Dict("ESS_CODEGEN_DISABLE" => "1")))
+        @test _cto_get(tally_w, :array_contraction) == 1
+        @test all(A[i] === _cto_outs(du_w, vm_w, NI, NJ)[i] for i in eachindex(A))
     end
 
     # ── Numerics may not move. The affine tier's answer is pinned against BOTH

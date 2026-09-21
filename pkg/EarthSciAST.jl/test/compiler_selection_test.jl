@@ -5,9 +5,11 @@
 #   * the closed VOCABULARY and its three failures — `compiler_unknown` outside
 #     it, `compiler_unavailable` for a member this binding cannot provide, and
 #     never an answer that quietly builds with a different compiler;
-#   * the strict `native` REFUSAL — a document whose equation the whole-array
-#     contraction tier accepts refuses at construction with the rule named, and
-#     the SAME document builds under `:interpreter`;
+#   * the strict `native` TIER REPORT on the hardest document the cascade has —
+#     one whose equation the whole-array contraction tier accepts, which `native`
+#     takes only because that tier now emits its nest (a walked nest is what
+#     §2.5.10 refuses), and which the `:interpreter` builds a different way and
+#     agrees with bit for bit;
 #   * AGREEMENT — `:native` and `:interpreter` produce bit-identical right-hand
 #     sides and seeds on corpus fixtures that both run. This is the property the
 #     interpreter exists for, so it is measured on documents of three different
@@ -41,7 +43,7 @@ const _CSEL_AGREE = [
 # `out[rcv] = Σ_s SR[s,rcv]·E[s]` from zero initial conditions, the
 # source-receptor shape that tier exists for. `ESS_ARRAY_CONTRACTION_MIN` is a
 # TUNING THRESHOLD (§2.5.10 keeps those), lowered here so the tier engages at a
-# size the test can afford; the refusal it produces is the same one a
+# size the test can afford; the routing it produces is the same one a
 # production-sized document gets at the default floor.
 _csel_lhs(v, idx, n) = Dict("op" => "faq", "args" => Any[], "output_idx" => Any[idx],
     "ranges" => Dict(idx => Any[1, n]),
@@ -150,10 +152,15 @@ end
         @test withenv("ESS_CODEGEN_DISABLE" => "1") do
             compiler(esm_problem(doc, (0.0, 1.0)))
         end === :native
-        # …and the strictness is back the moment the switch is not set.
-        @test_throws TreeWalkError withenv("ESS_ARRAY_CONTRACTION_MIN" => "8") do
+        # …and the strictness is back the moment the switch is not set: the
+        # hardest document in this file lands on the GENERATED contraction nest,
+        # which is the only form of that tier a strict compiler takes.
+        withenv("ESS_ARRAY_CONTRACTION_MIN" => "8") do
             d, i = _csel_contraction_doc()
-            build_evaluator(d; initial_conditions = i)
+            insp = BuildInspection()
+            build_evaluator(d; initial_conditions = i, inspect = insp)
+            @test any(r -> r.tier === :array_contraction_codegen,
+                      insp.compiler_report.rules)
         end
         # …and `:interpreter` is unaffected, since it turns the tier off anyway.
         @test withenv("ESS_CODEGEN_DISABLE" => "1") do
@@ -161,30 +168,37 @@ end
         end === :interpreter
     end
 
-    @testset "strict :native refuses the whole-array contraction tier" begin
+    @testset "strict :native compiles the whole-array contraction tier" begin
         doc, ics = _csel_contraction_doc()
-        e = try
-            _csel_contraction_build(doc, ics; compiler = :native)
-            nothing
-        catch err
-            err
-        end
-        @test e isa TreeWalkError
-        @test e.code == CSEL.ERROR_CODES.COMPILER_REFUSED_RULE
-        # The message names the compiler, the rule and the reason — the three
-        # things §2.5.10 fixes.
-        @test occursin("compiler=:native", e.detail)
-        @test occursin("D(conc)", e.detail)          # the rule, by its target
-        @test occursin("per output cell", e.detail)  # the reason
-
-        # The SAME document under `:interpreter`, which promises nothing about
-        # speed and therefore refuses nothing.
-        f!, u0, p, _t, vm = _csel_contraction_build(doc, ics; compiler = :interpreter)
-        du = zeros(Float64, length(u0))
-        f!(du, u0, p, 0.0)
         exact = [sum(Float64((3s + 7r) % 11) * Float64(s % 5) for s in 1:16)
                  for r in 1:16]
+        insp = BuildInspection()
+        f!, u0, p, _t, vm = withenv("ESS_ARRAY_CONTRACTION_MIN" => "8") do
+            build_evaluator(doc; initial_conditions = ics, compiler = :native,
+                            inspect = insp)
+        end
+        du = zeros(Float64, length(u0))
+        f!(du, u0, p, 0.0)
         @test [du[vm["conc[$r]"]] for r in 1:16] == exact
+        # The tier is named in the report, in its GENERATED form — the walked
+        # one is what §2.5.10 refuses, so its absence is half the claim.
+        rows = [r for r in insp.compiler_report.rules
+                if r.tier === :array_contraction_codegen]
+        @test length(rows) == 1
+        @test occursin("conc", rows[1].rule)
+        @test !any(r -> r.tier === :array_contraction,
+                   insp.compiler_report.rules)
+
+        # The SAME document under `:interpreter`, which turns the tier off and
+        # reaches the answer through the per-cell path instead. `===` per
+        # element: the two compilers agree bit for bit on the shape the tier
+        # exists for, which is the property the interpreter exists to witness.
+        fi!, ui, pi_, _ti, vmi = _csel_contraction_build(doc, ics;
+                                                         compiler = :interpreter)
+        dui = zeros(Float64, length(ui))
+        fi!(dui, ui, pi_, 0.0)
+        @test [dui[vmi["conc[$r]"]] for r in 1:16] == exact
+        @test all(du[vm["conc[$r]"]] === dui[vmi["conc[$r]"]] for r in 1:16)
     end
 
     @testset "native and interpreter agree bit for bit: $(basename(f))" for f in _CSEL_AGREE
@@ -238,15 +252,21 @@ end
         esm_problem(_CSEL_AGREE[1], (0.0, 1.0); inspect = insp)
         @test insp.compiler_report.compiler === :native
         @test !isempty(insp.compiler_report.rules)
-        # …and it is filled even when the build REFUSED, which is the case a
-        # caller most wants the partial record for.
+        # …and it is filled even when the build THREW, which is the case a
+        # caller most wants the partial record for. The document below files one
+        # rule on the contraction tier and then hands the tier the SAME output
+        # cells a second time, which `covered` refuses.
         doc, ics = _csel_contraction_doc()
+        eqs = doc["models"]["R"]["equations"]
+        push!(eqs, eqs[2])
         insp2 = BuildInspection()
         @test_throws TreeWalkError withenv("ESS_ARRAY_CONTRACTION_MIN" => "8") do
             build_evaluator(doc; initial_conditions = ics, inspect = insp2,
                             compiler = :native)
         end
         @test insp2.compiler_report.compiler === :native
+        @test any(r -> r.tier === :array_contraction_codegen,
+                  insp2.compiler_report.rules)
     end
 
     @testset "run_inline_tests takes a compiler" begin
