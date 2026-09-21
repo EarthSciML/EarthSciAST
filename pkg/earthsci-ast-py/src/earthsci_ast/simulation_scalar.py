@@ -7,10 +7,7 @@ SymPy RHS (via :func:`earthsci_ast.sympy_bridge._compile_flat_rhs`), integrated
 with :func:`scipy.integrate.solve_ivp`, and its algebraic-only states and
 observed bindings are recovered along the output trajectory.
 
-A CALLER reaches this module by naming it. It used to be reached by inspection —
-``_choose_pathway`` sent a system here when no variable declared a resolvable
-``shape`` (esm-spec §6.3), no equation carried an array op, and there were no
-data-loader fields or provider injections — and that router is gone:
+A caller reaches this module by NAMING it, never by having a document inspected:
 esm-libraries-spec §2.5.10 makes the choice of compiler the caller's and forbids
 a binding switching strategy on document content. ``sympy`` is a SPECIALTY
 compiler, one of the kind that runs only some documents: it refuses an array

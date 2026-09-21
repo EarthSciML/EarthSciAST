@@ -2,8 +2,8 @@
 its defining equation (issue #231), and no longer what decides which machinery
 builds the document either.
 
-The defect these tests were written for: ``_choose_pathway`` read array-ness out
-of EQUATION CONTENT alone, so a document whose only array-ness is a declared
+The defect these tests were written for: the content-based router read
+array-ness out of EQUATION CONTENT alone, so a document whose only array-ness is a declared
 ``shape`` — a bare whole-array ``D(theta) ~ 1`` over ``"shape": ["lev"]``, with
 no array op anywhere — went to the SCALAR (SymPy) pathway, where the shaped
 state got no cells at all and a ``coords`` assertion could not find it. The

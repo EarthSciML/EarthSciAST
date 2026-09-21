@@ -16,7 +16,7 @@ the gate a property of the ENGINE rather than of the document:
 * the NumPy array pathway evaluates observeds lazily, so it never reached one
   and the same document built and solved.
 
-Which answer you got therefore depended on which engine ``_choose_pathway``
+Which answer you got therefore depended on which engine the content-based router
 picked — and issue #231's declared-``shape`` routing arm moves documents across
 that line. These tests pin the gate at the document, on both pathways.
 

@@ -126,9 +126,9 @@ SUBSYSTEM_ALGEBRAIC_UNKNOWN = _doc(
 def _build(text: str, compiler: str | None = None):
     """Build the document under a NAMED compiler (``API_SPEC.md`` §5.8).
 
-    This used to monkeypatch ``_choose_pathway``, the content-based router that
-    no longer exists: which machinery builds a document is now the caller's to
-    name, and naming it is the whole point of the keyword.
+    Which machinery builds a document is the caller's to name, and naming it is
+    the whole point of the keyword — so a test that wants a particular engine
+    asks for it here rather than steering a router into it.
     """
     return esm_problem(
         load_string(text), model_name="M", tspan=(0.0, 1.0), compiler=compiler

@@ -24,8 +24,8 @@ reads. Ambient rather than threaded through every ``EvalContext`` on purpose:
 under ``native`` the refusal must fire wherever a per-cell walk is reached, and
 a context that was built without the policy would refuse nothing while
 reporting that ``native`` ran. An evaluation outside any :func:`use_policy`
-scope — a unit test driving a synthetic context, say — sees no policy and
-behaves exactly as it did before this module existed.
+scope — a unit test driving a synthetic context, say — sees no policy, records
+nothing and refuses nothing.
 
 **The recorder.** Each tier of the ladder calls :meth:`CompilerPolicy.decline`
 with its own name and the reason it could not take the node, and the tier that

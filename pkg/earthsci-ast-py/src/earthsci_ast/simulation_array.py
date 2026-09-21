@@ -3439,12 +3439,11 @@ def _simulate_with_numpy(
             #
             # An EMPTY document — neither states nor observeds — goes the same
             # way, and answers with a no-op success carrying no rows. That is
-            # the contract `test_empty_system` pins, and it used to be met by the
-            # scalar engine because such a document routed there; under
-            # `compiler="native"` every document is built by this machinery, so
-            # the answer has to be this machinery's too. Refusing here would make
-            # an empty document's verdict depend on how it was built, which is
-            # exactly what naming a compiler is supposed to stop.
+            # the contract `test_empty_system` pins, and it is the same answer
+            # the `sympy` compiler's observed-only path gives. Refusing here
+            # would make an empty document's verdict depend on which compiler
+            # built it, which is exactly what naming a compiler is supposed to
+            # stop.
             return _simulate_observeds_only(flat, build, tspan, saveat=saveat, callback=callback)
         shapes = build.shapes
         state_names = build.state_names

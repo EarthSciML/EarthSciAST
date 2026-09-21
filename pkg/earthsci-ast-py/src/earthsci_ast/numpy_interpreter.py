@@ -1879,11 +1879,12 @@ def _expand_reduce_ranges(resolved: dict[str, Any], reduce_syms: list[str]) -> l
 def _decline(tier: str, reason: str) -> None:
     """Record why ``tier`` could not take this aggregate, and decline.
 
-    Always returns ``None`` — the ladder's decline signal — so a tier writes
-    ``return _decline("einsum", "...")`` where it used to write ``return None``
-    and the reason reaches :class:`earthsci_ast.compiler.CompilerReport` (and,
-    under ``native``, the refusal that names the deepest one) instead of being
-    lost. A no-op outside a :func:`earthsci_ast.compiler.use_policy` scope.
+    Always returns ``None`` — the ladder's decline signal — so a tier declines
+    by writing ``return _decline("einsum", "...")``, and the reason reaches
+    :class:`earthsci_ast.compiler.CompilerReport` and, under ``native``, the
+    refusal that names the deepest one. A bare ``return None`` declines just as
+    well and says nothing, which is what would make the chain unreadable. A
+    no-op outside a :func:`earthsci_ast.compiler.use_policy` scope.
     """
     policy = _compiler.active_policy()
     if policy is not None:

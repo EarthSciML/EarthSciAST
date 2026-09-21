@@ -915,10 +915,9 @@ def _segmenting_engine(
 ) -> str:
     """How OFTEN the NumPy compilers rebuild — not WHICH machinery they use.
 
-    This is what is left of ``_choose_pathway`` once ``compiler`` owns the
-    choice of strategy. Its answer no longer depends on whether the document is
-    arrayed: esm-libraries-spec §2.5.10 forbids a binding switching strategy
-    inside ``native`` on document content, so under ``native`` and
+    ``compiler`` owns the choice of strategy, so nothing here asks whether the
+    document is arrayed: esm-libraries-spec §2.5.10 forbids a binding switching
+    strategy inside ``native`` on document content, so under ``native`` and
     ``interpreter`` alike a scalar document and a gridded one are built by the
     same vectorized NumPy machinery, and only the CADENCE differs.
 

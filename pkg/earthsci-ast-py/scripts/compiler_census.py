@@ -18,12 +18,12 @@ document:
    const-geometry hoist, the right-hand side once and the output-time observed
    pass, so a refusal here is the refusal a caller gets.
 
-   The phase-0 run of this script predates the ``compiler`` keyword and forced
-   the NumPy pathway by monkeypatching ``_choose_pathway``, with the ladder
-   instrumented by ``sys.settrace`` to recover the decline reasons. Both are
-   gone: the keyword is real and the reasons come from the binding's own
-   recorder (:class:`earthsci_ast.compiler.CompilerReport`), so what the census
-   reports is what a caller sees.
+   The refusal is the binding's own: it comes off the
+   :class:`earthsci_ast.compiler.CompilerRefusedRuleError` a caller would get,
+   with the decline chain the binding's recorder
+   (:class:`earthsci_ast.compiler.CompilerReport`) built. Nothing here forces a
+   strategy or infers a reason, so what the census reports is what a caller
+   sees.
 
 The instrumentation is a pure wrapper installed at run time: the tier functions
 are module globals that :func:`earthsci_ast.numpy_interpreter._eval_faq` looks
@@ -547,7 +547,9 @@ def summarize(paths: list[str]) -> None:
                 runs_ref += 1
                 ok_engine[ref.get("engine", "?")] += 1
             else:
-                ref_rhs_fail[f"{ref_rhs.get('error_class')}/{ref_rhs.get('error_code') or '-'}"] += 1
+                ref_rhs_fail[
+                    f"{ref_rhs.get('error_class')}/{ref_rhs.get('error_code') or '-'}"
+                ] += 1
         else:
             ref_fail[f"{ref.get('error_class')}/{ref.get('error_code') or '-'}"] += 1
 
