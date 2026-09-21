@@ -319,10 +319,22 @@ construction, and a literal zero default silently samples the wrong instant for
 any run that does not start at `t = 0`. A binding MUST default it to the start of
 the integration interval and MUST let a caller override it.
 
-`build_evaluator` survives as a **documented tier-2 extension seam**. It is the
+**Construction takes the `compiler`** (§2.5.10), which names WHICH build
+strategy produces the right-hand side. It is a document-fixing binding like the
+others in this section, not a per-run knob, which is why it belongs here and not
+on `solve`. Unspecified, it is `native`, and `native` is strict: a rule that
+compiler cannot express is a construction error by the paragraph above, not a
+quiet demotion to a slower path.
+
+`build_evaluator` (Julia) remains a **tier-2 extension seam**, and is
+**scheduled for retirement**. This section kept it on two grounds — it is the
 entry point for a caller that wants the compiled right-hand side without a
-Problem around it, and it has substantial downstream use; it is not deprecated
-by this section, and it is not stable API either.
+Problem around it, and it has substantial downstream use. `compiler` answers
+both: `esm_problem(…; compiler=:xla)` IS the compiled right-hand side, and the
+downstream use migrates to that call. It then becomes private behind
+`esm_problem`, with a deprecated alias for one minor; the forcing-buffer seam
+re-hangs on the Problem and the build-inspection record folds into
+`compiler_report`. `API_SPEC.md` §8 item 23 is the reconciliation row.
 
 #### 2.5.3 `solve`, and the return code
 
@@ -454,6 +466,82 @@ callback constructors at construction, and that is conforming. The line this
 section draws is that building a Problem must not drag in a time-stepping
 integrator, not that it must be free of every package the solver ecosystem
 ships.
+
+#### 2.5.10 Choosing the compiler
+
+A simulation-capable binding has always had several ways to build a right-hand
+side — a tree walk, generated code, a tape, a vectorized overlay, an emitter to
+a compiled program, a lambdified scalar form — and has always chosen among them
+by inspecting the document, silently. **`compiler` makes the choice the
+caller's and the outcome readable.**
+
+**The vocabulary is closed**, and the same in every binding:
+`interpreter`, `native`, `xla`, `mtk`, `sympy`. `API_SPEC.md` §5.8 carries the
+per-binding spelling and the per-binding coverage table; this section states
+what each value MEANS, which is the part a binding must not reinterpret.
+
+- **`native`** — the binding's compiled or vectorized tiers, for **every**
+  document, whatever its shape. A binding MUST NOT switch strategy inside
+  `native` on document content: a scalar document and a gridded one are built by
+  the same machinery, so that what ran is a property of the name and not of the
+  input. A rule `native` cannot express is a refusal (below).
+- **`interpreter`** — the reference evaluator, every fast tier off, complete
+  over the evaluable core. It carries **no performance promise of any kind**,
+  and a binding MUST NOT optimize it into agreement with `native`: its whole
+  value is being a second implementation. It is what the other compilers are
+  checked against, and a caller selects it to check them.
+- **`xla`** — a program lowered to StableHLO and executed through XLA.
+- **`mtk`** — a ModelingToolkit system. It is the one compiler that runs
+  **events and implicit equations**, the constructs §9.6.6's
+  `unsupported_construct` has the other compilers refuse; a refusal of one of
+  those constructs SHOULD name it.
+- **`sympy`** — a lambdified SymPy **scalar** right-hand side. It refuses array
+  documents, and it refuses an algebraic constraint it cannot solve rather than
+  dropping the equation.
+
+**The default is `native`, and it is strict.** A binding MUST build under
+`native` when no compiler is named. It MUST NOT choose `interpreter`, or any
+other value, on the grounds that the document is small, unshaped, or awkward.
+
+**A refusal is a hard error, and it is never a fallback — for every compiler.**
+`CONFORMANCE_SPEC.md` §5.38.3 states this for the compiled backends; it is
+general. A compiler that cannot run a rule of a document MUST raise
+`compiler_refused_rule` at CONSTRUCTION, naming the compiler, the rule (an
+equation or an observed, component-qualified) and the reason. It MUST NOT run
+that rule on a slower path, a partial lowering, or a host callback. A binding
+whose ladder decides at evaluation time rather than at build time MUST evaluate
+the right-hand side once at construction so that the refusal is a construction
+error, as §2.5.2 requires of every build failure. The reason a silent demotion
+is not an acceptable kindness is that it makes the compiler's name describe
+nothing: a caller who asked for a compiled program and got a tree walk has no
+way to find that out, and the cost difference between the two is orders of
+magnitude.
+
+**A compiler a binding cannot provide is refused, not substituted.** A value in
+the vocabulary that this binding does not implement, that this build did not
+compile in, or whose runtime this process cannot load, MUST raise
+`compiler_unavailable` naming what would have to be loaded or built. A value
+outside the vocabulary MUST raise `compiler_unknown`. Neither is ever answered
+by building with a different compiler.
+
+**Every Problem reports what ran.** A Problem exposes the compiler that built it
+and a per-rule record of the tier each rule landed on. Under `native` that
+record is the cost story a caller reads; under any compiler it is how a reported
+number is tied to the way it was produced. The names and their meanings are
+stable; the record's exact shape is per-binding.
+
+**Oracle selection is an argument, not an environment variable.** Where a
+binding today forces its reference path with an environment switch — a
+disable-this-tier family, a force-the-untiered-walk flag, a dual-run verifier, a
+decline logger — `compiler=interpreter` and the per-rule report replace it, and
+those switches are removed. A binding MUST NOT keep a switch whose effect is to
+select a different evaluation strategy: two ways to say the same thing is how an
+environment and an argument come to disagree. **Tuning thresholds are a
+different thing and stay**: a node budget, a box cap, a threading floor, a
+planner ratio. Under a strict `native` a threshold is a **refusal boundary**
+rather than a fallback trigger — crossing it produces `compiler_refused_rule`,
+not a quiet demotion — and a binding that carries one MUST document it as such,
+because moving it changes which documents build.
 
 ---
 
