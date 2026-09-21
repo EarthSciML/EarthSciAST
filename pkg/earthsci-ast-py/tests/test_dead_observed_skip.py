@@ -37,7 +37,6 @@ import numpy as np
 import pytest
 
 import earthsci_ast.parse as _parse
-from earthsci_ast.compiler import CompilerRefusedRuleError
 from earthsci_ast.parse import load_string
 from earthsci_ast.problem import ReturnCode, esm_problem, solve
 from earthsci_ast.simulation import BuildInspection
@@ -175,30 +174,25 @@ def test_needed_broken_observed_still_errors() -> None:
     live_eq = next(e for e in doc["models"]["M"]["equations"] if e["lhs"] == "live")
     live_eq["rhs"] = {"op": "/", "args": [1.0, "Z"]}
 
-    # Under the reference, the defect surfaces exactly as it always has: the run
-    # fails and names the symbol.
-    result = solve(
-        esm_problem(_load_unvalidated(json.dumps(doc)), (0.0, 1.0), compiler="interpreter"),
-        alg="LSODA",
-        reltol=1e-10,
-        abstol=1e-12,
-    )
-    assert result.retcode is not ReturnCode.Success
-    assert "Unresolved symbol" in (result.message or "")
-    assert "live" in (result.message or "")
-
-    # Under the strict `native` default it surfaces EARLIER, at construction:
-    # the whole-box tier declines because the body will not evaluate, and the
-    # per-cell walk that decline would fall to is what `native` refuses. The
-    # refusal carries the declining tier's own reason verbatim, so the symbol is
-    # still named — the defect is not masked on either compiler, which is what
-    # this test exists to pin. (That a decline caused by a BROKEN body is
-    # reported as a compiler refusal rather than as the body's own error is a
-    # diagnostic wart of the strict default, not a change in what is detected.)
-    with pytest.raises(CompilerRefusedRuleError) as excinfo:
-        esm_problem(_load_unvalidated(json.dumps(doc)), (0.0, 1.0))
-    assert "Unresolved symbol" in str(excinfo.value)
-    assert "live" in str(excinfo.value)
+    # Both compilers name the same defect, in the same words. The whole-box tier
+    # DOES decline here — the body will not evaluate — but a decline caused by a
+    # broken body is not a capability gap, and the strict `native` default says
+    # so: it re-runs the node before refusing, finds that the per-cell walk
+    # raises too, and lets that error through instead of blaming itself
+    # (`numpy_interpreter._eval_faq`). So the diagnostic a caller gets is the
+    # interpreter's own, not `compiler_refused_rule`, whichever compiler built
+    # the document — which is what this test exists to pin.
+    for compiler in (None, "native", "interpreter"):
+        result = solve(
+            esm_problem(_load_unvalidated(json.dumps(doc)), (0.0, 1.0), compiler=compiler),
+            alg="LSODA",
+            reltol=1e-10,
+            abstol=1e-12,
+        )
+        assert result.retcode is not ReturnCode.Success
+        assert "Unresolved symbol" in (result.message or "")
+        assert "live" in (result.message or "")
+        assert "compiler_refused_rule" not in (result.message or "")
 
 
 def test_dead_observed_doc_is_rejected_by_load() -> None:
