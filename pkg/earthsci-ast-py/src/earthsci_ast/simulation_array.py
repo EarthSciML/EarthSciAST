@@ -790,12 +790,14 @@ def _assert_no_unsolved_algebraic_constraint(
     target = undetermined[0]
     raise UnsupportedConstructError(
         "algebraic constraint",
+        # The detail reads into the class's own "... is not supported by the
+        # <evaluator>", so it ends on a noun phrase rather than a sentence.
         f"`{_expr_to_string(second.lhs)} ~ {_expr_to_string(second.rhs)}` is a second "
-        f"definition of {name!r}, so what it actually determines is {target!r} — and "
-        f"{target!r} has no defining equation of its own. Inverting it for {target!r} "
-        f"needs algebraic elimination, which this interpreter does not have; without "
-        f"it {target!r} would stay at its declared default for the whole run and be "
-        f"reported as the answer. Build with compiler='sympy', which solves it,",
+        f"definition of {name!r}, so what it actually determines is {target!r} — which "
+        f"has no defining equation of its own. Inverting it for {target!r} needs "
+        f"algebraic elimination; without it {target!r} would stay at its declared "
+        f"default for the whole run and be reported as the answer. Build with "
+        f"compiler='sympy', which solves it. This construct",
         "Python array interpreter",
     )
 
