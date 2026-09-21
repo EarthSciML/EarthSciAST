@@ -406,6 +406,11 @@ class EsmProblem:
     # derives from this one so a substituted parameter never re-materializes
     # the conservative-regrid geometry or the value-invention join buffers.
     static_cache: dict[str, Any] = field(default_factory=dict)
+    #: Segment 0 of a cadence-segmented run, built at construction so the
+    #: compiler has something to refuse here (esm-libraries-spec §2.5.10, "the
+    #: per-segment seed") and handed to :func:`solve` so the providers are
+    #: sampled once. ``None`` for every one-shot engine. Internal.
+    segment_seed: Any = None
 
     def __repr__(self) -> str:  # pragma: no cover - display only
         return (
@@ -808,6 +813,7 @@ def _esm_problem_under(
     else:
         engine = _segmenting_engine(flat, discrete_providers, merged, gated)
     static_cache: dict[str, Any] = {}
+    segment_seed: Any = None
     build: _NumpyRhsBuild | None = None
     scalar_build: _ScalarRhsBuild | None = None
     scalar_build_error: Exception | None = None
@@ -885,6 +891,24 @@ def _esm_problem_under(
     # is where the census found six sevenths of this binding's per-cell landings.
     if build is not None:
         exercise_every_evaluation(flat, build, t0, loader_arrays=merged)
+    elif engine in ("loaders", "discrete_providers"):
+        # esm-libraries-spec §2.5.10 lists "the per-segment seed" among the
+        # evaluations the compiler covers. A segmented engine compiles nothing at
+        # construction, so the seed IS its construction-time build: run segment 0
+        # here, keep its loader-invariant products, and let `solve` start from
+        # them instead of paying for them again.
+        segment_seed = _seed_segmented_engine(
+            flat,
+            engine,
+            p,
+            u0,
+            tspan,
+            providers=providers,
+            loader_provider=loader_provider,
+            provider_factory=provider_factory,
+            discrete_providers=discrete_providers,
+            static_cache=static_cache,
+        )
 
     return EsmProblem(
         flat=flat,
@@ -913,7 +937,62 @@ def _esm_problem_under(
         inspect=inspect,
         callbacks=CallbackSet(callback),
         static_cache=static_cache,
+        segment_seed=segment_seed,
     )
+
+
+def _seed_segmented_engine(
+    flat: FlattenedSystem,
+    engine: str,
+    p: dict[str, float],
+    u0: dict[str, float],
+    tspan: tuple[float, float],
+    *,
+    providers: dict[str, Any] | None,
+    loader_provider: Any,
+    provider_factory: Any,
+    discrete_providers: dict[str, Any],
+    static_cache: dict[str, Any],
+) -> Any:
+    """Build the first cadence segment at construction, for the compiler's sake.
+
+    Failures other than a compiler refusal are swallowed, for the same reason
+    the one-shot probe swallows them: a segmented document has always been
+    allowed to build here and fail at `solve` when a provider cannot be reached,
+    and turning that into a build error would be a different change made by
+    accident. Only the refusal the active compiler owes the caller travels out.
+    """
+    try:
+        if engine == "loaders":
+            return _simulate_with_loaders(
+                flat,
+                tspan,
+                p,
+                u0,
+                DEFAULT_ALG,
+                loader_provider=loader_provider,
+                provider_factory=provider_factory,
+                static_cache=static_cache,
+                seed_only=True,
+            )
+        return _simulate_with_discrete_providers(
+            flat,
+            tspan,
+            p,
+            u0,
+            DEFAULT_ALG,
+            DEFAULT_RELTOL,
+            DEFAULT_ABSTOL,
+            discrete_providers,
+            static_cache=static_cache,
+            seed_only=True,
+        )
+    except CompilerRefusedRuleError:
+        raise
+    except UnsupportedConstructError:
+        raise
+    except Exception:  # noqa: BLE001 — a non-refusal failure stays a run failure
+        return None
 
 
 def _segmenting_engine(
@@ -1504,6 +1583,8 @@ def _solve_engine(
             prob.providers or {},
             prob.inspect,
             maxiters=maxiters,
+            static_cache=prob.static_cache,
+            seed=prob.segment_seed,
         )
         return _with_merged_renames(prob, _finish_segmented(sol, saveat, cb))
     if prob.engine == "loaders":
@@ -1518,6 +1599,8 @@ def _solve_engine(
             loader_provider=prob.loader_provider,
             provider_factory=prob.provider_factory,
             maxiters=maxiters,
+            static_cache=prob.static_cache,
+            seed=prob.segment_seed,
         )
         return _with_merged_renames(prob, _finish_segmented(sol, saveat, cb))
     if prob.engine == "array":
@@ -1720,6 +1803,11 @@ def remake(
         compiler=prob.compiler,
         compiler_report=prob.compiler_report,
         engine=prob.engine,
+        # The seed was built for the ORIGINAL p / u0 / tspan, so a remake that
+        # rebinds any of them must not start from it. Dropping it costs the new
+        # problem one segment-0 build at its first run, which is what an
+        # unseeded segmented problem has always paid.
+        segment_seed=None if rebind or tspan is not None else prob.segment_seed,
         build=build,
         scalar_build=scalar_build,
         scalar_build_error=None if scalar_build is not None else prob.scalar_build_error,

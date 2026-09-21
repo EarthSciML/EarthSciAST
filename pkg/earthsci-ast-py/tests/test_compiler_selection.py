@@ -16,6 +16,7 @@ What these tests pin, in the order the contract states it:
 
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 
@@ -30,6 +31,7 @@ from earthsci_ast import (
     ReturnCode,
     esm_problem,
     load_path,
+    load_string,
     solve,
 )
 from earthsci_ast.flatten import LoaderField
@@ -210,6 +212,84 @@ def test_native_and_the_interpreter_agree_on_the_segmented_loader_engine() -> No
     assert native.retcode is ReturnCode.Success, native.message
     assert oracle.retcode is ReturnCode.Success, oracle.message
     np.testing.assert_array_equal(native.y, oracle.y)
+
+
+# --------------------------------------------------------------------------- #
+# The per-segment seed
+# --------------------------------------------------------------------------- #
+
+
+def _segmented_recurrence_document() -> str:
+    """A cadence-SEGMENTED document whose observed `native` cannot run.
+
+    Built from the shipped causal-self-reference fixture by giving it a
+    source-backed parameter, which is what puts it on the `loaders` engine — the
+    recurrence is untouched. An offline `loader_provider` answers the source, so
+    nothing here reaches the network.
+    """
+    doc = copy.deepcopy(
+        json.loads((_TESTS / "valid" / "recurrence_causal_self_reference.esm").read_text())
+    )
+    doc["esm"] = "1.1.0"
+    doc["data_sources"] = {
+        "raw": {"kind": "static", "source": {"url_template": "file:///data/terrain.nc"}}
+    }
+    model = doc["models"][next(iter(doc["models"]))]
+    model["variables"]["loaded_k"] = {
+        "type": "parameter",
+        "units": "1",
+        "default": 0.0,
+        "shape": [],
+        "update": {"kind": "data", "source": "raw", "from": {"file_variable": "K"}},
+    }
+    return json.dumps(doc)
+
+
+def _offline_loader(field, t):
+    return np.asarray(2.0, dtype=float)
+
+
+def test_a_segmented_engine_refuses_at_construction_not_inside_the_run() -> None:
+    """esm-libraries-spec §2.5.10 puts "the per-segment seed" under the compiler.
+
+    A cadence-segmented engine compiles per boundary, so construction has no
+    build of its own — and without one a compiler could refuse nothing here, and
+    a document it cannot run would come back as a failed RUN instead, which
+    §2.5.2 forbids of a build failure. Construction builds segment 0, so the
+    refusal lands where every other build failure does.
+    """
+    text = _segmented_recurrence_document()
+
+    with pytest.raises(CompilerRefusedRuleError) as excinfo:
+        esm_problem(load_string(text), (0.0, 1.0), loader_provider=_offline_loader)
+    err = excinfo.value
+    assert err.phase == "construction"
+    assert err.rule == "observed RecurrenceCausalSelfReference.r"
+    assert "recurrence sweep" in err.reason
+
+    # And the same document builds on the reference, where the seed's landing is
+    # recorded — which is what shows the seed ran rather than being skipped.
+    prob = esm_problem(
+        load_string(text), (0.0, 1.0), loader_provider=_offline_loader, compiler="interpreter"
+    )
+    assert prob.engine == "loaders"
+    assert prob.compiler_report.per_cell_rules() == ("observed RecurrenceCausalSelfReference.r",)
+
+
+def test_the_seed_products_are_kept_for_the_run_to_reuse() -> None:
+    """The seed is paid once per Problem, not once more on the first `solve`.
+
+    The loader-invariant build products it materializes are exactly what the
+    segmented driver's own cache holds, so they are handed forward rather than
+    recomputed at segment 0.
+    """
+    golden, provider = _loader_provider()
+    t0, t1 = golden["cadence"]["tspan"]
+    prob = esm_problem(load_path(str(LOADER_ODE)), (float(t0), float(t1)), loader_provider=provider)
+    assert prob.engine == "loaders"
+    # The run still produces the golden trajectory with the seeded cache in play.
+    sol = solve(prob, alg="LSODA")
+    assert sol.retcode is ReturnCode.Success, sol.message
 
 
 # --------------------------------------------------------------------------- #
