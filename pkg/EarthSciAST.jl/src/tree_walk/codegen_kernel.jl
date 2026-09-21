@@ -699,7 +699,11 @@ function _cg_emit_subcall(ctx::_CGCtx, kc::_CGKernCtx, S::_AccKernel)
 end
 
 # ---- Op application (mirrors `_eval_acc_op` arm for arm) --------------------
-function _cg_emit_op(ctx::_CGCtx, kc::_CGKernCtx, nd::_Node)
+# `kc` is left unannotated here and on `_cg_emit_fn`: the op ladder is the op
+# REGISTRY rendered as expressions and reads nothing off the evaluation context
+# but the recursion, so the scalar-spine emitter (array_contraction_codegen.jl)
+# shares these two rather than restating every registry row.
+function _cg_emit_op(ctx::_CGCtx, kc, nd::_Node)
     op = nd.op
     ch = nd.children
     ev(x) = _cg_emit(ctx, kc, x)
@@ -771,7 +775,7 @@ end
 # interpreters' `:fn` arms (compile.jl / access_kernel.jl), so interpolation
 # is never reimplemented here. Specs ride the `tabs` tuple (field loads are
 # hoisted by the compiler; the spec object is the very one the node carries).
-function _cg_emit_fn(ctx::_CGCtx, kc::_CGKernCtx, nd::_Node)
+function _cg_emit_fn(ctx::_CGCtx, kc, nd::_Node)
     pl = nd.payload
     ch = nd.children
     if pl isa Tuple{String,_InterpLinearSpec}

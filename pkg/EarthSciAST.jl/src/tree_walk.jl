@@ -57,6 +57,7 @@ include("tree_walk/acc_merge.jl")        # §4e  per-cell merge + `_make_rhs`
 include("tree_walk/oop_merge.jl")        #      kernel-CLASS merge, for both forms
 include("tree_walk/xcse.jl")             #      cross-kernel / kernel↔prelude fn-CSE
 include("tree_walk/codegen_kernel.jl")   # §4f  Julia-codegen tier for access kernels
+include("tree_walk/array_contraction_codegen.jl") # §4f  …and for the contraction nest
 include("tree_walk/const_tier.jl")       # §4g  cadence partition of the scalar prelude
 include("tree_walk/stencil.jl")          # §4c  symbolic stencilizer (spines + recipes)
 include("tree_walk/stencil_affine.jl")   #      affine box processor (the default build)

@@ -134,7 +134,6 @@ end
 # `Base.ScopedValues` would say this more directly but is 1.11+, and this
 # package supports 1.10.
 const _COMPILER_PLAN_KEY = :earthsci_compiler_plan
-const _PLAN_OVERRIDE_KEY = :earthsci_compiler_plan_override
 const _DEFAULT_COMPILER_PLAN = _plan_all(:native, false, false, true)
 
 _compiler_plan_now()::CompilerPlan =
@@ -185,8 +184,6 @@ _any_oracle_switch_set() =
 function _plan_for(compiler::Union{Nothing,Symbol})
     compiler === nothing || return _refuse_if_oracle_switch_set(
         _compiler_plan(compiler; explicit = true))
-    ov = get(task_local_storage(), _PLAN_OVERRIDE_KEY, nothing)
-    ov === nothing || return ov::CompilerPlan
     plan = _compiler_plan(:native; explicit = false)
     _any_oracle_switch_set() || return plan
     return _nonstrict(plan)
@@ -195,18 +192,6 @@ end
 _nonstrict(plan::CompilerPlan) =
     CompilerPlan(plan.name, plan.explicit, false,
         (getfield(plan, f) for f in fieldnames(CompilerPlan)[4:end])...)
-
-# The differential-test seam for a tier NO public compiler reaches. The
-# whole-array contraction tier is the live case: `native` refuses an equation it
-# accepts (its runner walks the tree per output cell) and `interpreter` turns it
-# off, so the tier's own bit-identity tests have no vocabulary value to build
-# under. This gives them one, and only them — it is unexported, it is not a
-# `compiler` value, and it is read only where the caller named no compiler.
-# A generated form for the tier retires it along with the refusal.
-_nonstrict_native_plan() = _nonstrict(_compiler_plan(:native; explicit = false))
-
-_with_plan_override(f, plan::CompilerPlan) =
-    task_local_storage(f, _PLAN_OVERRIDE_KEY, plan)
 
 function _refuse_if_oracle_switch_set(plan::CompilerPlan)
     (plan.explicit && plan.name === :native) || return plan
@@ -238,7 +223,9 @@ landed on, and every decline it collected getting there.
   it (a derivative target with its output axes, an observed's name, a setup
   array's name).
 * `kind` — `:equation`, `:observed` or `:setup_array`.
-* `tier` — where it landed: `:affine`, `:scan`, `:array_contraction`,
+* `tier` — where it landed: `:affine`, `:scan`, `:array_contraction_codegen`
+  (and `:array_contraction`, its walked form, which only a non-strict compiler
+  keeps),
   `:percell_build` (scalarized per output cell at BUILD, then compiled),
   `:codegen`, `:interpreter`, `:setup_compiled`, `:setup_percell`.
 * `declines` — `tier => reason` for every tier that looked at this rule and

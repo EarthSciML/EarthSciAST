@@ -6,11 +6,13 @@
 # output cell (the per-cell loop tier) or a ∏|k…|-term unrolled body per
 # structural group (the affine tier). This pins:
 #
-#   * BIT-IDENTITY, `===` per element (so NaN and -0.0 count), against the
+#   * BIT-IDENTITY, `===` per element (so NaN and -0.0 count), of the GENERATED
+#     nest against three independent oracles: the tier's own tree-walk runner,
+#     which is the SAME nest with the emitter off (`ESS_CODEGEN_DISABLE=1`); the
 #     kill-switch oracle `ESS_ARRAY_CONTRACTION_DISABLE=1` — which for the shapes
 #     below is the per-cell contraction loop, the nest's own fold order — and,
-#     for a SINGLE contracted index, against the pure-unroll reference
-#     `ESS_CONTRACTION_LOOP=0` as well;
+#     for a SINGLE contracted index, the pure-unroll reference
+#     `ESS_CONTRACTION_LOOP=0`;
 #   * the dense SOURCE-RECEPTOR shape `conc[rcv] = Σ_s SR[s,rcv]·E[s]`, whose
 #     output and contracted extents are EQUAL — the shape neither existing tier
 #     can afford, since `#out < ∏|k…|` never holds so the unroll is always built;
@@ -82,19 +84,16 @@ _ac_exact(NS, NR) = [sum(_ac_sr(s, r) * _ac_e0(s) for s in 1:NS) for r in 1:NR]
 # where the oracle tiers are still cheap enough to run against it.
 _ac_env(extra) = merge(Dict("ESS_ARRAY_CONTRACTION_MIN" => "8"), extra)
 
-# Every build here runs under the NON-STRICT native plan. The strict `native`
-# refuses an equation this tier accepts — its runner walks the expression tree
-# once per output cell on every call (API_SPEC §5.8) — and `:interpreter` turns
-# the tier off, so neither vocabulary value can build the subject of this file.
-# The refusal itself is pinned below, not weakened here.
+# The default compiler, which is `native`: the nest is emitted, so nothing here
+# needs a weakened plan. Each ORACLE case below names an `ESS_*` kill switch,
+# which makes the default non-strict on its own — that is what lets an oracle
+# build a form `native` would refuse.
 function _ac_build(doc, ics; env=Dict{String,String}(),
                    const_arrays=Dict{String,Vector{Float64}}())
     withenv((k => v for (k, v) in _ac_env(env))...) do
         _AC_ESS._reset_cascade_tally!()
-        r = _AC_ESS._with_plan_override(_AC_ESS._nonstrict_native_plan()) do
-            build_evaluator(doc; initial_conditions=ics,
+        r = build_evaluator(doc; initial_conditions=ics,
                             const_arrays=const_arrays)
-        end
         (r, copy(_AC_ESS._CASCADE_TALLY))
     end
 end
@@ -110,27 +109,56 @@ _ac_outs(du, vm, NR) = [du[vm["conc[$r]"]] for r in 1:NR]
 _ac_tally(t, k) = get(t, k, 0)
 
 const _AC_OFF = Dict("ESS_ARRAY_CONTRACTION_DISABLE" => "1")
+# The tier's own tree-walk runner: the SAME nest, the SAME fold order, with the
+# emitter off. It is the closest oracle the generated form has — the two differ
+# in nothing but whether the body is code or a tree — and it is a kill switch,
+# so the default compiler is non-strict under it and will keep a walked nest.
+const _AC_WALK = Dict("ESS_CODEGEN_DISABLE" => "1")
+
+# The tier fired in its GENERATED form. Every case also asserts the walked form
+# did not: under the default compiler a walked nest is a refusal, so a build that
+# quietly produced one would otherwise read as a pass.
+_ac_fired(t) = _ac_tally(t, :array_contraction_codegen)
 
 @testset "whole-array contraction nest (ess-array-contraction)" begin
 
-    # The tier is compiler backlog: the strict default refuses the equation it
-    # would take, naming the rule and the per-output-cell walk. Every other case
-    # in this file builds under the non-strict plan `_ac_build` installs, so
-    # this is the one place the refusal is pinned.
-    @testset "the strict default refuses an equation this tier accepts" begin
+    # The strict default TAKES this equation, because the nest it accepts is
+    # emitted rather than walked, and the build's report says so by name. This is
+    # the one place the tier's own report row is pinned; every other case reads
+    # the cascade tally.
+    @testset "the strict default compiles an equation this tier accepts" begin
         doc, ics = _ac_doc(16, 16), _ac_ics(16, 16)
-        e = try
-            withenv((k => v for (k, v) in _ac_env(Dict{String,String}()))...) do
-                build_evaluator(doc; initial_conditions=ics)
-            end
-            nothing
-        catch err
-            err
+        insp = _AC_ESS.BuildInspection()
+        withenv((k => v for (k, v) in _ac_env(Dict{String,String}()))...) do
+            build_evaluator(doc; initial_conditions=ics, compiler=:native,
+                            inspect=insp)
         end
-        @test e isa _AC_ESS.TreeWalkError
-        @test e.code == _AC_ESS.ERROR_CODES.COMPILER_REFUSED_RULE
-        @test occursin("D(conc)", e.detail)
-        @test occursin("per output cell", e.detail)
+        rep = insp.compiler_report
+        @test rep.compiler === :native
+        rows = [r for r in rep.rules if r.tier === :array_contraction_codegen]
+        @test length(rows) == 1
+        @test occursin("conc", rows[1].rule)
+        # …and the WALKED form of the same tier is nowhere in the build.
+        @test !any(r -> r.tier === :array_contraction, rep.rules)
+    end
+
+    # The generated nest against the tier's own walker, on every shape this file
+    # already covers: same nest, same fold order, code versus tree. `===` per
+    # element, so a NaN or a -0.0 could not pass.
+    @testset "generated nest === the walked nest: NS=$NS NR=$NR red=$red" for
+            (NS, NR, red) in ((16, 16, nothing), (24, 8, nothing), (8, 24, nothing),
+                              (16, 10, "*"), (16, 10, "max"), (16, 10, "min"))
+        coef = red === nothing ? _ac_sr : _ac_sr_frac
+        e0   = red === nothing ? _ac_e0 : _ac_e0_frac
+        doc, ics = _ac_doc(NS, NR; coef=coef, red=red), _ac_ics(NS, NR; e=e0)
+        dg, vg, tg = _ac_du(doc, ics)
+        dw, vw, tw = _ac_du(doc, ics; env=_AC_WALK)
+        @test _ac_fired(tg) == 1
+        @test _ac_tally(tg, :array_contraction) == 0
+        # The oracle really did walk the nest rather than reach another tier.
+        @test _ac_tally(tw, :array_contraction) == 1
+        @test _ac_fired(tw) == 0
+        @test all(_ac_outs(dg, vg, NR)[r] === _ac_outs(dw, vw, NR)[r] for r in 1:NR)
     end
 
     @testset "source-receptor NS=$NS NR=$NR: nest == oracle == exact" for (NS, NR) in
@@ -138,8 +166,10 @@ const _AC_OFF = Dict("ESS_ARRAY_CONTRACTION_DISABLE" => "1")
         doc, ics = _ac_doc(NS, NR), _ac_ics(NS, NR)
         dn, vn, tn = _ac_du(doc, ics)
         do_, vo, to = _ac_du(doc, ics; env=_AC_OFF)
-        @test _ac_tally(tn, :array_contraction) == 1
+        @test _ac_fired(tn) == 1
+        @test _ac_tally(tn, :array_contraction) == 0     # never the walked form
         @test _ac_tally(to, :array_contraction) == 0     # the oracle really is another tier
+        @test _ac_fired(to) == 0
         A = _ac_outs(dn, vn, NR)
         # `===` per element: bit-identity, so a NaN or a -0.0 could not pass.
         @test all(A[r] === _ac_outs(do_, vo, NR)[r] for r in 1:NR)
@@ -153,8 +183,10 @@ const _AC_OFF = Dict("ESS_ARRAY_CONTRACTION_DISABLE" => "1")
         doc, ics = _ac_doc(NS, NR), _ac_ics(NS, NR)
         dn, vn, tn = _ac_du(doc, ics)
         du, vu, tu = _ac_du(doc, ics; env=Dict("ESS_CONTRACTION_LOOP" => "0"))
-        @test _ac_tally(tn, :array_contraction) == 1
+        @test _ac_fired(tn) == 1
+        @test _ac_tally(tn, :array_contraction) == 0
         @test _ac_tally(tu, :array_contraction) == 0
+        @test _ac_fired(tu) == 0
         @test all(_ac_outs(dn, vn, NR)[r] === _ac_outs(du, vu, NR)[r] for r in 1:NR)
     end
 
@@ -171,7 +203,8 @@ const _AC_OFF = Dict("ESS_ARRAY_CONTRACTION_DISABLE" => "1")
         dn, vn, tn = _ac_du(doc, ics)
         do_, vo, to = _ac_du(doc, ics; env=_AC_OFF)
         du_, vu, tu = _ac_du(doc, ics; env=Dict("ESS_CONTRACTION_LOOP" => "0"))
-        @test _ac_tally(tn, :array_contraction) == 1
+        @test _ac_fired(tn) == 1
+        @test _ac_tally(tn, :array_contraction) == 0
         @test _ac_tally(to, :array_contraction) == 0
         @test _ac_tally(tu, :array_contraction) == 0
         f = red == "*" ? (*) : red == "max" ? max : min
@@ -230,7 +263,8 @@ const _AC_OFF = Dict("ESS_ARRAY_CONTRACTION_DISABLE" => "1")
             Dict{String,Any}("conc[$r,$q]" => 0.0 for r in R1LO:R1HI, q in 1:NR2))
         dn, vn, tn = _ac_du(doc, ics)
         do_, vo, to = _ac_du(doc, ics; env=_AC_OFF)
-        @test _ac_tally(tn, :array_contraction) == 1
+        @test _ac_fired(tn) == 1
+        @test _ac_tally(tn, :array_contraction) == 0
         @test _ac_tally(to, :array_contraction) == 0
         cells = [(r, q) for r in R1LO:R1HI, q in 1:NR2]
         @test all(dn[vn["conc[$r,$q]"]] === do_[vo["conc[$r,$q]"]]
@@ -245,7 +279,7 @@ const _AC_OFF = Dict("ESS_ARRAY_CONTRACTION_DISABLE" => "1")
     @testset "zero-allocation steady-state f!" begin
         NS, NR = 64, 64
         (f!, u0, p, _, _), tally = _ac_build(_ac_doc(NS, NR), _ac_ics(NS, NR))
-        @test _ac_tally(tally, :array_contraction) == 1
+        @test _ac_fired(tally) == 1
         du = similar(u0)
         @test rhs_alloc_bytes(f!, du, u0, p, 0.0) == 0
     end
@@ -273,10 +307,8 @@ const _AC_OFF = Dict("ESS_ARRAY_CONTRACTION_DISABLE" => "1")
                 _AC_ESS._bench_reset!()
                 _AC_ESS._BENCH_ON[] = true
                 try
-                    _AC_ESS._with_plan_override(_AC_ESS._nonstrict_native_plan()) do
-                        build_evaluator(_ac_doc(NS, NR);
-                                        initial_conditions=_ac_ics(NS, NR))
-                    end
+                    build_evaluator(_ac_doc(NS, NR);
+                                    initial_conditions=_ac_ics(NS, NR))
                 finally
                     _AC_ESS._BENCH_ON[] = false
                 end
@@ -301,6 +333,7 @@ const _AC_OFF = Dict("ESS_ARRAY_CONTRACTION_DISABLE" => "1")
         NS, NR = 16, 16
         doc, ics = _ac_doc(NS, NR), _ac_ics(NS, NR)
         dl, vl, tl = _ac_du(doc, ics; env=Dict("ESS_ARRAY_CONTRACTION_MIN" => "32"))
+        @test _ac_fired(tl) == 0
         @test _ac_tally(tl, :array_contraction) == 0
         do_, vo, _ = _ac_du(doc, ics; env=_AC_OFF)
         @test all(_ac_outs(dl, vl, NR)[r] === _ac_outs(do_, vo, NR)[r] for r in 1:NR)
@@ -330,11 +363,9 @@ const _AC_OFF = Dict("ESS_ARRAY_CONTRACTION_DISABLE" => "1")
         u0v = Dict("u[$i]" => Float64(i % 7) for i in 1:N)
         bld(extra) = withenv((k => v for (k, v) in _ac_env(extra))...) do
             _AC_ESS._reset_cascade_tally!()
-            (_AC_ESS._with_plan_override(_AC_ESS._nonstrict_native_plan()) do
-                _AC_ESS._build_evaluator_impl(_AC_ESS.Model(vars, eqs);
-                    index_sets=Dict("x" => _AC_ESS.IndexSet("interval"; size=N)),
-                    initial_conditions=u0v)
-             end,
+            (_AC_ESS._build_evaluator_impl(_AC_ESS.Model(vars, eqs);
+                 index_sets=Dict("x" => _AC_ESS.IndexSet("interval"; size=N)),
+                 initial_conditions=u0v),
              copy(_AC_ESS._CASCADE_TALLY))
         end
         run_ip(extra) = begin
@@ -345,7 +376,8 @@ const _AC_OFF = Dict("ESS_ARRAY_CONTRACTION_DISABLE" => "1")
         end
         dn, vn, tn = run_ip(Dict{String,String}())
         do_, vo, to = run_ip(_AC_OFF)
-        @test _ac_tally(tn, :array_contraction) == 1
+        @test _ac_fired(tn) == 1
+        @test _ac_tally(tn, :array_contraction) == 0
         @test _ac_tally(to, :array_contraction) == 0
         @test all(dn[vn["u[$i]"]] === do_[vo["u[$i]"]] for i in 1:N)
         # The closed form: u̇[i] = z[i] = Σ_j C[j,i]·2·u[j].
@@ -381,6 +413,7 @@ const _AC_OFF = Dict("ESS_ARRAY_CONTRACTION_DISABLE" => "1")
                     Dict{String,Any}("out[$i]" => 0.0 for i in 1:NI))
         du, vm, tally = _ac_du(doc, ics;
                                const_arrays=Dict("valence" => valence))
+        @test _ac_fired(tally) == 0
         @test _ac_tally(tally, :array_contraction) == 0
         @test all(du[vm["out[$i]"]] ==
                   sum(Float64((i + 2k) % 7) for k in 1:Int(valence[i])) * Float64(i)
