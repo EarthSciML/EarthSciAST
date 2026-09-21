@@ -7,7 +7,7 @@ use super::*;
 /// The answer to a run that provably never takes a solver step, or `None` when
 /// the solver really does have to advance.
 ///
-/// Two shapes reach here, and the answer to both is the initial state on the
+/// Two shapes qualify, and the answer to both is the initial state on the
 /// caller's output grid:
 ///
 ///   * an EMPTY interval (`t_end <= t0`). esm-spec §6.6.2 makes that a real
@@ -22,23 +22,23 @@ use super::*;
 ///   * a NON-empty interval whose whole output grid lies at or before `t0`
 ///     (`saveat` present and every requested time `<= t0`) — the shape an
 ///     inline test takes when the document declares, say, `{start: 0, end: 1}`
-///     and every assertion is at the initial instant. [`run_solver`] answered
-///     this one by draining those grid times from the initial state and
-///     breaking before its first `step()`.
+///     and every assertion is at the initial instant. [`run_solver`]'s `saveat`
+///     branch drains such times from the initial state and breaks before its
+///     first `step()`, so the trajectory is the same either way.
 ///
-/// Both were already answered correctly; what matters is answering them BEFORE
-/// the diffsol problem and its solver are built (issue #438). Constructing an
-/// implicit solver materializes a dense Jacobian, and this crate supplies a
-/// MATRIX-FREE finite-difference Jacobian, so diffsol pays one closure call per
-/// state column and each call evaluates the whole right-hand side twice:
-/// `2·n_states + 1` full RHS evaluations, every observed included, for a run
-/// whose answer is the untouched initial state. On a column model whose state
-/// count and whose per-evaluation cost both grow with the vertical grid, that
-/// is quadratic work in the grid size for an answer that needs one evaluation.
+/// Every caller consults this BEFORE building the diffsol problem and its
+/// solver (issue #438). Constructing an implicit solver materializes a dense
+/// Jacobian, and this crate supplies a MATRIX-FREE finite-difference Jacobian,
+/// so diffsol pays one closure call per state column and each call evaluates
+/// the whole right-hand side twice: `2·n_states + 1` full RHS evaluations,
+/// every observed included, for a run whose answer is the untouched initial
+/// state. On a column model whose state count and whose per-evaluation cost
+/// both grow with the vertical grid, that is quadratic work in the grid size
+/// for an answer that needs one evaluation.
 ///
 /// The `Flow::Cancel` arm is the caller's progress observer declining the run
-/// before it starts, exactly as it may inside [`run_solver`]; it is reported
-/// here so that a caller sees the same single step-0 report either way.
+/// before it starts, exactly as it may inside [`run_solver`]; the single step-0
+/// report is made here so that a caller sees the same one either way.
 #[cfg(feature = "solve")]
 pub(crate) fn nonadvancing_trajectory(
     t0: f64,
@@ -73,25 +73,17 @@ pub(crate) fn nonadvancing_trajectory(
         }
     }
 
-    // With a grid, every requested time gets the initial state. Under an empty
-    // interval that includes a time BEYOND it, which is the courtesy
-    // extrapolation the tail of [`run_solver`]'s `saveat` branch performs —
-    // and for a run that never moves, the initial state is what it extrapolates.
-    // Without a grid, the single point the run produced is `t0` itself.
-    match &opts.saveat {
-        Some(t_eval) => {
-            for &t in t_eval {
-                times.push(t);
-                for (i, &v) in initial_state.iter().enumerate() {
-                    state_rows[i].push(v);
-                }
-            }
-        }
-        None => {
-            times.push(t0);
-            for (i, &v) in initial_state.iter().enumerate() {
-                state_rows[i].push(v);
-            }
+    // With a grid, every requested time gets the initial state — including a
+    // time BEYOND an empty interval, which is the courtesy extrapolation the
+    // tail of [`run_solver`]'s `saveat` branch performs, and for a run that
+    // never moves the initial state is what it extrapolates. Without a grid,
+    // the single point the run produces is `t0` itself.
+    let natural = [t0];
+    let grid: &[f64] = opts.saveat.as_deref().unwrap_or(&natural);
+    for &t in grid {
+        times.push(t);
+        for (i, &v) in initial_state.iter().enumerate() {
+            state_rows[i].push(v);
         }
     }
     Some((times, state_rows, ReturnCode::Success))

@@ -599,16 +599,15 @@ impl Compiled {
         opts: &SolveOptions,
     ) -> IntegrateResult {
         // A run that never advances is answered from the initial state, before
-        // any of the machinery below exists (issue #438). Building the solver
-        // is not free: an implicit method materializes a dense Jacobian on
-        // construction, and this crate's Jacobian is matrix-free finite
-        // differences, so that costs `2·n_states + 1` full right-hand-side
-        // evaluations — for a trajectory that is the untouched initial state.
-        // [`run_solver`] keeps the same check as a backstop, and produces the
-        // identical trajectory, so this is a cost-only shortcut.
-        if let Some((time, state, retcode)) =
-            crate::simulate::driver::nonadvancing_trajectory(t0, t_end, ic_vec, opts)
-        {
+        // any of the machinery below exists (issue #438): building the solver
+        // materializes a dense Jacobian, which this crate's matrix-free
+        // finite-difference Jacobian pays for in full right-hand-side
+        // evaluations, one pair per state column — for a trajectory that is the
+        // untouched initial state. See [`nonadvancing_trajectory`], which also
+        // makes the step-0 progress report. [`run_solver`] keeps the same check
+        // as a backstop and produces the identical trajectory, so this is a
+        // cost-only shortcut.
+        if let Some((time, state, retcode)) = nonadvancing_trajectory(t0, t_end, ic_vec, opts) {
             return Ok((time, state, SolveStats::default(), retcode));
         }
         let n_states = self.state_names.len();

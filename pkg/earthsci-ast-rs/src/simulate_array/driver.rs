@@ -991,16 +991,17 @@ impl ArrayCompiled {
     ) -> Result<(Vec<f64>, Vec<Vec<f64>>, SolveStats, ReturnCode), SimulateError> {
         // A segment that never advances is answered from its own initial state,
         // before any closure, scratch buffer or diffsol problem is built
-        // (issue #438). Building the solver is not free: an implicit method
-        // materializes a dense Jacobian on construction, and the Jacobian below
-        // is matrix-free finite differences, so that costs `2·n_states + 1`
-        // full right-hand-side evaluations — each one materializing every
-        // varying observed, recurrence sweeps included — for a trajectory that
-        // is the untouched initial state. [`crate::simulate::run_solver`] keeps
-        // the same check as a backstop and produces the identical trajectory,
-        // so this is a cost-only shortcut.
+        // (issue #438): building the solver materializes a dense Jacobian,
+        // which the matrix-free finite-difference Jacobian below pays for in
+        // full right-hand-side evaluations, one pair per state column, each one
+        // materializing every varying observed — recurrence sweeps included —
+        // for a trajectory that is the untouched initial state. See
+        // [`crate::simulate::nonadvancing_trajectory`], which also makes the
+        // step-0 progress report. [`crate::simulate::run_solver`] keeps the same
+        // check as a backstop and produces the identical trajectory, so this is
+        // a cost-only shortcut.
         if let Some((time, state, retcode)) =
-            crate::simulate::driver::nonadvancing_trajectory(t0, t_end, u0, opts)
+            crate::simulate::nonadvancing_trajectory(t0, t_end, u0, opts)
         {
             return Ok((time, state, SolveStats::default(), retcode));
         }

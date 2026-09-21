@@ -9,26 +9,29 @@
 //! * `x` is a FROZEN ODE state (`D(x) = 0`, `ic(x) =` the same `faq`), so the
 //!   document has one state per level and the recurrence sits downstream of it.
 //!
-//! The two compute the same number, bit for bit. What differed was the cost:
-//! the state arm was quadratic in the column length where the observed arm was
-//! linear, and quadratic by a factor of 300 at 412 levels.
+//! The two compute the same number, bit for bit, and the recurrence sweeps once
+//! either way — so any difference in cost between the arms belongs to the state.
 //!
-//! The cause is not in the recurrence, which sweeps once either way. It is that
 //! BOTH arms are asked for an EMPTY time span (esm-spec §6.6.2's
-//! instantaneous-derivative shape, `{start: 0, end: 0}`) — and the state arm
-//! nonetheless built a diffsol solver for it. An implicit method materializes a
-//! dense Jacobian on construction, this crate's Jacobian is matrix-free finite
-//! differences, and so diffsol paid one closure call per state column with each
-//! call evaluating the whole right-hand side twice: `2·n_states + 1` full RHS
-//! evaluations, every observed re-materialized in each, to produce a trajectory
-//! that is the untouched initial state. With the state count and the
-//! per-evaluation cost both growing with the column, that is the quadratic.
+//! instantaneous-derivative shape, `{start: 0, end: 0}`), which integrates
+//! nothing. Building a diffsol solver for such a run is what these tests forbid:
+//! an implicit method materializes a dense Jacobian on construction, this
+//! crate's Jacobian is matrix-free finite differences, and so diffsol pays one
+//! closure call per state column with each call evaluating the whole right-hand
+//! side twice — `2·n_states + 1` full RHS evaluations, every observed
+//! re-materialized in each, to produce a trajectory that is the untouched
+//! initial state. With the state count and the per-evaluation cost both growing
+//! with the column, that is quadratic in the column length.
 //!
 //! These tests pin the shape of the cost, not only the answer.
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::{Compile, ProblemOptions, SolveOptions, esm_problem, load_string, solve};
+use earthsci_ast::{
+    Compile, EsmProblem, Flow, ProblemOptions, SolveOptions, esm_problem, load_string, solve,
+};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 /// The issue's reproducer at `nl` levels and `ng` independent columns.
@@ -99,11 +102,11 @@ fn run_empty_span(json: &str) -> earthsci_ast::Solution {
     run_span(json, (0.0, 0.0), None)
 }
 
-/// Solve one arm over `tspan`, asking for `total` at `saveat` (the runner's own
-/// grid when `None`).
-fn run_span(json: &str, tspan: (f64, f64), saveat: Option<Vec<f64>>) -> earthsci_ast::Solution {
+/// Build one arm over `tspan`. Separate from the solve so a test that measures
+/// the solve can leave the build outside its timer.
+fn problem_for(json: &str, tspan: (f64, f64)) -> EsmProblem {
     let file = load_string(json).expect("the reproducer loads");
-    let prob = esm_problem(
+    esm_problem(
         &file,
         tspan,
         ProblemOptions {
@@ -111,13 +114,23 @@ fn run_span(json: &str, tspan: (f64, f64), saveat: Option<Vec<f64>>) -> earthsci
             ..Default::default()
         },
     )
-    .expect("the reproducer builds");
-    let opts = SolveOptions {
+    .expect("the reproducer builds")
+}
+
+/// Ask for `total` at `saveat` (the runner's own grid when `None`).
+fn solve_opts(saveat: Option<Vec<f64>>) -> SolveOptions {
+    SolveOptions {
         output_observed: vec!["total".to_string()],
         saveat,
         ..Default::default()
-    };
-    solve(&prob, &opts).expect("the reproducer solves")
+    }
+}
+
+/// Solve one arm over `tspan`, asking for `total` at `saveat` (the runner's own
+/// grid when `None`).
+fn run_span(json: &str, tspan: (f64, f64), saveat: Option<Vec<f64>>) -> earthsci_ast::Solution {
+    let prob = problem_for(json, tspan);
+    solve(&prob, &solve_opts(saveat)).expect("the reproducer solves")
 }
 
 /// The one value the document computes, read off whichever row carries it (a
@@ -153,8 +166,8 @@ fn both_arms_agree_bit_for_bit_on_an_empty_span() {
 /// The mechanism, asserted directly and machine-independently: over an empty
 /// span the state arm must reach diffsol not at all, so the solver's own
 /// right-hand-side and Jacobian counters stay at zero however many states the
-/// document has. Before the fix this document reported a Jacobian build and the
-/// RHS evaluations that constructing one costs.
+/// document has. A run that builds a solver for this span instead reports the
+/// Jacobian build and the RHS evaluations that constructing one costs.
 #[test]
 fn an_empty_span_evaluates_no_right_hand_side_at_all() {
     let sol = run_empty_span(&doc(103, 140, true));
@@ -185,20 +198,23 @@ fn an_empty_span_evaluates_no_right_hand_side_at_all() {
 /// like 64. A wall-clock ceiling is deliberately loose — it must fail only on a
 /// genuine return to the per-state Jacobian, never on a contended machine.
 ///
-/// The document build is OUTSIDE the timer, so what is timed is the solve: the
-/// recurrence sweep, whose cost is `NG · NL`, plus whatever the run does around
-/// it. Linear in `NL` is ~8x; the `2·n_states + 1` Jacobian arm is ~64x.
+/// The document build is OUTSIDE the timer — [`problem_for`] runs once per
+/// column length and the timer wraps only [`solve`] — so what is timed is the
+/// solve: the recurrence sweep, whose cost is `NG · NL`, plus whatever the run
+/// does around it. Linear in `NL` is ~8x; the `2·n_states + 1` Jacobian arm is
+/// ~64x.
 #[test]
 fn state_leaf_recurrence_stays_linear_in_the_column_length() {
     const NG: usize = 40;
 
     let timed = |nl: usize| -> f64 {
-        let json = doc(nl, NG, true);
-        let _ = run_empty_span(&json); // warm caches, then best of three
+        let prob = problem_for(&doc(nl, NG, true), (0.0, 0.0));
+        let opts = solve_opts(None);
+        let _ = solve(&prob, &opts).expect("the reproducer solves"); // warm caches
         (0..3)
             .map(|_| {
                 let t0 = Instant::now();
-                let _ = run_empty_span(&json);
+                let _ = solve(&prob, &opts).expect("the reproducer solves");
                 t0.elapsed().as_secs_f64()
             })
             .fold(f64::INFINITY, f64::min)
@@ -219,9 +235,9 @@ fn state_leaf_recurrence_stays_linear_in_the_column_length() {
 /// The second shape the same check covers: a NON-empty span whose whole output
 /// grid sits at `t0`. That is what an inline test asks for when the document
 /// declares `{start: 0, end: 1}` and every assertion is at the initial instant
-/// — the runner's `saveat` is then `[0.0]` — and the solver loop already
-/// answered it by draining that grid point from the initial state and breaking
-/// before its first step. It never had to be built to do that.
+/// — the runner's `saveat` is then `[0.0]` — and the solver loop answers it by
+/// draining that grid point from the initial state and breaking before its
+/// first step. It never has to be built to do that.
 #[test]
 fn an_output_grid_that_never_leaves_the_start_builds_no_solver_either() {
     let sol = run_span(&doc(103, 140, true), (0.0, 1.0), Some(vec![0.0]));
@@ -256,5 +272,56 @@ fn a_span_that_must_be_crossed_is_still_integrated() {
     assert!(
         sol.metadata.n_rhs_calls > 0,
         "an integrated span must evaluate the right-hand side"
+    );
+}
+
+/// The output SHAPE the shortcut owns: under an empty span the caller's whole
+/// requested grid is answered, verbatim and in order, from the initial state —
+/// including a time beyond the span, which is the courtesy extrapolation the
+/// solver loop's `saveat` tail performs for a run that does step. Every row is
+/// constant across the grid, because nothing moved.
+#[test]
+fn an_empty_span_answers_the_whole_requested_grid() {
+    let sol = run_span(&doc(8, 4, true), (0.0, 0.0), Some(vec![0.0, 0.5, 1.0]));
+    assert_eq!(
+        sol.time,
+        vec![0.0, 0.5, 1.0],
+        "the grid the caller asked for"
+    );
+    for (row, name) in sol.state.iter().zip(&sol.state_variable_names) {
+        assert_eq!(row.len(), 3, "row `{name}` is short: {row:?}");
+        assert!(
+            row.iter().all(|v| v.to_bits() == row[0].to_bits()),
+            "row `{name}` moved over a span that integrates nothing: {row:?}"
+        );
+    }
+}
+
+/// The one thing the shortcut still owes a host: the single step-0 progress
+/// report `run_solver` makes before it steps, so a caller that renders a
+/// determinate 0% gets it whether or not the run turns out to advance. A run
+/// that never advances reports once, at `t0`, and never again.
+#[test]
+fn a_run_that_never_advances_still_makes_its_step_zero_report() {
+    let prob = problem_for(&doc(8, 4, true), (0.0, 0.0));
+    let seen = Arc::new(AtomicUsize::new(0));
+    let at_t0 = Arc::new(AtomicUsize::new(0));
+    let (seen_cb, at_t0_cb) = (Arc::clone(&seen), Arc::clone(&at_t0));
+    let opts = SolveOptions {
+        progress: Some(Arc::new(move |p: &earthsci_ast::Progress<'_>| {
+            seen_cb.fetch_add(1, Ordering::SeqCst);
+            if p.step == 0 && p.t == 0.0 {
+                at_t0_cb.fetch_add(1, Ordering::SeqCst);
+            }
+            Flow::Continue
+        })),
+        ..solve_opts(None)
+    };
+    let sol = solve(&prob, &opts).expect("the reproducer solves");
+    assert!(sol.retcode.is_success());
+    assert_eq!(
+        (seen.load(Ordering::SeqCst), at_t0.load(Ordering::SeqCst)),
+        (1, 1),
+        "expected exactly one report, made at step 0 and `t0`"
     );
 }
