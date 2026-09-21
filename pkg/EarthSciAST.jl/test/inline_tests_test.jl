@@ -483,9 +483,12 @@ end
     fixture = joinpath(@__DIR__, "..", "..", "..", "tests", "spatial",
                        "pde_inline_assertions_exec.esm")
     @test isfile(fixture)
+    # `compiler=:interpreter`: this fixture seeds from a coordinate expression,
+    # which the strict `native` refuses (API_SPEC §5.8) — see `_pit_run`.
     results = run_inline_tests(fixture; model_name="M",
                             alg=OrdinaryDiffEqTsit5.Tsit5(),
-                            reltol=1e-12, abstol=1e-14)
+                            reltol=1e-12, abstol=1e-14,
+                            compiler=:interpreter)
     @test length(results) == 7
     for r in results
         @test r.passed
