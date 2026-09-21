@@ -26,99 +26,59 @@ use crate::types::ExpressionNode;
 use ndarray::{ArrayViewD, Slice};
 
 // ---------------------------------------------------------------------------
-// Bail-out tracing (diagnostics only; off unless `ESS_VEC_DEBUG` is set).
+// Overlay selection.
 //
-// The vectorized overlay returns `None` from dozens of scattered sites and the
-// caller silently falls back to the per-cell oracle, so a model that never
-// vectorizes gives no clue *which* construct is responsible. With
-// `ESS_VEC_DEBUG=1` every bail records a short tag; because the AST walk
-// unwinds innermost-first, the FIRST entry in the log is the deepest — the
-// actual unsupported construct — and the rest are the enclosing nodes that
-// propagated the `None`.
+// The whole-array overlay is one of the evaluation tiers a compiler selects
+// (API_SPEC §5.8): `interpreter` runs the per-cell oracle everywhere, and the
+// flag below is how a rule reached deep inside an evaluation — a standalone
+// `faq` observed, a `makearray` body — learns which compiler is running.
+// `RhsStats`'s `force_scalar` only gates the two COMPILED-RULE call sites;
+// `eval_faq` and `eval_makearray` reach the overlay without passing through
+// either, so the choice has to travel with the evaluation rather than with the
+// rule.
 // ---------------------------------------------------------------------------
 
 thread_local! {
-    static VEC_BAIL_LOG: std::cell::RefCell<Vec<String>> =
-        const { std::cell::RefCell::new(Vec::new()) };
+    static OVERLAY_OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// Whether bail tracing is enabled (`ESS_VEC_DEBUG` set to anything non-empty).
-pub(super) fn vec_trace_on() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| {
-        std::env::var("ESS_VEC_DEBUG")
-            .map(|v| !v.is_empty() && v != "0")
-            .unwrap_or(false)
-    })
+/// Whether the whole-array overlay is off for this evaluation: true under
+/// [`crate::Compiler::Interpreter`], where every rule is walked per cell.
+pub(super) fn overlay_off() -> bool {
+    OVERLAY_OFF.with(std::cell::Cell::get)
 }
 
-/// Kill-switch for the whole vectorized overlay (`ESS_VEC_DISABLE=1`).
-///
-/// `RhsStats`'s `force_scalar` flag only gates the two *compiled-rule* call
-/// sites; an array observed whose body is a standalone `faq` reaches the
-/// overlay through `eval_faq`, which has no such flag. This switch turns the
-/// overlay off everywhere at once, so a run with it set is the pure per-cell
-/// oracle — the reference a bit-identity check needs.
-pub(super) fn vec_disabled() -> bool {
-    static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *OFF.get_or_init(|| {
-        std::env::var("ESS_VEC_DISABLE")
-            .map(|v| !v.is_empty() && v != "0")
-            .unwrap_or(false)
-    })
-}
+/// Arm the per-cell oracle for as long as this guard lives, restoring the
+/// previous setting on drop. Armed from `force_scalar` at the two evaluation
+/// funnels ([`super::rhs::evaluate_rhs_with_scratch`] and
+/// [`super::rhs::materialize_observeds_pass`]), which is where the compiler's
+/// choice enters the runtime.
+pub(super) struct OverlayGuard(bool);
 
-/// Record one bail site (no-op unless tracing is on).
-pub(super) fn note_bail(site: impl FnOnce() -> String) {
-    if vec_trace_on() {
-        VEC_BAIL_LOG.with(|l| l.borrow_mut().push(site()));
+impl OverlayGuard {
+    pub(super) fn armed(off: bool) -> Self {
+        OverlayGuard(OVERLAY_OFF.with(|c| c.replace(off)))
     }
 }
 
-thread_local! {
-    static VEC_OPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-/// Count one vectorized AST-node visit (tracing only).
-fn note_op() {
-    VEC_OPS.with(|c| c.set(c.get() + 1));
-}
-
-/// Read and reset the visited-node counter (tracing only).
-pub(super) fn take_op_count() -> usize {
-    VEC_OPS.with(|c| c.replace(0))
-}
-
-/// Drain the recorded bail sites (deepest first).
-pub(super) fn take_bail_log() -> Vec<String> {
-    VEC_BAIL_LOG.with(|l| l.borrow_mut().drain(..).collect())
-}
-
-/// A one-line description of an AST node, for the bail log.
-fn describe_expr(e: &Expr) -> String {
-    match e {
-        Expr::Number(n) => format!("Number({n})"),
-        Expr::Integer(n) => format!("Integer({n})"),
-        Expr::Variable(v) => format!("Variable({v})"),
-        Expr::Operator(n) => {
-            let bf = n
-                .broadcast_fn
-                .as_deref()
-                .map(|f| format!("[fn={f}]"))
-                .unwrap_or_default();
-            format!("op {}{}/{}", n.op, bf, n.args.len())
-        }
+impl Drop for OverlayGuard {
+    fn drop(&mut self) {
+        OVERLAY_OFF.with(|c| c.set(self.0));
     }
 }
 
-/// `return None`, recording `$site` in the bail log first.
+/// Leave the overlay: `$site` has no whole-array form, so the caller walks it
+/// per cell — and, under `native`, the tape's own lowering refuses the rule
+/// and names the reason (`crate::simulate_array::tape::ir`'s decline
+/// taxonomy). The site text is the reason, kept beside the return.
 macro_rules! bail_vec {
     ($site:literal) => {{
-        note_bail(|| $site.to_string());
+        let _: &str = $site;
         return None;
     }};
     ($site:literal, $fmt:expr) => {{
-        note_bail(|| format!(concat!($site, ": {}"), $fmt));
+        let _: &str = $site;
+        let _ = &$fmt;
         return None;
     }};
 }
@@ -353,7 +313,7 @@ pub(super) fn try_eval_faq_vectorized<'a>(
     ctx: &EvalCtx<'a>,
     pool: &mut Pool,
 ) -> Option<(VecValue<'a>, usize)> {
-    if vec_disabled() {
+    if overlay_off() {
         return None;
     }
     let lo: DimI = output_ranges.iter().map(|(l, _)| *l).collect();
@@ -502,7 +462,7 @@ pub(super) fn eval_vec_contracted<'a>(
     const MAXC: usize = 4;
     let nc = contract_names.len();
     if nc == 0 || nc > MAXC {
-        bail_vec!("contracted: contraction rank out of range", nc);
+        bail_vec!("contracted: contraction rank out of range");
     }
     let mut clo = [0i64; MAXC];
     let mut chi = [0i64; MAXC];
@@ -512,11 +472,8 @@ pub(super) fn eval_vec_contracted<'a>(
                 clo[i] = *l;
                 chi[i] = *h;
             }
-            other => {
-                bail_vec!(
-                    "contracted: non-static contraction dim (ragged/derived)",
-                    format!("{other:?}")
-                )
+            _ => {
+                bail_vec!("contracted: non-static contraction dim (ragged/derived)")
             }
         }
     }
@@ -710,9 +667,6 @@ pub(super) fn eval_vec<'a>(
     ops: &mut usize,
 ) -> Option<VecValue<'a>> {
     *ops += 1;
-    if vec_trace_on() {
-        note_op();
-    }
     // ---- CSE (ess-cse) -----------------------------------------------------
     // A discretization template is expanded at every reference site, so one
     // lowered tendency body evaluates the SAME subtree dozens of times under the
@@ -746,9 +700,6 @@ pub(super) fn eval_vec<'a>(
         (Some(rt), Some(class), Some(v)) => Some(rt.put(class, v, bx)),
         (_, _, r) => r,
     };
-    if r.is_none() {
-        note_bail(|| format!("  in {}", describe_expr(expr)));
-    }
     r
 }
 
@@ -819,7 +770,6 @@ pub(super) fn eval_vec_variable<'a>(
     // would need the buffer restructured. Correctness holds (the oracle reads
     // the live buffer); only the whole-array fast path is forgone for a rule
     // that reads forcing. Optimizing that is a separate, optional follow-up.
-    note_bail(|| format!("variable: unresolved symbol (forcing/loop-bind?): {name}"));
     None
 }
 
@@ -995,10 +945,7 @@ fn eval_vec_op_code<'a>(
         VecOp::Const => match eval_const(node) {
             Value::Scalar(s) => Some(VecValue::Scalar(s)),
             // Array-valued constants are not part of the stencil fast path.
-            Value::Array(_) => {
-                note_bail(|| "op: array-valued `const`".to_string());
-                None
-            }
+            Value::Array(_) => None,
         },
         // Scalar comparisons and `ifelse` over *scalar* operands — the einsum
         // weight idiom `ifelse(k==0,-2,1)` folds to a constant per contraction
@@ -1075,17 +1022,13 @@ fn eval_vec_op_code<'a>(
             // ungated `eval_expression` path, bail to the oracle rather than
             // guess (the oracle then reports it).
             if !crate::op_registry::is_scalar_operator(fn_name) {
-                note_bail(|| format!("op: broadcast fn `{fn_name}` is not a scalar operator"));
                 return None;
             }
             eval_vec_op_code(vec_op_code(fn_name), node, bx, ctx, pool, ops)
         }
         // Everything else (array-valued ifelse, aggregate, reshape, transpose,
         // concat, `fn` closed-registry calls, atan2, D, …) falls back.
-        VecOp::Unsupported => {
-            note_bail(|| format!("op: unsupported operator `{}`/{}", node.op, node.args.len()));
-            None
-        }
+        VecOp::Unsupported => None,
     }
 }
 
@@ -1186,17 +1129,16 @@ fn eval_vec_nested_aggregate<'a>(
     if spec.has_drivable_overlap() {
         bail_vec!("aggregate: carries an overlap join gate that drives enumeration");
     }
-    if let Some(name) = nested_aggregate_capture(
+    if nested_aggregate_capture(
         &spec,
         bx.syms
             .iter()
             .chain(bx.cnames.iter())
             .chain(ctx.loop_binds.keys()),
-    ) {
-        bail_vec!(
-            "aggregate: nested body depends on an enclosing bound index",
-            name
-        );
+    )
+    .is_some()
+    {
+        bail_vec!("aggregate: nested body depends on an enclosing bound index");
     }
     let (v, sub_ops) = try_eval_faq_vectorized(
         spec.idx_names,
@@ -1529,19 +1471,13 @@ pub(super) fn eval_vec_index<'a>(
     if arg0.shape().is_none() {
         return match arg0 {
             VecValue::Scalar(s) if n == 0 => Some(VecValue::Scalar(s)),
-            _ => {
-                note_bail(|| format!("index: base is a scalar but {n} index args given"));
-                None
-            }
+            _ => None,
         };
     }
     let src_ndim = arg0.shape().expect("array").len();
     if n != src_ndim {
         arg0.release(pool);
-        bail_vec!(
-            "index: arg count != source rank",
-            format!("{n} args vs rank {src_ndim}")
-        );
+        bail_vec!("index: arg count != source rank");
     }
     let src_origin: DimI = arg0
         .origin()
@@ -1599,19 +1535,7 @@ pub(super) fn eval_vec_index<'a>(
             _ => {
                 arg0.release(pool);
                 bail_vec!(
-                    "index: axis expression is neither an affine/wrap map of an unclaimed output symbol nor a constant select",
-                    format!(
-                        "axis {d} = {} (unclaimed output syms = {:?})",
-                        describe_expr(e),
-                        (0..out_ndim)
-                            .filter(|a| mapped[*a].is_none())
-                            // `.get`, not `[a]`: a box with no output-index
-                            // symbols at all (a top-level `makearray`, whose
-                            // region values are self-contained arrays) is
-                            // legal, and a diagnostic must not panic on it.
-                            .map(|a| bx.syms.get(a).map(|s| s.as_str()).unwrap_or("<none>"))
-                            .collect::<Vec<_>>()
-                    )
+                    "index: axis expression is neither an affine/wrap map of an unclaimed output symbol nor a constant select"
                 );
             }
         }
@@ -1704,13 +1628,7 @@ pub(super) fn eval_vec_index<'a>(
                 // A roll requires the source axis to be the full period.
                 if so != bx.lo[a] || ssz != period || bx.shape[a] as i64 != period {
                     arg0.release(pool);
-                    bail_vec!(
-                        "index: periodic wrap axis is not a full-period roll",
-                        format!(
-                            "src_origin={so} src_extent={ssz} period={period}                              out_lo={} out_extent={}",
-                            bx.lo[a], bx.shape[a]
-                        )
-                    );
+                    bail_vec!("index: periodic wrap axis is not a full-period roll");
                 }
                 let p = period as usize;
                 let s = (((k % period) + period) % period) as usize; // shift in [0,period)
@@ -1906,10 +1824,7 @@ pub(super) fn eval_vec_makearray<'a>(
     }
     let ndim = regions[0].len();
     if ndim != bx.shape.len() {
-        bail_vec!(
-            "makearray: region rank != output box rank",
-            format!("{ndim} vs {}", bx.shape.len())
-        );
+        bail_vec!("makearray: region rank != output box rank");
     }
     let mut lo_bb = DimI::from_elem(i64::MAX, ndim);
     let mut hi_bb = DimI::from_elem(i64::MIN, ndim);

@@ -516,6 +516,10 @@ pub(super) fn materialize_observeds_pass(
 ) {
     let ObsPass { env, force_scalar } = pass;
     let force_scalar = *force_scalar;
+    // `interpreter` reaching the runtime: the rules below that materialize
+    // through `eval_faq` rather than through a compiled call site read it here
+    // (see [`super::vectorized::OverlayGuard`]).
+    let _overlay = super::vectorized::OverlayGuard::armed(force_scalar);
     for rule in observed_rules {
         // The rule's own working precision (esm-spec §11.3.1). An equation is
         // evaluated at the element type of the variable it defines, which is
@@ -531,17 +535,6 @@ pub(super) fn materialize_observeds_pass(
                 body,
                 declared_shape,
             } => {
-                if vec_trace_on() {
-                    let _ = take_bail_log();
-                }
-                // Taken ONLY when the trace below will read it. `Instant::now()`
-                // panics on `wasm32-unknown-unknown` ("time not implemented on
-                // this platform"), so reading it unconditionally made every
-                // array/PDE `simulate` trap in the browser with an opaque
-                // `unreachable` — the scalar ODE path was unaffected, which is
-                // why it went unnoticed. `vec_trace_on()` is env-driven and so
-                // always false on wasm.
-                let t_start = vec_trace_on().then(std::time::Instant::now);
                 // `derived_extents` is EMPTY on every compiled-RHS context in
                 // this file, and deliberately so: `ArrayCompiled::from_model`
                 // densifies each value-invented derived set to an `interval`
@@ -556,31 +549,6 @@ pub(super) fn materialize_observeds_pass(
                     (Value::Scalar(s), Some(shape)) => ArrayD::from_elem(IxDyn(shape), s),
                     (Value::Scalar(s), None) => ArrayD::from_elem(IxDyn(&[]), s),
                 };
-                // `ESS_VEC_DEBUG`: a scalar-shaped observed rule whose body is an
-                // `faq` is materialized by `eval_faq`, which tries the
-                // same overlay first. A non-empty bail log means it fell back to
-                // the per-cell walk — the dominant per-step cost for a model whose
-                // stencils live in observeds rather than in the `D(...)` rules.
-                if vec_trace_on() {
-                    let log = take_bail_log();
-                    let us = t_start.map(|s| s.elapsed().as_micros()).unwrap_or(0);
-                    if log.is_empty() {
-                        eprintln!(
-                            "[vec-obs] {var}: vectorized, {us} us, {} node visits",
-                            take_op_count()
-                        );
-                    } else {
-                        eprintln!("[vec-obs] {var}: PER-CELL, {us} us");
-                        for (i, l) in log.iter().enumerate() {
-                            if i < 14 {
-                                eprintln!("[vec-obs]   {l}");
-                            }
-                        }
-                        if log.len() > 14 {
-                            eprintln!("[vec-obs]   … {} more frames", log.len() - 14);
-                        }
-                    }
-                }
                 dst.insert(var.clone(), arr);
             }
             // Causal self-reference (esm-spec §4.3.1.1). The one rule kind whose
@@ -690,18 +658,6 @@ pub(super) fn materialize_observeds_pass(
                 }
 
                 // ---- Per-cell oracle (fallback) ----------------------------
-                if vec_trace_on() && !force_scalar {
-                    let log = take_bail_log();
-                    eprintln!("[vec-bail] observed {var} -> per-cell oracle:");
-                    for (i, l) in log.iter().enumerate() {
-                        if i < 24 {
-                            eprintln!("[vec-bail]   {l}");
-                        }
-                    }
-                    if log.len() > 24 {
-                        eprintln!("[vec-bail]   … {} more frames", log.len() - 24);
-                    }
-                }
                 stats.obs_scalar_rules += 1;
                 let padded_origin: Vec<i64> = vec![1i64; padded_shape.len()];
                 let total = padded_shape.iter().copied().product::<usize>().max(1);
@@ -770,8 +726,12 @@ fn rule_set_key(call: &RhsCall) -> u64 {
 /// compiled tape ([`RhsScratch::install_tape`]) and the caller is not asking
 /// for the per-cell oracle, the call runs through the fast tape executor;
 /// otherwise the legacy interpreter path runs, byte-identical to the pre-tape
-/// driver. `ESS_TAPE_CHECK=N` runs BOTH paths for the first N calls of each
-/// taped scratch and asserts bitwise-equal `dy`.
+/// driver.
+///
+/// `force_scalar` is [`crate::Compiler::Interpreter`] reaching the runtime, so
+/// it also arms the per-cell oracle for the evaluations that do not pass
+/// through a compiled rule — a standalone `faq` observed, a `makearray` body
+/// (see [`super::vectorized::OverlayGuard`]).
 pub(super) fn evaluate_rhs_with_scratch(
     call: &RhsCall,
     dy: &mut [f64],
@@ -785,24 +745,14 @@ pub(super) fn evaluate_rhs_with_scratch(
     // arm; the const-literal memo is read by the tape's fallback arms too, so it
     // is retargeted here, on the same key, ahead of the dispatch.
     scratch.const_lits.retarget(rule_set_key(call));
+    let _overlay = super::vectorized::OverlayGuard::armed(force_scalar);
     if force_scalar || scratch.tape.is_none() {
         evaluate_rhs_legacy(call, dy, force_scalar, stats, scratch);
         return;
     }
-    // Take the tape out so the legacy check arm below can borrow the whole
+    // Take the tape out so the fallback arms below can borrow the whole
     // scratch without recursing back onto the tape path.
     let mut tape = scratch.tape.take().expect("tape checked Some");
-
-    // ESS_TAPE_CHECK: legacy arm first, into the (re)zeroed check buffer,
-    // using the scratch's legacy state exactly as production legacy would.
-    if tape.check_remaining > 0 {
-        tape.check_buf.resize(dy.len(), 0.0);
-        for v in tape.check_buf.iter_mut() {
-            *v = 0.0;
-        }
-        let mut check_stats = RhsStats::default();
-        evaluate_rhs_legacy(call, &mut tape.check_buf, false, &mut check_stats, scratch);
-    }
 
     // Fallback rules evaluate through the interpreter's `EvalCtx`, which
     // reads the legacy per-variable state arrays: refill them only then (a
@@ -822,31 +772,12 @@ pub(super) fn evaluate_rhs_with_scratch(
         stats,
     );
 
-    if tape.check_remaining > 0 {
-        for (k, (a, b)) in dy.iter().zip(tape.check_buf.iter()).enumerate() {
-            assert!(
-                a.to_bits() == b.to_bits(),
-                "ESS_TAPE_CHECK: dy[{k}] diverged at t={}: tape {a:e} ({:016x}) vs \
-                 legacy {b:e} ({:016x})",
-                call.t,
-                a.to_bits(),
-                b.to_bits()
-            );
-        }
-        tape.check_remaining -= 1;
-        if tape.check_remaining == 0 {
-            // The check passed for every requested call: drop the legacy
-            // comparison buffer.
-            tape.check_buf = Vec::new();
-        }
-    }
     scratch.tape = Some(tape);
 }
 
 /// The legacy interpreter RHS path (pre-Step-3b `evaluate_rhs_with_scratch`),
-/// unchanged: the oracle for `debug_eval_rhs*`, the `ESS_TAPE_DISABLE`
-/// wholesale fallback, the `ESS_TAPE_CHECK` comparison arm, the Jacobian
-/// closure, and every scratch without an installed tape.
+/// unchanged: the oracle for `debug_eval_rhs*`, [`crate::Compiler::Interpreter`],
+/// and every scratch without an installed tape.
 fn evaluate_rhs_legacy(
     call: &RhsCall,
     dy: &mut [f64],
@@ -1052,10 +983,6 @@ fn evaluate_rhs_legacy(
                 // (`try_eval_faq_vectorized`); a ragged/derived-bound filter
                 // (dynamic contraction window) bails to the per-cell oracle.
                 let lhs_shifts = lhs_constant_shifts(lhs_idx_exprs, output_idx_names);
-                // Clear any stale trace so the log below belongs to THIS rule.
-                if vec_trace_on() {
-                    let _ = take_bail_log();
-                }
                 if !force_scalar {
                     if let Some(dest_lo) = lhs_shifts
                         .as_ref()
@@ -1089,31 +1016,6 @@ fn evaluate_rhs_legacy(
                 }
 
                 // ---- Per-cell oracle (fallback / forced reference) ---------
-                // `ESS_VEC_DEBUG=1`: report *why* this rule is not vectorized.
-                // The log is deepest-first, so the first line names the actual
-                // unsupported construct and the rest are the enclosing nodes.
-                if vec_trace_on() && !force_scalar {
-                    let log = take_bail_log();
-                    if log.is_empty() {
-                        eprintln!(
-                            "[vec-bail] rule D({var_name}) fell back before the overlay ran                              (lhs_shifts={:?}, output_ranges={output_ranges:?})",
-                            lhs_shifts
-                        );
-                    } else {
-                        eprintln!(
-                            "[vec-bail] rule D({var_name}) -> per-cell oracle                              (output_idx={output_idx_names:?} contract={contract_names:?}                              reduce={reduce:?} filter={}):",
-                            filter.is_some()
-                        );
-                        for (i, l) in log.iter().enumerate() {
-                            if i < 24 {
-                                eprintln!("[vec-bail]   {l}");
-                            }
-                        }
-                        if log.len() > 24 {
-                            eprintln!("[vec-bail]   … {} more frames", log.len() - 24);
-                        }
-                    }
-                }
                 stats.scalar_rules += 1;
                 // Hoist the eval context and the static contraction bounds out of
                 // the per-cell loop: the bound key set (output_idx + contract

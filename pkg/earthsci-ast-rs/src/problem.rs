@@ -2195,10 +2195,9 @@ fn build_compiler_report(
         Backend::Array(c) => c,
     };
 
-    // `tape_disabled()` is the one condition under which the array runtime
-    // installs no tape at all, so under `native` it is a refusal rather than a
-    // silent demotion to the overlay-then-oracle pair. Its two arms are
-    // different failures and are reported as such.
+    // A per-variable element type is the one condition under which the array
+    // runtime installs no tape at all, so under `native` it is a refusal
+    // rather than a silent demotion to the overlay-then-oracle pair.
     if compiler == Compiler::Native {
         if let Some(var) = crate::precision::first_variable_override() {
             return Err(SimulateError::Compile(
@@ -2215,15 +2214,6 @@ fn build_compiler_report(
                         .to_string(),
                 },
             ));
-        }
-        if crate::simulate_array::tape::tape_disabled() {
-            return Err(SimulateError::CompilerUnavailable {
-                compiler: compiler.as_str(),
-                details: "ESS_TAPE_DISABLE is set in this process, which turns the tape off \
-                          wholesale; `native` IS the tape, so unset it (the kill switch is \
-                          retired in a later phase, where `compiler=interpreter` replaces it)"
-                    .to_string(),
-            });
         }
     }
 

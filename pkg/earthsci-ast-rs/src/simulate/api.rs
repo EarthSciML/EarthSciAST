@@ -516,9 +516,8 @@ pub struct SolutionMetadata {
     /// vectorizable.
     ///
     /// Always empty for the scalar interpreter path (which has no tape) and
-    /// when the tape is switched off with `ESS_TAPE_DISABLE` / `ESS_VEC_DISABLE`
-    /// — an empty list means "nothing to report", not "the tape covered
-    /// everything".
+    /// under [`crate::Compiler::Interpreter`], which builds none — an empty
+    /// list means "nothing to report", not "the tape covered everything".
     pub tape_fallbacks: Vec<(String, String)>,
     /// Every state spelling an `operator_compose` renaming match DELETED,
     /// mapped onto the survivor it was folded into (issue #230; carried from

@@ -21,19 +21,6 @@ use super::*;
 /// round-tripping ~55 KB slab arrays between every op.
 pub(super) const FCHUNK: usize = 1024;
 
-/// `ESS_TAPE_FUSE_MODE=elem`: run fused groups through the per-element
-/// micro-op interpreter instead of the chunked one (measurement arm for the
-/// Step 4 interpreter-design comparison; bit-identical either way).
-fn fuse_elem_mode() -> bool {
-    use std::sync::OnceLock;
-    static ELEM: OnceLock<bool> = OnceLock::new();
-    *ELEM.get_or_init(|| {
-        std::env::var("ESS_TAPE_FUSE_MODE")
-            .map(|v| v.eq_ignore_ascii_case("elem"))
-            .unwrap_or(false)
-    })
-}
-
 /// A micro-op operand resolved for one chunk: a pointer to `c` contiguous
 /// values, or a constant broadcast over the chunk.
 #[derive(Clone, Copy)]
@@ -408,11 +395,6 @@ pub(super) unsafe fn exec_fused(
     let mut outs: SmallVec<[(u16, *mut f64); 2]> = SmallVec::new();
     for &(reg, slot) in &fs.outputs {
         outs.push((reg, unsafe { slab_ptr.add(slot_off[slot as usize]) }));
-    }
-
-    if fuse_elem_mode() {
-        unsafe { exec_fused_elem(fs, &svals, &bases, &outs) };
-        return;
     }
 
     // Step 4b: run the chunked micro-program through the SIMD clone selected
@@ -830,10 +812,9 @@ pub(super) unsafe fn exec_fused_runs_avx512(
 }
 
 /// The SINGLE definition of micro-op scalar semantics: one element of one
-/// [`MicroOp`], evaluated over a scalar register file. Both cold per-element
-/// interpreters — the test-only reference executor (`refexec`) and the
-/// `ESS_TAPE_FUSE_MODE=elem` measurement arm ([`exec_fused_elem`]) — dispatch
-/// through this function, so they cannot drift from each other. The hot
+/// [`MicroOp`], evaluated over a scalar register file. The cold per-element
+/// reference executor (`refexec`, test-only) dispatches through this
+/// function, so it cannot drift from what it checks. The hot
 /// chunked executor ([`exec_fused_runs`]) applies the SAME kernels in the
 /// same per-element order through its monomorphized chunk loops (a structure
 /// a scalar evaluator cannot back without disturbing it); the A/B tests and
@@ -853,6 +834,9 @@ pub(super) unsafe fn exec_fused_runs_avx512(
 ///   input at the current element, including the [`GHOST_OFF`] `+0.0` read).
 ///   Operand reads are pure, so `Select` reading only the taken operand is
 ///   value-identical to the chunked executor's load-both blend.
+/// Test-only since the chunked executor became the only production one: its
+/// single caller is the reference executor that checks that executor.
+#[cfg(test)]
 #[inline(always)]
 pub(in crate::simulate_array::tape) fn eval_micro_op(
     op: &MicroOp,
@@ -921,55 +905,6 @@ pub(in crate::simulate_array::tape) fn eval_micro_op(
             } else {
                 binary_kernel_of(*op3)(t2, dv)
             };
-        }
-    }
-}
-
-/// The per-element measurement arm (`ESS_TAPE_FUSE_MODE=elem`): one scalar
-/// register file, micro-ops dispatched per element through [`eval_micro_op`]
-/// (the single definition of micro-op scalar semantics). Bit-identical to
-/// the chunked executor (same kernels, same order).
-#[inline(never)]
-unsafe fn exec_fused_elem(
-    fs: &FusedSpec,
-    svals: &[f64],
-    bases: &[*const f64],
-    outs: &[(u16, *mut f64)],
-) {
-    let mut regs: SmallVec<[f64; 32]> = SmallVec::from_elem(0.0f64, fs.n_regs as usize);
-    for run in &fs.runs {
-        for k in 0..run.len as usize {
-            let at = run.out_off as usize + k;
-            let get = |m: &MRef, regs: &[f64]| -> f64 {
-                match m {
-                    MRef::Reg(r) => regs[*r as usize],
-                    MRef::Scal(i) => svals[*i as usize],
-                    MRef::In(i) => {
-                        let inp = &fs.inputs[*i as usize];
-                        match inp.shifted_ix {
-                            None => unsafe { *bases[*i as usize].add(at) },
-                            Some(s) => {
-                                let o = run.in_off[s as usize];
-                                if o == GHOST_OFF {
-                                    0.0
-                                } else {
-                                    unsafe {
-                                        *bases[*i as usize].offset(
-                                            o as isize + k as isize * inp.elem_stride as isize,
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            };
-            for op in &fs.micro {
-                eval_micro_op(op, &mut regs, get);
-            }
-            for &(reg, optr) in outs {
-                unsafe { *optr.add(at) = regs[reg as usize] };
-            }
         }
     }
 }

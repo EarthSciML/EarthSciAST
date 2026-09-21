@@ -1237,7 +1237,13 @@ fn ab_fallback_ifelse_array_condition_indexed_reader() {
 /// an .esm path (e.g. simpleclimate.esm) and optionally `TAPE_AB_MP` to
 /// `NX=12,NY=7,NZ=7`. Builds the tape, obtains the model's own u0 through a
 /// zero-length solve, and asserts bitwise dy equality at u0 and at perturbed
-/// states.
+/// states — the `native` tape against the `interpreter` per-cell oracle, the
+/// same comparison `CONFORMANCE_SPEC.md` §5.44 runs over the corpus.
+///
+/// The two variables name an INPUT DOCUMENT and its metaparameters, not an
+/// evaluation strategy, so they are not switches `esm-libraries-spec.md`
+/// §2.5.10 retires: a model too large to commit is the one thing a fixture
+/// cannot be.
 #[test]
 fn ab_model_file_if_available() {
     let Ok(path) = std::env::var("TAPE_AB_MODEL") else {
@@ -1477,15 +1483,12 @@ fn export_demotion_skips_unread_publishes() {
         );
     };
 
-    // Demoted (production default for a no-fallback model outside check
-    // mode): the export is never published into the observed map.
+    // Demoted (production default for a no-fallback model): the export is
+    // never published into the observed map.
     let mut ctx = super::exec::TapeCtx::new(
         std::rc::Rc::new(prog),
         std::rc::Rc::new(compiled.observed_rules.clone()),
     );
-    if std::env::var("ESS_TAPE_CHECK").is_ok() {
-        return; // check mode legitimately keeps exports on
-    }
     let mut dy = vec![0.0f64; 1];
     run_call(&mut ctx, &mut dy);
     assert_eq!(dy[0].to_bits(), (-3.0f64).to_bits());
@@ -1494,8 +1497,8 @@ fn export_demotion_skips_unread_publishes() {
         "demoted export must not publish"
     );
 
-    // Re-enabled (fallbacks present / ESS_TAPE_CHECK / explicit request):
-    // the same call publishes the computed value, and dy is unchanged.
+    // Re-enabled (fallbacks present, or an explicit request): the same call
+    // publishes the computed value, and dy is unchanged.
     ctx.set_exports_active(true);
     let mut dy2 = vec![0.0f64; 1];
     run_call(&mut ctx, &mut dy2);
@@ -1732,7 +1735,7 @@ fn ab_superop_bin3_and_extended_pairs() {
         "Bin3 must stay off in the default configuration"
     );
 
-    // The Bin3 arm (`all_superops_cfg`, the `ESS_TAPE_BIN3=1` build): the
+    // The Bin3 arm (`all_superops_cfg`, the `ESS_TAPE_BIN3=1` threshold): the
     // three-op chain must merge, splat registers must be provisioned, and
     // BOTH executors must stay bitwise equal to the production interpreter.
     let compiled = compile(doc);

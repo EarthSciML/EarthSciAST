@@ -2930,8 +2930,8 @@ struct CacheEntry<V> {
 /// free to decline one entirely (the lowered `filter` then computes the same
 /// answer over the full product), and rebuilding one from the same inputs
 /// yields the same match set, since it is a pure function of the key columns.
-/// So an eviction — like a `ESS_JOIN_GATE_DISABLE=1` run — can make a document
-/// slower and can never make it answer differently.
+/// So an eviction — like a run with [`crate::broad_phase::set_join_gate_enabled`]
+/// off — can make a document slower and can never make it answer differently.
 ///
 /// # The policy
 ///
@@ -3135,7 +3135,8 @@ fn env_factor_len(name: &str, ctx: &EvalCtx) -> Option<usize> {
 /// pipeline both evaluate observeds in dependency order). The ordering
 /// constraint the hook exists to satisfy is satisfied structurally.
 pub(super) fn resolve_join_gates(join: &[JoinClause], ctx: &EvalCtx) -> Vec<JoinGate> {
-    // The driver kill-switch (`ESS_JOIN_GATE_DISABLE=1`). Declining here is the
+    // The driver switch ([`crate::broad_phase::set_join_gate_enabled`], a
+    // thread-local a test sets around one evaluation). Declining here is the
     // pre-driver path exactly: the full product, decided by `filter`. It is what
     // makes "the driver changes cost, never an answer" a directly testable
     // claim on the SAME document rather than an argument.
@@ -3340,18 +3341,6 @@ pub(super) fn resolve_join_gates(join: &[JoinClause], ctx: &EvalCtx) -> Vec<Join
                     && (c.matches as u128) > space.saturating_mul(ratio)
                 {
                     crate::broad_phase::bump_gate_plan_declines();
-                    if crate::broad_phase::join_gate_stats_enabled() {
-                        eprintln!(
-                            "[join-gate] declined clause {} on ({}, {}): {} pairs \
-                             against a {} reachable, {}x over",
-                            c.clause_ix,
-                            c.g.sym_l,
-                            c.g.sym_r,
-                            c.matches,
-                            space,
-                            (c.matches as u128) / space.max(1),
-                        );
-                    }
                     continue;
                 }
                 let Some((pos_l, keys_l, pos_r, keys_r)) = c.sides else {
@@ -4679,13 +4668,10 @@ pub(super) fn eval_faq(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
             filter,
             cell: Some(&cellbox),
         };
-        // Per-node cost reporting (`ESS_JOIN_GATE_STATS=1`, see
-        // [`crate::broad_phase::join_gate_stats_enabled`]). The counter is
-        // thread-local and bumped only on the gate-driven unroll, so the delta
-        // across this output loop is exactly the leaves THIS aggregate
-        // enumerated.
-        let stats_from = (!gates.is_empty() && crate::broad_phase::join_gate_stats_enabled())
-            .then(crate::broad_phase::overlap_enum_visits);
+        // Per-node cost accounting. The counter is thread-local and bumped
+        // only on the gate-driven unroll, so the delta across this output loop
+        // is exactly the leaves THIS aggregate enumerated.
+        let stats_from = (!gates.is_empty()).then(crate::broad_phase::overlap_enum_visits);
         let mut tuples = CartesianTuples::new(&ranges);
         while let Some(tuple) = tuples.next() {
             for (name, val) in idx_names.iter().zip(tuple.iter()) {
@@ -4827,8 +4813,7 @@ pub(super) fn eval_makearray(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value 
     // values vectorized (they are `faq`s, which try the overlay
     // themselves) but the assembly around them stayed a per-cell
     // `CartesianTuples` walk writing through bounds-checked dynamic-stride
-    // `ArrayD` indexing. `ESS_VEC_DEBUG` reported these observeds as
-    // "vectorized" precisely because nothing bailed — there was no bail site.
+    // `ArrayD` indexing.
     //
     // `eval_vec_makearray` is the same region-sub-range-write assembly the
     // compiled-rule path already uses (pinned bit-identical by
@@ -4862,7 +4847,7 @@ pub(super) fn eval_makearray(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value 
     // its `expr_mentions` scan has nothing to test. That is not cosmetic:
     // placeholder names cost one full walk of the region body PER AXIS PER
     // REGION, and on a 7-region PPM template that scan alone was 43% of the run.
-    if !vec_disabled()
+    if !overlay_off()
         && ctx.loop_binds.is_empty()
         && !shape.contains(&0)
         && !values.iter().any(region_value_is_prefix_scan)
@@ -4890,21 +4875,6 @@ pub(super) fn eval_makearray(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value 
         if let Some(out) = materialized {
             return Value::Array(Box::new(out));
         }
-        // `eval_vec_makearray` records its own bail site, so the log already
-        // names the offending region value.
-    } else if !vec_disabled() {
-        // Declined before the overlay ran, so nothing else recorded a reason.
-        // Without this, a `makearray` observed that took the per-cell path
-        // reported as "vectorized" under `ESS_VEC_DEBUG` — an empty bail log —
-        // and was invisible to exactly the tracing built to find it.
-        note_bail(|| {
-            format!(
-                "makearray: overlay not attempted (loop_binds={}, empty axis={}, prefix-scan region={})",
-                ctx.loop_binds.len(),
-                shape.contains(&0),
-                values.iter().any(region_value_is_prefix_scan),
-            )
-        });
     }
 
     let mut arr = ArrayD::<f64>::zeros(IxDyn(&shape));
