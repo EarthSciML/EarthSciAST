@@ -132,18 +132,15 @@ fn ess_tape_disable_reverts_wholesale_to_the_legacy_path() {
         ..Default::default()
     };
     let ics: HashMap<String, f64> = (1..=n).map(|k| (format!("u[{k}]"), 2.0)).collect();
-    let sol = earthsci_ast::esm_problem(
-        &file,
-        (0.0, 1.0),
-        earthsci_ast::ProblemOptions {
-            p: HashMap::new().clone(),
-            u0: ics.clone(),
-            compile: earthsci_ast::Compile::Always,
-            ..Default::default()
-        },
-    )
-    .and_then(|prob| earthsci_ast::solve(&prob, &opts))
-    .expect("legacy simulate must run");
+    // Through `ArrayCompiled::solve`, NOT `esm_problem`. The kill switch takes
+    // the tape away wholesale, and `native` IS the tape (API_SPEC §5.8), so
+    // `esm_problem` refuses the build with `compiler_unavailable` naming the
+    // variable rather than quietly running the interpreter under a name that
+    // promises otherwise. The extension seam keeps the historical routing, and
+    // it is the routing this file is about.
+    let sol = compiled
+        .solve((0.0, 1.0), &HashMap::new(), &ics, &opts)
+        .expect("legacy simulate must run");
     let ti = sol.time.len() - 1;
     let want = 2.0 * (-0.5f64).exp();
     for k in 0..n {

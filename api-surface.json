@@ -93,18 +93,18 @@
     }
   },
   "counts": {
-    "symbols": 928,
+    "symbols": 931,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
       "julia": 308,
       "typescript": 239,
       "python": 257,
-      "rust": 341,
+      "rust": 346,
       "go": 439
     },
     "by_tier": {
-      "extension": 654,
-      "stable": 274
+      "extension": 656,
+      "stable": 275
     }
   },
   "planned": [
@@ -1974,9 +1974,10 @@
     {
       "name": "compiler",
       "kind": "type",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
-        "python": "Compiler"
+        "python": "Compiler",
+        "rust": "Compiler"
       }
     },
     {
@@ -2001,7 +2002,8 @@
       "tier": "stable",
       "bindings": {
         "julia": "CompilerReport",
-        "python": "CompilerReport"
+        "python": "CompilerReport",
+        "rust": "CompilerReport"
       }
     },
     {
@@ -2010,6 +2012,14 @@
       "tier": "extension",
       "bindings": {
         "julia": "CompilerRuleRecord"
+      }
+    },
+    {
+      "name": "compiler_rule_report",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "CompilerRuleReport"
       }
     },
     {
@@ -6477,6 +6487,14 @@
       }
     },
     {
+      "name": "rhs",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "Rhs"
+      }
+    },
+    {
       "name": "role_algebraic",
       "kind": "constant",
       "tier": "extension",
@@ -6595,6 +6613,14 @@
       "tier": "extension",
       "bindings": {
         "rust": "run_inline_tests_with_base_dir"
+      }
+    },
+    {
+      "name": "run_inline_tests_with_options",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "run_inline_tests_with_options"
       }
     },
     {

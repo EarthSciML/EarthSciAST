@@ -254,7 +254,7 @@ fn reports_progress_on_the_natural_step_grid() {
         earthsci_ast::ProblemOptions {
             p: HashMap::new().clone(),
             u0: HashMap::new().clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )
@@ -288,7 +288,7 @@ fn reports_progress_on_an_interpolated_output_grid() {
         earthsci_ast::ProblemOptions {
             p: HashMap::new().clone(),
             u0: HashMap::new().clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )
@@ -321,7 +321,7 @@ fn reports_progress_from_the_array_runtime() {
         earthsci_ast::ProblemOptions {
             p: HashMap::new().clone(),
             u0: HashMap::new().clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )
@@ -330,10 +330,9 @@ fn reports_progress_from_the_array_runtime() {
 
     // Sanity that this really is the array path and it still computes:
     // D(y[1])/dt = 1*1 + 1*2 + 1*3 = 6, from y[1](0) = 0.
+    // See `Solution::index_of`: either spelling resolves.
     let i = sol
-        .state_variable_names
-        .iter()
-        .position(|n| n == "y[1]")
+        .index_of("y[1]")
         .unwrap_or_else(|| panic!("y[1] not in {:?}", sol.state_variable_names));
     assert!((sol.state[i][sol.time.len() - 1] - 6.0).abs() < 1e-6);
 
@@ -362,7 +361,7 @@ fn returning_cancel_stops_the_run() {
         earthsci_ast::ProblemOptions {
             p: HashMap::new().clone(),
             u0: HashMap::new().clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )
@@ -390,7 +389,7 @@ fn cancelling_at_step_zero_stops_before_any_work() {
         earthsci_ast::ProblemOptions {
             p: HashMap::new().clone(),
             u0: HashMap::new().clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )
@@ -419,7 +418,7 @@ fn observing_does_not_perturb_the_trajectory() {
         earthsci_ast::ProblemOptions {
             p: HashMap::new().clone(),
             u0: HashMap::new().clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )
@@ -433,7 +432,7 @@ fn observing_does_not_perturb_the_trajectory() {
         earthsci_ast::ProblemOptions {
             p: HashMap::new().clone(),
             u0: HashMap::new().clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )

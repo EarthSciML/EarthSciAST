@@ -572,7 +572,7 @@ fn a_default_less_coupling_target_makes_an_omitted_import_an_error() {
             (0.0, 1.0),
             earthsci_ast::ProblemOptions {
                 p,
-                compile: earthsci_ast::Compile::Always,
+                rhs: earthsci_ast::Rhs::Always,
                 ..Default::default()
             },
         )

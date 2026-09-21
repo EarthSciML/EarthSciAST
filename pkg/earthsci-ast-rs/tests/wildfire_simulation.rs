@@ -82,7 +82,11 @@ fn run(file: &EsmFile, test: &ModelTest) -> Solution {
         earthsci_ast::ProblemOptions {
             p: HashMap::new().clone(),
             u0: ics.clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
+            // The conservative-regrid geometry these fixtures build runs through
+            // `polygon_intersection_area`, which has no tape lowering, so `native`
+            // refuses them by NAME (API_SPEC §5.8).
+            compiler: Some(earthsci_ast::Compiler::Interpreter),
             ..Default::default()
         },
     )
@@ -163,7 +167,11 @@ fn wildfire_regrid_trajectory_and_constant_states() {
         earthsci_ast::ProblemOptions {
             p: HashMap::new().clone(),
             u0: HashMap::new().clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
+            // The conservative-regrid geometry these fixtures build runs through
+            // `polygon_intersection_area`, which has no tape lowering, so `native`
+            // refuses them by NAME (API_SPEC §5.8).
+            compiler: Some(earthsci_ast::Compiler::Interpreter),
             ..Default::default()
         },
     )

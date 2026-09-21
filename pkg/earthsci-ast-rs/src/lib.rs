@@ -345,7 +345,7 @@ pub use inline_tests::{
     AssertionResult, BuildProviderFactory, InlineTestOptions, check_assertion,
     ephemeral_injected_file, evaluate_cellwise, field_reduce, resolve_tolerance, run_inline_tests,
     run_inline_tests_filtered, run_inline_tests_paths, run_inline_tests_with_base_dir,
-    run_inline_tests_with_providers, state_cells,
+    run_inline_tests_with_options, run_inline_tests_with_providers, state_cells,
 };
 pub use performance::{CompactExpr, PerformanceError};
 #[cfg(feature = "parallel")]
@@ -357,9 +357,12 @@ pub use simulate::{
 };
 
 // The EsmProblem / `solve` surface. `simulate` is deleted in all its forms.
+#[allow(deprecated)]
+pub use problem::Compile;
 pub use problem::{
-    CallbackFn, CallbackSet, Compile, EnsembleProblem, EsmProblem, ProblemInput, ProblemOptions,
-    Remake, callbacks, compose, esm_problem, observed_field, remake,
+    CallbackFn, CallbackSet, Compiler, CompilerReport, CompilerRuleReport, EnsembleProblem,
+    EsmProblem, ProblemInput, ProblemOptions, Remake, Rhs, callbacks, compose, esm_problem,
+    observed_field, remake,
 };
 #[cfg(feature = "solve")]
 pub use problem::{

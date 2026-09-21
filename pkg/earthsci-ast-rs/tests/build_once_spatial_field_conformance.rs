@@ -138,7 +138,11 @@ fn build_once_spatial_field_trajectory_matches_golden() {
         earthsci_ast::ProblemOptions {
             p: HashMap::new().clone(),
             u0: HashMap::new().clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
+            // The build-once spatial field is a `polygon_intersection_area` regrid,
+            // which has no tape lowering, so `native` refuses it by NAME (API_SPEC
+            // §5.8).
+            compiler: Some(earthsci_ast::Compiler::Interpreter),
             ..Default::default()
         },
     )

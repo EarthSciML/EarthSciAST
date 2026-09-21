@@ -24,7 +24,7 @@ use earthsci_ast::adapter_support::{parse_manifest_output_args, write_report};
 
 use earthsci_ast::flatten;
 use earthsci_ast::simulate_array::ArrayCompiled;
-use earthsci_ast::{Alg, Compile, ProblemOptions, SolveOptions, esm_problem, load_string, solve};
+use earthsci_ast::{Alg, ProblemOptions, Rhs, SolveOptions, esm_problem, load_string, solve};
 use ndarray::{ArrayD, IxDyn};
 use serde_json::{Map, Value, json};
 
@@ -122,7 +122,7 @@ fn run_fixture(fx: &Value, base: &Path, integ: &Value) -> Result<Value, String> 
         ProblemOptions {
             p: params,
             u0: ics,
-            compile: Compile::Always,
+            rhs: Rhs::Always,
             ..Default::default()
         },
     )

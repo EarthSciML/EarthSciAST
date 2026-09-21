@@ -215,13 +215,20 @@ fn final_state(stdout: &str) -> Vec<(String, f64)> {
 fn esm_simulate_evaluates_a_recurrence_and_agrees_with_esm_test() {
     let doc = "../../tests/valid/recurrence_causal_self_reference.esm";
 
+    // Both commands name the REFERENCE compiler. A causal self-reference is
+    // the one construct CONFORMANCE_SPEC §5.19.2 forbids the tape from
+    // lowering, so the default `native` refuses this document by name
+    // (API_SPEC §5.8) — and what this test is about is the two commands
+    // AGREEING on the recurrence's values, which is the interpreter's to
+    // define.
+    //
     // `esm test` — the path that always worked. Six assertions, zero tolerance.
-    let (ok, out) = esm(&["test", doc]);
+    let (ok, out) = esm(&["test", "--compiler", "interpreter", doc]);
     assert!(ok, "esm test must pass on the valid corpus fixture:\n{out}");
     assert_eq!(total_row(&out), (6, 0, 0), "esm test verdict:\n{out}");
 
     // `esm simulate` — the path that returned the non-recurrent const verbatim.
-    let (ok, out) = esm(&["simulate", doc]);
+    let (ok, out) = esm(&["simulate", "--compiler", "interpreter", doc]);
     assert!(ok, "esm simulate must succeed:\n{out}");
     let state = final_state(&out);
     assert_eq!(

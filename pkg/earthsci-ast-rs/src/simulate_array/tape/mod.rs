@@ -71,7 +71,7 @@ mod tests;
 #[cfg(feature = "xla")]
 pub mod xla_emit;
 
-pub(crate) use exec::tape_disabled;
+pub(crate) use exec::{tape_check_calls, tape_disabled};
 pub(in crate::simulate_array) use exec::{TapeCtx, run_tape_call};
 pub(crate) use fuse::fuse_disabled;
 pub(crate) use ir::*;
@@ -186,6 +186,26 @@ impl fmt::Display for TapeBuildReport {
     }
 }
 
+/// Where ONE rule of a model landed, for `compiler_report` (API_SPEC §5.8).
+///
+/// Deliberately plain data rather than a borrow of the program: the program is
+/// built and discarded, and the record outlives it on the Problem.
+#[derive(Clone, Debug)]
+pub(crate) struct TapeRuleRecord {
+    /// The rule's variable name, as the compiled model spells it (the caller
+    /// qualifies it with the component).
+    pub name: String,
+    /// `"observed"` or `"state derivative"`.
+    pub kind: &'static str,
+    /// The cadence tier the rule runs at: `"const"` (once per solve, at
+    /// setup), `"segment"` (once per forcing-refresh segment) or
+    /// `"continuous"` (every right-hand-side call).
+    pub cadence: &'static str,
+    /// `None` when the rule lowered onto the tape; otherwise the DEEPEST
+    /// decline reason reached while trying.
+    pub fallback_reason: Option<String>,
+}
+
 /// Assemble the report from a finished program.
 pub(crate) fn make_report(prog: &TapeProgram, vn_hits: (usize, usize)) -> TapeBuildReport {
     let mut opcode_counts: std::collections::HashMap<&'static str, usize> =
@@ -262,6 +282,45 @@ impl ArrayCompiled {
     /// discard entry for inspection tooling (`examples/tape_report.rs`).
     pub fn debug_build_tape_report(&self) -> TapeBuildReport {
         self.build_tape(&HashSet::new()).1
+    }
+
+    /// Where every rule of this model LANDS, in program order — the per-rule
+    /// half of `compiler_report` (API_SPEC §5.8).
+    ///
+    /// [`TapeBuildReport::fallbacks`] answers only "which rules did not lower",
+    /// which is the wrong half for a caller asking what a compiler did: a
+    /// document with no fallbacks reports an empty list and says nothing about
+    /// the rules that DID lower, nor at which cadence they run. This walks the
+    /// program's whole rule table instead, so a taped rule is named too.
+    ///
+    /// Build-and-discard, like [`Self::debug_build_tape_report`]: the program
+    /// the solve runs is compiled separately.
+    pub(crate) fn tape_rule_records(
+        &self,
+        discrete_forcing: &HashSet<String>,
+    ) -> (Vec<TapeRuleRecord>, TapeBuildReport) {
+        let (prog, report) = self.build_tape(discrete_forcing);
+        let records = prog
+            .rules
+            .iter()
+            .map(|r| TapeRuleRecord {
+                name: r.name.clone(),
+                kind: match r.kind {
+                    RuleKind::Observed(_) => "observed",
+                    RuleKind::Rhs(_) => "state derivative",
+                },
+                cadence: match r.cadence {
+                    Cadence::Const => "const",
+                    Cadence::Segment => "segment",
+                    Cadence::Continuous => "continuous",
+                },
+                fallback_reason: match &r.status {
+                    RuleStatus::Taped => None,
+                    RuleStatus::Fallback(reason) => Some(reason.clone()),
+                },
+            })
+            .collect();
+        (records, report)
     }
 
     /// Step 4 diagnostic: dump per-group shape statistics of the fused

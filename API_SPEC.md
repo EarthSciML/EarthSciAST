@@ -1027,6 +1027,7 @@ reading that as a gap.
 | `cadence_error` | error | – | – | `CadenceError` | `CadenceError` | `CadenceError` |
 | `callbacks` | function | `callbacks` | – | `callbacks` | `callbacks` | – |
 | `canonicalize_error` | error | `CanonicalizeError` | `CanonicalizeError` | – | `CanonicalizeError` | – |
+| `compiler_report` | type | `CompilerReport` | – | `CompilerReport` | `CompilerReport` | – |
 | `component_exists` | function | – | `componentExists` | `component_exists` | `component_exists` | – |
 | `component_graph` | type | – | `ComponentGraph` | – | `ComponentGraph` | `ComponentGraph` |
 | `convert_units` | function | – | `convertUnits` | `convert_units` | `convert_units` | – |
@@ -1079,7 +1080,7 @@ reading that as a gap.
 | `callback_set` | type | – | – | `CallbackSet` | `CallbackSet` | – |
 | `canonical_index_set_json` | function | – | – | `canonical_index_set_json` | `canonical_index_set_json` | – |
 | `circular_reference_error` | error | – | `CircularReferenceError` | `CircularReferenceError` | – | – |
-| `compiler_report` | type | `CompilerReport` | – | `CompilerReport` | – | – |
+| `compiler` | type | – | – | `Compiler` | `Compiler` | – |
 | `coordinate` | type | – | – | – | `Coordinate` | `Coordinate` |
 | `coupling_couple` | type | `CouplingCouple` | – | – | – | `CouplingCouple` |
 | `coupling_role` | type | – | – | – | `CouplingRole` | `CouplingRole` |

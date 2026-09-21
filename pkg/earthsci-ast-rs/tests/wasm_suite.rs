@@ -149,7 +149,7 @@ fn scalar_ode_matches_analytic() {
         earthsci_ast::ProblemOptions {
             p: HashMap::new().clone(),
             u0: HashMap::new().clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )
@@ -187,7 +187,7 @@ fn array_pde_heat_matches_analytic() {
         earthsci_ast::ProblemOptions {
             p: HashMap::new().clone(),
             u0: ic.clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )

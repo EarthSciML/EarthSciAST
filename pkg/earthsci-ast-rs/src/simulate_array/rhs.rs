@@ -121,6 +121,24 @@ impl RhsScratch {
         self.tape.is_some()
     }
 
+    /// Force the tape's `Export` publishes on, so a caller can read every
+    /// observed's value back after a call.
+    ///
+    /// Production derives this from the fallback count — with nothing able to
+    /// read a published array the publish is a pure cost — so a scratch built
+    /// to HARVEST observeds has to say so. No-op on a scratch with no tape.
+    pub(super) fn set_exports_active(&mut self, on: bool) {
+        if let Some(tape) = self.tape.as_mut() {
+            tape.set_exports_active(on);
+        }
+    }
+
+    /// The observeds the tape published on the last call, or `None` on a
+    /// scratch that carries no tape.
+    pub(super) fn taped_observeds(&self) -> Option<&ArrMap> {
+        self.tape.as_ref().map(super::tape::TapeCtx::exported_observeds)
+    }
+
     /// Install the hoisted static observeds (see [`Self::static_keys`]): seed
     /// their arrays into `observed_arrays` once and remember their names so each
     /// RHS eval retains them in place. Called once per `simulate` closure setup;
@@ -446,37 +464,6 @@ pub(super) fn build_state_arrays(var_shapes: &IndexMap<String, VarShape>, state:
     state_arrays
 }
 
-/// Evaluate the observed algebraic rules (already dependency-ordered at build
-/// time) at `env`'s state/time into the name→array map `dst`, registering any
-/// FAQ-materialized derived ring under its producer id in the environment's
-/// `derived_rings`. An observed whose body yields an array (a `const` polygon,
-/// the clip ring) is stored as an array so downstream `index(...)` reads
-/// address it; a scalar body (an `area` FAQ) is a 0-D array. Shared by the RHS
-/// driver ([`evaluate_rhs`]) and the output-time observed exposure
-/// ([`ArrayCompiled::simulate`]) so both see identical observed values.
-///
-/// `dst` is a reused container (ess-mro), so the observed map is not
-/// reallocated each RHS call: it is cleared (capacity retained) then
-/// repopulated; for models with no observeds — the vectorized PDE path — it
-/// stays empty and nothing is allocated. The observed *value* arrays
-/// themselves are still materialized fresh (only models that actually carry
-/// algebraic observeds pay that, and they are outside the zero-allocation
-/// stencil path being verified).
-pub(super) fn materialize_observeds_into(
-    dst: &mut ArrMap,
-    observed_rules: &[AlgebraicRule],
-    env: &EvalEnv,
-) {
-    dst.clear();
-    let pass = ObsPass {
-        env: *env,
-        // Build/setup materialization: use the vectorized overlay (bit-identical
-        // to the oracle, and this runs once, off the per-step hot path).
-        force_scalar: false,
-    };
-    materialize_observeds_pass(dst, observed_rules, &pass, &mut RhsStats::default());
-}
-
 /// One observed-materialization pass: the rule-invariant evaluation
 /// environment plus the oracle switch, grouped so
 /// [`materialize_observeds_pass`] takes named fields instead of a dozen
@@ -492,7 +479,7 @@ pub(super) struct ObsPass<'a> {
     pub(super) force_scalar: bool,
 }
 
-/// Like [`materialize_observeds_into`] but does NOT clear `dst` first — the
+/// Materialize `observed_rules` into `dst` WITHOUT clearing it first — the
 /// rules are evaluated and their outputs inserted on top of whatever is already
 /// there. This is what lets the RHS seed the hoisted static observeds (ess:
 /// static-observed hoist) into `dst` and then materialize only the *varying*
@@ -1295,7 +1282,7 @@ mod elementwise_array_observed_tests {
             crate::problem::ProblemOptions {
                 p: HashMap::new().clone(),
                 u0: HashMap::new().clone(),
-                compile: crate::problem::Compile::Always,
+                rhs: crate::problem::Rhs::Always,
                 ..Default::default()
             },
         )

@@ -192,7 +192,7 @@ fn test_exponential_decay_matches_analytical() {
         earthsci_ast::ProblemOptions {
             p: params.clone(),
             u0: ic.clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )
@@ -276,7 +276,7 @@ fn test_reversible_reaction_reaches_steady_state() {
         earthsci_ast::ProblemOptions {
             p: params.clone(),
             u0: ic.clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )
@@ -360,7 +360,7 @@ fn test_autocatalytic_conserves_mass() {
         earthsci_ast::ProblemOptions {
             p: params.clone(),
             u0: ic.clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )
@@ -480,7 +480,7 @@ fn test_robertson_stiff_problem() {
         earthsci_ast::ProblemOptions {
             p: params.clone(),
             u0: ic.clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )
@@ -599,7 +599,7 @@ fn test_round_trip_simple_ode_fixture() {
         earthsci_ast::ProblemOptions {
             p: params.clone(),
             u0: ic.clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )
@@ -665,7 +665,7 @@ fn test_round_trip_stiff_vdp_fixture() {
         earthsci_ast::ProblemOptions {
             p: params.clone(),
             u0: ic.clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )
@@ -821,7 +821,7 @@ fn test_error_invalid_parameter_name() {
         earthsci_ast::ProblemOptions {
             p: params.clone(),
             u0: ic.clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )
@@ -874,7 +874,7 @@ fn test_error_missing_initial_condition() {
         earthsci_ast::ProblemOptions {
             p: params.clone(),
             u0: ic.clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )

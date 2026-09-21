@@ -386,11 +386,20 @@ impl TapeCtx {
         self.forcing_epoch += 1;
     }
 
-    /// Force `Export` instructions on/off (test/diagnostic hook — production
-    /// derives this from the fallback count and `ESS_TAPE_CHECK`).
-    #[allow(dead_code)]
+    /// Force `Export` instructions on/off (production derives this from the
+    /// fallback count and `ESS_TAPE_CHECK`; a harvesting scratch turns them on
+    /// because it IS the reader).
     pub(crate) fn set_exports_active(&mut self, on: bool) {
         self.exec.exports_active = on;
+    }
+
+    /// The observed arrays the last call published.
+    ///
+    /// Complete only when the program was built to export every observed —
+    /// which a `native` build is (see `compute_exports`) — and when the
+    /// publishes are active.
+    pub(in crate::simulate_array) fn exported_observeds(&self) -> &ArrMap {
+        &self.exec.obs
     }
 }
 

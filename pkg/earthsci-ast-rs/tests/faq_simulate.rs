@@ -88,16 +88,15 @@ fn sim_value(model_json: &str, var: &str) -> Result<f64, String> {
         earthsci_ast::ProblemOptions {
             p: HashMap::new().clone(),
             u0: ics.clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )
     .and_then(|prob| earthsci_ast::solve(&prob, &opts))
     .map_err(|e| format!("simulate: {e}"))?;
+    // See `Solution::index_of`: either spelling resolves.
     let slot = sol
-        .state_variable_names
-        .iter()
-        .position(|n| n == var)
+        .index_of(var)
         .ok_or_else(|| {
             format!(
                 "state slot '{var}' not found; known: {:?}",
@@ -529,17 +528,22 @@ fn ragged_index_set_drives_dynamic_reduction_bound() {
         earthsci_ast::ProblemOptions {
             p: HashMap::new().clone(),
             u0: ics.clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
+            // A RAGGED contraction bound is not static, so the tape cannot
+            // size the fold and `native` refuses this document by NAME
+            // (API_SPEC §5.8). What is pinned here is that the dynamic bound
+            // DRIVES the reduction, which is the reference evaluator's
+            // answer to give.
+            compiler: Some(earthsci_ast::Compiler::Interpreter),
             ..Default::default()
         },
     )
     .and_then(|prob| earthsci_ast::solve(&prob, &opts))
     .unwrap_or_else(|e| panic!("simulate ragged: {e}"));
     let at_t1 = |name: &str| -> f64 {
+        // See `Solution::index_of`: either spelling resolves.
         let slot = sol
-            .state_variable_names
-            .iter()
-            .position(|n| n == name)
+            .index_of(name)
             .unwrap_or_else(|| {
                 panic!(
                     "state slot '{name}' not found: {:?}",

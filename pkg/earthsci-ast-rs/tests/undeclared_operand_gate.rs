@@ -89,7 +89,7 @@ fn build_pipeline_route_refuses_and_names_the_operand() {
     let file = load_path(fixture()).expect("fixture parses");
     let opts = earthsci_ast::ProblemOptions {
         build_pipeline: true,
-        compile: earthsci_ast::Compile::Auto,
+        rhs: earthsci_ast::Rhs::Auto,
         ..Default::default()
     };
     match earthsci_ast::esm_problem(&file, (0.0, 0.0), opts) {
@@ -135,7 +135,7 @@ fn both_routes_give_the_same_verdict_in_the_same_words() {
         (0.0, 0.0),
         earthsci_ast::ProblemOptions {
             build_pipeline: true,
-            compile: earthsci_ast::Compile::Auto,
+            rhs: earthsci_ast::Rhs::Auto,
             ..Default::default()
         },
     )

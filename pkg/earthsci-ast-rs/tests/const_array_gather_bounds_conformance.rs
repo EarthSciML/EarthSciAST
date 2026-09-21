@@ -10,7 +10,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::{Alg, SolveOptions, load_string, run_inline_tests_with_base_dir};
+use earthsci_ast::{Alg, SolveOptions, load_string};
 use std::fs;
 
 mod common;
@@ -48,8 +48,21 @@ fn const_array_gathers_out_of_range_fail_with_the_spec_code() {
         let path = dir.join(fx["path"].as_str().expect("path"));
         let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
         let file = load_string(&text).unwrap_or_else(|e| panic!("{id}: does not load: {e}"));
-        let results =
-            run_inline_tests_with_base_dir(&file, fx["model"].as_str(), &opts, Some(dir.as_path()));
+        let results = earthsci_ast::run_inline_tests_with_options(
+            &file,
+            // §5.5.5 resolves an out-of-range const-array gather PER CELL by
+            // its declared boundary policy, which the tape has no form for,
+            // so `native` refuses these documents by NAME (API_SPEC §5.8).
+            // The fault they assert is the reference evaluator's.
+            &earthsci_ast::InlineTestOptions {
+                model_name: fx["model"].as_str().map(str::to_string),
+                solve: opts.clone(),
+                base_dir: Some(dir.clone()),
+                compiler: Some(earthsci_ast::Compiler::Interpreter),
+                ..Default::default()
+            },
+            None,
+        );
         assert_eq!(results.len(), 1, "{id}: expected one assertion result");
         let r = &results[0];
         match fx["outcome"].as_str().expect("outcome") {
