@@ -45,8 +45,17 @@ Design decisions of record (2026-09-21) that this tier implements:
 tests/conformance/compiler_agreement/
 ├── README.md            # this file — the contract
 ├── manifest.json        # fixtures, trajectories, tolerances, the `required` ledger
+├── stub_adapter.py      # a canned stand-in adapter, for the runner's own test only
+├── test_runner.py       # drives the runner through all five outcomes and both ledgers
 └── golden/<id>.json     # Julia-interpreter trajectory, one file per fixture (phase 2)
 ```
+
+`stub_adapter.py` is a test fixture for the HARNESS and never evaluates a
+document: it answers the adapter CLI from a canned table so `test_runner.py` can
+gate the runner in pure Python, with no binding installed and in under a second.
+It is not a producer and must never be registered as one. Its goldens are minted
+into the test's own temporary directory; nothing but the real Julia adapter ever
+writes `golden/`.
 
 There is no `fixtures/` directory and there should not be one: a fixture
 authored here would be a document whose only reader is the compiler gate, which
@@ -186,7 +195,17 @@ statement about the physics and a golden is a statement about the arithmetic;
 holding them to one band would mean loosening the arithmetic one.
 
 A fixture MAY carry a tighter or looser bound than these rules give, with a
-written reason in its entry, and only with one.
+written reason in its entry, and only with one. The runner reads that override as
+an explicit `rtol` AND `atol` on a `"source": "derived"` block plus a non-empty
+`reason` string in the same block; an override missing either number, or missing
+the reason, is a manifest error (exit 2) rather than a quietly widened gate.
+
+A `derived` block MAY also restate the figures it derives from — `rtol_class`,
+`atol_class`, `atol_scaled_class`, `reltol_integration`, `abstol_integration` —
+for legibility, and the entries here do. Each restated figure is checked against
+its authority (`tolerance_classes` and the fixture's `integration` block) and a
+disagreement is a manifest error. Writing a number twice is only worth doing if
+the two copies are made to agree.
 
 ## Golden format
 
@@ -216,6 +235,28 @@ manifest's `saveat` values rendered as the adapter's own float repr; the runner
 matches them by numeric value, not by string. Goldens are **not** bit-comparable
 across bindings and nothing asks them to be — the golden is a numeric reference,
 not a wire format.
+
+Three fields the contract did not pin, pinned by the runner that writes them:
+
+* **`saveat`** is the fixture's save times, from whichever source defines the run
+  — the manifest's `trajectory.saveat` for a `"from": "manifest"` entry, and the
+  ASSERTION TIMES of the named inline test for a `"from": "inline_tests"` one.
+  The document stays the single source of truth for its own run, so the runner
+  reads the inline test rather than have the manifest restate it.
+* **`state_order`** is what the adapter declared in its output, else the
+  manifest's `initial_conditions` keys in document order, else the row's element
+  names SORTED. Sorted last so the fallback is binding-independent rather than
+  whichever order one adapter's dictionary happened to iterate in. Every saved
+  row carries exactly these names and no others: a binding whose shape inference
+  invents an extra flat element must not put it in the golden, where it would
+  become a requirement every other binding had to reproduce.
+* **`observed`** carries one series per name in the fixture's
+  `trajectory.observed`, and is `{}` when the fixture names none.
+
+The runner's `--self-test` checks every committed golden against this shape —
+the ids, the reference binding and compiler, a non-empty duplicate-free
+`state_order`, a row at every declared save time, exactly the `state_order`
+names in each row, every value finite — before it believes a number in it.
 
 ## Adapter contract
 
@@ -248,12 +289,40 @@ The adapter writes:
   "compiler": "<value>",
   "fixtures": {
     "<id>": {
+      "state_order": ["u[1]", "u[2]", "…"],
       "state": { "<save time>": { "<element>": <f64> } },
       "observed": { "<name>": { "<save time>": <f64> } }
     }
   }
 }
 ```
+
+Field by field, so three adapters written independently produce the same thing:
+
+| Field | Required | Meaning |
+|---|---|---|
+| `binding` | yes | the binding answering. The runner supplies it when absent |
+| `compiler` | yes | the value that was passed in `--compiler`. Answering for a DIFFERENT compiler is a broken adapter, and the runner says so rather than filing the verdict under the wrong name |
+| `fixtures` | yes | one entry per manifest fixture id. A fixture the adapter omits is a failure — it is not a way to skip one |
+| `fixtures.<id>.state` | for an `ok` entry | the state rows: `{ save time: { element: value } }`. One row per save time the fixture defines, each naming every state element |
+| `fixtures.<id>.state_order` | no | the column-major element order. The runner uses it only when MINTING a golden and never for comparison; when it is absent the golden falls back to the manifest's `initial_conditions` order, then to sorted names |
+| `fixtures.<id>.observed` | no | one series per observed field: `{ name: { save time: value } }`. `{}` or absent when the fixture names none. Every name in the fixture's `trajectory.observed` must be present, and is gated at the same band as the state |
+
+**Save-time keys** are written as the adapter's own float repr of the save time.
+The runner canonicalizes both sides to `repr(float(t))` and matches BY NUMERIC
+VALUE; a key that lands within an ulp of a declared save time still matches, so a
+whole trajectory is never unreadable over the last bit of a time stamp.
+
+**Element keys** are bare column-major names. A leading `Model.` namespace is
+stripped by the runner, so either spelling is accepted. An element the reference
+does not carry is ignored — the reference decides what the trajectory IS — and an
+element it does carry and the producer does not is a mismatch, named.
+
+**Save times are not the adapter's to choose.** They are the manifest's `saveat`
+for a `"from": "manifest"` fixture and the named inline test's assertion times for
+a `"from": "inline_tests"` one, and the adapter reads them the same way the runner
+does. The adapter resolves a fixture's `path` by walking up from the manifest's
+ABSOLUTE path to the nearest ancestor directory named `tests`.
 
 Plain JSON has no literal for a non-finite value. The runner reads one spelled
 as a string `float()` parses (`"NaN"`, `"Infinity"`, `"-Infinity"`), as a bare
@@ -297,8 +366,25 @@ adapter.
 * an **`error`** is RED for any binding and any compiler. Unlike a refusal it
   says nothing about what a compiler can run, so `required` does not excuse it.
 
+Two cases the outcome table does not name, decided by the runner:
+
+* **no adapter registered at all** — no discovery variable, nothing on PATH, and
+  no planned adapter on disk — is the same FACT as an `unavailable` payload,
+  reported from the other side, and is governed by the same availability ledger:
+  green and named for a `bindings_optional` binding, RED for a required one. It
+  is never a refusal, because nothing was asked to lower anything;
+* **a broken adapter** — a timeout, no output, unparsable output, or output
+  answering for another compiler — is RED for EVERY binding, required or not. An
+  optional compiler's build failing is a build failure, and letting it read as a
+  legal skip is how a whole lane goes untested while the log says "skipped".
+
 The named-exclusion list under a strict `native` default IS the coverage
 backlog, and this tier is where it is read and burned down.
+
+A fixture's `required` map is also checked against the availability ledger: a
+fixture that requires `<binding>/<compiler>` to RUN it while
+`compilers.<compiler>.bindings_required` does not require that binding to OFFER
+the compiler is a manifest error, not a gate.
 
 ## Runner
 
@@ -307,21 +393,72 @@ backlog, and this tier is where it is read and burned down.
 
 ```
 --self-test                                   # goldens vs carried anchors + negative controls; no bindings
---write-golden --bindings julia               # mint golden/<id>.json from the reference interpreter
+--write-golden --bindings julia --compiler interpreter   # mint golden/<id>.json from the reference
 --bindings julia,rust,python --compiler native --output <report.json>
 ```
 
-Exit codes: 0 every required binding within tolerance (or the self-test passed);
-1 a mismatch, an error, a refusal from a binding a fixture's `required` map
-names, an `unavailable` from a `bindings_required` binding, or a self-test
-failure; 2 a manifest or configuration error. The report lists every refusal and
-every unavailable compiler by name and reason.
+Flags, in `run-compiled-rhs-conformance.py`'s spelling:
+
+| Flag | Meaning |
+|---|---|
+| `--manifest <path>` | the manifest to run (default: this directory's) |
+| `--bindings a,b,c` | comma-separated bindings (default: the compiler's required + optional bindings) |
+| `--compiler`, `--compilers` | comma-separated compilers from `API_SPEC.md` §5.8's vocabulary. The two spellings are one flag; the singular reads better for the one-compiler producer stages and the plural for a whole sweep. Default: every compiler the manifest carries |
+| `--output <file>` | where the aggregated report goes (default `conformance-results/compiler_agreement/report.json`) |
+| `--results-dir <dir>` | `<dir>/report.json`, for a caller that owns the directory rather than the filename. An explicit `--output` always wins |
+| `--timeout <s>` | per-adapter wall clock |
+| `--write-golden` | mint from the reference binding and the reference compiler, and refuse any other |
+| `--self-test` | the always-on guard; needs no live binding |
+
+`--write-golden` accepts `--bindings julia --compiler interpreter` and nothing
+else: the golden IS the Julia `interpreter` trajectory, and minting it from a
+compiled path would make the tier compare that path against itself.
+
+`--self-test` checks, in this order: the manifest's shape and both ledgers; every
+fixture's run resolves and every anchor point lands on a saved row; every
+COMMITTED golden's file shape and its agreement with the anchor it carries; and
+then the negative controls — a value moved off its band, a missing element, a
+missing save time, an error (required and not), a `required` refusal, an
+`interpreter` refusal, an unrequired refusal reported as a named exclusion with
+its rule and reason, both arms of the availability ledger, and the §5.44.2
+arithmetic itself including the scaled `reduction` floor. The controls run
+against a SYNTHETIC reference rather than a committed golden, so the harness is
+gated from the day it lands rather than only once phase 2 mints the goldens; with
+`golden/` empty the self-test says so and exits 0.
+
+One report holds every compiler a run asked for, keyed
+`compilers.<compiler>.bindings.<binding>`, beside the two ledgers the contract
+requires it to print by name: `refusals` (each with its rule, its reason and a
+verdict of `fail` or `named exclusion`) and `unavailable` (each with its reason).
+`scripts/test-conformance.sh` runs one binding and one compiler per stage and
+writes `conformance-results/compiler_agreement/<binding>_<compiler>_report.json`.
+
+Exit codes:
+
+| Code | When |
+|---|---|
+| 0 | the self-test passed, or every required binding answered within tolerance. An unrequired refusal and an unavailable optional compiler are both green, and both are named in the report AND on the console |
+| 1 | a mismatch; an `error`; an `interpreter` refusal; a refusal from a binding+compiler a fixture's `required` map names; an `unavailable` (or an unregistered adapter) from a `bindings_required` binding; a broken adapter; or a self-test failure |
+| 2 | a manifest or configuration error and no run attempted: the manifest is missing or malformed, the two ledgers contradict each other, a tolerance override carries no reason, a requested compiler is not in the manifest, a requested binding is `scope_excluded`, or a golden is missing for a producer run |
+
+Because the runner exits 0 on a legal skip, a workflow whose point is that a
+particular compiler RAN cannot read the exit code alone.
+`scripts/assert-compiler-agreement-available.py <report.json> <binding>
+<compiler>` reads the report and fails unless that binding's status under that
+compiler is literally `ok` — the analog of `assert-compiled-rhs-available.py`,
+and for the same reason.
 
 Stages in `scripts/test-conformance.sh` are one per binding per compiler, named
 `compiler-agreement <compiler> producer (<binding>)`: `interpreter` and `native`
 for Julia, Rust and Python; `xla` for Julia and Rust; `mtk` for Julia; `sympy`
 for Python. `compiler-agreement self-test` is the always-on guard and needs no
 live binding.
+
+A producer stage **declines to start**, with a warning naming exactly what is
+missing, when its binding's adapter is not on disk or when `golden/` holds no
+reference trajectory. Both are the phase-1 state and neither is a silent pass:
+the stage log says `UNAVAILABLE` and why. Once both exist the stage runs for
+real and the gate above decides.
 
 ## Adding a fixture
 

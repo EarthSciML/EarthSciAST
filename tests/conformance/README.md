@@ -19,6 +19,8 @@ tests/conformance/
 ├── compiler_agreement/             # the `compiler` keyword's gate (CONFORMANCE_SPEC §5.44)
 │   ├── README.md                   #   the contract: manifest schema, adapter CLI, outcomes, tolerance rule
 │   ├── manifest.json               #   fixtures referenced from the simulation tiers, tolerances, the `required` ledger
+│   ├── stub_adapter.py             #   a canned stand-in adapter, for the runner's own test only
+│   ├── test_runner.py              #   drives the runner through all five outcomes and both ledgers
 │   └── golden/<id>.json            #   the Julia-INTERPRETER trajectory (phase 2 mints these)
 ├── deprecated_op_alias/            # the `aggregate` -> `faq` alias contract (esm 1.1.0)
 │   ├── aliased.esm                 #   input, authored with the deprecated spelling
