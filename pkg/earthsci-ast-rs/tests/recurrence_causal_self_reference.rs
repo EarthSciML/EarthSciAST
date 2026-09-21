@@ -22,8 +22,28 @@
 //! Every assertion below names an expected value or an expected code. None
 //! asserts a bound, and none asserts merely that a run completed.
 
-use earthsci_ast::{AssertionResult, SolveOptions, load_path, load_string, run_inline_tests};
+use earthsci_ast::{
+    AssertionResult, Compiler, InlineTestOptions, SolveOptions, load_path, load_string,
+    run_inline_tests_with_options,
+};
 use serde_json::{Value, json};
+
+/// The REFERENCE compiler, for every fixture in this file.
+///
+/// A causal self-reference is the one construct CONFORMANCE_SPEC §5.19.2
+/// forbids the tape from lowering at all — its cells are not independent and
+/// the tape's scheduler reorders and batches — so `native` refuses every
+/// document here by construction (API_SPEC §5.8), and refusing is the right
+/// answer. What this file is about is the SEMANTICS of the sequential sweep,
+/// which is the interpreter's to define.
+fn interpreter_options(base_dir: Option<&std::path::Path>) -> InlineTestOptions {
+    InlineTestOptions {
+        compiler: Some(Compiler::Interpreter),
+        solve: SolveOptions::default(),
+        base_dir: base_dir.map(std::path::Path::to_path_buf),
+        ..Default::default()
+    }
+}
 
 fn fixture(name: &str) -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -33,7 +53,7 @@ fn fixture(name: &str) -> std::path::PathBuf {
 
 fn run_fixture(name: &str) -> Vec<AssertionResult> {
     let file = load_path(fixture(name)).expect("fixture parses");
-    let results = run_inline_tests(&file, None, &SolveOptions::default());
+    let results = run_inline_tests_with_options(&file, &interpreter_options(None), None);
     assert!(!results.is_empty(), "{name}: the fixture asserts nothing");
     results
 }
@@ -261,7 +281,7 @@ fn doc_with_body(body: Value) -> String {
 /// from a compile refusal or a runtime fault.
 fn probe_message(body: Value) -> String {
     let file = load_string(&doc_with_body(body)).expect("probe parses");
-    let results = run_inline_tests(&file, None, &SolveOptions::default());
+    let results = run_inline_tests_with_options(&file, &interpreter_options(None), None);
     assert_eq!(results.len(), 1, "one assertion: {results:?}");
     let r = &results[0];
     assert!(
@@ -450,7 +470,7 @@ fn self_read_offset_on_two_axes_is_rejected() {
     })
     .to_string();
     let file = load_string(&doc).expect("probe parses");
-    let results = run_inline_tests(&file, None, &SolveOptions::default());
+    let results = run_inline_tests_with_options(&file, &interpreter_options(None), None);
     assert_eq!(results.len(), 1);
     let msg = &results[0].message;
     assert!(
@@ -490,7 +510,7 @@ fn makearray_region_self_read_is_refused_as_unsupported_form() {
     })
     .to_string();
     let file = load_string(&doc).expect("probe parses");
-    let results = run_inline_tests(&file, None, &SolveOptions::default());
+    let results = run_inline_tests_with_options(&file, &interpreter_options(None), None);
     assert_eq!(results.len(), 1);
     let msg = &results[0].message;
     assert!(
@@ -723,7 +743,7 @@ fn a_two_variable_cycle_is_not_a_recurrence_and_still_produces_nothing() {
         "a two-variable cycle is not a recurrence diagnosis, got {codes:?}"
     );
     let file = load_string(&cyclic).expect("probe parses");
-    let results = run_inline_tests(&file, None, &SolveOptions::default());
+    let results = run_inline_tests_with_options(&file, &interpreter_options(None), None);
     assert_eq!(results.len(), 1);
     assert!(
         results[0].actual.is_none() && !results[0].passed,

@@ -5,7 +5,7 @@
 
 #[cfg(feature = "solve")]
 use super::tape::TapeProgram;
-use super::tape::tape_disabled;
+use super::tape::{tape_check_calls, tape_disabled};
 use super::*;
 #[cfg_attr(not(feature = "solve"), allow(unused_imports))]
 use crate::simulate::SimulateError;
@@ -143,6 +143,20 @@ impl ArrayCompiled {
     /// honourable for such a model and not for one with real dynamics.
     pub fn has_differential_equations(&self) -> bool {
         !self.rhs_rules.is_empty()
+    }
+
+    /// The single model's own namespace (the top-level `models` map key), or
+    /// `None` on the flattened path, whose names are already qualified.
+    ///
+    /// The single-model build names its slots BARE (`u[1]`, `k`), because the
+    /// raw `Model` it consumed carries no namespace; the flattened build and
+    /// the scalar interpreter both qualify (`M.u[1]`). Reported here so
+    /// [`crate::problem::EsmProblem`] can present ONE spelling whichever route
+    /// its document took — which matters now that `native` builds this runtime
+    /// for every document, including the 0-D ones the scalar interpreter used
+    /// to name.
+    pub(crate) fn namespace(&self) -> Option<&str> {
+        self.namespace.as_deref()
     }
 
     /// The OBSERVED variables this model declares, in dependency order.
@@ -806,7 +820,13 @@ impl ArrayCompiled {
         // scratches read the tape's slots rather than a seeded observed map,
         // and the inspection snapshot and the output-node pass harvest their
         // values from the tape ([`TapedObserveds`]).
-        if self.is_native() && tape.is_some() {
+        // `ESS_TAPE_CHECK` dual-runs the LEGACY path beside the tape and
+        // bit-compares `dy` (`rhs.rs`), and the legacy path materializes only
+        // the VARYING rules on top of a seeded static map — so with the hoist
+        // skipped it would read an unpublished static observed and compare the
+        // tape against a NaN. The check is a debugging switch, not a
+        // production path: keep the hoist while it is armed.
+        if self.is_native() && tape.is_some() && tape_check_calls() == 0 {
             return SolveSetup {
                 cadence,
                 sa0,

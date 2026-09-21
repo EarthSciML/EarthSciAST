@@ -71,7 +71,7 @@ mod tests;
 #[cfg(feature = "xla")]
 pub mod xla_emit;
 
-pub(crate) use exec::tape_disabled;
+pub(crate) use exec::{tape_check_calls, tape_disabled};
 pub(in crate::simulate_array) use exec::{TapeCtx, run_tape_call};
 pub(crate) use fuse::fuse_disabled;
 pub(crate) use ir::*;

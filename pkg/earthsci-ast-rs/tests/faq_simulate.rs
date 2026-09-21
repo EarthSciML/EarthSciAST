@@ -530,6 +530,12 @@ fn ragged_index_set_drives_dynamic_reduction_bound() {
             p: HashMap::new().clone(),
             u0: ics.clone(),
             rhs: earthsci_ast::Rhs::Always,
+            // A RAGGED contraction bound is not static, so the tape cannot
+            // size the fold and `native` refuses this document by NAME
+            // (API_SPEC §5.8). What is pinned here is that the dynamic bound
+            // DRIVES the reduction, which is the reference evaluator's
+            // answer to give.
+            compiler: Some(earthsci_ast::Compiler::Interpreter),
             ..Default::default()
         },
     )

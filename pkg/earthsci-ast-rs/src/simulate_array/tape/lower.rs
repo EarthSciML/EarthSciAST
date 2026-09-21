@@ -2539,9 +2539,19 @@ pub(super) fn build_tape_program(
 
     // ---- RHS rules ---------------------------------------------------------
     for (i, rule) in rhs_rules.iter().enumerate() {
+        // The state's NAME, not its slot index. A refusal has to name the
+        // rule an author can find (esm-libraries-spec §2.5.10: "naming the
+        // compiler, the rule — an equation or an observed,
+        // component-qualified — and the reason"), and `D(slot 0)` names
+        // nothing: the flat slot order is an implementation detail that
+        // coupling reorders.
         let name = match rule {
-            RhsRule::Scalar { slot, .. } => format!("D(slot {slot})"),
-            RhsRule::IndexedScalar { slot, .. } => format!("D(slot {slot})"),
+            RhsRule::Scalar { slot, .. } | RhsRule::IndexedScalar { slot, .. } => {
+                match compiled.scalar_state_names.get(*slot) {
+                    Some(var) => format!("D({var})"),
+                    None => format!("D(slot {slot})"),
+                }
+            }
             RhsRule::ArrayLoop { var_name, .. } => format!("D({var_name})"),
         };
         b.begin_rule(RuleInfo {

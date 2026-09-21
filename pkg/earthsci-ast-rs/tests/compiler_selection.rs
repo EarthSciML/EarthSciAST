@@ -191,10 +191,16 @@ fn the_interpreter_takes_the_document_native_refused() {
 /// `models` map at all until flattening), a discretized PDE, and an
 /// aggregate/contraction document.
 const AGREEMENT_FIXTURES: &[&str] = &[
+    // A 0-D ODE — the shape the scalar interpreter used to own outright.
     "tests/simulation/simple_ode.esm",
+    // A `reaction_systems`-only document: no `models` map at all until
+    // flattening lowers its reactions, which is the routing the `!= 1` fix
+    // exists for.
     "tests/simulation/autocatalytic_reaction.esm",
-    "tests/conformance/pde_simulation/fixtures/diffusion_1d_periodic_n4.esm",
-    "tests/fixtures/faq/20_faq_contraction_embedded.esm",
+    // A gridded document, whose rows are per-cell keys.
+    "tests/conformance/output_derivation/fixtures/gridded.esm",
+    // Aggregates over a coordinate registry.
+    "tests/valid/coordinates_registry.esm",
 ];
 
 #[test]
@@ -247,7 +253,7 @@ fn the_report_names_every_rule_not_only_the_declines() {
     // The half `SolutionMetadata::tape_fallbacks` cannot answer: a document
     // with no declines reports an empty fallback list and says nothing about
     // the rules that DID lower, nor at which cadence they run.
-    let path = fixture("tests/conformance/pde_simulation/fixtures/diffusion_1d_periodic_n4.esm");
+    let path = fixture("tests/conformance/output_derivation/fixtures/gridded.esm");
     let prob = build_rhs(&path, Compiler::Native, Rhs::Always).expect("builds");
     let report = prob.compiler_report();
     assert!(!report.rules().is_empty());
@@ -267,7 +273,7 @@ fn the_report_names_every_rule_not_only_the_declines() {
             derivatives += 1;
         }
     }
-    assert!(derivatives > 0, "a PDE document has state derivatives");
+    assert!(derivatives > 0, "a gridded document has state derivatives");
     // The summary line `esm simulate` prints.
     let line = report.to_string();
     assert!(line.contains("compiler native"), "{line}");
@@ -296,8 +302,9 @@ fn a_static_document_reports_no_compiler_rules() {
 /// reference.
 #[test]
 fn a_const_tier_observed_document_is_served_from_the_tape() {
-    let path =
-        fixture("tests/conformance/pde_inline_observed_param_rank2/fixtures/observed_param_rank2.esm");
+    let path = fixture(
+        "tests/conformance/shaped_parameter_broadcast/fixtures/shaped_parameter_scalar_default.esm",
+    );
     let prob = build_rhs(&path, Compiler::Native, Rhs::Always).expect("builds under native");
     let report = prob.compiler_report();
     let n_const = report.rules().iter().filter(|r| r.cadence == "const").count();

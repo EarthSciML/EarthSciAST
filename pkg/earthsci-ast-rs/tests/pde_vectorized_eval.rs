@@ -1037,6 +1037,11 @@ fn unary_broadcast_conformance_fixture_matches_its_inline_assertions() {
             p: HashMap::new().clone(),
             u0: ic.clone(),
             rhs: earthsci_ast::Rhs::Always,
+            // The unary `broadcast` this fixture is about has no wholesale
+            // tape lowering, so `native` refuses it by NAME (API_SPEC §5.8).
+            // The fixture is about the broadcast's VALUES, which is the
+            // reference evaluator's answer to give.
+            compiler: Some(earthsci_ast::Compiler::Interpreter),
             ..Default::default()
         },
     )

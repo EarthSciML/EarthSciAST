@@ -78,8 +78,20 @@ fn fixture(name: &str) -> std::path::PathBuf {
 fn a_true_body_counts_instead_of_panicking() {
     let path = fixture("semijoin_true_body.esm");
     let file = load_path(&path).expect("loads");
-    let results =
-        run_inline_tests_with_base_dir(&file, None, &SolveOptions::default(), path.parent());
+    let results = earthsci_ast::run_inline_tests_with_options(
+        &file,
+        // The semi-join's aggregate carries a driving overlap gate, which no
+        // tape lowering accepts, so `native` refuses this document by NAME
+        // (API_SPEC §5.8). The panic this test exists to prevent is the
+        // reference evaluator's.
+        &earthsci_ast::InlineTestOptions {
+            solve: SolveOptions::default(),
+            base_dir: path.parent().map(std::path::Path::to_path_buf),
+            compiler: Some(earthsci_ast::Compiler::Interpreter),
+            ..Default::default()
+        },
+        None,
+    );
     assert_eq!(results.len(), 2, "two inline assertions: {results:?}");
     for r in &results {
         assert!(

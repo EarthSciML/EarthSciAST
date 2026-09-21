@@ -637,6 +637,23 @@ pub struct EsmProblem {
     pub(crate) inspection: std::cell::RefCell<BuildInspection>,
     /// Whether the caller asked for build observability.
     pub(crate) inspect: bool,
+    /// A SCALAR observed graph for a document with nothing to integrate, when
+    /// the scalar interpreter can lower one.
+    ///
+    /// `Rhs::Always` on a state-free document compiles a right-hand side over
+    /// an EMPTY state vector — the inline-test runner's shape — and its whole
+    /// answer is an observed graph that is still a function of `t`
+    /// (esm-spec §6.6.3, issue #406). `native` builds the array runtime for it
+    /// like every other document, and the array runtime has no scalar graph to
+    /// walk, so the graph is compiled HERE, at construction, from the same
+    /// document. `None` when there is something to integrate, or when the
+    /// scalar interpreter cannot lower the document (an unexpanded `faq`),
+    /// which is the case answered from the build's own materialized fields.
+    ///
+    /// No compiler is CHOSEN for a document with nothing to integrate — there
+    /// is no right-hand side to build — so this is outside the §2.5.10
+    /// refusal, exactly as `static_observed_fields` is.
+    pub(crate) static_graph: Option<Rc<Compiled>>,
     /// The compiler that built this Problem's right-hand side (§2.5.10).
     pub(crate) compiler: Compiler,
     /// Where every rule landed, computed at CONSTRUCTION — which is also where
@@ -761,7 +778,7 @@ impl EsmProblem {
     pub fn state_variable_names(&self) -> Vec<String> {
         match &*self.backend {
             Backend::Scalar(c) => c.state_variable_names().to_vec(),
-            Backend::Array(c) => c.state_variable_names().to_vec(),
+            Backend::Array(c) => qualify_array_names(c, c.state_variable_names()),
             Backend::Static(_) => Vec::new(),
         }
     }
@@ -771,7 +788,7 @@ impl EsmProblem {
     pub fn parameter_names(&self) -> Vec<String> {
         match &*self.backend {
             Backend::Scalar(c) => c.parameter_names().to_vec(),
-            Backend::Array(c) => c.parameter_names().to_vec(),
+            Backend::Array(c) => qualify_array_names(c, c.parameter_names()),
             Backend::Static(_) => Vec::new(),
         }
     }
@@ -834,7 +851,7 @@ impl EsmProblem {
             // and `interpreter` build it for every document: answering "none"
             // here would say a model has no observeds when every one of its
             // rules is one.
-            Backend::Array(c) => c.observed_variable_names(),
+            Backend::Array(c) => qualify_array_names(c, &c.observed_variable_names()),
             Backend::Static(_) => Vec::new(),
         }
     }
@@ -889,6 +906,26 @@ fn qualify(model: &str, key: &str) -> String {
     } else {
         format!("{model}.{key}")
     }
+}
+
+/// `names` under the array runtime's single-model namespace, when that build
+/// left them bare.
+///
+/// Presentation only: the compiled artifact keeps its own spelling, and the
+/// override-key canonicalization (`canonicalize_override_keys`) already
+/// resolves a `<namespace>.`-prefixed key against a bare slot, so a caller may
+/// hand back exactly the names it was given.
+///
+/// This exists because `native` builds the array runtime for EVERY document
+/// (§5.8), including the 0-D ones that used to take the scalar interpreter —
+/// and the two name their slots differently. Without it the SAME document would
+/// report `M.y` or `y` depending on a routing decision the caller cannot see,
+/// which is the failure §2.5.10 exists to prevent.
+fn qualify_array_names(compiled: &crate::simulate_array::ArrayCompiled, names: &[String]) -> Vec<String> {
+    let Some(ns) = compiled.namespace() else {
+        return names.to_vec();
+    };
+    names.iter().map(|n| qualify(ns, n)).collect()
 }
 
 /// The component that owns a qualified name — everything before the final
@@ -1212,7 +1249,13 @@ fn array_observed_trajectories(
         let Ok(resolved) = resolve_observed_name(&declared, model, single, name) else {
             continue;
         };
-        match sol.state_variable_names.iter().position(|r| *r == resolved) {
+        // The solution's rows carry the qualified spelling (see
+        // `qualify_array_names`); the compiled model's rule names are bare.
+        let row_name = match compiled.namespace() {
+            Some(ns) => qualify(ns, &resolved),
+            None => resolved.clone(),
+        };
+        match sol.state_variable_names.iter().position(|r| *r == row_name) {
             Some(i) => out.push((name.clone(), sol.state[i].clone())),
             None => {
                 return Err(SimulateError::Compile(
@@ -1370,6 +1413,7 @@ pub fn remake(prob: &EsmProblem, changes: &Remake) -> Result<EsmProblem, Simulat
         // never rebuilds a right-hand side, and reporting a compiler the
         // derivative did not run would be a lie about which one produced its
         // numbers.
+        static_graph: prob.static_graph.clone(),
         compiler: prob.compiler,
         compiler_report: prob.compiler_report.clone(),
         callbacks: changes
@@ -1750,6 +1794,20 @@ pub fn esm_problem<'a>(
     // alone. Both need the tape, so the tape is built HERE rather than inside
     // `solve`, and with the DISCRETE forcing set step (5) just resolved, which
     // is what decides a rule's cadence tier.
+    // See [`EsmProblem::static_graph`]. Compiled only for an array backend
+    // with nothing to integrate, which is what `Rhs::Always` on a state-free
+    // document produces.
+    let static_graph = match &backend {
+        Backend::Array(c) if !c.has_differential_equations() => {
+            match (flat_only, owned_file.as_ref()) {
+                (Some(flat), _) => Compiled::from_flattened(flat).ok().map(Rc::new),
+                (None, Some(file)) => Compiled::from_file(file).ok().map(Rc::new),
+                (None, None) => None,
+            }
+        }
+        _ => None,
+    };
+
     let compiler_report = build_compiler_report(
         &backend,
         model_name.as_deref(),
@@ -1772,6 +1830,7 @@ pub fn esm_problem<'a>(
         build: Rc::new(build),
         inspection: std::cell::RefCell::new(BuildInspection::default()),
         inspect: opts.inspect,
+        static_graph,
         compiler,
         compiler_report,
         callbacks: std::mem::take(&mut opts.callbacks),
@@ -1962,8 +2021,13 @@ pub(crate) fn static_observed_graph(prob: &EsmProblem) -> Option<Rc<Compiled>> {
         Backend::Scalar(c) if c.state_variable_names().is_empty() => Some(Rc::clone(c)),
         // A scalar backend WITH state integrates; the trajectory is the answer.
         Backend::Scalar(_) => None,
-        // `Backend::Static` and the array runtime carry no compiled scalar
-        // graph to evaluate here.
+        // The ARRAY runtime, which `native` builds for every document. It
+        // carries no scalar graph of its own, so construction compiled one
+        // beside it when the document had nothing to integrate AND the scalar
+        // interpreter could lower it — see [`EsmProblem::static_graph`]. A
+        // SHAPED document (an unexpanded `faq`) has `None` here and is
+        // answered from the fields its build materialized.
+        Backend::Array(c) if !c.has_differential_equations() => prob.static_graph.clone(),
         _ => None,
     }
 }
@@ -2187,7 +2251,13 @@ fn build_compiler_report(
             kind: r.kind,
             cadence: r.cadence,
             tier,
-            reason: r.fallback_reason,
+            // Under `interpreter` there is no decline to report: the tape was
+            // never going to run, so what it would have said about a rule is
+            // not this compiler's story.
+            reason: match compiler {
+                Compiler::Interpreter => None,
+                _ => r.fallback_reason,
+            },
         });
     }
     let (fused_groups, fused_instructions) = if compiler == Compiler::Interpreter {
@@ -2470,6 +2540,12 @@ pub fn solve(prob: &EsmProblem, opts: &SolveOptions) -> Result<Solution, Simulat
             if prob.inspect {
                 *prob.inspection.borrow_mut() = insp;
             }
+            // One spelling per document, whichever route it took: the
+            // single-model array build names its rows bare, the flattened one
+            // and the scalar interpreter qualify. See `qualify_array_names`.
+            let mut sol = sol;
+            sol.state_variable_names =
+                qualify_array_names(compiled, &sol.state_variable_names);
             Ok(sol)
         }
     }

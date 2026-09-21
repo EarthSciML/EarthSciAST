@@ -4764,6 +4764,13 @@ mod subsystem_ragged_and_inspection_tests {
             crate::problem::ProblemOptions {
                 inspect: true,
                 rhs: crate::problem::Rhs::Always,
+                // These documents carry a `polygon_intersection_area` regrid
+                // and a RAGGED contraction bound, neither of which the tape
+                // can lower, so `native` refuses them by NAME (API_SPEC
+                // §5.8). What they pin is the ragged/overlap arithmetic and
+                // the inspection sink, which is the reference evaluator's
+                // answer to give.
+                compiler: Some(crate::problem::Compiler::Interpreter),
                 ..Default::default()
             },
         )

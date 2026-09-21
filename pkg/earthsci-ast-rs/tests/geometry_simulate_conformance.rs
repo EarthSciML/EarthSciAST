@@ -125,6 +125,11 @@ fn run_model_test(fixture: &str, model_name: &str, file: &EsmFile, model: &Model
             p: params.clone(),
             u0: ics.clone(),
             rhs: earthsci_ast::Rhs::Always,
+            // The geometry ops these fixtures are about — `polygon_intersection_area`,
+            // `intersect_polygon` — have no tape lowering, so `native` refuses every
+            // one of them by NAME (API_SPEC §5.8). The fixtures are about the areas,
+            // which is the reference evaluator's answer to give.
+            compiler: Some(earthsci_ast::Compiler::Interpreter),
             ..Default::default()
         },
     )
@@ -242,6 +247,11 @@ fn polygon_intersection_area_planar_fixture_area_is_one() {
             p: HashMap::new().clone(),
             u0: ics.clone(),
             rhs: earthsci_ast::Rhs::Always,
+            // The geometry ops these fixtures are about — `polygon_intersection_area`,
+            // `intersect_polygon` — have no tape lowering, so `native` refuses every
+            // one of them by NAME (API_SPEC §5.8). The fixtures are about the areas,
+            // which is the reference evaluator's answer to give.
+            compiler: Some(earthsci_ast::Compiler::Interpreter),
             ..Default::default()
         },
     )
@@ -308,6 +318,11 @@ fn planar_ode_fixture_is_runnable_and_exposes_area() {
             p: HashMap::new().clone(),
             u0: ics.clone(),
             rhs: earthsci_ast::Rhs::Always,
+            // The geometry ops these fixtures are about — `polygon_intersection_area`,
+            // `intersect_polygon` — have no tape lowering, so `native` refuses every
+            // one of them by NAME (API_SPEC §5.8). The fixtures are about the areas,
+            // which is the reference evaluator's answer to give.
+            compiler: Some(earthsci_ast::Compiler::Interpreter),
             ..Default::default()
         },
     )

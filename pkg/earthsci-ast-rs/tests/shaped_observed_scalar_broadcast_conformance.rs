@@ -83,8 +83,21 @@ fn scalar_rhs_broadcast_matches_golden() {
             fs::read_to_string(&esm_path).unwrap_or_else(|e| panic!("read {esm_path:?}: {e}"));
         let file = load_string(&text)
             .unwrap_or_else(|e| panic!("fixture {esm_path:?} does not load: {e}"));
-        let results =
-            run_inline_tests_with_base_dir(&file, fx["model"].as_str(), &opts, Some(dir.as_path()));
+        let results = earthsci_ast::run_inline_tests_with_options(
+            &file,
+            // This fixture's `ifelse` has branch value boxes that differ
+            // under a runtime scalar condition, which the tape cannot lower,
+            // so `native` refuses it by NAME (API_SPEC §5.8). The golden it
+            // is compared against is the reference evaluator's.
+            &earthsci_ast::InlineTestOptions {
+                model_name: fx["model"].as_str().map(str::to_string),
+                solve: opts.clone(),
+                base_dir: Some(dir.clone()),
+                compiler: Some(earthsci_ast::Compiler::Interpreter),
+                ..Default::default()
+            },
+            None,
+        );
 
         let expected = golden["assertions"].as_array().expect("golden assertions");
         assert_eq!(results.len(), expected.len());

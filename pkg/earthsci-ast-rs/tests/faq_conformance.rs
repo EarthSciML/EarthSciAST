@@ -89,6 +89,12 @@ fn run_model_test(
             p: params.clone(),
             u0: initial_conditions.clone(),
             rhs: earthsci_ast::Rhs::Always,
+            // A `join` whose overlap gate DRIVES enumeration has no form on the tape —
+            // the aggregate lowerings refuse it up front — so `native` refuses these
+            // documents by NAME (API_SPEC §5.8). The fixtures are about join
+            // cardinality and pairing, which is the reference evaluator's answer to
+            // give.
+            compiler: Some(earthsci_ast::Compiler::Interpreter),
             ..Default::default()
         },
     )

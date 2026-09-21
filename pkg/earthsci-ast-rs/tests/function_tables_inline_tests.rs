@@ -37,8 +37,21 @@ mod common;
 fn a_table_lookup_observed_evaluates_like_its_hand_lowered_twin() {
     let path = common::repo_fixture("conformance/function_tables/inline_test/fixture.esm");
     let file = load_path(&path).expect("fixture loads");
-    let results =
-        run_inline_tests_with_base_dir(&file, None, &SolveOptions::default(), path.parent());
+    let results = earthsci_ast::run_inline_tests_with_options(
+        &file,
+        // `table_lookup` lowers to `interp.linear` / `interp.bilinear`, and
+        // those closed functions have no tape lowering, so `native` refuses
+        // this document by NAME (API_SPEC §5.8). What is pinned here is that
+        // the two carriers AGREE, which is the reference evaluator's answer
+        // to give.
+        &earthsci_ast::InlineTestOptions {
+            solve: SolveOptions::default(),
+            base_dir: path.parent().map(std::path::Path::to_path_buf),
+            compiler: Some(earthsci_ast::Compiler::Interpreter),
+            ..Default::default()
+        },
+        None,
+    );
 
     assert_eq!(results.len(), 3, "three inline assertions: {results:?}");
     for r in &results {
