@@ -56,6 +56,14 @@ import numpy as np
 
 from . import op_registry
 from .classification import is_implicit_lhs
+from .compiler import (
+    CompilerPolicy,
+    CompilerRefusedRuleError,
+    CompilerReport,
+    phase_scope,
+    resolve_compiler,
+    use_policy,
+)
 from .esm_types import EsmFile, ExprNode
 from .expr_walk import iter_children
 from .expression import UnsupportedConstructError
@@ -90,6 +98,8 @@ from .simulation_array import (
     _NumpyRhsBuild,
     _resolve_index_set_shape,
     _simulate_with_numpy,
+    probe_output_time_observeds,
+    rule_label,
 )
 from .simulation_common import (
     SCIPY_AVAILABLE,
@@ -337,10 +347,21 @@ class EsmProblem:
     tspan: tuple[float, float]
     p: dict[str, float] = field(default_factory=dict)
     u0: dict[str, float] = field(default_factory=dict)
-    #: Which pathway :func:`solve` runs: ``"scalar"``, ``"array"``, ``"loaders"``
-    #: or ``"discrete_providers"``. Chosen at construction from the system's own
-    #: content, never by the caller.
-    pathway: str = "scalar"
+    #: The compiler that BUILT this problem — one member of §5.8's closed
+    #: vocabulary, and the caller's choice, not the document's. Stable surface.
+    compiler: str = "native"
+    #: Per rule, the tier it landed on and what declined on the way
+    #: (:class:`earthsci_ast.compiler.CompilerReport`). Stable surface; the
+    #: record's shape is per-binding.
+    compiler_report: CompilerReport = field(default_factory=CompilerReport)
+    #: Which SEGMENTING MECHANIC :func:`solve` runs: ``"array"`` (one build for
+    #: the whole span), ``"loaders"`` or ``"discrete_providers"`` (rebuild per
+    #: cadence segment), or ``"scalar"`` (the lambdified SymPy form, reached
+    #: only under ``compiler="sympy"``). Internal, not stable surface, and NOT
+    #: the compiler: under one compiler every document is built by the same
+    #: machinery, and this says only whether a refreshing forcing makes that
+    #: machinery run per segment.
+    engine: str = "scalar"
     #: The compiled NumPy right-hand side (array / PDE pathway), or ``None``.
     build: _NumpyRhsBuild | None = None
     #: The compiled lambdified SymPy right-hand side (scalar pathway), or ``None``.
@@ -384,8 +405,20 @@ class EsmProblem:
 
     def __repr__(self) -> str:  # pragma: no cover - display only
         return (
-            f"EsmProblem(pathway={self.pathway!r}, tspan={self.tspan!r}, "
-            f"states={len(self.flat.state_variables)}, params={len(self.flat.parameters)})"
+            f"EsmProblem(compiler={self.compiler!r}, engine={self.engine!r}, "
+            f"tspan={self.tspan!r}, states={len(self.flat.state_variables)}, "
+            f"params={len(self.flat.parameters)})"
+        )
+
+    def __str__(self) -> str:  # pragma: no cover - display only
+        tiers = self.compiler_report.tiers()
+        summary = (
+            ", ".join(f"{k}×{v}" for k, v in sorted(tiers.items())) if tiers else "no aggregates"
+        )
+        return (
+            f"EsmProblem built with compiler={self.compiler!r} "
+            f"({len(self.flat.state_variables)} states, "
+            f"{len(self.flat.parameters)} params) — tiers: {summary}"
         )
 
     def observed_field(self, name: str):
@@ -411,6 +444,7 @@ def esm_problem(
     provider_factory: Callable | None = None,
     inspect: BuildInspection | None = None,
     pushdown_rewrite: bool = False,
+    compiler: str | None = None,
 ) -> EsmProblem:
     """Build a document into a runnable :class:`EsmProblem` (esm-libraries-spec §2.5.2).
 
@@ -479,6 +513,36 @@ def esm_problem(
         observability is an extension seam, not stable API (API_SPEC §5.8).
     pushdown_rewrite:
         Opt into the projection-pushdown desugar on the raw authored document.
+    compiler:
+        WHICH strategy builds the right-hand side, over §5.8's closed
+        vocabulary — ``"native"``, ``"interpreter"``, ``"xla"``, ``"mtk"``,
+        ``"sympy"``. ``None`` means ``"native"``, and the default is STRICT.
+
+        * ``"native"`` — whole-box vectorized NumPy for EVERY document, scalar
+          ones included. A rule the vectorized tiers cannot express is a BUILD
+          error naming the rule and the deepest decline reason
+          (``compiler_refused_rule``), never a quiet demotion to the per-cell
+          tree walk. Construction evaluates the const-geometry hoist, the
+          right-hand side once at ``(u0, p, t0)``, and the output-time observed
+          pass once, so the refusal is a construction error wherever the
+          per-cell walk would have been reached (esm-libraries-spec §2.5.10).
+        * ``"interpreter"`` — the reference: every fast tier off, the per-cell
+          ``faq`` evaluator for every aggregate, source codegen and the
+          shape-inference interval hull off. No performance promise of any
+          kind; it exists to check the others, and it is bit-identical to
+          ``"native"`` on every document both run.
+        * ``"sympy"`` — the lambdified SymPy SCALAR right-hand side. Refuses an
+          array document (an array op anywhere, or a resolvable declared
+          ``shape``) and an algebraic constraint it cannot solve. ``cse``
+          applies to this compiler and no other.
+        * ``"xla"`` / ``"mtk"`` — in the vocabulary, not provided here:
+          ``compiler_unavailable``, never answered by building something else.
+
+        The cadence-segmented loader and discrete-provider mechanics are
+        INTERNAL to both ``native`` and ``interpreter``: a document whose
+        forcing refreshes still rebuilds per segment, with that compiler's
+        tiers. What the compiler names is how a rule is evaluated, not how
+        often.
 
     Raises
     ------
@@ -493,7 +557,63 @@ def esm_problem(
     SimulationError
         If the compile fails. A compile error is an error, not a return code:
         :class:`~earthsci_ast.simulation_common.ReturnCode` describes RUNS.
+    CompilerUnknownError, CompilerUnavailableError, CompilerRefusedRuleError
+        The three ways naming a ``compiler`` fails (esm-spec §9.6.6). All are
+        :class:`~earthsci_ast.errors.SimulationError` subclasses carrying the
+        registry code on ``.code``.
     """
+    chosen_compiler = resolve_compiler(compiler)
+    policy = CompilerPolicy(
+        compiler=chosen_compiler,
+        strict=chosen_compiler == "native",
+        every_tier_off=chosen_compiler == "interpreter",
+    )
+    with use_policy(policy), phase_scope("construction"):
+        return _esm_problem_under(
+            policy,
+            input,
+            tspan,
+            p=p,
+            u0=u0,
+            providers=providers,
+            model_name=model_name,
+            metaparameters=metaparameters,
+            base_path=base_path,
+            sample_time=sample_time,
+            const_arrays=const_arrays,
+            cse=cse,
+            callback=callback,
+            loader_provider=loader_provider,
+            provider_factory=provider_factory,
+            inspect=inspect,
+            pushdown_rewrite=pushdown_rewrite,
+        )
+
+
+def _esm_problem_under(
+    policy: CompilerPolicy,
+    input: Any,
+    tspan: tuple[float, float],
+    *,
+    p: dict[str, float] | None = None,
+    u0: dict[str, float] | None = None,
+    providers: dict[str, Any] | None = None,
+    model_name: str | None = None,
+    metaparameters: dict[str, int] | None = None,
+    base_path: str | None = None,
+    sample_time: float | None = None,
+    const_arrays: dict[str, Any] | None = None,
+    cse: bool = True,
+    callback: Any = None,
+    loader_provider: LoaderProvider | None = None,
+    provider_factory: Callable | None = None,
+    inspect: BuildInspection | None = None,
+    pushdown_rewrite: bool = False,
+) -> EsmProblem:
+    """The body of :func:`esm_problem`, with the compiler already resolved and
+    its policy already installed. Split out so that every ``return`` and every
+    raise inside the pipeline is inside the policy's scope without indenting the
+    whole function under a ``with``."""
     p = dict(p or {})
     u0 = dict(u0 or {})
     tspan = (float(tspan[0]), float(tspan[1]))
@@ -672,13 +792,19 @@ def esm_problem(
         )
         _inject_pushdown_aliases(merged, all_var_names, pd_coupling)
 
-    # ---- the pathway, and the compile ---------------------------------------
-    pathway = _choose_pathway(flat, discrete_providers, merged, gated)
+    # ---- the engine, and the compile ----------------------------------------
+    # WHICH machinery runs is the compiler's (the caller's); how OFTEN it runs
+    # is the document's. `_segmenting_engine` answers only the second question.
+    if policy.compiler == "sympy":
+        _refuse_array_document_under_sympy(flat)
+        engine = "scalar"
+    else:
+        engine = _segmenting_engine(flat, discrete_providers, merged, gated)
     static_cache: dict[str, Any] = {}
     build: _NumpyRhsBuild | None = None
     scalar_build: _ScalarRhsBuild | None = None
     scalar_build_error: Exception | None = None
-    if pathway == "array":
+    if engine == "array":
         build = _build_numpy_rhs(
             flat,
             p,
@@ -690,7 +816,7 @@ def esm_problem(
         )
         if inspect is not None:
             _fill_build_inspection(inspect, flat, build, t0, loader_arrays=merged)
-    elif pathway == "scalar" and not flat.state_variables:
+    elif engine == "scalar" and not flat.state_variables:
         # A document with no ODE states is a pure BUILD: its whole content is
         # the observed graph, which is exactly what `observed_field` reads back.
         # Materialize it through the NumPy interpreter — the same build the
@@ -732,19 +858,33 @@ def esm_problem(
                 raise
             scalar_build = None
             scalar_build_error = exc
-    elif pathway == "scalar":
+    elif engine == "scalar":
         scalar_build = _build_scalar_rhs(flat, p, u0, cse=cse)
-    # The loader- and discrete-provider pathways rebuild the right-hand side at
+    # The loader- and discrete-provider engines rebuild the right-hand side at
     # every cadence boundary — a refreshed forcing changes the const-hoisted
     # geometry the build folds in — so their compile belongs to the segment, not
     # to construction. They keep the provider objects instead.
+
+    # esm-libraries-spec §2.5.10: the compiler's refusal "covers every
+    # evaluation the compiler performs for the Problem, not the right-hand side
+    # alone", and "a binding whose ladder decides at evaluation time rather than
+    # at build time MUST exercise every such evaluation at construction". The
+    # Python ladder decides per aggregate, per call — so construction runs the
+    # two evaluations the build itself does not: one right-hand side at
+    # (u0, p, t0), and the output-time observed pass at t0. The const-geometry
+    # hoist and the static observeds ran inside `_build_numpy_rhs` above, which
+    # is where the census found six sevenths of this binding's per-cell landings.
+    if build is not None:
+        _exercise_every_evaluation(flat, build, t0)
 
     return EsmProblem(
         flat=flat,
         tspan=tspan,
         p=p,
         u0=u0,
-        pathway=pathway,
+        compiler=policy.compiler,
+        compiler_report=policy.report,
+        engine=engine,
         build=build,
         scalar_build=scalar_build,
         scalar_build_error=scalar_build_error,
@@ -767,25 +907,29 @@ def esm_problem(
     )
 
 
-def _choose_pathway(
+def _segmenting_engine(
     flat: FlattenedSystem,
     discrete_providers: dict[str, Any],
     merged: dict[str, Any],
     gated: dict[str, Any],
 ) -> str:
-    """Which engine runs this system — decided by the system's own content.
+    """How OFTEN the NumPy compilers rebuild — not WHICH machinery they use.
+
+    This is what is left of ``_choose_pathway`` once ``compiler`` owns the
+    choice of strategy. Its answer no longer depends on whether the document is
+    arrayed: esm-libraries-spec §2.5.10 forbids a binding switching strategy
+    inside ``native`` on document content, so under ``native`` and
+    ``interpreter`` alike a scalar document and a gridded one are built by the
+    same vectorized NumPy machinery, and only the CADENCE differs.
 
     A DISCRETE provider means the forcing changes during the run, so the
-    integration must be segmented on its refresh boundaries. Injected arrays —
-    a ``providers`` entry materialized at build, a caller ``const_arrays``, a
-    deferred gated fetch — are array-valued by construction, so they route to
-    the NumPy interpreter and take precedence over the in-document data-loader
-    seam (a document with both binds the injected arrays, as the pre-EsmProblem
-    entry points did). ``loader_fields`` alone means cadence segmentation.
-    Otherwise ARRAY-NESS routes to the NumPy interpreter — a DECLARED ``shape``
-    (esm-spec §6.3) or an array op anywhere (including every discretized PDE) —
-    and a system that is scalar by both measures goes to the lambdified SymPy
-    pathway.
+    integration is segmented on its refresh boundaries. Injected arrays — a
+    ``providers`` entry materialized at build, a caller ``const_arrays``, a
+    deferred gated fetch — are already bound, so one build covers the whole
+    span and takes precedence over the in-document data-loader seam (a document
+    with both binds the injected arrays, as the pre-Problem entry points did).
+    ``loader_fields`` alone means cadence segmentation. Everything else is one
+    build for the whole span.
     """
     if discrete_providers:
         return "discrete_providers"
@@ -793,11 +937,80 @@ def _choose_pathway(
         return "array"
     if flat.loader_fields:
         return "loaders"
+    return "array"
+
+
+def _refuse_array_document_under_sympy(flat: FlattenedSystem) -> None:
+    """``compiler="sympy"`` runs SCALAR documents; an array one is refused.
+
+    §5.8 gives ``sympy`` one job — a lambdified SymPy scalar right-hand side —
+    and array-ness is a property of the document, not of how the equation
+    happens to be spelled: a DECLARED ``shape`` (esm-spec §6.3) says so even
+    when the defining equation is a bare whole-array ``D(theta) ~ 1``, and an
+    array op anywhere says so for every discretized PDE. Both are refused here,
+    at construction, rather than lambdified into a scalar the caller would then
+    read as the answer for a whole field.
+    """
     if _declares_resolvable_shape(flat):
-        return "array"
-    if any(_has_array_op(eq.lhs) or _has_array_op(eq.rhs) for eq in flat.equations):
-        return "array"
-    return "scalar"
+        shaped = sorted(
+            n
+            for varmap in (flat.state_variables, flat.observed_variables)
+            for n, v in varmap.items()
+            if getattr(v, "shape", None)
+        )
+        raise CompilerRefusedRuleError(
+            "sympy",
+            f"variable {shaped[0]}" if shaped else "the document",
+            "it declares an array `shape`, and this compiler lambdifies a SCALAR "
+            "right-hand side only",
+            phase="construction",
+        )
+    for eq in flat.equations:
+        if _has_array_op(eq.lhs) or _has_array_op(eq.rhs):
+            raise CompilerRefusedRuleError(
+                "sympy",
+                rule_label(eq),
+                "it carries an array op, and this compiler lambdifies a SCALAR "
+                "right-hand side only",
+                phase="construction",
+            )
+
+
+def _exercise_every_evaluation(
+    flat: FlattenedSystem,
+    build: _NumpyRhsBuild,
+    t0: float,
+) -> None:
+    """Run, at construction, the two evaluations the build itself does not.
+
+    The Python ``faq`` ladder decides per aggregate AT EVALUATION TIME, so a
+    build that only compiled would report a tier it had not reached and a strict
+    ``native`` would refuse nothing. esm-libraries-spec §2.5.10 answers this
+    directly: a binding whose ladder decides at evaluation time MUST exercise
+    every evaluation at construction. Three of the four evaluations it names
+    already happen above — the const-geometry hoist and the static observeds
+    inside ``_build_numpy_rhs``, and the per-segment seed IS a build. These are
+    the remaining two.
+
+    A failure that is not a compiler refusal is swallowed: the probe's job is to
+    surface the TIERS, and a document whose right-hand side cannot be evaluated
+    at ``(u0, p, t0)`` — one still waiting for a provider, say — has always been
+    allowed to build here and fail at ``solve``. Turning those into build errors
+    would be a different change, made by accident.
+    """
+    try:
+        with phase_scope("rhs"):
+            build.rhs_function(float(t0), build.y0)
+    except CompilerRefusedRuleError:
+        raise
+    except Exception:  # noqa: BLE001 — a non-refusal failure stays a run failure
+        pass
+    try:
+        probe_output_time_observeds(flat, build, float(t0))
+    except CompilerRefusedRuleError:
+        raise
+    except Exception:  # noqa: BLE001 — see above
+        pass
 
 
 def _declares_resolvable_shape(flat: FlattenedSystem) -> bool:
@@ -1102,6 +1315,29 @@ def _walk_for_unlowered(
         )
 
 
+def policy_for(prob: EsmProblem) -> CompilerPolicy:
+    """The compiler policy this problem was BUILT with, for re-installing.
+
+    Construction exercises every evaluation it can reach, but two kinds of
+    evaluation happen later and must stay under the same compiler: a
+    cadence-segmented engine builds its right-hand side per SEGMENT during
+    ``solve``, and :func:`remake` rebuilds on a substituted parameter. Without
+    the policy re-installed those would walk per cell in silence under
+    ``native`` — a fallback, which esm-libraries-spec §2.5.10 forbids outright —
+    and under ``interpreter`` they would quietly run the fast tiers instead of
+    the reference.
+
+    The report is the SAME object, so a segment build's landings append to the
+    record the caller reads off the problem rather than starting a new one.
+    """
+    return CompilerPolicy(
+        compiler=prob.compiler,
+        strict=prob.compiler == "native",
+        every_tier_off=prob.compiler == "interpreter",
+        report=prob.compiler_report,
+    )
+
+
 # --------------------------------------------------------------------------- #
 # solve (esm-libraries-spec §2.5.3)
 # --------------------------------------------------------------------------- #
@@ -1198,7 +1434,22 @@ def solve(
     cbs = prob.callbacks if callback is None else CallbackSet(callback)
     cb = cbs if cbs else None
 
-    if prob.pathway == "discrete_providers":
+    with use_policy(policy_for(prob)), phase_scope("solve"):
+        return _solve_engine(prob, alg, reltol, abstol, saveat, cb, maxiters)
+
+
+def _solve_engine(
+    prob: EsmProblem,
+    alg: str,
+    reltol: float,
+    abstol: float,
+    saveat: Any,
+    cb: Any,
+    maxiters: int | None,
+) -> Solution:
+    """Dispatch a resolved run onto its segmenting engine, under the problem's
+    own compiler policy (installed by :func:`solve`)."""
+    if prob.engine == "discrete_providers":
         sol = _simulate_with_discrete_providers(
             prob.flat,
             prob.tspan,
@@ -1212,7 +1463,7 @@ def solve(
             maxiters=maxiters,
         )
         return _with_merged_renames(prob, _finish_segmented(sol, saveat, cb))
-    if prob.pathway == "loaders":
+    if prob.engine == "loaders":
         sol = _simulate_with_loaders(
             prob.flat,
             prob.tspan,
@@ -1226,7 +1477,7 @@ def solve(
             maxiters=maxiters,
         )
         return _with_merged_renames(prob, _finish_segmented(sol, saveat, cb))
-    if prob.pathway == "array":
+    if prob.engine == "array":
         return _with_merged_renames(
             prob,
             _simulate_with_numpy(
@@ -1399,25 +1650,31 @@ def remake(
     rebind = p is not None or u0 is not None
     build = prob.build
     scalar_build = prob.scalar_build
-    if rebind and prob.pathway == "array":
-        build = _build_numpy_rhs(
-            prob.flat,
-            new_p,
-            new_u0,
-            loader_arrays=prob.const_arrays,
-            static_cache=prob.static_cache,
-            sample_time=prob.sample_time,
-            build_only=True,
-        )
-    elif rebind and prob.pathway == "scalar":
-        scalar_build = _build_scalar_rhs(prob.flat, new_p, new_u0, cse=prob.cse)
+    # The rebuild is the SAME compiler's: a remake that quietly changed strategy
+    # would make `prob.compiler` describe the original build only.
+    with use_policy(policy_for(prob)), phase_scope("construction"):
+        if rebind and prob.engine == "array":
+            build = _build_numpy_rhs(
+                prob.flat,
+                new_p,
+                new_u0,
+                loader_arrays=prob.const_arrays,
+                static_cache=prob.static_cache,
+                sample_time=prob.sample_time,
+                build_only=True,
+            )
+            _exercise_every_evaluation(prob.flat, build, prob.sample_time)
+        elif rebind and prob.engine == "scalar":
+            scalar_build = _build_scalar_rhs(prob.flat, new_p, new_u0, cse=prob.cse)
 
     return EsmProblem(
         flat=prob.flat,
         tspan=new_tspan,
         p=new_p,
         u0=new_u0,
-        pathway=prob.pathway,
+        compiler=prob.compiler,
+        compiler_report=prob.compiler_report,
+        engine=prob.engine,
         build=build,
         scalar_build=scalar_build,
         scalar_build_error=None if scalar_build is not None else prob.scalar_build_error,
@@ -1488,9 +1745,9 @@ class Integrator:
     ) -> None:
         if not SCIPY_AVAILABLE:
             raise SimulationError(_scipy_missing_message("step"))
-        if prob.pathway in ("loaders", "discrete_providers"):
+        if prob.engine in ("loaders", "discrete_providers"):
             raise SimulationError(
-                f"init: the {prob.pathway!r} pathway rebuilds its right-hand side at "
+                f"init: the {prob.engine!r} pathway rebuilds its right-hand side at "
                 f"every cadence boundary, so it has no single steppable integrator. "
                 f"Run it with solve()."
             )
@@ -1626,7 +1883,7 @@ class Integrator:
 
 def _rhs_of(prob: EsmProblem) -> tuple[Callable, np.ndarray, list[str]]:
     """The compiled ``(rhs, u0, element names)`` a EsmProblem steps."""
-    if prob.pathway == "array" and prob.build is not None:
+    if prob.engine == "array" and prob.build is not None:
         build = prob.build
         return build.rhs_function, build.y0, _element_names(build.state_names, build.shapes)
     build_s = prob.scalar_build
@@ -1642,7 +1899,7 @@ def _rhs_of(prob: EsmProblem) -> tuple[Callable, np.ndarray, list[str]]:
             else "it has no compiled right-hand side"
         )
         raise SimulationError(
-            f"init: this EsmProblem cannot be stepped (pathway {prob.pathway!r}) "
+            f"init: this EsmProblem cannot be stepped (pathway {prob.engine!r}) "
             f"because {reason}. Run it with solve()."
         ) from cause
     if build_s.rhs_function is None:
@@ -1773,7 +2030,7 @@ def observed_field(prob: EsmProblem, name: str):
     build = prob.build
     if build is None:
         raise SimulationError(
-            f"observed_field: this EsmProblem took the {prob.pathway!r} pathway, which "
+            f"observed_field: this EsmProblem took the {prob.engine!r} pathway, which "
             f"has no build-time observed graph to read '{name}' from. Only the "
             f"array/PDE pathway materializes state-free observeds at build."
         )

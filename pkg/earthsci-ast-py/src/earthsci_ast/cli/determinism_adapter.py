@@ -103,8 +103,14 @@ def _compute_payload(fixture: dict[str, Any], payload: dict[str, Any]) -> dict[s
 
 
 def _run_fixture(
-    fixture: dict[str, Any], _manifest: dict[str, Any], _manifest_path: Path
+    fixture: dict[str, Any],
+    _manifest: dict[str, Any],
+    _manifest_path: Path,
+    _compiler: str | None = None,
 ) -> dict[str, Any]:
+    # `--compiler` is accepted for a uniform adapter surface and ignored: these
+    # fixtures drive the index-set / serialization producers directly and build
+    # no right-hand side.
     record = _compute_fixture(fixture)
     # Run the adversarial variants through the SAME real producers and emit
     # each — the runner asserts they collapse to the golden, proving order-,

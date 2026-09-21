@@ -33,7 +33,19 @@ import numpy as np
 import earthsci_ast as et
 from earthsci_ast import ReturnCode, esm_problem, evaluate_rhs, solve
 from earthsci_ast.cli._adapter_main import adapter_main
+from earthsci_ast.compiler import CompilerPolicy, resolve_compiler, use_policy
 from earthsci_ast.simulation import _build_numpy_rhs, _provider_sample_field
+
+
+def _policy(compiler: str | None) -> CompilerPolicy:
+    """The policy for a build this adapter drives through a private entry point.
+
+    ``esm_problem`` and ``evaluate_rhs`` install their own from the keyword; the
+    full-pipeline probe calls ``_build_numpy_rhs`` directly and so has to."""
+    chosen = resolve_compiler(compiler)
+    return CompilerPolicy(
+        compiler=chosen, strict=chosen == "native", every_tier_off=chosen == "interpreter"
+    )
 
 
 def _bare(name: str) -> str:
@@ -69,17 +81,21 @@ def _sample_trajectory(result, out_times) -> dict[str, dict[str, float]]:
     return traj
 
 
-def run_fixture(fixture: dict, base: Path, integ: dict) -> dict[str, Any]:
+def run_fixture(
+    fixture: dict, base: Path, integ: dict, compiler: str | None = None
+) -> dict[str, Any]:
     esm = et.load_path(str(base / fixture["path"]))
 
     rhs: dict[str, dict[str, float]] = {}
     for probe in fixture["rhs_probes"]:
-        raw = evaluate_rhs(esm, dict(probe["state"]), t=float(probe.get("t", 0.0)))
+        raw = evaluate_rhs(
+            esm, dict(probe["state"]), t=float(probe.get("t", 0.0)), compiler=compiler
+        )
         rhs[probe["id"]] = {_bare(k): float(v) for k, v in raw.items()}
 
     tr = fixture["trajectory"]
     tspan = (float(tr["time_span"]["start"]), float(tr["time_span"]["end"]))
-    prob = esm_problem(esm, tspan, u0=dict(tr["initial_conditions"]))
+    prob = esm_problem(esm, tspan, u0=dict(tr["initial_conditions"]), compiler=compiler)
     result = solve(
         prob,
         alg=integ.get("method", "RK45"),
@@ -90,7 +106,9 @@ def run_fixture(fixture: dict, base: Path, integ: dict) -> dict[str, Any]:
     return {"rhs": rhs, "trajectory": traj}
 
 
-def run_fixture_full(fixture: dict, base: Path, integ: dict) -> dict[str, Any]:
+def run_fixture_full(
+    fixture: dict, base: Path, integ: dict, compiler: str | None = None
+) -> dict[str, Any]:
     """Full-pipeline path (DESIGN pde_simulation_pipeline §7): load the fixture,
     install a static stub provider serving the manifest ``inputs`` (keyed
     ``<ModelPath>.<param>``), run the whole lowering pipeline (reaction-gen → template
@@ -117,13 +135,17 @@ def run_fixture_full(fixture: dict, base: Path, integ: dict) -> dict[str, Any]:
     # loaded wind/inflow forcing reaches the stencil through loader_arrays.
     rhs: dict[str, dict[str, float]] = {}
     for probe in fixture["rhs_probes"]:
-        build = _build_numpy_rhs(flat, {}, dict(probe["state"]), loader_arrays=loaded_arrays)
-        dy = build.rhs_function(float(probe.get("t", 0.0)), build.y0)
+        # The compiler is the caller's here too: `_build_numpy_rhs` reads the
+        # active policy, so this probe runs on the same tiers the trajectory
+        # below does instead of whatever the process happened to default to.
+        with use_policy(_policy(compiler)):
+            build = _build_numpy_rhs(flat, {}, dict(probe["state"]), loader_arrays=loaded_arrays)
+            dy = build.rhs_function(float(probe.get("t", 0.0)), build.y0)
         rhs[probe["id"]] = {_bare(n): float(v) for n, v in zip(build.elem_names, dy)}
 
     # --- Trajectory via the sanctioned provider-injected EsmProblem path --------
     tspan = (checkpoints[0], checkpoints[-1])
-    prob = esm_problem(esm, tspan, providers=providers)
+    prob = esm_problem(esm, tspan, providers=providers, compiler=compiler)
     result = solve(
         prob,
         alg=integ.get("method", "RK45"),
@@ -137,12 +159,15 @@ def run_fixture_full(fixture: dict, base: Path, integ: dict) -> dict[str, Any]:
 
 
 def _run_fixture(
-    fixture: dict[str, Any], manifest: dict[str, Any], manifest_path: Path
+    fixture: dict[str, Any],
+    manifest: dict[str, Any],
+    manifest_path: Path,
+    compiler: str | None = None,
 ) -> dict[str, Any]:
     integ = manifest.get("integrators", {}).get("python", {})
     base = manifest_path.parent
     runner = run_fixture_full if fixture.get("pipeline") == "full" else run_fixture
-    return runner(fixture, base, integ)
+    return runner(fixture, base, integ, compiler)
 
 
 def main(argv=None) -> int:

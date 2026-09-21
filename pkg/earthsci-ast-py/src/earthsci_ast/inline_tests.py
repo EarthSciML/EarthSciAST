@@ -288,8 +288,12 @@ class InlineTestOptions:
     atol: float | None = None
     #: Directory that anchors ``from_file`` reference paths (§6.6.5).
     base_dir: str | None = None
-    #: Common-subexpression elimination in the right-hand-side build.
+    #: Common-subexpression elimination in the right-hand-side build. Applies
+    #: to ``compiler="sympy"`` and to no other compiler.
     cse: bool | None = None
+    #: Which compiler builds each document's right-hand side (API_SPEC §5.8's
+    #: closed vocabulary). ``None`` inherits the run's.
+    compiler: str | None = None
     #: Initial-condition seed, applied beneath each test's own map.
     initial_conditions: Mapping[str, Any] | None = None
     #: Parameter-override seed, applied beneath each test's own map.
@@ -313,6 +317,7 @@ class _ResolvedOptions:
     atol: float | None
     base_dir: str | None
     cse: bool
+    compiler: str | None = None
     initial_conditions: Mapping[str, Any] = field(default_factory=dict)
     parameter_overrides: Mapping[str, Any] = field(default_factory=dict)
 
@@ -1185,6 +1190,7 @@ def simulate_states(
     initial_conditions: dict[str, float] | None = None,
     cse: bool = True,
     inspect: BuildInspection | None = None,
+    compiler: str | None = None,
 ) -> SimulatedStates:
     """Run the official :func:`earthsci_ast.problem.solve` pathway
     and sample the trajectory at each time of ``saveat``.
@@ -1218,6 +1224,7 @@ def simulate_states(
         u0=dict(initial_conditions or {}),
         cse=cse,
         inspect=inspect,
+        compiler=compiler,
     )
     # esm-spec §2.2.2, most-specific first: an explicit `rtol` / `atol` here
     # wins, else this document's `solver` block, else the runner's own
@@ -1682,6 +1689,7 @@ def _run_document_tests(
                         ),
                         cse=opts.cse,
                         inspect=insp,
+                        compiler=opts.compiler,
                     )
                 except Exception as err:  # noqa: BLE001 — recorded per assertion
                     sim_err = f"solve failed: {err}"
@@ -1789,6 +1797,7 @@ def _fold_options(
     atol: float | None,
     base_dir: str | None,
     cse: bool,
+    compiler: str | None,
 ) -> _ResolvedOptions:
     """Fold one document's :class:`InlineTestOptions` onto the call-level
     defaults: a field the override left ``None`` inherits, every other field
@@ -1801,6 +1810,7 @@ def _fold_options(
             atol=atol,
             base_dir=base_dir,
             cse=cse,
+            compiler=compiler,
         )
     if not isinstance(override, InlineTestOptions):
         raise TypeError(
@@ -1813,6 +1823,7 @@ def _fold_options(
         atol=atol if override.atol is None else float(override.atol),
         base_dir=base_dir if override.base_dir is None else override.base_dir,
         cse=cse if override.cse is None else bool(override.cse),
+        compiler=compiler if override.compiler is None else str(override.compiler),
         initial_conditions=dict(override.initial_conditions or {}),
         parameter_overrides=dict(override.parameter_overrides or {}),
     )
@@ -1827,6 +1838,7 @@ def run_inline_tests(
     atol: float | None = None,
     base_dir: str | None = None,
     cse: bool = True,
+    compiler: str | None = None,
     options_for: Callable[[Any], InlineTestOptions | None] | None = None,
 ) -> list[AssertionResult]:
     """Run every inline test (esm-spec §6.6, including the §6.6.5 PDE
@@ -1886,6 +1898,14 @@ def run_inline_tests(
     INTEGRATION tolerances; the tolerance each assertion is COMPARED at is the
     separate §6.6.4 quantity and is untouched.
 
+    ``compiler`` names which strategy builds each document's right-hand side,
+    over the closed vocabulary of ``API_SPEC.md`` §5.8, and defaults to the
+    strict ``native``. A document whose rules ``native`` cannot express raises
+    at its build, which this runner records per assertion as a ``solve failed``
+    just as it records any other build failure — so a corpus gate reads the
+    refusals off the results rather than losing them. ``options_for`` can name
+    a different compiler per document.
+
     A document that fails to LOAD raises when ``inputs`` names a single
     document, exactly as before. In a BATCH — an iterable or a directory — it
     instead contributes one ERROR row naming the path, so one unreadable file
@@ -1912,6 +1932,7 @@ def run_inline_tests(
             atol=atol,
             base_dir=base_dir,
             cse=cse,
+            compiler=compiler,
         )
         if isinstance(document, EsmFile):
             _run_document_tests(document, None, opts, results)

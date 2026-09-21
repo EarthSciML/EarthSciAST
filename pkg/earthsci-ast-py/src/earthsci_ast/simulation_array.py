@@ -18,7 +18,15 @@ from typing import Any, Callable
 
 import numpy as np
 
+from . import compiler as _compiler
 from .classification import is_implicit_lhs
+from .compiler import (
+    CompilerPolicy,
+    CompilerRefusedRuleError,
+    phase_scope,
+    resolve_compiler,
+    use_policy,
+)
 from .error_handling import INDEXED_DEFINITION_UNSUPPORTED_FORM
 from .esm_types import EsmFile, Expr, ExprNode, is_aggregate_op
 from .expr_walk import iter_children, map_children
@@ -854,6 +862,20 @@ def _loader_volatile_observeds(
     return volatile
 
 
+def rule_label(eq: FlattenedEquation) -> str:
+    """The name a compiler refusal or a report entry gives one driver equation.
+
+    Component-qualified, because that is what the caller reads the document in:
+    ``equation D(Chem.O3)`` for a derivative, and the equation as written for
+    anything else. Observeds are labelled ``observed <flattened name>`` where
+    they are materialized (:func:`_materialize_one_observed`).
+    """
+    target = _differentiated_lhs_target(eq.lhs)
+    if target is not None:
+        return f"equation D({target})"
+    return f"equation {_expr_to_string(eq.lhs)}"
+
+
 def _materialize_one_observed(name: str, rhs: Expr, ctx: EvalContext) -> Any:
     """Evaluate ONE observed assignment ``name = rhs``.
 
@@ -864,8 +886,9 @@ def _materialize_one_observed(name: str, rhs: Expr, ctx: EvalContext) -> Any:
     ``None`` when the RHS contains no self-read at all, so every existing
     document takes exactly the path below, unchanged.
     """
-    swept = sweep_recurrence(name, rhs, ctx, ctx.element_types.get(name))
-    return eval_expr(rhs, ctx) if swept is None else swept
+    with _compiler.rule_scope(f"observed {name}"):
+        swept = sweep_recurrence(name, rhs, ctx, ctx.element_types.get(name))
+        return eval_expr(rhs, ctx) if swept is None else swept
 
 
 def _materialize_observeds(
@@ -2984,7 +3007,8 @@ def _build_numpy_rhs(
         dy.fill(0.0)
         for eq in working_equations:
             try:
-                _apply_equation_to_dy(eq, ctx, shapes, state_layout, dy)
+                with _compiler.rule_scope(rule_label(eq)):
+                    _apply_equation_to_dy(eq, ctx, shapes, state_layout, dy)
             except NumpyInterpreterError as exc:
                 raise SimulationError(str(exc)) from exc
         np.isfinite(dy, out=_finite_mask)
@@ -3023,6 +3047,8 @@ def evaluate_rhs(
     state: dict[str, float],
     t: float = 0.0,
     parameters: dict[str, float] | None = None,
+    *,
+    compiler: str | None = None,
 ) -> dict[str, float]:
     """Evaluate the discretized method-of-lines RHS f(state, t) of an
     array/PDE model, returning a ``{element_name: derivative}`` map keyed by the
@@ -3032,7 +3058,38 @@ def evaluate_rhs(
     conformance tier (bead ess-fmw) uses to check that Julia, Python, and Rust
     agree on the *discretized RHS* independently of any integrator. ``state``
     supplies the value of every state element (same keying as
-    ``initial_conditions`` in :func:`simulate`)."""
+    ``initial_conditions`` in :func:`simulate`).
+
+    ``compiler`` is the same closed vocabulary ``esm_problem`` takes, and for
+    the same reason: this entry point builds and evaluates a right-hand side, so
+    WHICH machinery does it is the caller's to name. ``None`` means ``native``,
+    which is strict — a rule that would walk per cell is ``compiler_refused_rule``
+    here too. ``sympy`` has no scalar-lambdified form to offer a single-shot RHS
+    probe and is refused."""
+    chosen = resolve_compiler(compiler)
+    if chosen == "sympy":
+        raise CompilerRefusedRuleError(
+            "sympy",
+            "the whole document",
+            "evaluate_rhs answers from the NumPy interpreter's discretized "
+            "right-hand side; the lambdified SymPy form is reached through "
+            "esm_problem(..., compiler='sympy') and solve()",
+            phase="construction",
+        )
+    policy = CompilerPolicy(
+        compiler=chosen, strict=chosen == "native", every_tier_off=chosen == "interpreter"
+    )
+    with use_policy(policy), phase_scope("rhs"):
+        return _evaluate_rhs_under(file_or_flat, state, t, parameters)
+
+
+def _evaluate_rhs_under(
+    file_or_flat: EsmFile | FlattenedSystem,
+    state: dict[str, float],
+    t: float,
+    parameters: dict[str, float] | None,
+) -> dict[str, float]:
+    """:func:`evaluate_rhs`'s body, with the compiler policy already installed."""
     flat = file_or_flat if isinstance(file_or_flat, FlattenedSystem) else flatten(file_or_flat)
     if len(flat.independent_variables) > 1:
         raise UnsupportedDimensionalityError(
@@ -3118,6 +3175,62 @@ def observed_at_state(
     ctx = _ctx()
     _materialize_observeds(build.ordered_observed, ctx, skip_unresolved=True)
     return _pick(ctx)
+
+
+def probe_output_time_observeds(
+    flat: FlattenedSystem,
+    build: _NumpyRhsBuild,
+    t: float,
+) -> None:
+    """Run the OUTPUT-TIME observed pass once, at one node, for its tiers alone.
+
+    esm-libraries-spec §2.5.10 puts every evaluation a compiler performs for a
+    Problem under the compiler, "not the right-hand side alone: the
+    materialization of constants and static observeds at construction, the
+    per-segment seed, the right-hand side, and the observeds reported at output
+    times". The first three are exercised by construction already — the hoist
+    runs inside :func:`_build_numpy_rhs`, and ``esm_problem`` evaluates the
+    right-hand side once. This is the fourth: the pass
+    :func:`_simulate_with_numpy` runs at each output node, run once here so that
+    a rule which walks per cell only in THAT pass is a construction error rather
+    than a surprise at the end of a solve.
+
+    It evaluates, it does not return: the caller wants the tiers, and the values
+    are recomputed per node during the actual run. Unresolved observeds are
+    skipped exactly as the output-node pass skips them, so this probe cannot
+    turn a document the run tolerates into a build failure — only a refusal the
+    active compiler owes the caller travels out of it.
+    """
+    ordered = build.ordered_observed
+    if not ordered:
+        return
+    const_array_names = _const_array_observed_names(ordered)
+    varying = _time_varying_observeds(ordered, set(build.state_names))
+    # The two branches mirror `_simulate_with_numpy`'s: with nothing varying it
+    # evaluates the WHOLE graph once in an unseeded context, otherwise only the
+    # varying half on top of the build's static products. Which one runs decides
+    # which rules are evaluated, so the probe has to make the same choice.
+    ctx = EvalContext(
+        const_array_names=const_array_names,
+        state_layout=build.state_layout,
+        state_shapes=build.shapes,
+        param_values=build.param_values,
+        observed_values={} if not varying else dict(build.static_observed_values),
+        y=np.asarray(build.y0, dtype=float),
+        t=float(t),
+        index_sets=flat.index_sets,
+        derived_rings={} if not varying else dict(build.static_derived_rings),
+        derived_extents=build.derived_extents,
+        join_key_buffers=build.join_key_buffers,
+        join_key_index_sets=build.join_key_index_sets,
+        factor_scope=build.factor_scope,
+        var_index_sets=build.var_index_sets,
+        element_types=build.element_types,
+    )
+    with _compiler.phase_scope("observed-output"):
+        _materialize_observeds(
+            ordered if not varying else build.varying_observed, ctx, skip_unresolved=True
+        )
 
 
 def _simulate_observeds_only(

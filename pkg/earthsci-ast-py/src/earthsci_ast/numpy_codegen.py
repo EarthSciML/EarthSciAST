@@ -46,6 +46,7 @@ from typing import Any, Callable
 
 import numpy as np
 
+from .compiler import CompilerRefusedRuleError
 from .esm_types import ExprNode
 from .numpy_interpreter import (
     _CMP_UFUNCS,
@@ -402,6 +403,12 @@ def compile_box_body(
         code = compile(src, "<ess-numpy-codegen>", "exec")
         exec(code, em.ns)
         return em.ns["_boxfn"]
+    except CompilerRefusedRuleError:
+        # A compiler refusal is the one thing this catch-all must not swallow.
+        # The closure tier would raise it again on the first call, so declining
+        # here changes no answer — but it would hide WHICH tier the refusal came
+        # from behind a generic decline, and a refusal exists to be read.
+        raise
     except Exception:
         # Decline on ANY codegen-time failure (a folding subtree that raises,
         # recursion depth, the line cap): the closure-tier fallback reproduces
