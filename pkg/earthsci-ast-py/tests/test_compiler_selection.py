@@ -156,6 +156,38 @@ def test_a_refusal_names_how_to_get_an_answer_instead_of_only_failing() -> None:
     assert "compiler='interpreter'" in message
 
 
+#: A document whose whole-box tiers decline because the BODY RAISES — here an
+#: `index` on a rank-0 array — rather than because they cannot express it.
+BROKEN_BODY = _TESTS / "valid" / "faq" / "faq_semiring_indexset.esm"
+
+
+def test_a_refusal_stands_only_when_the_per_cell_walk_would_have_answered() -> None:
+    """The genuine side: the walk succeeds, so the refusal is a true statement
+    about the compiler and survives verification."""
+    with pytest.raises(CompilerRefusedRuleError) as excinfo:
+        esm_problem(str(GATED_PURE_MAP), (0.0, 1.0))
+    assert excinfo.value.verified, "a refusal must be confirmed before it is raised"
+    assert excinfo.value.rule == "observed ConservativeRegridAssembly.W_ij"
+
+
+def test_a_tier_that_declined_on_a_BROKEN_body_reports_the_body_s_own_error() -> None:
+    """The other side: the walk raises too, so the compiler is not at fault.
+
+    A tier declines both when it cannot express a construct and when evaluating
+    the body simply raises. Only the first is a capability gap. Blaming
+    `native` for an `index` applied to a scalar would send a reader looking for
+    a missing tier and hide the defect that is actually there — and the per-cell
+    walk would not have answered either.
+    """
+    prob = esm_problem(str(BROKEN_BODY), (0.0, 1.0))
+    assert prob.compiler == "native"
+    sol = solve(prob)
+    assert sol.retcode is not ReturnCode.Success
+    # The interpreter's own diagnostic, not `compiler_refused_rule`.
+    assert "index got 1 indices" in (sol.message or "")
+    assert "compiler_refused_rule" not in (sol.message or "")
+
+
 def test_native_carries_no_per_cell_landing_on_a_document_it_accepts() -> None:
     # The invariant a strict `native` exists to give: if the build returned, no
     # rule walked per cell. Checked on a document with aggregates, so the claim

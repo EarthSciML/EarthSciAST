@@ -132,6 +132,12 @@ class CompilerRefusedRuleError(SimulationError):
         self.reason = reason
         self.declines = declines
         self.phase = phase
+        #: Has the per-cell walk this refusal stands on been confirmed to
+        #: SUCCEED? Set by the ladder once it has re-run the node non-strictly.
+        #: A refusal only survives verification; see
+        #: ``numpy_interpreter._eval_faq``. Carried on the exception so an
+        #: enclosing aggregate does not re-verify a node an inner one settled.
+        self.verified = False
         chain = (
             "".join(f"\n    {tier}: {why}" for tier, why in declines)
             if declines
@@ -351,6 +357,23 @@ class CompilerPolicy:
             )
         )
         self._codegen = False
+
+    def verifying(self) -> CompilerPolicy:
+        """A non-strict twin of this policy, for confirming a refusal.
+
+        Same compiler and same tier selection, so the re-run takes the same path
+        — but it does not refuse, and it records into a THROWAWAY report so a
+        build that is about to fail cannot leave landings in the record a caller
+        reads.
+        """
+        return CompilerPolicy(
+            compiler=self.compiler,
+            strict=False,
+            every_tier_off=self.every_tier_off,
+            report=CompilerReport(),
+            rule=self.rule,
+            phase=self.phase,
+        )
 
     def land_per_cell(self, tier: str) -> None:
         """A per-cell walk is about to run. Under ``native`` it never does.

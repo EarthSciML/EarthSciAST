@@ -2413,6 +2413,41 @@ def _join_has_overlap(expr: ExprNode) -> bool:
 
 
 def _eval_faq(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
+    """Evaluate a faq node, and let no unverified refusal out of it.
+
+    Under a strict ``native`` the ladder refuses the moment a per-cell walk is
+    reached. But a tier also declines when the body simply RAISES — an
+    unresolved symbol, an out-of-range gather, an ``index`` applied to a scalar —
+    and then the refusal blames the compiler for a fault that is not its. The
+    per-cell walk would not have answered either; it would have raised the same
+    error, which is the diagnostic the caller needs.
+
+    So a refusal is a claim that has to be earned: re-run the node once,
+    non-strictly, and let it stand only if the walk SUCCEEDS. If the walk raises,
+    that error is the truth and it propagates instead. The re-run costs one
+    whole-node evaluation, on the refusal path only, for a build that is about to
+    fail either way.
+
+    ``verified`` marks the node that was re-run, so an enclosing aggregate does
+    not evaluate itself again over a refusal an inner one has already settled.
+    """
+    policy = _compiler.active_policy()
+    if policy is None or not policy.strict:
+        return _eval_faq_dispatch(expr, ctx)
+    try:
+        return _eval_faq_dispatch(expr, ctx)
+    except _compiler.CompilerRefusedRuleError as refusal:
+        if refusal.verified:
+            raise
+        refusal.verified = True
+        with _compiler.use_policy(policy.verifying()):
+            # Raises the real error, or returns — in which case the walk works
+            # and the refusal below is a true statement about the compiler.
+            _eval_faq_dispatch(expr, ctx)
+        raise
+
+
+def _eval_faq_dispatch(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
     """Evaluate a faq body over its output index box.
 
     Returns an ndarray whose shape is the cartesian product of the ranges for
