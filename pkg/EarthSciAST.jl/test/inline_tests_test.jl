@@ -905,7 +905,8 @@ end
         path = joinpath(dir, "decay.esm")
         write(path, JSON3.write(_pit_decay_doc(Any[
             _pit_coords_assert(["x" => 3]; expected=cos(pi * 2.5 / _PIT_N))])))
-        results = run_inline_tests([path]; model_name="M")
+        results = run_inline_tests([path]; model_name="M",
+                                   compiler=:interpreter)
         @test !isempty(results)
         @test all(r -> r.file == path, results)
 
@@ -913,7 +914,8 @@ end
         # named row rather than ending the run.
         bad = joinpath(dir, "broken.esm")
         write(bad, "{not json")
-        mixed = run_inline_tests([path, bad]; model_name="M")
+        mixed = run_inline_tests([path, bad]; model_name="M",
+                                 compiler=:interpreter)
         @test any(r -> r.file == bad && r.status == EarthSciAST.ERROR, mixed)
         @test any(r -> r.file == path && r.status == EarthSciAST.PASS, mixed)
     end
