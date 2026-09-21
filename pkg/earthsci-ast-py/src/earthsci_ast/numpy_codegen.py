@@ -35,9 +35,9 @@ time (including a constant subtree that raises) declines the WHOLE body:
 compiled closure, which reproduces today's behaviour — including the error —
 at evaluation time.
 
-Kill switch (oracle): ``ESS_NP_CODEGEN_DISABLE=1`` routes every body back to
-the compiled-closure tier (checked at the call sites in
-:mod:`numpy_interpreter`), so the two tiers can be diffed bitwise on any model.
+``compiler="interpreter"`` routes every body back to the compiled-closure tier
+(checked at the call sites in :mod:`numpy_interpreter`), so the two tiers can be
+diffed bitwise on any model by building the same document twice.
 """
 
 from __future__ import annotations

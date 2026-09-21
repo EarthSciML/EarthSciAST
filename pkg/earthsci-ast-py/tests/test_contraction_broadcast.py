@@ -9,6 +9,12 @@ scalar loop's answer. The fixtures are duo-shaped: the esm-spec §9.6.8
 halo-strip remap (reduced-rank ``output_idx`` with a literal-pinned singleton
 axis, output ranges that do not start at 1, contracted ranges that start at 0,
 a tent-basis ``max(0, min(...))`` body over affine gathers).
+
+The scalar loop these compare against is reached by naming the compiler that
+turns every fast tier off — ``compiler="interpreter"``, installed here as the
+policy ``esm_problem`` installs — rather than by an environment switch or by
+assigning to a module constant. Oracle selection is an argument
+(esm-libraries-spec §2.5.10), so the reference is the one a caller gets.
 """
 
 from __future__ import annotations
@@ -17,6 +23,7 @@ import numpy as np
 from test_numpy_interpreter import _ctx
 
 import earthsci_ast.numpy_interpreter as NI
+from earthsci_ast.compiler import CompilerPolicy, use_policy
 from earthsci_ast.esm_types import ExprNode
 from earthsci_ast.numpy_interpreter import eval_expr
 
@@ -74,13 +81,9 @@ def _strip_ctx():
 
 
 def _scalar_reference(node: ExprNode, ctx_factory) -> np.ndarray:
-    """The scalar loop's answer for ``node`` (broadcast path disabled)."""
-    prev = NI._CONTRACT_DISABLE
-    NI._CONTRACT_DISABLE = True
-    try:
+    """The scalar loop's answer for ``node``, under ``compiler="interpreter"``."""
+    with use_policy(CompilerPolicy(compiler="interpreter", every_tier_off=True)):
         return eval_expr(node, ctx_factory())
-    finally:
-        NI._CONTRACT_DISABLE = prev
 
 
 def _spy_broadcast(monkeypatch):

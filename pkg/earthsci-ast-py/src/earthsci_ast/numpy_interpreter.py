@@ -30,7 +30,6 @@ Design notes
 from __future__ import annotations
 
 import functools
-import os
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable
@@ -1933,7 +1932,7 @@ def _materialize_makearray_vectorized(
     # shared under parents that name the box differently. A ``None`` entry
     # means that region declined; it stays on the compiled closure.
     region_fns: list | None = None
-    if allow_codegen and not _CODEGEN_DISABLE and not _compiler.every_tier_off():
+    if allow_codegen and not _compiler.every_tier_off():
         key = (tuple(out_syms), tuple(out_shape))
         cache = getattr(ma, "_cg_regions", None)
         if cache is None:
@@ -2040,14 +2039,6 @@ def _materialize_map(
 # a ~32 MB body slab — comfortably inside every conformance runner while still
 # admitting any stencil-scale contraction.
 _CONTRACTION_BOX_CAP = 1 << 22
-# Kill switch (oracle): ESS_NP_CONTRACT_DISABLE=1 routes every plain
-# contraction back to the scalar loop, so the two paths can be diffed bitwise.
-_CONTRACT_DISABLE = os.environ.get("ESS_NP_CONTRACT_DISABLE", "") == "1"
-
-# Kill switch (oracle): ESS_NP_CODEGEN_DISABLE=1 routes every whole-box body
-# back to the compiled-closure tier, so the Tier-1 source codegen
-# (numpy_codegen.compile_box_body) can be diffed bitwise against it.
-_CODEGEN_DISABLE = os.environ.get("ESS_NP_CODEGEN_DISABLE", "") == "1"
 
 
 # A dynamically-keyed codegen cache (a {"from": ...}-ranged node) stops
@@ -2100,7 +2091,7 @@ def _codegen_box_fn(
     home at all; those stay on the closure tier."""
     if node is None:
         return _closure_box_fn(body, "the caller vouches for no cache home for this node")
-    if _CODEGEN_DISABLE or _compiler.every_tier_off():
+    if _compiler.every_tier_off():
         return _closure_box_fn(body, "source codegen is off")
     if not dynamic:
         fn = getattr(node, attr, _MISSING)
@@ -2190,8 +2181,6 @@ def _eval_faq_contraction_broadcast(
     array-bound index symbols, a shape mismatch — or a combined box over
     :data:`_CONTRACTION_BOX_CAP`.
     """
-    if _CONTRACT_DISABLE:
-        return _decline("broadcast", "the whole-box contraction is off (ESS_NP_CONTRACT_DISABLE)")
     if not reduce_syms:
         return _decline("broadcast", "the node does not contract; the pure-map tier handles it")
     red_ranges_exp = _expand_reduce_ranges(resolved, reduce_syms)
@@ -2738,6 +2727,31 @@ def _eval_faq_dispatch(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
             if policy is not None:
                 policy.land("gated-reduce")
             return vec
+        # The gated PURE MAP (no contracted range). Last in the sub-ladder
+        # because every tier above it needs a contraction, so this is the one
+        # that answers what they all decline — the shape that walked per cell by
+        # construction before it existed. Overlap-gated nodes are excluded for
+        # the same reason as above: their candidate set drives enumeration.
+        gmap = (
+            None
+            if overlap_gated
+            else _eval_faq_gated_map(
+                expr,
+                ctx,
+                out_syms,
+                out_ranges_exp,
+                out_shape,
+                reduce_syms,
+                raw_ranges,
+                empty_zero,
+                reducer,
+                filter_expr,
+            )
+        )
+        if gmap is not None:
+            if policy is not None:
+                policy.land("gated-map")
+            return gmap
         return _eval_faq_scalar(
             expr,
             ctx,
@@ -3875,8 +3889,7 @@ def _eval_faq_reduce_vectorized(
     if not reduce_syms:
         return _decline(
             "gated-reduce",
-            "the node has NO contraction, and every gated whole-box tier needs one — "
-            "a join- or filter-gated pure map has no whole-box tier in this binding",
+            "the node does not contract; the gated pure-map tier handles it",
         )
 
     red_ranges_exp = _expand_reduce_ranges(resolved, reduce_syms)
@@ -3891,55 +3904,154 @@ def _eval_faq_reduce_vectorized(
         # empty array. Cheap to hand back so the reduce logic below stays simple.
         return np.zeros(out_shape, dtype=float)
 
-    # Resolve the equi-join gate (if any) to a dense mask over the combined box
-    # BEFORE binding the index box — key coding reads only ctx registries + the
-    # declared ranges, not the broadcast bindings. A key that is not an axis of
-    # this box (``_join_admits_mask`` → None) or a malformed clause declines to
-    # the scalar path, which re-resolves and raises the authoritative error.
+    got = _gated_box_term(
+        expr, ctx, all_syms, all_ranges_exp, combined_shape, raw_ranges, filter_expr, "gated-reduce"
+    )
+    if got is None:
+        return None
+    term, admit = got
+    if admit is not None:
+        term = np.where(admit, term, empty_zero)
+
+    red_axes = tuple(range(len(out_syms), ndim))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        out = ufunc.reduce(np.ascontiguousarray(term), axis=red_axes, initial=empty_zero)
+    return np.asarray(out, dtype=float).reshape(out_shape)
+
+
+def _gated_box_term(
+    expr: ExprNode,
+    ctx: EvalContext,
+    all_syms: list[str],
+    all_ranges_exp: list[list[int]],
+    combined_shape: tuple[int, ...],
+    raw_ranges: dict[str, Any] | None,
+    filter_expr: Expr | None,
+    tier: str,
+) -> tuple[np.ndarray, np.ndarray | None] | None:
+    """``(body over the whole box, the gates' dense admit mask)``, or ``None``.
+
+    The half the two gated whole-box tiers share: resolve the equi-``join``
+    (RFC semiring-faq-unified-ir §5.3) and the ``filter`` predicate (§7.2) to one
+    dense boolean mask over ``combined_shape``, and evaluate the body once over
+    the same box. What each caller then DOES with a non-admitted cell differs —
+    a reduction sets it to the semiring identity so it is a no-op under ⊕, a
+    pure map's cell simply IS the identity — so the mask comes back separate
+    rather than already applied.
+
+    The join is resolved BEFORE the index box is bound: key coding reads only the
+    ctx registries and the declared ranges, not the broadcast bindings.
+
+    Declines (``None``, recording ``tier``) for a join key that is not an axis of
+    the box, an overlap candidate set (which must DRIVE enumeration rather than
+    mask it, §5.5.6), or a body or filter that does not evaluate and broadcast
+    over the box. The caller then falls back to the scalar path, which
+    re-resolves and raises the authoritative error.
+    """
     join_mask: np.ndarray | None = None
     if getattr(expr, "join", None):
         if raw_ranges is None:
-            return _decline("gated-reduce", "a join is present but the caller passed no raw ranges")
+            return _decline(tier, "a join is present but the caller passed no raw ranges")
         try:
             sym_positions = {s: list(r) for s, r in zip(all_syms, all_ranges_exp)}
             gates = _resolve_join(expr, raw_ranges, sym_positions, ctx)
             join_mask = _join_admits_mask(gates, all_syms, all_ranges_exp, combined_shape)
         except (NumpyInterpreterError, IndexError, ValueError, TypeError, KeyError) as exc:
-            return _decline("gated-reduce", f"join resolution raised {type(exc).__name__}: {exc}")
+            return _decline(tier, f"join resolution raised {type(exc).__name__}: {exc}")
         if join_mask is None:
             return _decline(
-                "gated-reduce",
-                "a join key is not an axis of the combined box, or the gate carries an "
-                "overlap candidate set",
+                tier,
+                "a join key is not an axis of the box, or the gate carries an overlap "
+                "candidate set",
             )
 
     try:
         with _bound_index_box(ctx, all_syms, all_ranges_exp):
-            # A filtered-out / masked term divides by A_j=0 in the regrid body; that
-            # value is immediately discarded by the mask, so silence the transient
-            # divide/invalid warnings (mirrors the batched-leaf kernel).
+            # A non-admitted term divides by A_j=0 in the regrid body; that value
+            # is discarded by the mask, so silence the transient divide/invalid
+            # warnings (mirrors the batched-leaf kernel).
             with np.errstate(divide="ignore", invalid="ignore"):
                 term = np.asarray(
                     _require_real(_compile_expr(expr.expr)(ctx), "aggregate body"),
                     dtype=float,
                 )
                 term = np.broadcast_to(term, combined_shape)
+                admit = join_mask
                 if filter_expr is not None:
-                    mask = np.asarray(_compile_expr(filter_expr)(ctx))
-                    term = np.where(mask.astype(bool), term, empty_zero)
-                if join_mask is not None:
-                    term = np.where(join_mask, term, empty_zero)
+                    keep = np.asarray(_compile_expr(filter_expr)(ctx)).astype(bool)
+                    keep = np.broadcast_to(keep, combined_shape)
+                    admit = keep if admit is None else (admit & keep)
     except (NumpyInterpreterError, IndexError, ValueError, TypeError, KeyError) as exc:
         return _decline(
-            "gated-reduce",
-            f"the body or the filter does not evaluate and broadcast over the combined "
-            f"box: {type(exc).__name__}: {exc}",
+            tier,
+            f"the body or the filter does not evaluate and broadcast over the box: "
+            f"{type(exc).__name__}: {exc}",
         )
+    return term, admit
 
-    red_axes = tuple(range(len(out_syms), ndim))
-    with np.errstate(divide="ignore", invalid="ignore"):
-        out = ufunc.reduce(np.ascontiguousarray(term), axis=red_axes, initial=empty_zero)
-    return np.asarray(out, dtype=float).reshape(out_shape)
+
+def _eval_faq_gated_map(
+    expr: ExprNode,
+    ctx: EvalContext,
+    out_syms: list[str],
+    out_ranges_exp: list[list[int]],
+    out_shape: tuple[int, ...],
+    reduce_syms: list[str],
+    raw_ranges: dict[str, Any] | None,
+    empty_zero: float,
+    reducer: str,
+    filter_expr: Expr | None,
+) -> np.ndarray | None:
+    """Whole-box fast path for a join- and/or filter-gated PURE MAP.
+
+    The gated counterpart of :func:`_materialize_map`, and the tier that closes
+    the one structural hole the compiler census found: every other gated tier
+    needs a contraction (:func:`_eval_faq_batched_leaf` is a pure map but only
+    for the planar ``polygon_intersection_area`` leaf,
+    :func:`_eval_faq_prefix_scan`, :func:`_eval_faq_operator_cached` and
+    :func:`_eval_faq_reduce_vectorized` all require one), so before this a node
+    whose output indices are its ONLY ranges walked per cell by construction —
+    the conservative-regrid narrow phase ``W_ij``, among others.
+
+    With no contracted range each output cell reduces over exactly ONE candidate
+    term, so the scalar path's answer (:func:`_reduce_over_gated` with a
+    one-element product) is: the body where the gates admit the cell, and the
+    semiring identity 0̄ where they do not. That makes the whole node one
+    masked box evaluation, and it is bit-for-bit the scalar path's — no ⊕-fold
+    happens at all, so unlike a contraction there is not even a summation order
+    to preserve. It is therefore valid for EVERY semiring, not only the ones
+    with a numpy ufunc; the one ⊕ that is not a no-op over a single term is
+    ``bool_and_or``, whose first fold step normalizes a term to 0.0/1.0
+    (:func:`_reduce_step`), and that is reproduced here.
+
+    Returns ``None`` — caller falls back to the exact scalar path — for anything
+    :func:`_gated_box_term` declines.
+    """
+    if reduce_syms:
+        return _decline("gated-map", "the node contracts; the gated reduce tier handles it")
+    if not out_syms or not out_shape:
+        return _decline("gated-map", "the node has no output symbols, or an empty output box")
+    if 0 in out_shape:
+        return np.zeros(out_shape, dtype=float)
+
+    got = _gated_box_term(
+        expr, ctx, out_syms, out_ranges_exp, out_shape, raw_ranges, filter_expr, "gated-map"
+    )
+    if got is None:
+        return None
+    term, admit = got
+    if reducer == "or":
+        # ⊕ = bool_and_or: the scalar fold's FIRST step is `1.0 if val != 0.0
+        # else 0.0`, not `val`, so a single admitted term is normalized rather
+        # than passed through. Every other ⊕ opens with `return val`.
+        term = np.where(term != 0.0, 1.0, 0.0)
+    if admit is None:
+        # Only reachable with an empty `join` list and no filter, which the
+        # dispatcher does not route here. `astype` rather than `asarray`: the
+        # body may still be the read-only broadcast view, and every other tier
+        # hands back an array its caller owns.
+        return np.asarray(term).astype(float).reshape(out_shape)
+    return np.asarray(np.where(admit, term, empty_zero), dtype=float).reshape(out_shape)
 
 
 def _expr_mentions(node: Expr, name: str) -> bool:

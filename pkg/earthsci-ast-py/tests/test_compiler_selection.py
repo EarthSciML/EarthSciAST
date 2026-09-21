@@ -32,6 +32,7 @@ from earthsci_ast import (
     esm_problem,
     load_path,
     load_string,
+    observed_field,
     solve,
 )
 from earthsci_ast.flatten import LoaderField
@@ -52,10 +53,16 @@ FAQ_JOIN = _TESTS / "valid" / "faq" / "join_disaggregation_m2m.esm"
 #: both `native` and `interpreter`.
 LOADER_ODE = _TESTS / "conformance" / "subsystem_loader" / "fixtures" / "subsystem_loader_ode.esm"
 LOADER_GOLDEN = _TESTS / "conformance" / "subsystem_loader" / "golden" / "subsystem_loader_ode.json"
-#: A join-gated `faq` with NO contraction: every gated whole-box tier needs one,
-#: so this shape has no whole-box tier in this binding at all and walks per cell
-#: by construction (the census's largest structural hole).
+#: A join-gated `faq` with NO contraction — the conservative-regrid narrow
+#: phase. It walked per cell by construction until the gated pure-map tier
+#: landed (the census's largest structural hole); `native` runs it now.
 GATED_PURE_MAP = _TESTS / "valid" / "geometry" / "conservative_regrid_assembly.esm"
+#: A pure map whose BODY the whole-box tiers cannot express — a partial `index`
+#: into a rank-3 array. Nothing gated about it, and no tier below the per-cell
+#: walk, so it is what a `native` refusal looks like today.
+UNVECTORIZABLE_MAP = (
+    _TESTS / "conformance" / "build_once_spatial_field" / "fixtures" / "build_once_spatial_ode.esm"
+)
 
 
 def _loader_provider():
@@ -122,9 +129,9 @@ def test_no_compiler_named_means_the_strict_native_default() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_native_refuses_a_gated_pure_map_at_construction_and_names_the_rule() -> None:
+def test_native_refuses_an_unvectorizable_map_at_construction_and_names_the_rule() -> None:
     with pytest.raises(CompilerRefusedRuleError) as excinfo:
-        esm_problem(str(GATED_PURE_MAP), (0.0, 1.0))
+        esm_problem(str(UNVECTORIZABLE_MAP), (0.0, 1.0))
     err = excinfo.value
     assert err.code == "compiler_refused_rule"
     assert err.compiler == "native"
@@ -132,25 +139,25 @@ def test_native_refuses_a_gated_pure_map_at_construction_and_names_the_rule() ->
     # document's refusal happens in the const-geometry hoist, inside
     # `esm_problem` itself, before any right-hand side exists. A `native` that
     # probed only `rhs_function` would let this document through.
-    assert err.rule == "observed ConservativeRegridAssembly.W_ij"
+    assert err.rule == "observed Field.area"
     assert err.phase == "construction"
     # The reason is the DEEPEST decline, and the whole chain travels with it.
-    assert "NO contraction" in err.reason
+    assert "does not evaluate or broadcast over the box" in err.reason
     tiers = [tier for tier, _ in err.declines]
-    assert tiers == ["batched-leaf", "prefix-scan", "operator-cache", "gated-reduce"]
+    assert tiers == ["batched-leaf", "einsum", "map"]
 
 
 def test_the_same_document_builds_and_runs_under_the_interpreter() -> None:
-    prob = esm_problem(str(GATED_PURE_MAP), (0.0, 1.0), compiler="interpreter")
+    prob = esm_problem(str(UNVECTORIZABLE_MAP), (0.0, 1.0), compiler="interpreter")
     assert prob.compiler == "interpreter"
     # The rule `native` refused landed on the per-cell walk, which is where the
     # reference puts every aggregate.
-    assert "observed ConservativeRegridAssembly.W_ij" in prob.compiler_report.per_cell_rules()
+    assert "observed Field.area" in prob.compiler_report.per_cell_rules()
 
 
 def test_a_refusal_names_how_to_get_an_answer_instead_of_only_failing() -> None:
     with pytest.raises(CompilerRefusedRuleError) as excinfo:
-        esm_problem(str(GATED_PURE_MAP), (0.0, 1.0))
+        esm_problem(str(UNVECTORIZABLE_MAP), (0.0, 1.0))
     message = str(excinfo.value)
     assert "not a fallback" in message
     assert "compiler='interpreter'" in message
@@ -165,9 +172,9 @@ def test_a_refusal_stands_only_when_the_per_cell_walk_would_have_answered() -> N
     """The genuine side: the walk succeeds, so the refusal is a true statement
     about the compiler and survives verification."""
     with pytest.raises(CompilerRefusedRuleError) as excinfo:
-        esm_problem(str(GATED_PURE_MAP), (0.0, 1.0))
+        esm_problem(str(UNVECTORIZABLE_MAP), (0.0, 1.0))
     assert excinfo.value.verified, "a refusal must be confirmed before it is raised"
-    assert excinfo.value.rule == "observed ConservativeRegridAssembly.W_ij"
+    assert excinfo.value.rule == "observed Field.area"
 
 
 def test_a_tier_that_declined_on_a_BROKEN_body_reports_the_body_s_own_error() -> None:
@@ -186,6 +193,37 @@ def test_a_tier_that_declined_on_a_BROKEN_body_reports_the_body_s_own_error() ->
     # The interpreter's own diagnostic, not `compiler_refused_rule`.
     assert "index got 1 indices" in (sol.message or "")
     assert "compiler_refused_rule" not in (sol.message or "")
+
+
+def test_native_runs_a_gated_pure_map_and_agrees_with_the_interpreter_bitwise() -> None:
+    """The gated pure map — a join- and/or filter-gated `faq` whose output
+    indices are its only ranges.
+
+    Every other gated tier needs a contraction, so until the gated pure-map
+    tier landed this shape walked per cell by construction and `native` refused
+    it. It is the conservative-regrid narrow phase, and the refusal it earned
+    was the largest single hole the compiler census found.
+
+    The comparison is BITWISE, not within tolerance: with no contracted range
+    there is no ⊕-fold and hence no summation order to reassociate, so the
+    whole-box evaluation is the per-cell walk's arithmetic in one pass. A
+    difference of one bit would mean the tier is computing something else.
+    """
+    fast = esm_problem(str(GATED_PURE_MAP), (0.0, 1.0))
+    assert fast.compiler == "native"
+    assert fast.compiler_report.per_cell_rules() == ()
+    landings = fast.compiler_report.tiers()
+    assert landings.get("gated-map"), f"the gated pure-map tier did not serve it: {landings}"
+
+    ref = esm_problem(str(GATED_PURE_MAP), (0.0, 1.0), compiler="interpreter")
+    # The rule that used to earn the refusal, and the one the new tier answers.
+    assert "observed ConservativeRegridAssembly.W_ij" in ref.compiler_report.per_cell_rules()
+
+    got = np.asarray(observed_field(fast, "ConservativeRegridAssembly.W_ij"), dtype=float)
+    want = np.asarray(observed_field(ref, "ConservativeRegridAssembly.W_ij"), dtype=float)
+    assert got.shape == want.shape
+    assert np.array_equal(got.view(np.uint64), want.view(np.uint64))
+    assert np.any(got != 0.0), "a gate that admitted nothing would prove nothing"
 
 
 def test_native_carries_no_per_cell_landing_on_a_document_it_accepts() -> None:
