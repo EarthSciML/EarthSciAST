@@ -267,13 +267,12 @@ end
 end
 
 # The default array build (affine access kernels + codegen tier) against the
-# forced per-cell SCALAR reference (`ESS_STENCIL_DISABLE=1` — compiled cell
+# forced per-cell SCALAR reference (`compiler=:interpreter` — compiled cell
 # nodes on `rhs_list`, evaluated by `_eval_node` with no merge machinery).
 @testset "array kernels ≡ per-cell scalar reference (differential)" begin
     _build(model, ics, disable) =
-        withenv("ESS_STENCIL_DISABLE" => (disable ? "1" : nothing)) do
-            build_evaluator(model; initial_conditions=ics)
-        end
+        build_evaluator(model; initial_conditions=ics,
+                        compiler = disable ? :interpreter : :native)
 
     # Bit-identical du across interior + ghost-boundary kernels, every grid size.
     @testset "bit-identical du (N=$N)" for N in (8, 32, 64)
@@ -308,12 +307,11 @@ end
 # cell's u0 by re-evaluation instead of a per-cell _index_at_cell→resolve→compile
 # rebuild. `_eval_node` computes every leaf in Float64, so an index bound as a
 # param equals that index folded to a literal — the u0 field must be bit-identical
-# to the forced per-cell path. `ESS_STENCIL_DISABLE=1` forces that per-cell path.
+# to the forced per-cell path. `compiler=:interpreter` forces that per-cell path.
 @testset "compile-once field-ic ≡ per-cell fallback (u0, ess-perf)" begin
     _build_u0(N, disable) =
-        withenv("ESS_STENCIL_DISABLE" => (disable ? "1" : nothing)) do
-            build_evaluator(_fieldic_model(N))[2]   # u0 is the 2nd return value
-        end
+        build_evaluator(_fieldic_model(N);
+                        compiler = disable ? :interpreter : :native)[2]   # u0 is 2nd
 
     @testset "bit-identical u0 (N=$N)" for N in (4, 16, 32)
         u0_fast = _build_u0(N, false)
@@ -348,7 +346,7 @@ end
 # each call `interp.linear` with their own table, indexed inside a faq that
 # takes the PER-CELL path. (The symbolic-stencil fast path already keyed the region
 # choice into its branch key, so it was correct; the per-cell fallback — taken by
-# any contraction, and by `ESS_STENCIL_DISABLE=1` — was not.)
+# any contraction, and under `compiler=:interpreter` — was not.)
 #
 # Fix: `_struct_sig!` keys the spec's CONTENT (`_fn_spec_hash`), so differing tables
 # land in different groups and each gets its own kernel. Content, NOT `objectid`:
@@ -435,8 +433,8 @@ end
     # -- (d) end-to-end reproduction ----------------------------------------
     # `makearray` regions 1-2 → TBL_A, 3-4 → TBL_B, over a faq. Three build
     # paths: the default affine build, the per-cell fallback via a contracted
-    # index (was WRONG), and the forced per-cell scalar reference via
-    # ESS_STENCIL_DISABLE (was WRONG). All three must agree with the scalar oracle.
+    # index (was WRONG), and the forced per-cell scalar reference under
+    # `compiler=:interpreter` (was WRONG). All three must agree with the oracle.
     N = 4
     mk_two_tables(tbl1, tbl2) = OpExpr("makearray", ESM.ASTExpr[];
         regions=[[[1, 2]], [[3, 4]]],
@@ -453,11 +451,11 @@ end
         model = ESM.Model(Dict("u" => ModelVariable(UnknownVariable)),
                           [ESM.Equation(lhs, rhs)])
         ics = Dict("u[$k]" => QUERY for k in 1:N)
-        withenv("ESS_STENCIL_DISABLE" => (disable_stencil ? "1" : nothing)) do
-            f!, u0, p, _, vmap, d = ESM._build_evaluator_impl(model; initial_conditions=ics)
-            du = similar(u0); f!(du, u0, p, 0.0)
-            ([du[vmap["u[$k]"]] for k in 1:N], d)
-        end
+        f!, u0, p, _, vmap, d = ESM._build_evaluator_impl(model;
+            initial_conditions=ics,
+            compiler = disable_stencil ? :interpreter : :native)
+        du = similar(u0); f!(du, u0, p, 0.0)
+        return ([du[vmap["u[$k]"]] for k in 1:N], d)
     end
 
     @testset "(d) makearray regions with different tables — $label" for
@@ -531,9 +529,8 @@ end
             model = ESM.Model(Dict("u" => ModelVariable(UnknownVariable)),
                               [ESM.Equation(l, r)])
             ics = Dict("u[$k]" => QUERY for k in 1:N)
-            withenv("ESS_STENCIL_DISABLE" => (disable ? "1" : nothing)) do
-                ESM._build_evaluator_impl(model; initial_conditions=ics)[6]
-            end
+            ESM._build_evaluator_impl(model; initial_conditions=ics,
+                compiler = disable ? :interpreter : :native)[6]
         end
         @testset "affine path" begin
             ds = [_diag(N, false) for N in (8, 16, 64)]

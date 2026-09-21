@@ -10,7 +10,7 @@
 #
 # Asserts, per model: sharing observable in the diag counters (`n_acc_cse_slots` /
 # `n_acc_inv_slots`) exactly where content matches; the default affine build ≡
-# per-cell (ESS_STENCIL_DISABLE=1) reference BIT-IDENTICALLY throughout — the
+# per-cell (`compiler=:interpreter`) reference BIT-IDENTICALLY throughout — the
 # shared slot evaluates the SAME op on the SAME inputs, just once.
 using Test
 using EarthSciAST
@@ -18,13 +18,10 @@ include("testutils.jl")
 const ESM = EarthSciAST
 
 function _fnk_build(model, ics; affine::Bool)
-    envs = affine ? ("ESS_STENCIL_DISABLE" => nothing,) :
-                    ("ESS_STENCIL_DISABLE" => "1",)
-    withenv(envs...) do
-        f!, u0, p, _tspan, vm, diag =
-            ESM._build_evaluator_impl(model; initial_conditions=ics, form=:inplace)
-        (f!, u0, p, diag)
-    end
+    f!, u0, p, _tspan, vm, diag =
+        ESM._build_evaluator_impl(model; initial_conditions=ics, form=:inplace,
+                                  compiler = affine ? :native : :interpreter)
+    return (f!, u0, p, diag)
 end
 _fnk_du(f!, u0, p, t) = (du = zero(u0); f!(du, u0, p, t); du)
 

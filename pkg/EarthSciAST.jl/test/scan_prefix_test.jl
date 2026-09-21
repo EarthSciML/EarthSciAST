@@ -9,9 +9,9 @@
 # `_unrolled_contraction_body` would emit.
 #
 # What is pinned here:
-#   * BIT-IDENTITY against the per-cell reference (ESS_STENCIL_DISABLE=1), which
+#   * BIT-IDENTITY against the per-cell reference (`compiler=:interpreter`), which
 #     never sees the rewrite, and against the affine-interpreted tier
-#     (ESS_CODEGEN_DISABLE=1). Inputs are catastrophic-cancellation magnitudes
+#     under the same compiler. Inputs are catastrophic-cancellation magnitudes
 #     with sign flips, so a re-association would show as a mismatch rather than
 #     a last-ulp rounding difference.
 #   * The rewrite actually FIRED (`n_scan_folds`, cascade `:scan`) — otherwise a
@@ -63,22 +63,14 @@ end
 
 # Build and evaluate one RHS at the catastrophic state vector.
 # `tier` selects which evaluation path produces `du`:
-#   :scan     — the default build (the rewrite fires)
-#   :percell  — ESS_STENCIL_DISABLE=1, the maximally independent reference
-#   :interp   — ESS_CODEGEN_DISABLE=1, affine but interpreted
-#   :untiered — ESS_UNTIERED=1, the prelude refilled in full on every call
+#   :scan   — the default build (the rewrite fires)
+#   :ref    — `compiler=:interpreter`: no affine tier, no codegen tier and a
+#             prelude refilled in full on every call, all at once, which is the
+#             one reference the vocabulary offers
 function _scan_du(model; tier=:scan)
-    envs = tier === :percell ? ("ESS_STENCIL_DISABLE" => "1", "ESS_CODEGEN_DISABLE" => nothing,
-                                "ESS_UNTIERED" => nothing) :
-           tier === :interp  ? ("ESS_STENCIL_DISABLE" => nothing, "ESS_CODEGEN_DISABLE" => "1",
-                                "ESS_UNTIERED" => nothing) :
-           tier === :untiered ? ("ESS_STENCIL_DISABLE" => nothing, "ESS_CODEGEN_DISABLE" => nothing,
-                                 "ESS_UNTIERED" => "1") :
-                               ("ESS_STENCIL_DISABLE" => nothing, "ESS_CODEGEN_DISABLE" => nothing,
-                                "ESS_UNTIERED" => nothing)
-    withenv(envs...) do
+    let compiler = tier === :ref ? :interpreter : :native
         ESM._reset_cascade_tally!()
-        f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(model)
+        f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(model; compiler=compiler)
         u = Float64[_sc_val(k) for k in 1:length(u0)]
         du = (buf = zero(u0); f!(buf, u, p, 0.0); buf)
         (du=du, vm=vm, diag=diag, tally=copy(ESM._CASCADE_TALLY))
@@ -94,8 +86,7 @@ end
             a = _scan_du(m)
             @test a.diag.n_scan_folds == 1            # the rewrite FIRED
             @test get(a.tally, :scan, 0) == 1
-            @test _bits(a.du) == _bits(_scan_du(m; tier=:percell).du)
-            @test _bits(a.du) == _bits(_scan_du(m; tier=:interp).du)
+            @test _bits(a.du) == _bits(_scan_du(m; tier=:ref).du)
         end
     end
 
@@ -123,7 +114,7 @@ end
         a = _scan_du(m)
         @test a.diag.n_scan_folds == 1
         @test a.du[a.vm["c[1]"]] == -Inf
-        @test _bits(a.du) == _bits(_scan_du(m; tier=:percell).du)
+        @test _bits(a.du) == _bits(_scan_du(m; tier=:ref).du)
     end
 
     @testset "mirrored spelling `i >= j` is the same forward scan" begin
@@ -152,7 +143,7 @@ end
             a = _scan_du(m)
             @test a.diag.n_scan_folds == 0
             @test get(a.tally, :scan, 0) == 0
-            @test _bits(a.du) == _bits(_scan_du(m; tier=:percell).du)
+            @test _bits(a.du) == _bits(_scan_du(m; tier=:ref).du)
         end
     end
 
@@ -162,7 +153,7 @@ end
         m = _scan_model(8; body=_op("*", _idx("u", _v("j")), _idx("u", _v("i"))))
         a = _scan_du(m)
         @test a.diag.n_scan_folds == 0
-        @test _bits(a.du) == _bits(_scan_du(m; tier=:percell).du)
+        @test _bits(a.du) == _bits(_scan_du(m; tier=:ref).du)
     end
 
     @testset "measure-weighted term (a cumulative integral)" begin
@@ -171,7 +162,7 @@ end
         m = _scan_model(n; body=_op("*", _idx("u", _v("j")), _n(0.25)))
         a = _scan_du(m)
         @test a.diag.n_scan_folds == 1
-        @test _bits(a.du) == _bits(_scan_du(m; tier=:percell).du)
+        @test _bits(a.du) == _bits(_scan_du(m; tier=:ref).du)
     end
 
     @testset "staggered scan: output on the NODES, terms on the CENTRES" begin
@@ -185,9 +176,7 @@ end
             a = _scan_du(m)
             @test a.diag.n_scan_folds == 1            # the rewrite FIRED
             @test get(a.tally, :scan, 0) == 1
-            @test _bits(a.du) == _bits(_scan_du(m; tier=:percell).du)
-            @test _bits(a.du) == _bits(_scan_du(m; tier=:interp).du)
-            @test _bits(a.du) == _bits(_scan_du(m; tier=:untiered).du)
+            @test _bits(a.du) == _bits(_scan_du(m; tier=:ref).du)
         end
     end
 
@@ -211,7 +200,7 @@ end
         a = _scan_du(m)
         @test a.diag.n_scan_folds == 1
         @test a.du[a.vm["c[1]"]] == -Inf
-        @test _bits(a.du) == _bits(_scan_du(m; tier=:percell).du)
+        @test _bits(a.du) == _bits(_scan_du(m; tier=:ref).du)
     end
 
     @testset "staggered declines that must stay on the triangular path" begin
@@ -220,7 +209,7 @@ end
         m = _scan_model_staggered(8; filt="<=")
         a = _scan_du(m)
         @test a.diag.n_scan_folds == 0
-        @test _bits(a.du) == _bits(_scan_du(m; tier=:percell).du)
+        @test _bits(a.du) == _bits(_scan_du(m; tier=:ref).du)
         # Terms offset from the FRONT (`j` over 2..n+1) are not a prefix
         # recurrence on this axis at all.
         n = 8
@@ -237,7 +226,7 @@ end
         ])
         b = _scan_du(front)
         @test b.diag.n_scan_folds == 0
-        @test _bits(b.du) == _bits(_scan_du(front; tier=:percell).du)
+        @test _bits(b.du) == _bits(_scan_du(front; tier=:ref).du)
     end
 
     @testset "identity gather over a CONTRACTING producer unwraps" begin

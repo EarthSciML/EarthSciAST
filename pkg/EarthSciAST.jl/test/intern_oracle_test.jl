@@ -1,6 +1,6 @@
 # Differential oracle for structural AST interning (perf plan A1, src/intern.jl):
-# build the SAME model with interning ON (the default) and OFF
-# (ESS_INTERN_DISABLE=1, byte-for-byte the pre-interning build) and require
+# build the SAME model under `compiler=:native` (interning on) and
+# `compiler=:interpreter` (interning off, with every other tier) and require
 #   * identical state maps (var_map) and initial states (u0/p),
 #   * BIT-identical du at several (u, t) probes,
 # across the representative gridded shapes: the compile-once template-reference
@@ -8,7 +8,7 @@
 # `_TemplateCtx.sites` / variant keys the interning pre-audit re-keys), the
 # affine-stencil fixtures (2-D Laplacian, makearray regions, const-coefficient
 # diffusion), an observed-chain model (the `_resolve_observed` splice path),
-# and the per-cell reference (ESS_STENCIL_DISABLE=1).
+# and a hand-built per-cell shape.
 # Also pins the interner's own merge/no-merge semantics (bit-egal literals,
 # Int-vs-Float `const` values, `wrt`/field discrimination, DAG idempotence).
 
@@ -27,27 +27,26 @@ _probe_states(n) = (
 )
 
 # Build `model` under `env` and return (du probes, u0, p, var_map).
-function _intern_probe_model(model; env=(),
+function _intern_probe_model(model; compiler=:native,
                              ics=Dict{String,Float64}(), const_arrays=Dict())
-    withenv(env...) do
-        f, u0, p, _, vmap = ESM.build_evaluator(model; initial_conditions=ics,
-                                                const_arrays=const_arrays)
-        dus = Vector{Float64}[]
-        for (ti, u) in zip((0.0, 0.7, 3.25), _probe_states(length(u0)))
-            du = similar(u0)
-            f(du, u, p, ti)
-            push!(dus, copy(du))
-        end
-        (dus, u0, p, vmap)
+    f, u0, p, _, vmap = ESM.build_evaluator(model; initial_conditions=ics,
+                                            const_arrays=const_arrays,
+                                            compiler=compiler)
+    dus = Vector{Float64}[]
+    for (ti, u) in zip((0.0, 0.7, 3.25), _probe_states(length(u0)))
+        du = similar(u0)
+        f(du, u, p, ti)
+        push!(dus, copy(du))
     end
+    return (dus, u0, p, vmap)
 end
 
-# The on/off differential for one model: interning default vs disabled.
+# The differential for one model: the interning compiler vs the interpreter.
 function _intern_oracle(model; ics=Dict{String,Float64}(),
                         const_arrays=Dict())
-    on = _intern_probe_model(model; env=(("ESS_INTERN_DISABLE" => nothing),),
+    on = _intern_probe_model(model; compiler=:native,
                              ics=ics, const_arrays=const_arrays)
-    off = _intern_probe_model(model; env=(("ESS_INTERN_DISABLE" => "1"),),
+    off = _intern_probe_model(model; compiler=:interpreter,
                               ics=ics, const_arrays=const_arrays)
     @test on[4] == off[4]                    # identical state map
     @test on[2] == off[2]                    # identical u0 (bitwise: Float64 ==)
@@ -210,41 +209,31 @@ end
         _intern_oracle(_int_observed_model())
     end
 
-    @testset "per-cell reference path (ESS_STENCIL_DISABLE)" begin
+    @testset "the interner's own semantics on the per-cell shape" begin
+        # The affine tier is what keeps the interned model off the scalar
+        # walker, so the stencil shape is where an interning bug would show up
+        # on both sides of the cascade at once.
         N = 8
         ics = Dict("u[$k]" => sin(0.3k) + 0.1k for k in 1:N)
-        model = _stencil_model(N)
-        on = withenv("ESS_STENCIL_DISABLE" => "1", "ESS_INTERN_DISABLE" => nothing) do
-            _intern_probe_model(model; ics=ics)
-        end
-        off = withenv("ESS_STENCIL_DISABLE" => "1", "ESS_INTERN_DISABLE" => "1") do
-            _intern_probe_model(model; ics=ics)
-        end
-        @test on[4] == off[4]
-        @test on[2] == off[2]
-        for k in eachindex(on[1])
-            @test on[1][k] == off[1][k]
-        end
+        _intern_oracle(_stencil_model(N); ics=ics)
     end
 
     @testset "compile-once template fixture (7³, references)" begin
         FIX = joinpath(TESTUTILS_REPO_ROOT, "tests", "bench",
                        "transport_3axis_7cubed_fullrank.esm")
-        function bp(env)
-            withenv(env...) do
-                flat = ESM.flatten(ESM.load_path(FIX))
-                f, u0, p, _, vmap = ESM.build_evaluator(flat)
-                dus = Vector{Float64}[]
-                for (ti, u) in zip((0.0, 0.7, 3.25), _probe_states(length(u0)))
-                    du = similar(u0)
-                    f(du, u, p, ti)
-                    push!(dus, copy(du))
-                end
-                (dus, u0, vmap)
+        function bp(compiler)
+            flat = ESM.flatten(ESM.load_path(FIX))
+            f, u0, p, _, vmap = ESM.build_evaluator(flat; compiler=compiler)
+            dus = Vector{Float64}[]
+            for (ti, u) in zip((0.0, 0.7, 3.25), _probe_states(length(u0)))
+                du = similar(u0)
+                f(du, u, p, ti)
+                push!(dus, copy(du))
             end
+            return (dus, u0, vmap)
         end
-        on = bp((("ESS_INTERN_DISABLE" => nothing),))
-        off = bp((("ESS_INTERN_DISABLE" => "1"),))
+        on = bp(:native)
+        off = bp(:interpreter)
         @test length(on[2]) == 343
         @test on[3] == off[3]
         @test on[2] == off[2]
