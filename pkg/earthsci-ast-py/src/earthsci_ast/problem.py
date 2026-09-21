@@ -1244,8 +1244,10 @@ def _assert_no_unlowered_operator(flat: FlattenedSystem) -> None:
     pathway lambdifies every observed eagerly and so tripped over a surviving
     op in a DEAD observed; the NumPy pathway evaluates observeds lazily and
     never reached one. The same document therefore passed or failed on which
-    engine ``_choose_pathway`` picked. Walking here, at the one front door every
-    pathway routes through, makes the answer a property of the document.
+    engine the router picked. Walking here, at the one front door every build
+    routes through, makes the answer a property of the document — and it stays
+    one now that the engine is the caller's to name, since a gate that fires
+    before any compiler is consulted cannot depend on which one was.
 
     Scope. Equations (which is where flatten puts every observed body) and the
     ``ic`` right-hand sides — the trees that are compiled for simulation. A
