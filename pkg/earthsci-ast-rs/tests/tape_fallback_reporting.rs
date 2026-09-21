@@ -235,21 +235,24 @@ const TAPED_MODEL: &str = r#"
     }
     "#;
 
+/// Through `compile_array`, NOT through `esm_problem`.
+///
+/// `esm_problem`'s default compiler is `Compiler::Native`, which is strict: a
+/// rule the tape cannot lower is a construction error naming the rule
+/// (`compiler_refused_rule`, API_SPEC §5.8), so a Problem with a SURVIVING
+/// fallback cannot exist. `SolutionMetadata::tape_fallbacks` is kept for
+/// compatibility and is still populated on the extension-seam entry points —
+/// `compile_array` and the `ArrayCompiled::solve` beneath it — which keep the
+/// historical routing: the tape where it lowers, the per-cell oracle where it
+/// does not. That is the path this file gates, and the assertions below are
+/// unchanged.
 fn run(json: &str) -> earthsci_ast::Solution {
     let file = load_string(json).expect("fixture loads");
     let opts = SolveOptions::default();
-    earthsci_ast::esm_problem(
-        &file,
-        (0.0, 0.1),
-        earthsci_ast::ProblemOptions {
-            p: HashMap::new().clone(),
-            u0: HashMap::new().clone(),
-            rhs: earthsci_ast::Rhs::Always,
-            ..Default::default()
-        },
-    )
-    .and_then(|prob| earthsci_ast::solve(&prob, &opts))
-    .expect("fixture simulates")
+    let compiled = earthsci_ast::compile_array(file).expect("fixture compiles");
+    compiled
+        .solve((0.0, 0.1), &HashMap::new(), &HashMap::new(), &opts)
+        .expect("fixture simulates")
 }
 
 #[test]

@@ -2785,6 +2785,40 @@ pub fn run_inline_tests_filtered(
     )
 }
 
+/// [`run_inline_tests_filtered`] driven by a whole [`InlineTestOptions`] — the
+/// entry a CALLER with one loaded document and a full set of knobs wants.
+///
+/// The four positional entry points above grew one argument at a time and
+/// cannot express the two newest knobs, the override seeds and the COMPILER
+/// (API_SPEC §5.8). A sixth positional arity for each would be the wrong
+/// answer; `InlineTestOptions` already names every knob, and
+/// [`run_inline_tests_paths`] already takes it — this is the same options
+/// record against a document the caller has already loaded.
+///
+/// `opts.base_dir` is used as given: unlike [`run_inline_tests_paths`], there
+/// is no path here to fall back to, so a caller with `from_file` references
+/// must set it.
+pub fn run_inline_tests_with_options(
+    file: &EsmFile,
+    opts: &InlineTestOptions,
+    build_providers: Option<&BuildProviderFactory<'_>>,
+) -> Vec<AssertionResult> {
+    run_inline_tests_seeded(
+        file,
+        None,
+        opts.model_name.as_deref(),
+        &opts.solve,
+        opts.base_dir.as_deref(),
+        build_providers,
+        opts.test_filter.as_deref(),
+        &InlineTestSeeds {
+            parameter_overrides: opts.parameter_overrides.clone(),
+            initial_conditions: opts.initial_conditions.clone(),
+            compiler: opts.compiler,
+        },
+    )
+}
+
 /// [`run_inline_tests_filtered`] with the caller's override SEEDS — the one
 /// thing the four `&EsmFile` entry points cannot express and
 /// [`run_inline_tests_paths`] can.

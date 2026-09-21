@@ -12,7 +12,10 @@
 //!   substitution it cannot honour;
 //! * §2.5.6 — the `init` / `step` / `solve_to_completion` lifecycle;
 //! * §2.5.7 — a solution indexed by variable name;
-//! * §2.5.8 — `EnsembleProblem`.
+//! * §2.5.8 — `EnsembleProblem`;
+//! * §2.5.10 — `compiler` is a CONSTRUCTION binding, so a `remake` inherits
+//!   it: the derivative shares the compiled right-hand side, and reporting a
+//!   compiler that did not produce its numbers would be a lie.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -469,6 +472,17 @@ fn remake_substitutes_without_mutating_the_original() {
 
     assert!((base.final_value("M.y").unwrap() - (-1.0f64).exp()).abs() < 1e-6);
     assert!((quick.final_value("M.y").unwrap() - (-2.0f64).exp()).abs() < 1e-6);
+
+    // §2.5.10: the compiler is a CONSTRUCTION binding and the derivative
+    // SHARES the compiled right-hand side, so it reports the same compiler and
+    // the same per-rule record. A remake that re-derived either would be
+    // describing a build that never happened.
+    assert_eq!(faster.compiler(), prob.compiler());
+    assert_eq!(faster.compiler(), Compiler::Native);
+    assert_eq!(
+        faster.compiler_report().rules().len(),
+        prob.compiler_report().rules().len()
+    );
 }
 
 #[test]

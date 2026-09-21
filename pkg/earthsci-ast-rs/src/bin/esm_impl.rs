@@ -292,6 +292,13 @@ enum Commands {
         /// Report every assertion, not just the summary table
         #[arg(short, long)]
         verbose: bool,
+        /// WHICH strategy builds each test's right-hand side (API_SPEC §5.8's
+        /// closed vocabulary). Unset is `native`, which is STRICT: a document
+        /// whose rules the tape cannot lower fails with the refusal rather
+        /// than running on a slower path. Pass `interpreter` to run the
+        /// reference evaluator, which refuses nothing it can evaluate.
+        #[arg(long, value_name = "NAME")]
+        compiler: Option<String>,
     },
     /// Run cross-language conformance tests and write results.json to OUT_DIR
     ConformanceTest {
@@ -4003,6 +4010,7 @@ fn mounted_components(path: &std::path::Path) -> Vec<String> {
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_test(
     paths: Vec<PathBuf>,
     model: Option<String>,
@@ -4011,7 +4019,14 @@ fn run_test(
     reltol: Option<f64>,
     abstol: Option<f64>,
     verbose: bool,
+    compiler: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // Refused before anything is discovered: a value outside the closed
+    // vocabulary is `compiler_unknown` and says nothing about any document.
+    let compiler = match compiler.as_deref() {
+        None => None,
+        Some(name) => Some(earthsci_ast::Compiler::parse_named(name).map_err(fail)?),
+    };
     let files = discover_test_inputs(&paths)?;
     if files.is_empty() {
         // A mis-rooted invocation must not silently pass, but nor is finding
@@ -4104,13 +4119,17 @@ fn run_test(
                     ),
                     ..opts.clone()
                 };
-                let results = earthsci_ast::run_inline_tests_filtered(
+                let results = earthsci_ast::run_inline_tests_with_options(
                     &esm_file,
-                    model.as_deref(),
-                    &file_opts,
-                    path.parent(),
+                    &earthsci_ast::InlineTestOptions {
+                        model_name: model.clone(),
+                        solve: file_opts,
+                        base_dir: path.parent().map(std::path::Path::to_path_buf),
+                        test_filter: filter.clone(),
+                        compiler,
+                        ..Default::default()
+                    },
                     providers.as_deref(),
-                    filter.as_deref(),
                 );
                 for r in results {
                     rows.push(TestRow {
@@ -4318,7 +4337,10 @@ pub fn main() -> std::process::ExitCode {
             reltol,
             abstol,
             verbose,
-        } => run_test(paths, model, filter, solver, reltol, abstol, verbose),
+            compiler,
+        } => run_test(
+            paths, model, filter, solver, reltol, abstol, verbose, compiler,
+        ),
         Commands::ConformanceTest { out_dir, manifest } => {
             run_conformance_test(&out_dir, manifest.as_deref())
         }

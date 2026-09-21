@@ -1,25 +1,25 @@
-//! Phase-0 compiler census: for each document, what the DEFAULT routing picks
-//! and what the array runtime's tape would do with it if it were forced.
+//! Compiler census: build every document under `Compiler::Native` and under
+//! `Compiler::Interpreter`, through the public `esm_problem` entry, and record
+//! what each one answered.
 //!
-//! The "native" compiler under consideration is the array runtime's tape for
-//! EVERY document — including the 0-D scalar ones the default router sends to
-//! `Backend::Scalar` — refusing any document that leaves a rule on the
-//! per-cell fallback path. This example measures the distance between that
-//! rule and today's code, one document at a time:
+//! The phase-0 shape of this example forced the array runtime by hand, because
+//! `native` did not exist yet and the default router sent 0-D documents to the
+//! scalar interpreter. It exists now, so the census measures IT: the numbers
+//! below are what a caller gets, not what a reconstruction of the build path
+//! predicts.
 //!
-//!   (a) `esm_problem` with default options, recording `backend_kind()`;
-//!   (b) the array runtime FORCED — `ArrayCompiled` built the way
-//!       `simulate::driver::build_array_compiled` builds it, whether or not
-//!       `is_array_file` would have routed here — plus
-//!       `debug_build_tape_report()`: rules taped, rules on the fallback path,
-//!       and each fallback's deepest bail reason.
+//! Per document:
 //!
-//! Each fallback also carries the CADENCE TIER of its rule, because the tape
-//! report cannot say WHEN the per-cell path runs: a CONST-tier observed is
-//! evaluated once at setup, an RHS rule on every call. See `forced_array`.
+//!   * **native** — `esm_problem(…, compiler: Some(Native))`. Either a Problem,
+//!     whose `compiler_report()` says where every rule landed and at which
+//!     cadence, or a refusal (`compiler_refused_rule`, with the rule and the
+//!     deepest decline reason) or an ordinary build error.
+//!   * **interpreter** — the same document under the reference compiler, which
+//!     refuses nothing it can evaluate, so a document that builds under one and
+//!     not the other separates "the tape cannot lower this" from "nothing can".
 //!
 //! One JSON object per document on stdout (JSON Lines); progress and panics on
-//! stderr. Nothing here affects evaluation: both halves build and discard.
+//! stderr. Nothing here evaluates a trajectory: both halves build and discard.
 //!
 //! Usage:
 //!     cargo run --example compiler_census -- <doc.esm> [more.esm …]
@@ -27,14 +27,12 @@
 //!
 //! A document that panics is reported with its message rather than taking the
 //! process down; a document that hangs or is killed emits no line at all, and
-//! the driver that invoked this example is what notices the missing one. (No
-//! document in either corpus did either, as of 2026-09-21.)
+//! the driver that invoked this example is what notices the missing one.
 
-use earthsci_ast::EsmFile;
-use earthsci_ast::simulate_array::{ArrayCompiled, file_has_array_ops, file_has_spatial_model};
-use earthsci_ast::{ProblemOptions, Rhs, esm_problem, flatten, load_path_with_options};
+use earthsci_ast::{
+    CompileError, Compiler, EsmProblem, ProblemOptions, Rhs, SimulateError, esm_problem,
+};
 use serde_json::{Map, Value, json};
-use std::collections::BTreeMap;
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -75,229 +73,100 @@ fn guarded<T>(sink: &Arc<Mutex<Option<String>>>, f: impl FnOnce() -> T) -> Resul
     }
 }
 
-/// (b): build `ArrayCompiled` the way `build_array_compiled` does, then the
-/// tape report. Records into `out`.
-fn forced_array(file: &EsmFile, out: &mut Map<String, Value>) {
-    // `build_array_compiled`'s own preamble: arm the document's precision
-    // environment, and work from an annotated copy when (and only when) a
-    // variable declares its own `element_type` (esm-spec §11.3.1).
-    let env = match earthsci_ast::precision_infer::env_of_file(file) {
-        Ok(e) => e,
-        Err(e) => {
-            out.insert("forced_ok".into(), json!(false));
-            out.insert("forced_err_variant".into(), json!(variant_of(&e)));
-            out.insert("forced_err".into(), json!(e.to_string()));
-            return;
-        }
-    };
-    let _guard = env.enter();
-    // `tape_disabled()` short-circuits to true for a document with per-variable
-    // element types, whatever the tape managed to lower — so record it.
-    out.insert(
-        "tape_disabled".into(),
-        json!(earthsci_ast::precision::has_variable_overrides()),
-    );
-    let annotated = match earthsci_ast::precision_infer::annotated(file) {
-        Ok(a) => a,
-        Err(e) => {
-            out.insert("forced_ok".into(), json!(false));
-            out.insert("forced_err_variant".into(), json!(variant_of(&e)));
-            out.insert("forced_err".into(), json!(e.to_string()));
-            return;
-        }
-    };
-    let file = annotated.as_ref().unwrap_or(file);
-
-    // `ArrayCompiled::from_file` takes exactly one raw `Model`, so anything
-    // else is flattened into one dot-namespaced system first. That is what
-    // `build_array_compiled` does for a COUPLED document; here it also covers
-    // the zero-model case — a document whose whole content is a
-    // `reaction_systems` block, which has no models at all until flattening
-    // lowers its reactions to `D(species, t) = …`. Production never reaches
-    // the array runtime with such a document (`is_array_file` is false, so it
-    // routes to `Backend::Scalar`), but the census must, because `native` is
-    // the tape for EVERY document. The route taken is recorded.
-    //
-    // (`build_array_compiled` also calls the crate-private
-    // `refuse_coupled_subsystem_event` gate here; it is a refusal, not a
-    // lowering step, and is not reachable from outside the crate.)
-    let n_models = file.models.as_ref().map_or(0, |m| m.len());
-    let t = Instant::now();
-    out.insert(
-        "forced_route".into(),
-        json!(if n_models == 1 {
-            "from_file"
+/// `Rhs::Auto` unless `--rhs always` was passed.
+///
+/// `Auto` is the default and is what decides `Backend::Static`: a document
+/// with no differential equations has no right-hand side, so no compiler is
+/// chosen for it and it can refuse nothing. `--rhs always` is for the
+/// pre-discretization fixtures whose `D` operators only become an integrable
+/// system once a harness has applied their discretization: under `Auto` they
+/// are static and the census learns nothing about them.
+fn rhs_mode() -> Rhs {
+    static MODE: std::sync::OnceLock<Rhs> = std::sync::OnceLock::new();
+    *MODE.get_or_init(|| {
+        if std::env::args().any(|a| a == "--rhs-always") {
+            Rhs::Always
         } else {
-            "flattened"
-        }),
-    );
-    let compiled = if n_models == 1 {
-        ArrayCompiled::from_file(file).map_err(|e| (variant_of(&e), e.to_string()))
-    } else {
-        match flatten(file) {
-            Ok(flat) => {
-                ArrayCompiled::from_flattened(&flat).map_err(|e| (variant_of(&e), e.to_string()))
+            Rhs::Auto
+        }
+    })
+}
+
+fn build(path: &Path, compiler: Compiler) -> Result<EsmProblem, SimulateError> {
+    esm_problem(
+        path,
+        (0.0, 1.0),
+        ProblemOptions {
+            rhs: rhs_mode(),
+            compiler: Some(compiler),
+            ..Default::default()
+        },
+    )
+}
+
+/// Record one compiler's answer for one document under the key prefix `tag`.
+fn record(out: &mut Map<String, Value>, tag: &str, path: &Path, compiler: Compiler) {
+    let t = Instant::now();
+    let built = build(path, compiler);
+    out.insert(format!("{tag}_ms"), json!(ms(t)));
+    match built {
+        Ok(prob) => {
+            let report = prob.compiler_report();
+            out.insert(format!("{tag}_ok"), json!(true));
+            out.insert(format!("{tag}_backend"), json!(prob.backend_kind()));
+            out.insert(format!("{tag}_n_rules"), json!(report.rules().len()));
+            out.insert(format!("{tag}_n_taped"), json!(report.n_taped()));
+            out.insert(format!("{tag}_n_oracle"), json!(report.n_oracle()));
+            let mut by_tier: Map<String, Value> = Map::new();
+            for r in report.rules() {
+                let n = by_tier
+                    .get(r.cadence)
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                by_tier.insert(r.cadence.to_string(), json!(n + 1));
             }
-            Err(e) => Err((variant_of(&e), e.to_string())),
+            out.insert(format!("{tag}_cadence"), Value::Object(by_tier));
         }
-    };
-    out.insert("compile_ms".into(), json!(ms(t)));
-    let compiled = match compiled {
-        Ok(c) => c,
-        Err((v, msg)) => {
-            out.insert("forced_ok".into(), json!(false));
-            out.insert("forced_err_variant".into(), json!(v));
-            out.insert("forced_err".into(), json!(msg));
-            return;
+        Err(SimulateError::Compile(CompileError::CompilerRefusedRule {
+            kind,
+            rule,
+            tier,
+            reason,
+            ..
+        })) => {
+            out.insert(format!("{tag}_ok"), json!(false));
+            out.insert(format!("{tag}_err_variant"), json!("CompilerRefusedRule"));
+            out.insert(format!("{tag}_refused_kind"), json!(kind));
+            out.insert(format!("{tag}_refused_rule"), json!(rule));
+            out.insert(format!("{tag}_refused_tier"), json!(tier));
+            out.insert(format!("{tag}_refused_reason"), json!(reason));
         }
-    };
-    out.insert("forced_ok".into(), json!(true));
-    out.insert(
-        "has_diff_eqs".into(),
-        json!(compiled.has_differential_equations()),
-    );
-    out.insert(
-        "n_state".into(),
-        json!(compiled.state_variable_names().len()),
-    );
-
-    // The observed cadence partition, so each fallback rule can be attributed
-    // to WHEN it is evaluated. This is the build-time-versus-RHS-path split,
-    // and the tape report alone cannot make it: `Instr::Fallback` says a rule
-    // is on the per-cell path, not how often that path runs.
-    //
-    // A CONST-tier observed is worse than the report suggests. `solve` calls
-    // `hoist_static_observeds` (`simulate_array/driver.rs:518` → `:697`)
-    // BEFORE `build_solve_tape` (`:530`), and that hoist evaluates the static
-    // rules through `materialize_observeds_into` — the whole-array overlay
-    // with the per-cell oracle beneath it — with no tape involved at all. So
-    // every CONST rule is evaluated off the tape once per solve, whether or
-    // not the tape lowered it.
-    let (const_names, discrete_names, continuous_names) = compiled.debug_cadence_partition(&[]);
-    out.insert("n_obs_const".into(), json!(const_names.len()));
-    out.insert("n_obs_discrete".into(), json!(discrete_names.len()));
-    out.insert("n_obs_continuous".into(), json!(continuous_names.len()));
-    let tier_of = |name: &str| -> &'static str {
-        // The tape names an RHS rule `D(var)` / `D(slot N)`; anything else is
-        // an observed rule, named by its variable.
-        if name.starts_with("D(") {
-            "rhs"
-        } else if const_names.iter().any(|n| n == name) {
-            "const"
-        } else if discrete_names.iter().any(|n| n == name) {
-            "discrete"
-        } else if continuous_names.iter().any(|n| n == name) {
-            "continuous"
-        } else {
-            "unclassified"
+        Err(e) => {
+            out.insert(format!("{tag}_ok"), json!(false));
+            out.insert(format!("{tag}_err_variant"), json!(variant_of(&e)));
+            out.insert(format!("{tag}_err"), json!(e.to_string()));
         }
-    };
-
-    let t = Instant::now();
-    let report = compiled.debug_build_tape_report();
-    out.insert("tape_ms".into(), json!(ms(t)));
-    out.insert("n_rules".into(), json!(report.n_rules));
-    out.insert("n_taped".into(), json!(report.n_taped));
-    out.insert("n_fallback".into(), json!(report.fallbacks.len()));
-    out.insert(
-        "n_instr".into(),
-        json!(report.n_instr_const + report.n_instr_segment + report.n_instr_continuous),
-    );
-    out.insert("slab_bytes".into(), json!(report.slab_bytes));
-    out.insert(
-        "fallbacks".into(),
-        Value::Array(
-            report
-                .fallbacks
-                .iter()
-                .map(
-                    |(rule, reason)| json!({"rule": rule, "reason": reason, "tier": tier_of(rule)}),
-                )
-                .collect(),
-        ),
-    );
+    }
 }
 
 fn census_one(path: &Path, sink: &Arc<Mutex<Option<String>>>) -> Value {
     let mut out = Map::new();
     out.insert("path".into(), json!(path.display().to_string()));
-
-    // (a) default routing, from the public one-shot entry, exactly as a caller
-    // would get it. `tspan` is irrelevant to construction; `Rhs::Auto` is
-    // the default and is what decides `Backend::Static`.
-    let t = Instant::now();
-    let default = guarded(sink, || {
-        esm_problem(
-            path,
-            (0.0, 1.0),
-            ProblemOptions {
-                rhs: Rhs::Auto,
-                ..Default::default()
-            },
-        )
-        .map(|p| p.backend_kind().to_string())
-        .map_err(|e| (variant_of(&e), e.to_string()))
-    });
-    out.insert("default_ms".into(), json!(ms(t)));
-    match default {
-        Ok(Ok(kind)) => {
-            out.insert("default_backend".into(), json!(kind));
-        }
-        Ok(Err((variant, msg))) => {
-            out.insert("default_err_variant".into(), json!(variant));
-            out.insert("default_err".into(), json!(msg));
-        }
-        Err(p) => {
-            out.insert("default_err_variant".into(), json!("PANIC"));
-            out.insert("default_err".into(), json!(p));
-        }
-    }
-
-    // (b) the array runtime forced. Load once more here because `esm_problem`
-    // consumed its own parse; the load itself is part of what a compiler
-    // front end pays, so it is timed separately.
-    let t = Instant::now();
-    let loaded = guarded(sink, || {
-        load_path_with_options(path, &BTreeMap::new()).map_err(|e| (variant_of(&e), e.to_string()))
-    });
-    out.insert("load_ms".into(), json!(ms(t)));
-    let file = match loaded {
-        Ok(Ok(f)) => f,
-        Ok(Err((variant, msg))) => {
-            out.insert("load_err_variant".into(), json!(variant));
-            out.insert("load_err".into(), json!(msg));
-            out.insert("forced_ok".into(), json!(false));
-            return Value::Object(out);
-        }
-        Err(p) => {
-            out.insert("load_err_variant".into(), json!("PANIC"));
-            out.insert("load_err".into(), json!(p));
-            out.insert("forced_ok".into(), json!(false));
-            return Value::Object(out);
-        }
-    };
-    out.insert(
-        "n_models".into(),
-        json!(file.models.as_ref().map_or(0, |m| m.len())),
-    );
-    // `is_array_file` (the crate-private router predicate) spelled out from its
-    // two public halves — this is the bit that decides Array vs Scalar once a
-    // document has differential equations.
-    out.insert(
-        "is_array_file".into(),
-        json!(file_has_array_ops(&file) || file_has_spatial_model(&file)),
-    );
-
-    match guarded(sink, || {
-        let mut sub = Map::new();
-        forced_array(&file, &mut sub);
-        sub
-    }) {
-        Ok(sub) => out.extend(sub),
-        Err(p) => {
-            out.insert("forced_ok".into(), json!(false));
-            out.insert("forced_err_variant".into(), json!("PANIC"));
-            out.insert("forced_err".into(), json!(p));
+    for (tag, compiler) in [
+        ("native", Compiler::Native),
+        ("interpreter", Compiler::Interpreter),
+    ] {
+        match guarded(sink, || {
+            let mut sub = Map::new();
+            record(&mut sub, tag, path, compiler);
+            sub
+        }) {
+            Ok(sub) => out.extend(sub),
+            Err(p) => {
+                out.insert(format!("{tag}_ok"), json!(false));
+                out.insert(format!("{tag}_err_variant"), json!("PANIC"));
+                out.insert(format!("{tag}_err"), json!(p));
+            }
         }
     }
     Value::Object(out)
@@ -307,6 +176,9 @@ fn main() -> Result<(), String> {
     let mut paths: Vec<PathBuf> = Vec::new();
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
+        if a == "--rhs-always" {
+            continue;
+        }
         if a == "--paths-from" {
             let list = args.next().ok_or("--paths-from needs a file")?;
             let text = std::fs::read_to_string(&list).map_err(|e| format!("{list}: {e}"))?;
