@@ -867,7 +867,8 @@ end
     # one the Python binding's `_method_for` has always done.
     doc = _pit_decay_doc(Any[_pit_coords_assert(["x" => 3];
                                                 expected=cos(pi * 2.5 / _PIT_N))])
-    results = run_inline_tests(_pit_load(doc); model_name="M")
+    results = run_inline_tests(_pit_load(doc); model_name="M",
+                               compiler=:interpreter)
     @test !isempty(results)
     @test all(r -> r.status == EarthSciAST.PASS, results)
 
