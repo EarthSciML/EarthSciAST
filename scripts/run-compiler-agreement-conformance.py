@@ -1207,6 +1207,15 @@ def _negative_controls(fixture: dict, classes: dict, rc: int) -> int:
     return rc
 
 
+def _availability_verdict(binding: str, compiler: str, adapter: dict, required: set) -> tuple:
+    """Run one adapter record through the REAL binding-level gate and report
+    (status, green?). Restating the ledger as a set membership here would only
+    assert the manifest agrees with itself; this asks the code that decides."""
+    sink = {"unavailable": [], "refusals": []}
+    b_report, ok = _gate_binding(binding, compiler, adapter, [], {}, {}, {}, required, sink)
+    return b_report.get("status"), ok, sink
+
+
 def _availability_controls(manifest: dict, rc: int) -> int:
     """The OTHER ledger: an unavailable compiler is green for a binding the manifest
     lists as optional and RED for one it requires. Merging this with the refusal
@@ -1218,28 +1227,49 @@ def _availability_controls(manifest: dict, rc: int) -> int:
         "ledger/interpreter_required",
         f"every binding must ANSWER for the interpreter (required={sorted(required)})",
     )
+    unavailable = {"adapter_status": "unavailable", "reason": "injected by --self-test"}
     for compiler in sorted(manifest.get("compilers", {})):
         req, opt = compiler_bindings(manifest, compiler)
         for b in sorted(req):
+            status, ok, sink = _availability_verdict(b, compiler, unavailable, req)
             rc = _report_control(
                 rc,
-                not _unavailable_is_green(b, req),
+                not ok and status == "fail" and sink["unavailable"],
                 f"ledger/{compiler}_unavailable_{b}",
-                f"an unavailable {compiler} in {b} (a `bindings_required` binding) is RED",
+                f"an unavailable {compiler} in {b} (a `bindings_required` binding) is RED "
+                f"and named (got {status!r})",
             )
         for b in sorted(opt):
+            status, ok, sink = _availability_verdict(b, compiler, unavailable, req)
             rc = _report_control(
                 rc,
-                _unavailable_is_green(b, req),
+                ok and status == "unavailable" and sink["unavailable"],
                 f"ledger/{compiler}_unavailable_{b}",
                 f"an unavailable {compiler} in {b} (a `bindings_optional` binding) is a "
-                "reported skip",
+                f"reported skip (got {status!r})",
             )
+
+    # An adapter that is not registered at all is the same FACT as one answering
+    # `unavailable`, so it lands on the availability ledger; a BROKEN adapter is
+    # not, and is RED whether or not the binding is required.
+    missing = CompilerAgreementHarness("native").missing_record("julia")
+    status, ok, sink = _availability_verdict("julia", "native", missing, set())
+    rc = _report_control(
+        rc,
+        ok and status == "unavailable" and sink["unavailable"],
+        "ledger/unregistered_adapter",
+        f"an unregistered adapter is availability, not a refusal (got {status!r})",
+    )
+    broken = {"adapter_status": "invalid_output", "error": "injected by --self-test"}
+    for req_set, label in ((set(), "optional"), ({"julia"}, "required")):
+        status, ok, _ = _availability_verdict("julia", "native", broken, req_set)
+        rc = _report_control(
+            rc,
+            not ok and status == "fail",
+            f"ledger/broken_adapter_{label}",
+            f"a broken adapter is RED for a {label} binding (got {status!r})",
+        )
     return rc
-
-
-def _unavailable_is_green(binding: str, required: set[str]) -> bool:
-    return binding not in required
 
 
 def _tolerance_controls(manifest: dict, classes: dict, rc: int) -> int:
