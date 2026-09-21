@@ -408,7 +408,6 @@ fn julian_day(t_utc: f64) -> f64 {
 // duplicates / exact matches; out-of-range below → 1, above → N+1; NaN x →
 // N+1; NaN entries in xs → error; non-monotonic xs → error.
 fn searchsorted(name: &str, x: f64, xs: &[f64]) -> Result<i64, ClosedFunctionError> {
-    let n = xs.len();
     // Validate monotonicity + NaN-in-table once per call (matches Julia).
     let mut prev = f64::NAN;
     for (i, v) in xs.iter().copied().enumerate() {
@@ -433,19 +432,32 @@ fn searchsorted(name: &str, x: f64, xs: &[f64]) -> Result<i64, ClosedFunctionErr
         }
         prev = v;
     }
+    Ok(searchsorted_at(x, xs))
+}
+
+/// The search half of [`searchsorted`], with the table taken as ALREADY
+/// validated (non-decreasing, NaN-free).
+///
+/// Split out so a caller that validates the table once — the array runtime's
+/// tape, which has a compile-time-constant `xs` and lowers the call to one
+/// instruction — can run the scan per element without re-walking the table
+/// for monotonicity every time. The two callers therefore share one scan
+/// rather than agreeing by inspection.
+pub(crate) fn searchsorted_at(x: f64, xs: &[f64]) -> i64 {
+    let n = xs.len();
     // Empty table: degenerate "above-range → N+1" with N=0 returns 1.
     if n == 0 {
-        return Ok(1);
+        return 1;
     }
     if x.is_nan() {
-        return Ok((n as i64) + 1);
+        return (n as i64) + 1;
     }
     for (i, v) in xs.iter().copied().enumerate() {
         if v >= x {
-            return Ok((i as i64) + 1);
+            return (i as i64) + 1;
         }
     }
-    Ok((n as i64) + 1)
+    (n as i64) + 1
 }
 
 // `interp.linear` per esm-spec §9.2: 1-D linear interpolation with
@@ -466,12 +478,24 @@ fn interp_linear(table: &[f64], axis: &[f64], x: f64) -> Result<f64, ClosedFunct
             ),
         ));
     }
+    Ok(interp_linear_at(table, axis, x))
+}
+
+/// The blend half of [`interp_linear`], with `table` and `axis` taken as
+/// ALREADY validated (equal lengths ≥ 2, strictly increasing, NaN-free).
+///
+/// Split out for the same reason as [`searchsorted_at`]: the array runtime's
+/// tape validates its compile-time-constant table once, at lowering, and then
+/// evaluates this per element. Keeping the arithmetic in ONE place is what
+/// makes the taped rule bit-identical to the per-cell oracle rather than
+/// merely intended to be.
+pub(crate) fn interp_linear_at(table: &[f64], axis: &[f64], x: f64) -> f64 {
     let n = axis.len();
     if x <= axis[0] {
-        return Ok(table[0]);
+        return table[0];
     }
     if x >= axis[n - 1] {
-        return Ok(table[n - 1]);
+        return table[n - 1];
     }
     // Strict monotonicity + the in-range tests above guarantee that some
     // interior cell exists. NaN x falls through both clamps (IEEE-754 ≤ /
@@ -490,7 +514,7 @@ fn interp_linear(table: &[f64], axis: &[f64], x: f64) -> Result<f64, ClosedFunct
         }
     }
     let w = (x - axis[i]) / (axis[i + 1] - axis[i]);
-    Ok(table[i] + w * (table[i + 1] - table[i]))
+    table[i] + w * (table[i + 1] - table[i])
 }
 
 // `interp.bilinear` per esm-spec §9.2: 2-D linear interpolation,
@@ -531,7 +555,39 @@ fn interp_bilinear(
             ));
         }
     }
+    Ok(bilinear_at(|i, j| table[i][j], axis_x, axis_y, x, y))
+}
+
+/// [`interp_bilinear`] over a ROW-MAJOR FLAT table (`table[i * ny + j]`),
+/// with the table and both axes taken as ALREADY validated.
+///
+/// The array runtime's tape holds its constant tables flat, in the same
+/// row-major layout every other slot uses, so this is the entry it evaluates
+/// per element; it shares [`bilinear_at`] with the nested-`Vec` registry
+/// entry rather than restating the blend.
+pub(crate) fn interp_bilinear_at(
+    table: &[f64],
+    axis_x: &[f64],
+    axis_y: &[f64],
+    x: f64,
+    y: f64,
+) -> f64 {
+    let ny = axis_y.len();
+    bilinear_at(|i, j| table[i * ny + j], axis_x, axis_y, x, y)
+}
+
+/// The blend half of [`interp_bilinear`], reading the table through `at(i, j)`
+/// so the nested-`Vec` and flat-slice callers share one copy of the pinned
+/// §9.2 evaluation order.
+fn bilinear_at(
+    at: impl Fn(usize, usize) -> f64,
+    axis_x: &[f64],
+    axis_y: &[f64],
+    x: f64,
+    y: f64,
+) -> f64 {
     let nx = axis_x.len();
+    let ny = axis_y.len();
     // Per-axis clamp (extrapolate-flat). NaN falls through both branches
     // because `<=` / `>=` are false for NaN — the resulting NaN
     // propagates via the weight into the final blend.
@@ -558,9 +614,9 @@ fn interp_bilinear(
     let j = locate_cell(axis_y, y_q);
     let wx = (x_q - axis_x[i]) / (axis_x[i + 1] - axis_x[i]);
     let wy = (y_q - axis_y[j]) / (axis_y[j + 1] - axis_y[j]);
-    let row_j = table[i][j] + wx * (table[i + 1][j] - table[i][j]);
-    let row_jp1 = table[i][j + 1] + wx * (table[i + 1][j + 1] - table[i][j + 1]);
-    Ok(row_j + wy * (row_jp1 - row_j))
+    let row_j = at(i, j) + wx * (at(i + 1, j) - at(i, j));
+    let row_jp1 = at(i, j + 1) + wx * (at(i + 1, j + 1) - at(i, j + 1));
+    row_j + wy * (row_jp1 - row_j)
 }
 
 // Largest 0-based index `i` in `[0, axis.len() - 2]` with `axis[i] <=

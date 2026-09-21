@@ -253,6 +253,31 @@ pub(super) fn run_range(
                     },
                 }
             }
+            Instr::Interp { table, x, y, out } => {
+                let tbl = &prog.interp_tables[*table as usize];
+                let desc = &prog.slots[*out as usize];
+                let off = slot_off[*out as usize];
+                if desc.scalar {
+                    let xv = resolve_scalar(x, env, slab_ptr, slot_off, obs);
+                    let yv = y.map_or(f64::NAN, |y| {
+                        resolve_scalar(&y, env, slab_ptr, slot_off, obs)
+                    });
+                    unsafe { *slab_ptr.add(off) = tbl.at(xv, yv) };
+                } else {
+                    let xv = resolve_rv(x, &desc.shape, env, slab_ptr, slot_off, obs);
+                    let dst = unsafe { slab_ptr.add(off) };
+                    let sh = &desc.shape;
+                    match y {
+                        // `y` is read only by `interp.bilinear`; the other two
+                        // entries never look at it.
+                        None => unsafe { ew1(dst, sh, &xv, |a| tbl.at(a, f64::NAN)) },
+                        Some(y) => {
+                            let yv = resolve_rv(y, &desc.shape, env, slab_ptr, slot_off, obs);
+                            unsafe { ew2(dst, sh, &xv, &yv, |a, b| tbl.at(a, b)) }
+                        }
+                    }
+                }
+            }
             Instr::ConstArray { data, out } => {
                 let d = &prog.const_data[*data as usize];
                 let off = slot_off[*out as usize];

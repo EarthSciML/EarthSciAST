@@ -33,6 +33,10 @@
 //!   `eval_const`/`json_to_value` produce for that node, in row-major order,
 //!   already precision-rounded at ingress — the same `f64`s the interpreter
 //!   would have read out of the same `Value::Array`.
+//! * [`Instr::Interp`] evaluates one esm-spec §9.2 `interp.*` entry over a
+//!   compile-time-constant table, elementwise in the query. Its element
+//!   semantics are the registry functions themselves, which is what the
+//!   per-cell oracle's `eval_fn` calls, so the agreement is by shared code.
 //! * [`Instr::Reduce`] folds a source box down over a set of axes with a
 //!   binary kernel, visiting the source in ROW-MAJOR order. That order is the
 //!   per-cell oracle's contraction odometer (`CartesianTuples`, LAST name
@@ -152,6 +156,27 @@ pub(crate) enum Instr {
         region: u32,
         out: SlotId,
     },
+    /// Evaluate the §9.2 `interp.*` entry `interp_tables[table]` elementwise
+    /// over `out`'s box: `out[k] = f(table, x[k], y[k])`, with a scalar query
+    /// operand broadcasting exactly as [`Instr::Bin`]'s operands do.
+    ///
+    /// The table and axes are COMPILE-TIME CONSTANTS — esm-spec §9.2's
+    /// "argument shape contract" requires literal `const`-op arrays, and their
+    /// load-time validity (lengths, strict monotonicity, NaN-freedom) is
+    /// checked once at lowering — so the instruction carries only the query.
+    /// `y` is `Some` exactly for [`InterpKind::Bilinear`].
+    ///
+    /// Element semantics ARE the closed-function registry's own arithmetic
+    /// ([`crate::registered_functions::interp_linear_at`] and its siblings):
+    /// the same functions the per-cell oracle reaches through `eval_fn`,
+    /// called on the same operands. A taped `interp.*` is bit-identical to the
+    /// interpreter by sharing its code, not by restating it.
+    Interp {
+        table: u32,
+        x: Operand,
+        y: Option<Operand>,
+        out: SlotId,
+    },
     /// Materialize the inline array literal `const_data[data]` into `out`:
     /// a straight row-major store of the literal's elements, origin all-1s.
     ///
@@ -236,6 +261,7 @@ impl Instr {
             | Instr::Copy { out, .. }
             | Instr::Region { out, .. }
             | Instr::ConstArray { out, .. }
+            | Instr::Interp { out, .. }
             | Instr::Reduce { out, .. } => Some(*out),
             Instr::JmpIfZero { .. }
             | Instr::Fallback { .. }
@@ -291,6 +317,12 @@ impl Instr {
                 }
             }
             Instr::Ramp { .. } | Instr::ConstArray { .. } => {}
+            Instr::Interp { x, y, .. } => {
+                op(x);
+                if let Some(y) = y {
+                    op(y);
+                }
+            }
             Instr::Fill { v, .. } => op(v),
             Instr::Copy { a, .. } => op(a),
             Instr::Region { base, src, .. } => {
@@ -329,6 +361,7 @@ impl Instr {
             Instr::Copy { .. } => "Copy",
             Instr::Region { .. } => "Region",
             Instr::ConstArray { .. } => "ConstArray",
+            Instr::Interp { .. } => "Interp",
             Instr::Reduce { .. } => "Reduce",
             Instr::JmpIfZero { .. } => "JmpIfZero",
             Instr::Fallback { .. } => "Fallback",
@@ -602,6 +635,79 @@ pub(crate) struct ConstArrayData {
     pub values: Vec<f64>,
 }
 
+/// Which esm-spec §9.2 `interp.*` entry an [`Instr::Interp`] evaluates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum InterpKind {
+    /// `interp.linear(table, axis, x)`.
+    Linear,
+    /// `interp.bilinear(table, axis_x, axis_y, x, y)`.
+    Bilinear,
+    /// `interp.searchsorted(x, xs)`.
+    SearchSorted,
+}
+
+impl InterpKind {
+    /// The kind a §9.2 registry name selects, or `None` for a name outside
+    /// the `interp.*` family.
+    pub(crate) fn from_name(name: &str) -> Option<InterpKind> {
+        match name {
+            "interp.linear" => Some(InterpKind::Linear),
+            "interp.bilinear" => Some(InterpKind::Bilinear),
+            "interp.searchsorted" => Some(InterpKind::SearchSorted),
+            _ => None,
+        }
+    }
+
+    /// The registry name this kind evaluates, for diagnostics.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            InterpKind::Linear => "interp.linear",
+            InterpKind::Bilinear => "interp.bilinear",
+            InterpKind::SearchSorted => "interp.searchsorted",
+        }
+    }
+}
+
+/// The constant payload of one [`Instr::Interp`]: the §9.2 lookup table and
+/// its axes, as `eval_const` produced them (so a taped call reads exactly the
+/// `f64`s the per-cell oracle would have read out of the same `const` node,
+/// including the Float32 ingress rounding).
+///
+/// Validated ONCE, at lowering, against the registry itself: a table the
+/// registry would reject never reaches here, because the lowering bails and
+/// the rule falls back to the oracle, which is what produces the registry's
+/// NaN sentinel.
+#[derive(Clone, Debug)]
+pub(crate) struct InterpTable {
+    pub kind: InterpKind,
+    /// `interp.linear`: `table`. `interp.bilinear`: `table` flattened
+    /// row-major (`table[i * axis_y.len() + j]`, the §9.2 layout).
+    /// `interp.searchsorted`: empty — the entry has no table beyond `xs`.
+    pub table: Vec<f64>,
+    /// `axis` (linear), `axis_x` (bilinear) or `xs` (searchsorted).
+    pub axis_x: Vec<f64>,
+    /// `axis_y`; empty for every kind but [`InterpKind::Bilinear`].
+    pub axis_y: Vec<f64>,
+}
+
+impl InterpTable {
+    /// Evaluate this entry at one query point — the SINGLE definition the fast
+    /// executor, the reference executor and the build-time constant fold all
+    /// call. `y` is read only by [`InterpKind::Bilinear`].
+    pub(crate) fn at(&self, x: f64, y: f64) -> f64 {
+        use crate::registered_functions::{interp_bilinear_at, interp_linear_at, searchsorted_at};
+        match self.kind {
+            InterpKind::Linear => interp_linear_at(&self.table, &self.axis_x, x),
+            InterpKind::Bilinear => {
+                interp_bilinear_at(&self.table, &self.axis_x, &self.axis_y, x, y)
+            }
+            // `eval_fn` lifts the registry's integer result with
+            // `ClosedValue::as_f64`, so the tape stores the same `f64`.
+            InterpKind::SearchSorted => searchsorted_at(x, &self.axis_x) as f64,
+        }
+    }
+}
+
 /// One makearray region: placement of a region write within its bounding box.
 #[derive(Clone, Debug)]
 pub(crate) struct RegionSpec {
@@ -704,6 +810,8 @@ pub(crate) struct TapeProgram {
     pub regions: Vec<RegionSpec>,
     /// Inline array-literal payloads (`Instr::ConstArray` indexes here).
     pub const_data: Vec<ConstArrayData>,
+    /// §9.2 `interp.*` constant tables (`Instr::Interp` indexes here).
+    pub interp_tables: Vec<InterpTable>,
     pub state_vars: Vec<StateRef>,
     /// Observed names resolved through the runtime observed map
     /// (`Operand::Obs`/`SrcRef::Obs` index here).
