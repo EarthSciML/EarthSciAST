@@ -611,8 +611,10 @@ function _resolve_field_ic(target::AbstractString, rhs::EarthSciAST.ASTExpr,
             # diagnostic (step 4 below), not a compiler refusal, and saying
             # "your compiler cannot run this" about it would name the wrong
             # thing entirely.
+            # No cell count: this entry point is called once per cell, so what
+            # it can report is the shape of the cost, not its extent.
             _refuse_percell_evaluation("ic($(target))",
-                "the coordinate-expression initial-state seed", 1)
+                "the coordinate-expression initial-state seed", nothing)
             return v
         end
     end

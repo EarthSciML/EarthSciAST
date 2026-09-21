@@ -436,12 +436,14 @@ not one of these and never reaches here: what is refused is re-deriving the
 program for every cell.
 """
 function _refuse_percell_evaluation(rule::AbstractString, what::AbstractString,
-                                    cells::Integer)
+                                    cells::Union{Nothing,Integer})
     _compiler_is_strict() || return nothing
+    over = cells === nothing ? "" :
+           ", over $cells cell" * (cells == 1 ? "" : "s")
     _refuse_rule(rule,
-        "$what resolves and compiles the expression once per cell, over " *
-        "$cells cell" * (cells == 1 ? "" : "s") * ", because the compile-once " *
-        "form declined it. That is a tree walk per cell at construction time, " *
-        "which esm-libraries-spec §2.5.10 puts under the same rule as the " *
-        "right-hand side. Build with compiler=:interpreter to run it")
+        "$what resolves and compiles the expression once per cell$over, " *
+        "because the compile-once form declined it. That is a tree walk per " *
+        "cell at construction time, which esm-libraries-spec §2.5.10 puts " *
+        "under the same rule as the right-hand side. Build with " *
+        "compiler=:interpreter to run it")
 end
