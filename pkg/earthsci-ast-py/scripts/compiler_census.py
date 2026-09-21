@@ -104,7 +104,7 @@ def _node_key(expr: Any) -> str:
     try:
         text = repr(expr)
     except Exception:  # pragma: no cover - defensive
-        return "id%x" % id(expr)
+        return f"id{id(expr):x}"
     return hashlib.sha1(text.encode("utf-8", "replace")).hexdigest()[:16]
 
 
@@ -204,7 +204,7 @@ def _install(active: dict, npi: Any, npc: Any) -> None:
     landing in either phase is a build-time refusal."""
     import sys as _sys
 
-    def L() -> "_Ladder":
+    def L() -> _Ladder:
         return active["ladder"]
 
     def traced(fn, args, kwargs):
@@ -339,6 +339,10 @@ def census_one(path: str, tspan: tuple[float, float] = (0.0, 1.0)) -> dict[str, 
     record["binding"] = os.path.dirname(earthsci_ast.__file__)
 
     # -- pass 1: the default router --------------------------------------
+    # The right-hand side is evaluated here too, not just under the forced
+    # pathway: a document that builds under both but whose RHS only the SymPy
+    # side can evaluate is the gap this census is looking for, and comparing a
+    # build against a build-plus-evaluation would invent one.
     t0 = time.perf_counter()
     try:
         prob = esm_problem(path, tspan)
@@ -348,6 +352,17 @@ def census_one(path: str, tspan: tuple[float, float] = (0.0, 1.0)) -> dict[str, 
             "states": len(prob.flat.state_variables),
             "params": len(prob.flat.parameters),
         }
+        try:
+            if prob.scalar_build is not None and prob.scalar_build.rhs_function is not None:
+                prob.scalar_build.rhs_function(float(tspan[0]), prob.scalar_build.y0)
+                record["default"]["rhs"] = {"ok": True}
+            elif prob.build is not None:
+                prob.build.rhs_function(float(tspan[0]), prob.build.y0)
+                record["default"]["rhs"] = {"ok": True}
+            else:
+                record["default"]["rhs"] = {"ok": True, "note": "no rhs_function"}
+        except BaseException as exc:  # noqa: BLE001
+            record["default"]["rhs"] = _fail(exc)
         del prob
     except BaseException as exc:  # noqa: BLE001 - a census records everything
         record["default"] = _fail(exc)
@@ -373,10 +388,14 @@ def census_one(path: str, tspan: tuple[float, float] = (0.0, 1.0)) -> dict[str, 
         active["ladder"] = rhs_ladder
         build = prob.build
         if build is None:
-            forced["rhs"] = {"ok": False, "error_class": "NoBuild", "error_code": "", "error": (
-                "forced array pathway produced no _NumpyRhsBuild "
-                f"(pathway={prob.pathway!r})"
-            )}
+            forced["rhs"] = {
+                "ok": False,
+                "error_class": "NoBuild",
+                "error_code": "",
+                "error": (
+                    f"forced array pathway produced no _NumpyRhsBuild (pathway={prob.pathway!r})"
+                ),
+            }
         else:
             t1 = time.perf_counter()
             try:
@@ -498,14 +517,17 @@ def summarize(paths: list[str]) -> None:
                     rows.append(json.loads(line))
 
     by_pathway: Counter = Counter()
+    ok_pathway: Counter = Counter()
     default_fail: Counter = Counter()
+    default_rhs_fail: Counter = Counter()
     forced_build_fail: Counter = Counter()
-    rhs_fail: Counter = Counter()
+    forced_rhs_fail: Counter = Counter()
     reasons: Counter = Counter()
     worker_bad: Counter = Counter()
+    landings_phase: Counter = Counter()
     zero_per_cell = with_per_cell = 0
-    builds_default = builds_forced = 0
-    only_sympy: list[tuple[str, str, str]] = []
+    builds_default = runs_default = 0
+    regressions: list[tuple[str, str, str]] = []
     top: list[tuple[int, int, str]] = []
 
     for r in rows:
@@ -513,31 +535,52 @@ def summarize(paths: list[str]) -> None:
             worker_bad[r["worker"]] += 1
             continue
         d = r.get("default", {})
+        f = r.get("forced_array", {})
+        d_rhs = d.get("rhs", {}) if d.get("ok") else {}
+        default_runs = bool(d.get("ok")) and bool(d_rhs.get("ok"))
         if d.get("ok"):
             builds_default += 1
             by_pathway[d.get("pathway", "?")] += 1
+            if d_rhs.get("ok"):
+                runs_default += 1
+                ok_pathway[d.get("pathway", "?")] += 1
+            else:
+                default_rhs_fail[
+                    f"{d_rhs.get('error_class')}/{d_rhs.get('error_code') or '-'}"
+                ] += 1
         else:
             default_fail[f"{d.get('error_class')}/{d.get('error_code') or '-'}"] += 1
-        f = r.get("forced_array", {})
+
+        bld = f.get("build", {}) if f.get("ok") else {}
+        rhs = f.get("rhs", {}) if f.get("ok") else {}
         if not f.get("ok"):
             forced_build_fail[f"{f.get('error_class')}/{f.get('error_code') or '-'}"] += 1
-            if d.get("ok"):
-                only_sympy.append(
-                    (r["path"], d.get("pathway", "?"), f"{f.get('error_class')}: {f.get('error', '')[:160]}")
+            if default_runs:
+                regressions.append(
+                    (
+                        r["path"],
+                        d.get("pathway", "?"),
+                        f"BUILD {f.get('error_class')}: {f.get('error', '')[:150]}",
+                    )
                 )
             continue
-        builds_forced += 1
-        rhs = f.get("rhs", {})
-        bld = f.get("build", {})
         for node in bld.get("per_cell_nodes", []):
             reasons[node["reason"]] += 1
+            landings_phase["build"] += 1
         if not rhs.get("ok"):
-            rhs_fail[f"{rhs.get('error_class')}/{rhs.get('error_code') or '-'}"] += 1
-            if d.get("ok"):
-                only_sympy.append(
-                    (r["path"], d.get("pathway", "?"), f"RHS {rhs.get('error_class')}: {rhs.get('error', '')[:160]}")
+            forced_rhs_fail[f"{rhs.get('error_class')}/{rhs.get('error_code') or '-'}"] += 1
+            if default_runs:
+                regressions.append(
+                    (
+                        r["path"],
+                        d.get("pathway", "?"),
+                        f"RHS {rhs.get('error_class')}: {rhs.get('error', '')[:150]}",
+                    )
                 )
             continue
+        for node in rhs.get("per_cell_nodes", []):
+            reasons[node["reason"]] += 1
+            landings_phase["rhs"] += 1
         nodes = rhs.get("faq_nodes_per_cell", 0) + bld.get("faq_nodes_per_cell", 0)
         cells = rhs.get("per_cell_cells_total", 0) + bld.get("per_cell_cells_total", 0)
         if nodes:
@@ -545,8 +588,6 @@ def summarize(paths: list[str]) -> None:
             top.append((cells, nodes, r["path"]))
         else:
             zero_per_cell += 1
-        for node in rhs.get("per_cell_nodes", []):
-            reasons[node["reason"]] += 1
 
     def table(title: str, counter: Counter) -> None:
         print(f"\n## {title}")
@@ -554,22 +595,25 @@ def summarize(paths: list[str]) -> None:
             print(f"  {v:6d}  {k}")
 
     print(f"documents recorded: {len(rows)}")
-    table("worker outcomes (no record)", worker_bad)
+    table("worker outcomes (no record at all)", worker_bad)
     table("built under the default router, by pathway", by_pathway)
     print(f"  total built: {builds_default}")
-    table("default-router build failures", default_fail)
-    print(f"\n## forced NumPy array pathway")
-    print(f"  built + RHS evaluated: {builds_forced - sum(rhs_fail.values())}")
+    table("built AND right-hand side evaluated, by pathway", ok_pathway)
+    print(f"  total runnable: {runs_default}")
+    table("default-router BUILD failures", default_fail)
+    table("default-router RHS failures", default_rhs_fail)
+    print("\n## forced NumPy array pathway (of the runnable documents above)")
     print(f"    zero per-cell landings : {zero_per_cell}")
     print(f"    with per-cell landings : {with_per_cell}")
     table("forced-array BUILD failures", forced_build_fail)
-    table("forced-array RHS failures", rhs_fail)
-    table("decline reasons (per faq node landing per cell)", reasons)
+    table("forced-array RHS failures", forced_rhs_fail)
+    table("phase the per-cell landings happen in", landings_phase)
+    table("decline reasons (one count per faq node that landed per cell)", reasons)
     print("\n## top 20 documents by per-cell output cells walked")
     for cells, nodes, path in sorted(top, reverse=True)[:20]:
         print(f"  {cells:12d} cells  {nodes:3d} nodes  {path}")
-    print("\n## builds under the default router but NOT under forced NumPy")
-    for path, pathway, err in sorted(only_sympy):
+    print(f"\n## runnable under the default router, NOT under forced NumPy ({len(regressions)})")
+    for path, pathway, err in sorted(regressions):
         print(f"  [{pathway}] {path}\n      {err}")
 
 
@@ -580,7 +624,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--output", help="JSONL output path for a sweep")
     ap.add_argument("--timeout", type=int, default=180, help="per-document seconds")
     ap.add_argument("--jobs", type=int, default=1, help="documents in flight at once")
-    ap.add_argument("--memcap", type=int, default=8, help="per-worker address-space cap, GiB (0 = none)")
+    ap.add_argument(
+        "--memcap", type=int, default=8, help="per-worker address-space cap, GiB (0 = none)"
+    )
     ap.add_argument("--skip", action="append", default=[], help="basename to skip")
     ap.add_argument("--resume", action="store_true", help="keep records already in --output")
     ap.add_argument("--summarize", action="append", default=[], help="JSONL to aggregate")
@@ -600,7 +646,11 @@ def main(argv: list[str] | None = None) -> int:
         try:
             rec = census_one(args.one)
         except BaseException as exc:  # noqa: BLE001
-            rec = {"path": args.one, "worker": "worker_error", "error": traceback.format_exc()[-800:]}
+            rec = {
+                "path": args.one,
+                "worker": "worker_error",
+                "error": traceback.format_exc()[-800:],
+            }
             del exc
         print(json.dumps(rec))
         return 0
