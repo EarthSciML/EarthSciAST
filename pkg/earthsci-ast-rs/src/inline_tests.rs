@@ -161,6 +161,11 @@ fn scope_to_component(
 struct InlineTestSeeds {
     parameter_overrides: HashMap<String, InlineValue>,
     initial_conditions: HashMap<String, InlineValue>,
+    /// WHICH compiler builds each test's right-hand side (API_SPEC §5.8).
+    /// Loop-invariant context like the seeds beside it: it comes from one
+    /// [`InlineTestOptions`] for the whole document, so it does not enter the
+    /// build memo's [`BuildKey`].
+    compiler: Option<crate::problem::Compiler>,
 }
 
 impl InlineTestSeeds {
@@ -1749,7 +1754,7 @@ fn static_evaluation_times(saveat: &[f64], start: f64, end: f64) -> Vec<f64> {
 /// condition.
 ///
 /// A SHAPED state-free document takes the array runtime under
-/// `Compile::Always` and carries no scalar observed graph on its backend;
+/// `Rhs::Always` and carries no scalar observed graph on its backend;
 /// [`crate::problem::static_observed_graph`] hands back the one compiled at
 /// construction for it, exactly the graph `simulate` evaluates.
 ///
@@ -2274,7 +2279,8 @@ fn build_for_test(
         p: scalar_params,
         u0,
         inspect: true,
-        compile: crate::problem::Compile::Always,
+        rhs: crate::problem::Rhs::Always,
+        compiler: seeds.compiler,
         ..Default::default()
     };
     // The document's own `data_sources`, ingested (esm-spec §8.9). A
@@ -2292,7 +2298,7 @@ fn build_for_test(
                 // content IS its build-time observed graph, so let the
                 // backend fall out of the document (`Auto`) and read the
                 // fields the build materialized.
-                popts.compile = crate::problem::Compile::Auto;
+                popts.rhs = crate::problem::Rhs::Auto;
             }
             Err(e) => {
                 return BuiltModel {
@@ -2337,7 +2343,7 @@ thread_local! {
 /// answer.
 ///
 /// A SHAPED state-free document takes the ARRAY runtime under
-/// `Compile::Always` and carries no scalar observed graph, so
+/// `Rhs::Always` and carries no scalar observed graph, so
 /// [`static_trajectory`] cannot serve it; when `solve` then refuses it too —
 /// `Exceeded maximum number of nonlinear solver failures (51) at time = 0`,
 /// issue #406's own diagnostic, on a document `esm simulate` evaluates without
@@ -2355,7 +2361,7 @@ thread_local! {
 /// besides. Answering from these fields is what a runner does when it has
 /// nothing else, never in preference to an answer it already has.
 ///
-/// `Compile::Always` is kept: the compile is what still refuses a construct no
+/// `Rhs::Always` is kept: the compile is what still refuses a construct no
 /// evaluator supports, in the `unsupported_construct` vocabulary esm-spec
 /// §9.6.6 asks for. A rebuild that fails, or that materializes nothing, hands
 /// back `None` and the caller reports the solve failure it already had —
@@ -2370,7 +2376,7 @@ fn build_pipeline_fields(
         p: p.clone(),
         u0: u0.clone(),
         inspect: true,
-        compile: crate::problem::Compile::Always,
+        rhs: crate::problem::Rhs::Always,
         build_pipeline: true,
         ..Default::default()
     };
@@ -2516,7 +2522,7 @@ fn run_component_tests(
                 // A document with NOTHING TO INTEGRATE is evaluated, not
                 // solved — the path `esm simulate` has always taken and this
                 // runner did not (issue #406). Checked BEFORE `solve`, because
-                // the runner builds with `Compile::Always` (so that a construct
+                // the runner builds with `Rhs::Always` (so that a construct
                 // no evaluator supports is still refused at build time, in the
                 // `unsupported_construct` vocabulary §9.6.6 asks for) and a
                 // forced right-hand side over an empty state vector reaches the
@@ -2539,7 +2545,7 @@ fn run_component_tests(
                         // Nothing to integrate, and no compiled observed graph
                         // to evaluate: the ARRAY runtime, which is what a
                         // SHAPED state-free document takes under
-                        // `Compile::Always`. What `solve` just reported is
+                        // `Rhs::Always`. What `solve` just reported is
                         // "Exceeded maximum number of nonlinear solver failures
                         // (51) at time = 0" — it handed a right-hand side over
                         // an empty state vector to the integrator — which is
@@ -2913,6 +2919,11 @@ pub struct InlineTestOptions {
     pub initial_conditions: HashMap<String, InlineValue>,
     /// Parameter-override seed, laid beneath each test's own map.
     pub parameter_overrides: HashMap<String, InlineValue>,
+    /// WHICH compiler builds each test's right-hand side (API_SPEC §5.8's
+    /// closed vocabulary). `None` is [`crate::Compiler::Native`], and `native`
+    /// is strict — a document the tape cannot lower fails its tests with the
+    /// refusal rather than running on a slower path.
+    pub compiler: Option<crate::problem::Compiler>,
 }
 
 impl std::fmt::Debug for InlineTestOptions {
@@ -2924,6 +2935,7 @@ impl std::fmt::Debug for InlineTestOptions {
             .field("test_filter", &self.test_filter)
             .field("initial_conditions", &self.initial_conditions.len())
             .field("parameter_overrides", &self.parameter_overrides.len())
+            .field("compiler", &self.compiler)
             .finish()
     }
 }
@@ -3033,6 +3045,7 @@ pub fn run_inline_tests_paths(
         let seeds = InlineTestSeeds {
             parameter_overrides: opts.parameter_overrides.clone(),
             initial_conditions: opts.initial_conditions.clone(),
+            compiler: opts.compiler,
         };
         results.extend(run_inline_tests_seeded(
             &file,
@@ -4158,7 +4171,7 @@ mod tests {
             crate::problem::ProblemOptions {
                 p: HashMap::new().clone(),
                 u0: HashMap::new().clone(),
-                compile: crate::problem::Compile::Always,
+                rhs: crate::problem::Rhs::Always,
                 ..Default::default()
             },
         )

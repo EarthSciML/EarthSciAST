@@ -124,7 +124,7 @@ fn run_model_test(fixture: &str, model_name: &str, file: &EsmFile, model: &Model
         earthsci_ast::ProblemOptions {
             p: params.clone(),
             u0: ics.clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )
@@ -241,7 +241,7 @@ fn polygon_intersection_area_planar_fixture_area_is_one() {
         earthsci_ast::ProblemOptions {
             p: HashMap::new().clone(),
             u0: ics.clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )
@@ -307,7 +307,7 @@ fn planar_ode_fixture_is_runnable_and_exposes_area() {
         earthsci_ast::ProblemOptions {
             p: HashMap::new().clone(),
             u0: ics.clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )

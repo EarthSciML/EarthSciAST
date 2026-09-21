@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use earthsci_ast::{
-    Alg, CallbackFn, CallbackSet, Compile, EnsembleProblem, EsmProblem, Flow, ProblemOptions,
+    Alg, CallbackFn, CallbackSet, Compiler, EnsembleProblem, EsmProblem, Flow, ProblemOptions, Rhs,
     Progress, Remake, ReturnCode, SimulateError, SolveOptions, callbacks, compose, esm_problem,
     init, load_string, observed_field, remake, solve, solve_ensemble, step,
 };
@@ -94,7 +94,7 @@ fn decay_problem(tspan: (f64, f64)) -> EsmProblem {
         &file,
         tspan,
         ProblemOptions {
-            compile: Compile::Always,
+            rhs: Rhs::Always,
             ..Default::default()
         },
     )
@@ -294,7 +294,7 @@ fn default_maxiters_does_not_cap_the_step_count() {
         &file,
         (0.0, t_end),
         ProblemOptions {
-            compile: Compile::Always,
+            rhs: Rhs::Always,
             ..Default::default()
         },
     )
@@ -353,7 +353,7 @@ fn problem_with_callbacks(set: CallbackSet) -> EsmProblem {
         &file,
         (0.0, 2.0),
         ProblemOptions {
-            compile: Compile::Always,
+            rhs: Rhs::Always,
             callbacks: set,
             ..Default::default()
         },

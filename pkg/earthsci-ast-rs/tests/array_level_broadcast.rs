@@ -44,7 +44,7 @@ fn run(
         earthsci_ast::ProblemOptions {
             p: HashMap::new().clone(),
             u0: HashMap::new().clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )
@@ -325,7 +325,7 @@ fn anonymous_shapes_keep_positional_broadcast() {
         earthsci_ast::ProblemOptions {
             p: HashMap::new().clone(),
             u0: ics.clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )

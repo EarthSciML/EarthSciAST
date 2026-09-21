@@ -766,7 +766,7 @@ fn pipeline_fields(name: &str) -> std::collections::HashMap<String, ndarray::Arr
         // asking for a compiled right-hand side would compile one with nothing
         // to integrate.
         build_pipeline: true,
-        compile: earthsci_ast::Compile::Auto,
+        rhs: earthsci_ast::Rhs::Auto,
         ..Default::default()
     };
     let prob = earthsci_ast::esm_problem(&file, (0.0, 0.0), opts)

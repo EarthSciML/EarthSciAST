@@ -2564,7 +2564,12 @@ pub(super) fn build_tape_program(
     }
 
     // ---- exports -----------------------------------------------------------
-    let exports = b.compute_exports(observed_rules, rhs_rules, &observed_names);
+    let exports = b.compute_exports(
+        observed_rules,
+        rhs_rules,
+        &observed_names,
+        compiled.is_native(),
+    );
 
     // ---- flatten + fusion + liveness + coloring ----------------------------
     let vn_hits = b.vn_hits();
@@ -2976,8 +2981,22 @@ impl<'m> TapeBuilder<'m> {
         observed_rules: &[AlgebraicRule],
         rhs_rules: &[RhsRule],
         observed_names: &HashSet<String>,
+        // `native` (API_SPEC §5.8): export EVERY observed, because under it the
+        // build-time hoist, the per-segment seed, the inspection snapshot and
+        // the output-node pass are all served from this program rather than
+        // from the whole-array overlay, and each of them may read an observed
+        // the probe cone below does not reach — a caller-requested array
+        // observed, or a hoisted static field. A publish nothing reads costs
+        // nothing anyway: `Export` only executes when a reader asked for it
+        // (`TapeExec::exports_active`).
+        export_all: bool,
     ) -> Vec<(String, SlotId)> {
         let mut needed: HashSet<String> = HashSet::new();
+        if export_all {
+            for r in observed_rules {
+                needed.insert(observed_rule_var(r).clone());
+            }
+        }
 
         // (a) Direct observed reads of every fallback rule body: the
         // interpreter resolves them through the runtime observed map, so a

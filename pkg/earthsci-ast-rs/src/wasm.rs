@@ -338,7 +338,7 @@ pub fn solve(
         ProblemOptions {
             p: parse_binding_map(params_str, "Params")?,
             u0: parse_binding_map(ic_str, "Initial-conditions")?,
-            compile: crate::problem::Compile::Always,
+            rhs: crate::problem::Rhs::Always,
             ..Default::default()
         },
     )
@@ -779,8 +779,34 @@ impl Problem {
         params_str: &str,
         ic_str: &str,
     ) -> Result<Problem, JsValue> {
-        use crate::problem::{Compile, ProblemOptions, esm_problem};
+        Problem::build_with(json_str, t0, t_end, params_str, ic_str, None)
+    }
 
+    /// [`Problem::build`] naming WHICH compiler builds the right-hand side
+    /// (API_SPEC §5.8's closed vocabulary — `native`, `interpreter`, `xla`,
+    /// `mtk`, `sympy`). `undefined` is `native`, and `native` is strict.
+    ///
+    /// A separate entry point rather than a sixth argument on `build`, because
+    /// `build`'s five arguments are `solve`'s leading five and a host calls
+    /// them positionally.
+    #[wasm_bindgen(js_name = buildWith)]
+    pub fn build_with(
+        json_str: &str,
+        t0: f64,
+        t_end: f64,
+        params_str: &str,
+        ic_str: &str,
+        compiler: Option<String>,
+    ) -> Result<Problem, JsValue> {
+        use crate::problem::{Compiler, ProblemOptions, Rhs, esm_problem};
+
+        let compiler = match compiler.as_deref() {
+            None | Some("") => None,
+            Some(name) => Some(
+                Compiler::parse_named(name)
+                    .map_err(|m| JsValue::from_str(&m))?,
+            ),
+        };
         let esm_file = rust_load_string(json_str).map_err(js_err("Parse error"))?;
         let prob = esm_problem(
             &esm_file,
@@ -793,7 +819,8 @@ impl Problem {
                 // documents `observed_field` exists to answer for. A host that
                 // means to integrate calls `solve`, which says so with its own
                 // error if there is nothing to integrate.
-                compile: Compile::Auto,
+                rhs: Rhs::Auto,
+                compiler,
                 ..Default::default()
             },
         )
@@ -801,6 +828,38 @@ impl Problem {
         Ok(Problem {
             inner: std::rc::Rc::new(prob),
         })
+    }
+
+    /// The compiler that built this problem — API_SPEC §5.8's vocabulary
+    /// spelling, e.g. `"native"`.
+    pub fn compiler(&self) -> String {
+        self.inner.compiler().as_str().to_string()
+    }
+
+    /// Where every rule landed:
+    /// `{ compiler, nTaped, nOracle, fusedGroups, rules: [{ rule, kind,
+    /// cadence, tier, reason }, …] }`.
+    ///
+    /// The host's only window into the build, and the one that answers the
+    /// question `tapeReport` answers only half of: a rule that DID lower is
+    /// named here too, with the cadence tier that says what it costs.
+    #[wasm_bindgen(js_name = compilerReport)]
+    pub fn compiler_report(&self) -> Result<JsValue, JsValue> {
+        let report = self.inner.compiler_report();
+        to_js(&serde_json::json!({
+            "compiler": report.compiler().as_str(),
+            "nTaped": report.n_taped(),
+            "nOracle": report.n_oracle(),
+            "fusedGroups": report.fused_groups(),
+            "fusedInstructions": report.fused_instructions(),
+            "rules": report.rules().iter().map(|r| serde_json::json!({
+                "rule": r.rule,
+                "kind": r.kind,
+                "cadence": r.cadence,
+                "tier": r.tier,
+                "reason": r.reason,
+            })).collect::<Vec<_>>(),
+        }))
     }
 
     /// Integrate, returning a [`Solution`] handle.

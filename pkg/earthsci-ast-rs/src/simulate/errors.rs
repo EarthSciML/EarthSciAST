@@ -40,6 +40,24 @@ pub enum SimulateError {
         details: String,
     },
 
+    /// [`crate::problem::ProblemOptions::compiler`] named a value that is in
+    /// API_SPEC §5.8's closed vocabulary but that this binding, this build or
+    /// this process cannot provide (esm-spec §9.6.6 `compiler_unavailable`).
+    ///
+    /// Never answered by building with a different compiler: the whole point
+    /// of naming one is that the caller knows which ran. `details` names what
+    /// would have to be loaded or built.
+    #[error(
+        "{code}: compiler '{compiler}' is not available here: {details}",
+        code = crate::diagnostic::codes::COMPILER_UNAVAILABLE
+    )]
+    CompilerUnavailable {
+        /// The vocabulary spelling the caller asked for.
+        compiler: &'static str,
+        /// What would have to be loaded or built to provide it.
+        details: String,
+    },
+
     /// A build progress observer asked [`crate::problem::esm_problem`] to
     /// stop (returned [`Flow::Cancel`]).
     ///

@@ -554,7 +554,7 @@ fn simulate_variable_map_expression_transform_end_to_end() {
         earthsci_ast::ProblemOptions {
             p: HashMap::new().clone(),
             u0: HashMap::new().clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )

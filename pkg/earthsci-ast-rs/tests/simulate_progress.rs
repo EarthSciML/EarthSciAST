@@ -254,7 +254,7 @@ fn reports_progress_on_the_natural_step_grid() {
         earthsci_ast::ProblemOptions {
             p: HashMap::new().clone(),
             u0: HashMap::new().clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )
@@ -288,7 +288,7 @@ fn reports_progress_on_an_interpolated_output_grid() {
         earthsci_ast::ProblemOptions {
             p: HashMap::new().clone(),
             u0: HashMap::new().clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )
@@ -321,7 +321,7 @@ fn reports_progress_from_the_array_runtime() {
         earthsci_ast::ProblemOptions {
             p: HashMap::new().clone(),
             u0: HashMap::new().clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )
@@ -362,7 +362,7 @@ fn returning_cancel_stops_the_run() {
         earthsci_ast::ProblemOptions {
             p: HashMap::new().clone(),
             u0: HashMap::new().clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )
@@ -390,7 +390,7 @@ fn cancelling_at_step_zero_stops_before_any_work() {
         earthsci_ast::ProblemOptions {
             p: HashMap::new().clone(),
             u0: HashMap::new().clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )
@@ -419,7 +419,7 @@ fn observing_does_not_perturb_the_trajectory() {
         earthsci_ast::ProblemOptions {
             p: HashMap::new().clone(),
             u0: HashMap::new().clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )
@@ -433,7 +433,7 @@ fn observing_does_not_perturb_the_trajectory() {
         earthsci_ast::ProblemOptions {
             p: HashMap::new().clone(),
             u0: HashMap::new().clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )

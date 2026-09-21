@@ -32,7 +32,7 @@
 
 use earthsci_ast::EsmFile;
 use earthsci_ast::simulate_array::{ArrayCompiled, file_has_array_ops, file_has_spatial_model};
-use earthsci_ast::{Compile, ProblemOptions, esm_problem, flatten, load_path_with_options};
+use earthsci_ast::{ProblemOptions, Rhs, esm_problem, flatten, load_path_with_options};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 use std::panic::AssertUnwindSafe;
@@ -223,7 +223,7 @@ fn census_one(path: &Path, sink: &Arc<Mutex<Option<String>>>) -> Value {
     out.insert("path".into(), json!(path.display().to_string()));
 
     // (a) default routing, from the public one-shot entry, exactly as a caller
-    // would get it. `tspan` is irrelevant to construction; `Compile::Auto` is
+    // would get it. `tspan` is irrelevant to construction; `Rhs::Auto` is
     // the default and is what decides `Backend::Static`.
     let t = Instant::now();
     let default = guarded(sink, || {
@@ -231,7 +231,7 @@ fn census_one(path: &Path, sink: &Arc<Mutex<Option<String>>>) -> Value {
             path,
             (0.0, 1.0),
             ProblemOptions {
-                compile: Compile::Auto,
+                rhs: Rhs::Auto,
                 ..Default::default()
             },
         )

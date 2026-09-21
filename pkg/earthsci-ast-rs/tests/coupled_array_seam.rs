@@ -364,7 +364,7 @@ fn coupled_array_evaluates_via_top_level_dispatcher() {
         earthsci_ast::ProblemOptions {
             p: HashMap::new().clone(),
             u0: ics.clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )
@@ -477,7 +477,7 @@ fn single_model_array_path_unchanged() {
         earthsci_ast::ProblemOptions {
             p: HashMap::new().clone(),
             u0: ics.clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )

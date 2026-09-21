@@ -1258,7 +1258,7 @@ fn ab_model_file_if_available() {
         crate::problem::ProblemOptions {
             p: HashMap::new().clone(),
             u0: HashMap::new().clone(),
-            compile: crate::problem::Compile::Always,
+            rhs: crate::problem::Rhs::Always,
             ..Default::default()
         },
     )

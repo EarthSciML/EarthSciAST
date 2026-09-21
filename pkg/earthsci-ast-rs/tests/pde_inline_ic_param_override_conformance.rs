@@ -144,7 +144,7 @@ fn local_and_qualified_override_keys_both_bind_the_build_scope() {
             earthsci_ast::ProblemOptions {
                 p: params.clone(),
                 u0: HashMap::new().clone(),
-                compile: earthsci_ast::Compile::Always,
+                rhs: earthsci_ast::Rhs::Always,
                 ..Default::default()
             },
         )

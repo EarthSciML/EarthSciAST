@@ -357,9 +357,12 @@ pub use simulate::{
 };
 
 // The EsmProblem / `solve` surface. `simulate` is deleted in all its forms.
+#[allow(deprecated)]
+pub use problem::Compile;
 pub use problem::{
-    CallbackFn, CallbackSet, Compile, EnsembleProblem, EsmProblem, ProblemInput, ProblemOptions,
-    Remake, callbacks, compose, esm_problem, observed_field, remake,
+    CallbackFn, CallbackSet, Compiler, CompilerReport, CompilerRuleReport, EnsembleProblem,
+    EsmProblem, ProblemInput, ProblemOptions, Remake, Rhs, callbacks, compose, esm_problem,
+    observed_field, remake,
 };
 #[cfg(feature = "solve")]
 pub use problem::{

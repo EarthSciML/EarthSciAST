@@ -244,7 +244,7 @@ fn run(json: &str) -> earthsci_ast::Solution {
         earthsci_ast::ProblemOptions {
             p: HashMap::new().clone(),
             u0: HashMap::new().clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )

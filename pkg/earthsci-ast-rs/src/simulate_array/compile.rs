@@ -910,6 +910,7 @@ impl ArrayCompiled {
             .collect();
 
         Ok(ArrayCompiled {
+            runtime_mode: crate::simulate_array::RuntimeMode::default(),
             var_shapes,
             scalar_state_names,
             scalar_state_index,
@@ -2920,7 +2921,17 @@ fn check_state_slots_covered(
 
 /// Evaluate a state-free build-time expression (grid geometry, §11.4.1
 /// coordinate-expression `ic` RHSs, §6.6.5 analytic `reference`s) through the
-/// official array evaluator. Array-producing `faq`/`makearray` nodes
+/// official array evaluator.
+///
+/// **Outside `native`'s refusal, deliberately.** esm-libraries-spec §2.5.10
+/// puts four evaluations under the refusal — the constants and static
+/// observeds materialized at construction, the per-segment seed, the
+/// right-hand side, and the observeds reported at output times — and this is
+/// none of them: it evaluates an INITIAL CONDITION or a piece of grid
+/// geometry, not one of the document's rules. No compiler tier in any binding
+/// has a form for initial-state assembly, so a refusal here would refuse the
+/// documents rather than name a gap that could be closed. Recorded rather than
+/// gated. Array-producing `faq`/`makearray` nodes
 /// yield arrays; elementwise ops broadcast over them. Any `{ "from": <set> }`
 /// range references are resolved against `index_sets` first, so a raw
 /// (pre-compile) expression evaluates exactly as an equation expression does
@@ -4752,7 +4763,7 @@ mod subsystem_ragged_and_inspection_tests {
             (0.0, 1.0),
             crate::problem::ProblemOptions {
                 inspect: true,
-                compile: crate::problem::Compile::Always,
+                rhs: crate::problem::Rhs::Always,
                 ..Default::default()
             },
         )
@@ -5021,7 +5032,7 @@ mod subsystem_ragged_and_inspection_tests {
             crate::problem::ProblemOptions {
                 p: HashMap::new().clone(),
                 u0: HashMap::new().clone(),
-                compile: crate::problem::Compile::Always,
+                rhs: crate::problem::Rhs::Always,
                 ..Default::default()
             },
         )

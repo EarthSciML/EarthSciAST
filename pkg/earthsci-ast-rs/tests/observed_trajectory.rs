@@ -251,7 +251,7 @@ fn a_state_free_document_is_sent_to_observed_field() {
     }
 }
 
-/// A pure `reaction_systems` document is DIFFERENTIAL, and `Compile::Auto` has
+/// A pure `reaction_systems` document is DIFFERENTIAL, and `Rhs::Auto` has
 /// to know it before flattening has lowered anything.
 ///
 /// The regression: `has_differential_equations` read `file.models` alone, and a

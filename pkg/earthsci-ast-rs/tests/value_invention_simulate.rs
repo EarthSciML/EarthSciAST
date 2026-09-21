@@ -123,7 +123,7 @@ fn argmin_nearest_generator_simulates_end_to_end() {
         earthsci_ast::ProblemOptions {
             p: HashMap::new().clone(),
             u0: ics.clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )
@@ -577,7 +577,7 @@ fn scvt_centroid_group_faq_simulates_end_to_end() {
         earthsci_ast::ProblemOptions {
             p: HashMap::new().clone(),
             u0: ics.clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )

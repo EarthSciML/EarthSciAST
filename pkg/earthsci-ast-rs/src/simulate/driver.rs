@@ -253,6 +253,14 @@ pub(crate) fn is_array_file(file: &EsmFile) -> bool {
 /// `models.len() != 1` — so flatten the coupling into one namespaced system first
 /// and build from that (ess-14f.8). The single-model path is byte-identical to
 /// the original `from_file` call. Shared by all three public entry points.
+///
+/// **The flatten arm is `!= 1`, not `> 1`.** A document whose whole content is
+/// a `reaction_systems` block has NO `models` map at all until flattening
+/// lowers each reaction to `D(species, t) = …`, so a `> 1` test sent it to
+/// `from_file`, which refused it with "File has no models to simulate". Every
+/// pure-chemistry document in the wild is that shape (`pollu`, `superfast`,
+/// `geoschem_fullchem`); the 2026-09-21 census counted 25 of them, all of
+/// which build fully taped once they are flattened first.
 pub(crate) fn build_array_compiled(
     file: &EsmFile,
 ) -> Result<crate::simulate_array::ArrayCompiled, SimulateError> {
@@ -270,7 +278,7 @@ pub(crate) fn build_array_compiled(
     let annotated = crate::precision_infer::annotated(file).map_err(SimulateError::Compile)?;
     let file = annotated.as_ref().unwrap_or(file);
     let model_count = file.models.as_ref().map_or(0, |m| m.len());
-    if model_count > 1 {
+    if model_count != 1 {
         refuse_coupled_subsystem_event(file)?;
         let flat = flatten(file).map_err(CompileError::from)?;
         Ok(crate::simulate_array::ArrayCompiled::from_flattened(&flat)?)
@@ -323,7 +331,7 @@ pub fn compile_array(file: EsmFile) -> Result<crate::simulate_array::ArrayCompil
         None => file,
     };
     let model_count = file.models.as_ref().map_or(0, |m| m.len());
-    if model_count > 1 {
+    if model_count != 1 {
         refuse_coupled_subsystem_event(&file)?;
         let flat = flatten(&file).map_err(CompileError::from)?;
         drop(file);

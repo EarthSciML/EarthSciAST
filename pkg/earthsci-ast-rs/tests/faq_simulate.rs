@@ -88,7 +88,7 @@ fn sim_value(model_json: &str, var: &str) -> Result<f64, String> {
         earthsci_ast::ProblemOptions {
             p: HashMap::new().clone(),
             u0: ics.clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )
@@ -529,7 +529,7 @@ fn ragged_index_set_drives_dynamic_reduction_bound() {
         earthsci_ast::ProblemOptions {
             p: HashMap::new().clone(),
             u0: ics.clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )

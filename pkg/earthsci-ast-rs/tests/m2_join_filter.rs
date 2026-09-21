@@ -71,7 +71,7 @@ fn sim_y(model_json: &str, slot: &str) -> Result<f64, String> {
         earthsci_ast::ProblemOptions {
             p: HashMap::new().clone(),
             u0: ics.clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )

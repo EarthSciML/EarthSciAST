@@ -141,7 +141,7 @@ fn scalar_ic_seeding_precedence() {
         earthsci_ast::ProblemOptions {
             p: HashMap::new().clone(),
             u0: HashMap::new().clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )
@@ -162,7 +162,7 @@ fn scalar_ic_seeding_precedence() {
             earthsci_ast::ProblemOptions {
                 p: params.clone(),
                 u0: HashMap::new().clone(),
-                compile: earthsci_ast::Compile::Always,
+                rhs: earthsci_ast::Rhs::Always,
                 ..Default::default()
             },
         )
@@ -181,7 +181,7 @@ fn scalar_ic_seeding_precedence() {
             earthsci_ast::ProblemOptions {
                 p: HashMap::new().clone(),
                 u0: ics.clone(),
-                compile: earthsci_ast::Compile::Always,
+                rhs: earthsci_ast::Rhs::Always,
                 ..Default::default()
             },
         )

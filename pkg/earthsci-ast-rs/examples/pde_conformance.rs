@@ -195,7 +195,7 @@ fn cmd_regrid(positional: &[String], flags: &HashMap<String, String>) -> Result<
         (0.0, 1.0),
         earthsci_ast::ProblemOptions {
             inspect: true,
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )
@@ -319,7 +319,7 @@ fn cmd_convergence(
             earthsci_ast::ProblemOptions {
                 p: HashMap::new().clone(),
                 u0: HashMap::new().clone(),
-                compile: earthsci_ast::Compile::Always,
+                rhs: earthsci_ast::Rhs::Always,
                 ..Default::default()
             },
         )

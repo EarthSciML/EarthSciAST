@@ -138,7 +138,7 @@ fn ess_tape_disable_reverts_wholesale_to_the_legacy_path() {
         earthsci_ast::ProblemOptions {
             p: HashMap::new().clone(),
             u0: ics.clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )

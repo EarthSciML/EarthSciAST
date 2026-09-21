@@ -148,6 +148,14 @@ enum Commands {
         /// — a RELATIONAL document's rows, for a row-by-row comparator.
         #[arg(long, default_value = "flat")]
         format: SimulateFormat,
+        /// WHICH strategy builds the right-hand side (API_SPEC §5.8's closed
+        /// vocabulary): `native` (the default — the tape, for every document,
+        /// and strict: a rule it cannot express is a build error naming the
+        /// rule), `interpreter` (the reference: every fast tier off, no
+        /// performance promise), or `xla` / `mtk` / `sympy`, which this
+        /// binding refuses with `compiler_unavailable`.
+        #[arg(long, value_name = "NAME")]
+        compiler: Option<String>,
     },
     /// Show information about an ESM file
     Info {
@@ -1895,7 +1903,7 @@ fn bench_simulate(
         &esm_file,
         (0.0, 1.0),
         earthsci_ast::ProblemOptions {
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )
@@ -2479,6 +2487,7 @@ fn run_analyze(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_simulate(
     file: PathBuf,
     time: f64,
@@ -2486,7 +2495,15 @@ fn run_simulate(
     observed: Vec<String>,
     model: Option<String>,
     format: SimulateFormat,
+    compiler: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // A value outside the closed vocabulary is `compiler_unknown` (esm-spec
+    // §9.6.6) and is refused HERE, before anything is loaded: it is the one of
+    // the three failures that says nothing about the document.
+    let compiler = match compiler.as_deref() {
+        None => None,
+        Some(name) => Some(earthsci_ast::Compiler::parse_named(name).map_err(fail)?),
+    };
     let content = read_input(&file)?;
     let esm_file = load_at(&file, &content)?;
 
@@ -2530,7 +2547,8 @@ fn run_simulate(
             // ("Exceeded maximum number of nonlinear solver failures at
             // time = 0") on a document that evaluates perfectly well. `Auto`
             // gives it the static backend and the single evaluation below.
-            compile: earthsci_ast::Compile::Auto,
+            rhs: earthsci_ast::Rhs::Auto,
+            compiler,
             model_name: model.clone(),
             build_pipeline: pipeline,
             ..Default::default()
@@ -2544,6 +2562,9 @@ fn run_simulate(
     };
 
     let prob = build(false)?;
+    // API_SPEC §5.8, "Every Problem reports what ran": one line, so a number
+    // in the output below is tied to the way it was produced.
+    println!("{}", prob.compiler_report());
     // Filled only on the static path: `--format csv` writes from the FIELDS,
     // not from flattened cell keys.
     let mut evaluated: Vec<(String, ndarray::ArrayD<f64>)> = Vec::new();
@@ -4260,7 +4281,8 @@ pub fn main() -> std::process::ExitCode {
             observed,
             model,
             format,
-        } => run_simulate(file, time, output, observed, model, format),
+            compiler,
+        } => run_simulate(file, time, output, observed, model, format, compiler),
         Commands::Info { file } => run_info(file),
         Commands::Units { file, check } => run_units(file, check),
         Commands::CouplingAnalysis { file, depth } => run_coupling_analysis(file, depth),

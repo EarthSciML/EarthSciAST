@@ -288,7 +288,7 @@ fn advection_1d_integrates_end_to_end_via_vectorized_path() {
         earthsci_ast::ProblemOptions {
             p: HashMap::new().clone(),
             u0: ic.clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )
@@ -1036,7 +1036,7 @@ fn unary_broadcast_conformance_fixture_matches_its_inline_assertions() {
         earthsci_ast::ProblemOptions {
             p: HashMap::new().clone(),
             u0: ic.clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )

@@ -51,7 +51,7 @@ fn run(observed: &[&str]) -> earthsci_ast::Solution {
         ProblemInput::Path(Path::new(GRID)),
         (0.0, 10.0),
         ProblemOptions {
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )

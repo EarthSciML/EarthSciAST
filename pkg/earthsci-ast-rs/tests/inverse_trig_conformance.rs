@@ -86,7 +86,7 @@ fn run_model_test(
         earthsci_ast::ProblemOptions {
             p: params.clone(),
             u0: initial_conditions.clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )
