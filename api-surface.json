@@ -181,8 +181,8 @@
     },
     {
       "canonical": "Compile -> Rhs",
-      "issue": "Rust's `Compile::{Auto, Always, Never}` decides whether a right-hand side is built AT ALL (static versus dynamic), not which compiler builds it. Beside the `Compiler` enum above the two names differ by one letter and mean different things.",
-      "resolution": "API_SPEC.md §8 item 22: rename to `Rhs::{Auto, Always, Never}` (working proposal), keeping `Compile` as a deprecated alias for one minor.",
+      "issue": "Rust's `Compile::{Auto, Always, Never}` decides whether a right-hand side is built AT ALL (static versus dynamic), not which compiler builds it. Beside the `Compiler` enum above the two names differ by one letter and mean different things, and the entry above puts a field `compiler` next to the existing field `compile` on the same `ProblemOptions`.",
+      "resolution": "API_SPEC.md §8 item 22: rename the type to `Rhs::{Auto, Always, Never}` and the field to `rhs` (working proposal), keeping `Compile` as a deprecated type alias for one minor.",
       "affects": [
         "rust"
       ]
