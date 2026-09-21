@@ -592,13 +592,30 @@ function _resolve_field_ic(target::AbstractString, rhs::EarthSciAST.ASTExpr,
     # (3) Coordinate expression over the grid geometry (per-cell field); model
     # parameters (e.g. a free-name geometry `x0`/`dx`) bind via `params`.
     if rhs isa OpExpr
-        try
-            return _eval_cellwise(rhs, cell; const_arrays=const_arrays,
-                                  registered_functions=registered_functions,
-                                  params=params)
+        # THE per-cell step: `_eval_cellwise` re-runs `_index_at_cell` →
+        # `_resolve_indices` → `_compile` for this one cell, so seeding a field
+        # costs one whole lowering per cell. Steps (1) and (2) above do not,
+        # which is why the refusal sits here and not at the caller's loop.
+        v = try
+            _eval_cellwise(rhs, cell; const_arrays=const_arrays,
+                           registered_functions=registered_functions,
+                           params=params)
         catch err
             _is_resource_error(err) && rethrow()
             push!(_errs, "as coordinate expression: $(sprint(showerror, err))")
+            nothing
+        end
+        if v !== nothing
+            # Refused only once this step has been shown to be the one that
+            # SERVES the seed: a document no step can seed is a document
+            # diagnostic (step 4 below), not a compiler refusal, and saying
+            # "your compiler cannot run this" about it would name the wrong
+            # thing entirely.
+            # No cell count: this entry point is called once per cell, so what
+            # it can report is the shape of the cost, not its extent.
+            _refuse_percell_evaluation("ic($(target))",
+                "the coordinate-expression initial-state seed", nothing)
+            return v
         end
     end
     # (4) Unsupported RHS — a clear error, never a silent drop.

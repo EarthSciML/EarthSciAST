@@ -83,13 +83,19 @@ mutable struct BuildInspection
     # names the build-time consumers actually READ, so it is a record of this
     # build, not a re-reading of the document.
     param_classes::Dict{String,Symbol}
+    # Which tier every rule of this build landed on (API_SPEC §5.8). The same
+    # record `compiler_report(prob)` returns, put here too so a caller who
+    # builds through `build_evaluator` — or whose build REFUSED — can still read
+    # it. Empty until the build that owns this record finishes.
+    compiler_report::CompilerReport
 end
 BuildInspection() = BuildInspection(Dict{String,Array{Float64}}(),
                                     Dict{String,Any}(), Dict{String,ASTExpr}(),
                                     Dict{String,Float64}(),
                                     Dict{String,ASTExpr}(),
                                     Dict{String,Int}(),
-                                    Dict{String,Symbol}())
+                                    Dict{String,Symbol}(),
+                                    CompilerReport(:native))
 
 """
     DiscreteMaterializer()
@@ -379,7 +385,8 @@ end
 # that a reader gathers out of range used to beta-reduce its body at the
 # out-of-range index instead; the discretizations' region-split boundary
 # stencils keep their gathers in range, which the conformance goldens pin.)
-_array_obs_inline_forced() = get(ENV, "ESS_ARRAY_OBS_INLINE", "") == "1"
+_array_obs_inline_forced() = _compiler_plan_now().name === :interpreter ||
+    get(ENV, "ESS_ARRAY_OBS_INLINE", "") == "1"
 
 # Candidate set: the promoted array observeds (post cadence cut) that are not
 # read by a discrete-cadence fill. `discrete_defs_refs` is the set of names
@@ -1488,6 +1495,13 @@ function _fold_field_ics!(eq_ics::Dict{String,Float64}, field_ics, array_cells,
         # per-cell path for both this and the symbolic stencil compiler.
         fast = _stencil_disabled() ? nothing :
                _try_field_ic_fastpath(rhs, param_scope, registered_functions, const_arrays)
+        # A `nothing` here is not by itself a refusal: `_resolve_field_ic`'s
+        # first two steps (a loaded const-array field, a broadcast constant)
+        # cost the same per cell whatever the compiler is. Only its third step
+        # — the coordinate expression — resolves and compiles per cell, and it
+        # raises the refusal itself.
+        _record_rule!("ic($(target))", :equation,
+                      fast === nothing ? :setup_percell : :setup_compiled)
         for cell in cells
             idxs = collect(Int, cell)
             eq_ics[_cell_key(target, idxs)] = fast === nothing ?
@@ -3250,7 +3264,35 @@ end
 # save/restore so a nested build cannot clobber an outer one's pool. With
 # `ESS_LANE_INTERN_DISABLE=1` the pool stays `nothing` and the build is
 # byte-for-byte today's un-interned build (the differential oracle).
-function _build_evaluator_impl(model::Model; kwargs...)
+#
+# `compiler` (API_SPEC §5.8) is resolved FIRST, because the plan it expands to
+# is what every tier gate below — starting with the two pool switches on the
+# next lines — reads its own on/off state from. `nothing` means the caller did
+# not name one, which is the default `native` and differs from an explicit
+# `:native` in one respect only: an explicit one refuses to build beside an
+# oracle kill switch, since then the compiler the caller named is not the
+# compiler that would run.
+function _build_evaluator_impl(model::Model;
+                               compiler::Union{Nothing,Symbol} = nothing,
+                               kwargs...)
+    plan = _plan_for(compiler)
+    record = _BuildRecord(plan)
+    insp = get(kwargs, :inspect, nothing)
+    return _with_compiler_plan(plan) do
+        _with_build_record(record) do
+            try
+                return _build_evaluator_impl_pools(model; kwargs...)
+            finally
+                # The report is filled even when the build THREW: a refusal is
+                # exactly the case a caller wants the partial tier record for.
+                insp isa BuildInspection &&
+                    (insp.compiler_report = _finish_report(record))
+            end
+        end
+    end
+end
+
+function _build_evaluator_impl_pools(model::Model; kwargs...)
     prev = _LANE_INTERN_POOL[]
     _LANE_INTERN_POOL[] = _lane_intern_disabled() ? nothing :
                           Dict{_LaneInternKey,Any}()
@@ -3598,6 +3640,7 @@ function _compile_derivative_equations(derivative_eqs::Vector{Equation},
                   _sub_preserving(eq.rhs, scalar_inline)
             rhs_r = _resolve_indices(rhs, array_var_info, var_map, const_registry, pgather)
             push!(scalar_entries, (idx, rhs_r))
+            _record_rule!(state_name.name, :equation, :scalar)
 
         elseif _is_indexed_D_lhs(eq.lhs)
             # D(index(var, k...)) = expr  — indexed scalar derivative
@@ -3619,6 +3662,7 @@ function _compile_derivative_equations(derivative_eqs::Vector{Equation},
                   _sub_preserving(eq.rhs, scalar_inline)
             rhs_r = _resolve_indices(rhs, array_var_info, var_map, const_registry, pgather)
             push!(scalar_entries, (idx, rhs_r))
+            _record_rule!(cname, :equation, :scalar)
 
         elseif _is_faq_D_lhs(eq.lhs)
             _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
@@ -3990,7 +4034,35 @@ end
 #                           nonzero means genuinely residual work the direct
 #                           stages did not see.
 const _CASCADE_TALLY = Dict{Symbol,Int}()
-_tally_cascade!(k::Symbol) = (_CASCADE_TALLY[k] = get(_CASCADE_TALLY, k, 0) + 1; nothing)
+
+# The ROUTING keys — the ones that say where an array equation finally landed,
+# exactly one per equation. Bumping one of these closes the rule the cascade
+# opened and files it in the build's `CompilerReport`; every other key is a
+# counter and only adds to the per-build tally.
+const _CASCADE_ROUTING_TIER = Dict{Symbol,Symbol}(
+    :affine             => :affine,
+    :affine_fused_retry => :affine,
+    :scan               => :scan,
+    :array_contraction  => :array_contraction,
+    # A per-cell SCALARIZE at build whose cell entries then go to the codegen
+    # tier as ordinary access kernels — build cost, not right-hand-side cost.
+    :percell_loop       => :percell_build,
+    :percell_acc        => :percell_build,
+    # …except under the forced per-cell reference, where they stay plain scalar
+    # nodes on `rhs_list` and are walked per cell on every call.
+    :percell_disabled   => :interpreter,
+)
+
+function _tally_cascade!(k::Symbol)
+    _CASCADE_TALLY[k] = get(_CASCADE_TALLY, k, 0) + 1
+    rec = _build_record()
+    if rec !== nothing
+        rec.tally[k] = get(rec.tally, k, 0) + 1
+        tier = get(_CASCADE_ROUTING_TIER, k, nothing)
+        tier === nothing || _land_rule!(tier)
+    end
+    return nothing
+end
 _reset_cascade_tally!() = (empty!(_CASCADE_TALLY); nothing)
 
 # One-line identity of a faq equation for the `ESS_STENCIL_DEBUG=1` notices: the
@@ -4167,6 +4239,11 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
     # body, and a `_ScanFold` accumulates over the result after the kernel
     # section. Both passes are O(N); the unrolled guarded fold below is O(N²).
     # Declining leaves `scan_fold === nothing` and changes nothing.
+    #
+    # Open this rule's report entry first: every tier below either lands it
+    # (through the routing tally) or refuses it, and a refusal raised several
+    # frames deeper reads the label from here so it can name what it refused.
+    _open_rule!(_faq_debug_label(lhs_body, idx_names, range_iters), :equation)
     scan_fold = nothing
     affine_kernels = nothing
     affine_first_try = false
@@ -4285,6 +4362,20 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
                 const_registry=const_registry, pgather=pgather,
                 param_sym_set=param_sym_set, reg_funcs=reg_funcs)
         if ac !== nothing
+            # §2.5.10: on this tier SUCCESS is what leaves a tree walk in the
+            # right-hand side. `_apply_array_contraction!` evaluates the
+            # compiled body once per OUTPUT CELL on every call
+            # (array_contraction.jl) and no codegen tier ever sees the section,
+            # so a compiler that promises compiled tiers cannot take it.
+            _compiler_is_strict() && _refuse_rule(
+                _faq_debug_label(lhs_body, idx_names, range_iters),
+                "the whole-array contraction tier accepted this equation, and " *
+                "that tier's runner walks the expression tree once per output " *
+                "cell on every right-hand-side call — no generated form for it " *
+                "exists yet, so it is compiler backlog rather than a property " *
+                "of the document. Build with compiler=:interpreter to run it, " *
+                "or lower the contracted extent below the tier's admission " *
+                "floor")
             _tally_cascade!(:array_contraction)
             get(ENV, "ESS_STENCIL_DEBUG", "") == "1" &&
                 (println(stderr, "[ess-array-contraction] FIRED: ",
@@ -4364,7 +4455,14 @@ function _try_compile_array_contraction(lhs_body::OpExpr, rhs_body::ASTExpr,
     # builds, the same isolation the per-cell loop tier's compile relies on.
     node = try
         _compile(marker, var_map, param_sym_set, reg_funcs)
-    catch
+    catch err
+        # errors.jl: running out of memory, blowing the stack or being
+        # interrupted says nothing about whether this tier can model the
+        # equation, and swallowing one here is worse than elsewhere — this is
+        # the tier that exists because the per-cell alternative exhausts
+        # memory, so the decline would send the build straight back into the
+        # allocation that just failed.
+        _is_resource_error(err) && rethrow()
         return nothing
     end
     # The output cells, in `Iterators.product` order (dimension 1 fastest) — the

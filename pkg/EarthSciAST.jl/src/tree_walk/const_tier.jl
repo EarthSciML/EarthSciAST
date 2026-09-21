@@ -142,7 +142,8 @@ function _def_tier(n::_Node, tier::Vector{Int8}, slot::Int, cache::_CSECache)::I
     return tr
 end
 
-_tcadence_disabled() = get(ENV, "ESS_TCADENCE_DISABLE", "") == "1"
+_tcadence_disabled() = !_compiler_plan_now().tcadence ||
+    get(ENV, "ESS_TCADENCE_DISABLE", "") == "1"
 
 # ---- The untiered kill switch: `ESS_UNTIERED=1` -------------------------------
 #
@@ -162,7 +163,8 @@ _tcadence_disabled() = get(ENV, "ESS_TCADENCE_DISABLE", "") == "1"
 # As with the time-tier switch, the recorded `tier[]` entries keep their computed
 # values: classification is a property of the prelude, so demotion happens at the
 # routing step only and every slot still lands in ascending order.
-_untiered() = get(ENV, "ESS_UNTIERED", "") == "1"
+_untiered() = !_compiler_plan_now().tiered ||
+    get(ENV, "ESS_UNTIERED", "") == "1"
 
 # Partition the FINAL prelude (post `_share_kernel_invariants!`) into its three cadence
 # tiers. Returns three ASCENDING slot-index vectors — the order `f!` must evaluate

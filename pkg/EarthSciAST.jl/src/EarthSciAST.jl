@@ -47,6 +47,12 @@ include("errors.jl")
 # Central diagnostic-code registry. Pure data, no dependencies; must precede
 # every raise site that names a code.
 include("error_codes.jl")
+# Compiler selection (API_SPEC §5.8, esm-libraries-spec §2.5.10): the closed
+# vocabulary, the per-tier plan each value expands to, the per-build report and
+# the strict-`native` refusal. Pure data plus task-local accessors; the types
+# it raises (`SimulateError`, `TreeWalkError`) are resolved at call time, so it
+# sits here, ahead of every tier that reads a plan.
+include("compiler.jl")
 # Core data model + validation
 include("types.jl")
 # Derived variable classification (esm-spec §6.3.1). Must follow types.jl (it
@@ -389,6 +395,12 @@ export
     # and cannot collide with the solver package that defines them.
     esm_problem, EsmProblem, callbacks, SimulateError, seed_expression_ic!,
     final_state, observed_field,
+    # Which strategy built the right-hand side, and where each rule landed
+    # (API_SPEC §5.8, esm-libraries-spec §2.5.10). `compiler` is also the name
+    # of the `esm_problem` keyword that CHOOSES one, over the closed vocabulary
+    # in `COMPILER_VOCABULARY`.
+    compiler, compiler_report, CompilerReport, CompilerRuleRecord,
+    tier_histogram, COMPILER_VOCABULARY,
     # Inline-test runner (esm-ol5qa; spec §6.6)
     AssertionStatus, AssertionResult, PASS, FAIL, ERROR, SKIP,
     esm_root, esm_path,

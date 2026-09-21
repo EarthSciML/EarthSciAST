@@ -551,6 +551,7 @@ end
 # loops, keeping them available as the differential oracle (mirroring
 # `ESS_SETUP_MAP_COMPILE_ONCE_DISABLE` / `ESS_STENCIL_DISABLE`).
 _geom_sweep_specialize_disabled() =
+    !_compiler_plan_now().geom_sweep_specialize ||
     get(ENV, "ESS_GEOM_SWEEP_SPECIALIZE_DISABLE", "") == "1"
 
 # `ESS_GEOM_SWEEP_VERIFY=1` runs BOTH sweeps on every materialization and
@@ -721,6 +722,7 @@ end
 # historic ungated dense sweep. It is the differential oracle for this change
 # (mirroring `ESS_GEOM_SWEEP_SPECIALIZE_DISABLE` / `ESS_STENCIL_DISABLE`).
 _geom_overlap_gate_disabled() =
+    !_compiler_plan_now().geom_overlap_gate ||
     get(ENV, "ESS_GEOM_OVERLAP_GATE_DISABLE", "") == "1"
 
 # `ESS_GEOM_OVERLAP_GATE_VERIFY=1` materializes every overlap-gated array BOTH
@@ -1229,6 +1231,7 @@ end
 # available as the differential oracle (mirroring `ESS_STENCIL_DISABLE` /
 # `ESS_LANE_INTERN_DISABLE`).
 _setup_map_compile_once_disabled() =
+    !_compiler_plan_now().setup_map_compile_once ||
     get(ENV, "ESS_SETUP_MAP_COMPILE_ONCE_DISABLE", "") == "1"
 
 # `ESS_SETUP_MAP_COMPILE_ONCE_VERIFY=1` runs BOTH paths on every engaged MAP and
@@ -1345,6 +1348,7 @@ function _materialize_setup_general_map(rhs::OpExpr, env::AbstractDict,
         end
         if fast !== nothing
             _SETUP_MAP_FASTPATH_HITS[] += 1
+            _record_rule!(_current_rule_label(), :setup_array, :setup_compiled)
             _setup_map_compile_once_verify() || return fast
             ref = _fill_map_percell(rhs, exts, ca, registered_functions, params)
             _assert_map_bit_identical(rhs, fast, ref)
@@ -1352,6 +1356,9 @@ function _materialize_setup_general_map(rhs::OpExpr, env::AbstractDict,
         end
     end
     _SETUP_MAP_FASTPATH_MISS[] += 1
+    _refuse_percell_evaluation(_current_rule_label(),
+        "the setup MAP materializer", prod(exts))
+    _record_rule!(_current_rule_label(), :setup_array, :setup_percell)
     return _fill_map_percell(rhs, exts, ca, registered_functions, params)
 end
 
@@ -1498,6 +1505,11 @@ function _materialize_setup_wholearray(rhs::OpExpr, env::AbstractDict,
         return reshape(Array{Float64}(src), exts...)   # column-major, numpy-parity
     end
     ca, params = _setup_env_split(env)
+    # This materializer has no compile-once form at all: the `makearray` stencil
+    # it serves is resolved and compiled from scratch at every output cell.
+    _refuse_percell_evaluation(_current_rule_label(),
+        "the whole-array setup materializer", prod(exts))
+    _record_rule!(_current_rule_label(), :setup_array, :setup_percell)
     arr = zeros(Float64, exts...)
     for I in CartesianIndices(Tuple(exts))
         arr[I] = _eval_cellwise(rhs, Int[Tuple(I)...]; const_arrays=ca,
@@ -1842,6 +1854,7 @@ function _materialize_geometry_setup(setup, defs, model, const_arrays_kw,
     ov_cache = Dict{Tuple{Vector{String},Vector{String},Float64},_OverlapIndex}()
     for n in _geom_setup_order(setup, defs)
         rhs = defs[n]
+        _open_rule!(n, :setup_array)
         arr = if _is_ranged_clip(rhs)
             _materialize_ranged_clip(rhs, env, index_sets, derived_extents, var_shapes)
         elseif _is_setup_wholearray_op(rhs)
@@ -2007,6 +2020,7 @@ function _derive_binning_coords(model, index_sets, const_arrays_kw, param_overri
             # (which has no trig): the CALLER supplies only raw `lon`/`lat`, never
             # pre-projected `X`/`Y`. The geometry-vocabulary reduce-projection path
             # is unchanged (`_body_needs_general_eval` is false there).
+            _open_rule!(n, :setup_array)
             env[n] = if _body_needs_general_eval(e)
                 _materialize_setup_general_map(e, env, index_sets, derived_extents,
                                                registered_functions)
@@ -2121,6 +2135,7 @@ function _derive_overlap_env_factors(model, index_sets, const_arrays_kw, param_o
                 ok = false; break                            # unresolved dep — retry / drop
             end
             ok || continue
+            _open_rule!(n, :setup_array)
             arr = _materialize_setup_general_map(e, env, index_sets, derived_extents,
                                                  registered_functions)
             env[n] = arr

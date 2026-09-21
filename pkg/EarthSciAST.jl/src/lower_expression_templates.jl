@@ -1850,7 +1850,8 @@ const _TemplateSites = Union{Nothing,IdDict{OpExpr,OpExpr}}
 # byte-identical (verified by the differential oracle + the affine/intern
 # oracles); `ESS_EXPAND_MEMO_DISABLE=1` restores the per-site re-expansion.
 const _ExpandMemo = Union{Nothing,Dict{Tuple{String,String},OpExpr}}
-_expand_memo_disabled() = get(ENV, "ESS_EXPAND_MEMO_DISABLE", "") == "1"
+_expand_memo_disabled() = !_compiler_plan_now().expand_memo ||
+    get(ENV, "ESS_EXPAND_MEMO_DISABLE", "") == "1"
 
 _expand_expr_refs(e::VarExpr, reg, ::_TemplateSites, ::_ExpandMemo=nothing) = e
 _expand_expr_refs(e::NumExpr, reg, ::_TemplateSites, ::_ExpandMemo=nothing) = e

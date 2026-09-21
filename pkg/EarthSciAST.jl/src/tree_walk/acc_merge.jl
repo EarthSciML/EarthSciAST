@@ -100,6 +100,7 @@ _acc_node_has_lazy(n::_Node) =
 # `ESS_OOP_MERGE_DISABLE=1`): those mean "no lane-batched class kernels in
 # this build", and a direct-emitted class kernel would violate that contract.
 _direct_class_emit_disabled() =
+    !_compiler_plan_now().direct_class_emit ||
     get(ENV, "ESS_DIRECT_CLASS_EMIT_DISABLE", "") == "1"
 _direct_class_emit_enabled() =
     !_direct_class_emit_disabled() && !_oop_merge_disabled()
@@ -145,6 +146,7 @@ _direct_class_emit_enabled() =
 # switches (`_direct_class_emit_enabled` folds both in), so every existing
 # oracle configuration behaves exactly as before this landed.
 _cross_eq_class_emit_disabled() =
+    !_compiler_plan_now().cross_eq_class_emit ||
     get(ENV, "ESS_CROSS_EQ_CLASS_EMIT_DISABLE", "") == "1"
 _cross_eq_class_emit_enabled() =
     !_cross_eq_class_emit_disabled() && _direct_class_emit_enabled()
@@ -420,7 +422,8 @@ _fn_spec_content_equal(a::_FnTypedCoreSpec, b::_FnTypedCoreSpec) =
 # `ESS_STENCIL_DISABLE`) keeps the ref `nothing` for the whole build, restoring
 # today's un-interned build byte for byte — the differential oracle
 # (test/lane_table_intern_test.jl).
-_lane_intern_disabled() = get(ENV, "ESS_LANE_INTERN_DISABLE", "") == "1"
+_lane_intern_disabled() = !_compiler_plan_now().lane_intern ||
+    get(ENV, "ESS_LANE_INTERN_DISABLE", "") == "1"
 
 struct _LaneInternKey
     spec::Any
