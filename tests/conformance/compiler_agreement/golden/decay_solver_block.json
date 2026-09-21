@@ -1,0 +1,17 @@
+{
+  "binding": "julia",
+  "compiler": "interpreter",
+  "id": "decay_solver_block",
+  "observed": {},
+  "saveat": [
+    4.0
+  ],
+  "state": {
+    "4.0": {
+      "A": 0.2706705411710481
+    }
+  },
+  "state_order": [
+    "A"
+  ]
+}

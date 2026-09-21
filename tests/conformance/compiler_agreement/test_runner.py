@@ -24,6 +24,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -79,7 +80,36 @@ def drop_anchors(manifest: dict) -> None:
         fx["anchor"] = {"source": "none"}
 
 
-def run_runner(manifest: Path, *args: str, scenario: str | None = None, adapter: bool = True):
+def _drop_anchors_native_optional(manifest: dict) -> None:
+    """`drop_anchors` + `native_optional`, the pair every test of the optional
+    availability arm needs: a canned trajectory the anchors would reject, gated
+    against a stub-minted golden, under a ledger that makes `native` optional."""
+    drop_anchors(manifest)
+    native_optional(manifest)
+
+
+def native_optional(manifest: dict) -> None:
+    """Put `native` on the OPTIONAL arm of the availability ledger for every binding.
+
+    A test about the optional arm must CONSTRUCT that arm rather than borrow
+    whichever arm the committed ledger happens to be on: `native` crosses to
+    `bindings_required` one binding at a time as each strict build lands, and a
+    test that read the committed ledger would quietly change what it asserts on
+    the day a binding crossed."""
+    manifest["compilers"]["native"] = {
+        **manifest["compilers"]["native"],
+        "bindings_required": [],
+        "bindings_optional": ["julia", "rust", "python"],
+    }
+
+
+def run_runner(
+    manifest: Path,
+    *args: str,
+    scenario: str | None = None,
+    adapter: bool = True,
+    runner: Path | None = None,
+):
     """Invoke the runner with the stub registered as the `julia` adapter."""
     env = dict(os.environ)
     if adapter:
@@ -90,13 +120,31 @@ def run_runner(manifest: Path, *args: str, scenario: str | None = None, adapter:
     else:
         env.pop("EARTHSCI_COMPILER_AGREEMENT_ADAPTER_JULIA", None)
     proc = subprocess.run(
-        [sys.executable, str(RUNNER), "--manifest", str(manifest), *args],
+        [sys.executable, str(runner or RUNNER), "--manifest", str(manifest), *args],
         capture_output=True,
         text=True,
         env=env,
         cwd=str(REPO_ROOT),
     )
     return proc
+
+
+def runner_under(tmp_path: Path) -> Path:
+    """A copy of the runner whose REPO_ROOT is `tmp_path`.
+
+    The runner derives its repository root from its own location and offers each
+    binding's PLANNED adapter when that file is on disk there. That fallback is
+    what makes a stage work the moment its adapter lands — and it is also why a
+    test of "no adapter registered ANYWHERE" cannot simply unset the environment
+    variable once a real adapter has been committed. Copying the runner beside an
+    empty root gives the test a tree with no planned adapter in it, whatever the
+    real repository has grown, so the case stays tested instead of quietly
+    becoming untestable."""
+    scripts = tmp_path / "scripts"
+    scripts.mkdir(parents=True, exist_ok=True)
+    for name in (RUNNER.name, "conformance_lib.py"):
+        shutil.copy2(REPO_ROOT / "scripts" / name, scripts / name)
+    return scripts / RUNNER.name
 
 
 def mint_golden(manifest: Path) -> None:
@@ -133,9 +181,9 @@ def statuses(payload: dict, compiler: str) -> dict:
 
 
 def test_self_test_passes_on_the_committed_manifest():
-    """The committed tier, exactly as it stands: no goldens minted yet, so the
-    self-test must SAY so and still exit 0 rather than crash or go red on a phase
-    that has not happened."""
+    """The committed tier, exactly as it stands: every reference trajectory in
+    `golden/` is checked for shape AND against the analytic anchor its fixture
+    carries, and the whole self-test exits 0."""
     proc = subprocess.run(
         [sys.executable, str(RUNNER), "--self-test"],
         capture_output=True,
@@ -143,7 +191,9 @@ def test_self_test_passes_on_the_committed_manifest():
         cwd=str(REPO_ROOT),
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert "none committed yet" in proc.stdout
+    committed = json.loads(COMMITTED_MANIFEST.read_text())["fixtures"]
+    for fx in committed:
+        assert f"[golden/{fx['id']}]" in proc.stdout
     assert "self-test: OK" in proc.stdout
 
 
@@ -298,6 +348,7 @@ def test_a_fixture_cannot_require_a_compiler_the_ledger_does_not(tmp_path):
 
     def patch(manifest):
         drop_anchors(manifest)
+        native_optional(manifest)
         manifest["fixtures"][0]["required"]["julia"] = ["native"]
 
     manifest = materialize(tmp_path, patch)
@@ -310,7 +361,7 @@ def test_a_fixture_cannot_require_a_compiler_the_ledger_does_not(tmp_path):
 
 
 def test_unavailable_optional_compiler_is_green_and_named(tmp_path):
-    manifest = materialize(tmp_path, drop_anchors)
+    manifest = materialize(tmp_path, _drop_anchors_native_optional)
     mint_golden(manifest)
     proc, payload = produce(manifest, "native", tmp_path, scenario="unavailable")
     assert proc.returncode == 0, proc.stdout + proc.stderr
@@ -334,7 +385,7 @@ def test_a_missing_adapter_is_unavailable_not_a_crash(tmp_path):
     """No adapter registered and none on disk: the same FACT as an adapter saying
     the compiler is not configured here, so it is governed by the availability
     ledger — green for an optional binding, with the reason printed."""
-    manifest = materialize(tmp_path, drop_anchors)
+    manifest = materialize(tmp_path, _drop_anchors_native_optional)
     mint_golden(manifest)
     report = tmp_path / "missing.json"
     proc = run_runner(
@@ -346,6 +397,7 @@ def test_a_missing_adapter_is_unavailable_not_a_crash(tmp_path):
         "--output",
         str(report),
         adapter=False,
+        runner=runner_under(tmp_path),
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     payload = json.loads(report.read_text())
@@ -462,7 +514,7 @@ def test_assert_available_passes_only_when_the_compiler_ran(tmp_path):
 def test_assert_available_fails_on_a_skip(tmp_path):
     """The runner exits 0 on a legal skip, which is exactly the hole this script
     fills for a workflow whose point is that the compiler ran."""
-    manifest = materialize(tmp_path, drop_anchors)
+    manifest = materialize(tmp_path, _drop_anchors_native_optional)
     mint_golden(manifest)
     report = tmp_path / "skipped.json"
     proc = run_runner(

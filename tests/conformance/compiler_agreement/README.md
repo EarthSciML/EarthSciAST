@@ -25,10 +25,13 @@ Design decisions of record (2026-09-21) that this tier implements:
 * Fixtures are **referenced by path** from the tiers that already own them.
   Nothing about a document's physics is decided here.
 
-> **No goldens are minted yet.** `golden/` does not exist in this tree. Phase 2
-> mints `golden/<id>.json` from the Julia `interpreter` and commits them, and
-> only then does any producer stage have something to compare against. Until
-> then the tier's contract is this file and `manifest.json`.
+> **Status.** `golden/` holds all six reference trajectories, minted from the
+> Julia `interpreter` and committed; each one reproduces the analytic anchor its
+> fixture carries. Julia answers for both `interpreter` and `native` with no
+> refusals on any fixture, and is `bindings_required` for each. Rust and Python
+> stay `bindings_optional` for `native` while their adapters are being written;
+> each crosses to `bindings_required` when its strict build lands, on the same
+> one-way ratchet.
 
 ## Shape
 
@@ -47,7 +50,7 @@ tests/conformance/compiler_agreement/
 ├── manifest.json        # fixtures, trajectories, tolerances, the `required` ledger
 ├── stub_adapter.py      # a canned stand-in adapter, for the runner's own test only
 ├── test_runner.py       # drives the runner through all five outcomes and both ledgers
-└── golden/<id>.json     # Julia-interpreter trajectory, one file per fixture (phase 2)
+└── golden/<id>.json     # Julia-interpreter trajectory, one file per fixture
 ```
 
 `stub_adapter.py` is a test fixture for the HARNESS and never evaluates a
@@ -77,7 +80,23 @@ carry an inline `tests` block.
 | `advection_1d_periodic_n4` | `conformance/pde_simulation/fixtures/advection_1d_periodic_n4.esm` | `Advect1D` | `pde_simulation` | copied | upwind advection — a wrap gather rather than a symmetric stencil |
 | `faq_discretized_1d_heat` | `fixtures/faq/15_discretized_1d_heat.esm` | `Heat1D` | `simulate_faq` | `reduction` | the same physics written as a `faq` over a `makearray` with ghost regions, so the array machinery rather than a pre-discretized operator is what each compiler has to lower |
 | `logistic_growth` | `valid/tests_analyses_comprehensive.esm` | `LogisticGrowth` | inline `tests` | `transcendental` | an **unshaped** ODE with a closed-form solution. `native` must run this on its compiled tiers, not a scalar interpreter: no document-type switch inside a compiler |
-| `decay_solver_block` | `valid/solver_block.esm` | `Decay` | inline `tests` | `transcendental` | the smallest unshaped ODE with a closed form, and the one that carries a `solver` block |
+| `decay_solver_block` | `valid/solver_block.esm` | `Decay` | inline `tests` | `transcendental` | the smallest unshaped ODE with a closed form, and the one that carries a `solver` block. **Its `solver.stiffness: "high"` is load-bearing** — see below |
+
+**The `solver` block selects the ALGORITHM, and every binding must honour it.**
+`decay_solver_block` declares `solver.stiffness: "high"` (esm-spec §2.2), so an
+adapter integrates it with its stiff algorithm. Only the ALGORITHM comes from
+the block: the tolerances are the fixture's own `integration` entry, because a
+conformance tier has an opinion about the integrator's error and states it per
+fixture.
+
+This is not a detail an adapter may decide for itself. On this document the
+stiff algorithm carries about 2.5e-8 of integration error against the closed
+form where the non-stiff one carries under 1e-12 — comfortably inside the
+fixture's anchor band either way, and about 250x the fixture's band against the
+GOLDEN. So a binding that integrated it with a non-stiff algorithm would be red
+against a golden minted with the stiff one, for a disagreement that is the
+algorithm's and not the compiler's. The block is the single place that choice is
+written, which is the reason this fixture is in the tier.
 
 ### Excluded, by name and reason
 
@@ -273,11 +292,12 @@ binary serves every compiler its binding offers; the adapter passes the value
 straight to `esm_problem` and does not interpret it. An adapter that inspected
 the value and chose a build itself would be reimplementing the thing under test.
 
-Planned paths, so the later phases build to the same places:
+The paths, so every binding's adapter lands in the place the runner already
+looks for it:
 
 | Binding | Adapter |
 |---|---|
-| Julia (reference) | `pkg/EarthSciAST.jl/scripts/compiler_agreement_adapter.jl` |
+| Julia (reference) | `pkg/EarthSciAST.jl/scripts/compiler_agreement_adapter.jl` — on disk; bootstraps `scripts/compiler_agreement_env` |
 | Rust | `pkg/earthsci-ast-rs/src/bin/earthsci-compiler-agreement-adapter-rust.rs`, feature `conformance-adapters` |
 | Python | `pkg/earthsci-ast-py/src/earthsci_ast/cli/compiler_agreement_adapter.py` |
 
@@ -456,9 +476,9 @@ live binding.
 
 A producer stage **declines to start**, with a warning naming exactly what is
 missing, when its binding's adapter is not on disk or when `golden/` holds no
-reference trajectory. Both are the phase-1 state and neither is a silent pass:
-the stage log says `UNAVAILABLE` and why. Once both exist the stage runs for
-real and the gate above decides.
+reference trajectory. Neither is a silent pass: the stage log says `UNAVAILABLE`
+and why. `golden/` is populated, so only a missing adapter can trigger it now,
+and the Julia stages run for real with the gate above deciding.
 
 ## Adding a fixture
 

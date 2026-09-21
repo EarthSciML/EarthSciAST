@@ -885,18 +885,17 @@ run_compiled_rhs_conformance_compiled_rust() {
 #     interpreter is complete over the evaluable core;
 #   * AVAILABILITY and REFUSAL are two ledgers. `bindings_required` says a binding
 #     must be able to ANSWER for a compiler; a fixture's `required` map says that
-#     compiler must be able to RUN that document. Only `interpreter` is required
-#     today, so every `native` stage is a legal visible skip until the strict build
-#     lands in all three bindings;
+#     compiler must be able to RUN that document. `interpreter` is required in all
+#     three bindings and `native` in julia, whose strict build has landed; the rust
+#     and python `native` stages stay legal visible skips until theirs do;
 #   * a compiler whose runtime is not configured here reports `unavailable` WITH
 #     ITS REASON and skips. A broken adapter does not: it fails.
 #
 # The adapters are built per binding and each stage declines to start until its
-# own is on disk, saying so. The reference goldens are minted by
-# `--write-golden --bindings julia --compiler interpreter` once the Julia adapter
-# lands; with `golden/` empty there is no reference trajectory to compare against,
-# so every producer stage declines and says that too. Neither is a silent pass:
-# the stage prints a warning naming exactly what is missing.
+# own is on disk, saying so. The reference goldens are minted from the Julia
+# adapter by `--write-golden --bindings julia --compiler interpreter` and are
+# committed, so only a missing adapter can make a stage decline now. A decline is
+# never a silent pass: the stage prints a warning naming exactly what is missing.
 #
 # CONFORMANCE_SPEC §5.44.5 also names `xla` (julia, rust), `mtk` (julia) and
 # `sympy` (python) producer stages. Each is one more `_run_compiler_agreement_stage`
@@ -1027,8 +1026,9 @@ run_compiler_agreement_interpreter_julia()  { _run_compiler_agreement_stage juli
 run_compiler_agreement_interpreter_rust()   { _run_compiler_agreement_stage rust interpreter; }
 run_compiler_agreement_interpreter_python() { _run_compiler_agreement_stage python interpreter; }
 
-# `native` is the strict default and bindings_optional in all three until the
-# strict build lands everywhere. A REFUSAL here is governed by each fixture's
+# `native` is the strict default: bindings_required in julia, whose strict build
+# has landed, and bindings_optional in rust and python until theirs do. A REFUSAL
+# here is governed by each fixture's
 # `required` map, not by that list — the named-exclusion list this produces IS the
 # coverage backlog, and this tier is where it is read and burned down.
 run_compiler_agreement_native_julia()  { _run_compiler_agreement_stage julia native; }
