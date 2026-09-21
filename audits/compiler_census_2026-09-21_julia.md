@@ -10,8 +10,42 @@ cell. How many corpus documents is that, and why?** Everything below is measured
 nothing is proposed.
 
 Raw sweep output (not committed): `/scratch/ctessum/compiler-sel/logs/census-julia/`
-(`census.jsonl`, `manifest.txt`, the per-shard `census.jsonl.shard*` files and their
-`.err` companions, `aggregate.py`).
+— `census.jsonl` (one JSON object per document), `manifest.txt`, the per-shard
+`census.jsonl.shard*` files with their `.err`/`.out` companions, the slurm job log
+`slurm-10661421.out`, and the two read-only aggregators `aggregate.py` and `section1.py`
+(the latter emits §1 of this document verbatim, so no number below was transcribed by
+hand).
+
+## Summary
+
+| | |
+|---|---|
+| documents in the corpus | 1217 (859 under `tests/`, 358 under `EarthSciModels`) |
+| documents that build | 817 |
+| …that reach the array cascade at all | 126 |
+| …with a per-cell landing at BUILD | 3, **all of them build-only** |
+| …with a per-cell tree walk at RHS-call time | **0** |
+| codegen declines, any reason, either pass | **0** |
+| decline / bail sites classified | 47 throw sites + 16 speculative catches + 2 unguarded ones |
+| sites whose landing walks the tree per cell at RHS | 2 kinds: a `_CodegenDecline` that recurs on the overflow pass, and the whole-array contraction tier *accepting* |
+| simulation/build test files classified | 155 (97 stay, 52 move to a fixture, 6 to a refusal tier) |
+| `ESS_*` reads in `src/` + `ext/` | 67 sites, 61 variables; 60 test files touch 47 of them |
+
+Three things in here were not in the plan's description of the cascade and change how the
+census has to be read; each is substantiated in §0 and §2.
+
+1. **The whole-array contraction tier is not code-generated.** When it *accepts* an
+   equation, its runner walks the tree once per output cell on every right-hand-side call
+   (array_contraction.jl:71-79). On this tier success, not decline, is what leaves an
+   interpreter in the RHS.
+2. **A primary codegen decline does not mean the interpreter runs.** The overflow emission
+   retries at `typemax(Int)` and, with `ESS_F64_OVERFLOW_CODEGEN` on, serves Float64 as
+   well. Only a decline that recurs there reaches `_run_acc_kernel!`. `:budget`, the one
+   cost-class reason, structurally cannot recur.
+3. **Two catch blocks on the array-contraction path swallow every exception** with no
+   `_is_resource_error` guard (resolve.jl:640, build.jl:4367), against the doctrine in
+   errors.jl:56-78 — on the very tier that exists because the alternative exhausts memory.
+   Recorded, not fixed.
 
 ---
 
@@ -95,7 +129,206 @@ mistakes them for it:
 
 ## 1. Corpus census
 
-_Pending: the corpus sweep is running. This section is filled by the next commit._
+**The answer, up front: on this corpus the `native` compiler would refuse nothing.** Of
+the 817 documents that build, **zero** leave a kernel on the per-cell interpreter at
+right-hand-side call time, and **zero** produce a codegen decline of any reason, on either
+emission pass. Three documents scalarize an equation per output cell — but all three do it
+at BUILD only; the kernels that came out were compiled, and their right-hand sides walk no
+tree.
+
+That is a real result about this corpus, not about the language. It is also a result about
+what the corpus is: only 126 of the 817 built documents (15%) contain an array equation
+that reaches the cascade at all. The rest are scalar fixtures whose right-hand sides run
+the scalar `_eval_node` list, which is interpreted but per slot, not per cell (§0).
+
+**Limits of this sweep, stated so the zero is not over-read.**
+
+1. **The source-receptor document the whole-array contraction tier exists for is not in
+   the measured set, and cannot be reached by this harness.**
+   `tests/conformance/pushdown/fixtures/isrm.esm` fails the census run with
+   `E_TREEWALK_UNSUPPORTED_SHAPE: ISRM.src_N`. Setting `pushdown_rewrite = true` does not
+   rescue it either — it then fails with `KeyError: key "ISRM.X" not found`, because the
+   pushdown gates are derived from *provider* records the census supplies none of
+   (both checked directly; log `isrm_probe.log`). Corpus-wide the `:array_contraction`
+   tally is therefore 0: the one tier whose *accepted* path interprets per cell was never
+   exercised by this sweep, and a document that does exercise it needs provider wiring a
+   path-only census cannot give it. Nothing else in the corpus meets the tier's admission
+   floor either — `_array_contraction_min()` is 1024 contracted elements
+   (resolve.jl:598-602). **This is the single largest gap in the zero.**
+2. **The fixtures are small.** `codegen_decline_budget` is the one decline reason that
+   depends on extent rather than on the construct, and at these grid sizes nothing came
+   near the 64-million-node budget. At production extents it would fire — and would still
+   not reach the interpreter, because the overflow pass's budget is `typemax(Int)` and
+   `f64cg` routes Float64 through it (§0b). The *capability* reasons, by contrast, are
+   structural: a document that has `box_rank > 3` or an op outside the emitter ladders has
+   it at every extent.
+3. **Per-cell BUILD cost does scale with the grid.** The three build-only documents are
+   cheap here (0.5–5.2 s) because their arrays are small. The scaling warning at
+   build.jl:4241-4256 is about exactly this, and this census does not measure it.
+4. **Documents needing a provider, a metaparameter binding or a model selection the front
+   door cannot guess** fall back to `build_evaluator`, which skips flattening; 48 of the
+   817 took that path. Their coupling is therefore not exercised.
+
+**No document timed out, exhausted memory or killed its worker** across all 1217. The
+`isrm.esm`-class out-of-memory risk did not materialise, for the reason limitation 1
+gives: that document fails shape resolution in seconds and never gets far enough to
+allocate.
+
+
+### 1A. What the sweep covered
+
+The manifest is every `.esm` under `tests/` in the worktree and under the read-only
+`EarthSciModels` checkout: **1217 documents**. Each was built in a worker
+process with `ESS_CODEGEN_DEBUG=1` and `ESS_STENCIL_DEBUG=1`, through
+`EarthSciAST.esm_problem(path, (0.0, 1.0))` where that works and
+`build_evaluator(load_path(path))` where the front door needs arguments the document
+does not supply (providers, metaparameters, a model selection). Which entry point each
+document used is recorded per document.
+
+| | documents |
+|---|---|
+| in the manifest | 1217 |
+| built | **817** |
+| did not build | 400 |
+| &nbsp;&nbsp;— from `tests/` | 859 in manifest, 471 built |
+| &nbsp;&nbsp;— from `EarthSciModels` | 358 in manifest, 346 built |
+| &nbsp;&nbsp;— built through `esm_problem` | 769 |
+| &nbsp;&nbsp;— built through `build_evaluator` | 48 |
+| median build wall time (built documents) | 1.50 s |
+| total build wall time (built documents) | 20 min |
+
+### 1B. Headline: per-cell at BUILD versus per-cell at RHS
+
+The two are different questions and the corpus answers them differently. Counts are
+over the **817 documents that built**.
+
+| landing | documents | share of built |
+|---|---|---|
+| reaches the array cascade at all (any `:affine` / `:scan` / `:array_contraction` / `:percell_*`) | **126** | 15.4% |
+| per-cell at BUILD (any `:percell_loop` / `:percell_acc` / `:percell_disabled`) | **3** | 0.4% |
+| &nbsp;&nbsp;— of which BUILD-ONLY: the kernels were then compiled, RHS carries no tree walk | **3** | 0.4% |
+| **per-cell at RHS — a kernel both codegen passes declined** | **0** | 0.0% |
+| **per-cell at RHS — an accepted whole-array contraction section** | **0** | 0.0% |
+| **per-cell at RHS — either of the two above (what `native` refuses)** | **0** | 0.0% |
+| a PRIMARY codegen decline (the overflow pass may still have compiled it) | **0** | 0.0% |
+| no per-cell landing of any kind | **814** | 99.6% |
+
+Summed over the built documents, in the units each tally actually counts:
+
+| quantity | unit | total |
+|---|---|---|
+| `:percell_loop` + `:percell_acc` + `:percell_disabled` | equations | 4 |
+| kernels on `_run_acc_kernel!` at RHS (`dual_codegen_decline_*`) | kernels | 0 |
+| whole-array contraction sections | equations | 0 |
+| kernels the PRIMARY emission compiled (`codegen_kernel`) | kernels | 228 |
+| kernels the OVERFLOW emission compiled (`dual_codegen_kernel`) | kernels | 0 |
+| kernels the PRIMARY emission declined (`codegen_decline_*`) | kernels | 0 |
+
+### 1C. Cascade landings, summed over the built documents
+
+| tally key | total | documents |
+|---|---|---|
+| `codegen_kernel` | 228 | 126 |
+| `affine` | 176 | 123 |
+| `direct_classmerge_round1_merge` | 79 | 45 |
+| `scan` | 7 | 5 |
+| `percell_acc` | 4 | 3 |
+
+### 1D. Decline-reason histogram
+
+PRIMARY emission (`codegen_decline_<reason>`) — a decline here does **not** mean the
+interpreter runs; the overflow emission gets the kernel next.
+
+| reason | kernels | documents |
+|---|---|---|
+| _(none — no built document produced a primary codegen decline)_ | 0 | 0 |
+
+OVERFLOW emission (`dual_codegen_decline_<reason>`) — **this is the per-cell
+interpreter at RHS time**, one row per kernel in `_KernelSection.dual_resid`.
+
+| reason | kernels | documents |
+|---|---|---|
+| _(none — no built document left a kernel on the per-cell interpreter)_ | 0 | 0 |
+
+### 1E. Top 20 documents by per-cell kernels
+
+Ranked by kernels left on the per-cell interpreter at RHS, then by per-cell BUILD
+equations. `where` says whether the per-cell work survives into the RHS call.
+
+| interp kernels at RHS | array-contraction sections | per-cell BUILD equations | where | build s | document |
+|---|---|---|---|---|---|
+| 0 | 0 | 2 | build only | 5.2 | `tests/valid/geometry/conservative_regrid_assembly.esm` |
+| 0 | 0 | 1 | build only | 0.7 | `tests/valid/faq/join_moves_running_exhaust.esm` |
+| 0 | 0 | 1 | build only | 0.5 | `tests/valid/faq/ragged_member_gather.esm` |
+
+### 1F. Documents that did not build
+
+Most of these are supposed not to build: `tests/invalid/**` is the invalid-fixture
+corpus and the coupling libraries and template fragments are not standalone models.
+Grouped by the error each one raised.
+
+| count | status | error code / type |
+|---|---|---|
+| 77 | build_error | `SchemaValidationError` |
+| 64 | build_error | `E_TREEWALK_NO_MODEL` |
+| 47 | build_error | `unlowered_operator` |
+| 39 | build_error | `unsupported_construct` |
+| 24 | build_error | `E_TREEWALK_UNSUPPORTED_SHAPE` |
+| 20 | build_error | `ParseError` |
+| 11 | build_error | `E_TREEWALK_UNBOUND_VARIABLE` |
+| 10 | build_error | `E_TREEWALK_UNSUPPORTED_RECURRENCE` |
+| 6 | build_error | `derived_index_set_unmaterialized` |
+| 6 | build_error | `E_TREEWALK_UNSUPPORTED_EQUATION` |
+| 5 | build_error | `metaparameter_name_conflict` |
+| 5 | build_error | `E_TREEWALK_AMBIGUOUS_MODEL` |
+| 4 | build_error | `indexed_definition_unsupported_form` |
+| 4 | build_error | `E_TREEWALK_UNDECLARED_INDEX_SET` |
+| 4 | build_error | `MethodError` |
+| 4 | build_error | `template_import_unknown_name` |
+| 4 | build_error | `subsystem_index_set_rename_unknown_name` |
+| 3 | build_error | `data_source_url_unresolved` |
+| 3 | build_error | `unresolved_subsystem_ref` |
+| 3 | build_error | `unknown_enum` |
+| 3 | build_error | `E_TREEWALK_GEOMETRY_OPERAND` |
+| 3 | build_error | `subsystem_index_set_conflict` |
+| 3 | build_error | `E_TREEWALK_UNSUPPORTED_OP` |
+| 2 | build_error | `template_constraint_unknown_index_set` |
+| 2 | build_error | `template_inject_target_not_component` |
+| 44 | build_error | _38 further codes, one to two documents each_ |
+
+No document timed out, exhausted memory or killed its worker; the known
+out-of-memory risk (`isrm.esm`-class documents) did not materialise in this corpus.
+
+### 1G. Slowest builds
+
+| build s | entry | document |
+|---|---|---|
+| 25.1 | `esm_problem` | `EarthSciModels/components/gaschem/geoschem_fullchem.esm` |
+| 23.3 | `esm_problem` | `tests/bench/transport_3axis_7cubed.esm` |
+| 12.2 | `esm_problem` | `tests/valid/derivative_trailing_boundary_operands.esm` |
+| 12.0 | `esm_problem` | `tests/conformance/expression_templates/import_rename_diamond/fixture.esm` |
+| 11.5 | `esm_problem` | `tests/valid/toplevel_ref_index_set_merge.esm` |
+| 10.9 | `esm_problem` | `tests/conformance/expression_templates/import_rename_integral_axis/expanded.esm` |
+| 10.8 | `esm_problem` | `EarthSciModels/components/atmospheric_deposition/wesley_dry_gas.esm` |
+| 10.0 | `esm_problem` | `EarthSciModels/components/urban_canopy/urban_canopy_model.esm` |
+| 9.2 | `esm_problem` | `tests/spatial/pde_inline_assertions_exec.esm` |
+| 8.8 | `esm_problem` | `tests/valid/template_import_minimal.esm` |
+| 8.5 | `esm_problem` | `tests/fixtures/faq/01_pure_ode_analytical.esm` |
+| 8.5 | `esm_problem` | `tests/indexing/idx_outside_faq.esm` |
+
+### 1H. Decline notices the build itself printed
+
+`ESS_STENCIL_DEBUG=1` and `ESS_CODEGEN_DEBUG=1` were set for every document and their
+stderr was captured per document (first 40 lines each, so line counts are a lower
+bound on busy documents; document counts are exact).
+
+| notice | lines | documents |
+|---|---|---|
+| `[ess-affine] FIRED` — the affine tier took the equation | 188 | 124 |
+| `[ess-codegen/codegen]` emission summary | 143 | 126 |
+| `[ess-affine] DECLINED` — fell through to per-cell BUILD | 4 | 3 |
+
+
 
 ---
 
@@ -112,8 +345,11 @@ Classes are as the plan defines them:
 * **cost** — both paths can express it and a budget/cap/heuristic chose the slower one;
 * **build-only** — only build time changes, the RHS-time shape is unaffected.
 
-The extra column **"per-cell tree walk at RHS?"** is what ruling D6 turns on. It is `yes`
-for exactly one group, group B's second-pass declines.
+The extra column **"per-cell tree walk at RHS?"** is what ruling D6 turns on. Across all
+47 throw sites and 16 speculative catches it is `yes` in exactly two places: a
+`_CodegenDecline` that recurs on the overflow emission (group B), and — not a decline at
+all — the whole-array contraction tier ACCEPTING an equation (group C's last row).
+Everything else lands on a compiled or table-driven runner, or costs only build time.
 
 ### 2A. `_StencilFallback` — the affine stencil tier (22 sites)
 
