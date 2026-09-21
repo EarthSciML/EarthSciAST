@@ -167,6 +167,20 @@ function fixture_run(doc, fx)
             _float_map(get(t, :parameter_overrides, Dict())), times)
 end
 
+# The flattened system's parameter and state names, or `nothing` when the
+# document cannot be flattened here — in which case the caller's keys pass
+# through untouched and `esm_problem` reports the real failure rather than this
+# helper reporting a derived one.
+function flattened_names(path)
+    try
+        flat = flatten(load_path(path))
+        return union(Set{String}(String(n) for n in keys(flat.parameters)),
+                     Set{String}(String(n) for n in keys(flat.state_variables)))
+    catch
+        return nothing
+    end
+end
+
 # Re-attach the scope an inline test's keys were written in.
 #
 # esm-spec §6.6.2 keys a test's `initial_conditions` / `parameter_overrides` by
@@ -174,18 +188,11 @@ end
 # against the whole flattened document, where that locality is gone. A key whose
 # `<model>.<key>` form names a real variable of the flattened system is rewritten
 # to it, and one that does not passes through untouched so `esm_problem` reports
-# on it exactly as it would have. This is what `_scope_to_component` does for
-# the library's own inline-test runner, so both paths resolve a test's keys the
-# same way.
-function scope_to_model(overrides, path, mname)
-    isempty(overrides) && return overrides
-    known = try
-        flat = flatten(load_path(path))
-        union(Set{String}(String(n) for n in keys(flat.parameters)),
-              Set{String}(String(n) for n in keys(flat.state_variables)))
-    catch
-        return overrides            # let `esm_problem` report the real failure
-    end
+# on it exactly as it would have. This is what `_scope_to_component` does for the
+# library's own inline-test runner, so both paths resolve a test's keys the same
+# way.
+function scope_to_model(overrides, known, mname)
+    (isempty(overrides) || known === nothing) && return overrides
     out = Dict{String,Any}()
     for (k, v) in overrides
         q = string(mname, ".", k)
@@ -219,8 +226,10 @@ function model_slots(var_map, mname)
     # A document whose states carry no component namespace at all: report the
     # whole state rather than nothing, so an un-namespaced fixture is a
     # trajectory instead of an empty row nobody can read.
-    isempty(out) && for (name, idx) in var_map
-        push!(out, (idx, String(name)))
+    if isempty(out)
+        for (name, idx) in var_map
+            push!(out, (idx, String(name)))
+        end
     end
     sort!(out; by = first)
     return out
@@ -258,6 +267,18 @@ function time_index(times, t)
 end
 
 function fixture_trajectory(fx, base, compiler)
+    # `observed` carries one series per name in `trajectory.observed`, and `{}`
+    # when the fixture names none — which is every fixture today. A fixture that
+    # NAMES one is a named failure rather than an empty map the runner would
+    # report as a missing field: the trajectory-time observed reader is the piece
+    # to add here, and saying so is more use than a silent hole. Checked before
+    # anything is built, because the answer does not depend on the run.
+    named = [String(n) for n in get(fx.trajectory, :observed, ())]
+    isempty(named) || error(
+        "fixture $(String(fx.id)) names observed fields $(join(named, ", ")), and " *
+        "this adapter reads state rows only; add an output-time observed reader " *
+        "here before that fixture can be gated")
+
     path = joinpath(base, String(fx.path))
     doc = JSON3.read(read(path, String))
     mname = String(fx.model)
@@ -266,9 +287,10 @@ function fixture_trajectory(fx, base, compiler)
     reltol = Float64(integ.reltol)
     abstol = Float64(integ.abstol)
 
+    known = flattened_names(path)
     prob = esm_problem(path, span;
-                       u0 = scope_to_model(ics, path, mname),
-                       p = scope_to_model(pover, path, mname),
+                       u0 = scope_to_model(ics, known, mname),
+                       p = scope_to_model(pover, known, mname),
                        compiler = Symbol(compiler))
     slots = model_slots(prob.var_map, mname)
 
@@ -282,17 +304,6 @@ function fixture_trajectory(fx, base, compiler)
         state[tkey(t)] = Dict{String,Float64}(name => Float64(sol.u[ti][idx])
                                               for (idx, name) in slots)
     end
-
-    # `observed` carries one series per name in `trajectory.observed`, and `{}`
-    # when the fixture names none — which is every fixture today. A fixture that
-    # NAMES one is a named failure rather than an empty map that the runner would
-    # report as a missing field: the trajectory-time observed reader is the piece
-    # to add here, and saying so is more use than a silent hole.
-    named = [String(n) for n in get(fx.trajectory, :observed, ())]
-    isempty(named) || error(
-        "fixture $(String(fx.id)) names observed fields $(join(named, ", ")), and " *
-        "this adapter reads state rows only; add an output-time observed reader " *
-        "here before that fixture can be gated")
 
     return Dict("state_order" => [name for (_, name) in slots],
                 "state" => state,
@@ -310,14 +321,6 @@ function refusal_parts(detail::AbstractString)
     return (String(m.captures[1]), String(m.captures[2]))
 end
 
-# A `compiler_unavailable` is a fact about the BINDING, not about a document, so
-# it is the whole output: the remaining fixtures would each raise the identical
-# error, and a per-fixture answer would read as a coverage backlog instead of a
-# missing compiler.
-struct CompilerUnavailable <: Exception
-    reason::String
-end
-
 function main()
     manifest_path, output_path, compiler = parse_args(ARGS)
     manifest = JSON3.read(read(manifest_path, String))
@@ -333,6 +336,10 @@ function main()
         catch err
             if err isa SimulateError &&
                err.code == ERROR_CODES.COMPILER_UNAVAILABLE
+                # A fact about the BINDING, not about a document, so it becomes
+                # the whole output and the remaining fixtures are not attempted:
+                # each would raise the identical error, and a per-fixture answer
+                # would read as a coverage backlog instead of a missing compiler.
                 unavailable = err.msg
                 break
             elseif err isa TreeWalkError &&
