@@ -413,9 +413,11 @@ def _validate_fixture_factory(classes: dict):
         if not isinstance(fx.get("model"), str) or not fx["model"]:
             raise ManifestError(f"{path}: fixtures[{fid}].model must be a non-empty string")
         integ = fx.get("integration")
-        if not isinstance(integ, dict) or not isinstance(
-            integ.get("reltol"), (int, float)
-        ) or not isinstance(integ.get("abstol"), (int, float)):
+        if (
+            not isinstance(integ, dict)
+            or not isinstance(integ.get("reltol"), (int, float))
+            or not isinstance(integ.get("abstol"), (int, float))
+        ):
             raise ManifestError(
                 f"{path}: fixtures[{fid}].integration must carry numeric reltol and abstol "
                 "(a conformance tier has an opinion about what it passes to solve)"
@@ -786,9 +788,7 @@ def compare_observed(
                 problems.append(f"{kind}: observed {name!r} missing save time {tk!r}")
                 continue
             rtol, atol = row_band(fixture, classes, {bare: _num(wv)})
-            w, p = compare_row(
-                {bare: wv}, row, rtol, atol, f"{kind}[observed {name} t={tk}]"
-            )
+            w, p = compare_row({bare: wv}, row, rtol, atol, f"{kind}[observed {name} t={tk}]")
             worst = max(worst, w)
             problems += p
     return worst, problems
@@ -968,7 +968,9 @@ def golden_shape_problems(
                 problems.append(f"golden.state[{t!r}][{name!r}] is not a finite number")
         for name in bare:
             if order and name not in order:
-                problems.append(f"golden.state[{t!r}] carries {name!r}, which is not in state_order")
+                problems.append(
+                    f"golden.state[{t!r}] carries {name!r}, which is not in state_order"
+                )
     named_observed = list((fixture.get("trajectory") or {}).get("observed") or [])
     observed = golden.get("observed", {})
     if not isinstance(observed, dict):
@@ -1012,8 +1014,9 @@ def gate_fixture(
         return {
             "status": "error",
             "error": str(produced["error"]),
-            "problems": [f"{binding}/{compiler} could not evaluate this fixture: "
-                         f"{produced['error']}"],
+            "problems": [
+                f"{binding}/{compiler} could not evaluate this fixture: {produced['error']}"
+            ],
         }
     if produced.get("status") == "refused":
         rule = produced.get("rule") or "(adapter named no rule)"
@@ -1391,7 +1394,9 @@ def self_test(manifest_path: Path) -> int:
             f"fixture/{fx['id']}",
             (
                 f"{len(saveat)} save time(s) and {len(anchors)} anchor point(s), every one on a "
-                f"saved row" if not off_grid else f"anchor times {off_grid} are not saved rows"
+                f"saved row"
+                if not off_grid
+                else f"anchor times {off_grid} are not saved rows"
             ),
         )
 
@@ -1723,8 +1728,7 @@ def _print_summary(report: dict) -> None:
                     )
                 elif st == "excluded":
                     print(
-                        f"        excluded {fid:34s} refused: {fr.get('rule')} — "
-                        f"{fr.get('reason')}"
+                        f"        excluded {fid:34s} refused: {fr.get('rule')} — {fr.get('reason')}"
                     )
                 elif st == "error":
                     print(f"        ERROR    {fid}: {fr.get('error')}")
@@ -1751,8 +1755,7 @@ def _print_summary(report: dict) -> None:
             )
     if report.get("manifest_excluded"):
         print(
-            f"  manifest exclusions: {len(report['manifest_excluded'])} fixture(s) not in "
-            "this tier"
+            f"  manifest exclusions: {len(report['manifest_excluded'])} fixture(s) not in this tier"
         )
 
 
