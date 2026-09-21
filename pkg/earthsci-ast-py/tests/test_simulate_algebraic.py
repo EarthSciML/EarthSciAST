@@ -34,6 +34,7 @@ from earthsci_ast.esm_types import (
     ReactionSystem,
     Species,
 )
+from earthsci_ast.expression import UnsupportedConstructError
 from earthsci_ast.problem import ReturnCode, esm_problem, solve
 from earthsci_ast.sympy_bridge import SimulationError
 
@@ -194,12 +195,10 @@ def test_simulate_same_lhs_dae_alias_eliminates_to_unbound_state():
         models={"Eq": model},
     )
 
-    # The same-LHS rewrite into an alias for the unbound state is SymPy's
-    # algebraic elimination, so this asks for that compiler by name.
+    # The rewrite into an alias for the unbound state IS algebraic elimination,
+    # and `sympy` is the compiler that has one.
     result = solve(
-        esm_problem(
-            file, (0.0, 1.0), p={"T": 298.0, "H_plus": 1.0e-4}, u0={}, compiler="sympy"
-        )
+        esm_problem(file, (0.0, 1.0), p={"T": 298.0, "H_plus": 1.0e-4}, u0={}, compiler="sympy")
     )
     assert result.retcode is ReturnCode.Success, f"solve() did not succeed: {result.message}"
 
@@ -208,6 +207,21 @@ def test_simulate_same_lhs_dae_alias_eliminates_to_unbound_state():
     assert np.isclose(result.y[k_idx, 0], 1.0e-8, rtol=1e-10)
     # OH_minus = K_w / H_plus = 1e-8 / 1e-4 = 1e-4
     assert np.isclose(result.y[oh_idx, 0], 1.0e-4, rtol=1e-10)
+
+    # The NumPy compilers have no elimination pass, so they REFUSE the document
+    # rather than integrate it with `OH_minus` frozen. That is what this system
+    # used to do: it returned Success with `K_w = 0` and `OH_minus = 0` — the
+    # right shape of answer, every number wrong, and nothing said so.
+    for compiler in (None, "native", "interpreter"):
+        with pytest.raises(UnsupportedConstructError) as excinfo:
+            esm_problem(
+                file, (0.0, 1.0), p={"T": 298.0, "H_plus": 1.0e-4}, u0={}, compiler=compiler
+            )
+        assert excinfo.value.code == "unsupported_construct"
+        message = str(excinfo.value)
+        assert "Eq.OH_minus" in message
+        # The refusal names the compiler that CAN run it.
+        assert "compiler='sympy'" in message
 
 
 def test_simulate_pure_ode_model_unaffected_by_algebraic_pass():

@@ -130,9 +130,7 @@ def _build(text: str, compiler: str | None = None):
     the whole point of the keyword — so a test that wants a particular engine
     asks for it here rather than steering a router into it.
     """
-    return esm_problem(
-        load_string(text), model_name="M", tspan=(0.0, 1.0), compiler=compiler
-    )
+    return esm_problem(load_string(text), model_name="M", tspan=(0.0, 1.0), compiler=compiler)
 
 
 # ---------------------------------------------------------------------------
@@ -140,21 +138,23 @@ def _build(text: str, compiler: str | None = None):
 # ---------------------------------------------------------------------------
 
 
-def test_unsolvable_algebraic_constraint_is_refused():
-    """A constraint `sp.solve` cannot invert determines `z` and nothing else.
+@pytest.mark.parametrize("compiler", [None, "native", "interpreter", "sympy"])
+def test_unsolvable_algebraic_constraint_is_refused(compiler):
+    """A constraint determining `z` and nothing else, refused under EVERY compiler.
 
     Dropping it leaves `z` at its default for the whole run and reports that as
     the answer, so the build is refused and the equation named.
 
-    This is the SymPy compiler's refusal, and §5.8 keeps it there: `sympy` "
-    "refuses an algebraic constraint it cannot solve rather than dropping the
-    equation". The NumPy compilers have no algebraic solve to fail at and so
-    have never checked this shape — a gap the strict `native` default makes
-    reachable by DEFAULT rather than one it creates, and one that belongs to
-    whoever gives the array engine a constraint check.
+    The two compilers refuse it for different reasons, and both are the right
+    one. `sympy` cannot INVERT the constraint (`sp.solve` meets three generators
+    and gives up). The NumPy compilers cannot solve an algebraic constraint at
+    all — they have no elimination pass — so any second whole definition that
+    determines an otherwise-undefined unknown is out of their reach. What must
+    not happen, under the DEFAULT above all, is the third thing: building it and
+    integrating with `z` frozen.
     """
     with pytest.raises(UnsupportedConstructError) as excinfo:
-        _build(UNSOLVABLE_CONSTRAINT, "sympy")
+        _build(UNSOLVABLE_CONSTRAINT, compiler)
     message = str(excinfo.value)
     assert excinfo.value.code == "unsupported_construct"
     # The equation and the unknown it was to determine are both named.
@@ -163,18 +163,19 @@ def test_unsolvable_algebraic_constraint_is_refused():
     assert "exp(M.z)" in message
 
 
-def test_second_definition_binding_no_unknown_is_refused():
+@pytest.mark.parametrize("compiler", [None, "native", "interpreter", "sympy"])
+def test_second_definition_binding_no_unknown_is_refused(compiler):
     """A second definition that binds no unknown is a count mismatch, not a no-op.
 
     The document is state-free, which is the branch `esm_problem` tolerates a
     SymPy lowering failure in — a coded REFUSAL must still come through it.
 
-    Named on `sympy` for the reason the unsolvable-constraint test above gives:
-    the count check is the SymPy bridge's, and the array engine does not carry
-    one.
+    `M.K ~ 2·M.p` binds no unknown `M.K ~ M.p` did not, so the count is what is
+    wrong and the check belongs at the front door, ahead of every compiler —
+    which is also where `validate()` answers the same way.
     """
     with pytest.raises(SimulationError) as excinfo:
-        _build(REDUNDANT_SECOND_DEFINITION, "sympy")
+        _build(REDUNDANT_SECOND_DEFINITION, compiler)
     message = str(excinfo.value)
     assert "equation_count_mismatch" in message
     assert "M.K" in message

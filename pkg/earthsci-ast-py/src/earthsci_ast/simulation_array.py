@@ -689,6 +689,117 @@ def _algebraically_defined_states(flat: FlattenedSystem, vi_var_names: set[str])
     return bare_defined - differentiated - set(vi_var_names)
 
 
+def whole_definition_target(lhs: Expr) -> str | None:
+    """The unknown a WHOLE-VARIABLE definition defines, or ``None``.
+
+    Two spellings define a whole unknown: a bare-string LHS (``x ~ body``,
+    esm-spec §6.3.1) and a derivative on a bare name (``D(x) ~ body``). Anything
+    else defines a SLICE or nothing: ``index(u, i) ~ …`` and an ``faq``-LHS write
+    a box of cells, and several of those legitimately tile one variable (a
+    stencil interior plus its two boundaries is three equations for one unknown),
+    so they are deliberately not counted. ``ic(…)`` is an initial value rather
+    than a definition, and implicit forms define nothing at all.
+
+    This is the unit both redundancy checks turn on, because a SECOND whole
+    definition of an already-whole-defined unknown is the one shape that cannot
+    be a tiling.
+    """
+    if isinstance(lhs, str):
+        return lhs
+    if not isinstance(lhs, ExprNode):
+        return None
+    if is_aggregate_op(lhs.op):
+        return None
+    if lhs.op == "D" and lhs.args and isinstance(lhs.args[0], str):
+        return lhs.args[0]
+    return None
+
+
+def classify_second_whole_definition(
+    flat: FlattenedSystem, vi_var_names: Iterable[str] = ()
+) -> tuple[str, FlattenedEquation, FlattenedEquation, str, tuple[str, ...]] | None:
+    """The first equation that WHOLE-defines an unknown an earlier one already
+    did, classified by what it actually binds. ``None`` when there is none.
+
+    Two equations defining one unknown are not automatically a fault — esm-spec
+    §4.9.4 counts equations against unknowns, and which fault it is depends on
+    whether the second equation determines something ELSE:
+
+    * ``"unbalanced"`` — every unknown the second equation mentions is already
+      determined, so it binds nothing: one more equation than there are unknowns
+      to bind (``equation_count_mismatch``). Keeping either definition runs a
+      model the document does not describe.
+    * ``"constraint"`` — the second equation mentions an unknown with no
+      defining equation of its own, so it is an implicit ALGEBRAIC CONSTRAINT
+      determining that unknown. A legitimate differential-algebraic system
+      (``K = f(T)`` and ``K = [H+]·[OH-]``, which determines ``[OH-]``), and
+      runnable only by a compiler that can solve it.
+
+    Returns ``(kind, first, second, name, undetermined)``; ``undetermined`` is
+    the unknowns the second equation would have to determine.
+    """
+    seen: dict[str, FlattenedEquation] = {}
+    clash: tuple[FlattenedEquation, FlattenedEquation, str] | None = None
+    defined: set[str] = set()
+    for eq in flat.equations:
+        name = whole_definition_target(eq.lhs)
+        if name is None:
+            continue
+        defined.add(name)
+        if name in seen:
+            if clash is None:
+                clash = (seen[name], eq, name)
+            continue
+        seen[name] = eq
+    if clash is None:
+        return None
+    first, second, name = clash
+    unknowns = (set(flat.state_variables) | set(flat.observed_variables)) - set(vi_var_names)
+    undetermined = tuple(sorted((unknowns - defined) & _expr_referenced_names(second.rhs)))
+    kind = "constraint" if undetermined else "unbalanced"
+    return kind, first, second, name, undetermined
+
+
+def _assert_no_unsolved_algebraic_constraint(
+    flat: FlattenedSystem, vi_var_names: Iterable[str] = ()
+) -> None:
+    """Refuse a differential-algebraic system this interpreter cannot solve.
+
+    A second whole definition of an unknown, whose right-hand side names an
+    unknown nothing else defines, is an algebraic constraint determining that
+    unknown — ``K_w ~ H_plus·OH_minus`` beside ``K_w ~ f(T)`` determines
+    ``OH_minus``. Solving it means inverting the equation, which the SymPy
+    compiler does and the NumPy interpreter cannot: there is no elimination pass
+    here, so the constrained unknown reaches no slot, stays at its declared
+    default, and the run reports that as the answer with
+    :attr:`~earthsci_ast.simulation_common.ReturnCode.Success`.
+
+    That is a WRONG answer rather than a missing one, which esm-spec §9.6.6 makes
+    a named diagnostic rather than a silent outcome. Refused at construction, per
+    esm-libraries-spec §2.5.2.
+
+    The narrowness is the point. Only a SECOND WHOLE definition is examined, so a
+    stencil that tiles one variable over several indexed equations is untouched,
+    and only an unknown that nothing else defines counts, so a constant state —
+    an unknown with no derivative, which is ordinary and common — is untouched.
+    """
+    found = classify_second_whole_definition(flat, vi_var_names)
+    if found is None or found[0] != "constraint":
+        return
+    _kind, _first, second, name, undetermined = found
+    target = undetermined[0]
+    raise UnsupportedConstructError(
+        "algebraic constraint",
+        f"`{_expr_to_string(second.lhs)} ~ {_expr_to_string(second.rhs)}` is a second "
+        f"definition of {name!r}, so what it actually determines is {target!r} — and "
+        f"{target!r} has no defining equation of its own. Inverting it for {target!r} "
+        f"needs algebraic elimination, which this interpreter does not have; without "
+        f"it {target!r} would stay at its declared default for the whole run and be "
+        f"reported as the answer. Build with compiler='sympy', which solves it,",
+        "Python array interpreter",
+    )
+
+
 def _assert_driver_equations_are_appliable(
     equations: list[FlattenedEquation],
     state_layout: dict[str, slice],
@@ -2535,6 +2646,11 @@ def _build_numpy_rhs(
     # which is also how the SymPy pathway recovers it, so the three bindings
     # answer alike.
     alg_state_names = _algebraically_defined_states(flat, vi_var_names)
+    # A second whole definition that determines an otherwise-undefined unknown is
+    # an algebraic constraint, and this interpreter has no elimination pass to
+    # solve one. Checked after the reclassification above, because that is what
+    # settles which unknowns have a definition at all.
+    _assert_no_unsolved_algebraic_constraint(flat, vi_var_names)
     state_names = [
         n
         for n in _integrated_state_names(flat)

@@ -98,6 +98,7 @@ from .simulation_array import (
     _NumpyRhsBuild,
     _resolve_index_set_shape,
     _simulate_with_numpy,
+    classify_second_whole_definition,
     probe_output_time_observeds,
     rule_label,
 )
@@ -869,7 +870,9 @@ def _esm_problem_under(
     # The loader- and discrete-provider engines rebuild the right-hand side at
     # every cadence boundary — a refreshed forcing changes the const-hoisted
     # geometry the build folds in — so their compile belongs to the segment, not
-    # to construction. They keep the provider objects instead.
+    # to construction. They keep the provider objects instead, and construction
+    # builds the FIRST segment below so the compiler still has something to
+    # refuse here rather than inside a run.
 
     # esm-libraries-spec §2.5.10: the compiler's refusal "covers every
     # evaluation the compiler performs for the Problem, not the right-hand side
@@ -881,7 +884,7 @@ def _esm_problem_under(
     # hoist and the static observeds ran inside `_build_numpy_rhs` above, which
     # is where the census found six sevenths of this binding's per-cell landings.
     if build is not None:
-        _exercise_every_evaluation(flat, build, t0, loader_arrays=merged)
+        exercise_every_evaluation(flat, build, t0, loader_arrays=merged)
 
     return EsmProblem(
         flat=flat,
@@ -981,7 +984,7 @@ def _refuse_array_document_under_sympy(flat: FlattenedSystem) -> None:
             )
 
 
-def _exercise_every_evaluation(
+def exercise_every_evaluation(
     flat: FlattenedSystem,
     build: _NumpyRhsBuild,
     t0: float,
@@ -1144,6 +1147,7 @@ def _assert_no_doubly_defined_state(flat: FlattenedSystem) -> None:
             bare_targets.setdefault(eq.lhs, eq)
     clash = sorted(set(diff_targets) & set(bare_targets))
     if not clash:
+        _assert_no_redundant_definition(flat)
         return
     name = clash[0]
     diff_eq = diff_targets[name]
@@ -1156,6 +1160,37 @@ def _assert_no_doubly_defined_state(flat: FlattenedSystem) -> None:
         f"system has one more equation than it has unknowns to bind; keeping the "
         f"derivative and dropping the constraint would run a model the document does "
         f"not describe. Remove one of the two definitions."
+    )
+
+
+def _assert_no_redundant_definition(flat: FlattenedSystem) -> None:
+    """Refuse a second WHOLE definition of an unknown that binds nothing new.
+
+    The sibling above catches one shape of it — a derivative equation beside a
+    bare-LHS one. This catches the rest: two bare-LHS definitions of one unknown,
+    or two derivative equations on it. ``M.K ~ M.p`` beside ``M.K ~ 2·M.p`` is
+    two equations for one unknown, which esm-spec §4.9.4 counts as unbalanced
+    and :func:`earthsci_ast.validate` reports the same way.
+
+    Only the case that binds NOTHING NEW is refused here. A second definition
+    whose right-hand side names an unknown nothing else defines is a
+    differential-algebraic constraint determining that unknown, not a redundant
+    equation — a legitimate system, which the SymPy compiler solves and the NumPy
+    interpreter refuses on its own grounds
+    (``simulation_array._assert_no_unsolved_algebraic_constraint``). Refusing it
+    here would take a document away from the compiler that can run it.
+    """
+    found = classify_second_whole_definition(flat)
+    if found is None or found[0] != "unbalanced":
+        return
+    _kind, first, second, name, _undetermined = found
+    raise _unbalanced(
+        f"unknown {name!r} is defined twice — by "
+        f"`{_expr_to_string(first.lhs)} ~ {_expr_to_string(first.rhs)}` and by "
+        f"`{_expr_to_string(second.lhs)} ~ {_expr_to_string(second.rhs)}`. "
+        f"esm-spec §4.9.4 counts an equation whichever form its LHS takes, and the "
+        f"second binds no unknown the first did not, so this system has one more "
+        f"equation than it has unknowns to bind. Remove one of the two definitions."
     )
 
 
@@ -1671,7 +1706,7 @@ def remake(
                 sample_time=prob.sample_time,
                 build_only=True,
             )
-            _exercise_every_evaluation(
+            exercise_every_evaluation(
                 prob.flat, build, prob.sample_time, loader_arrays=prob.const_arrays
             )
         elif rebind and prob.engine == "scalar":
