@@ -41,7 +41,15 @@ const _ESS_BO = EarthSciAST
         tspan = (Float64(golden["cadence"]["tspan"][1]), Float64(golden["cadence"]["tspan"][2]))
         traj = golden["trajectory"]
         atimes = sort!(Float64[parse(Float64, String(k)) for k in keys(traj) if String(k) != "comment"])
-        prob = _ESS_BO.esm_problem(fixture, tspan; inspect = insp)
+        # `compiler=:interpreter`: this fixture's `darea` is a `makearray`
+        # stencil, which the whole-array setup materializer lowers once per
+        # output cell — a construction-time tree walk per cell that the strict
+        # `native` refuses (API_SPEC §5.8). The subject here is the §5.12
+        # setup-field and trajectory goldens, not which compiler ran, so it is
+        # measured under the reference evaluator, as CONFORMANCE_SPEC §5.44 has
+        # every non-compiler conformance stage pin.
+        prob = _ESS_BO.esm_problem(fixture, tspan; inspect = insp,
+                                   compiler = :interpreter)
         r = solve(prob, Tsit5(); reltol = 1e-10, abstol = 1e-12, saveat = atimes)
         @test SciMLBase.successful_retcode(r)
 

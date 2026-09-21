@@ -230,9 +230,12 @@ _pit_from_file_assert(refdict; reduce="L2_error", abs_tol=1e-12) =
         write(prob, JSON3.write(doc))
 
         # Path input: base_dir defaults to the .esm file's directory.
+        # `compiler=:interpreter` for the same reason `_pit_run` passes it: the
+        # fixture seeds from a coordinate expression.
         results = run_inline_tests(prob; model_name="M",
                                 alg=OrdinaryDiffEqTsit5.Tsit5(),
-                                reltol=1e-12, abstol=1e-14)
+                                reltol=1e-12, abstol=1e-14,
+                                compiler=:interpreter)
         @test length(results) == 2
         # Identical evaluation machinery seeded the ic, so the diff is 0.
         for r in results

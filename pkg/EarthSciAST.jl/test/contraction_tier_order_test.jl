@@ -108,8 +108,17 @@ function _cto_build(NI, NJ, NK; env = Dict{String,String}())
         _CTO_ESS._BENCH_ON[] = true
         local f, u0, p, vm
         try
-            f, u0, p, _, vm = build_evaluator(doc; initial_conditions = ics,
-                                              const_arrays = Dict("dp" => dp))
+            # Under the NON-STRICT native plan, because one case here routes to
+            # the whole-array contraction nest and the strict default refuses
+            # an equation that tier accepts — its runner walks the tree once per
+            # output cell (API_SPEC §5.8). `array_contraction_test.jl` pins that
+            # refusal; what this file compares is tier ROUTING, which the
+            # refusal would hide rather than measure.
+            f, u0, p, _, vm = _CTO_ESS._with_plan_override(
+                _CTO_ESS._nonstrict_native_plan()) do
+                build_evaluator(doc; initial_conditions = ics,
+                                const_arrays = Dict("dp" => dp))
+            end
         finally
             _CTO_ESS._BENCH_ON[] = false
         end
