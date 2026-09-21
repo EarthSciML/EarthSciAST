@@ -623,3 +623,109 @@ fn compiled_datetime_family_matches_the_interpreter() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// esm-spec §9.2 `interp.*`
+// ---------------------------------------------------------------------------
+
+/// The `interp.*` family through the emitter, against this crate's
+/// interpreter.
+///
+/// Built from an inline document rather than added to the tier manifest: the
+/// manifest is the cross-language tier's, owned by its coordinator, and this
+/// gate is about the RUST emitter's new arm. The three entries are exercised
+/// in one document so a single probe sweep covers all of them.
+///
+/// The comparison is BITWISE, not tolerance-based, and deliberately so. The
+/// blend is three IEEE-754 operations in the order §9.2 pins, and the cell
+/// search and the clamps are exact, so the only thing that could move a bit
+/// here is XLA contracting `a + w * (b - a)` into an FMA. §9.2 permits that
+/// and prices it at ~2 ulp — so if this assertion ever fires with a one- or
+/// two-ulp difference, the fix is to relax THIS test to the spec's
+/// `{abs: 0, rel: 4e-16}`, not to change the lowering.
+#[test]
+fn interp_lowers_and_matches_the_interpreter() {
+    if !runtime_available() {
+        return;
+    }
+    // A non-uniform axis (so a wrong cell cannot hide behind even spacing), a
+    // 3x4 bilinear grid, and a searchsorted table with a duplicate run.
+    let doc = r#"{
+  "esm": "1.0.0",
+  "metadata": { "name": "XlaInterpProbe", "description": "One state per §9.2 interp entry, each reading query states, so a probe places every query independently." },
+  "models": { "M": { "variables": {
+      "qa": { "type": "unknown", "units": "1", "default": 0.0 },
+      "qb": { "type": "unknown", "units": "1", "default": 0.0 },
+      "lin": { "type": "unknown", "units": "1", "default": 0.0 },
+      "bil": { "type": "unknown", "units": "1", "default": 0.0 },
+      "ss":  { "type": "unknown", "units": "1", "default": 0.0 }
+    },
+    "equations": [
+      { "lhs": { "op": "D", "args": ["qa"], "wrt": "t" }, "rhs": 0.0 },
+      { "lhs": { "op": "D", "args": ["qb"], "wrt": "t" }, "rhs": 0.0 },
+      { "lhs": { "op": "D", "args": ["lin"], "wrt": "t" },
+        "rhs": { "op": "fn", "name": "interp.linear", "args": [
+          { "op": "const", "args": [], "value": [10.0, 20.0, 40.0, 80.0, 160.0] },
+          { "op": "const", "args": [], "value": [0.0, 1.0, 2.5, 3.0, 7.0] },
+          "qa" ]} },
+      { "lhs": { "op": "D", "args": ["bil"], "wrt": "t" },
+        "rhs": { "op": "fn", "name": "interp.bilinear", "args": [
+          { "op": "const", "args": [], "value": [[0.0, 1.0, 2.0, 3.0], [10.0, 11.5, 12.0, 13.0], [20.0, 21.0, 22.5, 23.0]] },
+          { "op": "const", "args": [], "value": [0.0, 1.0, 2.0] },
+          { "op": "const", "args": [], "value": [0.0, 10.0, 25.0, 30.0] },
+          "qa", "qb" ]} },
+      { "lhs": { "op": "D", "args": ["ss"], "wrt": "t" },
+        "rhs": { "op": "fn", "name": "interp.searchsorted", "args": [
+          "qa", { "op": "const", "args": [], "value": [1.0, 2.0, 2.0, 2.0, 4.0, 5.0] } ]} }
+    ] } }
+}"#;
+    let file = load_string(doc).expect("the probe document loads");
+    let compiled = ArrayCompiled::from_file(&file).expect("it compiles");
+    let program = match CompiledRhs::compile(&compiled) {
+        Ok(p) => p,
+        Err(CompileRhsError::Refused(e)) => {
+            panic!("the emitter refused rule {}: {}", e.rule, e.reason)
+        }
+        Err(CompileRhsError::Runtime(m)) => panic!("xla runtime: {m}"),
+    };
+    let names: Vec<String> = compiled.state_variable_names().to_vec();
+    let bare = |n: &str| {
+        names
+            .iter()
+            .position(|s| s == n || s.split_once('.').map(|x| x.1) == Some(n))
+            .unwrap_or_else(|| panic!("no state {n:?} in {names:?}"))
+    };
+    let (ia, ib) = (bare("qa"), bare("qb"));
+    let params: HashMap<String, f64> = HashMap::new();
+    let pv = compiled.debug_resolve_params(&params);
+
+    // Below range, on the first knot, mid-cell, on each interior knot, on the
+    // last knot, above range — in both axes, and on the duplicate run of the
+    // searchsorted table. NaN is left out: the tier compares `f64` bits, and a
+    // NaN payload is not a lowering property (the interpreter's comes out of
+    // Rust's arithmetic, the compiled one out of XLA's).
+    let qas = [-2.0, 0.0, 0.5, 1.0, 2.0, 2.5, 2.75, 3.0, 5.0, 7.0, 9.0];
+    let qbs = [-5.0, 0.0, 4.0, 10.0, 18.0, 25.0, 27.5, 30.0, 51.0];
+    let mut probes = 0usize;
+    for a in qas {
+        for b in qbs {
+            let mut u = vec![0.0f64; names.len()];
+            u[ia] = a;
+            u[ib] = b;
+            let (want, _) = compiled.debug_eval_rhs(&u, 0.0, &params, false);
+            let got = program.eval(&u, &pv, 0.0).expect("compiled eval");
+            assert_eq!(got.len(), want.len());
+            for (i, (g, w)) in got.iter().zip(want.iter()).enumerate() {
+                assert_eq!(
+                    g.to_bits(),
+                    w.to_bits(),
+                    "interp probe (qa={a}, qb={b}) tendency {}: compiled {g:.17e} vs \
+                     interpreter {w:.17e}",
+                    names[i]
+                );
+            }
+            probes += 1;
+        }
+    }
+    eprintln!("interp: {probes} probes, bit-identical");
+}
