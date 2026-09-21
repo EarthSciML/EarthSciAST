@@ -650,8 +650,7 @@ function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
                    time_slots::AbstractVector{Int},
                    dyn_slots::AbstractVector{Int},
                    scan_folds::AbstractVector{_ScanFold}=_ScanFold[],
-                   array_contractions::AbstractVector{_ArrayContraction}=
-                       _ArrayContraction[])
+                   array_contractions=_make_contraction_section(_ArrayContraction[]))
     # Build observability: with ESS_OOP_PROBE=1, record how each array kernel would
     # plan for the vectorized (traceable) `:oop` form — `:oop_vec` when it
     # vectorizes whole-array, else `:oopdecl_<reason>` — into the cascade tally, so

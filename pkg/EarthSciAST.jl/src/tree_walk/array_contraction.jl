@@ -29,6 +29,13 @@
 # `Vector{StepRange}` would re-box a range object per cell). `outs[c]` is the flat
 # `du` slot of output cell `c`; `body` folds the contracted indices for the cell
 # the counters currently name.
+#
+# `cg` is the GENERATED form of this same nest (array_contraction_codegen.jl), or
+# `nothing` when the emitter declined it and the walker below runs it. It holds an
+# `_ACGen`, whose type differs per emitted function; the field is left untyped
+# because the struct has to stay concrete for `Vector{_ArrayContraction}`, and
+# nothing reads it on a right-hand-side call — the section lifts the emitted ones
+# into a tuple at build, so every generated call is statically dispatched.
 struct _ArrayContraction
     refs::Vector{Base.RefValue{Int}}
     los::Vector{Int}
@@ -36,6 +43,7 @@ struct _ArrayContraction
     lens::Vector{Int}
     outs::Vector{Int}
     body::_Node
+    cg::Any
 end
 
 # Point the output loop counters at cell `c` (1-based, product order). Derived
@@ -56,7 +64,9 @@ end
     return nothing
 end
 
-# Run every whole-array contraction of this build, in place over `du`. Slots are
+# Run the whole-array contractions still on the WALKER, in place over `du` — the
+# ones the generated form declined, which only a non-strict compiler keeps (the
+# section in array_contraction_codegen.jl runs the emitted ones). Slots are
 # disjoint from every other section's (each cell is marked `covered` at build
 # time), so the position in the section order is free; it runs behind the kernel
 # section, where scan.jl's folds also sit.

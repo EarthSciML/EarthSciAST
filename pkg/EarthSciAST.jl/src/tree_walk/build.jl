@@ -2994,7 +2994,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # freshly allocated extended vector, whatever the in-place buffer held
     # before — and folds it into an accumulator it then discards.
     # `mat_levels` carries the `:inplace` shape
-    # `(scalars, _KernelSection, scans, array_contractions)` that
+    # `(scalars, _KernelSection, scans, _ContractionSection)` that
     # `_fill_obs_levels!` consumes; `mat_levels_oop` carries the same fills as
     # `(scalars, kernels, oop_plans, scans, array_contractions)` because the
     # out-of-place runners take the kernel and its plan separately rather than a
@@ -3036,7 +3036,8 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
                        lvl_scans, lvl_acs))
             else
                 push!(mat_levels,
-                      (lvl_scalars, _make_kernel_section(merged), lvl_scans, lvl_acs))
+                      (lvl_scalars, _make_kernel_section(merged), lvl_scans,
+                       _make_contraction_section(lvl_acs)))
             end
         end
     end
@@ -3146,7 +3147,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
         _make_rhs_with_obs_buffers(
             _make_rhs(rhs_list, scalar_prelude, scalar_cache, acc_kernels,
                       const_slots, time_slots, dyn_slots, scan_folds,
-                      array_contractions),
+                      _make_contraction_section(array_contractions)),
             _ObsExtVec(n_total), n_states, Tuple(mat_levels))
     elseif form === :oop
         # `pgather` (raw `param_arrays` buffers + discrete-cadence caches) rides
@@ -4044,6 +4045,10 @@ const _CASCADE_ROUTING_TIER = Dict{Symbol,Symbol}(
     :affine_fused_retry => :affine,
     :scan               => :scan,
     :array_contraction  => :array_contraction,
+    # …and the same tier once its nest is EMITTED rather than walked
+    # (array_contraction_codegen.jl), which is the only form a compiled
+    # compiler accepts.
+    :array_contraction_codegen => :array_contraction_codegen,
     # A per-cell SCALARIZE at build whose cell entries then go to the codegen
     # tier as ordinary access kernels — build cost, not right-hand-side cost.
     :percell_loop       => :percell_build,
@@ -4362,21 +4367,15 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
                 const_registry=const_registry, pgather=pgather,
                 param_sym_set=param_sym_set, reg_funcs=reg_funcs)
         if ac !== nothing
-            # §2.5.10: on this tier SUCCESS is what leaves a tree walk in the
-            # right-hand side. `_apply_array_contraction!` evaluates the
-            # compiled body once per OUTPUT CELL on every call
-            # (array_contraction.jl) and no codegen tier ever sees the section,
-            # so a compiler that promises compiled tiers cannot take it.
-            _compiler_is_strict() && _refuse_rule(
-                _faq_debug_label(lhs_body, idx_names, range_iters),
-                "the whole-array contraction tier accepted this equation, and " *
-                "that tier's runner walks the expression tree once per output " *
-                "cell on every right-hand-side call — no generated form for it " *
-                "exists yet, so it is compiler backlog rather than a property " *
-                "of the document. Build with compiler=:interpreter to run it, " *
-                "or lower the contracted extent below the tier's admission " *
-                "floor")
-            _tally_cascade!(:array_contraction)
+            # Which of the tier's two forms took the equation. The GENERATED nest
+            # is a compiled right-hand side like any other kernel; the walker is
+            # one `_eval_node` per output cell per call (array_contraction.jl),
+            # which §2.5.10 does not let a compiled compiler keep — so a strict
+            # compiler has already refused inside
+            # `_try_compile_array_contraction`, and only a non-strict one can be
+            # standing here with `cg === nothing`.
+            _tally_cascade!(ac.cg === nothing ? :array_contraction :
+                            :array_contraction_codegen)
             get(ENV, "ESS_STENCIL_DEBUG", "") == "1" &&
                 (println(stderr, "[ess-array-contraction] FIRED: ",
                          length(ac.outs), " output cells, ",
@@ -4496,11 +4495,28 @@ function _try_compile_array_contraction(lhs_body::OpExpr, rhs_body::ASTExpr,
         outs[c] = idx
     end
     rngs = [_expand_int_range(ranges_dict[n]) for n in idx_names]
-    return _ArrayContraction(out_refs,
-                             Int[first(r) for r in rngs],
-                             Int[step(r) for r in rngs],
-                             Int[length(r) for r in rngs],
-                             outs, node)
+    los  = Int[first(r) for r in rngs]
+    stps = Int[step(r) for r in rngs]
+    lens = Int[length(r) for r in rngs]
+    # Emit the nest (array_contraction_codegen.jl). The whole equation is ONE
+    # body, so the emission is O(1) in both extents like the nest itself. A
+    # `Symbol` back is the emitter's decline reason: the walker would then run
+    # `node` once per output cell on every right-hand-side call, which
+    # §2.5.10 puts under the refusal rule — named here, where the rule the
+    # cascade has open is still this equation, rather than several stages later
+    # where only "the assembled right-hand side" is left to name.
+    gen = _try_codegen_array_contraction(out_refs, los, stps, lens, outs, node)
+    if gen isa Symbol
+        _compiler_is_strict() && _refuse_rule(
+            _faq_debug_label(lhs_body, idx_names, range_iters),
+            "the whole-array contraction tier accepted this equation, but its " *
+            "generated form declined it ($(gen)), so the nest would walk the " *
+            "expression tree once per output cell on every right-hand-side " *
+            "call. Build with compiler=:interpreter to run it, or grow the " *
+            "emitter to cover this construct")
+        gen = nothing
+    end
+    return _ArrayContraction(out_refs, los, stps, lens, outs, node, gen)
 end
 
 # ---- Stage: faq per-cell fallback ----
