@@ -147,7 +147,7 @@ Then append, in this exact order, each clause only when the field is present:
 ## Associativity and parenthesization (NORMATIVE — added 2026-07-15)
 
 The generic rule (a sub-expression that is an operator node is parenthesized where a leaf
-would not be) leaves two cases that every binding currently gets WRONG. Both are
+would not be) leaves three cases that every binding at some point got WRONG. All are
 correctness bugs, not style, and the fixtures pin the CORRECT answer — do not "fix" the
 fixture to match the code:
 
@@ -157,13 +157,37 @@ fixture to match the code:
   `a^(b^c)`.
 - **`D`'s operand is parenthesized when it is an operator node.**
   `D(x + y)` MUST render `∂(x + y)/∂t`, never `∂x + y/∂t`, which reads as `(∂x) + (y/∂t)`.
+- **A negated SUM or DIFFERENCE MUST be parenthesized** (NORMATIVE — added 2026-09-22).
+  `{op:"-", args:[{op:"+", args:["a","b"]}]}` is `−(a + b)` and MUST render `−(a + b)` /
+  `-(a + b)`; likewise `−(a − b)`. Emitting `−a + b` is a **semantic error**: unary minus
+  binds TIGHTER than `+` and binary `-` (§ "Unary minus" below), so read back, `−a + b`
+  means `(−a) + b`. A negated PRODUCT, QUOTIENT or POWER needs no parentheses, because
+  unary minus binds LOOSER than `*`, `/` and `^`: `−a · b` reads back as
+  `−(a · b)` and `−a^2` as `−(a^2)`, the very nodes that were printed.
 
 Conversely, parentheses are NOT added where precedence already disambiguates: a comparison
 inside an `and`/`or` renders `x > 0 and x < 10`, not `(x > 0) and (x < 10)` (only a
 logical-`or` *argument* is parenthesized — see Generic fallback).
 
-Unary minus IS an operator node, so `{op:"*", args:[{op:"-",args:["a"]}, "b"]}` renders
-`(−a)·b`.
+### Unary minus (NORMATIVE — added 2026-09-22)
+
+Unary `-` binds **tighter than `+` and binary `-`** and **looser than `^`** — the standard
+mathematical reading, and the one `parse_expression` implements (its operand is parsed at
+MULTIPLICATIVE precedence). The printer's parenthesization is the exact inverse, so every
+rendering re-parses to the node it came from:
+
+| AST | Renders | Why |
+|---|---|---|
+| `{op:"+", args:[{op:"-",args:["a"]}, "b"]}` | `−a + b` | unary `-` binds tighter than `+` |
+| `{op:"-", args:[{op:"-",args:["a"]}, "b"]}` | `−a − b` | same, for binary `-` |
+| `{op:"-", args:[{op:"+", args:["a","b"]}]}` | `−(a + b)` | a negated sum MUST keep its parentheses |
+| `{op:"-", args:[{op:"*", args:["a","b"]}]}` | `−a · b` | unary `-` binds looser than `*` |
+| `{op:"-", args:[{op:"^", args:["a",2]}]}` | `−a^2` | unary `-` binds looser than `^` |
+| `{op:"*", args:[{op:"-",args:["a"]}, "b"]}` | `(−a)·b` | unary minus IS an operator node, and `−a · b` would read back as `−(a · b)` |
+| `{op:"^", args:[{op:"-",args:["a"]}, 2]}` | `(−a)^2` | `−a^2` would read back as `−(a^2)` |
+
+A negative *literal* is a number, not a unary-minus node, so it is never parenthesized:
+`{op:"^", args:[{op:"/",args:[300,"T"]}, -1.3]}` renders `(300 / T)^-1.3`.
 
 ## Number formatting (NORMATIVE — added 2026-07-15)
 

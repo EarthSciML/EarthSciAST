@@ -548,13 +548,26 @@ is_function_call_op(op::String) =
     get_operator_precedence(op) == _DISPLAY_FUNCTION_PRECEDENCE
 
 """
-    needs_parentheses(parent_op::String, child::ASTExpr, is_right_operand::Bool=false) -> Bool
+The minimum precedence a unary-minus operand may have and still render WITHOUT
+parentheses — `get_operator_precedence("*")`. It must equal the parser's
+`_TP_UMINUS_MIN` (parse_expression_text.jl), which reads a unary-minus operand
+at multiplicative precedence: render `-(a + b)` without its parentheses and it
+reads back as `(-a) + b`, a different expression. `-a * b` and `-a^2` need none.
+Mirrors `UMINUS_OPERAND_MIN` in pretty-print.ts.
+"""
+const _UMINUS_OPERAND_MIN = 5
+
+"""
+    needs_parentheses(parent_op::String, child::ASTExpr, is_right_operand::Bool=false,
+                      parent_argc::Int=2) -> Bool
 
 Check if parentheses are needed around a subexpression, mirroring
 pretty-print.ts `needsParentheses`. A function-call argument is parenthesized
-only when it is a logical-`or` (loosest precedence).
+only when it is a logical-`or` (loosest precedence). `parent_argc` distinguishes
+a unary `-` from a binary one; it defaults to the binary case.
 """
-function needs_parentheses(parent_op::String, child::ASTExpr, is_right_operand::Bool=false)
+function needs_parentheses(parent_op::String, child::ASTExpr, is_right_operand::Bool=false,
+                           parent_argc::Int=2)
     if isa(child, NumExpr) || isa(child, IntExpr) || isa(child, VarExpr)
         return false
     end
@@ -570,6 +583,13 @@ function needs_parentheses(parent_op::String, child::ASTExpr, is_right_operand::
     # parenthesize the loosest-binding (logical-or) child expressions.
     if is_function_call_op(parent_op)
         return child_prec <= 1
+    end
+
+    # Unary minus parenthesizes exactly the operands the parser would not
+    # re-absorb — a sum, a difference, a comparison, a logical op. See
+    # [`_UMINUS_OPERAND_MIN`](@ref).
+    if parent_op == "-" && parent_argc == 1
+        return child_prec < _UMINUS_OPERAND_MIN
     end
 
     if child_prec < parent_prec
@@ -996,9 +1016,9 @@ _latex_product_sep(args) =
 
 """Format one operand of `op`, parenthesizing per [`needs_parentheses`](@ref)."""
 function _format_operand(op::String, arg::ASTExpr, format::Symbol,
-                         is_right_operand::Bool=false)
+                         is_right_operand::Bool=false, parent_argc::Int=2)
     result = format_expression(arg, format)
-    return needs_parentheses(op, arg, is_right_operand) ? "($result)" : result
+    return needs_parentheses(op, arg, is_right_operand, parent_argc) ? "($result)" : result
 end
 
 # LaTeX function-call: `\left( \right)` only when the argument is tall
@@ -1062,7 +1082,7 @@ end
 function _format_unary_op(node::OpExpr, format::Symbol)
     op = node.op
     arg = node.args[1]
-    fa(a) = _format_operand(op, a, format)
+    fa(a) = _format_operand(op, a, format, false, 1)
 
     if op == "-"
         return format == :unicode ? "−$(fa(arg))" : "-$(fa(arg))"
