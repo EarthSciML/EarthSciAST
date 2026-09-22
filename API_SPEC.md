@@ -591,10 +591,12 @@ document; the message names the compiler, the rule — an equation or an
 observed, component-qualified — and the reason).
 
 **What the emitted program covers, under `xla`.** A binding whose `xla` emits
-only the right-hand side serves the Problem's other evaluations — the
+only the right-hand side must not serve the Problem's other evaluations — the
 build-time materialization of constants and static observeds, the per-segment
-seed, and the observeds reported at output times — from the SAME lowered form
-the emitter was built from, and says so. That is the condition under which the
+seed, and the observeds reported at output times — from an evaluator that
+declines on its own terms, and says which passes the emitted program covers.
+Serving them from whatever the emitter itself consumed satisfies that, since
+it has already been gated. That is the condition under which the
 refusal above means anything: a second evaluator beside the emitted program
 would decline on its own terms and put rules back on a per-cell walk with
 nothing in the report to show for it. In Rust that lowered form is the tape:
