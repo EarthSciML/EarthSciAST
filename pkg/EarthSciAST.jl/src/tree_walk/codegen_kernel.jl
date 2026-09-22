@@ -529,8 +529,10 @@ end
 #
 # A tiny body (≤ `_cg_subcall_fn_min_nodes()`) stays inlined per site, and
 # Julia < 1.12 keeps the pre-tier inlining wholesale — the emitted function is
-# the same inner-`function`-under-RGF mechanism as the split, which boxes and
-# segfaults there (`_cg_split_supported`).
+# the same inner-`function`-under-RGF mechanism as the split's inner-definition
+# transport, which boxes and segfaults there (`_cg_split_supported`). This tier
+# has not been ported to the by-value transport the split takes instead; it
+# ships off, so nothing on those versions depends on it.
 # Canonicalizer/parametrizer for one emitted sub-kernel body
 # (ess-cg-subcall-struct). Rewrites the expression so that everything that
 # varies between two structurally-equal sub-kernels becomes an ARGUMENT:
@@ -1205,26 +1207,30 @@ end
 # node function OOMs a 40 GB host). Loop nests are packed into `@noinline`
 # sub-functions up to this cap so LLVM compiles bounded pieces. Override with
 # ESS_CODEGEN_FN_NODE_CAP; 0 disables splitting (one function, one flat body).
-# A refusal boundary under `native`: on a Julia that cannot split, an oversized
-# body declines to the interpreter, and a decline the overflow emission repeats
-# is a refused rule.
+# Every supported Julia can split (`_cg_split_by_value` picks the transport), so
+# an oversized body is compiled rather than declined, on every version.
 _codegen_fn_node_cap() =
     something(tryparse(Int, get(ENV, "ESS_CODEGEN_FN_NODE_CAP", "")), 20_000)
 
-# Whether this Julia can carry the body split at all. Julia < 1.12 CANNOT, and
-# takes the pre-split path instead: one function per kernel, and an oversized
-# body declines to the interpreter the way it did before ess-iip-split.
+# Whether this Julia can carry an emitted sub-function as an INNER DEFINITION —
+# a `function` written inside the emitted body. Julia < 1.12 cannot, and takes
+# the by-value transport instead (`_cg_split_by_value`); the split itself is
+# available on every version.
 #
-# The split's only mechanism is an inner `function` inside the emitted body, and
-# that body becomes a `RuntimeGeneratedFunction`. RGF rewrites every inner
-# definition into a `Base.Experimental.@opaque` closure — it has to, since the
-# body is compiled inside a `@generated` function, which may not define methods
-# — and an untyped opaque closure is `Core.OpaqueClosure{NTuple{N, Any}}`. On
-# 1.10 and 1.11 that boxes every scalar crossing the boundary, which is a
-# per-cell leak linear in the grid, and a NEST of them (a helper calling a
-# helper) segfaults: the MethodError such a call raises crashes the runtime
-# while it is being constructed. 1.12's optimizer types and elides the closure,
-# which is why the split is allocation-free and stable only there.
+# Why an inner definition is version-dependent. The emitted body becomes a
+# `RuntimeGeneratedFunction`, and RGF rewrites every inner definition into a
+# `Base.Experimental.@opaque` closure — it has to, since the body is compiled
+# inside a `@generated` function, which may not define methods — and an untyped
+# opaque closure is `Core.OpaqueClosure{NTuple{N, Any}}`. On 1.10 and 1.11 that
+# boxes every scalar crossing the boundary, which is a per-cell leak linear in
+# the grid, and a NEST of them (a helper calling a helper) segfaults: the
+# MethodError such a call raises crashes the runtime while it is being
+# constructed. 1.12's optimizer types and elides the closure, which is why the
+# inner-definition transport is allocation-free and stable only there.
+#
+# This also gates the EXPERIMENTAL sub-kernel function tier
+# (`_cg_subcall_fn`/`_cg_cell_fn!`), which emits inner definitions of its own and
+# has not been ported to the by-value transport. That tier ships off.
 _cg_split_supported() = VERSION >= v"1.12"
 
 # The name a by-value build gives the tuple of emitted sub-functions.
