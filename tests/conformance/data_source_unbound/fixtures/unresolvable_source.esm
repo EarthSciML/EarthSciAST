@@ -1,0 +1,75 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "UnresolvableSource",
+    "description": "`Forcing.k` is data-fed from `NoSuchSource`, which the document does not declare. `validate()` reports `data_source_undefined` (esm-spec 8.5) for this document; the case is here because the SIMULATION front doors do not run that validation, and two flatteners drop a loader field whose source does not resolve, which used to leave the parameter looking like an ordinary one bound from `default`. A build MUST refuse: an unresolvable source is a source that is not bound either.",
+    "authors": [
+      "Test Suite"
+    ],
+    "tags": [
+      "conformance",
+      "data_source_unbound",
+      "refusal"
+    ]
+  },
+  "models": {
+    "Forcing": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.1,
+          "shape": [],
+          "update": {
+            "kind": "data",
+            "source": "NoSuchSource",
+            "from": {
+              "file_variable": "k_decay"
+            }
+          }
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              -1.0,
+              "k",
+              "x"
+            ]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "an_unresolvable_source_is_not_a_bound_source",
+          "description": "Same trajectory, same default, one more reason nothing can bind the parameter: the source it names does not exist.",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "assertions": [
+            {
+              "variable": "x",
+              "time": 1.0,
+              "expected": 0.9048374180359595
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
