@@ -41,7 +41,7 @@ Two phases, one harness (mirrors run-pde-simulation-conformance.py):
 
 Usage:
     python3 scripts/run-compiled-rhs-conformance.py --self-test
-    EARTHSCI_COMPILED_RHS_ADAPTER_JULIA="julia pkg/EarthSciAST.jl/scripts/compiled_rhs_adapter.jl" \\
+    EARTHSCI_COMPILED_RHS_ADAPTER_JULIA="julia pkg/EarthSciAST.jl/scripts/compiled_rhs_adapter.jl --compiler native" \\
         python3 scripts/run-compiled-rhs-conformance.py --write-golden --bindings julia
     python3 scripts/run-compiled-rhs-conformance.py --bindings julia,rust,python \\
         --engine interpreter --output conformance-results/compiled_rhs/report.json

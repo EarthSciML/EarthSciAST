@@ -6226,13 +6226,26 @@ are, through `EARTHSCI_COMPILER_AGREEMENT_ADAPTER_<BINDING>`:
 | Rust | `pkg/earthsci-ast-rs/src/bin/earthsci-compiler-agreement-adapter-rust.rs`, feature `conformance-adapters` |
 | Python | `pkg/earthsci-ast-py/src/earthsci_ast/cli/compiler_agreement_adapter.py` |
 
-**Every OTHER conformance stage pins `interpreter` explicitly.** Once the
-default is `native`, a stage that calls `esm_problem` with no compiler changes
-what it runs, and its goldens were minted under the reference path. Those
-stages' adapters therefore pass the compiler they mean rather than inheriting
-the default, and this tier is the only place `native`'s coverage is measured.
-Without that, the whole harness goes red for reasons unrelated to what each
-stage tests.
+**Every problem-building stage NAMES its compiler.** A stage that calls
+`esm_problem` or `build_evaluator` with no compiler runs whatever the library
+default happens to be, so a change to that default silently changes what the
+stage measures — while its goldens still say what it measured before. Every such
+stage's adapter therefore takes the compiler as an argument and every stage
+passes one explicitly. Which value is the stage's own to state:
+
+* `native` where every fixture the stage carries BUILDS under it. This is the
+  ordinary case, and it is the stronger one: the stage keeps exercising the
+  compiled tiers its goldens were minted from, and additionally asserts that
+  none of its fixtures refuses.
+* `interpreter` for a stage whose fixtures a strict `native` REFUSES, with the
+  reason written where the stage names it. Naming the reference evaluator keeps
+  that stage measuring what it is for instead of going red over a refusal it
+  does not test, and the refusal itself belongs to this tier's named-exclusion
+  ledger rather than to that stage.
+
+Either way the compiler is an argument and never an inheritance, and this tier
+remains the only place `native`'s coverage is measured. Without that, the whole
+harness goes red for reasons unrelated to what each stage tests.
 
 
 ## 6. CI Integration

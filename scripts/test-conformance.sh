@@ -590,6 +590,15 @@ run_pde_simulation_conformance_self_test() {
     fi
 }
 
+# EVERY PROBLEM-BUILDING STAGE NAMES ITS COMPILER (CONFORMANCE_SPEC §5.44.5).
+# The Julia adapters below pass `--compiler native` rather than inheriting the
+# library default, so that a change to that default can never change what a stage
+# measures. `native` is what these stages name because every fixture they carry
+# builds under it and the goldens were minted from numbers it reproduces exactly;
+# a stage whose fixtures a strict `native` REFUSES names `interpreter` instead,
+# and says so where it does. The compiler-agreement tier (§5.44) is where
+# `native`'s coverage is measured, not here.
+
 # Julia is the reference binding. Its adapter (self-bootstrapping the dedicated
 # scripts/pde_sim_adapter env with OrdinaryDiffEqTsit5 + JSON3) re-evaluates the
 # fixtures via the tree-walk evaluator + Tsit5 and the runner asserts a match to
@@ -600,7 +609,7 @@ run_pde_simulation_conformance_julia() {
         return 1
     fi
     log "Running PDE-simulation conformance with the Julia reference simulator..."
-    EARTHSCI_PDE_SIM_ADAPTER_JULIA="julia $JULIA_DIR/scripts/pde_simulation_adapter.jl" \
+    EARTHSCI_PDE_SIM_ADAPTER_JULIA="julia $JULIA_DIR/scripts/pde_simulation_adapter.jl --compiler native" \
         python3 "$SCRIPT_DIR/run-pde-simulation-conformance.py" \
             --bindings julia \
             --output "$OUTPUT_DIR/pde_simulation/julia_report.json"
@@ -673,7 +682,7 @@ run_pde_pipeline_conformance_julia() {
         return 1
     fi
     log "Running full-pipeline PDE conformance with the Julia reference simulator..."
-    EARTHSCI_PDE_SIM_ADAPTER_JULIA="julia $JULIA_DIR/scripts/pde_simulation_adapter.jl" \
+    EARTHSCI_PDE_SIM_ADAPTER_JULIA="julia $JULIA_DIR/scripts/pde_simulation_adapter.jl --compiler native" \
         python3 "$SCRIPT_DIR/run-pde-simulation-conformance.py" \
             --manifest "$PDE_PIPELINE_MANIFEST" \
             --bindings julia \
@@ -801,7 +810,7 @@ _run_compiled_rhs_stage() {
 # golden (the golden it produced) AND to every independent analytic_rhs anchor.
 run_compiled_rhs_conformance_interpreter_julia() {
     _run_compiled_rhs_stage julia interpreter "$JULIA_DIR" "Julia interpreter" \
-        env EARTHSCI_COMPILED_RHS_ADAPTER_JULIA="julia $JULIA_DIR/scripts/compiled_rhs_adapter.jl"
+        env EARTHSCI_COMPILED_RHS_ADAPTER_JULIA="julia $JULIA_DIR/scripts/compiled_rhs_adapter.jl --compiler native"
 }
 
 # Rust drives the vectorized faq evaluator (ArrayCompiled::debug_eval_rhs / the
@@ -846,7 +855,7 @@ run_compiled_rhs_conformance_compiled_julia() {
         return 0
     fi
     _run_compiled_rhs_stage julia compiled "$JULIA_DIR" "Julia compiled (StableHLO)" \
-        env EARTHSCI_COMPILED_RHS_ADAPTER_JULIA="julia $JULIA_DIR/scripts/compiled_rhs_adapter.jl"
+        env EARTHSCI_COMPILED_RHS_ADAPTER_JULIA="julia $JULIA_DIR/scripts/compiled_rhs_adapter.jl --compiler native"
 }
 
 # Rust's compiled lane is XlaBuilder emission over the tape, behind the opt-in
