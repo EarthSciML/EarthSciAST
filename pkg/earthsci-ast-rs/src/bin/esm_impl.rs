@@ -152,8 +152,11 @@ enum Commands {
         /// vocabulary): `native` (the default — the tape, for every document,
         /// and strict: a rule it cannot express is a build error naming the
         /// rule), `interpreter` (the reference: every fast tier off, no
-        /// performance promise), or `xla` / `mtk` / `sympy`, which this
-        /// binding refuses with `compiler_unavailable`.
+        /// performance promise), or `xla` (the emitter over the tape, run
+        /// through XLA; needs a build with the `xla` feature and a usable
+        /// `xla_extension`, and refuses with `compiler_unavailable`
+        /// otherwise). `mtk` and `sympy` belong to the Julia and Python
+        /// bindings and are always `compiler_unavailable` here.
         #[arg(long, value_name = "NAME")]
         compiler: Option<String>,
     },
