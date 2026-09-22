@@ -39,6 +39,109 @@ _twb_binkey(lon, lat, sym) = Dict{String,Any}("op"=>"skolem", "label"=>"bin", "a
     _twb_floor(_twb_div(_twb_ix(lon, sym), "bin_dx")),
     _twb_floor(_twb_div(_twb_ix(lat, sym), "bin_dy"))])
 
+# The GAP 1 document: a gated conservative-regridding broad phase whose target
+# rings AND binning coordinate are TEMPLATE-CONSTRUCTED (an affine aggregate over
+# a grid spec), not const-supplied. Two DISJOINT clusters make the bbox-min bin
+# admissible AND pruning real: src1/tgt1 at the origin, src2/tgt2 far at x≈10.
+function _twb_gap1_doc()
+    src_rings = [
+        [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],         # src1 @ origin
+        [[10.0, 0.0], [11.0, 0.0], [11.0, 1.0], [10.0, 1.0]],     # src2 @ x≈10
+    ]
+    # tgt_poly[j,v,k] CONSTRUCTED: cell j origin (10*(j-1), 0), size 1, CCW quad.
+    tgt_body = Dict{String,Any}("op"=>"ifelse", "args"=>[
+        _twb_eq("k", 1),
+        Dict{String,Any}("op"=>"+", "args"=>[
+            _twb_mul(10.0, Dict{String,Any}("op"=>"-", "args"=>["j", 1])),
+            _twb_mul(1.0, Dict{String,Any}("op"=>"+", "args"=>[_twb_eq("v", 2), _twb_eq("v", 3)]))]),
+        _twb_mul(1.0, Dict{String,Any}("op"=>"+", "args"=>[_twb_eq("v", 3), _twb_eq("v", 4)]))])
+
+    rng_ij = Dict{String,Any}("i"=>Dict("from"=>"src_cells"), "j"=>Dict("from"=>"tgt_cells"))
+    joinbin = Any[Dict{String,Any}("on"=>Any[Any["src_bin", "tgt_bin"]])]
+    filt = Dict{String,Any}("op"=>">", "args"=>[_twb_ix("A_ij_gated", "i", "j"), "atol"])
+
+    # esm 1.0.0 (esm-spec §6.3.1): an observed unknown carries NO
+    # `expression` field — it is DEFINED by a bare-variable-LHS equation in
+    # the model's `equations` array. The declarations below are therefore
+    # bare `unknown`s and every definition lives in `obs_defs`, which is
+    # spliced in ahead of the dynamics equations.
+    vars = Dict{String,Any}(
+        "atol"=>Dict{String,Any}("type"=>"parameter", "default"=>1e-12),
+        "bin_dx"=>Dict{String,Any}("type"=>"parameter", "default"=>5.0),
+        "bin_dy"=>Dict{String,Any}("type"=>"parameter", "default"=>5.0),
+        "F_src"=>Dict{String,Any}("type"=>"unknown", "shape"=>["src_cells"]),
+        "unit_src"=>Dict{String,Any}("type"=>"unknown", "shape"=>["src_cells"]),
+        "src_poly"=>Dict{String,Any}("type"=>"unknown", "shape"=>["src_cells", "cell_verts", "coord"]),
+        "tgt_poly"=>Dict{String,Any}("type"=>"unknown", "shape"=>["tgt_cells", "cell_verts", "coord"]),
+        "src_lon"=>Dict{String,Any}("type"=>"unknown", "shape"=>["src_cells"]),
+        "src_lat"=>Dict{String,Any}("type"=>"unknown", "shape"=>["src_cells"]),
+        "tgt_lon"=>Dict{String,Any}("type"=>"unknown", "shape"=>["tgt_cells"]),
+        "tgt_lat"=>Dict{String,Any}("type"=>"unknown", "shape"=>["tgt_cells"]),
+        "src_bin"=>Dict{String,Any}("type"=>"unknown", "shape"=>["src_cells"]),
+        "tgt_bin"=>Dict{String,Any}("type"=>"unknown", "shape"=>["tgt_cells"]),
+        "A_ij"=>Dict{String,Any}("type"=>"unknown", "shape"=>["src_cells", "tgt_cells"]),
+        "A_ij_gated"=>Dict{String,Any}("type"=>"unknown", "shape"=>["src_cells", "tgt_cells"]),
+        "A_j_gated"=>Dict{String,Any}("type"=>"unknown", "shape"=>["tgt_cells"]),
+        "F_tgt_gated"=>Dict{String,Any}("type"=>"unknown", "shape"=>["tgt_cells"]),
+        "F_unit_gated"=>Dict{String,Any}("type"=>"unknown", "shape"=>["tgt_cells"]),
+        "regrid_state"=>Dict{String,Any}("type"=>"unknown", "shape"=>["tgt_cells"], "default"=>0.0),
+        "pou_state"=>Dict{String,Any}("type"=>"unknown", "shape"=>["tgt_cells"], "default"=>0.0),
+    )
+    obs_defs = Any[
+        _twb_def("F_src", Dict{String,Any}("op"=>"const", "value"=>[10.0, 20.0], "args"=>[])),
+        _twb_def("unit_src", Dict{String,Any}("op"=>"const", "value"=>[1.0, 1.0], "args"=>[])),
+        _twb_def("src_poly", Dict{String,Any}("op"=>"const", "value"=>src_rings, "args"=>[])),
+        # CONSTRUCTED target rings (aggregate over the grid spec).
+        _twb_def("tgt_poly", _twb_agg(["j", "v", "k"],
+            Dict{String,Any}("j"=>Dict("from"=>"tgt_cells"), "v"=>Dict("from"=>"cell_verts"),
+                "k"=>Dict("from"=>"coord")), [], tgt_body)),
+        # binning coords: src from const rings, tgt from CONSTRUCTED rings (reduce-min).
+        _twb_def("src_lon", _twb_agg(["i"], Dict{String,Any}("i"=>Dict("from"=>"src_cells"), "v"=>Dict("from"=>"cell_verts")),
+            ["src_poly"], _twb_ix("src_poly", "i", "v", 1), Dict("reduce"=>"min"))),
+        _twb_def("src_lat", _twb_agg(["i"], Dict{String,Any}("i"=>Dict("from"=>"src_cells"), "v"=>Dict("from"=>"cell_verts")),
+            ["src_poly"], _twb_ix("src_poly", "i", "v", 2), Dict("reduce"=>"min"))),
+        _twb_def("tgt_lon", _twb_agg(["j"], Dict{String,Any}("j"=>Dict("from"=>"tgt_cells"), "v"=>Dict("from"=>"cell_verts")),
+            ["tgt_poly"], _twb_ix("tgt_poly", "j", "v", 1), Dict("reduce"=>"min"))),
+        _twb_def("tgt_lat", _twb_agg(["j"], Dict{String,Any}("j"=>Dict("from"=>"tgt_cells"), "v"=>Dict("from"=>"cell_verts")),
+            ["tgt_poly"], _twb_ix("tgt_poly", "j", "v", 2), Dict("reduce"=>"min"))),
+        # bin keys: skolem over the CONSTRUCTED coordinate (the gap-1 admission).
+        _twb_def("src_bin", _twb_agg(["i"], Dict{String,Any}("i"=>Dict("from"=>"src_cells")),
+            ["src_lon", "src_lat"], _twb_binkey("src_lon", "src_lat", "i"))),
+        _twb_def("tgt_bin", _twb_agg(["j"], Dict{String,Any}("j"=>Dict("from"=>"tgt_cells")),
+            ["tgt_lon", "tgt_lat"], _twb_binkey("tgt_lon", "tgt_lat", "j"))),
+        # DENSE narrow phase (oracle).
+        _twb_def("A_ij", _twb_agg(["i", "j"], rng_ij, ["src_poly", "tgt_poly"],
+            Dict{String,Any}("op"=>"polygon_intersection_area", "manifold"=>"planar",
+                "args"=>[_twb_ix("src_poly", "i"), _twb_ix("tgt_poly", "j")]))),
+        # GATED narrow phase (join on the constructed-coordinate bins).
+        _twb_def("A_ij_gated", _twb_agg(["i", "j"], rng_ij, ["src_poly", "tgt_poly", "src_bin", "tgt_bin"],
+            Dict{String,Any}("op"=>"polygon_intersection_area", "manifold"=>"planar",
+                "args"=>[_twb_ix("src_poly", "i"), _twb_ix("tgt_poly", "j")]),
+            Dict("join"=>joinbin))),
+        _twb_def("A_j_gated", _twb_agg(["j"], rng_ij, ["A_ij_gated", "src_bin", "tgt_bin"],
+            _twb_ix("A_ij_gated", "i", "j"), Dict("join"=>joinbin, "filter"=>filt))),
+        _twb_def("F_tgt_gated", _twb_agg(["j"], rng_ij, ["A_ij_gated", "A_j_gated", "F_src", "src_bin", "tgt_bin"],
+            _twb_div(_twb_mul(_twb_ix("A_ij_gated", "i", "j"), _twb_ix("F_src", "i")),
+                _twb_ix("A_j_gated", "j")), Dict("join"=>joinbin, "filter"=>filt))),
+        _twb_def("F_unit_gated", _twb_agg(["j"], rng_ij, ["A_ij_gated", "A_j_gated", "unit_src", "src_bin", "tgt_bin"],
+            _twb_div(_twb_mul(_twb_ix("A_ij_gated", "i", "j"), _twb_ix("unit_src", "i")),
+                _twb_ix("A_j_gated", "j")), Dict("join"=>joinbin, "filter"=>filt))),
+    ]
+    doc = Dict{String,Any}("esm"=>"1.0.0", "metadata"=>Dict{String,Any}("name"=>"gated_constructed"),
+        "index_sets"=>Dict{String,Any}(
+            "src_cells"=>Dict{String,Any}("kind"=>"interval", "size"=>2),
+            "tgt_cells"=>Dict{String,Any}("kind"=>"interval", "size"=>2),
+            "cell_verts"=>Dict{String,Any}("kind"=>"interval", "size"=>4),
+            "coord"=>Dict{String,Any}("kind"=>"interval", "size"=>2)),
+        "models"=>Dict{String,Any}("M"=>Dict{String,Any}("variables"=>vars, "equations"=>vcat(obs_defs, Any[
+            Dict{String,Any}("lhs"=>Dict{String,Any}("op"=>"ic", "args"=>["regrid_state"]), "rhs"=>0.0),
+            Dict{String,Any}("lhs"=>Dict{String,Any}("op"=>"ic", "args"=>["pou_state"]), "rhs"=>0.0),
+            Dict{String,Any}("lhs"=>Dict{String,Any}("op"=>"D", "args"=>["regrid_state"], "wrt"=>"t"), "rhs"=>"F_tgt_gated"),
+            Dict{String,Any}("lhs"=>Dict{String,Any}("op"=>"D", "args"=>["pou_state"], "wrt"=>"t"), "rhs"=>"F_unit_gated"),
+        ]))))
+    return doc
+end
+
 @testset "tree-walk build gaps: constructed binning coord + bare-alias setup geometry" begin
 
     # ===================================================================
@@ -48,102 +151,7 @@ _twb_binkey(lon, lat, sym) = Dict{String,Any}("op"=>"skolem", "label"=>"bin", "a
     # admissible AND pruning real: src1/tgt1 at the origin, src2/tgt2 far at x≈10.
     # ===================================================================
     @testset "GAP 1: aggregate-constructed coordinate is an admissible skolem-bin index target" begin
-        src_rings = [
-            [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],         # src1 @ origin
-            [[10.0, 0.0], [11.0, 0.0], [11.0, 1.0], [10.0, 1.0]],     # src2 @ x≈10
-        ]
-        # tgt_poly[j,v,k] CONSTRUCTED: cell j origin (10*(j-1), 0), size 1, CCW quad.
-        tgt_body = Dict{String,Any}("op"=>"ifelse", "args"=>[
-            _twb_eq("k", 1),
-            Dict{String,Any}("op"=>"+", "args"=>[
-                _twb_mul(10.0, Dict{String,Any}("op"=>"-", "args"=>["j", 1])),
-                _twb_mul(1.0, Dict{String,Any}("op"=>"+", "args"=>[_twb_eq("v", 2), _twb_eq("v", 3)]))]),
-            _twb_mul(1.0, Dict{String,Any}("op"=>"+", "args"=>[_twb_eq("v", 3), _twb_eq("v", 4)]))])
-
-        rng_ij = Dict{String,Any}("i"=>Dict("from"=>"src_cells"), "j"=>Dict("from"=>"tgt_cells"))
-        joinbin = Any[Dict{String,Any}("on"=>Any[Any["src_bin", "tgt_bin"]])]
-        filt = Dict{String,Any}("op"=>">", "args"=>[_twb_ix("A_ij_gated", "i", "j"), "atol"])
-
-        # esm 1.0.0 (esm-spec §6.3.1): an observed unknown carries NO
-        # `expression` field — it is DEFINED by a bare-variable-LHS equation in
-        # the model's `equations` array. The declarations below are therefore
-        # bare `unknown`s and every definition lives in `obs_defs`, which is
-        # spliced in ahead of the dynamics equations.
-        vars = Dict{String,Any}(
-            "atol"=>Dict{String,Any}("type"=>"parameter", "default"=>1e-12),
-            "bin_dx"=>Dict{String,Any}("type"=>"parameter", "default"=>5.0),
-            "bin_dy"=>Dict{String,Any}("type"=>"parameter", "default"=>5.0),
-            "F_src"=>Dict{String,Any}("type"=>"unknown", "shape"=>["src_cells"]),
-            "unit_src"=>Dict{String,Any}("type"=>"unknown", "shape"=>["src_cells"]),
-            "src_poly"=>Dict{String,Any}("type"=>"unknown", "shape"=>["src_cells", "cell_verts", "coord"]),
-            "tgt_poly"=>Dict{String,Any}("type"=>"unknown", "shape"=>["tgt_cells", "cell_verts", "coord"]),
-            "src_lon"=>Dict{String,Any}("type"=>"unknown", "shape"=>["src_cells"]),
-            "src_lat"=>Dict{String,Any}("type"=>"unknown", "shape"=>["src_cells"]),
-            "tgt_lon"=>Dict{String,Any}("type"=>"unknown", "shape"=>["tgt_cells"]),
-            "tgt_lat"=>Dict{String,Any}("type"=>"unknown", "shape"=>["tgt_cells"]),
-            "src_bin"=>Dict{String,Any}("type"=>"unknown", "shape"=>["src_cells"]),
-            "tgt_bin"=>Dict{String,Any}("type"=>"unknown", "shape"=>["tgt_cells"]),
-            "A_ij"=>Dict{String,Any}("type"=>"unknown", "shape"=>["src_cells", "tgt_cells"]),
-            "A_ij_gated"=>Dict{String,Any}("type"=>"unknown", "shape"=>["src_cells", "tgt_cells"]),
-            "A_j_gated"=>Dict{String,Any}("type"=>"unknown", "shape"=>["tgt_cells"]),
-            "F_tgt_gated"=>Dict{String,Any}("type"=>"unknown", "shape"=>["tgt_cells"]),
-            "F_unit_gated"=>Dict{String,Any}("type"=>"unknown", "shape"=>["tgt_cells"]),
-            "regrid_state"=>Dict{String,Any}("type"=>"unknown", "shape"=>["tgt_cells"], "default"=>0.0),
-            "pou_state"=>Dict{String,Any}("type"=>"unknown", "shape"=>["tgt_cells"], "default"=>0.0),
-        )
-        obs_defs = Any[
-            _twb_def("F_src", Dict{String,Any}("op"=>"const", "value"=>[10.0, 20.0], "args"=>[])),
-            _twb_def("unit_src", Dict{String,Any}("op"=>"const", "value"=>[1.0, 1.0], "args"=>[])),
-            _twb_def("src_poly", Dict{String,Any}("op"=>"const", "value"=>src_rings, "args"=>[])),
-            # CONSTRUCTED target rings (aggregate over the grid spec).
-            _twb_def("tgt_poly", _twb_agg(["j", "v", "k"],
-                Dict{String,Any}("j"=>Dict("from"=>"tgt_cells"), "v"=>Dict("from"=>"cell_verts"),
-                    "k"=>Dict("from"=>"coord")), [], tgt_body)),
-            # binning coords: src from const rings, tgt from CONSTRUCTED rings (reduce-min).
-            _twb_def("src_lon", _twb_agg(["i"], Dict{String,Any}("i"=>Dict("from"=>"src_cells"), "v"=>Dict("from"=>"cell_verts")),
-                ["src_poly"], _twb_ix("src_poly", "i", "v", 1), Dict("reduce"=>"min"))),
-            _twb_def("src_lat", _twb_agg(["i"], Dict{String,Any}("i"=>Dict("from"=>"src_cells"), "v"=>Dict("from"=>"cell_verts")),
-                ["src_poly"], _twb_ix("src_poly", "i", "v", 2), Dict("reduce"=>"min"))),
-            _twb_def("tgt_lon", _twb_agg(["j"], Dict{String,Any}("j"=>Dict("from"=>"tgt_cells"), "v"=>Dict("from"=>"cell_verts")),
-                ["tgt_poly"], _twb_ix("tgt_poly", "j", "v", 1), Dict("reduce"=>"min"))),
-            _twb_def("tgt_lat", _twb_agg(["j"], Dict{String,Any}("j"=>Dict("from"=>"tgt_cells"), "v"=>Dict("from"=>"cell_verts")),
-                ["tgt_poly"], _twb_ix("tgt_poly", "j", "v", 2), Dict("reduce"=>"min"))),
-            # bin keys: skolem over the CONSTRUCTED coordinate (the gap-1 admission).
-            _twb_def("src_bin", _twb_agg(["i"], Dict{String,Any}("i"=>Dict("from"=>"src_cells")),
-                ["src_lon", "src_lat"], _twb_binkey("src_lon", "src_lat", "i"))),
-            _twb_def("tgt_bin", _twb_agg(["j"], Dict{String,Any}("j"=>Dict("from"=>"tgt_cells")),
-                ["tgt_lon", "tgt_lat"], _twb_binkey("tgt_lon", "tgt_lat", "j"))),
-            # DENSE narrow phase (oracle).
-            _twb_def("A_ij", _twb_agg(["i", "j"], rng_ij, ["src_poly", "tgt_poly"],
-                Dict{String,Any}("op"=>"polygon_intersection_area", "manifold"=>"planar",
-                    "args"=>[_twb_ix("src_poly", "i"), _twb_ix("tgt_poly", "j")]))),
-            # GATED narrow phase (join on the constructed-coordinate bins).
-            _twb_def("A_ij_gated", _twb_agg(["i", "j"], rng_ij, ["src_poly", "tgt_poly", "src_bin", "tgt_bin"],
-                Dict{String,Any}("op"=>"polygon_intersection_area", "manifold"=>"planar",
-                    "args"=>[_twb_ix("src_poly", "i"), _twb_ix("tgt_poly", "j")]),
-                Dict("join"=>joinbin))),
-            _twb_def("A_j_gated", _twb_agg(["j"], rng_ij, ["A_ij_gated", "src_bin", "tgt_bin"],
-                _twb_ix("A_ij_gated", "i", "j"), Dict("join"=>joinbin, "filter"=>filt))),
-            _twb_def("F_tgt_gated", _twb_agg(["j"], rng_ij, ["A_ij_gated", "A_j_gated", "F_src", "src_bin", "tgt_bin"],
-                _twb_div(_twb_mul(_twb_ix("A_ij_gated", "i", "j"), _twb_ix("F_src", "i")),
-                    _twb_ix("A_j_gated", "j")), Dict("join"=>joinbin, "filter"=>filt))),
-            _twb_def("F_unit_gated", _twb_agg(["j"], rng_ij, ["A_ij_gated", "A_j_gated", "unit_src", "src_bin", "tgt_bin"],
-                _twb_div(_twb_mul(_twb_ix("A_ij_gated", "i", "j"), _twb_ix("unit_src", "i")),
-                    _twb_ix("A_j_gated", "j")), Dict("join"=>joinbin, "filter"=>filt))),
-        ]
-        doc = Dict{String,Any}("esm"=>"1.0.0", "metadata"=>Dict{String,Any}("name"=>"gated_constructed"),
-            "index_sets"=>Dict{String,Any}(
-                "src_cells"=>Dict{String,Any}("kind"=>"interval", "size"=>2),
-                "tgt_cells"=>Dict{String,Any}("kind"=>"interval", "size"=>2),
-                "cell_verts"=>Dict{String,Any}("kind"=>"interval", "size"=>4),
-                "coord"=>Dict{String,Any}("kind"=>"interval", "size"=>2)),
-            "models"=>Dict{String,Any}("M"=>Dict{String,Any}("variables"=>vars, "equations"=>vcat(obs_defs, Any[
-                Dict{String,Any}("lhs"=>Dict{String,Any}("op"=>"ic", "args"=>["regrid_state"]), "rhs"=>0.0),
-                Dict{String,Any}("lhs"=>Dict{String,Any}("op"=>"ic", "args"=>["pou_state"]), "rhs"=>0.0),
-                Dict{String,Any}("lhs"=>Dict{String,Any}("op"=>"D", "args"=>["regrid_state"], "wrt"=>"t"), "rhs"=>"F_tgt_gated"),
-                Dict{String,Any}("lhs"=>Dict{String,Any}("op"=>"D", "args"=>["pou_state"], "wrt"=>"t"), "rhs"=>"F_unit_gated"),
-            ]))))
-
+        doc = _twb_gap1_doc()
         insp = _TWB.BuildInspection()
         f!, u0, p, tspan, vmap = EarthSciAST._build_evaluator(doc; model_name="M", inspect=insp)
         du = similar(u0); f!(du, u0, p, 0.0)
@@ -161,6 +169,42 @@ _twb_binkey(lon, lat, sym) = Dict{String,Any}("op"=>"skolem", "label"=>"bin", "a
         @test F_tgt ≈ [10.0, 20.0]                                   # apply
         @test pou ≈ [1.0, 1.0]                                       # partition of unity
         @test sum(insp.setup_arrays["A_j_gated"] .* F_tgt) ≈ 30.0    # conservation (== mass_src)
+    end
+
+    # The binning coordinates are derived BEFORE the build proper and handed to it
+    # as const arrays, so the build never sweeps them again. That derivation must
+    # run under the compiler the caller named: under `:interpreter` a projected
+    # coordinate (one outside the geometry vocabulary, so the general setup map
+    # owns it) takes the per-cell reference, never the compile-once fast path.
+    @testset "the pre-build binning derivation runs under the requested compiler" begin
+        function projected_doc()
+            doc = _twb_gap1_doc()
+            for e in doc["models"]["M"]["equations"]
+                e["lhs"] == "tgt_lon" || continue
+                # tgt_lon[j] = exp(0) * tgt_poly[j,1,1] — a pure map, and `exp` is
+                # outside the geometry vocabulary.
+                e["rhs"] = _twb_agg(["j"], Dict{String,Any}("j"=>Dict("from"=>"tgt_cells")),
+                    ["tgt_poly"], _twb_mul(Dict{String,Any}("op"=>"exp", "args"=>[0.0]),
+                                           _twb_ix("tgt_poly", "j", 1, 1)))
+            end
+            return doc
+        end
+        tgt_lon = only(e["rhs"] for e in projected_doc()["models"]["M"]["equations"]
+                       if e["lhs"] == "tgt_lon")
+        @test _TWB._body_needs_general_eval(_TWB.expression_from_json(tgt_lon))
+        sweeps = Dict{Symbol,Tuple{Int,Int}}()
+        for compiler in (:native, :interpreter)
+            h0 = _TWB._SETUP_MAP_FASTPATH_HITS[]
+            m0 = _TWB._SETUP_MAP_FASTPATH_MISS[]
+            insp = _TWB.BuildInspection()
+            EarthSciAST._build_evaluator(projected_doc(); model_name="M", compiler=compiler, inspect=insp)
+            sweeps[compiler] = (_TWB._SETUP_MAP_FASTPATH_HITS[] - h0,
+                                _TWB._SETUP_MAP_FASTPATH_MISS[] - m0)
+            @test insp.const_arrays["tgt_lon"] ≈ [0.0, 10.0]
+        end
+        # (fast-path sweeps, per-cell reference sweeps)
+        @test sweeps[:native][1] > 0 && sweeps[:native][2] == 0
+        @test sweeps[:interpreter][1] == 0 && sweeps[:interpreter][2] > 0
     end
 
     # ===================================================================
