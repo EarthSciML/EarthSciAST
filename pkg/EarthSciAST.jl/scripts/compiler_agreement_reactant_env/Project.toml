@@ -1,0 +1,19 @@
+# Environment for `compiler_agreement_adapter.jl --compiler xla` ONLY.
+#
+# Every other compiler of this tier runs in scripts/compiler_agreement_env,
+# which does not (and should not) carry Reactant: Reactant bundles an XLA
+# runtime, and putting it in the environment the REFERENCE compiler
+# (`interpreter`) instantiates would make the reference lane depend on it. The
+# `xla` compiler is the one that needs it, so it gets its own env — the same
+# split, and for the same reason, as compiled_rhs_reactant_env beside it. The
+# adapter picks between the two off `--compiler`, before anything is loaded,
+# and self-bootstraps whichever it picked (Manifest.toml is gitignored
+# repo-wide).
+[deps]
+ADTypes = "47edcb42-4c32-4615-8424-f2b9edc5f35b"
+EarthSciAST = "c7bf5e87-b31b-4281-bdce-ffb8a46ec87c"
+JSON3 = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
+OrdinaryDiffEqRosenbrock = "43230ef6-c299-4910-a778-202eb28ce4ce"
+OrdinaryDiffEqTsit5 = "b1df2697-797e-41e3-8120-5422d3b24e4a"
+Reactant = "3c362404-f566-11ee-1572-e11a4b42c853"
+SciMLBase = "0bca4576-84f4-4d90-8ffe-ffa030f20462"

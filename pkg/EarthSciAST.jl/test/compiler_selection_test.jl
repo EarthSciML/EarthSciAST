@@ -110,9 +110,19 @@ end
             @test occursin(":interpreter", e.msg) && occursin(":native", e.msg)
         end
 
-        # In the vocabulary, not provided by this binding / this phase. Each one
-        # names what would have to be loaded or which binding has it — and none
-        # of them silently builds with another compiler.
+        # In the vocabulary, not provided by this binding / this SESSION. Each
+        # one names what would have to be loaded or which binding has it — and
+        # none of them silently builds with another compiler.
+        #
+        # `:xla` is in this list because of what is NOT loaded here, not because
+        # of what is not implemented: it is the specialty compiler that needs a
+        # heavy external dependency, so the answer is `compiler_unavailable`
+        # naming Reactant in a session without it, and a BUILD in a session with
+        # it (test/compiler_xla_test.jl gates that arm, under
+        # `ESM_TEST_REACTANT=1`). The two arms must never trade places — an
+        # unavailable compiler that quietly became `compiler_unknown` would tell
+        # a caller the vocabulary had shrunk.
+        @test Base.get_extension(EarthSciAST, :EarthSciASTReactantExt) === nothing
         for (v, needle) in ((:xla, "Reactant"), (:mtk, "ModelingToolkit"),
                             (:sympy, "Python"))
             e = try
