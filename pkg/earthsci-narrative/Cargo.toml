@@ -1,0 +1,20 @@
+[package]
+name = "earthsci-narrative"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89.0"
+authors = ["EarthSciML Authors and Contributors"]
+description = "Assemble EarthSciAST models from narrative documents (Markdown, Typst), run their tests and analyses, and draw their figures"
+license = "AGPL-3.0-only"
+repository = "https://github.com/EarthSciML/EarthSciAST"
+publish = false
+
+# The shared core behind the Markdown and Typst front ends. It must build for
+# `wasm32-unknown-unknown` with no host imports, because the Typst plugin and
+# the browser widget both link it: keep every dependency pure Rust, and keep
+# filesystem, clock and thread APIs out of the library.
+
+[dependencies]
+earthsci-ast = { path = "../earthsci-ast-rs", default-features = false, features = ["solve"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["preserve_order", "float_roundtrip"] }
