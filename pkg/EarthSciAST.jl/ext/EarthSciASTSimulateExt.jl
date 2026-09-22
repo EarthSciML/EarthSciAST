@@ -113,9 +113,19 @@ function _symbol_cache(prob::EsmProblem)
     return sys
 end
 
-_ode_problem(prob::EsmProblem, tspan) = SciMLBase.ODEProblem(
-    SciMLBase.ODEFunction(prob.f!; sys = _symbol_cache(prob)),
-    copy(prob.u0), tspan, prob.p)
+# A compiler that built its own SciML program integrates THAT program: `:mtk`
+# compiles a ModelingToolkit `System` whose events, mass matrix and observed
+# equations ride on its own `ODEProblem`, and reassembling one here out of the
+# right-hand side alone would drop every one of them. `nothing` — which is
+# every `:native` / `:interpreter` build — takes the ordinary path below.
+function _ode_problem(prob::EsmProblem, tspan)
+    backend = EarthSciAST._compiler_backend(prob.f!)
+    backend === nothing ||
+        return EarthSciAST._backend_ode_problem(backend, prob, tspan)
+    return SciMLBase.ODEProblem(
+        SciMLBase.ODEFunction(prob.f!; sys = _symbol_cache(prob)),
+        copy(prob.u0), tspan, prob.p)
+end
 
 # --------------------------------------------------------------------------- #
 # Per-run keyword resolution.

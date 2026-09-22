@@ -5674,10 +5674,20 @@ Adapters: `pkg/EarthSciAST.jl/test/unsupported_construct_conformance_test.jl`;
 `pkg/earthsci-ast-rs/tests/unsupported_construct_conformance.rs`. Go and
 TypeScript do not simulate; they only register the code.
 
-**Out of scope.** Julia's ModelingToolkit export runs both kinds of event and
-hands implicit equations to `mtkcompile`, so it never raises the code. Running
-any of the three constructs on an array evaluator is future work in every
-binding.
+**Out of scope.** Julia's ModelingToolkit path runs all three constructs, so it
+never raises the code. Since the `compiler` keyword landed (`API_SPEC.md` §5.8)
+that path is not only the export: `esm_problem(file; compiler = :mtk)` builds
+through it, so **`:mtk` is the compiler that RUNS what this category has the
+others refuse** — `_on_the_scalar_path` documents of all three kinds integrate
+to the values their inline tests name, and the two implicit ones compile to a
+system whose unknown `mtkcompile` solves away into an observed equation
+(`pkg/EarthSciAST.jl/test/compiler_mtk_test.jl`). The refusals this category
+gates are therefore refusals BY THE DEFAULT COMPILER: `:native` and
+`:interpreter` share the tree-walk evaluator and raise `unsupported_construct`
+exactly as before, and a document carrying one of the three constructs is run by
+naming `:mtk`, not by a fallback. Running any of the three on an ARRAY evaluator
+is still future work in every binding; `:mtk` reaches the array fixtures through
+its own symbolic lowering rather than through an array evaluator.
 
 ### 5.40 An Out-of-Range Const-Array Gather Fails, on Every Axis and in Both Spellings (normative)
 

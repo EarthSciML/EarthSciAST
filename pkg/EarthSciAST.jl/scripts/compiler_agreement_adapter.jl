@@ -16,9 +16,16 @@
 # API_SPEC §5.8's closed vocabulary. Its value is passed STRAIGHT to
 # `esm_problem` and never interpreted here: an adapter that read the value and
 # chose a build itself would be reimplementing the thing under test. That is
-# also why `:xla` and `:mtk` are not special-cased below — they answer
-# `unavailable` because `esm_problem` raises `compiler_unavailable` for them,
-# which is the binding's own statement about itself.
+# also why no compiler is special-cased below: a build is never chosen here.
+#
+# THE ONE THING THIS ADAPTER DOES DO PER COMPILER is load the RUNTIME that
+# compiler needs, which is configuration and not a build choice — the Rust
+# adapter's `XLA_EXTENSION_DIR` is the same step spelled as an environment
+# variable. `:mtk` lives in a package EXTENSION, so without ModelingToolkit in
+# the session `esm_problem` answers `compiler_unavailable`, and that answer
+# would be a fact about this adapter rather than about the binding. It is
+# loaded ONLY for `--compiler mtk` (see `load_compiler_runtime`), so no other
+# compiler's run pays for it.
 #
 # THE THREE OUTCOMES THIS ADAPTER DECIDES, and the one it must not conflate:
 #
@@ -79,6 +86,20 @@ const BINDING = "julia"
 # value outside it is a broken invocation rather than a compiler this binding
 # happens not to have, and the two must not arrive at the same answer.
 const COMPILER_VOCABULARY = ("interpreter", "native", "xla", "mtk", "sympy")
+
+# The runtime a compiler needs in the session, loaded for that compiler alone.
+# `:mtk` needs ModelingToolkit (the extension that implements it) plus a
+# nonlinear solver: an implicit equation compiles to a DAE whose consistent
+# initialization is a nonlinear solve, and OrdinaryDiffEq only carries one when
+# OrdinaryDiffEqNonlinearSolve is loaded.
+function load_compiler_runtime(compiler)
+    compiler == "mtk" || return nothing
+    @eval begin
+        import ModelingToolkit
+        import OrdinaryDiffEqNonlinearSolve
+    end
+    return nothing
+end
 
 function parse_args(args)
     manifest = nothing
@@ -335,6 +356,7 @@ end
 
 function main()
     manifest_path, output_path, compiler = parse_args(ARGS)
+    load_compiler_runtime(compiler)
     manifest = JSON3.read(read(manifest_path, String))
     base = tests_root(manifest_path)
 

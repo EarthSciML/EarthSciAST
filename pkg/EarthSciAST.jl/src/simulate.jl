@@ -420,6 +420,31 @@ _compose_callbacks(cbs::AbstractVector) =
     isempty(cbs) ? nothing : length(cbs) == 1 ? cbs[1] : _callback_set(cbs)
 
 # --------------------------------------------------------------------------- #
+# The compiler-built backend seam (API_SPEC §5.8).
+#
+# `:native` and `:interpreter` hand back a plain closure, and everything
+# downstream of it — the `ODEProblem` the SciMLBase extension assembles, the
+# build-time observed reader — is this package's own. A SPECIALTY compiler
+# builds a whole program instead: `:mtk` compiles a ModelingToolkit `System`,
+# whose EVENTS, mass matrix and OBSERVED EQUATIONS live on ITS `ODEProblem` and
+# would be silently lost if the solve path rebuilt one out of the right-hand
+# side alone.
+#
+# Such a compiler parks that program on the CALLABLE it returns, and these
+# three hooks ask the callable for it. Dispatch is on the right-hand side's own
+# type — a type the extension owns — so an extension ADDS a method instead of
+# overwriting a core one, and a compiler with no backend needs no method at all.
+# --------------------------------------------------------------------------- #
+_compiler_backend(@nospecialize(f)) = nothing
+function _backend_ode_problem end
+function _backend_observed_field end
+
+# The `:mtk` construction itself (EarthSciASTMTKExt). No fallback method: the
+# plan `_compiler_plan(:mtk)` returns has already raised `compiler_unavailable`
+# when the extension is not loaded, so this name is only ever called with it.
+function _mtk_problem end
+
+# --------------------------------------------------------------------------- #
 # Internal solve bridge, for the CORE-RESIDENT callers that have to run a
 # problem themselves — today only the inline-test engine (`run_inline_tests`),
 # which lives in this package and is handed an `alg` by its caller. It is NOT a
@@ -533,7 +558,13 @@ struct EsmProblem
 end
 
 function Base.show(io::IO, prob::EsmProblem)
-    np = prob.p === nothing ? 0 : length(prob.p)
+    # A compiler that built its own program carries its own parameter object
+    # (`:mtk` hands back ModelingToolkit's), whose `length` is a count of ITS
+    # internal partitions and not of the document's parameters. The build's
+    # parameter PARTITION is per declared name under every compiler, so it is
+    # what says how many parameters this problem has.
+    np = _compiler_backend(prob.f!) === nothing ?
+         (prob.p === nothing ? 0 : length(prob.p)) : length(prob.param_classes)
     print(io, "EsmProblem(", length(prob.u0), " state elements, ",
           prob.n_equations, " equations, ", np, " parameters, tspan=", prob.tspan)
     isempty(prob.discrete_providers) ||
@@ -815,6 +846,21 @@ function esm_problem(input, tspan;
     _plan_for(compiler)
     span = (Float64(tspan[1]), Float64(tspan[2]))
     t_sample = sample_time === nothing ? span[1] : Float64(sample_time)
+    # `:mtk` builds a ModelingToolkit `System` rather than this package's own
+    # evaluator, so it takes the whole construction (EarthSciASTMTKExt). The
+    # plan above has already answered `compiler_unavailable` if MTK is absent.
+    if compiler === :mtk
+        return _mtk_problem(input, span; p = p, u0 = u0, providers = providers,
+            model_name = model_name, metaparameters = metaparameters,
+            base_path = base_path, sample_time = t_sample,
+            const_arrays = const_arrays, param_arrays = param_arrays,
+            inspect = inspect, materialize_out = materialize_out,
+            pushdown_rewrite = pushdown_rewrite, seed_ic! = seed_ic!,
+            sinks = sinks, snapshot = snapshot, pre_write = pre_write,
+            checkpoint_predicates = checkpoint_predicates,
+            checkpoint_sinks = checkpoint_sinks,
+            terminate_on_checkpoint = terminate_on_checkpoint)
+    end
     # ---- extent discovery: a loader that measures its OWN record count ------
     # FIRST, because a discovered extent CLOSES a metaparameter and every load
     # below binds metaparameters at the loader API (esm-spec §9.7.6 site 3). The
@@ -1118,6 +1164,12 @@ Throws a `SimulateError` when `name` is not a build-time-evaluable observed
 (state-dependent, unsized axis, or not an observed at all).
 """
 function observed_field(prob::EsmProblem, name::AbstractString)
+    # A compiler that built its own program answers for its own observeds: under
+    # `:mtk` the value lives in the compiled system's OBSERVED EQUATIONS, which
+    # this package's build-time observed graph knows nothing about.
+    backend = _compiler_backend(prob.f!)
+    backend === nothing ||
+        return _backend_observed_field(backend, prob, String(name))
     # Reading an observed at output time is one of the evaluations
     # esm-libraries-spec §2.5.10 puts under the compiler's refusal rule, so it
     # runs under the plan that BUILT the problem rather than under whatever

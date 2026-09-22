@@ -66,7 +66,20 @@ end
 function _mtk_extended_op(op::AbstractString, expr::OpExpr,
                           var_dict::Dict{String,Any}, t_sym,
                           dim_dict::Dict{String,Any})
-    if op == "D"
+    if op == "neg"
+        # The CANONICAL unary minus (`src/canonicalize.jl` rewrites `{"op":"-"}`
+        # with one argument to it), so every canonicalized document that negates
+        # anything arrives here. Its absence made `ModelingToolkit.System` throw
+        # "Unsupported operator: neg" on `tests/valid/solver_block.esm` — a
+        # two-line scalar decay — while the un-canonicalized `-` spelling built
+        # fine, which is the same operator wearing a different name.
+        return -_esm_to_symbolic(expr.args[1], var_dict, t_sym, dim_dict)
+    elseif op == "pow"
+        # `pow(a, b)` is the registry's named spelling of `a ^ b` (op_registry
+        # `_op("pow"; fn=(^))`), the twin of the `neg`/`-` pair above.
+        return _esm_to_symbolic(expr.args[1], var_dict, t_sym, dim_dict) ^
+               _esm_to_symbolic(expr.args[2], var_dict, t_sym, dim_dict)
+    elseif op == "D"
         arg = _esm_to_symbolic(expr.args[1], var_dict, t_sym, dim_dict)
         wrt_name = expr.wrt === nothing ? "t" : expr.wrt
         if wrt_name == "t"
@@ -319,6 +332,17 @@ function _push_lowered_equation!(eqs::AbstractVector, lhs, rhs)
             "`const` array of size $(size(rhs)) defines a variable of size $(size(lhs))"))
         for I in CartesianIndices(rhs)
             push!(eqs, lhs[I] ~ rhs[I])
+        end
+    elseif (lhs isa Symbolics.Arr || lhs isa AbstractArray) &&
+           !(rhs isa AbstractArray)
+        # esm-spec §4.3.4 / CONFORMANCE_SPEC §5.41: a SCALAR right-hand side on a
+        # SHAPED left-hand side replicates along every axis the scalar does not
+        # declare. Symbolics' `~` refuses `Arr ~ scalar` outright ("Cannot equate
+        # an array of different sizes. Got (4,) and ()."), so the replication has
+        # to happen here — one equation per cell, which is the same thing the
+        # `const`-array arm above does for a shaped literal.
+        for I in CartesianIndices(axes(lhs))
+            push!(eqs, lhs[Tuple(I)...] ~ rhs)
         end
     else
         push!(eqs, lhs ~ rhs)
