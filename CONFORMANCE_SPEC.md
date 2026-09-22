@@ -6139,11 +6139,11 @@ which:
    though `pde_simulation` carries them tier-wide, so that a later change to
    either tier cannot silently move the other's gate.
 2. **Derived**, for every other fixture, from §5.38.2's four classes with the
-   integration tolerance added:
+   integration tolerance added, scaled by the **integration safety factor** `F`:
 
    ```
-   rtol = rtol_class + reltol_integration
-   atol = atol_class + abstol_integration
+   rtol = rtol_class + F · reltol_integration
+   atol = atol_class + F · abstol_integration
    |got − want| ≤ atol + rtol · |want|
    ```
 
@@ -6151,10 +6151,32 @@ which:
    fixture's entry tells the adapter to pass to `solve`. For the `reduction`
    class the class floor is scaled as §5.38.2 defines it —
    `atol_class = atol_scaled · maxᵢ|wantᵢ|` over the saved row, taken from the
-   reference — and the integration floor is added to that. The addition is the
-   whole difference from §5.38: a trajectory carries the integrator's own error
-   on top of the arithmetic's, and a band that ignored it would fail every
-   binding for a defect none of them has.
+   reference — and `F ·` the integration floor is added to that. Carrying the
+   integration tolerance at all is the difference from §5.38: a trajectory
+   carries the integrator's own error on top of the arithmetic's, and a band
+   that ignored it would fail every binding for a defect none of them has.
+
+**The integration safety factor.** `F` is stated per fixture as
+`tolerance.integration_factor` on a `derived` block and is **100** where a
+block omits it. It exists because a solver's `reltol` / `abstol` bound its
+**local** error per step, while the value compared here carries the accumulated
+**global** error, which exceeds the local tolerance by an integrator-dependent
+factor that no integrator undertakes to bound. A band equal to the local
+tolerance therefore requires every binding's integrator to beat a promise it
+never made, and reports the difference between two CORRECT integrators as a
+disagreement — which is not what this section asks, since the question is
+whether COMPILERS agree, not whether two integrators do. A factor of 100 on
+`1e-10` is still roughly six orders of magnitude below any compiler-level
+defect, so the band remains far tighter than the failures it exists to catch.
+
+`F` multiplies the **integration term only**. The class term — the arithmetic,
+which is the thing under test — is never scaled by it, so the gate on what this
+section gates is unchanged. A **copied** band (case 1) takes no factor, because
+that tier measured its bounds as trajectory bounds already; and an **anchor**
+(below) takes none either, its band being the fixture's own statement about the
+physics rather than this section's about the arithmetic. An `integration_factor`
+below 1 is a manifest error: it would tighten the band back under the
+integrator's own local tolerance.
 
 A fixture MAY carry a tighter or looser bound only with a written reason in its
 entry, the same rule §5.38.2 sets.
