@@ -15,7 +15,12 @@
 # Invoked with the dedicated env that carries OrdinaryDiffEqTsit5 + JSON3:
 #   julia --project=pkg/EarthSciAST.jl/scripts/pde_sim_adapter \
 #         pkg/EarthSciAST.jl/scripts/pde_simulation_adapter.jl \
-#         --manifest <manifest.json> --output <out.json>
+#         --manifest <manifest.json> --output <out.json> --compiler <value>
+#
+# `--compiler` is REQUIRED and names which strategy builds the right-hand side
+# (API_SPEC §5.8's closed vocabulary), passed straight to `build_evaluator` /
+# `esm_problem`. The stages pass `native`, because every fixture here builds
+# under it.
 
 # Self-contained environment bootstrap. The dedicated adapter project
 # (scripts/pde_sim_adapter/Project.toml) pins EarthSciAST (dev'd from
@@ -61,22 +66,36 @@ import SciMLBase
 const ODE = OrdinaryDiffEqTsit5
 const ESS = EarthSciAST
 
+# API_SPEC §5.8's closed vocabulary. `--compiler` is REQUIRED: a problem-building
+# stage NAMES the compiler it runs (CONFORMANCE_SPEC §5.44.5), so this adapter
+# never inherits the library default. Inheriting it would put the stage back in
+# the position the rule exists to prevent — a change to that default silently
+# changing what this tier measures.
+const COMPILER_VOCABULARY = ("interpreter", "native", "xla", "mtk", "sympy")
+
 function parse_args(args)
     manifest = nothing
     output = nothing
+    compiler = nothing
     i = 1
     while i <= length(args)
         if args[i] == "--manifest"
             manifest = args[i + 1]; i += 2
         elseif args[i] == "--output"
             output = args[i + 1]; i += 2
+        elseif args[i] == "--compiler"
+            compiler = args[i + 1]; i += 2
         else
             i += 1
         end
     end
     manifest === nothing && error("--manifest is required")
     output === nothing && error("--output is required")
-    (manifest, output)
+    compiler === nothing && error("--compiler is required")
+    compiler in COMPILER_VOCABULARY ||
+        error("--compiler must be one of " * join(COMPILER_VOCABULARY, ", ") *
+              ", got '$compiler'")
+    (manifest, output, compiler)
 end
 
 # Trajectory time key: a plain float string. The Python harness re-normalizes
@@ -85,17 +104,19 @@ tkey(t) = string(float(t))
 
 _ic_dict(obj) = Dict{String,Float64}(String(k) => Float64(v) for (k, v) in pairs(obj))
 
-function rhs_at(model, probe_state, t)
+function rhs_at(model, probe_state, t, compiler)
     ics = _ic_dict(probe_state)
-    f!, u0, p, _, vmap = build_evaluator(model; initial_conditions=ics)
+    f!, u0, p, _, vmap = build_evaluator(model; initial_conditions=ics,
+                                         compiler=Symbol(compiler))
     du = similar(u0)
     f!(du, u0, p, Float64(t))
     Dict{String,Float64}(name => Float64(du[idx]) for (name, idx) in vmap)
 end
 
-function trajectory(model, ic, t0, t1, out_times, reltol, abstol)
+function trajectory(model, ic, t0, t1, out_times, reltol, abstol, compiler)
     ics = _ic_dict(ic)
-    f!, u0, p, _, vmap = build_evaluator(model; initial_conditions=ics)
+    f!, u0, p, _, vmap = build_evaluator(model; initial_conditions=ics,
+                                         compiler=Symbol(compiler))
     prob = ODE.ODEProblem(f!, u0, (Float64(t0), Float64(t1)), p)
     sol = ODE.solve(prob, ODE.Tsit5(); reltol=reltol, abstol=abstol)
     out = Dict{String,Any}()
@@ -176,17 +197,18 @@ end
 # every CONST provider's field into `const_arrays` under its loader name, then
 # `build_evaluator` (which folds scoped-`ic` `Loader.*` into u0 and resolves the
 # lifted consumer gather from the loader name).
-function _pipeline_evaluator(path, providers, t0)
+function _pipeline_evaluator(path, providers, t0, compiler)
     doc = ESS._prepare_run_doc(path)
     merged_const = Dict{String,Any}()
     for (rawk, prov) in providers
         k = String(rawk)
         merged_const[k] = ESS._provider_const_field(ESS.provider_sample(prov, t0), k)
     end
-    return build_evaluator(doc; const_arrays = merged_const)
+    return build_evaluator(doc; const_arrays = merged_const,
+                          compiler = Symbol(compiler))
 end
 
-function pipeline_fixture(fx, base, reltol, abstol)
+function pipeline_fixture(fx, base, reltol, abstol, compiler)
     path = joinpath(base, String(fx.path))
     providers = _stub_providers(fx.inputs)
     checkpoints = Float64[Float64(c) for c in fx.trajectory.checkpoints]
@@ -194,7 +216,7 @@ function pipeline_fixture(fx, base, reltol, abstol)
     t1 = checkpoints[end]
 
     # --- RHS at each probe via the provider-folded evaluator ------------------
-    f!, u0, p, _, var_map = _pipeline_evaluator(path, providers, t0)
+    f!, u0, p, _, var_map = _pipeline_evaluator(path, providers, t0, compiler)
     baremap = Dict{String,Int}()
     for (k, idx) in var_map
         baremap[_bare(k)] = idx
@@ -221,7 +243,8 @@ function pipeline_fixture(fx, base, reltol, abstol)
     end
 
     # --- Trajectory via the sanctioned EsmProblem provider path ---------------
-    prob = ESS.esm_problem(path, (t0, t1); providers = providers)
+    prob = ESS.esm_problem(path, (t0, t1); providers = providers,
+                           compiler = Symbol(compiler))
     r = SciMLBase.solve(prob, ODE.Tsit5(); reltol = reltol, abstol = abstol,
                         saveat = checkpoints)
     SciMLBase.successful_retcode(r) || error("solve failed: retcode $(r.retcode)")
@@ -236,27 +259,27 @@ end
 
 # Pre-discretized path (pde_simulation): evaluate the compiled makearray RHS and
 # integrate the declared `initial_conditions` over `time_span`.
-function discretized_fixture(fx, base, reltol, abstol)
+function discretized_fixture(fx, base, reltol, abstol, compiler)
     path = joinpath(base, String(fx.path))
     file = load_path(path)
     model = file.models[String(fx.model)]
 
     rhs = Dict{String,Any}()
     for pr in fx.rhs_probes
-        rhs[String(pr.id)] = rhs_at(model, pr.state, pr.t)
+        rhs[String(pr.id)] = rhs_at(model, pr.state, pr.t, compiler)
     end
 
     tr = fx.trajectory
     ts = tr.time_span
     traj = trajectory(model, tr.initial_conditions,
                       ts[Symbol("start")], ts[Symbol("end")],
-                      tr.output_times, reltol, abstol)
+                      tr.output_times, reltol, abstol, compiler)
 
     return Dict("rhs" => rhs, "trajectory" => traj)
 end
 
 function main()
-    manifest_path, output_path = parse_args(ARGS)
+    manifest_path, output_path, compiler = parse_args(ARGS)
     manifest = JSON3.read(read(manifest_path, String))
     integ = manifest.integrators.julia
     reltol = Float64(integ.reltol)
@@ -266,9 +289,11 @@ function main()
     fixtures = Dict{String,Any}()
     for fx in manifest.fixtures
         if haskey(fx, :pipeline) && String(fx.pipeline) == "full"
-            fixtures[String(fx.id)] = pipeline_fixture(fx, base, reltol, abstol)
+            fixtures[String(fx.id)] = pipeline_fixture(fx, base, reltol, abstol,
+                                                      compiler)
         else
-            fixtures[String(fx.id)] = discretized_fixture(fx, base, reltol, abstol)
+            fixtures[String(fx.id)] = discretized_fixture(fx, base, reltol, abstol,
+                                                         compiler)
         end
     end
 

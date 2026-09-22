@@ -116,7 +116,7 @@ python3 scripts/run-pde-simulation-conformance.py --self-test
 ./scripts/test-conformance.sh            # runs the three producers + self-test
 
 # Regenerate the Julia-reference goldens (e.g. after changing a fixture):
-EARTHSCI_PDE_SIM_ADAPTER_JULIA="julia pkg/EarthSciAST.jl/scripts/pde_simulation_adapter.jl" \
+EARTHSCI_PDE_SIM_ADAPTER_JULIA="julia pkg/EarthSciAST.jl/scripts/pde_simulation_adapter.jl --compiler native" \
   python3 scripts/run-pde-simulation-conformance.py --write-golden --bindings julia
 ```
 

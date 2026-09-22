@@ -12,7 +12,22 @@
 #
 #   julia --project=pkg/EarthSciAST.jl/scripts/pde_sim_adapter \
 #         pkg/EarthSciAST.jl/scripts/compiled_rhs_adapter.jl \
-#         --manifest <manifest.json> --output <out.json> [--engine interpreter|compiled]
+#         --manifest <manifest.json> --output <out.json> --compiler <value> \
+#         [--engine interpreter|compiled]
+#
+# `--engine` AND `--compiler` ARE DIFFERENT QUESTIONS, and both are answered
+# here rather than inherited:
+#
+#   --engine    WHICH LANE evaluates the right-hand side — this tier's own axis.
+#               The tree-walk evaluator, or direct StableHLO emission.
+#   --compiler  WHICH STRATEGY BUILDS it, over API_SPEC §5.8's closed vocabulary.
+#               Passed straight to `build_evaluator` and never interpreted here.
+#
+# `--compiler` is REQUIRED (CONFORMANCE_SPEC §5.44.5): a problem-building stage
+# NAMES the compiler it runs, so that a change to the library's default can never
+# change what this tier measures. The stages pass `native`, because every fixture
+# here builds under it; a stage whose fixtures a strict `native` refuses is the
+# one that names `interpreter` instead, and says why where it does so.
 #
 # TWO ENGINES, ONE ADAPTER:
 #
@@ -102,10 +117,18 @@ using JSON3
 
 const BINDING = "julia"
 
+# API_SPEC §5.8's closed vocabulary. `--compiler` is REQUIRED: a stage names the
+# compiler it runs (CONFORMANCE_SPEC §5.44.5), so this adapter never falls back
+# to the library default. Defaulting it would put the stage back in the position
+# the rule exists to prevent — a change of the library's default silently
+# changing what this tier measures.
+const COMPILER_VOCABULARY = ("interpreter", "native", "xla", "mtk", "sympy")
+
 function parse_args(args)
     manifest = nothing
     output = nothing
     engine = "interpreter"
+    compiler = nothing
     i = 1
     while i <= length(args)
         if args[i] == "--manifest"
@@ -114,15 +137,21 @@ function parse_args(args)
             output = args[i + 1]; i += 2
         elseif args[i] == "--engine"
             engine = args[i + 1]; i += 2
+        elseif args[i] == "--compiler"
+            compiler = args[i + 1]; i += 2
         else
             i += 1
         end
     end
     manifest === nothing && error("--manifest is required")
     output === nothing && error("--output is required")
+    compiler === nothing && error("--compiler is required")
     engine in ("interpreter", "compiled") ||
         error("--engine must be 'interpreter' or 'compiled', got '$engine'")
-    (manifest, output, engine)
+    compiler in COMPILER_VOCABULARY ||
+        error("--compiler must be one of " * join(COMPILER_VOCABULARY, ", ") *
+              ", got '$compiler'")
+    (manifest, output, engine, compiler)
 end
 
 # Strip a leading `Model.` namespace so element names compare across bindings
@@ -178,10 +207,11 @@ function apply_parameters(p, overrides)
     merge(p, NamedTuple{Tuple(names)}(Tuple(vals)))
 end
 
-function fixture_rhs(fx, base)
+function fixture_rhs(fx, base, compiler)
     path = joinpath(base, String(fx.path))
     file = load_path(path)
-    f!, u0, p, _, var_map = build_evaluator(file; model_name = String(fx.model))
+    f!, u0, p, _, var_map = build_evaluator(file; model_name = String(fx.model),
+                                            compiler = Symbol(compiler))
     slot = bare_var_map(var_map)
 
     order = [String(s) for s in fx.state_order]
@@ -307,14 +337,15 @@ if HAVE_REACTANT
     end
 end
 
-function fixture_rhs_compiled(fx, base)
+function fixture_rhs_compiled(fx, base, compiler)
     ext = Base.get_extension(EarthSciAST, :EarthSciASTReactantExt)
     ext === nothing && error("the Reactant extension did not load")
 
     path = joinpath(base, String(fx.path))
     file = load_path(path)
     fo, u0, p, _, var_map = build_evaluator(file; model_name = String(fx.model),
-                                            form = :oop)
+                                            form = :oop,
+                                            compiler = Symbol(compiler))
     slot = bare_var_map(var_map)
 
     order = [String(s) for s in fx.state_order]
@@ -350,7 +381,7 @@ function fixture_rhs_compiled(fx, base)
 end
 
 function main()
-    manifest_path, output_path, engine = parse_args(ARGS)
+    manifest_path, output_path, engine, compiler = parse_args(ARGS)
     engine == ENGINE ||
         error("the bootstrap read engine '$ENGINE' off ARGS but parse_args read " *
               "'$engine'; the adapter would be running in the wrong environment")
@@ -411,11 +442,11 @@ function main()
     for fx in manifest.fixtures
         id = String(fx.id)
         if engine == "interpreter"
-            fixtures[id] = fixture_rhs(fx, base)
+            fixtures[id] = fixture_rhs(fx, base, compiler)
             continue
         end
         try
-            fixtures[id] = fixture_rhs_compiled(fx, base)
+            fixtures[id] = fixture_rhs_compiled(fx, base, compiler)
         catch err
             if err isa EarthSciAST.DirectEmitError
                 fixtures[id] = Dict("status" => "refused",

@@ -420,7 +420,7 @@ julia --project=$renv -e 'using Pkg; Pkg.develop(path="pkg/EarthSciAST.jl"); Pkg
 ESM_TEST_REACTANT=1 julia --project=$renv \
   -e 'cd("pkg/EarthSciAST.jl/test"); include("reactant_direct_emit_test.jl")'
 
-EARTHSCI_COMPILED_RHS_ADAPTER_JULIA="julia pkg/EarthSciAST.jl/scripts/compiled_rhs_adapter.jl" \
+EARTHSCI_COMPILED_RHS_ADAPTER_JULIA="julia pkg/EarthSciAST.jl/scripts/compiled_rhs_adapter.jl --compiler native" \
   python3 scripts/run-compiled-rhs-conformance.py --bindings julia --engine compiled \
     --output conformance-results/compiled_rhs/julia_compiled_report.json
 python3 scripts/assert-compiled-rhs-available.py \
