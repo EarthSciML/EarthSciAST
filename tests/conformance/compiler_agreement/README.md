@@ -80,23 +80,38 @@ carry an inline `tests` block.
 | `advection_1d_periodic_n4` | `conformance/pde_simulation/fixtures/advection_1d_periodic_n4.esm` | `Advect1D` | `pde_simulation` | copied | upwind advection — a wrap gather rather than a symmetric stencil |
 | `faq_discretized_1d_heat` | `fixtures/faq/15_discretized_1d_heat.esm` | `Heat1D` | `simulate_faq` | `reduction` | the same physics written as a `faq` over a `makearray` with ghost regions, so the array machinery rather than a pre-discretized operator is what each compiler has to lower |
 | `logistic_growth` | `valid/tests_analyses_comprehensive.esm` | `LogisticGrowth` | inline `tests` | `transcendental` | an **unshaped** ODE with a closed-form solution. `native` must run this on its compiled tiers, not a scalar interpreter: no document-type switch inside a compiler |
-| `decay_solver_block` | `valid/solver_block.esm` | `Decay` | inline `tests` | `transcendental` | the smallest unshaped ODE with a closed form, and the one that carries a `solver` block. **Its `solver.stiffness: "high"` is load-bearing** — see below |
+| `decay_solver_block` | `valid/solver_block.esm` | `Decay` | inline `tests` | `transcendental` | the smallest unshaped ODE with a closed form, and the one that carries a `solver` block. **Its `solver.stiffness: "high"` is load-bearing, and the stiff method must be a high-order one** (the golden is minted with `Rodas5P`) — see below |
 
 **The `solver` block selects the ALGORITHM, and every binding must honour it.**
 `decay_solver_block` declares `solver.stiffness: "high"` (esm-spec §2.2), so an
-adapter integrates it with its stiff algorithm. Only the ALGORITHM comes from
-the block: the tolerances are the fixture's own `integration` entry, because a
+adapter integrates it with a stiff algorithm. Only the ALGORITHM comes from the
+block: the tolerances are the fixture's own `integration` entry, because a
 conformance tier has an opinion about the integrator's error and states it per
-fixture.
+fixture. The block is the single place that choice is written, which is the
+reason this fixture is in the tier.
 
-This is not a detail an adapter may decide for itself. On this document the
-stiff algorithm carries about 2.5e-8 of integration error against the closed
-form where the non-stiff one carries under 1e-12 — comfortably inside the
-fixture's anchor band either way, and about 250x the fixture's band against the
-GOLDEN. So a binding that integrated it with a non-stiff algorithm would be red
-against a golden minted with the stiff one, for a disagreement that is the
-algorithm's and not the compiler's. The block is the single place that choice is
-written, which is the reason this fixture is in the tier.
+**A golden's own integration error must sit far below the band it is compared
+at** (ruling 2026-09-21), or the tier stops measuring the compiler and starts
+measuring the integrator. This fixture is where that bites, and the numbers say
+why. Against the closed form `2*exp(-2)`, at this fixture's `integration`
+tolerances:
+
+| Method | error vs the closed form | against the 2.8e-11 band vs the golden |
+|---|---|---|
+| `Rosenbrock23` | 2.5e-8 | ~900x OUTSIDE it |
+| `Rodas4` | 2.0e-12 | inside |
+| `Rodas5P` | **2.2e-14** | ~1300x inside — **what the golden is minted with** |
+
+A golden carrying 2.5e-8 of its own integration error cannot gate a 2.8e-11
+band: every binding MORE accurate than the reference reads as a mismatch, which
+is exactly how the Rust adapter's first run against this fixture failed — its
+stiff arm landed 6e-11 from the closed form and was marked red for being right.
+The fix is the reference's accuracy, not a widened band: widening would stop the
+fixture gating the arithmetic at all.
+
+So a binding integrates this document with a **high-order stiff method**. Naming
+a non-stiff method ignores the document's own declaration; naming a low-order
+stiff one reintroduces the problem above from the other side.
 
 ### Excluded, by name and reason
 

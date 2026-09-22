@@ -238,17 +238,29 @@ end
 # The algorithm this fixture integrates with.
 #
 # esm-spec §2.2's `solver` block is the document's declaration about ITSELF, and
-# `stiffness: "high"` selects the stiff algorithm — the same rule `_pick_solver`
-# applies for the library's own test runners, so a document that declares itself
-# stiff is integrated the same way whichever entry point reaches it. The
-# TOLERANCES are not taken from the block: the manifest's per-fixture
-# `integration` is what the adapter passes to `solve`, because a conformance tier
-# has an opinion about the integrator's error and states it per fixture.
+# `stiffness: "high"` selects a stiff algorithm. The TOLERANCES are not taken
+# from the block: the manifest's per-fixture `integration` is what the adapter
+# passes to `solve`, because a conformance tier has an opinion about the
+# integrator's error and states it per fixture.
+#
+# WHY Rodas5P AND NOT Rosenbrock23, which is what `_pick_solver` hands the
+# library's own inline-test runners. A GOLDEN'S OWN INTEGRATION ERROR MUST SIT
+# FAR BELOW THE BAND IT IS COMPARED AT, or the tier stops measuring the compiler
+# and starts measuring the integrator. On `decay_solver_block` — the one fixture
+# whose document declares itself stiff — the band against the golden is 2.8e-11,
+# and at this fixture's tolerances Rosenbrock23 lands 2.5e-8 from the closed form
+# `2*exp(-2)`: three orders of magnitude OUTSIDE the band it is supposed to
+# define. Anything more accurate than the golden then reads as a mismatch, which
+# is how the Rust adapter's first run against it failed — correctly integrating,
+# and red for it. Rodas5P lands 2.2e-14 from the closed form, roughly 1300x
+# inside the band, so the golden is a statement about the arithmetic again.
+# `stiffness: "high"` is still honoured, which is what the fixture is here to
+# exercise; only the ORDER of the stiff method chosen for it changed.
 function solver_alg(doc)
     blk = get(doc, :solver, nothing)
     stiff = blk === nothing ? nothing : get(blk, :stiffness, nothing)
     stiff !== nothing && String(stiff) == "high" &&
-        return OrdinaryDiffEqRosenbrock.Rosenbrock23()
+        return OrdinaryDiffEqRosenbrock.Rodas5P()
     return OrdinaryDiffEqTsit5.Tsit5()
 end
 
