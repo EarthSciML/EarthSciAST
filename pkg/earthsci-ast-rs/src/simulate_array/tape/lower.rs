@@ -2476,7 +2476,7 @@ pub(super) fn build_tape_program(
     seg_invariant_names: &HashSet<String>,
     // Step 4: run the kernel-fusion post-pass with the given superop
     // configuration (`None` = the unfused program, bitwise-identical
-    // results — the `ESS_TAPE_FUSE_DISABLE` arm).
+    // results — the arm `build_tape_opts` gives the fused-vs-unfused tests).
     fuse: Option<super::fuse::SuperopCfg>,
 ) -> (TapeProgram, (usize, usize)) {
     let rhs_rules: &[RhsRule] = &compiled.rhs_rules;

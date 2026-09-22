@@ -72,6 +72,7 @@
       "public_modules": [
         "adapter_support",
         "compiled_rhs_adapter",
+        "compiler_agreement_adapter",
         "esio_provider",
         "extension",
         "intern",

@@ -20,11 +20,13 @@ use std::fs;
 use std::path::Path;
 use std::process::ExitCode;
 
-use earthsci_ast::adapter_support::{parse_manifest_output_args, write_report};
+use earthsci_ast::adapter_support::write_report;
 
 use earthsci_ast::flatten;
 use earthsci_ast::simulate_array::ArrayCompiled;
-use earthsci_ast::{Alg, ProblemOptions, Rhs, SolveOptions, esm_problem, load_string, solve};
+use earthsci_ast::{
+    Alg, Compiler, ProblemOptions, Rhs, SolveOptions, esm_problem, load_string, solve,
+};
 use ndarray::{ArrayD, IxDyn};
 use serde_json::{Map, Value, json};
 
@@ -62,7 +64,50 @@ fn state_vec(names: &[String], state: &Map<String, Value>) -> Vec<f64> {
         .collect()
 }
 
-fn run_fixture(fx: &Value, base: &Path, integ: &Value) -> Result<Value, String> {
+/// The compiler this tier means (CONFORMANCE_SPEC §5.44.5).
+///
+/// Every stage other than the compiler-agreement tier names the compiler it
+/// means rather than inheriting `esm_problem`'s default: these goldens were
+/// minted against the reference evaluator, and a stage that silently changed
+/// evaluator when the default became `native` would be testing something else
+/// under the same name. `native`'s coverage is measured in §5.44 and nowhere
+/// else. `--compiler` overrides it, which is how this tier's fixtures are
+/// checked against another compiler without moving the gate.
+const TIER_COMPILER: Compiler = Compiler::Interpreter;
+
+/// `--manifest <m> --output <o> [--compiler <value>]`, rejecting anything else.
+///
+/// Its own parser rather than [`earthsci_ast::adapter_support`]'s shared one:
+/// the adapters that build no Problem have no compiler to name and must keep
+/// rejecting the flag.
+fn parse_args() -> Result<(std::path::PathBuf, std::path::PathBuf, Compiler), String> {
+    let mut manifest: Option<std::path::PathBuf> = None;
+    let mut output: Option<std::path::PathBuf> = None;
+    let mut compiler = TIER_COMPILER;
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--manifest" => manifest = args.next().map(std::path::PathBuf::from),
+            "--output" => output = args.next().map(std::path::PathBuf::from),
+            "--compiler" => {
+                let v = args.next().ok_or("--compiler needs a value")?;
+                compiler = Compiler::parse_named(&v)?;
+            }
+            other => return Err(format!("unexpected argument {other:?}")),
+        }
+    }
+    match (manifest, output) {
+        (Some(m), Some(o)) => Ok((m, o, compiler)),
+        _ => Err("--manifest and --output are required".to_string()),
+    }
+}
+
+fn run_fixture(
+    fx: &Value,
+    base: &Path,
+    integ: &Value,
+    compiler: Compiler,
+) -> Result<Value, String> {
     let rel = fx["path"].as_str().ok_or("fixture.path missing")?;
     let json_str = fs::read_to_string(base.join(rel)).map_err(|e| e.to_string())?;
     let file = load_string(&json_str).map_err(|e| format!("load: {e:?}"))?;
@@ -123,6 +168,7 @@ fn run_fixture(fx: &Value, base: &Path, integ: &Value) -> Result<Value, String> 
             p: params,
             u0: ics,
             rhs: Rhs::Always,
+            compiler: Some(compiler),
             ..Default::default()
         },
     )
@@ -272,14 +318,13 @@ fn run_fixture_full(fx: &Value, base: &Path, integ: &Value) -> Result<Value, Str
 }
 
 fn main() -> ExitCode {
-    let args = match parse_manifest_output_args() {
+    let (manifest_path, output_path, compiler) = match parse_args() {
         Ok(a) => a,
         Err(e) => {
             eprintln!("pde-sim-adapter-rust: {e}");
             return ExitCode::FAILURE;
         }
     };
-    let (manifest_path, output_path) = (args.manifest, args.output);
     let manifest: Value = match fs::read_to_string(&manifest_path)
         .map_err(|e| e.to_string())
         .and_then(|s| serde_json::from_str(&s).map_err(|e| e.to_string()))
@@ -304,7 +349,7 @@ fn main() -> ExitCode {
         let result = if fx.get("pipeline").and_then(Value::as_str) == Some("full") {
             run_fixture_full(fx, base, &integ)
         } else {
-            run_fixture(fx, base, &integ)
+            run_fixture(fx, base, &integ, compiler)
         };
         let entry = match result {
             Ok(v) => v,

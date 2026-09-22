@@ -140,9 +140,9 @@
 //!   the memo is a dense row of class-indexed cells per open scope, stamped with
 //!   the scope that wrote it. See [`Inner::memo`].
 //!
-//! Both structures are exact re-encodings, not approximations: they answer what
-//! the maps answered, and `ESS_CSE_PARANOID=1` asserts that node-visit by
-//! node-visit over a whole solve.
+//! Both structures are exact re-encodings, not approximations: they answer
+//! what the maps answered, which `the_resolved_table_agrees_with_the_map` pins
+//! address by address over a set of analysed bodies.
 
 // ## Interned (shared) node addresses
 //
@@ -227,32 +227,6 @@ pub(super) const BOX_TRANSPARENT_OPS: &[&str] = &[
     "not",
     "broadcast",
 ];
-
-/// `true` when the CSE overlay is switched off by `ESS_CSE_DISABLE=1`. The A/B
-/// kill switch for this optimization, mirroring `ESS_VEC_DISABLE` for the
-/// vectorizer: with it set, [`CseRt::class_of`] returns `None` everywhere and
-/// the evaluator runs exactly as it did before.
-pub(super) fn cse_disabled() -> bool {
-    use std::sync::OnceLock;
-    static OFF: OnceLock<bool> = OnceLock::new();
-    *OFF.get_or_init(|| {
-        std::env::var("ESS_CSE_DISABLE")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false)
-    })
-}
-
-/// `true` when `ESS_CSE_PARANOID=1` asks [`CseRt::class_of`] to cross-check the
-/// resolved class table against the map on every node visit.
-fn cse_paranoid() -> bool {
-    use std::sync::OnceLock;
-    static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| {
-        std::env::var("ESS_CSE_PARANOID")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false)
-    })
-}
 
 // ============================================================================
 // Structural classification (build time — once per rule body, per scratch).
@@ -1055,10 +1029,6 @@ struct Inner {
     classes: ClassTable,
     /// `classes.memoizable`, resolved for the hot path.
     addrs: AddrClasses,
-    /// Set from `ESS_CSE_PARANOID`; see [`CseRt::verify_class`]. Kept as a field
-    /// rather than read from the environment in `class_of` so the hot path pays
-    /// one perfectly-predicted branch on a byte it already has in cache.
-    verify: bool,
     /// Live memo, indexed `memo[depth - 1][class]`: one dense row per OPEN
     /// scope, stamped with the scope that wrote it.
     ///
@@ -1154,9 +1124,6 @@ impl CseRt {
     /// derived from the rule slices' own identity, so a different rule set
     /// invalidates the table.
     pub(super) fn retarget(&self, tag: u64) {
-        if cse_disabled() {
-            return;
-        }
         let mut i = self.inner.borrow_mut();
         if i.tag != tag {
             i.tag = tag;
@@ -1192,9 +1159,6 @@ impl CseRt {
     /// values computed from the previous parameters. Hashing ~10 f64 per call is
     /// far below the noise floor; a sweep pays one store rebuild per change.
     pub(super) fn bind_params(&self, params: &[f64]) {
-        if cse_disabled() {
-            return;
-        }
         use std::hash::{Hash, Hasher};
         let mut h = rustc_hash::FxHasher::default();
         params.len().hash(&mut h);
@@ -1233,9 +1197,6 @@ impl CseRt {
         &self,
         build: impl FnOnce() -> (FxHashSet<String>, FxHashSet<String>),
     ) {
-        if cse_disabled() {
-            return;
-        }
         let mut i = self.inner.borrow_mut();
         if !i.const_names_set {
             i.const_names_set = true;
@@ -1252,11 +1213,7 @@ impl CseRt {
     /// (its `output_idx_names` / `contract_names`), which the box-pure analysis
     /// (ess-lih) needs — see [`ClassTable::walk`].
     pub(super) fn analyse(&self, body: &Expr, idx_binders: &[String], c_binders: &[String]) {
-        if cse_disabled() {
-            return;
-        }
         let mut i = self.inner.borrow_mut();
-        i.verify = cse_paranoid();
         {
             let Inner {
                 classes,
@@ -1341,35 +1298,12 @@ impl CseRt {
     /// see [`AddrClasses`] for what was resolved and when.
     #[inline]
     pub(super) fn class_of(&self, expr: &Expr) -> Option<u32> {
-        if cse_disabled() {
-            return None;
-        }
         let i = self.inner.borrow();
         if i.depth == 0 {
             return None;
         }
         let addr = expr as *const Expr as usize;
-        if i.verify {
-            return Self::verify_class(&i, addr);
-        }
         i.addrs.get(addr).filter(|&c| c != NOT_MEMO)
-    }
-
-    /// `ESS_CSE_PARANOID=1`: assert on EVERY node visit that the resolved table
-    /// answers exactly what the map it was resolved from would, and answer from
-    /// the map. That equality is the entire correctness basis of the resolved
-    /// table, so being able to assert it over a real solve — rather than over
-    /// fixtures — is worth a switch; it makes the solve several times slower.
-    #[cold]
-    #[inline(never)]
-    fn verify_class(i: &Inner, addr: usize) -> Option<u32> {
-        let want = i.classes.memoizable.get(&addr).copied();
-        assert_eq!(
-            i.addrs.get(addr),
-            want,
-            "resolved CSE class table disagrees with the map at {addr:#x}"
-        );
-        want.filter(|&c| c != NOT_MEMO)
     }
 
     /// Borrow the array in slab `idx` for the caller's `'a`.
@@ -1758,9 +1692,6 @@ mod tests {
     /// rehash are both exercised.
     #[test]
     fn the_resolved_table_agrees_with_the_map() {
-        if cse_disabled() {
-            return;
-        }
         let bodies: Vec<Expr> = (0..24).map(repeats_body).collect();
         let rt = CseRt::default();
         for b in &bodies {
@@ -1793,9 +1724,6 @@ mod tests {
     /// classified, which is exactly the silent-wrong-answer failure mode.
     #[test]
     fn retarget_discards_the_resolved_table() {
-        if cse_disabled() {
-            return;
-        }
         let body = repeats_body(0);
         let Expr::Operator(root) = &body else {
             unreachable!()
@@ -2145,9 +2073,6 @@ mod tests {
     /// a mark that stayed in the map would never fire.
     #[test]
     fn pure_marks_reach_the_resolved_table() {
-        if cse_disabled() {
-            return;
-        }
         // sin(j)^2 appears TWICE, so its address is also plain-memoizable —
         // the pure mark must be the one that survives resolution.
         let sq = || {
@@ -2213,9 +2138,6 @@ mod tests {
     /// uniqueness.
     #[test]
     fn a_shared_cell_repeated_in_one_scope_is_memoizable() {
-        if cse_disabled() {
-            return;
-        }
         // Q = sqrt(sin(a) - b); body = Q + Q with ONE payload, so Q's child
         // cell (the `-` node) is a single address visited twice in the body's
         // root scope.
@@ -2243,9 +2165,6 @@ mod tests {
     /// exclusion must win over any earlier interior mark, permanently.
     #[test]
     fn a_marked_interior_cell_that_becomes_a_root_is_tombstoned() {
-        if cse_disabled() {
-            return;
-        }
         let (q, q_rc) = shared(ExpressionNode {
             op: "sqrt".to_string(),
             args: vec![op(
@@ -2294,9 +2213,6 @@ mod tests {
     /// state read served on every later RHS call.
     #[test]
     fn a_pure_mark_is_refused_under_a_different_binder_context() {
-        if cse_disabled() {
-            return;
-        }
         // Shared payload P = s * sin(j)^2 : `s` is state in every context, so
         // P is never pure; the `^` child CELL (inside P's shared args vector)
         // is maximal box-pure exactly when `j` is box-bound.

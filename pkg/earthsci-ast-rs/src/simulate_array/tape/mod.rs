@@ -7,10 +7,11 @@
 //! descriptors and observed exports (Step 3a), and executes it as the
 //! DEFAULT production RHS hot path through the fast slab executor in
 //! [`exec`] (Step 3b): `simulate` builds the program once per solve and each
-//! segment's RHS scratch runs it; `ESS_TAPE_DISABLE=1` reverts wholesale to
-//! the legacy interpreter, and `ESS_TAPE_CHECK=N` dual-runs and bit-compares
-//! the first N calls. The `debug_eval_rhs*` oracles, the samples pass and
-//! the FD Jacobian closure stay on the legacy interpreter path.
+//! segment's RHS scratch runs it. Which evaluator runs is the caller's
+//! choice of compiler (API_SPEC §5.8) and nothing else: `native` is this
+//! tape, `interpreter` is the per-cell oracle. The `debug_eval_rhs*` oracles,
+//! the samples pass and the FD Jacobian closure stay on the legacy
+//! interpreter path.
 //!
 //! ## Instruction set
 //!
@@ -71,9 +72,8 @@ mod tests;
 #[cfg(feature = "xla")]
 pub mod xla_emit;
 
-pub(crate) use exec::{tape_check_calls, tape_disabled};
+pub(crate) use exec::tape_disabled;
 pub(in crate::simulate_array) use exec::{TapeCtx, run_tape_call};
-pub(crate) use fuse::fuse_disabled;
 pub(crate) use ir::*;
 use lower::build_tape_program;
 
@@ -257,14 +257,11 @@ impl ArrayCompiled {
         &self,
         discrete_forcing: &HashSet<String>,
     ) -> (TapeProgram, TapeBuildReport) {
-        self.build_tape_opts(
-            discrete_forcing,
-            (!fuse_disabled()).then(fuse::SuperopCfg::from_env),
-        )
+        self.build_tape_opts(discrete_forcing, Some(fuse::SuperopCfg::from_env()))
     }
 
     /// [`Self::build_tape`] with the Step 4 fusion pass explicitly on/off
-    /// (the env-independent entry the fused-vs-unfused A/B tests drive).
+    /// (the entry the fused-vs-unfused A/B tests drive).
     pub(crate) fn build_tape_opts(
         &self,
         discrete_forcing: &HashSet<String>,

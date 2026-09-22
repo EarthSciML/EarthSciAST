@@ -2195,36 +2195,26 @@ fn build_compiler_report(
         Backend::Array(c) => c,
     };
 
-    // `tape_disabled()` is the one condition under which the array runtime
-    // installs no tape at all, so under `native` it is a refusal rather than a
-    // silent demotion to the overlay-then-oracle pair. Its two arms are
-    // different failures and are reported as such.
-    if compiler == Compiler::Native {
-        if let Some(var) = crate::precision::first_variable_override() {
-            return Err(SimulateError::Compile(
-                crate::compile_error::CompileError::CompilerRefusedRule {
-                    compiler: compiler.as_str(),
-                    kind: "variable",
-                    rule: qualify(model_name.unwrap_or(""), &var),
-                    tier: "const",
-                    reason: "the variable declares its own `element_type` (esm-spec §11.3.1), \
-                             and the tape resolves its kernels at execution from ONE \
-                             thread-local precision and fuses ACROSS rules, so a subtree in a \
-                             precision its neighbours are not is the one thing it cannot \
-                             express"
-                        .to_string(),
-                },
-            ));
-        }
-        if crate::simulate_array::tape::tape_disabled() {
-            return Err(SimulateError::CompilerUnavailable {
+    // A per-variable element type is the one condition under which the array
+    // runtime installs no tape at all, so under `native` it is a refusal
+    // rather than a silent demotion to the overlay-then-oracle pair.
+    if compiler == Compiler::Native
+        && let Some(var) = crate::precision::first_variable_override()
+    {
+        return Err(SimulateError::Compile(
+            crate::compile_error::CompileError::CompilerRefusedRule {
                 compiler: compiler.as_str(),
-                details: "ESS_TAPE_DISABLE is set in this process, which turns the tape off \
-                          wholesale; `native` IS the tape, so unset it (the kill switch is \
-                          retired in a later phase, where `compiler=interpreter` replaces it)"
+                kind: "variable",
+                rule: qualify(model_name.unwrap_or(""), &var),
+                tier: "const",
+                reason: "the variable declares its own `element_type` (esm-spec §11.3.1), \
+                         and the tape resolves its kernels at execution from ONE \
+                         thread-local precision and fuses ACROSS rules, so a subtree in a \
+                         precision its neighbours are not is the one thing it cannot \
+                         express"
                     .to_string(),
-            });
-        }
+            },
+        ));
     }
 
     let (records, tape_report) = compiled.tape_rule_records(discrete_forcing);

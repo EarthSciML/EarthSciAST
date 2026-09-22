@@ -67,6 +67,12 @@ pub(crate) mod classification;
 /// without spawning a process. Hidden from the published rustdoc surface.
 #[doc(hidden)]
 pub mod compiled_rhs_adapter;
+/// Core of the `compiler_agreement` conformance adapter (CONFORMANCE_SPEC
+/// §5.44), on the same terms as [`compiled_rhs_adapter`]: in the library so a
+/// test drives the binary's exact code path, and hidden from the published
+/// rustdoc surface.
+#[doc(hidden)]
+pub mod compiler_agreement_adapter;
 pub(crate) mod coupling;
 pub(crate) mod coupling_imports;
 pub(crate) mod dae;

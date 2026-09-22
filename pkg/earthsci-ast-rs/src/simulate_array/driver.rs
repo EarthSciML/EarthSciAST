@@ -5,7 +5,7 @@
 
 #[cfg(feature = "solve")]
 use super::tape::TapeProgram;
-use super::tape::{tape_check_calls, tape_disabled};
+use super::tape::tape_disabled;
 use super::*;
 #[cfg_attr(not(feature = "solve"), allow(unused_imports))]
 use crate::simulate::SimulateError;
@@ -260,17 +260,17 @@ impl ArrayCompiled {
     }
 
     /// Build a scratch with the compiled tape installed (Step 3b) — what the
-    /// production RHS closure carries. Honors `ESS_TAPE_DISABLE` /
-    /// `ESS_VEC_DISABLE` exactly as `simulate` does (returning a legacy
-    /// scratch), so a kill-switch test can observe the routing through
-    /// [`RhsScratch::has_tape`] / [`RhsStats::taped_rules`]. Exposed for the
-    /// fast-executor A/B, allocation-steady-state and invalidation tests,
-    /// driven through [`Self::debug_eval_rhs_into`].
+    /// production RHS closure carries. A document the tape cannot express at
+    /// all ([`tape_disabled`]) gets a legacy scratch, so a caller can observe
+    /// the routing through [`RhsScratch::has_tape`] /
+    /// [`RhsStats::taped_rules`]. Exposed for the fast-executor A/B,
+    /// allocation-steady-state and invalidation tests, driven through
+    /// [`Self::debug_eval_rhs_into`].
     #[doc(hidden)]
     pub fn debug_new_scratch_taped(&self) -> RhsScratch {
         let mut s = RhsScratch::new(&self.var_shapes);
         s.set_const_arrays(Rc::clone(&self.const_scope));
-        if !tape_disabled() && !vec_disabled() {
+        if !tape_disabled() {
             let (prog, _report) = self.build_tape(&HashSet::new());
             s.install_tape(Rc::new(prog), Rc::new(self.observed_rules.clone()));
         }
@@ -820,13 +820,7 @@ impl ArrayCompiled {
         // scratches read the tape's slots rather than a seeded observed map,
         // and the inspection snapshot and the output-node pass harvest their
         // values from the tape ([`TapedObserveds`]).
-        // `ESS_TAPE_CHECK` dual-runs the LEGACY path beside the tape and
-        // bit-compares `dy` (`rhs.rs`), and the legacy path materializes only
-        // the VARYING rules on top of a seeded static map — so with the hoist
-        // skipped it would read an unpublished static observed and compare the
-        // tape against a NaN. The check is a debugging switch, not a
-        // production path: keep the hoist while it is armed.
-        if self.is_native() && tape.is_some() && tape_check_calls() == 0 {
+        if self.is_native() && tape.is_some() {
             return SolveSetup {
                 cadence,
                 sa0,
@@ -960,10 +954,10 @@ impl ArrayCompiled {
     /// Step 3b: compile the tape program ONCE per solve and share it across
     /// every integration segment (each segment's fresh RHS scratch gets its
     /// own slab and re-runs the CONST/SEGMENT sections — the same cadence as
-    /// the static-observed hoist above). `ESS_TAPE_DISABLE=1` reverts
-    /// wholesale to the legacy interpreter path; `ESS_VEC_DISABLE=1` (the
-    /// pure per-cell oracle reference) implies it, since the tape compiles
-    /// the vectorized overlay's semantics.
+    /// the static-observed hoist above). [`crate::Compiler::Interpreter`]
+    /// builds no tape at all — it IS the per-cell oracle — and neither does a
+    /// document whose per-variable element types the tape cannot express
+    /// ([`tape_disabled`]).
     ///
     /// The build report's fallback list is kept, not dropped: a rule the
     /// tape could not compile is evaluated by the per-cell oracle, whose
@@ -980,10 +974,9 @@ impl ArrayCompiled {
         let mut tape_fallbacks: Vec<(String, String)> = Vec::new();
         // `interpreter` (API_SPEC §5.8) is the reference and nothing else: no
         // tape, and the whole-array overlay off under it, so every rule is
-        // walked per cell. It is a BUILD option, not an environment switch —
-        // the two kill switches below stay only until phase 2 retires them,
-        // and a caller should reach the oracle by naming the compiler.
-        let tape: SolveTape = if self.is_interpreter() || tape_disabled() || vec_disabled() {
+        // walked per cell. It is the compiler the caller named, and the only
+        // way to reach the oracle.
+        let tape: SolveTape = if self.is_interpreter() || tape_disabled() {
             None
         } else {
             let (prog, report) = self.build_tape(discrete_forcing);
@@ -1365,8 +1358,8 @@ impl ArrayCompiled {
                 // off-tape evaluation in the driver, and one §2.5.10 covers
                 // ("every evaluation the compiler performs for the Problem").
                 // The tape is bit-identical to the legacy path (that is what
-                // `ESS_TAPE_CHECK` asserts), so the differenced Jacobian is
-                // unchanged.
+                // the compiler-agreement tier asserts, CONFORMANCE_SPEC
+                // §5.44), so the differenced Jacobian is unchanged.
                 if let Some((prog, full_obs)) = &tape_jac {
                     s.install_tape(Rc::clone(prog), Rc::clone(full_obs));
                 }
@@ -1601,10 +1594,9 @@ impl ArrayCompiled {
         // couple two rules through the `derived_rings` registry / an `offsets`
         // factor name instead, and a `join` couples them through key COLUMN
         // names. A model using any of those keeps the old un-pruned behaviour.
-        let prune = !outobs_prune_disabled()
-            && varying_rules
-                .iter()
-                .all(|r| !expr_blocks_output_pruning(observed_rule_body(r)));
+        let prune = varying_rules
+            .iter()
+            .all(|r| !expr_blocks_output_pruning(observed_rule_body(r)));
 
         // Probe: the rules that must actually run before 0-D-ness is known. A
         // rule whose value is provably an array needs no probe at all, and a
@@ -1918,10 +1910,9 @@ impl ArrayCompiled {
         wanted: &HashSet<String>,
     ) -> HashSet<String> {
         let mut out: HashSet<String> = static_names.clone();
-        let prune = !outobs_prune_disabled()
-            && varying_rules
-                .iter()
-                .all(|r| !expr_blocks_output_pruning(observed_rule_body(r)));
+        let prune = varying_rules
+            .iter()
+            .all(|r| !expr_blocks_output_pruning(observed_rule_body(r)));
         let cone: Option<Vec<AlgebraicRule>> = if prune {
             let unknown: HashSet<String> = self
                 .observed_rules
@@ -2157,21 +2148,6 @@ impl ObservedRows {
             })
             .collect()
     }
-}
-
-/// `true` when the observed-trajectory dependency-cone pruning is switched off
-/// by `ESS_OUTOBS_PRUNE_DISABLE=1`. The A/B kill switch for that optimization,
-/// mirroring `ESS_VEC_DISABLE` / `ESS_CSE_DISABLE`: with it set,
-/// [`ArrayCompiled::append_observed_trajectories`] materializes the full
-/// varying rule set at every output node exactly as it did before.
-fn outobs_prune_disabled() -> bool {
-    use std::sync::OnceLock;
-    static OFF: OnceLock<bool> = OnceLock::new();
-    *OFF.get_or_init(|| {
-        std::env::var("ESS_OUTOBS_PRUNE_DISABLE")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false)
-    })
 }
 
 /// Is this observed rule's value provably an ARRAY (`ndim ≥ 1`) *without*
