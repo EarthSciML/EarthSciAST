@@ -28,7 +28,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use earthsci_ast::{
-    EsmProblem, Flow, ProblemOptions, Rhs, SimulateError, SolveOptions, esm_problem,
+    Compiler, EsmProblem, Flow, ProblemOptions, Rhs, SimulateError, SolveOptions, esm_problem,
     load_string, solve,
 };
 use std::sync::Arc;
@@ -112,6 +112,13 @@ fn problem_for(json: &str, tspan: (f64, f64)) -> EsmProblem {
         tspan,
         ProblemOptions {
             rhs: Rhs::Always,
+            // The reference compiler, because what this file measures is the
+            // non-advancing SHORTCUT and not which tier evaluates a rule: the
+            // reproducer's `rad` observed is a causal self-reference, which a
+            // strict `native` refuses as a per-cell sequential sweep
+            // (CONFORMANCE_SPEC §5.44.5 — a stage whose fixtures `native`
+            // refuses names `interpreter`, with the reason written here).
+            compiler: Some(Compiler::Interpreter),
             ..Default::default()
         },
     )
